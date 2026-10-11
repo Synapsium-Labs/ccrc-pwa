@@ -27,6 +27,7 @@ import { PrKeycap } from './PrKeycap';
 import { PrSheet } from './PrSheet';
 import './chat.css';
 import { substrateFaultText } from '../fleet/substrateWords';
+import { chipTone, metaChipTone } from './chipTones';
 
 export interface SessionHeaderProps {
   session: FleetSession | null;
@@ -316,12 +317,12 @@ export function SessionHeader({
             </>
           )}
           {wrapper !== '' && (
-            <Chip dot className="chip--active">
+            <Chip dot className={chipTone('active')}>
               {accountLabel(roster, wrapper)}
             </Chip>
           )}
           {repo !== null && (
-            <Chip className="chip--repo" title="repository">
+            <Chip className={chipTone('repo')} title="repository">
               {repo}
             </Chip>
           )}
@@ -329,7 +330,7 @@ export function SessionHeader({
               nothing, so a merged PR sits on a live workspace until a human
               archives it, and must not claim the chip meanwhile. */}
           {session?.archivedAt != null && (
-            <Chip className="chip--archived">
+            <Chip className={chipTone('archived')}>
               archived{session.pr?.number != null ? ` · merged #${session.pr.number}` : ''}
             </Chip>
           )}
@@ -339,7 +340,7 @@ export function SessionHeader({
           {hasMeta && (
             <>
               {model !== null ? (
-              <button type="button" className="metachip metachip--model" onClick={onChangeModel}>
+              <button type="button" className={metaChipTone('model')} onClick={onChangeModel}>
                 <span className="metachip-glyph" aria-hidden="true">🤖</span>
                 <span className="metachip-text">{model}</span>
                 {queuedField === 'class' && <span className="route-queued">queued</span>}
@@ -355,14 +356,14 @@ export function SessionHeader({
             )}
             <button
               type="button"
-              className={ultracode ? 'metachip metachip--ultra' : 'metachip'}
+              className={metaChipTone(ultracode ? 'ultra' : 'plain')}
               onClick={onChangeEffort}
             >
               <span className="metachip-text">{ultracode ? 'ultracode' : (effort ?? 'set effort')}</span>
               {queuedField === 'effort' && <span className="route-queued">queued</span>}
             </button>
             {branch !== null && !branchDuplicatesCrumb && (
-              <span className="metachip metachip--branch" title={branch}>
+              <span className={metaChipTone('branch')} title={branch}>
                 <span className="metachip-glyph" aria-hidden="true">⎇</span>
                 <span className="metachip-text">{branch}</span>
               </span>

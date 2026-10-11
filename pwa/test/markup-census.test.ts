@@ -81,6 +81,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
+import { ALL_CHIP_TONES, chipTone, metaChipTone } from '../src/session/chipTones';
 
 const PKG = path.join(import.meta.dirname, '..', '..');
 
@@ -433,10 +434,79 @@ describe('markup census', () => {
     // The whole census is a parse away from reporting a serene zero. If the
     // file walk or the TSX parse ever silently finds nothing, every test above
     // passes and the guard is gone.
+    //
+    // THESE ARE VACUITY FLOORS, NOT TARGETS, and the literal one proves why it
+    // matters to say so: it stood at 31 and read `> 30`, so the first wave that
+    // actually turned literals into named things — seven class strings in
+    // `SessionHeader` becoming `chipTone`/`metaChipTone` calls — made the
+    // census red for doing the work the census exists to prompt. A count that
+    // only ever goes up is not a count of this codebase; a class string leaving
+    // a call site is the good direction. The floor is set well under today's
+    // numbers for that reason, and what actually guards the content is the
+    // both-directions registry checks above, which cannot pass vacuously.
     expect(APP.length).toBeGreaterThan(40);
     expect(UI.length).toBeGreaterThan(20);
-    expect(blocks().size).toBeGreaterThan(100);
-    expect(literals().size).toBeGreaterThan(30);
-    expect(leaves().size).toBeGreaterThan(40);
+    expect(blocks().size).toBeGreaterThan(80);
+    expect(literals().size).toBeGreaterThan(20);
+    expect(leaves().size).toBeGreaterThan(30);
+  });
+});
+
+// ── the named tones, and the one place they may be typed ────────────────────
+describe('a chip tone is a name, not a string a call site remembers', () => {
+  // A design-system audit asked for a typed `tone` axis on `Chip` and `Well`.
+  // The axis was REFUSED and the refusal is measured in those components' own
+  // headers: `.chip--active` is an account alias, `.chip--archived` is one
+  // surface's contrast decision (its rule carries the 3.17:1 it was chosen
+  // against) and `.chip--repo` sets a font family — one word cannot mean all
+  // three, and the design system would be holding ccrc's vocabulary.
+  //
+  // What the refusal left unfixed is the half the audit actually complained
+  // about: `className="chip--activ"` compiles, renders an unskinned pill, and
+  // nothing says a word. The modifier is an APP decision, so the type that
+  // catches the typo lives in the app — `src/session/chipTones.ts` — and this
+  // is what keeps that file honest in both directions.
+  const SHEETS = ['src/session/chat.css', 'src/fleet/fleet.css']
+    .map((rel) => readFileSync(path.join(PKG, 'pwa', rel), 'utf8'))
+    .join('\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+
+  it('every tone it can produce is a rule some stylesheet declares', () => {
+    // The negative is the point: a renamed or deleted rule leaves the map
+    // producing a class nothing skins, which is the same silent nothing a typo
+    // produced before the map existed.
+    const orphans = ALL_CHIP_TONES
+      .flatMap((v) => v.split(/\s+/))
+      .filter((cls, i, all) => all.indexOf(cls) === i)
+      .filter((cls) => !new RegExp(`\\.${cls}(?![\\w-])`).test(SHEETS));
+    expect(orphans, 'this tone names no rule — the class is a silent no-op').toEqual([]);
+  });
+
+  it('is the only place those strings are typed', () => {
+    // `.chip--repo` written at a second call site is the drift this whole
+    // census exists for, and the tones are small enough that a literal reads
+    // as harmless. It is not: the second copy is the one that outlives a
+    // rename.
+    const typed: string[] = [];
+    for (const [tag, file] of APP) {
+      if (file.endsWith('chipTones.ts')) continue;
+      const src = readFileSync(file, 'utf8');
+      for (const m of src.matchAll(/'((?:meta)?chip--[a-z-]+[^']*)'/g)) {
+        typed.push(`${tag}:${path.basename(file)} '${m[1]}'`);
+      }
+    }
+    expect(typed, 'a tone literal outside chipTones.ts — call `chipTone`/`metaChipTone`').toEqual([]);
+  });
+
+  it('answers each name with the class the stylesheet skins', () => {
+    // The map read forwards, so a reshuffled Record cannot pass the two checks
+    // above by accident.
+    expect(chipTone('active')).toBe('chip--active');
+    expect(chipTone('repo')).toBe('chip--repo');
+    expect(chipTone('archived')).toBe('chip--archived');
+    expect(metaChipTone('model')).toBe('metachip metachip--model');
+    expect(metaChipTone('ultra')).toBe('metachip metachip--ultra');
+    expect(metaChipTone('branch')).toBe('metachip metachip--branch');
+    expect(metaChipTone('plain')).toBe('metachip');
   });
 });

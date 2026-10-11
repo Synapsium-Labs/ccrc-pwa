@@ -16,6 +16,17 @@ which commit delivered it or which red suite now keeps it true, and a queue whos
 only in a conversation is a queue nobody can re-audit. This is the mapping, and it is the last
 artifact of the wave.
 
+**AND IT IS CHECKED, because prose is a request.** `server/test/closeout-claims.test.ts` reads
+this file: every commit the table cites must resolve as a commit AND be an ancestor of this
+branch (a hash from someone else's branch is a citation to nowhere), every suite it names as a
+mechanism must exist (a renamed guard turns the table into a list of reassurances), the audit
+page it maps must be present, the `**Status:** CLOSED` line above must say so, and all twelve
+rows must be there — a close-out that quietly dropped one would still read as complete.
+Measured: changing one digit of one cited hash is 1 red. What that test deliberately does NOT
+judge is whether an item was a good idea or whether the mechanism named is the right one; those
+are judgements, and the line is the one `design-declaration.test.ts` draws when it checks that a
+posture was declared and never which one.
+
 **Anchors** are this branch at `ebb216ab`; the audit was first measured at `a05de021`. Line
 numbers are not quoted — trust the shipped source's own comments over this file.
 
@@ -61,6 +72,17 @@ measurement) and `font-family: mono` (not a tone at all). One word cannot mean a
 vocabulary, one screen's contrast argument and a typeface. `Well`'s five call-site classes are
 per-box layout — naming them would put the design system in charge of five layouts it cannot
 see. Both headers now carry that, which is what stops the next reader re-opening it.
+
+**The other half WAS applied, in the app.** The audit's observation — "the call sites already
+spell tones as free-form strings" — was right, and refusing the axis left it standing:
+`className="chip--activ"` compiled, rendered an unskinned pill and said nothing. The modifier is
+an app decision, so the type that catches the typo belongs in the app:
+`pwa/src/session/chipTones.ts` names the three chip tones and the four meta-chip tones as unions
+behind `chipTone()` / `metaChipTone()`, and the seven call sites in `SessionHeader` go through
+them. `markup-census.test.ts` pins both directions — every tone the map can produce must name a
+rule some stylesheet declares (a renamed rule is a silent no-op), and the map is the only place
+those strings may be typed. Nothing about the rendering changed; they are the same seven class
+strings chat.css has always skinned.
 
 ## What the work found that reading the source could not
 

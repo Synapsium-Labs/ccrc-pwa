@@ -341,22 +341,18 @@ const CONTROLS: Record<string, string> = {
     + 'against the axis a thumb actually misses on: a full-width disclosure is '
     + 'easy to hit horizontally and was short only vertically.',
   'session/SessionHeader.tsx <button> (computed)':
-    'SELECTOR button.metachip. The effort chip — `metachip` or '
+    'SELECTOR button.metachip. BOTH meta chips, since their classes went '
+    + 'through `metaChipTone()` — the model chip\'s used to be a literal and '
+    + 'had a key of its own here. They were always one rule and the old entry '
+    + 'said so ("on the same rule as the model chip below"); what the typed map '
+    + 'cost this census is the ability to tell two computed controls in one '
+    + 'file apart, and what it bought is that `className="metachip--modl"` '
+    + 'stopped compiling. The rule carries the floor for both. The effort chip — `metachip` or '
     + '`metachip--ultra` — on the same rule as the model chip below, which '
     + 'declares `--tap-min` since V1. SELECTOR rather than TOKEN for the '
     + 'reason the arm itself enforces: the class here is COMPUTED, so there is '
     + 'no class to look a floor up by, and the entry has to name the rule. See '
     + 'CITES_A_RULE.',
-  'session/SessionHeader.tsx <button> metachip metachip--model':
-    'TOKEN button.metachip, since V1 (operator\'s ruling). They measured about '
-    + '19px — `padding: 3px 9px` around `--fs-2xs` at line-height 1 plus a '
-    + 'hairline, the smallest controls in the app, found by this census and not '
-    + 'by a reader — then 24px by `--sp-6` for one wave. The floor is on the '
-    + 'BUTTON selector, not on `.metachip`, and that is what makes it safe: '
-    + '`.metachip--branch` is a `<span>` stating the branch and keeps the 24px '
-    + 'box, because a label is not a target. The overlay that would have '
-    + 'reached 44 without growing anything is still barred — it would overhang '
-    + 'the OTHER chip, and both are live choosers.',
 };
 
 /** OVERLAY entries name the pseudo-rule that reaches the floor. */
