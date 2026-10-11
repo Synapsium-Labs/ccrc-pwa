@@ -2646,3 +2646,630 @@ and §5.9, with edits to §5.6, §7 and §8.
   tier's pace resumes from that answer.
 - The kept-leaf item's horizon and its guard on a placed create read ccd's wall-clock `at`, as the mirror's other arms do,
   and the item gates no decision.
+
+## 16. Rulings, 2026-10-11 (wave 9's pre-flight) — binding; they AMEND sections 1–15
+
+Wave 9 (run 380) is the temp-root collector's SERVER LANE, the old R58 (R65). It writes the one composer that spends
+wave 7's `ws-collect` token, so its SAFETY subject is "what `ws-collect` is licensed against". It is server code and
+shared L0 only: no ccd, agent or PWA edit. Its pre-flight was four Opus readers and a critic at `d0c2b7803` (wave 8's
+merge). The coordinator's draft rulings were then attacked by four Opus attackers (SAFETY at xhigh, pacing and
+attention, feasibility, SECURITY), with two Sonnet refuters for every break: 68 agents, no error, and 28 breaks
+survived. The revision was checked again by two Opus readers (SAFETY at xhigh) with refuters: 30 agents, no error, and 13
+more items survived, among them five SAFETY wedges and stale-answer paths. A last check (22 agents) found no route that
+composes when a gate forbids it, and 9 more items (three silent-wedge paths among them). Every one is closed below. Evidence: the coordinator's `ccr15-evidence-archive/wave9-preflight/`
+(`preflight.json`, `attack.json`).
+
+**Measured at the pre-flight (2026-10-11; counts only, no contents read):**
+- `$REG/tmproots` holds 9 witnesses. Four belong to a live session, so five are orphan candidates.
+- `$REG/tmpquarantine` does not exist, and no dot-leading or dash-leading name stands.
+- A no-op `chmod 0700` stamps a directory's ctime on this box's ext4 (kernel 6.8), and `~/.cc-tmp` shares `$HOME`'s
+  file system. So every spawn on a recycled id changes the fresh token, a same-run respawn included.
+- Every witness is a child's: `_child_tmpdir` writes one only when `_child_runid_valid` holds, so a witness's `run`
+  names the child's minting run.
+- `cmd_ws_collect`'s flag loop takes flags from any position, including `--session`'s value. With the decision flags
+  on, the ids `--actor`, `--surface` and `--reason` all parse as the id `agent`. That holds for `ws-reclaim` and
+  `ws-expire` too (copies of the three loops, run in scratch). `sweepDec`'s surface is the constant `agent`, so a
+  redirect always lands on `agent`, never on an id the planter chooses. The token binds the id in every lane, so each
+  fails closed.
+- `lstatMeasured` answers `regular`, `symlink` or `other`, or a failure; a directory is `other`. The agent kills no
+  in-flight exec when its socket closes. A link failure returns at once with no document while ccd runs on. Local mode's
+  runner has no timeout.
+- `lock` is per id: a non-file at `$REG/.reap-<id>.lock`, or an id over 244 bytes (`ENAMETOOLONG`), answers it for that
+  id alone (fixture HOME). A one-line junk witness answers TERMINAL `witness-mismatch` with `collect.witness: null`, and
+  journals.
+
+- **R82 — the lane ships SHADOWED; arming is the operator's.**
+  - **The marker.** The lane composes `ws-collect` only while `$REG/collect-lane-live` exists. Nothing in the tree
+    writes it: it is hand-touched, on the `expire-lane-live` and `dead-coordinator-lane-live` precedent
+    (workspace-lifecycle rulings E and B).
+    - Its constant, `COLLECT_LANE_LIVE_MARKER`, is defined once, in the lane's L1 file, which has no `node:` import.
+    - Its holders are exactly that definer and the executor. Neither matches single-definition's WRITE pattern: the
+      lane's feed and attention writes live outside both files, as the expiry lane's do.
+    - A new describe in `single-definition.test.ts` pins this the way `:4747-4772` pins `expire-lane-live`.
+  - **Shadow audits.** Without the marker the lane audits under every rule below. Where it would spend, it records
+    "would collect" and composes nothing.
+    - **An unlistable registry is NOT shadow.** It is a pause this server cannot rule out (R86): the pass audits nothing
+      and clears the observation pairs, and a job stops at its step 2 or step 5.
+    - **The would-collect episode.** One feed row per (id, token) episode, and an attention item. A later would-collect
+      with the same token writes no feed row. The episode ends on another answer, another token, or the id leaving both
+      MEASURED listings (R83). The observation pair is cleared at each would-collect (R87's shadow pacing).
+  - **The marker is read by the executor alone, nearest the argv,** from the same single listing as `reclaim-paused`
+    (R85 step 5). A marker removed between the audit and the act composes nothing.
+    - The executor keeps a last-seen-live flag in the lane's memory. It starts as `shadowed` when the lane is
+      constructed, so an arming made while the server was down, or before a restart that no job saw, is still seen as a
+      flip. A flip either way clears every observation pair, and the job that sees it composes nothing (it frees the
+      slot, R85). So the first live spend after arming needs two fresh observations, both composed after the flip.
+      Pinned: a lane constructed with `collect-lane-live` standing writes the "now live" row and composes nothing on its
+      first job.
+    - Each flip writes ONE feed row ("the collector lane is now live" or "now shadowed"). Any same-uid session can
+      touch the marker, as with `expire-lane-live`, so the operator sees every change.
+  - **Before arming** (the operator's checklist, written by wave 9's docs task): the shadow feed rows have been read;
+    every would-collect names an orphan whose run is closed; no box-wide attention line stands, except the line for ids
+    held by R86 (b) or (c), which may stand once the operator has read it (those ids stay held, armed or not); and the
+    operator knows that any same-uid session can touch the marker. Arming is the §8 measure "an orphaned temp root is collected with
+    no human act".
+
+- **R83 — the population: two listings, read exactly.** This supersedes R58's "through the registry read the server
+  already has": that read does not enter subdirectories (R68), and R66 pins `tmpquarantine/` invisible to it.
+  - **The read.** Per pass, inside the pass's one gather (R87), for each of `<registryDir>/tmproots` and
+    `<registryDir>/tmpquarantine`:
+    1. `lstatMeasured`. Its vocabulary is `regular | symlink | other` or a failure, on both adapters, with no directory
+       kind. A proven `absent` is an EMPTY listing: no `readdir` is made and nothing is raised. Today's absent
+       `tmpquarantine` takes this arm. `symlink`, `regular` and every other failure make THAT listing unmeasured. `other`
+       goes on to step 2. This mirrors ccd's `verb-population-refuses-linked-tmproots`.
+    2. `readdir`. A null listing is resolved with `statMeasured`: `absent` is empty, and every other answer is
+       unmeasured. A FIFO, socket or device is `other` at step 1 and unmeasured here. The two are never folded.
+    3. Names that are not strings, and dot-leading names, are dropped (the witness writer's `.<id>.<pid>.<rand>.tmp`,
+       and review 369 C5's `.<id>.drop.<pid>`).
+    4. A listing of more than `COLLECT_POPULATION_MAX` = 1024 names is unmeasured: one box-wide line giving the count
+       only. A session that writes 100k names cannot bloat the agent frame or the server's memory.
+  - **Stated residual.** A swap of a directory for a link between the lstat and the readdir is not closed by the server,
+    and need not be: every audit of such a name answers ccd's `witness` probe and mints no token.
+  - **The id predicate.** ONE exported L0 predicate decides a temp-root id: wave 8's private `leafIdOk`
+    (`childReclaimSweep.ts:1643`), lifted to `shared/api.ts`'s foot and widened:
+    `isSessionIdShape(id) && !id.startsWith('.') && !id.startsWith('-') && id.length <= 255`. The cap is the bound
+    `store.ts`'s `CHILD_RECLAIM_MAX_SESSION_ID_CHARS` already names, lifted with it, and it closes
+    `line-bound-is-ccds-not-the-mirrors` for the kept-leaf reader too.
+    - **The leading `-` is a SAFETY rule, not defence in depth.** Every redirect pattern in ccd's flag loops begins with
+      `--`, and `isSessionIdShape` refuses `=`, so `!id.startsWith('-')` closes every redirect (measured).
+    - It gates the population BEFORE any argv, the audit's included. It is asserted AGAIN on `job.id` at the executor's
+      step 1 (R85), before any `wsCollectAudit` or `wsCollect` call. Each check has its own mutation pin.
+    - A name that is not dot-leading and fails the predicate is never audited and never composed. The pass counts such
+      names, and a non-zero count raises ONE box-wide line giving the count only, never the name, because the name is
+      untrusted same-uid input.
+    - **This amends R66's population and spec §5.10's**, both of which admit a leading `-`. A dash-leading witness or
+      record stays outside the lane's population until ccd's own refusal lands (R90).
+    - Wave 8's kept-leaf reader takes the same predicate. A dash-leading or over-long kept-leaf id is then not listed,
+      a display-only change.
+    - Pins: `--actor`, `--surface`, `--reason`, `--expect`, `--session`, `--`, `-h` and `-x` compose no argv, audit or
+      act; `a--actor` and `a.--actor` are audited as themselves; a 256-character id is refused; single-definition
+      holds the predicate's one definer.
+  - **Record names** are parsed exactly as ccd's `_ws_collect_rec_id`: `/^(.+)\.([0-9]+)\.([0-9]+)$/`, greedy, and the
+    id must pass the predicate. A record is never matched by an `<id>.*` prefix, because ids admit dots. Pins:
+    `a.b.17.42` gives `a.b`; `a-b.17`, `a-b.17.x` and `.a.1.2` give nothing.
+  - **The population** is the witnessed ids together with the record ids. A record-only id is audited like any other.
+  - **Either listing unmeasured:** the lane audits the ids of the measured listing only, and raises ONE box-wide line
+    naming the listing. It never reads a name's absence from an unmeasured listing. While `tmpquarantine` is
+    unmeasured, the probe `records` is subsumed under its line and lists no per-id item (R87).
+  - **The pre-filter is economy, never permission, and never hides a record.** An id is not audited this pass when its
+    exact `<id>.child` or `<id>.uuid` name is in the tick's registry names, UNLESS a record in the measured
+    `tmpquarantine` listing names it. A record-bearing id is audited at its own pace whatever the registry says,
+    because ccd answers a retaken path `quarantine-kept` above its registry rung so that it is never silent (§14 as
+    built, `crash-at-moved-residual-widened`; R66). The lookup is exact, never a prefix: `a` is still audited while a
+    row `a.b` stands (pinned). The absence of a row is never a reason to compose; ccd's `registered` rung decides.
+  - **Forgetting.** An id is forgotten without a feed row (its pacing and episodes dropped) only when BOTH listings were
+    measured on the pass and neither names it.
+  - **The lane never reads `~/.cc-tmp`.** A scan pins that no lane file passes a path spelling `.cc-tmp` to an `io`
+    member or builds one with a path join. A sentence that names the leaf takes the path from the audit document's
+    `collect.leaf`, through `childReclaimDetailText` (R88). Seeing orphaned slots would need a read grant that R66 calls
+    a SECURITY decision for a later wave, and wave 9 adds none.
+
+- **R84 — the readers.** Each is total, L1, and never borrows reclaim's.
+  - **The audit reader** (`ws-audit --session <id> --collect`):
+    - The document must be a JSON object with `session === id` and `mode === 'collect'`. Anything else is
+      `unreadable`.
+    - At exit 0, `collectable` is accepted only with a `token` matching `^[0-9a-f]{64}$`. A missing, null or short token
+      is `unreadable`, and never spent.
+    - At exit 1, only `verdict === 'unmeasured'` is accepted, with its probe word from `collect.unmeasured`. There is no
+      token arm on exit 1. Every other exit-1 shape is `unreadable`.
+    - No document at all (a runner kill, a composition die) is its own arm, `no-document`, never folded into a probe.
+    - An unknown verdict is a retry, never spent (a `startsWith('collectable')` check is the pinned mutation). An
+      unknown probe word is kept verbatim for classification only, and classed load-sensitive (R87).
+    - `resume`, `exists`, `collect.idleAt`, `collect.leaf` and `collect.witness` are carried for pacing, the hold and
+      display. `resume` here is the QUARANTINE PHASE, not reclaim's breadcrumb. It gates one thing only: R86 (e) tells
+      a resume from a fresh collection by the presence of the `resume` key, because the token's mode is not on the wire
+      (every document prints `mode: "collect"`).
+  - **The verb reader** (`ws-collect --expect <token> --session <id>` plus the decision flags):
+    - DONE, exit 0: `{collected, record, resumed, witness}`, and only when `collected === id`; any other `collected` is
+      `failed` (pinned). `witness: 'kept'` is a successful collection: a recycled spawn's witness was put back.
+    - REFUSED, exit 0: `{refused, detail, paths}`. The word is classed by a total L1 table over L0's collect words AND
+      the shared tokens ccd prints there: `state-changed`, `in-use`, `in-progress`, `paused` and
+      `containment-unproven`. An unknown word is a retry, never terminal.
+    - FAILED, exit 1: `{failed, detail}`, with `probe-unmeasured` or `quarantine-kept`. Collect documents carry no
+      `crumb` (R79), and wave 8's crumb reader is never applied to them.
+    - **No document: three arms, never folded.**
+      1. A RECOGNISED pre-lock die, matched exactly against ccd's own whole stderr, as `archivedExpiry.ts:309` and
+         `matchChildReclaimLockUnopenableDie` do. These are `flock-unavailable`, `lock-unopenable` (bash's diagnostic
+         lines for that one lock path, then `ccd: cannot open the reap lock at <path>`), the usage die, `bad token`,
+         `bad session id` and `python3 unavailable — cannot quote the collection record safely`. Each acted nothing.
+         Each recognised text is pinned by reading it off `ccd/ccd`.
+      2. A runner kill, a timeout, a client wait expiry or a link failure, which MAY have acted (R85).
+      3. Anything else, read as arm 2.
+      Only arm 1 carries a word. Every arm-1 word is a deferral, neutral to every tier, on wave 8's precedent
+      (`CHILD_RECLAIM_PRE_LOCK_DIE_PATTERNS`), and only `flock-unavailable` latches (R87).
+  - A scan pins that the collect readers neither import nor call `parseChildReclaimResult` or
+    `parseChildReclaimAuditFailed`.
+
+- **R85 — the licence: two observations, one job, one act.**
+  - **The rule, one L1 function.** The server spends a collect token only when ALL of these hold:
+    - an earlier audit of the id (observation 1) answered `collectable` with token T;
+    - the executor's OWN audit, in the act's job, is observation 2, and answers `collectable` with the same T;
+    - observation 2 ARRIVED at least the interval after observation 1 arrived, on the server's monotonic clock. Each is
+      stamped when its answer arrives (wave 8's `answered` idiom);
+    - every answer for the id between the two was `collectable` with T. Any other answer resets the pair: another
+      verdict, an unreadable or missing document, a different token, or any verb outcome.
+    The interval is `COLLECT_OBSERVE_INTERVAL_MS`, declared in `watch.ts` beside `CHILD_RECLAIM_SWEEP_MS` and derived
+    from it, never a second literal. The L1 rule takes it as an argument, as `childReclaimNextEntry` takes
+    `passIntervalMs`, because L1 imports L0 alone.
+  - **All three token modes** (`collect`, `collect-absent`, `collect-resume`) take this rule. There is no fast path for
+    a witness-only drop: the same-device bind-mount gap (R89) is the reason.
+  - **Memory only.** Observations live in process memory, keyed by (id, token), and are never written to coord.db or
+    any file. A restart, a raised pause, a missing capability, a pass that fails shut, an unlistable registry or a
+    marker flip clears the PAIRS (R87 says what survives). A restart needs two fresh observations (pinned).
+  - **The token is a comparand, never carried.**
+    - The lane holds T only to compare. The argv is `CCD_ARGV.wsCollect(obs2.token, job.id, dec)`: observation 2's
+      token and the job's id.
+    - `CollectToken` is declared at `shared/api.ts`'s foot, so `ccdargv.ts` imports nothing from a lane file. It is
+      minted only by the collect audit reader, and `wsCollect` takes it. So tsc refuses a plain string to `wsCollect`,
+      and a fixture pins `wsCollect(<string>)` as a compile error. In the same commit the existing plain-string calls
+      (`ws-collect-wiring.test.ts:25-26` and `:39`, `ccdargv-dec-parity.test.ts:161`) pass a test-only cast,
+      `TOKEN as CollectToken` (cast once at each file's token declaration), so `typecheck-tests` stays green.
+    - A string brand is assignable to `string`, so it does NOT keep a CollectToken out of `wsReclaim` or `wsExpire`
+      (measured: tsc rc 0). No fixture claims that direction. Instead a scan pins that the first argument at the one
+      `CCD_ARGV.wsCollect(` site is the identifier bound from observation 2's parsed document in the same function, and
+      that no `wsReclaim(` or `wsExpire(` site names a collector type or variable.
+    - The builder takes no record, slot or phase: ccd derives them.
+  - **The executor job,** on `queue.run(id, …)`. That is the same KeyedQueue key as the reclaim and expiry executors,
+    so no two lanes touch one id at once. In order:
+    1. `capSupported(COLLECT_CAP)` and `capSupported(RECLAIM_PAUSE_CAP)`; the id predicate again (R83).
+    2. The switches, from ONE registry listing: `reclaim-paused` present, or an unlistable registry, stops.
+    3. The presence defer (R86).
+    4. The audit, as observation 2, compared with observation 1 read from memory; then the open-run hold (R86), judged
+       on observation 2's document.
+    5. The switches again, from one fresh listing, with the live marker (R82). This is the job's LAST await.
+    6. After that await, synchronously, with no further await before the argv:
+       - observation 1 is re-read from memory, and a pair cleared since (a pause seen by a pass, a pass that failed
+         shut, a marker flip) composes nothing;
+       - presence is read again;
+       - the open-run hold's store reads are made again (CoordStore is synchronous);
+       - `capSupported(COLLECT_CAP)` is asked again, in the act's own scope.
+       Then, live: `wsCollect(obs2.token, id, dec)`. Shadow: record "would collect" and stop.
+  - **Bounds.**
+    - **The pass.** One pass at a time, under a `collectSweeping` guard that spans the gather and the synchronous
+      decide-and-enqueue only. The pass NEVER awaits a learning audit, an executor job or an act it enqueued: each is
+      tracked in memory (the per-id set, the slot, their enqueued-at and composed-at stamps), and every pass derives the
+      unsettled lines from those stamps. So a call that never settles cannot stop later passes.
+    - **The per-id set** covers EVERY collector ccd call for the id: the learning audits, the executor's audit and the
+      act. Each runs on `queue.run(id, …)`, as `learnExpiry` does. The pass enqueues no further collector call for an
+      id whose previous call has not settled.
+    - **Stale answers are discarded.** A reset is anything that clears a pair: a verb outcome, any other answer for the
+      id, the hold, the presence defer, a would-collect, and the lane-wide clears (a raised pause or an unlistable
+      registry, a missing capability, a pass that failed shut, a marker flip). The lane keeps a lane-wide clear
+      generation and a per-id one. Both are captured when a request is composed, and its answer is an observation only
+      if both are unchanged when it arrives. Pins: a learning audit composed before a job sees the marker appear, and
+      answering collectable after it, seeds no observation; the first live act after arming follows two observations,
+      both composed after the flip.
+    - **At most `COLLECT_AUDITS_PER_PASS` = 2 learning audits per pass, and at most one act job.** In each pass the act
+      job is offered FIRST, to the earliest ripe id (by ripening instant, then id) that has no unsettled or
+      already-enqueued collector call, skipping any id that has one. Learning audits are then offered to due ids by
+      next-ask instant and then id, never by observation age or listing order, again skipping ids with a call pending.
+      An id holding an observation is not offered a learning audit: its next ask is its ripening instant (observation
+      1's arrival plus the interval). A deferred or held id's next ask moves out (R87), so one id cannot take every
+      pass. Pins: with X under a standing presence claim and Y holding a ripe pair, Y's act is composed within two
+      passes; a single collectable orphan reaches its executor job within the interval plus two passes; a ripe X with a
+      never-settling call does not stop Y's act.
+    - **The fleet-wide slot.** At most ONE `ws-collect` is composed per pass, and at most one is in flight fleet-wide.
+      The slot is the collector's own, not reclaim's `CHILD_RECLAIM_MAX_IN_FLIGHT`: sharing would let a presence-leased
+      reclaim stall collection, and the expiry lane already keeps its own. Its life:
+      - it is taken when the act's job is enqueued;
+      - it is freed when the job settles having composed no `ws-collect`, at ANY step through 6: a switch, presence, the
+        hold, a cleared pair, the cap re-check, the start hold-off, a marker flip and shadow's would-collect alike;
+      - it is freed when the act answers a document, or a recognised arm-1 die (R84), which acted nothing;
+      - only an act answering no document of arm 2 or 3 keeps BOTH the id and the slot until `CHILD_RECLAIM_STALL_MS`
+        (480 s, twice the verb's 240 s row) after the act was composed, and the next act on the id is a fresh audit,
+        never a re-spend;
+      - a job still unsettled at `CHILD_RECLAIM_STALL_MS` keeps the slot, never reclaim's "stops counting";
+      - the lane composes no `ws-collect` until `CHILD_RECLAIM_STALL_MS` after its own start, because a restart forgets
+        the slot while the previous process's act may still be running on the box. Every rollout restarts the server,
+        so the first act after it waits 8 minutes: only slower.
+      A bound shared across the three destructive lanes is not this wave's; it is recorded for the operator.
+    - **Stated residual.** A killed ccd's orphaned children, such as the removal's `rm`, can outlive these bounds. They
+      hold the id's reap lock, so ccd answers `in-progress` for that id, but they are not counted against the slot.
+    - **Unsettled calls and jobs.** A killed audit is `no-document`. ANY collector ccd call still unsettled at its stall
+      bound (twice the 90 s row for an audit, `CHILD_RECLAIM_STALL_MS` for the act) raises ONE box-wide unsettled line
+      naming the id, because local mode's runner has no timeout. So does an executor JOB not settled
+      `CHILD_RECLAIM_STALL_MS` after it took the slot, even if it never composed a call (it may wait behind another
+      lane's job on the same KeyedQueue key); that line says the collector's act slot is held. The id is not re-queued
+      until its call or job settles.
+    - **Stated residual (local mode).** The restart half of "one in flight" rests, in local mode, on the server unit's
+      default `KillMode=control-group`, which kills a ccd child with the server. A local install run otherwise can
+      leave the old process's act running past the new process's hold-off.
+    - Pins: an act answering no document blocks a second id's act for STALL; a lane instance composes no act inside
+      STALL of its start; a learning audit for an id runs behind that id's queued reclaim job; two ids each get a
+      would-collect on consecutive shadow passes; a step-6 presence abort lets a second id's act be composed on the next
+      pass; an arm-1 `lock-unopenable` answer frees the slot; a never-settling learning audit raises the line and is not
+      re-queued; an act, and separately an executor audit, that never settles raises the line at its bound while later
+      passes still compose learning audits for other ids; an executor job queued behind a never-settling job on its key
+      raises the slot-held line at STALL.
+  - **Never** `--defer-expired` (ccd's arity guard dies on it, and the collector has no presence rung to licence
+    past). The lane never kills a holder.
+
+- **R86 — the gates.**
+  - **Capabilities.** The pass starts only when `capSupported(COLLECT_CAP) && capSupported(RECLAIM_PAUSE_CAP)`: never
+    run an automatic destructive lane on a box the phone cannot pause. `null` caps answer false. `capSupported` is the
+    gate.
+    - Every `CCD_ARGV.wsCollectAudit(` site ALSO calls `verbSupported(deps.fleetState, argv)` in its own scope, exactly
+      as `childReclaim.ts:1306` and `expireArchived.ts:196` do. The reason: verb-gate keys the site as `ws-audit`,
+      which is in `NEW_GENERATION` and not in `CAP_GATED_VERBS`. Where `collect-v1` is advertised that call answers
+      true, so it changes no decision. `ws-audit` is never added to `CAP_GATED_VERBS`.
+    - `CAP_GATED_VERBS` and `NEW_GENERATION` both gain `ws-collect`.
+    - `ws-collect-wiring.test.ts`'s INERT `it` is rewritten on purpose: its builder and `COLLECT_CAP` holder lists name
+      the lane's files. Its `'ws-collect'` literal list (`['ccdargv.ts','remote/runner.ts']`) and its `'--collect'` list
+      (`['ccdargv.ts']`) stay byte for byte, so the lane spells neither literal.
+    - A new scan pins that every `wsCollectAudit(` scope holds `capSupported(` with `COLLECT_CAP`.
+  - **Pause.** `reclaim-paused` is read at the pass's start (present: no audit at all, and the pairs clear), at the
+    job's start, and after the job's last await. An unlistable registry reads as paused. README `:4199-4201`'s list of
+    what `reclaim-paused` stops gains the collector; that line is outside run 358's hunks. The cleanup-pause row
+    (`:5310`) stays as it is: "child reclamation" covers the collector, and its two prose pins are run 358's.
+  - **Attached.** For a candidate with no row, R58's "attached-session defer" means ccd's `in-use` answer: reported
+    naming its holder, never killed, never licensed past and never ceilinged. The server adds a presence defer: an id
+    for which `presence.isVisible(id)` answers true composes nothing.
+    - It is read at the job's start AND again after the job's last await (R85 step 6). ccd has no presence rung for a
+      collection.
+    - It has no ceiling and no licence. It resets the pair, and the id's next ask is paced by a presence-deferral count
+      of its own (R87), so an open tab never starves other ids. An id it has deferred continuously past
+      `CHILD_RECLAIM_DEFER_CEILING_MS` is listed as attention, never licensed.
+  - **The open-run hold (new; only slower).** The lane composes nothing for an id while ANY of these stands. All are
+    judged on OBSERVATION 2's document, never observation 1's.
+    - (a) `collect.witness.run` names a run that is not terminal: `!TERMINAL_RUN_STATES.includes(state)`, so `unknown`
+      and an out-of-vocabulary word hold.
+    - (b) That run is ABSENT from coord.db. A lost, rebuilt or restored database makes every run absent at once, the
+      open ones included. This is the reclaim lane's `minting-run-absent`, never eligible (`watch.ts:3998`).
+    - (c) That run opened after the witness's `at` plus `CHILD_BIRTH_SKEW_MS`. Run ids restart after a database loss,
+      so such a run is not the minting run, and it holds as (b) does. This is reclaim's birth fence
+      (`childReclaimSweep.ts:643`).
+    - (d) coord.db names the id as the `sessionId` or `claimedBy` of any non-terminal run, through
+      `openRunsForSession(id)` and `openRunsClaimedBy(id)`, the expiry act's destructive-grade reads. A later run may
+      bind an unspent child (`childBindGate` admits a row-less id), and two open runs naming one session is a designed
+      state. This also holds a record-only id.
+    - (e) A collectable document with NO `resume` key (a fresh collection, whose token mode is `collect` or
+      `collect-absent`) that carries no `collect.witness.run`. It cannot happen on a wave-7 ccd, and it is pinned as
+      defence in depth, in both directions: a fresh collectable document with `witness: null` holds, and a collectable
+      `resume` document with `witness: null` and no open run naming the id is not held by (e).
+    - (f) Any of these reads fails. An unreadable store holds, at the job as at the pass (wave 8's fail-shut pass).
+    - **A record's own `run=` is not on the wire** (`collect.records` holds basenames only). A resume whose document
+      carries no witness is held by (d) alone. It finishes an act that began under these same gates, so it is not held
+      by (a) to (c). This is a stated residual.
+    - **What it raises.** The hold counts nothing, and it clears the observation pair, so a released hold needs two
+      fresh observations. A held id's next ask waits `CHILD_RECLAIM_DEFER_CEILING_MS`, never the next pass. An id held past the ceiling is listed as attention. Ids held by (b) or (c) collapse into ONE
+      box-wide line: the coordination database cannot vouch for these temp roots' runs, and a person removes them once
+      nothing still needs them.
+    - Pins, each red under its mutation: an absent run holds; a run opened after the witness's `at` plus skew holds; an
+      open run naming the id as its sessionId, which is not the witness's run, holds; a run bound during the audit
+      holds; an unreadable store holds.
+    - Task 0 measures, read-only, whether each live witness's run is in coord.db and opened before its witness's `at`
+      plus skew. Any that is not is held from day one, which is safe, and the checklist then shows no would-collect for
+      it.
+  - **Older ccd.** No `collect-v1` means no audit and no act. Every key the lane gates on exists on the oldest ccd that
+    advertises the token. An absent gating key never spends.
+
+- **R87 — pacing.**
+  - **One pass, one gather.** The pass keeps "one await before its loop" (the gather) and wave 8's
+    `pass-clock-after-gather` (the throttle re-stamped with the decision clock). The `collectSweeping` guard (R85) spans
+    the gather, so a second pass cannot overtake one; wave 8's passSeq check is therefore not needed here. Its throttle and every stored instant are on
+    the MONOTONIC clock, never `Date.now()`: the expiry lane's throttle is wall-clock, and this lane follows child
+    reclaim's. The population read (R83) is inside the gather.
+  - **What a clear clears.** A raised pause, a missing capability, a pass that fails shut, an unlistable registry and a
+    marker flip clear the OBSERVATION PAIRS only. The per-id pacing (below) survives all of them: the next-ask instant,
+    every run and its j, and the feed episodes. Only a restart loses it. The collector has no mirror seed, unlike
+    reclaim.
+  - **The per-id pacing state is the collector's own, in L1, and only wave 8's FORMULA is imported.** Wave 8's
+    `childReclaimTierAfterFailure` restarts its run on any different countable word, and a collector id answers several
+    classes in turn. So the collector keeps three runs per id, each with its own last arrival. It derives membership and
+    j for each through `childReclaimTierFrom` (module-private today; it gains the `export` keyword and nothing else, `j = max(0, run − CHILD_RECLAIM_TIER_ENTRY_RUN)`), and
+    paces through `childReclaimBackoffMs` and `childReclaimTierPaceMs`. Wave 8's reclaim code is otherwise untouched: no
+    new parameter, no widened type, and every reclaim answer unchanged. A new scan pins one definer of the pace formula,
+    and that the collector imports it.
+    - **The DEFERRAL count** is advanced by a deferral, a box-wide probe, a verb refusal and a recognised pre-lock die
+      (R84 arm 1), and cleared by any answer that is none of these. Its wait is `childReclaimBackoffMs` over the count.
+      It never enters a tier.
+    - **The FAILING run** is advanced by every audit-countable answer, whatever its probe or class: a load-sensitive or
+      per-leaf `unmeasured`, `lock`, and `no-document`. It is cleared only by an audit answer that passed every rung
+      (`collectable`, `changed-recently`), by `collected`, by `not-witnessed`, or by the id leaving both measured
+      listings. Its tier token is the CLASS word `failing`, never the probe, so alternating probes (`idle:timeout` with
+      `idle:walk-failed`, `checkouts` with `rows`) never restart it.
+      - A per-leaf deterministic answer enters the tier at once (wave 8's `stuck` entry); the others enter at the
+        fourth in the run.
+      - Attention: per-leaf deterministic at once; the rest, including `no-document` and `lock`, when the run enters the
+        tier, whatever any box-wide line says.
+    - **The VERB-FAILED run** is advanced by the verb's `failed` and by a no-document act of arm 2 or 3 (R84). It is
+      cleared only by `collected`, `not-witnessed` or leaving both measured listings. A `collectable` observation NEVER
+      clears it: otherwise a move that fails every time (`source-parent-without-owner-write-loops`; the token survives
+      a failed move, because the leaf is never moved and its ctime never stamped) would spend about every second pass for
+      ever. The ramp, then the tier at the fourth, and attention at tier entry. Pinned: failed, then collectable twice,
+      waits the backoff, and the fourth failure waits the tier pace.
+    - **The TERMINAL run** (`witness-mismatch`, `quarantine-kept`, `containment-unproven`) is advanced only by a terminal
+      answer, and enters the tier at once, as wave 8's `stuck` does. Its tier token is the class word `terminal`,
+      whatever ccd's word. It is cleared only by `collected`, by `not-witnessed`, or by the id leaving both measured
+      listings. Any other answer between two terminal answers leaves the run, its j and its last terminal arrival as they
+      stand. That covers an `unmeasured`, a deferral, `no-document`, `changed-recently` and an observation.
+      - Attention at once.
+      - The next ask is never sooner than `childReclaimTierPaceMs(j)` after the last terminal arrival. With j derived as
+        above, the asks after entry come at 15, 15, 15, 15, 30, 60 and 120 minutes, then every 4 h. That is at most 12
+        journaled terminal audits in the first 24 h and 6 a day after.
+      - Pinned against the imported pace, never a copied sequence: that count, and the same count with a terminal answer
+        alternating with `unmeasured checkouts`.
+      - They are never excluded for ever: `quarantine-kept` clears by itself on a retaken path, and
+        `containment-unproven` once the operator fixes the tree.
+    - **The next ask** is the LATEST of every wait that applies: the deferral wait, each run's wait (its tier pace once
+      in the tier, else the ramp over its count), the `changed-recently` schedule, the hold's flat wait, presence's ramp,
+      the ripening instant of a held observation (R85), and the refusal, die and shadow floors below. A "ceiling" named
+      for presence, `registered` or `in-progress` is only the clock for its attention, never a wait. Each wait counts from its own last arrival.
+  - **One total L1 table,** keyed by the answer and, for `unmeasured`, by the probe's class. Its lists are derived from
+    the table. The probe classes are pinned in both directions against ccd's `_ws_collect_unmeasured` call sites (20
+    words plus the four `idle:` words). The idle words are pinned from `_ws_collect_eval`'s `case`, never from the
+    literal `"idle:$why"`.
+    - **`collectable`:** an observation (R85). It clears the deferral count and the failing run, and never the
+      verb-failed or terminal run.
+    - **`changed-recently`:** clears the deferral count and the failing run.
+      - The next ask is `arrivalMono + clamp(idleAt·1000 − arrivalWall, passIntervalMs, 24 h)`. The lower end is the
+        lane's `passIntervalMs` argument, and L1 imports no L4 constant. The wall clock is compared once, at arrival,
+        with ccd's stamp (R39's rule).
+      - An `idleAt` that is not a finite non-negative integer takes the deferral wait, never NaN.
+      - A `changed-recently` that has answered continuously for 24 h on the monotonic clock is listed as attention:
+        no process of this uid uses the leaf, and something keeps changing it (ccd's in-use probe sees this uid only).
+      - idleAt never gates the spend; ccd decides the floor in the lock.
+      - Pinned: both clamp ends, the non-numeric idleAt, and the 24 h attention.
+    - **`not-witnessed`:** silent and retryable. It clears the three runs and advances the deferral count, so it is
+      asked no sooner than the ramp. It raises nothing, ends no item and never marks an id collected (R89).
+    - **`unreadable`, and an unknown verdict** (R84): the failing run (countable, class token `failing`): the ramp, then
+      the tier at the fourth, with attention at tier entry. A newer ccd that adds a verdict word therefore slows to the
+      tier's pace and is listed, never re-audited silently. Pinned: one id answering an unknown verdict four times is
+      listed, and is asked no more often than the ramp allows.
+    - **`registered`, `in-use`, `paused`, `in-progress` (audit verdicts):** deferrals, neutral to every tier. Each
+      fresh audit walks the leaf before it reaches the in-use rung, so the deferral wait matters.
+      - `in-use` is attention at once, naming ccd's holder; R71's leaked `tmux: server` holders are a standing case.
+      - A `registered` that persists continuously past `CHILD_RECLAIM_DEFER_CEILING_MS` is attention.
+      - An `in-progress` that persists continuously past the ceiling is attention. It names the lock path
+        `$REG/.reap-<id>.lock`, never a holder ccd did not name. A killed ccd's orphaned children (R85) are its standing
+        case.
+    - **`unmeasured`, BOX-WIDE (`platform`, `mv`, `flock`, `witness`, `floor`, `clock`, `eval`, `quarantine`):** a
+      deferral. ONE box-wide line (R88), never one per id. `platform`, `mv`, `floor` and a `quarantine` of the wrong
+      owner or mode never heal by themselves.
+    - **`unmeasured`, PER-LEAF and DETERMINISTIC (`idle:cap`, `idle:unreadable`, `mode`, `device`):** the failing run,
+      entered at once, with attention at once. R68 names these "so that wave 9 raises attention rather than retrying
+      silently". `device` is never read as transient (R89).
+    - **`unmeasured`, LOAD-SENSITIVE** (`idle:timeout`, `idle:walk-failed`, `in-use`, `checkouts`, `rows`, `registry`,
+      `identity`, `leaf`, `slot`, `records`, `token`, `lock`, and any unknown probe word): the failing run.
+      - `lock` is per id: a non-file at `$REG/.reap-<id>.lock`, or an id too long for that name, answers it for one id
+        alone (measured). It joins a box-wide line only in a pass where at least two distinct ids answered `lock` and no
+        audit answered anything else. Pinned: one id with a planted `.reap-<id>.lock` directory raises no box-wide line
+        and reaches the tier.
+      - `records` lists no per-id item while the server's own `tmpquarantine` listing is unmeasured (R83).
+    - **`no-document`** (the audit): the failing run. Its box-wide line lists no per-id item, and stands only in a pass
+      where at least two distinct ids' audits answered it and no audit returned a document; the per-id attention at
+      tier entry stands regardless. Pinned: one id answering `no-document` four times is listed.
+    - **TERMINAL:** the terminal run (above). A verb REFUSAL or FAILURE whose word is terminal (`refused
+      containment-unproven`, `refused quarantine-kept`, `refused witness-mismatch`, `failed quarantine-kept`) is a
+      terminal answer: it advances the terminal run and takes precedence over the refusal and verb-failed rows below.
+      Pinned: a `refused containment-unproven`, then two collectable audits, waits the terminal pace, and the item is
+      listed at once.
+    - **The verb's `failed`, and an arm-2 or arm-3 no-document act:** the verb-failed run.
+    - **A verb REFUSAL of any word,** retryable included, resets the pair and is a deferral. ccd journals every
+      `ws-collect` refusal, so the id's next learning audit also waits at least `CHILD_RECLAIM_DEFER_CEILING_MS` after it,
+      as wave 8's `refusedAt` paces a refusal. Pinned: at most 96 verb refusals a day per id.
+    - **A recognised pre-lock die (R84 arm 1):** a deferral, neutral to every tier. Only `flock-unavailable` latches.
+      Every other arm-1 die also takes the refusal floor (the next learning audit no sooner than
+      `CHILD_RECLAIM_DEFER_CEILING_MS` after it), because a `collectable` observation clears the deferral count and the
+      cycle would otherwise repeat; the same die recurring past the ceiling is attention.
+    - **The hold (R86):** resets the pair, and the next ask waits `CHILD_RECLAIM_DEFER_CEILING_MS` flat.
+    - **The presence defer (R86):** resets the pair, and the next ask waits `childReclaimBackoffMs` over a
+      presence-deferral count of its own. Each keeps its own continuity clock for its attention.
+  - **Stated residual: the collector's pacing is memory-only.** An unmeasured audit is journaled nowhere, and the lane
+    adds no mirror read (R89), so nothing is seeded. Every restart, and every rollout is one, re-enters each terminal and
+    verb-failed id at j = 0: about eight extra journaled terminal audits, or failing acts, per such id in the 4.5 h after
+    it. The 12-then-6 bound holds between restarts only. For every other id a restart costs at most one extra ask, and
+    since the observations restart too, it can only delay a collection.
+  - **`flock-unavailable`** from the verb latches box-level for the process, as `archivedExpiryBoxRefused` does. While
+    it is latched, a box-wide line says so, so an armed lane is never silently off.
+  - **Shadow pacing.** A would-collect clears the observation pair and touches no run. The id's next learning audit is
+    no sooner than `CHILD_RECLAIM_DEFER_CEILING_MS` after the would-collect's arrival, a floor inside the "latest of"
+    rule above, so shadow never audits a collectable id every pass.
+  - **The runner budget stays.** `ws-audit --collect` keeps `ws-audit`'s 90 s row. One kill grace is paid
+    (`g9-kill-grace-residual`, corrected 10-11 00:05): 30 + 10 + 30 + 3 = 73 s, or 78 s at the 8 s grace. A test reads
+    both sides from source and pins `30 + 10 + 30 + grace < 90`.
+    - **Stated residual.** The rows rung's git reads of other rows' repositories (`_ws_reclaim_workdir_shared`) carry no
+      bound of their own in that sum. A kill there is `no-document`, which fails closed and is paced as above.
+    - No mode-keyed row is added, so `remote-runner.test` and the runner comment stay as they are.
+
+- **R88 — attention and the feed.**
+  - **Collector attention is an arm of `ChildReclaimAttention`.** No new `CoordStatus` field and no PWA edit: the PWA
+    reader keeps any item with a string `sessionId`, a string `sentence` and a null-or-number `runId`, whatever its
+    `kind` (`childReclaimWords.ts:78-83`).
+    - The arm is declared at `shared/api.ts`'s foot. The union's last-arm line is rewritten in place, line-neutral.
+    - Its `runId` is the audit document's `collect.witness.run`, or null; a record's run is not on the wire. It carries
+      no `at`: an item built from server memory has no ccd clock to carry, and the union's `at` is ccd's alone.
+    - Task 0 reads how `ChildReclaimBanner.tsx` renders `sessionId` (text or a link), and the box-wide label below is
+      chosen to render as plain text.
+  - **A box-wide line is a SINGLE collector item, never a `kept-many`.** That covers a box-wide probe class, the
+    `no-document` and `lock` lines, an unmeasured or over-long listing, the refused-name count, the flock latch, the
+    unsettled collector call or job (audit, act or executor job) and the held-by-(b)/(c) line.
+    - Its `sessionId` is a fixed label that no session id can equal, because it contains a space or a `/`, which
+      `isSessionIdShape` refuses: for example `~/.cc-sessions/tmproots`, `~/.cc-sessions/tmpquarantine` or `the fleet
+      box`. The labels are spelled once, in a total table. Its `runId` is null.
+    - It takes no id in the one-item-per-id set, so the per-id items beside it still list.
+    - Pinned: an unmeasured listing with no measured id renders through `childReclaimAttentionOf`.
+  - **A collapsed per-id line** uses `kind: 'kept-many'` with a word no other line uses. Members need a numeric
+    `runId`. A collector item with no run (`collect.witness` null) never stays single beyond
+    `CHILD_RECLAIM_KEPT_MANY_OVER` of one word: past that, those items collapse into ONE box-wide count line naming the
+    count and at most that many ids. Pinned: six unreadable witnesses list as one line.
+  - **One item per id, with this precedence:** a reclaim item (about the row that stands) wins over a collector item,
+    and a collector item wins over a leaf-kept item. The winner CARRIES the loser's operator instruction as a second
+    clause, verbatim, wherever the winner does not already give it:
+    - a collector item carries a leaf-kept item's clips clause, because the clips leaf is never the collector's (R66);
+    - a reclaim item carries a collector `quarantine-kept` item's sentence, because a kept record is never silent (R66),
+      and a recycled row standing over its id is exactly when it arises;
+    - a reclaim item also carries a leaf-kept item's clips clause. Wave 8's `leaf-kept-yields-to-a-live-item` dropped the
+      leaf item silently; it now yields its clips clause to the winner, by the same mechanism (slug
+      `leaf-yield-carries-the-clips-clause`).
+    - The clause comes from the function that writes the leaf-kept sentence: `childReclaimLeafKept`'s yield gains
+      `clipsClause: string | null`. It is the `its clips directory ~/.cc-clips/<id> (<word>: <phrase>)` part; for a cut
+      line, `whether its clips directory ~/.cc-clips/<id> was kept is not known`; and null when clips is
+      `none-or-unreported`. `childReclaimAttentionWithLeaves` takes those yields, not bare items.
+    - An item that carries a second clause NEVER joins a collapsed line; it stays single.
+    - Pinned: an id with both, among six or more collector items with runs, still renders the clips sentence; a reclaim
+      item over a kept record still renders the record's sentence.
+  - **One write.** The merge happens inside `childReclaimPublishAttention`, the list's one write, which reads the
+    collector lane's memory. The collector never assigns `childReclaimAttentionList`, and census (c)'s WRITE literal in
+    `child-reclaim-verdict-readers.test.ts` is re-pointed in the same commit. **Stated residual:** collector items reach
+    the frame only at the reclaim pass's publish, and stand unchanged while that pass fails shut.
+  - **Every ccd-sourced string** that reaches a sentence or a feed row goes only through `childReclaimDetailText`:
+    `detail`, `paths`, `collect.leaf`, a record name, and any unknown probe or verdict word. The audit's stdout detail
+    is UNCUT and quotes session-chosen paths, including `/proc/<pid>/fd` targets in an in-use holder.
+    - Before any collector string reaches a sentence, `detailUnsafe` is widened from a hand list to every code point of
+      general category Cc, Cf, Zl, Zp or Cs. That covers LRM, RLM, ALM, U+200B to U+200D, U+FEFF, U+00AD, U+180E,
+      U+2060 to U+2064, U+206A to U+206F, U+FFF9 to U+FFFB and lone surrogates; plus, by code point, U+034F (category Mn)
+      and the whole tag block U+E0000 to U+E007F by range, whose unassigned points are Cn. Each listed class is pinned with its deletion red, and the narrowed upper bounds of wave 8's classes
+      (`detail-unsafe-upper-bounds-unpinned`) are pinned too.
+    - The existing `LC_LINE_MAX` cut (2048 code points) is the length bound, pinned at 2048 and 2049.
+  - **The feed** writes one row per (id, word) episode, quiet on repeats (wave 8's `childReclaimFeedQuiet` pattern),
+    under titles of the lane's own.
+    - A witness-only `collected` (`record: null`, `witness: 'dropped'`) says no leaf stood and the witness was dropped.
+      It never says a temp root was removed (pinned).
+    - Shadow writes "would collect <id>" once per (id, token) episode (R82). Each marker flip writes one row.
+  - **The two leaf-kept sentences that become false once the lane is armed** are rewritten so they are true whether
+    the lane is shadowed, armed, paused, or on a box without `collect-v1`. Each half is written only when that half
+    was kept.
+    - `:1630-1631` becomes: "What was kept stays on disk." Then, when clips was kept: "ccrc never removes the clips
+      directory; a person removes it once nothing still uses it." Then, when the temp root was kept: "ccrc’s temp-root
+      collector removes the temp root once it has stood idle, but only while the collector is switched on, the fleet
+      box’s ccd can collect and cleanup is not paused, and only if ccrc recorded handing that directory out; until
+      then, or if the collector lists it for you, a person removes it once nothing still uses it. The temp root leaves
+      this line once it is collected."
+    - `:1706` becomes: "Each clips directory stays until a person removes it; each temp root stays until ccrc’s
+      temp-root collector removes it, while the collector is switched on and cleanup is not paused, or until a person
+      does. The feed row of each names what was kept and why."
+    - A prose case pins both, and pins that "ccrc deletes nothing more of it" is gone. Workspace-lifecycle's similar
+      sentence (`archived-expiry-policy.test.ts:522`) stays true and is not touched, because an archived non-child
+      workspace's temp root is never witnessed.
+  - **`attention-runid-sentence-misses-leaf-arms` is fixed in the same commit as the arm,** line-neutrally
+    (`shared/api.ts:3832-3834`). `runId` is the run the item's own evidence names: the registry marker's minting run for
+    the terminal, failing, stuck and kept arms; the journal line's `meas.childOf` for leaf-kept; and the audit
+    document's `collect.witness.run` for the collector. Otherwise it is null.
+
+- **R89 — what wave 9 does not change, and the residuals it states.**
+  - **R75's closure stands.** No act joins `LIFECYCLE_BIRTH_ACT`, and `collect` stays out of the birth, generation,
+    latest-event and seed reads. `child-reclaim-birth-removal.test.ts` and `ws-collect-act.test.ts` stay green
+    untouched.
+  - **The lane adds no mirror read of `collect` rows.** Terminal pacing lives in memory (R87).
+  - **Stated residual: a witness-only `collect done` ends wave 8's kept-leaf temp-root half.** `lifecycleLeafEndsFor`
+    reads any `collect` `done`. Under `device-test-cannot-see-a-same-device-bind-mount`, or after
+    `tail-drop-believes-an-absent-leaf`, the item ends while the leaf still stands under a mount. Wave 9 is the first
+    wave that makes such a done happen automatically. Filtering the end on a removal needs a `meas` key from ccd (a
+    detail parse is fragile), so it goes to the path-identity follow-up.
+  - **Stated residuals, read as standing, never transient:** `permanent-device-change-holds-every-absence`, a
+    `~/.cc-tmp` deleted whole, and `source-parent-without-owner-write-loops`. The lane paces each (R87), and the cure of
+    each is ccd's. `device-test-cannot-see-a-same-device-bind-mount` loses only a witness, never data; R85's two
+    observations are the lane's only mitigation.
+  - **`tail-drop-ignores-a-recordless-slot` and `tail-drop-believes-an-absent-leaf`** are the reclaim tail's, and the
+    server cannot see a slot or a hidden leaf. `not-witnessed` therefore ends nothing (R87).
+  - **Stated residual: ids of 223 to 244 bytes** pass the reap lock but cannot write a slot or record name within
+    NAME_MAX. ccd's answer there is paced by the tier like any per-id answer.
+  - **No agent, ccd or PWA edit.** The agent's read grant already covers both listings (`isUnder(.cc-sessions)`). The
+    CLAUDE.md SAFETY bullet on `ws-collect` is already true once a composer exists and is not edited, and no skill text
+    names the verb (`ws-collect-prose.test.ts`).
+
+- **R90 — the carried pre-flight list, placed.**
+  - **In wave 9:**
+    - `attention-runid-sentence-misses-leaf-arms` (R88);
+    - `defer-whys-loop-has-no-floor`: a `toContain('generation-changed')` floor and a length floor, in the sweep-policy
+      suite;
+    - `leaf-kept-census-title-overclaims`: the title says what the census checks;
+    - `spec-presence-constants-citation-stale`: re-pointed by content;
+    - `detail-unsafe-upper-bounds-unpinned` and wave 8's deferred `detailUnsafe` classes (R88);
+    - `line-bound-is-ccds-not-the-mirrors`, closed by the lifted predicate's 255 cap (R83);
+    - `g9-kill-grace-residual`'s prose in the spec (`:1364-1366`), with an as-built note (R87);
+    - `corrupt-admin-entry-holds-the-repository`: no reclaim change; the collector's `checkouts` and `rows` are
+      load-sensitive (R87).
+  - **To the path-identity follow-up, which is ccd-bearing:**
+    - ccd's comments and residuals: `witness-only-header-omits-the-pause-rung`, `floor-knob-zero-strip-is-quadratic`,
+      `tail-drop-believes-an-absent-leaf`, `tail-drop-ignores-a-recordless-slot` and g9's ccd comment;
+    - ccd's own refusal of a dash-leading id: `_ws_tmproot_id_ok` refusing a leading `-`, or the flag loops of
+      `ws-collect`, `ws-reclaim` and `ws-expire` stopping at `--session`'s value. All three redirect on `--actor`,
+      `--surface` and `--reason` (measured);
+    - the collect audit creating `$REG/.reap-<id>.lock` for every name that reaches its lock rung, junk names
+      included;
+    - review 369's C1 (resume-boundary spawn pins) and C5, and C13's reach (review 374 F6);
+    - `maker-under-bsd-order-unpinned`;
+    - the kept-leaf end filter (R89);
+    - the `rec == f` recycled-admin rule and the NUL back-link corner;
+    - `collect-why-cases-red-past-the-cut`. It is test-only, and goes there by choice, to keep wave 9's suite
+      unchanged.
+  - **Also to the path-identity follow-up, as a SECURITY item:** registry ids come from any `<x>.uuid` name with no shape
+    filter (`registry.ts:1119`). `ws-release` and `ws-rename` are composed automatically with registry-derived ids,
+    carry no token, and use flag-scanning parses. The follow-up gates `readRegistryMeasured`'s ids, server-side
+    (refusing a leading `-`), beside ccd's fix. Wave 9 changes no other builder.
+  - **Its SECURITY lens also confirms** that no other builder in the wave puts a listing-derived id after a
+    flag-scanning parse.
+  - **To a later PWA pass:** the comment at `pwa/src/fleet/childReclaimWords.ts:56-58`.
+  - **Recorded only:** `leaf-end-acts-spelled-twice`; the attention census's quote style (review 379); token brands for
+    `wsReclaim` and `wsExpire`; an expiry-style review conjunct on the hold, which is not needed because a review's
+    report lives in `~/.cc-clips`, outside the collector's scope (R66).
+
+- **R91 — overlaps (R56).**
+  - **Workspace-lifecycle wave 6 (run 358, plain-ridge)** holds live claims 1149 to 1153, with hard expiries from 17:02Z
+    to 18:13Z on 10-11:
+    - 1149: `ccd/ccd`, the crumb and expire-consent-branch tests, and its plan;
+    - 1150: `archivedExpiry.ts`, `expireArchived.ts` and the two archived-expiry tests;
+    - 1151: `containment-refuted-word.test.ts` and `expire-archived.test.ts`;
+    - 1152: `endDeadCoordinator.ts`, `watch.ts` and the two dead-coordinator tests;
+    - 1153: `README.md`, the workspace-lifecycle spec and the two prose tests.
+
+    Its branch (`e5fba53e0`) is based on `cc33c8d51`, before wave 8. At `d0c2b7803` its regions are: the `watch.ts`
+    import lines `:112`, `:121` and `:125` (its own diff numbers them `:105-121`); the expiry feed call at `:4155`; the
+    dead-coordinator deps at `:4366`; and README `:3552-3553`, `:3585` and `:3789-3790`.
+    - It will land first, so wave 9 is the second lander: it merges main and re-points by content.
+    - At dispatch, if run 358 has not merged, the brief names those regions as off-limits. Wave 9 then adds its pass
+      after `sweepDeadCoordinators`'s call, and its import block away from W6's.
+  - **`shared/api.ts`** is edited only at its foot, plus line-neutral in-place rewrites above it: the union line, the
+    `runId` sentence and the predicate's new declaration at the foot. The predicate's former definitions,
+    `leafIdOk` (`childReclaimSweep.ts:1643`) and the module-private cap `CHILD_RECLAIM_MAX_SESSION_ID_CHARS`
+    (`store.ts:1493`), are server files and become imports. README cites `shared/api.ts` by line, so any insertion above `:7878` would pay
+    the re-anchor and the five citation cases.
+  - **PR #322** (stall settings) and **PR #346** (design system: `pwa/`, and CLAUDE.md `:87-100`) are line-disjoint,
+    provided wave 9 makes no PWA edit and touches CLAUDE.md, if at all, only at `:10`.
+  - **`single-definition.test.ts`** gains the live marker's block, the id predicate and the scans. Claims are re-read
+    at dispatch.
+  - **Size and numbers.** One PR: about 11–14 tasks, 30–45 files and 4–6.5k lines. 32 numbers are issued before dispatch
+    and listed singly in the evidence archive (`wave9/block-numbers.txt`). Wave 8 needed 36 with its fix round, so if a fix round needs more they are
+    issued then, never guessed.
+
+- **R92 — amendments.**
+  - **R58's listing.** R58's "lists witnessed candidates through the registry read the server already has" is superseded
+    by R83.
+  - **R57's floor.** R57's "the newest of ctime and mtime" is superseded by R68 (ctime only).
+  - **R58's "attached-session defer"** means R86's.
+  - **R58's "R39's pacing class"** reads as R85's and R87's bounds: the collector's own destructive slot, at most two
+    learning audits a pass, and wave 8's ramp and tier by import. Reclaim's `CHILD_RECLAIM_MAX_IN_FLIGHT` and its
+    lease are unchanged.
+  - **R66's population and spec §5.10's** exclude a dash-leading or over-long id (R83).
+  - **The spec, rewritten by wave 9's docs task** to describe the lane as built, shadowed:
+    - §5.10: `:233`, `:1261-1264`, `:1294-1299`, `:1321-1322` and `:1364-1367`;
+    - §7: `:1540`, `:1559`, `:1564` and `:1567`;
+    - §8: wave 9's row, `:1872` (`:1871` is wave 8's), and the paragraph at `:1878-1881`.
+  - **The README, likewise:** the "shipped inert" heading and the three "nothing composes it" sentences (`:3762`,
+    `:3780-3781`, `:5307`, `:5317-5318`), plus `:4199-4201` (R86).
+  - **§14 as built's `g9-kill-grace-residual` figures** (about 79 s, and 94 s at the widest grace) are superseded by R87:
+    one kill grace is paid, about 73 s, or 78 s at the 8 s grace (ledger, 10-11 00:05).
+  - **"§16 as built" and the numbers.** The worker writes "§16 as built (wave 9, run 380)", naming departures by slug,
+    with no number. The coordinator assigns the numbers at the fix round, singly.
