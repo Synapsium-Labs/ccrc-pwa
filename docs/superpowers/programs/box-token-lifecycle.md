@@ -751,6 +751,47 @@ spec's after wave 1.
     - (a)'s history test decided after the state read, not at the `token-absent` finding;
     - `ccrc-doctor` measured by CI.
   - **Decisions 1 and 2 were put to the operator** at 01:30 UTC.
+- **2026-10-11 13:40 UTC: the operator ruled Decisions 1 and 2. Row 2b is ruled through, and its gates are
+  re-measured.**
+  - **The operator's rulings,** answered at about 13:15 UTC, about 12 hours after the question:
+    - **Decision 1: A.** An armed `retired-presented` FAIL stands only while a retired presentation is unanswered,
+      meaning it is newer than the last completed rotation. The driver keeps a lifetime stamp. D-4412 owes a rotation
+      while the stamp is unanswered, under the same one-an-hour bound. This is number 4552, as the plan wrote it.
+    - **Decision 2: (a).** `token-absent` and `fleet-token-absent` take their armed class from history. They are WARN
+      on a box never handed a value, or on a server with no state file, and FAIL otherwise. This is number 4553.
+  - **My rulings:**
+    - **Residue 8(a) is not owed.** A set-aside `box-token.json.unusable-*` is already reported when it happens: boot
+      logs it, and the forward rotation it owes shows as `rotation-owed:<why>` until that rotation completes. The
+      file is kept as evidence for a human. A doctor WARN that only a human's removal clears would be a hand step.
+      Retention and pruning go to row 3.
+    - **R-i is not owed.** The fleet PASS line keeps "last sync proved" with no age, because the age of a proved sync
+      is no health signal once rotations are weekly. The console card shows the time.
+    - **The placeholder fleet file (row 2a's worker's finding):** doctor's fleet reader reads the shipped
+      placeholder as the existing FAIL word `fleet-token-unusable`, with the literal held to `PLACEHOLDER_TOKEN`.
+      No new word is needed.
+    - **Review 375's F1 to F7 ride row 2b:**
+      - F1: notify.sh's trim matches `extractToken`'s, U+FEFF and U+00A0 included, with a pin.
+      - F2: the advice names `--url` for a box with no `agent.env`.
+      - F3: the guard stays lexical, and its comment says why that suffices (one literal `$SECRETS` prefix).
+      - F4: the advice pin holds both halves.
+      - F5 to F7: prose.
+    - **The GPT-lane Plan 4 gate moves from dispatch to the merge.** Building the flip touches no live box. Only its
+      release would, so the merge waits for the operator's ruling on the sampler's baseline. `ccrc-pwa-clear-mesa`
+      recommends option 2 (mail 4186) and brings it to the operator.
+  - **Gates re-measured at 13:40:**
+    - Claim 1141 has ended. Its run 354 changes only `ccd/history/*`, `ccd/compact-card.*`, `ci.yml` and the history
+      tests, measured read-only in its workspace. So no row 2b file is under it.
+    - Claim 1153 (run 358, workspace lifecycle's wave 6, `ccrc-pwa-quiet-river`) holds `README.md`. Row 2b's two
+      README edits, the `box-token` doctor row and residue 6(a)'s sentence, are disjoint from wave 6's paragraphs.
+      Consent was asked.
+    - No open PR that touches row 2b's files has moved since September.
+    - The live server reads `PASS … generation #3`, with `retiredPresented` 0. So the legacy arm owes nothing at the
+      arming release.
+  - **Step 0's plan corrections go into row 2b's brief:**
+    - the fixture `python3` in `ccrc-install.test.ts` and `ccrc-update.test.ts` lets the two box-token programs
+      through;
+    - (a)'s history is decided after the state read;
+    - `ccrc-doctor` and `ccrc-install` are run split by `-t`, with CI the arbiter.
 - **Model auto-advance is not this programme's.** The operator assigned it to `ccrc-pwa-clear-mesa` at 11:25 UTC. The
   shared operator-window marker that coordinator proposed is off by the 13:28 ruling.
 
