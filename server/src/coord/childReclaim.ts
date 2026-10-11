@@ -195,7 +195,7 @@ export function childReclaimRowUuid(rec: Pick<SessionRecord, 'uuid' | 'unmeasure
   return rec.unmeasured.includes('uuid') ? null : rec.uuid;
 }
 
-/** The birth (spec §5.1): the opening `create` of the session's CURRENT generation, on ccd's clock, or null when
+/** The birth (spec §5.7): the opening `create` of the session's CURRENT generation, on ccd's clock, or null when
  *  it cannot be placed. It is the one placement shared by the birth fence, the coordination fence and the sweep
  *  entry's `bornAt`.
  *

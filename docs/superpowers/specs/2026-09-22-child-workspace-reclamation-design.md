@@ -355,8 +355,9 @@ compared at four points, and a request is spent only if every one agrees.
 3. **The executor's re-read.** After the switch is read and before presence is asked, the executor reads the generation
    again. A different value, or `absent` where there was a value, defers the request as `generation-changed`. A read that
    fails defers it as `marker-unreadable` and never as a change: it says the box could not be read, not that the workspace
-   moved. The re-read comes before presence so that no presence answer measured on a new workspace is credited to the old
-   one's episode.
+   moved. The re-read comes before presence so that a licence never reaches a re-minted workspace. It promises no more than
+   that: a re-mint that lands between the re-read and the presence answer can still credit that one answer to the old
+   entry, and the next pass reads the new generation and replaces the entry.
 4. **The audit's.** `ws-audit --reclaim` prints the generation it bound into the token. The executor compares it with the
    request's, and a different value defers `generation-changed`: the slug was minted again between the re-read and the
    audit, and the token is over the new workspace. A token-bearing document whose `generation` is null, or is not exactly

@@ -850,7 +850,7 @@ export class FleetWatcher {
   /** Per marked child: the workspace generation in which THIS lane has seen a
    *  `hold-retired` verdict for it once, with no other verdict in between. The
    *  key is the child's birth, the run its marker names and its generation
-   *  file's value (`ChildReclaimGenerationIdentity`; spec §5.6: slugs recycle).
+   *  file's value (`ChildReclaimGenerationIdentity`; spec §5.7).
    *  A `hold-retired` verdict that a SECOND consecutive pass finds for the SAME
    *  generation queues the release job, carrying that generation, which the
    *  job re-reads nearest its argv. A sighting of ANOTHER generation is a

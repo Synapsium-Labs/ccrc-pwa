@@ -2525,7 +2525,7 @@ Where wave 8's code and its draft rulings narrowed or spelled out the rulings ab
 R79), they now read as follows. This note amends; it edits no earlier text. It names each departure by slug and carries
 no number: the coordinator assigns this wave's numbers from the two blocks run 348 was issued, and the wave 8 plan's
 `## Deviations found` defines them. This wave's committed comments and test titles cite §5.5, §5.6, §5.7 and §5.9 of the
-design spec, and a few cite §5.1 (the birth) and §7 (its stated residuals). The spec text this wave adds is in §5.5, §5.7
+design spec, and a few cite §7 (its stated residuals). The spec text this wave adds is in §5.5, §5.7
 and §5.9, with edits to §5.6, §7 and §8.
 
 **R73 (the licence bound to the generation).**

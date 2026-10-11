@@ -1,5 +1,5 @@
-// Child reclamation, wave 8: the birth (spec §5.1) is the opening `create` of the workspace's current
-// generation, and a `purge` that follows it makes it unplaced (spec §5.6: slugs recycle). The row's OWN
+// Child reclamation, wave 8: the birth (spec §5.7) is the opening `create` of the workspace's current
+// generation, and a `purge` that follows it makes it unplaced (spec §5.7). The row's OWN
 // purge never does: ccd journals `purge done` BEFORE it unlinks the row, so a purge that died mid-way,
 // or answered rc 3, leaves the same generation's row listed with its own purge after its own create.
 // ONE store read (`lifecycleBirthEventsFor`), ONE placement (`childReclaimBornAt`). There are FOUR
@@ -239,7 +239,7 @@ describe('the sweep hands the birth its row\'s uuid', () => {
   });
 });
 
-describe('child-birth-unplaced says both of its causes (spec §5.1, §5.6)', () => {
+describe('child-birth-unplaced says both of its causes (spec §5.7)', () => {
   it('names a missing dated creation AND a removal after it, never the first alone, and still ends on the next pass', () => {
     const s = CHILD_RECLAIM_SKIP['child-birth-unplaced'].sentence;
     expect(s).toContain('holds no dated creation of this workspace, or a removal journaled after its creation');

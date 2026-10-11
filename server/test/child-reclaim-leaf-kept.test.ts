@@ -156,11 +156,14 @@ describe('childReclaimLeafKept — one item per id, from its latest reclaim row 
     for (const v of ['0', 'x', '12345678901', undefined]) expect(run(v), String(v)).toBeNull();
   });
 
-  it('lists nothing for a row whose id is not a session id\'s shape, so no feed row is written for it; a well-shaped id still lists', () => {
+  it('lists nothing for a row whose id fails ccd\'s id rule (a session id\'s shape, no leading dot), so no feed row is written for it; a well-shaped id still lists', () => {
     // Any session can append a journal line, so the mirror's id is attribution, never a path to name on the
     // banner. These ids would put a path outside ~/.cc-clips, a second line, or a reordered line before a person.
     const kept = { childOf: '41', clipsKept: 'refused', tmpRootKept: 'in-use' };
-    const forged = ['x/../../.ssh', 'demo-gone\nccd kept nothing else', 'demo-‮gone', 'demo gone', ''];
+    // ccd's own id rule refuses every dot-leading name too, so `.`, `..` and `.hidden` never name a path here.
+    const RLO = String.fromCharCode(0x202e);
+    const forged = ['x/../../.ssh', 'demo-gone\nccd kept nothing else', `demo-${RLO}gone`, 'demo gone', '', '.', '..',
+      '.hidden'];
     expect(derive(forged.map((sessionId) => src({ sessionId, meas: kept })))).toEqual([]);
     const got = derive([...forged.map((sessionId) => src({ sessionId, meas: kept })), src({ meas: kept })]);
     expect(got.map((k) => k.item.sessionId)).toEqual([ID]);

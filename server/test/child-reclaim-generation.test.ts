@@ -157,7 +157,7 @@ describe('one implementation each', () => {
       'its definition, step 2a and step 5; and the close').toEqual([
       ['server/src/coord/childReclaim.ts', 3], ['server/src/coord/close.ts', 1],
     ]);
-    // The birth's ONE placement (spec §5.1, §5.6) works as follows. `childReclaimBornAt` alone reads the birth
+    // The birth's ONE placement (spec §5.7) works as follows. `childReclaimBornAt` alone reads the birth
     // rows. The create-only read keeps its one other caller, the attention list. Each of the four consumers
     // hands the placement the uuid of the row it read.
     const placement = 'coord.lifecycleBirthEventsFor(';

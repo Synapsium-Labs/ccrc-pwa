@@ -245,13 +245,13 @@ export const childReclaimSameGeneration = (
 ): boolean => entry.bornAt !== null && entry.bornAt === bornAt && entry.markerRunId === markerRunId
   && childReclaimSameGenerationKey(entry.generation, generation);
 
-/** The three keys of one workspace generation (spec §5.6: slugs recycle): its birth, the run its marker
+/** The three keys of one workspace generation (spec §5.7): its birth, the run its marker
  *  names, and its generation file's value. An entry carries them, and so does the lane's hold-retired
  *  memory, so `childReclaimSameGeneration` reads both through this one shape. */
 export type ChildReclaimGenerationIdentity = Pick<ChildReclaimSweepEntry, 'bornAt' | 'markerRunId' | 'generation'>;
 
 /** What ONE `hold-retired` sighting does to the lane's hold-retired memory. Spec §5.7: two consecutive
- *  sightings queue the release job. Spec §5.6: slugs recycle, so both sightings must be of ONE generation.
+ *  sightings queue the release job, and both sightings must be of ONE workspace generation.
  *  - `second`: the stored key is this generation's (`childReclaimSameGeneration`, whose generation
  *    conjunct is `childReclaimSameGenerationKey`). The lane deletes the key and queues the release,
  *    carrying `generation`, which the job re-reads nearest its argv.
@@ -1638,6 +1638,9 @@ export interface ChildReclaimLeafKept {
   readonly detail: string | null;
 }
 
+/** ccd's own id rule (`_ws_tmproot_id_ok`): a session id's shape, and no leading `.`. */
+const leafIdOk = (id: string): boolean => isSessionIdShape(id) && !id.startsWith('.');
+
 const leafRunOf = (childOf: string | null): number | null =>
   (childOf !== null && CHILD_RUN_ID.test(childOf) ? Number(childOf) : null);
 
@@ -1650,9 +1653,13 @@ const leafRunOf = (childOf: string | null): number | null =>
  *    new workspace now.
  *  - A later `collect` `done` ends the temp-root half only. The collector never takes a clips directory.
  *
- *  A row whose id is not a session id's shape (`isSessionIdShape`) lists nothing, so no feed row is written
- *  for it: any session can append a journal line, so the mirror's id is attribution, and this item puts it
- *  in a path a person is told to remove.
+ *  A row whose id fails ccd's own id rule lists nothing, so no feed row is written for it: any session can
+ *  append a journal line, so the mirror's id is attribution, and this item puts it in a path a person is told
+ *  to remove. The rule is ccd's `_ws_tmproot_id_ok`: a session id's shape (`isSessionIdShape`) and no leading
+ *  `.`, so neither `.` nor `..` can name a directory above `~/.cc-clips` or `~/.cc-tmp`. It sets no length cap
+ *  of its own: the id rides one journal line, and ccd writes every line within `LC_LINE_MAX`. A line appended
+ *  by hand is not cut by the mirror's ingest, so a forged id's length is bounded only by one read of the
+ *  journal (a stated residual): it is still one plain line, with no separator and no dot-leading name.
  *
  *  `runId` is `meas.childOf` read through `CHILD_RUN_ID`, else null. The purge failures do not carry it,
  *  and a cut line has no `meas` at all. Ordered by session id. Pure and deterministic, so the coord frame's
@@ -1665,7 +1672,7 @@ export function childReclaimLeafKept(i: {
   const since = childReclaimLeafKeptSince(i.nowMs);
   const latest = new Map<string, ChildReclaimLeafSourceRow>();
   for (const r of i.rows) {
-    if (r.at < since || !childReclaimLeafSource(r) || !isSessionIdShape(r.sessionId)) continue;
+    if (r.at < since || !childReclaimLeafSource(r) || !leafIdOk(r.sessionId)) continue;
     const had = latest.get(r.sessionId);
     if (had === undefined || r.id > had.id) latest.set(r.sessionId, r);
   }
