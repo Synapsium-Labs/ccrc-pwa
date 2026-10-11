@@ -1147,7 +1147,6 @@ v9.describe('DM26: parents by fan-in, never across an epoch, only over final lea
     try {
       const ictx = { nowMs: 5_000, fts: false, pairIdx: NO_PAIRS9 };
       const initialTop = Number((fx.db.prepare('SELECT max(rowid) AS r FROM nodes').get() as { r: number }).r);
-      const firstTop = Number((fx.db.prepare('SELECT max(rowid) AS r FROM nodes WHERE depth = 0 AND session_pk = 2').get() as { r: number }).r);
       const sameTinyBudget = () => {
         let calls = 0;
         return s.newBudget(() => ++calls, { maxMs: 36 });
@@ -1156,9 +1155,9 @@ v9.describe('DM26: parents by fan-in, never across an epoch, only over final lea
       const expectedTrace = [
         { capturedTop: 64, made: 2, cursor: undefined },
         { capturedTop: 66, made: 2, cursor: undefined },
-        { capturedTop: 68, made: 1, cursor: String(firstTop) },
-        { capturedTop: 69, made: 2, cursor: String(firstTop) },
-        { capturedTop: 71, made: 2, cursor: String(firstTop) },
+        { capturedTop: 68, made: 1, cursor: '63' },
+        { capturedTop: 69, made: 2, cursor: '63' },
+        { capturedTop: 71, made: 2, cursor: '63' },
         { capturedTop: 73, made: 1, cursor: '73' },
         { capturedTop: 74, made: 0, cursor: '74' },
       ];
