@@ -23,8 +23,8 @@ removed on 2026-09-10 was not.
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner; R32/R33 as built (contract §10); the carried ccd, prose and test items | **AGENT-FIRST** | #215 | **done** — accepted by convergence review run 258 on `f8f0af9a`; merged as `b40f4145` 2026-10-04 22:10; release v0.0.79 |
 | 5 | the closed run's reclaim chip; the presence lease and its clocks (R39); R37 fenced to the generation (R40); the sweep's verdicts visible (R41–R44); the abandon copy and prose (R45, R46) | server + pwa (R38) | #290 | **deployed** v0.0.105 (`b27fabc15`, merged 2026-10-06 18:50; both boxes current by 19:04, through the updater); run 260 closed 19:05; reviews 285 and 303 (scoped, after fix round 1: no defect) |
 | 6 | `ws-reclaim` repaired (R48): the ONE removal helper and the in-use wait/keep of a temp root (R49); the positive witness `$REG/tmproots/<id>` (R50); F6 and the harness strip (R51); journaling `probe-unmeasured` and the id-tied pre-lock dies (R52); the three-way gone-branch read (R53); the `recorded` placement basis (R54); the vanish re-read's second trigger (R55) | **AGENT-FIRST** | #326 | **deployed** v0.0.124 (`b0647d850`, both boxes by 13:40 on 10-08) — run 291 closed `done`; reviews 335, 341 and 346 |
-| 7 | the temp-root collector verb, inert (R57, R66–R68): audit + token, quarantine-by-rename under the reap lock, the `$REG/tmpquarantine` record, destructive verb, cap token, agent grant, entry guard; plus the ccd halves (R69 `containment-refuted`, R70 `crumb`, rung 8, the reason cap, X1's generation input) | **AGENT-FIRST** | — | **dispatched** 2026-10-08 18:30 — run 347 (`ccrc-pwa-clear-summit`), plan `226bb881c` |
-| 8 | reclaim's server half (R65): X1 and X3 generation keying, R61's closure, the `crumb` verb and audit readers, the `clipsKept`/`tmpRootKept` reader, R69's `stuck` class, the persistent-failure tier | server | — | **planned** — run 348, plan `0d9f1b042`; dispatched after wave 7 merges (H1) |
+| 7 | the temp-root collector verb, inert (R57, R66–R68): audit + token, quarantine-by-rename under the reap lock, the `$REG/tmpquarantine` record, destructive verb, cap token, agent grant, entry guard; plus the ccd halves (R69 `containment-refuted`, R70 `crumb`, rung 8, the reason cap, X1's generation input) | **AGENT-FIRST** | #344 | **merged** `7609221a4` 2026-10-11 00:55 (prerelease v0.0.145; deploy agent-first via the updater) — run 347, reviews 369, 374, 376 |
+| 8 | reclaim's server half (R65): X1 and X3 generation keying, R61's closure, the `crumb` verb and audit readers, the `clipsKept`/`tmpRootKept` reader, R69's `stuck` class, the persistent-failure tier | server | — | **dispatched** 2026-10-11 00:59 — run 348 (`ccrc-pwa-quiet-prairie`), plan `0d9f1b042`; dispatched after wave 7 merges (H1) |
 | 9 | the collector's server lane (the old R58), after the fleet advertises wave 7's token and wave 8 has merged; SAFETY and SECURITY lenses | server | — | **to plan** |
 
 **Rule 3 is enforced at the end of wave 2** with no destructive verb in existence: a second bind on a
@@ -46,6 +46,33 @@ clause 11): it names a departure in its wave-done mail and the coordinator assig
 Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (reviews **170**, **171**, **172**); wave 4 = **174**. Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
 
 ## Decisions & deviations
+
+- **2026-10-11 01:00 — WAVE 7 IS MERGED: #344 is `7609221a4` (prerelease v0.0.145). Run 347 is closed `done`, final, released. Wave 8 (run 348) is dispatched.**
+  - **Review 376** (brisk-ridge, on an Anthropic account with no swap) was closed `done`: the held-out panel, the
+    mandatory SAFETY lens on the `chmod` line, three Sonnet refuters per finding, 16 agents, 0 errors. SAFETY found
+    nothing. Reverting the `chmod` reds both pins, F6 reds 12 of 41 and F7 reds exactly the all-zeros row. On macOS
+    the setgid red is gone; the 24 remaining macOS reds predate the range and are advisory.
+  - **Its two findings, ruled without a fix round:**
+    - F1 (b): the witness-only paragraph of the collector header omits the pause rung. It is comment-only, and the verb
+      re-checks the pause inside the lock. Carried to wave 9's pre-flight list as
+      `witness-only-header-omits-the-pause-rung`.
+    - F2 (c): `fd8b2f8b9`'s message calls CRLF "the one body" the old `-n` passed. Recorded.
+  - **Its two notes, recorded.** My fix-round 2 analysis said the witness-only arm does not ask an unprovable
+    absence, but `_ws_collect_slots_of` does; the shipped prose is true. No committed case runs the maker under BSD
+    argument order, which goes to wave 9's pre-flight list as `maker-under-bsd-order-unpinned`.
+  - **The merge.** Before it: PR head `337e48ab2` equalled the reviewed tip, the PR read MERGEABLE, and CI's
+    required checks were green on that head. Main's newest commit since CI (#348, box-token arming) shared no file
+    with the branch. The merge was `gh pr merge 344 --squash --admin --match-head-commit 337e48ab2…`, and the PR
+    reads MERGED with `headRefOid` `337e48ab2`. release-main published v0.0.145 at 00:56.
+  - **Wave 8 (run 348)** was dispatched at 00:59 to `quiet-prairie`, on an Anthropic account. Its brief is
+    `wave8-brief.md` (planSha `0d9f1b042`), amended for the merge in four places: Task 0 names `7609221a4`; WL5 has
+    landed (Order A, R81); workspace-lifecycle's next wave (run 358) may run alongside, under R56; and history B2's
+    claim 1141 needs consent for Task 10's README edit. It also carries
+    `corrupt-admin-entry-holds-the-repository` to Task 9's persistent tier.
+  - **Run 347 closed** `done`, `final:true`, `released:true`, with the child reclaim `queued`. The worker's evidence
+    is archived first (`wave7-final/`). quiet-river was told the wave merged (4198).
+  - **Deploy.** The fleet box was on v0.0.143 at the merge. Its intent reads channel `dev`, auto. The updater moves
+    it, and the coordinator only observes.
 
 - **2026-10-11 00:05 — fix round 2's wave-done (4192) is verified at `337e48ab2`. CI's required checks are green. Run 347 is at `awaiting-review`, and short scoped review run 376 is opened.**
   - **The round.** Seven commits over `aa1c06c4a`, eight files, no merge. The one code line is `13e2d8602`'s
