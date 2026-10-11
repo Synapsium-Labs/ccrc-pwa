@@ -96,6 +96,21 @@ const answer = (r: CliRun): unknown[] => [r.code, r.json?.['reason']];
 interface ScopeJson { kind: string; families: { ccrc_id: string; generation: string; first_seen_ms: number }[]; transcripts: number }
 const scopeOf = (r: CliRun): ScopeJson => r.json?.['scope'] as ScopeJson;
 
+/** Adds confirmed, node-free epochs after the seeded family epoch. The headings, rather than node text,
+ * supply cap pressure for the empty-tree continuation cases. */
+function seedEmptyEpochs(box: HistoryBox, count: number): void {
+  const db = new DatabaseSync(hist(box, 'db', 'history.db'));
+  try {
+    const family = db.prepare('SELECT session_pk FROM sessions WHERE ccrc_id = ? AND generation = ?').get(ID, G1) as { session_pk: number };
+    const start = db.prepare('SELECT COALESCE(MAX(seq), 0) AS seq FROM epochs WHERE session_pk = ?').get(family.session_pk) as { seq: number };
+    const insert = db.prepare('INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, started_ms, confirmed_ms) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    for (let n = 1; n <= count; n += 1) {
+      const hex = n.toString(16).padStart(7, '0');
+      insert.run(family.session_pk, start.seq + n, `f${hex}-0000-4000-8000-${n.toString(16).padStart(12, '0')}`, `fixture-empty-${n}`, 'fixture', T0 + n, T0 + n);
+    }
+  } finally { db.close(); }
+}
+
 /** A direct, confirmed root node for output-cap tests. It keeps the test focused on rendering: derivation is
  * separately covered above, while this test controls both root cardinality and gist representation precisely. */
 function seedRoots(box: HistoryBox, count: number, gist: (n: number) => string): string[] {
@@ -468,6 +483,45 @@ describe('the read verbs: identity, §8.3\'s table, the read-only handle, the fa
     expect(Number(r.json?.shown)).toBeLessThan(Number(r.json?.total));
     expect(Number(r.json?.shown)).toBeGreaterThan(0);
     expect(String(r.json?.next)).toContain('history tree --depth 2');
+  }, HEAVY);
+
+  it('tree caps a heading-only confirmed scope without inventing a node continuation', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-heading-cap-');
+    seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: turns(TA, 2) });
+    seedEmptyEpochs(box, 1_000);
+    const human = runCli(box, ['tree', '--depth', '1'], { env: withPane(box, ID) });
+    const json = treeJson(box, ID, ['--depth', '1']);
+    expect(human.code, human.stderr).toBe(0);
+    expect(json.code, json.stderr).toBe(0);
+    expect(human.stdout.length).toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+    expect(human.stdout).not.toContain('fixture-empty-1000');
+    expect(human.stdout).toContain('shown 0 of 0');
+    expect(human.stdout).not.toContain('next:');
+    expect(() => JSON.parse(json.stdout)).not.toThrow();
+    expect(json.json?.items).toEqual([]);
+    expect(json.json?.shown).toBe(0);
+    expect(json.json?.total).toBe(0);
+    expect(json.json?.next).toBeNull();
+  }, HEAVY);
+
+  it('tree describes its retained root when trailing empty epoch headings exhaust the human cap', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-trailing-heading-cap-');
+    const [root] = seedRoots(box, 1, () => 'Current Work: only visible root');
+    seedEmptyEpochs(box, 1_000);
+    const human = runCli(box, ['tree', '--depth', '1'], { env: withPane(box, ID) });
+    const json = treeJson(box, ID, ['--depth', '1']);
+    expect(human.code, human.stderr).toBe(0);
+    expect(json.code, json.stderr).toBe(0);
+    expect(human.stdout.length).toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+    expect(human.stdout).toContain('shown 1 of 1');
+    expect(human.stdout).not.toContain('fixture-empty-1000');
+    expect(human.stdout).toContain(`history describe ${root.slice(0, 7)}`);
+    expect(() => JSON.parse(json.stdout)).not.toThrow();
+    const items = json.json?.items as { node_id: string }[];
+    expect(items.map((item) => item.node_id)).toEqual([root]);
+    expect(json.json?.shown).toBe(1);
+    expect(json.json?.total).toBe(1);
+    expect(String(json.json?.next)).toContain(`history describe ${root.slice(0, 7)}`);
   }, HEAVY);
 
   it('tree depth one caps independent roots with truthful counts and describes the first omitted root', () => {

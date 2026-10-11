@@ -236,9 +236,10 @@ export function runTree(rc, a) {
   const candidateItems = keptNodes.map((n) => nodeItem(n, parentById, family, rc));
   const humanCapped = capped.kept.length < out.length;
   const depthOmitted = keptNodes.length < nodes.length && !humanCapped && a.depth < TREE_DEPTH_MAX;
-  const defaultNext = humanCapped
-    // Headings can consume the whole human budget, so the first visible root is the useful continuation.
-    ? ['describe', show(visibleNodes[keptNodes.length].node_id), ...rc.scopeArgs]
+  // A cap can omit headings after every node (or a node-free epoch tree), so an omitted visible node is optional.
+  const firstOmittedVisible = humanCapped ? visibleNodes[keptNodes.length] : undefined;
+  const defaultNext = firstOmittedVisible !== undefined
+    ? ['describe', show(firstOmittedVisible.node_id), ...rc.scopeArgs]
     : depthOmitted
       ? ['tree', '--depth', String(a.depth + 1), ...rc.scopeArgs]
       : keptNodes.length > 0
