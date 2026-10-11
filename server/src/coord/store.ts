@@ -19,7 +19,10 @@ import type { StallObservationRow, StallSettingsPatch, StallSettingsRead } from 
 // The coordination fence's claim shape is declared by its CONSUMER, the L1
 // sweep file's `childReclaimCoordinated` (the same port rule as above); the
 // read below implements it.
-import type { ChildReclaimCoordinatorClaim } from '../childReclaimSweep.js';
+import {
+  CHILD_RECLAIM_LEAF_FAILED_TOKENS, type ChildReclaimCoordinatorClaim, type ChildReclaimLeafEndRow,
+  type ChildReclaimLeafSourceRow,
+} from '../childReclaimSweep.js';
 // Type-only: ties `AUTO_CONTINUE_ARMED_LAST_ERROR` below to the send adapter's
 // own refusal word, so a rename there is a compile error here, not a silent miss.
 import type { SendResult } from '../inject/send.js';
@@ -5962,6 +5965,71 @@ export class CoordStore {
       .all(...ids, ...CoordStore.CHILD_RECLAIM_EVENT_ACTS) as unknown as Parameters<typeof CoordStore.reviveLifecycleRow>[0][];
     for (const r of rows) {
       if (r.sessionId !== null) out.get(r.sessionId)?.push(CoordStore.reviveLifecycleRow(r));
+    }
+    return out;
+  }
+
+  /** THE ONE SPELLING of `lifecycleReclaimRowsSince`'s statement, public so its test runs EXPLAIN over the
+   *  text this method runs. `INDEXED BY lifecycle_by_at`, `recentProvenance`'s idiom and its reason: the
+   *  table is NEVER PRUNED, and the planner prefers a scan that orders by `id` for free over a seek plus a
+   *  sort. `at >= ?` also excludes an undated row, which the horizon cannot place. */
+  static lifecycleReclaimRowsSinceSql(): string {
+    return `SELECT ${CoordStore.LC_COLS} FROM lifecycle_events INDEXED BY lifecycle_by_at ` +
+      'WHERE at >= ? AND act = ? AND sessionId IS NOT NULL ' +
+      `AND (outcome = ? OR (outcome = ? AND refusal IN (${placeholders(CHILD_RECLAIM_LEAF_FAILED_TOKENS.length)}))) ` +
+      'AND (measJson IS NOT NULL OR truncated = 1) ORDER BY id';
+  }
+
+  /**
+   * The kept-leaf item's SOURCE (child-reclamation spec §5.6, §5.9): every `reclaim` row ccd dated at or
+   * after `atMs` that may carry the two kept-leaf keys. These are a `done`, or a failure whose token is one
+   * of `CHILD_RECLAIM_LEAF_FAILED_TOKENS` (the act completed, then only the purge failed), carrying a `meas`
+   * or cut to fit. ONE statement, bounded by the window and never by the table. Oldest first, by this
+   * table's own `id`.
+   *
+   * Nothing is decided here: which row of an id stands, what it kept and what ends it are L1's
+   * (`childReclaimLeafKept`). Each row keeps `meas` and `truncated` exactly as the mirror holds them, so a
+   * cut line and a line with nothing measured never collapse into one value.
+   */
+  lifecycleReclaimRowsSince(atMs: number): ChildReclaimLeafSourceRow[] {
+    const act: LifecycleAct = 'reclaim';
+    const done: LifecycleOutcome = 'done';
+    const failed: LifecycleOutcome = 'failed';
+    const rows = this.db.prepare(CoordStore.lifecycleReclaimRowsSinceSql())
+      .all(atMs, act, done, failed, ...CHILD_RECLAIM_LEAF_FAILED_TOKENS) as unknown as
+        ({ id: number } & Parameters<typeof CoordStore.reviveLifecycleRow>[0])[];
+    return rows.flatMap((r) => {
+      // The WHERE excludes both; the row type cannot know it.
+      if (r.sessionId === null || r.at === null) return [];
+      const e = CoordStore.reviveLifecycleRow(r);
+      return [{ id: r.id, sessionId: r.sessionId, at: r.at, outcome: e.outcome, refusal: e.refusal,
+        truncated: e.truncated, meas: e.meas, detail: e.detail }];
+    });
+  }
+
+  /** THE ONE SPELLING of `lifecycleLeafEndsFor`'s statement. `INDEXED BY lifecycle_by_session`, as
+   *  `childReclaimEventsSql` is: the cost is bounded by the asked sessions' own histories. */
+  static lifecycleLeafEndsSql(sessions: number): string {
+    return 'SELECT id, sessionId, act, at FROM lifecycle_events INDEXED BY lifecycle_by_session ' +
+      `WHERE sessionId IN (${placeholders(sessions)}) AND act IN (?, ?) AND outcome = ? ORDER BY sessionId, id`;
+  }
+
+  /** What may END a kept-leaf item (spec §5.9): each asked id's `done` `create` and `collect` rows, oldest
+   *  first, with the mirror's id and ccd's nullable `at`. ONE statement whatever the id count. EVERY asked
+   *  id gets an entry, `[]` included (`childReclaimEvents`' rule). Whether a row FOLLOWS an item's source,
+   *  and whether a create is placed, are L1's. */
+  lifecycleLeafEndsFor(sessionIds: readonly string[]): Map<string, ChildReclaimLeafEndRow[]> {
+    const ids = [...new Set(sessionIds)];
+    const out = new Map<string, ChildReclaimLeafEndRow[]>(ids.map((id) => [id, []]));
+    if (ids.length === 0) return out;
+    const create: ChildReclaimLeafEndRow['act'] = 'create';
+    const collect: ChildReclaimLeafEndRow['act'] = 'collect';
+    const done: LifecycleOutcome = 'done';
+    const rows = this.db.prepare(CoordStore.lifecycleLeafEndsSql(ids.length))
+      .all(...ids, create, collect, done) as { id: number; sessionId: string; act: string; at: number | null }[];
+    for (const r of rows) {
+      const act = r.act === create ? create : r.act === collect ? collect : null;
+      if (act !== null) out.get(r.sessionId)?.push({ id: r.id, act, at: r.at });
     }
     return out;
   }

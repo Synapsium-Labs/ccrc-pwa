@@ -30,6 +30,7 @@ import { reclaimChild, type ChildReclaimOutcome, type ChildReclaimRequest } from
 import type { FleetIO } from '../src/io.js';
 import type { FleetState } from '../src/fleetstate.js';
 import type { Runner } from '../src/exec.js';
+import type { NotifyLog } from '../src/notifylog.js';
 import { REG_GENERATION_SHAPE } from '../../shared/api.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -102,6 +103,13 @@ export interface LaneOpts {
   /** Replaces the REAL executor (additive). The rig still records each request and its
    *  answer in `requests` and `outcomes`. Absent: the real executor on the watcher's queue, as before. */
   readonly exec?: (req: ChildReclaimRequest) => ChildReclaimOutcome | Promise<ChildReclaimOutcome>;
+  /** What the fleet advertises. Default: every verb and capability the sweep needs. */
+  readonly ccdVerbs?: readonly string[];
+  /** The feed's log, on deps. Default: none, as `testDeps` leaves it. */
+  readonly notifyLog?: NotifyLog;
+  /** A restart: an earlier rig's coord.db and fixture HOME. */
+  readonly coord?: CoordStore;
+  readonly home?: string;
 }
 
 /** ONE journal uid and cursor counter for every rig in a test file. A second rig over the same coord.db
@@ -111,7 +119,7 @@ export const laneFixture = (opts: LaneOpts = {}) => {
   let clock = 1_790_000_000_000;
   let mono = 5_000;
   vi.spyOn(Date, 'now').mockImplementation(() => clock);
-  const home = mkTmp('ccrc-child-reclaim-generation-lane-');
+  const home = opts.home ?? mkTmp('ccrc-child-reclaim-generation-lane-');
   seedRoster(home);
   const reg = path.join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
@@ -138,14 +146,15 @@ export const laneFixture = (opts: LaneOpts = {}) => {
       return r;
     },
   };
-  const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  const coord = opts.coord ?? new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const fleetState: FleetState = { connected: true, downSince: null, rosterFp: null, build: null,
-    ccdVerbs: ['ws-audit', 'ws-reclaim', 'ws-release', RECLAIM_CAP, RECLAIM_PAUSE_CAP, ACTOR_FLAGS_CAP] };
+    ccdVerbs: [...(opts.ccdVerbs ?? ['ws-audit', 'ws-reclaim', 'ws-release', RECLAIM_CAP, RECLAIM_PAUSE_CAP, ACTOR_FLAGS_CAP])] };
   const presence = { isVisible: (id: string) => opts.visible?.(id) === true };
   const requests: ChildReclaimRequest[] = [];
   const outcomes: ChildReclaimOutcome[] = [];
   const deps = {
     ...base, cfg, io, coord, fleetState, presence, monotonicMs: () => mono,
+    ...(opts.notifyLog === undefined ? {} : { notifyLog: opts.notifyLog }),
     childReclaimExec: async (req: ChildReclaimRequest): Promise<ChildReclaimOutcome> => {
       requests.push(req);
       const o = opts.exec !== undefined ? await opts.exec(req) : await base.queue.run(req.sessionId, () => reclaimChild(
@@ -161,10 +170,7 @@ export const laneFixture = (opts: LaneOpts = {}) => {
     const fields: Record<string, string> = { uuid: `u-${id}`, wrapper: 'claude', project: 'demo', workdir: `/w/${id}`,
       workspace: id.slice('demo-'.length), branch: `ws/${id}`, base: 'origin/main', started: '1', ...extra };
     for (const [f, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${f}`), v);
-    uidN += 1;
-    const line = JSON.stringify({ uid: `w8.1.${uidN}`, at: clock, act: 'create', outcome: 'done', verb: 'ws-add', id });
-    coord.ingestJournal({ gen: '1790000000000000000', rows: [parseJournalLine(line)], cursor: uidN * 200,
-      size: uidN * 200, at: clock });
+    journal(id, 'create', 'done', { verb: 'ws-add' });
   };
   let progN = 0;
   const openRun = (): { id: number; program: string } => {
@@ -205,6 +211,6 @@ export const laneFixture = (opts: LaneOpts = {}) => {
   const next = (): void => { clock += CHILD_RECLAIM_SWEEP_MS + 1; mono += CHILD_RECLAIM_SWEEP_MS + 1; };
   const releases = (): string[][] => calls.filter((c) => c[0] === 'ws-release');
   return { reg, coord, watcher, calls, requests, outcomes, queue: base.queue, plant, openRun, abandon,
-    finishedChild, remint, listing, sweepOn, pass, next, releases, journal, advance };
+    finishedChild, remint, listing, sweepOn, pass, next, releases, journal, advance, home, now: () => clock };
 };
 export type Lane = ReturnType<typeof laneFixture>;

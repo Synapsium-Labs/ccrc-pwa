@@ -88,7 +88,7 @@ import { refusalSentence } from './wsaudit.js';
 import {
   childMarkLeftListing, childReclaimBornAt, childReclaimGeneration, childReclaimGenerationRead, childReclaimLatest, childReclaimRowUuid,
   childReclaimTokenKind, reclaimChild,
-  recordChildReclaimKeptFeed, releaseRetiredChildHold, type ChildReclaimOutcome, type ChildReclaimReleaseOutcome,
+  recordChildReclaimKeptFeed, recordChildReclaimLeafKeptFeed, releaseRetiredChildHold, type ChildReclaimOutcome, type ChildReclaimReleaseOutcome,
   type ChildReclaimReleaseRequest, type ChildReclaimRequest,
 } from './coord/childReclaim.js';
 import {
@@ -103,6 +103,7 @@ import {
   type ChildReclaimLaneNow, type ChildReclaimMintingRunRead,
   type ChildReclaimReviewedRunRead, type ChildReclaimSiblingsRead, type ChildReclaimSweepEntry,
   type ChildReclaimSweepOutcome, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
+  childReclaimAttentionWithLeaves, childReclaimLeafKept, childReclaimLeafKeptSince, type ChildReclaimLeafKept,
 } from './childReclaimSweep.js';
 import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import {
@@ -905,6 +906,14 @@ export class FleetWatcher {
    *  again with no pruning pass between. IN MEMORY ONLY: a restart feeds each kept child once more. */
   private childReclaimKeptReported =
     new Map<string, { readonly runId: number; readonly words: Set<ChildReclaimKeptWord> }>();
+  /** The kept-leaf items (spec §5.6, §5.9), as the sweep's last successful kept-leaf read derived them.
+   *  Kept, never erased, across a read that failed. `[]` until the first pass. Derived from the mirror on
+   *  every pass that gets past the fail-shut try, so a restart rebuilds them on its first pass. */
+  private childReclaimLeaves: readonly ChildReclaimLeafKept[] = [];
+  /** The mirror rows (`ChildReclaimLeafKept.source`) whose kept-leaf feed row this process has written: one
+   *  row per source row per process, so a restart writes it once more. Never pruned, because an ended item
+   *  never returns. */
+  private readonly childReclaimLeafFed = new Set<number>();
   /** The seventh lane's clock — the journal mirror. `sweepLifecycle` below
    *  carries the lane's own docstring; this is only the clock field, same
    *  shape as `lastNameSweep`/`lastDivergenceSweep` above it. */
@@ -1141,6 +1150,9 @@ export class FleetWatcher {
    *    child whose recorded verdict is `held` has no failing item; with no verdict recorded, the
    *    failing arm stands.
    *  - It is never fed by an executor answer, and never by a sweep entry (`ChildReclaimSweepEntry`).
+   *  - Its `leaf-kept` items, and their `kept-many` collapse, come from the mirror on every pass that gets
+   *    past the fail-shut try. They are never filtered by the listing, and they yield to any other item
+   *    for the same child.
    *  `[]` until the first sweep — which runs on the first tick after a restart, so the mirror arms are
    *  rebuilt within one tick, and the kept arm at the first judging pass, rather than lost. */
   private childReclaimAttentionList: readonly ChildReclaimAttention[] = [];
@@ -3415,6 +3427,28 @@ export class FleetWatcher {
     const mirrorArms = childReclaimAttention({
       latest, live, kindOf: childReclaimTokenKind, sentenceFor: refusalSentence, nowMs: now,
     });
+    // ONE-b: the kept-leaf items (spec §5.6, §5.9). They are the clips directories and temp roots ccd kept
+    // on a reclaim that completed. Read from the mirror ALONE, so a restart rebuilds them, and NEVER filtered
+    // by `live`: after a `done`, ccd has purged the registry row, so no listing names the child.
+    // ITS OWN TRY, AFTER THE FAIL-SHUT TRY ABOVE. The items gate nothing: no verdict, due set, lease or
+    // request reads them. So a failed read here never fails the pass shut. It keeps the last items, as a
+    // failed mirror read keeps the whole list, and the pass decides exactly as it would have. When the
+    // fail-shut try failed, this read is never reached, and that pass publishes nothing.
+    // BEFORE the two early returns below, so a paused or capability-less pass lists them too.
+    try {
+      const rows = coord.lifecycleReclaimRowsSince(childReclaimLeafKeptSince(now));
+      this.childReclaimLeaves = childReclaimLeafKept({
+        rows, ends: coord.lifecycleLeafEndsFor(rows.map((r) => r.sessionId)), nowMs: now });
+    } catch (err) {
+      console.warn(`ccrc-server: sweepChildReclaim could not read the kept leaves (${err instanceof Error ? err.message : String(err)}) — the last kept-leaf items stand, and no reclaim decision reads them`);
+    }
+    // The feed keeps the record once an item has ended (spec §5.9): one row per source row per process.
+    // Recorded, never pushed.
+    for (const k of this.childReclaimLeaves) {
+      if (this.childReclaimLeafFed.has(k.source)) continue;
+      this.childReclaimLeafFed.add(k.source);
+      recordChildReclaimLeafKeptFeed({ coord, notifyLog: this.deps.notifyLog }, k);
+    }
 
     // TWO — the switches (spec §5.8, "the fourth [reader] is the one that
     // matters" — the box itself, not merely the server): BOTH caps must be
@@ -3909,7 +3943,8 @@ export class FleetWatcher {
     live: ReadonlyMap<string, number | null>): ChildReclaimKeptAttention[] {
     const verdicts = this.childReclaimJudged ?? new Map<string, ChildReclaimSweepVerdict>();
     const kept = childReclaimKeptItems({ verdicts, live, mirrorArms });
-    this.childReclaimAttentionList = childReclaimAttentionWithKept(mirrorArms, kept, verdicts);
+    this.childReclaimAttentionList = childReclaimAttentionWithLeaves(
+      childReclaimAttentionWithKept(mirrorArms, kept, verdicts), this.childReclaimLeaves.map((k) => k.item));
     return kept;
   }
 

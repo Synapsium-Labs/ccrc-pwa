@@ -14,6 +14,7 @@ import {
   childReclaimFailingSentence, childReclaimFailingWord, childReclaimFailureLine, childReclaimJournalRow,
   childReclaimSameGenerationKey, isChildReclaimKeptVerdict, type ChildReclaimFeedQuiet, type ChildReclaimKeptAttention,
   type ChildReclaimPreLockToken, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
+  childReclaimDetailText, type ChildReclaimLeafKept,
 } from '../childReclaimSweep.js';
 import type { CoordStore, OpenSiblingsResult } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
@@ -1693,6 +1694,45 @@ export function recordChildReclaimKeptFeed(
   } catch (err) {
     console.warn('ccrc-server: recordFeedEvent failed '
       + `(${err instanceof Error ? err.message : String(err)}) — child reclaim kept, feed archive degraded`);
+  } finally {
+    void log.flush();
+  }
+}
+
+/** The title of the one feed row a kept leaf writes (spec §5.9). */
+export const CHILD_RECLAIM_LEAF_KEPT_FEED_TITLE = 'child reclaim leaf kept';
+
+/** The kept-leaf feed row's body (spec §5.9): the item's own sentence, then ccd's own line for the row. That
+ *  line names what was kept and why, and a line cut to fit usually keeps it, because the encoder drops
+ *  `meas` before `detail`, except in its last-resort line, which keeps neither. ccd's line goes through
+ *  `childReclaimDetailText`: one line, control and bidi characters replaced, bounded by `LC_LINE_MAX`. Once
+ *  the item has ended, this row is the record. */
+export function childReclaimLeafKeptFeedBody(k: ChildReclaimLeafKept): string {
+  const a = k.item;
+  const who = a.runId === null ? a.sessionId : `${a.sessionId}, child of run #${a.runId}`;
+  const line = k.detail === null ? '' : childReclaimDetailText(k.detail);
+  const said = line === '' ? 'ccd recorded no detail.' : `ccd recorded: ${line}`;
+  return `${who}: ${a.sentence} ${said}`;
+}
+
+/**
+ * ONE feed row for a kept leaf (spec §5.9), in `recordChildReclaimKeptFeed`'s idiom exactly: `kind: 'run'`,
+ * recorded and NEVER pushed; a missing log degrades the record and never the sweep; `recordFeedEvent`
+ * throws synchronously and is caught; the flush is in a `finally`. The caller decides when to write it:
+ * once per source row, per process.
+ */
+export function recordChildReclaimLeafKeptFeed(
+  deps: Pick<ChildReclaimDeps, 'coord' | 'notifyLog'>, k: ChildReclaimLeafKept,
+): void {
+  const log = deps.notifyLog;
+  if (!log) return;
+  try {
+    const ev = log.record({ kind: 'run', sessionId: k.item.sessionId, runId: k.item.runId,
+      title: CHILD_RECLAIM_LEAF_KEPT_FEED_TITLE, body: childReclaimLeafKeptFeedBody(k) });
+    deps.coord.recordFeedEvent(log.epoch, ev);
+  } catch (err) {
+    console.warn('ccrc-server: recordFeedEvent failed '
+      + `(${err instanceof Error ? err.message : String(err)}) — child reclaim leaf kept, feed archive degraded`);
   } finally {
     void log.flush();
   }
