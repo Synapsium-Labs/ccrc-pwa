@@ -3542,8 +3542,8 @@ entry in the cleanup row on `/runs` saying it would expire, with what would be d
 composed. Armed, at most one expiry runs per sweep pass, fleet-wide. `$REG/reclaim-paused` is the fleet’s one cleanup switch: raised (the cleanup row's toggle on
 `/runs`, or `ccd reclaim-pause --state on`), it stops child reclamation and this lane alike, shadow included. A
 workspace someone is viewing is left alone for as long as they are; one a process is working in (a forgotten dev
-server, a tmux or fsmonitor daemon) is refused `in-use` each time it is asked and, after a few, listed with its id,
-its command and its path. The lane never kills: find out what the process is first — the fleet's own tmux server is
+server, a tmux or fsmonitor daemon) is refused `in-use` each time it is asked and, after a few, listed with the
+process's id, command and path. The lane never kills: find out what the process is first — the fleet's own tmux server is
 also a `tmux: server`. A workspace held past its seven days is listed, never touched. A cleanup that completed but kept
 the workspace's clips or temp root (ccd's removal refused it, could not measure it, or a process still used it) is
 listed, saying what was kept and why, until the server restarts; a fleet box whose ccd predates that report says so in
@@ -3553,8 +3553,8 @@ error, asked again four hours after each failed attempt (sooner after an answer 
 entry stays through a hold, a shadow audit or any other answer that ends no attempt, until an attempt completes, finds that
 none had begun or stops for good, or the workspace is archived again. One that met `containment-refuted` is listed at once on
 that cadence, and ccd's stopping before an attempt began does not end it (an attempt completing, a verdict stopping it, or a
-fresh archive does); one ccd stopped before it began is audited afresh, and listed after an hour if that recurs; a box with no
-`flock` gets no cleanup at all until the server restarts. The spec's §12 lists what to know before arming this lane or the next.
+fresh archive does, and a server restart drops it, as it drops every entry); one ccd stopped before it began is audited
+afresh, and listed after an hour if that recurs; a box with no `flock` gets no cleanup at all until the server restarts. The spec's §12 lists what to know before arming this lane or the next.
 
 **A coordinator that crashed is ended after an hour** (workspace lifecycle spec §5.4). A coordinator whose pane is
 gone with nothing bringing it back (`orphan`, `never-started`), or whose registry row is gone, with no deliberate act

@@ -529,8 +529,11 @@ each item is a departure named there).
     afresh and counted; and a fresh pin's `pin-failed`, a symbolic HEAD's deleted branch among them, is audited afresh
     rather than resumed. The one document still read final by its word is a `probe-unmeasured` over a breadcrumb that
     turns unreadable between the act's audit and the fork's in-lock read: nothing is deleted, and the row is listed and
-    not asked again until the server restarts. A breadcrumb already unreadable at the lane's audit never gets that far:
-    the audit answers `unmeasured` (exit 1), read as `audit-failed`, backed off and listed after the hour, never final.
+    not asked again until the server restarts. A breadcrumb already unreadable at the lane's audit never gets that far,
+    and what the lane does with it depends on whether it has learned the row's instant. On a learned row the act's own
+    audit answers `unmeasured` (exit 1), read as `audit-failed`: backed off and listed after the hour. On a row not yet
+    learned (every row after a server restart or a `restart` answer), `learnExpiry` meets it first and lists it at once
+    as a non-final `failing` ("its expiry could not be learned"). Neither is final, and nothing is deleted.
   - **`containment-refuted` is stuck.** The shared tail prints it, past the breadcrumb, when its removal-time re-ask
     proves that what it would remove is not only this workspace's own. Whatever `crumb` says, the row is listed at
     once, saying the expiry stopped part-way and nothing further was deleted, and goes straight to the persistent
@@ -542,8 +545,9 @@ each item is a departure named there).
   - **The words say when.** A standing entry is asked again four hours after each failed attempt, sooner after an
     answer that ends no attempt and never while the workspace is held. A fleet box that answers `flock-unavailable`
     gets no cleanup composed at all, for any workspace, until the server restarts. Its feed row says so, and so does
-    the row's entry; a standing entry (stuck or tier) keeps its place and says the halt in its own sentence while it
-    stands, with no new kind and no new word. A shadow feed row over a standing
+    the row's entry; every row whose sentence promises another ask says the halt in its own sentence while it stands
+    (a stuck entry, a tier entry and the hourly ladder's non-final `failing` row, `lock-unopenable` included), with no
+    new kind and no new word. A shadow feed row over a standing
     entry says that pass deleted nothing and that an earlier attempt may have stopped part-way; it never says nothing
     was deleted.
 
@@ -845,7 +849,10 @@ collects them.
   can delay an act and can ask again a row the lane had stopped asking (a halted box, a failure the box said will not
   resume, the unreadable-breadcrumb row below), always behind the lane's own guard: for the expiry lane a fresh audit
   whose token ccd proves again inside its lock, for the dead-coordinator lane the claimant measured again before and
-  after the fleet act; neither acts without it. A kept-leaf entry is lost with it (question (i)).
+  after the fleet act; neither acts without it. A restart also drops each expiry row's `nextAskAt` (a fresh entry's is
+  `0`) and its run of `failures`, so a tier or stuck row (normally asked every four hours) and a row backing off on the
+  ladder are asked again within a few passes, SOONER than an unrestarted lane would; every ask is still behind a fresh
+  audit and ccd's in-lock re-proof. A kept-leaf entry is lost with it (question (i)).
   The dead-coordinator lane keeps two things across a restart. One is its first-dead anchor (`dead_claimants`), which is
   re-anchored only after a gap of more than ten minutes (`DEAD_COORDINATOR_GAP_MS`) in which no pass measured the
   claimant crashed, so a restart shorter than that keeps the hour. The other is the breaker's hold: its held set is a
@@ -870,8 +877,10 @@ collects them.
   case in `ccd-leaf-root-newline.test.ts` goes red when the bare `pwd -P` is put back, measured in wave 6).
 - **One residual of question (k), in a narrow window.** A breadcrumb that stands but cannot be read (a
   `$REG/<id>.reaping` that is not a readable file) leaves `crumb` unsaid, as on the reclaim side. If it is already
-  unreadable at the lane's audit, `ws-audit --expire` answers `unmeasured` (exit 1), read as `audit-failed`: backed off
-  and listed after the hour, never final. Only a breadcrumb that turns unreadable between the act's audit and the
+  unreadable at the lane's audit, `ws-audit --expire` answers `unmeasured` (exit 1): on a learned row that is read as
+  `audit-failed`, backed off and listed after the hour; on a row not yet learned (every row after a server restart or a
+  `restart` answer), `learnExpiry` lists it at once as a non-final `failing` ("its expiry could not be learned").
+  Neither is final. Only a breadcrumb that turns unreadable between the act's audit and the
   in-lock fork leaves a `probe-unmeasured` read by its word: listed at once and not asked again for that archive until
   the server restarts. Nothing is deleted either way; read what stands in that row before anything else.
 - **One archived tree holds a leaked test tmux server** (the ledger's pre-arming item (d)). The lane refuses that row
@@ -898,8 +907,9 @@ collects them.
   because a restart says nothing about whether the leaf that refused containment is gone. Only an attempt that completes,
   a verdict that stops the row for good, or a fresh archive ends it (a server restart drops it, as it drops every entry).
 - **`flock-unavailable` halts the lane's act** on that box until the server restarts. The halt is one process-wide field
-  gating only the act: learn audits go on. Its feed row says so, and so does the row's entry; a standing entry (stuck or
-  tier) keeps its place and says the halt in its own sentence while it stands.
+  gating only the act: learn audits go on. Its feed row says so, and so does the row's entry; every row whose sentence
+  promises another ask (a stuck entry, a tier entry, the hourly ladder's non-final `failing` row, `lock-unopenable`
+  included) says the halt in its own sentence while it stands.
 - **The first armed pass faces the backlog** at one expiry a pass, fleet-wide. The operator expired fifteen archives by
   hand on 2026-10-07; raise `WS_EXPIRE_AFTER_S` first if what remains is too many at that pace.
 
@@ -918,6 +928,11 @@ collects them.
 - **Two residuals stand.** A lane gap of over ten minutes re-anchors every crashed coordinator on the same pass, so the
   breaker holds and no shadow row is written until all but one are revived, reclaimed or abandoned. A revive of the same
   id inside the act's last re-measure window, sub-second to one agent round trip, can still lose its runs.
+- **One breaker corner predates the restart fix.** The breaker's hold wins over a re-anchored instant, and that can keep
+  a fresh cluster from forming: with X held at an old instant and re-anchored later as Y crashes, once the other held
+  member is released X@old and Y@new lie outside the window, so the breaker does not trip and X or Y can be ended once
+  its own hour is up, though they crashed together. This corner predates the restart fix, and a lane that was never
+  restarted behaves the same; the clustering is unchanged.
 - **A permanently unreadable generation pins the mirror `stale`**, with no diagnostic of its own: the lane then decides
   nothing at all, which fails shut. `/api/fleet/health`'s lifecycle state shows it.
 - **An accepted abstention** (§5.4): a child's pre-start `reclaim` failure reads as a deliberate act.

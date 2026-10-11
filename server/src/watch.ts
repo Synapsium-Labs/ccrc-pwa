@@ -1169,7 +1169,9 @@ export class FleetWatcher {
    *  sighting, the last outcome (for change-only feed rows), the in-use and failure runs and the report. IN MEMORY
    *  ONLY (review 381, F10): a restart drops the +∞ rows and the process halt (`archivedExpiryBoxRefused`), so an armed
    *  lane can ask again about a row it had stopped — each ask behind a fresh audit and ccd's in-lock re-proof. It
-   *  also restarts the twice-observed sighting and the hour's runs, which DELAY an expiry. */
+   *  also drops each row's `nextAskAt` (a fresh entry's is `0`) and `failures` (review 382, R6), so a tier or stuck row
+   *  (normally asked every four hours) and a row backing off on the ladder are asked again within a few passes,
+   *  SOONER; and it restarts the twice-observed sighting and the hour's runs, which DELAY an expiry. */
   private lastArchivedExpirySweep = 0;
   private archivedExpiryState = new Map<string, ArchivedExpiryEntry>();
   /** ONE PASS AT A TIME. `tick()` dispatches the lane with `void`, and a pass whose audits and act outlast the cadence

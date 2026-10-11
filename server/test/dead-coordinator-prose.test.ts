@@ -174,6 +174,10 @@ describe('the specs', () => {
       '**The journal-gap trade.**', 'stays listed as unmeasured, never ended, until it spawns again', 'Ageing a gap out is carried',
       '**Two residuals stand.**', 'A lane gap of over ten minutes re-anchors every crashed coordinator on the same pass',
       'sub-second to one agent round trip, can still lose its runs', '**A permanently unreadable generation pins the mirror `stale`**',
+      // Review 382, R5: a pre-existing breaker corner, stated before arming.
+      '**One breaker corner predates the restart fix.**',
+      'The breaker\'s hold wins over a re-anchored instant, and that can keep a fresh cluster from forming: with X held at an old instant and re-anchored later as Y crashes, once the other held member is released X@old and Y@new lie outside the window, so the breaker does not trip and X or Y can be ended once its own hour is up, though they crashed together',
+      'This corner predates the restart fix, and a lane that was never restarted behaves the same; the clustering is unchanged',
       '(f) Should a new run under an abandoned programme return its row to active?',
       '(g) A stale mirror at the act keeps the run of crashed passes']) expect(b).toContain(item);
   });
