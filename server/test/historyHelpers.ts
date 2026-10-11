@@ -6,7 +6,7 @@
 // ISOLATION, in three layers:
 //  - HOME is a mkTmp fixture; the shim and the sweep read only $HOME paths.
 //  - the env is SCRUBBED of the operator's own Claude Code and tmux state
-//    (CLAUDECODE, CLAUDE_CONFIG_DIR, TMUX, TMUX_PANE, every CCRC_RECALL_*),
+//    (CLAUDECODE, CLAUDE_CONFIG_DIR, TMUX, TMUX_PANE, CCRC_SESSION_GENERATION, every CCRC_RECALL_*),
 //    which a spawn would otherwise inherit from the session running the suite;
 //  - it is ccrcContainedEnv's (wave 9): gh, tmux, ssh, scp, curl and the
 //    service managers poisoned in <home>/.local/bin, first on PATH, the user
@@ -49,7 +49,7 @@ export function skipOnDarwin(): void {
 export function scrubbedEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const e: NodeJS.ProcessEnv = { ...base };
   for (const k of Object.keys(e)) {
-    if (k === 'CLAUDECODE' || k === 'CLAUDE_CONFIG_DIR' || k === 'TMUX' || k === 'TMUX_PANE'
+    if (k === 'CLAUDECODE' || k === 'CLAUDE_CONFIG_DIR' || k === 'TMUX' || k === 'TMUX_PANE' || k === 'CCRC_SESSION_GENERATION'
       || k.startsWith('CCRC_RECALL_') || k.startsWith('HISTORY_TEST_') || k === 'NODE_OPTIONS') delete e[k];
   }
   return e;
@@ -333,5 +333,95 @@ export function recordDirFsyncs<T>(fn: () => T): { out: T; dirs: string[] } {
   } finally {
     fs.openSync = realOpen; fs.closeSync = realClose; fs.fsyncSync = realFsync;
     syncBuiltinESMExports();
+  }
+}
+
+// ── W1-B2 Task 10: the CLI runner, the pane fixtures, and a captured family ─────────────────────────────
+/** The pane every read-verb case runs in. */
+export const PANE = '%1';
+
+/** A working tmux in <home>/.local/bin, over the poison: it records its argv in $HOME/tmux-calls and answers
+ *  `cc-<id>` (or `opts.name` verbatim) as the pane's session name. Returns the env a CLI child needs. */
+export function withPane(box: HistoryBox, id: string, opts: { name?: string } = {}): Record<string, string> {
+  const name = opts.name ?? `cc-${id}`;
+  const bin = path.join(box.home, '.local', 'bin', 'tmux');
+  fs.writeFileSync(bin, `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/tmux-calls"\nprintf '%s\\n' '${name}'\n`);
+  fs.chmodSync(bin, 0o755);
+  return { TMUX_PANE: PANE };
+}
+
+/** A tmux that never answers: `exec sleep` keeps one pid, so the CLI's SIGKILL at its deadline ends it (a child
+ *  `sleep` would keep the pipe open past the kill). */
+export function sleepyTmux(box: HistoryBox, seconds: number): Record<string, string> {
+  const bin = path.join(box.home, '.local', 'bin', 'tmux');
+  fs.writeFileSync(bin, `#!/bin/sh\nexec sleep ${String(seconds)}\n`);
+  fs.chmodSync(bin, 0o755);
+  return { TMUX_PANE: PANE };
+}
+
+/** `node --no-warnings cli.mjs <args>` in the box, on the statfs preload, capped like every spawn here. `json` is
+ *  the last stdout line parsed, or null when it is not a JSON object. */
+export function runCli(box: HistoryBox, args: string[], opts: SpawnOpts = {}): SpawnResult & { json: Record<string, unknown> | null } {
+  const r = timed(() => spawnSync(process.execPath, ['--no-warnings', CLI, ...args],
+    { env: childEnv(box, opts), cwd: box.home, encoding: 'utf8', timeout: opts.timeoutMs ?? SPAWN_TIMEOUT_MS, killSignal: 'SIGTERM' }));
+  let json: Record<string, unknown> | null = null;
+  try {
+    const v: unknown = JSON.parse(r.stdout.trim().split('\n').at(-1) ?? '');
+    if (v !== null && typeof v === 'object' && !Array.isArray(v)) json = v as Record<string, unknown>;
+  } catch {
+    // a human-format answer
+  }
+  return { ...r, json };
+}
+
+/** The project slug a seeded transcript sits under. */
+export const SEED_SLUG = '-home-u-tree-demo';
+export interface SeedSpec {
+  id: string; project: string; uuid: string; rows: object[];
+  workdir?: string; generation?: string | null; accountId?: string;
+}
+
+/** One family, captured as the box captures one:
+ *  - one priming sweep first, which spends the first tick's registry scan so the epoch is the hook's 'startup' and
+ *    not the scan's 'import' (B1's scanDue is true while meta scan_ms is null; registryBackfill books a planted .uuid);
+ *  - its registry fields;
+ *  - its transcript, under the roster's first account unless `accountId` names another;
+ *  - a SessionStart(startup) line whose `reg` is the uuid; B1 drains it one tick after renaming it, so the epoch
+ *    appears on the second sweep (§6.1);
+ *  - sweep ticks until one leaves the transcript at end-of-file AND its epoch confirmed.
+ *  A string `generation` is written to the registry and carried on the line; null writes none (a gen-less line).
+ *  Throws when four ticks do not get there: a seed that stops short would make every case built on it vacuous. */
+export function seedFamily(box: HistoryBox, f: SeedSpec): { uuid: string; transcript: string } {
+  const prime = runSweep(box);
+  if (prime.code !== 0) throw new Error(`seedFamily(${f.id}): the priming sweep exited ${String(prime.code)}: ${prime.stderr}${prime.stdout}`);
+  plantSession(box, f.id, {
+    uuid: f.uuid, project: f.project,
+    ...(f.generation === undefined ? {} : { generation: f.generation }),
+    ...(f.workdir === undefined ? {} : { workdir: f.workdir }),
+  });
+  const transcript = plantTranscript(box, f.accountId ?? Object.keys(box.accountHome)[0]!, SEED_SLUG, f.uuid, f.rows);
+  spoolLine(box, f.id, {
+    v: 1, ev: 'SessionStart', id: f.id, sid: f.uuid, src: 'startup', reg: f.uuid,
+    ...(typeof f.generation === 'string' ? { gen: f.generation } : {}),
+  });
+  for (let i = 0; i < 4; i += 1) {
+    const r = runSweep(box);
+    if (r.code !== 0) throw new Error(`seedFamily(${f.id}): the sweep exited ${String(r.code)}: ${r.stderr}${r.stdout}`);
+    if (atEndOfFile(box, f.uuid)) return { uuid: f.uuid, transcript };
+  }
+  throw new Error(`seedFamily(${f.id}): four ticks left ${f.uuid} short of end-of-file`);
+}
+
+function atEndOfFile(box: HistoryBox, uuid: string): boolean {
+  const db = openStoreRO(box);
+  try {
+    const row = db.prepare("SELECT count(*) AS n FROM ingest_files f JOIN transcripts t ON t.transcript_pk = f.transcript_pk WHERE t.cc_session_uuid = ? AND f.source_key = '' AND f.eof_ms IS NOT NULL")
+      .get(uuid) as { n: number };
+    // B1 reaches the transcript's EOF through hintedUuids in the tick that RENAMES the line, but drains the line (and so
+    // books the family and its epoch) only in the next: EOF alone would return before the family exists.
+    const ep = db.prepare('SELECT count(*) AS n FROM epochs WHERE cc_session_uuid = ? AND confirmed_ms IS NOT NULL').get(uuid) as { n: number };
+    return Number(row.n) > 0 && Number(ep.n) > 0;
+  } finally {
+    db.close();
   }
 }

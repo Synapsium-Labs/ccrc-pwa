@@ -356,15 +356,19 @@ describe('ccrc history status (Linux)', () => {
     expect(r.stdout.split('\n')[0]).toMatch(new RegExp(`^scope=box coverage=this-box store=${storeIdOf(box)} indexed-through=\\S+ lag=\\S+$`));
   });
 
-  it('every other verb is bad-args in W1-B1, with a usage line, and --json carries the reason', () => {
+  it('an unknown verb is bad-args with the usage on stderr, and --json carries the reason; --help prints the usage (W1-B2)', () => {
     const box = boundBox('ccrc-hist-cli-bad-');
-    const plain = status(box, { args: ['grep', 'x'] });
+    const plain = status(box, { args: ['frobnicate', 'x'] });
     expect(plain.code).toBe(2);
-    expect(plain.stderr).toMatch(/^usage: ccrc history status \[--json\]/m);
-    const json = status(box, { args: ['describe', 'L0', '--json'] });
+    expect(plain.stderr).toMatch(/^usage: ccrc history <verb> \[options\]$/m);
+    const json = status(box, { args: ['frobnicate', '--json'] });
     expect([json.code, json.env.reason]).toEqual([2, 'bad-args']);
     expectIdentity(json.env);
     expect(status(box, { args: [] }).code).toBe(2);
+    expect(status(box, { args: ['status', 'extra'] }).code).toBe(2);
+    const help = status(box, { args: ['--help'] });
+    expect(help.code).toBe(0);
+    expect(help.stdout).toMatch(/^usage: ccrc history <verb> \[options\]$/m);
   });
 
   it('the ccrc dispatch line reaches cli.mjs: `ccrc history status --json` answers as the module does, `ccrc history` alone is bad-args', () => {

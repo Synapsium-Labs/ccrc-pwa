@@ -5691,3 +5691,178 @@ export function forkCounts({ liveSizes, unionSize, coveredSize, holdingCopies })
     forked: liveSizes.length > 1 && !liveSizes.some((n) => n === unionSize),
   };
 }
+
+// ── recall: the read verbs' arguments, selects by store version, recall-off's B2 refusals (W1-B2 Task 10) ──
+//
+// THE ARGUMENT WHITELIST is one table per read verb: §8.2 builds the whitelist from that one list. These are
+// exit 2 bad-args before anything is measured:
+//   - an option the table does not name;
+//   - a repeated option;
+//   - an option missing its value;
+//   - a value off its grammar.
+// `--` ends the options, so a word that starts with `--` is still searchable (`grep -- --force`; slug
+// history-read-args-terminator, NEW). Ids are not checked here: the id grammar is decideScope's (idOk), which
+// runs before any path is formed from one.
+export function paneOk(pane) { return typeof pane === 'string' && PANE_RE.test(pane); }
+
+export const TREE_DEPTH_DEFAULT = 2;
+export const TREE_DEPTH_MAX = 8;
+/** expand --around's window on each side (chosen: §8.4 names the option, not its bound). */
+export const AROUND_DEFAULT = 5;
+export const AROUND_MAX = 50;
+
+const readOpt = (kind, key, extra = {}) => Object.freeze({ kind, key, ...extra });
+/** Options every read verb takes (§8.2). */
+const COMMON_READ_OPTIONS = Object.freeze({
+  '--json': readOpt('flag', 'json'),
+  '--session': readOpt('value', 'session'),
+});
+const ANY_COUNT = Number.POSITIVE_INFINITY;
+export const READ_OPTIONS = Object.freeze({
+  grep: Object.freeze({
+    options: Object.freeze({
+      ...COMMON_READ_OPTIONS,
+      '--regex': readOpt('value', 'regex'),
+      '--role': readOpt('value', 'role'),
+      '--tool': readOpt('value', 'tool'),
+      '--since': readOpt('value', 'since'),
+      '--before': readOpt('value', 'before'),
+      '--node': readOpt('value', 'node'),
+      '--sort': readOpt('enum', 'sort', { values: GREP_SORTS }),
+      '--limit': readOpt('int', 'limit', { min: 1, max: GREP_LIMIT_MAX }),
+      '--cursor': readOpt('value', 'cursor'),
+      '--include-recall': readOpt('flag', 'includeRecall'),
+    }),
+    defaults: Object.freeze({
+      regex: null, role: null, tool: null, since: null, before: null, node: null,
+      sort: GREP_SORTS[0], limit: GREP_LIMIT_DEFAULT, cursor: null, includeRecall: false,
+    }),
+    positional: Object.freeze({ min: 0, max: ANY_COUNT }),
+  }),
+  describe: Object.freeze({
+    options: Object.freeze({
+      ...COMMON_READ_OPTIONS,
+      '--full': readOpt('flag', 'full'),
+      '--cursor': readOpt('value', 'cursor'),
+    }),
+    defaults: Object.freeze({ full: false, cursor: null }),
+    positional: Object.freeze({ min: 1, max: ANY_COUNT }),
+  }),
+  expand: Object.freeze({
+    options: Object.freeze({
+      ...COMMON_READ_OPTIONS,
+      '--around': readOpt('value', 'around'),
+      '--before': readOpt('int', 'before', { min: 0, max: AROUND_MAX }),
+      '--after': readOpt('int', 'after', { min: 0, max: AROUND_MAX }),
+      '--cursor': readOpt('value', 'cursor'),
+    }),
+    defaults: Object.freeze({ around: null, before: AROUND_DEFAULT, after: AROUND_DEFAULT, cursor: null }),
+    positional: Object.freeze({ min: 0, max: ANY_COUNT }),
+  }),
+  tree: Object.freeze({
+    options: Object.freeze({
+      ...COMMON_READ_OPTIONS,
+      '--depth': readOpt('int', 'depth', { min: 1, max: TREE_DEPTH_MAX }),
+    }),
+    defaults: Object.freeze({ depth: TREE_DEPTH_DEFAULT }),
+    positional: Object.freeze({ min: 0, max: 0 }),
+  }),
+});
+/** The read verbs (§8.2): derived from the whitelist, never listed twice. `touched` joins in W4. */
+export const READ_VERBS = Object.freeze(Object.keys(READ_OPTIONS));
+
+const BAD_READ_ARGS = Object.freeze({ ok: false, reason: 'bad-args' });
+
+/** A read verb's argv (after the verb) against its whitelist. Every key the verb's table names has a value in
+ *  `opts` (its default when not given), plus json, session, project and workspace. */
+export function parseReadArgs(verb, argv) {
+  if (typeof verb !== 'string' || !Object.hasOwn(READ_OPTIONS, verb) || !Array.isArray(argv)) return BAD_READ_ARGS;
+  const spec = READ_OPTIONS[verb];
+  const opts = { json: false, session: null, project: false, workspace: false, ...spec.defaults };
+  const positional = [];
+  const seen = new Set();
+  let rest = false;
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (typeof a !== 'string') return BAD_READ_ARGS;
+    if (rest || !a.startsWith('--')) {
+      positional.push(a);
+      continue;
+    }
+    if (a === '--') {
+      rest = true;
+      continue;
+    }
+    if (!Object.hasOwn(spec.options, a) || seen.has(a)) return BAD_READ_ARGS;
+    seen.add(a);
+    const o = spec.options[a];
+    if (o.kind === 'flag') {
+      opts[o.key] = true;
+      continue;
+    }
+    const v = argv[i + 1];
+    if (typeof v !== 'string' || v === '') return BAD_READ_ARGS;
+    i += 1;
+    if (o.kind === 'value') {
+      opts[o.key] = v;
+      continue;
+    }
+    if (o.kind === 'enum') {
+      if (!o.values.includes(v)) return BAD_READ_ARGS;
+      opts[o.key] = v;
+      continue;
+    }
+    if (!/^[0-9]{1,6}$/.test(v)) return BAD_READ_ARGS;
+    const n = Number(v);
+    if (n < o.min || n > o.max) return BAD_READ_ARGS;
+    opts[o.key] = n;
+  }
+  if (positional.length < spec.positional.min || positional.length > spec.positional.max) return BAD_READ_ARGS;
+  if (verb === 'grep' && positional.length === 0 && opts.regex === null) return BAD_READ_ARGS;
+  if (verb === 'expand' && positional.length === 0 && opts.around === null && opts.cursor === null) return BAD_READ_ARGS;
+  return { ok: true, verb, positional: Object.freeze(positional), opts: Object.freeze(opts) };
+}
+
+/** A select list naming only the columns the store's version has (§6.11, DM44). A column a later version added
+ *  reads `NULL AS <col>`, so a store older than the code answers with that field null and never a SQL error.
+ *  A table that version lacks throws, and so does a column no version declares (a typo, not an old store).
+ *  The verbs that need a newer table refuse first with migration-pending. */
+export function selectColumns(version, table, cols, schema = SCHEMA_ADDED, alias = null) {
+  const have = new Set();
+  const everywhere = new Set();
+  let known = false;
+  for (const [v, entry] of Object.entries(schema)) {
+    const t = entry.tables[table];
+    if (t === undefined) continue;
+    for (const c of t) everywhere.add(c);
+    if (Number(v) > version) continue;
+    known = true;
+    for (const c of t) have.add(c);
+  }
+  if (!known) throw new TypeError(`selectColumns: table ${table} is not in schema version ${version}`);
+  const q = alias === null ? '' : `${alias}.`;
+  return cols.map((c) => {
+    if (!everywhere.has(c)) throw new TypeError(`selectColumns: ${table}.${c} is in no schema version`);
+    return have.has(c) ? `${q}${c}` : `NULL AS ${c}`;
+  }).join(', ');
+}
+
+/** `recall-off` in B2 (slug history-recall-off-preflight-b2, NEW): the verb that writes recall-off/<id> ships
+ *  with W2 (§8.10), and B2 answers only its refusals, in this order:
+ *   - an argv off `<id> [--clear]` or `--clear-all` is bad-args;
+ *   - an id off ccd's grammar is bad-id, before any path is formed from it (C66);
+ *   - then the caller reads $REG/<id>.generation (`generation` null asks it to): unreadable is
+ *     generation-unreadable (C67);
+ *   - anything else is bad-args, naming W2. */
+export function decideRecallOffPreflight(i) {
+  const a = i.args;
+  const done = (reason) => ({ done: true, exit: EXIT.REFUSED, reason });
+  if (a.length === 1 && a[0] === '--clear-all') return done('bad-args');
+  const shapeOk = a.length >= 1 && a.length <= 2 && typeof a[0] === 'string' && !a[0].startsWith('--')
+    && (a.length === 1 || a[1] === '--clear');
+  if (!shapeOk) return done('bad-args');
+  if (!idOk(a[0])) return done('bad-id');
+  if (i.generation === null) return { done: false, id: a[0] };
+  if (i.generation.state === 'unreadable') return done('generation-unreadable');
+  return done('bad-args');
+}

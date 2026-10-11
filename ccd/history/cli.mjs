@@ -3,10 +3,10 @@
 // (`history) exec node --no-warnings "$CCRC_HERE/history/cli.mjs" "$@" ;;`; spec
 // docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md §5.1, §8).
 //
-// W1-B1 ships ONE verb, `status [--json]` (§8.4). It is a BOX verb: identity-free (§8.2; D-4249
+// `status [--json]` (§8.4) is a BOX verb: identity-free (§8.2; D-4249
 // history-box-verbs-identity-free) — it reads no TMUX_PANE, runs no tmux and derives no session id — and it
 // writes NO spool line (D-4250 history-box-verbs-no-counter-line), because doctor runs it on every `ccrc doctor`.
-// Every other verb answers exit 2 `bad-args` until W1-B2 ships the read verbs and the operator verbs.
+// W1-B2 adds the read verbs (READ_VERBS, in the dispatcher block that replaced `main`) and, from its Task 19, the operator verbs. An unknown verb answers exit 2 `bad-args` with the usage.
 //
 // Departures carried here: D-4167 (history-coverage-this-box: every answer carries store_id and coverage),
 // D-4169 (history-exit-codes-4-and-9) and D-4171 (history-reasons-by-exit) for the exit words, D-4183
@@ -28,8 +28,8 @@
 // never scans entries, blobs or memberships. Every statement it prepares besides its PRAGMAs is in
 // STATUS_SQL, which history-cli.test.ts runs through EXPLAIN QUERY PLAN against a seeded store.
 //
-// It prints no recalled text — ids, paths, counts and words only — so no output redaction applies here
-// (§8.3's layers run on recalled fields, which the read verbs of W1-B2 print).
+// status prints no recalled text: ids, paths, counts and words only. The read verbs print recalled text: each
+// field goes through redactField before any cut, and every output through redactFinal (§8.3).
 import { existsSync, lstatSync, readdirSync, realpathSync, statSync, promises as fsp } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -45,6 +45,22 @@ import * as healthLib from './lib.mjs';
 import * as healthStore from './store.mjs';
 import * as healthFs from 'node:fs';
 import * as healthPath from 'node:path';
+
+// The read verbs' imports (W1-B2 Task 10). Names cli.mjs's earlier imports do not already bind. StoreError,
+// openReader and userVersion are already bound by B1's './store.mjs' import above, and decideStatusRead and
+// decideStatusReadFailure by B1's './lib.mjs' import: importing a binding twice is a SyntaxError.
+// loadSecrets is imported statically: B1's ring census reds on any import() in a shipped module, and sweep.mjs's
+// entry guard keys on process.argv[1], so importing it runs nothing.
+import { closeSync, constants as FS, fstatSync, openSync, readSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import {
+  REASONS, TMUX_DEADLINE_MS, SCOPE_SOURCES, SCHEMA_ADDED, READ_VERBS, idOk, makePairIndex, redactFinal, makeBelt, beltUnits,
+  REDACT_SOURCES_META, parseRedactSources,
+  decideIdentity, decideHarness, resolveGeneration, decideScope, parseReadArgs, decideRecallOffPreflight, paneOk,
+  readEnvelope, shownLine, nextLine,
+} from './lib.mjs';
+import { loadSecrets } from './sweep.mjs';
+import { runTree, familiesOf, transcriptsOf, scopeHeader } from './recall.mjs';
 
 process.umask(0o077);
 
@@ -63,8 +79,10 @@ export const STATUS_SQL = Object.freeze({
 /** What a human reads for each non-zero exit (§8.3's table; the word itself is in `reason`). */
 const EXIT_MEANING = Object.freeze({
   [EXIT.REFUSED]: 'refused',
+  [EXIT.NOT_FOUND]: 'not found on this box (coverage=this-box)',
   [EXIT.DB]: 'store error',
   [EXIT.NOT_INDEXED]: 'not indexed yet: the first tick has not created the store, or this store has no rows yet',
+  [EXIT.RECALL_OFF]: 'recall is off for this session (the eval control arm; counted)',
   [EXIT.NO_STORE]: 'no store on this box (macOS, a server role, or never installed): stop, do not retry',
 });
 
@@ -168,7 +186,7 @@ function decided(env, d) {
 function boxFacts(env, P) {
   try { env.shim_mtime_ms = Math.trunc(lstatSync(P.shim).mtimeMs); } catch { env.shim_mtime_ms = null; }
   env.history_off = existsSync(P.off);
-  // The sweep's capText rule (Task 14), spelled again because cli.mjs imports nothing from sweep.mjs: absent is
+  // The sweep's capText rule (Task 14), spelled again because cli.mjs imports only loadSecrets from sweep.mjs, statically: absent is
   // null (the default, not malformed); an unreadable file is '' — malformed, so doctor WARNs (§9.3).
   const cr = readBounded(P.cap, CONTROL_FILE_MAX, true);
   const capRead = cr.state === 'absent' ? null : cr.state === 'value' ? cr.value : '';
@@ -300,31 +318,47 @@ function readStoreAnswered(env, P, nowMs) {
   }
 }
 
-/** `status --json`'s envelope (§8.3, §8.4). The no-store answer is §8.3's table in its own order: Darwin,
- *  the recorded role, the 2 s reachability stat, then every presence input measured (an unreadable one is
- *  store-unmeasured, never absent). */
+/** What §8.3's no-store table reads, measured in the table's own order (W1-B2 Task 10: shared by status and the
+ *  read verbs, so the two never measure a store differently):
+ *   - Darwin and the recorded role first: they answer before anything else is touched;
+ *   - then the 2 s reachability stat of db/history.db; one that never settles reads unsettled, and nothing
+ *     behind it is measured;
+ *   - then every presence input (measureStoreFacts), with the shim measured beside them. */
+export async function measureReach(home) {
+  const P = historyPaths(home);
+  const darwin = process.platform === 'darwin';
+  const role = readRole(P);
+  if (darwin || role === 'server') return { darwin, role, facts: unmeasuredFacts(role), statSettled: true, shim: 'unmeasured' };
+  const stat = await settleWithin(fsp.stat(P.dbFile), CLI_STAT_DEADLINE_MS);
+  if (!stat.settled) return { darwin, role, facts: unmeasuredFacts(role), statSettled: false, shim: presence(P.shim) };
+  return { darwin, role, facts: measureStoreFacts(home, role), statSettled: true, shim: presence(P.shim) };
+}
+
+/** decideCliStore's input from a reach measurement. */
+function cliFactsOf(reach) {
+  return { ...reach.facts, darwin: reach.darwin, statSettled: reach.statSettled, shim: reach.shim };
+}
+
+/** `status --json`'s envelope (§8.3, §8.4). The no-store answer is §8.3's table over measureReach. */
 export async function statusEnvelope(home, nowMs) {
   const P = historyPaths(home);
   const env = emptyEnvelope(P);
-  const darwin = process.platform === 'darwin';
-  const role = readRole(P);
-  env.role = role;
-  if (darwin || role === 'server') {
-    return decided(env, decideCliStore({ ...unmeasuredFacts(role), darwin, statSettled: true, shim: 'unmeasured' }));
-  }
+  const reach = await measureReach(home);
+  env.role = reach.role;
+  const d = decideCliStore(cliFactsOf(reach));
+  if (reach.darwin || reach.role === 'server') return decided(env, d);
   boxFacts(env, P);
-  const stat = await settleWithin(fsp.stat(P.dbFile), CLI_STAT_DEADLINE_MS);
-  if (!stat.settled) {
+  if (!reach.statSettled) {
     const id = readTrimmed(P.storeId);
     env.store_id = id !== null && UUID_RE.test(id) ? id : null;
-    return decided(env, decideCliStore({ ...unmeasuredFacts(role), darwin, statSettled: false, shim: presence(P.shim) }));
+    return decided(env, d);
   }
-  const facts = measureStoreFacts(home, role);
+  const facts = reach.facts;
   if (facts.storeId.state === 'value') env.store_id = facts.storeId.value;
   else if (facts.dbStoreId.state === 'value') env.store_id = facts.dbStoreId.value;
-  const d = decideCliStore({ ...facts, darwin, statSettled: true, shim: presence(P.shim) });
   await freeSpace(env, P);
   env.snapshot_bytes = snapshotBytes(P);
+  // B1's answering wrapper, never bare readStore: a failed read is ONE exit-5 envelope (review 316 F11).
   if (d.read) readStoreAnswered(env, P, nowMs);
   else decided(env, d);
   journalFacts(env, P);
@@ -360,19 +394,351 @@ export function render(env) {
   return `${lines.join('\n')}\n`;
 }
 
-/** `ccrc history <verb> …`. W1-B1: `status [--json]` only. */
-export async function main(argv) {
-  const home = process.env.HOME ?? '';
-  const json = argv.includes('--json');
-  const rest = argv.filter((a) => a !== '--json');
-  if (rest.length !== 1 || rest[0] !== 'status') {
-    process.stderr.write('usage: ccrc history status [--json]   (W1-B1; the read and operator verbs arrive with W1-B2)\n');
-    if (json) process.stdout.write(`${JSON.stringify({ ...emptyEnvelope(historyPaths(home)), exit: EXIT.REFUSED, reason: 'bad-args' })}\n`);
-    return EXIT.REFUSED;
+// ── W1-B2: the verb dispatcher and the read verbs' delivery (spec §8.1–§8.4, §8.8; W1-B2 Task 10) ──────────
+//
+// `ccrc history <verb>` answers two kinds of verb (§8.2):
+//   - BOX verbs derive no identity: `status`; `recall-off`, which in B2 answers only its refusals (the verb that
+//     writes ships with W2); and, from Task 19, the operator verbs.
+//   - READ verbs (READ_VERBS) need one, from tmux. They run in this order, each step a lib decision over what
+//     this file measured:
+//     1. the argument whitelist (parseReadArgs; READ_OPTIONS is the one list per verb);
+//     2. §8.3's Darwin and recorded-role rows (decideCliStore): 9 before any identity, so a server box needs no
+//        pane;
+//     3. the identity (decideIdentity over a bounded `tmux display-message -p -t "$TMUX_PANE" '#S'`);
+//     4. the harness (decideHarness over $REG/<id>.harness: unsupported and unreadable are refusals, never 6);
+//     5. the generation (resolveGeneration: CCRC_SESSION_GENERATION, then $REG/<id>.generation, then newest);
+//     6. the rest of §8.3's table, after the 2 s reachability stat (measureReach); no DB open before it;
+//     7. the read-only open (openReader), the journal mode (decideStatusRead: not WAL is store-not-wal), and the
+//        store's own version;
+//     8. the scope (decideScope), then its families and their transcripts; merged families and unconfirmed
+//        epochs are never read;
+//     9. the pair index and its belt (redact_hashes, plus the frozen list and the declared secretsFiles the last
+//        tick recorded, read now) for output redaction (§8.3 layers 1 and 4).
+//   A failed read of the admitted store, in any step from 7 on or in the verb's own read, is ONE exit-5 answer
+//   (decideStatusReadFailure, as status gives); any other throw is a defect, exit 1.
+//   The verbs' executors are recall.mjs's. This block decides nothing: it renders, and runs redactFinal over the
+//   whole output as the second belt (§8.3).
+
+/** Every bad-args answer prints this on stderr. */
+const USAGE = [
+  'usage: ccrc history <verb> [options]',
+  '  read verbs (in a cc- tmux pane): tree [--depth N] | grep <words> | describe <id | pasted line> | expand <id>',
+  '    each also takes: --session <id>, and --json',
+  '  box verbs: status [--json]',
+  '  every exit code and reason: the ccrc-history skill',
+].join('\n');
+
+/** No pairs: a refusal prints no recalled text, but every output still takes redactFinal's context and shape
+ *  layers (§8.3). */
+const NO_PAIRS = makePairIndex([]);
+const ABSENT = Object.freeze({ state: 'absent' });
+const UNREADABLE = Object.freeze({ state: 'unreadable' });
+/** A registry field or a recall-off file is a few dozen bytes; a read stops here. */
+const FIELD_READ_MAX = 4096;
+
+/** A small file as a Presence (§8.2; IV5: unreadable is never absent):
+ *   - ENOENT is absent;
+ *   - any other failure, a symlink (O_NOFOLLOW) or a non-regular file is unreadable;
+ *   - a value is the trimmed text of the first FIELD_READ_MAX bytes.
+ *  Callers form `p` only from an id idOk passed: no id becomes a path unchecked (slug history-id-grammar). */
+function presenceOf(p) {
+  let fd;
+  try {
+    fd = openSync(p, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK);
+  } catch (e) {
+    return e !== null && typeof e === 'object' && e.code === 'ENOENT' ? ABSENT : UNREADABLE;
   }
+  try {
+    if (!fstatSync(fd).isFile()) return UNREADABLE;
+    const b = Buffer.alloc(FIELD_READ_MAX);
+    const n = readSync(fd, b, 0, b.length, 0);
+    return { state: 'value', value: b.subarray(0, n).toString('utf8').trim() };
+  } catch {
+    return UNREADABLE;
+  } finally {
+    closeSync(fd);
+  }
+}
+const regPresence = (P, id, field) => presenceOf(`${P.reg}/${id}.${field}`);
+
+/** The pane's tmux session name (§8.2; C3, C65). The call is bounded at TMUX_DEADLINE_MS and ALWAYS uses -t: a
+ *  tmux call without -t answers for "the most recent session", which is some other pane. A tmux that does not
+ *  answer in time is killed and reads unsettled. Whether the answer is an identity is decideIdentity's call. */
+export function tmuxSession(pane) {
+  const r = spawnSync('tmux', ['display-message', '-p', '-t', pane, '#S'], {
+    encoding: 'utf8', timeout: TMUX_DEADLINE_MS, killSignal: 'SIGKILL', stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  return { settled: r.error === undefined && r.signal === null, status: r.status, stdout: typeof r.stdout === 'string' ? r.stdout : '' };
+}
+
+/** A read verb's answer when there is no ReadContext. `reason` rides only where §8.3 gives the exit one. `id`
+ *  and `gen` are what the counter line names; both are null before the identity resolved. */
+function refusal(exit, reason, storeId, id, gen) {
+  return { exit, ...(reason === undefined ? {} : { reason }), storeId, id, gen };
+}
+
+/** The store_id an exit-5 or exit-6 answer names (§8.3: the store-unbound remedy needs no sqlite3). */
+function refusalStoreId(reach, P) {
+  if (reach.facts.storeId.state === 'value') return reach.facts.storeId.value;
+  if (reach.facts.dbStoreId.state === 'value') return reach.facts.dbStoreId.value;
+  if (!reach.statSettled) {
+    const id = readTrimmed(P.storeId);
+    return id !== null && UUID_RE.test(id) ? id : null;
+  }
+  return null;
+}
+
+/** The output redaction's index (§8.3 layers 1 and 4). Pairs: every (len, sha256) the sweep recorded in redact_hashes,
+ *  which covers each account's declared secretsFile, plus the pairs of the files read now, so a value added since the
+ *  last tick is redacted too. The belt (W1-B2 Task 7A): the units of the frozen list's and the declared secretsFiles'
+ *  values read now; the declared paths are those the last tick recorded in meta redact_sources (Task 7B), because this
+ *  process sources no bash. The values live only in this process's memory, inside the belt (and, for --regex, the
+ *  child's stdin, Task 14): never printed, persisted or journaled. loadSecrets is the W1-B2 block's static import
+ *  (never an import(): B1's ring census refuses one in a shipped module); Task 19's operator relay reuses this index. */
+function pairIndexOf(db, home) {
+  const recorded = db.prepare('SELECT len, sha256 FROM redact_hashes').all()
+    .map((r) => ({ len: Number(r.len), sha256: Buffer.from(r.sha256).toString('hex') }));
+  const sources = db.prepare('SELECT v FROM meta WHERE k = ?').get(REDACT_SOURCES_META);
+  const loaded = loadSecrets(home, parseRedactSources(sources?.v));
+  return makePairIndex([...recorded, ...loaded.pairs], makeBelt(beltUnits(loaded.values)));
+}
+
+/** A failed read of an admitted store as a read verb's refusal (§8.3: ONE answer, exit 5, for a DB or schema error),
+ *  measured as B1's readStoreAnswered measures it and decided by lib's decideStatusReadFailure: a StoreError's word,
+ *  SQLite's own error (ERR_SQLITE_ERROR: a missing table or column, a corrupt page, an I/O error) as
+ *  store-read-failed, the error's message on stderr. Null for any other throw, a defect the caller rethrows, so it
+ *  stays exit 1 with no answer (review 316 F11's rule; B1's slug history-import-refusal-words names the word). */
+function readFailure(e, storeId, id, gen) {
+  const f = decideStatusReadFailure({
+    storeWord: e instanceof StoreError ? e.word : null,
+    sqliteError: e !== null && typeof e === 'object' && e.code === 'ERR_SQLITE_ERROR',
+  });
+  if (f === null) return null;
+  process.stderr.write(`ccrc history: ${f.reason}: ${e.message}\n`);
+  return refusal(f.exit, f.reason, storeId, id, gen);
+}
+
+/** The argv that reproduces this scope on a next: line. */
+function scopeArgsOf(o) {
+  if (typeof o.session === 'string') return ['--session', o.session];
+  if (o.project === true) return ['--project'];
+  if (o.workspace === true) return ['--workspace'];
+  return [];
+}
+
+/** The read context: every step of the order above through the scope, or the refusal that stopped it.
+ *  On success the caller owns `rc.db` and closes it. */
+export async function readContext(home, verb, parsed, nowMs = Date.now()) {
+  const P = historyPaths(home);
+  if (process.platform === 'darwin' || readRole(P) === 'server') {
+    const d = decideCliStore(cliFactsOf(await measureReach(home)));
+    return refusal(d.exit, d.reason, null, null, null);
+  }
+  const pane = process.env.TMUX_PANE ?? null;
+  const who = decideIdentity({ pane, tmux: paneOk(pane) ? tmuxSession(pane) : null });
+  if (!who.ok) return refusal(who.rc, who.reason, null, null, null);
+  const id = who.id;
+  const harness = decideHarness(regPresence(P, id, 'harness'));
+  if (!harness.ok) return refusal(harness.rc, harness.reason, null, id, null);
+  const generation = resolveGeneration({
+    envGen: process.env.CCRC_SESSION_GENERATION ?? null, regGen: regPresence(P, id, 'generation'),
+  });
+  let gen = generation.value;
+  const reach = await measureReach(home);
+  const d = decideCliStore(cliFactsOf(reach));
+  if (!d.read) return refusal(d.exit, d.reason, refusalStoreId(reach, P), id, gen);
+  let db;
+  try {
+    db = openReader(P.dbFile);
+  } catch (e) {
+    const f = readFailure(e, refusalStoreId(reach, P), id, gen);
+    if (f === null) throw e;
+    return f;
+  }
+  let handed = false;
+  let storeId = refusalStoreId(reach, P);
+  try {
+    const meta = db.prepare("SELECT v FROM meta WHERE k = 'store_id'").get();
+    if (meta !== undefined) storeId = meta.v;
+    // lib's decideStatusRead decides the journal mode, as it does for status: this file only measures.
+    const mode = db.prepare('PRAGMA journal_mode').get().journal_mode;
+    const version = userVersion(db);
+    const rd = decideStatusRead({ userVersion: version, journalMode: mode, recordedMigration: undefined });
+    if (rd.reason !== undefined) return refusal(rd.exit, rd.reason, storeId, id, gen);
+    const o = parsed.opts;
+    const session = typeof o.session === 'string' ? o.session : null;
+    const scopeInputs = {
+      source: SCOPE_SOURCES[0], id, generation,
+      flags: { project: o.project === true, workspace: o.workspace === true, session },
+      reg: {
+        project: regPresence(P, id, 'project'),
+        workdir: regPresence(P, id, 'workdir'),
+        sessionProject: session === null ? null : (idOk(session) ? regPresence(P, session, 'project') : ABSENT),
+      },
+    };
+    const verdict = decideScope(scopeInputs);
+    if (!verdict.ok) return refusal(verdict.rc, verdict.reason, storeId, id, gen);
+    // --session names another id's family: read with that id's own registry generation (§8.2).
+    const famGen = session === null ? verdict.generation
+      : resolveGeneration({ envGen: null, regGen: regPresence(P, verdict.id, 'generation') }).value;
+    const families = familiesOf(db, {
+      kind: verdict.kind, id: verdict.id, generation: famGen, project: verdict.project, workdir: verdict.workdir, workdirReal: null,
+    });
+    if (session === null && verdict.kind === 'family' && families.length === 1 && UUID_RE.test(families[0].generation)) {
+      gen = families[0].generation;
+    }
+    const transcriptPks = transcriptsOf(db, families.map((f) => f.sessionPk));
+    if (transcriptPks.length === 0) return refusal(EXIT.NOT_INDEXED, undefined, storeId, id, gen);
+    const rc = {
+      db, version, schema: SCHEMA_ADDED, storeId, nowMs, home, id, gen,
+      scope: {
+        kind: verdict.kind, id: verdict.id, generation: families.length === 1 ? families[0].generation : null,
+        project: verdict.project, workdir: verdict.workdir,
+        sessionPks: families.map((f) => f.sessionPk), transcriptPks, families,
+      },
+      scopeArgs: scopeArgsOf(o),
+      pairIdx: pairIndexOf(db, home),
+    };
+    handed = true;
+    return rc;
+  } catch (e) {
+    // A read of this admitted store failed (the meta read, the PRAGMA, the scope's families and transcripts, the
+    // pair index): ONE exit-5 answer, as status gives (review 316 F11). Anything else is a defect: exit 1.
+    const f = readFailure(e, storeId, id, gen);
+    if (f === null) throw e;
+    return f;
+  } finally {
+    if (!handed) db.close();
+  }
+}
+
+/** The recall.mjs runner each read verb calls. Each entry takes (rc, parsed, argv): `parsed` is parseReadArgs'
+ *  answer (the whitelist), `argv` the verb's own words, which grep and describe re-read with their own value
+ *  grammars. Tasks 12, 15 and 16 add grep, describe and expand in place. A verb not here answers bad-args before
+ *  anything is measured. */
+const READ_RUNNERS = Object.freeze({
+  tree: (rc, p) => runTree(rc, { depth: Number(p.opts.depth) }),
+});
+
+function refusalLine(exit, reason) {
+  return `exit ${exit}${reason === undefined ? '' : ` ${reason}`}: ${EXIT_MEANING[exit] ?? 'see --json'}`;
+}
+
+/** A refusal, written once: one --json envelope (store_id and coverage always), or one human line. */
+function emitRefusal(r, json, pairIdx) {
+  const text = json
+    ? JSON.stringify(readEnvelope({
+      exit: r.exit, ...(r.reason === undefined ? {} : { reason: r.reason }), storeId: r.storeId ?? null,
+      scope: null, header: null, items: [], shown: 0, total: 0, next: null,
+    }))
+    : refusalLine(r.exit, r.reason);
+  process.stdout.write(redactFinal(`${text}\n`, pairIdx));
+  return r.exit;
+}
+
+/** The --json scope object. In this task a scope holds at most one family (familiesOf answers the own family
+ *  only); Task 11, which widens scopes to a project or a workspace, bounds the list it names. */
+function scopeJson(rc) {
+  return {
+    kind: rc.scope.kind, id: rc.scope.id, project: rc.scope.project,
+    families: rc.scope.families.map((f) => ({ ccrc_id: f.ccrcId, generation: f.generation, first_seen_ms: f.firstSeenMs })),
+    transcripts: rc.scope.transcriptPks.length,
+  };
+}
+
+/** A verb's result. Human form: the header, the body, `shown K of N`, the next: line, the hint. --json: one
+ *  envelope. Both go through redactFinal over the rendered string (§8.3's second belt). */
+function emitResult(rc, res, json) {
+  const h = scopeHeader(rc);
+  let text;
+  if (json) {
+    text = `${JSON.stringify(readEnvelope({
+      exit: res.exit, ...(res.reason === undefined ? {} : { reason: res.reason }), storeId: rc.storeId, scope: scopeJson(rc),
+      header: { indexedThroughMs: h.indexedThroughMs, lagS: h.lagS }, items: res.items, shown: res.shown, total: res.total,
+      next: res.next === null ? null : nextLine(res.next),
+    }))}\n`;
+  } else {
+    // A runner's refusal (out-of-scope, regex-syntax, migration-pending, …) names its word under the header.
+    const lines = [res.header ?? h.line, ...(res.reason === undefined ? [] : [refusalLine(res.exit, res.reason)]),
+      ...res.blocks, shownLine(res.shown, res.total)];
+    if (res.next !== null) lines.push(nextLine(res.next));
+    if (res.hint !== undefined) lines.push(`hint: ${res.hint}`);
+    text = `${lines.join('\n')}\n`;
+  }
+  process.stdout.write(redactFinal(text, rc.pairIdx));
+  return res.exit;
+}
+
+async function readVerb(home, verb, argv) {
+  const parsed = parseReadArgs(verb, argv);
+  const json = parsed.ok ? parsed.opts.json === true : argv.includes('--json');
+  if (!parsed.ok) {
+    process.stderr.write(`${USAGE}\n`);
+    return emitRefusal({ exit: EXIT.REFUSED, reason: parsed.reason, storeId: null }, json, NO_PAIRS);
+  }
+  const runner = Object.hasOwn(READ_RUNNERS, verb) ? READ_RUNNERS[verb] : null;
+  if (runner === null) {
+    process.stderr.write(`ccrc history: ${verb} is not in this build\n${USAGE}\n`);
+    return emitRefusal({ exit: EXIT.REFUSED, reason: 'bad-args', storeId: null }, json, NO_PAIRS);
+  }
+  const ctx = await readContext(home, verb, parsed);
+  if (!('db' in ctx)) return emitRefusal(ctx, json, NO_PAIRS);
+  try {
+    let res;
+    try {
+      res = runner(ctx, parsed, argv);
+    } catch (e) {
+      // The verb's own read failed (a missing table or column, a corrupt page): the same ONE exit-5 answer.
+      const f = readFailure(e, ctx.storeId, ctx.id, ctx.gen);
+      if (f === null) throw e;
+      return emitRefusal(f, json, ctx.pairIdx);
+    }
+    return emitResult(ctx, res, json);
+  } finally {
+    ctx.db.close();
+  }
+}
+
+/** An unknown verb, or a box verb's argv off its grammar: B1's bad-args answer, the status-shaped envelope
+ *  under --json (it carries store_id and coverage). */
+function unknownVerb(home, json) {
+  process.stderr.write(`${USAGE}\n`);
+  if (json) process.stdout.write(`${JSON.stringify({ ...emptyEnvelope(historyPaths(home)), exit: EXIT.REFUSED, reason: 'bad-args' })}\n`);
+  return EXIT.REFUSED;
+}
+
+async function statusVerb(home, args) {
+  const json = args.includes('--json');
+  if (args.some((a) => a !== '--json')) return unknownVerb(home, json);
   const env = await statusWithHealth(home, Date.now());
   process.stdout.write(json ? `${JSON.stringify(env)}\n` : `${render(env)}${formatHealth(env.health).map((l) => `${l}\n`).join('')}`);
   return env.exit;
+}
+
+/** `recall-off` in B2: its refusals only (decideRecallOffPreflight). The verb writes nothing and spawns
+ *  nothing. */
+function recallOffVerb(home, args) {
+  const json = args.includes('--json');
+  const a = args.filter((x) => x !== '--json');
+  let d = decideRecallOffPreflight({ args: a, generation: null });
+  if (!d.done) d = decideRecallOffPreflight({ args: a, generation: regPresence(historyPaths(home), d.id, 'generation') });
+  if (d.reason === 'bad-args') process.stderr.write('ccrc history: recall-off writes its file from W2 (the replay eval); this build answers only its refusals\n');
+  return emitRefusal({ exit: d.exit, reason: d.reason, storeId: null }, json, NO_PAIRS);
+}
+
+/** `ccrc history <verb> …` (§8.2): help, the box verbs, the read verbs; anything else is bad-args. */
+export async function main(argv) {
+  const home = process.env.HOME ?? '';
+  const verb = argv[0] ?? '';
+  const rest = argv.slice(1);
+  if (verb === '-h' || verb === '--help' || verb === 'help') {
+    process.stdout.write(`${USAGE}\n`);
+    return EXIT.OK;
+  }
+  if (verb === 'status') return statusVerb(home, rest);
+  if (verb === 'recall-off') return recallOffVerb(home, rest);
+  if (READ_VERBS.includes(verb)) return readVerb(home, verb, rest);
+  return unknownVerb(home, argv.includes('--json'));
 }
 
 // ── the health block (history spec §9.6; W1-B1 task 28) ─────────────────────

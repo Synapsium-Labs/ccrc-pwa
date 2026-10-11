@@ -715,3 +715,32 @@ export interface SteerReceipt { readonly leafId: string; readonly tsMs: number }
 export function pickReceipt(receipts: readonly SteerReceipt[], w: { id: string; afterMs: number | null; uptoMs: number | null }): SteerReceipt | null;
 export function pickHoldingCopy(files: readonly { fileId: number; live: boolean; holds: boolean }[]): number | null;
 export function forkCounts(i: { liveSizes: readonly number[]; unionSize: number; coveredSize: number; holdingCopies: number }): { unspanned: number; forked: boolean };
+
+// --- W1-B2 Task 10: the read verbs' arguments, version-aware selects, recall-off's B2 refusals
+export function paneOk(pane: unknown): boolean;
+export const TREE_DEPTH_DEFAULT: 2;
+export const TREE_DEPTH_MAX: 8;
+export const AROUND_DEFAULT: 5;
+export const AROUND_MAX: 50;
+export interface ReadOptionSpec {
+  readonly kind: 'flag' | 'value' | 'enum' | 'int'; readonly key: string;
+  readonly values?: readonly string[]; readonly min?: number; readonly max?: number;
+}
+export interface ReadVerbSpec {
+  readonly options: Readonly<Record<string, ReadOptionSpec>>;
+  readonly defaults: Readonly<Record<string, string | number | boolean | null>>;
+  readonly positional: Readonly<{ min: number; max: number }>;
+}
+export const READ_OPTIONS: Readonly<Record<'grep' | 'describe' | 'expand' | 'tree', ReadVerbSpec>>;
+export const READ_VERBS: readonly string[];
+export type ReadOpts = Readonly<Record<string, string | number | boolean | null>>;
+export type ReadArgs =
+  | { ok: true; verb: string; positional: readonly string[]; opts: ReadOpts }
+  | { ok: false; reason: 'bad-args' };
+export function parseReadArgs(verb: string, argv: readonly string[]): ReadArgs;
+export function selectColumns(version: number, table: string, cols: readonly string[],
+  schema?: Readonly<Record<number, SchemaVersionAdded>>, alias?: string | null): string;
+export type RecallOffPreflight =
+  | { done: true; exit: 2; reason: 'bad-args' | 'bad-id' | 'generation-unreadable' }
+  | { done: false; id: string };
+export function decideRecallOffPreflight(i: { args: readonly string[]; generation: Presence<string> | null }): RecallOffPreflight;
