@@ -1323,6 +1323,11 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     (`ccd/ccd` and the crumb test) is uncontested.
   - **CCR-15 (mail 4210):** wave 8 (#349) is in review (run 378), and a fix round will follow. Its rulings carry the
     second-lander note as a conditional. #349 will probably land first, and then run 358 does that note in its merge.
+  - **plain-ridge's first question (4212), answered in 4214:**
+    - Block 6 is narrowed to CCR-15's condition. "Set by `_ws_reclaim_locked` and by the shared tail" is kept byte for
+      byte, and only the "So …" sentence is replaced. Accepted; Task 1's commit says so.
+    - Block 1 (the crumb test's FILE HEADER bullet, outside the consented describe) is held. Consent was asked of
+      CCR-15 in 4213. If no answer arrives by Task 12, the PR says the bullet is stale.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
