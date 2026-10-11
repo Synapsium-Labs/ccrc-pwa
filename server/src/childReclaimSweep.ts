@@ -955,6 +955,9 @@ export interface ChildReclaimJournalRow {
   readonly refusal: string | null;
   readonly at: number | null;
   readonly failingSince: number | null;
+  /** The line's own `detail`: ccd's words for a person, DISPLAY-ONLY. The stuck item's sentence carries
+   *  it, because it names the tree or row to fix (spec §5.9). Null when the line carried none. */
+  readonly detail: string | null;
 }
 
 /** The answer shape of wave 3's token classification, as this file receives
@@ -1018,7 +1021,7 @@ export function childReclaimJournalRow(
       if (e.at !== null) failingSince = e.at;
     }
   }
-  return { sessionId: latest.id, outcome: latest.outcome, refusal: latest.refusal, at: latest.at, failingSince };
+  return { sessionId: latest.id, outcome: latest.outcome, refusal: latest.refusal, at: latest.at, failingSince, detail: latest.detail };
 }
 
 /** THE reading of "this child stands under a TERMINAL refusal": its latest
@@ -1026,9 +1029,11 @@ export function childReclaimJournalRow(
  *  the attention list and the lane's terminal exclusion, so the two can never
  *  disagree — and deliberately NOT "is on the attention list", which also
  *  names children whose reclaim keeps FAILING, and a failure is retried. A
- *  pre-lock refusal is a failure line, never terminal (`childReclaimFailureLine`). */
+ *  pre-lock refusal is a failure line, never terminal (`childReclaimFailureLine`). It reads two fields.
+ *  It is typed as the row without `detail`, so a caller holding a row from before that field still
+ *  compiles. */
 export const childReclaimTerminalRefusal = (
-  row: ChildReclaimJournalRow, kindOf: (token: string) => ChildReclaimTokenKind | null,
+  row: Omit<ChildReclaimJournalRow, 'detail'>, kindOf: (token: string) => ChildReclaimTokenKind | null,
 ): boolean => row.outcome === REFUSED && row.refusal !== null && kindOf(row.refusal) === 'terminal';
 
 /** Has this child's reclaim kept failing for the whole ceiling (spec §5.9)?
@@ -1059,6 +1064,75 @@ export const childReclaimFailingSentence = (word: string | null): string =>
 export const childReclaimFailingWord = (refusal: string | null, sentenceFor: (token: string) => string): string | null =>
   refusal === null ? null : (lcRefusalWord(refusal) ?? sentenceFor(refusal));
 
+/** What ccrc does next for a STUCK child (spec §5.9), said once for the attention item, the chip and the
+ *  feed row. It is CONDITIONAL for `childReclaimFailingSentence`'s reason: while `reclaim-paused` stands,
+ *  or the fleet box lacks the reclaim capabilities, the item stays listed and nothing retries it. */
+export const CHILD_RECLAIM_STUCK_RETRY =
+  'While automatic reclamation runs, ccrc retries it on its long backoff; the box resumes from its breadcrumb once the tree or row is fixed.';
+
+/** A `reclaim` line in the STUCK class (spec §5.9): a FAILURE carrying a stuck word. ccd journals the word
+ *  only through `_lc_fail`, so a refusal carrying it is not stuck. `stuckOf` is injected, because L1
+ *  imports L0 alone: the set lives in `coord/childReclaim.ts` (`isChildReclaimStuckToken`). A stuck line is
+ *  a failure line too (`childReclaimFailureLine`), and is never terminal. */
+export const childReclaimStuckRow = <R extends { readonly outcome: string; readonly refusal: string | null }>(
+  row: R, stuckOf: (token: string) => boolean,
+): row is R & { readonly refusal: string } => row.outcome === FAILED && row.refusal !== null && stuckOf(row.refusal);
+
+/** A sentence end for ccd's detail. An ellipsis ends a detail `childReclaimDetailText` cut, so it takes no stop. */
+const childReclaimStuckEnd = (t: string): string => (/[.!?…]$/.test(t) ? t : `${t}.`);
+
+/** The ONE rewrite of a stuck sentence's last clause (spec §5.9): the retry clause, which by construction
+ *  ends every `childReclaimStuckSentence` composed with no kept word, gives way to `clause`. A sentence that
+ *  does not end with the retry clause (a kept one) is returned as it is. Read by `childReclaimStuckKept` and
+ *  `childReclaimStuckHeld` alone. */
+const childReclaimStuckSwap = (sentence: string, clause: string): string => {
+  const retry = ` ${CHILD_RECLAIM_STUCK_RETRY}`;
+  return sentence.endsWith(retry) ? `${sentence.slice(0, -retry.length)} ${clause}` : sentence;
+};
+
+/** What a stuck sentence says in place of the retry clause for a child the sweep KEEPS (spec §5.9): the
+ *  child is kept, and why, in the sweep table's own kept sentence. It promises no retry, because a kept
+ *  child is never asked. */
+export const childReclaimStuckKeptClause = (kept: ChildReclaimKeptWord): string =>
+  `The sweep keeps this child for a person: ${CHILD_RECLAIM_SKIP[kept].sentence}`;
+
+/** A stuck sentence for a KEPT child (spec §5.9): the retry clause gives way to
+ *  `childReclaimStuckKeptClause` (`childReclaimStuckSwap`). Read by the composer below (the chip) and by
+ *  `childReclaimAttentionWithKept` (the banner), which holds the verdicts the mirror arm never sees. */
+export const childReclaimStuckKept = (sentence: string, kept: ChildReclaimKeptWord): string =>
+  childReclaimStuckSwap(sentence, childReclaimStuckKeptClause(kept));
+
+/** What a stuck sentence says in place of the retry clause for a child the sweep HOLDS (spec §5.9): a held
+ *  child is never asked while the hold stands, so nothing retries it then, and its long backoff resumes
+ *  once the hold lifts. */
+export const CHILD_RECLAIM_STUCK_HELD =
+  'This workspace carries a hold, so ccrc does not retry it while the hold stands; its long backoff resumes once the hold lifts.';
+
+/** A stuck sentence for a HELD child (spec §5.9): the retry clause gives way to `CHILD_RECLAIM_STUCK_HELD`
+ *  (`childReclaimStuckSwap`). Read by the chip (`childReclaimStatus`) and by `childReclaimAttentionWithKept`
+ *  (the banner). A sentence that does not end with the retry clause (a kept one) is returned as it is. */
+export const childReclaimStuckHeld = (sentence: string): string =>
+  childReclaimStuckSwap(sentence, CHILD_RECLAIM_STUCK_HELD);
+
+/** The stuck item's sentence (spec §5.9), composed ONCE for the attention item and the chip, so the two
+ *  say the same thing of one line. It is ccd's word for the token, then what ccd recorded as standing in
+ *  the way, then the conditional retry clause, or, for a child kept under a `kept` word, the kept clause
+ *  in its place. The detail is any session's text (identity on the fleet box is attribution), so it is
+ *  carried only as `childReclaimDetailText` makes it: one line, bounded. A line with no detail, or none
+ *  left once made one line, says the record was cut and points to the feed, whose failed row carries
+ *  ccd's printed detail. The word's lookup order is `childReclaimFailingWord`'s: the journal map first,
+ *  the server's lookup second. */
+export const childReclaimStuckSentence = (token: string, detail: string | null,
+  sentenceFor: (token: string) => string, kept: ChildReclaimKeptWord | null): string => {
+  const word = lcRefusalWord(token) ?? sentenceFor(token);
+  const shown = detail === null ? '' : childReclaimDetailText(detail);
+  const what = shown === ''
+    ? 'The journal record was cut, so it does not name the tree or row in the way; this child’s “child reclaim failed” row in the feed names it.'
+    : `What ccd found in the way: ${childReclaimStuckEnd(shown)}`;
+  const sentence = `${word} ${what} ${CHILD_RECLAIM_STUCK_RETRY}`;
+  return kept === null ? sentence : childReclaimStuckKept(sentence, kept);
+};
+
 export interface ChildReclaimAttentionInput {
   readonly latest: readonly ChildReclaimJournalRow[];
   /** Every registry row this read listed → its minting run id, or null when
@@ -1068,18 +1142,22 @@ export interface ChildReclaimAttentionInput {
   /** Wave 3's classification, read totally — null for a token this build does
    *  not know, which is therefore never reported as terminal. */
   readonly kindOf: (token: string) => ChildReclaimTokenKind | null;
+  /** The STUCK classifier (`coord/childReclaim.ts`'s `isChildReclaimStuckToken`), injected for `kindOf`'s
+   *  reason: L1 imports L0 alone. */
+  readonly stuckOf: (token: string) => boolean;
   /** The server's one sentence per token (`wsaudit.ts`'s `refusalSentence`). */
   readonly sentenceFor: (token: string) => string;
   readonly nowMs: number;
 }
 
-/** The two arms of the attention list that the lifecycle mirror alone derives
+/** The three arms of the attention list that the lifecycle mirror alone derives
  *  (spec §5.9); `childReclaimAttention` answers these and no other. */
-export type ChildReclaimJournalAttention = Extract<ChildReclaimAttention, { readonly kind: 'terminal' | 'failing' }>;
+export type ChildReclaimJournalAttention = Extract<ChildReclaimAttention, { readonly kind: 'terminal' | 'stuck' | 'failing' }>;
 
 /** The fleet-level attention list (spec §5.9): each child whose latest reclaim
  *  event in its current generation is a refusal wave 3 classes TERMINAL, or a
- *  failure closing a run of failures that has lasted the ceiling, and whose
+ *  failure closing a run of failures that has lasted the ceiling, or — at once — a failure carrying a STUCK
+ *  word (`childReclaimStuckRow`), which outranks the failing arm, and whose
  *  registry row still exists — with the server's sentence. An `intent` as the
  *  latest event lists nothing: an attempt is in flight, or died mid-way.
  *  DERIVED FROM THE MIRROR ALONE, "so a restart does not lose it": an
@@ -1098,16 +1176,32 @@ export function childReclaimAttention(i: ChildReclaimAttentionInput): ChildRecla
   const out: ChildReclaimJournalAttention[] = [];
   for (const row of i.latest) {
     if (!i.live.has(row.sessionId)) continue;
-    // Unplaceable: no `at`, no item — whichever arm below it would reach.
-    if (row.at === null) continue;
     const runId = i.live.get(row.sessionId) ?? null;
-    if (childReclaimTerminalRefusal(row, i.kindOf)) {
+    // TERMINAL first: ccd's settled word. Unplaceable (no `at`) lists nothing.
+    if (row.at !== null && childReclaimTerminalRefusal(row, i.kindOf)) {
       out.push({
         kind: 'terminal', sessionId: row.sessionId, runId, token: row.refusal!, sentence: i.sentenceFor(row.refusal!),
         // Since when: the refusal's own line, on ccd's clock.
         at: row.at,
       });
-    } else if (childReclaimFailingPastCeiling(row, i.nowMs)) {
+      continue;
+    }
+    // STUCK (spec §5.9): at once, with no ceiling, because nothing a wait can change is left. It needs no
+    // clock to be listed, so a line ccd did not place is listed at `null`. It outranks the failing arm
+    // below, so a stuck child never reads "every attempt has failed" with a retry promise that ccd will
+    // refuse the same way.
+    if (childReclaimStuckRow(row, i.stuckOf)) {
+      out.push({
+        kind: 'stuck', sessionId: row.sessionId, runId, token: row.refusal,
+        // No kept word here: the verdicts are not this derivation's. `childReclaimAttentionWithKept` swaps
+        // a kept child's clause.
+        sentence: childReclaimStuckSentence(row.refusal, row.detail, i.sentenceFor, null), at: row.at,
+      });
+      continue;
+    }
+    // Unplaceable: no `at`, no failing item.
+    if (row.at === null) continue;
+    if (childReclaimFailingPastCeiling(row, i.nowMs)) {
       const word = childReclaimFailingWord(row.refusal, i.sentenceFor);
       out.push({
         kind: 'failing', sessionId: row.sessionId, runId, token: row.refusal ?? '', sentence: childReclaimFailingSentence(word),
@@ -1132,10 +1226,10 @@ const childReclaimBySession = (a: { readonly sessionId: string }, b: { readonly 
 /** The attention list's kept arm (spec §5.9): one item per recorded verdict that is not eligible and
  *  answers a KEPT word, for a row this listing still carries as a child (`live` → the marker's run id,
  *  null when the row is no longer a child) whose marker still names the run the verdict was judged
- *  under, and that has no `terminal` item, because ccd's own terminal word outranks the sweep's, as on
- *  the chip. A marker naming another run is a recycled slug's next workspace (spec §5.6): the old
- *  workspace's kept verdict, which a pass that judged nothing keeps, is not listed for it, and the
- *  next judging pass judges it afresh. Doubt words, `held` and the ordinary words never reach it.
+ *  under, and that has no `terminal` or `stuck` item, because ccd's own word outranks the sweep's, as on
+ *  the chip. A stuck child is therefore never a kept or a kept-many member. A marker naming another run
+ *  is a recycled slug's next workspace (spec §5.6): the old workspace's kept verdict, which a pass that
+ *  judged nothing keeps, is not listed for it, and the next judging pass judges it afresh. Doubt words, `held` and the ordinary words never reach it.
  *  The sentence is the sweep table's, so the banner and the chip say the same thing. Ordered by session
  *  id. Pure and deterministic: the coord frame's byte-equality guard emits once per change. */
 export function childReclaimKeptItems(i: {
@@ -1143,14 +1237,14 @@ export function childReclaimKeptItems(i: {
   readonly live: ReadonlyMap<string, number | null>;
   readonly mirrorArms: readonly ChildReclaimJournalAttention[];
 }): ChildReclaimKeptAttention[] {
-  const terminal = new Set(i.mirrorArms.filter((a) => a.kind === 'terminal').map((a) => a.sessionId));
+  const outranks = new Set(i.mirrorArms.filter((a) => a.kind === 'terminal' || a.kind === 'stuck').map((a) => a.sessionId));
   const out: ChildReclaimKeptAttention[] = [];
   for (const [sessionId, v] of i.verdicts) {
     if (!isChildReclaimKeptVerdict(v)) continue;
     const runId = i.live.get(sessionId);
     if (typeof runId !== 'number') continue;
     if (v.runId !== runId) continue;
-    if (terminal.has(sessionId)) continue;
+    if (outranks.has(sessionId)) continue;
     out.push({ kind: 'kept', sessionId, runId, word: v.why, sentence: CHILD_RECLAIM_SKIP[v.why].sentence });
   }
   return out.sort(childReclaimBySession);
@@ -1188,7 +1282,12 @@ export function childReclaimKeptList(items: readonly ChildReclaimKeptAttention[]
  *  can stand past the ceiling, and the failing sentence — "ccrc retries it" — would be false of it). A
  *  child whose recorded verdict is `held` has no `failing` item either, for the same reason: it is never
  *  asked while the hold stands. Only `held` withholds — a doubt word keeps wave 4's failing item — and a
- *  `terminal` item is never filtered. With no verdict recorded the failing arm stands as it always did. */
+ *  `terminal` item is never filtered. With no verdict recorded the failing arm stands as it always did.
+ *  A `stuck` item is never filtered: `held` never withholds it, and the kept arm never lists its child.
+ *  For a child kept under the run the item names, its retry clause gives way to the kept reason
+ *  (`childReclaimStuckKept`), so the banner never promises a retry the kept word prevents. For a held
+ *  child it gives way to the hold's clause (`childReclaimStuckHeld`), with no run to match, so the banner
+ *  never promises a retry the hold prevents (spec §5.9). */
 export function childReclaimAttentionWithKept(
   mirrorArms: readonly ChildReclaimJournalAttention[], kept: readonly ChildReclaimKeptAttention[],
   verdicts: ReadonlyMap<string, ChildReclaimSweepVerdict>,
@@ -1196,7 +1295,19 @@ export function childReclaimAttentionWithKept(
   const keptIds = new Set(kept.map((a) => a.sessionId));
   const heldIds = new Set([...verdicts].filter(([, v]) => !v.eligible && v.why === 'held').map(([id]) => id));
   return [
-    ...mirrorArms.filter((a) => !(a.kind === 'failing' && (keptIds.has(a.sessionId) || heldIds.has(a.sessionId)))),
+    ...mirrorArms.filter((a) => !(a.kind === 'failing' && (keptIds.has(a.sessionId) || heldIds.has(a.sessionId))))
+      .map((a) => {
+        // A STUCK item for a child the sweep KEEPS under the run the item names (spec §5.9): its retry
+        // clause gives way to the kept reason. A kept verdict under another run is a recycled slug's (§5.6).
+        // A STUCK item for a child the sweep HOLDS (spec §5.9): its retry clause gives way to the hold's,
+        // because a held child is never asked while the hold stands. No run to match: a held verdict
+        // carries none, and `heldIds` withholds the failing item on the same reading.
+        if (a.kind !== 'stuck') return a;
+        if (heldIds.has(a.sessionId)) return { ...a, sentence: childReclaimStuckHeld(a.sentence) };
+        const v = verdicts.get(a.sessionId);
+        return v !== undefined && isChildReclaimKeptVerdict(v) && v.runId === a.runId
+          ? { ...a, sentence: childReclaimStuckKept(a.sentence, v.why) } : a;
+      }),
     ...childReclaimKeptList(kept),
   ];
 }
@@ -1205,24 +1316,26 @@ export function childReclaimAttentionWithKept(
 export interface ChildReclaimFeedQuiet {
   /** The non-presence deferral episode this child is in, or null. */
   readonly deferWhy: string | null;
-  /** The token of this child's `failing` attention item, or null when the failing arm does not list
-   *  it, or lists it with no token. */
+  /** The token of this child's `failing` or `stuck` attention item, or null when neither arm lists it,
+   *  or the failing arm lists it with no token. */
   readonly failureToken: string | null;
 }
 
 /** What the feed already says for this child (spec §5.9), derived from the entry the lane keeps and the
  *  attention list it has just published. `deferWhy` is the entry's latest deferral word unless that word is
  *  one of the presence defers, which keep their one-row-per-pass shape (the ceiling's own row states the wait
- *  each one ends). `failureToken` is the word of this child's `failing` item, when it has one and the item
- *  carries a word: a `terminal` item, another child's item and an item with no token say nothing. Pure: the
- *  executor decides nothing on it but whether its own feed row would repeat it. */
+ *  each one ends). `failureToken` is the word of this child's `failing` or `stuck` item, when it has one and
+ *  the item carries a word: a `terminal` item, another child's item and an item with no token say nothing.
+ *  Pure: the executor decides nothing on it but whether its own feed row would repeat it. */
 export function childReclaimFeedQuiet(
   entry: ChildReclaimSweepEntry, listed: readonly ChildReclaimAttention[], sessionId: string,
 ): ChildReclaimFeedQuiet {
   const why = entry.lastDeferWhy;
   const deferWhy = why !== null && !(CHILD_RECLAIM_PRESENCE_DEFERS as readonly string[]).includes(why) ? why : null;
-  const failing = listed.find((a) => a.kind === 'failing' && a.sessionId === sessionId);
-  const failureToken = failing !== undefined && failing.kind === 'failing' && failing.token !== '' ? failing.token : null;
+  // A listed STUCK item is read like a failing one (spec §5.9): a retry that finds the same word writes no new row.
+  const failing = listed.find((a) => (a.kind === 'failing' || a.kind === 'stuck') && a.sessionId === sessionId);
+  const failureToken = failing !== undefined && (failing.kind === 'failing' || failing.kind === 'stuck') && failing.token !== ''
+    ? failing.token : null;
   return { deferWhy, failureToken };
 }
 

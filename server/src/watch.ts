@@ -87,7 +87,7 @@ import { configDirFor } from './config.js';
 import { refusalSentence } from './wsaudit.js';
 import {
   childMarkLeftListing, childReclaimBornAt, childReclaimGeneration, childReclaimGenerationRead, childReclaimLatest, childReclaimRowUuid,
-  childReclaimTokenKind, reclaimChild,
+  childReclaimTokenKind, isChildReclaimStuckToken, reclaimChild,
   recordChildReclaimKeptFeed, recordChildReclaimLeafKeptFeed, releaseRetiredChildHold, type ChildReclaimOutcome, type ChildReclaimReleaseOutcome,
   type ChildReclaimReleaseRequest, type ChildReclaimRequest,
 } from './coord/childReclaim.js';
@@ -3425,7 +3425,7 @@ export class FleetWatcher {
     // The mirror arms; the list itself is written once, by `childReclaimPublishAttention`. No executor
     // answer ever writes it (spec §5.9 — see the `.then` below).
     const mirrorArms = childReclaimAttention({
-      latest, live, kindOf: childReclaimTokenKind, sentenceFor: refusalSentence, nowMs: now,
+      latest, live, kindOf: childReclaimTokenKind, stuckOf: isChildReclaimStuckToken, sentenceFor: refusalSentence, nowMs: now,
     });
     // ONE-b: the kept-leaf items (spec §5.6, §5.9). They are the clips directories and temp roots ccd kept
     // on a reclaim that completed. Read from the mirror ALONE, so a restart rebuilds them, and NEVER filtered

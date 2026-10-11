@@ -15,6 +15,7 @@ import {
   childReclaimSameGenerationKey, isChildReclaimKeptVerdict, type ChildReclaimFeedQuiet, type ChildReclaimKeptAttention,
   type ChildReclaimPreLockToken, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
   childReclaimDetailText, type ChildReclaimLeafKept,
+  CHILD_RECLAIM_STUCK_RETRY, childReclaimStuckHeld, childReclaimStuckRow, childReclaimStuckSentence,
 } from '../childReclaimSweep.js';
 import type { CoordStore, OpenSiblingsResult } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
@@ -22,6 +23,7 @@ import {
   CHILD_RUN_ID, LC_REASON_MAX_BYTES, REG_GENERATION_SHAPE, TERMINAL_RUN_STATES, holdReason, type ChildMark,
   type ChildReclaimGeneration, type ChildReclaimGenerationKey, type LifecycleAct, type LifecycleOutcome,
   type ChildReclaimStatus, type MarkerState, type MirroredLifecycleEvent, type RunState, type RunSummary, lcRefusalWord, type LcRefusalToken,
+  isChildReclaimKeptWord,
 } from '../../../shared/api.js';
 
 /**
@@ -1611,7 +1613,7 @@ export function childReclaimFailedTail(o: { readonly resume: ChildReclaimResume;
     // ccd proved another tree or row is in the way, and its detail says which.
     // Conditional, like the failing sentence: the switch can stop the retries.
     case 'stuck':
-      return 'While automatic reclamation runs, ccrc retries it on its long backoff; the box resumes from its breadcrumb once the tree or row is fixed.';
+      return CHILD_RECLAIM_STUCK_RETRY;
     default: {
       const _exhaustive: never = o.resume;
       return _exhaustive;
@@ -1815,8 +1817,8 @@ const CHILD_RECLAIM_SWITCH_PAUSED: ChildReclaimStatus = {
 const childReclaimTokenSentence = (token: string): string =>
   lcRefusalWord(token) ?? refusalSentence(token);
 
-/** The four fields of a mirror row the chip reads. */
-export type ChildReclaimEvent = Pick<MirroredLifecycleEvent, 'act' | 'outcome' | 'refusal' | 'at'>;
+/** The five fields of a mirror row the chip reads; `detail` only for a stuck line's sentence (spec §5.9). */
+export type ChildReclaimEvent = Pick<MirroredLifecycleEvent, 'act' | 'outcome' | 'refusal' | 'at' | 'detail'>;
 
 /**
  * What the registry says of a run's session, as the watcher last listed it.
@@ -1887,6 +1889,12 @@ export interface ChildReclaimStatusInput {
  *    the durable record (spec §5.9). A terminal refusal is ccd's own settled
  *    word, and the attention list's terminal arm lists the child in the same
  *    sentence.
+ * 2a. STUCK, where the gate holds: the generation's latest event is a failure carrying a stuck word
+ *    (`childReclaimStuckRow`) → deferred, with the attention item's own sentence and the line's time.
+ *    It outranks the verdict (3) and every remaining event (4), and is never `refused`. A KEPT verdict
+ *    swaps the retry clause for the kept reason, and the switch never replaces that answer.
+ *    A HELD verdict swaps it for the hold's clause (`childReclaimStuckHeld`), and the
+ *    switch replaces that answer as it replaces the hold's own deferred one.
  * 3. THE SWEEP'S LAST VERDICT, where the gate holds (the registry, as last
  *    listed, still carries a `ChildMark` naming THIS run, and no open run names
  *    the session): a KEPT word → refused, never replaced by the switch; a
@@ -1954,6 +1962,26 @@ export function childReclaimStatus(input: ChildReclaimStatusInput): ChildReclaim
   const row = input.row;
   const marked = row.kind === 'row' && row.child.kind === 'child' && row.child.runId === run.id
     && !input.sessionHasOpenRun;
+  // STUCK (spec §5.9): ccd PROVED another tree or registry row stands in this workspace's way. The chip
+  // says what the attention item says, from the same composer, at the line's own time. `deferred`, never
+  // `refused`: the PWA treats `refused` as settled and never re-reads it, and a fixed tree completes on a
+  // later pass. It answers ahead of the sweep's verdict, because the stuck item outranks a kept or held
+  // item on the banner. Like every failure line, it speaks only for a child that still stands as this
+  // run's (`marked`). For a child the sweep KEEPS, the sentence drops the retry clause and names the kept
+  // reason instead; it promises no retry, so the switch leaves it as it leaves every kept answer. For a
+  // child the sweep HOLDS, the sentence drops the retry clause for the hold's: no retry while the hold
+  // stands, the long backoff once it lifts. The same rewrite the banner makes (`childReclaimStuckHeld`).
+  // It still says the sweep acts once the hold lifts, so, like the verdict arm's own held answer, the
+  // switch turns it to `paused`. Every other stuck answer promises a retry, and the switch turns it to
+  // `paused`.
+  if (event !== null && marked && childReclaimStuckRow(event, isChildReclaimStuckToken)) {
+    const kept = input.verdict.kind === 'skip' && isChildReclaimKeptWord(input.verdict.why) ? input.verdict.why : null;
+    const held = input.verdict.kind === 'skip' && input.verdict.why === 'held';
+    const sentence = childReclaimStuckSentence(event.refusal, event.detail, refusalSentence, kept);
+    const stuck: ChildReclaimStatus = {
+      word: 'deferred', sentence: held ? childReclaimStuckHeld(sentence) : sentence, at: event.at };
+    return kept === null ? waiting(stuck) : stuck;
+  }
   // THE SWEEP'S LAST VERDICT (spec §5.9), ahead of every retryable or failure event: a measured
   // reason the sweep keeps or waits on outranks an older answer that promises a retry it will not make.
   if (marked && input.verdict.kind === 'skip') {

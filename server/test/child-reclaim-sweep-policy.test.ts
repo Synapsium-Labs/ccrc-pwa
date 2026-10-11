@@ -34,7 +34,7 @@ import {
   HOLD_NO_REASON, HOLD_UNREADABLE,
 } from '../src/registry.js';
 import { CHILD_BIRTH_SKEW_MS } from '../src/coord/childSpent.js';
-import { childReclaimTokenKind } from '../src/coord/childReclaim.js';
+import { childReclaimTokenKind, isChildReclaimStuckToken } from '../src/coord/childReclaim.js';
 import {
   CHILD_RECLAIM_KEPT_WORDS, LC_REFUSAL_WORD, SPAWN_STALL_MS, TERMINAL_RUN_STATES, holdReason, isChildReclaimKeptWord,
   isLcRefusalToken,
@@ -1107,7 +1107,7 @@ describe('childReclaimJournalRow — one generation\'s latest reclaim event, as 
     const gen = [ev('create', 'done'), ev('reclaim', 'refused', { refusal: 'tree-unreadable' })];
     // `toEqual`, so the row's WHOLE shape is pinned: it carries no `ingestedAt`.
     expect(childReclaimJournalRow(gen, gen[1]!)).toEqual({ sessionId: 'demo-a', outcome: 'refused',
-      refusal: 'tree-unreadable', at: NOW, failingSince: null });
+      refusal: 'tree-unreadable', at: NOW, failingSince: null, detail: null });
   });
 
   it('carries an INTENT when the intent is the latest — the latest event decides, whatever its outcome', () => {
@@ -1160,11 +1160,12 @@ describe('childReclaimAttention', () => {
     latest,
     live: new Map(live),
     kindOf,
+    stuckOf: isChildReclaimStuckToken,
     sentenceFor: (t: string): string => `sentence for ${t}`,
     nowMs,
   });
   const row = (over: Partial<ChildReclaimJournalRow> = {}): ChildReclaimJournalRow => ({
-    sessionId: 'demo-a', outcome: 'refused', refusal: 'tree-unreadable', at: NOW, failingSince: null, ...over,
+    sessionId: 'demo-a', outcome: 'refused', refusal: 'tree-unreadable', at: NOW, failingSince: null, detail: null, ...over,
   });
 
   it('reports a terminal refusal of a child whose registry row still exists, with the SERVER\'s sentence', () => {
@@ -1421,7 +1422,7 @@ describe('a run of pre-lock refusals is a failure run, listed like any other (sp
     const row = childReclaimJournalRow(gen, latest);
     expect(row).not.toBeNull();
     return { row: row!, list: childReclaimAttention({
-      latest: [row!], live, kindOf: childReclaimTokenKind, sentenceFor: (t) => `sentence for ${t}`, nowMs }) };
+      latest: [row!], live, kindOf: childReclaimTokenKind, stuckOf: isChildReclaimStuckToken, sentenceFor: (t) => `sentence for ${t}`, nowMs }) };
   };
 
   it('two refusals a ceiling apart: the run started at the first, and the child is listed with that line', () => {
@@ -1474,7 +1475,7 @@ describe('a run of pre-lock refusals is a failure run, listed like any other (sp
 
 describe('a pre-lock refusal is a failure line, never a terminal refusal (spec §5.9)', () => {
   const refusal = (token: string): ChildReclaimJournalRow =>
-    ({ sessionId: 'demo-a', outcome: 'refused', refusal: token, at: NOW, failingSince: null });
+    ({ sessionId: 'demo-a', outcome: 'refused', refusal: token, at: NOW, failingSince: null, detail: null });
 
   it('childReclaimTerminalRefusal is false for each lock token, under the real kind map and a test one', () => {
     for (const t of Object.values(CHILD_RECLAIM_PRE_LOCK_TOKEN)) {

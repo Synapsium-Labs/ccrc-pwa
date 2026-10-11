@@ -56,9 +56,9 @@ describe('parseChildReclaimResult: a failed word printed before the breadcrumb i
     }
   });
 
-  it('the kebab scanner’s guard admits both pre-breadcrumb words and not pin-failed', () => {
+  it('the kebab scanner’s guard admits probe-unmeasured and the stuck word, and not pin-failed', () => {
     expect(isChildReclaimKebab('probe-unmeasured')).toBe(true);
-    expect(isChildReclaimKebab('state-changed')).toBe(true);
+    expect(isChildReclaimKebab('containment-refuted'), 'admitted only by the stuck set').toBe(true);
     expect(isChildReclaimKebab('pin-failed')).toBe(false);
   });
 });
