@@ -1212,6 +1212,12 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       is still held by claims 1142 and 1141.
       - STATUS: fleet and server v0.0.143, newest v0.0.143, backups fleet 164M/server 626M, disk free fleet 215G/work
         volume 252G/server 33G, no anomalies.
+    - **2026-10-11 00:45 UTC: v0.0.144 published at 00:44:06; not yet moved, inside the usual lag.** No action was
+      taken. It is #348, box-token row 2a: test pins, plus three shipped lines, which are the token verb's
+      temp-beside-the-destination guard, notify.sh's placeholder guard, and one log sentence. Wave 15 (run 300) is
+      still held by claims 1142 and 1141.
+      - STATUS: fleet and server v0.0.143, newest v0.0.144, backups fleet 164M/server 626M, disk free fleet 215G/work
+        volume 250G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
