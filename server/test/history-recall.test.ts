@@ -1345,3 +1345,63 @@ describe('C27: scope joins before grep ranking (W1-B2 task 12)', () => {
     } finally { rc.db.close(); }
   }, HEAVY);
 });
+
+describe("grep's snippet localization and Task 12 helper seam (W1-B2 task 12 fix round 1, phase A)", () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  const T = 0x23;
+  const FILLER = 'filler '.repeat(60);
+  let box: rH.HistoryBox;
+  beforeAll(() => {
+    if (process.platform === 'darwin') return;
+    box = rH.makeHistoryBox('ccrc-hist-grep-snip-');
+    GRX.seed(box, T, GRX.idA, 'demo', [
+      GRX.user(T, 1, `${FILLER}zqpfxfound closes the prefix hit`),
+      GRX.user(T, 2, `${FILLER}café closes the accent hit`),
+      GRX.user(T, 3, `${FILLER}studies are archived`),
+      GRX.user(T, 4, `${FILLER}relational data follows`),
+    ]);
+  }, HEAVY);
+
+  /** The one snippet runGrep returns for `words`, through the in-process runner (the CLI's own path). */
+  const snippetOf = async (words: string[]): Promise<string> => {
+    const recall = await GRX.recall();
+    const rc = await GRX.rc(box, GRX.idA);
+    try {
+      const r = recall.runGrep(rc, await GRX.grepArgs(words));
+      expect(r.exit, words.join(' ')).toBe(0);
+      expect(r.items, words.join(' ')).toHaveLength(1);
+      return String(r.items[0]?.snippet);
+    } finally { rc.db.close(); }
+  };
+
+  it('F1: a prefix hit far beyond the initial window is shown at its matched span, not at the body beginning', async () => {
+    const s = await snippetOf(['zqpfx*']);
+    expect(s).toContain('zqpfxfound');
+    expect(s.startsWith('filler filler filler')).toBe(false);
+  }, HEAVY);
+
+  it('F2: a plain `cafe` locates the accented source token far beyond the initial window', async () => {
+    const s = await snippetOf(['cafe']);
+    expect(s).toContain('café');
+    expect(s.startsWith('filler filler filler')).toBe(false);
+  }, HEAVY);
+
+  it('the accepted Porter localizations survive: studying/studies, relate/relational', async () => {
+    expect(await snippetOf(['studying'])).toContain('studies are archived');
+    expect(await snippetOf(['relate'])).toContain('relational data');
+  }, HEAVY);
+
+  it('F7: Task 12\'s module-private helpers keep their exact names, each declared once, and renderHits takes termsOf per hit', () => {
+    const src = fs.readFileSync(path.join(REPO, 'ccd', 'history', 'recall.mjs'), 'utf8');
+    const decl = (name: string): number => (src.match(new RegExp(`^(?:export )?(?:function ${name}\\(|const ${name} =)`, 'gm')) ?? []).length;
+    for (const n of ['FRAME_RESERVE', 'versioned', 'bindFor', 'referrerSql', 'rankedSql', 'countSql', 'GREP_FILTER', 'FTS_MATCH', 'indexGate',
+      'refusal', 'notFound', 'grepNotFound', 'hintLine', 'scopeArgs', 'iso', 'nodeEntries', 'grepParams', 'rankedAndCounted', 'blobOf',
+      'hitSnippet', 'hitLine', 'hitItem', 'renderHits']) expect(decl(n), n).toBe(1);
+    for (const n of ['grepVersioned', 'grepRefusal', 'grepHint']) expect(decl(n), `${n} is an alias the seam does not name`).toBe(0);
+    expect(src).toContain('function renderHits(rc, pool, termsOf, a, total) {');
+    const body = /function renderHits\([^)]*\) \{[\s\S]*?\n\}\n/.exec(src)?.[0] ?? '';
+    expect(body).toContain('hitSnippet(rc, h, termsOf(h))');
+    expect(src).toContain('() => snippetTerms(raw)');
+    expect((src.match(/\bblobOf\(/g) ?? []).length, 'blobOf is declared once and called by hitSnippet only').toBe(2);
+  });
+});

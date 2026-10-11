@@ -3367,26 +3367,47 @@ function quoteFtsTerm(t) {
 }
 
 // derived from lossless-claw src/store/full-text-fallback.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
-const RAW_TERM_RE = /"([^"]+)"|(\S+)/g;
+const RAW_TERM_RE = /"([^"]+)"(\*?)|(\S+)/g;
 const EDGE_PUNCTUATION_RE = /^[`'"()[\]{}<>.,:;!?*_+=|\\/-]+|[`'"()[\]{}<>.,:;!?*_+=|\\/-]+$/g;
 
 function normalizeQueryTerm(raw) {
   return typeof raw === 'string' ? raw.trim().replace(EDGE_PUNCTUATION_RE, '').toLowerCase() : '';
 }
 
+/** Whether a token (or a phrase's inside) ends in the FTS5 prefix marker exactly as quoteFtsTerm reads it: a star run
+ *  after at least one character that is neither a star nor a space. */
+const PREFIX_MARKED_RE = /[^*\s]\s*\*+$/;
+
+/** The one lexer behind queryTerms and snippetTerms, the raw query's words as sanitizeFtsQuery splits them: each
+ *  normalized term with whether the query made it a prefix (a star right after a phrase's closing quote, or
+ *  ending the token or the phrase's inside, which is what sanitizeFtsQuery turns into an FTS5 prefix query),
+ *  once per (term, prefix) pair. */
+function lexQueryTerms(raw) {
+  const text = String(raw);
+  const out = [];
+  const add = (term, prefix) => {
+    if (term.length > 0 && !out.some((x) => x.term === term && x.prefix === prefix)) out.push({ term, prefix });
+  };
+  for (const m of text.matchAll(RAW_TERM_RE)) {
+    const inner = m[1] ?? m[3] ?? '';
+    add(normalizeQueryTerm(inner), m[2] === '*' || PREFIX_MARKED_RE.test(inner.replace(/"/g, '')));
+  }
+  if (out.length === 0) add(normalizeQueryTerm(text), false);
+  return out;
+}
+
 /** The plain words of a query, lowercased, edge punctuation (a trailing `*`
  *  included) stripped, each once: the snippet window's needles (§11 P9). */
 export function queryTerms(raw) {
-  const terms = [];
-  for (const m of String(raw).matchAll(RAW_TERM_RE)) {
-    const t = normalizeQueryTerm(m[1] ?? m[2] ?? '');
-    if (t.length > 0 && !terms.includes(t)) terms.push(t);
-  }
-  if (terms.length === 0) {
-    const t = normalizeQueryTerm(String(raw));
-    if (t.length > 0) terms.push(t);
-  }
-  return terms;
+  return [...new Set(lexQueryTerms(raw).map((x) => x.term))];
+}
+
+/** queryTerms for snippet localization: the same words, each once, but a term the query made a prefix keeps one
+ *  terminal `*`, which snippetSpan reads as FTS5's prefix marker (W1-B2 Task 12 fix round 1, finding F1). queryTerms
+ *  strips that star for its display callers, so grep's snippet cannot be located from it. `stud` and `stud*` are
+ *  different needles and both stay. */
+export function snippetTerms(raw) {
+  return lexQueryTerms(raw).map(({ term, prefix }) => (prefix ? `${term}*` : term));
 }
 
 // derived from lossless-claw src/tools/lcm-grep-tool.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
@@ -3729,10 +3750,18 @@ function porterStem(word) {
   return stem;
 }
 
-/** Unicode61 token candidates with their original code-unit spans. */
+/** The comparison form of one unicode61 token candidate, as FTS5's default `porter unicode61` (remove_diacritics)
+ *  compares it: lowercased, canonically decomposed, combining diacritical marks (U+0300 to U+036F) removed. It is a
+ *  comparison value only: the candidate's span in the source text is never rebuilt from it (Task 12 fix round 1, F2). */
+function foldToken(word) {
+  return word.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+/** Unicode61 token candidates with their original code-unit spans. Combining diacritical marks belong to the token
+ *  they follow, as in FTS5, so a decomposed `e` + U+0301 is one candidate. */
 function unicode61Words(text) {
   const words = [];
-  const word = /[\p{L}\p{N}]+/gu;
+  const word = /[\p{L}\p{N}\u0300-\u036f]+/gu;
   for (let m = word.exec(text); m !== null; m = word.exec(text)) words.push({ text: m[0], at: m.index, end: m.index + m[0].length });
   return words;
 }
@@ -5942,27 +5971,27 @@ export function snippetSpan(text, terms) {
   const content = String(text);
   let at = -1;
   let len = 0;
-  const phraseTokens = (term) => unicode61Words(String(term).replace(/\*+$/, '')).map(({ text }) => text.toLowerCase());
+  const phraseTokens = (term) => unicode61Words(String(term).replace(/\*+$/, '')).map(({ text }) => foldToken(text)).filter((t) => t.length > 0);
   for (const term of terms) {
     const raw = String(term);
+    // FTS5 reads a terminal star as a prefix on the phrase's LAST token (`"error hand"*`), never on the first.
     const prefix = raw.endsWith('*');
     const needles = phraseTokens(raw);
     if (needles.length === 0) continue;
-    const words = /[\p{L}\p{N}]+/gu;
+    const stems = needles.map(porterStem);
+    // Whether the candidate (already folded) is needle `k`: the last needle of a prefix term by prefix, else by Porter stem.
+    const is = (folded, k) => (prefix && k === needles.length - 1 ? folded.startsWith(needles[k]) : porterStem(folded) === stems[k]);
+    const words = /[\p{L}\p{N}\u0300-\u036f]+/gu;
     for (let first = words.exec(content); first !== null; first = words.exec(content)) {
-      const lowered = first[0].toLowerCase();
-      const firstMatches = prefix
-        ? lowered.startsWith(needles[0])
-        : porterStem(lowered) === porterStem(needles[0]);
-      if (!firstMatches) continue;
+      if (!is(foldToken(first[0]), 0)) continue;
       // Probe the phrase with a separate cursor, so its later words remain candidate starts in the main scan.
-      const phrase = /[\p{L}\p{N}]+/gu;
+      const phrase = /[\p{L}\p{N}\u0300-\u036f]+/gu;
       phrase.lastIndex = first.index + first[0].length;
       let last = first;
       let matches = true;
       for (let offset = 1; offset < needles.length; offset += 1) {
         const next = phrase.exec(content);
-        if (next === null || porterStem(next[0].toLowerCase()) !== porterStem(needles[offset])) {
+        if (next === null || !is(foldToken(next[0]), offset)) {
           matches = false;
           break;
         }

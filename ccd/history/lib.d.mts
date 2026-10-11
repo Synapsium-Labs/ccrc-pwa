@@ -468,6 +468,8 @@ export function decideRecallOff(i: { file: Presence<string>; generation: string 
 // --- W1-B2 Task 2: search primitives (spec §8.4 grep, §11 V2, P1, P8, P9, P10)
 export function sanitizeFtsQuery(raw: string): string;
 export function queryTerms(raw: string): string[];
+/** queryTerms for snippet localization: a term the query made a prefix keeps one terminal `*` (Task 12 fix round 1, F1). */
+export function snippetTerms(raw: string): string[];
 export function regexSyntaxIn(pattern: string): string | null;
 export function regexSyntaxHint(pattern: string, syntax: string): string;
 export const REGEX_MAX_LEN: 500;

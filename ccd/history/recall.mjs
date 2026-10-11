@@ -14,7 +14,7 @@
 // It reads no environment variable and has no entry guard: cli.mjs imports it.
 import {
   EXIT, OUTPUT_CAP, TREE_DEPTH_MAX, SCOPE_FAMILIES_JSON_MAX, selectColumns, displayPrefixes, headerLine, scopeLag, recallEnvelope, capOutput, redactForDisplay, redactFinal, readEnvelope, nextLine,
-  REASONS, INDEXED_PROVENANCE, SEARCHABLE_PROVENANCE, FTS_STEP, RANK_POOL, decideGrepIndex, sanitizeFtsQuery, queryTerms, regexSyntaxIn, regexSyntaxHint, ftsOrderBy, displaySnippet, snippetLine, escapeXmlText, redactField, extractNodeId, resolveScopedId, SEARCH_REACH, parseGrepArgs,
+  REASONS, INDEXED_PROVENANCE, SEARCHABLE_PROVENANCE, FTS_STEP, RANK_POOL, decideGrepIndex, sanitizeFtsQuery, snippetTerms, regexSyntaxIn, regexSyntaxHint, ftsOrderBy, displaySnippet, snippetLine, escapeXmlText, redactField, extractNodeId, resolveScopedId, SEARCH_REACH, parseGrepArgs,
 } from './lib.mjs';
 import { childrenOf, parentOf, probeFts5, blobPlainText, lineageEntries } from './store.mjs';
 
@@ -288,10 +288,32 @@ export function runTree(rc, a) {
   return { exit: EXIT.OK, header: head.line, blocks: retained.map((o) => o.text), items, shown: keptNodes.length, total: nodes.length, next };
 }
 
-// ── grep, the FTS path (W1-B2 Task 12; spec §8.4, §9.1) ───────────────────────────────────────────
+// ---------------------------------------------------------------------------------------------
+// grep, the FTS path (spec §8.4, §8.3, §9.1; W1-B2 Task 12).
+//  - A hit is one in-scope REFERRER of a matching blob: an entry (its first body), an entry variant (a
+//    later body of the same uuid), or a sidecar. Blobs are shared across families, so a blob's match says
+//    nothing about scope until it is joined to a referrer.
+//  - The scope join and the provenance filter run INSIDE the ranking statement, before its LIMIT
+//    (RANK_POOL), so exit 3 means zero in-scope matches, never zero in a global top-N (C27).
+//  - total is a separate count of every in-scope matching referrer: the N of "shown K of N" (§8.3).
+//  - Every select names its columns through selectColumns, so a store older than this code answers NULL
+//    for a column it lacks (§6.11, DM44); none is a wildcard projection (C43).
+// ---------------------------------------------------------------------------------------------
 
+/** Room kept for what the CLI prints around a verb's blocks: Task 11's header, `shown K of N`, `next:` and a hint
+ *  line; with --json, the envelope's fixed fields and its scope, which names at most a handful of families plus
+ *  `families_total` (Task 11's scopeJson and lib's SCOPE_FAMILIES_JSON_MAX), so it is bounded whatever the project holds. A verb's own blocks fill
+ *  OUTPUT_CAP minus this (Tasks 13 and 15). */
+const FRAME_RESERVE = 1200;
+
+/** The entries columns a referrer carries. */
 const REFERRER_ENTRY_COLS = Object.freeze(['entry_id', 'uuid', 'transcript_pk', 'ts_ms', 'role', 'provenance', 'tool_name', 'blob_id']);
+
+/** The FTS match: each blob whose redacted plain text holds the sanitised query, with its BM25 rank. */
 const FTS_MATCH = 'SELECT rowid, rank FROM blobs_fts WHERE blobs_fts MATCH :q';
+
+/** The scope join, the provenance filter and grep's filters, over `refs r`. Named parameters: :tpks and :provs
+ *  are JSON arrays (json_each), :nodes a JSON array or NULL, the rest a value or NULL. */
 const GREP_FILTER = `r.transcript_pk IN (SELECT value FROM json_each(:tpks))
       AND r.provenance IN (SELECT value FROM json_each(:provs))
       AND (:role IS NULL OR r.role = :role)
@@ -300,35 +322,44 @@ const GREP_FILTER = `r.transcript_pk IN (SELECT value FROM json_each(:tpks))
       AND (:before IS NULL OR r.ts_ms < :before)
       AND (:nodes IS NULL OR r.entry_id IN (SELECT value FROM json_each(:nodes)))`;
 
-function grepVersioned(rc, table, alias, cols) {
+/** One table as a derived table holding the columns the store's version has (NULL AS <col> for one a later
+ *  version adds). SQLite flattens it into the enclosing join, so the table's own indexes still serve it. */
+function versioned(rc, table, alias, cols) {
   return `(SELECT ${selectColumns(rc.version, table, cols, rc.schema)} FROM ${table}) AS ${alias}`;
 }
 
+/** The named parameters `sql` uses, taken from `all`. node:sqlite refuses a named parameter the statement does
+ *  not hold ("Unknown named parameter", M, 22.16.0), and the ranked and count statements use different sets. */
 function bindFor(sql, all) {
   const out = {};
   for (const [k, v] of Object.entries(all)) if (new RegExp(`:${k}(?![A-Za-z0-9_])`).test(sql)) out[k] = v;
   return out;
 }
 
+/** `refs`: every referrer of a blob `matchSql` selects as (blob_id, rank). That is the FTS MATCH here, and the
+ *  regex child's blob list in Task 14. A variant whose blob is the entry's first body is that entry's own row
+ *  (§6.2: the first body also gets a variant row once a second appears), so it is not counted twice. */
 function referrerSql(rc, matchSql) {
-  const e = (alias) => grepVersioned(rc, 'entries', alias, REFERRER_ENTRY_COLS);
+  const e = (alias) => versioned(rc, 'entries', alias, REFERRER_ENTRY_COLS);
   return `WITH m(blob_id, rank) AS (${matchSql}),
   refs(via, entry_id, uuid, transcript_pk, ts_ms, role, provenance, tool_name, blob_id, name, rank) AS (
     SELECT 'entry', e.entry_id, e.uuid, e.transcript_pk, e.ts_ms, e.role, e.provenance, e.tool_name, m.blob_id, NULL, m.rank
       FROM m JOIN ${e('e')} ON e.blob_id = m.blob_id
     UNION ALL
     SELECT 'variant', e.entry_id, e.uuid, e.transcript_pk, e.ts_ms, e.role, e.provenance, e.tool_name, m.blob_id, NULL, m.rank
-      FROM m JOIN ${grepVersioned(rc, 'entry_variants', 'v', ['entry_id', 'blob_id'])} ON v.blob_id = m.blob_id
+      FROM m JOIN ${versioned(rc, 'entry_variants', 'v', ['entry_id', 'blob_id'])} ON v.blob_id = m.blob_id
         JOIN ${e('e')} ON e.entry_id = v.entry_id
       WHERE v.blob_id <> e.blob_id
     UNION ALL
     SELECT 'sidecar', s.entry_id, se.uuid, s.transcript_pk, COALESCE(se.ts_ms, s.first_seen_ms), NULL, 'tool', NULL,
         m.blob_id, s.name, m.rank
-      FROM m JOIN ${grepVersioned(rc, 'sidecars', 's', ['transcript_pk', 'name', 'blob_id', 'entry_id', 'first_seen_ms'])} ON s.blob_id = m.blob_id
-        LEFT JOIN ${grepVersioned(rc, 'entries', 'se', ['entry_id', 'uuid', 'ts_ms'])} ON se.entry_id = s.entry_id
+      FROM m JOIN ${versioned(rc, 'sidecars', 's', ['transcript_pk', 'name', 'blob_id', 'entry_id', 'first_seen_ms'])} ON s.blob_id = m.blob_id
+        LEFT JOIN ${versioned(rc, 'entries', 'se', ['entry_id', 'uuid', 'ts_ms'])} ON se.entry_id = s.entry_id
   )`;
 }
 
+/** The top RANK_POOL in-scope referrers in `sort` order. The scope sits in this statement's WHERE, before its
+ *  LIMIT (C27). The tie-break makes the order total, so a cursor's position means one hit. */
 function rankedSql(rc, matchSql, sort) {
   return `${referrerSql(rc, matchSql)}
   SELECT r.via AS via, r.entry_id AS entry_id, r.uuid AS uuid, r.ts_ms AS ts_ms, r.role AS role,
@@ -337,24 +368,51 @@ function rankedSql(rc, matchSql, sort) {
     ORDER BY ${ftsOrderBy(sort, 'r.ts_ms')}, r.blob_id, r.entry_id LIMIT :pool`;
 }
 
+/** The true in-scope count, the same filter with no LIMIT. */
 function countSql(rc, matchSql) {
   return `${referrerSql(rc, matchSql)}
   SELECT count(*) AS n FROM refs r WHERE ${GREP_FILTER}`;
 }
 
-function grepRefusal(reason, hint = null) {
+/** A refusing VerbResult. Its exit is the one REASONS maps the word to (2, 4, 5 or 7). `hint` is the hint's text;
+ *  the CLI prints it after `hint: ` (Task 10's emitResult). */
+function refusal(reason, hint = null) {
   return { exit: REASONS[reason], reason, header: null, blocks: [], items: [], shown: 0, total: 0, next: null, ...(hint === null ? {} : { hint }) };
 }
 
-function grepNotFound() {
-  return { exit: EXIT.NOT_FOUND, header: null, blocks: [], items: [], shown: 0, total: 0, next: null, hint: SEARCH_REACH };
+/** Exit 3: nothing in this scope, on this box (§8.3; coverage=this-box). It carries no reason. */
+function notFound() {
+  return { exit: EXIT.NOT_FOUND, header: null, blocks: [], items: [], shown: 0, total: 0, next: null };
 }
 
-function grepHint(text) {
+/** grep's exit 3, both forms (§8.3): notFound plus the one line that says how far grep reaches, lib's SEARCH_REACH
+ *  (B1's history-entry-index-text-windowed and history-sidecar-redact-before-cut; spec §8.4, rev 3.5).
+ *  Only grep prints it: describe, expand and tree search nothing, and their exit 3 means an id is not in scope. */
+function grepNotFound() {
+  return { ...notFound(), hint: SEARCH_REACH };
+}
+
+/** A hint's text as VerbResult.hint carries it. The CLI prints the `hint: ` prefix itself (Task 10's emitResult),
+ *  so one that arrives prefixed is stripped, never doubled. */
+function hintLine(text) {
   return text.startsWith('hint: ') ? text.slice('hint: '.length) : text;
 }
 
-/** A node id, prefix, or pasted line is always resolved against the scope before its entries are used. */
+/** The flags that reproduce this call's scope in a `next:` line. */
+function scopeArgs(rc) {
+  if (rc.scope.kind === 'project') return ['--project'];
+  if (rc.scope.kind === 'workspace') return ['--workspace'];
+  return rc.scope.id === rc.id ? [] : ['--session', rc.scope.id];
+}
+
+/** An ISO time, or `?` for none. */
+function iso(ms) {
+  return ms === null || ms === undefined ? '?' : new Date(ms).toISOString();
+}
+
+/** A node id, prefix or pasted line resolved INSIDE the scope (§8.2 "Every verb resolves ids inside the scope";
+ *  RV19). A node outside it is exit 2 out-of-scope, never 3; prefix uniqueness is computed among the scope's
+ *  nodes. Node ids are hex after the kind letter, so `wanted + 'g'` bounds the prefix range on the primary key. */
 export function resolveNodeInScope(rc, wanted) {
   const rows = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', ['node_id', 'session_pk'], rc.schema)} FROM nodes
     WHERE node_id >= ? AND node_id < ?`).all(wanted, `${wanted}g`);
@@ -366,31 +424,38 @@ export function resolveNodeInScope(rc, wanted) {
   });
   switch (verdict.kind) {
     case 'ok': return { ok: true, id: verdict.id };
-    case 'out-of-scope': return { ok: false, result: grepRefusal('out-of-scope') };
-    case 'not-found': return { ok: false, result: { exit: EXIT.NOT_FOUND, header: null, blocks: [], items: [], shown: 0, total: 0, next: null } };
-    case 'ambiguous': return { ok: false, result: grepRefusal('bad-args', `${wanted} names ${verdict.candidates.length} nodes in this scope (${verdict.candidates.slice(0, 5).join(', ')}); give more of the id`) };
-    default: return { ok: false, result: grepRefusal('bad-args') };
+    case 'out-of-scope': return { ok: false, result: refusal('out-of-scope') };
+    case 'not-found': return { ok: false, result: notFound() };
+    case 'ambiguous':
+      return { ok: false, result: refusal('bad-args',
+        `${wanted} names ${verdict.candidates.length} nodes in this scope (${verdict.candidates.slice(0, 5).join(', ')}); give more of the id`) };
+    default: return { ok: false, result: refusal('bad-args') };
   }
 }
 
+/** `--node`'s entries: the node resolved in scope, then its lineage (Task 9's range CTE, toward sources). */
 function nodeEntries(rc, raw) {
   const ex = extractNodeId(raw);
-  if (!ex.ok) return { ok: false, result: grepRefusal('bad-args', grepHint(redactField(ex.error, rc.pairIdx))) };
+  if (!ex.ok) return { ok: false, result: refusal('bad-args', hintLine(redactField(ex.error, rc.pairIdx))) };
   const found = resolveNodeInScope(rc, ex.id);
   if (!found.ok) return found;
   return { ok: true, entries: lineageEntries(rc.db, found.id).map((x) => x.entryId) };
 }
 
+/** Every named parameter grep's statements may use; bindFor keeps each statement's own. */
 function grepParams(rc, a, nodes, extra) {
   return {
     ...extra,
     tpks: JSON.stringify(rc.scope.transcriptPks),
     provs: JSON.stringify(a.includeRecall ? INDEXED_PROVENANCE : SEARCHABLE_PROVENANCE),
     role: a.role, tool: a.tool, since: a.sinceMs, before: a.beforeMs,
-    nodes: nodes === null ? null : JSON.stringify(nodes), pool: RANK_POOL, now_ms: rc.nowMs,
+    nodes: nodes === null ? null : JSON.stringify(nodes),
+    pool: RANK_POOL, now_ms: rc.nowMs,
   };
 }
 
+/** The ranked pool and the true count. When blobs_fts vanished between the gate and the statement (a
+ *  `doctor --repair` drop and recreate), the answer is 7 fts-pending, never exit 1 (review focus 5). */
 function rankedAndCounted(rc, matchSql, sort, all) {
   try {
     const rs = rankedSql(rc, matchSql, sort);
@@ -399,16 +464,18 @@ function rankedAndCounted(rc, matchSql, sort, all) {
     const total = Number(rc.db.prepare(cs).get(bindFor(cs, all)).n);
     return { pool, total };
   } catch (e) {
-    if (/no such table: (?:main\.)?blobs_fts\b/.test(String(e?.message))) return { result: grepRefusal('fts-pending') };
+    if (/no such table: (?:main\.)?blobs_fts\b/.test(String(e && e.message))) return { result: refusal('fts-pending') };
     throw e;
   }
 }
 
+/** grep's index gate on the reader (§9.1): the read-only probe, blobs_fts, and the backfill's row. */
 function indexGate(rc) {
   let probe;
   try { probe = probeFts5(rc.db); } catch { probe = 'threw'; }
   const table = probe === 'present'
     && rc.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'blobs_fts'").get() !== undefined;
+  // derivation ('fts', 1), the one version the sweep creates (B1 Task 23).
   const row = table
     ? rc.db.prepare(`SELECT ${selectColumns(rc.version, 'derivation_state', ['completed_ms'], rc.schema)} FROM derivation_state
         WHERE step = ? AND version = 1`).get(FTS_STEP)
@@ -416,32 +483,66 @@ function indexGate(rc) {
   return decideGrepIndex({ probe, table, completed: row !== undefined && row.completed_ms !== null });
 }
 
-function hitSnippet(rc, hit, terms) {
-  const b = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'blobs', ['z', 'raw_len', 'pruned_ms'], rc.schema)} FROM blobs WHERE blob_id = ?`).get(hit.blob_id);
-  if (b === undefined) return '';
-  if (b.z === null) return `content pruned on ${b.pruned_ms === null ? '?' : new Date(b.pruned_ms).toISOString().slice(0, 10)}`;
-  return snippetLine(displaySnippet(blobPlainText(b.z, hit.via === 'sidecar', rc.pairIdx, Number(b.raw_len)), terms, rc.pairIdx).replace(/\s+/g, ' '));
+/** A blob's z, its recorded size (blobPlainText's decode bound, and its sidecar and body caps) and pruned time. */
+function blobOf(rc, blobId) {
+  return rc.db.prepare(`SELECT ${selectColumns(rc.version, 'blobs', ['z', 'raw_len', 'pruned_ms'], rc.schema)} FROM blobs WHERE blob_id = ?`).get(blobId);
 }
 
-function renderHits(rc, pool, terms, a, total) {
-  const page = pool.slice(0, a.limit);
-  const snippets = page.map((h) => hitSnippet(rc, h, terms));
+/** One hit's snippet (§8.3, P9, P12). lib's displaySnippet finds the earliest term in the blob's RAW plain text,
+ *  reads only the window around it plus ENTRY_REDACT_MARGIN on each side through redactForDisplay's reading (the
+ *  index's escape readings too) and cuts the window from that reading, or shows it inexact under
+ *  DISPLAY_INEXACT_NOTE when the cut cannot be shown exact (Task 12's displayWindow); the line is then made one line and cut to SNIPPET_MAX
+ *  by Task 3's snippetLine (surrogate-safe). Redaction comes before every cut, so no window edge can leave a piece of
+ *  a secret (B1's D-4202 (`history-redaction-before-cut`)), and one hit costs its window, never its whole body: a
+ *  body can be BLOB_DECODE_MAX (16 MiB) long, and `renderHits` builds a snippet for every hit on a page
+ *  (spec §8.3 and §8.4; review finding R37). A sidecar's text is already redacted inside
+ *  blobPlainText, before its own 512 KB cut, and the window re-checks it. */
+function hitSnippet(rc, hit, terms) {
+  const b = blobOf(rc, hit.blob_id);
+  if (b === undefined) return '';
+  if (b.z === null) return `content pruned on ${b.pruned_ms === null ? '?' : new Date(b.pruned_ms).toISOString().slice(0, 10)}`;
+  const plain = blobPlainText(b.z, hit.via === 'sidecar', rc.pairIdx, Number(b.raw_len));
+  return snippetLine(displaySnippet(plain, terms, rc.pairIdx).replace(/\s+/g, ' '));
+}
+
+/** A hit's human line: its snippet inside the untrusted-content envelope, which escapes it (§8.3, P30). */
+function hitLine(hit, snippet) {
+  return `  ${recallEnvelope({ src: hit.provenance, id: hit.uuid ?? `sidecar:${hit.name}`, ts: hit.ts_ms, role: hit.role, text: snippet })}`;
+}
+
+/** A hit's --json item: JSON escaping only, so exact copies come from here (§8.3). */
+function hitItem(hit, snippet, nodeId) {
   return {
-    exit: EXIT.OK, header: null,
-    blocks: page.map((h, i) => `  ${recallEnvelope({ src: h.provenance, id: h.uuid ?? `sidecar:${h.name}`, ts: h.ts_ms, role: h.role, text: snippets[i] })}`),
-    items: page.map((h, i) => ({ entry_uuid: h.uuid, node_id: null, ts_ms: h.ts_ms, role: h.role, provenance: h.provenance, snippet: snippets[i], sidecar: h.name, trust: 'untrusted' })),
-    shown: page.length, total, next: null,
+    entry_uuid: hit.uuid, node_id: nodeId, ts_ms: hit.ts_ms, role: hit.role, provenance: hit.provenance, snippet,
+    sidecar: hit.name, trust: 'untrusted',
   };
 }
 
-/** `grep <words>` refuses plain regex syntax before preparing any statement, then scopes referrers before rank. */
+/** The first page of hits, flat. Task 13 replaces this with the grouped, capped and cursored rendering. */
+function renderHits(rc, pool, termsOf, a, total) {
+  const page = pool.slice(0, a.limit);
+  const snippets = page.map((h) => hitSnippet(rc, h, termsOf(h)));
+  return {
+    exit: EXIT.OK, header: null, blocks: page.map((h, i) => hitLine(h, snippets[i])),
+    items: page.map((h, i) => hitItem(h, snippets[i], null)), shown: page.length, total, next: null,
+  };
+}
+
+/** `grep <words>` (§8.4). In order:
+ *  1. regex syntax in plain search refuses BEFORE any statement is prepared (C7);
+ *  2. the index gate;
+ *  3. `--node`, resolved in scope;
+ *  4. the ranked pool and the true count;
+ *  5. the hits. */
 export function runGrep(rc, a, deps = {}) {
-  if (a.regex !== null) return grepRefusal('bad-args', '--regex is not served by this build');
+  if (a.regex !== null) return refusal('bad-args', '--regex is not served by this build');   // Task 14 replaces this line
   const raw = a.words.join(' ');
   const syntax = regexSyntaxIn(raw);
-  if (syntax !== null) return grepRefusal('regex-syntax', grepHint(regexSyntaxHint(escapeXmlText(redactField(raw, rc.pairIdx)), syntax)));
+  if (syntax !== null) {
+    return refusal('regex-syntax', hintLine(regexSyntaxHint(escapeXmlText(redactField(raw, rc.pairIdx)), syntax)));
+  }
   const gate = indexGate(rc);
-  if (!gate.ok) return grepRefusal(gate.reason);
+  if (!gate.ok) return refusal(gate.reason);
   let nodes = null;
   if (a.node !== null) {
     const ne = nodeEntries(rc, a.node);
@@ -451,11 +552,14 @@ export function runGrep(rc, a, deps = {}) {
   const found = rankedAndCounted(rc, FTS_MATCH, a.sort, grepParams(rc, a, nodes, { q: sanitizeFtsQuery(raw) }));
   if ('result' in found) return found.result;
   if (found.total === 0) return grepNotFound();
-  return renderHits(rc, found.pool, queryTerms(raw), a, found.total);
+  // The snippet's needles keep a terminal prefix `*` that queryTerms strips (fix round 1, F1).
+  return renderHits(rc, found.pool, () => snippetTerms(raw), a, found.total);   // deps: Task 13 reads deps.cap
 }
 
-/** CLI dispatcher for grep's post-whitelist value grammar. */
+/** cli.mjs's READ_RUNNERS.grep (W1-B2 Task 12). Task 10's whitelist has already refused an unknown or repeated
+ *  option; grep's own value grammar (lib parseGrepArgs) re-reads the verb's argv for the values: the time bounds,
+ *  --role, --tool and the regex-or-words rule. A refused value is exit 2 bad-args. */
 export function grepVerb(rc, argv) {
   const g = parseGrepArgs(argv, rc.nowMs);
-  return g.ok ? runGrep(rc, g.args) : grepRefusal('bad-args');
+  return g.ok ? runGrep(rc, g.args) : refusal('bad-args');
 }

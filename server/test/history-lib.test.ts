@@ -3772,6 +3772,34 @@ describe('queryTerms and snippetWindow: the earliest hit, stems included, from r
   });
 });
 
+describe('snippetTerms and unicode61 diacritic comparison: prefix markers survive, comparison folds, source offsets stay (W1-B2 task 12 fix round 1)', () => {
+  it('snippetTerms keeps an explicit terminal prefix star the sanitiser would emit, and queryTerms still strips it', () => {
+    const raw = 'stud* "error hand"* "x y*" plain D-12* **  ***';
+    expect(libSearch.snippetTerms(raw)).toEqual(['stud*', 'error hand*', 'x y*', 'plain', 'd-12*']);
+    expect(libSearch.queryTerms(raw)).toEqual(['stud', 'error hand', 'x y', 'plain', 'd-12']);
+    expect(libSearch.snippetTerms('   ')).toEqual([]);
+    expect(libSearch.snippetTerms('stud stud*')).toEqual(['stud', 'stud*']);
+  });
+  it('a star-bearing term localizes a prefix hit far beyond the head, and only the last word of a phrase is the prefix', () => {
+    const far = `${'a'.repeat(100)} studies are archived`;
+    expect(libSearch.snippetSpan(far, libSearch.snippetTerms('stud*')).at).toBe(far.indexOf('studies'));
+    expect(libSearch.snippetSpan(far, libSearch.queryTerms('stud*')).at, 'CONTROL: the stripped term is not a prefix').toBe(-1);
+    const phrase = `${'a'.repeat(100)} error handled cleanly`;
+    expect(libSearch.snippetSpan(phrase, libSearch.snippetTerms('"error hand"*')).at).toBe(phrase.indexOf('error'));
+  });
+  it('a diacritic compares as FTS5 unicode61 does, precomposed or decomposed, while the span stays in the source offsets', () => {
+    for (const word of ['caf\u00e9', 'cafe\u0301', 'CAF\u00c9', 'caf\u00e9s']) {
+      const text = `${'a'.repeat(100)} ${word} tail`;
+      expect(libSearch.snippetSpan(text, ['cafe']), word).toEqual({ at: text.indexOf(word), len: word.length });
+    }
+    const accentedQuery = `${'a'.repeat(100)} cafe tail`;
+    expect(libSearch.snippetSpan(accentedQuery, ['caf\u00e9']).at, 'the needle folds too').toBe(accentedQuery.indexOf('cafe'));
+    const pre = `${'\u00e9'.repeat(30)} cafe`;
+    expect(libSearch.snippetSpan(pre, ['cafe']).at, 'folding changes no source offset').toBe(pre.indexOf('cafe'));
+    expect(libSearch.snippetSpan(`${'a'.repeat(100)} caf\u00e9 stud\u00efes`, libSearch.snippetTerms('stud*')).at).toBe(`${'a'.repeat(100)} caf\u00e9 `.length);
+  });
+});
+
 describe('parseTimeBound: --since and --before (spec 8.4)', () => {
   const NOW = Date.UTC(2026, 9, 6, 12, 0, 0);
   it('reads <n>d, <n>h and <n>min before now', () => {
