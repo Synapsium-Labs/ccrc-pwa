@@ -7671,7 +7671,7 @@ _bt_find() {
   local arm="$1" word="$2" a="${3:-}" b="${4:-}" say="" cls=WARN fix=""
   local card="Rotate now on the console's Box token card"
   case "$arm:$word" in
-    server:token-absent) cls=FAIL
+    server:token-absent) cls=FAIL   # 4553: `_bt_server_arm` lowers it to WARN once the state read shows no state file
       say="$a does not exist, so every box-token lane on this server answers 401"
       fix="restart the server (ccrc.service), which mints a value at boot; if it still has none, its log names the failed mint" ;;
     server:token-mode|fleet:fleet-token-mode) cls=FAIL
@@ -7733,7 +7733,7 @@ _bt_find() {
     server:file:*) cls=FAIL
       say="on re-read ($(_bt_age "$a") ago) the server's $b token file was found ${word#file:}; the last good value is kept in memory"
       fix="look at the file without printing it (ls -l); the next rotation rewrites the server's token files ($card), and a restart re-reads them" ;;
-    fleet:fleet-token-absent) cls=FAIL
+    fleet:fleet-token-absent) cls=FAIL   # 4553: `_bt_fleet_arm` lowers it to WARN for a box never handed a value
       say="$a does not exist, so this box's calls to the server carry no box token"
       fix="the server writes it at its next rotation ($card); a single box records CCRC_ROLE=both in ~/.ccrc/ccrc.env and restarts the server, which writes it at boot" ;;
     fleet:no-generation)
@@ -7754,10 +7754,10 @@ _bt_find() {
 }
 
 _bt_server_arm() {   # <token path> <state path>
-  local tok="$1" state="$2" before="${#BT_CLASS[@]}" out="" kw w n node seq="" since="" rot="" rotating=0 grace=0 refused=0 bad=0
+  local tok="$1" state="$2" before="${#BT_CLASS[@]}" out="" kw w n node seq="" since="" rot="" rotating=0 grace=0 refused=0 bad=0 tai=-1
   _bt_value_file "$tok"
   case "$BT_TF" in
-    absent) _bt_find server token-absent "$tok" ;;
+    absent) tai="${#BT_CLASS[@]}"; _bt_find server token-absent "$tok" ;;
     ok) [ "$BT_TF_MODE" = 600 ] || _bt_find server token-mode "$tok" "${BT_TF_MODE:-unreadable}" ;;
     *) _bt_find server token-unusable "$tok" "$BT_TF" ;;
   esac
@@ -7766,7 +7766,10 @@ _bt_server_arm() {   # <token path> <state path>
     "${_BT_SYNC_ERRORS[*]} ${_BT_LOST_WORDS[*]}" "${_BT_TRANSPORTS[*]}" "${_BT_FILE_PROBLEMS[*]}" \
     "$_BT_PENDING_CAP" "$_BT_TICK_MS" 2>/dev/null)" || out=""
   case "${out%%$'\n'*}" in
-    absent) _bt_find server state-absent "$state"; return 0 ;;
+    # 4553: an absent token beside an absent state is a server that has never run the lifecycle (a fresh install): WARN.
+    # Every other state read (ok, unreadable, no python3 above) leaves the token's FAIL, because a state file means
+    # there was a value once; an unreadable one still says so, and an undecidable history fails closed.
+    absent) [ "$tai" -lt 0 ] || BT_CLASS[tai]=WARN; _bt_find server state-absent "$state"; return 0 ;;
     ok) ;;
     *) _bt_find server state-unreadable "$state"; return 0 ;;
   esac
@@ -7812,10 +7815,10 @@ _bt_server_arm() {   # <token path> <state path>
 
 _bt_fleet_arm() {   # <own-write: 0|1>
   local own="$1" ff="$HOME/.cc-secrets/ccrc-mail.token" gen="$HOME/.ccrc/box-token-generation" rep="$HOME/.ccrc/token-sync.json"
-  local before="${#BT_CLASS[@]}" out="" kw w n x bad=0 tr="" ownseen=0
+  local before="${#BT_CLASS[@]}" out="" kw w n x bad=0 tr="" ownseen=0 tai=-1 nogen=0 nosync=0
   _bt_value_file "$ff"
   case "$BT_TF" in
-    absent) _bt_find fleet fleet-token-absent "$ff" ;;
+    absent) tai="${#BT_CLASS[@]}"; _bt_find fleet fleet-token-absent "$ff" ;;
     ok) if [ "$BT_TF_PLACEHOLDER" = 1 ]; then _bt_find fleet fleet-token-unusable "$ff" placeholder
         elif [ "$BT_TF_MODE" != 600 ]; then _bt_find fleet fleet-token-mode "$ff" "${BT_TF_MODE:-unreadable}"; fi ;;
     *) _bt_find fleet fleet-token-unusable "$ff" "$BT_TF" ;;
@@ -7829,8 +7832,8 @@ _bt_fleet_arm() {   # <own-write: 0|1>
       synced) if _bt_member "$w" "${_BT_TRANSPORTS[@]}" && _bt_num "$n"; then tr="$w"; else bad=1; fi ;;
       finding)
         case "$w" in
-          no-generation|generation-malformed) _bt_find fleet "$w" "$gen" ;;
-          never-synced|sync-unreadable) _bt_find fleet "$w" "$rep" ;;
+          no-generation|generation-malformed) [ "$w" = no-generation ] && nogen=1; _bt_find fleet "$w" "$gen" ;;
+          never-synced|sync-unreadable) [ "$w" = never-synced ] && nosync=1; _bt_find fleet "$w" "$rep" ;;
           proof-unmeasured) _bt_num "$n" && _bt_find fleet "$w" "$n" || bad=1 ;;
           sync:*) if _bt_member "${w#sync:}" "${_BT_SYNC_ERRORS[@]}" && _bt_num "$n"; then _bt_find fleet "$w" "$n"; else bad=1; fi ;;
           *) bad=1 ;;
@@ -7840,6 +7843,10 @@ _bt_fleet_arm() {   # <own-write: 0|1>
     esac
   done <<< "$out"
   if [ "$bad" -eq 1 ]; then _bt_find fleet sync-unreadable "$rep"; return 0; fi
+  # 4553: an absent token on a box with no generation file and no sync report (an own-write box reads no report, so
+  # the generation file alone speaks for it) was never handed a value, a fresh install: WARN. Any trace of one, a
+  # malformed generation file or an unreadable report included, leaves the FAIL.
+  if [ "$tai" -ge 0 ] && [ "$nogen" -eq 1 ] && { [ "$nosync" -eq 1 ] || [ "$ownseen" -eq 1 ]; }; then BT_CLASS[tai]=WARN; fi
   [ "${#BT_CLASS[@]}" -eq "$before" ] || return 0
   if [ "$ownseen" -eq 1 ]; then
     BT_PART+=("fleet: token file 0600, generation recorded, written by this box's server")

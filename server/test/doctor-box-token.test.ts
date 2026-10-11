@@ -212,7 +212,14 @@ describe('doctor box-token: PASS, and only on a measured healthy box', () => {
 interface Row { label?: string; word: string; arm: 'server' | 'fleet'; armedClass: 'FAIL' | 'WARN'; plant: (b: Box) => void }
 const now = (): number => Date.now();
 const ROWS: Row[] = [
-  { arm: 'server', word: 'token-absent', armedClass: 'FAIL', plant: (b) => rmSync(dot(b, 'mail.token')) },
+  // 4553 (Decision 2 (a)): the armed class of an absent token comes from the box's history, read after the state read.
+  // A server that has a state file once held a value and lost it: FAIL. One with no state file has never run the
+  // lifecycle: WARN. A state it cannot read still says there was one: FAIL (fail closed).
+  { arm: 'server', word: 'token-absent', label: 'token-absent (with history: a state file)', armedClass: 'FAIL', plant: (b) => rmSync(dot(b, 'mail.token')) },
+  { arm: 'server', word: 'token-absent', label: 'token-absent (with history: a state file it cannot read)', armedClass: 'FAIL',
+    plant: (b) => { rmSync(dot(b, 'mail.token')); plantState(b, '{"v":1,'); } },
+  { arm: 'server', word: 'token-absent', label: 'token-absent (fresh: no state file either)', armedClass: 'WARN',
+    plant: (b) => { rmSync(dot(b, 'mail.token')); rmSync(dot(b, 'box-token.json')); } },
   { arm: 'server', word: 'token-mode', armedClass: 'FAIL', plant: (b) => chmodSync(dot(b, 'mail.token'), 0o644) },
   { arm: 'server', word: 'token-unusable', armedClass: 'FAIL', plant: (b) => writeFileSync(dot(b, 'mail.token'), '# no value line\n\n', { mode: 0o600 }) },
   { arm: 'server', word: 'state-absent', armedClass: 'WARN', plant: (b) => rmSync(dot(b, 'box-token.json')) },
@@ -258,7 +265,17 @@ const ROWS: Row[] = [
   { arm: 'server', word: 'fleet-unconfirmed', armedClass: 'WARN', plant: (b) => editState(b, (s) => { s.current.id = null; s.fleetConfirmed = null; }) },
   { arm: 'server', word: 'file:changed', armedClass: 'FAIL', plant: (b) => editState(b, (s) => { s.fileProblem = { at: now() - MIN, file: 'current', word: 'changed' }; }) },
   { arm: 'server', word: 'file:retired', armedClass: 'FAIL', plant: (b) => editState(b, (s) => { s.fileProblem = { at: now() - MIN, file: 'current', word: 'retired' }; }) },
-  { arm: 'fleet', word: 'fleet-token-absent', armedClass: 'FAIL', plant: (b) => rmSync(fleetFile(b)) },
+  // 4553: a fleet box that was never handed a value (no generation file and no sync report) WARNs; any trace of a
+  // handed value (either file, readable or not) makes the lost token a FAIL.
+  { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (with history: a generation file and a sync report)', armedClass: 'FAIL', plant: (b) => rmSync(fleetFile(b)) },
+  { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (with history: a sync report only)', armedClass: 'FAIL',
+    plant: (b) => { rmSync(fleetFile(b)); rmSync(dot(b, NODE_FILES.tokenGeneration)); } },
+  { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (with history: a generation file only)', armedClass: 'FAIL',
+    plant: (b) => { rmSync(fleetFile(b)); rmSync(dot(b, 'token-sync.json')); } },
+  { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (with history: a sync report it cannot read, no generation file)', armedClass: 'FAIL',
+    plant: (b) => { rmSync(fleetFile(b)); rmSync(dot(b, NODE_FILES.tokenGeneration)); plantReport(b, '{"v":2}'); } },
+  { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (fresh: no generation file and no sync report)', armedClass: 'WARN',
+    plant: (b) => { rmSync(fleetFile(b)); rmSync(dot(b, NODE_FILES.tokenGeneration)); rmSync(dot(b, 'token-sync.json')); } },
   { arm: 'fleet', word: 'fleet-token-mode', armedClass: 'FAIL', plant: (b) => chmodSync(fleetFile(b), 0o640) },
   { arm: 'fleet', word: 'fleet-token-unusable', armedClass: 'FAIL', plant: (b) => writeFileSync(fleetFile(b), '# comment only\n', { mode: 0o600 }) },
   // R.1 (run 377, Task R): the file `deploy/ccrc-mail.token.example` ships, copied and never edited, is no token.
@@ -570,6 +587,32 @@ describe('doctor box-token: where the files are, and what marks a fleet box (D-4
       writeFileSync(dot(c, 'agent.env'), 'CCRC_SERVER_URL=ws://127.0.0.1:7788\n', { mode: 0o000 });
       expect(runCheck(c).stdout).toContain('fleet: never-synced — ');
     }
+  });
+});
+
+// 4553: the history is read from the arm's own reads, so it holds on the both-role box whose fleet file is its server's own write.
+describe('doctor box-token: a fresh box WARNs, a box that lost its value FAILs (4553, armed in a copy)', () => {
+  it('both role, local: no fleet file, no generation file, no state and no mail.token is two WARN findings, rc 2', () => {
+    const b = box({ role: 'both' });
+    for (const f of [fleetFile(b), dot(b, NODE_FILES.tokenGeneration), dot(b, 'token-sync.json'), dot(b, 'mail.token'), dot(b, 'box-token.json')]) rmSync(f);
+    const r = runCheck(b, armed());
+    expect(r.stdout).toMatch(/^WARN box-token: server: token-absent — .*; server: state-absent — .*; fleet: fleet-token-absent — /);
+    expect(r.stdout).not.toMatch(/^FAIL /m);
+    expect(r.code).toBe(2);
+  });
+  it('both role, local: the same box with a generation file left behind is a FAIL on the fleet arm', () => {
+    const b = box({ role: 'both' });
+    for (const f of [fleetFile(b), dot(b, 'token-sync.json'), dot(b, 'mail.token'), dot(b, 'box-token.json')]) rmSync(f);
+    const r = runCheck(b, armed());
+    expect(r.stdout).toMatch(/^FAIL box-token: server: token-absent — .*; fleet: fleet-token-absent — /);
+    expect(r.code).toBe(1);
+  });
+  it('both role, remote: the worse arm wins, so a fresh server with a fleet that lost its value is a FAIL', () => {
+    const b = box({ role: 'both', fleet: 'remote', agentEnv: true });
+    for (const f of [fleetFile(b), dot(b, 'mail.token'), dot(b, 'box-token.json')]) rmSync(f);
+    const r = runCheck(b, armed());
+    expect(r.stdout).toMatch(/^FAIL box-token: /);
+    expect(r.code).toBe(1);
   });
 });
 
