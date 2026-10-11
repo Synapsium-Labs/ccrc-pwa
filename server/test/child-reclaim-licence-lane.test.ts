@@ -1,4 +1,4 @@
-// Child reclamation wave 8, X1 at the lane (spec §5.5, §5.7). A licence the sweep judged over ONE
+// Child reclamation wave 8, the same-run re-mint at the lane (spec §5.5, §5.7). A licence the sweep judged over ONE
 // workspace generation never reaches a re-mint of the same name, wherever the re-mint falls: before the
 // sweep reads the generation, between that read and the queue, or while the request waits on the
 // session's queue. The licence here is the presence-only kind: fifteen presence answers, measured by the
@@ -16,7 +16,7 @@ const model = (reg: string) => modelCcd({ reg, id: 'demo-a', wave7: true, hooks:
 
 /** demo-a, watched until its presence episode over G1 spans the ceiling: fifteen unlicensed asks, each
  *  answered `presence` by the executor before any argv, and the next ask is licensed
- *  (`child-reclaim-sweep.test.ts`'s L17 shape, on the real executor). Leaves the clock one pass on. */
+ *  (`child-reclaim-sweep.test.ts`'s recycled-slug presence shape, on the real executor). Leaves the clock one pass on. */
 const ripen = async (f: Lane): Promise<void> => {
   f.finishedChild('demo-a', G1);
   await f.pass();
@@ -29,7 +29,7 @@ const ripen = async (f: Lane): Promise<void> => {
   f.next();
 };
 
-describe('X1 at the lane: a licence judged over one generation never reaches a re-mint (spec §5.5, §5.7)', () => {
+describe('the same-run re-mint at the lane: a licence judged over one generation never reaches a re-mint (spec §5.5, §5.7)', () => {
   it('the CONTROL: with no re-mint, the licence reaches ccd and reclaims G1', async () => {
     const f = laneFixture({ visible: () => true, ccd: model });
     await ripen(f);

@@ -1,4 +1,4 @@
-// X1's ccd half (child reclamation wave 7, spec 2026-09-22 §5.5): the reclaim
+// The same-run re-mint, ccd's half (child reclamation wave 7, spec 2026-09-22 §5.5): the reclaim
 // token binds the ROW'S GENERATION — `$REG/<id>.generation`, minted once by row
 // creation (`cmd_ws_add`, before any row field), removed last by `_reg_purge`,
 // and rewritten by nothing else — so a token `ws-audit --reclaim` minted over

@@ -1,4 +1,4 @@
-// Child reclamation wave 8, X1 in the executor (spec §5.5, §5.7). A sweep request carries
+// Child reclamation wave 8, the same-run re-mint in the executor (spec §5.5, §5.7). A sweep request carries
 // `licenceGeneration`: the workspace generation the sweep judged it under, from its own byte-exact
 // read. The executor re-reads the generation after the switch and before presence, for EVERY sweep
 // request, licensed or not (step 2c). It then compares the audit's own `generation` with the licence
@@ -237,13 +237,19 @@ describe('step 5a — the audit’s generation, against the licence', () => {
 });
 
 describe('an older ccd: its audit prints no generation', () => {
-  it('a LICENSED request is never spent: it defers unsupported, and the detail says the audit prints no generation', async () => {
-    const s = await rig({ wave7: false });
-    const out = await reclaimChild(s.deps, s.req(value(G1), { licensed: true }));
-    expect(out).toMatchObject({ kind: 'deferred', why: 'unsupported' });
-    expect(detailOf(out)).toContain('ws-audit prints no generation');
-    expect(s.verbs()).toEqual(['ws-audit']);
-  });
+  // Whatever the licence was judged under: a licence over no generation is a licence too, and an older ccd's
+  // token binds no generation either way (spec §5.5).
+  it.each<[string, string | null, ChildReclaimGenerationKey]>([
+    ['judged under a value', G1, value(G1)],
+    ['judged under no generation, on a row with none', null, ABSENT],
+  ])('a LICENSED request %s is never spent: it defers unsupported, and the detail says the audit prints no generation',
+    async (_what, file, licence) => {
+      const s = await rig({ wave7: false, generation: file });
+      const out = await reclaimChild(s.deps, s.req(licence, { licensed: true }));
+      expect(out).toMatchObject({ kind: 'deferred', why: 'unsupported' });
+      expect(detailOf(out)).toContain('ws-audit prints no generation');
+      expect(s.verbs()).toEqual(['ws-audit']);
+    });
 
   it('an UNLICENSED request relies on step 2c, and proceeds', async () => {
     const s = await rig({ wave7: false });

@@ -11,7 +11,7 @@
 // its answer can be recorded. `child-reclaim-sweep.test.ts`'s "the production path" pins that
 // composition. FIXTURE HOME ONLY: every path derives from `mkTmp`.
 //
-// THE ONE WATCHER RIG (ruling H7). A later task that needs more of it adds an option to `LaneOpts`, or a
+// THE ONE WATCHER RIG, the one shared lane rig. A later task that needs more of it adds an option to `LaneOpts`, or a
 // member to what `laneFixture` returns, additively and in its own commit. It never builds a second
 // `FleetWatcher` rig.
 import { vi } from 'vitest';

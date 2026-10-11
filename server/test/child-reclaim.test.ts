@@ -32,7 +32,7 @@ import { CCD } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { CHILD_ID, childReclaimVerb, evalOf, makeChild } from './childReclaimFixture.js';
-// A generation wave 7's ccd binds into its token (spec §5.5); a licensed request is judged under it. The shared fixture's G1 (H7).
+// A generation wave 7's ccd binds into its token (spec §5.5); a licensed request is judged under it. The one shared lane rig's G1.
 import { G1 as GEN_W8 } from './childReclaimGenerationFixture.js';
 
 const ID = 'demo-quiet-basin';
