@@ -65,6 +65,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { loopbackCurlFront } from './containedTools.js';
+import { PLACEHOLDER_TOKEN } from '../src/coord/token.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..', '..');
@@ -121,7 +122,7 @@ function writeCcrcEnv(home: string, text: string): void {
  *  out to, besides `curl` itself (stubbed) — real binaries, symlinked in once
  *  per fixture so a regression in how the script actually invokes any of them
  *  (a flag typo, a pipeline reordering) still fails this suite. */
-const REAL_TOOLS = ['jq', 'grep', 'tail', 'cut', 'tr'];
+const REAL_TOOLS = ['jq', 'grep', 'tail', 'cut', 'tr', 'sed'];
 
 /** Runs the real, checked-in `deploy/notify.sh` against a fixture HOME whose
  *  PATH is `stub-bin` ONLY — no system directory reachable at all — holding
@@ -379,6 +380,38 @@ describe('deploy/notify.sh hands the box token to curl on stdin, never on argv (
     const r = runNotify(home, { CCRC_ADDR: 'http://127.0.0.1:9', CCRC_MAIL_TOKEN_FILE: f });
     expect(r.status, r.stderr).toBe(0);
     expect(existsSync(path.join(home, 'curl.argv')), 'notify POSTed the unedited placeholder').toBe(false);
+  });
+
+  // R.2 (review 375 F1): the trim is `extractToken`'s, which is `String.prototype.trim` and so also strips a BOM
+  // (U+FEFF) and a no-break space (U+00A0), neither of which `tr -d '[:space:]'` touches (it is byte-wise). A
+  // placeholder behind one of them used to slip past the guard above and be POSTed, a guaranteed 401 swallowed by
+  // `|| true`. The file below is written as bytes, never through a string the platform could re-encode.
+  it.each([
+    ['a BOM', '\uFEFF'],
+    ['a no-break space', '\u00A0'],
+  ])('sends nothing when the shipped placeholder sits behind %s', (_w, lead) => {
+    const home = mkTmp('ccrc-notify-placeholder-uni-');
+    recordingCurl(home);
+    const f = path.join(home, 'placeholder.token');
+    writeFileSync(f, Buffer.from(`${lead}${PLACEHOLDER_TOKEN}\n`, 'utf8'), { mode: 0o600 });
+    const r = runNotify(home, { CCRC_ADDR: 'http://127.0.0.1:9', CCRC_MAIL_TOKEN_FILE: f });
+    expect(r.status, r.stderr).toBe(0);
+    expect(existsSync(path.join(home, 'curl.argv')), `notify POSTed the placeholder behind ${_w}`).toBe(false);
+  });
+
+  it.each([
+    ['a BOM before the value', `\uFEFF${'z'.repeat(64)}\n`],
+    ['a no-break space either side of the value', `\u00A0${'z'.repeat(64)}\u00A0\n`],
+    ['a line of no-break spaces ahead of the value line (the server reads it as blank)', `\u00A0\u00A0\n${'z'.repeat(64)}\n`],
+    ['a BOM before a #-comment line (the server reads it as a comment)', `\uFEFF# a comment\n${'z'.repeat(64)}\n`],
+  ])('sends the bare value the server extracts: %s', (_w, content) => {
+    const home = mkTmp('ccrc-notify-uni-value-');
+    recordingCurl(home);
+    const f = path.join(home, 'mail.token');
+    writeFileSync(f, Buffer.from(content, 'utf8'), { mode: 0o600 });
+    const r = runNotify(home, { CCRC_ADDR: 'http://127.0.0.1:9', CCRC_MAIL_TOKEN_FILE: f });
+    expect(r.status, r.stderr).toBe(0);
+    expect(fed(home)).toBe(CONFIG);
   });
 
   // `set +x` FIRST (spec 4.9): an inherited xtrace (`bash -x`, or an exported

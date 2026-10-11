@@ -263,6 +263,11 @@ describe('deploy/notify.sh carries the token the way the server expects it', () 
       ['hex + trailing newline', `${HEX}\n`],
       ['hex + trailing space', `${HEX} `],
       ['CRLF', `${HEX}\r\n`],
+      // R.2 (review 375 F1): `extractToken` trims with `String.prototype.trim`, which strips these too.
+      ['a BOM before the value', `\uFEFF${HEX}\n`],
+      ['a no-break space either side of the value', `\u00A0${HEX}\u00A0\n`],
+      ['a line of no-break spaces before the value line', `\u00A0\n${HEX}\n`],
+      ['a BOM before a #-comment line', `\uFEFF# a comment\n${HEX}\n`],
       // Interior whitespace, not just the edges — the exact fixture that
       // discriminates "strip everywhere" (both sides, post-fix) from "strip
       // the edges only" (the server's pre-fix `.trim()`): an edges-only
