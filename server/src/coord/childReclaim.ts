@@ -304,87 +304,127 @@ export type ChildReclaimWip =
   | { readonly kind: 'commit'; readonly sha: string }
   | { readonly kind: 'unreadable' };
 
-/** Replaces a `resumable: boolean` + `preLockDie: boolean` pair (review 170
+/** What a failed attempt promises about the NEXT one (spec §5.6, §5.9). It
+ *  replaces a `resumable: boolean` + `preLockDie: boolean` pair (review 170
  *  fr-I m1): the pair admitted `{resumable:true, preLockDie:true}`, a state no
- *  producer ever built, and the seam rule this same round's F21 is about says
- *  two conditions a caller handles differently must not share a
- *  representation that also permits a THIRD, impossible one. One discriminant
- *  makes it unrepresentable:
- *   - `resumable`: ccd's own destructive tail genuinely started and left a
- *     breadcrumb — its own `{failed:…}` document at exit 1, or a call cut
- *     short with nothing printed. The next attempt resumes FROM there. A
- *     `{failed:…}` word in `CHILD_RECLAIM_PRE_CRUMB_FAILED` is the exception:
- *     it is printed before the breadcrumb exists ON THE FRESH ARM, so it is
- *     `not-resumable`. On the RESUMED arm `probe-unmeasured` is printed while
- *     an earlier attempt's breadcrumb stands (the set's doc names it).
- *   - `not-resumable`: a substance refusal — `ws-audit --reclaim` itself (a
- *     non-destructive verb that never reaches the reap lock), an unrecognised
- *     refusal word, or a `reclaimed` document naming another session — or a
- *     `{failed:…}` word printed before the breadcrumb on the FRESH arm
- *     (`CHILD_RECLAIM_PRE_CRUMB_FAILED`). ccd's own ladder never advanced this
- *     session's state on that arm, but a plain retry MIGHT still succeed (a
- *     race, a version gap this build cannot name yet). On the RESUMED arm
- *     the same word reads here too, while the breadcrumb stands: a wrong
- *     feed sentence, never a wrong act (the set's doc, and spec §7 item 6).
+ *  producer ever built, and the seam rule says two conditions a caller handles
+ *  differently must not share a representation that also permits a THIRD,
+ *  impossible one. One discriminant makes it unrepresentable:
+ *   - `resumable`: the act had started, so the box's next attempt resumes from
+ *     its breadcrumb. Four producers:
+ *       - a `{failed:…}` document saying `"crumb":true`. It says the act's
+ *         breadcrumb was WRITTEN, never that it stands now (spec §5.6);
+ *       - a `{failed:…}` document with NO `crumb` key (an older ccd, or a
+ *         breadcrumb that stood but could not be read) whose word is outside
+ *         `CHILD_RECLAIM_PRE_CRUMB_FAILED`;
+ *       - a call cut short with nothing printed;
+ *       - an exit-1 `ws-audit --reclaim` whose `unmeasured` document names a
+ *         breadcrumb phase in `resume`: a breadcrumb stood when the audit read
+ *         it, and ccd's next attempt resumes from it
+ *         (`parseChildReclaimAuditFailed`).
+ *   - `not-resumable`: nothing the next attempt could resume from was shown,
+ *     but a plain retry MIGHT still succeed (a race, a version gap this build
+ *     cannot name yet). Its producers:
+ *       - a `{failed:…}` document saying `"crumb":false`, printed before the
+ *         breadcrumb;
+ *       - a `CHILD_RECLAIM_PRE_CRUMB_FAILED` word with no `crumb` key;
+ *       - an exit-1 audit whose `unmeasured` document names no phase, and
+ *         every audit answer this build cannot read;
+ *       - a verb answer that is a refusal in substance: an unrecognised
+ *         refusal word, or a `reclaimed` document naming another session.
  *   - `pre-lock-die`: a recognised PRE-LOCK die of `cmd_ws_reclaim` (a usage
  *     error, a malformed token/run id/session id, a missing `python3`, a
  *     missing `flock` binary, or an unopenable lock file — ccd's RECLAIM
- *     region, before `_ws_reclaim_locked` runs). Also never advanced
- *     anything, but UNLIKE `not-resumable` it recurs IDENTICALLY until
- *     whatever caused it changes — not a race, so the feed must say
- *     something DIFFERENT from both other cases. */
-export type ChildReclaimResume = 'resumable' | 'not-resumable' | 'pre-lock-die';
+ *     region, before `_ws_reclaim_locked` runs). It never advanced anything,
+ *     but UNLIKE `not-resumable` it recurs IDENTICALLY until whatever caused
+ *     it changes — not a race, so the feed says something different again.
+ *   - `stuck`: ccd PROVED that another tree or row is in the way
+ *     (`CHILD_RECLAIM_STUCK_TOKENS`), decided by the word whatever `crumb`
+ *     says. A retry finds the same until that tree or row is moved or removed,
+ *     and the box resumes from its breadcrumb once it is.
+ *  `purge-incomplete` has no value of its own: its `resume` is read like any
+ *  other word's, and what the feed says of it is decided by its WORD
+ *  (`childReclaimFailedTail`).
+ *  Stated residuals (spec §7, item 6), each a wrong feed sentence and never a
+ *  wrong act: with no `crumb` key, a pre-breadcrumb `pin-failed` or
+ *  `tombstone-unwritable` reads `resumable` and a resumed arm's
+ *  `probe-unmeasured` reads `not-resumable`; and an audit over a breadcrumb it
+ *  could not read prints no `resume`, so it reads `not-resumable`. */
+export type ChildReclaimResume = 'resumable' | 'not-resumable' | 'pre-lock-die' | 'stuck';
 
 const CHILD_RECLAIM_RESUME: Readonly<Record<ChildReclaimResume, true>> = {
-  resumable: true, 'not-resumable': true, 'pre-lock-die': true,
+  resumable: true, 'not-resumable': true, 'pre-lock-die': true, stuck: true,
 };
 
 export function isChildReclaimResume(v: unknown): v is ChildReclaimResume {
   return typeof v === 'string' && Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_RESUME, v);
 }
 
-/** The ccd `{failed:…}` words `parseChildReclaimResult` gives their own
- *  treatment: the ones `cmd_ws_reclaim` prints BEFORE the tombstone and the
- *  breadcrumb on the FRESH arm (spec §5.6, "A failure printed before the
- *  breadcrumb"), so nothing had started and there is nothing to resume from.
- *  Unlike every other post-start failure word — free ccd text this file never
- *  compares against a literal — each of these decides `ChildReclaimResume`
- *  itself (`not-resumable`, never `resumable`):
+/** ccd's journal word for a probe the reclaim ladder needs that could not run
+ *  or be read (spec §5.7, §5.9): the verb's fresh-arm `{failed:…}` word, and
+ *  the word `ws-audit --reclaim` journals for its own `unmeasured` answer
+ *  (verb `ws-audit`). Spelled once, so the pre-crumb set below and the audit's
+ *  exit-1 arm cannot drift apart. */
+export const CHILD_RECLAIM_PROBE_UNMEASURED = 'probe-unmeasured' as const satisfies LcRefusalToken;
+
+/** The FALLBACK for a `{failed:…}` document that carries no `crumb` key — an
+ *  older ccd, or a breadcrumb that stood but could not be read (spec §5.6).
+ *  These are the words `cmd_ws_reclaim` prints BEFORE the tombstone and the
+ *  breadcrumb on its FRESH arm, so with nothing else to go on they read
+ *  `not-resumable`, and every other word reads `resumable`. A document that
+ *  says `crumb` is decided by it instead, and these words decide nothing there.
  *   - `probe-unmeasured`: on the fresh arm, the presence rungs' own in-lock
- *     tmux probe (spec §5.7, "Presence, and its bound" — rungs 5 and 6)
- *     failing before any act. It is pre-breadcrumb on the fresh arm ONLY: on
- *     the RESUMED arm the locked recomputation prints it for any unmeasured
- *     verdict (an unreadable tombstone, for one) while an earlier attempt's
- *     breadcrumb stands. See the residual below.
+ *     tmux probe (spec §5.7, rungs 5 and 6) failing before any act. On the
+ *     RESUMED arm the locked recomputation prints it too, over a standing
+ *     breadcrumb, and a ccd that prints `crumb` says `true` there.
  *   - `state-changed`: the consent binding (spec §5.5) — the in-lock recompute
  *     and the pin read different branch states, so the act stopped before the
  *     tombstone. Printed on the fresh arm only, because only the fresh arm runs
  *     the pin phase. Also a `refused` word (`CHILD_RECLAIM_TOKEN_KIND`), which
  *     is why this set is typed against both vocabularies.
- *  `pin-failed` and `tombstone-unwritable` are deliberately NOT here, for one
- *  reason: each is printed once in the fresh path's pin phase, before the
- *  breadcrumb, and also by the tail after it, so the word alone cannot tell the
- *  two apart. `pin-failed` has eight tail producers (the settle's re-pin and
- *  the per-deletion keeps); `tombstone-unwritable` has five (the tail's reads
- *  and updates of the tombstone). The pre-breadcrumb case of BOTH words is a
- *  stated residual: each reads `resumable`, so the feed says "the box resumes
- *  where it stopped" of an act that is retried from the start. ws-expire's pin
- *  phase prints the same two words before its own breadcrumb, so the residual
- *  covers that verb as well. The fix is an additive `crumb:false` field on
- *  ccd's document, which covers both words, carried to wave 7.
- *  The mirror image is also a stated residual (spec §7, item 6): a
- *  `probe-unmeasured` printed on the RESUMED arm, with an earlier attempt's
- *  breadcrumb standing, reads `not-resumable` here, so the feed says "It is
- *  retried from the start" while the box's next attempt resumes from that
- *  breadcrumb. A wrong sentence, never a wrong act. Wave 7's additive `crumb`
- *  field tells the two cases apart.
+ *  `pin-failed` and `tombstone-unwritable` are deliberately NOT here: each is
+ *  printed once in the fresh path's pin phase, before the breadcrumb, and also
+ *  by the tail after it, so the word alone cannot tell the two apart. ccd's
+ *  `crumb` does, and only a document without it falls back here.
  *  Named so `isChildReclaimKebab` admits `probe-unmeasured` without a second
  *  hand-kept literal. */
-const CHILD_RECLAIM_PRE_CRUMB_FAILED = ['probe-unmeasured', 'state-changed'] as const satisfies
+const CHILD_RECLAIM_PRE_CRUMB_FAILED = [CHILD_RECLAIM_PROBE_UNMEASURED, 'state-changed'] as const satisfies
   readonly (LcRefusalToken | ChildReclaimToken)[];
 
 function isChildReclaimPreCrumbFailed(v: unknown): boolean {
   return typeof v === 'string' && (CHILD_RECLAIM_PRE_CRUMB_FAILED as readonly string[]).includes(v);
+}
+
+/** The `stuck` words (spec §5.6, §5.9): ccd PROVED at the tail's removal-time
+ *  re-ask that another tree or registry row lies at, inside or through what it
+ *  would delete. The session was stopped and nothing further was deleted; a
+ *  retry finds the same until that tree or row is moved or removed. Spelled
+ *  ONCE, here. The sweep carries the class to L1 as a tier field, and never
+ *  re-spells the word. Never a `CHILD_RECLAIM_TOKEN_KIND` key:
+ *  `childReclaimTokenKind('containment-refuted')` stays null, because it is a
+ *  `{failed:…}` word and never a refusal. */
+export const CHILD_RECLAIM_STUCK_TOKENS = ['containment-refuted'] as const satisfies readonly LcRefusalToken[];
+export type ChildReclaimStuckToken = typeof CHILD_RECLAIM_STUCK_TOKENS[number];
+
+export function isChildReclaimStuckToken(v: unknown): v is ChildReclaimStuckToken {
+  return typeof v === 'string' && (CHILD_RECLAIM_STUCK_TOKENS as readonly string[]).includes(v);
+}
+
+/** ccd's word for a reclaim that COMPLETED and purged its registry row, while
+ *  something beside the row would not unlink (spec §5.6). Its `detail` names
+ *  what still stands. Spelled once: the feed's failed tail reads it first. */
+export const CHILD_RECLAIM_PURGE_INCOMPLETE = 'purge-incomplete' as const satisfies LcRefusalToken;
+
+/** A `{failed:…}` document's `resume`, the WORD first and then `crumb` (spec
+ *  §5.6). `crumb` is read strictly: only the two booleans count, and any other
+ *  value (absent, a string, a number, null) is absence, never either value.
+ *  This reader is `ws-reclaim`'s alone; a `ws-collect` document carries no
+ *  `crumb`, and this is never applied to one. */
+function childReclaimFailedResume(word: string, crumb: unknown): ChildReclaimResume {
+  if (isChildReclaimStuckToken(word)) return 'stuck';
+  if (crumb === true) return 'resumable';
+  if (crumb === false) return 'not-resumable';
+  return isChildReclaimPreCrumbFailed(word) ? 'not-resumable' : 'resumable';
 }
 
 export type ChildReclaimOutcome =
@@ -653,13 +693,14 @@ export function childReclaimDecision(input: ChildReclaimDecisionInput): ChildRec
  *  any of these types is accepted and a typo is not. `ChildReclaimResume`'s
  *  own `isChildReclaimResume` guard, not a second hand-kept list here: the
  *  same reason every other member of this function is a guard call, never an
- *  inline set. Deliberately NOT named `isChildReclaimWord`: wave 5 owns that
- *  name, in `shared/api.ts`, as the type guard of the run chip's
- *  `ChildReclaimWord` vocabulary (spec §5.9) — a different set with a
- *  different meaning. */
+ *  inline set. The stuck words and `purge-incomplete` are admitted through
+ *  their one spelling each (spec §5.6). Deliberately NOT named
+ *  `isChildReclaimWord`: wave 5 owns that name, in `shared/api.ts`, as the type
+ *  guard of the run chip's `ChildReclaimWord` vocabulary (spec §5.9) — a
+ *  different set with a different meaning. */
 export function isChildReclaimKebab(v: unknown): boolean {
   return isChildReclaimToken(v) || isChildReclaimDeferWhy(v) || isChildReclaimResume(v)
-    || isChildReclaimPreCrumbFailed(v)
+    || isChildReclaimPreCrumbFailed(v) || isChildReclaimStuckToken(v) || v === CHILD_RECLAIM_PURGE_INCOMPLETE
     || (typeof v === 'string' && (Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_NOT_WHY, v) || v === 'not-queued'));
 }
 
@@ -689,6 +730,19 @@ export type ChildReclaimAuditRead =
       readonly generation: ChildReclaimAuditGeneration }
   | { readonly kind: 'refused'; readonly token: ChildReclaimToken; readonly detail: string }
   | { readonly kind: 'unreadable'; readonly detail: string };
+
+/** The audit's own `unmeasured` answer, read off an exit-1 document (spec
+ *  §5.7, §5.9). `resume` is `resumable` exactly when the document names a
+ *  breadcrumb phase (a non-empty string `resume`): a breadcrumb stood when the
+ *  audit read it. Nothing else is read from it. No hand-kept phase list. */
+export type ChildReclaimAuditUnmeasured = {
+  readonly kind: 'unmeasured'; readonly resume: 'resumable' | 'not-resumable'; readonly detail: string };
+
+/** What an exit-1 audit document can answer: its `unmeasured` answer or
+ *  `unreadable`. It has NO `token` arm and no `refused` arm, so no exit-1
+ *  document is ever spent, a token-bearing one included, and that holds by type,
+ *  not by convention. */
+export type ChildReclaimAuditFailedRead = ChildReclaimAuditUnmeasured | Extract<ChildReclaimAuditRead, { kind: 'unreadable' }>;
 
 /** `sessionId` is checked against the document's own `id` field exactly as
  *  `parseChildReclaimResult` checks `reclaimed`/`refused` against it (fix
@@ -742,6 +796,24 @@ export function parseChildReclaimAudit(sessionId: string, stdout: string): Child
     return { kind: 'refused', token: v.verdict, detail: typeof v.detail === 'string' ? v.detail : '' };
   }
   return { kind: 'unreadable', detail: `ws-audit --reclaim answered a verdict this build does not know: ${String(v.verdict)}` };
+}
+
+/** `ws-audit --reclaim`'s document at a NON-ZERO exit (spec §5.7, §5.9). ccd
+ *  prints its `unmeasured` answer, then journals `failed probe-unmeasured`
+ *  (verb `ws-audit`) and exits 1; it prints `"resume":<phase>` whenever it read
+ *  a `reclaim:` breadcrumb. This applies `parseChildReclaimAudit`'s identity
+ *  rules (a JSON object, `id === sessionId`, `mode === 'reclaim'`) and accepts
+ *  ONLY `verdict === 'unmeasured'`. Every other shape is `unreadable`, a
+ *  token-bearing document first of all. `detail` is the same at every arm:
+ *  ccd's stderr, which names what was not measured. */
+export function parseChildReclaimAuditFailed(sessionId: string, stdout: string, stderr: string): ChildReclaimAuditFailedRead {
+  const detail = `ws-audit --reclaim failed: ${stderr.trim()}`;
+  let v: unknown;
+  try { v = JSON.parse(stdout.trim()); } catch { return { kind: 'unreadable', detail }; }
+  if (!isRecord(v) || v.id !== sessionId || v.mode !== 'reclaim' || v.verdict !== 'unmeasured') {
+    return { kind: 'unreadable', detail };
+  }
+  return { kind: 'unmeasured', resume: typeof v.resume === 'string' && v.resume !== '' ? 'resumable' : 'not-resumable', detail };
 }
 
 /** The exact stderr shape ccd's own `die` calls print for the SIX single-line
@@ -828,8 +900,8 @@ export type ChildReclaimVerbRead =
    *  dropped a secret did leave something uncommitted, and the feed says so. */
   | { readonly kind: 'reclaimed'; readonly wip: ChildReclaimWip; readonly secretsDropped: number | 'unreadable' }
   | { readonly kind: 'refused'; readonly token: ChildReclaimToken; readonly detail: string }
-  /** `resume` (review 170 F20; three-way since fr-I m1 — see
-   *  `ChildReclaimResume`'s own docstring). `matchChildReclaimPreLockDie`,
+  /** `resume` (review 170 F20; three-way since fr-I m1, four-way since
+   *  `stuck` — see `ChildReclaimResume`'s own docstring). `matchChildReclaimPreLockDie`,
    *  above, is what decides `pre-lock-die` here. `token` (spec §5.9) is
    *  ccd's own failure word: the mirror line's `refusal` for the same
    *  attempt, since ccd writes both from one word. Null where ccd named none
@@ -865,23 +937,8 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
       // Fix round 2, review minor C: an empty `detail` must not render
       // "…failed: ." — omit the separator rather than leave it dangling.
       const detail = typeof v.detail === 'string' ? v.detail : '';
-      // A word in `CHILD_RECLAIM_PRE_CRUMB_FAILED` (`probe-unmeasured`, the
-      // presence rungs' in-lock probe failing, spec §5.7; `state-changed`, the
-      // consent binding, spec §5.5) is printed BEFORE the tombstone and the
-      // breadcrumb on the FRESH arm (spec §5.6) — the destructive tail never
-      // started, so unlike every other post-start `{failed:…}` document there
-      // is no breadcrumb to resume from. A retry starts completely afresh,
-      // exactly as `not-resumable` already reads (`childReclaimFeedBody`'s tail
-      // text: "It is retried from the start."). On the RESUMED arm the locked
-      // recomputation prints `probe-unmeasured` too, while an earlier
-      // attempt's breadcrumb stands: it still reads `not-resumable` here, so
-      // the feed's "retried from the start" is wrong there (a wrong sentence,
-      // never a wrong act), and wave 7's additive `crumb` field tells the two
-      // apart (spec §7, item 6). `pin-failed` and `tombstone-unwritable` stay
-      // `resumable`: each also has post-breadcrumb producers, so the word
-      // cannot tell them apart, and the pre-breadcrumb case of both is a stated
-      // residual (see the set's doc).
-      const resume: ChildReclaimResume = isChildReclaimPreCrumbFailed(v.failed) ? 'not-resumable' : 'resumable';
+      // The word first, then ccd's `crumb` (spec §5.6; `childReclaimFailedResume`).
+      const resume = childReclaimFailedResume(v.failed, v.crumb);
       return { kind: 'failed', resume, detail: detail === '' ? v.failed : `${v.failed}: ${detail}`, token: v.failed };
     }
   }
@@ -1093,6 +1150,13 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   if (audit.kind === 'unreadable') {
     return { kind: 'failed', sessionId, runId, resume: 'not-resumable', detail: audit.detail, token: null };
   }
+  // The audit's own `unmeasured` answer at exit 1 carries the word ccd journaled
+  // for it, so the feed's quiet and the sweep's failure count see the same word
+  // the mirror holds (spec §5.9).
+  if (audit.kind === 'unmeasured') {
+    return { kind: 'failed', sessionId, runId, resume: audit.resume, detail: audit.detail,
+      token: CHILD_RECLAIM_PROBE_UNMEASURED };
+  }
   if (audit.kind === 'refused') return childReclaimRefusal(req, audit.token, audit.detail);
   if (audit.childOf !== runId) {
     return deferred('marker-mismatch', `ws-audit read the child marker as run ${audit.childOf}, not run ${runId}`);
@@ -1207,16 +1271,19 @@ function childReclaimRefusal(req: ChildReclaimRequest, token: ChildReclaimToken,
 
 /** The audit — its own function so the verb-gate scanner reads its own gate:
  *  `ws-audit` is an old verb, asked the old question. The FLAG's question
- *  (`reclaim-v1`) was already answered in step 4. The EXIT STATUS is read
- *  before a byte of stdout: ANY exit 1 — the audit's own unmeasured answer, a
- *  reclaim document saying `"verdict":"unmeasured"`, included — is
- *  `unreadable` here and `failed` to the executor, whatever the document says,
- *  so no exit-1 document (a token-bearing one included) is ever spent. */
-async function childReclaimAudit(deps: ChildReclaimDeps, req: ChildReclaimRequest): Promise<ChildReclaimAuditRead> {
+ *  (`reclaim-v1`) was already answered in step 4. The EXIT STATUS decides which
+ *  reader runs. At exit 0 it is `parseChildReclaimAudit`, the only reader that
+ *  can answer a token. At any other exit it is `parseChildReclaimAuditFailed`,
+ *  whose answer type has no token arm: the audit's own `unmeasured` answer,
+ *  resumable when it names a breadcrumb phase, or `unreadable`. So no exit-1
+ *  document, a token-bearing one included, is ever spent (spec §5.7, §5.9). */
+async function childReclaimAudit(
+  deps: ChildReclaimDeps, req: ChildReclaimRequest,
+): Promise<ChildReclaimAuditRead | ChildReclaimAuditUnmeasured> {
   const argv = CCD_ARGV.wsReclaimAudit(req.sessionId, req.deferExpired);
   if (!verbSupported(deps.fleetState, argv)) return { kind: 'unreadable', detail: 'the fleet host cannot answer ws-audit' };
   const res = await deps.runCcd(argv);
-  if (!res.ok) return { kind: 'unreadable', detail: `ws-audit --reclaim failed: ${res.stderr.trim()}` };
+  if (!res.ok) return parseChildReclaimAuditFailed(req.sessionId, res.stdout, res.stderr);
   return parseChildReclaimAudit(req.sessionId, res.stdout);
 }
 
@@ -1512,6 +1579,45 @@ function childReclaimWipText(wip: ChildReclaimWip, dropped: number | 'unreadable
   }
 }
 
+/** What a failed attempt's feed row promises next (spec §5.9): ONE decision,
+ *  the WORD first and then `resume`, every value spoken by its own arm.
+ *  `purge-incomplete` is decided by its word whatever `resume` it carries: the
+ *  reclaim completed and its registry row was purged, and ccd's detail (rendered
+ *  just before this sentence) names what still stands. The sentence is
+ *  CONDITIONAL: the sweep asks again only if the row's own files still stand.
+ *  It never says that nothing retries it, nor that the box resumes.
+ *  The `never` guard makes a `ChildReclaimResume` value added without a
+ *  sentence a compile error, never the old ternary's silent "retried from the
+ *  start". */
+export function childReclaimFailedTail(o: { readonly resume: ChildReclaimResume; readonly token: string | null }): string {
+  if (o.token === CHILD_RECLAIM_PURGE_INCOMPLETE) {
+    return 'The reclaim itself completed and its registry row was purged; what still stands is named above. If the row’s own files still stand, the sweep asks again.';
+  }
+  switch (o.resume) {
+    // `pre-lock-die` (review 170 F20, wording per fr-I m2, corrected per fr-I
+    // rereview-r1 m2): the recogniser covers THREE families — an argv/version
+    // die (usage, a malformed token/run id/session id), a missing binary
+    // (python3, flock), and a lock/registry state die (lock-unopenable: EISDIR,
+    // EACCES, a missing `$REG`) — and no single named list of causes is true of
+    // all three. The sentence stays CAUSE-NEUTRAL and leaves the cause to ccd's
+    // own message, rendered immediately before it.
+    case 'pre-lock-die':
+      return 'ccd refused the call before anything started; nothing was touched, and it refuses the same way every time until that changes.';
+    // The act had started, or the audit read a standing breadcrumb.
+    case 'resumable': return 'It is retried; the box resumes where it stopped.';
+    // Nothing to resume from was shown; a plain retry might still work.
+    case 'not-resumable': return 'It is retried from the start.';
+    // ccd proved another tree or row is in the way, and its detail says which.
+    // Conditional, like the failing sentence: the switch can stop the retries.
+    case 'stuck':
+      return 'While automatic reclamation runs, ccrc retries it on its long backoff; the box resumes from its breadcrumb once the tree or row is fixed.';
+    default: {
+      const _exhaustive: never = o.resume;
+      return _exhaustive;
+    }
+  }
+}
+
 function childReclaimFeedBody(o: Exclude<ChildReclaimOutcome, { kind: 'gone' }>, req: ChildReclaimRequest,
   nowMs: number): string {
   const who = `${o.sessionId}, child of run #${o.runId}`;
@@ -1521,37 +1627,10 @@ function childReclaimFeedBody(o: Exclude<ChildReclaimOutcome, { kind: 'gone' }>,
       return `${who}, was reclaimed (${req.trigger}). ${childReclaimWipText(o.wip, o.secretsDropped)}${wait}`;
     case 'deferred': return `${who}: reclaim deferred (${o.why}) — ${childReclaimSentence(o.detail)}${wait}`;
     case 'refused': return `${who}: ${o.sentence}${o.detail === '' ? '' : ` (${o.detail})`}${wait}`;
-    // `resume` says what to promise the reader (fix round 1 review minor #4,
-    // corrected fix round 2 minor C; three-way since review 170 fr-I m1).
     // `childReclaimSentence` (not a bare `.`) avoids doubling the punctuation
     // when `o.detail` already ends a sentence.
-    case 'failed': {
-      // `pre-lock-die` (review 170 F20, wording per fr-I m2, corrected per
-      // fr-I rereview-r1 m2): the recogniser covers THREE families — an
-      // argv/version die (usage, a malformed token/run id/session id), a
-      // missing binary (python3, flock), and a lock/registry state die
-      // (lock-unopenable: EISDIR, EACCES, a missing `$REG`) — and no single
-      // named list of causes ("its own arguments, or ccd/python3/flock") is
-      // true of all three; naming only that list pointed an operator at the
-      // wrong thing for the third. The sentence stays CAUSE-NEUTRAL instead
-      // and leaves the cause to `o.detail` — ccd's own message, rendered
-      // immediately before this sentence — which already names it.
-      const tail = o.resume === 'pre-lock-die'
-        ? 'ccd refused the call before anything started; nothing was touched, and it refuses the same way every time until that changes.'
-        // `resumable`: ccd's own tail genuinely started and left a
-        // breadcrumb. `not-resumable`: an audit failure (never reached the
-        // destructive path), a verb answer that is a REFUSAL in substance
-        // (an unrecognised word, or `reclaimed` naming another session), or a
-        // `{failed:…}` word printed before the breadcrumb on the FRESH arm
-        // (`CHILD_RECLAIM_PRE_CRUMB_FAILED`) — none advanced this session's
-        // state, so none has anything to resume, but unlike a pre-lock die a
-        // plain retry MIGHT still work. On the RESUMED arm `probe-unmeasured`
-        // is printed while an earlier attempt's breadcrumb stands, so there
-        // "retried from the start" is a wrong sentence, never a wrong act
-        // (wave 7's `crumb` field carries it; spec §7 item 6).
-        : o.resume === 'resumable' ? 'It is retried; the box resumes where it stopped.' : 'It is retried from the start.';
-      return `${who}: reclaim failed — ${childReclaimSentence(o.detail)} ${tail}${wait}`;
-    }
+    case 'failed':
+      return `${who}: reclaim failed — ${childReclaimSentence(o.detail)} ${childReclaimFailedTail(o)}${wait}`;
   }
 }
 
