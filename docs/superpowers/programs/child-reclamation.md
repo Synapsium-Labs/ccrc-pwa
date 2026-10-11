@@ -24,8 +24,8 @@ removed on 2026-09-10 was not.
 | 5 | the closed run's reclaim chip; the presence lease and its clocks (R39); R37 fenced to the generation (R40); the sweep's verdicts visible (R41–R44); the abandon copy and prose (R45, R46) | server + pwa (R38) | #290 | **deployed** v0.0.105 (`b27fabc15`, merged 2026-10-06 18:50; both boxes current by 19:04, through the updater); run 260 closed 19:05; reviews 285 and 303 (scoped, after fix round 1: no defect) |
 | 6 | `ws-reclaim` repaired (R48): the ONE removal helper and the in-use wait/keep of a temp root (R49); the positive witness `$REG/tmproots/<id>` (R50); F6 and the harness strip (R51); journaling `probe-unmeasured` and the id-tied pre-lock dies (R52); the three-way gone-branch read (R53); the `recorded` placement basis (R54); the vanish re-read's second trigger (R55) | **AGENT-FIRST** | #326 | **deployed** v0.0.124 (`b0647d850`, both boxes by 13:40 on 10-08) — run 291 closed `done`; reviews 335, 341 and 346 |
 | 7 | the temp-root collector verb, inert (R57, R66–R68): audit + token, quarantine-by-rename under the reap lock, the `$REG/tmpquarantine` record, destructive verb, cap token, agent grant, entry guard; plus the ccd halves (R69 `containment-refuted`, R70 `crumb`, rung 8, the reason cap, X1's generation input) | **AGENT-FIRST** | #344 | **deployed** fleet box v0.0.145 (`7609221a4`, merged 2026-10-11 00:55; the updater's auto move 01:10–01:12, agent restarted 01:10:52; `ccd caps` advertises `collect-v1` and `ws-collect`) — run 347, reviews 369, 374, 376 |
-| 8 | reclaim's server half (R65): X1 and X3 generation keying, R61's closure, the `crumb` verb and audit readers, the `clipsKept`/`tmpRootKept` reader, R69's `stuck` class, the persistent-failure tier | server | #349 | **in review** — run 348 (`ccrc-pwa-quiet-prairie`, dispatched 2026-10-11 00:59), plan `0d9f1b042`; PR #349 at `4b5a94ac1` after fix round 1; reviews 378, 379 |
-| 9 | the collector's server lane (the old R58), after the fleet advertises wave 7's token and wave 8 has merged; SAFETY and SECURITY lenses | server | — | **to plan** |
+| 8 | reclaim's server half (R65): X1 and X3 generation keying, R61's closure, the `crumb` verb and audit readers, the `clipsKept`/`tmpRootKept` reader, R69's `stuck` class, the persistent-failure tier | server | #349 | **merged** `d0c2b7803` (2026-10-11 12:13, prerelease v0.0.147; the updater moves it) — run 348 (`ccrc-pwa-quiet-prairie`), plan `0d9f1b042`; reviews 378, 379 |
+| 9 | the collector's server lane (the old R58), after the fleet advertises wave 7's token and wave 8 has merged; SAFETY and SECURITY lenses | server | — | **to plan** — run 380 opened 2026-10-11 |
 
 **Rule 3 is enforced at the end of wave 2** with no destructive verb in existence: a second bind on a
 PR-bearing child refuses. **Wave 3's `ws-reclaim` and wave 7's collector are the only verbs that destroy anything** (R38, R48). Waves 3 and 4 do nothing on a
@@ -46,6 +46,63 @@ clause 11): it names a departure in its wave-done mail and the coordinator assig
 Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (reviews **170**, **171**, **172**); wave 4 = **174**. Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
 
 ## Decisions & deviations
+
+- **2026-10-11 12:15 — WAVE 8 IS MERGED: #349 is `d0c2b7803` (12:13:47Z, prerelease v0.0.147). Run 348 is closed `done`, final, released. Wave 9's run 380 is opened.**
+  - **Review 379** (swift-meadow, `claude-dev0-corp`, an Anthropic account with no swap) is accepted and closed `done`
+    with its own `{reviewedTip, report}`. It measured the tip once, at `4b5a94ac1`, unmoved through the read. It ran the
+    held-out panel (three Opus·high lenses), the SAFETY lens on Opus·xhigh, and three Sonnet·high refuters per
+    finding: 16 agents, 0 errors. It raised 4 findings and refuted all 4 (3–0, 3–0, 3–0, 2–1). F1 to F12 are met at
+    the tip; the 36 entries match the rulings; the boundary is clean. F9's two mutants are red; F7 is widened and
+    exact. Every changed file, each gate and pools-prose are green alone. Report: `reviews/review-379-4b5a94ac.md`.
+  - **Ruled with no fix round.** Nothing survived, and these are recorded and carried to wave 9's pre-flight list:
+    - `defer-whys-loop-has-no-floor`. Measured: a hand-kept list put back in the loop's place stays green, and an
+      emptied or narrowed `CHILD_RECLAIM_DEFER_WHYS` passes vacuously. The ruled shape asked for no floor, so this is
+      not a defect of the round. The SAFETY lens refuted it 2–1. A one-line `toContain('generation-changed')` floor
+      closes it.
+    - `attention-runid-sentence-misses-leaf-arms`. `shared/api.ts:3832-3834` says `runId` is the minting run the
+      registry marker names. For `leaf-kept` and the leaf `kept-many`'s members it is `meas.childOf`. It is
+      byte-identical at `0511d5370`, was not among F1's five sentences, and was refuted 3–0 as out of scope. A
+      line-neutral fix exists.
+    - `leaf-kept-census-title-overclaims`. The census title's "no other file spells the three words as a set" is
+      literally false. Its comment narrows the claim to one code line. The title is plan-prescribed.
+    - `spec-presence-constants-citation-stale`. Spec `:1961` cites `shared/api.ts:3856-3857` for the presence
+      constants, and those lines no longer hold them. The text is identical at `0511d5370`.
+    - `detail-unsafe-upper-bounds-unpinned`. Narrowing `detailUnsafe`'s upper bounds (U+202E to U+202D, U+2069 to
+      U+2066) stays green, since the ruling pinned one character per class.
+    - Recorded only: F7's census is single-quote and one-line by design. A double-quoted or one-key-per-line copy stays
+      green, and the second is the legitimate tables' own shape.
+  - **The merge.** Before it: the PR head equalled the reviewed tip, it read MERGEABLE, and every required check was
+    green on that head (`test (server)` over a 554-file selection; `test-macos` advisory and still running). Main was
+    `cc33c8d51`, docs only, and merge-tree exited 0. The merge was `gh pr merge 349 --squash --admin
+    --match-head-commit 4b5a94ac1…`. release-main published v0.0.147 at 12:14.
+  - **Workspace-lifecycle's conditional (4209) is wave 6's to apply.** Run 358 was not on main, so #349 landed first.
+    quiet-river was told (4223), with the four edits and the CLAUDE.md numeral to re-measure if README grows.
+  - **Run 348 closed** `done`, `final:true`, `released:true`, and the child reclaim is `queued`. The worker's evidence is
+    archived first (`wave8-final/`).
+  - **Run 380 is opened** (`planned`, wave 9 of 9) before 348 closed, so the programme stays live. Wave 9's entry
+    conditions both hold: the fleet advertises wave 7's token, and wave 8 is merged.
+  - **Deploy.** Server-only. Both boxes were on v0.0.146 at the merge, with intent channel `dev`, auto. The updater moves
+    them, and the coordinator only observes.
+
+- **2026-10-11 12:15 — wave 9's pre-flight list, gathered in one place.** Each item names where it was ruled.
+  - From wave 7, review 369 and its fix round 1 (4158): C1's resume-boundary spawn pins; C5;
+    `tail-drop-ignores-a-recordless-slot`; `tail-drop-believes-an-absent-leaf`.
+  - From wave 7, 4181 (F2's residuals; each fails closed, and a lane must never read one as transient):
+    `device-test-cannot-see-a-same-device-bind-mount`; `permanent-device-change-holds-every-absence`; a `~/.cc-tmp`
+    deleted whole, which holds every leafless witness unmeasured.
+  - From wave 7, fix round 2 (4189): `collect-why-cases-red-past-the-cut` (four length-sensitive cases);
+    `source-parent-without-owner-write-loops` (the lane must not retry it every pass as transient);
+    `floor-knob-zero-strip-is-quadratic`; C13's reach to an admin entry other than the one naming the path (review 374
+    F6). `corrupt-admin-entry-holds-the-repository` is now pinned by wave 8's tier (F9), so the lane reads the tier and
+    must not add a second one.
+  - From wave 7's merge: `g9-kill-grace-residual`'s over-count correction (one grace is paid; the lane sets its
+    deadlines); `witness-only-header-omits-the-pause-rung`; `maker-under-bsd-order-unpinned`.
+  - From wave 8 (review 379): the five carries above.
+  - From wave 8's own residue (the account's "Residue NOT fixed" section, `wave8-final/`): `line-bound-is-ccds-not-the-mirrors`
+    (a kept-leaf session id is shape-checked but not length-capped); `detailUnsafe` omits LRM/RLM/ALM, U+200B to U+200D
+    and U+FEFF; `leaf-end-acts-spelled-twice`. The PWA comment at `pwa/src/fleet/childReclaimWords.ts:56-58` waits for a
+    later PWA pass.
+  - Carried to the path-identity follow-up, not wave 9: the `rec == f` recycled-admin rule and the NUL back-link corner.
 
 - **2026-10-11 11:53 — wave 8 fix round 1's wave-done is verified (4220); run 348 is at `awaiting-review`, and scoped review run 379 is opened.**
   - **Re-measured.** The tip is `4b5a94ac1`, as claimed, and PR #349 is open at it. The range `0511d5370..4b5a94ac1` is
