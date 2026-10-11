@@ -79,7 +79,7 @@ The six task drafts were written in parallel against a fixed interface list, and
 - **H1 — §16's final text binds.** The drafts were written against an earlier §16. Its last check changed these, and every task applies them:
   - **The pass guard.** `collectSweeping` spans the gather and the synchronous decide-and-enqueue ONLY. The pass never awaits a learning audit, an executor job or an act it enqueued. Each is tracked by stamps in memory, and every pass derives the unsettled lines from them (R85).
   - **The offer.** The act job is offered FIRST, to the earliest ripe id (by ripening instant, then id) with no unsettled or already-enqueued collector call, skipping any id that has one. Learning audits are offered next, by next-ask instant and then id, again skipping pending ids. An id holding an observation is never offered a learning audit: its next ask is its ripening instant (R85). Pins: a single collectable orphan reaches its executor job within the interval plus two passes; a ripe X with a never-settling call does not stop Y's act.
-  - **Unsettled jobs.** An executor JOB not settled `CHILD_RECLAIM_STALL_MS` after it took the slot raises the box-wide line, saying the act slot is held, even if it never composed a call (R85). Its bound counts from the enqueue (`unsettled-bound-counts-from-the-queue`, accepted).
+  - **Unsettled jobs.** An executor JOB not settled `CHILD_RECLAIM_STALL_MS` after it took the slot raises the box-wide line, saying the act slot is held, even if it never composed a call (R85). Its bound counts from the enqueue (`unsettled-bound-counts-from-the-queue`, accepted). The job's STALL bound is checked FIRST: an act job past `CHILD_RECLAIM_STALL_MS` reads as holding the act slot whether its own audit, its act or nothing is out, so the box line treats `'act'` and `'job'` alike as slot-held (ruled at the plan attack). Only a learning audit, or an executor audit not yet past the job's bound, reads `'audit'` past `COLLECT_AUDIT_STALL_MS`.
   - **Pacing rows (R87):**
     - `unreadable` and an unknown verdict advance the FAILING run;
     - `not-witnessed` clears the three runs and ADVANCES the deferral count;
@@ -156,7 +156,7 @@ The six task drafts were written in parallel against a fixed interface list, and
     - `hold-reported-ahead-of-the-licence`;
     - `unplaced-witness-instant-holds`;
     - `audit-gate-refusal-clears-as-caps`;
-    - `learnCollect` does not re-assert the id predicate (two checks, as R83 names).
+    - `learn-collect-asks-no-id-predicate` (H13's name): `learnCollect` does not re-assert the id predicate (two checks, as R83 names).
   - Task 7:
     - `collect-sweeping-is-the-overtaken-guard` (now §16's);
     - `pass-reads-its-switches-in-its-gather`;
@@ -164,7 +164,7 @@ The six task drafts were written in parallel against a fixed interface list, and
     - `an-answer-for-a-forgotten-id-is-dropped`;
     - `collector-records-unread`.
   - Task 8:
-    - `ws-collect-cap-entry-is-a-classification`;
+    - `ws-collect-cap-entry-is-a-classification` is VOID (H13): the wave-done does not name it;
     - `collect-act-cap-after-last-await-pinned`;
     - `cc-tmp-scan-display-only`;
     - `budget-test-pins-the-read-values`;
@@ -183,7 +183,7 @@ The six task drafts were written in parallel against a fixed interface list, and
     - `WITNESS_AT_SHAPE` stays ccd's own `^[0-9]{13}$`;
     - the witness `run` reads through `CHILD_RUN_ID`.
   - **Loose labels and wordings, accepted:**
-    - the `unsettled` label stays `collector calls still running`, and the job's sentence carries "the act slot is held" for a job only;
+    - the `unsettled` label is `collector / calls still running` (every label holds a `/`, ruled at the plan attack: a registry id can hold a space, but no file name can hold a `/`), and the sentence carries "the act slot is held" for every act job past `CHILD_RECLAIM_STALL_MS`, its act out or not (`'act'` and `'job'` alike, H1);
     - the unsettled job's sentence names no minute count, because L1 cannot read `CHILD_RECLAIM_STALL_MS`.
   - **Task 4's die and terminal readings, accepted, each named by slug in the wave-done:**
     - `flock-unavailable-takes-no-floor`;
@@ -197,8 +197,8 @@ The six task drafts were written in parallel against a fixed interface list, and
     - `learnCollect` not re-asserting the predicate is named `learn-collect-asks-no-id-predicate`.
   - **Task 1's re-derivation scan is widened to `[.-]`,** so a one-line private copy that tests only the dash is scanned too (the fix workflow edits Task 1).
   - **Task 7:**
-    - The gather's try/catch around reads that never reject is DELETED, with T7.30 and T7.31, because a guard with no red breaks the mutation-table rule.
-    - Lane pins are ADDED for the pass-scoped box lines' publication (`collectPassAudits`), the `held` arm's fold, the step-6 `answered presence` arm's fold, and `collectRunCcd`'s phase reset (the fix workflow adds them).
+    - The gather's try/catch around reads that never reject is DELETED, with T7.30 and T7.31, because a guard with no red breaks the mutation-table rule. The two rows stand as ONE `Deleted (H13)` row, so T7.32 onwards keep their numbers.
+    - Lane cases are ADDED, each with a mutation row, for the pass-scoped box lines' publication (`collectPassAudits`), the `held` arm's fold (the pair cleared, and the flat `CHILD_RECLAIM_DEFER_CEILING_MS` wait before the next act), and `collectRunCcd`'s phase reset (the fix workflow adds them). The step-6 `answered presence` arm's fold is already red, through 'a presence that appears at step 6…'.
   - **The drafts' sidecar JSONs are stale and are not part of the plan.**
 
 ## Review Focus (the five failure modes most likely to bite)
@@ -230,7 +230,7 @@ Every file this wave touches, taken from each task's own **Files** block, which 
 | `server/test/ccdargv-brand.test.ts` | 1 |
 | `server/test/ccdargv-dec-parity.test.ts` | 1 |
 | `server/test/ws-collect-wiring.test.ts` | 1 (the cast), 6 (the INERT `it`'s two lists), 7 (`watch.ts` holder), 8 (the describe) |
-| `server/test/single-definition.test.ts` | 1, 8 (appended, in that order) |
+| `server/test/single-definition.test.ts` | 1 (appended), 4 (`'run-open'` excused by name in the archive-door scan's `want`, in place), 6 (`coord/collectTempRoot.ts` joins that excuse, in place), 8 (appended after Task 1's) |
 | `server/test/collect-readers.test.ts` (new) | 2 |
 | `server/test/collect-population.test.ts` (new) | 3 |
 | `server/test/collectAnswers.ts` (new) | 4 |
@@ -248,6 +248,7 @@ Every file this wave touches, taken from each task's own **Files** block, which 
 | `server/test/collect-temp-root-reads.test.ts` (new) | 6 |
 | `server/test/collect-open-run-hold.test.ts` (new) | 6 |
 | `server/test/verb-gate.test.ts` | 6 (`CAP_GATED_VERBS`), 8 (`NEW_GENERATION`, the scan) |
+| `server/test/mail-routes.test.ts` | 6 (`isCollectExecutorKebab` joins the kebab scan's accept chain) |
 | `server/test/collectLaneFixture.ts` (new) | 7 |
 | `server/test/collect-lane-bounds.test.ts` (new) | 7 |
 | `server/test/collect-lane-pass.test.ts` (new) | 7 |
@@ -296,7 +297,7 @@ Measure from the workspace root, before Task 1. If any check does not print what
 git fetch origin main
 git merge-base --is-ancestor origin/main HEAD; echo "a0 rc=$?"          # (a0) rc=0; if 1, run `git merge origin/main` once (never a rebase), then re-measure
 grep -c '^## 16\. Rulings, 2026-10-11' docs/superpowers/programs/child-reclamation-contract.md   # (a1) 1
-grep -c 'wsCollectAudit\|wsCollect(' server/src/ccdargv.ts             # (a2) 2 or more: wave 7's builders
+grep -c '^  wsCollectAudit: \|^  wsCollect: ' server/src/ccdargv.ts   # (a2) 2: wave 7's builders
 grep -c "COLLECT_CAP = 'collect-v1'" server/src/ccdargv.ts            # (a3) 1
 grep -c '^export function childReclaimTierPaceMs\|^function childReclaimTierFrom' server/src/childReclaimSweep.ts   # (a4) 2: wave 8's tier
 grep -rn 'wsCollect' server/src --include=*.ts | grep -v ccdargv.ts | wc -l   # (a5) 0: no composer yet
@@ -322,7 +323,7 @@ For each witness name from (b1), read ONLY its `run=` and `at=` fields and look 
 
 ```bash
 ~/.local/bin/ccrc-api claims list --project ccrc-pwa                                  # no live claim on a path this wave edits, or the coordinator's recorded agreement in the brief
-git log --oneline origin/main -20 | grep -i 'workspace lifecycle wave 6' || echo "WL wave 6 not landed"   # if not landed, its watch.ts and README regions (R91) are off-limits
+git grep -q 'rereadDeadCoordinatorJournalTrust' origin/main -- server/src/watch.ts && echo "WL wave 6 landed" || echo "WL wave 6 not landed"   # if not landed, its watch.ts and README regions (R91) are off-limits. A CONTENT probe: main's own docs(plan) commit cc33c8d51 matches 'workspace lifecycle wave 6', so a log grep says landed too early
 ```
 
 ---
@@ -345,19 +346,19 @@ git log --oneline origin/main -20 | grep -i 'workspace lifecycle wave 6' || echo
 - **R88, the attention arm.** The collector's attention arm is declared at the foot. The union's last-arm line is rewritten in place, line-neutral.
   - The arm carries `runId` (the audit's `collect.witness.run`, or null) and NO `at`.
   - `attention-runid-sentence-misses-leaf-arms` is fixed in the same commit, line-neutrally (`shared/api.ts:3832-3834`). Task 1's three lines are the canonical text (H3): Task 5 rewrites neither them nor the doc pair, and its prose pin reads Task 1's lines verbatim.
-  - A box-wide line's `sessionId` is a fixed label holding a space or a `/`. The labels are spelled once, in a total table (`COLLECT_BOX_LABELS`).
+  - A box-wide line's `sessionId` is a fixed label holding a `/`, which no file name under `$REG` (so no registry id) and no session id's shape can carry. A space is not enough: a reclaim item's id is read from any `$REG/<x>.uuid` name with no shape filter (R90 defers that), so a same-uid session could plant a registry id equal to a label that holds only a space. The labels are spelled once, in a total table (`COLLECT_BOX_LABELS`).
   - A collapsed per-id collector line is a `kept-many` whose word no other line uses. Its arm, `ChildReclaimCollectMany`, is declared here too, so the union line is rewritten once (`collect-many-arm-declared`, accepted, H3). Its word begins `collect:` (`` `collect:${string}` ``, H3); Task 5 spells that prefix once in L1 as `CHILD_RECLAIM_COLLECT_MANY_PREFIX`.
-- **R91.** `shared/api.ts` is edited only at its foot, plus line-neutral in-place rewrites above it. README cites the file by line at `:7878-7880`, `:7930`, `:7938` and `:7951`, all BELOW this task's three in-place edits (`:3796-3797`, `:3832-3834`, `:3857`). Step 6 proves the bytes README cites are unchanged.
-- **The doc pair.** The pair at `:3796-3797` says "the three this file's foot declares". The collector makes that five, so it is rewritten line for line. R91 does not list this rewrite; it is named by slug `attention-doc-pair-counts-the-collector` (accepted, H9).
+- **R91.** `shared/api.ts` is edited only at its foot, plus line-neutral in-place rewrites above it. README cites the file by line at `:7878-7880`, `:7930`, `:7938` and `:7951`, all BELOW this task's three in-place edits (`:3797-3798`, `:3832-3834`, `:3856`). Step 6 proves the bytes README cites are unchanged.
+- **The doc pair.** The pair at `:3797-3798` says "the three this file's foot declares". The collector makes that five, so it is rewritten line for line. R91 does not list this rewrite; it is named by slug `attention-doc-pair-counts-the-collector` (accepted, H9).
 - **What the banner does with a label (R88's Task 0 read, done at planning).** `pwa/src/fleet/ChildReclaimBanner.tsx:148-150` keys a single line by `a.sessionId` (`<li key={a.sessionId}`) and renders the label as plain text in a `<span>`. So a label renders as plain text, and no two box-wide lines may share one.
 
 **Files:**
 - Modify: `shared/api.ts`:
-  - three in-place, line-for-line edits inside `ChildReclaimAttention`'s docstring and union: the doc pair (`:3796-3797`), the `runId` sentence (`:3832-3834`) and the last arm's line (`:3857`);
+  - three in-place, line-for-line edits inside `ChildReclaimAttention`'s docstring and union: the doc pair (`:3797-3798`), the `runId` sentence (`:3832-3834`) and the last arm's line (`:3856`);
   - one block appended after the file's last line (`}`, closing `leafKeptWord`, `:9673`).
 - Modify: `server/src/ccdargv.ts`: the `../../shared/api.js` import (`:2`), and `wsCollect`'s docstring and first parameter (`:452-458`).
 - Modify: `server/src/childReclaimSweep.ts`: the import (`:15`), `leafIdOk` deleted (`:1642-1643`), the docstring of `childReclaimLeafKept` (`:1656-1663`) and its one call (`:1677`).
-- Modify: `server/src/coord/store.ts`: the import (`:31`), the private cap (`:1493`) and its five other mentions (`:1478`, `:1501`, `:1515`, `:1525`, `:3430`).
+- Modify: `server/src/coord/store.ts`: the import (`:79`), the private cap (`:1493`) and its five other mentions (`:1478`, `:1501`, `:1515`, `:1525`, `:3430`).
 - Modify: `server/test/ws-collect-wiring.test.ts` (one import line, and the ONE cast at its `TOKEN` declaration, `:15`; the calls at `:25-26` and `:39` are untouched, H1).
 - Modify: `server/test/ccdargv-dec-parity.test.ts` (the cast at `:161`, and one import line).
 - Modify: `server/test/ccdargv-brand.test.ts` (one `EXPECTED` entry).
@@ -394,10 +395,10 @@ git log --oneline origin/main -20 | grep -i 'workspace lifecycle wave 6' || echo
   // ChildReclaimAttention = …its seven arms… | ChildReclaimCollectAttention | ChildReclaimCollectMany
   export const COLLECT_BOX_LABELS: {
     readonly tmproots: '~/.cc-sessions/tmproots'; readonly tmpquarantine: '~/.cc-sessions/tmpquarantine';
-    readonly 'refused-names': 'unusable names under ~/.cc-sessions'; readonly 'box-probe': 'the fleet box';
-    readonly 'no-document': 'temp-root audits that printed nothing'; readonly lock: 'temp-root reap locks';
-    readonly flock: 'flock on the fleet box'; readonly unsettled: 'collector calls still running';
-    readonly unvouched: 'temp roots coord.db cannot vouch for'; readonly 'no-run': 'temp roots with no run';
+    readonly 'refused-names': 'unusable names under ~/.cc-sessions'; readonly 'box-probe': 'collector / the fleet box';
+    readonly 'no-document': 'collector / audits that printed nothing'; readonly lock: 'collector / temp-root reap locks';
+    readonly flock: 'collector / flock on the fleet box'; readonly unsettled: 'collector / calls still running';
+    readonly unvouched: 'collector / temp roots coord.db cannot vouch for'; readonly 'no-run': 'collector / temp roots with no run';
   };
   export type CollectBoxLine = keyof typeof COLLECT_BOX_LABELS;
   export const COLLECT_BOX_LINES: readonly CollectBoxLine[];
@@ -413,23 +414,23 @@ git log --oneline origin/main -20 | grep -i 'workspace lifecycle wave 6' || echo
   - `no-document`: the audit's no-document line.
   - `lock`: the line for two or more ids answering `lock`.
   - `flock`: the `flock-unavailable` latch.
-  - `unsettled`: ONE line for every collector call (an audit or the act) past its stall bound, and every executor JOB not settled `CHILD_RECLAIM_STALL_MS` after it took the slot, whose clause says the act slot is held (H1, R85).
+  - `unsettled`: ONE line for every learning audit, or executor audit, past `COLLECT_AUDIT_STALL_MS`, and every executor JOB not settled `CHILD_RECLAIM_STALL_MS` after it took the slot, whose clause says the act slot is held. The job's bound is checked first, so a job whose own audit or act never settles is listed as holding the slot, `'act'` and `'job'` alike (H1, R85).
   - `unvouched`: ids held by R86 (b) or (c), once held past the hold's ceiling (`unvouched-line-waits-the-ceiling`, H8).
   - `no-run`: the ONE count line for run-less items past `CHILD_RECLAIM_KEPT_MANY_OVER`, with one clause per word (`no-run-lines-share-one-label`, H8). There is no per-word label.
 
 - [ ] **Step 1: Re-measure the anchors (read-only)**
 
 ```bash
-grep -n "costs disk rather than correctness. The four arms below and the three this file's foot declares (stuck, and" shared/api.ts   # one line (3796)
+grep -n "costs disk rather than correctness. The four arms below and the three this file's foot declares (stuck, and" shared/api.ts   # one line (3797)
 grep -n '^ \*  switch. `runId` is the minting run the registry marker names, or null when$' shared/api.ts                           # one line (3832)
-grep -n "readonly sentence: string } | ChildReclaimStuckAttention | ChildReclaimLeafKeptAttention | ChildReclaimLeafKeptMany;$" shared/api.ts   # one line (3857)
+grep -n "readonly sentence: string } | ChildReclaimStuckAttention | ChildReclaimLeafKeptAttention | ChildReclaimLeafKeptMany;$" shared/api.ts   # one line (3856)
 tail -n 1 shared/api.ts                                                       # }
 grep -rn "isTmpRootId\|TMPROOT_ID_MAX_CHARS\|CollectToken\|COLLECT_BOX_LABELS\|ChildReclaimCollect" shared server/src pwa/src agent/src   # nothing
 grep -n "^const leafIdOk = " server/src/childReclaimSweep.ts                 # one line (1643)
 grep -n "isSessionIdShape" server/src/childReclaimSweep.ts                   # 15 (import), 1643, 1659 (docstring)
 grep -n "^const CHILD_RECLAIM_MAX_SESSION_ID_CHARS = 255;$" server/src/coord/store.ts   # one line (1493)
 grep -c "CHILD_RECLAIM_MAX_SESSION_ID_CHARS" server/src/coord/store.ts       # 6
-grep -n "^  IDLE_RUN_STATES, transitionsFor, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES,$" server/src/coord/store.ts   # one line (31)
+grep -n "^  IDLE_RUN_STATES, transitionsFor, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES,$" server/src/coord/store.ts   # one line (79)
 grep -n "wsCollect: (token: string, id: string, dec: ActorFlags | null) =>" server/src/ccdargv.ts   # one line (457)
 grep -n "CCD_ARGV.wsCollect(" server/test/*.ts                               # ws-collect-wiring :25 :26 :39; ccdargv-dec-parity :161
 grep -n "^const TOKEN = 'a'.repeat(64);$" server/test/ws-collect-wiring.test.ts   # one line (15): the file's one token declaration, cast once (H1)
@@ -440,7 +441,7 @@ ls server/test/types/bypasses/                                               # b
 
 STOP rules:
 - **Any declaration already exists** (the fifth grep prints a line). Another wave declared it. Report `collect-l0-owned-elsewhere`, and build nothing on it.
-- **The README anchors moved above `:3857`.** If any README `shared/api.ts` anchor now lies at or above `:3857`, an in-place edit here could touch cited bytes. STOP and report `readme-anchor-above-the-union`.
+- **The README anchors moved above `:3856`.** If any README `shared/api.ts` anchor now lies at or above `:3856`, an in-place edit here could touch cited bytes. STOP and report `readme-anchor-above-the-union`.
 - **Any other count differs.** Report it by slug, and re-point by content, never by line.
 - **The wiring test's calls are on `:25-26` and `:39`, and its `TOKEN` on `:15`.** The final §16 cites `:25-26` and `:39` (H1), so nothing drifted. If a line moved, the edit is by content: this is not a departure.
 
@@ -564,9 +565,9 @@ describe('COLLECT_BOX_LABELS — the box-wide lines’ fixed sessionIds (spec §
     expect(COLLECT_BOX_LINES).toHaveLength(10);
   });
 
-  it.each(Object.keys(COLLECT_BOX_LABELS))('%s: holds a space or a slash, so no session id and no temp-root id equals it', (line) => {
+  it.each(Object.keys(COLLECT_BOX_LABELS))('%s: holds a slash, which no registry file name can carry, so no session id and no temp-root id equals it', (line) => {
     const label = COLLECT_BOX_LABELS[line as keyof typeof COLLECT_BOX_LABELS];
-    expect(label).toMatch(/[ /]/);
+    expect(label).toMatch(/\//);
     expect(isSessionIdShape(label)).toBe(false);
     expect(isTmpRootId(label)).toBe(false);
   });
@@ -578,7 +579,7 @@ describe('COLLECT_BOX_LABELS — the box-wide lines’ fixed sessionIds (spec §
   it('each listing is named by its path, and the box-wide probe line by the box', () => {
     expect(COLLECT_BOX_LABELS.tmproots).toBe('~/.cc-sessions/tmproots');
     expect(COLLECT_BOX_LABELS.tmpquarantine).toBe('~/.cc-sessions/tmpquarantine');
-    expect(COLLECT_BOX_LABELS['box-probe']).toBe('the fleet box');
+    expect(COLLECT_BOX_LABELS['box-probe']).toBe('collector / the fleet box');
   });
 });
 ```
@@ -629,8 +630,8 @@ describe('child reclamation wave 9: the temp-root id predicate and its cap are d
   const DEF_FN = (n: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?function\\s+${n}\\b`, 'm');
   const DEF_VAL = (n: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${n}\\b`, 'm');
   const definers = (re: RegExp): string[] => ALL.filter((f) => re.test(readFileSync(f, 'utf8'))).map(rel).sort();
-  /** The session-id shape and a leading-dot test on one code line: a re-derived predicate under a new name. */
-  const REDERIVED = /\bisSessionIdShape\s*\(.*startsWith\(\s*['"]\.['"]\s*\)|startsWith\(\s*['"]\.['"]\s*\).*\bisSessionIdShape\s*\(/;
+  /** The session-id shape and a leading-dot or leading-dash test on one code line: a re-derived predicate under a new name. */
+  const REDERIVED = /\bisSessionIdShape\s*\(.*startsWith\(\s*['"][.-]['"]\s*\)|startsWith\(\s*['"][.-]['"]\s*\).*\bisSessionIdShape\s*\(/;
 
   it('CONTROL: the patterns see a declaration, an un-exported copy and a re-derivation, and not an import or a call', () => {
     expect(DEF_FN('isTmpRootId').test('export function isTmpRootId(id: unknown): id is string {')).toBe(true);
@@ -638,6 +639,7 @@ describe('child reclamation wave 9: the temp-root id predicate and its cap are d
     expect(DEF_VAL('TMPROOT_ID_MAX_CHARS').test("import { TMPROOT_ID_MAX_CHARS } from '../../../shared/api.js';")).toBe(false);
     expect(DEF_FN('isTmpRootId').test('  if (!isTmpRootId(id)) return;')).toBe(false);
     expect(REDERIVED.test("const ok = (id: string): boolean => isSessionIdShape(id) && !id.startsWith('.');")).toBe(true);
+    expect(REDERIVED.test("const ok = (id: string): boolean => isSessionIdShape(id) && !id.startsWith('-');")).toBe(true);
     expect(REDERIVED.test('if (!isSessionIdShape(sid)) {')).toBe(false);
   });
 
@@ -654,7 +656,7 @@ describe('child reclamation wave 9: the temp-root id predicate and its cap are d
     expect(stallCode(path.join(ccrcRoot, 'server/src/coord/store.ts'))).toMatch(/\bTMPROOT_ID_MAX_CHARS\b/);
   });
 
-  it('no code line outside shared/api.ts re-derives it from the session-id shape and a leading-dot test', () => {
+  it('no code line outside shared/api.ts re-derives it from the session-id shape and a leading-dot or leading-dash test', () => {
     expect(ALL.filter((f) => rel(f) !== 'shared/api.ts' && stallCode(f).split('\n').some((l) => REDERIVED.test(l)))
       .map(rel)).toEqual([]);
   });
@@ -693,7 +695,7 @@ Expected: FAIL. vitest resolves a missing named export to `undefined`, so:
 
 - [ ] **Step 4: Write the declarations, the brand, and the two imports**
 
-(a) In `shared/api.ts`, inside `ChildReclaimAttention`'s docstring, replace the doc pair (`:3796-3797`), two lines for two (slug `attention-doc-pair-counts-the-collector`):
+(a) In `shared/api.ts`, inside `ChildReclaimAttention`'s docstring, replace the doc pair (`:3797-3798`), two lines for two (slug `attention-doc-pair-counts-the-collector`):
 
 ```ts
  *  costs disk rather than correctness. The four arms below and the three this file's foot declares (stuck, and
@@ -723,7 +725,7 @@ with:
  *  `leaf-kept`, and the collect audit's `collect.witness.run` on `collect`; a box-wide `collect` line has none.
 ```
 
-(c) Replace the union's last line (`:3857`), in place, one for one:
+(c) Replace the union's last line (`:3856`), in place, one for one:
 
 ```ts
       readonly members: readonly ChildReclaimKeptMember[]; readonly sentence: string } | ChildReclaimStuckAttention | ChildReclaimLeafKeptAttention | ChildReclaimLeafKeptMany;
@@ -798,20 +800,20 @@ export interface ChildReclaimCollectMany {
 }
 
 /** The fixed `sessionId` of each BOX-WIDE collector line (spec §5.9, §5.10): one line per condition, never one per id.
- *  - Each label holds a space or a `/`, which a session id's shape refuses, so no id's item can carry it.
+ *  - Each label holds a `/`, which no file name under $REG (so no registry id) and no session id's shape can carry.
  *  - Each is distinct, because the banner keys a single line by its `sessionId`.
  *  - The labels are spelled once, in this total table, and the list of lines is derived. */
 export const COLLECT_BOX_LABELS = {
   tmproots: '~/.cc-sessions/tmproots',
   tmpquarantine: '~/.cc-sessions/tmpquarantine',
   'refused-names': 'unusable names under ~/.cc-sessions',
-  'box-probe': 'the fleet box',
-  'no-document': 'temp-root audits that printed nothing',
-  lock: 'temp-root reap locks',
-  flock: 'flock on the fleet box',
-  unsettled: 'collector calls still running',
-  unvouched: 'temp roots coord.db cannot vouch for',
-  'no-run': 'temp roots with no run',
+  'box-probe': 'collector / the fleet box',
+  'no-document': 'collector / audits that printed nothing',
+  lock: 'collector / temp-root reap locks',
+  flock: 'collector / flock on the fleet box',
+  unsettled: 'collector / calls still running',
+  unvouched: 'collector / temp roots coord.db cannot vouch for',
+  'no-run': 'collector / temp roots with no run',
 } as const;
 export type CollectBoxLine = keyof typeof COLLECT_BOX_LABELS;
 export const COLLECT_BOX_LINES: readonly CollectBoxLine[] = Object.keys(COLLECT_BOX_LABELS) as CollectBoxLine[];
@@ -877,7 +879,7 @@ The "Composed by NOTHING" sentence stays true until Task 6 composes the builder.
 ```
 
 (h) In `server/src/coord/store.ts`, kept line for line (several tests cite this file by line in prose):
-- line 31: replace `  IDLE_RUN_STATES, transitionsFor, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES,` with `  IDLE_RUN_STATES, transitionsFor, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES, TMPROOT_ID_MAX_CHARS,`;
+- line 79: replace `  IDLE_RUN_STATES, transitionsFor, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES,` with `  IDLE_RUN_STATES, transitionsFor, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES, TMPROOT_ID_MAX_CHARS,`;
 - line 1493: replace `const CHILD_RECLAIM_MAX_SESSION_ID_CHARS = 255;` with `/* The bound is L0's `TMPROOT_ID_MAX_CHARS` (spec §5.10), the one temp-root id cap, imported above. */`;
 - then replace every remaining `CHILD_RECLAIM_MAX_SESSION_ID_CHARS` in the file with `TMPROOT_ID_MAX_CHARS`: five occurrences, at `:1478`, `:1501`, `:1515`, `:1525` and `:3430`. Two are code (`:1501`, `:1525`) and three are prose.
 
@@ -939,8 +941,8 @@ Make each mutation alone, run its command, record the red, and revert before the
 | T1.10 | In `ChildReclaimCollectAttention`, add `readonly at?: number \| null;` | same | `test/collect-l0.test.ts(…): error TS2578: Unused '@ts-expect-error' directive.` If this mutation stays green, tsc did not check excess properties on the union: STOP and report `collect-arm-excess-at-unflagged` |
 | T1.11 | `ChildReclaimCollectMany`'s `` word: `collect:${string}` `` → `word: string` | `cd server && ./node_modules/.bin/vitest run test/collect-l0.test.ts` | Stays green: the disjointness is a type fact plus the run-time prefix loop. Record it as `collect-many-word-type-unpinned-by-a-red` and leave it (the loop reds when a kept word gains the prefix; T1.12) |
 | T1.12 | Add `'collect:x'` to `ChildReclaimKeptWord`'s union and table (`:3778-3784`) | same | `a collapsed collector line is a kept-many whose word…` with message `collect:x: expected true to be false` |
-| T1.13 | `COLLECT_BOX_LABELS['box-probe']`: `'box-probe': 'the fleet box'` → `'box-probe': 'fleet-box'` | same | `box-probe: holds a space or a slash…` (`expected 'fleet-box' to match /[ /]/`), and `each listing is named by its path…` |
-| T1.14 | `lock: 'temp-root reap locks'` → `lock: 'the fleet box'` | same | `no two lines share a label…` (`expected 9 to be 10`) |
+| T1.13 | `COLLECT_BOX_LABELS['box-probe']`: `'box-probe': 'collector / the fleet box'` → `'box-probe': 'collector the fleet box'` (the space stays, the slash goes) | same | `box-probe: holds a slash, which no registry file name can carry…` (`expected 'collector the fleet box' to match /\//`), and `each listing is named by its path…` |
+| T1.14 | `lock: 'collector / temp-root reap locks'` → `lock: 'collector / the fleet box'` | same | `no two lines share a label…` (`expected 9 to be 10`) |
 | T1.15 | Delete the `'no-run'` row from `COLLECT_BOX_LABELS` | same | `the lines are the table’s keys, derived, ten of them` (`expected [ …(9) ] to have a length of 10 but got 9`) |
 | T1.16 | Delete the cast at `ws-collect-wiring.test.ts`'s `TOKEN` declaration (`const TOKEN = 'a'.repeat(64) as CollectToken;` → `const TOKEN = 'a'.repeat(64);`) | `cd server && ./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json` | `test/ws-collect-wiring.test.ts(26,…)`, `(27,…)` and `(40,…)`: `error TS2345: Argument of type 'string' is not assignable to parameter of type 'CollectToken'.`, once at each of the three calls (base `:25`, `:26`, `:39`, shifted one line by the import); typecheck-tests reds with it |
 
@@ -2220,7 +2222,7 @@ describe('the two listings', () => {
     });
   });
 
-  it('the cap counts the RAW listing: dot-leading names cost the frame as much as any other', () => {
+  it("the cap counts the RAW listing: dot-leading names cost the lane's memory as much as any other", () => {
     const names = [...many(COLLECT_POPULATION_MAX).map((n) => `.${n}.tmp`), 'a'];
     expect(pop(listed(...names)).unmeasured).toEqual([{ listing: 'tmproots', kind: 'over-cap', count: COLLECT_POPULATION_MAX + 1 }]);
   });
@@ -2341,7 +2343,9 @@ Expected: FAIL, 33 of 33 (re-measure). Vitest binds a missing named export to `u
 /** The most names one listing may carry before the lane reads it as unmeasured (spec §5.10, the population). A
  *  session of this uid can write any number of names into either directory; past this many, the lane neither audits
  *  nor forgets from that listing, and says the count alone. Counted over the RAW listing, dot-leading names included,
- *  because they cost the frame and the memory as much as any other name. */
+ *  because they cost the lane's memory as much as any other name. STATED RESIDUAL: the cap bounds what the lane
+ *  audits and remembers, not the listing itself: the agent's readdir returns every name in one frame, as the
+ *  registry's own $REG listing already does every tick. */
 export const COLLECT_POPULATION_MAX = 1024;
 
 /** The two registry subdirectories the lane lists, by the name its box-wide line gives each. */
@@ -2562,9 +2566,11 @@ MSG
 - `continuity-measured-answer-to-answer` (accepted, H9). "Continuously past" a span is measured from a streak's first answer to its LATEST, never to `now`, so a cause stands only on evidence. Each is inclusive at its span.
 - `hold-and-presence-continuity-survive-observations` (accepted, H9). A `collectable` observation never ends the hold's or presence's continuity, since a held id is re-observed between holds. Every other answer, and every act outcome, ends both.
 - `collector-l1-imports-the-formula-file` (accepted, H2). The brief says the lane's L1 file imports `shared/api.js` only, but R87 makes it import wave 8's formula. `collectLane.ts` imports `'./childReclaimSweep.js'`, an L1 file that itself imports L0 alone, and the pacing suite pins that its imports are exactly those two.
+- H13's four die and terminal readings (accepted, H13), each named by slug in the wave-done: `flock-unavailable-takes-no-floor`, `would-collect-ends-the-die-streak`, `terminal-refusal-keeps-the-refusal-floor` and `terminal-failure-clears-the-deferral-count`.
 
 **Files:**
 - Modify: `server/src/childReclaimSweep.ts`. ONE edit: `function childReclaimTierFrom(` → `export function childReclaimTierFrom(` (:918). No parameter, no widened type, no docstring change, and no reclaim answer changes.
+- Modify: `server/test/single-definition.test.ts`. ONE line, edited in place (line-neutral): the archive-door scan's `want` line (:4192 at `d0c2b7803`) excuses `'run-open'` in `server/src/collectLane.ts` by name, as `AUDIT_WORDS` excuses the audit's words (5c). No other line, and no new case. Task 6 adds its own file to that array in its own commit.
 - Modify: `server/src/collectLane.ts`.
   - The import block gains the `'./childReclaimSweep.js'` import below, and `type CollectToken` in the `'../../shared/api.js'` import if it is not already there.
   - The licence-and-pacing block is appended below Task 3's population block.
@@ -2671,6 +2677,7 @@ grep -n '^export function collectRefusalClass(word: string): CollectRefusalClass
 grep -n -A8 '^export type CollectAudit' server/src/collectLane.ts                                  # H3: verdict and unmeasured carry witnessRun and leaf
 grep -n '^export function collectPopulation\|^export const collectForgets' server/src/collectLane.ts   # Task 3
 grep -n '^function childReclaimTierFrom(' server/src/childReclaimSweep.ts                          # wave 8, private: :918 at d0c2b7803
+grep -n "const want = AUDIT_WORDS.has(code) ?" server/test/single-definition.test.ts                # the archive-door scan's want line: :4192 at d0c2b7803 (5c edits it)
 grep -o '_ws_collect_refuse [a-z-]* ' ccd/ccd | sort -u                                            # nine words at d0c2b7803
 ```
 
@@ -4082,14 +4089,22 @@ export function collectFeedStep(e: CollectEntry, cue: CollectFeedCue): { readonl
 }
 ```
 
+5c. The archive-door scan's excuse (`server/test/single-definition.test.ts`, ONE line edited in place, line-neutral). The scan `it.each(CODES)("'%s' is a code-line literal in shared/api.ts alone")` (:4189-4193 at `d0c2b7803`) wants every quoted `'run-open'` on a code line to be in `shared/api.ts` alone. 5b's `COLLECT_HOLD_WHY_TABLE` spells it, and H3 fixes that name. So excuse the collector's hold vocabulary by name, as `AUDIT_WORDS` excuses the audit's words and `worktree-gone` is excused for the docs lane. No other `CODES` member is spelled by the collector (measured at planning). Task 6 adds `server/src/coord/collectTempRoot.ts` to this array in its own commit, for its `held('run-open', …)`.
+
+```bash
+cd server && sed -i "/const want = AUDIT_WORDS.has(code) ?/s|: code === 'worktree-gone'|: code === 'run-open' ? ['server/src/collectLane.ts', 'shared/api.ts'] : code === 'worktree-gone'|" test/single-definition.test.ts
+grep -c "code === 'run-open' ? \['server/src/collectLane.ts', 'shared/api.ts'\]" test/single-definition.test.ts   # 1
+git diff --stat test/single-definition.test.ts      # 1 file changed, 1 insertion(+), 1 deletion(-)
+```
+
 - [ ] **Step 6: Run to pass**
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/collect-licence.test.ts test/collect-pacing.test.ts test/collect-population.test.ts
-cd server && ./node_modules/.bin/vitest run test/child-reclaim-persistent-tier.test.ts test/child-reclaim-tier-lane.test.ts test/child-reclaim-sweep-policy.test.ts
+cd server && ./node_modules/.bin/vitest run test/child-reclaim-persistent-tier.test.ts test/child-reclaim-tier-lane.test.ts test/child-reclaim-sweep-policy.test.ts test/single-definition.test.ts
 ```
 
-Expected: PASS. `collect-licence` is at 70/70, `collect-pacing` at 68/68 and `collect-population` at 33/33 (re-measure). The three wave 8 suites are green at their own counts, unchanged: the export changed no reclaim answer. Run in the FOREGROUND, under 600 s.
+Expected: PASS. `collect-licence` is at 70/70, `collect-pacing` at 68/68 and `collect-population` at 33/33 (re-measure). The three wave 8 suites are green at their own counts, unchanged: the export changed no reclaim answer. `single-definition` is green with 5c's line. Without it, it reds `a second 'run-open': expected [ 'server/src/collectLane.ts', 'shared/api.ts' ] to deeply equal [ 'shared/api.ts' ]` (re-measure). Run in the FOREGROUND, under 600 s.
 
 Measured on the scratch copy, kept here for the reviewer, not asserted:
 - with a terminal answer alternating with `unmeasured checkouts`, 9 terminal audits fall in the first 24 h and 3 in the second;
@@ -4188,7 +4203,7 @@ Make each mutation alone on the Step 6 tree, run its file in the FOREGROUND (`cd
 
 ```bash
 git add server/src/childReclaimSweep.ts server/src/collectLane.ts server/test/collectAnswers.ts \
-  server/test/collect-licence.test.ts server/test/collect-pacing.test.ts
+  server/test/collect-licence.test.ts server/test/collect-pacing.test.ts server/test/single-definition.test.ts
 git commit -m "$(cat <<'MSG'
 feat(collect): the collector's licence and pacing, in memory
 
@@ -4212,6 +4227,9 @@ terminal advances the terminal run. not-witnessed clears the three runs
 and advances the deferral count. A pre-lock die other than
 flock-unavailable takes the refusal floor, and the same die recurring
 past the ceiling is listed. Evidence is the latest document's.
+
+The archive-door scan in single-definition excuses the hold-why
+'run-open' in collectLane.ts by name, as it excuses the audit's words.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 MSG
@@ -4241,7 +4259,7 @@ MSG
   - Listed once `changed-recently` has answered for 24 h, first answer to latest.
   - Shadow's would-collect is listed while its episode stands (`collectWouldCollectStands`).
   - Ids held by (b) or (c) collapse into ONE box-wide line, once held a ceiling (`unvouched-line-waits-the-ceiling`, H8).
-  - The box-wide unsettled line covers an unsettled collector call OR executor JOB; a job's clause says the collector's act slot is held (H1, R85).
+  - The box-wide unsettled line covers an unsettled collector call OR executor JOB; a job's clause says the collector's act slot is held (H1, R85), whether or not its `ws-collect` is out: the line treats `'act'` and `'job'` alike as slot-held, and Task 7's `collectUnsettled` checks the job's `CHILD_RECLAIM_STALL_MS` bound before the audit bound.
   - `records` lists no per-id item while `tmpquarantine` is unmeasured.
   - The `no-document` and `lock` box lines stand only when at least two distinct ids answered them in a pass where no audit answered anything else. The per-id item at tier entry stands regardless.
 - **R90, the pre-flight items this task closes:** `detail-unsafe-upper-bounds-unpinned` and wave 8's deferred `detailUnsafe` classes. (`attention-runid-sentence-misses-leaf-arms` is Task 1's; this task's prose suite pins Task 1's words.)
@@ -4336,7 +4354,7 @@ MSG
     paths: readonly string[]): string;
   ```
 - **For Task 7** (`watch.ts`):
-  - It keeps `boxProbes` (through `collectBoxProbesAfter`, over every audit and act answer), the pass's `passAudits` (through `collectPassClass`, over every learning and executor audit, keyed by composing pass; it publishes the latest pass whose audits all settled), `flockLatched`, the `unsettled` kinds (`'audit'`, `'act'` or `'job'`, from its flights' phases, each bound counted from the enqueue) and the population's `unmeasured` doubts and `refusedNames` (Task 3's, as they stand).
+  - It keeps `boxProbes` (through `collectBoxProbesAfter`, over every audit and act answer), the pass's `passAudits` (through `collectPassClass`, over every learning and executor audit, keyed by composing pass; it publishes the latest pass whose audits all settled), `flockLatched`, the `unsettled` kinds (`'audit'`, `'act'` or `'job'`, from its flights' phases, each bound counted from the enqueue, an act job's `CHILD_RECLAIM_STALL_MS` bound checked FIRST so a job whose own audit or `ws-collect` hangs past it reads `'act'` or `'job'`, never `'audit'`) and the population's `unmeasured` doubts and `refusedNames` (Task 3's, as they stand).
   - It calls `collectAttentionItems({ entries: <the lane's entries, each mapped through collectAttentionViewOf>, box, nowMono })` and passes the result as `childReclaimAttentionWithLeaves`'s third argument, replacing this task's `CHILD_RECLAIM_COLLECT_NONE` (and dropping that name from `watch.ts`'s import once unused). It re-points census (c) again in its own commit.
   - It writes the feed rows. After each fold it calls `collectFeedStep(entry, collectFeedCueOfAudit(a))` or `collectFeedStep(entry, collectFeedCueOfAct(r))` (a would-collect: `{ kind: 'row', key: collectWouldCollectKey(token) }`), and writes a row only when `opened !== null`. The writer is a private `watch.ts` method in `recordExpireFeed`'s idiom (`kind: 'run'`, recorded and never pushed), outside `collectLane.ts` and `collectTempRoot.ts` (R82), titled from `COLLECT_FEED_TITLE` with this task's bodies.
 
@@ -4361,7 +4379,7 @@ grep -nE "export interface CollectEntry\b|export type CollectHoldWhy|export type
 grep -n "'run-after-witness'\|'id-in-open-run'\|readonly kind: 'die'" server/src/collectLane.ts      # (f2) H3's hold whys and H1's die cause: each present
 grep -n "collectProbeClassOf\|CollectListingLine\|'run-postdates-witness'\|'run-names-id'" server/src/collectLane.ts   # (f3) NOTHING
 sed -n '/^export type CollectAudit =/,/;$/p' server/src/collectLane.ts                               # (f4) the verdict and unmeasured arms carry witnessRun and leaf (H3)
-grep -nE "^export const (collectable|verdict|unmeasured|NO_DOCUMENT|UNREADABLE|COLLECTED|refusedAct|failedAct|DIE|ACT_NO_DOCUMENT|T1|DAY|step) " server/test/collectAnswers.ts   # (k) Task 4's builders: THIRTEEN
+grep -nE "^export const (collectable|verdict|unmeasured|NO_DOCUMENT|UNREADABLE|COLLECTED|refusedAct|failedAct|DIE|ACT_NO_DOCUMENT|T1|DAY|step)\b" server/test/collectAnswers.ts   # (k) Task 4's builders: THIRTEEN
 grep -c "^import" server/src/collectLane.ts                                                          # (l) TWO (H2)
 grep -n "^export function childReclaimTierFrom" server/src/childReclaimSweep.ts                     # (g) Task 4: ONE
 grep -n "const leafIdOk" server/src/childReclaimSweep.ts                                            # (h) Task 1: NOTHING
@@ -4552,6 +4570,7 @@ const BOTH = 'The reclaim of this child completed, but ccd kept its clips direct
 ```
 
 - In "lists a done row that kept the temp root…", the expected yield gains `clipsClause: null` after `detail: 'temp root kept (in-use): pid 7',`.
+- In "lists a line cut to fit, with no run and its own sentence", the expected yield gains ``clipsClause: `whether its clips directory ~/.cc-clips/${ID} was kept is not known`,`` after `detail: 'clips kept (refused)',`. The row is `truncated: true, meas: null`, so its clips leaf is `truncated` and Step 4(e) yields that clause.
 - In the `on the list` describe:
   - add `CHILD_RECLAIM_COLLECT_NONE, type ChildReclaimLeafKept` to the `../src/childReclaimSweep.js` import;
   - add this line under `const item = …`:
@@ -4649,6 +4668,15 @@ describe('collectAttentionItems — one item per id, each at its own threshold (
     expect(one(view({ verbFailed: runOf('verb-failed', 'probe-unmeasured', 4) }))?.word).toBe('verb-failed');
   });
 
+  it('an unknown probe or failure word reaches its sentence only through childReclaimDetailText', () => {
+    const bad = `fro${NL}${RLO}b`;
+    for (const v of [view({ failing: runOf('failing', bad, 4) }), view({ verbFailed: runOf('verb-failed', bad, 4) })]) {
+      const s = one(v)!.sentence;
+      expect(s.includes(NL) || s.includes(RLO), s).toBe(false);
+      expect(s).toContain('(fro b)');
+    }
+  });
+
   it('a terminal answer is listed at once with what ccd last answered, never that it refuses now (H8), and outranks a standing in-use', () => {
     const terminal = runOf('terminal', 'witness-mismatch', 1, true, 'witness unreadable');
     expect(one(view({ witnessRun: null, terminal }))).toEqual({ kind: 'collect', sessionId: 'demo-a', runId: null,
@@ -4664,10 +4692,11 @@ describe('collectAttentionItems — one item per id, each at its own threshold (
     expect(one(view({ changedRecentlySince: 0 }))?.word).toBe('changed-recently');
   });
 
-  it('a standing would-collect episode is listed while shadowed', () => {
+  it('a standing would-collect episode is listed, in words true whether the lane is still shadowed or armed since', () => {
     const a = one(view({ wouldCollect: true }))!;
     expect(a.word).toBe('would-collect');
-    expect(a.sentence).toContain('The collector is shadowed, so nothing was removed');
+    expect(a.sentence).toContain('While the collector was shadowed');
+    expect(a.sentence, 'a flip to live does not end the episode, so no present-tense shadow').not.toMatch(/is shadowed|arms it by hand/);
   });
 
   it('a pre-lock die recurring past the ceiling is listed, naming ccd’s word; nothing was removed (H1)', () => {
@@ -4693,13 +4722,13 @@ describe('collectAttentionItems — one item per id, each at its own threshold (
 });
 
 describe('box-wide lines: single items under fixed labels (spec §5.10)', () => {
-  it('every label is spelled once, holds a space or a slash, and is no session id', () => {
+  it('every label is spelled once, holds a slash, which no registry file name can carry, and is no session id', () => {
     const labels = Object.values(COLLECT_BOX_LABELS);
     expect(Object.keys(COLLECT_BOX_LABELS).sort()).toEqual(['box-probe', 'flock', 'lock', 'no-document', 'no-run',
       'refused-names', 'tmpquarantine', 'tmproots', 'unsettled', 'unvouched']);
     expect(new Set(labels).size).toBe(labels.length);
     for (const l of labels) {
-      expect(/[ /]/.test(l), l).toBe(true);
+      expect(/\//.test(l), l).toBe(true);
       expect(isSessionIdShape(l), l).toBe(false);
       expect(isTmpRootId(l), l).toBe(false);
     }
@@ -4735,12 +4764,15 @@ describe('box-wide lines: single items under fixed labels (spec §5.10)', () => 
     expect(pa({ a: 'lock', b: 'lock', c: 'no-document' })).toEqual([]);
   });
 
-  it('the flock latch and unsettled calls or jobs each raise one line; unsettled names its ids, and a job says the act slot is held (H1)', () => {
+  it('the flock latch and unsettled calls or jobs each raise one line; unsettled names its ids, and a job says the act slot is held, its act out or not (H1, R85)', () => {
     expect(items({}, { flockLatched: true }).box.map((a) => a.word)).toEqual(['flock']);
+    const two = items({}, { unsettled: new Map([['demo-b', 'audit'], ['demo-a', 'audit']]) }).box;
+    expect(two.map((a) => a.word)).toEqual(['unsettled']);
+    expect(two[0]!.sentence).toContain('demo-a, demo-b');
+    expect(two[0]!.sentence, 'audits alone hold no slot').not.toContain('act slot');
     const u = items({}, { unsettled: new Map([['demo-b', 'audit'], ['demo-a', 'act']]) }).box;
-    expect(u.map((a) => a.word)).toEqual(['unsettled']);
-    expect(u[0]!.sentence).toContain('demo-a, demo-b');
-    expect(u[0]!.sentence).not.toContain('act slot');
+    expect(u[0]!.sentence).toContain('within its bound for demo-b.');
+    expect(u[0]!.sentence, 'a job whose act is out holds the slot too (R85)').toContain('act slot is held by the job for demo-a');
     const j = items({}, { unsettled: new Map([['demo-b', 'audit'], ['demo-c', 'job']]) }).box;
     expect(j.map((a) => a.word)).toEqual(['unsettled']);
     expect(j[0]!.sentence).toContain('within its bound for demo-b.');
@@ -5055,7 +5087,7 @@ Expected: FAIL. None of these was measured at planning, so record the measured c
 - `collect-feed-body`: every case fails with `… is not a function` (the bodies and the two cue functions), or with `Cannot convert undefined or null to object` for `COLLECT_FEED_TITLE`.
 - `child-reclaim-detail-unsafe-classes`: the new Cf rows (LRM, RLM, ALM, ZWSP, ZWJ, the byte-order mark, the soft hyphen, U+180E, U+2060, U+2064, U+206A, U+206F, U+FFF9, U+FFFB and the tag letter), both Cs rows, U+034F and the three tag-range rows fail with `expected 'left…right' to be 'left right'`. The rows wave 8 already covers (ESC, US, DEL, APC, RLO, PDI, U+2028, U+2029) and the CONTROL and `LC_LINE_MAX` cases pass.
 - `child-reclaim-leaf-kept-prose`: every case fails but the `runId` case, which is GREEN at entry: Task 1 rewrote those three lines, and this file only pins them. The sentences red on `expected '…stays on disk and ccrc deletes nothing more of it…' to be '…'`, and the source scan reds on `not.toContain`. The yield case reds on `expected [ [ 'demo-k', undefined ], … ]`.
-- `child-reclaim-leaf-kept`: the sentence cases red on the new constants. The three merge cases red on `CHILD_RECLAIM_COLLECT_NONE` being undefined: `TypeError: Cannot read properties of undefined (reading 'perId')`, or an older merge's output.
+- `child-reclaim-leaf-kept`: the sentence cases red on the new constants. The two yield cases ("lists a done row that kept the temp root…" and "lists a line cut to fit, with no run and its own sentence") red on the `clipsClause` each now expects: `expected [ { item: …, …(2) } ] to deeply equal [ { item: …, …(3) } ]`. The three merge cases red on `CHILD_RECLAIM_COLLECT_NONE` being undefined: `TypeError: Cannot read properties of undefined (reading 'perId')`, or an older merge's output.
 - `child-reclaim-detail-text`: green. Its CONTROL row now names U+2070, which is safe before and after.
 
 - [ ] **Step 3: L0, `shared/api.ts` — NO edit (H3).** Task 1 declared `ChildReclaimCollectMany` in its ONE union-line rewrite (`collect-many-arm-declared`), rewrote the doc pair (`attention-doc-pair-counts-the-collector`) and the `runId` sentence (`attention-runid-sentence-misses-leaf-arms`), and its `COLLECT_BOX_LABELS` table stands with Task 1's label strings. Step 0 (a) to (d) and (j) measured all of it. This task's sentences read the labels through `COLLECT_BOX_LABELS[<key>]`, never a copy of a label string, and Step 10 proves `shared/api.ts` untouched.
@@ -5228,7 +5260,7 @@ export function childReclaimAttentionWithLeaves(
         .map((k) => ({ ...k, sentence: withSecond(k.sentence, reclaimSecond(k.sessionId)) })),
       ...childReclaimKeptList(kept.filter((k) => reclaimSecond(k.sessionId).length === 0)));
   }
-  const singles: ChildReclaimAttention[] = [];
+  const singles: ChildReclaimCollectAttention[] = [];
   const loose: ChildReclaimCollectAttention[] = [];
   for (const c of [...collect.perId].sort(childReclaimBySession)) {
     if (taken.has(c.sessionId)) continue;
@@ -5340,7 +5372,7 @@ export function collectAttentionViewOf(e: CollectEntry): CollectAttentionView {
     if (c.kind === 'held') hold = { why: c.why, since: c.sinceMono };
     else if (c.kind === 'presence') presenceSince = c.sinceMono;
     else if (c.kind === 'die') die = { word: c.word, since: c.sinceMono };
-    else if (c.kind === 'terminal' || c.kind === 'failing' || c.kind === 'verb-failed') continue;
+    else if (!('sinceMono' in c)) continue;   // the three runs, projected whole below
     else if (c.kind === COLLECT_CHANGED_RECENTLY) changedRecentlySince = c.sinceMono;
     else deferral = { word: c.kind, detail: c.detail, since: c.sinceMono };
   }
@@ -5355,10 +5387,11 @@ export function collectAttentionViewOf(e: CollectEntry): CollectAttentionView {
 /** How one pass's audit counts for the two pass-scoped box lines (spec §5.10). */
 export type CollectPassClass = 'no-document' | 'lock' | 'other';
 
-/** Which collector work is unsettled past its bound (spec §5.10, H1, R85): a learning or executor AUDIT (twice the
- *  90 s row), the ACT (`CHILD_RECLAIM_STALL_MS`), or an executor JOB that took the act slot and has not settled in
- *  `CHILD_RECLAIM_STALL_MS`, whether or not it composed a call. Each bound counts from the enqueue
- *  (`unsettled-bound-counts-from-the-queue`). */
+/** Which collector work is unsettled past its bound (spec §5.10, H1, R85): `'audit'`, a learning audit past twice the
+ *  90 s row, or an executor job's own audit past it and short of `CHILD_RECLAIM_STALL_MS`; or an executor JOB that took the act
+ *  slot and has not settled in `CHILD_RECLAIM_STALL_MS`, whether or not it composed a call: `'act'` when its
+ *  `ws-collect` is out, `'job'` otherwise. The job's bound is checked first, and the box line says the act slot is
+ *  held for `'act'` and `'job'` alike. Each bound counts from the enqueue (`unsettled-bound-counts-from-the-queue`). */
 export type CollectUnsettledKind = 'audit' | 'act' | 'job';
 
 /** What the box-wide lines read (spec §5.10): the population's doubted listings (Task 3's `CollectListingDoubt`, the
@@ -5439,7 +5472,7 @@ const COLLECT_ITEM_MANY: Readonly<Record<CollectItemWord, string>> = {
   failing: 'the temp-root collector has not been able to measure its temp root for some time; nothing was removed, and ccrc keeps asking.',
   'verb-failed': 'the temp-root collector’s attempts to collect its temp root keep failing; ccd kept what still stands each time.',
   'changed-recently': 'something under its temp root has kept changing for more than a day, though no process of this user uses it.',
-  'would-collect': 'the temp-root collector would collect its temp root now; it is shadowed, so nothing was removed.',
+  'would-collect': 'while the collector was shadowed, the temp-root collector found its temp root orphaned and idle and removed nothing.',
 };
 const COLLECT_TERMINAL_MANY = 'ccd’s last answer for its temp root was terminal; each is listed for you to look at, and '
   + 'the feed row of each names ccd’s word and what it found.';
@@ -5527,8 +5560,8 @@ function collectItemOf(id: string, v: CollectAttentionView, recordsSubsumed: boo
   }
   if (v.wouldCollect) {
     return { word: 'would-collect', many: COLLECT_ITEM_MANY['would-collect'],
-      sentence: `The temp-root collector would collect ${tmp} now: two audits at least a pass apart found it orphaned `
-        + 'and idle. The collector is shadowed, so nothing was removed; a person arms it by hand.' };
+      sentence: `While the collector was shadowed, two audits at least a pass apart found ${tmp} orphaned and idle, so it `
+        + 'recorded that it would collect it and removed nothing. This line ends once ccd answers anything else for it.' };
   }
   return null;
 }
@@ -5581,10 +5614,10 @@ function collectBoxItems(b: CollectBoxFacts, unvouched: readonly string[]): Chil
     line('flock', 'ccd on the fleet box answered that flock (util-linux) is unavailable, so the temp-root collector '
       + 'composes nothing until flock is installed and this server restarts.');
   }
-  const calls = [...b.unsettled].filter(([, k]) => k !== 'job').map(([id]) => id).sort();
-  const jobs = [...b.unsettled].filter(([, k]) => k === 'job').map(([id]) => id).sort();
+  const calls = [...b.unsettled].filter(([, k]) => k === 'audit').map(([id]) => id).sort();
+  const jobs = [...b.unsettled].filter(([, k]) => k === 'job' || k === 'act').map(([id]) => id).sort();
   if (calls.length + jobs.length > 0) {
-    // H1, R85: the line covers an unsettled collector call OR executor job; a job's clause says the act slot is held.
+    // H1, R85: an unsettled audit call OR executor job; a job's clause, its act out or not, says the act slot is held.
     const said = [
       ...(calls.length === 0 ? [] : [`A temp-root collector call to ccd has not settled within its bound for `
         + `${childReclaimIdsNamed(calls)}.`]),
@@ -5755,7 +5788,7 @@ Expected:
 - the second command: green, with the counts the earlier tasks left. The trailing `collect-` filter runs Tasks 2 to 4's collector files.
   - `child-reclaim-leaf-kept-lane` stays green: its sentence check is a `stringContaining` on the temp-root clause, which is unchanged.
   - `mail-routes`' kebab scanner reads `server/src/coord` only, and this task adds no quoted literal there.
-  - `single-definition` stays green: the only new literal lists are the hold-why and item-word tables, each total over its own type.
+  - `single-definition` stays green: `'run-open'`, the hold-why table's key in `collectLane.ts`, is excused by name on the archive-door scan's `want` line (`:4192` at `d0c2b7803`, Task 4's in-place edit); this task adds no other copy of a `CODES` literal to `shared`, `server/src`, `pwa/src` or `agent/src`, and the item-word table is total over its own type.
 
 Run each command in the foreground with a timeout of at least 600000 ms. If `child-reclaim-sweep` reds on a known load flake, re-run it in isolation before calling it a break.
 
@@ -5770,7 +5803,7 @@ Expected: `pwa tsc rc=0`, and `git status` prints nothing. The new union arms co
 
 `collect-attention.test.ts`'s last case reads the real list through `childReclaimAttentionOf`, using a dynamic `import()` that vitest resolves; `typecheck-tests` sees it as `Promise<any>`. It covers a per-id item, a `collect:in-use` line and an unmeasured-listing box line with no measured id. How they render, read off `ChildReclaimBanner.tsx` at `d0c2b7803`:
 - A `collect` item passes `isAttention` (`childReclaimWords.ts:78-83`: a string `sessionId`, a string `sentence`, and a null-or-number `runId`). The banner renders it at `:148-153` as `<li key={a.sessionId}>`, with `<span className="child-reclaim-who">` holding `a.runId === null ? a.sessionId : \`run #${a.runId} · ${a.sessionId}\``, then the sentence.
-- A box-wide line's `sessionId` is its fixed label, rendered as PLAIN TEXT in that span: a React text node, not a link. The labels are distinct, so the `key` stays unique, and no session id can equal one (it holds a space or a `/`).
+- A box-wide line's `sessionId` is its fixed label, rendered as PLAIN TEXT in that span: a React text node, not a link. The labels are distinct, so the `key` stays unique, and no session id or registry id can equal one: each holds a `/`, which no file name under `$REG` can carry (a reclaim item's id comes from a registry file name with no shape filter, so a space alone would not do).
 - A `ChildReclaimCollectMany` passes `isKeptMany` (`:98-103`) and renders at `:141-146`, keyed `kept-many collect:<word>`, a key no other line uses. Each member renders as `run #N · <id>`.
 
 Do NOT add a PWA test file.
@@ -5823,7 +5856,7 @@ Do NOT add a PWA test file.
 | T5.38 | `collectTmp`: `childReclaimDetailText(leaf)` → `leaf` | D | "every ccd-sourced string reaches a body only through childReclaimDetailText…": `a newline: expected true to be false` |
 | T5.39 | `collectBoxItems`: `only('no-document') >= 2` → `>= 1` | C | "no-document and lock…": `expected [ 'no-document' ] to deeply equal []` |
 | T5.40 | `only`: `answers.every((a) => a === c) ? answers.length : 0` → `answers.filter((a) => a === c).length` | C | the same case, on `{ a, b, c: 'other' }` and on `{ a, b, c: 'no-document' }` for `lock` |
-| T5.41 | `COLLECT_BOX_LABELS['no-run']` → `'temp-roots-no-run'` | C | "every label is spelled once, holds a space or a slash…": `temp-roots-no-run: expected false to be true` |
+| T5.41 | `COLLECT_BOX_LABELS['no-run']` → `'temp-roots-no-run'` | C | "every label is spelled once, holds a slash…": `temp-roots-no-run: expected false to be true` |
 | T5.42 | `collectBoxProbesAfter`: `return passed ? new Map() : prev;` → `return prev;` | C | "a box-wide probe stands until an answer passes every rung…": `expected 1 to be +0` |
 | T5.43 | `collectFeedCollectedBody`'s witness-only arm → `` `${collectWho(id, runId)}: the temp root was removed; …` `` | D | "a witness-only collect says no leaf stood…": `expected '…removed…' not to match /remov/` |
 | T5.44 | `collectFeedCollectedBody`: `childReclaimDetailText(r.record)` → `r.record` | D | "every ccd-sourced string…": `a newline: expected true to be false` |
@@ -5833,11 +5866,14 @@ Do NOT add a PWA test file.
 | T5.48 | `collectAttentionViewOf`: `else if (c.kind === 'die') die = { word: c.word, since: c.sinceMono };` → `else if (c.kind === 'die') continue;` | C | "a pre-lock die recurring for a ceiling…": `expected null to deeply equal { word: 'lock-unopenable', since: 0 }` |
 | T5.49 | `collectAttentionViewOf`: `wouldCollect: collectWouldCollectStands(e)` → `wouldCollect: e.feedEpisode !== null` | C | "wouldCollect is true while the would-collect episode stands…": `expected true to be false` |
 | T5.50 | the terminal sentence (H8): `` `${collectCap(tmp)}: ccd’s last terminal answer for it was ${w}${said}…` `` → `` `${collectCap(tmp)}: ${lead ?? w}…` `` (the present-tense lead H8 forbids) | C | "a terminal answer is listed at once with what ccd last answered…": `expected { … } to deeply equal { … }` |
-| T5.51 | the unsettled line: `filter(([, k]) => k === 'job')` → `filter(() => false)` | C | "the flock latch and unsettled calls or jobs…": `expected '…' to contain 'act slot is held by the job for demo-c'` |
+| T5.51 | the unsettled line: `filter(([, k]) => k === 'job' \|\| k === 'act')` → `filter(() => false)` | C | "the flock latch and unsettled calls or jobs…": `a job whose act is out holds the slot too (R85): expected '…' to contain 'act slot is held by the job for demo-a'` |
 | T5.52 | `collectAttentionItems`: `d.listing === 'tmpquarantine'` → `d.listing === 'tmproots'` | C | "records lists no per-id item while tmpquarantine is unmeasured": `expected [ { … } ] to deeply equal []` |
 | T5.53 | `collectBoxItems`: drop the sort of `b.unmeasured` (`const doubts = [...b.unmeasured];`) | C | "an unmeasured listing, an over-cap listing and refused names…": the two listing lines in the doubts' order, not the table's |
 | T5.54 | `collectFeedCueOfAudit`: `case 'collectable': return { kind: 'observe', token: a.token };` → `case 'collectable': return { kind: 'row', key: a.kind };` | D | "audits": `expected { kind: 'row', … } to deeply equal { kind: 'observe', … }`, and the episode case's `feedEpisode` |
 | T5.55 | `collectFeedCueOfAct`: `` `refused ${r.word}` `` → `'refused'` | D | "acts": `expected { kind: 'row', key: 'refused' } to deeply equal { kind: 'row', key: 'refused in-use' }` |
+| T5.56 | `collectProbeText`: `childReclaimDetailText(word)` → `word` | C | "an unknown probe or failure word reaches its sentence only through childReclaimDetailText": `expected true to be false` |
+| T5.57 | the unsettled line, back to the pre-R85 split: `calls`' `k === 'audit'` → `k !== 'job'`, and `jobs`' `k === 'job' \|\| k === 'act'` → `k === 'job'` | C | "the flock latch and unsettled calls or jobs…": the act entry joins the call clause, `expected 'A temp-root collector call to ccd has not settled within its bound for demo-a, demo-b. …' to contain 'within its bound for demo-b.'` |
+| T5.58 | the would-collect sentence: restore `` `The temp-root collector would collect ${tmp} now: two audits at least a pass apart found it orphaned ` `` + `'and idle. The collector is shadowed, so nothing was removed; a person arms it by hand.'` | C | "a standing would-collect episode is listed…": `expected '…' to contain 'While the collector was shadowed'` |
 
 Revert each mutation, then re-run Step 7's first command: green.
 
@@ -5948,8 +5984,10 @@ MSG
   - the `COLLECT_CAP` list (`:65`; `grep -n "declared, read by nothing" …`).
 
   The `'ws-collect'` list (`:63`) and the `'--collect'` list (`:64`) stay byte for byte. The describe, its title and the deliberate rewrite are Task 8's (R86). Task 7 adds `'watch.ts'` to the `COLLECT_CAP` list in its own commit (H5).
-- Modify (comment-only, line-neutral): `server/src/ccdargv.ts`, the two docstrings this commit makes false (H5, `ccdargv-collect-docstrings-rewritten`): `wsCollect`'s "Composed by NOTHING in this build…" (`:455-456` at `d0c2b7803`) and `COLLECT_CAP`'s "…Nothing reads it in this build" (`:895-896`). Step 4 (d).
-- No edit to `shared/api.ts`, `server/src/collectLane.ts`, `server/src/childReclaimSweep.ts`, `server/src/watch.ts`, `README.md` or `single-definition.test.ts`.
+- Modify (comment-only, line-neutral): `server/src/ccdargv.ts`, the two docstrings this commit makes false (H5, `ccdargv-collect-docstrings-rewritten`): `wsCollect`'s "Composed by NOTHING in this build…", the LAST THREE lines of the docstring as Task 1 Step 4 (e) left it (from the `dec trails, and ccd strips it before it binds a positional. Composed by NOTHING…` line through `until then. */`; Task 1 grew it from 5 lines to 7, so the `:455-456` of `d0c2b7803` no longer locate it), and `COLLECT_CAP`'s "…Nothing reads it in this build" (`:895-896` at `d0c2b7803`, two lines lower after Task 1). Step 4 (d).
+- Modify: `server/test/mail-routes.test.ts`, one import and one arm of the kebab scanner's accept chain, with its comment and the assertion message's last words (P9). The scanner (`it('every quoted kebab token in server/src/coord that looks like a code is declared'`, `:574` at `d0c2b7803`) reads every `.ts` file in `server/src/coord`, and this executor spells thirteen kebab literals no guard admits: `id-in-open-run`, `id-refused`, `marker-flip`, `no-document`, `no-witness-run`, `not-asked`, `not-collectable`, `not-licensed`, `pair-cleared`, `run-absent`, `run-after-witness`, `run-open` and `would-collect`. They are admitted through the executor's own exported guard, `isCollectExecutorKebab`, derived from its tables, as `isArchivedExpiryKebab` (`server/src/archivedExpiry.ts:596`) admits the expiry lane's: never through `NOT_CODES`. Step 4 (e).
+- Modify: `server/test/single-definition.test.ts`, ONE in-place word, line-neutral (P8). The archive-door scan (`it.each(CODES)("'%s' is a code-line literal in shared/api.ts alone"`, `:4191` at `d0c2b7803`) holds `'run-open'` to `shared/api.ts` and the files excused by name, and the hold's `held('run-open', …)` spells it here. Task 4 excused `server/src/collectLane.ts` in that `want` line; this commit adds `'server/src/coord/collectTempRoot.ts'` to the same array. Nothing else in the file changes, and no line is added (`session-hook.test.ts`'s citation audit cites it by line). Step 4 (f).
+- No edit to `shared/api.ts`, `server/src/collectLane.ts`, `server/src/childReclaimSweep.ts`, `server/src/watch.ts` or `README.md`, and none to `single-definition.test.ts` beyond Step 4 (f)'s one array.
 
 **Interfaces:**
 - Consumes:
@@ -5990,6 +6028,7 @@ MSG
     obs: CollectObservation | null) => boolean;
   export type CollectHoldWhy =
     | 'run-open' | 'run-absent' | 'run-after-witness' | 'id-in-open-run' | 'no-witness-run' | 'store-unreadable';
+  export const COLLECT_HOLD_WHYS: readonly CollectHoldWhy[];   // Task 4's, the table's keys; isCollectExecutorKebab reads it
   // Task 2's parse contract the hold keys on (H3, H7; pinned by this task's consumer case):
   //   resume === null  iff the document carries NO `resume` key (a present non-string `resume` is `unreadable`);
   //   witnessRun === null && witnessAt === null  iff `collect.witness` is null; a witness whose `run` or `at` is not a
@@ -6011,7 +6050,10 @@ MSG
   FleetIO.readdir / statMeasured / lstatMeasured  // server/src/io.ts:123 / :127 / :135; MeasuredPathKind :71, MeasuredStat :56
   CcdResult             // server/src/lifecycle.ts:21  grep -n "^export interface CcdResult"
   // Precedents this file follows: expireArchived.ts's expirySwitches (:131), expireAudit (:194) and expireAct (:203);
-  // childReclaim.ts's childReclaimAudit (:1302, verbSupported at :1306).
+  // childReclaim.ts's childReclaimAudit (:1302, verbSupported at :1306); archivedExpiry.ts's isArchivedExpiryKebab (:596),
+  // the mail-routes scanner's guard derived from Records (P9).
+  // Task 4's single-definition excusal (P8): `code === 'run-open' ? ['server/src/collectLane.ts', 'shared/api.ts']`
+  //   in the archive-door scan's `want` line (single-definition.test.ts:4192); Step 4 (f) widens it.
   ```
 - Produces:
   ```ts
@@ -6055,6 +6097,9 @@ MSG
   export function collectOpenRunHold(coord: CollectTempRootDeps['coord'], id: string,
     doc: Pick<CollectAuditCollectable, 'resume' | 'witnessRun' | 'witnessAt'>): CollectHoldRead;
   export function collectTempRoot(deps: CollectTempRootDeps, job: CollectJob): Promise<CollectJobOutcome>;
+  /** mail-routes.test.ts's SIXTEENTH union (P9): every kebab word this file spells, derived from its tables and
+   *  L1's COLLECT_HOLD_WHYS, never a list. */
+  export function isCollectExecutorKebab(v: string): boolean;
 
   // server/test/collectTempRootFixture.ts
   export const ID: string; export const TOK: CollectToken; export const TOK2: CollectToken;
@@ -6102,6 +6147,9 @@ grep -n "Composed by NOTHING in this build\|Nothing reads it in" server/src/ccda
 ls server/src/coord/collectTempRoot.ts 2>/dev/null || echo "absent, as expected"
 grep -n "^const CAP_GATED_VERBS" -A 2 server/test/verb-gate.test.ts         # no 'ws-collect' yet
 grep -n "a reference to either builder\|declared, read by nothing" server/test/ws-collect-wiring.test.ts   # both still ['ccdargv.ts']
+grep -n "code === 'run-open' ?" server/test/single-definition.test.ts   # Task 4's excusal: ['server/src/collectLane.ts', 'shared/api.ts'] (P8)
+grep -n "|| isDeadCoordinatorKebab(tok),\|isCollectExecutorKebab" server/test/mail-routes.test.ts   # one line: the chain's last arm (P9)
+grep -n "export const COLLECT_HOLD_WHYS" server/src/collectLane.ts   # Task 4's, read by the guard (P9)
 ```
 
 Expected: each fixed name is found once at its home, and `collectTempRoot.ts` is absent.
@@ -6110,6 +6158,7 @@ STOP rules:
 - If `collectLicence`, `collectLicenceStands`, `CollectCapture`, `CollectObservation` or `CollectHoldWhy` is absent, or `collectLicenceStands` still takes Task 4's draft shape `(first, cap, laneGen, e)` rather than `(first, composed, now, obs)`, STOP: Task 4 did not land H3's names. The code here calls the licence, the re-read and the hold vocabulary in exactly one place each.
 - If `collectLane.ts` imports any specifier but `'../../shared/api.js'` and `'./childReclaimSweep.js'`, STOP: L1 is broken upstream (H2).
 - If `wsCollect`'s first parameter is still `string`, STOP: Task 1 is not on the branch.
+- If `single-definition.test.ts` has no `code === 'run-open' ?` excusal naming `server/src/collectLane.ts`, STOP: Task 4 did not land P8's in-place edit, and its commit is already red. If `mail-routes.test.ts`'s chain does not end at `|| isDeadCoordinatorKebab(tok),`, re-read it before Step 4 (e) and append the new arm after whatever arm is last.
 
 - [ ] **Step 1: Write the shared fixture**
 
@@ -7027,7 +7076,7 @@ import { CHILD_BIRTH_SKEW_MS } from './childSpent.js';
 import {
   COLLECT_LANE_LIVE_MARKER, collectLicence, collectLicenceStands, parseCollectAudit, parseCollectResult,
   type CollectAudit, type CollectCapture, type CollectHoldWhy, type CollectListing, type CollectObservation,
-  type CollectResult,
+  COLLECT_HOLD_WHYS, type CollectResult,
 } from '../collectLane.js';
 import { TERMINAL_RUN_STATES, TMPROOT_ID_MAX_CHARS, isTmpRootId, type RunState } from '../../../shared/api.js';
 
@@ -7163,6 +7212,35 @@ export type CollectJobOutcome =
 export type CollectLearnAnswer =
   | { readonly kind: 'not-asked'; readonly why: 'caps' }
   | { readonly kind: 'answered'; readonly audit: CollectAnswer<CollectAudit> };
+
+// ── the words this file spells, for the coordination scanner ─────────────────
+
+/** The kebab words this executor spells as quoted literals, as TOTAL tables over their own unions: the outcome kinds,
+ *  the not-asked whys, the answered whys and the audit's kinds (its `no-document`). The hold's whys are L1's
+ *  `COLLECT_HOLD_WHYS`, read, never re-spelled. None is a mail rejection or a run refusal: no `refused` or
+ *  `reject.code` ever carries one; they ride the job's outcome and the lane's memory. */
+const COLLECT_OUTCOME_KINDS: Readonly<Record<CollectJobOutcome['kind'], true>> = {
+  'not-asked': true, answered: true, held: true, 'would-collect': true, acted: true,
+};
+const COLLECT_NOT_ASKED_WHYS: Readonly<Record<Extract<CollectJobOutcome, { kind: 'not-asked' }>['why'], true>> = {
+  caps: true, 'id-refused': true, paused: true, presence: true,
+};
+const COLLECT_ANSWERED_WHYS: Readonly<Record<CollectAnsweredWhy, true>> = {
+  stale: true, 'not-collectable': true, 'not-licensed': true, paused: true, 'marker-flip': true, 'pair-cleared': true,
+  presence: true, caps: true,
+};
+const COLLECT_AUDIT_KINDS: Readonly<Record<CollectAudit['kind'], true>> = {
+  collectable: true, verdict: true, unmeasured: true, unreadable: true, 'no-document': true,
+};
+
+/** Every kebab word this file spells, for `mail-routes.test.ts`'s scan of `server/src/coord`, where this executor
+ *  lives: its SIXTEENTH union, admitted as `isArchivedExpiryKebab` admits the expiry lane's. Derived from the tables
+ *  above and L1's `COLLECT_HOLD_WHYS`, never a list, so a word added to a union is admitted and a typo is not. */
+export function isCollectExecutorKebab(v: string): boolean {
+  const own = (o: object): boolean => Object.prototype.hasOwnProperty.call(o, v);
+  return own(COLLECT_OUTCOME_KINDS) || own(COLLECT_NOT_ASKED_WHYS) || own(COLLECT_ANSWERED_WHYS)
+    || own(COLLECT_AUDIT_KINDS) || (COLLECT_HOLD_WHYS as readonly string[]).includes(v);
+}
 
 // ── words ────────────────────────────────────────────────────────────────────
 
@@ -7446,28 +7524,52 @@ The act's site in `collectTempRoot` is gated by `capSupported(` in its own scope
 The `'ws-collect'` list and the `'--collect'` list stay byte for byte. The describe, its title and the assertion messages are Task 8's deliberate rewrite (R86). Task 7 adds `'watch.ts'` to the capability list in its own commit, because its pass gate asks `capSupported(…, COLLECT_CAP)` in `watch.ts` (H5).
 
 (d) In `server/src/ccdargv.ts`, comment-only and line-neutral (H5, `ccdargv-collect-docstrings-rewritten`, moved here from Task 8 because this commit makes both docstrings false):
-- `wsCollect`'s docstring keeps its first three lines. Its last two (`grep -n "Composed by NOTHING in this build" server/src/ccdargv.ts` and the line after, `:455-456` at `d0c2b7803`) become:
+- `wsCollect`'s docstring, as Task 1 Step 4 (e) left it (seven lines; the `:455-456` of `d0c2b7803` no longer locate it): replace its LAST THREE lines, from `   *  dec trails, and ccd strips it before it binds a positional. Composed by NOTHING in this build: the collector's lane` (`grep -n "Composed by NOTHING in this build" server/src/ccdargv.ts`) through `   *  until then. */`, with:
   ```ts
-     *  positional. Its ONE composer is the collector's executor (`coord/collectTempRoot.ts`), behind `COLLECT_CAP`, armed
-     *  only by `$REG/collect-lane-live`; `ws-collect-wiring.test.ts` pins that no other server source composes it. */
+     *  dec trails, and ccd strips it before it binds a positional. Its ONE composer is the collector's executor
+     *  (`coord/collectTempRoot.ts`), behind `COLLECT_CAP`, armed only by `$REG/collect-lane-live`;
+     *  `ws-collect-wiring.test.ts` pins that no other server source composes it. */
   ```
+  Replacing only the `Composed by NOTHING` line and the one after it would drop `dec trails, and ccd strips it before it binds a` and leave `   *  until then. */` after the comment had closed: a syntax error in `ccdargv.ts` that the stat check below cannot see (P10). Only `tsc` (Step 7) would.
 - `COLLECT_CAP`'s docstring: its last two lines (`grep -n "Nothing reads it in" server/src/ccdargv.ts` and the line after, `:895-896`) become:
   ```ts
    *  to a box with no evidence it exists is the failure the capability reader was built to prevent. The collector's lane
    *  asks it before every audit and again in the act's own scope (`verb-gate.test.ts`, `collect-temp-root.test.ts`). */
   ```
 
-These are Task 8 Step 9's texts, rewrapped to the file's 122-column width, citing `collect-temp-root.test.ts` where Task 8's text cites `collect-lane-scans.test.ts`, which does not exist until Task 8. Check: `git diff --stat server/src/ccdargv.ts` shows equal insertions and deletions (4 and 4), and `grep -c "Composed by NOTHING in this build\|Nothing reads it in" server/src/ccdargv.ts` prints `0`.
+These are Task 8 Step 9's texts, rewrapped to the file's 122-column width, citing `collect-temp-root.test.ts` where Task 8's text cites `collect-lane-scans.test.ts`, which does not exist until Task 8. Check: `git diff --stat server/src/ccdargv.ts` shows equal insertions and deletions (5 and 5: three lines of `wsCollect`'s docstring, two of `COLLECT_CAP`'s), `grep -c "Composed by NOTHING in this build\|Nothing reads it in" server/src/ccdargv.ts` prints `0`, `grep -c "until then\. \*/" server/src/ccdargv.ts` prints `0`, and `cd server && ./node_modules/.bin/tsc --noEmit -p .` prints nothing (the docstring still closes once).
+
+(e) In `server/test/mail-routes.test.ts` (P9), admit the executor's kebab words through its own guard:
+- after `import { isDeadCoordinatorKebab } from '../src/deadCoordinator.js';` (`:23` at `d0c2b7803`), add:
+  ```ts
+  import { isCollectExecutorKebab } from '../src/coord/collectTempRoot.js';
+  ```
+- in the kebab scanner's accept chain, replace its last arm, `        || isDeadCoordinatorKebab(tok),` (`grep -n "|| isDeadCoordinatorKebab(tok)," server/test/mail-routes.test.ts`; `:856` at `d0c2b7803`), with:
+  ```ts
+          || isDeadCoordinatorKebab(tok)
+          // CHILD RECLAMATION, WAVE 9: the SIXTEENTH union, checked together and never merged, on the standing rule
+          // `enter-ignored` above states. `coord/collectTempRoot.ts` (the temp-root collector's one executor) spells its
+          // outcome kinds, its not-asked and answered whys, the open-run hold's whys and the audit's `no-document` as
+          // literals. None is a mail rejection or a run refusal — no route answers with one; they ride the job's outcome
+          // and the lane's memory. Admitted through the exported guard, derived from that file's tables and L1's
+          // `COLLECT_HOLD_WHYS`, never NOT_CODES, for the reason every union above gives.
+          || isCollectExecutorKebab(tok),
+  ```
+- in the assertion message on the line after, `stall-watch settings word or dead-coordinator word` becomes `stall-watch settings word, dead-coordinator word or temp-root collector word`. Nothing else in the file changes.
+
+(f) In `server/test/single-definition.test.ts`, ONE in-place edit of the archive-door scan's `want` line, line-neutral (P8; `grep -n "code === 'run-open' ?" server/test/single-definition.test.ts`, `:4192` at `d0c2b7803`). Task 4's
+`code === 'run-open' ? ['server/src/collectLane.ts', 'shared/api.ts']` becomes
+`code === 'run-open' ? ['server/src/collectLane.ts', 'server/src/coord/collectTempRoot.ts', 'shared/api.ts']`, the order the scan's `.sort()` produces. The hold's `held('run-open', …)` above is the executor's one code-line spelling of the word; the guard reads `COLLECT_HOLD_WHYS` and spells none.
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/collect-temp-root.test.ts test/collect-temp-root-reads.test.ts test/collect-open-run-hold.test.ts
 cd server && ./node_modules/.bin/vitest run test/verb-gate.test.ts test/ws-collect-wiring.test.ts test/whitelist-subset.test.ts
-cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts test/ccdargv-dec-parity.test.ts test/expire-archived.test.ts
+cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts test/ccdargv-dec-parity.test.ts test/expire-archived.test.ts test/mail-routes.test.ts
 ```
 
-Expected: every file PASSES. Run each line in the foreground, with a timeout of at least 600000 ms. If (b) is skipped, `verb-gate.test.ts` reds with `has no ungated call site outside UNGATED_BY_DECISION: expected [ 'coord/collectTempRoot.ts:<n> wsCollect (ws-collect)' ] to deeply equal []`. If (c) is skipped, `ws-collect-wiring.test.ts` reds with `a reference to either builder: expected [ 'ccdargv.ts', 'coord/collectTempRoot.ts' ] to deeply equal [ 'ccdargv.ts' ]`. If the consumer case "what the hold keys on…" reds, Task 2's reader answers the hold's keys differently from the contract above: STOP and report `collect-audit-hold-keys`. Re-run a known load flake in isolation before calling it a break.
+Expected: every file PASSES. Run each line in the foreground, with a timeout of at least 600000 ms. If (e) is skipped, `mail-routes.test.ts` reds with `not-collectable is not a declared MailRejectCode, … or dead-coordinator word: expected false to be true`. If (f) is skipped, `single-definition.test.ts` reds with `a second 'run-open': expected [ 'server/src/collectLane.ts', 'server/src/coord/collectTempRoot.ts', 'shared/api.ts' ] to deeply equal [ 'server/src/collectLane.ts', 'shared/api.ts' ]`. If (b) is skipped, `verb-gate.test.ts` reds with `has no ungated call site outside UNGATED_BY_DECISION: expected [ 'coord/collectTempRoot.ts:<n> wsCollect (ws-collect)' ] to deeply equal []`. If (c) is skipped, `ws-collect-wiring.test.ts` reds with `a reference to either builder: expected [ 'ccdargv.ts', 'coord/collectTempRoot.ts' ] to deeply equal [ 'ccdargv.ts' ]`. If the consumer case "what the hold keys on…" reds, Task 2's reader answers the hold's keys differently from the contract above: STOP and report `collect-audit-hold-keys`. Re-run a known load flake in isolation before calling it a break.
 
 - [ ] **Step 6: Mutation check**
 
@@ -7475,7 +7577,8 @@ Make each edit, run it, see the red, and revert before the next. The commands ar
 - E is `./node_modules/.bin/vitest run test/collect-temp-root.test.ts`;
 - R is the same with `test/collect-temp-root-reads.test.ts`;
 - H is the same with `test/collect-open-run-hold.test.ts`;
-- G is the same with `test/verb-gate.test.ts`.
+- G is the same with `test/verb-gate.test.ts`;
+- M is the same with `test/mail-routes.test.ts`.
 
 Every red text is measured by the worker; where the measured text differs, it replaces the draft's.
 
@@ -7533,6 +7636,8 @@ Every red text is measured by the worker; where the measured text differs, it re
 | 52 | Hold (f): the `catch` returns `{ kind: 'clear' }` | `H -t 'a read that throws'` | `expected { kind: 'clear' } to match object { kind: 'held', why: 'store-unreadable' }` |
 | 53 | Hold (f): `if (!worker.ok) return held('store-unreadable', …);` returns `{ kind: 'clear' }` | `H -t 'the session read'` | `expected { kind: 'clear' } to match object { kind: 'held', why: 'store-unreadable' }` |
 | 54 | Hold (f): `if (!read.ok) return held('store-unreadable', …);` returns `{ kind: 'clear' }` | `H -t 'witness run'` | "the witness run’s read failing holds": `expected { kind: 'clear' } to match object { kind: 'held', why: 'store-unreadable' }` |
+| 55 | `mail-routes.test.ts`: delete the `\|\| isCollectExecutorKebab(tok),` arm, ending the chain at `\|\| isDeadCoordinatorKebab(tok),` again (P9) | `M -t 'every quoted kebab token'` | `not-collectable is not a declared MailRejectCode, … or temp-root collector word: expected false to be true` |
+| 56 | `isCollectExecutorKebab`: delete `\|\| (COLLECT_HOLD_WHYS as readonly string[]).includes(v)` (the hold's whys no longer admitted) | `M -t 'every quoted kebab token'` | `no-witness-run is not a declared MailRejectCode, … or temp-root collector word: expected false to be true` |
 
 Two guards are held by the compiler, not by a case; record them as such:
 - Deleting `if (obs2.kind !== 'collectable') return …` makes `obs2.token` a TS2339.
@@ -7554,7 +7659,7 @@ Expected: no output from either.
 git add server/src/coord/collectTempRoot.ts server/test/collectTempRootFixture.ts \
   server/test/collect-temp-root.test.ts server/test/collect-temp-root-reads.test.ts \
   server/test/collect-open-run-hold.test.ts server/test/verb-gate.test.ts server/test/ws-collect-wiring.test.ts \
-  server/src/ccdargv.ts
+  server/test/mail-routes.test.ts server/test/single-definition.test.ts server/src/ccdargv.ts
 git commit -m "$(cat <<'MSG'
 feat(server): the temp-root collector's executor, its reads and its open-run hold
 
@@ -7576,14 +7681,17 @@ collectSwitches reads both switches from one listing. learnCollect and the
 executor share the one audit site. verb-gate classifies ws-collect as
 capability-gated, and the wiring census names the executor. The two
 ccdargv.ts docstrings that said nothing composes the verb or reads its
-capability now name the executor. Spec §5.10.
+capability now name the executor. mail-routes' kebab scanner admits the
+executor's words through its own guard, isCollectExecutorKebab, and
+single-definition's run-open scan names the executor beside the lane.
+Spec §5.10.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 MSG
 )"
 ```
 
-Name these departures, by slug, in the wave-done (H9, H5): `hold-reported-ahead-of-the-licence`, `unplaced-witness-instant-holds`, `audit-gate-refusal-clears-as-caps`, `learnCollect` not re-asserting the id predicate (two checks, as R83 names), and `ccdargv-collect-docstrings-rewritten`. `hold-off-asked-at-step-6-live-only` is VOID (H4) and is not named.
+Name these departures, by slug, in the wave-done (H9, H5): `hold-reported-ahead-of-the-licence`, `unplaced-witness-instant-holds`, `audit-gate-refusal-clears-as-caps`, `learn-collect-asks-no-id-predicate` (two checks, as R83 names; H13), and `ccdargv-collect-docstrings-rewritten`. `hold-off-asked-at-step-6-live-only` is VOID (H4) and is not named.
 
 ---
 
@@ -7875,7 +7983,8 @@ Create `server/test/collectLaneFixture.ts`:
 // - the REAL population read, switches, learning audit and executor (`coord/collectTempRoot.ts`), and the real L1;
 // - a scripted ccd behind the agent's real exec whitelist: a MODEL of `ws-audit --collect` and `ws-collect`, printing
 //   the documents ccd prints (`_ws_collect_audit_doc`'s keys, the verb's done line), one token per id, spent only while
-//   it is the current one. A case can script any id's answers, and HOLD any call until it releases it;
+//   it is the current one. A case can script any id's answers, and HOLD any call, or the next registry listing, until it
+//   releases it;
 // - two clocks a case moves together: the wall clock (`Date.now`) and the lane's monotonic clock (`monotonicMs`);
 // - `pass()` resolves when the pass has decided and enqueued, as the lane's own pass does (spec §5.10: a pass never
 //   awaits a call it queued), and `settled()` waits for those calls, all but the ones a case is holding.
@@ -7983,7 +8092,8 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
   };
   const scripts = new Map<string, (verb: CollectVerb, args: readonly string[]) => CcdAnswer | undefined>();
   const holds = new Map<string, { promise: Promise<void>; reached: boolean }>();
-  /** Per id, how many of its calls a case is holding (`hold` reached, `occupy` standing): `settled()` waits on none. */
+  /** Per id, how many of its calls a case is holding (`hold` or `holdListing` reached, `occupy` standing): `settled()`
+   *  waits on none. */
   const parked = new Map<string, number>();
   const park = (id: string, by: number): void => {
     const n = (parked.get(id) ?? 0) + by;
@@ -8016,6 +8126,7 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
   let gatherReached = 0;                   // how many gathers reached the population read
   let unlistable = false;                  // the registry's own listing fails (null), as an unreadable `$REG` does
   let rejecting = false;                   // the population's lstat of EITHER listing rejects, as a port gone mid-call does
+  let listingHold: { readonly promise: Promise<void>; readonly id: string } | null = null;   // the NEXT `$REG` listing waits
   const io: FleetIO = {
     ...base.io,
     async lstatMeasured(p) {
@@ -8026,6 +8137,11 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
       return base.io.lstatMeasured(p);
     },
     async readdir(p, timeoutMs, signal) {
+      if (p === reg && listingHold !== null) {
+        const h = listingHold;
+        listingHold = null; park(h.id, 1);
+        try { await h.promise; } finally { park(h.id, -1); }
+      }
       if (p === reg && unlistable) return null;
       return base.io.readdir(p, timeoutMs, signal);
     },
@@ -8053,9 +8169,12 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
     await watcher.sweepTempRootCollect([], listing);
   };
   /** Waits until every collector call the lane has queued has settled (its fold, its slot effect and its feed row
-   *  applied), but for the calls a case is holding (`hold` reached, `occupy` standing). Read what a pass's calls did
-   *  after this. */
+   *  applied), but for the calls a case is holding (`hold` or `holdListing` reached, `occupy` standing). Read what a
+   *  pass's calls did after this. */
   const settled = async (): Promise<void> => {
+    // A call or job a case has just RELEASED is unparked a microtask later (`hold`'s and `occupy`'s `finally`): let
+    // those run first, or this resolves before the released call has even been composed.
+    await new Promise<void>((r) => { setImmediate(r); });
     await vi.waitFor(() => {
       const open = [...watcher.currentCollectLane().inFlight.keys()].filter((id) => !parked.has(id));
       if (open.length > 0) throw new Error(`collector calls not settled: ${open.join(', ')}`);
@@ -8087,6 +8206,13 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
     let release: () => void = () => {};
     gate = new Promise<void>((r) => { release = r; });
     return { release: () => { gate = null; release(); } };
+  };
+  /** The NEXT listing of the registry itself (a switches read: a pass's gather, or an act job's step 2 or step 5) waits
+   *  until released, counted as one of `id`'s held calls. Arm it from `onCall` at the job's own audit to hold its step 5. */
+  const holdListing = (id: string): { release: () => void } => {
+    let release: () => void = () => {};
+    listingHold = { promise: new Promise<void>((r) => { release = r; }), id };
+    return { release: () => release() };
   };
   /** A job on the id's queue key that holds it until released: another lane's executor (a reclaim, an expiry). The
    *  id's collector calls queued behind it are held with it. */
@@ -8125,7 +8251,8 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
   return {
     home, reg, cfg, coord, notifyLog, watcher, mintingRun, startMono, fleetState, calls, onCall, scripts, answers,
     now: (): number => clock, mono: (): number => mono, names, witness, unwitness, touch, remove, pass, settled, next, advance,
-    pastHoldOff, passesUntil, hold, holdGather, occupy, goLive, audits, collects, feed, wouldCollects, attention, boxWide,
+    pastHoldOff, passesUntil, hold, holdGather, holdListing, occupy, goLive, audits, collects, feed, wouldCollects, attention,
+    boxWide,
     gatherReached: (): number => gatherReached,
     setUnlistable: (v: boolean): void => { unlistable = v; },
     setRejecting: (v: boolean): void => { rejecting = v; },
@@ -8428,15 +8555,18 @@ describe('one gather, one pass at a time, a monotonic throttle (spec §5.10)', (
 describe('the gates at the pass’s start: nothing is asked, and every observation pair clears (spec §5.10)', () => {
   /** Shadowed, past the start hold-off: demo-a gets its first observation; `raise` stands for ONE pass; then `lower`.
    *  Answers the pass, counted after the gate lowered, that records demo-a's would-collect: 2 when the pair was cleared
-   *  (a fresh observation first), 1 when it survived. */
+   *  (a fresh observation first), 1 when it survived. demo-b, planted while the gate stands, is due for a LEARNING audit,
+   *  which reads no switch itself: only the pass's own gate keeps it unasked. */
   const passOfWouldCollect = async (f: CollectRig, raise: () => void, lower: () => void): Promise<number> => {
     f.pastHoldOff();
     f.witness('demo-a');
     await f.pass(); await f.settled();
     expect(f.audits('demo-a'), 'observation 1').toHaveLength(1);
     raise();
+    f.witness('demo-b');                                    // never asked: due for a LEARNING audit, which reads no switch itself
     f.next(); await f.pass(); await f.settled();
     expect(f.audits('demo-a'), 'nothing is asked while the gate stands').toHaveLength(1);
+    expect(f.audits('demo-b'), 'no learning audit while the gate stands: the pass itself stops').toEqual([]);
     lower();
     return f.passesUntil(() => f.wouldCollects('demo-a').length > 0, 3);
   };
@@ -8657,6 +8787,17 @@ describe('the collector’s items reach the frame through the list’s ONE write
     expect(box, 'one box-wide line for the unmeasured listing').toHaveLength(1);
     expect(box[0]!.runId).toBeNull();
   });
+
+  it('a pass whose audits all print nothing raises the no-document box line, published once that pass’s calls settle', async () => {
+    const f = await collectRig();
+    for (const id of ['demo-a', 'demo-b']) {
+      f.witness(id);
+      f.scripts.set(id, (verb) => (verb === 'audit' ? f.answers.noDocument() : undefined));
+    }
+    await f.pass(); await f.settled();                      // two learning audits, one pass, neither printed anything
+    expect(f.audits().map((c) => c.id).sort()).toEqual(['demo-a', 'demo-b']);
+    expect(f.boxWide(await f.attention()).map((a) => a.word), 'the pass’s tally reached the frame').toContain('no-document');
+  });
 });
 ```
 
@@ -8673,6 +8814,7 @@ Create `server/test/collect-lane-slot.test.ts`:
 // FIXTURE HOME ONLY (`collectLaneFixture.ts`): ccd is a scripted model, the registry a fixture HOME's.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { CHILD_RECLAIM_STALL_MS, CHILD_RECLAIM_SWEEP_MS, COLLECT_AUDIT_STALL_MS } from '../src/watch.js';
+import { CHILD_RECLAIM_DEFER_CEILING_MS } from '../src/childReclaimSweep.js';
 import { collectRig, type CollectRig } from './collectLaneFixture.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
@@ -8755,6 +8897,27 @@ describe('the slot is freed by everything else (spec §5.10)', () => {
     expect(f.collects('demo-b')).toHaveLength(1);
   });
 
+  it('an open-run hold composes nothing, frees the slot and CLEARS THE PAIR: once it releases, the act follows two observations composed after it, a ceiling later', async () => {
+    const f = await live();
+    const program = 'w9-collect-held';
+    const r = f.coord.openRun({ program, title: program, project: 'demo', wave: 1, waveOf: null, claimedBy: 'demo-coord' });
+    if (!('id' in r)) throw new Error(`openRun refused: ${JSON.stringify(r)}`);
+    f.coord.bindSession(r.id, 'demo-a');                    // an open run names demo-a: the hold's (d)
+    f.next(); await f.pass(); await f.settled();            // demo-a's act job: held at step 4
+    expect(f.collects('demo-a')).toEqual([]);
+    expect(f.lane().slot).toEqual({ kind: 'free' });
+    expect(f.lane().entries.get('demo-a')?.obs ?? null, 'the hold cleared the pair').toBeNull();
+    const heldAt = f.calls.length;
+    const heldMono = f.mono();
+    const c = f.coord.closeRun({ runId: r.id, finalState: 'failed', causedBy: 'operator', handoffCommit: null, program,
+      viaClosing: false });
+    if (!c.ok) throw new Error(`closeRun refused: ${JSON.stringify(c)}`);
+    await f.passesUntil(() => f.collects('demo-a').length > 0, 40);
+    const fresh = f.calls.slice(heldAt).filter((x) => x.verb === 'audit' && x.id === 'demo-a');
+    expect(fresh.length, 'two observations composed after the hold').toBeGreaterThanOrEqual(2);
+    expect(f.collects('demo-a')[0]!.mono - heldMono, 'the held id waited the ceiling').toBeGreaterThanOrEqual(CHILD_RECLAIM_DEFER_CEILING_MS);
+  });
+
   it('two ids each get a would-collect on consecutive shadow passes', async () => {
     const f = await collectRig();
     f.pastHoldOff(); f.witness('demo-a');
@@ -8807,7 +8970,7 @@ describe('a call or job that never settles (spec §5.10: local mode’s runner h
     expect(f.audits('demo-a'), 'never queued again while it stands').toHaveLength(1);
   });
 
-  it('an executor audit that never settles raises the line at COLLECT_AUDIT_STALL_MS while later passes still compose learning audits for other ids', async () => {
+  it('an executor audit that never settles raises the line at COLLECT_AUDIT_STALL_MS while later passes still compose learning audits for other ids, and at STALL says the act slot is held', async () => {
     const f = await live();
     f.hold('audit', 'demo-a');                              // the NEXT audit of demo-a: its act job's own, never answered
     f.next(); await f.pass();
@@ -8823,9 +8986,14 @@ describe('a call or job that never settles (spec §5.10: local mode’s runner h
     expect(line[0]!.sentence, 'an audit, not a held slot').not.toMatch(/act slot is held/);
     expect(f.audits('demo-c').length, 'later passes still learn other ids').toBeGreaterThanOrEqual(1);
     expect(f.collects()).toEqual([]);
+    while (f.mono() - queued < CHILD_RECLAIM_STALL_MS) { f.next(); await f.pass(); await f.settled(); }
+    const atStall = await linesFor(f, 'demo-a');
+    expect(atStall, 'still one line, now at the job’s own bound').toHaveLength(1);
+    expect(atStall[0]!.sentence, 'its audit still out at STALL: the act slot is held').toMatch(/act slot is held/);
   });
 
-  it('an act job keeps the slot past STALL — it never stops counting — is listed, and later passes still learn', async () => {
+  it('an act job keeps the slot past STALL — it never stops counting — is listed as holding it, and later passes still learn', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const f = await live();
     f.hold('collect', 'demo-a');                            // demo-a's ws-collect never answers
     f.next();
@@ -8838,8 +9006,10 @@ describe('a call or job that never settles (spec §5.10: local mode’s runner h
     expect(f.lane().slot).toEqual({ kind: 'job', id: 'demo-a', sinceMono: queued });
     const line = await linesFor(f, 'demo-a');
     expect(line).toHaveLength(1);
-    expect(line[0]!.sentence, 'its act is out: no job that composed nothing').not.toMatch(/act slot is held/);
+    expect(line[0]!.sentence, 'its act is out: the act slot is held').toMatch(/act slot is held/);
     expect(f.audits('demo-c').length, 'later passes still learn other ids').toBeGreaterThanOrEqual(1);
+    expect(warn.mock.calls.some(([m]) => String(m).includes("the collector's call for demo-a has not settled")
+      && String(m).includes('the act slot stays taken')), 'logged once, as its ws-collect call').toBe(true);
   });
 
   it('an executor job queued behind a never-settling job on its key raises the slot-held line at STALL', async () => {
@@ -8856,6 +9026,28 @@ describe('a call or job that never settles (spec §5.10: local mode’s runner h
     expect(line, 'a job that composed nothing is listed too').toHaveLength(1);
     expect(line[0]!.sentence).toMatch(/act slot is held/);
     expect(f.audits('demo-a'), 'the job composed nothing: only observation 1').toHaveLength(1);
+  });
+
+  it('a job whose own audit answered, waiting between its calls, is no unsettled audit: it is listed at STALL, holding the slot', async () => {
+    const f = await live();
+    const step5: { release: () => void }[] = [];            // the job's step-5 listing, held once its own audit is composed
+    f.onCall.push((c) => {
+      const s = f.lane().slot;
+      if (step5.length === 0 && c.verb === 'audit' && c.id === 'demo-a' && s.kind === 'job') step5.push(f.holdListing('demo-a'));
+    });
+    f.next(); await f.pass(); await f.settled();            // demo-a's job: its audit answered; its step 5 waits
+    expect(f.audits('demo-a')).toHaveLength(2);
+    const s = f.lane().slot;
+    expect(s).toMatchObject({ kind: 'job', id: 'demo-a' });
+    expect(f.lane().inFlight.get('demo-a')?.phase, 'back to queued once its audit answered').toBe('queued');
+    const queued = s.kind === 'job' ? s.sinceMono : Number.NaN;
+    while (f.mono() + CHILD_RECLAIM_SWEEP_MS + 1 - queued < CHILD_RECLAIM_STALL_MS) { f.next(); await f.pass(); await f.settled(); }
+    expect(f.mono() - queued).toBeGreaterThanOrEqual(COLLECT_AUDIT_STALL_MS);
+    expect(await linesFor(f, 'demo-a'), 'its audit answered: no unsettled audit, and not yet STALL').toEqual([]);
+    f.next(); await f.pass(); await f.settled();
+    const line = await linesFor(f, 'demo-a');
+    expect(line).toHaveLength(1);
+    expect(line[0]!.sentence).toMatch(/act slot is held/);
   });
 });
 
@@ -8878,7 +9070,7 @@ describe('flock-unavailable latches for the process (spec §5.10)', () => {
 How these cases are built:
 - **SAFETY cases.** Every one drives the REAL executor and the REAL L1 through the watcher. ccd is a model, and the only fake clocks are `Date.now` and `monotonicMs`.
 - **What they assert.** Their assertions are what reaches ccd: the call log, in composition order with the clock it was composed at. They also read the feed and the frame. `currentCollectLane()` is read only for what no call shows directly: the slot, the flag, the latch, the entries forgetting drops, and the flights `settled()` waits on.
-- **Settling (H1).** `pass()` resolves when the pass has decided and enqueued, because the lane's pass never awaits a call it queued. A case that reads what the calls did calls `settled()` first; `passesUntil` does so after every pass. A call a case is holding (`hold` reached, `occupy` standing) is never waited on, so a never-settling call cannot hang a case.
+- **Settling (H1).** `pass()` resolves when the pass has decided and enqueued, because the lane's pass never awaits a call it queued. A case that reads what the calls did calls `settled()` first; `passesUntil` does so after every pass. A call a case is holding (`hold` or `holdListing` reached, `occupy` standing) is never waited on, so a never-settling call cannot hang a case. `settled()` first yields one macrotask (`setImmediate`): a released hold unparks its id a microtask after `release()`, and without the yield `release(); await f.settled()` returns before the released call is composed (the act job's case in `collect-lane-pass` and T7.34 would read too early).
 - **Escapes.** The `’` in titles is U+2019, as wave 8's suites write it. There are no `\n` or `\0` escapes in these files other than the rig's `stderr` strings, where `\n` is a backslash followed by the letter. Check them with `cat -A`.
 
 - [ ] **Step 3: Run the tests to verify they fail**
@@ -9038,7 +9230,7 @@ import {
   collectClearPair, collectFeedAnswerBody, collectFeedCollectedBody, collectFeedCueOfAct, collectFeedCueOfAudit,
   collectFeedStep, collectFeedSwitchBody, collectFeedWouldCollectBody, collectFirstSighting, collectForgets, collectFresh,
   collectJobEffects, collectOffers, collectPassClass, collectPopulation, collectWouldCollectKey,
-  type CollectAttentionView, type CollectAudit, type CollectEntry, type CollectFeedCue, type CollectListing,
+  type CollectAttentionView, type CollectAudit, type CollectEntry, type CollectFeedCue,
   type CollectPassClass, type CollectPopulation, type CollectResult, type CollectStep, type CollectUnsettledKind,
 } from './collectLane.js';
 import {
@@ -9067,8 +9259,9 @@ export const COLLECT_OBSERVE_INTERVAL_MS = CHILD_RECLAIM_SWEEP_MS;
 /** How long a collector AUDIT (`ws-audit --collect`, a learning audit or the executor's own) may stay unsettled before
  *  the lane lists it (spec §5.10): twice `ws-audit`'s remote runner row, 90 s (`remote/runner.ts`, whose table is not
  *  exported, so the suite reads the row and pins this against it). Local mode's runner has no timeout, so a call can
- *  hang for ever; the id is never asked again until it settles. The act's bound, and a job's that composed nothing, is
- *  `CHILD_RECLAIM_STALL_MS`. Counted from when the lane QUEUED the call (`unsettled-bound-counts-from-the-queue`).
+ *  hang for ever; the id is never asked again until it settles. An act JOB's bound, whatever it has out (its act, its
+ *  own audit, or nothing yet), is `CHILD_RECLAIM_STALL_MS`, asked first. Counted from when the lane QUEUED the call
+ *  (`unsettled-bound-counts-from-the-queue`).
  *  EXPORTED for its suite. */
 export const COLLECT_AUDIT_STALL_MS = 2 * 90_000;
 
@@ -9077,8 +9270,8 @@ export const COLLECT_AUDIT_STALL_MS = 2 * 90_000;
  *  - `learn`: a learning audit;
  *  - `act`: the executor's job, whose `phase` says what is out: `queued` (waiting on the id's key, or between its
  *    calls), `audit` (its own `ws-audit`) or `act` (its `ws-collect`). The runner the lane hands the executor sets it
- *    (`collectRunCcd`), so the unsettled line can tell the executor's audit from its act, and both from a job that has
- *    composed nothing. */
+ *    (`collectRunCcd`), so the unsettled line can list the executor's own audit at the audit's bound; at STALL the job
+ *    is listed as holding the act slot, whatever is out. */
 export interface CollectFlight {
   readonly kind: 'learn' | 'act';
   readonly sinceMono: number;
@@ -9280,21 +9473,12 @@ with
     }
     // TWO — THE ONE GATHER (spec §5.10): the population's two listings and the switches' own registry listing, together.
     // The pause is read from THIS listing, not the tick's, because the tick never hands a lane a registry that did not
-    // list, and this lane must read one as a pause. Neither read rejects (a port that does makes THAT listing unmeasured,
-    // or the registry paused); the catch is defence in depth, and fails the pass shut: nothing decided, every pair clear.
-    let gathered: readonly [
-      { readonly tmproots: CollectListing; readonly tmpquarantine: CollectListing }, { readonly paused: boolean },
-    ];
-    try {
-      gathered = await Promise.all([
-        readCollectPopulation(this.deps.io, this.deps.cfg.registryDir),
-        collectSwitches(this.deps.io, this.deps.cfg.registryDir),
-      ]);
-    } catch (err) {
-      console.warn(`ccrc-server: sweepTempRootCollect could not read its population (${err instanceof Error ? err.message : String(err)}) — no collector decisions this pass, and every observation pair is cleared`);
-      this.collectClearPairs();
-      return;
-    }
+    // list, and this lane must read one as a pause. Neither read rejects: a port that does makes THAT listing unmeasured,
+    // or the registry paused. So no catch stands here: a guard no case can reach has no red (H13).
+    const gathered = await Promise.all([
+      readCollectPopulation(this.deps.io, this.deps.cfg.registryDir),
+      collectSwitches(this.deps.io, this.deps.cfg.registryDir),
+    ]);
     // The pass's decision clock, read AFTER the gather; the throttle re-stamped with it, so any two deciding passes are at
     // least one interval apart however long a gather takes.
     const mono = this.childReclaimLaneNow().monoMs;
@@ -9580,8 +9764,8 @@ with
     return fresh;
   }
 
-  /** A LANE-WIDE CLEAR (spec §5.10): a raised pause or an unlistable registry, a missing capability, a pass that failed
-   *  shut, a marker flip. The lane's generation moves to a value never used before, so the answer to any call composed
+  /** A LANE-WIDE CLEAR (spec §5.10): a raised pause or an unlistable registry, a missing capability, a marker flip.
+   *  The lane's generation moves to a value never used before, so the answer to any call composed
    *  before it is no observation, and every entry goes through Task 4's `collectClearPair`: the PAIRS only. Each id's
    *  next ask, its runs, its clocks and its feed episodes survive; only a restart loses them. */
   private collectClearPairs(): void {
@@ -9606,14 +9790,16 @@ with
   }
 
   /** The ids whose collector call or job has not settled within its bound (spec §5.10), by kind, each counted from when
-   *  it was QUEUED: an audit (a learning audit, or the executor's own) at `COLLECT_AUDIT_STALL_MS`; the act at
-   *  `CHILD_RECLAIM_STALL_MS`; a job that has composed nothing, holding the act slot, at `CHILD_RECLAIM_STALL_MS`. */
+   *  it was QUEUED. An act JOB not settled `CHILD_RECLAIM_STALL_MS` after it took the slot is asked FIRST, whatever it
+   *  has out: its `ws-collect` (`act`), or its own audit or nothing yet (`job`) — R85's "even if it never composed a
+   *  call" — and Task 5's line says the act slot is held for both. Short of that, an audit (a learning audit, or the
+   *  job's own) is listed at `COLLECT_AUDIT_STALL_MS`. The two kinds differ only in the process log's noun. */
   private collectUnsettled(mono: number): Map<string, CollectUnsettledKind> {
     const out = new Map<string, CollectUnsettledKind>();
     for (const [id, f] of [...this.collectInFlight].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
       const age = mono - f.sinceMono;
-      if ((f.kind === 'learn' || f.phase === 'audit') && age >= COLLECT_AUDIT_STALL_MS) out.set(id, 'audit');
-      else if (f.kind === 'act' && age >= CHILD_RECLAIM_STALL_MS) out.set(id, f.phase === 'act' ? 'act' : 'job');
+      if (f.kind === 'act' && age >= CHILD_RECLAIM_STALL_MS) out.set(id, f.phase === 'act' ? 'act' : 'job');
+      else if ((f.kind === 'learn' || f.phase === 'audit') && age >= COLLECT_AUDIT_STALL_MS) out.set(id, 'audit');
     }
     return out;
   }
@@ -9686,7 +9872,7 @@ git diff -U0 HEAD -- server/src/collectLane.ts | grep -c '^-[^-]'   # 0: the foo
 ```
 
 Expected:
-- **The three new files:** `Test Files  3 passed (3)`, with every case green. The count is derived (bounds 25, pass 28, slot 13) and must be re-measured.
+- **The three new files:** `Test Files  3 passed (3)`, with every case green. The count is derived (bounds 25, pass 29, slot 15) and must be re-measured.
 - **The nine touched or neighbouring suites:** all green. Census (c) now lists the new `WRITE`. `ws-collect-wiring.test.ts` is GREEN, all five cases: its INERT `it` names `watch.ts` among `COLLECT_CAP`'s holders (H5: no commit is red).
 - **Tasks 2–6's collector suites:** green at the counts those tasks left. This task changed none of their files above `collectLane.ts`'s foot.
 - **Both `tsc` runs** print nothing. The bounds suite's compile pin (`settles`) is where a `CollectJobOutcome` that is not assignable to `CollectJobSettled` reds.
@@ -9732,12 +9918,11 @@ Make each mutation alone, record its red, and revert it before the next. B, P, S
 | T7.23 | delete `    this.lastCollectSweep = gate;` | `P` | `the throttle is stamped BEFORE the gather…`: `throttled from the stamp before the gather: expected 1 to be 0`; the source pin: `the throttle is stamped, then the guard raised: expected false to be true` |
 | T7.24 | delete `    this.lastCollectSweep = mono;` | `P` | `and RE-STAMPED after it…`: `throttled from the decision clock: expected 2 to be 1`; the source pin: `expected -1 to be greater than <n>` |
 | T7.25 | the pass awaits its calls: `collectLearn` and `collectAct` return their chains (drop the `void`), `collectPass` returns them, and `sweepTempRootCollect` awaits `Promise.all` of them inside its `try` | `P`, `S` | P, the source pin: `the pass awaits its gather alone: expected [ …(2) ] to have a length of 1 but got 2`. S, `an executor audit that never settles…`: `Error: Test timed out` (the pass waits on the held audit) |
-| T7.26 | the cap gate: delete `\|\| !capSupported(this.deps.fleetState, RECLAIM_PAUSE_CAP)` | `P` | `the pause's capability missing…`: `nothing is asked while the gate stands: expected [ …(2) ] to have a length of 1 but got 2` |
+| T7.26 | the cap gate: delete `\|\| !capSupported(this.deps.fleetState, RECLAIM_PAUSE_CAP)` | `P` | `the pause's capability missing…`: `no learning audit while the gate stands: the pass itself stops: expected [ {…} ] to deeply equal []` (demo-a's own job still stops at its step 1, so demo-a's count is no red) |
 | T7.27 | the cap gate: delete its `this.collectClearPairs();` | `P` | both capability cases: `expected 1 to be 2` |
-| T7.28 | delete the `if (switches.paused) { … }` block | `P` | `reclaim-paused raised` and `a registry that does not list`: `nothing is asked while the gate stands: expected [ …(2) ] to have a length of 1 but got 2` |
+| T7.28 | delete the `if (switches.paused) { … }` block | `P` | `reclaim-paused raised` and `a registry that does not list`: `no learning audit while the gate stands: the pass itself stops: expected [ {…} ] to deeply equal []` (demo-a's own job still stops at its step 2) |
 | T7.29 | the paused branch: delete its `this.collectClearPairs();` | `P` | the same two cases: `expected 1 to be 2` |
-| T7.30 | delete the `try { … } catch (err) { … }` around the gather, keeping `gathered = await Promise.all([…]);` | `P` | GREEN, and recorded as measured green: Task 6's two reads never reject (R83), so no case reaches the catch, which is defence in depth. A red here means a Task 6 read rejects: STOP, `collect-lane-consumes-readCollectPopulation` |
-| T7.31 | the catch: delete its `this.collectClearPairs();` | `P` | GREEN, recorded as T7.30 |
+| T7.30–T7.31 | Deleted (H13): the gather's try/catch is gone from Step 5 (i), so these two rows, which could only measure green, go with it. The numbers are kept so that T7.32 onwards keep theirs | — | — |
 | T7.32 | the forgetting rule: `if (collectForgets(pop, id))` → `if (!pop.ids.includes(id))` | `P` | `an id is forgotten only when BOTH…`: `one listing unmeasured: its absence is never read: expected false to be true`; `a port that rejects…`: `nor forgotten: expected false to be true` |
 | T7.33 | delete the forgetting `for` line | `P` | `an id is forgotten only when BOTH…`: `both measured, neither names it: forgotten: expected true to be false` |
 | T7.34 | `collectFoldAudit`: `const entry = this.collectState.get(id);` → `const entry = this.collectEntryOf(id);` | `P` | `an answer that arrives after its id was forgotten…`: `the late answer re-created nothing: expected true to be false` |
@@ -9761,9 +9946,9 @@ Make each mutation alone, record its red, and revert it before the next. B, P, S
 | T7.52 | `startMono: this.collectStartMono` → `startMono: this.collectStartMono - CHILD_RECLAIM_STALL_MS` | `S` | `a lane composes no act inside CHILD_RECLAIM_STALL_MS…`: `no act job ran: none saw the marker: expected true to be false` |
 | T7.53 | `collectUnsettled`: `age >= COLLECT_AUDIT_STALL_MS` → `age >= CHILD_RECLAIM_STALL_MS` | `S` | `a learning audit is listed at twice the audit row…` and `an executor audit that never settles…`: `expected [] to have a length of 1 but got 0` |
 | T7.54 | `collectUnsettled`: delete `\|\| f.phase === 'audit'` | `S` | `an executor audit that never settles…`: `listed at the audit’s bound, not the act’s: expected [] to have a length of 1 but got 0` |
-| T7.55 | `collectUnsettled`: `f.phase === 'act' ? 'act' : 'job'` → `'job'` | `S` | `an act job keeps the slot past STALL…`: `its act is out: no job that composed nothing: expected '…' not to match /act slot is held/` |
-| T7.56 | `collectUnsettled`: `f.phase === 'act' ? 'act' : 'job'` → `'act'` | `S` | `an executor job queued behind a never-settling job…`: `expected '…' to match /act slot is held/` |
-| T7.57 | `collectRunCcd`: delete `this.collectPhase(id, argv[0] === 'ws-audit' ? 'audit' : 'act');` (the phase never leaves `queued`) | `S` | `an executor audit that never settles…`: `listed at the audit’s bound…: expected [] to have a length of 1 but got 0`; `an act job keeps the slot past STALL…`: `expected '…' not to match /act slot is held/` |
+| T7.55 | `collectUnsettled`: swap the two branches back, the audit's bound asked first (`if ((f.kind === 'learn' \|\| f.phase === 'audit') && age >= COLLECT_AUDIT_STALL_MS) out.set(id, 'audit'); else if (f.kind === 'act' && age >= CHILD_RECLAIM_STALL_MS) …`) | `S` | `an executor audit that never settles…`: `its audit still out at STALL: the act slot is held: expected '…' to match /act slot is held/` |
+| T7.56 | `collectUnsettled`: `f.phase === 'act' ? 'act' : 'job'` → `'job'` (Task 5's line words `act` and `job` alike, so the kind tells only the log's noun) | `S` | `an act job keeps the slot past STALL…`: `logged once, as its ws-collect call: expected false to be true` |
+| T7.57 | `collectRunCcd`: delete `this.collectPhase(id, argv[0] === 'ws-audit' ? 'audit' : 'act');` (the phase never leaves `queued`) | `S` | `an executor audit that never settles…`: `listed at the audit’s bound…: expected [] to have a length of 1 but got 0`; `an act job keeps the slot past STALL…`: `logged once, as its ws-collect call: expected false to be true` |
 | T7.58 | `const busy = new Set<string>(this.collectInFlight.keys());` → `const busy = new Set<string>();` | `S` | `a learning audit is listed…`: `never queued again while it stands: expected [ …(2) ] to have a length of 1 but got 2` |
 | T7.59 | delete `if (fx.latchFlock) this.collectFlockLatched = true;` | `S` | `flock-unavailable latches…`: `expected false to be true` |
 | T7.60 | the constructor: delete `this.collectStartMono = deps.monotonicMs?.() ?? performance.now();` | `./node_modules/.bin/tsc --noEmit -p .` | `src/watch.ts(…): error TS2564: Property 'collectStartMono' has no initializer and is not definitely assigned in the constructor.` |
@@ -9771,6 +9956,10 @@ Make each mutation alone, record its red, and revert it before the next. B, P, S
 | T7.62 | `export const COLLECT_AUDIT_STALL_MS = 2 * 90_000;` → `= 90_000;` | `P` | `a learning audit's unsettled bound…`: `expected 90000 to be 180000` |
 | T7.63 | revert Step 6 (a) (V's `WRITE` back to `…, this.childReclaimLeaves, CHILD_RECLAIM_COLLECT_NONE)`) | `V` | `(c) the attention list is read only…`: `watch.ts: NOT ALLOWED this.childReclaimAttentionList = childReclaimAttentionWithLeaves(` |
 | T7.64 | revert Step 6 (b) (drop `'watch.ts'` from W's `COLLECT_CAP` holders) | `W` | `the builders, the verb, its mode flag and its token…`: `expected [ 'ccdargv.ts', 'coord/collectTempRoot.ts', 'watch.ts' ] to deeply equal [ 'ccdargv.ts', 'coord/collectTempRoot.ts' ]` |
+| T7.65 | `collectFoldJob`, `case 'held':` delete the `this.collectState.set(id, collectAfterHold(e, s.hold.why, at));` line (H13: the `held` fold) | `S` | `an open-run hold composes nothing…`: `the hold cleared the pair: expected { …(2) } to be null` |
+| T7.66 | `collectLane.ts`'s `collectNextAskMono`: delete `if (e.held !== null) waits.push(e.held.atMono + CHILD_RECLAIM_DEFER_CEILING_MS);` | `S` | `an open-run hold composes nothing…`: `the held id waited the ceiling: expected <n> to be greater than or equal to 900000` |
+| T7.67 | `collectSettled`: delete `this.collectPassAudits = t.audits;` (H13: the pass-scoped lines' publication) | `P` | `a pass whose audits all print nothing…`: `the pass’s tally reached the frame: expected [] to include 'no-document'` |
+| T7.68 | `collectRunCcd`: `try { return await this.deps.runCcd(argv); } finally { this.collectPhase(id, 'queued'); }` → `return await this.deps.runCcd(argv);` (H13: the phase reset) | `S` | `a job whose own audit answered…`: `back to queued once its audit answered: expected 'audit' to be 'queued'` |
 
 After each mutation, revert it. Then re-run Step 7's first three commands green.
 
@@ -9823,7 +10012,7 @@ MSG
 - **R89.** No skill text names the verb, and the CLAUDE.md SAFETY bullet is not edited. `ws-collect-prose.test.ts` stays green untouched.
 
 **Readings this task takes (each named by slug in the wave-done, for the coordinator):**
-- `ws-collect-cap-entry-is-a-classification` (named in H9; its premise moved with H6). At Task 6's shape the act's function, `collectTempRoot`, composes no `wsCollectAudit(` of its own: the one audit site is `collectAudit`, a separate function, so `collectTempRoot`'s scope holds `capSupported(` and no `verbSupported(`. Task 6's `CAP_GATED_VERBS` entry for `ws-collect` is therefore the act site's gate in verb-gate's scan, and deleting it reds (T8.26, to be measured). The act's second ask is pinned in place by `collect-act-cap-after-last-await-pinned` below. The wave-done names the slug with this measured reading, for the coordinator to keep or void.
+- `ws-collect-cap-entry-is-a-classification` (named in H9; its premise moved with H6). At Task 6's shape the act's function, `collectTempRoot`, composes no `wsCollectAudit(` of its own: the one audit site is `collectAudit`, a separate function, so `collectTempRoot`'s scope holds `capSupported(` and no `verbSupported(`. Task 6's `CAP_GATED_VERBS` entry for `ws-collect` is therefore the act site's gate in verb-gate's scan, and deleting it reds (T8.26, to be measured). The act's second ask is pinned in place by `collect-act-cap-after-last-await-pinned` below. H13 voided this slug: the wave-done does not name it, and T8.26 pins the entry as load-bearing.
 - `collect-act-cap-after-last-await-pinned`. This is a textual pin of R85 step 6 in `collect-lane-scans.test.ts`. The act job asks `capSupported(…, COLLECT_CAP)` at least twice, and the last ask stands after the job's last `await` and before the statement that composes the argv.
 - `cc-tmp-scan-display-only`. R83's "passes a path … to an `io` member" cannot be read textually across lines. The scan therefore pins three things in the pass, the lane and the executor:
   - every `.cc-tmp` spelling is the display form `~/.cc-tmp`, which no `io` call can resolve, because there is no tilde expansion;
@@ -10375,7 +10564,7 @@ cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts test/
 
 Expected: PASS. In particular:
 - `ws-collect-prose.test.ts` is green UNCHANGED. Check `grep -rc 'ws-collect' ccd/coordinator-skill ccd/worker-skill ccd/reviewer-skill | grep -v ':0$'`, which prints nothing.
-- `git diff origin/main -- CLAUDE.md` shows nothing from this task.
+- `git diff $(git merge-base origin/main HEAD) -- CLAUDE.md` shows nothing from this task. The merge base is used so that a CLAUDE.md edit another PR landed on `main` is not read as this branch's.
 
 If a scan reds on code Tasks 1–7 shipped, the scan is never loosened to pass. **STOP** and report by slug (for example `pass-cap-gate-not-in-watch`) with the measured text; a red provenance case is reported with `collectTempRoot`'s measured lines (H6 voids `collect-scan-shape-mismatch`).
 
@@ -10408,7 +10597,7 @@ If a scan reds on code Tasks 1–7 shipped, the scan is never loosened to pass. 
 | T8.23 | `server/src/coord/childReclaim.ts`: `export const CHILD_RECLAIM_DEFER_WHYS = [] as readonly ChildReclaimDeferWhy[];` | `./node_modules/.bin/vitest run test/child-reclaim-sweep-policy.test.ts -t 'ANY-kind clock'` | `the derived list lost the server’s own word: expected [] to include 'generation-changed'`. Before this task's floor the same mutation is GREEN (measure it once on the pre-task file and record it, the evidence for the floor) |
 | T8.24 | The same export: `Object.keys(CHILD_RECLAIM_DEFER_WHY).slice(0, 7) as readonly ChildReclaimDeferWhy[]` | same | `the derived list lost the server’s own word: expected [ 'siblings-open', … ] to include 'generation-changed'` |
 | T8.25 | `child-reclaim-attention-arms.test.ts` `SPELLED`: `` `'${w}'|…` `` becomes `` `['"]${w}['"]|…` `` | `./node_modules/.bin/vitest run test/child-reclaim-attention-arms.test.ts` | `CONTROL: double quotes are outside this census, as the title says: expected true to be false` |
-| T8.26 | `verb-gate.test.ts`: delete Task 6's `'ws-collect'` from `CAP_GATED_VERBS` | `./node_modules/.bin/vitest run test/verb-gate.test.ts` | RED at Task 6's shape (H6; `ws-collect-cap-entry-is-a-classification` recast): "has no ungated call site outside UNGATED_BY_DECISION": `expected [ 'coord/collectTempRoot.ts:NN wsCollect (ws-collect)' ] to deeply equal []`; "gates every verb this branch added…": `ws-collect: expected [ 'coord/collectTempRoot.ts:NN wsCollect (ws-collect)' ] to deeply equal []` |
+| T8.26 | `verb-gate.test.ts`: delete Task 6's `'ws-collect'` from `CAP_GATED_VERBS` | `./node_modules/.bin/vitest run test/verb-gate.test.ts` | RED at Task 6's shape (H6; H13 voids `ws-collect-cap-entry-is-a-classification`, because the entry is load-bearing): "has no ungated call site outside UNGATED_BY_DECISION": `expected [ 'coord/collectTempRoot.ts:NN wsCollect (ws-collect)' ] to deeply equal []`; "gates every verb this branch added…": `ws-collect: expected [ 'coord/collectTempRoot.ts:NN wsCollect (ws-collect)' ] to deeply equal []` |
 | T8.27 | `watch.ts`: compose `CCD_ARGV.wsCollectAudit(id)` in `sweepTempRootCollect` (with `verbSupported` and `capSupported(…, COLLECT_CAP)` beside it, so verb-gate's own cases stay green) | `./node_modules/.bin/vitest run test/ws-collect-wiring.test.ts test/verb-gate.test.ts` | wiring: `a reference to either builder…: expected [ 'ccdargv.ts', 'coord/collectTempRoot.ts', 'watch.ts' ] to deeply equal [ 'ccdargv.ts', 'coord/collectTempRoot.ts' ]`; verb-gate: `expected [ 'coord/collectTempRoot.ts', 'watch.ts' ] to deeply equal [ 'coord/collectTempRoot.ts' ]` |
 | T8.28 | `collectLane.ts`: add `const VERB = 'ws-collect';` and use it in a feed title | `./node_modules/.bin/vitest run test/ws-collect-wiring.test.ts` | `the verb as a literal…: expected [ 'ccdargv.ts', 'collectLane.ts', 'remote/runner.ts' ] to deeply equal [ 'ccdargv.ts', 'remote/runner.ts' ]` |
 | T8.29 | `collectTempRoot`: spend a token read from the lane's memory, `CCD_ARGV.wsCollect(deps.lane.observation(job.id)!.token, job.id, …)` (H6) | `./node_modules/.bin/vitest run test/collect-lane-scans.test.ts` | "its first argument is <obs>.token…": `the first argument is "deps.lane.observation(job.id)!.token", not <identifier>.token: expected null not to be null` |
@@ -10517,7 +10706,7 @@ EOF
 
 ```bash
 git log --oneline -9                                                                   # Tasks 1–8 committed, one each
-git fetch origin main && git log --oneline origin/main -20 | grep -i 'workspace lifecycle wave 6' || echo "WL W6 not on main"   # if landed: merge main FIRST (git merge origin/main), then re-anchor below by content
+git fetch origin main && { git grep -q 'rereadDeadCoordinatorJournalTrust' origin/main -- server/src/watch.ts && echo "WL W6 on main: merge it first (git merge origin/main), then re-anchor by content" || echo "WL W6 not on main"; }   # a content probe: main's own docs(plan) commit for wave 6 (cc33c8d51) matches a log grep, so a log grep says landed too early
 grep -n "Wave 7 ships it inert" docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md            # :233 and :1262
 grep -n "The server's lane (wave 9) owns the rest" docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md
 grep -n "the lane audits every pass\|about 79 seconds\|pre-flight list\|on every pass for the child's life\|worst case can exceed" docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md
@@ -10630,7 +10819,7 @@ Expected: every case but none fails. The first `not.toContain` of each removal c
     >   - Each is `lstat`ed first. A proven absence is an empty listing. A link, a file or a failed answer makes that listing unmeasured, and only a real directory is listed.
     >   - A null listing is resolved by a measured stat, so only a proven absence is empty.
     >   - Dot-leading names are dropped.
-    >   - A listing of more than `COLLECT_POPULATION_MAX` (1024) names, counted before any is dropped, is unmeasured.
+    >   - A listing of more than `COLLECT_POPULATION_MAX` (1024) names, counted before any is dropped, is unmeasured. The cap bounds what the lane audits and remembers, not the listing itself: the agent's `readdir` returns every name in one frame, as the registry's own `$REG` listing already does every tick.
     >   - A record's id is parsed as ccd parses it (`<id>.<ns>.<pid>`, never a prefix).
     >   - An id must pass `isTmpRootId`: a session id's shape, leading with neither `.` nor `-`, of at most 255 characters. It is checked before any argv and again at the act. A name that fails it is counted, never named, and never audited.
     >   - An id whose exact `<id>.child` or `<id>.uuid` row stands is not audited that pass, unless a quarantine record names it.
@@ -10665,7 +10854,7 @@ Expected: every case but none fails. The first `not.toContain` of each removal c
     >   - At most `COLLECT_AUDITS_PER_PASS` (2) learning audits run a pass. At most one `ws-collect` is composed a pass, and one is in flight fleet-wide, under a slot of the collector's own.
     >   - Each pass offers the act job first, to the earliest ripe id by its ripening instant and then id, then up to two learning audits by next-ask instant and then id. An id with a collector call or job still pending is skipped, and an id holding an observation is never offered a learning audit. The pass never awaits a call it queued.
     >   - An act that answered no document keeps its id and the slot for `CHILD_RECLAIM_STALL_MS` (eight minutes). No act job, shadow's would-collect included, is offered within eight minutes of the lane's start.
-    >   - A collector call or executor job unsettled past its bound (twice the 90 s row for an audit, eight minutes for the act or a job) is listed on one box-wide line, the job's saying the act slot is held, and its id is not asked again until it settles.
+    >   - A collector call or executor job unsettled past its bound is listed on one box-wide line, and its id is not asked again until it settles. An act job's bound, eight minutes, is checked first: past it, the line says the act slot is held, whether or not the job's `ws-collect` is out. A learning audit, or an act job's own audit inside those eight minutes, is listed as a call once it stands past twice the 90 s row.
     >   - The pacing is memory only: every restart, a rollout included, re-enters each terminal and verb-failed id at j = 0, about eight extra journaled terminal audits or failing acts per such id in the 4.5 h after it. The 12-then-6 bound holds between restarts only.
     > - **What it shows.**
     >   - Collector items join the cleanup row's attention list (§5.9), one per id. Answers that stand for the whole box are listed once each.
@@ -10701,16 +10890,40 @@ Expected: every case but none fails. The first `not.toContain` of each removal c
     - `- The audit's worst case can exceed its runner row (above); it fails closed.` becomes `- The registry row pass has no bound of its own, so the audit can still outrun its runner row (above); a kill there fails closed.`
   - (h) §7 item 6, `and the audit's worst case, about 79 seconds (94 at the widest kill grace) against a 90 second runner row, fails closed when the runner kills it.`, becomes:
     > `and the audit's probes, about 73 seconds (78 at the widest kill grace) against a 90 second runner row, leave the row pass unbounded, which fails closed when the runner kills it.`
+  - (h2) §7's residual lists end with wave 8's (`Wave 8 carries these residuals as well, and amends the ones above.`, whose last bullet begins `The seed's windowed slice and the recycled-slug window affect pacing only.`). Directly after that last bullet, before the `---` above `## 8. The waves`, append a paragraph of the same shape and indentation. Two comments this wave ships cite §7 for these residuals (Task 1's `TMPROOT_ID_MAX_CHARS` docstring and Task 7's `sweepTempRootCollect` docstring), and R89's stated residuals have no other home in the spec:
+    ```markdown
+
+       Wave 9 carries these residuals as well, as built.
+       - The lane's memory is its only pacing, so every restart, a rollout included, re-enters each terminal and
+         verb-failed id at j = 0 (§5.10).
+       - No act job is offered for eight minutes after the lane starts, because a restart forgets the slot while the
+         previous process's act may still run. In local mode that rests on the server unit's default
+         `KillMode=control-group`.
+       - A killed ccd's orphaned children are not counted against the slot. They hold the id's reap lock, so ccd
+         answers `in-progress`.
+       - An id of 223 to 244 bytes passes the reap lock but cannot name a slot or a record within NAME_MAX. ccd's answer
+         there is paced by the tier like any per-id answer.
+       - A witness-only `collect` `done` ends a kept-leaf item's temp-root half (§5.9) even when the device test could
+         not see a same-device bind mount. The item can then end while the leaf stands under the mount, until the
+         path-identity follow-up filters that end on a removal.
+    ```
+    Measure each bullet against the tip (`grep -n 'KillMode\|orphaned children' server/src/watch.ts` and `grep -n 'past 244' shared/api.ts`), and correct the text to the code, never the reverse.
   - (i) §8, the wave 9 row (`grep -n "^| 9 | server |" …`) becomes:
     > `| 9 | server | the collector's lane, as built and shipped shadowed behind `$REG/collect-lane-live`: its population from the two registry listings and the one id predicate; two observations of one token, the second the act job's own audit, before one act; the capability, pause, presence and open-run gates; its own pacing over reclaim's ramp and tier, and its own destructive slot; collector items in the cleanup row's list, and the feed (§5.10) | in shadow every would-collect is recorded and nothing is composed; once the operator arms it, an orphaned temp root is collected with no human act |`
   - (j) §8's paragraph, from `half and the collector's lane both edit the sweep, so wave 9 is dispatched` through `which brought the expiry lane, is met.`, becomes:
     > `half and the collector's lane both edit the sweep, so wave 9 was dispatched once the fleet's `ccd caps` advertised wave 7's token and wave 8 had merged. Wave 9's subject is what `ws-collect` is licensed against, and it ships its lane shadowed: arming it is the operator's act, after the checks §5.10 names.`
   - (k) Appendix A, `(`shared/api.ts:3856-3857`)` becomes the measured lines from Step 0's grep. At `d0c2b7803` they are `(`shared/api.ts:4141-4142`)`. Task 1 inserts only at the foot, so they hold; measure anyway.
-  - (l) Every code comment and test title this wave added cites a spec section. List them with `git diff origin/main...HEAD -- server/src server/test shared | grep -o '§5\.[0-9]*[^)]*' | sort | uniq -c`. Confirm each cited section now says what the comment says it says. A miss is fixed in the spec, or reported by slug.
+  - (k2) The `crumb` paragraph's `ws-expire` sentence (§5.6, `grep -n "this wave leaves it alone" docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md`; `:728-732` at `d0c2b7803`). Make this edit ONLY if Step 0's content probe printed `WL W6 on main` (workspace lifecycle wave 6, #351, merged into this branch first). At `d0c2b7803` the paragraph says that `ws-expire`'s own pre-breadcrumb documents and its resumed arm's `probe-unmeasured` "carry no key … because the code that prints it is `_ws_expire_locked`'s and this wave leaves it alone". Once wave 6 is on `main`, `_ws_expire_locked` sets `crumb` itself: `true` on its resumed arm, `false` on its fresh arm before its own breadcrumb is written, and no key over a breadcrumb that stands but could not be read. Measure that first with `grep -n '_WS_RCL_CRUMB=' ccd/ccd`.
+    - In the sentence that begins `` `ws-reclaim` sets it itself: ``, add after its clause about the shared tail: "`ws-expire`'s locked region sets it the same way (workspace lifecycle's wave 6): `true` on its resumed arm, so the `probe-unmeasured` printed there while its `expire:` breadcrumb stands reads resumable, and `false` on its fresh arm until its breadcrumb is written".
+    - In the absence list, the two clauses from `` `ws-expire`'s own pre-breadcrumb documents, `` through `` `_ws_expire_locked`'s and this wave leaves it alone; `` become: "a `ws-expire` whose breadcrumb stands but could not be read;". The reclaim clause before it and the `ws-collect` clause after it stay.
+    - Correct the text to the code. The edit is one more sentence of `spec-stale-sentences-beyond-the-r92-list`'s class, and the wave-done says so.
+
+    If Step 0 printed `WL W6 not on main`, leave the paragraph alone. The wave-done then names slug `spec-ws-expire-crumb-sentence-after-wl-w6`, so that the second lander makes this edit in its merge.
+  - (l) Every code comment and test title this wave added cites a spec section. List them with `git diff origin/main...HEAD -- server/src server/test shared | grep -oE '§[0-9]+(\.[0-9]+)?[^)]*' | sort | uniq -c`, which lists every section cited, §7's included, never §5.x's alone. Confirm each cited section now says what the comment says it says. A miss is fixed in the spec, or reported by slug.
 
 - [ ] **Step 4: README and CLAUDE.md**
   - (a) `:3762`, `**The temp-root collector (child reclamation wave 7, shipped inert).**`, becomes `**The temp-root collector (child reclamation waves 7 and 9; the lane ships shadowed).**`.
-  - (b) `:3779-3781`, from ``on Darwin the audit measures nothing. `ccd caps` advertises`` to the paragraph's end, becomes:
+  - (b) `:3779-3781`, from ``` `mv` with `--no-copy` (coreutils 9.2 or later); on Darwin the audit measures nothing. ``` (the whole of `:3779`, from its first character) to the paragraph's end (`until the collector's lane lands (wave 9).`, `:3781`), becomes:
     ```markdown
     `mv` with `--no-copy` (coreutils 9.2 or later); on Darwin the audit measures nothing. `ccd caps` advertises
     `collect-v1` and `ws-collect`, and the agent grants `['ws-collect','--expect']`.
@@ -10744,7 +10957,7 @@ Expected: every case but none fails. The first `not.toContain` of each removal c
   - (d) `:5307`'s cell, `and nothing composes it yet |`, becomes ``and the server's collector lane composes it only once the operator has armed it (`$REG/collect-lane-live`) |``.
   - (e) `:5317-5318`, `` `ws-reclaim`, token-gated the same way, is composed by the server alone, and `ws-collect`, gated on its own token, will be (nothing composes it in this build). `` becomes ``` `ws-reclaim` and `ws-collect`, each token-gated the same way, are composed by the server alone, `ws-collect` only once the operator has armed its lane. ```
   - (f) `:5310` (the cleanup-pause row) is NOT touched. Check with `git diff -U0 origin/main -- README.md | grep -c "raise / lower the cleanup pause"`, which prints `0`.
-  - (g) CLAUDE.md:10. Measure `wc -l < README.md` and round to the nearest hundred. If that differs from CLAUDE.md's `(~6000 lines)`, edit that numeral alone (`git diff origin/main -- CLAUDE.md` shows one line). If it does not differ, CLAUDE.md is not touched.
+  - (g) CLAUDE.md:10. Measure `wc -l < README.md` and round to the nearest hundred. If that differs from CLAUDE.md's `(~6000 lines)`, edit that numeral alone (`git diff $(git merge-base origin/main HEAD) -- CLAUDE.md` shows one line; the merge base, so a CLAUDE.md edit another PR landed on `main` is not read as this branch's). If it does not differ, CLAUDE.md is not touched.
 
 - [ ] **Step 5: "§16 as built (wave 9, run 380)"**, appended after R92 at the end of §16. Model it on "§15 as built" (`grep -n '^### §15 as built' docs/superpowers/programs/child-reclamation-contract.md`). It names slugs, never a number:
 
@@ -10769,8 +10982,11 @@ Appendix A.
   `records`; the population comes from the two listings alone.
 - `an-answer-for-a-forgotten-id-is-dropped`: forgetting an id does not wait for its in-flight call, and that call's late
   answer is dropped.
-- The learning audit does not re-assert the id predicate: the population's check and the act job's step 1 are the two
-  checks this rule names.
+- `learn-collect-asks-no-id-predicate`: the learning audit does not re-assert the id predicate; the population's check
+  and the act job's step 1 are the two checks this rule names.
+- `population-cap-bounds-the-lane-not-the-frame` (a stated residual): the 1024 cap bounds what the lane audits and
+  remembers, not the listing itself. The agent's `readdir` returns every name in one frame, as the registry's own `$REG`
+  listing already does every tick, so R83's "cannot bloat the agent frame" holds for the lane's memory only.
 - `cc-tmp-scan-display-only`: the scan pins three things, because a value handed to `io` cannot be followed across
   lines as text: the pass, the lane and the executor spell `.cc-tmp` only as the display form `~/.cc-tmp`, never beside
   an `io` call or a path join, and the lane and the executor never read the home directory.
@@ -10796,10 +11012,6 @@ Appendix A.
   unknown.
 - `collect-act-cap-after-last-await-pinned`: a textual pin of step 6. The act job asks `COLLECT_CAP` at least twice, and
   the last ask follows the job's last await and precedes the argv's statement.
-- `ws-collect-cap-entry-is-a-classification`: `CAP_GATED_VERBS` lists `ws-collect`, added with the act's one site. The
-  act's function composes no audit of its own (the one audit site is shared with the learning audit), so its scope holds
-  no `verbSupported(`, and the entry is the site's gate in verb-gate's scan. The second ask's place is pinned by
-  `collect-act-cap-after-last-await-pinned`.
 
 **R86 (the gates).**
 - `pass-reads-its-switches-in-its-gather`: the pause read "at the pass's start" is the registry listing inside the
@@ -10830,6 +11042,14 @@ Appendix A.
   counter is added, as §16 now says.
 - `budget-test-pins-the-read-values`: `collect-audit-budget.test.ts` pins the six values it reads (30, 10, 30, 3, 8 and
   90) as well as the inequality, so a change to any bound reds it and the sum is argued again.
+- `flock-unavailable-takes-no-floor` (H13): a `flock-unavailable` die takes no refusal floor and starts no die streak.
+  It latches box-wide instead and waits the ramp alone.
+- `would-collect-ends-the-die-streak` (H13): a shadow would-collect ends a recurring die's streak, as every act outcome
+  but the same die does.
+- `terminal-refusal-keeps-the-refusal-floor` (H13): a verb refusal whose word is terminal advances the terminal run and
+  keeps the refusal row's deferral and floor beside it.
+- `terminal-failure-clears-the-deferral-count` (H13): a verb failure whose word is terminal (`failed quarantine-kept`)
+  advances the terminal run and clears the deferral count, as every other verb failure does.
 
 **R88 (attention and the feed).**
 - `collect-many-arm-declared`: the collapsed per-id collector line is a new L0 arm, `ChildReclaimCollectMany`, whose word
@@ -10866,11 +11086,11 @@ Appendix A.
   is read as R86 reads README `:5310`: "child reclamation" covers the collector.
 ```
 
-The note names exactly the slugs H1–H9 accepted, one sentence each under the R it amends, and no void slug (`hold-count-never-binds`, `hold-off-asked-at-step-6-live-only`, `collect-scan-shape-mismatch`, `refusal-kind-spelled-by-task-2`, `collector-imports-childreclaimsweep`). An R with no departure gets no heading (R82 has none). Measure each sentence against the tip and correct it to the code, never the reverse; a slug a worker recorded beyond these is added only on the coordinator's word. Then:
+The note names exactly the slugs H1–H9 and H13 accepted, plus the plan attack's stated residual `population-cap-bounds-the-lane-not-the-frame`, one sentence each under the R it amends, and no void slug (`hold-count-never-binds`, `hold-off-asked-at-step-6-live-only`, `collect-scan-shape-mismatch`, `refusal-kind-spelled-by-task-2`, `collector-imports-childreclaimsweep`, `ws-collect-cap-entry-is-a-classification`). An R with no departure gets no heading (R82 has none). Measure each sentence against the tip and correct it to the code, never the reverse; a slug a worker recorded beyond these is added only on the coordinator's word. Then:
 
 ```bash
 sed -n '/^### §16 as built (wave 9, run 380)/,$p' docs/superpowers/programs/child-reclamation-contract.md | grep -cE 'D-[0-9]|[0-9]{4} ?(–|\.\.|-) ?[0-9]{4}'   # 0
-sed -n '/^### §16 as built (wave 9, run 380)/,$p' docs/superpowers/programs/child-reclamation-contract.md | grep -cE 'hold-count-never-binds|hold-off-asked-at-step-6-live-only|collect-scan-shape-mismatch|refusal-kind-spelled-by-task-2|collector-imports-childreclaimsweep'   # 0
+sed -n '/^### §16 as built (wave 9, run 380)/,$p' docs/superpowers/programs/child-reclamation-contract.md | grep -cE 'hold-count-never-binds|hold-off-asked-at-step-6-live-only|collect-scan-shape-mismatch|refusal-kind-spelled-by-task-2|collector-imports-childreclaimsweep|ws-collect-cap-entry-is-a-classification'   # 0
 ```
 
 - [ ] **Step 6: Run the prose test: GREEN.**
@@ -10918,8 +11138,8 @@ Revert each, then re-run Step 6: green.
 ```bash
 git add docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md README.md \
   docs/superpowers/programs/child-reclamation-contract.md server/test/collect-lane-prose.test.ts
-git diff --cached --quiet -- CLAUDE.md || echo "CLAUDE.md staged: confirm it is the :10 numeral alone"
 git add CLAUDE.md   # only if Step 4 (g) changed the numeral; otherwise this adds nothing
+git diff --cached -- CLAUDE.md | grep '^[-+][^-+]' | grep -v 'README.md` (~' && echo "CLAUDE.md staged beyond the :10 numeral: unstage it" || true
 git commit -F - <<'EOF'
 docs(collect): the temp-root collector's lane as built, shadowed, and the checklist before arming it
 
@@ -10931,8 +11151,9 @@ pacing and slot, and what it shows. §5.2 and §8 say the lane composes the
 verb, shadowed behind a file nothing in the tree writes. The audit's budget
 pays one kill grace, about 73 s or 78 s at the widest grace, and the old
 79/94 s figures are corrected in §5.10 and §7. The residuals carried to this
-wave's pre-flight say where each went. Appendix A's presence citation points
-at the lines that hold the constants.
+wave's pre-flight say where each went, and §7 lists the residuals wave 9
+carries as built. Appendix A's presence citation points at the lines that
+hold the constants.
 
 README's collector paragraph loses "shipped inert" and every "nothing
 composes it". A new paragraph says how the lane runs shadowed and armed, and
