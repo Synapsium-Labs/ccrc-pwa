@@ -1341,6 +1341,10 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     README figure (~6000, with README at 6002), which pools-prose re-measures after Task 11.
   - **Progress, measured read-only:** `ws/plain-ridge` has 11 local commits, Tasks 1–11 (09:24–10:16), not pushed yet.
     Task 12, the whole branch and the PR, is in progress.
+  - **Consent given to box-token row 2b (run 377, bright-river's 4226; answered in 4227):** two README edits under
+    run 358's claim 1153. They are the doctor table's `box-token` row (:589) and one node-id sentence (about :537),
+    disjoint from wave 6's three README hunks (about :3549, :3585 and :3789). The second lander merges main, re-points
+    citations, and re-runs the session-hook citation cases and pools-prose's README numeral.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
