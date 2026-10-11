@@ -10,10 +10,14 @@
 // - a `ws-collect` document carries no `crumb`;
 // - its refusal words are not reclaim's;
 // - its audit is keyed `session`, not `id`.
-import { CHILD_RUN_ID, isTmpRootId, type CollectToken } from '../../shared/api.js';
 import {
-  CHILD_RECLAIM_DEFER_CEILING_MS, childReclaimBackoffMs, childReclaimTierFrom, childReclaimTierPaceMs,
-  type ChildReclaimLaneNow, type ChildReclaimTierState,
+  CHILD_RUN_ID, COLLECT_BOX_LABELS, COLLECT_BOX_LINES, TMPROOT_ID_MAX_CHARS, isTmpRootId, lcRefusalWord,
+  type ChildReclaimCollectAttention, type CollectBoxLine, type CollectToken, type LcRefusalToken,
+} from '../../shared/api.js';
+import {
+  CHILD_RECLAIM_DEFER_CEILING_MS, childReclaimBackoffMs, childReclaimDetailText, childReclaimIdsNamed, childReclaimStuckEnd,
+  childReclaimTierFrom, childReclaimTierPaceMs,
+  type ChildReclaimCollectInput, type ChildReclaimLaneNow, type ChildReclaimTierState,
 } from './childReclaimSweep.js';
 
 const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
@@ -888,5 +892,431 @@ export function collectFeedStep(e: CollectEntry, cue: CollectFeedCue): { readonl
       return e.feedEpisode === cue.key
         ? { entry: e, opened: null }
         : { entry: { ...e, feedEpisode: cue.key }, opened: cue.key };
+  }
+}
+
+// ── Attention and the feed (spec §5.10, §5.9) ───────────────────────────────────────────────────────────────────
+//
+// A REPORT, gating nothing: no audit, act, slot, pair or pace reads anything below. Every ccd-sourced string (a
+// detail, a path, `collect.leaf`, a record name, an unknown word) reaches a sentence or a body only through
+// `childReclaimDetailText`. No sentence builds a temp-root path: the leaf is the audit document's own.
+
+/** The words a collector item uses for itself (spec §5.10). A TERMINAL item's word is ccd's own instead. */
+export type CollectItemWord =
+  | 'in-use' | 'registered' | 'in-progress' | 'presence' | 'held' | 'die' | 'per-leaf' | 'failing' | 'verb-failed'
+  | 'changed-recently' | 'would-collect';
+
+/** One paced run as attention reads it (spec §5.10): its tier state (wave 8's derivation), and the word and detail
+ *  of the answer that last advanced it, both ccd's and untrusted. */
+export interface CollectRunView {
+  readonly tier: ChildReclaimTierState;
+  readonly word: string | null;
+  readonly detail: string | null;
+}
+
+/** What attention reads of one id's lane memory (spec §5.10), PROJECTED from Task 4's `CollectEntry` by
+ *  `collectAttentionViewOf` (H3). Each clock field is non-null only while Task 4's `collectAttentionCauses` says that
+ *  cause stands. All instants are on the monotonic clock. */
+export interface CollectAttentionView {
+  /** The latest document's `collect.witness.run`, or null. */
+  readonly witnessRun: number | null;
+  /** The latest document's `collect.leaf`, ccd's spelling, or null. */
+  readonly leaf: string | null;
+  readonly failing: CollectRunView;
+  readonly verbFailed: CollectRunView;
+  readonly terminal: CollectRunView;
+  /** A STANDING deferral (`in-use`, `registered`, `in-progress`): its word, ccd's latest detail, and since when that
+   *  word has answered with no break. Null when none stands. */
+  readonly deferral: { readonly word: string; readonly detail: string; readonly since: number } | null;
+  readonly presenceSince: number | null;
+  readonly hold: { readonly why: CollectHoldWhy; readonly since: number } | null;
+  readonly changedRecentlySince: number | null;
+  /** A recognised arm-1 die other than `flock-unavailable`, recurring for the ceiling (H1), or null. */
+  readonly die: { readonly word: CollectDieWord; readonly since: number } | null;
+  /** A shadow would-collect episode stands (Task 4's `collectWouldCollectStands`). No token is carried: the shipped
+   *  tree's one `as CollectToken` stays the audit reader's. */
+  readonly wouldCollect: boolean;
+}
+
+/** One run as attention reads it: Task 4's tier derivation, and the run's latest word and detail. */
+const collectRunView = (r: CollectRun, token: CollectRunToken): CollectRunView => ({
+  tier: collectRunTier(r, token), word: r.kind === 'run' ? r.word : null, detail: r.kind === 'run' ? r.detail : null,
+});
+
+/** THE PROJECTION (H3): Task 4's entry as attention reads it. It decides NO threshold. Every clock field is copied from
+ *  the cause Task 4's `collectAttentionCauses` says stands (first answer to latest, inclusive), and is null otherwise;
+ *  the runs are projected whole; the evidence is the latest document's. */
+export function collectAttentionViewOf(e: CollectEntry): CollectAttentionView {
+  let deferral: CollectAttentionView['deferral'] = null;
+  let presenceSince: number | null = null;
+  let hold: CollectAttentionView['hold'] = null;
+  let changedRecentlySince: number | null = null;
+  let die: CollectAttentionView['die'] = null;
+  for (const c of collectAttentionCauses(e)) {
+    if (c.kind === 'held') hold = { why: c.why, since: c.sinceMono };
+    else if (c.kind === 'presence') presenceSince = c.sinceMono;
+    else if (c.kind === 'die') die = { word: c.word, since: c.sinceMono };
+    else if (!('sinceMono' in c)) continue;   // the three runs, projected whole below
+    else if (c.kind === COLLECT_CHANGED_RECENTLY) changedRecentlySince = c.sinceMono;
+    else deferral = { word: c.kind, detail: c.detail, since: c.sinceMono };
+  }
+  return {
+    witnessRun: e.evidence.runId, leaf: e.evidence.leaf,
+    failing: collectRunView(e.failing, 'failing'), verbFailed: collectRunView(e.verbFailed, 'verb-failed'),
+    terminal: collectRunView(e.terminal, 'terminal'),
+    deferral, presenceSince, hold, changedRecentlySince, die, wouldCollect: collectWouldCollectStands(e),
+  };
+}
+
+/** How one pass's audit counts for the two pass-scoped box lines (spec §5.10). */
+export type CollectPassClass = 'no-document' | 'lock' | 'other';
+
+/** Which collector work is unsettled past its bound (spec §5.10, H1, R85): `'audit'`, a learning audit past twice the
+ *  90 s row, or an executor job's own audit past it and short of `CHILD_RECLAIM_STALL_MS`; or an executor JOB that took the act
+ *  slot and has not settled in `CHILD_RECLAIM_STALL_MS`, whether or not it composed a call: `'act'` when its
+ *  `ws-collect` is out, `'job'` otherwise. The job's bound is checked first, and the box line says the act slot is
+ *  held for `'act'` and `'job'` alike. Each bound counts from the enqueue (`unsettled-bound-counts-from-the-queue`). */
+export type CollectUnsettledKind = 'audit' | 'act' | 'job';
+
+/** What the box-wide lines read (spec §5.10): the population's doubted listings (Task 3's `CollectListingDoubt`, the
+ *  count the RAW listing's) and its refused-name count, the box-wide probes standing, this pass's audits by id, the
+ *  flock latch, and the collector work unsettled past its bound. */
+export interface CollectBoxFacts {
+  readonly unmeasured: readonly CollectListingDoubt[];
+  readonly refusedNames: number;
+  readonly boxProbes: ReadonlyMap<string, string>;
+  readonly passAudits: ReadonlyMap<string, CollectPassClass>;
+  readonly flockLatched: boolean;
+  readonly unsettled: ReadonlyMap<string, CollectUnsettledKind>;
+}
+
+const COLLECT_LOCK_PROBE = 'lock' satisfies keyof typeof COLLECT_PROBE_CLASS;
+const COLLECT_RECORDS_PROBE = 'records' satisfies keyof typeof COLLECT_PROBE_CLASS;
+const COLLECT_CHANGED_RECENTLY: LcRefusalToken = 'changed-recently';
+const COLLECT_NO_DOCUMENT: Extract<CollectAudit['kind'], 'no-document'> = 'no-document';
+const COLLECT_IN_USE = 'in-use';
+const COLLECT_IN_PROGRESS = 'in-progress';
+const COLLECT_REGISTERED: LcRefusalToken = 'registered';
+
+/** One audit's class for the pass-scoped lines. */
+export function collectPassClass(a: CollectAudit): CollectPassClass {
+  if (a.kind === COLLECT_NO_DOCUMENT) return 'no-document';
+  return a.kind === 'unmeasured' && a.probe === COLLECT_LOCK_PROBE ? 'lock' : 'other';
+}
+
+/** The box-wide probes standing after one answer (spec §5.10): a box-wide `unmeasured` sets its probe's latest
+ *  detail; an answer that passed every rung (`collectable`, `changed-recently`, `collected`) clears them all; any
+ *  other answer leaves them standing. */
+export function collectBoxProbesAfter(prev: ReadonlyMap<string, string>, a: CollectAudit | CollectResult): ReadonlyMap<string, string> {
+  if (a.kind === 'unmeasured') {
+    return collectProbeClass(a.probe) === 'box-wide' ? new Map([...prev, [a.probe, a.detail]]) : prev;
+  }
+  const passed = a.kind === 'collectable' || a.kind === 'collected'
+    || (a.kind === 'verdict' && a.verdict === COLLECT_CHANGED_RECENTLY);
+  return passed ? new Map() : prev;
+}
+
+const CEILING_MIN = CHILD_RECLAIM_DEFER_CEILING_MS / 60_000;
+const CHANGING_HOURS = COLLECT_CHANGED_RECENTLY_SPAN_MS / 3_600_000;
+const COLLECT_ASKS_LONG = 'ccrc asks again on a long, capped schedule.';
+
+const collectTmp = (leaf: string | null): string => {
+  const t = leaf === null ? '' : childReclaimDetailText(leaf);
+  return t === '' ? 'its temp root' : `its temp root ${t}`;
+};
+const collectCap = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
+const collectSaid = (detail: string | null): string => {
+  const t = detail === null ? '' : childReclaimDetailText(detail);
+  return t === '' ? '' : ` What ccd said: ${childReclaimStuckEnd(t)}`;
+};
+const collectProbeText = (word: string | null): string =>
+  (word === null ? 'no word' : word === COLLECT_NO_DOCUMENT ? 'ccd answered nothing' : childReclaimDetailText(word));
+
+/** Why a hold stands, in a person's words (spec §5.10). Total over `CollectHoldWhy`. */
+const COLLECT_HOLD_WHY: Readonly<Record<CollectHoldWhy, string>> = {
+  'run-open': 'the run that minted it is not closed',
+  'run-absent': 'the run that minted it is not in the coordination database',
+  'run-after-witness': 'the run its witness names opened after ccrc handed the directory out, so it is not the minting run',
+  'id-in-open-run': 'an open run names this id',
+  'no-witness-run': 'ccd’s audit named no run for it',
+  'store-unreadable': 'the coordination database could not be read',
+};
+/** The holds the coordination database cannot vouch for: one box-wide line, never per id (spec §5.10). */
+const COLLECT_HOLD_UNVOUCHED: readonly CollectHoldWhy[] = ['run-absent', 'run-after-witness'];
+
+/** What a collapsed line says of each member, by word (spec §5.10). Total over `CollectItemWord`. */
+const COLLECT_ITEM_MANY: Readonly<Record<CollectItemWord, string>> = {
+  'in-use': 'a process still uses its temp root, so the temp-root collector leaves it alone; the feed row of each names the process ccd found.',
+  registered: 'a registry row of its id, or what one left behind, still stands, so the temp-root collector leaves its temp root alone.',
+  'in-progress': 'another ccd process has held its reap lock for a long time, so the temp-root collector leaves its temp root alone.',
+  presence: 'its id has been open on a screen for a long time, so the temp-root collector leaves its temp root alone.',
+  held: 'the temp-root collector holds its temp root because of what the coordination database says of its run; each is asked again once its hold lifts.',
+  die: `ccd refused to start the temp-root collector’s verb for it before its lock, each time, for at least ${CEILING_MIN} minutes; nothing was removed.`,
+  'per-leaf': 'ccd cannot collect its temp root as it stands, and this does not heal by itself; the feed row of each names what ccd found.',
+  failing: 'the temp-root collector has not been able to measure its temp root for some time; nothing was removed, and ccrc keeps asking.',
+  'verb-failed': 'the temp-root collector’s attempts to collect its temp root keep failing; ccd kept what still stands each time.',
+  'changed-recently': 'something under its temp root has kept changing for more than a day, though no process of this user uses it.',
+  'would-collect': 'while the collector was shadowed, the temp-root collector found its temp root orphaned and idle and removed nothing.',
+};
+const COLLECT_TERMINAL_MANY = 'ccd has answered its temp root with a terminal word, so it is listed for you to look at; '
+  + 'its feed row names that word and what ccd found.';
+
+interface CollectItemText { readonly word: string; readonly sentence: string; readonly many: string }
+
+/** One id's item (spec §5.10), in this precedence: terminal, verb-failed, a recurring pre-lock die, failing (a
+ *  per-leaf word or the tier; `records` subsumed while `tmpquarantine` is unmeasured), in-use, a hold (an unvouched
+ *  one joins one box line instead), in-progress, registered, presence, changed-recently, then shadow's would-collect.
+ *  WHETHER each stands is the view's: Task 4's causes decided it, first answer to latest and inclusive, and this
+ *  function decides no threshold. */
+function collectItemOf(id: string, v: CollectAttentionView, recordsSubsumed: boolean): CollectItemText | 'unvouched' | null {
+  const tmp = collectTmp(v.leaf);
+  if (v.terminal.tier.tier && v.terminal.word !== null) {
+    // H8: true in every state. It says what ccd answered at the run's LAST terminal answer, never that the id is
+    // refused now: in shadow, ccd may answer `collectable` again while the terminal run stands.
+    const w = childReclaimDetailText(v.terminal.word);
+    const lead = lcRefusalWord(v.terminal.word);
+    const said = lead === null
+      ? ', which means the temp-root collector found something it could not prove safe; nothing was removed, and it '
+        + 'is listed for you to look at.'
+      : `, which said: “${lead}”`;
+    return { word: v.terminal.word, many: COLLECT_TERMINAL_MANY,
+      sentence: `${collectCap(tmp)}: ccd’s last terminal answer for it was ${w}${said}${collectSaid(v.terminal.detail)} `
+        + COLLECT_ASKS_LONG };
+  }
+  if (v.verbFailed.tier.tier) {
+    return { word: 'verb-failed', many: COLLECT_ITEM_MANY['verb-failed'],
+      sentence: `The temp-root collector’s attempts to collect ${tmp} keep failing (${collectProbeText(v.verbFailed.word)}).`
+        + `${collectSaid(v.verbFailed.detail)} ccd kept what still stands each time; ${COLLECT_ASKS_LONG}` };
+  }
+  if (v.die !== null) {
+    return { word: 'die', many: COLLECT_ITEM_MANY.die,
+      sentence: `ccd refused to start the temp-root collector’s verb for this id before its lock `
+        + `(${childReclaimDetailText(v.die.word)}) each time for at least ${CEILING_MIN} minutes; nothing was removed `
+        + `from ${tmp}. ccrc asks again later, no sooner than the ceiling after each refusal.` };
+  }
+  if (v.failing.tier.tier && !(recordsSubsumed && v.failing.word === COLLECT_RECORDS_PROBE)) {
+    const probe = collectProbeText(v.failing.word);
+    const said = collectSaid(v.failing.detail);
+    if (v.failing.word !== null && collectProbeClass(v.failing.word) === 'per-leaf') {
+      return { word: 'per-leaf', many: COLLECT_ITEM_MANY['per-leaf'],
+        sentence: `ccd cannot collect ${tmp} as it stands (${probe}).${said} This does not heal by itself: `
+          + 'ccrc asks again on a long, capped schedule, and a person decides what to do with it.' };
+    }
+    return { word: 'failing', many: COLLECT_ITEM_MANY.failing,
+      sentence: `The temp-root collector has not been able to measure ${tmp} for some time (${probe}).${said} `
+        + 'Nothing was removed; ccrc keeps asking, backing off in between.' };
+  }
+  const d = v.deferral;
+  if (d !== null && d.word === COLLECT_IN_USE) {
+    return { word: 'in-use', many: COLLECT_ITEM_MANY['in-use'],
+      sentence: `A process still uses ${tmp}, so the temp-root collector leaves it alone.${collectSaid(d.detail)} `
+        + 'ccrc never stops a process; it asks again later, and this line ends once nothing uses it.' };
+  }
+  if (v.hold !== null) {
+    if (COLLECT_HOLD_UNVOUCHED.includes(v.hold.why)) return 'unvouched';
+    return { word: 'held', many: COLLECT_ITEM_MANY.held,
+      sentence: `The temp-root collector has held ${tmp} for at least ${CEILING_MIN} minutes: `
+        + `${COLLECT_HOLD_WHY[v.hold.why]}. It is never collected while the hold stands, and is asked again once it lifts.` };
+  }
+  if (d !== null && d.word === COLLECT_IN_PROGRESS) {
+    return { word: 'in-progress', many: COLLECT_ITEM_MANY['in-progress'],
+      sentence: `Another ccd process has held this id’s reap lock, ~/.cc-sessions/.reap-${id}.lock, for at least `
+        + `${CEILING_MIN} minutes, so the temp-root collector leaves ${tmp} alone.${collectSaid(d.detail)} A reap, `
+        + 'reclaim, expiry, restore or collection of it may still be running, or a killed one left a process holding '
+        + 'the lock; ccrc asks again later.' };
+  }
+  if (d !== null && d.word === COLLECT_REGISTERED) {
+    return { word: 'registered', many: COLLECT_ITEM_MANY.registered,
+      sentence: `A registry row of this id, or what one left behind, has stood for at least ${CEILING_MIN} minutes, so `
+        + `the temp-root collector treats ${tmp} as that workspace’s and leaves it alone. ccrc asks again later; this `
+        + 'line ends once the id is free.' };
+  }
+  if (v.presenceSince !== null) {
+    return { word: 'presence', many: COLLECT_ITEM_MANY.presence,
+      sentence: `This id has been open on a screen for at least ${CEILING_MIN} minutes, so the temp-root collector `
+        + `leaves ${tmp} alone. It never collects a temp root while its id is open, and asks again once it is not.` };
+  }
+  if (v.changedRecentlySince !== null) {
+    return { word: 'changed-recently', many: COLLECT_ITEM_MANY['changed-recently'],
+      sentence: `Something under ${tmp} has kept changing for at least ${CHANGING_HOURS} hours, though no process of `
+        + 'this user is using it. The temp-root collector leaves it alone while it changes; a person decides what '
+        + 'keeps changing it.' };
+  }
+  if (v.wouldCollect) {
+    return { word: 'would-collect', many: COLLECT_ITEM_MANY['would-collect'],
+      sentence: `While the collector was shadowed, two audits at least a pass apart found ${tmp} orphaned and idle, so it `
+        + 'recorded that it would collect it and removed nothing. This line ends once ccd answers anything else for it.' };
+  }
+  return null;
+}
+
+/** The box-wide lines (spec §5.10): each a single item under its fixed label, in the label table's order. */
+function collectBoxItems(b: CollectBoxFacts, unvouched: readonly string[]): ChildReclaimCollectAttention[] {
+  const out: ChildReclaimCollectAttention[] = [];
+  const line = (word: CollectBoxLine, sentence: string): void => {
+    out.push({ kind: 'collect', sessionId: COLLECT_BOX_LABELS[word], runId: null, word, sentence });
+  };
+  // Task 3's doubts, in the label table's order; an over-cap count is the RAW listing's
+  // (`population-cap-counts-the-raw-listing`).
+  const doubts = [...b.unmeasured].sort((p, q) => COLLECT_BOX_LINES.indexOf(p.listing) - COLLECT_BOX_LINES.indexOf(q.listing));
+  for (const l of doubts) {
+    const also = l.listing === 'tmpquarantine' ? '; a quarantine record it cannot see is not listed' : '';
+    if (l.kind === 'over-cap') {
+      line(l.listing, `${COLLECT_BOX_LABELS[l.listing]} holds ${l.count} names, more than the ${COLLECT_POPULATION_MAX} `
+        + `the temp-root collector reads, so it audits none of them${also}.`);
+    } else {
+      line(l.listing, `The temp-root collector could not list ${COLLECT_BOX_LABELS[l.listing]} `
+        + `(${childReclaimDetailText(l.why)}), so it audits only the ids the other listing names, and never reads an `
+        + `absence from this one${also}.`);
+    }
+  }
+  if (b.refusedNames > 0) {
+    line('refused-names', `${b.refusedNames} names under ${COLLECT_BOX_LABELS.tmproots} or `
+      + `${COLLECT_BOX_LABELS.tmpquarantine} are not temp-root ids ccrc acts on (for example a name that begins with a `
+      + `dash, is longer than ${TMPROOT_ID_MAX_CHARS} characters, is not a session id’s shape, or is no quarantine `
+      + 'record of one), so the collector never audits them. A person looks at them by hand.');
+  }
+  if (b.boxProbes.size > 0) {
+    const what = [...b.boxProbes].sort(([p], [q]) => (p < q ? -1 : p > q ? 1 : 0)).map(([p, d]) => {
+      const t = childReclaimDetailText(d);
+      return t === '' ? childReclaimDetailText(p) : `${childReclaimDetailText(p)} (${t})`;
+    }).join('; ');
+    line('box-probe', `ccd on the fleet box cannot collect any temp root as things stand: ${what}. The collector `
+      + 'removes nothing until this is fixed, and keeps asking.');
+  }
+  const answers = [...b.passAudits.values()];
+  const only = (c: CollectPassClass): number => (answers.every((a) => a === c) ? answers.length : 0);
+  if (only('no-document') >= 2) {
+    line('no-document', `${answers.length} temp-root audits this pass got no answer from ccd at all, and none got one; `
+      + 'the fleet box or the link to it may be struggling. ccrc keeps asking.');
+  }
+  if (only('lock') >= 2) {
+    line('lock', `${answers.length} temp roots answered this pass that their reap lock could not be opened, and no `
+      + 'audit answered anything else. ccrc keeps asking.');
+  }
+  if (b.flockLatched) {
+    line('flock', 'ccd on the fleet box answered that flock (util-linux) is unavailable, so the temp-root collector '
+      + 'composes nothing until flock is installed and this server restarts.');
+  }
+  const calls = [...b.unsettled].filter(([, k]) => k === 'audit').map(([id]) => id).sort();
+  const jobs = [...b.unsettled].filter(([, k]) => k === 'job' || k === 'act').map(([id]) => id).sort();
+  if (calls.length + jobs.length > 0) {
+    // H1, R85: an unsettled audit call OR executor job; a job's clause, its act out or not, says the act slot is held.
+    const said = [
+      ...(calls.length === 0 ? [] : [`A temp-root collector call to ccd has not settled within its bound for `
+        + `${childReclaimIdsNamed(calls)}.`]),
+      ...(jobs.length === 0 ? [] : [`The collector’s act slot is held by the job for ${childReclaimIdsNamed(jobs)}, `
+        + 'which has not settled within its bound, whether or not it has called ccd yet.']),
+    ];
+    line('unsettled', `${said.join(' ')} The collector asks nothing more of these ids until each settles.`);
+  }
+  if (unvouched.length > 0) {
+    line('unvouched', `${unvouched.length} temp roots are held because the coordination database cannot vouch for the `
+      + `run that minted each one: the run is missing, or opened after the temp root was handed out `
+      + `(${childReclaimIdsNamed(unvouched)}). They stay held, armed or not; a person removes them once nothing still needs them.`);
+  }
+  return out;
+}
+
+/** The collector's attention (spec §5.10): ONE uncollapsed item per id, in id order; each word's collapsed clause;
+ *  and the box-wide lines. An id that fails `isTmpRootId` never lists. Pure. Each entry is already
+ *  `collectAttentionViewOf`'s projection, so WHETHER a per-id cause stands was Task 4's decision and no threshold is
+ *  read here: `nowMono` is carried for the lane's call and read by none
+ *  (`continuity-measured-answer-to-answer`). */
+export function collectAttentionItems(i: {
+  readonly entries: ReadonlyMap<string, CollectAttentionView>;
+  readonly box: CollectBoxFacts;
+  readonly nowMono: number;
+}): ChildReclaimCollectInput {
+  const recordsSubsumed = i.box.unmeasured.some((d) => d.listing === 'tmpquarantine');
+  const perId: ChildReclaimCollectAttention[] = [];
+  const manyLead: Record<string, string> = {};
+  const unvouched: string[] = [];
+  for (const [id, v] of [...i.entries].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    if (!isTmpRootId(id)) continue;
+    const t = collectItemOf(id, v, recordsSubsumed);
+    if (t === null) continue;
+    if (t === 'unvouched') { unvouched.push(id); continue; }
+    perId.push({ kind: 'collect', sessionId: id, runId: v.witnessRun, word: t.word, sentence: t.sentence });
+    manyLead[t.word] = t.many;
+  }
+  return { perId, manyLead, box: collectBoxItems(i.box, unvouched) };
+}
+
+/** The collector's feed titles (spec §5.10): its own, never a child reclaim title. */
+export type CollectFeedKind = 'collected' | 'would-collect' | 'answer' | 'switch';
+export const COLLECT_FEED_TITLE: Readonly<Record<CollectFeedKind, string>> = {
+  collected: 'temp root collected',
+  'would-collect': 'temp root would be collected',
+  answer: 'temp root collector',
+  switch: 'temp root collector switch',
+};
+
+const collectWho = (id: string, runId: number | null): string => (runId === null ? id : `${id}, child of run #${runId}`);
+const COLLECT_WITNESS_SAID: Readonly<Record<Extract<CollectResult, { readonly kind: 'collected' }>['witness'], string>> = {
+  dropped: 'its witness was dropped',
+  kept: 'its witness was kept: a newer spawn on this id had written it again',
+  absent: 'its witness was already gone',
+};
+
+/** A `collected` row (spec §5.10). A witness-only collect (`record: null`) says no leaf stood and what became of the
+ *  witness, and NEVER that a temp root was removed: nothing was. */
+export function collectFeedCollectedBody(id: string, runId: number | null, leaf: string | null,
+  r: Extract<CollectResult, { readonly kind: 'collected' }>): string {
+  const at = leaf === null ? '' : childReclaimDetailText(leaf);
+  if (r.record === null) {
+    return `${collectWho(id, runId)}: no leaf stood${at === '' ? '' : ` at ${at}`}, so nothing was moved; `
+      + `${COLLECT_WITNESS_SAID[r.witness]}.`;
+  }
+  return `${collectWho(id, runId)}: the temp-root collector removed its temp root${at === '' ? '' : ` ${at}`} `
+    + `(record ${childReclaimDetailText(r.record)})${r.resumed ? ', finishing a collection an earlier attempt began' : ''}; `
+    + `${COLLECT_WITNESS_SAID[r.witness]}.`;
+}
+
+/** Shadow's row, once per (id, token) episode (spec §5.10). */
+export function collectFeedWouldCollectBody(id: string, runId: number | null, leaf: string | null): string {
+  return `would collect ${collectWho(id, runId)}: ${collectTmp(leaf)} was found `
+    + 'orphaned and idle by two audits at least a pass apart. The collector is shadowed, so nothing was removed.';
+}
+
+/** One row per switch flip (spec §5.10). Any same-uid session can touch the switch, so every change is said. */
+export const collectFeedSwitchBody = (live: boolean): string => (live
+  ? 'the collector lane is now live: the temp-root collector removes an orphaned temp root it has proved idle twice, '
+    + 'with no person in the loop, while cleanup is not paused.'
+  : 'the collector lane is now shadowed: the temp-root collector audits and reports what it would collect, and removes nothing.');
+
+/** One row per (id, word) episode of any other answer (spec §5.10): ccd's word, detail and paths, each made one line. */
+export function collectFeedAnswerBody(id: string, runId: number | null, word: string, detail: string | null,
+  paths: readonly string[]): string {
+  const w = childReclaimDetailText(word);
+  const d = detail === null ? '' : childReclaimDetailText(detail);
+  const p = paths.map((x) => childReclaimDetailText(x)).filter((x) => x !== '');
+  const said = `${w === '' ? 'a word this build cannot show' : w}${d === '' ? '' : `: ${d}`}`
+    + `${p.length === 0 ? '' : ` (paths: ${p.join(', ')})`}`;
+  return `${collectWho(id, runId)}: ccd answered ${childReclaimStuckEnd(said)}`;
+}
+
+/** The feed cue of one AUDIT answer (spec §5.10; R88: one row per (id, word) episode, quiet on repeats), which the lane
+ *  hands Task 4's `collectFeedStep` after each fold. A `collectable` answer is an observation: no row, and a
+ *  would-collect episode of its own token stands. Every other answer is a row keyed by its word. A key is memory
+ *  only, compared and never shown. A shadow would-collect is `{ kind: 'row', key: collectWouldCollectKey(token) }`. */
+export function collectFeedCueOfAudit(a: CollectAudit): CollectFeedCue {
+  switch (a.kind) {
+    case 'collectable': return { kind: 'observe', token: a.token };
+    case 'verdict': return { kind: 'row', key: a.verdict };
+    case 'unmeasured': return { kind: 'row', key: `unmeasured ${a.probe}` };
+    case 'no-document': case 'unreadable': return { kind: 'row', key: a.kind };
+  }
+}
+
+/** The feed cue of one ACT outcome (spec §5.10): every outcome is a row keyed by its kind and word, an act's
+ *  `no-document` apart from an audit's. */
+export function collectFeedCueOfAct(r: CollectResult): CollectFeedCue {
+  switch (r.kind) {
+    case 'collected': return { kind: 'row', key: 'collected' };
+    case 'refused': return { kind: 'row', key: `refused ${r.word}` };
+    case 'failed': return { kind: 'row', key: `failed ${r.token}` };
+    case 'die': return { kind: 'row', key: `die ${r.word}` };
+    case 'no-document': return { kind: 'row', key: 'act no-document' };
   }
 }

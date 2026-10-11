@@ -104,7 +104,7 @@ import {
   type ChildReclaimReviewedRunRead, type ChildReclaimSiblingsRead, type ChildReclaimSweepEntry,
   type ChildReclaimSweepOutcome, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
   childReclaimAttentionWithLeaves, childReclaimLeafKept, childReclaimLeafKeptSince, type ChildReclaimLeafKept,
-  CHILD_RECLAIM_SWEEP_REJECTED, childReclaimTierSeed,
+  CHILD_RECLAIM_SWEEP_REJECTED, childReclaimTierSeed, CHILD_RECLAIM_COLLECT_NONE,
 } from './childReclaimSweep.js';
 import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import {
@@ -3966,7 +3966,7 @@ export class FleetWatcher {
     const verdicts = this.childReclaimJudged ?? new Map<string, ChildReclaimSweepVerdict>();
     const kept = childReclaimKeptItems({ verdicts, live, mirrorArms });
     this.childReclaimAttentionList = childReclaimAttentionWithLeaves(
-      childReclaimAttentionWithKept(mirrorArms, kept, verdicts), this.childReclaimLeaves.map((k) => k.item));
+      childReclaimAttentionWithKept(mirrorArms, kept, verdicts), this.childReclaimLeaves, CHILD_RECLAIM_COLLECT_NONE);
     return kept;
   }
 
