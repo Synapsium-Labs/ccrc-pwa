@@ -1019,7 +1019,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const runId = terminalRun(f.coord, 'demo');
     const reason = holdReason('demo', 2, null, null);
     f.writeRow({ child: String(runId), hold: reason });
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('released');
     expect(f.calls).toEqual([['ws-release', '--session', RID,
       '--surface', 'agent', '--actor', `run:${runId} reclaim sweep: program demo retired`]]);
@@ -1039,7 +1039,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     db.prepare('UPDATE runs SET program = ? WHERE id = ?').run(program, runId);
     const reason = holdReason(program, 2, null, null);
     f.writeRow({ child: String(runId), hold: reason });
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program, accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program, accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('released');
     const actor = f.calls[0]![f.calls[0]!.indexOf('--actor') + 1]!;
     expect(Buffer.byteLength(actor, 'utf8')).toBeLessThanOrEqual(LC_REASON_MAX_BYTES);
@@ -1053,7 +1053,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const runId = terminalRun(f.coord, 'demo');
     const reason = holdReason('demo', 2, null, null);
     f.writeRow({ child: String(runId), hold: reason });
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('not-held');
   });
 
@@ -1062,7 +1062,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const runId = terminalRun(f.coord, 'demo');
     const reason = holdReason('demo', 2, null, null);
     f.writeRow({ child: String(runId), hold: reason });
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('failed');
   });
 
@@ -1072,7 +1072,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const runId = terminalRun(f.coord, 'demo');
     const reason = holdReason('demo', 2, null, null);
     f.writeRow({ child: String(runId), hold: reason });
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('failed');
     expect(f.calls).toEqual([]);
   });
@@ -1086,7 +1086,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     // or a fresh dispatch re-held it — after this job was queued with the
     // OLDER `reason` byte-captured at the deciding pass.
     writeFileSync(path.join(f.reg, `${RID}.hold`), 'a human wrote this over it');
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
     expect(f.calls, 'no argv composed once the byte re-check disagreed').toEqual([]);
   });
@@ -1102,7 +1102,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const r2 = f.coord.openRun({ program: 'demo', title: 'demo', project: 'demo', wave: 2, waveOf: null,
       claimedBy: 'demo-coord' });
     if (!('id' in r2)) throw new Error(`openRun r2 refused: ${JSON.stringify(r2)}`);
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
     expect(f.calls, 'no argv composed once the count re-check disagreed').toEqual([]);
   });
@@ -1120,7 +1120,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     // the row's current text) would release against evidence that no longer
     // proves anything once R's own row has moved on.
     f.coord.db.prepare('UPDATE runs SET wave = ? WHERE id = ?').run(5, runId);
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
     expect(f.calls, 'no argv composed once the re-derived rendering disagreed').toEqual([]);
   });
@@ -1129,7 +1129,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const f = await rrig();
     const reason = 'program:ghost wave:2';
     f.writeRow({ child: '999', hold: reason });
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId: 999, reason, program: 'ghost', accountedRunId: 999 };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId: 999, reason, program: 'ghost', accountedRunId: 999, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
     expect(f.calls).toEqual([]);
   });
@@ -1140,14 +1140,14 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const other = terminalRun(f.coord, 'demo-other');
     const reason = holdReason('demo', 2, null, null);
     f.writeRow({ child: String(other), hold: reason });   // re-bound to a different run since
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
   });
 
   it('the row is gone entirely — a listable registry that no longer names this session — no release', async () => {
     const f = await rrig({ row: false });
     const req: ChildReclaimReleaseRequest = { sessionId: RID, runId: 1, reason: 'program:demo wave:2',
-      program: 'demo', accountedRunId: 1 };
+      program: 'demo', accountedRunId: 1, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
   });
 
@@ -1157,7 +1157,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const reason = holdReason('demo', 2, null, null);
     f.writeRow({ child: String(runId), hold: reason });
     const deps: ChildReclaimDeps = { ...f.deps, io: { ...f.deps.io, readdir: async () => null } };
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(deps, req)).toBe('failed');
   });
 
@@ -1170,7 +1170,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
       claimedBy: 'demo-coord' });
     if (!('id' in sib)) throw new Error(`openRun sib refused: ${JSON.stringify(sib)}`);
     f.coord.markDispatched(sib.id, RID, RID, 'ws/quiet-basin', false);
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
   });
 
@@ -1193,7 +1193,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const born = read.run.closedAt + CHILD_BIRTH_SKEW_MS + 1;
     const line = JSON.stringify({ uid: 'k7.1.1', at: born, act: 'create', outcome: 'done', verb: 'ws-add', id: RID });
     f.coord.ingestJournal({ gen: '1790000000000000000', rows: [parseJournalLine(line)], cursor: 200, size: 200, at: born });
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold({ ...f.deps, now: () => born + 1_000 }, req)).toBe('released');
     expect(f.calls.map((c) => c[0])).toEqual(['ws-release']);
   });
@@ -1228,7 +1228,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const line = JSON.stringify({ uid: `k7b.1.${k7n}`, at: closedAt, act: 'create', outcome: 'done', verb: 'ws-add', id: RID });
     f.coord.ingestJournal({ gen: '1790000000000000000', rows: [parseJournalLine(line)], cursor: k7n * 200,
       size: k7n * 200, at: closedAt });
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold({ ...f.deps, now: () => closedAt + 1_000 }, req)).toBe('changed');
     expect(f.calls).toEqual([]);
   });
@@ -1241,7 +1241,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const closedAt = closedClaim(f.coord, 'demo-earlier');
     // No `create` is mirrored at all, and the clock is a month past the claim:
     // with no birth to compare against, doubt keeps the child.
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold({ ...f.deps, now: () => closedAt + 30 * 24 * 3_600_000 }, req)).toBe('changed');
     expect(f.calls).toEqual([]);
   });
@@ -1254,7 +1254,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const coordRun = f.coord.openRun({ program: 'demo-coordinated', title: 't', project: 'demo', wave: 1,
       waveOf: null, claimedBy: RID });
     if (!('id' in coordRun)) throw new Error(`openRun coordRun refused: ${JSON.stringify(coordRun)}`);
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
   });
 
@@ -1267,7 +1267,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const reason = holdReason('demo', 2, null, null);
     f.writeRow({ child: String(runId), hold: reason });
     writeFileSync(path.join(f.reg, 'reclaim-paused'), '');
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
     expect(f.calls).toEqual([]);
   });
@@ -1285,7 +1285,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const deps: ChildReclaimDeps = { ...f.deps, io: { ...f.deps.io,
       readdir: async (dir: string, timeoutMs?: number, signal?: AbortSignal) =>
         (pastStep5 ? null : f.deps.io.readdir(dir, timeoutMs, signal)) } };
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(deps, req)).toBe('failed');
     expect(pastStep5).toBe(true);
     expect(f.calls).toEqual([]);
@@ -1297,7 +1297,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
     const reason = holdReason('demo', 2, null, null);
     f.writeRow({ child: String(runId), hold: reason });
     const spy = vi.spyOn(f.coord, 'openRunsForSession').mockImplementation(() => { throw new Error('boom'); });
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     await expect(releaseRetiredChildHold(f.deps, req)).resolves.toBe('failed');
     expect(f.calls).toEqual([]);
     spy.mockRestore();
@@ -1323,7 +1323,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
       if (id !== runId || !r.ok || r.run === null) return r;
       return { ok: true as const, run: { ...r.run, state: 'working' as const } };
     });
-    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId };
+    const req: ChildReclaimReleaseRequest = { sessionId: RID, runId, reason, program: 'demo', accountedRunId: runId, generation: { kind: 'absent' } };
     expect(await releaseRetiredChildHold(f.deps, req)).toBe('changed');
     expect(f.calls).toEqual([]);
     spy.mockRestore();

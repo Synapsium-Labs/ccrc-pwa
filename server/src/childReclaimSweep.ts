@@ -212,9 +212,10 @@ export const childReclaimSameGenerationKey = (a: ChildReclaimGenerationKey, b: C
 export const isChildReclaimGenerationKey = (g: ChildReclaimGeneration): g is ChildReclaimGenerationKey =>
   g.kind !== 'unreadable';
 
-/** Does this entry describe the workspace generation born at `bornAt`, whose `.child` marker names run `markerRunId`
- *  and whose registry row carries `generation` (spec §5.5; §5.6: slugs recycle)? ALL THREE keys must match, the
- *  generation through `childReclaimSameGenerationKey`. A null birth never matches.
+/** Does this entry, or the lane's hold-retired memory, describe the workspace generation born at `bornAt`, whose
+ *  `.child` marker names run `markerRunId` and whose registry row carries `generation` (spec §5.5; §5.6: slugs
+ *  recycle)? ALL THREE keys must match, the generation through `childReclaimSameGenerationKey`. A null birth never
+ *  matches.
  *
  *  WHY THREE. A recycled slug's new row and marker are listed before its new birth can be placed, so the birth
  *  alone would let an old workspace's licence-ripe presence episode license a request to the new one; a marker
@@ -230,9 +231,43 @@ export const isChildReclaimGenerationKey = (g: ChildReclaimGeneration): g is Chi
  *  entry's reach: it carries the entry's key as `licenceGeneration`, which the executor re-proves against the row
  *  (spec §5.5). */
 export const childReclaimSameGeneration = (
-  entry: ChildReclaimSweepEntry, bornAt: number | null, markerRunId: number, generation: ChildReclaimGenerationKey,
+  entry: ChildReclaimGenerationIdentity, bornAt: number | null, markerRunId: number,
+  generation: ChildReclaimGenerationKey,
 ): boolean => entry.bornAt !== null && entry.bornAt === bornAt && entry.markerRunId === markerRunId
   && childReclaimSameGenerationKey(entry.generation, generation);
+
+/** The three keys of one workspace generation (spec §5.6: slugs recycle): its birth, the run its marker
+ *  names, and its generation file's value. An entry carries them, and so does the lane's hold-retired
+ *  memory, so `childReclaimSameGeneration` reads both through this one shape. */
+export type ChildReclaimGenerationIdentity = Pick<ChildReclaimSweepEntry, 'bornAt' | 'markerRunId' | 'generation'>;
+
+/** What ONE `hold-retired` sighting does to the lane's hold-retired memory. Spec §5.7: two consecutive
+ *  sightings queue the release job. Spec §5.6: slugs recycle, so both sightings must be of ONE generation.
+ *  - `second`: the stored key is this generation's (`childReclaimSameGeneration`, whose generation
+ *    conjunct is `childReclaimSameGenerationKey`). The lane deletes the key and queues the release,
+ *    carrying `generation`, which the job re-reads nearest its argv.
+ *  - `first`: no key is stored, or an UNEQUAL one is. `key` REPLACES it, so the next sighting of THIS
+ *    generation is the second. Keeping the old key instead would match no later sighting, and the hold
+ *    would stand for ever under an `ordinary` verdict that no surface shows.
+ *  - `forget`: the generation could not be read. That is no key, so the lane deletes whatever it stored.
+ *    The sweep's verdict answers `identity-unmeasured` for such a row before `hold-retired` is reached,
+ *    so this arm is defence in depth.
+ *  Pure. The lane applies it and decides nothing. */
+export type ChildReclaimHoldRetiredStep =
+  | { readonly kind: 'second'; readonly generation: ChildReclaimGenerationKey }
+  | { readonly kind: 'first'; readonly key: ChildReclaimGenerationIdentity }
+  | { readonly kind: 'forget' };
+
+export function childReclaimHoldRetiredStep(
+  stored: ChildReclaimGenerationIdentity | undefined, bornAt: number | null, markerRunId: number,
+  generation: ChildReclaimGeneration,
+): ChildReclaimHoldRetiredStep {
+  if (generation.kind === 'unreadable') return { kind: 'forget' };
+  if (stored !== undefined && childReclaimSameGeneration(stored, bornAt, markerRunId, generation)) {
+    return { kind: 'second', generation };
+  }
+  return { kind: 'first', key: { bornAt, markerRunId, generation } };
+}
 
 /** The minting run as the store answered: a row, no row, or a row this process
  *  could not represent — three answers, never folded. `openedAt` is the run's

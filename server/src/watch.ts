@@ -93,11 +93,12 @@ import {
 import {
   childReclaimAskOrder, childReclaimAttention, childReclaimAttentionWithKept, childReclaimDeferExpired, childReclaimDue,
   childReclaimFeedQuiet, childReclaimFirstSighting, childReclaimHoldRead, childReclaimJournalRow, childReclaimKeptItems,
-  childReclaimNextEntry, childReclaimSameGeneration, isChildReclaimGenerationKey,
+  childReclaimHoldRetiredStep, childReclaimNextEntry, childReclaimSameGeneration, isChildReclaimGenerationKey,
   childReclaimSweepVerdict, childReclaimTerminalRefusal, type ChildReclaimAsk, type ChildReclaimCoordinatorClaim,
   childReclaimKeptVerdicts, type ChildReclaimHoldCandidate,
   type ChildReclaimHoldCandidatesRead, type ChildReclaimHoldOpenRead, type ChildReclaimHoldRead,
-  type ChildReclaimJournalAttention, type ChildReclaimJournalRow, type ChildReclaimKeptAttention,
+  type ChildReclaimGenerationIdentity, type ChildReclaimJournalAttention, type ChildReclaimJournalRow,
+  type ChildReclaimKeptAttention,
   type ChildReclaimLaneNow, type ChildReclaimMintingRunRead,
   type ChildReclaimReviewedRunRead, type ChildReclaimSiblingsRead, type ChildReclaimSweepEntry,
   type ChildReclaimSweepOutcome, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
@@ -840,18 +841,25 @@ export class FleetWatcher {
    *  `<why> <id>`, because an absent minting run and an absent reviewed run
    *  are two conditions with two sentences. */
   private childReclaimAbsentLogged = new Set<string>();
-  /** Per marked child: has THIS lane already seen a `hold-retired` verdict for
-   *  it once, with no other verdict in between? A `hold-retired` verdict a
-   *  SECOND consecutive pass finds queues the release job; any other verdict
-   *  — eligible or any other ineligibility — clears the entry, so the two
-   *  sightings must be back to back. IN MEMORY ONLY, the `childReclaimSweepState`
-   *  idiom: a restart only delays a release by one more sighting, never causes
-   *  one — the job's own re-reads, and ccd's rung 4, prove everything again
-   *  before anything is written. A child already in `childReclaimInFlight`
-   *  (its release job dispatched, or its ordinary reclaim in flight) is never
-   *  touched here — the lane has no re-entrancy guard beyond that one set, and
-   *  an overlapping pass must not turn "two further passes" into one. */
-  private childReclaimHoldRetiredSeen = new Set<string>();
+  /** Per marked child: the workspace generation in which THIS lane has seen a
+   *  `hold-retired` verdict for it once, with no other verdict in between. The
+   *  key is the child's birth, the run its marker names and its generation
+   *  file's value (`ChildReclaimGenerationIdentity`; spec §5.6: slugs recycle).
+   *  A `hold-retired` verdict that a SECOND consecutive pass finds for the SAME
+   *  generation queues the release job, carrying that generation, which the
+   *  job re-reads nearest its argv. A sighting of ANOTHER generation is a
+   *  first sighting, and its key REPLACES the stored one.
+   *  `childReclaimHoldRetiredStep` (L1) decides which; this lane applies it.
+   *  Any other verdict, eligible or any other ineligibility, deletes the
+   *  entry, so the two sightings must be back to back. IN MEMORY ONLY, the
+   *  `childReclaimSweepState` idiom: a restart only delays a release by one
+   *  more sighting, never causes one, because the job's own re-reads and ccd's
+   *  rung 4 prove everything again before anything is written. A child already
+   *  in `childReclaimInFlight` (its release job dispatched, or its ordinary
+   *  reclaim in flight) is never touched here: the lane has no re-entrancy
+   *  guard beyond that one set, and an overlapping pass must not turn "two
+   *  further passes" into one. */
+  private childReclaimHoldRetiredSeen = new Map<string, ChildReclaimGenerationIdentity>();
   /** Per marked child: has its retired-hold release job ANSWERED since this
    *  lane last saw it eligible? Set where the job settles, beside the delete
    *  of its sweep entry; CONSUMED by the next eligible verdict, which seeds
@@ -3280,8 +3288,9 @@ export class FleetWatcher {
    * this child's own runs, whose accounting has since retired (spec §5.7's
    * "no hold" conjunct) — never reaches the ordinary reclaim path directly:
    * `ws-reclaim`'s own rung 4 refuses any hold. Instead, on the SECOND
-   * consecutive pass this pass answers it, the child's own `release` payload
-   * is queued as its own job (`releaseRetiredChildHold`, `coord/childReclaim.
+   * consecutive pass this pass answers it for the SAME workspace generation
+   * (spec §5.6), the child's own `release` payload is queued as its own job
+   * (`releaseRetiredChildHold`, `coord/childReclaim.
    * ts`) on the child's `KeyedQueue` key — which re-proves every fact it
    * relies on before it ever composes `ws-release`, and whose own outcome
    * (`released`/`not-held`/`changed`/`failed`) writes back nothing but the
@@ -3574,13 +3583,20 @@ export class FleetWatcher {
         // too would let an overlapping pass turn two sightings into one.
         if (v.why === 'hold-retired') {
           if (!this.childReclaimInFlight.has(r.id)) {
-            if (this.childReclaimHoldRetiredSeen.has(r.id)) {
-              this.childReclaimHoldRetiredSeen.delete(r.id);
+            // TWO SIGHTINGS OF ONE GENERATION (spec §5.6, §5.7). L1 decides what this sighting does to the
+            // memory (`childReclaimHoldRetiredStep`). A `first` stores its key, REPLACING whatever an
+            // earlier generation left. A `second` or a `forget` deletes it. Only a `second` queues the
+            // job, and the job carries the generation.
+            const step = childReclaimHoldRetiredStep(
+              this.childReclaimHoldRetiredSeen.get(r.id), childBornAt, v.runId, regGeneration);
+            if (step.kind === 'first') this.childReclaimHoldRetiredSeen.set(r.id, step.key);
+            else this.childReclaimHoldRetiredSeen.delete(r.id);
+            if (step.kind === 'second') {
               this.childReclaimInFlight.add(r.id);
               const release = v.release;
               acts.push(this.execChildReclaimRelease(coord, {
                 sessionId: r.id, runId: v.runId, reason: release.reason, program: release.program,
-                accountedRunId: release.accountedRunId,
+                accountedRunId: release.accountedRunId, generation: step.generation,
               }).then(
                 (outcome) => {
                   // A `failed` answer composes no argv on the box and leaves
@@ -3610,8 +3626,6 @@ export class FleetWatcher {
                 this.childReclaimReleaseAnswered.add(r.id);
                 this.childReclaimInFlight.delete(r.id);
               }));
-            } else {
-              this.childReclaimHoldRetiredSeen.add(r.id);
             }
           }
           continue;
@@ -3763,7 +3777,7 @@ export class FleetWatcher {
     for (const id of [...this.childReclaimSweepState.keys()]) {
       if (!seen.has(id)) this.childReclaimSweepState.delete(id);
     }
-    for (const id of [...this.childReclaimHoldRetiredSeen]) {
+    for (const id of [...this.childReclaimHoldRetiredSeen.keys()]) {
       if (!seen.has(id)) this.childReclaimHoldRetiredSeen.delete(id);
     }
     for (const id of [...this.childReclaimReleaseAnswered]) {

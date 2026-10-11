@@ -1199,6 +1199,9 @@ export interface ChildReclaimReleaseRequest {
   readonly reason: string;
   readonly program: string;
   readonly accountedRunId: number;
+  /** The workspace generation both `hold-retired` sightings were made under (spec §5.6, §5.7): the sweep's
+   *  own byte-exact read, a value or `absent`, never unreadable. Step 7 re-reads it. */
+  readonly generation: ChildReclaimGenerationKey;
 }
 
 /** `releaseRetiredChildHold`'s answer. `released`/`not-held` are ccd's own two
@@ -1257,6 +1260,13 @@ export function childReclaimReleaseActor(runId: number, program: string): string
  *      remove the hold the operator may have raised the switch to keep:
  *      `cmd_ws_release` does not read the marker itself. `set` answers
  *      `changed`; `unmeasurable` answers `failed`.
+ *   7. the generation (`childReclaimGenerationRead`, the read the executor's
+ *      own step 2c makes) — still the one both sightings were made under (spec
+ *      §5.6). Read LAST, nearest the argv: a same-run re-mint carries the same
+ *      hold text, rendered from the same run, so steps 1 and 2 pass it, and
+ *      only this read tells the two workspaces apart. A different value, or
+ *      `absent` against a value, answers `changed`; an unreadable read answers
+ *      `failed`.
  * A throw or an `ok:false` from any of these answers `failed` and composes no
  * argv — never a guess standing in for a read this process could not finish.
  * Only once every one of them agrees does it compose `ws-release`, gated by
@@ -1272,7 +1282,10 @@ export function childReclaimReleaseActor(runId: number, program: string): string
  * last-written claim is treated as that claim — this job cannot tell the two
  * apart, and nothing here tries to: parsing a hold back is exactly what this
  * whole lane refuses to do (`run-routes.test.ts`'s "NOTHING in the tree
- * parses one back").
+ * parses one back"). The gap from step 7's read to ccd's unlink is the same
+ * residual for a re-mint, because `ws-release` carries no token and no
+ * generation. Releasing a re-minted workspace's hold that way cannot reclaim
+ * it: its own minting run is live, so the sweep answers `minting-run-open`.
  *
  * NEVER PARSES a hold: every comparison below is byte equality against a
  * RENDERING (`holdReason`), never a scan for structure inside the text
@@ -1362,8 +1375,8 @@ export async function releaseRetiredChildHold(
     return 'failed';
   }
 
-  // 6 — the reclaim switch: still down. Read last, nearest the argv, like
-  // the executor's own step 2b.
+  // 6 — the reclaim switch: still down. Read just before the generation
+  // (step 7), like the executor's own step 2b.
   let pause: MarkerState;
   try {
     pause = await childReclaimPauseRead(deps.io, deps.cfg.registryDir);
@@ -1374,6 +1387,20 @@ export async function releaseRetiredChildHold(
   }
   if (pause === 'set') return 'changed';
   if (pause !== 'clear') return 'failed';
+
+  // 7 — the generation: still the one both sightings were made under (spec §5.6, §5.7). Read LAST,
+  // nearest the argv: a same-run re-mint carries the same hold text, rendered from the same run, so
+  // steps 1 and 2 pass it, and only this read tells the two workspaces apart.
+  let current: ChildReclaimGeneration;
+  try {
+    current = await childReclaimGenerationRead(deps.io, deps.cfg.registryDir, sessionId);
+  } catch (err) {
+    console.warn(`ccrc-server: releaseRetiredChildHold: reading ${sessionId}'s generation failed `
+      + `(${err instanceof Error ? err.message : String(err)})`);
+    return 'failed';
+  }
+  if (current.kind === 'unreadable') return 'failed';
+  if (!childReclaimSameGenerationKey(req.generation, current)) return 'changed';
 
   // Only now: the one write this job may ever compose. It deletes nothing
   // but the hold file (`cmd_ws_release`'s own docstring).
