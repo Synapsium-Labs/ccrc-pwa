@@ -54,7 +54,9 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
      code line outside `_ws_expire_locked`, and ccd/ccd is restamped.
   2. **server/test/ccd-child-reclaim-crumb.test.ts.** Only its ws-expire describe is rewritten and retitled; the
      printer and ws-reclaim describes stay byte for byte.
-  Wave 8 overlaps neither file.
+  Wave 8 overlaps neither file. A third consent followed (4213, answered in 4214): that test file's header bullet on
+  ws-expire's keyless documents is replaced with the plan's wording. It is comment only, and the rest of the header
+  stays byte for byte.
 
 - **2026-10-11 07:57 — wave 8's wave-done (4205) is verified at `0511d5370`, PR #349. Run 348 is at `awaiting-review`, and review run 378 is opened.**
   - **Measured.** origin's tip equals the fingerprint. PR #349 is MERGEABLE over main `7609221a4`, which has not moved,
