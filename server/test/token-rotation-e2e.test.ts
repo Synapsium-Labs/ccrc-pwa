@@ -363,6 +363,31 @@ describe('F1 (review 362): the view never claims a current value the holder does
       expect(v.fleetConfirmed).toBe('unknown');
     } finally { await r.app.close(); }
   });
+
+  // R2 (review 365): the server-role rig above has `bothWriter: null`, so it can only see the `current` arm of the view's
+  // fleetConfirmed. The same sequence on a both-role rig reaches the `own-write` arm, which must be gated on the holder too.
+  // The first both rig starts from a hand-made value (as D-4414 F2 does): on an empty both home boot's first mint owes
+  // nothing, so no own-write promotion would ever happen. Its first tick adopts and promotes by own-write.
+  it.skipIf(isRoot)('a both box with history whose boot mint fails: no own-write confirmation of a value the holder does not hold (R2, review 365)', async () => {
+    const home = mkTmp('ccrc-token-e2e-r2-');
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', 'mail.token'), `${'e'.repeat(64)}\n`, { mode: 0o600 });
+    const ctl = { off: 0, writerFails: false };
+    const b = await bothAt(home, ctl);
+    await b.driver.tick();
+    // the precondition: the own-write arm is live before the fault, so the assertions below can see it
+    const before = b.driver.view();
+    expect(before).toMatchObject({ fleetConfirmed: 'own-write' });
+    expect(before.currentSeq).not.toBeNull();
+    rmSync(b.paths.current);
+    rmSync(b.paths.previous, { force: true });
+    const r = await bothAt(home, { ...ctl, lockDirForBoot: true });             // ~/.ccrc unwritable at boot (EACCES)
+    expect(r.boot.mintFailed).toBe(true);
+    expect(r.boot.holder.hasCurrent()).toBe(false);
+    const v = r.driver.view();
+    expect(v).toMatchObject({ phase: 'unconfigured', currentSeq: null, fleetConfirmed: 'unknown' });
+    expect(['current', 'own-write'], 'the fleet confirmed a generation the holder does not hold').not.toContain(v.fleetConfirmed);
+  });
 });
 
 describe('a failed boot mint is retried (spec 10.1, review: driver guards)', () => {

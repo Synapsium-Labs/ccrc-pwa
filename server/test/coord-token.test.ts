@@ -183,6 +183,15 @@ describe('deploy/notify.sh carries the token the way the server expects it', () 
     expect(notifySh, 'the token is back on curl\'s argv').not.toMatch(/-H\s+"x-ccrc-mail-token/);
   });
 
+  it('refuses the shipped placeholder, and its literal is PLACEHOLDER_TOKEN (ledger 12:00 residue 5)', () => {
+    // The literal in the script is a copy of the authority in coord/token.ts.
+    // Reading it from the file text and comparing it keeps the copy honest
+    // without a second one in this test.
+    const m = /^\[ "\$tok" != '([^'\n]*)' \] \|\| exit 0\n/m.exec(notifySh);
+    expect(m, 'notify.sh has no placeholder guard line').not.toBeNull();
+    expect(m![1]).toBe(PLACEHOLDER_TOKEN);
+  });
+
   it('starts with set +x +a, then umask 077, before any other statement (spec 4.9)', () => {
     // The first two lines of code after the shebang and before the first
     // comment, the shape ccd-pool-sync and ccd-update-sync carry: a token

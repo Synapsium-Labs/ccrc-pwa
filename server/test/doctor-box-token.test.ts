@@ -491,11 +491,38 @@ describe('doctor box-token: the shell spellings are pinned to L0', () => {
     expect(at, 'the box-token block marker moved: re-point the pin').toBeGreaterThanOrEqual(0);
     return src.slice(at);
   };
-  /** Every hex-class spelling (`[0-9a-f]{n}`, `[a-f0-9]{n}`, `[0-9a-fA-F]{n}`, `[[:xdigit:]]{n}`...) in the block's code
-   *  lines, less the 64-wide digest shape (a different thing); a 4th spelling in another class reds (review of fix 1). */
+  /** Every bracket class whose admitted set is hex digits (and `-`) and holds at least one hex letter, in any spelling:
+   *  ranges, listed letters, `\d`, `[:digit:]`, `[:xdigit:]`, a `\-` literal, bare or inside `(?:…)`, in the block's code
+   *  lines, less the exact `[0-9a-f]{64}` digest spelling (a different thing); a 4th spelling in another class reds (review
+   *  of fix 1; review 365 R3). The class body admits `[` only as a `[:name:]`, so the bash `[[ "$g" =~ ^[0-9a-f]{16}$ ]]`
+   *  yields its inner class rather than a body that swallowed the outer `[`. */
+  const HEX_SET = new Set('0123456789abcdefABCDEF-');
+  const expandClass = (body: string): Set<string> => {
+    const out = new Set<string>();
+    for (let i = 0; i < body.length; i++) {
+      if (body.startsWith('[:xdigit:]', i)) { for (const c of '0123456789abcdefABCDEF') out.add(c); i += 9; continue; }
+      if (body.startsWith('[:digit:]', i)) { for (const c of '0123456789') out.add(c); i += 8; continue; }
+      const named = /^\[:[a-z]+:\]/.exec(body.slice(i)); // any other POSIX class admits more than hex
+      if (named) { out.add(named[0]); i += named[0].length - 1; continue; }
+      if (body[i] === '\\') { // `\d` is 0-9 and `\-` is a literal `-`; any other escape is a character no hex set admits
+        if (body[i + 1] === 'd') for (const c of '0123456789') out.add(c);
+        else if (body[i + 1] === '-') out.add('-');
+        else out.add(body.slice(i, i + 2));
+        i += 1; continue;
+      }
+      if (body[i + 1] === '-' && i + 2 < body.length && body[i + 2] !== '\\' && body[i + 2] !== '[') {
+        for (let c = body.charCodeAt(i); c <= body.charCodeAt(i + 2); c++) out.add(String.fromCharCode(c));
+        i += 2; continue;
+      }
+      out.add(body[i]!);
+    }
+    return out;
+  };
   const genShapes = (src: string): string[] =>
     checkBlock(src).split('\n').filter((l) => !/^\s*#/.test(l))
-      .flatMap((l) => [...l.matchAll(/\[(?:\[:xdigit:\]|[0-9a-fA-F-]*[aA]-[fF][0-9a-fA-F-]*)\]\{\d+(?:,\d*)?\}/g)].map((m) => m[0]))
+      .flatMap((l) => [...l.matchAll(/(?:\(\?:)?\[((?:\[:[a-z]+:\]|\\.|[^\]\\[])*)\]\)?\{\d+(?:,\d*)?\}/g)]
+        .filter((m) => { const set = expandClass(m[1]!); return [...set].every((c) => HEX_SET.has(c)) && [...set].some((c) => /[a-fA-F]/.test(c)); })
+        .map((m) => m[0]))
       .filter((w) => w !== '[0-9a-f]{64}');
   const proofTuple = (src: string): unknown[] | null => {
     const hits = [...checkBlock(src).matchAll(/\bpf in \(([^)]*)\)/g)];
@@ -528,6 +555,22 @@ describe('doctor box-token: the shell spellings are pinned to L0', () => {
     expect(genShapes(`${src}\n    x = re.compile(r"[0-9a-fA-F]{16}")\n`)).not.toEqual(want);
     expect(genShapes(`${src}\n    x = re.compile(r"[[:xdigit:]]{16}")\n`)).not.toEqual(want);
     expect(genShapes(`${src}\n    x = re.compile(r"[0-9]{2}")\n`), 'a digit-only class is not a hex shape').toEqual(want);
+    // Review 365 R3: a class is judged by the set it admits, so every spelling of hex is a hex shape. `String.raw` keeps the
+    // backslash (an untagged template turns `\d` into a bare `d`, a spelling the old scanner already found). Each row
+    // names a pattern its own element must match, so an element edited to lose its backslash (or any other spelling) fails
+    // that assertion instead of passing as a different shape.
+    const spellings: [string, RegExp][] = [
+      [String.raw`[\da-f]`, /\\d/], [String.raw`[a-f\d]`, /\\d/], ['[0-9abcdef]', /^\[0-9abcdef\]$/], ['(?:[0-9a-f])', /^\(\?:\[/],
+      ['[[:digit:]a-f]', /\[:digit:\]/], [String.raw`[0-9a-f\-]`, /\\-/],
+    ];
+    for (const [spelled, has] of spellings) {
+      expect(spelled, `the planted element ${spelled} lost the spelling it names`).toMatch(has);
+      expect.soft(genShapes(`${src}\n    x = re.compile(r"${spelled}{16}")\n`), `${spelled} is a hex shape`).not.toEqual(want);
+    }
+    // The natural bash spelling: a class body that admits `[` would swallow it and miss the shape.
+    expect.soft(genShapes(`${src}\n    [[ "$x" =~ ^[0-9a-f]{16}$ ]]\n`), 'a hex class inside a bash [[ ]] test').not.toEqual(want);
+    expect.soft(genShapes(`${src}\n    x = re.compile(r"[A-Za-z0-9._:-]{8}")\n`), 'a class wider than hex is not a hex shape').toEqual(want);
+    expect.soft(genShapes(`${src}\n    x = re.compile(r"[0-9a-g]{16}")\n`), 'a near-miss class (g is not hex) is not a hex shape').toEqual(want);
     expect(proofTuple(src.replace(', "proof-unmeasured")', ')'))).not.toEqual([null, 'proved', ...l0Proof()]);
     expect(proofTuple(src.replace('"proved"', '"proven"'))).not.toEqual([null, 'proved', ...l0Proof()]);
     expect(proofTuple(src.replace('(None, ', '('))).not.toEqual([null, 'proved', ...l0Proof()]);
