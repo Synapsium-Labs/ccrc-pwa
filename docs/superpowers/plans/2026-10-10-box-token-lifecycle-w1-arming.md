@@ -465,3 +465,20 @@ The constant and the SKIP branch stay as a one-line kill switch. A disarmed copy
 
 - **4552** (PENDING Decision 1; written for Option A). An armed `retired-presented` FAIL stands only while a retired presentation is unanswered, meaning it is newer than the last completed rotation. It is not "a retired value presented since the server started". The driver records when it first saw the latest presentation, in `box-token.json`'s optional `counters.retiredPresentedAt`. An absent key means a state from before this number, and `null` means none recorded. The stamp survives a restart. D-4412's `oweForRetiredPresentation` owes a rotation while the stamp is unanswered, as well as on a fresh count. Its `HOLD_REPROBE_MS` bound is unchanged, so a presentation inside the hour is answered once the hour has passed instead of being forgotten. A state from before this number with a non-zero count is stamped at the new build's first tick, so it reads as unanswered, never as clear. Doctor reads an absent key with a count, or a null stamp with a count, as unanswered. Why: the parent plan's Task B5 makes the finding a pure function of the since-boot count. Armed, that count clears only on a restart, and a completed rotation, which D-4412 owes for exactly this case, would never clear it. D-4412 as merged also lets a presentation inside its hour go unanswered for good. The spec's §4.8 lists "the count of retired values presented" and assigns it no class. The count stays on the console card and in the state file unchanged. Known limit: a rollback to a build before this number drops the key when its count changes, and if the stamp was unanswered at the rollback and nothing is presented afterwards, the roll-forward forgets it. If the operator rules B, this entry instead records `retired-presented` as a WARN. If C, it records the restart-only remedy and the boot-time zeroing.
 - **4553** (only if Decision 2 is ruled (a)). `fleet-token-absent` and `token-absent` take their armed class from the box's history: WARN on a box never handed a value (no generation file and no sync report), or on a server that has never run the lifecycle (no state file); FAIL otherwise. The spec arms both as FAIL. Why: `ccrc install`'s exit code is doctor's, so a FAIL there makes every fresh install exit non-zero until its first rotation, and keeps `~/ccrc.migrating`. If Decision 2 is ruled (b) or (c), this number is not spent.
+
+## Design
+
+**Posture:** none
+
+**Why:** this plan turns doctor arms on (`_BT_ARMS_ON=0` to `1`) over a tree where four
+pins have been proven red under their mutants. It renders nothing. Its one mention of a
+PWA file is a sentence saying the opposite — `BOX_TOKEN_UNREADABLE_TEXT` is module-local
+in `pwa/src/screens/SettingsScreen.tsx` "and this task does not edit that file" — which
+is what the UI-path scan matched on. The console card that card belongs to shipped in
+part B (#341), already on `main`.
+
+**Answered on the merge, not when this plan was written.** `server/test/design-declaration.test.ts`
+landed on the design-system branch after this plan was filed, and its scope boundary is a
+filename date (`2026-09-29`) rather than a list — so merging the two trees asked this plan
+a question that did not exist at the time. Appended at the end of the file on purpose: it
+shifts no line above it, so every citation anchor into this document is untouched.

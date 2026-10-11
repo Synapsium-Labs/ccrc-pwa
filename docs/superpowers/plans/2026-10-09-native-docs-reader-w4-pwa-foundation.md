@@ -12838,3 +12838,23 @@ No commit in this task but Step 5's: everything else it writes is scratch or git
 ```json
 []
 ```
+
+## Design
+
+**Posture:** none
+
+**Why:** this wave's own Goal says it: "no visible change beyond crash resilience". It
+is the parse pipeline, the module worker and its runner, `renderHast`, the extraction of
+`lib/markdown.tsx` out of `MessageBubble.tsx` with chat BYTE-IDENTICAL (a golden test of
+today's output is committed before anything moves), the three `RenderBoundary` mounts and
+a router gaining `useLocation`. A design canvas would depict a screen this wave is
+measured not to have changed.
+
+The Docs screen itself is W5. That is where the question has an answer worth drawing,
+and W5's plan is where it gets asked.
+
+**Answered on the merge, not when this plan was written.** `server/test/design-declaration.test.ts`
+landed on the design-system branch after this plan was filed, and its scope boundary is a
+filename date (`2026-09-29`) rather than a list — so merging the two trees asked this plan
+a question that did not exist at the time. Appended at the end of the file on purpose: it
+shifts no line above it, so every citation anchor into this document is untouched.
