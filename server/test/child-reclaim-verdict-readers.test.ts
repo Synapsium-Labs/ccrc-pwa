@@ -147,7 +147,8 @@ describe('the sweep’s verdicts are read by no decision (spec §5.9)', () => {
     const DECLARATION = 'private childReclaimAttentionList: readonly ChildReclaimAttention[]';
     const FRAME = 'childReclaimAttention: this.childReclaimAttentionList';
     const FEED_QUIET = 'childReclaimFeedQuiet(entry, this.childReclaimAttentionList, r.id)';
-    const WRITE = 'this.childReclaimAttentionList = childReclaimAttentionWithKept(mirrorArms, kept, verdicts)';
+    const WRITE = 'this.childReclaimAttentionList = childReclaimAttentionWithLeaves(\n'
+      + '      childReclaimAttentionWithKept(mirrorArms, kept, verdicts), this.childReclaimLeaves.map((k) => k.item))';
     expect(expressionHits(/\bchildReclaimAttentionList\b/, [DECLARATION, FRAME, FEED_QUIET, WRITE])).toEqual([
       `watch.ts: ${DECLARATION}`,
       // `emitCoord`: the coord frame's two arms (unmeasurable, measured).
