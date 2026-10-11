@@ -444,6 +444,18 @@ export const CCD_ARGV = {
    *  Workspace lifecycle wave 3b's lane is its one caller (`expireArchived`'s act), behind `EXPIRE_CAP`. */
   wsExpire: (token: string, id: string, dec: ActorFlags | null) =>
     argv(['ws-expire', '--expect', token, '--session', id, ...decFlags(dec)]),
+  /** `ws-audit --collect` (child reclamation, spec 2026-09-22 §5.10): the SAME verb and granted prefix as `wsAudit` —
+   *  `['ws-audit','--session']` — with the mode flag after the id, the order `cmd_ws_audit` reads. No grant of its own,
+   *  and no `--defer-expired`. Its document carries a witnessed temp root's verdict and, when it is collectable, the
+   *  token `ws-collect` spends. */
+  wsCollectAudit: (id: string) => argv(['ws-audit', '--session', id, '--collect']),
+  /** `ws-collect` — the collector of a witnessed child temp root whose workspace is gone. `token` is
+   *  `ws-audit --collect`'s, recomputed and compared by ccd inside the reap lock BEFORE anything moves. The confirmation
+   *  token LEADS (`['ws-collect','--expect']` is the grant); the dec trails, and ccd strips it before it binds a
+   *  positional. Composed by NOTHING in this build: the collector's lane is its one caller, behind `COLLECT_CAP`, and
+   *  `ws-collect-wiring.test.ts` pins that no server source composes it until then. */
+  wsCollect: (token: string, id: string, dec: ActorFlags | null) =>
+    argv(['ws-collect', '--expect', token, '--session', id, ...decFlags(dec)]),
   wsAttic:   (id: string) => argv(['ws-attic', '--session', id]),
   /** The dec flags ride AFTER `--reason`, and `--reason` is NOT one of them: on
    *  `ws-hold` the hold reason IS the declared reason (ccd's `cmd_ws_hold` says
@@ -873,6 +885,16 @@ export const EXPIRE_CAP = 'expire-v1';
  *  come from `ccd caps` and lacks this token answers `unsupported` (section 7.1's skew table, C1). `capSupported`
  *  alone folds the first into the second, and the two have different remedies. */
 export const DOCS_CAP = 'docs-v1';
+
+/** The `ccd caps` token that says this box has the child temp-root collector (child reclamation spec 2026-09-22 §5.10,
+ *  §8's wave 7): `ws-audit --collect`, `ws-collect`, the `collect` journal act and the quarantine record — one ccd
+ *  inode. Spelled ONCE in `server/src`; ccd's `echo collect-v1` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS`
+ *  are the other two spellings, held equal by that test's `toContain`.
+ *
+ *  READ IT WITH `capSupported`, NEVER `verbSupported`: the verb it gates deletes a directory, and a destructive verb sent
+ *  to a box with no evidence it exists is the failure the capability reader was built to prevent. Nothing reads it in
+ *  this build — the collector's lane does, before its first audit (`ws-collect-wiring.test.ts` pins that). */
+export const COLLECT_CAP = 'collect-v1';
 
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string

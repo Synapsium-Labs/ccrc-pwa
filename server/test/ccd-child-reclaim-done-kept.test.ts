@@ -171,13 +171,16 @@ describe('a kept word never reads as null — it is printed without python, and 
     // The temp root's kept word is replaced, after step (6) set it and before the document is printed, by a
     // value no arm names: the residue patch runs in the tail's own shell, so a function it calls can reach the
     // tail's local.
+    // BOTH kept words are replaced: each key has its own default arm, and each is pinned.
     const odd = 'eval "_t_patch_real()$(declare -f _ws_tombstone_patch | tail -n +2)";'
-      + ' _ws_tombstone_patch() { [[ "${FUNCNAME[1]-}" == _ws_reclaim_tail && "${2-}" == *residueBytes* ]] && tmpkept=odd-word; _t_patch_real "$@"; };';
+      + ' _ws_tombstone_patch() { [[ "${FUNCNAME[1]-}" == _ws_reclaim_tail && "${2-}" == *residueBytes* ]]'
+      + ' && { clipskept=odd-clips; tmpkept=odd-word; }; _t_patch_real "$@"; };';
     const r = childReclaimVerb(h, evalOf(h).token, { pre: `${CLIPS_NOT_OURS} ${TMP_IN_USE} ${odd}` });
     expect(r.code, r.stdout + r.stderr).toBe(0);
     const doc = JSON.parse(r.stdout) as Doc;
-    expect(doc['clipsKept']).toBe('refused');
+    expect(measOf(doneRow('reclaim'))['clipsKept'], 'the CONTROL: the tail carried the odd clips word').toBe('odd-clips');
     expect(measOf(doneRow('reclaim'))['tmpRootKept'], 'the CONTROL: the tail carried the odd word').toBe('odd-word');
+    expect(doc['clipsKept'], 'an unnamed clips value is unmeasured, never nothing kept').toBe('unmeasured');
     expect(doc['tmpRootKept'], 'an unnamed value is unmeasured, never nothing kept').toBe('unmeasured');
   }, 90_000);
 });

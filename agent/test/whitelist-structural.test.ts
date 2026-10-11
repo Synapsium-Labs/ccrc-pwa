@@ -156,6 +156,12 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the docs fetch verb granted without --project',
     codes: ['TS2322'],
   },
+  // CHILD RECLAMATION wave 7, g13's and g15's shape for the temp-root collector: enrolled on its confirmation token, so
+  // the narrowed grant is a compile error.
+  'g20-ws-collect-without-expect.ts': {
+    what: 'the temp-root collector granted without its confirmation token',
+    codes: ['TS2322'],
+  },
 };
 
 describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is written', () => {
@@ -370,6 +376,14 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
     expect(() => auditExecWhitelist(withCcd([['ws-expire', '--session']])))
       .toThrow(/only grantable with '--expect'/);
     expect(() => auditExecWhitelist(withCcd([['ws-expire', '--expect']]))).not.toThrow();
+  });
+
+  it('throws on a ws-collect with no confirmation token, the fourth destructive verb (child reclamation wave 7)', () => {
+    expect(() => auditExecWhitelist(withCcd([['ws-collect']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-collect', '--session']])))
+      .toThrow(/only grantable with '--expect'/);
+    expect(() => auditExecWhitelist(withCcd([['ws-collect', '--expect']]))).not.toThrow();
   });
 
   // NATIVE DOCS READER wave 2: the four docs verbs, enrolled for their ARGUMENT SURFACE (`coord-pause`'s reason).

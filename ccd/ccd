@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=464119d6879f72ad5fb0dbb429f5f5008176c13a9611bcb7e67f129848c7e695
+# ccrc:generated 1 sha256=a9a55573ce80cbe58c1ee16e84aef4fc79aa10cba2f601009dd6c9ad2b4885f4
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -9,8 +9,8 @@
 set -uo pipefail
 
 # ── THE DIRECT-ENTRY BOUNDARY (D-3696, D-3697) — before any external command ──
-# A direct `ws-reclaim` or `ws-expire`, or a direct `ws-audit --session <id>
-# --reclaim [--defer-expired]` or `… --expire`, runs under Bash >= 4.4 PRIVILEGED with
+# A direct `ws-reclaim`, `ws-expire` or `ws-collect`, or a direct `ws-audit --session <id>
+# --reclaim [--defer-expired]`, `… --expire` or `… --collect`, runs under Bash >= 4.4 PRIVILEGED with
 # no shell function defined — the state the installed launcher (`ccd/ccd-entry.py`
 # rendered to ~/.local/bin/ccd) starts it in, re-measured here, not taken on its
 # word; no environment marker is read. `$-` alone is not enough — a plain bash
@@ -24,8 +24,8 @@ set -uo pipefail
 # inherited `nocasematch` folds here starts PROTECTED, `-p` drops that option, and
 # this guard and the dispatcher compare exactly again. SOURCE MODE never runs this;
 # the launcher classifies a superset of these shapes; the dispatcher owns every tail.
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire ]] \
-     || { [[ $# -eq 4 || $# -eq 5 ]] && [[ "${1-}" == ws-audit && "${2-}" == --session && ( "${4-}" == --reclaim || ( $# -eq 4 && "${4-}" == --expire ) ) ]] \
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]] && { [[ "${1-}" == ws-reclaim || "${1-}" == ws-expire || "${1-}" == ws-collect ]] \
+     || { [[ $# -eq 4 || $# -eq 5 ]] && [[ "${1-}" == ws-audit && "${2-}" == --session && ( "${4-}" == --reclaim || ( $# -eq 4 && ( "${4-}" == --expire || "${4-}" == --collect ) ) ) ]] \
           && [[ $# -eq 4 || "${5-}" == --defer-expired ]]; }; }; then
   if ! (( BASH_VERSINFO[0] > 4 || ( BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4 ) )) || [[ $- != *p* ]]; then
     printf 'ccd: refused (entry-unprivileged): %s reaches ccd only through its installed direct entry, under Bash >= 4.4 in privileged mode (-p); this is Bash %s with flags %s — nothing was run\n' \
@@ -4365,7 +4365,7 @@ _LC_OBS=""
 # a call site's choice. `_lc_emit` maps an unrecognised act to `unknown` plus a
 # `badact` field, which is what makes the equality hold by construction rather
 # than by everyone remembering.
-_LC_ACTS=(archive attic-drop claim create destroy enable ensure expire forget gc
+_LC_ACTS=(archive attic-drop claim collect create destroy enable ensure expire forget gc
           hold purge reap reclaim rehome release rename restore route spawn start stop
           supervise swap unarchive unsupervise)
 # The vocabulary is the set of ACCEPTABLE INPUTS; the degrade word is the
@@ -8625,7 +8625,7 @@ EOF
   echo child-argv-v1
   # child reclamation (wave 3): see "RECLAIM-V1" in the RECLAIM region
   echo reclaim-v1
-  echo reclaim-pause-v1; echo expire-v1; echo ws-expire   # the verb rides here, not in the list above, which sits above the frozen corpus; see "EXPIRE-V1"
+  echo reclaim-pause-v1; echo expire-v1; echo ws-expire; echo collect-v1; echo ws-collect   # the verbs ride here, not in the list above, which sits above the frozen corpus; see "EXPIRE-V1" and "COLLECT-V1"
   echo docs-tree
   echo docs-show
   echo docs-fetch
@@ -12812,10 +12812,10 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   # `--reclaim` is the one exception to that: see "WS-AUDIT --RECLAIM" in the RECLAIM region.
   local mode=reap defer=0
   [[ ( $# -eq 2 || $# -eq 3 || $# -eq 4 ) && $1 == --session ]] \
-    || die "usage: ccd ws-audit --session <id> [--reclaim [--defer-expired] | --expire]"
-  if (( $# >= 3 )); then [[ $3 != --expire || $# -ne 3 ]] || { _ws_expire_audit "$2"; return; }   # "WS-AUDIT --EXPIRE", EXPIRE region
+    || die "usage: ccd ws-audit --session <id> [--reclaim [--defer-expired] | --expire | --collect]"
+  if (( $# >= 3 )); then [[ $3 != --expire || $# -ne 3 ]] || { _ws_expire_audit "$2"; return; }; [[ $3 != --collect || $# -ne 3 ]] || { _ws_collect_audit "$2"; return; }   # "WS-AUDIT --EXPIRE" and "WS-AUDIT --COLLECT", in their regions
     [[ $3 == --reclaim && ( $# -eq 3 || $4 == --defer-expired ) ]] \
-      || die "usage: ccd ws-audit --session <id> [--reclaim [--defer-expired] | --expire]"
+      || die "usage: ccd ws-audit --session <id> [--reclaim [--defer-expired] | --expire | --collect]"
     [[ $_WS_AUDIT_INNER == 1 ]] || { _ws_reclaim_audit_contained "$@"; return; }; mode=reclaim   # see "THE AUDIT READS THE LIVE CHILD CONTAINED" (RECLAIM region)
     (( $# == 4 )) && defer=1
   fi
@@ -13160,8 +13160,8 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   # verdict: no token, and the same token name the eval uses, so the sheet
   # reads the same sentence whichever read caught it.
   if [[ $mode == reclaim ]]; then
-    printf '"mode":"reclaim","childOf":%s,' \
-      "$( _child_runid_valid "$RECLAIM_CHILDOF" && echo "$RECLAIM_CHILDOF" || echo null)"
+    printf '"mode":"reclaim","childOf":%s,"generation":%s,' \
+      "$( _child_runid_valid "$RECLAIM_CHILDOF" && echo "$RECLAIM_CHILDOF" || echo null)" "$( _reg_generation_valid "$RECLAIM_GENERATION" && printf '"%s"' "$RECLAIM_GENERATION" || echo null)"
     [[ -n "$RECLAIM_RESUME_PHASE" ]] && printf '"resume":%s,' "$(_json_str "$RECLAIM_RESUME_PHASE")"
     if [[ "$REAP_VERDICT" == reclaimable ]]; then
       # never the literal `"verdict":"…"` shape — see "RECLAIMABLE, SPELLED THROUGH _JSON_STR" in the RECLAIM region
@@ -26327,6 +26327,7 @@ _WS_RCL_ACT=reclaim
 _ws_reclaim_reset() {   # every REAP_* global `_ws_reap_reset` owns, plus the reclaim ladder's own
   _ws_reap_reset
   RECLAIM_CHILDOF=""        # the marker's run id, as READ — never inferred from anything else
+  RECLAIM_GENERATION=""     # the row's generation as READ (`_ws_reclaim_generation`) — a token input; '' = never read
   RECLAIM_DEFER=0           # 1 = --defer-expired: rungs 5 and 6 skipped, and a fingerprint input
   RECLAIM_WORKTREE=""       # `present`, or `absent` for a vanished worktree (`_ws_reclaim_eval_absent`)
   RECLAIM_HEAD=""           # the child's HEAD commit (differs from REAP_TIP on a detached HEAD); on the
@@ -26356,6 +26357,52 @@ _ws_reclaim_fingerprint() {   # key=value... -> the reclaim token. Every input i
   # reclaim token can never equal a reap token or a resume token over the same
   # facts: the first input is always `mode=…`.
   printf '%s\n' "$@" | _plat_sha256 | cut -d' ' -f1
+}
+
+_ws_reclaim_generation() {   # id -> rc 0 with RECLAIM_GENERATION = the row's generation
+  #                               (`$REG/<id>.generation`, spec §5.5); rc 2 with RECLAIM_GENERATION=''
+  #                               when it could not be read as one, and RECLAIM_GENERATION_WHY saying why:
+  #                               the row's compaction lock refused, absent, present and not the 36-byte
+  #                               grammar, or not readable through its alias
+  # THE ONE READER, `_reg_generation_read`: an owned hard-link alias on a held
+  # descriptor and a same-inode recheck, never `_reg_get` or a bare `cat`, which
+  # name the path twice. The generation is minted with the row (`cmd_ws_add`,
+  # before any row field) and removed last by `_reg_purge`; nothing else writes
+  # it — not `/clear`, which rewrites `uuid` (`_sync_uuid`), not a swap, not a
+  # respawn's re-init, which mints only into absence. So it is the one value
+  # that differs between a row and a re-mint of its id. ABSENT, INVALID AND
+  # UNREADABLE ARE ALL 2, never a value. The reader's rc 1 is wider than
+  # "invalid": a link or unreadable file, no `link`, an alias it cannot make
+  # (a registry it cannot write), or a file replaced mid-read is a read that
+  # did not run, and is retried. Absent and invalid are no state ccd's own
+  # writers leave on a child (`cmd_ws_add` dies before it writes `.child`
+  # when it cannot mint), and a token bound to `generation=` would be one no
+  # re-mint could invalidate.
+  # UNDER THE ROW'S COMPACTION LOCK, as every other caller of the reader takes
+  # it (row creation's `_reg_generation_init`, the spawn and its re-check; the
+  # purge takes that lock too, but never calls the reader):
+  # the reader's alias `link` is a write off the canonical name, and every such
+  # write happens under a held lock (`session-hook.test.ts`'s canonical-write
+  # census). The order reap lock -> compaction lock is the purge's own, which
+  # the reclaim tail already takes, so it adds no new order. An acquire that
+  # fails is a read that did not run: rc 2 — unmeasured, no token, a retry —
+  # with the acquire's status and `COMPACT_LOCK_WHY` carried into the detail.
+  # Run in THIS shell, never `$( )`, so that reason reaches the caller.
+  local fd="" rc=0
+  RECLAIM_GENERATION=""; RECLAIM_GENERATION_WHY=""
+  _compact_lock_acquire "$1" "$COMPACT_LOCK_WAIT"; rc=$?
+  if (( rc != 0 )); then
+    RECLAIM_GENERATION_WHY="not read: the row's compaction lock was refused, _compact_lock_acquire rc $rc${COMPACT_LOCK_WHY:+ ($COMPACT_LOCK_WHY)} (1 = refused or contended, 2 = no flock mechanism)"
+    return 2
+  fi
+  fd="$COMPACT_LOCK_FD"
+  _reg_generation_read "$1"; rc=$?
+  _compact_lock_release "$fd"
+  if (( rc != 0 )); then
+    RECLAIM_GENERATION_WHY="absent; present but not one 36-byte lowercase UUID; or not readable through its owned alias: a link, a file it cannot read, no link command, a registry it cannot write, or a file replaced mid-read"
+    return 2
+  fi
+  RECLAIM_GENERATION="$REG_GENERATION"
 }
 
 _ws_reclaim_unmeasured() {   # detail -> rc 1 with REAP_VERDICT=unmeasured and REAP_DETAIL set
@@ -26403,6 +26450,13 @@ _ws_reclaim_normalise() {   # dir -> 0 when every directory under it is u+rwx an
   # is still unreadable afterwards — an entry another uid owns, a chmod that did
   # not take — is named, and rung 8 refuses on it.
   #
+  # EVERY REASON IS ONE CAPPED LINE (spec §5.5, §5.9): `$left` is a name the
+  # session chose and `$d` a path, and a long or non-UTF-8 one, raw, grows at
+  # the journal's encoder until the refusal row loses its `detail`, `verb` and
+  # `dec.*`. So each reason that carries one goes through `_ws_leaf_why_line`
+  # (printable ASCII, 300 bytes, the cut marked). The two fixed sentences are
+  # short ASCII already. No token reads this reason.
+  #
   # `-user` GOVERNS BOTH ARMS, so the disjunction is parenthesised as a whole:
   # find's `-o` binds looser than the implicit `-a`, and an unwrapped
   # `-user me \( dir-arm \) -o \( file-arm \)` parses as
@@ -26417,17 +26471,17 @@ _ws_reclaim_normalise() {   # dir -> 0 when every directory under it is u+rwx an
     \( \( -type d ! -perm -u=rwx -exec chmod u+rwx {} \; \) \
     -o \( -type f ! -perm -u=r -exec chmod u+r {} \; \) \) 2>"$errf"; rc=$?
   if (( rc == 124 )); then
-    rm -f "$errf"; _WS_NORMALISE_WHY="the permission pass over $d did not finish within ${REAP_SCAN_SECONDS}s"; return 2
+    rm -f "$errf"; _WS_NORMALISE_WHY=$(_ws_leaf_why_line "the permission pass over $d did not finish within ${REAP_SCAN_SECONDS}s"); return 2
   fi
   # find answers 0, or 1 for an entry it could not read or fix — the pass RAN.
   # Anything else (125-127: it never started; above 128: a signal) means it did
   # not run to the end, and what is still unreadable is not its verdict.
   if (( rc != 0 && rc != 1 )); then
-    rm -f "$errf"; _WS_NORMALISE_WHY="the permission pass over $d did not run to completion (rc $rc)"; return 2
+    rm -f "$errf"; _WS_NORMALISE_WHY=$(_ws_leaf_why_line "the permission pass over $d did not run to completion (rc $rc)"); return 2
   fi
   left=$(find -P "$d" -xdev \( -type d ! -perm -u=rwx -o -type f ! -perm -u=r \) -print -quit 2>>"$errf")
   if [[ -n "$left" || -s "$errf" ]]; then
-    _WS_NORMALISE_WHY="${left:+$left is still unreadable after the permission pass}${left:+ }$(head -1 "$errf" 2>/dev/null)"
+    _WS_NORMALISE_WHY=$(_ws_leaf_why_line "${left:+$left is still unreadable after the permission pass}${left:+ }$(head -1 "$errf" 2>/dev/null)")
     rm -f "$errf"; return 1
   fi
   rm -f "$errf"
@@ -27491,7 +27545,13 @@ _ws_reclaim_eval() {   # id defer(0|1) childof('' = do not compare) -> 0 when th
   [[ -z "$childof" || "$mark" == "$childof" ]] \
     || { _reap_refuse not-a-child "$id was minted for run $mark, not run $childof — the two authorities disagree"; return 1; }
   RECLAIM_CHILDOF="$mark"
-  _WS_LADDER_BIND=("mode=reclaim" "id=$id" "childOf=$RECLAIM_CHILDOF" "deferExpired=$RECLAIM_DEFER")
+  # …AND WHICH ROW IT IS (spec §5.5): the row's generation is a token input, so
+  # a token minted over this row is never spent on a re-mint of the same id,
+  # whatever else matches. Asked after rungs 1-2, so their terminal words are
+  # unchanged; unreadable, it mints no token (`_ws_reclaim_generation`).
+  _ws_reclaim_generation "$id" \
+    || { _ws_reclaim_unmeasured "$REG/$id.generation could not be read as this row's generation ($RECLAIM_GENERATION_WHY) — which row a token would bind is unknown"; return 1; }
+  _WS_LADDER_BIND=("mode=reclaim" "id=$id" "childOf=$RECLAIM_CHILDOF" "deferExpired=$RECLAIM_DEFER" "generation=$RECLAIM_GENERATION")
   _ws_reclaim_ladder "$id" "$defer"
 }
 
@@ -27633,8 +27693,17 @@ _ws_reclaim_ladder() {   # id defer -> rungs 3-10, SHARED by `_ws_reclaim_eval` 
   elif (( rc == 0 )); then
     _ws_reclaim_unmeasured "$main records a worktree at $workdir, but git cannot resolve the directory's repository"; return 1
   fi
-  (( rc == 0 )) \
-    || { _reap_refuse no-worktree-record "$main has no worktree record for $workdir"; return 1; }
+  # A list that printed NO record is believed only once git's admin entries
+  # are read (`_ws_reclaim_no_record`): an entry it could not read, or one that
+  # names this tree, is unmeasured and retried, never the terminal word. Its
+  # reason names an admin entry, which git names after a basename the session
+  # chose, so it is ONE CAPPED LINE (`_ws_leaf_why_line`, spec §5.6) before it
+  # reaches the journal, as the permission pass's reason is.
+  if (( rc != 0 )); then
+    _ws_reclaim_no_record "$mainreal" "$workdir" \
+      || { _ws_reclaim_unmeasured "$(_ws_leaf_why_line "$_WS_NOREC_WHY")"; return 1; }
+    _reap_refuse no-worktree-record "$main has no worktree record for $workdir"; return 1
+  fi
   # THE RECORD MUST NOT BE THE MAIN CHECKOUT'S. A row naming `$main` itself
   # would pin the project's own checkout and hand the tail its branch's
   # name; no child is ever the main worktree. The vanished arm
@@ -27840,6 +27909,24 @@ _ws_reclaim_eval_absent() {   # id workdir main regbranch -> the ladder's answer
   _ws_reclaim_record "$main" "$workdir"; rec=$?
   (( rec == 2 )) \
     && { _ws_reclaim_unmeasured "could not read $main's worktree list, so whether git still records $workdir was never asked"; return 1; }
+  # "No record" is an INPUT here (`record=1`), and with it the pin keeps no
+  # HEAD of git's record — so it is believed only once git's admin entries are
+  # read (`_ws_reclaim_no_record`), exactly as on the present arm, its reason
+  # cut to one capped line there too.
+  if (( rec == 1 )); then
+    _ws_reclaim_no_record "$mainreal" "$workdir" \
+      || { _ws_reclaim_unmeasured "$(_ws_leaf_why_line "$_WS_NOREC_WHY")"; return 1; }
+  fi
+  # AN ALL-ZERO HEAD NAMES NO COMMIT THAT WAS READ (spec §5.5, rung 8's rule).
+  # git lists the null id for a record in TWO shapes (measured, git 2.43): an
+  # admin `HEAD` it cannot read (no `branch` line), and a `HEAD` symbolic to a
+  # branch that no longer exists (its `branch` line kept). As the pin's
+  # recorded head it would bind the token, then stop the pin; so either shape
+  # is unmeasured here, at the one read of `RECLAIM_REC_HEAD`, and retried.
+  if (( rec == 0 )) && [[ "$RECLAIM_REC_HEAD" =~ ^0+$ ]]; then
+    _ws_reclaim_unmeasured "git's worktree record of $workdir names the all-zero HEAD — git prints that for a record whose admin HEAD it cannot read, or whose HEAD names a branch that no longer exists — so no commit of it was read and none could be pinned"
+    return 1
+  fi
   # The branch deleted is the REGISTRY's, exactly as on the present arm; a
   # record left on ANOTHER branch (the tree drifted before it vanished) keeps
   # that one, recorded — the pin of this arm reads no HEAD, so it is noted here.
@@ -27884,8 +27971,9 @@ _ws_reclaim_eval_absent() {   # id workdir main regbranch -> the ladder's answer
 _ws_reclaim_resume_eval() {   # id defer childof phase -> 0 with REAP_TOKEN = the RESUME token, else REAP_VERDICT
   # A crash may not launder a refusal (spec §5.6): the resume re-asserts what
   # authorised the act — the marker and its --child-of, the pause, the hold —
-  # BEFORE anything else runs, and its token binds the phase and the recorded
-  # tip, so a stale resume token refuses `state-changed` like any other.
+  # BEFORE anything else runs, and its token binds the phase, the recorded tip
+  # and the row's generation, so a stale resume token refuses `state-changed`
+  # like any other — a re-mint of the id included.
   _ws_reclaim_reset
   local id="$1" defer="$2" childof="$3" phase="$4" mark tomb tombtip tombbranch
   RECLAIM_DEFER="$defer"
@@ -27896,6 +27984,8 @@ _ws_reclaim_resume_eval() {   # id defer childof phase -> 0 with REAP_TOKEN = th
   [[ -z "$childof" || "$mark" == "$childof" ]] \
     || { _reap_refuse not-a-child "$id was minted for run $mark, not run $childof — the two authorities disagree"; return 1; }
   RECLAIM_CHILDOF="$mark"
+  _ws_reclaim_generation "$id" \
+    || { _ws_reclaim_unmeasured "$REG/$id.generation could not be read as this row's generation ($RECLAIM_GENERATION_WHY) — an interrupted reclaim does not finish on a row it cannot identify"; return 1; }
   [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \
     || { _reap_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused)"; return 1; }
   if [[ -e "$REG/$id.hold" ]]; then
@@ -27911,6 +28001,7 @@ _ws_reclaim_resume_eval() {   # id defer childof phase -> 0 with REAP_TOKEN = th
     || { _ws_reclaim_unmeasured "the tombstone at $tomb cannot be read, so which steps of the interrupted reclaim already ran is unknown"; return 1; }
   REAP_BRANCH="$tombbranch"; REAP_TIP="$tombtip"
   REAP_TOKEN=$(_ws_reclaim_fingerprint "mode=reclaim-resume" "id=$id" "childOf=$mark" \
+    "generation=$RECLAIM_GENERATION" \
     "deferExpired=$defer" "phase=$phase" "branch=$tombbranch" "tip=$tombtip")
   REAP_VERDICT=reclaimable
   return 0
@@ -28627,7 +28718,7 @@ _ws_reclaim_log_of() {   # main kind(tree|branch) arg [recorded] -> 0 with what 
   # `worktree.useRelativePaths`, which git 2.43 prints verbatim, so there both
   # readers miss together) — its HEAD reflog was never located, and removing
   # that record would delete it unkept. So it fails, and the record stands.
-  local main="$1" kind="$2" arg="$3" recorded="${4:-0}" common f d g gd real rc n=0
+  local main="$1" kind="$2" arg="$3" recorded="${4:-0}" common f gd rc
   common=$(_ws_common_dir "$main") \
     || { _WS_KEEP_WHY="could not resolve the repository of $main, so no reflog of it could be located"; return 1; }
   if [[ "$kind" == branch ]]; then
@@ -28654,6 +28745,19 @@ _ws_reclaim_log_of() {   # main kind(tree|branch) arg [recorded] -> 0 with what 
   _ws_reclaim_absent "$arg"; rc=$?
   (( rc == 0 )) \
     || { _WS_KEEP_WHY="${_WS_ABSENT_WHY:-something that is not a directory stands at $arg} — the HEAD reflog of the checkout there could not be located"; return 1; }
+  _ws_reclaim_admin_entries "$common" "$arg" "$recorded"
+}
+
+_ws_reclaim_admin_entries() {   # common path recorded -> 0 with `<d>/logs/HEAD` and `gitdir:<d>` appended to
+  #                                  _WS_LOGS for every <common>/worktrees/<d> whose `gitdir` names <path>/.git (as
+  #                                  given, or resolved); 1 (_WS_KEEP_WHY) when `worktrees/` or an entry could not
+  #                                  be read, an entry's `gitdir` names no path, or `recorded` is 1 and no entry names it
+  # GIT'S ADMIN ENTRIES, READ WHOLE — `_ws_reclaim_log_of`'s walk of a gone
+  # checkout, and the ONE matcher of an entry to a path: the ladder asks it
+  # too, of a STANDING tree git's list printed no record of
+  # (`_ws_reclaim_no_record`). `_ws_reclaim_log_of` says why each refusal here
+  # is a failure and never "no entry".
+  local common="$1" arg="$2" recorded="${3:-0}" d g real rc n=0
   _ws_reclaim_absent "$common/worktrees"; rc=$?
   if (( rc == 0 )); then
     (( recorded )) || return 0
@@ -28672,6 +28776,14 @@ _ws_reclaim_log_of() {   # main kind(tree|branch) arg [recorded] -> 0 with what 
     g=$(cat -- "$d/gitdir" 2>/dev/null) \
       || { _WS_KEEP_WHY="$d/gitdir cannot be read — whether $d is git's record of $arg was never asked"; return 1; }
     g="${g%%$'\n'*}"
+    # A `gitdir` THAT NAMES NO PATH MEASURED NOTHING (spec §5.5, rung 8's rule):
+    # git right-trims it, and with exit 0 its list leaves out an empty one, as
+    # it leaves out an unreadable one, and lists a blank one (a lone newline,
+    # spaces, a tab) at no path (measured, git 2.43). A first line that is
+    # empty or blank, whatever follows it, names no path to compare, so "names
+    # something else" was never read off it.
+    [[ "$g" == *[![:space:]]* ]] \
+      || { _WS_KEEP_WHY="$d/gitdir names no path on its first line — git's list leaves out an empty one and lists a blank one at no path, so whether $d is git's record of $arg was never asked"; return 1; }
     [[ "$g" == "$arg/.git" || "$g" == "$real/.git" ]] || continue
     [[ -d "$d" && ! -L "$d" ]] \
       || { _WS_KEEP_WHY="$d, git's record of $arg, is not a directory — what it names was never read"; return 1; }
@@ -28679,6 +28791,36 @@ _ws_reclaim_log_of() {   # main kind(tree|branch) arg [recorded] -> 0 with what 
   done
   (( n || ! recorded )) \
     || { _WS_KEEP_WHY="git records a checkout at $arg, but no $common/worktrees/*/gitdir entry names $arg/.git — its HEAD reflog could not be located, so it was never read"; return 1; }
+  return 0
+}
+
+_WS_NOREC_WHY=''
+_ws_reclaim_no_record() {   # common workdir -> 0 when NO admin entry of the repository whose common dir is
+  #                              common names <workdir>/.git, every entry read; 1 (_WS_NOREC_WHY) when one does —
+  #                              git's list omitted a record that exists; 2 (_WS_NOREC_WHY) when `worktrees/` or
+  #                              an entry could not be read
+  # GIT'S "NO RECORD" IS BELIEVED ONLY ONCE ITS ADMIN ENTRIES ARE READ (spec
+  # §5.5, rung 8's rule: a read that failed measured nothing). `git worktree
+  # list` exits 0 and OMITS the stanza of a record whose `gitdir` it cannot
+  # read or that is empty — every linked stanza when `worktrees/` cannot be
+  # listed (measured, git 2.43) — so `_ws_reclaim_record`'s rc 1 alone reads an
+  # unreadable record as none. Git's list LISTS a record whose `gitdir` is
+  # blank (empty after the trim) at no path, which the matcher refuses too: a
+  # first line that names no path measured nothing. Asked of the entries
+  # themselves, through the one matcher (`_ws_reclaim_admin_entries`), whether
+  # the tree stands or is gone. Its readers' globals are shadowed: asking this
+  # changes nothing a caller read.
+  local common="$1" w="$2" e
+  local -a _WS_LOGS=()
+  local _WS_KEEP_WHY=''
+  _WS_NOREC_WHY=''
+  _ws_reclaim_admin_entries "$common" "$w" 0 \
+    || { _WS_NOREC_WHY="$_WS_KEEP_WHY — git's worktree list prints no path for a record whose gitdir it cannot read or that names none, so its silence about $w measured nothing"; return 2; }
+  for e in ${_WS_LOGS[@]+"${_WS_LOGS[@]}"}; do
+    [[ "$e" == gitdir:* ]] || continue
+    _WS_NOREC_WHY="git's worktree list omitted a record that exists: it printed no record of $w, but ${e#gitdir:} names $w/.git"
+    return 1
+  done
   return 0
 }
 
@@ -29190,11 +29332,27 @@ _ws_reclaim_residue() {   # workdir -> bytes under the harness's path-keyed temp
   if [[ "$b" =~ ^[0-9]+$ ]]; then echo "$b"; else echo null; fi
 }
 
-_ws_reclaim_failed_json() {   # token detail -> the post-start failure document on stdout.
+# WHETHER A FAILURE WAS PRINTED PAST THE ACT'S BREADCRUMB (spec §5.6, §7 item 6):
+# `false` before it (nothing started, so a retry starts over), `true` past it:
+# the act had started. `true` says the breadcrumb was WRITTEN, never that it
+# stands now. The tail's `purge-*` failures print it after `_reg_purge` took
+# the row and its `.reaping` file. '' prints NO key: a reader takes
+# that absence as unmeasured, never as either value. Set by `_ws_reclaim_locked`
+# and by the shared tail; `cmd_ws_collect` shadows it to '' with `local` (a
+# collection has no breadcrumb). So `ws-expire`'s own pre-breadcrumb documents,
+# its resumed arm's `probe-unmeasured` (printed while its `expire:` breadcrumb
+# stands), and every `ws-collect` document, carry no key. Assigned here, when
+# ccd is read, so an exported value can never reach a document.
+_WS_RCL_CRUMB=''
+_ws_reclaim_failed_json() {   # token detail -> the post-start failure document on stdout, with
+  #                                `"crumb":true|false` only when _WS_RCL_CRUMB says one
   # `"failed"`, NEVER `"refused"`: a failure after the act started is not a
   # ladder answer, and `server/test/wsaudit.test.ts` harvests every literal
   # refusal object as one. The server reads this as `failed` and retries.
-  printf '{"failed":%s,"detail":%s}\n' "$(_json_str "$1")" "$(_json_str "$2")"
+  # ONLY the two literals print: any other value omits the key, never prints it.
+  local crumb=''
+  case "$_WS_RCL_CRUMB" in true|false) crumb=",\"crumb\":$_WS_RCL_CRUMB" ;; esac
+  printf '{"failed":%s,"detail":%s%s}\n' "$(_json_str "$1")" "$(_json_str "$2")" "$crumb"
 }
 
 _ws_reclaim_children_merge() {   # recorded settled -> the nested-checkout lines the tail acts on, one per path
@@ -29242,7 +29400,8 @@ _ws_reclaim_fail() {   # id lctx token detail [k v]... -> journals a post-start 
 
 _WS_OWNED_WHY=''
 _ws_reclaim_owned() {   # id workdir main -> 0 when the tree at workdir is still provably the child's own;
-  #                          1 (_WS_OWNED_WHY) when it is not, or when that could not be asked
+  #                          1 (_WS_OWNED_WHY) when it is PROVEN not to be; 2 (_WS_OWNED_WHY) when
+  #                          that could not be asked
   # THE LADDER'S IDENTITY RUNGS, RE-ASKED AT REMOVAL TIME (spec §5.5, rung 9
   # asked of the path), on the fresh arm AND every resumed one: the resumed arm
   # has no ladder in front of it, and on every arm the tree stands until the
@@ -29250,28 +29409,44 @@ _ws_reclaim_owned() {   # id workdir main -> 0 when the tree at workdir is still
   # follow the link it asks about); a LEAF that is not a link (a symlinked
   # ancestor stays legal); git's record of it, read from $main — a list that
   # could not be read asked nothing, and a tree that stands with no record is
-  # not one of $main's worktrees; not the MAIN checkout, asked twice (git's
+  # not PROVEN one of $main's worktrees; not the MAIN checkout, asked twice (git's
   # first stanza, and the resolved path against $main's); and no OTHER registry
   # row naming it or rooted inside it, literally or resolved, nor at, inside or
   # through its clips directory or temp root (spec §5.5, §5.6) — an unlistable
   # registry, or a leaf that cannot be measured, asked nothing; and, where a
   # gone row was placed on git's record (spec §5.5), no checkout inside the
   # tree that is that row's moved tree.
+  #
+  # THREE ANSWERS, NOT TWO (spec §5.6). The tail stops on 1 and on 2 alike, in
+  # the same place — after the unit and the pane, before the settle and before
+  # anything further is deleted — but it names them apart. 1 is a PROOF that
+  # the tree is not only the child's own: a workdir that is not one plain path
+  # (the record is immutable), a link or a non-directory at it, the main
+  # checkout or the project directory, another registry row SHARED with it,
+  # NESTED in it or in a leaf, or spelled THROUGH it, or a gone row's tree moved
+  # inside it. A retry meets the same proof until that tree or row is moved or
+  # removed. 2 is a question that could not be asked, which a retry may answer.
+  # So nothing that was not asked is ever folded into 1: an unprovable absence,
+  # an unreadable worktree list, a registry that could not be asked, a scan that
+  # failed, and `_ws_reclaim_moved_check`'s own 2 — or any answer it never
+  # gives — are all 2. So is a tree that stands with no worktree record: git's
+  # list silently omits a record whose `gitdir` it cannot read (spec §5.5, rung
+  # 8), so "no record" there is no proof.
   local id="$1" wd="$2" main="$3" rc nested
   _WS_OWNED_WHY=''
   _ws_reclaim_plain_path "$wd" \
     || { _WS_OWNED_WHY="the workdir is spelled '$wd' — not one plain absolute path"; return 1; }
   [[ ! -L "$wd" ]] || { _WS_OWNED_WHY="$wd is a symbolic link — ccd never follows a link to a tree it would pin or remove"; return 1; }
   _ws_reclaim_absent "$wd"; rc=$?
-  (( rc != 2 )) || { _WS_OWNED_WHY="$_WS_ABSENT_WHY — whether the tree at $wd stands or is gone was never asked"; return 1; }
+  (( rc != 2 )) || { _WS_OWNED_WHY="$_WS_ABSENT_WHY — whether the tree at $wd stands or is gone was never asked"; return 2; }
   [[ ! -e "$wd" || -d "$wd" ]] || { _WS_OWNED_WHY="something that is not a directory stands at $wd"; return 1; }
   _ws_reclaim_record "$main" "$wd"; rc=$?
-  (( rc != 2 )) || { _WS_OWNED_WHY="could not read $main's worktree list, so whether git records $wd was never asked"; return 1; }
-  [[ ! -d "$wd" ]] || (( rc == 0 )) || { _WS_OWNED_WHY="$main has no worktree record for the tree at $wd"; return 1; }
+  (( rc != 2 )) || { _WS_OWNED_WHY="could not read $main's worktree list, so whether git records $wd was never asked"; return 2; }
+  [[ ! -d "$wd" ]] || (( rc == 0 )) || { _WS_OWNED_WHY="$main has no worktree record for the tree at $wd"; return 2; }
   (( ! RECLAIM_REC_MAIN )) || { _WS_OWNED_WHY="$wd is $main's main checkout"; return 1; }
   [[ "$(_ws_realpath "$wd")" != "$(_ws_realpath "$main")" ]] || { _WS_OWNED_WHY="$wd is the project directory $main itself"; return 1; }
   _ws_reclaim_workdir_shared "$id" "$wd" \
-    || { _WS_OWNED_WHY="could not ask whether another registry row names $wd or a path inside it: $_WS_SHARED_WHY"; return 1; }
+    || { _WS_OWNED_WHY="could not ask whether another registry row names $wd or a path inside it: $_WS_SHARED_WHY"; return 2; }
   [[ -z "$_WS_SHARED_ROWS" ]] || { _WS_OWNED_WHY="$wd is also named by registry row(s) $_WS_SHARED_ROWS"; return 1; }
   [[ -z "$_WS_NESTED_ROWS" ]] || { _WS_OWNED_WHY="$wd has registry row(s) $_WS_NESTED_ROWS rooted inside it, or in its clips directory or temp root, each another session's tree"; return 1; }
   [[ -z "$_WS_THROUGH_ROWS" ]] || { _WS_OWNED_WHY="registry row(s) $_WS_THROUGH_ROWS spell their workdir through $wd, not as one plain path, so ccd cannot prove it lies outside $wd"; return 1; }
@@ -29279,8 +29454,13 @@ _ws_reclaim_owned() {   # id workdir main -> 0 when the tree at workdir is still
   # exactly what it asked before (`_ws_reclaim_moved_check` says why).
   if [[ -n "$_WS_RECORDED_GDIRS" && -d "$wd" ]]; then
     nested=$(_ws_nested_checkouts "$wd") \
-      || { _WS_OWNED_WHY="could not scan $wd for a gone row's moved tree"; return 1; }
-    _ws_reclaim_moved_check "$nested" || { _WS_OWNED_WHY="$_WS_MOVED_WHY"; return 1; }
+      || { _WS_OWNED_WHY="could not scan $wd for a gone row's moved tree"; return 2; }
+    _ws_reclaim_moved_check "$nested"; rc=$?
+    case "$rc" in
+      0) : ;;
+      1) _WS_OWNED_WHY="$_WS_MOVED_WHY"; return 1 ;;
+      *) _WS_OWNED_WHY="${_WS_MOVED_WHY:-the moved-tree check answered $rc, an answer it never gives, so whether the tree of a gone row was moved inside $wd was never asked}"; return 2 ;;
+    esac
   fi
   return 0
 }
@@ -29374,18 +29554,27 @@ _WS_PHYS=''
 _WS_PHYS_WHY=''
 _ws_dir_physical() {   # dir -> 0 with _WS_PHYS = its physical path; 1 with _WS_PHYS_WHY (and _WS_PHYS '')
   #                         when it cannot be entered, its read lacks the sentinel, or the path holds a newline
-  # THE ONE PHYSICAL RESOLUTION its seven callers share: a directory a removal
+  # THE ONE PHYSICAL RESOLUTION its eight callers share: a directory a removal
   # or an in-use probe acts under, or a leaf a placement or a checkout question
   # is asked of. The three newline sites: `_ws_leaf_remove`'s root,
   # `_ws_path_users`' parent and `_ws_expire_cwd_users`' parent. The four
   # leaf-question sites: `_ws_reclaim_workdir_shared`'s leaf placement,
   # `_ws_leaf_checkouts`' leaf, and `_ws_leaf_checkout_one`'s admin directory
-  # and checkout directory. A bare `$(cd -- "$d" && pwd -P)` dropped EVERY
+  # and checkout directory. The eighth is the collector's quarantine path,
+  # `_ws_collect_qpath`: the quarantine maker, the record writer and the
+  # record reader all reach this function through it, never directly, so
+  # the census stays eight.
+  # A bare `$(cd -- "$d" && pwd -P)` dropped EVERY
   # trailing newline: a root resolving to `<vol>\n` read as `<vol>`, so the
-  # removal took `<vol>/<id>` and both probes answered "nobody". Other bare
-  # captures on removal paths stay bare and fail closed (a truncated root makes
-  # the containment proof refuse): the tail's `wdreal`,
-  # `_ws_reclaim_nested_proven`'s `real` and the pin's `wdreal`. So this is
+  # removal took `<vol>/<id>` and both probes answered "nobody". This speaks
+  # for its eight callers only. Bare captures stand elsewhere, and the ones
+  # named here are examples, not a census. Some fail closed: the tail's
+  # `wdreal` and `_ws_reclaim_nested_proven`'s `real` (a truncated root makes
+  # the containment proof refuse), and `_ws_leaf_remove`'s `lreal` (it must
+  # equal the leaf, or the leaf is refused). Others are LABEL PREFIXES only,
+  # never a path acted under: the pin's `wdreal` and rung 9's, which name a
+  # nested checkout's paths relative to the workdir; any refusal comes later,
+  # from the tail's containment proof. So this is
   # `_ws_reclaim_resolve`'s own entry, exactly: POSIX mode by ASSIGNMENT,
   # `unset` of the functions named after every command it calls, `builtin cd -L`
   # with `CDPATH` emptied, `builtin pwd -P`, `builtin printf x`; the read is
@@ -29703,10 +29892,18 @@ _ws_leaf_read_small() {   # file -> 0 with _WS_SMALL = its bytes, each NUL read 
   #                            not a regular file or cannot be read; 2 when it holds more than 4096 bytes
   # A FILE READ AS A FILE, bounded: `-f` first (a FIFO would block), the size
   # before the bytes, and the read is the group's redirection (an unopenable file
-  # answers 1). A NUL becomes a newline, never dropped: INSIDE a line it splits
-  # it, unmeasured; a TRAILING one is a line end the caller strips, so `gitdir:
-  # A\0` and `gitdir: A\n\0` both read as A. Git reads the second as `A\n` and
-  # fails; ccd answers measured, safely: only a back-linked tree passes.
+  # answers 1). A NUL becomes a newline, never dropped. What an INNER one means
+  # is each caller's: in the `.git` file it splits the line, unmeasured; in an
+  # admin directory's `gitdir` back-link it leaves a newline in the text that is
+  # compared with the `.git` path, so the tree is refused when that path holds no
+  # newline, accepted when the NUL sits at the offset of a newline the path does
+  # hold (a hand-crafted file: git writes no NUL), and unmeasured otherwise
+  # (the corner is the path-identity programme's). A TRAILING one is a line
+  # end each caller strips, so `gitdir: A\0` and `gitdir: A\n\0` both read as
+  # A. Git reads the second as `A\n` and fails; ccd answers measured, safely:
+  # an A inside the leaf passes before any back-link is read (removing the leaf
+  # removes all of it), and outside the leaf only a tree git back-links passes
+  # (`_ws_leaf_checkout_one` says which back-links count).
   local f="$1" sz
   _WS_SMALL=''
   [[ -f "$f" ]] || return 1
@@ -29720,9 +29917,13 @@ _ws_leaf_read_small() {   # file -> 0 with _WS_SMALL = its bytes, each NUL read 
   return 0
 }
 _WS_CHECKOUTS_WHY=''
-_ws_leaf_checkout_one() {   # leaf-physical .git-entry -> 0 the leaf's own; 1 refused; 2 unmeasured (_WS_CHECKOUTS_WHY)
+_WS_CHECKOUTS_ACCEPTED=''   # `_ws_leaf_checkouts`' rc 0: every OUTSIDE admin directory a back-link let pass, with that back-link
+_ws_leaf_checkout_accepted() {   # admin back-link -> appends `<admin>=<back-link>`, each `_ws_collect_enc`'s spelling, to _WS_CHECKOUTS_ACCEPTED
+  _WS_CHECKOUTS_ACCEPTED+="${_WS_CHECKOUTS_ACCEPTED:+,}$(_ws_collect_enc "$1")=$(_ws_collect_enc "$2")"
+}
+_ws_leaf_checkout_one() {   # leaf-physical .git-entry [alias accepted] -> 0 the leaf's own; 1 refused; 2 unmeasured (_WS_CHECKOUTS_WHY)
   # ONE `.git` entry, asked without following it (`_ws_leaf_checkouts` says why).
-  local lp="$1" f="$2" d="${2%/.git}" buf gd rest adp rec rc
+  local lp="$1" f="$2" d="${2%/.git}" alias="${3-}" accepted="${4-}" buf gd rest adp rec rc pre
   if [[ -L "$f" ]]; then
     _WS_CHECKOUTS_WHY="$f is a symbolic link — git follows a .git link and ccd never does, so the tree at $d may be a checkout git records elsewhere"
     return 1
@@ -29757,6 +29958,21 @@ _ws_leaf_checkout_one() {   # leaf-physical .git-entry -> 0 the leaf's own; 1 re
   case "/$rest/" in
     */../*) _WS_CHECKOUTS_WHY="$f names its git directory through a '..' after another component, which a logical and a physical walk read apart — where it lands was never asked"; return 2 ;;
   esac
+  # THE COLLECTOR'S ALIAS, INSIDE THE LEAF (spec §5.10). A linked worktree of a
+  # clone that is itself in the leaf names its git directory ABSOLUTELY, git's
+  # default, by the leaf's PRE-MOVE spelling, which the collector's move took
+  # away. Under the alias that spelling is read at the leaf's new place, and
+  # only while nothing stands at it again, PROVEN; the INSIDE THE LEAF rule
+  # below then answers for the tree exactly as the pre-move ask did, so no
+  # accepted pair is needed. A relative gitdir was joined to the tree's own
+  # directory above and never begins with the alias, and an absolute one
+  # holding a `..` was refused above.
+  if [[ -n "$alias" && ( "$gd" == "${alias%/}" || "$gd" == "${alias%/}/"* ) ]]; then
+    _ws_reclaim_absent "$gd"; rc=$?
+    (( rc != 2 )) || { _WS_CHECKOUTS_WHY="$_WS_ABSENT_WHY — whether anything stands again at $gd, the git directory $f names in the leaf's pre-move spelling, was never asked"; return 2; }
+    (( rc != 1 )) || { _WS_CHECKOUTS_WHY="$f names $gd as its git directory, in the leaf's pre-move spelling, where something stands again — not the leaf's own"; return 1; }
+    gd="${lp%/}${gd#"${alias%/}"}"
+  fi
   _ws_reclaim_absent "$gd"; rc=$?
   (( rc != 0 )) || { _WS_CHECKOUTS_WHY="$f names $gd as its git directory, which no longer exists — git no longer records the tree at $d"; return 1; }
   (( rc != 2 )) || { _WS_CHECKOUTS_WHY="$_WS_ABSENT_WHY — where $f's git directory stands was never asked"; return 2; }
@@ -29767,8 +29983,13 @@ _ws_leaf_checkout_one() {   # leaf-physical .git-entry -> 0 the leaf's own; 1 re
   [[ "$adp" != "$lp" && "$adp" != "${lp%/}/"* ]] || return 0
   # OUTSIDE IT: only a linked worktree whose admin directory's `gitdir` names
   # THIS `.git` back is the leaf's — rung 9's `_ws_reclaim_gitdir_own`, asked
-  # of any repository. Anything else is a tree git records elsewhere: moved
-  # here, or an admin name a later worktree recycled.
+  # of any repository — or, under the collector's alias, the pre-move spelling
+  # the two conditions below admit. Anything else is a tree git records
+  # elsewhere: moved here, or an admin name a later worktree recycled. "Names
+  # THIS `.git` back" is a compare of text with each NUL of the back-link read
+  # as a newline, so it is literal only for a back-link without a NUL: one
+  # whose NUL sits at the offset of a newline in the `.git` path passes
+  # (`_ws_leaf_read_small` says which cases are refused and which are not).
   _ws_reclaim_absent "$adp/gitdir"; rc=$?
   (( rc != 2 )) || { _WS_CHECKOUTS_WHY="$_WS_ABSENT_WHY — whose tree $adp records was never asked"; return 2; }
   (( rc != 0 )) || { _WS_CHECKOUTS_WHY="$f names $adp as its git directory, which lies outside the leaf and holds no record of which tree it belongs to — the tree at $d is not provably the leaf's own"; return 1; }
@@ -29776,15 +29997,40 @@ _ws_leaf_checkout_one() {   # leaf-physical .git-entry -> 0 the leaf's own; 1 re
     || { _WS_CHECKOUTS_WHY="$adp/gitdir could not be read whole, so whose tree $adp records was never asked"; return 2; }
   rec="$_WS_SMALL"
   while [[ "$rec" == *$'\n' ]]; do rec="${rec%$'\n'}"; done
-  [[ "$rec" != "$f" ]] || return 0
+  [[ "$rec" != "$f" ]] || { _ws_leaf_checkout_accepted "$adp" "$rec"; return 0; }
   _ws_dir_physical "$d" \
     || { _WS_CHECKOUTS_WHY="$d cannot be resolved ($_WS_PHYS_WHY), so whether $adp records it was never asked"; return 2; }
-  [[ "$rec" != "${_WS_PHYS%/}/.git" ]] || return 0
+  [[ "$rec" != "${_WS_PHYS%/}/.git" ]] || { _ws_leaf_checkout_accepted "$adp" "$rec"; return 0; }
+  # THE COLLECTOR'S ALIAS (spec §5.10): a leaf asked again after the collector
+  # moved it into a quarantine slot. Its trees' back-links still name the leaf's
+  # PRE-MOVE spelling (`alias`, the leaf's physical path before the move), and
+  # such a back-link counts as the leaf's own ONLY when (1) the pre-move ask
+  # accepted this same admin directory with this same back-link value
+  # (`accepted`, the quarantine record's list), and (2) nothing stands at that
+  # pre-move spelling now, PROVEN. A later worktree that recycled the admin
+  # name — a recycled slug's `git worktree add` at the same spelling — fails one
+  # or the other and refuses WHILE THE LEAF IS IN THE SLOT (spec §5.10, the
+  # residual `alias-refusal-ends-at-the-putback`). Once the putback restores the
+  # leaf to its original path there is no alias: the un-aliased `rec == f` rule
+  # above decides, as it did before this wave, and a recycled worktree whose
+  # back-link names the restored `.git` passes it.
+  if [[ -n "$alias" ]]; then
+    if [[ "$d" == "$lp" ]]; then pre="${alias%/}"; else pre="${alias%/}/${d#"${lp%/}/"}"; fi
+    if [[ "$rec" == "$pre/.git" ]] \
+       && [[ ",$accepted," == *",$(_ws_collect_enc "$adp")=$(_ws_collect_enc "$rec"),"* ]]; then
+      _ws_reclaim_absent "$pre"; rc=$?
+      (( rc != 0 )) || return 0
+      (( rc != 2 )) || { _WS_CHECKOUTS_WHY="$_WS_ABSENT_WHY — whether anything stands again at $pre, where the tree at $d stood before it was moved, was never asked"; return 2; }
+      _WS_CHECKOUTS_WHY="$f names $adp as its git directory, which git records as $rec's — the spelling the tree at $d had before it was moved, where something stands again — not the leaf's own"
+      return 1
+    fi
+  fi
   _WS_CHECKOUTS_WHY="$f names $adp as its git directory, which git records as $rec's — the tree at $d is a checkout git records elsewhere, not the leaf's own"
   return 1
 }
-_ws_leaf_checkouts() {   # leaf -> 0 when no checkout in it is one git records elsewhere; 1 refused; 2 unmeasured
-  #                         (each with _WS_CHECKOUTS_WHY naming the checkout, or why it was never asked)
+_ws_leaf_checkouts() {   # leaf [alias accepted] -> 0 when no checkout in it is one git records elsewhere; 1 refused;
+  #                         2 unmeasured (each with _WS_CHECKOUTS_WHY naming the checkout, or why it was never asked);
+  #                         on 0, _WS_CHECKOUTS_ACCEPTED lists every outside admin directory a back-link let pass
   # ANOTHER SESSION'S TREE MOVED INTO A LEAF IS NOT THE LEAF'S (spec §5.5, §5.6).
   # A `mv` keeps a worktree's `.git` FILE, which still names the admin directory
   # its repository keeps for it; git's record of the tree then reads
@@ -29807,12 +30053,28 @@ _ws_leaf_checkouts() {   # leaf -> 0 when no checkout in it is one git records e
   # directory it names resolved physically — absent refuses (git no longer
   # records the tree), unresolvable is unmeasured, inside the leaf passes;
   # outside it passes only as a linked worktree whose admin `gitdir` names
-  # this `.git` back (literally, or by its directory's physical path), and
+  # this `.git` back (literally, or by its directory's physical path; each NUL
+  # of the back-link is read as a newline, so a hand-crafted one whose NUL sits
+  # at the offset of a newline in the `.git` path passes too), and
   # refuses otherwise. Anything else named `.git` is unmeasured. A refusal
   # outranks an unmeasured entry, whatever order the walk lists them in.
-  local lp outf errf err rc f why='' n=0
+  # THE ALIAS (the collector's alone, spec §5.10): `alias` is the leaf's physical
+  # path BEFORE the collector moved it, and `accepted` the record's list of what
+  # that pre-move ask let pass (`_WS_CHECKOUTS_ACCEPTED`'s spelling). With them,
+  # a back-link naming the pre-move spelling is the leaf's own under the two
+  # conditions `_ws_leaf_checkout_one` states, and a git directory spelled
+  # absolutely inside the pre-move leaf is read at the leaf's new place while
+  # nothing stands at that spelling. Every other caller passes neither, and
+  # nothing it is answered changes.
+  local lp outf errf err rc f why='' n=0 alias="${2-}" accepted="${3-}"
   local -a gits=()
-  _WS_CHECKOUTS_WHY=''
+  _WS_CHECKOUTS_WHY=''; _WS_CHECKOUTS_ACCEPTED=''
+  if [[ -n "$alias" ]]; then
+    [[ "$alias" == /* && "$alias" != *$'\n'* ]] \
+      || { _WS_CHECKOUTS_WHY="the leaf's pre-move spelling '$alias' is not an absolute path, so no back-link is compared with it"; return 2; }
+    _ws_collect_pairs_ok "$accepted" \
+      || { _WS_CHECKOUTS_WHY="the accepted checkouts handed with $alias are not a list ccd writes"; return 2; }
+  fi
   _ws_dir_physical "$1" \
     || { _WS_CHECKOUTS_WHY="$1 cannot be resolved ($_WS_PHYS_WHY), so the checkouts in it were never looked for"; return 2; }
   lp="$_WS_PHYS"
@@ -29838,7 +30100,7 @@ _ws_leaf_checkouts() {   # leaf -> 0 when no checkout in it is one git records e
   (( n <= WS_LEAF_CHECKOUTS_CAP )) \
     || { _WS_CHECKOUTS_WHY="$lp holds more than $WS_LEAF_CHECKOUTS_CAP entries named .git, so not every checkout in it was examined"; return 2; }
   for f in ${gits[@]+"${gits[@]}"}; do
-    _ws_leaf_checkout_one "$lp" "$f"; rc=$?
+    _ws_leaf_checkout_one "$lp" "$f" "$alias" "$accepted"; rc=$?
     (( rc != 1 )) || return 1
     (( rc == 0 )) || [[ -n "$why" ]] || why="$_WS_CHECKOUTS_WHY"
   done
@@ -29846,7 +30108,7 @@ _ws_leaf_checkouts() {   # leaf -> 0 when no checkout in it is one git records e
   [[ -z "$why" ]] || return 2
   return 0
 }
-_ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROVEN by `_ws_reclaim_absent`;
+_ws_leaf_remove() {   # root id [expect-devino [alias accepted]] -> 0 removed, or absent — PROVEN by `_ws_reclaim_absent`;
   #                       1 refused (_WS_LEAF_WHY); 2 unmeasured (_WS_LEAF_WHY)
   # THE ONE REMOVAL of `<root>/<id>`, a per-session leaf under a box-wide root:
   # the reclaim and expiry tail's clips directory and temp root, and wave 7's
@@ -29871,7 +30133,9 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
   # - A LINK OR FILE LEAF is unlinked with `rm -f --`, never followed: `-L` is
   #   asked first, so a link's target, wherever it points, is untouched. Such a
   #   leaf is what `_child_tmpdir`'s rc 2 leaves in place; kept, a recycled
-  #   slug would meet it on every spawn.
+  #   slug would meet it on every spawn. A COLLECTOR'S call (an alias passed)
+  #   never unlinks one: its leaf is the recorded directory and nothing else,
+  #   so a link or file there is refused (1), untouched (spec §5.10).
   # - A DIRECTORY LEAF goes only when it is this uid's own (`_ws_leaf_uid`,
   #   `ls -dn`, never follows it), its dev:ino is the one the caller recorded
   #   (when the caller names one), it is not a mount of another file system, and
@@ -29934,11 +30198,20 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
   #   (iii) a clone, a submodule of one, or a worktree of one inside the leaf
   #   is the leaf's own, and goes with it; (iv) a bind-mount alias spelling of
   #   the leaf is not compared.
-  local root="$1" id="$2" want="${3-}" rroot leaf me owner lreal have ldev rdev err rc
+  # - THE COLLECTOR'S ALIAS (spec §5.10): `alias` and `accepted`, passed by the
+  #   collector alone, with the witness's dev:ino, for a leaf in a quarantine
+  #   slot (`<slot>/leaf`), and handed to the checkout question unchanged
+  #   (`_ws_leaf_checkouts` says what they admit). Every other caller passes
+  #   neither, and is answered exactly as before. An alias handed WITHOUT that
+  #   dev:ino is unmeasured (2) before anything is looked at: the alias speaks
+  #   only for the one recorded leaf, so the identity check is never skipped.
+  local root="$1" id="$2" want="${3-}" alias="${4-}" accepted="${5-}" rroot leaf me owner lreal have ldev rdev err rc
   _WS_LEAF_WHY=''
   if ! [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || [[ "$id" == . || "$id" == .. ]]; then
     _WS_LEAF_WHY="'$id' is not a session id ccd mints, so nothing under $root was touched"; return 1
   fi
+  [[ -z "$alias" || -n "$want" ]] \
+    || { _WS_LEAF_WHY="the leaf's pre-move spelling was handed with no expected dev:ino — the alias speaks only for the recorded leaf, so nothing under $root was touched"; return 2; }
   _ws_reclaim_absent "$root"; rc=$?
   (( rc != 0 )) || return 0
   (( rc != 2 )) || { _WS_LEAF_WHY="$_WS_ABSENT_WHY — whether $id stands under it was never asked"; return 2; }
@@ -29948,6 +30221,8 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
   [[ -n "$rroot" && "$rroot" != / ]] || { _WS_LEAF_WHY="$root resolved to an unusable path"; return 2; }
   leaf="${rroot%/}/$id"
   if [[ -L "$leaf" || ( -e "$leaf" && ! -d "$leaf" ) ]]; then
+    [[ -z "$alias" ]] \
+      || { _WS_LEAF_WHY="$leaf is a link or not a directory, never the recorded one, so it was not unlinked"; return 1; }
     err=$(rm -f -- "$leaf" 2>&1) \
       || { _WS_LEAF_WHY="$leaf could not be unlinked: $(printf '%s' "${err:-rm said nothing}" | head -1)"; return 2; }
   elif [[ -d "$leaf" ]]; then
@@ -29971,7 +30246,8 @@ _ws_leaf_remove() {   # root id [expect-devino] -> 0 removed, or absent — PROV
       || { _WS_LEAF_WHY="$leaf cannot be entered, so where it resolves was never asked"; return 2; }
     [[ "$lreal" == "$leaf" ]] \
       || { _WS_LEAF_WHY="$leaf resolves to $lreal — ccd never removes a tree it would reach through another path"; return 1; }
-    _ws_leaf_checkouts "$leaf"; rc=$?
+    if [[ -n "$alias" ]]; then _ws_leaf_checkouts "$leaf" "$alias" "$accepted"; rc=$?
+    else _ws_leaf_checkouts "$leaf"; rc=$?; fi
     (( rc == 0 )) || { _WS_LEAF_WHY="$_WS_CHECKOUTS_WHY — nothing under $leaf was removed"; (( rc == 1 )) && return 1; return 2; }
     _ws_reclaim_normalise "$leaf"; rc=$?
     (( rc != 2 )) || { _WS_LEAF_WHY="$_WS_NORMALISE_WHY — nothing under $leaf was removed"; return 2; }
@@ -30122,8 +30398,11 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
   local regproject regworkdir reguuid regbranch childlines recorded merged cj first cline cpath crest cbr chead
   local holders wdreal kept=() k keptjson keptall treegone crc killrc dropped bstate
   local noun=reclaim donekey=reclaimed bindkey=childOf
-  local clipskept='' clipswhy='' tmpkept='' tmpwhy='' lfrc cword tword gone dparts tmpq tarc
+  local clipskept='' clipswhy='' tmpkept='' tmpwhy='' lfrc cword tword gone dparts tmpq tarc orc
   [[ "$_WS_RCL_ACT" != expire ]] || { noun=expiry; donekey=expired; bindkey=archivedAt; }
+  # Every failure from here on is printed past a breadcrumb, for both verbs
+  # (`crumb`, spec §5.6).
+  _WS_RCL_CRUMB=true
   tomb="$REG/.reaped/$id.json"
   case "$phase" in
     children|worktree|branch|artifacts) : ;;
@@ -30275,11 +30554,24 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
       "the registry row of $id (project '$regproject', workdir '$regworkdir', branch '$regbranch') and the record its pin wrote (project '$project', workdir '$workdir', branch '$tregbranch') disagree — ccd cannot prove the tree at that path is $id's own, so nothing further was deleted"
     return 1
   fi
-  if ! _ws_reclaim_owned "$id" "$workdir" "$main"; then
-    _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
-      "$_WS_OWNED_WHY — ccd cannot prove the tree at that path is $id's own, so nothing further was deleted"
-    return 1
-  fi
+  # THE TREE IS RE-PROVEN THE CHILD'S OWN (spec §5.5, §5.6) — on a resumed arm
+  # the only identity check there is — and a refusal says how it was reached. A
+  # PROOF that it is not (rc 1) is `containment-refuted`, from this literal call
+  # site: a retry meets the same thing until the other tree or row is moved or
+  # removed. A question that could not be asked (rc 2) stays
+  # `worktree-remove-failed`. Both stop HERE, where the tail always stopped: the
+  # unit stopped and the pane killed, the tombstone and the breadcrumb standing,
+  # nothing further deleted, and no step after this one run.
+  _ws_reclaim_owned "$id" "$workdir" "$main"; orc=$?
+  case "$orc" in
+    0) : ;;
+    1) _ws_reclaim_fail "$id" "$lctx" containment-refuted \
+         "$_WS_OWNED_WHY — so the tree at that path is not only $id's own; the session was stopped, nothing further was deleted, and a retry finds the same until that tree or row is moved or removed"
+       return 1 ;;
+    *) _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
+         "$_WS_OWNED_WHY — ccd cannot prove the tree at that path is $id's own, so nothing further was deleted"
+       return 1 ;;
+  esac
   # (2) THE SETTLE: the session is dead now, so anything it wrote between the
   # pin phase and the kill is pinned before any tree is touched. A link at the
   # workdir fails here, in the pin's own leaf test, before any commit.
@@ -30383,6 +30675,15 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
       if (( treegone && ! _WS_NPROOF_GONE )); then
         _ws_reclaim_fail "$id" "$lctx" worktree-remove-failed \
           "$id's own tree is gone, yet a checkout stands at $cpath — ccd cannot prove it went with the tree, so nothing further was deleted"
+        return 1
+      fi
+      # THE ALL-ZERO ID IS NO HEAD TO COMPARE AGAINST (spec §5.6): `update-ref -d
+      # --no-deref <ref> <all-zero id>` exits 0 and deletes the ref whatever it
+      # names (measured, git 2.43), so a record naming it is unmeasured.
+      if [[ -n "$cbr" ]] && git -C "$main" show-ref --verify --quiet "refs/heads/$cbr" \
+         && [[ "$chead" =~ ^0{40}$ ]]; then
+        _ws_reclaim_fail "$id" "$lctx" branch-unmeasured \
+          "the record names the all-zero id as the head of $cbr (the checkout at $cpath), which git's update-ref reads as an unconditional delete — so the branch was kept and nothing further was deleted"
         return 1
       fi
       if [[ -n "$cbr" ]] && git -C "$main" show-ref --verify --quiet "refs/heads/$cbr" \
@@ -30543,6 +30844,14 @@ _ws_reclaim_tail() {   # id phase lctx childof surface declared resumed(phase|''
       return 1
     fi
     if [[ "$bstate" == "present "* ]]; then
+      # THE ALL-ZERO ID IS NO TIP TO COMPARE AGAINST (spec §5.6): `update-ref -d
+      # --no-deref <ref> <all-zero id>` exits 0 and deletes the ref whatever it
+      # names (measured, git 2.43), so a tombstone naming it is unmeasured.
+      if [[ "$tip" =~ ^0{40}$ ]]; then
+        _ws_reclaim_fail "$id" "$lctx" branch-unmeasured \
+          "the tombstone records the all-zero id as the tip of $branch, which git's update-ref reads as an unconditional delete — so the branch was kept and nothing further was deleted"
+        return 1
+      fi
       if ! [[ "$tip" =~ ^[0-9a-f]{40}$ ]]; then
         _ws_reclaim_fail "$id" "$lctx" branch-moved \
           "the tombstone records no tip for $branch — a branch is never deleted at an unknown commit, so it was kept and nothing further was deleted"
@@ -30828,6 +31137,12 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
   [[ "$surface" == none ]] || declared="$surface"
   _ws_reclaim_fork "$id" "$defer" "$childof"
   phase="$RECLAIM_RESUME_PHASE"; resumed="$phase"
+  # `crumb` (spec §5.6): a resumed arm's breadcrumb already stands (`true`); a
+  # fresh arm's is not written yet (`false`); a breadcrumb that stands but could
+  # not be read leaves it unsaid — whether an act started is not known.
+  if [[ -n "$phase" ]]; then _WS_RCL_CRUMB=true
+  elif [[ -e "$REG/$id.reaping" || -L "$REG/$id.reaping" ]]; then _WS_RCL_CRUMB=''
+  else _WS_RCL_CRUMB=false; fi
   # 10 — the consent IS the fingerprint, recomputed HERE, inside the lock. A
   # server-side check fails open into deletion; this one cannot.
   if [[ "$REAP_VERDICT" == reclaimable && "$token" != "$REAP_TOKEN" ]]; then
@@ -30910,6 +31225,7 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
       _ws_reclaim_fail "$id" "$lctx" tombstone-unwritable "could not write the tombstone or the breadcrumb for $id — nothing was destroyed"
       return 1
     fi
+    _WS_RCL_CRUMB=true   # redundant: `_ws_reclaim_tail` sets it at its own top, before any failure printer it reaches
     phase="$start"
   fi
   _ws_reclaim_tail "$id" "$phase" "$lctx" "$RECLAIM_CHILDOF" "$surface" "$declared" "$resumed"
@@ -30925,11 +31241,22 @@ _ws_reclaim_locked() {   # token childof id defer surface actor reason — every
 # `u+r` on a file, only where this uid owns the entry, never a group or other
 # bit — to the child's tree and its clips directory before reading them,
 # because a mode-000 directory answers `git status` clean. Nothing is
-# destroyed or created; a mode changes. The plain form does neither, byte for
+# destroyed or created (but for what the generation read below takes and
+# leaves); a mode changes. The plain form does neither, byte for
 # byte: `mode` is read at exactly two places, the eval call and the verdict
 # line, and both keep their old text on `reap`. It is the one exception
 # because every GIT read is contained (below): before that, `git status`
 # rewrote the child's index and ran the repository's hooks on every audit.
+#
+# AND THE ROW'S GENERATION (spec §5.5). The document carries `generation`,
+# the row's generation the ladder bound into the token, or null where rungs
+# 1-2 refused before reading it. Reading it creates and unlinks one transient
+# hard link, `$REG/.<id>.generation-read.*` (`_reg_generation_read`'s owned
+# alias), and leaves nothing behind. The read runs under the row's compaction
+# lock (`_ws_reclaim_generation`), whose acquire publishes
+# `$REG/.<id>.compactions.lock` where none stands yet (row creation already
+# published it for every child `ws-add` made) and unlinks its own transient
+# `lock-open` alias; a reclaim's purge takes that same lock.
 #
 # THE AUDIT READS THE LIVE CHILD CONTAINED. The child may be
 # ALIVE while the server audits it, and an uncontained `git status` of its
@@ -31839,6 +32166,2020 @@ _ws_expire_return_gap() { :; }
 # `capSupported(state, 'expire-v1')`, which refuses on no evidence; wave 3b
 # composes it, this wave ships it inert.
 # ── end archived-workspace expiry ───────────────────────────────────────────── EXPIRE-END ──
+
+# ── temp-root collection: ws-collect (spec 2026-09-22 §5.2, §5.10) ────────────── COLLECT-BEGIN ──
+# A child's temp root `$HOME/.cc-tmp/<id>` that outlived its row — kept by a
+# reclaim tail that found it in use, or left by a human verb — is collected by
+# `ws-collect`, composed by the server and by nothing else (CLAUDE.md SAFETY:
+# forbidden to every session). A SIBLING of `ws-reclaim` and `ws-expire`, never
+# a flag on either: rung 2's `.child` marker is gone for this population, and
+# its only evidence is the positive witness `$REG/tmproots/<id>` (spec §5.2).
+# This region holds what is the collector's OWN — its quarantine record, its
+# quarantine and slot, its rename and the proof of it, its idle walk, its token
+# and its row rule — and borrows the rest from the RECLAIM region: the witness,
+# the removal helper and its checkout question, the in-use probe, the absence
+# proof and the lock `$REG/.reap-<id>.lock`.
+#
+# THE RECORD IS RESUME AUTHORITY; THE JOURNAL IS NOT. Before anything moves, the
+# verb writes `$REG/tmpquarantine/<id>.<ns>.<pid>` (temp file, then rename): the
+# witness line it acted on, the token it was given, and every checkout outside
+# the leaf its pre-move question accepted. It names NO path of its own: the slot
+# it moves the leaf into is DERIVED from the record's name under the physical
+# quarantine (`_ws_collect_qpath`), so a space in a path never splits it. A
+# crash at any later step leaves the record, and the next audit of that id finds
+# it, whatever the witness says by then. ccd reads no journal to decide anything.
+# The record is same-uid writable, as the witness is, and shares its TRUST note:
+# it guards against ccd's own crash and a recycled id, never a hostile session.
+#
+# WHERE. `tmpquarantine/` is a DOTLESS registry subdirectory, the `pools/` and
+# `tmproots/` precedent: every registry glob ccd ships is suffix-shaped and every
+# registry `find` is depth-1 and name-filtered, so `_reg_purge`, `_ws_slug_free`,
+# `ccd ls` and the server's registry read never see it, and the record outlives
+# the row it was never part of (`ccd-collect-record.test.ts` pins each). Its
+# writer's temp file is dot-leading inside it, never read as a record. A record
+# is found by EXACT parse — its name less its two trailing all-digit dot-fields
+# must equal the id — never by an `<id>.*` prefix, because ids admit dots: a
+# nested project's `p-calm-mesa.v2-quiet-river` is not `p-calm-mesa`'s.
+#
+# THE QUARANTINE is `<physical ~/.cc-tmp>/.ccd-quarantine`, on the leaf's own file
+# system so a rename never crosses one: a real directory of this uid at 0700,
+# made by the verb alone — a plain `mkdir -m 0700` when PROVEN absent, then
+# `chmod g-s` on what that mkdir made. Beside a present leaf and on a resume it
+# is refused as anything else, by the audit's read-only question as by the
+# verb (`_ws_collect_qcheck`). Beside an absent leaf the evaluation only lists
+# its slots (`_ws_collect_slots_of`), so a quarantine that is a link or not a
+# directory, or whose slots cannot be listed, is unmeasured there; it does not
+# ask the uid and mode half, because that arm moves nothing into it. A
+# slot in it is `slot.<id>.<ns>.<pid>`, made by an exclusive `mkdir`; the
+# `slot.` prefix keeps it clear of any rule keyed on a leaf's own name, and the
+# leaf moves to `<slot>/leaf`. Its name pairs it with its record.
+#
+# LINUX ONLY. `_ws_collect_mv` holds the region's one GNU rename spelling, `mv -T -n
+# --no-copy`: one renameat2(RENAME_NOREPLACE), never a copy. A box whose `mv` has
+# no `--no-copy`, and Darwin, answer unmeasured, and so does the idle walk's GNU
+# `find -printf` there. `macos-platform.test.ts` exempts exactly that function.
+_WS_REC_ID=''
+_WS_QREC_WHY=''; _WS_QRECS_WHY=''
+_WS_QREC_ID=''; _WS_QREC_SLOT=''; _WS_QREC_DEV=''; _WS_QREC_INO=''; _WS_QREC_BTIME=''
+_WS_QREC_RUN=''; _WS_QREC_AT=''; _WS_QREC_TOKEN=''; _WS_QREC_CHECKOUTS=''
+_WS_QRECS=()
+WS_COLLECT_RECORD_MAX=65536   # the most bytes one quarantine record may hold, its newline included
+
+_ws_collect_enc() {   # text -> on stdout, every byte outside [A-Za-z0-9._/:@+~-] spelled %XX (upper-case hex)
+  # ONE SPELLING FOR A PATH IN A key=value LINE (spec §5.10). A record holds
+  # paths — each admin directory and back-link the checkout question accepted —
+  # on one space-separated line, so a space, `,`, `=` or `%` in a path would
+  # split a field. Its slot is never one of them: G5 derives it. INJECTIVE: `%` is itself spelled, so two texts never
+  # encode alike, and comparing two encodings compares the texts. Bytes, never
+  # characters (`LC_ALL=C`).
+  local LC_ALL=C s="${1-}" o='' c i
+  for (( i = 0; i < ${#s}; i++ )); do
+    c="${s:i:1}"
+    case "$c" in
+      [A-Za-z0-9._/:@+~-]) o+="$c" ;;
+      *) printf -v c '%%%02X' "'$c"; o+="$c" ;;
+    esac
+  done
+  printf '%s' "$o"
+}
+
+_ws_collect_pairs_ok() {   # list -> 0 when '' or a comma list of `<enc>=<enc>` pairs, each side `_ws_collect_enc`'s spelling
+  local LC_ALL=C e='([A-Za-z0-9._/:@+~-]|%[0-9A-F]{2})+'
+  local re="^$e=$e(,$e=$e)*\$"
+  [[ -z "${1-}" || "$1" =~ $re ]]
+}
+
+_ws_collect_rec_id() {   # name -> 0 with _WS_REC_ID = the id a `<id>.<ns>.<pid>` name is for: its two trailing
+  #                          all-digit dot-fields stripped, and nothing else; 1 when the name is no such name
+  # EXACT, NEVER A PREFIX: the longest leading part the two trailing fields leave
+  # is the id, and it must itself be an id a witness is named for.
+  local LC_ALL=C re='^(.+)\.([0-9]+)\.([0-9]+)$' got
+  _WS_REC_ID=''
+  [[ "${1-}" =~ $re ]] || return 1
+  got="${BASH_REMATCH[1]}"
+  _ws_tmproot_id_ok "$got" || return 1
+  _WS_REC_ID="$got"
+}
+
+_ws_collect_qrec_dir() { printf '%s' "$REG/tmpquarantine"; }   # -> the quarantine records' directory (a path, not a decision)
+
+_WS_QPATH=''; _WS_QPATH_WHY=''
+_ws_collect_qpath() {   # -> 0 with _WS_QPATH = `<physical ~/.cc-tmp>/.ccd-quarantine`, resolved and NEVER made;
+  #                        2 (_WS_QPATH_WHY) when ~/.cc-tmp cannot be resolved
+  # ONE RESOLUTION, NO WRITE (G5). `_ws_collect_qdir` makes the quarantine
+  # under this path; the record reader only DERIVES a slot under it, and the
+  # audit that reads records is read-only. `_ws_dir_physical`'s eighth call
+  # site, and the COLLECT region's only one: the quarantine maker, the record
+  # writer and the record reader all ask it here, and so must every later
+  # collector function that needs the physical `~/.cc-tmp`.
+  local root="$HOME/.cc-tmp"
+  _WS_QPATH=''; _WS_QPATH_WHY=''
+  _ws_dir_physical "$root" || { _WS_QPATH_WHY="$root cannot be resolved ($_WS_PHYS_WHY)"; return 2; }
+  [[ -n "$_WS_PHYS" && "$_WS_PHYS" != / ]] || { _WS_QPATH_WHY="$root resolved to an unusable path"; return 2; }
+  _WS_QPATH="${_WS_PHYS%/}/.ccd-quarantine"
+}
+
+_ws_collect_record_write() {   # id slot token -> 0 written, and PROVEN by reading it back; 1 not written
+  #                                (_WS_QREC_WHY) — the caller then refuses before anything moves
+  # THE WITNESS LINE IT ACTED ON is the caller's last `_ws_tmproot_witness_read`
+  # of id (`_WS_WIT_*`), and the CHECKOUTS its last pre-move `_ws_leaf_checkouts`
+  # of the leaf (`_WS_CHECKOUTS_ACCEPTED`). A witness with no birth time (`-`) is
+  # never acted on, so it is never recorded either. The record's name is its
+  # slot's, less `slot.`: `<id>.<ns>.<pid>`, which pairs the two. The slot must
+  # lie in the physical quarantine (`_ws_collect_qpath`), and the body names no
+  # slot path: the reader derives the slot from the name (G5). The one kind of
+  # path it carries is the `checkouts=` list's encoded admin and back-link
+  # paths. A record that stands is never overwritten, and its directory is made
+  # 0700 on first write.
+  local LC_ALL=C id="${1-}" slot="${2-}" token="${3-}" dir base name f tmp line co
+  _WS_QREC_WHY=''
+  _ws_tmproot_id_ok "$id" || { _WS_QREC_WHY="'$id' is not an id a witness is named for, so no record was written"; return 1; }
+  base="${slot##*/}"
+  [[ "$slot" == /* && "$base" == slot.* ]] || { _WS_QREC_WHY="$slot is not a quarantine slot's path, so no record was written"; return 1; }
+  name="${base#slot.}"
+  _ws_collect_rec_id "$name" && [[ "$_WS_REC_ID" == "$id" ]] \
+    || { _WS_QREC_WHY="$base is not a slot named for $id, so no record was written"; return 1; }
+  _ws_collect_qpath || { _WS_QREC_WHY="$_WS_QPATH_WHY, so no record was written"; return 1; }
+  [[ "${slot%/*}" == "$_WS_QPATH" ]] \
+    || { _WS_QREC_WHY="$slot is not in the quarantine $_WS_QPATH, so no record was written"; return 1; }
+  [[ "$token" =~ ^[0-9a-f]{64}$ ]] || { _WS_QREC_WHY="the token is not one ccd mints, so no record was written"; return 1; }
+  [[ "${_WS_WIT_DEV-}" =~ ^[0-9]+$ && "${_WS_WIT_INO-}" =~ ^[0-9]+$ && "${_WS_WIT_BTIME-}" =~ ^[1-9][0-9]*$ \
+     && "${_WS_WIT_AT-}" =~ ^[0-9]{13}$ ]] && _child_runid_valid "${_WS_WIT_RUN-}" \
+    || { _WS_QREC_WHY="no witness of $id with a birth time was read, so no record was written"; return 1; }
+  co="${_WS_CHECKOUTS_ACCEPTED-}"
+  _ws_collect_pairs_ok "$co" || { _WS_QREC_WHY="the accepted checkouts are not a list ccd writes, so no record was written"; return 1; }
+  line="v=1 id=$id dev=$_WS_WIT_DEV ino=$_WS_WIT_INO btime=$_WS_WIT_BTIME run=$_WS_WIT_RUN at=$_WS_WIT_AT token=$token checkouts=$co"
+  (( ${#line} + 1 <= WS_COLLECT_RECORD_MAX )) \
+    || { _WS_QREC_WHY="the record of $id would hold more than $WS_COLLECT_RECORD_MAX bytes, so none was written"; return 1; }
+  dir=$(_ws_collect_qrec_dir)
+  [[ ! -L "$dir" ]] || { _WS_QREC_WHY="$dir is a link, which is never followed, so no record was written"; return 1; }
+  [[ -e "$dir" ]] || mkdir -m 0700 -- "$dir" 2>/dev/null || :
+  [[ -d "$dir" && ! -L "$dir" ]] || { _WS_QREC_WHY="$dir could not be made a directory, so no record was written"; return 1; }
+  f="$dir/$name"
+  [[ ! -e "$f" && ! -L "$f" ]] || { _WS_QREC_WHY="$f already stands — a record is never overwritten"; return 1; }
+  tmp="$dir/.$name.$BASHPID.$RANDOM.tmp"
+  { printf '%s\n' "$line" > "$tmp"; } 2>/dev/null \
+    || { rm -f -- "$tmp" 2>/dev/null; _WS_QREC_WHY="$tmp could not be written, so no record was written"; return 1; }
+  mv -f -- "$tmp" "$f" 2>/dev/null \
+    || { rm -f -- "$tmp" 2>/dev/null; _WS_QREC_WHY="$tmp could not be renamed to $f, so no record was written"; return 1; }
+  if ! _ws_collect_record_read "$f" || [[ "$_WS_QREC_TOKEN" != "$token" || "$_WS_QREC_SLOT" != "$slot" ]]; then
+    rm -f -- "$f" 2>/dev/null
+    _WS_QREC_WHY="$f did not read back as it was written, so it was removed and nothing moves"; return 1
+  fi
+  return 0
+}
+
+_ws_collect_record_read() {   # file -> 0 parsed (sets _WS_QREC_ID _WS_QREC_SLOT _WS_QREC_DEV _WS_QREC_INO
+  #                               _WS_QREC_BTIME _WS_QREC_RUN _WS_QREC_AT _WS_QREC_TOKEN _WS_QREC_CHECKOUTS)
+  #                               | 1 absent, PROVEN | 2 unreadable or malformed | 3 unmeasured (_WS_QPATH_WHY):
+  #                               whether the record stands could not be measured, or the physical
+  #                               ~/.cc-tmp cannot be resolved, so no slot is derived
+  # FOUR ANSWERS, NEVER AN OVERLOADED 2. As the witness reader's, a link, a
+  # directory, a dot-leading or unparseable NAME, a `checkouts=` list in no
+  # spelling ccd writes and a `tmpquarantine/` that is itself a link all answer
+  # 2: the record is not one ccd writes, and its caller keeps it. The body is
+  # judged first, and only a well-formed one asks for its slot: a physical
+  # `~/.cc-tmp` that cannot be resolved says nothing against the record, only
+  # that its slot cannot be derived now, so that is 3, unmeasured, and its
+  # caller retries. ABSENCE IS MEASURED, never a failed `-e`: 1 only when
+  # `_ws_reclaim_absent` proves nothing stands at the name, and its unmeasured
+  # answer (an unsearchable `tmpquarantine/`, where `-e` reads false over a
+  # record that stands) is 3, retried, its reason in `_WS_QPATH_WHY`, the one
+  # reason rc 3 carries. A record that stands as a file but will not OPEN is
+  # folded into 2 with the malformed ones: its caller keeps it, never retries
+  # it. Every field is cleared first. The content's id must be the one its own
+  # name parses to (rc 2 otherwise, G5). The body names NO slot path (its
+  # `checkouts=` list's encoded admin and back-link paths are the one kind of
+  # path it carries): `_WS_QREC_SLOT` is DERIVED,
+  # `<physical ~/.cc-tmp>/.ccd-quarantine/slot.<name>`, through
+  # `_ws_collect_qpath`, which makes nothing, so a record never names another
+  # id's slot and a space in a path never splits one. `_WS_QREC_CHECKOUTS`
+  # stays in `_ws_collect_enc`'s spelling, the form `_ws_leaf_checkouts`' alias
+  # compares.
+  local LC_ALL=C f="${1-}" name body line fd max rc
+  local -a m
+  local re='^v=1 id=([A-Za-z0-9._-]+) dev=([0-9]+) ino=([0-9]+) btime=([1-9][0-9]*) run=([^ ]+) at=([0-9]{13}) token=([0-9a-f]{64}) checkouts=([^ ]*)$'
+  _WS_QREC_ID=''; _WS_QREC_SLOT=''; _WS_QREC_DEV=''; _WS_QREC_INO=''; _WS_QREC_BTIME=''
+  _WS_QREC_RUN=''; _WS_QREC_AT=''; _WS_QREC_TOKEN=''; _WS_QREC_CHECKOUTS=''
+  name="${f##*/}"
+  [[ "$name" != .* ]] && _ws_collect_rec_id "$name" || return 2
+  [[ ! -L "${f%/*}" ]] || return 2
+  _ws_reclaim_absent "$f"; rc=$?
+  (( rc != 0 )) || return 1
+  (( rc != 2 )) || { _WS_QPATH_WHY="whether the quarantine record $f stands was never measured ($_WS_ABSENT_WHY)"; return 3; }
+  [[ -f "$f" && ! -L "$f" ]] || return 2
+  max="$WS_COLLECT_RECORD_MAX"
+  { exec {fd}<"$f"; } 2>/dev/null || return 2
+  IFS= read -r -N "$(( max + 1 ))" body <&"$fd" || :
+  { exec {fd}<&-; } 2>/dev/null || :
+  (( ${#body} <= max )) && [[ "$body" == *$'\n' ]] || return 2
+  line="${body%$'\n'}"
+  [[ "$line" != *$'\n'* && "$line" =~ $re ]] || return 2
+  m=("${BASH_REMATCH[@]}")
+  [[ "${m[1]}" == "$_WS_REC_ID" ]] || return 2
+  _child_runid_valid "${m[5]}" || return 2
+  _ws_collect_pairs_ok "${m[8]}" || return 2
+  _ws_collect_qpath || return 3
+  _WS_QREC_ID="${m[1]}"; _WS_QREC_SLOT="$_WS_QPATH/slot.$name"; _WS_QREC_DEV="${m[2]}"; _WS_QREC_INO="${m[3]}"
+  _WS_QREC_BTIME="${m[4]}"; _WS_QREC_RUN="${m[5]}"; _WS_QREC_AT="${m[6]}"; _WS_QREC_TOKEN="${m[7]}"
+  _WS_QREC_CHECKOUTS="${m[8]}"
+  return 0
+}
+
+_ws_collect_records_of() {   # id -> 0 with _WS_QRECS = the path of every record named for id EXACTLY (also printed,
+  #                              one per line; none when the directory is PROVEN absent); 2 (_WS_QRECS_WHY) when the
+  #                              records could not be listed
+  # A RECORD IS NEVER INVISIBLE: an unlistable directory, one that is a link,
+  # or a file where it should be answers 2, never "no record". Dot-leading names
+  # (a writer's temp file) and names that are no `<id>.<ns>.<pid>` are skipped.
+  local LC_ALL=C id="${1-}" dir outf errf err rc n
+  _WS_QRECS=(); _WS_QRECS_WHY=''
+  _ws_tmproot_id_ok "$id" || { _WS_QRECS_WHY="'$id' is not an id a record is named for"; return 2; }
+  dir=$(_ws_collect_qrec_dir)
+  [[ ! -L "$dir" ]] || { _WS_QRECS_WHY="$dir is a link, which is never followed, so its records were never listed"; return 2; }
+  _ws_reclaim_absent "$dir"; rc=$?
+  (( rc != 0 )) || return 0
+  (( rc != 2 )) || { _WS_QRECS_WHY="$_WS_ABSENT_WHY — whether a record of $id stands was never asked"; return 2; }
+  [[ -d "$dir" ]] || { _WS_QRECS_WHY="$dir is not a directory, so its records were never listed"; return 2; }
+  outf=$(_plat_mktemp) || { _WS_QRECS_WHY="could not make a scratch file to list $dir"; return 2; }
+  errf=$(_plat_mktemp) || { rm -f "$outf"; _WS_QRECS_WHY="could not make a scratch file to list $dir"; return 2; }
+  find -P "$REG/tmpquarantine" -mindepth 1 -maxdepth 1 -name '*.*' ! -name '.*' -print0 >"$outf" 2>"$errf"; rc=$?
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  if (( rc != 0 )) || [[ -n "$err" ]]; then
+    rm -f "$outf"
+    _WS_QRECS_WHY="could not list $dir (find exit $rc${err:+: ${err%%$'\n'*}}), so whether a record of $id stands was never asked"
+    return 2
+  fi
+  while IFS= read -r -d '' n; do
+    _ws_collect_rec_id "${n##*/}" && [[ "$_WS_REC_ID" == "$id" ]] || continue
+    _WS_QRECS+=("$n")
+    printf '%s\n' "$n"
+  done < "$outf"
+  rm -f "$outf"
+  return 0
+}
+
+_ws_collect_record_drop() {   # file -> 0 the record is gone, PROVEN; 1 not a record's path, nothing touched;
+  #                               2 not proven gone (_WS_QREC_WHY)
+  # ORDER (spec §5.10): the record goes LAST, after the slot and the witness, so
+  # a crash anywhere before leaves it for the next audit.
+  local f="${1-}" dir rc
+  _WS_QREC_WHY=''
+  dir=$(_ws_collect_qrec_dir)
+  [[ "${f%/*}" == "$dir" && "${f##*/}" != .* ]] && _ws_collect_rec_id "${f##*/}" \
+    || { _WS_QREC_WHY="$f is not a quarantine record's path, so nothing was touched"; return 1; }
+  [[ ! -L "$dir" ]] || { _WS_QREC_WHY="$dir is a link, which is never followed, so $f was left"; return 2; }
+  rm -f -- "$f" 2>/dev/null || { _WS_QREC_WHY="$f could not be removed"; return 2; }
+  _ws_reclaim_absent "$f"; rc=$?
+  (( rc != 1 )) || { _WS_QREC_WHY="$f stands again after its removal"; return 2; }
+  (( rc != 2 )) || { _WS_QREC_WHY="$_WS_ABSENT_WHY — that $f is gone was never proven"; return 2; }
+  return 0
+}
+
+_ws_collect_now_ns() { date +%s%N; }   # the clock the idle floor and a slot's name read, epoch ns — a function, so a test can name the instant
+
+_WS_QSTATE=''; _WS_Q_WHY=''
+_ws_collect_qcheck() {   # -> 0 with _WS_QPATH = the quarantine and _WS_QSTATE `absent` (PROVEN: the verb makes it)
+  #                         or `ok` (a real directory, not a link, of this uid at mode 700); 2 (_WS_Q_WHY) for every
+  #                         other shape: a link, a non-directory, another uid's directory, any other mode, an absence
+  #                         it cannot prove, or a `~/.cc-tmp` that cannot be resolved
+  # THE QUARANTINE QUESTION, READ-ONLY (spec §5.10): it makes, changes and
+  # writes nothing, so `ws-audit --collect` asks it — the fresh present-leaf
+  # arm and the resume alike — and refuses a quarantine the verb would refuse,
+  # instead of licensing a move that fails on every pass. The verb's maker
+  # (`_ws_collect_qdir`) asks it around its own mkdir. A quarantine that stands
+  # at 2700 is answered here like any other mode: the operator's to fix.
+  local q me owner mode rc
+  _WS_QSTATE=''; _WS_Q_WHY=''
+  _ws_collect_qpath || { _WS_Q_WHY="$_WS_QPATH_WHY, so no quarantine was asked for"; return 2; }
+  q="$_WS_QPATH"
+  _ws_reclaim_absent "$q"; rc=$?
+  (( rc != 2 )) || { _WS_Q_WHY="$_WS_ABSENT_WHY — whether the quarantine stands was never asked"; return 2; }
+  (( rc != 0 )) || { _WS_QSTATE=absent; return 0; }
+  [[ -d "$q" && ! -L "$q" ]] || { _WS_Q_WHY="$q is not a real directory (a link, or not a directory)"; return 2; }
+  me=$(id -u) || { _WS_Q_WHY="this uid could not be read, so whether $q is ours was never asked"; return 2; }
+  owner=$(_ws_leaf_uid "$q") || { _WS_Q_WHY="who owns $q could not be read"; return 2; }
+  [[ "$owner" == "$me" ]] || { _WS_Q_WHY="$q belongs to uid $owner, not this uid $me"; return 2; }
+  mode=$(_plat_mode "$q" 2>/dev/null) || { _WS_Q_WHY="the mode of $q could not be read"; return 2; }
+  [[ "$mode" == 700 ]] || { _WS_Q_WHY="$q is mode $mode, not 0700"; return 2; }
+  _WS_QSTATE=ok
+}
+
+_WS_Q=''
+_ws_collect_qdir() {   # -> 0 with _WS_Q = the quarantine, `<physical ~/.cc-tmp>/.ccd-quarantine` (made, 0700, when
+  #                       PROVEN absent); 2 (_WS_Q_WHY) when it is anything but a real directory of this uid at 0700
+  # THE MAKER, the verb's alone (`_ws_collect_locked`): the check, then — only
+  # when it PROVED the quarantine absent — a plain `mkdir -m 0700`, never `-p`.
+  # Under a setgid `~/.cc-tmp` the kernel hands that new directory the setgid
+  # bit (2700), so `chmod g-s` clears it, on what THIS call's mkdir made and
+  # nothing else (departure quarantine-made-without-setgid). Then the check
+  # again, which must answer `ok`. A mkdir that fails because another verb
+  # made the quarantine first falls to that same re-check, and what the other
+  # made is judged as it stands, never chmod-ed.
+  local q err
+  _WS_Q=''; _WS_Q_WHY=''
+  _ws_collect_qcheck || return 2
+  q="$_WS_QPATH"
+  if [[ "$_WS_QSTATE" == absent ]]; then
+    if err=$(mkdir -m 0700 -- "$q" 2>&1); then
+      chmod -- g-s "$q" 2>/dev/null || { _WS_Q_WHY="$q was made, but its setgid bit could not be cleared"; return 2; }
+      err=''
+    fi
+    _ws_collect_qcheck || return 2
+    [[ "$_WS_QSTATE" == ok ]] \
+      || { _WS_Q_WHY="$q could not be made${err:+: ${err%%$'\n'*}}"; return 2; }
+  fi
+  _WS_Q="$q"
+}
+
+_WS_SLOT=''; _WS_SLOT_WHY=''
+_ws_collect_slot_path() {   # q id -> 0 with _WS_SLOT = `<q>/slot.<id>.<ns>.<pid>` (not made); 2 when the id or the clock cannot be used
+  local q="${1-}" id="${2-}" ns
+  _WS_SLOT=''
+  _ws_tmproot_id_ok "$id" || return 2
+  ns=$(_ws_collect_now_ns) && [[ "$ns" =~ ^[1-9][0-9]{9,18}$ ]] || return 2
+  _WS_SLOT="${q%/}/slot.$id.$ns.$BASHPID"
+}
+_ws_collect_slot_make() {   # slot -> 0 made by THIS call, a real directory at 0700; 1 the name already stands (a slot
+  #                              is never reused); 2 could not be made (_WS_SLOT_WHY)
+  local s="${1-}" err rc
+  _WS_SLOT_WHY=''
+  _ws_reclaim_absent "$s"; rc=$?
+  (( rc != 1 )) || { _WS_SLOT_WHY="$s already stands — a slot is never reused"; return 1; }
+  (( rc != 2 )) || { _WS_SLOT_WHY="$_WS_ABSENT_WHY — whether $s stands was never asked"; return 2; }
+  # EXCLUSIVE: a plain `mkdir`, never `-p`, fails on a name that stands, whoever made it.
+  if ! err=$(mkdir -m 0700 -- "$s" 2>&1); then
+    if [[ -e "$s" || -L "$s" ]]; then _WS_SLOT_WHY="$s already stands — a slot is never reused"; return 1; fi
+    _WS_SLOT_WHY="$s could not be made: ${err%%$'\n'*}"; return 2
+  fi
+  [[ -d "$s" && ! -L "$s" ]] || { _WS_SLOT_WHY="$s is not a real directory after its mkdir"; return 2; }
+}
+
+_ws_collect_mv() {   # src dst -> mv's own exit code: ONE renameat2(RENAME_NOREPLACE), never a copy; 2 on Darwin, mv never run
+  [[ "$CCD_OS" != darwin ]] || return 2
+  mv -T -n --no-copy -- "$1" "$2"
+}
+_WS_MV_NOCOPY=''
+_ws_collect_mv_ok() {   # -> 0 when this box's `mv` has `--no-copy` (asked once, then remembered); 1 when not, or Darwin
+  local h
+  [[ "$CCD_OS" != darwin ]] || return 1
+  if [[ -z "$_WS_MV_NOCOPY" ]]; then
+    _WS_MV_NOCOPY=0
+    h=$(LC_ALL=C mv --help 2>/dev/null) && [[ "$h" == *--no-copy* ]] && _WS_MV_NOCOPY=1
+  fi
+  [[ "$_WS_MV_NOCOPY" == 1 ]]
+}
+
+_ws_collect_ident() {   # path dev:ino btime -> 0 path is a real directory (an lstat: never followed) with this device,
+  #                        inode and birth time; 1 something else stands there, or nothing does; 2 could not be read,
+  #                        or path ends in `/`, `/.` or `/..`
+  # NEVER FOLLOWED, BY MECHANISM: a path ending in `/`, `/.` or `/..` names what
+  # a link before it POINTS AT — `[[ -L link/ ]]` is false and `stat link/`
+  # reads the target (measured, and so for `link/.` and `link/..`) — so such a
+  # spelling is refused before anything is asked of it.
+  local p="${1-}" want="${2-}" bt="${3-}" have hbt rc
+  case "$p" in */|*/.|*/..) return 2 ;; esac
+  if [[ -L "$p" ]] || { [[ -e "$p" ]] && [[ ! -d "$p" ]]; }; then return 1; fi
+  if [[ ! -e "$p" ]]; then
+    _ws_reclaim_absent "$p"; rc=$?
+    (( rc == 0 )) && return 1
+    return 2
+  fi
+  have=$(_plat_devino "$p" 2>/dev/null) && [[ "$have" =~ ^[0-9]+:[0-9]+$ ]] || return 2
+  hbt=$(_plat_btime "$p" 2>/dev/null) && [[ "$hbt" =~ ^-?[0-9]+$ ]] || return 2
+  [[ "$have" == "$want" && "$hbt" == "$bt" ]] || return 1
+  return 0
+}
+
+_WS_MOVE_WHY=''
+_ws_collect_move() {   # src dst dev:ino btime -> 0 PROVEN moved: dst is that directory, and nothing stands at src;
+  #                       1 PROVEN not moved: src is still that directory; 2 unmeasured (_WS_MOVE_WHY), and 2 with
+  #                       nothing renamed when src is not PROVEN that directory before the rename
+  # IDENTITY FIRST: before anything is renamed, src must be that directory (an
+  # lstat, `_ws_collect_ident`), or the answer is 2 and `mv` is never run. So a
+  # different directory at src, or an identity that is no dev:ino and birth
+  # time at all, is refused BEFORE acting, and the caller's own earlier check
+  # is re-asked inside the move, so the window it leaves is this function's.
+  # THE PROOF IS AN lstat, NEVER mv's EXIT CODE (spec §5.10): coreutils changed
+  # what `mv -n` answers on a skip in 9.2, and a `mv` that copied would answer 0
+  # over a new inode. The same proof serves the move into a slot and the move
+  # back: the restore is proven when the original path is the directory again
+  # and the slot's `leaf` is gone. A box with no `--no-copy` never renames:
+  # without it a cross-device rename becomes a copy. A cross-device rename
+  # with it fails, and that is "not moved" here: the caller reads every
+  # non-zero answer as unmeasured.
+  local src="${1-}" dst="${2-}" want="${3-}" bt="${4-}" err mrc a b
+  _WS_MOVE_WHY=''
+  _ws_collect_ident "$src" "$want" "$bt"; a=$?
+  (( a == 0 )) \
+    || { _WS_MOVE_WHY="$src is not PROVEN the directory $want (identity answer $a), so nothing was renamed"; return 2; }
+  _ws_collect_mv_ok \
+    || { _WS_MOVE_WHY="this box has no 'mv --no-copy' (or is Darwin), so $src was never renamed — a rename that could copy is never used"; return 2; }
+  err=$(_ws_collect_mv "$src" "$dst" 2>&1); mrc=$?
+  _ws_collect_ident "$dst" "$want" "$bt"; a=$?
+  if (( a == 0 )); then
+    _ws_reclaim_absent "$src"; b=$?
+    (( b != 0 )) || return 0
+    _WS_MOVE_WHY="$dst is $want, but ${_WS_ABSENT_WHY:-something stands at $src again} — the move is not proven"
+    return 2
+  fi
+  _ws_collect_ident "$src" "$want" "$bt"; b=$?
+  if (( b == 0 )); then
+    _WS_MOVE_WHY="$src was not moved to $dst (mv exit $mrc${err:+: ${err%%$'\n'*}})"
+    return 1
+  fi
+  _WS_MOVE_WHY="neither $dst nor $src is the directory $want after the rename (mv exit $mrc${err:+: ${err%%$'\n'*}})"
+  return 2
+}
+
+WS_COLLECT_IDLE_SCAN_S=30     # bound on one leaf's idle walk (departure idle-walk-bound-30s: with the in-use probe's 10 s and the
+                              # checkout scan's 30 s, the audit fits ws-audit's 90 s runner row; measured 2026-10-08: the largest
+                              # live leaf, 76,915 entries, in at most 4.8 s). A timeout is unmeasured, and the leaf is retried.
+WS_COLLECT_IDLE_CAP=2000000   # the most entries one walk counts; more is unmeasured
+_WS_IDLE_NEWEST_NS=''; _WS_IDLE_COUNT=''; _WS_IDLE_WHY=''; _WS_IDLE_DETAIL=''; _WS_IDLE_LEAF=''
+_ws_collect_idle() {   # leaf -> 0 with _WS_IDLE_NEWEST_NS = the newest CTIME under leaf, leaf included, in epoch ns,
+  #                       _WS_IDLE_COUNT = the entries walked, leaf included, and _WS_IDLE_LEAF = leaf; 2 unmeasured,
+  #                       _WS_IDLE_WHY one word of `timeout`, `unreadable`, `cap` or `walk-failed`, _WS_IDLE_DETAIL why
+  # CTIME ONLY (spec §5.10). mtime is user-settable — a future one would hold a
+  # leaf for ever — and every change that moves it stamps ctime too: a write, a
+  # create, a delete, a rename, a chmod, a utimensat. The walk is GNU `find -P
+  # <leaf> -xdev`: it never follows a link (a link's own ctime is read), and a
+  # leaf spelt ending in `/`, `/.` or `/..` — which names what a link before it
+  # points at — is refused unwalked. It never crosses a file system. No pass
+  # before it makes anything readable, so an unreadable entry is unmeasured,
+  # said in its own word, and never normalised here. It writes nothing inside
+  # the leaf UNLESS `$TMPDIR` is at or under it: its one write is the stderr
+  # scratch file `_plat_mktemp` makes in `$TMPDIR` before `find` starts, so the
+  # walk then counts that file with a ctime of now and the leaf reads busy —
+  # fail-closed, never a false idle. Bounded by
+  # `WS_COLLECT_IDLE_SCAN_S` and `WS_COLLECT_IDLE_CAP`. The newest value is
+  # kept as two exact integers, seconds then nanoseconds, never one float.
+  local LC_ALL=C leaf="${1-}" errf res tail err frc arc
+  _WS_IDLE_NEWEST_NS=''; _WS_IDLE_COUNT=''; _WS_IDLE_WHY=''; _WS_IDLE_DETAIL=''; _WS_IDLE_LEAF=''
+  if [[ "$CCD_OS" == darwin ]]; then
+    _WS_IDLE_WHY=walk-failed; _WS_IDLE_DETAIL="the idle walk is GNU find's, and this box is Darwin"; return 2
+  fi
+  case "$leaf" in */|*/.|*/..)
+    _WS_IDLE_WHY=walk-failed; _WS_IDLE_DETAIL="$leaf ends in '/', '/.' or '/..', which names what a link before it points at, so it was not walked"; return 2 ;;
+  esac
+  [[ -d "$leaf" && ! -L "$leaf" ]] \
+    || { _WS_IDLE_WHY=walk-failed; _WS_IDLE_DETAIL="$leaf is not a real directory, so it was not walked"; return 2; }
+  errf=$(_plat_mktemp) || { _WS_IDLE_WHY=walk-failed; _WS_IDLE_DETAIL="could not make a scratch file to walk $leaf"; return 2; }
+  res=$(LC_ALL=C _plat_timeout "$WS_COLLECT_IDLE_SCAN_S" find -P "$leaf" -xdev -printf '%C@\n' 2>"$errf" \
+        | LC_ALL=C awk -v cap="$WS_COLLECT_IDLE_CAP" '
+            { if (++n > cap) { over = 1; exit }
+              if ($0 !~ /^[0-9]+[.][0-9]+$/) { bad = 1; exit }
+              i = index($0, ".")
+              s = substr($0, 1, i - 1) + 0
+              f = substr(substr($0, i + 1) "000000000", 1, 9) + 0
+              if (n == 1 || s > ms || (s == ms && f > mf)) { ms = s; mf = f } }
+            END { if (over) exit 3
+                  if (bad || n == 0) exit 4
+                  printf "%d %.0f%09d\n", n, ms, mf }'
+        printf '\nrc %s %s' "${PIPESTATUS[0]}" "${PIPESTATUS[1]}")
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  tail="${res##*$'\n'}"; res="${res%$'\n'*}"; res="${res%$'\n'}"
+  read -r _ frc arc <<< "$tail"
+  if [[ "$arc" == 3 ]]; then
+    _WS_IDLE_WHY=cap; _WS_IDLE_DETAIL="$leaf holds more than $WS_COLLECT_IDLE_CAP entries, so its newest change was never found"; return 2
+  fi
+  if [[ "$frc" == 124 ]]; then
+    _WS_IDLE_WHY=timeout; _WS_IDLE_DETAIL="the walk of $leaf did not finish within ${WS_COLLECT_IDLE_SCAN_S}s"; return 2
+  fi
+  if [[ "$frc" != 0 || -n "$err" ]]; then
+    if [[ "$err" == *"Permission denied"* ]]; then _WS_IDLE_WHY=unreadable; else _WS_IDLE_WHY=walk-failed; fi
+    _WS_IDLE_DETAIL="could not read all of $leaf (find exit $frc${err:+: ${err%%$'\n'*}}), so a change under what it could not read was never seen"
+    return 2
+  fi
+  [[ "$arc" == 0 && "$res" =~ ^([1-9][0-9]*)\ ([0-9]{1,19})$ ]] \
+    || { _WS_IDLE_WHY=walk-failed; _WS_IDLE_DETAIL="the walk of $leaf printed what is not a change time (awk exit $arc)"; return 2; }
+  _WS_IDLE_COUNT="${BASH_REMATCH[1]}"; _WS_IDLE_NEWEST_NS="${BASH_REMATCH[2]}"; _WS_IDLE_LEAF="$leaf"
+  return 0
+}
+
+_WS_FLOOR_WHY=''
+_ws_collect_floor_s() {   # -> rc 0 and the idle floor on stdout, whole seconds: 86400 (24 h, spec §5.10) when
+  #                          WS_COLLECT_IDLE_FLOOR_S is unset, empty, or a whole number at or below that; the knob when
+  #                          it is a whole number ABOVE that; 999999999 when it is a whole number of ten or more
+  #                          significant digits (the raise is honoured, clamped so the arithmetic never wraps). Its
+  #                          leading zeros are stripped first (all zeros read 0, so `0000000001` is 1, never the
+  #                          clamp); the clamp is asked of the LENGTH of what is left, and only then is the value
+  #                          compared, so arithmetic never sees more than nine digits. rc 2, NOTHING printed and
+  #                          _WS_FLOOR_WHY naming the knob, when the knob is set, non-empty and not a whole number
+  #                          (`172800s`, `48h`, `172800 `): a raise asked for unreadably is unmeasured, never folded to
+  #                          24 h. The knob only RAISES the floor. This is the floor's ONE definition (ruling G4): the
+  #                          only test-only seam that lowers it is a sourced harness redefining this function
+  #                          (`_ws_collect_floor_s() { echo 0; };`), never the knob
+  local b=86400 o="${WS_COLLECT_IDLE_FLOOR_S-}"
+  _WS_FLOOR_WHY=''
+  if [[ -n "$o" ]]; then
+    [[ "$o" =~ ^[0-9]+$ ]] \
+      || { _WS_FLOOR_WHY="WS_COLLECT_IDLE_FLOOR_S is set and is not a whole number of seconds, so the raised floor it asks for was never read"; return 2; }
+    o="${o#"${o%%[!0]*}"}"; o="${o:-0}"
+    if (( ${#o} > 9 )); then b=999999999
+    elif (( 10#$o > b )); then b=$(( 10#$o )); fi
+  fi
+  printf '%s' "$b"
+}
+_ws_collect_floor_held() {   # newest-ns -> 0 when the clock is at least the floor past it; 1 when not yet (a clock
+  #                              stepped backwards only delays it); 2 when the input, the clock or the floor cannot be
+  #                              read. The floor is `_ws_collect_floor_s`'s print, taken only when it answered 0 with a
+  #                              whole number of at most nine digits: an empty print is never a floor of 0. A caller
+  #                              asks `_ws_collect_floor_s` itself for _WS_FLOOR_WHY
+  local nw="${1-}" now fl
+  [[ "$nw" =~ ^[0-9]{1,19}$ ]] || return 2
+  now=$(_ws_collect_now_ns) && [[ "$now" =~ ^[1-9][0-9]{9,18}$ ]] || return 2
+  fl=$(_ws_collect_floor_s) && [[ "$fl" =~ ^[0-9]{1,9}$ ]] || return 2
+  (( 10#$now - 10#$nw >= fl * 1000000000 )) || return 1
+  return 0
+}
+
+_ws_collect_token() {   # id -> the collector's token on stdout; rc 2, nothing printed, when an input was not measured
+  # THE CONSENT (spec §5.10), in `_ws_reclaim_fingerprint`'s encoding: named
+  # key=value inputs, `mode=collect` first, so it never equals a reclaim, an
+  # expiry or a resume token. It binds the id; the witness the caller read last
+  # (`_ws_tmproot_witness_read <id>`: dev, ino, btime, run, at); and the walk the
+  # caller made last (`_ws_collect_idle` of the leaf named `<id>`: the newest
+  # ctime in ns and the entry count). Any change under the leaf stamps a ctime,
+  # and a re-witness changes run or at, so either mints another token. An
+  # unmeasured input — an empty field, a `-` birth time, a walk of another leaf —
+  # mints NOTHING.
+  local LC_ALL=C id="${1-}"
+  _ws_tmproot_id_ok "$id" || return 2
+  [[ "${_WS_WIT_DEV-}" =~ ^[0-9]+$ && "${_WS_WIT_INO-}" =~ ^[0-9]+$ && "${_WS_WIT_BTIME-}" =~ ^[1-9][0-9]*$ \
+     && "${_WS_WIT_AT-}" =~ ^[0-9]{13}$ ]] || return 2
+  _child_runid_valid "${_WS_WIT_RUN-}" || return 2
+  [[ "${_WS_IDLE_NEWEST_NS-}" =~ ^[0-9]{1,19}$ && "${_WS_IDLE_COUNT-}" =~ ^[1-9][0-9]*$ \
+     && "${_WS_IDLE_LEAF-}" == */"$id" ]] || return 2
+  _ws_reclaim_fingerprint "mode=collect" "id=$id" "dev=$_WS_WIT_DEV" "ino=$_WS_WIT_INO" "btime=$_WS_WIT_BTIME" \
+    "run=$_WS_WIT_RUN" "at=$_WS_WIT_AT" "newestCtimeNs=$_WS_IDLE_NEWEST_NS" "entries=$_WS_IDLE_COUNT"
+}
+
+_WS_COLLECT_ROWS_WHY=''
+_ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside or through leaf; 1 when one does, or
+  #                              id's own row stands (_WS_COLLECT_ROWS_WHY names which); 2 when that could not be asked
+  #                              (_WS_COLLECT_ROWS_WHY)
+  # A REGISTRY ROW AT, INSIDE OR THROUGH THE LEAF IS ANOTHER SESSION'S TREE
+  # (spec §5.10). The removal helper does not ask it, so the collector asks
+  # it itself — measured: without it, a stopped session's clone inside a dead
+  # child's temp root is deleted with the leaf. It is `_ws_reclaim_workdir_shared`'s
+  # own question, ONE registry pass, asked with the leaf AS the workdir: every
+  # row, standing or placed by either of its gone-row arms, compared literally
+  # and resolved — equal, inside, or spelled through it. That helper skips the
+  # id's own row; this asks it first, by its `.workdir` alone: a temp root whose
+  # id has a row is never collected. That absence is MEASURED
+  # (`_ws_reclaim_absent`), never an `-e` test, which reads EACCES as absence: a
+  # `.workdir` under a `$REG` that can be read but not searched answers 2. The
+  # id's own row standing is DELIBERATELY the same refusal as another row's
+  # (rc 1): a backstop behind `_ws_collect_registered`, which every caller asks
+  # first. A lone dangling own `.workdir` link, which that check reads as free,
+  # is an operator's attention item. It also compares the id's clips leaf, as
+  # it does for a reclaim: a row there refuses too, and a clips leaf whose
+  # absence cannot be proven answers 2 — both fail closed. Its git reads of
+  # other rows' repositories run contained, so a caller asks this only under
+  # `_ws_reclaim_contained`. Asked on the pre-move spelling, before the move
+  # and after it.
+  local id="${1-}" leaf="${2-}" rc
+  _WS_COLLECT_ROWS_WHY=''
+  _ws_tmproot_id_ok "$id" || { _WS_COLLECT_ROWS_WHY="'$id' is not an id a witness is named for"; return 2; }
+  _ws_reclaim_absent "$REG/$id.workdir"; rc=$?
+  if (( rc == 1 )); then
+    _WS_COLLECT_ROWS_WHY="$id's own registry row stands ($REG/$id.workdir) — a temp root whose id has a row is never collected"
+    return 1
+  fi
+  if (( rc != 0 )); then
+    _WS_COLLECT_ROWS_WHY="whether $id's own registry row stands could not be measured (${_WS_ABSENT_WHY:-its absence was not proven})"
+    return 2
+  fi
+  _ws_reclaim_workdir_shared "$id" "$leaf"; rc=$?
+  if (( rc == 0 )); then
+    [[ -n "$_WS_SHARED_ROWS$_WS_NESTED_ROWS$_WS_THROUGH_ROWS" ]] || return 0
+    _WS_COLLECT_ROWS_WHY="registry row(s) lie at, inside or through $leaf, or $id's clips leaf $HOME/.cc-clips/$id (a row there is listed as inside) — at: ${_WS_SHARED_ROWS:-none}; inside: ${_WS_NESTED_ROWS:-none}; through: ${_WS_THROUGH_ROWS:-none}"
+    return 1
+  fi
+  _WS_COLLECT_ROWS_WHY="asked with $leaf as the workdir: ${_WS_SHARED_WHY:-the registry could not be compared with it}"
+  return 2
+}
+
+# ── ws-audit --collect: the collector's audit (temp-root collector, spec §5.10) ───────── WS-AUDIT-COLLECT ──
+# `cmd_ws_audit` sits above the frozen citation corpus's anchors, so its one
+# line for this mode is a hand-off on its existing `if` line, beside the
+# expiry's, and the mode is answered here, whole.
+#
+# THE POPULATION, decided BEFORE any lock: an id with a witness standing at
+# `$REG/tmproots/<id>` (never read through a `tmproots/` that is itself a
+# link), or with at least one quarantine record of it under
+# `$REG/tmpquarantine/`, found by `_ws_collect_records_of`'s exact parse and
+# never by an `<id>.*` prefix (ids admit dots). Anything else answers
+# `not-witnessed` and takes NO lock: the audit never makes `.reap-<name>.lock`
+# for a name ccd never handed a temp root.
+#
+# THE LOCK. Inside the population the audit takes `$REG/.reap-<id>.lock`,
+# `-n` — the lock every verb that removes anything of the id takes. It writes
+# nothing that lock serialises; it holds it so the registry listing control
+# below has a name it KNOWS stands, its own lock file. Held by another process:
+# the retryable `in-progress`, nothing journaled.
+#
+# THE ONE EVALUATION, `_ws_collect_fork`, which `ws-collect` runs again inside
+# its own lock and compares the token against. A standing record makes it a
+# RESUME (`_ws_collect_resume_eval`), whatever the witness now says: the
+# record is the resume's authority, and a resume never walks the tree or asks
+# the floor. Otherwise the fresh rungs (`_ws_collect_eval`), in this order, the
+# first that does not pass ending it:
+#   registered — `$REG/<id>.child` or `$REG/<id>.uuid` by DIRECT lookup (the
+#     read `_child_tmpdir` makes, which needs no listing), each absence
+#     MEASURED by `_ws_reclaim_absent` — never an `-e` test, which reads EACCES
+#     as absence — then `_ws_slug_free`, believed only when a WILDCARD listing
+#     of `$REG` shows the lock this process holds: a `$REG` that can be searched but not listed makes every
+#     glob come back empty, and `_ws_slug_free` then answers free over a
+#     standing row (measured);
+#   witness-mismatch (TERMINAL) — the witness unreadable, or without a birth
+#     time. The leaf's absence is then MEASURED, and a leaf PROVEN absent
+#     takes the witness-only arm (below);
+#   the quarantine, asked READ-ONLY (`_ws_collect_qcheck`) — one the verb
+#     would refuse licenses no move into it: unmeasured `quarantine`;
+#   quarantine-kept (TERMINAL) — a slot of the id stands that no record names
+#     (`_ws_collect_slots_of`; a quarantine that is a link or not a directory,
+#     or whose slots cannot be listed, is unmeasured `quarantine`). It may hold
+#     an earlier leaf of the id, so it is asked before the leaf's own words;
+#   witness-mismatch (TERMINAL) — the leaf a link or not a directory, or not
+#     the real directory at the id by dev, ino and birth time;
+#   owner write — a leaf without it cannot be renamed into the quarantine, so
+#     it is not licensed to move: unmeasured `mode`, as is a mode that cannot
+#     be read;
+#   changed-recently — the newest CTIME over every entry under the leaf, the leaf
+#     included, younger than the floor (Task 4's `_ws_collect_floor_held`
+#     against `_ws_collect_floor_s`); mtime is never read. A knob the floor
+#     cannot read is unmeasured `floor`, and the document then names no floor
+#     and no instant;
+#   in-use — `_ws_path_users` (cwd, open file, TMPDIR);
+#   containment-unproven (TERMINAL) — `_ws_leaf_checkouts` on the leaf's own
+#     path, then `_ws_collect_rows_clear` (a registry row at, inside or
+#     through the leaf);
+#   paused — read here, inside the lock, as the verb reads it. Last, because a
+#     pause stops the act and not the measurement: a paused fleet still learns
+#     its terminal refusals.
+# A probe that cannot answer ends it at its rung as `unmeasured`, and names
+# itself in `collect.unmeasured`. A witness whose leaf is PROVEN absent, with
+# no record standing, takes its own arm. The absence is believed only on the
+# device the witness records (`_ws_collect_root_dev`): a physical `~/.cc-tmp`
+# on another device, or one whose device cannot be read, is unmeasured
+# `device`, since an empty mount point is no proof that the leaf is gone.
+# Then a slot of the id that no record names is the operator's
+# (`quarantine-kept`, and the witness stays beside it), and a quarantine that
+# is a link or not a directory, or whose slots cannot be listed, is unmeasured
+# `quarantine`. Past those it is collectable at once with a token of its own,
+# and the verb then drops the witness and nothing else. So a FRESH collection
+# never orphans a slot in silence (spec §5.10): the resume does not ask,
+# because a record names its own slot there, and the reclaim tail's witness
+# drop is not the collector's (`tail-drop-ignores-a-recordless-slot`).
+#
+# THE DOCUMENT mirrors `ws-audit --expire`'s, with a `collect` object.
+# `collectable` MEANS a token, spelled through `_json_str` as the other audits'
+# success words are. Every word here is set through `_ws_collect_refuse`,
+# never the reap ladder's refusal helper, and no line of this block is written
+# in a shape the refusal harvests read (`ccd-collect-audit.test.ts` pins it).
+# `unmeasured` prints the document with that word and EXITS 1 — the server
+# reads any audit exit 1 as `failed` and retries — and is journaled nowhere.
+# A TERMINAL word (`witness-mismatch`, `quarantine-kept`,
+# `containment-unproven`) is journaled, act `collect`, verb `ws-audit`, its
+# detail cut by `_ws_leaf_why_line`; nothing else the audit answers is.
+#
+# LINUX ONLY. On Darwin the audit answers unmeasured (`platform`) before it
+# reads anything, and so does a box whose `mv` has no `--no-copy` (`mv`): the
+# verb's move is one `renameat2(RENAME_NOREPLACE)` or nothing.
+#
+# BOUNDED, AND NOT ALWAYS INSIDE THE RUNNER'S ROW. The fresh rungs can spend,
+# in sequence, the idle walk's `WS_COLLECT_IDLE_SCAN_S` (30 s), the in-use
+# probe's `WS_PATH_USERS_SCAN_S` (10 s) and the checkout scan's
+# `REAP_SCAN_SECONDS` (30 s), and each `_plat_timeout` adds its TERM-to-KILL
+# grace (`CCD_TIMEOUT_KILL_AFTER`, 3 s by default, at most 8 s): about 79 s
+# by default and 94 s at the widest grace, before the row pass, which no bound
+# of its own caps — against ws-audit's 90 s runner row. A runner that kills the
+# audit gets no document, which the server reads as a failed audit and
+# retries: it fails closed. A budget keyed on the mode is wave 9's.
+_WS_COLLECT_PROBE=''; _WS_COLLECT_REG_WHY=''; _WS_COLLECT_PHASE=''; _WS_COLLECT_LEAF=''
+_WS_COLLECT_RECORD=''; _WS_COLLECT_SLOT=''; _WS_COLLECT_NEWEST_NS=''; _WS_COLLECT_ENTRIES=''
+_WS_COLLECT_IDLE_AT=''; _WS_COLLECT_FLOOR=''
+_WS_COLLECT_RECORDS=()
+
+_ws_collect_reset() {   # -> every answer the collector's evaluation sets, cleared: no earlier read is ever printed
+  REAP_VERDICT=''; REAP_DETAIL=''; REAP_TOKEN=''
+  _WS_COLLECT_PROBE=''; _WS_COLLECT_REG_WHY=''; _WS_COLLECT_PHASE=''; _WS_COLLECT_LEAF=''
+  _WS_COLLECT_RECORD=''; _WS_COLLECT_SLOT=''; _WS_COLLECT_NEWEST_NS=''; _WS_COLLECT_ENTRIES=''
+  _WS_COLLECT_IDLE_AT=''; _WS_COLLECT_FLOOR=''
+  _WS_COLLECT_RECORDS=()
+  _WS_WIT_DEV=''; _WS_WIT_INO=''; _WS_WIT_BTIME=''; _WS_WIT_RUN=''; _WS_WIT_UID=''; _WS_WIT_AT=''
+}
+_ws_collect_refuse() { REAP_VERDICT="$1"; REAP_DETAIL="$2"; return 1; }   # word detail -> rc 1: the collector's answer, set
+_ws_collect_unmeasured() { REAP_VERDICT=unmeasured; _WS_COLLECT_PROBE="$1"; REAP_DETAIL="$2"; return 1; }   # probe detail -> rc 1
+
+# THE FLOOR AND THE IDENTITY ARE TASK 4'S, never redefined here: bash keeps
+# the LAST definition of a name, so a second one in this block would replace
+# Task 4's for every caller. `_ws_collect_floor_s` is the one definition of the
+# floor (the knob only raises it), `_ws_collect_floor_held` the one judgment of
+# it, and `_ws_collect_ident <path> <dev:ino> <btime>` the one identity check,
+# the one `_ws_collect_move` proves a move with.
+
+_ws_collect_floor_read() {   # -> 0 with _WS_COLLECT_FLOOR = the idle floor, whole seconds; 2 with _WS_COLLECT_FLOOR
+  #                              '' and _WS_FLOOR_WHY when the floor could not be read
+  # `_ws_collect_floor_s` is asked IN THIS SHELL first, its print discarded, so
+  # its `_WS_FLOOR_WHY` reaches the caller (a `$( )` would keep it in a
+  # subshell); then once more for the print itself. An empty print is never a
+  # floor of 0, and no instant is computed from one.
+  local f
+  _WS_COLLECT_FLOOR=''
+  _ws_collect_floor_s >/dev/null || return 2
+  f=$(_ws_collect_floor_s) && [[ "$f" =~ ^[0-9]{1,9}$ ]] \
+    || { _WS_FLOOR_WHY="${_WS_FLOOR_WHY:-the idle floor printed no whole number of seconds}"; return 2; }
+  _WS_COLLECT_FLOOR="$f"
+}
+
+_ws_collect_paused() {   # -> 0 when reclamation is not paused; rc 1 with `paused` set when it is
+  [[ ! -e "$REG/reclaim-paused" && ! -L "$REG/reclaim-paused" ]] \
+    || { _ws_collect_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused) — nothing is collected while it stands"; return 1; }
+}
+
+_ws_collect_registered() {   # id -> 0 when no registry row stands for id; 1 when one does; 2 when that could not be
+  #                               told — each with _WS_COLLECT_REG_WHY. The CALLER HOLDS `$REG/.reap-<id>.lock`.
+  local id="$1" f rc
+  local -a ctl=()
+  _WS_COLLECT_REG_WHY=''
+  for f in child uuid; do
+    _ws_reclaim_absent "$REG/$id.$f"; rc=$?
+    if (( rc == 1 )); then
+      _WS_COLLECT_REG_WHY="$REG/$id.$f stands — a workspace is registered as $id, so the temp root at its id is that workspace's"
+      return 1
+    fi
+    (( rc == 0 )) \
+      || { _WS_COLLECT_REG_WHY="whether $REG/$id.$f stands could not be measured (${_WS_ABSENT_WHY:-its absence was not proven})"; return 2; }
+  done
+  # THE LISTING CONTROL: the glob is a wildcard, so it is answered by READING
+  # `$REG`, and the one name it must find is the lock this process holds open.
+  ctl=("$REG/.reap-$id".lo[c]k)
+  [[ ${#ctl[@]} -eq 1 && "${ctl[0]}" == "$REG/.reap-$id.lock" ]] \
+    || { _WS_COLLECT_REG_WHY="a wildcard listing of $REG does not show the lock this process holds there, so $REG cannot be listed and no other row of $id could be seen"; return 2; }
+  [[ "$id" == *-* ]] \
+    || { _WS_COLLECT_REG_WHY="$id names no project and slug, so whether its slug is free cannot be asked"; return 2; }
+  _ws_slug_free "${id%-*}" "${id##*-}" && return 0
+  _WS_COLLECT_REG_WHY="the registry still holds $(_ws_slug_residue "${id%-*}" "${id##*-}") — a row of $id, or what one left behind"
+  return 1
+}
+
+_WS_QSLOTS=(); _WS_QSLOTS_WHY=''
+_ws_collect_slots_of() {   # id -> 0 with _WS_QSLOTS = the path of every quarantine slot named for id EXACTLY (none
+  #                             when the quarantine, or ~/.cc-tmp itself, is PROVEN absent); 2 (_WS_QSLOTS_WHY) when
+  #                             the quarantine could not be listed
+  # EXACT PARSE, NEVER A PREFIX: a slot's name less `slot.` and less its two
+  # trailing all-digit fields (`_ws_collect_rec_id`, the record's own grammar)
+  # must be the id. Ids admit dots, so `slot.<id>.*` would also match a nested
+  # id's slot (`<id>.v2-quiet-river`). A quarantine that is a link, is not a
+  # directory, or cannot be listed answers 2, never "no slot". Reads only.
+  local LC_ALL=C id="${1-}" q outf errf err rc n
+  _WS_QSLOTS=(); _WS_QSLOTS_WHY=''
+  _ws_tmproot_id_ok "$id" || { _WS_QSLOTS_WHY="'$id' is not an id a slot is named for"; return 2; }
+  _ws_reclaim_absent "$HOME/.cc-tmp"; rc=$?
+  (( rc != 0 )) || return 0
+  (( rc != 2 )) || { _WS_QSLOTS_WHY="$_WS_ABSENT_WHY — whether a quarantine slot of $id stands was never asked"; return 2; }
+  _ws_collect_qpath || { _WS_QSLOTS_WHY="$_WS_QPATH_WHY — whether a quarantine slot of $id stands was never asked"; return 2; }
+  q="$_WS_QPATH"
+  [[ ! -L "$q" ]] || { _WS_QSLOTS_WHY="$q is a link, which is never followed, so whether a quarantine slot of $id stands was never asked"; return 2; }
+  _ws_reclaim_absent "$q"; rc=$?
+  (( rc != 0 )) || return 0
+  (( rc != 2 )) || { _WS_QSLOTS_WHY="$_WS_ABSENT_WHY — whether a quarantine slot of $id stands was never asked"; return 2; }
+  [[ -d "$q" ]] || { _WS_QSLOTS_WHY="$q is not a directory, so whether a quarantine slot of $id stands was never asked"; return 2; }
+  outf=$(_plat_mktemp) || { _WS_QSLOTS_WHY="could not make a scratch file to list $q"; return 2; }
+  errf=$(_plat_mktemp) || { rm -f "$outf"; _WS_QSLOTS_WHY="could not make a scratch file to list $q"; return 2; }
+  find -P "$q" -mindepth 1 -maxdepth 1 -name 'slot.*' -print0 >"$outf" 2>"$errf"; rc=$?
+  err=$(cat "$errf" 2>/dev/null); rm -f "$errf"
+  if (( rc != 0 )) || [[ -n "$err" ]]; then
+    rm -f "$outf"
+    _WS_QSLOTS_WHY="could not list $q (find exit $rc${err:+: ${err%%$'\n'*}}), so whether a quarantine slot of $id stands was never asked"
+    return 2
+  fi
+  while IFS= read -r -d '' n; do
+    n="${n##*/}"
+    _ws_collect_rec_id "${n#slot.}" && [[ "$_WS_REC_ID" == "$id" ]] || continue
+    _WS_QSLOTS+=("$q/$n")
+  done < "$outf"
+  rm -f "$outf"
+  return 0
+}
+
+_WS_ROOTDEV_WHY=''
+_ws_collect_root_dev() {   # dev what -> 0 when the physical ~/.cc-tmp is on device dev (decimal, as a witness and a
+  #                             record spell it); 1 when it is on another; 2 when its device could not be read — 1 and
+  #                             2 with _WS_ROOTDEV_WHY, naming the path, the device read there and the one `what` carries
+  # AN ABSENCE NEEDS THE RECORDED DEVICE (spec §5.10): with `~/.cc-tmp`'s volume
+  # missing and its mount point standing empty, every leaf and slot under it
+  # reads absent. So an arm that would act on an absence — the witness-only
+  # arm's absent leaf, a resume's `removed` — first asks that the physical
+  # `~/.cc-tmp` (`_ws_collect_qpath`, never made) is on the device the witness
+  # or the record carries. A `~/.cc-tmp` that cannot be resolved, PROVEN absent
+  # included, has no device to read: 2. Reads only.
+  local want="${1-}" what="${2-}" root have
+  _WS_ROOTDEV_WHY=''
+  _ws_collect_qpath \
+    || { _WS_ROOTDEV_WHY="$_WS_QPATH_WHY, so its device was never compared with device $want that $what carries"; return 2; }
+  root="${_WS_QPATH%/.ccd-quarantine}"
+  [[ "$want" =~ ^[0-9]+$ ]] \
+    || { _WS_ROOTDEV_WHY="$what carries no device, so the device of $root was never compared with it"; return 2; }
+  have=$(_plat_devino "$root" 2>/dev/null) && [[ "$have" =~ ^[0-9]+:[0-9]+$ ]] \
+    || { _WS_ROOTDEV_WHY="the device of $root could not be read, so it was never compared with device $want that $what carries"; return 2; }
+  have="${have%%:*}"
+  [[ "$have" == "$want" ]] && return 0
+  _WS_ROOTDEV_WHY="$root is on device $have, not on device $want that $what carries — a mount point on another device is never read as the leaf's absence"
+  return 1
+}
+
+_ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP_TOKEN), a word, or `unmeasured`
+  #                        (_WS_COLLECT_PROBE). The CALLER HOLDS `$REG/.reap-<id>.lock`. Reads only.
+  local id="$1" leaf="$HOME/.cc-tmp/$1" rc floor why=walk-failed mode owner
+  _ws_collect_registered "$id"; rc=$?
+  (( rc != 2 )) || { _ws_collect_unmeasured registry "$_WS_COLLECT_REG_WHY"; return 1; }
+  (( rc != 1 )) || { _ws_collect_refuse registered "$_WS_COLLECT_REG_WHY"; return 1; }
+  _ws_tmproot_witness_read "$id"; rc=$?
+  (( rc != 1 )) || { _ws_collect_refuse not-witnessed "no witness stands for $id at $(_ws_tmproot_witness_file "$id") and no quarantine record names it — there is nothing to collect"; return 1; }
+  (( rc != 2 )) || { _ws_collect_refuse witness-mismatch "the witness $(_ws_tmproot_witness_file "$id") cannot be read as ccd writes it — a temp root nothing vouches for is offered to the operator, never taken"; return 1; }
+  [[ "$_WS_WIT_BTIME" != - ]] \
+    || { _ws_collect_refuse witness-mismatch "the witness of $id records no birth time, so device and inode alone would vouch for $leaf — it is offered to the operator, never taken"; return 1; }
+  _ws_reclaim_absent "$leaf"; rc=$?
+  (( rc != 2 )) || { _ws_collect_unmeasured leaf "$_WS_ABSENT_WHY"; return 1; }
+  if (( rc == 0 )); then
+    # A WITNESS WITH NO LEAF (and the fork found no record of the id): nothing
+    # to walk, probe or remove; the verb drops the witness, compared first —
+    # unless a quarantine slot of the id stands. With no record naming it, that
+    # slot (which may hold the leaf) is the operator's: TERMINAL, and the
+    # witness stays beside it, so a FRESH collection never orphans the slot in
+    # silence (the resume arm does not ask `_ws_collect_slots_of`: a record
+    # names its own slot there).
+    # FIRST, the absence is believed only on the device the witness carries:
+    # an empty mount point is no proof that the leaf is gone.
+    _ws_collect_root_dev "$_WS_WIT_DEV" "the witness of $id" \
+      || { _ws_collect_unmeasured device "$_WS_ROOTDEV_WHY: nothing is dropped, and the next pass asks again"; return 1; }
+    _WS_COLLECT_LEAF=absent
+    # This arm lists the quarantine's slots, so a quarantine that is a link or
+    # not a directory, or whose slots cannot be listed, answers unmeasured
+    # `quarantine`; it does not ask `_ws_collect_qcheck`'s uid and mode half,
+    # because it moves nothing into the quarantine.
+    _ws_collect_slots_of "$id"; rc=$?
+    (( rc == 0 )) || { _ws_collect_unmeasured quarantine "$_WS_QSLOTS_WHY"; return 1; }
+    (( ${#_WS_QSLOTS[@]} == 0 )) \
+      || { _ws_collect_refuse quarantine-kept "kept as it stands, listed for the operator, and the witness of $id stays: the quarantine slot ${_WS_QSLOTS[0]##*/} stands with no record naming it"; return 1; }
+    _ws_collect_paused || return 1
+    REAP_TOKEN=$(_ws_reclaim_fingerprint mode=collect-absent "id=$id" "dev=$_WS_WIT_DEV" "ino=$_WS_WIT_INO" \
+      "btime=$_WS_WIT_BTIME" "run=$_WS_WIT_RUN" "at=$_WS_WIT_AT")
+    [[ "$REAP_TOKEN" =~ ^[0-9a-f]{64}$ ]] \
+      || { REAP_TOKEN=''; _ws_collect_unmeasured token "the collection token of $id could not be minted"; return 1; }
+    REAP_VERDICT=collectable
+    return 0
+  fi
+  _WS_COLLECT_LEAF=present
+  # THE QUARANTINE the verb would move the leaf into, asked READ-ONLY and
+  # first: a quarantine the verb refuses licenses nothing, and decides nothing
+  # from what it holds (spec §5.10).
+  _ws_collect_qcheck \
+    || { _ws_collect_unmeasured quarantine "$_WS_Q_WHY — no leaf is licensed to move into it, and the next pass asks again"; return 1; }
+  # A SLOT OF THE ID THAT NO RECORD NAMES (the fork found none) may hold an
+  # earlier leaf of it. Collecting this one would drop the witness and take
+  # the id out of the population, and that slot would be listed by no audit
+  # again: TERMINAL, as on the absent arm, and asked before the leaf's own
+  # words, so a FRESH collection never orphans the slot in silence (the resume
+  # arm does not ask `_ws_collect_slots_of`: a record names its own slot there).
+  _ws_collect_slots_of "$id"; rc=$?
+  (( rc == 0 )) || { _ws_collect_unmeasured quarantine "$_WS_QSLOTS_WHY"; return 1; }
+  (( ${#_WS_QSLOTS[@]} == 0 )) \
+    || { _ws_collect_refuse quarantine-kept "kept as it stands, listed for the operator, and the witness of $id stays: the quarantine slot ${_WS_QSLOTS[0]##*/} stands with no record naming it, and the leaf at $leaf is not collected beside it"; return 1; }
+  [[ -d "$leaf" && ! -L "$leaf" ]] \
+    || { _ws_collect_refuse witness-mismatch "$leaf is a link or not a directory — the collector takes only the directory its witness names; it is offered to the operator"; return 1; }
+  _ws_collect_ident "$leaf" "$_WS_WIT_DEV:$_WS_WIT_INO" "$_WS_WIT_BTIME"; rc=$?
+  (( rc != 2 )) || { _ws_collect_unmeasured identity "the device, inode or birth time of $leaf could not be read"; return 1; }
+  if (( rc != 0 )); then
+    # rc 1 IS TWO FACTS: something else stands at the id, or NOTHING does — the
+    # leaf vanished between the test above and the identity's stat. A vanish is
+    # a retry, never a terminal word: the next pass reads the witness-only arm.
+    _ws_reclaim_absent "$leaf"; rc=$?
+    (( rc != 0 )) || { _ws_collect_unmeasured leaf "$leaf vanished while its identity was read — the next pass asks again"; return 1; }
+    (( rc != 2 )) || { _ws_collect_unmeasured leaf "$_WS_ABSENT_WHY"; return 1; }
+    _ws_collect_refuse witness-mismatch "$leaf is $(_plat_devino "$leaf" 2>/dev/null) born $(_plat_btime "$leaf" 2>/dev/null), not the $_WS_WIT_DEV:$_WS_WIT_INO born $_WS_WIT_BTIME its witness names — it is offered to the operator, never taken"
+    return 1
+  fi
+  # OWNER WRITE, read off the leaf whose identity was just proven (spec
+  # §5.10): a directory without it cannot be renamed to another parent, so the
+  # verb's rename would fail on every pass. `_plat_mode` prints the octal bits
+  # with no leading zeros (`755`, `555`, `2755`), so the owner's digit is the
+  # third from the right, and a shorter print has none. The collector never
+  # changes a leaf's mode before the move: a chmod stamps the leaf's ctime,
+  # which the token binds, so the verb acts only on the mode measured here.
+  mode=$(_plat_mode "$leaf" 2>/dev/null) && [[ "$mode" =~ ^[0-7]{1,4}$ ]] \
+    || { _ws_collect_unmeasured mode "the mode of $leaf could not be read, so whether it can be renamed into the quarantine is unknown — the next pass asks again"; return 1; }
+  owner="00$mode"; owner="${owner: -3:1}"
+  (( (owner & 2) != 0 )) \
+    || { _ws_collect_unmeasured mode "$leaf is mode $mode: without owner write it cannot be renamed into the quarantine, so it is not licensed to move — the collector never changes a leaf's mode, and it stays listed as it is"; return 1; }
+  _ws_collect_idle "$leaf"; rc=$?
+  if (( rc != 0 )) || [[ ! "${_WS_IDLE_NEWEST_NS-}" =~ ^[0-9]{1,19}$ || ! "${_WS_IDLE_COUNT-}" =~ ^[0-9]{1,9}$ ]]; then
+    if (( rc != 0 )); then case "${_WS_IDLE_WHY-}" in timeout|unreadable|cap) why="$_WS_IDLE_WHY" ;; esac; fi
+    _ws_collect_unmeasured "idle:$why" "the walk of $leaf for its newest change did not finish ($why), so how long it has been idle is unknown"
+    return 1
+  fi
+  _WS_COLLECT_NEWEST_NS="$_WS_IDLE_NEWEST_NS"; _WS_COLLECT_ENTRIES="$_WS_IDLE_COUNT"
+  _ws_collect_floor_read \
+    || { _ws_collect_unmeasured floor "${_WS_FLOOR_WHY:-the idle floor could not be read}, so how long $leaf must stay idle is unknown"; return 1; }
+  floor="$_WS_COLLECT_FLOOR"
+  _WS_COLLECT_IDLE_AT=$(( (10#$_WS_COLLECT_NEWEST_NS + floor * 1000000000 + 999999999) / 1000000000 ))
+  _ws_collect_floor_held "$_WS_COLLECT_NEWEST_NS"; rc=$?
+  (( rc != 2 )) || { _ws_collect_unmeasured clock "this box's clock could not be read, so how long $leaf has been idle is unknown"; return 1; }
+  (( rc != 1 )) || { _ws_collect_refuse changed-recently "the newest change under $leaf is less than ${floor}s old — it is collectable from epoch $_WS_COLLECT_IDLE_AT, if nothing changes it first"; return 1; }
+  _ws_path_users "$leaf"; rc=$?
+  (( rc != 2 )) || { _ws_collect_unmeasured in-use "${_WS_PATH_USERS_WHY-}"; return 1; }
+  (( rc != 1 )) || { _ws_collect_refuse in-use "a process of this uid still uses $leaf (pid ${_WS_PATH_USERS_PIDS-}: ${_WS_PATH_USERS_WHY-})"; return 1; }
+  _ws_leaf_checkouts "$leaf"; rc=$?
+  (( rc != 2 )) || { _ws_collect_unmeasured checkouts "${_WS_CHECKOUTS_WHY-}"; return 1; }
+  (( rc != 1 )) || { _ws_collect_refuse containment-unproven "${_WS_CHECKOUTS_WHY-}"; return 1; }
+  _ws_collect_rows_clear "$id" "$leaf"; rc=$?
+  (( rc != 2 )) || { _ws_collect_unmeasured rows "${_WS_COLLECT_ROWS_WHY-}"; return 1; }
+  (( rc != 1 )) || { _ws_collect_refuse containment-unproven "${_WS_COLLECT_ROWS_WHY-}"; return 1; }
+  _ws_collect_paused || return 1
+  REAP_TOKEN=$(_ws_collect_token "$id") && [[ "$REAP_TOKEN" =~ ^[0-9a-f]{64}$ ]] \
+    || { REAP_TOKEN=''; _ws_collect_unmeasured token "the collection token of $id could not be minted"; return 1; }
+  REAP_VERDICT=collectable
+}
+
+_ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collectable` with REAP_TOKEN and
+  #                                _WS_COLLECT_PHASE (`unmoved`, `moved` or `removed`), a word, or `unmeasured`.
+  #                                The CALLER HOLDS `$REG/.reap-<id>.lock`. Reads only, and never the tree's walk.
+  # THE PHASE IS READ OFF THE DISK, never off the journal: `moved` — the
+  # record's directory stands in its slot (`<slot>/leaf`, the record's dev, ino
+  # and birth time) and NOTHING stands at the id; `unmoved` — it stands at the
+  # id and the slot holds nothing; `removed` — it stands at neither (the slot's
+  # leaf was removed, or the restore and a later tail took it), which is believed
+  # only while the physical `~/.cc-tmp` is on the device the record carries
+  # (`_ws_collect_root_dev`: an empty mount point proves nothing). The slot is
+  # never read from the record: Task 4's reader DERIVES it from the record's
+  # name, `<physical ~/.cc-tmp>/.ccd-quarantine/slot.<record name>` (the record
+  # body carries no slot path), and the slot may hold `leaf` and nothing else.
+  # Anything the collector did not leave there is `quarantine-kept`: the record
+  # and the slot stay for the operator, as they stand. So is a slot leaf with
+  # ANYTHING at the id: the original path was retaken, the leaf can never go
+  # back, and every audit answers it, TERMINAL — read off the disk, so it
+  # clears once the path is free again. The registry is asked only after the
+  # phase, because a retake usually brings a row, whose retryable `registered`
+  # would otherwise hide it on every pass. A `moved` resume re-proves,
+  # read-only, what the verb proves after a move: nobody uses either spelling,
+  # and no registry row lies at, inside or through the PRE-MOVE spelling.
+  # THE RECORD READER ANSWERS FOUR WAYS (ruling R-a): 0 parsed; 1 absent,
+  # PROVEN (it vanished between the listing and the read: unmeasured
+  # `records`); 2 malformed, the TERMINAL `quarantine-kept`; 3 unmeasured —
+  # the physical `~/.cc-tmp` cannot be resolved, so the slot was never derived,
+  # or whether the record stands was never measured: unmeasured `quarantine`,
+  # journaled nowhere and asked again by the next pass — a bind mount not up
+  # yet is no fault of the record's, and keeping it would journal a retryable
+  # fact on every audit.
+  local id="$1" rec name slot sleaf orig="$HOME/.cc-tmp/$1" rc sstate=absent ostate=other phase ents
+  shift
+  (( $# == 1 )) \
+    || { _ws_collect_refuse quarantine-kept "$# quarantine records name $id — a resume completes one record and never chooses between several; they are kept for the operator"; return 1; }
+  rec="$1"; name="${rec##*/}"; _WS_COLLECT_RECORD="$rec"
+  _ws_collect_record_read "$rec"; rc=$?
+  (( rc != 1 )) || { _ws_collect_unmeasured records "the quarantine record $rec vanished while it was read"; return 1; }
+  (( rc != 3 )) || { _ws_collect_unmeasured quarantine "${_WS_QPATH_WHY:-the physical ~/.cc-tmp could not be resolved} — the slot of $rec was never derived, or whether it stands was never measured; the record stays as it is, and the next pass asks again"; return 1; }
+  (( rc == 0 )) || { _ws_collect_refuse quarantine-kept "the quarantine record $rec cannot be read as ccd writes it — it, and whatever it names, are kept for the operator"; return 1; }
+  [[ "${_WS_QREC_ID-}" == "$id" ]] \
+    || { _ws_collect_refuse quarantine-kept "the quarantine record $rec names ${_WS_QREC_ID-nothing}, not $id — it is kept for the operator"; return 1; }
+  [[ "${_WS_QREC_BTIME-}" =~ ^[1-9][0-9]*$ ]] \
+    || { _ws_collect_refuse quarantine-kept "the quarantine record $rec records no birth time, so device and inode alone would vouch for what it names — it is kept for the operator"; return 1; }
+  # THE QUARANTINE, asked as the fresh arm asks it (`_ws_collect_qcheck`,
+  # READ-ONLY, mode included): ccd never reads a slot through a quarantine the
+  # verb would refuse. A `~/.cc-tmp` PROVEN absent holds no quarantine to ask.
+  _ws_reclaim_absent "$HOME/.cc-tmp"; rc=$?
+  (( rc != 2 )) || { _ws_collect_unmeasured quarantine "$_WS_ABSENT_WHY"; return 1; }
+  if (( rc != 0 )); then
+    _ws_collect_qcheck \
+      || { _ws_collect_unmeasured quarantine "$_WS_Q_WHY — ccd never reads a slot through it, and the next pass asks again"; return 1; }
+  fi
+  slot="$_WS_QREC_SLOT"; sleaf="$slot/leaf"; _WS_COLLECT_SLOT="$slot"
+  if [[ -L "$slot" ]] || { [[ -e "$slot" ]] && [[ ! -d "$slot" ]]; }; then
+    _ws_collect_refuse quarantine-kept "the slot $slot is a link or not a directory — the collector never made it so; it is kept for the operator"
+    return 1
+  elif [[ -d "$slot" ]]; then
+    ents=$(LC_ALL=C find -P "$slot" -mindepth 1 -maxdepth 1 -printf '%f/' 2>/dev/null) \
+      || { _ws_collect_unmeasured slot "the slot $slot could not be listed"; return 1; }
+    [[ -z "$ents" || "$ents" == leaf/ ]] \
+      || { _ws_collect_refuse quarantine-kept "the slot $slot holds what the collector never put there — it is kept for the operator"; return 1; }
+    if [[ -L "$sleaf" ]] || { [[ -e "$sleaf" ]] && [[ ! -d "$sleaf" ]]; }; then
+      _ws_collect_refuse quarantine-kept "$sleaf is a link or not a directory — a slot leaf that is not the one moved there is kept for the operator"
+      return 1
+    elif [[ -d "$sleaf" ]]; then
+      _ws_collect_ident "$sleaf" "$_WS_QREC_DEV:$_WS_QREC_INO" "$_WS_QREC_BTIME"; rc=$?
+      (( rc != 2 )) || { _ws_collect_unmeasured identity "the device, inode or birth time of $sleaf could not be read"; return 1; }
+      if (( rc != 0 )); then
+        # As the fresh leaf's: rc 1 is also "nothing stands", and a slot leaf
+        # that vanished after the test above is a retry, never `quarantine-kept`.
+        _ws_reclaim_absent "$sleaf"; rc=$?
+        (( rc != 0 )) || { _ws_collect_unmeasured slot "$sleaf vanished while its identity was read — the next pass asks again"; return 1; }
+        (( rc != 2 )) || { _ws_collect_unmeasured slot "$_WS_ABSENT_WHY"; return 1; }
+        _ws_collect_refuse quarantine-kept "$sleaf is $(_plat_devino "$sleaf" 2>/dev/null) born $(_plat_btime "$sleaf" 2>/dev/null), not the $_WS_QREC_DEV:$_WS_QREC_INO born $_WS_QREC_BTIME its record names — it is kept for the operator"
+        return 1
+      fi
+      sstate=leaf
+    fi
+  else
+    _ws_reclaim_absent "$slot"; rc=$?
+    (( rc == 0 )) || { _ws_collect_unmeasured slot "${_WS_ABSENT_WHY:-$slot stands but is neither a link, a file nor a directory}"; return 1; }
+  fi
+  _ws_collect_ident "$orig" "$_WS_QREC_DEV:$_WS_QREC_INO" "$_WS_QREC_BTIME"; rc=$?
+  case "$rc" in
+    0) ostate=match ;;
+    1) _ws_reclaim_absent "$orig"; rc=$?
+       (( rc != 2 )) || { _ws_collect_unmeasured leaf "$_WS_ABSENT_WHY"; return 1; }
+       (( rc != 0 )) || ostate=absent ;;
+    *) _ws_collect_unmeasured identity "the device, inode or birth time of $orig could not be read"; return 1 ;;
+  esac
+  case "$sstate:$ostate" in
+    leaf:match)  _ws_collect_refuse quarantine-kept "the directory record $rec names stands both in $slot and at $orig — one of them is not what the collector moved; both are kept for the operator"; return 1 ;;
+    leaf:absent) phase=moved ;;
+    leaf:*)      _ws_collect_refuse quarantine-kept "something stands at $orig, the path the leaf in $slot was moved from — the original path was retaken, so the leaf cannot go back; the record, the slot and its leaf are kept for the operator"; return 1 ;;
+    absent:match) phase=unmoved ;;
+    *)          # NEITHER PLACE holds it, which is believed only on the device
+                # the record carries (`moved` and `unmoved` prove it by identity).
+                _ws_collect_root_dev "$_WS_QREC_DEV" "the quarantine record $name" \
+                  || { _ws_collect_unmeasured device "$_WS_ROOTDEV_WHY: nothing is dropped, and the next pass asks again"; return 1; }
+                phase=removed ;;
+  esac
+  _WS_COLLECT_PHASE="$phase"
+  # THE REGISTRY, asked only now: a retaken original path is TERMINAL above,
+  # and a retake usually brings a row whose retryable `registered` would hide it.
+  _ws_collect_registered "$id"; rc=$?
+  (( rc != 2 )) || { _ws_collect_unmeasured registry "$_WS_COLLECT_REG_WHY"; return 1; }
+  (( rc != 1 )) || { _ws_collect_refuse registered "$_WS_COLLECT_REG_WHY"; return 1; }
+  if [[ "$phase" == moved ]]; then
+    _ws_path_users "$sleaf"; rc=$?
+    (( rc != 2 )) || { _ws_collect_unmeasured in-use "${_WS_PATH_USERS_WHY-}"; return 1; }
+    (( rc != 1 )) || { _ws_collect_refuse in-use "a process of this uid still uses $sleaf (pid ${_WS_PATH_USERS_PIDS-}: ${_WS_PATH_USERS_WHY-})"; return 1; }
+    _ws_path_users "$orig"; rc=$?
+    (( rc != 2 )) || { _ws_collect_unmeasured in-use "${_WS_PATH_USERS_WHY-}"; return 1; }
+    (( rc != 1 )) || { _ws_collect_refuse in-use "a process of this uid still uses $orig, the spelling $sleaf had before its move (pid ${_WS_PATH_USERS_PIDS-}: ${_WS_PATH_USERS_WHY-})"; return 1; }
+    _ws_collect_rows_clear "$id" "$orig"; rc=$?
+    (( rc != 2 )) || { _ws_collect_unmeasured rows "${_WS_COLLECT_ROWS_WHY-}"; return 1; }
+    (( rc != 1 )) || { _ws_collect_refuse containment-unproven "${_WS_COLLECT_ROWS_WHY-}"; return 1; }
+  fi
+  _ws_collect_paused || return 1
+  # THE RESUME TOKEN binds the id, the record's name, the phase read off the
+  # disk, the derived slot, the record's dev, ino, birth time, run and at, the
+  # token the record was written under (`pre=`), and its `checkouts=` list,
+  # still encoded: the verb hands that list to the removal as the checkouts it
+  # accepts, so a record whose list changed is another consent. The witness is
+  # NOT an input: the record is the resume's authority.
+  REAP_TOKEN=$(_ws_reclaim_fingerprint mode=collect-resume "id=$id" "record=$name" "phase=$phase" "slot=$slot" \
+    "dev=$_WS_QREC_DEV" "ino=$_WS_QREC_INO" "btime=$_WS_QREC_BTIME" "run=${_WS_QREC_RUN-}" "at=${_WS_QREC_AT-}" \
+    "pre=${_WS_QREC_TOKEN-}" "checkouts=${_WS_QREC_CHECKOUTS-}")
+  [[ "$REAP_TOKEN" =~ ^[0-9a-f]{64}$ ]] \
+    || { REAP_TOKEN=''; _ws_collect_unmeasured token "the resume token of $id could not be minted"; return 1; }
+  REAP_VERDICT=collectable
+}
+
+_ws_collect_fork() {   # id -> THE ONE EVALUATION `ws-audit --collect` and `ws-collect` share: a standing record
+  #                        RESUMES, else the fresh rungs. The CALLER HOLDS `$REG/.reap-<id>.lock`. Reads only.
+  local id="$1" out rc
+  local -a recs=()
+  _ws_collect_reset
+  out=$(_ws_collect_records_of "$id"); rc=$?
+  (( rc == 0 )) || { _ws_collect_unmeasured records "the quarantine records of $id could not be listed"; return 1; }
+  [[ -z "$out" ]] || mapfile -t recs <<< "$out"
+  _WS_COLLECT_RECORDS=(${recs[@]+"${recs[@]}"})
+  if (( ${#recs[@]} )); then
+    _ws_tmproot_witness_read "$id" || :   # the document reports it; a resume never asks it
+    _ws_collect_resume_eval "$id" "${recs[@]}"
+  else
+    _ws_collect_eval "$id"
+  fi
+}
+
+_ws_collect_audit() {   # id -> `ccd ws-audit --session <id> --collect`, whole: ONE JSON document on stdout; exit 1 on
+  #                         `unmeasured` (the server retries), else 0. Contained: the row rule's placement may ask git.
+  _ws_reclaim_contained _ws_collect_audit_contained "$@"
+}
+
+_ws_collect_audit_contained() {   # `_ws_collect_audit`'s body, run under `_ws_reclaim_contained` — call that
+  local id="$1" w out rc=0 lfd inpop=0 wrc=0
+  _ws_tmproot_id_ok "$id" || die "bad session id"
+  _json_str probe >/dev/null 2>&1 \
+    || die "python3 unavailable — cannot quote the audit record safely"
+  _ws_collect_reset
+  if [[ "$CCD_OS" == darwin ]]; then
+    _ws_collect_unmeasured platform "the temp-root collector runs on Linux only — on this box it measures nothing and takes nothing"
+    _ws_collect_audit_doc "$id"; return
+  fi
+  w=$(_ws_tmproot_witness_file "$id")
+  if [[ -L "$REG/tmproots" ]]; then
+    _ws_collect_unmeasured witness "$REG/tmproots is a link — ccd never follows it, so whether $id is witnessed was never asked"
+    _ws_collect_audit_doc "$id"; return
+  fi
+  # "NO WITNESS" IS A MEASUREMENT (spec §5.10, the population): `[[ -e ]]`
+  # reads a `tmproots/` it cannot search as no witness, and that would answer
+  # `not-witnessed` of an id ccd did hand out. Unmeasured, never not-witnessed.
+  _ws_reclaim_absent "$w"; wrc=$?
+  if (( wrc == 2 )); then
+    _ws_collect_unmeasured witness "${_WS_ABSENT_WHY:-whether $w stands could not be asked} — whether $id is witnessed was never asked"
+    _ws_collect_audit_doc "$id"; return
+  fi
+  (( wrc == 1 )) && inpop=1
+  if (( ! inpop )); then
+    out=$(_ws_collect_records_of "$id"); rc=$?
+    (( rc == 0 )) || { _ws_collect_unmeasured records "the quarantine records of $id could not be listed"; _ws_collect_audit_doc "$id"; return; }
+    [[ -z "$out" ]] || inpop=1
+  fi
+  if (( ! inpop )); then
+    _ws_collect_refuse not-witnessed "no witness stands for $id and no quarantine record names it — ccd never handed out a temp root under this id that is still to be collected" || :
+    _ws_collect_audit_doc "$id"; return
+  fi
+  _ws_collect_mv_ok || {
+    _ws_collect_unmeasured mv "this box's mv has no --no-copy, so the collector's move could only ever be a copy — it measures nothing and takes nothing"
+    _ws_collect_audit_doc "$id"; return; }
+  command -v flock >/dev/null 2>&1 || {
+    _ws_collect_unmeasured flock "flock (util-linux) is unavailable, so the reap lock of $id cannot be taken"
+    _ws_collect_audit_doc "$id"; return; }
+  exec {lfd}>>"$REG/.reap-$id.lock" || {
+    _ws_collect_unmeasured lock "cannot open the reap lock at $REG/.reap-$id.lock"
+    _ws_collect_audit_doc "$id"; return; }
+  if ! flock -n "$lfd"; then
+    exec {lfd}>&-
+    _ws_collect_refuse in-progress "another ccd process holds the reap lock of $id — a reap, reclaim, expiry, restore or collection of it is running" || :
+    _ws_collect_audit_doc "$id"; return
+  fi
+  _ws_collect_fork "$id" || :
+  _ws_collect_audit_doc "$id"; rc=$?
+  exec {lfd}>&-
+  return "$rc"
+}
+
+_ws_collect_audit_doc() {   # id -> THE document on stdout, and the journal line of a TERMINAL word; rc 1 on
+  #                             `unmeasured`, else 0
+  local id="$1" leaf="$HOME/.cc-tmp/$1" exists=false wit=null recs='[' r first=1 newest=null entries=null
+  local idleat=null probe=null floor=null cut
+  [[ -n "$REAP_VERDICT" ]] \
+    || _ws_collect_unmeasured eval "the evaluation of $id answered nothing" || :
+  [[ -d "$leaf" && ! -L "$leaf" ]] && exists=true
+  if [[ -n "$_WS_WIT_DEV" ]]; then
+    wit=$(printf '{"dev":%s,"ino":%s,"btime":%s,"run":%s,"at":%s}' "$(_json_str "$_WS_WIT_DEV")" \
+      "$(_json_str "$_WS_WIT_INO")" "$(_json_str "$_WS_WIT_BTIME")" "$(_json_str "$_WS_WIT_RUN")" "$(_json_str "$_WS_WIT_AT")")
+  fi
+  for r in ${_WS_COLLECT_RECORDS[@]+"${_WS_COLLECT_RECORDS[@]}"}; do
+    (( first )) || recs+=','; first=0; recs+="$(_json_str "${r##*/}")"
+  done
+  recs+=']'
+  [[ -z "$_WS_COLLECT_NEWEST_NS" ]] || newest=$(_json_str "$_WS_COLLECT_NEWEST_NS")
+  [[ -z "$_WS_COLLECT_ENTRIES" ]] || entries="$_WS_COLLECT_ENTRIES"
+  [[ -z "$_WS_COLLECT_IDLE_AT" ]] || idleat="$_WS_COLLECT_IDLE_AT"
+  [[ -z "$_WS_COLLECT_PROBE" ]] || probe=$(_json_str "$_WS_COLLECT_PROBE")
+  # THE FLOOR AS IT READS NOW, or null when it cannot be read: never an empty field.
+  if _ws_collect_floor_read; then floor="$_WS_COLLECT_FLOOR"; fi
+  printf '{"session":%s,"mode":"collect","exists":%s,"collect":{"leaf":%s,"witness":%s,"records":%s,"newestCtimeNs":%s,"entries":%s,"floorS":%s,"idleAt":%s,"unmeasured":%s},' \
+    "$(_json_str "$id")" "$exists" "$(_json_str "$leaf")" "$wit" "$recs" "$newest" "$entries" \
+    "$floor" "$idleat" "$probe"
+  [[ -z "$_WS_COLLECT_PHASE" ]] || printf '"resume":%s,' "$(_json_str "$_WS_COLLECT_PHASE")"
+  if [[ "$REAP_VERDICT" == collectable ]]; then
+    printf '"verdict":%s,"detail":"","token":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_TOKEN")"
+    return 0
+  fi
+  printf '"verdict":%s,"detail":%s}\n' "$(_json_str "$REAP_VERDICT")" "$(_json_str "$REAP_DETAIL")"
+  if [[ "$REAP_VERDICT" == unmeasured ]]; then
+    echo "ccd: ws-audit --collect measured nothing ($_WS_COLLECT_PROBE): $REAP_DETAIL — retry" >&2
+    return 1
+  fi
+  # A TERMINAL word is journaled, and only a terminal one: wave 9's lane audits
+  # every pass, and a retryable word a pass would bury the journal.
+  cut=$(_ws_leaf_why_line "$REAP_DETAIL")
+  case "$REAP_VERDICT" in
+    witness-mismatch)     _lc_emit collect refused "$id" "" verb ws-audit refusal witness-mismatch detail "$cut" ;;
+    quarantine-kept)      _lc_emit collect refused "$id" "" verb ws-audit refusal quarantine-kept detail "$cut" ;;
+    containment-unproven) _lc_emit collect refused "$id" "" verb ws-audit refusal containment-unproven detail "$cut" ;;
+  esac
+  return 0
+}
+# ── end ws-audit --collect ──────────────────────────────────────────────── WS-AUDIT-COLLECT-CLOSE ──
+
+# ── ws-collect: the temp-root collector's destructive verb (child reclamation wave 7, spec §5.10) ──
+# An ORPHANED temp root — a child's `$HOME/.cc-tmp/<id>` whose registry row is
+# gone (a human verb, or a reclaim tail that KEPT it) — is collected by this
+# verb and by nothing else, and the verb is composed by the server alone
+# (CLAUDE.md SAFETY). Its population is a WITNESSED id or a QUARANTINE RECORD
+# (spec §5.2). Its consent is `ws-audit --collect`'s token, recomputed inside
+# the reap lock by the same evaluation (`_ws_collect_fork`) — the witness, the
+# registry, the in-use probe, the row rule and the idle floor, or a record and
+# the phase it stands at — BEFORE anything moves. Then (spec §5.10):
+#   2  lstat the leaf: a real directory with the witness's dev, ino and birth time;
+#   3  the checkout question of the ORIGINAL path, the quarantine record, the slot;
+#   4  ONE rename into `<physical ~/.cc-tmp>/.ccd-quarantine/slot.<id>.<ns>.<pid>/leaf`
+#      (Task 4's `_ws_collect_move`), proven by lstat, never by mv's exit code;
+#   5  re-prove after the move (`_ws_collect_reprove`); any doubt moves it BACK;
+#   6  remove the slot's leaf through the ONE removal helper (`_ws_leaf_remove`);
+# and then the order: the slot's leaf proven gone, the empty slot rmdir'd
+# (never a recursive remove), the witness compared and dropped, the witness
+# writer's dead temp files of the id reaped, and the record dropped LAST. A
+# witness whose leaf is PROVEN absent, with no record standing, is collected by
+# compare-and-drop alone: nothing moves.
+# WHY A RENAME: a recycled slug's `_child_tmpdir` hands out `<root>/<id>` with
+# `mkdir -p`, which ADOPTS whatever stands there, and takes no lock this verb
+# takes. But every hand-out reads `.child` first, so a spawn before the move
+# is seen by step 5's direct lookup, a spawn after it gets a new inode, and
+# step 6 removes only the slot's inode, dev:ino-checked. The move stamps the
+# leaf's ctime, so neither the tree token nor the idle floor is asked after
+# it: a leaf moved back waits a fresh floor.
+# THE RECORD (`$REG/tmpquarantine/<id>.<ns>.<pid>`) is resume authority, never
+# the journal: a run that dies anywhere leaves it, and the next audit visits it
+# whatever the witness now says. A record this verb can neither finish nor
+# undo is KEPT, with its slot, for the operator: never emptied, never taken.
+# So is anything in a slot that is not the witnessed leaf, and a leaf whose
+# original path was taken again since the move — TERMINAL refusals, the
+# second only while the path stays taken. What VANISHED inside the lock (a
+# leaf, a record, a slot's leaf) took no act of this verb's, so it is a retry,
+# never a terminal word.
+# LINUX-FIRST: off Linux, or with an mv that offers no `--no-copy`, nothing moves.
+# Every detail another function's reason reaches (a session-chosen name, a line
+# of stderr) is cut by `_ws_leaf_why_line` before the journal or a document
+# carries it.
+
+# THE SEAM at each step boundary: `point id [slot]`. Nothing on the box; a test
+# redefines it to force a race or a crash into that exact gap. Its points, in
+# order: locked consented recorded slotted moved proven removed emptied
+# witnessed dropped, and restoring before any move back (ruling G7).
+_ws_collect_gap() { :; }
+
+# THE ONE MOVE, ITS PROOF AND THE IDENTITY are Task 4's (`_ws_collect_move`,
+# `_ws_collect_mv`, `_ws_collect_mv_ok`, `_ws_collect_ident`: ruling G3), and
+# the evaluation, the registry question and the pause reader are Task 5's
+# (`_ws_collect_fork`, `_ws_collect_registered`, `_ws_collect_paused`). This
+# block defines none of them again: a second definition would replace the first.
+
+# THE SEAM, as `_ws_path_users_proc_root` is the in-use probe's: a test names a
+# fake mount table, and the box answers its own.
+_ws_collect_mountinfo() { printf '%s' /proc/self/mountinfo; }
+_WS_MOUNTS_WHY=''
+_ws_collect_mounts_clear() {   # dir -> 0 when no mount point is at dir or under it; 1 one is; 2 unmeasured: the table
+  #                                could not be read, or held a line that is not a mount, or none (_WS_MOUNTS_WHY)
+  # `dir` is PHYSICAL. A mount inside the leaf moves with it, and `rm
+  # --one-file-system` stops at another file system's but CROSSES a bind mount
+  # of the same one, deleting its source's content (the removal's stated
+  # limit, spec §5.10). The table is the kernel's for ccd's own mount
+  # namespace; its fifth field is the mount point with space, tab, newline and
+  # backslash written as \040, \011, \012 and \134 — so `dir` is ENCODED the
+  # same way and the two are compared as text, never decoded.
+  local dir="${1%/}" mi enc fd line mp n=0
+  _WS_MOUNTS_WHY=''
+  mi=$(_ws_collect_mountinfo)
+  enc="${dir//\\/\\134}"; enc="${enc// /\\040}"; enc="${enc//$'\t'/\\011}"; enc="${enc//$'\n'/\\012}"
+  { exec {fd}<"$mi"; } 2>/dev/null \
+    || { _WS_MOUNTS_WHY="$mi could not be read, so whether anything is mounted under $dir was never asked"; return 2; }
+  while IFS= read -r line <&"$fd" || [[ -n "$line" ]]; do
+    mp=''
+    [[ "$line" != *' - '* ]] || read -r _ _ _ _ mp _ <<< "$line"
+    if [[ "$mp" != /* ]]; then
+      { exec {fd}<&-; } 2>/dev/null || :
+      _WS_MOUNTS_WHY="$mi holds a line that is not a mount, so the table was never read whole"; return 2
+    fi
+    n=$(( n + 1 ))
+    if [[ "$mp" == "$enc" || "$mp" == "$enc/"* ]]; then
+      { exec {fd}<&-; } 2>/dev/null || :
+      _WS_MOUNTS_WHY="something is mounted at $mp, at or under $dir — ccd never removes across a mount"; return 1
+    fi
+  done
+  { exec {fd}<&-; } 2>/dev/null || :
+  (( n > 0 )) || { _WS_MOUNTS_WHY="$mi listed no mount at all, so the table was never read"; return 2; }
+  return 0
+}
+
+_WS_REPROVE_WORD=''; _WS_REPROVE_WHY=''
+_ws_collect_reprove() {   # id slotleaf dev:ino btime -> 0 when every proof after the move holds; 1 one answered a
+  #                            doubt (_WS_REPROVE_WORD, _WS_REPROVE_WHY); 2 one could not be asked (_WS_REPROVE_WHY);
+  #                            3 the slot's leaf is PROVEN gone (_WS_REPROVE_WHY): nothing there to move back or remove
+  # STEP 5 (spec §5.10), never the tree token or the idle floor (the move
+  # stamped the leaf's ctime). Identity is asked LAST, so the removal that
+  # follows runs directly after an lstat of the slot's leaf in this lock.
+  local id="$1" sl="$2" want="$3" bt="$4" rc s
+  _WS_REPROVE_WORD=''; _WS_REPROVE_WHY=''
+  # (a) and (b) — THE REGISTRY, by Task 5's `_ws_collect_registered`: `.child`
+  # and `.uuid` by DIRECT lookup (the read `_child_tmpdir` makes, which sees
+  # them whether or not `$REG` can be listed), then the slug, believed only
+  # when a wildcard listing shows the reap lock this verb holds.
+  _ws_collect_registered "$id"; rc=$?
+  (( rc != 1 )) || { _WS_REPROVE_WORD=registered; _WS_REPROVE_WHY="$_WS_COLLECT_REG_WHY"; return 1; }
+  (( rc != 2 )) || { _WS_REPROVE_WHY="$_WS_COLLECT_REG_WHY"; return 2; }
+  # (c) nobody uses it, on BOTH spellings: the path TMPDIR names, and the
+  # slot's leaf (a cwd or an open file follows a rename). `_ws_path_users`
+  # compares each path it is asked as given AND its physical twin (the parent
+  # resolved, the leaf not followed), so the first ask covers the TMPDIR
+  # spelling `_child_tmpdir` composes and the physical original path alike.
+  for s in "$HOME/.cc-tmp/$id" "$sl"; do
+    _ws_path_users "$s"; rc=$?
+    (( rc != 1 )) || { _WS_REPROVE_WORD=in-use; _WS_REPROVE_WHY="$_WS_PATH_USERS_WHY"; return 1; }
+    (( rc != 2 )) || { _WS_REPROVE_WHY="$_WS_PATH_USERS_WHY"; return 2; }
+  done
+  # (d) no registry row at, inside or through the leaf, on its PRE-MOVE
+  # spelling: the LOGICAL one `_child_tmpdir` hands out, which the rule
+  # compares LITERALLY though nothing stands there now (ruling G6).
+  _ws_collect_rows_clear "$id" "$HOME/.cc-tmp/$id"; rc=$?
+  (( rc != 1 )) || { _WS_REPROVE_WORD=containment-unproven; _WS_REPROVE_WHY="${_WS_COLLECT_ROWS_WHY-}"; return 1; }
+  (( rc != 2 )) || { _WS_REPROVE_WHY="${_WS_COLLECT_ROWS_WHY-}"; return 2; }
+  # (e) nothing mounted at or under the slot's leaf. A mount there is no doubt
+  # about whose the leaf is, but a removal ccd cannot make safely: the leaf
+  # goes back, and the answer is unmeasured (ruling T6 OPEN8).
+  _ws_collect_mounts_clear "$sl"; rc=$?
+  (( rc == 0 )) || { _WS_REPROVE_WHY="$_WS_MOUNTS_WHY"; return 2; }
+  # (f) LAST: the slot's leaf is still the witnessed one. What is not is never
+  # moved back to the id's path: the caller KEEPS it (ruling T8 OPEN5). An rc 1
+  # is also "nothing stands, PROVEN": a leaf that left its slot is no foreign
+  # object in it, and there is nothing to move back, so that is its own answer
+  # (3), the retry the resume's identity check answers too; the record finishes it.
+  _ws_collect_ident "$sl" "$want" "$bt"; rc=$?
+  (( rc != 0 )) || return 0
+  (( rc != 2 )) || { _WS_REPROVE_WHY="the identity of $sl could not be read"; return 2; }
+  _ws_reclaim_absent "$sl"; rc=$?
+  (( rc != 0 )) || { _WS_REPROVE_WHY="the witnessed leaf vanished from its slot, so there is nothing there to move back or remove ($sl)"; return 3; }
+  (( rc != 2 )) || { _WS_REPROVE_WHY="$_WS_ABSENT_WHY"; return 2; }
+  _WS_REPROVE_WORD=quarantine-kept
+  _WS_REPROVE_WHY="the slot's leaf is not the witnessed directory $want born $bt: something else stands at $sl"
+  return 1
+}
+
+_ws_collect_unwind() {   # slot rec -> 0 when the slot, where it stands, was removed EMPTY and the record dropped; else 1
+  # Never a recursive remove: a slot that holds anything is not this verb's to empty.
+  local slot="$1" rec="$2" rc
+  _ws_reclaim_absent "$slot"; rc=$?
+  if (( rc == 1 )); then
+    rmdir -- "$slot" 2>/dev/null || return 1
+    _ws_reclaim_absent "$slot" || return 1
+  elif (( rc == 2 )); then
+    return 1
+  fi
+  _ws_collect_record_drop "$rec"
+}
+
+_ws_collect_keep() {   # id rec lctx why -> journals and prints the failure that KEEPS a quarantine record; always rc 1
+  # A KEPT RECORD HAS AN OWNER, the operator, told on every audit: nothing
+  # further in the record or its slot is removed here, and no session acts on
+  # one (spec §5.10). Its next pass resumes from it, or refuses it.
+  _ws_reclaim_fail "$1" "$3" quarantine-kept \
+    "$(_ws_leaf_why_line "the quarantine record ${2##*/} is kept, and nothing further was removed: $4")"
+}
+
+_ws_collect_putback() {   # id slot rec orig lctx why surface actor reason -> 0 when the slot's leaf is back at orig,
+  #                            PROVEN, and the slot and the record are cleared; 2 when the slot's leaf is PROVEN not
+  #                            the record's directory, or orig was taken again since the move (`refused
+  #                            quarantine-kept` printed: TERMINAL, the second while it stays taken); 1 otherwise: the
+  #                            slot's leaf PROVEN gone (`failed probe-unmeasured`, the record and the slot standing),
+  #                            or KEPT (`failed quarantine-kept` printed)
+  # THE RESTORE is Task 4's `_ws_collect_move` reversed, with the RECORD's
+  # identity, never whatever happens to stand in the slot: one NOREPLACE
+  # rename, proven by lstat (the original path is that directory again, and
+  # nothing stands at the slot's leaf). NOREPLACE: a path retaken since the
+  # move is never clobbered, and that record is the operator's while it stays
+  # retaken (ruling T8 OPEN4); once the path is free, the next pass resumes it.
+  # WHAT STANDS IN THE SLOT IS ASKED FIRST (spec §5.10). Something other than
+  # the record's directory there — a link, a file, another directory — reached
+  # it after the move, and is never moved back to the id's path: it is the
+  # operator's, TERMINAL, as at step 5's own identity proof (ruling T8 OPEN5),
+  # whichever step found the doubt. A slot leaf PROVEN gone has nothing to move
+  # back: a retry, the word step 5 answers for the same vanish. An identity
+  # that cannot be read is left to the move, which refuses it and keeps.
+  local id="$1" slot="$2" rec="$3" orig="$4" lctx="$5" why="$6" mrc arc=0 irc
+  _ws_collect_gap restoring "$id" "$slot"
+  _ws_collect_ident "$slot/leaf" "${_WS_QREC_DEV-}:${_WS_QREC_INO-}" "${_WS_QREC_BTIME-}"; irc=$?
+  if (( irc == 1 )); then
+    _ws_reclaim_absent "$slot/leaf"; arc=$?
+    if (( arc == 1 )); then
+      _ws_collect_refused "$id" "$lctx" quarantine-kept \
+        "kept in its slot with the quarantine record ${rec##*/}, listed for the operator, and nothing was moved back or removed: the slot's leaf is not the witnessed directory ${_WS_QREC_DEV-}:${_WS_QREC_INO-} born ${_WS_QREC_BTIME-}, so it never goes back to $orig, after: $why" \
+        "$7" "$8" "$9"
+      return 2
+    fi
+    if (( arc == 0 )); then
+      _ws_reclaim_fail "$id" "$lctx" probe-unmeasured \
+        "$(_ws_leaf_why_line "the record and its slot stand, and nothing was moved back or removed: the witnessed leaf vanished from its slot before it could go back to $orig, after: $why")"
+      return 1
+    fi
+    arc=0
+  fi
+  _ws_collect_move "$slot/leaf" "$orig" "${_WS_QREC_DEV-}:${_WS_QREC_INO-}" "${_WS_QREC_BTIME-}"; mrc=$?
+  if (( mrc == 0 )); then
+    _ws_collect_unwind "$slot" "$rec" && return 0
+    _ws_collect_keep "$id" "$rec" "$lctx" "$id is back at $orig, but its slot or its record could not be cleared after: $why"
+    return 1
+  fi
+  if (( mrc == 1 )); then _ws_reclaim_absent "$orig"; arc=$?; fi
+  if (( mrc == 1 && arc == 1 )); then
+    _ws_collect_refused "$id" "$lctx" quarantine-kept \
+      "kept in its slot with the quarantine record ${rec##*/}, listed for the operator, and nothing was removed: $orig was taken again since the move, so the leaf cannot go back, after: $why" \
+      "$7" "$8" "$9"
+    return 2
+  fi
+  _ws_collect_keep "$id" "$rec" "$lctx" "what the slot's leaf holds could not be proven back at $orig, after: $why${_WS_MOVE_WHY:+ ($_WS_MOVE_WHY)}"
+  return 1
+}
+
+_WS_CAD=''; _WS_CAD_WHY=''
+_ws_collect_witness_cad() {   # id dev ino btime run at -> 0 with _WS_CAD = dropped (it was the collected one), kept
+  #                                (it is not, and is back) or absent; 2 unmeasured (_WS_CAD_WHY)
+  # COMPARE-AND-DROP (spec §5.10), never `_ws_tmproot_witness_drop`, the
+  # tail's plain unlink (spec §5.6). The witness writer replaces the file with
+  # an unlocked temp-file-then-`mv -f`, so a read-then-`rm -f` of the live name
+  # can delete a recycled spawn's FRESH witness. So the live name is moved
+  # aside by one NOREPLACE rename to a dot-leading name no reader takes for an
+  # id, the moved copy is read, and it is unlinked only when it is, field for
+  # field, the witness this collection acted on. Anything else is moved back.
+  local id="$1" dev="$2" ino="$3" bt="$4" run="$5" at="$6" w aside line='' mid pre suf rc
+  _WS_CAD=''; _WS_CAD_WHY=''
+  w=$(_ws_tmproot_witness_file "$id")
+  [[ ! -L "${w%/*}" ]] || { _WS_CAD_WHY="${w%/*} is a link, never followed"; return 2; }
+  _ws_reclaim_absent "$w"; rc=$?
+  (( rc != 0 )) || { _WS_CAD=absent; return 0; }
+  (( rc != 2 )) || { _WS_CAD_WHY="$_WS_ABSENT_WHY"; return 2; }
+  aside="${w%/*}/.$id.drop.$BASHPID"
+  _ws_reclaim_absent "$aside" || { _WS_CAD_WHY="$aside already stands, so the witness was not moved aside"; return 2; }
+  _ws_collect_mv "$w" "$aside" 2>/dev/null || :
+  if [[ ! -f "$aside" || -L "$aside" ]]; then
+    if [[ -e "$aside" || -L "$aside" ]]; then _ws_collect_mv "$aside" "$w" 2>/dev/null || :; fi
+    _WS_CAD_WHY="$w could not be moved aside to $aside"; return 2
+  fi
+  if _ws_leaf_read_small "$aside"; then line="${_WS_SMALL%$'\n'}"; fi
+  pre="v=1 id=$id run=$run dev=$dev ino=$ino btime=$bt uid="; suf=" at=$at"
+  mid="${line#"$pre"}"; mid="${mid%"$suf"}"
+  if [[ "$line" != *$'\n'* && "$line" == "$pre"*"$suf" && "$mid" =~ ^[0-9]+$ ]]; then
+    rm -f -- "$aside" 2>/dev/null || :
+    _ws_reclaim_absent "$aside" \
+      || { _WS_CAD_WHY="$aside, the collected witness moved aside, could not be unlinked"; return 2; }
+    _WS_CAD=dropped; return 0
+  fi
+  _ws_collect_mv "$aside" "$w" 2>/dev/null || :
+  _ws_reclaim_absent "$aside" \
+    || echo "ccd: warn: $id's witness $w is not the one this collection acted on, and a newer one stands — the older is left at $aside, inert (no reader takes a dot-leading name for an id)" >&2
+  _WS_CAD=kept; return 0
+}
+
+_WS_COLLECT_TEMPS_REMOVED=0
+_ws_collect_reap_temps() {   # id -> the witness writer's DEAD temp files of this id removed (_WS_COLLECT_TEMPS_REMOVED);
+  #                             never the act's answer: always rc 0
+  # A writer killed between its `printf` and its `mv` leaves
+  # `tmproots/.<id>.<pid>.<rand>.tmp` (spec §5.10). Under this id's reap lock,
+  # and only while its slug reads free, a file goes when its name is EXACTLY
+  # that shape — the id matched literally, then two all-digit fields; never an
+  # `<id>.*` prefix, because ids admit dots and `.<id>.v2-x.1.2.tmp` is another
+  # id's — and its mtime is at least an hour old (a live write takes
+  # milliseconds). A temp file of an id with neither a witness nor a quarantine
+  # record is never visited.
+  local id="$1" dir="$REG/tmproots" f base rest m now re='^[0-9]+\.[0-9]+\.tmp$'
+  _WS_COLLECT_TEMPS_REMOVED=0
+  [[ -d "$dir" && ! -L "$dir" ]] || return 0
+  _ws_collect_registered "$id" || return 0
+  now=$(date +%s) || return 0
+  [[ "$now" =~ ^[0-9]+$ ]] || return 0
+  for f in "$dir/.$id".*.tmp; do
+    [[ -f "$f" && ! -L "$f" ]] || continue
+    base="${f##*/}"
+    [[ "$base" == ".$id."* ]] || continue
+    rest="${base#".$id."}"
+    [[ "$rest" =~ $re ]] || continue
+    m=$(_plat_mtime "$f" 2>/dev/null) || continue
+    [[ "$m" =~ ^[0-9]+$ ]] && (( now - m >= 3600 )) || continue
+    rm -f -- "$f" 2>/dev/null && _WS_COLLECT_TEMPS_REMOVED=$(( _WS_COLLECT_TEMPS_REMOVED + 1 ))
+  done
+  return 0
+}
+
+_ws_collect_refused() {   # id tx word detail surface actor reason -> ws-collect's ONE refusal past its flock decline,
+  #                            journaled and printed from one detail; rc 0
+  # The verdict point before anything moved (no tx), and a refusal after a
+  # PROVEN restore (the intent's tx, which this closes). The word is always an
+  # argument, so no refusal scan harvests a literal from here. ONE STRING, TWO
+  # READERS: the journal row and the document carry the same cut detail.
+  local id="$1" tx="$2" word="$3" detail
+  detail=$(_ws_leaf_why_line "$4")
+  _lc_emit collect refused "$id" "$tx" verb ws-collect refusal "$word" detail "$detail" \
+    dec.surface "$5" dec.actor "$6" dec.reason "$7"
+  printf '{"refused":%s,"detail":%s,"paths":[]}\n' "$(_json_str "$word")" "$(_json_str "$detail")"
+  return 0
+}
+
+_ws_collect_witness_only() {   # id surface actor reason — a witness whose leaf the evaluation PROVED absent, with no
+  #                                record standing: compare-and-drop and the temp-file reap alone; 0 collected | 1 failed
+  # NOTHING MOVES AND NOTHING IS REMOVED but the witness this collection acted
+  # on (`_WS_WIT_*`, read by the evaluation in this lock): no quarantine, no
+  # record and no slot are made for a leaf that is not there (spec §5.10).
+  local id="$1" surface="$2" actor="$3" reason="$4" lctx
+  lctx=$(_lc_tx)
+  _lc_intent collect "$id" "$lctx" verb ws-collect \
+    detail "$(_ws_leaf_why_line "no leaf stands at $HOME/.cc-tmp/$id: dropping its witness")" \
+    dec.surface "$surface" dec.actor "$actor" dec.reason "$reason"
+  _ws_collect_witness_cad "$id" "${_WS_WIT_DEV-}" "${_WS_WIT_INO-}" "${_WS_WIT_BTIME-}" "${_WS_WIT_RUN-}" "${_WS_WIT_AT-}" \
+    || { _ws_reclaim_fail "$id" "$lctx" probe-unmeasured "$(_ws_leaf_why_line "nothing was removed: the witness of $id, whose leaf is gone, could not be compared and dropped: $_WS_CAD_WHY")"; return 1; }
+  _ws_collect_gap witnessed "$id"
+  _ws_collect_reap_temps "$id"
+  _lc_done collect "$id" "$lctx" verb ws-collect meas.resumed "" \
+    detail "$(_ws_leaf_why_line "witness $_WS_CAD; $_WS_COLLECT_TEMPS_REMOVED stale witness temp file(s) removed; no leaf stood at $HOME/.cc-tmp/$id")"
+  printf '{"collected":%s,"record":null,"resumed":false,"witness":%s}\n' "$(_json_str "$id")" "$(_json_str "$_WS_CAD")"
+  return 0
+}
+
+_ws_collect_finish() {   # id rec slot lctx resumed — the order (spec §5.10), from the leaf's absence to the record's drop
+  local id="$1" rec="$2" slot="$3" lctx="$4" resumed="$5" rc cad
+  # the slot's leaf, PROVEN gone
+  _ws_reclaim_absent "$slot/leaf"; rc=$?
+  (( rc == 0 )) || { _ws_collect_keep "$id" "$rec" "$lctx" "the slot's leaf is not proven gone${_WS_ABSENT_WHY:+ ($_WS_ABSENT_WHY)}"; return 1; }
+  # the EMPTY slot, by rmdir — never a recursive remove: what else it holds is not this verb's
+  _ws_reclaim_absent "$slot"; rc=$?
+  if (( rc == 1 )); then
+    rmdir -- "$slot" 2>/dev/null || :
+    _ws_reclaim_absent "$slot"; rc=$?
+  fi
+  (( rc == 0 )) \
+    || { _ws_collect_keep "$id" "$rec" "$lctx" "the slot could not be removed empty: it holds something this verb did not put there, or could not be looked at ($slot)"; return 1; }
+  _ws_collect_gap emptied "$id" "$slot"
+  # the witness, compared and dropped
+  _ws_collect_witness_cad "$id" "${_WS_QREC_DEV-}" "${_WS_QREC_INO-}" "${_WS_QREC_BTIME-}" "${_WS_QREC_RUN-}" "${_WS_QREC_AT-}" \
+    || { _ws_collect_keep "$id" "$rec" "$lctx" "the leaf is gone, but its witness could not be compared and dropped: $_WS_CAD_WHY"; return 1; }
+  cad="$_WS_CAD"
+  _ws_collect_gap witnessed "$id" "$slot"
+  _ws_collect_reap_temps "$id"
+  # the record, LAST
+  _ws_collect_record_drop "$rec" \
+    || { _ws_collect_keep "$id" "$rec" "$lctx" "the leaf is gone and its witness $cad, but the record could not be dropped"; return 1; }
+  _ws_collect_gap dropped "$id" "$slot"
+  _lc_done collect "$id" "$lctx" verb ws-collect meas.resumed "$resumed" \
+    detail "$(_ws_leaf_why_line "witness $cad; $_WS_COLLECT_TEMPS_REMOVED stale witness temp file(s) removed; collected $slot/leaf (record ${rec##*/})")"
+  printf '{"collected":%s,"record":%s,"resumed":%s,"witness":%s}\n' "$(_json_str "$id")" "$(_json_str "${rec##*/}")" \
+    "$( [[ -n "$resumed" ]] && echo true || echo false )" "$(_json_str "$cad")"
+  return 0
+}
+
+_ws_collect_after_move() {   # id rec orig lctx resumed surface actor reason — steps 5 and 6, then the order to the end
+  # From here on the RECORD is the authority, on both arms: it is read here.
+  local id="$1" rec="$2" orig="$3" lctx="$4" resumed="$5" surface="$6" actor="$7" reason="$8"
+  local name="${2##*/}" slot dev ino bt rc prc why word
+  # THE READER'S FOUR ANSWERS (ruling R-a): 3 is UNMEASURED — the physical
+  # ~/.cc-tmp could not be resolved, so no slot was derived, or whether the
+  # record stands was never measured. That is a retry: the record and its
+  # slot stand as they are, nothing is moved back or removed, and the next
+  # pass resumes from them. Any other failure KEEPS the record.
+  _ws_collect_record_read "$rec"; rc=$?
+  if (( rc == 3 )); then
+    _ws_reclaim_fail "$id" "$lctx" probe-unmeasured \
+      "$(_ws_leaf_why_line "the record and its slot stand, and nothing was moved back or removed: the quarantine record $name could not be read back after the move: ${_WS_QPATH_WHY:-the physical $HOME/.cc-tmp could not be resolved}")"
+    return 1
+  fi
+  # 1 is the record PROVEN gone since the move: nothing this verb did, and no
+  # record for the next pass to finish from. The leaf stays in its slot, which
+  # the next audit refuses as a slot with no record, the operator's.
+  if (( rc == 1 )); then
+    _ws_reclaim_fail "$id" "$lctx" quarantine-kept \
+      "$(_ws_leaf_why_line "the leaf stays in its slot slot.$name, listed for the operator, and nothing was moved back or removed: its quarantine record $name vanished after the move")"
+    return 1
+  fi
+  (( rc == 0 )) || { _ws_collect_keep "$id" "$rec" "$lctx" "the quarantine record $name could not be read back after the move"; return 1; }
+  slot="${_WS_QREC_SLOT-}"; dev="${_WS_QREC_DEV-}"; ino="${_WS_QREC_INO-}"; bt="${_WS_QREC_BTIME-}"
+  # 5 — RE-PROVE after the move. Any doubt moves the leaf back, and only a
+  # PROVEN restore clears the slot and the record. A slot's leaf that is not
+  # the witnessed one is never moved back: it is KEPT (ruling T8 OPEN5).
+  _ws_collect_reprove "$id" "$slot/leaf" "$dev:$ino" "$bt"; rc=$?
+  # The slot's leaf PROVEN gone (3) is no doubt to move back from: nothing is
+  # there. The record and the slot stand, and the next pass reads the phase
+  # off the disk and finishes the order — the word the resume answers too.
+  if (( rc == 3 )); then
+    _ws_reclaim_fail "$id" "$lctx" probe-unmeasured \
+      "$(_ws_leaf_why_line "the record and its slot stand, and nothing was moved back or removed: $_WS_REPROVE_WHY")"
+    return 1
+  fi
+  if (( rc != 0 )); then
+    why="$_WS_REPROVE_WHY"; word="$_WS_REPROVE_WORD"
+    if (( rc == 1 )) && [[ "$word" == quarantine-kept ]]; then
+      _ws_collect_refused "$id" "$lctx" quarantine-kept \
+        "kept in its slot with the quarantine record $name, listed for the operator, and nothing was moved back or removed: $why" \
+        "$surface" "$actor" "$reason"
+      return 0
+    fi
+    _ws_collect_putback "$id" "$slot" "$rec" "$orig" "$lctx" "$why" "$surface" "$actor" "$reason"; prc=$?
+    (( prc != 2 )) || return 0
+    (( prc == 0 )) || return 1
+    if (( rc == 2 )); then
+      _ws_reclaim_fail "$id" "$lctx" probe-unmeasured \
+        "$(_ws_leaf_why_line "$id was moved back to $orig and nothing was removed: $why")"
+      return 1
+    fi
+    _ws_collect_refused "$id" "$lctx" "$word" "$id was moved back to $orig and nothing was removed: $why" \
+      "$surface" "$actor" "$reason"
+    return 0
+  fi
+  _ws_collect_gap proven "$id" "$slot"
+  # 6 — remove the slot's leaf, DIRECTLY after step 5's last proof (an lstat of
+  # it, in this lock), through the ONE removal helper: the witness's dev:ino,
+  # and the ALIAS (the PHYSICAL pre-move spelling and the checkouts the
+  # pre-move question accepted, from the record: ruling G8), so its checkout
+  # question reads the moved tree as the question before the move read it, and
+  # no wider. Its reason may carry a session-chosen name or a raw newline:
+  # every sink it reaches (`_ws_collect_refused`, `_ws_collect_keep`) cuts it
+  # with `_ws_leaf_why_line` first.
+  _ws_leaf_remove "$slot" leaf "$dev:$ino" "$orig" "${_WS_QREC_CHECKOUTS-}"; rc=$?
+  case "$rc" in
+    0) : ;;
+    1) # A REFUSAL, nothing under the leaf removed: it goes back by a PROVEN
+       # restore and the answer is containment-unproven, or it is kept (ruling T6 OPEN11).
+       why="${_WS_LEAF_WHY-}"
+       _ws_collect_putback "$id" "$slot" "$rec" "$orig" "$lctx" "$why" "$surface" "$actor" "$reason"; prc=$?
+       (( prc != 2 )) || return 0
+       (( prc == 0 )) || return 1
+       _ws_collect_refused "$id" "$lctx" containment-unproven "$id was moved back to $orig and nothing was removed: $why" \
+         "$surface" "$actor" "$reason"
+       return 0 ;;
+    *) # UNMEASURED, and possibly part-removed (an rm that failed part-way):
+       # never moved back as if whole. The record and the slot are KEPT, and
+       # the next pass resumes from them.
+       _ws_collect_keep "$id" "$rec" "$lctx" "${_WS_LEAF_WHY-}"; return 1 ;;
+  esac
+  _ws_collect_gap removed "$id" "$slot"
+  _ws_collect_finish "$id" "$rec" "$slot" "$lctx" "$resumed"
+}
+
+_ws_collect_fresh() {   # id q orig lctx surface actor reason — steps 2 to 4 of a fresh collection, then the rest
+  # The witness's fields and the token are the ones the evaluation's consent
+  # bound (`_ws_collect_fork`, in this lock, a moment ago): the record holds exactly those.
+  local id="$1" q="$2" orig="$3" lctx="$4" surface="$5" actor="$6" reason="$7"
+  local dev="${_WS_WIT_DEV-}" ino="${_WS_WIT_INO-}" bt="${_WS_WIT_BTIME-}" run="${_WS_WIT_RUN-}" at="${_WS_WIT_AT-}" token="${REAP_TOKEN-}"
+  local name slot rec rc why dropped
+  # 2 — LSTAT THE LEAF (Task 4's `_ws_collect_ident`): a real directory with
+  # the witness's identity. A link, a file or a mismatch is never moved and
+  # never unlinked: it is the operator's. NOTHING standing there, PROVEN, is
+  # no mismatch: the leaf the evaluation saw in this lock is gone, which is a
+  # retry (`state-changed`), and the next audit takes the witness-without-leaf
+  # arm (ruling R-f). An absence that cannot be proven is unmeasured.
+  _ws_collect_ident "$orig" "$dev:$ino" "$bt"; rc=$?
+  case "$rc" in
+    0) : ;;
+    1) _ws_reclaim_absent "$orig"; rc=$?
+       if (( rc == 0 )); then
+         _ws_collect_refused "$id" "" state-changed \
+           "nothing was moved, and the next audit judges its witness alone: $orig, which the evaluation in this lock saw, is gone" \
+           "$surface" "$actor" "$reason"
+         return 0
+       fi
+       (( rc != 2 )) || { _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "nothing was moved: ${_WS_ABSENT_WHY:-whether anything stands at $orig could not be asked}")"; return 1; }
+       _ws_collect_refused "$id" "" witness-mismatch \
+         "nothing was moved or unlinked, and what stands is the operator's: it is not the real directory its witness names ($dev:$ino, born $bt) — $orig" \
+         "$surface" "$actor" "$reason"
+       return 0 ;;
+    *) _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "nothing was moved: the identity of $orig could not be read")"; return 1 ;;
+  esac
+  # 3a — THE CHECKOUT QUESTION, of the ORIGINAL path, before anything moves.
+  # Anything but 0 stops here; on 0 the accepted pairs it leaves (each outside
+  # admin directory a back-link let pass) ride the record into step 6's alias,
+  # which accepts no other.
+  _ws_leaf_checkouts "$orig"; rc=$?
+  case "$rc" in
+    0) : ;;
+    1) _ws_collect_refused "$id" "" containment-unproven "nothing was moved: ${_WS_CHECKOUTS_WHY-}" "$surface" "$actor" "$reason"
+       return 0 ;;
+    *) _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "nothing was moved: ${_WS_CHECKOUTS_WHY-}")"; return 1 ;;
+  esac
+  # 3b — THE RECORD, before the slot and the move: a failed write stops here.
+  # The slot is NAMED first, not made (Task 4's `_ws_collect_slot_path`): the
+  # record's name is the slot's, less `slot.`, which pairs the two.
+  _ws_collect_slot_path "$q" "$id" \
+    || { _ws_reclaim_fail "$id" "" probe-unmeasured "nothing was moved: no quarantine slot could be named for $id (its id or the clock could not be used)"; return 1; }
+  slot="$_WS_SLOT"; name="${_WS_SLOT##*/slot.}"
+  rec="$(_ws_collect_qrec_dir)/$name"
+  # The writer reads the caller's `_WS_WIT_*`, which carry no id: so this id's
+  # witness is read HERE, under the lock, directly before the write, with
+  # nothing between them. The read-back below compares the record with what
+  # the consent bound, so a witness rewritten since the evaluation stops here.
+  _ws_tmproot_witness_read "$id" || :
+  _ws_collect_record_write "$id" "$slot" "$token" \
+    || { _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "nothing was moved: the quarantine record for $id could not be written${_WS_QREC_WHY:+ ($_WS_QREC_WHY)}")"; return 1; }
+  _ws_collect_gap recorded "$id" "$slot"
+  if ! _ws_collect_record_read "$rec" || [[ "${_WS_QREC_ID-}" != "$id" || "${_WS_QREC_SLOT-}" != "$slot" \
+       || "${_WS_QREC_DEV-}" != "$dev" || "${_WS_QREC_INO-}" != "$ino" || "${_WS_QREC_BTIME-}" != "$bt" \
+       || "${_WS_QREC_RUN-}" != "$run" || "${_WS_QREC_AT-}" != "$at" || "${_WS_QREC_TOKEN-}" != "$token" ]]; then
+    if _ws_collect_record_drop "$rec"; then dropped='and the record was dropped'
+    else dropped="and the record could not be dropped (${_WS_QREC_WHY:-not proven gone}): the next pass clears it"; fi
+    _ws_reclaim_fail "$id" "" probe-unmeasured \
+      "$(_ws_leaf_why_line "nothing was moved, $dropped: the quarantine record $name did not read back as written, or its witness is not the one the consent bound")"
+    return 1
+  fi
+  # 3c — THE SLOT, made EXCLUSIVELY (Task 4's `_ws_collect_slot_make`): a name
+  # that already stands is never adopted and, not being this verb's, never removed.
+  _ws_collect_slot_make "$slot"; rc=$?
+  if (( rc != 0 )); then
+    why="${_WS_SLOT_WHY:-the quarantine slot $slot could not be made}"
+    (( rc != 1 )) || why="the quarantine slot already stood, and a slot is never adopted ($slot)"
+    if _ws_collect_record_drop "$rec"; then dropped='and the record was dropped'
+    else dropped="and the record could not be dropped (${_WS_QREC_WHY:-not proven gone}): the next pass clears it"; fi
+    _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "nothing was moved, $dropped: $why")"
+    return 1
+  fi
+  _ws_collect_gap slotted "$id" "$slot"
+  _lc_intent collect "$id" "$lctx" verb ws-collect \
+    detail "$(_ws_leaf_why_line "record $name: moving $orig into $slot/leaf")" \
+    dec.surface "$surface" dec.actor "$actor" dec.reason "$reason"
+  # 4 — THE MOVE: Task 4's `_ws_collect_move`, ONE NOREPLACE rename proven by
+  # lstat (the slot's leaf is the witnessed directory AND nothing stands at the
+  # original path), never by mv's exit code. It asks the source's identity
+  # first, and renames nothing when that is not PROVEN the witnessed leaf.
+  _ws_collect_move "$orig" "$slot/leaf" "$dev:$ino" "$bt"; rc=$?
+  why="${_WS_MOVE_WHY-}"
+  case "$rc" in
+    0) : ;;
+    1) # PROVEN NOT MOVED: the leaf is still at its path (EXDEV under --no-copy,
+       # a NOREPLACE refusal, or an mv that answered without moving it).
+       if _ws_collect_unwind "$slot" "$rec"; then
+         _ws_reclaim_fail "$id" "$lctx" probe-unmeasured \
+           "$(_ws_leaf_why_line "nothing was moved, and the slot and the record were cleared: the move of $id into its slot was not proven ($why)")"
+         return 1
+       fi
+       _ws_collect_keep "$id" "$rec" "$lctx" "the move of $id was not proven, and its slot or its record could not be cleared ($why)"
+       return 1 ;;
+    *) # UNMEASURED: neither path is provably the witnessed leaf, or the source
+       # was not it before the rename (nothing renamed). Whatever reached the
+       # slot is not provably it, so it is KEPT there with its record, listed
+       # for the operator, never moved back and never unlinked (ruling T8
+       # OPEN5); an EMPTY slot is cleared, and the answer is unmeasured.
+       _ws_reclaim_absent "$slot/leaf"; rc=$?
+       if (( rc == 1 )); then
+         _ws_collect_refused "$id" "$lctx" quarantine-kept \
+           "kept in its slot with its record, listed for the operator, and nothing was moved back or removed: what reached the slot of record $name is not proven the witnessed leaf moved from a free $orig ($why)" \
+           "$surface" "$actor" "$reason"
+         return 0
+       fi
+       if (( rc == 0 )) && _ws_collect_unwind "$slot" "$rec"; then
+         _ws_reclaim_fail "$id" "$lctx" probe-unmeasured \
+           "$(_ws_leaf_why_line "nothing was moved, and the empty slot and the record were cleared: the move of $id was not proven and nothing reached its slot ($why)")"
+         return 1
+       fi
+       _ws_collect_keep "$id" "$rec" "$lctx" "the move of $id was not proven, and whether anything reached its slot could not be asked ($why)"
+       return 1 ;;
+  esac
+  _ws_collect_gap moved "$id" "$slot"
+  _ws_collect_after_move "$id" "$rec" "$orig" "$lctx" "" "$surface" "$actor" "$reason"
+}
+
+_ws_collect_resume() {   # id rec q orig lctx surface actor reason — a quarantine record stands for id: resume FROM IT,
+  #                           at the phase the evaluation read off the disk (`_WS_COLLECT_PHASE`)
+  # Never the tree token or the idle floor (the move stamped the leaf's ctime):
+  # the record is the authority, re-read here, and step 5's proofs follow
+  # before anything is removed. The phase is Task 5's, read in this lock a
+  # moment ago (`_ws_collect_resume_eval`); the verb never re-derives it.
+  local id="$1" rec="$2" q="$3" orig="$4" lctx="$5" surface="$6" actor="$7" reason="$8" name slot rc
+  name="${rec##*/}"
+  # THE READER'S FOUR ANSWERS (ruling R-a). 1 is the record VANISHED since
+  # the evaluation read it in this lock: only an actor that does not take the
+  # lock removes one, so that is a retry (`state-changed`, ruling R-l), and
+  # the next audit reads the id afresh — never the operator's terminal word.
+  # 3 is UNMEASURED: the physical ~/.cc-tmp could not be resolved, so no slot
+  # was derived, or whether the record stands was never measured. That is a
+  # retry too: `failed probe-unmeasured`, the record and its slot standing
+  # where they are, nothing moved or removed.
+  _ws_collect_record_read "$rec"; rc=$?
+  if (( rc == 1 )); then
+    _ws_collect_refused "$id" "" state-changed \
+      "nothing was moved or removed, and the next audit reads $id afresh: record $name, which the evaluation in this lock read, vanished before this verb read it" \
+      "$surface" "$actor" "$reason"
+    return 0
+  fi
+  if (( rc == 3 )); then
+    _ws_reclaim_fail "$id" "" probe-unmeasured \
+      "$(_ws_leaf_why_line "the record and its slot stand, and nothing was moved or removed: the slot of record $name was never derived, as the physical $HOME/.cc-tmp could not be resolved${_WS_QPATH_WHY:+ ($_WS_QPATH_WHY)}")"
+    return 1
+  fi
+  # Every other failure (2: a body naming another id, or a bad `checkouts=`),
+  # and a field that is not this id's, is `quarantine-kept`. The reader
+  # DERIVES the slot from the record's name (ruling G5): the compare is
+  # defence in depth.
+  if (( rc != 0 )) || [[ "${_WS_QREC_ID-}" != "$id" || "${_WS_QREC_SLOT-}" != "$q/slot.$name" ]]; then
+    _ws_collect_refused "$id" "" quarantine-kept \
+      "kept as it stands, listed for the operator, and nothing was moved or removed: record $name is not a quarantine record this verb wrote for $id at its slot slot.$name" \
+      "$surface" "$actor" "$reason"
+    return 0
+  fi
+  slot="${_WS_QREC_SLOT-}"
+  case "${_WS_COLLECT_PHASE-}" in
+    moved)
+      # The slot's leaf is the record's own: asked again here, before any act,
+      # so a leaf that is not the one the record names is never acted on. Its
+      # rc 1 is also "nothing stands": a slot leaf that vanished since the
+      # evaluation is a retry, never the terminal word.
+      _ws_collect_ident "$slot/leaf" "${_WS_QREC_DEV-}:${_WS_QREC_INO-}" "${_WS_QREC_BTIME-}"; rc=$?
+      case "$rc" in
+        0) : ;;
+        1) _ws_reclaim_absent "$slot/leaf"; rc=$?
+           if (( rc == 0 )); then
+             _ws_reclaim_fail "$id" "" probe-unmeasured \
+               "the record and its slot stand, and nothing was moved or removed: the slot leaf of record $name vanished since the evaluation read it; the next pass reads its phase again"
+             return 1
+           fi
+           (( rc != 2 )) || { _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "nothing was moved or removed: ${_WS_ABSENT_WHY:-whether the leaf in its slot stands could not be asked}")"; return 1; }
+           _ws_collect_refused "$id" "" quarantine-kept \
+             "kept as it stands, listed for the operator, and nothing was moved or removed: the slot's leaf is not the directory record $name names" \
+             "$surface" "$actor" "$reason"
+           return 0 ;;
+        *) _ws_reclaim_fail "$id" "" probe-unmeasured "nothing was moved or removed: the identity of $slot/leaf could not be read"; return 1 ;;
+      esac
+      _lc_intent collect "$id" "$lctx" verb ws-collect meas.resumed "$name" \
+        detail "$(_ws_leaf_why_line "resuming record $name: $slot/leaf")" \
+        dec.surface "$surface" dec.actor "$actor" dec.reason "$reason"
+      _ws_collect_gap moved "$id" "$slot"
+      _ws_collect_after_move "$id" "$rec" "$orig" "$lctx" "$name" "$surface" "$actor" "$reason"
+      return ;;
+    unmoved)
+      # THE MOVE NEVER HAPPENED (or was undone): the leaf stands at its path and
+      # the slot holds nothing. The slot and the record are cleared, the witness
+      # is KEPT, and the answer is `state-changed`: the leaf is audited afresh
+      # (ruling T6 OPEN10).
+      _lc_intent collect "$id" "$lctx" verb ws-collect meas.resumed "$name" \
+        detail "$(_ws_leaf_why_line "record $name: $orig never left, or came back")" \
+        dec.surface "$surface" dec.actor "$actor" dec.reason "$reason"
+      if _ws_collect_unwind "$slot" "$rec"; then
+        _ws_collect_refused "$id" "$lctx" state-changed \
+          "nothing was removed, the slot and the record were cleared, and $id stands with its witness to be audited afresh: record $name described a collection whose move never happened or was undone" \
+          "$surface" "$actor" "$reason"
+        return 0
+      fi
+      _ws_collect_keep "$id" "$rec" "$lctx" "the leaf never left $orig, but its slot or the record could not be cleared"
+      return 1 ;;
+    removed)
+      # THE REMOVAL HAD FINISHED before the run stopped: the order resumes from
+      # the slot's rmdir.
+      _lc_intent collect "$id" "$lctx" verb ws-collect meas.resumed "$name" \
+        detail "$(_ws_leaf_why_line "resuming record $name past its removal")" \
+        dec.surface "$surface" dec.actor "$actor" dec.reason "$reason"
+      _ws_collect_finish "$id" "$rec" "$slot" "$lctx" "$name"
+      return ;;
+  esac
+  _ws_reclaim_fail "$id" "" probe-unmeasured "nothing was moved or removed: the evaluation named no phase this verb acts on for record $name (${_WS_COLLECT_PHASE:-none})"
+  return 1
+}
+
+cmd_ws_collect() {   # ccd ws-collect --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]
+  # THE DESTRUCTIVE VERB FOR AN ORPHANED, WITNESSED TEMP ROOT, composed by the
+  # server and by nothing else. The token `ws-audit --collect` minted must equal
+  # the one recomputed here, inside the reap lock. stdout is ONE JSON line:
+  # `{"collected":…}`, a refusal document at exit 0, or `{"failed":…}` at exit 1
+  # (a quarantine record, where one stands, resumes it).
+  local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 args=()
+  while (( $# )); do
+    case "$1" in
+      --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-collect --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"
+                   lc_gs=1; lc_surface="$2"; shift 2 ;;
+      --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
+      --actor)     [[ $# -ge 2 ]] || die "usage: ccd ws-collect --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"
+                   lc_ga=1; lc_actor="$2"; shift 2 ;;
+      --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      --reason)    [[ $# -ge 2 ]] || die "usage: ccd ws-collect --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"
+                   lc_gr=1; lc_reason="$2"; shift 2 ;;
+      --reason=*)  lc_gr=1; lc_reason="${1#--reason=}"; shift ;;
+      *)           args+=("$1"); shift ;;
+    esac
+  done
+  if (( lc_gs )); then local lc_w; lc_w=$(_lc_surface_norm "$lc_surface"); lc_surface=${lc_w:-unknown}; fi
+  if (( lc_ga )); then
+    [[ -n "${lc_actor//[[:space:]]/}" ]] || die "--actor must be non-blank"
+    _lc_dec_ok "$lc_actor" || die "--actor is longer than $_LC_DEC_MAX bytes"
+  fi
+  if (( lc_gr )); then
+    [[ -n "${lc_reason//[[:space:]]/}" ]] || die "--reason must be non-blank"
+    _lc_dec_ok "$lc_reason" || die "--reason is longer than $_LC_DEC_MAX bytes"
+  fi
+  set -- ${args[@]+"${args[@]}"}
+  # NO `--defer-expired`: it lands in `args`, and four positionals is the only shape.
+  [[ $# -eq 4 && $1 == --expect && $3 == --session ]] \
+    || die "usage: ccd ws-collect --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"
+  local token=$2 id=$4
+  [[ $token =~ ^[0-9a-f]{64}$ ]]                            || die "bad token"
+  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] && _ws_tmproot_id_ok "$id" || die "bad session id"
+  _json_str probe >/dev/null 2>&1 \
+    || die "python3 unavailable — cannot quote the collection record safely"
+  # THE FLAVOUR `_ws_reclaim_fail` journals under (act `collect`, verb
+  # `ws-collect`), and NO `crumb`: a collection has no breadcrumb, so the
+  # shared tail's global is shadowed to '' for this call and all it reaches.
+  local _WS_RCL_ACT=collect _WS_RCL_CRUMB=''
+  # NEVER A LOCK FOR A FOREIGN NAME: the reap lock is taken only for an id in
+  # the collector's population — a witness stands for it, or a record names it
+  # (spec §5.2). A `tmproots/` that is itself a link is never followed, so it
+  # puts no id in the population, and whether this one is in it was never
+  # asked: unmeasured, before the lock, as `ws-audit --collect` answers it.
+  local wf rrc=0 wrc=0
+  if [[ -L "$REG/tmproots" ]]; then
+    _ws_reclaim_fail "$id" "" probe-unmeasured \
+      "no lock was taken, and nothing was moved or removed: $REG/tmproots is a link, which ccd never follows, so whether $id is witnessed was never asked"
+    return 1
+  fi
+  wf=$(_ws_tmproot_witness_file "$id")
+  # NO WITNESS IS PROVEN ABSENT, never read off a failed test: a `tmproots/`
+  # this process cannot search reads `-e` false, and the sentence below would
+  # tell the journal ccrc never handed this id out. Unmeasured, before the lock.
+  _ws_reclaim_absent "$wf"; wrc=$?
+  if (( wrc == 2 )); then
+    _ws_reclaim_fail "$id" "" probe-unmeasured \
+      "$(_ws_leaf_why_line "no lock was taken, and nothing was moved or removed: whether a witness stands for $id could not be asked (${_WS_ABSENT_WHY:-$wf could not be looked at}), so whether the collector may lock $id was never asked")"
+    return 1
+  fi
+  _ws_collect_records_of "$id" >/dev/null || rrc=$?
+  if (( wrc == 0 && rrc == 0 && ${#_WS_QRECS[@]} == 0 )); then
+    _ws_collect_refused "$id" "" not-witnessed \
+      "no lock was taken, and there is nothing to collect: no witness ($wf) and no quarantine record names $id" \
+      "$lc_surface" "$lc_actor" "$lc_reason"
+    return 0
+  fi
+  # ...and records that could not be listed, with no witness standing, never
+  # prove the id the collector's: unmeasured, BEFORE the lock, which is never
+  # opened (and so never made) for a name that may be foreign. A witness that
+  # stands puts the id in the population whatever the listing said.
+  if (( wrc == 0 && rrc != 0 )); then
+    _ws_reclaim_fail "$id" "" probe-unmeasured \
+      "$(_ws_leaf_why_line "no lock was taken, and nothing was moved or removed: no witness stands for $id ($wf) and its quarantine records could not be listed (${_WS_QRECS_WHY:-the listing failed}), so whether the collector may lock $id was never asked")"
+    return 1
+  fi
+  # THE SHARED LOCK: `$REG/.reap-<id>.lock`, the one ws-reap, ws-reclaim,
+  # ws-expire and ws-restore take, so none of them runs on this id at once.
+  local lock="$REG/.reap-$id.lock" lfd rc=0
+  command -v flock >/dev/null 2>&1 \
+    || _lc_refuse collect "$id" flock-unavailable \
+         "flock (util-linux) is unavailable — refusing to run the destructive verb unserialised"
+  exec {lfd}>>"$lock" \
+    || _lc_refuse collect "$id" lock-unopenable "cannot open the reap lock at $lock"
+  flock -n "$lfd" || {
+    _lc_emit collect refused "$id" "" verb ws-collect refusal in-progress \
+      detail "another ccd process is already reaping, reclaiming, expiring, restoring or collecting $id and still holds the lock"
+    exec {lfd}>&-
+    printf '{"refused":"in-progress","detail":%s,"paths":[]}\n' \
+      "$(_json_str "another ccd process is already reaping, reclaiming, expiring, restoring or collecting $id and still holds the lock")"
+    return 0
+  }
+  _ws_reclaim_contained _ws_collect_locked "$token" "$id" "$lc_surface" "$lc_actor" "$lc_reason"; rc=$?
+  exec {lfd}>&-
+  return "$rc"
+}
+
+_ws_collect_locked() {   # token id surface actor reason — everything the reap lock serialises, for a collection
+  local token="$1" id="$2" surface="$3" actor="$4" reason="$5" q rroot orig lctx rec
+  _ws_collect_gap locked "$id"
+  # THE PAUSE, inside the lock and before the evaluation: a fresh collection,
+  # a resume and a witness-only drop alike stop on it. `_ws_collect_paused` is
+  # Task 5's reader, the one the pause census pins; it sets REAP_DETAIL.
+  if ! _ws_collect_paused; then
+    _ws_collect_refused "$id" "" paused "nothing was moved or removed: ${REAP_DETAIL-}" "$surface" "$actor" "$reason"
+    return 0
+  fi
+  # 1 — THE CONSENT IS THE TOKEN, recomputed HERE by the one evaluation
+  # `ws-audit --collect` runs (`_ws_collect_fork`): where a record stands, the
+  # record, its slot's leaf and the phase read off the disk; else the registry
+  # and the witness, then, beside a leaf PROVEN absent, the physical
+  # `~/.cc-tmp`'s device against the witness's and the id's recordless slots;
+  # beside a present leaf, the quarantine (read-only), the id's recordless
+  # slots, the leaf's identity and owner write, the idle floor, the tree's
+  # newest ctime and count, the probe, the checkouts and the row rule — all
+  # before anything moves.
+  _ws_collect_fork "$id"
+  [[ -n "${REAP_VERDICT-}" ]] || { REAP_VERDICT=unmeasured; REAP_DETAIL="the collection evaluation answered no verdict for $id"; }
+  if [[ "${REAP_VERDICT-}" == collectable && "$token" != "${REAP_TOKEN-}" ]]; then
+    REAP_VERDICT=state-changed
+    REAP_DETAIL="nothing was moved: $id changed since the audit that minted the token (expected ${REAP_TOKEN-}, was given $token)"
+  fi
+  if [[ "${REAP_VERDICT-}" == unmeasured ]]; then
+    _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "${REAP_DETAIL-}")"
+    return 1
+  fi
+  if [[ "${REAP_VERDICT-}" != collectable ]]; then
+    _ws_collect_refused "$id" "" "${REAP_VERDICT-}" "${REAP_DETAIL-}" "$surface" "$actor" "$reason"
+    return 0
+  fi
+  _ws_collect_gap consented "$id"
+  # LINUX-FIRST: Task 4's move is one rename that never copies, or nothing.
+  _ws_collect_mv_ok \
+    || { _ws_reclaim_fail "$id" "" probe-unmeasured "nothing was moved: the collector is Linux-first and moves only by a rename that never copies, and on $CCD_OS, or with an mv that offers no --no-copy, that move cannot be made"; return 1; }
+  # THE WITNESS-ONLY ARM (Task 5's DEP3): the witness stands, its leaf is
+  # PROVEN absent and no record names the id. Nothing to move or remove.
+  if [[ -z "${_WS_COLLECT_RECORD-}" && "${_WS_COLLECT_LEAF-}" == absent ]]; then
+    _ws_collect_witness_only "$id" "$surface" "$actor" "$reason"
+    return
+  fi
+  if ! _ws_collect_qdir || [[ "${_WS_Q-}" != /?*/.ccd-quarantine ]]; then
+    _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "nothing was moved: ${_WS_Q_WHY:-the quarantine directory is not <physical ~/.cc-tmp>/.ccd-quarantine}")"
+    return 1
+  fi
+  q="${_WS_Q-}"; rroot="${q%/.ccd-quarantine}"; orig="$rroot/$id"
+  lctx=$(_lc_tx)
+  rec="${_WS_COLLECT_RECORD-}"
+  if [[ -n "$rec" ]]; then
+    _ws_collect_resume "$id" "$rec" "$q" "$orig" "$lctx" "$surface" "$actor" "$reason"
+  else
+    _ws_collect_fresh "$id" "$q" "$orig" "$lctx" "$surface" "$actor" "$reason"
+  fi
+}
+# COLLECT-V1. `cmd_caps` echoes it, and the verb `ws-collect` beside it: this
+# box has `ws-audit --collect`, `ws-collect`, the `collect` journal act and the
+# quarantine record under `$REG/tmpquarantine/` — one ccd inode, one token
+# (spec 2026-09-22 §5.10, §8's wave 7). The server composes the destructive verb
+# ONLY behind `capSupported(state, 'collect-v1')`, which refuses on no evidence;
+# the collector's lane composes it, and this wave ships it inert. Both protected
+# shapes cross the direct-entry boundary at the top of this file and in
+# `ccd/ccd-entry.py`.
+# ── end temp-root collection ─────────────────────────────────────────────────── COLLECT-END ──
 
 # ── ws-reap's mirrors: a reclaim breadcrumb, a leaf link (spec 2026-09-22 §5.5-§5.6) ─ MIRROR-BEGIN ──
 _ws_reap_leaf_ok() { [[ ! -L "${1%"${1##*[!/]}"}" ]] || _reap_refuse containment-unproven "$1 is a symbolic link — ccd never follows a link to a tree it would delete, so it cannot prove the tree at that path is $2's own"; }   # workdir id -> 0, or rc 1 refused
@@ -35755,6 +38096,7 @@ case "${1:-}" in
   ws-reap)   shift; cmd_ws_reap "$@" ;;
   ws-reclaim) shift; cmd_ws_reclaim "$@" ;;
   ws-expire) shift; cmd_ws_expire "$@" ;;
+  ws-collect) shift; cmd_ws_collect "$@" ;;
   ws-hold)    shift; cmd_ws_hold "$@" ;;
   ws-release) shift; cmd_ws_release "$@" ;;
   coord-pause) shift; cmd_coord_pause "$@" ;;
@@ -35770,6 +38112,6 @@ case "${1:-}" in
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-reclaim|ws-expire|ws-hold|ws-release|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-hold|ws-release|coord-pause|reclaim-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi

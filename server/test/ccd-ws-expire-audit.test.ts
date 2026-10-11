@@ -123,7 +123,7 @@ describe('ws-audit --expire — the token the verb spends', () => {
     for (const extra of ['--defer-expired', '--expire']) {
       const bad = h.run(`${EXP_STUBS} cmd_ws_audit --session ${EXP_ID} --expire ${extra}`);
       expect(bad.code, extra).toBe(1);
-      expect(bad.stderr).toContain('usage: ccd ws-audit --session <id> [--reclaim [--defer-expired] | --expire]');
+      expect(bad.stderr).toContain('usage: ccd ws-audit --session <id> [--reclaim [--defer-expired] | --expire | --collect]');
     }
   }, 90_000);
 

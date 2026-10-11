@@ -7140,6 +7140,10 @@ export type LifecycleAct =
                     // teardown, server-composed seven days after its archive. Its own act,
                     // never `reclaim`'s: the population, the token and the deciding rung
                     // differ, and stage 4's crash clause reads a deliberate removal by act.
+  | 'collect'       // ws-collect (spec 2026-09-22 §5.10): a witnessed child TEMP ROOT whose
+                    // workspace is already gone, moved aside and removed. Its own act, never
+                    // `reclaim`'s: it removes no workspace and puts down no session (no row
+                    // stands for the id when it acts), so no removal set counts it.
   | 'rehome'        // A session's HOME account moving. TWO EMITTERS, both
                     // landed (account pools, wave 2b): the 5-second tick's
                     // own re-seed (`_auto_swap_check`, §5.5.4 — grep
@@ -7185,7 +7189,7 @@ export type LifecycleAct =
 const LIFECYCLE_ACT_MAP: Record<LifecycleAct, true> = {
   create: true, claim: true, purge: true, supervise: true, unsupervise: true,
   destroy: true, rename: true, hold: true, release: true, archive: true, restore: true,
-  'attic-drop': true, reap: true, reclaim: true, expire: true, rehome: true, gc: true, spawn: true, route: true, start: true, ensure: true,
+  'attic-drop': true, reap: true, reclaim: true, expire: true, collect: true, rehome: true, gc: true, spawn: true, route: true, start: true, ensure: true,
   swap: true, enable: true, stop: true, forget: true, unarchive: true,
   unknown: true,
 };
@@ -7876,10 +7880,16 @@ export type LcRefusalToken =
   | 'purge-mechanism-absent'  // D-2605 r3: the box cannot take the lock AT ALL (flock/mktemp/link off PATH) while a generation is live
   | 'pin-failed'              // ws-reclaim (spec 2026-09-22 §5.5): ccrc could not keep the child's work — the pin phase, or one of the tail's per-deletion keeps — so the verb stopped before deleting anything further
   | 'unit-still-active'       // ws-reclaim (spec 2026-09-22 §5.6): the child's unit or its tmux pane could not be proven stopped after unsupervise and the kill, so the tail stopped before deleting anything further
-  | 'branch-unmeasured'       // ws-reclaim or ws-expire (spec §5.5): the tail's step 5 could not read whether the child's branch still exists, so it stopped before removing anything further — journaled `failed`, never `refused`
+  | 'branch-unmeasured'       // ws-reclaim or ws-expire (spec §5.5, §5.6): the tail's step 5 could not read whether the child's branch still exists, or a recorded tip (step 5) or a nested checkout's recorded head (step 3, phase `children`, where the child's tree may still stand) is the all-zero id (git reads that as an unconditional delete), so it stopped before the branch's compare-and-swap and removed nothing further — journaled `failed`, never `refused`
   | 'probe-unmeasured'        // ws-reclaim and `ws-audit --reclaim` (spec §5.9): a probe the ladder needs could not run or be read, before any act — journaled `failed`, its `verb` telling the two arms apart
   | 'token-malformed'         // ws-reclaim (spec §5.9): `--expect` is not 64 lowercase hex — journaled `refused` before the lock, once the session id is valid
-  | 'run-id-malformed';       // ws-reclaim (spec §5.9): `--child-of` fails ccd's run-id grammar — journaled `refused` before the lock, once the session id is valid
+  | 'run-id-malformed'        // ws-reclaim (spec §5.9): `--child-of` fails ccd's run-id grammar — journaled `refused` before the lock, once the session id is valid
+  | 'containment-refuted'     // ws-reclaim or ws-expire (spec §5.6): the tail's removal-time re-ask PROVED the tree at the workdir is not only the child's own, so it stopped before deleting anything further — journaled `failed`, never `refused`
+  | 'witness-mismatch'        // ws-audit --collect and ws-collect (spec §5.10): the temp root at the id is not the real directory its witness names by dev, ino and birth time, or the witness cannot be read or has no birth time — TERMINAL, journaled `refused`: offered to the operator, never taken
+  | 'quarantine-kept'         // ws-audit --collect and ws-collect (spec §5.10): a quarantine record, its slot or its slot's leaf the collector cannot read, prove or clear, or the directory's original path taken again — TERMINAL, journaled `refused`, kept as it stands for the operator; or ws-collect kept a record a later pass can finish from — journaled `failed`
+  | 'not-witnessed'           // ws-audit --collect and ws-collect (spec §5.2): no witness and no quarantine record names the id — RETRYABLE: there is nothing to collect
+  | 'registered'              // ws-audit --collect and ws-collect (spec §5.10): a registry row of the id, or what one left behind, still stands (`.child`, `.uuid`, or what the slug still holds) — RETRYABLE: the temp root is treated as that workspace's
+  | 'changed-recently';       // ws-audit --collect and ws-collect (spec §5.10): the newest change under the temp root is younger than the idle floor — RETRYABLE
 
 /**
  * The word for each. DECLARED ONCE AND EXPORTED — there is no module-private
@@ -7962,9 +7972,15 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // started. By step 5 the unit is stopped, the pane is gone and the tree was
   // removed (or never stood, on the vanished arm), so the sentence promises
   // nothing intact, only that nothing FURTHER went. The breadcrumb stays at the
-  // branch, and the retry resumes there.
+  // branch, and the retry resumes there. Wave 7 (spec §5.6) adds two arms that
+  // print it with the branch READ as present: the tombstone's recorded tip
+  // (step 5, breadcrumb at `branch`), or a nested checkout's recorded head
+  // (step 3, phase `children`, where the child's tree can still stand and the
+  // breadcrumb is not at `branch`), is the all-zero id, which `update-ref -d`
+  // reads as no compare at all. Both stop before the branch's compare-and-swap,
+  // so the sentence names the record that cannot be compared against too.
   'branch-unmeasured':
-    'ccrc could not read whether the branch still exists, so it stopped before removing anything further; it tries again.',
+    'ccrc could not read whether the branch still exists, or the record it keeps of the branch cannot be compared against, so it stopped before removing anything further; it tries again.',
   // Child reclamation, wave 6 (spec §5.9). A probe the reclaim ladder needs
   // could not run, or its answer could not be read. That happens at audit time
   // (`verb ws-audit`) or in ws-reclaim's locked recomputation
@@ -7984,6 +8000,36 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
     'ccrc asked for this clean-up with a confirmation token that is not a shape ccd mints, so nothing was looked up and nothing was removed. This is a ccrc bug, not something about this workspace.',
   'run-id-malformed':
     'ccrc named the run this workspace belongs to with a run id that is not a shape ccrc mints, so nothing was looked up and nothing was removed. This is a ccrc bug, not something about this workspace.',
+  // Child reclamation, wave 7 (spec §5.6). The tail's removal-time re-ask
+  // (`_ws_reclaim_owned`) PROVED that what it would remove is not only the
+  // child's own: another session's registry row at, inside or through the
+  // worktree or a leaf, a gone row's tree moved inside it, a workdir that is the
+  // main checkout or the project directory, a link or a non-directory at the
+  // workdir, or a recorded workdir that is not one plain path. It only ever rides
+  // `_lc_fail`, after the unit was stopped and the pane killed, from ws-reclaim
+  // and ws-expire alike, because the tail is shared. The sentence says only what
+  // is true under any server. It never says whether, or when, ccrc retries.
+  'containment-refuted':
+    'ccrc found that what it would remove is not only this workspace’s own tree — another session’s tree or registry row lies at, inside or through it, or the recorded path is not this workspace’s worktree — so it stopped. The session was stopped and nothing further was deleted. A retry finds the same thing until that other tree or row is moved or removed.',
+  // The temp-root collector (spec §5.10). `witness-mismatch` is TERMINAL, journaled `refused` by `ws-audit --collect`
+  // and `ws-collect`; so is `quarantine-kept` when what it names is one the collector cannot read, prove or clear, or
+  // the directory's original path is taken again. `ws-collect` also journals it `failed` when it stopped partway (for
+  // example a record, slot or witness it could not read back, clear or compare, or a removal or restore it could not
+  // prove) and keeps what stands. Each says only what is true wherever it is printed: nothing further is removed.
+  'witness-mismatch':
+    'The temporary directory under this id is not the one ccrc recorded handing out — it was replaced or moved, or its record cannot be read or vouches for too little — so ccrc’s collector will not remove it. Nothing was removed; it is listed for you to look at.',
+  'quarantine-kept':
+    'ccrc’s collector found something it cannot finish safely — a quarantine record or slot it cannot read, prove or clear, or the directory’s original path taken again — and keeps what still stands of it and any record of it. Nothing further was removed. It is listed for you to look at, and ccrc finishes it on a later look only if it can prove it again.',
+  // The temp-root collector's RETRYABLE words (spec §5.2, §5.10): printed by `ws-audit --collect`, journaled `refused`
+  // by `ws-collect` at its one refusal point. Each is true wherever it is printed: neither the audit nor the verb has
+  // removed anything when it answers one. The verb answers `registered` after a PROVEN restore of a leaf it had
+  // moved, or on a resume whose leaf stays in its quarantine slot, untouched.
+  'not-witnessed':
+    'ccrc has no record of handing out a temporary directory under this id, so there is nothing for it to clean up. Nothing was removed.',
+  'registered':
+    'A workspace with this id, or what one left behind, still stands in the registry, so ccrc treats the temporary directory there as that workspace’s and will not clean it up. Nothing was removed; ccrc looks again once the id is free.',
+  'changed-recently':
+    'Something in this temporary directory changed recently, so ccrc leaves it alone for now. Nothing was removed; ccrc looks again once it has stayed unchanged long enough.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the

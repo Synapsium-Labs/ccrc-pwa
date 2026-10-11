@@ -164,6 +164,7 @@ describe('_ws_leaf_checkouts — refused: rc 1, a checkout git records elsewhere
     expect(a.why).toContain(`${leafOf()}/a\nb/still-harbor cannot be resolved`);
   }, 60_000);
 
+  // This fixture leaves the walk's order to the file system; `ccd-leaf-checkouts-pins.test.ts` fixes it, first, between and last.
   it('a refusal OUTRANKS an unmeasured entry, whichever order the walk lists them in', () => {
     movedTree(path.join(leafOf(), 'm', 'still-harbor'));
     for (const d of ['a', 'z']) {

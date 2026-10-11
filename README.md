@@ -3756,7 +3756,42 @@ functions, inherited shell options) stripped, and the body refuses them
 (`ccd: refused (entry-unprivileged)`, exit 125) when it was not started that way — an imported
 `find` that answered "no rows" once turned an honest `containment-unproven` into `reclaimable`. It
 is a startup boundary, not a sandbox: `PATH` and every binary it selects are trusted, and a writer
-who replaces both files is not stopped.
+who replaces both files is not stopped. `ws-expire`, `ws-collect`, `ws-audit --session <id> --expire` and
+`ws-audit --session <id> --collect` are decided the same way.
+
+**The temp-root collector (child reclamation wave 7, shipped inert).** A child's temp root,
+`$HOME/.cc-tmp/<id>`, that outlives its workspace — a reclaim tail kept it because a process still used it or ccd's
+removal refused it, or a human verb left it — is taken back by
+`ccd ws-collect --expect <token> --session <id>`, with the token that `ccd ws-audit --session <id> --collect` minted;
+the server composes it and no session runs it (spec §5.10). Only a *witnessed* leaf is a candidate: the witness
+`$REG/tmproots/<id>` that ccd writes each time it hands a child its temp root (spec §5.2) must still match the leaf's
+device, inode and birth time. Every leaf without one — made before the witness shipped, or row-less — and every kept
+clips directory is the operator's and is never touched, and the collector takes only a real directory, never a link
+or a file. The audit refuses until the leaf has stayed unchanged for a floor of 24 hours (the newest *change* time under
+it, never the modification time; `WS_COLLECT_IDLE_FLOOR_S` can only raise the floor, and a value that is not a whole
+number is unmeasured, not 24 hours), no process of this uid uses the leaf, no registry row names the id or lies at,
+inside or through the leaf, and `$REG/reclaim-paused` is not raised. The verb then writes a quarantine record
+(`$REG/tmpquarantine/<id>.<ns>.<pid>`, the resume authority after a crash), renames the leaf into a quarantine slot
+(`~/.cc-tmp/.ccd-quarantine/slot.<id>.<ns>.<pid>/leaf`, one `mv -T -n --no-copy`, proven by `lstat` and never by `mv`'s
+exit code), re-proves, and removes only the slot's inode, so a spawn that re-mints the slug gets a new inode instead
+of losing its leaf. It drops the witness by compare-and-drop and the record last. A record or slot that ccd can neither
+finish nor undo is kept and listed as `quarantine-kept`, and no session acts on one. It is Linux-only, needing GNU
+`mv` with `--no-copy` (coreutils 9.2 or later); on Darwin the audit measures nothing. `ccd caps` advertises
+`collect-v1` and `ws-collect`, the agent grants `['ws-collect','--expect']`, and no server code composes the verb
+until the collector's lane lands (wave 9).
+
+**Reclaim's tail, corrected in wave 7 (it is shared with `ws-expire`).** `containment-refuted` is the failed word the
+tail prints when it proves that what it would remove is not only the child's own (another session's row or tree at,
+inside or through it, a workdir that is the main checkout, a link or non-directory at the workdir); the session was
+stopped and nothing further was deleted, and a retry finds the same thing until the other tree or row is moved or
+removed. What could not be asked stays `worktree-remove-failed`. The failed document carries `crumb`, saying whether
+the failure was printed past the act's breadcrumb, and omits it where that is not known (`ws-expire`'s own
+pre-breadcrumb documents, its resumed arm's `probe-unmeasured`, every `ws-collect` document). Git's silence about a worktree record is no longer believed
+without reading its admin entries, so `no-worktree-record` becomes a retried unmeasured answer when an entry could not
+be read, and a vanished tree whose record names the all-zero head is unmeasured at the audit. The reclaim token also
+binds the row's generation (`ws-audit --reclaim` prints it as `generation`), so a token minted over one row is never
+spent on a re-mint of its id; a `.child` row without a valid generation is unmeasured on every pass. An all-zero
+tombstone tip or recorded head is `branch-unmeasured` before the branch's compare-and-swap, never a delete.
 
 **Routing (routing slice 2).** Clause 13 makes every brief name the wave's shape and the routing
 `ccd/coordinator-skill/references/routing-matrix.md` (spec §3, verbatim) derives from it, and makes
@@ -4862,8 +4897,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7874-7876`), each with an operator sentence of its own at `:7920`,
-`:7928` and `:7941`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7878-7880`), each with an operator sentence of its own at `:7930`,
+`:7938` and `:7951`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -5261,6 +5296,7 @@ implements — that list is the authority; the table below is a map:
 | `ws-archive` · `ws-restore` — `--session <id>` | fold an idle workspace out of the live fleet / back in — costs the tmux pane, deletes nothing |
 | `ws-audit --session <id>` · `ws-reap --expect <token> --session <id>` | the read-only reap preview, which mints a token; the human-confirmed removal, every guard re-proved on the box |
 | `ws-reclaim …` | the server's removal of a CHILD workspace a run minted — never run by hand or by a session |
+| `ws-collect --expect <token> --session <id>` | the server's removal of an orphaned, witnessed child TEMP ROOT, by quarantine rename — never run by hand or by a session; its audit is `ws-audit --session <id> --collect`, and nothing composes it yet |
 | `ws-rm [--reason <text>] <id>` · `ws-gc [--prune]` | terminal-only: tear one workspace down, refusing anything it might destroy; report every worktree's state, size and idle time (`--prune` acts on each row, reclaiming or declining it) |
 | `ws-attic --session <id>` · `ws-attic --drop <id>` | list / drop the commits a removal pinned under `refs/ccrc/attic/<id>/` |
 | `coord-pause --state on\|off` · `reclaim-pause --state on\|off` · `project-pool --project <p> --pool <name>\|--clear` | raise / lower the coordinator pause; raise / lower the cleanup pause (`$REG/reclaim-paused`: child reclamation, the expiry of archived workspaces and the dead-coordinator lane); tag / untag a project's pool |
@@ -5270,7 +5306,8 @@ implements — that list is the authority; the table below is a map:
 
 `ws-rm`, `ws-gc` and `ws-attic --drop` cross no wire (the agent grants none of
 them), `ws-reap` crosses it only behind the token `ws-audit` minted, and
-`ws-reclaim`, token-gated the same way, is composed by the server alone.
+`ws-reclaim`, token-gated the same way, is composed by the server alone, and `ws-collect`, gated on its own token, will
+be (nothing composes it in this build).
 
 **A screenshot from a Mac.** `ccd/ccclip` is the Mac-side helper: bound to a
 global hotkey (or run directly), it takes the clipboard image with `pngpaste`,
