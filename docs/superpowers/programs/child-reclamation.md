@@ -66,8 +66,8 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     - no commit is red: the wiring test's INERT case moves with Task 6;
     - the first-argument scan matches the executor's shape;
     - the reader choices, the attention wording and 29 departures, each accepted by slug.
-  - **Numbers.** Two blocks of 16 were issued by the allocator for run 380: 4788 to 4819, listed singly in
-    `wave9/block-numbers.txt`. The coordinator assigns them at the fix round.
+  - **Numbers.** Two blocks of 16 were issued by the allocator for run 380. All 32 are listed singly in
+    `wave9/block-numbers.txt` and will be listed singly in the plan. The coordinator assigns them at the fix round.
   - **Next:** apply the reconcile's edits, then assemble, attack and fix the plan. Then the docs PR.
 
 - **2026-10-11 13:29 — wave 9's rulings are RULED: contract §16, R82 to R92 (`59f098cb5`). Its plan is being drafted.**
