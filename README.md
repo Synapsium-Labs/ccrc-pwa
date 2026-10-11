@@ -4206,7 +4206,9 @@ keeps for a person while its reason stands, and each reclaimed child whose clips
 kept (listed from the lifecycle journal for seven days, after the registry row is gone). A request that
 waited in the queue is spent only on the workspace it was judged over: the sweep binds it to the registry
 row's generation, and the executor and the audit re-prove it, so a slug minted again is never reclaimed on
-the old licence.
+the old licence by a licensed request, nor by any request on a ccd whose audit binds the generation. On an
+older ccd an unlicensed request keeps the gap from the executor's re-read to the act, the spec's stated
+residual.
 
 **Landing order (landing-order wave 1).** Every merge of `main` into a branch restarts that branch's
 CI, so a session absorbs `main` only on a licence. Worker clause 16 names three, each read after one

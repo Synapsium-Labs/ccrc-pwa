@@ -1011,8 +1011,9 @@ that pace buys repeated attempts and journal lines and nothing else. So a child 
   tier, so the fourth failure is the same failure live or after a restart. It reads the journal only when the slice's opening
   creation is the sighting's own birth, so with no placed birth it seeds nothing, and another workspace's rows never seed
   this one. It carries no failure instant, so a seeded child is asked once on its next due pass and its tier pace applies from
-  that answer on. A lost memory therefore costs a tier child one extra ask, never a fresh four-hour wait and never a fall
-  back to the ordinary ramp.
+  that answer on. A lost memory therefore costs a tier child one extra ask, never a fresh four-hour wait, and never a fall
+  back to the ordinary ramp unless the seed cannot read it (no placed birth, a reclaim done/unknown line, or a slice
+  windowed short).
 - **A held stuck child.** A child under a hold is never asked, and its memory is dropped. When the hold lifts it is sighted
   afresh and seeded like a restart's, so the sweep sights it on the first pass after the hold lifts and asks it once on the
   next, before the tier's pace resumes from that answer.
@@ -1085,10 +1086,11 @@ The reader is `ws-reclaim`'s alone. A `ws-collect` document carries no `crumb`, 
 `failed` `probe-unmeasured` line and exits 1. The server reads that document only when it is a JSON object naming the
 session, with mode `reclaim` and verdict `unmeasured`. It answers a failure carrying the word `probe-unmeasured`, the word
 the mirror holds, so the feed's repeat check and the tier's count see the word the journal does. It is resumable when the
-document's `resume` is a non-empty string naming a breadcrumb phase, because a breadcrumb stood when the audit read it, and
-not resumable otherwise. Every other exit-1 shape is unreadable with no word. The reader has no token arm and no refused
-arm, so no exit-1 document is spent, a token-bearing one included, and that holds by type and not by convention. There
-is no fourth resume value, so an audit over a breadcrumb it could not read prints no `resume` and reads not resumable (§7).
+document's `resume` is a non-empty string, which ccd prints only for a breadcrumb phase, when a breadcrumb stood as the
+audit read it; the server does not check the phase. It is not resumable otherwise. Every other exit-1 shape is unreadable
+with no word. The reader has no token arm and no refused arm, so no exit-1 document is spent, a token-bearing one
+included, and that holds by type and not by convention. The audit has no value for a breadcrumb it could not read, so an
+audit over one prints no `resume` and reads not resumable (§7).
 
 **A chip on the closed run's row**, reading the lifecycle mirror rather than the registry row that no longer
 exists, and the sweep's last verdict on a child that still stands: reclaimed, pending, deferred, paused, or
@@ -1186,7 +1188,8 @@ with no ceiling, on its first answer, for as long as the child's row stands.
 - **The sentence.** It is ccd's word for the token, then what ccd recorded as standing in the way, then the retry clause.
   The retry clause is conditional, like the failing sentence, because while the switch is raised or the fleet box lacks the
   reclaim capabilities the item stays listed and nothing retries it: "While automatic reclamation runs, ccrc retries it on
-  its long backoff; the box resumes from its breadcrumb once the tree or row is fixed." The recorded detail names the tree or
+  its long backoff; the box resumes from its breadcrumb once the tree or row is fixed." That long backoff is the persistent
+  tier: a stuck child is retried on the persistent tier (§5.7) from its first answer. The recorded detail names the tree or
   row to fix. It is carried as one bounded plain line, because any session can append a journal line: each run of control
   characters (the C0 and C1 controls, DEL, the line and paragraph separators) and of bidirectional embeddings, overrides and
   isolates becomes one space, the ends are trimmed, and past `LC_LINE_MAX` characters it is cut and marked with an ellipsis.
@@ -1818,14 +1821,18 @@ approved on a narrow one.
    - The gather's load on the agent is unmeasured. Each pass reads every marked row's generation, concurrently, through the
      fleet's read path; on a remote fleet that is one agent request per marked child per pass, and nothing has measured what
      that costs the agent (§5.7).
+   - The registry records are read before the generation is gathered, so one of a re-mint's two sightings can judge the old
+     row's fields (its hold, workspace and identity) under the new generation, and the twice-observed rule then covers the
+     new row's fields on one pass, not two; the licence is unaffected, because the request carries the generation, which
+     the executor re-reads, and ccd re-reads the hold inside its lock (§5.5).
    - A lost new creation reads as doubt. A recycled slug whose new creation line was never journaled (ccd's journal writer
      never gates the act, so a full disk can lose it) leaves the old creation followed by a removal that no newer creation
      replaces, so the child reads `child-birth-unplaced` until a later creation is mirrored. It read
      `minting-run-postdates-child` before, a kept word with a banner item. Now it is doubt, shown on the chip only. The
      consumers of an unplaced birth all fail safe (§5.7).
-   - There is no fourth resume value. An exit-1 audit prints `resume` only over a breadcrumb it read, so an audit over a
-     breadcrumb it could not read names none, and the server reads it not resumable: the feed says the act is retried from
-     the start of an act the box's next attempt resumes. A wrong sentence, never a wrong act.
+   - The audit has no value for a breadcrumb it could not read. An exit-1 audit prints `resume` only over a breadcrumb it
+     read, so an audit over a breadcrumb it could not read names none, and the server reads it not resumable: the feed says
+     the act is retried from the start of an act the box's next attempt resumes. A wrong sentence, never a wrong act.
    - A box-level cure can wait up to the tier's cap. A child already on the persistent tier is asked next at most four
      hours after its last failure, so a fix that is not the child's own (a fleet update, say) is noticed that late. The
      tier's word `probe-unmeasured` is shared by the box-wide presence probe and the per-child rung 8, so a long tmux-probe

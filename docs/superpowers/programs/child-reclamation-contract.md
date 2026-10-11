@@ -2524,8 +2524,9 @@ break they found is closed below. Evidence: the coordinator's `ccr15-evidence-ar
 Where wave 8's code and its draft rulings narrowed or spelled out the rulings above (R73, R74, R75, R76, R77, R78 and
 R79), they now read as follows. This note amends; it edits no earlier text. It names each departure by slug and carries
 no number: the coordinator assigns this wave's numbers from the two blocks run 348 was issued, and the wave 8 plan's
-`## Deviations found` defines them. The spec text every committed comment of this wave cites is §5.5, §5.7 and §5.9 of
-the design spec, with edits to §5.6, §7 and §8.
+`## Deviations found` defines them. This wave's committed comments and test titles cite §5.5, §5.6, §5.7 and §5.9 of the
+design spec, and a few cite §5.1 (the birth) and §7 (its stated residuals). The spec text this wave adds is in §5.5, §5.7
+and §5.9, with edits to §5.6, §7 and §8.
 
 **R73 (the licence bound to the generation).**
 - `pass-clock-after-gather`: R39 says the lane reads its two clocks once per pass; the throttle now takes its monotonic
@@ -2539,8 +2540,8 @@ the design spec, with edits to §5.6, §7 and §8.
   apart.
 - `marked-means-marker-reads-as-child`: the gather reads exactly the rows whose marker reads as a child; a row whose marker
   is unreadable answers `marker-unreadable` before identity is judged, so its generation decides nothing and is not read.
-- `refused-generation-not-carried`: the audit's `refused` answer carries no generation, so the key on a refused document
-  is read by nothing and gates nothing, as R73 (e) says.
+- `refused-generation-not-carried`: R73 (e) said a refused document's key is read for the record; it is not. The audit's
+  `refused` answer carries no generation, so the key is read by nothing, and, as R73 (e) says, gates nothing.
 - `wave7-generation-pins-owed`: the two server-side `absence-permits` cases of wave 7's
   `ccd-child-reclaim-row-generation.test.ts` are flipped in the commit that makes the token arm name its generation,
   because a null `generation` on a token-bearing document is now unreadable.
