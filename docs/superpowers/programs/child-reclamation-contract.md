@@ -2655,7 +2655,8 @@ shared L0 only: no ccd, agent or PWA edit. Its pre-flight was four Opus readers 
 merge). The coordinator's draft rulings were then attacked by four Opus attackers (SAFETY at xhigh, pacing and
 attention, feasibility, SECURITY), with two Sonnet refuters for every break: 68 agents, no error, and 28 breaks
 survived. The revision was checked again by two Opus readers (SAFETY at xhigh) with refuters: 30 agents, no error, and 13
-more items survived, among them five SAFETY wedges and stale-answer paths. Every one is closed below. Evidence: the coordinator's `ccr15-evidence-archive/wave9-preflight/`
+more items survived, among them five SAFETY wedges and stale-answer paths. A last check (22 agents) found no route that
+composes when a gate forbids it, and 9 more items (three silent-wedge paths among them). Every one is closed below. Evidence: the coordinator's `ccr15-evidence-archive/wave9-preflight/`
 (`preflight.json`, `attack.json`).
 
 **Measured at the pre-flight (2026-10-11; counts only, no contents read):**
@@ -2821,8 +2822,8 @@ more items survived, among them five SAFETY wedges and stale-answer paths. Every
     - `CollectToken` is declared at `shared/api.ts`'s foot, so `ccdargv.ts` imports nothing from a lane file. It is
       minted only by the collect audit reader, and `wsCollect` takes it. So tsc refuses a plain string to `wsCollect`,
       and a fixture pins `wsCollect(<string>)` as a compile error. In the same commit the existing plain-string calls
-      (`ws-collect-wiring.test.ts:24-25` and `:39`, `ccdargv-dec-parity.test.ts:161`) pass a test-only cast,
-      `TOKEN as CollectToken`, so `typecheck-tests` stays green.
+      (`ws-collect-wiring.test.ts:25-26` and `:39`, `ccdargv-dec-parity.test.ts:161`) pass a test-only cast,
+      `TOKEN as CollectToken` (cast once at each file's token declaration), so `typecheck-tests` stays green.
     - A string brand is assignable to `string`, so it does NOT keep a CollectToken out of `wsReclaim` or `wsExpire`
       (measured: tsc rc 0). No fixture claims that direction. Instead a scan pins that the first argument at the one
       `CCD_ARGV.wsCollect(` site is the identifier bound from observation 2's parsed document in the same function, and
@@ -2844,7 +2845,10 @@ more items survived, among them five SAFETY wedges and stale-answer paths. Every
        - `capSupported(COLLECT_CAP)` is asked again, in the act's own scope.
        Then, live: `wsCollect(obs2.token, id, dec)`. Shadow: record "would collect" and stop.
   - **Bounds.**
-    - **The pass.** One pass at a time, under a `collectSweeping` guard.
+    - **The pass.** One pass at a time, under a `collectSweeping` guard that spans the gather and the synchronous
+      decide-and-enqueue only. The pass NEVER awaits a learning audit, an executor job or an act it enqueued: each is
+      tracked in memory (the per-id set, the slot, their enqueued-at and composed-at stamps), and every pass derives the
+      unsettled lines from those stamps. So a call that never settles cannot stop later passes.
     - **The per-id set** covers EVERY collector ccd call for the id: the learning audits, the executor's audit and the
       act. Each runs on `queue.run(id, …)`, as `learnExpiry` does. The pass enqueues no further collector call for an
       id whose previous call has not settled.
@@ -2855,10 +2859,15 @@ more items survived, among them five SAFETY wedges and stale-answer paths. Every
       if both are unchanged when it arrives. Pins: a learning audit composed before a job sees the marker appear, and
       answering collectable after it, seeds no observation; the first live act after arming follows two observations,
       both composed after the flip.
-    - **At most `COLLECT_AUDITS_PER_PASS` = 2 learning audits per pass,** and at most one act job, each offered to due
-      or ripe ids by next-ask instant and then id, never by observation age or listing order. A deferred or held id's
-      next ask moves out (R87), so one id cannot take every pass. Pinned: with X under a standing presence claim and Y
-      holding a ripe pair, Y's act is composed within two passes.
+    - **At most `COLLECT_AUDITS_PER_PASS` = 2 learning audits per pass, and at most one act job.** In each pass the act
+      job is offered FIRST, to the earliest ripe id (by ripening instant, then id) that has no unsettled or
+      already-enqueued collector call, skipping any id that has one. Learning audits are then offered to due ids by
+      next-ask instant and then id, never by observation age or listing order, again skipping ids with a call pending.
+      An id holding an observation is not offered a learning audit: its next ask is its ripening instant (observation
+      1's arrival plus the interval). A deferred or held id's next ask moves out (R87), so one id cannot take every
+      pass. Pins: with X under a standing presence claim and Y holding a ripe pair, Y's act is composed within two
+      passes; a single collectable orphan reaches its executor job within the interval plus two passes; a ripe X with a
+      never-settling call does not stop Y's act.
     - **The fleet-wide slot.** At most ONE `ws-collect` is composed per pass, and at most one is in flight fleet-wide.
       The slot is the collector's own, not reclaim's `CHILD_RECLAIM_MAX_IN_FLIGHT`: sharing would let a presence-leased
       reclaim stall collection, and the expiry lane already keeps its own. Its life:
@@ -2876,9 +2885,12 @@ more items survived, among them five SAFETY wedges and stale-answer paths. Every
       A bound shared across the three destructive lanes is not this wave's; it is recorded for the operator.
     - **Stated residual.** A killed ccd's orphaned children, such as the removal's `rm`, can outlive these bounds. They
       hold the id's reap lock, so ccd answers `in-progress` for that id, but they are not counted against the slot.
-    - **Unsettled calls.** A killed audit is `no-document`. ANY collector ccd call still unsettled at its stall bound
-      (twice the 90 s row for an audit, `CHILD_RECLAIM_STALL_MS` for the act) raises ONE box-wide unsettled line naming
-      the id, because local mode's runner has no timeout. The id is not re-queued until that call settles.
+    - **Unsettled calls and jobs.** A killed audit is `no-document`. ANY collector ccd call still unsettled at its stall
+      bound (twice the 90 s row for an audit, `CHILD_RECLAIM_STALL_MS` for the act) raises ONE box-wide unsettled line
+      naming the id, because local mode's runner has no timeout. So does an executor JOB not settled
+      `CHILD_RECLAIM_STALL_MS` after it took the slot, even if it never composed a call (it may wait behind another
+      lane's job on the same KeyedQueue key); that line says the collector's act slot is held. The id is not re-queued
+      until its call or job settles.
     - **Stated residual (local mode).** The restart half of "one in flight" rests, in local mode, on the server unit's
       default `KillMode=control-group`, which kills a ccd child with the server. A local install run otherwise can
       leave the old process's act running past the new process's hold-off.
@@ -2886,7 +2898,9 @@ more items survived, among them five SAFETY wedges and stale-answer paths. Every
       STALL of its start; a learning audit for an id runs behind that id's queued reclaim job; two ids each get a
       would-collect on consecutive shadow passes; a step-6 presence abort lets a second id's act be composed on the next
       pass; an arm-1 `lock-unopenable` answer frees the slot; a never-settling learning audit raises the line and is not
-      re-queued.
+      re-queued; an act, and separately an executor audit, that never settles raises the line at its bound while later
+      passes still compose learning audits for other ids; an executor job queued behind a never-settling job on its key
+      raises the slot-held line at STALL.
   - **Never** `--defer-expired` (ccd's arity guard dies on it, and the collector has no presence rung to licence
     past). The lane never kills a holder.
 
@@ -2950,8 +2964,9 @@ more items survived, among them five SAFETY wedges and stale-answer paths. Every
     advertises the token. An absent gating key never spends.
 
 - **R87 — pacing.**
-  - **One pass, one gather.** The pass keeps "one await before its loop" and wave 8's overtaken-pass guard
-    (`pass-clock-after-gather`, `an-overtaken-gather-decides-nothing`). Its throttle and every stored instant are on
+  - **One pass, one gather.** The pass keeps "one await before its loop" (the gather) and wave 8's
+    `pass-clock-after-gather` (the throttle re-stamped with the decision clock). The `collectSweeping` guard (R85) spans
+    the gather, so a second pass cannot overtake one; wave 8's passSeq check is therefore not needed here. Its throttle and every stored instant are on
     the MONOTONIC clock, never `Date.now()`: the expiry lane's throttle is wall-clock, and this lane follows child
     reclaim's. The population read (R83) is inside the gather.
   - **What a clear clears.** A raised pause, a missing capability, a pass that fails shut, an unlistable registry and a
@@ -2961,7 +2976,7 @@ more items survived, among them five SAFETY wedges and stale-answer paths. Every
   - **The per-id pacing state is the collector's own, in L1, and only wave 8's FORMULA is imported.** Wave 8's
     `childReclaimTierAfterFailure` restarts its run on any different countable word, and a collector id answers several
     classes in turn. So the collector keeps three runs per id, each with its own last arrival. It derives membership and
-    j for each through `childReclaimTierFrom` (exported UNCHANGED, `j = max(0, run − CHILD_RECLAIM_TIER_ENTRY_RUN)`), and
+    j for each through `childReclaimTierFrom` (module-private today; it gains the `export` keyword and nothing else, `j = max(0, run − CHILD_RECLAIM_TIER_ENTRY_RUN)`), and
     paces through `childReclaimBackoffMs` and `childReclaimTierPaceMs`. Wave 8's reclaim code is otherwise untouched: no
     new parameter, no widened type, and every reclaim answer unchanged. A new scan pins one definer of the pace formula,
     and that the collector imports it.
@@ -2997,8 +3012,9 @@ more items survived, among them five SAFETY wedges and stale-answer paths. Every
       - They are never excluded for ever: `quarantine-kept` clears by itself on a retaken path, and
         `containment-unproven` once the operator fixes the tree.
     - **The next ask** is the LATEST of every wait that applies: the deferral wait, each run's wait (its tier pace once
-      in the tier, else the ramp over its count), the `changed-recently` schedule, the hold's and presence's ceiling, and
-      the refusal and shadow floors below. Each wait counts from its own last arrival.
+      in the tier, else the ramp over its count), the `changed-recently` schedule, the hold's flat wait, presence's ramp,
+      the ripening instant of a held observation (R85), and the refusal, die and shadow floors below. A "ceiling" named
+      for presence, `registered` or `in-progress` is only the clock for its attention, never a wait. Each wait counts from its own last arrival.
   - **One total L1 table,** keyed by the answer and, for `unmeasured`, by the probe's class. Its lists are derived from
     the table. The probe classes are pinned in both directions against ccd's `_ws_collect_unmeasured` call sites (20
     words plus the four `idle:` words). The idle words are pinned from `_ws_collect_eval`'s `case`, never from the
@@ -3014,8 +3030,12 @@ more items survived, among them five SAFETY wedges and stale-answer paths. Every
         no process of this uid uses the leaf, and something keeps changing it (ccd's in-use probe sees this uid only).
       - idleAt never gates the spend; ccd decides the floor in the lock.
       - Pinned: both clamp ends, the non-numeric idleAt, and the 24 h attention.
-    - **`not-witnessed`:** silent and retryable. It clears every run, raises nothing, ends no item and never marks an id
-      collected (R89).
+    - **`not-witnessed`:** silent and retryable. It clears the three runs and advances the deferral count, so it is
+      asked no sooner than the ramp. It raises nothing, ends no item and never marks an id collected (R89).
+    - **`unreadable`, and an unknown verdict** (R84): the failing run (countable, class token `failing`): the ramp, then
+      the tier at the fourth, with attention at tier entry. A newer ccd that adds a verdict word therefore slows to the
+      tier's pace and is listed, never re-audited silently. Pinned: one id answering an unknown verdict four times is
+      listed, and is asked no more often than the ramp allows.
     - **`registered`, `in-use`, `paused`, `in-progress` (audit verdicts):** deferrals, neutral to every tier. Each
       fresh audit walks the leaf before it reaches the in-use rung, so the deferral wait matters.
       - `in-use` is attention at once, naming ccd's holder; R71's leaked `tmux: server` holders are a standing case.
@@ -3039,17 +3059,27 @@ more items survived, among them five SAFETY wedges and stale-answer paths. Every
     - **`no-document`** (the audit): the failing run. Its box-wide line lists no per-id item, and stands only in a pass
       where at least two distinct ids' audits answered it and no audit returned a document; the per-id attention at
       tier entry stands regardless. Pinned: one id answering `no-document` four times is listed.
-    - **TERMINAL:** the terminal run (above).
+    - **TERMINAL:** the terminal run (above). A verb REFUSAL or FAILURE whose word is terminal (`refused
+      containment-unproven`, `refused quarantine-kept`, `refused witness-mismatch`, `failed quarantine-kept`) is a
+      terminal answer: it advances the terminal run and takes precedence over the refusal and verb-failed rows below.
+      Pinned: a `refused containment-unproven`, then two collectable audits, waits the terminal pace, and the item is
+      listed at once.
     - **The verb's `failed`, and an arm-2 or arm-3 no-document act:** the verb-failed run.
     - **A verb REFUSAL of any word,** retryable included, resets the pair and is a deferral. ccd journals every
       `ws-collect` refusal, so the id's next learning audit also waits at least `CHILD_RECLAIM_DEFER_CEILING_MS` after it,
       as wave 8's `refusedAt` paces a refusal. Pinned: at most 96 verb refusals a day per id.
     - **A recognised pre-lock die (R84 arm 1):** a deferral, neutral to every tier. Only `flock-unavailable` latches.
-    - **The hold and the presence defer (R86):** each resets the pair and sets the next ask no sooner than the deferral
-      wait over a count of its own. Each keeps its own continuity clock for the ceiling's attention.
-  - **Stated residual: the collector's pacing is memory-only.** An unmeasured audit is journaled nowhere, so no seed can
-    exist. A restart costs at most one extra ask per id, and since the observations restart too, it can only delay a
-    collection.
+      Every other arm-1 die also takes the refusal floor (the next learning audit no sooner than
+      `CHILD_RECLAIM_DEFER_CEILING_MS` after it), because a `collectable` observation clears the deferral count and the
+      cycle would otherwise repeat; the same die recurring past the ceiling is attention.
+    - **The hold (R86):** resets the pair, and the next ask waits `CHILD_RECLAIM_DEFER_CEILING_MS` flat.
+    - **The presence defer (R86):** resets the pair, and the next ask waits `childReclaimBackoffMs` over a
+      presence-deferral count of its own. Each keeps its own continuity clock for its attention.
+  - **Stated residual: the collector's pacing is memory-only.** An unmeasured audit is journaled nowhere, and the lane
+    adds no mirror read (R89), so nothing is seeded. Every restart, and every rollout is one, re-enters each terminal and
+    verb-failed id at j = 0: about eight extra journaled terminal audits, or failing acts, per such id in the 4.5 h after
+    it. The 12-then-6 bound holds between restarts only. For every other id a restart costs at most one extra ask, and
+    since the observations restart too, it can only delay a collection.
   - **`flock-unavailable`** from the verb latches box-level for the process, as `archivedExpiryBoxRefused` does. While
     it is latched, a box-wide line says so, so an armed lane is never silently off.
   - **Shadow pacing.** A would-collect clears the observation pair and touches no run. The id's next learning audit is
@@ -3073,7 +3103,7 @@ more items survived, among them five SAFETY wedges and stale-answer paths. Every
       chosen to render as plain text.
   - **A box-wide line is a SINGLE collector item, never a `kept-many`.** That covers a box-wide probe class, the
     `no-document` and `lock` lines, an unmeasured or over-long listing, the refused-name count, the flock latch, the
-    unsettled act and the held-by-(b)/(c) line.
+    unsettled collector call or job (audit, act or executor job) and the held-by-(b)/(c) line.
     - Its `sessionId` is a fixed label that no session id can equal, because it contains a space or a `/`, which
       `isSessionIdShape` refuses: for example `~/.cc-sessions/tmproots`, `~/.cc-sessions/tmpquarantine` or `the fleet
       box`. The labels are spelled once, in a total table. Its `runId` is null.
