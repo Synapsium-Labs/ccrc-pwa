@@ -1591,7 +1591,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // (or a caller's guess at it) in a log file readable by anyone who can
       // read the log.
       console.warn('ccrc-server: /api/notify refused a request with the WRONG box token (401) — ' +
-        'run ccrc doctor on both boxes (its box-token line), and ccrc token probe --file ~/.cc-secrets/ccrc-mail.token on the fleet box');
+        'run ccrc doctor on both boxes (its box-token line), and ccrc token probe --file ~/.cc-secrets/ccrc-mail.token on the fleet box ' +
+        '(add --url <server> on a box with no ~/.ccrc/agent.env)');
       return reply.code(401).send({ ok: false, error: 'unauthenticated' });
     }
     const body = (req.body ?? {}) as { message?: unknown };
