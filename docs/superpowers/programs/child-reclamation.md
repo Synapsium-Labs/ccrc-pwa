@@ -25,7 +25,7 @@ removed on 2026-09-10 was not.
 | 6 | `ws-reclaim` repaired (R48): the ONE removal helper and the in-use wait/keep of a temp root (R49); the positive witness `$REG/tmproots/<id>` (R50); F6 and the harness strip (R51); journaling `probe-unmeasured` and the id-tied pre-lock dies (R52); the three-way gone-branch read (R53); the `recorded` placement basis (R54); the vanish re-read's second trigger (R55) | **AGENT-FIRST** | #326 | **deployed** v0.0.124 (`b0647d850`, both boxes by 13:40 on 10-08) — run 291 closed `done`; reviews 335, 341 and 346 |
 | 7 | the temp-root collector verb, inert (R57, R66–R68): audit + token, quarantine-by-rename under the reap lock, the `$REG/tmpquarantine` record, destructive verb, cap token, agent grant, entry guard; plus the ccd halves (R69 `containment-refuted`, R70 `crumb`, rung 8, the reason cap, X1's generation input) | **AGENT-FIRST** | #344 | **deployed** fleet box v0.0.145 (`7609221a4`, merged 2026-10-11 00:55; the updater's auto move 01:10–01:12, agent restarted 01:10:52; `ccd caps` advertises `collect-v1` and `ws-collect`) — run 347, reviews 369, 374, 376 |
 | 8 | reclaim's server half (R65): X1 and X3 generation keying, R61's closure, the `crumb` verb and audit readers, the `clipsKept`/`tmpRootKept` reader, R69's `stuck` class, the persistent-failure tier | server | #349 | **deployed** v0.0.147 (`d0c2b7803`, merged 2026-10-11 12:13; both boxes current by 12:23, through the updater) — run 348 (`ccrc-pwa-quiet-prairie`), plan `0d9f1b042`; reviews 378, 379 |
-| 9 | the collector's server lane (the old R58), after the fleet advertises wave 7's token and wave 8 has merged; SAFETY and SECURITY lenses | server | — | **to plan** — run 380 opened 2026-10-11 |
+| 9 | the collector's server lane (the old R58), after the fleet advertises wave 7's token and wave 8 has merged; SAFETY and SECURITY lenses | server | — | **planning** — run 380 opened 2026-10-11; rulings contract §16 (R82–R92); ships SHADOWED |
 
 **Rule 3 is enforced at the end of wave 2** with no destructive verb in existence: a second bind on a
 PR-bearing child refuses. **Wave 3's `ws-reclaim` and wave 7's collector are the only verbs that destroy anything** (R38, R48). Waves 3 and 4 do nothing on a
@@ -46,6 +46,30 @@ clause 11): it names a departure in its wave-done mail and the coordinator assig
 Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (reviews **170**, **171**, **172**); wave 4 = **174**. Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
 
 ## Decisions & deviations
+
+- **2026-10-11 13:29 — wave 9's rulings are RULED: contract §16, R82 to R92 (`59f098cb5`). Its plan is being drafted.**
+  - **Two attacks.** The draft was attacked by `wf_5cb3e8a1-c6d`: four Opus attackers (SAFETY at xhigh, pacing and
+    attention, feasibility, SECURITY) and two Sonnet refuters for every break, 68 agents. 28 breaks survived. The
+    revision was then checked by `wf_17e26468-211` (two Opus readers, SAFETY at xhigh, with refuters; 30 agents), and 13
+    more survived, among them five SAFETY wedges and stale-answer paths. All are folded in; evidence in
+    `wave9-preflight/` (`attack.json`, `v2-check.json`, `s16-v3.md`).
+  - **What changed from the draft, in short.**
+    - The fleet-wide slot is freed by any settled job that composed nothing, shadow included. Only an act with no
+      document keeps it for 480 s, and the lane composes nothing for 480 s after its own start.
+    - A "reset" is unified: lane-wide and per-id clear generations, captured at compose, so a stale answer is never an
+      observation. A marker flip clears the pairs, and the last-seen-live flag starts `shadowed`.
+    - The open-run hold also holds an absent run, a run opened after the witness (the birth fence) and a re-bound
+      child; it is judged on observation 2 and re-read after the last await.
+    - Pacing is the collector's own per-id state: a deferral count and three runs (failing, verb-failed, terminal),
+      with wave 8's formula imported and wave 8's reclaim code untouched but for one `export`. `lock` is per id.
+    - Box-wide lines are single items with a fixed non-id label, so they render with no PWA edit. The clips clause is
+      carried by the winning item.
+    - `detailUnsafe` covers general categories Cc, Cf, Zl, Zp and Cs, plus U+034F and the tag block.
+    - My branded-token pin was measured unbuildable in the direction I claimed (tsc accepts a brand as a string), so it
+      is a scan.
+  - **The branch merged main** (`5416c3cce`; the ledger kept ours, and the contract took main's §15 as built).
+  - **Plan drafting** runs as `wf_6c6a5efb-807` (six Opus drafters, the three SAFETY tasks at xhigh), and a final
+    consistency check of §16 as `wf_f0df68c6-d21`.
 
 - **2026-10-11 12:41 — wave 9's pre-flight is measured; its draft rulings (contract §16, R82–R92) are under attack.**
   - **The pre-flight.** Workflow `wf_4de39178-36a`: four Opus readers (the composer, SAFETY, attention and pacing,
