@@ -3794,8 +3794,8 @@ export interface ChildReclaimKeptMember { readonly sessionId: string; readonly r
 /** One entry of the fleet-level attention list (child-reclamation spec §5.9):
  *  a child that automatic reclamation has left standing, or one whose reclaim
  *  keeps failing. A REPORT, never a tap: nothing waits on it, and ignoring it
- *  costs disk rather than correctness. There are FOUR arms, told apart by
- *  `kind`:
+ *  costs disk rather than correctness. The four arms below are told apart by
+ *  `kind`, as are the three this file's foot declares (stuck, and kept leaves):
  *
  *  - `terminal`: a TERMINAL reclaim refusal left the child standing.
  *  - `failing`: the child's reclaim has kept FAILING past the defer ceiling,
@@ -3853,7 +3853,7 @@ export type ChildReclaimAttention =
   | { readonly kind: 'kept'; readonly sessionId: string; readonly runId: number;
       readonly word: ChildReclaimKeptWord; readonly sentence: string }
   | { readonly kind: 'kept-many'; readonly word: ChildReclaimKeptWord;
-      readonly members: readonly ChildReclaimKeptMember[]; readonly sentence: string };
+      readonly members: readonly ChildReclaimKeptMember[]; readonly sentence: string } | ChildReclaimStuckAttention | ChildReclaimLeafKeptAttention | ChildReclaimLeafKeptMany;
 
 /** One ARCHIVED WORKSPACE the expiry lane reports (workspace lifecycle spec 2026-09-24 §5.3, wave 3b): one the lane
  *  WOULD clean up while it runs shadowed (`would-expire`), one held past its seven days (`held`), one a process keeps
@@ -9594,3 +9594,80 @@ export const STALL_SECTION_TEXT = {
   stale: 'The latest read failed — this is the last answer that landed.',
   unread: 'The stall watch settings could not be read — the screen tries again every minute.',
 } as const;
+
+/* ── child-workspace reclamation: the reclaim server half (wave 8, spec §5.5, §5.9) ──────────────────────────────
+ * APPENDED at the foot, never inserted above: README and the frozen spec and plan corpus cite this file by line, so
+ * every declaration below sits under every anchor they hold. The two edits above (`ChildReclaimAttention`'s doc line
+ * pair and its last arm's line) are rewritten in place, line for line. */
+
+/** The grammar of a registry row's GENERATION, `$REG/<id>.generation` (spec §5.5): exactly 36 lowercase ASCII UUID
+ *  characters and nothing else, so no newline, no byte-order mark and no padding. It is ccd's `_reg_generation_valid`
+ *  grammar, and `server/test/child-reclaim-generation-shape.test.ts` holds this `.source` equal to that function's
+ *  own regex text. NO FLAGS: an `m` flag would let `$` match before a trailing newline, and a `g` flag would make
+ *  `.test` stateful. `NODE_ID_RE` (`server/src/coord/store.ts`) spells the same text for another concept, an update
+ *  node's id, and is deliberately not this constant: two concepts never share a name because their text agrees. */
+export const REG_GENERATION_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** A registry row's generation as ONE read of `$REG/<id>.generation` answered (spec §5.5). Three answers, never
+ *  folded:
+ *  - `value`: the file holds exactly a `REG_GENERATION_SHAPE` value, and `v` is that content, byte for byte;
+ *  - `absent`: a PROVEN ENOENT, and nothing else;
+ *  - `unreadable`: everything else, a read that failed or content that is not the grammar.
+ *  NOT the lifecycle mirror's generation (`childReclaimGeneration`, `server/src/coord/childReclaim.ts`, which slices
+ *  journal rows at a `create`). This is the value ccd mints with the row and binds a reclaim token to. */
+export type ChildReclaimGeneration =
+  | { readonly kind: 'value'; readonly v: string }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'unreadable' };
+
+/** The generation as a KEY (spec §5.5): what the sweep's entry, its hold-retired memory and every sweep request
+ *  carry. `unreadable` is never a key: a read that could not say makes the row's identity unmeasured instead. */
+export type ChildReclaimGenerationKey = Extract<ChildReclaimGeneration, { readonly kind: 'value' | 'absent' }>;
+
+/** One arm of `ChildReclaimAttention` (spec §5.9): a child whose reclaim ccd PROVED cannot finish as things stand,
+ *  `containment-refuted`, because a tree or a registry row the removal would reach is not the child's own. Listed at
+ *  once, and retried only on the long, capped persistent tier. `token` is ccd's word, beside the sentence for a
+ *  maintainer's grep. `sentence` is the server's and names what to fix. `at` is the journal line's own (ccd's
+ *  clock), or null when the line carried none. `runId` is the minting run the marker names, or null when the marker
+ *  no longer reads as a child. */
+export interface ChildReclaimStuckAttention {
+  readonly kind: 'stuck'; readonly sessionId: string; readonly runId: number | null;
+  readonly token: string; readonly sentence: string; readonly at: number | null;
+}
+
+/** One arm of `ChildReclaimAttention` (spec §5.9): a leaf the reclaim tail KEPT once the act had completed, the
+ *  clips directory or the temp root, which ccd's removal helper refused, could not measure, or found in use. The
+ *  workspace itself is gone, so this item outlives the registry row. `at` is the journal line's own (ccd's clock),
+ *  or null when the line carried none. */
+export interface ChildReclaimLeafKeptAttention {
+  readonly kind: 'leaf-kept'; readonly sessionId: string; readonly runId: number | null;
+  readonly sentence: string; readonly at: number | null;
+}
+
+/** One arm of `ChildReclaimAttention` (spec §5.9): many kept-leaf items collapsed into one line, with the sentence
+ *  stating the count. It has `kept-many`'s shape and member type, so the PWA's one reader renders it unchanged, under
+ *  a `word` that no `ChildReclaimKeptWord` uses, because that reader keys a collapsed line by its word. A member's
+ *  `runId` is a number, as the PWA requires of a member (`pwa/src/fleet/childReclaimWords.ts`, `isKeptMember`): a
+ *  kept leaf whose run is not known stays a single `leaf-kept` item, which the PWA renders with a null run. */
+export interface ChildReclaimLeafKeptMany {
+  readonly kind: 'kept-many'; readonly word: 'leaf-kept';
+  readonly members: readonly ChildReclaimKeptMember[]; readonly sentence: string;
+}
+
+/** ccd's words for a leaf the shared reclaim and expire tail KEPT (`clipsKept`, `tmpRootKept`; spec §5.6): `refused`
+ *  (its removal helper refused it), `unmeasured` (whether it went could not be measured) and `in-use` (a process
+ *  still used it after the bounded wait). Spelled ONCE, as a total table's keys, and the runtime list is derived. */
+export type LeafKeptWord = 'refused' | 'unmeasured' | 'in-use';
+const LEAF_KEPT_WORD_TABLE: Readonly<Record<LeafKeptWord, true>> = { refused: true, unmeasured: true, 'in-use': true };
+export const LEAF_KEPT_WORDS: readonly LeafKeptWord[] = Object.keys(LEAF_KEPT_WORD_TABLE) as LeafKeptWord[];
+
+/** THE WORD HALF: the ONE classifier of a kept-leaf word (spec §5.6), shared by child reclamation and workspace
+ *  lifecycle. One of ccd's three words is itself; ANY other value (a string ccd does not print, `null`, a number,
+ *  `undefined`) is `unmeasured`, because ccd prints only its three words, so anything else means a leaf stood.
+ *  NULL AND ABSENCE ARE NOT ITS QUESTION. Each carrier asks them BEFORE it calls this, because the two wires give
+ *  them two meanings: on a stdout document a missing key is an older ccd (`unreported`) and `null` is nothing
+ *  kept, while the mirror's meas has already folded a missing key into `null`, which reads "nothing kept, or not
+ *  reported". */
+export function leafKeptWord(v: unknown): LeafKeptWord {
+  return typeof v === 'string' && (LEAF_KEPT_WORDS as readonly string[]).includes(v) ? v as LeafKeptWord : 'unmeasured';
+}
