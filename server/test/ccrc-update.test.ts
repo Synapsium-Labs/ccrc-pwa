@@ -88,6 +88,21 @@ const REAL_MV = realPath('mv');
  *  two macOS programs of `DARWIN_PYTHON3_PROGRAMS` reach it, through the
  *  `python3` stub's `-c` arm. */
 const REAL_PYTHON3 = spawnSync('bash', ['-c', 'command -v python3'], { encoding: 'utf8' }).stdout.trim();
+
+/** The box-token doctor check's two JSON readers (`_BT_PY_STATE`, `_BT_PY_FLEET` in `ccd/ccrc-doctor-checks`), read
+ *  from the shipped file so the stub's `python3 -I -c` arm is an EXACT-text allow-list: those two programs, and only
+ *  those, go to the real interpreter, because a refused `python3` makes them read `state-unreadable` and
+ *  `sync-unreadable` (a FAIL once the arms are on). A third program, or an edited one, still reaches the refusal. */
+const BT_PY_ARM = ((): string => {
+  const src = readFileSync(join(REPO, 'ccd', 'ccrc-doctor-checks'), 'utf8');
+  const progs = ['_BT_PY_STATE', '_BT_PY_FLEET'].map((n) => {
+    const m = new RegExp(`^${n}='([^']*)'$`, 'm').exec(src);
+    if (!m) throw new Error(`ccd/ccrc-doctor-checks no longer holds ${n}='…' in the shape this stub reads`);
+    return `'${m[1]}'`;
+  });
+  if (REAL_PYTHON3 === '') return '';
+  return `if [ "$1" = "-I" ] && [ "$2" = "-c" ]; then case "$3" in ${progs.join('|')}) exec '${REAL_PYTHON3}' "$@" ;; esac; fi`;
+})();
 // D-3277 (fix round 1, Task 9): the real `flock`, so a shim placed ahead of
 // it on PATH can rewrite a file and then `exec` into the genuine binary —
 // the locking semantics the shim intercepts stay real, only the write in
@@ -622,6 +637,8 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
   // building a fake venv locally, refuse anything else loudly.
   plant('python3', [
     '#!/bin/sh',
+    // The box-token doctor readers, ahead of the argv log (their program text is not an argv a case asserts on).
+    BT_PY_ARM,
     'printf \'%s\\n\' "$*" >> "$HOME/python3-argv"',
     'if [ "$1" = "-m" ] && [ "$2" = "venv" ] && [ -n "$3" ]; then',
     '  bin="$3/bin"; mkdir -p "$bin" || exit 1',

@@ -147,6 +147,20 @@ const RSYNC = realPath('rsync');
  *  is genuinely `python3 <path>/ccrc update`, not the fixture's poison. */
 const PYTHON3 = realPath('python3');
 
+/** The box-token doctor check's two JSON readers (`_BT_PY_STATE`, `_BT_PY_FLEET` in `ccd/ccrc-doctor-checks`), read
+ *  from the shipped file so the stub's `python3 -I -c` arm is an EXACT-text allow-list: those two programs, and only
+ *  those, go to the real interpreter, because a refused `python3` makes them read `state-unreadable` and
+ *  `sync-unreadable` (a FAIL once the arms are on). A third program, or an edited one, still reaches the refusal. */
+const BT_PY_ARM = ((): string => {
+  const src = readFileSync(join(REPO, 'ccd', 'ccrc-doctor-checks'), 'utf8');
+  const progs = ['_BT_PY_STATE', '_BT_PY_FLEET'].map((n) => {
+    const m = new RegExp(`^${n}='([^']*)'$`, 'm').exec(src);
+    if (!m) throw new Error(`ccd/ccrc-doctor-checks no longer holds ${n}='…' in the shape this stub reads`);
+    return `'${m[1]}'`;
+  });
+  return `if [ "$1" = "-I" ] && [ "$2" = "-c" ]; then case "$3" in ${progs.join('|')}) exec '${PYTHON3}' "$@" ;; esac; fi`;
+})();
+
 /** `<home>/checkout` — the shipped tree this box installs FROM. */
 const treeRoot = (home: string): string => join(home, 'checkout');
 /** The `ccrc` a test runs: the one INSIDE the fixture tree, so `CCRC_HERE`
@@ -689,6 +703,8 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   writeFileSync(join(home, 'fixture-vacuous-python'), VACUOUS_RUNTIME_PYTHON, { mode: 0o755 });
   plant('python3', [
     '#!/bin/sh',
+    // The box-token doctor readers, ahead of the argv log (their program text is not an argv a case asserts on).
+    BT_PY_ARM,
     'printf \'%s\\n\' "$*" >> "$HOME/python3-argv"',
     'if [ "$1" = "-m" ] && [ "$2" = "venv" ] && [ -n "$3" ]; then',
     '  case "$3" in',
