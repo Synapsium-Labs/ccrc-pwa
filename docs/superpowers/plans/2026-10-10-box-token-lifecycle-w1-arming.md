@@ -11,7 +11,7 @@ Provenance: this is row 2a of the programme ledger `docs/superpowers/programs/bo
 The coordinator split this plan on 2026-10-10 at 22:15 UTC, because only the flip waits on rulings.
 
 - **Part 1 (ledger row 2a, run 370): Tasks 1, 2, 5, 6, 7, 8, 9 and 10.** These add pins and clear residue on free files. The arms stay off, and no operator decision is needed. Task 11 rides here too if claim 1141 has been released when the worker reaches it; otherwise it moves to part 2. Part 1 defines no deviation number.
-- **Part 2 (ledger row 2b, a later run): Tasks 3, 4 and 12, plus Task 11 if part 1 did not take it.** Part 2 dispatches only after all of these:
+- **Part 2 (ledger row 2b, run 377): Tasks 3, 4, 11, R and 12, in that order.** Part 1 did not take Task 11. Task R (the residue of review 375 and the placeholder fleet file) was added by the coordinator's run 377 brief on 2026-10-11. Part 2 dispatches only after all of these:
   - part 1 has merged;
   - Decisions 1 and 2 are ruled;
   - the GPT-lane answer is recorded (see "Trigger and bound");
@@ -24,9 +24,11 @@ The coordinator split this plan on 2026-10-10 at 22:15 UTC, because only the fli
 
 **Trigger and bound (ledger row 2a):** The trigger was the GPT-lane lane-1 B4 soak gate, which passed on 2026-10-08 at 11:20 UTC. The PR must merge before row 3's first PR (the weekly schedule). **Another soak is open now.** The GPT-lane programme's Plan 4 soak clock started on 2026-10-09 at 13:50 UTC and runs to about 2026-10-21. Its go needs both lanes' `b4-sample.sh` samples to exit 0. Criterion 4 of that sampler STOPs on any doctor FAIL, and on a WARN from a check that did not WARN in its baseline. The ledger's carried constraint forbids a new doctor WARN while a GPT-lane soak gate is open. **So Task 12 is dispatched only after a written answer from the GPT-lane coordinator or the operator.** The answer must say either that Plan 4's samples do not bind this arming, or that the operator amends the sampler's baseline by name for `box-token`, or that the merge waits for the Plan 4 window to close. Record the answer here, in place of this paragraph.
 
+**Recorded 2026-10-11 (coordinator, run 377 brief):** the Plan 4 gate is at the merge, not at the dispatch. Task 12 is built in full on the branch, and the coordinator holds the merge until the operator rules on the soak sampler's baseline. The operator's answer replaces this paragraph when it comes.
+
 ## Operator decision 1: how an armed `retired-presented` FAIL clears
 
-**PENDING. Tasks 3 and 4 are written against Option A and wait for this ruling. Task 12 (the flip) waits for Tasks 3 and 4, or for their replacement under the option ruled.**
+**RULED 2026-10-11: Option A (the operator).** Tasks 3 and 4 run as written. Deviation 4552 records it. Task 12 (the flip) follows Tasks 3 and 4.
 
 **The problem.** Today the finding is a pure function of `box-token.json`'s `counters.retiredPresented > 0`. Doctor reads it at `ccd/ccrc-doctor-checks:7531-7532` and classes it FAIL at `:7688`. The count lives in memory in `BoxTokenHolder`. The driver copies it to the file each tick (`server/src/token/driver.ts:670-683`). Only a new server process resets it, and a completed rotation does not touch `counters`. With the arms on, one presentation of a retired value holds doctor at FAIL until the next restart. That includes a §10.3 probe, or anyone on the internet who still has the leaked value. While doctor FAILs, every `ccrc update` of that box exits 3. The remedy text says "resync that box", which does not clear it.
 
@@ -63,6 +65,8 @@ The coordinator split this plan on 2026-10-10 at 22:15 UTC, because only the fli
 | (c) | Arm everything except these two words, which stay SKIP behind their own switch. | A second switch, which nobody may write by hand. |
 
 The coordinator puts this to the operator with Task 12 Step 0's measured list of reds.
+
+**RULED 2026-10-11: (a) (the operator).** Task 12 Step 3 is in scope. Deviation 4553 records it.
 
 ## Global Constraints
 
@@ -169,7 +173,7 @@ The coordinator puts this to the operator with Task 12 Step 0's measured list of
 | Review 365's M6 (above) | The R2 row only |
 | `holds &&` dropped from the whole condition | The R2 row and the server-role F1 row |
 
-### Task 3 (part 2): `retired-presented` is answered by a rotation, the server half (PENDING Decision 1, Option A)
+### Task 3 (part 2): `retired-presented` is answered by a rotation, the server half (Decision 1, Option A)
 
 **Files:** `server/src/token/policy.ts` (`:71`, `:97`, `:113`, `oweForRetiredPresentation` at `:155-159`), `server/src/token/files.ts` (`isBoxTokenState`, `:142`), `server/src/token/driver.ts` (`retiredSeen`/`retiredOwedAt` at `:83-84`, `noteCounters` at `:670-683`, `noteRetiredPresentations` at `:574-584`, both called at `:237-238`), `server/test/token-files.test.ts`, `server/test/token-policy.test.ts`, and `server/test/token-rotation-e2e.test.ts` (the D-4412 describe at `:1614`, `idleAfterRetirement` at `:1616`). Re-run `server/test/token-boot.test.ts` and `server/test/coord-token.test.ts`.
 
@@ -224,7 +228,7 @@ The coordinator puts this to the operator with Task 12 Step 0's measured list of
 | The stamp never written (the `counters` literal keeps two fields) | The stamp row and the legacy row |
 | `files.ts` stops checking the field | The `'1'`, `{}` and `-1` validator rows |
 
-### Task 4 (part 2): `retired-presented` is answered by a rotation, the doctor half (PENDING Decision 1, Option A; waits on claim 1141)
+### Task 4 (part 2): `retired-presented` is answered by a rotation, the doctor half (Decision 1, Option A)
 
 **Files:** `ccd/ccrc-doctor-checks` (the state validator at `:7488`, the finding at `:7531-7532`, the parser at `:7748`, `_bt_find`'s arm at `:7688-7690`), and `server/test/doctor-box-token.test.ts` (ROWS at `:212-262`, the `retired-presented` row at `:246`, `healthyState` at `:88`).
 
@@ -386,13 +390,32 @@ The coordinator puts this to the operator with Task 12 Step 0's measured list of
 |---|---|
 | The old `token's script is missing: …` refusal restored | The ccrc-cli row |
 
-### Task 12 (part 2): The flip, `_BT_ARMS_ON=0` to `1` (LAST; waits on claim 1141, both decisions, the GPT-lane answer, residue 8(a)'s ruling, and Tasks 1 to 11 committed green)
+### Task R (part 2): the residue of review 375, and the placeholder fleet file (added by the run 377 brief, 2026-10-11)
+
+One commit per item, before Task 12, red-first where it is behaviour.
+
+**Files:** `ccd/ccrc-doctor-checks`, `server/test/doctor-box-token.test.ts`, `server/test/coord-token.test.ts` (R.1); `deploy/notify.sh`, `server/test/notify-addr.test.ts` (R.2); `server/src/server.ts`, `server/test/notify-token.test.ts` (R.3); `ccd/ccrc-token-sync` (R.4); `server/test/doctor-box-token.test.ts`, `server/test/install-worker-skill.test.ts`, `server/test/token-rotation-e2e.test.ts` (R.5).
+
+- [ ] **R.1 (the placeholder fleet file):** doctor's fleet reader reads the shipped placeholder as the existing FAIL word `fleet-token-unusable`, never as ok. Hold its literal to `PLACEHOLDER_TOKEN` by the same pin idiom as `coord-token.test.ts`'s notify.sh literal. Add ROWS rows: armed FAIL, disarmed SKIP.
+- [ ] **R.2 (review 375 F1):** notify.sh's token trim matches `extractToken`'s (`server/src/coord/token.ts`), U+FEFF and U+00A0 included. A placeholder preceded by a BOM or a no-break space sends nothing. Pin it in `notify-addr.test.ts`, red first.
+- [ ] **R.3 (review 375 F2 and F4):** the `/api/notify` advice names `--url <server>` for a box with no `agent.env`. Its pin in `notify-token.test.ts` holds both halves, doctor and the probe.
+- [ ] **R.4 (review 375 F3):** a comment at the guard in `_TS_WRITE_PY` says it is lexical, and why that suffices (both paths share one literal `$SECRETS` prefix). Prose only.
+- [ ] **R.5 (review 375 F5 to F7), prose:**
+  - F5: R3's docstring says "quantified classes", not "any spelling".
+  - F6: R4's citation greps verbatim.
+  - F7: R2's plant comment states the true reason, or the plant goes if it is redundant. Re-measure M6.
+
+### Task 12 (part 2): The flip, `_BT_ARMS_ON=0` to `1` (LAST; after Tasks 3, 4, 11 and R are committed green)
 
 **Files:** `ccd/ccrc-doctor-checks` (`:7397-7403` header, `:7420` constant, `:7431` tail, the branch at `:7868`, and `_bt_find` at `:7640`/`:7700` if Decision 2 (a)), `server/test/doctor-box-token.test.ts`, `server/test/ccrc-doctor.test.ts` (`:13692-13710`), `server/test/ccrc-install.test.ts` (the `BASE_LIVE_SHAPE` comment at `:8283-8296`, its maps at `:8309`, `:8360` and `:8481`, `liveBox()` at `:8568`, the live-shape case at `:8652`), the fallout files Step 0 names, `README.md` (`:589`), and `server/src/token/policy.ts` (`:43-44`).
 
 The constant and the SKIP branch stay as a one-line kill switch. A disarmed copy of the file keeps the branch pinned.
 
 - [ ] **Step 0: Measure the blast radius before writing anything.** Apply `_BT_ARMS_ON=1` in the working tree (save a copy first). Run each of these, one call each: `ccrc-install`, `ccrc-update`, `ccrc-account`, `ccrc-uninstall`, `install-census`, `ccrc-doctor-graphify`, `ccrc-doctor`, `doctor-box-token`, `token-rotation-real-verb`. Restore, then `cmp`. List every red with its armed class and word. Send the list to the coordinator, who puts Decision 2 to the operator and scopes the fixture files the reds name into this table (re-reading claims). Nothing in this task proceeds until both are back.
+  **Done 2026-10-11** (the ledger's 01:30 entry). Its three corrections bind the rest of this task:
+  - **The fixture `python3`** in `server/test/ccrc-install.test.ts` and `server/test/ccrc-update.test.ts` refuses `python3 -I -c`, so the box-token readers (`$_BT_PY_STATE`, `$_BT_PY_FLEET`) return nothing there: the server arm reads `state-unreadable` and the fleet arm `sync-unreadable`. Let those two programs through to the real interpreter, as the stub already does for its other pass-through arms. Both files join this task's table.
+  - **(a)'s history is decided after the state read** in `_bt_server_arm`, not at the `token-absent` finding.
+  - **The measured fallout is 196 reds:** 76 in `doctor-box-token` (Step 1 absorbs them), 96 in `ccrc-install` and 24 in `ccrc-update`, all exit codes from fresh fixture HOMEs, which (a) plus the stub fix should clear. They are re-measured on the final tip, never trusted.
 - [ ] **Step 1: Write the armed pins on the shipped file (red now).** In `doctor-box-token.test.ts`:
   - Replace `armedCopy()`/`armed()` (`:52-60`) with `disarmedCopy()`/`disarmed()`. It flips `^_BT_ARMS_ON=1$` to `0` in a copy, and throws if no such line exists.
   - The describe at `:264` runs ROWS against `disarmed()` and keeps every SKIP assertion. Retitle it `disarmed in a copy, every armed state is SKIP with its word (the kill switch)`.
@@ -441,10 +464,10 @@ The constant and the SKIP branch stay as a one-line kill switch. A disarmed copy
 
 - **Residue 6(b)** (`owedSince` restarts with the process, `driver.ts:72`, `:749-750`). This is a known limit already recorded in the 2026-10-08 rulings. Owner: wave 2's schedule.
 - **Residue 7** (`deploy.sh` never rewrites `ccrc-caps`, and `ccrc-api` is placed only by `deploy.sh`). Centralised-update wave 16's `_inst_bins ccrc-api` decides it. Owner: that programme.
-- **Residue 8(a)** (no doctor word for a set-aside `box-token.json.unusable-*`). The wave-done that raised it marked it "for the arming PR". It needs a word and a class, and a WARN that only a human's file removal clears would be a hand step. **The coordinator rules it before Task 12 is dispatched.** If ruled, it rides Task 12, because it is the same file. Otherwise it goes to wave 2 by that ruling.
+- **Residue 8(a)** (no doctor word for a set-aside `box-token.json.unusable-*`). The wave-done that raised it marked it "for the arming PR". It needs a word and a class, and a WARN that only a human's file removal clears would be a hand step. **Ruled 2026-10-11 (coordinator): not owed in this PR.**
 - **Residue 8(b)** (a dangling `agent.env` symlink: doctor and server disagree, in the safe direction) and **8(c)** (an unusable state plus an absent `mail.token` mints and owes nothing; it needs two faults). They need a ruling. Owner: the coordinator.
 - **R-a** (a slim in-repo copy of review 362's live-topology simulation). It needs a ruling. The live first rotation has already passed, so it is a regression guard only. Owner: the coordinator.
-- **R-i** (should the fleet PASS line print the proved sync's age, `ccd/ccrc-doctor-checks:7809`?). It is a ruling on a doctor sentence. Owner: the coordinator. If ruled before Task 12, it rides Task 12.
+- **R-i** (should the fleet PASS line print the proved sync's age, `ccd/ccrc-doctor-checks:7809`?). It is a ruling on a doctor sentence. **Ruled 2026-10-11 (coordinator): not owed in this PR.**
 - **R-j** (does D-4410's "never adopt a value it cannot match to its own write record" extend to `mail-pending-<id>.token`, `mail-previous.token` and the promote rename at `driver.ts:377`?). It needs a ruling. If yes, it is a fix in `boot.ts` and `driver.ts` with pins. Owner: the coordinator, then wave 2.
 - **Review 365's V3 and V15** (an extra in-place rewrite after the rename, through `io.open` or `os.open(dir_fd=…)`, which the recording wrapper does not see). Both are contrived, and pinning them means widening `WRAPPER`. Owner: the coordinator, as a ruling on whether wave 2 widens the wrapper.
 - **The ruled CONTROL-noise row** (the `m1` CONTROL row reds as noise under any verb mutant). Task 1's rows do not rely on it. Cleaning it up is optional.
