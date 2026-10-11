@@ -194,7 +194,7 @@ describe('where step 2c sits: after the switch, before presence', () => {
     expect(s.generationReads()).toBe(0);
   });
 
-  it('a re-minted workspace someone is viewing answers generation-changed, never presence: no presence answer measured on a new workspace is credited to the old one’s episode', async () => {
+  it('a re-minted workspace someone is viewing answers generation-changed, never presence: the generation is re-read BEFORE presence is asked (spec §5.5), so a re-mint that has landed by that re-read has no presence answer credited to the old one’s episode', async () => {
     const s = await rig({ generation: G2, visible: true });
     expect(await reclaimChild(s.deps, s.req(value(G1)))).toMatchObject({ kind: 'deferred', why: 'generation-changed' });
     const c = await rig({ generation: G1, visible: true });
@@ -391,7 +391,8 @@ describe('parseChildReclaimAudit reads `generation` in four arms, by hasOwnPrope
 describe('generation-changed: the server’s own defer word', () => {
   it('is a defer reason and a declared word, and never a ccd word, a journal token or a presence defer', () => {
     // Not a presence defer, so `childReclaimNextEntry` ends the presence episode on it, and no licence
-    // outlives it: the class `child-reclaim-sweep-policy.test.ts` pins for every non-presence defer.
+    // outlives it. Two pins hold that: the last line below keeps it outside the presence set, and
+    // `child-reclaim-sweep-policy.test.ts` loops every declared defer word minus that set (spec §5.7).
     expect(isChildReclaimDeferWhy('generation-changed')).toBe(true);
     expect(isChildReclaimKebab('generation-changed')).toBe(true);
     expect(Object.keys(CHILD_RECLAIM_TOKEN_KIND)).not.toContain('generation-changed');

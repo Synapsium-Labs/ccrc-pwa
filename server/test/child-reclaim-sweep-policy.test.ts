@@ -34,7 +34,7 @@ import {
   HOLD_NO_REASON, HOLD_UNREADABLE,
 } from '../src/registry.js';
 import { CHILD_BIRTH_SKEW_MS } from '../src/coord/childSpent.js';
-import { childReclaimTokenKind, isChildReclaimStuckToken } from '../src/coord/childReclaim.js';
+import { CHILD_RECLAIM_DEFER_WHYS, childReclaimTokenKind, isChildReclaimStuckToken } from '../src/coord/childReclaim.js';
 import {
   CHILD_RECLAIM_KEPT_WORDS, LC_REFUSAL_WORD, SPAWN_STALL_MS, TERMINAL_RUN_STATES, holdReason, isChildReclaimKeptWord,
   isLcRefusalToken,
@@ -545,8 +545,8 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
   });
 
   it('a defer that is not presence starts the ANY-kind clock, and clears the presence clock', () => {
-    for (const why of ['state-changed', 'paused', 'held', 'in-progress', 'reap-in-progress', 'siblings-open',
-      'unsupported', 'paused-at-server']) {
+    // Every defer word the executor declares, minus the presence defers: derived, never a hand-kept list.
+    for (const why of CHILD_RECLAIM_DEFER_WHYS.filter((w) => !(CHILD_RECLAIM_PRESENCE_DEFERS as readonly string[]).includes(w))) {
       const withPresence: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 1000,
         lastPresenceDeferredAt: NOW - 1000, lastPresenceWallAt: NOW - 1000 };
       expect(childReclaimNextEntry(withPresence, { kind: 'deferred', why }, ask(NOW, false), at(NOW), PASS), why)

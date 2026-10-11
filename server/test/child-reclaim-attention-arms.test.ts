@@ -40,9 +40,12 @@ describe('leafKeptWord, the one kept-leaf classifier (spec §5.6)', () => {
   it('is declared once, in shared/api.ts, and no other file spells the three words as a set', () => {
     const DECL = /^\s*(?:export\s+)?(?:function|const|let|var)\s+leafKeptWord\b/m;
     expect(ALL.filter((f) => DECL.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/api.ts']);
-    // A second copy of the word list is a second classifier waiting to drift: one CODE line naming all three.
-    const SET = (l: string): boolean => ["'refused'", "'unmeasured'", "'in-use'"].every((w) => l.includes(w));
-    expect(SET("const W = ['refused', 'unmeasured', 'in-use'];"), 'CONTROL').toBe(true);
+    // A second copy of the word list is a second classifier waiting to drift: one CODE line naming all three,
+    // each quoted or as a bare object key, so a copy of L0's own table shape under a new name is caught too.
+    const SPELLED = ['refused', 'unmeasured', 'in-use'].map((w) => new RegExp(`'${w}'|(?<![\\w$'"-])${w}\\s*:`));
+    const SET = (l: string): boolean => SPELLED.every((re) => re.test(l));
+    expect(SET("const W = ['refused', 'unmeasured', 'in-use'];"), 'CONTROL: a quoted list').toBe(true);
+    expect(SET("const T = { refused: true, unmeasured: true, 'in-use': true };"), 'CONTROL: a table, bare keys').toBe(true);
     const holders = ALL.filter((f) => codeOnly(readFileSync(f, 'utf8')).split('\n').some(SET)).map(rel);
     expect(holders).toEqual(['shared/api.ts']);
     // Workspace lifecycle's word half (spec §5.6), by NAME (its list, its word type, its reader), so a copy wrapped over

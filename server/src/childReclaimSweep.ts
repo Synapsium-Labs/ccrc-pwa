@@ -1316,9 +1316,10 @@ export type ChildReclaimJournalAttention = Extract<ChildReclaimAttention, { read
  *  nothing waits on it. A failure's sentence is its journal word first
  *  (`lcRefusalWord`, the journal-only map) and the server's lookup second —
  *  the order `lcRefusalWord`'s own docstring prescribes. Only ccd's own `at`
- *  places a line in time: a child whose latest line carried none cannot say
- *  since when, and is not listed — the mirror's ingest time is the server's
- *  clock and never an event time. */
+ *  places a line in time: on the terminal and failing arms, a child whose
+ *  latest line carried none cannot say since when, and is not listed; the
+ *  stuck arm needs no clock and lists such a line at `at: null` — the
+ *  mirror's ingest time is the server's clock and never an event time. */
 export function childReclaimAttention(i: ChildReclaimAttentionInput): ChildReclaimJournalAttention[] {
   const out: ChildReclaimJournalAttention[] = [];
   for (const row of i.latest) {

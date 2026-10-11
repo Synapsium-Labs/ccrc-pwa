@@ -268,6 +268,8 @@ const CHILD_RECLAIM_DEFER_WHY: Readonly<Record<ChildReclaimDeferWhy, true>> = {
   paused: true, held: true, attached: true, 'tree-busy': true, 'state-changed': true, 'in-progress': true,
   'reap-in-progress': true,
 };
+/** The defer words as a runtime list (spec §5.7), derived from the table's keys and never listed again. */
+export const CHILD_RECLAIM_DEFER_WHYS = Object.keys(CHILD_RECLAIM_DEFER_WHY) as readonly ChildReclaimDeferWhy[];
 
 export function isChildReclaimDeferWhy(v: unknown): v is ChildReclaimDeferWhy {
   return typeof v === 'string' && Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_DEFER_WHY, v);

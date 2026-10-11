@@ -3794,8 +3794,8 @@ export interface ChildReclaimKeptMember { readonly sessionId: string; readonly r
 /** One entry of the fleet-level attention list (child-reclamation spec §5.9):
  *  a child that automatic reclamation has left standing, or one whose reclaim
  *  keeps failing. A REPORT, never a tap: nothing waits on it, and ignoring it
- *  costs disk rather than correctness. The four arms below are told apart by
- *  `kind`, as are the three this file's foot declares (stuck, and kept leaves):
+ *  costs disk rather than correctness. The four arms below and the three this file's foot declares (stuck, and
+ *  kept leaves) are told apart by `kind`, save the two that share `kept-many`, which only `word` tells apart:
  *
  *  - `terminal`: a TERMINAL reclaim refusal left the child standing.
  *  - `failing`: the child's reclaim has kept FAILING past the defer ceiling,
@@ -3808,13 +3808,13 @@ export interface ChildReclaimKeptMember { readonly sessionId: string; readonly r
  *  - `kept-many`: one collapsed line for many children kept for the same word
  *    (a lost coordination database keeps every child at once).
  *
- *  `terminal` and `failing` are DERIVED from the lifecycle mirror by EVERY
- *  sweep pass (the latest `reclaim` event of any outcome in the id's current
- *  workspace generation is that refusal, or the last of that run of failures,
- *  and the registry row still exists), so a restart does not lose them.
- *  `kept` and `kept-many` come from the sweep's last JUDGING pass over durable
- *  state: the registry listing, coord.db and the mirror. They are kept as they
- *  are, never erased, across a pass that judged nothing.
+ *  `terminal` and `failing` are DERIVED from the lifecycle mirror by EVERY sweep pass (the latest `reclaim` event
+ *  of any outcome in the id's current workspace generation is that refusal, or the last of that run of failures,
+ *  and the registry row still exists), so a restart does not lose them. `kept` and a kept word's `kept-many` come
+ *  from the sweep's last JUDGING pass over durable state: the registry listing, coord.db and the mirror. They are
+ *  kept as they are, never erased, across a pass that judged nothing. The leaf arms (`leaf-kept`, and the `kept-many`
+ *  whose `word` is `'leaf-kept'`) are re-derived from the mirror on every pass that clears the fail-shut try AND
+ *  whose own kept-leaf read succeeds, a paused pass included; when that read fails, the last leaf items stand.
  *
  *  A child has at most one item. A `kept` item replaces a `failing` item for
  *  the same child. A child whose last judged verdict is `held` has no `failing`
@@ -3826,20 +3826,20 @@ export interface ChildReclaimKeptMember { readonly sessionId: string; readonly r
  *  a failure's from the journal's own word for it, a kept word's from the
  *  sweep — and the PWA renders it and maps no token or word itself: several of
  *  `ws-reclaim`'s tokens share names with the audit's, and the two
- *  vocabularies are held disjoint server-side. On the two mirror arms `token`
- *  is the refusal's or the failure's (empty when ccd journaled a failure with
- *  none) and rides beside it for a maintainer's grep, never for a renderer's
+ *  vocabularies are held disjoint server-side. On the three journal arms (`terminal`, `failing`, `stuck`) `token`
+ *  is the refusal's or the failure's (empty when ccd journaled a failure with none) and rides beside it for a
+ *  maintainer's grep, never for a renderer's
  *  switch. `runId` is the minting run the registry marker names, or null when
  *  the marker no longer reads as a child (a `kept` item's `runId` is never
  *  null).
  *
- *  `at` (epoch ms) exists only on the two mirror arms, and it is ccd's clock
- *  alone: a refusal's journal line, or the first failure of the run that ccd
- *  placed. A child whose latest line carried no `at` cannot be placed and is
- *  not listed — the mirror's `ingestedAt` is the server's clock and is never
- *  read as an event time (D8, `server/src/coord/schema.ts`). A kept item
- *  carries no time: its condition is durable and nothing this read holds dates
- *  it.
+ *  `at` (epoch ms) is ccd's clock alone, and only `terminal`, `failing`, `stuck` and `leaf-kept` carry it: a refusal's
+ *  journal line, the first failure of the run that ccd placed, a stuck line's own, or a kept leaf's line, which is
+ *  always ccd's dated `at` (the leaf read selects dated lines only). On `terminal` and `failing`, a child whose
+ *  latest line carried no `at` cannot be placed and is not listed; `stuck` lists that child at `at: null`. The
+ *  mirror's `ingestedAt` is the server's clock and is never read as an event time (D8, `server/src/coord/schema.ts`).
+ *  A `kept` or `kept-many` item carries no time: a kept word's condition is durable and nothing this read holds
+ *  dates it.
  *
  *  `kind` is ADDITIVE: an older server's items carry none, and the PWA's one
  *  reader reads such an item as it always did. A `kept-many` item has no
@@ -9638,7 +9638,7 @@ export interface ChildReclaimStuckAttention {
 /** One arm of `ChildReclaimAttention` (spec §5.9): a leaf the reclaim tail KEPT once the act had completed, the
  *  clips directory or the temp root, which ccd's removal helper refused, could not measure, or found in use. The
  *  workspace itself is gone, so this item outlives the registry row. `at` is the journal line's own (ccd's clock),
- *  or null when the line carried none. */
+ *  and always dated: the source read selects dated lines only, so this arm never carries the type's null. */
 export interface ChildReclaimLeafKeptAttention {
   readonly kind: 'leaf-kept'; readonly sessionId: string; readonly runId: number | null;
   readonly sentence: string; readonly at: number | null;

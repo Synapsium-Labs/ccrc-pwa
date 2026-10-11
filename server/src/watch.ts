@@ -3975,9 +3975,9 @@ export class FleetWatcher {
    *  never eligible, because a lost or rebuilt database makes every child's
    *  minting run absent at once; an absent REVIEWED run keeps a review child,
    *  because a run the database does not hold is not proven terminal and the
-   *  report in the child's clips may still be cited; a child whose own birth
-   *  cannot be PLACED (no placed `create` row at all) cannot be proven to
-   *  match its marker's run id, so it is skipped rather than guessed at
+   *  report in the child's clips may still be cited; a child whose own birth cannot be PLACED (no placed
+   *  `create` row at all, or a removal journaled after its placed create that is not the row's own and that no
+   *  newer create has replaced) cannot be proven to match its marker's run id, so it is skipped rather than guessed at
    *  (spec §5.1: the marker's run id and the argv the server composed are the
    *  two authorities, and neither alone authorises anything). A FOURTH, not an
    *  absence but logged the same way: a child that has coordinated in its
@@ -4001,7 +4001,7 @@ export class FleetWatcher {
     } else if (why === 'coordinating') {
       console.warn(`ccrc-server: sweepChildReclaim: ${r.id} is marked as a child of run ${runId}, but it has held a coordinator's chair since about when it was created, holds one now, or held one at a time that cannot be placed — never reclaimed automatically; a person removes it once nothing still needs it`);
     } else {
-      console.warn(`ccrc-server: sweepChildReclaim: ${r.id} is marked as a child of run ${runId}, but the lifecycle mirror holds no placed 'create' row for it — its own birth cannot be placed, so the run-id fence cannot prove the marker's run minted this workspace; skipped until a placed create row appears (a workspace minted before the mirror existed, or whose create line carried no ccd clock)`);
+      console.warn(`ccrc-server: sweepChildReclaim: ${r.id} is marked as a child of run ${runId}, but its own birth cannot be placed: the lifecycle mirror holds no placed 'create' row for it (a workspace minted before the mirror existed, or whose create line carried no ccd clock), or a removal journaled after its placed create, not the row's own, that ccrc has not yet seen replaced by a newer creation — so the run-id fence cannot prove the marker's run minted this workspace; skipped, and looked at again on the next pass`);
     }
   }
 
