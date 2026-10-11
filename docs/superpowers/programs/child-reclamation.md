@@ -47,6 +47,14 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-11 23:45 — run 380's session was OOM-killed at 23:12, during Task 10, and resumed idle. I mailed it where to resume (4257).**
+  - **Before the kill.** Tasks 1 to 9 and a final fix commit are committed locally (tip `c7dfbbf69`, 46 files, unpushed).
+    - The hard boundary holds: nothing under `ccd/`, `agent/`, `pwa/` or `deploy/`, and `CLAUDE.md` is untouched.
+    - Before the kill, Task 10's full-suite subagent had run server shards 1 to 25 of 48. Two of them each had one red file, both on wave 8's known load-red list: `boot.test.ts` (shard 1) and `ccd-review-335-pins.test.ts` F9 (shard 16).
+  - **The kill.** A box-wide OOM at 23:12:46 hit several units, the worker's pane among them, and shard 26 died with exit 137.
+    - systemd restarted the unit, and ccd resumed the session at 23:13:02. Nothing prompted it after that.
+    - The mail asks it to resume from shard 26, in the foreground, re-running each red alone and against `origin/main`. It then pushes and sends the wave-done in the same turn.
+
 - **2026-10-11 16:40 — run 380 has STARTED (4239, acked). Task 0 is green at `d9647b76b`, which equals `origin/main`, so no merge was needed.**
   - **(a0) to (a5)** print as the plan states.
   - **(b1)** There are 12 witnesses (9 at drafting time). **(b2)** `tmpquarantine` is absent. **(b3)** No name starts with a dot or a dash.
