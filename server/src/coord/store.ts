@@ -43,7 +43,8 @@ import {
 } from './rundefs.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import {
-  DEAD_COORDINATOR_JOURNAL_ACTS, type DeadAnchor, type DeadCoordinatorJournalRow,
+  DEAD_COORDINATOR_BREAKER_HELD_HEAD, DEAD_COORDINATOR_JOURNAL_ACTS, deadCoordinatorBreakerHeldDetail,
+  splitDeadCoordinatorBreakerHeld, type DeadAnchor, type DeadCoordinatorBreakerMember, type DeadCoordinatorJournalRow,
 } from '../deadCoordinator.js';
 import {
   CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_AUTHORITY_CODES,
@@ -3344,6 +3345,55 @@ export class CoordStore {
    *  population. Deleting a row that is not there is a no-op. */
   deleteDeadAnchor(claimantId: string): void {
     this.db.prepare('DELETE FROM dead_claimants WHERE claimantId = ?').run(claimantId);
+  }
+
+  /** The dead-coordinator breaker's held set, made durable (review 381, F1) — the stall watch's "Durable dedupe, no
+   *  migration" shape: ONE `run_events` observation row, `fromState = toState` = the carrier run's current state (so
+   *  `pushNewRuns` skips it), `causedBy` `operator`, `detail` `deadCoordinatorBreakerHeldDetail`'s encoding. NO dedupe
+   *  on `(runId, detail)`: a held set can recur after a clear, and the LATEST row is the truth
+   *  (`deadCoordinatorBreakerHeldLatest`). The carrier is ANY existing run, whatever its state — the detail carries the
+   *  whole set. `run-gone` is an absent run; `unencodable` is a member the encoding cannot carry exactly (nothing is
+   *  written, so the in-memory hold stands for that process alone). Synchronous, like every write on this store. */
+  recordDeadCoordinatorBreakerHeld(
+    runId: number, held: readonly DeadCoordinatorBreakerMember[], at: number,
+  ): { recorded: true; eventId: number } | { recorded: false; why: 'run-gone' | 'unencodable' } {
+    const detail = deadCoordinatorBreakerHeldDetail(held);
+    if (detail === null) return { recorded: false, why: 'unencodable' };
+    const run = this.db.prepare('SELECT state FROM runs WHERE id = ?').get(runId) as { state: string } | undefined;
+    if (run === undefined) return { recorded: false, why: 'run-gone' };
+    const res = this.db.prepare(
+      'INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(runId, at, run.state, run.state, 'operator', detail);
+    return { recorded: true, eventId: Number(res.lastInsertRowid) };
+  }
+
+  /** The LATEST held-set row (`ORDER BY id DESC LIMIT 1` over the head): the members and the run that carries it. No row
+   *  at all is `{ ok: true, held: [], runId: null }`; a row this build cannot parse, or whose integers it cannot prove
+   *  (`persistedInt`, D-2545's rule), is `{ ok: false }` — ALL-OR-FAILURE like `deadAnchors`, never an empty set and
+   *  never an older row's: the lane acts on nothing that pass. A thrown statement is `{ ok: false }` too. */
+  deadCoordinatorBreakerHeldLatest():
+    { ok: true; held: DeadCoordinatorBreakerMember[]; runId: number | null } | { ok: false; detail: string } {
+    try {
+      const row = this.db.prepare(
+        'SELECT CAST(runId AS TEXT) AS runText, CAST(detail AS TEXT) AS detail FROM run_events ' +
+        "WHERE causedBy = 'operator' AND substr(detail, 1, ?) = ? ORDER BY id DESC LIMIT 1",
+      ).get(DEAD_COORDINATOR_BREAKER_HELD_HEAD.length, DEAD_COORDINATOR_BREAKER_HELD_HEAD) as
+        { runText: string; detail: string } | undefined;
+      if (row === undefined) return { ok: true, held: [], runId: null };
+      const run = persistedInt(row.runText, 'run_events runId');
+      if (!run.ok) return { ok: false, detail: run.detail };
+      const parts = splitDeadCoordinatorBreakerHeld(row.detail);
+      if (parts === null) return { ok: false, detail: 'the breaker held-set row is malformed' };
+      const held: DeadCoordinatorBreakerMember[] = [];
+      for (const p of parts) {
+        const at = persistedInt(p.text, 'breaker held firstDeadAt');
+        if (!at.ok) return { ok: false, detail: at.detail };
+        held.push({ id: p.id, firstDeadAt: at.value });
+      }
+      return { ok: true, held, runId: run.value };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   /** Per session id, the LATEST instant it held a coordinator's chair. This is

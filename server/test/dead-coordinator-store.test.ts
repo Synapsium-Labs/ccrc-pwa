@@ -7,6 +7,7 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { parseJournalLine, type JournalRow } from '../src/coord/journalparse.js';
+import { parseStallDetail } from '../src/coord/stall.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const dbPath = (): string => path.join(mkTmp('ccrc-dead-store-'), '.ccrc', 'coord.db');
@@ -119,5 +120,81 @@ describe('closeRun’s compare-and-set — commits only while claimedBy names th
     expect(s.reclaimProgram(id, 'demo-heir', T, null)).toMatchObject({ ok: true });
     expect(s.closeRun({ runId: id, finalState: 'failed', causedBy: 'operator', handoffCommit: null, program: 'p',
       viaClosing: true })).toMatchObject({ ok: true, to: 'failed' });
+  });
+});
+
+describe('the breaker’s held set — a run_events observation, no migration (review 381, F1)', () => {
+  const store = () => {
+    const db = openCoordDb(dbPath());
+    const s = new CoordStore(db);
+    const open = (claimedBy: string): number => {
+      const r = s.openRun({ program: `p-${claimedBy}`, title: 'p', project: 'demo', wave: 1, waveOf: null, claimedBy });
+      if (!('id' in r)) throw new Error('openRun refused');
+      return r.id;
+    };
+    return { db, s, open };
+  };
+  const members = [{ id: 'demo-c-a', firstDeadAt: 10 }, { id: 'demo-c-b', firstDeadAt: 20 }];
+
+  it('no row: an empty set and NO run — which is not an unreadable read', () => {
+    expect(store().s.deadCoordinatorBreakerHeldLatest()).toEqual({ ok: true, held: [], runId: null });
+  });
+
+  it('round-trips the members with their first-dead instants, on the run that carries it', () => {
+    const { s, open } = store();
+    const run = open('demo-c-a');
+    expect(s.recordDeadCoordinatorBreakerHeld(run, members, 100)).toMatchObject({ recorded: true });
+    expect(s.deadCoordinatorBreakerHeldLatest()).toEqual({ ok: true, held: members, runId: run });
+  });
+
+  it('the LATEST row wins: a clear, then the same set again, then a clear — each a new row, no dedupe', () => {
+    const { s, open } = store();
+    const run = open('demo-c-a');
+    expect(s.recordDeadCoordinatorBreakerHeld(run, members, 100)).toMatchObject({ recorded: true });
+    expect(s.recordDeadCoordinatorBreakerHeld(run, [], 200)).toMatchObject({ recorded: true });
+    expect(s.deadCoordinatorBreakerHeldLatest()).toEqual({ ok: true, held: [], runId: run });
+    expect(s.recordDeadCoordinatorBreakerHeld(run, members, 300)).toMatchObject({ recorded: true });
+    expect(s.deadCoordinatorBreakerHeldLatest()).toEqual({ ok: true, held: members, runId: run });
+    expect(s.recordDeadCoordinatorBreakerHeld(run, [], 400)).toMatchObject({ recorded: true });
+    expect(s.deadCoordinatorBreakerHeldLatest()).toEqual({ ok: true, held: [], runId: run });
+  });
+
+  it('is an OBSERVATION: fromState equals toState, so no push; and no stall parse reads it as a notice', () => {
+    const { s, open } = store();
+    const run = open('demo-c-a');
+    const w = s.recordDeadCoordinatorBreakerHeld(run, members, 100);
+    if (!w.recorded) throw new Error('not recorded');
+    const pushable = s.runEventsSince(0).find((e) => e.eventId === w.eventId);
+    const held = s.runEvents(run).filter((e) => (e.detail ?? '').startsWith('dead-coordinator-breaker-held:'));
+    expect(held).toHaveLength(1);
+    expect(held[0]).toMatchObject({ fromState: 'planned', toState: 'planned', causedBy: 'operator' });
+    expect(pushable, 'the pushNewRuns read sees it, and skips it: not a transition').toMatchObject({ runId: run });
+    expect(pushable!.fromState).toBe(pushable!.toState);
+    const seen = s.stallObservationsSince(0);
+    expect(seen.ok && seen.rows.some((r) => (r.detail ?? '').startsWith('dead-coordinator-breaker-held:'))).toBe(true);
+    for (const r of seen.ok ? seen.rows : []) {
+      if ((r.detail ?? '').startsWith('dead-coordinator-breaker-held:')) expect(parseStallDetail(r.detail)).toBeNull();
+    }
+  });
+
+  it('an absent run writes nothing; an id the encoding cannot carry writes nothing — both said out loud', () => {
+    const { s, open } = store();
+    const run = open('demo-c-a');
+    expect(s.recordDeadCoordinatorBreakerHeld(999, members, 100)).toEqual({ recorded: false, why: 'run-gone' });
+    expect(s.recordDeadCoordinatorBreakerHeld(run, [{ id: 'demo,c', firstDeadAt: 10 }], 100)).toEqual({ recorded: false, why: 'unencodable' });
+    expect(s.recordDeadCoordinatorBreakerHeld(run, [{ id: 'demo-c-a', firstDeadAt: 0 }], 100)).toEqual({ recorded: false, why: 'unencodable' });
+    expect(s.deadCoordinatorBreakerHeldLatest()).toEqual({ ok: true, held: [], runId: null });
+  });
+
+  it('a malformed LATEST row fails the WHOLE read — never a partial set, never an older row’s', () => {
+    const { db, s, open } = store();
+    const run = open('demo-c-a');
+    s.recordDeadCoordinatorBreakerHeld(run, members, 100);
+    for (const bad of ['demo-c-a@soon', 'demo-c-a@10,demo-c-b', 'demo-c-b@20,demo-c-a@10', 'demo-c-a@10,demo-c-a@10', '@5', 'demo c@5', 'demo-c-a@010', ',']) {
+      db.exec(`INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (${run}, 300, 'planned', 'planned', 'operator', 'dead-coordinator-breaker-held:${bad}')`);
+      expect(s.deadCoordinatorBreakerHeldLatest(), bad).toMatchObject({ ok: false });
+      db.exec('DELETE FROM run_events WHERE id = (SELECT MAX(id) FROM run_events)');
+    }
+    expect(s.deadCoordinatorBreakerHeldLatest()).toEqual({ ok: true, held: members, runId: run });
   });
 });

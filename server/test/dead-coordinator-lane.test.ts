@@ -20,6 +20,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { closeRun } from '../src/coord/close.js';
 import { parseJournalLine } from '../src/coord/journalparse.js';
 import { buildServer } from '../src/server.js';
+import { stallNoticeCounts } from '../src/coord/stallsettings.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { DEAD_COORDINATOR_AFTER_MS, DEAD_COORDINATOR_LANE_LIVE_MARKER } from '../src/deadCoordinator.js';
 import { NotifyLog } from '../src/notifylog.js';
@@ -625,6 +626,107 @@ describe('the circuit breaker', () => {
     expect((f.watcher().currentCoord()?.deadCoordinatorAttention ?? []).map((a) => a.kind)).toEqual(['breaker']);
     expect(f.feed().filter(([, t]) => t.startsWith('dead coordinator')), 'the trip is recorded; nothing would be ended')
       .toEqual([[A, 'dead coordinator: breaker tripped']]);
+  });
+});
+
+describe('the breaker’s hold survives a RESTART (review 381, F1)', () => {
+  /** The breaker tripped on {A, B}; then B reads unmeasurable (its row gone, no history): its anchor is deleted (ruling E),
+   *  so B is held ONLY by the breaker's memory. */
+  const tripThenDoubt = async (f: Fixture) => {
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    f.plant(A); f.plant(B);
+    const ra = f.working(A);
+    const rb = f.working(B);
+    await f.pass(); await walk(f, 27 * 60_000);
+    expect(breakerItem(f)).toEqual([['breaker', [A, B]]]);
+    rmSync(path.join(f.reg, `${B}.uuid`));
+    f.next(); await f.pass();
+    expect(f.anchorOf(B), 'B’s anchor went (ruling E): its hold is memory alone').toBeNull();
+    expect(breakerItem(f)).toEqual([['breaker', [A, B]]]);
+    return { ra, rb };
+  };
+  /** B's own `unmeasured` item rides beside it: the breaker item is what the invariant is about. */
+  const breakerItem = (f: Fixture) => f.attention().filter(([k]) => k === 'breaker');
+  const latest = (f: Fixture) => f.coord.deadCoordinatorBreakerHeldLatest();
+
+  it('THE INVARIANT: a restart does not dissolve the held cluster — A is not ended while B is unreleased, however long the passes run', async () => {
+    const f = await fixture();
+    const { ra, rb } = await tripThenDoubt(f);
+    f.restart();
+    await walk(f, HOUR + 30 * 60_000);
+    expect([ra, rb].map(f.stateOf), 'nothing ended: B is still in the population with no evidence').toEqual(['working', 'working']);
+    expect(f.calls, 'nothing composed on the box').toEqual([]);
+    expect(breakerItem(f), 'the breaker item still names both').toEqual([['breaker', [A, B]]]);
+  });
+
+  it('the record is the trip’s own: both members, at their ORIGINAL first-dead instants, on a run the first member coordinates', async () => {
+    const f = await fixture();
+    const { ra } = await tripThenDoubt(f);
+    expect(latest(f)).toEqual({ ok: true, runId: ra, held: [{ id: A, firstDeadAt: T0 }, { id: B, firstDeadAt: T0 }] });
+    const rows = f.coord.runEvents(ra).filter((e) => (e.detail ?? '').startsWith('dead-coordinator-breaker-held:'));
+    expect(rows, 'written when the set CHANGED, not on every pass').toHaveLength(1);
+  });
+
+  it('a restart does not loosen what releases it: B back alive releases B, the breaker clears and A (alone) ends; the clear is recorded', async () => {
+    const f = await fixture();
+    const { ra, rb } = await tripThenDoubt(f);
+    f.restart();
+    writeFileSync(path.join(f.reg, `${B}.uuid`), `u-${B}`);
+    f.live.add(B);
+    f.next(); await f.pass();
+    expect(f.attention(), 'A alone is no cluster').toEqual([]);
+    expect(latest(f), 'the clear is a row too').toEqual({ ok: true, runId: ra, held: [] });
+    expect([ra, rb].map(f.stateOf), 'not yet: A has not been dead an hour').toEqual(['working', 'working']);
+    await walk(f, HOUR);
+    expect([ra, rb].map(f.stateOf), 'B lives; A, dead past the hour and two passes, ends').toEqual(['failed', 'working']);
+  });
+
+  it('a seeded member that LEFT the population is released too — its programme closed while the server was down', async () => {
+    const f = await fixture();
+    const { ra, rb } = await tripThenDoubt(f);
+    f.restart();
+    expect(f.coord.closeRun({ runId: rb, finalState: 'failed', causedBy: 'operator', handoffCommit: null, program: `prog-${B}`, viaClosing: true })).toMatchObject({ ok: true });
+    await f.pass();
+    expect(f.attention()).toEqual([]);
+    expect(latest(f)).toMatchObject({ ok: true, held: [] });
+    expect(f.stateOf(ra)).toBe('working');
+  });
+
+  it('an UNREADABLE record: this pass composes nothing at all — no claimant measured, no act — and the next readable pass proceeds', async () => {
+    const f = await fixture();
+    const { ra } = await tripThenDoubt(f);
+    const db = (f.coord as unknown as { db: { exec(sql: string): void } }).db;
+    db.exec(`INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) SELECT runId, at, state, state, 'operator', ` +
+      `'dead-coordinator-breaker-held:${A}@soon' FROM (SELECT ${ra} AS runId, ${T0} AS at, state FROM runs WHERE id = ${ra})`);
+    f.restart();
+    const asked = f.tmuxAsked.length;
+    f.next(); await f.pass();
+    expect(f.tmuxAsked.length, 'not even measured').toBe(asked);
+    expect(f.stateOf(ra)).toBe('working');
+    db.exec('DELETE FROM run_events WHERE id = (SELECT MAX(id) FROM run_events)');
+    f.next(); await f.pass();
+    expect(f.tmuxAsked.length, 'the readable pass measures').toBeGreaterThan(asked);
+    expect(breakerItem(f), 'and the seeded hold stands').toEqual([['breaker', [A, B]]]);
+  });
+
+  it('is written in SHADOW too, and only when the set changes', async () => {
+    const f = await fixture();
+    f.plant(A); f.plant(B);
+    const ra = f.working(A); f.working(B);
+    await anHourDead(f);
+    for (let k = 0; k < 3; k += 1) { f.next(); await f.pass(); }
+    const rows = f.coord.runEvents(ra).filter((e) => (e.detail ?? '').startsWith('dead-coordinator-breaker-held:'));
+    expect(rows.map((e) => e.detail)).toEqual([`dead-coordinator-breaker-held:${A}@${T0},${B}@${T0}`]);
+  });
+
+  it('the stall watch never counts it, and nothing pushes it', async () => {
+    const f = await fixture();
+    f.plant(A); f.plant(B);
+    f.working(A); f.working(B);
+    await f.pass();
+    const seen = f.coord.stallObservationsSince(0);
+    expect(seen.ok && seen.rows.some((r) => (r.detail ?? '').startsWith('dead-coordinator-breaker-held:'))).toBe(true);
+    expect(stallNoticeCounts(seen.ok ? seen.rows : []).every((c) => c.sent === 0 && c.shadow === 0)).toBe(true);
   });
 });
 

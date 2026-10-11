@@ -115,7 +115,7 @@ import {
 import { expireArchived, expiryReviewing, learnExpiry, recordExpireFeed } from './coord/expireArchived.js';
 import {
   deadAnchorNext, deadCoordinatorAttention, deadCoordinatorBreaker,
-  deadCoordinatorBreakerKey, deadCoordinatorCrash, deadCoordinatorDue, deadCoordinatorEntry, deadCoordinatorJournal,
+  deadCoordinatorBreakerHeldKey, deadCoordinatorBreakerKey, deadCoordinatorCrash, deadCoordinatorDue, deadCoordinatorEntry, deadCoordinatorJournal,
   deadCoordinatorNextEntry, deadCoordinatorOutcomeKey, deadCoordinatorSighted, deadCoordinatorSince, deadCoordinatorThrew,
   type ClaimantDeadCause, type DeadAnchor, type DeadCoordinatorActOutcome, type DeadCoordinatorBreaker,
   type DeadCoordinatorBreakerMember, type DeadCoordinatorEntry, type DeadCoordinatorJournal, type DeadCoordinatorJournalTrust,
@@ -1167,7 +1167,9 @@ export class FleetWatcher {
   /** The expiry lane's clock and memory (wave 3b): its OWN — never the child lane's map, which wave 5's chip reads.
    *  Per archived workspace, `ArchivedExpiryEntry` (L1): the instant ccd gave for THIS archive, the twice-observed
    *  sighting, the last outcome (for change-only feed rows), the in-use and failure runs and the report. IN MEMORY
-   *  ONLY: a restart can only DELAY an expiry. */
+   *  ONLY (review 381, F10): a restart drops the +∞ rows and the process halt (`archivedExpiryBoxRefused`), so an armed
+   *  lane can ask again about a row it had stopped — each ask behind a fresh audit and ccd's in-lock re-proof. It
+   *  also restarts the twice-observed sighting and the hour's runs, which DELAY an expiry. */
   private lastArchivedExpirySweep = 0;
   private archivedExpiryState = new Map<string, ArchivedExpiryEntry>();
   /** ONE PASS AT A TIME. `tick()` dispatches the lane with `void`, and a pass whose audits and act outlast the cadence
@@ -1189,6 +1191,13 @@ export class FleetWatcher {
    *  (`breaker-remembers-its-cluster`); and the key of the trip its feed row last recorded. */
   private deadCoordinatorBreakerHeld: readonly DeadCoordinatorBreakerMember[] = [];
   private deadCoordinatorBreakerRecorded: string | null = null;
+  /** The held set SURVIVES A RESTART (review 381, F1): a `run_events` observation row (`recordDeadCoordinatorBreakerHeld`),
+   *  written whenever the set the lane hands to the next pass CHANGES, read back ONCE per process at the first pass that
+   *  reaches step three. `Seeded` is that once; `HeldKey` is the key of the set the record last carried (so an
+   *  unchanged set writes nothing), and `HeldRunId` the run that record sits on (where an empty set is written). */
+  private deadCoordinatorBreakerSeeded = false;
+  private deadCoordinatorBreakerHeldKey = '';
+  private deadCoordinatorBreakerHeldRunId: number | null = null;
   private deadCoordinatorAttentionList: readonly DeadCoordinatorAttention[] = [];
   /** The coordination serialiser's sweep handle (`CoordRoutesHandle.withSweepAbandon`), handed over by `buildServer`
    *  once `registerCoordRoutes` has built it. Until then the lane measures and records, and ends nothing. */
@@ -4252,6 +4261,21 @@ export class FleetWatcher {
       forget();
       return;
     }
+    // ...and, ONCE per process, the breaker's held set from its durable record (review 381, F1). A record this pass cannot
+    // read is a hold it cannot know: the lane measures, records and acts on NOTHING, and asks again next pass — never an
+    // empty seed, which would let a restart dissolve the very cluster the breaker exists to hold.
+    if (!this.deadCoordinatorBreakerSeeded) {
+      const seed = coord.deadCoordinatorBreakerHeldLatest();
+      if (!seed.ok) {
+        console.warn(`ccrc-server: sweepDeadCoordinators could not read the breaker's held set (${seed.detail}) — no decisions this pass`);
+        forget();
+        return;
+      }
+      this.deadCoordinatorBreakerHeld = seed.held;
+      this.deadCoordinatorBreakerHeldKey = deadCoordinatorBreakerHeldKey(seed.held);
+      this.deadCoordinatorBreakerHeldRunId = seed.runId;
+      this.deadCoordinatorBreakerSeeded = true;
+    }
     // FOUR — each claimant, measured by the reclaim door's own ladder, one at a time, through a tmux port that notes
     // a tmux that did not answer (a FLEET-wide doubt the breaker reads); then the journal clause for the dead ones in
     // ONE store read. A read that throws is `unreadable` for each of them — never "no history".
@@ -4327,7 +4351,9 @@ export class FleetWatcher {
     const breaker = deadCoordinatorBreaker(crashed, held, unmeasurable, ids.length,
       fleetDoubt.length === 0 ? null : fleetDoubt.join('; '), now);
     this.deadCoordinatorBreakerState = breaker;
+    const before = this.deadCoordinatorBreakerHeld;
     this.deadCoordinatorBreakerHeld = breaker.tripped ? breaker.members : [];
+    this.recordDeadCoordinatorBreakerHeldChange(coord, before, ids, now);
     const key = deadCoordinatorBreakerKey(breaker);
     if (breaker.tripped && key !== this.deadCoordinatorBreakerRecorded) {
       recordDeadCoordinatorBreaker({ coord, notifyLog: this.deps.notifyLog }, breaker);
@@ -4350,6 +4376,39 @@ export class FleetWatcher {
     }
     // EIGHT — the attention list, from the lane's memory and its breaker alone.
     this.deadCoordinatorAttentionList = deadCoordinatorAttention(this.deadCoordinatorState, this.deadCoordinatorBreakerState);
+  }
+
+  /** The breaker's held set, recorded when it CHANGED (review 381, F1) — in shadow too: a `coord.db` row, not a fleet act.
+   *  The carrier is any run that exists: for a set, the lowest open run a member coordinates; for an empty set, the run the
+   *  last record sits on, else a run any claimant in the population (the members `before` the change first) coordinates.
+   *  A write that cannot land (no carrier, the encoding cannot carry an id, a throw) is warned, leaves the key unchanged
+   *  so the next pass tries again, and leaves the in-memory hold standing for this process. */
+  private recordDeadCoordinatorBreakerHeldChange(
+    coord: CoordStore, before: readonly DeadCoordinatorBreakerMember[], ids: readonly string[], now: number,
+  ): void {
+    const held = this.deadCoordinatorBreakerHeld;
+    const key = deadCoordinatorBreakerHeldKey(held);
+    if (key === this.deadCoordinatorBreakerHeldKey) return;
+    try {
+      const candidates: number[] = [];
+      if (held.length === 0 && this.deadCoordinatorBreakerHeldRunId !== null) candidates.push(this.deadCoordinatorBreakerHeldRunId);
+      for (const id of [...held.map((m) => m.id), ...before.map((m) => m.id), ...ids]) {
+        const open = coord.openRunsClaimedBy(id);
+        if (open.ok && open.siblings.length > 0) { candidates.push(open.siblings[0]!.id); break; }
+      }
+      for (const runId of candidates) {
+        const w = coord.recordDeadCoordinatorBreakerHeld(runId, held, now);
+        if (w.recorded) {
+          this.deadCoordinatorBreakerHeldKey = key;
+          this.deadCoordinatorBreakerHeldRunId = runId;
+          return;
+        }
+        if (w.why === 'unencodable') break;
+      }
+      console.warn('ccrc-server: sweepDeadCoordinators could not record the breaker\'s held set — it stands in memory until the next pass');
+    } catch (err) {
+      console.warn(`ccrc-server: sweepDeadCoordinators could not record the breaker's held set (${err instanceof Error ? err.message : String(err)})`);
+    }
   }
 
   /** The act — or its shadow — for one due claimant, on the coordination serialiser. Its outcome, or `null` when it

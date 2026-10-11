@@ -339,6 +339,53 @@ export function deadCoordinatorBreaker(
 export const deadCoordinatorBreakerKey = (b: DeadCoordinatorBreaker): string | null =>
   b.tripped ? `${b.why}:${b.claimants.join(',')}` : null;
 
+// ── the breaker's hold, made durable (review 381, F1) ─────────────────────────
+
+/** The head of the `run_events` observation row that carries the breaker's held set across a restart (the stall watch's
+ *  "Durable dedupe, no migration" shape: `fromState = toState`, so nothing pushes it). After the head: the members as
+ *  `id@firstDeadAt`, comma-joined, ids ascending; an EMPTY list is the hold cleared. `parseStallDetail` reads any detail
+ *  with other than four colon-separated parts as null, and this one has two, so the stall count never sees it. */
+export const DEAD_COORDINATOR_BREAKER_HELD_HEAD = 'dead-coordinator-breaker-held:';
+
+/** A claimant id is a session id. The encoding's separators (`@`, `,`, and the head's `:`) are outside this set, so an
+ *  id that is not in it is NOT written (`null`), never escaped: the in-memory hold still stands for that process. */
+const BREAKER_HELD_ID = /^[A-Za-z0-9._-]+$/;
+
+/** The held set's detail, or `null` when a member cannot be carried exactly (an id outside the encoding's alphabet, or an
+ *  instant that is not a positive safe integer) or two members share an id. */
+export function deadCoordinatorBreakerHeldDetail(members: readonly DeadCoordinatorBreakerMember[]): string | null {
+  const sorted = [...members].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  for (let i = 0; i < sorted.length; i += 1) {
+    const m = sorted[i]!;
+    if (!BREAKER_HELD_ID.test(m.id) || !Number.isSafeInteger(m.firstDeadAt) || m.firstDeadAt < 1) return null;
+    if (i > 0 && sorted[i - 1]!.id === m.id) return null;
+  }
+  return `${DEAD_COORDINATOR_BREAKER_HELD_HEAD}${sorted.map((m) => `${m.id}@${m.firstDeadAt}`).join(',')}`;
+}
+
+/** A held-set detail split into its members' ids and UNPROVEN instant texts, strictly: the head, then nothing or
+ *  `id@digits` joined by commas with ids strictly ascending. Anything else is `null` — a malformed row, which the store
+ *  reads as a failed read, never as a smaller set. The store proves each instant (`persistedInt`). */
+export function splitDeadCoordinatorBreakerHeld(detail: string): { id: string; text: string }[] | null {
+  if (!detail.startsWith(DEAD_COORDINATOR_BREAKER_HELD_HEAD)) return null;
+  const body = detail.slice(DEAD_COORDINATOR_BREAKER_HELD_HEAD.length);
+  if (body === '') return [];
+  const out: { id: string; text: string }[] = [];
+  for (const part of body.split(',')) {
+    const at = part.split('@');
+    if (at.length !== 2) return null;
+    const [id, text] = at as [string, string];
+    if (!BREAKER_HELD_ID.test(id) || !/^[1-9][0-9]*$/.test(text)) return null;
+    if (out.length > 0 && !(out[out.length - 1]!.id < id)) return null;
+    out.push({ id, text });
+  }
+  return out;
+}
+
+/** The held set's key, for "write its record only when it CHANGES": the sorted `id@firstDeadAt` list. */
+export const deadCoordinatorBreakerHeldKey = (members: readonly DeadCoordinatorBreakerMember[]): string =>
+  [...members].map((m) => `${m.id}@${m.firstDeadAt}`).sort().join(',');
+
 // ── the act's answer, and the lane's memory ──────────────────────────────────
 
 /** One programme the act ended, or would end: its slug and the runs it closes. */
@@ -412,7 +459,10 @@ export type DeadCoordinatorReport =
        *  a worker). With no `runs` and no `error` this IS the report: an act a revive cut short. */
       readonly after?: DeadCoordinatorProgress };
 
-/** The lane's memory of one claimant — IN MEMORY ONLY (the anchor is the durable half): a restart can only delay. */
+/** The lane's memory of one claimant — IN MEMORY ONLY (the anchor is the durable half). A restart drops the run of
+ *  crashed passes, which DELAYS an act, and the backoff (`nextAskAt`, `attempts`), which can bring an abandon back
+ *  SOONER after a stuck or thrown act (review 381, F10); the act is still behind the claimant's re-measure before and
+ *  after the fleet act. The breaker's hold is not in this entry: it survives a restart (review 381, F1). */
 export interface DeadCoordinatorEntry {
   /** Consecutive passes that measured it crashed. */
   readonly crashedPasses: number;

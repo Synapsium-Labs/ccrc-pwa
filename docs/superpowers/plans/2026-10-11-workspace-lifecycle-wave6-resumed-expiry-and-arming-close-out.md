@@ -3600,6 +3600,7 @@ Named by slug, in the order the brief's numbers are written against them (the ca
 - **D-4630** — `a-shadow-row-over-a-standing-entry-says-this-pass` (Task 8) — a shadow feed row over a standing entry says that pass deleted nothing and an earlier attempt may have stopped part-way, never "nothing was deleted".
 - **D-4631** — `the-census-bounds-at-the-tombstone` (Task 9) — the census holds the expiry's `failed` `state-changed` producer before `_ws_tombstone`, where wave 5 bounded it at the breadcrumb.
 - **D-4632** — `before-arming-is-section-12` (Task 11) — the spec gains §12 "Before arming", per lane, with the open operator questions: words only.
+- **D-4820** — `the-breaker-hold-survives-a-restart` (fix round 1, F1) — the dead-coordinator breaker's held set is a `run_events` observation row (`dead-coordinator-breaker-held:` and the `id@firstDeadAt` members), written when it changes and read back once per process at the lane's first pass, where an unreadable row makes that pass act on nothing; no schema change, §5.4 and §12 say what a restart does, and two comments (review 381, F10) are made true.
 
 ## Deploy note
 
