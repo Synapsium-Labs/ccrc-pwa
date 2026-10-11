@@ -876,12 +876,16 @@ three keys under which it made the first sighting: its birth, its marker's run a
 sighting under an equal key is the second, and queues the release. A sighting under another key is a first sighting, and
 its key replaces whatever an earlier workspace of the id left, so the next sighting of this one is the second. Any other
 verdict, and a generation that cannot be read, delete the memory. One pure function decides which of the three a sighting
-is, and the lane applies it. The job carries the generation and reads it again after every other check, nearest the argv,
-because a same-run re-mint carries the same hold text, rendered from the same run, so the job's earlier comparisons pass
-it, and only the generation tells the two workspaces apart. A different value, or `absent` where there was a value,
-answers `changed`; an unreadable read answers `failed`. The gap from that read to ccd's unlink remains, because
-`ws-release` carries no token and no generation. Releasing the hold of a re-minted workspace that way cannot reclaim it,
-since its own minting run is live and the sweep answers `minting-run-open`.
+is, and the lane applies it. The job carries the generation and reads it again after every other check, nearest the argv. That read is defence in
+depth, and no earlier check leans on it. The job is queued only once the minting run is terminal, since `hold-retired`
+needs that, so the run cannot mint the slug again. A re-mint by any other run fails the first check, because the
+marker then names that other run, and a dispatch, which is what mints, runs under the coordination mutex. What the read
+still does is bind the release to the generation its sightings judged: a workspace they never judged, such as one made
+under a run id that was reused after coord.db was rebuilt, answers `changed`, never `released`. A different value, or
+`absent` where there was a value, answers `changed`; an unreadable read answers `failed`. The first check must not be
+loosened on the strength of this read. The gap from that read to ccd's unlink remains, because `ws-release` carries no
+token and no generation. Releasing the hold of a re-minted workspace that way cannot reclaim it, since its own minting
+run is live and the sweep answers `minting-run-open`.
 
 The lane runs on a pass that already reads the registry, so it costs one predicate rather than a new timer;
 the plan names which pass, under the constraint that it must not race the write routes.
