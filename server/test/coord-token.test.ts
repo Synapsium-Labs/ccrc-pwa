@@ -192,6 +192,17 @@ describe('deploy/notify.sh carries the token the way the server expects it', () 
     expect(m![1]).toBe(PLACEHOLDER_TOKEN);
   });
 
+  it('doctor\'s fleet reader holds the same placeholder literal (R.1, run 377)', () => {
+    // `ccd/ccrc-doctor-checks` reads a fleet token file whose value line is the shipped placeholder as
+    // `fleet-token-unusable`. Its literal is a copy of the authority in coord/token.ts, held the way notify.sh's
+    // is: read from the file text and compared, never a second copy typed here.
+    const doctor = readFileSync(path.join(repoRoot, 'ccd', 'ccrc-doctor-checks'), 'utf8');
+    const m = /^_BT_PLACEHOLDER='([^'\n]*)'$/m.exec(doctor);
+    expect(m, 'ccrc-doctor-checks has no _BT_PLACEHOLDER line').not.toBeNull();
+    expect(m![1]).toBe(PLACEHOLDER_TOKEN);
+    expect(doctor.match(/^_BT_PLACEHOLDER=/gm)).toHaveLength(1);
+  });
+
   it('starts with set +x +a, then umask 077, before any other statement (spec 4.9)', () => {
     // The first two lines of code after the shebang and before the first
     // comment, the shape ccd-pool-sync and ccd-update-sync carry: a token

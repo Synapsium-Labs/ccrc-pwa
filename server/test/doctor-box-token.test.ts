@@ -26,6 +26,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { TOKEN_HOLDS, OWED_REASONS, TOKEN_ORIGINS } from '../../shared/box-token.js';
 import { GENERATION_ID_HEX, NODE_FILES, TOKEN_SYNC_OP_ERRORS, TOKEN_TRANSPORTS } from '../../shared/agent-protocol.js';
 import { TOKEN_FILE_PROBLEMS } from '../../shared/box-token.js';
+import { PLACEHOLDER_TOKEN } from '../src/coord/token.js';
 import { DRIVER_TICK_MS, FAILURES_FOR_BANNER, PENDING_HARD_CAP, type BoxTokenState } from '../src/token/policy.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -260,6 +261,15 @@ const ROWS: Row[] = [
   { arm: 'fleet', word: 'fleet-token-absent', armedClass: 'FAIL', plant: (b) => rmSync(fleetFile(b)) },
   { arm: 'fleet', word: 'fleet-token-mode', armedClass: 'FAIL', plant: (b) => chmodSync(fleetFile(b), 0o640) },
   { arm: 'fleet', word: 'fleet-token-unusable', armedClass: 'FAIL', plant: (b) => writeFileSync(fleetFile(b), '# comment only\n', { mode: 0o600 }) },
+  // R.1 (run 377, Task R): the file `deploy/ccrc-mail.token.example` ships, copied and never edited, is no token.
+  // The comparison is on the trimmed value, the way `extractToken` trims (a BOM or a no-break space in front still
+  // reads as the placeholder, since the server's reader would call it the placeholder too).
+  { arm: 'fleet', word: 'fleet-token-unusable', label: 'fleet-token-unusable (the shipped placeholder)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(fleetFile(b), `# comment first\n${PLACEHOLDER_TOKEN}\n`, { mode: 0o600 }) },
+  { arm: 'fleet', word: 'fleet-token-unusable', label: 'fleet-token-unusable (the placeholder behind a BOM)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(fleetFile(b), Buffer.from(`\uFEFF${PLACEHOLDER_TOKEN}\n`), { mode: 0o600 }) },
+  { arm: 'fleet', word: 'fleet-token-unusable', label: 'fleet-token-unusable (the placeholder behind a no-break space)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(fleetFile(b), Buffer.from(`\u00A0${PLACEHOLDER_TOKEN}\u00A0\n`), { mode: 0o600 }) },
   { arm: 'fleet', word: 'no-generation', armedClass: 'WARN', plant: (b) => rmSync(dot(b, NODE_FILES.tokenGeneration)) },
   { arm: 'fleet', word: 'generation-malformed', armedClass: 'WARN', plant: (b) => writeFileSync(dot(b, NODE_FILES.tokenGeneration), 'not-an-id\n') },
   { arm: 'fleet', word: 'never-synced', armedClass: 'WARN', plant: (b) => rmSync(dot(b, 'token-sync.json')) },
@@ -368,6 +378,30 @@ describe('doctor box-token: a rotation answers a retired presentation (4552)', (
     const r = runCheck(b, armed());
     expect(r.stdout).toMatch(/remedy: .*this line clears when that rotation completes/);
     expect(r.stdout).not.toMatch(/resync that box/);
+  });
+});
+
+describe('doctor box-token: the placeholder fleet file (R.1)', () => {
+  it('armed, the sentence names the placeholder, not a missing value line; the server arm is untouched', () => {
+    const b = box({ role: 'fleet' });
+    writeFileSync(fleetFile(b), `# comment first\n${PLACEHOLDER_TOKEN}\n`, { mode: 0o600 });
+    const r = runCheck(b, armed());
+    expect(r.stdout).toContain('fleet: fleet-token-unusable — ');
+    expect(r.stdout).toContain('placeholder');
+    expect(r.stdout).not.toContain('carries no value line');
+    expect(r.stdout).not.toContain(PLACEHOLDER_TOKEN);
+  });
+
+  it('a server-role mail.token holding the placeholder is NOT read by this arm (it is the fleet reader\'s word)', () => {
+    const b = box({ role: 'server' });
+    writeFileSync(dot(b, 'mail.token'), `${PLACEHOLDER_TOKEN}\n`, { mode: 0o600 });
+    expect(runCheck(b, armed()).stdout).toBe(`PASS box-token: ${SERVER_PASS}\n`);
+  });
+
+  it('a real-looking value that merely starts like the placeholder is still ok', () => {
+    const b = box({ role: 'fleet' });
+    writeFileSync(fleetFile(b), `${PLACEHOLDER_TOKEN}-x\n`, { mode: 0o600 });
+    expect(runCheck(b, armed()).stdout).toBe(`PASS box-token: ${FLEET_PASS}\n`);
   });
 });
 

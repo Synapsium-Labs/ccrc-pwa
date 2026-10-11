@@ -7418,6 +7418,14 @@ _check_history() {
 # each check in its own `$( … )`, so it cannot leak; it writes nothing, so it sets no umask (a file-level
 # `umask 077` would reach every `--fix` writer).
 _BT_ARMS_ON=0
+# The value line `deploy/ccrc-mail.token.example` ships. A copy of `PLACEHOLDER_TOKEN` (`server/src/coord/token.ts`),
+# held to it by a text pin in `coord-token.test.ts`. The fleet reader only: a fleet file carrying it is no token.
+_BT_PLACEHOLDER='REPLACE-THIS-LINE-WITH-THE-OUTPUT-OF-openssl-rand--hex-32'
+# What `String.prototype.trim` strips beyond ASCII (`extractToken` trims with it), as byte sequences: no-break space,
+# BOM, U+1680, U+2000-200A, U+2028, U+2029, U+202F, U+205F, U+3000. Used only to compare a value line to the placeholder.
+_BT_UNI_WS=($'\xc2\xa0' $'\xef\xbb\xbf' $'\xe1\x9a\x80' $'\xe2\x80\x80' $'\xe2\x80\x81' $'\xe2\x80\x82' $'\xe2\x80\x83'
+  $'\xe2\x80\x84' $'\xe2\x80\x85' $'\xe2\x80\x86' $'\xe2\x80\x87' $'\xe2\x80\x88' $'\xe2\x80\x89' $'\xe2\x80\x8a'
+  $'\xe2\x80\xa8' $'\xe2\x80\xa9' $'\xe2\x80\xaf' $'\xe2\x81\x9f' $'\xe3\x80\x80')
 _BT_HOLDS=(update-in-flight agent-predates-op verb-missing stale-client fleet-rows node-id-unmeasured link-down pending-cap no-coord role-unrecorded mint-failed)
 _BT_OWED=(adopted fleet-behind confirm-deadline retired-written-back recovered aux-unusable unverifiable-files code-used claim-misbound retired-presented)
 _BT_ORIGINS=(adopted minted rotated)
@@ -7622,10 +7630,12 @@ _bt_age() {   # <seconds> -> "45 s", "12 min", "3 h", "2 d"
 }
 
 # <path> -> BT_TF: ok | absent | not-regular | unreadable | no-value, and BT_TF_MODE (octal, empty if unread).
+# Also BT_TF_PLACEHOLDER (1 when BT_TF is ok and the value line, trimmed as `extractToken` trims, is the shipped
+# placeholder; else 0). It is a measurement: only the fleet arm acts on it.
 # Absent is `! -e` AND `! -L`: a dangling link is present and not a regular file, never absent.
 _bt_value_file() {
-  local p="$1" line="" t=""
-  BT_TF=""; BT_TF_MODE=""
+  local p="$1" line="" t="" u="" w=""
+  BT_TF=""; BT_TF_MODE=""; BT_TF_PLACEHOLDER=0
   if [ ! -e "$p" ] && [ ! -L "$p" ]; then BT_TF=absent; return 0; fi
   if [ -L "$p" ] || [ ! -f "$p" ]; then BT_TF=not-regular; return 0; fi
   BT_TF_MODE="$(_plat_mode -- "$p" 2>/dev/null)" || BT_TF_MODE=""
@@ -7635,9 +7645,12 @@ _bt_value_file() {
     t="${line//[[:space:]]/}"
     [ -n "$t" ] || continue
     case "$t" in \#*) continue ;; esac
-    BT_TF=ok; break
-  done < "$p" 2>/dev/null || BT_TF=unreadable
-  line=""; t=""
+    BT_TF=ok
+    u="$t"; for w in "${_BT_UNI_WS[@]}"; do u="${u//"$w"/}"; done
+    [ "$u" = "$_BT_PLACEHOLDER" ] && BT_TF_PLACEHOLDER=1
+    break
+  done < "$p" 2>/dev/null || { BT_TF=unreadable; BT_TF_PLACEHOLDER=0; }
+  line=""; t=""; u=""
   return 0
 }
 
@@ -7656,6 +7669,7 @@ _bt_find() {
       case "$b" in
         not-regular) say="$a is not a regular file" ;;
         unreadable) say="$a cannot be read" ;;
+        placeholder) say="$a carries the placeholder value the example file ships, not a token" ;;
         *) say="$a carries no value line" ;;
       esac
       fix="look at what is there without printing it (ls -l $a); a file the server wrote is rewritten by its next rotation ($card)" ;;
@@ -7791,7 +7805,8 @@ _bt_fleet_arm() {   # <own-write: 0|1>
   _bt_value_file "$ff"
   case "$BT_TF" in
     absent) _bt_find fleet fleet-token-absent "$ff" ;;
-    ok) [ "$BT_TF_MODE" = 600 ] || _bt_find fleet fleet-token-mode "$ff" "${BT_TF_MODE:-unreadable}" ;;
+    ok) if [ "$BT_TF_PLACEHOLDER" = 1 ]; then _bt_find fleet fleet-token-unusable "$ff" placeholder
+        elif [ "$BT_TF_MODE" != 600 ]; then _bt_find fleet fleet-token-mode "$ff" "${BT_TF_MODE:-unreadable}"; fi ;;
     *) _bt_find fleet fleet-token-unusable "$ff" "$BT_TF" ;;
   esac
   if ! command -v python3 >/dev/null 2>&1; then _bt_find fleet sync-unreadable "$rep" no-python; return 0; fi
