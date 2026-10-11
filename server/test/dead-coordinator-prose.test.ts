@@ -53,6 +53,38 @@ describe('README: a coordinator that crashed', () => {
   });
 });
 
+describe('the spec says what a restart does to the dead-coordinator lane (review 381, F1)', () => {
+  const spec = flat('docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md');
+  it('§5.4: the breaker\'s hold survives, the run of passes restarts, and the lost backoff is the one thing that can bring an act sooner', () => {
+    const at = spec.indexOf('- **The attention list is the lane\'s own memory** (the expiry lane\'s shape)');
+    expect(at, '§5.4\'s attention-list bullet is there').toBeGreaterThan(-1);
+    const para = spec.slice(at, spec.indexOf('- **The lane never pushes.**', at));
+    expect(para.length, 'the bullet is bounded').toBeGreaterThan(100);
+    expect(para).not.toContain('never cause one');
+    for (const item of ['A restart keeps the breaker\'s hold', 'read back at the first pass', 'a record it cannot read makes that pass act on nothing',
+      'restarts the run of crashed passes, which delays an act', 'drops the backoff after a stuck or thrown act, the one thing that can bring an act sooner',
+      're-measure before and after the fleet act']) expect(para, item).toContain(item);
+  });
+  it('§5.4\'s breaker bullet names the record: a run_events observation row, written when the set changes, shadow included, no migration', () => {
+    const at = spec.indexOf('- **The breaker remembers.**');
+    expect(at).toBeGreaterThan(-1);
+    const para = spec.slice(at, spec.indexOf('- **One claimant a pass**', at));
+    for (const item of ['a `run_events` observation row', 'written whenever the held set changes, in shadow too', 'no new table or column',
+      'first-dead instants']) expect(para, item).toContain(item);
+  });
+  it('§12 says it per lane: the hold is the one thing a restart keeps, and the lost backoff can bring an abandon sooner', () => {
+    const at = spec.indexOf('- **Their memory is in memory.**');
+    expect(at, '§12\'s memory bullet is there').toBeGreaterThan(-1);
+    const para = spec.slice(at, spec.indexOf('- **`$REG/reclaim-paused` stops both lanes at once**', at));
+    expect(para).not.toContain('never cause one');
+    for (const item of ['The dead-coordinator breaker\'s hold is the one thing a restart keeps', 'a record the lane cannot read makes that pass act on nothing',
+      'releases on what releases it without a restart', 'the run of crashed passes starts again, which delays an act',
+      'a restarted lane can ask for that abandon SOONER than an unrestarted one would', 'still behind the claimant\'s re-measure before and after the fleet act']) {
+      expect(para, item).toContain(item);
+    }
+  });
+});
+
 describe('the skill corpora', () => {
   it('the coordinator’s resume runbook says, in WORDS, what an armed lane does to a programme whose coordinator stays dead', () => {
     const r = flat('ccd/coordinator-skill/references/resume.md');

@@ -651,14 +651,20 @@ each item is a departure named there).
 - **The breaker remembers.** It keeps each member's first-dead instant and releases a member only on evidence (alive,
   stopped, a deliberate act) or when it leaves the population, so one pass that cannot measure a member — which deletes
   that member's anchor — does not dissolve the cluster. "Fleet-wide" is what the pass measured: tmux not answering for
-  any claimant trips it whatever the count; a registry that will not list stops the tick before the lane runs.
+  any claimant trips it whatever the count; a registry that will not list stops the tick before the lane runs. The held
+  set is kept in `coord.db` as a `run_events` observation row (the stall watch's "Durable dedupe, no migration" shape: no
+  new table or column; `fromState = toState`, so nothing pushes it), written whenever the held set changes, in shadow
+  too, with each member's first-dead instants, and read back once per process at the first pass (review 381, F1).
 - **One claimant a pass**, the longest dead first, ARMED; in shadow every due claimant is recorded.
 - **The re-measure runs inside the arm.** A compare-and-set on `claimedBy` cannot see a revive of the same id, so the
   abandon arm re-measures the claimant immediately before each run's fleet act and again after it, before the commit;
   a revive that lands inside that last round trip is the residual. A re-measure that reads anything but a crash deletes
   the anchor, as a pass's would.
 - **The attention list is the lane's own memory** (the expiry lane's shape): would-end, unmeasured, stuck and the
-  breaker, rebuilt over the passes after a restart, which can delay an act and never cause one.
+  breaker, rebuilt over the passes after a restart. A restart keeps the breaker's hold (the record above, read back at
+  the first pass; a record it cannot read makes that pass act on nothing, and the next pass tries again), restarts the
+  run of crashed passes, which delays an act, and drops the backoff after a stuck or thrown act, the one thing that can
+  bring an act sooner. Every act is still behind the claimant's re-measure before and after the fleet act.
 - **The lane never pushes.** The stall watch notifies about a dead coordinator's stalled workers — r3
   (`coordinator-dead`) and, once its wave-2 arms are armed, `coord-deaf`, one push per worker, each naming the
   coordinator; this lane's feed rows (each with the claimant's first-dead instant, and one per breaker trip) are records
@@ -835,6 +841,13 @@ collects them.
   box said will not resume, the unreadable-breadcrumb row below), always behind the lane's own guard: for the expiry
   lane a fresh audit whose token ccd proves again inside its lock, for the dead-coordinator lane the claimant measured
   again before and after the fleet act; neither acts without it. A kept-leaf entry is lost with it (question (i)).
+  The dead-coordinator breaker's hold is the one thing a restart keeps: its held set is a `run_events` row in
+  `coord.db`, written when the set changes (in shadow too) and read back at the lane's first pass, and a record the lane
+  cannot read makes that pass act on nothing. It releases on what releases it without a restart: evidence that the
+  claimant is alive, stopped or was stopped on purpose, or the claimant leaving the population. For that lane a restart
+  also means the run of crashed passes starts again, which delays an act, and the backoff after a stuck or thrown act
+  (`nextAskAt`, `attempts`) is lost, so a restarted lane can ask for that abandon SOONER than an unrestarted one would:
+  the one way a restart can bring an act forward, still behind the claimant's re-measure before and after the fleet act.
 - **`$REG/reclaim-paused` stops both lanes at once**, shadow included: the cleanup row's toggle on `/runs`.
 
 **The expiry lane (`$REG/expire-lane-live`).**
