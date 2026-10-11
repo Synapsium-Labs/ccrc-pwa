@@ -1345,6 +1345,34 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     run 358's claim 1153. They are the doctor table's `box-token` row (:589) and one node-id sentence (about :537),
     disjoint from wave 6's three README hunks (about :3549, :3585 and :3789). The second lander merges main, re-points
     citations, and re-runs the session-hook citation cases and pools-prose's README numeral.
+- **2026-10-11 14:55 — run 358 wave-done (plain-ridge's 4230), re-measured; at `awaiting-review`; review run 381 opened and
+  dispatched.**
+  - **The claim:** Tasks 1–12 are done, and PR #351 is open at `6062388ba`.
+    - The first full run, at `e5fba53e0`, was red with server 623/626 files. Two reds were known; the third,
+      deviation-refs, was this wave's own. The plan's D entries in the shape `- **D-N** \`slug\`` are invisible to
+      ledger.ts's loose DEFINITION scan, so the worker rewrote the 16 entries as `- **D-N** — \`slug\``.
+    - **The worker's finding:** wave 5's 4480–4494, in the old shape, are invisible to that scan on `main` today. Sent
+      to review 381 to be measured and classified.
+    - The whole-branch review was ready with fixes and found nothing critical or important. The fix wave `4d2f7551d`
+      and `012f4ca68` addressed every item. The worker left the "never cause one" sentences elsewhere (§5.4 ~:660,
+      `deadCoordinator.ts:274`, `childReclaimSweep.ts:56`, `watch.ts:802/836`); review 381 classifies them.
+    - **Second lander:** merged main `d0c2b7803` as `6062388ba`, with two conflicts resolved keeping both sides. The
+      4209/4223 conditional is applied. Post-merge guards are green: single-definition 530, deviation-refs 31,
+      pools-prose 27, citations 5, cite-remeasure 147/196, tsc clean. No full suite was re-run after the merge; the PR's
+      CI is the arbiter.
+  - **Re-measured:**
+    - the branch, PR #351's head and the fingerprint are all `6062388ba`, OPEN and MERGEABLE;
+    - ONE merge, of main;
+    - 13 commits since the plan;
+    - 18 files, +1048/−138;
+    - `merge-tree` with main `d0c2b7803` is clean.
+    The run was still `dispatched`, so it was advanced `working`, then `awaiting-review`, with that fingerprint. The
+    evidence is copied to `.superpowers/sdd/coordinator-evidence/run358/`.
+  - **Review run 381** (`kind:'review'`, reviews 358, opened with the programme's own title). Its brief (6.2 KB) names
+    the held-out panel; (A) on both sides, including the absent key read exactly as main reads it and CCR-15's
+    conditions; (B)–(F) with rulings (l) and (n); §12's completeness; the left sentences and the ledger-scan finding for
+    classification; the merge; the scope; and sixteen-plus mutation rows.
+    Dispatched at 14:57 to `ccrc-pwa-keen-meadow` on the first try (`skillState: present`), with workflow on.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
