@@ -9,9 +9,11 @@
 //   - `true` means printed past the act's breadcrumb (the act had started),
 //     never that a breadcrumb stands now: a tail `purge-*` failure prints it
 //     after the row and its breadcrumb were purged;
-//   - `ws-expire`'s own pre-breadcrumb documents (its `probe-unmeasured`,
-//     `pin-failed` and `tombstone-unwritable`) carry NO key: its locked body is
-//     another programme's region and is not edited;
+//   - `ws-expire` says it on its own documents too (workspace lifecycle wave 6,
+//     question (k)): `false` on its fresh arm before its breadcrumb (its
+//     `probe-unmeasured`, `pin-failed`, `state-changed` and
+//     `tombstone-unwritable`), `true` on its resumed arm (its `probe-unmeasured`,
+//     printed while its `expire:` breadcrumb stands);
 //   - a breadcrumb that stands but cannot be read says nothing either way.
 // FIXTURE HOMEs ONLY: every ccd call runs through the harness, never against $HOME.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
