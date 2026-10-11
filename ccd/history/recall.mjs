@@ -13,7 +13,7 @@
 //
 // It reads no environment variable and has no entry guard: cli.mjs imports it.
 import {
-  EXIT, TREE_DEPTH_MAX, selectColumns, displayPrefixes, headerLine, scopeLag, recallEnvelope, capOutput, redactForDisplay,
+  EXIT, OUTPUT_CAP, TREE_DEPTH_MAX, selectColumns, displayPrefixes, headerLine, scopeLag, recallEnvelope, capOutput, redactForDisplay, redactFinal, readEnvelope, nextLine,
 } from './lib.mjs';
 import { childrenOf, parentOf } from './store.mjs';
 
@@ -141,6 +141,50 @@ function nodeLine(rc, n, level, show) {
   return `${'  '.repeat(level + 1)}${id} ${n.kind} depth=${n.depth} ${isoOf(n.earliest_ms)}..${isoOf(n.latest_ms)} ${body}`;
 }
 
+/** A complete JSON item for one retained node. Display redaction happens before JSON serialisation, then the
+ * delivery layer applies the final belt to the completed envelope. */
+function nodeItem(n, parentById, family, rc) {
+  const f = family.get(Number(n.session_pk));
+  return {
+    node_id: n.node_id, parent_id: parentById.get(n.node_id) ?? null, kind: n.kind, depth: Number(n.depth), status: n.status,
+    ccrc_id: f === undefined ? null : f.ccrcId, generation: f === undefined ? null : f.generation, epoch_seq: Number(n.epoch_seq),
+    earliest_ms: n.earliest_ms ?? null, latest_ms: n.latest_ms ?? null,
+    gist: typeof n.gist === 'string' ? redactForDisplay(n.gist, rc.pairIdx) : null,
+  };
+}
+
+/** The JSON scope mirrors cli.mjs's scopeJson exactly. */
+function jsonScope(rc) {
+  return {
+    kind: rc.scope.kind, id: rc.scope.id, project: rc.scope.project,
+    families: rc.scope.families.map((f) => ({ ccrc_id: f.ccrcId, generation: f.generation, first_seen_ms: f.firstSeenMs })),
+    transcripts: rc.scope.transcriptPks.length,
+  };
+}
+
+/** Render the actual final JSON representation whose length the cap promises. */
+function renderJson(rc, head, items, shown, total, next) {
+  return redactFinal(`${JSON.stringify(readEnvelope({
+    exit: EXIT.OK, storeId: rc.storeId, scope: jsonScope(rc),
+    header: { indexedThroughMs: head.indexedThroughMs, lagS: head.lagS }, items, shown, total,
+    next: next === null ? null : nextLine(next),
+  }))}\n`, rc.pairIdx);
+}
+
+/** The greatest complete item prefix that fits the final JSON envelope. Each check measures the exact string
+ * cli.mjs writes after redactFinal; monotonic binary search avoids rendering every candidate prefix of a large scope. */
+function jsonPrefixCount(rc, head, items, total, nextFor) {
+  const fits = (n) => renderJson(rc, head, items.slice(0, n), n, total, nextFor(n)).length <= OUTPUT_CAP;
+  let lo = 0;
+  let hi = items.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (fits(mid)) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
 /** `tree [--depth N]` (§8.4): per family, its confirmed epochs; per epoch, its top nodes (those no node
  *  condenses), each followed by its children down to `depth` levels. Each node shows a display prefix unique in
  *  the scope (minimum 6), its kind, its time range and its gist in an envelope. N counts every node in scope,
@@ -186,21 +230,33 @@ export function runTree(rc, a) {
     }
   }
   const capped = capOutput(out.map((o) => o.text), head.line.length + TREE_RESERVE);
-  const keptNodes = out.slice(0, capped.kept.length).filter((o) => o.node !== null).map((o) => o.node);
-  const firstRoot = keptNodes.find((n) => parentById.get(n.node_id) === null) ?? null;
-  let next = null;
-  if (capped.kept.length < out.length && a.depth > 1) next = ['tree', '--depth', '1', ...rc.scopeArgs];
-  else if (keptNodes.length < nodes.length && capped.kept.length === out.length && a.depth < TREE_DEPTH_MAX) {
-    next = ['tree', '--depth', String(a.depth + 1), ...rc.scopeArgs];
-  } else if (firstRoot !== null) next = ['describe', show(firstRoot.node_id), ...rc.scopeArgs];
-  const items = keptNodes.map((n) => {
-    const f = family.get(Number(n.session_pk));
-    return {
-      node_id: n.node_id, parent_id: parentById.get(n.node_id) ?? null, kind: n.kind, depth: Number(n.depth), status: n.status,
-      ccrc_id: f === undefined ? null : f.ccrcId, generation: f === undefined ? null : f.generation, epoch_seq: Number(n.epoch_seq),
-      earliest_ms: n.earliest_ms ?? null, latest_ms: n.latest_ms ?? null,
-      gist: typeof n.gist === 'string' ? redactForDisplay(n.gist, rc.pairIdx) : null,
-    };
-  });
-  return { exit: EXIT.OK, header: head.line, blocks: capped.kept, items, shown: keptNodes.length, total: nodes.length, next };
+  let retained = out.slice(0, capped.kept.length);
+  let keptNodes = retained.filter((o) => o.node !== null).map((o) => o.node);
+  const visibleNodes = out.filter((o) => o.node !== null).map((o) => o.node);
+  const candidateItems = keptNodes.map((n) => nodeItem(n, parentById, family, rc));
+  const humanCapped = capped.kept.length < out.length;
+  const depthOmitted = keptNodes.length < nodes.length && !humanCapped && a.depth < TREE_DEPTH_MAX;
+  const defaultNext = humanCapped
+    // Headings can consume the whole human budget, so the first visible root is the useful continuation.
+    ? ['describe', show(visibleNodes[keptNodes.length].node_id), ...rc.scopeArgs]
+    : depthOmitted
+      ? ['tree', '--depth', String(a.depth + 1), ...rc.scopeArgs]
+      : keptNodes.length > 0
+        ? ['describe', show(keptNodes[0].node_id), ...rc.scopeArgs]
+        : null;
+  const nextFor = (count) => count < candidateItems.length
+    ? ['describe', show(visibleNodes[count].node_id), ...rc.scopeArgs]
+    : defaultNext;
+  // JSON carries full ids, structural fields and unflattened escaped gists. Its final redacted envelope can be
+  // larger than the human blocks, so retain the common prefix that satisfies both representations.
+  const jsonCount = jsonPrefixCount(rc, head, candidateItems, nodes.length, nextFor);
+  // The mutation pin changes this comparison to false, restoring human-block-only retention.
+  if (jsonCount < keptNodes.length) {
+    const last = keptNodes[jsonCount - 1];
+    retained = last === undefined ? [] : retained.slice(0, retained.findIndex((o) => o.node === last) + 1);
+    keptNodes = keptNodes.slice(0, jsonCount);
+  }
+  const items = keptNodes.map((n) => nodeItem(n, parentById, family, rc));
+  const next = nextFor(keptNodes.length);
+  return { exit: EXIT.OK, header: head.line, blocks: retained.map((o) => o.text), items, shown: keptNodes.length, total: nodes.length, next };
 }

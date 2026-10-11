@@ -96,6 +96,29 @@ const answer = (r: CliRun): unknown[] => [r.code, r.json?.['reason']];
 interface ScopeJson { kind: string; families: { ccrc_id: string; generation: string; first_seen_ms: number }[]; transcripts: number }
 const scopeOf = (r: CliRun): ScopeJson => r.json?.['scope'] as ScopeJson;
 
+/** A direct, confirmed root node for output-cap tests. It keeps the test focused on rendering: derivation is
+ * separately covered above, while this test controls both root cardinality and gist representation precisely. */
+function seedRoots(box: HistoryBox, count: number, gist: (n: number) => string): string[] {
+  seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: turns(TA, 2) });
+  const db = new DatabaseSync(hist(box, 'db', 'history.db'));
+  try {
+    const family = db.prepare('SELECT session_pk FROM sessions WHERE ccrc_id = ? AND generation = ?').get(ID, G1) as { session_pk: number };
+    const epoch = db.prepare('SELECT seq FROM epochs WHERE session_pk = ? AND confirmed_ms IS NOT NULL ORDER BY seq LIMIT 1').get(family.session_pk) as { seq: number };
+    const transcript = db.prepare('SELECT transcript_pk FROM transcripts WHERE cc_session_uuid = ?').get(TA) as { transcript_pk: number };
+    const insert = db.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics,
+      summary_blob_id, boundary_entry_id, span_start_uuid, earliest_ms, latest_ms, src_chars, desc_count, desc_chars,
+      directive_flag, capped, parser_version, created_ms)
+      VALUES (?, ?, ?, ?, 'native_leaf', 0, 'fixture', ?, NULL, NULL, NULL, NULL, ?, ?, 0, 0, 0, 0, 0, 1, ?)`);
+    const ids: string[] = [];
+    for (let n = 1; n <= count; n += 1) {
+      const id = `L${n.toString(16).padStart(20, '0')}`;
+      ids.push(id);
+      insert.run(id, family.session_pk, epoch.seq, transcript.transcript_pk, gist(n), T0 + n, T0 + n, Date.now());
+    }
+    return ids;
+  } finally { db.close(); }
+}
+
 describe('C36, the Darwin row: a read verb answers 9 natively on macOS', () => {
   it.runIf(process.platform === 'darwin')('tree on macOS answers 9 before any identity', () => {
     const box = makeHistoryBox('ccrc-hist-rcl-darwin-');
@@ -436,8 +459,8 @@ describe('the read verbs: identity, §8.3\'s table, the read-only handle, the fa
     expect(json.shown).toBe(1);
   }, HEAVY);
 
-  it('tree depth one caps output honestly and gives an actionable next', () => {
-    const box = makeHistoryBox('ccrc-hist-rcl-cap-');
+  it('tree depth one truncates descendants and points to a deeper tree', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-depth-');
     seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: cycles(TA, 2_000) });
     expect(runSweep(box).code).toBe(0);
     const r = treeJson(box, ID, ['--depth', '1']);
@@ -445,6 +468,48 @@ describe('the read verbs: identity, §8.3\'s table, the read-only handle, the fa
     expect(Number(r.json?.shown)).toBeLessThan(Number(r.json?.total));
     expect(Number(r.json?.shown)).toBeGreaterThan(0);
     expect(String(r.json?.next)).toContain('history tree --depth 2');
+  }, HEAVY);
+
+  it('tree depth one caps independent roots with truthful counts and describes the first omitted root', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-root-cap-');
+    const ids = seedRoots(box, 1_000, (n) => `Current Work: independent root ${n}; ${'x'.repeat(90)}`);
+    const human = runCli(box, ['tree', '--depth', '1'], { env: withPane(box, ID) });
+    const json = treeJson(box, ID, ['--depth', '1']);
+    expect(human.code, human.stderr).toBe(0);
+    expect(json.code, json.stderr).toBe(0);
+    expect(human.stdout.length).toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+    expect(json.stdout.length).toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+    const items = json.json?.['items'] as { node_id: string }[];
+    const shown = Number(json.json?.['shown']);
+    const total = Number(json.json?.['total']);
+    expect(shown).toBe(items.length);
+    expect(shown).toBeLessThan(total);
+    expect(total).toBe(ids.length);
+    expect(items.map((x) => x.node_id)).toEqual(ids.slice(0, shown));
+    expect(human.stdout).toContain(`shown ${shown} of ${total}`);
+    const omitted = ids[shown]!;
+    expect(String(json.json?.['next'])).toContain(`history describe ${omitted}`);
+    expect(String(json.json?.['next'])).not.toContain(`history describe ${ids[0]}`);
+  }, HEAVY);
+
+  it('tree caps parseable JSON after its escaped gist and envelope overhead, retaining a deterministic root prefix', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-json-cap-');
+    const ids = seedRoots(box, 2_000, (n) => `Current Work: root ${n}${'\n'.repeat(40)}${'\\\\"<&>'.repeat(4)}`);
+    const human = runCli(box, ['tree', '--depth', '1'], { env: withPane(box, ID) });
+    const json = treeJson(box, ID, ['--depth', '1']);
+    expect(human.code, human.stderr).toBe(0);
+    expect(json.code, json.stderr).toBe(0);
+    expect(human.stdout.length).toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+    expect(json.stdout.length).toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+    expect(() => JSON.parse(json.stdout)).not.toThrow();
+    const items = json.json?.['items'] as { node_id: string }[];
+    const shown = Number(json.json?.['shown']);
+    const total = Number(json.json?.['total']);
+    expect(items.length).toBe(shown);
+    expect(shown).toBeLessThan(total);
+    expect(total).toBe(ids.length);
+    expect(items.map((x) => x.node_id)).toEqual(ids.slice(0, shown));
+    expect(String(json.json?.['next'])).toContain(`history describe ${ids[shown]}`);
   }, HEAVY);
 
   it('tree applies display redaction before escaping in human and JSON gists', () => {
