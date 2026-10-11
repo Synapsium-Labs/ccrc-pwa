@@ -295,11 +295,11 @@ describe('the close reads coordination history itself — has-coordinated, and a
     expect(b.handed).toEqual([]);
   });
 
-  it('K5d: a session that never coordinated never reads the mirror for this question — a throwing create read still queues', async () => {
+  it('K5d: a session that never coordinated never reads the mirror for this question — a throwing birth read still queues', async () => {
     const b = build();
     const id = b.dispatched(ID);
     b.seed(ID, String(id));
-    b.coord.lifecycleCreatesFor = () => { throw new Error('the mirror is unreadable'); };
+    b.coord.lifecycleBirthEventsFor = () => { throw new Error('the mirror is unreadable'); };
     const out = await closeRun(b.deps, id, { intent: 'abandon' }, 'operator');
     expect(out).toMatchObject({ ok: true, childReclaim: 'queued' });
   });

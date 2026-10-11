@@ -23,6 +23,7 @@ import type { CcdPrLine } from '../prstate.js';
 import type { DeadCoordinatorStop, SweepFleetAct } from '../deadCoordinator.js';
 import {
   CHILD_RECLAIM_FEED_QUIET_NONE, CHILD_RECLAIM_LICENCE_NONE, childReclaimDecision, childReclaimHasCoordinated, childReclaimRowListing,
+  childReclaimRowUuid,
   type ChildReclaimDecision, type ChildReclaimMinting, type ChildReclaimNotWhy, type ChildReclaimRequest,
   type ChildReclaimReviewed,
 } from './childReclaim.js';
@@ -774,7 +775,10 @@ async function childGateAtClose(
   // after the mark/minting checks, never ahead of them.
   let hasCoordinated: boolean | 'unreadable';
   try {
-    hasCoordinated = childReclaimHasCoordinated(deps.coord, sessionId, Date.now());
+    // The birth is told the row this mark read read (spec §5.6): its own unfinished purge never unplaces it.
+    // An unplaced birth with an earlier claim declines `has-coordinated` here. That is fail-safe: the sweep
+    // judges the child again on its next pass.
+    hasCoordinated = childReclaimHasCoordinated(deps.coord, sessionId, Date.now(), read.found ? childReclaimRowUuid(read.record) : null);
   } catch (err) {
     console.warn(`ccrc-server: the coordination fence (childReclaimHasCoordinated) failed at close `
       + `(${err instanceof Error ? err.message : String(err)}) — ${sessionId}'s coordination history unreadable`);

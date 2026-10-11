@@ -502,7 +502,8 @@ export type ChildReclaimSkipRow =
  *    `not-a-workspace`'s ends with the same phrase, and the two minting-run words say, directly
  *    before it, that a rebuilt database may have left workers running.
  *  - `doubt`: a read that failed, or one that placed no birth for the child
- *    (`child-birth-unplaced`: the mirror holds no dated creation of the workspace), so the sweep
+ *    (`child-birth-unplaced`: the mirror holds no dated creation of the workspace, or a removal
+ *    journaled after its creation that no newer creation has replaced yet), so the sweep
  *    left the child alone and reads again next pass. The chip reads `deferred`, which the switch
  *    turns to `paused`; it never reaches the banner or the kept feed row.
  *  - `held`: a hold stands. Read as `deferred` like a doubt; it never reaches the banner, and
@@ -545,8 +546,9 @@ export const CHILD_RECLAIM_SKIP = {
   'hold-unmeasured': { class: 'doubt', sentence:
     'Whether this workspace’s hold belongs to its own programme could not be read, so the hold is treated as standing. The sweep reads it again on its next pass.' },
   'child-birth-unplaced': { class: 'doubt', sentence:
-    'The lifecycle journal holds no dated creation of this workspace, so nothing proves the run its child marker names made it. '
-    + 'The sweep leaves it alone and looks for that creation again on its next pass.' },
+    'The lifecycle journal holds no dated creation of this workspace, or a removal journaled after its creation '
+    + 'that ccrc has not yet seen replaced by a newer creation, so nothing proves the run its child marker names made it. '
+    + 'The sweep leaves it alone and looks again on its next pass.' },
   'minting-run-unreadable': { class: 'doubt', sentence:
     'The run this workspace’s child marker names could not be read from the coordination database. The sweep reads it again on its next pass.' },
   'reviewed-run-unreadable': { class: 'doubt', sentence:

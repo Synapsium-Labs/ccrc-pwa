@@ -1297,15 +1297,16 @@ describe('CHILD_RECLAIM_SKIP — every skip word classed exactly once, with its 
   });
 
   // An unplaced birth is doubt, not kept: the lane places the birth afresh on every judging pass, so the
-  // word ends once the mirror holds a dated `create` for the workspace, with no person acting. Its
-  // sentence keeps the fact it could not prove and says the sweep looks again; it never says ccrc leaves
-  // the child for a person.
+  // word ends once the mirror holds a dated `create` for the workspace that no purge but the row's own
+  // follows, with no person acting. Its sentence names both causes (no dated creation, or a removal after
+  // it not yet replaced) and says the sweep looks again; it never says ccrc leaves the child for a person.
   it('child-birth-unplaced is doubt: its sentence says what could not be placed and that the sweep looks again', () => {
     expect(CHILD_RECLAIM_SKIP['child-birth-unplaced'].class).toBe('doubt');
     expect(isChildReclaimKeptWord('child-birth-unplaced')).toBe(false);
     expect(sentenceOf('child-birth-unplaced')).toBe(
-      'The lifecycle journal holds no dated creation of this workspace, so nothing proves the run its child marker names made it. '
-      + 'The sweep leaves it alone and looks for that creation again on its next pass.');
+      'The lifecycle journal holds no dated creation of this workspace, or a removal journaled after its creation '
+      + 'that ccrc has not yet seen replaced by a newer creation, so nothing proves the run its child marker names made it. '
+      + 'The sweep leaves it alone and looks again on its next pass.');
   });
 
   it('a classed word says its sentence, an ordinary word has none, and an apostrophe is the curly one', () => {

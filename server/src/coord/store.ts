@@ -78,7 +78,7 @@ import {
   type AskState,
   type ClaimConflict, type ClaimState, type ClaimSummary,
   type CoordCaps, type DeviationAllocation, type DeviationAllocState,
-  type LifecycleAct, type LifecycleGap, type LifecycleGapReason,
+  type LifecycleAct, type LifecycleGap, type LifecycleGapReason, type LifecycleOutcome,
   type MailDeliveryState, type MailGate,
   type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
   type NotifyEvent, type PeerDeliverable, type ProgramState,
@@ -1524,6 +1524,27 @@ function childReclaimDisplacedHeirCandidates(detail: string): string[] | null {
     out.push(body.slice(i + 4));
   }
   return out;
+}
+
+/** The acts the birth read returns (spec §5.1's birth; spec §5.6, slugs recycle). `create` opens a generation,
+ *  and `purge` is the one removal. Every removal of a row ends in ccd's `_reg_purge`, which journals `purge done`
+ *  BEFORE it unlinks the row's files, and that line carries the row's `meas.uuid`. `collect` never purges: it
+ *  removes the leftover temp root of a row that is already gone. So it is not here, by construction. The
+ *  runtime list derives from the map. */
+export type LifecycleBirthAct = Extract<LifecycleAct, 'create' | 'purge'>;
+const LIFECYCLE_BIRTH_ACT: Readonly<Record<LifecycleBirthAct, true>> = { create: true, purge: true };
+const LIFECYCLE_BIRTH_ACTS = Object.keys(LIFECYCLE_BIRTH_ACT) as LifecycleBirthAct[];
+const isLifecycleBirthAct = (v: string): v is LifecycleBirthAct =>
+  Object.prototype.hasOwnProperty.call(LIFECYCLE_BIRTH_ACT, v);
+
+/** One row of the birth read: a `done` `create` or `done` `purge` of one session. `id` is the mirror's own row id
+ *  (ingest order, never ccd's clock). `at` is ccd's clock. `uuid` is the line's `meas.uuid`, or null when the
+ *  line carried none. */
+export interface LifecycleBirthEvent {
+  readonly id: number;
+  readonly act: LifecycleBirthAct;
+  readonly at: number | null;
+  readonly uuid: string | null;
 }
 
 /**
@@ -5767,20 +5788,20 @@ export class CoordStore {
     return rows.map((r) => CoordStore.reviveLifecycleRow(r));
   }
 
-  /** One session's `create` rows ALONE, oldest-first, UNCAPPED by
-   *  `LIFECYCLE_PAGE_MAX` (child-reclamation wave 4, spec §5.1's birth fence):
-   *  a failing child's ordinary window (`lifecycleFor`, 500 rows) scrolls past
-   *  its own opening `create` in days of retried refusals, and the run-id fence
-   *  needs that row for the LIFE of the workspace, not for as long as it fits
-   *  a page. Bounded to one ACT: `lifecycle_by_session` is `(sessionId, id)`,
-   *  so this still walks every row of the session (filtering `act` after the
-   *  index narrows to the session) rather than a narrower index on `act`
-   *  itself — a cost bound on the SESSION, not the whole table, and never
-   *  the oldest `create` either, which would skip every recycled slug
-   *  (spec §5.6): `childReclaimGeneration`, this read's one caller, is what
-   *  narrows "every create this session ever had" down to the CURRENT
-   *  generation's own opening row. Same column set, same reviver, as
-   *  `lifecycleFor` — `reviveLifecycleRow` is the one definition both share. */
+  /** One session's `create` rows ALONE, oldest-first, UNCAPPED by `LIFECYCLE_PAGE_MAX` (child-reclamation wave 4,
+   *  spec §5.9).
+   *  - Why uncapped: a failing child's ordinary window (`lifecycleFor`, 500 rows) scrolls past its own opening
+   *    `create` in days of retried refusals, and the attention list's generation needs that row for the LIFE
+   *    of the workspace.
+   *  - Its one caller is the sweep's attention rows (`childReclaimAttentionGenerationRows`), which merge it into
+   *    the window. The birth reads `lifecycleBirthEventsFor` instead, which adds the `purge` rows (spec §5.1,
+   *    §5.6).
+   *  - Cost: bounded to one ACT. `lifecycle_by_session` is `(sessionId, id)`, so this still walks every row of
+   *    the session (it filters `act` after the index narrows to the session), not a narrower index on `act`.
+   *    The bound is on the SESSION, never the whole table.
+   *  - It never answers the oldest `create`, which would skip every recycled slug (spec §5.6).
+   *    `childReclaimGeneration` cuts "every create this session ever had" down to the CURRENT generation.
+   *  - Same column set and same reviver as `lifecycleFor`: `reviveLifecycleRow` is the one definition both share. */
   lifecycleCreatesFor(sessionId: string): MirroredLifecycleEvent[] {
     const c = CoordStore.LC_COLS;
     const act: LifecycleAct = 'create';
@@ -5794,6 +5815,36 @@ export class CoordStore {
       obsJson: string | null; decJson: string | null; measJson: string | null; raw: string;
     }[];
     return rows.map((r) => CoordStore.reviveLifecycleRow(r));
+  }
+
+  /** THE ONE SPELLING of `lifecycleBirthEventsFor`'s statement. It is public so that its test reads the text this
+   *  method runs: the hint is present, and the plan seeks. `INDEXED BY lifecycle_by_session` is
+   *  `childReclaimEventsSql`'s idiom: the table is never pruned, so this read costs one session's own history. */
+  static readonly LIFECYCLE_BIRTH_EVENTS_SQL =
+    'SELECT id, act, at, measJson FROM lifecycle_events INDEXED BY lifecycle_by_session ' +
+    `WHERE sessionId = ? AND act IN (${placeholders(LIFECYCLE_BIRTH_ACTS.length)}) AND outcome = ? ` +
+    'ORDER BY id ASC';
+
+  /** The birth's rows for one session (spec §5.1, §5.6): every `done` `create` and every `done` `purge`, oldest
+   *  first by the mirror's own `id`.
+   *  - UNCAPPED, like `lifecycleCreatesFor` and for its reason: the opening create must stay findable for the
+   *    life of the workspace.
+   *  - A refused or intent row of either act is not returned. A refused ws-add minted nothing, and an intent
+   *    without its done never completed.
+   *  - It decides nothing. Which create opens the generation, and which purge follows it, is
+   *    `childReclaimBornAt`'s decision.
+   *  - It throws when the statement returns an act it never asked for. Every caller already reads a throw as
+   *    unreadable. */
+  lifecycleBirthEventsFor(sessionId: string): readonly LifecycleBirthEvent[] {
+    const done: LifecycleOutcome = 'done';
+    const rows = this.db.prepare(CoordStore.LIFECYCLE_BIRTH_EVENTS_SQL).all(sessionId, ...LIFECYCLE_BIRTH_ACTS, done) as
+      { id: number; act: string; at: number | null; measJson: string | null }[];
+    return rows.map((r) => {
+      if (!isLifecycleBirthAct(r.act)) {
+        throw new Error(`lifecycleBirthEventsFor: the statement returned act ${JSON.stringify(r.act)}, which it never asks for`);
+      }
+      return { id: r.id, act: r.act, at: r.at, uuid: reviveMeas(jsonOrNull(r.measJson))?.uuid ?? null };
+    });
   }
 
   /** The reviver `lifecycleFor` and `lifecycleCreatesFor` share, extracted so

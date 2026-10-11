@@ -86,7 +86,8 @@ import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
 import { refusalSentence } from './wsaudit.js';
 import {
-  childMarkLeftListing, childReclaimBornAt, childReclaimGeneration, childReclaimGenerationRead, childReclaimLatest, childReclaimTokenKind, reclaimChild,
+  childMarkLeftListing, childReclaimBornAt, childReclaimGeneration, childReclaimGenerationRead, childReclaimLatest, childReclaimRowUuid,
+  childReclaimTokenKind, reclaimChild,
   recordChildReclaimKeptFeed, releaseRetiredChildHold, type ChildReclaimOutcome, type ChildReclaimReleaseOutcome,
   type ChildReclaimReleaseRequest, type ChildReclaimRequest,
 } from './coord/childReclaim.js';
@@ -3537,19 +3538,14 @@ export class FleetWatcher {
           // is not proof of that same correspondence — it could equally be a
           // coincidence with a run this rebuilt database never actually
           // minted this workspace with. The child's own birth is the OPENING
-          // `create` of its current generation — `lifecycleCreatesFor` is
-          // uncapped, so a failing child's `create` is findable for the life
-          // of the workspace, never just for as long as it fits a page (the
-          // birth fence's own reason `lifecycleCreatesFor` exists rather than
-          // reusing `lifecycleFor` here). `childReclaimGeneration` over a
-          // CREATE-ONLY list answers a single-row slice whose one element IS
-          // that opening row — a generation is a contiguous slice of ONE
-          // array, so its first element, when the slice is non-empty, is
-          // always index 0, whatever the fence would otherwise have sliced
-          // around it. Placed through `childReclaimBornAt`, the ONE placement
-          // this fence, the coordination fence and the entry's own `bornAt`
-          // all read.
-          childBornAt = childReclaimBornAt(coord, r.id, now);
+          // `create` of its current generation, unless a `purge` that is not
+          // this row's own follows it (spec §5.1, §5.6). It is read uncapped
+          // by `lifecycleBirthEventsFor`, so a failing child's `create` is
+          // findable for the life of the workspace. It is placed through
+          // `childReclaimBornAt`, the ONE placement that this fence, the
+          // coordination fence and the entry's own `bornAt` all read, and it
+          // is told this row's uuid.
+          childBornAt = childReclaimBornAt(coord, r.id, now, childReclaimRowUuid(r));
         } catch (err) {
           // `node:sqlite` throws synchronously; an unread run is not an
           // absent one. Every read this try attempted is discarded together —
@@ -3893,9 +3889,8 @@ export class FleetWatcher {
    *  (rare — the mirror's own dedupe degrades to its raw bytes for exactly
    *  that row) may appear twice, which costs `childReclaimGeneration`
    *  nothing: a duplicate boundary answers the same boundary. The birth
-   *  fence (above, in the per-child loop) does NOT use this — it reads
-   *  `lifecycleCreatesFor` alone, where a single-row generation IS the
-   *  opening create, and merging in window rows would only cost a query. */
+   *  (above, in the per-child loop) does NOT use this: it reads
+   *  `lifecycleBirthEventsFor` through `childReclaimBornAt`. */
   private childReclaimAttentionGenerationRows(coord: CoordStore, sessionId: string): MirroredLifecycleEvent[] {
     const window = coord.lifecycleFor({ sessionId });
     const creates = coord.lifecycleCreatesFor(sessionId);

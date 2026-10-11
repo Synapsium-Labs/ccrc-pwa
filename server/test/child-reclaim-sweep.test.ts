@@ -1983,7 +1983,7 @@ describe('one entry describes one workspace generation (spec §5.6, §5.7)', () 
     f.abandon(r2);                                            // its minting run is terminal by the first pass that lists it
     for (const n of readdirSync(reg)) if (n.startsWith('demo-a.')) rmSync(path.join(reg, n));
     f.plant('demo-a', { uuid: 'u-demo-a-2', child: String(r2.id) }, { create: false });   // removed and re-minted in one pass
-    expect(childReclaimBornAt(f.coord, 'demo-a', f.now()), 'the birth still reads the old workspace\'s').toBe(T0);
+    expect(childReclaimBornAt(f.coord, 'demo-a', f.now(), 'u-demo-a-2'), 'the birth still reads the old workspace\'s').toBe(T0);
     await f.pass();
     expect(f.requests, 'a fresh first sighting asks nothing').toHaveLength(15);
     f.next(); await f.pass();
@@ -2027,7 +2027,7 @@ describe('the coordination fence at the lane — a claim counts only in the chil
     for (let k = 1; k < n; k += 1) { f.next(); await f.pass(); }
   };
   /** The fence's own answer for demo-a now — what the verdict's `coordinating` is decided from. */
-  const fenced = (f: ReturnType<typeof fixture>): boolean => childReclaimHasCoordinated(f.coord, 'demo-a', f.now());
+  const fenced = (f: ReturnType<typeof fixture>): boolean => childReclaimHasCoordinated(f.coord, 'demo-a', f.now(), 'u-demo-a');
 
   it('K4a: a recycled slug whose last claim ended before this generation was born is reclaimed — two passes, one request', async () => {
     const f = fixture();

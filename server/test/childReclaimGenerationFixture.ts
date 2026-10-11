@@ -99,6 +99,9 @@ export interface LaneOpts {
   readonly visible?: (id: string) => boolean;
   /** Runs after EVERY `readFileMeasured` the server makes, with its path, so a case can re-mint at an exact read. */
   readonly afterRead?: (p: string) => void;
+  /** Replaces the REAL executor (additive). The rig still records each request and its
+   *  answer in `requests` and `outcomes`. Absent: the real executor on the watcher's queue, as before. */
+  readonly exec?: (req: ChildReclaimRequest) => ChildReclaimOutcome | Promise<ChildReclaimOutcome>;
 }
 
 /** ONE journal uid and cursor counter for every rig in a test file. A second rig over the same coord.db
@@ -145,7 +148,7 @@ export const laneFixture = (opts: LaneOpts = {}) => {
     ...base, cfg, io, coord, fleetState, presence, monotonicMs: () => mono,
     childReclaimExec: async (req: ChildReclaimRequest): Promise<ChildReclaimOutcome> => {
       requests.push(req);
-      const o = await base.queue.run(req.sessionId, () => reclaimChild(
+      const o = opts.exec !== undefined ? await opts.exec(req) : await base.queue.run(req.sessionId, () => reclaimChild(
         { coord, io, cfg, runCcd: base.runCcd, fleetState, presence }, req));
       outcomes.push(o);
       return o;
@@ -184,6 +187,16 @@ export const laneFixture = (opts: LaneOpts = {}) => {
   /** The SAME row with its generation re-minted: a same-run re-mint, in the window where only the
    *  generation tells it apart (spec §5.6). */
   const remint = (id: string, g: string): void => { writeFileSync(path.join(reg, `${id}.generation`), g); };
+  /** One ccd journal line for `id`, mirrored at the rig's wall clock. `over` is spread last, so
+   *  `{ meas: { uuid } }` carries `_reg_purge`'s uuid and `{ at }` sets the line's own clock. */
+  const journal = (id: string, act: string, outcome: string, over: Readonly<Record<string, unknown>> = {}): void => {
+    uidN += 1;
+    const line = JSON.stringify({ uid: `w8.1.${uidN}`, at: clock, act, outcome, id, ...over });
+    coord.ingestJournal({ gen: '1790000000000000000', rows: [parseJournalLine(line)], cursor: uidN * 200,
+      size: uidN * 200, at: clock });
+  };
+  /** Moves the wall clock and the monotonic clock together, by `ms`. */
+  const advance = (ms: number): void => { clock += ms; mono += ms; };
   const listing = async () => ({ records: await readRegistry(io, cfg), names: readdirSync(reg) });
   const sweepOn = async (l: Awaited<ReturnType<typeof listing>>): Promise<void> => {
     await watcher.sweepChildReclaim(l.records, l.names);
@@ -192,6 +205,6 @@ export const laneFixture = (opts: LaneOpts = {}) => {
   const next = (): void => { clock += CHILD_RECLAIM_SWEEP_MS + 1; mono += CHILD_RECLAIM_SWEEP_MS + 1; };
   const releases = (): string[][] => calls.filter((c) => c[0] === 'ws-release');
   return { reg, coord, watcher, calls, requests, outcomes, queue: base.queue, plant, openRun, abandon,
-    finishedChild, remint, listing, sweepOn, pass, next, releases };
+    finishedChild, remint, listing, sweepOn, pass, next, releases, journal, advance };
 };
 export type Lane = ReturnType<typeof laneFixture>;

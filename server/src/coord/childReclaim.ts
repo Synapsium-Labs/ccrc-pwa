@@ -6,7 +6,7 @@ import type { Deps } from '../server.js';
 import type { Presence } from '../presence.js';
 import type { NotifyLog } from '../notifylog.js';
 import { CCD_ARGV, RECLAIM_CAP, capSupported, sweepDec, verbSupported } from '../ccdargv.js';
-import { readSessionRecord } from '../registry.js';
+import { readSessionRecord, type SessionRecord } from '../registry.js';
 import { refusalSentence } from '../wsaudit.js';
 import { CHILD_BIRTH_SKEW_MS, type ChildSpentVerdict } from './childSpent.js';
 import {
@@ -140,9 +140,10 @@ const RECLAIM_ACT: LifecycleAct = 'reclaim';
  *  `done` is a create that never completed.
  *
  *  THE ONE IMPLEMENTATION. The sweep's attention list calls it with `at` =
- *  now; the birth fence calls it over `lifecycleCreatesFor` alone, so its
- *  single-row answer is the opening `create` itself; wave 5's run chip
- *  imports it and calls it with `at` = the run's `closedAt`.
+ *  now; the birth (`childReclaimBornAt`) opens at the same create over the
+ *  birth read's rows, and `child-reclaim-birth-removal.test.ts` holds the two
+ *  equal; wave 5's run chip imports it and calls it with `at` = the run's
+ *  `closedAt`.
  *  `child-reclaim-generation.test.ts` scans for a second. */
 export function childReclaimGeneration(
   events: readonly MirroredLifecycleEvent[], at: number,
@@ -182,20 +183,68 @@ export function childReclaimLatest(events: readonly MirroredLifecycleEvent[]): M
   return null;
 }
 
-/** The birth fence's birth (spec §5.1): the opening `create` of the session's CURRENT generation, on ccd's
- *  clock; null when unplaceable. The one placement the birth fence and the coordination fence share. */
+/** The listed row's current `.uuid`, as the birth's own-purge test reads it (spec §5.1, §5.6). It is the measured
+ *  value, or null when this read could not measure the uuid. A caller with no row at all passes null too.
+ *  Both nulls are handled ONE way: every `purge` counts, which is the doubt direction. Only the uuid's own doubt
+ *  matters here. Another identity field's does not. */
+export function childReclaimRowUuid(rec: Pick<SessionRecord, 'uuid' | 'unmeasured'>): string | null {
+  return rec.unmeasured.includes('uuid') ? null : rec.uuid;
+}
+
+/** The birth (spec §5.1): the opening `create` of the session's CURRENT generation, on ccd's clock, or null when
+ *  it cannot be placed. It is the one placement shared by the birth fence, the coordination fence and the sweep
+ *  entry's `bornAt`.
+ *
+ *  THE OPENING CREATE is the placed `done` create (`at !== null`, `at <= nowMs`) with the highest mirror id. That
+ *  is the create `childReclaimGeneration` opens the generation at, over the same creates.
+ *
+ *  A REMOVAL UNPLACES IT (spec §5.6: slugs recycle). A recycled slug's new `create` can be missing from the mirror
+ *  while its row and marker are already listed: it is not ingested yet, or its `at` is ahead of this server's
+ *  clock. The older generation's create would then stand in for the birth. So the answer is null (doubt) when a
+ *  `purge` FOLLOWS the opening create, which means all three of these hold:
+ *  - its mirror id is higher. The id orders, never `at`.
+ *  - ccd's own clock does not place it first: NOT (`purge.at !== null && purge.at < create.at`). A purge with a
+ *    null `at` counts, because doubt is the safe direction. ccd always stamps `at`, so only a hand-written or
+ *    foreign line reaches that arm.
+ *  - it is not the row's OWN purge. ccd journals `purge done` BEFORE it unlinks the row, so a purge that died
+ *    mid-way, or one that stopped at rc 3, leaves this same generation's row listed with its own purge after its
+ *    own create. A purge whose `uuid` equals `rowUuid` leaves the birth placed: the sweep asks again, and ccd
+ *    resumes from its breadcrumb. A purge with no `uuid` counts, and so does every purge when `rowUuid` is null.
+ *
+ *  DOWNSTREAM, A STATED RESIDUAL. An unplaced birth makes any earlier numeric coordinator claim read
+ *  "coordinated" (`childReclaimCoordinated` keeps a child whose birth is null).
+ *  - The sweep never shows it, because its `child-birth-unplaced` check comes first.
+ *  - The executor's step 2a defers `siblings-open`, close declines `has-coordinated`, and the release job answers
+ *    `changed`.
+ *  Each of the three is the safe direction, and each ends once the new create is placed. */
 export function childReclaimBornAt(
-  coord: Pick<CoordStore, 'lifecycleCreatesFor'>, sessionId: string, nowMs: number,
+  coord: Pick<CoordStore, 'lifecycleBirthEventsFor'>, sessionId: string, nowMs: number, rowUuid: string | null,
 ): number | null {
-  return childReclaimGeneration(coord.lifecycleCreatesFor(sessionId), nowMs)[0]?.at ?? null;
+  const events = coord.lifecycleBirthEventsFor(sessionId);
+  let openId = Number.NEGATIVE_INFINITY;
+  let openAt: number | null = null;
+  for (const e of events) {
+    if (e.act === 'create' && e.at !== null && e.at <= nowMs && e.id > openId) { openId = e.id; openAt = e.at; }
+  }
+  if (openAt === null) return null;
+  const createAt = openAt;
+  for (const e of events) {
+    if (e.act !== 'purge' || e.id <= openId) continue;
+    if (e.at !== null && e.at < createAt) continue;        // ccd's own clock places it before the create
+    if (rowUuid !== null && e.uuid === rowUuid) continue;   // the row's own unfinished purge
+    return null;
+  }
+  return createAt;
 }
 /** THE reader for one session (spec §1 rule 4). Throws when a store read throws; each caller keeps its own
- *  unreadable answer. */
+ *  unreadable answer. `rowUuid` is the uuid of the row the caller read (`childReclaimRowUuid`), passed through to
+ *  the birth. */
 export function childReclaimHasCoordinated(
-  coord: Pick<CoordStore, 'childReclaimCoordinatorClaims' | 'lifecycleCreatesFor'>, sessionId: string, nowMs: number,
+  coord: Pick<CoordStore, 'childReclaimCoordinatorClaims' | 'lifecycleBirthEventsFor'>, sessionId: string,
+  nowMs: number, rowUuid: string | null,
 ): boolean {
   return childReclaimCoordinated(coord.childReclaimCoordinatorClaims().get(sessionId),
-    () => childReclaimBornAt(coord, sessionId, nowMs), CHILD_BIRTH_SKEW_MS);
+    () => childReclaimBornAt(coord, sessionId, nowMs, rowUuid), CHILD_BIRTH_SKEW_MS);
 }
 
 /** Why a reclaim did not happen YET. The server's own reasons first, then the
@@ -969,7 +1018,7 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   // unreadable `openRunsForSession` — never silently treated as "never
   // coordinated".
   try {
-    if (childReclaimHasCoordinated(deps.coord, sessionId, (deps.now ?? Date.now)())) {
+    if (childReclaimHasCoordinated(deps.coord, sessionId, (deps.now ?? Date.now)(), childReclaimRowUuid(read.record))) {
       return deferred('siblings-open', `${sessionId} has coordinated run(s)`);
     }
   } catch (err) {
@@ -1368,7 +1417,7 @@ export async function releaseRetiredChildHold(
   // `hold-retired` is never `changed` here on a claim an earlier workspace
   // under the same slug made.
   try {
-    if (childReclaimHasCoordinated(deps.coord, sessionId, (deps.now ?? Date.now)())) return 'changed';
+    if (childReclaimHasCoordinated(deps.coord, sessionId, (deps.now ?? Date.now)(), childReclaimRowUuid(read.record))) return 'changed';
   } catch (err) {
     console.warn(`ccrc-server: releaseRetiredChildHold: re-reading ${sessionId}'s coordination history failed `
       + `(${err instanceof Error ? err.message : String(err)})`);
