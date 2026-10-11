@@ -616,7 +616,9 @@ describe('doctor box-token: the shell spellings are pinned to L0', () => {
     expect(at, 'the box-token block marker moved: re-point the pin').toBeGreaterThanOrEqual(0);
     return src.slice(at);
   };
-  /** Every bracket class whose admitted set is hex digits (and `-`) and holds at least one hex letter, in any spelling:
+  /** Every QUANTIFIED bracket class (one followed by `{n}` or `{n,m}`; a class with no such quantifier is not seen, and
+   *  neither is a hex shape spelled some other way, such as a `\x` escape or a literal alternation) whose admitted set is
+   *  hex digits (and `-`) and holds at least one hex letter, however the class spells that set:
    *  ranges, listed letters, `\d`, `[:digit:]`, `[:xdigit:]`, a `\-` literal, bare or inside `(?:…)`, in the block's code
    *  lines, less the exact `[0-9a-f]{64}` digest spelling (a different thing); a 4th spelling in another class reds (review
    *  of fix 1; review 365 R3). The class body admits `[` only as a `[:name:]`, so the bash `[[ "$g" =~ ^[0-9a-f]{16}$ ]]`

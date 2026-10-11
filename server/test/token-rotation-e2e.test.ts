@@ -366,12 +366,12 @@ describe('F1 (review 362): the view never claims a current value the holder does
 
   // R2 (review 365): the server-role rig above has `bothWriter: null`, so it can only see the `current` arm of the view's
   // fleetConfirmed. The same sequence on a both-role rig reaches the `own-write` arm, which must be gated on the holder too.
-  // The first both rig starts from a hand-made value (as D-4414 F2 does): on an empty both home boot's first mint owes
-  // nothing, so no own-write promotion would ever happen. Its first tick adopts and promotes by own-write.
+  // The first both rig starts on an empty home: boot mints a value, and its first tick promotes it by own-write (the
+  // precondition below measures that, so it is not assumed). An earlier draft planted a hand-made value first, on the
+  // belief that an empty both home never reaches own-write; measured 2026-10-11 (review 375 F7), it does, and the
+  // plant is gone because it did nothing for the row, which reds under M6 with or without it.
   it.skipIf(isRoot)('a both box with history whose boot mint fails: no own-write confirmation of a value the holder does not hold (R2, review 365)', async () => {
     const home = mkTmp('ccrc-token-e2e-r2-');
-    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
-    writeFileSync(path.join(home, '.ccrc', 'mail.token'), `${'e'.repeat(64)}\n`, { mode: 0o600 });
     const ctl = { off: 0, writerFails: false };
     const b = await bothAt(home, ctl);
     await b.driver.tick();
