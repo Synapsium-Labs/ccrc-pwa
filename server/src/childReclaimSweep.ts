@@ -24,9 +24,10 @@ import {
  *  absent: the PWA's terminal drawer opens a real `tmux attach`, so a phone
  *  that locks with the drawer open would wedge a child forever, and the only
  *  exit would be a human detaching from a sub-workspace — rule 4 inverted by
- *  its own safeguard. The same span caps the failure backoff and is how long
- *  a run of failures lasts before the child is listed (spec §5.9: "kept
- *  failing past the defer ceiling"). */
+ *  its own safeguard. The same span caps the ORDINARY failure ramp
+ *  (`childReclaimBackoffMs`), is the persistent tier's first wait
+ *  (`childReclaimTierPaceMs`), and is how long a run of failures lasts before
+ *  the child is listed (spec §5.9: "kept failing past the defer ceiling"). */
 export const CHILD_RECLAIM_DEFER_CEILING_MS = 15 * 60_000;
 
 /** The defers the ceiling bounds: the server's per-session visibility claim
@@ -56,7 +57,10 @@ export interface ChildReclaimAsk {
 
 /** The sweep's memory of one marked child. IN MEMORY ONLY: a restart loses
  *  it, and losing it can only DELAY a reclaim, or retry a failing one sooner —
- *  never cause one. TWO deferral clocks, never folded into one, because they
+ *  never cause one. The persistent tier is the one part a first sighting reads
+ *  back: it is seeded from the mirror's current generation
+ *  (`childReclaimTierSeed`), so a lost memory costs a tier child one extra ask,
+ *  never a fresh tier wait and never a fall back to the ordinary ramp. TWO deferral clocks, never folded into one, because they
  *  answer two questions: how long has this child been waiting (any deferral —
  *  spec §5.9 shows a deferral "with its elapsed time"), and how long has a
  *  continuous PRESENCE episode kept it (the only thing the 15-minute ceiling
@@ -123,7 +127,7 @@ export interface ChildReclaimAsk {
  *  answer stays within the gap bound, an answer settles before the next pass,
  *  no wall-clock step or suspend falls in the lease, and this memory is not
  *  cleared. A breach of any of those forfeits the lease and fails closed. */
-export interface ChildReclaimSweepEntry {
+export interface ChildReclaimSweepEntry extends ChildReclaimTierState {
   /** When this child was first sighted eligible (monotonic). */
   readonly firstEligibleAt: number;
   /** The FIRST deferral of ANY kind the sweep saw — what each request carries
@@ -192,15 +196,17 @@ export interface ChildReclaimSweepEntry {
 
 /** A child seen eligible for the first time, in the workspace generation born
  *  at `bornAt`, marked by run `markerRunId` and carrying the registry generation
- *  `generation`: no clock, no failure, never asked. `monoMs` is the lane's
- *  monotonic clock. */
+ *  `generation`: no clock, no failure, never asked, and on the persistent tier
+ *  as `tier` seeds it (`childReclaimTierSeed`; none by default). `monoMs` is the
+ *  lane's monotonic clock. */
 export const childReclaimFirstSighting = (
   monoMs: number, bornAt: number | null, markerRunId: number, generation: ChildReclaimGenerationKey,
+  tier: ChildReclaimTierState = CHILD_RECLAIM_TIER_NONE,
 ): ChildReclaimSweepEntry => ({
   firstEligibleAt: monoMs, firstDeferredAt: null, firstPresenceDeferredAt: null, lastPresenceDeferredAt: null,
   lastPresenceWallAt: null, presenceHeldSince: null,
   consecutiveFailures: 0, lastFailedAt: null, refusedAt: null, lastAskedAt: null, bornAt, markerRunId, generation,
-  lastDeferWhy: null,
+  lastDeferWhy: null, ...childReclaimTierOf(tier),
 });
 
 /** Are two generation keys the same generation (spec §5.5)? A value matches an EQUAL value, byte for byte, and
@@ -694,13 +700,22 @@ export function childReclaimKeptVerdicts(
   return new Map([...verdicts].filter(([, v]) => isChildReclaimKeptVerdict(v)));
 }
 
-/** The executor's outcome, as far as this memory needs it. STRUCTURAL:
- *  wave 3's `ChildReclaimOutcome` is assignable to it without this file
- *  importing `coord/childReclaim.ts` (an L3/L4 module). */
+/** The executor's outcome, as far as this memory needs it. Projected from
+ *  wave 3's `ChildReclaimOutcome` by `childReclaimSweepOutcomeOf`
+ *  (`coord/childReclaim.ts`), which this file cannot import (an L3 module).
+ *  A `failed` answer carries ccd's own word (`token`, null where ccd named
+ *  none) and whether that word is in the stuck class (`stuck`), so the
+ *  persistent tier is decided here, from the answer alone. */
 export type ChildReclaimSweepOutcome =
-  | { readonly kind: 'reclaimed' | 'gone' | 'failed' }
+  | { readonly kind: 'reclaimed' | 'gone' }
+  | { readonly kind: 'failed'; readonly token: string | null; readonly stuck: boolean }
   | { readonly kind: 'refused'; readonly token: string }
   | { readonly kind: 'deferred'; readonly why: string };
+
+/** How the lane writes a REJECTED request (spec §5.7): as a failure. A
+ *  rejection is a defect the executor could not name, so it carries no word,
+ *  and it leaves the persistent tier exactly as it stands. */
+export const CHILD_RECLAIM_SWEEP_REJECTED: ChildReclaimSweepOutcome = { kind: 'failed', token: null, stuck: false };
 
 /** How far apart two presence-class answers of one CONTINUOUS episode may be
  *  (the later answer's ARRIVAL from the earlier one's REQUEST), and how far
@@ -740,6 +755,9 @@ const childReclaimPresenceWithin = (entry: ChildReclaimSweepEntry, now: ChildRec
  *  ceiling. A FAILURE counts one more in the run and stamps when it was
  *  asked. A DEFERRAL ends any run of failures and clears `refusedAt`, and
  *  starts the any-kind clock once.
+ *
+ *  The persistent tier (spec §5.9, `childReclaimTierAfterFailure`) moves only
+ *  on a failure, ends on a refusal, and is kept by a deferral.
  *
  *  The PRESENCE clock is an EPISODE (spec §5.7). Every outcome other than a
  *  presence-class deferral ends it, so `failed` (a rejected request among
@@ -781,13 +799,14 @@ export function childReclaimNextEntry(
     case 'reclaimed': case 'gone': return null;
     case 'failed':
       return {
-        ...entry, consecutiveFailures: entry.consecutiveFailures + 1, lastFailedAt: ask.at.monoMs,
+        ...entry, ...childReclaimTierAfterFailure(entry, outcome.token, outcome.stuck),
+        consecutiveFailures: entry.consecutiveFailures + 1, lastFailedAt: ask.at.monoMs,
         firstPresenceDeferredAt: null, lastPresenceDeferredAt: null, lastPresenceWallAt: null, presenceHeldSince: null,
         refusedAt: null, lastAskedAt: ask.at.monoMs, lastDeferWhy: null,
       };
     case 'refused':
       return {
-        ...entry, consecutiveFailures: 0, lastFailedAt: null,
+        ...entry, ...CHILD_RECLAIM_TIER_NONE, consecutiveFailures: 0, lastFailedAt: null,
         firstPresenceDeferredAt: null, lastPresenceDeferredAt: null, lastPresenceWallAt: null, presenceHeldSince: null,
         refusedAt: ask.at.monoMs, lastAskedAt: ask.at.monoMs, lastDeferWhy: null,
       };
@@ -799,6 +818,9 @@ export function childReclaimNextEntry(
       // the lease: an unlicensed presence answer keeps the child in line or puts it at the back,
       // EXCEPT that a holder whose answer does not continue its episode forfeits
       const inLine = presence && !ask.licensed && (continues || !ask.asHolder);
+      // THE PERSISTENT TIER STANDS (spec §5.9): `...entry` keeps its membership, its word, j and its run. The ramp
+      // is cleared exactly as it always was (`consecutiveFailures`, `lastFailedAt`), so a deferred tier child is due
+      // on its next pass, and the presence lease, its episode and its licence are unchanged (spec §5.7).
       return {
         ...entry,
         firstDeferredAt: entry.firstDeferredAt ?? ask.at.wallMs,                                                // WALL: display only
@@ -834,30 +856,106 @@ export const childReclaimDeferExpired = (entry: ChildReclaimSweepEntry, now: Chi
   && now.monoMs - entry.firstPresenceDeferredAt >= CHILD_RECLAIM_DEFER_CEILING_MS   // the span: the MONOTONIC clock alone
   && childReclaimPresenceWithin(entry, now, passIntervalMs);                         // freshness: the larger of the two clocks
 
-/** The wait after `consecutiveFailures` failed attempts in a row (spec §5.9:
- *  "retries back off in between"): `min(ceiling, passInterval × 2^k)` — two
+/** The ORDINARY failure ramp (spec §5.9: "retries back off in between"):
+ *  `min(ceiling, passInterval × 2^k)` after k failed attempts in a row — two
  *  intervals after the first failure, doubling, never longer than the
- *  ceiling, so a child that keeps failing is still asked for at least once a
- *  ceiling. `0` with no failure. */
+ *  ceiling. `0` with no failure. A child on the PERSISTENT TIER waits longer
+ *  (`childReclaimFailureWaitMs`), up to `CHILD_RECLAIM_TIER_CAP_MS`. Neither
+ *  wait has an unbounded arm, so a child that keeps failing is always asked
+ *  again. */
 export function childReclaimBackoffMs(consecutiveFailures: number, passIntervalMs: number): number {
   if (consecutiveFailures <= 0) return 0;
   return Math.min(CHILD_RECLAIM_DEFER_CEILING_MS, passIntervalMs * 2 ** consecutiveFailures);
 }
 
+/** THE PERSISTENT TIER (spec §5.9, "the persistent tier"). The ordinary ramp
+ *  asks a child whose every attempt fails about once a ceiling, for ever. A
+ *  word that will not heal by itself gains nothing at that pace but feed and
+ *  journal rows. Such a word is a tree ccd proved is not the child's own (the
+ *  stuck class), or the same failure word time after time.
+ *
+ *  ENTRY: a `stuck` answer (the class `coord/childReclaim.ts` spells once, carried here on the answer), or the
+ *  `CHILD_RECLAIM_TIER_ENTRY_RUN`-th consecutive failure carrying the SAME countable word. EXIT: a reclaim, a
+ *  gone row, any refusal, or a failure with a different countable word. A failure whose word is NOT countable
+ *  (`childReclaimTierCountable`: none, or a pre-lock die's, both of which hit every child alike) neither enters,
+ *  counts, advances nor ends it, because those are exactly the failures the journal records as no word, or
+ *  never at all, and the restart seed must read back what the memory held. A deferral keeps it. PACE:
+ *  `childReclaimTierPaceMs(j)`, where `j = max(0, run − K)`, the same j the restart seed derives, so a restarted
+ *  process paces a child exactly as the one that died would have. Every count is in this memory. No clock
+ *  decides membership.
+ *
+ *  A stated cost: a cure that is not the child's own (a fleet update, say) is picked up only at the tier's next
+ *  ask, up to `CHILD_RECLAIM_TIER_CAP_MS` later. */
+export const CHILD_RECLAIM_TIER_ENTRY_RUN = 4;
+/** The persistent tier's longest wait: four hours. Finite on purpose, so the tier never stops asking. */
+export const CHILD_RECLAIM_TIER_CAP_MS = 4 * 3600_000;
+
+/** One child's place on the persistent tier. Part of `ChildReclaimSweepEntry`, and in memory only like it. */
+export interface ChildReclaimTierState {
+  /** On the tier: its failure wait is `childReclaimTierPaceMs(tierJ)`, never the ordinary ramp alone. */
+  readonly tier: boolean;
+  /** The countable word of the current run of failures, or null with no such run. */
+  readonly tierToken: string | null;
+  /** The tier's exponent, `max(0, tierRun − CHILD_RECLAIM_TIER_ENTRY_RUN)` on the tier, else 0. */
+  readonly tierJ: number;
+  /** Consecutive failures carrying `tierToken`, counting through deferrals and uncountable failures. */
+  readonly tierRun: number;
+}
+
+export const CHILD_RECLAIM_TIER_NONE: ChildReclaimTierState = { tier: false, tierToken: null, tierJ: 0, tierRun: 0 };
+
+/** Does this failure word count toward the tier? A word ccd named, and not a pre-lock die's. */
+export const childReclaimTierCountable = (token: string | null): token is string =>
+  token !== null && !isChildReclaimPreLockToken(token);
+
+/** The tier fields alone, so a spread never carries the rest of an entry. */
+export function childReclaimTierOf(t: ChildReclaimTierState): ChildReclaimTierState {
+  return { tier: t.tier, tierToken: t.tierToken, tierJ: t.tierJ, tierRun: t.tierRun };
+}
+
+/** The ONE derivation of membership and j from a run, shared by the live memory and the restart seed. */
+function childReclaimTierFrom(token: string | null, run: number, stuck: boolean): ChildReclaimTierState {
+  const tier = stuck || run >= CHILD_RECLAIM_TIER_ENTRY_RUN;
+  return { tier, tierToken: token, tierJ: tier ? Math.max(0, run - CHILD_RECLAIM_TIER_ENTRY_RUN) : 0, tierRun: run };
+}
+
+/** The tier after one failed answer. */
+export function childReclaimTierAfterFailure(t: ChildReclaimTierState, token: string | null, stuck: boolean): ChildReclaimTierState {
+  if (!stuck && !childReclaimTierCountable(token)) return childReclaimTierOf(t);   // neutral: the tier stands
+  const run = token !== null && token === t.tierToken ? t.tierRun + 1 : 1;         // a different word starts a run
+  return childReclaimTierFrom(token, run, stuck);
+}
+
+/** The tier's wait after a failure: `min(CHILD_RECLAIM_TIER_CAP_MS, ceiling × 2^j)`. Finite for EVERY input. A
+ *  non-positive or non-numeric j reads 0, the ceiling, and an overflowing one reads the cap. */
+export function childReclaimTierPaceMs(j: number): number {
+  const e = j > 0 ? j : 0;
+  return Math.min(CHILD_RECLAIM_TIER_CAP_MS, CHILD_RECLAIM_DEFER_CEILING_MS * 2 ** e);
+}
+
+/** The wait after the last failure, the ONE number `childReclaimDue`'s backoff reads: the ordinary ramp, or on
+ *  the tier its pace. The pace starts at the ceiling, which the ramp never exceeds, so it is never shorter than
+ *  the ramp (spec §5.7: pacing is only ever slower). */
+export function childReclaimFailureWaitMs(entry: ChildReclaimSweepEntry, passIntervalMs: number): number {
+  return entry.tier ? childReclaimTierPaceMs(entry.tierJ) : childReclaimBackoffMs(entry.consecutiveFailures, passIntervalMs);
+}
+
 /** Has the failure backoff passed? Always with no failure on record;
- *  otherwise only once `childReclaimBackoffMs` has elapsed since the failed
- *  attempt's pass — at EXACTLY the backoff, yes. Private: `childReclaimDue`
+ *  otherwise only once `childReclaimFailureWaitMs` has elapsed (the ordinary
+ *  ramp, or the persistent tier's pace) since the failed attempt's pass — at
+ *  EXACTLY the backoff, yes. Private: `childReclaimDue`
  *  is the one question a caller outside this file asks (spec §5.9's second
  *  pacing, the terminal-refusal wait, is not a failure and this predicate
  *  alone cannot see it — see `childReclaimDue`). */
 const childReclaimBackoffOver = (entry: ChildReclaimSweepEntry, monoMs: number, passIntervalMs: number): boolean =>
   entry.lastFailedAt === null
-  || monoMs - entry.lastFailedAt >= childReclaimBackoffMs(entry.consecutiveFailures, passIntervalMs);
+  || monoMs - entry.lastFailedAt >= childReclaimFailureWaitMs(entry, passIntervalMs);
 
 /** May the lane ask for this child again — THE ONE "may I ask" question a
  *  caller outside this file uses, folding BOTH pacings this memory tracks
- *  (spec §5.9): the failure backoff (above), and — separately — a TERMINAL
- *  refusal's own wait, never sooner than the defer ceiling after `refusedAt`.
+ *  (spec §5.9): the failure backoff (above, the persistent tier's pace
+ *  included), and — separately — a TERMINAL refusal's own wait, never
+ *  sooner than the defer ceiling after `refusedAt`.
  *  The refusal wait exists because the executor's answer and the lifecycle
  *  mirror's ingest of the same refusal are two different writers on two
  *  different clocks: the mirror may not have the line yet, or (a `ws-audit`
@@ -1022,6 +1120,54 @@ export function childReclaimJournalRow(
     }
   }
   return { sessionId: latest.id, outcome: latest.outcome, refusal: latest.refusal, at: latest.at, failingSince, detail: latest.detail };
+}
+
+/** THE PERSISTENT TIER'S RESTART SEED (spec §5.9). The memory is lost on a restart, a raised switch, a missing
+ *  capability, a mirror fail-shut and every pass that does not find the child eligible. So every first sighting
+ *  reads the tier back from ccd's own journal of the CURRENT generation:
+ *  - it walks back over `reclaim` lines, reading past `intent`s and other acts;
+ *  - it reads past a `refused` line whose word `kindOf` classes neither `terminal` nor `gone`: a box retry
+ *    refusal, which the executor answers as a deferral that KEEPS the tier, or a word this build cannot classify,
+ *    which it answers as a failure naming no word (neutral). ccd journals every refusal, so without this a
+ *    restart would read a shorter run than the memory held;
+ *  - it reads past a failure line whose word is not countable, as the memory is neutral to it;
+ *  - it counts the latest run of one countable word, and ends at any other outcome or another word.
+ *  Membership and j come from `childReclaimTierFrom`, the live memory's own derivation. The caller leaves
+ *  `lastFailedAt` null, so a seeded child is asked once on its next due pass, and its tier pace applies from that
+ *  answer on. A lost memory costs one extra ask, never a fresh wait.
+ *
+ *  `generation` is `childReclaimGeneration(events, now)`'s slice. It is read only when its opening `create` is
+ *  `bornAt`, the birth the new entry describes, so another workspace's rows never seed this one. No birth seeds
+ *  nothing. No clock is read: ccd's `at` places nothing here. `stuckOf` is the stuck class and `kindOf` wave 3's
+ *  token kind, both injected (`isChildReclaimStuckToken`, `childReclaimTokenKind`; this file imports L0 alone).
+ *  Two residuals:
+ *  - The slice can be windowed short (`lifecycleFor`'s page), which only makes a run look younger.
+ *  - A recycled slug's rows are read before its new `create` is placed.
+ *  Each affects pacing only. */
+export function childReclaimTierSeed(
+  generation: readonly MirroredLifecycleEvent[], bornAt: number | null, stuckOf: (token: string) => boolean,
+  kindOf: (token: string) => ChildReclaimTokenKind | null,
+): ChildReclaimTierState {
+  const opening = generation[0];
+  if (bornAt === null || opening === undefined || opening.at !== bornAt) return CHILD_RECLAIM_TIER_NONE;
+  let token: string | null = null;
+  let run = 0;
+  for (let k = generation.length - 1; k >= 0; k -= 1) {
+    const e = generation[k]!;
+    if (e.act !== RECLAIM_ACT || e.outcome === INTENT) continue;
+    if (e.outcome === REFUSED && e.refusal !== null && !isChildReclaimPreLockToken(e.refusal)) {
+      const kind = kindOf(e.refusal);
+      // a box retry refusal (the executor's deferral, which keeps the tier) or a word this build cannot classify
+      // (a word-less failure, neutral): the live memory's tier stands through both, so the walk reads past them
+      if (kind !== 'terminal' && kind !== 'gone') continue;
+    }
+    if (!childReclaimFailureLine(e)) break;
+    if (!childReclaimTierCountable(e.refusal)) continue;
+    if (token !== null && e.refusal !== token) break;
+    token = e.refusal;
+    run += 1;
+  }
+  return token === null ? CHILD_RECLAIM_TIER_NONE : childReclaimTierFrom(token, run, stuckOf(token));
 }
 
 /** THE reading of "this child stands under a TERMINAL refusal": its latest

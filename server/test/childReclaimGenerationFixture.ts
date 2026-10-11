@@ -203,6 +203,10 @@ export const laneFixture = (opts: LaneOpts = {}) => {
   };
   /** Moves the wall clock and the monotonic clock together, by `ms`. */
   const advance = (ms: number): void => { clock += ms; mono += ms; };
+  /** Moves both clocks so the monotonic one reads `m`. */
+  const advanceTo = (m: number): void => { advance(m - mono); };
+  /** The lane's memory of one child, as the watcher holds it. */
+  const entryOf = (id: string) => watcher.currentChildReclaimDefers().get(id);
   const listing = async () => ({ records: await readRegistry(io, cfg), names: readdirSync(reg) });
   const sweepOn = async (l: Awaited<ReturnType<typeof listing>>): Promise<void> => {
     await watcher.sweepChildReclaim(l.records, l.names);
@@ -211,6 +215,7 @@ export const laneFixture = (opts: LaneOpts = {}) => {
   const next = (): void => { clock += CHILD_RECLAIM_SWEEP_MS + 1; mono += CHILD_RECLAIM_SWEEP_MS + 1; };
   const releases = (): string[][] => calls.filter((c) => c[0] === 'ws-release');
   return { reg, coord, watcher, calls, requests, outcomes, queue: base.queue, plant, openRun, abandon,
-    finishedChild, remint, listing, sweepOn, pass, next, releases, journal, advance, home, now: () => clock };
+    finishedChild, remint, listing, sweepOn, pass, next, releases, journal, advance, home, now: () => clock,
+    advanceTo, mono: () => mono, entryOf };
 };
 export type Lane = ReturnType<typeof laneFixture>;

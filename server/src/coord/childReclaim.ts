@@ -16,6 +16,7 @@ import {
   type ChildReclaimPreLockToken, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
   childReclaimDetailText, type ChildReclaimLeafKept,
   CHILD_RECLAIM_STUCK_RETRY, childReclaimStuckHeld, childReclaimStuckRow, childReclaimStuckSentence,
+  type ChildReclaimSweepOutcome,
 } from '../childReclaimSweep.js';
 import type { CoordStore, OpenSiblingsResult } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
@@ -438,6 +439,21 @@ export type ChildReclaimOutcome =
   | { readonly kind: 'gone'; readonly sessionId: string }
   | { readonly kind: 'failed'; readonly sessionId: string; readonly runId: number;
       readonly resume: ChildReclaimResume; readonly detail: string; readonly token: string | null };
+
+/** The executor's answer as the sweep's memory needs it (spec §5.9, the persistent tier). The ONE projection:
+ *  `failed` carries ccd's own word and whether it is in the stuck class, decided HERE by the class's one spelling
+ *  (`isChildReclaimStuckToken`). The lane hands the same predicate, and the same token kind the executor's
+ *  refusal arm reads (`childReclaimTokenKind`), to the restart seed (`childReclaimTierSeed`), so the live memory
+ *  and the seed never classify one word two ways. Every other arm
+ *  carries what the memory reads, and nothing else. */
+export function childReclaimSweepOutcomeOf(o: ChildReclaimOutcome): ChildReclaimSweepOutcome {
+  switch (o.kind) {
+    case 'reclaimed': case 'gone': return { kind: o.kind };
+    case 'refused': return { kind: 'refused', token: o.token };
+    case 'deferred': return { kind: 'deferred', why: o.why };
+    case 'failed': return { kind: 'failed', token: o.token, stuck: isChildReclaimStuckToken(o.token) };
+  }
+}
 
 /** `runId` is the MINTING run — the one the child's `.child` marker names and
  *  the value composed as `--child-of`. On the close path it is read off the

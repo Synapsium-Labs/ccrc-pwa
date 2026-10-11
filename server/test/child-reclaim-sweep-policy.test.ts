@@ -470,7 +470,8 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
   it('a first sighting starts no clock, counts no failure, and was never asked', () => {
     expect(entry).toEqual({ firstEligibleAt: NOW - 60_000, firstDeferredAt: null, firstPresenceDeferredAt: null,
       lastPresenceDeferredAt: null, lastPresenceWallAt: null, presenceHeldSince: null, bornAt: BORN, markerRunId: RUN, generation: { kind: 'absent' },
-      lastDeferWhy: null, consecutiveFailures: 0, lastFailedAt: null, refusedAt: null, lastAskedAt: null });
+      lastDeferWhy: null, consecutiveFailures: 0, lastFailedAt: null, refusedAt: null, lastAskedAt: null,
+      tier: false, tierToken: null, tierJ: 0, tierRun: 0 });
   });
 
   it('forgets a child whose reclaim ended outright — reclaimed, or already gone', () => {
@@ -495,11 +496,11 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
   it('counts a failed attempt and stamps when it was asked — the any-kind clock untouched, the presence episode ended', () => {
     const withPresence: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 1000,
       lastPresenceDeferredAt: NOW - 1000, lastPresenceWallAt: NOW - 1000 };
-    const once = childReclaimNextEntry(withPresence, { kind: 'failed' }, ask(NOW, false), at(NOW), PASS);
+    const once = childReclaimNextEntry(withPresence, { kind: 'failed', token: null, stuck: false }, ask(NOW, false), at(NOW), PASS);
     expect(once).toEqual({ ...withPresence, consecutiveFailures: 1, lastFailedAt: NOW,
       firstPresenceDeferredAt: null, lastPresenceDeferredAt: null, lastPresenceWallAt: null, refusedAt: null,
       lastAskedAt: NOW });
-    expect(childReclaimNextEntry(once!, { kind: 'failed' }, ask(NOW + 120_000, false), at(NOW + 120_000), PASS))
+    expect(childReclaimNextEntry(once!, { kind: 'failed', token: null, stuck: false }, ask(NOW + 120_000, false), at(NOW + 120_000), PASS))
       .toEqual({ ...withPresence, consecutiveFailures: 2, lastFailedAt: NOW + 120_000,
         firstPresenceDeferredAt: null, lastPresenceDeferredAt: null, lastPresenceWallAt: null, refusedAt: null,
         lastAskedAt: NOW + 120_000 });
@@ -536,7 +537,7 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
   it('`licensed` is read only on a presence-class defer — it changes nothing for failed, refused, or any other why', () => {
     const stale: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 10 * C, lastPresenceDeferredAt: NOW - PASS,
       lastPresenceWallAt: NOW - PASS };
-    for (const outcome of [{ kind: 'failed' as const }, { kind: 'refused' as const, token: 'tree-unreadable' },
+    for (const outcome of [{ kind: 'failed' as const, token: null, stuck: false }, { kind: 'refused' as const, token: 'tree-unreadable' },
       { kind: 'deferred' as const, why: 'held' }]) {
       expect(childReclaimNextEntry(stale, outcome, ask(NOW, true), at(NOW), PASS), outcome.kind)
         .toEqual(childReclaimNextEntry(stale, outcome, ask(NOW, false), at(NOW), PASS));
@@ -594,7 +595,7 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
 
   it('every arm except `refused` clears `refusedAt` — a stale one from an earlier refusal does not survive a later failure or deferral', () => {
     const stale: ChildReclaimSweepEntry = { ...entry, refusedAt: NOW - 1 };
-    expect(childReclaimNextEntry(stale, { kind: 'failed' }, ask(NOW, false), at(NOW), PASS)).toMatchObject({ refusedAt: null });
+    expect(childReclaimNextEntry(stale, { kind: 'failed', token: null, stuck: false }, ask(NOW, false), at(NOW), PASS)).toMatchObject({ refusedAt: null });
     expect(childReclaimNextEntry(stale, { kind: 'deferred', why: 'held' }, ask(NOW, false), at(NOW), PASS))
       .toMatchObject({ refusedAt: null });
   });
@@ -604,7 +605,7 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
       lastPresenceWallAt: NOW - PASS };
     expect(childReclaimDeferExpired(stale, at(NOW), PASS), 'the control: past the ceiling, its latest answer recent').toBe(true);
     const outcomes: ChildReclaimSweepOutcome[] = [
-      { kind: 'failed' }, { kind: 'refused', token: 'tree-unreadable' }, { kind: 'deferred', why: 'held' },
+      { kind: 'failed', token: null, stuck: false }, { kind: 'refused', token: 'tree-unreadable' }, { kind: 'deferred', why: 'held' },
     ];
     for (const outcome of outcomes) {
       const next = childReclaimNextEntry(stale, outcome, ask(NOW, false), at(NOW), PASS)!;
@@ -788,7 +789,7 @@ describe('the lane\'s two clocks, the bracketed answer, and the presence lease (
     expect(rejoined.presenceHeldSince, 're-joins at its own arrival, at the back').toBe(502_000);
     // Every other outcome clears it — a holder's or not.
     const others: ChildReclaimSweepOutcome[] = [
-      { kind: 'failed' }, { kind: 'refused', token: 'tree-unreadable' },
+      { kind: 'failed', token: null, stuck: false }, { kind: 'refused', token: 'tree-unreadable' },
       ...['state-changed', 'paused', 'held', 'in-progress'].map((why): ChildReclaimSweepOutcome => ({ kind: 'deferred', why })),
     ];
     for (const outcome of others) {
@@ -951,7 +952,7 @@ describe('S1: seeded interleavings of the lane model — every licence rests on 
         const answered = now();
         inFlight.delete(ev.id);
         if (ev.kind === 'reclaimed') { listed.delete(ev.id); reclaimedAt.set(ev.id, ev.a); }
-        const outcome: ChildReclaimSweepOutcome = ev.kind === 'rejected' ? { kind: 'failed' }
+        const outcome: ChildReclaimSweepOutcome = ev.kind === 'rejected' ? { kind: 'failed', token: null, stuck: false }
           : ev.kind === 'reclaimed' ? { kind: 'reclaimed' } : { kind: 'deferred', why: ev.kind };
         // The lane's identity guard: write back only while the entry is the live one.
         if (entries.get(ev.id) === ev.entry) {
@@ -1667,7 +1668,7 @@ describe('feed rows de-duplicated (spec §5.9) — lastDeferWhy and childReclaim
       .lastDeferWhy).toBe('held');
     expect(childReclaimNextEntry(deferred, { kind: 'deferred', why: 'state-changed' }, ask(NOW + PASS, false), at(NOW + PASS), PASS)!
       .lastDeferWhy).toBe('state-changed');
-    const failed = childReclaimNextEntry(deferred, { kind: 'failed' }, ask(NOW + PASS, false), at(NOW + PASS), PASS)!;
+    const failed = childReclaimNextEntry(deferred, { kind: 'failed', token: null, stuck: false }, ask(NOW + PASS, false), at(NOW + PASS), PASS)!;
     expect(failed.lastDeferWhy, 'a failed attempt ends the episode — a rejection is written through this arm').toBeNull();
     expect(childReclaimNextEntry(deferred, { kind: 'refused', token: 'tree-unreadable' }, ask(NOW + PASS, false), at(NOW + PASS), PASS)!
       .lastDeferWhy, 'a refusal ends it too').toBeNull();

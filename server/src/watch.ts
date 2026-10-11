@@ -87,7 +87,7 @@ import { configDirFor } from './config.js';
 import { refusalSentence } from './wsaudit.js';
 import {
   childMarkLeftListing, childReclaimBornAt, childReclaimGeneration, childReclaimGenerationRead, childReclaimLatest, childReclaimRowUuid,
-  childReclaimTokenKind, isChildReclaimStuckToken, reclaimChild,
+  childReclaimSweepOutcomeOf, childReclaimTokenKind, isChildReclaimStuckToken, reclaimChild,
   recordChildReclaimKeptFeed, recordChildReclaimLeafKeptFeed, releaseRetiredChildHold, type ChildReclaimOutcome, type ChildReclaimReleaseOutcome,
   type ChildReclaimReleaseRequest, type ChildReclaimRequest,
 } from './coord/childReclaim.js';
@@ -104,6 +104,7 @@ import {
   type ChildReclaimReviewedRunRead, type ChildReclaimSiblingsRead, type ChildReclaimSweepEntry,
   type ChildReclaimSweepOutcome, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
   childReclaimAttentionWithLeaves, childReclaimLeafKept, childReclaimLeafKeptSince, type ChildReclaimLeafKept,
+  CHILD_RECLAIM_SWEEP_REJECTED, childReclaimTierSeed,
 } from './childReclaimSweep.js';
 import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
 import {
@@ -815,6 +816,9 @@ export class FleetWatcher {
    *  a restart loses it, and losing it can only DELAY a reclaim (two passes
    *  rebuild eligibility, the ceiling clock restarts) or retry a failing one
    *  sooner, which ccd's re-proof on the box makes safe — never cause one.
+   *  The persistent tier is re-read at every first sighting
+   *  (`childReclaimTierSeed`), so a lost memory costs a tier child one extra
+   *  ask, never a fresh tier wait.
    *  Its decision clocks are this process's monotonic clock; `firstDeferredAt`
    *  and `lastPresenceWallAt` are wall-clock epoch ms and `bornAt` is ccd's
    *  clock, compared for equality only (`ChildReclaimSweepEntry`). An entry
@@ -3384,6 +3388,9 @@ export class FleetWatcher {
     // asked on the strength of a partial measurement.
     let latest: ChildReclaimJournalRow[];
     let claims: ReadonlyMap<string, ChildReclaimCoordinatorClaim>;
+    // THE PERSISTENT TIER'S SEED (spec §5.9) reads each child's CURRENT generation, the slice this read already
+    // cuts: kept per id for the first sightings below, never read again.
+    const tierGenerations = new Map<string, readonly MirroredLifecycleEvent[]>();
     try {
       const withReclaim = coord.childReclaimSessionIds();
       claims = coord.childReclaimCoordinatorClaims();
@@ -3391,6 +3398,7 @@ export class FleetWatcher {
       for (const r of records) {
         if (!withReclaim.has(r.id)) continue;
         const gen = childReclaimGeneration(this.childReclaimAttentionGenerationRows(coord, r.id), now);
+        tierGenerations.set(r.id, gen);
         const row = childReclaimJournalRow(gen, childReclaimLatest(gen));
         if (row !== null) latest.push(row);
       }
@@ -3684,7 +3692,11 @@ export class FleetWatcher {
       // the new marker before the mirror can place the new birth.
       // `v.runId` is the marker's own (`childReclaimSweepVerdict`).
       if (entry === undefined || !childReclaimSameGeneration(entry, childBornAt, v.runId, regGeneration)) {
-        this.childReclaimSweepState.set(r.id, childReclaimFirstSighting(mono, childBornAt, v.runId, regGeneration));
+        // A LOST MEMORY NEVER RESETS THE PERSISTENT TIER (spec §5.9): the sighting is seeded from the mirror's
+        // current generation, with `lastFailedAt` left null, so a tier child is asked once on its next due pass
+        // and then waits its tier pace. It never waits a fresh tier pace, and never falls back to the 15-minute ramp.
+        this.childReclaimSweepState.set(r.id, childReclaimFirstSighting(mono, childBornAt, v.runId, regGeneration,
+          childReclaimTierSeed(tierGenerations.get(r.id) ?? [], childBornAt, isChildReclaimStuckToken, childReclaimTokenKind)));
         continue;
       }
       if (this.childReclaimInFlight.has(r.id)) continue;
@@ -3782,7 +3794,7 @@ export class FleetWatcher {
           // is what lets a presence-class answer RESTART the episode rather
           // than silently keep skipping ccd's presence rungs forever (spec
           // §5.7), and whether it went to the lease's holder.
-          this.childReclaimWriteBack(r.id, entry, outcome, ask, answered);
+          this.childReclaimWriteBack(r.id, entry, childReclaimSweepOutcomeOf(outcome), ask, answered);
         },
         (err: unknown) => {
           const answered = this.childReclaimLaneNow();
@@ -3793,9 +3805,9 @@ export class FleetWatcher {
           // licence on the same episode. It forfeits a holder's lease. And it
           // backs off, so a child whose every attempt rejects cannot hog the
           // one slot. It is written only while the entry is still the live
-          // one, like the answer.
+          // one, like the answer. It names no word, so it leaves the persistent tier as it stands.
           console.warn(`ccrc-server: sweepChildReclaim: the reclaim of ${r.id} threw (${err instanceof Error ? err.message : String(err)}) — recorded as a failed attempt; the sweep retries after its backoff`);
-          this.childReclaimWriteBack(r.id, entry, { kind: 'failed' }, ask, answered);
+          this.childReclaimWriteBack(r.id, entry, CHILD_RECLAIM_SWEEP_REJECTED, ask, answered);
         },
       ).finally(() => {
         this.childReclaimInFlight.delete(r.id);
