@@ -2518,3 +2518,126 @@ break they found is closed below. Evidence: the coordinator's `ccr15-evidence-ar
   - **No answer of either carrier changes.** Wave 8 moves workspace-lifecycle's `keptLeafWord` to L0 as `leafKeptWord`
     under its consent (4036, 4045), deleting its word list, word type and reader there, or declares it first if wave 8
     lands first. Either way it is defined once.
+
+### §15 as built (wave 8, run 348)
+
+Where wave 8's code and its draft rulings narrowed or spelled out the rulings above (R73, R74, R75, R76, R77, R78 and
+R79), they now read as follows. This note amends; it edits no earlier text. It names each departure by slug and carries
+no number: the coordinator assigns this wave's numbers from the two blocks run 348 was issued, and the wave 8 plan's
+`## Deviations found` defines them. The spec text every committed comment of this wave cites is §5.5, §5.7 and §5.9 of
+the design spec, with edits to §5.6, §7 and §8.
+
+**R73 (the licence bound to the generation).**
+- `pass-clock-after-gather`: R39 says the lane reads its two clocks once per pass; the throttle now takes its monotonic
+  reading before the gather and stamps with it, so a tick that lands during the gather is throttled, and the pass's one
+  decision reading follows the gather.
+- `an-overtaken-gather-decides-nothing`: a pass counter, which R73's text does not name, is bumped before the gather, and
+  a pass whose gather settles after a newer pass has begun returns before it decides anything.
+- `pass-throttle-restamped-after-gather`: a pass that was not overtaken re-stamps the throttle with its decision clock,
+  read after the gather, because the overtaken guard caught only strict overtaking and a gather that settled just short of
+  an interval let two decisions land less than one interval apart; any two deciding passes are now at least one interval
+  apart.
+- `marked-means-marker-reads-as-child`: the gather reads exactly the rows whose marker reads as a child; a row whose marker
+  is unreadable answers `marker-unreadable` before identity is judged, so its generation decides nothing and is not read.
+- `refused-generation-not-carried`: the audit's `refused` answer carries no generation, so the key on a refused document
+  is read by nothing and gates nothing, as R73 (e) says.
+- `wave7-generation-pins-owed`: the two server-side `absence-permits` cases of wave 7's
+  `ccd-child-reclaim-row-generation.test.ts` are flipped in the commit that makes the token arm name its generation,
+  because a null `generation` on a token-bearing document is now unreadable.
+- `uidn-at-module-scope-per-h7`: the shared lane rig's `let uidN = 0;` sits at module scope from the task that first
+  needs the rig, the plan's shared-rig ruling over the task text.
+
+**R74 (the hold-retired memory).**
+- `hold-retired-step-in-l1`: which of first, second and forget a hold-retired sighting is lives in one pure L1 function,
+  `childReclaimHoldRetiredStep`, which the lane applies, instead of a branch inside the watcher.
+
+**R75 (the birth).**
+- `born-at-opens-through-generation`: the birth placement keeps its own opening-create loop over the birth events, which
+  carry no `outcome` and so are not `childReclaimGeneration`'s input; the docstring no longer claims the birth calls it,
+  and an equivalence case holds the two placements equal.
+
+**R76 (the readers of wave 7's ccd fields).**
+- `failed-tail-extracted-as-export`: the failed feed tail is extracted from `childReclaimFeedBody` into the exported,
+  exhaustive `childReclaimFailedTail`.
+- `purge-incomplete-resume-read-by-crumb`: `purge-incomplete`'s `resume` is read like any other word's, the word first and
+  then `crumb`, and the feed's tail for it is decided by its word.
+- `wave7-header-comment-stale`: the header comment of wave 7's `containment-refuted-word.test.ts` is corrected for the
+  reclaim parser's half only; the expiry half still reads resumable until workspace lifecycle's wave 6.
+- `leaf-collapse-members-carry-a-run`: the collapsed kept-leaf line is a separate arm of the attention union whose members
+  are `ChildReclaimKeptMember`, carrying a number `runId`, and the existing `kept-many` arm keeps its word unwidened.
+- `leaf-kept-yields-to-a-live-item`: a kept-leaf item is dropped when the list already holds any item for the id, a
+  `kept-many` member included, so one item per id holds across every arm and the banner's key stays unique.
+- `leaf-end-clock-guard`: an end of a kept-leaf item counts only when it follows the row by mirror id and is not dated by
+  ccd's clock before it, R75's guard applied to the ends, so doubt keeps the item listed.
+- `leaf-kept-ends-read`: the ends come from a second bounded read, one statement over the source's ids, because a later
+  `create` or `collect` can lie outside the source's time window.
+- `leaf-kept-feed-row`: "the feed keeps the record" is made true by one `child reclaim leaf kept` row per source row per
+  process, recorded and never pushed, carrying ccd's own `detail` as one bounded plain line.
+- `leaf-kept-null-run-stays-single`: only items with a number run collapse into `kept-many`, because the board drops a
+  member whose run is not a number; an item with no run always lists singly.
+- `leaf-kept-undated-row-unlisted`: a `reclaim` row ccd journaled with no `at` lies outside the source's window and is never
+  listed, since the horizon cannot place it.
+- `leaf-kept-feed-memory-unpruned`: the set of source rows already fed is never pruned, because an ended item never
+  returns and a prune would be a branch with no observable effect to pin.
+- `leaf-kept-phrase-second-table`: the reclaim lane's `LEAF_PHRASE` keeps its own phrasing of the three kept-leaf words
+  beside workspace lifecycle's `LEAF_KEPT_WHY`, two surfaces both keyed by `LeafKeptWord`, so a word added to L0 reds both
+  under the compiler.
+- `verdict-readers-pin-stale-after-leaf-writer`: the attention list's one write was re-pointed through
+  `childReclaimAttentionWithLeaves` without re-pointing `child-reclaim-verdict-readers.test.ts` case (c)'s census literal,
+  which a fix-round commit of the same task corrected.
+- R76's "nothing retries it" is amended. `purge-incomplete`'s feed tail is conditional: the reclaim completed and the row was
+  purged, what still stands is named, and the sweep asks again if the row's own files still stand. It says neither that
+  nothing retries it nor that the box resumes.
+
+**R77 (the stuck class).**
+- `stuck-outranks-the-verdict-on-the-chip`: R77's precedence is carried onto the chip, which answers a stuck line ahead of
+  the sweep's verdict, `deferred` and never `refused`; a kept verdict swaps the retry clause for its reason, and a held one
+  for the hold's.
+- `stuck-lists-an-unplaced-line`: a stuck line that ccd did not date is listed with a null `at`, because the item needs no
+  clock, where the failing arm lists nothing for an undated line.
+- `stuck-classifier-injected-into-L1`: L1 imports L0 alone, so the stuck classifier reaches `childReclaimAttention` as
+  an injected `stuckOf`, as `kindOf` does.
+- `terminal-refusal-reads-the-row-without-detail`: `childReclaimTerminalRefusal` is typed over the journal row without
+  `detail`, so a caller holding a row from before the field still compiles.
+- The held ruling made at the plan's reconciliation, with no slug of its own: a stuck child the sweep holds also shows no
+  retry clause, its sentence says ccrc does not retry it while the hold stands and that the long backoff resumes once the
+  hold lifts, and the switch turns that chip answer to `paused` as it turns the hold's own.
+
+**R78 (the persistent tier).**
+- `tier-uncountable-failure-neutral`: a failure whose word is not countable (no word, or a pre-lock word) neither enters,
+  counts, advances nor ends the tier, and so do a box retry refusal and a refusal this build cannot classify, because ccd
+  journals every `ws-reclaim` refusal through one emit and a rule that let them end the tier would make the live memory and
+  its restart seed disagree; R78's "a failure with a different token" reads as a different countable token.
+- `tier-j-from-run`: live, j is `max(0, run − K)`, the seed's own formula, for both kinds of member, so a stuck child is
+  paced at the ceiling for its first four answers and then at 30, 60, 120 and 240 minutes.
+- `tier-seed-carries-short-run`: the seed also carries the word and run of a child that is not yet a member, so the K-th
+  failure is the same failure live and after a restart.
+- `tier-seed-birth-guard`: the seed reads a generation only when its opening `create` is the entry's own birth, so with
+  no placed birth it seeds nothing, which paces by the ordinary ramp for longer and never misses an ask.
+
+**R79 (the carried inheritances).**
+- `corrupt-admin-entry-holds-the-repository`: wave 7's carried item is classified by the tier. A repeated `pin-failed` is a
+  ccd `failed` line, neither a refusal nor a pre-lock word, so it enters the persistent tier on its fourth consecutive
+  failure and is retried at `min(4 h, 15 min × 2^j)`; the predicates are `token !== null &&
+  !isChildReclaimPreLockToken(token)` and `tier = stuck || run >= 4`, and every `pin-failed` emission is `_ws_reclaim_fail …
+  pin-failed`, which is not in `CHILD_RECLAIM_PRE_LOCK_TOKEN`.
+
+**Departures with no rule of their own.**
+- `brief-labels-reworded-to-spec-citations`: where the plan's comment and test-title text cited its own or the contract's
+  labels (a ruling letter, an R-number, a draft id), the committed text cites the spec only, and no asserted string
+  changed.
+- `held-verdict-case-narrows-kept-many`: one drafted test case read `a.sessionId` on the attention union, which `kept-many`
+  lacks, and narrows with `'sessionId' in a`, expected values unchanged.
+- `shared-describe-made-reclaim-only`: NOT applied. Workspace lifecycle's wave 6 was not on main when the reader task
+  landed, so the step was done as written.
+- `as-built-note-carries-slugs-not-numbers`: the plan's instruction to write each number singly is superseded by the
+  rule that a number main does not define is never written; this note names slugs only, as §14's did, and the coordinator
+  assigns the numbers.
+
+**As built, not departures** (the spec's §5.7 and §5.9 state each).
+- A stuck child the sweep keeps never gets a kept feed row, because it is excluded from the kept items; the feed's latest
+  line for it stays the stuck line, and the banner names the kept reason.
+- A held stuck child is sighted afresh on the first pass after its hold lifts, and asked once on the next, before the
+  tier's pace resumes from that answer.
+- The kept-leaf item's horizon and its guard on a placed create read ccd's wall-clock `at`, as the mirror's other arms do,
+  and the item gates no decision.
