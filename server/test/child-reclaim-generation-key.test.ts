@@ -3,8 +3,8 @@
 // - L1 (`childReclaimSweep.ts`): the one key predicate, the entry's third key, and the verdict's doubt word
 //   `identity-unmeasured` for an unreadable read.
 // - The ONE read (`childReclaimGenerationRead`): byte-exact, three answers, a port's rejection left to its caller
-//   (H5), and its stated residual
-//   (a symlink is followed) pinned as measured behaviour.
+//   (spec §5.5), and its stated residual
+//   (the local adapter follows a symlink) pinned as measured behaviour.
 // Fixture directories only: every path is under a `mkTmp` directory, never a live registry.
 import { describe, it, expect } from 'vitest';
 import { mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -149,9 +149,9 @@ describe('childReclaimGenerationRead, the ONE read, byte-exact (spec §5.5)', ()
     expect(await childReclaimGenerationRead(failing, '/reg', 'demo-a')).toEqual({ kind: 'unreadable' });
   });
 
-  // H5: the read does NOT catch a rejecting port, as `childReclaimPauseRead` does not. Each caller's try answers it:
-  // the sweep's gather folds it to `unreadable` for that row, the executor's re-read defers `marker-unreadable`, and
-  // the release job answers `failed`.
+  // Spec §5.5: the read does NOT catch a rejecting port, as `childReclaimPauseRead` does not. Each caller's try
+  // answers it: the sweep's gather folds it to `unreadable` for that row, the executor's re-read defers
+  // `marker-unreadable`, and the release job answers `failed`.
   it('a rejecting port is not caught: the rejection propagates to the caller', async () => {
     const rejecting: Pick<FleetIO, 'readFileMeasured'> = { readFileMeasured: async () => { throw new Error('agent gone'); } };
     await expect(childReclaimGenerationRead(rejecting, '/reg', 'demo-a')).rejects.toThrow('agent gone');
@@ -166,8 +166,9 @@ describe('childReclaimGenerationRead, the ONE read, byte-exact (spec §5.5)', ()
     expect(asked).toEqual(['/home/u/.cc-sessions/demo-a.b.generation']);
   });
 
-  // THE STATED RESIDUAL (spec §5.5): both adapters follow a link, where ccd's own read refuses one. Pinned as
-  // measured, so a change in either direction is a decision rather than a drift.
+  // THE STATED RESIDUAL (spec §5.5): the local adapter follows a link, where ccd's own read refuses every one (the
+  // remote adapter's answers are in `childReclaimGenerationRead`'s docstring). Pinned as measured, so a change in
+  // either direction is a decision rather than a drift.
   it('a link to a valid file reads as that value, and a dangling link reads absent', async () => {
     const d = reg();
     writeFileSync(path.join(d, 'target'), G1);

@@ -2,8 +2,10 @@
 // its memory and every request on it. What is only provable HERE:
 // - the reads are GATHERED, concurrently, before the per-child loop, so the loop stays synchronous and no await
 //   sits between a row's entry read and its write;
-// - a tick during the gather is throttled, and a pass overtaken during its gather decides nothing, so two loops
-//   never count one interval's sighting twice;
+// - a tick during the gather is throttled, a pass overtaken during its gather decides nothing, and a pass that
+//   decides re-stamps the throttle with its own decision clock, so any two passes that decide are at least one
+//   interval apart on the monotonic clock, however long a gather takes;
+// - every decision clock is read AFTER the gather, so no entry is stamped with an instant older than its evidence;
 // - the generation is the entry's third key, an unreadable one is the doubt word `identity-unmeasured` and seeds
 //   nothing, and every request carries the entry's key as `licenceGeneration`.
 // The executor is stubbed at `Deps.childReclaimExec`, the lane's one seam (`child-reclaim-sweep.test.ts`'s idiom).
@@ -58,8 +60,8 @@ const fixture = () => {
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const requests: ChildReclaimRequest[] = [];
   // The generation reads, counted, holdable and rejectable: while `holding`, a read waits for `release()`, so a case
-  // decides exactly when a pass's gather settles; a row named by `reject(id)` has its read REJECT (H5). Every other
-  // read is the real one.
+  // decides exactly when a pass's gather settles; a row named by `reject(id)` has its read REJECT (spec §5.5). Every
+  // other read is the real one.
   const genReads: string[] = [];
   let inFlight = 0;
   let maxInFlight = 0;
@@ -127,8 +129,10 @@ const fixture = () => {
     await watcher.sweepChildReclaim(await readRegistry(deps.io, cfg), readdirSync(reg));
   };
   const next = (): void => { clock += CHILD_RECLAIM_SWEEP_MS + 1; mono += CHILD_RECLAIM_SWEEP_MS + 1; };
+  const advance = (ms: number): void => { clock += ms; mono += ms; };
   return {
-    reg, calls, requests, genReads, finishedRun, plant, setGeneration, pass, next,
+    reg, calls, requests, genReads, finishedRun, plant, setGeneration, pass, next, advance,
+    mono: () => mono,
     maxInFlight: () => maxInFlight,
     hold: (): void => { holding = true; },
     unhold: (): void => { holding = false; },
@@ -246,18 +250,20 @@ describe('the reads are gathered before the loop, so the loop stays synchronous 
     expect(f.genReads).toHaveLength(3);
   });
 
-  it('the pass awaits twice: the gather, after the throttle and before every loop, and the acts at its end', () => {
+  it('the pass awaits twice: the gather, after the throttle and before the decision clock and every loop, and the acts at its end', () => {
     const src = codeOnly(readFileSync(path.join(srcDir, 'watch.ts'), 'utf8'));
     const start = src.indexOf('  async sweepChildReclaim(');
     expect(start).toBeGreaterThan(-1);
     const body = src.slice(start, src.indexOf('\n  }\n', start));
     const throttle = body.indexOf('this.lastChildReclaimSweep = gate;');
     const gather = body.indexOf('await this.childReclaimGatherGenerations(records)');
+    const decisionClock = body.indexOf('const asked = this.childReclaimLaneNow();');
     const loop = body.indexOf('for (const r of records) {');
     const acts = body.indexOf('await Promise.all(acts);');
-    expect([throttle, gather, loop, acts].every((i) => i > -1), 'an anchor is gone').toBe(true);
+    expect([throttle, gather, decisionClock, loop, acts].every((i) => i > -1), 'an anchor is gone').toBe(true);
     expect([...body.matchAll(/\bawait\b/g)].map((m) => m.index)).toEqual([gather, acts]);
     expect(throttle).toBeLessThan(gather);
+    expect(gather, 'the decision clock is read after the gather').toBeLessThan(decisionClock);
     expect(gather).toBeLessThan(loop);
   });
 
@@ -291,5 +297,38 @@ describe('the reads are gathered before the loop, so the loop stays synchronous 
     expect(f.entryOf('demo-a'), 'B’s entry stands untouched').toBe(sighted);
     f.next(); await f.pass();
     expect(f.requests).toHaveLength(1);
+  });
+
+  it('a pass that decides re-stamps the throttle: a gather that settles just short of an interval delays the next pass', async () => {
+    const f = fixture();
+    f.plant('demo-a', f.finishedRun().id, G1);
+    f.hold();
+    const a = f.pass();                                          // pass A: the throttle stamped at the original instant
+    await vi.waitFor(() => expect(f.heldCount()).toBe(1));
+    f.unhold();
+    f.advance(CHILD_RECLAIM_SWEEP_MS - 100);                     // A's gather holds for most of an interval
+    f.release(); await a;                                        // not overtaken: A decides, the first sighting
+    expect(f.entryOf('demo-a')).toBeDefined();
+    f.advance(101);                                              // just past the ORIGINAL stamp + one interval
+    await f.pass();                                              // pass B: 101 ms after A decided
+    expect(f.genReads, 'B is throttled: it gathered nothing').toEqual(['demo-a.generation']);
+    expect(f.requests, 'B is no second sighting: A decided less than an interval ago').toEqual([]);
+    f.next(); await f.pass();                                    // a whole interval after A's decision
+    expect(f.requests).toHaveLength(1);
+  });
+
+  it('the decision clock is read after the gather: a first sighting is stamped when it is decided', async () => {
+    const f = fixture();
+    f.plant('demo-a', f.finishedRun().id, G1);
+    f.hold();
+    const a = f.pass();
+    await vi.waitFor(() => expect(f.heldCount()).toBe(1));
+    f.unhold();
+    const gated = f.mono();
+    f.advance(30_000);                                           // the gather takes half an interval
+    f.release(); await a;
+    expect(f.mono()).toBe(gated + 30_000);
+    expect(f.entryOf('demo-a')?.firstEligibleAt, 'stamped with the clock after the gather, never the gate’s')
+      .toBe(f.mono());
   });
 });

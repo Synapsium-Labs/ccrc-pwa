@@ -844,12 +844,15 @@ export async function childReclaimPauseRead(
  *  `value` only when it is exactly `REG_GENERATION_SHAPE`. `fieldMeasured` is never used here: its trim would accept
  *  a trailing newline and a leading byte-order mark that ccd's own read refuses. `absent` is a PROVEN ENOENT only;
  *  every other failure the port REPORTS is `unreadable`. A port that REJECTS is not caught here (as
- *  `childReclaimPauseRead`): each caller's try answers it (H5). The sweep's gather folds it to `unreadable` for its
- *  row, the executor's re-read defers `marker-unreadable`, and the release job answers `failed`.
+ *  `childReclaimPauseRead`): each caller's try answers it (spec §5.5). The sweep's gather folds it to `unreadable`
+ *  for its row, the executor's re-read defers `marker-unreadable`, and the release job answers `failed`.
  *
- *  THE STATED RESIDUAL: the read follows a symlink on both adapters, so a link to a valid file reads as that value
- *  and a dangling link reads `absent`, where ccd's read refuses both. ccd writes neither shape. A ccd that binds the
- *  generation then audits such a row `unmeasured`, and nothing is spent on it. */
+ *  THE STATED RESIDUAL: a symlink at the name is not refused here, where ccd's read refuses every link. What it
+ *  answers depends on the adapter. The local adapter follows the link: a link to a valid file reads as that value,
+ *  and a dangling link reads `absent`. The remote adapter's agent resolves the link before its read whitelist: a
+ *  link whose target stays under a read root reads as that value, a link whose target leaves every read root
+ *  answers `forbidden`, which reads `unreadable`, and a dangling link reads `absent`. ccd writes none of these
+ *  shapes. A ccd that binds the generation then audits such a row `unmeasured`, and nothing is spent on it. */
 export async function childReclaimGenerationRead(
   io: Pick<FleetIO, 'readFileMeasured'>, registryDir: string, id: string,
 ): Promise<ChildReclaimGeneration> {

@@ -794,8 +794,11 @@ export class FleetWatcher {
   private lastChildReclaimSweep: number | null = null;
   /** The child-reclaim lane's pass counter (spec §5.5, §5.7), bumped as each pass starts its generation gather,
    *  the one await before its loop. A pass whose number is no longer the latest when its gather settles was
-   *  OVERTAKEN by a newer pass, and decides nothing: two loops back to back would count one interval's sighting
-   *  twice. */
+   *  OVERTAKEN by a newer pass, and decides nothing. A pass that was NOT overtaken re-stamps the throttle
+   *  (`lastChildReclaimSweep`) with its own decision clock, read after the gather, so the next pass cannot start
+   *  until a whole interval after this one decided. Together the two keep any two passes that decide at least
+   *  one interval apart on the monotonic clock, so one interval never counts as two sightings, however long a
+   *  gather takes. */
   private childReclaimPassSeq = 0;
   /** Per marked child: the twice-observed sighting, the two deferral clocks
    *  (the first deferral of any kind, which each request carries; the first
@@ -3316,6 +3319,12 @@ export class FleetWatcher {
     const asked = this.childReclaimLaneNow();
     const now = asked.wallMs;
     const mono = asked.monoMs;
+    // THE THROTTLE, RE-STAMPED with this pass's decision clock (spec §5.7):
+    // the pass was not overtaken, so it decides now, and the next pass must
+    // start a whole interval after THIS decision, not after the gate stamped
+    // above. Without it, a gather that settled just short of an interval would
+    // let the next pass decide a moment later: two sightings in one interval.
+    this.lastChildReclaimSweep = mono;
 
     // ONE — the attention list's mirror arms, and the pass's coordination-history
     // read, from the mirror ALONE (spec §5.9: "derived from the lifecycle mirror so
@@ -3762,10 +3771,13 @@ export class FleetWatcher {
   /** Every MARKED row's registry generation (spec §5.5), read concurrently
    *  through `childReclaimGenerationRead`: the pass's one await before its
    *  loop. A row whose marker does not read as a child is not read, because
-   *  its verdict answers before identity is asked. Each read is bounded by the
-   *  io's own request timeout. The reader lets a rejecting port propagate
-   *  (H5), so a rejecting read folds to `unreadable` for its row HERE: one
-   *  row's rejection is that row's `identity-unmeasured`, never the pass's. */
+   *  its verdict answers before identity is asked. Only the remote adapter's
+   *  read has a timer (its request timeout); a local read has none. The pass
+   *  counter (`childReclaimPassSeq`) and the throttle's re-stamp after the
+   *  gather are what keep a slow gather from bringing two deciding passes
+   *  within one interval. The reader lets a rejecting port propagate (spec §5.5),
+   *  so a rejecting read folds to `unreadable` for its row HERE: one row's
+   *  rejection is that row's `identity-unmeasured`, never the pass's. */
   private async childReclaimGatherGenerations(
     records: readonly SessionRecord[],
   ): Promise<ReadonlyMap<string, ChildReclaimGeneration>> {
