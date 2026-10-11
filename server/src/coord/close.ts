@@ -22,7 +22,7 @@ import { childBirthOf, childSpent, childSpentLive, childSpentLiveFrom } from './
 import type { CcdPrLine } from '../prstate.js';
 import type { DeadCoordinatorStop, SweepFleetAct } from '../deadCoordinator.js';
 import {
-  CHILD_RECLAIM_FEED_QUIET_NONE, childReclaimDecision, childReclaimHasCoordinated, childReclaimRowListing,
+  CHILD_RECLAIM_FEED_QUIET_NONE, CHILD_RECLAIM_LICENCE_NONE, childReclaimDecision, childReclaimHasCoordinated, childReclaimRowListing,
   type ChildReclaimDecision, type ChildReclaimMinting, type ChildReclaimNotWhy, type ChildReclaimRequest,
   type ChildReclaimReviewed,
 } from './childReclaim.js';
@@ -832,7 +832,7 @@ async function childGateAtClose(
     // minted by a review run this close is not.
     request: decision.reclaim && mark.kind === 'child'
       ? { sessionId, runId: mark.runId, trigger: 'close', deferExpired: false, deferredSinceMs: null,
-          feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE } : null,
+          feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: CHILD_RECLAIM_LICENCE_NONE } : null,
   };
 }
 

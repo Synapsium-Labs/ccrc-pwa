@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { FleetIO } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
@@ -17,7 +18,8 @@ import {
 import type { CoordStore, OpenSiblingsResult } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import {
-  CHILD_RUN_ID, LC_REASON_MAX_BYTES, TERMINAL_RUN_STATES, holdReason, type ChildMark, type LifecycleAct, type LifecycleOutcome,
+  CHILD_RUN_ID, LC_REASON_MAX_BYTES, REG_GENERATION_SHAPE, TERMINAL_RUN_STATES, holdReason, type ChildMark,
+  type ChildReclaimGeneration, type ChildReclaimGenerationKey, type LifecycleAct, type LifecycleOutcome,
   type ChildReclaimStatus, type MarkerState, type MirroredLifecycleEvent, type RunState, type RunSummary, lcRefusalWord, type LcRefusalToken,
 } from '../../../shared/api.js';
 
@@ -343,13 +345,24 @@ export type ChildReclaimOutcome =
  *  verdict on a DIFFERENT clock — the current presence episode, which
  *  `childReclaimDeferExpired` reads — so a long wait here never implies a
  *  licence. It is carried separately because it is a fingerprint input on
- *  the box and this is not. */
+ *  the box and this is not.
+ *
+ *  `licenceGeneration`: the registry generation (`$REG/<id>.generation`,
+ *  spec §5.5) this request was judged under. The sweep sends its entry's key,
+ *  a value or `absent`, on EVERY request, licensed or not. Close sends `none`
+ *  (`CHILD_RECLAIM_LICENCE_NONE`): close queues only when the minting run names
+ *  this session and no other open run does, so no re-mint of the slug by that
+ *  run can follow it. */
 export interface ChildReclaimRequest {
   readonly sessionId: string; readonly runId: number;
   readonly trigger: 'close' | 'sweep'; readonly deferExpired: boolean;
   readonly deferredSinceMs: number | null;
   readonly feedQuiet: ChildReclaimFeedQuiet;
+  readonly licenceGeneration: ChildReclaimGenerationKey | { readonly kind: 'none' };
 }
+
+/** Close's generation (spec §5.5): it judged no generation, and none is compared. */
+export const CHILD_RECLAIM_LICENCE_NONE: ChildReclaimRequest['licenceGeneration'] = { kind: 'none' };
 
 /** Nothing the feed already says (spec §5.9): close's value, and any first attempt's. */
 export const CHILD_RECLAIM_FEED_QUIET_NONE: ChildReclaimFeedQuiet = { deferWhy: null, failureToken: null };
@@ -823,6 +836,26 @@ export async function childReclaimPauseRead(
   const names = await io.readdir(registryDir);
   if (names === null) return 'unmeasurable';
   return names.includes(RECLAIM_PAUSE_MARKER) ? 'set' : 'clear';
+}
+
+/** THE ONE READ of a registry row's generation, `$REG/<id>.generation` (spec §5.5): the sweep's third key, the
+ *  executor's re-read before presence, and the hold-release job's re-read all answer through it. BYTE-EXACT: the
+ *  content is taken as `readFileMeasured` returns it, with no trim, no newline strip and no NUL strip, and it is a
+ *  `value` only when it is exactly `REG_GENERATION_SHAPE`. `fieldMeasured` is never used here: its trim would accept
+ *  a trailing newline and a leading byte-order mark that ccd's own read refuses. `absent` is a PROVEN ENOENT only;
+ *  every other failure the port REPORTS is `unreadable`. A port that REJECTS is not caught here (as
+ *  `childReclaimPauseRead`): each caller's try answers it (H5). The sweep's gather folds it to `unreadable` for its
+ *  row, the executor's re-read defers `marker-unreadable`, and the release job answers `failed`.
+ *
+ *  THE STATED RESIDUAL: the read follows a symlink on both adapters, so a link to a valid file reads as that value
+ *  and a dangling link reads `absent`, where ccd's read refuses both. ccd writes neither shape. A ccd that binds the
+ *  generation then audits such a row `unmeasured`, and nothing is spent on it. */
+export async function childReclaimGenerationRead(
+  io: Pick<FleetIO, 'readFileMeasured'>, registryDir: string, id: string,
+): Promise<ChildReclaimGeneration> {
+  const read = await io.readFileMeasured(path.join(registryDir, `${id}.generation`));
+  if (!read.ok) return read.reason === 'absent' ? { kind: 'absent' } : { kind: 'unreadable' };
+  return REG_GENERATION_SHAPE.test(read.content) ? { kind: 'value', v: read.content } : { kind: 'unreadable' };
 }
 
 async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequest): Promise<ChildReclaimOutcome> {

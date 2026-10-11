@@ -12,7 +12,8 @@
 // at the instant of deletion — this file narrows the window, it does not close it.
 import {
   CHILD_RECLAIM_KEPT_WORDS, SPAWN_STALL_MS, TERMINAL_RUN_STATES, holdReason, isChildReclaimKeptWord, lcRefusalWord,
-  type ChildMark, type ChildReclaimAttention, type ChildReclaimKeptWord, type LcRefusalToken, type LifecycleAct,
+  type ChildMark, type ChildReclaimAttention, type ChildReclaimGeneration, type ChildReclaimGenerationKey,
+  type ChildReclaimKeptWord, type LcRefusalToken, type LifecycleAct,
   type LifecycleOutcome, type MirroredLifecycleEvent, type RunState,
 } from '../../shared/api.js';
 
@@ -67,7 +68,7 @@ export interface ChildReclaimAsk {
  *  `firstDeferredAt` is wall-clock epoch ms because it is DISPLAYED (each
  *  request's `deferredSinceMs`, the run chip's `at`). `lastPresenceWallAt` is
  *  the presence gap's second operand. `bornAt` is ccd's clock, compared for
- *  equality only, and `markerRunId` is no clock at all. That is safe only
+ *  equality only, and `markerRunId` and `generation` are no clock at all. That is safe only
  *  because this memory never leaves the process: it is never persisted or
  *  sent, and nothing but `firstDeferredAt` is read as an epoch.
  *
@@ -101,9 +102,9 @@ export interface ChildReclaimAsk {
  *  Without the lease, three or more due children that kept deferring kept
  *  every presence-held child unlicensed for good (spec §5.7: "Unbounded would
  *  be worse than absent"). The entry describes ONE workspace generation, by
- *  two keys, its birth (`bornAt`) and the run its marker names
- *  (`markerRunId`): a slug minted again is a new child, sighted afresh
- *  (`childReclaimSameGeneration` states the windows the two keys leave).
+ *  three keys, its birth (`bornAt`), the run its marker names (`markerRunId`)
+ *  and its registry row's generation (`generation`): a slug minted again is a
+ *  new child, sighted afresh (`childReclaimSameGeneration` states what is left).
  *
  *  THE BOUND (spec §5.7) is three figures, never run together. From its
  *  lease's first ask, the holder is licensed within the ceiling plus one pass
@@ -177,48 +178,61 @@ export interface ChildReclaimSweepEntry {
    *  still reads the OLD workspace's; a marker naming a different run is a
    *  new workspace all the same, and starts from a first sighting. */
   readonly markerRunId: number;
+  /** The registry row's generation (`$REG/<id>.generation`, spec §5.5) when this entry was sighted: the THIRD key
+   *  (`childReclaimSameGeneration`). A value or `absent`, never `unreadable`: a read that could not say seeds no
+   *  entry, because the verdict answers `identity-unmeasured` for it. Every sweep request carries it as
+   *  `licenceGeneration`, the generation that request was judged under. */
+  readonly generation: ChildReclaimGenerationKey;
   /** The `why` of the latest outcome when it was a deferral, or null after any other outcome:
    *  the deferral EPISODE a feed row is written once for (spec §5.9). No pacing reads it. */
   readonly lastDeferWhy: string | null;
 }
 
 /** A child seen eligible for the first time, in the workspace generation born
- *  at `bornAt` and marked by run `markerRunId`: no clock, no failure, never
- *  asked. `monoMs` is the lane's monotonic clock. */
+ *  at `bornAt`, marked by run `markerRunId` and carrying the registry generation
+ *  `generation`: no clock, no failure, never asked. `monoMs` is the lane's
+ *  monotonic clock. */
 export const childReclaimFirstSighting = (
-  monoMs: number, bornAt: number | null, markerRunId: number,
+  monoMs: number, bornAt: number | null, markerRunId: number, generation: ChildReclaimGenerationKey,
 ): ChildReclaimSweepEntry => ({
   firstEligibleAt: monoMs, firstDeferredAt: null, firstPresenceDeferredAt: null, lastPresenceDeferredAt: null,
   lastPresenceWallAt: null, presenceHeldSince: null,
-  consecutiveFailures: 0, lastFailedAt: null, refusedAt: null, lastAskedAt: null, bornAt, markerRunId,
+  consecutiveFailures: 0, lastFailedAt: null, refusedAt: null, lastAskedAt: null, bornAt, markerRunId, generation,
   lastDeferWhy: null,
 });
 
-/** Does this entry describe the workspace generation born at `bornAt` whose `.child` marker names run
- *  `markerRunId` (spec §5.6: slugs recycle)? BOTH keys must match. A recycled slug's new row and marker
- *  are listed before its new birth can be placed, so the birth alone would let an old workspace's
- *  licence-ripe presence episode license a request to the new one; a marker naming a different run
- *  ends the old generation there. A null birth never matches.
+/** Are two generation keys the same generation (spec §5.5)? A value matches an EQUAL value, byte for byte, and
+ *  `absent` matches `absent`. Nothing else matches. THE ONE predicate every generation-keyed memory of this lane asks,
+ *  the sweep's entry first (`childReclaimSameGeneration`). */
+export const childReclaimSameGenerationKey = (a: ChildReclaimGenerationKey, b: ChildReclaimGenerationKey): boolean =>
+  a.kind === 'value' ? b.kind === 'value' && a.v === b.v : b.kind === 'absent';
+
+/** Is this read a KEY (spec §5.5)? Every read but `unreadable`. A narrowing, never a decision: the verdict has
+ *  already answered `identity-unmeasured` for an unreadable read before the lane touches an entry. */
+export const isChildReclaimGenerationKey = (g: ChildReclaimGeneration): g is ChildReclaimGenerationKey =>
+  g.kind !== 'unreadable';
+
+/** Does this entry describe the workspace generation born at `bornAt`, whose `.child` marker names run `markerRunId`
+ *  and whose registry row carries `generation` (spec §5.5; §5.6: slugs recycle)? ALL THREE keys must match, the
+ *  generation through `childReclaimSameGenerationKey`. A null birth never matches.
  *
- *  A FIRST WINDOW LEFT is one run minting the same slug twice, with no pass between to forget the old
- *  entry. The old workspace must have been eligible while its run could still mint: `planned`, bound to
- *  another session past the spawn stall. Then, before the next pass, the old row is removed by anything
- *  but this lane's own reclaim (whose answer forgets the entry), a dispatch finds that session spent and
- *  unbinds the run, the next dispatch's ws-add draws the same slug, and the run then leaves that binding
- *  (abandoned, or bound to yet another workspace past `planned`). The next pass must also come before
- *  the mirror PLACES the new `create`: a `create` that carries no clock, or one dated ahead of the
- *  server's, is not placed. A pass in between that reads the run with no session, with this
- *  one, or inside the spawn stall, or that lists no row for the slug, deletes the entry.
+ *  WHY THREE. A recycled slug's new row and marker are listed before its new birth can be placed, so the birth
+ *  alone would let an old workspace's licence-ripe presence episode license a request to the new one; a marker
+ *  naming a different run ends the old generation there. Neither key sees one run minting the same slug twice with
+ *  no pass between to forget the old entry: the birth may still read the old workspace's, and the marker names the
+ *  same run. The registry generation does. ccd mints it with the row, before any other field, never rewrites it in
+ *  place, removes it last when the row ends, and refuses a new row while any field of an old one stands, so a slug
+ *  minted again carries a new value.
  *
- *  A SECOND, SAME-RUN ROUTE is not this function's to close: a licensed request (one sent with
- *  `--defer-expired`, because the old workspace's presence episode ran past its ceiling, spec §5.7) that
- *  is still queued behind other work on the session's queue when the same run mints the slug again. The
- *  executor re-reads the marker against the request's own run when the job reaches the front, so a
- *  marker naming that same run passes, and the new workspace is asked about on the old one's licence.
- *  Nothing in the entry can see it, because the request is already out. Carried to wave 7. */
+ *  WHAT IT LEAVES. `absent` matches `absent`: two generation-less rows under one slug, which only a ws-add older than
+ *  the generation's minting could write, are not told apart; a ccd that binds the generation audits such a row
+ *  `unmeasured` and spends nothing on it. A request already queued when the slug is minted again is out of the
+ *  entry's reach: it carries the entry's key as `licenceGeneration`, which the executor re-proves against the row
+ *  (spec §5.5). */
 export const childReclaimSameGeneration = (
-  entry: ChildReclaimSweepEntry, bornAt: number | null, markerRunId: number,
-): boolean => entry.bornAt !== null && entry.bornAt === bornAt && entry.markerRunId === markerRunId;
+  entry: ChildReclaimSweepEntry, bornAt: number | null, markerRunId: number, generation: ChildReclaimGenerationKey,
+): boolean => entry.bornAt !== null && entry.bornAt === bornAt && entry.markerRunId === markerRunId
+  && childReclaimSameGenerationKey(entry.generation, generation);
 
 /** The minting run as the store answered: a row, no row, or a row this process
  *  could not represent — three answers, never folded. `openedAt` is the run's
@@ -358,6 +372,9 @@ export interface ChildReclaimSweepInput {
   readonly child: ChildMark;
   /** False when this read could not measure the row's identity triple. */
   readonly identityMeasured: boolean;
+  /** The registry row's generation as this pass read it (`childReclaimGenerationRead`, spec §5.5). `unreadable`
+   *  makes the row's identity unmeasured, exactly as an unread identity field does. */
+  readonly generation: ChildReclaimGeneration;
   /** `FleetSession.workspace`: null for a project's main checkout, which
    *  cannot be a child in depth of ccd's own rung-1 refusal (spec §5.1). */
   readonly workspace: string | null;
@@ -537,7 +554,7 @@ export const CHILD_RECLAIM_SKIP = {
 export function childReclaimSweepVerdict(i: ChildReclaimSweepInput): ChildReclaimSweepVerdict {
   if (i.child.kind === 'none') return { eligible: false, why: 'not-a-child' };
   if (i.child.kind === 'unreadable') return { eligible: false, why: 'marker-unreadable' };
-  if (!i.identityMeasured) return { eligible: false, why: 'identity-unmeasured' };
+  if (!i.identityMeasured || i.generation.kind === 'unreadable') return { eligible: false, why: 'identity-unmeasured' };
   if (i.workspace === null) return { eligible: false, why: 'not-a-workspace', runId: i.child.runId };
   if (i.held.kind === 'held') return { eligible: false, why: 'held' };
   if (i.held.kind === 'unmeasured') return { eligible: false, why: 'hold-unmeasured' };

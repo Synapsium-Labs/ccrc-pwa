@@ -479,7 +479,7 @@ const mirrored = (act: string, outcome: string, at: number, refusal: string | nu
 /** A sweep entry as the chip reads it: the decision clocks are the lane's monotonic ones (never an epoch), `bornAt`
  *  is the idle null, `markerRunId` is the marker's own run, and the two fields the chip reads are the caller's. */
 const entry = (firstDeferredAt: number | null, firstPresenceDeferredAt: number | null = null, consecutiveFailures = 0) =>
-  ({ ...childReclaimFirstSighting(5_000, null, RUN), firstDeferredAt, firstPresenceDeferredAt, consecutiveFailures });
+  ({ ...childReclaimFirstSighting(5_000, null, RUN, { kind: 'absent' }), firstDeferredAt, firstPresenceDeferredAt, consecutiveFailures });
 
 describe('withChildReclaim — the composer GET /api/runs calls', () => {
   it('keeps every other field and sets childReclaim on each row', () => {

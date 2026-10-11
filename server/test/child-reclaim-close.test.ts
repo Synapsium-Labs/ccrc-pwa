@@ -99,7 +99,7 @@ describe('the hand-off happens AFTER the commit, and only after it', () => {
     expect(out).toEqual({ ok: true, id, state: 'failed', released: true, childReclaim: 'queued' });
     // `deferredSinceMs: null` — close is always a first attempt: it has no wait to report (spec §5.7).
     expect(b.handed).toEqual([{ req: { sessionId: ID, runId: id, trigger: 'close', deferExpired: false,
-                                       deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE },
+                                       deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'none' } },
                                 stateAtCall: 'failed' }]);
     expect(b.acts()).toEqual(['ws-release']);
   });
@@ -338,7 +338,7 @@ describe('the fleet act for a finished child is a RELEASE — never a hold, neve
     // `stateAtCall` (read from `coord.run` at the moment the port is called)
     // is the run's OWN post-commit state, `failed`, never a pre-commit one.
     expect(child.handed).toEqual([{ req: { sessionId: ID, runId: c, trigger: 'close', deferExpired: false,
-                                          deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE },
+                                          deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'none' } },
                                     stateAtCall: 'failed' }]);
 
     const plain = build();
@@ -425,7 +425,7 @@ describe('a REVIEW child lives until the run it reviewed is terminal (spec §5.7
     const out = await closeRun(b.deps, review, { state: 'failed' }, 'coordinator');
     expect(out).toEqual({ ok: true, id: review, state: 'failed', released: true, childReclaim: 'queued' });
     expect(b.handed).toEqual([{ req: { sessionId: ID, runId: review, trigger: 'close', deferExpired: false,
-                                       deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE },
+                                       deferredSinceMs: null, feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'none' } },
                                 stateAtCall: 'failed' }]);
   });
 });

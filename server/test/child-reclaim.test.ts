@@ -114,7 +114,7 @@ const rig = async (over: { mark?: string | null; markSymlink?: 'dangling' | 'liv
            req: (deferExpired = false, deferredSinceMs: number | null = null,
                  feedQuiet: ChildReclaimFeedQuiet = CHILD_RECLAIM_FEED_QUIET_NONE): ChildReclaimRequest =>
              ({ sessionId: ID, runId, trigger: deferredSinceMs === null ? 'close' as const : 'sweep' as const,
-                deferExpired, deferredSinceMs, feedQuiet }) };
+                deferExpired, deferredSinceMs, feedQuiet, licenceGeneration: deferredSinceMs === null ? { kind: 'none' } : { kind: 'absent' } }) };
 };
 
 describe('the fourteen words', () => {
@@ -1330,7 +1330,7 @@ describe('releaseRetiredChildHold — the hold-release job', () => {
 describe('feed rows de-duplicated (spec §5.9) — childReclaimFeedSkips, reclaimChild and the failure token', () => {
   const REQ = (over: Partial<ChildReclaimRequest> & { feedQuiet?: ChildReclaimFeedQuiet } = {}): ChildReclaimRequest =>
     ({ sessionId: ID, runId: 7, trigger: 'sweep', deferExpired: false, deferredSinceMs: 1,
-       feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, ...over });
+       feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'absent' }, ...over });
   const quiet = (deferWhy: string | null, failureToken: string | null = null): ChildReclaimFeedQuiet => ({ deferWhy, failureToken });
   const deferredOf = (why: string): Exclude<ChildReclaimOutcome, { kind: 'gone' }> =>
     ({ kind: 'deferred', sessionId: ID, runId: 7, why: why as never, detail: 'd' });

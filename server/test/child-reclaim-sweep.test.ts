@@ -200,18 +200,20 @@ const fixture = (opts: FixtureOpts = {}) => {
     await watcher.sweepChildReclaim(await readRegistry(deps.io, cfg), readdirSync(reg));
   };
   /** Like `pass`, but returns as soon as the decision is MADE, not once it
-   *  has SETTLED: `sweepChildReclaim` has no `await` between its own entry
-   *  and the per-child loop's `queue.run` call, so by the time the call
-   *  below returns (a plain synchronous call, its own promise merely
-   *  captured, never adopted by an enclosing `return`), any enqueue for this
-   *  pass has already happened — real, awaited fs I/O only for the registry
-   *  read ahead of it. The caller gets the still-pending completion back, to
-   *  await once whatever it queued behind can proceed — never blocked on it
-   *  immediately, which would hang forever if the very guard under test had
-   *  failed to guard. */
+   *  has SETTLED. `sweepChildReclaim`'s one `await` before its per-child loop
+   *  is the generation gather (spec §5.5), and from the loop to its
+   *  `queue.run` calls it awaits nothing. So this waits until the pass has
+   *  replaced its verdict map (`currentChildReclaimVerdicts()`, replaced whole
+   *  by every judging pass in the same synchronous run as every enqueue): by
+   *  then any enqueue for this pass has already happened. The caller gets the
+   *  still-pending completion back, to await once whatever it queued behind
+   *  can proceed — never blocked on it immediately, which would hang forever
+   *  if the very guard under test had failed to guard. */
   const passDispatched = async (): Promise<{ settle: Promise<void> }> => {
     const records = await readRegistry(deps.io, cfg);
+    const before = watcher.currentChildReclaimVerdicts();
     const settle = watcher.sweepChildReclaim(records, readdirSync(reg));
+    await vi.waitFor(() => expect(watcher.currentChildReclaimVerdicts(), 'the pass has not judged yet').not.toBe(before));
     return { settle };
   };
   /** The poll's own split, made explicit: `listing` reads the registry NOW;
@@ -324,7 +326,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     f.next();
     await f.pass();
     expect(f.requests).toEqual([{ sessionId: 'demo-a', runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
-        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE }]);
+        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'absent' } }]);
   });
 
   it('keeps its own clock: a second call inside CHILD_RECLAIM_SWEEP_MS is not a second pass', async () => {
@@ -418,7 +420,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     f.next(); await f.pass();
     expect(f.requests).toEqual([
       { sessionId: 'demo-r', runId: review.id, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
-        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE }]);
+        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'absent' } }]);
   });
 
   it('leaves a held child, a child with an unreadable marker, and a row with no marker', async () => {
@@ -501,7 +503,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     f.next(); await f.pass();                                 // …and its second — only now
     expect(f.requests).toEqual([
       { sessionId: 'demo-a', runId: r1.id, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
-        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE }]);
+        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'absent' } }]);
   });
 
   it('a release answered after the NEXT pass began still needs two FRESH unheld passes — the in-flight guard covers the release job too', async () => {
@@ -537,7 +539,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     f.next(); await f.pass();                                  // …and its second — only now
     expect(f.requests).toEqual([
       { sessionId: 'demo-a', runId: r1.id, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
-        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE }]);
+        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'absent' } }]);
   });
 
   it('a SECOND interleaving: ccd unlinks the hold before it answers — the eligible sighting made while the release is in flight dies with the answer, and the reclaim still needs two fresh passes after it', async () => {
@@ -576,7 +578,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     f.next(); await f.pass();                                   // its second — only now
     expect(f.requests).toEqual([
       { sessionId: 'demo-a', runId: r1.id, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
-        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE }]);
+        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'absent' } }]);
   });
 
   it('a pass whose listing was read BEFORE the release answered seeds nothing after the answer — the reclaim still needs two fresh unheld passes', async () => {
@@ -605,7 +607,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     f.next(); await f.pass();                                  // the SECOND fresh pass — only now
     expect(f.requests).toEqual([
       { sessionId: 'demo-a', runId: r1.id, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
-        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE }]);
+        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'absent' } }]);
   });
 
   it('a release that FAILS after being in flight across TWO passes is not retried the very next pass, only the one after — and never double-queues while in flight', async () => {
@@ -752,7 +754,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     f.next(); await f.pass();                                  // the SECOND — the request
     expect(f.requests, 'the mark outlived the fail-shut').toEqual([
       { sessionId: 'demo-a', runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
-        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE }]);
+        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'absent' } }]);
   });
 
   it('the release answer\'s mark is cleared when reclaim-paused is raised then lowered — two fresh passes, not three', async () => {
@@ -766,7 +768,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     f.next(); await f.pass();                                  // the SECOND — the request
     expect(f.requests, 'the mark outlived the pause').toEqual([
       { sessionId: 'demo-a', runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
-        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE }]);
+        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'absent' } }]);
   });
 
   it('the release answer\'s mark leaves with its row: listed again, the child needs two fresh passes, not three', async () => {
@@ -780,7 +782,7 @@ describe('sweepChildReclaim — what reaches the executor', () => {
     f.next(); await f.pass();                                  // the SECOND — the request
     expect(f.requests, 'the mark outlived its row').toEqual([
       { sessionId: 'demo-a', runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
-        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE }]);
+        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'absent' } }]);
   });
 
   it('a box that does not advertise ws-release never releases the hold — gated exactly as the close route gates it', async () => {
@@ -1297,7 +1299,7 @@ describe('fail-shut on the pass-level reads — a throw stops the WHOLE pass, no
     expect(f.requests).toEqual([]);
     f.next(); await f.pass();
     expect(f.requests).toEqual([{ sessionId: 'demo-a', runId, trigger: 'sweep', deferExpired: false, deferredSinceMs: null,
-        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE }]);
+        feedQuiet: CHILD_RECLAIM_FEED_QUIET_NONE, licenceGeneration: { kind: 'absent' } }]);
   });
 });
 

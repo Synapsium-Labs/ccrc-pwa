@@ -85,6 +85,7 @@ const base = (over: Partial<ChildReclaimSweepInput> = {}): ChildReclaimSweepInpu
   sessionId: 'demo-a',
   child: { kind: 'child', runId: 7 },
   identityMeasured: true,
+  generation: { kind: 'absent' },
   workspace: 'demo-a',
   held: { kind: 'none' },
   terminal: false,
@@ -464,11 +465,11 @@ describe('childReclaimHoldRead — accounting a hold\'s text against this child\
 });
 
 describe('the twice-observed memory, its two clocks, the presence episode, and the failure backoff', () => {
-  const entry: ChildReclaimSweepEntry = childReclaimFirstSighting(NOW - 60_000, BORN, RUN);
+  const entry: ChildReclaimSweepEntry = childReclaimFirstSighting(NOW - 60_000, BORN, RUN, { kind: 'absent' });
 
   it('a first sighting starts no clock, counts no failure, and was never asked', () => {
     expect(entry).toEqual({ firstEligibleAt: NOW - 60_000, firstDeferredAt: null, firstPresenceDeferredAt: null,
-      lastPresenceDeferredAt: null, lastPresenceWallAt: null, presenceHeldSince: null, bornAt: BORN, markerRunId: RUN,
+      lastPresenceDeferredAt: null, lastPresenceWallAt: null, presenceHeldSince: null, bornAt: BORN, markerRunId: RUN, generation: { kind: 'absent' },
       lastDeferWhy: null, consecutiveFailures: 0, lastFailedAt: null, refusedAt: null, lastAskedAt: null });
   });
 
@@ -699,7 +700,7 @@ describe('the lane\'s two clocks, the bracketed answer, and the presence lease (
   /** The gap bound, as the policy derives it from the interval it is handed. */
   const G = 2.5 * PASS;
   /** A first sighting at monotonic 0. */
-  const fresh: ChildReclaimSweepEntry = childReclaimFirstSighting(0, BORN, RUN);
+  const fresh: ChildReclaimSweepEntry = childReclaimFirstSighting(0, BORN, RUN, { kind: 'absent' });
   /** One due item, the shape `childReclaimAskOrder` takes. */
   const item = (id: string, over: Partial<ChildReclaimSweepEntry> = {}): { id: string; entry: ChildReclaimSweepEntry } =>
     ({ id, entry: { ...fresh, ...over } });
@@ -878,12 +879,12 @@ describe('the lane\'s two clocks, the bracketed answer, and the presence lease (
   });
 
   it('P14: one entry describes one workspace generation — a null birth never matches', () => {
-    const e = childReclaimFirstSighting(5_000, BORN, RUN);
+    const e = childReclaimFirstSighting(5_000, BORN, RUN, { kind: 'absent' });
     expect(e.bornAt).toBe(BORN);
-    expect(childReclaimSameGeneration(e, BORN, RUN)).toBe(true);
-    expect(childReclaimSameGeneration(e, BORN + 1, RUN)).toBe(false);
-    expect(childReclaimSameGeneration(e, null, RUN)).toBe(false);
-    expect(childReclaimSameGeneration(childReclaimFirstSighting(5_000, null, RUN), null, RUN)).toBe(false);
+    expect(childReclaimSameGeneration(e, BORN, RUN, { kind: 'absent' })).toBe(true);
+    expect(childReclaimSameGeneration(e, BORN + 1, RUN, { kind: 'absent' })).toBe(false);
+    expect(childReclaimSameGeneration(e, null, RUN, { kind: 'absent' })).toBe(false);
+    expect(childReclaimSameGeneration(childReclaimFirstSighting(5_000, null, RUN, { kind: 'absent' }), null, RUN, { kind: 'absent' })).toBe(false);
   });
 
   it('P15: a recycled slug re-marked by another run while its birth still reads the old one is a NEW generation — a licence-ripe episode never carries over', () => {
@@ -891,9 +892,9 @@ describe('the lane\'s two clocks, the bracketed answer, and the presence lease (
     const ripe: ChildReclaimSweepEntry = { ...fresh, firstPresenceDeferredAt: m0 - C, lastPresenceDeferredAt: m0 - PASS,
       lastPresenceWallAt: m0 - PASS, presenceHeldSince: m0 - C };
     expect(childReclaimDeferExpired(ripe, at(m0), PASS), 'the old workspace\'s episode is ripe').toBe(true);
-    expect(childReclaimSameGeneration(ripe, BORN, RUN + 1), 'the birth unchanged, the marker names another run').toBe(false);
-    expect(childReclaimSameGeneration(ripe, BORN, RUN), 'both keys unchanged: the same generation').toBe(true);
-    const seeded = childReclaimFirstSighting(m0, BORN, RUN + 1);
+    expect(childReclaimSameGeneration(ripe, BORN, RUN + 1, { kind: 'absent' }), 'the birth unchanged, the marker names another run').toBe(false);
+    expect(childReclaimSameGeneration(ripe, BORN, RUN, { kind: 'absent' }), 'both keys unchanged: the same generation').toBe(true);
+    const seeded = childReclaimFirstSighting(m0, BORN, RUN + 1, { kind: 'absent' });
     expect(seeded.markerRunId).toBe(RUN + 1);
     expect(childReclaimDeferExpired(seeded, at(m0), PASS), 'the new workspace starts unlicensed').toBe(false);
   });
@@ -969,8 +970,8 @@ describe('S1: seeded interleavings of the lane model — every licence rests on 
       const due: { id: string; entry: ChildReclaimSweepEntry }[] = [];
       for (const id of [...listed].sort()) {
         const entry = entries.get(id);
-        if (entry === undefined || !childReclaimSameGeneration(entry, BORN, RUN)) {
-          entries.set(id, childReclaimFirstSighting(asked.monoMs, BORN, RUN));
+        if (entry === undefined || !childReclaimSameGeneration(entry, BORN, RUN, { kind: 'absent' })) {
+          entries.set(id, childReclaimFirstSighting(asked.monoMs, BORN, RUN, { kind: 'absent' }));
           continue;
         }
         if (inFlight.has(id)) continue;
@@ -1653,7 +1654,7 @@ describe('the attention list\'s kept arm (spec §5.9)', () => {
 // for, and the failure word the attention list shows for it. The entry remembers the first; the list
 // carries the second. Nothing here paces, decides or dispatches.
 describe('feed rows de-duplicated (spec §5.9) — lastDeferWhy and childReclaimFeedQuiet', () => {
-  const fresh: ChildReclaimSweepEntry = childReclaimFirstSighting(NOW - 60_000, BORN, RUN);
+  const fresh: ChildReclaimSweepEntry = childReclaimFirstSighting(NOW - 60_000, BORN, RUN, { kind: 'absent' });
 
   it('(a) a deferral sets lastDeferWhy to its word, any later non-deferral clears it, and a first sighting reads null', () => {
     expect(fresh.lastDeferWhy).toBeNull();
