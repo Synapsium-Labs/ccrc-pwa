@@ -47,6 +47,27 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-11 07:57 — wave 8's wave-done (4205) is verified at `0511d5370`, PR #349. Run 348 is at `awaiting-review`, and review run 378 is opened.**
+  - **Measured.** origin's tip equals the fingerprint. PR #349 is MERGEABLE over main `7609221a4`, which has not moved,
+    and merge-tree exits 0. 18 commits, no merge. The range touches nothing under `ccd/`, `agent/`, `pwa/` or
+    `deploy/`, and neither `schema.ts` nor `deadCoordinator.ts`. CI was running at the advance.
+  - **The worker's suite line is `red`, and every red is explained.** ccd-review-335-pins (F9, twice) and tmp-sweep's
+    "FAILS CLOSED" fail identically on clean main, the same main-reds wave 7 measured. boot.test.ts was a load flake,
+    green alone. 641 of 641 server files ran; agent and pwa are green.
+  - **Its own reviews.** Every task had a review, with fix rounds on Tasks 2, 3 and 7. A SAFETY lens on Opus xhigh
+    built 50 re-mint constructions and found no Critical or Important issue. A whole-branch review produced one fix
+    wave of 18 items, all addressed in a scoped re-review.
+  - **Carried `corrupt-admin-entry-holds-the-repository`:** the tier classifies it. A repeated `pin-failed` is a ccd
+    failed line, so it enters the persistent tier on its fourth consecutive failure.
+  - **Ruling 4203 was not needed:** workspace-lifecycle wave 6 was not on main at Task 6, so Task 6's Step 5 ran as
+    written. If wave 6 lands second, it makes the shared describe reclaim-only under the consent in 4202.
+  - **README** was edited under brisk-meadow's consent (4204, claim 1141).
+  - **Ten departures were found**, to be numbered at the fix round from the brief's list:
+    `pass-throttle-restamped-after-gather`, `born-at-opens-through-generation`, `uidn-at-module-scope-per-h7`,
+    `wave7-header-comment-stale`, `verdict-readers-pin-stale-after-leaf-writer`, `leaf-kept-phrase-second-table`,
+    `brief-labels-reworded-to-spec-citations`, `held-verdict-case-narrows-kept-many`,
+    `as-built-note-carries-slugs-not-numbers` and `leaf-kept-session-id-follows-ccds-rule`.
+
 - **2026-10-11 01:33 — wave 7 is DEPLOYED on the fleet box by ccrc's own updater; no hand rollout.** `~/ccrc` now points at
   v0.0.145 (`7609221a4`). `~/.ccrc/update.json` records the auto move (`from: pwa`, phase `done`, 01:10:35–01:12:06).
   The agent restarted at 01:10:52, so its cached caps are fresh, and `ccd caps` advertises `collect-v1` and
