@@ -915,7 +915,7 @@ export function childReclaimTierOf(t: ChildReclaimTierState): ChildReclaimTierSt
 }
 
 /** The ONE derivation of membership and j from a run, shared by the live memory and the restart seed. */
-function childReclaimTierFrom(token: string | null, run: number, stuck: boolean): ChildReclaimTierState {
+export function childReclaimTierFrom(token: string | null, run: number, stuck: boolean): ChildReclaimTierState {
   const tier = stuck || run >= CHILD_RECLAIM_TIER_ENTRY_RUN;
   return { tier, tierToken: token, tierJ: tier ? Math.max(0, run - CHILD_RECLAIM_TIER_ENTRY_RUN) : 0, tierRun: run };
 }

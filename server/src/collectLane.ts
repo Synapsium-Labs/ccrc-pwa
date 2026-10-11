@@ -11,6 +11,10 @@
 // - its refusal words are not reclaim's;
 // - its audit is keyed `session`, not `id`.
 import { CHILD_RUN_ID, isTmpRootId, type CollectToken } from '../../shared/api.js';
+import {
+  CHILD_RECLAIM_DEFER_CEILING_MS, childReclaimBackoffMs, childReclaimTierFrom, childReclaimTierPaceMs,
+  type ChildReclaimLaneNow, type ChildReclaimTierState,
+} from './childReclaimSweep.js';
 
 const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
 /** A JSON object: never an array, never null. */
@@ -416,3 +420,473 @@ export function collectPopulation(input: {
 /** Is `id` forgotten this pass, its pacing and feed episodes dropped without a feed row (spec §5.10)? Only when BOTH
  *  listings were measured and neither names it: an unmeasured listing never says an id is gone. */
 export const collectForgets = (pop: CollectPopulation, id: string): boolean => pop.bothMeasured && !pop.ids.includes(id);
+
+// ── the licence and the pacing (spec §5.10, "the lane": two observations, one job, one act) ─────────────────────
+//
+// The lane's per-id memory, and every rule it decides by. MEMORY ONLY: nothing here is written to coord.db or to any
+// file, so a restart starts every id afresh, and a fresh id needs two fresh observations before anything is spent.
+// Every instant is the lane's MONOTONIC clock (`ChildReclaimLaneNow.monoMs`), stamped when an answer ARRIVES; the wall
+// clock is read once, at a `changed-recently` answer's arrival, against ccd's own `idleAt`. Every interval is an
+// ARGUMENT, because this file imports no L4 constant. The pace is wave 8's, IMPORTED, never a second formula:
+// `childReclaimTierFrom`, `childReclaimTierPaceMs` and `childReclaimBackoffMs` (`childReclaimSweep.ts`, L1).
+
+/** How far a `changed-recently` answer may push the id's next ask at most, and how long `changed-recently` may answer
+ *  without a break before the id is listed (spec §5.10, pacing): 24 hours. One span, both uses. */
+export const COLLECT_CHANGED_RECENTLY_SPAN_MS = 24 * 3_600_000;
+
+/** The class word each of the three runs carries as its tier token (spec §5.10, pacing). ccd's own word is never the
+ *  token, so a change of probe or of terminal word never restarts a run. */
+export type CollectRunToken = 'failing' | 'verb-failed' | 'terminal';
+
+/** One of the id's three runs (spec §5.10, pacing): none, or `run` answers since it was last cleared, the last of
+ *  them ARRIVING at `atMono`. `stuck` is set once an answer entered the run on the tier at once (a per-leaf
+ *  deterministic probe, or any terminal answer) and stays set until the run clears, so a later answer of another
+ *  class never takes the run off the tier. `word` and `detail` are the latest answer's, ccd's own strings: whatever
+ *  reaches a sentence or a feed row goes through `childReclaimDetailText` first. */
+export type CollectRun =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'run'; readonly run: number; readonly atMono: number; readonly stuck: boolean;
+      readonly word: string; readonly detail: string };
+
+export const COLLECT_RUN_NONE: CollectRun = { kind: 'none' };
+
+/** The run after one more answer of its class, arriving at `atMono`. */
+const collectRunAdvance = (r: CollectRun, atMono: number, word: string, detail: string, stuck: boolean): CollectRun => ({
+  kind: 'run', run: (r.kind === 'run' ? r.run : 0) + 1, atMono, stuck: stuck || (r.kind === 'run' && r.stuck), word, detail,
+});
+
+/** The run's place on wave 8's persistent tier, through that tier's ONE derivation of membership and j
+ *  (`childReclaimTierFrom`), with the run's class word as its token. */
+export const collectRunTier = (r: CollectRun, token: CollectRunToken): ChildReclaimTierState =>
+  (r.kind === 'none' ? childReclaimTierFrom(null, 0, false) : childReclaimTierFrom(token, r.run, r.stuck));
+
+/** The run's wait after its last answer: the tier's pace once on the tier, else the ordinary ramp over its count;
+ *  `0` with no run. Both are wave 8's, imported. */
+export const collectRunWaitMs = (r: CollectRun, token: CollectRunToken, passIntervalMs: number): number => {
+  if (r.kind === 'none') return 0;
+  const t = collectRunTier(r, token);
+  return t.tier ? childReclaimTierPaceMs(t.tierJ) : childReclaimBackoffMs(r.run, passIntervalMs);
+};
+
+/** OBSERVATION 1 (spec §5.10, the licence): an audit of the id answered `collectable` with `token`, ARRIVING at
+ *  `arrivedMono`. Keyed (id, token): the entry is the id's, and the token is held only to be COMPARED. */
+export interface CollectObservation { readonly token: CollectToken; readonly arrivedMono: number }
+
+/** Why the open-run hold stands (spec §5.10, the gates), as the executor judges it on observation 2's document: the
+ *  witness's run is open, absent from coord.db, or opened after the witness; coord.db names the id in an open run;
+ *  a fresh collectable document names no witness run; or a store read failed. Spelled once, as a total table's keys. */
+const COLLECT_HOLD_WHY_TABLE = {
+  'run-open': true, 'run-absent': true, 'run-after-witness': true, 'id-in-open-run': true, 'no-witness-run': true,
+  'store-unreadable': true,
+} as const satisfies Readonly<Record<string, true>>;
+export type CollectHoldWhy = keyof typeof COLLECT_HOLD_WHY_TABLE;
+export const COLLECT_HOLD_WHYS: readonly CollectHoldWhy[] = Object.keys(COLLECT_HOLD_WHY_TABLE) as CollectHoldWhy[];
+
+/** The pacing row of each word the collector's audit answers with besides `collectable` and `unmeasured` (spec
+ *  §5.10, pacing): ccd's `_ws_collect_refuse` words, held set-equal to them in both directions by a test.
+ *  - `defer`: a deferral, neutral to every run; `listedAfterMs` is how long it must answer without a break before the
+ *    id is listed (`0`: at once), or null for never by its own continuity.
+ *  - `schedule`: `changed-recently`, re-asked from ccd's `idleAt`, and listed after `listedAfterMs` without a break.
+ *  - `silent`: `not-witnessed`, which clears the three runs, advances the deferral count, and raises nothing (R87).
+ *  - `terminal`: the terminal run.
+ *  A verdict word NOT in this table is read as a failure (the failing run): never spent, and listed at the tier. */
+export type CollectVerdictRow =
+  | { readonly pace: 'defer'; readonly listedAfterMs: number | null }
+  | { readonly pace: 'schedule'; readonly listedAfterMs: number }
+  | { readonly pace: 'silent' }
+  | { readonly pace: 'terminal' };
+export const COLLECT_VERDICT_TABLE = {
+  'changed-recently': { pace: 'schedule', listedAfterMs: COLLECT_CHANGED_RECENTLY_SPAN_MS },
+  'not-witnessed': { pace: 'silent' },
+  registered: { pace: 'defer', listedAfterMs: CHILD_RECLAIM_DEFER_CEILING_MS },
+  'in-use': { pace: 'defer', listedAfterMs: 0 },
+  paused: { pace: 'defer', listedAfterMs: null },
+  'in-progress': { pace: 'defer', listedAfterMs: CHILD_RECLAIM_DEFER_CEILING_MS },
+  'witness-mismatch': { pace: 'terminal' },
+  'quarantine-kept': { pace: 'terminal' },
+  'containment-unproven': { pace: 'terminal' },
+} as const satisfies Readonly<Record<string, CollectVerdictRow>>;
+export type CollectVerdictWord = keyof typeof COLLECT_VERDICT_TABLE;
+export const COLLECT_VERDICT_WORDS: readonly CollectVerdictWord[] = Object.keys(COLLECT_VERDICT_TABLE) as CollectVerdictWord[];
+const isCollectVerdictWord = (w: string): w is CollectVerdictWord => Object.hasOwn(COLLECT_VERDICT_TABLE, w);
+
+/** A run of one deferral or schedule word, answered without a break (spec §5.10, attention): from the first such
+ *  answer's arrival to the latest's, with the latest's detail (ccd's holder, for `in-use`). */
+export interface CollectStreak {
+  readonly word: CollectVerdictWord; readonly sinceMono: number; readonly lastMono: number; readonly detail: string;
+}
+/** The open-run hold's continuity: first at `sinceMono`, last at `atMono`, latest for `why`. It keeps NO count: the
+ *  hold's next ask waits `CHILD_RECLAIM_DEFER_CEILING_MS` flat (R87). Task 6's `CollectHeld` is the hold's RESULT. */
+export interface CollectHoldClock {
+  readonly why: CollectHoldWhy; readonly sinceMono: number; readonly atMono: number;
+}
+/** A recognised pre-lock die other than `flock-unavailable`, recurring with ONE word (R87): from the first such die's
+ *  arrival to the latest's. `collectable` observations, the hold and presence continue it; any other answer, act
+ *  outcome or would-collect ends it. */
+export interface CollectDieStreak {
+  readonly word: CollectDieWord; readonly sinceMono: number; readonly lastMono: number;
+}
+/** The presence defer's continuity and count: deferred `count` times, first at `sinceMono`, last at `atMono`. */
+export interface CollectPresence { readonly count: number; readonly sinceMono: number; readonly atMono: number }
+/** The LATEST document's own evidence (R88, H3): its witness's run and its leaf (ccd's path, display only). A
+ *  collectable, verdict or unmeasured document brings its own; no document and an unreadable one bring none. */
+export interface CollectEvidence { readonly runId: number | null; readonly leaf: string | null }
+
+/** THE LANE'S MEMORY OF ONE ID (spec §5.10). Memory only.
+ *  - `idGen`: the id's clear generation. Every reset of the pair stamps a generation the lane never used before, so a
+ *    request composed before it is stale when it answers (`collectFresh`).
+ *  - `obs`: observation 1, or none.
+ *  - `deferrals`, `deferredAtMono`: the DEFERRAL count and its last arrival; it never enters a tier.
+ *  - `failing`, `verbFailed`, `terminal`: the three runs.
+ *  - `scheduleMono`: a `changed-recently` answer's next ask, or none.
+ *  - `refusedAtMono`, `wouldCollectAtMono`, `dieAtMono`: the last verb refusal's, the last would-collect's and the last
+ *    pre-lock die's (`flock-unavailable` aside) arrival, each the origin of a floor of `CHILD_RECLAIM_DEFER_CEILING_MS`
+ *    under the next ask.
+ *  - `streak`, `die`, `held`, `presence`: the four continuity clocks attention reads.
+ *  - `evidence`: the latest document's.
+ *  - `feedEpisode`: the key of the feed episode whose row was written, or none (`collectFeedStep`). */
+export interface CollectEntry {
+  readonly idGen: number;
+  readonly obs: CollectObservation | null;
+  readonly deferrals: number;
+  readonly deferredAtMono: number | null;
+  readonly failing: CollectRun;
+  readonly verbFailed: CollectRun;
+  readonly terminal: CollectRun;
+  readonly scheduleMono: number | null;
+  readonly refusedAtMono: number | null;
+  readonly wouldCollectAtMono: number | null;
+  readonly dieAtMono: number | null;
+  readonly streak: CollectStreak | null;
+  readonly die: CollectDieStreak | null;
+  readonly held: CollectHoldClock | null;
+  readonly presence: CollectPresence | null;
+  readonly evidence: CollectEvidence;
+  readonly feedEpisode: string | null;
+}
+
+/** A first sighting, and every id after a restart: nothing observed, nothing counted, due at once. `gen` is a clear
+ *  generation the lane never used before. */
+export const collectFirstSighting = (gen: number): CollectEntry => ({
+  idGen: gen, obs: null, deferrals: 0, deferredAtMono: null,
+  failing: COLLECT_RUN_NONE, verbFailed: COLLECT_RUN_NONE, terminal: COLLECT_RUN_NONE,
+  scheduleMono: null, refusedAtMono: null, wouldCollectAtMono: null, dieAtMono: null,
+  streak: null, die: null, held: null, presence: null, evidence: { runId: null, leaf: null }, feedEpisode: null,
+});
+
+/** One step's context: `now` is the answer's ARRIVAL (or the executor's decision), read in its own callback; `gen`
+ *  is a clear generation the lane never used before, drawn from the ONE counter both kinds of generation come from,
+ *  stamped only by a transition that resets the pair; `passIntervalMs` is the lane's pass interval. */
+export interface CollectStep {
+  readonly now: ChildReclaimLaneNow;
+  readonly gen: number;
+  readonly passIntervalMs: number;
+}
+
+/** What a request was composed under (spec §5.10, stale answers): the lane-wide clear generation and the id's. */
+export interface CollectCapture { readonly lane: number; readonly id: number }
+
+export const collectCapture = (laneGen: number, e: CollectEntry): CollectCapture => ({ lane: laneGen, id: e.idGen });
+
+/** Is an answer to a request composed under `cap` an OBSERVATION? Only when neither generation has moved since, and
+ *  the id is still remembered: a lane-wide clear, any reset of the id's pair, and forgetting the id each make every
+ *  earlier request stale. A stale answer paces the id like any other, and is never an observation. A plain boolean,
+ *  never a type predicate: false means the id is forgotten OR the answer is stale, and a stale answer's entry is still
+ *  the id's, to be paced, so a caller checks `undefined` itself. */
+export const collectFresh = (cap: CollectCapture, laneGen: number, e: CollectEntry | undefined): boolean =>
+  e !== undefined && cap.lane === laneGen && cap.id === e.idGen;
+
+/** A lane-wide clear (a raised pause, an unlistable registry, a missing capability, a pass that failed shut, a flip
+ *  of the live marker): the OBSERVATION PAIR only. The pacing, every run, the continuity clocks and the feed episode
+ *  stand (spec §5.10). The caller moves the lane-wide generation in the same act. */
+export const collectClearPair = (e: CollectEntry): CollectEntry => (e.obs === null ? e : { ...e, obs: null });
+
+/** A `changed-recently` answer's next ask (spec §5.10, pacing): `arrival.monoMs + clamp(idleAt·1000 − arrival.wallMs,
+ *  passIntervalMs, 24 h)`. The wall clock is compared once, here, with ccd's own stamp; what is stored is monotonic.
+ *  An `idleAt` that is not a finite non-negative integer, or a wall clock that makes the difference no number, has
+ *  no schedule: the answer takes the deferral wait. idleAt never gates a spend; ccd decides the floor in its lock. */
+export type CollectIdleSchedule = { readonly kind: 'at'; readonly monoMs: number } | { readonly kind: 'no-idle-at' };
+export function collectIdleSchedule(idleAt: number | null, arrival: ChildReclaimLaneNow, passIntervalMs: number): CollectIdleSchedule {
+  if (idleAt === null || !Number.isInteger(idleAt) || idleAt < 0) return { kind: 'no-idle-at' };
+  const ahead = idleAt * 1000 - arrival.wallMs;
+  if (Number.isNaN(ahead)) return { kind: 'no-idle-at' };
+  return { kind: 'at', monoMs: arrival.monoMs + Math.min(Math.max(ahead, passIntervalMs), COLLECT_CHANGED_RECENTLY_SPAN_MS) };
+}
+
+/** The memory after one AUDIT answer (spec §5.10, pacing). `observes` is `collectFresh` of the request's capture:
+ *  a stale answer paces the id as any answer does, and never seeds or continues an observation.
+ *  - `collectable`: passed every rung, so the deferral count and the failing run clear; the verb-failed and terminal
+ *    runs NEVER do. A fresh one with the token observation 1 holds continues the pair, observation 1 keeping its first
+ *    arrival; with another token, or none held, it is observation 1 afresh.
+ *  - Every other answer resets the pair.
+ *  - A `defer` word, and an `unmeasured` box-wide probe: a deferral.
+ *  - `changed-recently`: clears the deferral count and the failing run, and schedules from `idleAt`; without one it is
+ *    a deferral.
+ *  - `not-witnessed`: clears the three runs and ADVANCES the deferral count, so it is asked no sooner than the ramp (R87).
+ *  - A terminal word: the terminal run, on the tier at once.
+ *  - An `unmeasured` per-leaf or load-sensitive probe (an unknown probe word is load-sensitive), `no-document`,
+ *    `unreadable` and a verdict word the table does not know: the failing run, a per-leaf probe on the tier at once.
+ *  The hold's, presence's and the die's continuity end at every answer but a `collectable` one; a deferral or schedule
+ *  word continues its own streak and every other answer ends it. Only `changed-recently` keeps a schedule. A
+ *  collectable, verdict or unmeasured document brings its own evidence; no document and an unreadable one keep the last. */
+export function collectAfterAudit(e: CollectEntry, a: CollectAudit, s: CollectStep, observes: boolean): CollectEntry {
+  const t = s.now.monoMs;
+  // the LATEST document's evidence (R88, H3): every document that carries one brings it; the rest keep the last
+  const d: CollectEntry = a.kind === 'no-document' || a.kind === 'unreadable'
+    ? e : { ...e, evidence: { runId: a.witnessRun, leaf: a.leaf } };
+  // EVERY answer but a fresh observation of the token held resets the pair, under a new generation (spec §5.10)
+  const reset = { obs: null, idGen: s.gen } as const;
+  const ended = { held: null, presence: null, streak: null, scheduleMono: null, die: null } as const;
+  const deferral = { deferrals: e.deferrals + 1, deferredAtMono: t } as const;
+  const undeferred = { deferrals: 0, deferredAtMono: null } as const;
+  const failure = (word: string, detail: string, stuck: boolean): CollectEntry =>
+    ({ ...d, ...reset, ...ended, ...undeferred, failing: collectRunAdvance(e.failing, t, word, detail, stuck) });
+  const streak = (word: CollectVerdictWord, detail: string): CollectStreak =>
+    (e.streak !== null && e.streak.word === word
+      ? { ...e.streak, lastMono: t, detail }
+      : { word, sinceMono: t, lastMono: t, detail });
+  switch (a.kind) {
+    case 'collectable': {
+      const passed: CollectEntry = { ...d, ...undeferred, failing: COLLECT_RUN_NONE, streak: null, scheduleMono: null };
+      if (!observes) return { ...passed, ...reset };
+      if (e.obs !== null && e.obs.token === a.token) return passed;
+      return { ...passed, obs: { token: a.token, arrivedMono: t }, idGen: s.gen };
+    }
+    case 'verdict': {
+      if (!isCollectVerdictWord(a.verdict)) return failure(a.verdict, a.detail, false);
+      const word = a.verdict;
+      const row: CollectVerdictRow = COLLECT_VERDICT_TABLE[word];
+      if (row.pace === 'terminal') {
+        return { ...d, ...reset, ...ended, ...undeferred, terminal: collectRunAdvance(e.terminal, t, word, a.detail, true) };
+      }
+      if (row.pace === 'silent') {
+        return { ...d, ...reset, ...ended, ...deferral,
+          failing: COLLECT_RUN_NONE, verbFailed: COLLECT_RUN_NONE, terminal: COLLECT_RUN_NONE };
+      }
+      if (row.pace === 'defer') return { ...d, ...reset, ...ended, ...deferral, streak: streak(word, a.detail) };
+      const at = collectIdleSchedule(a.idleAt, s.now, s.passIntervalMs);
+      const base: CollectEntry = { ...d, ...reset, ...ended, failing: COLLECT_RUN_NONE, streak: streak(word, a.detail) };
+      return at.kind === 'at' ? { ...base, ...undeferred, scheduleMono: at.monoMs } : { ...base, ...deferral };
+    }
+    case 'unmeasured': {
+      const cls = collectProbeClass(a.probe);
+      if (cls === 'box-wide') return { ...d, ...reset, ...ended, ...deferral };
+      return failure(a.probe, a.detail, cls === 'per-leaf');
+    }
+    case 'no-document': return failure('no-document', a.stderr, false);
+    case 'unreadable': return failure('unreadable', a.detail, false);
+  }
+}
+
+/** The memory after the ACT (spec §5.10, pacing). Every outcome resets the pair and ends every continuity clock but
+ *  a recurring die's.
+ *  - `collected`: every run, count and floor clears, as at a first sighting.
+ *  - `refused`, of any word, retryable included: a deferral, and the refusal floor. A terminal word (the verb's
+ *    refusal table, `collectRefusalClass`) also advances the terminal run, ahead of the refusal row (R87). A
+ *    `not-witnessed` reads as the audit's (H7): the three runs clear, beside the deferral and the floor.
+ *  - `failed` whose word is terminal (`failed quarantine-kept`): the terminal run, ahead of the verb-failed row (R87).
+ *  - Any other `failed`, a reader-made `''` included, and `no-document` (an act that MAY have acted): the verb-failed run.
+ *  - `die` (a recognised pre-lock die, which acted nothing): a deferral, neutral to every run. Every word but
+ *    `flock-unavailable`, which latches box-wide instead (Task 7), also takes the refusal floor (`dieAtMono`) and
+ *    continues a die streak of its own word, which attention reads past the ceiling (R87). */
+export function collectAfterAct(e: CollectEntry, r: CollectResult, s: CollectStep): CollectEntry {
+  const t = s.now.monoMs;
+  const after: CollectEntry = {
+    ...e, obs: null, idGen: s.gen, held: null, presence: null, streak: null, scheduleMono: null, die: null,
+  };
+  switch (r.kind) {
+    case 'collected':
+      return { ...collectFirstSighting(s.gen), evidence: e.evidence, feedEpisode: e.feedEpisode };
+    case 'refused': {
+      const silent = isCollectVerdictWord(r.word) && COLLECT_VERDICT_TABLE[r.word].pace === 'silent';
+      const runs: Partial<CollectEntry> = silent
+        ? { failing: COLLECT_RUN_NONE, verbFailed: COLLECT_RUN_NONE, terminal: COLLECT_RUN_NONE }
+        : collectRefusalClass(r.word) === 'terminal'
+          ? { terminal: collectRunAdvance(e.terminal, t, r.word, r.detail, true) } : {};
+      return { ...after, ...runs, deferrals: e.deferrals + 1, deferredAtMono: t, refusedAtMono: t };
+    }
+    case 'failed':
+      return collectRefusalClass(r.token) === 'terminal'
+        ? { ...after, deferrals: 0, deferredAtMono: null, terminal: collectRunAdvance(e.terminal, t, r.token, r.detail, true) }
+        : { ...after, deferrals: 0, deferredAtMono: null,
+          verbFailed: collectRunAdvance(e.verbFailed, t, r.token, r.detail, false) };
+    case 'no-document':
+      return { ...after, deferrals: 0, deferredAtMono: null,
+        verbFailed: collectRunAdvance(e.verbFailed, t, 'no-document', r.stderr, false) };
+    case 'die': {
+      if (r.word === 'flock-unavailable') return { ...after, deferrals: e.deferrals + 1, deferredAtMono: t };
+      return { ...after, deferrals: e.deferrals + 1, deferredAtMono: t, dieAtMono: t,
+        die: e.die !== null && e.die.word === r.word ? { ...e.die, lastMono: t } : { word: r.word, sinceMono: t, lastMono: t } };
+    }
+  }
+}
+
+/** The memory after the open-run hold stood (spec §5.10, the gates): the pair resets, and the hold's continuity runs
+ *  on. It counts nothing: no run, not the deferral count, and no count of its own. Its next ask waits
+ *  `CHILD_RECLAIM_DEFER_CEILING_MS` flat (R87). */
+export function collectAfterHold(e: CollectEntry, why: CollectHoldWhy, s: CollectStep): CollectEntry {
+  const t = s.now.monoMs;
+  return { ...e, obs: null, idGen: s.gen, presence: null, held: { why, sinceMono: e.held?.sinceMono ?? t, atMono: t } };
+}
+
+/** The memory after the presence defer (spec §5.10, the gates): the pair resets, and presence's own count and
+ *  continuity run on. No ceiling licenses past it: it is only ever listed. */
+export function collectAfterPresence(e: CollectEntry, s: CollectStep): CollectEntry {
+  const t = s.now.monoMs;
+  return { ...e, obs: null, idGen: s.gen, held: null,
+    presence: { count: (e.presence?.count ?? 0) + 1, sinceMono: e.presence?.sinceMono ?? t, atMono: t } };
+}
+
+/** The memory after a shadowed job recorded "would collect" (spec §5.10, shadow): the pair resets, no run moves, and
+ *  the next learning audit waits the shadow floor, so shadow never audits a collectable id every pass. */
+export function collectAfterWouldCollect(e: CollectEntry, s: CollectStep): CollectEntry {
+  return { ...e, obs: null, idGen: s.gen, held: null, presence: null, die: null, wouldCollectAtMono: s.now.monoMs };
+}
+
+/** THE NEXT ASK (spec §5.10, pacing): the LATEST of every wait that applies, each counted from its own last arrival.
+ *  - the deferral wait, `childReclaimBackoffMs` over the deferral count;
+ *  - each run's wait (`collectRunWaitMs`);
+ *  - the `changed-recently` schedule;
+ *  - the hold's wait: the ceiling, flat (R87: no count of its own);
+ *  - presence's wait: the ramp over its own count;
+ *  - the refusal, die and shadow floors, the ceiling after each;
+ *  - while observation 1 stands, the observation interval after its arrival, so a holder is not offered again
+ *    before its partner may be composed.
+ *  null when no wait applies: the id is due at once. */
+export function collectNextAskMono(e: CollectEntry, passIntervalMs: number, observeIntervalMs: number): number | null {
+  const waits: number[] = [];
+  if (e.deferredAtMono !== null) waits.push(e.deferredAtMono + childReclaimBackoffMs(e.deferrals, passIntervalMs));
+  for (const [r, token] of [[e.failing, 'failing'], [e.verbFailed, 'verb-failed'], [e.terminal, 'terminal']] as const) {
+    if (r.kind === 'run') waits.push(r.atMono + collectRunWaitMs(r, token, passIntervalMs));
+  }
+  if (e.scheduleMono !== null) waits.push(e.scheduleMono);
+  if (e.held !== null) waits.push(e.held.atMono + CHILD_RECLAIM_DEFER_CEILING_MS);
+  if (e.presence !== null) waits.push(e.presence.atMono + childReclaimBackoffMs(e.presence.count, passIntervalMs));
+  if (e.refusedAtMono !== null) waits.push(e.refusedAtMono + CHILD_RECLAIM_DEFER_CEILING_MS);
+  if (e.dieAtMono !== null) waits.push(e.dieAtMono + CHILD_RECLAIM_DEFER_CEILING_MS);
+  if (e.wouldCollectAtMono !== null) waits.push(e.wouldCollectAtMono + CHILD_RECLAIM_DEFER_CEILING_MS);
+  if (e.obs !== null) waits.push(e.obs.arrivedMono + observeIntervalMs);
+  return waits.length === 0 ? null : Math.max(...waits);
+}
+
+/** May the lane ask about this id now? At or after its next ask, or at once with none. A clock that is no number is
+ *  never due. */
+export const collectDue = (e: CollectEntry, nowMono: number, passIntervalMs: number, observeIntervalMs: number): boolean => {
+  const next = collectNextAskMono(e, passIntervalMs, observeIntervalMs);
+  return next === null ? Number.isFinite(nowMono) : nowMono >= next;
+};
+
+/** Is the id RIPE, offered the act job (spec §5.10)? Due, with observation 1 standing. A due id without one is
+ *  offered a learning audit instead. */
+export const collectRipe = (e: CollectEntry, nowMono: number, passIntervalMs: number, observeIntervalMs: number): boolean =>
+  e.obs !== null && collectDue(e, nowMono, passIntervalMs, observeIntervalMs);
+
+/** THE LICENCE, the ONE rule (spec §5.10, two observations, one job, one act). `ws-collect` may be spent only when:
+ *  - observation 2, the executor's own audit in the act's job, is an observation (`observes`, its capture fresh);
+ *  - it answered `collectable`;
+ *  - observation 1, read from memory before observation 2 was applied, stands;
+ *  - both carry ONE token;
+ *  - observation 2 ARRIVED at least `observeIntervalMs` after observation 1 did, on the monotonic clock.
+ *  Every answer between the two was `collectable` with that token, because any other answer resets the pair. All
+ *  three token modes take this rule. A difference that is no finite number, or an interval that is not positive,
+ *  never licenses. The licence carries NO token: the argv's token is observation 2's own, read off its parsed
+ *  document where the argv is built. `first` is kept for step 6's re-read (`collectLicenceStands`). */
+export type CollectLicence =
+  | { readonly kind: 'licensed'; readonly first: CollectObservation }
+  | { readonly kind: 'stale' | 'not-collectable' | 'no-first' | 'token-changed' | 'too-soon' };
+export function collectLicence(
+  first: CollectObservation | null, second: CollectAudit, secondArrivedMono: number, observeIntervalMs: number,
+  observes: boolean,
+): CollectLicence {
+  if (!observes) return { kind: 'stale' };
+  if (second.kind !== 'collectable') return { kind: 'not-collectable' };
+  if (first === null) return { kind: 'no-first' };
+  if (second.token !== first.token) return { kind: 'token-changed' };
+  const span = secondArrivedMono - first.arrivedMono;
+  if (!(Number.isFinite(span) && observeIntervalMs > 0 && span >= observeIntervalMs)) return { kind: 'too-soon' };
+  return { kind: 'licensed', first };
+}
+
+/** Step 6's re-read (spec §5.10): after the job's last await, the licence still stands only while neither generation
+ *  captured when observation 2 was composed (`composed`) has moved by `now`, and memory still holds the very
+ *  observation 1 the licence was judged on (`obs`). The executor calls it through its port (H3): `now` is
+ *  `lane.generations(id)`, whose `id` is -1 for a forgotten id (a generation no entry carries), and `obs` is
+ *  `lane.observation(id)`. */
+export const collectLicenceStands = (
+  first: CollectObservation, composed: CollectCapture, now: CollectCapture, obs: CollectObservation | null,
+): boolean =>
+  composed.lane === now.lane && composed.id === now.id
+  && obs !== null && obs.token === first.token && obs.arrivedMono === first.arrivedMono;
+
+/** One reason the id stands on the attention list (spec §5.10, attention), in a fixed order, the most severe first.
+ *  `collectAttentionItems` writes the item; this says only that it stands.
+ *  - `terminal`: the terminal run stands, at once.
+ *  - `failing`, `verb-failed`: that run is on the tier.
+ *  - `in-use`: at once. `registered`, `in-progress`: answered without a break for the ceiling. `changed-recently`: for
+ *    24 hours. Each measured from the streak's first answer to its latest.
+ *  - `held`, `presence`: deferred so for the ceiling, first to latest.
+ *  - `die`: one pre-lock die word recurring for the ceiling, first to latest (R87). */
+export type CollectAttentionCause =
+  | { readonly kind: 'terminal' | 'failing' | 'verb-failed'; readonly word: string; readonly detail: string }
+  | { readonly kind: CollectVerdictWord; readonly detail: string; readonly sinceMono: number }
+  | { readonly kind: 'held'; readonly why: CollectHoldWhy; readonly sinceMono: number }
+  | { readonly kind: 'presence'; readonly sinceMono: number }
+  | { readonly kind: 'die'; readonly word: CollectDieWord; readonly sinceMono: number };
+export function collectAttentionCauses(e: CollectEntry): CollectAttentionCause[] {
+  const out: CollectAttentionCause[] = [];
+  const runs = [['terminal', e.terminal], ['failing', e.failing], ['verb-failed', e.verbFailed]] as const;
+  for (const [token, r] of runs) {
+    if (r.kind === 'run' && collectRunTier(r, token).tier) out.push({ kind: token, word: r.word, detail: r.detail });
+  }
+  const s = e.streak;
+  if (s !== null) {
+    const row: CollectVerdictRow = COLLECT_VERDICT_TABLE[s.word];
+    const after = row.pace === 'defer' || row.pace === 'schedule' ? row.listedAfterMs : null;
+    if (after !== null && s.lastMono - s.sinceMono >= after) out.push({ kind: s.word, detail: s.detail, sinceMono: s.sinceMono });
+  }
+  if (e.held !== null && e.held.atMono - e.held.sinceMono >= CHILD_RECLAIM_DEFER_CEILING_MS) {
+    out.push({ kind: 'held', why: e.held.why, sinceMono: e.held.sinceMono });
+  }
+  if (e.presence !== null && e.presence.atMono - e.presence.sinceMono >= CHILD_RECLAIM_DEFER_CEILING_MS) {
+    out.push({ kind: 'presence', sinceMono: e.presence.sinceMono });
+  }
+  if (e.die !== null && e.die.lastMono - e.die.sinceMono >= CHILD_RECLAIM_DEFER_CEILING_MS) {
+    out.push({ kind: 'die', word: e.die.word, sinceMono: e.die.sinceMono });
+  }
+  return out;
+}
+
+/** What one step means for the feed (spec §5.9's quiet-on-repeat, as the collector reads it). Task 5's
+ *  `collectFeedCueOfAudit` and `collectFeedCueOfAct` say which cue each answer carries.
+ *  - `row`: one row per episode of `key`; a repeat is quiet, and any other key ends the episode.
+ *  - `observe`: an observation of `token`: no row; a would-collect episode of that token stands, any other ends.
+ *  - `quiet`: no row, and the standing episode stands. */
+export type CollectFeedCue =
+  | { readonly kind: 'row'; readonly key: string }
+  | { readonly kind: 'observe'; readonly token: CollectToken }
+  | { readonly kind: 'quiet' };
+
+/** The would-collect episode's key: one per (id, token), so a later would-collect of the same token is quiet. In
+ *  memory only, for comparison: never a sentence. */
+const COLLECT_WOULD_COLLECT_PREFIX = 'would-collect ';
+export const collectWouldCollectKey = (token: CollectToken): string => `${COLLECT_WOULD_COLLECT_PREFIX}${token}`;
+
+/** Does a would-collect episode stand for this id? Task 5's projection reads it (R82's shadow item), so no token is
+ *  carried or cast to answer it: true while the feed episode is a would-collect key. */
+export const collectWouldCollectStands = (e: CollectEntry): boolean =>
+  e.feedEpisode !== null && e.feedEpisode.startsWith(COLLECT_WOULD_COLLECT_PREFIX);
+
+/** The feed episode after one step: the entry, and the key of the episode it opened (a row is due), or null. */
+export function collectFeedStep(e: CollectEntry, cue: CollectFeedCue): { readonly entry: CollectEntry; readonly opened: string | null } {
+  switch (cue.kind) {
+    case 'quiet': return { entry: e, opened: null };
+    case 'observe':
+      return e.feedEpisode === null || e.feedEpisode === collectWouldCollectKey(cue.token)
+        ? { entry: e, opened: null }
+        : { entry: { ...e, feedEpisode: null }, opened: null };
+    case 'row':
+      return e.feedEpisode === cue.key
+        ? { entry: e, opened: null }
+        : { entry: { ...e, feedEpisode: cue.key }, opened: cue.key };
+  }
+}
