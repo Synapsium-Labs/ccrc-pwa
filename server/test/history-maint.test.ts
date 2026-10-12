@@ -21,8 +21,7 @@ import {
   PASS_DRIVER, SHIM, type HistoryBox,
 } from './historyHelpers.js';
 
-/** Every case here spawns the sweep or the CLI (and often the shim) on a heavily loaded box, so each spawning case gets
- *  this budget; a case that needs longer says `1.5 * HEAVY` or `2.5 * HEAVY`, never a second literal. */
+// Each spawning case gets this budget (the sweep and the CLI spawn on a heavily loaded box); longer is 1.5 * HEAVY or 2.5 * HEAVY, never a new literal.
 const HEAVY = 120_000;
 
 const ID = 'claude-a-maint';
@@ -142,6 +141,52 @@ describe.skipIf(process.platform === 'darwin')('O54 (relay half): the CLI and th
     expect(j.stdout.trim().split('\n'), 'stdout is the envelope alone').toHaveLength(1);
     expect(j.json).toMatchObject({ exit: 0, coverage: 'this-box' });
     expect(j.stderr).toContain('line one\nline two\n');
+  }, HEAVY);
+
+  it('every non-zero line an operator verb prints names the operator, whatever stopped it (R-X-OPERATOR)', () => {
+    const box = boundBox('ccrc-hist-o54op-');
+    stubShim(box, { stdout: '{"rc":0}\n', exit: 0 });
+    const runs: Array<[string, Run]> = [
+      ['apply-in-session', op(box, ['import', '--apply'], { CLAUDECODE: '1' })],
+      ['needs-tty', op(box, ['doctor', '--adopt'])],
+      ['bad-args', op(box, ['import', '--bogus'])],
+    ];
+    const box2 = boundBox('ccrc-hist-o54op2-');
+    stubShim(box2, { stdout: '', exit: 75 });
+    runs.push(['writer-busy', op(box2, ['doctor', '--backup'])]);
+    stubShim(box2, { stdout: 'not json\n', exit: 0 });
+    runs.push(['internal', op(box2, ['doctor', '--backup'])]);
+    stubShim(box2, { stdout: '{"rc":5,"reason":"store-unreachable"}\n', exit: 5 });
+    runs.push(['store error', op(box2, ['doctor', '--backup'])]);
+    const srv = makeHistoryBox('ccrc-hist-o54op-srv-', { role: 'server', shim: true });
+    runs.push(['no-store', op(srv, ['doctor', '--backup'])]);
+    const lineOf = (r: Run): string[] => r.stderr.split('\n').filter((l) => /^ccrc history \S+: /.test(l));
+    expect(lineOf(runs[0]![1])[0], 'CONTROL: the case reads the refusal line itself').toContain('refused: apply-in-session');
+    for (const [name, run] of runs) {
+      expect(run.code, name).not.toBe(0);
+      const lines = lineOf(run);
+      expect(lines, `${name}: one line`).toHaveLength(1);
+      expect(lines[0], `${name} names the operator`).toMatch(/; .*\bthe operator\b/);
+    }
+  }, HEAVY);
+
+  it('a result line with no trailing newline is still the result: exit 0, and the line before it is relayed', () => {
+    const box = boundBox('ccrc-hist-o54nn-');
+    stubShim(box, { stdout: 'progress\n{"rc":0}', exit: 0 });
+    const h = op(box, ['doctor', '--backup']);
+    expect(h.code, h.stderr).toBe(0);
+    expect(h.stdout).toBe('progress\n');
+    const j = op(box, ['doctor', '--backup', '--json']);
+    expect(j.json?.['exit']).toBe(0);
+  }, HEAVY);
+
+  it('--json before the doctor flag is the same form: the shim is asked --op migrate', () => {
+    const box = boundBox('ccrc-hist-o54jf-');
+    stubShim(box, { stdout: '{"rc":0}\n', exit: 0 });
+    const r = op(box, ['doctor', '--json', '--migrate']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.json?.['exit']).toBe(0);
+    expect(stubArgv(box)).toEqual(['--op migrate']);
   }, HEAVY);
 });
 

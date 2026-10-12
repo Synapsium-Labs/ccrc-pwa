@@ -445,12 +445,15 @@ export function stubShim(box: HistoryBox, script: { stdout: string; exit: number
 }
 
 /** Hold the shim's lock from outside, as a first concurrent pass holds it: a `flock` holder that sleeps, in its own
- *  process group, until the returned release kills it. Returns only once the lock is really taken. */
+ *  process group, until the returned release kills it. Returns only once the lock is really taken. The holder sleeps 600 s,
+ *  longer than any case budget (2.5 * HEAVY = 300 s), so the lock cannot lapse mid-case; and release signals nothing once the
+ *  holder has exited or been signalled, so a process-group id the OS may have recycled for another session is never killed. */
 export function holdLock(box: HistoryBox): () => void {
   const lock = historyPaths(box.home).lock;
   fs.mkdirSync(path.dirname(lock), { recursive: true });
-  const holder = spawn('flock', [lock, 'sleep', '120'], { stdio: 'ignore', detached: true });
+  const holder = spawn('flock', [lock, 'sleep', '600'], { stdio: 'ignore', detached: true });
   const release = (): void => {
+    if (holder.exitCode !== null || holder.signalCode !== null) return;
     try { process.kill(-holder.pid!, 'SIGKILL'); } catch { /* already gone */ }
   };
   for (let i = 0; i < 200; i += 1) {

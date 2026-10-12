@@ -1230,9 +1230,16 @@ export const OP_OF_VERB = Object.freeze({
 /** What a human reads for an operator verb's non-zero exit without a word of its own (§8.3). */
 const OP_EXIT_WORDS = Object.freeze({
   [EXIT.INTERNAL]: 'internal error: the history writer gave no result this CLI could relay',
-  [EXIT.WRITER_BUSY]: 'writer-busy: another history pass holds the lock; the operator runs it again when that pass ends',
+  [EXIT.WRITER_BUSY]: 'writer-busy: another history pass holds the lock',
   [EXIT.NO_STORE]: 'no store on this box (macOS, a server role, or never installed): stop, do not retry',
 });
+
+/** What every non-zero line an operator verb prints ends with (R-X-OPERATOR): these forms are the operator's, never the
+ *  reading session's, so a session that meets a speed bump reads whose call it is, not a precondition to work around. */
+const OP_OPERATOR_NOTE = Object.freeze({
+  [EXIT.WRITER_BUSY]: 'the operator runs it again, from a terminal outside any session, when that pass ends',
+});
+const OP_OPERATOR_NOTE_ANY = 'ccrc history\'s operator verbs are the operator\'s to run, from a terminal outside any session; a session does not retry or work around this';
 
 /** {op, opArgs} for `<verb> <rest…>`, or null. A doctor flag comes first and alone names the op; what follows it
  *  is that op's arguments, which parseOpVerbArgs judges. */
@@ -1374,7 +1381,7 @@ export async function operatorMain(home, argv) {
     process.stdout.write(`${JSON.stringify(env)}\n`);
   } else if (r.exit !== EXIT.OK) {
     const words = OP_EXIT_WORDS[r.exit] ?? `${r.exit === EXIT.REFUSED ? 'refused' : 'store error'}: ${r.reason ?? ''}`;
-    process.stderr.write(`ccrc history ${verb}: ${words}\n`);
+    process.stderr.write(`ccrc history ${verb}: ${words}; ${OP_OPERATOR_NOTE[r.exit] ?? OP_OPERATOR_NOTE_ANY}\n`);
   }
   return r.exit;
 }
