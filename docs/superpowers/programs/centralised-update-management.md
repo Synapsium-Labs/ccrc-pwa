@@ -1269,6 +1269,21 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - Wave 15 (run 300) is still held by the open PRs #351 (`ccd/ccd`) and #353 (`ccd/ccrc`).
       - STATUS: fleet and server v0.0.152, newest v0.0.152, backups fleet 168M/server 641M, disk free fleet 217G/work
         volume 201G/server 33G, no anomalies.
+    - **2026-10-12 18:50 UTC: v0.0.153, the box-token arming (#353), auto-converged unattended.** No action was taken.
+      - It was published at 18:41:26. The fleet box ran 18:44:27 to 18:46:39 and the server 18:46:55 to 18:47:18. Both
+        `update.json` records read `done`, and both boxes had converged by 18:48:46.
+      - Doctor's `box-token` FAIL and WARN arms are now on.
+        - Both boxes read `PASS`: the server on generation #3, and the fleet with its sync proved.
+        - Server doctor: 25 passed, 0 warned, 0 failed.
+        - Fleet doctor: 33 passed, 6 warned, 0 failed. They are the same six warnings as at 14:46, and none is from
+          `box-token`.
+        - No update exited 3.
+      - The driver's new owe rule is live. Its first tick wrote `retiredPresentedAt: null`, and it owes no rotation.
+      - Between the checks, at 17:46, a hand-started `ccrc update --force` reinstalled v0.0.152 on the fleet box after
+        a tmux out-of-memory event. That was not the auto mechanism. The 16:42 and 17:42 checks did not run.
+      - Wave 15 (run 300) is now held by the open PR #351 (`ccd/ccd`) alone.
+      - STATUS: fleet and server v0.0.153, newest v0.0.153, backups fleet 170M/server 645M, disk free fleet 217G/work
+        volume 245G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
