@@ -395,7 +395,9 @@ function fakePython(version: string, home: string): string {
  *
  *  The stamp's `requirement` and `probeSha256` are DERIVED from the shipped
  *  `ccd/ccgpt-runtime` (its `LITELLM_REQUIREMENT=` line, and the sha256 of what
- *  its `probe-source` prints), never typed here, and the stamp is written in
+ *  its `probe-source` prints followed by what its `patch-source` prints — the
+ *  probe's bytes, then the LiteLLM patch's, the order the builder stamps them in,
+ *  spec §22.2, D-4859), never typed here, and the stamp is written in
  *  the builder's own bytes (`pyJsonDump`, its key order, its `python` and
  *  `canary` shapes). So a builder change cannot leave this fixture planting a
  *  runtime the real `check` refuses while every lane case goes on passing. A
@@ -437,11 +439,14 @@ export function plantFakeRuntime(home: string, opts: FakeRuntimeOptions = {}): F
   } else {
     const requirement = /^LITELLM_REQUIREMENT='([^']+)'$/m.exec(fs.readFileSync(cli, 'utf8'))?.[1];
     if (requirement === undefined) throw new Error('plantFakeRuntime: ccd/ccgpt-runtime declares no LITELLM_REQUIREMENT line');
-    const probe = spawnSync('bash', [cli, 'probe-source'], {
-      env: { PATH: process.env['PATH'] ?? '/usr/bin:/bin', HOME: home }, cwd: home,
-    });
-    if (probe.status !== 0) throw new Error(`plantFakeRuntime: ccgpt-runtime probe-source exited ${probe.status}`);
-    const probeSha256 = createHash('sha256').update(probe.stdout).digest('hex');
+    const source = (verb: 'probe-source' | 'patch-source'): Buffer => {
+      const r = spawnSync('bash', [cli, verb], {
+        env: { PATH: process.env['PATH'] ?? '/usr/bin:/bin', HOME: home }, cwd: home,
+      });
+      if (r.status !== 0) throw new Error(`plantFakeRuntime: ccgpt-runtime ${verb} exited ${r.status}`);
+      return r.stdout;
+    };
+    const probeSha256 = createHash('sha256').update(source('probe-source')).update(source('patch-source')).digest('hex');
     // The builder's key order, and its canary word for a raw shape that does
     // not leak a system role.
     fs.writeFileSync(stamp, pyJsonDump({
