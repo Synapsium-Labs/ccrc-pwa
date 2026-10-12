@@ -3768,6 +3768,17 @@ if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
   interrupted=$(jq -r 'if .interrupted == true then "true" else "false" end' "$f" 2>/dev/null) || interrupted="false"
 fi
 
+# `subagent-tool-event-keeps-the-waiting-ask` (D-4039, finding 4063): a subagent's tool event never ends the main
+# thread's wait. Its PreToolUse/PostToolUse reaches the case above as `working` with a null ask, and written as is it
+# erased a question the main thread asked 3.1 s earlier, before any pane tick could mint the ask row. Only `waiting`
+# is carried, with its ask and `interrupted`; the stamp and the event move as for any event (the delegates hold and
+# the frozen arm read them), and every other state keeps today's write.
+if [[ -n "$paid" && "$prev_state" == waiting && ( "$event" == PreToolUse || "$event" == PostToolUse ) ]]; then
+  state="waiting"
+  ask_json=$(jq -c '.ask // null' "$f" 2>/dev/null) || ask_json="null"
+  interrupted=$(jq -r 'if .interrupted == true then "true" else "false" end' "$f" 2>/dev/null) || interrupted="false"
+fi
+
 # Transitions to working/done clear the ask: an answered question must not
 # stay sticky on the sheet.
 [[ "$state" == working || "$state" == done ]] && { [[ "$event" == SubagentStart || "$event" == SubagentStop ]] || ask_json="null"; }
