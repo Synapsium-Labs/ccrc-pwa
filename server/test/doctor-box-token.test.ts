@@ -563,6 +563,8 @@ describe('doctor box-token: the has-a-value test reads the way extractToken read
 // (the shell strips them first), the rest `_BT_UNI_WS`'s. Each row plants the code point (a) around the shipped
 // placeholder: doctor must still read the placeholder (placeholder pass), (b) alone on the file's only line: doctor must
 // read no value line (value pass), and (c) around a real value: doctor must read it and PASS. Fleet and server arms.
+// U+00A0 and U+FEFF also have hand-written rows (ROWS, and the has-a-value describe above), so deleting either from
+// `_BT_UNI_WS` reds its generated rows and those rows too (deleting U+FEFF: 26 tests red when measured, row 2c).
 describe('doctor box-token: every code point of extractToken\'s trim set is stripped (review 383 F4)', () => {
   const TRIM_SET: number[] = [];
   for (let c = 0; c <= 0xffff; c++) if (String.fromCodePoint(c).trim() === '') TRIM_SET.push(c);
@@ -770,7 +772,7 @@ describe('doctor box-token: where the files are, and what marks a fleet box (D-4
 // 4553, as D-139 rules it (operator, 2026-10-12): a box never handed a value is not unhealthy, it is new. The fact stays
 // named in the detail (doctor's `auth` and `provenance` precedents: only the verdict moves) and the line is PASS with no
 // `remedy:`. A box that once held a value and lost it stays FAIL. The history is read from the arm's own reads.
-const SERVER_NEVER = 'no value has been minted here yet, and the server mints one at boot';
+const SERVER_NEVER = 'no value has been minted here yet, and the server mints one at boot, or its log says why that mint failed';
 const FLEET_NEVER = "no value has been handed to this box yet, and the server's next rotation hands one";
 describe('doctor box-token: a box never handed a value reads PASS with its sentence, a box that lost its value FAILs (4553, D-139)', () => {
   const dropServer = (b: Box): void => { for (const f of ['mail.token', 'box-token.json']) rmSync(dot(b, f)); };
@@ -812,6 +814,20 @@ describe('doctor box-token: a box never handed a value reads PASS with its sente
       expect(d.code, name).toBe(3);
     }
   });
+  // A dangling symlink is a trace too: `_bt_server_trace` tests each name by `[ -e ] || [ -L ]`, and `-e` follows the link to
+  // a target that is not there. These rows plant the link as the ONLY trace, so deleting either `|| [ -L … ]` half reds one
+  // of them (ruled into Task 5 for review findings on Task 4; the rows pin behaviour that already held).
+  for (const [name, half] of [['box-token-retired.json', 'the trace-name test'], ['box-token.json.unusable-1760000000000', 'the set-aside test']] as const) {
+    it(`review 391 F1: a dangling symlink named ${name} is the only trace: FAIL, never the never-minted PASS (4554; ${half} reads \`-L\`)`, () => {
+      const b = box({ role: 'server' });
+      dropServer(b);
+      symlinkSync(join(b.home, 'no-such-target'), dot(b, name));
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout).toMatch(/^FAIL box-token: server: token-absent — /);
+      expect(r.stdout).not.toContain(SERVER_NEVER);
+      expect(r.code).toBe(1);
+    });
+  }
   it('names beside it that are not traces (box-token.json.bak, notes.txt) keep the fresh PASS (4554)', () => {
     const b = box({ role: 'server' });
     dropServer(b);

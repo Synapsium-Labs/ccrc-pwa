@@ -13728,7 +13728,7 @@ describe('ccrc doctor: box-token', () => {
     writeCcrcEnv(home, ['CCRC_ROLE=server', 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
     const r = runDoctor(home);
     const line = anyVerdictFor(r.stdout, 'box-token');
-    expect(line).toMatch(/^PASS box-token: server: token-absent — .* no value has been minted here yet, and the server mints one at boot$/);
+    expect(line).toMatch(/^PASS box-token: server: token-absent — .* no value has been minted here yet, and the server mints one at boot, or its log says why that mint failed$/);
     expect(line).not.toMatch(/hosts no sessions/);
     expect(line).not.toMatch(/switched off/);
     expect(r.stdout).not.toMatch(/^(WARN|FAIL) box-token: /m);

@@ -7404,9 +7404,9 @@ _check_history() {
 # of 2026-10-12: a fresh install ends green): an absent token takes its class from the box's history (4553;
 # `_bt_server_arm`, `_bt_fleet_arm`). With no history it is not a finding, only a fact named in the detail (the server
 # mints at boot; the server's next rotation hands the fleet its value), the way `auth` and `provenance` name theirs.
-# A box that once held a value and lost it stays FAIL (on the server, a sibling trace counts as that history, 4554). That PASS is not an arm's finding, so the kill switch leaves it
-# PASS as well; every real finding is SKIP there. An absent token on a box without `python3` FAILs, by fail-closed
-# design: nothing can be read to class it lower.
+# A box that once held a value and lost it stays FAIL (on the server, a sibling trace counts as that history, 4554).
+# That PASS is not an arm's finding, so the kill switch leaves it PASS as well; every real finding is SKIP there. An
+# absent token on a box without `python3` FAILs, by fail-closed design: nothing can be read to class it lower.
 # `transport http` is printed on a PASS line and is never a verdict.
 #
 # THE WORDS ARE L0's, pinned by `doctor-box-token.test.ts`: `_BT_HOLDS` is `TOKEN_HOLDS`, `_BT_OWED` is
@@ -7702,7 +7702,7 @@ _bt_find() {
   local arm="$1" word="$2" a="${3:-}" b="${4:-}" say="" cls=WARN fix=""
   local card="Rotate now on the console's Box token card"
   case "$arm:$word" in
-    server:token-absent) cls=FAIL   # 4553: `_bt_server_arm` lowers it to WARN once the state read shows no state file
+    server:token-absent) cls=FAIL   # 4553/D-139: _bt_server_arm lowers it to PASS with its sentence when the state read is absent and no sibling trace stands (4554)
       say="$a does not exist, so every box-token lane on this server answers 401"
       fix="restart the server (ccrc.service), which mints a value at boot; if it still has none, its log names the failed mint" ;;
     server:token-mode|fleet:fleet-token-mode) cls=FAIL
@@ -7768,7 +7768,7 @@ _bt_find() {
     server:file:*) cls=FAIL
       say="on re-read ($(_bt_age "$a") ago) the server's $b token file was found ${word#file:}; the last good value is kept in memory"
       fix="look at the file without printing it (ls -l); the next rotation rewrites the server's token files ($card), and a restart re-reads them" ;;
-    fleet:fleet-token-absent) cls=FAIL   # 4553: `_bt_fleet_arm` lowers it to WARN for a box never handed a value
+    fleet:fleet-token-absent) cls=FAIL   # 4553/D-139: _bt_fleet_arm lowers it to PASS with its sentence for a box never handed a value (4555: a refusal's held generation is history)
       say="$a does not exist, so this box's calls to the server carry no box token"
       fix="the server writes it at its next rotation ($card); a single box records CCRC_ROLE=both in ~/.ccrc/ccrc.env and restarts the server, which writes it at boot" ;;
     fleet:no-generation)
@@ -7850,7 +7850,7 @@ _bt_server_arm() {   # <token path> <state path>
     absent) if [ "$tai" -ge 0 ]; then
               _bt_server_trace "${state%/*}"
               if [ -z "$BT_TRACE" ]; then
-                BT_PART[tai]="server: token-absent — $tok does not exist, and neither does the server's state file: no value has been minted here yet, and the server mints one at boot"
+                BT_PART[tai]="server: token-absent — $tok does not exist, and neither does the server's state file: no value has been minted here yet, and the server mints one at boot, or its log says why that mint failed"
                 BT_CLASS[tai]=PASS; BT_FIX[tai]=""
               else
                 BT_SERVER_STATE=trace   # 4554: an own-write fleet arm reads this as no `absent` read either
