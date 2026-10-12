@@ -8320,7 +8320,12 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  to `PASS` and `"credentials"` from `SKIP` to `PASS` (the second only because that
  *  directory now exists, which ends `credentials`' fresh-box SKIP), nothing else; both
  *  refreshes, all three codes and every other class are equal. A box without the fleet
- *  files is a fresh box, `box-token` WARN, and its own case below keeps that measured.
+ *  files is a fresh box, `box-token` PASS with its sentence (D-139, below), and its own case
+ *  below keeps that measured. RE-MEASURED once more in fix round 1, after the operator's D-139
+ *  ruling moved the never-handed state from WARN to PASS: on a disposable copy of the tip
+ *  outside any git repo, by a MEASURE-only case that builds `liveBox()` itself, with the old
+ *  literal re-serialised byte-identical first, and nothing moved (the live shape holds the
+ *  fleet files, so it never was a never-handed box): zero differing lines.
  *  It is a golden: nothing re-measures
  *  it, so a merge-up that moves a doctor check's class on the live shape reds
  *  the live-shape case until Step 3 is re-run on a disposable copy of the new
@@ -8601,12 +8606,12 @@ const usageRow = (): string =>
  *  MEASURE case builds its box with exactly these calls.
  *
  *  Since the box-token arming (row 2a) the box also holds what part B leaves on
- *  every live fleet box, because doctor's `box-token` FAIL and WARN arms are on and
- *  a fleet box without them reads WARN (a fresh box, never handed a value): the
- *  fleet token file (0600: the comment line, then a runtime-random 64-hex value, so
- *  no fixture value is a literal here), the generation file (16 hex) and the proved
- *  sync report. `{ fleetFiles: false }` is the fresh box, and `liveBoxFresh` below
- *  keeps its class measured. */
+ *  every live fleet box (a live box is not a fresh one, and a fleet box that once
+ *  held a value and lost it would FAIL): the fleet token file (0600: the comment
+ *  line, then a runtime-random 64-hex value, so no fixture value is a literal here),
+ *  the generation file (16 hex) and the proved sync report. `{ fleetFiles: false }`
+ *  is the fresh box, which reads PASS with its sentence (a box never handed a value,
+ *  D-139), and the fresh-fleet case below keeps that class measured. */
 function liveBox(prefix: string, opts: { systemd?: boolean; fleetFiles?: boolean } = {}): string {
   const home = freshBox(prefix);
   gitInit(treeRoot(home));
