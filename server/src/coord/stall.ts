@@ -730,12 +730,20 @@ export function stallBackoff(input: StallInput): { readonly streak: number; read
   return { streak, quietMs: Math.min(stallQuietMs(input) * 2 ** Math.min(streak, STALL_WORKING_BACKOFF_CAP), STALL_BACKOFF_CEILING_MS) };
 }
 
-/** The dialog and limit caps' clock: the same mail terms, from the live stamp whatever the word. The caller
+/** The limit cap's clock: the worker's and inbound mail terms, from the live stamp whatever the word. The caller
  *  passes a MEASURED stamp: a null one is hold `unmeasured` before this is reached, never a 0. It carries NO
  *  re-activation term, and neither cap's key moves with one (coordinator ruling on `quiet-restarts-on-reactivation`
  *  (D-3788)): a dialog that blocked the pane through the review still blocks the fix-round brief. */
 function capQuietSince(input: StallInput, f: StallFacts, liveSince: number): number {
   return Math.max(liveSince, f.workerLast?.at ?? 0, f.inboundLast?.at ?? 0, input.subject.primary.dispatchedAt ?? 0);
+}
+
+/** `dialog-cap-clock-ignores-inbound-mail` (D-4040, finding 4063): the dialog cap's clock, `capQuietSince` less the
+ *  inbound term. Mail cannot land on a pane a dialog holds (spec §10 step 2b: "neither can land on `waiting`"), and mail
+ *  that did land re-stamps the live word, so a coordinator's nudge to a parked worker never restarts the 2 h. The
+ *  worker's own mail still counts: it is the worker acting. No re-activation term, as `capQuietSince` (D-3788). */
+function dialogQuietSince(input: StallInput, f: StallFacts, liveSince: number): number {
+  return Math.max(liveSince, f.workerLast?.at ?? 0, input.subject.primary.dispatchedAt ?? 0);
 }
 
 /** When a later rung falls due (spec §4.2: "r2 at r1 + 1 h ... r3 at r2 + 1 h"; a rung due while the worker
@@ -1064,7 +1072,7 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
   const hookAskCorrelated = w.hookAsk.kind === 'ask' && live.since !== null && w.hookAsk.at >= live.since - ASK_DIALOG_SLACK_MS;
   const askRowOpen = w.askRow.kind === 'row' && (w.askRow.state === 'held' || w.askRow.state === 'answering');
   if (live.word === 'waiting' && (hookAskCorrelated || askRowOpen)) return holdVerdict('ask');
-  if (dialogShaped) return capQuiet >= stallQuietMs(input) && !stallDialogCapDone(input, live.since) ? capVerdict('dialog-cap', dialogKey) : holdVerdict('dialog');
+  if (dialogShaped) return now - dialogQuietSince(input, f, live.since) >= stallQuietMs(input) && !stallDialogCapDone(input, live.since) ? capVerdict('dialog-cap', dialogKey) : holdVerdict('dialog');
   // (5) the limit hold, capped once per episode (`stallLimited`, shared with the session verdicts)
   if (stallLimited(w, now)) {
     return capQuiet >= LIMIT_HOLD_CAP_MS && rungDoneAt(input, 'limit-cap', 1, capKey) === null ? capVerdict('limit-cap', capKey) : holdVerdict('limit');
