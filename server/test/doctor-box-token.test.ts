@@ -655,6 +655,37 @@ describe('doctor box-token: a box never handed a value reads PASS with its sente
     expect(r.stdout).toMatch(/^FAIL box-token: server: token-absent — .*; fleet: fleet-token-absent — /);
     expect(r.code).toBe(1);
   });
+  // Review 383 F1: on an own-write box the fleet file, the generation file and `fleetConfirmed` are written together by
+  // the server, so a state that is PRESENT proves the hand-out whatever the generation file says. The generation file
+  // alone is not the history; the server arm's state read outranks it (the narrowing reads never-handed only when that
+  // read was itself `absent`).
+  it('both role, local, own-write: a valid state at generation #2 (fleet confirmed, a rotation recorded) and the fleet and generation files gone is a FAIL, never never-handed', () => {
+    const b = box({ role: 'both' });
+    for (const f of [fleetFile(b), dot(b, NODE_FILES.tokenGeneration), dot(b, 'token-sync.json')]) rmSync(f);
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(/^FAIL box-token: server: generation #2.*; fleet: fleet-token-absent — .* does not exist, so this box's calls to the server carry no box token/);
+    expect(r.stdout).not.toContain(FLEET_NEVER);
+    expect(r.stdout).toMatch(/\n {2}remedy: \S/);
+    expect(r.code).toBe(1);
+  });
+  it('both role, local, own-write: the same loss under a state that records no hand-out yet (minted, no rotation, nothing confirmed) is a FAIL too: any present state outranks the generation file', () => {
+    const b = box({ role: 'both' });
+    editState(b, (s) => { s.origin = 'minted'; s.lastRotationAt = null; s.fleetConfirmed = null; s.lastSync = null; s.retiredRefusedAt = null; });
+    for (const f of [fleetFile(b), dot(b, NODE_FILES.tokenGeneration), dot(b, 'token-sync.json')]) rmSync(f);
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(/^FAIL box-token: /);
+    expect(r.stdout).not.toContain(FLEET_NEVER);
+    expect(r.code).toBe(1);
+  });
+  it('both role, local, own-write: a state it cannot read is no `absent` read either, so the lost fleet value stays FAIL', () => {
+    const b = box({ role: 'both' });
+    plantState(b, '{"v":1,');
+    for (const f of [fleetFile(b), dot(b, NODE_FILES.tokenGeneration), dot(b, 'token-sync.json')]) rmSync(f);
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(/^FAIL box-token: /);
+    expect(r.stdout).not.toContain(FLEET_NEVER);
+    expect(r.code).toBe(1);
+  });
   it('both role, remote: the worse arm wins, so a fresh server with a fleet that lost its value is a FAIL', () => {
     const b = box({ role: 'both', fleet: 'remote', agentEnv: true });
     for (const f of [fleetFile(b), dot(b, 'mail.token'), dot(b, 'box-token.json')]) rmSync(f);

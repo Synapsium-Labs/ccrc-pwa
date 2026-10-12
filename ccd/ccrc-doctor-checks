@@ -7782,10 +7782,12 @@ _bt_server_arm() {   # <token path> <state path>
         elif [ "$BT_TF_MODE" != 600 ]; then _bt_find server token-mode "$tok" "${BT_TF_MODE:-unreadable}"; fi ;;
     *) _bt_find server token-unusable "$tok" "$BT_TF" ;;
   esac
+  BT_SERVER_STATE=unreadable
   if ! command -v python3 >/dev/null 2>&1; then _bt_find server state-unreadable "$state" no-python; return 0; fi
   out="$(python3 -I -c "$_BT_PY_STATE" "$state" "${_BT_ORIGINS[*]}" "${_BT_HOLDS[*]}" "${_BT_OWED[*]}" \
     "${_BT_SYNC_ERRORS[*]} ${_BT_LOST_WORDS[*]}" "${_BT_TRANSPORTS[*]}" "${_BT_FILE_PROBLEMS[*]}" \
     "$_BT_PENDING_CAP" "$_BT_TICK_MS" 2>/dev/null)" || out=""
+  case "${out%%$'\n'*}" in absent) BT_SERVER_STATE=absent ;; ok) BT_SERVER_STATE=ok ;; esac   # anything else stays unreadable
   case "${out%%$'\n'*}" in
     # 4553, as D-139 rules it (operator, 2026-10-12): an absent token beside an absent state is a server that has never run
     # the lifecycle (a fresh install). It is PASS with its sentence, never WARN: the fact stays named in the detail, only
@@ -7874,7 +7876,11 @@ _bt_fleet_arm() {   # <own-write: 0|1>
   # no report, so the generation file alone speaks for it) was never handed a value, a fresh install. It is PASS with its
   # sentence, never WARN; its two companions (`no-generation`, `never-synced`) say the same fact and are dropped. Any
   # trace of a value, a malformed generation file or an unreadable report included, leaves the FAIL.
-  if [ "$tai" -ge 0 ] && [ "$nogen" -eq 1 ] && { [ "$nosync" -eq 1 ] || [ "$ownseen" -eq 1 ]; }; then
+  # An own-write box (both, local, no agent.env) writes the fleet file, the generation file and `fleetConfirmed` together,
+  # so the server arm's state outranks the generation file alone (review 383 F1): it reads never-handed only when that
+  # state read was itself `absent`. Any present state, readable or not, records or may record the hand-out. The state is
+  # read once, by the server arm, which runs first on such a box.
+  if [ "$tai" -ge 0 ] && [ "$nogen" -eq 1 ] && { [ "$nosync" -eq 1 ] || { [ "$ownseen" -eq 1 ] && [ "$BT_SERVER_STATE" = absent ]; }; }; then
     BT_PART[tai]="fleet: fleet-token-absent — $ff does not exist: no value has been handed to this box yet, and the server's next rotation hands one"
     BT_CLASS[tai]=PASS; BT_FIX[tai]=""
     _bt_drop "fleet: no-generation — "; _bt_drop "fleet: never-synced — "
@@ -7909,7 +7915,7 @@ _bt_agent_env_marks_fleet() {
 
 _check_box-token() {
   { set +x; } 2>/dev/null
-  local role="" fmode="" tok="" dir state arms="" own=0 c worst=PASS detail fix="" x
+  local role="" fmode="" tok="" dir state arms="" own=0 c worst=PASS detail fix="" x BT_SERVER_STATE=""
   local -a BT_PART=() BT_CLASS=() BT_FIX=()
   # The role, the fleet mode and the token path, read as `_check_timeout` reads the role: `ccrc`'s one reader,
   # only when it is loaded and the file is there. Anything else is "not recorded", which picks arms by presence.
