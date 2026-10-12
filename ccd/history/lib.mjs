@@ -6843,14 +6843,16 @@ export function exploreOutline(text, kind, fileName, idx) {
 // ── version-aware reads (W1-B2 Task 17) ─────────────────────────────────────────────────────────────────
 // Spec §6.11 "The CLI keeps answering" (slug history-cli-reads-store-version): the CLI reads user_version first
 // and builds its named-column queries for THAT version from SCHEMA_ADDED. A column the store lacks is selected
-// as NULL (Task 10's selectColumns, with its alias argument for a join), and a verb that cannot answer without a
+// as NULL (Task 10's selectColumns; a join reads a versioned() derived table in recall.mjs; a few v1-only reads — the scope's families and transcripts, eofOf, scopeHeader, tree's epochs, store.mjs's childrenOf/parentOf/LINEAGE_SQL and regex-worker.mjs — still name literal v1 columns, which every version keeps because migrations are additive), and a verb that cannot answer without a
 // newer table answers exit 5 migration-pending. Migrations are additive only, so an older store's columns are
 // always a subset (DM44); schemaAdditive is the test that refuses one that is not.
 
 /** What every read verb reads before its own statements: the scope (sessions, epochs, transcripts and the entries
  *  that say a transcript holds rows), the header (ingest_files' end-of-file marks, derivation_state's recover step),
- *  and cli.mjs's context (the store id in meta, the redaction index's redact_hashes). Measured at the base by
- *  reading recall.mjs's familiesOf, transcriptsOf and scopeHeader and cli.mjs's readContext. */
+ *  and cli.mjs's context (the store id in meta, the redaction index's redact_hashes). They are an inventory, not a
+ *  guard: cli.mjs's readContext reads meta, redact_hashes, sessions, epochs, transcripts and entries before any
+ *  executor's pendingFor runs (a missing one answers store-read-failed), and emitResult reads the header again
+ *  after it. A version that adds a table to this list must add its check to readContext (hardening item H-21). */
 const READ_CONTEXT_TABLES = Object.freeze(['meta', 'redact_hashes', 'sessions', 'epochs', 'transcripts', 'entries', 'ingest_files', 'derivation_state']);
 
 /** Every table each read verb's path reads (recall.mjs, the store.mjs functions it calls, and grep --regex's
@@ -6894,6 +6896,7 @@ export function schemaAdditive(schema, measured) {
     const keys = Object.keys(entry).sort();
     if (keys.join(',') !== 'heavy,tables' || typeof entry.heavy !== 'boolean') lost.push(`v${v} has keys ${keys.join(',')}`);
     for (const [t, cols] of Object.entries(entry.tables ?? {})) {
+      if (!Array.isArray(cols)) { lost.push(`${t} at v${v} lists no array of columns`); continue; }
       const have = cum.get(t) ?? new Set();
       for (const c of cols) {
         if (have.has(c)) lost.push(`${t}.${c} re-listed at v${v}`);
@@ -6908,7 +6911,13 @@ export function schemaAdditive(schema, measured) {
     const want = cumAt.get(v);
     if (want === undefined) { lost.push(`v${v} measured but not declared`); continue; }
     for (const [t, cols] of want) for (const c of cols) if (!(tables[t] ?? []).includes(c)) lost.push(`${t}.${c} lost at v${v}`);
-    for (const [t, cols] of Object.entries(tables)) for (const c of cols) if (!(want.get(t)?.has(c) ?? false)) lost.push(`${t}.${c} undeclared at v${v}`);
+    for (const [t, cols] of Object.entries(tables)) {
+      if (!Array.isArray(cols)) { lost.push(`${t} at v${v} lists no array of columns`); continue; }
+      for (const c of cols) if (!(want.get(t)?.has(c) ?? false)) lost.push(`${t}.${c} undeclared at v${v}`);
+    }
+  }
+  if (measured !== undefined) {
+    for (const v of versions) if (!Object.hasOwn(measured, String(v))) lost.push(`v${v} declared but not measured`);
   }
   return lost.length === 0 ? { ok: true } : { ok: false, lost };
 }

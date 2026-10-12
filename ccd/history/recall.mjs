@@ -1513,14 +1513,15 @@ export function expandVerb(rc, parsed) {
 
 // ── version-aware reads (W1-B2 Task 17) ─────────────────────────────────────────────────────────────────
 // Spec §6.11 "The CLI keeps answering" (slug history-cli-reads-store-version): every select above names its
-// columns through selectColumns (with its alias argument, for a join) at the STORE's version, so a column an
-// older store lacks reads as NULL. A verb that needs a TABLE the store lacks answers exit 5 migration-pending
-// here, before any statement is prepared — never exit 1, never "no such table".
+// columns through selectColumns, or reads a versioned() derived table for a join, or names v1-only columns every
+// version keeps, at the STORE's version, so a column an older store lacks reads as NULL. A verb that needs a TABLE
+// the store lacks answers exit 5 migration-pending here, before the executor prepares any statement of its own
+// (readContext's reads come first; see VERB_TABLES) — never exit 1, never "no such table".
 
 /** null when `verb` can answer a store at rc.version; otherwise the migration-pending VerbResult. rc.schema and
  *  rc.verbTables default to the build's own; only a test sets them (the DM44 seam). */
 export function pendingFor(rc, verb) {
   const missing = xlib.missingTablesAt(rc.version, verb, rc.schema ?? xlib.SCHEMA_ADDED, rc.verbTables ?? xlib.VERB_TABLES);
   if (missing.length === 0) return null;
-  return refusal('migration-pending', `this store is at schema v${rc.version} and has no ${missing.join(', ')}: the next scheduled tick migrates it, or the operator runs ${xlib.HISTORY_CMD} doctor --migrate`);
+  return refusal('migration-pending', `this store is at schema v${rc.version} and has no ${missing.join(', ')}: a scheduled tick migrates it once its disk and snapshot checks pass, or the operator runs ${xlib.HISTORY_CMD} doctor --migrate`);
 }

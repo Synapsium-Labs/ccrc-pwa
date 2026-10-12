@@ -3198,6 +3198,7 @@ describe.skipIf(process.platform === 'darwin')('DM44: the read verbs answer an o
     runDescribe(rc: Ctx, a: Record<string, unknown>): Result | Promise<Result>;
     runExpand(rc: Ctx, a: Record<string, unknown>): Result | Promise<Result>;
     runTree(rc: Ctx, a: Record<string, unknown>): Result | Promise<Result>;
+    runRegex(rc: Ctx, a: Record<string, unknown>): Result | Promise<Result>;
   }
   const ID = 'claude-a-x17';
   let box: rH.HistoryBox;
@@ -3279,6 +3280,37 @@ describe.skipIf(process.platform === 'darwin')('DM44: the read verbs answer an o
     expect(st.json?.['user_version']).toBe(1);
     expect(st.json?.['migration']).toBe('none');
   }, HEAVY);
+
+  it('every executor answers 5 migration-pending when its own verb needs the missing table, and only then', async () => {
+    const grepArgs = { words: ['zqx17seam'], regex: null, role: null, tool: null, sinceMs: null, beforeMs: null,
+      node: null, sort: 'recency', limit: 20, cursor: null, includeRecall: false, json: true };
+    const regexArgs = { ...grepArgs, regex: 'zqx17seam', words: [] };
+    const calls: { verb: 'tree' | 'grep' | 'describe' | 'expand'; name: string; run: (rc: Ctx) => Result | Promise<Result> }[] = [
+      { verb: 'tree', name: 'tree', run: (rc) => R.runTree(rc, { depth: 2, json: true }) },
+      { verb: 'grep', name: 'grep', run: (rc) => R.runGrep(rc, grepArgs) },
+      { verb: 'grep', name: 'grep (regex)', run: (rc) => R.runRegex(rc, regexArgs) },
+      { verb: 'describe', name: 'describe', run: (rc) => R.runDescribe(rc, { target: leaf, full: false, cursor: null, json: true }) },
+      { verb: 'expand', name: 'expand', run: (rc) => R.runExpand(rc, { target: leaf, around: null, before: 5, after: 5, cursor: null, json: true }) },
+    ];
+    for (const V of ['tree', 'grep', 'describe', 'expand'] as const) {
+      const vt = libRead.VERB_TABLES as Record<string, readonly string[]>;
+      const rc = await contextFor(SEAM, { ...vt, [V]: [...vt[V]!, 'seam_table'] });
+      try {
+        for (const c of calls) {
+          const r = await Promise.resolve(c.run(rc));
+          if (c.verb === V) expect([r.exit, r.reason], `${V}: ${c.name}`).toEqual([5, 'migration-pending']);
+          else expect(r.reason, `${V} must not refuse ${c.name}`).not.toBe('migration-pending');
+        }
+      } finally { rc.db.close(); }
+    }
+    const ctl = await contextFor(SEAM);
+    try {
+      for (const c of calls) {
+        const r = await Promise.resolve(c.run(ctl));
+        expect(r.reason, `CONTROL: with no verbTables seam ${c.name} is not migration-pending`).not.toBe('migration-pending');
+      }
+    } finally { ctl.db.close(); }
+  }, HEAVY);
 });
 
 describe.skipIf(process.platform === 'darwin')('DM17 (CLI half) and C45: a newer store is read; coverage and store_id on every verb (Task 17)', () => {
@@ -3349,7 +3381,7 @@ describe.skipIf(process.platform === 'darwin')('DM17 (CLI half) and C45: a newer
       const r = cli(args);
       expect(r.code, `${args.join(' ')}: ${r.stderr}`).toBe(0);
     }
-    expect([0, 3], 'grep reads it too (0 or no hits, never 5)').toContain(cli(['grep', 'zqx17seam']).code);
+    expect(cli(['grep', 'zqx17seam']).code, 'grep reads it too (0 or no hits, never 5)').toBe(0);
     const st = rH.runCli(box, ['status', '--json']);
     expect(st.json?.['user_version']).toBe(2);
     expect(st.json?.['migration']).toBe('refuse-newer');

@@ -6112,3 +6112,22 @@ describe('C43: no ccd/history module prepares SELECT * (W1-B2 Task 17; the serve
     for (const f of files) expect(starSelects(t17fs.readFileSync(t17path.join(dir, f), 'utf8')), f).toEqual([]);
   });
 });
+
+describe('lib: Task 17 fix round 1 (W1-B2 Task 17)', () => {
+  type Schema = Readonly<Record<number, { heavy: boolean; tables: Readonly<Record<string, readonly string[]>> }>>;
+  const lostOf = (r: { ok: boolean; lost?: string[] }): string[] => (r.ok ? [] : r.lost!);
+
+  it('schemaAdditive flags a declared version nothing measured', () => {
+    const m1 = { 1: t17lib.SCHEMA_ADDED[1]!.tables as Record<string, string[]> };
+    expect(t17lib.schemaAdditive(t17lib.SCHEMA_ADDED, m1), 'CONTROL: one declared version, one measured').toEqual({ ok: true });
+    const r = t17lib.schemaAdditive({ ...t17lib.SCHEMA_ADDED, 2: { heavy: false, tables: { nodes: ['zq_new_col'] } } } as Schema, m1);
+    expect(r.ok).toBe(false);
+    expect(lostOf(r)).toContain('v2 declared but not measured');
+  });
+
+  it('schemaAdditive refuses a column set that is not a list', () => {
+    const r = t17lib.schemaAdditive({ 1: { heavy: false, tables: { t: 'ab' } } } as unknown as Schema);
+    expect(r.ok).toBe(false);
+    expect(lostOf(r)).toContain('t at v1 lists no array of columns');
+  });
+});
