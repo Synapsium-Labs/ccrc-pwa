@@ -436,10 +436,12 @@ _rt_find_sites() {
 # _rt_holds <file> <bytes> — 0 iff <file> is a regular file holding exactly
 # <bytes>, which carry no NUL. Bash builtins only: `read -d ''` keeps every
 # newline, and it answers 0 only when it met a NUL, which <bytes> never carry.
+# A file it cannot read holds nothing, QUIETLY: the redirect's own error is
+# silenced first, so `check`'s answer stays the one word doctor matches.
 _rt_holds() {
   local have=""
   [ -f "$1" ] || return 1
-  IFS= read -r -d '' have < "$1" && return 1
+  IFS= read -r -d '' have 2>/dev/null < "$1" && return 1
   [ "$have" = "$2" ]
 }
 

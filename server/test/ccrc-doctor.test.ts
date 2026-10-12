@@ -11145,7 +11145,7 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
       /passed an older behaviour probe, or carries an older ccrc LiteLLM patch, than the one this ccrc ships \(ccgpt-runtime check: probe-moved\)/,
       /^ {2}remedy: rebuild it: ccgpt-runtime build — it re-runs the shipped probe against a fresh, freshly patched generation$/],
     ['mutated', (h: string) => { plantFakeRuntime(h, { stamp: false }); },
-      /no longer matches its stamp \(ccgpt-runtime check: mutated\): its interpreter, its stamp, its installed LiteLLM or its ccrc LiteLLM patch changed after the build/,
+      /is no longer what its build made \(ccgpt-runtime check: mutated\): its interpreter, its stamp, its installed LiteLLM or its ccrc LiteLLM patch changed after the build/,
       /ccgpt-runtime build/],
   ] as const)('FAILs a runtime that `ccgpt-runtime check` answers %s, in its own sentence, with a rebuild remedy', async (word, plant, said, remedy) => {
     const home = await healthyCodexBox(`ccrc-doctor-codex-rt-${word}-`);
@@ -11162,7 +11162,7 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
     const rt = plantFakeRuntime(home);
     rmSync(join(rt.site, 'ccrc_litellm_patch.py'));
     const r = runDoctor(home);
-    const re = /^FAIL codex: the current runtime generation no longer matches its stamp \(ccgpt-runtime check: mutated\)/m;
+    const re = /^FAIL codex: the current runtime generation is no longer what its build made \(ccgpt-runtime check: mutated\)/m;
     expect(r.stdout, r.stdout).toMatch(re);
     expect(remedyAfter(r.stdout, re)).toMatch(/ccgpt-runtime build/);
     noRunnerBugLine(r.stdout, 'codex');

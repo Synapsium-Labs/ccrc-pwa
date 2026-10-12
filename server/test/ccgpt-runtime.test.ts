@@ -35,7 +35,7 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
-  cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync,
+  chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync,
   realpathSync, rmSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -661,6 +661,21 @@ describe.skipIf(!PY)('ccgpt-runtime: the builder\'s decisions, over a scripted r
     expect(r.stdout).toMatch(new RegExp(`\\(mutated; previous: ${g1}\\)\\n$`));
     expect(readFileSync(path.join(sitePackages(home, g2), 'ccrc_litellm_patch.py')).equals(patchSource())).toBe(true);
     expect(run(home, ['check']).code).toBe(0);
+  });
+
+  // A patch module `check` cannot read holds nothing: `mutated`, and QUIETLY, so the
+  // answer is still the one word doctor matches, never a bash error line before it.
+  // Root reads a mode-000 file anyway, so the case runs only where the mode binds.
+  it.skipIf(process.getuid?.() === 0)('check reads mutated, quietly, for a generation whose patch module it cannot read', () => {
+    const home = box('ccgpt-rt-patch-unreadable-');
+    const g1 = built(run(home, ['build']));
+    const mod = path.join(sitePackages(home, g1), 'ccrc_litellm_patch.py');
+    chmodSync(mod, 0o000);
+    try {
+      expect(run(home, ['check'])).toEqual({ code: 1, stdout: '', stderr: 'ccgpt-runtime: mutated\n' });
+    } finally {
+      chmodSync(mod, 0o644);
+    }
   });
 
   // Every failure: exit 2, ONE stderr line naming the stage, nothing on stdout,
@@ -1581,6 +1596,7 @@ const HOOK_DRIVER_PY = [
   'adds = [{"type": "response.output_item.added", "output_index": n, "item": fcn(n, "")} for n in range(3)]',
   'dones = [{"type": "response.output_item.done", "output_index": n, "item": fcn(n, ARGS)} for n in range(3)]',
   'out["interleaved"] = run_err(adds + dones)',
+  'out["interleavedAgain"] = run_err(adds + dones)',
   'out["inOrder"] = run_err([c for n in range(3) for c in (adds[n], dones[n])])',
   'first = cls.chunk_parser',
   'ccrc_litellm_patch._apply(t)',
@@ -1646,9 +1662,11 @@ describe.skipIf(!PY)('ccrc_litellm_patch: loaded by its .pth under -I, lazily, a
     const venv = path.join(home, 'venv');
     const env = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home };
     // Skipped only where this python3 has no venv module at all: `--without-pip`
-    // never reaches ensurepip, so any other failure to make one is a red.
+    // never reaches ensurepip, so any other failure to make one is a red. A probe
+    // that timed out or was killed (status null) is a red too, never a skip.
     const hasVenv = spawnSync(PY!, ['-c', 'import venv'], { cwd: home, env, encoding: 'utf8', timeout: 60_000 });
-    if (hasVenv.status !== 0) { ctx.skip(); return; }
+    if (hasVenv.status === 1 && /No module named/.test(String(hasVenv.stderr))) { ctx.skip(); return; }
+    expect(hasVenv.status, String(hasVenv.stderr)).toBe(0);
     const mk = spawnSync(PY!, ['-m', 'venv', '--without-pip', venv], { cwd: home, env, encoding: 'utf8', timeout: 60_000 });
     expect(mk.status, String(mk.stderr)).toBe(0);
     const lib = path.join(venv, 'lib');
@@ -1731,6 +1749,8 @@ describe.skipIf(!PY)('ccrc_litellm_patch: loaded by its .pth under -I, lazily, a
     // The synthesized deltas are exactly what an in-order stream gets: only stderr differs.
     expect(interleaved.seen).toEqual([...adds, ...deltas]);
     expect(interleaved.stderr).toMatch(/^ccrc_litellm_patch: interleaved no-delta items[^\n]*\n$/);
+    // Once per STREAM, not once per process: a second broken stream, on a new iterator, says so again.
+    expect((out['interleavedAgain'] as { stderr: string }).stderr).toMatch(/^ccrc_litellm_patch: interleaved no-delta items[^\n]*\n$/);
     expect(inOrder.seen).toEqual([adds[0], deltas[0], adds[1], deltas[1], adds[2], deltas[2]]);
     expect(inOrder.stderr).toBe('');
   });

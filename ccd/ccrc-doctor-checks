@@ -6651,7 +6651,7 @@ _dr_cx_runtime() {
       _dr_cx_fail "the current runtime generation passed an older behaviour probe, or carries an older ccrc LiteLLM patch, than the one this ccrc ships (ccgpt-runtime check: probe-moved), so what it was proven to do is not what this build checks" \
         "rebuild it: ccgpt-runtime build — it re-runs the shipped probe against a fresh, freshly patched generation" ;;
     "1:ccgpt-runtime: mutated")
-      _dr_cx_fail "the current runtime generation no longer matches its stamp (ccgpt-runtime check: mutated): its interpreter, its stamp, its installed LiteLLM or its ccrc LiteLLM patch changed after the build" \
+      _dr_cx_fail "the current runtime generation is no longer what its build made (ccgpt-runtime check: mutated): its interpreter, its stamp, its installed LiteLLM or its ccrc LiteLLM patch changed after the build" \
         "rebuild it: ccgpt-runtime build — a mutated generation is never repaired in place" ;;
     *)
       _dr_cx_fail "ccgpt-runtime check answered something this doctor does not know (exit $rc: $(_dr_first_line "$ans")), so the runtime's state is unmeasured" \
