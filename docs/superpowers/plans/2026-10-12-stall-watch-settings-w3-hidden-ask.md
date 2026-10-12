@@ -344,14 +344,15 @@ held in reserve, and assigned to this wave by the coordinator's ruling R38. Two 
 - **Departs from:** the hook's own rule that a transition to `working` clears the ask (`ccd/session-hook.sh`, the line
   after the SubagentStart/SubagentStop block), as applied to a subagent's tool events — the overwrite spec §3.3
   measured and finding 4063 traced to an erased question (ledger R32).
-- **What W3 does:** a PreToolUse or PostToolUse carrying `agent_id`, arriving while the hookstate reads `waiting`,
-  keeps `waiting`, the ask and `interrupted`; the stamp and the event move as for any event.
+- **What W3 does:** a PreToolUse or PostToolUse carrying `agent_id`, arriving while the hookstate reads `waiting` and
+  that wait does not carry `waitBy: "subagent"` (it was raised by the main thread), keeps `waiting`, the ask and
+  `interrupted`; the stamp and the event move as for any event. A wait a subagent raised itself is not carried.
 - **Why:** the server mints an ask row only on the first pane tick that sees the dialog (`detectDialogs`), and the
   stall watch's hold 2a reads the hookstate ask. An erased ask leaves the question invisible to both, and to the mail
   gate's sender, for as long as the dialog stands (3 h measured).
 - **Not done:** carrying every state. Background work after the main Stop keeps writing `working`, which the card,
   the dispatch busy check and the operator's reading of a session rely on; the operator has not ruled that away.
-- **Pinned by:** `server/test/session-hook-subagent-ask.test.ts` (13 cases); mutation rows, measured out of tree at the
+- **Pinned by:** `server/test/session-hook-subagent-ask.test.ts` (14 cases); mutation rows, measured out of tree at the
   fix-round-1 commit (hook + test), each restored and `cmp`-checked:
   M1 (delete the carry block) → 7 failed (a subagent PreToolUse after a PermissionRequest question leaves waiting and the questions; a subagent PostToolUse does too, and so do many in a row; the PreToolUse question arm is kept the same way; an approval dialog is kept the same way; the stamp and the event still move, for the delegates hold and the frozen arm; a main-thread wait survives a SubagentStop and a SubagentStart, and is not flipped to subagent-raised; the interrupted flag is carried with the wait);
   M2 (drop `"$prev_state" == waiting &&`) → 1 failed (scope: a subagent tool event over done still writes working, as before);
@@ -360,7 +361,8 @@ held in reserve, and assigned to this wave by the coordinator's ruling R38. Two 
   M8 (drop the `interrupted` carry in the block) → 1 failed (the interrupted flag is carried with the wait);
   M9 (drop the provenance condition, `w_by != subagent`) → 2 failed (a subagent's own approved dialog ends at its next tool event (working, no ask); the same holds after a Stop, and across a SubagentStop that carries the provenance);
   M10 (stop preserving `waitBy` in the SubagentStart/SubagentStop block) → 1 failed (the same holds after a Stop, and across a SubagentStop that carries the provenance);
-  M11 (never record `waitBy` on a fresh subagent wait) → 3 failed (a subagent's own approved dialog ends at its next tool event (working, no ask); the same holds after a Stop, and across a SubagentStop that carries the provenance; Review Focus 1 scope pin: a subagent PermissionRequest over a main-thread question writes its own approval).
+  M11 (never record `waitBy` on a fresh subagent wait) → 3 failed (a subagent's own approved dialog ends at its next tool event (working, no ask); the same holds after a Stop, and across a SubagentStop that carries the provenance; Review Focus 1 scope pin: a subagent PermissionRequest over a main-thread question writes its own approval);
+  M12 (delete the `waitby=""` reset in the carry) → 1 failed (a subagent AskUserQuestion over a main-thread question leaves the main wait, still main-owned).
 - **Departure `carry-only-a-main-thread-wait` (task review, Important 1):** the carry now applies only to a wait the
   main thread raised. The hook records an additive hookstate key `waitBy: "subagent"` when a subagent's own event freshly
   sets `waiting`, preserves it across the SubagentStart/SubagentStop carry, and the D-4039 block skips a stored
