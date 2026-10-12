@@ -4007,17 +4007,19 @@ function foldToken(word) {
   return out;
 }
 
-/** Unicode61 token candidates with their original code-unit spans, lazily. A candidate is a run of token characters (the frozen
- *  table) and of the marks unicode61 drops, which belong to the token they follow, as in FTS5, so a decomposed `e` + U+0301 is one
- *  candidate; every other code point, a lone surrogate included, is a boundary. Spans stay in the source's UTF-16 code units. */
+/** Unicode61 token candidates with their original code-unit spans, lazily. A candidate is OPENED only by a token character (the
+ *  frozen table) and continues over token characters and the marks unicode61 drops: a dropped mark belongs to the token it FOLLOWS,
+ *  as in FTS5, so a decomposed `e` + U+0301 is one candidate, but a mark can never open one. A leading or mark-only run of dropped
+ *  marks is skipped, no token, as runtime SQLite's highlight() measures (U+0301 then `a` hits at the `a`; Task 12 fix round 5, F2). Every
+ *  other code point, a lone surrogate included, is a boundary. Spans stay in the source's UTF-16 code units. */
 function* unicode61Words(text) {
   let at = -1;
   let i = 0;
   while (i < text.length) {
     const cp = text.codePointAt(i);
-    if (isUnicode61Token(cp) || isDroppedMark(cp)) {
+    if (isUnicode61Token(cp)) {
       if (at < 0) at = i;
-    } else if (at >= 0) {
+    } else if (at >= 0 && !isDroppedMark(cp)) {
       yield { text: text.slice(at, i), at, end: i };
       at = -1;
     }

@@ -3894,7 +3894,38 @@ describe('snippetTerms and unicode61 diacritic comparison: prefix markers surviv
       expect(libSearch.snippetSpan(alone, [mid]), 'standalone, it localizes with the original span').toEqual({ at: lead.length + 1, len: 1 });
     }
   });
-  it('F2 round 4: snippetSpan reads every non-surrogate code point U+0000..U+10FFFF exactly as runtime SQLite unicode61 does: token (and its exact folded term), ignored continuation, or boundary, with zero exclusions', () => {
+  /** Where runtime SQLite's own `highlight()` puts the first hit of `match` in `text` (the product's `porter unicode61`), in code units. */
+  const sqliteSpan = (text: string, match: string): { at: number; len: number } => {
+    const db = new FtsDb(':memory:');
+    try {
+      db.exec("CREATE VIRTUAL TABLE t USING fts5(b, tokenize='porter unicode61')");
+      db.prepare('INSERT INTO t (rowid, b) VALUES (1, ?)').run(text);
+      const row = db.prepare("SELECT highlight(t, 0, char(2), char(3)) AS h FROM t WHERE t MATCH ?").get(match) as { h: string } | undefined;
+      if (row === undefined) return { at: -1, len: 0 };
+      const at = row.h.indexOf('\u0002');
+      return { at, len: row.h.indexOf('\u0003') - at - 1 };
+    } finally { db.close(); }
+  };
+  it('F2 round 5: a dropped mark only CONTINUES a token a token character opened; a leading or mark-only run of dropped marks is no token, so the span starts where SQLite highlights the hit', () => {
+    const one = '\u0301a tail';
+    const two = '\u0301\u0300a tail';
+    const inner = 'x\u0301a tail';
+    const run = '\u0301 pp \u0301\u0300 rr tail';
+    // Runtime SQLite first: the hit begins AFTER the leading marks, an internal mark is inside the hit, a mark-only run is skipped.
+    expect(sqliteSpan(one, 'a'), 'runtime SQLite: \\u0301a highlights only a').toEqual({ at: 1, len: 1 });
+    expect(sqliteSpan(two, 'a'), 'runtime SQLite: \\u0301\\u0300a highlights only a').toEqual({ at: 2, len: 1 });
+    expect(sqliteSpan(inner, 'xa'), 'runtime SQLite: x\\u0301a is one hit, its mark inside').toEqual({ at: 0, len: 3 });
+    expect(sqliteSpan(run, '"pp rr"'), 'runtime SQLite: the mark-only run is no token between pp and rr').toEqual({ at: 2, len: run.indexOf('rr') + 'rr'.length - 2 });
+    expect(libSearch.snippetSpan(one, ['a']), 'a leading U+0301 opens nothing: the hit is a alone').toEqual(sqliteSpan(one, 'a'));
+    expect(libSearch.snippetSpan(two, ['a']), 'nor do two leading marks: the hit starts after both').toEqual(sqliteSpan(two, 'a'));
+    expect(libSearch.snippetSpan(one, ['\u0301a']), 'a needle\'s leading mark opens nothing either').toEqual({ at: 1, len: 1 });
+    expect(libSearch.snippetSpan(inner, ['xa']), 'a mark after an open token continues it, inside the raw span').toEqual(sqliteSpan(inner, 'xa'));
+    expect(libSearch.snippetSpan(run, ['pp rr']), 'a leading and a mark-only run are no tokens: phrase adjacency holds').toEqual(sqliteSpan(run, '"pp rr"'));
+    const far = `${'y '.repeat(60)}\u0301\u0300\u0323a tail`;
+    expect(libSearch.snippetSpan(far, ['a']), 'far from the head, the span still starts at a').toEqual(sqliteSpan(far, 'a'));
+    expect(sqliteSpan(far, 'a').at, 'CONTROL: SQLite starts it after the three marks').toBe(far.indexOf('a tail'));
+  });
+  it('F2 round 5 (round 4\'s exhaustive test, made direct): the private unicode61 helpers and snippetSpan read every non-surrogate code point U+0000..U+10FFFF exactly as runtime SQLite unicode61 does: token (and its exact folded code point), ignored continuation, or boundary, with zero exclusions', async () => {
     const ALL = 0x10ffff + 1;
     // The oracle, read from runtime SQLite one 64Ki block at a time (bounded memory): per code point a folded-term code point (> 0: a standalone
     // token), -1 (a mark dropped inside a token: ignored continuation), -2 (a boundary), 0 (never read, or an unexpected shape).
@@ -3963,12 +3994,42 @@ describe('snippetTerms and unicode61 diacritic comparison: prefix markers surviv
     expect(tokens, 'CONTROL: the standalone token population of the frozen unicode61 category table').toBe(1_104_042);
     expect(dropped, 'CONTROL: the dropped marks are the only ignored continuations').toBe(25);
 
-    // Production, one code point at a time. Token: it is a standalone token, folds to the oracle's term, keeps its source span, and is
-    // not the term of any NEIGHBOUR or HOST-case/decomposition confusable the oracle reads as another term (equal where the oracle says equal).
-    const diverge: string[] = [];
-    const bad = (cp: number, what: string): void => { if (diverge.length < 400) diverge.push(`${cp.toString(16)} ${what}`); else if (diverge.length === 400) diverge.push('...'); };
-    const first = (s: string): number => s.codePointAt(0)!;
-    let probes = 0;
+    // DIRECT: the three private helpers themselves, compared with the oracle code point by code point. Observed through snippetSpan
+    // alone, a fold is applied to source and needle alike, so a wrong fold of a token onto any distant token compares equal to itself
+    // (the gap round 4's bounded neighbour and host-confusable probes left open). The helpers stay private: the test runs a temporary
+    // copy of the trusted lib.mjs bytes with ONE appended export statement naming them, and never reads, parses or copies their tables.
+    const dir = mkTmp('ccrc-history-f2r5-');
+    const copy = join(dir, 'lib-instrumented.mjs');
+    const EXPORTS = 'export { isUnicode61Token, unicode61Fold, isDroppedMark };';
+    writeFileSync(copy, `${readFileSync(LIB, 'utf8')}\n${EXPORTS}\n`);
+    const h = await import(/* @vite-ignore */ `${pathToFileURL(copy).href}?f2r5=${process.pid}-${Date.now()}`) as {
+      isUnicode61Token: (cp: number) => boolean; unicode61Fold: (cp: number) => number; isDroppedMark: (cp: number) => boolean;
+    };
+    expect([typeof h.isUnicode61Token, typeof h.unicode61Fold, typeof h.isDroppedMark], 'CONTROL: the instrumented copy exports the three helpers').toEqual(['function', 'function', 'function']);
+    expect(Object.keys(libSearch).filter((k) => ['isUnicode61Token', 'unicode61Fold', 'isDroppedMark'].includes(k)), 'CONTROL: production keeps them private').toEqual([]);
+    const direct: string[] = [];
+    const pub: string[] = [];
+    const note = (list: string[], cp: number, what: string): void => { if (list.length < 400) list.push(`${cp.toString(16)} ${what}`); else if (list.length === 400) list.push('...'); };
+    let compared = 0;
+    for (let cp = 0; cp < ALL; cp += 1) {
+      if (cp >= 0xd800 && cp <= 0xdfff) continue;
+      compared += 1;
+      const cls = o(cp);
+      const tok = h.isUnicode61Token(cp);
+      const drop = h.isDroppedMark(cp);
+      if (cls === -2) {
+        if (tok !== false || drop !== false) note(direct, cp, `boundary: token ${tok}, dropped ${drop}`);
+      } else if (cls === -1) {
+        if (tok !== false || drop !== true) note(direct, cp, `dropped continuation: token ${tok}, dropped ${drop}`);
+      } else {
+        const fold = h.unicode61Fold(cp);
+        if (tok !== true || drop !== false || fold !== cls) note(direct, cp, `token: token ${tok}, dropped ${drop}, fold ${fold.toString(16)} != sqlite ${cls.toString(16)}`);
+      }
+    }
+    expect(compared, 'CONTROL: every non-surrogate code point was compared directly').toBe(read);
+
+    // PUBLIC behaviour, one code point at a time, through snippetSpan: raw spans, membership and the mark rules. Folding equality is
+    // proved by the direct comparison above (equal folds are exactly the oracle's equal terms, every pair), not by these symmetric reads.
     for (let cp = 0; cp < ALL; cp += 1) {
       if (cp >= 0xd800 && cp <= 0xdfff) continue;
       const ch = String.fromCodePoint(cp);
@@ -3976,48 +4037,30 @@ describe('snippetTerms and unicode61 diacritic comparison: prefix markers surviv
       if (cls === -2) {
         const t = `x${ch}y`;
         const split = libSearch.snippetSpan(t, ['x y']);
-        if (split.at !== 0 || split.len !== t.length) bad(cp, 'boundary: `x y` must read across it');
-        if (libSearch.snippetSpan(t, ['xy']).at !== -1) bad(cp, 'boundary: `xy` must not');
+        if (split.at !== 0 || split.len !== t.length) note(pub, cp, 'boundary: `x y` must read across it');
+        if (libSearch.snippetSpan(t, ['xy']).at !== -1) note(pub, cp, 'boundary: `xy` must not');
         const needle = libSearch.snippetSpan(t, [t]);
-        if (needle.at !== 0 || needle.len !== t.length) bad(cp, 'boundary: a needle splits the same way');
-        if (libSearch.snippetSpan(ch, [ch]).at !== -1) bad(cp, 'boundary: no token of its own');
+        if (needle.at !== 0 || needle.len !== t.length) note(pub, cp, 'boundary: a needle splits the same way');
+        if (libSearch.snippetSpan(ch, [ch]).at !== -1) note(pub, cp, 'boundary: no token of its own');
       } else if (cls === -1) {
         const t = `x${ch}y`;
         const joined = libSearch.snippetSpan(t, ['xy']);
-        if (joined.at !== 0 || joined.len !== t.length) bad(cp, 'dropped: continues the token and vanishes');
-        if (libSearch.snippetSpan(t, ['x y']).at !== -1) bad(cp, 'dropped: is no boundary');
-        if (libSearch.snippetSpan(ch, [ch]).at !== -1) bad(cp, 'dropped: no standalone token');
+        if (joined.at !== 0 || joined.len !== t.length) note(pub, cp, 'dropped: continues the token and vanishes');
+        if (libSearch.snippetSpan(t, ['x y']).at !== -1) note(pub, cp, 'dropped: is no boundary');
+        if (libSearch.snippetSpan(ch, [ch]).at !== -1) note(pub, cp, 'dropped: no standalone token');
         const across = libSearch.snippetSpan(`pp ${ch} rr`, ['pp rr']);
-        if (across.at !== 0) bad(cp, 'dropped: a mark-only candidate is no token');
+        if (across.at !== 0) note(pub, cp, 'dropped: a mark-only candidate is no token');
+        const lead = libSearch.snippetSpan(`${ch}y`, ['y']);
+        if (lead.at !== ch.length || lead.len !== 1) note(pub, cp, `dropped: a leading mark opens no token (at ${lead.at}, len ${lead.len})`);
       } else {
         const term = String.fromCodePoint(cls);
         const own = libSearch.snippetSpan(ch, [term]);
-        if (own.at !== 0 || own.len !== ch.length) bad(cp, `token: standalone as its term ${cls.toString(16)}`);
+        if (own.at !== 0 || own.len !== ch.length) note(pub, cp, `token: standalone as its term ${cls.toString(16)}`);
         const mid = libSearch.snippetSpan(`x${ch}y`, [`x${term}y`]);
-        if (mid.at !== 0 || mid.len !== ch.length + 2) bad(cp, `token: inside a word as ${cls.toString(16)}`);
-        const same = new Set<number>();
-        const other = new Set<number>();
-        const consider = (b: number): void => {
-          if (!(b >= 0 && b < ALL) || (b >= 0xd800 && b <= 0xdfff) || b === cp) return;
-          (o(b) === cls ? same : other).add(b);
-        };
-        for (const d of [-2, -1, 1, 2]) consider(cp + d);
-        for (const s of [ch.toLowerCase(), ch.toUpperCase(), ch.normalize('NFD'), ch.normalize('NFC'), ch.normalize('NFKD'), ch.toUpperCase().toLowerCase()]) consider(first(s));
-        same.add(cls);
-        for (const b of same) {
-          probes += 1;
-          const r = libSearch.snippetSpan(ch, [String.fromCodePoint(b)]);
-          if (r.at !== 0 || r.len !== ch.length) bad(cp, `token: same term as ${b.toString(16)}`);
-        }
-        if (other.size > 0) {
-          probes += other.size;
-          const hit = libSearch.snippetSpan(ch, [...other].map((b) => String.fromCodePoint(b)));
-          if (hit.at !== -1) bad(cp, `token: equated with another term (${[...other].filter((b) => libSearch.snippetSpan(ch, [String.fromCodePoint(b)]).at !== -1).map((b) => b.toString(16)).join(',')})`);
-        }
+        if (mid.at !== 0 || mid.len !== ch.length + 2) note(pub, cp, `token: inside a word as ${cls.toString(16)}`);
       }
     }
-    expect(probes, 'CONTROL: the equivalence probes ran').toBeGreaterThan(3_000_000);
-    expect(diverge, 'production disagrees with runtime SQLite at (code point, what)').toEqual([]);
+    expect({ direct, public: pub }, 'production disagrees with runtime SQLite at (code point, what): direct helper parity, then snippetSpan').toEqual({ direct: [], public: [] });
   }, 600_000);
 });
 
