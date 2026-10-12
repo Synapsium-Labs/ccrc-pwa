@@ -24,7 +24,7 @@ time.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
-| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merge approved by the operator; `main` absorbed at `39c42f503`; review run 390 dispatched (R34) |
+| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merge approved by the operator; `main` absorbed at `39c42f503`; one last bounded round from review 390 (R35) |
 
 ## Decisions & deviations
 
@@ -667,6 +667,35 @@ time.
     ONE-poll comment naming only Updates and Notifications.
   - Next: `review-done`, then the merge with `--match-head-commit` at the reviewed tip, under the operator's R33
     approval.
+- **R35 (2026-10-12 12:23)**, review 390 is accepted, and one last bounded round fixes its prose and test hygiene.
+  - Review run 390 (`ccrc-pwa-brisk-basin`, mail 4313) reviewed `39c42f503`, scoped to the merge, with the held-out
+    panel: 54 agents, no lens unverified, 15 confirmed and 2 refuted, collapsing to five findings.
+    - None is a behaviour defect.
+    - The suites are green; the PWA reds were load timeouts that passed alone.
+    - The citation instrument agrees with `main` at `7 passed | 443 skipped`.
+    - `watch.ts`, `coord-db`, `schema.ts` and `pwa/src/lib/api.ts` came through the merge with no finding.
+    - Run 390 closed `done` and released. The report is copied to `w2-review-390-report.md`.
+  - F1, ruled: README's "Settings has a third section, **Stall watch**" is false once `main`'s Box token card
+    renders as its own section with its own heading. The sentence takes `main`'s own idiom, "then has a further
+    section", which carries no ordinal to keep true; `main` made the same change when it added the card. The README
+    pin's anchor and header follow it. This stays inside the licensed Settings paragraph.
+  - F2: the placement test asserts only the loading state. It gains a case with a landed updates view that pins
+    the four headings in order.
+  - F3: the screen's map comments are made true of four sections:
+    - the ONE-poll comment names its three readers;
+    - `StallWatchSection.tsx`'s "third" and "the other two" are corrected;
+    - the banner comment says "above every section".
+    `main`'s own "a third section" for the card stays; the panel refuted it, because it counts in file order.
+  - F4, ruled: `box-token-card.test.tsx` now makes a live fetch of `/api/coord/stall-watch`, because this wave
+    mounts a fetching section into the screen that test mounts. The wave caused it, so the wave fixes it. Its `mount`
+    spies `api.stallWatch` and nothing else changes. The file is unclaimed and the worker claims it first.
+  - F5: a snapshot note beside the plan's mutation row L (`main`'s anchor, "1 failed") and in its absorb section.
+    It takes no number.
+  - R1, taken into the round: the stall-watch block's lead in `shared/api.ts` no longer stands at the end of the
+    file. The placement sentence is corrected; it is a comment inside wave 1's block, and `shared/api.ts` is claimed
+    first.
+  - The bound: this is the last round. Its review is scoped to this round's diff, and anything it leaves goes to a
+    follow-up after the merge. Run 322 is back at `working` (fingerprint `39c42f503`), with mail 4314.
 
 ## Carried constraints (reviewers get these)
 
