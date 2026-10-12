@@ -4,7 +4,11 @@
 // `nodeText`, `keystrokeParts`, `CodeBlock`, `TableWrap`, and today's `mdComponents` split into
 // `SHARED_COMPONENTS` (code, pre, table) and `CHAT_COMPONENTS` (those plus chat's `a` and `img`). `ChatMarkdown`
 // is both of `MessageBubble`'s Markdown sites. `markdown-golden.test.tsx` holds chat's output byte for byte.
-import Markdown from 'react-markdown';
+// Hardened per ruling U3 (W4 Task 6; section 4.12): a message of at most `CHAT_SYNC_MAX_BYTES` UTF-8 bytes is
+// pre-scanned, then rendered as before; a longer one parses in `chatRunner`'s worker; whatever is not formatted
+// shows as `MsgPlain` with `chatPlainNote`'s sentence; and `isRefusedChatImageSrc` keeps chat from drawing an
+// image whose source is root-relative or protocol-relative (`chat-hardening.test.tsx`).
+import Markdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
 import React, { useCallback, useState, type ReactNode } from 'react';
@@ -24,11 +28,34 @@ import dockerfile from 'highlight.js/lib/languages/dockerfile';
 import rust from 'highlight.js/lib/languages/rust';
 import go from 'highlight.js/lib/languages/go';
 import { remarkAlerts } from './remarkAlerts';
-import { MD_HIGHLIGHT_BLOCK_MAX_CHARS } from './markdownLimits';
+import {
+  CHAT_PARSE_BUDGET_MS, CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, MD_HIGHLIGHT_BLOCK_MAX_CHARS,
+  MD_MAX_CONTAINER_DEPTH, MD_MAX_DELIMITER_RUN, MD_MAX_TREE_DEPTH,
+} from './markdownLimits';
+import { prescanMarkdown, utf8ByteLength } from './markdownGuard';
+import type { ParseOutcome } from './markdownParse';
+import { chatRunner, type MarkdownParser } from './markdownRunner';
+import { renderHast, type RenderHastOptions } from './renderHast';
+import { useParsedMarkdown } from './useParsedMarkdown';
 import '../session/chat.css';
 
 export const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|avif|bmp)(\?|#|$)/i;
 export const isImageUrl = (href: string | undefined): href is string => href !== undefined && IMG_EXT.test(href);
+
+/** Whether chat refuses `src` as an image source: true when it is root-relative or protocol-relative as a browser's
+ *  URL parser reads it. Leading ASCII whitespace and C0 controls are skipped, as a browser strips them from an
+ *  attribute URL, and a leading backslash counts as a slash, as the parser reads it (`\\h/x` is `//h/x`). A refused
+ *  source would be fetched from ccrc's own origin, or from a host the message names, carrying the operator's
+ *  cookie. A path-relative source (`x.png`, `../x`) is not refused; absent (`undefined`) is not refused either.
+ *  Takes the value after react-markdown's `defaultUrlTransform`. The ONE predicate: `img` and the auto-embed in `a`
+ *  both call it. */
+export function isRefusedChatImageSrc(src: string | undefined): boolean {
+  if (src === undefined) return false;
+  let i = 0;
+  while (i < src.length && src.charCodeAt(i) <= 0x20) i += 1;
+  const lead = src.charAt(i);
+  return lead === '/' || lead === '\\';
+}
 
 /** Absolute, scheme-qualified URL — a bare "example.com" would otherwise resolve
  *  same-origin and get swallowed by the PWA's navigation fallback. */
@@ -162,11 +189,12 @@ export const SHARED_COMPONENTS: Components = {
 };
 
 /** Open in the external browser (a bare `<a>` in a standalone PWA would try to
- *  navigate the app itself), and render image URLs inline as tap-to-open images. */
+ *  navigate the app itself), and render image URLs inline as tap-to-open images,
+ *  except a source `isRefusedChatImageSrc` refuses, which stays a plain link. */
 export const CHAT_COMPONENTS: Components = {
   ...SHARED_COMPONENTS,
   a({ href, children }) {
-    if (isImageUrl(href)) {
+    if (isImageUrl(href) && !isRefusedChatImageSrc(href)) {
       const name = href.split('/').pop()?.split(/[?#]/)[0] || 'image';
       return (
         <a href={href} target="_blank" rel="noopener noreferrer" className="msg-img-link" onClick={(e) => openExternal(e, href)}>
@@ -182,6 +210,13 @@ export const CHAT_COMPONENTS: Components = {
   },
   img({ src, alt }) {
     const href = typeof src === 'string' ? src : undefined;
+    if (isRefusedChatImageSrc(href)) {
+      return (
+        <a href={href} target="_blank" rel="noopener noreferrer" onClick={(e) => openExternal(e, href)}>
+          {href}
+        </a>
+      );
+    }
     return (
       <a href={href} target="_blank" rel="noopener noreferrer" className="msg-img-link" onClick={(e) => openExternal(e, href)}>
         <img src={src} alt={alt ?? ''} loading="lazy" className="msg-img" />
@@ -190,8 +225,74 @@ export const CHAT_COMPONENTS: Components = {
   },
 };
 
-/** One chat message body (an assistant turn, an opened compaction recap) as Markdown: GFM, then the alert
- *  callouts, through chat's components. The streaming caret is the caller's sibling after it. */
-export function ChatMarkdown({ text }: { text: string }): ReactNode {
+/** The one-line note under a message chat shows as plain text: why it was not formatted. Exhaustive over every
+ *  outcome but `tree` (a new kind is a compile error here); the limits are interpolated from `markdownLimits.ts`. */
+export function chatPlainNote(o: Exclude<ParseOutcome, { kind: 'tree' }>): string {
+  switch (o.kind) {
+    case 'refused':
+      return o.why === 'container-depth'
+        ? `Shown as plain text: line ${o.line} nests ${o.value} levels deep (limit ${MD_MAX_CONTAINER_DEPTH}).`
+        : `Shown as plain text: line ${o.line} has a run of ${o.value} emphasis marks (limit ${MD_MAX_DELIMITER_RUN}).`;
+    case 'too-deep':
+      return `Shown as plain text: this message nests ${o.depth} levels deep (limit ${MD_MAX_TREE_DEPTH}).`;
+    case 'too-wide':
+      return `Shown as plain text: this message would draw ${o.elements} elements (limit ${DOCS_MAX_RENDER_ELEMENTS}).`;
+    case 'threw':
+      return `Shown as plain text: it could not be formatted (${o.error}).`;
+    case 'timeout':
+      return `Shown as plain text: formatting took longer than ${o.budgetMs / 1000} s.`;
+    case 'worker-unavailable':
+      return 'Shown as plain text: this browser cannot format long messages in the background.';
+    case 'worker-failed':
+      return `Shown as plain text: the formatter stopped (${o.error}).`;
+  }
+}
+
+/** A message shown as plain text: the text verbatim in `<pre className="msg-plain">`, then, when `note` is given,
+ *  `<p className="msg-plain-note">`. `note` absent = no note line. */
+export function MsgPlain({ text, note }: { text: string; note?: string }): ReactNode {
+  return (
+    <>
+      <pre className="msg-plain">{text}</pre>
+      {note !== undefined && <p className="msg-plain-note">{note}</p>}
+    </>
+  );
+}
+
+/** At most `CHAT_SYNC_MAX_BYTES`: the pre-scan, then react-markdown on the main thread, exactly as before. */
+function SyncChatMarkdown({ text }: { text: string }): ReactNode {
+  const scan = prescanMarkdown(text);
+  if (!scan.ok) {
+    return <MsgPlain text={text} note={chatPlainNote({ kind: 'refused', why: scan.why, line: scan.line, value: scan.value })} />;
+  }
   return <Markdown remarkPlugins={[remarkGfm, remarkAlerts]} components={CHAT_COMPONENTS}>{text}</Markdown>;
+}
+
+/** How a tree from the worker renders in chat: chat's components and react-markdown's own url transform, so it is
+ *  byte-identical to the synchronous path (M4.P10). */
+const CHAT_RENDER: RenderHastOptions = { components: CHAT_COMPONENTS, urlTransform: defaultUrlTransform };
+
+/** Over `CHAT_SYNC_MAX_BYTES`: the worker. The latest settled tree; else, while the current text parses, the last
+ *  good tree; else, after an outcome that is not a tree for the current text, plain text with its note; else
+ *  (nothing settled yet, or no tree yet while the current text parses) plain text alone. No Format anyway. */
+function AsyncChatMarkdown({ text, parser }: { text: string; parser: MarkdownParser }): ReactNode {
+  const { outcome, lastGood, pending } = useParsedMarkdown(text, parser, { profile: 'chat', budgetMs: CHAT_PARSE_BUDGET_MS });
+  if (outcome?.kind === 'tree') return renderHast(outcome.tree, CHAT_RENDER);
+  if (pending && lastGood !== null) return renderHast(lastGood, CHAT_RENDER);
+  if (outcome !== null && !pending) return <MsgPlain text={text} note={chatPlainNote(outcome)} />;
+  return <MsgPlain text={text} />;
+}
+
+/** Chat's parser: `chatRunner.parse`, read at call time, so a test spies it with `vi.spyOn(chatRunner, 'parse')`. */
+const chatParse: MarkdownParser = (src, opts) => chatRunner.parse(src, opts);
+
+/** One chat message body (an assistant turn, an opened compaction recap) as Markdown: GFM, then the alert
+ *  callouts, through chat's components. A text of at most `CHAT_SYNC_MAX_BYTES` UTF-8 bytes renders on the main
+ *  thread behind the pre-scan; a longer one parses through `parser` (absent = `chatRunner`'s), with a
+ *  `CHAT_PARSE_BUDGET_MS` budget. The two paths are two components, so crossing the threshold remounts. The
+ *  streaming caret is the caller's sibling after it. */
+export function ChatMarkdown({ text, parser = chatParse }: { text: string; parser?: MarkdownParser }): ReactNode {
+  return utf8ByteLength(text) <= CHAT_SYNC_MAX_BYTES
+    ? <SyncChatMarkdown text={text} />
+    : <AsyncChatMarkdown text={text} parser={parser} />;
 }

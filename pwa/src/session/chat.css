@@ -1075,6 +1075,14 @@ button.metachip:active {
 }
 .msg-assist pre code { background: none; border-radius: 0; padding: 0; color: inherit; font: inherit; }
 
+/* PLAIN TEXT — a message chat did not format (lib/markdown.tsx's MsgPlain: the pre-scan refused it, or the worker
+   path answered something other than a tree). It sits in the .msg-assist pre well above, which paints its ground
+   and ink, so no colour here: it only grows to the whole message and wraps instead of scrolling. The note under
+   it is one quiet line; its ground is .chat's --bg-page (registered in design/audit.mjs INHERITED_GROUNDS). */
+.msg-plain { white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg-assist .msg-plain { max-height: none; }
+.msg-plain-note { color: var(--ink-secondary); font-size: var(--text-xs); }
+
 /* TABLES — wrapper scroller (div, via TableWrap): zebra body, eyebrow header,
    CSS-only edge-fade scroll affordance (Lea Verou technique). */
 .md-table-wrap {
