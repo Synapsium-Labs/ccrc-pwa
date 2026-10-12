@@ -127,13 +127,19 @@ describe('a subagent tool event keeps the main thread waiting (D-4039)', () => {
   });
 
   it('a subagent AskUserQuestion over a main-thread question leaves the main wait, still main-owned', () => {
+    // The subagent asks a DIFFERENT question, so "the main thread's ask survived" is observable, not assumed.
+    const Q2 = { questions: [{ question: 'Subagent asks?', header: 'Sub', multiSelect: false,
+      options: [{ label: 'yes', description: 'go on' }, { label: 'no', description: 'stop' }] }] };
     askViaPermission();
-    run({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_input: Q, ...SUB });
-    expect(readState()).toMatchObject({ state: 'waiting', ask: { questions: Q.questions } });
-    expect(readState()).not.toHaveProperty('waitBy');
+    run({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_input: Q2, ...SUB });
+    const first = readState();
+    expect(first).toMatchObject({ state: 'waiting', ask: { questions: Q.questions } });
+    expect(JSON.stringify(first['ask'])).not.toContain('Subagent asks?');
+    expect(first).not.toHaveProperty('waitBy');
     run({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: '/x' }, ...SUB });
     const s = readState();
     expect(s).toMatchObject({ state: 'waiting', ask: { questions: Q.questions } });
+    expect(JSON.stringify(s['ask'])).not.toContain('Subagent asks?');
     expect(s).not.toHaveProperty('waitBy');
   });
 
