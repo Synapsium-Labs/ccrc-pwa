@@ -61,10 +61,14 @@ the ledger's R32 and `.superpowers/sdd/stall-watch-settings/finding-4063-forensi
 1. **A subagent's own dialog while the main thread waits.** A background subagent's PermissionRequest still writes its
    `{approval}` ask over a main-thread question (the PermissionRequest arm sets `waiting` for any sender). Out of scope
    here: it is a real dialog on the pane, and under `bypassPermissions` it never fires. The wave-done names it.
-2. **`updatedAt` and `event` still move on a carried `waiting`.** The `delegates` hold and the frozen arm read
-   subagent activity from them (spec §5's bounded exception), so the carry keeps today's stamp and event. The ask row's
-   `askAt` provenance can read a later time; `detectDialogs` mints once per pane dialog id, so no second row is minted.
-   Task 1 pins that the stamp still moves.
+2. **A carried `waiting` keeps its stamp and gains `aliveAt` (D-4041).** The carry keeps the wait's own `updatedAt`
+   and `event` and writes the additive `aliveAt` = now; a main-thread write carries none. The first version of this
+   wave moved the stamp, for "the `delegates` hold and the frozen arm"; review showed neither can see a carried
+   `waiting` (a `waiting` hookstate sets `dialogPending`, and the verdict returns at its dialog step before either arm).
+   The reader that needs liveness is the aged door (`hookstate.ts`, 30 min), and it now ages on `max(updatedAt,
+   aliveAt)`. The attention bucket, the ask row's `askAt` and the answer's CAS read the wait's start, which no longer
+   moves. The carry is decided from one fresh read, so a main-thread answer landing after the prefilter is not
+   overwritten. Task 1's cases pin the kept stamp, the absent `aliveAt` after a main write, and that race.
 3. **Background work after the main thread's Stop.** A subagent's tool event over `done` still writes `working`, as
    today: the card keeps reading `working` while background work runs. Task 1 pins this, so the carry cannot widen to
    every state unnoticed.
@@ -337,7 +341,8 @@ From `server/`, one file per command, foreground:
 ## Deviations found
 
 Both numbers were issued to this programme in its 2026-10-05 17:47 block ("stall-watch-settings: W1 server, W2 PWA"),
-held in reserve, and assigned to this wave by the coordinator's ruling R38. Two numbers of the block remain in reserve.
+held in reserve, and assigned to this wave by the coordinator's ruling R38. A third, D-4041, was assigned from the same block by the
+coordinator's ruling R40 (the fix round after review). One number of the block remains in reserve.
 
 ### D-4039 `subagent-tool-event-keeps-the-waiting-ask`
 
@@ -346,37 +351,64 @@ held in reserve, and assigned to this wave by the coordinator's ruling R38. Two 
   measured and finding 4063 traced to an erased question (ledger R32).
 - **What W3 does:** a PreToolUse or PostToolUse carrying `agent_id`, arriving while the hookstate reads `waiting` and
   that wait does not carry `waitBy: "subagent"` (it was raised by the main thread), keeps `waiting`, the ask and
-  `interrupted`; the stamp and the event move as for any event. A wait a subagent raised itself is not carried.
+  `interrupted`. (As first shipped, the stamp and the event moved as for any event; D-4041 keeps them, below.) A wait a
+  subagent raised itself is not carried.
 - **Why:** the server mints an ask row only on the first pane tick that sees the dialog (`detectDialogs`), and the
   stall watch's hold 2a reads the hookstate ask. An erased ask leaves the question invisible to both, and to the mail
   gate's sender, for as long as the dialog stands (3 h measured).
 - **Not done:** carrying every state. Background work after the main Stop keeps writing `working`, which the card,
   the dispatch busy check and the operator's reading of a session rely on; the operator has not ruled that away.
-- **Pinned by:** `server/test/session-hook-subagent-ask.test.ts` (14 cases). Every row below was re-measured at test
-  commit `baa51395e`, out of tree, one mutation at a time, each restored and `cmp`-checked; the unmutated hook passes 14 of 14:
-  M1 (delete the carry block) → 8 failed (a subagent PreToolUse after a PermissionRequest question leaves waiting and the questions; a subagent PostToolUse does too, and so do many in a row; the PreToolUse question arm is kept the same way; an approval dialog is kept the same way; the stamp and the event still move, for the delegates hold and the frozen arm; a main-thread wait survives a SubagentStop and a SubagentStart, and is not flipped to subagent-raised; a subagent AskUserQuestion over a main-thread question leaves the main wait, still main-owned; the interrupted flag is carried with the wait);
-  M2 (drop `"$prev_state" == waiting &&`) → 1 failed (scope: a subagent tool event over done still writes working, as before);
-  M3 (drop `-n "$paid" &&` from the carry condition) → 1 failed (control: the main thread answering (its own PostToolUse) ends the wait and clears the ask);
-  M7 (drop the event-type conjunct) → 1 failed (Review Focus 1 scope pin: a subagent PermissionRequest over a main-thread question writes its own approval);
+- **Pinned by:** `server/test/session-hook-subagent-ask.test.ts` (24 cases after D-4041; D-4039's own are the first
+  fourteen, one of them replaced). Every row below was re-measured at commit `8e0135f87`, out of tree, one mutation at a
+  time, each restored and `cmp`-checked; the unmutated hook passes 24 of 24. The carry now reads the file once, fresh
+  (D-4041), so the conditions below are the ones the code holds today, and `$fr_by`, `$fr_state` and `$fr_ask` are that
+  read's values:
+  M1 (delete the carry block) → 12 failed (a carried write keeps updatedAt and event and writes aliveAt; a main-thread wait survives a SubagentStop and a SubagentStart, and is not flipped to subagent-raised; a main-thread write after a carried one carries no aliveAt; a subagent AskUserQuestion over a main-thread question leaves the main wait, still main-owned; a subagent PostToolUse does too, and so do many in a row; a subagent PreToolUse after a PermissionRequest question leaves waiting and the questions; a subagent PreToolUse keeps the stamp and writes aliveAt too, and a second carry keeps the FIRST stamp; an approval dialog is kept the same way; the PreToolUse question arm is kept the same way; the interrupted flag is carried with the wait; control: with no interleaving the shim is a pass-through and the wait is carried; the prefilter keeps the fresh read off every other event: one read over working or done, and for a main-thread event over a wait);
+  M2 (drop `"$prev_state" == waiting &&`, now the no-fork prefilter only: the fresh read still decides, so only the read-count pin sees it) → 1 failed (the prefilter keeps the fresh read off every other event: one read over working or done, and for a main-thread event over a wait);
+  M3 (drop `-n "$paid" &&` from the carry condition) → 3 failed (a main-thread write after a carried one carries no aliveAt; control: the main thread answering (its own PostToolUse) ends the wait and clears the ask; the prefilter keeps the fresh read off every other event: one read over working or done, and for a main-thread event over a wait);
+  M7 (drop the event-type conjunct) → 2 failed (Review Focus 1 scope pin: a subagent PermissionRequest over a main-thread question writes its own approval; SubagentStart and SubagentStop read the hookstate file with two jq forks: the prefilter and the shared fresh read);
   M8 (drop the `interrupted` carry in the block) → 1 failed (the interrupted flag is carried with the wait);
-  M9 (drop the provenance condition, `w_by != subagent`) → 2 failed (a subagent's own approved dialog ends at its next tool event (working, no ask); the same holds after a Stop, and across a SubagentStop that carries the provenance);
-  M10 (stop preserving `waitBy` in the SubagentStart/SubagentStop block) → 1 failed (the same holds after a Stop, and across a SubagentStop that carries the provenance);
-  M11 (never record `waitBy` on a fresh subagent wait) → 3 failed (a subagent's own approved dialog ends at its next tool event (working, no ask); the same holds after a Stop, and across a SubagentStop that carries the provenance; Review Focus 1 scope pin: a subagent PermissionRequest over a main-thread question writes its own approval);
+  M9 (drop the provenance condition, `"$fr_by" != subagent`) → 2 failed (a subagent's own approved dialog ends at its next tool event (working, no ask); the same holds after a Stop, and across a SubagentStop that carries the provenance);
+  M10 (stop preserving `waitBy` in the SubagentStart/SubagentStop block) → 2 failed (control: SubagentStart over working and over a subagent-raised wait write no aliveAt; the same holds after a Stop, and across a SubagentStop that carries the provenance);
+  M11 (never record `waitBy` on a fresh subagent wait) → 4 failed (Review Focus 1 scope pin: a subagent PermissionRequest over a main-thread question writes its own approval; a subagent's own approved dialog ends at its next tool event (working, no ask); control: SubagentStart over working and over a subagent-raised wait write no aliveAt; the same holds after a Stop, and across a SubagentStop that carries the provenance);
   M12 (delete the `waitby=""` reset in the carry) → 1 failed (a subagent AskUserQuestion over a main-thread question leaves the main wait, still main-owned);
-  M13 (keep the subagent's own question instead of the main thread's, `ask_json` not restored when the tool is AskUserQuestion) → 1 failed (a subagent AskUserQuestion over a main-thread question leaves the main wait, still main-owned).
+  M13 (delete `ask_json="${fr_ask:-null}"` in the carry, so the subagent's own question is kept instead of the main thread's) → 8 failed (a main-thread wait survives a SubagentStop and a SubagentStart, and is not flipped to subagent-raised; a subagent AskUserQuestion over a main-thread question leaves the main wait, still main-owned; a subagent PostToolUse does too, and so do many in a row; a subagent PreToolUse after a PermissionRequest question leaves waiting and the questions; an approval dialog is kept the same way; the PreToolUse question arm is kept the same way; the interrupted flag is carried with the wait; control: with no interleaving the shim is a pass-through and the wait is carried).
 - **Departure `carry-only-a-main-thread-wait` (task review, Important 1):** the carry now applies only to a wait the
   main thread raised. The hook records an additive hookstate key `waitBy: "subagent"` when a subagent's own event freshly
   sets `waiting`, preserves it across the SubagentStart/SubagentStop carry, and the D-4039 block skips a stored
   subagent-raised wait, so a subagent's approved dialog ends at its next tool event as it did before. It took no number.
-- **Cost if wrong:** a stale `waiting` survives background work after a dialog was dismissed without a main-thread
-  event; the next main-thread event clears it, as it would without subagents. A residual race remains and runs both
-  ways: a subagent hook run that reads `prev_state` before the main thread's PermissionRequest renames its file, and
-  renames after it, still erases the ask; one that read `waiting` before the main thread's answer can write
-  `waiting` back over it, resurrecting an answered wait until the next main-thread event heals it (the window is one
-  hook run; the file is last-writer-wins by design).
-  A carried `waiting` also moves `updatedAt` on every subagent tool call. A coordinator's answer to a held ask can
-  therefore refuse `ask-moved` more often (it fails safe: nothing is pressed, and a retry works). The fleet's
-  unseen-attention badge, which takes its time from `updatedAt`, can re-fire after an ack for as long as the subagent works.
+  It added one `jq` fork to every SubagentStart/SubagentStop (review 397 F2); D-4041 folds the block's three reads into
+  one shared fresh read, so that block now pays two forks fewer than at the tip of the first round and one fewer than at
+  the base (table under D-4041).
+- **Cost if wrong:**
+  - A main wait that ends with no main hook event (Esc on a dialog fires no Stop; a denial fires nothing this hook maps)
+    stays `waiting` while subagents write, until the next main-thread event. While it stands:
+    - fleet `dialogPending` is true (`fleet.ts` ORs a `waiting` hookstate into it);
+    - the stall verdict holds `dialog` and can push `dialog-cap`, more than once if the live word re-stamps, and it
+      pre-empts the limit, frozen, delegates and coordinator-ball arms;
+    - the mail gate refuses `pending-ask`;
+    - the PWA shows a stale question and an attention row;
+    - a later hookless dialog (sandbox, elicitation) is minted as an ask from the STALE question and mailed to the
+      parent with stale buttons, and its operator push waits out the hold's grace. `answerAsk`'s menu check refuses any
+      press, so no wrong keystroke is possible.
+  - After D-4041 that last dialog takes the capped dialog hold instead of the uncapped `ask` one, because the stale
+    `hookAsk.at` no longer moves with every subagent call. At the first round's tip the carry re-stamped it, so the cap
+    never ran down.
+  - Not done: an age bound on the carry, because it would bring finding 4063 back for a long real wait.
+  - A residual race remains. D-4041 closed the wide window (a main-thread answer landing between the prefilter read and
+    the write is no longer overwritten: it ended `waiting` at the first round's tip and ends `working` now). The narrow one
+    stays: a main-thread answer that lands between the fresh read and the `mv`, a few milliseconds inside one hook run, is
+    still overwritten by the carried `waiting` and heals on the next main-thread event. The write is last-writer-wins by
+    design. Measured with a forced-interleaving `jq` shim, both variants and both trees, under D-4041.
+  - A carried `waiting` no longer moves `updatedAt` (D-4041), so the two costs the first round named, the badge re-firing
+    after an ack and `ask-moved` refusing more often, are gone.
+  - A subagent tool event never ends the main thread's wait only for PreToolUse/PostToolUse. A subagent PermissionRequest
+    still replaces a main question with its own approval, as at the base (Review Focus 1; the scope pin).
+  - `waitBy` rests on a subagent's PermissionRequest payload carrying `agent_id`. No live capture shows that: the capture
+    files hold no PermissionRequest at all (0 of 437; the capture sessions ran under bypass). The evidence is static,
+    the bundle builds that input with the same base builder as PreToolUse, whose captures do carry `agent_id` (spec §11
+    risk 3). If a build omitted it, `waitBy` would never be recorded and the regression the departure fixes would
+    return for sessions that are not under `bypassPermissions`.
 
 ### D-4040 `dialog-cap-clock-ignores-inbound-mail`
 
@@ -395,3 +427,93 @@ held in reserve, and assigned to this wave by the coordinator's ruling R38. Two 
   M6 (drop the inbound term from `capQuietSince`) → 1 failed (control: the limit cap keeps the inbound term).
 - **Cost if wrong:** if some inbound mail does reach a pane under a dialog without re-stamping its word, the cap fires
   up to 2 h earlier than today for that dialog: one operator push, never mail.
+
+### D-4041 `a-carried-wait-keeps-its-stamp`
+
+Assigned from the programme's reserve by the coordinator's ruling R40. It resolves review 397's F3 and its race finding.
+
+- **Departs from:** D-4039's "the stamp and the event move as for any event" for a carried `waiting`, as first shipped and
+  as Review Focus 2 first read; and the hook's rule that every write stamps `updatedAt` now.
+- **What W3 does:**
+  - On every subagent-originated write over a MAIN-thread `waiting`, the hook keeps the file's prior `updatedAt` and
+    `event`, as well as the state, ask and `interrupted`, and writes an additive `aliveAt` = now. That covers a subagent
+    PreToolUse/PostToolUse and SubagentStart/SubagentStop. A main-thread write rewrites the file with no `aliveAt`, and
+    so does every other write.
+  - The carry is decided from ONE fresh `jq` read of the file at the carry point (state, `waitBy`, ask, `interrupted`,
+    `updatedAt`, `event`), not from `prev_state`, which the prefilter read ~650 lines earlier. `prev_state` stays as the
+    no-fork prefilter. The SubagentStart/SubagentStop block takes its state, ask, `interrupted` and `waitBy` from the
+    same read, so its three forks become one.
+  - `hookstate.ts` ages a file on `max(updatedAt, aliveAt)` when `aliveAt` is a finite number. An absent or malformed one
+    is ignored: never `malformed`, never `no-state` by itself. `HookState` is unchanged; `aliveAt` rides on the raw
+    read's ok variant as an optional field.
+  - A file whose `updatedAt` is not a number keeps no stamp: the write is as before, with a fresh one.
+- **Why:** the moving stamp (D-4039 as first shipped) was meant to serve the `delegates` hold and the frozen arm. Neither
+  can see a carried `waiting`: a `waiting` hookstate sets fleet `dialogPending`, and the verdict returns at its dialog
+  step before them. What the moving stamp did instead:
+  - re-fired the attention badge (`bucketSince` reads the stamp when the hook state is `waiting`);
+  - opened an `ask-moved` window on the coordinator's answer (the CAS against `askAt`): modelled at about 45% of answers
+    for a session making a tool call every 3 s;
+  - lost the feed record when the operator's answer lost its CAS (`server.ts` ≈:2226).
+  The one reader that needs the stamp to move is the aged door (30 min), which the dispatch busy check, fleet
+  `hookState`/`dialogPending` and the mail gate all read. `aliveAt` serves it without moving the wait's start.
+  The fresh read closes the first race: a main-thread answer landing inside a subagent hook run was overwritten by a carried
+  `waiting` decided from the old read.
+- **Not done:**
+  - A separate wait-start field on `HookState` and the wire: a 13-file literal census rides on `HookState`, and
+    `watch.ts` is claimed by another run. `aliveAt` stays on the raw read.
+  - A change to `watch.ts`'s frozen clock (`watch.ts:331` is claimed and unchanged).
+  - An age bound on the carry (see D-4039's Cost if wrong).
+  - A closure of the narrow window between the fresh read and the `mv`. It needs a lock or a compare-and-swap in a shell
+    hook, and the file is last-writer-wins by design.
+- **Pinned by:**
+  - `server/test/session-hook-subagent-ask.test.ts` (24 cases), the "stamp" cases, the "carry is decided from one fresh
+    read" describe (a `jq` shim in the fixture's `bin/` rewrites the file after the prefilter read, as a main-thread answer
+    would, and counts reads), and `server/test/hookstate.test.ts` (7 cases in the `aliveAt` describe).
+  - Every row was measured at commit `8e0135f87`, out of tree, one mutation at a time, each restored and `cmp`-checked;
+    the unmutated files pass 24 of 24 and 61 of 61:
+  S1 (never keep the file's `updatedAt` and `event`, `w_upd` and `w_ev` left unset) → 3 failed (SubagentStart and SubagentStop over a main-thread wait keep the stamp and write aliveAt; a carried write keeps updatedAt and event and writes aliveAt; a subagent PreToolUse keeps the stamp and writes aliveAt too, and a second carry keeps the FIRST stamp);
+  S2 (never write `aliveAt`) → 4 failed (SubagentStart and SubagentStop over a main-thread wait keep the stamp and write aliveAt; a carried write keeps updatedAt and event and writes aliveAt; a main-thread write after a carried one carries no aliveAt; a subagent PreToolUse keeps the stamp and writes aliveAt too, and a second carry keeps the FIRST stamp);
+  S3 (a main-thread write also writes `aliveAt`, `--arg aliveAt "${w_alive:-$(_hook_epoch_ms)}"`) → 3 failed (a main-thread write after a carried one carries no aliveAt; control: SubagentStart over working and over a subagent-raised wait write no aliveAt; a main answer landing after the prefilter read is not overwritten by a carried waiting);
+  S4 (drop `_hook_keep_stamp` from the SubagentStart/SubagentStop block) → 1 failed (SubagentStart and SubagentStop over a main-thread wait keep the stamp and write aliveAt);
+  S5 (drop `_hook_keep_stamp` from the tool-event carry) → 3 failed (a carried write keeps updatedAt and event and writes aliveAt; a main-thread write after a carried one carries no aliveAt; a subagent PreToolUse keeps the stamp and writes aliveAt too, and a second carry keeps the FIRST stamp);
+  S6 (decide the tool-event carry from `prev_state` again, not the fresh read) → 1 failed (a main answer landing after the prefilter read is not overwritten by a carried waiting);
+  S7 (SubagentStart/SubagentStop take `state` from `prev_state`, not the fresh read) → 1 failed (the same holds for a SubagentStop: its state comes from the fresh read, not from the prefilter);
+  S8 (a second fresh read in the SubagentStart/SubagentStop block, the fork fold undone) → 1 failed (SubagentStart and SubagentStop read the hookstate file with two jq forks: the prefilter and the shared fresh read);
+  S9 (SubagentStart/SubagentStop do not exit on an empty fresh state) → 1 failed (a file that is gone or unreadable at the fresh read leaves SubagentStop inert);
+  S10 (SubagentStart/SubagentStop write `ask` null instead of the file's) → 2 failed (SubagentStart and SubagentStop over a main-thread wait keep the stamp and write aliveAt; a main-thread wait survives a SubagentStop and a SubagentStart, and is not flipped to subagent-raised);
+  A1 (the age cut ignores `aliveAt`, `now - raw.state.updatedAt`) → 2 failed (a wait stamped past 30 minutes ago is fresh through a recent aliveAt; the boundary is the same one: exactly 30 minutes from the later stamp is still fresh);
+  A2 (a non-finite `aliveAt` is accepted, the `Number.isFinite` check dropped) → 1 failed (a malformed aliveAt is ignored: not malformed, not no-state by itself, and it revives nothing);
+  A3 (a malformed `aliveAt` rejects the whole read as `malformed`) → 1 failed (a malformed aliveAt is ignored: not malformed, not no-state by itself, and it revives nothing);
+  A4 (`Math.max` dropped: `aliveAt` alone sets the age) → 1 failed (the later of the two wins: an aliveAt OLDER than a fresh updatedAt does not age the file);
+  A5 (the raw read drops `aliveAt`) → 3 failed (a wait stamped past 30 minutes ago is fresh through a recent aliveAt; the boundary is the same one: exactly 30 minutes from the later stamp is still fresh; the raw read reports a finite aliveAt beside the unchanged state, and HookState itself does not grow).
+- **Measured, forced interleaving** (a `jq` shim on PATH in a fixture HOME; a main-thread answer rewrites the file after
+  the chosen read; subagent PostToolUse over a main-thread question):
+
+  | variant | at the first round's tip | now |
+  |---|---|---|
+  | 1: the answer lands after the prefilter read | `waiting`, ask erased (the carry re-read a null ask) | `working`, main's answer kept |
+  | 1, SubagentStop | `waiting`, ask erased | `working` |
+  | 2: the answer lands after the fresh carry read, before the `mv` | `waiting`, ask kept (answer overwritten) | `waiting`, ask kept (answer overwritten): the residual |
+  | 2, SubagentStop | `waiting` | `waiting`: the residual |
+
+- **Forks per event class** (every `jq` invocation, a logging shim in a fixture HOME; the base `da1373cf6`, the first
+  round's tip `efb4842b7`, now `8e0135f87`):
+
+  | event class | base | tip | now |
+  |---|---|---|---|
+  | main PostToolUse over working / over waiting | 3 / 4 | 3 / 4 | 3 / 4 |
+  | main PreToolUse over working | 4 | 4 | 4 |
+  | main PermissionRequest (ask), Stop | 5, 5 | 5, 5 | 5, 5 |
+  | subagent PostToolUse over working / over done | 3 / 3 | 3 / 3 | 3 / 3 |
+  | subagent PostToolUse over a main-thread wait | 3 | 4 | 4 |
+  | subagent PreToolUse (Bash) over a main-thread wait | 5 | 6 | 6 |
+  | subagent PostToolUse over a subagent's own wait | 3 | 4 | 4 |
+  | subagent PermissionRequest | 5 | 5 | 5 |
+  | SubagentStart over working / SubagentStop over waiting | 7 / 7 | 8 / 8 | 6 / 6 |
+
+  A subagent tool event over any `waiting` pays the one fresh read, as the plan's hot-path constraint says; main-thread
+  events pay nothing new, and the SubagentStart/SubagentStop block ends one fork under the base.
+- **Cost if wrong:** an older server running this hook ages a carried wait at its start + 30 min, so during update skew
+  the dispatch busy check could proceed; the reader must not trail the hook (name `--server-first` for a hand rollout);
+  after the aged read expires, the frozen arm's clock reads the wait start (`watch.ts:331` is claimed and unchanged), so
+  frozen can fire up to 30 min earlier. The narrow window between the fresh read and the `mv` stays (above).
