@@ -47,6 +47,16 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-12 06:26 — FIX ROUND 1's wave-done (4271, acked; archived in `wave9-fr1/`): PR #354 at `4007a2439`.**
+  - **Re-measured.** 9 commits and 17 files since `c7dfbbf69`, no merge of main. The boundary is clean (no `ccd/`, `store.ts`, `CLAUDE.md` or `session-hook.test.ts`), `merge-tree` is clean, and the PR is mergeable.
+  - **Reported.** Every ruled finding is fixed, accepted, recorded or carried as ruled, and every ruled mutation row was measured red, then green.
+    - The 61 numbers are defined singly.
+    - The suites run alone are green. The suite line stays red from the wave's first full run (clause 15).
+  - **The worker's new slugs** are test shapes, and one is a correct reading of the ruling's "(a new reference)". None changes ruled behaviour. They fold into 4850, 4851 and 4853, and two residuals go to the named-without-a-number line.
+    - Ruled in 4272: one docs-only commit, then the wave-done for the new tip.
+    - The scoped review is dispatched at that tip.
+  - **Workspace-lifecycle wave 6 (#351)** has not landed.
+
 - **2026-10-12 05:38 — the path-identity follow-up's PRE-FLIGHT is done** (`wf_e321bcc7-a08`, read-only; `path-identity-preflight/scope.md` and `preflight.json`).
   - **The items.** 37, measured against wave 9's tip, which changed nothing under `ccd/`: 26 open, 2 partly closed, and 9 unclear fold-ins that no source carries explicitly.
   - **Four groups:**
