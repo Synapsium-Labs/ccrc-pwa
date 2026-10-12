@@ -1611,6 +1611,13 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - Mail 4286 requires crash-point, persistence-failure, lone-surrogate and exact 4266 regression probes plus mutation-red
     rows. It forbids a fake claimant sentinel and an untyped `run_events` marker. Both lanes remain SHADOWED; a fresh
     scoped review follows an exact-fingerprint `wave-done`.
+- **2026-10-12 10:04 — queued mail reconciled; #351 is the second lander (addendum 4288).**
+  - Plain-ridge kept the stopped work and added two local words-only commits through `1a19f637b`; they correctly narrow
+    4826 and name H1 as unresolved until the typed state proves closure, so they remain in the round.
+  - CCR-15 wave 9 PR #354 merged first as `28e8dc1b2`. This is the named clause-16 trigger: plain-ridge merges
+    `origin/main`, never rebases, and preserves both programmes' `watch.ts` and README changes by content.
+  - As second lander, #351 owns the child-reclamation spec's ws-expire/crumb sentence that this wave makes false. It also
+    owns the stale generated `ccd/ccd` EXPIRE-V1 capability comment, followed by the generated-file stamp/ownership guard.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
