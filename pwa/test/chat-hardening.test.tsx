@@ -175,6 +175,19 @@ describe('M4.C2: messages over CHAT_SYNC_MAX_BYTES parse through chatRunner', ()
     expect(container.querySelector('button')).toBeNull();
   });
 
+  it("a non-tree outcome for an older text never puts its note under a newer text that is still parsing", async () => {
+    const calls = deferChatParses();
+    const { container, next } = assistant(longText('# First'));
+    await answer(calls, 0, { kind: 'timeout', budgetMs: CHAT_PARSE_BUDGET_MS });
+    expect(noteOf(container)).toBe('Shown as plain text: formatting took longer than 2 s.');
+    const second = longText('# Second');
+    next(second);
+    expect(calls).toHaveLength(2);
+    expect(plainOf(container)?.textContent).toBe(second);
+    expect(noteOf(container)).toBeNull();
+    expect(container.querySelector('h1')).toBeNull();
+  });
+
   it('the streaming caret stays after the body on the worker path, before and after the tree', async () => {
     const calls = deferChatParses();
     const { container } = assistant(longText('# Streaming'), true);
@@ -267,6 +280,20 @@ describe('M4.C3: chat refuses a root-relative or protocol-relative image source'
     expect(isRefusedChatImageSrc(src)).toBe(false);
   });
 
+  it('a same-scheme special-relative https:/ source draws no image, as an img or as an auto-embed', () => {
+    const asImg = assistant('![](https:/api/example/x)');
+    expect(asImg.container.querySelectorAll('img')).toHaveLength(0);
+    const imgLink = screen.getByRole('link', { name: 'https:/api/example/x' });
+    expect(imgLink.getAttribute('href')).toBe('https:/api/example/x');
+    expect(imgLink.className).toBe('');
+    cleanup();
+    const asLink = assistant('[x](https:/files/a.png)');
+    expect(asLink.container.querySelectorAll('img')).toHaveLength(0);
+    const link = screen.getByRole('link', { name: 'x' });
+    expect(link.getAttribute('href')).toBe('https:/files/a.png');
+    expect(link.className).toBe('');
+  });
+
   it('an https image still embeds', () => {
     assistant('![ok](https://example.com/c.png)');
     expect(screen.getByRole('img', { name: 'ok' }).getAttribute('src')).toBe('https://example.com/c.png');
@@ -290,13 +317,16 @@ describe('isRefusedChatImageSrc: the URL parser\'s own reading of "root-relative
   it.each([
     '/api/example/x', '//h.example/x.png', '\\\\h.example/x.png', '/\\h.example/x.png', '\\/h.example/x.png',
     `${TAB}//h.example/x.png`, ' /api/x', `${NUL}/api/x`, `${US}${LF}//h.example/x`, '/',
+    // A same-scheme special-relative http(s) source resolves against the page's own origin.
+    'https:/api/x', 'HTTPS:/api/x', 'https:\\api\\x', '  https:/api/x', 'http:/x.png', `${TAB}https:/api/x`,
   ])('refuses %j', (src) => {
     expect(isRefusedChatImageSrc(src)).toBe(true);
   });
 
   // Path-relative sources are NOT refused (refinement (k); widening is the operator's open question).
   it.each([
-    'https://example.com/c.png', 'http://example.com/c.png', 'mailto:a@example.com', 'example.com/x.png', '../api/x',
+    'https://example.com/c.png', 'http://example.com/c.png', 'https://h.example/x.png', 'http://h.example/x.png',
+    'HTTPS://h.example/x.png', 'https:\\\\h.example/x.png', 'mailto:a@example.com', 'example.com/x.png', '../api/x',
     'x.png', '%5Ch.example/x.png', '',
   ])('keeps %j', (src) => {
     expect(isRefusedChatImageSrc(src)).toBe(false);

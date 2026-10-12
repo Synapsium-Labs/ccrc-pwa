@@ -42,17 +42,20 @@ import '../session/chat.css';
 export const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|avif|bmp)(\?|#|$)/i;
 export const isImageUrl = (href: string | undefined): href is string => href !== undefined && IMG_EXT.test(href);
 
-/** Whether chat refuses `src` as an image source: true when it is root-relative or protocol-relative as a browser's
- *  URL parser reads it. Leading ASCII whitespace and C0 controls are skipped, as a browser strips them from an
- *  attribute URL, and a leading backslash counts as a slash, as the parser reads it (`\\h/x` is `//h/x`). A refused
- *  source would be fetched from ccrc's own origin, or from a host the message names, carrying the operator's
- *  cookie. A path-relative source (`x.png`, `../x`) is not refused; absent (`undefined`) is not refused either.
+/** Whether chat refuses `src` as an image source: true when it is root-relative or protocol-relative as the browser
+ *  resolves it, including a same-scheme special-relative http(s): source. Leading ASCII whitespace and C0 controls
+ *  are skipped, as a browser strips them from an attribute URL, and a leading backslash counts as a slash, as the
+ *  parser reads it (`\\h/x` is `//h/x`). A special http(s) scheme NOT followed by two slashes or backslashes
+ *  (`https:/api/x`) resolves against the page's own origin, so it is refused too. A refused source would be fetched
+ *  from ccrc's own origin, or from a host the message names, carrying the operator's cookie. A path-relative source
+ *  (`x.png`, `../x`) is not refused; absent (`undefined`) is not refused either.
  *  Takes the value after react-markdown's `defaultUrlTransform`. The ONE predicate: `img` and the auto-embed in `a`
  *  both call it. */
 export function isRefusedChatImageSrc(src: string | undefined): boolean {
   if (src === undefined) return false;
   let i = 0;
   while (i < src.length && src.charCodeAt(i) <= 0x20) i += 1;
+  if (/^https?:(?![/\\]{2})/i.test(src.slice(i))) return true;
   const lead = src.charAt(i);
   return lead === '/' || lead === '\\';
 }
