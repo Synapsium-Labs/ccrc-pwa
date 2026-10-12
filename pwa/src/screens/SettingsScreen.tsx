@@ -1,11 +1,14 @@
 // Settings screen (route `/settings`, centralised update management W3 —
-// design 2026-09-20 §13). Updates (the channel, auto-install, *Check now*, the
-// catalogue line, the release list, the node inventory), the Box token card
-// (box-token lifecycle wave 1, Task B6: age, state, fleet confirmation,
-// transport, *Rotate now*) and Notifications (the bell, release notifications,
-// the unarmed-exposure banner) — all shipped in this file, below the header
-// (Tasks 7–10 of the W3 plan; fix rounds 1–2 widened several of their
-// guards in place — see the plan's `## Deviations found`, D-3315/D-3316).
+// design 2026-09-20 §13). Four sections: Updates (the channel, auto-install,
+// *Check now*, the catalogue line, the release list, the node inventory), the
+// Box token card (box-token lifecycle wave 1, Task B6: age, state, fleet
+// confirmation, transport, *Rotate now*) and Notifications (the bell, release
+// notifications, the unarmed-exposure banner) — those three shipped in this
+// file, below the header (Updates and Notifications by Tasks 7–10 of the W3
+// plan; fix rounds 1–2 widened several of their guards in place — see the
+// plan's `## Deviations found`, D-3315/D-3316); and Stall watch (stall watch
+// settings, design 2026-10-05 §13), which lives in its own file,
+// `StallWatchSection.tsx`, with its own read.
 //
 // The AccountsScreen skeleton, class for class (`.settings-screen/-head/-back/
 // -title`, fleet.css): a back chevron that returns to the fleet, then the <h1>.
@@ -20,6 +23,8 @@ import { compareReleaseTags, isNewerTag } from '../../../shared/semver';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
 import { NotificationBell } from '../fleet/NotificationBell';
+import { StallWatchSection } from './StallWatchSection';
+import { UNCONFIRMED_TEXT } from './settingsText';
 import { isManagedNode, planMove, rollbackBlockers, type MoveIntent, type PlannedMove, type RollbackBlocker } from '../fleet/movePlan';
 import { UpdateMoveSheet } from '../fleet/UpdateMoveSheet';
 import { ACK_UNREADABLE_TEXT, canAck, sendAck } from '../fleet/updateAck';
@@ -71,8 +76,6 @@ export const AUTO_LABELS: Record<AutoMode, string> = {
 
 /** The auto-install note's lead; the node labels follow, in `nodes()` order. */
 const AUTO_GATE_NOTE = 'Auto-install needs the rollback gate on every node — not yet on: ';
-/** A write that answered 2xx but unreadably (`postJsonOr`'s `unreadable`, D-1150): it may have landed. */
-export const UNCONFIRMED_TEXT = "Saved — the server's answer could not be read; the screen will re-check.";
 /** The first poll never landed and was not a 501 — a read that failed, said as one, not a skeleton forever. */
 const UNREAD_TEXT = 'The update plane could not be read — the screen tries again every minute.';
 /** A later poll failed: what is shown is the last answer that landed, and it says so. */
@@ -341,6 +344,10 @@ export const MACOS_UNMANAGED_TEXT = 'macOS: not centrally managed';
 // The Ack's gate and tap live in fleet/updateAck.ts since wave 14 (D-4267): the home screen's halt banner offers the
 // same Ack. Re-exported so this screen's callers and tests keep their import.
 export { ACK_UNREADABLE_TEXT, canAck };
+// UNCONFIRMED_TEXT is defined in ./settingsText so the Stall watch section can import it without a cycle back to this
+// screen; re-exported here so this screen's callers and tests keep their import, and so the spec's citation of this
+// file (§13 step 3) still resolves to the re-export here.
+export { UNCONFIRMED_TEXT };
 
 export function currentText(n: NodeWire): string {
   if (typeof n.measuredAt !== 'number') return 'not measured';
@@ -543,7 +550,7 @@ function NodeList({ nodes, releases, now, catalogueLastOkAt, onAcked, onMove }: 
 
 // ── Notifications (spec §13 item 2, §12's unarmed banner; programme wave 3 Task 10) ──
 // Two things live here, and one thing deliberately does not:
-//   * The PHONE-PUSH toggle is the literal <NotificationBell/> — the same
+//   * The PUSH toggle is the literal <NotificationBell/> — the same
 //     component the fleet header mounts, with its four subscribe outcomes
 //     (NotificationBell.tsx:29-47). This file imports none of lib/push's
 //     lifecycle calls and spells none of those outcomes; a second copy of the
@@ -559,7 +566,7 @@ function NodeList({ nodes, releases, now, catalogueLastOkAt, onAcked, onMove }: 
 //     which tags the server will announce from the next sweep on; it sends
 //     nothing and marks nothing.
 //
-// THE UNARMED-EXPOSURE BANNER (spec §12) sits above both sections. Its trigger
+// THE UNARMED-EXPOSURE BANNER (spec §12) sits above every section. Its trigger
 // is `AuthStatus.mode === 'off'` from the unauthenticated GET /api/auth/status
 // (D-3298 — /health reports no gate state), AND a
 // page origin whose hostname is not one of shared/base-url.ts's
@@ -639,7 +646,8 @@ function NotificationsSection({ view, reload }: { view: UpdatesView | null; relo
       {supported ? (
         <div className="settings-bell-row">
           <NotificationBell />
-          <span>Phone notifications for this browser</span>
+          {/* the label says push, never a device: notifications-label-says-push (D-4036) */}
+          <span>Push notifications for this browser</span>
         </div>
       ) : (
         <p className="settings-note">This browser cannot receive Web Push.</p>
@@ -806,8 +814,12 @@ function BoxTokenSection({ view, now, reload }: { view: UpdatesView; now: number
 }
 
 export function SettingsScreen(): ReactNode {
-  // ONE poll and ONE clock for the whole screen: every section reads the same
-  // answer (Tasks 7–10), so two sections can never disagree about the fleet.
+  // ONE /api/updates poll for the Updates, Box token and Notifications
+  // sections: all three read the same answer (Tasks 7–10; the card,
+  // box-token lifecycle Task B6), so they can never disagree about the fleet.
+  // ONE clock for the two that show an age, Updates and the Box token card.
+  // The Stall watch section is the one with its own read, of its own
+  // endpoint, through its own hook (useStallWatchView, design 2026-10-05 §13).
   const poll = useUpdatesView();
   const now = useNow(30_000);
   return (
@@ -822,6 +834,7 @@ export function SettingsScreen(): ReactNode {
       <UpdatesSection poll={poll} now={now} />
       {poll.view !== null && <BoxTokenSection view={poll.view} now={now} reload={poll.reload} />}
       <NotificationsSection view={poll.view} reload={poll.reload} />
+      <StallWatchSection />
     </div>
   );
 }
