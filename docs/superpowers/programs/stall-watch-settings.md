@@ -632,6 +632,10 @@ time.
     ≈:3545 to ≈:3810, far from the Settings paragraph. Consent for the one-paragraph co-edit was asked of
     `ccrc-pwa-quiet-river` (mail 4294), and the worker commits that hunk only after this session confirms it.
   - Run 322 is back at `working` (fingerprint `451854d1d`).
+  - Consent (10:19). `ccrc-pwa-quiet-river` consents (mail 4296) to the merge resolution of README.md's Settings
+    paragraph only, while claim 1172 stands, and to no other path under claims 1171, 1172 or 1174. Its ordering
+    note: run 358 merges `main` before its own handoff, so whichever of #322 and #351 lands second absorbs the other.
+    This session confirmed the licence to the worker (mail 4299).
 
 ## Carried constraints (reviewers get these)
 
