@@ -28,7 +28,7 @@ time.
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
 | 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merged `6e4524164` 2026-10-12; run 322 closed `done`, `final:true` (R37) |
-| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | fix round 2 at `3a28932a7`, CI green; merge review run 403 dispatched (R44) |
+| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | review 403 accepted; fix round 3, wording only (R45) |
 
 ## Decisions & deviations
 
@@ -953,6 +953,33 @@ time.
   - Re-measured, and the server accepted the fingerprint: run 394 `awaiting-review`.
   - Review run 403 dispatched 23:09:50 to `ccrc-pwa-swift-mesa`, scoped to `24e4eebc6..3a28932a7` (seven commits,
     seven files), with local suites gated on free memory; brief `.superpowers/sdd/stall-watch-settings/w3-fr2-review-brief.md`.
+
+- **R45 (2026-10-12 23:42)**, review 403 is accepted, and one last wording-only round precedes the merge.
+  - Review run 403 (`ccrc-pwa-swift-mesa`, mail 4433) read `3a28932a7`, the live tip, with the panel (33 agents,
+    none unverified). Closed `done`; report copied to `w3-review-403-report.md`.
+    - Confirmed: 4414's items and 4416's A-H are done as ruled; the merge-deny floor's composition (52, then 54,
+      then 51) is true; every mutation row reproduces; every suite is green; the citation instrument equals
+      `main`'s.
+    - The three unrun files read nothing the wave changed.
+    - The whole wave does what R38 and R40 asked, measured end to end.
+  - Findings: F1-F6, all minor and wording only:
+    - the hook's "exponent form" is false below 1e17;
+    - the plan's CAS-across-a-tool-event pin claim;
+    - the S11 re-measure sentence;
+    - a test header naming a span of six numbers, where only D-2403 and D-2404 were measured;
+    - the H comment for a multi-line corrupt value;
+    - the fresh read's self-contradicting "a jq that fails prints nothing".
+  - Ruling on F7: the stamp rule keeps a fractional `updatedAt` as its floor, and exponent literals below 1e17,
+    unchanged since `24e4eebc6`. Accepted.
+    - Why: the hook writes integer milliseconds only, so a fractional stamp means a foreign or corrupt file, and
+      keeping its floor moves the stamp by under 1 ms.
+    - The three overclaiming sentences are fixed: the hook comment, plan :500-501 and :472, and the test title
+      `session-hook-subagent-ask.test.ts:220`, with every plan row citing that title.
+    - Cost if wrong: none to behaviour; a corrupt stamp rounds down.
+  - Ruling: fix round 3, wording only (mail 4434; run 394 back at `working`). The code diff may touch only comments and one test
+    title. The words are in shipped comments and a test header, so they are fixed before merge, not parked. This is
+    the last round: any further wording finding goes to the post-merge residue list.
+    - Parked: the long lines (style), and README :5413-5417 (claim 1204, run 398; follow-up list).
 
 ## Carried constraints (reviewers get these)
 
