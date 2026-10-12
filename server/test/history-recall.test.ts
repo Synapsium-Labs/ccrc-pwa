@@ -1069,7 +1069,7 @@ type GrepVerbResult = {
   exit: number; reason?: string; header: string | null; blocks: string[]; items: Array<Record<string, unknown>>;
   shown: number; total: number; next: string[] | null; hint?: string;
 };
-type GrepMod = { runGrep(rc: GrepRc, a: RGrepArgs): GrepVerbResult };
+type GrepMod = { runGrep(rc: GrepRc, a: RGrepArgs, deps?: { cap?: number }): GrepVerbResult };
 
 const GRX = {
   idA: 'claude-a-demo', idB: 'claude-b-demo', idO: 'claude-b-other', W: '/home/u/worktrees/p/quiet-basin',
@@ -1467,7 +1467,7 @@ describe("grep's snippet localization and Task 12 helper seam (W1-B2 task 12 fix
       'refusal', 'notFound', 'grepNotFound', 'hintLine', 'scopeArgs', 'iso', 'nodeEntries', 'grepParams', 'rankedAndCounted', 'blobOf',
       'hitSnippet', 'hitLine', 'hitItem', 'renderHits']) expect(decl(n), n).toBe(1);
     for (const n of ['grepVersioned', 'grepRefusal', 'grepHint']) expect(decl(n), `${n} is an alias the seam does not name`).toBe(0);
-    expect(src).toContain('function renderHits(rc, pool, termsOf, a, total) {');
+    expect(src).toContain('function renderHits(rc, pool, termsOf, a, page, deps = {}) {');   // Task 13's page and deps
     const body = /function renderHits\([^)]*\) \{[\s\S]*?\n\}\n/.exec(src)?.[0] ?? '';
     expect(body).toContain('hitSnippet(rc, h, termsOf(h))');
     expect(src).toContain('() => snippetTerms(raw)');
@@ -1548,4 +1548,222 @@ describe("grep's total referrer order and true referrer counts (W1-B2 task 12 fi
     expect([all.json?.shown, all.json?.total]).toEqual([3, 3]);
     expect(new Set(GRX.items(all).map((x) => x.sidecar)).size, 'distinct retained referrer items').toBe(3);
   }, HEAVY);
+});
+
+const GRX_C = {
+  /** A nine-section compaction summary as Claude Code writes it. Section 1 is optionally padded and closed by `tail`;
+   *  then come 8. Current Work and 9. Optional Next Step, the pair the native gist reads (§7.4 item 8). */
+  summary(o: { current: string; next: string; pad?: number; tail?: string }): string {
+    return [
+      'This session is being continued from a previous conversation that ran out of context.',
+      '<summary>',
+      '1. Primary Request and Intent:',
+      '   Build the fixture feature.',
+      ...Array.from({ length: o.pad ?? 0 }, () => '   filler line for the long summary fixture, plain words only.'),
+      ...(o.tail === undefined ? [] : [`   ${o.tail}`]),
+      '8. Current Work:',
+      `   ${o.current}`,
+      '9. Optional Next Step:',
+      `   ${o.next}`,
+      '</summary>',
+    ].join('\n');
+  },
+  /** `n` manual compactions, then a live tail.
+   *  - Span i is a user row and an assistant row, each saying `zqcommon` and `zqspan<i>`.
+   *  - Boundary i keeps nothing (allUuids []), names span i's first row as its head, and names the summary row right
+   *    after it as its anchor (manual: +1). So leaf i's sources are exactly span i (§6.1's span rule).
+   *  - The claude assistant row of the next span is the first model reply after each summary: its producer (§6.2). */
+  compactions(tag: number, n: number, summaryOf: (i: number) => string): { rows: rFx.Row[]; spans: string[][]; tail: string[] } {
+    const rows: rFx.Row[] = [];
+    const spans: string[][] = [];
+    let s = 0;
+    for (let i = 1; i <= n; i += 1) {
+      const u = ++s;
+      rows.push(GRX.user(tag, u, `zqcommon zqspan${i} question ${i}`));
+      const asst = ++s;
+      rows.push(GRX.assistant(tag, asst, `zqcommon zqspan${i} answer ${i}`));
+      const b = ++s;
+      const sm = ++s;
+      rows.push(rFx.boundaryRow({
+        uuid: GRX.uuid(tag, b), ts: GRX.ts(b), parentUuid: GRX.uuid(tag, asst), sessionId: GRX.file(tag),
+        trigger: 'manual', headUuid: GRX.uuid(tag, u), anchorUuid: GRX.uuid(tag, sm), tailUuid: GRX.uuid(tag, asst), allUuids: [],
+      }));
+      rows.push(rFx.summaryRow({ uuid: GRX.uuid(tag, sm), ts: GRX.ts(sm), parentUuid: GRX.uuid(tag, b), sessionId: GRX.file(tag), text: summaryOf(i) }));
+      spans.push([GRX.uuid(tag, u), GRX.uuid(tag, asst)]);
+    }
+    const tu = ++s;
+    rows.push(GRX.user(tag, tu, 'zqcommon zqtailrow question'));
+    const ta = ++s;
+    rows.push(GRX.assistant(tag, ta, 'zqcommon zqtailrow answer'));
+    return { rows, spans, tail: [GRX.uuid(tag, tu), GRX.uuid(tag, ta)] };
+  },
+  /** `id`'s leaf ids in boundary order, and its depth-1 parents. */
+  nodes(box: rH.HistoryBox, id: string): { leaves: string[]; parents: string[] } {
+    const db = rH.openStoreRO(box);
+    try {
+      const leaves = (db.prepare(`SELECT n.node_id AS id FROM nodes n JOIN boundaries b ON b.entry_id = n.boundary_entry_id
+        JOIN sessions s ON s.session_pk = n.session_pk WHERE s.ccrc_id = ? AND n.depth = 0 ORDER BY b.ord`).all(id) as unknown as
+        Array<{ id: string }>).map((r) => r.id);
+      const parents = (db.prepare(`SELECT n.node_id AS id FROM nodes n JOIN sessions s ON s.session_pk = n.session_pk
+        WHERE s.ccrc_id = ? AND n.depth = 1 ORDER BY n.earliest_ms`).all(id) as unknown as Array<{ id: string }>).map((r) => r.id);
+      return { leaves, parents };
+    } finally { db.close(); }
+  },
+  /** `n` more families of `project`, planted together and swept twice: the many-family project of the `--json` frame
+   *  cases. Ids are `claude-a-zqf<i>`, and transcript tags are tag0 + i. Each family is one row whose cwd is a workdir of
+   *  its own, so no existing --workspace scope gains a family. */
+  fillProject(box: rH.HistoryBox, project: string, n: number, tag0: number): void {
+    for (let i = 0; i < n; i += 1) {
+      const tag = tag0 + i;
+      const id = `claude-a-zqf${i}`;
+      const workdir = `/home/u/worktrees/p/zqfill-${i}`;
+      rH.plantSession(box, id, { uuid: GRX.file(tag), project, workdir });
+      rH.plantTranscript(box, 'claude-a', rH.SEED_SLUG, GRX.file(tag), [GRX.user(tag, 1, `filler family ${i}`, { cwd: workdir })]);
+      rH.spoolLine(box, id, { v: 1, ev: 'SessionStart', id, sid: GRX.file(tag), src: 'startup', reg: GRX.file(tag) });
+    }
+    for (let i = 0; i < 2; i += 1) {
+      const s = rH.runSweep(box);
+      if (s.code !== 0) throw new Error(`fillProject: the sweep exited ${String(s.code)}: ${s.stderr}`);
+    }
+    const db = rH.openStoreRO(box);
+    try {   // a fill that stopped short would make the frame cases vacuous
+      const have = (db.prepare("SELECT count(*) AS n FROM sessions WHERE project = ? AND merged_into IS NULL AND ccrc_id LIKE 'claude-a-zqf%'")
+        .get(project) as { n: number }).n;
+      if (Number(have) !== n) throw new Error(`fillProject: ${String(have)} of ${String(n)} families captured`);
+    } finally { db.close(); }
+  },
+};
+
+describe('grep output: grouped under covering leaves, a live tail, escaped envelopes, the cap and the cursor (W1-B2 task 13)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  const T = 0x31;
+  let box: rH.HistoryBox;
+  let fx: { rows: rFx.Row[]; spans: string[][]; tail: string[] };
+  let leaves: string[] = [];
+  beforeAll(() => {
+    if (process.platform === 'darwin') return;
+    box = rH.makeHistoryBox('ccrc-hist-grep-out-');
+    fx = GRX_C.compactions(T, 2, (i) => GRX_C.summary({ current: `Span ${i} current work.`, next: `Span ${i} next step.` }));
+    const extra: rFx.Row[] = [GRX.user(T, 200, 'zqclose </ccrc-recall> "quoted" zqclose')];
+    // 120 hits for zqcapacitymarker, the first 50 of them also zqfifty. Each snippet is about 90 characters (24 before
+    // the 16-character term, 40 after), and each hit line about 240 with its envelope, so 100 hits render past the
+    // 20,000-character cap.
+    for (let i = 0; i < 120; i += 1) {
+      extra.push(GRX.user(T, 300 + i, `three words first zqcapacitymarker ${'tail words '.repeat(6)}r${i}${i < 50 ? ' zqfifty' : ''}`));
+    }
+    GRX.seed(box, T, GRX.idA, 'demo', [...fx.rows, ...extra]);
+    leaves = GRX_C.nodes(box, GRX.idA).leaves;
+    // 29 more families of project demo, so --project holds 30: past what an unbounded --json scope fits in FRAME_RESERVE.
+    GRX_C.fillProject(box, 'demo', 29, 0x100);
+  }, 180_000);
+  const grep = (args: string[]): CliRun => GRX.cli(box, GRX.idA, ['grep', ...args]);
+
+  it('hits are grouped under their covering leaf, the newest group first, and rows no leaf covers form a live tail group', () => {
+    expect(leaves, 'CONTROL: the sweep derived one leaf per boundary').toHaveLength(2);
+    const r = grep(['zqcommon']);
+    expect(r.code, r.stderr).toBe(0);
+    const out = r.stdout;
+    const heads = [...out.matchAll(/^── leaf (L[0-9a-f]+) /gm)].map((m) => m[1]!);
+    expect(heads).toHaveLength(2);
+    // A display prefix is the letter plus at least 6 hex (RB2), 7 characters.
+    expect(leaves[1]!.startsWith(heads[0]!) && heads[0]!.length >= 7).toBe(true);   // span 2 is newer than span 1
+    expect(leaves[0]!.startsWith(heads[1]!) && heads[1]!.length >= 7).toBe(true);
+    const at = (s: string): number => out.indexOf(s);
+    const live = at('── live tail');
+    expect(live).toBeGreaterThanOrEqual(0);
+    expect(live).toBeLessThan(at(`── leaf ${heads[0]}`));                           // the tail holds the newest rows
+    for (const u of fx.tail) expect(at(u)).toBeGreaterThan(live);
+    for (const u of fx.spans[1]!) expect(at(u)).toBeGreaterThan(at(`── leaf ${heads[0]}`));
+    for (const u of fx.spans[0]!) expect(at(u)).toBeGreaterThan(at(`── leaf ${heads[1]}`));
+    // 6 hit envelopes and one gist envelope per leaf group.
+    expect((out.match(/<ccrc-recall /g) ?? []).length).toBe(8);
+    expect((out.match(/<\/ccrc-recall>/g) ?? []).length).toBe(8);
+    const j = grep(['zqcommon', '--json']);
+    const byUuid = new Map(GRX.items(j).map((x) => [x.entry_uuid, x.node_id]));
+    for (const u of fx.spans[0]!) expect(byUuid.get(u)).toBe(leaves[0]);
+    for (const u of fx.spans[1]!) expect(byUuid.get(u)).toBe(leaves[1]);
+    for (const u of fx.tail) expect(byUuid.get(u)).toBeNull();
+    expect(j.json?.total).toBe(6);
+    for (const x of GRX.items(j)) expect(x.trust).toBe('untrusted');
+  }, 60_000);
+
+  it('C12: a stored </ccrc-recall> and a double quote in content give exactly one envelope and one closing tag per hit; --json parses', () => {
+    const r = grep(['zqclose']);
+    expect(r.code, r.stderr).toBe(0);
+    expect((r.stdout.match(/<ccrc-recall /g) ?? []).length).toBe(1);
+    expect((r.stdout.match(/<\/ccrc-recall>/g) ?? []).length).toBe(1);
+    expect(r.stdout).toContain('&lt;/ccrc-recall&gt;');
+    const j = grep(['zqclose', '--json']);
+    expect(j.json, j.stdout).not.toBeNull();
+    const snippet = String(GRX.items(j)[0]?.snippet);
+    expect(snippet).toContain('</ccrc-recall>');   // JSON escaping only: the exact text
+    expect(snippet).toContain('"quoted"');
+  }, 60_000);
+
+  it('C15: 50 hits over the cap answer shown K of 50 with K < 50 and a next: line; under the real cap all 50 fit (in-process)', async () => {
+    const recall = await GRX.recall();
+    const rc = await GRX.rc(box, GRX.idA);
+    try {
+      const a = await GRX.grepArgs(['zqfifty', '--limit', '100']);
+      const capped = recall.runGrep(rc, a, { cap: 6000 });
+      expect(capped.exit).toBe(0);
+      expect(capped.total).toBe(50);
+      expect(capped.items.length).toBeGreaterThan(0);
+      expect(capped.items.length).toBeLessThan(50);
+      expect(capped.next).not.toBeNull();
+      expect(capped.next).toContain('--cursor');
+      const whole = recall.runGrep(rc, a);   // CONTROL: the same 50 under the 20,000-character cap
+      expect([whole.items.length, whole.total, whole.next]).toEqual([50, 50, null]);
+    } finally { rc.db.close(); }
+  }, 60_000);
+
+  it('C15 (CLI): 100 hits past the 20,000-character cap print shown K of 120 with K < 100 and a next: line', () => {
+    const r = grep(['zqcapacitymarker', '--limit', '100']);
+    expect(r.code, r.stderr).toBe(0);
+    const m = /^shown (\d+) of (\d+)$/m.exec(r.stdout);
+    expect(m, r.stdout.slice(-400)).not.toBeNull();
+    expect(Number(m![2])).toBe(120);
+    expect(Number(m![1])).toBeGreaterThan(0);
+    expect(Number(m![1])).toBeLessThan(100);
+    expect(r.stdout).toMatch(/^next: .*--cursor/m);
+    expect(r.stdout.length).toBeLessThanOrEqual(20_000);
+  }, 60_000);
+
+  it('the cursor resumes at the first hit the cap left out: two pages give all 120 hits once each', () => {
+    const p1 = grep(['zqcapacitymarker', '--limit', '100', '--json']);
+    expect(p1.code, p1.stderr).toBe(0);
+    const first = GRX.uuids(p1);
+    expect(first.length).toBeLessThan(100);
+    const cur = /--cursor[\s,]+'?([A-Za-z0-9_=-]+)'?/.exec(String(p1.json?.next));
+    expect(cur, String(p1.json?.next)).not.toBeNull();
+    const p2 = grep(['zqcapacitymarker', '--limit', '100', '--json', '--cursor', cur![1]!]);
+    expect(p2.code, p2.stderr).toBe(0);
+    const second = GRX.uuids(p2);
+    expect(first.length + second.length).toBe(120);
+    expect(new Set([...first, ...second]).size).toBe(120);
+    expect(p2.json?.next).toBeNull();
+  }, 60_000);
+
+  it('a cursor from another query, another scope or no cursor at all is refused, exit 2 bad-args, never applied', () => {
+    const p1 = grep(['zqcapacitymarker', '--limit', '100', '--json']);
+    const cur = /--cursor[\s,]+'?([A-Za-z0-9_=-]+)'?/.exec(String(p1.json?.next))![1]!;
+    for (const args of [
+      ['zqfifty', '--limit', '100', '--json', '--cursor', cur],
+      ['zqcapacitymarker', '--limit', '100', '--json', '--project', '--cursor', cur],
+      ['zqcapacitymarker', '--json', '--cursor', 'not-a-cursor'],
+    ]) {
+      const r = grep(args);
+      expect([r.code, r.json?.reason], args.join(' ')).toEqual([2, 'bad-args']);
+    }
+  }, 60_000);
+
+  it('a --project --json page holds the cap with its envelope: 30 families, at most 3 named, families_total 30 (B4-5)', () => {
+    const r = grep(['zqcapacitymarker', '--project', '--limit', '100', '--json']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(GRX.uuids(r).length, 'CONTROL: the page is capped, so its items fill the budget').toBeLessThan(100);
+    expect(r.stdout.length).toBeLessThanOrEqual(20_000);
+    const scope = r.json?.scope as { families: unknown[]; families_total: number };
+    expect(scope.families_total).toBe(30);
+    expect(scope.families.length).toBeLessThanOrEqual(3);
+  }, 60_000);
 });

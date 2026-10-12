@@ -15,6 +15,7 @@
 import {
   EXIT, OUTPUT_CAP, TREE_DEPTH_MAX, SCOPE_FAMILIES_JSON_MAX, selectColumns, displayPrefixes, headerLine, scopeLag, recallEnvelope, capOutput, redactForDisplay, redactFinal, readEnvelope, nextLine,
   REASONS, INDEXED_PROVENANCE, SEARCHABLE_PROVENANCE, FTS_STEP, RANK_POOL, decideGrepIndex, sanitizeFtsQuery, snippetTerms, regexSyntaxIn, regexSyntaxHint, ftsOrderBy, displaySnippet, snippetLine, escapeXmlText, redactField, extractNodeId, resolveScopedId, SEARCH_REACH, parseGrepArgs,
+  GREP_LIMIT_DEFAULT, encodeCursor, decodeCursor, canonicalJson, sha256Hex,
 } from './lib.mjs';
 import { childrenOf, parentOf, probeFts5, blobPlainText, lineageEntries } from './store.mjs';
 
@@ -523,22 +524,146 @@ function hitItem(hit, snippet, nodeId) {
   };
 }
 
-/** The first page of hits, flat. Task 13 replaces this with the grouped, capped and cursored rendering. */
-function renderHits(rc, pool, termsOf, a, total) {
-  const page = pool.slice(0, a.limit);
-  const snippets = page.map((h) => hitSnippet(rc, h, termsOf(h)));
+/** The group key of rows no leaf covers yet: grep's live tail (§8.4). */
+const LIVE_TAIL = '';
+
+/** The hint a refused cursor carries. */
+const STALE_CURSOR = 'that --cursor belongs to another query, scope or filter; run the query again without it';
+
+/** What a grep cursor is bound to: the query, the scope and every filter. A cursor from another query or scope
+ *  is refused, never applied to the wrong list. */
+function grepKey(rc, a) {
+  return sha256Hex(canonicalJson({
+    words: a.regex === null ? sanitizeFtsQuery(a.words.join(' ')) : null, regex: a.regex,
+    scope: [rc.scope.kind, rc.scope.id, rc.scope.generation],
+    role: a.role, tool: a.tool, since: a.sinceMs, before: a.beforeMs, node: a.node, sort: a.sort, recall: a.includeRecall,
+  })).slice(0, 20);
+}
+
+/** The ranked-pool offset a --cursor names, 0 with none, or null for a cursor that does not decode or belongs to
+ *  another key. An offset is a position in a total order (rankedSql's tie-break). Text indexed between two pages
+ *  can shift it by the number of new hits; that is accepted. */
+function cursorPos(cursor, key) {
+  if (cursor === null) return 0;
+  const c = decodeCursor(cursor, 'grep');
+  if (c === null || c.q !== key || !Number.isSafeInteger(c.pos) || c.pos < 0) return null;
+  return c.pos;
+}
+
+/** The next page's argv: this call's query, scope and filters, then the cursor. Each argument is redacted as a raw
+ *  field before nextLine serialises it (history-redaction-before-cut). Times are absolute, so a relative --since
+ *  does not drift between pages. */
+function grepArgv(rc, a, cursor) {
+  const out = ['grep'];
+  if (a.regex !== null) out.push('--regex', a.regex);
+  out.push(...scopeArgs(rc));
+  if (a.role !== null) out.push('--role', a.role);
+  if (a.tool !== null) out.push('--tool', a.tool);
+  if (a.sinceMs !== null) out.push('--since', new Date(a.sinceMs).toISOString());
+  if (a.beforeMs !== null) out.push('--before', new Date(a.beforeMs).toISOString());
+  if (a.node !== null) out.push('--node', a.node);
+  if (a.sort !== 'recency') out.push('--sort', a.sort);
+  if (a.limit !== GREP_LIMIT_DEFAULT) out.push('--limit', String(a.limit));
+  if (a.includeRecall) out.push('--include-recall');
+  if (a.json) out.push('--json');
+  out.push('--cursor', cursor);
+  if (a.regex === null) out.push('--', ...a.words);
+  return out.map((x) => redactField(x, rc.pairIdx));
+}
+
+/** Display prefixes for every node of the scope (§6.1): unique within the scope, never shorter than
+ *  NODE_ID_DISPLAY_MIN. */
+function scopePrefixes(rc) {
+  const ids = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', ['node_id'], rc.schema)} FROM nodes
+    WHERE session_pk IN (SELECT value FROM json_each(?))`).all(JSON.stringify(rc.scope.sessionPks)).map((r) => r.node_id);
+  return displayPrefixes(ids);
+}
+
+/** Each entry's covering leaf, through node_sources_entry (§8.4). node_sources holds leaf edges only (§6.3). Two
+ *  fork leaves can hold one shared row (DM36, DM37); it groups under the lower node_id, deterministically. */
+function coveringLeaves(rc, entryIds) {
+  if (entryIds.length === 0) return new Map();
+  const rows = rc.db.prepare(`SELECT ns.entry_id AS entry_id, min(ns.node_id) AS node_id
+      FROM ${versioned(rc, 'node_sources', 'ns', ['node_id', 'entry_id'])}
+      WHERE ns.entry_id IN (SELECT value FROM json_each(?)) GROUP BY ns.entry_id`).all(JSON.stringify(entryIds));
+  return new Map(rows.map((r) => [r.entry_id, r.node_id]));
+}
+
+/** The time range and gist of each group's leaf. */
+function leafHeads(rc, ids) {
+  if (ids.length === 0) return new Map();
+  const rows = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', ['node_id', 'earliest_ms', 'latest_ms', 'gist'], rc.schema)}
+    FROM nodes WHERE node_id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(ids));
+  return new Map(rows.map((r) => [r.node_id, r]));
+}
+
+/** One page of hits (§8.3, §8.4), grouped under their covering leaves plus a live tail.
+ *  - The page is pool[pos, pos + limit).
+ *  - The cap is fitted in RANK order: K is the most leading hits whose grouped rendering (or, with --json, whose
+ *    items) fits OUTPUT_CAP minus FRAME_RESERVE. At least one hit is always shown. Those K are then grouped; groups
+ *    are ordered by their best hit, and hits keep rank order inside a group.
+ *  - The next cursor is pos + K, so the cap never skips a hit.
+ *  - A leaf group shows the leaf's display prefix, its time range and its gist, redacted then cut (one line,
+ *    SNIPPET_MAX). Every recalled field sits in an escaped envelope.
+ *  - `total` is the true in-scope count; past RANK_POOL there is no next page, and a hint says so. */
+function renderHits(rc, pool, termsOf, a, page, deps = {}) {
+  const budget = (deps.cap ?? OUTPUT_CAP) - FRAME_RESERVE;
+  const hits = pool.slice(page.pos, page.pos + a.limit);
+  if (hits.length === 0) return grepNotFound();
+  const snippets = hits.map((h) => hitSnippet(rc, h, termsOf(h)));
+  const leafOf = coveringLeaves(rc, [...new Set(hits.map((h) => h.entry_id).filter((x) => x !== null))]);
+  const groupOf = hits.map((h) => (h.entry_id === null ? LIVE_TAIL : leafOf.get(h.entry_id) ?? LIVE_TAIL));
+  const heads = leafHeads(rc, [...new Set(groupOf.filter((g) => g !== LIVE_TAIL))]);
+  const pre = scopePrefixes(rc);
+  const headers = new Map();
+  const headerOf = (g) => {
+    if (headers.has(g)) return headers.get(g);
+    let text;
+    if (g === LIVE_TAIL) {
+      text = '── live tail (rows no leaf covers yet)';
+    } else {
+      const n = heads.get(g);
+      const shown = pre.get(g) ?? g;
+      text = `── leaf ${shown} ${iso(n?.earliest_ms ?? null)} → ${iso(n?.latest_ms ?? null)}`;
+      if (n !== undefined && n.gist !== null) {
+        const gist = redactField(n.gist, rc.pairIdx).replace(/\s+/g, ' ').trim();
+        const cut = snippetLine(gist);
+        text += `\n  ${recallEnvelope({ src: 'node', id: shown, ts: n.latest_ms, role: null, text: cut })}`;
+      }
+    }
+    headers.set(g, text);
+    return text;
+  };
+  const lines = hits.map((h, i) => hitLine(h, snippets[i]));
+  const items = hits.map((h, i) => hitItem(h, snippets[i], groupOf[i] === LIVE_TAIL ? null : groupOf[i]));
+  const grouped = (k) => {
+    const order = [];
+    const members = new Map();
+    for (let i = 0; i < k; i += 1) {
+      if (!members.has(groupOf[i])) { members.set(groupOf[i], []); order.push(groupOf[i]); }
+      members.get(groupOf[i]).push(lines[i]);
+    }
+    return order.map((g) => [headerOf(g), ...members.get(g)].join('\n'));
+  };
+  const size = (k) => (a.json ? JSON.stringify(items.slice(0, k)).length : grouped(k).join('\n').length);
+  let k = 1;
+  while (k < hits.length && size(k + 1) <= budget) k += 1;
+  const end = page.pos + k;
+  const next = end < pool.length ? grepArgv(rc, a, encodeCursor({ v: 1, resource: 'grep', q: page.key, pos: end })) : null;
+  const beyondPool = next === null && page.total > pool.length;
   return {
-    exit: EXIT.OK, header: null, blocks: page.map((h, i) => hitLine(h, snippets[i])),
-    items: page.map((h, i) => hitItem(h, snippets[i], null)), shown: page.length, total, next: null,
+    exit: EXIT.OK, header: null, blocks: grouped(k), items: items.slice(0, k), shown: Math.min(k, items.length), total: page.total, next,
+    ...(beyondPool ? { hint: `ranking covers the top ${RANK_POOL} in-scope matches; narrow the words, or add --since or --before` } : {}),
   };
 }
 
 /** `grep <words>` (§8.4). In order:
  *  1. regex syntax in plain search refuses BEFORE any statement is prepared (C7);
- *  2. the index gate;
- *  3. `--node`, resolved in scope;
- *  4. the ranked pool and the true count;
- *  5. the hits. */
+ *  2. a --cursor that does not belong to this query refuses;
+ *  3. the index gate;
+ *  4. `--node`, resolved in scope;
+ *  5. the ranked pool and the true count;
+ *  6. one grouped, capped page. */
 export function runGrep(rc, a, deps = {}) {
   if (a.regex !== null) return refusal('bad-args', '--regex is not served by this build');   // Task 14 replaces this line
   const raw = a.words.join(' ');
@@ -546,6 +671,9 @@ export function runGrep(rc, a, deps = {}) {
   if (syntax !== null) {
     return refusal('regex-syntax', hintLine(regexSyntaxHint(escapeXmlText(redactField(raw, rc.pairIdx)), syntax)));
   }
+  const key = grepKey(rc, a);
+  const pos = cursorPos(a.cursor, key);
+  if (pos === null) return refusal('bad-args', STALE_CURSOR);
   const gate = indexGate(rc);
   if (!gate.ok) return refusal(gate.reason);
   let nodes = null;
@@ -556,9 +684,9 @@ export function runGrep(rc, a, deps = {}) {
   }
   const found = rankedAndCounted(rc, FTS_MATCH, a.sort, grepParams(rc, a, nodes, { q: sanitizeFtsQuery(raw) }));
   if ('result' in found) return found.result;
-  if (found.total === 0) return grepNotFound();
-  // The snippet's needles keep a terminal prefix `*` that queryTerms strips (fix round 1, F1).
-  return renderHits(rc, found.pool, () => snippetTerms(raw), a, found.total);   // deps: Task 13 reads deps.cap
+  if (found.total === 0) return grepNotFound();   // Task 12's reach line, kept
+  // The snippet's needles keep a terminal prefix `*` that queryTerms strips (fix round 1, F1; R-T13-1).
+  return renderHits(rc, found.pool, () => snippetTerms(raw), a, { pos, total: found.total, key }, deps);
 }
 
 /** cli.mjs's READ_RUNNERS.grep (W1-B2 Task 12). Task 10's whitelist has already refused an unknown or repeated
