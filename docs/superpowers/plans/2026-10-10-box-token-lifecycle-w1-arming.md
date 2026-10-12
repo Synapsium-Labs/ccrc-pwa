@@ -82,12 +82,12 @@ The coordinator puts this to the operator with Task 12 Step 0's measured list of
 - The repo is public. Keep hostnames, IPs, home paths, account and pool names, emails and docserver URLs out of code, tests, comments and commit messages.
 - Deviation numbers: this plan defines 4552, and 4553 only if Decision 2 is ruled (a). Both are written bare. A worker who needs another writes `D-TBD-<slug>` and reports it, and the coordinator issues it from 4554 to 4570. Before a commit that defines a number, run `git fetch origin main`, then `test/deviation-refs.test.ts` and `test/dtbd.test.ts`, one call each.
 - **Claims.** Re-read `GET /api/claims?project=ccrc-pwa` before each dispatch.
-  - **1141** (run 354, `ccrc-history` B2) holds `ccd/ccrc`, `ccd/ccrc-doctor-checks`, `deploy/deploy.sh`, `README.md`, `CLAUDE.md`, `server/test/ccrc-doctor.test.ts`, `server/test/ccrc-install.test.ts`, `server/test/ccrc-account.test.ts`, `server/test/ccrc-uninstall.test.ts` and `agent/test/deploy-verify.test.ts`. That was measured on 2026-10-10 at 21:22 UTC, and its hard expiry is 2026-10-11 at 04:34 UTC. **Tasks 4, 11 and 12 wait for 1141's release, or for its holder's consent.**
+  - **1141** (run 354, `ccrc-history` B2) holds `ccd/ccrc`, `ccd/ccrc-doctor-checks`, `deploy/deploy.sh`, `README.md`, `CLAUDE.md`, `server/test/ccrc-doctor.test.ts`, `server/test/ccrc-install.test.ts`, `server/test/ccrc-account.test.ts`, `server/test/ccrc-uninstall.test.ts` and `agent/test/deploy-verify.test.ts`. That was measured on 2026-10-10 at 21:22 UTC, and its hard expiry is 2026-10-11 at 04:34 UTC. **Claim 1141 has ended**, so Tasks 4, 11 and 12 no longer wait on it. `README.md` is now held under claim 1161 (re-read as 1172), and this plan edits it only with that claim's holder's consent, which was given, and only the doctor row's words. This fix round's own claim is 1173.
   - **1142** (`ccd/ccd`, `server/test/macos-platform.test.ts`) was listed by the centralised-update ledger at 21:42 UTC. This plan edits neither file. Claims 1129 and 1132 were no longer listed there.
   - Every other task is on free files and can start now.
 - **Order.**
-  - Part 1 runs Tasks 1, 2, 5, 6, 7, 8, 9 and 10, in that order. It then runs Task 11 if claim 1141 is gone.
-  - Part 2 runs Tasks 3, 4, 11 (if still owed) and 12, in that order. Task 12, the flip, is always the last commit. It is dispatched only when Decisions 1 and 2 are ruled, the GPT-lane answer is recorded, and the coordinator has ruled residue 8(a) (see "Not in this PR").
+  - Part 1 ran Tasks 1, 2, 5, 6, 7, 8, 9 and 10, in that order.
+  - Part 2 runs Tasks 3, 4, 11, R and 12, in that order (Task 11 is unconditional: claim 1141 has ended). Task 12, the flip, is always the last commit. It is dispatched only when Decisions 1 and 2 are ruled, the GPT-lane answer is recorded, and the coordinator has ruled residue 8(a) (see "Not in this PR").
 
 ## File Structure
 
@@ -271,8 +271,10 @@ The coordinator puts this to the operator with Task 12 Step 0's measured list of
 | `if rp is not None and (lr is None or rp > lr):` becomes `if rp is not None:` | The answered-PASS case |
 | The final `elif k["retiredPresented"] > 0` branch deleted (absence read as clear) | The legacy ROWS row |
 | `rp > lr` becomes `rp > lr + 60000` (a tick of slack toward clear) | The 30-s-after edge row |
-| The presence branch collapsed to `rp = k.get("retiredPresentedAt")` / `if rp is not None` (overloaded null) | The null-stamp ROWS row |
+| The presence branch collapsed to `rp = k.get("retiredPresentedAt")` / `if rp is not None and (lr is None or rp > lr)`, with BOTH `elif` branches (the null-stamp one and the trailing `elif k["retiredPresented"] > 0`) dropped (overloaded null; shape B, measured in fix round 1: `doctor-box-token` 5 failed of 152) | The null-stamp ROWS row, the legacy ROWS row and the sentence row |
 | The validator clause deleted | The `'x'` case |
+
+**A limit no test can see (shape A).** The same collapse with the trailing `elif k["retiredPresented"] > 0` kept is an equivalent mutant: it gives `doctor-box-token` 152/152 green, because that trailing branch reads an absent key and a null stamp alike, so the presence test is redundant with it. Shape A is not a pin and is not listed as one (the Global Constraint on mutants that cannot red); only shape B reds.
 
 ### Task 5 (part 1): R3, the hex-shape scanner sees every spelling
 
