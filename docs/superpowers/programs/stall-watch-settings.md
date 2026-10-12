@@ -24,7 +24,7 @@ time.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
-| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merge approved by the operator; run 322 `working`, absorbing `main` (two prose conflicts) before it lands (R33) |
+| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merge approved by the operator; `main` absorbed at `39c42f503`; review run 390 dispatched (R34) |
 
 ## Decisions & deviations
 
@@ -636,13 +636,44 @@ time.
     paragraph only, while claim 1172 stands, and to no other path under claims 1171, 1172 or 1174. Its ordering
     note: run 358 merges `main` before its own handoff, so whichever of #322 and #351 lands second absorbs the other.
     This session confirmed the licence to the worker (mail 4299).
+- **R34 (2026-10-12 11:36)**, the absorb is verified, and its review is dispatched.
+  - Mail 4306 claims merge commit `39c42f503`, whose parents are `451854d1d` and `origin/main` `28e8dc1b2`; it was
+    a plain merge with no rebase.
+    - Both conflicts are resolved as ruled. The header names Updates, the Box token card, Notifications and Stall
+      watch. README keeps `main`'s card text verbatim, with "push bell" and the Stall watch sentence; it is one hunk
+      against `main`.
+    - The merge forced one test change: `stall-settings-readme`'s second anchor now uses `main`'s Notifications
+      sentence. Reverting to "phone-push" still reds the device row (measured).
+    - `schema.ts` is byte-identical to `main`'s.
+    - The citation instrument reads `7 passed | 443 skipped` on both `main` and the merge. The carried 7|328 was
+      `main`'s count when the wave began, not a property of this wave.
+    - `suite: red` is load again. The first whole-PWA run, at load average 90 to 135, had 6 timeouts in 2 files,
+      both green alone. `main` itself showed 35 such reds at the same load. CI's `test (pwa)` is green.
+  - Re-measured:
+    - `origin/ws/calm-basin`, the workspace `HEAD` and PR #322's head all read `39c42f503`, the workspace is clean,
+      and the PR is `MERGEABLE`.
+    - Every required CI check is green; only the macOS legs were still running.
+    - `merge-tree` against current `main` is clean.
+    - The net change against `main` is the same 16 files, with `server/src` holding item 5's `watch.ts` comments
+      only.
+    - The server took the fingerprint, and run 322 is `awaiting-review`.
+    - The evidence is copied to `w2-absorb-child-evidence/`.
+  - Claims: the worker holds claims 1180 and 1181, and README under claim 1172 is licensed.
+  - Review run 390 is dispatched to `ccrc-pwa-brisk-basin` (the cap read 13 of 24), with the registry route opus,
+    high effort, sonnet subagents, workflow on and compact 40. Its brief is `w2-absorb-review-brief.md`: the panel
+    on `28e8dc1b2..<tip>`, scoped to the merge, the forced anchor and any meaning `main` changed, with what review
+    340 accepted kept as residue.
+  - The worker raised two `main` comments for the reviewer: the box-token comment's "a third section", and the
+    ONE-poll comment naming only Updates and Notifications.
+  - Next: `review-done`, then the merge with `--match-head-commit` at the reviewed tip, under the operator's R33
+    approval.
 
 ## Carried constraints (reviewers get these)
 
 - Mutation-table discipline: every guard ships with a row measured red when it is removed, before and after.
 - The README citation instrument (`session-hook.test.ts -t 'CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE
-  BOUND|TWO CORPUS|whole corpus'`) stays at `7 passed | 328 skipped (335)` (R22). README and `CLAUDE.md` edits are
-  made in place.
+  BOUND|TWO CORPUS|whole corpus'`) agrees with `main`'s own count: `7 passed | 328 skipped (335)` when the wave began
+  (R22), `7 passed | 443 skipped` on `28e8dc1b2` (R34). README and `CLAUDE.md` edits are made in place.
 - `stall.ts` and `stallsettings.ts` stay L1: pure, and spelling no marker name. No marker gains a writer
   (`single-definition.test.ts`).
 - The migration slot is measured, never assumed: 17 at `77f8d63a5`. Slots are a cross-branch namespace; whichever
