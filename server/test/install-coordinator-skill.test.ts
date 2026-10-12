@@ -201,26 +201,43 @@ describe('install-coordinator-skill.sh default homes are the roster, behavioural
   });
 });
 
-/** `line` with a trailing shell comment removed: a `#` opens one only outside quotes and at the line start or after
- *  whitespace (so `$#`, `${#x}` and a `#` inside a quoted string stay). */
-function stripShellComment(line: string): string {
+/** `text`'s lines, each with its trailing shell comment removed. A `#` opens a comment only outside quotes and at the
+ *  line start or after whitespace (so `$#`, `${#x}` and a `#` inside a quoted string stay). The quote state is carried
+ *  across newlines: a string that spans lines keeps a `#` line inside it as code, which is what the shell does. A
+ *  comment ends at its own newline, with the quote state still `null`. The limit: this is a quote scanner, not a shell
+ *  parser, so a heredoc body is read as shell and an unbalanced quote there (an apostrophe in prose) would flip the
+ *  state for the rest of the file; `deploy/deploy.sh` is measured clean by the real-file row. */
+function stripShellComments(text: string): string[] {
+  const out: string[] = [];
+  let cur = '';
   let q: '"' | "'" | null = null;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i]!;
-    if (q === "'") { if (c === "'") q = null; continue; }
-    if (q === '"') { if (c === '\\') i++; else if (c === '"') q = null; continue; }
-    if (c === '\\') { i++; continue; }
-    if (c === "'" || c === '"') { q = c; continue; }
-    if (c === '#' && (i === 0 || /\s/.test(line[i - 1]!))) return line.slice(0, i);
+  let inComment = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (c === '\n') { out.push(cur); cur = ''; inComment = false; continue; }
+    if (inComment) continue;
+    const next = text[i + 1];
+    if (q === "'") { cur += c; if (c === "'") q = null; continue; }
+    if (q === '"') {
+      cur += c;
+      if (c === '\\' && next !== undefined && next !== '\n') cur += text[++i]!;
+      else if (c === '"') q = null;
+      continue;
+    }
+    if (c === '\\') { cur += c; if (next !== undefined && next !== '\n') cur += text[++i]!; continue; }
+    if (c === "'" || c === '"') { q = c; cur += c; continue; }
+    if (c === '#' && (i === 0 || /\s/.test(text[i - 1]!))) { inComment = true; continue; }
+    cur += c;
   }
-  return line;
+  out.push(cur);
+  return out;
 }
 
 /** The deploy.sh code lines that name the box token file (`ccrc-mail.token` or `mail.token`), less the two rsync
  *  excludes (one per arm) that keep a stale checkout copy from riding `deploy/` to a box. Empty is the pass. A count
  *  other than two excludes is reported as its own line, so a lost exclude is as red as a planted ship. */
 function tokenNamingLines(text: string): string[] {
-  const code = text.split('\n').map((l) => stripShellComment(l).trimEnd()).filter((l) => /mail\.token/.test(l));
+  const code = stripShellComments(text).map((l) => l.trimEnd()).filter((l) => /mail\.token/.test(l));
   const EXCLUDE = /^\s+--exclude 'ccrc-mail\.token' \\$/;
   const excludes = code.filter((l) => EXCLUDE.test(l));
   const rest = code.filter((l) => !EXCLUDE.test(l)).map((l) => l.trim());
@@ -299,6 +316,9 @@ describe('the deploy ships the skill, agent-side — and no longer ships the tok
     it('refuses a bare mail.token line and a line whose trailing comment hides nothing', () => {
       expect(tokenNamingLines(`${base}cp x ~/.ccrc/mail.token # ship it\n`)).toHaveLength(1);
       expect(tokenNamingLines(`${base}echo "# not a comment" ; scp a ccrc-mail.token\n`)).toHaveLength(1);
+    });
+    it('refuses a token line inside a quoted string that spans lines, a `#` line in it being no comment', () => {
+      expect(tokenNamingLines(`${base}bash -c "echo start\n  # not a comment inside the quote; scp deploy/ccrc-mail.token \\"$BOX:.ccrc/mail.token\\""\n`)).toHaveLength(1);
     });
     it('accepts a commented-out mention, whole-line or trailing', () => {
       expect(tokenNamingLines(`${base}# "\${SCP[@]}" deploy/ccrc-mail.token "$BOX:.ccrc/mail.token"\n`)).toEqual([]);

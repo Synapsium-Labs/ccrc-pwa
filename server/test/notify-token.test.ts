@@ -39,6 +39,11 @@ describe('POST /api/notify with a box token', () => {
     // the gate that logged anything was `legacy`, the benign one. This is the
     // arm an operator actually needs to see.
     expect(warn.mock.calls.flat().join(' ')).toMatch(/refused|401|WRONG/i);
+    // Ledger residue 3: the advice names today's tools, not the retired
+    // hand-copied token file.
+    const logged = warn.mock.calls.flat().join(' ');
+    expect(logged).toContain('ccrc token probe');
+    expect(logged).not.toContain('deploy/ccrc-mail.token');
   });
 
   it('a REJECTED notify never reaches the bus or the session stream — the negative half of the ' +

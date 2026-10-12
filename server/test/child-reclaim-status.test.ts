@@ -14,7 +14,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
   CHILD_RECLAIM_STATUS_SENTENCE, CHILD_RECLAIM_TOKEN_KIND, childReclaimSessions,
-  childReclaimStatus, childReclaimTokenKind, withChildReclaim, type ChildReclaimSources, type ChildReclaimStatusInput,
+  childReclaimStatus, childReclaimTokenKind, isChildReclaimStuckToken, withChildReclaim, type ChildReclaimSources, type ChildReclaimStatusInput,
 } from '../src/coord/childReclaim.js';
 import {
   CHILD_RECLAIM_DEFER_CEILING_MS, CHILD_RECLAIM_SKIP, childReclaimAttention, childReclaimFailingSentence,
@@ -401,8 +401,8 @@ describe('childReclaimStatus — past the ceiling, the attention list’s own fa
   ];
   it.each(LINES)('%s %j → the list’s sentence for the same row, dated from the run’s start', (outcome, refusal) => {
     const listed = childReclaimAttention({
-      latest: [{ sessionId: SID, outcome, refusal, at: EV_AT, failingSince: AT }],
-      live: new Map([[SID, RUN]]), kindOf: childReclaimTokenKind, sentenceFor: refusalSentence, nowMs,
+      latest: [{ sessionId: SID, outcome, refusal, at: EV_AT, failingSince: AT, detail: null }],
+      live: new Map([[SID, RUN]]), kindOf: childReclaimTokenKind, stuckOf: isChildReclaimStuckToken, sentenceFor: refusalSentence, nowMs,
     });
     expect(listed.map((a) => a.kind)).toEqual(['failing']);
     expect(childReclaimStatus(base({ event: ev(outcome, refusal), journalFailingSince: AT })))
@@ -479,7 +479,7 @@ const mirrored = (act: string, outcome: string, at: number, refusal: string | nu
 /** A sweep entry as the chip reads it: the decision clocks are the lane's monotonic ones (never an epoch), `bornAt`
  *  is the idle null, `markerRunId` is the marker's own run, and the two fields the chip reads are the caller's. */
 const entry = (firstDeferredAt: number | null, firstPresenceDeferredAt: number | null = null, consecutiveFailures = 0) =>
-  ({ ...childReclaimFirstSighting(5_000, null, RUN), firstDeferredAt, firstPresenceDeferredAt, consecutiveFailures });
+  ({ ...childReclaimFirstSighting(5_000, null, RUN, { kind: 'absent' }), firstDeferredAt, firstPresenceDeferredAt, consecutiveFailures });
 
 describe('withChildReclaim — the composer GET /api/runs calls', () => {
   it('keeps every other field and sets childReclaim on each row', () => {

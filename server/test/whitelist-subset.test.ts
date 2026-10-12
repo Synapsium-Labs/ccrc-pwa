@@ -68,6 +68,10 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   // the FLAGGED shape crosses its own grant.
   wsExpireAudit: ['demo-quiet-dune'],
   wsExpire: ['a'.repeat(64), 'demo-quiet-dune', { surface: 'agent', actor: 'expiry sweep', reason: null }],
+  // CHILD RECLAMATION wave 7: the collector's audit rides wsAudit's grant; the verb carries a dec, so layer 2 proves
+  // the FLAGGED shape crosses its own grant.
+  wsCollectAudit: ['demo-quiet-dune'],
+  wsCollect: ['a'.repeat(64), 'demo-quiet-dune', { surface: 'agent', actor: 'collect sweep', reason: null }],
   wsAttic: ['demo-quiet-basin'],
   // The one sample that carries a dec, so layer 2's `isExecAllowed` check
   // actually proves the FLAGGED shape is reachable under the granted
@@ -570,6 +574,8 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
                 '--surface', 'agent', '--actor', 'run:7 reclaim close'],
     wsExpireAudit: ['ws-audit', '--session', 'demo-quiet-dune', '--expire'],
     wsExpire: ['ws-expire', '--expect', 'a'.repeat(64), '--session', 'demo-quiet-dune', '--surface', 'agent', '--actor', 'expiry sweep'],
+    wsCollectAudit: ['ws-audit', '--session', 'demo-quiet-dune', '--collect'],
+    wsCollect: ['ws-collect', '--expect', 'a'.repeat(64), '--session', 'demo-quiet-dune', '--surface', 'agent', '--actor', 'collect sweep'],
     wsAttic: ['ws-attic', '--session', 'demo-quiet-basin'],
     wsHold: ['ws-hold', '--session', 'demo-quiet-basin', '--reason', 'program:agent-evals wave:1/4',
              '--surface', 'pwa', '--actor', 'device:iPhone'],

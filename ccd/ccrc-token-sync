@@ -278,6 +278,8 @@ if not isinstance(value, str) or re.fullmatch(value_re, value) is None:
     out("bad", "the value is not 64 lowercase hex")
 if not isinstance(gen, str) or re.fullmatch(gen_re, gen) is None:
     out("bad", "the generation is not 16 lowercase hex")
+if os.path.dirname(os.path.abspath(tmp)) != os.path.dirname(os.path.abspath(dest)):
+    out("fail", "the temp file is not beside the token file")
 preamble = comment + "\n"
 try:
     if os.path.lexists(dest):

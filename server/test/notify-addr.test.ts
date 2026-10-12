@@ -366,6 +366,21 @@ describe('deploy/notify.sh hands the box token to curl on stdin, never on argv (
     expect(existsSync(path.join(home, 'curl.argv')), 'a tokenless notify still dialled the server').toBe(false);
   });
 
+  // The shipped placeholder is a value too: a copy of `ccrc-mail.token.example`
+  // left in place extracts to the placeholder string, which the server refuses,
+  // so a POST carrying it is a guaranteed 401 that `|| true` swallows. Same
+  // answer as no token: nothing sent, exit 0. `CCRC_ADDR` is set because without
+  // it the script exits at the address guard first and this row is green anyway.
+  it('sends nothing when the token file still holds the shipped placeholder', () => {
+    const home = mkTmp('ccrc-notify-placeholder-');
+    recordingCurl(home);
+    const f = path.join(home, 'placeholder.token');
+    writeFileSync(f, readFileSync(path.join(repoRoot, 'deploy', 'ccrc-mail.token.example')), { mode: 0o600 });
+    const r = runNotify(home, { CCRC_ADDR: 'http://127.0.0.1:9', CCRC_MAIL_TOKEN_FILE: f });
+    expect(r.status, r.stderr).toBe(0);
+    expect(existsSync(path.join(home, 'curl.argv')), 'notify POSTed the unedited placeholder').toBe(false);
+  });
+
   // `set +x` FIRST (spec 4.9): an inherited xtrace (`bash -x`, or an exported
   // SHELLOPTS=xtrace) would trace the token read and the printf line to stderr.
   // ccd discards this hook's stderr today, but a hand run or a future caller

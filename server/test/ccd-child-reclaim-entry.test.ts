@@ -473,7 +473,7 @@ const echoed = (): { flags: string; argv: string[] } => {
 // The fourth column is where a MALFORMED audit shape must die: ordinary at
 // both entries, and still refused by `cmd_ws_audit`'s own parse (plan:112) —
 // so a dispatcher that wrongly accepted one cannot leave this table green.
-const USAGE = /^ccd: usage: ccd ws-audit --session <id> \[--reclaim \[--defer-expired\] \| --expire\]$/m;
+const USAGE = /^ccd: usage: ccd ws-audit --session <id> \[--reclaim \[--defer-expired\] \| --expire \| --collect\]$/m;
 const GRAMMAR: ReadonlyArray<readonly [string, readonly string[], boolean, RegExp | null]> = [
   ['ws-reclaim alone', ['ws-reclaim'], true, null],
   ['ws-reclaim with the full tail', ['ws-reclaim', '--expect', ANY_TOKEN, '--child-of', '7', '--session', 'x'], true, null],

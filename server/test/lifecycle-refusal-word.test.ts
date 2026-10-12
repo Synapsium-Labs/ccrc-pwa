@@ -25,7 +25,9 @@ const ALL_TOKENS: Record<LcRefusalToken, true> = {
   'session-live': true, 'session-verdict-unknown': true, 'spawn-failed': true,
   'purge-refused': true, 'purge-incomplete': true, 'purge-mechanism-absent': true,
   'pin-failed': true, 'unit-still-active': true, 'branch-unmeasured': true, 'probe-unmeasured': true,
-  'token-malformed': true, 'run-id-malformed': true,
+  'token-malformed': true, 'run-id-malformed': true, 'containment-refuted': true,
+  'witness-mismatch': true, 'quarantine-kept': true,
+  'not-witnessed': true, 'registered': true, 'changed-recently': true,
 };
 const TOKENS = Object.keys(ALL_TOKENS) as LcRefusalToken[];
 
@@ -33,7 +35,7 @@ describe('the journal-only refusal vocabulary', () => {
   it.each(TOKENS)('isLcRefusalToken(%s)', (t) => { expect(isLcRefusalToken(t)).toBe(true); });
 
   it('covers the whole union and derives its list from the map', () => {
-    expect(TOKENS.length).toBe(18);
+    expect(TOKENS.length).toBe(24);
     expect([...LC_REFUSAL_TOKENS].sort()).toEqual([...TOKENS].sort());
   });
 
@@ -118,6 +120,13 @@ describe('ws-reclaim’s failure words claim only what is true at EVERY site tha
     expect(LC_REFUSAL_WORD['branch-unmeasured']).toMatch(/could not read whether the branch still exists/);
     expect(LC_REFUSAL_WORD['branch-unmeasured']).toMatch(/tries again/);
     expect(LC_REFUSAL_WORD['branch-unmeasured']).not.toMatch(/\bgone\b|was kept|was deleted/);
+  });
+
+  // Wave 7 (spec §5.6): the same word is printed when the branch READS as present but the tombstone's tip, or a nested
+  // checkout's recorded head, is the all-zero id (git's `update-ref -d` reads that as no compare at all). The sentence
+  // names the record that cannot be compared against, so it is true of those two arms as well as the unread branch.
+  it('branch-unmeasured also names a record that cannot be compared against, for the two all-zero arms', () => {
+    expect(LC_REFUSAL_WORD['branch-unmeasured']).toMatch(/record it keeps of the branch cannot be compared against/);
   });
 
   // Three reap words that ws-reclaim's tail also emits, each widened to be

@@ -391,7 +391,7 @@ describe('the tail re-judges the workdir LEAF at removal time, on every arm (spe
     const r = childReclaimVerb(h, tok);
     expect(otherSnapshot(h, c, other), '`other` was neither removed nor committed into').toEqual(before);
     expect(r.code, r.stdout + r.stderr).toBe(1);
-    expect(JSON.parse(r.stdout).failed).toBe('worktree-remove-failed');
+    expect(JSON.parse(r.stdout).failed).toBe('containment-refuted');
     expect(JSON.parse(r.stdout).detail).toContain('symbolic link');
     expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the branch survives').toContain(CHILD_BRANCH);
     expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays, for the retry').toBe('reclaim:worktree');
@@ -399,7 +399,7 @@ describe('the tail re-judges the workdir LEAF at removal time, on every arm (spe
   }, 90_000);
 
   for (const [label, dropRecord] of [['git’s record of it standing', false], ['git’s record of it gone', true]] as const) {
-    it(`(c2) a DANGLING link planted at resume phase \`worktree\`, ${label}, reaches the removal step and fails worktree-remove-failed — nothing removed`, () => {
+    it(`(c2) a DANGLING link planted at resume phase \`worktree\`, ${label}, reaches the removal step and fails containment-refuted — nothing removed`, () => {
       // The settle is skipped here (no directory stands at the path), so the
       // tail's identity rungs (`_ws_reclaim_owned`, asked on every arm) are what
       // stands between this link and the rest of the tail.
@@ -412,7 +412,7 @@ describe('the tail re-judges the workdir LEAF at removal time, on every arm (spe
       const r = childReclaimVerb(h, tok);
       expect(r.code, r.stdout + r.stderr).toBe(1);
       const o = JSON.parse(r.stdout) as { failed: string; detail: string };
-      expect(o.failed).toBe('worktree-remove-failed');
+      expect(o.failed).toBe('containment-refuted');
       expect(o.detail).toContain('symbolic link');
       expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the branch survives').toContain(CHILD_BRANCH);
       expect(h.reg(CHILD_ID, 'uuid'), 'the registry row survives').not.toBeNull();
@@ -439,7 +439,7 @@ describe('the tail re-judges the workdir LEAF at removal time, on every arm (spe
     expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the branch survives').toContain(CHILD_BRANCH);
     expect(r.code, r.stdout + r.stderr).toBe(1);
     const o = JSON.parse(r.stdout) as { failed: string; detail: string };
-    expect(o.failed).toBe('worktree-remove-failed');
+    expect(o.failed).toBe('containment-refuted');
     expect(o.detail).toContain('plain absolute path');
     expect(h.reg(CHILD_ID, 'uuid')).not.toBeNull();
   }, 90_000);
@@ -450,7 +450,7 @@ describe('failures after the act started', () => {
     const c = makeChild(h);
     const r = childReclaimVerb(h, evalOf(h).token, { pre: '_ws_wip_commit() { RECLAIM_WIP_WHY="the disk is full"; return 1; };' });
     expect(r.code).toBe(1);
-    expect(JSON.parse(r.stdout)).toEqual({ failed: 'pin-failed', detail: 'the disk is full' });
+    expect(JSON.parse(r.stdout)).toEqual({ failed: 'pin-failed', detail: 'the disk is full', crumb: false });
     failedPairAgrees(r);
     expect(h.reg(CHILD_ID, 'reaping')).toBeNull();
     intact(c);

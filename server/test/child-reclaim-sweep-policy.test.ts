@@ -34,7 +34,7 @@ import {
   HOLD_NO_REASON, HOLD_UNREADABLE,
 } from '../src/registry.js';
 import { CHILD_BIRTH_SKEW_MS } from '../src/coord/childSpent.js';
-import { childReclaimTokenKind } from '../src/coord/childReclaim.js';
+import { CHILD_RECLAIM_DEFER_WHYS, childReclaimTokenKind, isChildReclaimStuckToken } from '../src/coord/childReclaim.js';
 import {
   CHILD_RECLAIM_KEPT_WORDS, LC_REFUSAL_WORD, SPAWN_STALL_MS, TERMINAL_RUN_STATES, holdReason, isChildReclaimKeptWord,
   isLcRefusalToken,
@@ -85,6 +85,7 @@ const base = (over: Partial<ChildReclaimSweepInput> = {}): ChildReclaimSweepInpu
   sessionId: 'demo-a',
   child: { kind: 'child', runId: 7 },
   identityMeasured: true,
+  generation: { kind: 'absent' },
   workspace: 'demo-a',
   held: { kind: 'none' },
   terminal: false,
@@ -464,12 +465,13 @@ describe('childReclaimHoldRead — accounting a hold\'s text against this child\
 });
 
 describe('the twice-observed memory, its two clocks, the presence episode, and the failure backoff', () => {
-  const entry: ChildReclaimSweepEntry = childReclaimFirstSighting(NOW - 60_000, BORN, RUN);
+  const entry: ChildReclaimSweepEntry = childReclaimFirstSighting(NOW - 60_000, BORN, RUN, { kind: 'absent' });
 
   it('a first sighting starts no clock, counts no failure, and was never asked', () => {
     expect(entry).toEqual({ firstEligibleAt: NOW - 60_000, firstDeferredAt: null, firstPresenceDeferredAt: null,
-      lastPresenceDeferredAt: null, lastPresenceWallAt: null, presenceHeldSince: null, bornAt: BORN, markerRunId: RUN,
-      lastDeferWhy: null, consecutiveFailures: 0, lastFailedAt: null, refusedAt: null, lastAskedAt: null });
+      lastPresenceDeferredAt: null, lastPresenceWallAt: null, presenceHeldSince: null, bornAt: BORN, markerRunId: RUN, generation: { kind: 'absent' },
+      lastDeferWhy: null, consecutiveFailures: 0, lastFailedAt: null, refusedAt: null, lastAskedAt: null,
+      tier: false, tierToken: null, tierJ: 0, tierRun: 0 });
   });
 
   it('forgets a child whose reclaim ended outright — reclaimed, or already gone', () => {
@@ -494,11 +496,11 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
   it('counts a failed attempt and stamps when it was asked — the any-kind clock untouched, the presence episode ended', () => {
     const withPresence: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 1000,
       lastPresenceDeferredAt: NOW - 1000, lastPresenceWallAt: NOW - 1000 };
-    const once = childReclaimNextEntry(withPresence, { kind: 'failed' }, ask(NOW, false), at(NOW), PASS);
+    const once = childReclaimNextEntry(withPresence, { kind: 'failed', token: null, stuck: false }, ask(NOW, false), at(NOW), PASS);
     expect(once).toEqual({ ...withPresence, consecutiveFailures: 1, lastFailedAt: NOW,
       firstPresenceDeferredAt: null, lastPresenceDeferredAt: null, lastPresenceWallAt: null, refusedAt: null,
       lastAskedAt: NOW });
-    expect(childReclaimNextEntry(once!, { kind: 'failed' }, ask(NOW + 120_000, false), at(NOW + 120_000), PASS))
+    expect(childReclaimNextEntry(once!, { kind: 'failed', token: null, stuck: false }, ask(NOW + 120_000, false), at(NOW + 120_000), PASS))
       .toEqual({ ...withPresence, consecutiveFailures: 2, lastFailedAt: NOW + 120_000,
         firstPresenceDeferredAt: null, lastPresenceDeferredAt: null, lastPresenceWallAt: null, refusedAt: null,
         lastAskedAt: NOW + 120_000 });
@@ -535,7 +537,7 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
   it('`licensed` is read only on a presence-class defer — it changes nothing for failed, refused, or any other why', () => {
     const stale: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 10 * C, lastPresenceDeferredAt: NOW - PASS,
       lastPresenceWallAt: NOW - PASS };
-    for (const outcome of [{ kind: 'failed' as const }, { kind: 'refused' as const, token: 'tree-unreadable' },
+    for (const outcome of [{ kind: 'failed' as const, token: null, stuck: false }, { kind: 'refused' as const, token: 'tree-unreadable' },
       { kind: 'deferred' as const, why: 'held' }]) {
       expect(childReclaimNextEntry(stale, outcome, ask(NOW, true), at(NOW), PASS), outcome.kind)
         .toEqual(childReclaimNextEntry(stale, outcome, ask(NOW, false), at(NOW), PASS));
@@ -543,8 +545,13 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
   });
 
   it('a defer that is not presence starts the ANY-kind clock, and clears the presence clock', () => {
-    for (const why of ['state-changed', 'paused', 'held', 'in-progress', 'reap-in-progress', 'siblings-open',
-      'unsupported', 'paused-at-server']) {
+    // Every defer word the executor declares, minus the presence defers: derived, never a hand-kept list.
+    const whys = CHILD_RECLAIM_DEFER_WHYS.filter((w) => !(CHILD_RECLAIM_PRESENCE_DEFERS as readonly string[]).includes(w));
+    // A FLOOR, so the loop below can never pass on an emptied or narrowed list (spec §5.7): the server's own word is
+    // in it, and every box and server defer word that is not presence, twelve when this was written.
+    expect(whys, 'the derived list lost the server’s own word').toContain('generation-changed');
+    expect(whys.length, 'the derived list was narrowed').toBeGreaterThanOrEqual(12);
+    for (const why of whys) {
       const withPresence: ChildReclaimSweepEntry = { ...entry, firstPresenceDeferredAt: NOW - 1000,
         lastPresenceDeferredAt: NOW - 1000, lastPresenceWallAt: NOW - 1000 };
       expect(childReclaimNextEntry(withPresence, { kind: 'deferred', why }, ask(NOW, false), at(NOW), PASS), why)
@@ -593,7 +600,7 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
 
   it('every arm except `refused` clears `refusedAt` — a stale one from an earlier refusal does not survive a later failure or deferral', () => {
     const stale: ChildReclaimSweepEntry = { ...entry, refusedAt: NOW - 1 };
-    expect(childReclaimNextEntry(stale, { kind: 'failed' }, ask(NOW, false), at(NOW), PASS)).toMatchObject({ refusedAt: null });
+    expect(childReclaimNextEntry(stale, { kind: 'failed', token: null, stuck: false }, ask(NOW, false), at(NOW), PASS)).toMatchObject({ refusedAt: null });
     expect(childReclaimNextEntry(stale, { kind: 'deferred', why: 'held' }, ask(NOW, false), at(NOW), PASS))
       .toMatchObject({ refusedAt: null });
   });
@@ -603,7 +610,7 @@ describe('the twice-observed memory, its two clocks, the presence episode, and t
       lastPresenceWallAt: NOW - PASS };
     expect(childReclaimDeferExpired(stale, at(NOW), PASS), 'the control: past the ceiling, its latest answer recent').toBe(true);
     const outcomes: ChildReclaimSweepOutcome[] = [
-      { kind: 'failed' }, { kind: 'refused', token: 'tree-unreadable' }, { kind: 'deferred', why: 'held' },
+      { kind: 'failed', token: null, stuck: false }, { kind: 'refused', token: 'tree-unreadable' }, { kind: 'deferred', why: 'held' },
     ];
     for (const outcome of outcomes) {
       const next = childReclaimNextEntry(stale, outcome, ask(NOW, false), at(NOW), PASS)!;
@@ -699,7 +706,7 @@ describe('the lane\'s two clocks, the bracketed answer, and the presence lease (
   /** The gap bound, as the policy derives it from the interval it is handed. */
   const G = 2.5 * PASS;
   /** A first sighting at monotonic 0. */
-  const fresh: ChildReclaimSweepEntry = childReclaimFirstSighting(0, BORN, RUN);
+  const fresh: ChildReclaimSweepEntry = childReclaimFirstSighting(0, BORN, RUN, { kind: 'absent' });
   /** One due item, the shape `childReclaimAskOrder` takes. */
   const item = (id: string, over: Partial<ChildReclaimSweepEntry> = {}): { id: string; entry: ChildReclaimSweepEntry } =>
     ({ id, entry: { ...fresh, ...over } });
@@ -787,7 +794,7 @@ describe('the lane\'s two clocks, the bracketed answer, and the presence lease (
     expect(rejoined.presenceHeldSince, 're-joins at its own arrival, at the back').toBe(502_000);
     // Every other outcome clears it — a holder's or not.
     const others: ChildReclaimSweepOutcome[] = [
-      { kind: 'failed' }, { kind: 'refused', token: 'tree-unreadable' },
+      { kind: 'failed', token: null, stuck: false }, { kind: 'refused', token: 'tree-unreadable' },
       ...['state-changed', 'paused', 'held', 'in-progress'].map((why): ChildReclaimSweepOutcome => ({ kind: 'deferred', why })),
     ];
     for (const outcome of others) {
@@ -878,12 +885,12 @@ describe('the lane\'s two clocks, the bracketed answer, and the presence lease (
   });
 
   it('P14: one entry describes one workspace generation — a null birth never matches', () => {
-    const e = childReclaimFirstSighting(5_000, BORN, RUN);
+    const e = childReclaimFirstSighting(5_000, BORN, RUN, { kind: 'absent' });
     expect(e.bornAt).toBe(BORN);
-    expect(childReclaimSameGeneration(e, BORN, RUN)).toBe(true);
-    expect(childReclaimSameGeneration(e, BORN + 1, RUN)).toBe(false);
-    expect(childReclaimSameGeneration(e, null, RUN)).toBe(false);
-    expect(childReclaimSameGeneration(childReclaimFirstSighting(5_000, null, RUN), null, RUN)).toBe(false);
+    expect(childReclaimSameGeneration(e, BORN, RUN, { kind: 'absent' })).toBe(true);
+    expect(childReclaimSameGeneration(e, BORN + 1, RUN, { kind: 'absent' })).toBe(false);
+    expect(childReclaimSameGeneration(e, null, RUN, { kind: 'absent' })).toBe(false);
+    expect(childReclaimSameGeneration(childReclaimFirstSighting(5_000, null, RUN, { kind: 'absent' }), null, RUN, { kind: 'absent' })).toBe(false);
   });
 
   it('P15: a recycled slug re-marked by another run while its birth still reads the old one is a NEW generation — a licence-ripe episode never carries over', () => {
@@ -891,9 +898,9 @@ describe('the lane\'s two clocks, the bracketed answer, and the presence lease (
     const ripe: ChildReclaimSweepEntry = { ...fresh, firstPresenceDeferredAt: m0 - C, lastPresenceDeferredAt: m0 - PASS,
       lastPresenceWallAt: m0 - PASS, presenceHeldSince: m0 - C };
     expect(childReclaimDeferExpired(ripe, at(m0), PASS), 'the old workspace\'s episode is ripe').toBe(true);
-    expect(childReclaimSameGeneration(ripe, BORN, RUN + 1), 'the birth unchanged, the marker names another run').toBe(false);
-    expect(childReclaimSameGeneration(ripe, BORN, RUN), 'both keys unchanged: the same generation').toBe(true);
-    const seeded = childReclaimFirstSighting(m0, BORN, RUN + 1);
+    expect(childReclaimSameGeneration(ripe, BORN, RUN + 1, { kind: 'absent' }), 'the birth unchanged, the marker names another run').toBe(false);
+    expect(childReclaimSameGeneration(ripe, BORN, RUN, { kind: 'absent' }), 'both keys unchanged: the same generation').toBe(true);
+    const seeded = childReclaimFirstSighting(m0, BORN, RUN + 1, { kind: 'absent' });
     expect(seeded.markerRunId).toBe(RUN + 1);
     expect(childReclaimDeferExpired(seeded, at(m0), PASS), 'the new workspace starts unlicensed').toBe(false);
   });
@@ -950,7 +957,7 @@ describe('S1: seeded interleavings of the lane model — every licence rests on 
         const answered = now();
         inFlight.delete(ev.id);
         if (ev.kind === 'reclaimed') { listed.delete(ev.id); reclaimedAt.set(ev.id, ev.a); }
-        const outcome: ChildReclaimSweepOutcome = ev.kind === 'rejected' ? { kind: 'failed' }
+        const outcome: ChildReclaimSweepOutcome = ev.kind === 'rejected' ? { kind: 'failed', token: null, stuck: false }
           : ev.kind === 'reclaimed' ? { kind: 'reclaimed' } : { kind: 'deferred', why: ev.kind };
         // The lane's identity guard: write back only while the entry is the live one.
         if (entries.get(ev.id) === ev.entry) {
@@ -969,8 +976,8 @@ describe('S1: seeded interleavings of the lane model — every licence rests on 
       const due: { id: string; entry: ChildReclaimSweepEntry }[] = [];
       for (const id of [...listed].sort()) {
         const entry = entries.get(id);
-        if (entry === undefined || !childReclaimSameGeneration(entry, BORN, RUN)) {
-          entries.set(id, childReclaimFirstSighting(asked.monoMs, BORN, RUN));
+        if (entry === undefined || !childReclaimSameGeneration(entry, BORN, RUN, { kind: 'absent' })) {
+          entries.set(id, childReclaimFirstSighting(asked.monoMs, BORN, RUN, { kind: 'absent' }));
           continue;
         }
         if (inFlight.has(id)) continue;
@@ -1106,7 +1113,7 @@ describe('childReclaimJournalRow — one generation\'s latest reclaim event, as 
     const gen = [ev('create', 'done'), ev('reclaim', 'refused', { refusal: 'tree-unreadable' })];
     // `toEqual`, so the row's WHOLE shape is pinned: it carries no `ingestedAt`.
     expect(childReclaimJournalRow(gen, gen[1]!)).toEqual({ sessionId: 'demo-a', outcome: 'refused',
-      refusal: 'tree-unreadable', at: NOW, failingSince: null });
+      refusal: 'tree-unreadable', at: NOW, failingSince: null, detail: null });
   });
 
   it('carries an INTENT when the intent is the latest — the latest event decides, whatever its outcome', () => {
@@ -1159,11 +1166,12 @@ describe('childReclaimAttention', () => {
     latest,
     live: new Map(live),
     kindOf,
+    stuckOf: isChildReclaimStuckToken,
     sentenceFor: (t: string): string => `sentence for ${t}`,
     nowMs,
   });
   const row = (over: Partial<ChildReclaimJournalRow> = {}): ChildReclaimJournalRow => ({
-    sessionId: 'demo-a', outcome: 'refused', refusal: 'tree-unreadable', at: NOW, failingSince: null, ...over,
+    sessionId: 'demo-a', outcome: 'refused', refusal: 'tree-unreadable', at: NOW, failingSince: null, detail: null, ...over,
   });
 
   it('reports a terminal refusal of a child whose registry row still exists, with the SERVER\'s sentence', () => {
@@ -1296,15 +1304,16 @@ describe('CHILD_RECLAIM_SKIP — every skip word classed exactly once, with its 
   });
 
   // An unplaced birth is doubt, not kept: the lane places the birth afresh on every judging pass, so the
-  // word ends once the mirror holds a dated `create` for the workspace, with no person acting. Its
-  // sentence keeps the fact it could not prove and says the sweep looks again; it never says ccrc leaves
-  // the child for a person.
+  // word ends once the mirror holds a dated `create` for the workspace that no purge but the row's own
+  // follows, with no person acting. Its sentence names both causes (no dated creation, or a removal after
+  // it not yet replaced) and says the sweep looks again; it never says ccrc leaves the child for a person.
   it('child-birth-unplaced is doubt: its sentence says what could not be placed and that the sweep looks again', () => {
     expect(CHILD_RECLAIM_SKIP['child-birth-unplaced'].class).toBe('doubt');
     expect(isChildReclaimKeptWord('child-birth-unplaced')).toBe(false);
     expect(sentenceOf('child-birth-unplaced')).toBe(
-      'The lifecycle journal holds no dated creation of this workspace, so nothing proves the run its child marker names made it. '
-      + 'The sweep leaves it alone and looks for that creation again on its next pass.');
+      'The lifecycle journal holds no dated creation of this workspace, or a removal journaled after its creation '
+      + 'that ccrc has not yet seen replaced by a newer creation, so nothing proves the run its child marker names made it. '
+      + 'The sweep leaves it alone and looks again on its next pass.');
   });
 
   it('a classed word says its sentence, an ordinary word has none, and an apostrophe is the curly one', () => {
@@ -1419,7 +1428,7 @@ describe('a run of pre-lock refusals is a failure run, listed like any other (sp
     const row = childReclaimJournalRow(gen, latest);
     expect(row).not.toBeNull();
     return { row: row!, list: childReclaimAttention({
-      latest: [row!], live, kindOf: childReclaimTokenKind, sentenceFor: (t) => `sentence for ${t}`, nowMs }) };
+      latest: [row!], live, kindOf: childReclaimTokenKind, stuckOf: isChildReclaimStuckToken, sentenceFor: (t) => `sentence for ${t}`, nowMs }) };
   };
 
   it('two refusals a ceiling apart: the run started at the first, and the child is listed with that line', () => {
@@ -1472,7 +1481,7 @@ describe('a run of pre-lock refusals is a failure run, listed like any other (sp
 
 describe('a pre-lock refusal is a failure line, never a terminal refusal (spec §5.9)', () => {
   const refusal = (token: string): ChildReclaimJournalRow =>
-    ({ sessionId: 'demo-a', outcome: 'refused', refusal: token, at: NOW, failingSince: null });
+    ({ sessionId: 'demo-a', outcome: 'refused', refusal: token, at: NOW, failingSince: null, detail: null });
 
   it('childReclaimTerminalRefusal is false for each lock token, under the real kind map and a test one', () => {
     for (const t of Object.values(CHILD_RECLAIM_PRE_LOCK_TOKEN)) {
@@ -1653,7 +1662,7 @@ describe('the attention list\'s kept arm (spec §5.9)', () => {
 // for, and the failure word the attention list shows for it. The entry remembers the first; the list
 // carries the second. Nothing here paces, decides or dispatches.
 describe('feed rows de-duplicated (spec §5.9) — lastDeferWhy and childReclaimFeedQuiet', () => {
-  const fresh: ChildReclaimSweepEntry = childReclaimFirstSighting(NOW - 60_000, BORN, RUN);
+  const fresh: ChildReclaimSweepEntry = childReclaimFirstSighting(NOW - 60_000, BORN, RUN, { kind: 'absent' });
 
   it('(a) a deferral sets lastDeferWhy to its word, any later non-deferral clears it, and a first sighting reads null', () => {
     expect(fresh.lastDeferWhy).toBeNull();
@@ -1664,7 +1673,7 @@ describe('feed rows de-duplicated (spec §5.9) — lastDeferWhy and childReclaim
       .lastDeferWhy).toBe('held');
     expect(childReclaimNextEntry(deferred, { kind: 'deferred', why: 'state-changed' }, ask(NOW + PASS, false), at(NOW + PASS), PASS)!
       .lastDeferWhy).toBe('state-changed');
-    const failed = childReclaimNextEntry(deferred, { kind: 'failed' }, ask(NOW + PASS, false), at(NOW + PASS), PASS)!;
+    const failed = childReclaimNextEntry(deferred, { kind: 'failed', token: null, stuck: false }, ask(NOW + PASS, false), at(NOW + PASS), PASS)!;
     expect(failed.lastDeferWhy, 'a failed attempt ends the episode — a rejection is written through this arm').toBeNull();
     expect(childReclaimNextEntry(deferred, { kind: 'refused', token: 'tree-unreadable' }, ask(NOW + PASS, false), at(NOW + PASS), PASS)!
       .lastDeferWhy, 'a refusal ends it too').toBeNull();
