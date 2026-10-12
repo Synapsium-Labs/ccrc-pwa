@@ -589,3 +589,71 @@ m79Vitest.describe('M7.9: the tree does not know a standalone docs server', () =
     m79Vitest.expect(added(files.filter(([n]) => n !== doctor))).toEqual([`${doctor}: not scanned`]);
   });
 });
+
+// ---- Docs W4 Task 10: M7.3's doctor half, one prefix in ccd/ccrc-doctor-checks (spec 2026-10-01 sections 7.2 and 7.10) ----
+// `docs-sw` builds its ERE and every message from ONE assignment, `CCRC_DOCS_PAGE_PREFIX='/docs'`, at the end of the
+// doctor file. This block holds that assignment to exactly one line, its value equal to the `DOCS_PAGE_PREFIX` the TS
+// half above reads (the module scope's import), the quoted prefix to one occurrence in the whole file, and the
+// check's own body to the variable: it spells the prefix nowhere and reads `$CCRC_DOCS_PAGE_PREFIX`.
+// Raw text on purpose: a quoted prefix in a comment counts. NOT EXHAUSTIVE. Known evasions: a second prefix set
+// through `declare`, `export`, `readonly`, `local`, `printf -v` or `read`, or on a line that starts with something
+// else (`x=1; CCRC_DOCS_PAGE_PREFIX=...`); the prefix built from parts or spelled unquoted outside the check's body;
+// and any spelling in a file other than ccd/ccrc-doctor-checks.
+// It reuses the module scope's `describe`, `it`, `expect`, `readFileSync`, `path`, `ccrcRoot` and `DOCS_PAGE_PREFIX`.
+const M73_DOCTOR = 'ccd/ccrc-doctor-checks';
+const M73_ASSIGN = /^\s*CCRC_DOCS_PAGE_PREFIX=(.*)$/;
+
+/** What the doctor file says about the prefix: each assignment line's value with one pair of surrounding quotes
+ *  removed, how many times the quoted prefix appears anywhere, and the body of `_check_docs-sw` ('' when absent). */
+function m73Doctor(text: string, prefix: string): { values: string[]; quoted: number; body: string } {
+  const lines = text.split('\n');
+  const values = lines.flatMap((l) => {
+    const m = M73_ASSIGN.exec(l);
+    if (m === null) return [];
+    const raw = (m[1] ?? '').trim();
+    const q = /^'([^']*)'$/.exec(raw) ?? /^"([^"]*)"$/.exec(raw);
+    return [q === null ? raw : (q[1] ?? '')];
+  });
+  const quoted = text.split(`'${prefix}'`).length - 1 + text.split(`"${prefix}"`).length - 1;
+  const start = lines.findIndex((l) => l.startsWith('_check_docs-sw() {'));
+  const end = start < 0 ? -1 : lines.findIndex((l, i) => i > start && l === '}');
+  const body = start < 0 || end < 0 ? '' : lines.slice(start + 1, end).join('\n');
+  return { values, quoted, body };
+}
+
+describe("M7.3 (doctor half): one CCRC_DOCS_PAGE_PREFIX in the doctor file, equal to shared/docs.ts's", () => {
+  const text = readFileSync(path.join(ccrcRoot, M73_DOCTOR), 'utf8');
+  const got = m73Doctor(text, DOCS_PAGE_PREFIX);
+
+  it('CONTROL: the scan reads every assignment line and quote form, counts quoted literals, and finds the body', () => {
+    const planted = [
+      "CCRC_DOCS_PAGE_PREFIX='/docs'",
+      '  CCRC_DOCS_PAGE_PREFIX="/doc"',
+      'CCRC_DOCS_PAGE_PREFIX=/x',
+      "declare CCRC_DOCS_PAGE_PREFIX='/y'",
+      "# a comment naming '/docs' counts as a literal",
+      '_check_docs-sw() {',
+      '  echo "$CCRC_DOCS_PAGE_PREFIX"',
+      '}',
+    ].join('\n');
+    expect(m73Doctor(planted, '/docs')).toEqual({
+      values: ['/docs', '/doc', '/x'], quoted: 2, body: '  echo "$CCRC_DOCS_PAGE_PREFIX"',
+    });
+    expect(m73Doctor('', '/docs')).toEqual({ values: [], quoted: 0, body: '' });
+  });
+
+  it('is assigned on exactly one line, and its value is DOCS_PAGE_PREFIX', () => {
+    expect(got.values).toEqual([DOCS_PAGE_PREFIX]);
+    expect(text).toMatch(new RegExp(`^CCRC_DOCS_PAGE_PREFIX='${DOCS_PAGE_PREFIX}'$`, 'm'));
+  });
+
+  it('the quoted prefix appears once in the whole file: the assignment', () => {
+    expect(got.quoted).toBe(1);
+  });
+
+  it("_check_docs-sw reads the variable and never spells the prefix", () => {
+    expect(got.body, '_check_docs-sw() not found, or not closed by a bare } at column 0').not.toBe('');
+    expect(got.body).toContain('$CCRC_DOCS_PAGE_PREFIX');
+    expect(got.body.includes(DOCS_PAGE_PREFIX), 'a spelled prefix in the check: interpolate the variable').toBe(false);
+  });
+});

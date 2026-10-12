@@ -59,6 +59,7 @@ import {
 } from './codexLaneFixture.js';
 import { docsProbeProgram } from './docsHelperPy.js';
 import { DOCS_INDEX_READY } from './docsIndexFixtures.js';
+import { swJs } from './swFixtures.js';
 
 /** The two python3 invocations ccd's Docs front makes when the closing
  *  doctor's `docs` check runs the installed ccd (Docs W1a): the floor probe,
@@ -842,6 +843,8 @@ function fullTree(home: string, opts: { version: string; sha: string }): string 
   mkdirSync(join(tree, 'server', 'dist-pwa'), { recursive: true });
   writeFileSync(join(tree, 'server', 'dist-pwa', 'index.html'),
     '<!doctype html><title>fixture PWA</title>\n');
+  // Docs W4: the bundle's service worker, which the closing doctor's `docs-sw` measures (`swFixtures.ts`).
+  writeFileSync(join(tree, 'server', 'dist-pwa', 'sw.js'), swJs());
   // D-1159: the shape `ccrc-agent.service` actually runs, and the one
   // `_inst_tree` now preflights — `agent/dist/agent/src/index.js`, tsc's
   // rootDir-preserving output, exactly as `server/dist/server/src/index.js`

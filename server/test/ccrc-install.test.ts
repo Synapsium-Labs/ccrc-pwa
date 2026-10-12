@@ -8287,6 +8287,10 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  three maps each gained `"box-token": "SKIP"` (wave 1 reports a box with no token
  *  subject, and every state that will be a FAIL or WARN once armed, as SKIP; the live
  *  shape's own word was not read off the case) and nothing else moved.
+ *  RE-MEASURED again when doctor gained its `docs-sw` check (native Docs reader
+ *  W4, spec 2026-10-01 §7.2), by the live-shape case on the W4 tree: the three
+ *  maps each gained `"docs-sw": "SKIP"` (the `--role fleet` box records
+ *  `CCRC_ROLE=fleet` and serves no PWA bundle) and nothing else moved.
  *  It is a golden: nothing re-measures
  *  it, so a merge-up that moves a doctor check's class on the live shape reds
  *  the live-shape case until Step 3 is re-run on a disposable copy of the new
@@ -8315,6 +8319,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "credentials": "SKIP",
         "disk": "PASS",
         "docs": "PASS",
+        "docs-sw": "SKIP",
         "exposure": "SKIP",
         "fleet": "SKIP",
         "flock": "PASS",
@@ -8366,6 +8371,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "credentials": "SKIP",
         "disk": "PASS",
         "docs": "PASS",
+        "docs-sw": "SKIP",
         "exposure": "SKIP",
         "fleet": "SKIP",
         "flock": "PASS",
@@ -8487,6 +8493,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "credentials": "SKIP",
       "disk": "PASS",
       "docs": "PASS",
+      "docs-sw": "SKIP",
       "exposure": "SKIP",
       "fleet": "SKIP",
       "flock": "PASS",

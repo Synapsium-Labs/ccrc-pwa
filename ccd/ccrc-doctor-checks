@@ -210,7 +210,7 @@ CCRC_DOCTOR_CHECKS=(
   fleet
   memory
   routing model-default   # one line, as `flock timeout` above; _check_model-default is at the END of this file
-  models codex docs history   # four entries on one line: every line below is cited by number elsewhere
+  models codex docs history docs-sw   # five entries on one line: every line below is cited by number elsewhere
 )
 
 # ── verdict helpers ───────────────────────────────────────────────────────
@@ -7873,4 +7873,125 @@ _check_box-token() {
   if [ "$worst" = FAIL ]; then _dr_fail box-token "$detail" "$fix"; return 1; fi
   _dr_warn box-token "$detail" "$fix"
   return 2
+}
+
+# ── docs-sw: the installed service worker keeps the Docs pages on the app shell ──
+# The server half of the Docs pair (spec 2026-10-01 §7.2; native Docs reader
+# W4). Every page under the Docs prefix is the app shell: the server's
+# not-found handler and the worker's navigateFallback both hand it
+# `index.html`. A worker whose navigation denylist covers the prefix sends
+# every hard load of a Docs page past the shell, so the page breaks on reload
+# and offline. The build already refuses such a `CCRC_SW_DENYLIST` entry
+# (`pwa/src/lib/sw-denylist.ts`); this check is the one measurement of the
+# bundle actually INSTALLED, which catches a hand-built bundle, a pre-Docs
+# checkout and a regression in the built-ins. It probes nothing else: not a
+# unit, not a port, not a proxy mapping.
+#
+# THE PREFIX IS ONE ASSIGNMENT, the line below, and every message and the ERE
+# interpolate it; `docs-parity.test.ts` (M7.3's doctor half) holds it to one
+# line, equal to `DOCS_PAGE_PREFIX` in `shared/docs.ts`, and holds the check's
+# body to the variable.
+#
+# 1. A FLEET BOX SKIPs, on either piece of evidence `_check_update-exposure`
+#    uses: a recorded `CCRC_ROLE=fleet`, or a unit directory holding
+#    `ccrc-agent.service` and no `ccrc.service` (the env-less fleet host this
+#    file's header describes). A `server` or `both` box, and a box with no
+#    evidence either way, is measured. Neither SKIP names a path: a SKIP has
+#    nothing to fix.
+# 2. THE WORKER is `$BOX_TREE_DIR/server/dist-pwa/sw.js`, where both lanes put
+#    the bundle (`~/ccrc`, through its version symlink on a release-lane box).
+#    Absent, or there and not a readable file: FAIL, `ccrc update --force`.
+# 3. THE SHAPE: workbox emits the whole worker as ONE minified line, so the
+#    `denylist:[` OCCURRENCES are counted, never lines, by parameter-expansion
+#    length arithmetic; a line count could never see two lists. Exactly one,
+#    closed by the next `]}`, or WARN: this check knows that shape and no
+#    other, and a verdict on a shape it does not know would be a guess.
+# 4. THE PREFIX: each comma-separated entry of that list, as the worker prints
+#    it (a RegExp literal, every `/` escaped: the knob's `/wiki` is
+#    `/^\/wiki(\/|$)/`), is matched with bash's own ERE, built from the prefix,
+#    for an entry equal to the prefix or under it: the knob form, a bare `$`
+#    anchor, no end anchor at all, or `\/` and anything after. A sibling that
+#    merely starts the same way (`/docsy`, `/docs-archive`) is not. FAIL names
+#    every entry that covers it.
+#
+# BUILTINS ONLY: `$(<file)`, `${var//pattern/}`, `${#var}` and `[[ =~ ]]`. No
+# grep, sed, awk, tr, head or cut: this file reaches for none of them, and the
+# doctor suite's PATH holds no system directory (`_check_docs`' note).
+CCRC_DOCS_PAGE_PREFIX='/docs'
+
+_check_docs-sw() {
+  if [ -z "${BOX_TREE_DIR:-}" ] || ! declare -F _box_env_value >/dev/null 2>&1; then
+    _dr_fail docs-sw "ccrc's own tree path and config reader are not loaded, so the installed service worker was not measured" \
+      "this is a bug in ccrc, not a fact about your box — _check_docs-sw reads BOX_TREE_DIR and this box's recorded CCRC_ROLE through _box_env_value, both declared in ccrc itself, and this check table was sourced by something that is not ccrc"
+    return 1
+  fi
+  local role=""
+  # -f BEFORE -r: `_check_skills`' guard order, for its reason (a directory answers -r too).
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$role" = fleet ]; then
+    _dr_skip docs-sw "this box records CCRC_ROLE=fleet, so it serves no PWA bundle and no service worker of its own"
+    return 3
+  fi
+  if [ ! -f "$CCRC_UNIT_DIR/$(_dr_unit_file ccrc.service)" ] && [ -f "$CCRC_UNIT_DIR/$(_dr_unit_file ccrc-agent.service)" ]; then
+    _dr_skip docs-sw "this box runs no ccrc server (its units are ccrc-agent.service and no ccrc.service), so it serves no PWA bundle and no service worker of its own"
+    return 3
+  fi
+
+  local p="$CCRC_DOCS_PAGE_PREFIX" sw="$BOX_TREE_DIR/server/dist-pwa/sw.js"
+  if [ ! -e "$sw" ] && [ ! -L "$sw" ]; then
+    _dr_fail docs-sw "no service worker at $sw, so this box serves its PWA bundle without the file every browser installs" \
+      "ccrc update --force"
+    return 1
+  fi
+  if [ ! -f "$sw" ] || [ ! -r "$sw" ]; then
+    _dr_fail docs-sw "$sw is there but is not a file this check can read, so what it refuses was not measured" \
+      "ccrc update --force"
+    return 1
+  fi
+
+  local body open='denylist:[' close=']}' without n after shape=""
+  body="$(<"$sw")"
+  without="${body//"$open"/}"
+  n=$(( (${#body} - ${#without}) / ${#open} ))
+  after="${body#*"$open"}"
+  if [ "$n" -ne 1 ]; then
+    shape="carries $n denylists"
+  elif [[ "$after" != *"$close"* ]]; then
+    shape="carries 1 denylist that never closes"
+  fi
+  if [ -n "$shape" ]; then
+    _dr_warn docs-sw "$sw $shape, and this check knows the shape workbox emits (exactly one, closed by $close), so whether it refuses $p was not measured" \
+      "hard-reload $p/ in a browser and check that the Docs screen renders"
+    return 2
+  fi
+
+  # The prefix as the worker prints it, as ERE text: each `/` is `\/` in the
+  # RegExp literal, matched by the ERE `\\/`; a letter, digit, `_` or `-` is
+  # itself; anything else is bracketed so it matches only itself.
+  local list="${after%%"$close"*}" ere="" c i
+  for (( i = 0; i < ${#p}; i++ )); do
+    c="${p:i:1}"
+    case "$c" in
+      /) ere+='\\/' ;;
+      [A-Za-z0-9_-]) ere+="$c" ;;
+      *) ere+="[$c]" ;;
+    esac
+  done
+  # After `/^` and the prefix: the literal's end (no end anchor), `$/`, the
+  # knob's `(\/|$)/`, or `\/` and anything (an entry under the prefix).
+  local head='^/\^' tail='(/|\$/|\(\\/\|\$\)/|\\/.*)$'
+  local re="$head$ere$tail" rest="$list," e k=0 found=""
+  while [ -n "$rest" ]; do
+    e="${rest%%,*}"
+    rest="${rest#*,}"
+    [ -n "$e" ] || continue
+    k=$((k + 1))
+    if [[ $e =~ $re ]]; then found+="${found:+, }$e"; fi
+  done
+  if [ -n "$found" ]; then
+    _dr_fail docs-sw "the installed service worker refuses the app shell to $p; Docs pages break on a hard load and offline ($sw denies $found)" \
+      "remove $p from CCRC_SW_DENYLIST in the deploying machine's ~/.ccrc/deploy.env and deploy again, or move to the release lane: ccrc update"
+    return 1
+  fi
+  _dr_pass docs-sw "$sw keeps $p on the app shell: its one denylist holds $k entries ($list), none of them $p or under it"
 }
