@@ -670,6 +670,42 @@ describe('prune: dry run by default, tombstones by referrer age, the floor, the 
     expect(ex.stdout).not.toContain('content pruned');
   }, HEAVY);
 
+  it('D-4589, the row path: a row captured again after a prune (a copied transcript, or the same raw line in another file) is stored again through compressMissing', async (ctx) => {
+    // The pinned path is the transcript-ROW arm: an entry row's blob goes through compressMissing's `need` (sweep.mjs),
+    // whose "already stored" test is blobLive (a body present), never blobId (a row, a tombstone included). The second
+    // capture is a copy of the first transcript's row, byte for byte (the same timestamp string), under another session.
+    const box = makeHistoryBox('ccrc-hist-d4589r-', { role: 'fleet', shim: true });
+    const ID2 = 'claude-a-maint2';
+    const U2 = '11111111-1111-4111-8111-1111111111a2';
+    const ts = maintIso(200 * MAINT_DAY);
+    const row = userRow({ uuid: MAINT_QUOKKA, ts, sessionId: MAINT_U1, text: 'zqrowrevive20 words of the old captured row' });
+    const rowBlob = (): { blob_id: number; z: Uint8Array | null; pruned_ms: number | null } | undefined =>
+      maintQ<{ blob_id: number; z: Uint8Array | null; pruned_ms: number | null }>(box,
+        'SELECT b.blob_id, b.z, b.pruned_ms FROM entries e JOIN blobs b ON b.blob_id = e.blob_id WHERE e.uuid = ?', MAINT_QUOKKA)[0];
+    // 1. An old capture, 200 days back.
+    seedFamily(box, { id: ID, project: 'demo', uuid: MAINT_U1, rows: [row] });
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();
+    const old = rowBlob();
+    expect(old, 'CONTROL: the old row is captured').toBeDefined();
+    expect(old!.z, 'CONTROL: the old row holds its bytes').not.toBeNull();
+    expect(maintMatch(box, 'zqrowrevive20'), 'CONTROL: indexed before the prune').toBe(1);
+    // 2. Prune it.
+    const r = await maintPty(box, 'cli', ['prune', '--older-than', '90d', '--apply']);
+    expect(r.code, r.out).toBe(0);
+    const pruned = rowBlob()!;
+    expect(pruned.blob_id, 'CONTROL: the same blob row').toBe(old!.blob_id);
+    expect(pruned.z, 'CONTROL: the row blob is a tombstone').toBeNull();
+    expect(pruned.pruned_ms, 'CONTROL: the tombstone is stamped').toBeGreaterThan(0);
+    expect(maintMatch(box, 'zqrowrevive20'), 'CONTROL: the tombstone left the index').toBe(0);
+    // 3. The same bytes again, from another file: a second session's transcript holding the identical row.
+    seedFamily(box, { id: ID2, project: 'demo', uuid: U2, rows: [row] });
+    const again = rowBlob()!;
+    expect(again.blob_id, 'content-addressed: the copied row names the same blob row').toBe(pruned.blob_id);
+    expect(again.z, 'the tombstone is revived: the row bytes are stored again').not.toBeNull();
+    expect(again.pruned_ms, 'a revived blob is no longer pruned').toBeNull();
+    expect(maintMatch(box, 'zqrowrevive20'), 'the revived text is searchable again').toBe(1);
+  }, HEAVY);
+
   it('DM27: deleting a transcript prunes nothing its age does not', async () => {
     const box = makeHistoryBox('ccrc-hist-dm27-', { role: 'fleet', shim: true });
     const { transcript } = seedFamily(box, { id: ID, project: 'demo', uuid: MAINT_U1, rows: [
