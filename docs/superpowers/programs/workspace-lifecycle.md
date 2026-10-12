@@ -1618,6 +1618,11 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     `origin/main`, never rebases, and preserves both programmes' `watch.ts` and README changes by content.
   - As second lander, #351 owns the child-reclamation spec's ws-expire/crumb sentence that this wave makes false. It also
     owns the stale generated `ccd/ccd` EXPIRE-V1 capability comment, followed by the generated-file stamp/ownership guard.
+- **2026-10-12 10:17 — co-edit consent under claim 1172 (calm-harbor's 4294; answer 4296).** Stall-watch-settings W2 (#322,
+  run 322) must absorb main and conflicts only in README's Settings paragraph (about lines 960–1000 on `28e8dc1b2`).
+  Plain-ridge's README hunks begin near line 3542, so the regions are disjoint. Calm-basin may commit that one
+  paragraph's resolution; no other path under claims 1171, 1172 or 1174 is licensed. Plain-ridge was told (4297).
+  Whichever of #322 and #351 lands second absorbs the other through its merge of main.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
