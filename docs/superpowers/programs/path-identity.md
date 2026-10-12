@@ -20,12 +20,14 @@ Run-level wave numbers map onto the spec's wave names as below. W0 (the spec) ne
 | # | spec name | scope | deploy class | PRs | state |
 |---|---|---|---|---|---|
 | — | W0 | the spec, this ledger, and the contract's rulings section | docs | #360 | **merged** `837a099c0` (2026-10-12 18:48); the contract section rides the first plan's docs PR |
-| 1 | W1a | the server's id gate (spec 2.3): `isRegistryId`, `readSessionRecord.kind`, `RegistryRead.refused`, the split of the 12 `readRegistry` callers, `knownId`, `POST /api/runs`, every stored-row argv seam and the two executor seams, and the stop builders' order | server | — | **planned** — plan to be written |
+| 1 | W1a | the server's id gate (spec 2.3): `isRegistryId`, `readSessionRecord.kind`, `RegistryRead.refused`, the split of the 12 `readRegistry` callers, `knownId`, `POST /api/runs`, every stored-row argv seam and the two executor seams, and the stop builders' order | server | — | **planned** — run **399**; block of 24 issued (listed in the entry below); plan to be written |
 | 2 | W1b | ccd's id fix (spec 2.4 to 2.6): the decision-flag loops, the predicates, the composed-id cap, the reap-lock order, the dot-leading entry rule, and the real-binary parity pins | **ccd/ccd** | — | not opened; waits for #351 (workspace-lifecycle W6) to merge |
 | 3 | W2 | absences and mounts (spec section 3) | ccd/ccd + server | — | not opened; after W1b; needs workspace-lifecycle's consent |
 | 4 | W3 | worktree path identity (spec section 4) | ccd/ccd | — | not opened; after W2; needs workspace-lifecycle's consent |
 
 ## Decisions & deviations
+
+- **2026-10-12 18:53 — WAVE 1 (W1a) IS RUN 399, `planned`.** It was opened at 18:52 beside CCR-15's run 400, before run 380 closed. Its block is 24 numbers, issued by the allocator: 4860, 4861, 4862, 4863, 4864, 4865, 4866, 4867, 4868, 4869, 4870, 4871, 4872, 4873, 4874, 4875, 4876, 4877, 4878, 4879, 4880, 4881, 4882, 4883.
 
 - **2026-10-12 18:51 — THE PROGRAMME OPENS. The operator merged the W0 spec (#360, 18:48:11Z) and wrote "360 merged", naming no exception.**
   - **How I read the merge.** It approves the design with its recommendations. Each row marked Operator takes its recommended option as the working ruling. Each row marked Coordinator stands as proposed. The operator can change any of them before the wave that builds it dispatches; a change after dispatch becomes a fix round.
