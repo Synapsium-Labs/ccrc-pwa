@@ -28,7 +28,7 @@ time.
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
 | 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merged `6e4524164` 2026-10-12; run 322 closed `done`, `final:true` (R37) |
-| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | fix round 1 (R40) at `24e4eebc6`; review run 402 dispatched (R41) |
+| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | fix round 1 (R40): CI reds at `24e4eebc6` being fixed (R42); review run 402 reading the old tip |
 
 ## Decisions & deviations
 
@@ -892,6 +892,25 @@ time.
     in five files since `efb4842b7`. The server accepted the fingerprint: run 394 `awaiting-review`. CI was running.
   - Review run 402 dispatched 20:40:32 to the fresh `ccrc-pwa-brisk-prairie`, scoped to the round with ten checks,
     the panel, and whole-wave properties; brief `.superpowers/sdd/stall-watch-settings/w3-fr1-review-brief.md`.
+
+- **R42 (2026-10-12 21:23)**, fix round 1's wave-done is withdrawn: two CI reds the round caused.
+  - Mail 4413 from `ccrc-pwa-bright-cove`: PR #362's CI run 38305507333 has two red server shards at `24e4eebc6`, both
+    from this round, in files missing from its local list.
+    - `test/ask-instance-guard.test.ts` pins the spurious `ask-moved` that D-2403 documents: a SubagentStop
+      re-stamping an open dialog.
+    - `test/session-hook-merge-deny.test.ts`'s jq-program census floor reads 51 against 52, because of the fork fold.
+  - Ruling (mail 4414):
+    - Invert the first to pin the fix, keeping a control that a main-thread write still moves the stamp, and record
+      in D-4041 that it supersedes D-2403's bump for a main-thread wait only. The restamp pair stays.
+    - Scope `freshAskAt`'s D-2403 docstring in `server/src/registry.ts`, in words.
+    - Re-measure the floor and state its composition.
+    - Re-gate every server test that reads the hook's text or the hookstate.
+  - Run 394 cannot go back to `working` while review run 402 is open (`review-in-flight`). Review 402 reads
+    `24e4eebc6` and is left to finish. Once its report lands:
+    - close it `failed` if the worker's push made it stale, and do not rule on it;
+    - advance run 394 `working`, then `awaiting-review` on the new fingerprint;
+    - open a fresh review run scoped to the new commits. It takes 402's report as input and re-verifies its
+      findings at the new tip.
 
 ## Carried constraints (reviewers get these)
 
