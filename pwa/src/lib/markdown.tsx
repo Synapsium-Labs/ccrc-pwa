@@ -24,6 +24,7 @@ import dockerfile from 'highlight.js/lib/languages/dockerfile';
 import rust from 'highlight.js/lib/languages/rust';
 import go from 'highlight.js/lib/languages/go';
 import { remarkAlerts } from './remarkAlerts';
+import { MD_HIGHLIGHT_BLOCK_MAX_CHARS } from './markdownLimits';
 import '../session/chat.css';
 
 export const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|avif|bmp)(\?|#|$)/i;
@@ -86,8 +87,11 @@ export function keystrokeParts(raw: string): string[] | null {
 }
 
 /** Fenced code: language label + copy bar over a syntax-highlighted well.
- *  The bar is a SIBLING above the scrolling <pre>, never an overlay. */
-export function CodeBlock({ children }: { children?: ReactNode }): ReactNode {
+ *  The bar is a SIBLING above the scrolling <pre>, never an overlay.
+ *  Highlighted only when the language is registered, `highlight` is not `false`, and the block is at most
+ *  `MD_HIGHLIGHT_BLOCK_MAX_CHARS` characters (after the trailing-newline strip); a registered block over the cap
+ *  renders as plain text and says so in its label, its size in whole KiB of characters, rounded up. */
+export function CodeBlock({ children, highlight }: { children?: ReactNode; highlight?: boolean }): ReactNode {
   const [copied, setCopied] = useState(false);
   const codeEl = React.Children.toArray(children).find(React.isValidElement) as
     | React.ReactElement<{ className?: string; children?: ReactNode }>
@@ -95,7 +99,9 @@ export function CodeBlock({ children }: { children?: ReactNode }): ReactNode {
   const lang = (/language-([\w-]+)/.exec(codeEl?.props.className ?? '')?.[1] ?? '').toLowerCase();
   const label = LANG_LABEL[lang] ?? (lang || 'text');
   const raw = nodeText(children).replace(/\n$/, '');
-  const html = lang && hljs.getLanguage(lang)
+  const wanted = highlight !== false && Boolean(lang && hljs.getLanguage(lang));
+  const overCap = wanted && raw.length > MD_HIGHLIGHT_BLOCK_MAX_CHARS;
+  const html = wanted && !overCap
     ? hljs.highlight(raw, { language: lang, ignoreIllegals: true }).value // sync, never throws
     : null;
   const onCopy = useCallback(() => {
@@ -107,7 +113,9 @@ export function CodeBlock({ children }: { children?: ReactNode }): ReactNode {
   return (
     <div className="code-block">
       <div className="code-block-bar">
-        <span className="code-block-lang">{label}</span>
+        <span className="code-block-lang">
+          {overCap ? `${label} · not highlighted (${Math.ceil(raw.length / 1024)} KiB)` : label}
+        </span>
         <button type="button" className="code-block-copy" onClick={onCopy}
                 aria-label="Copy code" data-copied={copied || undefined}>
           <span aria-live="polite">{copied ? 'Copied' : 'Copy'}</span>
