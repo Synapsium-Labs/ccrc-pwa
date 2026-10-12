@@ -3750,29 +3750,49 @@ function porterStem(word) {
   return stem;
 }
 
+/** The combining marks FTS5 unicode61 drops inside a token at remove_diacritics 1, the default B1's `porter unicode61`
+ *  tables use: U+0300-0304, U+0306-030C, U+030F, U+0311, U+031B, U+0323-0328, U+032D-032E, U+0330-0331. Measured
+ *  against node:sqlite on every code point U+0080..U+2FFFF (the case `beltFold is unicode61's own fold`); every other
+ *  mark is a boundary to unicode61, so it is one to the belt and to the snippet locator (Task 12 fix round 3, F2). The
+ *  ONE definition: beltFold, foldToken and the token pattern below all read it. */
+const isDroppedMark = (c) => (c >= 0x300 && c <= 0x304) || (c >= 0x306 && c <= 0x30c) || c === 0x30f || c === 0x311
+  || c === 0x31b || (c >= 0x323 && c <= 0x328) || c === 0x32d || c === 0x32e || c === 0x330 || c === 0x331;
+
+/** A unicode61 token candidate: letters and numbers, and ONLY the marks unicode61 drops, which continue it. */
+const UNICODE61_WORD = (() => {
+  let marks = '';
+  for (let c = 0x300; c <= 0x36f; c += 1) if (isDroppedMark(c)) marks += `\\u${c.toString(16).padStart(4, '0')}`;
+  return new RegExp(`[\\p{L}\\p{N}${marks}]+`, 'gu');
+})();
+
+/** One code point as FTS5 `unicode61` (remove_diacritics=1) compares it, WITHOUT context: the simple case fold SQLite
+ *  applies per code point (never JavaScript's whole-string rules, which turn a final U+03A3 into U+03C2), then a base
+ *  ASCII Latin letter alone when the fold's canonical decomposition is that letter plus ONE dropped mark. A decomposition
+ *  with more marks (U+1ED9), a non-Latin base (Greek, Cyrillic) or a mark unicode61 keeps stays the folded code point. */
+function foldCodePoint(ch) {
+  if (ch.charCodeAt(0) < 0x80) return ch.toLowerCase();
+  const upper = ch.toUpperCase();
+  let simple = [...upper].length === 1 ? upper.toLowerCase() : ch.toLowerCase();
+  if ([...simple].length !== 1) simple = ch;
+  const parts = [...simple.normalize('NFD')];
+  return parts.length === 2 && /^[A-Za-z]$/.test(parts[0]) && isDroppedMark(parts[1].codePointAt(0)) ? parts[0].toLowerCase() : simple;
+}
+
 /** The comparison form of one unicode61 token candidate, as FTS5's default `porter unicode61` (remove_diacritics=1)
- *  compares it: lowercased, then folded per ORIGINAL code point. An explicit combining mark (U+0300 to U+036F) is
- *  removed; a code point whose canonical decomposition is a base plus ONE such mark folds to the base; one whose
- *  decomposition holds MORE THAN ONE mark (U+1ED9) stays as it is, which is the default mode's own refusal to fold it
- *  (mode 2 would). It is a comparison value only: the candidate's span in the source text is never rebuilt from it
- *  (Task 12 fix round 1, F2; round 2, F2). */
+ *  compares it: every original code point folded alone (foldCodePoint) and a dropped mark removed. It is a comparison
+ *  value only: the candidate's span in the source text is never rebuilt from it (Task 12 fix round 1, F2; round 2, F2;
+ *  round 3, F2). */
 function foldToken(word) {
   let out = '';
-  for (const ch of word.toLowerCase()) {
-    if (/^[\u0300-\u036f]$/.test(ch)) continue;
-    const d = ch.normalize('NFD');
-    out += (d.match(/[\u0300-\u036f]/g) ?? []).length > 1 ? ch : d.replace(/[\u0300-\u036f]/g, '');
-  }
+  for (const ch of word) if (!isDroppedMark(ch.codePointAt(0))) out += foldCodePoint(ch);
   return out;
 }
 
-/** Unicode61 token candidates with their original code-unit spans. Combining diacritical marks belong to the token
- *  they follow, as in FTS5, so a decomposed `e` + U+0301 is one candidate. */
-function unicode61Words(text) {
-  const words = [];
-  const word = /[\p{L}\p{N}\u0300-\u036f]+/gu;
-  for (let m = word.exec(text); m !== null; m = word.exec(text)) words.push({ text: m[0], at: m.index, end: m.index + m[0].length });
-  return words;
+/** Unicode61 token candidates with their original code-unit spans, lazily. The marks unicode61 drops belong to the
+ *  token they follow, as in FTS5, so a decomposed `e` + U+0301 is one candidate; every other mark is a boundary. */
+function* unicode61Words(text) {
+  const word = new RegExp(UNICODE61_WORD);
+  for (let m = word.exec(text); m !== null; m = word.exec(text)) yield { text: m[0], at: m.index, end: m.index + m[0].length };
 }
 
 /** A slice end that never splits a surrogate pair. */
@@ -5115,12 +5135,6 @@ const BELT_CODE = (() => {
 })();
 const FOLD_MEMO = new Map();
 const FOLD_MEMO_MAX = 4096;
-/** The combining marks FTS5 unicode61 drops inside a token at remove_diacritics 1, the default B1's `porter unicode61`
- *  tables use: U+0300-0304, U+0306-030C, U+030F, U+0311, U+031B, U+0323-0328, U+032D-032E, U+0330-0331. Measured
- *  against node:sqlite on every code point U+0080..U+2FFFF (the case `beltFold is unicode61's own fold`); every other
- *  mark is a boundary to unicode61, so it is one to the belt. */
-const isDroppedMark = (c) => (c >= 0x300 && c <= 0x304) || (c >= 0x306 && c <= 0x30c) || c === 0x30f || c === 0x311
-  || c === 0x31b || (c >= 0x323 && c <= 0x328) || c === 0x32d || c === 0x32e || c === 0x330 || c === 0x331;
 const isAsciiAlnum = (b) => (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5a) || (b >= 0x61 && b <= 0x7a);
 
 /** A non-ASCII code point's belt code, exactly as FTS5 unicode61 (remove_diacritics 1) folds it inside a token
@@ -5980,7 +5994,19 @@ export function snippetSpan(text, terms) {
   const content = String(text);
   let at = -1;
   let len = 0;
-  const phraseTokens = (term) => unicode61Words(String(term).replace(/\*+$/, '')).map(({ text }) => foldToken(text)).filter((t) => t.length > 0);
+  const phraseTokens = (term) => [...unicode61Words(String(term).replace(/\*+$/, ''))].map(({ text }) => foldToken(text)).filter((t) => t.length > 0);
+  // The source's candidates, folded on demand; one folded to nothing (removed marks only) is no token, as in FTS5.
+  const source = unicode61Words(content);
+  const words = [];
+  const wordAt = (i) => {
+    while (words.length <= i) {
+      const next = source.next();
+      if (next.done) return null;
+      const folded = foldToken(next.value.text);
+      if (folded.length > 0) words.push({ ...next.value, folded });
+    }
+    return words[i];
+  };
   for (const term of terms) {
     const raw = String(term);
     // FTS5 reads a terminal star as a prefix on the phrase's LAST token (`"error hand"*`), never on the first.
@@ -5990,25 +6016,22 @@ export function snippetSpan(text, terms) {
     const stems = needles.map(porterStem);
     // Whether the candidate (already folded) is needle `k`: the last needle of a prefix term by prefix, else by Porter stem.
     const is = (folded, k) => (prefix && k === needles.length - 1 ? folded.startsWith(needles[k]) : porterStem(folded) === stems[k]);
-    const words = /[\p{L}\p{N}\u0300-\u036f]+/gu;
-    for (let first = words.exec(content); first !== null; first = words.exec(content)) {
-      if (!is(foldToken(first[0]), 0)) continue;
-      // Probe the phrase with a separate cursor, so its later words remain candidate starts in the main scan.
-      const phrase = /[\p{L}\p{N}\u0300-\u036f]+/gu;
-      phrase.lastIndex = first.index + first[0].length;
+    for (let i = 0; wordAt(i) !== null; i += 1) {
+      const first = wordAt(i);
+      if (!is(first.folded, 0)) continue;
       let last = first;
       let matches = true;
       for (let offset = 1; offset < needles.length; offset += 1) {
-        const next = phrase.exec(content);
-        if (next === null || !is(foldToken(next[0]), offset)) {
+        const next = wordAt(i + offset);
+        if (next === null || !is(next.folded, offset)) {
           matches = false;
           break;
         }
         last = next;
       }
       if (!matches) continue;
-      const matchAt = first.index;
-      const matchLen = last.index + last[0].length - matchAt;
+      const matchAt = first.at;
+      const matchLen = last.end - matchAt;
       if (at === -1 || matchAt < at || (matchAt === at && matchLen > len)) {
         at = matchAt;
         len = matchLen;

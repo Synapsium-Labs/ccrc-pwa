@@ -1360,6 +1360,7 @@ describe("grep's snippet localization and Task 12 helper seam (W1-B2 task 12 fix
       GRX.user(T, 3, `${FILLER}studies are archived`),
       GRX.user(T, 4, `${FILLER}relational data follows`),
       GRX.user(T, 5, `\u1ed9 earlyhead ${FILLER}o closes the true default-fold hit`),
+      GRX.user(T, 6, `${FILLER}\u039f\u03a3 closes the context-free sigma hit`),
     ]);
   }, HEAVY);
 
@@ -1393,6 +1394,20 @@ describe("grep's snippet localization and Task 12 helper seam (W1-B2 task 12 fix
     expect(s).not.toContain('\u1ed9');
     expect(s).not.toContain('earlyhead');
     expect(s.startsWith('filler filler filler')).toBe(false);
+  }, HEAVY);
+
+  it('F2 round 3: `\u03bf\u03c3` is shown at the far source `\u039f\u03a3` (unicode61 folds sigma per code point, not by JavaScript\'s final-sigma rule), not at the body head', async () => {
+    const recall = await GRX.recall();
+    const rc = await GRX.rc(box, GRX.idA);
+    try {
+      const r = recall.runGrep(rc, await GRX.grepArgs(['\u03bf\u03c3']));
+      expect(r.exit).toBe(0);
+      expect(r.items, 'FTS returned exactly one blob').toHaveLength(1);
+      const s = String(r.items[0]?.snippet);
+      expect(s).toContain('\u039f\u03a3 closes the context-free sigma hit');
+      expect(s).not.toContain('filler filler filler filler filler filler filler filler');
+      expect(s.startsWith('filler filler filler')).toBe(false);
+    } finally { rc.db.close(); }
   }, HEAVY);
 
   it('the accepted Porter localizations survive: studying/studies, relate/relational', async () => {
