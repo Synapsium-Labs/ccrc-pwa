@@ -1,0 +1,152 @@
+// The Markdown pre-scan and the UTF-8 byte count (native Docs reader, W4 Task 3; design 2026-10-01 section 4.10).
+// `prescanMarkdown` runs before any parse, in chat's synchronous path and in the parse worker: one iterative pass
+// over the lines that refuses the two shapes that overflow the parser's stack, deep containers on one line and a
+// long run of one emphasis delimiter. It bounds depth, not time; the worker's budget is the only time bound.
+//
+// Imports only `markdownLimits.ts`: the parse worker's closure reaches this file (`markdown-purity.test.ts`).
+import { MD_MAX_CONTAINER_DEPTH, MD_MAX_DELIMITER_RUN } from './markdownLimits';
+
+export type PrescanResult =
+  | { ok: true }
+  | { ok: false; why: 'container-depth' | 'delimiter-run'; line: number; value: number };
+
+/** The open fence a line starts (up to 3 spaces, then 3 or more backticks or tildes), or `undefined`. A backtick
+ *  fence's info string may not contain a backtick (CommonMark), so "```a`b" opens nothing. */
+function fenceOpen(line: string): { ch: string; len: number } | undefined {
+  let i = 0;
+  while (i < 3 && line.charCodeAt(i) === 0x20) i += 1;
+  const ch = line[i];
+  if (ch !== '`' && ch !== '~') return undefined;
+  let j = i;
+  while (line[j] === ch) j += 1;
+  if (j - i < 3) return undefined;
+  if (ch === '`' && line.indexOf('`', j) !== -1) return undefined;
+  return { ch, len: j - i };
+}
+
+/** Whether `line` closes a fence of `ch` at least `len` long: up to 3 spaces, the run, then only spaces or tabs. */
+function fenceCloses(line: string, ch: string, len: number): boolean {
+  let i = 0;
+  while (i < 3 && line.charCodeAt(i) === 0x20) i += 1;
+  let j = i;
+  while (line[j] === ch) j += 1;
+  if (j - i < len) return false;
+  for (; j < line.length; j += 1) {
+    const c = line.charCodeAt(j);
+    if (c !== 0x20 && c !== 0x09) return false;
+  }
+  return true;
+}
+
+const isDigit = (c: number): boolean => c >= 0x30 && c <= 0x39;
+const isBlank = (c: number): boolean => c === 0x20 || c === 0x09;
+
+/** The container depth of one line: repeatedly skip up to 3 spaces, then consume `>` (and one optional space) or
+ *  a list marker (`-`, `+`, `*`, or 1-9 digits then `.` or `)`) together with the space or tab it needs. The count
+ *  runs to the end of the markers, so a refusal reports the line's whole depth. */
+function containerDepth(line: string): number {
+  let depth = 0;
+  let i = 0;
+  for (;;) {
+    let s = 0;
+    while (s < 3 && line.charCodeAt(i) === 0x20) {
+      i += 1;
+      s += 1;
+    }
+    const c = line.charCodeAt(i);
+    if (c === 0x3e /* > */) {
+      i += 1;
+      if (line.charCodeAt(i) === 0x20) i += 1;
+      depth += 1;
+      continue;
+    }
+    if ((c === 0x2d /* - */ || c === 0x2b /* + */ || c === 0x2a /* * */) && isBlank(line.charCodeAt(i + 1))) {
+      i += 2;
+      depth += 1;
+      continue;
+    }
+    if (isDigit(c)) {
+      let j = i;
+      while (isDigit(line.charCodeAt(j))) j += 1;
+      const d = line.charCodeAt(j);
+      if (j - i <= 9 && (d === 0x2e /* . */ || d === 0x29 /* ) */) && isBlank(line.charCodeAt(j + 1))) {
+        i = j + 2;
+        depth += 1;
+        continue;
+      }
+    }
+    return depth;
+  }
+}
+
+/** The longest run of `*` or of `_` on one line (a run is one character repeated). */
+function longestRun(line: string): number {
+  let best = 0;
+  let run = 0;
+  let prev = -1;
+  for (let i = 0; i < line.length; i += 1) {
+    const c = line.charCodeAt(i);
+    if (c === 0x2a || c === 0x5f) {
+      run = c === prev ? run + 1 : 1;
+      if (run > best) best = run;
+    } else {
+      run = 0;
+    }
+    prev = c;
+  }
+  return best;
+}
+
+/** The two limits a pre-scan applies: the most container markers on one line and the longest delimiter run. */
+export interface PrescanLimits {
+  readonly containerDepth: number;
+  readonly delimiterRun: number;
+}
+
+/** One pass over the lines (LF, CRLF and CR each end one), skipping fenced blocks for both checks: the first line
+ *  whose container depth is over `limits.containerDepth`, or whose longest delimiter run is over
+ *  `limits.delimiterRun`, refuses, with its 1-based number and its measured value. An unclosed fence runs to the
+ *  end, as it does for the parser. Production calls it only through `prescanMarkdown`; tests call it with lower
+ *  limits to measure how deep a real document goes. */
+export function prescanWithin(src: string, limits: PrescanLimits): PrescanResult {
+  const lines = src.split(/\r\n|\r|\n/);
+  let fence: { ch: string; len: number } | undefined;
+  for (let n = 0; n < lines.length; n += 1) {
+    const line = lines[n]!;
+    if (fence !== undefined) {
+      if (fenceCloses(line, fence.ch, fence.len)) fence = undefined;
+      continue;
+    }
+    fence = fenceOpen(line);
+    if (fence !== undefined) continue;
+    const depth = containerDepth(line);
+    if (depth > limits.containerDepth) return { ok: false, why: 'container-depth', line: n + 1, value: depth };
+    const run = longestRun(line);
+    if (run > limits.delimiterRun) return { ok: false, why: 'delimiter-run', line: n + 1, value: run };
+  }
+  return { ok: true };
+}
+
+/** The pre-scan at `MD_MAX_CONTAINER_DEPTH` and `MD_MAX_DELIMITER_RUN`: what runs before every parse. */
+export function prescanMarkdown(src: string): PrescanResult {
+  return prescanWithin(src, { containerDepth: MD_MAX_CONTAINER_DEPTH, delimiterRun: MD_MAX_DELIMITER_RUN });
+}
+
+/** The UTF-8 byte length of `s`, counted without allocating: a surrogate pair is 4 bytes, and a lone surrogate is
+ *  3 (`TextEncoder` writes it as U+FFFD). */
+export function utf8ByteLength(s: string): number {
+  let bytes = 0;
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.charCodeAt(i);
+    if (c < 0x80) bytes += 1;
+    else if (c < 0x800) bytes += 2;
+    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) {
+      const d = s.charCodeAt(i + 1);
+      if (d >= 0xdc00 && d <= 0xdfff) {
+        bytes += 4;
+        i += 1;
+      } else bytes += 3;
+    } else bytes += 3;
+  }
+  return bytes;
+}
