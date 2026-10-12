@@ -3518,14 +3518,19 @@ made, and each residual they stated, is named under the rule it touches.
 - Task 3: `population-header-in-task-2-style`.
 - Task 4: `licence-header-in-task-2-style`, `presence-null-already-red`, `r23-sweep-of-contract-and-ruling-tokens`, and
   fix round 1's pacing pins (each answer's effect on the hold, the presence defer and the continuity clocks, and the
-  rewritten not-witnessed case).
+  rewritten not-witnessed case), and `changed-recently-row-uses-a-later-idleat`.
 - Task 5: `stuck-end-exported`, `would-collect-body-calls-collect-who`, `watch-interim-empty-collector`, and fix round
-  1's comment above the run-less count line, on which of its words are ccd's own and which are this build's labels.
+  1's comment above the run-less count line, on which of its words are ccd's own and which are this build's labels;
+  fix round 1's shape choices `reasons-hide-row-per-test`, `records-in-doubt-takes-the-doubts`,
+  `collect-said-word-nullable` and `collect-read-what-exported`, a CONTROL lane row (an act `failed` with a non-empty
+  token keeps the answer body), and three one-clause docstrings beyond the three ruled.
 - Task 6: `outcome-detail-is-diagnostic` and `ccdargv-collect-docstrings-rewritten`.
 - Task 7: `collect-lane-fields-beside-the-child-reclaim-lane`, `older-pass-guard-is-shadowed-by-the-prune`,
   `t7-38-act-queue-pinned-by-the-registry-listing-count`, `t7-22-reds-as-a-timeout`,
   `publish-docstring-returns-rewrapped`, fix round 1's lane cases for a pause seen at step 5, the learning audit's
-  `not-asked` and a learning call that never settles, and its two comments on the flip row.
+  `not-asked` and a learning call that never settles, its two comments on the flip row, and fix round 1's
+  `box-probe-stamp-is-a-new-map`, `probes-read-where-they-live-mid-sequence`, `f4-answers-arrive-a-whole-interval-apart`
+  and `f4-step-5-hold-armed-after-the-probe-pass`.
 - Task 8: `collect-act-cap-after-last-await-pinned`, `budget-test-pins-the-read-values`,
   `census-title-control-pins-its-width`, `h6-scan-follows-the-reshaped-audit-site`,
   `destructive-builder-fence-reads-whole-files`, fix round 1's pin that the act slot's bound covers twice
