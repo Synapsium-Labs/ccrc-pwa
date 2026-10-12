@@ -47,6 +47,19 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-12 11:02 — THE COLLECTOR IS ARMED. The operator ruled "I want YOU to arm it", and at 11:02:30 I created `$REG/collect-lane-live` on the fleet box.** That file is the only thing I touched in the registry, as a one-off act at the operator's explicit instruction. The rule that sessions never touch `~/.cc-sessions` stands for everything else.
+  - **This answers the operator's question 2:** the collector is armed BEFORE the path-identity follow-up's W2. What arming before W2 accepts was told to the operator first. A collect that drops only the witness can close a kept-temp-root attention item while the leaf stays on disk. The two tail-drop fixes can leave a temp root unwitnessed: that is a leak, never a removal.
+  - **The README's pre-arming checklist, measured at 10:55–11:02:**
+    - the fleet box's `ccd caps` lists `collect-v1` and `reclaim-pause-v1`;
+    - every "would collect" names an orphan whose run is closed: `MekWarLive-brisk-canyon` (363), `ccrc-pwa-brisk-prairie` (369) and `ccrc-pwa-still-harbor` (364);
+    - `reclaim-paused` and `coordinator-paused` are absent;
+    - the feed's last 200 events hold no box-wide line. I cannot read the /runs cleanup row through the client.
+  - **What the lane said before arming:**
+    - `ccrc-pwa-clear-summit` (347) is refused `containment-unproven`: a nested git worktree in its temp root names a git directory that is gone. The collector never takes it, and it stays for a person.
+    - Some answers were transient `in-use`, from holders that later went away.
+  - **No Settings switch exists.** The marker is the only control. `single-definition.test.ts`'s wave-9 block pins that nothing in the tree writes it. The broader stop is the reclaim pause (`POST /api/coord/reclaim-pause`, the console's child-reclaim banner), which stops reclaim and the collector alike. A Settings control would be a design change (a writer and a route).
+  - **Next.** A read-only feed watcher waits for the lane's "now live" switch row and the first `temp root collected`. I will record them.
+
 - **2026-10-12 08:01 — WAVE 9 IS DEPLOYED: v0.0.149 (`28e8dc1b2`) on both boxes, by the updater. Nobody rolled it out by hand.**
   - **Release.** `release-main` published prerelease v0.0.149 at 07:29:38.
   - **Fleet box.** It moved `from: pwa` (the auto move). `~/ccrc` points at `ccrc-versions/v0.0.149` from 07:58. At 07:59 it read `[incomplete]` while the update restarted the agent, and at 08:01 it read `[current]`. The phase is `done`.
