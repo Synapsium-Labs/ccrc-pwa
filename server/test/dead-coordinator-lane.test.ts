@@ -1312,6 +1312,8 @@ describe('the breaker\'s typed state: dirty before any anchor change, clean only
   const scripted = async (o: {
     ids: string[]; dead: string[]; events: Record<number, (f: Fixture) => void>; passes: number[];
     fail?: (f: Fixture, minute: number) => (() => void) | null; restartAfter?: number; atRestart?: (f: Fixture) => void;
+    /** Called after each pass, with the minute — a measurement mid-world. */
+    after?: (f: Fixture, minute: number, stateOfRun: (id: string) => string) => void;
   }) => {
     const f = await fixture();
     f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
@@ -1327,6 +1329,7 @@ describe('the breaker\'s typed state: dirty before any anchor change, clean only
         const restore = o.fail?.(f, t) ?? null;
         await f.pass();
         restore?.();
+        o.after?.(f, t, (id) => f.stateOf(r[id]!));
       }
       if (o.restartAfter === t) { o.atRestart?.(f); f.restart(); }
     }
@@ -1399,6 +1402,32 @@ describe('the breaker\'s typed state: dirty before any anchor change, clean only
       expect(r.breaker.length).toBe(1);
     }, HEAVY);
   }
+
+  // THE REVIEW OF D-4857: one failed write must never let an ARMED lane act sooner. A is crashed from 0, doubted on the pass at
+  // 50 ONLY (its anchor deleted: the hour restarts), crashed again from 51: a lane with no failure re-anchors it at 51 and
+  // cannot end it before 111.
+  const P_A = [0, 9, 18, 27, 36, 45, 50, 51, 60, 69, 78, 87, 96, 105, 111];
+  const evA: Record<number, (f: Fixture) => void> = { 50: (f) => { doubt(f, A); }, 51: (f) => { undoubt(f, A); } };
+  const hourOfA = async (fail: (f: Fixture, minute: number) => (() => void) | null, restartAfter?: number) => {
+    const seen: Record<number, string> = {};
+    await scripted({ ids: [A], dead: [A], events: evA, passes: P_A, fail, ...(restartAfter === undefined ? {} : { restartAfter }),
+      after: (_f, minute, st) => { seen[minute] = st(A); } });
+    expect([seen[60], seen[105]], 'the doubt at 50 restarted the hour: not ended before 111').toEqual(['working', 'working']);
+    expect(seen[111], 'ended once an hour has passed since 51, not never').toBe('failed');
+  };
+  it('P1: a DIRTY MARK that fails on the pass that doubts A keeps its anchor delete PENDING — the hour still restarts, and A is not ended at 60', async () => {
+    await hourOfA((f, minute) => (minute === 50 ? failSql(f, /^INSERT INTO dead_coordinator_breaker_state/) : null));
+  }, HEAVY);
+  it('P3: a COMMIT that fails on that pass, then a restart: the conservative seed continues NO durable anchor, so the hour restarts at its pass', async () => {
+    await hourOfA((f, minute) => (minute === 50 ? failSql(f, /^UPDATE dead_coordinator_breaker_state/) : null), 50);
+  }, HEAVY);
+  it('P2: a DIRTY MARK that fails on the pass that trips {M, N} still moves the in-memory hold: doubted from the next pass, they hold, and Q is not ended', async () => {
+    const r = await scripted({ ids: [Q, M, N], dead: [Q], passes: [0, 9, 18, 27, 36, 45, 54, 55, 60, 69],
+      events: { 53: (f) => { f.live.delete(M); f.live.delete(N); }, 55: (f) => { doubt(f, M); doubt(f, N); } },
+      fail: (f, minute) => (minute === 54 ? failSql(f, /^INSERT INTO dead_coordinator_breaker_state/) : null) });
+    expect(r.breaker, 'the trip formed on the failed pass stands').toEqual([['breaker', [M, N]]]);
+    expect(r.states[Q], 'Q, due at 60, is held').toBe('working');
+  }, HEAVY);
 
   it('A LONE-SURROGATE claimant is held across a restart: its id has a spelling, so the record lands and the act is not withheld for it', async () => {
     const S = 'demo-coord-\ud800';

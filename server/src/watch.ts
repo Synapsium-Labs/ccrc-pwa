@@ -4980,7 +4980,10 @@ export class FleetWatcher {
       if (c.kind === 'crashed') {
         const supervisedAt = records.find((r) => r.id === id)?.supervisedAt ?? null;
         // A supervisor heartbeat LATER than the anchor is supervision since it began: a new episode, anchored afresh (D-4825).
-        const prev = anchors.get(id) ?? null;
+        // On the CONSERVATIVE SEED's pass (a state that was dirty, absent or unreadable) no durable anchor is taken as
+        // continuing: a delete this process's predecessor decided may never have landed, so every crashed claimant's hour
+        // restarts at this pass (review of D-4857, item 3). That only delays an act.
+        const prev = seedCause !== null ? null : anchors.get(id) ?? null;
         // ...or a trusted journal's newest successful spawn later than it (D-4827): the unsupervised fallbacks stamp no heartbeat.
         const spawnedAt = journalSpawnedAtOf(id);
         const fresh = deadCoordinatorNewEpisode(prev, supervisedAt, at, spawnedAt);
@@ -5020,17 +5023,14 @@ export class FleetWatcher {
     const before = this.deadCoordinatorBreakerHeld;
     const next = breaker.tripped ? breaker.members : [];
     // THE COMMIT (D-4857): the dirty mark alone, then ONE transaction for the anchor changes, the exact snapshot and the
-    // state clean. A dirty mark that did not land is a pass NOT TAKEN for the hold: no anchor change, no act, and the
-    // in-memory hold is not moved (a restart would read the older clean state, which this process then still matches).
-    // A commit that did not land keeps the NEW in-memory hold (monotone), with the state dirty, so a restart is
-    // conservative; the next pass re-sends every change. Either way nothing acts.
+    // state clean. Whatever lands, the in-memory hold MOVES to this pass's (monotone): a dirty mark or a commit that did
+    // not land keeps the anchor changes pending (laid over the durable anchors, re-sent by the next commit), and the pass
+    // acts on nothing (review of D-4857, items 1 and 2: a failed write must never forget a trip or a doubt).
     const commit = this.commitDeadCoordinatorBreaker(coord, next, upserts, deletes, ids, before);
-    if (commit !== 'mark-failed') {
-      this.deadCoordinatorBreakerHeld = next;
-      if (seedCause !== null) {
-        this.deadCoordinatorBreakerSeeded = true;
-        this.noteDeadCoordinatorSeed(coord, seedCause, next.map((m) => m.id), breaker.tripped, ids);
-      }
+    this.deadCoordinatorBreakerHeld = next;
+    if (seedCause !== null) {
+      this.deadCoordinatorBreakerSeeded = true;
+      this.noteDeadCoordinatorSeed(coord, seedCause, next.map((m) => m.id), breaker.tripped, ids, commit === 'committed');
     }
     const recorded = commit === 'committed' || commit === 'unchanged';
     const key = deadCoordinatorBreakerKey(breaker);
@@ -5064,8 +5064,10 @@ export class FleetWatcher {
    *  (`AnchorsPending`). Four answers:
    *   - `unchanged`: nothing to change — no anchor, the held set's key is what the last landed commit wrote, and the state
    *     is known clean. Nothing is written; the pass may act;
-   *   - `mark-failed`: the dirty mark did not land. NO anchor change, no act, and the caller does not move the in-memory
-   *     hold or the pending changes: a pass not taken;
+   *   - `mark-failed`: the dirty mark did not land. NO anchor change and no act; the changes stay pending for the next
+   *     commit, as on `commit-failed`, and the caller moves the in-memory hold. The state still reads as the last commit
+   *     left it (clean, if it was), older than this process's hold: a restart before the next commit lands seeds that
+   *     older state (the residual §12 names);
    *   - `commit-failed`: the mark landed and the transaction did not (a refusal, a statement or a COMMIT that threw).
    *     Nothing of it moved, the state stays dirty, the changes stay pending for the next commit, and the pass acts on
    *     nothing; the caller keeps the new in-memory hold;
@@ -5086,7 +5088,8 @@ export class FleetWatcher {
     const mark = coord.markDeadCoordinatorBreakerDirty(Date.now());
     this.deadCoordinatorBreakerDurableClean = false;
     if (!mark.ok) {
-      console.warn(`ccrc-server: sweepDeadCoordinators could not mark the breaker's state dirty (${mark.detail}) — no anchor changed and no act this pass`);
+      for (const [id, a] of changes) this.deadCoordinatorAnchorsPending.set(id, a);
+      console.warn(`ccrc-server: sweepDeadCoordinators could not mark the breaker's state dirty (${mark.detail}) — no anchor changed and no act this pass; the changes stay pending`);
       return 'mark-failed';
     }
     const record: number[] = [];
@@ -5117,18 +5120,21 @@ export class FleetWatcher {
 
   /** The words for a pass that seeded the hold conservatively (D-4857; review 382, R2): ONE warn line and ONE feed row,
    *  naming the cause — `no breaker state yet` (absent), a state left dirty, or a row it could not read (a bounded
-   *  reason, never the row's content) — through `recordRows`. They are said once because the pass that seeds sets
-   *  `Seeded`. No new attention kind, no wire word. */
+   *  reason, never the row's content) — through `recordRows`, saying whether that pass's record LANDED. They are said
+   *  once because the pass that seeds sets `Seeded`. No new attention kind, no wire word. */
   private noteDeadCoordinatorSeed(
     coord: CoordStore, cause: DeadCoordinatorSeedCause, held: readonly string[], tripped: boolean, ids: readonly string[],
+    landed: boolean,
   ): void {
-    const rest = '— it holds every coordinator this pass did not see released, flagged, and writes';
+    const record = cause.kind === 'absent' ? 'the first state' : 'a fresh record';
+    const rest = `— it holds every coordinator this pass did not see released, flagged, and restarts every crashed coordinator's hour; ${landed
+      ? `it wrote ${record}` : `${record} did not land, so it ends nothing until one does`}`;
     console.warn(cause.kind === 'absent'
-      ? `ccrc-server: sweepDeadCoordinators: no breaker state yet ${rest} the first state`
+      ? `ccrc-server: sweepDeadCoordinators: no breaker state yet ${rest}`
       : cause.kind === 'dirty'
-        ? `ccrc-server: sweepDeadCoordinators found the breaker's state left dirty (generation ${cause.generation}) ${rest} a fresh record`
-        : `ccrc-server: sweepDeadCoordinators could not read the breaker's record of its hold (the breaker state row: ${cause.reason}) ${rest} a fresh record`);
-    recordDeadCoordinatorBreakerSeed({ coord, notifyLog: this.deps.notifyLog }, cause, held, tripped, ids);
+        ? `ccrc-server: sweepDeadCoordinators found the breaker's state left dirty (generation ${cause.generation}) ${rest}`
+        : `ccrc-server: sweepDeadCoordinators could not read the breaker's record of its hold (the breaker state row: ${cause.reason}) ${rest}`);
+    recordDeadCoordinatorBreakerSeed({ coord, notifyLog: this.deps.notifyLog }, cause, held, tripped, ids, landed);
   }
 
   /** The act — or its shadow — for one due claimant, on the coordination serialiser. Its outcome, or `null` when it

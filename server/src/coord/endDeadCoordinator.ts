@@ -315,7 +315,7 @@ export function recordDeadCoordinatorBreaker(
  *  the population, else `fleet`). */
 export function recordDeadCoordinatorBreakerSeed(
   deps: Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, cause: DeadCoordinatorSeedCause, held: readonly string[],
-  tripped: boolean, population: readonly string[],
+  tripped: boolean, population: readonly string[], landed: boolean,
 ): void {
-  recordRows(deps, held[0] ?? population[0] ?? 'fleet', [deadCoordinatorBreakerSeedFeedRow(cause, held, tripped)], 'breaker seed');
+  recordRows(deps, held[0] ?? population[0] ?? 'fleet', [deadCoordinatorBreakerSeedFeedRow(cause, held, tripped, landed)], 'breaker seed');
 }

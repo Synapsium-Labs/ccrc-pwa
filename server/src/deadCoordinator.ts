@@ -937,9 +937,10 @@ export type DeadCoordinatorSeedCause =
 /** The feed row for a pass that seeded its hold conservatively: written once, by the pass that seeds, through
  *  `recordRows` — a record, never a push, and no new attention kind. `held` is who the breaker held that pass as members;
  *  `tripped` is whether it tripped at all (review 382, N3: the words key on the breaker, not on `held` — a trip on a
- *  fleet-wide doubt has no members). */
+ *  fleet-wide doubt has no members). `landed` is whether that pass's record was written: the words never claim a write
+ *  that failed. */
 export function deadCoordinatorBreakerSeedFeedRow(
-  cause: DeadCoordinatorSeedCause, held: readonly string[], tripped: boolean,
+  cause: DeadCoordinatorSeedCause, held: readonly string[], tripped: boolean, landed: boolean,
 ): { readonly title: string; readonly body: string } {
   const [title, lead] = cause.kind === 'absent'
     ? ['dead coordinator: no breaker state yet',
@@ -949,7 +950,9 @@ export function deadCoordinatorBreakerSeedFeedRow(
         `The lane found its breaker state left dirty (generation ${cause.generation}: a pass marked it before changing anchors, and its commit did not land), `]
       : ['dead coordinator: breaker record unreadable',
         `The lane could not read its record of the breaker's hold (the breaker state row: ${cause.reason}), `];
-  const tail = `It writes ${cause.kind === 'absent' ? 'the first' : 'a fresh'} record, and ends nothing until that record is written.`;
+  const record = cause.kind === 'absent' ? 'the first record' : 'a fresh record';
+  const tail = 'Every crashed coordinator\'s hour restarts at this pass. '
+    + (landed ? `It wrote ${record}.` : `It could not write ${record} yet, and ends nothing until one is written.`);
   const none = 'so it held every coordinator this pass did not see alive, stopped or put down on purpose, but fewer than two stood, so no cluster formed';
   return { title,
     body: held.length > 0
