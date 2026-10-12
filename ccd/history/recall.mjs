@@ -580,12 +580,16 @@ function scopePrefixes(rc) {
 }
 
 /** Each entry's covering leaf, through node_sources_entry (§8.4). node_sources holds leaf edges only (§6.3). Two
- *  fork leaves can hold one shared row (DM36, DM37); it groups under the lower node_id, deterministically. */
+ *  fork leaves can hold one shared row (DM36, DM37); it groups under the lower node_id, deterministically. Only a
+ *  leaf of the scope's own families counts: an entry is store-global, so another family's leaf can hold the same
+ *  row, and that leaf is not this scope's to show. */
 function coveringLeaves(rc, entryIds) {
   if (entryIds.length === 0) return new Map();
   const rows = rc.db.prepare(`SELECT ns.entry_id AS entry_id, min(ns.node_id) AS node_id
       FROM ${versioned(rc, 'node_sources', 'ns', ['node_id', 'entry_id'])}
-      WHERE ns.entry_id IN (SELECT value FROM json_each(?)) GROUP BY ns.entry_id`).all(JSON.stringify(entryIds));
+      JOIN ${versioned(rc, 'nodes', 'n', ['node_id', 'session_pk'])} ON n.node_id = ns.node_id
+      WHERE ns.entry_id IN (SELECT value FROM json_each(?)) AND n.session_pk IN (SELECT value FROM json_each(?))
+      GROUP BY ns.entry_id`).all(JSON.stringify(entryIds), JSON.stringify(rc.scope.sessionPks));
   return new Map(rows.map((r) => [r.entry_id, r.node_id]));
 }
 
@@ -603,7 +607,8 @@ function leafHeads(rc, ids) {
  *    items) fits OUTPUT_CAP minus FRAME_RESERVE. At least one hit is always shown. Those K are then grouped; groups
  *    are ordered by their best hit, and hits keep rank order inside a group.
  *  - The next cursor is pos + K, so the cap never skips a hit.
- *  - A leaf group shows the leaf's display prefix, its time range and its gist, redacted then cut (one line,
+ *  - A leaf group shows the leaf's display prefix, its time range and its gist, redacted as every read verb
+ *    redacts (redactForDisplay, so the index's escape readings too), then cut (one line,
  *    SNIPPET_MAX). Every recalled field sits in an escaped envelope.
  *  - `total` is the true in-scope count; past RANK_POOL there is no next page, and a hint says so. */
 function renderHits(rc, pool, termsOf, a, page, deps = {}) {
@@ -626,7 +631,7 @@ function renderHits(rc, pool, termsOf, a, page, deps = {}) {
       const shown = pre.get(g) ?? g;
       text = `── leaf ${shown} ${iso(n?.earliest_ms ?? null)} → ${iso(n?.latest_ms ?? null)}`;
       if (n !== undefined && n.gist !== null) {
-        const gist = redactField(n.gist, rc.pairIdx).replace(/\s+/g, ' ').trim();
+        const gist = redactForDisplay(n.gist, rc.pairIdx).replace(/\s+/g, ' ').trim();
         const cut = snippetLine(gist);
         text += `\n  ${recallEnvelope({ src: 'node', id: shown, ts: n.latest_ms, role: null, text: cut })}`;
       }

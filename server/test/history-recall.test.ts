@@ -1767,3 +1767,118 @@ describe('grep output: grouped under covering leaves, a live tail, escaped envel
     expect(scope.families.length).toBeLessThanOrEqual(3);
   }, 60_000);
 });
+
+describe("grep groups only under the scope's own leaves and shows leaf gists as read verbs do (W1-B2 task 13 fix round 1)", () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  const TAG_A = 0x41; const TAG_B = 0x42;
+  /** The escape-glued secret of the Task 7A witness (history-lib.test.ts): built at runtime, one registered pair. */
+  const V = Array.from({ length: 40 }, (_, i) => 'abcdefghjkmnpqrstuvwxyz23456789'[(i * 7 + 3) % 31]).join('');
+  const glued = JSON.stringify({ text: `\n${V}` });   // a literal backslash-n glued to V
+  /** The reviewer's context-only text: literal backslash-quotes, no pair involved. */
+  const KEYVAL = 'abcdefghijklmnopqrstuv';
+  const escaped = `{\\"api_key\\":\\"${KEYVAL}\\"}`;
+  const OUT = 'L' + '0'.repeat(20);
+  let box: rH.HistoryBox;
+  let fx: { rows: rFx.Row[]; spans: string[][]; tail: string[] };
+  let leavesA: string[] = [];
+  let leavesB: string[] = [];
+  let outSessionPk: number | null = null;
+  let famA: number[] = [];
+  let famB: number[] = [];
+  let edgeCount = 0;
+  let gistA0 = '';
+  let gistA1 = '';
+  beforeAll(async () => {
+    if (process.platform === 'darwin') return;
+    box = rH.makeHistoryBox('ccrc-hist-grep-leafscope-');
+    fx = GRX_C.compactions(TAG_A, 2, (i) => GRX_C.summary({
+      current: i === 1 ? `${glued} Span 1 current work.` : `${escaped} Span 2 current work.`,
+      next: `Span ${i} next step.`,
+    }));
+    GRX.seed(box, TAG_A, GRX.idA, 'demo', fx.rows);
+    const fxB = GRX_C.compactions(TAG_B, 1, (i) => GRX_C.summary({ current: `Family B span ${i} work.`, next: `Family B span ${i} next.` }));
+    GRX.seed(box, TAG_B, GRX.idB, 'demo', fxB.rows, 'claude-b');
+    leavesA = GRX_C.nodes(box, GRX.idA).leaves;
+    leavesB = GRX_C.nodes(box, GRX.idB).leaves;
+    const { createHash } = await import('node:crypto');
+    const store = await import('../../ccd/history/store.mjs');
+    const w = store.openWriter(libRead.historyPaths(box.home).dbFile);
+    try {
+      const cols = (w.prepare('PRAGMA table_info(nodes)').all() as unknown as Array<{ name: string }>).map((c) => c.name);
+      w.prepare(`INSERT INTO nodes (${cols.join(', ')}) SELECT ${cols.map((c) => (c === 'node_id' || c === 'gist' ? '?' : c)).join(', ')}
+        FROM nodes WHERE node_id = ?`).run(OUT, 'zqoutsidegist marker', leavesB[0]!);
+      const eid = (w.prepare('SELECT entry_id FROM entries WHERE uuid = ?').get(fx.spans[0]![0]!) as { entry_id: number }).entry_id;
+      w.prepare('INSERT INTO node_sources (node_id, entry_id, ord) VALUES (?, ?, 0)').run(OUT, eid);
+      w.prepare('INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, ?)')
+        .run(V.length, createHash('sha256').update(V).digest(), 1_700_000_000_000);
+      edgeCount = Number((w.prepare('SELECT count(*) AS n FROM node_sources WHERE entry_id = ?').get(eid) as { n: number }).n);
+      outSessionPk = Number((w.prepare('SELECT session_pk FROM nodes WHERE node_id = ?').get(OUT) as { session_pk: number }).session_pk);
+      const pks = (id: string): number[] => (w.prepare('SELECT session_pk FROM sessions WHERE ccrc_id = ?').all(id) as unknown as Array<{ session_pk: number }>).map((r) => Number(r.session_pk));
+      famA = pks(GRX.idA);
+      famB = pks(GRX.idB);
+      gistA0 = String((w.prepare('SELECT gist FROM nodes WHERE node_id = ?').get(leavesA[0]!) as { gist: string | null }).gist);
+      gistA1 = String((w.prepare('SELECT gist FROM nodes WHERE node_id = ?').get(leavesA[1]!) as { gist: string | null }).gist);
+    } finally { w.close(); }
+  }, 180_000);
+  const grep = (args: string[]): CliRun => GRX.cli(box, GRX.idA, ['grep', ...args]);
+  const headsOf = (out: string): string[] => [...out.matchAll(/^── leaf (L[0-9a-f]+) /gm)].map((m) => m[1]!);
+
+  it('grep from a family never groups an in-scope hit under an outside leaf', () => {
+    expect(leavesA, 'CONTROL: family A has one leaf per boundary').toHaveLength(2);
+    expect(leavesB.length, 'CONTROL: family B has a leaf of its own').toBeGreaterThanOrEqual(1);
+    expect(OUT < leavesA[0]!, 'CONTROL: the outside leaf sorts below family A\'s first leaf').toBe(true);
+    expect(leavesA.some((l) => l.startsWith('L000000')), 'CONTROL: no family-A leaf starts with L000000').toBe(false);
+    expect(outSessionPk, 'CONTROL: the outside leaf keeps family B\'s session').not.toBeNull();
+    expect(famB.includes(outSessionPk!), 'CONTROL: it is in family B').toBe(true);
+    expect(famA.includes(outSessionPk!), 'CONTROL: and not in family A').toBe(false);
+    expect(edgeCount, 'CONTROL: the span-1 entry has two node_sources edges').toBe(2);
+    const j = grep(['zqspan1', '--json']);
+    expect(j.code, `CONTROL: exit 0: ${j.stderr}`).toBe(0);
+    const mine = GRX.items(j).filter((x) => fx.spans[0]!.includes(String(x.entry_uuid)));
+    expect(mine, 'CONTROL: both span-1 rows are hits').toHaveLength(2);
+    for (const x of mine) expect(x.node_id, 'every span-1 item groups under family A\'s own leaf').toBe(leavesA[0]);
+    expect(j.stdout, 'the JSON never names the outside leaf').not.toContain(OUT);
+    const h = grep(['zqspan1']);
+    expect(h.code, `CONTROL: exit 0: ${h.stderr}`).toBe(0);
+    const heads = headsOf(h.stdout);
+    expect(heads, 'one leaf header').toHaveLength(1);
+    expect(heads[0]!.length >= 7 && leavesA[0]!.startsWith(heads[0]!), 'the header is family A\'s first leaf').toBe(true);
+    expect(h.stdout).not.toContain(OUT);
+    expect(h.stdout).not.toContain('L000000');
+    expect(h.stdout).not.toContain('zqoutsidegist');
+  }, HEAVY);
+
+  it('grep over the project still groups under the lower leaf when both are in scope', () => {
+    expect(OUT < leavesA[0]!, 'CONTROL: the outside leaf is the lower id').toBe(true);
+    const j = grep(['zqspan1', '--project', '--json']);
+    expect(j.code, `CONTROL: exit 0: ${j.stderr}`).toBe(0);
+    const by = new Map(GRX.items(j).map((x) => [x.entry_uuid, x.node_id]));
+    expect(by.get(fx.spans[0]![0]!), 'the two-edge row groups under the lower in-scope leaf').toBe(OUT);
+    expect(by.get(fx.spans[0]![1]!), 'the one-edge row stays under its leaf').toBe(leavesA[0]);
+    const h = grep(['zqspan1', '--project']);
+    expect(h.code, `CONTROL: exit 0: ${h.stderr}`).toBe(0);
+    expect(h.stdout).toContain('── leaf L000000');
+  }, HEAVY);
+
+  it('a leaf gist shows only what the index would: the escape-glued secret and a backslash-quoted key are masked', () => {
+    const idx = libRead.makePairIndex(libRead.secretPairs([V]).pairs);
+    expect(gistA0, 'CONTROL: leaf 0\'s stored gist carries the glued value').toContain(V);
+    expect(libRead.redactField(gistA0, idx), 'CONTROL: one reading leaves it').toContain(V);
+    expect(libRead.redactForDisplay(gistA0, idx), 'CONTROL: the display reading masks it').not.toContain(V);
+    const none = libRead.makePairIndex([]);
+    expect(gistA1, 'CONTROL: leaf 1\'s stored gist carries the escaped key').toContain(KEYVAL);
+    expect(libRead.redactField(gistA1, none), 'CONTROL: one reading keeps the key').toContain(KEYVAL);
+    expect(libRead.redactForDisplay(gistA1, none), 'CONTROL: the display reading drops it').not.toContain(KEYVAL);
+    const h = grep(['zqspan1']);
+    expect(h.code, `CONTROL: exit 0: ${h.stderr}`).toBe(0);
+    expect(h.stdout, 'CONTROL: the leaf-0 header and its gist envelope print').toMatch(/── leaf L[0-9a-f]+ [^\n]*\n  <ccrc-recall src="node"/);
+    expect(h.stdout, 'the leaf gist does not print the glued value').not.toContain(V);
+    const j = grep(['zqspan1', '--json']);
+    expect(j.code, `CONTROL: exit 0: ${j.stderr}`).toBe(0);
+    expect(j.stdout, 'nor does --json').not.toContain(V);
+    const h2 = grep(['zqspan2']);
+    expect(h2.code, `CONTROL: exit 0: ${h2.stderr}`).toBe(0);
+    expect(h2.stdout, 'CONTROL: the leaf-1 gist envelope prints').toMatch(/── leaf L[0-9a-f]+ [^\n]*\n  <ccrc-recall src="node"/);
+    expect(h2.stdout, 'the leaf gist does not print the backslash-quoted key value').not.toContain(KEYVAL);
+  }, HEAVY);
+});
