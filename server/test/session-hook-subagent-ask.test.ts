@@ -271,6 +271,28 @@ exec "$REAL_JQ" "$@"
     expect(readState()).toMatchObject({ state: 'waiting', ask: { questions: Q.questions } });
   });
 
+  it('the prefilter keeps the fresh read off every other event: one read over working or done, and for a main-thread event over a wait', () => {
+    installShim();
+    const log = path.join(home, 'jq.log');
+    const env = { REAL_JQ: realJq(), SHIM_LOG: log };
+    const reads = (payload: object): number => {
+      fs.rmSync(log, { force: true });
+      run(payload, env);
+      return fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).length;
+    };
+    const subPost = { hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: '/x' }, ...SUB };
+    const mainPost = { hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: '/x' } };
+    const ask = { hook_event_name: 'PermissionRequest', tool_name: 'AskUserQuestion', tool_input: Q };
+    run(mainPost, env);
+    expect(reads(subPost), 'subagent over working').toBe(1);
+    run({ hook_event_name: 'Stop' }, env);
+    expect(reads(subPost), 'subagent over done').toBe(1);
+    run(ask, env);
+    expect(reads(mainPost), 'main thread over a wait').toBe(1);
+    run(ask, env);
+    expect(reads(subPost), 'subagent over a main-thread wait: the prefilter and the fresh read').toBe(2);
+  });
+
   it('SubagentStart and SubagentStop read the hookstate file with two jq forks: the prefilter and the shared fresh read', () => {
     askViaPermission();
     installShim();
