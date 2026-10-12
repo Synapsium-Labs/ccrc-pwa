@@ -1254,6 +1254,21 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       (`ccd/ccrc`).
       - STATUS: fleet and server v0.0.149, newest v0.0.149, backups fleet 167M/server 635M, disk free fleet 217G/work
         volume 224G/server 33G, no anomalies.
+    - **2026-10-12 14:46 UTC: v0.0.150 to v0.0.152 auto-converged unattended.** No action was taken.
+      - The releases: v0.0.150 is #322, stall watch settings' wave 2, published at 14:14:18. v0.0.151 (a docs
+        commit) followed at 14:35:01, and v0.0.152 (#356, docs) at 14:35:58. Both boxes had reached v0.0.150 by the
+        next move. v0.0.151 was skipped, because the auto move went to the newest.
+      - The move to v0.0.152 was fleet first, one node at a time. The fleet box ran 14:39:11 to 14:41:47, and the
+        server 14:42:47 to 14:43:09.
+      - The 14:42 hourly probe landed in the gap between the two. It read "boxes differ" and the fleet row
+        `pending`. Its re-probes then read the server row `pending` and `incomplete` for about two minutes after the
+        server's own record said `done` and `install: complete`. That is the inventory's once-a-minute re-measure
+        lagging, not a fault. Every anomaly cleared by 14:45:10.
+      - The box token held: `PASS` on both boxes (server generation #3, fleet sync proved). Server doctor: 25 passed,
+        0 warned, 0 failed. Fleet doctor: 33 passed, 6 warned, 0 failed, with no warning from `box-token`.
+      - Wave 15 (run 300) is still held by the open PRs #351 (`ccd/ccd`) and #353 (`ccd/ccrc`).
+      - STATUS: fleet and server v0.0.152, newest v0.0.152, backups fleet 168M/server 641M, disk free fleet 217G/work
+        volume 201G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
