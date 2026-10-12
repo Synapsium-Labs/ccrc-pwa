@@ -994,7 +994,8 @@ export class FleetWatcher {
    *    server was down, or before a restart no job saw, is still a flip, and still writes its row.
    *  - `collectPop`: the last measured pass's population, for the box-wide listing and refused-name lines; `null` before
    *    one. `collectPopNames`: the registry listing that pass's pre-filter read, for attention's projection.
-   *  - `collectBoxProbes`: the box-wide probes standing (Task 5's `collectBoxProbesAfter`, over every answer).
+   *  - `collectBoxProbes`: the box-wide probes standing (through `collectBoxProbesAtArrival`: every answer but one older
+   *    than their latest change; the population's clear, `collectBoxAfterPopulation`, also drops them).
    *    `collectBoxProbesAtMono`: the ARRIVAL of the answer that last changed them (`collectBoxProbesAtArrival`), so an
    *    answer older than that change says nothing of them.
    *  - `collectPassSeq`, `collectPassTally`, `collectPassPublished`, `collectPassAudits`: each pass's audits by class
@@ -4328,10 +4329,10 @@ export class FleetWatcher {
       .catch((err: unknown) => {
         // The job settled and its fold failed, so the lane does not know what the job did: the pair resets under a new
         // generation and the id takes the refusal floor (`collectAfterFoldFailed`), before the line is written. The
-        // slot is left as the settle made it.
+        // slot is left as the settle made it, or as it was if the settle threw before its slot write (a stated residual).
         const e = this.collectState.get(id);
         if (e !== undefined) this.collectState.set(id, collectAfterFoldFailed(e, this.collectStepAt(this.collectClock())));
-        console.warn(`ccrc-server: sweepTempRootCollect: folding the collector's job for ${id} failed (${err instanceof Error ? err.message : String(err)}) — its observation pair is reset, and ${id} waits CHILD_RECLAIM_DEFER_CEILING_MS`);
+        console.warn(`ccrc-server: sweepTempRootCollect: folding the collector's job for ${id} failed (${err instanceof Error ? err.message : String(err)}) — ${e !== undefined ? `its observation pair is reset, and ${id} waits CHILD_RECLAIM_DEFER_CEILING_MS` : `${id} was forgotten while the job was out, so nothing is reset`}`);
       })
       .finally(() => { this.collectSettled(id, pass); });
   }
@@ -4425,8 +4426,9 @@ export class FleetWatcher {
       body: this.collectAuditBody(id, next, a) }));
   }
 
-  /** The ONE write of the box-wide probes (spec §5.10): both fields together, through L1's `collectBoxProbesAtArrival`,
-   *  so no answer's word about the box is applied without its arrival. */
+  /** The ONE write of the box-wide probes from an ANSWER (spec §5.10): both fields together, through L1's
+   *  `collectBoxProbesAtArrival`, so no answer's word about the box is applied without its arrival. The population's
+   *  clear (`collectBoxAfterPopulation`) is the only other write, and it leaves the stamp alone. */
   private collectBoxProbesAnswered(a: CollectAudit | CollectResult, arrivedMono: number): void {
     const next = collectBoxProbesAtArrival(
       { probes: this.collectBoxProbes, changedAtMono: this.collectBoxProbesAtMono }, a, arrivedMono);

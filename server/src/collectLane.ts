@@ -1111,8 +1111,9 @@ export interface CollectBoxProbeState {
 /** The box-wide probes after one answer, by when it ARRIVED (spec §5.10): an answer that arrived before the probes' latest
  *  change says nothing of them, so it is skipped whole. An act job folds its second audit when the JOB settles, which
  *  can be after a later answer set or cleared a probe; only the arrival tells the older answer from the newer. A tie
- *  applies (`<`, never `<=`). Otherwise `collectBoxProbesAfter` decides, and the stamp moves to the arrival only when
- *  the probes CHANGED (a new map): an answer that leaves them standing never moves it. Pure. */
+ *  applies (`<`, never `<=`). Otherwise `collectBoxProbesAfter` decides, and the stamp moves to the arrival whenever it
+ *  returns a new map, a box-wide answer re-asserting a standing probe included, since that is a newer word about the box;
+ *  an answer it returns `prev` for (a per-id probe, a non-passing verdict, no document) never moves it. Pure. */
 export function collectBoxProbesAtArrival(prev: CollectBoxProbeState, a: CollectAudit | CollectResult,
   arrivedMono: number): CollectBoxProbeState {
   if (arrivedMono < prev.changedAtMono) return prev;

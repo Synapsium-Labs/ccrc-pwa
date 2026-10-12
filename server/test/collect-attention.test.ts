@@ -300,7 +300,7 @@ describe('collectBoxProbesAtArrival: an answer older than the probes\' latest ch
     expect([got.probes.size, got.changedAtMono]).toEqual([0, STAMP]);
   });
 
-  it('an answer that changes nothing never moves the stamp: the very state comes back', () => {
+  it('an answer that leaves the probes as they were (a per-id probe, a non-passing verdict, no document) never moves the stamp: the very state comes back', () => {
     const s = standing();
     for (const a of [unmeasured('checkouts'), verdict('registered'), NO_DOCUMENT]) {
       expect(collectBoxProbesAtArrival(s, a, STAMP + 500), JSON.stringify(a)).toBe(s);
@@ -313,6 +313,15 @@ describe('collectBoxProbesAtArrival: an answer older than the probes\' latest ch
     expect(set.changedAtMono).toBe(STAMP + 500);
     const cleared = collectBoxProbesAtArrival(set, COLLECTED, STAMP + 900);
     expect([cleared.probes.size, cleared.changedAtMono], 'an answer that passes every rung clears them').toEqual([0, STAMP + 900]);
+  });
+
+  it('a box-wide answer re-asserting a standing probe is a newer word about the box: it moves the stamp, so an older passing answer is skipped', () => {
+    const empty: CollectBoxProbeState = { probes: new Map(), changedAtMono: Number.NEGATIVE_INFINITY };
+    const s1 = collectBoxProbesAtArrival(empty, unmeasured('mv'), 50);
+    const s2 = collectBoxProbesAtArrival(s1, unmeasured('mv'), 150);
+    expect([...s2.probes]).toEqual([...s1.probes]);
+    expect(s2.changedAtMono).toBe(150);
+    expect(collectBoxProbesAtArrival(s2, collectable(T1), 100)).toBe(s2);
   });
 
   it('a passing answer older than a later set is skipped, and one at or after it clears', () => {
