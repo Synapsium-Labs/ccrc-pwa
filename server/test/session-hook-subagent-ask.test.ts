@@ -216,6 +216,30 @@ describe('a subagent tool event keeps the main thread waiting (D-4039)', () => {
     run({ hook_event_name: 'Stop' });
     expect(readState()).not.toHaveProperty('waitBy');
   });
+  // The fresh read's defensive cuts (D-4041): a broken stamp is never kept, and the kept event is letters only.
+  it('an updatedAt that is not a plain non-negative integer keeps no stamp and writes no aliveAt', () => {
+    for (const raw of ['1e300', '-5', '"123"', 'null']) {
+      askViaPermission();
+      const text = fs.readFileSync(stateFile(), 'utf8').replace(/"updatedAt":\d+/, `"updatedAt":${raw}`);
+      expect(text, raw).toContain(`"updatedAt":${raw}`);
+      fs.writeFileSync(stateFile(), text);
+      const before = Date.now();
+      run({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: '/x' }, ...SUB });
+      const s = readState();
+      expect(s, raw).toMatchObject({ state: 'waiting', ask: { questions: Q.questions } });
+      expect(s, raw).not.toHaveProperty('aliveAt');
+      expect(s['updatedAt'] as number, raw).toBeGreaterThanOrEqual(before);
+      expect(s['updatedAt'] as number, raw).toBeLessThan(1e14);
+    }
+  });
+
+  it('the kept event is cut to letters: a stored event with other characters is written without them', () => {
+    askViaPermission();
+    fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), updatedAt: 1, event: 'Permission Request!' }) + '\n');
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: '/x' }, ...SUB });
+    expect(readState()).toMatchObject({ state: 'waiting', updatedAt: 1, event: 'PermissionRequest' });
+  });
+
 });
 
 // ── The race (review 397, "P1 exception 1"; D-4041) ─────────────────────────────────────────────────────────────────
@@ -270,6 +294,32 @@ exec "$REAL_JQ" "$@"
     run({ hook_event_name: 'SubagentStop', ...SUB }, { ...raceEnv('prefilter'), SHIM_REWRITE: 'not json' });
     expect(fs.existsSync(`${stateFile()}.fired`), 'the shim fired').toBe(true);
     expect(fs.readFileSync(stateFile(), 'utf8').trim()).toBe('not json');
+  });
+
+  it('a state that is not one of the hook\'s words is never carried: a SubagentStop leaves the file as it was', () => {
+    for (const bad of ['wait\ning', 'waitingx', 'Waiting', 5]) {
+      askViaPermission();
+      fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), state: bad, updatedAt: 1 }) + '\n');
+      const before = fs.readFileSync(stateFile(), 'utf8');
+      run({ hook_event_name: 'SubagentStop', ...SUB });
+      expect(fs.readFileSync(stateFile(), 'utf8'), JSON.stringify(bad)).toBe(before);
+    }
+  });
+
+  it('nor is it carried by a subagent tool event whose prefilter saw waiting: a corrupt state arriving after it writes working', () => {
+    for (const bad of ['wait\ning', 'waitingx']) {
+      askViaPermission();
+      installShim();
+      const corrupt = JSON.stringify({ v: 1, state: bad, event: 'PermissionRequest', sessionId: 'uuid-1', pid: 4242,
+        updatedAt: 1, ask: { questions: Q.questions }, subagents: [], graphQueries: 0, graphGateDenials: 0 });
+      run({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: '/x' }, ...SUB },
+        { ...raceEnv('prefilter'), SHIM_REWRITE: corrupt });
+      expect(fs.existsSync(`${stateFile()}.fired`), 'the shim fired').toBe(true);
+      const s = readState();
+      expect(s, JSON.stringify(bad)).toMatchObject({ state: 'working', ask: null });
+      expect(s, JSON.stringify(bad)).not.toHaveProperty('aliveAt');
+      fs.rmSync(`${stateFile()}.fired`, { force: true });
+    }
   });
 
   it('control: with no interleaving the shim is a pass-through and the wait is carried', () => {

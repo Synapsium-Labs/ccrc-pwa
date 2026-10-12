@@ -3761,15 +3761,16 @@ waitby=""
 # ONE fresh `jq` read of the file at the carry point answers every question the two subagent arms below ask: its state,
 # who raised the wait, the ask, `interrupted`, and the wait's own `updatedAt` and `event`. It is a read of the file as it
 # stands NOW, not of `prev_state`, which the prefilter took ~650 lines up: a main-thread answer that lands in between
-# must not be overwritten by a `waiting` decided from the old read. Lines, not `@tsv` (see the prefilter's note above);
-# `state` and `event` are cut to letters so a corrupt value cannot shift the lines, and `updatedAt` prints only when it
-# is a number. A jq that fails prints nothing: every field comes up empty, which both arms read as "nothing to carry".
+# must not be overwritten by a `waiting` decided from the old read. Lines, not `@tsv` (see the prefilter's note above).
+# `state` prints only when it is one of the three words this hook writes (an exact match, so a corrupt value is never
+# healed into one: `"wait\ning"` is empty here, not `waiting`); `event` is cut to letters, and `updatedAt` prints only when
+# it is a number. A jq that fails prints nothing: every field comes up empty, which both arms read as "nothing to carry".
 fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev=""
 _hook_fresh_read() {
   fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev=""
   { read -r fr_state; read -r fr_by; read -r fr_ask; read -r fr_int; read -r fr_upd; read -r fr_ev; } < <(jq -r \
     'def keep(f): explode | map(select(f)) | implode; def alpha: (. >= 65 and . <= 90) or (. >= 97 and . <= 122);
-     (.state | if type == "string" then keep(alpha) else "" end),
+     (.state | if . == "working" or . == "waiting" or . == "done" then . else "" end),
      (if .waitBy == "subagent" then "subagent" else "" end),
      (.ask // null | tojson),
      (if .interrupted == true then "true" else "false" end),
