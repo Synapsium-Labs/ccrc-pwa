@@ -72,11 +72,14 @@ describe('a subagent tool event keeps the main thread waiting (D-4039)', () => {
 
   it('the stamp and the event still move, for the delegates hold and the frozen arm', () => {
     askViaPermission();
-    const before = readState()['updatedAt'] as number;
+    // Rewrite the stored stamp so "moved" is a strict, observable change, not a same-millisecond tie.
+    const seeded = { ...readState(), updatedAt: 1 };
+    fs.writeFileSync(stateFile(), JSON.stringify(seeded) + '\n');
     run({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: '/x' }, ...SUB });
     const after = readState();
+    expect(after['state']).toBe('waiting');
     expect(after['event']).toBe('PostToolUse');
-    expect(after['updatedAt'] as number).toBeGreaterThanOrEqual(before);
+    expect(after['updatedAt'] as number).toBeGreaterThan(1);
   });
 
   it('control: the main thread answering (its own PostToolUse) ends the wait and clears the ask', () => {
@@ -89,5 +92,57 @@ describe('a subagent tool event keeps the main thread waiting (D-4039)', () => {
     run({ hook_event_name: 'Stop' });
     run({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: '/x' }, ...SUB });
     expect(readState()).toMatchObject({ state: 'working', ask: null });
+  });
+
+  // carry-only-a-main-thread-wait (task review, Important 1): a wait the subagent raised itself ends as it always did.
+  it('a subagent\'s own approved dialog ends at its next tool event (working, no ask)', () => {
+    run({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'npm test' }, ...SUB });
+    expect(readState()).toMatchObject({ state: 'waiting', waitBy: 'subagent' });
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'npm test' }, ...SUB });
+    const s = readState();
+    expect(s).toMatchObject({ state: 'working', ask: null });
+    expect(s).not.toHaveProperty('waitBy');
+  });
+
+  it('the same holds after a Stop, and across a SubagentStop that carries the provenance', () => {
+    run({ hook_event_name: 'Stop' });
+    run({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'npm test' }, ...SUB });
+    run({ hook_event_name: 'SubagentStop', ...SUB });
+    expect(readState()).toMatchObject({ state: 'waiting', waitBy: 'subagent' });
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'npm test' }, ...SUB });
+    expect(readState()).toMatchObject({ state: 'working', ask: null });
+  });
+
+  it('a main-thread wait survives a SubagentStop and a SubagentStart, and is not flipped to subagent-raised', () => {
+    askViaPermission();
+    run({ hook_event_name: 'SubagentStart', ...SUB });
+    run({ hook_event_name: 'SubagentStop', ...SUB });
+    const mid = readState();
+    expect(mid).toMatchObject({ state: 'waiting', ask: { questions: Q.questions } });
+    expect(mid).not.toHaveProperty('waitBy');
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: '/x' }, ...SUB });
+    const after = readState();
+    expect(after).toMatchObject({ state: 'waiting', ask: { questions: Q.questions } });
+    expect(after).not.toHaveProperty('waitBy');
+  });
+
+  it('Review Focus 1 scope pin: a subagent PermissionRequest over a main-thread question writes its own approval', () => {
+    askViaPermission();
+    run({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls' }, ...SUB });
+    expect(readState()).toMatchObject({ state: 'waiting', ask: { approval: { tool: 'Bash', summary: 'ls' } }, waitBy: 'subagent' });
+  });
+
+  it('the interrupted flag is carried with the wait', () => {
+    askViaPermission();
+    fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), interrupted: true }) + '\n');
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: '/x' }, ...SUB });
+    expect(readState()).toMatchObject({ state: 'waiting', interrupted: true, ask: { questions: Q.questions } });
+  });
+
+  it('a main-thread write carries no waitBy key (the default shape is unchanged)', () => {
+    askViaPermission();
+    expect(readState()).not.toHaveProperty('waitBy');
+    run({ hook_event_name: 'Stop' });
+    expect(readState()).not.toHaveProperty('waitBy');
   });
 });

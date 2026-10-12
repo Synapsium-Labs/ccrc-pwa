@@ -3751,6 +3751,12 @@ if [[ "$event" == PreToolUse && "${tool:-}" == Bash && "$payload" == *merge* \
   fi
 fi
 
+# `carry-only-a-main-thread-wait` (D-4039, task review): who raised the wait. `waitby` is "subagent" only when THIS event
+# freshly set `waiting` and carries an `agent_id` (`$paid`); it is stored as the additive key `waitBy`, preserved with
+# the carried state below, and absent everywhere else, so every other write keeps today's shape byte for byte.
+waitby=""
+[[ "$state" == waiting && -n "$paid" ]] && waitby="subagent"
+
 if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
   name=$(jq -r '.agent_name // .subagent_name // .agent_type // "subagent"' <<<"$payload" 2>/dev/null) || name="subagent"
   now=$(_hook_epoch_ms)
@@ -3766,6 +3772,7 @@ if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
   state="$prev_state"
   ask_json=$(jq -c '.ask // null' "$f" 2>/dev/null) || ask_json="null"
   interrupted=$(jq -r 'if .interrupted == true then "true" else "false" end' "$f" 2>/dev/null) || interrupted="false"
+  waitby=$(jq -r 'if .waitBy == "subagent" then "subagent" else "" end' "$f" 2>/dev/null) || waitby=""
 fi
 
 # `subagent-tool-event-keeps-the-waiting-ask` (D-4039, finding 4063): a subagent's tool event never ends the main
@@ -3773,10 +3780,20 @@ fi
 # erased a question the main thread asked 3.1 s earlier, before any pane tick could mint the ask row. Only `waiting`
 # is carried, with its ask and `interrupted`; the stamp and the event move as for any event (the delegates hold and
 # the frozen arm read them), and every other state keeps today's write.
+# `carry-only-a-main-thread-wait` (task review, Important 1): a wait that a subagent raised itself (`waitBy` stored
+# as "subagent") is NOT carried, so that subagent's own approved dialog ends at its next tool event as it always did.
+# One jq fork reads the three stored fields; this runs on a subagent's tool event only.
 if [[ -n "$paid" && "$prev_state" == waiting && ( "$event" == PreToolUse || "$event" == PostToolUse ) ]]; then
-  state="waiting"
-  ask_json=$(jq -c '.ask // null' "$f" 2>/dev/null) || ask_json="null"
-  interrupted=$(jq -r 'if .interrupted == true then "true" else "false" end' "$f" 2>/dev/null) || interrupted="false"
+  w_ask="" w_int="" w_by=""
+  { read -r w_ask; read -r w_int; read -r w_by; } < <(jq -r \
+    '(.ask // null | tojson), (if .interrupted == true then "true" else "false" end),
+     (if .waitBy == "subagent" then "subagent" else "" end)' "$f" 2>/dev/null)
+  if [[ "$w_by" != subagent ]]; then
+    state="waiting"
+    ask_json="${w_ask:-null}"
+    [[ "$w_int" == true ]] && interrupted="true" || interrupted="false"
+    waitby=""
+  fi
 fi
 
 # Transitions to working/done clear the ask: an answered question must not
@@ -3788,13 +3805,14 @@ out=$(jq -cn \
   --arg sessionId "${CLAUDE_CODE_SESSION_ID:-}" --argjson pid "${CLAUDE_PID:-0}" \
   --argjson updatedAt "${hts:-$(_hook_epoch_ms)}" --argjson interrupted "$interrupted" \
   --argjson ask "$ask_json" --argjson subagents "$subs" --argjson graphQueries "$gq" \
-  --argjson graphGateDenials "$gd" \
+  --argjson graphGateDenials "$gd" --arg waitBy "$waitby" \
   --argjson ccrcPeerReads "$cp" --argjson ccrcClaims "$cc" \
   '{v:$v, state:$state, event:$event, sessionId:$sessionId, pid:$pid,
     updatedAt:$updatedAt, ask:$ask, subagents:$subagents, graphQueries:$graphQueries,
     graphGateDenials:$graphGateDenials, ccrcPeerReads:$ccrcPeerReads,
     ccrcClaims:$ccrcClaims}
-   + (if $interrupted then {interrupted:true} else {} end)') || exit 0
+   + (if $interrupted then {interrupted:true} else {} end)
+   + (if $waitBy == "subagent" then {waitBy:"subagent"} else {} end)') || exit 0
 
 # 64KB cap: drop the questions envelope before anything else — a truncated
 # envelope is worse than none.
