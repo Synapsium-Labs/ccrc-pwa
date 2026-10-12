@@ -6714,7 +6714,11 @@ export function expandArgsOf(parsed) {
 export function expandResumeOf(cursor) {
   if (cursor === null || typeof cursor.t !== 'string') return null;
   const m = /^around:([^:]+):([0-9]{1,2}):([0-9]{1,2})$/.exec(cursor.t);
-  if (m !== null) return { target: null, around: m[1], before: Number(m[2]), after: Number(m[3]) };
+  if (m !== null) {
+    const before = Number(m[2]);
+    const after = Number(m[3]);
+    return before > AROUND_MAX || after > AROUND_MAX ? null : { target: null, around: m[1], before, after };
+  }
   return expandTargetOf(cursor.t) === 'bad' ? null : { target: cursor.t, around: null, before: AROUND_DEFAULT, after: AROUND_DEFAULT };
 }
 
@@ -6803,11 +6807,35 @@ export function renderEntryText(body) {
  *  whole for its outline (spec §8.3 and §8.4). */
 export const EXPLORE_READ_MAX = 256 * 1024;
 
+/** exploreCounts(stripReadPrefix(t)) in one pass with no split: a counts-only outline must cost the item's length, not
+ *  a copy of it per line (a 64 MiB newline-dense sidecar split twice peaked at 2 GiB; spec §8.4's bound is 1 GiB).
+ *  Stripping a Read prefix removes characters inside a line, never a newline, so the line count is the raw text's. */
+function exploreCountsOnePass(t) {
+  const prefix = /[^\S\n]*(\d+)(?:→|\t)/y;   // READ_PREFIX_RE at a line start; [^\S\n] is \s without crossing the line's end
+  let stripped = 0;
+  let prev = null;
+  for (let at = 0; at <= t.length;) {
+    prefix.lastIndex = at;
+    const m = prefix.exec(t);
+    if (m === null || (prev !== null && Number(m[1]) !== prev + 1)) break;
+    prev = Number(m[1]);
+    stripped += m[0].length;
+    const nl = t.indexOf('\n', at);
+    if (nl === -1) break;
+    at = nl + 1;
+  }
+  let lines = 1;
+  for (let i = t.indexOf('\n'); i !== -1; i = t.indexOf('\n', i + 1)) lines += 1;
+  return ['Structured summary:', `Characters: ${(t.length - stripped).toLocaleString('en-US')}.`,
+    `Lines: ${lines.toLocaleString('en-US')}.`].join('\n');
+}
+
 /** A cut item's outline (§8.4, §11 P17): `explore` over the item's redacted window when the item is at most
- *  EXPLORE_READ_MAX characters, else Task 3's counts-only summary over the raw text (characters and lines: numbers,
- *  never content). The caller cuts the result to EXPLORE_CUT and CUT_TEXT_BUDGET. */
+ *  EXPLORE_READ_MAX characters, else Task 3's counts-only summary over the raw text, computed in one pass
+ *  (exploreCountsOnePass; characters and lines: numbers, never content). The caller cuts the result to EXPLORE_CUT
+ *  and CUT_TEXT_BUDGET. */
 export function exploreOutline(text, kind, fileName, idx) {
   const t = String(text);
-  if (t.length > EXPLORE_READ_MAX) return exploreCounts(stripReadPrefix(t));
+  if (t.length > EXPLORE_READ_MAX) return exploreCountsOnePass(t);
   return explore(redactDisplayWindow(t, 0, t.length, idx), kind, fileName);
 }

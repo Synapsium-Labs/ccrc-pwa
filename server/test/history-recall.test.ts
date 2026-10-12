@@ -1075,6 +1075,7 @@ type GrepDeps = { cap?: number; budgetMs?: number; spawn?: (...args: unknown[]) 
 type GrepMod = {
   runGrep(rc: GrepRc, a: RGrepArgs, deps?: GrepDeps): GrepVerbResult;
   runDescribe?(rc: GrepRc, a: libRead.DescribeArgs, deps?: { cap?: number }): GrepVerbResult;
+  runExpand?: (rc: unknown, a: Record<string, unknown>) => { exit: number; blocks: string[]; items: Array<Record<string, unknown>>; next: string[] | null; hint?: string };
 };
 
 const GRX = {
@@ -2942,5 +2943,209 @@ describe.skipIf(process.platform === 'darwin')('expand and grep under --project 
     expect(familiesIn(g)).toBe(N);
     expect(g.stdout.length, 'CONTROL: the cap, not the hits, ended the grep page').toBeGreaterThan(libRead.OUTPUT_CAP - 4000);
     expect(g.stdout.length, 'grep --project --json').toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+  }, HEAVY);
+});
+
+// ── W1-B2 Task 16, fix round 1 ──────────────────────────────────────────────────────────────────────────
+/** Seed one family from transcript TEXT (a line that no object can build), as seedFamily does for objects, then give the
+ *  sweeps one more tick than seedFamily's four so the leaf is derived. */
+function t16fSeedRaw(box: rH.HistoryBox, f: { id: string; project: string; generation: string; uuid: string; text: string }): void {
+  expect(rH.runSweep(box).code, 'the priming sweep').toBe(0);
+  rH.plantSession(box, f.id, { uuid: f.uuid, project: f.project, generation: f.generation });
+  rH.plantTranscript(box, Object.keys(box.accountHome)[0]!, rH.SEED_SLUG, f.uuid, f.text);
+  rH.spoolLine(box, f.id, { v: 1, ev: 'SessionStart', id: f.id, sid: f.uuid, src: 'startup', reg: f.uuid, gen: f.generation });
+  for (let i = 0; i < 6; i += 1) {
+    const r = rH.runSweep(box);
+    expect(r.code, r.stderr).toBe(0);
+  }
+}
+
+describe.skipIf(process.platform === 'darwin')('expand fix round 1 (Task 16): one-pass counts, a too-deep row as stored, the paired path, bounded resumes, damaged vs pruned, --json in next, the condensed lineage', () => {
+  const BS = String.fromCharCode(92);
+  const ALPHA = 'abcdefghjkmnpqrstuvwxyz23456789';
+  // ── the shared box: one oversized first item (D, G)
+  const ID = 'claude-a-x16f1';
+  const T = 'a16f0001';
+  const U = t16uuid(T, 0);
+  const e = (i: number): string => t16uuid(T, i);
+  const BIG = `zqbigf1 ${Array.from({ length: 18_000 }, (_, i) => `w${i % 97}`).join(' ')} zqbigendf1`;
+  // ── B: a row nested past JSON.stringify's stack
+  const BID = 'claude-a-x16f1b';
+  const BT = 'a16f0002';
+  const BU = t16uuid(BT, 0);
+  const b = (i: number): string => t16uuid(BT, i);
+  // ── C: a paired path glued to an escape letter
+  const CID = 'claude-a-x16f1c';
+  const CT = 'a16f0003';
+  const CU = t16uuid(CT, 0);
+  const c = (i: number): string => t16uuid(CT, i);
+  const S = `zqpath${Array.from({ length: 38 }, (_, i) => ALPHA[(i * 7 + 3) % ALPHA.length]!).join('')}`;
+  const P = `C:${BS}keys${BS}n${S}.ts`;
+  const CODE = Array.from({ length: 120 }, (_, i) => (i === 0 ? "import fs from 'node:fs';" : i === 1 ? 'export function main(argv) {' : `  const v${i} = fs.join('a', 'b${i}');`)).join('\n');
+  // ── F: three rows, one tombstoned, one with no body and no tombstone
+  const FID = 'claude-a-x16f1f';
+  const FT = 'a16f0004';
+  const FU = t16uuid(FT, 0);
+  const f = (i: number): string => t16uuid(FT, i);
+  // ── H: a condensed node
+  const HT = 0x61;
+  let box: rH.HistoryBox;
+  let bbox: rH.HistoryBox;
+  let cbox: rH.HistoryBox;
+  let fbox: rH.HistoryBox;
+  let hbox: rH.HistoryBox;
+  let leaf = '';
+  let bLeaf = '';
+  let cLeaf = '';
+  let fLeaf = '';
+  let deepLine = '';
+  const cli = (args: string[]) => rH.runCli(box, args, { env: rH.withPane(box, ID) });
+
+  beforeAll(() => {
+    box = rH.makeHistoryBox('ccrc-hist-x16f1-');
+    t16seed(box, { id: ID, project: 'demo', generation: '0189abcd-1234-4678-9abc-0000000f1001', uuid: U, rows: t16leafRows(T, U, [
+      rFx.userRow({ uuid: e(1), ts: t16ts(1), sessionId: U, text: BIG }),
+      rFx.assistantRow({ uuid: e(2), ts: t16ts(2), parentUuid: e(1), sessionId: U, text: 'zqafterf1 the small one after the big one' }),
+    ]) });
+    leaf = t16leafOf(box, ID);
+
+    bbox = rH.makeHistoryBox('ccrc-hist-x16f1b-');
+    const deepRow = rFx.toolUseRow({ uuid: b(2), ts: t16ts(2), parentUuid: b(1), sessionId: BU, toolUseId: 'toolu_01X16F1DEEP', name: 'Bash', input: { zqdeepslot: 1 } });
+    const rows = t16leafRows(BT, BU, [rFx.userRow({ uuid: b(1), ts: t16ts(1), sessionId: BU, text: 'zqmarkerf1b the user row before the deep one' }), deepRow]);
+    const plain = JSON.stringify(deepRow);
+    expect(plain.split('{"zqdeepslot":1}'), 'CONTROL: the slot is in the serialised row once').toHaveLength(2);
+    deepLine = plain.replace('{"zqdeepslot":1}', () => `${'{"a":'.repeat(20_000)}{"zqdeep16":true}${'}'.repeat(20_000)}`);
+    const lines = rows.map((r) => (r === deepRow ? deepLine : JSON.stringify(r)));
+    t16fSeedRaw(bbox, { id: BID, project: 'demo', generation: '0189abcd-1234-4678-9abc-0000000f1002', uuid: BU, text: `${lines.join('\n')}\n` });
+    bLeaf = t16leafOf(bbox, BID);
+
+    cbox = rH.makeHistoryBox('ccrc-hist-x16f1c-');
+    t16seed(cbox, { id: CID, project: 'demo', generation: '0189abcd-1234-4678-9abc-0000000f1003', uuid: CU, rows: t16leafRows(CT, CU, [
+      rFx.userRow({ uuid: c(1), ts: t16ts(1), sessionId: CU, text: 'zqmarkerf1c read the key file' }),
+      rFx.toolUseRow({ uuid: c(2), ts: t16ts(2), parentUuid: c(1), sessionId: CU, toolUseId: 'toolu_01X16F1READ', name: 'Read', input: { file_path: P } }),
+      rFx.toolResultRow({ uuid: c(3), ts: t16ts(3), parentUuid: c(2), sessionId: CU, toolUseId: 'toolu_01X16F1READ', content: CODE, sourceToolUseID: 'toolu_01X16F1READ' }),
+    ]) });
+    cLeaf = t16leafOf(cbox, CID);
+
+    fbox = rH.makeHistoryBox('ccrc-hist-x16f1f-');
+    t16seed(fbox, { id: FID, project: 'demo', generation: '0189abcd-1234-4678-9abc-0000000f1004', uuid: FU, rows: t16leafRows(FT, FU, [
+      rFx.userRow({ uuid: f(1), ts: t16ts(1), sessionId: FU, text: 'zqf1one the first row stays whole' }),
+      rFx.userRow({ uuid: f(2), ts: t16ts(2), sessionId: FU, text: 'zqf1two the second row is tombstoned' }),
+      rFx.userRow({ uuid: f(3), ts: t16ts(3), sessionId: FU, text: 'zqf1three the third row loses its body with no tombstone' }),
+    ]) });
+    fLeaf = t16leafOf(fbox, FID);
+
+    hbox = rH.makeHistoryBox('ccrc-hist-x16f1h-');
+    const fx = GRX_C.compactions(HT, 8, (i) => GRX_C.summary({ current: `zqcond${i} work.`, next: `Next ${i}.` }));
+    GRX.seed(hbox, HT, GRX.idA, 'demo', fx.rows);
+  }, 900_000);
+
+  it("a row nested past JSON.stringify's stack expands as stored, exit 0, and its node page still renders", () => {
+    expect(() => JSON.stringify(JSON.parse(deepLine)), 'CONTROL: JSON.stringify cannot render this row').toThrow(RangeError);
+    const db = rH.openStoreRO(bbox);
+    try {
+      const row = db.prepare('SELECT type FROM entries WHERE uuid = ?').get(b(2)) as { type: string } | undefined;
+      expect(row?.type, 'CONTROL: stored parsed, not raw').toBe('assistant');
+    } finally { db.close(); }
+    const bcli = (args: string[]) => rH.runCli(bbox, args, { env: rH.withPane(bbox, BID) });
+    const one = bcli(['expand', b(2), '--json']);
+    expect(one.code, one.stderr).toBe(0);
+    expect(t16items(one)).toHaveLength(1);
+    expect(t16items(one)[0]!.text).toContain('{"a":{"a":');
+    const node = bcli(['expand', bLeaf]);
+    expect(node.code, node.stderr).toBe(0);
+    expect(node.stdout).toContain('zqmarkerf1b the user row before the deep one');
+  }, HEAVY);
+
+  it('a paired path shows a pair-only value through redactForDisplay, never redactField', async () => {
+    const idx = libRead.makePairIndex(libRead.secretPairs([S]).pairs);
+    expect(libRead.redactField(P, idx), 'CONTROL: one reading leaves the value glued to the escape letter').toContain(S);
+    expect(libRead.redactForDisplay(P, idx), 'CONTROL: the display reading removes it').not.toContain(S);
+    expect(idx.belt ?? null, 'CONTROL: the final belt does not know a pair-only value').toBeNull();
+    const mod = await GRX.recall();
+    const rc = await GRX.rc(cbox, CID);
+    try {
+      const args = { target: cLeaf, around: null, before: 5, after: 5, cursor: null, json: false };
+      rc.pairIdx = libRead.makePairIndex([]);
+      const bare = mod.runExpand!(rc, args);
+      expect(bare.exit).toBe(0);
+      expect(bare.blocks.join('\n'), 'CONTROL: with no pairs the value reaches the outline label').toContain(S);
+      rc.pairIdx = idx;
+      const r = mod.runExpand!(rc, args);
+      expect(r.exit).toBe(0);
+      expect(r.blocks.join('\n'), 'CONTROL: the row was cut and outlined').toContain('Code exploration summary (');
+      expect(r.blocks.join('\n'), 'no block holds the value').not.toContain(S);
+      expect(JSON.stringify(r.items), 'no item field holds the value').not.toContain(S);
+    } finally { rc.db.close(); }
+  }, HEAVY);
+
+  it('a resumed --around window keeps AROUND_MAX: a crafted cursor naming 99 on each side is bad-args', () => {
+    const cur = libRead.encodeCursor({ v: 1, resource: 'expand', t: `around:${e(1)}:99:99`, i: 0, o: 0 });
+    const r = cli(['expand', '--cursor', cur, '--json']);
+    expect([r.code, r.json?.['reason']]).toEqual([2, 'bad-args']);
+    const ok = libRead.encodeCursor({ v: 1, resource: 'expand', t: `around:${e(1)}:1:1`, i: 0, o: 0 });
+    expect(cli(['expand', '--cursor', ok, '--json']).code, 'CONTROL: a window within AROUND_MAX resumes').toBe(0);
+  }, HEAVY);
+
+  it('a tombstone prints "content pruned on <date>"; a NULL body with no tombstone prints the damaged line, never pruned', () => {
+    const fcli = (args: string[]) => rH.runCli(fbox, args, { env: rH.withPane(fbox, FID) });
+    expect(fcli(['expand', fLeaf]).stdout, 'CONTROL: the rows print before the store is changed').toContain('zqf1two');
+    const w = new DatabaseSync(libRead.historyPaths(fbox.home).dbFile);
+    try {
+      w.prepare('UPDATE blobs SET z = NULL, pruned_ms = ? WHERE blob_id = (SELECT blob_id FROM entries WHERE uuid = ?)').run(Date.UTC(2026, 0, 2), f(2));
+      w.prepare('UPDATE blobs SET z = NULL WHERE blob_id = (SELECT blob_id FROM entries WHERE uuid = ?)').run(f(3));
+    } finally { w.close(); }
+    const j = fcli(['expand', fLeaf, '--json']);
+    expect(j.code, j.stderr).toBe(0);
+    const items = t16items(j);
+    expect(items.find((i) => i.uuid === f(1)), 'CONTROL: row 1 is untouched').toMatchObject({ text: 'zqf1one the first row stays whole' });
+    expect(items.find((i) => i.uuid === f(2))).toMatchObject({ pruned_ms: Date.UTC(2026, 0, 2), text: '' });
+    expect(items.find((i) => i.uuid === f(3))).toMatchObject({ undecodable: true, pruned_ms: null });
+    const h = fcli(['expand', fLeaf]);
+    expect(h.stdout).toContain('content pruned on 2026-01-02');
+    expect(h.stdout).toContain('content does not decode');
+    expect(h.stdout).not.toContain('content pruned on an unrecorded date');
+  }, HEAVY);
+
+  it('expand --json keeps --json in its next argv; the human next line does not carry it', () => {
+    const j = cli(['expand', leaf, '--json']);
+    expect(j.code, j.stderr).toBe(0);
+    expect(j.json?.['next'], 'CONTROL: the first item takes more than one page').not.toBeNull();
+    expect(String(j.json?.['next'])).toContain('--json');
+    const h = cli(['expand', leaf]);
+    expect(h.code, h.stderr).toBe(0);
+    const next = h.stdout.split('\n').filter((l) => l.startsWith('next:'));
+    expect(next.length, 'CONTROL: the human page printed a next line').toBeGreaterThan(0);
+    expect(next.join('\n')).not.toContain('--json');
+  }, HEAVY);
+
+  it('a condensed node expands to its leaves\' entries, in child order', () => {
+    const hcli = (args: string[]) => rH.runCli(hbox, args, { env: rH.withPane(hbox, GRX.idA) });
+    const db = rH.openStoreRO(hbox);
+    let parent = '';
+    let kids: string[] = [];
+    try {
+      const conds = (db.prepare("SELECT node_id FROM nodes WHERE kind = 'condensed'").all() as { node_id: string }[]).map((r) => r.node_id);
+      expect(conds, 'CONTROL: one condensed node').toHaveLength(1);
+      parent = conds[0]!;
+      kids = (db.prepare('SELECT child_id FROM node_children WHERE node_id = ? ORDER BY ord').all(parent) as { child_id: string }[]).map((r) => r.child_id);
+      expect(kids, 'CONTROL: it condenses the eight leaves').toHaveLength(8);
+    } finally { db.close(); }
+    const all = (target: string): string[] => {
+      const out: string[] = [];
+      let cursor: string | null = null;
+      for (let pages = 0; pages < 20; pages += 1) {
+        const r = hcli(['expand', target, ...(cursor === null ? [] : ['--cursor', cursor]), '--json']);
+        expect(r.code, r.stderr).toBe(0);
+        out.push(...t16items(r).map((i) => i.uuid));
+        cursor = t16cursor(String(r.json?.['next'] ?? ''));
+        if (cursor === null) return out;
+      }
+      throw new Error(`${target} did not finish in 20 pages`);
+    };
+    const parentList = all(parent);
+    const childLists = kids.map((k) => all(k));
+    expect(parentList.length).toBeGreaterThan(0);
+    expect(parentList).toEqual(childLists.flat());
   }, HEAVY);
 });

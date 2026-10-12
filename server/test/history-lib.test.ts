@@ -49,6 +49,7 @@ import { spawnSync as libGrepSpawn } from 'node:child_process';
 import * as libDescribe from '../../ccd/history/lib.mjs';
 import * as t16lib from '../../ccd/history/lib.mjs';
 import * as t16crypto from 'node:crypto';
+import * as t16f from '../../ccd/history/lib.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LIB = join(REPO, 'ccd', 'history', 'lib.mjs');
@@ -5987,5 +5988,50 @@ describe('lib: expand decisions (W1-B2 Task 16; spec §8.4 expand, §8.3 redacti
     expect(t16lib.exploreOutline(big, 'code', 'a.ts', idx)).toBe(['Structured summary:', `Characters: ${big.length.toLocaleString('en-US')}.`,
       `Lines: ${(t16lib.EXPLORE_READ_MAX + 1).toLocaleString('en-US')}.`].join('\n'));
     expect(t16lib.EXPLORE_READ_MAX, 'the outline bound is under the JSON one, so a JSON past it is counts only either way').toBeLessThanOrEqual(t16lib.EXPLORE_JSON_MAX);
+  });
+});
+
+describe('lib: expand fix round 1 (W1-B2 Task 16)', () => {
+  it("exploreOutline's counts-only branch equals exploreCounts(stripReadPrefix(t)) on every shape", () => {
+    const N = 30_000;
+    const lines = (f: (i: number) => string): string => Array.from({ length: N }, (_, i) => f(i)).join('');
+    const plain = Array.from({ length: N }, (_, i) => `plain line ${i} of the text`).join('\n');
+    const shapes: Record<string, string> = {
+      'consecutive Read-prefixed lines': lines((i) => `${String(i + 1).padStart(6)}→line ${i}\n`),
+      'numbering broken at line 1,000': lines((i) => `${String(i < 1000 ? i + 1 : i + 3).padStart(6)}→line ${i}\n`),
+      'tab-form prefixes joined by CRLF': Array.from({ length: N }, (_, i) => `${i + 1}\tcol ${i}`).join('\r\n'),
+      'plain text, no trailing newline': plain,
+      'plain text ending in a newline': `${plain}\n`,
+      'a first line 7→ then 8→ then plain': `   7→x\n   8→y\n${plain}`,
+    };
+    for (const [name, t] of Object.entries(shapes)) {
+      expect(t.length > t16f.EXPLORE_READ_MAX, `CONTROL: ${name} is past EXPLORE_READ_MAX`).toBe(true);
+      const s = t16f.stripReadPrefix(t);
+      const expected = ['Structured summary:', `Characters: ${s.length.toLocaleString('en-US')}.`, `Lines: ${s.split(/\r?\n/).length.toLocaleString('en-US')}.`].join('\n');
+      expect(t16f.exploreOutline(t, 'code', undefined, t16f.makePairIndex([])), name).toBe(expected);
+    }
+  });
+
+  it('a counts-only outline of a 64 MiB newline-dense item stays far under the 1 GiB bound (a child process)', () => {
+    const SCRIPT = [
+      'const L = await import(process.argv[1]);',
+      "const t = '\\n'.repeat(64 * 1024 * 1024);",
+      "const out = L.exploreOutline(t, 'code', undefined, L.makePairIndex([]));",
+      'process.stdout.write(JSON.stringify({ out, rss: process.resourceUsage().maxRSS }));',
+    ].join('\n');
+    const lib = new URL('../../ccd/history/lib.mjs', import.meta.url).href;
+    const r = libGrepSpawn(process.execPath, ['--no-warnings', '--input-type=module', '-e', SCRIPT, lib], { encoding: 'utf8', timeout: 240_000 });
+    expect(r.status, r.stderr).toBe(0);
+    const m = JSON.parse(r.stdout) as { out: string; rss: number };
+    expect(m.out, 'CONTROL: the counts are of the whole item').toContain('Lines: 67,108,865.');
+    expect(m.rss < 512 * 1024, `peak RSS ${m.rss} KiB`).toBe(true);
+  }, 300_000);
+
+  it('a resumed --around window keeps AROUND_MAX: 50 and 50 resume, 51 or 99 on either side are null', () => {
+    const U = '11111111-1111-4111-8111-111111111111';
+    const at = (b: number, a: number) => t16f.expandResumeOf({ t: `around:${U}:${b}:${a}` } as never);
+    expect(at(50, 50)).toEqual({ target: null, around: U, before: 50, after: 50 });
+    expect(at(51, 0)).toBeNull();
+    expect(at(0, 99)).toBeNull();
   });
 });

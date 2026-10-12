@@ -1275,7 +1275,8 @@ function expandEstimate(s, items, whole) {
  *  (blobOverDecodeCap, B1's history-permanent-failures-classified; only a raw-only line-too-long blob gets there) it
  *  is `too-large` too, against that bound. Its size is read before its z is. The decode is bounded by the stored
  *  raw_len (B1's unbrotli(z, maxLen), FPM10), and a blob that does not decode answers `undecodable`, never a throw
- *  and never `pruned`: a damaged blob is not a pruned one (no overloaded value at a seam). */
+ *  and never `pruned`: a damaged blob is not a pruned one (no overloaded value at a seam). A NULL `z` with no
+ *  `pruned_ms` is a damaged store and answers `undecodable`; only `pruned_ms` makes a tombstone (spec §6.2). */
 function expandBlob(s, blobId, isSidecar) {
   const m = s.blobLen.get(blobId);
   // A missing row is impossible under `blob_id … REFERENCES blobs ON DELETE RESTRICT`; it is the doctor's to report.
@@ -1285,7 +1286,7 @@ function expandBlob(s, blobId, isSidecar) {
   if (!xlib.expandBlobFits(rawLen)) return { state: 'too-large', rawLen };
   if (!isSidecar && xlib.blobOverDecodeCap(rawLen)) return { state: 'too-large', rawLen, bound: xlib.BLOB_DECODE_MAX };
   const b = s.blob.get(blobId);
-  if (b === undefined || b.z === null) return { state: 'pruned', prunedMs: null };
+  if (b === undefined || b.z === null) return { state: 'undecodable', rawLen };
   let bytes;
   try { bytes = xstore.unbrotli(b.z, rawLen); } catch { return { state: 'undecodable', rawLen }; }
   return { state: 'bytes', bytes };
@@ -1308,12 +1309,22 @@ function expandEntryText(rc, s, e) {
   const primary = expandParse(p.bytes);
   const rows = s.variants.all(e.entry_id).filter((v) => v.blob_id !== e.blob_id);
   const others = [];
-  for (const v of rows) {
+  for (const v of rows.filter((x) => x.cause === 'ccd-sanitize')) {
     const vb = expandBlob(s, v.blob_id, false);
     if (vb.state === 'bytes') others.push({ body: expandParse(vb.bytes), cause: v.cause });
   }
   const body = others.length === 0 ? primary : xlib.pickExpandBody({ primary, variants: others });
-  return { state: 'text', text: xlib.renderEntryText(body), causes: rows.map((v) => v.cause), primary };
+  let text;
+  try {
+    text = xlib.renderEntryText(body);
+  } catch (err) {
+    if (!(err instanceof RangeError)) throw err;
+    // A body nested past V8's JSON.stringify stack (about 4,500 levels, far inside B1's JSON_DEPTH_MAX) cannot be
+    // rendered. Its primary blob's stored text is shown instead, through the same windows, so the page and the
+    // cursor still move.
+    text = p.bytes.toString('utf8');
+  }
+  return { state: 'text', text, causes: rows.map((v) => v.cause), primary };
 }
 
 /** A sidecar's bytes as RAW text. It is never redacted whole: a 64 MiB sidecar redacted whole peaked at 1,954 MiB
@@ -1336,7 +1347,7 @@ function expandPairedPath(rc, s, e, body) {
     const b = expandBlob(s, r.blob_id, false);
     if (b.state === 'bytes') {
       const p = xlib.toolUseInputPath(expandParse(b.bytes), ids[0]);
-      if (p.found) return p.path === null ? null : xlib.redactField(p.path, rc.pairIdx);
+      if (p.found) return p.path === null ? null : xlib.redactForDisplay(p.path, rc.pairIdx);
     }
     uuid = r.parent_uuid;
   }
@@ -1477,7 +1488,7 @@ export function runExpand(rc, a) {
     if (item.partial) { next = { i, o: item.to }; break; }
   }
   const nextArgs = next === null ? null
-    : ['expand', ...r.args, ...scope, '--cursor', xlib.encodeCursor({ v: 1, resource: 'expand', t: r.key, i: next.i, o: next.o })];
+    : ['expand', ...r.args, ...scope, ...(a.json ? ['--json'] : []), '--cursor', xlib.encodeCursor({ v: 1, resource: 'expand', t: r.key, i: next.i, o: next.o })];
   const hint = a.cursor === null ? xlib.delegateHint(expandEstimate(s, items, r.whole)) : null;
   return { exit: xlib.EXIT.OK, header: null, blocks, items: out, total: items.length, shown, next: nextArgs, ...(hint === null ? {} : { hint }) };
 }
