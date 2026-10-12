@@ -216,7 +216,10 @@ export const CHILD_RECLAIM_MAX_IN_FLIGHT = 1;
  *  budget's grace before the lane treats it as stuck. It STAYS in flight —
  *  nothing here cancels or forgets it — and is
  *  logged once, not once a pass, so a fleet host that never answers does not
- *  fill the log forever. */
+ *  fill the log forever. The temp-root collector (spec §5.10) spends the same constant three times: its act is not
+ *  offered until this long after the lane's start, a settled act job that may have acted keeps the act slot this long,
+ *  and an act job still unsettled this long after it took the slot is listed; `collect-lane-pass.test.ts` pins it at
+ *  or above twice `ws-collect`'s remote runner row. */
 export const CHILD_RECLAIM_STALL_MS = 480_000;
 
 /** How long a collector AUDIT (`ws-audit --collect`, a learning audit or the executor's own) may stay unsettled before

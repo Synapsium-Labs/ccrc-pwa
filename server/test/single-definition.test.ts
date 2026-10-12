@@ -4163,10 +4163,15 @@ describe('the archive door\'s refusal codes are spelled once, in L0 (workspace l
   // `ARCHIVE_REFUSALS` (spec §5.2) is the one declaration; the server sends `ARCHIVE_REFUSALS.<name>` and the PWA
   // compares against it. `run-open` was a bare literal written twice in `server.ts` and once in
   // `ArchiveConflictSheet.tsx` before this wave. Code lines only (`stallCode`): prose names the codes in backticks.
-  // Two OTHER vocabularies share spellings, and each is excused here by name rather than by widening the scan:
+  // Four OTHER vocabularies share spellings, and each is excused here by name rather than by widening the scan:
   //   - `server/src/wsaudit.ts` keys its sentences by ccd's AUDIT verdict words, two of which ccd also dies with
   //     in `cmd_ws_archive` (`session-busy`, `status-unknown`) — the audit's seam, not the door's;
+  //   - the temp-root collector's open-run hold word `run-open` (`server/src/collectLane.ts`,
+  //     `server/src/coord/collectTempRoot.ts`) — the collector's seam, not the door's;
+  //   - the docs reader's `worktree-gone` (`server/src/docs/policy.ts`, `shared/docs.ts`) — the reader's own word;
   //   - `className="run-open"` is the runs board's row button (D-287), a CSS identity — excluded by the pattern.
+  // The collector's and the docs reader's excusals are by FILE (the `want` line below), a known width: a door code
+  // spelled in one of those files is not seen.
   const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const literal = (code: string): RegExp => new RegExp(`(?<!className=)(['"\`])${esc(code)}\\1`);
   const AUDIT_WORDS = new Set(['session-busy', 'status-unknown']);

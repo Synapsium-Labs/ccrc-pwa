@@ -16,7 +16,9 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CHILD_RECLAIM_SWEEP_MS, COLLECT_AUDIT_STALL_MS, COLLECT_OBSERVE_INTERVAL_MS } from '../src/watch.js';
+import {
+  CHILD_RECLAIM_STALL_MS, CHILD_RECLAIM_SWEEP_MS, COLLECT_AUDIT_STALL_MS, COLLECT_OBSERVE_INTERVAL_MS,
+} from '../src/watch.js';
 import { CHILD_RECLAIM_DEFER_CEILING_MS } from '../src/childReclaimSweep.js';
 import {
   COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, COLLECT_LANE_LIVE_MARKER, collectFeedAnswerBody, collectFeedReadBody,
@@ -52,6 +54,15 @@ describe('the lane’s constants are derived, and the tick dispatches it (spec �
     const row = /^\s*'ws-audit':\s*([0-9_]+),/m.exec(readFileSync(path.join(srcDir, 'remote', 'runner.ts'), 'utf8'));
     expect(row, 'ws-audit’s runner row is gone').not.toBeNull();
     expect(COLLECT_AUDIT_STALL_MS).toBe(2 * Number(row![1]!.replace(/_/g, '')));
+  });
+
+  it('the act slot’s bound covers twice ws-collect’s remote runner row', () => {
+    const row = /^\s*'ws-collect':\s*([0-9_]+),/m.exec(readFileSync(path.join(srcDir, 'remote', 'runner.ts'), 'utf8'));
+    expect(row, 'ws-collect’s runner row is gone').not.toBeNull();
+    // At LEAST twice the row, never exactly: the constant is shared with the reclaim lane's own bound, so a raise is
+    // allowed (it only makes the collector slower to end its start hold-off, free the slot and list a stuck job, never
+    // faster). A value below twice the row would let all three fire inside a `ws-collect` the runner still lets run.
+    expect(CHILD_RECLAIM_STALL_MS).toBeGreaterThanOrEqual(2 * Number(row![1]!.replace(/_/g, '')));
   });
 
   it('the tick dispatches the pass, unawaited, after the dead-coordinator lane and before the mail lane', () => {
