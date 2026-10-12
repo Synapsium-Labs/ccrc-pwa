@@ -504,6 +504,43 @@ describe('doctor box-token: the has-a-value test reads the way extractToken read
   }
 });
 
+// Review 383 F4 (for `_BT_UNI_WS`): one GENERATED row per code point of `extractToken`'s trim set. The set is derived here,
+// never listed by hand: every code point `String.prototype.trim` removes (`extractToken` trims with it), so a code point
+// an engine adds, or one deleted from the shell's strip, reds its own row. The ASCII members are the `[[:space:]]` class's
+// (the shell strips them first), the rest `_BT_UNI_WS`'s. Each row plants the code point (a) around the shipped
+// placeholder: doctor must still read the placeholder (placeholder pass), (b) alone on the file's only line: doctor must
+// read no value line (value pass), and (c) around a real value: doctor must read it and PASS. Fleet and server arms.
+describe('doctor box-token: every code point of extractToken\'s trim set is stripped (review 383 F4)', () => {
+  const TRIM_SET: number[] = [];
+  for (let c = 0; c <= 0xffff; c++) if (String.fromCodePoint(c).trim() === '') TRIM_SET.push(c);
+  const hex = (c: number): string => `U+${c.toString(16).toUpperCase().padStart(4, '0')}`;
+  it('the generated trim set is the one the rows were written for (25 code points, the ASCII six and U+00A0, U+1680, U+2000-200A, U+2028, U+2029, U+202F, U+205F, U+3000, U+FEFF)', () => {
+    expect(TRIM_SET.length).toBe(25);
+    expect(TRIM_SET).toContain(0x0b);
+    expect(TRIM_SET).toContain(0xa0);
+    expect(TRIM_SET).toContain(0x2000);
+    expect(TRIM_SET).toContain(0xfeff);
+  });
+  it.each(TRIM_SET.map((c) => [hex(c), c] as const))('%s is stripped: the placeholder behind it is still the placeholder, a line of only it has no value, a real value inside it is the value', (h, c) => {
+    const cp = String.fromCodePoint(c);
+    const plant = (b: Box, arm: 'fleet' | 'server', text: string): void =>
+      writeFileSync(arm === 'fleet' ? fleetFile(b) : dot(b, 'mail.token'), Buffer.from(text, 'utf8'), { mode: 0o600 });
+    for (const arm of ['fleet', 'server'] as const) {
+      const word = arm === 'fleet' ? 'fleet-token-unusable' : 'token-unusable';
+      const b = box({ role: arm });
+      plant(b, arm, `${cp}${PLACEHOLDER_TOKEN}${cp}\n`);
+      const ph = runCheck(b, CHECKS_SRC);
+      expect(ph.stdout, `${arm}: the placeholder around ${h} read as a value`).toMatch(new RegExp(`^FAIL box-token: ${arm}: ${word} — .* carries the placeholder value`));
+      plant(b, arm, `${cp}\n`);
+      const none = runCheck(b, CHECKS_SRC);
+      expect(none.stdout, `${arm}: a line of only ${h} read as a value`).toMatch(new RegExp(`^FAIL box-token: ${arm}: ${word} — .* carries no value line`));
+      plant(b, arm, `${cp}${arm === 'fleet' ? b.fleetValue : b.value}${cp}\n`);
+      const ok = runCheck(b, CHECKS_SRC);
+      expect(ok.stdout, `${arm}: a real value inside ${h} was not read as the value`).toBe(`PASS box-token: ${arm === 'fleet' ? FLEET_PASS : SERVER_PASS}\n`);
+    }
+  });
+});
+
 describe('doctor box-token: the FAIL and WARN arms are on in the shipped file', () => {
   for (const row of ROWS) {
     it(`${row.arm}: ${row.label ?? row.word} -> ${row.armedClass}`, () => {

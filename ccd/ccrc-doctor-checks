@@ -7429,7 +7429,9 @@ _BT_ARMS_ON=1
 # held to it by a text pin in `coord-token.test.ts`. Both arms read it: a token file carrying it is no token.
 _BT_PLACEHOLDER='REPLACE-THIS-LINE-WITH-THE-OUTPUT-OF-openssl-rand--hex-32'
 # What `String.prototype.trim` strips beyond ASCII (`extractToken` trims with it), as byte sequences: no-break space,
-# BOM, U+1680, U+2000-200A, U+2028, U+2029, U+202F, U+205F, U+3000. Used only to compare a value line to the placeholder.
+# BOM, U+1680, U+2000-200A, U+2028, U+2029, U+202F, U+205F, U+3000. `_bt_value_file` strips it (with ASCII whitespace) from
+# every line before it tells a blank or `#` line apart, and compares the value line to the placeholder; `doctor-box-token.test.ts`
+# pins every code point of the trim set, derived there, one row each.
 _BT_UNI_WS=($'\xc2\xa0' $'\xef\xbb\xbf' $'\xe1\x9a\x80' $'\xe2\x80\x80' $'\xe2\x80\x81' $'\xe2\x80\x82' $'\xe2\x80\x83'
   $'\xe2\x80\x84' $'\xe2\x80\x85' $'\xe2\x80\x86' $'\xe2\x80\x87' $'\xe2\x80\x88' $'\xe2\x80\x89' $'\xe2\x80\x8a'
   $'\xe2\x80\xa8' $'\xe2\x80\xa9' $'\xe2\x80\xaf' $'\xe2\x81\x9f' $'\xe3\x80\x80')
