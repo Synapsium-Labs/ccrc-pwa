@@ -3757,6 +3757,36 @@ fi
 waitby=""
 [[ "$state" == waiting && -n "$paid" ]] && waitby="subagent"
 
+# `a-carried-wait-keeps-its-stamp` (D-4041, review 397 F3; the race is that review's artifact 2, "P1 exception 1").
+# ONE fresh `jq` read of the file at the carry point answers every question the two subagent arms below ask: its state,
+# who raised the wait, the ask, `interrupted`, and the wait's own `updatedAt` and `event`. It is a read of the file as it
+# stands NOW, not of `prev_state`, which the prefilter took ~650 lines up: a main-thread answer that lands in between
+# must not be overwritten by a `waiting` decided from the old read. Lines, not `@tsv` (see the prefilter's note above);
+# `state` and `event` are cut to letters so a corrupt value cannot shift the lines, and `updatedAt` prints only when it
+# is a number. A jq that fails prints nothing: every field comes up empty, which both arms read as "nothing to carry".
+fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev=""
+_hook_fresh_read() {
+  fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev=""
+  { read -r fr_state; read -r fr_by; read -r fr_ask; read -r fr_int; read -r fr_upd; read -r fr_ev; } < <(jq -r \
+    'def keep(f): explode | map(select(f)) | implode; def alpha: (. >= 65 and . <= 90) or (. >= 97 and . <= 122);
+     (.state | if type == "string" then keep(alpha) else "" end),
+     (if .waitBy == "subagent" then "subagent" else "" end),
+     (.ask // null | tojson),
+     (if .interrupted == true then "true" else "false" end),
+     (.updatedAt | if type == "number" and . >= 0 then floor | tostring else "" end),
+     (.event | if type == "string" then keep(alpha) else "" end)' "$f" 2>/dev/null)
+}
+# The stamp a carried wait keeps. A MAIN-thread wait (fresh state `waiting`, not raised by a subagent) that a subagent
+# event writes over keeps the file's own `updatedAt` and `event` (the wait's START, which the attention bucket, the ask
+# row's `askAt` and the stall watch's hold 2a read) and gains the additive `aliveAt` = now (the liveness the aged door,
+# `hookstate.ts`, reads, so a long wait with subagents working stays fresh). Every other write has no `aliveAt`, and a
+# file whose `updatedAt` is not a number keeps nothing: it is written as before, with a fresh stamp.
+w_ev="" w_upd="" w_alive=""
+_hook_keep_stamp() {
+  [[ "$fr_state" == waiting && "$fr_by" != subagent && "$fr_upd" =~ ^[0-9]+$ ]] || return 0
+  w_upd="$fr_upd" w_ev="$fr_ev" w_alive=$(_hook_epoch_ms)
+}
+
 if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
   name=$(jq -r '.agent_name // .subagent_name // .agent_type // "subagent"' <<<"$payload" 2>/dev/null) || name="subagent"
   now=$(_hook_epoch_ms)
@@ -3766,33 +3796,36 @@ if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
   else
     subs=$(jq -c --arg n "$name" 'del(.[ (map(.name) | index($n)) // empty ])' <<<"$subs" 2>/dev/null) || subs="[]"
   fi
-  # Session state untouched: keep the previous state (or skip entirely when
-  # no state was ever written — a subagent event before any turn is inert).
+  # Session state untouched: keep the state the file holds (or skip entirely when no state was ever written, or the file
+  # is gone or unreadable by now — a subagent event before any turn is inert). `prev_state` is only the no-fork prefilter.
   [[ -n "$prev_state" ]] || exit 0
-  state="$prev_state"
-  ask_json=$(jq -c '.ask // null' "$f" 2>/dev/null) || ask_json="null"
-  interrupted=$(jq -r 'if .interrupted == true then "true" else "false" end' "$f" 2>/dev/null) || interrupted="false"
-  waitby=$(jq -r 'if .waitBy == "subagent" then "subagent" else "" end' "$f" 2>/dev/null) || waitby=""
+  _hook_fresh_read
+  [[ -n "$fr_state" ]] || exit 0
+  state="$fr_state"
+  ask_json="${fr_ask:-null}"
+  [[ "$fr_int" == true ]] && interrupted="true" || interrupted="false"
+  waitby="$fr_by"
+  _hook_keep_stamp
 fi
 
-# `subagent-tool-event-keeps-the-waiting-ask` (D-4039, finding 4063): a subagent's tool event never ends the main
-# thread's wait. Its PreToolUse/PostToolUse reaches the case above as `working` with a null ask, and written as is it
-# erased a question the main thread asked 3.1 s earlier, before any pane tick could mint the ask row. Only `waiting`
-# is carried, with its ask and `interrupted`; the stamp and the event move as for any event (the delegates hold and
-# the frozen arm read them), and every other state keeps today's write.
+# `subagent-tool-event-keeps-the-waiting-ask` (D-4039, finding 4063): a subagent's PreToolUse/PostToolUse never ends the
+# main thread's wait. It reaches the case above as `working` with a null ask, and written as is it erased a question the
+# main thread asked 3.1 s earlier, before any pane tick could mint the ask row. Only `waiting` is carried, with its ask and
+# `interrupted`, and every other state keeps today's write. (A subagent's PermissionRequest is not a tool event of this
+# kind: it still replaces a main question with its own approval, as it always did — Review Focus 1.)
+# `a-carried-wait-keeps-its-stamp` (D-4041): the carry keeps the wait's `updatedAt` and `event` and adds `aliveAt`
+# (above). The reader that needs the stamp to MOVE is the aged door (`hookstate.ts`), and it reads `aliveAt` for that.
 # `carry-only-a-main-thread-wait` (task review, Important 1): a wait that a subagent raised itself (`waitBy` stored
 # as "subagent") is NOT carried, so that subagent's own approved dialog ends at its next tool event as it always did.
-# One jq fork reads the three stored fields; this runs on a subagent's tool event only.
+# `prev_state` is the no-fork prefilter only; the decision is made on the one fresh read, on a subagent's tool event.
 if [[ -n "$paid" && "$prev_state" == waiting && ( "$event" == PreToolUse || "$event" == PostToolUse ) ]]; then
-  w_ask="" w_int="" w_by=""
-  { read -r w_ask; read -r w_int; read -r w_by; } < <(jq -r \
-    '(.ask // null | tojson), (if .interrupted == true then "true" else "false" end),
-     (if .waitBy == "subagent" then "subagent" else "" end)' "$f" 2>/dev/null)
-  if [[ "$w_by" != subagent ]]; then
+  _hook_fresh_read
+  if [[ "$fr_state" == waiting && "$fr_by" != subagent ]]; then
     state="waiting"
-    ask_json="${w_ask:-null}"
-    [[ "$w_int" == true ]] && interrupted="true" || interrupted="false"
+    ask_json="${fr_ask:-null}"
+    [[ "$fr_int" == true ]] && interrupted="true" || interrupted="false"
     waitby=""
+    _hook_keep_stamp
   fi
 fi
 
@@ -3801,18 +3834,19 @@ fi
 [[ "$state" == working || "$state" == done ]] && { [[ "$event" == SubagentStart || "$event" == SubagentStop ]] || ask_json="null"; }
 
 out=$(jq -cn \
-  --argjson v 1 --arg state "$state" --arg event "$event" \
+  --argjson v 1 --arg state "$state" --arg event "${w_ev:-$event}" \
   --arg sessionId "${CLAUDE_CODE_SESSION_ID:-}" --argjson pid "${CLAUDE_PID:-0}" \
-  --argjson updatedAt "${hts:-$(_hook_epoch_ms)}" --argjson interrupted "$interrupted" \
+  --argjson updatedAt "${w_upd:-${hts:-$(_hook_epoch_ms)}}" --argjson interrupted "$interrupted" \
   --argjson ask "$ask_json" --argjson subagents "$subs" --argjson graphQueries "$gq" \
-  --argjson graphGateDenials "$gd" --arg waitBy "$waitby" \
+  --argjson graphGateDenials "$gd" --arg waitBy "$waitby" --arg aliveAt "$w_alive" \
   --argjson ccrcPeerReads "$cp" --argjson ccrcClaims "$cc" \
   '{v:$v, state:$state, event:$event, sessionId:$sessionId, pid:$pid,
     updatedAt:$updatedAt, ask:$ask, subagents:$subagents, graphQueries:$graphQueries,
     graphGateDenials:$graphGateDenials, ccrcPeerReads:$ccrcPeerReads,
     ccrcClaims:$ccrcClaims}
    + (if $interrupted then {interrupted:true} else {} end)
-   + (if $waitBy == "subagent" then {waitBy:"subagent"} else {} end)') || exit 0
+   + (if $waitBy == "subagent" then {waitBy:"subagent"} else {} end)
+   + (if $aliveAt != "" then {aliveAt: ($aliveAt | tonumber)} else {} end)') || exit 0
 
 # 64KB cap: drop the questions envelope before anything else — a truncated
 # envelope is worse than none.

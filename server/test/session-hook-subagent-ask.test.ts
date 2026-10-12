@@ -70,16 +70,70 @@ describe('a subagent tool event keeps the main thread waiting (D-4039)', () => {
     expect(readState()).toMatchObject({ state: 'waiting', ask: { approval: { tool: 'Bash', summary: 'rm -rf build' } } });
   });
 
-  it('the stamp and the event still move, for the delegates hold and the frozen arm', () => {
+  // a-carried-wait-keeps-its-stamp (D-4041): the aged door (hookstate.ts) is the reader that needs liveness, and it
+  // reads `aliveAt`. The attention bucket, the ask row's `askAt` and the verdict's hold 2a read the wait's START.
+  it('a carried write keeps updatedAt and event and writes aliveAt', () => {
     askViaPermission();
-    // Rewrite the stored stamp so "moved" is a strict, observable change, not a same-millisecond tie.
+    // Rewrite the stored stamp so "kept" is a strict, observable fact, not a same-millisecond tie.
     const seeded = { ...readState(), updatedAt: 1 };
     fs.writeFileSync(stateFile(), JSON.stringify(seeded) + '\n');
+    const before = Date.now();
     run({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: '/x' }, ...SUB });
     const after = readState();
     expect(after['state']).toBe('waiting');
-    expect(after['event']).toBe('PostToolUse');
-    expect(after['updatedAt'] as number).toBeGreaterThan(1);
+    expect(after['event']).toBe('PermissionRequest');
+    expect(after['updatedAt']).toBe(1);
+    expect(after['aliveAt'] as number).toBeGreaterThanOrEqual(before);
+  });
+
+  it('a subagent PreToolUse keeps the stamp and writes aliveAt too, and a second carry keeps the FIRST stamp', () => {
+    askViaPermission();
+    fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), updatedAt: 1 }) + '\n');
+    run({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, ...SUB });
+    const first = readState();
+    expect(first).toMatchObject({ state: 'waiting', event: 'PermissionRequest', updatedAt: 1 });
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, ...SUB });
+    const second = readState();
+    expect(second).toMatchObject({ state: 'waiting', event: 'PermissionRequest', updatedAt: 1 });
+    expect(second['aliveAt'] as number).toBeGreaterThanOrEqual(first['aliveAt'] as number);
+  });
+
+  it('a main-thread write after a carried one carries no aliveAt', () => {
+    askViaPermission();
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: '/x' }, ...SUB });
+    expect(readState()).toHaveProperty('aliveAt');
+    // a new main-thread question: waiting again, rewritten whole, with a fresh stamp and no aliveAt
+    askViaPermission();
+    const renewed = readState();
+    expect(renewed).toMatchObject({ state: 'waiting', event: 'PermissionRequest' });
+    expect(renewed).not.toHaveProperty('aliveAt');
+    // and the answer: working
+    run({ hook_event_name: 'PostToolUse', tool_name: 'AskUserQuestion', tool_input: Q });
+    expect(readState()).toMatchObject({ state: 'working' });
+    expect(readState()).not.toHaveProperty('aliveAt');
+  });
+
+  it('SubagentStart and SubagentStop over a main-thread wait keep the stamp and write aliveAt', () => {
+    askViaPermission();
+    fs.writeFileSync(stateFile(), JSON.stringify({ ...readState(), updatedAt: 1 }) + '\n');
+    for (const ev of ['SubagentStart', 'SubagentStop']) {
+      run({ hook_event_name: ev, ...SUB });
+      const s = readState();
+      expect(s, ev).toMatchObject({ state: 'waiting', event: 'PermissionRequest', updatedAt: 1, ask: { questions: Q.questions } });
+      expect(s['aliveAt'] as number, ev).toBeGreaterThan(1);
+    }
+  });
+
+  it('control: SubagentStart over working and over a subagent-raised wait write no aliveAt', () => {
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: '/x' } });
+    run({ hook_event_name: 'SubagentStart', ...SUB });
+    expect(readState()).toMatchObject({ state: 'working' });
+    expect(readState()).not.toHaveProperty('aliveAt');
+    run({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'npm test' }, ...SUB });
+    run({ hook_event_name: 'SubagentStop', ...SUB });
+    const s = readState();
+    expect(s).toMatchObject({ state: 'waiting', waitBy: 'subagent' });
+    expect(s).not.toHaveProperty('aliveAt');
   });
 
   it('control: the main thread answering (its own PostToolUse) ends the wait and clears the ask', () => {
@@ -161,5 +215,71 @@ describe('a subagent tool event keeps the main thread waiting (D-4039)', () => {
     expect(readState()).not.toHaveProperty('waitBy');
     run({ hook_event_name: 'Stop' });
     expect(readState()).not.toHaveProperty('waitBy');
+  });
+});
+
+// ── The race (review 397, "P1 exception 1"; D-4041) ─────────────────────────────────────────────────────────────────
+// A forced interleaving: a `jq` shim in the fixture's `bin/` passes through to the real jq, and, on ONE chosen read of the
+// hookstate file, prints the real result first and then rewrites the file the way the main thread's ANSWER would. The
+// prefilter read is the one whose program names `graphQueries`; the carry's fresh read is the one that names `waitBy`.
+describe('the carry is decided from one fresh read (D-4041)', () => {
+  const SHIM = `#!/bin/bash
+args=("$@"); last="${'$'}{args[$((${'$'}{#args[@]}-1))]}"
+if [[ "$last" == *.hookstate.json ]]; then
+  [[ -n "${'$'}{SHIM_LOG:-}" ]] && echo "$last" >> "$SHIM_LOG"
+  hit=""
+  case "${'$'}{SHIM_RACE:-}" in
+    prefilter) [[ "$*" == *graphQueries* ]] && hit=1 ;;
+    carry) [[ "$*" == *waitBy* ]] && hit=1 ;;
+  esac
+  if [[ -n "$hit" && ! -e "$last.fired" ]]; then
+    : > "$last.fired"
+    "$REAL_JQ" "$@" > "$last.shimout"; rc=$?
+    printf '%s\n' "$SHIM_REWRITE" > "$last.rw" && mv "$last.rw" "$last"
+    cat "$last.shimout"; rm -f "$last.shimout"; exit $rc
+  fi
+fi
+exec "$REAL_JQ" "$@"
+`;
+  const realJq = (): string => execFileSync('sh', ['-c', 'command -v jq'], { encoding: 'utf8' }).trim();
+  const installShim = (): void => { fs.writeFileSync(path.join(home, 'bin', 'jq'), SHIM, { mode: 0o755 }); };
+  const mainAnswer = (): string => JSON.stringify({ v: 1, state: 'working', event: 'PostToolUse', sessionId: 'uuid-1', pid: 4242,
+    updatedAt: Date.now(), ask: null, subagents: [], graphQueries: 0, graphGateDenials: 0 });
+  const raceEnv = (race: string): Record<string, string> => ({ REAL_JQ: realJq(), SHIM_RACE: race, SHIM_REWRITE: mainAnswer() });
+
+  it('a main answer landing after the prefilter read is not overwritten by a carried waiting', () => {
+    askViaPermission();
+    installShim();
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: '/x' }, ...SUB }, raceEnv('prefilter'));
+    expect(fs.existsSync(`${stateFile()}.fired`), 'the shim fired').toBe(true);
+    expect(readState()).toMatchObject({ state: 'working', ask: null });
+    expect(readState()).not.toHaveProperty('aliveAt');
+  });
+
+  it('the same holds for a SubagentStop: its state comes from the fresh read, not from the prefilter', () => {
+    askViaPermission();
+    installShim();
+    run({ hook_event_name: 'SubagentStop', ...SUB }, raceEnv('prefilter'));
+    expect(fs.existsSync(`${stateFile()}.fired`), 'the shim fired').toBe(true);
+    expect(readState()).toMatchObject({ state: 'working', ask: null });
+  });
+
+  it('control: with no interleaving the shim is a pass-through and the wait is carried', () => {
+    askViaPermission();
+    installShim();
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: '/x' }, ...SUB }, { REAL_JQ: realJq() });
+    expect(readState()).toMatchObject({ state: 'waiting', ask: { questions: Q.questions } });
+  });
+
+  it('SubagentStart and SubagentStop read the hookstate file with two jq forks: the prefilter and the shared fresh read', () => {
+    askViaPermission();
+    installShim();
+    const log = path.join(home, 'jq.log');
+    for (const ev of ['SubagentStart', 'SubagentStop']) {
+      fs.rmSync(log, { force: true });
+      run({ hook_event_name: ev, ...SUB }, { REAL_JQ: realJq(), SHIM_LOG: log });
+      const forks = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean);
+      expect(forks, ev).toHaveLength(2);
+    }
   });
 });
