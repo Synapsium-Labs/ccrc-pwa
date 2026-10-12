@@ -14,7 +14,7 @@ import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import * as pty from 'node-pty';
-import { beltWidth, historyPaths, floorThreshold } from '../../ccd/history/lib.mjs';
+import { beltWidth, historyPaths, floorThreshold, REPARSE_MAX_TARGETS, BELT_VERSION } from '../../ccd/history/lib.mjs';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { userRow, compactionSequence, toolResultRow } from './historyFixtures.js';
 import {
@@ -778,5 +778,256 @@ describe('prune: dry run by default, tombstones by referrer age, the floor, the 
     const dry = runShim(box, ['--op', 'prune', '--older-than', '90d']);
     expect(dry.code, dry.stderr).toBe(0);
     expect(lastResult(dry.stdout)).toEqual({ rc: 0 });
+  }, HEAVY);
+});
+
+describe('reparse: targets, the 500-leaf limit, pruned spans refused, ids kept, crashes retried (W1-B2 Task 21)', () => {
+  skipOnDarwin();
+  /** A family with two manual compactions (Task 5's builder), so two leaves are derived. */
+  function twoLeaves(prefix: string): HistoryBox {
+    const box = makeHistoryBox(prefix, { role: 'fleet', shim: true });
+    seedFamily(box, { id: ID, project: 'demo', uuid: MAINT_U1, rows: compactionSequence({ n: 2, trigger: 'manual' }).rows });
+    expect(runSweep(box).code).toBe(0);
+    return box;
+  }
+  const leafIds = (box: HistoryBox): string[] =>
+    maintQ<{ node_id: string }>(box, "SELECT node_id FROM nodes WHERE kind <> 'condensed' ORDER BY node_id").map((r) => r.node_id);
+  const allIds = (box: HistoryBox): string[] =>
+    maintQ<{ node_id: string }>(box, 'SELECT node_id FROM nodes ORDER BY node_id').map((r) => r.node_id);
+  const sourcesOf = (box: HistoryBox): Array<{ node_id: string; entry_id: number; ord: number }> =>
+    maintQ(box, 'SELECT node_id, entry_id, ord FROM node_sources ORDER BY node_id, ord');
+  interface LeafRow { node_id: string; kind: string; status: string; gist: string | null; topics: string | null; directive_flag: number; capped: number }
+  /** Every derived field reparse may rewrite, per leaf. */
+  const leafRows = (box: HistoryBox): LeafRow[] =>
+    maintQ<LeafRow>(box, 'SELECT node_id, kind, status, gist, topics, directive_flag, capped FROM nodes WHERE depth = 0 ORDER BY node_id');
+  const refsOf = (box: HistoryBox): unknown[] => maintQ(box, 'SELECT node_id, kind, value, origin FROM node_refs ORDER BY node_id, kind, value');
+  const crashes = (box: HistoryBox): number =>
+    maintQ<{ n: number }>(box, "SELECT n FROM counters WHERE name = 'parser_crash'")[0]?.n ?? 0;
+
+  it('DM7: two fresh boxes over the same fixtures derive the same L/N + 20-hex ids, and reparse --apply keeps them and their sources', () => {
+    const a = twoLeaves('ccrc-hist-dm7a-');
+    const b = twoLeaves('ccrc-hist-dm7b-');
+    const ids = allIds(a);
+    expect(leafIds(a).length, 'CONTROL: the fixture derived its two leaves').toBe(2);
+    for (const id of ids) expect(id).toMatch(/^[LN][0-9a-f]{20}$/);
+    expect(allIds(b), 're-ingest on a fresh box derives the same ids').toEqual(ids);
+    const sources = sourcesOf(a);
+    const r = runShim(a, ['--op', 'reparse', '--apply']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lastResult(r.stdout)).toEqual({ rc: 0 });
+    expect(r.stdout).toMatch(/^history-sweep: reparsed 2 leaves \([0-9]+ changed, 0 failed\); node ids and sources unchanged$/m);
+    expect(allIds(a), 'a reparse never mints an id').toEqual(ids);
+    expect(sourcesOf(a), 'nor moves a source').toEqual(sources);
+  }, HEAVY);
+
+  it('DM21: a span with a tombstoned source is refused span-pruned through both doors and by the dry run, and node_sources stay byte-identical', () => {
+    const box = twoLeaves('ccrc-hist-dm21-');
+    const leaf = leafIds(box)[0]!;
+    const db = new DatabaseSync(dbFile(box));
+    try {
+      db.prepare(`UPDATE blobs SET z = NULL, pruned_ms = ? WHERE blob_id = (SELECT e.blob_id FROM node_sources ns
+          JOIN entries e ON e.entry_id = ns.entry_id WHERE ns.node_id = ? ORDER BY ns.ord LIMIT 1)`).run(Date.now(), leaf);
+    } finally { db.close(); }
+    const sources = sourcesOf(box);
+    const direct = runShim(box, ['--op', 'reparse', '--node', leaf, '--apply']);
+    expect(direct.code).toBe(2);
+    expect(lastResult(direct.stdout)).toEqual({ rc: 2, reason: 'span-pruned' });
+    const cli = runCli(box, ['reparse', '--node', leaf, '--apply', '--json']);
+    expect(cli.code, cli.stderr).toBe(2);
+    expect(cli.json?.['reason']).toBe('span-pruned');
+    const dry = runShim(box, ['--op', 'reparse']);
+    expect(lastResult(dry.stdout), 'a dry run says what --apply would answer').toEqual({ rc: 2, reason: 'span-pruned' });
+    expect(sourcesOf(box)).toEqual(sources);
+    const other = leafIds(box)[1]!;
+    const untouched = runShim(box, ['--op', 'reparse', '--node', other, '--apply']);
+    expect(lastResult(untouched.stdout), 'a leaf with no pruned source still reparses').toEqual({ rc: 0 });
+    // A tombstoned SUMMARY is a pruned span too (prune never makes one; a restored or hand-edited store can).
+    const summary = maintQ<{ id: number | null }>(box, 'SELECT summary_blob_id AS id FROM nodes WHERE node_id = ?', other)[0]?.id ?? null;
+    expect(summary, 'CONTROL: a native leaf names its summary blob (Task 8)').not.toBeNull();
+    const db2 = new DatabaseSync(dbFile(box));
+    try { db2.prepare('UPDATE blobs SET z = NULL, pruned_ms = ? WHERE blob_id = ?').run(Date.now(), summary!); } finally { db2.close(); }
+    const sumRefused = runShim(box, ['--op', 'reparse', '--node', other, '--apply']);
+    expect(lastResult(sumRefused.stdout)).toEqual({ rc: 2, reason: 'span-pruned' });
+    expect(sourcesOf(box)).toEqual(sources);
+  }, HEAVY);
+
+  it('an unknown --node is not found (exit 3, no reason word) in both forms', () => {
+    const box = boundBox('ccrc-hist-rp3-');
+    const missing = `L${'0'.repeat(19)}9`;
+    expect(lastResult(runShim(box, ['--op', 'reparse', '--node', missing, '--apply']).stdout)).toEqual({ rc: 3 });
+    expect(lastResult(runShim(box, ['--op', 'reparse', '--node', missing]).stdout)).toEqual({ rc: 3 });
+  }, HEAVY);
+
+  it('C62: exactly REPARSE_MAX_TARGETS leaves run; one more answers reparse-too-many and writes nothing', () => {
+    const box = boundBox('ccrc-hist-c62-');
+    /** Leaves planted by SQL on the store's own WAL: no boundary, so refreshLeaf skips each, and the run's
+     *  answer is decided by the count alone. */
+    const plant = (from: number, to: number): void => {
+      const db = new DatabaseSync(dbFile(box));
+      try {
+        db.exec('BEGIN IMMEDIATE');
+        db.prepare("INSERT OR IGNORE INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, ?, '', 'demo', 1)").run(ID);
+        db.prepare('INSERT OR IGNORE INTO transcripts (transcript_pk, cc_session_uuid) VALUES (1, ?)').run(MAINT_U1);
+        const ins = db.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, parser_version,
+            created_ms) VALUES (?, 1, 1, 1, 'native_leaf', 0, 'not-requested', 1, 1)`);
+        for (let i = from; i < to; i += 1) ins.run(`L${i.toString(16).padStart(20, '0')}`);
+        db.exec('COMMIT');
+      } finally { db.close(); }
+    };
+    const nodes = (): unknown[] => maintQ(box, 'SELECT node_id, kind, status, gist, topics, parser_version, created_ms FROM nodes ORDER BY node_id');
+    plant(0, REPARSE_MAX_TARGETS);
+    const ran = runShim(box, ['--op', 'reparse', '--apply']);
+    expect(ran.code, ran.stderr).toBe(0);
+    expect(ran.stdout).toMatch(new RegExp(`^history-sweep: reparsed ${REPARSE_MAX_TARGETS} leaves`, 'm'));
+    plant(REPARSE_MAX_TARGETS, REPARSE_MAX_TARGETS + 1);
+    const before = nodes();
+    const refused = runShim(box, ['--op', 'reparse', '--apply']);
+    expect(refused.code).toBe(2);
+    expect(lastResult(refused.stdout)).toEqual({ rc: 2, reason: 'reparse-too-many' });
+    expect(refused.stdout).toMatch(/^history-sweep: reparse-too-many: 501 leaves named, above the limit of 500/m);
+    expect(nodes(), 'nothing written').toEqual(before);
+  }, HEAVY);
+
+  it('RB5: a parse-failed leaf is left alone by the tick and re-derived by reparse --apply, under the same id and sources', () => {
+    const box = twoLeaves('ccrc-hist-rb5a-');
+    const before = leafRows(box);
+    const refs = refsOf(box);
+    const sources = sourcesOf(box);
+    const target = leafIds(box)[0]!;
+    expect(before.find((x) => x.node_id === target)?.kind, 'CONTROL: derived native from its summary').toBe('native_leaf');
+    // The leaf as Task 8 records a crashed derivation (RB5), planted by SQL with no sweep running.
+    const db = new DatabaseSync(dbFile(box));
+    try {
+      db.exec('BEGIN IMMEDIATE');
+      db.prepare(`UPDATE nodes SET kind = 'raw_leaf', status = 'parse-failed', gist = NULL, topics = NULL, directive_flag = 0, capped = 0
+        WHERE node_id = ?`).run(target);
+      db.prepare('DELETE FROM node_refs WHERE node_id = ?').run(target);
+      db.exec('COMMIT');
+    } finally { db.close(); }
+    expect(runSweep(box).code).toBe(0);
+    expect(leafRows(box).find((x) => x.node_id === target)?.status, 'no tick retries a recorded crash').toBe('parse-failed');
+    const r = runShim(box, ['--op', 'reparse', '--apply']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lastResult(r.stdout)).toEqual({ rc: 0 });
+    expect(r.stdout).toMatch(/^history-sweep: reparsed 2 leaves \(1 changed, 0 failed\); node ids and sources unchanged$/m);
+    expect(leafRows(box), 'the leaf reads as it was first derived, under the same id').toEqual(before);
+    expect(refsOf(box)).toEqual(refs);
+    expect(sourcesOf(box)).toEqual(sources);
+  }, HEAVY);
+
+  it('RB5: a leaf whose derivation still throws is recorded parse-failed and counted once, the other is re-derived, and the next reparse retries it', () => {
+    const box = twoLeaves('ccrc-hist-rb5b-');
+    const before = leafRows(box);
+    // The LATER leaf's summary blob: the earlier leaf's derivation never reads it (topics read the previous summary).
+    const last = maintQ<{ node_id: string; s: number }>(box,
+      'SELECT node_id, summary_blob_id AS s FROM nodes WHERE depth = 0 ORDER BY boundary_entry_id DESC LIMIT 1')[0]!;
+    expect(last.s, 'CONTROL: a native leaf names its summary blob (Task 8)').toBeGreaterThan(0);
+    const crash0 = crashes(box);
+    const r = runShim(box, ['--op', 'reparse', '--apply'], { preloads: [PRELOADS.faults], env: { HISTORY_TEST_THROW_BLOB: String(last.s) } });
+    expect(r.code, r.stderr).toBe(0);
+    expect(lastResult(r.stdout)).toEqual({ rc: 0 });
+    expect(r.stdout).toMatch(/^history-sweep: reparsed 2 leaves \([0-9]+ changed, 1 failed\); node ids and sources unchanged$/m);
+    const mid = leafRows(box);
+    expect(mid.find((x) => x.node_id === last.node_id)).toMatchObject({ kind: 'raw_leaf', status: 'parse-failed', gist: null, topics: null });
+    expect(mid.filter((x) => x.node_id !== last.node_id), 'the other leaf is re-derived as it was')
+      .toEqual(before.filter((x) => x.node_id !== last.node_id));
+    expect(maintQ(box, 'SELECT kind FROM node_refs WHERE node_id = ?', last.node_id), 'a crashed leaf holds no refs').toEqual([]);
+    expect(crashes(box) - crash0, 'counted once').toBe(1);
+    const again = runShim(box, ['--op', 'reparse', '--apply']);
+    expect(again.code, again.stderr).toBe(0);
+    expect(again.stdout).toMatch(/^history-sweep: reparsed 2 leaves \(1 changed, 0 failed\)/m);
+    expect(leafRows(box), 'the next reparse retries it').toEqual(before);
+  }, HEAVY);
+
+  it('RB5: an all-leaves reparse clears the leaf-crashed markers and lowers the leaves cursor, so the next tick derives the boundary under its old id', () => {
+    const box = twoLeaves('ccrc-hist-rb5c-');
+    const ids = allIds(box);
+    const gone = maintQ<{ node_id: string; b: number; rowid: number }>(box,
+      'SELECT node_id, boundary_entry_id AS b, rowid FROM nodes WHERE depth = 0 ORDER BY boundary_entry_id DESC LIMIT 1')[0]!;
+    // A boundary whose derivation threw before its leaf id was known: no leaf, and Task 8's marker. Planted by SQL.
+    const db = new DatabaseSync(dbFile(box));
+    try {
+      db.exec('BEGIN IMMEDIATE');
+      db.prepare('DELETE FROM node_refs WHERE node_id = ?').run(gone.node_id);
+      db.prepare('DELETE FROM node_sources WHERE node_id = ?').run(gone.node_id);
+      db.prepare('DELETE FROM node_children WHERE node_id = ? OR child_id = ?').run(gone.node_id, gone.node_id);
+      if (db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'nodes_fts'").get() !== undefined) {
+        db.prepare('DELETE FROM nodes_fts WHERE rowid = ?').run(gone.rowid);
+      }
+      db.prepare('DELETE FROM nodes WHERE node_id = ?').run(gone.node_id);
+      // Task 8's marker shape: cursor = the NODE_PARSER_VERSION it crashed under (1 in B2), so a tick's todo skips it.
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('leaf-crashed', ?, '1', ?)").run(gone.b, Date.now());
+      db.exec('COMMIT');
+    } finally { db.close(); }
+    expect(runSweep(box).code).toBe(0);
+    expect(allIds(box), 'CONTROL: the marked boundary waits for a reparse').not.toContain(gone.node_id);
+    const r = runShim(box, ['--op', 'reparse', '--apply']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^history-sweep: reparse: 1 crashed boundary marker\(s\) cleared; the next tick derives their leaves$/m);
+    expect(maintQ(box, "SELECT version FROM derivation_state WHERE step = 'leaf-crashed'")).toEqual([]);
+    expect(runSweep(box).code).toBe(0);
+    expect(allIds(box), 'the next tick derives it again, under the id it had').toEqual(ids);
+  }, HEAVY);
+
+  it('RB6: while a recovery step is registered, reparse --apply answers recovering and rewrites nothing; the dry run still answers', () => {
+    const box = twoLeaves('ccrc-hist-rb6rp-');
+    const before = leafRows(box);
+    maintRecovering(box);
+    const r = runShim(box, ['--op', 'reparse', '--apply']);
+    expect(r.code, r.stderr).toBe(2);
+    expect(lastResult(r.stdout)).toEqual({ rc: 2, reason: 'recovering' });
+    expect(leafRows(box)).toEqual(before);
+    const dry = runShim(box, ['--op', 'reparse']);
+    expect(dry.code, dry.stderr).toBe(0);
+    expect(lastResult(dry.stdout)).toEqual({ rc: 0 });
+  }, HEAVY);
+
+  it('O59: a reparse whose belt lacks a unit the belt state records as covered records the belt due; one with every unit loaded leaves the state as it was', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file regardless of its mode
+    const AN = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const v = `${Array.from({ length: 29 }, () => AN[Math.floor(Math.random() * AN.length)]!).join('')}7`;
+    const box = makeHistoryBox('ccrc-hist-rpbelt-', { role: 'fleet', shim: true });
+    const secret = path.join(box.home, '.cc-secrets', 'rp-belt.env');
+    fs.mkdirSync(path.dirname(secret), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(secret, `ZQ_RP_BELT=${v}\n`, { mode: 0o600 });
+    seedFamily(box, { id: ID, project: 'demo', uuid: MAINT_U1, rows: compactionSequence({ n: 2, trigger: 'manual' }).rows });
+    const belt = (): { v: number; rids: number[]; gen: number[] | null; w?: string } | null => {
+      const raw = maintMeta(box, 'fts_belt');
+      return raw === null ? null : JSON.parse(raw) as { v: number; rids: number[]; gen: number[] | null; w?: string };
+    };
+    for (let k = 0; k < 4 && belt()?.v !== BELT_VERSION; k += 1) expect(runSweep(box).code).toBe(0);
+    const covered = maintMeta(box, 'fts_belt');
+    expect(belt()?.v, 'CONTROL: the ticks completed a belt generation').toBe(BELT_VERSION);
+    expect(belt()?.rids.length, 'CONTROL: recording the one unit covered').toBe(1);
+    expect(leafIds(box).length, 'CONTROL: the fixture derived its two leaves').toBe(2);
+    const same = runShim(box, ['--op', 'reparse', '--apply']);
+    expect(same.code, same.stderr).toBe(0);
+    expect(lastResult(same.stdout)).toEqual({ rc: 0 });
+    expect(maintMeta(box, 'fts_belt'), 'every recorded unit loaded: the state stays as the tick left it').toBe(covered);
+    fs.chmodSync(secret, 0o000);
+    try {
+      const r = runShim(box, ['--op', 'reparse', '--apply']);
+      expect(r.code, r.stderr).toBe(0);
+      expect(lastResult(r.stdout)).toEqual({ rc: 0 });
+    } finally { fs.chmodSync(secret, 0o600); }
+    const due = belt();
+    // The pass ends with stampBeltWitness (ruling R-rollback), so the due record carries the pass's witness `w`
+    // beside v, rids and gen: read the three apart from it.
+    expect({ v: due?.v, rids: due?.rids, gen: due?.gen }, 'the unit was unreadable during the pass: its rewritten leaves lack its belt, so the belt is due')
+      .toEqual({ v: 0, rids: [], gen: null });
+    expect(typeof due?.w, 'the pass ends stamped with its own witness, so the next tick reads no other build').toBe('string');
+    // An open generation recorded under another BELT_VERSION covers nothing this version can stamp (spec §6.2 "The
+    // belt"; ruling R-version): planted with every unit loaded and the rids exact, a reparse still records the belt due.
+    const rids = (JSON.parse(covered!) as { rids: number[] }).rids;
+    const pw = new DatabaseSync(dbFile(box));
+    try {
+      pw.prepare('UPDATE meta SET v = ? WHERE k = ?')
+        .run(JSON.stringify({ v: BELT_VERSION, rids, gen: rids, gv: BELT_VERSION + 1 }), 'fts_belt');
+    } finally { pw.close(); }
+    const other = runShim(box, ['--op', 'reparse', '--apply']);
+    expect(other.code, other.stderr).toBe(0);
+    const due2 = belt();
+    expect({ v: due2?.v, rids: due2?.rids, gen: due2?.gen }, 'an open generation at another version: the belt is due')
+      .toEqual({ v: 0, rids: [], gen: null });
   }, HEAVY);
 });

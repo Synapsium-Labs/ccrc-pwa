@@ -17,7 +17,7 @@ import {
   LINE_MAX, NODE_PARSER_VERSION, blobOverDecodeCap, blockFields, blockStatus, capRefs, classifyRef, decideLeafId, directionOfSummaryRow,
   directiveFlag, eofAfterBoundary, FAN_IN, forkCounts, ftsTextOf, gistSha, leafId, leafReady, nativeGist, nativeTopics, nodeIndexTexts,
   parentId, parentRollup, parseBlocks, pickHoldingCopy, pickReceipt, planFanIn, planSpans, producerOfCopy, redactField, selectBlock,
-  summaryParts, summaryRowFor, withinBudget,
+  summaryParts, summaryRowFor, withinBudget, REPARSE_MAX_TARGETS,
 } from './lib.mjs';
 import { bump, getStep, parentOf, setStep, unbrotli, withTx } from './store.mjs';
 
@@ -825,4 +825,154 @@ export function rerollParents(db, ictx, nodeIds) {
     n += 1;
   }
   return n;
+}
+
+// ── reparse (W1-B2 Task 21) ────────────────────────────────────────────────────────────────────────
+// §8.4 "reparse", §6.6, §11 L8. A reparse re-runs the parser over stored summaries; it never re-spans a
+// leaf, so a leaf's id and its node_sources never change (§6.1). Its targets are refused whole: above
+// REPARSE_MAX_TARGETS, or when any target's span holds pruned text (history-reparse-targets). It is also RB5's one
+// retry (history-parser-crash-recorded): a parse-failed leaf is an ordinary target, and an all-leaves or --session
+// run clears the leaf-crashed markers so the next tick derives those boundaries.
+
+/** The leaves a reparse names: `--node <id>` — that leaf, or every leaf under a condensed node (walking
+ *  node_children down, UNION so a cycle ends); `--session <id>` — every leaf of that ccrc id's families,
+ *  every generation; neither — every leaf. `pruned` lists the targets whose span holds a tombstoned source
+ *  blob, or whose summary blob is tombstoned; above REPARSE_MAX_TARGETS it is not measured, because the
+ *  refusal is reparse-too-many whatever the spans hold. `found` is false only for a --node this store has no
+ *  row for. Read-only: a dry run calls it on a reader. */
+export function reparseTargets(db, sel) {
+  let nodeIds;
+  if (sel.node !== null) {
+    const n = db.prepare('SELECT node_id, kind FROM nodes WHERE node_id = ?').get(sel.node);
+    if (n === undefined) return { nodeIds: [], pruned: [], found: false };
+    nodeIds = n.kind !== 'condensed' ? [String(n.node_id)] : db.prepare(`WITH RECURSIVE sub(node_id) AS (
+          SELECT ? UNION SELECT nc.child_id FROM node_children nc JOIN sub ON sub.node_id = nc.node_id)
+        SELECT n.node_id AS node_id FROM sub JOIN nodes n ON n.node_id = sub.node_id
+        WHERE n.kind <> 'condensed' ORDER BY n.node_id`).all(sel.node).map((r) => String(r.node_id));
+  } else if (sel.session !== null) {
+    nodeIds = db.prepare(`SELECT n.node_id AS node_id FROM nodes n JOIN sessions s ON s.session_pk = n.session_pk
+        WHERE s.ccrc_id = ? AND n.kind <> 'condensed' ORDER BY n.node_id`).all(sel.session).map((r) => String(r.node_id));
+  } else {
+    nodeIds = db.prepare("SELECT node_id FROM nodes WHERE kind <> 'condensed' ORDER BY node_id").all().map((r) => String(r.node_id));
+  }
+  if (nodeIds.length > REPARSE_MAX_TARGETS) return { nodeIds, pruned: [], found: true };
+  const prunedQ = db.prepare(`SELECT 1 AS x FROM nodes n WHERE n.node_id = ? AND (
+      EXISTS (SELECT 1 FROM node_sources ns JOIN entries e ON e.entry_id = ns.entry_id JOIN blobs b ON b.blob_id = e.blob_id
+              WHERE ns.node_id = n.node_id AND b.z IS NULL)
+      OR EXISTS (SELECT 1 FROM blobs b WHERE b.blob_id = n.summary_blob_id AND b.z IS NULL))`);
+  return { nodeIds, pruned: nodeIds.filter((id) => prunedQ.get(id) !== undefined), found: true };
+}
+
+/** RB5's record for an EXISTING leaf whose re-derivation threw (history-parser-crash-recorded): rewritten as Task 8
+ *  writes a crashed leaf — raw_leaf, parse-failed, no gist, topics or refs, an empty nodes_fts row when ictx.fts —
+ *  and parser_crash bumped once, in one transaction. The id, node_sources, span and summary_blob_id stay, so the
+ *  next reparse can retry it. */
+function markReparseCrash(db, ictx, s, nodeId) {
+  withTx(db, 'NORMAL', () => {
+    db.prepare(`UPDATE nodes SET kind = 'raw_leaf', status = 'parse-failed', gist = NULL, topics = NULL, directive_flag = 0,
+      capped = 0, parser_version = ? WHERE node_id = ?`).run(NODE_PARSER_VERSION, nodeId);
+    db.prepare('DELETE FROM node_refs WHERE node_id = ?').run(nodeId);
+    if (ictx.fts === true) indexNode(db, s, nodeId, null, null, [], ictx.pairIdx);
+    bump(db, 'parser_crash');
+  });
+}
+
+/** One existing leaf re-derived in place from its stored summary (§8.4 "reparse"; §6.1 ids never change), with
+ *  the current parser and ictx.pairIdx, through Task 8's leafFields: the field computation deriveOne uses. It keeps
+ *  node_id, node_sources, the span and the time range; rewrites kind, status, gist, topics, directive_flag, capped
+ *  and parser_version; replaces node_refs and, when ictx.fts, the nodes_fts row; all in one transaction. Counters
+ *  are not folded again. A leaf whose boundary, holding copy or summary cannot be read answers 'skipped' and writes
+ *  nothing. A derivation that throws for any reason but a busy store (a parser bug, RB5) is recorded by
+ *  markReparseCrash and answers 'failed'; a busy store propagates, as in deriveLeaves. `pass` is deriveLeaves' cache
+ *  ({ copy, epochs, files }); reparseLeaves shares one across its targets, so a copy is planned once per run. */
+export function refreshLeaf(db, ictx, nodeId, pass = { copy: null, epochs: new Map(), files: new Map() }) {
+  const s = stmts(db);
+  const n = db.prepare(`SELECT node_id, session_pk, kind, status, gist, topics, directive_flag, capped, boundary_entry_id
+    FROM nodes WHERE node_id = ? AND depth = 0`).get(nodeId);
+  if (n === undefined || n.boundary_entry_id === null) return 'skipped';
+  const b = db.prepare(`SELECT b.entry_id AS entry_id, e.uuid AS uuid, e.ts_ms AS ts_ms, b.transcript_pk AS transcript_pk,
+      t.cc_session_uuid AS cc_uuid
+    FROM boundaries b JOIN entries e ON e.entry_id = b.entry_id JOIN transcripts t ON t.transcript_pk = b.transcript_pk
+    WHERE b.entry_id = ?`).get(n.boundary_entry_id);
+  if (b === undefined) return 'skipped';
+  const budget = { bytes: 0 };
+  let f;
+  try {
+    const holding = holdingCopy(s, pass, b);
+    if (holding === null) return 'skipped';
+    const copy = copyPlan(s, pass, holding.file_id, budget);
+    const pick = copy.picks.get(b.uuid);
+    if (pick === undefined || pick.uuid === null) return 'skipped';
+    const summaryAt = copy.index.get(pick.uuid);
+    if (summaryAt === undefined || textOf(s, copy.rows[summaryAt].blob_id, budget) === null) return 'skipped';
+    const byEntry = new Map(copy.rows.map((r) => [Number(r.entry_id), r]));
+    const sources = db.prepare('SELECT entry_id FROM node_sources WHERE node_id = ? ORDER BY ord').all(nodeId)
+      .map((r) => byEntry.get(Number(r.entry_id))).filter((r) => r !== undefined);
+    f = leafFields(db, ictx, nodeToolkit(), s, copy, b, pick, nodeId, Number(n.session_pk), sources, budget);
+  } catch (e) {
+    if (ictx.isBusy(e)) throw e;   // a busy store ends the reparse; anything else is RB5's recorded crash
+    markReparseCrash(db, ictx, s, nodeId);
+    return 'failed';
+  }
+  const after = [f.kind, f.status, f.gist, f.topics === null ? null : JSON.stringify(f.topics), f.flag ? 1 : 0, f.capped || f.refs.capped ? 1 : 0];
+  const before = [n.kind, n.status, n.gist, n.topics, Number(n.directive_flag), Number(n.capped)];
+  const refKey = (rs) => rs.map((r) => `${r.kind}\0${r.value}\0${r.origin}`).sort().join('\n');
+  const oldRefs = refKey(db.prepare('SELECT kind, value, origin FROM node_refs WHERE node_id = ?').all(nodeId));
+  const same = JSON.stringify(before) === JSON.stringify(after) && oldRefs === refKey(f.refs.refs);
+  withTx(db, 'NORMAL', () => {
+    db.prepare(`UPDATE nodes SET kind = ?, status = ?, gist = ?, topics = ?, directive_flag = ?, capped = ?, parser_version = ?
+      WHERE node_id = ?`).run(...after, NODE_PARSER_VERSION, nodeId);
+    db.prepare('DELETE FROM node_refs WHERE node_id = ?').run(nodeId);
+    for (const r of f.refs.refs) s.insRef.run(nodeId, r.kind, r.value, r.origin);
+    if (ictx.fts === true) indexNode(db, s, nodeId, f.gist, f.topics, f.refs.refs, ictx.pairIdx);
+  });
+  return same ? 'unchanged' : 'updated';
+}
+
+/** Re-derive each target leaf in place (§8.4 "reparse"): refreshLeaf (above) keeps the node id and its
+ *  node_sources and rewrites only what the parser derives, all targets sharing one pass cache; then Task 9's
+ *  rerollParents re-rolls every parent above EVERY target, ids kept. The re-roll runs whatever changed, and also
+ *  when the loop throws (a busy store), because each leaf commits alone: a run that stopped after some leaves
+ *  committed, or between the last commit and the re-roll, leaves parents a rerun must heal even when every leaf
+ *  then reads 'unchanged'. rerollParents is idempotent. Answers how many leaves changed and how many failed. */
+export function reparseLeaves(db, ictx, nodeIds) {
+  const pass = { copy: null, epochs: new Map(), files: new Map() };
+  let changed = 0;
+  let failed = 0;
+  try {
+    for (const id of nodeIds) {
+      const r = refreshLeaf(db, ictx, id, pass);
+      if (r === 'updated') changed += 1;
+      else if (r === 'failed') failed += 1;
+    }
+  } catch (e) {
+    try { rerollParents(db, ictx, nodeIds); } catch { /* the loop's own error is the one that ends the pass */ }
+    throw e;
+  }
+  rerollParents(db, ictx, nodeIds);
+  return { changed, failed };
+}
+
+/** RB5's other retry (history-parser-crash-recorded): a boundary whose derivation threw before its leaf id was
+ *  known has no node, only Task 8's (LEAF_CRASHED_STEP, <boundary entry_id>) marker, which the ticks skip. This
+ *  deletes the markers of `sel.session`'s boundaries (that ccrc id's families, every generation, through their
+ *  epochs), or every marker when `sel.session` is null, and lowers the ('leaves', NODE_PARSER_VERSION) low-water
+ *  cursor below the lowest one, in one transaction, so the next tick derives them. Answers how many it cleared. */
+export function clearLeafCrashes(db, sel) {
+  const rows = sel.session === null
+    ? db.prepare('SELECT version FROM derivation_state WHERE step = ?').all(LEAF_CRASHED_STEP)
+    : db.prepare(`SELECT DISTINCT d.version AS version FROM derivation_state d
+        JOIN boundaries b ON b.entry_id = d.version JOIN transcripts t ON t.transcript_pk = b.transcript_pk
+        JOIN epochs ep ON ep.cc_session_uuid = t.cc_session_uuid JOIN sessions s ON s.session_pk = ep.session_pk
+        WHERE d.step = ? AND s.ccrc_id = ?`).all(LEAF_CRASHED_STEP, sel.session);
+  if (rows.length === 0) return 0;
+  let low = Infinity;
+  for (const r of rows) low = Math.min(low, Number(r.version));
+  withTx(db, 'NORMAL', () => {
+    const del = db.prepare('DELETE FROM derivation_state WHERE step = ? AND version = ?');
+    for (const r of rows) del.run(LEAF_CRASHED_STEP, r.version);
+    const cursor = Number(getStep(db, LEAF_STEP, NODE_PARSER_VERSION)?.cursor ?? 0);
+    if (low - 1 < cursor) setStep(db, LEAF_STEP, NODE_PARSER_VERSION, String(low - 1));
+  });
+  return rows.length;
 }

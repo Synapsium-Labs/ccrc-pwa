@@ -56,7 +56,7 @@ import {
   REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES,
   REASONS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker, parseOpVerbArgs, BIND_KINDS, paneReadWanted,
   HARNESS_TABLE, exportDates, exportHorizonDays, planExport, retentionLowered, parseJournalRecord,
-  decideRecallOff, recallOffPath,
+  decideRecallOff, recallOffPath, decideReparse, REPARSE_MAX_TARGETS,
 } from './lib.mjs';
 import {
   MIGRATIONS, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
@@ -66,7 +66,7 @@ import {
   pruneApply, pruneDryRun,
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
-import { deriveNodes } from './derive.mjs';
+import { deriveNodes, reparseTargets, reparseLeaves, clearLeafCrashes } from './derive.mjs';
 
 const USAGE = 'usage: sweep.mjs [--op <verb> <op-args...>] [--roster-unreadable] --secrets <file...> -- <home...>';
 
@@ -4246,7 +4246,7 @@ export function mergeSteps(db, ctx, budget) {
 
 /** The --op verbs this build runs (§8.4). Each B2 verb joins in the task that ships its path (Tasks 20–28): a verb
  *  named here has an entry in OP_HANDLERS or BINDING_PASSES, and one in OP_DRY_RUNS when it has a dry run. */
-const OP_VERBS = new Set(['import', 'migrate', 'prune']);
+const OP_VERBS = new Set(['import', 'migrate', 'prune', 'reparse']);
 
 /** adopt, restore and rebuild (§8.4): they run BEFORE openStore, which refuses exactly the states they exist to
  *  repair (store-unbound, store-missing, store-recoverable, store-zero-byte, store-schema-missing, …). */
@@ -4265,6 +4265,7 @@ const OP_DRY_RUNS = Object.freeze({
     return { rc: EXIT.OK };
   },
   prune: (h) => pruneDryRunOp(h.home, h.P, h.args, h.out, h.now()),
+  reparse: (h) => reparseDryRunOp(h.home, h.P, h.args, h.out),
 });
 
 /** Each writing verb's body, on the store openStore opened, under the lock, after the lock-take journal half, the
@@ -4274,6 +4275,7 @@ const OP_HANDLERS = Object.freeze({
   import: (c) => importApply(c.db, c.ctx, c.P, c.args),
   migrate: (c) => migrateOp(c.db, c.ctx, c.opened, c.free),
   prune: (c) => pruneApplyOp(c.db, c.ctx, c.args),
+  reparse: (c) => reparseApplyOp(c.db, c.ctx, c.args),
 });
 
 /** The binding verbs' place, run in place of openStore and a handler. Empty in this task, so adopt, restore and
@@ -5208,6 +5210,90 @@ export function pruneApplyOp(db, ctx, args) {
     onDeleted: () => { derivStmts(db).pending.run(MERGE_STEP, 1); },
   });
   ctx.out(`history-sweep: pruned ${r.blobs} blob(s), ${r.bytes} bytes compressed, older than ${args.days} days; every row and node stays, and expand says "content pruned on <date>"`);
+  return { rc: EXIT.OK };
+}
+
+// ── reparse (W1-B2 Task 21) ────────────────────────────────────────────────────────────────────────
+// §8.4 "reparse": the targets, then lib's decideReparse — above REPARSE_MAX_TARGETS (500) reparse-too-many,
+// any target over pruned text span-pruned, each refusing the WHOLE run with nothing written. The dry run
+// answers the same decision, so it predicts what --apply would do. --apply re-derives in place
+// (derive.mjs's reparseLeaves) with this pass's full redaction index and FTS state, then, for an all-leaves or
+// --session run, clears the matching leaf-crashed markers (derive.mjs's clearLeafCrashes; RB5).
+
+/** The tick's belt-state rule, for an operator pass that writes index rows or stored node fields (§6.2 "The belt",
+ *  rev 3.5; coordinator ruling R-oppass-belt). Only the tick's rederiveFts moves meta fts_belt, through lib's decideBelt, and no
+ *  operator pass runs it. A pass whose belt lacks a unit the state records as covered (that unit's file unreadable
+ *  during the pass) writes rows without that unit's belt, and its letter-glued or stray-CSI remnants would stay terms
+ *  while the state says every row carries it: no belt generation would ever open for them. So, inside the CALLER's
+ *  transaction and BEFORE the pass writes its first such row (a kill after a later commit then finds the belt already
+ *  due), the belt is recorded due — `{ v: 0, rids: [], gen: null }`, the record Task 23's rebuild writes, which the
+ *  next tick's decideBelt opens a generation on — unless the stored state is at BELT_VERSION, its rids are exactly
+ *  this pass's live units, and an open generation's gen names no unit outside them and was opened at this BELT_VERSION
+ *  (its gv; one at another version restarts from cursor 0, ruling R-version). The rule is the plain inequality:
+ *  a live unit the state does not name yet also records it due, which costs at most one extra generation per operator
+ *  pass and needs no mark. Answers whether it wrote. Callers: reparseApplyOp and ftsRebuildJob (W1-B2 Task 23:
+ *  repair, a resumed repair and the recovery reindex's rebuild). A caller that writes witnessed values ends with
+ *  stampBeltWitness after this record (Task 7B; ruling R-rollback). */
+export function recordBeltDueIfUncovered(db, pairIdx) {
+  const live = new Set(pairIdx?.beltLive ?? []);
+  const s = parseBeltState(getMeta(db, BELT_META));
+  const covered = s !== null && s.v === BELT_VERSION && s.rids.length === live.size && s.rids.every((r) => live.has(r))
+    && (s.gen === null || (s.gv === BELT_VERSION && s.gen.every((r) => live.has(r))));
+  if (covered) return false;
+  setMeta(db, BELT_META, formatBeltState({ v: 0, rids: [], gen: null }));
+  return true;
+}
+
+/** The decision both forms share: `{ result }` when the run stops (not found, or refused), else
+ *  `{ targets }`. Its lines say why. */
+function reparsePlan(db, args, out) {
+  const t = reparseTargets(db, { node: args.node, session: args.session });
+  if (!t.found) {
+    out(`history-sweep: no node ${args.node} in this store`);
+    return { result: { rc: EXIT.NOT_FOUND } };
+  }
+  const d = decideReparse({ targets: t.nodeIds.length, prunedSpans: t.pruned.length });
+  if (!d.ok) {
+    out(d.reason === 'reparse-too-many'
+      ? `history-sweep: reparse-too-many: ${t.nodeIds.length} leaves named, above the limit of ${REPARSE_MAX_TARGETS}; the operator names fewer with --node or --session`
+      : `history-sweep: span-pruned: ${t.pruned.length} of the ${t.nodeIds.length} leaves named hold pruned text (${t.pruned.slice(0, 3).join(', ')}); their stored derivation stays`);
+    return { result: { rc: EXIT.REFUSED, reason: d.reason } };
+  }
+  return { targets: t.nodeIds };
+}
+
+/** `reparse` without --apply: the targets and the decision, on a read-only handle; nothing written. */
+export function reparseDryRunOp(home, P, args, out) {
+  const r = dryRunReader(home, P, out);
+  if (r.result !== undefined) return r.result;
+  try {
+    const plan = reparsePlan(r.ro, args, out);
+    if (plan.result !== undefined) return plan.result;
+    out(`history-sweep: reparse would re-derive ${plan.targets.length} leaves from their stored summaries; the operator adds --apply, from a terminal outside any session, to re-derive them`);
+    return { rc: EXIT.OK };
+  } finally {
+    r.ro.close();
+  }
+}
+
+/** `reparse --apply`: the decision, then the re-derivation with this pass's redaction index (B1's secretsStep,
+ *  the frozen list plus the shim's --secrets) and FTS state (ftsPrepare), node ids and sources kept. A leaf whose
+ *  derivation still throws is recorded parse-failed and counted (RB5) and the run goes on; the line reports it.
+ *  A --node run names no boundary without a leaf, so it clears no marker. Before the first leaf is rewritten, the
+ *  tick's belt-state rule (recordBeltDueIfUncovered; spec §6.2 "The belt"); at the end, the pass's own witness
+ *  (stampBeltWitness; ruling R-rollback), since its secretsStep can record pairs and it writes no ticks row. */
+export function reparseApplyOp(db, ctx, args) {
+  const plan = reparsePlan(db, args, ctx.out);
+  if (plan.result !== undefined) return plan.result;
+  const ictx = makeIngestCtx(ctx.home, ctx.homes, ctx.now(), ctx.ids);
+  ictx.pairIdx = secretsStep(db, ictx, ctx.parsed.secrets).pairIdx;
+  ictx.fts = ftsPrepare(db, ictx.nowMs).tables;
+  withTx(db, 'NORMAL', () => { recordBeltDueIfUncovered(db, ictx.pairIdx); });   // the op pass's belt rule (reparse)
+  const r = reparseLeaves(db, ictx, plan.targets);
+  const cleared = args.node === null ? clearLeafCrashes(db, { session: args.session }) : 0;
+  withTx(db, 'NORMAL', () => { stampBeltWitness(db); });   // the op pass's witness (reparse)
+  ctx.out(`history-sweep: reparsed ${plan.targets.length} leaves (${r.changed} changed, ${r.failed} failed); node ids and sources unchanged`);
+  if (cleared > 0) ctx.out(`history-sweep: reparse: ${cleared} crashed boundary marker(s) cleared; the next tick derives their leaves`);
   return { rc: EXIT.OK };
 }
 

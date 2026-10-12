@@ -344,3 +344,34 @@ if (readSwap !== '') {
   };
   syncBuiltinESMExports();
 }
+
+// ── W1-B2 Task 21: a derive throw for one blob (RB5) ─────────────────────────────────────────────
+// HISTORY_TEST_THROW_BLOB=<blob_id>: a prepared `SELECT z FROM blobs WHERE blob_id = ?` (derive.mjs's blob read,
+//   Task 8's stmts().blobZ) throws from `get` when bound to <blob_id> and CALLED FROM derive.mjs, on every call: a
+//   leaf whose derivation reads that blob throws a plain Error, which is not busy. Other blobs read as before.
+//   B1's own blob reads in sweep.mjs (INGEST_STMTS' blobZ and derivStmts' blobZ) prepare
+//   `SELECT z, raw_len FROM blobs WHERE blob_id = ?`, a different text, so only derive.mjs's statement is wrapped; the
+//   stack check below is a second belt for a later task that reuses the text: the seam is for derive.mjs (an
+//   `--op reparse` pass, or a tick's derivation) and never makes another reader throw for that blob.
+// It patches DatabaseSync.prototype.prepare on top of whatever an earlier block installed.
+import { DatabaseSync as DatabaseSyncR21 } from 'node:sqlite';
+{
+  const throwBlobR21 = process.env.HISTORY_TEST_THROW_BLOB ?? '';
+  if (/^[0-9]+$/.test(throwBlobR21)) {
+    const protoR21 = DatabaseSyncR21.prototype;
+    const realPrepareR21 = protoR21.prepare;
+    protoR21.prepare = function prepareR21(sql) {
+      const st = realPrepareR21.call(this, sql);
+      if (String(sql) === 'SELECT z FROM blobs WHERE blob_id = ?') {
+        const realGetR21 = st.get.bind(st);
+        st.get = (...args) => {
+          if (String(args[0]) === throwBlobR21 && String(new Error().stack).includes('/ccd/history/derive.mjs')) {
+            throw new Error(`preload-faults: HISTORY_TEST_THROW_BLOB ${throwBlobR21}`);
+          }
+          return realGetR21(...args);
+        };
+      }
+      return st;
+    };
+  }
+}
