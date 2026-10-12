@@ -13,13 +13,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
-import { beltWidth } from '../../ccd/history/lib.mjs';
+import * as pty from 'node-pty';
+import { beltWidth, historyPaths, floorThreshold } from '../../ccd/history/lib.mjs';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
-import { userRow } from './historyFixtures.js';
+import { userRow, compactionSequence } from './historyFixtures.js';
 import {
   makeHistoryBox, runSweep, runShim, runCli, plantSession, plantTranscript, openStoreRO, stubShim, holdLock,
-  PASS_DRIVER, SHIM, type HistoryBox,
+  PASS_DRIVER, SHIM, withPane, seedFamily, preloadOptions, PRELOADS, CLI, skipOnDarwin, type HistoryBox,
 } from './historyHelpers.js';
+import { removeTmpFixturesEachTest } from './tmpHelpers.js';
+
+removeTmpFixturesEachTest();   // each case's boxes (stores, transcripts, backup copies) go when the case ends
 
 // Each spawning case gets this budget (the sweep and the CLI spawn on a heavily loaded box); longer is 1.5 * HEAVY or 2.5 * HEAVY, never a new literal.
 const HEAVY = 120_000;
@@ -467,5 +471,219 @@ describe.skipIf(process.platform === 'darwin')('RB6: while a recovery step is re
     const r = op(box, ['doctor', '--migrate', '--json']);
     expect([r.code, r.json?.['reason']], `${r.stdout}${r.stderr}`).toEqual([2, 'migrate-refused']);
     expect(sha(dbFile(box)), 'the store is untouched').toBe(before);
+  }, HEAVY);
+});
+
+// ── W1-B2 Tasks 20-23: prune, reparse, backup and repair (spec 2026-10-05 §6.6, §8.4) ──────────────
+// Shared by those four tasks' describes; only what Task 19's block above does not already hold (ID, boundBox,
+// snapshot, lastResult), each name carrying a `maint`/`MAINT_` prefix. The TTY gate has no seam (§10.1): an
+// irreversible form runs under a real node-pty terminal, through either door — the CLI (`node cli.mjs …`, which
+// spawns the shim) or the shim itself.
+const MAINT_U1 = '11111111-1111-4111-8111-1111111111a1';
+const MAINT_QUOKKA = 'c0000000-0000-4000-8000-0000000000a1';
+const MAINT_DAY = 86_400_000;
+function maintIso(msAgo: number): string { return new Date(Date.now() - msAgo).toISOString(); }
+/** The CLI's --json envelope read off a pty: the last line that parses as a JSON object. */
+function maintJson(out: string): Record<string, unknown> | null {
+  const lines = out.replace(/\r/g, '').split('\n').map((l) => l.trim()).filter((l) => l.startsWith('{'));
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    try { return JSON.parse(lines[i]!) as Record<string, unknown>; } catch { /* a partial line */ }
+  }
+  return null;
+}
+function maintQ<T>(box: HistoryBox, sql: string, ...args: Array<string | number>): T[] {
+  const db = openStoreRO(box);
+  try { return db.prepare(sql).all(...args) as T[]; } finally { db.close(); }
+}
+function maintMatch(box: HistoryBox, word: string): number {
+  return maintQ<{ n: number }>(box, 'SELECT count(*) AS n FROM blobs_fts WHERE blobs_fts MATCH ?', word)[0]!.n;
+}
+function maintMeta(box: HistoryBox, k: string): string | null {
+  return maintQ<{ v: string }>(box, 'SELECT v FROM meta WHERE k = ?', k)[0]?.v ?? null;
+}
+function maintNames(dir: string): string[] { try { return fs.readdirSync(dir).sort(); } catch { return []; } }
+function maintTombstones(box: HistoryBox): number {
+  return maintQ<{ n: number }>(box, 'SELECT count(*) AS n FROM blobs WHERE z IS NULL')[0]!.n;
+}
+/** RB6's state: a `('recover', <ms>)` step registered as restore and rebuild register it (§9.14), planted by SQL
+ *  with no sweep running. No scheduled pass may run on the box afterwards: it would start replaying. */
+function maintRecovering(box: HistoryBox): void {
+  const db = new DatabaseSync(historyPaths(box.home).dbFile);
+  try {
+    db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+  } finally { db.close(); }
+}
+/** A door on a REAL terminal (node-pty), so stdin is a TTY and only the pane, the switches or the lock can
+ *  refuse. `cli` is `node --no-warnings cli.mjs <args>` (which spawns the shim with stdin inherited); `shim` is
+ *  the placed `~/.local/bin/ccd-history-sweep <args>`. Every spawn carries the statfs preload. A pty merges
+ *  stdout and stderr; `signal` is set when the child died of one. The guard timer is a safety net, never the
+ *  assertion. */
+function maintPty(box: HistoryBox, door: 'cli' | 'shim', args: string[],
+  o: { env?: Record<string, string>; preloads?: string[] } = {}): Promise<{ code: number; signal: number | undefined; out: string }> {
+  const file = door === 'cli' ? process.execPath : 'bash';
+  const argv = door === 'cli' ? ['--no-warnings', CLI, ...args] : [path.join(box.home, '.local', 'bin', 'ccd-history-sweep'), ...args];
+  const merged: NodeJS.ProcessEnv = {
+    ...box.env, HISTORY_TEST_STATFS: 'plenty', NODE_OPTIONS: preloadOptions(o.preloads ?? [PRELOADS.statfs]), ...(o.env ?? {}),
+  };
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(merged)) if (v !== undefined) env[k] = v;
+  return new Promise((resolve) => {
+    const p = pty.spawn(file, argv, { name: 'xterm-color', cols: 200, rows: 40, cwd: box.home, env });
+    let out = '';
+    let done = false;
+    const finish = (code: number, signal: number | undefined): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ code, signal, out });
+    };
+    const timer = setTimeout(() => { p.kill(); finish(-1, undefined); }, 80_000);
+    p.onData((d) => { out += d; });
+    p.onExit(({ exitCode, signal }) => finish(exitCode, signal));
+  });
+}
+
+describe('prune: dry run by default, tombstones by referrer age, the floor, the bumps and the lock (W1-B2 Task 20)', () => {
+  skipOnDarwin();
+  /** A family whose first span is old enough to prune: one distinctive operator row, then one manual compaction
+   *  (Task 5's builder), every row stamped `ageMs` ago, so a leaf over them is derived. */
+  function prunable(prefix: string, ageMs = 200 * MAINT_DAY): HistoryBox {
+    const box = makeHistoryBox(prefix, { role: 'fleet', shim: true });
+    const seq = compactionSequence({ n: 1, trigger: 'manual' });
+    const rows = [
+      userRow({ uuid: MAINT_QUOKKA, ts: maintIso(ageMs), sessionId: MAINT_U1, text: 'quokkaprune words of the old span' }),
+      ...seq.rows.map((r) => ({ ...r, timestamp: maintIso(ageMs), sessionId: MAINT_U1 })),
+    ];
+    seedFamily(box, { id: ID, project: 'demo', uuid: MAINT_U1, rows });
+    expect(runSweep(box).code).toBe(0);
+    return box;
+  }
+
+  it('O12: prune without --apply, through both doors, says what it would tombstone and writes nothing', () => {
+    const box = prunable('ccrc-hist-o12-');
+    const before = snapshot(box);
+    const direct = runShim(box, ['--op', 'prune', '--older-than', '90d']);
+    expect(direct.code, direct.stderr).toBe(0);
+    expect(lastResult(direct.stdout)).toEqual({ rc: 0 });
+    expect(direct.stdout).toMatch(/^history-sweep: prune --older-than 90d would tombstone [1-9][0-9]* blob\(s\), [0-9]+ bytes compressed; the export holds 0 of them$/m);
+    expect(direct.stdout, 'the hint names the operator and the terminal (R-X-OPERATOR)')
+      .toContain('the operator adds --apply, from a terminal outside any session, to tombstone');
+    const cli = runCli(box, ['prune', '--older-than', '90d', '--json']);
+    expect(cli.code, cli.stderr).toBe(0);
+    expect(cli.json?.['exit']).toBe(0);
+    expect(snapshot(box), 'a dry run writes nothing').toEqual(before);
+    expect(maintTombstones(box)).toBe(0);
+  }, HEAVY);
+
+  it('DM22: a duration under 30 days is older-than-floor through both doors, decided before the gate; 30d is allowed', () => {
+    const box = boundBox('ccrc-hist-dm22-');
+    const cli = runCli(box, ['prune', '--older-than', '7d', '--apply', '--json']);
+    expect(cli.code, cli.stderr).toBe(2);
+    expect(cli.json?.['reason']).toBe('older-than-floor');
+    const direct = runShim(box, ['--op', 'prune', '--older-than', '29d', '--apply']);
+    expect(direct.code).toBe(2);
+    expect(lastResult(direct.stdout)).toEqual({ rc: 2, reason: 'older-than-floor' });
+    const floor = runShim(box, ['--op', 'prune', '--older-than', '30d']);
+    expect(floor.code, floor.stderr).toBe(0);
+    expect(lastResult(floor.stdout)).toEqual({ rc: 0 });
+  }, HEAVY);
+
+  it('DM14: --apply under a terminal tombstones the old span — z NULL, pruned_ms set, its FTS row gone — while every entry and node stays, and expand says "content pruned on <date>"', async (ctx) => {
+    const box = prunable('ccrc-hist-dm14-');
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();          // a Node without FTS5 has no index to prune from
+    const leaf = maintQ<{ node_id: string }>(box, 'SELECT node_id FROM nodes WHERE depth = 0 ORDER BY node_id')[0]?.node_id;
+    expect(leaf, 'CONTROL: the fixture derived a leaf over the old span').toMatch(/^L[0-9a-f]{20}$/);
+    const counts = (): number[] => ['entries', 'nodes', 'node_sources', 'blobs']
+      .map((t) => maintQ<{ n: number }>(box, `SELECT count(*) AS n FROM ${t}`)[0]!.n);
+    const before = counts();
+    expect(maintMatch(box, 'quokkaprune'), 'CONTROL: indexed before the prune').toBe(1);
+    const r = await maintPty(box, 'cli', ['prune', '--older-than', '90d', '--apply']);
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).toMatch(/history-sweep: pruned [1-9][0-9]* blob\(s\)/);
+    const blob = maintQ<{ z: Uint8Array | null; pruned_ms: number | null }>(box,
+      'SELECT b.z, b.pruned_ms FROM blobs b JOIN entries e ON e.blob_id = b.blob_id WHERE e.uuid = ?', MAINT_QUOKKA)[0]!;
+    expect(blob.z).toBeNull();
+    expect(blob.pruned_ms).toBeGreaterThan(0);
+    expect(maintMatch(box, 'quokkaprune'), 'the pruned blob left the index').toBe(0);
+    expect(counts(), 'tombstones content, never rows').toEqual(before);
+    expect(maintQ<{ step: string }>(box, "SELECT step FROM derivation_state WHERE step = 'fts-merge' AND completed_ms IS NULL"),
+      'the deleted index bytes are left to the ticks\' merge steps').toHaveLength(1);
+    const ex = runCli(box, ['expand', leaf!], { env: withPane(box, ID) });
+    expect(ex.code, ex.stderr).toBe(0);
+    expect(ex.stdout).toContain(`content pruned on ${new Date(blob.pruned_ms!).toISOString().slice(0, 10)}`);
+  }, HEAVY);
+
+  it('DM27: deleting a transcript prunes nothing its age does not', async () => {
+    const box = makeHistoryBox('ccrc-hist-dm27-', { role: 'fleet', shim: true });
+    const { transcript } = seedFamily(box, { id: ID, project: 'demo', uuid: MAINT_U1, rows: [
+      userRow({ uuid: MAINT_QUOKKA, ts: maintIso(MAINT_DAY), sessionId: MAINT_U1, text: 'young words whose file is about to go' }),
+    ] });
+    expect(maintQ<{ n: number }>(box, 'SELECT count(*) AS n FROM entries')[0]!.n, 'CONTROL: ingested').toBe(1);
+    fs.rmSync(transcript);
+    expect(runSweep(box).code).toBe(0);                            // the tick finds the file gone and counts it
+    const r = await maintPty(box, 'shim', ['--op', 'prune', '--older-than', '30d', '--apply']);
+    expect(r.code, r.out).toBe(0);
+    expect(lastResult(r.out)).toEqual({ rc: 0 });
+    expect(maintTombstones(box), 'a source file\'s absence decides nothing (lossless-claw #610)').toBe(0);
+  }, HEAVY);
+
+  it('C25: in a session (CLAUDECODE) prune --apply answers apply-in-session; with no terminal prune --apply and import --session --file --apply answer needs-tty; nothing is written', () => {
+    const box = boundBox('ccrc-hist-c25-');
+    const file = plantTranscript(box, 'claude-a', '-home-u-tree-demo', MAINT_U1,
+      [userRow({ uuid: MAINT_QUOKKA, ts: maintIso(0), sessionId: MAINT_U1, text: 'an import candidate' })]);
+    const before = snapshot(box);
+    const cases: Array<{ args: string[]; env: Record<string, string>; reason: string }> = [
+      { args: ['prune', '--older-than', '90d', '--apply', '--json'], env: { CLAUDECODE: '1' }, reason: 'apply-in-session' },
+      { args: ['prune', '--older-than', '90d', '--apply', '--json'], env: {}, reason: 'needs-tty' },
+      { args: ['import', '--session', ID, '--file', file, '--apply', '--json'], env: {}, reason: 'needs-tty' },
+    ];
+    for (const c of cases) {
+      const r = runCli(box, c.args, { env: c.env });
+      expect(r.code, `${c.args.join(' ')}: ${r.stderr}`).toBe(2);
+      expect(r.json?.['reason'], c.args.join(' ')).toBe(c.reason);
+      expect(snapshot(box), c.args.join(' ')).toEqual(before);
+    }
+  }, HEAVY);
+
+  it('C34: with the shim\'s lock held, prune --apply under a terminal answers exit 4 writer-busy and writes nothing', async () => {
+    const box = prunable('ccrc-hist-c34-');
+    const before = snapshot(box);
+    const release = holdLock(box);
+    try {
+      const r = await maintPty(box, 'cli', ['prune', '--older-than', '90d', '--apply', '--json']);
+      expect(r.code, r.out).toBe(4);
+      expect(maintJson(r.out)?.['reason']).toBe('writer-busy');
+    } finally {
+      release();
+    }
+    expect(snapshot(box)).toEqual(before);
+    expect(maintTombstones(box)).toBe(0);
+  }, HEAVY);
+
+  it('RB3: below the free-space floor prune --apply still runs (it is how the store gets room back); a probe that never settles answers 5 store-unreachable and tombstones nothing', async () => {
+    const box = prunable('ccrc-hist-pfloor-');
+    const fsSize = 10 * 1024 ** 3;
+    const hung = await maintPty(box, 'shim', ['--op', 'prune', '--older-than', '90d', '--apply'], { env: { HISTORY_TEST_STATFS: 'hang' } });
+    expect(hung.code, hung.out).toBe(5);
+    expect(lastResult(hung.out)).toEqual({ rc: 5, reason: 'store-unreachable' });
+    expect(maintTombstones(box), 'an unreachable store is never written').toBe(0);
+    // 4 KiB under the floor's threshold, on a probe that settles (§9.3's floor would refuse an ingest here).
+    const low = await maintPty(box, 'shim', ['--op', 'prune', '--older-than', '90d', '--apply'],
+      { env: { HISTORY_TEST_STATFS: `${floorThreshold(fsSize) - 4096}:${fsSize}` } });
+    expect(low.code, low.out).toBe(0);
+    expect(lastResult(low.out)).toEqual({ rc: 0 });
+    expect(maintTombstones(box), 'below the floor is exactly where prune must run').toBeGreaterThan(0);
+  }, HEAVY);
+
+  it('RB6: while a recovery step is registered, prune --apply answers recovering and tombstones nothing; the dry run still answers', async () => {
+    const box = prunable('ccrc-hist-rb6p-');
+    maintRecovering(box);
+    const r = await maintPty(box, 'shim', ['--op', 'prune', '--older-than', '90d', '--apply']);
+    expect(r.code, r.out).toBe(2);
+    expect(lastResult(r.out)).toEqual({ rc: 2, reason: 'recovering' });
+    expect(maintTombstones(box), 'nothing is pruned under a replay').toBe(0);
+    const dry = runShim(box, ['--op', 'prune', '--older-than', '90d']);
+    expect(dry.code, dry.stderr).toBe(0);
+    expect(lastResult(dry.stdout)).toEqual({ rc: 0 });
   }, HEAVY);
 });

@@ -386,7 +386,7 @@ describe('the sweep: skeleton, store open and refusals, and the shim', () => {
     const bad = runSweep(box, ['--bogus']);
     expect(bad.code).toBe(2);
     expect(bad.stderr).toMatch(/usage: sweep\.mjs/);
-    const op = runSweep(box, ['--op', 'prune']);
+    const op = runSweep(box, ['--op', 'frobnicate']);   // B2 runs prune; this case needs a verb no build runs
     expect(op.code).toBe(2);
     expect(JSON.parse(lines(op.stdout).at(-1)!)).toEqual({ rc: 2, reason: 'bad-args' });
   });

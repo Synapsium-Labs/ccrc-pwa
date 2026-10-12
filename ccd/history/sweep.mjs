@@ -63,6 +63,7 @@ import {
   measureStoreFacts, measuredSize, openReader, openWriter, readAttempts, removeStaleMigrationTemps, removeStaleTemps, runMigration, setMeta,
   syncWriterMirror, userVersion, withTx, writeFileAtomic, removeEntry, readBounded, removeStaleAtomicTemps, mkdirDurable,
   CODEC, brotli, unbrotli, unbrotliPrefix, compressFdRange, probeFts5, createFtsTables, recoverStepAt, storedVersionAt,
+  pruneApply, pruneDryRun,
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
 import { deriveNodes } from './derive.mjs';
@@ -4242,7 +4243,7 @@ export function mergeSteps(db, ctx, budget) {
 
 /** The --op verbs this build runs (§8.4). Each B2 verb joins in the task that ships its path (Tasks 20–28): a verb
  *  named here has an entry in OP_HANDLERS or BINDING_PASSES, and one in OP_DRY_RUNS when it has a dry run. */
-const OP_VERBS = new Set(['import', 'migrate']);
+const OP_VERBS = new Set(['import', 'migrate', 'prune']);
 
 /** adopt, restore and rebuild (§8.4): they run BEFORE openStore, which refuses exactly the states they exist to
  *  repair (store-unbound, store-missing, store-recoverable, store-zero-byte, store-schema-missing, …). */
@@ -4260,6 +4261,7 @@ const OP_DRY_RUNS = Object.freeze({
     importDryRun(c.P, c.parsed.homes, c.args, c.out);
     return { rc: EXIT.OK };
   },
+  prune: (h) => pruneDryRunOp(h.home, h.P, h.args, h.out, h.now()),
 });
 
 /** Each writing verb's body, on the store openStore opened, under the lock, after the lock-take journal half, the
@@ -4268,6 +4270,7 @@ const OP_DRY_RUNS = Object.freeze({
 const OP_HANDLERS = Object.freeze({
   import: (c) => importApply(c.db, c.ctx, c.P, c.args),
   migrate: (c) => migrateOp(c.db, c.ctx, c.opened, c.free),
+  prune: (c) => pruneApplyOp(c.db, c.ctx, c.args),
 });
 
 /** The binding verbs' place, run in place of openStore and a handler. Empty in this task, so adopt, restore and
@@ -5139,6 +5142,70 @@ export function periodicCensus(db, ctx) {
     journalAudit(db, ctx, nowMs);
   }
   exportCensus(db, nowMs, ctx.budget);
+}
+
+// ── prune (W1-B2 Task 20) ──────────────────────────────────────────────────────────────────────────
+// §6.6 "prune --older-than <dur>", §8.4. A dry run by default: the store read through a read-only handle,
+// nothing written. `--apply` (irreversible: a TTY and no cc- pane, both decided by the gate before this
+// runs) tombstones every blob whose every referrer is older than the cutoff, in bounded BEGIN IMMEDIATE
+// batches with the journal half between them (store.mjs's pruneApply). It never deletes a row, never
+// touches the journal or the export, and never decides by a source file's absence (lossless-claw #610,
+// DM27). Free space is probed for reachability only, by runOpPass: prune frees space, so a store below the
+// floor is exactly the one it must not refuse (history-prune-not-floor-gated).
+
+/** Blobs per prune batch (§6.6 "bounded BEGIN IMMEDIATE batches"). Chosen. */
+const PRUNE_BATCH = 500;
+/** The most free pages one batch's PRAGMA incremental_vacuum returns: 256 MiB at 4 KiB pages. Chosen. */
+const PRUNE_VACUUM_PAGES = 65_536;
+
+/** A dry run's store (§8.4 "dry run by default"): measured as a scheduled pass would find it and opened
+ *  READ-ONLY only when decideStoreOpen would open it. No store yet answers rc 0 with a line; a refusal word
+ *  answers its own exit; nothing is written — no journal half, no marker, no flush. Returns `{ ro }` or
+ *  `{ result }`; the caller closes `ro`. */
+function dryRunReader(home, P, out) {
+  const verdict = decideStoreOpen(measureStoreFacts(home, readRole(P)));
+  if (verdict.act === 'create' || verdict.act === 'drop-pending-create') {
+    out('history-sweep: no store on this box yet; nothing to do');
+    return { result: { rc: EXIT.OK } };
+  }
+  if (verdict.act === 'refuse') {
+    return { result: REASONS[verdict.word] === EXIT.DB ? { rc: EXIT.DB, reason: verdict.word } : { rc: EXIT.INTERNAL } };
+  }
+  return { ro: openReader(P.dbFile) };
+}
+
+/** `prune --older-than <dur>` without --apply (§6.6): what --apply would tombstone, and how much of it the
+ *  export already holds. */
+export function pruneDryRunOp(home, P, args, out, nowMs) {
+  const r = dryRunReader(home, P, out);
+  if (r.result !== undefined) return r.result;
+  try {
+    const t = pruneDryRun(r.ro, nowMs - args.days * DAY_MS);
+    out(`history-sweep: prune --older-than ${args.days}d would tombstone ${t.blobs} blob(s), ${t.bytes} bytes compressed; the export holds ${t.exported} of them`);
+    out('history-sweep: a dry run writes nothing; rows, nodes, the journal and the export are never touched; the operator adds --apply, from a terminal outside any session, to tombstone');
+    return { rc: EXIT.OK };
+  } finally {
+    r.ro.close();
+  }
+}
+
+/** `prune --older-than <dur> --apply` (§6.6): the batched tombstone, the WAL truncated after each batch, the
+ *  journal half between batches (a failed append ends the pass through runOpPass's JournalError arm), and the
+ *  merge step registered INSIDE each batch that deleted index rows (store.mjs's onDeleted), so the bytes those
+ *  deletes left are purged by the scheduled ticks' bounded merges (§6.2) even when the pass stops between
+ *  batches. */
+export function pruneApplyOp(db, ctx, args) {
+  const nowMs = ctx.now();
+  const r = pruneApply(db, {
+    cutoffMs: nowMs - args.days * DAY_MS,
+    nowMs,
+    batch: PRUNE_BATCH,
+    vacuumPages: PRUNE_VACUUM_PAGES,
+    between: () => { if (runJournalHalf(ctx.home, ctx.ids, ctx.now)) throw new JournalError('append-failed'); },
+    onDeleted: () => { derivStmts(db).pending.run(MERGE_STEP, 1); },
+  });
+  ctx.out(`history-sweep: pruned ${r.blobs} blob(s), ${r.bytes} bytes compressed, older than ${args.days} days; every row and node stays, and expand says "content pruned on <date>"`);
+  return { rc: EXIT.OK };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {

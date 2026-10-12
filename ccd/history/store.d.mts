@@ -65,3 +65,16 @@ export function parentOf(db: DatabaseSync, nodeId: string): string | null;
 // ── W1-B2 Task 19: a registered recovery step (RB6) and the stored version (RB13, RB17) ──
 export function recoverStepAt(dbFile: string): 'open' | 'none' | 'absent' | 'unmeasured';
 export function storedVersionAt(dbFile: string): Presence<number>;
+// ── W1-B2 Task 20: prune by referrer age (§6.6) ──
+export function pruneProtected(db: DatabaseSync): Set<number>;
+export function pruneCandidates(db: DatabaseSync, i: {
+  cutoffMs: number; afterBlobId: number; limit: number; protectedIds: ReadonlySet<number>;
+}): { blobIds: number[]; bytes: number; exported: number; lastBlobId: number; more: boolean };
+export function pruneBatch(db: DatabaseSync, i: {
+  blobIds: readonly number[]; nowMs: number; fts: boolean; onDeleted?: () => void;
+}): number;
+export function pruneDryRun(db: DatabaseSync, cutoffMs: number): { blobs: number; bytes: number; exported: number };
+export function incrementalVacuum(db: DatabaseSync, pages: number): number;
+export function pruneApply(db: DatabaseSync, i: {
+  cutoffMs: number; nowMs: number; batch: number; vacuumPages: number; between: () => void; onDeleted?: () => void;
+}): { blobs: number; bytes: number; fts: boolean };

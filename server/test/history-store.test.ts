@@ -8,6 +8,7 @@
 // no carrier, and the children are plain node.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -21,7 +22,8 @@ import {
   CODEC, MIGRATIONS, StoreError, openWriter, openReader, userVersion, probeFts5, withTx, brotli, unbrotli,
   measuredSize, getMeta, setMeta, bump, closeWriter, schemaOf,
   mintStoreId, mintWriter, writeFileAtomic, peekStoreId, measureStoreFacts, removeStaleTemps, removeStaleMigrationTemps, createStore,
-  finishPending, dropPending, syncWriterMirror,
+  finishPending, dropPending, syncWriterMirror, createFtsTables,
+  pruneProtected, pruneCandidates, pruneBatch, pruneDryRun, incrementalVacuum, pruneApply,
   readAttempts, clearDoneMarkers, assertAdditive, runMigration, removeEntry, readBounded, removeStaleAtomicTemps, mkdirDurable,
 } from '../../ccd/history/store.mjs';
 
@@ -957,5 +959,153 @@ v9s.describe('DM9: the lineage walks toward a node\'s sources, on real SQLite (W
     } finally {
       db.close();
     }
+  });
+});
+
+// ── W1-B2 Task 20: prune by referrer age (spec 2026-10-05 §6.6; DM14 store half, DM15) ────────────
+describe('store.mjs: prune tombstones by referrer age (W1-B2 Task 20)', () => {
+  const DAY = 86_400_000;
+  const NOW = Date.UTC(2026, 9, 6, 12, 0, 0);
+  const CUTOFF = NOW - 90 * DAY;
+  const OLD = NOW - 200 * DAY;
+  const NEW = NOW - DAY;
+
+  /** A bound store holding one referrer arrangement per DM15 clause, planted by SQL on the writer handle.
+   *  Blob ids are assigned in this order: old-only 1, shared 2, young 3, summary 4, kept 5, boundary 6,
+   *  null-ts 7, variant-host-old 8, variant-of-old 9, variant-host-new 10, variant-of-new 11,
+   *  sidecar-unlinked 12, orphan 13. */
+  function planted(): { home: string; db: DatabaseSync; blob: Record<string, number>; close: () => void } {
+    const home = mkTmp('ccrc-history-prune-');
+    createStore(home);
+    const db = openWriter(historyPaths(home).dbFile);
+    const blob: Record<string, number> = {};
+    const mkBlob = (tag: string): number => {
+      const r = db.prepare("INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, 'br5', ?, ?)")
+        .run(createHash('sha256').update(tag).digest(), brotli(Buffer.from(tag)), tag.length);
+      blob[tag] = Number(r.lastInsertRowid);
+      return blob[tag]!;
+    };
+    const tp = Number(db.prepare('INSERT INTO transcripts (cc_session_uuid) VALUES (?)')
+      .run('11111111-1111-4111-8111-111111111111').lastInsertRowid);
+    let n = 0;
+    const entry = (blobId: number, tsMs: number | null): number => {
+      n += 1;
+      return Number(db.prepare(`INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns,
+          struct_file_id, blob_id, ts_ms) VALUES (?, ?, 'user', 'operator', 1, ?, 1, ?, ?)`)
+        .run(`e${String(n).padStart(4, '0')}`, tp, n, blobId, tsMs).lastInsertRowid);
+    };
+    entry(mkBlob('old-only'), OLD);
+    const shared = mkBlob('shared');
+    entry(shared, OLD);
+    const young = entry(mkBlob('young'), NEW);
+    db.prepare('INSERT INTO sidecars (transcript_pk, name, blob_id, entry_id, first_seen_ms) VALUES (?, ?, ?, ?, ?)')
+      .run(tp, 'toolu_01shared.txt', shared, young, NEW);
+    const summary = mkBlob('summary');
+    entry(summary, OLD);
+    const sp = Number(db.prepare("INSERT INTO sessions (ccrc_id, generation, project, first_seen_ms) VALUES ('claude-a-demo', '', 'demo', 1)")
+      .run().lastInsertRowid);
+    db.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, summary_blob_id,
+        parser_version, created_ms) VALUES ('L00000000000000000001', ?, 1, ?, 'native_leaf', 0, 'not-requested', ?, 1, 1)`)
+      .run(sp, tp, summary);
+    const kept = mkBlob('kept');
+    entry(kept, OLD);   // a kept list some old row also names: only the structure rule protects it
+    const boundaryEntry = entry(mkBlob('boundary'), OLD);
+    db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord, kept_blob_id) VALUES (?, ?, 1, ?)').run(boundaryEntry, tp, kept);
+    entry(mkBlob('null-ts'), null);
+    const oldHost = entry(mkBlob('variant-host-old'), OLD);
+    db.prepare('INSERT INTO entry_variants (entry_id, blob_id, first_file_id, first_seen_ms) VALUES (?, ?, 1, ?)')
+      .run(oldHost, mkBlob('variant-of-old'), OLD);
+    const newHost = entry(mkBlob('variant-host-new'), NEW);
+    db.prepare('INSERT INTO entry_variants (entry_id, blob_id, first_file_id, first_seen_ms) VALUES (?, ?, 1, ?)')
+      .run(newHost, mkBlob('variant-of-new'), NEW);
+    db.prepare('INSERT INTO sidecars (transcript_pk, name, blob_id, entry_id, first_seen_ms) VALUES (?, ?, ?, NULL, ?)')
+      .run(tp, 'toolu_01unlinked.txt', mkBlob('sidecar-unlinked'), OLD);
+    mkBlob('orphan');
+    return { home, db, blob, close: () => closeWriter(db) };
+  }
+  const PRUNED = ['boundary', 'old-only', 'variant-host-old', 'variant-of-old'];
+  const KEPT = ['shared', 'young', 'summary', 'kept', 'null-ts', 'variant-host-new', 'variant-of-new', 'sidecar-unlinked', 'orphan'];
+
+  it('DM15: a blob is a candidate only when every referrer is older than the cutoff; shared, NULL-time, unlinked-sidecar, unreferenced and structure blobs stay', () => {
+    const { db, blob, close } = planted();
+    try {
+      const protectedIds = pruneProtected(db);
+      expect([...protectedIds].sort((a, b) => a - b), 'structure: the native summary and the kept list')
+        .toEqual([blob['summary']!, blob['kept']!].sort((a, b) => a - b));
+      const c = pruneCandidates(db, { cutoffMs: CUTOFF, afterBlobId: 0, limit: 100, protectedIds });
+      const name = (id: number): string => Object.keys(blob).find((k) => blob[k] === id)!;
+      expect(c.blobIds.map(name).sort()).toEqual(PRUNED);
+      expect(c.more).toBe(false);
+      expect(c.exported, 'nothing is exported before W1-B4').toBe(0);
+      expect(pruneDryRun(db, CUTOFF)).toEqual({ blobs: 4, bytes: c.bytes, exported: 0 });
+    } finally { close(); }
+  });
+
+  it('DM14 (store half): pruneApply tombstones in bounded batches — z NULL, pruned_ms stamped, the FTS row gone, the merge step registered inside the batch — keeps every row, truncates the WAL after each batch, and calls back between batches', (ctx) => {
+    const { home, db, blob, close } = planted();
+    try {
+      if (probeFts5(db) === 'absent') ctx.skip();
+      withTx(db, 'NORMAL', () => {
+        createFtsTables(db);
+        db.prepare('INSERT INTO blobs_fts (rowid, body) VALUES (?, ?)').run(blob['old-only']!, 'oldonlyword');
+        db.prepare('INSERT INTO blobs_fts (rowid, body) VALUES (?, ?)').run(blob['shared']!, 'sharedword');
+        db.prepare('UPDATE blobs SET fts_indexed = 1 WHERE blob_id IN (?, ?)').run(blob['old-only']!, blob['shared']!);
+      });
+      const count = (t: string): number => (db.prepare(`SELECT count(*) AS n FROM ${t}`).get() as { n: number }).n;
+      const TABLES = ['entries', 'entry_variants', 'sidecars', 'nodes', 'boundaries', 'blobs'];
+      const before = TABLES.map(count);
+      // RB3: the -wal file's size at each between() call, after that batch's vacuum and checkpoint. This test holds
+      // no other connection, so a TRUNCATE checkpoint always completes and leaves the file empty.
+      const mergePending = (): number => (db.prepare("SELECT count(*) AS n FROM derivation_state WHERE step = 'fts-merge' AND completed_ms IS NULL").get() as { n: number }).n;
+      expect(mergePending(), 'CONTROL: no merge step is pending before the prune').toBe(0);
+      const wal = `${historyPaths(home).dbFile}-wal`;
+      const walSizes: number[] = [];
+      let registered = 0;
+      // batch 2: SQL pages [1,4] [5,6] [8,9] [] — the protected 4 and 5 dropped — so three batches tombstone.
+      const r = pruneApply(db, {
+        cutoffMs: CUTOFF, nowMs: NOW, batch: 2, vacuumPages: 64,
+        between: () => { walSizes.push(fs.statSync(wal).size); },
+        onDeleted: () => {
+          expect(() => db.exec('BEGIN'), 'registered inside the batch\'s own transaction').toThrow(/within a transaction/);
+          // The sweep's registration (derivStmts(db).pending), written here by its SQL: it must commit with the batch.
+          db.prepare(`INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('fts-merge', 1, NULL, NULL)
+            ON CONFLICT(step, version) DO UPDATE SET completed_ms = NULL`).run();
+          registered += 1;
+        },
+      });
+      expect(r).toEqual({ blobs: 4, bytes: expect.any(Number), fts: true });
+      expect(walSizes, 'one call after each batch that tombstoned something, the WAL truncated before each').toEqual([0, 0, 0]);
+      expect(registered, 'every batch that deleted index rows registers the merge step with them').toBe(3);
+      expect(mergePending(), 'the pass\'s onDeleted registration left exactly one pending merge step').toBe(1);
+      const state = (tag: string): { z: Uint8Array | null; pruned_ms: number | null; fts_indexed: number } =>
+        db.prepare('SELECT z, pruned_ms, fts_indexed FROM blobs WHERE blob_id = ?').get(blob[tag]!) as never;
+      for (const tag of PRUNED) expect(state(tag), tag).toEqual({ z: null, pruned_ms: NOW, fts_indexed: 0 });
+      for (const tag of KEPT) expect(state(tag).z, tag).not.toBeNull();
+      const match = (w: string): number =>
+        (db.prepare('SELECT count(*) AS n FROM blobs_fts WHERE blobs_fts MATCH ?').get(w) as { n: number }).n;
+      expect(match('oldonlyword'), 'the tombstoned blob left the index').toBe(0);
+      expect(match('sharedword'), 'a kept blob keeps its row').toBe(1);
+      expect(TABLES.map(count), 'tombstones content, never rows').toEqual(before);
+      expect(pruneApply(db, { cutoffMs: CUTOFF, nowMs: NOW, batch: 2, vacuumPages: 64, between: () => {} }).blobs,
+        'a second pass finds nothing left').toBe(0);
+    } finally { close(); }
+  });
+
+  it('incrementalVacuum returns what it freed and refuses a page count that is not a positive integer', () => {
+    const { db, close } = planted();
+    try {
+      withTx(db, 'NORMAL', () => {
+        db.exec('CREATE TABLE scratch_free (x BLOB)');
+        const ins = db.prepare('INSERT INTO scratch_free (x) VALUES (?)');
+        for (let k = 0; k < 200; k += 1) ins.run(Buffer.alloc(4000, k % 251));
+        db.exec('DROP TABLE scratch_free');
+      });
+      const freelist = (): number => Number((db.prepare('PRAGMA freelist_count').get() as { freelist_count: number }).freelist_count);
+      const free = freelist();
+      expect(free, 'CONTROL: dropping the filled table left free pages').toBeGreaterThan(0);
+      expect(incrementalVacuum(db, 64)).toBe(Math.min(free, 64));
+      expect(freelist(), 'the freelist shrank by exactly what was returned').toBe(free - Math.min(free, 64));
+      expect(() => incrementalVacuum(db, 0)).toThrow(TypeError);
+    } finally { close(); }
   });
 });

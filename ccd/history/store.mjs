@@ -1104,3 +1104,138 @@ export function storedVersionAt(dbFile) {
     db.close();
   }
 }
+
+// ── prune: tombstones by referrer age (§6.6; W1-B2 Task 20) ──────────────────────────────────────
+
+/** The blob ids that are structure, never content (§6.6): every native summary a node names
+ *  (nodes.summary_blob_id) and every kept list (boundaries.kept_blob_id). Read once per pass: nodes has no
+ *  index on summary_blob_id, so a probe per candidate would scan it once per blob. */
+export function pruneProtected(db) {
+  const ids = new Set();
+  for (const r of db.prepare('SELECT summary_blob_id AS id FROM nodes WHERE summary_blob_id IS NOT NULL').all()) ids.add(Number(r.id));
+  for (const r of db.prepare('SELECT kept_blob_id AS id FROM boundaries WHERE kept_blob_id IS NOT NULL').all()) ids.add(Number(r.id));
+  return ids;
+}
+
+const PRUNE_STMTS = new WeakMap();
+/** The candidate page, prepared once per connection (a reader's too: it writes nothing). One row per blob past
+ *  the cursor that still holds text, has at least one content referrer
+ *  (history-prune-needs-a-referrer), and has no referrer at or after the cutoff: a referrer with no time is
+ *  never old, a variant ages by its entry, a sidecar ages by its entry, and a sidecar no entry names is
+ *  never old. Each clause is ONE line: the mutation steps edit them line by line. The referrer probes are
+ *  index searches (entries_blob, entry_variants_blob, sidecars_blob). */
+function pruneStmts(db) {
+  let s = PRUNE_STMTS.get(db);
+  if (s !== undefined) return s;
+  s = {
+    candidates: db.prepare(`SELECT b.blob_id AS blob_id, length(b.z) AS zlen, b.exported_ms IS NOT NULL AS exported
+      FROM blobs b
+      WHERE b.blob_id > ? AND b.z IS NOT NULL
+        AND (EXISTS (SELECT 1 FROM entries e WHERE e.blob_id = b.blob_id) OR EXISTS (SELECT 1 FROM entry_variants v WHERE v.blob_id = b.blob_id) OR EXISTS (SELECT 1 FROM sidecars s WHERE s.blob_id = b.blob_id))
+        AND NOT EXISTS (SELECT 1 FROM entries e WHERE e.blob_id = b.blob_id AND (e.ts_ms IS NULL OR e.ts_ms >= ?))
+        AND NOT EXISTS (SELECT 1 FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id WHERE v.blob_id = b.blob_id AND (e.ts_ms IS NULL OR e.ts_ms >= ?))
+        AND NOT EXISTS (SELECT 1 FROM sidecars s LEFT JOIN entries e ON e.entry_id = s.entry_id WHERE s.blob_id = b.blob_id AND (e.entry_id IS NULL OR e.ts_ms IS NULL OR e.ts_ms >= ?))
+      ORDER BY b.blob_id LIMIT ?`),
+  };
+  PRUNE_STMTS.set(db, s);
+  return s;
+}
+
+/** One page of prune candidates past `afterBlobId` (§6.6): `limit` rows read, the protected ones dropped.
+ *  `more` says the page was full, so the caller reads the next one from `lastBlobId`; `exported` counts the
+ *  candidates the sole-copy export already holds (exported_ms, set from W1-B4). */
+export function pruneCandidates(db, i) {
+  const rows = pruneStmts(db).candidates.all(i.afterBlobId, i.cutoffMs, i.cutoffMs, i.cutoffMs, i.limit);
+  const blobIds = [];
+  let bytes = 0;
+  let exported = 0;
+  for (const r of rows) {
+    const id = Number(r.blob_id);
+    if (i.protectedIds.has(id)) continue;
+    blobIds.push(id);
+    bytes += Number(r.zlen);
+    if (Number(r.exported) === 1) exported += 1;
+  }
+  const lastBlobId = rows.length > 0 ? Number(rows[rows.length - 1].blob_id) : i.afterBlobId;
+  return { blobIds, bytes, exported, lastBlobId, more: rows.length === i.limit };
+}
+
+/** One batch in its own BEGIN IMMEDIATE transaction (§6.6): each blob's z set NULL, pruned_ms stamped and
+ *  fts_indexed cleared — a tombstone; the blob row and every row naming it stay — and its blobs_fts row
+ *  deleted when the index exists. Deleting a rowid the contentless index never held is a no-op (measured,
+ *  24.14.1). When it deleted index rows it calls `onDeleted` INSIDE the same transaction, so the caller's merge
+ *  step commits with the deletes it exists to purge (§6.2) and no stop between batches can separate them.
+ *  Answers how many blobs this batch tombstoned. */
+export function pruneBatch(db, i) {
+  const tombstone = db.prepare('UPDATE blobs SET z = NULL, pruned_ms = ?, fts_indexed = 0 WHERE blob_id = ? AND z IS NOT NULL');
+  const del = i.fts ? db.prepare('DELETE FROM blobs_fts WHERE rowid = ?') : null;
+  let n = 0;
+  withTx(db, 'NORMAL', () => {
+    for (const id of i.blobIds) {
+      if (Number(tombstone.run(i.nowMs, id).changes) !== 1) continue;
+      n += 1;
+      if (del !== null) del.run(id);
+    }
+    if (del !== null && n > 0 && i.onDeleted !== undefined) i.onDeleted();
+  });
+  return n;
+}
+
+/** What `prune` without --apply reports (§6.6): how many blobs, and their compressed bytes, --apply would
+ *  tombstone at this cutoff, and how many of those the export already holds. It runs on a reader. */
+export function pruneDryRun(db, cutoffMs) {
+  const protectedIds = pruneProtected(db);
+  let after = 0;
+  let blobs = 0;
+  let bytes = 0;
+  let exported = 0;
+  for (;;) {
+    const c = pruneCandidates(db, { cutoffMs, afterBlobId: after, limit: 500, protectedIds });
+    blobs += c.blobIds.length;
+    bytes += c.bytes;
+    exported += c.exported;
+    after = c.lastBlobId;
+    if (!c.more) return { blobs, bytes, exported };
+  }
+}
+
+/** §6.6's PRAGMA incremental_vacuum(N): returns at most `pages` free pages to the filesystem (the store is
+ *  auto_vacuum=INCREMENTAL from creation, §6.2). A full VACUUM is never run: it needs about the store's size
+ *  free, which the floor (§9.3) forbids. Answers the pages it freed. */
+export function incrementalVacuum(db, pages) {
+  if (!Number.isSafeInteger(pages) || pages < 1) {
+    throw new TypeError(`incrementalVacuum: pages must be a positive integer, not ${String(pages)}`);
+  }
+  const free = Number(db.prepare('PRAGMA freelist_count').get().freelist_count);
+  const n = Math.min(free, pages);
+  if (n > 0) db.exec(`PRAGMA incremental_vacuum(${n})`);
+  return n;
+}
+
+/** `prune --apply`'s loop (§6.6): pages of candidates from a blob-id cursor; each non-empty page tombstoned
+ *  in one batch (with `onDeleted`, the caller's merge-step registration, inside it), the freed pages vacuumed,
+ *  the WAL checkpointed and truncated (RB3: the batch's frames never accumulate across a long pass on the very
+ *  store that has no room for them; a reader on an older snapshot makes the checkpoint answer busy, which is not
+ *  an error and is retried after the next batch), then `between()` — the caller's journal half, which may throw
+ *  to end the pass. It stops when a page comes back short. Answers what it tombstoned and whether the FTS table
+ *  exists.
+ *  derived from lossless-claw src/prune.ts @ e05d8d3, MIT, see LICENSE.lossless-claw */
+export function pruneApply(db, i) {
+  const protectedIds = pruneProtected(db);
+  const fts = db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'blobs_fts'").get() !== undefined;
+  let after = 0;
+  let blobs = 0;
+  let bytes = 0;
+  for (;;) {
+    const c = pruneCandidates(db, { cutoffMs: i.cutoffMs, afterBlobId: after, limit: i.batch, protectedIds });
+    if (c.blobIds.length > 0) {
+      blobs += pruneBatch(db, { blobIds: c.blobIds, nowMs: i.nowMs, fts, onDeleted: i.onDeleted });
+      bytes += c.bytes;
+      incrementalVacuum(db, i.vacuumPages);
+      db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+      i.between();
+    }
+    after = c.lastBlobId;
+    if (!c.more) return { blobs, bytes, fts };
+  }
+}

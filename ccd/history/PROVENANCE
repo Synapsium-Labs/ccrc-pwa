@@ -151,3 +151,10 @@ upstream: src/db/migration.ts
 commit: e05d8d3
 upstream-sha256: 0a272a2d4b29ce79954003cdb8b5db4152f8b6001401938713b2987417a856f1
 changed: JavaScript; the missing-table, missing-shadow and missing-column tests (upstream lines 1079-1127) are kept as a pure decision over measured names, but the shadow list is per table (a contentless table has no _content shadow) and the stale-schema SQL test is not carried over; the repair that acts on the answer is a resumable backfill, not an in-transaction drop, create and seed
+
+item: batched prune loop (P15)
+ours: ccd/history/store.mjs
+upstream: src/prune.ts
+commit: e05d8d3
+upstream-sha256: d443f116d8e13d4ef215dd645058259aa6dea1650c6653eac40417d6cf385d4f
+changed: JavaScript; the dry-run default and the batched BEGIN IMMEDIATE loop (upstream lines 346-384) are kept, but a batch tombstones blobs by referrer age instead of deleting conversations, the batch loop calls back between batches for the journal half, the closing VACUUM becomes a per-batch incremental vacuum, and upstream's wal_checkpoint(TRUNCATE) runs after every batch
