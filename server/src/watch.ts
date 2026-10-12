@@ -4287,8 +4287,11 @@ export class FleetWatcher {
         // not exist at that record, a pairing needs an instant, and a held instant only ever comes from an anchor: so a
         // hold that was never recorded has a member whose anchor began after the record (a claimant doubted at the record's
         // pass re-anchors later, and an anchor leaves with its claimant). The record is written with the write-time clock,
-        // never before a same-pass anchor, so an anchor of the pass that landed it is not flagged. This also covers a write
-        // that kept failing before a restart: its anchors began after the last LANDED record. A pass that STARTS an anchor also
+        // never before a same-pass anchor, so an anchor of the pass that landed it is not flagged. This covers a write
+        // that kept failing before a restart only for holds whose anchors are still durable at it: one class is OPEN, pending a
+        // ruling — a held instant that lives only in memory because held-set writes failed while anchor writes landed (a held
+        // id that cannot be spelled, or a run_events INSERT failing while dead_claimants UPDATEs land) is lost with its anchor
+        // if a doubt deletes it before a restart, and this recovery cannot see it (the act stays withheld while the write fails). A pass that STARTS an anchor also
         // writes the record when the set is unchanged (the checkpoint, step six), so its write time moves past that pass's
         // anchors and a restart flags only the anchors of a pass that died before its write or whose write failed — not every
         // crashed claimant of a quiet system. The cost after such a loss is safe over-holding: two crashed claimants whose
@@ -4459,7 +4462,9 @@ export class FleetWatcher {
    *  checkpoint returns `true`, since the durable record still carries the hold and a restart flags the pass's anchors. The
    *  cost is one extra observation row per pass that starts an anchor, and none on a quiet pass. A restart that
    *  lands while writes keep failing seeds the older record, which can hold less than the process did: the first pass then
-   *  flags every claimant whose durable anchor began after that record row (D-4826). A `false` is warned, leaves the key unchanged so the next pass tries again, and
+   *  flags every claimant whose durable anchor began after that record row (D-4826), which does NOT close that class: a held
+   *  instant that lived in memory alone, its anchor deleted by a doubt before the restart, is invisible to it (open, pending
+   *  a ruling). A `false` is warned, leaves the key unchanged so the next pass tries again, and
    *  leaves the in-memory hold standing for this process. */
   private recordDeadCoordinatorBreakerHeldChange(
     coord: CoordStore, before: readonly DeadCoordinatorBreakerMember[], ids: readonly string[], checkpoint: boolean,

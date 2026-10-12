@@ -417,7 +417,9 @@ export interface DeadCoordinatorBreakerMember {
  *  (a checkpoint, so the write time moves past that pass's anchors), which leaves only the anchors of a pass that died before
  *  its write, or whose write failed, newer than the record: the cost is holding two such crashed claimants, though they never
  *  clustered, until evidence releases one. A server clock that steps backwards across a restart can make a later anchor read
- *  earlier than the record. The all-unmeasurable arm diverges as measured: R's extra claimant can be measured while all of
+ *  earlier than the record. One class is OPEN, pending a ruling: a held
+ *  instant that lived in memory alone because held-set writes failed while anchor writes landed, its anchor then deleted by a
+ *  doubt before the restart, is invisible to that recovery. The all-unmeasurable arm diverges as measured: R's extra claimant can be measured while all of
  *  U's are not, so R does not trip there, but every other claimant is as unmeasured in R as in U, so R can act there only
  *  on the claimant U already ended. The cost of the accumulation is more holding: a member held at an old instant that
  *  crashes anew also clusters near its new instant, a held member's instants and its record grow by one per re-anchor
@@ -657,7 +659,8 @@ export type DeadCoordinatorReport =
  *  crashed passes, which DELAYS an act, and the backoff (`nextAskAt`, `attempts`), which can bring an abandon back
  *  SOONER after a stuck or thrown act (review 381, F10). A restart while a held-set write is failing, or a death between a
  *  pass's anchors and its record, seeds the older record, which can hold less than the process did: the first pass flags
- *  every claimant whose durable anchor began after it (D-4826). The lane composes no act on a pass whose held-set record
+ *  every claimant whose durable anchor began after it (D-4826), though not a held instant that lived in memory alone
+ *  with its anchor deleted by a doubt (open, pending a ruling). The lane composes no act on a pass whose held-set record
  *  did not land, so the record never lags an act; the
  *  act is still behind the claimant's re-measure before and after the fleet act. The breaker's hold is not in this entry: it survives a restart (review
  *  381, F1), and an unreadable record of it seeds a conservative fallback (review 382, R2). */

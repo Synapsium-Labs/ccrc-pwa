@@ -894,7 +894,7 @@ collects them.
   releases one, though they never clustered. The record is written with the write-time clock, so an anchor of the pass
   that landed it is not flagged, and the lane records before it acts; a failed checkpoint of an unchanged set withholds
   no act. The limit: a server clock that steps backwards across a restart can make a later anchor read earlier than the
-  record.
+  record. One class is open, pending a ruling: a held instant that lives only in memory because held-set writes failed while anchor writes landed (a held id that cannot be spelled, such as one with a lone surrogate, or a run_events INSERT failing while dead_claimants UPDATEs land) is lost with its anchor if a doubt deletes that anchor before a restart, and the restart's recovery cannot see it; the act stays withheld while the write fails, so only a restart in that state exposes it.
   Anchors and releases are
   pass-sampled: an anchor sits on its lane's own pass, up to one cadence after the crash, evidence that releases a hold is
   seen only at a pass, and a restart moves the pass grid as any start does, so a pair near the ten-minute window's edge
@@ -983,7 +983,8 @@ collects them.
   seen, and in remote mode a fleet clock running behind the server's can hide one. (6) After a lost record write the
   recovery over-holds (two crashed claimants whose anchors began after the last landed record are held until evidence),
   and a server clock that steps backwards across a restart can make a later anchor read earlier than the
-  record. Each of (1), (2), (5) and (6) only delays an act or holds more; (3) and (4) can bring an act sooner; none
+  record. One further class is open, pending a ruling, and is not numbered here yet: a held instant lost with its anchor
+  while held-set writes fail (the memory bullet above names it). Each of (1), (2), (5) and (6) only delays an act or holds more; (3) and (4) can bring an act sooner; none
   bypasses the lane's own fresh audit, hour, journal, re-measure or breaker decision. The one action to take before a
   rollback is the next item's.
 - **Roll back below this release only with the lane disarmed.** No released build before this one reads the breaker's
