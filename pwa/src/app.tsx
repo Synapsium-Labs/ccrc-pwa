@@ -12,6 +12,7 @@ import { useEffect, useLayoutEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { BlockScreen } from './components/BlockScreen';
 import { LoginScreen } from './components/LoginScreen';
+import { RenderBoundary, ScreenFallback } from './components/RenderBoundary';
 import { ToastHost } from './components/Toast';
 import { AccountsStrip } from './fleet/AccountsStrip';
 import { useAuthLost } from './lib/auth';
@@ -111,6 +112,35 @@ export function App(): ReactNode {
     // rather than this pane, so the write is a harmless no-op there.
     if (pane !== null) pane.scrollTop = 0;
   }, [path, search]);
+  // THE DETAIL LADDER, behind its own RenderBoundary (design 2026-10-01
+  // section 4.12). Rendered INSIDE `.shell-detail` below, so a screen that
+  // throws while rendering shows "This screen could not be shown." in the pane
+  // while `.shell-nav`, the login overlay, the block screen and the toasts,
+  // all outside it, stay mounted. Its reset key is `path + search`, so any
+  // navigation draws the ladder again; it is not a React `key`, so it never
+  // remounts a screen and the pane reset above stays the shell's.
+  const ladder = sessionId ? (
+    // key remounts per session so per-session UI state (terminal drawer,
+    // pickers) never leaks across a sidebar switch.
+    <SessionScreen key={sessionId} id={sessionId} />
+  ) : archive ? (
+    <ArchiveScreen sessions={sessions} onOpen={(id) => navigate(`/s/${id}`)} />
+  ) : accounts ? (
+    <AccountsScreen />
+  ) : mail ? (
+    <MailScreen />
+  ) : runs ? (
+    <RunsScreen />
+  ) : settings ? (
+    <SettingsScreen />
+  ) : (
+    <div className="shell-placeholder">
+      <p className="shell-placeholder-mark" aria-hidden="true">
+        ❯
+      </p>
+      <p className="shell-placeholder-copy">Select a session</p>
+    </div>
+  );
   return (
     <>
       {authLost && <LoginScreen />}
@@ -133,28 +163,7 @@ export function App(): ReactNode {
           />
         </aside>
         <section className="shell-detail" ref={detail}>
-          {sessionId ? (
-            // key remounts per session so per-session UI state (terminal drawer,
-            // pickers) never leaks across a sidebar switch.
-            <SessionScreen key={sessionId} id={sessionId} />
-          ) : archive ? (
-            <ArchiveScreen sessions={sessions} onOpen={(id) => navigate(`/s/${id}`)} />
-          ) : accounts ? (
-            <AccountsScreen />
-          ) : mail ? (
-            <MailScreen />
-          ) : runs ? (
-            <RunsScreen />
-          ) : settings ? (
-            <SettingsScreen />
-          ) : (
-            <div className="shell-placeholder">
-              <p className="shell-placeholder-mark" aria-hidden="true">
-                ❯
-              </p>
-              <p className="shell-placeholder-copy">Select a session</p>
-            </div>
-          )}
+          <RenderBoundary where="detail" resetKey={path + search} fallback={() => <ScreenFallback />}>{ladder}</RenderBoundary>
         </section>
       </div>
       <ToastHost />
