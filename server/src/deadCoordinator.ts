@@ -157,6 +157,25 @@ function spawnSucceeded(r: DeadCoordinatorJournalRow): boolean {
   return typeof meas === 'object' && meas !== null && (meas as { rc?: unknown }).rc === '0';
 }
 
+/** The newest `spawn` row that recorded `rc` 0, in journal order (`rows` already sorted by generation), with its index. */
+function newestSuccessfulSpawn(rows: readonly DeadCoordinatorJournalRow[]): { index: number; row: DeadCoordinatorJournalRow } | null {
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const r = rows[i]!;
+    if (r.act === 'spawn' && r.outcome === 'done' && spawnSucceeded(r)) return { index: i, row: r };
+  }
+  return null;
+}
+
+/** The instant (ms) of the claimant's newest SUCCESSFUL spawn, by the same selector `deadCoordinatorJournal` reads its
+ *  "last start" with, or `null` (no such row, a row with no instant, or a generation this reader cannot place). It is the
+ *  second kind of evidence of a later life (`deadCoordinatorNewEpisode`, D-4827); the caller reads it only for a claimant
+ *  the journal clause called crashed, so the journal was trusted. */
+export function deadCoordinatorJournalSpawnedAt(mirrorRows: readonly DeadCoordinatorJournalRow[]): number | null {
+  if (mirrorRows.some((r) => !GEN_DIGITS.test(r.gen))) return null;
+  const found = newestSuccessfulSpawn([...mirrorRows].sort((a, b) => compareGenerations(a.gen, b.gen)));
+  return found === null ? null : found.row.at;
+}
+
 /** THE ONE READER of the journal clause. "Since its last successful start" is since the newest `spawn` row that
  *  recorded `rc` 0: `start` and `ensure` are journaled at the TOP of their verbs, before any pane exists, so a revive
  *  that FAILED journals them too — the case the clause exists for (a person stopped it, a later revive failed and
@@ -179,12 +198,9 @@ export function deadCoordinatorJournal(
     return { kind: 'unreadable', detail: `a journal row names a generation that cannot be placed ("${unplaced.gen}")` };
   }
   const rows = [...mirrorRows].sort((a, b) => compareGenerations(a.gen, b.gen));
-  let from = 0;
-  let start: DeadCoordinatorJournalRow | null = null;
-  for (let i = rows.length - 1; i >= 0; i -= 1) {
-    const r = rows[i]!;
-    if (r.act === 'spawn' && r.outcome === 'done' && spawnSucceeded(r)) { from = i + 1; start = r; break; }
-  }
+  const found = newestSuccessfulSpawn(rows);
+  const from = found === null ? 0 : found.index + 1;
+  const start: DeadCoordinatorJournalRow | null = found === null ? null : found.row;
   const lost = journalLossSince(start, trust);
   if (lost !== null) return { kind: 'unreadable', detail: lost };
   if (rows.length === 0) return hasHistory ? { kind: 'quiet', started: false } : { kind: 'no-history' };
@@ -260,20 +276,30 @@ export function deadAnchorNext(prev: DeadAnchor | null, nowMs: number): DeadAnch
   return { firstDeadAt: prev.firstDeadAt, lastDeadAt: nowMs };
 }
 
-/** A NEW EPISODE (D-4825, the returning-id seam): the claimant is crashed this pass, and its supervisor stamped a heartbeat
- *  (`supervisedAt`, epoch SECONDS, the evidence of a spawn the lane already reads) LATER than its durable anchor's
- *  `firstDeadAt` and not after now — so it was supervised again after that anchor began, and what is crashed now is a
- *  later death, not the one the anchor counts. The lane then starts a FRESH anchor at this crash, as for a first crash
+/** A NEW EPISODE (D-4825, D-4827; the returning-id seam): the claimant is crashed this pass, and EVIDENCE of a later life
+ *  is later than its durable anchor's `firstDeadAt` and not after now — so what is crashed now is a later death, not the
+ *  one the anchor counts. Two kinds of evidence, either enough: (1) its supervisor's heartbeat (`supervisedAt`, epoch
+ *  SECONDS), which is SUPERVISION evidence — `cmd_supervise` re-stamps it every 30 s and at every supervisor start,
+ *  `cmd_swap` while a carry runs — so a restart of a supervisor also shows; (2) the trusted journal's newest SUCCESSFUL
+ *  `spawn` (rc 0, already selected by `deadCoordinatorJournal`, `spawnedAtMs`), which covers the unsupervised fallbacks of
+ *  a successful spawn that stamp no heartbeat. The lane then starts a FRESH anchor at this crash, as for a first crash
  *  (`deadAnchorNext(null, now)`), and the breaker adds that instant to every instant it remembers. A lane that saw the
  *  claimant alive in between would have deleted the anchor and anchored afresh; one that skipped that pass, or was
- *  restarting, did not, and keeps the old episode's instant — which this makes the same. Stateless: the heartbeat and the
- *  anchor are both durable or registry-read, so it survives a restart, and once the fresh anchor is written the heartbeat
- *  is no longer later than it, so it fires once. The hour then counts from the fresh anchor, exactly as for a first crash. */
-export function deadCoordinatorNewEpisode(prev: DeadAnchor | null, supervisedAtS: number | null, nowMs: number): boolean {
+ *  restarting, did not, and keeps the old episode's instant — which this makes the same. Stateless: the evidence and the
+ *  anchor are both durable or read, so it survives a restart, and once the fresh anchor is written neither piece of
+ *  evidence is later than it, so it fires once per later life. The hour then counts from the fresh anchor, exactly as for
+ *  a first crash. A heartbeat that classifies the claimant crashed is already outside the 120-second fresh window, so the
+ *  new anchor is that delay, plus up to a cadence or the skipped passes, later than the stamp: it never shortens the old
+ *  hour. Not covered, and not claimed: a later life that left neither a heartbeat nor a journaled successful spawn, and, in
+ *  remote mode, evidence stamped by a fleet clock running behind the server's (it can only hide a return, never invent
+ *  one). Both values are read as the existing timestamp handling reads them: a future, non-positive or unsafe one is no
+ *  evidence. */
+export function deadCoordinatorNewEpisode(
+  prev: DeadAnchor | null, supervisedAtS: number | null, nowMs: number, spawnedAtMs: number | null = null,
+): boolean {
   if (prev === null) return false;
-  if (supervisedAtS === null || !Number.isSafeInteger(supervisedAtS) || supervisedAtS <= 0) return false;
-  const stamp = supervisedAtS * 1000;
-  return stamp <= nowMs && stamp > prev.firstDeadAt;
+  const later = (ms: number | null): boolean => ms !== null && Number.isSafeInteger(ms) && ms > 0 && ms <= nowMs && ms > prev.firstDeadAt;
+  return later(supervisedAtS !== null && Number.isSafeInteger(supervisedAtS) ? supervisedAtS * 1000 : null) || later(spawnedAtMs);
 }
 
 /** SINCE WHEN the claimant has been dead, for the hour: `max(firstDeadAt, .supervised's stamp)`. The stamp may only
@@ -378,8 +404,9 @@ export interface DeadCoordinatorBreakerMember {
  *  ended and that RETURNS (a new spawn, a new run) while R still holds its old episode is covered by
  *  `deadCoordinatorNewEpisode` (D-4825): its supervisor's heartbeat is later than R's durable anchor, so R anchors it
  *  afresh at its next crash, as U, which deleted the anchor, does — R then carries U's new instant beside every one it
- *  remembers. That rests on the heartbeat: a return that stamps none is not seen, and this does not claim to cover it, nor
- *  claim that no other corner exists. A process that dies between step five (a fresh anchor written) and step six (the
+ *  remembers. That rests on a heartbeat or a journaled successful spawn (D-4827): a return that leaves neither is not seen, in
+ *  remote mode a fleet clock behind the server's can hide one, and this does not claim to cover them, nor claim that no
+ *  other corner exists. A process that dies between step five (a fresh anchor written) and step six (the
  *  record written), or whose write kept failing, seeds the older record; the lane's first pass therefore flags every
  *  claimant whose durable anchor began after that record row was written (D-4826), so the holds it formed and lost are
  *  held again, flagged, at the cost of holding two crashed claimants whose anchors merely postdate the record until evidence

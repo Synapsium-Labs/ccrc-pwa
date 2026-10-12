@@ -115,7 +115,7 @@ import {
 import { expireArchived, expiryReviewing, learnExpiry, recordExpireFeed } from './coord/expireArchived.js';
 import {
   deadAnchorNext, deadCoordinatorNewEpisode, deadCoordinatorAttention, deadCoordinatorBreaker,
-  deadCoordinatorBreakerHeldKey, deadCoordinatorBreakerKey, deadCoordinatorCrash, deadCoordinatorDue, deadCoordinatorEntry, deadCoordinatorJournal,
+  deadCoordinatorBreakerHeldKey, deadCoordinatorBreakerKey, deadCoordinatorCrash, deadCoordinatorDue, deadCoordinatorEntry, deadCoordinatorJournal, deadCoordinatorJournalSpawnedAt,
   deadCoordinatorNextEntry, deadCoordinatorOutcomeKey, deadCoordinatorSighted, deadCoordinatorSince, deadCoordinatorThrew,
   type ClaimantDeadCause, type DeadAnchor, type DeadCoordinatorActOutcome, type DeadCoordinatorBreaker,
   type DeadCoordinatorBreakerMember, type DeadCoordinatorEntry, type DeadCoordinatorJournal, type DeadCoordinatorJournalTrust,
@@ -4336,12 +4336,15 @@ export class FleetWatcher {
     }
     const dead = ids.filter((id) => measured.get(id)!.state === 'dead');
     let journalOf: (id: string) => DeadCoordinatorJournal;
+    /** The newest successful spawn's instant for a claimant the clause called crashed (so the journal was trusted), or `null`. */
+    let journalSpawnedAtOf: (id: string) => number | null = () => null;
     try {
       const rows = coord.deadCoordinatorJournalRows(dead);
       journalOf = (id) => {
         const j = rows.get(id);
         return j === undefined ? { kind: 'no-history' } : deadCoordinatorJournal(j.rows, j.hasHistory, journal.trust);
       };
+      journalSpawnedAtOf = (id) => { const j = rows.get(id); return j === undefined ? null : deadCoordinatorJournalSpawnedAt(j.rows); };
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       journalOf = () => ({ kind: 'unreadable', detail });
@@ -4360,9 +4363,11 @@ export class FleetWatcher {
       try {
         if (c.kind === 'crashed') {
           const supervisedAt = records.find((r) => r.id === id)?.supervisedAt ?? null;
-          // A heartbeat LATER than the anchor is a spawn since it began: a new episode, anchored afresh (D-4825).
+          // A supervisor heartbeat LATER than the anchor is supervision since it began: a new episode, anchored afresh (D-4825).
           const prev = anchors.get(id) ?? null;
-          const fresh = deadCoordinatorNewEpisode(prev, supervisedAt, at);
+          // ...or a trusted journal's newest successful spawn later than it (D-4827): the unsupervised fallbacks stamp no heartbeat.
+          const spawnedAt = journalSpawnedAtOf(id);
+          const fresh = deadCoordinatorNewEpisode(prev, supervisedAt, at, spawnedAt);
           const a = deadAnchorNext(fresh ? null : prev, at);
           coord.setDeadAnchor(id, a);
           crashed.push({ id, firstDeadAt: a.firstDeadAt, since: deadCoordinatorSince(a, supervisedAt, at), cause: c.cause });

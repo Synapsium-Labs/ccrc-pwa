@@ -650,10 +650,14 @@ each item is a departure named there).
   succeeded (it was started and never ran); a horizon with no spawn row at all still reads crashed.
 - **The anchor restarts after a gap nobody measured.** `dead_claimants` carries `lastDeadAt` beside `firstDeadAt`; an
   episode whose last crashed pass is older than ten minutes (a server down, an older build running after a rollback,
-  which never writes the table) starts again at the pass that measures it. A claimant crashed with a supervisor
-  heartbeat later than its anchor has been supervised again since the anchor began, so that crash starts a fresh anchor,
-  as a first crash does, and the hour counts from it; the breaker adds that instant to every instant it remembers, so a
-  lane that skipped the pass that saw it alive no longer keeps the old episode alone (D-4825). The table is a new table
+  which never writes the table) starts again at the pass that measures it. A claimant crashed with
+  evidence of a later life later than its anchor starts a fresh anchor, as a first crash does, and the hour counts from
+  it; the evidence is a supervisor heartbeat (supervision evidence: re-stamped every 30 seconds, at every supervisor
+  start and by a swap, so it also shows a supervisor's restart) or the trusted journal's newest successful spawn (which
+  covers an unsupervised fallback that stamps none), either later than the anchor and not after now; the breaker adds
+  that instant to every instant it remembers, so a lane that skipped the pass that saw it alive no longer keeps the old
+  episode alone (D-4825, D-4827). A later life that leaves neither is not seen, and in remote mode a fleet clock running
+  behind the server's can hide one; neither is permissive. The table is a new table
   and nothing else, so a rolled-back build boots on it.
 - **The breaker holds the whole lane**, not only the claimants it names, and it **clears through the doors that
   already exist**: the claimants fall back under the threshold when the operator revives them, reclaims their
@@ -894,8 +898,8 @@ collects them.
   by claimants the unrestarted lane has already ended. A claimant the
   unrestarted lane ended that returns under a new run is covered by the episode boundary: a supervisor heartbeat later
   than its durable anchor starts a fresh anchor at its next crash, so the restarted lane carries the new instant beside
-  every one it remembers (D-4825). That rests on the heartbeat: a return that stamps none is not seen, and no claim is
-  made that no other corner exists. The lost backoff has a knock-on: if the unrestarted lane backs off a stuck claimant
+  every one it remembers (D-4825). That rests on a heartbeat or a journaled successful spawn (D-4827): a return that leaves neither is not seen, in remote
+  mode a fleet clock behind the server's can hide one, and no claim is made that no other corner exists. The lost backoff has a knock-on: if the unrestarted lane backs off a stuck claimant
   while the restarted lane, its backoff lost, ends it, the unrestarted lane keeps that claimant as an extra entry that can
   cluster with a new crash, so the restarted lane can end a third claimant the unrestarted lane holds. The lane composes no act on a pass whose held-set record did not
   land, so the record never lags an act, and every act is still behind the claimant's re-measure before and after the fleet act.

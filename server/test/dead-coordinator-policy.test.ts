@@ -11,7 +11,7 @@ import {
   DEAD_COORDINATOR_DELIBERATE_ACTS, DEAD_COORDINATOR_GAP_MS, DEAD_COORDINATOR_JOURNAL_ACTS,
   DEAD_COORDINATOR_JOURNAL_MARGIN_MS, DEAD_COORDINATOR_JOURNAL_TRUSTED, deadAnchorNext, deadCoordinatorAttention,
   deadCoordinatorBackoffMs, deadCoordinatorBreaker, deadCoordinatorNewEpisode, deadCoordinatorBreakerFeedRow, deadCoordinatorBreakerKey,
-  deadCoordinatorCrash, deadCoordinatorDue, deadCoordinatorEntry, deadCoordinatorFeedRows, deadCoordinatorJournal,
+  deadCoordinatorCrash, deadCoordinatorDue, deadCoordinatorEntry, deadCoordinatorFeedRows, deadCoordinatorJournal, deadCoordinatorJournalSpawnedAt,
   deadCoordinatorNextEntry, deadCoordinatorReportSentence, deadCoordinatorSighted, deadCoordinatorSince, deadCoordinatorThrewFeedRow,
   deadCoordinatorThrew, isDeadCoordinatorKebab,
   type ClaimantReading, type DeadCoordinatorJournal, type DeadCoordinatorJournalRow, type DeadCoordinatorJournalTrust,
@@ -212,6 +212,31 @@ describe('a new spawn starts a new episode (D-4825)', () => {
   });
 });
 
+describe('a journaled successful spawn starts a new episode too (D-4827)', () => {
+  const anchor = { firstDeadAt: NOW, lastDeadAt: NOW + PASS };
+  const now = NOW + 30 * PASS;
+  it('a trusted successful spawn later than the anchor and not after now is evidence of a later life, with no heartbeat at all', () => {
+    expect(deadCoordinatorNewEpisode(anchor, null, now, NOW + 5 * PASS)).toBe(true);
+    expect(deadCoordinatorNewEpisode(anchor, null, now, NOW - PASS), 'a spawn from before the anchor is this episode').toBe(false);
+    expect(deadCoordinatorNewEpisode(anchor, null, now, NOW), 'the same instant is not later').toBe(false);
+    expect(deadCoordinatorNewEpisode(anchor, null, now, now + PASS), 'a spawn from the future is no evidence').toBe(false);
+    expect(deadCoordinatorNewEpisode(null, null, now, NOW + 5 * PASS), 'no anchor: the first crash anchors as it always did').toBe(false);
+    for (const bad of [null, 0, -5, 1.5, Number.NaN]) expect(deadCoordinatorNewEpisode(anchor, null, now, bad), String(bad)).toBe(false);
+    // either kind is enough; neither is
+    expect(deadCoordinatorNewEpisode(anchor, Math.floor((NOW + 5 * PASS) / 1000), now, NOW - PASS)).toBe(true);
+    expect(deadCoordinatorNewEpisode(anchor, null, now, null)).toBe(false);
+  });
+  it('the newest successful spawn is read by the clause\'s own selector: the last rc-0 spawn in journal order, never a failed one, never an unplaced generation', () => {
+    expect(deadCoordinatorJournalSpawnedAt([])).toBeNull();
+    expect(deadCoordinatorJournalSpawnedAt([row('stop'), spawned(1)]), 'a failed spawn is no start').toBeNull();
+    expect(deadCoordinatorJournalSpawnedAt([{ ...spawned(0), at: NOW + 5 }, { ...spawned(1), at: NOW + 9 }])).toBe(NOW + 5);
+    expect(deadCoordinatorJournalSpawnedAt([{ ...spawned(0), at: NOW + 5 }, { ...spawned(0), at: NOW + 7 }])).toBe(NOW + 7);
+    expect(deadCoordinatorJournalSpawnedAt([{ ...spawned(0), gen: NEWER_GEN, at: NOW + 9 }, { ...spawned(0), gen: OLDER_GEN, at: NOW + 1 }]), 'journal order, not ingest order').toBe(NOW + 9);
+    expect(deadCoordinatorJournalSpawnedAt([{ ...spawned(0), gen: 'not a generation' }])).toBeNull();
+    expect(deadCoordinatorJournalSpawnedAt([{ ...spawned(0), at: null }])).toBeNull();
+  });
+});
+
 describe('the circuit breaker (spec §5.4)', () => {
   const at = (id: string, firstDeadAt: number) => ({ id, firstDeadAt });
   it('two claimants first measured crashed within ten minutes of each other trip it, naming both', () => {
@@ -297,19 +322,31 @@ describe('the circuit breaker (spec §5.4)', () => {
     expect(one.tripped && one.members).toEqual([at('c-x', t1), at('c-y', t1)]);
   });
 
+  it('an id\'s OWN instants never cluster it: one id, two instants four minutes apart, no second id, is not a trip (review 385, F4)', () => {
+    const t = NOW + 3_600_000;
+    expect(deadCoordinatorBreaker([], [{ id: 'c-x', firstDeadAt: t, instants: [t, t + 4 * PASS] }], [], 1, null, t + 5 * PASS)).toEqual({ tripped: false });
+    expect(deadCoordinatorBreaker([at('c-x', t + 4 * PASS)], [at('c-x', t)], [], 1, null, t + 5 * PASS), 'a crashed anchor beside its own held instant').toEqual({ tripped: false });
+    // ...and with a second id, anywhere, the same instants do not cluster the first with itself: only the pair does.
+    expect(deadCoordinatorBreaker([at('c-x', t + 4 * PASS), at('c-y', t + 3_600_000)], [at('c-x', t)], [], 2, null, t + 7_200_000)).toEqual({ tripped: false });
+  });
+
   it('MONOTONE (review 384, F1): adding an entry, an instant or a flag never turns `tripped` false and never drops a member — a seeded grid', () => {
     let seed = 20261011;
     const rnd = (n: number): number => { seed = (Math.imul(seed, 1103515245) + 12345) >>> 0; return (seed >>> 8) % n; };
     const ids = ['c-a', 'c-b', 'c-c', 'c-d', 'c-e'];
     const instants = [0, 4, 9, 11, 21, 40, 41, 90].map((m) => NOW + m * 60_000);
     type In = { crashed: Map<string, number>; held: Map<string, { ats: number[]; fallback: boolean }> };
+    // The pass's own measurements are SHARED by the two inputs (the unmeasurable arm's trigger reads only them): they vary
+    // between iterations, never between a base and its supersets.
+    let arm: { unmeasurable: string[]; measured: number; doubt: string | null } = { unmeasurable: [], measured: 0, doubt: null };
     const run = (i: In) => deadCoordinatorBreaker([...i.crashed].map(([id, firstDeadAt]) => ({ id, firstDeadAt })),
       [...i.held].map(([id, h]) => {
         const ats = [...new Set(h.ats)].sort((x, y) => x - y);
         return { id, firstDeadAt: ats[0]!, ...(ats.length > 1 ? { instants: ats } : {}), ...(h.fallback ? { fallback: true as const } : {}) };
       }),
-      [], 0, null, NOW + 200 * 60_000);
+      arm.unmeasurable, arm.measured, arm.doubt, NOW + 200 * 60_000);
     const members = (b: ReturnType<typeof run>): string[] => (b.tripped ? b.members.map((m) => m.id) : []);
+    const claimants = (b: ReturnType<typeof run>): string[] => (b.tripped ? b.claimants : []);
     const clone = (i: In): In => ({ crashed: new Map(i.crashed), held: new Map([...i.held].map(([id, h]) => [id, { ats: [...h.ats], fallback: h.fallback }])) });
     let checked = 0; let tripped = 0;
     for (let k = 0; k < 600; k += 1) {
@@ -318,6 +355,8 @@ describe('the circuit breaker (spec §5.4)', () => {
         if (rnd(3) === 0) base.crashed.set(id, instants[rnd(instants.length)]!);
         if (rnd(4) === 0) base.held.set(id, { ats: [instants[rnd(instants.length)]!, ...(rnd(3) === 0 ? [instants[rnd(instants.length)]!] : [])], fallback: rnd(6) === 0 });
       }
+      const unm = ids.filter(() => rnd(5) === 0);
+      arm = { unmeasurable: unm, measured: unm.length + rnd(3), doubt: rnd(6) === 0 ? 'tmux did not answer' : null };
       const before = run(base);
       const supers: In[] = [];
       for (const id of ids) {
@@ -336,6 +375,16 @@ describe('the circuit breaker (spec §5.4)', () => {
           tripped += 1;
           expect(after.tripped, JSON.stringify({ base: [[...base.crashed], [...base.held]], sup: [[...sup.crashed], [...sup.held]] })).toBe(true);
           for (const m of members(before)) expect(members(after), `${m} dropped`).toContain(m);
+          // the unmeasurable arm names a SUPERSET too, and each member keeps every instant and its flag (not ids alone)
+          for (const c of claimants(before)) expect(claimants(after), `${c} left the named claimants`).toContain(c);
+          if (before.tripped && after.tripped) {
+            for (const m of before.members) {
+              const a = after.members.find((x) => x.id === m.id);
+              expect(a, `${m.id} dropped`).toBeDefined();
+              for (const at of m.instants ?? [m.firstDeadAt]) expect(a!.instants ?? [a!.firstDeadAt], `${m.id} lost the instant ${at}`).toContain(at);
+              if (m.fallback === true) expect(a!.fallback, `${m.id} lost its flag`).toBe(true);
+            }
+          }
         }
       }
     }

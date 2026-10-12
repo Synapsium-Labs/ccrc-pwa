@@ -1026,7 +1026,7 @@ describe('a restarted lane never ends a claimant the unrestarted lane\'s breaker
  *  `firstDeadAt`. */
 describe('a new spawn starts a new episode (D-4825)', () => {
   const [X, Z, Q] = ['demo-coord-x', 'demo-coord-z', 'demo-coord-q'];
-  const world = async (lane: 'U' | 'R', o: { restartAt?: number } = {}) => {
+  const world = async (lane: 'U' | 'R', o: { restartAt?: number; evidence?: 'heartbeat' | 'journal' } = {}) => {
     const f = await fixture();
     f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
     vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -1036,7 +1036,8 @@ describe('a new spawn starts a new episode (D-4825)', () => {
     const events: Record<number, () => void> = {
       4: () => { f.live.delete(Q); },                            // Q crashes (anchored at the pass at 9)
       22: () => { f.live.delete(X); },                           // X crashes (anchored at the pass at 27)
-      64: () => { f.live.add(X); writeFileSync(path.join(f.reg, `${X}.supervised`), String(Math.floor((T0 + 65 * 60_000) / 1000))); },
+      // D-4827: a successful spawn that stamps NO heartbeat (an unsupervised fallback) is journaled all the same.
+      64: () => { f.live.add(X); if (o.evidence === 'journal') f.journal(X, 'spawn', { meas: { rc: '0' } }); else writeFileSync(path.join(f.reg, `${X}.supervised`), String(Math.floor((T0 + 65 * 60_000) / 1000))); },
       70: () => { f.live.delete(X); f.live.delete(Z); },         // X crashes again, its heartbeat stays at minute 65; Z crashes
     };
     const passes = new Set([0, 9, 18, 27, 36, 45, 54, 63, 72, 81, 90, 99, 108, 117, 126, 135, 144, ...(lane === 'U' ? [66] : [])]);
@@ -1051,8 +1052,8 @@ describe('a new spawn starts a new episode (D-4825)', () => {
     return { states: [X, Z, Q].map((id) => f.stateOf(r[id]!)),
       breaker: f.attention().filter(([k]) => k === 'breaker'), anchorX: f.anchorOf(X) };
   };
-  const together = async (o: { restartAt?: number } = {}): Promise<void> => {
-    const u = await world('U');
+  const together = async (o: { restartAt?: number; evidence?: 'heartbeat' | 'journal' } = {}): Promise<void> => {
+    const u = await world('U', o.evidence === undefined ? {} : { evidence: o.evidence });
     vi.restoreAllMocks();
     const r = await world('R', o);
     expect(u.breaker, 'the lane that saw X alive trips on {X, Z}').toEqual([['breaker', [X, Z]]]);
@@ -1062,6 +1063,9 @@ describe('a new spawn starts a new episode (D-4825)', () => {
   };
   it('the lane that missed the alive pass starts a fresh anchor from the later heartbeat, clusters X with Z, and ends neither X nor Q while the other lane\'s breaker stands', async () => { await together(); });
   it('...and a restart after the fresh anchor was written changes nothing: the anchor and the held record carry the boundary', async () => { await together({ restartAt: 75 }); });
+
+  it('a JOURNALED successful spawn with no heartbeat starts a new episode too: the lane that missed the alive pass ends neither Q nor the returned claimant (D-4827)', async () => { await together({ evidence: 'journal' }); });
+  it('...and a restart after the fresh anchor was written changes nothing (D-4827)', async () => { await together({ evidence: 'journal', restartAt: 75 }); });
 
   it('a new episode\'s hour counts from its FRESH anchor: the claimant is not ended before it, and is ended after it, not never', async () => {
     const f = await fixture();
