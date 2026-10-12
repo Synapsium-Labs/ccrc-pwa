@@ -25,7 +25,7 @@ removed on 2026-09-10 was not.
 | 6 | `ws-reclaim` repaired (R48): the ONE removal helper and the in-use wait/keep of a temp root (R49); the positive witness `$REG/tmproots/<id>` (R50); F6 and the harness strip (R51); journaling `probe-unmeasured` and the id-tied pre-lock dies (R52); the three-way gone-branch read (R53); the `recorded` placement basis (R54); the vanish re-read's second trigger (R55) | **AGENT-FIRST** | #326 | **deployed** v0.0.124 (`b0647d850`, both boxes by 13:40 on 10-08) — run 291 closed `done`; reviews 335, 341 and 346 |
 | 7 | the temp-root collector verb, inert (R57, R66–R68): audit + token, quarantine-by-rename under the reap lock, the `$REG/tmpquarantine` record, destructive verb, cap token, agent grant, entry guard; plus the ccd halves (R69 `containment-refuted`, R70 `crumb`, rung 8, the reason cap, X1's generation input) | **AGENT-FIRST** | #344 | **deployed** fleet box v0.0.145 (`7609221a4`, merged 2026-10-11 00:55; the updater's auto move 01:10–01:12, agent restarted 01:10:52; `ccd caps` advertises `collect-v1` and `ws-collect`) — run 347, reviews 369, 374, 376 |
 | 8 | reclaim's server half (R65): X1 and X3 generation keying, R61's closure, the `crumb` verb and audit readers, the `clipsKept`/`tmpRootKept` reader, R69's `stuck` class, the persistent-failure tier | server | #349 | **deployed** v0.0.147 (`d0c2b7803`, merged 2026-10-11 12:13; both boxes current by 12:23, through the updater) — run 348 (`ccrc-pwa-quiet-prairie`), plan `0d9f1b042`; reviews 378, 379 |
-| 9 | the collector's server lane (the old R58), after the fleet advertises wave 7's token and wave 8 has merged; SAFETY and SECURITY lenses | server | — | **dispatched** 2026-10-11 16:33 — run 380 (`ccrc-pwa-quiet-hollow`), plan `d9647b76b` (#352); rulings contract §16 (R82–R92); ships SHADOWED |
+| 9 | the collector's server lane (the old R58), after the fleet advertises wave 7's token and wave 8 has merged; SAFETY and SECURITY lenses | server | — | **in review** 2026-10-12 01:14 — run 380 (`ccrc-pwa-quiet-hollow`), PR #354 at `c7dfbbf69`, review run 386; plan `d9647b76b` (#352); rulings contract §16 (R82–R92); ships SHADOWED |
 
 **Rule 3 is enforced at the end of wave 2** with no destructive verb in existence: a second bind on a
 PR-bearing child refuses. **Wave 3's `ws-reclaim` and wave 7's collector are the only verbs that destroy anything** (R38, R48). Waves 3 and 4 do nothing on a
@@ -46,6 +46,30 @@ clause 11): it names a departure in its wave-done mail and the coordinator assig
 Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (reviews **170**, **171**, **172**); wave 4 = **174**. Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
 
 ## Decisions & deviations
+
+- **2026-10-12 01:14 — WAVE 9's WAVE-DONE (4261, acked): PR #354 at `c7dfbbf69`. Run 380 is advanced to `awaiting-review` and its eleven items are settled. Review run 386 is opened.**
+  - **Re-measured.**
+    - The remote tip equals the claim.
+    - The base is main `d9647b76b` (the plan's merge, unmoved): 10 commits, no merge of main, and `merge-tree` is clean.
+    - The PR is open and mergeable.
+    - Workspace-lifecycle wave 6 has not landed, so nothing was absorbed.
+  - **Suite: red on the first full run, with no red in this wave's files.** The worker measured each red:
+    - `ccd-review-335-pins` F9 (two cases) is main-red: it fails alone and on `origin/main`, because the box's long `TMPDIR` clips the line.
+    - `tmp-sweep` "FAILS CLOSED" is main-red.
+    - `boot.test.ts`'s hung-ccd case is a load flake: 3 of 3 alone, on the branch and on main.
+    - Agent (494) and PWA (3516) pass, as do both `tsc` runs, the PWA build and the gates.
+  - **CI at 01:14.** `select tests`, `typecheck (server)`, `test (agent)`, `build-pwa` and `node floor` pass. The server shards and `test (pwa)` are pending. `probe-macos` failed, which is advisory.
+  - **The boundary holds.** `CLAUDE.md` is untouched (README is 6024 lines), and nothing writes `$REG/collect-lane-live`.
+  - **Departures are named by slug in the account.** I number them at the fix round, singly, from the plan's list.
+  - **Seven items are open for my ruling.** I rule on them together with the review's report:
+    - `hold-presence-alternation-can-starve-attention`
+    - `collectable-alternation-is-silent`
+    - `lane-silent-without-capabilities`
+    - `flip-row-filed-under-a-job-id`
+    - `registered-id-with-a-kept-record-hidden-while-quarantine-is-unmeasured` (a stated residual)
+    - `ccd-collect-budget-comment-sums-a-grace-per-probe` (`ccd/`: outside the boundary; a carry for the path-identity follow-up)
+    - `spec-ws-expire-crumb-sentence-after-wl-w6`
+  - **Evidence** is archived in `wave9-done/`: the mail, the account and the worker's SDD ledger.
 
 - **2026-10-11 23:45 — run 380's session was OOM-killed at 23:12, during Task 10, and resumed idle. I mailed it where to resume (4257).**
   - **Before the kill.** Tasks 1 to 9 and a final fix commit are committed locally (tip `c7dfbbf69`, 46 files, unpushed).
