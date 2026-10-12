@@ -1069,7 +1069,8 @@ type GrepVerbResult = {
   exit: number; reason?: string; header: string | null; blocks: string[]; items: Array<Record<string, unknown>>;
   shown: number; total: number; next: string[] | null; hint?: string;
 };
-type GrepMod = { runGrep(rc: GrepRc, a: RGrepArgs, deps?: { cap?: number }): GrepVerbResult };
+type GrepDeps = { cap?: number; budgetMs?: number; spawn?: (...args: unknown[]) => unknown };
+type GrepMod = { runGrep(rc: GrepRc, a: RGrepArgs, deps?: GrepDeps): GrepVerbResult };
 
 const GRX = {
   idA: 'claude-a-demo', idB: 'claude-b-demo', idO: 'claude-b-other', W: '/home/u/worktrees/p/quiet-basin',
@@ -1881,4 +1882,190 @@ describe("grep groups only under the scope's own leaves and shows leaf gists as 
     expect(h2.stdout, 'CONTROL: the leaf-1 gist envelope prints').toMatch(/── leaf L[0-9a-f]+ [^\n]*\n  <ccrc-recall src="node"/);
     expect(h2.stdout, 'the leaf gist does not print the backslash-quoted key value').not.toContain(KEYVAL);
   }, HEAVY);
+});
+
+describe('grep --regex: refused unspawned, killed at its budget, matched over redacted text in a paged child (W1-B2 task 14)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  const T = 0x41;
+  /** A synthetic 64-hex fixture secret: one [A-Za-z0-9_-] run, so the value layer replaces it whole. */
+  const TOKEN = `${'c0ffee'.repeat(10)}abcd`;
+  /** An admitted pattern that backtracks for seconds on 30 'a's with no 'b' (measured: 9 `a*` on 28 'a's took 8.7 s
+   *  on 22.16.0). It has no group, so neither upstream's guard nor P10's structural check refuses it. */
+  const SLOW = 'a*a*a*a*a*a*a*a*a*b';
+  let box: rH.HistoryBox;
+  beforeAll(() => {
+    if (process.platform === 'darwin') return;
+    box = rH.makeHistoryBox('ccrc-hist-regex-');
+    fs.mkdirSync(path.join(box.home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(box.home, '.cc-secrets', 'fixture.env'), `ZQ_FIXTURE_TOKEN=${TOKEN}\n`, { mode: 0o600 });
+    const rows: rFx.Row[] = [
+      GRX.user(T, 1, 'zq123x marker row'),
+      GRX.user(T, 2, 'zq9x second'),
+      GRX.user(T, 3, `zq ${'a'.repeat(30)} end`),
+      GRX.user(T, 4, `the key is ${TOKEN} ok`),
+    ];
+    // More candidate blobs than mutation 4's 64-blob cut, with a match after the 64th: the child's one iterate() must
+    // step to the end of the candidates.
+    for (let i = 0; i < 70; i += 1) rows.push(GRX.user(T, 100 + i, `filler row number ${i}`));
+    rows.push(GRX.user(T, 300, 'zq777x after every filler'));
+    GRX.seed(box, T, GRX.idA, 'demo', rows);
+  }, 120_000);
+  const grep = (args: string[]): CliRun => GRX.cli(box, GRX.idA, ['grep', ...args]);
+
+  it('an admitted pattern runs in the child: every in-scope match to the end of the scan, newest first, its match in the snippet', () => {
+    const r = grep(['--regex', 'zq[0-9]+x', '--json']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(GRX.uuids(r)).toEqual([GRX.uuid(T, 300), GRX.uuid(T, 2), GRX.uuid(T, 1)]);
+    expect(r.json?.total).toBe(3);
+    expect(String(GRX.items(r)[2]?.snippet)).toContain('zq123x');
+    const human = grep(['--regex', 'zq[0-9]+x']);
+    expect(human.stdout).toMatch(/<ccrc-recall [^>]*>[^<]*zq777x[^<]*<\/ccrc-recall>/);
+    expect(grep(['--regex', 'zqnomatch[0-9]']).code).toBe(3);
+  }, 60_000);
+
+  it('a refused, invalid or misused --regex is exit 2 with its word, before anything runs', () => {
+    for (const [args, reason] of [
+      [['--regex', '(.*a){8}$'], 'regex-refused'],
+      [['--regex', 'zq('], 'regex-refused'],
+      [['--regex', 'x'.repeat(501)], 'regex-refused'],
+      [['--regex', 'zq', 'extra'], 'bad-args'],
+      [['--regex', 'zq', '--sort', 'relevance'], 'bad-args'],
+    ] as Array<[string[], string]>) {
+      const r = grep([...args, '--json']);
+      expect([r.code, r.json?.reason], args.join(' ')).toEqual([2, reason]);
+    }
+    const human = grep(['--regex', '(.*a){8}$']);
+    expect(`${human.stdout}\n${human.stderr}`).toMatch(/^hint: --regex refused/m);
+  }, 60_000);
+
+  it('C8a: (.*a){8}$ is refused with zero worker spawns, exit 2 regex-refused (in-process spawn spy)', async () => {
+    const recall = await GRX.recall();
+    const rc = await GRX.rc(box, GRX.idA);
+    try {
+      const calls: unknown[][] = [];
+      const spawn = (...args: unknown[]): unknown => { calls.push(args); return (spawnSync as unknown as (...x: unknown[]) => unknown)(...args); };
+      const refused = recall.runGrep(rc, await GRX.grepArgs(['--regex', '(.*a){8}$']), { spawn });
+      expect([refused.exit, refused.reason]).toEqual([2, 'regex-refused']);
+      expect(calls).toHaveLength(0);
+      const ran = recall.runGrep(rc, await GRX.grepArgs(['--regex', 'zq[0-9]+x']), { spawn });   // CONTROL: the spy sees a spawn
+      expect(ran.exit).toBe(0);
+      expect(calls).toHaveLength(1);
+    } finally { rc.db.close(); }
+  }, 60_000);
+
+  it('C8b: an admitted but slow pattern is killed at its budget: exit 2 regex-timeout, never exit 3', async () => {
+    const recall = await GRX.recall();
+    const rc = await GRX.rc(box, GRX.idA);
+    try {
+      const slow = await GRX.grepArgs(['--regex', SLOW]);
+      const t0 = Date.now();
+      const at50 = recall.runGrep(rc, slow, { budgetMs: 50 });
+      expect([at50.exit, at50.reason]).toEqual([2, 'regex-timeout']);
+      expect(Date.now() - t0).toBeLessThan(5000);
+      // CONTROL: the pattern, not the child's start-up, is what the budget stops. A fast pattern under the same 3 s finishes;
+      // the slow one under it is still killed.
+      const fast = recall.runGrep(rc, await GRX.grepArgs(['--regex', 'zq[0-9]+x']), { budgetMs: 3000 });
+      expect(fast.exit).toBe(0);
+      const at3s = recall.runGrep(rc, slow, { budgetMs: 3000 });
+      expect([at3s.exit, at3s.reason]).toEqual([2, 'regex-timeout']);
+    } finally { rc.db.close(); }
+  }, 60_000);
+
+  it('the child matches redacted text: a known secret is no regex hit, though its row is in scope', () => {
+    expect(grep(['--regex', 'the key is']).code).toBe(0);   // CONTROL: the row is a candidate and matches
+    expect(grep(['--regex', `.${TOKEN.slice(1, 16)}`]).code).toBe(3);
+  }, 60_000);
+});
+
+describe("grep's reach is the index window for both forms, and its exit 3 says so (W1-B2 task 14; spec §6.2 and §8.4, rev 3.5)", () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  const T = 0x42;
+  const FRONT = 'zqreachfront';
+  const TAIL = 'zqreachtail';
+  /** One message whose plain text runs past ENTRY_FTS_BYTES + ENTRY_REDACT_MARGIN (B1's history-entry-index-text-windowed):
+   *  FRONT at its start, TAIL after 1,190,000 bytes of plain words. Neither the index nor its redaction window reaches
+   *  TAIL, while the stored row holds it verbatim. */
+  const LONG = `${FRONT} ${'plain words here '.repeat(70_000)}${TAIL} end`;
+  /** A sidecar (a tool output Claude Code saved to its own file) whose tail sits past SIDECAR_FTS_BYTES: Task 16's
+   *  big29.txt shape. The sweep links it to row 3 and indexes its first SIDECAR_FTS_BYTES only (DM29). */
+  const SIDE = `zqhead14 ${'x '.repeat(270_000)}zqtail14\n`;
+  let box: rH.HistoryBox;
+  beforeAll(async () => {
+    if (process.platform === 'darwin') return;
+    const lib = await import('../../ccd/history/lib.mjs');
+    box = rH.makeHistoryBox('ccrc-hist-reach-');
+    const t = GRX.seed(box, T, GRX.idA, 'demo', [
+      GRX.user(T, 1, LONG),
+      GRX.toolUse(T, 2, 'toolu_01REACH14', 'cat build.log'),
+      GRX.toolResult(T, 3, 'toolu_01REACH14', 'Output too large. Full output saved to: tool-results/big14.txt'),
+    ]);
+    const dir = path.join(path.dirname(t), GRX.file(T), 'tool-results');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'big14.txt'), SIDE);
+    // A sidecar planted after its transcript was read is found by the periodic discovery scan: the run-pass driver's
+    // clock offset makes one due, and two passes let the second ingest and link what the first found (Task 16's t16scan).
+    for (let k = 0; k < 2; k += 1) {
+      const r = rH.runDriver(box, { offsetMs: lib.SCAN_INTERVAL_MS + 60_000 });
+      if (r.code !== 0) throw new Error(`run-pass driver: ${r.stderr}`);
+    }
+  }, 300_000);
+  const grep = (args: string[]): CliRun => GRX.cli(box, GRX.idA, ['grep', ...args]);
+  const hints = (r: CliRun): string[] => r.stdout.split('\n').filter((l) => l.startsWith('hint: '));
+
+  it('CONTROL: TAIL starts past the window and its redaction margin, FRONT inside it', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(new TextEncoder().encode(LONG.slice(0, LONG.indexOf(TAIL))).length)
+      .toBeGreaterThan(lib.ENTRY_FTS_BYTES + lib.ENTRY_REDACT_MARGIN);
+    expect(LONG.startsWith(FRONT)).toBe(true);
+  });
+
+  it('plain grep finds FRONT and not TAIL, and its exit 3 prints the reach line once', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const front = grep([FRONT, '--json']);
+    expect(front.code, front.stderr).toBe(0);
+    expect(GRX.uuids(front)).toEqual([GRX.uuid(T, 1)]);
+    const tail = grep([TAIL]);
+    expect(tail.code, tail.stderr).toBe(3);
+    expect(hints(tail)).toEqual([`hint: ${lib.SEARCH_REACH}`]);
+  }, 120_000);
+
+  it('--regex reaches the same text: a match only past the window is exit 3 with the reach line; one inside it is found', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const recall = await GRX.recall();
+    const rc = await GRX.rc(box, GRX.idA);
+    try {
+      // Character classes leave regexPrefilter no whole-word literal, so the child scans every in-scope blob and the
+      // answer is the scan's alone.
+      const front = recall.runGrep(rc, await GRX.grepArgs(['--regex', '[z]qreachfron[t]']), { budgetMs: 60_000 });
+      expect(front.exit).toBe(0);
+      expect(front.items.map((x) => x.entry_uuid)).toEqual([GRX.uuid(T, 1)]);
+      const tail = recall.runGrep(rc, await GRX.grepArgs(['--regex', '[z]qreachtai[l]']), { budgetMs: 60_000 });
+      expect([tail.exit, tail.hint]).toEqual([3, lib.SEARCH_REACH]);
+    } finally { rc.db.close(); }
+  }, 180_000);
+
+  it('a sidecar: neither form finds a sentinel past SIDECAR_FTS_BYTES, both find one inside it, and each exit 3 states the reach (DM29)', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(new TextEncoder().encode(SIDE.slice(0, SIDE.indexOf('zqtail14'))).length, 'CONTROL: the tail sits past the sidecar window')
+      .toBeGreaterThan(lib.SIDECAR_FTS_BYTES);
+    const db = rH.openStoreRO(box);
+    try {
+      const linked = db.prepare(`SELECT e.uuid AS uuid FROM sidecars s JOIN entries e ON e.entry_id = s.entry_id WHERE s.name = 'big14.txt'`)
+        .get() as { uuid: string } | undefined;
+      expect(linked?.uuid, 'CONTROL: the sidecar is stored and linked to its tool_result').toBe(GRX.uuid(T, 3));
+    } finally { db.close(); }
+    const recall = await GRX.recall();
+    const rc = await GRX.rc(box, GRX.idA);
+    try {
+      const head = recall.runGrep(rc, await GRX.grepArgs(['--regex', '[z]qhea[d]14']), { budgetMs: 60_000 });
+      expect(head.exit, 'CONTROL: --regex finds the head inside the window').toBe(0);
+      expect(head.items.map((x) => x.sidecar)).toContain('big14.txt');
+      const tail = recall.runGrep(rc, await GRX.grepArgs(['--regex', '[z]qtai[l]14']), { budgetMs: 60_000 });
+      expect([tail.exit, tail.hint]).toEqual([3, lib.SEARCH_REACH]);
+    } finally { rc.db.close(); }
+    expect(grep(['zqhead14']).code, 'CONTROL: plain grep finds the head').toBe(0);
+    const plain = grep(['zqtail14']);
+    expect(plain.code, plain.stderr).toBe(3);
+    expect(hints(plain)).toEqual([`hint: ${lib.SEARCH_REACH}`]);
+  }, 180_000);
 });

@@ -16,7 +16,10 @@ import {
   EXIT, OUTPUT_CAP, TREE_DEPTH_MAX, SCOPE_FAMILIES_JSON_MAX, selectColumns, displayPrefixes, headerLine, scopeLag, recallEnvelope, capOutput, redactForDisplay, redactFinal, readEnvelope, nextLine,
   REASONS, INDEXED_PROVENANCE, SEARCHABLE_PROVENANCE, FTS_STEP, RANK_POOL, decideGrepIndex, sanitizeFtsQuery, snippetTerms, regexSyntaxIn, regexSyntaxHint, ftsOrderBy, displaySnippet, snippetLine, escapeXmlText, redactField, extractNodeId, resolveScopedId, SEARCH_REACH, parseGrepArgs,
   GREP_LIMIT_DEFAULT, encodeCursor, decodeCursor, canonicalJson, sha256Hex,
+  guardRegex, regexPrefilter, REGEX_BUDGET_MS, REGEX_MAX_LEN, historyPaths,
 } from './lib.mjs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { childrenOf, parentOf, probeFts5, blobPlainText, lineageEntries } from './store.mjs';
 
 /**
@@ -670,7 +673,7 @@ function renderHits(rc, pool, termsOf, a, page, deps = {}) {
  *  5. the ranked pool and the true count;
  *  6. one grouped, capped page. */
 export function runGrep(rc, a, deps = {}) {
-  if (a.regex !== null) return refusal('bad-args', '--regex is not served by this build');   // Task 14 replaces this line
+  if (a.regex !== null) return runRegex(rc, a, deps);
   const raw = a.words.join(' ');
   const syntax = regexSyntaxIn(raw);
   if (syntax !== null) {
@@ -700,4 +703,86 @@ export function runGrep(rc, a, deps = {}) {
 export function grepVerb(rc, argv) {
   const g = parseGrepArgs(argv, rc.nowMs);
   return g.ok ? runGrep(rc, g.args) : refusal('bad-args');
+}
+
+// ---------------------------------------------------------------------------------------------
+// grep --regex (spec §8.4, §9.1; W1-B2 Task 14). A separate path:
+//  1. the guard (lib's guardRegex): too long, nested or invalid is a discriminated refusal, and no child is spawned
+//     (C8a);
+//  2. the same cursor check and index gate as plain grep;
+//  3. regex-worker.mjs, over redacted text, killed at a wall-clock budget. A kill is exit 2 regex-timeout, never
+//     "no match" (C8b);
+//  4. the matching blobs go through grep's own referrer join: scope, provenance and filters, a true count, and Task
+//     13's grouped and capped page. Hits are newest first: a regex hit has no rank.
+// ---------------------------------------------------------------------------------------------
+
+/** The regex child, beside this file. */
+export const WORKER_PATH = fileURLToPath(new URL('./regex-worker.mjs', import.meta.url));
+/** The child's stdout bound: one short JSON line per matching blob. */
+const WORKER_MAX_BUFFER = 64 * 1024 * 1024;
+/** The child's matches as the (blob_id, rank) rows referrerSql reads. */
+const REGEX_MATCH = 'SELECT value, 0 FROM json_each(:blobs)';
+
+/** The parent's pair index as the pairs the child rebuilds it from: (len, sha256) only, never a value. It iterates
+ *  each length's set, so `idx` must be a makePairIndex result (rc.pairIdx always is): lib.d.mts types the values as
+ *  bare `{ has }` objects, and a makeProbeIndex result's values are exactly that, with nothing to iterate. */
+function pairsOf(idx) {
+  const out = [];
+  for (const [len, shas] of idx.byLen) for (const sha256 of shas) out.push({ len, sha256 });
+  return out;
+}
+
+/** exit 1: the child failed for a reason other than its budget. */
+function childFailed(detail) {
+  return { exit: EXIT.INTERNAL, header: null, blocks: [], items: [], shown: 0, total: 0, next: null, hint: `the --regex child failed: ${detail}` };
+}
+
+/** `grep --regex <pattern>`. `deps.budgetMs` and `deps.spawn` are in-process test seams (history-test-seams-not-env). */
+export function runRegex(rc, a, deps = {}) {
+  const guard = guardRegex(a.regex);
+  if (!guard.ok) {
+    return refusal('regex-refused', `--regex refused (${guard.why}): keep the pattern under ${REGEX_MAX_LEN} characters, valid, and with no repeated group over a variable quantifier or an alternation`);
+  }
+  const key = grepKey(rc, a);
+  const pos = cursorPos(a.cursor, key);
+  if (pos === null) return refusal('bad-args', STALE_CURSOR);
+  const gate = indexGate(rc);
+  if (!gate.ok) return refusal(gate.reason);
+  let nodes = null;
+  if (a.node !== null) {
+    const ne = nodeEntries(rc, a.node);
+    if (!ne.ok) return ne.result;
+    nodes = ne.entries;
+  }
+  const job = {
+    dbPath: historyPaths(rc.home).dbFile,
+    transcriptPks: rc.scope.transcriptPks,
+    provenance: [...(a.includeRecall ? INDEXED_PROVENANCE : SEARCHABLE_PROVENANCE)],
+    prefilter: regexPrefilter(a.regex),
+    pattern: guard.source,
+    pairs: pairsOf(rc.pairIdx),
+    // §8.3 layer 4: the parent's units, so the child masks what this process's output would. stdin only.
+    belt: rc.pairIdx.belt == null ? [] : [...rc.pairIdx.belt.texts],
+  };
+  const budgetMs = deps.budgetMs ?? REGEX_BUDGET_MS;
+  const spawn = deps.spawn ?? spawnSync;
+  // No `env` option: the child inherits this process's environment, and no env is ever passed whole.
+  const r = spawn(process.execPath, ['--no-warnings', WORKER_PATH], {
+    input: JSON.stringify(job), encoding: 'utf8', timeout: budgetMs, killSignal: 'SIGKILL', maxBuffer: WORKER_MAX_BUFFER,
+  });
+  if (r.error && r.error.code === 'ETIMEDOUT') {
+    return refusal('regex-timeout', `--regex ran past ${budgetMs} ms and was stopped; add a literal word to the pattern, or narrow the scope`);
+  }
+  if (r.error || r.status !== 0) {
+    return childFailed(r.error ? r.error.message : `exit ${r.status}${r.signal ? ` (${r.signal})` : ''}: ${String(r.stderr ?? '').trim().slice(0, 300)}`);
+  }
+  const lines = String(r.stdout).split('\n').filter((l) => l !== '').map((l) => JSON.parse(l));
+  const done = lines.at(-1);
+  if (done === undefined || done.done !== true) return childFailed('it ended without its done line');
+  const matched = new Map(lines.slice(0, -1).map((m) => [m.blob_id, m.match]));
+  if (matched.size === 0) return grepNotFound();
+  const found = rankedAndCounted(rc, REGEX_MATCH, 'recency', grepParams(rc, a, nodes, { blobs: JSON.stringify([...matched.keys()]) }));
+  if ('result' in found) return found.result;
+  if (found.total === 0) return grepNotFound();
+  return renderHits(rc, found.pool, (h) => [matched.get(h.blob_id) ?? ''], a, { pos, total: found.total, key }, deps);
 }
