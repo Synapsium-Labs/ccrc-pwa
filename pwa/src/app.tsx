@@ -15,7 +15,7 @@ import { LoginScreen } from './components/LoginScreen';
 import { ToastHost } from './components/Toast';
 import { AccountsStrip } from './fleet/AccountsStrip';
 import { useAuthLost } from './lib/auth';
-import { navigate, usePath } from './lib/router';
+import { navigate, useLocation } from './lib/router';
 import { useMediaQuery } from './lib/useMediaQuery';
 import { AccountsScreen } from './screens/AccountsScreen';
 import { ArchiveScreen } from './screens/ArchiveScreen';
@@ -30,7 +30,7 @@ import './styles/shell.css';
 export { navigate } from './lib/router';
 
 export function App(): ReactNode {
-  const path = usePath();
+  const { path, search } = useLocation();
   useEffect(() => {
     // The fleet stream is the app's heartbeat: connect once at the shell so
     // deep links to /s/:id (or /archive) still get live names, limits and
@@ -96,8 +96,8 @@ export function App(): ReactNode {
   // platform's definition of a layout effect. That one is REASONED: jsdom does
   // no layout and paints nothing, so no test in this package can observe a
   // frame, and a real-browser runner is not on this branch.
-  // `popstate` (back/forward) goes through `usePath`, so it is covered by the
-  // same dependency.
+  // `popstate` (back/forward) goes through `useLocation`, so it is covered by
+  // the same dependencies; a change of the search alone is a new page too.
   //
   // THE SIDEBAR IS DELIBERATELY LEFT ALONE. `.shell-nav` has always been
   // scrollable, and its content does NOT swap per route — it is the same fleet
@@ -110,7 +110,7 @@ export function App(): ReactNode {
     // Null only if the shell has not mounted; on mobile the document scrolls
     // rather than this pane, so the write is a harmless no-op there.
     if (pane !== null) pane.scrollTop = 0;
-  }, [path]);
+  }, [path, search]);
   return (
     <>
       {authLost && <LoginScreen />}
