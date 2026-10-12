@@ -47,6 +47,32 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-12 05:38 — the path-identity follow-up's PRE-FLIGHT is done** (`wf_e321bcc7-a08`, read-only; `path-identity-preflight/scope.md` and `preflight.json`).
+  - **The items.** 37, measured against wave 9's tip, which changed nothing under `ccd/`: 26 open, 2 partly closed, and 9 unclear fold-ins that no source carries explicitly.
+  - **Four groups:**
+    - SECURITY: ids that start with `-` redirect the flag-scanning verbs. This is live today and fails closed only because no `agent` or `pwa` row exists.
+    - Temp-root tail and collector.
+    - Worktree identity: R31's re-pointed alias and bind spelling, R54's recorded basis, and the window before `git worktree remove`. `~/worktrees` is itself a bind mount on the fleet box.
+    - Prose and test-only carries.
+  - **Proposed shape.**
+    - W0: an operator-approved spec plus contract rulings.
+    - Then four `ccd`-serial, agent-first waves, each one PR with one SAFETY subject:
+      - W1: ids are never flags, server and `ccd`;
+      - W2: what the tail and collector believe about a leaf, including the kept-leaf `meas` key and its server filter;
+      - W3: worktree path identity, gated on the spec;
+      - W4, optional: temp-root identity format v2.
+  - **Gates.** Every `ccd/ccd` edit waits for workspace-lifecycle wave 6 (#351) to merge. The ladder and tail are shared with `ws-expire`, so quiet-river consents per wave.
+  - **Thirteen operator questions,** led by:
+    - the programme's shape (its own programme, or waves 10+ of CCR-15);
+    - entry-time identity and the legacy-row policy;
+    - bind and mountinfo scope;
+    - whether `ws-reclaim` may use a refusal-only cwd probe;
+    - closing or narrowing the tail window;
+    - `rec == f`;
+    - the kept-leaf absent-key policy;
+    - whether arming `collect-lane-live` waits for W2.
+  - **Put to the operator 2026-10-12.** Nothing is opened until they answer.
+
 - **2026-10-12 05:19 — FIX ROUND 1 is SENT to run 380 (4267), and run 380 is back at `working`.** The rulings are `wave9/fix-round-1-rulings.md`, binding.
   - **How they were checked** (`wf_2a071c39-a23`, 83 agents): Opus grounded each draft ruling against `c7dfbbf69` and attacked it, with three Sonnet refuters per objection.
     - No ruling was found wrong; fourteen were sharpened.
