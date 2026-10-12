@@ -7,7 +7,8 @@
 // two structurally identical questions mints the same key twice and only
 // `updatedAt` distinguishes instance 1 from instance 2.
 //
-// HISTORY. This suite once MEASURED A DEFECT (D-2403 to D-2408): the hook
+// HISTORY. This suite once MEASURED A DEFECT (D-2403 and D-2404 are the bump it
+// measured, and the suite itself closed D-2406): the hook
 // stamped `updatedAt` on every write, and its `SubagentStart`/`SubagentStop`
 // arm rewrote the identical ask envelope under a fresh number, so a subagent
 // event landing on a session blocked at a dialog made the parent's CAS refuse

@@ -3768,7 +3768,8 @@ waitby=""
 # (a negative prints with its `-` and fails it; mutation N2 pins it). The `type == "number"` here is POSITIONAL, not a
 # guard: `floor` on a string, array, object, null or boolean aborts the jq program, which would blank every line printed after
 # `updatedAt` (today only `event`, unused while `fr_upd` is empty); it keeps a later field safe if one is ever added.
-# A jq that fails prints nothing: every field comes up empty, which both arms read as "nothing to carry".
+# A jq that fails on its first output (a non-object root, an unparseable file) prints nothing: every field comes up
+# empty, which both arms read as "nothing to carry". Lines printed before a later error still come out.
 fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev=""
 _hook_fresh_read() {
   fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev=""
@@ -3785,8 +3786,10 @@ _hook_fresh_read() {
 # event writes over keeps the file's own `updatedAt` and `event` (the wait's START, which the attention bucket, the ask
 # row's `askAt` and the stall watch's hold 2a read) and gains the additive `aliveAt` = now (the liveness the aged door,
 # `hookstate.ts`, reads, so a long wait with subagents working stays fresh). Every other write has no `aliveAt`, and a
-# file whose `updatedAt` is not a plain non-negative number (null, a boolean, a string, a negative or an exponent form
-# fails the `^[0-9]+$` test below) keeps nothing: it is written as before, with a fresh stamp.
+# file whose `updatedAt` is negative, is not a number (null, a boolean, a string), or is a value jq prints in exponent
+# form (1e17 and above) fails the `^[0-9]+$` test below and keeps nothing: it is written as before, with a fresh stamp.
+# A fractional value keeps its floor: the hook writes integer milliseconds only, so one is a foreign or corrupt file,
+# and the floor moves the stamp by under 1 ms.
 w_ev="" w_upd="" w_alive=""
 _hook_keep_stamp() {
   [[ "$fr_state" == waiting && "$fr_by" != subagent && "$fr_upd" =~ ^[0-9]+$ ]] || return 0
@@ -3805,8 +3808,8 @@ if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
   # Session state untouched: keep the state the file holds (or skip entirely when no state was ever written, or the file
   # is gone or unreadable by now — a subagent event before any turn is inert). `prev_state` is only the no-fork prefilter.
   # A stored state that is not one of the hook's three words (a corrupt file) reads empty at the fresh read and exits
-  # there too, which ALSO skips the subagent-list update above: at base that update was written, the corrupt state
-  # carried through (D-4041).
+  # there too, which ALSO skips the subagent-list update above: at base that update was written over the corrupt state
+  # (a multi-line one mangled by the prefilter) (D-4041).
   [[ -n "$prev_state" ]] || exit 0
   _hook_fresh_read
   [[ -n "$fr_state" ]] || exit 0

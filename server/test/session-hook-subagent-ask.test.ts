@@ -217,7 +217,7 @@ describe('a subagent tool event keeps the main thread waiting (D-4039)', () => {
     expect(readState()).not.toHaveProperty('waitBy');
   });
   // The fresh read's defensive cuts (D-4041): a broken stamp is never kept, and the kept event is letters only.
-  it('an updatedAt that is not a plain non-negative integer keeps no stamp and writes no aliveAt', () => {
+  it('an updatedAt that is negative, non-numeric or 1e17 and above keeps no stamp and writes no aliveAt (a fractional one keeps its floor)', () => {
     for (const raw of ['1e300', '-5', '"123"', 'null']) {
       askViaPermission();
       const text = fs.readFileSync(stateFile(), 'utf8').replace(/"updatedAt":\d+/, `"updatedAt":${raw}`);
