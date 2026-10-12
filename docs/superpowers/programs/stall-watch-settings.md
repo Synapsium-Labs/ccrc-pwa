@@ -28,7 +28,7 @@ time.
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
 | 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merged `6e4524164` 2026-10-12; run 322 closed `done`, `final:true` (R37) |
-| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | run 394 `awaiting-review` at `efb4842b7` (R39); review run 397 dispatched |
+| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | review 397 accepted; fix round 1 (R40): a carried wait keeps its stamp |
 
 ## Decisions & deviations
 
@@ -838,6 +838,42 @@ time.
     checks; brief `.superpowers/sdd/stall-watch-settings/w3-review-brief.md`, route Opus high, Sonnet subagents,
     workflow on, compact 40. Caps at 18:18: 5 of 7 active, 12 of 24 in the day. The worker's evidence is copied to
     `w3-child-evidence/` (25 files).
+
+- **R40 (2026-10-12 19:43)**, review 397 is accepted, and wave 3 gets one fix round: a carried wait keeps its stamp.
+  - Review run 397 (`ccrc-pwa-soft-prairie`, mail 4387) reviewed `efb4842b7` with the held-out panel. Five
+    findings, none class (a). The mutation rows (M1-M13, M4-M6) reproduce, suites are green apart from the
+    session-hook compaction-ratio load flake (red at the base too), and the citation instrument agrees with `main`.
+    Closed `done`; report copied to `w3-review-397-report.md`. PR #362's CI is green on every required leg at the
+    tip (mail 4369); one macOS leg failed outside the wave's files.
+  - Before ruling, a verification workflow (`wf_a05201ff-3c4`: three Opus measurers, each challenged by a Sonnet
+    refuter; output `w3-f3-verify-workflow.json`) tested the ruling's premises.
+    - The `ask-moved` window fails safe: nothing is typed, the row stays answerable, retries converge, and the 120 s
+      grace release backs it. The operator's route never refuses, but when its CAS loses the feed record is lost.
+    - "Nothing worse than the base but the named costs" does NOT hold. Beyond F1 and F3:
+      - a new race: a main answer write landing inside a subagent hook run is overwritten by a carried `waiting`;
+      - the dialog cap can push more than once in F1's stale case;
+      - a later hookless dialog (sandbox, elicitation) is minted as an ask from the STALE question and offered
+        stale answer buttons. `answerAsk`'s menu check refuses any press, so no wrong keystroke is possible.
+    - A narrow variant needs no claimed file. On a carried write, keep the prior `updatedAt`, add an `aliveAt`
+      stamp, and let `hookstate.ts`'s single age cut read both. The review's own wait-start shape would need
+      `watch.ts` (claim 1197, run 358).
+  - Ruling: fix round 1, on the same PR.
+    1. `a-carried-wait-keeps-its-stamp`, a reserve number assigned by this ruling. Every subagent-originated write over a
+       main-thread wait keeps `updatedAt` and `event` and writes `aliveAt`. The carry is decided from one fresh read
+       at the carry point, which narrows the race. The age cut reads max(`updatedAt`, `aliveAt`), and an absent or
+       malformed `aliveAt` is ignored. Files: the hook and its test (claim 1194) plus `server/src/hookstate.ts` and
+       `server/test/hookstate.test.ts` (unclaimed).
+       - Why: it removes F3's badge re-fire, the `ask-moved` window, the operator's lost feed record and the
+         uncapped `ask` reroute of a hookless dialog, with no claimed file.
+       - Cost if wrong: during update skew an older server ages a carried wait at its start + 30 min, and the frozen
+         arm can fire up to 30 min earlier after the aged read expires.
+    2. F2: fold the SubagentStart/SubagentStop reads into one `jq` fork.
+    3. F1 and its wider consequences: words in D-4039's "Cost if wrong". An age bound on the carry is rejected,
+       because it would bring finding 4063 back for a long real wait. A reader-side bound needs claimed files and
+       stays a follow-up.
+    4. F4 and F5: words. Review Focus 2 is corrected.
+  - Not merging as is. The three new cells (the race, repeat pushes, stale minting) are user-visible, and item 1
+    removes or narrows each at the cost of four small files.
 
 ## Carried constraints (reviewers get these)
 
