@@ -566,7 +566,7 @@ function NodeList({ nodes, releases, now, catalogueLastOkAt, onAcked, onMove }: 
 //     which tags the server will announce from the next sweep on; it sends
 //     nothing and marks nothing.
 //
-// THE UNARMED-EXPOSURE BANNER (spec §12) sits above both sections. Its trigger
+// THE UNARMED-EXPOSURE BANNER (spec §12) sits above every section. Its trigger
 // is `AuthStatus.mode === 'off'` from the unauthenticated GET /api/auth/status
 // (D-3298 — /health reports no gate state), AND a
 // page origin whose hostname is not one of shared/base-url.ts's
@@ -814,10 +814,11 @@ function BoxTokenSection({ view, now, reload }: { view: UpdatesView; now: number
 }
 
 export function SettingsScreen(): ReactNode {
-  // ONE /api/updates poll and ONE clock for the Updates and Notifications
-  // sections: both read the same answer (Tasks 7–10), so they can never
-  // disagree about the fleet. The Stall watch section reads its own endpoint
-  // through its own hook (useStallWatchView, design 2026-10-05 §13).
+  // ONE /api/updates poll and ONE clock for the Updates, Box token and
+  // Notifications sections: all three read the same answer (Tasks 7–10), so
+  // they can never disagree about the fleet. The Stall watch section is the
+  // one with its own read, of its own endpoint, through its own hook
+  // (useStallWatchView, design 2026-10-05 §13).
   const poll = useUpdatesView();
   const now = useNow(30_000);
   return (

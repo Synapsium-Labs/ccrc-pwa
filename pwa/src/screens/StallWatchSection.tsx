@@ -1,7 +1,8 @@
-// The Settings screen's third section, Stall watch (stall watch settings, design 2026-10-05 §13; programme
+// The Settings screen's Stall watch section (stall watch settings, design 2026-10-05 §13; programme
 // stall-watch-settings W2 Task 3). What the watch does now, the next step up its ladder, the level and quiet-time
 // controls, and the notice counts, over the section's OWN read of GET /api/coord/stall-watch (`useStallWatchView`,
-// beside the screen's one /api/updates poll that the other two sections share).
+// beside the screen's one /api/updates poll that the other three sections share: Updates, the Box token card and
+// Notifications).
 //
 // Four rules this file keeps, each pinned in settings-screen.test.tsx:
 //   * NOT AVAILABLE WINS. A 501 not-configured, or the 404 not-found an older server answers, replaces the whole
