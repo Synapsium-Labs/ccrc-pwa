@@ -6610,3 +6610,204 @@ export function parseDescribeArgs(argv) {
   a.target = node ?? words.join(' ');
   return { ok: true, args: a };
 }
+
+// ── expand (W1-B2 Task 16) ─────────────────────────────────────────────────────────────────────────────
+// The decisions recall.mjs's expand delivers (spec §8.4 "expand", §8.3 "Redaction" and "Cap", §6.1 variants,
+// §11 P17): what a page costs and where a page or a cut ends, which target an argument names, whether an
+// entry is in scope, which items are cut, a cursor's validity, the delegate hint, a tool_result's paired path,
+// the ONE rendering of a row's RAW text (every window of which recall.mjs shows through Task 12's
+// redactDisplayWindow, before any cut or escape), and a cut item's outline over at most EXPLORE_READ_MAX of it.
+
+/** What one page of expand text may cost (textCost): the cap less 2,000 for the header, the item lines, the
+ *  shown and next lines and the hint (*chosen*). */
+export const PAGE_TEXT_BUDGET = OUTPUT_CAP - 2000;
+/** The cost ceiling of each half of a cut item (its first EXPLORE_CUT characters, its outline), so a cut item
+ *  fits an empty page whatever it escapes to (*chosen*). */
+export const CUT_TEXT_BUDGET = 8000;
+/** The page budget left that lets a whole item which does not fit start here as a partial, when it is not the
+ *  page's first item (*chosen*): below it the item waits to be first on the next page. */
+export const EXPAND_MIN_PARTIAL = 4000;
+
+/** One UTF-16 code unit's cost on a page: the longest form it escapes to. XML text turns `&` into `&amp;` and
+ *  `<`/`>` into 4; JSON turns `"`, `\` and \b \f \n \r \t into 2, any other control character into 6, and a
+ *  surrogate half is charged 6 too (a lone one is). So a page fits the cap in the human form and in --json
+ *  alike, and a cursor's offsets mean the same in both. */
+export function charCost(code) {
+  if (code === 0x26) return 5;
+  if (code === 0x3c || code === 0x3e) return 4;
+  if (code === 0x22 || code === 0x5c) return 2;
+  if (code < 0x20) return code === 0x08 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d ? 2 : 6;
+  if (code >= 0xd800 && code <= 0xdfff) return 6;
+  return 1;
+}
+
+/** The cost of text[start, end). */
+export function textCost(text, start = 0, end = text.length) {
+  let n = 0;
+  for (let i = start; i < end; i += 1) n += charCost(text.charCodeAt(i));
+  return n;
+}
+
+const isHighSurrogate = (text, k) => {
+  const c = text.charCodeAt(k);
+  return c >= 0xd800 && c <= 0xdbff;
+};
+
+/** Where a page of `text` that starts at `start` ends (exclusive) under `budget`. A page always moves (one
+ *  character, or one surrogate pair, at least) and never splits a surrogate pair. */
+export function pageEnd(text, start, budget) {
+  if (start >= text.length) return text.length;
+  let n = 0;
+  let i = start;
+  while (i < text.length) {
+    const c = charCost(text.charCodeAt(i));
+    if (n + c > budget) break;
+    n += c;
+    i += 1;
+  }
+  if (i === start) i = start + 1;
+  if (i < text.length && isHighSurrogate(text, i - 1)) i = i - 1 > start ? i - 1 : i + 1;
+  return i;
+}
+
+/** The first at most `maxChars` characters of `text` whose cost stays under `budget`, whole pairs only. */
+export function cutText(text, maxChars, budget) {
+  let n = Math.min(pageEnd(text, 0, budget), maxChars, text.length);
+  if (n > 0 && n < text.length && isHighSurrogate(text, n - 1)) n -= 1;
+  return text.slice(0, n);
+}
+
+/** A node id or its prefix (6 to 20 hex, §6.1's display minimum) — the grammar Task 12's resolveNodeInScope resolves. */
+const EXPAND_NODE_RE = /^[LN][0-9a-f]{6,20}$/;
+/** A raw-only row's key: B1's rawRowKey (`x` + 32 hex), the uuid an unparsable line is stored under. */
+const EXPAND_RAW_RE = /^x[0-9a-f]{32}$/;
+
+/** What an expand argument names. */
+export function expandTargetOf(s) {
+  if (typeof s !== 'string') return 'bad';
+  if (EXPAND_NODE_RE.test(s)) return 'node';
+  if (UUID_RE.test(s) || EXPAND_RAW_RE.test(s)) return 'entry';
+  return 'bad';
+}
+
+/** expand's arguments from Task 10's parseReadArgs answer, whose `expand` row has checked every option's grammar:
+ *  at most one target, and never a target with --around. --before/--after mean something only with --around and
+ *  are ignored otherwise. Neither target nor --around leaves a bare --cursor, which names its own target. */
+export function expandArgsOf(parsed) {
+  const pos = parsed.positional;
+  const o = parsed.opts;
+  if (pos.length > 1) return { ok: false, reason: 'bad-args' };
+  const target = pos.length === 1 ? pos[0] : null;
+  const around = typeof o.around === 'string' ? o.around : null;
+  if (target !== null && around !== null) return { ok: false, reason: 'bad-args' };
+  return {
+    ok: true,
+    args: {
+      target, around, before: Number.isSafeInteger(o.before) ? o.before : AROUND_DEFAULT,
+      after: Number.isSafeInteger(o.after) ? o.after : AROUND_DEFAULT, cursor: typeof o.cursor === 'string' ? o.cursor : null,
+    },
+  };
+}
+
+/** What a decoded expand cursor names, for `expand --cursor <c>` given alone: its key is the target, or
+ *  `around:<uuid>:<before>:<after>`. null when the key names nothing expand could resolve. */
+export function expandResumeOf(cursor) {
+  if (cursor === null || typeof cursor.t !== 'string') return null;
+  const m = /^around:([^:]+):([0-9]{1,2}):([0-9]{1,2})$/.exec(cursor.t);
+  if (m !== null) return { target: null, around: m[1], before: Number(m[2]), after: Number(m[3]) };
+  return expandTargetOf(cursor.t) === 'bad' ? null : { target: cursor.t, around: null, before: AROUND_DEFAULT, after: AROUND_DEFAULT };
+}
+
+/** An entry named by uuid: outside the scope is out-of-scope, never not-found (§8.2). */
+export function entryScopeVerdict({ found, inScope }) {
+  if (!found) return 'not-found';
+  return inScope ? 'ok' : 'out-of-scope';
+}
+
+/** Whether an item is cut to EXPLORE_CUT with an outline: a tool output or a sidecar, outside a message expansion
+ *  (which shows its row whole, paged). */
+export function expandCuts({ whole, kind, provenance }) {
+  if (whole) return false;
+  return kind === 'sidecar' || provenance === 'tool' || provenance === 'recall-echo';
+}
+
+/** A decoded expand cursor against this expansion: its key must be this target's, its item inside the list, its
+ *  offset a non-negative integer. No cursor starts at the top. */
+export function decideExpandCursor({ cursor, key, total }) {
+  if (cursor === null) return { ok: true, i: 0, o: 0 };
+  const { t, i, o } = cursor;
+  if (t !== key || !Number.isSafeInteger(i) || !Number.isSafeInteger(o) || i < 0 || o < 0 || i >= total) return { ok: false };
+  return { ok: true, i, o };
+}
+
+/** §8.4: more than DELEGATE_FACTOR times the cap is a `hint: delegate` line (cli.mjs prints `hint: ` before it). */
+export function delegateHint(chars) {
+  if (!(chars > DELEGATE_FACTOR * OUTPUT_CAP)) return null;
+  return `delegate: this expansion holds about ${Math.ceil(chars / 1000)}k characters, more than ${DELEGATE_FACTOR} times `
+    + `the ${OUTPUT_CAP / 1000}k cap; hand it to a subagent with the skill's delegation template`;
+}
+
+/** expand may decompress a blob of `rawLen` bytes in one call only up to SIDECAR_WHOLE_MAX (*chosen*): the size the
+ *  scale case measures the 1 GiB RSS bound at. B1 streams a larger sidecar into one blob; decompressed whole it
+ *  would pass that bound, and past ~512 MiB Node's string limit. Such a blob prints one fixed line instead. */
+export function expandBlobFits(rawLen) {
+  return rawLen <= SIDECAR_WHOLE_MAX;
+}
+
+/** The file a tool_use named, by its id, from an assistant row's content (P17 dispatches the outline on its
+ *  extension): `file_path` (Read, Edit, Write), `notebook_path`, then `path` (Grep, Glob). `found` tells the
+ *  paired tool_use that names no file (a Bash call: the walk up the chain stops there) from no paired tool_use in
+ *  this content (the walk goes on): two conditions, two answers. */
+export function toolUseInputPath(content, toolUseId) {
+  if (!Array.isArray(content)) return { found: false };
+  for (const b of content) {
+    if (b === null || typeof b !== 'object' || b.type !== 'tool_use' || b.id !== toolUseId) continue;
+    const input = b.input;
+    if (input === null || typeof input !== 'object') return { found: true, path: null };
+    for (const k of ['file_path', 'notebook_path', 'path']) if (typeof input[k] === 'string' && input[k] !== '') return { found: true, path: input[k] };
+    return { found: true, path: null };
+  }
+  return { found: false };
+}
+
+/** A stored row's RAW text as expand prints it: text blocks, `[tool_use <name>] <input as JSON>`, a tool_result's
+ *  content bare (so the outline reads the tool's own output), `[<type>]` for any other block. Nothing is redacted
+ *  here (spec §8.3 and §8.4; coordinator ruling R-display-window): recall.mjs shows every window of
+ *  this text through redactDisplayWindow, whose escape readings separate a value that JSON rendering glued an escape
+ *  letter onto, in a string leaf or in an object KEY, which a replacer over leaves never sees (review finding R38).
+ *  Redacting each leaf here instead would cost a whole 16 MiB leaf per page (R36, R37). */
+export function renderEntryText(body) {
+  const json = (v) => JSON.stringify(v === undefined ? null : v) ?? 'null';
+  const block = (b) => {
+    if (typeof b === 'string') return b;
+    if (b === null || typeof b !== 'object') return String(b);
+    switch (b.type) {
+      case 'text': return typeof b.text === 'string' ? b.text : '';
+      case 'tool_use': return `[tool_use ${typeof b.name === 'string' ? b.name : ''}] ${json(b.input)}`;
+      case 'tool_result':
+        if (typeof b.content === 'string') return b.content;
+        return Array.isArray(b.content) ? b.content.map(block).join('\n') : json(b.content);
+      default: return `[${typeof b.type === 'string' ? b.type : 'block'}]`;
+    }
+  };
+  if (body === null || body === undefined) return '';
+  if (typeof body === 'string') return body;
+  if (Array.isArray(body)) return body.map(block).join('\n');
+  if (typeof body === 'object') return json(body);
+  return String(body);
+}
+
+/** How much of a cut item an outline reads (*chosen*: 256 Ki characters, under EXPLORE_JSON_MAX): up to it the
+ *  explorer reads redactDisplayWindow's window of the whole item, past it the outline is counts only. An outline's
+ *  explorers read the whole text they are given, so without the bound one cut 64 MiB sidecar would be redacted
+ *  whole for its outline (spec §8.3 and §8.4). */
+export const EXPLORE_READ_MAX = 256 * 1024;
+
+/** A cut item's outline (§8.4, §11 P17): `explore` over the item's redacted window when the item is at most
+ *  EXPLORE_READ_MAX characters, else Task 3's counts-only summary over the raw text (characters and lines: numbers,
+ *  never content). The caller cuts the result to EXPLORE_CUT and CUT_TEXT_BUDGET. */
+export function exploreOutline(text, kind, fileName, idx) {
+  const t = String(text);
+  if (t.length > EXPLORE_READ_MAX) return exploreCounts(stripReadPrefix(t));
+  return explore(redactDisplayWindow(t, 0, t.length, idx), kind, fileName);
+}

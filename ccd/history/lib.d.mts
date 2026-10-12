@@ -775,3 +775,27 @@ export function displaySnippet(text: string, terms: readonly string[], idx: Pair
 // --- W1-B2 Task 15: describe's arguments
 export interface DescribeArgs { target: string; full: boolean; cursor: string | null; json: boolean }
 export function parseDescribeArgs(argv: readonly string[]): { ok: true; args: DescribeArgs } | { ok: false; reason: 'bad-args' };
+// ── W1-B2 Task 16: expand ──
+export const PAGE_TEXT_BUDGET: number;
+export const CUT_TEXT_BUDGET: 8000;
+export const EXPAND_MIN_PARTIAL: 4000;
+export function charCost(code: number): number;
+export function textCost(text: string, start?: number, end?: number): number;
+export function pageEnd(text: string, start: number, budget: number): number;
+export function cutText(text: string, maxChars: number, budget: number): string;
+export function expandTargetOf(s: string): 'node' | 'entry' | 'bad';
+export interface ExpandArgs { target: string | null; around: string | null; before: number; after: number; cursor: string | null }
+export function expandArgsOf(parsed: { positional: readonly string[]; opts: Readonly<Record<string, unknown>> }):
+  { ok: true; args: ExpandArgs } | { ok: false; reason: 'bad-args' };
+export function expandResumeOf(cursor: Readonly<Record<string, unknown>> | null):
+  { target: string | null; around: string | null; before: number; after: number } | null;
+export function entryScopeVerdict(i: { found: boolean; inScope: boolean }): 'ok' | 'out-of-scope' | 'not-found';
+export function expandCuts(i: { whole: boolean; kind: 'entry' | 'sidecar'; provenance: string | null }): boolean;
+export function decideExpandCursor(i: { cursor: Readonly<Record<string, unknown>> | null; key: string; total: number }):
+  { ok: true; i: number; o: number } | { ok: false };
+export function delegateHint(chars: number): string | null;
+export function expandBlobFits(rawLen: number): boolean;
+export function toolUseInputPath(content: unknown, toolUseId: string): { found: false } | { found: true; path: string | null };
+export function renderEntryText(body: unknown): string;
+export const EXPLORE_READ_MAX: number;
+export function exploreOutline(text: string, kind: ExploreKind, fileName: string | undefined, idx: PairIndex): string;

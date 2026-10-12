@@ -22,6 +22,9 @@ import {
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { childrenOf, parentOf, probeFts5, blobPlainText, lineageEntries } from './store.mjs';
+import * as xlib from './lib.mjs';
+import * as xstore from './store.mjs';
+import { basename as xbasename } from 'node:path';
 
 /**
  * @typedef {object} ScopeFamily
@@ -1081,4 +1084,407 @@ export function runDescribe(rc, a, deps = {}) {
 export function describeVerb(rc, argv) {
   const d = parseDescribeArgs(argv);
   return d.ok ? runDescribe(rc, d.args) : refusal('bad-args');
+}
+
+// ── expand (W1-B2 Task 16) ─────────────────────────────────────────────────────────────────────────────
+// `ccrc history expand` (spec §8.4 "expand", §6.1 variants, §6.6 pruned text, §8.2 "Every verb resolves ids
+// inside the scope", §8.3 "Redaction" and "Cap", §11 P17). Three targets, from Task 10's parseReadArgs through lib's expandArgsOf:
+//   - a node id or prefix: the node's real text in order. A leaf's sources come by node_sources.ord. A condensed
+//     node's leaves come in child order, their sources through P7's range CTE (store.mjs's lineageEntries, which
+//     walks DOWN). Each source is followed by the sidecars linked to it. A tool output or sidecar over
+//     EXPLORE_CUT is cut, with a deterministic outline (P17) and a `next:` line naming `expand <uuid>`;
+//   - a message uuid: that one row WHOLE, with its sidecars, paged by cursor (slug
+//     history-expand-message-id, NEW: a cut tool output needs a way to read the rest);
+//   - --around <uuid> [--before N --after N]: the rows around one row in its holding copy's file order, cut as a
+//     node's are.
+// Every id resolves inside the scope: outside it is exit 2 out-of-scope, never 3.
+// THE ORDER EVERY FIELD TAKES (slug history-redaction-before-cut; spec §8.3 and §8.4): its FULL
+// raw text leaves the blob (lib's renderEntryText for a row, the decoded bytes for a sidecar); the window to show is
+// picked on that raw text (the cut's first EXPLORE_CUT characters, or a page); lib's redactDisplayWindow redacts that
+// window with ENTRY_REDACT_MARGIN each side and cuts it back (the outline's input likewise, through exploreOutline);
+// then recallEnvelope's escape, then cli.mjs's serialisation and redactFinal. Nothing redacts a whole item: one page
+// costs its window (coordinator ruling R-display-window). One blob is decompressed at a time, and only one lib's
+// expandBlobFits admits (at most SIDECAR_WHOLE_MAX bytes); nothing holds a whole node in memory.
+// A PAGE is measured in lib's textCost on what it prints, so it fits the cap in the human form and in --json alike.
+// A cursor's offsets count characters of the item's raw text, the same in both forms.
+
+/** How far a tool_result's paired tool_use is looked for up its parentUuid chain (B1's sweep walks 16). */
+const EXPAND_PAIR_WALK = 16;
+const EXPAND_ENTRY_COLS = Object.freeze(['entry_id', 'uuid', 'transcript_pk', 'type', 'role', 'ts_ms', 'provenance', 'parent_uuid', 'blob_id']);
+/** cli.mjs prints a VerbResult's hint after `hint: `. */
+const EXPAND_TARGET_HINT = 'expand <node id | message uuid> [--cursor <c>], or expand --around <uuid> [--before N] [--after N]';
+/** Prepared once per read handle. Every select names its columns through selectColumns at the STORE's version
+ *  (§6.11, DM44), so a column an older store lacks reads as NULL, never "no such column". */
+const EXPAND_STMTS = new WeakMap();
+
+function expandStmts(rc) {
+  const hit = EXPAND_STMTS.get(rc.db);
+  if (hit !== undefined) return hit;
+  const cols = (table, list) => xlib.selectColumns(rc.version, table, list, rc.schema);
+  const q = (sql) => rc.db.prepare(sql);
+  const s = {
+    node: q(`SELECT ${cols('nodes', ['node_id', 'kind', 'session_pk'])} FROM nodes WHERE node_id = ?`),
+    entryById: q(`SELECT ${cols('entries', EXPAND_ENTRY_COLS)} FROM entries WHERE entry_id = ?`),
+    entryByUuid: q(`SELECT ${cols('entries', EXPAND_ENTRY_COLS)} FROM entries WHERE uuid = ?`),
+    hop: q(`SELECT ${cols('entries', ['parent_uuid', 'blob_id'])} FROM entries WHERE uuid = ?`),
+    // A blob's size and tombstone, read WITHOUT its z: the delegate estimate and the decompression bound need no body.
+    blobLen: q(`SELECT ${cols('blobs', ['raw_len', 'pruned_ms'])} FROM blobs WHERE blob_id = ?`),
+    blob: q(`SELECT ${cols('blobs', ['z'])} FROM blobs WHERE blob_id = ?`),
+    variants: q(`SELECT ${cols('entry_variants', ['blob_id', 'cause'])} FROM entry_variants WHERE entry_id = ? ORDER BY first_seen_ms, blob_id`),
+    sidecars: q(`SELECT ${cols('sidecars', ['entry_id', 'name', 'blob_id'])} FROM sidecars WHERE transcript_pk = ? ORDER BY name, blob_id`),
+    // ingest_files has no transcript_pk index: every in-scope transcript's rows in ONE statement, one scan per call.
+    files: q(`SELECT ${cols('ingest_files', ['file_id', 'status', 'source_key'])} FROM ingest_files WHERE transcript_pk IN (SELECT value FROM json_each(?)) ORDER BY file_id`),
+    member: q(`SELECT ${cols('memberships', ['line'])} FROM memberships WHERE file_id = ? AND entry_id = ?`),
+    before: q(`SELECT ${cols('memberships', ['entry_id', 'line'])} FROM memberships WHERE file_id = ? AND line < ? ORDER BY line DESC LIMIT ?`),
+    after: q(`SELECT ${cols('memberships', ['entry_id', 'line'])} FROM memberships WHERE file_id = ? AND line > ? ORDER BY line LIMIT ?`),
+  };
+  EXPAND_STMTS.set(rc.db, s);
+  return s;
+}
+
+/** The in-scope transcripts' file rows, the live copy first: where a row's holding copy is looked for. The live copy is
+ *  the row whose `source_key` is '' WHATEVER its status: B1 marks a deleted-from-disk live copy `gone` and keeps its
+ *  `source_key` '' (sweep's markGone), and only a `retired` copy carries a non-empty key. That is lib's
+ *  pickHoldingCopy rule (Task 8; §6.1 "The copy": a live copy, then the smallest file_id), which describe and the
+ *  derivation use, so expand picks the same copy's memberships for --around and orders the lineage the same way. */
+function expandScopedFiles(s, rc) {
+  const out = s.files.all(JSON.stringify(rc.scope.transcriptPks));
+  return out.sort((a, b) => (a.source_key === '' ? 0 : 1) - (b.source_key === '' ? 0 : 1) || a.file_id - b.file_id);
+}
+
+/** The first in-scope file holding an entry, by primary-key probes: memberships has no entry_id index. */
+function expandHolding(s, files, entryId) {
+  for (const f of files) {
+    const m = s.member.get(f.file_id, entryId);
+    if (m !== undefined) return { fileId: f.file_id, line: m.line };
+  }
+  return null;
+}
+
+/** A condensed node's source entries in leaf order (its children's ord, depth first), then node_sources.ord. */
+function expandLineage(rc, s, nodeId, kind) {
+  const leaves = [];
+  if (kind !== 'condensed') leaves.push(nodeId);
+  else {
+    const stack = [nodeId];
+    const seen = new Set();
+    while (stack.length > 0) {
+      const id = stack.pop();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const n = s.node.get(id);
+      if (n === undefined) continue;
+      if (n.kind !== 'condensed') { leaves.push(id); continue; }
+      const kids = [...xstore.childrenOf(rc.db, id)].sort((a, b) => a.ord - b.ord);
+      for (let i = kids.length - 1; i >= 0; i -= 1) stack.push(kids[i].childId);
+    }
+  }
+  const rank = new Map(leaves.map((id, i) => [id, i]));
+  const rows = xstore.lineageEntries(rc.db, nodeId).filter((r) => rank.has(r.nodeId));
+  rows.sort((a, b) => rank.get(a.nodeId) - rank.get(b.nodeId) || a.ord - b.ord);
+  const out = [];
+  const seenEntry = new Set();
+  for (const r of rows) if (!seenEntry.has(r.entryId)) { seenEntry.add(r.entryId); out.push(r.entryId); }
+  return out;
+}
+
+/** What the arguments name, resolved inside the scope: {refuse} or {key, args, entryIds, whole}. */
+function expandResolve(rc, s, a) {
+  const files = expandScopedFiles(s, rc);
+  const scopeTranscripts = new Set(rc.scope.transcriptPks);
+  const entryNamed = (uuid) => {
+    const e = s.entryByUuid.get(uuid);
+    const hold = e === undefined ? null : expandHolding(s, files, e.entry_id);
+    const verdict = xlib.entryScopeVerdict({ found: e !== undefined, inScope: e !== undefined && (scopeTranscripts.has(e.transcript_pk) || hold !== null) });
+    return { verdict, e, hold };
+  };
+  const refuseEntry = (verdict) => (verdict === 'not-found' ? notFound() : refusal('out-of-scope'));
+  if (a.around !== null) {
+    if (xlib.expandTargetOf(a.around) !== 'entry') return { refuse: refusal('bad-args', EXPAND_TARGET_HINT) };
+    const { verdict, e, hold } = entryNamed(a.around);
+    if (verdict !== 'ok') return { refuse: refuseEntry(verdict) };
+    const ids = [];
+    if (hold !== null) {
+      for (const r of s.before.all(hold.fileId, hold.line, a.before).reverse()) ids.push(r.entry_id);
+      ids.push(e.entry_id);
+      for (const r of s.after.all(hold.fileId, hold.line, a.after)) ids.push(r.entry_id);
+    } else ids.push(e.entry_id);
+    return {
+      key: `around:${e.uuid}:${a.before}:${a.after}`, entryIds: ids, whole: false,
+      args: ['--around', e.uuid, '--before', String(a.before), '--after', String(a.after)],
+    };
+  }
+  const kind = xlib.expandTargetOf(a.target);
+  if (kind === 'bad') return { refuse: refusal('bad-args', EXPAND_TARGET_HINT) };
+  if (kind === 'entry') {
+    const { verdict, e } = entryNamed(a.target);
+    if (verdict !== 'ok') return { refuse: refuseEntry(verdict) };
+    return { key: e.uuid, args: [e.uuid], entryIds: [e.entry_id], whole: true };
+  }
+  // A node id or prefix: Task 12's resolveNodeInScope is the ONE spelling of §8.2's rule (out-of-scope is 2, never 3;
+  // prefix uniqueness among the scope's nodes), shared with grep --node and describe.
+  const found = resolveNodeInScope(rc, a.target);
+  if (!found.ok) return { refuse: found.result };
+  const node = s.node.get(found.id);
+  return { key: found.id, args: [found.id], entryIds: expandLineage(rc, s, found.id, node.kind), whole: false };
+}
+
+/** The expansion's items: each entry, then the sidecars linked to it. Sidecars are read by their transcript (the
+ *  primary key's prefix) once per transcript; sidecars has no entry_id index. */
+function expandItems(s, entryIds) {
+  const byTranscript = new Map();
+  const sidecarsOf = (e) => {
+    let m = byTranscript.get(e.transcript_pk);
+    if (m === undefined) {
+      m = new Map();
+      for (const r of s.sidecars.all(e.transcript_pk)) {
+        if (r.entry_id === null) continue;
+        const list = m.get(r.entry_id) ?? [];
+        list.push(r);
+        m.set(r.entry_id, list);
+      }
+      byTranscript.set(e.transcript_pk, m);
+    }
+    return m.get(e.entry_id) ?? [];
+  };
+  const items = [];
+  for (const id of entryIds) {
+    const e = s.entryById.get(id);
+    if (e === undefined) continue;
+    const sidecars = sidecarsOf(e);
+    items.push({ kind: 'entry', e, sidecars });
+    for (const sc of sidecars) items.push({ kind: 'sidecar', e, name: sc.name, blobId: sc.blob_id });
+  }
+  return items;
+}
+
+/** The delegate hint's measure: stored sizes, read without any z, a cut item counted as at most twice EXPLORE_CUT. */
+function expandEstimate(s, items, whole) {
+  let chars = 0;
+  for (const it of items) {
+    const m = s.blobLen.get(it.kind === 'entry' ? it.e.blob_id : it.blobId);
+    const len = m === undefined ? 0 : Number(m.raw_len);
+    chars += xlib.expandCuts({ whole, kind: it.kind, provenance: it.e.provenance }) ? Math.min(len, 2 * xlib.EXPLORE_CUT) : len;
+  }
+  return chars;
+}
+
+/** One blob, decompressed only when lib's expandBlobFits lets one call hold it whole: a tombstone answers `pruned`
+ *  (with its date, when recorded), a blob past SIDECAR_WHOLE_MAX answers `too-large` with its byte size, and
+ *  neither is decompressed. A message body (`isSidecar` false) also holds B1's body cap: past BLOB_DECODE_MAX
+ *  (blobOverDecodeCap, B1's history-permanent-failures-classified; only a raw-only line-too-long blob gets there) it
+ *  is `too-large` too, against that bound. Its size is read before its z is. The decode is bounded by the stored
+ *  raw_len (B1's unbrotli(z, maxLen), FPM10), and a blob that does not decode answers `undecodable`, never a throw
+ *  and never `pruned`: a damaged blob is not a pruned one (no overloaded value at a seam). */
+function expandBlob(s, blobId, isSidecar) {
+  const m = s.blobLen.get(blobId);
+  // A missing row is impossible under `blob_id … REFERENCES blobs ON DELETE RESTRICT`; it is the doctor's to report.
+  if (m === undefined) return { state: 'pruned', prunedMs: null };
+  if (m.pruned_ms !== null) return { state: 'pruned', prunedMs: Number(m.pruned_ms) };
+  const rawLen = Number(m.raw_len);
+  if (!xlib.expandBlobFits(rawLen)) return { state: 'too-large', rawLen };
+  if (!isSidecar && xlib.blobOverDecodeCap(rawLen)) return { state: 'too-large', rawLen, bound: xlib.BLOB_DECODE_MAX };
+  const b = s.blob.get(blobId);
+  if (b === undefined || b.z === null) return { state: 'pruned', prunedMs: null };
+  let bytes;
+  try { bytes = xstore.unbrotli(b.z, rawLen); } catch { return { state: 'undecodable', rawLen }; }
+  return { state: 'bytes', bytes };
+}
+
+/** A stored body: JSON for a parsed row, the line's text for a raw-only one. A body past B1's structure bound
+ *  (jsonWithinStructureBound, B1's history-json-structure-bound: a raw-only blob can nest millions of levels) is
+ *  never parsed: its text is shown as stored. */
+function expandParse(bytes) {
+  const text = bytes.toString('utf8');
+  if (!xlib.jsonWithinStructureBound(bytes)) return text;
+  try { return JSON.parse(text); } catch { return text; }
+}
+
+/** An entry's RAW text (lib's renderEntryText; every shown window of it is redacted by expandRenderItem): the
+ *  unsanitised variant when the pair is ccd's own (DM2b), a tombstone as `pruned`. */
+function expandEntryText(rc, s, e) {
+  const p = expandBlob(s, e.blob_id, false);
+  if (p.state !== 'bytes') return p;
+  const primary = expandParse(p.bytes);
+  const rows = s.variants.all(e.entry_id).filter((v) => v.blob_id !== e.blob_id);
+  const others = [];
+  for (const v of rows) {
+    const vb = expandBlob(s, v.blob_id, false);
+    if (vb.state === 'bytes') others.push({ body: expandParse(vb.bytes), cause: v.cause });
+  }
+  const body = others.length === 0 ? primary : xlib.pickExpandBody({ primary, variants: others });
+  return { state: 'text', text: xlib.renderEntryText(body), causes: rows.map((v) => v.cause), primary };
+}
+
+/** A sidecar's bytes as RAW text. It is never redacted whole: a 64 MiB sidecar redacted whole peaked at 1,954 MiB
+ *  for one page (review finding R36), so expandRenderItem redacts only the window it shows. */
+function expandSidecarText(rc, s, blobId) {
+  const p = expandBlob(s, blobId, true);
+  if (p.state !== 'bytes') return p;
+  return { state: 'text', text: p.bytes.toString('utf8'), causes: [], primary: null };
+}
+
+/** The file a tool_result's tool_use named (P17 dispatches the outline on its extension), redacted. The walk stops
+ *  at the first ancestor holding the paired tool_use, whether or not it names a file. */
+function expandPairedPath(rc, s, e, body) {
+  const ids = xlib.toolResultIdsOf(body);
+  if (ids.length === 0) return null;
+  let uuid = e.parent_uuid;
+  for (let hop = 0; hop < EXPAND_PAIR_WALK && typeof uuid === 'string'; hop += 1) {
+    const r = s.hop.get(uuid);
+    if (r === undefined) return null;
+    const b = expandBlob(s, r.blob_id, false);
+    if (b.state === 'bytes') {
+      const p = xlib.toolUseInputPath(expandParse(b.bytes), ids[0]);
+      if (p.found) return p.path === null ? null : xlib.redactField(p.path, rc.pairIdx);
+    }
+    uuid = r.parent_uuid;
+  }
+  return null;
+}
+
+/** The primary body of an entry, for a sidecar's pairing (small: a tool_result row). */
+function expandPrimaryBody(s, e) {
+  const b = expandBlob(s, e.blob_id, false);
+  return b.state === 'bytes' ? expandParse(b.bytes) : null;
+}
+
+/** One item rendered for this page: {block, json, cost, partial, to}, or null when it may not start here. A cut or
+ *  pruned item that does not fit waits for the next page unless it is the page's first. A whole item that does not
+ *  fit starts as a partial when it is the first, or while EXPAND_MIN_PARTIAL of the budget is left.
+ *  o = {whole, from, budget, first, scope}. */
+function expandRenderItem(rc, s, it, pos, total, o) {
+  const isEntry = it.kind === 'entry';
+  const e = it.e;
+  const src = isEntry ? (e.provenance ?? 'harness') : 'sidecar';
+  const id = isEntry ? e.uuid : `${e.uuid}/${it.name}`;
+  const t = isEntry ? expandEntryText(rc, s, e) : expandSidecarText(rc, s, it.blobId);
+  const ts = e.ts_ms === null ? '-' : new Date(Number(e.ts_ms)).toISOString();
+  const lead = isEntry
+    ? `── ${pos}/${total} ${e.type === '' ? 'raw' : e.type}${e.role ? `/${e.role}` : ''} ${src} ${e.uuid} ${ts}`
+    : `── ${pos}/${total} sidecar ${it.name} of ${e.uuid}`;
+  const causes = t.state === 'text' ? t.causes : [];
+  const tail = causes.map((c) => `variant cause=${c}`);
+  const base = {
+    kind: it.kind, uuid: e.uuid, ...(isEntry ? {} : { name: it.name }), type: e.type, role: e.role,
+    ts_ms: e.ts_ms === null ? null : Number(e.ts_ms), provenance: src, trust: 'untrusted',
+  };
+  const extra = { variants: causes.map((cause) => ({ cause })), ...(isEntry ? { sidecars: it.sidecars.map((sc) => ({ name: sc.name })) } : {}) };
+  const env = (text, suffix = '') => xlib.recallEnvelope({
+    src, id: `${id}${suffix}`, ts: e.ts_ms === null ? null : Number(e.ts_ms), role: isEntry ? e.role : null, text,
+  });
+  const measure = (block, json) => Math.max(block.length, JSON.stringify(json).length);
+
+  if (t.state === 'pruned') {
+    const when = t.prunedMs === null ? 'on an unrecorded date' : `on ${new Date(t.prunedMs).toISOString().slice(0, 10)}`;
+    const block = [lead, `content pruned ${when}`].join('\n');
+    const json = { ...base, text: '', from: 0, to: 0, of: 0, cut: false, outline: null, outline_kind: null, pruned_ms: t.prunedMs, ...extra };
+    const cost = measure(block, json);
+    return cost <= o.budget || o.first ? { block, json, cost, partial: false, to: 0 } : null;
+  }
+
+  if (t.state === 'too-large') {
+    // lib's expandBlobFits said no (or, for a message body, B1's blobOverDecodeCap: `bound` names BLOB_DECODE_MAX):
+    // one fixed line, nothing decompressed. `of` is the recorded size, in bytes.
+    const block = [lead, `content too large to expand here: ${t.rawLen} bytes, over the ${t.bound ?? xlib.SIDECAR_WHOLE_MAX}-byte bound one call decompresses`].join('\n');
+    const json = { ...base, text: '', from: 0, to: 0, of: t.rawLen, cut: true, outline: null, outline_kind: null, pruned_ms: null, ...extra };
+    const cost = measure(block, json);
+    return cost <= o.budget || o.first ? { block, json, cost, partial: false, to: 0 } : null;
+  }
+
+  if (t.state === 'undecodable') {
+    // The stored bytes do not decode within their recorded raw_len (B1's blob-undecodable; doctor counts it). Not a
+    // pruned blob, and never a throw: one fixed line, with `undecodable: true` on the --json item.
+    const block = [lead, `content does not decode: the stored blob is damaged (recorded ${t.rawLen} bytes)`].join('\n');
+    const json = { ...base, text: '', from: 0, to: 0, of: 0, cut: false, outline: null, outline_kind: null, pruned_ms: null, undecodable: true, ...extra };
+    const cost = measure(block, json);
+    return cost <= o.budget || o.first ? { block, json, cost, partial: false, to: 0 } : null;
+  }
+
+  // R is the item's RAW text. Every window shown of it goes through shownOf, which redacts the window plus
+  // ENTRY_REDACT_MARGIN each side and cuts it back (Task 12's redactDisplayWindow): never the whole item first.
+  const R = t.text;
+  const shownOf = (from, to) => xlib.redactDisplayWindow(R, from, to, rc.pairIdx);
+  if (xlib.expandCuts({ whole: o.whole, kind: it.kind, provenance: e.provenance }) && R.length > xlib.EXPLORE_CUT) {
+    const path = expandPairedPath(rc, s, e, isEntry ? t.primary : expandPrimaryBody(s, e));
+    const kind = xlib.exploreKindOf(path) ?? (isEntry ? null : xlib.exploreKindOf(it.name)) ?? 'code';
+    const cutEnd = xlib.cutText(R, xlib.EXPLORE_CUT, xlib.CUT_TEXT_BUDGET).length;
+    const shown = xlib.cutText(shownOf(0, cutEnd), xlib.EXPLORE_CUT, xlib.CUT_TEXT_BUDGET);
+    const outline = xlib.cutText(xlib.exploreOutline(R, kind, path === null ? undefined : xbasename(path), rc.pairIdx),
+      xlib.EXPLORE_CUT, xlib.CUT_TEXT_BUDGET);
+    const block = [`${lead} [cut ${cutEnd} of ${R.length} chars; outline: ${kind}]`, env(shown), env(outline, '#outline'),
+      xlib.nextLine(['expand', e.uuid, ...o.scope]), ...tail].join('\n');
+    const json = { ...base, text: shown, from: 0, to: cutEnd, of: R.length, cut: true, outline, outline_kind: kind, pruned_ms: null, ...extra };
+    const cost = measure(block, json);
+    return cost <= o.budget || o.first ? { block, json, cost, partial: false, to: 0 } : null;
+  }
+
+  const from = Math.min(o.from, R.length);
+  const frame = [`${lead} [chars ${from}-${R.length} of ${R.length}; continues]`, env(''), ...tail].join('\n');
+  const frameJson = { ...base, text: '', from, to: R.length, of: R.length, cut: false, outline: null, outline_kind: null, pruned_ms: null, ...extra };
+  const fixed = measure(frame, frameJson);
+  let to = R.length;
+  if (fixed + xlib.textCost(R, from) > o.budget) {
+    if (!o.first && o.budget - fixed < xlib.EXPAND_MIN_PARTIAL) return null;
+    to = xlib.pageEnd(R, from, Math.max(1, o.budget - fixed));
+  }
+  let text = shownOf(from, to);
+  // A mark can print longer than what it replaced: the page shrinks until what it prints fits, keeping one
+  // character (or one pair) at least, as pageEnd does.
+  while (fixed + xlib.textCost(text) > o.budget) {
+    const shorter = xlib.pageEnd(R, from, Math.max(1, xlib.textCost(R, from, to) >> 1));
+    if (shorter >= to) break;
+    to = shorter;
+    text = shownOf(from, to);
+  }
+  const partial = to < R.length;
+  const note = from === 0 && !partial ? '' : ` [chars ${from}-${to} of ${R.length}${partial ? '; continues' : ''}]`;
+  const block = [`${lead}${note}`, env(text), ...tail].join('\n');
+  const json = { ...base, text, from, to, of: R.length, cut: false, outline: null, outline_kind: null, pruned_ms: null, ...extra };
+  return { block, json, cost: fixed + xlib.textCost(text), partial, to };
+}
+
+/** `expand` over a ReadContext. Returns a VerbResult whose `shown` is the position of the last item reached. */
+export function runExpand(rc, a) {
+  const s = expandStmts(rc);
+  const decoded = a.cursor === null ? null : xlib.decodeCursor(a.cursor, 'expand');
+  if (a.cursor !== null && decoded === null) return refusal('bad-args', 'that --cursor is not one expand printed');
+  // A bare `expand --cursor <c>` resumes the expansion its cursor names.
+  let want = a;
+  if (a.target === null && a.around === null) {
+    const resume = xlib.expandResumeOf(decoded);
+    if (resume === null) return refusal('bad-args', EXPAND_TARGET_HINT);
+    want = { ...a, ...resume };
+  }
+  const r = expandResolve(rc, s, want);
+  if (r.refuse !== undefined) return r.refuse;
+  const items = expandItems(s, r.entryIds);
+  const at = xlib.decideExpandCursor({ cursor: decoded, key: r.key, total: items.length });
+  if (!at.ok) return refusal('bad-args', 'that --cursor belongs to another expansion');
+  const scope = rc.scopeArgs ?? [];
+  const blocks = [];
+  const out = [];
+  let budget = xlib.PAGE_TEXT_BUDGET;
+  let next = null;
+  let shown = at.i;
+  for (let i = at.i; i < items.length; i += 1) {
+    const item = expandRenderItem(rc, s, items[i], i + 1, items.length, { whole: r.whole, from: i === at.i ? at.o : 0, budget, first: blocks.length === 0, scope });
+    if (item === null) { next = { i, o: 0 }; break; }
+    blocks.push(item.block);
+    out.push(item.json);
+    budget -= item.cost;
+    shown = i + 1;
+    if (item.partial) { next = { i, o: item.to }; break; }
+  }
+  const nextArgs = next === null ? null
+    : ['expand', ...r.args, ...scope, '--cursor', xlib.encodeCursor({ v: 1, resource: 'expand', t: r.key, i: next.i, o: next.o })];
+  const hint = a.cursor === null ? xlib.delegateHint(expandEstimate(s, items, r.whole)) : null;
+  return { exit: xlib.EXIT.OK, header: null, blocks, items: out, total: items.length, shown, next: nextArgs, ...(hint === null ? {} : { hint }) };
+}
+
+/** cli.mjs's READ_RUNNERS.expand: Task 10's parseReadArgs answer, through lib's expandArgsOf. */
+export function expandVerb(rc, parsed) {
+  const p = xlib.expandArgsOf(parsed);
+  if (!p.ok) return refusal('bad-args', EXPAND_TARGET_HINT);
+  return runExpand(rc, { ...p.args, json: parsed.opts.json === true });
 }

@@ -30,6 +30,8 @@ import * as rH from './historyHelpers.js';
 import * as rFx from './historyFixtures.js';
 import { DatabaseSync as RDatabaseSync } from 'node:sqlite';
 import type { GrepArgs as RGrepArgs } from '../../ccd/history/lib.mjs';
+import { brotliDecompressSync as t16brotli } from 'node:zlib';
+import { randomBytes as t16random } from 'node:crypto';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
 
 removeTmpFixturesEachTest();
@@ -2400,4 +2402,545 @@ describe('describe: one node, resolved inside the scope (W1-B2 task 15)', () => 
     expect(scope.families_total).toBe(60);
     expect(scope.families.length).toBeLessThanOrEqual(3);
   }, 60_000);
+});
+
+// ── W1-B2 Task 16: expand ───────────────────────────────────────────────────────────────────────────────
+// Pins C10, C11, C13, C29, DM2b (CLI half), DM29 (CLI half), and review focus 3 (scale), through the CLI as a
+// session runs it: a fixture HOME, a functional fake tmux answering the family's cc- name (withPane), the statfs
+// preload. Each family is seeded by real sweep ticks (seedFamily), and one more tick derives its leaf.
+interface T16Item {
+  kind: 'entry' | 'sidecar'; uuid: string; name?: string; type: string; role: string | null; ts_ms: number | null;
+  provenance: string; text: string; from: number; to: number; of: number; cut: boolean; outline: string | null;
+  outline_kind: string | null; variants: { cause: string }[]; pruned_ms: number | null; undecodable?: true; trust: string;
+}
+const t16items = (r: { json: Record<string, unknown> | null }): T16Item[] => (r.json?.['items'] ?? []) as T16Item[];
+/** The resume cursor a page printed: its --json `next`, or the human form's last `next:` line that carries one. */
+const t16cursor = (s: string): string | null => {
+  const m = [...s.matchAll(/--cursor '?([A-Za-z0-9_-]+)'?/g)];
+  return m.length === 0 ? null : m[m.length - 1]![1]!;
+};
+const t16ts = (i: number): string => new Date(Date.UTC(2026, 9, 1, 10, 0, i)).toISOString();
+/** A fixture uuid: the family's 8-hex tag, then `i`. */
+const t16uuid = (tag: string, i: number): string => `${tag}-0000-4000-8000-${String(i).padStart(12, '0')}`;
+const t16summary = (tag: string): string => ['<summary>', '1. Primary Request and Intent:', `   ${tag} intent`,
+  '8. Current Work:', `   ${tag} current work`, '9. Optional Next Step:', `   ${tag} next step`, '</summary>'].join('\n');
+/** One leaf's rows: `sources`, then a manual boundary whose head is the last source and which keeps no row, then
+ *  the summary row its anchor names (§6.1: leaf 1 claims every source). */
+function t16leafRows(tag: string, sid: string, sources: object[]): object[] {
+  const n = sources.length;
+  const last = t16uuid(tag, n);
+  return [
+    ...sources,
+    rFx.boundaryRow({ uuid: t16uuid(tag, n + 1), ts: t16ts(n + 1), parentUuid: last, sessionId: sid, trigger: 'manual',
+      headUuid: last, anchorUuid: t16uuid(tag, n + 2), tailUuid: last, allUuids: [] }),
+    rFx.summaryRow({ uuid: t16uuid(tag, n + 2), ts: t16ts(n + 2), parentUuid: t16uuid(tag, n + 1), sessionId: sid, text: t16summary(`zq${tag}`) }),
+  ];
+}
+/** The leaf node of one family, read from the store. CONTROL: the fixture derived it. */
+function t16leafOf(box: rH.HistoryBox, id: string): string {
+  const db = rH.openStoreRO(box);
+  try {
+    const rows = db.prepare(`SELECT n.node_id AS node_id FROM nodes n JOIN sessions s ON s.session_pk = n.session_pk
+      WHERE s.ccrc_id = ? AND n.kind <> 'condensed' ORDER BY n.created_ms`).all(id) as { node_id: string }[];
+    expect(rows.length, `CONTROL: ${id}'s leaf was derived`).toBeGreaterThan(0);
+    return rows[0]!.node_id;
+  } finally { db.close(); }
+}
+/** Seed one family, tick once more so its leaf is derived, and answer the transcript path. */
+function t16seed(box: rH.HistoryBox, f: { id: string; project: string; generation: string; uuid: string; rows: object[]; accountId?: string }): string {
+  const seeded = rH.seedFamily(box, f);
+  const r = rH.runSweep(box);
+  expect(r.code, r.stderr).toBe(0);
+  return seeded.transcript;
+}
+const t16prefixed = (lines: string[]): string => lines.map((l, i) => `${String(i + 1).padStart(6)}→${l}`).join('\n');
+/** A second copy of a known transcript, and a sidecar planted after its transcript was read, are found by the
+ *  periodic discovery scan (SCAN_INTERVAL_MS). The run-pass driver's clock offset makes one due, as B1's DM35
+ *  case does; two passes let the second ingest and link what the first found. */
+function t16scan(box: rH.HistoryBox): void {
+  for (let k = 0; k < 2; k += 1) {
+    const r = rH.runDriver(box, { offsetMs: libRead.SCAN_INTERVAL_MS + 60_000 });
+    expect(r.code, r.stderr).toBe(0);
+  }
+}
+
+describe.skipIf(process.platform === 'darwin')('expand (Task 16): real text in order, cut and outlined, in scope', () => {
+  const ID = 'claude-a-x16';
+  const OTHER = 'claude-a-x16oth';
+  const G = '0189abcd-1234-4678-9abc-00000000a016';
+  const GO = '0189abcd-1234-4678-9abc-00000000b016';
+  const T = 'a1600001';
+  const TO = 'a1600002';
+  const U = t16uuid(T, 0);
+  const UO = t16uuid(TO, 0);
+  const e = (i: number): string => t16uuid(T, i);
+  const o = (i: number): string => t16uuid(TO, i);
+  const CODE = t16prefixed(Array.from({ length: 120 }, (_, i) => (i === 0 ? "import fs from 'node:fs';"
+    : i === 1 ? "import path from 'node:path';" : i === 2 ? 'export function main(argv) {' : `  const v${i} = path.join('a', 'b${i}');`)));
+  const JSON_OUT = t16prefixed(JSON.stringify(Array.from({ length: 80 }, (_, i) => ({ id: i, name: `item ${i}`, tags: ['a', 'b'] })), null, 1).split('\n'));
+  let box: rH.HistoryBox;
+  let leaf = '';
+  let otherLeaf = '';
+  const cli = (args: string[], id = ID) => rH.runCli(box, args, { env: rH.withPane(box, id) });
+
+  beforeAll(() => {
+    box = rH.makeHistoryBox('ccrc-hist-x16-');
+    t16seed(box, { id: ID, project: 'demo', generation: G, uuid: U, rows: t16leafRows(T, U, [
+      rFx.userRow({ uuid: e(1), ts: t16ts(1), sessionId: U, text: 'zqsentinel10 open the app and read its entry point' }),
+      rFx.toolUseRow({ uuid: e(2), ts: t16ts(2), parentUuid: e(1), sessionId: U, toolUseId: 'toolu_01X16READ', name: 'Read', input: { file_path: '/home/u/tree/demo/src/app.ts' } }),
+      rFx.toolResultRow({ uuid: e(3), ts: t16ts(3), parentUuid: e(2), sessionId: U, toolUseId: 'toolu_01X16READ', content: CODE, sourceToolUseID: 'toolu_01X16READ' }),
+      rFx.toolUseRow({ uuid: e(4), ts: t16ts(4), parentUuid: e(3), sessionId: U, toolUseId: 'toolu_01X16JSON', name: 'Read', input: { file_path: '/home/u/tree/demo/data.json' } }),
+      rFx.toolResultRow({ uuid: e(5), ts: t16ts(5), parentUuid: e(4), sessionId: U, toolUseId: 'toolu_01X16JSON', content: JSON_OUT, sourceToolUseID: 'toolu_01X16JSON' }),
+      rFx.assistantRow({ uuid: e(6), ts: t16ts(6), parentUuid: e(5), sessionId: U, text: 'zqdone16 read both files' }),
+    ]) });
+    t16seed(box, { id: OTHER, project: 'other', generation: GO, uuid: UO, rows: t16leafRows(TO, UO, [
+      rFx.userRow({ uuid: o(1), ts: t16ts(1), sessionId: UO, text: 'zqx16oth another project entirely' }),
+      rFx.assistantRow({ uuid: o(2), ts: t16ts(2), parentUuid: o(1), sessionId: UO, text: 'zqx16oth answered' }),
+    ]) });
+    leaf = t16leafOf(box, ID);
+    otherLeaf = t16leafOf(box, OTHER);
+  }, 480_000);
+
+  it('C10: the real text, in source order; a tool output over 2k is cut with an outline dispatched on its paired path, and a next: line', () => {
+    const r = cli(['expand', leaf]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain('zqsentinel10 open the app and read its entry point');
+    const at = (s: string): number => r.stdout.indexOf(s);
+    expect(at('zqsentinel10')).toBeLessThan(at(e(3)));
+    expect(at(e(3))).toBeLessThan(at(e(5)));
+    expect(at(e(5))).toBeLessThan(at('zqdone16'));
+    expect(r.stdout).toMatch(new RegExp(`${e(3)} \\S+ \\[cut 2000 of \\d+ chars; outline: code\\]`));
+    expect(r.stdout, 'the code outline reads the imports only after the Read prefix is stripped').toContain('Imports/dependencies (2)');
+    expect(r.stdout).toMatch(new RegExp(`^next: .*history '?expand'? '?${e(3)}'?$`, 'm'));
+    expect(r.stdout).toMatch(new RegExp(`${e(5)} \\S+ \\[cut 2000 of \\d+ chars; outline: json\\]`));
+    expect(r.stdout).toContain('Structured summary (JSON)');
+    expect(r.stdout).toMatch(/^shown 6 of 6$/m);
+    expect(r.stdout).not.toMatch(/^hint: delegate/m);
+    expect(r.stdout.length).toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+    const j = cli(['expand', leaf, '--json']);
+    expect(j.code, j.stderr).toBe(0);
+    const items = t16items(j);
+    expect(items.map((i) => i.uuid)).toEqual([e(1), e(2), e(3), e(4), e(5), e(6)]);
+    expect(items[2]).toMatchObject({ cut: true, from: 0, to: 2000, outline_kind: 'code', trust: 'untrusted' });
+    expect(items[2]!.of).toBe(CODE.length);
+    expect(items[0]).toMatchObject({ cut: false, provenance: 'operator', text: 'zqsentinel10 open the app and read its entry point' });
+  }, HEAVY);
+
+  it('a message uuid expands that one row whole; --around reads the rows around it in file order', () => {
+    const whole = cli(['expand', e(3), '--json']);
+    expect(whole.code, whole.stderr).toBe(0);
+    expect(t16items(whole)).toHaveLength(1);
+    expect(t16items(whole)[0]).toMatchObject({ uuid: e(3), cut: false, from: 0, to: CODE.length, of: CODE.length, text: CODE });
+    const around = cli(['expand', '--around', e(3), '--before', '1', '--after', '2', '--json']);
+    expect(around.code, around.stderr).toBe(0);
+    expect(t16items(around).map((i) => i.uuid)).toEqual([e(2), e(3), e(4), e(5)]);
+    expect(cli(['expand', '--around', e(3)]).code, 'the default window is 5 each side').toBe(0);
+    for (const bad of [['expand'], ['expand', 'zz'], ['expand', leaf, e(3)], ['expand', leaf, '--around', e(3)], ['expand', '--around', e(3), '--after', '51'], ['expand', leaf, '--bogus']]) {
+      const r = cli([...bad, '--json']);
+      expect([r.code, r.json?.['reason']], bad.join(' ')).toEqual([2, 'bad-args']);
+    }
+    const missing = cli(['expand', t16uuid('a16000ff', 1), '--json']);
+    expect(missing.code, 'a uuid in no family is not found here').toBe(3);
+  }, HEAVY);
+
+  it('C29: another project\'s node id, message uuid and --around uuid, and grep --node, are out-of-scope (2), never 3', () => {
+    for (const args of [['describe', otherLeaf], ['expand', otherLeaf], ['expand', o(1)], ['expand', '--around', o(1)], ['grep', 'zqx16oth', '--node', otherLeaf]]) {
+      const r = cli([...args, '--json']);
+      expect([r.code, r.json?.['reason']], args.join(' ')).toEqual([2, 'out-of-scope']);
+      expect(r.stdout, args.join(' ')).not.toContain('another project entirely');
+    }
+    const own = cli(['expand', otherLeaf], OTHER);
+    expect(own.code, 'CONTROL: from its own pane the same node expands').toBe(0);
+    expect(own.stdout).toContain('zqx16oth another project entirely');
+  }, HEAVY);
+});
+
+describe.skipIf(process.platform === 'darwin')('expand (Task 16): pages, cursors, variants, sidecars, redaction at rest', () => {
+  const ID = 'claude-a-x16pg';
+  const G = '0189abcd-1234-4678-9abc-00000000c016';
+  const T = 'a1600003';
+  const U = t16uuid(T, 0);
+  const e = (i: number): string => t16uuid(T, i);
+  const BIG = `zqbig11 ${Array.from({ length: 18_000 }, (_, i) => `w${i % 97}`).join(' ')} zqbigend11`;
+  let box: rH.HistoryBox;
+  let leaf = '';
+  const cli = (args: string[], id = ID) => rH.runCli(box, args, { env: rH.withPane(box, id) });
+
+  beforeAll(() => {
+    box = rH.makeHistoryBox('ccrc-hist-x16pg-');
+    t16seed(box, { id: ID, project: 'demo', generation: G, uuid: U, rows: t16leafRows(T, U, [
+      rFx.userRow({ uuid: e(1), ts: t16ts(1), sessionId: U, text: BIG }),
+      rFx.assistantRow({ uuid: e(2), ts: t16ts(2), parentUuid: e(1), sessionId: U, text: 'zqafter11 the small one after the big one' }),
+    ]) });
+    leaf = t16leafOf(box, ID);
+  }, 240_000);
+
+  it('C11: an oversized first item gives a partial page and a cursor; following it reads the rest exactly once; a page never passes the cap', () => {
+    const human = cli(['expand', leaf]);
+    expect(human.code, human.stderr).toBe(0);
+    expect(human.stdout.length).toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+    expect(human.stdout).toMatch(new RegExp(`${e(1)} \\S+ \\[chars 0-\\d+ of ${BIG.length}; continues\\]`));
+    expect(human.stdout).toMatch(/^shown 1 of 2$/m);
+    expect(human.stdout, 'more than 3x the cap: the first page says delegate').toMatch(/^hint: delegate: /m);
+    expect(t16cursor(human.stdout)).not.toBeNull();
+    const slices: string[] = [];
+    let after = 0;
+    let cursor: string | null = null;
+    let pages = 0;
+    do {
+      const r = cli(['expand', leaf, ...(cursor === null ? [] : ['--cursor', cursor]), '--json']);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout.length, `page ${pages + 1}`).toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+      for (const it of t16items(r)) {
+        if (it.uuid === e(1)) { expect(it.from, 'each page resumes where the last one stopped').toBe(slices.join('').length); slices.push(it.text); }
+        if (it.uuid === e(2)) after += 1;
+      }
+      cursor = t16cursor(String(r.json?.['next'] ?? ''));
+      pages += 1;
+    } while (cursor !== null && pages < 20);
+    expect(pages, 'the big item took more than one page').toBeGreaterThan(1);
+    expect(slices.join(''), 'the pages join to the text exactly').toBe(BIG);
+    expect(after, 'the next item shows once, after the big one').toBe(1);
+  }, HEAVY);
+
+  it('C11: a bare --cursor resumes the expansion it names; a cursor from another expansion, or one expand never printed, is bad-args', () => {
+    const first = cli(['expand', leaf]);
+    const c = t16cursor(first.stdout)!;
+    const bare = cli(['expand', '--cursor', c, '--json']);
+    expect(bare.code, bare.stderr).toBe(0);
+    expect(t16items(bare)[0]).toMatchObject({ uuid: e(1) });
+    expect(t16items(bare)[0]!.from, 'it resumes past the first page').toBeGreaterThan(0);
+    const wrong = cli(['expand', e(2), '--cursor', c, '--json']);
+    expect([wrong.code, wrong.json?.['reason']]).toEqual([2, 'bad-args']);
+    const junk = cli(['expand', leaf, '--cursor', 'zz', '--json']);
+    expect([junk.code, junk.json?.['reason']]).toEqual([2, 'bad-args']);
+  }, HEAVY);
+
+  it('DM2b: a ccd-sanitize variant pair prints the unsanitised body, and says it has a variant', () => {
+    const VID = 'claude-a-x16var';
+    const VT = 'a1600004';
+    const VU = t16uuid(VT, 0);
+    const v = (i: number): string => t16uuid(VT, i);
+    const rows = (fill: string): object[] => {
+      const a = rFx.toolUseRow({ uuid: v(2), ts: t16ts(2), parentUuid: v(1), sessionId: VU, toolUseId: 'toolu_01X16VAR', name: 'Read', input: { file_path: '/home/u/tree/demo/a.md' } });
+      const m = a['message'] as { content: unknown[] };
+      m.content = [{ type: 'text', text: fill }, ...m.content];
+      return [rFx.userRow({ uuid: v(1), ts: t16ts(1), sessionId: VU, text: 'zqx16var question' }), a];
+    };
+    // The sanitised copy is ingested FIRST, so the entry's primary body is the "..." one: only pickExpandBody
+    // can print the unsanitised body (the CONTROL mutant below prints the primary).
+    const vbox = rH.makeHistoryBox('ccrc-hist-x16var-');
+    const vcli = (args: string[]) => rH.runCli(vbox, args, { env: rH.withPane(vbox, VID) });
+    const t = t16seed(vbox, { id: VID, project: 'demo', generation: '0189abcd-1234-4678-9abc-00000000d016', uuid: VU, rows: rows('...') });
+    rH.plantTranscript(vbox, 'claude-b', path.basename(path.dirname(t)), VU, rows(''));
+    t16scan(vbox);
+    const db = rH.openStoreRO(vbox);
+    try {
+      const causes = (db.prepare(`SELECT v.cause AS cause FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id WHERE e.uuid = ?`)
+        .all(v(2)) as { cause: string }[]).map((r) => r.cause);
+      expect(causes, 'CONTROL: B1 stored the pair as a ccd-sanitize variant').toEqual(['ccd-sanitize', 'ccd-sanitize']);
+    } finally { db.close(); }
+    const j = vcli(['expand', v(2), '--json']);
+    expect(j.code, j.stderr).toBe(0);
+    const item = t16items(j)[0]!;
+    expect(item.text).toBe('\n[tool_use Read] {"file_path":"/home/u/tree/demo/a.md"}');
+    expect(item.variants).toEqual([{ cause: 'ccd-sanitize' }]);
+    expect(vcli(['expand', v(2)]).stdout).toMatch(/^variant cause=ccd-sanitize$/m);
+  }, 180_000);
+
+  it('C13: a token and a PEM block are redacted on output and kept verbatim at rest', () => {
+    const SID = 'claude-a-x16sec';
+    const ST = 'a1600005';
+    const SU = t16uuid(ST, 0);
+    const GHO = ['gh', 'o_', 'Zq9fixture0not0a0real0token0abcdefgh'].join('');
+    const PEM = ['-----BEGIN ', 'RSA PRIVATE KEY-----\n', 'MIIZQfixture0body0line0one0abcdefghijklmnop', '\n',
+      'ZQfixture0body0line0two0qrstuvwxyz0123456', '\n-----END RSA PRIVATE KEY-----'].join('');
+    const text = `zqx16sec deploy with ${GHO} and\n${PEM}\nend`;
+    t16seed(box, { id: SID, project: 'demo', generation: '0189abcd-1234-4678-9abc-00000000e016', uuid: SU, rows: [
+      rFx.userRow({ uuid: t16uuid(ST, 1), ts: t16ts(1), sessionId: SU, text }),
+    ] });
+    for (const form of [[], ['--json']]) {
+      const r = cli(['expand', t16uuid(ST, 1), ...form], SID);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout).toContain('zqx16sec deploy with');
+      for (const frag of ['Zq9fixture0not', 'MIIZQfixture0body', 'ZQfixture0body0line0two']) expect(r.stdout, `${frag} ${form.join('')}`).not.toContain(frag);
+    }
+    const db = rH.openStoreRO(box);
+    try {
+      const row = db.prepare('SELECT b.z AS z FROM entries e JOIN blobs b ON b.blob_id = e.blob_id WHERE e.uuid = ?').get(t16uuid(ST, 1)) as { z: Uint8Array };
+      const atRest = t16brotli(row.z).toString('utf8');
+      expect(atRest).toContain(GHO);
+      expect(atRest).toContain('ZQfixture0body0line0two');
+    } finally { db.close(); }
+  }, HEAVY);
+
+  it('DM29: a sidecar past its 512 KB FTS window is not found by grep, and expand pages reach its tail; one past SIDECAR_WHOLE_MAX is never decompressed', () => {
+    const DID = 'claude-a-x16side';
+    const DT = 'a1600006';
+    const DU = t16uuid(DT, 0);
+    const d = (i: number): string => t16uuid(DT, i);
+    const dbox = rH.makeHistoryBox('ccrc-hist-x16side-');
+    const dcli = (args: string[]) => rH.runCli(dbox, args, { env: rH.withPane(dbox, DID) });
+    const t = t16seed(dbox, { id: DID, project: 'demo', generation: '0189abcd-1234-4678-9abc-00000000f016', uuid: DU, rows: [
+      rFx.userRow({ uuid: d(1), ts: t16ts(1), sessionId: DU, text: 'zqx16side build it' }),
+      rFx.toolUseRow({ uuid: d(2), ts: t16ts(2), parentUuid: d(1), sessionId: DU, toolUseId: 'toolu_01X16SIDE', name: 'Bash', input: { command: 'cat build.log' } }),
+      rFx.toolResultRow({ uuid: d(3), ts: t16ts(3), parentUuid: d(2), sessionId: DU, toolUseId: 'toolu_01X16SIDE', content: 'Output too large. Full output saved to: tool-results/big29.txt' }),
+    ] });
+    const dir = path.join(path.dirname(t), DU, 'tool-results');
+    fs.mkdirSync(dir, { recursive: true });
+    const body = `zqhead29 ${'x '.repeat(270_000)}zqtail29\n`;
+    expect(body.indexOf('zqtail29'), 'CONTROL: the tail sits past the FTS window').toBeGreaterThan(libRead.SIDECAR_FTS_BYTES);
+    fs.writeFileSync(path.join(dir, 'big29.txt'), body);
+    t16scan(dbox);
+    const db = rH.openStoreRO(dbox);
+    try {
+      const linked = db.prepare(`SELECT e.uuid AS uuid FROM sidecars s JOIN entries e ON e.entry_id = s.entry_id WHERE s.name = 'big29.txt'`).get() as { uuid: string } | undefined;
+      expect(linked?.uuid, 'CONTROL: the sidecar is stored and linked to its tool_result').toBe(d(3));
+    } finally { db.close(); }
+    expect(dcli(['grep', 'zqtail29']).code, 'past the window: no index term').toBe(3);
+    expect(dcli(['grep', 'zqhead29']).code, 'CONTROL: inside the window').toBe(0);
+    const first = dcli(['expand', d(3), '--json']);
+    expect(first.code, first.stderr).toBe(0);
+    const [entry, side] = t16items(first);
+    expect(entry!.uuid).toBe(d(3));
+    expect(side).toMatchObject({ kind: 'sidecar', name: 'big29.txt', from: 0, of: body.length });
+    expect(side!.text.startsWith('zqhead29')).toBe(true);
+    // A cursor is ids and offsets only: one aimed near the end reads the tail without 30 page calls.
+    let cursor: string | null = libRead.encodeCursor({ v: 1, resource: 'expand', t: d(3), i: 1, o: body.length - 40_000 });
+    const tail: string[] = [];
+    for (let pages = 0; cursor !== null && pages < 10; pages += 1) {
+      const r = dcli(['expand', d(3), '--cursor', cursor, '--json']);
+      expect(r.code, r.stderr).toBe(0);
+      for (const it of t16items(r)) if (it.kind === 'sidecar') tail.push(it.text);
+      cursor = t16cursor(String(r.json?.['next'] ?? ''));
+    }
+    expect(tail.join('')).toContain('zqtail29');
+    // lib's expandBlobFits: a blob whose recorded size passes SIDECAR_WHOLE_MAX is never decompressed. Its raw_len
+    // is raised in place, so the bound is measured without a second 64 MiB fixture; z still holds the small body,
+    // which is exactly what a mutant that decompresses anyway would print.
+    const w = new DatabaseSync(libRead.historyPaths(dbox.home).dbFile);
+    try {
+      w.prepare("UPDATE blobs SET raw_len = ? WHERE blob_id = (SELECT blob_id FROM sidecars WHERE name = 'big29.txt')").run(libRead.SIDECAR_WHOLE_MAX + 1);
+    } finally { w.close(); }
+    const huge = dcli(['expand', d(3), '--json']);
+    expect(huge.code, huge.stderr).toBe(0);
+    expect(huge.stdout.length).toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+    expect(t16items(huge)[1]).toMatchObject({ kind: 'sidecar', name: 'big29.txt', text: '', cut: true, of: libRead.SIDECAR_WHOLE_MAX + 1 });
+    const hugeHuman = dcli(['expand', d(3)]);
+    expect(hugeHuman.stdout).toMatch(/^content too large to expand here: \d+ bytes/m);
+    expect(hugeHuman.stdout, 'nothing of the body is printed').not.toContain('zqhead29');
+  }, 180_000);
+
+  it('DM29: a message past its 1 MiB index window and its redaction margin is not found by grep past the window, and expand pages reach its tail', () => {
+    const LID = 'claude-a-x16long';
+    const LT = 'a1600009';
+    const LU = t16uuid(LT, 0);
+    const l = (i: number): string => t16uuid(LT, i);
+    const lbox = rH.makeHistoryBox('ccrc-hist-x16long-');
+    const lcli = (args: string[]) => rH.runCli(lbox, args, { env: rH.withPane(lbox, LID) });
+    // As Task 14's reach describe builds it: the head inside the window, the tail after 1,190,000 bytes of plain words.
+    const LONG = `zqlonghead29 ${'plain words here '.repeat(70_000)}zqlongtail29 end`;
+    expect(Buffer.byteLength(LONG.slice(0, LONG.indexOf('zqlongtail29')), 'utf8'), 'CONTROL: the tail sits past the window and its margin')
+      .toBeGreaterThan(libRead.ENTRY_FTS_BYTES + libRead.ENTRY_REDACT_MARGIN);
+    t16seed(lbox, { id: LID, project: 'demo', generation: '0189abcd-1234-4678-9abc-00000001c016', uuid: LU, rows: [
+      rFx.userRow({ uuid: l(1), ts: t16ts(1), sessionId: LU, text: LONG }),
+    ] });
+    expect(lcli(['grep', 'zqlonghead29']).code, 'CONTROL: inside the window').toBe(0);
+    expect(lcli(['grep', 'zqlongtail29']).code, 'past the window: no index term').toBe(3);
+    // A cursor is ids and offsets only: one aimed near the end reads the tail without 60 page calls.
+    let cursor: string | null = libRead.encodeCursor({ v: 1, resource: 'expand', t: l(1), i: 0, o: LONG.length - 40_000 });
+    const tail: string[] = [];
+    for (let pages = 0; cursor !== null && pages < 10; pages += 1) {
+      const r = lcli(['expand', l(1), '--cursor', cursor, '--json']);
+      expect(r.code, r.stderr).toBe(0);
+      for (const it of t16items(r)) if (it.kind === 'entry' && it.uuid === l(1)) tail.push(it.text);
+      cursor = t16cursor(String(r.json?.['next'] ?? ''));
+    }
+    expect(tail.join(''), 'the stored row holds the tail, and expand reads it').toContain('zqlongtail29');
+  }, 300_000);
+
+  it("a message body past B1's BLOB_DECODE_MAX prints the too-large line and is not decompressed; a blob that does not decode prints its own line, never a throw or a pruned one", () => {
+    const CID = 'claude-a-x16cap';
+    const CT = 'a1600008';
+    const CU = t16uuid(CT, 0);
+    const c = (i: number): string => t16uuid(CT, i);
+    const cbox = rH.makeHistoryBox('ccrc-hist-x16cap-');
+    const ccli = (args: string[]) => rH.runCli(cbox, args, { env: rH.withPane(cbox, CID) });
+    t16seed(cbox, { id: CID, project: 'demo', generation: '0189abcd-1234-4678-9abc-00000001b016', uuid: CU, rows: [
+      rFx.userRow({ uuid: c(1), ts: t16ts(1), sessionId: CU, text: 'zqx16cap the body under the cap test' }),
+      rFx.userRow({ uuid: c(2), ts: t16ts(2), sessionId: CU, text: 'zqx16bad the body whose bytes are damaged' }),
+    ] });
+    expect(ccli(['expand', c(1)]).stdout, 'CONTROL: the body prints before its raw_len is raised').toContain('zqx16cap');
+    expect(ccli(['expand', c(2)]).stdout, 'CONTROL: the body prints before its bytes are damaged').toContain('zqx16bad');
+    // raw_len is raised in place past BLOB_DECODE_MAX but kept under SIDECAR_WHOLE_MAX, so only B1's body cap refuses it;
+    // z still holds the small body, which is exactly what a mutant that decompresses anyway would print. The second
+    // row's z is replaced by bytes that are not Brotli.
+    expect(libRead.BLOB_DECODE_MAX + 1, 'CONTROL: expandBlobFits alone would admit it').toBeLessThanOrEqual(libRead.SIDECAR_WHOLE_MAX);
+    const w = new DatabaseSync(libRead.historyPaths(cbox.home).dbFile);
+    try {
+      w.prepare('UPDATE blobs SET raw_len = ? WHERE blob_id = (SELECT blob_id FROM entries WHERE uuid = ?)').run(libRead.BLOB_DECODE_MAX + 1, c(1));
+      w.prepare('UPDATE blobs SET z = ? WHERE blob_id = (SELECT blob_id FROM entries WHERE uuid = ?)').run(Buffer.from('zq not brotli at all, damaged'), c(2));
+    } finally { w.close(); }
+    const capJ = ccli(['expand', c(1), '--json']);
+    expect(capJ.code, capJ.stderr).toBe(0);
+    expect(t16items(capJ)[0]).toMatchObject({ kind: 'entry', uuid: c(1), text: '', cut: true, of: libRead.BLOB_DECODE_MAX + 1 });
+    const capH = ccli(['expand', c(1)]);
+    expect(capH.stdout).toContain(`content too large to expand here: ${libRead.BLOB_DECODE_MAX + 1} bytes, over the ${libRead.BLOB_DECODE_MAX}-byte bound`);
+    expect(capH.stdout, 'nothing of the body is printed').not.toContain('zqx16cap');
+    const badJ = ccli(['expand', c(2), '--json']);
+    expect(badJ.code, badJ.stderr).toBe(0);
+    expect(t16items(badJ)[0]).toMatchObject({ kind: 'entry', uuid: c(2), text: '', pruned_ms: null, undecodable: true });
+    const badH = ccli(['expand', c(2)]);
+    expect(badH.code, badH.stderr).toBe(0);
+    expect(badH.stdout).toMatch(/^content does not decode: the stored blob is damaged/m);
+    expect(badH.stdout).not.toMatch(/^content pruned/m);
+  }, HEAVY);
+});
+
+describe.skipIf(process.platform === 'darwin')('expand at scale (Task 16, review focus 3): multi-MiB items, a sidecar near SIDECAR_WHOLE_MAX', () => {
+  const ID = 'claude-a-x16big';
+  const G = '0189abcd-1234-4678-9abc-00000001a016';
+  const T = 'a1600007';
+  const U = t16uuid(T, 0);
+  const e = (i: number): string => t16uuid(T, i);
+  /** The per-call wall clock this measures against (*chosen*: "a few seconds" on a quiet box, with room for CI
+   *  load; the worker records the measured values in the PR). */
+  const SCALE_MS = 20_000;
+  /** Peak RSS for one page of a ~64 MiB blob (*chosen*): one blob decompressed, only the page's window redacted
+   *  (Task 12's redactDisplayWindow), never the store. Redacting the whole blob instead peaked at 1,954 MiB (review
+   *  finding R36), which Step 13's mutant (b) shows red here; windowed, a prototype page peaked at 201,720 KiB. */
+  const RSS_KIB = 1_048_576;
+  const RSS_PRELOAD = path.join(rH.REPO, 'server', 'test', 'fixtures', 'history', 'preload-rss.mjs');
+  const S = t16random(32).toString('hex');
+  const items = Math.ceil((libRead.EXPLORE_JSON_MAX * 1.25) / 48);
+  const BULK = JSON.stringify(Array.from({ length: items }, (_, i) => ({ id: i, name: `zqbulk item ${i}`, tags: ['a', 'b'] })));
+  const DENSE = `zqx16dense ${Array.from({ length: 2000 }, () => S).join(' ')}`;
+  const HUGE = libRead.SIDECAR_WHOLE_MAX - 4096;
+  let box: rH.HistoryBox;
+  let leaf = '';
+  const cli = (args: string[], preloads?: string[]) => rH.runCli(box, args, { env: rH.withPane(box, ID), ...(preloads === undefined ? {} : { preloads }) });
+
+  beforeAll(() => {
+    expect(BULK.length, 'CONTROL: the bulk output is past the explorer\'s JSON bound').toBeGreaterThan(libRead.EXPLORE_JSON_MAX);
+    expect(Math.ceil(BULK.length * 1.3), 'CONTROL: its transcript line, quotes escaped, stays under LINE_MAX (a parsed row)').toBeLessThan(libRead.LINE_MAX);
+    box = rH.makeHistoryBox('ccrc-hist-x16big-');
+    fs.mkdirSync(path.join(box.home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(box.home, '.cc-secrets', 'x16.env'), `ZQ_X16_KEY=${S}\n`, { mode: 0o600 });
+    const t = t16seed(box, { id: ID, project: 'demo', generation: G, uuid: U, rows: t16leafRows(T, U, [
+      rFx.userRow({ uuid: e(1), ts: t16ts(1), sessionId: U, text: 'zqx16big load the data' }),
+      rFx.toolUseRow({ uuid: e(2), ts: t16ts(2), parentUuid: e(1), sessionId: U, toolUseId: 'toolu_01X16BULK', name: 'Read', input: { file_path: '/home/u/tree/demo/big.json' } }),
+      rFx.toolResultRow({ uuid: e(3), ts: t16ts(3), parentUuid: e(2), sessionId: U, toolUseId: 'toolu_01X16BULK', content: BULK }),
+      rFx.toolUseRow({ uuid: e(4), ts: t16ts(4), parentUuid: e(3), sessionId: U, toolUseId: 'toolu_01X16HUGE', name: 'Bash', input: { command: 'cat huge16.log' } }),
+      rFx.toolResultRow({ uuid: e(5), ts: t16ts(5), parentUuid: e(4), sessionId: U, toolUseId: 'toolu_01X16HUGE', content: 'Output too large. Full output saved to: tool-results/huge16.log' }),
+      rFx.userRow({ uuid: e(6), ts: t16ts(6), sessionId: U, parentUuid: e(5), text: DENSE }),
+      rFx.assistantRow({ uuid: e(7), ts: t16ts(7), parentUuid: e(6), sessionId: U, text: 'zqx16big done' }),
+    ]) });
+    const dir = path.join(path.dirname(t), U, 'tool-results');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'huge16.log'), Buffer.alloc(HUGE, '2026-10-05T12:00:00Z INFO worker 17 processed batch 4242 in 31ms ok\n'));
+    t16scan(box);
+    leaf = t16leafOf(box, ID);
+  }, 600_000);
+
+  it('a node holding a multi-MiB tool output and a ~64 MiB sidecar: one page, cut and outlined, within the cap and the clock; the JSON outline is skipped past its bound', () => {
+    const r = cli(['expand', leaf]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.ms, `expand of the node took ${r.ms} ms`).toBeLessThan(SCALE_MS);
+    expect(r.stdout.length).toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+    expect(r.stdout).toMatch(new RegExp(`${e(3)} \\S+ \\[cut 2000 of ${BULK.length} chars; outline: json\\]`));
+    expect(r.stdout, 'JSON.parse is skipped above EXPLORE_JSON_MAX').not.toContain('Structured summary (JSON)');
+    expect(r.stdout).toMatch(new RegExp(`sidecar huge16\\.log of ${e(5)} \\[cut 2000 of ${HUGE} chars; outline: code\\]`));
+  }, 120_000);
+
+  it('the multi-MiB row whole, and the sidecar paged at its start and in its middle: each page within the cap, the clock and the RSS bound', () => {
+    const bulk = cli(['expand', e(3), '--json']);
+    expect(bulk.code, bulk.stderr).toBe(0);
+    expect(bulk.ms).toBeLessThan(SCALE_MS);
+    expect(bulk.stdout.length).toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+    expect(t16items(bulk)[0]!.to).toBeLessThan(t16items(bulk)[0]!.of);
+    const first = cli(['expand', e(5)], [RSS_PRELOAD]);
+    expect(first.code, first.stderr).toBe(0);
+    expect(first.ms).toBeLessThan(SCALE_MS);
+    expect(first.stdout.length).toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+    const rss = Number(/history-test-maxrss-kib=(\d+)/.exec(first.stderr)?.[1] ?? 'NaN');
+    expect(rss, 'the RSS preload reported').toBeGreaterThan(0);
+    expect(rss, `peak RSS ${rss} KiB for one page of a ${HUGE}-byte blob`).toBeLessThan(RSS_KIB);
+    const mid = cli(['expand', e(5), '--cursor', libRead.encodeCursor({ v: 1, resource: 'expand', t: e(5), i: 1, o: HUGE >> 1 })]);
+    expect(mid.code, mid.stderr).toBe(0);
+    expect(mid.ms).toBeLessThan(SCALE_MS);
+    expect(mid.stdout.length).toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+    const grep = cli(['grep', 'zqbulk']);
+    expect(grep.code, grep.stderr).toBe(0);
+    expect(grep.ms).toBeLessThan(SCALE_MS);
+    expect(grep.stdout.length).toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+  }, 300_000);
+
+  it('a secret straddling a page boundary: no page, and no two pages joined, print 8 consecutive characters of it', () => {
+    const windows = Array.from({ length: S.length - 7 }, (_, i) => S.slice(i, i + 8));
+    const outs: string[] = [];
+    const slices: string[] = [];
+    let cursor: string | null = null;
+    let pages = 0;
+    do {
+      const r = cli(['expand', e(6), ...(cursor === null ? [] : ['--cursor', cursor]), '--json']);
+      expect(r.code, r.stderr).toBe(0);
+      outs.push(r.stdout);
+      for (const it of t16items(r)) slices.push(it.text);
+      cursor = t16cursor(String(r.json?.['next'] ?? ''));
+      pages += 1;
+    } while (cursor !== null && pages < 20);
+    expect(pages, 'CONTROL: even redacted, the region spans more than one page').toBeGreaterThan(1);
+    for (const text of [...outs, slices.join('')]) {
+      expect(windows.filter((w) => text.includes(w)), 'a window of the secret printed').toEqual([]);
+    }
+  }, 120_000);
+});
+
+describe.skipIf(process.platform === 'darwin')('expand and grep under --project with 40 families: a full --json page stays within the cap (Task 16)', () => {
+  // The page budgets (expand's PAGE_TEXT_BUDGET, grep's FRAME_RESERVE) count the items, not the envelope. They fit
+  // only while Task 11's scopeJson bounds its families list (lib's SCOPE_FAMILIES_JSON_MAX, with families_total):
+  // listed whole, 40 families add ~4.5k characters to every --json envelope. One family is captured with all the
+  // rows; 39 more of the project are written straight into the store, as Task 11's wide-scope case writes them.
+  const N = 40;
+  const ID = 'claude-a-p40f00';
+  const T = 'a1640000';
+  const U = t16uuid(T, 0);
+  const BIGP = `zqp40big ${Array.from({ length: 6000 }, (_, i) => `w${i % 97}`).join(' ')} zqp40bigend`;
+  let box: rH.HistoryBox;
+  const cli = (args: string[]) => rH.runCli(box, args, { env: rH.withPane(box, ID) });
+  /** The scope's family count as the envelope states it: Task 11's families_total, else the list's own length. */
+  const familiesIn = (r: { json: Record<string, unknown> | null }): number => {
+    const sc = r.json?.['scope'] as { families: unknown[]; families_total?: number } | undefined;
+    return sc === undefined ? -1 : (sc.families_total ?? sc.families.length);
+  };
+
+  beforeAll(() => {
+    box = rH.makeHistoryBox('ccrc-hist-x16p40-');
+    const rows: object[] = Array.from({ length: 120 }, (_, k) => rFx.userRow({ uuid: t16uuid(T, k + 1), ts: t16ts(k + 1), sessionId: U,
+      text: `zqp40 row ${k} ${'lorem ipsum dolor sit amet '.repeat(24)}` }));
+    rows.push(rFx.userRow({ uuid: t16uuid(T, 121), ts: t16ts(121), sessionId: U, text: BIGP }));
+    t16seed(box, { id: ID, project: 'p40', generation: '0189abcd-1234-4678-9abc-000000f40000', uuid: U, rows });
+    const w = new DatabaseSync(libRead.historyPaths(box.home).dbFile);
+    try {
+      const ins = w.prepare('INSERT INTO sessions (ccrc_id, generation, project, first_seen_ms) VALUES (?, ?, ?, ?)');
+      w.exec('BEGIN');
+      for (let k = 1; k < N; k += 1) {
+        ins.run(`claude-a-p40f${String(k).padStart(2, '0')}`, `0189abcd-1234-4678-9abc-${(0xf40000 + k).toString(16).padStart(12, '0')}`, 'p40', k);
+      }
+      w.exec('COMMIT');
+    } finally { w.close(); }
+  }, 240_000);
+
+  it('a full expand page and a full grep page, each --project --json, fit OUTPUT_CAP; the envelope still counts 40 families', () => {
+    const x = cli(['expand', t16uuid(T, 121), '--project', '--json']);
+    expect(x.code, x.stderr).toBe(0);
+    expect(familiesIn(x), 'CONTROL: the scope is the project\'s 40 families').toBe(N);
+    expect(x.json?.['next'], 'CONTROL: the page was full, so a cursor follows').not.toBeNull();
+    expect(x.stdout.length, 'expand --project --json').toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+    const g = cli(['grep', 'zqp40', '--project', '--limit', '100', '--json']);
+    expect(g.code, g.stderr).toBe(0);
+    expect(familiesIn(g)).toBe(N);
+    expect(g.stdout.length, 'CONTROL: the cap, not the hits, ended the grep page').toBeGreaterThan(libRead.OUTPUT_CAP - 4000);
+    expect(g.stdout.length, 'grep --project --json').toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+  }, HEAVY);
 });

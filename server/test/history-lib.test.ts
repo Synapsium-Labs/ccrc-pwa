@@ -47,6 +47,8 @@ import * as libGrep from '../../ccd/history/lib.mjs';
 import { randomBytes as libGrepRandom } from 'node:crypto';
 import { spawnSync as libGrepSpawn } from 'node:child_process';
 import * as libDescribe from '../../ccd/history/lib.mjs';
+import * as t16lib from '../../ccd/history/lib.mjs';
+import * as t16crypto from 'node:crypto';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LIB = join(REPO, 'ccd', 'history', 'lib.mjs');
@@ -5849,5 +5851,141 @@ describe('lib: describe\'s arguments (W1-B2 task 15)', () => {
     ]) {
       expect(libDescribe.parseDescribeArgs(bad), JSON.stringify(bad)).toEqual({ ok: false, reason: 'bad-args' });
     }
+  });
+});
+
+describe('lib: expand decisions (W1-B2 Task 16; spec §8.4 expand, §8.3 redaction before every cut)', () => {
+  const M = t16lib.REDACTED_MARK;
+  const SECRET = t16crypto.randomBytes(32).toString('hex');
+  const idx = t16lib.makePairIndex(t16lib.secretPairs([SECRET]).pairs);
+  const U = '11111111-1111-4111-8111-111111111111';
+  /** One surrogate pair, built from its code units so no escape is decoded in transit. */
+  const PAIR = String.fromCharCode(0xd83d, 0xde00);
+
+  it('charCost charges each code unit its longest escaped form, XML or JSON; textCost sums a range', () => {
+    expect([...`a&<>"\\\n\t\x01${String.fromCharCode(0xe9)}`].map((c) => t16lib.charCost(c.charCodeAt(0)))).toEqual([1, 5, 4, 4, 2, 2, 2, 2, 6, 1]);
+    expect(t16lib.charCost(0xd83d)).toBe(6);
+    expect(t16lib.textCost('a&b')).toBe(7);
+    expect(t16lib.textCost('xxa&b', 2)).toBe(7);
+    expect(t16lib.textCost('xxa&b', 2, 3)).toBe(1);
+  });
+
+  it('pageEnd stops before the budget is passed, always moves, and never splits a surrogate pair', () => {
+    expect(t16lib.pageEnd('abcdef', 0, 3)).toBe(3);
+    expect(t16lib.pageEnd('a&bc', 0, 5)).toBe(1);
+    expect(t16lib.pageEnd('&&&', 0, 1), 'a page always takes one character').toBe(1);
+    expect(t16lib.pageEnd(`ab${PAIR}cd`, 0, 8), 'the high half fits, the low half does not: back off the pair').toBe(2);
+    expect(t16lib.pageEnd(PAIR, 0, 1), 'a pair that alone passes the budget is taken whole').toBe(2);
+    expect(t16lib.pageEnd('abc', 3, 10)).toBe(3);
+  });
+
+  it('cutText takes at most maxChars and at most the budget, whole surrogate pairs only', () => {
+    expect(t16lib.cutText('abcdef', 4, 100)).toBe('abcd');
+    expect(t16lib.cutText('&&&&&', 10, 12)).toBe('&&');
+    expect(t16lib.cutText(`ab${PAIR}`, 3, 100)).toBe('ab');
+    expect(t16lib.cutText('', 4, 100)).toBe('');
+    expect(t16lib.PAGE_TEXT_BUDGET).toBe(t16lib.OUTPUT_CAP - 2000);
+    expect(2 * t16lib.CUT_TEXT_BUDGET, 'a cut item always fits an empty page').toBeLessThan(t16lib.PAGE_TEXT_BUDGET);
+    expect(t16lib.EXPAND_MIN_PARTIAL).toBeLessThan(t16lib.PAGE_TEXT_BUDGET);
+  });
+
+  it('expandTargetOf: a node id or prefix, an entry uuid or raw-row key, else bad', () => {
+    expect(t16lib.expandTargetOf('L0123ab')).toBe('node');
+    expect(t16lib.expandTargetOf(`N${'a'.repeat(20)}`)).toBe('node');
+    expect(t16lib.expandTargetOf(U)).toBe('entry');
+    expect(t16lib.expandTargetOf(`x${'0'.repeat(32)}`)).toBe('entry');
+    for (const s of ['L0123a', 'L0123AB', `L${'a'.repeat(21)}`, '../x', '', 'zz']) expect(t16lib.expandTargetOf(s), s).toBe('bad');
+  });
+
+  it('expandArgsOf takes Task 10\'s parsed whitelist answer: one target or --around, never both; a bare cursor resumes what it names', () => {
+    const parsed = (argv: string[]): { positional: readonly string[]; opts: Record<string, unknown> } => {
+      const r = t16lib.parseReadArgs('expand', argv) as { ok: boolean; positional?: readonly string[]; opts?: Record<string, unknown> };
+      expect(r.ok, `CONTROL: Task 10's whitelist admits ${argv.join(' ')}`).toBe(true);
+      return { positional: r.positional!, opts: r.opts! };
+    };
+    const D = t16lib.AROUND_DEFAULT;
+    expect(t16lib.expandArgsOf(parsed(['L0123ab']))).toEqual({ ok: true, args: { target: 'L0123ab', around: null, before: D, after: D, cursor: null } });
+    expect(t16lib.expandArgsOf(parsed(['--around', U, '--before', '2', '--after', '50', '--json'])))
+      .toEqual({ ok: true, args: { target: null, around: U, before: 2, after: 50, cursor: null } });
+    expect(t16lib.expandArgsOf(parsed(['--cursor', 'abc']))).toEqual({ ok: true, args: { target: null, around: null, before: D, after: D, cursor: 'abc' } });
+    for (const b of [['L0123ab', 'L0123ac'], ['L0123ab', '--around', U]]) expect(t16lib.expandArgsOf(parsed(b)), b.join(' ')).toEqual({ ok: false, reason: 'bad-args' });
+    expect(t16lib.expandResumeOf({ v: 1, resource: 'expand', t: 'L0123ab', i: 0, o: 0 })).toEqual({ target: 'L0123ab', around: null, before: D, after: D });
+    expect(t16lib.expandResumeOf({ v: 1, resource: 'expand', t: `around:${U}:2:7`, i: 0, o: 0 })).toEqual({ target: null, around: U, before: 2, after: 7 });
+    for (const c of [{ t: 'zz' }, { t: 7 }, {}, null]) expect(t16lib.expandResumeOf(c), JSON.stringify(c)).toBeNull();
+  });
+
+  it('entryScopeVerdict, expandCuts and decideExpandCursor', () => {
+    expect(t16lib.entryScopeVerdict({ found: false, inScope: false })).toBe('not-found');
+    expect(t16lib.entryScopeVerdict({ found: false, inScope: true })).toBe('not-found');
+    expect(t16lib.entryScopeVerdict({ found: true, inScope: false }), 'out of scope is never not-found').toBe('out-of-scope');
+    expect(t16lib.entryScopeVerdict({ found: true, inScope: true })).toBe('ok');
+    expect(t16lib.expandCuts({ whole: true, kind: 'sidecar', provenance: null })).toBe(false);
+    expect(t16lib.expandCuts({ whole: false, kind: 'sidecar', provenance: null })).toBe(true);
+    for (const [prov, cut] of [['tool', true], ['recall-echo', true], ['model', false], ['operator', false], ['harness', false]] as const) {
+      expect(t16lib.expandCuts({ whole: false, kind: 'entry', provenance: prov }), prov).toBe(cut);
+    }
+    expect(t16lib.decideExpandCursor({ cursor: null, key: 'K', total: 3 })).toEqual({ ok: true, i: 0, o: 0 });
+    expect(t16lib.decideExpandCursor({ cursor: { v: 1, resource: 'expand', t: 'K', i: 2, o: 10 }, key: 'K', total: 3 })).toEqual({ ok: true, i: 2, o: 10 });
+    for (const c of [{ t: 'J', i: 0, o: 0 }, { t: 'K', i: 3, o: 0 }, { t: 'K', i: 0, o: -1 }, { t: 'K', i: 1.5, o: 0 }, { t: 'K', i: '1', o: 0 }]) {
+      expect(t16lib.decideExpandCursor({ cursor: c, key: 'K', total: 3 }), JSON.stringify(c)).toEqual({ ok: false });
+    }
+  });
+
+  it('delegateHint answers above three times the cap only; expandBlobFits bounds one call\'s decompression at SIDECAR_WHOLE_MAX', () => {
+    expect(t16lib.delegateHint(t16lib.DELEGATE_FACTOR * t16lib.OUTPUT_CAP)).toBeNull();
+    expect(t16lib.delegateHint(t16lib.DELEGATE_FACTOR * t16lib.OUTPUT_CAP + 1), 'cli.mjs prefixes `hint: ` itself').toMatch(/^delegate: /);
+    expect(t16lib.expandBlobFits(0)).toBe(true);
+    expect(t16lib.expandBlobFits(t16lib.SIDECAR_WHOLE_MAX)).toBe(true);
+    expect(t16lib.expandBlobFits(t16lib.SIDECAR_WHOLE_MAX + 1)).toBe(false);
+  });
+
+  it('toolUseInputPath tells "this tool_use names no file" from "no paired tool_use here"', () => {
+    const content = [{ type: 'text', text: 'x' }, { type: 'tool_use', id: 't1', name: 'Read', input: { file_path: '/home/u/a.ts' } },
+      { type: 'tool_use', id: 't2', name: 'NotebookEdit', input: { notebook_path: '/home/u/n.ipynb' } },
+      { type: 'tool_use', id: 't3', name: 'Grep', input: { path: '/home/u/src' } }, { type: 'tool_use', id: 't4', name: 'Bash', input: { command: 'ls' } },
+      { type: 'tool_use', id: 't5', name: 'Odd', input: null }];
+    expect(t16lib.toolUseInputPath(content, 't1')).toEqual({ found: true, path: '/home/u/a.ts' });
+    expect(t16lib.toolUseInputPath(content, 't2')).toEqual({ found: true, path: '/home/u/n.ipynb' });
+    expect(t16lib.toolUseInputPath(content, 't3')).toEqual({ found: true, path: '/home/u/src' });
+    expect(t16lib.toolUseInputPath(content, 't4'), 'found, naming no file: the pairing walk stops here').toEqual({ found: true, path: null });
+    expect(t16lib.toolUseInputPath(content, 't5')).toEqual({ found: true, path: null });
+    expect(t16lib.toolUseInputPath(content, 'nope')).toEqual({ found: false });
+    expect(t16lib.toolUseInputPath('a string body', 't1')).toEqual({ found: false });
+  });
+
+  it('renderEntryText renders a row\'s raw text; its window through redactDisplayWindow masks a value in a leaf, behind an escape JSON glued on, and in a KEY (R38)', () => {
+    // SECRET is pair-only here (makePairIndex without belt units), so only the escape readings separate it from an
+    // escape letter JSON rendering glued on: the shape of review 316 F2, reached through a key on expand's path.
+    const show = (t: string): string => t16lib.redactDisplayWindow(`p ${t} q`, 2, 2 + t.length, idx);
+    const body = [
+      { type: 'text', text: `a\n${SECRET}` },
+      { type: 'tool_use', id: 't', name: 'Bash', input: { command: `echo\n${SECRET}`, n: 1 } },
+    ];
+    const raw = t16lib.renderEntryText(body);
+    expect(raw, 'the raw rendering: nothing is redacted here').toBe(`a\n${SECRET}\n[tool_use Bash] {"command":"echo\\n${SECRET}","n":1}`);
+    expect(show(raw), 'a deeper reading removed the glued value, so the window shows that reading, decoded')
+      .toBe(`a\n${M}\n[tool_use Bash] {"command":"echo\n${M}","n":1}`);
+    expect(show(t16lib.renderEntryText([{ type: 'tool_result', tool_use_id: 't', content: `out ${SECRET}` }]))).toBe(`out ${M}`);
+    expect(t16lib.renderEntryText([{ type: 'tool_result', tool_use_id: 't', content: [{ type: 'text', text: 'a' }, { type: 'image' }] }]))
+      .toBe('a\n[image]');
+    expect(show(t16lib.renderEntryText(`\x1b[32m${SECRET}\x1b[0m`)), 'a token behind an SGR code').toBe(`\x1b[32m${M}\x1b[0m`);
+    expect(show(t16lib.renderEntryText({ kind: 'attachment', value: SECRET }))).toBe(`{"kind":"attachment","value":"${M}"}`);
+    expect(t16lib.renderEntryText(null)).toBe('');
+    const keyed = t16lib.renderEntryText([{ type: 'tool_use', id: 'k', name: 'WebFetch', input: { headers: { [`\n${SECRET}`]: 'x', [`\t${SECRET}`]: 'y' } } }]);
+    expect(keyed, 'CONTROL: JSON glued the escape letter onto the key').toContain(`\\n${SECRET}`);
+    expect(t16lib.redactField(keyed, idx), 'CONTROL: one reading cannot separate it').toContain(SECRET);
+    expect(show(keyed)).toBe(`[tool_use WebFetch] {"headers":{"\n${M}":"x","\t${M}":"y"}}`);
+  });
+
+  it('exploreOutline explores the redacted window up to EXPLORE_READ_MAX and counts only past it', () => {
+    const code = ["import fs from 'node:fs';", `export const f = (k = '${SECRET}') => k;`, 'export function main() {}'].join('\n');
+    const o = t16lib.exploreOutline(code, 'code', 'a.ts', idx);
+    expect(o, 'CONTROL: the code explorer ran').toContain('Imports/dependencies (1)');
+    expect(o, 'CONTROL: the signature line holding the value is in the outline').toContain('export const f = (k =');
+    expect(o).not.toContain(SECRET.slice(0, 8));
+    const big = 'x\n'.repeat(t16lib.EXPLORE_READ_MAX);
+    expect(t16lib.exploreOutline(big, 'code', 'a.ts', idx)).toBe(['Structured summary:', `Characters: ${big.length.toLocaleString('en-US')}.`,
+      `Lines: ${(t16lib.EXPLORE_READ_MAX + 1).toLocaleString('en-US')}.`].join('\n'));
+    expect(t16lib.EXPLORE_READ_MAX, 'the outline bound is under the JSON one, so a JSON past it is counts only either way').toBeLessThanOrEqual(t16lib.EXPLORE_JSON_MAX);
   });
 });
