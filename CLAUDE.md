@@ -16,7 +16,7 @@ Everything here is public: code, test fixtures, docs, commit messages, branch na
 Sessions working in other projects often file ccrc issues and PRs about what they saw on a fleet. Describe the
 behaviour, not the deployment. Never include:
 - names of other projects, products, clients or programmes, or of workspaces built from them;
-- lane, account or login names (fixtures use neutral ones such as `lane-a`);
+- lane, account or login names (new test fixtures use neutral ones, such as `lane-a`);
 - hostnames, IP addresses, tailnet names, cloud volume IDs or absolute home paths;
 - other private repositories, or their branches, PR numbers or issue numbers;
 - links to private trackers, or their ticket IDs (refer to ccrc work by its GitHub `#n`);
