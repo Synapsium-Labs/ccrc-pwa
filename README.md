@@ -1782,7 +1782,11 @@ waits until both tiers answer; `stop` stops only what it proves is this lane's a
 leaves running. The runtime is an isolated LiteLLM venv under `~/.ccrc/runtime/codex/`, built by
 `ccrc install` when the roster has a `codex` lane (`ccgpt-runtime build`, which needs `python3` with `venv`;
 pip installs the `litellm[proxy]` range `ccgpt-runtime` pins, which can take minutes) and made current only
-after a behaviour probe passes; a failed build keeps the previous generation. Per-lane state lives in
+after a behaviour probe passes; a failed build keeps the previous generation. Each generation also carries
+ccrc's one patch to LiteLLM (`ccgpt-runtime patch-source` prints it): when Codex streams no delta events for a
+tool call or a reply, it hands the finished arguments or text on, so parallel tool calls keep their input. The
+probe is its acceptance test, and `ccgpt-runtime check` reads `mutated` for a generation that has lost it.
+Per-lane state lives in
 `~/.ccrc/codex/<id>/` — `lane.json`, `litellm.yaml` (re-rendered by `ccrc models litellm <id>`; it carries no
 `reasoning` keys because the shim owns effort) and `runtime.env`, which holds the gateway key — and logs in
 `~/.ccrc/logs/codex/<id>/`. The verbs need `jq` (and every one but `login` needs `node`) and are refused on a
