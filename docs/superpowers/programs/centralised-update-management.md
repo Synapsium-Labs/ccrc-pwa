@@ -1247,6 +1247,13 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         (claim 1155) edits `ccd/ccrc`. `server/test/macos-platform.test.ts` is free.
       - STATUS: fleet and server v0.0.148, newest v0.0.148, backups fleet 166M/server 633M, disk free fleet 219G/work
         volume 241G/server 33G, no anomalies.
+    - **2026-10-12 10:00 UTC: v0.0.149 auto-converged unattended.** No action was taken. It is #354, child
+      reclamation's wave 9 (the temp-root collector's server lane, shadowed), published at 07:29:38. The hourly checks
+      paused for about 16 hours while this session waited on an operator answer. The box token held, with doctor
+      reading `PASS … generation #3`. Wave 15 (run 300) is still held by the open PRs #351 (`ccd/ccd`) and #353
+      (`ccd/ccrc`).
+      - STATUS: fleet and server v0.0.149, newest v0.0.149, backups fleet 167M/server 635M, disk free fleet 217G/work
+        volume 224G/server 33G, no anomalies.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
