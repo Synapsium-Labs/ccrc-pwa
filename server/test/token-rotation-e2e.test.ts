@@ -1840,6 +1840,24 @@ describe('a retired presentation on a box-token lane owes one forward rotation, 
       expect(r4.driver.view()).toMatchObject({ rotationOwed: false });
     } finally { await r4.app.close(); }
   });
+
+  it('a stamp planted ahead of the clock is clamped to now: at most one rotation, then answered (4552, review 383 F2)', async () => {
+    const { r } = await idleAfterRetirement();
+    await r.app.close();
+    const driverNow = Date.now() + r.clock.offset + 1000;
+    // a stamp 10 h in the driver's future (a clock stepped back across a restart), no further presentation
+    await plantCounters(r, { previousPresented: 0, retiredPresented: 0, retiredPresentedAt: driverNow + 10 * 3_600_000 });
+    const r2 = await rig({ home: r.home, fleetHome: r.fleetHome });
+    try {
+      r2.clock.offset = r.clock.offset + 1000;
+      for (let i = 0; i < 36; i++) { await r2.driver.tick(); r2.clock.offset += 10 * 60_000; }   // 6 h of ticks
+      expect(r2.agent.calls, 'one rotation answers the clamped stamp, never one an hour').toBeLessThanOrEqual(1);
+      const s = await stateOf(r2);
+      expect(s.counters.retiredPresentedAt as number, 'the stored stamp was written down to the driver clock').toBeLessThan(driverNow + 10 * 60_000);
+      expect(s.lastRotationAt as number, 'answered: a rotation completed after the stamp').toBeGreaterThanOrEqual(s.counters.retiredPresentedAt as number);
+      expect(r2.driver.view()).toMatchObject({ rotationOwed: false });
+    } finally { await r2.app.close(); }
+  });
 });
 
 // ── D-4414 (review 352 F2, F3, F6): no path retires or drops a value without its durable digest, and no failure makes

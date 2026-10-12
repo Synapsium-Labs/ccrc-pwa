@@ -683,9 +683,17 @@ export class BoxTokenDriver implements TokenRouteDriver {
     }
     // 4552: the stamp is the driver's clock at the tick that first saw the latest retired presentation. It survives a
     // restart (the count does not), and a state written before 4552 with a count is unanswered, never clear.
+    // A stored stamp later than this clock (a clock stepped back across a restart) is written down to now: it stays
+    // unanswered until a rotation completes after it, is never cleared, and can no longer outlast the clock (review 383
+    // F2). Two edges keep "never cleared" true: an already-answered stamp (not after the last rotation) is left alone,
+    // and an unanswered one is not written down to or below the last rotation, which would read as answered.
     const known = 'retiredPresentedAt' in s.counters;
+    const stored = known ? (s.counters.retiredPresentedAt ?? null) : null;
+    const lastRot = s.lastRotationAt;
+    const clamped = stored === null || stored <= now || (lastRot !== null && stored <= lastRot) ? stored
+      : Math.max(now, lastRot === null ? now : lastRot + 1);
     const at = c.retired > this.retiredStampSeen ? now
-      : known ? (s.counters.retiredPresentedAt ?? null)
+      : known ? clamped
       : s.counters.retiredPresented > 0 ? now : null;   // 4552: a pre-4552 count is unanswered, never clear
     this.retiredStampSeen = c.retired;
     if (s.counters.previousPresented !== c.matched.previous || s.counters.retiredPresented !== c.retired
