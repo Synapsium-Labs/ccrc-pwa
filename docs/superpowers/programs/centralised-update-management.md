@@ -1284,6 +1284,46 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - Wave 15 (run 300) is now held by the open PR #351 (`ccd/ccd`) alone.
       - STATUS: fleet and server v0.0.153, newest v0.0.153, backups fleet 170M/server 645M, disk free fleet 217G/work
         volume 245G/server 33G, no anomalies.
+    - **2026-10-12 20:02 UTC: v0.0.155 converged, but the server did not move by auto. Someone moved it by hand after a
+      14-minute stall. A mechanism defect, for a wave.**
+      - **The releases:** v0.0.154 (#360) and v0.0.155 (#359), both docs-only, were published at 18:49:09 and 18:53:18.
+      - **The poller noticed v0.0.155 at 19:17:08.** That is within its design. It polls every 30 minutes, the server's
+        own restart at 18:47:07 reset the clock, and the notice landed 30:01 after the boot poll. v0.0.154 was never
+        announced, by design, because only the newest tag is. The fleet moved by auto at 19:17:20 to 19:19:22.
+      - **The server did not follow.** Its node row kept the 19:17:20 note "waiting-for-fleet — fleet's auto update to
+        v0.0.155 has not landed", although the fleet landed at 19:19:22. Twice earlier today the same gate released within a
+        minute of the fleet landing: at 14:41, and at 18:46 for the arming.
+      - **At 19:33:12 someone else started a transient unit by hand,** "server catch-up to v0.0.155 (fleet already there)".
+        The server's `update.json` reads `from: cli`, 19:33:13 to 19:33:35. Its health gate passed, and its doctor reads
+        25 passed, 0 warned, 0 failed. Both boxes read `box-token` PASS, and both now run v0.0.155.
+      - **The evidence, read-only:**
+        - The old server process logged nothing from 19:17:42 to its stop at 19:33:23. Its dead-coordinator sweep had
+          logged every 3 to 9 minutes until 19:11:52.
+        - In that window the only coordination writes were route calls: one mail posted and delivered inline, an ack,
+          and one run closed. No delivery shows the tick lane at work.
+        - The silence began 2 seconds after the fleet's own install restarted its agent, at 19:17:40.
+      - **The cause, from a four-agent read-only code reading:**
+        - The planner rebuilds from `coord.db` on every 60-second inventory run, so it should have released by about
+          19:20.
+        - So the old process most likely completed no inventory run after the agent restart: its inventory or tick lane
+          stopped silently.
+        - The code cannot settle which mechanism did it. The candidates are an inventory run that never finished (its
+          projection write has no deadline), a lease held by another row, or a silent acquire refusal.
+        - Without the hand action, the server would most likely have stayed on v0.0.153 until something restarted it.
+      - **To fix through a wave:**
+        1. **The refusal note never clears.** This is certain in the code. A server with no move keeps a stale
+           "waiting-for-fleet" sentence for good. Clear it, or replace it with the node's resolve detail.
+        2. **The inventory and dispatch lanes can stop silently.** Record when each last completed. Warn, and show it on
+           `GET /api/updates` and the console, when either is older than 3 intervals, or when an idle node with an
+           intended auto move stays unmoved past a bound.
+        3. **Bound the projection write** inside the inventory run with a deadline.
+        4. **Log each dispatch decision once per change.** The plane logged no decision from 18:48 to 19:33, which is
+           why this took a code reading to diagnose.
+        5. **Optional:** poll again a few minutes after a server boot, or poll faster while auto is on the dev channel.
+           The 30-minute cadence is by design, for the unauthenticated request budget.
+      - Wave 15 (run 300) is still held by the open PR #351 (`ccd/ccd`) alone.
+      - STATUS: fleet and server v0.0.155, newest v0.0.155, backups fleet 170M/server 649M, disk free fleet 215G/work
+        volume 241G/server 33G, no anomalies at 19:42.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
