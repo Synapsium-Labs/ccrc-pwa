@@ -24,7 +24,7 @@ time.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
-| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | run 322 `awaiting-review` at `451854d1d`; review 340 accepted; merge awaits the operator (R31) |
+| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merge approved by the operator; run 322 `working`, absorbing `main` (two prose conflicts) before it lands (R33) |
 
 ## Decisions & deviations
 
@@ -609,6 +609,29 @@ time.
     - (3) Arming stays the operator's.
   - Routed: a reply to `ccrc-pwa-calm-mesa`, and a report to the operator, who decides whether (1) and (2) open as
     a programme.
+- **R33 (2026-10-12 10:14)**, the operator approves the merge of PR #322, and wave 2 absorbs `main` first.
+  - The operator: "yes to 322 merge". They asked for this session's recommendation on the two wordings. The wordings
+    are still the operator's to decide; the recommendation is in the reply, and the answer will be recorded here.
+  - Re-measured before merging:
+    - PR #322's head is still `451854d1d`, and run 322 is still `awaiting-review`.
+    - `origin/main` has moved 30 commits to `28e8dc1b2`. Six files are touched on both sides, and `merge-tree` now
+      conflicts in two: `README.md`'s Settings paragraph and `SettingsScreen.tsx`'s header comment.
+    - Both conflicts are prose. Box-token lifecycle wave 1 part B (#341) added a Box token card to the same screen
+      and paragraph.
+    - The other four auto-merge, but `main` also carries box-token wave 1 part A's migration. So the suites must
+      re-run on the merge result, and nothing merges at `451854d1d`.
+  - Ruling: one absorb round (mail 4295).
+    - The worker merges `origin/main`, never rebasing. Its header comment names Updates, the Box token card,
+      Notifications and Stall watch. README keeps `main`'s card text verbatim, the push-bell wording and the Stall
+      watch sentence.
+    - The worker measures the migration slots and the citation counts at `origin/main` and on the merge result,
+      re-runs every suite, and changes nothing else.
+    - A short scoped review of the merge follows, then the merge with `--match-head-commit` at the new tip, under
+      the operator's approval.
+  - `README.md` is under workspace-lifecycle run 358's claim 1172 (`ccrc-pwa-plain-ridge`). Its edits sit at
+    ≈:3545 to ≈:3810, far from the Settings paragraph. Consent for the one-paragraph co-edit was asked of
+    `ccrc-pwa-quiet-river` (mail 4294), and the worker commits that hunk only after this session confirms it.
+  - Run 322 is back at `working` (fingerprint `451854d1d`).
 
 ## Carried constraints (reviewers get these)
 
