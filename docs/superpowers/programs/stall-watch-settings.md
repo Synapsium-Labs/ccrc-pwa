@@ -28,7 +28,7 @@ time.
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
 | 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merged `6e4524164` 2026-10-12; run 322 closed `done`, `final:true` (R37) |
-| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | review 402 accepted; fix round 2 (R43) with fix round 1's CI reds (R42) |
+| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | fix round 2 at `3a28932a7`, CI green; merge review run 403 dispatched (R44) |
 
 ## Decisions & deviations
 
@@ -935,6 +935,24 @@ time.
       positional.
     - Words: F5's event fallback, F7, D-4039's missing session-verdict and `turnStall` consequences, the M4 line's
       qualifier, plan :53 and :46-47. Task 1's snippet is not rewritten; a note says D-4041 supersedes it.
+
+- **R44 (2026-10-12 23:10)**, fix round 2 is verified, and its merge review is dispatched.
+  - 22:32, mail 4422: the worker paused its 57-file re-gate at 16 files. The fleet box had about 4-6 GiB available
+    at load 100-141, and Claude Code's memory reaper had stopped a run.
+  - Ruling (mail 4424): push, and let PR CI gate every file it runs, since CI runs on a quiet box. Run locally,
+    alone, only a list file CI did not select, and only with 8 GiB or more available; otherwise name it unrun.
+    - Why: the box went out of memory at 15:48Z, and CI is the arbiter for a file it ran.
+    - Cost if wrong: a file CI skipped stays unmeasured until the reviewer or the daily full run reaches it.
+  - Wave-done, mail 4430: tip = PR #362's head = `3a28932a7`, `merge-tree` clean against `main` `2d1835188`.
+    - Done: every item of 4414 and of 4416 (A-H). An in-round independent review's F1-F6 are all addressed.
+    - Mutation rows: N3 removed; N1 re-measured at 2 failed with the real `'waitingx'` case; S11 new (4 of 6
+      ask-instance-guard cases).
+    - CI run 38317359692 passed every required leg (502 server files) and ran 53 of the 57; `ask-route` passed
+      locally. `compact-card`, `divergence` and `transcript-parse` are unrun (memory).
+    - The citation instrument, both `tsc` and `bash -n` are clean.
+  - Re-measured, and the server accepted the fingerprint: run 394 `awaiting-review`.
+  - Review run 403 dispatched 23:09:50 to `ccrc-pwa-swift-mesa`, scoped to `24e4eebc6..3a28932a7` (seven commits,
+    seven files), with local suites gated on free memory; brief `.superpowers/sdd/stall-watch-settings/w3-fr2-review-brief.md`.
 
 ## Carried constraints (reviewers get these)
 
