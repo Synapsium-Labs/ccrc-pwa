@@ -26,6 +26,7 @@
 //   extraMigrations    SQL appended to MIGRATIONS as v2, v3, ... (the migration seam, DM42/DM43)
 //   heavy              the versions among those that SCHEMA_ADDED marks heavy
 //   managedSettings    the managed-settings list the census reads instead of /etc (Task 26)
+//   budgetMs, budgetBytes, chunkBytes  the run budget's limits, handed to sweep.mjs as deps.budget (W1-B2 Task 25)
 // argv after the script is runPass's argv, exactly as the shim would pass it.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -97,6 +98,12 @@ if (spec.throwTimesAtStart !== undefined) {
     return real.apply(this, args);
   };
   syncBuiltinESMExports();
+}
+// W1-B2 Task 25: budgetMs, budgetBytes, chunkBytes — the run budget's limits (B1's newBudget maxMs, maxBytes
+// and chunkBytes), so a test can build a recovery larger than one pass. sweep.mjs's passCtx reads them as
+// deps.budget, an injected dependency (slug history-test-seams-not-env); an absent field keeps lib's default.
+if (spec.budgetMs !== undefined || spec.budgetBytes !== undefined || spec.chunkBytes !== undefined) {
+  deps.budget = { maxMs: spec.budgetMs, maxBytes: spec.budgetBytes, chunkBytes: spec.chunkBytes };
 }
 const code = await runPass(process.argv.slice(2), deps);
 // An explicit exit, never a drained loop: an unsettled statfs (the 'hang' seam) pins a libuv thread.

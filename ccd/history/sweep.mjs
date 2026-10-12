@@ -58,6 +58,8 @@ import {
   HARNESS_TABLE, exportDates, exportHorizonDays, planExport, retentionLowered, parseJournalRecord,
   decideRecallOff, recallOffPath, decideReparse, REPARSE_MAX_TARGETS, planCopy, STORE_DB_REL,
   diffForeignKeys, ftsTablesHealthy, FTS_REBUILD_STEP, decideCounterResets, decideIntegrity,
+  RECOVER_PHASES, formatRecoverCursor, parseRecoverCursor, orderJournalFiles, indexRecord, replayStep, nextUnmovedTicks, HEALTH_META,
+  mergeJournalByTime,
 } from './lib.mjs';
 import {
   MIGRATIONS, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
@@ -1957,6 +1959,789 @@ export function discoverAndPlan(db, c, uuids) {
   return planned;
 }
 
+// ── The recovery step (spec §9.14 "Recovery: one step for --restore and --rebuild"; §9.2; W1-B2) ──────────────
+//
+// `doctor --restore` and `doctor --rebuild` register ONE derivation step, ('recover', <bind ms>), inside the store
+// before it is linked (store.mjs; slug history-binding-facts-before-link).
+//
+// While that step is registered, and once the store is at this build's version (planRun decides the migration
+// first, §6.11), a scheduled pass runs (recoverPass's doc comment is the authority for the order):
+//   1. the outbox;
+//   2. the migration verdict;
+//   3. the secrets, with the pass's belt;
+//   4. the FTS probe (ftsPrepare);
+//   5. the phrase re-index and the hash re-derivation, in one slice of the run budget (reindexForValues,
+//      rederiveFts);
+//   6. this step, within the run budget;
+//   7. meta recover_unmoved_ticks and a ticks row;
+//   8. the journal half (D-4224).
+// The drain and the ingest wait, and no ingest cursor moves, so replayed epochs keep their order before new ones.
+// Every writing --op form but restore and rebuild is refused `recovering` meanwhile, by lib's decideOpGate as Task
+// 19's runOpPass measures it (RB6; D-4698 (history-ops-refused-while-recovering)), so no operator verb moves a cursor
+// either. Three exemptions move none: W2's recall-off (RB12), migrate on a store not yet at this build's version,
+// which the step waits for (RB13), and adopt on an unbound store, which no pass opens until it is bound (RB14). A dry
+// run and a read verb still answer.
+//
+// The step walks the phases lib's RECOVER_PHASES names, each run by RECOVER_EXECUTORS:
+//   index    Reads every journal file of this store, in lib orderJournalFiles' order. Each `redact` record goes
+//            into redact_hashes, before any blob is replayed or indexed (D-4241). A restore has already
+//            put every one of them into its copy before the link (journalRedactPairs, store.mjs's commitRestore;
+//            spec §8.4 and §9.14) and started the cursor `+pairs` when that added any, so
+//            here they insert nothing and the reindex phase still runs. Each
+//            drain-time verdict goes into a scratch table by event_key, and each `drained` record by file
+//            (D-4725 (history-recovery-scratch-tables)).
+//   apply    Reads the same records again through lib replayStep (D-4699 (history-recovery-replay)):
+//            - a receipt is applied with its drain-time verdicts, at the spool record's own position;
+//            - a verdict with no event_key is applied at its own position;
+//            - a spool record of a file with no `drained` record is skipped (D-4230),
+//              and counted journal_spool_undrained_gone only when B1 keeps its file nowhere: not in .draining/,
+//              .draining/rejected/ (D-4346) or .draining/planted/<area>/
+//              (D-4347); a set-aside file is kept (D-4728 (history-replay-keeps-set-aside-files)).
+//            It never reads $REG and writes no journal record.
+//   reindex  W1-B2 Task 29's FTS re-derivation, for pairs the index pass added. A no-op until then.
+// W1-B4 inserts its export phases between apply and reindex, in RECOVER_PHASES and here (D-4700 (history-b4-after-b2)).
+//
+// THE CURSOR is lib's RecoverCursor, kept in derivation_state.cursor. It advances in the SAME transaction as the
+// records it covers, so a kill never re-applies or skips a chunk (DI4). Within a phase it names the first file of the
+// current replay group and a position in it:
+//   - for a group of one file, a byte offset;
+//   - for a merge group of several (two writers whose files overlap in time, against §6.9's rule), the ordinal of
+//     the next record in their time-merged order.
+// A chunk stops only before a record that is not a `spool` record, so a file's spool records never part from their
+// `file` record across two passes.
+//
+// Before every chunk, the step checks the run budget, history-off and the free-space floor (§9.3):
+//   - low disk pauses the step and counts capture_paused_low_disk, never recovery-stalled;
+//   - a chunk that throws rolls back, counts recover_chunk_failed and ends the step for this pass with its cursor
+//     unmoved, and so does a stored cursor lib's grammar refuses (never a silent restart);
+//   - so does a journal file the step cannot read (EACCES, EIO) and a spool answer it cannot measure: recovery never
+//     completes past journal data it could not read (D-4592 (history-recover-unreadable-journal-fails-the-chunk));
+//   - an executor that answers neither a moved cursor nor a finished phase ends the step for this pass too.
+//   A step that cannot progress reaches doctor's recovery-stalled through meta recover_unmoved_ticks
+//   (D-4727 (history-recovery-chunk-failure-counted)).
+
+const RECOVER_ROW_SQL = "SELECT version, cursor FROM derivation_state WHERE step = 'recover' AND completed_ms IS NULL ORDER BY version DESC LIMIT 1";
+const RECOVER_CURSOR_SQL = "UPDATE derivation_state SET cursor = ? WHERE step = 'recover' AND version = ?";
+const RECOVER_DONE_SQL = "UPDATE derivation_state SET cursor = ?, completed_ms = ? WHERE step = 'recover' AND completed_ms IS NULL AND version <= ?";
+/** The index pass's results, which must survive the several passes a large replay spans; schema v1 has no table for
+ *  them. Made by the step and dropped when it completes, as the FTS tables are made by derivation: never part of a
+ *  schema version (D-4725 (history-recovery-scratch-tables)). A duplicate verdict line (an outbox appended twice after a
+ *  crash, §9.14) is indexed once. */
+const RECOVER_SCRATCH_DDL = Object.freeze([
+  'CREATE TABLE IF NOT EXISTS recover_verdicts (seq INTEGER PRIMARY KEY, event_key TEXT NOT NULL, rec TEXT NOT NULL, UNIQUE (event_key, rec))',
+  'CREATE TABLE IF NOT EXISTS recover_drained (file TEXT PRIMARY KEY)',
+]);
+const RECOVER_SCRATCH_TABLES = Object.freeze(['recover_verdicts', 'recover_drained']);
+const RECOVER_VERDICT_INSERT = 'INSERT INTO recover_verdicts (event_key, rec) VALUES (?, ?) ON CONFLICT (event_key, rec) DO NOTHING';
+const RECOVER_VERDICTS_AT = 'SELECT rec FROM recover_verdicts WHERE event_key = ? ORDER BY seq';
+const RECOVER_DRAINED_INSERT = 'INSERT INTO recover_drained (file) VALUES (?) ON CONFLICT (file) DO NOTHING';
+const RECOVER_DRAINED_HAS = 'SELECT 1 AS x FROM recover_drained WHERE file = ?';
+const RECOVER_REDACT_INSERT = 'INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, ?) ON CONFLICT (len, sha256) DO NOTHING';
+const RECOVER_RECEIPT_INSERT = 'INSERT INTO spool_receipts (event_key, payload_sha, received_ms, ts_ms, ts_source) VALUES (?, ?, ?, ?, ?) ON CONFLICT (event_key) DO NOTHING';
+const RECOVER_TICK_INSERT = 'INSERT INTO ticks (ts_ms, lag_ms, bytes, files_behind, bytes_behind) VALUES (?, ?, 0, 0, 0)';
+/** One read of a journal file while replaying it. */
+const RECOVER_READ = 1 << 20;
+/** journal/<store_id>/<YYYY-MM>.<writer>.jsonl, B1's month files: never the dot-named temps a month file is linked
+ *  from (B1 Task 15). The month is 01-12, as lib's cursor grammar reads it, so a listed file can always be a cursor's
+ *  file. */
+const JOURNAL_NAME_RE = /^([0-9]{4}-(?:0[1-9]|1[0-2]))\.([0-9a-f]{8})\.jsonl$/;
+const JOURNAL_HEAD_PROBE = 4096;
+/** The phases that read the journal: while a listed file is unreadable they fail (D-4592). */
+const JOURNAL_PHASES = Object.freeze(['index', 'apply']);
+const JOURNAL_TAIL_PROBE = 64 * 1024;
+/** The observation replay decides a verdict-less epoch line with: nothing read from $REG, ever (§9.14). Under it,
+ *  decideEpochLine confirms only a line whose own `reg` names its sid. */
+const NO_OBSERVATION = Object.freeze({
+  v: 1,
+  observedMs: 0,
+  uuid: Object.freeze({ state: 'absent' }),
+  generation: Object.freeze({ state: 'absent' }),
+  project: Object.freeze({ state: 'absent' }),
+  workdir: Object.freeze({ state: 'absent' }),
+  journaled: null,
+  heldMatches: Object.freeze({}),
+});
+
+/** Whether a restore or a rebuild registered a recovery step that has not completed: planRun's `recovering` input. */
+export function isRecovering(db) {
+  return db.prepare(RECOVER_ROW_SQL).get() !== undefined;
+}
+
+/** A journal file's ends, measured as Task 7's planReplay measures a file (which the executor must agree with). Three
+ *  answers besides the ends, never folded into one null (D-4592 (history-recover-unreadable-journal-fails-the-chunk);
+ *  the "no overloaded null at a seam" rule): recovery never completes past journal data it could not read.
+ *  - `{ kind: 'ends', headT, headStore, lastT }`:
+ *    - `headT` and `headStore` from a first line that is a `head` record, both null when it is not one. Such a file is
+ *      kept and sorts last in its month, alone, as planReplay keeps it;
+ *    - `lastT`, the latest record time in the last JOURNAL_TAIL_PROBE bytes (the head's own time included). B1's
+ *      writer appends in time order, so the tail holds the file's latest record.
+ *  - `{ kind: 'gone' }`: the name vanished between the listing and the open (ENOENT). It is listed nowhere.
+ *  - `{ kind: 'foreign' }`: the name is a link (O_NOFOLLOW meets it: ELOOP) or no regular file, which no writer in the
+ *    tree makes. It is never replayed, and counted journal_head_mismatch with the files whose head names another store.
+ *  - `{ kind: 'unreadable' }`: any other open or read error (EACCES, EIO, ...). The file may hold journal data, so the
+ *    step fails its chunk and a later tick retries it. */
+function journalEnds(path) {
+  let fd;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return { kind: 'gone' };
+    if (e && e.code === 'ELOOP') return { kind: 'foreign' };
+    return { kind: 'unreadable' };
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) return { kind: 'foreign' };
+    if (st.size === 0) return { kind: 'ends', headT: null, headStore: null, lastT: null };
+    const headBuf = Buffer.alloc(Math.min(JOURNAL_HEAD_PROBE, st.size));
+    readSync(fd, headBuf, 0, headBuf.length, 0);
+    const nl = headBuf.indexOf(0x0a);
+    const first = parseJournalRecord(headBuf.toString('utf8', 0, nl === -1 ? headBuf.length : nl));
+    const head = first.kind === 'record' && first.rec.k === 'head' ? first.rec : null;
+    const tailLen = Math.min(JOURNAL_TAIL_PROBE, st.size);
+    const tailBuf = Buffer.alloc(tailLen);
+    readSync(fd, tailBuf, 0, tailLen, st.size - tailLen);
+    let lastT = head === null ? null : head.t;
+    for (const line of tailBuf.toString('utf8').split('\n')) {
+      if (line === '') continue;
+      const p = parseJournalRecord(line);
+      if (p.kind === 'record') lastT = lastT === null ? p.rec.t : Math.max(lastT, p.rec.t);
+    }
+    return { kind: 'ends', headT: head === null ? null : head.t, headStore: head === null ? null : head.store_id, lastT };
+  } catch (e) {
+    return e && e.code === 'ENOENT' ? { kind: 'gone' } : { kind: 'unreadable' };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** This store's journal files, measured for lib orderJournalFiles, in three lists:
+ *  - `files`: the listed files. A file with no head is kept;
+ *  - `foreign`: a file whose head names another store, or a name that is a link or no regular file. Never replayed, and
+ *    counted journal_head_mismatch once when the index phase ends, as planReplay drops and counts it;
+ *  - `unreadable`: a file that could not be opened or read (D-4592): it is no other store's file, and its data is not
+ *    known, so recoveryStep fails its journal chunks while one stands.
+ *  A name that vanished (ENOENT) is in none. */
+function journalListing(P, storeId) {
+  const dir = `${P.journalDir}/${storeId}`;
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return { dir, files: [], foreign: [], unreadable: [] };
+    throw e;
+  }
+  const files = [];
+  const foreign = [];
+  const unreadable = [];
+  for (const name of names.sort()) {
+    const m = JOURNAL_NAME_RE.exec(name);
+    if (m === null) continue;
+    const ends = journalEnds(`${dir}/${name}`);
+    if (ends.kind === 'gone') continue;
+    if (ends.kind === 'unreadable') {
+      unreadable.push(name);
+      continue;
+    }
+    if (ends.kind === 'foreign' || (ends.headStore !== null && ends.headStore !== storeId)) {
+      foreign.push(name);
+      continue;
+    }
+    files.push({ name, month: m[1], writer: m[2], headT: ends.headT, lastT: ends.lastT });
+  }
+  return { dir, files, foreign, unreadable };
+}
+
+/** A journal file's lines from byte `start`, each with the offset just past it (`next`) and its size with its
+ *  newline. A last fragment with no newline (a torn tail, §9.14) is a line too, ending at end-of-file. When the next
+ *  append adds the newline B1's writer puts before it, a resumed read starts at that newline and meets an empty
+ *  line, which every caller skips. */
+function* fileLines(path, start) {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const size = fstatSync(fd).size;
+    let pos = start;
+    let carry = Buffer.alloc(0);
+    let carryAt = start;
+    while (pos < size) {
+      const want = Math.min(RECOVER_READ, size - pos);
+      const piece = Buffer.allocUnsafe(want);
+      const n = readSync(fd, piece, 0, want, pos);
+      if (n <= 0) break;
+      pos += n;
+      const buf = carry.length === 0 ? piece.subarray(0, n) : Buffer.concat([carry, piece.subarray(0, n)]);
+      let from = 0;
+      for (let i = buf.indexOf(0x0a); i !== -1; i = buf.indexOf(0x0a, from)) {
+        yield { raw: buf.toString('utf8', from, i), next: carryAt + i + 1, bytes: i + 1 - from };
+        from = i + 1;
+      }
+      carry = Buffer.from(buf.subarray(from));
+      carryAt += from;
+    }
+    if (carry.length > 0) yield { raw: carry.toString('utf8'), next: carryAt + carry.length, bytes: carry.length };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Every `redact` record of this store's journal, read whole BEFORE a restore links its copy
+ *  (spec §8.4 and §9.14). W1-B2 Task 27's restore hands `pairs` to store.mjs's commitRestore,
+ *  which inserts them into the staged copy's redact_hashes inside its FULL bind transaction, so no read verb ever
+ *  serves a restored store without a pair this journal knows: the index phase's "redaction first" (D-4241) then holds
+ *  from the moment the store is visible, not from the moment the phase reaches the record. The files are the index
+ *  phase's own (journalListing, in name order): the pairs are exactly what that phase could learn. `skipped` names
+ *  every file it did not read, a foreign head or a name that is no regular file, a name it cannot open or read
+ *  (journalListing's `unreadable`), and any listed file whose read failed part-way; never skipped silently. A pair is a few dozen bytes and redact records are
+ *  rare, so the answer is small; the read is one pass over the journal, under the restore's lock. */
+export function journalRedactPairs(P, storeId) {
+  const listing = journalListing(P, storeId);
+  const pairs = [];
+  const skipped = [...listing.foreign, ...listing.unreadable];
+  for (const f of listing.files) {
+    const found = [];
+    try {
+      for (const { raw } of fileLines(`${listing.dir}/${f.name}`, 0)) {
+        if (raw === '') continue;
+        const x = indexRecord(parseJournalRecord(raw));
+        if (x.redact !== undefined) found.push(x.redact);
+      }
+    } catch {
+      skipped.push(f.name);
+    }
+    pairs.push(...found);   // a file read part-way still yields the pairs it gave: a pair can only mask more
+  }
+  return { pairs, skipped };
+}
+
+/** One replay group's lines from position `at`.
+ *  - A group of one file is read by byte offset.
+ *  - A merge group is read whole and merged by lib's mergeJournalByTime, the very function Task 7's planReplay merges it
+ *    with (R-T25-1), so the executor applies the order O56 pins: each file's own order kept, the earliest record next, a
+ *    tie to the earlier file in the group. A line that is not a record takes the latest record time before it in its
+ *    own file, as planReplay times it; an empty line is skipped, as planReplay skips it. The merged list is cached for
+ *    the pass, and a position is an ordinal into it. */
+function* groupLines(run, group, at) {
+  if (group.length === 1) {
+    yield* fileLines(`${run.dir}/${group[0]}`, at);
+    return;
+  }
+  let merged = run.merged.get(group[0]);
+  if (merged === undefined) {
+    merged = mergeJournalByTime(group.map((name) => {
+      const items = [];
+      let lastT = null;
+      for (const { raw } of fileLines(`${run.dir}/${name}`, 0)) {
+        if (raw === '') continue;
+        const r = parseJournalRecord(raw);
+        const t = r.kind === 'record' ? r.rec.t : (lastT ?? 0);
+        if (r.kind === 'record') lastT = lastT === null ? t : Math.max(lastT, t);
+        items.push({ raw, t });
+      }
+      return items;
+    }));
+    run.merged.set(group[0], merged);
+  }
+  for (let i = at; i < merged.length; i += 1) {
+    yield { raw: merged[i].raw, next: i + 1, bytes: Buffer.byteLength(merged[i].raw) + 1 };
+  }
+}
+
+/** Where the cursor points in this pass's listing. A cursor naming a file this listing does not lead a group with
+ *  restarts the phase. Journal files are never removed, so only a group that changed shape since the last pass can
+ *  do that, and every record applies idempotently. */
+function locateGroup(groups, cursor) {
+  if (cursor.file === null) return { gi: 0, at: 0 };
+  const gi = groups.findIndex((g) => g[0] === cursor.file);
+  return gi === -1 ? { gi: 0, at: 0 } : { gi, at: cursor.offset };
+}
+
+/** One chunk of a journal phase. From the cursor's position, the records of ONE replay group are handed to
+ *  `onRecord` in order, in ONE transaction that also advances the cursor past them.
+ *  - The chunk takes at least one line.
+ *  - Once budget.chunkBytes of journal are read, it stops before the next line that is not a `spool` record.
+ *  - Empty lines (the fence a torn tail leaves) are skipped uncounted.
+ *  It answers the cursor it committed, whether that moved, and whether the phase has no record left. */
+function journalChunk(db, run, cursor, onRecord) {
+  const { gi, at } = locateGroup(run.groups, cursor);
+  if (gi >= run.groups.length) return { cursor, moved: false, phaseDone: true };
+  const group = run.groups[gi];
+  let bytes = 0;
+  let pos = at;
+  let ended = true;
+  const next = withTx(db, 'NORMAL', () => {
+    for (const line of groupLines(run, group, at)) {
+      const r = line.raw === '' ? null : parseJournalRecord(line.raw);
+      if (bytes >= run.budget.chunkBytes && !(r !== null && r.kind === 'record' && r.rec.k === 'spool')) {
+        ended = false;
+        break;
+      }
+      if (r !== null) onRecord(r, line.raw);
+      bytes += line.bytes;
+      pos = line.next;
+    }
+    const c = ended && gi + 1 < run.groups.length
+      ? { ...cursor, file: run.groups[gi + 1][0], offset: 0, pairsAdded: run.pairsAdded }
+      : { ...cursor, file: group[0], offset: pos, pairsAdded: run.pairsAdded };
+    db.prepare(RECOVER_CURSOR_SQL).run(formatRecoverCursor(c), run.version);
+    return c;
+  });
+  run.budget.bytes += bytes;
+  return {
+    cursor: next,
+    moved: formatRecoverCursor(next) !== formatRecoverCursor(cursor),
+    phaseDone: ended && gi + 1 >= run.groups.length,
+  };
+}
+
+/** The index pass's one record: a learned pair into redact_hashes first (a pair the store lacked marks the cursor
+ *  `+pairs`, which Task 29's reindex phase reads); a drain-time verdict, by its event_key, and a `drained` record, by
+ *  its file, into the scratch tables. Skips are counted by the apply pass alone, so each is counted once. */
+function indexJournalRecord(db, run, r, raw) {
+  const x = indexRecord(r);
+  if (x.redact !== undefined) {
+    const changes = db.prepare(RECOVER_REDACT_INSERT).run(x.redact.len, Buffer.from(x.redact.sha256, 'hex'), x.redact.t).changes;
+    if (Number(changes) > 0) run.pairsAdded = true;
+  }
+  if (x.verdictKey !== undefined) db.prepare(RECOVER_VERDICT_INSERT).run(x.verdictKey, raw);
+  if (x.drainedFile !== undefined) db.prepare(RECOVER_DRAINED_INSERT).run(x.drainedFile);
+}
+
+/** The drain-time verdicts indexed under one event_key, in journal order. */
+function verdictsAt(db, key) {
+  return db.prepare(RECOVER_VERDICTS_AT).all(key).flatMap((row) => {
+    const p = parseJournalRecord(String(row.rec));
+    return p.kind === 'record' ? [p.rec] : [];
+  });
+}
+
+/** The apply pass's one record. replayStep (lib, L1) decides; this applies its actions. Before the step:
+ *  - a `file` record's name is looked up in the drained index;
+ *  - a `spool` record's verdicts are looked up by its event_key.
+ *  The replay state's maps then hold exactly what the step reads. A `head` starts a file, so no spool record
+ *  after it can borrow the previous file's name. */
+function applyJournalRecord(db, run, r) {
+  if (r.kind === 'record') {
+    const rec = r.rec;
+    if (rec.k === 'file' && db.prepare(RECOVER_DRAINED_HAS).get(rec.name) !== undefined) run.drained.add(rec.name);
+    if (rec.k === 'spool' && run.state.file !== null) {
+      const key = eventKey(run.state.file, rec.ord);
+      if (!run.verdicts.has(key)) run.verdicts.set(key, verdictsAt(db, key));
+    }
+  }
+  const step = replayStep(run.state, r);
+  run.state = { ...step.state, drained: run.drained, verdictsByKey: run.verdicts };
+  if (r.kind === 'record' && r.rec.k === 'head') run.state = { ...run.state, file: null };
+  for (const a of step.actions) applyReplayAction(db, run, a);
+}
+
+/** The observation a replayed recall or steer line is decided with: the generation its `generation-joined` verdict
+ *  named, else none. A line that carried its own gen joined it without a verdict (via 'line'). */
+function replayObservation(verdicts) {
+  const j = verdicts.find((v) => v.kind === 'generation-joined');
+  if (j === undefined) return NO_OBSERVATION;
+  const generation = j.via === 'registry' ? { state: 'value', value: j.generation }
+    : j.via === 'unreadable' ? { state: 'unreadable' } : { state: 'absent' };
+  return { ...NO_OBSERVATION, generation };
+}
+
+/** One verdict, applied by an idempotent upsert on its natural key (§9.14), so a record the restored backup already
+ *  holds changes nothing.
+ *  - A re-key is a merge, which a replayed `family(X, '')` lands in (ensureFamily follows merged_into;
+ *    D-4194).
+ *  - Counters fold only where the record proves the event happened, and only once:
+ *    - a join's counters only for an epoch line's own verdicts, which apply once, with the line's fresh receipt;
+ *    - a re-key only when it merged;
+ *    - a drop only when it removed a waiting candidate.
+ *    A verdict with no event_key (a later-tick join) has no key to prove it new, so its join is not counted again.
+ *  - `bind` and `drained` change nothing in the store. */
+function replayVerdict(db, v, countJoins) {
+  switch (v.kind) {
+    case 'family':
+      ensureFamily(db, v.ccrc_id, v.generation, v.project, v.first_seen_ms);
+      return;
+    case 'generation-joined':
+      if (countJoins && v.via === 'absent') bump(db, 'family_gen_absent');
+      if (countJoins && v.via === 'unreadable') bump(db, 'family_gen_unreadable');
+      return;
+    case 'rekeyed': {
+      const legacy = db.prepare("SELECT session_pk, project FROM sessions WHERE ccrc_id = ? AND generation = '' AND merged_into IS NULL")
+        .get(v.ccrc_id);
+      if (legacy === undefined) return;
+      const to = ensureFamily(db, v.ccrc_id, v.generation, legacy.project, v.t);
+      mergeFamily(db, legacy.session_pk, to.sessionPk);
+      bump(db, 'family_rekeyed');
+      return;
+    }
+    case 'epoch-confirmed': {
+      const f = ensureFamily(db, v.ccrc_id, v.generation, '', v.t);
+      chainEpoch(db, f.sessionPk, v.cc_session_uuid, v.cause, v.declared_by, v.t);
+      db.prepare(DELETE_CANDIDATE).run(v.cc_session_uuid, v.ccrc_id);
+      return;
+    }
+    case 'epoch-chained': {
+      const f = ensureFamily(db, v.ccrc_id, v.generation, '', v.t);
+      chainEpoch(db, f.sessionPk, v.cc_session_uuid, 'clear', 'hook', null);
+      return;
+    }
+    case 'epoch-unconfirmed':
+      if (Number(db.prepare(DELETE_CANDIDATE).run(v.cc_session_uuid, v.ccrc_id).changes) === 0) return;
+      bump(db, 'epoch_unconfirmed');
+      if (v.superseded === true) bump(db, 'epoch_unconfirmed_superseded');
+      return;
+    case 'mapping': {
+      const f = ensureFamily(db, v.ccrc_id, v.generation, '', v.t);
+      chainEpoch(db, f.sessionPk, v.cc_session_uuid, 'import', v.declared_by, v.t);
+      db.prepare(DELETE_CANDIDATE).run(v.cc_session_uuid, v.ccrc_id);
+      return;
+    }
+    default:
+      return;
+  }
+}
+
+/** A SessionStart line, replayed at its own position (§9.14; D-4190).
+ *  - With drain-time verdicts: each is applied in journal order. A clear that was chained but not confirmed
+ *    re-enters epoch_candidates as the drain left it, aged by its journal time, so the live tick goes on deciding
+ *    it within the same 7 days.
+ *  - With none: the drain either kept the line as a candidate, or found its epoch already in place. lib's
+ *    decideEpochLine, under an observation that read nothing, tells the candidate. A candidate whose uuid some
+ *    family already holds confirmed is the in-place case, and is not re-added. */
+function replayEpochLine(db, a, tsMs) {
+  const { rec } = a;
+  if (a.verdicts.length === 0) {
+    const line = rec.reg === undefined ? { src: rec.src, sid: rec.sid } : { src: rec.src, sid: rec.sid, reg: rec.reg };
+    if (decideEpochLine(line, NO_OBSERVATION).kind !== 'candidate') return;
+    if (db.prepare('SELECT 1 AS x FROM epochs WHERE cc_session_uuid = ? AND confirmed_ms IS NOT NULL LIMIT 1').get(rec.sid) !== undefined) return;
+    db.prepare(INSERT_CANDIDATE).run(rec.sid, rec.id, rec.gen ?? '', rec.src, tsMs, a.recvMs);
+    return;
+  }
+  let chained = null;
+  let confirmed = false;
+  for (const v of a.verdicts) {
+    replayVerdict(db, v, true);
+    if (v.kind === 'epoch-chained') chained = v;
+    if (v.kind === 'epoch-confirmed') confirmed = true;
+  }
+  if (chained !== null && !confirmed) db.prepare(INSERT_CANDIDATE).run(rec.sid, rec.id, chained.generation, 'clear', tsMs, a.recvMs);
+}
+
+/** One drained spool line's receipt, as drainFile writes it: event_key from the draining name and the ordinal,
+ *  received_ms the file's journaling time, ts_ms the line's ts else that time.
+ *  - payload_sha hashes the record's re-serialisation: the journal keeps the parsed object, and every writer in the
+ *    tree writes exactly that compact text (D-4726 (history-replay-receipt-sha-from-record)).
+ *  - A duplicate is a no-op, never a collision: the bytes a restored backup's receipt hashed are not in the journal.
+ *  - A fresh receipt's effects follow it: an epoch line through its verdicts; a recall or steer line through the
+ *    drain's own applyEventLine, with the generation its verdict named. `run.ectx.replay` is true, so applyEventLine
+ *    reads no switch whose state is today's, not the drain's: Task 11's recall_off_stale count is the drain's alone
+ *    (§9.14 "never re-decides"). */
+function replayReceipt(db, run, a) {
+  const fromLine = typeof a.rec.ts === 'number';
+  const tsMs = fromLine ? a.rec.ts : a.recvMs;
+  const fresh = Number(db.prepare(RECOVER_RECEIPT_INSERT)
+    .run(a.key, sha256Bytes(JSON.stringify(a.rec)), a.recvMs, tsMs, fromLine ? 'line' : 'received').changes) > 0;
+  if (!fresh) return;
+  if (a.rec.ev === 'SessionStart') {
+    replayEpochLine(db, a, tsMs);
+    return;
+  }
+  if (a.rec.ev === 'recall' || a.rec.ev === 'steer') {
+    applyEventLine(db, run.ectx, { key: a.key, rec: a.rec, recvMs: a.recvMs, tsMs, obs: replayObservation(a.verdicts) });
+  }
+}
+
+/** Whether `path` is there, by lstat. ENOENT is "not there"; any other error is "could not be measured" and is thrown,
+ *  never read as absence (D-4592 (history-recover-unreadable-journal-fails-the-chunk)): the apply chunk that meets it
+ *  fails, and a later tick measures again. */
+function spoolEntryThere(path) {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return false;
+    throw new Error(`the spool cannot be measured at ${path}: ${e && e.code ? e.code : String(e)}`);
+  }
+}
+
+/** Whether a journaled spool file with no `drained` record is still kept. In `.draining/` it was held, or drained by the
+ *  lost store before its verdicts were flushed, and the live drain decides it after the step. B1 also sets a journaled
+ *  file aside with no `drained` record, its bytes kept and its lines in no store: into `.draining/rejected/<name>` when
+ *  the store refused its rows (D-4346), and into `.draining/planted/<area>/<name>` when
+ *  a directory at its sidecar or sidecar-temp name displaced it (D-4347). Replay skips all three, as
+ *  the lost store held none of a set-aside file's lines; only a file kept in none of them is gone
+ *  (D-4728 (history-replay-keeps-set-aside-files)). It answers true or false only for a spool it could measure: an
+ *  lstat or a listing that fails for any reason but ENOENT throws, so the chunk fails and the file is never counted
+ *  gone on a guess (D-4592 (history-recover-unreadable-journal-fails-the-chunk)). */
+function undrainedFileKept(draining, name) {
+  if (spoolEntryThere(`${draining}/${name}`)) return true;
+  if (spoolEntryThere(`${draining}/${REJECTED_DIR}/${name}`)) return true;
+  let areas;
+  try {
+    areas = readdirSync(`${draining}/${PLANTED_DIR}`);
+  } catch (e) {
+    if (e && e.code === 'ENOENT') return false;
+    throw new Error(`the spool cannot be listed at ${draining}/${PLANTED_DIR}: ${e && e.code ? e.code : String(e)}`);
+  }
+  return areas.some((area) => spoolEntryThere(`${draining}/${PLANTED_DIR}/${area}/${name}`));
+}
+
+/** One replayStep action. A `tick` record is the lag series' copy. replayStep answers it only when it is newer than
+ *  the ticks the store held below the bind (ReplayState.ticksAfter) and older than the bind itself
+ *  (ReplayState.ticksBefore): a recovery pass journals its own tick record, whose row it already wrote
+ *  (D-4701 (history-replay-skips-post-bind-ticks)). lib decides that bound; this executor applies every tick it answers. */
+function applyReplayAction(db, run, a) {
+  switch (a.do) {
+    case 'receipt':
+      replayReceipt(db, run, a);
+      return;
+    case 'verdict':
+      replayVerdict(db, a.rec, false);
+      return;
+    case 'redact':
+      db.prepare(RECOVER_REDACT_INSERT).run(a.len, Buffer.from(a.sha256, 'hex'), a.t);
+      return;
+    case 'tick':
+      db.prepare(RECOVER_TICK_INSERT).run(a.t, a.lagMs);
+      return;
+    case 'skip':
+      bump(db, a.counter);
+      return;
+    case 'skip-undrained':
+      // Its file was held, or drained by the lost store before its verdicts were flushed: either way it is still in
+      // .draining/ with its sidecar, and the live drain decides it after the step. Or B1 set it aside after journaling
+      // it (undrainedFileKept). Counted only when it is gone.
+      if (typeof a.file !== 'string' || !undrainedFileKept(run.P.draining, a.file)) bump(db, 'journal_spool_undrained_gone');
+      return;
+    default:
+      return;   // 'file': the replay state carries it
+  }
+}
+
+/** index: the first pass. At the phase's start, any rows a killed earlier step left are cleared. */
+function recoverIndexChunk(db, run, cursor) {
+  if (cursor.file === null) {
+    withTx(db, 'NORMAL', () => { for (const t of RECOVER_SCRATCH_TABLES) db.exec(`DELETE FROM ${t}`); });
+  }
+  return journalChunk(db, run, cursor, (r, raw) => indexJournalRecord(db, run, r, raw));
+}
+
+/** apply: the second pass. The per-chunk lookups start empty, except the current file's drained flag, which a
+ *  spool record continuing that file still needs. */
+function recoverApplyChunk(db, run, cursor) {
+  run.verdicts.clear();
+  run.drained.clear();
+  const f = run.state.file;
+  if (f !== null && db.prepare(RECOVER_DRAINED_HAS).get(f) !== undefined) run.drained.add(f);
+  return journalChunk(db, run, cursor, (r) => applyJournalRecord(db, run, r));
+}
+
+/** reindex: W1-B2 Task 29 replaces this body with the FTS re-derivation the index pass's new pairs owe. */
+function recoverReindexChunk(_db, _run, cursor) {
+  return { cursor, moved: false, phaseDone: true };
+}
+
+/** One executor per RECOVER_PHASES phase, keyed by its name. The contract each keeps:
+ *  - it is `(db, run, cursor) => { cursor, moved, phaseDone }`, or a Promise of it, and does ONE bounded chunk;
+ *  - it commits its cursor, at its own phase, in the transaction that applies the chunk;
+ *  - `phaseDone` hands the move to the next phase to recoveryStep;
+ *  - `{ moved: false, phaseDone: false }` ends the step for this pass: recoveryStep calls it no more until the next
+ *    pass, which counts toward recovery-stalled.
+ *  W1-B4 adds its export phases here and to RECOVER_PHASES together; history-recover.test.ts holds the two equal. */
+export const RECOVER_EXECUTORS = Object.freeze({
+  index: recoverIndexChunk,
+  apply: recoverApplyChunk,
+  reindex: recoverReindexChunk,
+});
+
+/** The step's end, in one transaction:
+ *  - every open recover row up to this one is completed: a replay of the whole journal subsumes an older one;
+ *  - the scratch tables are dropped;
+ *  - the unmoved count is reset;
+ *  - B1's four spool counters are re-measured against this box's spool (Task 23's applyCounterResets and
+ *    measureSpoolStanding): a store-refused or displaced file still kept raises its count, and a cured one resets it. */
+function finishRecovery(db, run, cursor) {
+  withTx(db, 'NORMAL', () => {
+    db.prepare(RECOVER_DONE_SQL).run(formatRecoverCursor(cursor), run.now(), run.version);
+    for (const t of RECOVER_SCRATCH_TABLES) db.exec(`DROP TABLE IF EXISTS ${t}`);
+    setMeta(db, HEALTH_META.recoverUnmovedTicks, '0');
+    // D-4723 (history-counter-resets-after-cure): a restored or rebuilt store's spool counters are another moment's; this box's
+    // spool is the standing truth (Task 23's re-measure, inside the step's closing transaction).
+    applyCounterResets(db, measureSpoolStanding(run.ectx.home));
+  });
+}
+
+/** The registered recovery step, advanced chunk by chunk within `ctx.budget`.
+ *  - It answers `held` when history-off or the free-space floor stopped it before a chunk.
+ *  - It answers `moved` when any cursor advanced this pass, and `done` when the step completed.
+ *  - A chunk that throws rolls back and ends the pass's step, and so does a stored cursor lib's grammar refuses.
+ *    Busy rethrows, so the pass ends as a busy tick ends (O22).
+ *  - An executor answer that neither moved nor finished its phase ends the pass's step: the executor is not called
+ *    again until the next pass.
+ *  `executors` is an in-process seam (history-recover.test.ts); every caller in the tree passes none. */
+export async function recoveryStep(db, ctx, executors = RECOVER_EXECUTORS) {
+  const row = db.prepare(RECOVER_ROW_SQL).get();
+  if (row === undefined) return { moved: false, done: true, held: false };
+  // A NULL column is the step's start (lib parseRecoverCursor); a stored text lib refuses is never a guess at where
+  // to resume: restarting would read as progress on every pass and hide a stall from doctor.
+  const storedCursor = parseRecoverCursor(row.cursor === null ? null : String(row.cursor));
+  if (storedCursor === null) {
+    process.stderr.write(`history-sweep: the recovery cursor ${JSON.stringify(String(row.cursor))} does not parse; the step waits\n`);
+    countOutside(db, 'recover_chunk_failed');
+    return { moved: false, done: false, held: false };
+  }
+  for (const sql of RECOVER_SCRATCH_DDL) db.exec(sql);
+  const version = Number(row.version);
+  // A listing that fails (the journal directory cannot be read) is a failed journal chunk below, not a throw out of the pass
+  // and not an empty journal (D-4592).
+  let listing;
+  let listingError = null;
+  try {
+    listing = journalListing(ctx.paths, ctx.ids.storeId);
+  } catch (e) {
+    if (isBusy(e)) throw e;
+    listingError = e;
+    listing = { dir: `${ctx.paths.journalDir}/${ctx.ids.storeId}`, files: [], foreign: [], unreadable: [] };
+  }
+  const run = {
+    version,
+    P: ctx.paths,
+    storeId: ctx.ids.storeId,
+    budget: ctx.budget,
+    now: ctx.now,
+    dir: listing.dir,
+    groups: orderJournalFiles(listing.files),
+    foreign: listing.foreign,
+    merged: new Map(),
+    // replay: true: applyEventLine reads no switch whose state is today's (Task 11's recall_off_stale, §9.14).
+    // belt: the pass's substring belt (§8.3 layer 4), set by recoverPass from its secrets step; Task 29's reindex phase
+    // redacts node fields through it.
+    ectx: { home: ctx.home, paths: ctx.paths, ids: ctx.ids, now: ctx.now, homes: ctx.homes, out: ctx.out, deps: ctx.deps, replay: true, belt: ctx.belt ?? null },
+    pairsAdded: false,
+    drained: new Set(),
+    verdicts: new Map(),
+    state: null,
+  };
+  const ticksAfter = Number(db.prepare('SELECT COALESCE(MAX(ts_ms), 0) AS t FROM ticks WHERE ts_ms < ?').get(version).t);
+  // ticksBefore: the step's bind ms. replayStep answers no tick at or after it, so this executor bounds no tick itself.
+  run.state = { storeId: run.storeId, file: null, recvMs: 0, drained: run.drained, verdictsByKey: run.verdicts, ticksAfter, ticksBefore: version };
+  let cursor = storedCursor;
+  run.pairsAdded = cursor.pairsAdded;
+  const floorProbe = floorProbeFor(ctx.paths.dbDir, ctx.deps.statfs);
+  let moved = false;
+  for (;;) {
+    if (!budgetLeft(ctx.budget)) return { moved, done: false, held: false };
+    if (existsSync(ctx.paths.off)) return { moved, done: false, held: true };
+    const floor = await floorProbe();
+    if (floor !== 'ok') {
+      if (floor === 'low-disk') countOutside(db, 'capture_paused_low_disk');
+      return { moved, done: false, held: true };
+    }
+    try {
+      // D-4592 (history-recover-unreadable-journal-fails-the-chunk): a journal file the step could not read is data it
+      // never read. Its journal phases fail while one stands (the cursor unmoved, the step open), so a later tick retries
+      // it once it reads; they never run past it, and it is never counted journal_head_mismatch.
+      if (JOURNAL_PHASES.includes(cursor.phase)) {
+        if (listingError !== null) throw new Error(`the journal directory cannot be listed: ${listingError.code ?? String(listingError)}`);
+        if (listing.unreadable.length > 0) throw new Error(`a journal file cannot be read: ${listing.unreadable.join(', ')}`);
+      }
+      const exec = executors[cursor.phase];
+      if (exec === undefined) throw new Error(`the recovery cursor names a phase this build does not run: ${cursor.phase}`);
+      const r = await exec(db, run, cursor);
+      moved = moved || r.moved;
+      cursor = r.cursor;
+      if (!r.phaseDone) {
+        // Neither moved nor finished: calling it again this pass would spin out the budget on the write lock.
+        if (!r.moved) return { moved, done: false, held: false };
+        continue;
+      }
+      const at = RECOVER_PHASES.indexOf(cursor.phase);
+      if (at === RECOVER_PHASES.length - 1) {
+        finishRecovery(db, run, cursor);
+        return { moved: true, done: true, held: false };
+      }
+      const next = { phase: RECOVER_PHASES[at + 1], file: null, offset: 0, blobId: null, pairsAdded: run.pairsAdded };
+      withTx(db, 'NORMAL', () => {
+        if (at === 0 && run.foreign.length > 0) bump(db, 'journal_head_mismatch', run.foreign.length);
+        db.prepare(RECOVER_CURSOR_SQL).run(formatRecoverCursor(next), version);
+      });
+      cursor = next;
+      moved = true;
+    } catch (e) {
+      if (isBusy(e)) throw e;
+      process.stderr.write(`history-sweep: a recovery chunk failed and was rolled back: ${e && e.message ? e.message : String(e)}\n`);
+      countOutside(db, 'recover_chunk_failed');
+      return { moved, done: false, held: false };
+    }
+  }
+}
+
+/** A scheduled pass on planRun's `recover` arm (§9.2 "While a recovery step is registered"). It runs:
+ *  1. B1's tick prefix, items 1-6 of tick's doc comment, in that order: flushOutbox (a JournalError counted
+ *     journal_write_failed, as tick counts it), makeIngestCtx, secretsStep with its redact records (and the pass's
+ *     belt, kept on ctx for the step's executors), ftsPrepare, then reindexForValues and rederiveFts sharing one
+ *     rederiveSlice of the run budget. They run whatever phase the step is at, the reindex phase's open index rebuild
+ *     included: that rebuild deletes each blob's row before writing it, and an open generation cannot clear the
+ *     belt-due record it writes (W1-B2 Task 25's ruling). tick's beltNodesStep is not part of this prefix;
+ *  2. the step within the run budget. Below the free-space floor the step does not start, and
+ *     capture_paused_low_disk +1;
+ *  3. meta recover_unmoved_ticks (lib nextUnmovedTicks: reset by a move, kept by a hold, else one more);
+ *  4. a ticks row, its lag unmeasured;
+ *  5. the journal half.
+ *  The drain and the ingest never run here, so no ingest cursor moves. It exits 0, as a tick does: status and doctor
+ *  read the step's progress. */
+export async function recoverPass(db, ctx, failedAtStart) {
+  let busy = false;
+  try {
+    // B1's tick item 1: the outbox first, outside the run budget. With no writer token the rows wait in the DB.
+    if (ctx.ids !== null) {
+      try {
+        flushOutbox(db, ctx.home, ctx.ids, ctx.now());
+      } catch (e) {
+        if (!(e instanceof JournalError)) throw e;
+        countOutside(db, 'journal_write_failed');
+      }
+    }
+    const ictx = makeIngestCtx(ctx.home, ctx.homes, ctx.now(), ctx.ids, floorProbeFor(ctx.paths.dbDir, ctx.deps.statfs));
+    const secrets = secretsStep(db, ictx, ctx.parsed.secrets);
+    ictx.pairIdx = secrets.pairIdx;
+    ctx.belt = secrets.pairIdx.belt;   // §8.3 layer 4: recoveryStep hands it to its executors as run.ectx.belt (Task 29)
+    ictx.fts = ftsPrepare(db, ictx.nowMs).tables;
+    // B1's tick re-indexes within one slice shared by the phrase path and the hash re-derivation (review 344 F2); the
+    // recover arm does the same, under any pause and whatever phase the step is at (Task 25's ruling: the reindex
+    // phase's rebuild deletes each blob's row before it writes one). Both are async; un-awaited, the pass would close
+    // the writer under them.
+    const slice = rederiveSlice(ctx.budget);
+    await reindexForValues(db, ictx, secrets.values, secrets.newValues, ctx.budget, slice);
+    await rederiveFts(db, ictx, ctx.budget, slice);
+    let r = { moved: false, done: false, held: true };
+    if (ctx.pause === 'low-disk') bump(db, 'capture_paused_low_disk');
+    else r = await recoveryStep(db, ctx);
+    if (!r.done) {
+      const prev = Number(getMeta(db, HEALTH_META.recoverUnmovedTicks) ?? '0');
+      const n = nextUnmovedTicks({ prev: Number.isSafeInteger(prev) && prev >= 0 ? prev : 0, moved: r.moved, held: r.held });
+      withTx(db, 'NORMAL', () => { setMeta(db, HEALTH_META.recoverUnmovedTicks, String(n)); });
+    }
+    recordTick(db, ictx, null);
+  } catch (e) {
+    if (isBusy(e)) busy = true;
+    else {
+      if (!(e instanceof JournalError)) throw e;
+      countOutside(db, 'journal_write_failed');
+    }
+  }
+  if (busy) return EXIT.OK;
+  const unwritable = runJournalHalf(ctx.home, ctx.ids, ctx.now);
+  try {
+    if (unwritable) {
+      bump(db, 'journal_write_failed');
+      ctx.out('history-sweep: journal-unwritable');
+    }
+    setMeta(db, 'journal_unwritable', counterOf(db, 'journal_write_failed') > failedAtStart ? String(ctx.now()) : '');
+  } catch (e) {
+    if (!isBusy(e)) throw e;
+  }
+  return EXIT.OK;
+}
+
 /**
  * What one tick of a bound, open store carries. runPass builds it; tick and the steps below read it.
  * @typedef {object} TickCtx
@@ -2340,7 +3125,9 @@ export function passCtx(o) {
     rosterUnreadable: o.parsed.rosterUnreadable,
     pause: o.pause,
     ingest: o.ingest,
-    budget: newBudget(o.now),
+    // deps.budget is an in-process limit (maxMs, maxBytes, chunkBytes) for tests only; absent, lib's run budget applies
+    // (W1-B2 Task 25; slug history-test-seams-not-env).
+    budget: newBudget(o.now, o.deps.budget ?? {}),
   };
 }
 
@@ -2381,7 +3168,7 @@ export async function scheduledPass(parsed, deps, out) {
     });
     // D-4166 (history-cap-file): the cap is the operator file. capText (Task 14): an unreadable cap file is '' — malformed, so the default applies AND doctor WARNs (§9.3).
     const cap = capOf(capText(P.cap));
-    const run = planRun({ historyOff: false, store: { act: 'open' }, free, sizeBytes, capGb: cap.gb, migration, recovering: false });
+    const run = planRun({ historyOff: false, store: { act: 'open' }, free, sizeBytes, capGb: cap.gb, migration, recovering: isRecovering(db) });
     if (run.arm === 'migrate') {
       // §6.11: a pass that migrates does nothing else but the journal half; the drain resumes next tick
       // against a store at this build's version.
@@ -2391,6 +3178,16 @@ export async function scheduledPass(parsed, deps, out) {
       out('history-sweep: migrated');
       noteJournalHalf(db, unwritable, now, out);
       return EXIT.OK;
+    }
+    if (run.arm === 'recover') {
+      // W1-B2 Task 25 (§9.2 "While a recovery step is registered"; D-4224): a restore or a rebuild
+      // registered a recovery step, and the store is at this build's version (planRun decided the migration first).
+      // This pass runs B1's tick prefix (the outbox, the secrets, the FTS probe, the re-index and the hash re-derivation),
+      // then the step, a ticks row and the journal half, in recoverPass's doc comment's order; the drain and the ingest wait.
+      setMeta(db, 'migration', migration);
+      setMeta(db, 'capture_pause', run.pause ?? '');
+      fixModes(db, P);
+      return await recoverPass(db, passCtx({ home, P, ids, parsed, now, out, deps, pause: run.pause, ingest: false }), failedAtStart);
     }
     if (run.arm !== 'run') {
       // A migration refused for room or escalated as too long (§6.11): unlike at the cap the DRAIN stops

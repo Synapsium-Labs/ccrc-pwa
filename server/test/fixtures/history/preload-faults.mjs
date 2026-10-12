@@ -435,3 +435,26 @@ import { DatabaseSync as DatabaseSyncR23 } from 'node:sqlite';
     };
   }
 }
+
+// ── W1-B2 Task 25: a statement that throws (the recovery chunk's rollback; recovery-stalled) ─────────────────
+// HISTORY_TEST_THROW_SQL=<substring>: every prepared statement whose SQL contains <substring> throws, from run, get,
+//   all and iterate, an Error coded ERR_SQLITE_ERROR, instead of executing. Not a kill: the pass lives on, so what
+//   it does with a failed chunk (roll back, count recover_chunk_failed, keep its cursor) is observable.
+import { DatabaseSync as DatabaseSyncRcv } from 'node:sqlite';
+{
+  const throwSqlRcv = process.env.HISTORY_TEST_THROW_SQL ?? '';
+  if (throwSqlRcv !== '') {
+    const protoRcv = DatabaseSyncRcv.prototype;
+    const prepareRcv = protoRcv.prepare;
+    protoRcv.prepare = function prepareThrowRcv(sql) {
+      const st = prepareRcv.call(this, sql);
+      if (!String(sql).includes(throwSqlRcv)) return st;
+      for (const m of ['run', 'get', 'all', 'iterate']) {
+        st[m] = () => {
+          throw Object.assign(new Error(`preload-faults: injected failure in ${m} of ${throwSqlRcv}`), { code: 'ERR_SQLITE_ERROR' });
+        };
+      }
+      return st;
+    };
+  }
+}

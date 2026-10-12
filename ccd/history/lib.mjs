@@ -5190,19 +5190,22 @@ export function replayStep(state, r) {
   }
 }
 
-/** One merge group's records by record time, each file's own order kept, a tie to the earlier file in the group.
- *  A journal block (a `file` record and its `spool` records) shares one `t`, so a block is never split. */
-function mergeJournalByTime(files) {
+/** One merge group's items by their time `t`, each file's own order kept, a tie to the earlier file in the group.
+ *  `files` is one array of items per file, each item carrying a numeric `t`; the answer is the items themselves, merged.
+ *  A journal block (a `file` record and its `spool` records) shares one `t`, so a block is never split. The ONE merge
+ *  both planReplay (items `{ read, t }`) and sweep.mjs's recovery executor (items `{ raw, t }`, W1-B2 Task 25) use, so
+ *  the order O56 pins is the order the executor applies (R-T25-1). */
+export function mergeJournalByTime(files) {
   const pos = files.map(() => 0);
   const out = [];
   for (;;) {
     let pick = -1;
     for (let f = 0; f < files.length; f += 1) {
-      if (pos[f] >= files[f].recs.length) continue;
-      if (pick < 0 || files[f].recs[pos[f]].t < files[pick].recs[pos[pick]].t) pick = f;
+      if (pos[f] >= files[f].length) continue;
+      if (pick < 0 || files[f][pos[f]].t < files[pick][pos[pick]].t) pick = f;
     }
     if (pick < 0) return out;
-    out.push(files[pick].recs[pos[pick]].read);
+    out.push(files[pick][pos[pick]]);
     pos[pick] += 1;
   }
 }
@@ -5239,7 +5242,7 @@ export function planReplay({ storeId, files, ticksAfter, ticksBefore = null }) {
     kept.push({ name: f.name, month: f.month, writer: f.writer, headT, lastT, recs });
   }
   const byName = new Map(kept.map((f) => [f.name, f]));
-  const stream = orderJournalFiles(kept).flatMap((g) => mergeJournalByTime(g.map((n) => byName.get(n))));
+  const stream = orderJournalFiles(kept).flatMap((g) => mergeJournalByTime(g.map((n) => byName.get(n).recs)).map((x) => x.read));
   const redacts = [];
   const seenPairs = new Set();
   const seenVerdicts = new Set();

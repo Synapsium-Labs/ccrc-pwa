@@ -737,6 +737,7 @@ jobs:
           test/history-parser.test.ts
           test/history-recall.test.ts
           test/history-maint.test.ts
+          test/history-recover.test.ts
           test/measure-history.test.ts
           test/history-derive.test.ts
           EOF

@@ -663,6 +663,8 @@ export function planReplay(i: {
   storeId: string; files: readonly { name: string; month: string; writer: string; lines: readonly string[] }[]; ticksAfter: number;
   ticksBefore?: number | null;
 }): ReplayAction[];
+/** One merge group's items merged by `t`: each file's own order kept, a tie to the earlier file (planReplay and sweep.mjs's recovery executor share it; W1-B2 Task 25, R-T25-1). */
+export function mergeJournalByTime<T extends { t: number }>(files: readonly (readonly T[])[]): T[];
 export function nextUnmovedTicks(i: { prev: number; moved: boolean; held: boolean }): number;
 export interface FkRow { table: string | null; rowid: number | null; parent: string | null; fkid: number | null }
 export function diffForeignKeys(baseline: readonly FkRow[], current: readonly FkRow[]): { newViolations: FkRow[]; preExisting: number };

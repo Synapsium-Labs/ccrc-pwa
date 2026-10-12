@@ -28,6 +28,7 @@ import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { parseRoster } from '../../shared/roster.js';
 import { historyPaths } from '../../ccd/history/lib.mjs';
+import { createStore } from '../../ccd/history/store.mjs';
 
 export const REPO = path.resolve(__dirname, '..', '..');
 export const SWEEP = path.join(REPO, 'ccd', 'history', 'sweep.mjs');
@@ -250,6 +251,12 @@ export interface DriverDeps {
   /** The word an --op pass's store open answers instead of opening (FU4 M28), handed to sweep.mjs as deps.openStore. */
   openStoreWord?: string;
   extraMigrations?: string[]; heavy?: number[]; managedSettings?: string[];
+  /** W1-B2 Task 25: the run budget's wall-clock limit in ms, handed to sweep.mjs as deps.budget.maxMs (default lib's RUN_BUDGET_MS). */
+  budgetMs?: number;
+  /** W1-B2 Task 25: the run budget's byte limit, handed to sweep.mjs as deps.budget.maxBytes (default lib's RUN_BUDGET_BYTES). */
+  budgetBytes?: number;
+  /** W1-B2 Task 25: the bytes one chunk reads before it stops at the next non-spool record, as deps.budget.chunkBytes (default lib's CHUNK_BYTES). */
+  chunkBytes?: number;
 }
 export interface DriverResult { code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }
 /** NODE_OPTIONS for these preloads, each as a file URL (Task 14's childEnv rule): NODE_OPTIONS splits on
@@ -462,4 +469,35 @@ export function holdLock(box: HistoryBox): () => void {
   }
   release();
   throw new Error('holdLock: the holder never took the lock');
+}
+
+// ── W1-B2 Task 25: recovery fixtures ──────────────────────────────────────────────────────────────────────────
+/** The box's journal directory for its bound store: `~/.ccrc/history/journal/<store.id>`. */
+export function journalDirOf(box: HistoryBox): string {
+  return path.join(box.root, 'journal', fs.readFileSync(path.join(box.root, 'store.id'), 'utf8').trim());
+}
+
+/** The newest recovery step registered in the box's store (what status reads), or undefined. */
+export function recoverRow(box: HistoryBox): { version: number; cursor: string | null; completed_ms: number | null } | undefined {
+  const db = openStoreRO(box);
+  try {
+    const r = db.prepare("SELECT version, cursor, completed_ms FROM derivation_state WHERE step = 'recover' ORDER BY version DESC LIMIT 1")
+      .get() as { version: number; cursor: string | null; completed_ms: number | null } | undefined;
+    if (r === undefined) return undefined;
+    return {
+      version: Number(r.version),
+      cursor: r.cursor === null ? null : String(r.cursor),
+      completed_ms: r.completed_ms === null ? null : Number(r.completed_ms),
+    };
+  } finally {
+    db.close();
+  }
+}
+
+/** What `doctor --rebuild` leaves before its first recovery tick, made in-process: a fresh history.db with `storeId`
+ *  and a new writer token, and inside it the ('recover', version) step, the `bind` outbox row and `bound:<version>`
+ *  (store.mjs createStore with a rebuild bind, W1-B2 Task 24). The caller has already removed the lost DB. */
+export function boundEmptyStore(box: HistoryBox, storeId: string, version = Date.now()): { storeId: string; writer: string; version: number } {
+  const got = createStore(box.home, { storeId, bind: { kind: 'rebuild', nowMs: version } });
+  return { ...got, version };
 }
