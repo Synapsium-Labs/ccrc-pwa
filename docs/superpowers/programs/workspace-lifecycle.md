@@ -1601,6 +1601,16 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     schema migration and also a new persistence decision. Coordinator clause 11 reserves that choice for the operator.
   - Mail 4269 confirms the stop: preserve local `bcb39b146`, narrow every 4826 claim to what it proves, and keep the
     deleted-anchor/write-failure class as an unresolved ARMING BLOCKER. Both lanes remain SHADOWED; no marker is created.
+- **2026-10-12 09:59 — operator chose the typed marker table; fix round 4 resumes under mail 4286.**
+  - The operator selected the dedicated typed state over an existing-table sentinel or accepting the residual. Number
+    4857 is allocated for the migration-backed dirty breaker-state departure and must be defined in the active plan.
+  - Before a safety-relevant anchor mutation, dirty must be durable. The exact held snapshot, corresponding anchor
+    mutations and transition back to clean form one synchronous transaction; only its confirmed commit permits an act.
+    Dirty, malformed, unreadable or ambiguous state fails shut and seeds every unreleased claimant as a flagged wildcard
+    while preserving every readable member, instant and flag. Claimant-id encoding becomes total and canonical.
+  - Mail 4286 requires crash-point, persistence-failure, lone-surrogate and exact 4266 regression probes plus mutation-red
+    rows. It forbids a fake claimant sentinel and an untyped `run_events` marker. Both lanes remain SHADOWED; a fresh
+    scoped review follows an exact-fingerprint `wave-done`.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
