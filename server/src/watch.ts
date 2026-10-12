@@ -1189,7 +1189,7 @@ export class FleetWatcher {
   private deadCoordinatorSweeping = false;
   private deadCoordinatorState = new Map<string, DeadCoordinatorEntry>();
   private deadCoordinatorBreakerState: DeadCoordinatorBreaker = { tripped: false };
-  /** The breaker's memory: the members it holds with their ORIGINAL first-dead instants, released only on evidence
+  /** The breaker's memory: the members it holds with every first-dead instant they have carried, released only on evidence
    *  (`breaker-remembers-its-cluster`); and the key of the trip its feed row last recorded. */
   private deadCoordinatorBreakerHeld: readonly DeadCoordinatorBreakerMember[] = [];
   private deadCoordinatorBreakerRecorded: string | null = null;

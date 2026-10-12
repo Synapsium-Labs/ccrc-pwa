@@ -328,8 +328,8 @@ export const deadCoordinatorDue = (since: number, crashedPasses: number, nowMs: 
  *
  *  IT REMEMBERS (the departure `breaker-remembers-its-cluster`). A cluster member that reads unmeasurable for one pass
  *  loses its durable anchor (ruling E) and is re-anchored later, so a breaker recomputed from the anchors alone would
- *  let one transient doubt dissolve the cluster for good. `members` carries each held claimant's ORIGINAL first-dead
- *  instant; the lane hands them back on the next pass and releases a member only on an answer that is evidence — alive,
+ *  let one transient doubt dissolve the cluster for good. `members` carries each held claimant's accumulated first-dead
+ *  instants (every one it has held or been anchored at); the lane hands them back on the next pass and releases a member only on an answer that is evidence — alive,
  *  stopped, a deliberate act — or when it leaves the population. */
 export type DeadCoordinatorBreaker =
   | { readonly tripped: false }
@@ -366,8 +366,9 @@ export interface DeadCoordinatorBreakerMember {
  *  over the (id, instant) points, comparing consecutive points of different ids, finds exactly the clustered ids: on a
  *  within-window run from a point of A to a point of B, the first change of id leaves A beside a consecutive different-id
  *  point and the last change lands on B beside one. Members are the clustered ids, and a member's instants for the next
- *  pass are those it carried plus this pass's anchor (so they grow by one per re-anchor while it is held, bounded by its
- *  unmeasurable episodes, and the record grows with them); its `firstDeadAt` is the earliest. The anchor itself stays
+ *  pass are those it carried plus this pass's anchor (so they grow by one per re-anchor while it is held — an
+ *  unmeasurable episode, a gap, a backward clock step, a later life (D-4825, D-4827) — with no bound of their own, and
+ *  the record grows with them); its `firstDeadAt` is the earliest. The anchor itself stays
  *  durable in `dead_claimants`.
  *
  *  A held member FLAGGED `fallback` (review 382, R2) is a WILDCARD: it clusters with every other entry, whatever the
@@ -382,40 +383,44 @@ export interface DeadCoordinatorBreakerMember {
  *  ids paired), so no id unclusters; adding an id, an instant or a flag therefore never untrips the clustered arm and
  *  never drops a member. The unmeasurable arm names `unmeasurable ∪ crashed ∪ members`, and its trigger (`fleetDoubt`,
  *  `allUnmeasurable`) reads only the pass's own measurements, so the superset stays a superset there too.
- *  ANCHORS ARE PASS-SAMPLED: an anchor is the instant of its lane's own pass (`deadAnchorNext(…, at)`), up to one cadence
- *  after the crash, and a restarted process passes on its own grid, as does any lane started at another moment. Two lanes
- *  therefore anchor one crash up to a cadence apart, and a pair near the window's edge can cluster in one and not in the
- *  other. That is inherent to pass sampling, was true before this, and is not argued away: what follows is claimed ONLY
- *  FOR ANCHORS BOTH LANES SHARE.
- *  WHAT IT GIVES A RESTARTED LANE R against an unrestarted one U, UNDER TWO ASSUMPTIONS. (A1) Both hold the same anchor
- *  instants for a claimant's current episode (not true across a restart that moves the pass grid, nor across a gap longer
- *  than the episode gap, which re-anchors every crashed coordinator: the spec's residuals name that, and this does not
- *  argue about either). (A2) R's population differs from U's only by claimants U has ended and R has not yet: R's reset run
- *  of crashed passes delays its act, whereas its lost backoff makes it act SOONER, and that is a path of its own: if U
- *  backs off a stuck claimant P while R, its backoff lost, ends P, U keeps P as an extra entry that can cluster with a new
- *  crash, so R can end a third claimant Q that U holds. THE HYPOTHESIS: every id U holds, R holds with at least U's
- *  instants, or flagged. At the seed it holds: a plain restart reads U's own record, and the fallback holds every claimant
- *  the pass does not release, flagged, a superset of anything U holds (a held member is always unreleased and in the
- *  population). Each step: both see the same anchors and release the same members on the same evidence (alive, stopped,
- *  deliberate, left the population), so R's entries are a superset of U's as (id, instant) pairs and flags; by the
- *  property R trips whenever U does, with members ⊇ U's; and each member's next instants are its held instants plus this
- *  pass's anchor on both sides, so R's remain ⊇ U's (or R's is flagged, and every member of a flagged trip is). So, for
- *  the anchors both share and outside the paths named here, U's breaker standing implies R's stands. A claimant that U
- *  ended and that RETURNS (a new spawn, a new run) while R still holds its old episode is covered by
- *  `deadCoordinatorNewEpisode` (D-4825): its supervisor's heartbeat is later than R's durable anchor, so R anchors it
- *  afresh at its next crash, as U, which deleted the anchor, does — R then carries U's new instant beside every one it
- *  remembers. That rests on a heartbeat or a journaled successful spawn (D-4827): a return that leaves neither is not seen, in
- *  remote mode a fleet clock behind the server's can hide one, and this does not claim to cover them, nor claim that no
- *  other corner exists. A process that dies between step five (a fresh anchor written) and step six (the
- *  record written), or whose write kept failing, seeds the older record; the lane's first pass therefore flags every
- *  claimant whose durable anchor began after that record row was written (D-4826), so the holds it formed and lost are
- *  held again, flagged, at the cost of holding two crashed claimants whose anchors merely postdate the record until evidence
- *  releases one. A server clock that steps backwards across a restart can make a later anchor read earlier than the record. The all-unmeasurable arm diverges as measured:
- *  R's extra claimant can be measured while all of U's are not, so R does not trip there, but every other claimant is as
- *  unmeasured in R as in U, so R can act there only on the claimant U already ended. The cost of the accumulation is more
- *  holding: a member held at an old instant that crashes anew also clusters near its new instant, a held member's instants
- *  and its record grow by one per re-anchor while it is held, and while a flagged member stands a coordinator that crashes
- *  is swept into the hold and flagged itself, until evidence releases it or fewer than two entries stand. */
+ *  ANCHORS AND RELEASES ARE PASS-SAMPLED: an anchor is the instant of its lane's own pass (`deadAnchorNext(…, at)`), up to
+ *  one cadence after the crash, and evidence that releases a hold (alive, stopped, deliberate) is seen only at a pass; a
+ *  restarted process passes on its own grid, as does any lane started at another moment. Two lanes therefore anchor one
+ *  crash up to a cadence apart, can release a member at different passes, and a pair near the window's edge can cluster in
+ *  one and not in the other; the lane with more passes may act sooner. That is inherent to pass sampling, was true before
+ *  this, and is not argued away: what follows is claimed ONLY FOR THE PASSES AND EVIDENCE BOTH LANES SHARE. The pure
+ *  property above, a statement about this function's inputs, does not depend on it.
+ *  WHAT IT GIVES A RESTARTED LANE R against an unrestarted one U, UNDER TWO ASSUMPTIONS. (A1) Both lanes' passes fall at
+ *  the same moments, so they hold the same anchor instants for a claimant's current episode and see, and release on, the
+ *  same evidence (not true across a restart that moves the pass grid, nor across a gap longer than the episode gap, which
+ *  re-anchors every crashed coordinator: the spec's residuals name both, and this does not argue about either). (A2) R's
+ *  population differs from U's only by claimants U has ended and R has not yet: R's reset run of crashed passes delays its
+ *  act, whereas its lost backoff makes it act SOONER, and that is a path of its own: if U backs off a stuck claimant P
+ *  while R, its backoff lost, ends P, U keeps P as an extra entry that can cluster with a new crash, so R can end a third
+ *  claimant Q that U holds. THE HYPOTHESIS: every id U holds, R holds with at least U's instants, or flagged. At the seed
+ *  it holds: a plain restart reads U's own record (and flags every claimant whose anchor began after it, D-4826), and the
+ *  fallback holds every claimant the pass does not release, flagged, a superset of anything U holds (a held member is
+ *  always unreleased and in the population). Each step: both see the same anchors and release the same members on the
+ *  same evidence (alive, stopped, deliberate, left the population), so R's entries are a superset of U's as (id, instant)
+ *  pairs and flags; by the property R trips whenever U does, with members ⊇ U's; and each member's next instants are its
+ *  held instants plus this pass's anchor on both sides, so R's remain ⊇ U's (or R's is flagged, and every member of a
+ *  flagged trip is). So, for the passes and evidence both lanes share, and outside the paths named here, U's breaker
+ *  standing implies R's stands. A claimant that U ended and that RETURNS (a new spawn, a new run) while R still holds its
+ *  old episode is covered by `deadCoordinatorNewEpisode` (D-4825, D-4827): a supervisor heartbeat (supervision evidence)
+ *  or a journaled successful spawn is later than R's durable anchor, so R anchors it afresh at its next crash, as U, which
+ *  deleted the anchor, does — R then carries U's new instant beside every one it remembers. That rests on one of the two:
+ *  a return that leaves neither is not seen, in remote mode a fleet clock behind the server's can hide one, and this does
+ *  not claim to cover them, nor claim that no other corner exists. A process that dies between step five (a fresh anchor
+ *  written) and step six (the record written), or whose write kept failing, seeds the older record; the lane's first pass
+ *  therefore flags every claimant whose durable anchor began after that record row was written (D-4826), so the holds it
+ *  formed and lost are held again, flagged, at the cost of holding two crashed claimants whose anchors merely postdate the
+ *  record until evidence releases one. A server clock that steps backwards across a restart can make a later anchor read
+ *  earlier than the record. The all-unmeasurable arm diverges as measured: R's extra claimant can be measured while all of
+ *  U's are not, so R does not trip there, but every other claimant is as unmeasured in R as in U, so R can act there only
+ *  on the claimant U already ended. The cost of the accumulation is more holding: a member held at an old instant that
+ *  crashes anew also clusters near its new instant, a held member's instants and its record grow by one per re-anchor
+ *  while it is held, and while a flagged member stands a coordinator that crashes is swept into the hold and flagged
+ *  itself, until evidence releases it or fewer than two entries stand. */
 export function deadCoordinatorBreaker(
   crashed: readonly DeadCoordinatorBreakerMember[], held: readonly DeadCoordinatorBreakerMember[],
   unmeasurable: readonly string[], measured: number, fleetDoubt: string | null, nowMs: number,
@@ -485,7 +490,7 @@ export const DEAD_COORDINATOR_BREAKER_HELD_HEAD = 'dead-coordinator-breaker-held
  *  on write and on read alike. */
 const BREAKER_HELD_SAFE = /^[A-Za-z0-9._-]*$/;
 const BREAKER_HELD_LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
-/** A fallback member's mark, after its instant (review 382, R2): `id@<instant>*`. `*` is outside the escaped-id alphabet
+/** A fallback member's mark, after the complete `+` list of its instants (review 382, R2): `id@<t1+t2…>*`. `*` is outside the escaped-id alphabet
  *  and is not a digit, so it can never be part of an id or an instant. No released build reads this record at all (the
  *  build that first had a reader, before the mark, never shipped), so a rollback to a released build starts with no hold,
  *  failing open: the spec's §12 says to disarm the lane before rolling back. */

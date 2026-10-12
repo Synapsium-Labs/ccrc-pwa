@@ -662,7 +662,7 @@ each item is a departure named there).
 - **The breaker holds the whole lane**, not only the claimants it names, and it **clears through the doors that
   already exist**: the claimants fall back under the threshold when the operator revives them, reclaims their
   programmes or abandons their runs. No new route.
-- **The breaker remembers.** It keeps each member's first-dead instant and releases a member only on evidence (alive,
+- **The breaker remembers.** It keeps every first-dead instant each member has carried while held and releases a member only on evidence (alive,
   stopped, a deliberate act) or when it leaves the population, so one pass that cannot measure a member — which deletes
   that member's anchor — does not dissolve the cluster. "Fleet-wide" is what the pass measured: tmux not answering for
   any claimant trips it whatever the count; a registry that will not list stops the tick before the lane runs. The held
@@ -673,8 +673,8 @@ each item is a departure named there).
   Its clustering is monotone: a member keeps every first-dead instant it has carried while held, adds its current anchor
   each time it is crashed and anchored, and clusters at all of them, and two entries cluster when any instant of one is
   within the window of any instant of the other, so a held instant never replaces a re-anchored one, and, for the
-  anchors both lanes share, a restarted lane's breaker stands wherever an unrestarted lane's does, under the conditions
-  §12 names; anchors are pass-sampled (review 384, F1); the
+  passes and evidence both lanes share, a restarted lane's breaker stands wherever an unrestarted lane's does, under the
+  conditions §12 names; anchors and releases are pass-sampled (review 384, F1; review 385, F3); the
   cost is that a member held at an old instant that crashes anew also clusters near its new instant, and a held member's
   instants, and its record, grow by one per re-anchor while it is held.
 - **One claimant a pass**, the longest dead first, ARMED; in shadow every due claimant is recorded.
@@ -868,11 +868,11 @@ collects them.
   ladder are asked again within a few passes, SOONER than an unrestarted lane would; every ask is still behind a fresh
   audit and ccd's in-lock re-proof. A kept-leaf entry is lost with it (question (i)).
   The dead-coordinator lane keeps two things across a restart. One is its first-dead anchor (`dead_claimants`), which is
-  re-anchored only after a gap of more than ten minutes (`DEAD_COORDINATOR_GAP_MS`) in which no pass measured the
-  claimant crashed, so a restart shorter than that keeps the hour. The other is the breaker's hold: its held set is a
+  re-anchored after a gap of more than ten minutes (`DEAD_COORDINATOR_GAP_MS`) in which no pass measured the
+  claimant crashed, or when evidence of a later life shows (D-4825, D-4827), so a restart shorter than that keeps the hour. The other is the breaker's hold: its held set is a
   `run_events` row in `coord.db`, written when the set changes (in shadow too) and read back at the lane's first pass.
   A record the lane cannot read does not stop it: for that pass the lane holds every claimant the pass does not release,
-  each flagged in the new record (a `*` after its instant), and writes that record over the bad one, so the bad row is
+  each flagged in the new record (a `*` after its complete `+` list of instants), and writes that record over the bad one, so the bad row is
   never read again. A flagged claimant clusters with any other crashed or held claimant, whatever the instants, until
   evidence releases it, so every claimant a readable record would hold is held too; the cost is that while one stands a
   coordinator that crashes is swept into the hold and is flagged itself, until evidence releases it or fewer than two
@@ -890,11 +890,12 @@ collects them.
   held, flagged, until evidence releases one, though they never clustered. The record is written with the write-time
   clock, so an anchor of the pass that landed it is not flagged, and the lane records before it acts. The limit: a server
   clock that steps backwards across a restart can make a later anchor read earlier than the record.
-  Anchors are pass-sampled: an anchor sits on
-  its lane's own pass, up to one cadence after the crash, and a restart moves the pass grid as any start does, so a pair
-  near the ten-minute window's edge can cluster in one lane and not in the other, and the comparison below is claimed
-  only for anchors both lanes share. The breaker's clustering is monotone (§5.4), so for anchors both lanes share a
-  restarted lane's breaker stands wherever an unrestarted lane's does when the restarted lane's population differs only
+  Anchors and releases are
+  pass-sampled: an anchor sits on its lane's own pass, up to one cadence after the crash, evidence that releases a hold is
+  seen only at a pass, and a restart moves the pass grid as any start does, so a pair near the ten-minute window's edge
+  can cluster or release in one lane and not in the other, the lane with more passes may act sooner, and the comparison
+  below is claimed only for the passes and evidence both lanes share. The breaker's clustering is monotone (§5.4), so for
+  the passes, anchors and evidence both lanes share a restarted lane's breaker stands wherever an unrestarted lane's does when the restarted lane's population differs only
   by claimants the unrestarted lane has already ended. A claimant the
   unrestarted lane ended that returns under a new run is covered by the episode boundary: a supervisor heartbeat later
   than its durable anchor starts a fresh anchor at its next crash, so the restarted lane carries the new instant beside
@@ -951,8 +952,9 @@ collects them.
 
 **The dead-coordinator lane (`$REG/dead-coordinator-lane-live`).**
 - **Arm it after the expiry lane**, once its own shadow list is read and any breaker trip is worked through.
-- **Its arming blockers are closed** (wave 5): the act's own clock is pinned, a second crash is a second record, a
+- **Its wave-5 arming blockers are closed**: the act's own clock is pinned, a second crash is a second record, a
   release and a re-hold are told apart, every thrown act is recorded, and an unread generation is no successful sweep.
+  What stands instead is listed in full below, residual by residual.
 - **The three early reads, and what wave 6 closes.** Before measuring the claimant the act reads the mirror's health
   state, its gap list and the last instant ccd counted an unwritten journal line. Wave 6 reads the first two again after
   the measure, and the count behind the third: a failure counted during the measure's round trip, where the early read
@@ -961,9 +963,23 @@ collects them.
 - **The journal-gap trade.** A coordinator whose last successful spawn is not newer than a recorded gap stays listed as
   unmeasured, never ended, until it spawns again (wave 4, accepted). Ageing a gap out is carried, for a decision on
   shadow evidence.
-- **Two residuals stand.** A lane gap of over ten minutes re-anchors every crashed coordinator on the same pass, so the
-  breaker holds and no shadow row is written until all but one are revived, reclaimed or abandoned. A revive of the same
-  id inside the act's last re-measure window, sub-second to one agent round trip, can still lose its runs.
+- **The accepted residuals, every one of them** (arm only knowing these; this release closes none of them). (1) A lane
+  gap of over ten minutes re-anchors every crashed coordinator on the same pass, so the breaker holds and no shadow row
+  is written until all but one are revived, reclaimed or abandoned. (2) A revive of the same id inside the act's last
+  re-measure window, sub-second to one agent round trip, can still lose its runs. (3) Anchors and releases are
+  pass-sampled: an anchor sits on its lane's own pass, up to one cadence after the crash, and evidence that releases a
+  hold (alive, stopped, deliberate) is seen only at a pass, so two lanes, or a restarted and an unrestarted one, with
+  passes at different moments can hold or release a pair near the ten-minute window's edge differently, and the lane
+  with more passes may act sooner. (4) A restart drops the in-memory backoff and retry population (`nextAskAt`,
+  `attempts`), so a restarted lane can let another claimant proceed sooner, and if the unrestarted lane backs off a
+  stuck claimant while the restarted one ends it, the first keeps it as an extra entry that can cluster with a new
+  crash; it still re-audits, waits its durable hour, re-measures before and after the act, and is blocked by the durable
+  breaker hold. (5) A later life that leaves neither a supervisor heartbeat nor a journaled successful spawn is not
+  seen, and in remote mode a fleet clock running behind the server's can hide one. (6) The lost-write recovery
+  over-holds, and a server clock that steps backwards across a restart can make a later anchor read earlier than the
+  record. Each of (1), (2), (5) and (6) only delays an act or holds more; (3) and (4) can bring an act sooner; none
+  bypasses the lane's own fresh audit, hour, journal, re-measure or breaker decision. The one action to take before a
+  rollback is the next item's.
 - **Roll back below this release only with the lane disarmed.** No released build before this one reads the breaker's
   held-set record, so a rollback below it (`ccrc rollback`, or the unattended update watchdog) starts with no hold, the
   restart hole failing open: arm the lane only on a release that carries the reader, and before rolling back below it

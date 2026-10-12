@@ -3377,7 +3377,7 @@ export class CoordStore {
    *  that threw before any row was found) and the `runId` it sits on (`null` when none, or when the run id itself cannot
    *  be proved) — the lane warns once per row, and, when the fallback's set comes out empty, writes that empty set on
    *  that run (a non-empty set goes on the lowest open run a member coordinates). A member the fallback held carries a
-   *  `*` after its instant and reads back `fallback: true`. NO RELEASED BUILD READS THIS RECORD AT ALL (the build that
+   *  `*` after its complete `+` list of instants and reads back `fallback: true`. NO RELEASED BUILD READS THIS RECORD AT ALL (the build that
    *  first had a reader, before the flag, never shipped), so a rollback to a released build starts with no hold: the
    *  restart hole, failing OPEN — the spec's §12 says to disarm the lane before rolling back. A thrown statement is
    *  `{ ok: false }` too. */
