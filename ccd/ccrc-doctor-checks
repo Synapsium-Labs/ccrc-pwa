@@ -7645,11 +7645,22 @@ _bt_age() {   # <seconds> -> "45 s", "12 min", "3 h", "2 d"
 # <path> -> BT_TF: ok | absent | not-regular | unreadable | no-value, and BT_TF_MODE (octal, empty if unread).
 # Also BT_TF_PLACEHOLDER (1 when BT_TF is ok and the value line, trimmed as `extractToken` trims, is the shipped
 # placeholder; else 0). It is a measurement: both arms act on it.
-# Absent is `! -e` AND `! -L`: a dangling link is present and not a regular file, never absent.
+# Absent is `! -e` AND `! -L` AND a MEASURED absence: `[ -e ]` is false for ENOENT and for EACCES alike, so a path
+# that is not there is absent only when its nearest existing ancestor is a directory this process can search (review
+# 383 F5; the python readers do the same, mapping only FileNotFoundError to absent). A parent that exists and cannot be
+# searched (or is not a directory) leaves the file UNMEASURED: `unreadable`, never absent. A dangling link is present
+# and not a regular file, never absent.
 _bt_value_file() {
-  local p="$1" line="" t="" u="" w=""
+  local p="$1" line="" t="" u="" w="" d=""
   BT_TF=""; BT_TF_MODE=""; BT_TF_PLACEHOLDER=0
-  if [ ! -e "$p" ] && [ ! -L "$p" ]; then BT_TF=absent; return 0; fi
+  if [ ! -e "$p" ] && [ ! -L "$p" ]; then
+    d="${p%/*}"; [ "$d" != "$p" ] || d=.; [ -n "$d" ] || d=/
+    while [ -n "$d" ] && [ ! -e "$d" ] && [ ! -L "$d" ]; do
+      case "$d" in */*) d="${d%/*}"; [ -n "$d" ] || d=/ ;; *) d=. ;; esac
+    done
+    if [ -d "$d" ] && [ -x "$d" ]; then BT_TF=absent; else BT_TF=unreadable; fi
+    return 0
+  fi
   if [ -L "$p" ] || [ ! -f "$p" ]; then BT_TF=not-regular; return 0; fi
   BT_TF_MODE="$(_plat_mode -- "$p" 2>/dev/null)" || BT_TF_MODE=""
   if [ ! -r "$p" ]; then BT_TF=unreadable; return 0; fi

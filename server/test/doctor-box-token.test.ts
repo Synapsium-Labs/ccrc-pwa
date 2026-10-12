@@ -732,6 +732,68 @@ describe('doctor box-token: a box never handed a value reads PASS with its sente
   });
 });
 
+// Review 383 F5: `[ -e ]` is false for ENOENT and for EACCES alike, so a token file inside a directory this process cannot
+// search (mode 0600: no search bit) read as ABSENT, which the never-handed lowering turned into a WARN, and whose
+// sentence ("does not exist") was false. Absent is a measured ENOENT; a parent that exists and cannot be searched is
+// UNMEASURED, the arm's existing unreadable word (FAIL). A root runner can search any directory, so these rows skip there
+// (the suite's own idiom, as the agent.env case above).
+describe('doctor box-token: an unsearchable parent directory is unreadable, never absent (review 383 F5)', () => {
+  const itNonRoot = process.getuid && process.getuid() === 0 ? it.skip : it;
+  const unsearchable = (dir: string, f: () => void): void => {
+    chmodSync(dir, 0o600);
+    try { f(); } finally { chmodSync(dir, 0o700); }
+  };
+  const noFleetHistory = (b: Box): void => { for (const f of [dot(b, NODE_FILES.tokenGeneration), dot(b, 'token-sync.json')]) rmSync(f); };
+  itNonRoot('fleet: ~/.cc-secrets at mode 0600 holding the token file, with no generation file and no sync report, is FAIL fleet-token-unusable (cannot be read), not a never-handed box', () => {
+    const b = box({ role: 'fleet' });
+    noFleetHistory(b);
+    unsearchable(join(b.home, '.cc-secrets'), () => {
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout).toMatch(/^FAIL box-token: fleet: fleet-token-unusable — .* cannot be read/);
+      expect(r.stdout).not.toMatch(/ccrc-mail\.token does not exist/);
+      expect(r.stdout).not.toContain(FLEET_NEVER);
+      expect(r.stdout).toMatch(/\n {2}remedy: \S/);
+      expect(r.code).toBe(1);
+      const d = runCheck(b, disarmed());
+      expect(d.stdout).toMatch(/^SKIP box-token: fleet: fleet-token-unusable — /);
+      expect(d.code).toBe(3);
+    });
+  });
+  itNonRoot('fleet: the same directory with the generation file and the report present stays FAIL, and its sentence no longer says "does not exist"', () => {
+    const b = box({ role: 'fleet' });
+    unsearchable(join(b.home, '.cc-secrets'), () => {
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout).toMatch(/^FAIL box-token: fleet: fleet-token-unusable — .* cannot be read/);
+      expect(r.stdout).not.toMatch(/ccrc-mail\.token does not exist/);
+      expect(r.code).toBe(1);
+    });
+  });
+  itNonRoot('fleet: a directory that is only missing is still absent (ENOENT), so the never-handed PASS holds when ~/.cc-secrets does not exist at all', () => {
+    const b = box({ role: 'fleet' });
+    noFleetHistory(b);
+    rmSync(join(b.home, '.cc-secrets'), { recursive: true });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(new RegExp(`^PASS box-token: fleet: fleet-token-absent — .* ${FLEET_NEVER}\\n$`));
+    expect(r.code).toBe(0);
+  });
+  itNonRoot('server: a token path inside a directory that cannot be searched (CCRC_MAIL_TOKEN_PATH) is FAIL token-unusable (cannot be read), never absent, and its state beside it is unreadable too', () => {
+    const b = box({ role: 'server' });
+    const alt = join(b.home, 'alt-dir');
+    mkdirSync(alt, { recursive: true, mode: 0o700 });
+    renameSync(dot(b, 'mail.token'), join(alt, 'custom.token'));
+    renameSync(dot(b, 'box-token.json'), join(alt, 'box-token.json'));
+    writeFileSync(dot(b, 'ccrc.env'), `CCRC_ROLE=server\nCCRC_FLEET=local\nCCRC_MAIL_TOKEN_PATH=${join(alt, 'custom.token')}\n`, { mode: 0o600 });
+    unsearchable(alt, () => {
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout).toMatch(/^FAIL box-token: server: token-unusable — .* cannot be read/);
+      expect(r.stdout).toContain('server: state-unreadable — ');
+      expect(r.stdout).not.toMatch(/custom\.token does not exist/);
+      expect(r.stdout).not.toContain(SERVER_NEVER);
+      expect(r.code).toBe(1);
+    });
+  });
+});
+
 describe('doctor box-token: every python this check runs is isolated (security)', () => {
   it('each `python3 … -c` in the box-token block is `python3 -I -c`, and there are at least two', () => {
     const src = readFileSync(CHECKS_SRC, 'utf8');
