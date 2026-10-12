@@ -564,8 +564,8 @@ export const collectEvidenceOf = (a: CollectAudit): CollectEvidence | null =>
  *  - `streak`, `die`, `held`, `presence`: the four continuity clocks attention reads.
  *  - `evidence`: the latest document's.
  *  - `feedEpisode`: the key of the feed episode whose row was written, or none (`collectFeedStep`).
- *  - `feedOutlivesObservations`: whether that episode is one an observation does not end (a refusal's or a die's, which
- *    the act's cue says so itself); false with no episode. Read only by `collectFeedStep`'s observe arm. */
+ *  - `feedOutlivesObservations`: whether that episode is one an observation does not end (a refusal's or a die's, as
+ *    the act's cue itself says); false with no episode. Only `collectFeedStep` reads it. */
 export interface CollectEntry {
   readonly idGen: number;
   readonly obs: CollectObservation | null;
@@ -743,6 +743,15 @@ export function collectAfterAct(e: CollectEntry, r: CollectResult, s: CollectSte
         die: e.die !== null && e.die.word === r.word ? { ...e.die, lastMono: t } : { word: r.word, sinceMono: t, lastMono: t } };
     }
   }
+}
+
+/** The memory after an act job SETTLED but its fold failed (spec §5.10, pacing): the job's outcome is lost to the lane,
+ *  so the lane does not know what the job did, and fails toward slower. The pair resets under a new generation, the id
+ *  takes the refusal floor (`refusedAtMono`: the next ask waits `CHILD_RECLAIM_DEFER_CEILING_MS`), and nothing else
+ *  moves. Never `collectClearPair`, which keeps the id's generation and would leave a request composed before the
+ *  failure to seed an observation. */
+export function collectAfterFoldFailed(e: CollectEntry, s: CollectStep): CollectEntry {
+  return { ...e, obs: null, idGen: s.gen, refusedAtMono: s.now.monoMs };
 }
 
 /** The memory after the open-run hold stood (spec §5.10, the gates): the pair resets, and the hold's continuity runs
@@ -1093,6 +1102,24 @@ export function collectBoxProbesAfter(prev: ReadonlyMap<string, string>, a: Coll
   return passed ? new Map() : prev;
 }
 
+/** The box-wide probes standing, with the arrival of the answer that last CHANGED them (spec §5.10). */
+export interface CollectBoxProbeState {
+  readonly probes: ReadonlyMap<string, string>;
+  readonly changedAtMono: number;
+}
+
+/** The box-wide probes after one answer, by when it ARRIVED (spec §5.10): an answer that arrived before the probes' latest
+ *  change says nothing of them, so it is skipped whole. An act job folds its second audit when the JOB settles, which
+ *  can be after a later answer set or cleared a probe; only the arrival tells the older answer from the newer. A tie
+ *  applies (`<`, never `<=`). Otherwise `collectBoxProbesAfter` decides, and the stamp moves to the arrival only when
+ *  the probes CHANGED (a new map): an answer that leaves them standing never moves it. Pure. */
+export function collectBoxProbesAtArrival(prev: CollectBoxProbeState, a: CollectAudit | CollectResult,
+  arrivedMono: number): CollectBoxProbeState {
+  if (arrivedMono < prev.changedAtMono) return prev;
+  const probes = collectBoxProbesAfter(prev.probes, a);
+  return probes === prev.probes ? prev : { probes, changedAtMono: arrivedMono };
+}
+
 /** The box-wide lines' evidence after a pass measured its population (spec §5.10): no line outlives the ids behind it.
  *  - The pass-scoped lines (`no-document`, `lock`) read the last finished pass's audits. Once NONE of the ids those
  *    audits were for is still a candidate, they are dropped: the ids left (removed by hand, or registered again), no
@@ -1387,7 +1414,8 @@ export function collectFeedWouldCollectBody(id: string, runId: number | null, le
     + 'orphaned and idle by two audits at least a pass apart. The collector is shadowed, so nothing was removed.';
 }
 
-/** One row per switch flip (spec §5.10). Any same-uid session can touch the switch, so every change is said. */
+/** One row per flip an act job sees (spec §5.10). The marker is read at the act's last check alone, so a change undone
+ *  between two such reads writes none. */
 export const collectFeedSwitchBody = (live: boolean): string => (live
   ? 'the collector lane is now live: the temp-root collector removes an orphaned temp root it has proved idle twice, '
     + 'with no person in the loop, while cleanup is not paused.'

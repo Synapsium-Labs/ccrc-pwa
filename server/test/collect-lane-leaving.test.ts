@@ -7,7 +7,9 @@
 //   still a candidate, and stands while they are merely paced; the box-probe line clears once the measured population
 //   holds no ids, and stands while a listing is unmeasured;
 // - an id whose registry row stands again projects no per-id item, and its memory is kept: the item returns once the
-//   row goes.
+//   row goes;
+// - an answer older than the box-wide probes' latest change says nothing of them: an act job folds its observation 2 when
+//   the JOB settles, so a probe a later answer raised, or an act's own answer, is cleared by an older answer never.
 // FIXTURE HOME ONLY (`collectLaneFixture.ts`): ccd is a scripted model, the registry a fixture HOME's.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdirSync, rmSync } from 'node:fs';
@@ -28,6 +30,12 @@ const boxProbe = (f: CollectRig, id: string, probe: string): CcdAnswer => ({ cod
   session: id, mode: 'collect', exists: true,
   collect: { leaf: path.join(f.home, '.cc-tmp', id), records: [], unmeasured: probe, witness: null },
   verdict: 'unmeasured', detail: `${probe} is not usable on this box` }) });
+
+/** The box-wide probes the lane holds now, read where they live: the frame carries them only at the child lane's publish. */
+const probesOf = (f: CollectRig): ReadonlyMap<string, string> =>
+  (f.watcher as unknown as { collectBoxProbes: ReadonlyMap<string, string> }).collectBoxProbes;
+/** ccd's `ws-collect` refusal document: a verb answer that passes no rung. */
+const refusedInUse = (): CcdAnswer => ({ code: 0, stdout: JSON.stringify({ refused: 'in-use', detail: 'd', paths: [] }) });
 
 describe('a collected act whose id was forgotten mid-flight still writes its row (spec §5.10)', () => {
   it('the gather that forgets the id lands while ws-collect is out: the collected row is written, from the job’s own observation 2, and no entry comes back', async () => {
@@ -141,5 +149,99 @@ describe('an id whose registry row stands again projects no item, and keeps its 
     const items = await f.attention();
     expect(f.boxWide(items).map((a) => a.word), 'the doubt is said').toContain('tmproots');
     expect(itemsFor(items, 'demo-a').map((a) => a.word), 'and the item is not hidden by it').toEqual(['would-collect']);
+  });
+});
+
+describe('an answer older than the box-wide probes’ latest change says nothing of them (spec §5.10)', () => {
+  /** A live lane past its hold-off where demo-a holds observation 1; its act is composed by the next pass. */
+  const live = async (): Promise<CollectRig> => {
+    const f = await collectRig();
+    f.pastHoldOff(); await f.goLive();
+    f.witness('demo-a');
+    f.next(); await f.pass(); await f.settled();            // observation 1 (goLive ended on a pass: the next one is throttled)
+    return f;
+  };
+  /** Arms the job's step-5 listing to wait, from demo-a's own audit call: the next listing of the registry after it. */
+  const holdStep5 = (f: CollectRig): { release: () => void }[] => {
+    const held: { release: () => void }[] = [];
+    f.onCall.push((c) => {
+      const s = f.lane().slot;
+      if (held.length === 0 && c.verb === 'audit' && c.id === 'demo-a' && s.kind === 'job') held.push(f.holdListing('demo-a'));
+    });
+    return held;
+  };
+
+  it('a probe raised after the act job’s observation 2 arrived outlives that answer, folded when the job settles: the line stands', async () => {
+    const f = await live();
+    f.scripts.set('demo-a', (verb) => (verb === 'collect' ? refusedInUse() : undefined));
+    const step5 = holdStep5(f);
+    f.next(); await f.pass(); await f.settled();            // demo-a's job: observation 2 collectable; its step 5 waits
+    expect(step5, 'the job reached its audit').toHaveLength(1);
+    f.witness('demo-b');
+    f.scripts.set('demo-b', (verb) => (verb === 'audit' ? boxProbe(f, 'demo-b', 'mv') : undefined));
+    f.next(); await f.pass(); await f.settled();            // demo-b answers mv, a whole interval after observation 2
+    expect([...probesOf(f).keys()], 'demo-b raised the probe').toEqual(['mv']);
+    step5[0]!.release(); await f.settled();                 // demo-a's act: refused in-use, which passes no rung
+    expect(f.collects('demo-a'), 'the job composed its act').toHaveLength(1);
+    expect([...probesOf(f).keys()], 'observation 2 is older than the probe: it clears nothing').toEqual(['mv']);
+    expect(await boxWords(f), 'the line stands on the frame').toContain('box-probe');
+  });
+
+  it('an answer that leaves the probes standing never moves the stamp: observation 2, after the probe, still clears it', async () => {
+    const f = await live();
+    f.witness('demo-b');
+    f.scripts.set('demo-b', (verb) => (verb === 'audit' ? boxProbe(f, 'demo-b', 'mv') : undefined));
+    f.scripts.set('demo-a', (verb) => (verb === 'collect' ? refusedInUse() : undefined));
+    const late = f.hold('audit', 'demo-a');                 // demo-a's job's own audit (observation 2), composed and never answered
+    f.next(); await f.pass(); await f.settled();            // demo-b answers mv while observation 2 is out
+    expect(late.reached(), 'observation 2 is out').toBe(true);
+    expect([...probesOf(f).keys()]).toEqual(['mv']);
+    f.advance(1);                                           // observation 2 arrives after the probe
+    const step5 = f.holdListing('demo-a');                  // armed here, never by a pass: the job's step 5 is the next listing
+    late.release();
+    await f.settled();                                      // demo-a's job waits at step 5
+    f.unwitness('demo-b');
+    f.witness('demo-c');
+    f.scripts.set('demo-c', (verb) => (verb === 'audit' ? boxProbe(f, 'demo-c', 'rows') : undefined));
+    f.next(); await f.pass(); await f.settled();            // demo-c answers a per-id probe: the box probes are unchanged
+    expect([...probesOf(f).keys()], 'rows is no box-wide probe').toEqual(['mv']);
+    step5.release(); await f.settled();                     // demo-a's act: refused in-use
+    expect(f.collects('demo-a')).toHaveLength(1);
+    expect(probesOf(f).size, 'observation 2 arrived after the last CHANGE: it clears the probe').toBe(0);
+    expect(await boxWords(f)).not.toContain('box-probe');
+  });
+
+  it('a probe raised between observation 2 and a collected act’s answer is cleared by that answer, at its own arrival', async () => {
+    const f = await live();
+    const act = f.hold('collect', 'demo-a');
+    f.next(); await f.pass();                               // the act job: observation 2 answered, then ws-collect, held
+    await vi.waitFor(() => expect(act.reached()).toBe(true));
+    f.next();
+    f.witness('demo-b');
+    f.scripts.set('demo-b', (verb) => (verb === 'audit' ? boxProbe(f, 'demo-b', 'mv') : undefined));
+    await f.pass(); await f.settled();                      // demo-b answers mv while the act is out
+    expect([...probesOf(f).keys()], 'the probe stands while the act is out').toEqual(['mv']);
+    f.advance(1);
+    act.release(); await f.settled();                       // ws-collect answers collected
+    expect(f.coord.feedEvents(500).filter((e) => e.title === COLLECT_FEED_TITLE.collected), 'the act collected').toHaveLength(1);
+    expect(probesOf(f).size, 'the collected answer passed every rung after the probe').toBe(0);
+    expect(await boxWords(f)).not.toContain('box-probe');
+  });
+
+  it('control: an act answer that passes no rung leaves that probe standing', async () => {
+    const f = await live();
+    f.scripts.set('demo-a', (verb) => (verb === 'collect' ? refusedInUse() : undefined));
+    const act = f.hold('collect', 'demo-a');
+    f.next(); await f.pass();
+    await vi.waitFor(() => expect(act.reached()).toBe(true));
+    f.next();
+    f.witness('demo-b');
+    f.scripts.set('demo-b', (verb) => (verb === 'audit' ? boxProbe(f, 'demo-b', 'mv') : undefined));
+    await f.pass(); await f.settled();
+    f.advance(1);
+    act.release(); await f.settled();
+    expect(f.collects('demo-a')).toHaveLength(1);
+    expect([...probesOf(f).keys()]).toEqual(['mv']);
+    expect(await boxWords(f)).toContain('box-probe');
   });
 });

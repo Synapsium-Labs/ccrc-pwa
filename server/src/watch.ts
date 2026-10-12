@@ -139,9 +139,9 @@ import { CATALOGUE_POLL_INTERVAL_MS } from './update/catalogue.js';
 import { COLLECT_CAP } from './ccdargv.js';
 import type { ChildReclaimCollectInput } from './childReclaimSweep.js';
 import {
-  COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, collectAfterAct, collectAfterAudit, collectAfterHold, collectAfterPresence,
-  collectAfterWouldCollect, collectAttentionItems, collectAttentionViews, collectBoxAfterPopulation,
-  collectBoxProbesAfter, collectCandidateOf, collectClearPair, collectFeedAnswerBody, collectFeedCollectedBody,
+  COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, collectAfterAct, collectAfterAudit, collectAfterFoldFailed, collectAfterHold,
+  collectAfterPresence, collectAfterWouldCollect, collectAttentionItems, collectAttentionViews, collectBoxAfterPopulation,
+  collectBoxProbesAtArrival, collectCandidateOf, collectClearPair, collectFeedAnswerBody, collectFeedCollectedBody,
   collectFeedCueOfAct, collectFeedCueOfAudit, collectFeedReadBody, collectFeedStep, collectFeedSwitchBody,
   collectFeedWouldCollectBody,
   collectFirstSighting, collectForgets, collectForgottenActRow, collectFresh, collectJobEffects, collectOffers,
@@ -992,6 +992,8 @@ export class FleetWatcher {
    *  - `collectPop`: the last measured pass's population, for the box-wide listing and refused-name lines; `null` before
    *    one. `collectPopNames`: the registry listing that pass's pre-filter read, for attention's projection.
    *  - `collectBoxProbes`: the box-wide probes standing (Task 5's `collectBoxProbesAfter`, over every answer).
+   *    `collectBoxProbesAtMono`: the ARRIVAL of the answer that last changed them (`collectBoxProbesAtArrival`), so an
+   *    answer older than that change says nothing of them.
    *  - `collectPassSeq`, `collectPassTally`, `collectPassPublished`, `collectPassAudits`: each pass's audits by class
    *    (Task 5's `collectPassClass`), keyed by the pass that queued them; the latest pass whose calls have all settled is
    *    the one the pass-scoped box lines read. */
@@ -1009,6 +1011,7 @@ export class FleetWatcher {
   private collectPop: CollectPopulation | null = null;
   private collectPopNames: ReadonlySet<string> = new Set();
   private collectBoxProbes: ReadonlyMap<string, string> = new Map();
+  private collectBoxProbesAtMono = Number.NEGATIVE_INFINITY;
   private collectPassSeq = 0;
   private collectPassTally = new Map<number, { pending: number; readonly audits: Map<string, CollectPassClass> }>();
   private collectPassPublished = 0;
@@ -4320,7 +4323,12 @@ export class FleetWatcher {
         this.collectSettleJob(coord, id, pass, { kind: 'threw', detail });
       })
       .catch((err: unknown) => {
-        console.warn(`ccrc-server: sweepTempRootCollect: folding the collector's job for ${id} failed (${err instanceof Error ? err.message : String(err)})`);
+        // The job settled and its fold failed, so the lane does not know what the job did: the pair resets under a new
+        // generation and the id takes the refusal floor (`collectAfterFoldFailed`), before the line is written. The
+        // slot is left as the settle made it.
+        const e = this.collectState.get(id);
+        if (e !== undefined) this.collectState.set(id, collectAfterFoldFailed(e, this.collectStepAt(this.collectClock())));
+        console.warn(`ccrc-server: sweepTempRootCollect: folding the collector's job for ${id} failed (${err instanceof Error ? err.message : String(err)}) — its observation pair is reset, and ${id} waits CHILD_RECLAIM_DEFER_CEILING_MS`);
       })
       .finally(() => { this.collectSettled(id, pass); });
   }
@@ -4337,7 +4345,9 @@ export class FleetWatcher {
   }
 
   /** THE FOLD TABLE (spec §5.10): each of the executor's outcome arms through Task 4's transitions, each transition at
-   *  the answer's ARRIVAL under a generation the lane never used before. Nothing here decides a pace; L1 does.
+   *  the answer's ARRIVAL under a generation the lane never used before, and each answer's word about the BOX only
+   *  when no later answer has changed the box-wide probes since it arrived (`collectBoxProbesAtArrival`). Nothing here
+   *  decides a pace; L1 does.
    *  - `not-asked`: caps and paused were cleared through the port already, and a refused id has nothing to pace;
    *    presence (step 3) is `collectAfterPresence`.
    *  - every arm that carries observation 2's answer folds it first (`collectFoldAudit`): an observation only under its
@@ -4359,8 +4369,10 @@ export class FleetWatcher {
       return;
     }
     const e = this.collectFoldAudit(coord, id, pass, s.audit.value, s.audit.arrived, s.audit.composed);
-    // What an act says of the BOX counts whatever became of its id, as an audit's does (`collectFoldAudit`).
-    if (s.kind === 'acted') this.collectBoxProbes = collectBoxProbesAfter(this.collectBoxProbes, s.result);
+    // What an act says of the BOX counts whatever became of its id, as an audit's does (`collectFoldAudit`). It is the
+    // only clear for a probe raised between observation 2's arrival and a `collected` act's answer, which observation 2's
+    // own fold (a collectable answer, older than that probe) leaves standing. It stays ahead of the forgotten-id branch.
+    if (s.kind === 'acted') this.collectBoxProbesAnswered(s.result, s.arrived.mono);
     if (e === null) {
       // The id was forgotten while the job was out: its fold is dropped, save the row L1 says a deletion still owes.
       const row = collectForgottenActRow(id, s, s.audit.value);
@@ -4391,15 +4403,16 @@ export class FleetWatcher {
     }
   }
 
-  /** Folds one AUDIT answer (spec §5.10). What it says of the BOX counts whatever became of the id: the box-wide probes
-   *  (Task 5's `collectBoxProbesAfter`) and, for an answer a pass queued, that pass's tally (`collectPassClass`). Then
-   *  the id's entry, through Task 4's `collectAfterAudit`: an OBSERVATION only when `composed` is given and both
-   *  generations it captured still stand (`collectFresh`); then the feed cue. An id forgotten while the call was out has
-   *  no entry, and the answer is dropped for it (`an-answer-for-a-forgotten-id-is-dropped`): the entry written, or
-   *  null. */
+  /** Folds one AUDIT answer (spec §5.10). What it says of the BOX counts whatever became of the id: the box-wide probes,
+   *  by the answer's ARRIVAL (`collectBoxProbesAnswered`: an answer older than the probes' latest change is skipped, as
+   *  an act job's observation 2 can be, folded when its job settles) and, for an answer a pass queued, that pass's tally
+   *  (`collectPassClass`). Then the id's entry, through Task 4's `collectAfterAudit`: an OBSERVATION only when
+   *  `composed` is given and both generations it captured still stand (`collectFresh`); then the feed cue. An id
+   *  forgotten while the call was out has no entry, and the answer is dropped for it
+   *  (`an-answer-for-a-forgotten-id-is-dropped`): the entry written, or null. */
   private collectFoldAudit(coord: CoordStore, id: string, pass: number | null, a: CollectAudit, arrived: CollectClock,
     composed: CollectGenerations | null): CollectEntry | null {
-    this.collectBoxProbes = collectBoxProbesAfter(this.collectBoxProbes, a);
+    this.collectBoxProbesAnswered(a, arrived.mono);
     if (pass !== null) this.collectPassTally.get(pass)?.audits.set(id, collectPassClass(a));
     const entry = this.collectState.get(id);
     if (entry === undefined) return null;
@@ -4407,6 +4420,15 @@ export class FleetWatcher {
     const next = collectAfterAudit(entry, a, this.collectStepAt(arrived), observes);
     return this.collectFeedAfter(coord, id, next, collectFeedCueOfAudit(a), () => ({ title: COLLECT_FEED_TITLE.answer,
       body: this.collectAuditBody(id, next, a) }));
+  }
+
+  /** The ONE write of the box-wide probes (spec §5.10): both fields together, through L1's `collectBoxProbesAtArrival`,
+   *  so no answer's word about the box is applied without its arrival. */
+  private collectBoxProbesAnswered(a: CollectAudit | CollectResult, arrivedMono: number): void {
+    const next = collectBoxProbesAtArrival(
+      { probes: this.collectBoxProbes, changedAtMono: this.collectBoxProbesAtMono }, a, arrivedMono);
+    this.collectBoxProbes = next.probes;
+    this.collectBoxProbesAtMono = next.changedAtMono;
   }
 
   /** Writes `next` back after one step's feed cue (Task 4's `collectFeedStep`, over Task 5's cue), and writes the
@@ -4482,8 +4504,9 @@ export class FleetWatcher {
       cleared: () => { this.collectClearPairs(); },
       flipped: (live) => {
         // THE LAST-SEEN-LIVE FLAG (spec §5.10). A change either way is a FLIP: every pair clears, ONE feed row says so —
-        // any same-uid session can touch the marker, so the operator sees every change — and the job that saw it
-        // composes nothing. It starts SHADOWED, so an arming the lane never saw is a flip too.
+        // any same-uid session can touch the marker, so every change an act job SEES is said; one undone between two
+        // step-5 reads is never seen — and the job that saw it composes nothing. It starts SHADOWED, so an arming the
+        // lane never saw is a flip too.
         if (live === this.collectLastSeenLive) return false;
         this.collectLastSeenLive = live;
         this.collectClearPairs();

@@ -188,6 +188,24 @@ describe('a call or job that never settles (spec §5.10: local mode’s runner h
     expect(f.audits('demo-a'), 'never queued again while it stands').toHaveLength(1);
   });
 
+  it('a learning audit still queued behind another lane’s never-settling job on its key is listed at COLLECT_AUDIT_STALL_MS, not before, and never as the act slot held', async () => {
+    const f = await collectRig();
+    f.occupy('demo-a');                                     // another lane's job on demo-a's key, never released
+    f.witness('demo-a');
+    await f.pass(); await f.settled();
+    const flight = f.lane().inFlight.get('demo-a');
+    expect(flight, 'queued behind the other job, composing nothing').toMatchObject({ kind: 'learn', phase: 'queued' });
+    const queued = flight!.sinceMono;
+    while (f.mono() + CHILD_RECLAIM_SWEEP_MS + 1 - queued < COLLECT_AUDIT_STALL_MS) { f.next(); await f.pass(); await f.settled(); }
+    expect(await linesFor(f, 'demo-a'), 'no line before its bound').toEqual([]);
+    f.next(); await f.pass(); await f.settled();
+    expect(f.mono() - queued).toBeGreaterThanOrEqual(COLLECT_AUDIT_STALL_MS);
+    const line = await linesFor(f, 'demo-a');
+    expect(line, 'exactly one line at its bound').toHaveLength(1);
+    expect(line[0]!.sentence, 'an audit, not a held slot').not.toMatch(/act slot is held/);
+    expect(f.audits('demo-a'), 'it composed nothing: it is still queued').toEqual([]);
+  });
+
   it('an executor audit that never settles raises the line at COLLECT_AUDIT_STALL_MS while later passes still compose learning audits for other ids, and at STALL says the act slot is held', async () => {
     const f = await live();
     f.hold('audit', 'demo-a');                              // the NEXT audit of demo-a: its act job's own, never answered
@@ -314,6 +332,56 @@ describe('a fold that throws never wedges an id or the slot (spec §5.10)', () =
     expect(f.lane().slot, 'the slot was freed before the fold').toEqual({ kind: 'free' });
     f.next(); await f.pass(); await f.settled();
     expect(f.collects('demo-b')).toHaveLength(1);
+  });
+
+  it('an act job whose fold throws after an answer: observation 1 is not left standing, the id takes the refusal floor, and its next act follows two fresh audits a ceiling later', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const f = await live();
+    f.unwitness('demo-b');
+    f.scripts.set('demo-a', (verb) => (verb === 'collect'
+      ? { code: 0, stdout: JSON.stringify({ refused: 'in-use', detail: 'd', paths: [] }) } : undefined));
+    const gen0 = f.lane().entries.get('demo-a')!.idGen;
+    expect(f.lane().entries.get('demo-a')!.obs, 'observation 1 stands').not.toBeNull();
+    vi.spyOn(f.watcher as unknown as { collectFoldJob: () => unknown }, 'collectFoldJob')
+      .mockImplementationOnce(() => { throw new Error('fold broke'); });
+    f.next(); await f.pass(); await f.settled();            // demo-a's act: refused in-use, then its fold throws
+    expect(f.collects('demo-a'), 'the act was composed once').toHaveLength(1);
+    const msg = warn.mock.calls.map(([m]) => String(m)).find((m) => m.includes("folding the collector's job for demo-a failed (fold broke)"));
+    expect(msg, 'logged, as before').toBeDefined();
+    expect(msg, 'and says what the lane then did').toContain('its observation pair is reset');
+    expect(msg).toContain('CHILD_RECLAIM_DEFER_CEILING_MS');
+    const e = f.lane().entries.get('demo-a')!;
+    expect(e.obs, 'observation 1 is not left standing').toBeNull();
+    expect(e.idGen, 'the pair reset under a generation the lane never used').toBeGreaterThan(gen0);
+    await f.passesUntil(() => f.collects('demo-a').length > 1, 60);
+    const at = f.calls.flatMap((c, i) => (c.verb === 'collect' && c.id === 'demo-a' ? [i] : []));
+    expect(f.calls.slice(at[0]! + 1, at[1]).filter((c) => c.verb === 'audit' && c.id === 'demo-a').length,
+      'two fresh audits between the acts').toBeGreaterThanOrEqual(2);
+    expect(f.collects('demo-a')[1]!.mono - f.collects('demo-a')[0]!.mono, 'a ceiling apart, as after any refusal')
+      .toBeGreaterThanOrEqual(CHILD_RECLAIM_DEFER_CEILING_MS);
+  });
+
+  it('a job that rejects, then whose fold throws, keeps the slot as ever and leaves no observation standing: its next act follows two fresh audits a ceiling later', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const f = await live();
+    f.unwitness('demo-b');
+    let thrown = false;
+    f.setVisible((id) => {
+      if (id === 'demo-a' && !thrown) { thrown = true; throw new Error('presence gone'); }
+      return false;
+    });
+    vi.spyOn(f.watcher as unknown as { collectFoldJob: () => unknown }, 'collectFoldJob')
+      .mockImplementationOnce(() => { throw new Error('fold broke'); });
+    f.next(); await f.pass(); await f.settled();            // demo-a's job rejects at step 3, then the fold of its `threw` throws
+    expect(thrown, 'demo-a’s job reached its presence read').toBe(true);
+    const settledAt = f.mono();                             // the rig's clocks stand still while a pass's calls settle
+    expect(f.lane().slot, 'kept, as for any job that rejects').toEqual({ kind: 'kept', id: 'demo-a', untilMono: settledAt + CHILD_RECLAIM_STALL_MS });
+    expect(f.lane().entries.get('demo-a')!.obs, 'no observation left standing').toBeNull();
+    const from = f.calls.length;
+    await f.passesUntil(() => f.collects('demo-a').length > 0, 60);
+    expect(f.calls.slice(from).filter((c) => c.verb === 'audit' && c.id === 'demo-a').length, 'two fresh audits first')
+      .toBeGreaterThanOrEqual(2);
+    expect(f.collects('demo-a')[0]!.mono - settledAt, 'and a ceiling after the fold').toBeGreaterThanOrEqual(CHILD_RECLAIM_DEFER_CEILING_MS);
   });
 
   it('a learning audit that itself rejects is folded as an audit with no document: the failing run moves, and nothing was composed', async () => {

@@ -13,7 +13,7 @@ import {
 } from '../src/childReclaimSweep.js';
 import {
   COLLECT_CHANGED_RECENTLY_SPAN_MS, COLLECT_PROBE_CLASS, COLLECT_RUN_NONE, COLLECT_VERDICT_TABLE, COLLECT_VERDICT_WORDS,
-  collectAfterAct, collectAfterAudit, collectAfterHold, collectAfterPresence, collectAfterWouldCollect,
+  collectAfterAct, collectAfterAudit, collectAfterFoldFailed, collectAfterHold, collectAfterPresence, collectAfterWouldCollect,
   collectAttentionCauses, collectDue, collectFeedCueOfAct, collectFeedCueOfAudit, collectFeedStep, collectFirstSighting,
   collectIdleSchedule, collectLicence,
   collectNextAskMono, collectRefusalClass, collectRipe, collectRunTier, collectWouldCollectKey, collectWouldCollectStands,
@@ -330,6 +330,45 @@ describe('a verb refusal: at most 96 a day per id', () => {
   });
 });
 
+describe('a fold that failed: the pair resets under a new generation, the id takes the refusal floor, and nothing else moves (spec §5.10)', () => {
+  /** An entry with every field populated: the chain seeds what it can, the rest is set by spread. */
+  const populated = (): CollectEntry => {
+    const i = id().wouldCollect(0).act(refusedAct('quarantine-kept'), 0).act(failedAct(), MIN)
+      .audit(unmeasured('checkouts'), 2 * MIN).act(DIE, 3 * MIN).hold(4 * MIN);
+    return {
+      ...collectFeedStep(i.e(), { kind: 'row', key: 'x', outlivesObservations: true }).entry,
+      obs: { token: T1, arrivedMono: 5 * MIN },
+      presence: { count: 2, sinceMono: MIN, atMono: 4 * MIN },
+      streak: { word: 'in-use', sinceMono: MIN, lastMono: 4 * MIN, detail: 'in-use: d' },
+      scheduleMono: 40 * MIN,
+    };
+  };
+  const NOW = 7 * MIN;
+  const GEN = 9_000;
+
+  it('ends observation 1, stamps a generation the lane never used, stamps the refusal floor, and keeps every other field as it was', () => {
+    const before = populated();
+    expect(before.obs, 'observation 1 stands').not.toBeNull();
+    expect(before.refusedAtMono, 'an earlier refusal floor stands').not.toBe(NOW);
+    expect(before.idGen).not.toBe(GEN);
+    const after = collectAfterFoldFailed(before, step(NOW, GEN));
+    expect(after.obs).toBeNull();
+    expect(after.idGen).toBe(GEN);
+    expect(after.refusedAtMono).toBe(NOW);
+    expect(Object.keys(after).sort(), 'no field added or dropped').toEqual(Object.keys(before).sort());
+    for (const k of Object.keys(before) as (keyof CollectEntry)[]) {
+      if (k === 'obs' || k === 'idGen' || k === 'refusedAtMono') continue;
+      expect(after[k], `${k} is the input's own`).toBe(before[k]);
+    }
+  });
+
+  it('the next ask waits the ceiling from the fold, so the lane is never faster for a defect', () => {
+    const after = collectAfterFoldFailed(collectFirstSighting(1), step(NOW, GEN));
+    expect(collectNextAskMono(after, PASS, OBSERVE)).toBe(NOW + C);
+    expect(collectNextAskMono(collectAfterFoldFailed(populated(), step(NOW, GEN)), PASS, OBSERVE)).toBeGreaterThanOrEqual(NOW + C);
+  });
+});
+
 describe('a recognised pre-lock die', () => {
   const FLOCK_DIE: CollectResult = { kind: 'die', word: 'flock-unavailable' };
   const BAD_TOKEN_DIE: CollectResult = { kind: 'die', word: 'bad-token' };
@@ -623,7 +662,17 @@ describe('the deferral words\' own attention', () => {
     // count, the hold's and the die's continuity, and a feed episode that outlives observations
     const i = id().wouldCollect(0).act(refusedAct('quarantine-kept'), 0).act(failedAct(), MIN)
       .audit(unmeasured('checkouts'), 2 * MIN).act(DIE, 3 * MIN).hold(4 * MIN);
-    const before = collectFeedStep(i.e(), { kind: 'row', key: 'x', outlivesObservations: true }).entry;
+    // The chain cannot seed presence, the streak or the schedule (a hold clears presence, an act clears the streak, and
+    // an answer that starts a streak ends the die), so each is set here by spread: the whole-entry comparison below then
+    // proves every one ended.
+    const before: CollectEntry = {
+      ...collectFeedStep(i.e(), { kind: 'row', key: 'x', outlivesObservations: true }).entry,
+      presence: { count: 2, sinceMono: MIN, atMono: 4 * MIN },
+      streak: { word: 'in-use', sinceMono: MIN, lastMono: 4 * MIN, detail: 'in-use: d' },
+      scheduleMono: 40 * MIN,
+    };
+    expect([before.presence, before.streak, before.scheduleMono].map((x) => x !== null), 'presence, the streak and the schedule stand')
+      .toEqual([true, true, true]);
     expect([before.terminal.kind, before.verbFailed.kind, before.failing.kind], 'the three runs stand').toEqual(['run', 'run', 'run']);
     expect([before.deferrals, before.deferredAtMono], 'a deferral count').toEqual([1, 3 * MIN]);
     expect([before.held === null, before.die === null], 'the hold and the die clocks').toEqual([false, false]);

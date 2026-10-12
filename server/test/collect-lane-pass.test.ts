@@ -289,6 +289,23 @@ describe('every collector call rides the id’s queue key (spec §5.10)', () => 
     expect(f.audits('demo-a')).toHaveLength(2);
     expect(f.wouldCollects('demo-a')).toHaveLength(1);
   });
+
+  it('a learning audit refused for a missing capability when its turn on the key comes clears every pair: the capability back before the next pass, demo-a still needs a fresh observation', async () => {
+    const f = await collectRig();
+    f.pastHoldOff();
+    f.witness('demo-a'); f.witness('demo-b');
+    const rel = f.occupy('demo-b');                         // demo-b's learning audit queues behind another lane's job
+    await f.pass(); await f.settled();                      // demo-a: observation 1
+    expect(f.lane().entries.get('demo-a')!.obs, 'observation 1 stands').not.toBeNull();
+    f.fleetState.ccdVerbs = FULL_CAPS.filter((v) => v !== COLLECT_CAP);
+    rel(); await f.settled();                               // demo-b's audit is composed now: the capability is gone, so it is not asked
+    f.fleetState.ccdVerbs = [...FULL_CAPS];                 // restored BEFORE the next pass: its own capability gate must not do the clearing
+    expect(f.audits('demo-b'), 'nothing of demo-b reached ccd').toEqual([]);
+    expect(f.lane().entries.get('demo-a')!.obs, 'the refused audit cleared the pair').toBeNull();
+    f.next(); await f.pass(); await f.settled();
+    expect(f.wouldCollects('demo-a'), 'demo-a learns again first: it is not collected on that pass').toEqual([]);
+    expect(f.audits('demo-a'), 'one more learning audit').toHaveLength(2);
+  });
 });
 
 describe('stale answers, the live flag and a restart (spec §5.10)', () => {
@@ -335,6 +352,27 @@ describe('stale answers, the live flag and a restart (spec §5.10)', () => {
     expect(flipRows(f, true)).toHaveLength(1);
     expect(flipRows(f, false)).toHaveLength(1);
     expect(f.collects()).toEqual([]);
+  });
+
+  it('a pause the act job sees at its last check clears every pair: lowered before the next pass, the id still needs a fresh observation', async () => {
+    const f = await collectRig();
+    f.pastHoldOff(); f.witness('demo-a');
+    await f.pass(); await f.settled();                      // observation 1
+    const step5: { release: () => void }[] = [];            // the job's step-5 listing, held once its own audit is composed
+    f.onCall.push((c) => {
+      const s = f.lane().slot;
+      if (step5.length === 0 && c.verb === 'audit' && c.id === 'demo-a' && s.kind === 'job') step5.push(f.holdListing('demo-a'));
+    });
+    f.next(); await f.pass(); await f.settled();            // demo-a's job: observation 2 answered; its step 5 waits
+    expect(step5, 'the job reached its audit').toHaveLength(1);
+    expect(f.lane().entries.get('demo-a')!.obs, 'observation 1 stands while the job waits').not.toBeNull();
+    f.pause();                                              // raised while it waits: its last check reads it
+    step5[0]!.release(); await f.settled();                 // NO pass runs while the pause stands: its own gate would clear the pair too
+    expect(f.lane().entries.get('demo-a')!.obs, 'the job that saw the pause cleared the pair').toBeNull();
+    f.unpause();
+    f.next(); await f.pass(); await f.settled();
+    expect(f.wouldCollects('demo-a'), 'not offered again on the old observation').toEqual([]);
+    expect(f.audits('demo-a'), 'one more learning audit instead').toHaveLength(3);
   });
 
   it('a restart needs two fresh observations: no memory is carried', async () => {

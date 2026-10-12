@@ -17,9 +17,10 @@ import {
 } from '../src/childReclaimSweep.js';
 import {
   COLLECT_RUN_NONE, collectAfterAct, collectAfterAudit, collectAfterHold, collectAfterPresence, collectAttentionItems,
-  collectAttentionViewOf, collectBoxProbesAfter, collectFeedStep, collectFirstSighting, collectPassClass,
+  collectAttentionViewOf, collectBoxProbesAfter, collectBoxProbesAtArrival, collectFeedStep, collectFirstSighting, collectPassClass,
   collectRunTier, collectWouldCollectKey, parseCollectResult,
-  type CollectAttentionView, type CollectAudit, type CollectBoxFacts, type CollectEntry, type CollectRunView,
+  type CollectAttentionView, type CollectAudit, type CollectBoxFacts, type CollectBoxProbeState, type CollectEntry,
+  type CollectRunView,
 } from '../src/collectLane.js';
 import { COLLECTED, DAY, DIE, NO_DOCUMENT, T1, collectable, step, unmeasured, verdict } from './collectAnswers.js';
 
@@ -281,6 +282,45 @@ describe('collectPassClass and collectBoxProbesAfter (spec §5.10)', () => {
     for (const a of [collectable(T1), verdict('changed-recently'), COLLECTED]) {
       expect(collectBoxProbesAfter(s1, a).size, JSON.stringify(a)).toBe(0);
     }
+  });
+});
+
+describe('collectBoxProbesAtArrival: an answer older than the probes\' latest change says nothing of them (spec §5.10)', () => {
+  const STAMP = 1_000;
+  const standing = (): CollectBoxProbeState => ({ probes: new Map([['mv', 'mv: d']]), changedAtMono: STAMP });
+
+  it('an answer that arrived before the latest change is skipped whole: the very state comes back', () => {
+    const s = standing();
+    expect(collectBoxProbesAtArrival(s, collectable(T1), STAMP - 1)).toBe(s);
+    expect(collectBoxProbesAtArrival(s, unmeasured('floor'), STAMP - 1), 'an older set is skipped too').toBe(s);
+  });
+
+  it('a tie applies: an answer that arrived at the stamp itself is not older', () => {
+    const got = collectBoxProbesAtArrival(standing(), collectable(T1), STAMP);
+    expect([got.probes.size, got.changedAtMono]).toEqual([0, STAMP]);
+  });
+
+  it('an answer that changes nothing never moves the stamp: the very state comes back', () => {
+    const s = standing();
+    for (const a of [unmeasured('checkouts'), verdict('registered'), NO_DOCUMENT]) {
+      expect(collectBoxProbesAtArrival(s, a, STAMP + 500), JSON.stringify(a)).toBe(s);
+    }
+  });
+
+  it('an answer that changes the probes moves the stamp to its own arrival', () => {
+    const set = collectBoxProbesAtArrival(standing(), unmeasured('floor'), STAMP + 500);
+    expect([...set.probes], 'a second probe joins').toEqual([['mv', 'mv: d'], ['floor', 'floor: d']]);
+    expect(set.changedAtMono).toBe(STAMP + 500);
+    const cleared = collectBoxProbesAtArrival(set, COLLECTED, STAMP + 900);
+    expect([cleared.probes.size, cleared.changedAtMono], 'an answer that passes every rung clears them').toEqual([0, STAMP + 900]);
+  });
+
+  it('a passing answer older than a later set is skipped, and one at or after it clears', () => {
+    const empty: CollectBoxProbeState = { probes: new Map(), changedAtMono: Number.NEGATIVE_INFINITY };
+    const set = collectBoxProbesAtArrival(empty, unmeasured('mv'), 200);
+    expect([[...set.probes], set.changedAtMono], 'from the first state, anything applies').toEqual([[['mv', 'mv: d']], 200]);
+    expect(collectBoxProbesAtArrival(set, collectable(T1), 150), 'a passing answer that arrived before the set').toBe(set);
+    expect(collectBoxProbesAtArrival(set, collectable(T1), 200).probes.size).toBe(0);
   });
 });
 
