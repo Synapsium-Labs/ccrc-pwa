@@ -53,6 +53,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CCD, ghContainedEnv, harnessBin, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { CCD_ARGV, type ActorFlags } from '../src/ccdargv.js';
+import type { CollectToken } from '../../shared/api.js';
 import { decOf, eventsOf, measOf } from './lifecycleHelpers.js';
 
 const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src');
@@ -158,7 +159,7 @@ const PROBES: Record<string, Probe> = {
   // population (no witness, no quarantine record), so the real verb takes no lock and answers `not-witnessed` as JSON
   // naming the id — the same witness, and proof the dec was stripped before `--session` bound.
   'ws-collect': {
-    argv: (d) => CCD_ARGV.wsCollect('a'.repeat(64), ABSENT, d),
+    argv: (d) => CCD_ARGV.wsCollect('a'.repeat(64) as CollectToken, ABSENT, d),
     reached: (c) => { refusedForTheAbsentSession(c); expect(c.out).toContain('"refused":"not-witnessed"'); },
   },
   'ws-add': {

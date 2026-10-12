@@ -76,7 +76,7 @@ import {
   parseWaveDoneSignals,
   PROGRAM_KICKOFF_SUBJECT,
   RUN_HOLD_NUMBER_MAX,
-  IDLE_RUN_STATES, transitionsFor, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES,
+  IDLE_RUN_STATES, transitionsFor, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES, TMPROOT_ID_MAX_CHARS,
   WAVE_DONE_SUBJECT,
   type AskState,
   type ClaimConflict, type ClaimState, type ClaimSummary,
@@ -1475,7 +1475,7 @@ class IntentJournalFault extends Error {
  *  note, which is exactly the "hand-written" case this function throws on.
  *
  *  THE LENGTH BOUND. A candidate longer than
- *  `CHILD_RECLAIM_MAX_SESSION_ID_CHARS` (255) is never returned, and the
+ *  `TMPROOT_ID_MAX_CHARS` (255) is never returned, and the
  *  search stops at the first occurrence past that offset. Safe because a
  *  session id is a FILENAME component — the registry holds `<id>.uuid`, and
  *  no filesystem this runs on takes a component over 255 bytes, which no
@@ -1490,7 +1490,7 @@ class IntentJournalFault extends Error {
  *  sweep pass and every close. The bound makes the work per row
  *  proportional to 255, not to the row. `null` still means "no ` -> ` at
  *  all"; a row whose every candidate is too long parses to `[]`. */
-const CHILD_RECLAIM_MAX_SESSION_ID_CHARS = 255;
+/* The bound is L0's `TMPROOT_ID_MAX_CHARS` (spec §5.10), the one temp-root id cap, imported above. */
 function childReclaimDisplacedCandidates(detail: string): string[] | null {
   const prefix = 'reclaim:';
   if (!detail.startsWith(prefix)) return null;
@@ -1498,7 +1498,7 @@ function childReclaimDisplacedCandidates(detail: string): string[] | null {
   const first = body.indexOf(' -> ');
   if (first === -1) return null;
   const out: string[] = [];
-  for (let i = first; i !== -1 && i <= CHILD_RECLAIM_MAX_SESSION_ID_CHARS; i = body.indexOf(' -> ', i + 1)) {
+  for (let i = first; i !== -1 && i <= TMPROOT_ID_MAX_CHARS; i = body.indexOf(' -> ', i + 1)) {
     out.push(body.slice(0, i));
   }
   return out;
@@ -1512,7 +1512,7 @@ function childReclaimDisplacedCandidates(detail: string): string[] | null {
  *  included, and the writer's own separator is always one of them. It searches
  *  from the END (`lastIndexOf`, resuming one character before each hit), so the
  *  suffixes come shortest first, and it stops at the first one longer than
- *  `CHILD_RECLAIM_MAX_SESSION_ID_CHARS` — every later one is longer still, and
+ *  `TMPROOT_ID_MAX_CHARS` — every later one is longer still, and
  *  no session id can be (that bound's own docstring, above). The extra readings
  *  over-protect, which is the fail-shut direction. */
 function childReclaimDisplacedHeirCandidates(detail: string): string[] | null {
@@ -1522,7 +1522,7 @@ function childReclaimDisplacedHeirCandidates(detail: string): string[] | null {
   const last = body.lastIndexOf(' -> ');
   if (last === -1) return null;
   const out: string[] = [];
-  for (let i = last; i !== -1 && body.length - (i + 4) <= CHILD_RECLAIM_MAX_SESSION_ID_CHARS;
+  for (let i = last; i !== -1 && body.length - (i + 4) <= TMPROOT_ID_MAX_CHARS;
     i = i === 0 ? -1 : body.lastIndexOf(' -> ', i - 1)) {
     out.push(body.slice(i + 4));
   }
@@ -3427,7 +3427,7 @@ export class CoordStore {
     // `DISTINCT`: `reclaimProgram` writes one identical row (one `at` for the
     // act) per run of the programme it moves, so N runs would otherwise parse
     // the same text N times; the candidate length bound is the parsers' own
-    // (`CHILD_RECLAIM_MAX_SESSION_ID_CHARS`, whose docstring states why dropping
+    // (`TMPROOT_ID_MAX_CHARS`, whose docstring states why dropping
     // a longer one is safe). There is no SQL `MAX`: each row's instant is
     // proven before the fold compares it.
     const displacements = this.db.prepare(

@@ -11,10 +11,10 @@ import {
 import { reviveMeas } from '../src/coord/journalparse.js';
 import { CHILD_RECLAIM_PURGE_INCOMPLETE, childReclaimLeafKeptFeedBody } from '../src/coord/childReclaim.js';
 import {
-  CHILD_RECLAIM_KEPT_MANY_OVER, CHILD_RECLAIM_LEAF_FAILED_TOKENS, CHILD_RECLAIM_LEAF_KEPT_HORIZON_MS,
+  CHILD_RECLAIM_COLLECT_NONE, CHILD_RECLAIM_KEPT_MANY_OVER, CHILD_RECLAIM_LEAF_FAILED_TOKENS, CHILD_RECLAIM_LEAF_KEPT_HORIZON_MS,
   CHILD_RECLAIM_LEAF_KEPT_MANY_WORD, childReclaimAttentionWithLeaves, childReclaimDetailText, childReclaimLeafKept,
   childReclaimLeafKeptManySentence, childReclaimLeafKeptSince, childReclaimMirrorLeaf,
-  type ChildReclaimLeafEndRow, type ChildReclaimLeafSourceRow,
+  type ChildReclaimLeafEndRow, type ChildReclaimLeafKept, type ChildReclaimLeafSourceRow,
 } from '../src/childReclaimSweep.js';
 const NOW = 1_790_000_000_000;
 const DAY = 86_400_000;
@@ -37,17 +37,18 @@ const derive = (rows: readonly ChildReclaimLeafSourceRow[],
 
 const HORIZON = 'This line ends when the id is used for a new workspace, or 7 days after ccd recorded the reclaim; '
   + 'the feed keeps the record.';
-const KEPT_TAIL = 'What was kept stays on disk and ccrc deletes nothing more of it; a person removes it once nothing '
-  + 'still uses it.';
+const CLIPS_HALF = 'ccrc never removes the clips directory; a person removes it once nothing still uses it.';
+const TMP_HALF = 'ccrc’s temp-root collector removes the temp root once it has stood idle, but only while the '
+  + 'collector is switched on, the fleet box’s ccd can collect and cleanup is not paused, and only if ccrc recorded '
+  + 'handing that directory out; until then, or if the collector lists it for you, a person removes it once nothing '
+  + 'still uses it. The temp root leaves this line once it is collected.';
 const TMP_IN_USE = 'The reclaim of this child completed, but ccd kept its temp root ~/.cc-tmp/demo-gone (in-use: a '
-  + `process still used it after the bounded wait). ${KEPT_TAIL} The temp root leaves this line once it is collected. `
-  + HORIZON;
+  + `process still used it after the bounded wait). What was kept stays on disk. ${TMP_HALF} ${HORIZON}`;
 const CLIPS_REFUSED = 'The reclaim of this child completed, but ccd kept its clips directory ~/.cc-clips/demo-gone '
-  + `(refused: its removal helper refused it). ${KEPT_TAIL} ${HORIZON}`;
+  + `(refused: its removal helper refused it). What was kept stays on disk. ${CLIPS_HALF} ${HORIZON}`;
 const BOTH = 'The reclaim of this child completed, but ccd kept its clips directory ~/.cc-clips/demo-gone '
   + '(unmeasured: whether it could be removed could not be measured) and its temp root ~/.cc-tmp/demo-gone '
-  + `(refused: its removal helper refused it). ${KEPT_TAIL} The temp root leaves this line once it is collected. `
-  + HORIZON;
+  + `(refused: its removal helper refused it). What was kept stays on disk. ${CLIPS_HALF} ${TMP_HALF} ${HORIZON}`;
 const CUT = 'The reclaim of this child completed, but the journal line ccd wrote for it was cut to fit, so whether '
   + 'its clips directory or its temp root was kept is not known; the feed row for it carries what ccd said.';
 const TRUNCATED = `${CUT} ${HORIZON}`;
@@ -97,7 +98,7 @@ describe('childReclaimLeafKept — one item per id, from its latest reclaim row 
     const r = src({ meas: { childOf: '41', tmpRootKept: 'in-use' }, detail: 'temp root kept (in-use): pid 7' });
     expect(derive([r])).toEqual([{
       item: { kind: 'leaf-kept', sessionId: ID, runId: 41, sentence: TMP_IN_USE, at: NOW - DAY },
-      source: r.id, detail: 'temp root kept (in-use): pid 7',
+      source: r.id, detail: 'temp root kept (in-use): pid 7', clipsClause: null,
     }]);
   });
 
@@ -131,6 +132,7 @@ describe('childReclaimLeafKept — one item per id, from its latest reclaim row 
     expect(derive([r])).toEqual([{
       item: { kind: 'leaf-kept', sessionId: ID, runId: null, sentence: TRUNCATED, at: NOW - DAY }, source: r.id,
       detail: 'clips kept (refused)',
+      clipsClause: `whether its clips directory ~/.cc-clips/${ID} was kept is not known`,
     }]);
   });
 
@@ -223,6 +225,7 @@ describe('how the item ends', () => {
 describe('on the list: one item per child, and the collapse', () => {
   const item = (sessionId: string, runId: number | null = 41): ChildReclaimLeafKeptAttention =>
     ({ kind: 'leaf-kept', sessionId, runId, sentence: `s ${sessionId}`, at: NOW });
+  const y = (a: ChildReclaimLeafKeptAttention): ChildReclaimLeafKept => ({ item: a, source: 1, detail: null, clipsClause: null });
 
   it('a leaf item yields to any item the list already holds for the id, a stuck item and a kept-many member included', () => {
     const list: ChildReclaimAttention[] = [
@@ -233,27 +236,28 @@ describe('on the list: one item per child, and the collapse', () => {
       { kind: 'kept-many', word: 'minting-run-absent', members: [{ sessionId: 'demo-m', runId: 4 }], sentence: 'm' },
     ];
     const leaves = ['demo-t', 'demo-f', 'demo-s', 'demo-k', 'demo-m', 'demo-new'].map((id) => item(id));
-    expect(childReclaimAttentionWithLeaves(list, leaves)).toEqual([...list, item('demo-new')]);
+    expect(childReclaimAttentionWithLeaves(list, leaves.map(y), CHILD_RECLAIM_COLLECT_NONE)).toEqual([...list, item('demo-new')]);
   });
 
   it(`collapses more than ${CHILD_RECLAIM_KEPT_MANY_OVER} items with a run into one line of its own word; an item with no run stays single`, () => {
     const six = ['demo-a', 'demo-b', 'demo-c', 'demo-d', 'demo-e', 'demo-f'].map((id) => item(id));
     const orphan = item('demo-0', null);
-    expect(childReclaimAttentionWithLeaves([], [...six, orphan].reverse())).toEqual([
+    expect(childReclaimAttentionWithLeaves([], [...six, orphan].reverse().map(y), CHILD_RECLAIM_COLLECT_NONE)).toEqual([
       orphan,
       { kind: 'kept-many', word: 'leaf-kept', members: six.map((a) => ({ sessionId: a.sessionId, runId: 41 })),
         sentence: childReclaimLeafKeptManySentence(6) },
     ]);
     expect(childReclaimLeafKeptManySentence(6)).toBe('6 reclaimed child workspaces have a clips directory or a temp '
-      + 'root that ccd kept on disk. Each stays until a person removes it, and the feed row of each names what was '
-      + 'kept and why. Each one leaves this line when its id is used for a new workspace, or 7 days after ccd '
-      + 'recorded its reclaim.');
+      + 'root that ccd kept on disk. Each clips directory stays until a person removes it; each temp root stays until '
+      + 'ccrc’s temp-root collector removes it, while the collector is switched on and cleanup is not paused, or until '
+      + 'a person does. The feed row of each names what was kept and why. Each one leaves this line when its id is '
+      + 'used for a new workspace, or 7 days after ccd recorded its reclaim.');
   });
 
   it('five with a run and any number without stay single, ordered by session id', () => {
     const five = ['demo-a', 'demo-b', 'demo-c', 'demo-d', 'demo-e'].map((id) => item(id));
     const loose = [item('demo-x', null), item('demo-y', null)];
-    expect(childReclaimAttentionWithLeaves([], [...loose, ...five])).toEqual([...five, ...loose]);
+    expect(childReclaimAttentionWithLeaves([], [...loose, ...five].map(y), CHILD_RECLAIM_COLLECT_NONE)).toEqual([...five, ...loose]);
   });
 
   it('its collapse word is no kept word, so its line never shares a key with another kept-many line', () => {
@@ -268,7 +272,8 @@ describe('childReclaimDetailText — ccd’s detail as one bounded plain line', 
   const RLO = String.fromCharCode(0x202e);
   const LONG = `${'x'.repeat(10)}${NL}${RLO}${'y'.repeat(9988)}`;
   const leaf = (detail: string | null) => ({
-    item: { kind: 'leaf-kept' as const, sessionId: ID, runId: null, sentence: 's.', at: NOW }, source: 1, detail });
+    item: { kind: 'leaf-kept' as const, sessionId: ID, runId: null, sentence: 's.', at: NOW }, source: 1, detail,
+    clipsClause: null });
 
   it('a 10,000-character detail holding a newline and a bidi override reads as one line of at most LC_LINE_MAX + 1 characters', () => {
     expect(LONG).toHaveLength(10_000);
