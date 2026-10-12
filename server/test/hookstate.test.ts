@@ -661,17 +661,21 @@ describe('aliveAt — the age cut reads the later of updatedAt and aliveAt (D-40
   });
 
   it('a malformed aliveAt is ignored: not malformed, not no-state by itself, and it revives nothing', async () => {
-    for (const bad of ['soon', null, {}, [1], true, 1e999]) {
+    // `JSON.stringify(Infinity)` is `null`, so the non-finite number goes in as its JSON text: `1e999` parses to Infinity.
+    const INF = '__INFINITY__';
+    const put = (reg: string, o: Record<string, unknown>): void =>
+      seed(reg, ID, JSON.stringify(waiting(o)).replace(`"${INF}"`, '1e999'));
+    for (const bad of ['soon', null, {}, [1], true, INF]) {
       const reg = mkTmp('ccrc-hookstate-');
       // fresh by updatedAt: still fresh, still ok
-      seed(reg, ID, waiting({ updatedAt: NOW - 1000, aliveAt: bad }));
+      put(reg, { updatedAt: NOW - 1000, aliveAt: bad });
       const fresh = await readHookStateMeasured(localIO, reg, ID, UUID, NOW);
       expect(fresh, `fresh, aliveAt: ${String(bad)}`).toMatchObject({ ok: true, state: { state: 'waiting' } });
       const raw = await readHookStateRawMeasured(localIO, reg, ID, UUID);
       expect(raw, `raw, aliveAt: ${String(bad)}`).toMatchObject({ ok: true });
       if (raw.ok) expect(raw.aliveAt, `raw.aliveAt: ${String(bad)}`).toBeUndefined();
       // stale by updatedAt: a malformed aliveAt does not revive it
-      seed(reg, ID, waiting({ updatedAt: OLD, aliveAt: bad }));
+      put(reg, { updatedAt: OLD, aliveAt: bad });
       expect(await readHookStateMeasured(localIO, reg, ID, UUID, NOW), `stale, aliveAt: ${String(bad)}`)
         .toEqual({ ok: false, reason: 'no-state' });
     }
