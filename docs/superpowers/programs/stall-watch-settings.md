@@ -28,7 +28,7 @@ time.
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
 | 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merged `6e4524164` 2026-10-12; run 322 closed `done`, `final:true` (R37) |
-| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | fix round 1 (R40): CI reds at `24e4eebc6` being fixed (R42); review run 402 reading the old tip |
+| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | review 402 accepted; fix round 2 (R43) with fix round 1's CI reds (R42) |
 
 ## Decisions & deviations
 
@@ -911,6 +911,30 @@ time.
     - advance run 394 `working`, then `awaiting-review` on the new fingerprint;
     - open a fresh review run scoped to the new commits. It takes 402's report as input and re-verifies its
       findings at the new tip.
+
+- **R43 (2026-10-12 21:32)**, review 402 is accepted, and wave 3 gets fix round 2.
+  - Review run 402 (`ccrc-pwa-brisk-prairie`, mail 4415) read `24e4eebc6` with the panel (39 agents, none
+    unverified): 7 confirmed findings, 4 refuted. The worker had not pushed, so the reviewed tip was live and the
+    close was accepted. Report copied to `w3-review-402-report.md`. The round closes review 397's F3 at all three
+    readers and the race's first variant; every S/N/A/M row reproduces; the citation instrument agrees with `main`.
+    F1 and F2 are the two CI reds already ruled (R42).
+  - Rulings (fix round 2, mail 4416, which extends 4414):
+    - Update skew is accepted as named, not removed. The default moves (`ccrc rollout`, the PWA's apply, the
+      automatic moves) are fleet-first, so every ordinary move opens a window bounded by the update lag, and
+      unbounded if the server's move halts. Inside it, a carried wait reads no-state at its start + 30 min. The
+      plan header loses "fleet-first is the order this wave needs", and the entry names `--server-first` for a hand
+      rollout.
+      - Why: splitting the PR to ship the reader first costs a second release and review. The window needs a
+        carried wait older than 30 min during an update, and its worst reader (the dispatch busy check) also needs
+        a dispatch aimed at that worker.
+      - Cost if wrong: one `/clear` dispatched into a worker parked on a question.
+    - F3 routing: `store.ts`'s `restampAsk` docstring and `watch.ts` :7409-7413 (claim 1197, run 358) still
+      describe the old re-stamp as current. Recorded in D-4041's Not done and added to the follow-up list;
+      `asks-mint.test.ts`, unclaimed, is scoped in this round.
+    - Code: remove dead check N3 (the regex is the rule); make F6's vacuous test iteration real. N4 stays, named as
+      positional.
+    - Words: F5's event fallback, F7, D-4039's missing session-verdict and `turnStall` consequences, the M4 line's
+      qualifier, plan :53 and :46-47. Task 1's snippet is not rewritten; a note says D-4041 supersedes it.
 
 ## Carried constraints (reviewers get these)
 
