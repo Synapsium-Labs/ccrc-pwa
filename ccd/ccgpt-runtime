@@ -63,7 +63,8 @@
 # ── WHEN IT REBUILDS ─────────────────────────────────────────────────────
 # Only when `check` fails: no usable `current` (absent), the requirement below
 # moved (requirement-moved), the probe's or the patch's bytes moved
-# (probe-moved), or the generation no longer matches its own stamp (mutated).
+# (probe-moved), or the generation no longer matches its own stamp or no longer
+# holds the patch the build installed (mutated).
 # pip takes the highest version in range at build time, so two boxes built on
 # different days may differ inside the range; each stamp records what its box
 # resolved, and a box does not drift after its build.
@@ -142,6 +143,9 @@ _RT_PIP_FLOOR='22.2'
 RT="${HOME:-}/.ccrc/runtime/codex"
 STAMP=.ccrc-runtime.json
 GEN_RE='^gen-[0-9]{8}T[0-9]{6}Z-[0-9]+$'
+# The one line of a generation's ccrc_litellm_patch.pth: the `patch` stage writes
+# it, and `check` requires exactly it (spec §22.2, D-4859).
+_RT_PTH_LINE='import ccrc_litellm_patch'
 _RT_SHA_PY='import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
 # json.dump DEFAULTS, written by the generation's own interpreter, tmp then
 # os.replace — the stamp is read by `check` and by later readers, never half.
@@ -417,6 +421,44 @@ _rt_litellm_version() {   # <python> — the installed distribution's own versio
   "$1" -I -c 'import importlib.metadata as m; print(m.version("litellm"))' 2>/dev/null
 }
 
+# _rt_find_sites <gen> — sets RT_SITES to the generation's
+# lib/python3*/site-packages directories: the build's one glob, read by the
+# `patch` stage and by `check`. Found by a glob, never by asking an
+# interpreter (the header's WHAT IT RUNS).
+_rt_find_sites() {
+  local d
+  RT_SITES=()
+  for d in "$1"/lib/python3*/site-packages; do
+    [ -d "$d" ] && RT_SITES+=("$d")
+  done
+}
+
+# _rt_holds <file> <bytes> — 0 iff <file> is a regular file holding exactly
+# <bytes>, which carry no NUL. Bash builtins only: `read -d ''` keeps every
+# newline, and it answers 0 only when it met a NUL, which <bytes> never carry.
+_rt_holds() {
+  local have=""
+  [ -f "$1" ] || return 1
+  IFS= read -r -d '' have < "$1" && return 1
+  [ "$have" = "$2" ]
+}
+
+# _rt_patch_installed <gen> — 0 iff the generation still holds the patch the
+# build installed (spec §22.2, D-4859): ONE site-packages by the build's glob,
+# its .pth exactly `_RT_PTH_LINE` and a newline, and its module byte for byte
+# what `patch-source` prints. Compared with the source directly rather than
+# re-hashed against the stamp: a deleted or edited file is then named by what
+# it is, whatever the stamp says (the stamp's hash is compared on its own), and
+# `check` already has the source at hand.
+_rt_patch_installed() {
+  local want
+  _rt_find_sites "$1"
+  [ "${#RT_SITES[@]}" -eq 1 ] || return 1
+  _rt_holds "${RT_SITES[0]}/ccrc_litellm_patch.pth" "$_RT_PTH_LINE"$'\n' || return 1
+  want="$(_rt_patch_source; printf x)"
+  _rt_holds "${RT_SITES[0]}/ccrc_litellm_patch.py" "${want%x}"
+}
+
 # _rt_verdict — sets RT_WORD, RT_NAME, RT_VER; rc 0 (RT_WORD=ok) iff the
 # current generation is exactly what this file would build now. The four
 # other words are `check`'s whole vocabulary.
@@ -433,6 +475,9 @@ _rt_verdict() {
   # The probe's bytes, then the patch's — what a build stamps (spec §22.2, D-4859).
   want="$( { _rt_probe_source; _rt_patch_source; } | "$py" -I -c "$_RT_SHA_PY" 2>/dev/null)" || return 1
   [ "$sha" = "$want" ] || { RT_WORD=probe-moved; return 1; }
+  # The patch the build installed, still installed: a deleted or edited module
+  # or .pth leaves a generation that runs stock LiteLLM, which is `mutated`.
+  _rt_patch_installed "$RT/$RT_NAME" || return 1
   [ "$(_rt_litellm_version "$py")" = "$RT_VER" ] || return 1
   RT_WORD=ok
 }
@@ -476,8 +521,7 @@ _rt_prune() {
 }
 
 _rt_build() {   # <force: 0|1>
-  local why gen py out rc line pass="" fail="" detail errtail ver sha canary built prev link pip_s probe_s pipv now d site
-  local -a sites=()
+  local why gen py out rc line pass="" fail="" detail errtail ver sha canary built prev link pip_s probe_s pipv now site
   _rt_need_home
   if [ "$1" = 1 ]; then
     why=forced
@@ -538,19 +582,17 @@ _rt_build() {   # <force: 0|1>
   # D-4859): after pip is done with that directory, and BEFORE the probe, so
   # the probe tests the runtime a tier will run. The directory is found by a
   # glob, never by asking an interpreter (the system python3 runs only `-m
-  # venv`, the header's WHAT IT RUNS), and must be exactly one; the files are
-  # written by redirects alone.
-  for d in "$gen"/lib/python3*/site-packages; do
-    [ -d "$d" ] && sites+=("$d")
-  done
-  if [ "${#sites[@]}" -eq 0 ]; then
+  # venv`, the header's WHAT IT RUNS; `_rt_find_sites`), and must be exactly
+  # one; the files are written by redirects alone.
+  _rt_find_sites "$gen"
+  if [ "${#RT_SITES[@]}" -eq 0 ]; then
     _rt_fail patch "$gen" "the new venv has no site-packages to install the runtime patch into"; return 2
-  elif [ "${#sites[@]}" -gt 1 ]; then
-    _rt_fail patch "$gen" "the new venv has ${#sites[@]} site-packages directories (lib/python3*/site-packages), not one, so the runtime patch has no one place to go"; return 2
+  elif [ "${#RT_SITES[@]}" -gt 1 ]; then
+    _rt_fail patch "$gen" "the new venv has ${#RT_SITES[@]} site-packages directories (lib/python3*/site-packages), not one, so the runtime patch has no one place to go"; return 2
   fi
-  site="${sites[0]}"
+  site="${RT_SITES[0]}"
   { _rt_patch_source > "$site/ccrc_litellm_patch.py" \
-      && printf '%s\n' 'import ccrc_litellm_patch' > "$site/ccrc_litellm_patch.pth"; } 2>/dev/null \
+      && printf '%s\n' "$_RT_PTH_LINE" > "$site/ccrc_litellm_patch.pth"; } 2>/dev/null \
     || { _rt_fail patch "$gen" "could not write the runtime patch into ${site#"$gen"/}"; return 2; }
 
   # probe — the bytes `probe-source` prints, kept in the generation as the
@@ -674,12 +716,14 @@ _rt_probe_source() {
 #
 # IT GATES ON THE STREAM TOO, and it is the acceptance test of ccgpt-runtime's
 # LiteLLM patch (spec §22.2, D-4859), which the build writes into the
-# generation before this runs. SHIM_OUT goes out again streamed, twice, over
-# two scripted Codex streams carrying two parallel tool calls and a text: one
-# with every delta event, one with NONE, the arguments and the text only in
-# the finished items, as Codex sends many parallel calls. Both must reach
-# Claude Code as the same blocks, each call's arguments and the text exactly
-# once; stock LiteLLM turns the no-delta stream's calls into empty input.
+# generation before this runs. SHIM_OUT goes out again streamed, three times,
+# over three scripted Codex streams carrying two parallel tool calls and a
+# text: one with every delta event, one with NONE, the arguments and the text
+# only in the finished items, as Codex sends many parallel calls, and one with
+# no delta events whose calls carry their arguments whole in their added
+# events. All three must reach Claude Code as the same blocks, each call's
+# arguments and the text exactly once; stock LiteLLM turns the no-delta
+# stream's calls into empty input.
 #
 # The failure names keep the HARNESS's dependencies (translate,
 # one-upstream-request, translate-stream: the async router, the httpx sink, the
@@ -798,7 +842,8 @@ async def _both():  # ONE event loop for both calls
 
 
 # The streamed scenarios (spec §22.2, D-4859): two parallel tool calls and a
-# text, scripted as Codex streams them WITH every delta event and WITHOUT any.
+# text, scripted as Codex streams them WITH every delta event, WITHOUT any, and
+# without any but with each call's arguments whole in its added event.
 ARGS = (json.dumps({"q": "one"}), json.dumps({"q": "two"}))
 
 
@@ -816,7 +861,7 @@ def _msg(text, status):
             "content": [{"type": "output_text", "text": text, "annotations": []}] if text else []}
 
 
-def _scripted(with_deltas):
+def _scripted(with_deltas, args_in_added=False):
     out, s = [], 0
     def add(kind, **kw):
         nonlocal s
@@ -824,7 +869,7 @@ def _scripted(with_deltas):
     add("response.created", response={"id": "r", "object": "response", "created_at": 1,
         "status": "in_progress", "model": MODEL, "output": []})
     for n, a in enumerate(ARGS):
-        add("response.output_item.added", output_index=n, item=_fc(n, "", "in_progress"))
+        add("response.output_item.added", output_index=n, item=_fc(n, a if args_in_added else "", "in_progress"))
         if with_deltas:
             add("response.function_call_arguments.delta", item_id=f"fc_{n}", output_index=n, delta=a[:4])
             add("response.function_call_arguments.delta", item_id=f"fc_{n}", output_index=n, delta=a[4:])
@@ -842,11 +887,11 @@ def _scripted(with_deltas):
     return "".join(out).encode()
 
 
-async def _stream(with_deltas):
+async def _stream(with_deltas, args_in_added=False):
     """(events, None) or (None, error): SHIM_OUT streamed over one scripted
     upstream, its reply read as Anthropic events — SSE bytes parsed by their
     `data: ` lines, or dicts taken as they come."""
-    _stream_body[0] = _scripted(with_deltas)
+    _stream_body[0] = _scripted(with_deltas, args_in_added)
     try:
         reply = await router.aanthropic_messages(**json.loads(json.dumps(dict(SHIM_OUT, stream=True))))
         events, buf = [], ""
@@ -867,7 +912,7 @@ async def _stream(with_deltas):
 
 
 async def _all():  # ONE event loop for every call: the Router is never driven from a second one
-    return await _both(), (await _stream(False), await _stream(True))
+    return await _both(), (await _stream(False), await _stream(True), await _stream(False, True))
 
 
 try:
@@ -939,12 +984,14 @@ def _blocks(events):
 
 
 # The stream gates (spec §22.2, D-4859): the no-delta stream must keep each
-# call's arguments, and the streamed one must not have them twice.
+# call's arguments, and neither the streamed one nor the one whose added events
+# carry the arguments whole may have them twice.
 for _events, _err in streams:
     if _err is not None:
         fail("translate-stream", f"{type(_err).__name__}: {_err}")
 _want = [("tool_use", ARGS[0]), ("tool_use", ARGS[1]), ("text", "ok")]
-for (_events, _), _name in zip(streams, ("stream-tool-args-kept", "stream-deltas-not-duplicated")):
+for (_events, _), _name in zip(streams, ("stream-tool-args-kept", "stream-deltas-not-duplicated",
+                                       "stream-added-args-not-duplicated")):
     _got = _blocks(_events)
     if _got != _want:
         fail(_name, blob(_got))
@@ -986,7 +1033,7 @@ _rt_patch_source() {
 # on the stated premise that "the item's fields were already streamed". Codex sends
 # some responses, most often ones carrying parallel tool calls, with no delta events
 # at all: the arguments and the text arrive only in the finished item. Each call then
-# reaches Claude Code with input {} (measured 2026-10-12: 70-90% of multi-call
+# reaches Claude Code with input {} (measured 2026-10-12: 70-91% of multi-call
 # responses from Claude Code 2.1.292 on, on both lanes).
 #
 # THE FIX. When `response.output_item.done` finishes a function_call, custom_tool_call
@@ -994,7 +1041,13 @@ _rt_patch_source() {
 # arguments, input or text as ONE delta event in place of that done event, so the
 # chunk it makes is the same chunk a streamed delta would have made. Nothing is sent
 # twice: a call whose arguments streamed, or arrived whole in its added event, is left
-# alone, and so is a message whose text streamed.
+# alone, and so is a message whose text streamed. It assumes each output item is
+# emitted whole (its added event, its deltas, its done event) before the next item's
+# added event, as LiteLLM's bridge and adapter already assume for streamed deltas: the
+# synthesized delta carries no id, and downstream joins an id-less delta to the call
+# that opened most recently. A call that streamed nothing and finishes after a later
+# item was added still gets its delta, and the stream says so on stderr, once
+# (`interleaved no-delta items`), so a broken assumption is seen, not silent.
 #
 # LAZY AND INERT. Importing this module imports nothing from LiteLLM. It adds a
 # meta-path finder that waits for the bridge's module and patches the iterator class
@@ -1046,6 +1099,9 @@ def _in_place_of_done(state, chunk):
             state.add(("text", chunk.get("item_id")))
         return chunk
     if kind == "response.output_item.added":
+        for key in [k for k in state if k[0] == "added"]:
+            state.discard(key)
+        state.add(("added", slot))  # the most recent added item's slot, and only that
         field = _CALL_DELTA.get(item.get("type"), (None, None))[1]
         if field and (item.get(field) or chunk.get("arguments")):
             state.add(("call", slot))  # the added event carried them whole
@@ -1058,6 +1114,11 @@ def _in_place_of_done(state, chunk):
         if ("call", slot) in state or not isinstance(payload, str) or not payload:
             return chunk
         state.add(("call", slot))
+        if ("added", slot) not in state and any(k[0] == "added" for k in state) and ("warned",) not in state:
+            state.add(("warned",))
+            _warn("interleaved no-delta items: output item %r finished after a later item was added; "
+                  "its arguments were handed on anyway, and downstream may join them to that later "
+                  "call" % (slot,))
         return {"type": delta_kind, "item_id": item.get("id"), "output_index": slot, "delta": payload}
     if item.get("type") == "message":
         text = _message_text(item)
@@ -1100,6 +1161,8 @@ def _apply(module):
 
 
 class _Finder(object):
+    _ccrc_finder = True  # what a later run of this module recognises; the class itself is new each run
+
     def find_spec(self, name, path=None, target=None):
         if not (name.startswith(_PREFIX) and name.endswith(_SUFFIX)):
             return None
@@ -1126,7 +1189,11 @@ class _Finder(object):
         return spec
 
 
-if not any(isinstance(f, _Finder) for f in sys.meta_path):
+# One finder per process, even when this module's body runs twice (a reload, or an
+# import under a second name): each run defines a NEW _Finder class, so an isinstance
+# test never matches the first run's finder, and two finders delegate to each other
+# without end. The class attribute is read by name, so it matches across runs.
+if not any(getattr(f, "_ccrc_finder", False) is True for f in sys.meta_path):
     sys.meta_path.insert(0, _Finder())
 for _name, _module in list(sys.modules.items()):
     if _name.startswith(_PREFIX) and _name.endswith(_SUFFIX):
