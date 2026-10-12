@@ -71,7 +71,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 - **2026-10-12 11:19 — ALL THREE ORPHANS ARE COLLECTED.**
   - **Collects:**
     - `ccrc-pwa-still-harbor` (run 364) at 11:15:14 (record `…1791803712119500698.4034814`);
-    - `MekWarLive-brisk-canyon` (run 363) at 11:17:33 (record `…1791803851729873736.216665`).
+    - `project-b-brisk-canyon` (run 363) at 11:17:33 (record `…1791803851729873736.216665`).
   - **The lane's behaviour.** It took them one at a time, and each witness was dropped. No row was `failed` or `quarantine-kept`.
   - **Re-measured read-only (`ls`):**
     - both leaves and both witnesses are gone;
@@ -85,14 +85,14 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     - the leaf `~/.cc-tmp/ccrc-pwa-brisk-prairie`;
     - its witness `$REG/tmproots/ccrc-pwa-brisk-prairie`.
 
-    Empty: `$REG/tmpquarantine/` and `~/.cc-tmp/.ccd-quarantine/` (the record was dropped last, and nothing is kept). The other three leaves stand: `MekWarLive-brisk-canyon`, `ccrc-pwa-still-harbor`, and `ccrc-pwa-clear-summit` (refused `containment-unproven`).
+    Empty: `$REG/tmpquarantine/` and `~/.cc-tmp/.ccd-quarantine/` (the record was dropped last, and nothing is kept). The other three leaves stand: `project-b-brisk-canyon`, `ccrc-pwa-still-harbor`, and `ccrc-pwa-clear-summit` (refused `containment-unproven`).
   - **Next.** A second read-only feed watcher waits for the two remaining collects. It stops at once on a `quarantine-kept` or `failed` row.
 
 - **2026-10-12 11:02 — THE COLLECTOR IS ARMED. The operator ruled "I want YOU to arm it", and at 11:02:30 I created `$REG/collect-lane-live` on the fleet box.** That file is the only thing I touched in the registry, as a one-off act at the operator's explicit instruction. The rule that sessions never touch `~/.cc-sessions` stands for everything else.
   - **This answers the operator's question 2:** the collector is armed BEFORE the path-identity follow-up's W2. What arming before W2 accepts was told to the operator first. A collect that drops only the witness can close a kept-temp-root attention item while the leaf stays on disk. The two tail-drop fixes can leave a temp root unwitnessed: that is a leak, never a removal.
   - **The README's pre-arming checklist, measured at 10:55–11:02:**
     - the fleet box's `ccd caps` lists `collect-v1` and `reclaim-pause-v1`;
-    - every "would collect" names an orphan whose run is closed: `MekWarLive-brisk-canyon` (363), `ccrc-pwa-brisk-prairie` (369) and `ccrc-pwa-still-harbor` (364);
+    - every "would collect" names an orphan whose run is closed: `project-b-brisk-canyon` (363), `ccrc-pwa-brisk-prairie` (369) and `ccrc-pwa-still-harbor` (364);
     - `reclaim-paused` and `coordinator-paused` are absent;
     - the feed's last 200 events hold no box-wide line. I cannot read the /runs cleanup row through the client.
   - **What the lane said before arming:**
@@ -127,7 +127,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     - confirm the lane is SHADOWED on the box;
     - close run 380 final only after opening the next run, per the operator's answer on programme shape.
 
-- **2026-10-12 07:06 — FIX ROUND 2 is in (4279, acked; archived in `wave9-fr2/`): PR #354 at `ec9d63aa7`. Run 380 is at `awaiting-review`, and SCOPED REVIEW RUN 388 is DISPATCHED to `ccrc-pwa-bright-canyon` (claude-corp, Anthropic; Opus `xhigh`) and advanced to `working`.**
+- **2026-10-12 07:06 — FIX ROUND 2 is in (4279, acked; archived in `wave9-fr2/`): PR #354 at `ec9d63aa7`. Run 380 is at `awaiting-review`, and SCOPED REVIEW RUN 388 is DISPATCHED to `ccrc-pwa-bright-canyon` (lane-a, Anthropic; Opus `xhigh`) and advanced to `working`.**
   - **Re-measured.**
     - One commit since `241cbb873`, eight files.
     - Every changed `server/src` line is a comment or docstring line.
@@ -155,7 +155,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     - R8, R9 and R11 are recorded.
   - **Numbers.** Each fix goes under its per-task number (4850, 4851, 4853, 4854, 4855). There are no new numbers.
 
-- **2026-10-12 06:29 — the fold is in (4273, acked): PR #354 at `241cbb873`. Run 380 is at `awaiting-review`, and SCOPED REVIEW RUN 387 is DISPATCHED to `ccrc-pwa-plain-prairie` (claude-corp, Anthropic; Opus `xhigh`) and advanced to `working`.**
+- **2026-10-12 06:29 — the fold is in (4273, acked): PR #354 at `241cbb873`. Run 380 is at `awaiting-review`, and SCOPED REVIEW RUN 387 is DISPATCHED to `ccrc-pwa-plain-prairie` (lane-a, Anthropic; Opus `xhigh`) and advanced to `working`.**
   - **The fold.** `241cbb873` is docs only: the plan's `## Deviations found` and the "§16 as built" note.
     - It folds the new slugs into 4850, 4851 and 4853, and adds two residuals.
     - It corrects my ruling's clause on `registered-id-with-only-an-unparseable-record-stays-hidden`: the refused-names line COUNTS such a name and never names it.
@@ -250,7 +250,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     - `platform-hazards`' BSD deadline-shim candidate.
   - **Checked:** none of these files is among the 36 test files the range changes.
 
-- **2026-10-12 01:16 — review run 386 is DISPATCHED to `ccrc-pwa-calm-delta` (claude-corp, Anthropic; Opus `xhigh`) and advanced to `working`.**
+- **2026-10-12 01:16 — review run 386 is DISPATCHED to `ccrc-pwa-calm-delta` (lane-a, Anthropic; Opus `xhigh`) and advanced to `working`.**
   - **The brief** (7826 bytes) names the held-out panel, plus the plan's four lenses with SAFETY (Opus `xhigh`) and SECURITY mandatory.
   - **It adds three SAFETY rows**, each with a mutation row:
     - `collect-lane-live` has no writer;
@@ -457,7 +457,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
   Opus readers and a critic, read-only at `d0c2b7803`) is running.
 
 - **2026-10-11 12:15 — WAVE 8 IS MERGED: #349 is `d0c2b7803` (12:13:47Z, prerelease v0.0.147). Run 348 is closed `done`, final, released. Wave 9's run 380 is opened.**
-  - **Review 379** (swift-meadow, `claude-dev0-corp`, an Anthropic account with no swap) is accepted and closed `done`
+  - **Review 379** (swift-meadow, `lane-b`, an Anthropic account with no swap) is accepted and closed `done`
     with its own `{reviewedTip, report}`. It measured the tip once, at `4b5a94ac1`, unmoved through the read. It ran the
     held-out panel (three Opus·high lenses), the SAFETY lens on Opus·xhigh, and three Sonnet·high refuters per
     finding: 16 agents, 0 errors. It raised 4 findings and refuted all 4 (3–0, 3–0, 3–0, 2–1). F1 to F12 are met at
@@ -734,7 +734,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     for each of Tasks 2, 4, 5, 6, 7, 8 and 9. 4532 and 4533 are in reserve.
 
 - **2026-10-10 01:47 — review 369 is wave 7's review (brisk-prairie's 4157), closed `done` with its own report.**
-  - **How it ran.** On `claude-dev1` with no swap, on Opus 5.5: the held-out panel, the plan's four lenses with
+  - **How it ran.** On `lane-c` with no swap, on Opus 5.5: the held-out panel, the plan's four lenses with
     models literal (SAFETY as four Opus·xhigh parts), 3 Sonnet refuters per finding, and the leads from 4153 and
     4156 in a workflow of their own. 239 agents ran, with no error.
   - **The suites at the tip are green,** except the three main-reds (boot, ccd-review-335-pins, tmp-sweep, each red
@@ -754,17 +754,17 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     It confirms three other findings: the final recycled-spawn pins are missing; a resumed collect audit re-reads
     the idle floor, which needs a ruling; and the NUL back-link prose is false.
   - **What was done.** Addendum 4153 gives review 369 all four as leads for its refuters, not rulings. Review 369 is
-    still on `claude-dev1`.
+    still on `lane-c`.
 
 - **2026-10-09 21:43 — review 368 is NOT accepted as wave 7's review; review run 369 is dispatched in its place.**
   - **What 368 was.** Its reviewer, `ccrc-pwa-calm-cove`, was born on a Claude account at 19:08 and swapped to the
-    Codex lane `gpt2` at 19:38, probably by a rescue swap. Its report (`reviews/review-368-7a4b0a19.md`, 11 lines)
+    Codex lane `lane-g` at 19:38, probably by a rescue swap. Its report (`reviews/review-368-7a4b0a19.md`, 11 lines)
     ran none of the brief's mandatory lenses: no held-out panel, no SAFETY or SECURITY lens, no suites. Under
     coordinator clause 14, an unrun lens is unverified, never approval.
   - **What was done with it.** Run 368 was closed with its own `{reviewedTip, report}`, and the server accepted it.
     Its one finding, F1, is carried to 369 for the panel's refuters. F1: `server/src/remote/runner.ts:49` keeps
     `ws-audit --collect` at the generic 90 s deadline, while its bounded probes may reach about 94 s.
-  - **Review run 369** went to `ccrc-pwa-brisk-prairie` on `claude-dev1` and is at `working`. Its brief
+  - **Review run 369** went to `ccrc-pwa-brisk-prairie` on `lane-c` and is at `working`. Its brief
     (`review-369-brief.md`) repeats 368's, tells the reviewer to stop and mail if it is not on an Anthropic account
     or is swapped off one, and adjudicates F1.
   - **Cost.** The first dispatch was refused `oversize` (9070 of 8192 bytes, nothing written); the trimmed brief
@@ -1137,7 +1137,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
   - the server was `[current]` at 13:40:06.
 
   So the fleet box went first, as wave 6 requires. Nothing was rolled out by hand.
-  - **R59's last item is resolved.** `expoAI-assistant-calm-mesa`, held since wave 5 because its branch was gone,
+  - **R59's last item is resolved.** `project-a-calm-mesa`, held since wave 5 because its branch was gone,
     reclaimed at 13:39:31, on the first attempt after the fleet box took the gone-branch pin. The row reads `reclaim`
     `done`: nothing kept in clips or the temp root, and residue 0. The paced retry loop has ended.
   - **The worker.** Run 291 closed on the merged fingerprint, and the server queued amber-river's own child
@@ -1361,9 +1361,9 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     `swift-hollow` scratch directory. It hand-ran `ws-expire` on four archived, unmarked
     workspaces of this programme's era: `amber-summit`, `keen-hollow`, `plain-ridge` and `warm-hollow`. Their attic
     refs and tombstones are kept.
-    - It also removed `expoAI-assistant-calm-mesa`'s `node_modules` and its `~/.cc-tmp` leaf, keeping the worktree.
+    - It also removed `project-a-calm-mesa`'s `node_modules` and its `~/.cc-tmp` leaf, keeping the worktree.
     - Nothing of this session's was touched.
-  - **`expoAI-assistant-calm-mesa`'s reclaim loop, measured.**
+  - **`project-a-calm-mesa`'s reclaim loop, measured.**
     - 249 attempts since 10-05 14:04, every one `pin-failed` ("refs/heads/ws/calm-mesa does not resolve — there is no
       branch tip to pin").
     - It is paced at one attempt every 15.5 min, about 190 journal rows a day. That is harmless, and it ends when wave
@@ -1863,7 +1863,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
   - **The live cases.**
     - `ccrc-pwa-brisk-meadow` is an R37 false positive: its slug coordinated program-leverage runs 10 to 30 in
       August. R40 lets the sweep take it.
-    - `expoAI-assistant-calm-mesa` (`pin-failed`, branch gone, HEAD `af784dbf` on `origin/main`) waits for wave 6,
+    - `project-a-calm-mesa` (`pin-failed`, branch gone, HEAD `af784dbf` on `origin/main`) waits for wave 6,
       or for the operator's one `update-ref`.
   - **Route (clause 13), changed from wave 4's Opus·high with workflows off:**
     `{class:'opus', effort:'xhigh', subagent:'sonnet', workflow:'on', compact:'40'}`. This is the bulk row, because
@@ -1888,7 +1888,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
       Their work runs are `working`.
     - `brisk-meadow` (review 171 of run 148, both `done`, no `.hold`) is passed over with no feed row. That skip is
       invisible by construction. It is wave 5's attention-list item (R37/R-5d skips) in a live case.
-    - `expoAI-assistant-calm-mesa` (run 139) fails `pin-failed: refs/heads/ws/calm-mesa does not resolve … there is
+    - `project-a-calm-mesa` (run 139) fails `pin-failed: refs/heads/ws/calm-mesa does not resolve … there is
       no branch tip to pin` at 14:04, 14:20 and 14:24. It fails closed, retries, and will reach the attention list.
       **New for wave 5:** a child whose branch is already gone can never be reclaimed today. Wave 5 decides what
       may be pinned instead (the worktree's HEAD) or names the operator act.
@@ -1908,8 +1908,8 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     (`ccd-scope-sweep`) and wave 9 ("ccd stops a pane's scope when it ends the pane", every verb including reclaim)
     do. Wave 5 does not duplicate it.
   - **Not reclamation:** the graph sweep's 14 kills in 7 days are its own `MemoryMax=4G` cgroup OOM
-    (`ccd-graph-sweep.service`, `oom-kill`). The trees near the kills are mostly `MekWarLive/swift-harbor`, then
-    `expoAI-assistant/identity-flake`, neither of them a child.
+    (`ccd-graph-sweep.service`, `oom-kill`). The trees near the kills are mostly `project-b/swift-harbor`, then
+    `project-a/identity-flake`, neither of them a child.
 
 - **2026-10-05 13:06 — the fleet converged past v0.0.79 and the sweep is live.** Measured read-only.
   - **Convergence:** the halt cleared overnight. The updater sent the fleet box v0.0.84 at 12:22 (from v0.0.78)
@@ -2673,7 +2673,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
     - Server box doctor: its one FAIL is the old inactive `ccrc-agent.service` unit on a server-role box,
       which is the operator's to clear and predates this programme.
     - Before moving, #171's two new files (`ccgpt-proxy.py`, `ccgpt-usage.py`) were checked on the fleet
-      box: neither path was occupied, and no live OpenClaw file names them. The shared unit pair stays
+      box: neither path was occupied, and no live file of another fleet-host project names them. The shared unit pair stays
       unplaced (D-3172).
   - **Measurement (a): the scratchpad FOLLOWS `TMPDIR`.** Wave 1's quiescent probe found Claude Code's
     per-uid root under `TMPDIR`, with nothing under `/tmp/claude-<uid>` for that cwd. A child's harness

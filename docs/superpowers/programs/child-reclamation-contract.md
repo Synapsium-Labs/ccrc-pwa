@@ -1480,7 +1480,7 @@ Code citations are to `77c11245`. They are hints, so locate code by content.
   - **The leftovers in `~/.cc-tmp`:**
     - `ccrc-pwa-swift-hollow`'s empty, unwitnessed leaf;
     - the foreign entries in `~/.cc-tmp`, measured 2026-10-06 at 18 directories and 105 loose files, about 6.66 GiB.
-  - **`expoAI-assistant-calm-mesa`** (branch proven absent; HEAD and every reflog commit on `origin/main`; clean
+  - **`project-a-calm-mesa`** (branch proven absent; HEAD and every reflog commit on `origin/main`; clean
     tree) reclaims on its own once wave 6's gone-branch pin is live. Until then the operator may recreate the branch
     at HEAD to reclaim it sooner.
 
