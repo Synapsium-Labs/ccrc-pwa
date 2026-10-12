@@ -19,7 +19,8 @@ import { fileURLToPath } from 'node:url';
 import { CHILD_RECLAIM_SWEEP_MS, COLLECT_AUDIT_STALL_MS, COLLECT_OBSERVE_INTERVAL_MS } from '../src/watch.js';
 import { CHILD_RECLAIM_DEFER_CEILING_MS } from '../src/childReclaimSweep.js';
 import {
-  COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, COLLECT_LANE_LIVE_MARKER, collectFeedSwitchBody,
+  COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, COLLECT_LANE_LIVE_MARKER, collectFeedAnswerBody, collectFeedReadBody,
+  collectFeedSwitchBody, parseCollectAudit, type CollectReadWhat,
 } from '../src/collectLane.js';
 import { COLLECT_CAP, RECLAIM_PAUSE_CAP } from '../src/ccdargv.js';
 import { COLLECT_BOX_LABELS } from '../../shared/api.js';
@@ -457,5 +458,58 @@ describe('a refusal or a die that repeats every cycle writes ONE feed row, and p
     expect(audited, 'the verdict was answered').toBeGreaterThanOrEqual(3);
     expect(rowsSaying(f, 'demo-a', 'audit-d'), 'the audit verdict\'s own row').toHaveLength(1);
     expect(rowsSaying(f, 'demo-a', 'refusal-d'), 'a refusal before it and a refusal after it').toHaveLength(2);
+  });
+});
+
+describe('an answer the reader made is worded on the feed as ccrc’s, chosen by its KIND, never as a word ccd said (spec §5.10)', () => {
+  const ID = 'demo-a';
+  /** One row of the feed: the audit or act answer, how the rig scripts it, and what ccrc says of it. */
+  interface Arm {
+    readonly live: boolean;
+    readonly script: (f: CollectRig) => (verb: 'audit' | 'collect') => CcdAnswer | undefined;
+    readonly what: CollectReadWhat;
+    /** What ccrc saw, as the reader hands the lane. */
+    readonly saw: string;
+    /** The witness's run in the row's heading: an audit that printed no document brings none. */
+    readonly run: (f: CollectRig) => number | null;
+  }
+  const NOTHING: CcdAnswer = { code: 1, stdout: '', stderr: 'ccd: scripted kill\n' };
+  const JUNK: CcdAnswer = { code: 0, stdout: 'not a document\n' };
+  const OTHER: CcdAnswer = { code: 0, stdout: JSON.stringify({ collected: 'demo-other', record: null, resumed: false, witness: 'dropped' }) };
+  const arms: readonly (readonly [string, Arm])[] = [
+    ['an audit that printed no document', { live: false, what: 'no-document', saw: 'ccd: scripted kill', run: () => null,
+      script: () => (verb) => (verb === 'audit' ? NOTHING : undefined) }],
+    ['an audit that printed a document ccrc cannot read', { live: false, what: 'unreadable', run: () => null,
+      saw: (parseCollectAudit(ID, true, JUNK.stdout, '') as { readonly detail: string }).detail,
+      script: () => (verb) => (verb === 'audit' ? JUNK : undefined) }],
+    ['an act that printed no document', { live: true, what: 'no-document', saw: 'ccd: scripted kill', run: (f) => f.mintingRun,
+      script: () => (verb) => (verb === 'collect' ? NOTHING : undefined) }],
+    ['an act whose failure the reader made, with no word of ccd’s', { live: true, what: 'unaccepted', run: (f) => f.mintingRun,
+      saw: 'ws-collect reported collecting demo-other, not demo-a', script: () => (verb) => (verb === 'collect' ? OTHER : undefined) }],
+  ];
+
+  it.each(arms)('%s', async (_what, arm) => {
+    const f = await collectRig();
+    if (arm.live) { f.pastHoldOff(); await f.goLive(); }
+    f.witness(ID);
+    f.scripts.set(ID, arm.script(f));
+    if (arm.live) await f.passesUntil(() => f.collects(ID).length >= 1, 200);
+    else { await f.pass(); await f.settled(); }
+    const rows = f.feed().filter((e) => e.sessionId === ID && e.title === COLLECT_FEED_TITLE.answer);
+    expect(rows, 'one row').toHaveLength(1);
+    const body = rows[0]!.body;
+    expect(body).toBe(collectFeedReadBody(ID, arm.run(f), arm.what, arm.saw));
+    expect(body).not.toMatch(/ccd answered (no-document|unreadable)|a word this build cannot show/);
+  });
+
+  it('CONTROL: an act that failed with a word of ccd’s keeps ccd’s words', async () => {
+    const f = await collectRig();
+    f.pastHoldOff(); await f.goLive();
+    f.witness(ID);
+    f.scripts.set(ID, (verb) => (verb === 'collect'
+      ? { code: 1, stdout: JSON.stringify({ failed: 'probe-unmeasured', detail: 'ccd’s own detail' }) } : undefined));
+    await f.passesUntil(() => f.collects(ID).length >= 1, 200);
+    const rows = f.feed().filter((e) => e.sessionId === ID && e.title === COLLECT_FEED_TITLE.answer);
+    expect(rows.map((e) => e.body)).toEqual([collectFeedAnswerBody(ID, f.mintingRun, 'probe-unmeasured', 'ccd’s own detail', [])]);
   });
 });

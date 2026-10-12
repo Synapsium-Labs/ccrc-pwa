@@ -4,7 +4,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   COLLECT_FEED_TITLE, collectFeedAnswerBody, collectFeedCollectedBody, collectFeedCueOfAct, collectFeedCueOfAudit,
-  collectFeedStep, collectFeedSwitchBody, collectFeedWouldCollectBody, collectFirstSighting, collectWouldCollectKey,
+  collectFeedReadBody, collectFeedStep, collectFeedSwitchBody, collectFeedWouldCollectBody, collectFirstSighting,
+  collectWouldCollectKey, type CollectReadWhat,
 } from '../src/collectLane.js';
 import {
   ACT_NO_DOCUMENT, COLLECTED, DIE, NO_DOCUMENT, T1, UNREADABLE, collectable, failedAct, refusedAct, unmeasured, verdict,
@@ -55,6 +56,23 @@ describe('the collector feed bodies (spec §5.10)', () => {
     }
     expect(collectFeedAnswerBody('demo-a', 41, 'in-use', 'pid 7', ['/p/a', '/p/b']))
       .toBe('demo-a, child of run #41: ccd answered in-use: pid 7 (paths: /p/a, /p/b).');
+  });
+
+  it.each<readonly [CollectReadWhat, string]>([
+    ['no-document', 'demo-a, child of run #41: ccd answered nothing; what ccrc saw: ccd: killed.'],
+    ['unreadable', 'demo-a, child of run #41: ccrc could not read ccd’s answer; what ccrc saw: ccd: killed.'],
+    ['unaccepted', 'demo-a, child of run #41: ccrc could not accept ccd’s answer; what ccrc saw: ccd: killed.'],
+  ])('an answer this reader made, %s, is worded as ccrc’s, with what ccrc saw after it', (what, body) => {
+    expect(collectFeedReadBody('demo-a', 41, what, 'ccd: killed')).toBe(body);
+  });
+
+  it('an answer this reader made says what ccrc saw only when it is something, and escapes it like any other string', () => {
+    expect(collectFeedReadBody('demo-a', null, 'no-document', '')).toBe('demo-a: ccd answered nothing.');
+    expect(collectFeedReadBody('demo-a', null, 'unaccepted', `${RLO}${NL}`)).toBe('demo-a: ccrc could not accept ccd’s answer.');
+    const bad = `x${NL}${RLO}y`;
+    const body = collectFeedReadBody('demo-a', null, 'unreadable', bad);
+    expect(body).toBe('demo-a: ccrc could not read ccd’s answer; what ccrc saw: x y.');
+    expect(body.includes(NL) || body.includes(RLO)).toBe(false);
   });
 
   it('the titles are the lane’s own: distinct, and none is a child reclaim title', () => {

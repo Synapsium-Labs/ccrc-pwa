@@ -1846,8 +1846,11 @@ export function childReclaimAttentionWithLeaves(
       singles.push(...these.filter((c) => c.runId !== null));
     }
     if (lead !== undefined && runless.length > CHILD_RECLAIM_KEPT_MANY_OVER) {
-      // Tense-neutral, so a terminal word stays true after a later `collectable` (spec §5.10). A terminal or per-leaf
-      // word is ccd's; `held`, `presence` and `would-collect` are ccrc's own. Each reaches the line made safe alike.
+      // Tense-neutral, so a terminal word stays true after a later `collectable` (spec §5.10). Only a terminal word is
+      // ccd's own, copied from its answer; every other word is a fixed label of this build (`per-leaf`, `failing`,
+      // `verb-failed`, `die`, `held`, `presence`, `would-collect`, and `in-use`, `registered`, `in-progress` and
+      // `changed-recently`, which spell ccd's verdict words). This seam takes any string, so every word goes through
+      // `childReclaimDetailText` alike.
       counted.push(`${runless.length} are listed under ${childReclaimDetailText(word)}: `
         + `${childReclaimIdsNamed(runless.map((c) => c.sessionId))}. For each one: ${lead}`);
     } else {

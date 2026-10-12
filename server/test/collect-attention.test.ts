@@ -18,7 +18,7 @@ import {
 import {
   COLLECT_RUN_NONE, collectAfterAct, collectAfterAudit, collectAfterHold, collectAfterPresence, collectAttentionItems,
   collectAttentionViewOf, collectBoxProbesAfter, collectFeedStep, collectFirstSighting, collectPassClass,
-  collectRunTier, collectWouldCollectKey,
+  collectRunTier, collectWouldCollectKey, parseCollectResult,
   type CollectAttentionView, type CollectAudit, type CollectBoxFacts, type CollectEntry, type CollectRunView,
 } from '../src/collectLane.js';
 import { COLLECTED, DAY, DIE, NO_DOCUMENT, T1, collectable, step, unmeasured, verdict } from './collectAnswers.js';
@@ -134,6 +134,60 @@ describe('collectAttentionItems — one item per id, each at its own threshold (
     const inUse = view({ deferral: { word: 'in-use', detail: 'pid 7', since: NOW } });
     expect(items({ '-x': inUse, '.y': inUse }).perId).toEqual([]);
     expect(items({ 'demo-a': view() })).toEqual({ perId: [], manyLead: {}, box: [] });
+  });
+});
+
+describe('whose words a sentence quotes: ccd’s, or ccrc’s own (spec §5.10)', () => {
+  const SAW = 'ws-collect reported collecting demo-other, not demo-a';
+  const ccrcsOwn = 'keep failing (ccrc could not accept ccd’s answer). What ccrc saw: ws-collect reported collecting demo-other, not demo-a.';
+
+  it('a verb failure this reader made reads as ccrc’s: no empty brackets, and no “What ccd said”', () => {
+    const s = one(view({ verbFailed: runOf('verb-failed', '', 4, false, SAW) }))!.sentence;
+    expect(s).toContain(ccrcsOwn);
+    expect(s).not.toContain('()');
+    expect(s).not.toContain('What ccd said');
+  });
+
+  it.each<readonly [string, 'failing' | 'verb-failed', string]>([
+    ['an empty word, which the reader makes', 'verb-failed', ''],
+    ['no-document, from an act', 'verb-failed', 'no-document'],
+    ['no-document, from an audit', 'failing', 'no-document'],
+    ['unreadable, from an audit', 'failing', 'unreadable'],
+  ])('%s: its detail is what ccrc saw, never what ccd said', (_what, run, word) => {
+    const r = runOf(run, word, 4, false, 'text ccrc saw');
+    const s = one(view(run === 'failing' ? { failing: r } : { verbFailed: r }))!.sentence;
+    expect(s).toContain(' What ccrc saw: text ccrc saw.');
+    expect(s).not.toContain('What ccd said');
+  });
+
+  it('CONTROL: a word ccd said keeps “What ccd said”, in a terminal item, a per-leaf item and a verb failure alike', () => {
+    expect(one(view({ verbFailed: runOf('verb-failed', 'probe-unmeasured', 4, false, 'd') }))!.sentence)
+      .toContain('(probe-unmeasured). What ccd said: d.');
+    expect(one(view({ failing: runOf('failing', 'device', 1, true, 'a mount') }))!.sentence).toContain('What ccd said: a mount.');
+    const t = one(view({ terminal: runOf('terminal', 'witness-mismatch', 1, true, 'w') }))!.sentence;
+    expect(t).toContain('What ccd said: w.');
+    expect(t).not.toContain('What ccrc saw');
+  });
+
+  it('a word made only of characters a sentence may not carry reads as one this build cannot show, never as empty brackets', () => {
+    for (const v of [view({ failing: runOf('failing', RLO, 4) }), view({ verbFailed: runOf('verb-failed', RLO, 4) })]) {
+      const s = one(v)!.sentence;
+      expect(s).toContain('(a word this build cannot show)');
+      expect(s).not.toContain('()');
+    }
+  });
+
+  it.each<readonly [string, string, string]>([
+    ['a collected document for another id', JSON.stringify({ collected: 'demo-other', record: null, resumed: false, witness: 'dropped' }), SAW],
+    ['a failed document with no word', JSON.stringify({ failed: '', detail: 'ccd’s own text' }), 'ws-collect answered failed with no word'],
+  ])('end to end: %s, four times over, is listed as ccrc’s own words', (_what, doc, saw) => {
+    const result = parseCollectResult('demo-a', false, `${doc}\n`, '');
+    expect(result).toEqual({ kind: 'failed', token: '', detail: saw });
+    const e = [2, 3, 4, 5].reduce((x, gen) => collectAfterAct(x, result, step(gen * 1000, gen)), collectFirstSighting(1));
+    const sentence = one(collectAttentionViewOf(e))!.sentence;
+    expect(sentence).toContain(`keep failing (ccrc could not accept ccd’s answer). What ccrc saw: ${saw}.`);
+    expect(sentence).not.toContain('What ccd said');
+    expect(sentence).not.toContain('()');
   });
 });
 

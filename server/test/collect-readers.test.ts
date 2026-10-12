@@ -287,6 +287,13 @@ describe('parseCollectResult — the three documents (spec §5.10)', () => {
       .toEqual({ kind: 'failed', token: 'probe-unmeasured', detail: 'd' });
     expect(R(J({ failed: 'quarantine-kept', detail: 'k' }), false)).toEqual({ kind: 'failed', token: 'quarantine-kept', detail: 'k' });
   });
+
+  it.each<readonly [string, boolean, Record<string, unknown>]>([
+    ['at exit 1, with ccd’s detail', false, { failed: '', detail: 'ccd’s own text' }],
+    ['at exit 0, with none', true, { failed: '' }],
+  ])('a failure with no word reads as this reader’s: its token is empty and its detail is ccrc’s sentence, %s', (_what, ok, doc) => {
+    expect(R(J(doc), ok)).toEqual({ kind: 'failed', token: '', detail: 'ws-collect answered failed with no word' });
+  });
 });
 
 describe('parseCollectResult — no document: three arms, never folded (spec §5.10)', () => {

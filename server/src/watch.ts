@@ -142,7 +142,8 @@ import {
   COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, collectAfterAct, collectAfterAudit, collectAfterHold, collectAfterPresence,
   collectAfterWouldCollect, collectAttentionItems, collectAttentionViews, collectBoxAfterPopulation,
   collectBoxProbesAfter, collectCandidateOf, collectClearPair, collectFeedAnswerBody, collectFeedCollectedBody,
-  collectFeedCueOfAct, collectFeedCueOfAudit, collectFeedStep, collectFeedSwitchBody, collectFeedWouldCollectBody,
+  collectFeedCueOfAct, collectFeedCueOfAudit, collectFeedReadBody, collectFeedStep, collectFeedSwitchBody,
+  collectFeedWouldCollectBody,
   collectFirstSighting, collectForgets, collectForgottenActRow, collectFresh, collectJobEffects, collectOffers,
   collectPassClass, collectPopulation, collectWouldCollectKey, type CollectAudit, type CollectEntry, type CollectFeedCue,
   type CollectPassClass, type CollectPopulation, type CollectResult, type CollectStep, type CollectUnsettledKind,
@@ -4421,29 +4422,32 @@ export class FleetWatcher {
     return stepped.entry;
   }
 
-  /** An audit answer's row body, worded by Task 5's builder (spec §5.10). A collectable answer opens no row. */
+  /** An audit answer's row body, worded by Task 5's builder (spec §5.10). A collectable answer opens no row. A document
+ *  that was not one (`no-document`, `unreadable`) is worded as ccrc's, by KIND, never as a word ccd said. */
   private collectAuditBody(id: string, e: CollectEntry, a: CollectAudit): string {
     const runId = e.evidence.runId;
     switch (a.kind) {
       case 'verdict': return collectFeedAnswerBody(id, runId, a.verdict, a.detail, []);
       case 'unmeasured': return collectFeedAnswerBody(id, runId, a.probe, a.detail, []);
-      case 'no-document': return collectFeedAnswerBody(id, runId, a.kind, a.stderr, []);
-      case 'unreadable': return collectFeedAnswerBody(id, runId, a.kind, a.detail, []);
+      case 'no-document': return collectFeedReadBody(id, runId, 'no-document', a.stderr);
+      case 'unreadable': return collectFeedReadBody(id, runId, 'unreadable', a.detail);
       case 'collectable': return collectFeedAnswerBody(id, runId, a.kind, null, []);
       default: { const unnamed: never = a; return unnamed; }
     }
   }
 
-  /** An act's row, titled and worded by Task 5 (spec §5.10): `collected` its own; every other outcome ccd's word. */
+  /** An act's row, titled and worded by Task 5 (spec §5.10): `collected` its own; a `failed` with no word and an act that
+ *  answered no document are ccrc's words, chosen by KIND; every other outcome ccd's word. */
   private collectActRow(id: string, e: CollectEntry, r: CollectResult): { readonly title: string; readonly body: string } {
     const runId = e.evidence.runId;
     switch (r.kind) {
       case 'collected':
         return { title: COLLECT_FEED_TITLE.collected, body: collectFeedCollectedBody(id, runId, e.evidence.leaf, r) };
       case 'refused': return { title: COLLECT_FEED_TITLE.answer, body: collectFeedAnswerBody(id, runId, r.word, r.detail, r.paths) };
-      case 'failed': return { title: COLLECT_FEED_TITLE.answer, body: collectFeedAnswerBody(id, runId, r.token, r.detail, []) };
+      case 'failed': return { title: COLLECT_FEED_TITLE.answer, body: r.token === ''
+        ? collectFeedReadBody(id, runId, 'unaccepted', r.detail) : collectFeedAnswerBody(id, runId, r.token, r.detail, []) };
       case 'die': return { title: COLLECT_FEED_TITLE.answer, body: collectFeedAnswerBody(id, runId, r.word, null, []) };
-      case 'no-document': return { title: COLLECT_FEED_TITLE.answer, body: collectFeedAnswerBody(id, runId, r.kind, r.stderr, []) };
+      case 'no-document': return { title: COLLECT_FEED_TITLE.answer, body: collectFeedReadBody(id, runId, 'no-document', r.stderr) };
       default: { const unnamed: never = r; return unnamed; }
     }
   }

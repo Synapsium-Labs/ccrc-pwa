@@ -111,6 +111,25 @@ describe('an id whose registry row stands again projects no item, and keeps its 
     expect(itemsFor(await f.attention(), 'demo-a').map((a) => a.word), 'the row went: the item returns').toEqual(['would-collect']);
   });
 
+  it('while tmpquarantine cannot be read the registered id’s item stands, with the tmpquarantine line beside it; once it reads again the item is hidden again', async () => {
+    const f = await collectRig();
+    f.pastHoldOff(); f.witness('demo-a');
+    await f.pass(); await f.settled();
+    f.next(); await f.pass(); await f.settled();            // shadow: demo-a would be collected
+    f.next(); await f.pass([...f.names(), 'demo-a.uuid']); await f.settled();
+    expect(itemsFor(await f.attention(), 'demo-a'), 'the row stands and the record listing is measured: hidden').toEqual([]);
+    f.breakQuarantine();                                    // tmpquarantine is now a link: no record can be read from it
+    f.next(); await f.pass([...f.names(), 'demo-a.uuid']); await f.settled();
+    const blind = await f.attention();
+    expect(itemsFor(blind, 'demo-a').map((a) => a.word), 'a record it cannot see is not a record it can rule out').toEqual(['would-collect']);
+    expect(f.boxWide(blind).map((a) => a.word), 'and the doubt is said').toContain('tmpquarantine');
+    f.mendQuarantine();                                     // measured again, with no record
+    f.next(); await f.pass([...f.names(), 'demo-a.uuid']); await f.settled();
+    const mended = await f.attention();
+    expect(itemsFor(mended, 'demo-a'), 'a measured listing that names no record hides it again').toEqual([]);
+    expect(f.boxWide(mended).map((a) => a.word)).not.toContain('tmpquarantine');
+  });
+
   it('a listing in doubt hides nothing: with tmproots unmeasured, a would-collect item still stands', async () => {
     const f = await collectRig();
     f.pastHoldOff(); f.witness('demo-a');

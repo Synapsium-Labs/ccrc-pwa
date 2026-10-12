@@ -262,10 +262,12 @@ function collectDie(sessionId: string, err: string): CollectDieWord | null {
 /** `ccd ws-collect --expect <token> --session <id> …`'s answer (spec §5.10).
  *  - `collected` (exit 0, `collected === id`). `record` is the quarantine record's name, or null for a witness-only drop.
  *  - `refused` (exit 0). ccd's word is kept verbatim and classed by `collectRefusalClass`.
- *  - `failed`. ccd's word, or `''` when this reader made the failure: a `collected` document for another id or one it
- *    cannot read, or a document at an exit status that contradicts it.
+ *  - `failed`. `token` is ccd's word, and `detail` is ccd's text, or `token` is `''` when this reader made the failure
+ *    (a `collected` document for another id or one it cannot read, a document at an exit status that contradicts it,
+ *    or a `failed` document that carries no word), and `detail` is then this build's own sentence, never ccd's.
  *  - `die`: a RECOGNISED pre-lock die. It acted nothing.
- *  - `no-document`: anything else with no document, which MAY have acted (a runner kill, a timeout, a link failure). */
+ *  - `no-document`: anything else with no document, which MAY have acted (a runner kill, a timeout, a link failure).
+ *    `stderr` is what the runner printed, text ccrc saw and not a word ccd said. */
 export type CollectResult =
   | { readonly kind: 'collected'; readonly record: string | null; readonly resumed: boolean; readonly witness: CollectWitnessWord }
   | { readonly kind: 'refused'; readonly word: string; readonly detail: string; readonly paths: readonly string[] }
@@ -302,6 +304,7 @@ export function parseCollectResult(sessionId: string, ok: boolean, stdout: strin
       return { kind: 'refused', word: v.refused, detail: typeof v.detail === 'string' ? v.detail : '', paths };
     }
     if (typeof v.failed === 'string') {
+      if (v.failed === '') return { kind: 'failed', token: '', detail: 'ws-collect answered failed with no word' };
       return { kind: 'failed', token: v.failed, detail: typeof v.detail === 'string' ? v.detail : '' };
     }
   }
@@ -449,8 +452,10 @@ export type CollectRunToken = 'failing' | 'verb-failed' | 'terminal';
 /** One of the id's three runs (spec §5.10, pacing): none, or `run` answers since it was last cleared, the last of
  *  them ARRIVING at `atMono`. `stuck` is set once an answer entered the run on the tier at once (a per-leaf
  *  deterministic probe, or any terminal answer) and stays set until the run clears, so a later answer of another
- *  class never takes the run off the tier. `word` and `detail` are the latest answer's, ccd's own strings: whatever
- *  reaches a sentence or a feed row goes through `childReclaimDetailText` first. */
+ *  class never takes the run off the tier. `word` and `detail` are the latest answer's, and their provenance is
+ *  mixed: ccd's own strings, except that a word this build's readers make (`''`, `unreadable` and `no-document`, which
+ *  `collectReaderMade` names) carries ccrc's own sentence or text ccrc saw, such as a runner's stderr. Whatever
+ *  reaches a sentence or a feed row goes through `childReclaimDetailText` first, and a sentence says whose it is. */
 export type CollectRun =
   | { readonly kind: 'none' }
   | { readonly kind: 'run'; readonly run: number; readonly atMono: number; readonly stuck: boolean;
@@ -930,7 +935,8 @@ export type CollectItemWord =
   | 'changed-recently' | 'would-collect';
 
 /** One paced run as attention reads it (spec §5.10): its tier state (wave 8's derivation), and the word and detail
- *  of the answer that last advanced it, both ccd's and untrusted. */
+ *  of the answer that last advanced it. Both are untrusted, and of mixed provenance: ccd's, save where
+ *  `collectReaderMade` says this build's reader made the word, and then the detail is ccrc's text or text ccrc saw. */
 export interface CollectRunView {
   readonly tier: ChildReclaimTierState;
   readonly word: string | null;
@@ -991,21 +997,40 @@ export function collectAttentionViewOf(e: CollectEntry): CollectAttentionView {
   };
 }
 
+/** Is the quarantine-record listing in doubt this pass (spec §5.10)? It is when `tmpquarantine` is among the
+ *  population's doubted listings, whether it could not be measured (`unmeasured`) or carried more names than the lane
+ *  reads (`over-cap`); an `absent` listing is a proven absence, measured, and never a doubt. It reads the doubts and
+ *  nothing else, so a doubt about `tmproots` alone leaves it false. The ONE spelling: the hide in
+ *  `collectAttentionViews` and the `records` subsumption in `collectAttentionItems` both read it. */
+export const collectRecordsInDoubt = (doubts: readonly CollectListingDoubt[]): boolean =>
+  doubts.some((d) => d.listing === 'tmpquarantine');
+
 /** WHICH remembered ids attention projects (spec §5.10): every one, save an id whose exact registry row stands again
- *  in the listing the last measured pass's pre-filter read (`registryNames`, through `collectRowStands`) while no
- *  quarantine record in that population names it. Such an id (a reused slug) is never asked and never forgotten, and
- *  an item it carried (would-collect, in-use, a terminal word) would describe what is now a live workspace, so it
- *  projects none. A record keeps it listed, as it keeps it a candidate: a kept record is never silent. Nothing is ever
- *  hidden because an id is merely absent from a listing that is unmeasured or over its cap: attention must not vanish
- *  exactly when a listing is in doubt. Pacing memory is KEPT, untouched: once the row goes, the item returns as it
- *  stood. With no population measured yet, no id is projected (and none is remembered). Pure: the watcher hands its
- *  memory and that pass's listing over, and publishes what comes back. */
+ *  in the listing the last measured pass's pre-filter read (`registryNames`, through `collectRowStands`) while the
+ *  MEASURED `tmpquarantine` names no record of it. Such an id (a reused slug) is never asked and never forgotten, and
+ *  while its row stands it projects NO per-id item (a terminal word, a failed verb, a die, a failing probe, in-use,
+ *  a hold, in-progress, registered, presence, changed-recently or would-collect), because each would describe what is
+ *  now a live workspace. A record keeps it listed, as it keeps it a candidate: a kept record is never silent. Pacing
+ *  memory is KEPT, untouched: once the row goes, the item returns as it stood.
+ *  - While `tmpquarantine` is in doubt (`collectRecordsInDoubt`: unmeasured, or over its cap) the hide is OFF for every
+ *    id, because a record's absence from a listing that could not be read is no absence. For each id whose row
+ *    stands, that restores the `quarantine-kept` terminal item, its second clause on a reclaim item over that id (a
+ *    member of a kept-many line splitting out included), and every other remembered item of such an id, its share of
+ *    the unvouched box line among them. A reused slug with no record then shows a stale item for the length of the
+ *    doubt; the `tmpquarantine` box line says why.
+ *  - A doubt about `tmproots` alone changes nothing here: the record listing is measured, and the hide applies. An
+ *    `absent` `tmpquarantine` names no record and does not lift it.
+ *  - A record whose name fails `parseCollectRecordName` is a refused name, never a record id, so an id with only such a
+ *    record stays hidden; the refused-names box line says the count.
+ *  With no population measured yet, no id is projected (and none is remembered). Pure: the watcher hands its memory
+ *  and that pass's listing over, and publishes what comes back. */
 export function collectAttentionViews(entries: ReadonlyMap<string, CollectEntry>, pop: CollectPopulation | null,
   registryNames: ReadonlySet<string>): Map<string, CollectAttentionView> {
   const out = new Map<string, CollectAttentionView>();
   if (pop === null) return out;
+  const recordsInDoubt = collectRecordsInDoubt(pop.unmeasured);
   for (const [id, e] of entries) {
-    if (collectRowStands(registryNames, id) && !pop.recordIds.has(id)) continue;
+    if (!recordsInDoubt && collectRowStands(registryNames, id) && !pop.recordIds.has(id)) continue;
     out.set(id, collectAttentionViewOf(e));
   }
   return out;
@@ -1037,6 +1062,15 @@ const COLLECT_LOCK_PROBE = 'lock' satisfies keyof typeof COLLECT_PROBE_CLASS;
 const COLLECT_RECORDS_PROBE = 'records' satisfies keyof typeof COLLECT_PROBE_CLASS;
 const COLLECT_CHANGED_RECENTLY: LcRefusalToken = 'changed-recently';
 const COLLECT_NO_DOCUMENT: Extract<CollectAudit['kind'], 'no-document'> = 'no-document';
+const COLLECT_UNREADABLE: Extract<CollectAudit['kind'], 'unreadable'> = 'unreadable';
+
+/** Is `word` one this build's own readers make, rather than one ccd said (spec §5.10)? Three words are: `''`, the word
+ *  of a `failed` result this reader made (`parseCollectResult`'s `token`), and `unreadable` and `no-document`, the
+ *  words of an audit or an act that printed no document, or none this reader could read. The detail beside such a word
+ *  is ccrc's own text, or text ccrc saw (a runner's stderr): a sentence never quotes it as ccd's. Every other word is
+ *  ccd's, a probe's, a refusal's or a verdict's. */
+const collectReaderMade = (word: string): boolean =>
+  word === '' || word === COLLECT_UNREADABLE || word === COLLECT_NO_DOCUMENT;
 const COLLECT_IN_USE = 'in-use';
 const COLLECT_IN_PROGRESS = 'in-progress';
 const COLLECT_REGISTERED: LcRefusalToken = 'registered';
@@ -1089,12 +1123,22 @@ const collectTmp = (leaf: string | null): string => {
   return t === '' ? 'its temp root' : `its temp root ${t}`;
 };
 const collectCap = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
-const collectSaid = (detail: string | null): string => {
+/** The detail beside an answer's `word`, made safe, and led by whose it is: ` What ccrc saw: ` for a word this build's
+ *  reader made (`collectReaderMade`), ` What ccd said: ` for any other. `word` is required: no default says whose. */
+const collectSaid = (detail: string | null, word: string | null): string => {
   const t = detail === null ? '' : childReclaimDetailText(detail);
-  return t === '' ? '' : ` What ccd said: ${childReclaimStuckEnd(t)}`;
+  const lead = word !== null && collectReaderMade(word) ? 'What ccrc saw' : 'What ccd said';
+  return t === '' ? '' : ` ${lead}: ${childReclaimStuckEnd(t)}`;
 };
-const collectProbeText = (word: string | null): string =>
-  (word === null ? 'no word' : word === COLLECT_NO_DOCUMENT ? 'ccd answered nothing' : childReclaimDetailText(word));
+/** An answer's word as a sentence's parenthesis. No sentence ever prints empty brackets: a word that cleans to nothing
+ *  says so, and the reader's `''` says what ccrc could not do. */
+const collectProbeText = (word: string | null): string => {
+  if (word === null) return 'no word';
+  if (word === COLLECT_NO_DOCUMENT) return 'ccd answered nothing';
+  if (word === '') return 'ccrc could not accept ccd’s answer';
+  const t = childReclaimDetailText(word);
+  return t === '' ? 'a word this build cannot show' : t;
+};
 
 /** Why a hold stands, in a person's words (spec §5.10). Total over `CollectHoldWhy`. */
 const COLLECT_HOLD_WHY: Readonly<Record<CollectHoldWhy, string>> = {
@@ -1144,13 +1188,13 @@ function collectItemOf(id: string, v: CollectAttentionView, recordsSubsumed: boo
         + 'is listed for you to look at.'
       : `, which said: “${lead}”`;
     return { word: v.terminal.word, many: COLLECT_TERMINAL_MANY,
-      sentence: `${collectCap(tmp)}: ccd’s last terminal answer for it was ${w}${said}${collectSaid(v.terminal.detail)} `
+      sentence: `${collectCap(tmp)}: ccd’s last terminal answer for it was ${w}${said}${collectSaid(v.terminal.detail, v.terminal.word)} `
         + COLLECT_ASKS_LONG };
   }
   if (v.verbFailed.tier.tier) {
     return { word: 'verb-failed', many: COLLECT_ITEM_MANY['verb-failed'],
       sentence: `The temp-root collector’s attempts to collect ${tmp} keep failing (${collectProbeText(v.verbFailed.word)}).`
-        + `${collectSaid(v.verbFailed.detail)} ccd kept what still stands each time; ${COLLECT_ASKS_LONG}` };
+        + `${collectSaid(v.verbFailed.detail, v.verbFailed.word)} ccd kept what still stands each time; ${COLLECT_ASKS_LONG}` };
   }
   if (v.die !== null) {
     return { word: 'die', many: COLLECT_ITEM_MANY.die,
@@ -1160,7 +1204,7 @@ function collectItemOf(id: string, v: CollectAttentionView, recordsSubsumed: boo
   }
   if (v.failing.tier.tier && !(recordsSubsumed && v.failing.word === COLLECT_RECORDS_PROBE)) {
     const probe = collectProbeText(v.failing.word);
-    const said = collectSaid(v.failing.detail);
+    const said = collectSaid(v.failing.detail, v.failing.word);
     if (v.failing.word !== null && collectProbeClass(v.failing.word) === 'per-leaf') {
       return { word: 'per-leaf', many: COLLECT_ITEM_MANY['per-leaf'],
         sentence: `ccd cannot collect ${tmp} as it stands (${probe}).${said} This does not heal by itself: `
@@ -1173,7 +1217,7 @@ function collectItemOf(id: string, v: CollectAttentionView, recordsSubsumed: boo
   const d = v.deferral;
   if (d !== null && d.word === COLLECT_IN_USE) {
     return { word: 'in-use', many: COLLECT_ITEM_MANY['in-use'],
-      sentence: `A process still uses ${tmp}, so the temp-root collector leaves it alone.${collectSaid(d.detail)} `
+      sentence: `A process still uses ${tmp}, so the temp-root collector leaves it alone.${collectSaid(d.detail, d.word)} `
         + 'ccrc never stops a process; it asks again later, and this line ends once nothing uses it.' };
   }
   if (v.hold !== null) {
@@ -1185,7 +1229,7 @@ function collectItemOf(id: string, v: CollectAttentionView, recordsSubsumed: boo
   if (d !== null && d.word === COLLECT_IN_PROGRESS) {
     return { word: 'in-progress', many: COLLECT_ITEM_MANY['in-progress'],
       sentence: `Another ccd process has held this id’s reap lock, ~/.cc-sessions/.reap-${id}.lock, for at least `
-        + `${CEILING_MIN} minutes, so the temp-root collector leaves ${tmp} alone.${collectSaid(d.detail)} A reap, `
+        + `${CEILING_MIN} minutes, so the temp-root collector leaves ${tmp} alone.${collectSaid(d.detail, d.word)} A reap, `
         + 'reclaim, expiry, restore or collection of it may still be running, or a killed one left a process holding '
         + 'the lock; ccrc asks again later.' };
   }
@@ -1292,7 +1336,7 @@ export function collectAttentionItems(i: {
   readonly box: CollectBoxFacts;
   readonly nowMono: number;
 }): ChildReclaimCollectInput {
-  const recordsSubsumed = i.box.unmeasured.some((d) => d.listing === 'tmpquarantine');
+  const recordsSubsumed = collectRecordsInDoubt(i.box.unmeasured);
   const perId: ChildReclaimCollectAttention[] = [];
   const manyLead: Record<string, string> = {};
   const unvouched: string[] = [];
@@ -1349,7 +1393,9 @@ export const collectFeedSwitchBody = (live: boolean): string => (live
     + 'with no person in the loop, while cleanup is not paused.'
   : 'the collector lane is now shadowed: the temp-root collector audits and reports what it would collect, and removes nothing.');
 
-/** One row per (id, word) episode of any other answer (spec §5.10): ccd's word, detail and paths, each made one line. */
+/** One row per (id, word) episode of any other answer (spec §5.10): ccd's word, detail and paths, each made one line.
+ *  An answer this build's reader made (`no-document`, `unreadable`, a `failed` result with no word) is
+ *  `collectFeedReadBody`'s, never this builder's, which words only what ccd said. */
 export function collectFeedAnswerBody(id: string, runId: number | null, word: string, detail: string | null,
   paths: readonly string[]): string {
   const w = childReclaimDetailText(word);
@@ -1358,6 +1404,26 @@ export function collectFeedAnswerBody(id: string, runId: number | null, word: st
   const said = `${w === '' ? 'a word this build cannot show' : w}${d === '' ? '' : `: ${d}`}`
     + `${p.length === 0 ? '' : ` (paths: ${p.join(', ')})`}`;
   return `${collectWho(id, runId)}: ccd answered ${childReclaimStuckEnd(said)}`;
+}
+
+/** What this build's reader could not do with ccd's answer, for a feed row (spec §5.10): `no-document` (ccd printed
+ *  nothing: an audit's or an act's), `unreadable` (a document that is not an audit's shape) and `unaccepted` (a `failed`
+ *  result this reader made, or ccd's with no word). The row's words are ccrc's, never quoted as ccd's. */
+export type CollectReadWhat = 'no-document' | 'unreadable' | 'unaccepted';
+
+const COLLECT_READ_SAID: Readonly<Record<CollectReadWhat, string>> = {
+  'no-document': 'ccd answered nothing',
+  unreadable: 'ccrc could not read ccd’s answer',
+  unaccepted: 'ccrc could not accept ccd’s answer',
+};
+
+/** One row per (id, kind) episode of an answer THIS READER made (spec §5.10): what ccrc could not do, in ccrc's words,
+ *  then `what ccrc saw` (a runner's stderr, or the reader's own sentence) through `childReclaimDetailText`, left out
+ *  when it cleans to nothing. The watcher picks it by the answer's KIND, never by a word. */
+export function collectFeedReadBody(id: string, runId: number | null, what: CollectReadWhat, detail: string): string {
+  const d = childReclaimDetailText(detail);
+  const said = `${COLLECT_READ_SAID[what]}${d === '' ? '' : `; what ccrc saw: ${d}`}`;
+  return `${collectWho(id, runId)}: ${childReclaimStuckEnd(said)}`;
 }
 
 /** The feed cue of one AUDIT answer (spec §5.10: one row per (id, word) episode, quiet on repeats), which the lane

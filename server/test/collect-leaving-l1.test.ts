@@ -2,12 +2,13 @@
 // and presence's continuity across an act (L1, `server/src/collectLane.ts`). `collect-lane-leaving.test.ts` pins that
 // the watcher applies each. No ccd runs and no HOME is touched: every input is a literal of what the readers hand L1.
 import { describe, it, expect } from 'vitest';
-import { CHILD_RECLAIM_DEFER_CEILING_MS } from '../src/childReclaimSweep.js';
+import { CHILD_RECLAIM_DEFER_CEILING_MS, childReclaimAttentionWithLeaves } from '../src/childReclaimSweep.js';
+import type { ChildReclaimAttention } from '../../shared/api.js';
 import {
-  COLLECT_FEED_TITLE, collectAfterAct, collectAfterPresence, collectAttentionViewOf, collectAttentionViews,
-  collectBoxAfterPopulation, collectEvidenceOf, collectFeedCollectedBody, collectFirstSighting, collectForgottenActRow,
-  collectPopulation, type CollectEntry, type CollectJobSettled, type CollectPassClass, type CollectPopulation,
-  type CollectResult,
+  COLLECT_FEED_TITLE, collectAfterAct, collectAfterAudit, collectAfterPresence, collectAttentionItems,
+  collectAttentionViewOf, collectAttentionViews, collectBoxAfterPopulation, collectEvidenceOf, collectFeedCollectedBody,
+  collectFirstSighting, collectForgottenActRow, collectPopulation, type CollectBoxFacts, type CollectEntry,
+  type CollectJobSettled, type CollectListing, type CollectPassClass, type CollectPopulation, type CollectResult,
 } from '../src/collectLane.js';
 import {
   ACT_NO_DOCUMENT, COLLECTED, DIE, NO_DOCUMENT, T1, UNREADABLE, collectable, failedAct, refusedAct, step, unmeasured,
@@ -17,11 +18,13 @@ import {
 const C = CHILD_RECLAIM_DEFER_CEILING_MS;
 const OBS2 = collectable(T1, { witnessRun: 41, leaf: '/home/u/.cc-tmp/demo-a' });
 const acted = (result: CollectResult): CollectJobSettled => ({ kind: 'acted', composedMono: 0, result });
-/** A population from its two listings and the tick's registry names, through the one L1 rule. */
-const pop = (roots: readonly string[] | null, records: readonly string[] = [], registry: readonly string[] = []): CollectPopulation =>
+/** A population from its two listings and the tick's registry names, through the one L1 rule. `tmpquarantine` is the
+ *  listing of `records` unless a case hands the listing itself (unmeasured, absent, over its cap). */
+const pop = (roots: readonly string[] | null, records: readonly string[] = [], registry: readonly string[] = [],
+  tmpquarantine: CollectListing = { kind: 'listed', names: records }): CollectPopulation =>
   collectPopulation({
     tmproots: roots === null ? { kind: 'unmeasured', why: 'a link' } : { kind: 'listed', names: roots },
-    tmpquarantine: { kind: 'listed', names: records },
+    tmpquarantine,
     registryNames: new Set(registry),
   });
 
@@ -94,12 +97,50 @@ describe('collectAttentionViews: only a re-registered id is hidden, and memory i
       .toEqual(['demo-a', 'demo-b', 'demo-c']);
   });
 
-  it('a listing in doubt hides nothing: unmeasured, over its cap, or simply not naming the id', () => {
-    const over = collectPopulation({ tmproots: { kind: 'listed', names: Array.from({ length: 1025 }, (_, i) => `x${i}`) },
-      tmpquarantine: { kind: 'absent' }, registryNames: new Set() });
-    for (const [what, p] of [['unmeasured', pop(null)], ['over its cap', over], ['not named', pop([])]] as const) {
-      expect([...collectAttentionViews(entries, p, new Set()).keys()], what).toEqual(['demo-a', 'demo-b', 'demo-c']);
-    }
+  it.each<readonly [string, CollectPopulation, readonly string[]]>([
+    ['(a) tmpquarantine unmeasured', pop(['demo-a'], [], [...registry], { kind: 'unmeasured', why: 'a link' }), ['demo-a', 'demo-b', 'demo-c']],
+    ['(b) tmpquarantine over its cap', pop(['demo-a'], [], [...registry],
+      { kind: 'listed', names: Array.from({ length: 1025 }, (_, i) => `x${i}`) }), ['demo-a', 'demo-b', 'demo-c']],
+    ['(c) tmpquarantine listed, with no record of the id', pop(['demo-a'], ['demo-d.1.2'], [...registry]), ['demo-a']],
+    ['(d) tmpquarantine absent', pop(['demo-a'], [], [...registry], { kind: 'absent' }), ['demo-a']],
+    ['(e) tmproots unmeasured, tmpquarantine measured and empty', pop(null, [], [...registry]), ['demo-a']],
+  ])('a registered id is hidden only while a MEASURED tmpquarantine names no record of it; a record it could not read is no absence: %s', (_what, p, shown) => {
+    expect([...collectAttentionViews(entries, p, registry).keys()]).toEqual(shown);
+  });
+
+  it('a registered id whose kept quarantine record the lane cannot read still lists its quarantine-kept item, and the reclaim item over it carries the clause', () => {
+    const kept = collectAfterAudit(collectFirstSighting(1), verdict('quarantine-kept'), step(0, 2), true);
+    const only: ReadonlyMap<string, CollectEntry> = new Map([['demo-b', kept]]);
+    const box = (p: CollectPopulation): CollectBoxFacts => ({
+      unmeasured: p.unmeasured, refusedNames: p.refusedNames, boxProbes: new Map(), passAudits: new Map(),
+      flockLatched: false, unsettled: new Map(),
+    });
+    const term: ChildReclaimAttention = { kind: 'terminal', sessionId: 'demo-b', runId: 1, token: 'tree-unreadable', sentence: 't.', at: 1 };
+    const listed = (p: CollectPopulation) => {
+      const input = collectAttentionItems({ entries: collectAttentionViews(only, p, registry), box: box(p), nowMono: 0 });
+      return { input, merged: childReclaimAttentionWithLeaves([term], [], input) };
+    };
+    const blind = listed(pop(['demo-b'], [], [...registry], { kind: 'unmeasured', why: 'a link' }));
+    expect(blind.input.perId.map((a) => [a.sessionId, a.word])).toEqual([['demo-b', 'quarantine-kept']]);
+    expect(blind.merged, 'the reclaim item carries the kept record’s clause, and the doubt is said beside it').toEqual(
+      [{ ...term, sentence: `t. ${blind.input.perId[0]!.sentence}` }, ...blind.input.box]);
+    expect(blind.input.box.map((a) => a.word)).toEqual(['tmpquarantine']);
+    const seen = listed(pop(['demo-b'], [], [...registry], { kind: 'listed', names: [] }));
+    expect(seen.input.perId, 'a measured listing that names no record hides it').toEqual([]);
+    expect(seen.merged).toEqual([term]);
+  });
+
+  it('a terminal item of a registered id is hidden while the measured tmpquarantine names no record, and returns once the row goes', () => {
+    const terminal = collectAfterAudit(collectFirstSighting(1), verdict('witness-mismatch'), step(0, 2), true);
+    const only: ReadonlyMap<string, CollectEntry> = new Map([['demo-b', terminal]]);
+    const words = (p: CollectPopulation, names: ReadonlySet<string>): string[] => {
+      const input = collectAttentionItems({ entries: collectAttentionViews(only, p, names), nowMono: 0, box: {
+        unmeasured: p.unmeasured, refusedNames: 0, boxProbes: new Map(), passAudits: new Map(), flockLatched: false,
+        unsettled: new Map() } });
+      return input.perId.map((a) => a.word);
+    };
+    expect(words(pop(['demo-b'], [], ['demo-b.uuid']), registry), 'the row stands: no item').toEqual([]);
+    expect(words(pop(['demo-b']), new Set()), 'the row went: the item stands').toEqual(['witness-mismatch']);
   });
 
   it('with no population measured yet, nothing is projected', () => {
