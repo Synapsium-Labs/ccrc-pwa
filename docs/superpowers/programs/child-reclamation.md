@@ -25,7 +25,7 @@ removed on 2026-09-10 was not.
 | 6 | `ws-reclaim` repaired (R48): the ONE removal helper and the in-use wait/keep of a temp root (R49); the positive witness `$REG/tmproots/<id>` (R50); F6 and the harness strip (R51); journaling `probe-unmeasured` and the id-tied pre-lock dies (R52); the three-way gone-branch read (R53); the `recorded` placement basis (R54); the vanish re-read's second trigger (R55) | **AGENT-FIRST** | #326 | **deployed** v0.0.124 (`b0647d850`, both boxes by 13:40 on 10-08) — run 291 closed `done`; reviews 335, 341 and 346 |
 | 7 | the temp-root collector verb, inert (R57, R66–R68): audit + token, quarantine-by-rename under the reap lock, the `$REG/tmpquarantine` record, destructive verb, cap token, agent grant, entry guard; plus the ccd halves (R69 `containment-refuted`, R70 `crumb`, rung 8, the reason cap, X1's generation input) | **AGENT-FIRST** | #344 | **deployed** fleet box v0.0.145 (`7609221a4`, merged 2026-10-11 00:55; the updater's auto move 01:10–01:12, agent restarted 01:10:52; `ccd caps` advertises `collect-v1` and `ws-collect`) — run 347, reviews 369, 374, 376 |
 | 8 | reclaim's server half (R65): X1 and X3 generation keying, R61's closure, the `crumb` verb and audit readers, the `clipsKept`/`tmpRootKept` reader, R69's `stuck` class, the persistent-failure tier | server | #349 | **deployed** v0.0.147 (`d0c2b7803`, merged 2026-10-11 12:13; both boxes current by 12:23, through the updater) — run 348 (`ccrc-pwa-quiet-prairie`), plan `0d9f1b042`; reviews 378, 379 |
-| 9 | the collector's server lane (the old R58), after the fleet advertises wave 7's token and wave 8 has merged; SAFETY and SECURITY lenses | server | — | **in review** 2026-10-12 01:14 — run 380 (`ccrc-pwa-quiet-hollow`), PR #354 at `c7dfbbf69`, review run 386 done 04:41 (22 findings), fix round 1 being ruled; plan `d9647b76b` (#352); rulings contract §16 (R82–R92); ships SHADOWED |
+| 9 | the collector's server lane (the old R58), after the fleet advertises wave 7's token and wave 8 has merged; SAFETY and SECURITY lenses | server | — | **in review** 2026-10-12 01:14 — run 380 (`ccrc-pwa-quiet-hollow`), PR #354 at `c7dfbbf69`, review run 386 done 04:41 (22 findings), FIX ROUND 1 sent 05:33 (4267); plan `d9647b76b` (#352); rulings contract §16 (R82–R92); ships SHADOWED |
 
 **Rule 3 is enforced at the end of wave 2** with no destructive verb in existence: a second bind on a
 PR-bearing child refuses. **Wave 3's `ws-reclaim` and wave 7's collector are the only verbs that destroy anything** (R38, R48). Waves 3 and 4 do nothing on a
@@ -46,6 +46,33 @@ clause 11): it names a departure in its wave-done mail and the coordinator assig
 Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (reviews **170**, **171**, **172**); wave 4 = **174**. Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
 
 ## Decisions & deviations
+
+- **2026-10-12 05:33 — FIX ROUND 1 is SENT to run 380 (4267), and run 380 is back at `working`.** The rulings are `wave9/fix-round-1-rulings.md`, binding.
+  - **How they were checked** (`wf_2a071c39-a23`, 83 agents): Opus grounded each draft ruling against `c7dfbbf69` and attacked it, with three Sonnet refuters per objection.
+    - No ruling was found wrong; fourteen were sharpened.
+    - The 8 objections that survived are folded in.
+  - **Class (a):**
+    - F1: the one fold-failure catch resets the id's pair under a fresh generation, and takes the refusal floor (`fold-failure-resets-the-pair-and-floors`).
+    - F2: a refused or die feed episode outlives observations, flagged by its cue and never parsed from its key (`a-refusal-or-die-episode-outlives-observations`).
+    - F3: the registered-id hide applies only while `tmpquarantine` is measured. It is under `a-registered-id-projects-no-item`, together with F19's accepted narrowing of H8.
+    - F4: box probes carry an arrival stamp, so an older answer never clears a newer probe, and F11's line keeps a role (`older-answer-never-clears-a-newer-probe`).
+    - F5: the reader's own words are said as ccrc's, with no empty brackets, and the feed rows are chosen by kind (`reader-made-words-are-ccrcs`).
+  - **Class (b):**
+    - F6: the flip-row prose is narrowed to changes an act job sees. Both arming checklists now name `collect-v1` and `reclaim-pause-v1` (open item 3).
+    - F7: the "§16 as built" note is refreshed, with a whitespace-flattened prose pin.
+    - F8: a comment. F9: per-branch pins.
+  - **Class (c):**
+    - Pins: F10, F12 and F15 (the last an inequality).
+    - Comment: F18.
+    - Accepted: F20, and F21 with a planted-file mutation row.
+    - Recorded: F13, F14, F16 (a residual) and F17.
+    - Carried: F22, by anchor text. Its EXPIRE-V1 comment is workspace-lifecycle's, and quiet-river was told (4268), together with the second lander's duty on spec `:724-736`.
+  - **Numbers.** 61 in all, each defined singly in the plan's `## Deviations found`:
+    - the 32 issued at dispatch, plus 29 issued now, each single number from 4828 through 4856 (`wave9/block-numbers.txt`);
+    - 51 are substantive, including the plan's own as-built slugs, which its as-built note says take numbers;
+    - the other 10 are one per task, Tasks 1 to 10;
+    - residuals and items ruled not findings are named with no number.
+  - **Overlap.** Run 358 re-took its claims as 1164 and 1167, and consent 4237 still stands. This round does not touch `store.ts`, `CLAUDE.md` or `session-hook.test.ts`.
 
 - **2026-10-12 04:41 — REVIEW 386 IS DONE (4265, acked), and its run is closed `done`, released. The report is archived as `reviews/review-386-c7dfbbf6.md`.**
   - **Coverage.** At `c7dfbbf69`, 155 agents ran with no lens unverified. 48 findings were raised, 27 survived the refuters, and they merge to 22.
