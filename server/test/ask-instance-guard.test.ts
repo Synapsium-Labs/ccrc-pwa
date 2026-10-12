@@ -29,7 +29,9 @@
 // This supersedes the bump D-2403 describes, for a main-thread wait ONLY.
 // STILL OPEN: a wait a SUBAGENT raised (`waitBy:"subagent"`) is not carried, so
 // its stamp still moves on a subagent event; that, and any other bump, is why
-// the `restampAsk` pair stays.
+// the `restampAsk` pair stays. The two cases where the stamp MOVES are kept on
+// purpose: a new main-thread question (the control above) and that
+// subagent-raised wait (last describe).
 //
 // `server/test/session-hook.test.ts`'s "ask survives subagent events while
 // waiting" pins the envelope's survival; this suite measures what that costs

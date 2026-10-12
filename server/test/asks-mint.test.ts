@@ -597,18 +597,22 @@ describe('the ask mint point (D-2172, D-2173)', () => {
 //
 // The mint stores the child's hookstate `updatedAt` as `askAt`, and
 // `takeAskForAnswer` refuses `ask-moved` unless a fresh read still equals it.
-// `session-hook.sh` stamps `updatedAt` on EVERY write, and its subagent arm
-// re-reads `.ask` straight back off the file — so a subagent event under an
-// open dialog rewrites the identical envelope under a new number and, with
-// nothing re-stamping the row, refused every parent answer for the row's
-// whole life. `server/test/ask-instance-guard.test.ts` measures that at the
-// hook and at the CAS; THIS suite measures the thing neither of those can —
-// that the watcher actually calls the re-stamp on an ordinary tick. A CAS
-// nothing invokes is decoration.
+// `session-hook.sh` stamps `updatedAt` on every write, and its subagent arm
+// re-reads `.ask` straight back off the file. Since D-4041 that arm KEEPS the
+// stamp (and adds `aliveAt`) over a MAIN-thread wait, so the bump this describes
+// survives only for a wait a SUBAGENT raised (`waitBy:"subagent"`, not carried:
+// the event rewrites the identical envelope under a new number) and for any
+// other bump. With nothing re-stamping the row, such a bump refused every parent
+// answer for the row's whole life. `server/test/ask-instance-guard.test.ts`
+// measures the hook and the CAS (and pins the D-4041 fix for a main-thread
+// wait); THIS suite measures the thing neither of those can — that the watcher
+// actually calls the re-stamp on an ordinary tick. A CAS nothing invokes is
+// decoration.
 describe('the ask instance guard advances under a live dialog', () => {
   /** The hookstate write `session-hook.sh`'s `SubagentStart`/`SubagentStop`
-   *  arm performs: the SAME ask envelope, the same `waiting` state, a fresh
-   *  `updatedAt`. `at` is passed explicitly because two `Date.now()` calls in
+   *  arm performs over a wait a SUBAGENT raised (a main-thread wait keeps its
+   *  stamp since D-4041): the SAME ask envelope, the same `waiting` state, a
+   *  fresh `updatedAt`. `at` is passed explicitly because two `Date.now()` calls in
    *  one test can land in the same millisecond, which would make the
    *  assertion vacuous rather than false. */
   const bump = (home: string, id: string, ask: unknown, at: number): void => {
