@@ -1679,8 +1679,9 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     - 4824–4827 and the 4288 items;
     - words, numbers and scope;
     - the full suite once, every mutation row plus 4286's missing rows, and PR CI.
-  - **Dispatch:** refused `cap-concurrency` (7/7) at 20:38. A waiter retries every five minutes. Plain-ridge was told
-    to stay idle (4406).
+  - **Dispatch:** refused `cap-concurrency` (7/7) at 20:38. A waiter retried every five minutes, and at 21:03 the run
+    was dispatched to `ccrc-pwa-keen-canyon` (an Anthropic lane, `skillState: present`) with workflow on. Plain-ridge
+    was told to stay idle (4406).
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
