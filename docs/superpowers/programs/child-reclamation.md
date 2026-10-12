@@ -25,7 +25,7 @@ removed on 2026-09-10 was not.
 | 6 | `ws-reclaim` repaired (R48): the ONE removal helper and the in-use wait/keep of a temp root (R49); the positive witness `$REG/tmproots/<id>` (R50); F6 and the harness strip (R51); journaling `probe-unmeasured` and the id-tied pre-lock dies (R52); the three-way gone-branch read (R53); the `recorded` placement basis (R54); the vanish re-read's second trigger (R55) | **AGENT-FIRST** | #326 | **deployed** v0.0.124 (`b0647d850`, both boxes by 13:40 on 10-08) — run 291 closed `done`; reviews 335, 341 and 346 |
 | 7 | the temp-root collector verb, inert (R57, R66–R68): audit + token, quarantine-by-rename under the reap lock, the `$REG/tmpquarantine` record, destructive verb, cap token, agent grant, entry guard; plus the ccd halves (R69 `containment-refuted`, R70 `crumb`, rung 8, the reason cap, X1's generation input) | **AGENT-FIRST** | #344 | **deployed** fleet box v0.0.145 (`7609221a4`, merged 2026-10-11 00:55; the updater's auto move 01:10–01:12, agent restarted 01:10:52; `ccd caps` advertises `collect-v1` and `ws-collect`) — run 347, reviews 369, 374, 376 |
 | 8 | reclaim's server half (R65): X1 and X3 generation keying, R61's closure, the `crumb` verb and audit readers, the `clipsKept`/`tmpRootKept` reader, R69's `stuck` class, the persistent-failure tier | server | #349 | **deployed** v0.0.147 (`d0c2b7803`, merged 2026-10-11 12:13; both boxes current by 12:23, through the updater) — run 348 (`ccrc-pwa-quiet-prairie`), plan `0d9f1b042`; reviews 378, 379 |
-| 9 | the collector's server lane (the old R58), after the fleet advertises wave 7's token and wave 8 has merged; SAFETY and SECURITY lenses | server | — | **in review** 2026-10-12 01:14 — run 380 (`ccrc-pwa-quiet-hollow`), PR #354 at `c7dfbbf69`, review run 386 done 04:41 (22 findings), FIX ROUND 1 done at `241cbb873` (review 387: no class (a)); FIX ROUND 2 sent (4278, two pins and prose); plan `d9647b76b` (#352); rulings contract §16 (R82–R92); ships SHADOWED |
+| 9 | the collector's server lane (the old R58), after the fleet advertises wave 7's token and wave 8 has merged; SAFETY and SECURITY lenses | server | — | **in review** 2026-10-12 01:14 — run 380 (`ccrc-pwa-quiet-hollow`), PR #354 at `c7dfbbf69`, review run 386 done 04:41 (22 findings), FIX ROUND 1 done at `241cbb873` (review 387: no class (a)); FIX ROUND 2 done at `ec9d63aa7` (4279), scoped review run 388 dispatched; plan `d9647b76b` (#352); rulings contract §16 (R82–R92); ships SHADOWED |
 
 **Rule 3 is enforced at the end of wave 2** with no destructive verb in existence: a second bind on a
 PR-bearing child refuses. **Wave 3's `ws-reclaim` and wave 7's collector are the only verbs that destroy anything** (R38, R48). Waves 3 and 4 do nothing on a
@@ -46,6 +46,23 @@ clause 11): it names a departure in its wave-done mail and the coordinator assig
 Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (reviews **170**, **171**, **172**); wave 4 = **174**. Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
 
 ## Decisions & deviations
+
+- **2026-10-12 07:06 — FIX ROUND 2 is in (4279, acked; archived in `wave9-fr2/`): PR #354 at `ec9d63aa7`. Run 380 is at `awaiting-review`, and SCOPED REVIEW RUN 388 is DISPATCHED to `ccrc-pwa-bright-canyon` (claude-corp, Anthropic; Opus `xhigh`) and advanced to `working`.**
+  - **Re-measured.**
+    - One commit since `241cbb873`, eight files.
+    - Every changed `server/src` line is a comment or docstring line.
+    - Nothing under `ccd/`, `agent/`, `pwa/`, `deploy/` or `shared/`, and the commit message is clean. `merge-tree` against `main` is clean.
+    - #351 has not landed (`main` is still `d9647b76b`), so the round merges no main.
+    - CI at this tip had started.
+  - **The worker's claims:**
+    - R1 and R6 are added, each measured red under its ruled mutation;
+    - R2, R3, R4, R5, R7 and R10 are done, each named in its per-task entry;
+    - no new number.
+  - **The review's brief** (`review-388-brief.md`, 4.4 KB) names:
+    - SAFETY (Opus `xhigh`): the round changes no behaviour, and the lane stays SHADOWED;
+    - the held-out panel;
+    - each ruling checked at the tip;
+    - the boundary.
 
 - **2026-10-12 06:58 — REVIEW 387 IS DONE (4277, acked; run 387 closed `done`, released; report `reviews/review-387-241cbb87.md`). FIX ROUND 2 is SENT (4278), and run 380 is back at `working`.**
   - **No class (a) finding.** 153 agents ran, with no lens unverified.
