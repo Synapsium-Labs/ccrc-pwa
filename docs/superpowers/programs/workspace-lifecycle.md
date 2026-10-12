@@ -1682,6 +1682,16 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - **Dispatch:** refused `cap-concurrency` (7/7) at 20:38. A waiter retried every five minutes, and at 21:03 the run
     was dispatched to `ccrc-pwa-keen-canyon` (an Anthropic lane, `skillState: present`) with workflow on. Plain-ridge
     was told to stay idle (4406).
+- **2026-10-12 22:36 — review 401's memory ask (ask 26) ruled in mail 4425.**
+  - **The ask:** box memory pressure (about 4 GB free, load 136) stopped two of the reviewer's jobs: its local
+    full-suite run, at about 76 of 663 files, and half the mutation rows, with 19 of 58 measured red.
+  - **The full-suite measurement is met by PR CI.** Run 38304571039 ran on `6f1942bbc` against main `2d1835188`. Its
+    required shards server 1/5 to 5/5 passed 664 test files, and every other required check passed too; macOS is
+    advisory. The reviewer cites that run and does not re-run the suite locally.
+  - **Every mutation row is still owed.** The rows run sequentially in one process, with `--maxWorkers=1`, once about
+    6 GB is available. If memory does not allow them within about two hours, the report goes out with each unmeasured
+    row named UNVERIFIED, never passed.
+  - **The ask itself:** it had left the ask route (`not-held`) before the answer landed, so the mail carries the ruling.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
