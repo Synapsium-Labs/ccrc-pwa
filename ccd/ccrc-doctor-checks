@@ -8052,11 +8052,14 @@ _check_docs-sw() {
     return 1
   fi
 
-  local body open='denylist:[' close=']}' without n after shape=""
+  local body open='denylist:[' close=']}' without n after="" shape="" re_open='denylist:\[(.*)$'
   body="$(<"$sw")"
   without="${body//"$open"/}"
   n=$(( (${#body} - ${#without}) / ${#open} ))
-  after="${body#*"$open"}"
+  # The text after the FIRST `denylist:[`, by bash's own regex: `${body#*"$open"}` is quadratic in the offset, and in
+  # a real worker the precache manifest comes first, so the offset is about the file's size (80 KB took 11.6 s,
+  # 320 KB over 120 s). The regex and the `//` count above are linear.
+  [[ $body =~ $re_open ]] && after="${BASH_REMATCH[1]}"
   if [ "$n" -ne 1 ]; then
     shape="carries $n denylists"
   elif [[ "$after" != *"$close"* ]]; then

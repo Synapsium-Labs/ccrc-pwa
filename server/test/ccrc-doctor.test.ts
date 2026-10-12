@@ -13786,11 +13786,11 @@ describe('ccrc doctor: docs-sw', () => {
   const plant = (home: string, body: string): void => { writeFileSync(swPath(home), body); };
   /** `_check_docs-sw` alone, as `cmd_doctor` runs it: `ccrc` sourced first (its `BOX_TREE_DIR`, `BOX_ENV_FILE`,
    *  `_box_env_value`), then the table, both through the fixture's `<home>/ccrc/ccd` links. */
-  const runDocsSw = (home: string): Result => {
+  const runDocsSw = (home: string, timeout?: number): Result => {
     const ccd = join(home, 'ccrc', 'ccd');
     const r = spawnSync(BASH, ['-c',
       `set -uo pipefail; . ${shq(join(ccd, 'ccrc'))}; . ${shq(join(ccd, 'ccrc-doctor-checks'))}; _check_docs-sw`],
-    { env: doctorEnv(home), encoding: 'utf8' });
+    { env: doctorEnv(home), encoding: 'utf8', ...(timeout === undefined ? {} : { timeout }) });
     return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
   };
   const lines = (out: string): string[] => out.split('\n').filter((l) => l !== '');
@@ -13980,6 +13980,28 @@ describe('ccrc doctor: docs-sw', () => {
     expect(r.stdout).toMatch(/^ {2}remedy: this is a bug in ccrc/m);
     expect(r.status).toBe(1);
   });
+
+  it('reads a large worker in linear time: a ~300 KB precache manifest BEFORE the one denylist still PASSes within the bound', () => {
+    // A real build prints `precacheAndRoute([...])` before the NavigationRoute, so `denylist:[` sits near the END of a
+    // file that grows with the manifest. `${body#*"$open"}` is quadratic in that offset (measured on bash 5.2: 20 KB
+    // 0.47 s, 80 KB 11.6 s, 320 KB over 120 s); the regex extraction is linear. The spawn is killed at 20 s so the
+    // quadratic form fails fast with an empty verdict instead of holding the suite for minutes.
+    const home = healthy('ccrc-doctor-docs-sw-large-');
+    const entries: string[] = [];
+    for (let i = 0; entries.join(',').length < 300_000; i++) {
+      entries.push(`{url:"assets/chunk-${String(i).padStart(5, '0')}-aBcDeFgH.js",revision:null}`);
+    }
+    plant(home, `self.__WB_MANIFEST=[${entries.join(',')}];${swJs()}`);
+    expect(statSync(swPath(home)).size).toBeGreaterThan(300_000);
+    const t0 = Date.now();
+    const r = runDocsSw(home, 20_000);
+    const elapsed = Date.now() - t0;
+    expect(lines(r.stdout), `after ${elapsed} ms: ${r.stderr}`).toEqual([
+      `PASS docs-sw: ${swPath(home)} keeps /docs on the app shell: its one denylist holds 2 entries (/^\\/api\\//,/^\\/ws\\//), none of them /docs or under it`,
+    ]);
+    expect(r.code).toBe(0);
+    expect(elapsed, 'the linear extraction takes well under a second; the bound is for a box at load 50+').toBeLessThan(10_000);
+  }, 40_000);
 
   it('docs-sw is the table\'s last name and _check_docs-sw is declared (M7.6)', () => {
     const names = tableNames();
