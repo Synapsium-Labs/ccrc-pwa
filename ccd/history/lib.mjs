@@ -6921,3 +6921,12 @@ export function schemaAdditive(schema, measured) {
   }
   return lost.length === 0 ? { ok: true } : { ok: false, lost };
 }
+
+// ── the operator door's pane read (W1-B2 Task 19) ──────────────────────────────────────────────────────────
+/** Whether an --op form's gate needs the pane's tmux session name (§8.2, §8.4 speed bumps): only an irreversible
+ *  WRITING_FORMS form needs it, and only from a pane id of PANE_RE's grammar. Both doors ask this ONE rule before
+ *  their own bounded tmux read: B1's paneNameFor in the sweep, opPaneName in the CLI. */
+export function paneReadWanted(form, pane) {
+  return form !== null && Object.hasOwn(WRITING_FORMS, form) && WRITING_FORMS[form].irreversible === true
+    && typeof pane === 'string' && PANE_RE.test(pane);
+}

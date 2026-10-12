@@ -805,3 +805,6 @@ export function missingTablesAt(version: number, verb: string, schema?: Readonly
   verbTables?: Readonly<Record<string, readonly string[]>>): string[];
 export function schemaAdditive(schema: Readonly<Record<number, SchemaVersionAdded>>,
   measured?: Readonly<Record<number, Readonly<Record<string, readonly string[]>>>>): { ok: true } | { ok: false; lost: string[] };
+
+// ── W1-B2 Task 19: the operator door's pane read ──
+export function paneReadWanted(form: string | null, pane: string | null): boolean;

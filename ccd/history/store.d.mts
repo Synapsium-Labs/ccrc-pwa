@@ -61,3 +61,7 @@ export interface LineageRow { readonly nodeId: string; readonly entryId: number;
 export function lineageEntries(db: DatabaseSync, nodeId: string): LineageRow[];
 export function childrenOf(db: DatabaseSync, nodeId: string): { childId: string; ord: number }[];
 export function parentOf(db: DatabaseSync, nodeId: string): string | null;
+
+// ── W1-B2 Task 19: a registered recovery step (RB6) and the stored version (RB13, RB17) ──
+export function recoverStepAt(dbFile: string): 'open' | 'none' | 'absent' | 'unmeasured';
+export function storedVersionAt(dbFile: string): Presence<number>;

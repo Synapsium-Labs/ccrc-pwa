@@ -54,6 +54,7 @@ import * as t17lib from '../../ccd/history/lib.mjs';
 import * as t17sqlite from 'node:sqlite';
 import * as t17fs from 'node:fs';
 import * as t17path from 'node:path';
+import * as t19lib from '../../ccd/history/lib.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LIB = join(REPO, 'ccd', 'history', 'lib.mjs');
@@ -6129,5 +6130,18 @@ describe('lib: Task 17 fix round 1 (W1-B2 Task 17)', () => {
     const r = t17lib.schemaAdditive({ 1: { heavy: false, tables: { t: 'ab' } } } as unknown as Schema);
     expect(r.ok).toBe(false);
     expect(lostOf(r)).toContain('t at v1 lists no array of columns');
+  });
+});
+
+describe('lib: paneReadWanted, the one rule both operator doors read a pane by (W1-B2 Task 19; spec §8.2, §8.4 speed bumps)', () => {
+  it('an irreversible form from a pane id of the %N grammar, and nothing else', () => {
+    expect(t19lib.paneReadWanted('prune-apply', '%3')).toBe(true);
+    expect(t19lib.paneReadWanted('adopt', '%12')).toBe(true);
+    expect(t19lib.paneReadWanted('import-session-apply', '%0')).toBe(true);
+    const no: Array<[string | null, string | null]> = [
+      ['backup', '%3'], ['import-apply', '%3'], ['migrate', '%3'], [null, '%3'], ['unknown-op', '%3'], ['__proto__', '%3'],
+      ['prune-apply', ''], ['prune-apply', null], ['prune-apply', '3'], ['prune-apply', '%3;x'], ['prune-apply', '%'],
+    ];
+    for (const [form, pane] of no) expect(t19lib.paneReadWanted(form, pane), `${String(form)} ${String(pane)}`).toBe(false);
   });
 });

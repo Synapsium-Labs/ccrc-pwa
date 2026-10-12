@@ -1062,3 +1062,45 @@ export function blobPlainText(z, isSidecar, idx, rawLen) {
     return '';
   }
 }
+
+// ── W1-B2 Task 19: a registered recovery step and the stored version, measured read-only (RB6, RB13) ──────────
+/** An open ('recover', <bind ms>) step: what restore and rebuild register (§9.14), and what refuses every writing
+ *  --op form lib's recoveryExempt does not exempt meanwhile (RB6 with RB12-RB14, slug
+ *  history-ops-refused-while-recovering; lib's decideOpGate decides). */
+const RECOVER_OPEN_SQL = "SELECT 1 AS x FROM derivation_state WHERE step = 'recover' AND completed_ms IS NULL LIMIT 1";
+
+/** Whether db/history.db holds an open recovery step, on its OWN read-only handle, closed before it returns, so it
+ *  can run before any writer opens the store. Four answers, kept apart: 'absent' (no file), 'unmeasured' (the
+ *  file would not open read-only, or has no derivation_state), 'none' and 'open'. A caller refuses on 'open' only
+ *  and leaves every other answer to the store's own refusal words further on (openStore, decideBind). */
+export function recoverStepAt(dbFile) {
+  if (dbFileState(dbFile) === 'absent') return 'absent';
+  let db;
+  try { db = openReader(dbFile); } catch { return 'unmeasured'; }
+  try {
+    return db.prepare(RECOVER_OPEN_SQL).get() === undefined ? 'none' : 'open';
+  } catch {
+    return 'unmeasured';
+  } finally {
+    db.close();
+  }
+}
+
+/** history.db's own user_version, on its OWN read-only handle, closed before it returns: the stored-version fact
+ *  decideOpGate's RB13 exemption reads while a recovery step is open (both halves), and the one decideBind's adopt
+ *  arm decides a newer store by (RB17, through sweep.mjs's bindFactsOf). A Presence, never a bare number: 'absent'
+ *  (no file) and 'unreadable' (the file would not open read-only, or the pragma would not read) stay apart from a
+ *  value, so an unmeasured version is never read as one (IV5). B1's peekVersion stays openStore's throwing peek. */
+export function storedVersionAt(dbFile) {
+  if (dbFileState(dbFile) === 'absent') return { state: 'absent' };
+  let db;
+  try { db = openReader(dbFile); } catch { return { state: 'unreadable' }; }
+  try {
+    const v = userVersion(db);
+    return Number.isSafeInteger(v) && v >= 0 ? { state: 'value', value: v } : { state: 'unreadable' };
+  } catch {
+    return { state: 'unreadable' };
+  } finally {
+    db.close();
+  }
+}

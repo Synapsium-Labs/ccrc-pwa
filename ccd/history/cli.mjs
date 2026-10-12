@@ -62,6 +62,9 @@ import {
 } from './lib.mjs';
 import { loadSecrets } from './sweep.mjs';
 import { runTree, grepVerb, describeVerb, expandVerb, familiesOf, transcriptsOf, scopeHeader } from './recall.mjs';
+import { spawn as spawnOp } from 'node:child_process';
+import { isatty as isattyOp } from 'node:tty';
+import { recoverStepAt as opRecoverStepAt, storedVersionAt as opStoredVersionAt } from './store.mjs';
 
 process.umask(0o077);
 
@@ -426,6 +429,7 @@ const USAGE = [
   '  read verbs (in a cc- tmux pane): tree [--depth N] | grep <words> | describe <id | pasted line> | expand <id>',
   '    each also takes one of: --session <id> | --project | --workspace; and --json',
   '  box verbs: status [--json]',
+  '  operator verbs: import | prune | reparse | doctor [--repair | --backup | --migrate | --adopt | --restore <file> | --rebuild [--store-id <uuid>]]',
   '  every exit code and reason: the ccrc-history skill',
 ].join('\n');
 
@@ -826,6 +830,7 @@ export async function main(argv) {
   if (verb === 'status') return statusVerb(home, rest);
   if (verb === 'recall-off') return recallOffVerb(home, rest);
   if (READ_VERBS.includes(verb)) return readVerb(home, verb, rest);
+  if (verb === 'doctor' || (!verb.startsWith('--') && Object.hasOwn(OP_OF_VERB, verb))) return operatorMain(home, argv);
   return unknownVerb(home, argv.includes('--json'));
 }
 
@@ -1191,6 +1196,187 @@ export function formatHealth(health) {
     }
   }
   return out;
+}
+
+// ── THE OPERATOR DOOR (W1-B2 Task 19) ─────────────────────────────────────────────────────────────────────
+// `ccrc history import|prune|reparse …` and `ccrc history doctor --repair|--backup|--migrate|--adopt|
+// --restore <file>|--rebuild [--store-id <uuid>]` (spec §8.4 "Operator verbs" and "Speed bumps", §8.3's no-store
+// table, §5.1). A BOX verb: it derives no identity and writes no spool line. In order, each step a lib decision:
+//   1. the verb and its arguments, by parseOpVerbArgs. A refusal here spawns nothing;
+//   2. the door, by decideOpDoor over cliFactsOf(reach) (§8.3's one no-store table, decideCliStore, from store.id
+//      and the DB). macOS, a recorded server role and a box that never installed answer 9; a store with no shim
+//      answers 2 writer-absent (a plain uninstall kept the data); an unreachable or dangling store answers its 5;
+//   3. THE GATE, decideOpGate, from this process's CLAUDECODE, isatty(0), a registered recovery step with the facts
+//      its exemptions read (RB6, RB13, RB14; read only behind measureReach's settled stat) and, for an irreversible
+//      form only, the bounded
+//      `tmux display-message -p -t "$TMUX_PANE" '#S'` (Task 10's tmuxSession). The sweep runs the same gate again
+//      from its own environment (slug history-op-gate-in-sweep): decided once, executed twice;
+//   4. the shim, `~/.local/bin/ccd-history-sweep --op <op> <args…>`, as a child. stdin and stderr are inherited, so
+//      the sweep's own isatty(0) is the operator's terminal. stdout is piped and relayed line by line as it arrives
+//      (an import's dry run can list thousands of files). Its LAST line, the sweep's `{"rc":…}`, is held back for
+//      decideRelay: 75 (the shim found the lock held) is exit 4 writer-busy, a well-formed result is its rc and
+//      reason, and anything else is exit 1.
+// It never runs sweep.mjs itself: the shim is the ONE lock taker (§5.1, RV13). It passes no env: the child inherits
+// this process's, so the env allow-list holds.
+// Bare `doctor` is the status health, read-only (slug history-bare-doctor-is-status-health, NEW: §8.4 lists the
+// bare form without saying what it does; those lines are what doctor's history check relays).
+
+/** A CLI operator verb, or a doctor flag, → the --op verb the sweep runs. */
+export const OP_OF_VERB = Object.freeze({
+  import: 'import', prune: 'prune', reparse: 'reparse',
+  '--repair': 'repair', '--backup': 'backup', '--migrate': 'migrate', '--adopt': 'adopt', '--restore': 'restore', '--rebuild': 'rebuild',
+});
+
+/** What a human reads for an operator verb's non-zero exit without a word of its own (§8.3). */
+const OP_EXIT_WORDS = Object.freeze({
+  [EXIT.INTERNAL]: 'internal error: the history writer gave no result this CLI could relay',
+  [EXIT.WRITER_BUSY]: 'writer-busy: another history pass holds the lock; the operator runs it again when that pass ends',
+  [EXIT.NO_STORE]: 'no store on this box (macOS, a server role, or never installed): stop, do not retry',
+});
+
+/** {op, opArgs} for `<verb> <rest…>`, or null. A doctor flag comes first and alone names the op; what follows it
+ *  is that op's arguments, which parseOpVerbArgs judges. */
+function opFormOf(verb, rest) {
+  if (verb === 'doctor') {
+    const flag = rest[0];
+    if (typeof flag !== 'string' || !flag.startsWith('--') || !Object.hasOwn(OP_OF_VERB, flag)) return null;
+    return { op: OP_OF_VERB[flag], opArgs: rest.slice(1) };
+  }
+  if (verb.startsWith('--') || !Object.hasOwn(OP_OF_VERB, verb)) return null;
+  return { op: OP_OF_VERB[verb], opArgs: [...rest] };
+}
+
+/** The pane an irreversible form runs in, read as the sweep reads it (§8.2, §8.4): whether to read it at all is
+ *  lib's paneReadWanted, the one rule the sweep's paneNameFor asks too; the read is Task 10's bounded tmuxSession,
+ *  always with -t. Anything else is null, and the TTY requirement still stands then. */
+function opPaneName(form) {
+  const pane = process.env.TMUX_PANE ?? '';
+  if (!healthLib.paneReadWanted(form, pane)) return null;
+  const t = tmuxSession(pane);
+  return t.settled && t.status === 0 ? t.stdout.trim() : null;
+}
+
+/** The shim as a child: its stdout relayed line by line as it arrives, its LAST line held back for the relay. */
+function opRelay(P, op, opArgs, emit) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (r) => { if (!done) { done = true; resolve(r); } };
+    let child;
+    try {
+      child = spawnOp(P.shim, ['--op', op, ...opArgs], { stdio: ['inherit', 'pipe', 'inherit'] });
+    } catch {
+      finish({ exit: EXIT.INTERNAL });
+      return;
+    }
+    let buf = '';
+    let held = null;
+    const take = (line) => {
+      if (held !== null) emit(held);
+      held = line;
+    };
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (d) => {
+      buf += d;
+      for (let i = buf.indexOf('\n'); i !== -1; i = buf.indexOf('\n')) {
+        take(buf.slice(0, i));
+        buf = buf.slice(i + 1);
+      }
+    });
+    child.on('error', () => finish({ exit: EXIT.INTERNAL }));
+    child.on('close', (status, signal) => {
+      if (buf !== '') take(buf);
+      let lastLine = null;
+      if (held !== null && held.startsWith('{"rc"')) lastLine = held;
+      else if (held !== null) emit(held);
+      finish(healthLib.decideRelay({ status, signal, lastLine }));
+    });
+  });
+}
+
+/** The relay's redaction index (§8.3, layers 1 and 4): Task 10's pairIndexOf, the read verbs' own index, so a relayed
+ *  sweep line is redacted as a recalled field is: the pairs the sweep recorded in redact_hashes, the frozen list's and
+ *  the declared secretsFiles' pairs read now (the paths from meta redact_sources), and the belt of those values. It
+ *  reads the store only where a read verb would (decideCliStore's `read`, so behind measureReach's settled stat), on
+ *  a read-only handle closed before it returns, so the shim's op never runs beside this process's reader. Where the
+ *  store cannot be read (no settled stat, no DB yet before a rebuild or a restore, or an open or a select that failed
+ *  as a StoreError or SQLite's own error), the index is the files read now with their belt, never no index; any
+ *  other throw is a defect and propagates (exit 1). */
+function relayIndexOf(home, P, reach) {
+  if (decideCliStore(cliFactsOf(reach)).read) {
+    let db = null;
+    try {
+      db = openReader(P.dbFile);
+      return pairIndexOf(db, home);
+    } catch (e) {
+      if (!(e instanceof StoreError) && !(e !== null && typeof e === 'object' && e.code === 'ERR_SQLITE_ERROR')) throw e;
+    } finally {
+      if (db !== null) db.close();
+    }
+  }
+  const files = loadSecrets(home, []);
+  return makePairIndex(files.pairs, makeBelt(beltUnits(files.values)));
+}
+
+/** One operator verb through the door. `emit` gets each line the sweep printed before its result, already through
+ *  redactFinal with relayIndexOf's index, which is built only once the gate has passed, before the shim starts. */
+export async function runOpVerb(home, verb, rest, emit) {
+  const P = healthLib.historyPaths(home);
+  const map = opFormOf(verb, rest);
+  if (map === null) return { exit: EXIT.REFUSED, reason: 'bad-args' };
+  const parsed = healthLib.parseOpVerbArgs(map.op, map.opArgs);
+  if (!parsed.ok) return { exit: EXIT.REFUSED, reason: parsed.reason };
+  const reach = await measureReach(home);
+  const door = healthLib.decideOpDoor(cliFactsOf(reach));
+  if (!door.ok) return door.reason === undefined ? { exit: door.exit } : { exit: door.exit, reason: door.reason };
+  const form = healthLib.formOf(map.op, map.opArgs);
+  // RB6 (slug history-ops-refused-while-recovering): the CLI's pre-check, so a refused form spawns nothing. It opens
+  // the store read-only only behind measureReach's settled 2 s stat; an unsettled stat, or any answer but `open`,
+  // leaves the call to the sweep's half, which is authoritative. While a step is open it also carries the facts lib's
+  // recoveryExempt reads (RB13: the stored user_version against this build's; RB14: store.id's presence, as
+  // measureReach read it), so it never refuses a form the sweep would let through.
+  const recovering = form !== null && reach.statSettled && opRecoverStepAt(P.dbFile) === 'open';
+  const recovery = recovering
+    ? { storedVersion: opStoredVersionAt(P.dbFile), codeVersion: healthLib.SCHEMA_VERSION, storeId: reach.facts.storeId }
+    : {};
+  const gate = healthLib.decideOpGate(form, { claudecode: (process.env.CLAUDECODE ?? '') !== '', historyOff: healthFs.existsSync(P.off), recovering, ...recovery },
+    isattyOp(0), opPaneName(form));
+  if (!gate.ok) return { exit: gate.rc, reason: gate.reason };
+  const idx = relayIndexOf(home, P, reach);
+  return opRelay(P, map.op, map.opArgs, (line) => emit(redactFinal(line, idx)));
+}
+
+/** main's arm for `import`, `prune`, `reparse` and `doctor`: argv is main's own, the verb first, `--json` anywhere.
+ *  Under --json, stdout is the envelope alone and the sweep's lines go to stderr; every relayed line arrives here
+ *  already through redactFinal (runOpVerb's relayIndexOf). */
+export async function operatorMain(home, argv) {
+  const json = argv.includes('--json');
+  const rest = argv.filter((a) => a !== '--json');
+  const verb = rest[0] ?? '';
+  if (verb === 'doctor' && rest.length === 1) {
+    const env = await statusWithHealth(home, Date.now());
+    process.stdout.write(json ? `${JSON.stringify(env)}\n` : formatHealth(env.health).map((l) => `${l}\n`).join(''));
+    return env.exit;
+  }
+  const P = healthLib.historyPaths(home);
+  const emit = (line) => {
+    const text = `${line}\n`;
+    if (json) process.stderr.write(text);
+    else process.stdout.write(text);
+  };
+  const r = await runOpVerb(home, verb, rest.slice(1), emit);
+  if (json) {
+    const id = readTrimmed(P.storeId);
+    const env = healthLib.readEnvelope({
+      exit: r.exit, ...(r.reason === undefined ? {} : { reason: r.reason }),
+      storeId: id !== null && healthLib.UUID_RE.test(id) ? id : null,
+      scope: null, header: null, items: [], shown: 0, total: 0, next: null,
+    });
+    process.stdout.write(`${JSON.stringify(env)}\n`);
+  } else if (r.exit !== EXIT.OK) {
+    const words = OP_EXIT_WORDS[r.exit] ?? `${r.exit === EXIT.REFUSED ? 'refused' : 'store error'}: ${r.reason ?? ''}`;
+    process.stderr.write(`ccrc history ${verb}: ${words}\n`);
+  }
+  return r.exit;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {

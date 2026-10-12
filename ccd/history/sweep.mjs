@@ -54,7 +54,7 @@ import {
   makeBelt, beltUnits, BELT_META, BELT_NODES_STEP, BELT_COUNTERS, REDACT_SOURCES_META, normalizeRedactSources, parseBeltState, formatBeltState,
   decideBelt, beltAfterGeneration, BELT_VERSION, beltWitnessMoved,
   REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES,
-  REASONS, WRITING_FORMS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker,
+  REASONS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker, parseOpVerbArgs, BIND_KINDS, paneReadWanted,
   HARNESS_TABLE, exportDates, exportHorizonDays, planExport, retentionLowered, parseJournalRecord,
   decideRecallOff, recallOffPath,
 } from './lib.mjs';
@@ -62,7 +62,7 @@ import {
   MIGRATIONS, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
   measureStoreFacts, measuredSize, openReader, openWriter, readAttempts, removeStaleMigrationTemps, removeStaleTemps, runMigration, setMeta,
   syncWriterMirror, userVersion, withTx, writeFileAtomic, removeEntry, readBounded, removeStaleAtomicTemps, mkdirDurable,
-  CODEC, brotli, unbrotli, unbrotliPrefix, compressFdRange, probeFts5, createFtsTables,
+  CODEC, brotli, unbrotli, unbrotliPrefix, compressFdRange, probeFts5, createFtsTables, recoverStepAt, storedVersionAt,
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
 import { deriveNodes } from './derive.mjs';
@@ -4240,36 +4240,55 @@ export function mergeSteps(db, ctx, budget) {
 // which the CLI relays (§8.4); the process exits with that rc. A held lock never reaches here: the shim
 // answers 75 for an --op pass (§5.1).
 
-/** The --op verbs B1 runs (§10.5 B1: "the shim with --op import" and --op migrate, §6.11). B2 adds its own. */
+/** The --op verbs this build runs (§8.4). Each B2 verb joins in the task that ships its path (Tasks 20–28): a verb
+ *  named here has an entry in OP_HANDLERS or BINDING_PASSES, and one in OP_DRY_RUNS when it has a dry run. */
 const OP_VERBS = new Set(['import', 'migrate']);
 
-/** The arguments B1's verbs take; null is bad-args. import: [--apply] [--session <id> --file <path>], the
- *  pair both or neither; migrate: none. */
+/** adopt, restore and rebuild (§8.4): they run BEFORE openStore, which refuses exactly the states they exist to
+ *  repair (store-unbound, store-missing, store-recoverable, store-zero-byte, store-schema-missing, …). */
+const BINDING_OPS = new Set(BIND_KINDS);
+
+/** The verbs whose rows the code's schema version shapes: a store awaiting its migration refuses them
+ *  (migration-pending). backup and migrate run at any stored version; the binding verbs never reach openStore. */
+const OP_NEEDS_CODE_VERSION = new Set(['import', 'prune', 'reparse', 'repair']);
+
+/** Each verb's dry run, its null form (§8.4 "dry run by default"): READ-ONLY, after the bounded reachability probe,
+ *  with no journal half, no op marker and no flush. c = {home, P, parsed, args, deps, out, now}; answers
+ *  {rc, reason?}. */
+const OP_DRY_RUNS = Object.freeze({
+  import: async (c) => {
+    importDryRun(c.P, c.parsed.homes, c.args, c.out);
+    return { rc: EXIT.OK };
+  },
+});
+
+/** Each writing verb's body, on the store openStore opened, under the lock, after the lock-take journal half, the
+ *  op marker and the first outbox flush. c = {db, ctx, P, args, opened, free}; answers {rc, reason?}. An rc of 0 is
+ *  followed by the release flush and journal half (§8.4: every writing form flushes before it exits 0). */
+const OP_HANDLERS = Object.freeze({
+  import: (c) => importApply(c.db, c.ctx, c.P, c.args),
+  migrate: (c) => migrateOp(c.db, c.ctx, c.opened, c.free),
+});
+
+/** The binding verbs' place, run in place of openStore and a handler. Empty in this task, so adopt, restore and
+ *  rebuild answer bad-args; W1-B2 Task 26 replaces this table and its branch in opPass with one call to
+ *  bindingPass, which Tasks 26–28 fill. */
+const BINDING_PASSES = Object.freeze({});
+
+/** B1's name, kept: a verb's arguments by lib's one grammar (parseOpVerbArgs), or null when refused. opPass
+ *  reads parseOpVerbArgs itself, for the refusal's word. */
 export function parseOpArgs(op, args) {
-  if (op === 'migrate') return args.length === 0 ? {} : null;
-  const o = { apply: false, session: null, file: null };
-  for (let i = 0; i < args.length; i += 1) {
-    const a = args[i];
-    if (a === '--apply' && !o.apply) { o.apply = true; continue; }
-    if ((a === '--session' || a === '--file') && i + 1 < args.length) {
-      const k = a.slice(2);
-      if (o[k] !== null) return null;
-      i += 1;
-      o[k] = args[i];
-      continue;
-    }
-    return null;
-  }
-  return (o.session === null) === (o.file === null) ? o : null;
+  if (!OP_VERBS.has(op)) return null;
+  const p = parseOpVerbArgs(op, args);
+  return p.ok ? p.args : null;
 }
 
 /** The pane an irreversible form runs in, by the bounded tmux read the CLI uses (§8.2, §8.4): always with
  *  -t, under TMUX_DEADLINE_MS, and only for a pane id of the right grammar. A reversible form, no pane,
  *  or a tmux that fails or times out answers null — the TTY requirement still stands then. */
 export function paneNameFor(form) {
-  if (form === null || WRITING_FORMS[form]?.irreversible !== true) return null;
   const pane = process.env.TMUX_PANE ?? '';
-  if (!/^%[0-9]+$/.test(pane)) return null;
+  if (!paneReadWanted(form, pane)) return null;
   const r = spawnSync('tmux', ['display-message', '-p', '-t', pane, '#S'],
     { encoding: 'utf8', timeout: TMUX_DEADLINE_MS, stdio: ['ignore', 'pipe', 'ignore'] });
   return r.status === 0 ? r.stdout.trim() : null;
@@ -4617,39 +4636,41 @@ async function opPass(parsed, deps, out) {
     out(JSON.stringify(rc === EXIT.OK || reason === undefined ? { rc } : { rc, reason }));
     return rc;
   };
-  const args = OP_VERBS.has(parsed.op) ? parseOpArgs(parsed.op, parsed.opArgs) : null;
-  if (args === null) return result(EXIT.REFUSED, 'bad-args');
-  if (args.session != null) {
-    if (!idOk(args.session)) return result(EXIT.REFUSED, 'bad-id');
-    // Resolved ONCE, here, against the operator's cwd (Task 26F item 2): admission, the file's binding and the
-    // journal's mapping verdict then all see the one absolute path. Left as typed, a relative path was admitted by
-    // its cwd-relative spelling but stored verbatim, giving the file a second path row and a path replay cannot resolve.
-    args.file = resolve(args.file);
-    if (!args.file.endsWith('.jsonl') || !UUID_RE.test(basename(args.file, '.jsonl'))) return result(EXIT.REFUSED, 'bad-args');
-  }
+  const verdict = OP_VERBS.has(parsed.op) ? parseOpVerbArgs(parsed.op, parsed.opArgs) : { ok: false, reason: 'bad-args' };
+  if (!verdict.ok) return result(EXIT.REFUSED, verdict.reason);
+  // Resolved ONCE against the operator's cwd (B1 Task 26F item 2): admission, the file's binding and the journal's
+  // mapping verdict then all see one absolute path. Left as typed, a relative path was admitted by its cwd-relative
+  // spelling but stored verbatim, giving the file a second path row and a path replay cannot resolve. parseOpVerbArgs
+  // freezes its args (and already checked the `<uuid>.jsonl` basename, which resolving does not change), so copy.
+  const args = typeof verdict.args.file === 'string' ? { ...verdict.args, file: resolve(verdict.args.file) } : verdict.args;
   const form = formOf(parsed.op, parsed.opArgs);
-  const gate = decideOpGate(form, { claudecode: (process.env.CLAUDECODE ?? '') !== '', historyOff: existsSync(P.off) },
-    isatty(0), paneNameFor(form));
+  // The gate's inputs, read once: RB6's second call below reuses them, so tmux is read at most once per pass.
+  const gateEnv = { claudecode: (process.env.CLAUDECODE ?? '') !== '', historyOff: existsSync(P.off) };
+  const tty = isatty(0);
+  const paneName = paneNameFor(form);
+  const gate = decideOpGate(form, gateEnv, tty, paneName);
   if (!gate.ok) return result(gate.rc, gate.reason);
   const role = readRole(P);
   if (role === 'server') {
     out('history-sweep: store-create-refused-role');
     return result(EXIT.NO_STORE);
   }
-  if (form === null && parsed.rosterUnreadable) {
-    // D-4313 (history-import-refusal-words): an unreadable roster is no homes, so there is nothing to list or admit;
-    // reading it as an empty roster answered "nothing to import" and exit 0. A dry run writes nothing at all (§8.4),
-    // so it cannot count the condition; --apply does (below).
+  if (form === null && parsed.op === 'import' && parsed.rosterUnreadable) {
+    // B1's D-4313 (history-import-refusal-words): an unreadable roster is no homes, so there is nothing to list or
+    // admit; reading it as an empty roster answered "nothing to import" and exit 0. A dry run writes nothing at all
+    // (§8.4), so it cannot count the condition; --apply does (below). Import only: prune's and reparse's dry runs
+    // need no roster.
     out('history-sweep: accounts.sh could not be read, so no home is known; nothing listed');
     return result(EXIT.REFUSED, 'roster-unreadable');
   }
   if (form === null) {
-    // The dry run stats and opens db/history.db, so the bounded probe goes first (§9.3, RR15): a dead volume
-    // answers store-unreachable instead of blocking the operator's shell in a stat it can never leave.
+    const dry = OP_DRY_RUNS[parsed.op];
+    if (dry === undefined) return result(EXIT.REFUSED, 'bad-args');
+    // The dry run stats and opens db/history.db, so the bounded probe goes first (§9.3, RR15).
     const reach = await statfsWithDeadline(probePath(P, home), STATFS_DEADLINE_MS, deps.statfs);
     if (reach.state === 'unsettled') return result(EXIT.DB, 'store-unreachable');
-    importDryRun(P, parsed.homes, args, out);
-    return result(EXIT.OK);
+    const r = await dry({ home, P, parsed, args, deps, out, now });
+    return result(r.rc, r.reason);
   }
   if (runJournalHalf(home, idsFromFiles(P), now)) {
     out('history-sweep: journal-unwritable');
@@ -4671,6 +4692,33 @@ async function opPass(parsed, deps, out) {
     return result(rc, reason);
   };
   if (free.state === 'unsettled') return released(EXIT.DB, 'store-unreachable');
+  // RB6 (slug history-ops-refused-while-recovering): THE authoritative half. A registered recovery step, measured on
+  // its own read-only handle behind the probe above, runs the gate again with `recovering`, before the binding branch
+  // (adopt on a bound store is refused) and before openStore (no op marker, no flush, no writer). Only `open`
+  // refuses; every other answer is left to openStore's and decideBind's own words. Like store-unreachable, it comes
+  // after the lock-take journal half, which moves no cursor, and answers through B1's `released`, so the half at
+  // release runs on it as on every other answer from here on. With it go the facts lib's recoveryExempt reads,
+  // measured only now: the stored user_version against this build's, counted as openStore counts it (RB13: migrate
+  // runs while they differ), and store.id's presence (RB14: adopt runs on an unbound store). The gate decides; this
+  // half only measures.
+  if (recoverStepAt(P.dbFile) === 'open') {
+    const recovery = {
+      recovering: true,
+      storedVersion: storedVersionAt(P.dbFile),
+      codeVersion: deps.migrations === undefined ? SCHEMA_VERSION : deps.migrations.length,
+      storeId: measureStoreFacts(home, role).storeId,
+    };
+    const held = decideOpGate(form, { ...gateEnv, ...recovery }, tty, paneName);
+    if (!held.ok) return released(held.rc, held.reason);
+  }
+  if (BINDING_OPS.has(parsed.op)) {
+    const bind = BINDING_PASSES[parsed.op];
+    if (bind === undefined) return released(EXIT.REFUSED, 'bad-args');
+    const r = await bind({ home, P, parsed, args, deps, out, now, free, role });
+    return released(r.rc, r.reason);
+  }
+  const handler = OP_HANDLERS[parsed.op];
+  if (handler === undefined) return released(EXIT.REFUSED, 'bad-args');
   let opened;
   try {
     // `deps.openStore` is an in-process dependency like `deps.statfs`, never an env var (slug history-test-seams-not-env): the
@@ -4730,9 +4778,9 @@ async function opPass(parsed, deps, out) {
       return outcome(EXIT.INTERNAL, undefined, true);
     }
     clearDoneMarkers(home, opened.stored);
-    if (parsed.op === 'import' && opened.stored !== opened.code) return outcome(EXIT.DB, 'migration-pending');
+    if (OP_NEEDS_CODE_VERSION.has(parsed.op) && opened.stored !== opened.code) return outcome(EXIT.DB, 'migration-pending');
     const ctx = passCtx({ home, P, ids, parsed, now, out, deps, pause: null, ingest: true });
-    const r = parsed.op === 'migrate' ? migrateOp(db, ctx, opened, free) : await importApply(db, ctx, P, args);
+    const r = await handler({ db, ctx, P, args, opened, free });
     if (r.rc === EXIT.OK) flushOutbox(db, home, ids, now());   // D-4225: only an rc 0 is told "done"
     return outcome(r.rc, r.reason);
   }

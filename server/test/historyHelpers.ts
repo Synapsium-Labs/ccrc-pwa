@@ -18,7 +18,7 @@ import { beforeEach } from 'vitest';
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { mkTmp } from './tmpHelpers.js';
@@ -424,4 +424,39 @@ function atEndOfFile(box: HistoryBox, uuid: string): boolean {
   } finally {
     db.close();
   }
+}
+
+// ── W1-B2 Task 19: the operator door's stand-ins ──────────────────────────────────────────────────────
+/** Replace the box's placed shim with a stand-in: it appends its argv, one line per run, to
+ *  `<home>/stub-shim-argv`, prints `stdout` verbatim and exits `exit`. The CLI's relay is then measured against an
+ *  answer the case chose; a case that must spawn nothing reads the argv file as absent. A box keeps its stand-in;
+ *  a case that needs the real shim builds its own box. */
+export function stubShim(box: HistoryBox, script: { stdout: string; exit: number }): void {
+  const quote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
+  const p = path.join(box.home, '.local', 'bin', 'ccd-history-sweep');
+  fs.writeFileSync(p, [
+    '#!/usr/bin/env bash',
+    'printf \'%s\\n\' "$*" >> "$HOME/stub-shim-argv"',
+    `printf '%s' ${quote(script.stdout)}`,
+    `exit ${script.exit}`,
+    '',
+  ].join('\n'));
+  fs.chmodSync(p, 0o755);
+}
+
+/** Hold the shim's lock from outside, as a first concurrent pass holds it: a `flock` holder that sleeps, in its own
+ *  process group, until the returned release kills it. Returns only once the lock is really taken. */
+export function holdLock(box: HistoryBox): () => void {
+  const lock = historyPaths(box.home).lock;
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  const holder = spawn('flock', [lock, 'sleep', '120'], { stdio: 'ignore', detached: true });
+  const release = (): void => {
+    try { process.kill(-holder.pid!, 'SIGKILL'); } catch { /* already gone */ }
+  };
+  for (let i = 0; i < 200; i += 1) {
+    if (spawnSync('flock', ['-n', lock, 'true']).status !== 0) return release;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+  }
+  release();
+  throw new Error('holdLock: the holder never took the lock');
 }
