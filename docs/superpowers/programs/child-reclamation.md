@@ -47,6 +47,16 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-12 11:06 — THE FIRST LIVE COLLECT: `ccrc-pwa-brisk-prairie` (child of run 369), at 11:05:07.**
+  - **The sequence.** The lane read the new marker at 11:02:42 (feed seq 16633, "now live"). The act followed at 11:05:04, with record `ccrc-pwa-brisk-prairie.1791803104297524425.2645416`.
+  - **The two-audit rule held.** The gap of about 2.5 minutes fits two fresh audits at least `COLLECT_OBSERVE_INTERVAL_MS` (60 s, `watch.ts:202`) apart after the switch cleared the pairs.
+  - **Re-measured read-only (`ls`).** Gone:
+    - the leaf `~/.cc-tmp/ccrc-pwa-brisk-prairie`;
+    - its witness `$REG/tmproots/ccrc-pwa-brisk-prairie`.
+
+    Empty: `$REG/tmpquarantine/` and `~/.cc-tmp/.ccd-quarantine/` (the record was dropped last, and nothing is kept). The other three leaves stand: `MekWarLive-brisk-canyon`, `ccrc-pwa-still-harbor`, and `ccrc-pwa-clear-summit` (refused `containment-unproven`).
+  - **Next.** A second read-only feed watcher waits for the two remaining collects. It stops at once on a `quarantine-kept` or `failed` row.
+
 - **2026-10-12 11:02 — THE COLLECTOR IS ARMED. The operator ruled "I want YOU to arm it", and at 11:02:30 I created `$REG/collect-lane-live` on the fleet box.** That file is the only thing I touched in the registry, as a one-off act at the operator's explicit instruction. The rule that sessions never touch `~/.cc-sessions` stands for everything else.
   - **This answers the operator's question 2:** the collector is armed BEFORE the path-identity follow-up's W2. What arming before W2 accepts was told to the operator first. A collect that drops only the witness can close a kept-temp-root attention item while the leaf stays on disk. The two tail-drop fixes can leave a temp root unwitnessed: that is a leak, never a removal.
   - **The README's pre-arming checklist, measured at 10:55–11:02:**
