@@ -380,7 +380,6 @@ coordinator's ruling R40 (the fix round after review). One number of the block r
   M11 (never record `waitBy` on a fresh subagent wait) → 4 failed (Review Focus 1 scope pin: a subagent PermissionRequest over a main-thread question writes its own approval; a subagent's own approved dialog ends at its next tool event (working, no ask); control: SubagentStart over working and over a subagent-raised wait write no aliveAt; the same holds after a Stop, and across a SubagentStop that carries the provenance);
   M12 (delete the `waitby=""` reset in the carry) → 1 failed (a subagent AskUserQuestion over a main-thread question leaves the main wait, still main-owned);
   M13 (delete `ask_json="${fr_ask:-null}"` in the carry, so the subagent's own question is kept instead of the main thread's) → 9 failed (a main-thread wait survives a SubagentStop and a SubagentStart, and is not flipped to subagent-raised; a subagent AskUserQuestion over a main-thread question leaves the main wait, still main-owned; a subagent PostToolUse does too, and so do many in a row; a subagent PreToolUse after a PermissionRequest question leaves waiting and the questions; an approval dialog is kept the same way; an updatedAt that is not a plain non-negative integer keeps no stamp and writes no aliveAt; control: with no interleaving the shim is a pass-through and the wait is carried; the PreToolUse question arm is kept the same way; the interrupted flag is carried with the wait).
-  Also `server/test/ask-instance-guard.test.ts` (6 cases), inverted to pin the fix: a SubagentStop over a main-thread dialog keeps `updatedAt` and `event` and adds `aliveAt`, the parent's CAS succeeds across repeated stops, and a new main-thread question still moves the stamp and is refused `ask-moved`; a subagent-raised wait still moves its stamp. This supersedes the bump D-2403 describes, for a main-thread wait only; the `restampAsk` pair stays for a subagent's own dialog and any other bump. M14 (leave `w_upd` unset in `_hook_keep_stamp`, so the carried write takes a moving stamp) → 4 failed in that file, out of tree, restored and `cmp`-checked (SubagentStop leaves updatedAt and event as the wait set them; the parent is NOT refused; repeated SubagentStops never move the guarded number; a subagent TOOL event keeps the number too). `session-hook-merge-deny.test.ts`'s jq-program floor is re-measured from 52 to 51 for the fold of the Start/Stop arm's three reads.
 - **Departure `carry-only-a-main-thread-wait` (task review, Important 1):** the carry now applies only to a wait the
   main thread raised. The hook records an additive hookstate key `waitBy: "subagent"` when a subagent's own event freshly
   sets `waiting`, preserves it across the SubagentStart/SubagentStop carry, and the D-4039 block skips a stored
@@ -503,6 +502,19 @@ Assigned from the programme's reserve by the coordinator's ruling R40. It resolv
     a corrupt state is never carried), and the "carry is decided from one fresh read" describe (a `jq` shim in the
     fixture's `bin/` rewrites the file after the prefilter read, as a main-thread answer would, and counts reads); and
     `server/test/hookstate.test.ts` (7 cases in the `aliveAt` describe).
+  - `server/test/ask-instance-guard.test.ts` (6 cases), inverted to pin this fix (ruling 4414): a SubagentStop over a
+    main-thread dialog keeps `updatedAt` and `event`, adds `aliveAt` and keeps the ask; the parent's CAS then succeeds,
+    across repeated stops and a subagent tool event; a new main-thread question still moves the stamp and is refused
+    `ask-moved`; and a wait a subagent raised (`waitBy:"subagent"`) still moves its stamp, with `waitBy` surviving the
+    Stop. This supersedes the bump D-2403 describes, for a main-thread wait only; the `restampAsk` pair stays, because a
+    subagent's own dialog and any other bump still need it.
+    - S11 (leave `w_upd` unset in `_hook_keep_stamp`, so a carried write takes a moving stamp) → 4 failed in that file:
+      SubagentStop leaves updatedAt and event as the wait set them; the parent is NOT refused; repeated SubagentStops
+      never move the guarded number; a subagent TOOL event over the dialog keeps the number too. Out of tree, restored
+      and `cmp`-checked.
+  - `server/test/session-hook-merge-deny.test.ts`'s jq-program floor is 51. The extractor's count, measured at each ref:
+    52 at the base, 54 after D-4039 (two programs added), 51 after D-4041 (four removed, the shared fresh read added);
+    the `as $` bindings were 33 throughout.
   - Every S and N row was re-measured in fix round 2 at commit `df7fb0248` (the hook code of the tip), out of tree, one
     mutation at a time, each restored and `cmp`-checked, with identical counts and titles to the `ed7537045` measurement;
     the unmutated files pass 28 of 28 and 61 of 61. The A rows live in `hookstate.ts` and that round did not touch it:
@@ -532,9 +544,9 @@ Assigned from the programme's reserve by the coordinator's ruling R40. It resolv
   - **N3 is gone and N4 is a named survivor.** The first round's `. >= 0` on the fresh read's `updatedAt` was dead code
     (it survived 28 of 28): `_hook_keep_stamp`'s `^[0-9]+$` is the rule, since a negative prints with its `-` and fails
     it, and N2 pins that. It was removed in fix round 2 (review 402 F7, check 7). N4 (`type == "number"`) stays, and is
-    POSITIONAL, not a guard: without it a string, array or object `updatedAt` makes `floor` abort the jq program, which
-    blanks every line printed after it. Today that is only `event`, and `event` is unused whenever `fr_upd` is empty, because `_hook_keep_stamp` gates on
-    `fr_upd`. If a later edit printed another field after `updatedAt`, the type check would become load-bearing. The hook's
+    POSITIONAL, not a guard: without it a string, array, object, null or boolean `updatedAt` makes `floor` abort the jq
+    program, which blanks every line printed after it. Today that is only `event`, and `event` is unused whenever
+    `fr_upd` is empty, because `_hook_keep_stamp` gates on `fr_upd`. If a later edit printed another field after `updatedAt`, the type check would become load-bearing. The hook's
     comment names it so.
 - **Measured, forced interleaving** (a `jq` shim on PATH in a fixture HOME; a main-thread write rewrites the file after
   the chosen read; subagent PostToolUse; variants 1 and 2 over a main-thread question, the erase row over a `working` file):
