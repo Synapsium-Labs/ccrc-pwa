@@ -30,6 +30,7 @@ import { GENERATION_ID_HEX, NODE_FILES, TOKEN_SYNC_OP_ERRORS, TOKEN_TRANSPORTS }
 import { TOKEN_FILE_PROBLEMS } from '../../shared/box-token.js';
 import { PLACEHOLDER_TOKEN } from '../src/coord/token.js';
 import { DRIVER_TICK_MS, FAILURES_FOR_BANNER, PENDING_HARD_CAP, type BoxTokenState } from '../src/token/policy.js';
+import { SET_ASIDE_MARK, tokenPaths } from '../src/token/files.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -47,6 +48,8 @@ const SKIP_TAIL = '; the FAIL and WARN arms are switched off (_BT_ARMS_ON=0)';
 const ID_OLD = 'a1b2c3d4e5f60718';
 const ID_CUR = '0123456789abcdef';
 const MIN = 60_000;
+/** A `box-token-retired.json` in the writer's shape (`appendRetired`): never a bare `[]`. */
+const RETIRED = '{"v":1,"retired":[]}\n';
 
 interface Box { home: string; value: string; fleetValue: string }
 interface Run { code: number; stdout: string; stderr: string }
@@ -252,6 +255,16 @@ const ROWS: Row[] = [
   { arm: 'server', word: 'token-absent', label: 'token-absent (with history: a state file)', armedClass: 'FAIL', plant: (b) => rmSync(dot(b, 'mail.token')) },
   { arm: 'server', word: 'token-absent', label: 'token-absent (with history: a state file it cannot read)', armedClass: 'FAIL',
     plant: (b) => { rmSync(dot(b, 'mail.token')); plantState(b, '{"v":1,'); } },
+  // 4554 (review 391 F1): a sibling trace of a value this server once held is history too, by NAME only (never opened:
+  // `mail-previous.token` holds a value). The state is absent and so is the token, and the line stays FAIL.
+  { arm: 'server', word: 'token-absent', label: 'token-absent (with history: no state, but box-token-retired.json)', armedClass: 'FAIL',
+    plant: (b) => { rmSync(dot(b, 'mail.token')); rmSync(dot(b, 'box-token.json')); writeFileSync(dot(b, 'box-token-retired.json'), RETIRED, { mode: 0o600 }); } },
+  { arm: 'server', word: 'token-absent', label: 'token-absent (with history: no state, but mail-previous.token)', armedClass: 'FAIL',
+    plant: (b) => { rmSync(dot(b, 'mail.token')); rmSync(dot(b, 'box-token.json')); writeFileSync(dot(b, 'mail-previous.token'), `${b.value}\n`, { mode: 0o600 }); } },
+  { arm: 'server', word: 'token-absent', label: 'token-absent (with history: no state, but a set-aside box-token.json)', armedClass: 'FAIL',
+    plant: (b) => { rmSync(dot(b, 'mail.token')); rmSync(dot(b, 'box-token.json')); writeFileSync(dot(b, 'box-token.json.unusable-1760000000000'), '{}', { mode: 0o600 }); } },
+  { arm: 'server', word: 'token-absent', label: 'token-absent (with history: no state, but a set-aside box-token-retired.json)', armedClass: 'FAIL',
+    plant: (b) => { rmSync(dot(b, 'mail.token')); rmSync(dot(b, 'box-token.json')); writeFileSync(dot(b, 'box-token-retired.json.unusable-1760000000000'), RETIRED, { mode: 0o600 }); } },
   { arm: 'server', word: 'token-mode', armedClass: 'FAIL', plant: (b) => chmodSync(dot(b, 'mail.token'), 0o644) },
   { arm: 'server', word: 'token-unusable', armedClass: 'FAIL', plant: (b) => writeFileSync(dot(b, 'mail.token'), '# no value line\n\n', { mode: 0o600 }) },
   { arm: 'server', word: 'token-unusable', label: 'token-unusable (the shipped placeholder)', armedClass: 'FAIL',
@@ -720,6 +733,15 @@ describe('doctor box-token: where the files are, and what marks a fleet box (D-4
     expect(out).toContain(`server: token-absent — ${elsewhere} does not exist`);
     expect(out).toMatch(/^PASS box-token: /);
   });
+  it('both role, local, own-write: an override into a directory that does not exist yet is the fresh PASS on both arms (4554)', () => {
+    const b = box({ role: 'both' });
+    for (const f of ['mail.token', 'box-token.json', 'token-sync.json', NODE_FILES.tokenGeneration]) rmSync(dot(b, f));
+    rmSync(fleetFile(b));
+    writeFileSync(dot(b, 'ccrc.env'), `CCRC_ROLE=both\nCCRC_FLEET=local\nCCRC_MAIL_TOKEN_PATH=${join(b.home, 'elsewhere', 'custom.token')}\n`, { mode: 0o600 });
+    const r = runCheck(b);
+    expect(r.stdout).toMatch(new RegExp(`^PASS box-token: server: token-absent — .*; fleet: fleet-token-absent — .* ${FLEET_NEVER}\\n$`));
+    expect(r.code).toBe(0);
+  });
 
   const bothLocal = (): Box => { const b = box({ role: 'both' }); rmSync(dot(b, 'token-sync.json')); return b; };
   it('an `export CCRC_AGENT_TOKEN=` line marks a fleet box: the sync report is read, so its absence is never-synced', () => {
@@ -764,6 +786,40 @@ describe('doctor box-token: a box never handed a value reads PASS with its sente
       expect(r.code).toBe(0);
       expect(r.stderr).toBe('');
     }
+  });
+  // Review 391 F1 (4554): the server arm's `absent` state read is history only when no sibling trace says a value was held
+  // once. A trace is a NAME beside the state file (never opened: `mail-previous.token` holds a value).
+  const TRACES: [string, (b: Box) => void][] = [
+    ['box-token-retired.json', (b) => writeFileSync(dot(b, 'box-token-retired.json'), RETIRED, { mode: 0o600 })],
+    ['mail-previous.token', (b) => writeFileSync(dot(b, 'mail-previous.token'), `${b.value}\n`, { mode: 0o600 })],
+    ['box-token.json.unusable-1760000000000', (b) => writeFileSync(dot(b, 'box-token.json.unusable-1760000000000'), '{}', { mode: 0o600 })],
+    ['box-token-retired.json.unusable-1760000000000', (b) => writeFileSync(dot(b, 'box-token-retired.json.unusable-1760000000000'), RETIRED, { mode: 0o600 })],
+  ];
+  const reEsc = (x: string): string => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  it('review 391 F1: a server with no token and no state but a sibling trace held a value once: FAIL naming the trace, never the never-minted sentence (4554)', () => {
+    for (const [name, plant] of TRACES) {
+      const b = box({ role: 'server' });
+      dropServer(b);
+      plant(b);
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout, name).toMatch(new RegExp(`^FAIL box-token: server: token-absent — .* but .*${reEsc(name)} does: this server held a value once and lost it`));
+      expect(r.stdout, name).not.toContain('no value has been minted here yet');
+      expect(r.stdout, name).toMatch(/\n {2}remedy: \S/);
+      expect(r.code, name).toBe(1);
+      const d = runCheck(b, disarmed());
+      expect(d.stdout, name).toMatch(/^SKIP box-token: server: token-absent — /);
+      expect(d.stdout, name).not.toContain('no value has been minted here yet');
+      expect(d.code, name).toBe(3);
+    }
+  });
+  it('names beside it that are not traces (box-token.json.bak, notes.txt) keep the fresh PASS (4554)', () => {
+    const b = box({ role: 'server' });
+    dropServer(b);
+    writeFileSync(dot(b, 'box-token.json.bak'), '{}', { mode: 0o600 });
+    writeFileSync(dot(b, 'notes.txt'), 'x\n', { mode: 0o600 });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(new RegExp(`^PASS box-token: ${never('server')}\\n$`));
+    expect(r.code).toBe(0);
   });
   it('fleet role: no token file, no generation file and no sync report is PASS rc 0, naming the fact, with no remedy; disarmed the same', () => {
     const b = box({ role: 'fleet' });
@@ -849,6 +905,25 @@ describe('doctor box-token: a box never handed a value reads PASS with its sente
       expect(r.stdout).toMatch(new RegExp(`^PASS box-token: ${never('server')}; ${never('fleet')}\\n$`));
       expect(r.code).toBe(0);
     }
+  });
+  // 4554: the own-write fleet arm reads a server trace as "the state read was not `absent`", so it agrees with the server arm.
+  const bothTrace = (name: string, plant: (b: Box) => void, serverWord: string): void => {
+    const b = box({ role: 'both' });
+    dropServer(b); dropFleet(b);
+    plant(b);
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout, name).toMatch(new RegExp(`^FAIL box-token: server: token-absent — .*${serverWord}`));
+    expect(r.stdout, name).toMatch(/; fleet: fleet-token-absent — .* does not exist, so this box's calls to the server carry no box token/);
+    expect(r.stdout, name).not.toContain(FLEET_NEVER);
+    expect(r.stdout, name).not.toContain(SERVER_NEVER);
+    expect(r.code, name).toBe(1);
+  };
+  it('both role, local, own-write: a fresh-looking box with a server trace is FAIL on both arms: the fleet arm agrees (4554)', () => {
+    bothTrace('box-token-retired.json', (b) => writeFileSync(dot(b, 'box-token-retired.json'), RETIRED, { mode: 0o600 }), 'box-token-retired\\.json does: ');
+  });
+  it('both role, local, own-write: the same with a set-aside trace in place of the retired file (4554)', () => {
+    bothTrace('box-token.json.unusable-1760000000000', (b) => writeFileSync(dot(b, 'box-token.json.unusable-1760000000000'), '{}', { mode: 0o600 }),
+      'box-token\\.json\\.unusable-1760000000000 does: ');
   });
   it('both role, local: the same box with a generation file left behind lost its value, a FAIL on the fleet arm', () => {
     const b = box({ role: 'both' });
@@ -962,6 +1037,44 @@ describe('doctor box-token: an unsearchable parent directory is unreadable, neve
       expect(r.stdout).toContain('server: state-unreadable — ');
       expect(r.stdout).not.toMatch(/custom\.token does not exist/);
       expect(r.stdout).not.toContain(SERVER_NEVER);
+      expect(r.code).toBe(1);
+    });
+  });
+  // 4554: a directory with a search bit and no read bit opens its files but cannot list them, so a set-aside copy cannot be
+  // ruled out, and boot refuses to start on it. Its state read is `absent` (`lstat` needs only search). An undecidable
+  // history fails closed, with a sentence and remedy of its own: "restart the server" would be false there.
+  const unlistable = (b: Box, role: 'server' | 'both'): string => {
+    const alt = join(b.home, 'alt-dir');
+    mkdirSync(alt, { recursive: true, mode: 0o700 });
+    for (const f of ['mail.token', 'box-token.json']) rmSync(dot(b, f));
+    writeFileSync(dot(b, 'ccrc.env'), `CCRC_ROLE=${role}\nCCRC_FLEET=local\nCCRC_MAIL_TOKEN_PATH=${join(alt, 'custom.token')}\n`, { mode: 0o600 });
+    return alt;
+  };
+  const listless = (dir: string, f: () => void): void => {
+    chmodSync(dir, 0o300);
+    try { f(); } finally { chmodSync(dir, 0o700); }
+  };
+  itNonRoot('server: a token directory that exists and cannot be listed (search, no read) cannot rule a trace out: FAIL with its own sentence and remedy, never the never-minted PASS (4554)', () => {
+    const b = box({ role: 'server' });
+    const alt = unlistable(b, 'server');
+    listless(alt, () => {
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout).toMatch(/^FAIL box-token: server: token-absent — .* cannot be listed/);
+      expect(r.stdout.split('\n')[0]).toContain('refuses to boot until it can list it');
+      expect(r.stdout).toMatch(/\n {2}remedy: .*chmod u\+r /);
+      expect(r.stdout).not.toContain(SERVER_NEVER);
+      expect(r.code).toBe(1);
+    });
+  });
+  itNonRoot('both role, local, own-write: the same unlistable directory is FAIL on the fleet part too (4554)', () => {
+    const b = box({ role: 'both' });
+    const alt = unlistable(b, 'both');
+    for (const f of [fleetFile(b), dot(b, NODE_FILES.tokenGeneration), dot(b, 'token-sync.json')]) rmSync(f);
+    listless(alt, () => {
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout).toMatch(/^FAIL box-token: server: token-absent — .* cannot be listed/);
+      expect(r.stdout).toMatch(/; fleet: fleet-token-absent — .* does not exist, so this box's calls to the server carry no box token/);
+      expect(r.stdout).not.toContain(FLEET_NEVER);
       expect(r.code).toBe(1);
     });
   });
@@ -1104,6 +1217,22 @@ describe('doctor box-token: the shell spellings are pinned to L0', () => {
     expect(proofTuple(src.replace(', "proof-unmeasured")', ')'))).not.toEqual([null, 'proved', ...l0Proof()]);
     expect(proofTuple(src.replace('"proved"', '"proven"'))).not.toEqual([null, 'proved', ...l0Proof()]);
     expect(proofTuple(src.replace('(None, ', '('))).not.toEqual([null, 'proved', ...l0Proof()]);
+  });
+  it('the server trace names are the server writer\'s (tokenPaths, SET_ASIDE_MARK, and boot\'s own set-aside list) (4554)', () => {
+    const p = tokenPaths('/x/mail.token', '/h');
+    expect(arr('_BT_TRACES')).toEqual([path.basename(p.retired), path.basename(p.previous)]);
+    expect(arr('_BT_ASIDE')).toEqual([path.basename(p.retired) + SET_ASIDE_MARK, path.basename(p.state) + SET_ASIDE_MARK]);
+    const boot = readFileSync(join(REPO, 'server', 'src', 'token', 'boot.ts'), 'utf8');
+    const hits = [...boot.matchAll(/const prefixes = \[([^\]]*)\]\.map/g)];
+    expect(hits, 'boot.ts no longer lists its set-aside prefixes in this shape: re-point the pin').toHaveLength(1);
+    const keys = hits[0]![1]!.split(',').map((x) => x.trim()).filter(Boolean).map((x) => /^paths\.(\w+)$/.exec(x)?.[1] ?? `?${x}`);
+    expect(keys.length).toBeGreaterThan(0);
+    const bootAside = keys.map((k) => {
+      const v = (p as unknown as Record<string, unknown>)[k];
+      if (typeof v !== 'string') throw new Error(`boot's set-aside list names paths.${k}, which tokenPaths does not carry as a path`);
+      return path.basename(v) + SET_ASIDE_MARK;
+    });
+    expect(bootAside).toEqual(arr('_BT_ASIDE'));
   });
   it('the generation file and the fleet file are the names the writers use', () => {
     const src = readFileSync(CHECKS_SRC, 'utf8');

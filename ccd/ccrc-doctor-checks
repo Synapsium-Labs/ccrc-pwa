@@ -7404,7 +7404,7 @@ _check_history() {
 # of 2026-10-12: a fresh install ends green): an absent token takes its class from the box's history (4553;
 # `_bt_server_arm`, `_bt_fleet_arm`). With no history it is not a finding, only a fact named in the detail (the server
 # mints at boot; the server's next rotation hands the fleet its value), the way `auth` and `provenance` name theirs.
-# A box that once held a value and lost it stays FAIL. That PASS is not an arm's finding, so the kill switch leaves it
+# A box that once held a value and lost it stays FAIL (on the server, a sibling trace counts as that history, 4554). That PASS is not an arm's finding, so the kill switch leaves it
 # PASS as well; every real finding is SKIP there. An absent token on a box without `python3` FAILs, by fail-closed
 # design: nothing can be read to class it lower.
 # `transport http` is printed on a PASS line and is never a verdict.
@@ -7428,6 +7428,12 @@ _BT_ARMS_ON=1
 # The value line `deploy/ccrc-mail.token.example` ships. A copy of `PLACEHOLDER_TOKEN` (`server/src/coord/token.ts`),
 # held to it by a text pin in `coord-token.test.ts`. Both arms read it: a token file carrying it is no token.
 _BT_PLACEHOLDER='REPLACE-THIS-LINE-WITH-THE-OUTPUT-OF-openssl-rand--hex-32'
+# 4554: the names beside the server's state file that only a server that once held a value can have. Held to the writer by
+# `doctor-box-token.test.ts`: `_BT_TRACES` are `tokenPaths`' `retired` and `previous` basenames (`server/src/token/files.ts`),
+# `_BT_ASIDE` are the prefixes of boot's own set-aside list (`server/src/token/boot.ts`, `setAsideNames`: the retired and
+# state files plus `SET_ASIDE_MARK`, `.unusable-`). Tested by NAME only: `mail-previous.token` holds a value.
+_BT_TRACES=(box-token-retired.json mail-previous.token)
+_BT_ASIDE=(box-token-retired.json.unusable- box-token.json.unusable-)
 # What `String.prototype.trim` strips beyond ASCII (`extractToken` trims with it), as byte sequences: no-break space,
 # BOM, U+1680, U+2000-200A, U+2028, U+2029, U+202F, U+205F, U+3000. `_bt_value_file` strips it (with ASCII whitespace) from
 # every line before it tells a blank or `#` line apart, and compares the value line to the placeholder; `doctor-box-token.test.ts`
@@ -7793,8 +7799,27 @@ _bt_drop() {
   BT_PART=(${p[@]+"${p[@]}"}); BT_CLASS=(${c[@]+"${c[@]}"}); BT_FIX=(${f[@]+"${f[@]}"})
 }
 
+# `_bt_server_trace <dir>` — 4554: a trace beside the state file that only a server that once held a value can have, by
+# NAME only (never opened: mail-previous.token holds a value). Sets the caller's BT_TRACE to the first trace's name,
+# `unlisted` when the directory exists and cannot be listed (a set-aside copy cannot be ruled out: fail closed), else
+# empty. A directory that does not exist holds no trace (the caller's reads already measured that ENOENT).
+_bt_server_trace() {
+  local d="$1" n f
+  BT_TRACE=""
+  for n in "${_BT_TRACES[@]}"; do
+    if [ -e "$d/$n" ] || [ -L "$d/$n" ]; then BT_TRACE="$n"; return 0; fi
+  done
+  if [ -d "$d" ] && [ ! -r "$d" ]; then BT_TRACE=unlisted; return 0; fi
+  for n in "${_BT_ASIDE[@]}"; do
+    for f in "$d/$n"*; do
+      if [ -e "$f" ] || [ -L "$f" ]; then BT_TRACE="${f##*/}"; return 0; fi
+    done
+  done
+  return 0
+}
+
 _bt_server_arm() {   # <token path> <state path>
-  local tok="$1" state="$2" before="${#BT_CLASS[@]}" out="" kw w n node seq="" since="" rot="" rotating=0 grace=0 refused=0 bad=0 tai=-1
+  local tok="$1" state="$2" before="${#BT_CLASS[@]}" out="" kw w n node seq="" since="" rot="" rotating=0 grace=0 refused=0 bad=0 tai=-1 BT_TRACE=""
   _bt_value_file "$tok"
   case "$BT_TF" in
     absent) tai="${#BT_CLASS[@]}"; _bt_find server token-absent "$tok" ;;
@@ -7816,9 +7841,26 @@ _bt_server_arm() {   # <token path> <state path>
     # the verdict moves, and the server's own `state-absent` is not a second line for it. Every other state read (ok,
     # unreadable, no python3 above) leaves the token's FAIL, because a state file means there was a value once; an
     # unreadable one still says so, and an undecidable history fails closed.
+    # A trace of a value beside the absent state (4554) is history too: `box-token-retired.json`, `mail-previous.token`, or a
+    # set-aside copy (`_bt_server_trace`, by name only). Then the FAIL stays, its sentence names the trace, and
+    # `BT_SERVER_STATE` records `trace`, so an own-write fleet arm reads no `absent` state either. A token directory that
+    # exists and cannot be listed cannot rule a set-aside copy out, so it fails closed with a sentence and remedy of its own:
+    # boot refuses to start on it (`boot.ts`, `setAsideNames`), and "restart the server" would be false there. A directory
+    # that does not exist holds no trace: a fresh server whose override directory is not created yet stays the fresh PASS.
     absent) if [ "$tai" -ge 0 ]; then
-              BT_PART[tai]="server: token-absent — $tok does not exist, and neither does the server's state file: no value has been minted here yet, and the server mints one at boot"
-              BT_CLASS[tai]=PASS; BT_FIX[tai]=""
+              _bt_server_trace "${state%/*}"
+              if [ -z "$BT_TRACE" ]; then
+                BT_PART[tai]="server: token-absent — $tok does not exist, and neither does the server's state file: no value has been minted here yet, and the server mints one at boot"
+                BT_CLASS[tai]=PASS; BT_FIX[tai]=""
+              else
+                BT_SERVER_STATE=trace   # 4554: an own-write fleet arm reads this as no `absent` read either
+                if [ "$BT_TRACE" = unlisted ]; then
+                  BT_PART[tai]="server: token-absent — $tok does not exist, and neither does the server's state file, and ${state%/*} cannot be listed, so a value held here once cannot be ruled out, and the server refuses to boot until it can list it"
+                  BT_FIX[tai]="give ${state%/*} its read bit (chmod u+r ${state%/*}); the server then boots and mints a value"
+                else
+                  BT_PART[tai]="server: token-absent — $tok does not exist, and neither does the server's state file, but ${state%/*}/$BT_TRACE does: this server held a value once and lost it; the server mints a new one at its next boot, and the fleet must then be handed it"
+                fi
+              fi
             else _bt_find server state-absent "$state"; fi
             return 0 ;;
     ok) ;;
@@ -7903,8 +7945,8 @@ _bt_fleet_arm() {   # <own-write: 0|1>
   # report included, leaves the FAIL.
   # An own-write box (both, local, no agent.env) writes the fleet file, the generation file and `fleetConfirmed` together,
   # so the server arm's state outranks the generation file alone (review 383 F1): it reads never-handed only when that
-  # state read was itself `absent`. Any present state, readable or not, records or may record the hand-out. The state is
-  # read once, by the server arm, which runs first on such a box.
+  # state read was itself `absent` with no sibling trace (it records `trace` otherwise, 4554). Any present state, readable or
+  # not, records or may record the hand-out. The state is read once, by the server arm, which runs first on such a box.
   if [ "$tai" -ge 0 ] && [ "$nogen" -eq 1 ] && { [ "$nosync" -eq 1 ] || [ "$refonly" -eq 1 ] || { [ "$ownseen" -eq 1 ] && [ "$BT_SERVER_STATE" = absent ]; }; }; then
     BT_PART[tai]="fleet: fleet-token-absent — $ff does not exist: no value has been handed to this box yet, and the server's next rotation hands one"
     BT_CLASS[tai]=PASS; BT_FIX[tai]=""
