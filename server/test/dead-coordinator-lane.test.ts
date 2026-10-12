@@ -1493,6 +1493,26 @@ describe('the breaker\'s typed state: dirty before any anchor change, clean only
     expect([ra, rb].map(f.stateOf), 'released through the door that exists: A alone ends').toEqual(['failed', 'working']);
   }, HEAVY);
 
+  it('under a CLEAN state, an anchor newer than its snapshot — one an older build started, after a rollback — is held FLAGGED beside every member the snapshot carries (D-4826, the rule that stays)', async () => {
+    const f = await fixture();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const C = 'demo-coord-c';
+    f.plant(A); f.plant(B);
+    const ra = f.working(A); f.working(B);
+    // The snapshot: A and C held (C has since left the population), written at minute 1. A's anchor is that hold's; B's
+    // anchor began at minute 30, after the snapshot, written by a build that does not keep the typed state.
+    putState(f, 'clean', `dead-coordinator-breaker-held:${A}@${T0},${C}@${T0}`, 4, T0 + 60_000);
+    f.coord.setDeadAnchor(A, { firstDeadAt: T0, lastDeadAt: T0 + 30 * 60_000 });
+    f.coord.setDeadAnchor(B, { firstDeadAt: T0 + 30 * 60_000, lastDeadAt: T0 + 30 * 60_000 });
+    f.advance(31 * 60_000);
+    await f.pass();
+    expect(f.attention().filter(([k]) => k === 'breaker'), 'A, held, and B, flagged, trip though 30 minutes apart').toEqual([['breaker', [A, B]]]);
+    const st = stateOf(f);
+    expect(st.kind === 'clean' && st.held.find((m) => m.id === B), 'B flagged in the next snapshot').toMatchObject({ id: B, fallback: true });
+    expect(feedTitles(f), 'a clean state: no seed words').toEqual([]);
+    expect(f.stateOf(ra)).toBe('working');
+  });
+
   it('an EMPTY population with no state yet: the pass writes the exact empty snapshot and turns the state clean, no carrier needed; an anchor left behind is deleted in the same commit', async () => {
     const f = await fixture({ breakerState: 'absent' });
     vi.spyOn(console, 'warn').mockImplementation(() => {});
