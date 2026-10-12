@@ -814,11 +814,12 @@ function BoxTokenSection({ view, now, reload }: { view: UpdatesView; now: number
 }
 
 export function SettingsScreen(): ReactNode {
-  // ONE /api/updates poll and ONE clock for the Updates, Box token and
-  // Notifications sections: all three read the same answer (Tasks 7–10), so
-  // they can never disagree about the fleet. The Stall watch section is the
-  // one with its own read, of its own endpoint, through its own hook
-  // (useStallWatchView, design 2026-10-05 §13).
+  // ONE /api/updates poll for the Updates, Box token and Notifications
+  // sections: all three read the same answer (Tasks 7–10; the card,
+  // box-token lifecycle Task B6), so they can never disagree about the fleet.
+  // ONE clock for the two that show an age, Updates and the Box token card.
+  // The Stall watch section is the one with its own read, of its own
+  // endpoint, through its own hook (useStallWatchView, design 2026-10-05 §13).
   const poll = useUpdatesView();
   const now = useNow(30_000);
   return (
