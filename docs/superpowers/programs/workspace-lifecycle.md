@@ -1623,6 +1623,17 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   Plain-ridge's README hunks begin near line 3542, so the regions are disjoint. Calm-basin may commit that one
   paragraph's resolution; no other path under claims 1171, 1172 or 1174 is licensed. Plain-ridge was told (4297).
   Whichever of #322 and #351 lands second absorbs the other through its merge of main.
+- **2026-10-12 18:44 — #322 and #353 landed first; #351 owes no further merge of main (bright-river's 4372; told 4374).**
+  - **What landed:** main is `82464a449`. Since `28e8dc1b2` it gained #322 (`6e4524164`), #355, #356 and #353 (box-token
+    row 2b), which changed README's doctor row under consent 4227.
+  - **Measured:** plain-ridge's local `936115cc5` and the pushed `6bef07fd7` both merge clean against `82464a449`
+    (merge-tree rc 0). The shared paths are README.md, `watch.ts` and `coord-db.test.ts`.
+    - Main still has 18 migrations, so the branch's migration 19 has no rival.
+    - README gains 18 lines, all above line 1000. The branch adds no README line-number citation.
+    - The merged README is 6054 lines, inside pools-prose's band around CLAUDE.md's ~6000.
+  - **Ruling:** the "second lander merges main" terms of 4227 and 4296 are met by measurement, and neither is a
+    clause-16 trigger. Plain-ridge absorbs main again only on its clause 16: a conflict, or a required check red while
+    main passes. The 4288 merge (`404398ce4`) remains the second-lander merge after #354.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
