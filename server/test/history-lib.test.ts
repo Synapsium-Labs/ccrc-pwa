@@ -3775,10 +3775,18 @@ describe('queryTerms and snippetWindow: the earliest hit, stems included, from r
 describe('snippetTerms and unicode61 diacritic comparison: prefix markers survive, comparison folds, source offsets stay (W1-B2 task 12 fix round 1)', () => {
   it('snippetTerms keeps an explicit terminal prefix star the sanitiser would emit, and queryTerms still strips it', () => {
     const raw = 'stud* "error hand"* "x y*" plain D-12* **  ***';
-    expect(libSearch.snippetTerms(raw)).toEqual(['stud*', 'error hand*', 'x y*', 'plain', 'd-12*']);
+    expect(libSearch.snippetTerms(raw)).toEqual(['stud*', 'error hand*', 'x y*', 'plain', 'D-12*']);
     expect(libSearch.queryTerms(raw)).toEqual(['stud', 'error hand', 'x y', 'plain', 'd-12']);
     expect(libSearch.snippetTerms('   ')).toEqual([]);
     expect(libSearch.snippetTerms('stud stud*')).toEqual(['stud', 'stud*']);
+  });
+  it('F2 breaker: snippetTerms keeps raw code points (no host case conversion) while queryTerms keeps its legacy lowercase; the prefix star and edge stripping are shared', () => {
+    const big = '\u{104b0}';
+    const small = '\u{104d8}';
+    expect(libSearch.snippetTerms(big), 'raw U+104B0 survives').toEqual([big]);
+    expect(libSearch.queryTerms(big), 'legacy display contract: host lowercase').toEqual([small]);
+    expect(libSearch.snippetTerms(`${big}* "${big} ${big}"* (${big}) ${big}`)).toEqual([`${big}*`, `${big} ${big}*`, big]);
+    expect(libSearch.snippetTerms('Stud STUD* stud')).toEqual(['Stud', 'STUD*', 'stud']);
   });
   it('a star-bearing term localizes a prefix hit far beyond the head, and only the last word of a phrase is the prefix', () => {
     const far = `${'a'.repeat(100)} studies are archived`;

@@ -1362,6 +1362,7 @@ describe("grep's snippet localization and Task 12 helper seam (W1-B2 task 12 fix
       GRX.user(T, 5, `\u1ed9 earlyhead ${FILLER}o closes the true default-fold hit`),
       GRX.user(T, 6, `${FILLER}\u039f\u03a3 closes the context-free sigma hit`),
       GRX.user(T, 7, `\u0131 earlyhead7 ${FILLER}i closes the true dotless-guard hit`),
+      GRX.user(T, 8, `${FILLER}\u{104b0} closes the raw supplementary hit`),
     ]);
   }, HEAVY);
 
@@ -1422,6 +1423,19 @@ describe("grep's snippet localization and Task 12 helper seam (W1-B2 task 12 fix
       expect(s).toContain('i closes the true dotless-guard hit');
       expect(s).not.toContain('\u0131');
       expect(s).not.toContain('earlyhead7');
+      expect(s.startsWith('filler filler filler')).toBe(false);
+    } finally { rc.db.close(); }
+  }, HEAVY);
+
+  it('F2 breaker: a raw U+104B0 query is shown at the far U+104B0 token (snippetTerms passes no host lowercase to U+104D8), not at the body head', async () => {
+    const recall = await GRX.recall();
+    const rc = await GRX.rc(box, GRX.idA);
+    try {
+      const r = recall.runGrep(rc, await GRX.grepArgs(['\u{104b0}']));
+      expect(r.exit).toBe(0);
+      expect(r.items, 'SQLite returned exactly one blob').toHaveLength(1);
+      const s = String(r.items[0]?.snippet);
+      expect(s).toContain('\u{104b0} closes the raw supplementary hit');
       expect(s.startsWith('filler filler filler')).toBe(false);
     } finally { rc.db.close(); }
   }, HEAVY);

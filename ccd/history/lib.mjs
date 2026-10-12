@@ -3371,7 +3371,13 @@ const RAW_TERM_RE = /"([^"]+)"(\*?)|(\S+)/g;
 const EDGE_PUNCTUATION_RE = /^[`'"()[\]{}<>.,:;!?*_+=|\\/-]+|[`'"()[\]{}<>.,:;!?*_+=|\\/-]+$/g;
 
 function normalizeQueryTerm(raw) {
-  return typeof raw === 'string' ? raw.trim().replace(EDGE_PUNCTUATION_RE, '').toLowerCase() : '';
+  return typeof raw === 'string' ? stripQueryEdges(raw).toLowerCase() : '';
+}
+
+/** The edge-stripped term with its raw code points: no case conversion, normalization or other folding, which the
+ *  snippet locator leaves to its frozen unicode61 helpers (W1-B2 Task 12 breaker correction, F2). */
+function stripQueryEdges(raw) {
+  return typeof raw === 'string' ? raw.trim().replace(EDGE_PUNCTUATION_RE, '') : '';
 }
 
 /** Whether a token (or a phrase's inside) ends in the FTS5 prefix marker exactly as quoteFtsTerm reads it: a star run
@@ -3382,7 +3388,7 @@ const PREFIX_MARKED_RE = /[^*\s]\s*\*+$/;
  *  normalized term with whether the query made it a prefix (a star right after a phrase's closing quote, or
  *  ending the token or the phrase's inside, which is what sanitizeFtsQuery turns into an FTS5 prefix query),
  *  once per (term, prefix) pair. */
-function lexQueryTerms(raw) {
+function lexQueryTerms(raw, normalize = normalizeQueryTerm) {
   const text = String(raw);
   const out = [];
   const add = (term, prefix) => {
@@ -3390,9 +3396,9 @@ function lexQueryTerms(raw) {
   };
   for (const m of text.matchAll(RAW_TERM_RE)) {
     const inner = m[1] ?? m[3] ?? '';
-    add(normalizeQueryTerm(inner), m[2] === '*' || PREFIX_MARKED_RE.test(inner.replace(/"/g, '')));
+    add(normalize(inner), m[2] === '*' || PREFIX_MARKED_RE.test(inner.replace(/"/g, '')));
   }
-  if (out.length === 0) add(normalizeQueryTerm(text), false);
+  if (out.length === 0) add(normalize(text), false);
   return out;
 }
 
@@ -3402,12 +3408,13 @@ export function queryTerms(raw) {
   return [...new Set(lexQueryTerms(raw).map((x) => x.term))];
 }
 
-/** queryTerms for snippet localization: the same words, each once, but a term the query made a prefix keeps one
+/** queryTerms for snippet localization: the same words, each once (by raw code points: host case conversion would
+ *  turn U+104B0 into U+104D8, which unicode61 keeps apart, so every fold is left to snippetSpan), but a term the query made a prefix keeps one
  *  terminal `*`, which snippetSpan reads as FTS5's prefix marker (W1-B2 Task 12 fix round 1, finding F1). queryTerms
  *  strips that star for its display callers, so grep's snippet cannot be located from it. `stud` and `stud*` are
  *  different needles and both stay. */
 export function snippetTerms(raw) {
-  return lexQueryTerms(raw).map(({ term, prefix }) => (prefix ? `${term}*` : term));
+  return lexQueryTerms(raw, stripQueryEdges).map(({ term, prefix }) => (prefix ? `${term}*` : term));
 }
 
 // derived from lossless-claw src/tools/lcm-grep-tool.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
