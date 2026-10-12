@@ -130,3 +130,42 @@ export function parseMarkdown(src: string, profile: MarkdownProfile = 'chat'): P
 export function parseWithoutPrescan(src: string): ParseOutcome {
   return run(src, 'chat');
 }
+
+/** One job for the parse worker, as the runner posts it. */
+export interface MarkdownJob {
+  readonly id: number;
+  readonly src: string;
+  readonly profile: MarkdownProfile;
+}
+
+/** The worker's answer to the job with the same `id`. */
+export interface MarkdownReply {
+  readonly id: number;
+  readonly outcome: ParseOutcome;
+}
+
+/** Everything the parse worker does with one message (`markdownWorker.ts` is only the wiring), here so tests never
+ *  import the worker entry. A message with no finite numeric `id` is dropped: there is nothing to answer to. A
+ *  non-string `src`, or a `profile` other than `'chat'` and `'docs'`, answers `threw` `TypeError`. Otherwise the
+ *  answer is `parseMarkdown`'s outcome. Both the parse and the post are wrapped: a `post` that throws (a structured
+ *  clone's `DataCloneError`) is answered once more with `threw` and the thrown name, and a throw from that second
+ *  post is swallowed, so the runner's budget answers the job. */
+export function answerMarkdownJob(data: unknown, post: (reply: MarkdownReply) => void): void {
+  if (typeof data !== 'object' || data === null) return;
+  const job = data as { readonly id?: unknown; readonly src?: unknown; readonly profile?: unknown };
+  const id = job.id;
+  if (typeof id !== 'number' || !Number.isFinite(id)) return;
+  const outcome: ParseOutcome =
+    typeof job.src === 'string' && (job.profile === 'chat' || job.profile === 'docs')
+      ? parseMarkdown(job.src, job.profile)
+      : { kind: 'threw', error: 'TypeError' };
+  try {
+    post({ id, outcome });
+  } catch (e) {
+    try {
+      post({ id, outcome: { kind: 'threw', error: errorName(e) } });
+    } catch {
+      // Nothing more can be said from here: the runner's budget timer answers this job.
+    }
+  }
+}

@@ -4,7 +4,7 @@
 // So no React, no react-dom, no highlight.js, no `../session/*`, no `./api` and no stylesheet can reach the worker.
 // Specifiers are read by TypeScript's own `ts.preProcessFile` (static imports, re-exports, `import()` and
 // `require`), not by a regex. `hast` and `mdast` have no runtime module (their only package is `@types/*`), so
-// naming them can only ever be a type import. Task 5 adds `markdownWorker.ts` to ROOTS. It reads imports only: a DOM
+// naming them can only ever be a type import. ROOTS end at `markdownWorker.ts`, the entry. It reads imports only: a DOM
 // global used without an import (`window`, `document`) is not seen here, and the worker, which has no DOM, is
 // where such a use would fail.
 //
@@ -16,7 +16,9 @@ import { describe, expect, it } from 'vitest';
 
 const PWA = path.join(import.meta.dirname, '..');
 const LIB = path.join(PWA, 'src', 'lib');
-const ROOTS: readonly string[] = ['markdownLimits.ts', 'markdownGuard.ts', 'remarkAlerts.ts', 'markdownParse.ts'];
+const ROOTS: readonly string[] = [
+  'markdownLimits.ts', 'markdownGuard.ts', 'remarkAlerts.ts', 'markdownParse.ts', 'markdownWorker.ts',
+];
 const ALLOWED_PACKAGES: ReadonlySet<string> = new Set([
   'unified', 'remark-parse', 'remark-gfm', 'remark-rehype', 'hast', 'mdast',
 ]);

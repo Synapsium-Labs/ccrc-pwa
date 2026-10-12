@@ -68,6 +68,9 @@ export default defineConfig({
       },
     }),
   ],
+  // The Markdown parse worker (src/lib/markdownWorker.ts, spawned by
+  // src/lib/markdownRunner.ts) is bundled as an ES module worker.
+  worker: { format: 'es' },
   // The built shell lands inside the server package: ccrc-server statically
   // serves dist-pwa/ at / with SPA fallback (server.ts findPwaRoot).
   build: {
