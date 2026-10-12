@@ -445,3 +445,147 @@ slugVitest.describe('M3.12: slug_from_url gives _gh_repo_slug\'s verdict on ever
     }
   }, 120_000);
 });
+
+// ---- Docs W4 Task 9: M7.9, ccrc does not know a standalone docs server (spec 2026-10-01 sections 1 and 7.3) ----
+// Two needles, both built from parts so this file never spells either whole. The DIRECTORY needle may appear in the
+// shipped source (ccd/, deploy/, server/src, pwa/src, agent/src, shared/) only inside the two existing ruling
+// comments that explain why it is NOT special-cased, one in ccd/ccrc and one in ccd/ccrc-doctor-checks, each
+// located by its anchor sentence and taken as the paragraph around it (contiguous comment lines with text; a bare
+// `#` or a code line ends it), never by a line number. The NAME needle, case-insensitive, appears nowhere in
+// pwa/src or in pwa/vite.config.ts. The file list is git's: tracked files plus untracked ones git would not ignore
+// (so a scratch copy with a fresh `git init` scans the same set, and a gitignored secret is never read); a file
+// holding a NUL byte is skipped as binary.
+// Raw text on purpose: a needle in a comment counts. NOT EXHAUSTIVE. Known evasions: a name split across two
+// lines; a name built from parts in code (as this block builds its own); the directory needle in another case;
+// either needle in an excluded tree (server/test, docs/, README.md, CLAUDE.md, a gitignored file); and the name
+// needle anywhere outside pwa/src and pwa/vite.config.ts.
+// Imports under names of its own (this block is appended below others that bind theirs).
+import * as m79Vitest from 'vitest';
+import * as m79Fs from 'node:fs';
+import * as m79Path from 'node:path';
+import * as m79Cp from 'node:child_process';
+
+const M79_DIR = ['claude', 'doc' + 'server'].join('-');
+const M79_NAME = ['doc', 'server'].join('');
+/** The two ruling comments: file -> the anchor sentence that locates the paragraph. */
+const M79_RULINGS: ReadonlyMap<string, string> = new Map([
+  ['ccd/ccrc', 'A named `.' + M79_DIR + '` skip used to sit here.'],
+  ['ccd/ccrc-doctor-checks', 'NO `.' + M79_DIR + '` SPECIAL CASE, DELIBERATELY'],
+]);
+const M79_ROOTS = ['ccd', 'deploy', 'server/src', 'pwa/src', 'agent/src', 'shared'];
+const M79_PWA_CONFIG = 'pwa/vite.config.ts';
+
+/** Every violation in `files` ([repo-relative path, text]), one line each; empty means clean. */
+function m79Scan(files: ReadonlyArray<readonly [string, string]>): string[] {
+  const out: string[] = [];
+  const names = new Set(files.map(([name]) => name));
+  for (const ruled of M79_RULINGS.keys()) if (!names.has(ruled)) out.push(`${ruled}: not scanned`);
+  for (const [name, text] of files) {
+    const lines = text.split('\n');
+    const allowed = new Set<number>();
+    const anchor = M79_RULINGS.get(name);
+    if (anchor !== undefined) {
+      const at = lines.flatMap((l, i) => (l.includes(anchor) ? [i] : []));
+      if (at.length !== 1) out.push(`${name}: the ruling comment's anchor sentence appears ${at.length} times, want 1`);
+      else {
+        const prose = (i: number): boolean => /^\s*#\s*\S/.test(lines[i] ?? '');
+        let lo = at[0] ?? 0;
+        let hi = lo;
+        while (lo > 0 && prose(lo - 1)) lo--;
+        while (hi + 1 < lines.length && prose(hi + 1)) hi++;
+        for (let i = lo; i <= hi; i++) allowed.add(i);
+      }
+    }
+    const pwa = name.startsWith('pwa/src/') || name === M79_PWA_CONFIG;
+    lines.forEach((line, i) => {
+      if (line.includes(M79_DIR) && !allowed.has(i)) {
+        out.push(`${name}:${i + 1}: the directory name outside the two ruling comments`);
+      }
+      if (pwa && line.toLowerCase().includes(M79_NAME)) {
+        out.push(`${name}:${i + 1}: the standalone server's name in the PWA`);
+      }
+    });
+  }
+  return out;
+}
+
+/** The scanned files as git lists them (tracked, plus untracked and not ignored), text only. */
+function m79Files(): Array<readonly [string, string]> {
+  const listed = m79Cp.execFileSync(
+    'git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', ...M79_ROOTS, M79_PWA_CONFIG],
+    { cwd: ccrcRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+  );
+  const out: Array<readonly [string, string]> = [];
+  for (const name of new Set(listed.split('\0').filter((n) => n !== ''))) {
+    const abs = m79Path.join(ccrcRoot, name);
+    if (!m79Fs.existsSync(abs) || !m79Fs.statSync(abs).isFile()) continue;
+    const bytes = m79Fs.readFileSync(abs);
+    if (bytes.includes(0)) continue;
+    out.push([name, bytes.toString('utf8')]);
+  }
+  return out;
+}
+
+m79Vitest.describe('M7.9: the tree does not know a standalone docs server', () => {
+  const files = m79Files();
+  const textOf = (name: string): string => files.find(([n]) => n === name)?.[1] ?? '';
+  const swapped = (name: string, text: string): Array<readonly [string, string]> =>
+    files.map(([n, t]) => [n, n === name ? text : t] as const);
+  /** The violations a planted copy adds over the real tree's own, so each CONTROL proves the scanner alone. */
+  const added = (planted: ReadonlyArray<readonly [string, string]>): string[] => {
+    const base = new Set(m79Scan(files));
+    return m79Scan(planted).filter((v) => !base.has(v));
+  };
+
+  m79Vitest.it('reaches every root, and both ruling comments carry the directory needle', () => {
+    const names = files.map(([n]) => n);
+    for (const want of [
+      'ccd/ccrc', 'ccd/ccrc-doctor-checks', 'deploy/deploy.sh', 'server/src/index.ts', 'pwa/src/app.tsx',
+      'pwa/src/lib/sw-denylist.ts', 'agent/src/server.ts', 'shared/docs.ts', M79_PWA_CONFIG,
+    ]) m79Vitest.expect(names, want).toContain(want);
+    for (const ruled of M79_RULINGS.keys()) m79Vitest.expect(textOf(ruled), ruled).toContain(M79_DIR);
+  });
+
+  m79Vitest.it('the shipped source is clean', () => {
+    m79Vitest.expect(m79Scan(files)).toEqual([]);
+  });
+
+  m79Vitest.it('CONTROL: the old sw-denylist comment line, planted in a copy of the scanned text, is a hit', () => {
+    const swFile = 'pwa/src/lib/sw-denylist.ts';
+    const old = '// a ' + M79_NAME + ' at `/docs` and a preview at `/fleet` behind the same';
+    const n = textOf(swFile).split('\n').length;
+    m79Vitest.expect(added(swapped(swFile, textOf(swFile) + '\n' + old)))
+      .toEqual([`${swFile}:${n + 1}: the standalone server's name in the PWA`]);
+    const cfgN = textOf(M79_PWA_CONFIG).split('\n').length;
+    m79Vitest.expect(added(swapped(M79_PWA_CONFIG, textOf(M79_PWA_CONFIG) + '\n// a Doc' + 'Server')))
+      .toEqual([`${M79_PWA_CONFIG}:${cfgN + 1}: the standalone server's name in the PWA`]);
+  });
+
+  m79Vitest.it('CONTROL: the directory needle outside the ruling paragraph is a hit, inside it is not', () => {
+    const dep = 'deploy/deploy.sh';
+    const depN = textOf(dep).split('\n').length;
+    m79Vitest.expect(added(swapped(dep, textOf(dep) + '\nSKIP="$HOME/.' + M79_DIR + '"')))
+      .toEqual([`${dep}:${depN + 1}: the directory name outside the two ruling comments`]);
+    const ccrc = 'ccd/ccrc';
+    const lines = textOf(ccrc).split('\n');
+    const at = lines.findIndex((l) => l.includes(M79_RULINGS.get(ccrc) ?? '\0'));
+    m79Vitest.expect(at, 'the anchor sentence is in ccd/ccrc').toBeGreaterThanOrEqual(0);
+    // One more line of the same paragraph is still inside it.
+    const inside = [...lines.slice(0, at + 1), '    # see ~/.' + M79_DIR, ...lines.slice(at + 1)].join('\n');
+    m79Vitest.expect(added(swapped(ccrc, inside))).toEqual([]);
+    // The same line split off by a bare `#` is a paragraph of its own, so it is outside.
+    const past = [...lines.slice(0, at), '    # see ~/.' + M79_DIR, '    #', ...lines.slice(at)].join('\n');
+    m79Vitest.expect(added(swapped(ccrc, past)))
+      .toContain(`${ccrc}:${at + 1}: the directory name outside the two ruling comments`);
+  });
+
+  m79Vitest.it('CONTROL: a ruling comment whose anchor sentence moved or doubled is a hit, never a silent pass', () => {
+    const doctor = 'ccd/ccrc-doctor-checks';
+    const anchor = M79_RULINGS.get(doctor) ?? '\0';
+    m79Vitest.expect(added(swapped(doctor, textOf(doctor).replace(anchor, 'NO SPECIAL CASE'))))
+      .toContain(`${doctor}: the ruling comment's anchor sentence appears 0 times, want 1`);
+    m79Vitest.expect(added(swapped(doctor, textOf(doctor) + '\n# ' + anchor)))
+      .toContain(`${doctor}: the ruling comment's anchor sentence appears 2 times, want 1`);
+    m79Vitest.expect(added(files.filter(([n]) => n !== doctor))).toEqual([`${doctor}: not scanned`]);
+  });
+});

@@ -51,13 +51,13 @@ export default defineConfig({
         // state must never be cached — /api and /ws are explicitly
         // network-only (and navigations to them never fall back to the shell).
         //
-        // CO-TENANTS ARE A BUILD-TIME KNOB, not a built-in list. `/docs` (a
-        // docserver) and `/fleet` (a preview) are what the REFERENCE box puts
-        // behind the same proxy; a stranger's install has neither, and baking
-        // those paths in would ship one operator's reverse-proxy layout inside
-        // everybody's service worker. The box that has co-tenants sets
-        // CCRC_SW_DENYLIST in its own (gitignored) env — see
-        // deploy/ccrc.env.example.
+        // CO-TENANTS ARE A BUILD-TIME KNOB, not a built-in list. A box may put
+        // a wiki at `/wiki` and a preview at `/fleet` behind the same proxy; a
+        // stranger's install has neither, and baking those paths in would ship
+        // one operator's reverse-proxy layout inside everybody's service worker.
+        // The box that has co-tenants sets CCRC_SW_DENYLIST on the deploying
+        // machine — see deploy/deploy.sh's header. An entry covering `/docs`,
+        // ccrc's own Docs pages, fails the build (src/lib/sw-denylist.ts).
         globPatterns: ['**/*.{js,css,html,png,svg,webmanifest}'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: swDenylist(process.env['CCRC_SW_DENYLIST']),
