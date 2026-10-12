@@ -1587,6 +1587,20 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     unmeasurable/member-instant property pins. Numbers 4826–4827 were allocated for the round.
   - Both lanes remain SHADOWED; this session creates neither live marker. A new scoped review follows the next verified
     `wave-done`.
+- **2026-10-12 05:34 — fix round 4 hit its explicit stop clause (plain-ridge's 4266); run 358 stays `working`.**
+  - Plain-ridge has five local, unpushed commits through `bcb39b146`. The named suites are green, 4827 and F4–F9 are
+    implemented, and 4826 recovers post-record anchors plus anchor-start checkpoints. Nothing is accepted or pushed yet.
+  - Its internal Opus review measured a remaining F1 class: while held-record inserts fail but anchor updates land, a
+    newly held instant can later lose its anchor to doubt before restart. The restart then sees neither a newer anchor nor
+    the missing held instant and can act while the uninterrupted lane remains held. This satisfies 4264's stop condition.
+  - **A and C are rejected.** Total encoding removes the lone-surrogate trigger but leaves the selective-write failure;
+    words alone leave both triggers. Either would convert F1 into an accepted arming residual, contrary to review 385.
+  - **B is not authorized yet.** A precommitted dirty marker is the only offered direction that could close F1, but a
+    reserved `dead_claimants` row has no collision-proof identity and introduces unruled marker-before-mutation,
+    record-and-clear, wildcard restart, malformed-state, clearing, rollback and act-gating semantics. A typed table is a
+    schema migration and also a new persistence decision. Coordinator clause 11 reserves that choice for the operator.
+  - Mail 4269 confirms the stop: preserve local `bcb39b146`, narrow every 4826 claim to what it proves, and keep the
+    deleted-anchor/write-failure class as an unresolved ARMING BLOCKER. Both lanes remain SHADOWED; no marker is created.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
