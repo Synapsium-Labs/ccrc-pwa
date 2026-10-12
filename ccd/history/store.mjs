@@ -24,7 +24,7 @@ import {
 import { dirname } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as Z, createBrotliCompress, createBrotliDecompress } from 'node:zlib';
-import { BUSY_TIMEOUT_MS, CONTROL_FILE_MAX, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_VERSION, SIDECAR_WHOLE_MAX, UUID_RE, WRITER_RE, blobOverDecodeCap, ftsTextOf, historyPaths, jsonWithinStructureBound, newSha256, sidecarIndexText } from './lib.mjs';
+import { BUSY_TIMEOUT_MS, CONTROL_FILE_MAX, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_VERSION, SIDECAR_WHOLE_MAX, UUID_RE, WRITER_RE, backupNameOf, blobOverDecodeCap, ftsTextOf, historyPaths, jsonWithinStructureBound, newSha256, sidecarIndexText } from './lib.mjs';
 
 /** The codec word every blob row records: Brotli at quality 5 (RV6). */
 export const CODEC = 'br5';
@@ -1242,4 +1242,65 @@ export function pruneApply(db, i) {
     after = c.lastBlobId;
     if (!c.more) return { blobs, bytes, fts };
   }
+}
+
+// ── doctor --backup's copy (§8.4; W1-B2 Task 22) ─────────────────────────────────────────────────
+
+/** A backup's temp (§8.4 "temp then rename"): `.<ts>.db.tmp` in backups/, with the rollback journal SQLite may
+ *  leave beside it. Only a pass holding the lock writes one, so every match a pass finds is stale. The
+ *  pre-migration snapshot's `.pre-v<N>.db.tmp` is runMigration's and never matches. */
+const BACKUP_TMP_RE = /^\.[0-9]{8}T[0-9]{6}Z\.db\.tmp(-journal)?$/;
+
+/** Remove every stale backup temp under backups/ (`BACKUP_TMP_RE`, through `removeEntry`); nothing when backups/ is
+ *  absent. `doctor --backup` calls it BEFORE its room probe, so the free space that probe measures already includes
+ *  the bytes a killed copy left; otherwise a store too full for a copy stays refused by the very temp a crashed
+ *  copy left (D-4588, history-backup-stale-temp-before-room-probe; spec §9.3 planCopy, §6.6). */
+export function removeStaleBackupTemps(home) {
+  const P = historyPaths(home);
+  if (!existsSync(P.backups)) return;
+  for (const n of readdirSync(P.backups)) if (BACKUP_TMP_RE.test(n)) removeEntry(`${P.backups}/${n}`);
+}
+
+/** `doctor --backup`'s copy (§8.4; ruled Q6). VACUUM INTO `backups/.<ts>.db.tmp` — the target is a bound
+ *  parameter and never a caller's path — then fsync, link() it to `backups/<ts>.db`, unlink the temp and fsync
+ *  the directory. A kill leaves only the temp, which the next backup removes first (C51), so a partial copy
+ *  never carries a backup's name. link() refuses a name that exists, where rename() would replace it: a second
+ *  backup in the same second, or an operator file of that name, is StoreError('backup-exists')
+ *  (D-4721, history-backup-link-not-rename). The copy's mode is the process umask's — 0600 from its first byte under
+ *  the shim's and runPass's umask 077 (C35); the fchmod is a belt for a caller with another umask. Every copy
+ *  stores its measured rate in meta.copy_bps, which planMigration reads (§8.4), at whatever version the store is:
+ *  the rate is the disk's, not the schema's. */
+export function writeBackup(db, home, i) {
+  const P = historyPaths(home);
+  // B1's mkdirDurable, as B1's runMigration creates this same directory: the first backup on a box with no backups/
+  // fsyncs db/, so a power loss cannot lose backups/ and the copy inside it (review 316 F23).
+  mkdirDurable(P.backups);
+  for (const n of readdirSync(P.backups)) if (BACKUP_TMP_RE.test(n)) removeEntry(`${P.backups}/${n}`);
+  const name = backupNameOf(i.nowMs);
+  const finalPath = `${P.backups}/${name}`;
+  if (existsSync(finalPath)) throw new StoreError('backup-exists', `${name} already exists`);
+  const tmpPath = `${P.backups}/.${name}.tmp`;
+  const t0 = process.hrtime.bigint();
+  db.prepare('VACUUM INTO ?').run(tmpPath);
+  const fd = openSync(tmpPath, FS.O_RDONLY);
+  try {
+    fchmodSync(fd, 0o600);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+  const seconds = Number(process.hrtime.bigint() - t0) / 1e9;
+  const sizeBytes = statSync(tmpPath).size;
+  try {
+    linkSync(tmpPath, finalPath);
+  } catch (e) {
+    removeEntry(tmpPath);
+    if (e && e.code === 'EEXIST') throw new StoreError('backup-exists', `${name} appeared while it was written`);
+    throw e;
+  }
+  unlinkSync(tmpPath);
+  fsyncDir(P.backups);
+  const copyBps = Math.max(1, Math.round(sizeBytes / Math.max(seconds, 0.001)));
+  withTx(db, 'NORMAL', () => { setMeta(db, 'copy_bps', copyBps); });
+  return { name, sizeBytes, copyBps };
 }

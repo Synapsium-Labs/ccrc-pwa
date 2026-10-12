@@ -75,6 +75,11 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
   { name: 'history-switches', root: '~/.ccrc/history-off, ~/.ccrc/history-max-gb', pattern: 'O',
     creators: ['operator shell'], collector: null, bound: 'until removed', tier: '<64 B each',
     ruling: 'touched by hand; persists until removed (no writer in the tree, pinned by single-definition.test.ts)' },
+  // ccrc history, W1-B2 (spec 2026-10-05 §9.4): the operator's own snapshots (`doctor --backup`).
+  { name: 'history-backups', root: '~/.ccrc/history/db/backups/<ts>.db, and its .<ts>.db.tmp while one is written', pattern: 'O',
+    creators: ['ccd/history/sweep.mjs (--op backup)'], collector: null,
+    bound: 'until removed by hand', tier: 'one store size per backup',
+    ruling: 'operator-made by `ccrc history doctor --backup`; remove by hand (the next --backup removes a stale .tmp first)' },
   // #316: the server suite's one temp parent per vitest run, every fixture inside it. Ephemeral (E): its creator
   // collects it, and a later run collects one whose owner was SIGKILLed, once its socket refuses and it is quiet.
   // The window is named, not numbered: RUN_QUIET_S lives once, in the .mjs, which L0 cannot import.

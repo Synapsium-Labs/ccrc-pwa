@@ -78,3 +78,7 @@ export function incrementalVacuum(db: DatabaseSync, pages: number): number;
 export function pruneApply(db: DatabaseSync, i: {
   cutoffMs: number; nowMs: number; batch: number; vacuumPages: number; between: () => void; onDeleted?: () => void;
 }): { blobs: number; bytes: number; fts: boolean };
+export function removeStaleBackupTemps(home: string): void;
+export function writeBackup(db: DatabaseSync, home: string, i: { nowMs: number }): {
+  name: string; sizeBytes: number; copyBps: number;
+};

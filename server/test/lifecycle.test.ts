@@ -1061,7 +1061,7 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     W3: ['history-steer-files'],
   } as const;
   type HistoryPr = keyof typeof HISTORY_ROWS_BY_PR;
-  const HISTORY_LANDED: readonly HistoryPr[] = ['B1'];
+  const HISTORY_LANDED: readonly HistoryPr[] = ['B1', 'B2'];
 
   it('the history classes are §9.4\'s thirteen, each declared by the PR its Lands-in column names, and none before it (O17)', () => {
     const all: string[] = Object.values(HISTORY_ROWS_BY_PR).flat();
@@ -1152,6 +1152,19 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.ruling).toContain('touched by hand; persists until removed');
     // B1's two; W2 adds headless-on and W3 the steer markers, each to this root in its own PR
     expect(c!.root).toBe('~/.ccrc/history-off, ~/.ccrc/history-max-gb');
+  });
+
+  it('declares history-backups: an operator-made O class with no collector, created by --op backup, its stale .tmp removed by the next backup', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-backups');
+    expect(c, 'shared/lifecycle.ts declares no history-backups class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.creators).toEqual(['ccd/history/sweep.mjs (--op backup)']);
+    expect(c!.collector).toBeNull();
+    expect(c!.ruling).toContain('ccrc history doctor --backup');
+    expect(c!.ruling).toContain('remove by hand');
+    expect(c!.ruling).toContain('removes a stale .tmp first');
+    expect(c!.root).toBe('~/.ccrc/history/db/backups/<ts>.db, and its .<ts>.db.tmp while one is written');
+    expect(c!.tier).toBe('one store size per backup');
   });
 
   it('declares the server suite\'s per-run temp parent, an E class its own creator collects (#316)', () => {

@@ -56,14 +56,14 @@ import {
   REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES,
   REASONS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker, parseOpVerbArgs, BIND_KINDS, paneReadWanted,
   HARNESS_TABLE, exportDates, exportHorizonDays, planExport, retentionLowered, parseJournalRecord,
-  decideRecallOff, recallOffPath, decideReparse, REPARSE_MAX_TARGETS,
+  decideRecallOff, recallOffPath, decideReparse, REPARSE_MAX_TARGETS, planCopy, STORE_DB_REL,
 } from './lib.mjs';
 import {
   MIGRATIONS, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
   measureStoreFacts, measuredSize, openReader, openWriter, readAttempts, removeStaleMigrationTemps, removeStaleTemps, runMigration, setMeta,
   syncWriterMirror, userVersion, withTx, writeFileAtomic, removeEntry, readBounded, removeStaleAtomicTemps, mkdirDurable,
   CODEC, brotli, unbrotli, unbrotliPrefix, compressFdRange, probeFts5, createFtsTables, recoverStepAt, storedVersionAt,
-  pruneApply, pruneDryRun,
+  pruneApply, pruneDryRun, writeBackup, removeStaleBackupTemps,
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
 import { deriveNodes, reparseTargets, reparseLeaves, clearLeafCrashes } from './derive.mjs';
@@ -4246,7 +4246,7 @@ export function mergeSteps(db, ctx, budget) {
 
 /** The --op verbs this build runs (§8.4). Each B2 verb joins in the task that ships its path (Tasks 20–28): a verb
  *  named here has an entry in OP_HANDLERS or BINDING_PASSES, and one in OP_DRY_RUNS when it has a dry run. */
-const OP_VERBS = new Set(['import', 'migrate', 'prune', 'reparse']);
+const OP_VERBS = new Set(['import', 'migrate', 'prune', 'reparse', 'backup']);
 
 /** adopt, restore and rebuild (§8.4): they run BEFORE openStore, which refuses exactly the states they exist to
  *  repair (store-unbound, store-missing, store-recoverable, store-zero-byte, store-schema-missing, …). */
@@ -4276,6 +4276,7 @@ const OP_HANDLERS = Object.freeze({
   migrate: (c) => migrateOp(c.db, c.ctx, c.opened, c.free),
   prune: (c) => pruneApplyOp(c.db, c.ctx, c.args),
   reparse: (c) => reparseApplyOp(c.db, c.ctx, c.args),
+  backup: (c) => backupOp(c.db, c.ctx),
 });
 
 /** The binding verbs' place, run in place of openStore and a handler. Empty in this task, so adopt, restore and
@@ -5294,6 +5295,42 @@ export function reparseApplyOp(db, ctx, args) {
   withTx(db, 'NORMAL', () => { stampBeltWitness(db); });   // the op pass's witness (reparse)
   ctx.out(`history-sweep: reparsed ${plan.targets.length} leaves (${r.changed} changed, ${r.failed} failed); node ids and sources unchanged`);
   if (cleared > 0) ctx.out(`history-sweep: reparse: ${cleared} crashed boundary marker(s) cleared; the next tick derives their leaves`);
+  return { rc: EXIT.OK };
+}
+
+// ── doctor --backup (W1-B2 Task 22) ────────────────────────────────────────────────────────────────
+// §8.4 "doctor --backup"; §6.11's planCopy. A writing form but not an irreversible one: the gate refuses it under
+// CLAUDECODE and history-off, and it needs no TTY. It runs at any stored version (a snapshot is exactly what an
+// operator takes before a risky act), and the copy's single VACUUM INTO is uninterruptible: runOpPass's journal
+// half runs at the lock's take and its release.
+
+/** `--op backup`: a stale backup temp is removed first (D-4588, history-backup-stale-temp-before-room-probe), so the
+ *  free space measured next already includes the bytes a killed copy left; that free space is measured now, on db/
+ *  (a link followed) under STATFS_DEADLINE_MS; lib's planCopy must admit the store's measured size above the floor's
+ *  threshold, because the copy itself takes that much (§9.3); then store.mjs's writeBackup, which records copy_bps
+ *  at whatever version the store is (§8.4). D-4695 (history-backup-preflight-and-rename) is the preflight. */
+export async function backupOp(db, ctx) {
+  const P = ctx.paths;
+  removeStaleBackupTemps(ctx.home);
+  const free = await statfsWithDeadline(P.dbDir, STATFS_DEADLINE_MS, ctx.deps.statfs);
+  if (free.state === 'unsettled') return { rc: EXIT.DB, reason: 'store-unreachable' };
+  const storeBytes = (ctx.deps.measureSize ?? measuredSize)(db, P.dbFile);
+  const room = free.state === 'ok' ? planCopy({ freeBytes: free.bytes, thresholdBytes: floorThreshold(free.fsSize), sizeBytes: storeBytes }) : { admit: false, needBytes: null };
+  if (!room.admit) {
+    ctx.out(room.needBytes === null || free.state !== 'ok'
+      ? 'history-sweep: backup-refused: free space on the store\'s filesystem could not be measured, so no copy is admitted'
+      : `history-sweep: backup-refused: a copy needs more than ${room.needBytes} bytes free on the store's filesystem (the free-space threshold plus the store's ${storeBytes} bytes); ${free.bytes} are free`);
+    return { rc: EXIT.REFUSED, reason: 'backup-refused' };
+  }
+  let r;
+  try {
+    r = writeBackup(db, ctx.home, { nowMs: ctx.now() });
+  } catch (e) {
+    if (!(e instanceof StoreError) || e.word !== 'backup-exists') throw e;
+    ctx.out(`history-sweep: backup-refused: ${e.message}; the operator takes it again in a second`);
+    return { rc: EXIT.REFUSED, reason: 'backup-refused' };
+  }
+  ctx.out(`history-sweep: backup written: ~/${STORE_DB_REL}/backups/${r.name} (${r.sizeBytes} bytes, ${r.copyBps} B/s); the operator puts it back with ccrc history doctor --restore ${r.name}, from a terminal outside any session`);
   return { rc: EXIT.OK };
 }
 

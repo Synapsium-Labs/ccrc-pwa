@@ -25,6 +25,7 @@ import {
   finishPending, dropPending, syncWriterMirror, createFtsTables,
   pruneProtected, pruneCandidates, pruneBatch, pruneDryRun, incrementalVacuum, pruneApply,
   readAttempts, clearDoneMarkers, assertAdditive, runMigration, removeEntry, readBounded, removeStaleAtomicTemps, mkdirDurable,
+  writeBackup,
 } from '../../ccd/history/store.mjs';
 
 /** A delete-mode (rollback-journal) v1 store built by hand, the shape a
@@ -1148,5 +1149,74 @@ describe('store.mjs: prune tombstones by referrer age (W1-B2 Task 20)', () => {
       expect(freelist(), 'the freelist shrank by exactly what was returned').toBe(free - Math.min(free, 64));
       expect(() => incrementalVacuum(db, 0)).toThrow(TypeError);
     } finally { close(); }
+  });
+});
+
+// ── W1-B2 Task 22: doctor --backup's copy (spec 2026-10-05 §8.4) ─────────────────────────────────
+describe('store.mjs: writeBackup (W1-B2 Task 22)', () => {
+  it('copies to backups/<ts>.db through a dot-temp, removes every stale backup temp first, never touches a pre-v temp or an operator file, and refuses a same-second name', () => {
+    const home = mkTmp('ccrc-history-backup-');
+    createStore(home);
+    const P = historyPaths(home);
+    fs.mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(P.backups, '.20260101T000000Z.db.tmp'), 'partial');
+    fs.writeFileSync(path.join(P.backups, '.20260101T000000Z.db.tmp-journal'), 'partial');
+    fs.writeFileSync(path.join(P.backups, '.pre-v2.db.tmp'), 'the migration owns this one');
+    fs.writeFileSync(path.join(P.backups, '20251231T000000Z.db'), 'an operator backup');
+    const db = openWriter(P.dbFile);
+    try {
+      const nowMs = Date.UTC(2026, 9, 6, 12, 0, 0);
+      const r = writeBackup(db, home, { nowMs });
+      expect(r.name).toBe('20261006T120000Z.db');
+      expect(fs.readdirSync(P.backups).sort()).toEqual(['.pre-v2.db.tmp', '20251231T000000Z.db', '20261006T120000Z.db']);
+      expect(fs.readFileSync(path.join(P.backups, '20251231T000000Z.db'), 'utf8')).toBe('an operator backup');
+      const copy = new DatabaseSync(path.join(P.backups, r.name), { readOnly: true });
+      try {
+        expect((copy.prepare("SELECT v FROM meta WHERE k = 'store_id'").get() as { v: string }).v).toBe(getMeta(db, 'store_id'));
+        expect((copy.prepare('PRAGMA integrity_check').get() as { integrity_check: string }).integrity_check).toBe('ok');
+      } finally { copy.close(); }
+      expect(r.sizeBytes).toBe(fs.statSync(path.join(P.backups, r.name)).size);
+      expect(Number(getMeta(db, 'copy_bps')), 'every copy records its measured rate').toBe(r.copyBps);
+      expect(wordOf(() => writeBackup(db, home, { nowMs })), 'never clobbered').toBe('backup-exists');
+      expect(fs.readdirSync(P.backups).filter((n) => n.endsWith('.tmp')), 'the refused copy left no temp').toEqual(['.pre-v2.db.tmp']);
+    } finally { closeWriter(db); }
+  });
+
+  it('writeBackup fsyncs db/ when it creates backups/, before backups/ itself (review 316 F23)', () => {
+    // B1's `runMigration fsyncs db/ when it creates backups/` case, for the second creator of that directory.
+    // recordDirFsyncs is B1's (historyHelpers.ts), already imported by this file.
+    const home = mkTmp('ccrc-history-backup-f23-');
+    createStore(home);
+    const P = historyPaths(home);
+    expect(fs.existsSync(P.backups), 'createStore makes no backups/').toBe(false);
+    const db = openWriter(P.dbFile);
+    try {
+      const { dirs } = recordDirFsyncs(() => writeBackup(db, home, { nowMs: Date.UTC(2026, 9, 6, 12, 0, 0) }));
+      expect(dirs.indexOf(P.dbDir), 'db/ gained backups/ and is fsynced').toBeGreaterThanOrEqual(0);
+      expect(dirs.indexOf(P.dbDir), 'db/ before backups/').toBeLessThan(dirs.indexOf(P.backups));
+    } finally { closeWriter(db); }
+  });
+
+  it('a file that appears at the final name after the existence check is refused backup-exists by the publish, left as it was, and no temp remains (D-4721: link, not rename)', () => {
+    // The race the existsSync pre-check cannot close: an operator file lands at the final name between the check and
+    // the publish. The seam makes the check answer false for that one path, so only the publish itself can refuse.
+    const home = mkTmp('ccrc-history-backup-link-');
+    createStore(home);
+    const P = historyPaths(home);
+    fs.mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+    const nowMs = Date.UTC(2026, 9, 6, 12, 0, 0);
+    const finalPath = path.join(P.backups, '20261006T120000Z.db');
+    fs.writeFileSync(finalPath, 'an operator file');
+    const db = openWriter(P.dbFile);
+    const realExists = fs.existsSync;
+    try {
+      fs.existsSync = ((p: fs.PathLike) => (String(p) === finalPath ? false : realExists(p))) as typeof fs.existsSync;
+      syncBuiltinESMExports();
+      let word: string;
+      try { word = wordOf(() => writeBackup(db, home, { nowMs })); } finally { fs.existsSync = realExists; syncBuiltinESMExports(); }
+      expect(word, 'the publish refused where rename() would have replaced').toBe('backup-exists');
+      expect(fs.readFileSync(finalPath, 'utf8'), 'the operator file is as it was').toBe('an operator file');
+      expect(fs.readdirSync(P.backups).filter((n) => n.endsWith('.tmp')), 'the refused copy left no temp').toEqual([]);
+    } finally { fs.existsSync = realExists; syncBuiltinESMExports(); closeWriter(db); }
   });
 });

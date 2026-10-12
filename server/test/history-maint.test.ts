@@ -10,6 +10,7 @@
 // reads that record as absent. No case here has a TTY; the TTY rows are Task 30's.
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
@@ -18,7 +19,7 @@ import { beltWidth, historyPaths, floorThreshold, REPARSE_MAX_TARGETS, BELT_VERS
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { userRow, compactionSequence, toolResultRow } from './historyFixtures.js';
 import {
-  makeHistoryBox, runSweep, runShim, runCli, plantSession, plantTranscript, openStoreRO, stubShim, holdLock,
+  makeHistoryBox, runSweep, runShim, runCli, runDriver, plantSession, plantTranscript, openStoreRO, stubShim, holdLock,
   PASS_DRIVER, SHIM, withPane, seedFamily, preloadOptions, PRELOADS, CLI, skipOnDarwin, type HistoryBox,
 } from './historyHelpers.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
@@ -1029,5 +1030,115 @@ describe('reparse: targets, the 500-leaf limit, pruned spans refused, ids kept, 
     const due2 = belt();
     expect({ v: due2?.v, rids: due2?.rids, gen: due2?.gen }, 'an open generation at another version: the belt is due')
       .toEqual({ v: 0, rids: [], gen: null });
+  }, HEAVY);
+});
+
+/** The placed shim run from a parent whose umask is `umask` (C35's "an inherited umask 0002"), with the statfs
+ *  preload and any others. */
+function maintShimUmask(box: HistoryBox, umask: string, args: string[], env: Record<string, string> = {},
+  preloads: string[] = [PRELOADS.statfs]): { status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string } {
+  const r = spawnSync('bash', ['-c', `umask ${umask}; exec bash "$0" "$@"`, path.join(box.home, '.local', 'bin', 'ccd-history-sweep'), ...args], {
+    cwd: box.home, encoding: 'utf8', timeout: 240_000, killSignal: 'SIGTERM',
+    env: { ...box.env, HISTORY_TEST_STATFS: 'plenty', NODE_OPTIONS: preloadOptions(preloads), ...env },
+  });
+  return { status: r.status, signal: r.signal, stdout: String(r.stdout), stderr: String(r.stderr) };
+}
+
+describe('doctor --backup: 0600 from the first byte, temp then publish, the copy preflight (W1-B2 Task 22)', () => {
+  skipOnDarwin();
+  const BACKUP_NAME = /^[0-9]{8}T[0-9]{6}Z\.db$/;
+  const BACKUP_TMP = /^\.[0-9]{8}T[0-9]{6}Z\.db\.tmp$/;
+
+  it('C35: under an inherited umask 0002 the backup is 0600 from its first byte and lies under db/backups/', () => {
+    const box = boundBox('ccrc-hist-c35-');
+    const P = historyPaths(box.home);
+    // Killed right after VACUUM INTO returns and before writeBackup's own fchmod: the temp is as SQLite made it.
+    const killed = maintShimUmask(box, '0002', ['--op', 'backup'], { HISTORY_TEST_KILL: 'openSync:.db.tmp:1:before' },
+      [PRELOADS.statfs, PRELOADS.faults]);
+    expect(killed.signal, killed.stderr).toBe('SIGKILL');
+    const tmp = maintNames(P.backups).filter((n) => BACKUP_TMP.test(n));
+    expect(tmp, 'CONTROL: the kill landed between the copy and the fchmod').toHaveLength(1);
+    expect(fs.statSync(path.join(P.backups, tmp[0]!)).mode & 0o777, 'the copy\'s mode at its first stat').toBe(0o600);
+    const r = maintShimUmask(box, '0002', ['--op', 'backup']);
+    expect(r.status, r.stderr).toBe(0);
+    expect(lastResult(r.stdout)).toEqual({ rc: 0 });
+    const done = maintNames(P.backups).filter((n) => BACKUP_NAME.test(n));
+    expect(done).toHaveLength(1);
+    expect(fs.statSync(path.join(P.backups, done[0]!)).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(P.backups).mode & 0o777).toBe(0o700);
+    expect(maintNames(P.backups).filter((n) => BACKUP_TMP.test(n)), 'the stale temp was removed first').toEqual([]);
+    expect(r.stdout).toContain(`history-sweep: backup written: ~/.ccrc/history/db/backups/${done[0]}`);
+  }, HEAVY);
+
+  it('C51: a VACUUM INTO killed mid-copy leaves only backups/.<ts>.db.tmp, never a backup name; the next --backup removes it first and writes a copy of the store', () => {
+    const box = boundBox('ccrc-hist-c51-');
+    const P = historyPaths(box.home);
+    const killed = runShim(box, ['--op', 'backup'], { preloads: [PRELOADS.faults], env: { HISTORY_TEST_KILL_SQL: 'VACUUM INTO' } });
+    expect(killed.signal).toBe('SIGKILL');
+    const left = maintNames(P.backups);
+    expect(left, 'only the temp: a partial copy never carries a backup name').toHaveLength(1);
+    expect(left[0]).toMatch(BACKUP_TMP);
+    expect(fs.readFileSync(path.join(P.backups, left[0]!), 'utf8'), 'the seam\'s partial copy').toBe('partial');
+    const r = runShim(box, ['--op', 'backup']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lastResult(r.stdout)).toEqual({ rc: 0 });
+    const after = maintNames(P.backups);
+    expect(after).toHaveLength(1);
+    expect(after[0]).toMatch(BACKUP_NAME);
+    const copy = new DatabaseSync(path.join(P.backups, after[0]!), { readOnly: true });
+    try {
+      expect((copy.prepare("SELECT v FROM meta WHERE k = 'store_id'").get() as { v: string }).v)
+        .toBe(fs.readFileSync(P.storeId, 'utf8').trim());
+      expect((copy.prepare('PRAGMA integrity_check').get() as { integrity_check: string }).integrity_check).toBe('ok');
+    } finally { copy.close(); }
+  }, HEAVY);
+
+  it('C52: free space = threshold + store size - 1 is refused backup-refused and writes nothing (a stale temp a killed copy left is removed first, D-4588); + 1 proceeds and records copy_bps', () => {
+    const box = boundBox('ccrc-hist-c52-');
+    const P = historyPaths(box.home);
+    const fsSize = 10 * 1024 ** 3;
+    const size = 1_000_000;                                       // the driver's measured-size seam
+    const need = floorThreshold(fsSize) + size;
+    // D-4588: the stale temp a killed copy left is removed BEFORE the room probe, so a refusal does not keep it.
+    fs.mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(P.backups, '.20260101T000000Z.db.tmp'), 'partial');
+    const refused = runDriver(box, { sizeBytes: size }, ['--op', 'backup'], { env: { HISTORY_TEST_STATFS: `${need - 1}:${fsSize}` } });
+    expect(refused.code, refused.stderr).toBe(2);
+    expect(lastResult(refused.stdout)).toEqual({ rc: 2, reason: 'backup-refused' });
+    expect(refused.stdout).toMatch(/^history-sweep: backup-refused: a copy needs more than [0-9]+ bytes free/m);
+    expect(maintNames(P.backups), 'nothing written, and the stale temp is gone').toEqual([]);
+    const ok = runDriver(box, { sizeBytes: size }, ['--op', 'backup'], { env: { HISTORY_TEST_STATFS: `${need + 1}:${fsSize}` } });
+    expect(ok.code, ok.stderr).toBe(0);
+    expect(maintNames(P.backups).filter((n) => BACKUP_NAME.test(n))).toHaveLength(1);
+    expect(Number(maintMeta(box, 'copy_bps'))).toBeGreaterThan(0);
+  }, HEAVY);
+
+  it('doctor --backup through the CLI writes one backup and relays exit 0', () => {
+    const box = boundBox('ccrc-hist-bk-cli-');
+    const r = runCli(box, ['doctor', '--backup', '--json']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.json?.['exit']).toBe(0);
+    expect(maintNames(historyPaths(box.home).backups).filter((n) => BACKUP_NAME.test(n))).toHaveLength(1);
+  }, HEAVY);
+
+  it('a backup of a store a migration is still due on runs at its stored version and records copy_bps, the rate planMigration reads', () => {
+    const box = boundBox('ccrc-hist-bk-pend-');
+    const r = runDriver(box, { extraMigrations: [V2] }, ['--op', 'backup']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lastResult(r.stdout)).toEqual({ rc: 0 });
+    expect(versionOf(historyPaths(box.home).dbFile), 'a backup never migrates').toBe(1);
+    expect(maintNames(historyPaths(box.home).backups).filter((n) => BACKUP_NAME.test(n))).toHaveLength(1);
+    const rate = /\([0-9]+ bytes, ([0-9]+) B\/s\)/.exec(r.stdout)?.[1];
+    expect(rate, `the backup line names its rate:\n${r.stdout}`).toBeDefined();
+    expect(Number(maintMeta(box, 'copy_bps')), 'this copy\'s rate, recorded at the stored version').toBe(Number(rate));
+  }, HEAVY);
+
+  it('RB6: while a recovery step is registered, doctor --backup answers recovering and writes no copy', () => {
+    const box = boundBox('ccrc-hist-rb6bk-');
+    maintRecovering(box);
+    const r = runShim(box, ['--op', 'backup']);
+    expect(r.code, r.stderr).toBe(2);
+    expect(lastResult(r.stdout)).toEqual({ rc: 2, reason: 'recovering' });
+    expect(maintNames(historyPaths(box.home).backups), 'nothing written').toEqual([]);
   }, HEAVY);
 });
