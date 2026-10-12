@@ -47,6 +47,13 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-12 11:39 — THE OPERATOR RULED: "yes proceed with next work, and yes add setting to the settings UI".**
+  - **Question 3 is answered yes:** I start the path-identity W0 spec and the W1 planning now.
+  - **The collector's switch goes into the Settings UI.** It is designed in the W0 spec, on the stall-watch settings precedent (spec 2026-10-05), and built as a wave of the follow-up.
+  - **Question 1 (programme shape) is still unanswered.** I take the default that contract R71 already states: the path-identity work is a follow-up PROGRAMME of its own, not CCR-15 waves 10+.
+    - Run 380 stays at `merging` until that programme's first run opens. Then it closes final, which retires CCR-15 complete.
+    - The operator can still redirect before then.
+
 - **2026-10-12 11:19 — ALL THREE ORPHANS ARE COLLECTED.**
   - **Collects:**
     - `ccrc-pwa-still-harbor` (run 364) at 11:15:14 (record `…1791803712119500698.4034814`);
