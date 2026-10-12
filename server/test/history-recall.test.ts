@@ -1361,6 +1361,7 @@ describe("grep's snippet localization and Task 12 helper seam (W1-B2 task 12 fix
       GRX.user(T, 4, `${FILLER}relational data follows`),
       GRX.user(T, 5, `\u1ed9 earlyhead ${FILLER}o closes the true default-fold hit`),
       GRX.user(T, 6, `${FILLER}\u039f\u03a3 closes the context-free sigma hit`),
+      GRX.user(T, 7, `\u0131 earlyhead7 ${FILLER}i closes the true dotless-guard hit`),
     ]);
   }, HEAVY);
 
@@ -1406,6 +1407,21 @@ describe("grep's snippet localization and Task 12 helper seam (W1-B2 task 12 fix
       const s = String(r.items[0]?.snippet);
       expect(s).toContain('\u039f\u03a3 closes the context-free sigma hit');
       expect(s).not.toContain('filler filler filler filler filler filler filler filler');
+      expect(s.startsWith('filler filler filler')).toBe(false);
+    } finally { rc.db.close(); }
+  }, HEAVY);
+
+  it('F2 round 4: `i` is shown at the far ASCII `i`, never at the early dotless \u0131 that unicode61 keeps apart from it, and not at the body head', async () => {
+    const recall = await GRX.recall();
+    const rc = await GRX.rc(box, GRX.idA);
+    try {
+      const r = recall.runGrep(rc, await GRX.grepArgs(['i']));
+      expect(r.exit).toBe(0);
+      expect(r.items, 'FTS returned exactly one blob').toHaveLength(1);
+      const s = String(r.items[0]?.snippet);
+      expect(s).toContain('i closes the true dotless-guard hit');
+      expect(s).not.toContain('\u0131');
+      expect(s).not.toContain('earlyhead7');
       expect(s.startsWith('filler filler filler')).toBe(false);
     } finally { rc.db.close(); }
   }, HEAVY);

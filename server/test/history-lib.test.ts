@@ -3837,26 +3837,72 @@ describe('snippetTerms and unicode61 diacritic comparison: prefix markers surviv
     const markOnly = `${lead} pp \u0301 rr tail`;
     expect(libSearch.snippetSpan(markOnly, ['pp rr']), 'a candidate of removed marks only is no token: the phrase reads across it').toEqual({ at: markOnly.indexOf('pp'), len: markOnly.indexOf('rr') + 2 - markOnly.indexOf('pp') });
   });
-  it('F2 round 3: snippetSpan agrees with runtime SQLite unicode61 (porter unicode61 default remove_diacritics=1) on every non-surrogate code point U+0080..U+10FFFF both read as a token or both as a boundary', () => {
-    // The marks SQLite drops inside a token, listed here independently of the production predicate.
-    const DROPPED: [number, number][] = [[0x300, 0x304], [0x306, 0x30c], [0x30f, 0x30f], [0x311, 0x311], [0x31b, 0x31b], [0x323, 0x328], [0x32d, 0x32e], [0x330, 0x331]];
-    const isDropped = (cp: number): boolean => DROPPED.some(([a, b]) => cp >= a && cp <= b);
-    const CONTROLS = [0xb5, 0x3bc, 0x3a3, 0x3c2, 0x3c3, 0x17f, 0x130, 0xe9, 0x1ed9];
-    const seen = new Map<number, string>();   // the SQLite terms of every control and every mark U+0300-U+036F, joined by a space
-    // A code point is COMPARED when SQLite and the JavaScript letter/number class agree about it (a token both ways, or a
-    // boundary both ways), and always when it is a combining mark U+0300-U+036F. The two disagreeing classes are counted and
-    // left out: SQLite tokenizes code points that are neither a letter nor a number (private use, unassigned, symbols), and a
-    // few newer letters are boundaries to its older Unicode table.
-    const LN = /^[\p{L}\p{N}]$/u;
+  /** What runtime SQLite's `unicode61` (the product's `porter unicode61`, default remove_diacritics=1) reads each text as: its terms, in order. */
+  const sqliteTermsOf = (texts: string[]): string[][] => {
+    const db = new FtsDb(':memory:');
+    try {
+      db.exec("CREATE VIRTUAL TABLE t USING fts5(b, tokenize='unicode61')");
+      db.exec("CREATE VIRTUAL TABLE tv USING fts5vocab(t, 'instance')");
+      const ins = db.prepare('INSERT INTO t (rowid, b) VALUES (?, ?)');
+      texts.forEach((s, i) => ins.run(i + 1, s));
+      const out: string[][] = texts.map(() => []);
+      for (const r of db.prepare('SELECT doc, term FROM tv ORDER BY doc, offset').all() as { doc: number; term: string }[]) out[Number(r.doc) - 1]!.push(r.term);
+      return out;
+    } finally { db.close(); }
+  };
+  it('F2 round 4: an early dotless \u0131 (U+0131), which unicode61 keeps apart from `i`, never localizes as `i`: the later ASCII `i` is the true hit', () => {
+    const far = 'x'.repeat(100);
+    expect(sqliteTermsOf(['\u0131', 'i', '\u0130', 'I']), 'runtime SQLite: \u0131 stays itself, \u0130 and I are i').toEqual([['\u0131'], ['i'], ['i'], ['i']]);
+    const early = `\u0131 ${far} i tail`;
+    expect(libSearch.snippetSpan(early, ['i']), 'the later ASCII i, never offset 0').toEqual({ at: early.indexOf(' i ') + 1, len: 1 });
+    const only = `${far} \u0131 tail`;
+    expect(libSearch.snippetSpan(only, ['i']).at, 'an isolated \u0131 is not an i').toBe(-1);
+    expect(libSearch.snippetSpan(only, ['\u0131']), 'and it matches itself').toEqual({ at: far.length + 1, len: 1 });
+    expect(libSearch.snippetSpan(`${far} i tail`, ['\u0131']).at, 'nor is an i an \u0131').toBe(-1);
+    expect(libSearch.snippetSpan(`${far} \u0130 tail`, ['i']), '\u0130 does fold to i').toEqual({ at: far.length + 1, len: 1 });
+  });
+  it('F2 round 4: a supplementary pair the runtime SQLite keeps apart (U+104B0 / U+104D8) localizes at the later true token, with its two-code-unit span; U+10400 / U+10428 is a real supplementary fold', () => {
+    const far = 'x'.repeat(100);
+    const big = '\u{104b0}';
+    const small = '\u{104d8}';
+    expect(sqliteTermsOf([big, small, '\u{10400}', '\u{10428}']), 'runtime SQLite first: the pair is two terms, Deseret is one').toEqual([[big], [small], ['\u{10428}'], ['\u{10428}']]);
+    const early = `${big} ${far} ${small} tail`;
+    expect(libSearch.snippetSpan(early, [small]), 'the later true token, two code units').toEqual({ at: early.indexOf(small), len: 2 });
+    expect(libSearch.snippetSpan(early, [big]), 'and the early one is its own').toEqual({ at: 0, len: 2 });
+    expect(libSearch.snippetSpan(`${far} ${big} tail`, [small]).at, 'an isolated U+104B0 is not U+104D8').toBe(-1);
+    const deseret = `${far} \u{10400} tail`;
+    expect(libSearch.snippetSpan(deseret, ['\u{10428}']), 'SQLite folds U+10400 to U+10428').toEqual({ at: far.length + 1, len: 2 });
+    expect(libSearch.snippetSpan(`${far} \u{10428} tail`, ['\u{10400}']), 'both ways').toEqual({ at: far.length + 1, len: 2 });
+  });
+  it('F2 round 4: token membership is unicode61\'s frozen category table, not the host letter/number classes: U+19B0 is a boundary, U+0378 and private use are tokens', () => {
+    const lead = 'a'.repeat(100);
+    expect(sqliteTermsOf(['p\u19b0q', 'p\u0378q', 'p\ue000q', '\u0378']), 'runtime SQLite first')
+      .toEqual([['p', 'q'], ['p\u0378q'], ['p\ue000q'], ['\u0378']]);
+    expect(/^[\p{L}\p{N}]$/u.test('\u19b0'), 'CONTROL: this host calls U+19B0 a letter').toBe(true);
+    expect(/^[\p{L}\p{N}]$/u.test('\u0378'), 'CONTROL: and U+0378 no letter or number').toBe(false);
+    const split = `${lead} p\u19b0q tail`;
+    expect(libSearch.snippetSpan(split, ['pq']).at, 'U+19B0 splits the source token').toBe(-1);
+    expect(libSearch.snippetSpan(split, ['p q']), 'the phrase `p q` is there').toEqual({ at: split.indexOf('p'), len: 3 });
+    expect(libSearch.snippetSpan(split, ['p\u19b0q']), 'and a needle splits the same way').toEqual({ at: split.indexOf('p'), len: 3 });
+    expect(libSearch.snippetSpan(split, ['q']), 'the second half is its own token').toEqual({ at: split.indexOf('q'), len: 1 });
+    for (const mid of ['\u0378', '\ue000']) {
+      const text = `${lead} p${mid}q tail`;
+      expect(libSearch.snippetSpan(text, [`p${mid}q`]), `U+${mid.codePointAt(0)!.toString(16)} is a token character: one token, source span`).toEqual({ at: text.indexOf('p'), len: 3 });
+      expect(libSearch.snippetSpan(text, ['p q']).at, 'it does not split').toBe(-1);
+      expect(libSearch.snippetSpan(text, ['q']).at, 'q is no token of its own').toBe(-1);
+      const alone = `${lead} ${mid} tail`;
+      expect(libSearch.snippetSpan(alone, [mid]), 'standalone, it localizes with the original span').toEqual({ at: lead.length + 1, len: 1 });
+    }
+  });
+  it('F2 round 4: snippetSpan reads every non-surrogate code point U+0000..U+10FFFF exactly as runtime SQLite unicode61 does: token (and its exact folded term), ignored continuation, or boundary, with zero exclusions', () => {
+    const ALL = 0x10ffff + 1;
+    // The oracle, read from runtime SQLite one 64Ki block at a time (bounded memory): per code point a folded-term code point (> 0: a standalone
+    // token), -1 (a mark dropped inside a token: ignored continuation), -2 (a boundary), 0 (never read, or an unexpected shape).
+    const oracle = new Int32Array(ALL);
+    const unexpected: string[] = [];
     let read = 0;
-    let tokens = 0;
-    let dropped = 0;
-    let boundaries = 0;
-    let sqliteOnly = 0;
-    let scriptOnly = 0;
-    const compared = new Map<number, string[]>();   // every COMPARED code point's SQLite terms
-    for (let from = 0x80; from <= 0x10ffff; from = (from | 0xffff) + 1) {   // one in-memory table per 64Ki block, so memory stays bounded
-      const to = from | 0xffff;
+    for (let from = 0; from < ALL; from += 0x10000) {
+      const to = from + 0xffff;
       const db = new FtsDb(':memory:');
       try {
         db.exec("CREATE VIRTUAL TABLE t USING fts5(b, tokenize='unicode61')");
@@ -3867,7 +3913,8 @@ describe('snippetTerms and unicode61 diacritic comparison: prefix markers surviv
         for (let cp = from; cp <= to; cp += 1) {
           if (cp >= 0xd800 && cp <= 0xdfff) continue;   // a lone surrogate is no character
           cps.push(cp);
-          ins.run(cp, `q${String.fromCodePoint(cp)}q`);
+          ins.run(cp * 2 + 1, `q${String.fromCodePoint(cp)}q`);   // wrapped: tells a token (one term q<fold>q), a dropped mark (qq) and a boundary (q, q) apart
+          ins.run(cp * 2 + 2, String.fromCodePoint(cp));          // direct and standalone: a token is exactly one term, anything else none
         }
         db.exec('COMMIT');
         const terms = new Map<number, string[]>();
@@ -3876,79 +3923,102 @@ describe('snippetTerms and unicode61 diacritic comparison: prefix markers surviv
           a.push(r.term);
           terms.set(Number(r.doc), a);
         }
-        read += cps.length;
         for (const cp of cps) {
-          const ch = String.fromCodePoint(cp);
-          const t = terms.get(cp) ?? [];
-          const isMark = cp >= 0x300 && cp <= 0x36f;
-          if (isMark || CONTROLS.includes(cp)) seen.set(cp, t.join(' '));
-          const sqliteToken = t.length === 1;
-          const scriptToken = LN.test(ch);
-          if (!isMark && sqliteToken && !scriptToken) { sqliteOnly += 1; continue; }
-          if (!isMark && !sqliteToken && scriptToken) { scriptOnly += 1; continue; }
-          if (sqliteToken && t[0] === 'qq') dropped += 1;
-          else if (sqliteToken) tokens += 1;
-          else boundaries += 1;
-          compared.set(cp, t);
+          read += 1;
+          const wrapped = terms.get(cp * 2 + 1) ?? [];
+          const direct = terms.get(cp * 2 + 2) ?? [];
+          if (wrapped.length === 2 && wrapped[0] === 'q' && wrapped[1] === 'q' && direct.length === 0) oracle[cp] = -2;
+          else if (wrapped.length === 1 && wrapped[0] === 'qq' && direct.length === 0) oracle[cp] = -1;
+          else if (wrapped.length === 1 && wrapped[0]!.startsWith('q') && wrapped[0]!.endsWith('q') && direct.length === 1 && wrapped[0] === `q${direct[0]}q` && [...direct[0]!].length === 1) oracle[cp] = direct[0]!.codePointAt(0)!;
+          else unexpected.push(`${cp.toString(16)}:${JSON.stringify(wrapped)}/${JSON.stringify(direct)}`);
         }
       } finally { db.close(); }
     }
-    const diverge: string[] = [];
-    // The term SQLite reads a single token code point as, or null (ASCII letters and digits fold to lower case).
-    const termOf = (cp: number): string | null => {
-      if (cp < 0x80) return /^[A-Za-z0-9]$/.test(String.fromCharCode(cp)) ? `q${String.fromCharCode(cp).toLowerCase()}q` : null;
-      const t = compared.get(cp);
-      return t !== undefined && t.length === 1 && t[0] !== 'qq' ? t[0]! : null;
-    };
-    let overFoldProbes = 0;
-    const caseKnown: string[] = [];
-    for (const [cp, t] of compared) {
-      const ch = String.fromCodePoint(cp);
-      const text = `q${ch}q`;
-      const sqliteToken = t.length === 1;
-      const phrase = libSearch.snippetSpan(text, [t.join(' ')]);
-      const joined = sqliteToken ? { at: 0, len: text.length } : libSearch.snippetSpan(text, [t.join('')]);
-      if (!(phrase.at === 0 && phrase.len === text.length && (sqliteToken ? joined.at === 0 : joined.at === -1))) diverge.push(cp.toString(16));
-      if (!sqliteToken || t[0] === 'qq') continue;
-      // OVER-FOLD probes: every plausible wrong fold of this code point names another code point that SQLite reads as a
-      // DIFFERENT term, and the locator must not equate them. Two families. A MARK fold (the base of the decomposition, the
-      // decomposition with every mark U+0300-U+036F removed) is held to zero at every code point. A CASE fold (whole-token
-      // lower case, the simple fold) is held to zero where the wrong target is ASCII, the one range every SQLite build
-      // agrees on; beyond it SQLite's case table is older than this runtime's Unicode (Cherokee, Georgian Mtavruli, Ϳ,
-      // ...), so a pin there would fail on a build skew, not on a defect. U+0131 (dotless ı, which SQLite keeps apart from
-      // `i`) is the one ASCII-target case the accepted fold equates, named in `caseKnown`.
-      const probe = (w: string, family: 'mark' | 'case'): void => {
-        if ([...w].length !== 1) return;
-        const target = w.codePointAt(0)!;
-        const other = termOf(target);
-        if (other === null || other === t[0]) return;
-        if (family === 'case' && target >= 0x80) return;
-        overFoldProbes += 1;
-        if (libSearch.snippetSpan(text, [other]).at !== -1) (family === 'mark' ? diverge : caseKnown).push(`${cp.toString(16)}~${target.toString(16)}`);
-      };
-      probe(ch.normalize('NFD').replace(/[\u0300-\u036f]/g, ''), 'mark');
-      probe(ch.normalize('NFD').slice(0, 1), 'mark');
-      probe(ch.toLowerCase(), 'case');
-      probe(ch.toUpperCase().toLowerCase(), 'case');
+    expect(read, 'CONTROL: every non-surrogate code point was read').toBe(ALL - 0x800);
+    expect(unexpected.slice(0, 10), 'CONTROL: every code point is a token, a dropped mark or a boundary, and no token folds to several code points').toEqual([]);
+    let tokens = 0;
+    let dropped = 0;
+    let boundaries = 0;
+    for (let cp = 0; cp < ALL; cp += 1) {
+      if (cp >= 0xd800 && cp <= 0xdfff) continue;
+      if (oracle[cp]! > 0) tokens += 1; else if (oracle[cp] === -1) dropped += 1; else if (oracle[cp] === -2) boundaries += 1;
     }
-    expect(overFoldProbes, 'CONTROL: the over-fold probes ran').toBeGreaterThan(5_000);
-    expect(read, 'CONTROL: every non-surrogate code point was read').toBe(0x10ffff - 0x80 + 1 - 0x800);
-    // CONTROLS: sigma, micro sign, long s, U+0130, ordinary é, U+1ED9, a dropped U+0301 and a boundary U+0305, as SQLite reads them.
-    expect([0x3a3, 0x3c2, 0x3c3].map((cp) => seen.get(cp)), 'CONTROL: Σ, ς and σ are one σ').toEqual(['q\u03c3q', 'q\u03c3q', 'q\u03c3q']);
-    expect([0xb5, 0x3bc].map((cp) => seen.get(cp)), 'CONTROL: the micro sign is μ').toEqual(['q\u03bcq', 'q\u03bcq']);
-    expect([0x17f, 0x130, 0xe9, 0x1ed9].map((cp) => seen.get(cp)), 'CONTROL: ſ is s, İ is i, é is e, U+1ED9 stays itself')
-      .toEqual(['qsq', 'qiq', 'qeq', 'q\u1ed9q']);
-    expect([seen.get(0x301), seen.get(0x305)], 'CONTROL: U+0301 is dropped, U+0305 a boundary').toEqual(['qq', 'q q']);
-    const marks = [...seen.keys()].filter((cp) => cp >= 0x300 && cp <= 0x36f);
-    expect(marks.length, 'CONTROL: all 112 marks were read').toBe(112);
-    expect(marks.filter((cp) => seen.get(cp) === 'qq').length, 'CONTROL: exactly 25 of the 112 marks are dropped').toBe(25);
-    expect(marks.filter((cp) => (seen.get(cp) === 'qq') !== isDropped(cp)), 'CONTROL: SQLite drops exactly the listed marks').toEqual([]);
-    expect(dropped, 'CONTROL: the dropped marks are the only dropped code points').toBe(25);
-    expect(tokens + dropped + boundaries + sqliteOnly + scriptOnly).toBe(read);
-    expect(tokens, 'the SQLite-tokenized letter/number population is the whole of it, not a sample').toBeGreaterThan(147_000);
-    expect(diverge.length, `diverging code points (first 20): ${diverge.slice(0, 20).join(' ')}`).toBe(0);
-    expect(caseKnown.filter((x) => x !== '131~69'), 'no case fold equates an ASCII letter with a code point SQLite keeps apart, the dotless ı excepted').toEqual([]);
-  }, 180_000);
+    expect(tokens + dropped + boundaries, 'CONTROL: the three classes are the whole range').toBe(read);
+    // CONTROLS, asserted on the oracle: the relations the round-3 and round-4 findings turn on.
+    const o = (cp: number): number => oracle[cp]!;
+    expect([o(0x131), o(0x69), o(0x130), o(0x49)], 'CONTROL: \u0131 is its own term; \u0130 and I are i').toEqual([0x131, 0x69, 0x69, 0x69]);
+    expect([o(0x378) > 0, /^[\p{L}\p{N}]$/u.test('\u0378')], 'CONTROL: U+0378 is a SQLite-only token').toEqual([true, false]);
+    expect([o(0x19b0), /^[\p{L}\p{N}]$/u.test('\u19b0')], 'CONTROL: U+19B0 is a JavaScript-only letter, a boundary to SQLite').toEqual([-2, true]);
+    expect([o(0x104b0), o(0x104d8)], 'CONTROL: U+104B0 and U+104D8 stay distinct').toEqual([0x104b0, 0x104d8]);
+    expect([o(0x3a3), o(0x3c2), o(0x3c3)], 'CONTROL: \u03a3, \u03c2 and \u03c3 are one \u03c3').toEqual([0x3c3, 0x3c3, 0x3c3]);
+    expect([o(0xb5), o(0x3bc)], 'CONTROL: the micro sign is Greek \u03bc').toEqual([0x3bc, 0x3bc]);
+    expect([o(0x17f), o(0xe9), o(0x1ed9)], 'CONTROL: \u017f is s, \u00e9 is e, U+1ED9 stays itself').toEqual([0x73, 0x65, 0x1ed9]);
+    expect([o(0x301), o(0x305)], 'CONTROL: U+0301 is dropped, U+0305 a boundary').toEqual([-1, -2]);
+    expect([o(0), o(0xfffe), o(0xffff), o(0x10ffff) > 0], 'CONTROL: NUL, U+FFFE and U+FFFF are boundaries; the last code point is a token').toEqual([-2, -2, -2, true]);
+    const marks = Array.from({ length: 0x70 }, (_, i) => 0x300 + i);
+    expect(marks.filter((cp) => o(cp) === -1).length, 'CONTROL: exactly 25 of the 112 marks U+0300-U+036F are dropped').toBe(25);
+    expect(marks.filter((cp) => o(cp) === -2).length, 'CONTROL: and exactly 87 are boundaries').toBe(87);
+    const DROPPED: [number, number][] = [[0x300, 0x304], [0x306, 0x30c], [0x30f, 0x30f], [0x311, 0x311], [0x31b, 0x31b], [0x323, 0x328], [0x32d, 0x32e], [0x330, 0x331]];
+    expect(marks.filter((cp) => (o(cp) === -1) !== DROPPED.some(([a, b]) => cp >= a && cp <= b)), 'CONTROL: SQLite drops exactly the listed marks').toEqual([]);
+    expect(tokens, 'CONTROL: the standalone token population of the frozen unicode61 category table').toBe(1_104_042);
+    expect(dropped, 'CONTROL: the dropped marks are the only ignored continuations').toBe(25);
+
+    // Production, one code point at a time. Token: it is a standalone token, folds to the oracle's term, keeps its source span, and is
+    // not the term of any NEIGHBOUR or HOST-case/decomposition confusable the oracle reads as another term (equal where the oracle says equal).
+    const diverge: string[] = [];
+    const bad = (cp: number, what: string): void => { if (diverge.length < 400) diverge.push(`${cp.toString(16)} ${what}`); else if (diverge.length === 400) diverge.push('...'); };
+    const first = (s: string): number => s.codePointAt(0)!;
+    let probes = 0;
+    for (let cp = 0; cp < ALL; cp += 1) {
+      if (cp >= 0xd800 && cp <= 0xdfff) continue;
+      const ch = String.fromCodePoint(cp);
+      const cls = o(cp);
+      if (cls === -2) {
+        const t = `x${ch}y`;
+        const split = libSearch.snippetSpan(t, ['x y']);
+        if (split.at !== 0 || split.len !== t.length) bad(cp, 'boundary: `x y` must read across it');
+        if (libSearch.snippetSpan(t, ['xy']).at !== -1) bad(cp, 'boundary: `xy` must not');
+        const needle = libSearch.snippetSpan(t, [t]);
+        if (needle.at !== 0 || needle.len !== t.length) bad(cp, 'boundary: a needle splits the same way');
+        if (libSearch.snippetSpan(ch, [ch]).at !== -1) bad(cp, 'boundary: no token of its own');
+      } else if (cls === -1) {
+        const t = `x${ch}y`;
+        const joined = libSearch.snippetSpan(t, ['xy']);
+        if (joined.at !== 0 || joined.len !== t.length) bad(cp, 'dropped: continues the token and vanishes');
+        if (libSearch.snippetSpan(t, ['x y']).at !== -1) bad(cp, 'dropped: is no boundary');
+        if (libSearch.snippetSpan(ch, [ch]).at !== -1) bad(cp, 'dropped: no standalone token');
+        const across = libSearch.snippetSpan(`pp ${ch} rr`, ['pp rr']);
+        if (across.at !== 0) bad(cp, 'dropped: a mark-only candidate is no token');
+      } else {
+        const term = String.fromCodePoint(cls);
+        const own = libSearch.snippetSpan(ch, [term]);
+        if (own.at !== 0 || own.len !== ch.length) bad(cp, `token: standalone as its term ${cls.toString(16)}`);
+        const mid = libSearch.snippetSpan(`x${ch}y`, [`x${term}y`]);
+        if (mid.at !== 0 || mid.len !== ch.length + 2) bad(cp, `token: inside a word as ${cls.toString(16)}`);
+        const same = new Set<number>();
+        const other = new Set<number>();
+        const consider = (b: number): void => {
+          if (!(b >= 0 && b < ALL) || (b >= 0xd800 && b <= 0xdfff) || b === cp) return;
+          (o(b) === cls ? same : other).add(b);
+        };
+        for (const d of [-2, -1, 1, 2]) consider(cp + d);
+        for (const s of [ch.toLowerCase(), ch.toUpperCase(), ch.normalize('NFD'), ch.normalize('NFC'), ch.normalize('NFKD'), ch.toUpperCase().toLowerCase()]) consider(first(s));
+        same.add(cls);
+        for (const b of same) {
+          probes += 1;
+          const r = libSearch.snippetSpan(ch, [String.fromCodePoint(b)]);
+          if (r.at !== 0 || r.len !== ch.length) bad(cp, `token: same term as ${b.toString(16)}`);
+        }
+        if (other.size > 0) {
+          probes += other.size;
+          const hit = libSearch.snippetSpan(ch, [...other].map((b) => String.fromCodePoint(b)));
+          if (hit.at !== -1) bad(cp, `token: equated with another term (${[...other].filter((b) => libSearch.snippetSpan(ch, [String.fromCodePoint(b)]).at !== -1).map((b) => b.toString(16)).join(',')})`);
+        }
+      }
+    }
+    expect(probes, 'CONTROL: the equivalence probes ran').toBeGreaterThan(3_000_000);
+    expect(diverge, 'production disagrees with runtime SQLite at (code point, what)').toEqual([]);
+  }, 600_000);
 });
 
 describe('parseTimeBound: --since and --before (spec 8.4)', () => {
