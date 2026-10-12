@@ -9364,8 +9364,8 @@ export function archivedFoldSince(s: Pick<FleetSession, 'bucket' | 'bucketSince'
 export const MAIL_REPLAY_MS = 600_000;
 
 // ── Stall watch settings (design 2026-10-05, §5, §5.1, §12) ────────────────────────────────────────────────────────
-// The whole block stands at the END of this file, below `MAIL_REPLAY_MS`, for that constant's own reason: README and
-// the compaction card cite this file by line, and an insertion above them moves every anchor under it. Every string
+// The whole block was APPENDED below `MAIL_REPLAY_MS` (later blocks follow it), for that constant's own reason: README
+// and the compaction card cite this file by line, and an insertion above them moves every anchor under it. Every string
 // the Settings page's Stall watch section shows is one of the constants below, and no other file spells one. A
 // `{name}` slot is filled by the PWA's one helper, `fillStallText`. No text spells a registry marker name, a rung
 // code or a wave number; the level `does` and stage `stops` and `gate` texts (`stall-settings.test.ts` pins them)
