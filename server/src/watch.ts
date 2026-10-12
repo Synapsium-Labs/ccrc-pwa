@@ -5065,8 +5065,8 @@ export class FleetWatcher {
    *   - `unchanged`: nothing to change — no anchor, the held set's key is what the last landed commit wrote, and the state
    *     is known clean. Nothing is written; the pass may act;
    *   - `mark-failed`: the dirty mark did not land. NO anchor change and no act; the changes stay pending for the next
-   *     commit, as on `commit-failed`, and the caller moves the in-memory hold. The state still reads as the last commit
-   *     left it (clean, if it was), older than this process's hold: a restart before the next commit lands seeds that
+   *     commit, as on `commit-failed`, and the caller moves the in-memory hold. The state still reads as the last landed
+   *     write left it (clean, if it was), older than this process's hold: a restart before the next mark lands seeds that
    *     older state (the residual §12 names);
    *   - `commit-failed`: the mark landed and the transaction did not (a refusal, a statement or a COMMIT that threw).
    *     Nothing of it moved, the state stays dirty, the changes stay pending for the next commit, and the pass acts on

@@ -400,9 +400,9 @@ export interface DeadCoordinatorBreakerMember {
  *  claimant Q that U holds. THE HYPOTHESIS: every id U holds, R holds with at least U's instants, or flagged. At the seed
  *  it holds, because of how U writes (D-4857): U marks its typed state dirty, alone, before it changes any anchor, and
  *  turns it clean only in the one transaction that writes its exact held snapshot with every anchor change; a commit that
- *  fails leaves the state dirty, and a mark that fails leaves it as the last commit left it while U's hold moves on (its
+ *  fails leaves the state dirty, and a mark that fails leaves it as the last landed write left it while U's hold moves on (its
  *  anchor changes pending). So at every instant the state is clean with U's exact hold, or dirty, or — only after a
- *  mark that failed, until U's next commit lands — clean and older than U's hold: a restart in that last window is the
+ *  mark that failed, until U's next dirty mark lands — clean and older than U's hold: a restart in that last window is the
  *  residual named below, and this hypothesis does not hold across it. Over a clean state R seeds U's own snapshot (and
  *  flags every claimant whose anchor began after it, D-4826: since every anchor change of this release commits with its
  *  snapshot, only an older build's); over a dirty, absent or unreadable one the conservative seed holds every claimant
@@ -424,9 +424,10 @@ export interface DeadCoordinatorBreakerMember {
  *  the snapshot that holds it, a failed commit leaves the state dirty, and every id has a spelling. The cost is that a
  *  restart over a dirty state, and the first pass after the deploy that creates the table, hold every claimant the pass
  *  does not release, flagged, until evidence releases each, and restart every crashed claimant's hour at that pass; while
- *  the breaker's writes keep failing, nothing acts. A restart after a dirty mark that failed, before the next commit lands,
- *  seeds a clean state older than U's hold: a trip formed or a doubt seen on those passes is lost with U, and R can act
- *  sooner; it needs the one-statement dirty write itself to fail and a restart before a write lands again. A server clock that steps backwards across a restart can make a
+ *  the breaker's writes keep failing, nothing acts. A restart after a dirty mark that failed, before the next dirty mark lands,
+ *  seeds a clean state older than U's hold: a trip formed, a doubt seen or a release on those passes is lost with U, and R can act
+ *  sooner; it needs the one-statement dirty write itself to fail, a restart before a mark lands again, and R's first crashed
+ *  pass within `DEAD_COORDINATOR_GAP_MS` of the claimant's last committed crashed instant (later, its anchor starts afresh). A server clock that steps backwards across a restart can make a
  *  later anchor read earlier than the snapshot. The all-unmeasurable arm diverges as measured: R's extra claimant can be measured while all of
  *  U's are not, so R does not trip there, but every other claimant is as unmeasured in R as in U, so R can act there only
  *  on the claimant U already ended. The cost of the accumulation is more holding: a member held at an old instant that
@@ -703,7 +704,7 @@ export type DeadCoordinatorReport =
  *  SOONER after a stuck or thrown act (review 381, F10). The breaker's hold is not in this entry: it survives a restart in
  *  the typed state (review 381, F1; D-4857), which a pass marks dirty before it changes any anchor and turns clean only
  *  with the exact snapshot, so a restart finds the last complete hold or a dirty state (save after a dirty mark that
- *  failed, until the next commit lands: §12's residual (7)), and a dirty, absent or unreadable state seeds the
+ *  failed, until the next dirty mark lands: §12's residual (7)), and a dirty, absent or unreadable state seeds the
  *  conservative hold and restarts every crashed claimant's hour (review 382, R2; review of D-4857). The lane composes no act on a pass whose commit did not land, so the
  *  durable state never lags an act; the act is still behind the claimant's re-measure before and after the fleet act. */
 export interface DeadCoordinatorEntry {
