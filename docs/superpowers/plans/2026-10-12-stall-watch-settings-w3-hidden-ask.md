@@ -382,7 +382,11 @@ held in reserve, and assigned to this wave by the coordinator's ruling R38. Two 
 - **Why:** spec §10 step 2b already says neither worker nor coordinator mail can land on `waiting`. Counting it let
   each nudge push the cap back 2 h (finding 4063: two nudges, two restarts), so the more a coordinator tried, the later
   the operator heard.
-- **Pinned by:** the `dialog-cap-clock-ignores-inbound-mail (D-4040)` describe in `stall-verdict.test.ts`; mutation
-  rows M4-M6 (filled in at Task 2 Step 5).
+- **Pinned by:** the `dialog-cap-clock-ignores-inbound-mail (D-4040)` describe in `stall-verdict.test.ts` (6 cases).
+  Every row below was measured at commit `11e1efb8e`, out of tree, one mutation at a time, each restored and
+  `cmp`-checked; the unmutated file passes 315 of 315:
+  M4 (time hold 2b from `capQuietSince` again) → 4 failed (a coordinator nudge sent while the dialog shows does not restart the 2 h; nor do two (finding 4063: each restarted it); nor does mail to the worker role on the run; a pending harness menu under an idle word is timed the same way);
+  M5 (add `f.inboundLast?.at ?? 0` to `dialogQuietSince`) → 4 failed (the same four);
+  M6 (drop the inbound term from `capQuietSince`) → 1 failed (control: the limit cap keeps the inbound term).
 - **Cost if wrong:** if some inbound mail does reach a pane under a dialog without re-stamping its word, the cap fires
   up to 2 h earlier than today for that dialog: one operator push, never mail.
