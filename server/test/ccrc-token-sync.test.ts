@@ -16,7 +16,7 @@
 // prove "never printed" build their search patterns from pieces).
 import { describe, it, expect } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import {
@@ -174,6 +174,7 @@ describe('ccrc token sync: the synced path (spec §4.5, Figure 4)', () => {
     expect(statSync(genFile(home)).mode & 0o777).toBe(0o600);
     const rep = reportOf(home)!;
     expect(rep).toEqual({ v: 1, at: expect.any(Number), result: 'synced', generation: GEN, transport: 'https', proof: 'proved' });
+    expect(read(join(home, '.ccrc', 'token-sync.json'))).toMatch(new RegExp(`^\\{"v":1,"at":\\d+,"result":"synced","generation":"${GEN}","transport":"https","proof":"proved"\\}\\n$`));
     expect(statSync(join(home, '.ccrc', 'token-sync.json')).mode & 0o777).toBe(0o600);
     // Two calls: the claim, then the proof.
     expect(calls(home)).toBe(2);
@@ -545,6 +546,285 @@ describe('ccrc token sync: refusals — each word, its exit code, and what it le
   });
 });
 
+// ── 4555: a refusal that wrote nothing keeps the generation this box held ───────────────────────────────────────────
+// A refusal rewrites ~/.ccrc/token-sync.json with `"generation":null`, so once the token file and the generation file are
+// gone the last trace of a value this box held is gone too. 4555: a run that wrote no value (R_GEN empty) carries the
+// generation the box holds in an optional `held` key, read in bash from the generation file, else the previous report's
+// `generation`, else its `held`. Everything the agent reads stays byte for byte: the synced report, the stdout line, every
+// exit code and every first stderr line. The rows that hold what must not change are green before the fix; their reds are
+// measured under the mutants of the commit message.
+describe('ccrc token sync: a refusal that wrote nothing keeps the generation this box held (4555)', () => {
+  const itNonRoot = process.getuid && process.getuid() === 0 ? it.skip : it;
+  const REP = (h: string): string => join(h, '.ccrc', 'token-sync.json');
+  const rep = (h: string): string => read(REP(h));
+  let OTHER = randomBytes(8).toString('hex');
+  while (OTHER === GEN) OTHER = randomBytes(8).toString('hex');
+  const BAD_CODE_LINE = `${TOKEN_SYNC_STDERR_PREFIX}bad-code: the code on stdin is not 43 base64url characters; nothing was claimed\n`;
+  const SYNCED_REPORT = `{"v":1,"at":1,"result":"synced","generation":"${GEN}","transport":"https","proof":"proved"}\n`;
+
+  /** The FIFO idiom of the token-path row, timed: a helper started BEFORE the call frees a reader blocked on the FIFO after
+   *  5 s (an O_WRONLY|O_NONBLOCK open and close; ENXIO with no reader is ignored). A verb that never opens the FIFO returns
+   *  in well under a second, and one that blocks on it returns only after the helper has freed it. */
+  function withFifo(fifo: string, run: () => void): number {
+    const helper = spawn('python3', ['-I', '-c', [
+      'import os, sys, time',
+      'time.sleep(5)',
+      'try:',
+      '    os.close(os.open(sys.argv[1], os.O_WRONLY | os.O_NONBLOCK))',
+      'except OSError:',
+      '    pass',
+    ].join('\n'), fifo], { stdio: 'ignore' });
+    const t0 = Date.now();
+    try {
+      run();
+      return Date.now() - t0;
+    } finally {
+      helper.kill();
+      try { closeSync(openSync(fifo, fsConstants.O_WRONLY | fsConstants.O_NONBLOCK)); } catch { /* no reader */ }
+    }
+  }
+  const syncTimed = (home: string): Run =>
+    runToken(home, ['sync', '--from', 'agent'], 'short\n', {}, { timeout: 15000 });
+  const mkfifo = (p: string): void => {
+    const made = spawnSync('mkfifo', [p], { encoding: 'utf8' });
+    expect(made.status, made.stderr).toBe(0);
+  };
+
+  it('R1 bad-code after a sync: the report keeps the generation as held, and stderr is the one line it always was', () => {
+    const home = box('tok-held-badcode-');
+    expect(sync(home).code).toBe(0);
+    const r = sync(home, 'short\n');
+    expectRefusal(r, 'bad-code');
+    expect(r.stderr).toBe(BAD_CODE_LINE);
+    expect(reportOf(home)).toEqual({ v: 1, at: expect.any(Number), result: 'bad-code', generation: null, transport: null, proof: null, held: GEN });
+    expect(read(tokenFile(home))).toBe(`${PREAMBLE}${VALUE}\n`);
+    expect(read(genFile(home))).toBe(`${GEN}\n`);
+    expectNoSecret(home, r);
+  });
+
+  interface Case { word: keyof typeof TOKEN_SYNC_EXIT; plant: (home: string) => void; stderr: string; nonRoot?: true }
+  const CASES: Case[] = [
+    {
+      word: 'stale-client',
+      plant: (home) => writeFileSync(join(harnessBin(home), 'ccrc-api'),
+        '#!/usr/bin/env bash\ncurl -sS -m 30 -X "$method" -H "x-ccrc-mail-token: $TOKEN" "$url"\n', { mode: 0o755 }),
+      stderr: `${TOKEN_SYNC_STDERR_PREFIX}stale-client: ~/.local/bin/ccrc-api cannot be shown to keep the box token off its argv (an install before wave 13, or a file this verb cannot read); replace it before a sync — nothing was claimed\n`,
+    },
+    {
+      word: 'claim-refused',
+      plant: (home) => claimAnswers(home, 403, '{"ok":false,"error":"wrong-node"}'),
+      stderr: `${TOKEN_SYNC_STDERR_PREFIX}claim-refused: the claim door answered 403 wrong-node\n`,
+    },
+    {
+      word: 'code-used',
+      plant: (home) => claimAnswers(home, 410, '{"ok":false,"error":"code-used"}'),
+      stderr: `${TOKEN_SYNC_STDERR_PREFIX}code-used: the claim door answered 410 code-used: someone claimed this code first\n`,
+    },
+    {
+      word: 'write-failed',
+      plant: (home) => chmodSync(join(home, '.cc-secrets'), 0o500),
+      stderr: `${TOKEN_SYNC_STDERR_PREFIX}write-failed: no temp file could be made in ~/.cc-secrets; nothing was claimed\n`,
+      nonRoot: true,
+    },
+  ];
+  for (const c of CASES) {
+    (c.nonRoot ? itNonRoot : it)(`R2 ${c.word} after a sync keeps the held generation; the same refusal on a fresh box carries none, with the identical exit, stderr and empty stdout`, () => {
+      const synced = box(`tok-held-${c.word}-`);
+      const fresh = box(`tok-held-fresh-${c.word}-`);
+      expect(sync(synced).code).toBe(0);
+      try {
+        c.plant(synced);
+        c.plant(fresh);
+        const rs = sync(synced);
+        const rf = sync(fresh);
+        for (const r of [rs, rf]) {
+          expectRefusal(r, c.word);
+          expect(r.stderr).toBe(c.stderr);
+          expect(r.stdout).toBe('');
+        }
+        expect(rs.code).toBe(rf.code);
+        const fr = reportOf(fresh)!;
+        expect(fr).toEqual({ v: 1, at: expect.any(Number), result: c.word, generation: null, transport: fr['transport'], proof: null });
+        expect('held' in fr).toBe(false);
+        expect(reportOf(synced)).toEqual({ v: 1, at: expect.any(Number), result: c.word, generation: null, transport: fr['transport'], proof: null, held: GEN });
+        expectNoSecret(synced, rs);
+        expectNoSecret(fresh, rf);
+      } finally {
+        for (const h of [synced, fresh]) { try { chmodSync(join(h, '.cc-secrets'), 0o700); } catch { /* not planted */ } }
+      }
+    });
+  }
+
+  it('R3 the generation file lost, then a refusal: held comes from the previous report\'s generation', () => {
+    const home = box('tok-held-genlost-');
+    expect(sync(home).code).toBe(0);
+    rmSync(genFile(home));
+    const r = sync(home, 'short\n');
+    expectRefusal(r, 'bad-code');
+    expect(reportOf(home)).toMatchObject({ result: 'bad-code', generation: null, held: GEN });
+  });
+
+  it('R4 a chain: the second refusal carries the held the first refusal wrote', () => {
+    const home = box('tok-held-chain-');
+    expect(sync(home).code).toBe(0);
+    expect(reportOf(home)).toMatchObject({ result: 'synced', generation: GEN });
+    expectRefusal(sync(home, 'short\n'), 'bad-code');
+    expect(reportOf(home)).toMatchObject({ generation: null, held: GEN });
+    rmSync(genFile(home));
+    const r = sync(home, 'short\n');
+    expectRefusal(r, 'bad-code');
+    expect(reportOf(home)).toEqual({ v: 1, at: expect.any(Number), result: 'bad-code', generation: null, transport: null, proof: null, held: GEN });
+  });
+
+  it('R4b precedence: the generation file outranks the report', () => {
+    const home = box('tok-held-prec-');
+    expect(sync(home).code).toBe(0);
+    writeFileSync(genFile(home), `${OTHER}\n`, { mode: 0o600 });
+    const r = sync(home, 'short\n');
+    expectRefusal(r, 'bad-code');
+    expect(reportOf(home)).toMatchObject({ held: OTHER });
+    expect(rep(home)).not.toContain(GEN);
+  });
+
+  it('R5 a fresh box carries nothing, byte for byte', () => {
+    const a = box('tok-held-fresh5-');
+    expectRefusal(sync(a, 'short\n'), 'bad-code');
+    expect(rep(a)).toMatch(/^\{"v":1,"at":\d+,"result":"bad-code","generation":null,"transport":null,"proof":null\}\n$/);
+    const b = box('tok-held-fresh5b-');
+    claimAnswers(b, 403, '{"ok":false,"error":"wrong-node"}');
+    expectRefusal(sync(b), 'claim-refused');
+    expect(rep(b)).toMatch(/^\{"v":1,"at":\d+,"result":"claim-refused","generation":null,"transport":"https","proof":null\}\n$/);
+  });
+
+  it('R6 a refusal after the write carries its own generation and no held', () => {
+    const home = box('tok-held-after-');
+    expect(sync(home).code).toBe(0);
+    proofAnswers(home, 401);
+    const r = sync(home);
+    expectRefusal(r, 'proof-failed');
+    expect(reportOf(home)).toEqual({ v: 1, at: expect.any(Number), result: 'proof-failed', generation: GEN, transport: 'https', proof: 'proof-failed' });
+
+    // The generation write blocked on a box that already synced: the previous report carries a generation, and still no held.
+    const home2 = box('tok-held-after2-');
+    expect(sync(home2).code).toBe(0);
+    rmSync(genFile(home2));
+    mkdirSync(genFile(home2));
+    const r2 = sync(home2);
+    expectRefusal(r2, 'write-failed');
+    const rp = reportOf(home2)!;
+    expect(rp['generation']).toBe(GEN);
+    expect('held' in rp).toBe(false);
+  });
+
+  it('R7 a synced run after a refusal that carried held is byte for byte the synced report', () => {
+    const home = box('tok-held-resync-');
+    expect(sync(home).code).toBe(0);
+    expectRefusal(sync(home, 'short\n'), 'bad-code');
+    const r = sync(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toBe(`synced ${GEN} https\n`);
+    expect(rep(home)).toMatch(new RegExp(`^\\{"v":1,"at":\\d+,"result":"synced","generation":"${GEN}","transport":"https","proof":"proved"\\}\\n$`));
+  });
+
+  describe('R8 what is not read as held at the generation path', () => {
+    it('a generation file that is not 16 hex', () => {
+      const home = box('tok-held-genxyz-');
+      writeFileSync(genFile(home), 'xyz\n', { mode: 0o600 });
+      expectRefusal(sync(home, 'short\n'), 'bad-code');
+      expect('held' in reportOf(home)!).toBe(false);
+    });
+
+    it('a symlink to a regular file holding a generation is never followed', () => {
+      const home = box('tok-held-genlink-');
+      const target = join(home, 'elsewhere.gen');
+      writeFileSync(target, `${GEN}\n`, { mode: 0o600 });
+      symlinkSync(target, genFile(home));
+      expectRefusal(sync(home, 'short\n'), 'bad-code');
+      expect('held' in reportOf(home)!).toBe(false);
+      expect(read(target)).toBe(`${GEN}\n`);
+      expect(lstatSync(genFile(home)).isSymbolicLink()).toBe(true);
+    });
+
+    it('a FIFO is never opened', () => {
+      const home = box('tok-held-genfifo-');
+      mkfifo(genFile(home));
+      const before = lstatSync(genFile(home));
+      let r: Run | undefined;
+      const ms = withFifo(genFile(home), () => { r = syncTimed(home); });
+      expectRefusal(r!, 'bad-code');
+      expect(ms).toBeLessThan(4000);
+      expect(lstatSync(genFile(home)).isFIFO()).toBe(true);
+      expect(lstatSync(genFile(home)).ino).toBe(before.ino);
+      expect('held' in reportOf(home)!).toBe(false);
+    }, 30000);
+  });
+
+  describe('R8r what is not read as held at the report path', () => {
+    it('a symlink to a synced report is never followed, and its target is untouched', () => {
+      const home = box('tok-held-replink-');
+      const target = join(home, 'elsewhere.json');
+      writeFileSync(target, SYNCED_REPORT, { mode: 0o600 });
+      symlinkSync(target, REP(home));
+      expectRefusal(sync(home, 'short\n'), 'bad-code');
+      expect('held' in reportOf(home)!).toBe(false);
+      expect(read(target)).toBe(SYNCED_REPORT);
+      expect(lstatSync(REP(home)).isSymbolicLink()).toBe(false);
+    });
+
+    it('a FIFO is never opened, and the rename replaces it with the refusal\'s report', () => {
+      const home = box('tok-held-repfifo-');
+      mkfifo(REP(home));
+      let r: Run | undefined;
+      const ms = withFifo(REP(home), () => { r = syncTimed(home); });
+      expectRefusal(r!, 'bad-code');
+      expect(ms).toBeLessThan(4000);
+      expect(lstatSync(REP(home)).isFile()).toBe(true);
+      expect('held' in reportOf(home)!).toBe(false);
+    }, 30000);
+  });
+
+  itNonRoot('R9 an unreadable generation file is skipped silently: exactly the one stderr line it always was', () => {
+    const home = box('tok-held-genperm-');
+    expect(sync(home).code).toBe(0);
+    chmodSync(genFile(home), 0o000);
+    try {
+      const r = sync(home, 'short\n');
+      expectRefusal(r, 'bad-code');
+      expect(r.stderr).toBe(BAD_CODE_LINE);
+    } finally {
+      chmodSync(genFile(home), 0o600);
+    }
+  });
+
+  itNonRoot('R9 an unreadable generation file does not hide the previous report: held comes from the report', () => {
+    const home = box('tok-held-genperm2-');
+    expect(sync(home).code).toBe(0);
+    chmodSync(genFile(home), 0o000);
+    try {
+      expectRefusal(sync(home, 'short\n'), 'bad-code');
+      expect(reportOf(home)).toMatchObject({ result: 'bad-code', generation: null, held: GEN });
+    } finally {
+      chmodSync(genFile(home), 0o600);
+    }
+  });
+
+  itNonRoot('R9r an unreadable report is skipped silently: one stderr line, and no held (nothing readable held a generation)', () => {
+    const home = box('tok-held-repperm-');
+    expect(sync(home).code).toBe(0);
+    rmSync(genFile(home));
+    const old = lstatSync(REP(home)).ino;
+    chmodSync(REP(home), 0o000);
+    try {
+      const r = sync(home, 'short\n');
+      expectRefusal(r, 'bad-code');
+      expect(r.stderr).toBe(BAD_CODE_LINE);
+      expect('held' in reportOf(home)!).toBe(false);
+    } finally {
+      if (lstatSync(REP(home)).ino === old) chmodSync(REP(home), 0o600);
+    }
+  });
+});
+
 describe('ccrc token sync: set +x first, umask 077, and the environment exits', () => {
   it('an inherited xtrace (SHELLOPTS=xtrace) prints neither the code nor the value — set +x is the first statement', () => {
     const home = box('tok-sync-xtrace-');
@@ -758,6 +1038,22 @@ describe('ccrc token sync: the shell spellings agree with L0 (plan Global Constr
     expect(code.filter((l) => /\bpython3 -I -c\b/.test(l)).length).toBe(3);
     // And no spelling that takes another route to the interpreter (a bare `python3 "$x"`, `python3 -m`, `python3 -`).
     expect(code.filter((l) => /\bpython3 (?!-I -c\b)(?!>\/dev\/null)(?![a-z])/.test(l) && !/command -v python3/.test(l))).toEqual([]);
+  });
+
+  it('the held generation is read in bash: _ts_held and _ts_report name no python3, and the verb still has three python3 -I -c lines (4555)', () => {
+    const src = verb();
+    const held = /^_ts_held\(\) \{\n([\s\S]*?)\n\}$/m.exec(src);
+    const report = /^_ts_report\(\) \{\n([\s\S]*?)\n\}$/m.exec(src);
+    expect(held, 'ccd/ccrc-token-sync has no _ts_held() { … }').not.toBeNull();
+    expect(report, 'ccd/ccrc-token-sync has no _ts_report() { … }').not.toBeNull();
+    // `_ts_report` reaches python only through `_ts_rename`, which existed before 4555.
+    expect(held![1]).not.toMatch(/python3/);
+    expect(report![1]).not.toMatch(/python3/);
+    // The shape is derived from GEN_RE (pinned to L0 above), never spelled again.
+    expect(held![1]).toContain('$GEN_RE');
+    expect(held![1]).not.toContain('{16}');
+    const code = src.split('\n').filter((l) => !l.trimStart().startsWith('#'));
+    expect(code.filter((l) => /\bpython3 -I -c\b/.test(l)).length).toBe(3);
   });
 
   it('the agent\'s frozen argv is the verb this file answers', () => {
