@@ -7601,6 +7601,8 @@ r = regular(rp)
 if r == "absent":
     say("finding", "never-synced")
     sys.exit(0)
+def g16(x):
+    return type(x) is str and re.fullmatch(r"[0-9a-f]{16}", x) is not None
 def unreadable():
     say("finding", "sync-unreadable")
     sys.exit(0)
@@ -7611,7 +7613,8 @@ try:
         j = json.loads(f.read().decode("utf-8"))
     res, at, gen, tr, pf = j["result"], j["at"], j["generation"], j["transport"], j["proof"]
     ok = (type(j) is dict and j["v"] == 1 and type(at) is int and at >= 0 and (res == "synced" or res in errs)
-        and (gen is None or (type(gen) is str and re.fullmatch(r"[0-9a-f]{16}", gen) is not None))
+        and (gen is None or g16(gen))
+        and ("held" not in j or g16(j["held"]))
         and (tr is None or tr in transports) and pf in (None, "proved", "proof-failed", "proof-unmeasured"))
 except Exception:
     ok = False
@@ -7622,7 +7625,9 @@ age = max(0, now - at)
 # proved), or any report that carries a generation (a `write-failed` of `ccrc-token-sync` after the write). A report that
 # records only a refusal, no generation (`bad-code`, `stale-client`, `claim-refused`, `code-used`, `busy`, `spawn-failed`,
 # or a `write-failed` before anything was written), says nothing was ever handed to this box: it is no history.
-if res not in ("synced", "proof-failed", "proof-unmeasured") and gen is None:
+# 4555: a refusal that wrote nothing carries `held` (the generation this box held) when it held one, and that is history,
+# so the rule needs `held` absent. A present `held` that is not one generation id makes the report unreadable above.
+if res not in ("synced", "proof-failed", "proof-unmeasured") and gen is None and "held" not in j:
     say("refusal-only")
 if res == "synced":
     if pf != "proved" or tr is None:

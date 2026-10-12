@@ -823,6 +823,37 @@ describe('ccrc token sync: a refusal that wrote nothing keeps the generation thi
       if (lstatSync(REP(home)).ino === old) chmodSync(REP(home), 0o600);
     }
   });
+
+  // R10, the writer and the reader together (review 391 F2): the real verb syncs, then refuses; the token and generation
+  // files are lost; doctor's own check reads the report the verb wrote and says FAIL, not the never-handed PASS or a WARN.
+  it('review 391 F2 end to end: the real verb syncs, refuses, the token and generation files are lost, and doctor reads FAIL (4555)', () => {
+    const home = box('tok-held-e2e-');
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=fleet\nCCRC_FLEET=local\n', { mode: 0o600 });
+    expect(sync(home).code).toBe(0);
+    expectRefusal(sync(home, 'short\n'), 'bad-code');
+    rmSync(tokenFile(home));
+    rmSync(genFile(home));
+    const bin = join(home, 'bt-bin');
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(join(home, 'tmp'), { recursive: true });
+    for (const n of ['python3', 'stat']) {
+      const found = spawnSync('bash', ['-c', `command -v ${n}`], { encoding: 'utf8' }).stdout.trim();
+      expect(found, `this box has no ${n}`).not.toBe('');
+      symlinkSync(found, join(bin, n));
+    }
+    const bashPath = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
+    const q = (x: string): string => `'${x.replace(/'/g, `'\\''`)}'`;
+    const script = ['set -uo pipefail', `. ${q(CCRC)}`, `. ${q(join(REPO, 'ccd', 'ccrc-doctor-checks'))}`, '_check_box-token'].join('\n');
+    const d = spawnSync(bashPath, ['-c', script], {
+      encoding: 'utf8', env: { HOME: home, PATH: bin, LC_ALL: 'C', TMPDIR: join(home, 'tmp') },
+    });
+    const out = d.stdout ?? '';
+    expect(out).toMatch(/^FAIL box-token: fleet: fleet-token-absent — /);
+    expect(out.split('\n')[0]).toContain('fleet: sync:bad-code — ');
+    expect(out).not.toContain('no value has been handed to this box yet');
+    expect(d.status).toBe(1);
+    for (const x of [out, d.stderr ?? '']) expect(x.includes(VALUE)).toBe(false);
+  });
 });
 
 describe('ccrc token sync: set +x first, umask 077, and the environment exits', () => {

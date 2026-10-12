@@ -207,6 +207,36 @@ describe('doctor box-token: PASS, and only on a measured healthy box', () => {
       expect(r.code).toBe(0);
     }
   });
+
+  // Row 2c invariant: the live server's disk (mail.token, box-token.json at generation #3 with counters 0 and 0 and a
+  // null stamp, and box-token-retired.json in the writer's shape) is PASS at every commit.
+  const plantLiveServer = (b: Box): void => {
+    editState(b, (s) => {
+      s.current.seq = 3; s.nextSeq = 4;
+      s.counters = { previousPresented: 0, retiredPresented: 0, retiredPresentedAt: null };
+    });
+    writeFileSync(dot(b, 'box-token-retired.json'), '{"v":1,"retired":[]}\n', { mode: 0o600 });
+  };
+  it('the live server shape: generation #3, counters 0 and 0 with a null stamp, and box-token-retired.json beside it, is PASS (row 2c invariant)', () => {
+    const b = box({ role: 'server' });
+    plantLiveServer(b);
+    for (const checks of [CHECKS_SRC, disarmed()]) {
+      const r = runCheck(b, checks);
+      expect(r.stdout).toBe('PASS box-token: server: generation #3, rotated 60 min ago, fleet confirmed, retired value refused\n');
+      expect(r.code).toBe(0);
+      expect(r.stderr).toBe('');
+    }
+  });
+
+  it('the live shape on role both, local: the same server part, and the fleet part written by this box\'s server, is PASS (row 2c invariant)', () => {
+    const b = box({ role: 'both' });
+    rmSync(dot(b, 'token-sync.json'));
+    plantLiveServer(b);
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toBe(`PASS box-token: server: generation #3, rotated 60 min ago, fleet confirmed, retired value refused; fleet: token file 0600, generation recorded, written by this box's server\n`);
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe('');
+  });
 });
 
 // ── every armed state: FAIL or WARN with its word (SKIP only in the disarmed copy) ──
@@ -288,6 +318,10 @@ const ROWS: Row[] = [
     plant: (b) => { rmSync(fleetFile(b)); rmSync(dot(b, NODE_FILES.tokenGeneration)); plantReport(b, { result: 'proof-failed', generation: null, proof: 'proof-failed' }); } },
   { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (with history: a refusal that carries a generation, written after the value)', armedClass: 'FAIL',
     plant: (b) => { rmSync(fleetFile(b)); rmSync(dot(b, NODE_FILES.tokenGeneration)); plantReport(b, { result: 'write-failed', generation: ID_CUR, transport: null, proof: null }); } },
+  // Review 391 F2 (4555): `ccrc-token-sync` now writes `held` on a refusal that wrote nothing from a box that held a
+  // generation, so a box that synced, was refused, then lost its token and generation files is history, not never-handed.
+  { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (with history: a refusal report carrying the generation it held, no generation file; review 391 F2, 4555)', armedClass: 'FAIL',
+    plant: (b) => { rmSync(fleetFile(b)); rmSync(dot(b, NODE_FILES.tokenGeneration)); plantReport(b, { result: 'bad-code', generation: null, transport: null, proof: null, held: ID_CUR }); } },
   { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (with history: a generation file only)', armedClass: 'FAIL',
     plant: (b) => { rmSync(fleetFile(b)); rmSync(dot(b, 'token-sync.json')); } },
   { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (with history: a sync report it cannot read, no generation file)', armedClass: 'FAIL',
@@ -760,6 +794,53 @@ describe('doctor box-token: a box never handed a value reads PASS with its sente
       expect(d.code).toBe(3);
     });
   }
+  // Review 391 F2 (4555): the refusal-only rule needs `held` absent. A refusal that wrote nothing carries `held` when the box
+  // held a generation, and that is history: the lost token reads FAIL, never the never-handed PASS.
+  const plantHeldRefusal = (b: Box): void => {
+    dropFleet(b);
+    plantReport(b, { result: 'bad-code', generation: null, transport: null, proof: null, held: ID_CUR });
+  };
+  it('review 391 F2: a box that synced, then refused, then lost its token and generation files is a FAIL, never never-handed (4555)', () => {
+    const b = box({ role: 'fleet' });
+    plantHeldRefusal(b);
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(/^FAIL box-token: fleet: fleet-token-absent — .* does not exist, so this box's calls to the server carry no box token/);
+    expect(r.stdout.split('\n')[0]).toContain('fleet: sync:bad-code — ');
+    expect(r.stdout).not.toContain(FLEET_NEVER);
+    expect(r.stdout).toMatch(/\n {2}remedy: \S/);
+    expect(r.code).toBe(1);
+  });
+  it('both role, remote: a healthy server and a fleet side that synced, refused and lost its files is a FAIL on the fleet part (4555)', () => {
+    const b = box({ role: 'both', fleet: 'remote', agentEnv: true });
+    plantHeldRefusal(b);
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(new RegExp(`^FAIL box-token: ${SERVER_PASS}; fleet: fleet-token-absent — .* does not exist, so this box's calls`));
+    expect(r.stdout).not.toContain(FLEET_NEVER);
+    expect(r.code).toBe(1);
+  });
+  for (const [label, held] of [['xyz', 'xyz'], ['null', null], ['7', 7]] as const) {
+    it(`a held that is not one generation id is unreadable, and the lost token stays FAIL (4555): held ${label}`, () => {
+      const b = box({ role: 'fleet' });
+      dropFleet(b);
+      plantReport(b, { result: 'bad-code', generation: null, transport: null, proof: null, held });
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout).toContain('fleet: sync-unreadable — ');
+      expect(r.stdout).toMatch(/^FAIL /);
+      expect(r.stdout).not.toContain(FLEET_NEVER);
+      expect(r.code).toBe(1);
+    });
+  }
+  it('held changes nothing while the token file is there: a healthy fleet box with a refusal report reads the same with or without it (4555)', () => {
+    const without = box({ role: 'fleet' });
+    plantReport(without, { result: 'bad-code', generation: null, transport: null, proof: null });
+    const withHeld = box({ role: 'fleet' });
+    plantReport(withHeld, { result: 'bad-code', generation: null, transport: null, proof: null, held: ID_CUR });
+    const a = runCheck(without, CHECKS_SRC);
+    const h = runCheck(withHeld, CHECKS_SRC);
+    expect(a.stdout).toMatch(/^WARN box-token: fleet: sync:bad-code — /);
+    expect(h.stdout).toBe(a.stdout);
+    expect(h.code).toBe(a.code);
+  });
   it('both role, local: nothing of either side is two PASS parts on one line, rc 0', () => {
     const b = box({ role: 'both' });
     dropServer(b); dropFleet(b);
