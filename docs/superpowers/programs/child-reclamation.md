@@ -47,7 +47,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
-- **2026-10-12 07:30 — REVIEW 388 IS DONE (4281, acked; run 388 closed `done`, released; report `reviews/review-388-ec9d63aa.md`). WAVE 9 IS MERGED: #354 = `28e8dc1b2` (07:28:38Z), a squash of `ec9d63aa7`, by `--admin --match-head-commit`. Run 380 is at `merging`.**
+- **2026-10-12 07:29 — REVIEW 388 IS DONE (4281, acked; run 388 closed `done`, released; report `reviews/review-388-ec9d63aa.md`). WAVE 9 IS MERGED: #354 = `28e8dc1b2` (07:28:38Z), a squash of `ec9d63aa7`, by `--admin --match-head-commit`. Run 380 is at `merging`.**
   - **No class (a) finding.** 34 agents ran, with no lens unverified.
     - SAFETY (Opus `xhigh`): every `server/src` hunk is a comment. The TypeScript printer's comment-free output is identical before and after, for both files.
     - The lane stays SHADOWED: `collect-lane-live` has no writer.
