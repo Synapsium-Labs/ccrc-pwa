@@ -264,6 +264,14 @@ exec "$REAL_JQ" "$@"
     expect(readState()).toMatchObject({ state: 'working', ask: null });
   });
 
+  it('a file that is gone or unreadable at the fresh read leaves SubagentStop inert', () => {
+    askViaPermission();
+    installShim();
+    run({ hook_event_name: 'SubagentStop', ...SUB }, { ...raceEnv('prefilter'), SHIM_REWRITE: 'not json' });
+    expect(fs.existsSync(`${stateFile()}.fired`), 'the shim fired').toBe(true);
+    expect(fs.readFileSync(stateFile(), 'utf8').trim()).toBe('not json');
+  });
+
   it('control: with no interleaving the shim is a pass-through and the wait is carried', () => {
     askViaPermission();
     installShim();
