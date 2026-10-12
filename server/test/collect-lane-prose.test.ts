@@ -116,6 +116,29 @@ describe('the programme’s rulings file', () => {
       'registered-id-with-a-kept-record-hidden-while-quarantine-is-unmeasured',
       'ccd-collect-budget-comment-sums-a-grace-per-probe', 'spec-ws-expire-crumb-sentence-after-wl-w6',
       'pass-scoped-box-lines-stand-until-the-next-call']) expect(note, slug).toContain(slug);
+    expect(note).toContain('`pass-scoped-box-lines-stand-until-the-next-call` is struck: '
+      + '`box-lines-clear-when-their-ids-leave` retired it.');
+  });
+  // The corrections line names every task's plan-text corrections, one bullet per task.
+  const CORRECTION_SLUGS = ['attention-doc-pair-counts-the-collector', 'collect-many-word-type-pinned-by-ts-expect-error',
+    'collect-l0-red-at-collection', 'step3-attention-case-reds-at-runtime', 'step3-tsc-shape-differs',
+    't1-9-dated-directive-stays-consumed', 'lock-die-mixed-bash-lines-row-added', 't2-16-longer-id-row-reds',
+    'population-header-in-task-2-style', 'licence-header-in-task-2-style', 'presence-null-already-red',
+    'r23-sweep-of-contract-and-ruling-tokens', 'stuck-end-exported', 'would-collect-body-calls-collect-who',
+    'watch-interim-empty-collector', 'outcome-detail-is-diagnostic', 'ccdargv-collect-docstrings-rewritten',
+    'collect-lane-fields-beside-the-child-reclaim-lane', 'older-pass-guard-is-shadowed-by-the-prune',
+    't7-38-act-queue-pinned-by-the-registry-listing-count', 't7-22-reds-as-a-timeout',
+    'publish-docstring-returns-rewrapped', 'collect-act-cap-after-last-await-pinned', 'budget-test-pins-the-read-values',
+    'census-title-control-pins-its-width', 'h6-scan-follows-the-reshaped-audit-site',
+    'destructive-builder-fence-reads-whole-files', 'collect-lane-prose-pins', 'r92-section-7-lines-are-section-5-10s',
+    'spec-stale-sentences-beyond-the-r92-list', 'spec-5-8-pause-sentence-untouched', 'no-pass-fails-shut-clear',
+    'flip-rows-are-for-changes-an-act-job-sees', 'arming-checklist-names-the-capabilities',
+    'task-10-shards-run-as-halves-after-an-oom', 'commit-subject-follows-the-frame'];
+  it('names every task’s plan-text corrections on the one corrections line', () => {
+    const from = note.indexOf('**Plan-text corrections and measured red shapes**');
+    expect(from, 'the corrections line is missing').toBeGreaterThan(-1);
+    const line = note.slice(from, note.indexOf('**Ruled at fix round 1**', from));
+    for (const slug of CORRECTION_SLUGS) expect(line, slug).toContain(`\`${slug}\``);
   });
   it('says a forgotten id’s late answer still counts for the box, and no longer says it is dropped', () => {
     expect(note).not.toContain("that call's late answer is dropped.");

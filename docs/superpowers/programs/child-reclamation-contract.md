@@ -3276,7 +3276,7 @@ composes when a gate forbids it, and 9 more items (three silent-wedge paths amon
 
 ### §16 as built (wave 9, run 380)
 
-Where wave 9's code and the plan's text narrowed or spelled out the rulings above (R82 to R92), they now read as
+Where wave 9's code and the plan's text narrowed or spelled out this section's rulings above, they now read as
 follows. This note amends; it edits no earlier text. It names each departure by slug and carries no number: the
 coordinator assigns this wave's numbers from the block run 380 was issued, and the wave 9 plan's `## Deviations found`
 defines them. This wave's committed comments and test titles cite §5.10 of the design spec, and §5.7 and §5.9 where the
@@ -3505,12 +3505,30 @@ made, and each residual they stated, is named under the rule it touches.
   without either the lane does not run at all, shadow included, and an empty shadow feed proves nothing. It is worded as
   a fact the operator checks, never a step ccrc enforces.
 
-**Plan-text corrections and measured red shapes:** `collect-l0-red-at-collection`,
-`step3-attention-case-reds-at-runtime`, `step3-tsc-shape-differs`, `t1-9-dated-directive-stays-consumed`,
-`lock-die-mixed-bash-lines-row-added`, `t2-16-longer-id-row-reds`, `population-header-in-task-2-style`,
-`licence-header-in-task-2-style`, `presence-null-already-red`, `t7-38-act-queue-pinned-by-the-registry-listing-count`,
-`t7-22-reds-as-a-timeout`, `publish-docstring-returns-rewrapped` and `task-10-shards-run-as-halves-after-an-oom`.
-`commit-subject-follows-the-frame`, above, is the whole-wave one.
+**Plan-text corrections and measured red shapes**, per task (some are also named above under their rules):
+- Task 1: `attention-doc-pair-counts-the-collector`, `collect-many-word-type-pinned-by-ts-expect-error`,
+  `collect-l0-red-at-collection`, `step3-attention-case-reds-at-runtime`, `step3-tsc-shape-differs` and
+  `t1-9-dated-directive-stays-consumed`.
+- Task 2: `lock-die-mixed-bash-lines-row-added` and `t2-16-longer-id-row-reds`.
+- Task 3: `population-header-in-task-2-style`.
+- Task 4: `licence-header-in-task-2-style`, `presence-null-already-red`, `r23-sweep-of-contract-and-ruling-tokens`, and
+  fix round 1's pacing pins (each answer's effect on the hold, the presence defer and the continuity clocks, and the
+  rewritten not-witnessed case).
+- Task 5: `stuck-end-exported`, `would-collect-body-calls-collect-who`, `watch-interim-empty-collector`, and fix round
+  1's comment on the verdict words of a reclaim item's collector clause.
+- Task 6: `outcome-detail-is-diagnostic` and `ccdargv-collect-docstrings-rewritten`.
+- Task 7: `collect-lane-fields-beside-the-child-reclaim-lane`, `older-pass-guard-is-shadowed-by-the-prune`,
+  `t7-38-act-queue-pinned-by-the-registry-listing-count`, `t7-22-reds-as-a-timeout`,
+  `publish-docstring-returns-rewrapped`, fix round 1's lane cases for a pause seen at step 5, the learning audit's
+  `not-asked` and a learning call that never settles, and its two comments on the flip row.
+- Task 8: `collect-act-cap-after-last-await-pinned`, `budget-test-pins-the-read-values`,
+  `census-title-control-pins-its-width`, `h6-scan-follows-the-reshaped-audit-site`,
+  `destructive-builder-fence-reads-whole-files`, fix round 1's pin that the act slot's bound covers twice
+  `ws-collect`'s remote runner row, and its comment naming the excused vocabularies of the door-code scan.
+- Task 9: `collect-lane-prose-pins`, `r92-section-7-lines-are-section-5-10s`, `spec-stale-sentences-beyond-the-r92-list`,
+  `spec-5-8-pause-sentence-untouched`, `no-pass-fails-shut-clear`, `flip-rows-are-for-changes-an-act-job-sees`, this
+  note's refresh, and `arming-checklist-names-the-capabilities`.
+- Task 10: `task-10-shards-run-as-halves-after-an-oom` and `commit-subject-follows-the-frame`, the whole-wave one.
 
 **Ruled at fix round 1** (the seven open items the wave-done raised):
 - `hold-presence-alternation-can-starve-attention`: not a finding. H9's `hold-and-presence-continuity-survive-observations`
