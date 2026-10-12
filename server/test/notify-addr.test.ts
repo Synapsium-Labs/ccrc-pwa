@@ -414,6 +414,39 @@ describe('deploy/notify.sh hands the box token to curl on stdin, never on argv (
     expect(fed(home)).toBe(CONFIG);
   });
 
+  // R.2 / fix round 1 (review 383 F4): one GENERATED row per code point of `extractToken`'s trim set. The set is
+  // derived here, never listed by hand: every code point `String.prototype.trim` removes (c such that the one-code-point
+  // string trims to ''), so a code point a future engine adds, or one deleted from notify.sh's strip, reds its own row.
+  // Each row plants the code point both ways: ahead of the shipped placeholder (nothing may be sent) and around a real
+  // value (the bare value is what goes out).
+  const TRIM_SET: number[] = [];
+  for (let c = 0; c <= 0xffff; c++) if (String.fromCodePoint(c).trim() === '') TRIM_SET.push(c);
+  const hex = (c: number): string => `U+${c.toString(16).toUpperCase().padStart(4, '0')}`;
+
+  it('the generated trim set is the one the rows below were written for (it holds U+00A0 and U+FEFF)', () => {
+    expect(TRIM_SET.length).toBeGreaterThanOrEqual(25);
+    expect(TRIM_SET).toContain(0xa0);
+    expect(TRIM_SET).toContain(0xfeff);
+  });
+
+  it.each(TRIM_SET.map((c) => [hex(c), c] as const))('strips %s as extractToken trims it: no placeholder POST, the bare value otherwise', (_h, c) => {
+    const cp = String.fromCodePoint(c);
+    const ph = mkTmp('ccrc-notify-trim-ph-');
+    recordingCurl(ph);
+    const pf = path.join(ph, 'placeholder.token');
+    writeFileSync(pf, Buffer.from(`${cp}${PLACEHOLDER_TOKEN}${cp}\n`, 'utf8'), { mode: 0o600 });
+    const pr = runNotify(ph, { CCRC_ADDR: 'http://127.0.0.1:9', CCRC_MAIL_TOKEN_FILE: pf });
+    expect(pr.status, pr.stderr).toBe(0);
+    expect(existsSync(path.join(ph, 'curl.argv')), `notify POSTed the placeholder around ${_h}`).toBe(false);
+    const vh = mkTmp('ccrc-notify-trim-val-');
+    recordingCurl(vh);
+    const vf = path.join(vh, 'mail.token');
+    writeFileSync(vf, Buffer.from(`${cp}${'z'.repeat(64)}${cp}\n`, 'utf8'), { mode: 0o600 });
+    const vr = runNotify(vh, { CCRC_ADDR: 'http://127.0.0.1:9', CCRC_MAIL_TOKEN_FILE: vf });
+    expect(vr.status, vr.stderr).toBe(0);
+    expect(fed(vh), `the value was not sent bare around ${_h}`).toBe(CONFIG);
+  });
+
   // `set +x` FIRST (spec 4.9): an inherited xtrace (`bash -x`, or an exported
   // SHELLOPTS=xtrace) would trace the token read and the printf line to stderr.
   // ccd discards this hook's stderr today, but a hand run or a future caller
