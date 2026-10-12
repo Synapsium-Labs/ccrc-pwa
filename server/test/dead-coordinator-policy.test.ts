@@ -346,7 +346,7 @@ describe('the circuit breaker (spec §5.4)', () => {
       }),
       arm.unmeasurable, arm.measured, arm.doubt, NOW + 200 * 60_000);
     const members = (b: ReturnType<typeof run>): string[] => (b.tripped ? b.members.map((m) => m.id) : []);
-    const claimants = (b: ReturnType<typeof run>): string[] => (b.tripped ? b.claimants : []);
+    const claimants = (b: ReturnType<typeof run>): readonly string[] => (b.tripped ? b.claimants : []);
     const clone = (i: In): In => ({ crashed: new Map(i.crashed), held: new Map([...i.held].map(([id, h]) => [id, { ats: [...h.ats], fallback: h.fallback }])) });
     let checked = 0; let tripped = 0;
     for (let k = 0; k < 600; k += 1) {
