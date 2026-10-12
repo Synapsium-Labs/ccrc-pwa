@@ -3795,6 +3795,24 @@ describe('snippetTerms and unicode61 diacritic comparison: prefix markers surviv
     const phrase = `${'a'.repeat(100)} error handled cleanly`;
     expect(libSearch.snippetSpan(phrase, libSearch.snippetTerms('"error hand"*')).at).toBe(phrase.indexOf('error'));
   });
+  it('F1 breaker: a terminal prefix is read on the candidate\'s Porter stem (as FTS5 does), so `runn*` skips an early `running` for the later true `runn`, and `runs*` finds `running`', () => {
+    const far = 'z '.repeat(120);
+    const early = `running early ${far}runn later`;
+    const only = `${far}running only`;
+    const db = ftsCorpus([[1, early], [2, only]]);
+    expect(matchIds(db, '"runn"*'), 'real porter FTS: `runn*` matches the row holding a literal runn, and not the running-only row').toEqual([1]);
+    expect(libSearch.snippetSpan(early, libSearch.snippetTerms('runn*')), 'the later true prefix candidate, never the early `running` (stem run)').toEqual({ at: early.indexOf('runn later'), len: 4 });
+    expect(libSearch.snippetSpan(only, libSearch.snippetTerms('runn*')).at, 'a running-only text is no runn* hit').toBe(-1);
+  });
+  it('F1 breaker inverse: the query prefix is stemmed too, so `runs*` (stem run*) localizes `running`, and only the last phrase token is a prefix', () => {
+    const only = `${'z '.repeat(120)}running only`;
+    const stemmed = ftsCorpus([[1, only]]);
+    expect(matchIds(stemmed, '"runs"*'), 'real porter FTS: `runs*` stems to run* and matches running').toEqual([1]);
+    expect(libSearch.snippetSpan(only, libSearch.snippetTerms('runs*')), 'the query prefix is stemmed too').toEqual({ at: only.indexOf('running'), len: 7 });
+    // Only the LAST token of a phrase is the prefix; every other token stays an exact Porter-stem equality.
+    expect(libSearch.snippetSpan('runn later', libSearch.snippetTerms('"runn lat"*')), 'phrase: runn exact, lat prefix').toEqual({ at: 0, len: 10 });
+    expect(libSearch.snippetSpan('running later', libSearch.snippetTerms('"runn lat"*')).at, 'phrase: a non-final token is not a prefix').toBe(-1);
+  });
   it('a diacritic compares as FTS5 unicode61 does, precomposed or decomposed, while the span stays in the source offsets', () => {
     for (const word of ['caf\u00e9', 'cafe\u0301', 'CAF\u00c9', 'caf\u00e9s']) {
       const text = `${'a'.repeat(100)} ${word} tail`;

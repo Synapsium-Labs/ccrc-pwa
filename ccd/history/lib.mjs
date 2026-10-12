@@ -6254,8 +6254,10 @@ export function snippetSpan(text, terms) {
     const needles = phraseTokens(raw);
     if (needles.length === 0) continue;
     const stems = needles.map(porterStem);
-    // Whether the candidate (already folded) is needle `k`: the last needle of a prefix term by prefix, else by Porter stem.
-    const is = (folded, k) => (prefix && k === needles.length - 1 ? folded.startsWith(needles[k]) : porterStem(folded) === stems[k]);
+    // Whether the candidate (already folded) is needle `k`. FTS5's `porter unicode61` stems the query token and the indexed
+    // token alike and applies prefix semantics to the stems, so the last needle of a prefix term is a stem-prefix test
+    // (`runn*` rejects `running`, stem run; `runs*`, stem run, finds it) and every other needle is Porter-stem equality.
+    const is = (folded, k) => (prefix && k === needles.length - 1 ? porterStem(folded).startsWith(stems[k]) : porterStem(folded) === stems[k]);
     for (let i = 0; wordAt(i) !== null; i += 1) {
       const first = wordAt(i);
       if (!is(first.folded, 0)) continue;

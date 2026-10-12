@@ -1363,6 +1363,8 @@ describe("grep's snippet localization and Task 12 helper seam (W1-B2 task 12 fix
       GRX.user(T, 6, `${FILLER}\u039f\u03a3 closes the context-free sigma hit`),
       GRX.user(T, 7, `\u0131 earlyhead7 ${FILLER}i closes the true dotless-guard hit`),
       GRX.user(T, 8, `${FILLER}\u{104b0} closes the raw supplementary hit`),
+      GRX.user(T, 9, `running earlyhead9 ${FILLER}runn closes the true porter-prefix hit`),
+      GRX.user(T, 10, `${FILLER}swimming closes the stemmed-query prefix hit`),
     ]);
   }, HEAVY);
 
@@ -1438,6 +1440,19 @@ describe("grep's snippet localization and Task 12 helper seam (W1-B2 task 12 fix
       expect(s).toContain('\u{104b0} closes the raw supplementary hit');
       expect(s.startsWith('filler filler filler')).toBe(false);
     } finally { rc.db.close(); }
+  }, HEAVY);
+
+  it('F1 breaker: `runn*` is shown at the far literal `runn` SQLite matched, never the early `running` (stem run)', async () => {
+    const s = await snippetOf(['runn*']);
+    expect(s).toContain('runn closes the true porter-prefix hit');
+    expect(s).not.toContain('earlyhead9');
+    expect(s.startsWith('running')).toBe(false);
+  }, HEAVY);
+
+  it('F1 breaker inverse: `swims*` (stem swim*) is shown at the far `swimming` through the stemmed query prefix', async () => {
+    const w = await snippetOf(['swims*']);
+    expect(w).toContain('swimming closes the stemmed-query prefix hit');
+    expect(w.startsWith('filler filler filler')).toBe(false);
   }, HEAVY);
 
   it('the accepted Porter localizations survive: studying/studies, relate/relational', async () => {
