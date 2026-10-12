@@ -11,7 +11,7 @@ import {
   HOLD_REPROBE_MS, MAX_PENDING, PENDING_HARD_CAP, applySyncResult, backoffMs, bothRoleWriterArmed, claimVerdict, codeExpiresAt,
   confirmedGeneration, extendedGraceState, handedOutState, mintedState, nextAction, phaseOf, promotedState,
   pendingExitOpen, recoveryPlan, retireDue, rotationGate, stagedState,
-  adoptedState, foreignUnderUnusableRetired, oweForRetiredPresentation, retiredUnanswered, retiringDigests, retiringLanded, retiringRecorded,
+  adoptedState, clampRetiredStamp, foreignUnderUnusableRetired, oweForRetiredPresentation, retiredUnanswered, retiringDigests, retiringLanded, retiringRecorded,
   type BoxTokenState, type ClaimDoorState, type FileMetaLike, type GateInput, type GateNode, type GateVerdict,
 } from '../src/token/policy.js';
 import { CLAIM_CODE_TTL_MS } from '../../shared/agent-protocol.js';
@@ -710,6 +710,28 @@ describe('D-4412: a retired presentation owes one forward rotation, bounded', ()
       expect(retiredUnanswered(stamped(5000, 6000))).toBe(false);
       expect(retiredUnanswered(stamped(null, null))).toBe(false);
       expect(retiredUnanswered(stamped(undefined, null))).toBe(false);
+    });
+
+    // 4552 (review 383 F2): the clamp is a policy decision. Every stamp later than now is written down; an unanswered one is
+    // never written to or below the last rotation, so it is never cleared; an answered one goes to now and stays answered.
+    it('clampRetiredStamp: answered ahead goes to now, unanswered ahead goes to max(now, last rotation + 1), the rest are untouched', () => {
+      // answered ahead: now < stored <= lastRotationAt
+      expect(clampRetiredStamp(9000, 9500, 5000)).toBe(5000);
+      expect(clampRetiredStamp(9000, 9000, 5000)).toBe(5000);
+      expect(retiredUnanswered(stamped(clampRetiredStamp(9000, 9500, 5000), 9500))).toBe(false);
+      // unanswered ahead, the clock past the last rotation: plain now
+      expect(clampRetiredStamp(9000, 4000, 5000)).toBe(5000);
+      expect(clampRetiredStamp(9000, null, 5000)).toBe(5000);
+      // unanswered ahead, the clock at or behind the last rotation: one past it, never to or below it
+      expect(clampRetiredStamp(9000, 5000, 5000)).toBe(5001);
+      expect(clampRetiredStamp(9000, 8000, 5000)).toBe(8001);
+      expect(retiredUnanswered(stamped(clampRetiredStamp(9000, 8000, 5000), 8000))).toBe(true);
+      // not ahead of the clock: as stored
+      expect(clampRetiredStamp(5000, 4000, 5000)).toBe(5000);
+      expect(clampRetiredStamp(3000, 9000, 5000)).toBe(3000);
+      // null and absent: no stamp is invented
+      expect(clampRetiredStamp(null, 4000, 5000)).toBeNull();
+      expect(clampRetiredStamp(undefined, 4000, 5000)).toBeNull();
     });
 
     it('an unanswered stamp with nothing owed in this process owes retired-presented, with fresh 0', () => {

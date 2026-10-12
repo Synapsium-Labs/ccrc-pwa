@@ -441,7 +441,7 @@ describe('deploy/notify.sh hands the box token to curl on stdin, never on argv (
     const vh = mkTmp('ccrc-notify-trim-val-');
     recordingCurl(vh);
     const vf = path.join(vh, 'mail.token');
-    writeFileSync(vf, Buffer.from(`${cp}${'z'.repeat(64)}${cp}\n`, 'utf8'), { mode: 0o600 });
+    writeFileSync(vf, Buffer.from(`${cp}${TOKEN}${cp}\n`, 'utf8'), { mode: 0o600 });
     const vr = runNotify(vh, { CCRC_ADDR: 'http://127.0.0.1:9', CCRC_MAIL_TOKEN_FILE: vf });
     expect(vr.status, vr.stderr).toBe(0);
     expect(fed(vh), `the value was not sent bare around ${_h}`).toBe(CONFIG);

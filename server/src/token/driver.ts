@@ -13,7 +13,7 @@ import { NODE_ID_RE } from '../coord/store.js';
 import {
   DRIVER_TICK_MS, FAILURES_FOR_BANNER, ROTATE_NOW_MIN_INTERVAL_MS, STALL_ALERT_MS, TOKEN_FILE_REREAD_MS, applySyncResult,
   backoffMs, extendedGraceState, handedOutState, nextAction, owe, mintedState, phaseOf, promotedState, rotationGate,
-  oweForRetiredPresentation, pendingExitOpen, retiringDigests, retiringLanded, retiringRecorded, stagedState, type BoxTokenState, type GateInput, type GateVerdict, type GenerationObservation, type SyncResult, type WriteRecord,
+  clampRetiredStamp, oweForRetiredPresentation, pendingExitOpen, retiringDigests, retiringLanded, retiringRecorded, stagedState, type BoxTokenState, type GateInput, type GateVerdict, type GenerationObservation, type SyncResult, type WriteRecord,
 } from './policy.js';
 import type { BothRoleWriter, GateRowsSource, GenerationReader, TokenStore, TokenSyncLink } from './ports.js';
 import type { BoxTokenHolder, HolderSlots } from '../coord/token.js';
@@ -683,15 +683,9 @@ export class BoxTokenDriver implements TokenRouteDriver {
     }
     // 4552: the stamp is the driver's clock at the tick that first saw the latest retired presentation. It survives a
     // restart (the count does not), and a state written before 4552 with a count is unanswered, never clear.
-    // A stored stamp later than this clock (a clock stepped back across a restart) is written down to now: it stays
-    // unanswered until a rotation completes after it, is never cleared, and can no longer outlast the clock (review 383
-    // F2). Two edges keep "never cleared" true: an already-answered stamp (not after the last rotation) is left alone,
-    // and an unanswered one is not written down to or below the last rotation, which would read as answered.
+    // A stored stamp later than this clock is written down by policy's `clampRetiredStamp` (review 383 F2).
     const known = 'retiredPresentedAt' in s.counters;
-    const stored = known ? (s.counters.retiredPresentedAt ?? null) : null;
-    const lastRot = s.lastRotationAt;
-    const clamped = stored === null || stored <= now || (lastRot !== null && stored <= lastRot) ? stored
-      : Math.max(now, lastRot === null ? now : lastRot + 1);
+    const clamped = clampRetiredStamp(s.counters.retiredPresentedAt, s.lastRotationAt, now);
     const at = c.retired > this.retiredStampSeen ? now
       : known ? clamped
       : s.counters.retiredPresented > 0 ? now : null;   // 4552: a pre-4552 count is unanswered, never clear

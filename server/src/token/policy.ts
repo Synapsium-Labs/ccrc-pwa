@@ -157,6 +157,19 @@ export function retiredUnanswered(s: BoxTokenState): boolean {
   return typeof at === 'number' && (s.lastRotationAt === null || at > s.lastRotationAt);
 }
 
+/** 4552 (review 383 F2): a stored `retiredPresentedAt` later than the driver's clock (a clock stepped back across a
+ *  restart) could never be answered, because a rotation stamps `lastRotationAt` with that same clock. It is written
+ *  down: an UNANSWERED stamp (after the last rotation, or no rotation yet) goes to `max(now, lastRotationAt + 1)`, so it
+ *  stays unanswered and is never cleared; an ANSWERED one goes to `now` and stays answered, since
+ *  `now < stored <= lastRotationAt`. A stamp not ahead of the clock, or `null`, is returned as it is. An absent stamp is
+ *  not this function's to read: the driver stamps a pre-4552 count itself, so `undefined` comes back `null`. */
+export function clampRetiredStamp(stored: number | null | undefined, lastRotationAt: number | null, now: number): number | null {
+  if (typeof stored !== 'number') return null;
+  if (stored <= now) return stored;
+  const unanswered = lastRotationAt === null || stored > lastRotationAt;
+  return unanswered ? Math.max(now, lastRotationAt === null ? now : lastRotationAt + 1) : now;
+}
+
 /** The input is `fresh`, the retired presentations the holder counted since the driver last asked, or a presentation
  *  still unanswered (`retiredUnanswered`: 4552, so one made inside the bound below is owed once the bound passes). The
  *  state returned owes a rotation for the word `retired-presented`, or null when nothing is owed: neither a new nor an
