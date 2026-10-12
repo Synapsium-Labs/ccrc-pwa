@@ -4288,8 +4288,8 @@ export class FleetWatcher {
         // hold that was never recorded has a member whose anchor began after the record (a claimant doubted at the record's
         // pass re-anchors later, and an anchor leaves with its claimant). The record is written with the write-time clock,
         // never before a same-pass anchor, so an anchor of the pass that landed it is not flagged. This covers a write
-        // that kept failing before a restart only for holds whose anchors are still durable at it: one class is OPEN, pending a
-        // ruling — a held instant that lives only in memory because held-set writes failed while anchor writes landed (a held
+        // that kept failing before a restart only for holds whose anchors are still durable at it: one class is an unresolved ARMING
+        // BLOCKER (the lane must not be armed until it is closed) — a held instant that lives only in memory because held-set writes failed while anchor writes landed (a held
         // id that cannot be spelled, or a run_events INSERT failing while dead_claimants UPDATEs land) is lost with its anchor
         // if a doubt deletes it before a restart, and this recovery cannot see it (the act stays withheld while the write fails). A pass that STARTS an anchor also
         // writes the record when the set is unchanged (the checkpoint, step six), so its write time moves past that pass's
@@ -4463,8 +4463,8 @@ export class FleetWatcher {
    *  cost is one extra observation row per pass that starts an anchor, and none on a quiet pass. A restart that
    *  lands while writes keep failing seeds the older record, which can hold less than the process did: the first pass then
    *  flags every claimant whose durable anchor began after that record row (D-4826), which does NOT close that class: a held
-   *  instant that lived in memory alone, its anchor deleted by a doubt before the restart, is invisible to it (open, pending
-   *  a ruling). A `false` is warned, leaves the key unchanged so the next pass tries again, and
+   *  instant that lived in memory alone, its anchor deleted by a doubt before the restart, is invisible to it (an unresolved
+   *  ARMING BLOCKER: the lane must not be armed until it is closed). A `false` is warned, leaves the key unchanged so the next pass tries again, and
    *  leaves the in-memory hold standing for this process. */
   private recordDeadCoordinatorBreakerHeldChange(
     coord: CoordStore, before: readonly DeadCoordinatorBreakerMember[], ids: readonly string[], checkpoint: boolean,
