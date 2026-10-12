@@ -28,7 +28,7 @@ time.
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
 | 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merged `6e4524164` 2026-10-12; run 322 closed `done`, `final:true` (R37) |
-| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | — | run 394 dispatched 2026-10-12 14:51 to `ccrc-pwa-bright-cove` (R38) |
+| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | run 394 `awaiting-review` at `efb4842b7` (R39); review run 397 dispatched |
 
 ## Decisions & deviations
 
@@ -816,6 +816,28 @@ time.
     `.superpowers/sdd/stall-watch-settings/w3-wave-brief.md`; the plan is blob `5d9622c25` at `3da7ea0e5`.
   - Deploy class: both. The updater moves the fleet box first, which this wave needs, since the server reads what
     the hook writes. This session never rolls out by hand.
+
+- **R39 (2026-10-12 18:19)**, wave 3's wave-done is verified, and its review is dispatched.
+  - Wave-done, mail 4366 from `ccrc-pwa-bright-cove` (after the fleet's 15:48Z out-of-memory crash, which
+    lapsed its claim 1192; re-taken as 1194). `suite: unrun`: no full server suite on a memory-tight box; per-file
+    tables green, both `tsc` clean, the citation instrument `7 passed | 443 skipped` before and after.
+  - Re-measured: branch tip = PR #362's head = `efb4842b7`, PR open and `MERGEABLE`, `merge-tree` clean against
+    `main` `da1373cf6` (unmoved). The first commit `e0c7418c0` carries the plan blob `5d9622c25` unchanged. Twelve
+    commits, five files. The server accepted the fingerprint: run 394 `dispatched` → `working` → `awaiting-review`,
+    and its three items settled `done` (1720-1722).
+  - The worker's departure, `carry-only-a-main-thread-wait`, recorded inside D-4039 with no number: a subagent's own
+    PermissionRequest writes an additive hookstate key `waitBy:"subagent"`, so its dialog is not carried after the
+    subagent's next tool event. It narrows R38's "only `waiting` is carried" to a main-thread wait, which R38's own
+    shape got wrong: an approved subagent dialog would have stayed `waiting` until the next main-thread event. Not
+    ruled yet; the review weighs it.
+  - The worker's named follow-ups: a carried `waiting` moves `updatedAt` per subagent tool call, so `ask-moved`
+    refusals on a coordinator's answer and a re-firing unseen badge; and a one-hook-run race. R38 kept the stamp
+    moving for the `delegates` hold and the frozen arm, which may not be reachable under a `waiting` word. Not ruled
+    yet; the review measures every reader of the stamp.
+  - Review run 397 dispatched 18:19:26 to the fresh `ccrc-pwa-soft-prairie`, with the held-out panel and eight
+    checks; brief `.superpowers/sdd/stall-watch-settings/w3-review-brief.md`, route Opus high, Sonnet subagents,
+    workflow on, compact 40. Caps at 18:18: 5 of 7 active, 12 of 24 in the day. The worker's evidence is copied to
+    `w3-child-evidence/` (25 files).
 
 ## Carried constraints (reviewers get these)
 
