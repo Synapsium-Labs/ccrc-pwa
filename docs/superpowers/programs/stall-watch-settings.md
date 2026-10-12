@@ -2,10 +2,12 @@
 
 Spec: `docs/superpowers/specs/2026-10-05-stall-watch-settings-design.md` (rev 3.2, approved 2026-10-05 17:46 UTC)
 Plans: `docs/superpowers/plans/2026-10-05-stall-watch-settings-w1-server.md` (wave 1),
-`docs/superpowers/plans/2026-10-05-stall-watch-settings-w2-pwa.md` (wave 2)
+`docs/superpowers/plans/2026-10-05-stall-watch-settings-w2-pwa.md` (wave 2),
+`docs/superpowers/plans/2026-10-12-stall-watch-settings-w3-hidden-ask.md` (wave 3; it lands with the wave's PR, R38)
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-calm-harbor`   Workspace: **a fresh child per wave**
 Predecessor: `stall-watch`, complete (its ledger's R38).
-**Status: complete** (R37, 2026-10-12). Wave 1 merged as `7f7bf4afc` (#320), and wave 2 as `6e4524164` (#322).
+**Status: wave 3 open** (R38, 2026-10-12). Wave 1 merged as `7f7bf4afc` (#320), wave 2 as `6e4524164` (#322), and
+the ledger to R37 as `da1373cf6` (#356). Wave 3 carries finding 4063's two fixes, by the operator's ruling.
 
 **What this program is.** The Settings page gains a **Stall watch** section with one arming ladder and one quiet
 time.
@@ -26,6 +28,7 @@ time.
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
 | 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merged `6e4524164` 2026-10-12; run 322 closed `done`, `final:true` (R37) |
+| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | — | opened (R38) |
 
 ## Decisions & deviations
 
@@ -772,6 +775,46 @@ time.
   - Next: this ledger lands on `main` by a docs PR from this branch, after `main` is merged in (its plan taken as
     `main` has it). Then the deploy is checked read-only once v0.0.150 is published.
 
+- **R38 (2026-10-12 14:41)**, the operator keeps finding 4063's two fixes in this programme as wave 3, and the
+  ledger to R37 is merged.
+  - The operator, 2026-10-12 14:30: "no keep the two fixes in this programme. can we get on with work now?", then
+    "merge 356 when green". The two fixes are R32's owners 1 and 2: the hook's subagent overwrite of the main
+    thread's ask, and the dialog cap's clock. Owner 3, arming, stays the operator's.
+  - #356 merged at 14:34:05Z as `da1373cf6`, by `--admin --squash --match-head-commit f7baf646e`. Every required
+    check was green, `test (server)` included; the macOS legs were still running and gate nothing. The first attempt
+    answered "Base branch was modified": `main` had moved by #355, another programme's docs only, and `merge-tree`
+    stayed clean, so the same pinned merge was retried. `main` was merged into this branch afterwards (`b6e675657`).
+  - Ruling: wave 3 is two tasks in `docs/superpowers/plans/2026-10-12-stall-watch-settings-w3-hidden-ask.md`, and
+    the plan rides in the wave's PR, its first commit, rather than in a docs PR first — because the operator asked to
+    get on with the work, and the held-out panel reviews plan and code together at wave-done. Cost if wrong: a plan
+    defect the review finds costs a fix round, never a merged defect.
+  - Ruling, task 1's shape: a subagent's PreToolUse or PostToolUse that finds the hookstate `waiting` keeps
+    `waiting`, its ask and `interrupted`, beside the SubagentStart/SubagentStop carry, below `:2900` (D-3615). Only
+    `waiting` is carried: after the main Stop, background work keeps writing `working`, as the card, the dispatch
+    busy check and the operator read it today. The stamp and the event still move, because the `delegates` hold and
+    the frozen arm read them. The ask row cannot be minted twice: `detectDialogs` mints once per pane dialog id.
+    Cost if wrong: a dismissed dialog with no main-thread event stays `waiting` under background work until the next
+    main-thread event, which is also what happens today with no subagent.
+  - Ruling, task 2's shape: the dialog cap times its quiet from the latest of its live stamp, the worker's own last
+    mail and the dispatch, dropping the inbound term; the limit cap keeps the shared clock. Spec §10 step 2b already
+    says no mail can land on `waiting`, and the gate delivers only on `idle` or `shell`. Mail that does land
+    re-stamps the live word, so a `dialogPending` under an idle word loses nothing. Cost if wrong: one operator push
+    up to 2 h earlier for that dialog, never mail.
+  - Numbers: D-4039 `subagent-tool-event-keeps-the-waiting-ask` and D-4040 `dialog-cap-clock-ignores-inbound-mail`,
+    from this programme's 17:47 block, both unused on `main` (measured on `da1373cf6`). The block's last two reserve
+    numbers stay unassigned, for a fix round's departure by ruling.
+  - Claims at 14:31: 1188 (run 354) holds `server/test/session-hook.test.ts`, and 1172 (run 358) holds `README.md`,
+    `server/src/watch.ts` and `server/src/coord/store.ts`. Neither fix needs them: task 1's tests go in a new
+    `server/test/session-hook-subagent-ask.test.ts`, as the turn marker's did, and README is left alone. A README
+    sentence that turns false is named in the wave-done and routed.
+  - Scope: the R37 residue list stays out; the operator named the two fixes.
+  - Routing is unchanged from wave 2: Opus high for the main loop, Sonnet high for implementers, Opus high for each
+    task's reviewer, Haiku for scouts, workflows off, compact at 40.
+  - Dispatch: the concurrency cap stood at 7 of 7 at 14:40 (runs 354, 358, 367, 372, 373, 389, 391) and the daily
+    cap at 15 of 24. Run 3 is opened now and dispatched by a bounded waiter when a slot frees.
+  - Deploy class: both. The updater moves the fleet box first, which this wave needs, since the server reads what
+    the hook writes. This session never rolls out by hand.
+
 ## Carried constraints (reviewers get these)
 
 - Mutation-table discipline: every guard ships with a row measured red when it is removed, before and after.
@@ -810,3 +853,8 @@ time.
   - At wave-done: re-measure, advance, then a review run with the held-out panel. The merge is the operator's call.
     Wave 2 is the last wave, so its close carries `final:true`.
   - Done: merged as `6e4524164` (#322), and run 322 closed `done` with `final:true` (R37).
+- **Wave 3:** `docs/superpowers/plans/2026-10-12-stall-watch-settings-w3-hidden-ask.md`, both tasks, on a fresh child
+  of `ccrc-pwa` (R38). The plan's first commit takes it unchanged from this branch.
+  - Do not edit `server/test/session-hook.test.ts` (claim 1188), `README.md`, `watch.ts` or `store.ts` (claim 1172).
+  - At wave-done: re-measure, advance, then a review run with the held-out panel over plan and code. The merge is the
+    operator's call. Wave 3 is the last wave, so its close carries `final:true`.
