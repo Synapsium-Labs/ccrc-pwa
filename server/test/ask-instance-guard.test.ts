@@ -215,6 +215,7 @@ describe('still open: a wait a SUBAGENT raised is not carried', () => {
     const after = readState();
     expect(after.ask).toEqual(before.ask);
     expect(after.updatedAt).toBeGreaterThan(before.updatedAt);   // the stamp still moves
+    expect(after.waitBy).toBe('subagent');                        // and the provenance survives the Stop
     expect(after.aliveAt).toBeUndefined();
   });
 });

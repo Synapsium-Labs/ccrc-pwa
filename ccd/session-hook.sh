@@ -3766,7 +3766,7 @@ waitby=""
 # healed into one: `"wait\ning"` is empty here, not `waiting`); `event` is cut to letters, and `updatedAt` prints its
 # floor when it is a number. WHAT MAKES A STAMP KEEPABLE is the `^[0-9]+$` test in `_hook_keep_stamp` below, and only that
 # (a negative prints with its `-` and fails it; mutation N2 pins it). The `type == "number"` here is POSITIONAL, not a
-# guard: `floor` on a string, array or object aborts the jq program, which would blank every line printed after
+# guard: `floor` on a string, array, object, null or boolean aborts the jq program, which would blank every line printed after
 # `updatedAt` (today only `event`, unused while `fr_upd` is empty); it keeps a later field safe if one is ever added.
 # A jq that fails prints nothing: every field comes up empty, which both arms read as "nothing to carry".
 fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev=""
@@ -3785,7 +3785,8 @@ _hook_fresh_read() {
 # event writes over keeps the file's own `updatedAt` and `event` (the wait's START, which the attention bucket, the ask
 # row's `askAt` and the stall watch's hold 2a read) and gains the additive `aliveAt` = now (the liveness the aged door,
 # `hookstate.ts`, reads, so a long wait with subagents working stays fresh). Every other write has no `aliveAt`, and a
-# file whose `updatedAt` is not a number keeps nothing: it is written as before, with a fresh stamp.
+# file whose `updatedAt` is not a plain non-negative number (null, a boolean, a string, a negative or an exponent form
+# fails the `^[0-9]+$` test below) keeps nothing: it is written as before, with a fresh stamp.
 w_ev="" w_upd="" w_alive=""
 _hook_keep_stamp() {
   [[ "$fr_state" == waiting && "$fr_by" != subagent && "$fr_upd" =~ ^[0-9]+$ ]] || return 0

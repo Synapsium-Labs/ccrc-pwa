@@ -1258,7 +1258,8 @@ export const UNMEASURED_ASK_AT = -1;
  *
  * THAT ARGUMENT IS SOUND ABOUT SUBSTITUTION AND SILENT ABOUT EVERYTHING ELSE
  * (D-2403). `updatedAt` moving is NECESSARY for a substitution and nowhere
- * near sufficient for one: `ccd/session-hook.sh` stamps it on EVERY write,
+ * near sufficient for one: `ccd/session-hook.sh` stamps it on every write
+ * except a carried main-thread wait (D-4041, below),
  * and its `SubagentStart`/`SubagentStop` arm re-reads `.ask` straight back
  * off the file, so a subagent event on a session blocked at a dialog rewrites
  * the identical envelope under a fresh number. (That sentence no longer holds

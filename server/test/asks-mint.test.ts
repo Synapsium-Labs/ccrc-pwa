@@ -597,7 +597,8 @@ describe('the ask mint point (D-2172, D-2173)', () => {
 //
 // The mint stores the child's hookstate `updatedAt` as `askAt`, and
 // `takeAskForAnswer` refuses `ask-moved` unless a fresh read still equals it.
-// `session-hook.sh` stamps `updatedAt` on every write, and its subagent arm
+// `session-hook.sh` stamps `updatedAt` on every write except a carried
+// main-thread wait (D-4041, below), and its subagent arm
 // re-reads `.ask` straight back off the file. Since D-4041 that arm KEEPS the
 // stamp (and adds `aliveAt`) over a MAIN-thread wait, so the bump this describes
 // survives only for a wait a SUBAGENT raised (`waitBy:"subagent"`, not carried:
@@ -612,7 +613,8 @@ describe('the ask instance guard advances under a live dialog', () => {
   /** The hookstate write `session-hook.sh`'s `SubagentStart`/`SubagentStop`
    *  arm performs over a wait a SUBAGENT raised (a main-thread wait keeps its
    *  stamp since D-4041): the SAME ask envelope, the same `waiting` state, a
-   *  fresh `updatedAt`. `at` is passed explicitly because two `Date.now()` calls in
+   *  fresh `updatedAt`. The fixture writes no `waitBy` field (the server
+   *  ignores it), so it stands for that bump by its shape, not by its marker. `at` is passed explicitly because two `Date.now()` calls in
    *  one test can land in the same millisecond, which would make the
    *  assertion vacuous rather than false. */
   const bump = (home: string, id: string, ask: unknown, at: number): void => {
