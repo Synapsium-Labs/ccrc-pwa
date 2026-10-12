@@ -1562,6 +1562,31 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     and both review-384 probes; it then attacks the record grammar and durability, every earlier ruling and mutation row,
     and the G1/G2 arming facts. It uses the full held-out panel and was dispatched to `ccrc-pwa-warm-cove` on the first
     try (`skillState: present`), with workflow on. Mail 4260 tells the worker to stay idle.
+- **2026-10-12 02:20 — review 385 ruled; run 358 is back at `working` for fix round 4 (mail 4264).**
+  - Warm-cove reviewed `6bef07fd7` with the full held-out panel: 57 agents, 0 unverified, 0 unexamined; both reviewer
+    findings also received three refuters and stood 3–0. Every prior mutation row reproduced, all named suites and
+    required CI legs are green, and only the advisory macOS ccd leaf/reclaim shards are red. Review run 385 is closed
+    `done`; its report is `~/.cc-clips/ccrc-pwa-warm-cove/review-385-6bef07fd.md`.
+  - **F1 is a blocker (4826): close the durable pre-record death window.** A death or restart after durable anchors are
+    written but before the changed held record lands can discard the whole new hold and let the restarted lane end Q.
+    On restart, anchors newer than the latest held-record row are conservatively added to the seed and flagged, then
+    the readable replacement record must land before any act. The review's fresh-episode, doubt-only and generic
+    probes become red-first lane cases.
+  - **F2 is a blocker (4827): use the successful-spawn journal evidence already read by the lane.** A successful
+    unsupervised fallback can journal a new spawn without writing `supervisedAt`; heartbeat-only 4825 then lets the old
+    episode end the returned claimant early. A later trusted successful-spawn time joins valid later supervision as
+    fresh-episode evidence, with restart durability and the un-stamped-return probe.
+  - **F3/G1 are accepted as one explicit sampling residual.** Anchors and releases are sampled on independently timed
+    passes; the lane with more passes can act sooner. Cross-lane prose is limited to shared passes/evidence. The pure
+    breaker's monotonicity theorem remains intact.
+  - **G2 is accepted as an explicit residual.** A restart can drop in-memory backoff/population and let another
+    claimant proceed sooner. The own-lane arming bullets must say so; this close-out does not add another persistence
+    design. Every act still has its fresh audit, durable hour, before/after claimant measurement and durable breaker.
+  - F4 gets a mutation-red no-self-cluster case. F5–F9 correct supervision/spawn terms, the stamp/hour bound,
+    accumulated-instant grammar and growth words, remote-clock coverage, the plan's token departure, and the missing
+    unmeasurable/member-instant property pins. Numbers 4826–4827 were allocated for the round.
+  - Both lanes remain SHADOWED; this session creates neither live marker. A new scoped review follows the next verified
+    `wave-done`.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
