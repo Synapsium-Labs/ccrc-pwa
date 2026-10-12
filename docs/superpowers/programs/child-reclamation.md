@@ -47,6 +47,15 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-12 01:16 — review run 386 is DISPATCHED to `ccrc-pwa-calm-delta` (claude-corp, Anthropic; Opus `xhigh`) and advanced to `working`.**
+  - **The brief** (7826 bytes) names the held-out panel, plus the plan's four lenses with SAFETY (Opus `xhigh`) and SECURITY mandatory.
+  - **It adds three SAFETY rows**, each with a mutation row:
+    - `collect-lane-live` has no writer;
+    - `isTmpRootId` is the one predicate;
+    - the argv carries observation 2's token.
+  - **It also asks the reviewer to judge** the account's seven open items.
+  - **Archive.** The brief is `review-386-brief.md` and the dispatch body is `disp386.json`.
+
 - **2026-10-12 01:14 — WAVE 9's WAVE-DONE (4261, acked): PR #354 at `c7dfbbf69`. Run 380 is advanced to `awaiting-review` and its eleven items are settled. Review run 386 is opened.**
   - **Re-measured.**
     - The remote tip equals the claim.
