@@ -3763,8 +3763,12 @@ waitby=""
 # stands NOW, not of `prev_state`, which the prefilter took ~650 lines up: a main-thread answer that lands in between
 # must not be overwritten by a `waiting` decided from the old read. Lines, not `@tsv` (see the prefilter's note above).
 # `state` prints only when it is one of the three words this hook writes (an exact match, so a corrupt value is never
-# healed into one: `"wait\ning"` is empty here, not `waiting`); `event` is cut to letters, and `updatedAt` prints only when
-# it is a number. A jq that fails prints nothing: every field comes up empty, which both arms read as "nothing to carry".
+# healed into one: `"wait\ning"` is empty here, not `waiting`); `event` is cut to letters, and `updatedAt` prints its
+# floor when it is a number. WHAT MAKES A STAMP KEEPABLE is the `^[0-9]+$` test in `_hook_keep_stamp` below, and only that
+# (a negative prints with its `-` and fails it; mutation N2 pins it). The `type == "number"` here is POSITIONAL, not a
+# guard: `floor` on a string, array or object aborts the jq program, which would blank every line printed after
+# `updatedAt` (today only `event`, unused while `fr_upd` is empty); it keeps a later field safe if one is ever added.
+# A jq that fails prints nothing: every field comes up empty, which both arms read as "nothing to carry".
 fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev=""
 _hook_fresh_read() {
   fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev=""
@@ -3774,7 +3778,7 @@ _hook_fresh_read() {
      (if .waitBy == "subagent" then "subagent" else "" end),
      (.ask // null | tojson),
      (if .interrupted == true then "true" else "false" end),
-     (.updatedAt | if type == "number" and . >= 0 then floor | tostring else "" end),
+     (.updatedAt | if type == "number" then floor | tostring else "" end),
      (.event | if type == "string" then keep(alpha) else "" end)' "$f" 2>/dev/null)
 }
 # The stamp a carried wait keeps. A MAIN-thread wait (fresh state `waiting`, not raised by a subagent) that a subagent
@@ -3799,6 +3803,9 @@ if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
   fi
   # Session state untouched: keep the state the file holds (or skip entirely when no state was ever written, or the file
   # is gone or unreadable by now — a subagent event before any turn is inert). `prev_state` is only the no-fork prefilter.
+  # A stored state that is not one of the hook's three words (a corrupt file) reads empty at the fresh read and exits
+  # there too, which ALSO skips the subagent-list update above: at base that update was written, the corrupt state
+  # carried through (D-4041).
   [[ -n "$prev_state" ]] || exit 0
   _hook_fresh_read
   [[ -n "$fr_state" ]] || exit 0

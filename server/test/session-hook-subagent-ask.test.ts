@@ -308,7 +308,11 @@ exec "$REAL_JQ" "$@"
 
   it('nor is it carried by a subagent tool event whose prefilter saw waiting: a corrupt state arriving after it writes working', () => {
     for (const bad of ['wait\ning', 'waitingx']) {
+      // The previous iteration left the shim on PATH, and the shim execs nothing without REAL_JQ: take it out before
+      // the ask, so every iteration writes a real `waiting` and the prefilter really sees it (review 402 F6).
+      fs.rmSync(path.join(home, 'bin', 'jq'), { force: true });
       askViaPermission();
+      expect(readState(), JSON.stringify(bad)).toMatchObject({ state: 'waiting' });
       installShim();
       const corrupt = JSON.stringify({ v: 1, state: bad, event: 'PermissionRequest', sessionId: 'uuid-1', pid: 4242,
         updatedAt: 1, ask: { questions: Q.questions }, subagents: [], graphQueries: 0, graphGateDenials: 0 });
