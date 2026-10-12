@@ -834,7 +834,12 @@ describe('every jq `as $name` binding in the hook is parenthesised on its own (j
     expect(programs.map((p) => p.name), 'the merge strip is among them').toContain('MERGE_STRIP_JQ');
     // A FLOOR, so the scan can never go vacuous: a deleted jq call lowers these, and the
     // number is then re-measured here rather than silently accepted.
-    expect(programs.length, 'jq programs found').toBeGreaterThanOrEqual(52);
+    // FLOOR 51, composition: what LEFT is the Start/Stop arm's three single-field reads of the
+    // file (`.ask // null`, `.interrupted == true`, `.waitBy == "subagent"`), which the D-4041
+    // fork fold replaced with ONE shared fresh read (`_hook_fresh_read`) that answers state, who
+    // raised the wait, the ask, `interrupted`, `updatedAt` and `event` together. The floor stood at 52
+    // before that fold; the count now measures 51; the 33 `as $` bindings below did not change.
+    expect(programs.length, 'jq programs found').toBeGreaterThanOrEqual(51);
     expect(asBindings(programs), '`as $` bindings found').toBeGreaterThanOrEqual(33);
     // Coverage by EQUALITY, not floors: every `as $` in a non-comment line of the hook
     // sits inside a program the extractor read, so a binding it cannot reach reds here.

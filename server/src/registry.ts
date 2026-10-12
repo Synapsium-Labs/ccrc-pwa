@@ -1261,7 +1261,12 @@ export const UNMEASURED_ASK_AT = -1;
  * near sufficient for one: `ccd/session-hook.sh` stamps it on EVERY write,
  * and its `SubagentStart`/`SubagentStop` arm re-reads `.ask` straight back
  * off the file, so a subagent event on a session blocked at a dialog rewrites
- * the identical envelope under a fresh number. Read alone, this function
+ * the identical envelope under a fresh number. (That sentence no longer holds
+ * for a MAIN-thread wait since D-4041: the hook keeps that wait's `updatedAt`
+ * and `event` and adds `aliveAt`, so such a subagent event moves nothing this
+ * function compares. It still holds for a wait a SUBAGENT raised, stored as
+ * `waitBy:"subagent"`, which is not carried and is rewritten under a fresh
+ * stamp, and for any other bump.) Read alone, this function
  * therefore refused parents over bumps nobody made — permanently, because
  * nothing re-stamped the row. It is now half of a pair: `CoordStore.restampAsk`
  * advances `askAt` on the ticks where `detectDialogs` has just re-scraped the
