@@ -47,6 +47,16 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-12 11:19 — ALL THREE ORPHANS ARE COLLECTED.**
+  - **Collects:**
+    - `ccrc-pwa-still-harbor` (run 364) at 11:15:14 (record `…1791803712119500698.4034814`);
+    - `MekWarLive-brisk-canyon` (run 363) at 11:17:33 (record `…1791803851729873736.216665`).
+  - **The lane's behaviour.** It took them one at a time, and each witness was dropped. No row was `failed` or `quarantine-kept`.
+  - **Re-measured read-only (`ls`):**
+    - both leaves and both witnesses are gone;
+    - `$REG/tmpquarantine/` and `~/.cc-tmp/.ccd-quarantine/` are empty.
+  - **What is left.** `ccrc-pwa-clear-summit` (run 347) stands, leaf and witness. It is refused `containment-unproven`: a nested git worktree inside its temp root names a git directory that is gone. It is a person's to remove, and the collector never takes it.
+
 - **2026-10-12 11:06 — THE FIRST LIVE COLLECT: `ccrc-pwa-brisk-prairie` (child of run 369), at 11:05:07.**
   - **The sequence.** The lane read the new marker at 11:02:42 (feed seq 16633, "now live"). The act followed at 11:05:04, with record `ccrc-pwa-brisk-prairie.1791803104297524425.2645416`.
   - **The two-audit rule held.** The gap of about 2.5 minutes fits two fresh audits at least `COLLECT_OBSERVE_INTERVAL_MS` (60 s, `watch.ts:202`) apart after the switch cleared the pairs.
