@@ -31,7 +31,8 @@ import * as rFx from './historyFixtures.js';
 import { DatabaseSync as RDatabaseSync } from 'node:sqlite';
 import type { GrepArgs as RGrepArgs } from '../../ccd/history/lib.mjs';
 import { brotliDecompressSync as t16brotli } from 'node:zlib';
-import { randomBytes as t16random } from 'node:crypto';
+import { randomBytes as t16random, createHash as t18createHash } from 'node:crypto';
+import { DEFAULT_TEST_ROSTER as t18roster } from './helpers.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
 
 removeTmpFixturesEachTest();
@@ -3385,5 +3386,557 @@ describe.skipIf(process.platform === 'darwin')('DM17 (CLI half) and C45: a newer
     const st = rH.runCli(box, ['status', '--json']);
     expect(st.json?.['user_version']).toBe(2);
     expect(st.json?.['migration']).toBe('refuse-newer');
+  }, HEAVY);
+});
+
+// ── W1-B2 Task 18: output redaction across every verb ───────────────────────────────────────────────────────
+// Pins C32, C33, C49, C59, C60, C69 and DM31's CLI half. Every fixture secret is minted at runtime; a shape-matched one
+// is joined from parts. A "leak" is any 8 consecutive characters of a secret in any stdout, or in the text one
+// item printed across pages, joined.
+const t18hex = (bytes: number): string => t16random(bytes).toString('hex');
+const t18alnum = (n: number): string => {
+  const a = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  return Array.from(t16random(n), (b) => a[b % a.length]!).join('');
+};
+const t18ts = (i: number): string => new Date(Date.UTC(2026, 9, 3, 10, 0, i)).toISOString();
+const t18uuid = (tag: string, i: number): string => `${tag}-0000-4000-8000-${String(i).padStart(12, '0')}`;
+/** A secret file under the fixture HOME, 0600 in a 0700 directory, as ccrc keeps them. */
+function t18secret(box: rH.HistoryBox, rel: string, body: string): string {
+  const p = path.join(box.home, rel);
+  fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(p, body, { mode: 0o600 });
+  return p;
+}
+/** Every 8-character window of `secret` found in any of `texts`, with the text's index. */
+function t18leaks(texts: readonly string[], secret: string): string[] {
+  const windows = Array.from({ length: secret.length - 7 }, (_, i) => secret.slice(i, i + 8));
+  const out: string[] = [];
+  texts.forEach((t, i) => { for (const w of windows) if (t.includes(w)) { out.push(`#${i}: ${w}`); break; } });
+  return out;
+}
+/** The FTS index's own bytes, as latin1 (B1 Task 23's measure). */
+function t18ftsBytes(box: rH.HistoryBox): string {
+  const db = rH.openStoreRO(box);
+  try {
+    return (db.prepare('SELECT block FROM blobs_fts_data').all() as { block: Uint8Array }[]).map((r) => Buffer.from(r.block).toString('latin1')).join('');
+  } finally { db.close(); }
+}
+/** One leaf over `sources`: a manual boundary whose head is the last source, keeping no row, and its summary. */
+function t18leafRows(tag: string, sid: string, sources: object[], summary: string): object[] {
+  const n = sources.length;
+  const last = t18uuid(tag, n);
+  return [
+    ...sources,
+    rFx.boundaryRow({ uuid: t18uuid(tag, n + 1), ts: t18ts(n + 1), parentUuid: last, sessionId: sid, trigger: 'manual',
+      headUuid: last, anchorUuid: t18uuid(tag, n + 2), tailUuid: last, allUuids: [] }),
+    rFx.summaryRow({ uuid: t18uuid(tag, n + 2), ts: t18ts(n + 2), parentUuid: t18uuid(tag, n + 1), sessionId: sid, text: summary }),
+  ];
+}
+function t18leafOf(box: rH.HistoryBox, id: string): string {
+  const db = rH.openStoreRO(box);
+  try {
+    const row = db.prepare(`SELECT n.node_id AS node_id FROM nodes n JOIN sessions s ON s.session_pk = n.session_pk
+      WHERE s.ccrc_id = ? AND n.kind <> 'condensed'`).get(id) as { node_id: string } | undefined;
+    expect(row?.node_id, `CONTROL: ${id}'s leaf was derived`).toMatch(/^L[0-9a-f]{20}$/);
+    return row!.node_id;
+  } finally { db.close(); }
+}
+const t18cursor = (s: string): string | null => {
+  const m = [...s.matchAll(/--cursor '?([A-Za-z0-9_-]+)'?/g)];
+  return m.length === 0 ? null : m[m.length - 1]![1]!;
+};
+type T18Run = { code: number | null; stdout: string; json: Record<string, unknown> | null };
+/** Every page of a paged verb, human or --json, following its cursors. */
+function t18pages(run: (args: string[]) => T18Run, args: string[]): T18Run[] {
+  const out: T18Run[] = [];
+  let cursor: string | null = null;
+  do {
+    const r = run([...args, ...(cursor === null ? [] : ['--cursor', cursor])]);
+    expect(r.code, args.join(' ')).toBe(0);
+    out.push(r);
+    cursor = t18cursor(r.json === null ? r.stdout : String(r.json['next'] ?? ''));
+  } while (cursor !== null && out.length < 30);
+  return out;
+}
+
+describe.skipIf(process.platform === 'darwin')('C32, C33 and DM31: values, the agent bearer, a session token, gists and the next: echo (Task 18)', () => {
+  const ID = 'claude-a-x18a';
+  const T = 'a1800001';
+  const U = t18uuid(T, 0);
+  const e = (i: number): string => t18uuid(T, i);
+  const V = t18hex(32);
+  const D = t18hex(32);
+  const K = t18hex(32);
+  const P = t18hex(32);
+  const A = t18hex(32);
+  /** A 43-character session token in the base64url alphabet, alphanumeric only: one value-layer run, and one
+   *  index term (unicode61 would split a `-` or `_` into two, which the index-bytes check could not see). */
+  const TOK = t18alnum(43);
+  let box: rH.HistoryBox;
+  let leaf = '';
+  const cli = (args: string[]): T18Run => rH.runCli(box, args, { env: rH.withPane(box, ID) });
+
+  beforeAll(() => {
+    box = rH.makeHistoryBox('ccrc-hist-x18a-');
+    // Every source is in place before the first tick, so the index and the gists are made from redacted text.
+    t18secret(box, '.cc-secrets/x18a.env', `ZQ_X18_VALUE=${V}\nZQ_X18_GIST=${K}\nZQ_X18_DM31=${P}\n`);
+    t18secret(box, '.ccrc/agent.env', `CCRC_AGENT_TOKEN=${A}\nCCRC_AGENT_LABEL=fixture-agent-label-value-0001\n`);
+    t18secret(box, '.ccrc/sessions.json', JSON.stringify([{ idHash: t18createHash('sha256').update(TOK).digest('hex'), createdMs: 1 }]));
+    const summary = ['<summary>', '1. Primary Request and Intent:', '   zqx18a intent', '8. Current Work:', `   zqc33 rotating ${K} now`,
+      '9. Optional Next Step:', '   zqc33 next step', '</summary>'].join('\n');
+    rH.seedFamily(box, { id: ID, project: 'demo', generation: '0189abcd-1234-4678-9abc-00000000a018', uuid: U, rows: t18leafRows(T, U, [
+      rFx.userRow({ uuid: e(1), ts: t18ts(1), sessionId: U, text: `zqc32row ${V} digest ${D}` }),
+      rFx.userRow({ uuid: e(2), ts: t18ts(2), parentUuid: e(1), sessionId: U, text: `zqc32agent bearer ${A} label fixture-agent-label-value-0001` }),
+      rFx.userRow({ uuid: e(3), ts: t18ts(3), parentUuid: e(2), sessionId: U, text: `zqc32session cookie ${TOK}` }),
+      rFx.toolUseRow({ uuid: e(4), ts: t18ts(4), parentUuid: e(3), sessionId: U, toolUseId: 'toolu_01X18A1', name: K, input: { command: 'zqc33tool run one' } }),
+      rFx.toolResultRow({ uuid: e(5), ts: t18ts(5), parentUuid: e(4), sessionId: U, toolUseId: 'toolu_01X18A1', content: 'ok one' }),
+      rFx.toolUseRow({ uuid: e(6), ts: t18ts(6), parentUuid: e(5), sessionId: U, toolUseId: 'toolu_01X18A2', name: K, input: { command: 'zqc33tool run two' } }),
+      rFx.toolResultRow({ uuid: e(7), ts: t18ts(7), parentUuid: e(6), sessionId: U, toolUseId: 'toolu_01X18A2', content: 'ok two' }),
+      rFx.userRow({ uuid: e(8), ts: t18ts(8), parentUuid: e(7), sessionId: U, text: `zqdm31 the key is ${P} ok` }),
+      rFx.assistantRow({ uuid: e(9), ts: t18ts(9), parentUuid: e(8), sessionId: U, text: 'zqx18a done' }),
+    ], summary) });
+    expect(rH.runSweep(box).code).toBe(0);
+    leaf = t18leafOf(box, ID);
+  }, 240_000);
+
+  it('C32: a secret-file value is redacted in grep, expand and --json while an unrelated digest prints; the agent bearer and a session token likewise, and neither is in the index', () => {
+    const outs = (word: string, uuid: string): string[] => [cli(['grep', word]).stdout, cli(['grep', word, '--json']).stdout,
+      cli(['expand', uuid]).stdout, cli(['expand', uuid, '--json']).stdout];
+    const row = outs('zqc32row', e(1));
+    expect(row[2], 'CONTROL: the row is printed').toContain('zqc32row');
+    expect(t18leaks(row, V)).toEqual([]);
+    expect(row[2], 'an unrelated 64-hex digest is not a secret').toContain(D);
+    const agent = outs('zqc32agent', e(2));
+    expect(t18leaks(agent, A)).toEqual([]);
+    expect(agent[2], 'agent.env is read by identifier keys only: a LABEL is printed').toContain('fixture-agent-label-value-0001');
+    expect(t18leaks(outs('zqc32session', e(3)), TOK)).toEqual([]);
+    const fts = t18ftsBytes(box);
+    // unicode61 folds case, so an indexed term is stored lowercase.
+    expect(fts.includes(A.slice(16, 32).toLowerCase()), 'the agent bearer is no index byte').toBe(false);
+    expect(fts.includes(TOK.slice(8, 24).toLowerCase()), 'the session token is no index byte').toBe(false);
+  }, HEAVY);
+
+  it('C32: what the loader persists is (len, sha256) only: its pairs, redact_hashes and the journal hold no value (slug history-loader-values-in-tick-memory)', async () => {
+    // B1's loadSecrets also returns the values, for the tick's re-index; they live in that process's memory only.
+    // This case pins what leaves it: the pairs, the redact_hashes table, and every journal byte.
+    const sweep = await import('../../ccd/history/sweep.mjs') as unknown as { loadSecrets(home: string, files: string[]): { pairs: Array<Record<string, unknown>> } };
+    const loaded = sweep.loadSecrets(box.home, []);
+    expect(loaded.pairs.length).toBeGreaterThan(0);
+    for (const p of loaded.pairs) expect(Object.keys(p).sort()).toEqual(['len', 'sha256']);
+    const text = JSON.stringify(loaded.pairs);
+    for (const s of [V, A, TOK, K, P]) expect(text.includes(s)).toBe(false);
+    const db = rH.openStoreRO(box);
+    try {
+      const cols = (db.prepare('PRAGMA table_info(redact_hashes)').all() as { name: string }[]).map((c) => c.name);
+      expect(cols, 'redact_hashes has no column a value could sit in').toEqual(['len', 'sha256', 'first_seen_ms']);
+    } finally { db.close(); }
+    const files: string[] = [];
+    const walk = (d: string): void => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (e.isFile()) files.push(p);
+      }
+    };
+    walk(libRead.historyPaths(box.home).journalDir);
+    expect(files.length, 'CONTROL: the ticks journaled').toBeGreaterThan(0);
+    const bytes = files.map((f) => fs.readFileSync(f).toString('latin1')).join('\n');
+    for (const s of [V, A, TOK, K, P]) expect(bytes.includes(s), 'no journal byte holds a loaded value').toBe(false);
+  }, HEAVY);
+
+  it('C33: a token in a describe gist, a tree gist and a next: echo of the query is redacted', () => {
+    const d = [cli(['describe', leaf]).stdout, cli(['describe', leaf, '--json']).stdout];
+    expect(d[0], 'CONTROL: the gist is shown').toContain('zqc33 rotating');
+    const t = [cli(['tree']).stdout, cli(['tree', '--json']).stdout];
+    const g = [cli(['grep', 'zqc33tool', '--tool', K, '--limit', '1']).stdout, cli(['grep', 'zqc33tool', '--tool', K, '--limit', '1', '--json']).stdout];
+    expect(g[0], 'CONTROL: two hits over a limit of one print a next: line echoing the query').toMatch(/^next: /m);
+    expect(t18leaks([...d, ...t, ...g], K)).toEqual([]);
+  }, HEAVY);
+
+  it('DM31 (CLI half): a planted token is no FTS prefix and no --regex match: both exit 3', () => {
+    expect(cli(['grep', 'zqdm31']).code, 'CONTROL: the row itself is indexed').toBe(0);
+    expect(cli(['grep', `"${P.slice(0, 6)}"*`]).code).toBe(3);
+    expect(cli(['grep', '--regex', P.slice(0, 10)]).code).toBe(3);
+  }, HEAVY);
+});
+
+describe.skipIf(process.platform === 'darwin')('C59: redaction before every cut, escape and page (Task 18)', () => {
+  const ID = 'claude-a-x18c59';
+  const T = 'a1800002';
+  const U = t18uuid(T, 0);
+  const e = (i: number): string => t18uuid(T, i);
+  const S = { nl: t18hex(32), tab: t18hex(32), tool: t18hex(32), cut: t18hex(32), snip: t18hex(32), sgr: t18hex(32), page: t18hex(32), excerpt: t18hex(32), full: t18hex(32) };
+  const SK = ['s', 'k-', t18alnum(40)].join('');
+  const GHO = ['gh', 'o_', t18alnum(36)].join('');
+  const PEM_LINES = [`MII${t18alnum(40)}`, t18alnum(43), t18alnum(43)];
+  const PEM = ['-----BEGIN ', 'RSA PRIVATE KEY-----\n', PEM_LINES.join('\n'), '\n-----END RSA PRIVATE KEY-----'].join('');
+  const LEAD = '<summary>\n1. Primary Request and Intent:\n';
+  // 41 + 2 * 1969 + 1 = 3980, ending in a space: the excerpt secret is its own value-layer run, starting 20 characters
+  // before describe's 4k cut.
+  const PRE = `${LEAD}${'v '.repeat((3980 - LEAD.length) >> 1)} `;
+  let box: rH.HistoryBox;
+  let leaf = '';
+  const cli = (args: string[]): T18Run => rH.runCli(box, args, { env: rH.withPane(box, ID) });
+
+  beforeAll(() => {
+    expect(PRE.length, 'CONTROL: the excerpt secret starts 20 characters before describe\'s 4k cut').toBe(3980);
+    box = rH.makeHistoryBox('ccrc-hist-x18c59-');
+    t18secret(box, '.cc-secrets/x18c59.env', Object.entries(S).map(([k, v]) => `ZQ_C59_${k.toUpperCase()}=${v}`).join('\n') + '\n');
+    const summary = `${PRE}${S.excerpt}\n8. Current Work:\n   zqc59 current work\n9. Optional Next Step:\n   zqc59 next step\n`
+      + `${Array.from({ length: 2000 }, () => S.full).join(' ')}\n</summary>`;
+    rH.seedFamily(box, { id: ID, project: 'demo', generation: '0189abcd-1234-4678-9abc-00000000b018', uuid: U, rows: t18leafRows(T, U, [
+      rFx.userRow({ uuid: e(1), ts: t18ts(1), sessionId: U, text: `zqc59nl line\n${S.nl}\tafter\t${S.tab}` }),
+      rFx.toolUseRow({ uuid: e(2), ts: t18ts(2), parentUuid: e(1), sessionId: U, toolUseId: 'toolu_01C59BASH', name: 'Bash', input: { command: `deploy --key\n${S.tool}` } }),
+      rFx.toolResultRow({ uuid: e(3), ts: t18ts(3), parentUuid: e(2), sessionId: U, toolUseId: 'toolu_01C59BASH', content: `${'p '.repeat(995)}${S.cut} ${'q '.repeat(1500)}` }),
+      rFx.toolUseRow({ uuid: e(4), ts: t18ts(4), parentUuid: e(3), sessionId: U, toolUseId: 'toolu_01C59PEM', name: 'Read', input: { file_path: '/home/u/tree/demo/key.pem' } }),
+      rFx.toolResultRow({ uuid: e(5), ts: t18ts(5), parentUuid: e(4), sessionId: U, toolUseId: 'toolu_01C59PEM', content: `${'r '.repeat(950)}${PEM}\n${'s '.repeat(1500)}` }),
+      rFx.userRow({ uuid: e(6), ts: t18ts(6), parentUuid: e(5), sessionId: U, text: `zqc59snip ${'u '.repeat(10)}${S.snip} tail words` }),
+      rFx.userRow({ uuid: e(7), ts: t18ts(7), parentUuid: e(6), sessionId: U, text: `zqc59shape x\n${SK}\ny\n${GHO}` }),
+      rFx.userRow({ uuid: e(8), ts: t18ts(8), parentUuid: e(7), sessionId: U, text: `zqc59sgr \x1b[32m${S.sgr}\x1b[0m done` }),
+      rFx.userRow({ uuid: e(9), ts: t18ts(9), parentUuid: e(8), sessionId: U, text: `zqc59page ${Array.from({ length: 2000 }, () => S.page).join(' ')}` }),
+      rFx.assistantRow({ uuid: e(10), ts: t18ts(10), parentUuid: e(9), sessionId: U, text: 'zqc59 done' }),
+    ], summary) });
+    expect(rH.runSweep(box).code).toBe(0);
+    leaf = t18leafOf(box, ID);
+  }, 240_000);
+
+  it('no output, page or pair of pages prints 8 characters of any secret, and every --json output parses', () => {
+    const expandHuman = t18pages((a) => cli(a), ['expand', leaf]);
+    const expandJson = t18pages((a) => cli(a), ['expand', leaf, '--json']);
+    const describeJson = t18pages((a) => cli(a), ['describe', leaf, '--full', '--json']);
+    const singles = [cli(['describe', leaf]), cli(['describe', leaf, '--json']), cli(['grep', 'zqc59snip']), cli(['grep', 'zqc59snip', '--json']),
+      cli(['grep', 'zqc59shape', '--json']), cli(['expand', e(1), '--json']), cli(['expand', e(2), '--json']), cli(['expand', e(8), '--json'])];
+    const runs = [...expandHuman, ...expandJson, ...describeJson, ...singles];
+    expect(expandJson.length, 'CONTROL: even redacted, the page region spans more than one expand page').toBeGreaterThan(1);
+    expect(describeJson.length, 'CONTROL: even redacted, the summary spans more than one --full page').toBeGreaterThan(1);
+    for (const r of [...expandJson, ...describeJson, ...singles.filter((_, i) => [1, 3, 4, 5, 6, 7].includes(i))]) {
+      expect(r.json, 'every --json output parses').not.toBeNull();
+    }
+    // The text each expand item printed across pages, joined in page order, is checked whole as well.
+    const joined = new Map<string, string>();
+    for (const r of expandJson) for (const it of (r.json?.['items'] ?? []) as { uuid: string; kind: string; text: string }[]) {
+      const k = `${it.kind}:${it.uuid}`;
+      joined.set(k, (joined.get(k) ?? '') + it.text);
+    }
+    const texts = [...runs.map((r) => r.stdout), ...joined.values()];
+    const named: Array<[string, string]> = [...Object.entries(S), ['sk', SK], ['gho', GHO], ...PEM_LINES.map((l, i): [string, string] => [`pem${i}`, l])];
+    for (const [name, secret] of named) expect(t18leaks(texts, secret), name).toEqual([]);
+    expect(texts.join('\n'), 'CONTROL: the rows themselves are printed').toContain('zqc59snip');
+    // §8.3's 300-character steer cap clause is vacuous in B2: steering, and with it every steer cap, ships in W3.
+  }, HEAVY);
+
+  it('each item expanded alone, human and --json, page by page: no cut, no page and no pair of pages prints 8 characters of a secret', () => {
+    // The leaf-wide expansion above stops at the first item whose raw cut ends inside an unterminated PEM block: a raw
+    // cut there makes the final pass mask the rest of the output, which hides every later item. Each item alone does not.
+    const runs: T18Run[] = [];
+    const joined = new Map<string, string>();
+    for (let i = 1; i <= 9; i += 1) {
+      const pages = t18pages((a) => cli(a), ['expand', e(i), '--json']);
+      for (const r of pages) expect(r.json, 'every --json page parses').not.toBeNull();
+      runs.push(...pages, ...t18pages((a) => cli(a), ['expand', e(i)]));
+      for (const r of pages) for (const it of (r.json?.['items'] ?? []) as { uuid: string; kind: string; text: string }[]) {
+        const k = `${it.kind}:${it.uuid}`;
+        joined.set(k, (joined.get(k) ?? '') + it.text);
+      }
+    }
+    expect(runs.length, 'CONTROL: the nine items took more than nine pages').toBeGreaterThan(9);
+    const texts = [...runs.map((r) => r.stdout), ...joined.values()];
+    const named: Array<[string, string]> = [...Object.entries(S).filter(([k]) => k !== 'excerpt' && k !== 'full'), ['sk', SK], ['gho', GHO], ...PEM_LINES.map((l, i): [string, string] => [`pem${i}`, l])];
+    expect(texts.join('\n'), 'CONTROL: the rows themselves are printed').toContain('zqc59nl');
+    for (const [name, secret] of named) expect(t18leaks(texts, secret), name).toEqual([]);
+  }, HEAVY);
+});
+
+describe.skipIf(process.platform === 'darwin')('C49: gateway keys redacted by roster; the loader opens nothing under exec.authDir (Task 18)', () => {
+  const ID = 'claude-a-x18c49';
+  const T = 'a1800003';
+  const U = t18uuid(T, 0);
+  const e = (i: number): string => t18uuid(T, i);
+  const SKEY = ['s', 'k-', t18hex(24)].join('');
+  const GWK = t18alnum(40);
+  const Z = t18alnum(40);
+  const AUTH_DIR = '.local/share/ccrc/codex/codex-a';
+  let box: rH.HistoryBox;
+  const cli = (args: string[]): T18Run => rH.runCli(box, args, { env: rH.withPane(box, ID) });
+
+  beforeAll(() => {
+    const roster = structuredClone(t18roster) as { version: number; accounts: Record<string, unknown>[] };
+    roster.accounts.find((a) => a['id'] === 'gpt')!['exec'] = { kind: 'external', secretsFile: '.config/x18-gw/gw.env' };
+    roster.accounts.push({
+      id: 'codex-a', label: 'codex-a', configDirSuffix: '.claude-codex-a', homeAble: false, hue: 'amber', telemetry: 'codex',
+      exec: { kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011, authDir: AUTH_DIR },
+    });
+    box = rH.makeHistoryBox('ccrc-hist-x18c49-', { roster });
+    t18secret(box, '.ccrc/codex/codex-a/runtime.env', `LITELLM_MASTER_KEY=${SKEY}\n`);
+    t18secret(box, '.config/x18-gw/gw.env', `GW_UPSTREAM_KEY=${GWK}\n`);
+    t18secret(box, `${AUTH_DIR}/auth.json`, JSON.stringify({ access_token: Z }));
+    rH.seedFamily(box, { id: ID, project: 'demo', generation: '0189abcd-1234-4678-9abc-00000000c018', uuid: U, rows: [
+      rFx.userRow({ uuid: e(1), ts: t18ts(1), sessionId: U, text: `zqc49 lane key ${SKEY} end` }),
+      rFx.userRow({ uuid: e(2), ts: t18ts(2), parentUuid: e(1), sessionId: U, text: `zqc49 gateway ${GWK} end` }),
+      rFx.userRow({ uuid: e(3), ts: t18ts(3), parentUuid: e(2), sessionId: U, text: `zqc49 oauth ${Z} end` }),
+    ] });
+    // The shim reads the roster's declared secretsFile from accounts.sh and passes it to the sweep (§5.1), which
+    // records its pairs in redact_hashes; the CLI, which sources no bash, uses those (§8.3 layer 1).
+    const r = rH.runShim(box);
+    expect(r.code, r.stderr).toBe(0);
+  }, 240_000);
+
+  it('a codex lane\'s runtime.env key and an external account\'s declared secretsFile key are redacted in grep, expand and --json', () => {
+    const outs = [cli(['grep', 'zqc49']).stdout, cli(['grep', 'zqc49', '--json']).stdout];
+    for (const uuid of [e(1), e(2)]) outs.push(cli(['expand', uuid]).stdout, cli(['expand', uuid, '--json']).stdout);
+    expect(outs.join('\n'), 'CONTROL: the rows are printed').toContain('zqc49 gateway');
+    expect(t18leaks(outs, SKEY)).toEqual([]);
+    expect(t18leaks(outs, GWK)).toEqual([]);
+    expect(t18leaks([t18ftsBytes(box)], GWK.toLowerCase()), 'the sweep indexed the declared key redacted: the CLI reads the file too, so output alone cannot tell').toEqual([]);
+    expect(t18leaks([t18ftsBytes(box)], SKEY.toLowerCase()), 'the sweep indexed the codex lane\'s key redacted: neither fixture value leaves a term (C49, rev 3.5)').toEqual([]);
+  }, HEAVY);
+
+  it('the value under exec.authDir is never loaded: it prints (no shape catches it), no pair holds it, and an unreadable file there is never read', (ctx) => {
+    expect(cli(['expand', e(3)]).stdout).toContain(Z);
+    const db = rH.openStoreRO(box);
+    try {
+      const n = (db.prepare('SELECT count(*) AS n FROM redact_hashes WHERE len = ? AND sha256 = ?')
+        .get(Z.length, t18createHash('sha256').update(Z).digest()) as { n: number }).n;
+      expect(n).toBe(0);
+    } finally { db.close(); }
+    if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file regardless of its mode
+    const auth = path.join(box.home, AUTH_DIR, 'auth.json');
+    fs.chmodSync(auth, 0o000);
+    try {
+      expect(rH.runShim(box).code).toBe(0);
+      const st = rH.runCli(box, ['status', '--json']);
+      expect(st.json?.['redact_unreadable'] as string[]).not.toContain(auth);
+    } finally { fs.chmodSync(auth, 0o600); }
+  }, HEAVY);
+});
+
+describe.skipIf(process.platform === 'darwin')('C60: what a value is (Task 18)', () => {
+  const ID = 'claude-a-x18c60';
+  const T = 'a1800004';
+  const U = t18uuid(T, 0);
+  const e = (i: number): string => t18uuid(T, i);
+  const Q = t18alnum(40);
+  const SEGS = [t18alnum(16), t18alnum(14), t18alnum(13)];
+  const B = `${SEGS[0]}/${SEGS[1]}+${SEGS[2]}==`;
+  const RK = t18alnum(40);
+  let box: rH.HistoryBox;
+  let rot = '';
+  const cli = (args: string[]): T18Run => rH.runCli(box, args, { env: rH.withPane(box, ID) });
+
+  beforeAll(() => {
+    box = rH.makeHistoryBox('ccrc-hist-x18c60-');
+    t18secret(box, '.cc-secrets/x18c60.env',
+      `# a comment line is skipped\nexport ZQ_QUOTED_KEY="${Q}"\nZQ_B64_VALUE=${B}\nCLAUDE_CODE_OAUTH_TOKEN=${t18alnum(40)}\n`);
+    rot = t18secret(box, '.cc-secrets/x18rot.env', `ZQ_ROT_KEY=${RK}\n`);
+    rH.seedFamily(box, { id: ID, project: 'demo', generation: '0189abcd-1234-4678-9abc-00000000d018', uuid: U, rows: [
+      rFx.userRow({ uuid: e(1), ts: t18ts(1), sessionId: U, text: `zqc60 quoted ${Q} end` }),
+      rFx.userRow({ uuid: e(2), ts: t18ts(2), parentUuid: e(1), sessionId: U, text: `zqc60 kv ZQ_ANY=${B} end` }),
+      rFx.userRow({ uuid: e(3), ts: t18ts(3), parentUuid: e(2), sessionId: U, text: `zqc60 url https://example.invalid/cb?state=${B}&x=1 end` }),
+      rFx.userRow({ uuid: e(4), ts: t18ts(4), parentUuid: e(3), sessionId: U, text: `zqc60 bare ${B} end` }),
+      rFx.userRow({ uuid: e(5), ts: t18ts(5), parentUuid: e(4), sessionId: U, text: 'zqc60 name CLAUDE_CODE_OAUTH_TOKEN is set in the lane file' }),
+      rFx.userRow({ uuid: e(6), ts: t18ts(6), parentUuid: e(5), sessionId: U, text: `zqc60 rot ${RK} end` }),
+    ] });
+  }, 240_000);
+
+  it('a quoted export value is redacted; a base64 value holding / and + loses every 12+ segment as KEY=<v>, in a URL and bare; a 23-character key name prints', () => {
+    const outs = [cli(['grep', 'zqc60', '--json']).stdout];
+    for (let i = 1; i <= 5; i += 1) outs.push(cli(['expand', e(i)]).stdout, cli(['expand', e(i), '--json']).stdout);
+    expect(t18leaks(outs, Q)).toEqual([]);
+    for (const seg of SEGS) expect(outs.filter((o) => o.includes(seg)), `segment ${seg.length}`).toEqual([]);
+    expect(cli(['expand', e(5)]).stdout).toContain('CLAUDE_CODE_OAUTH_TOKEN');
+  }, HEAVY);
+
+  it('an unreadable listed file: status WARNs redact-source-unreadable, and the pairs it gave earlier still redact', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file regardless of its mode
+    fs.chmodSync(rot, 0o000);
+    try {
+      expect(rH.runSweep(box).code).toBe(0);
+      const st = rH.runCli(box, ['status', '--json']);
+      expect((st.json?.['health'] as { warn: { word: string }[] }).warn.map((w) => w.word)).toContain('redact-source-unreadable');
+      expect(st.json?.['redact_unreadable'] as string[]).toContain(rot);
+      const outs = [cli(['expand', e(6)]).stdout, cli(['expand', e(6), '--json']).stdout, cli(['grep', 'zqc60', 'rot', '--json']).stdout];
+      expect(outs[0], 'CONTROL: the row is printed').toContain('zqc60 rot');
+      expect(t18leaks(outs, RK)).toEqual([]);
+    } finally { fs.chmodSync(rot, 0o600); }
+  }, HEAVY);
+});
+
+describe.skipIf(process.platform === 'darwin')('the index\'s escape readings at display: no output shows a value the index masked (Task 18; B1\'s D-4343; spec §8.3)', () => {
+  const ID = 'claude-a-x18esc';
+  const T = 'a1800006';
+  const U = t18uuid(T, 0);
+  const e = (i: number): string => t18uuid(T, i);
+  const V = t18hex(32);   // in a row, glued to a literal escape twice
+  const W = t18hex(32);   // in the summary, so in the leaf's gist
+  /** What a tool printing JSON leaves in text: a literal backslash and `n` glued onto the value (B1's review 316 F2). */
+  const glued = (v: string): string => JSON.stringify({ text: `\n${v}` });
+  let box: rH.HistoryBox;
+  let leaf = '';
+  const cli = (args: string[]): T18Run => rH.runCli(box, args, { env: rH.withPane(box, ID) });
+  /** Every nodes_fts row's stored text (nodes_fts keeps its content, unlike the contentless blobs_fts). */
+  const nodeRows = (): string[] => {
+    const db = rH.openStoreRO(box);
+    try {
+      return (db.prepare('SELECT gist, topics, refs FROM nodes_fts').all() as Array<Record<string, string | null>>)
+        .map((r) => `${r['gist'] ?? ''}\n${r['topics'] ?? ''}\n${r['refs'] ?? ''}`);
+    } finally { db.close(); }
+  };
+
+  beforeAll(() => {
+    box = rH.makeHistoryBox('ccrc-hist-x18esc-');
+    // Both values are PAIRS ONLY by the time the leaf is derived and the CLI runs. A first tick records their pairs
+    // from the secret file, which is then rewritten without them: a value no source still holds keeps its pair
+    // (redact_hashes only grows) but is no belt unit (Task 7A's belt holds the values loaded now). So only the escape
+    // readings find either value behind a literal `\n`: redactField's one reading sees the run `n<value>`, which no pair
+    // matches, and layer 1's glue windows bound a window only at a run end, `_` or `-`.
+    const file = t18secret(box, '.cc-secrets/x18esc.env', `ZQ_ESC_ROW=${V}\nZQ_ESC_GIST=${W}\n`);
+    expect(rH.runSweep(box).code).toBe(0);
+    fs.writeFileSync(file, `ZQ_ESC_OTHER=${t18hex(32)}\n`, { mode: 0o600 });
+    const summary = ['<summary>', '1. Primary Request and Intent:', '   zqesc intent', '8. Current Work:',
+      `   zqescgist printed ${glued(W)} here`, '9. Optional Next Step:', '   zqesc next step', '</summary>'].join('\n');
+    rH.seedFamily(box, { id: ID, project: 'demo', generation: '0189abcd-1234-4678-9abc-00000000f018', uuid: U, rows: t18leafRows(T, U, [
+      // The value starts 20 characters after the hit word, inside grep's snippet window (24 before, 40 after).
+      rFx.userRow({ uuid: e(1), ts: t18ts(1), sessionId: U, text: `zqescrow ${glued(V)} then \\u005cn${V} done` }),
+      rFx.assistantRow({ uuid: e(2), ts: t18ts(2), parentUuid: e(1), sessionId: U, text: 'zqesc done' }),
+    ], summary) });
+    expect(rH.runSweep(box).code).toBe(0);
+    leaf = t18leafOf(box, ID);
+    const db = rH.openStoreRO(box);
+    try {
+      const pairs = db.prepare('SELECT count(*) AS n FROM redact_hashes WHERE len = ? AND sha256 = ?');
+      for (const v of [V, W]) {
+        expect((pairs.get(v.length, t18createHash('sha256').update(v).digest()) as { n: number }).n,
+          'CONTROL: the first tick recorded the value\'s pair').toBe(1);
+      }
+    } finally { db.close(); }
+  }, 240_000);
+
+  it('grep and its snippet, expand, describe and tree, human and --json, and grep --regex show no 8 characters of either value', () => {
+    const runs = [cli(['grep', 'zqescrow']), cli(['grep', 'zqescrow', '--json']), cli(['expand', e(1)]), cli(['expand', e(1), '--json']),
+      cli(['describe', leaf]), cli(['describe', leaf, '--json']), cli(['tree']), cli(['tree', '--json']), cli(['grep', '--regex', 'zqescrow'])];
+    for (const r of runs) expect(r.code, r.stdout).toBe(0);
+    const texts = runs.map((r) => r.stdout);
+    expect(texts[2], 'CONTROL: the row is printed').toContain('zqescrow');
+    expect(texts[4], 'CONTROL: the gist is printed').toContain('zqescgist');
+    expect(t18leaks(texts, V)).toEqual([]);
+    expect(t18leaks(texts, W)).toEqual([]);
+  }, HEAVY);
+
+  it('nodes_fts holds neither value, as Task 8 derives the row and as Task 9\'s backfill re-inserts it (lib\'s nodeIndexTexts)', () => {
+    expect(nodeRows().join('\n'), 'CONTROL: the leaf is indexed').toContain('zqescgist');
+    expect(t18leaks(nodeRows(), W), 'as derived (Task 8 indexNode)').toEqual([]);
+    const w = new DatabaseSync(libRead.historyPaths(box.home).dbFile);
+    try {
+      w.exec('DELETE FROM nodes_fts');
+      w.prepare("UPDATE derivation_state SET cursor = '0' WHERE step = 'nodes-fts'").run();
+    } finally { w.close(); }
+    expect(rH.runSweep(box).code).toBe(0);
+    expect(nodeRows().join('\n'), 'CONTROL: the backfill re-inserted the row').toContain('zqescgist');
+    expect(t18leaks(nodeRows(), W), 'as re-inserted (Task 9 insertNodeFts)').toEqual([]);
+  }, HEAVY);
+});
+
+describe.skipIf(process.platform === 'darwin')('C69: the substring belt on every verb, the index and --regex (Tasks 7A, 7B, 10, 14, 18; spec §8.3 layer 4)', () => {
+  const ID = 'claude-a-x18c69';
+  const T = 'a1800005';
+  const U = t18uuid(T, 0);
+  const e = (i: number): string => t18uuid(T, i);
+  const ESC = String.fromCharCode(27);
+  const BS = String.fromCharCode(92);
+  /** Review 351's shape: `Q`, a CSI final byte (`P`), 29 letters and digits, a digit. */
+  const V = `QP${t18alnum(29)}7`;
+  /** A declared secretsFile's key, which only the shim names: the CLI reads its file through meta redact_sources. */
+  const G = `${t18alnum(39)}7`;
+  /** A 64-hex value, printed upper-cased in the summary a leaf's gist is taken from. */
+  const H = t18hex(32);
+  /** V with every eighth character a JSON escape: no literal piece reaches V's belt width. */
+  const SPLIT = [...V].map((c, i) => (i % 8 === 7 ? `${BS}u00${c.charCodeAt(0).toString(16)}` : c)).join('');
+  let box: rH.HistoryBox;
+  let leaf = '';
+  const cli = (args: string[]): T18Run => rH.runCli(box, args, { env: rH.withPane(box, ID) });
+  /** Each text holding beltWidth(secret) consecutive characters of `secret`, case folded. */
+  const beltLeaks = (texts: readonly string[], secret: string): string[] => {
+    const w = libRead.beltWidth(secret);
+    const out: string[] = [];
+    texts.forEach((t, i) => {
+      const low = t.toLowerCase();
+      for (let k = 0; k + w <= secret.length; k += 1) {
+        if (low.includes(secret.slice(k, k + w).toLowerCase())) { out.push(`#${i}: ${secret.slice(k, k + w)}`); break; }
+      }
+    });
+    return out;
+  };
+  /** `s` as a reader decodes it: JSON escapes undone, three levels deep. */
+  const decoded = (s: string): string => {
+    let t = s;
+    for (let k = 0; k < 3; k += 1) t = t.split(`${BS}${BS}`).join(BS).replace(/\\u([0-9a-fA-F]{4})/g, (_m, h: string) => String.fromCharCode(parseInt(h, 16)));
+    return t;
+  };
+  /** Every term of an FTS table (fts5vocab, so a value inside a longer term is seen and no prefix compression hides it):
+   *  blobs_fts for the rows, nodes_fts for the leaf whose gist is taken from the summary that holds H. */
+  const termsOf = (table: 'blobs_fts' | 'nodes_fts'): string[] => {
+    const db = rH.openStoreRO(box);
+    try {
+      db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS temp.c69_${table} USING fts5vocab(main, ${table}, 'row')`);
+      return (db.prepare(`SELECT term FROM temp.c69_${table}`).all() as { term: string }[]).map((r) => r.term);
+    } finally { db.close(); }
+  };
+  const terms = (): string[] => termsOf('blobs_fts');
+
+  beforeAll(() => {
+    const roster = structuredClone(t18roster) as { version: number; accounts: Record<string, unknown>[] };
+    roster.accounts.find((a) => a['id'] === 'gpt')!['exec'] = { kind: 'external', secretsFile: '.config/x18c69-gw/gw.env' };
+    box = rH.makeHistoryBox('ccrc-hist-x18c69-', { roster });
+    t18secret(box, '.cc-secrets/x18c69.env', `ZQ_C69_V=${V}\nZQ_C69_H=${H}\n`);
+    t18secret(box, '.config/x18c69-gw/gw.env', `GW_C69_KEY=${G}\n`);
+    const summary = ['<summary>', '1. Primary Request and Intent:', '   zqc69 intent', '8. Current Work:', `   zqc69 work ${H.toUpperCase()} now`,
+      '9. Optional Next Step:', '   zqc69 next step', '</summary>'].join('\n');
+    rH.seedFamily(box, { id: ID, project: 'demo', generation: '0189abcd-1234-4678-9abc-00000000e018', uuid: U, rows: t18leafRows(T, U, [
+      rFx.userRow({ uuid: e(1), ts: t18ts(1), sessionId: U, text: `zqc69 csi w ${V[0]}${ESC}[0m${ESC}[${V.slice(1)} y` }),
+      rFx.userRow({ uuid: e(2), ts: t18ts(2), parentUuid: e(1), sessionId: U, text: `zqc69 glued ab_${V}_tail and ab${V}cd end` }),
+      rFx.userRow({ uuid: e(3), ts: t18ts(3), parentUuid: e(2), sessionId: U, text: `zqc69 split cfg "${SPLIT}" end` }),
+      rFx.userRow({ uuid: e(4), ts: t18ts(4), parentUuid: e(3), sessionId: U, text: `zqc69 gateway xq${G}zz end` }),
+      rFx.assistantRow({ uuid: e(5), ts: t18ts(5), parentUuid: e(4), sessionId: U, text: 'zqc69 done' }),
+    ], summary) });
+    // The shim passes the declared secretsFile to the sweep, which records its path in meta redact_sources.
+    const r = rH.runShim(box);
+    expect(r.code, r.stderr).toBe(0);
+    leaf = t18leafOf(box, ID);
+  }, 240_000);
+
+  it('grep, expand, describe and tree, human and --json, print no belt-width stretch of any value, read as written or decoded', () => {
+    const runs: T18Run[] = [cli(['grep', 'zqc69']), cli(['grep', 'zqc69', '--json'])];
+    for (let i = 1; i <= 4; i += 1) runs.push(cli(['expand', e(i)]), cli(['expand', e(i), '--json']));
+    runs.push(cli(['describe', leaf]), cli(['describe', leaf, '--json']), cli(['tree']), cli(['tree', '--json']));
+    for (const r of runs) expect(r.code, r.stdout).toBe(0);
+    const outs = runs.map((r) => r.stdout);
+    expect(outs.join('\n'), 'CONTROL: the rows are printed').toContain('zqc69 glued');
+    for (const s of [V, G, H]) {
+      expect(beltLeaks(outs, s), s.slice(0, 6)).toEqual([]);
+      expect(beltLeaks(outs.map(decoded), s), `${s.slice(0, 6)} decoded as a reader would`).toEqual([]);
+    }
+  }, HEAVY);
+
+  it('no index term holds a belt-width stretch; the stray-CSI remnant is no MATCH, and a stretch is no --regex hit (exit 3)', () => {
+    const t = terms();
+    expect(t, 'CONTROL: the rows are indexed').toContain('zqc69');
+    for (const s of [V, G, H]) expect(beltLeaks(t, s), s.slice(0, 6)).toEqual([]);
+    // H is in the summary only, and summary provenance is no blobs_fts term (INDEXED_PROVENANCE), so the loop above
+    // cannot see H's index half: nodes_fts, which indexes the leaf's gist (Current Work, the line holding H), can.
+    const nt = termsOf('nodes_fts');
+    expect(nt, 'CONTROL: H\'s leaf has a nodes_fts row, from the gist line that holds H').toContain('now');
+    expect(beltLeaks(nt, H), 'nodes_fts holds no belt-width stretch of H').toEqual([]);
+    expect(cli(['grep', V.slice(1)]).code, 'the 31 characters a stray CSI left').toBe(3);
+    // An unanchored literal is no whole word, so regexPrefilter answers null and the child scans every in-scope blob.
+    expect(cli(['grep', '--regex', V.slice(2, 16)]).code).toBe(3);
+    expect(cli(['grep', '--regex', G.slice(3, 17)]).code).toBe(3);
+  }, HEAVY);
+
+  it('the --regex child names a malformed job in fixed words, never echoing the units it was handed', () => {
+    const worker = path.join(REPO, 'ccd', 'history', 'regex-worker.mjs');
+    const r = spawnSync(process.execPath, ['--no-warnings', worker], { input: `{"belt":["${V}"`, encoding: 'utf8', env: box.env, cwd: box.home });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('the job on stdin is not JSON');
+    expect(r.stderr).not.toContain(V.slice(2, 16));
   }, HEAVY);
 });
