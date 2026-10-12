@@ -93,7 +93,7 @@ Each line binds every task.
   - No overloaded null at a seam.
   - coord.db stays synchronous; never wrap it in async.
 - **Wire:** additive only, absence permits, ONE reader per field, no `FLEET_PROTO` bump, and no new L0 wire type.
-- **Single definition:** the predicate and its cap have one definer each (Task 1). No server line re-derives the predicate from `isSessionIdShape` and a `startsWith` (`single-definition.test.ts`'s `REDERIVED` scan). Every gate imports `isRegistryId` from L0 (Task 15).
+- **Single definition:** the predicate and its cap have one definer each (Task 1). No server line re-derives the predicate from `isSessionIdShape` and a `startsWith` (`single-definition.test.ts`'s per-line `REDERIVED` scan, and Task 1's whole-text scan, which also sees a re-derivation split across lines). Every gate imports `isRegistryId` from L0 (Task 15).
 - **Census sentences stay intact.** `registry.test.ts`'s `taggedRegistryCensusClaims` parses every `[registry-read-census:*]` sentence in `server/src` comments. Examples are the `knownId` comment's "745 agent-WS operations [registry-read-census:fleet]" and "31 [registry-read-census:fields]". Keep each number and its tag, and keep them within 40 characters of each other.
   - Any task that rewrites a comment holding one of these sentences runs `registry`.
 - **Guard placement.** Guards sit at the entry of a function or a switch arm, never on a call-site line, because `unattended-actor.test.ts` pins call sites by their surrounding text.
@@ -708,7 +708,7 @@ git show <e1>:ccd/ccd | awk '/^cmd_stop\(\)/,/^}/' | grep -c -- '--surface)'    
 **Interfaces:**
 - Consumes (at `837a099c0`):
   - `isSessionIdShape(s: string): boolean`, `shared/api.ts:6229` (`grep -n "^export function isSessionIdShape" shared/api.ts`), unchanged;
-  - on the test side, `single-definition.test.ts`'s module-scope `ALL`, `rel`, `ccrcRoot` (`:63`, `:64`, `:32`), `readFileSync` and `path` (its imports).
+  - on the test side, `single-definition.test.ts`'s module-scope `ALL`, `rel`, `ccrcRoot` (`:63`, `:64`, `:32`), `stallCodeText` and `stallCode` (`:4094`, `:4096`, the comment-line filter wave 9's scans use), `readFileSync` and `path` (its imports).
 - Produces, all in `shared/api.ts`'s foot block, L0, importing nothing, in this order:
   ```ts
   export const REGISTRY_ID_MAX_CHARS = 255;
@@ -896,6 +896,24 @@ describe('path identity W1a: the registry id predicate is defined once, and isTm
   it('TMPROOT_ID_MAX_CHARS is the alias, never a second literal', () => {
     expect(aliasRhs(API())).toBe('REGISTRY_ID_MAX_CHARS;');
   });
+
+  // Wave 9's REDERIVED scan reads one code line at a time, so a copy of the old two-line body under a new name (the
+  // shape call on one line, the prefix tests on the next) passes it. This scan reads each file's whole code text, and
+  // `[^;{}]` keeps a match inside one statement, so a shape check and a prefix test in two statements are not a copy.
+  it('no file outside shared/api.ts re-derives it from the shape and a prefix test, even across lines', () => {
+    const REDERIVED_STMT = new RegExp(
+      String.raw`\bisSessionIdShape\s*\([^;{}]*?startsWith\(\s*['"][.-]['"]\s*\)`
+      + String.raw`|startsWith\(\s*['"][.-]['"]\s*\)[^;{}]*?\bisSessionIdShape\s*\(`);
+    expect(REDERIVED_STMT.test("const ok = (id: string): boolean => isSessionIdShape(id)\n  && !id.startsWith('-');\n"),
+      'CONTROL: a two-line copy').toBe(true);
+    expect(REDERIVED_STMT.test("const ok = (id: string): boolean => !id.startsWith('.')\n  && isSessionIdShape(id);\n"),
+      'CONTROL: a two-line copy, prefix first').toBe(true);
+    expect(REDERIVED_STMT.test("if (!isSessionIdShape(sid)) {\n  return null;\n}\nif (sid.startsWith('-')) {\n"),
+      'CONTROL: two statements are not a copy').toBe(false);
+    expect(REDERIVED_STMT.test(stallCodeText("  // isSessionIdShape(id) && !id.startsWith('-')\n")),
+      'CONTROL: a comment line is not code').toBe(false);
+    expect(ALL.filter((f) => rel(f) !== 'shared/api.ts' && REDERIVED_STMT.test(stallCode(f))).map(rel)).toEqual([]);
+  });
 });
 ```
 
@@ -913,8 +931,9 @@ Expected: FAIL.
   - The cap case fails `expected undefined to be 255`.
   - The 8 dash rows, the 18 table rows, the narrowing case, the agreement case and the lists case each fail with `TypeError: … isRegistryId is not a function`.
   - If instead the whole file fails at collection, record that by slug (`registry-id-l0-red-at-collection`) and measure the per-case reds through a temporary copy, as wave 9 did.
-- `single-definition.test.ts -t 'path identity W1a'`: 3 failed, 1 passed, and every other describe skipped.
+- `single-definition.test.ts -t 'path identity W1a'`: 3 failed, 2 passed, and every other describe skipped.
   - The CONTROL case passes: it reads only literals.
+  - The cross-line scan passes: at the base only `shared/api.ts`, which it exempts, holds the shape and a prefix test in one statement (measured on the export: no file in `shared`, `server/src`, `pwa/src` or `agent/src` but `shared/api.ts` matches).
   - The declaration case fails `expected [] to deeply equal [ 'shared/api.ts' ]`.
   - The body pin fails `expected '\n  return typeof id === …' to match /\bisRegistryId\s*\(/`.
   - The alias pin fails `expected '255;' to be 'REGISTRY_ID_MAX_CHARS;'`.
@@ -1017,7 +1036,7 @@ grep -n '^export const REGISTRY_ID_MAX_CHARS\|^export const TMPROOT_ID_MAX_CHARS
 
 Expected:
 - First command: every file passes. `registry-id-l0.test.ts` has 30 cases. The collector suites pass unchanged, which is the measured form of "the accepted set is unchanged". `collect-population`'s `HARDCODED on purpose` case still reads 255 through the alias.
-- `single-definition`: exactly as green as at the base, plus this block's 4 cases. The wave 9 describes stay green: `DEF_FN('isTmpRootId')` still finds `['shared/api.ts']`, `DEF_VAL('TMPROOT_ID_MAX_CHARS')` still finds `['shared/api.ts']` (the alias is a `const` declaration), and `REDERIVED` reads no file but `shared/api.ts`'s exempt copy. If anything else is red, run it on the base first.
+- `single-definition`: exactly as green as at the base, plus this block's 5 cases. The wave 9 describes stay green: `DEF_FN('isTmpRootId')` still finds `['shared/api.ts']`, `DEF_VAL('TMPROOT_ID_MAX_CHARS')` still finds `['shared/api.ts']` (the alias is a `const` declaration), and `REDERIVED` (per line) and this block's cross-line scan each read no file but `shared/api.ts`'s exempt copy. If anything else is red, run it on the base first.
 - `typecheck-tests` passes. It is a known load flake, so re-run it alone before calling it red.
 - The two server `tsc` runs, the PWA's and the agent's print nothing and exit 0. The PWA bundles `shared/api.ts` and the agent compiles `../shared/**/*.ts`; neither reads the new names, and the pwa's `noUnusedLocals` sees no unused local.
 
@@ -1057,6 +1076,7 @@ Make each mutation alone, run its command, record the red in the SDD ledger, and
 | T1.6 | In `server/src/registry.ts`, add the line `const REGISTRY_ID_MAX_CHARS = 255;` directly after `} from '../../shared/api.js';` | same | `isRegistryId and REGISTRY_ID_MAX_CHARS are declared in shared/api.ts and nowhere else` (`expected [ 'server/src/registry.ts', 'shared/api.ts' ] to deeply equal [ 'shared/api.ts' ]`) |
 | T1.7 | `export const REGISTRY_ID_MAX_CHARS = 255;` → `= 256;` | `(cd server && ./node_modules/.bin/vitest run test/registry-id-l0.test.ts test/collect-population.test.ts)` | `its cap is 255 characters, hardcoded` (`expected 256 to be 255`), `256 characters -> false`, the lists case, and `collect-population`'s `HARDCODED on purpose` case (`expected 256 to be 255`) |
 | T1.8 | Replace `export function isTmpRootId(id: unknown): id is string {` / `  return isRegistryId(id);` / `}` with `export const isTmpRootId = isRegistryId;` | `(cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts)` (the whole file: an alternation needs a bare pipe, which this table cannot carry, and `\|` is a literal pipe to vitest) | wave 9's `isTmpRootId and TMPROOT_ID_MAX_CHARS are declared in shared/api.ts and nowhere else` (`expected [] to deeply equal [ 'shared/api.ts' ]`), and this block's body pin (`isTmpRootId is not declared as a function in shared/api.ts: expected null not to be null`) |
+| T1.9 | In `server/src/registry.ts`, add the two lines `const idOk = (id: string): boolean => isSessionIdShape(id)` / `  && !id.startsWith('-');` directly after `} from '../../shared/api.js';` (text only: no command here compiles `registry.ts`) | `(cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts)` | this block's `no file outside shared/api.ts re-derives it from the shape and a prefix test, even across lines` (`expected [ 'server/src/registry.ts' ] to deeply equal []`). Wave 9's per-line `no code line outside shared/api.ts re-derives it …` case stays green, because neither line holds both tests; that is why the cross-line scan exists. |
 
 After reverting each mutation, run Step 5's first two commands again and see them green. Then check that `git diff --stat` names only the four files Step 8 adds.
 
@@ -1078,7 +1098,8 @@ becomes a derived alias, so the store is not edited, and isTmpRootId stays a
 function whose body calls isRegistryId, so the collector accepts the same set
 (its suites pass unchanged). A new test file pins the predicate's answers on
 the collector's table and the dash ids. A shared case list holds the ids the
-later gate tests plant. single-definition pins the pair's one definer, the
+later gate tests plant. single-definition pins the pair's one definer, no re-derivation split
+across lines, the
 derived body and the alias.
 MSG
 )"
@@ -6880,7 +6901,7 @@ Tasks 2 and 5 built all of this behaviour. Task 8 changes eight tag words, adds 
   - inside `const requireAttribution = async (`;
   - inside `app.post('/api/mail', …)`;
   - inside `app.post('/api/mail/:id/ack', …)`.
-- Modify `server/test/registry-refused-census.test.ts`: replace its content with the final file in Step 2, except the two blocks Tasks 6 and 7 appended at its foot, which Step 2 keeps verbatim. The new content restates Task 5's cases at their final placement, keeps Task 5's orphan-tag pin, adds `no site is unplaced`, and pins `tick` handing its `records` to `detectDialogs(`.
+- Modify `server/test/registry-refused-census.test.ts` in place (Step 2); never replace it. Three edits: eight `EXPECTED_SITES` word changes, a `no site is unplaced` case in Task 5's first describe, and a `tick() passes its records to detectDialogs(` case in Task 6's `tick` describe. Every earlier case, helper and import stays byte for byte.
 - Create `server/test/registry-retained-callers.test.ts`.
 - Not edited: `shared/api.ts`, `server/src/registry.ts`, `server/test/idGateFixture.ts`, and every file outside this list.
 
@@ -6894,11 +6915,8 @@ Tasks 2 and 5 built all of this behaviour. Task 8 changes eight tag words, adds 
   - The census vocabulary: `[registry-refused:<word>]`, where `<word>` is one of `holds`, `refuses`, `gated`, `omits`, `stale`, `reports`, `tests-only`, `knownId`, `raw-name`, `wrapper` and `unplaced`.
 - Produces (test-local, never exported):
   ```ts
-  // registry-refused-census.test.ts
-  interface Site { file: string; enclosing: string; reader: 'readRegistry' | 'readRegistryMeasured'; word: string; line: number }
-  const scanSites: (file: string, src: string) => Site[];
-  const assembleFleetCalls: () => { at: string; args: string[] }[];
-  const tickBody: () => string;
+  // registry-refused-census.test.ts: no new helper. Step 2 reuses Task 5's `allSites` and `key`,
+  // and Task 6's `TICK_WATCH_TS`, `TICK_HEAD`, `tickCode` and `tickBodyOf`.
   // registry-retained-callers.test.ts
   const plantRow: (home: string, id: string, fields: Record<string, string>) => void;
   const expectPlanted: (home: string, id: string) => void;
@@ -7218,132 +7236,59 @@ describe('the raw-name ladders read a refused row as unmeasurable, never as abse
 
 - [ ] **Step 2: Bring the census to its final placement, `server/test/registry-refused-census.test.ts`**
 
-Before replacing the file, keep Step 0 (g)'s title list. Then set aside, byte for byte, the two blocks Tasks 6 and 7 appended at its foot:
-- Task 6's block: from the line `// Path identity W1a, Task 6 (spec §2.3, R19's precedent): …` through the closing `});` of its describe `tick hands its records to the lanes that would otherwise read the registry again (spec §2.3)`.
-- Task 7's block: its four aliased import lines (`t7ReadFileSync`, `t7path`, `t7FileURLToPath`, `t7CodeOnly`), and everything from `// PATH IDENTITY W1a, TASK 7 (spec §2.3).` through the closing `});` of its describe `Task 7: the migrated readers and the six production assembleFleet calls (spec §2.3)`.
+Edit the file Tasks 5, 6 and 7 left, in place; never replace it. Every existing case, helper and import stays byte for byte, apart from the three edits below. That keeps:
+- Task 5's scan and its first describe: the CONTROL, the `sites.length > 0` guard, and the orphan-tag count (`commentTagCount`);
+- Task 6's describe, with its body-slicer CONTROL and its helpers `TICK_WATCH_TS`, `TICK_HEAD`, `TICK_STRINGS`, `tickCode` and `tickBodyOf`;
+- Task 7's describe, with its four aliased imports and its `t7…` helpers. It already pins every production `assembleFleet(` call's records argument, and the `readRegistry(` and `readRegistryMeasured(` call counts (8 and 15).
 
-Replace the file's whole content with the code below. Put Task 7's four import lines directly under this file's last `import`. Then append both blocks, unchanged, at the file's foot, Task 6's first.
-- Their names (`TICK_WATCH_TS`, `TICK_HEAD`, `TICK_STRINGS`, `tickCode`, `tickBodyOf`, `T7_SRC` and the `t7…` helpers) collide with nothing below.
-- This file already imports everything Task 6's block uses.
-- Both blocks stay green, because this task changes tag words only.
-- They keep pins this file does not restate: the two CONTROL cases that prove the brace slicer and the argument splitter measure something, and Task 7's per-file placed words with its `readRegistry(` and `readRegistryMeasured(` call counts (8 and 15).
-- A case copied back without its helpers would not compile, so the blocks move whole.
+Keep Step 0 (g)'s title list, make the three edits, and run Step 0 (g)'s grep again. Every title from the first list must still appear, and the second list adds exactly two: `no site is unplaced` and `tick() passes its records to detectDialogs(`. Record the comparison in the SDD ledger.
 
-Then run Step 0 (g)'s grep again. Every title from the first list must appear in the second; Task 7's "exactly these 23 sites" title is this file's own. If a title is still missing because an earlier task wrote a case outside those two blocks, copy that `it` back verbatim, with every helper it uses, into the describe it came from.
+(a) In `EXPECTED_SITES` (Task 7's case `the classified set is exactly these 23 sites`), change exactly these eight rows. Match each row by its whole string, wherever it stands; the case sorts both sides. Only the word changes: the other fifteen rows stay as they are, and `expect(EXPECTED_SITES).toHaveLength(23);` stays.
 
-Record the comparison in the SDD ledger.
+Before:
 
 ```ts
-// Path identity W1a (spec §2.3): every call of a registry reader in server/src
-// is classified for refused rows. A refused row is a `.uuid` whose basename is
-// not a registry id: `readRegistryMeasured` names it in `refused` and never
-// reads it. Each caller says what it does about that in a
-// `[registry-refused:<word>]` tag within the three lines above its call. The
-// scan reads calls from code only, with comments and strings blanked, and reads
-// tags from the raw source. So a sentence ABOUT a reader is not a call, and a
-// tag is never code.
-//
-// The words:
-//   holds       the caller answers unmeasured for a refused id
-//   refuses     the caller refuses its act
-//   gated       an outer gate refuses first
-//   omits       the caller acts only on `records`, which never hold a refused row
-//   stale       the caller serves a marked stale answer when the registry is unlistable
-//   reports     the caller reports, additively, what it could not measure
-//   tests-only  production passes `records`; only tests reach this read
-//   knownId     the route's knownId refuses a non-registry id before this read
-//   raw-name    the caller's raw listing reads a listed-but-omitted row as unmeasurable
-//   wrapper     readRegistry's own call, and nowhere else
-//   unplaced    not yet placed; this file pins that no site carries it
-import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { codeOnly } from './sourceScan.js';
+  'commands.ts | sessionCommands | readRegistry | unplaced',
+  'coord/routes.ts | POST /api/mail | readRegistry | unplaced',
+  'coord/routes.ts | POST /api/mail/:id/ack | readRegistry | unplaced',
+  'coord/routes.ts | requireAttribution | readRegistry | unplaced',
+  'server.ts | prTasks | readRegistry | unplaced',
+  'watch.ts | detectDialogs | readRegistry | unplaced',
+  'watch.ts | sweepNames | readRegistry | unplaced',
+  'watch.ts | sweepPr | readRegistry | unplaced',
+```
 
-const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
+After:
 
-/** The census vocabulary. `unplaced` stays a word, so a tag left at it is read
- *  and named, and never mistaken for a missing tag. */
-const WORDS: ReadonlySet<string> = new Set([
-  'holds', 'refuses', 'gated', 'omits', 'stale', 'reports', 'tests-only',
-  'knownId', 'raw-name', 'wrapper', 'unplaced',
-]);
+```ts
+  'commands.ts | sessionCommands | readRegistry | knownId',
+  'coord/routes.ts | POST /api/mail | readRegistry | raw-name',
+  'coord/routes.ts | POST /api/mail/:id/ack | readRegistry | raw-name',
+  'coord/routes.ts | requireAttribution | readRegistry | raw-name',
+  'server.ts | prTasks | readRegistry | knownId',
+  'watch.ts | detectDialogs | readRegistry | tests-only',
+  'watch.ts | sweepNames | readRegistry | omits',
+  'watch.ts | sweepPr | readRegistry | omits',
+```
 
-/** Every `.ts` under server/src, recursively, as a posix path relative to it. */
-const sources = (dir = srcRoot): string[] =>
-  readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
-    const full = path.join(dir, e.name);
-    if (e.isDirectory()) return sources(full);
-    return /\.ts$/.test(e.name) ? [path.relative(srcRoot, full).split(path.sep).join('/')] : [];
-  });
+The list then holds these 23 rows, in Task 5's spelling (a route is `<METHOD> <path>`, as Task 5's `enclosingOf` writes it). They are shown sorted; the list's own order is free:
 
-const read = (rel: string): string => readFileSync(path.join(srcRoot, rel), 'utf8');
-
-/** A string literal, blanked to spaces with its newlines kept, so a reader named
- *  inside a string is not a call and every line number stays the source's. */
-const STRING = /'(?:\\.|[^\\'\n])*'|"(?:\\.|[^\\"\n])*"|`(?:\\[\s\S]|[^\\`])*`/g;
-const blankStrings = (code: string): string => code.replace(STRING, (m) => m.replace(/[^\n]/g, ' '));
-
-/** The declaration a call sits in: the nearest line at or above it that opens a
- *  function, a method, an async const, or a route registration (its path). */
-const DECLS: readonly RegExp[] = [
-  /^\s*(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*[(<]/,
-  /^\s*(?:(?:private|public|protected|static)\s+)*async\s+(\w+)\s*\(/,
-  /^\s*(?:export\s+)?const\s+(\w+)\s*=\s*async\b/,
-  /\bapp\.(?:get|post|put|patch|delete)\(\s*['"]([^'"]+)['"]/,
-];
-const TAG = /\[registry-refused:([A-Za-z-]+)\]/;
-const CALL = /(?<!function\s+)\b(readRegistryMeasured|readRegistry)\s*\(/g;
-
-interface Site { file: string; enclosing: string; reader: 'readRegistry' | 'readRegistryMeasured'; word: string; line: number }
-
-/** Every reader call in one source, with its enclosing declaration and its tag
- *  word (`UNTAGGED` when none of the three lines above carries one). */
-const scanSites = (file: string, src: string): Site[] => {
-  const raw = src.split('\n');
-  const code = codeOnly(src);
-  const decl = code.split('\n');
-  const calls = blankStrings(code).split('\n');
-  const out: Site[] = [];
-  calls.forEach((l, i) => {
-    for (const m of l.matchAll(CALL)) {
-      let enclosing = '(top level)';
-      for (let j = i; j >= 0; j -= 1) {
-        const hit = DECLS.map((re) => re.exec(decl[j]!)).find((x) => x !== null);
-        if (hit) { enclosing = hit[1]!; break; }
-      }
-      let word = 'UNTAGGED';
-      for (let j = i - 1; j >= Math.max(0, i - 3); j -= 1) {
-        const t = TAG.exec(raw[j]!);
-        if (t) { word = t[1]!; break; }
-      }
-      out.push({ file, enclosing, reader: m[1] as Site['reader'], word, line: i + 1 });
-    }
-  });
-  return out;
-};
-
-const key = (s: Site): string => `${s.file} | ${s.enclosing} | ${s.reader} | ${s.word}`;
-const ALL: readonly Site[] = sources().flatMap((f) => scanSites(f, read(f)));
-
-/** The final placement: 22 consumer sites and the wrapper. */
-const FINAL: readonly string[] = [
+```ts
   'commands.ts | sessionCommands | readRegistry | knownId',
   'coord/dispatch.ts | dispatchRun | readRegistryMeasured | gated',
   'coord/dispatch.ts | dispatchRun | readRegistryMeasured | refuses',
   'coord/dispatch.ts | dispatchRun | readRegistryMeasured | refuses',
   'coord/fingerprint.ts | resolveDoneBranch | readRegistryMeasured | holds',
-  'coord/routes.ts | /api/claims | readRegistryMeasured | reports',
-  'coord/routes.ts | /api/mail | readRegistry | raw-name',
-  'coord/routes.ts | /api/mail/:id/ack | readRegistry | raw-name',
-  'coord/routes.ts | /api/peers | readRegistryMeasured | reports',
+  'coord/routes.ts | GET /api/peers | readRegistryMeasured | reports',
+  'coord/routes.ts | POST /api/claims | readRegistryMeasured | reports',
+  'coord/routes.ts | POST /api/mail | readRegistry | raw-name',
+  'coord/routes.ts | POST /api/mail/:id/ack | readRegistry | raw-name',
   'coord/routes.ts | requireAttribution | readRegistry | raw-name',
   'fleet.ts | assembleFleet | readRegistryMeasured | tests-only',
   'lifecycle.ts | listProjects | readRegistryMeasured | reports',
   'registry.ts | readRegistry | readRegistryMeasured | wrapper',
-  'server.ts | /api/fleet | readRegistryMeasured | stale',
-  'server.ts | /ws/fleet | readRegistryMeasured | stale',
+  'server.ts | GET /api/fleet | readRegistryMeasured | stale',
+  'server.ts | GET /ws/fleet | readRegistryMeasured | stale',
   'server.ts | prTasks | readRegistry | knownId',
   'watch.ts | detectDialogs | readRegistry | tests-only',
   'watch.ts | sweepHookStates | readRegistryMeasured | tests-only',
@@ -7352,117 +7297,27 @@ const FINAL: readonly string[] = [
   'watch.ts | sweepPr | readRegistry | omits',
   'watch.ts | sweepTasks | readRegistryMeasured | omits',
   'watch.ts | tick | readRegistryMeasured | omits',
-];
-
-describe('every registry reader call is classified for refused rows (spec §2.3)', () => {
-  it('CONTROL: the scan sees a call, and ignores a comment, a string and the definitions', () => {
-    const sample = [
-      '// readRegistry(io, cfg) named in a comment is not a call',
-      "const said = 'readRegistryMeasured(io, cfg) inside a string is not a call';",
-      'export async function readRegistry(io: FleetIO, cfg: CcrcConfig): Promise<SessionRecord[]> {',
-      '  // [registry-refused:wrapper] the wrapper',
-      '  const r = await readRegistryMeasured(io, cfg);',
-      '  return r.listed ? r.records : [];',
-      '}',
-      'export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promise<RegistryRead> {',
-      '  return { listed: false };',
-      '}',
-      "app.post('/api/demo', async (req, reply) => {",
-      '  // [registry-refused:raw-name] a tagged route call',
-      '  const registry = await readRegistry(deps.io, deps.cfg);',
-      '});',
-      'const far = async (): Promise<void> => {',
-      '  // [registry-refused:omits] four lines above the call is too far',
-      '  const a = 1;',
-      '  const b = 2;',
-      '  const c = 3;',
-      '  await readRegistry(io, cfg);',
-      '};',
-    ].join('\n');
-    expect(scanSites('sample.ts', sample)).toEqual([
-      { file: 'sample.ts', enclosing: 'readRegistry', reader: 'readRegistryMeasured', word: 'wrapper', line: 5 },
-      { file: 'sample.ts', enclosing: '/api/demo', reader: 'readRegistry', word: 'raw-name', line: 13 },
-      { file: 'sample.ts', enclosing: 'far', reader: 'readRegistry', word: 'UNTAGGED', line: 20 },
-    ]);
-  });
-
-  it('each readRegistry( and readRegistryMeasured( call carries a [registry-refused:<word>] tag within three lines above it', () => {
-    expect(ALL.filter((s) => !WORDS.has(s.word)).map((s) => `${s.file}:${s.line} ${s.reader} ${s.word}`)).toEqual([]);
-    // Task 5's orphan pin, kept: every `[registry-refused:*]` tag on a `//` comment line stands above a reader
-    // call. A stale tag left above a deleted call, or a tag that is only a string, is red.
-    const tagLines = sources().reduce((n, f) => n + read(f).split('\n')
-      .filter((l) => /^\s*\/\/.*\[registry-refused:[A-Za-z-]+\]/.test(l)).length, 0);
-    expect(tagLines, 'a [registry-refused:*] tag that stands above no reader call').toBe(ALL.length);
-  });
-
-  it('the classified set is exactly these 23 sites', () => {
-    expect(ALL.map(key).sort()).toEqual([...FINAL].sort());
-  });
-
-  it('wrapper is used once, in registry.ts, inside readRegistry', () => {
-    expect(ALL.filter((s) => s.word === 'wrapper').map(key))
-      .toEqual(['registry.ts | readRegistry | readRegistryMeasured | wrapper']);
-  });
-
-  it('no site is unplaced', () => {
-    expect(ALL.filter((s) => s.word === 'unplaced').map(key)).toEqual([]);
-  });
-});
-
-/** `tick`'s body, code only: from its declaration to the first two-space-indented
- *  closing brace, which ends a class method in watch.ts. */
-const tickBody = (): string => {
-  const src = codeOnly(read('watch.ts'));
-  const from = src.indexOf('  async tick(');
-  expect(from, 'async tick( is declared in watch.ts').toBeGreaterThan(-1);
-  const to = src.indexOf('\n  }\n', from);
-  expect(to, 'tick has a closing brace at method depth').toBeGreaterThan(from);
-  return src.slice(from, to);
-};
-
-describe('tick hands its own records to the lanes whose fallback is tests-only (spec §2.3)', () => {
-  it('tick passes its records to sweepHookStates(', () => {
-    expect(tickBody()).toMatch(/this\.sweepHookStates\(\s*records\s*\)/);
-  });
-
-  it('tick passes its records to detectDialogs(', () => {
-    expect(tickBody()).toMatch(/this\.detectDialogs\([^)]*\brecords\s*\)/);
-  });
-});
-
-/** Each production `assembleFleet(` call, its arguments split at its own
- *  top-level commas, with comments and strings blanked. */
-const assembleFleetCalls = (): { at: string; args: string[] }[] =>
-  sources().flatMap((f) => {
-    const code = blankStrings(codeOnly(read(f)));
-    return [...code.matchAll(/(?<!function\s+)\bassembleFleet\s*\(/g)].map((m) => {
-      const start = (m.index ?? 0) + m[0].length;
-      const args: string[] = [];
-      let depth = 1;
-      let cur = '';
-      for (let i = start; i < code.length && depth > 0; i += 1) {
-        const c = code[i]!;
-        if ('([{'.includes(c)) { depth += 1; cur += c; continue; }
-        if (')]}'.includes(c)) { depth -= 1; if (depth === 0) break; cur += c; continue; }
-        if (c === ',' && depth === 1) { args.push(cur.trim()); cur = ''; continue; }
-        cur += c;
-      }
-      if (cur.trim() !== '') args.push(cur.trim());
-      return { at: `${f}:${code.slice(0, m.index ?? 0).split('\n').length}`, args };
-    });
-  });
-
-describe('every production assembleFleet( call passes its records (spec §2.3)', () => {
-  it('the six production calls each pass a records argument that is not undefined', () => {
-    const calls = assembleFleetCalls();
-    expect(calls.map((c) => c.at.replace(/:\d+$/, '')).sort()).toEqual([
-      'coord/routes.ts', 'coord/routes.ts', 'server.ts', 'server.ts', 'server.ts', 'watch.ts',
-    ]);
-    // The records argument is the tenth, the one before the coord store.
-    expect(calls.filter((c) => c.args[9] === undefined || c.args[9] === 'undefined').map((c) => c.at)).toEqual([]);
-  });
-});
 ```
+
+(b) In the first describe, `every registry reader call is classified for refused rows (spec §2.3)`, insert this case directly after the case `wrapper is used once, in registry.ts, inside readRegistry`, below its closing `  });`:
+
+```ts
+  it('no site is unplaced', () => {
+    expect(allSites().filter((s) => s.word === 'unplaced').map(key)).toEqual([]);
+  });
+```
+
+(c) In Task 6's describe, `tick hands its records to the lanes that would otherwise read the registry again (spec §2.3)`, insert this case directly after the case `tick() passes its records to sweepHookStates(`, below its closing `  });`. It reuses Task 6's helpers, and `readFileSync`, which Task 5's imports already hold:
+
+```ts
+  it('tick() passes its records to detectDialogs(', () => {
+    const body = tickBodyOf(tickCode(readFileSync(TICK_WATCH_TS, 'utf8')), TICK_HEAD);
+    expect(body, 'tick no longer hands detectDialogs its records: that lane would read the registry itself')
+      .toMatch(/\bthis\.detectDialogs\([^)]*\brecords\s*\)/);
+  });
+```
+
+Measured at `837a099c0`: `tick`'s body (`async tick(): Promise<void> {`, `watch.ts:1874`) holds `const pending = await this.detectDialogs(this.primed, records);` (`watch.ts:2023`), so this case passes at once. T8.3 is its proof.
 
 - [ ] **Step 3: Run both files and see the expected red**
 
@@ -7473,14 +7328,10 @@ cd server && ./node_modules/.bin/vitest run test/registry-retained-callers.test.
 Expected:
 - `registry-retained-callers.test.ts`: all eight cases PASS. Tasks 2 and 5 built this behaviour; Step 6 proves each pin.
 - `registry-refused-census.test.ts`: two cases are RED and the rest PASS.
-  - `the classified set is exactly these 23 sites` is red. The diff shows eight rows reading `unplaced` where `FINAL` has `knownId` (2), `omits` (2), `tests-only` (1) or `raw-name` (3).
+  - `the classified set is exactly these 23 sites` is red. The diff shows eight rows reading `unplaced` where `EXPECTED_SITES` has `knownId` (2), `omits` (2), `tests-only` (1) or `raw-name` (3).
   - `no site is unplaced` is red: `expected [ 'commands.ts | sessionCommands | readRegistry | unplaced', … ] to deeply equal []`, with eight entries.
 
-If the 23-site case is also red on a row's `enclosing` column, the cause is a helper that Task 6 or 7 introduced around a read. The sites this can affect are dispatch's reads, `/api/fleet`, `/ws/fleet`, `/api/peers`, `/api/claims`, `assembleFleet` and `listProjects`. In that case:
-- write the scan's name into `FINAL` for that row only;
-- record it in the SDD ledger under the slug `census-enclosing-repointed`.
-
-A row whose file, reader or word differs, or a 22nd or 24th site, is not this case. **STOP** and report the measured rows.
+Every other case in the file PASSES, the two new ones included: `tick() passes its records to detectDialogs(` is green at once, and Task 7's describe names no `unplaced` site. The scanner is Task 5's, unchanged, and Step 0 (f) measured it green at Task 7's tip, so the `enclosing` column cannot move here. A diff on any row other than the eight words, or a 22nd or 24th site, is not this case. **STOP** and report the measured rows.
 
 - [ ] **Step 4: Place the eight tags**
 
@@ -7548,15 +7399,15 @@ Apply each mutation alone and run its command from `server/`. See the red, then 
 |---|---|---|---|
 | T8.1 | `server.ts` `knownId`: delete its first statement, `if (!isRegistryId(id)) return false;` (Task 2) | `./node_modules/.bin/vitest run test/registry-retained-callers.test.ts -t 'commands and GET /pr'` | `expected 200 to be 404` on `/commands`. Measure `/pr` too by commenting out the `/commands` pair for one run, then restore it: `expected 200 to be 404` |
 | T8.2 | `registry.ts` `readRegistryMeasured`: let the loop build every listed id. `const ids = listedIds.filter((x) => isRegistryId(x));` becomes `const ids = listedIds;` (Task 5's mutation row 1), so `ids` keeps every `.uuid` id, sorted, refused ones included. `refused` stays as it is | `./node_modules/.bin/vitest run test/registry-retained-callers.test.ts -t 'sweepNames\|sweepPr\|pane'` | sweepNames: `expected [ [ 'ws-rename', '--session', '--actor', '--branch', 'ws/brainstorm-helix-and-slide-notes' ] ] to deeply equal []`. sweepPr: `expected [ [ 'pr-state', '--project', 'solo' ] ] to deeply equal []`. tick: `expected [ '=cc---actor:', '=cc-demo-quiet-basin:' ] not to include '=cc---actor:'` |
-| T8.3 | `watch.ts` `tick`: `const pending = await this.detectDialogs(this.primed, records);` becomes `const pending = await this.detectDialogs(this.primed);` | `./node_modules/.bin/vitest run test/registry-refused-census.test.ts -t 'detectDialogs'` | `expected '…' to match /this\.detectDialogs\([^)]*\brecords\s*\)/`. The behaviour case stays green, because the fallback omits refused rows as well; this census case is the pin |
+| T8.3 | `watch.ts` `tick`: `const pending = await this.detectDialogs(this.primed, records);` becomes `const pending = await this.detectDialogs(this.primed);` | `./node_modules/.bin/vitest run test/registry-refused-census.test.ts -t 'detectDialogs'` | `tick() passes its records to detectDialogs(`: `tick no longer hands detectDialogs its records: that lane would read the registry itself: expected '…' to match /\bthis\.detectDialogs\([^)]*\brecords\s*\)/`. The behaviour case stays green, because the fallback omits refused rows as well; this census case is the pin |
 | T8.4 | `coord/routes.ts` `requireAttribution`: delete the `if (names.includes(\`${whoId}.uuid\`)) { … return false; }` block inside `if (!row) {` | `./node_modules/.bin/vitest run test/registry-retained-callers.test.ts -t 'claims'` | `expected 403 to be 502` (`unknown-sender`) |
 | T8.5 | `coord/routes.ts` `POST /api/mail`, check 5: delete the `if (names.includes(\`${fromId}.uuid\`)) { return refuse(…); }` block inside `if (!sender) {` | `./node_modules/.bin/vitest run test/registry-retained-callers.test.ts -t 'mail from'` | `expected 403 to be 502` (`unknown-sender`) |
 | T8.6 | `coord/routes.ts` `POST /api/mail`, check 7: delete the `if (names.includes(\`${toId}.uuid\`)) { return refuse(…); }` block | `./node_modules/.bin/vitest run test/registry-retained-callers.test.ts -t 'mail to'` | `expected 404 to be 502` (`unknown-recipient`) |
 | T8.7 | `coord/routes.ts` `POST /api/mail/:id/ack`: delete the `if (names.includes(\`${fromId}.uuid\`)) { return refuse(…); }` block inside `if (!sender) {` | `./node_modules/.bin/vitest run test/registry-retained-callers.test.ts -t 'ack'` | `expected 403 to be 502` (`unknown-sender`) |
 | T8.8 | `commands.ts`: Step 4 edit 1's tag word goes back to `unplaced` | `./node_modules/.bin/vitest run test/registry-refused-census.test.ts` | `the classified set is exactly these 23 sites`: the diff names `commands.ts \| sessionCommands \| readRegistry \| unplaced`. `no site is unplaced`: `expected [ 'commands.ts \| sessionCommands \| readRegistry \| unplaced' ] to deeply equal []` |
-| T8.9 | `watch.ts`: delete Step 4 edit 5's whole tag line | same | `each … call carries a … tag`: `expected [ 'watch.ts:NN readRegistry UNTAGGED' ] to deeply equal []`, and the 23-site diff |
+| T8.9 | `watch.ts`: delete Step 4 edit 5's whole tag line | same | `each … call carries a … tag`: `an untagged reader call: expected [ 'watch.ts:<n>' ] to deeply equal []`, and the 23-site case on `watch.ts \| detectDialogs \| readRegistry \| null` |
 | T8.10 | `commands.ts` `sessionCommands`: add a second line, `const again = await readRegistry(deps.io, deps.cfg); void again;`, directly under its tagged call | same | the 23-site case (a 24th row, `commands.ts \| sessionCommands \| readRegistry \| knownId`, because the tag is within three lines of both calls). The second call shares that tag, so the word rule cannot see it. The multiset carries this row, together with the kept orphan count (`a [registry-refused:*] tag that stands above no reader call: expected 23 to be 24`) and Task 7's kept count case (`readRegistry( call sites in server/src: expected 9 to be 8`) |
-| T8.11 | `lifecycle.ts`: insert `// [registry-refused:holds] stray` as a new line directly above `export async function listProjects(` (Task 5's row 8, kept through Step 2) | same | `a [registry-refused:*] tag that stands above no reader call: expected 24 to be 23` |
+| T8.11 | `lifecycle.ts`: insert `// [registry-refused:holds] stray` as a new line directly above `export async function listProjects(` (Task 5's row 8; Step 2 keeps Task 5's `commentTagCount`) | same | `a [registry-refused:*] tag that stands above no reader call: expected 24 to be 23` |
 
 Revert each mutation, then run Step 5's command again: green.
 
@@ -7647,6 +7498,7 @@ Name this carried line, by slug, in the wave-done: `raw-name-refused-detail-says
   - `POST /api/runs/:id/reclaim`:
     - `which: 'heir'`: 400 `{ ok: false, error: 'bad-session', detail }`.
     - `which: 'claimant'`: 409 `{ ok: false, error: 'bad-session', detail }`, with a detail that names `POST /api/runs/:id/abandon`.
+  - The PWA's reclaim sheet (`pwa/src/fleet/ResumeSheet.tsx`'s `reclaimErrorText`) reads a 409's code only through `isReclaimRefuseCode`, and `bad-session` is not a `ReclaimRefuseCode`. So it shows this 409 as an unrecognised refusal and never shows the `detail`. `pwa/` is outside this wave; Task 16 carries it as `reclaim-sheet-drops-the-bad-session-detail`.
 
 - [ ] **Step 0: Entry conditions.** Tasks 1 to 8 are committed. Measure each one from the workspace root; never assume it.
 
@@ -8809,7 +8661,7 @@ Make each edit in `server/src/coord/routes.ts`, run the command from `server/`, 
 | 2 | Move that line (with its comment) out of the block to directly ABOVE `if (to === 'awaiting-review' \|\| to === 'merging') {`, so it guards every target | `A -t 'retreating'` | `control: retreating a --actor run to working is unaffected`: `expected 409 to be 200`. |
 | 3 | Drop the negation: `if (!isRegistryId(run.sessionId))` becomes `if (isRegistryId(run.sessionId))` | `A`, then `RR` | A: both refusal cases, as row 1. RR: `working -> awaiting-review DOES re-measure, and a stale claim is refused (D-6)`, `expected { ok: false, reject: { code: 'bad-session' } } to match object { ok: false, reject: { code: 'stale-tip' } }`. Valid ids are now refused, which is the over-refusal pin. That pin is the existing `run-routes` case, not a new one. |
 
-After row 3, confirm the restore: `git diff --stat` shows only `server/test/advance-registry-id.test.ts` as untracked, and `server/src/coord/routes.ts` carries only Step 3's edit (`git diff server/src/coord/routes.ts` shows one hunk of eight added lines).
+After row 3, confirm the restore: `git status --short` shows `server/src/coord/routes.ts` modified and `server/test/advance-registry-id.test.ts` untracked (`git diff --stat` never lists an untracked file, so it cannot show the test file), `git diff --stat` prints the lines recorded before row 1, and `server/src/coord/routes.ts` carries only Step 3's edit (`git diff server/src/coord/routes.ts` shows one hunk of eight added lines, plus the one-line import change if Step 3 (b) was taken).
 
 - [ ] **Step 7: Typecheck**
 
@@ -9479,7 +9331,7 @@ MSG
 
 ### Task 14: stop's builder order
 
-**Model routing:** `opus`, effort `high`. This is the one positional redirect in the server's argv set, and it is pinned on the real binary. The server's id gates already refuse an id spelled `--surface` before either builder runs: `/stop` through `readSessionRecord`'s `bad-id` (Task 4), and the archive door through `knownId` (Task 2). This task reorders the builders so that the argv itself refuses such an id. It is the second lock, and it also covers any future caller.
+**Model routing:** `opus`, effort `high`. This is the one positional redirect in the server's argv set, and it is pinned on the real binary. The server's id gates already refuse an id spelled `--surface` before either builder runs: `/stop` through `readSessionRecord`'s `bad-id` (Task 4), and the archive door through `knownId` (Task 2). This task reorders the builders so that the argv itself refuses such an id. It is the second lock for an id or a project spelled `--surface`, and it also covers any future caller of `stopId`. It does not close a legacy registry field spelled `--surface=<word>` in the pair form: that gap is carried to W1b's stop loop (`stop-pair-registry-field-redirect`, Task 16).
 
 **Why:** spec §2.3 says the stop builders move to `['stop', '--surface', surface, id]` and `['stop', '--surface', surface, w, p]`. Spec §2.4 gives the reason: with the id first, `cmd_stop`'s loop cannot tell an id spelled `--surface` from the key. R14 binds the two shapes, and every pin of today's order is updated in this same commit. README's two stop prose lines are Task 16's, under R14's condition, and this task does not touch them.
 
@@ -9836,7 +9688,14 @@ with:
    *  --surface` dies on ccd's usage line and stops nothing. The server's id
    *  gates (`knownId`, `readSessionRecord`'s `bad-id`) refuse such an id
    *  before either builder runs; this order is the lock behind them, for any
-   *  future caller. It is safe on every ccd that advertises `stop-surface`,
+   *  future caller of `stopId`. `stopPair` is narrower: its project is the
+   *  legacy row's `.project`, and its wrapper the row's `.wrapper` when the
+   *  id does not end in `-<project>`, fields no id gate reads. `cmd_stop`'s
+   *  `--surface=*` arm strips a token of that spelling from any position, so
+   *  a field reading `--surface=<word>` still leaves a one-argument stop of
+   *  the other token, in either order: a stated residual, carried to W1b's
+   *  stop loop (`stop-pair-registry-field-redirect`).
+   *  The order is safe on every ccd that advertises `stop-surface`,
    *  whose loop strips the flag from any position (the loop shipped in the
    *  same ccd as the token, and `ccd-session-state.test.ts`'s "takes the
    *  flag before the id as well" pins the current one). A ccd without the
@@ -10446,7 +10305,9 @@ const CENSUS: readonly CensusRow[] = [
   { file: 'server.ts', scope: 'POST /api/sessions/:id/ensure', builder: 'ensure', id: 'id', origin: ['request'], gate: ['ensure-route-head'] },
   // stopArgvFor's two callers gate the id: /stop by readSessionRecord, /archive by knownId (pinned in their own case below).
   { file: 'server.ts', scope: 'stopArgvFor', builder: 'stopId', id: 'id', origin: ['request'], gate: ['readSessionRecord', 'knownId'] },
-  // The wrapper is the request id's own prefix; the project is the registry row's.
+  // The wrapper is the request id's own prefix, or the row's `.wrapper` when the id does not end in `-<project>`; the
+  // project is the row's `.project`. These gates vet the request id only: neither field is gated, a stated residual
+  // carried to W1b's stop loop (`stop-pair-registry-field-redirect`).
   { file: 'server.ts', scope: 'stopArgvFor', builder: 'stopPair', id: 'originalWrapper', origin: ['request', 'registry'], gate: ['readSessionRecord', 'knownId'] },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/swap', builder: 'swapCross', id: 'id', origin: ['request'], gate: ['cross-arm-head'] },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/swap', builder: 'swap', id: 'id', origin: ['request'], gate: ['readSessionRecord'], entry: /\breadSessionRecord\(deps\.io, deps\.cfg, id\)/ },
@@ -10703,7 +10564,7 @@ turns the suite red."
 - **R7 and R3.** The spec is not edited. Its §2.3 corrections are recorded here instead: `knownId` is not the one choke point, and the watches omit a refused id rather than keep its earlier state.
 - **R1, R17 (as amended), R18, R19, R20 and Task 3.** Each departure these name is listed by slug, and none gets a number. The departures are `registry-id-at-foot`, `masked-arms-pinned-by-their-masks`, `fleet-fallback-is-tests-only`, `cold-start-skips-an-unmeasured-fleet`, `bad-id-is-not-a-code` and `resume-dispatch-refuses-not-holds`.
 - **R13.** The answers table is restated as built.
-- **R14 and R24, plus Task 16's own carried lines.** These are README's stop prose (when it is not edited here), the coordinator skill's rows, the abandon sheet, a stored work-run `project`, the parity rows on the real binary, the rename, and SEC2 C and D.
+- **R14 and R24, plus Task 16's own carried lines.** These are README's stop prose (when it is not edited here), the coordinator skill's rows, the abandon sheet, the reclaim sheet, a stored work-run `project`, the parity rows on the real binary, the rename, a flag-shaped registry field in stop's pair form, and SEC2 C and D.
 
 **Files:**
 - Modify: `docs/superpowers/plans/2026-10-12-path-identity-w1a-server-id-gate.md`. APPEND the section `## As built (W1a, run 399)` after the last line of the file. That line closes `## Deviations found`, whose last subsection is `### Plan-text corrections and extra pins, one number per task`. Nothing above it is edited, including `## Deviations found` (the coordinator owns it until the fix round).
@@ -10785,7 +10646,7 @@ if (/\/home\/|\/Users\/|\.ts\.net|\b100\.\d+\.\d+\.\d+/.test(s)) bad.push("a hos
 const slugs = ["registry-id-at-foot", "masked-arms-pinned-by-their-masks", "resume-dispatch-refuses-not-holds",
   "fleet-fallback-is-tests-only", "cold-start-skips-an-unmeasured-fleet", "bad-id-is-not-a-code",
   "wave-lifecycle-rows-carried", "abandon-sheet-misreads-an-omitted-fleet-act",
-  "work-run-project-reaches-ws-add-unchecked"];
+  "reclaim-sheet-drops-the-bad-session-detail", "work-run-project-reaches-ws-add-unchecked", "stop-pair-registry-field-redirect"];
 for (const slug of slugs) if (!s.includes("`" + slug + "`")) bad.push("slug " + slug + " missing");
 const names = ["### Corrections to spec §2.3", "### The readers as built", "### The masked arms and their masks",
   "### The answers this wave adds", "### Carried lines, and README", "`childGateAtClose`", "`freshAskAt`",
@@ -10820,7 +10681,7 @@ grep -c '`knownId` gates 18 request-id routes (14 POST, 4 GET' server/src/server
 grep -rhoE '\[registry-refused:[A-Za-z-]+\]' server/src | LC_ALL=C sort | uniq -c
 # (m5) 1 gated, 2 holds, 2 knownId, 4 omits, 3 raw-name, 2 refuses, 3 reports, 2 stale, 3 tests-only, 1 wrapper;
 #      23 in all, and no unplaced. If a docstring spells a tag in prose, the census file's table is the authority:
-grep -c 'unplaced' server/test/registry-refused-census.test.ts                                      # (m5b) the "no site is unplaced" case and nothing else
+grep -c "| unplaced'" server/test/registry-refused-census.test.ts                                   # (m5b) 0: no EXPECTED_SITES row is left unplaced
 grep -cE '^export (async )?function childGateAtClose\(' server/src/coord/close.ts                    # (m6) 1: exported for its pin (R17 as amended)
 grep -rn 'childGateAtClose' server/test --include=*.test.ts | wc -l                                  # (m6b) >= 1: its direct pin exists
 grep -c "fleet-act-omitted:bad-session" server/src/coord/close.ts                                    # (m7) 1 (R27)
@@ -11055,6 +10916,13 @@ Notes on the table:
   - After R6, it tells the operator `<workspace> is still claimed by another open run` for an abandon that performed
     no fleet act.
   - `pwa/` is outside this boundary, so this is carried.
+- **The reclaim sheet drops the abandon pointer (`reclaim-sheet-drops-the-bad-session-detail`).**
+  - `pwa/src/fleet/ResumeSheet.tsx`'s `reclaimErrorText` reads a 409's code only through `isReclaimRefuseCode`, and
+    `bad-session` is not a `ReclaimRefuseCode`.
+  - So the reclaim door's 409 for a stored claimant that is not a registry id (R5) reaches the operator as "the
+    hand-over was refused, for a reason this build does not recognise". Its `detail`, which names
+    `POST /api/runs/:id/abandon`, is not shown.
+  - `pwa/` is outside this boundary, so this is carried. Measured: 0 such stored rows at Task 0.
 - **A stored work-run `project` reaches `ws-add` unchecked (`work-run-project-reaches-ws-add-unchecked`).**
   - At dispatch, a stored `project` reaches `CCD_ARGV.wsAddWorker(run.project, …)` with no server re-check.
   - Measured: 0 such rows at Task 0, and the `POST /api/runs` check covers every new row.
@@ -11068,6 +10936,12 @@ Notes on the table:
   - the comments in `run-signals-routing.test.ts` (above its `isSessionIdShape` describe), `run-route-route.test.ts` (above the `'bad claimant'` case) and `child-reclaim-paused-at-server.test.ts` (above its `from` round-trip cases).
 
   Legacy rows can still hold such ids, so each comment's conclusion stands; only its description of the route is stale. Carried to the first wave that edits each file.
+- **A flag-shaped registry field in stop's pair form (`stop-pair-registry-field-redirect`).** `stopPair` takes its
+  project from the legacy row's `.project`, and its wrapper from the row's `.wrapper` when the id does not end in
+  `-<project>`. No id gate reads either field, and `cmd_stop`'s `--surface=*` arm strips a token of that spelling from
+  any position, so a field reading `--surface=<word>` leaves a one-argument stop of the other token, in either order.
+  The pair form already recomputes its target from those two fields by design. Carried to W1b, whose stop loop
+  refuses a second `--surface` in either spelling.
 - **The full rename of `TMPROOT_ID_MAX_CHARS`.** It touches `coord/store.ts`, so it waits until after #351. Until
   then, the alias stands.
 - **SEC2 C and D.** A `RegistryId` brand on every builder, or an assertion inside each id-taking builder, stays in the
@@ -11196,8 +11070,9 @@ than holding.
 It lists the 23 classified registry reader sites, the masked arms and
 their masks, and the answers this wave adds. It also lists the carried
 lines: the coordinator skill's bad-session rows, the abandon sheet's
-reading of an omitted fleet act, a stored work-run project reaching
-ws-add, the real-binary parity rows, the alias's rename, and SEC2 C and D.
+reading of an omitted fleet act, the reclaim sheet's dropped bad-session
+detail, a stored work-run project reaching ws-add, the real-binary parity
+rows, the alias's rename, and SEC2 C and D.
 Departures are named by slug and carry no number.
 
 README's two stop prose lines spell the leading order when #351 had
@@ -11479,8 +11354,10 @@ cat >> "$BODY" <<'EOF'
 
 - The coordinator skill's `references/wave-lifecycle.md` rows for `bad-session` (open, dispatch, close, advance, reclaim) live under `ccd/`. They ride W1b.
 - `pwa/src/fleet/AbandonSheet.tsx` reads `released: false` as "still claimed by another open run", which misdescribes an abandon that performed no fleet act. `pwa/` is outside this wave.
+- `pwa/src/fleet/ResumeSheet.tsx` shows the reclaim door's 409 `bad-session` as an unrecognised refusal and drops its `detail`, which names the abandon door. `pwa/` is outside this wave.
 - A stored work-run `project` reaches the dispatch `ws-add` with no server re-check. 0 such rows were measured, and the POST check covers new rows. W1b's ws-add loop closes it.
 - Spec §2.8's real-binary parity rows (ids `--actor`, `--surface`, `--reason`, `--expect`, `--defer-expired`) go green only with W1b's loops, so they ride W1b.
+- `stop`'s legacy pair form takes its wrapper and project from registry fields no id gate reads, and ccd strips a `--surface=<word>` token from any position, so such a field still redirects that form, in either order. It rides W1b's stop loop, which refuses a second `--surface` in either spelling.
 - `TMPROOT_ID_MAX_CHARS`'s full rename waits until after #351.
 - SEC2 C and D are left for later (spec "Later").
 EOF
@@ -11488,7 +11365,7 @@ printf '%s\n\n' "$README_CARRY" >> "$BODY"
 cat >> "$BODY" <<'EOF'
 ## Departures, by slug
 
-`registry-id-at-foot`, `masked-arms-pinned-by-their-masks`, `fleet-fallback-is-tests-only`, `cold-start-skips-an-unmeasured-fleet`, `bad-id-is-not-a-code`, `wave-lifecycle-rows-carried`, `resume-dispatch-refuses-not-holds`, `abandon-sheet-misreads-an-omitted-fleet-act`, `work-run-project-reaches-ws-add-unchecked`
+`registry-id-at-foot`, `masked-arms-pinned-by-their-masks`, `fleet-fallback-is-tests-only`, `cold-start-skips-an-unmeasured-fleet`, `bad-id-is-not-a-code`, `wave-lifecycle-rows-carried`, `resume-dispatch-refuses-not-holds`, `abandon-sheet-misreads-an-omitted-fleet-act`, `reclaim-sheet-drops-the-bad-session-detail`, `work-run-project-reaches-ws-add-unchecked`, `stop-pair-registry-field-redirect`
 EOF
 [ -n "$EXTRA_SLUGS" ] && printf '\nRecorded during the wave: %s\n' "$EXTRA_SLUGS" >> "$BODY"
 printf '\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n' >> "$BODY"
@@ -11537,7 +11414,7 @@ PROSE=$(printf '%s\n' \
   "Path identity W1a, run 399: PR #$PR, $(git rev-list --count origin/main..HEAD) commits on $BR. Deploy class: server." \
   "First full run: see the ledger's Step 1 record (shards, Test Files total, agent and pwa)." \
   "Departures by slug: registry-id-at-foot, masked-arms-pinned-by-their-masks, fleet-fallback-is-tests-only, cold-start-skips-an-unmeasured-fleet, bad-id-is-not-a-code, wave-lifecycle-rows-carried, resume-dispatch-refuses-not-holds, plus any the ledger recorded." \
-  "Carried: wave-lifecycle bad-session rows (W1b), abandon-sheet-misreads-an-omitted-fleet-act, work-run-project-reaches-ws-add-unchecked, the real-binary parity rows (W1b), the TMPROOT_ID_MAX_CHARS rename, SEC2 C and D; README stop prose: $(git diff --quiet origin/main...HEAD -- README.md && echo carried || echo landed here)." \
+  "Carried: wave-lifecycle bad-session rows (W1b), abandon-sheet-misreads-an-omitted-fleet-act, reclaim-sheet-drops-the-bad-session-detail, work-run-project-reaches-ws-add-unchecked, stop-pair-registry-field-redirect (W1b), the real-binary parity rows (W1b), the TMPROOT_ID_MAX_CHARS rename, SEC2 C and D; README stop prose: $(git diff --quiet origin/main...HEAD -- README.md && echo carried || echo landed here)." \
   "Overlaps at Step 4: #351 $S351; run 400's PR as recorded in the ledger. Step 4 merge-tree was clean, so main was not absorbed; read the census suites on the merge ref.")
 ID="$id" UUID="$uuid" SUITE="$SUITE" FAILURE="$FAILURE" TIP="$TIP" PR="$PR" PHASE="$PHASE" PROSE="$PROSE" node -e '
 const e = process.env;
@@ -11633,7 +11510,7 @@ This wave's numbers come from the block the allocator issued for run 399 on 2026
   - `over-long-request-ids-stop-at-the-router` (Task 2);
   - `resume-dispatch-refuses-not-holds` and `overlong-id-plants-no-row` (Task 3);
   - `generation-pin-follows-kind` (Task 4);
-  - `abandon-sheet-misreads-an-omitted-fleet-act` and `work-run-project-reaches-ws-add-unchecked` (Task 16's carried lines);
+  - `abandon-sheet-misreads-an-omitted-fleet-act`, `reclaim-sheet-drops-the-bad-session-detail`, `work-run-project-reaches-ws-add-unchecked` and `stop-pair-registry-field-redirect` (Task 16's carried lines);
 - from Task 0's STOP rules: `tree-not-ready`, `contract-17-not-on-main`, `registry-id-owned-elsewhere`, `registry-unmeasured`, `registry-rows-fail-the-predicate`, `stored-rows-unmeasured`, `stored-rows-fail-the-predicate`, `gate-site-moved`, `claim-overlap` and `stop-surface-loop-postdates-token`.
 
 ### Substantive departures, one number each

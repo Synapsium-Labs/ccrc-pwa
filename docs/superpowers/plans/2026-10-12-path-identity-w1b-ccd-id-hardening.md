@@ -201,7 +201,7 @@ R1 to R14 are the coordinator's W1b rulings, renumbered. R15 onward were **propo
     - If records exist but none both parses and names the id, the moved judgement answers, with byte-identical words and details.
   - The witness comes next.
     - A witness that parses lets the lock open, even with no birth time: that `witness-mismatch` stays an under-lock answer for a ccd-written witness.
-    - A witness that does not parse first gets the registry peek (R12). The peek answers "no row" only when all three of these hold: `$REG/<id>.child` and `$REG/<id>.uuid` are proven absent by `_ws_reclaim_absent`; `$REG` is readable, so a glob of it is a listing; and `_ws_slug_free "${id%-*}" "${id##*-}"` answers free. That last check covers every `$REG/<id>.<field>` and every dot family, which are the rows `_ws_collect_registered` reads. In every other case the lock opens, and the locked evaluation answers `registered` or unmeasured `registry` as it does today.
+    - A witness that does not parse first gets the registry peek (R12). The peek answers "no row" only when all three of these hold: `$REG/<id>.child` and `$REG/<id>.uuid` are proven absent by `_ws_reclaim_absent`; a wildcard `"$REG"/tmproot[s]` lists exactly `$REG/tmproots`, the directory the witness was just read from, so a glob of `$REG` is a listing (a readable bit is no such proof: an opendir can still fail while `-r` holds); and `_ws_slug_free "${id%-*}" "${id##*-}"` answers free. That last check covers every `$REG/<id>.<field>` and every dot family, which are the rows `_ws_collect_registered` reads. In every other case the lock opens, and the locked evaluation answers `registered` or unmeasured `registry` as it does today.
   - The pass sets `_WS_COLLECT_RECORDS` for the audit document.
   - It journals nothing itself: the audit document and `_ws_collect_refused` do the journaling.
 - **R22 — The audits' dot rule (proposed by the frame; confirmed 2026-10-12).**
@@ -427,7 +427,7 @@ _ws_tmproot_id_ok() { _reg_id_ok "${1-}" && [[ "${1-}" != .* ]]; }   # id -> 0 i
     3. Any record that parses and names ID: rc 0.
     4. Records exist, but no record both parses and names ID: `_ws_collect_records_judge`, then rc 1.
     5. No records: a witness that parses gives rc 0.
-    6. A witness that does not parse gets the registry peek (R21). It gives rc 0 unless `_ws_reclaim_absent` proves `$REG/<id>.child` and `$REG/<id>.uuid` absent, AND `[[ -r "$REG" ]]` holds, AND `_ws_slug_free "${1%-*}" "${1##*-}"` answers 0.
+    6. A witness that does not parse gets the registry peek (R21). It gives rc 0 unless `_ws_reclaim_absent` proves `$REG/<id>.child` and `$REG/<id>.uuid` absent, AND the listing control `ctl=("$REG"/tmproot[s])` lists exactly `$REG/tmproots`, AND `_ws_slug_free "${1%-*}" "${1##*-}"` answers 0.
     7. Otherwise `_ws_collect_witness_judge`, then rc 1.
 - **The call sites:**
   - In `_ws_collect_audit_contained`, directly before `exec {lfd}>>"$REG/.reap-$id.lock"`: `_ws_collect_prelock "$id" || { _ws_collect_audit_doc "$id"; return; }`.
@@ -3146,7 +3146,7 @@ EOF
 
 **Model routing:** `opus`, effort `high`.
 
-**Why:** the only way ccd can mint a flag-spelled id is a dash-leading project: project `-` plus slug `actor` gives `--actor` (spec §2.4). SEC3 and SEC4 close it at `_ws_project_valid`. `_ws_tmproot_id_ok` is re-derived from Task 1's `_reg_id_ok`, so the witness, the records, the slots, ws-collect and the collect audit refuse a dash-leading id through one spelling of the dash rule. R11: `cmd_enable`'s two-argument form asks the same predicate before it journals. R7: this lands before ws-add's task (Task 6).
+**Why:** the only way ccd can mint a flag-spelled id is a dash-leading project: project `-` plus slug `actor` gives `--actor` (spec §2.4). SEC3 and SEC4 close it at `_ws_project_valid`. `_ws_tmproot_id_ok` is re-derived from Task 1's `_reg_id_ok`, so the witness, the records, the slots, ws-collect and the collect audit refuse a dash-leading id through one spelling of the dash rule. R11: `cmd_enable`'s two-argument form asks the same predicate before it journals, and ahead of it `cmd_start`'s own wrapper check, words and all, so neither an unrostered or flag-spelled wrapper nor a bad project leaves a journal line or a reap lock for an id nothing created (coordinator ruling). R7: this lands before ws-add's task (Task 6).
 
 **Files:**
 - Modify `ccd/ccd`, with every edit located by content. Then restamp.
@@ -3156,7 +3156,7 @@ EOF
   - `cmd_project_pool`. The die line containing `and no LEADING dot (the tag is a file in $POOLS_DIR` is edited in place.
   - `_ws_tmproot_id_ok`. Its two comment lines (`# THE ID A WITNESS MAY BE NAMED FOR…`) and its definition line are rewritten, two lines to two and one to one. The heading phrase stays first on its line, because Task 7 inserts above it.
   - `cmd_start`. The die line `|| die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot"` is edited in place.
-  - `cmd_enable`. A three-line comment and a three-line `if` block go directly after `local id; if [[ $# -ge 2 ]]; then id=$(_id "$1" "$2"); else id="$1"; fi`, before `# TWO EVENTS, NOT ONE.` and `_ws_expire_refuse_return`. This is below `cmd_start()`, so lines may be added.
+  - `cmd_enable`. A four-line comment and a four-line `if` block (the wrapper check, then the project check) go directly after `local id; if [[ $# -ge 2 ]]; then id=$(_id "$1" "$2"); else id="$1"; fi`, before `# TWO EVENTS, NOT ONE.` and `_ws_expire_refuse_return`. This is below `cmd_start()`, so lines may be added.
 - Modify `ccd/ccrc-doctor-checks`. Inside `_check_pools`, the comment lines from `` # `_ws_project_valid`'s own (`ccd:3685`, `` to `` # dot-leading), so no name `ccd` `` are rewritten. Six lines stay six.
 - Modify `server/test/pool-name-parity.test.ts`:
   - the PROJECT-NAME header prose, in three spans;
@@ -3180,6 +3180,7 @@ EOF
 - Produces:
   - `_ws_tmproot_id_ok() { _reg_id_ok "${1-}" && [[ "${1-}" != .* ]]; }   # id -> 0 iff a witness, a token verb or its audit may name it`
   - `_ws_project_valid`'s fourth body line: `  [[ "$1" != -* ]] || return 1`
+  - `cmd_enable`'s wrapper check, first in the same block: `_is_valid_wrapper "$1" || die "unknown wrapper '$1' (valid: ${CCRC_ACCOUNTS[*]})"` (`cmd_start`'s own check and literal)
   - `cmd_enable`'s project check, ahead of `_ws_expire_refuse_return`: `_ws_project_valid "$2" || die "invalid project '$2' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot or dash"`
 
 - [ ] **Step 0: Entry conditions (Tasks 1 to 4 are committed; measure, never assume)**
@@ -3214,7 +3215,8 @@ grep -E '(^| )dash=|uuid-dash=|uuid-dot=|reap-dash=|reap-dot=|reap-nodash=|tmpro
 // A dash-leading project is the one path by which ccd could mint an id spelled
 // as a flag: project `-` with slug `actor` is `--actor`. So `_ws_project_valid`
 // refuses a leading `-` at every site that creates under a project: ws-add,
-// start, enable (which now asks before it journals) and project-pool. And
+// start, enable (which now asks, its wrapper first, before it journals) and
+// project-pool. And
 // `_ws_tmproot_id_ok` is re-derived from `_reg_id_ok`, so the witness, the
 // records, the slots, ws-collect and its audit refuse a dash-leading id through
 // one spelling of the dash rule. It agrees with the server's `isTmpRootId` on
@@ -3309,6 +3311,31 @@ done`);
     expect(startedIds(), 'a supervised start was asked for').toEqual([]);
     // The CONTROL: a plain project journals exactly one enable row, so the reader above can see one.
     fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true });
+    expect(shFail(`${START_STUBS} cmd_enable claude-b demo`).code).toBe(0);
+    expect(eventsOf(h.home, 'enable').map((e) => e['id'])).toEqual(['claude-b-demo']);
+  }, 60_000);
+
+  it('enable refuses an unrostered or flag-spelled wrapper before it journals or locks', () => {
+    // `cmd_start` refuses the same wrapper with the same words, but only after enable's expiry gate and its
+    // `enable` line. enable's loop has no arm for `--actor`, so its catch-all binds it positionally and the
+    // composed id is `--actor-demo`.
+    fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true });
+    for (const w of ['acct-unrostered', '--actor']) {
+      const id = `${w}-demo`;
+      // An archive marker planted for the composed id, as in the project case above: past the check, the expiry
+      // gate would open a permanent `.reap-<id>.lock` and clear the archive, journaling `unarchive`.
+      fs.writeFileSync(path.join(regDir(), `${id}.archived`), '1700000000\n');
+      const r = shFail(`${START_STUBS} cmd_enable ${w} demo`);
+      expect(r.code, `${w}: ${r.stdout}`).not.toBe(0);
+      expect(r.stderr, w).toContain(`unknown wrapper '${w}'`);
+      expect(readJournal(h.home).filter((e) => e['id'] === id), `${w}: a journal row names the id`).toEqual([]);
+      expect(fs.existsSync(path.join(regDir(), `${id}.archived`)), `${w}: the planted archive marker was cleared`)
+        .toBe(true);
+    }
+    expect(reapLocks(), 'a reap lock was opened for a refused id').toEqual([]);
+    expect(eventsOf(h.home, 'enable'), 'an enable row was journaled').toEqual([]);
+    expect(startedIds(), 'a supervised start was asked for').toEqual([]);
+    // The CONTROL: a rostered wrapper on the same project journals exactly one enable row.
     expect(shFail(`${START_STUBS} cmd_enable claude-b demo`).code).toBe(0);
     expect(eventsOf(h.home, 'enable').map((e) => e['id'])).toEqual(['claude-b-demo']);
   }, 60_000);
@@ -3656,10 +3683,11 @@ cd server && ./node_modules/.bin/vitest run test/ccd-project-dash.test.ts test/p
 ```
 
 Expected: FAIL. These are drafted predictions; record the measured text in the ledger.
-- `ccd-project-dash.test.ts`: 10 failed of 10.
+- `ccd-project-dash.test.ts`: 11 failed of 11.
   - `-lead accept` and `--reason accept`.
   - ws-add, start, enable and project-pool for `-lead` exit 0 (`expected 0 not to be 0`). Project-pool prints `tagged -lead pool-a`.
   - "each refusal": ws-add exits 0.
+  - The wrapper case: `acct-unrostered: a journal row names the id`, with `unarchive` and `enable` rows for `acct-unrostered-demo`, because the expiry gate and enable's journal line run before `cmd_start` refuses the wrapper.
   - `-x-y ok`.
   - The derivation pin: `expected undefined to contain …`, or the old body.
   - The collect audit exits 0 or 1 with a JSON document on stdout, and creates `.reap--x-y.lock` where `mv --no-copy` exists.
@@ -3772,7 +3800,7 @@ After:
       || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot or dash"
 ```
 
-(4g) `cmd_enable` asks the project before it journals (R11). Before:
+(4g) `cmd_enable` asks the wrapper and the project before it journals (R11; the wrapper half by coordinator ruling). Before:
 
 ```bash
   local id; if [[ $# -ge 2 ]]; then id=$(_id "$1" "$2"); else id="$1"; fi
@@ -3783,10 +3811,12 @@ After:
 
 ```bash
   local id; if [[ $# -ge 2 ]]; then id=$(_id "$1" "$2"); else id="$1"; fi
-  # THE PROJECT IS ASKED BEFORE ANYTHING IS JOURNALED (path-identity spec §2.4). `cmd_start` refuses the
-  # same project, but only after this verb's `enable` line, which would then name an id nothing created.
-  # `_ws_project_valid` is the creation sites' one rule: no leading dot or dash.
+  # THE WRAPPER AND THE PROJECT ARE ASKED BEFORE ANYTHING IS JOURNALED (path-identity spec §2.4). `cmd_start`
+  # refuses both, but only after the expiry gate's lock and this verb's `enable` line, which would then name an
+  # id nothing created. The wrapper check is `cmd_start`'s own, words and all; `_ws_project_valid` is the
+  # creation sites' one rule for a project: no leading dot or dash.
   if [[ $# -ge 2 ]]; then
+    _is_valid_wrapper "$1" || die "unknown wrapper '$1' (valid: ${CCRC_ACCOUNTS[*]})"
     _ws_project_valid "$2" || die "invalid project '$2' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot or dash"
   fi
   # TWO EVENTS, NOT ONE. `cmd_start` runs in THIS process and writes its own
@@ -3836,6 +3866,7 @@ bash -n ccd/ccrc-doctor-checks; echo "rc=$?"                                    
 awk '/^_ws_project_valid\(\) \{/{s=NR} s&&/^}$/{print NR-s+1; exit}' ccd/ccd                              # 17
 git show origin/main:ccd/ccd | awk '/^_ws_project_valid\(\) \{/{s=NR} s&&/^}$/{print NR-s+1; exit}'       # 17
 grep -cF 'no LEADING dot or dash' ccd/ccd                                                                 # 4: ws-add, project-pool, start, enable
+awk '/^cmd_enable\(\) \{/{f=1} f&&/_is_valid_wrapper "\$1"/{print "wrap " NR} f&&/_ws_project_valid "\$2"/{print "proj " NR} f&&/^  _ws_expire_refuse_return "\$id" enable/{print "exp " NR; exit}' ccd/ccd   # wrap < proj < exp
 ```
 
 - [ ] **Step 8: Run them GREEN**
@@ -3844,7 +3875,7 @@ grep -cF 'no LEADING dot or dash' ccd/ccd                                       
 cd server && ./node_modules/.bin/vitest run test/ccd-project-dash.test.ts test/pool-name-parity.test.ts test/ownership.test.ts test/mark-check.test.ts
 ```
 
-Expected: PASS, with 10 of 10 in `ccd-project-dash.test.ts`.
+Expected: PASS, with 11 of 11 in `ccd-project-dash.test.ts`.
 
 - [ ] **Step 9: The mutation table.**
 - Save the green copy first: `S=$(mktemp -d) && cp ccd/ccd "$S/ccd.task5"`.
@@ -3862,7 +3893,8 @@ Expected: PASS, with 10 of 10 in `ccd-project-dash.test.ts`.
 | T5.6 | Restore `cmd_start`'s die text to `…, and no LEADING dot"` | `./node_modules/.bin/vitest run test/ccd-project-dash.test.ts -t 'no LEADING dot or dash'` | `start: expected '…and no LEADING dot\n' to contain 'and no LEADING dot or dash'` |
 | T5.7 | Restore `cmd_ws_add`'s die text to `…, and no LEADING dot (a dot-leading id aliases ccd's own hidden registry files — see _ws_project_valid)"` | same | `ws-add: expected '…' to contain 'and no LEADING dot or dash'` |
 | T5.8 | Insert one blank line inside `_ws_project_valid`, directly after `  local LC_ALL=C` | `./node_modules/.bin/vitest run test/session-hook.test.ts -t 'CITATION DEBT\|README HAS ITS OWN CENSUS\|LOCATION INDEXES\|ROW PASS\|RANGE BOUND\|backticked _identifier'` | At least one census pass reds: the corpus cites lines below the function, which move. Measure once. If every pass stays green, report `census-blind-at-ws-project-valid` in the wave-done. |
-| T5.9 | Move Task 5's three-line `if [[ $# -ge 2 ]]; then … fi` block in `cmd_enable` from directly after the `local id` line to directly after the `  _ws_expire_refuse_return "$id" enable` line, so it still precedes `_lc_done enable` | `./node_modules/.bin/vitest run test/ccd-project-dash.test.ts -t 'enable refuses'` | `-lead: a journal row names the id`: an `unarchive` row, written by the expiry gate the check now follows. Past it, the planted archive marker is gone and `.reap-claude-b--lead.lock` stands. The check must precede that gate, because the gate opens a permanent reap lock for an archived id |
+| T5.9 | Move Task 5's four-line `if [[ $# -ge 2 ]]; then … fi` block in `cmd_enable` from directly after the `local id` line to directly after the `  _ws_expire_refuse_return "$id" enable` line, so it still precedes `_lc_done enable` | `./node_modules/.bin/vitest run test/ccd-project-dash.test.ts -t 'enable refuses'` | `-lead: a journal row names the id`: an `unarchive` row, written by the expiry gate the check now follows. Past it, the planted archive marker is gone and `.reap-claude-b--lead.lock` stands. The wrapper case reds alike (`acct-unrostered: a journal row names the id`). The checks must precede that gate, because the gate opens a permanent reap lock for an archived id |
+| T5.10 | In `cmd_enable`, replace the line `    _is_valid_wrapper "$1" \|\| die "unknown wrapper '$1' …"` with `    :` | `./node_modules/.bin/vitest run test/ccd-project-dash.test.ts -t 'enable refuses an unrostered'` | `acct-unrostered: a journal row names the id: expected [ { act: 'unarchive', id: 'acct-unrostered-demo', … }, { act: 'enable', id: 'acct-unrostered-demo', … } ] to deeply equal []`: the project check passes `demo`, so the expiry gate and enable's journal line run before `cmd_start` refuses the wrapper. The stderr assertion stays GREEN, because `cmd_start`'s refusal carries the same words |
 
 In the table, `\|` is a Markdown table escape, in the mutation text and in the `-t` filters alike: type a plain `|`. Typed as `\|`, a `-t` filter matches no title, every case is skipped, and the row reads green.
 
@@ -3911,9 +3943,11 @@ gains a leading-dash line of its own, separate from the charset line and the
 dot line, and its callers say "no LEADING dot or dash". The function keeps
 its line count: one line of its own header comment is folded.
 
-enable's two-argument form now asks _ws_project_valid before it journals, so
-a dash- or dot-leading project leaves no enable row naming an id nothing
-created. It refuses more than before, by design.
+enable's two-argument form now asks cmd_start's own wrapper check and
+_ws_project_valid before it journals or locks, so an unrostered or
+flag-spelled wrapper, or a dash- or dot-leading project, leaves no enable
+row and no reap lock naming an id nothing created. It refuses more than
+before, by design.
 
 _ws_tmproot_id_ok is re-derived from _reg_id_ok. The witness, the records,
 the slots, ws-collect and its audit now refuse a dash-leading id through one
@@ -5017,7 +5051,7 @@ For each row:
 
 In M1 and M2 the `|` inside the table is escaped for Markdown only. Type the commands with a bare `||`.
 
-Each `sed` changes exactly one line. Before running, confirm it with `diff "$S/ccd.good" ccd/ccd | grep -c '^[<>]'`: 2 for M1, M4, M5 and M7 (a changed line shows as one `<` and one `>` line), and 1 for M2 and M3 (a deleted line shows as one `<`).
+Each `sed` changes exactly one line. After applying it, and before running the suite, confirm it with `diff "$S/ccd.good" ccd/ccd | grep -c '^[<>]'`: 2 for M1, M4, M5 and M7 (a changed line shows as one `<` and one `>` line), and 1 for M2 and M3 (a deleted line shows as one `<`). For M6, the same count over `diff "$S/test.good" server/test/ccd-id-cap.test.ts` prints 1.
 
 After the last row:
 
@@ -5042,7 +5076,7 @@ diff <(git show origin/main:ccd/ccd | awk '/^# THE ID A WITNESS MAY BE NAMED FOR
      <(awk '/^# THE ID A VERB MAY BIND/{exit} /^[A-Za-z_][A-Za-z0-9_]*\(\) *\{/{print NR": "$1}' ccd/ccd) && echo "starts unmoved"
 ```
 
-Expected: `starts unmoved`. A difference means the ws-add edit added a line. Fix it in place and do not re-measure the census (R9).
+Expected: `starts unmoved`. A difference means an edit above R15's insertion added or dropped a line; in this task that is the ws-add edit. Find that edit by content and fix it in place. Never delete an unrelated line to restore a start, and do not re-measure the census (R9).
 
 - [ ] **Step 8: Ledger and commit**
 
@@ -5095,7 +5129,7 @@ EOF
 - **R26.** No new `die` literal: `die "bad session id"` is reused at every site.
 
 **Files:**
-- Modify `ccd/ccd`. Five one-line edits, each replacing one line in place, so no line count changes. Then restamp.
+- Modify `ccd/ccd`. Five in-place edits, each replacing its lines one for one, so no line count changes. Edit B also rewrites the comment line Task 2 put directly above ws-expire's entry. Then restamp.
   - `cmd_ws_reclaim`: the entry line that Task 2 wrote (`_reg_id_ok "$id" … || die "bad session id"`). It sits directly above `[[ $token =~ ^[0-9a-f]{64}$ ]]         || _lc_refuse reclaim "$id" token-malformed "bad token"`.
   - `cmd_ws_expire`: the entry line that Task 2 wrote. It sits directly above `_json_str probe >/dev/null 2>&1 \` / `|| die "python3 unavailable — cannot quote the expiry record safely"`. This edit is made under workspace-lifecycle's consent.
   - `cmd_ws_collect`: Task 2's `_reg_id_ok "$id" && _ws_tmproot_id_ok "$id" || die "bad session id"`.
@@ -5289,7 +5323,7 @@ Expected: **4 failed, 2 passed.**
 
 Any other red set is reported by slug before going on.
 
-- [ ] **Step 4: Implement: five in-place line edits in `ccd/ccd`**
+- [ ] **Step 4: Implement: five in-place edits in `ccd/ccd`**
 
 **Edit A: `cmd_ws_reclaim`'s entry.** The before line is Task 2's padded spelling, as Step 1 (c) printed it.
 
@@ -5304,16 +5338,18 @@ After:
   [[ $token =~ ^[0-9a-f]{64}$ ]]         || _lc_refuse reclaim "$id" token-malformed "bad token"
 ```
 
-**Edit B: `cmd_ws_expire`'s entry.** The before line is Task 2's padded spelling, as Step 1 (d) printed it.
+**Edit B: `cmd_ws_expire`'s entry, and the comment line Task 2 put directly above it.** The before entry line is Task 2's padded spelling, as Step 1 (d) printed it. The comment is rewritten in place, one line for one, so that it names the dot rule (SEC6) the line below it now also enforces; the two lines are adjacent, so they make one hunk.
 
 Before:
 ```bash
+  # NO FLAG SPELLING BINDS: `_reg_id_ok` refuses a leading `-` (path-identity spec §2.4), before the reap lock.
   _reg_id_ok "$id"                       || die "bad session id"
   _json_str probe >/dev/null 2>&1 \
     || die "python3 unavailable — cannot quote the expiry record safely"
 ```
 After:
 ```bash
+  # NO FLAG SPELLING AND NO DOT-LEADING NAME BINDS: `_ws_tmproot_id_ok` refuses both (path-identity spec §2.4, §2.6), before the reap lock.
   _ws_tmproot_id_ok "$id" || die "bad session id"
   _json_str probe >/dev/null 2>&1 \
     || die "python3 unavailable — cannot quote the expiry record safely"
@@ -5360,7 +5396,7 @@ After:
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] && { [[ $mode != reclaim ]] || _ws_tmproot_id_ok "$id"; } || die "bad session id"
 ```
 
-No comment is added or changed, so the danglers scan is unaffected. No `die` literal is new, so `SANCTIONED` stays 16.
+One comment line changes, in place: Edit B's. Its one backticked name, `_ws_tmproot_id_ok`, exists, so the danglers scan is unaffected, and it holds no `die "` text. No comment is added. No `die` literal is new, so `SANCTIONED` stays 16.
 
 Then, from the workspace root:
 
@@ -6071,16 +6107,18 @@ _ws_collect_prelock() {   # id -> 0 the reap lock may be opened; 1 an answer is 
   #     fresh rungs ask `registered` before the witness, and a row's retryable,
   #     unjournaled `registered` must not become a terminal, journaled
   #     `witness-mismatch` here. So the lock opens unless `$REG/<id>.child` and
-  #     `$REG/<id>.uuid` are PROVEN absent (`_ws_reclaim_absent`), `$REG` is
-  #     readable (a glob of it is then a listing; one it cannot read comes back
-  #     empty), and `_ws_slug_free` answers free over every field and dot
-  #     family `_ws_collect_registered` reads. A lock opened there is a row's;
+  #     `$REG/<id>.uuid` are PROVEN absent (`_ws_reclaim_absent`), a wildcard
+  #     of `$REG` lists exactly `$REG/tmproots`, where the witness was just
+  #     read (a readable bit is no such proof: an opendir can still fail, and
+  #     a glob that fails comes back empty), and `_ws_slug_free` answers free
+  #     over every field and dot family `_ws_collect_registered` reads. A lock
+  #     opened there is a row's;
   #   otherwise the witness judgement answers: `not-witnessed` or
   #     `witness-mismatch`.
   # A judgement that reads sound on its second look met a writer between the
   # two reads: unmeasured, and the next pass asks again.
   local id="$1" out r rc
-  local -a recs=()
+  local -a recs=() ctl=()
   _ws_collect_reset
   _ws_collect_slug_askable "$id" || { _ws_collect_unmeasured registry "$_WS_COLLECT_REG_WHY"; return 1; }
   out=$(_ws_collect_records_of "$id"); rc=$?
@@ -6097,7 +6135,11 @@ _ws_collect_prelock() {   # id -> 0 the reap lock may be opened; 1 an answer is 
     return 1
   fi
   _ws_tmproot_witness_read "$id" && return 0
-  _ws_reclaim_absent "$REG/$id.child" && _ws_reclaim_absent "$REG/$id.uuid" && [[ -r "$REG" ]] \
+  # THE LISTING CONTROL, as `_ws_collect_registered` keeps one: the one name a
+  # wildcard of `$REG` must find is the directory the witness was read from.
+  ctl=("$REG"/tmproot[s])
+  _ws_reclaim_absent "$REG/$id.child" && _ws_reclaim_absent "$REG/$id.uuid" \
+    && [[ ${#ctl[@]} -eq 1 && "${ctl[0]}" == "$REG/tmproots" ]] \
     && _ws_slug_free "${id%-*}" "${id##*-}" || return 0
   _ws_collect_witness_judge "$id" || return 1
   _ws_collect_unmeasured witness "the witness of $id read as ccd writes it only on a second look, so it changed while it was read — the next pass asks again"
@@ -6227,9 +6269,9 @@ No mutation is restamped (no suite in these commands reads the stamp). Every red
 | T9.4 | Delete the record-parse `return 0`: `      _ws_collect_record_read "$r" && [[ "${_WS_QREC_ID-}" == "$id" ]] && return 0` becomes `      _ws_collect_record_read "$r" && [[ "${_WS_QREC_ID-}" == "$id" ]]` | `-t 'still take the lock'` | the record half: `expected 1 to be 0` (it answers unmeasured `records`, read sound on a second look, and takes no lock) |
 | T9.5 | Let a parsed record naming another id return 0: the same line becomes `      _ws_collect_record_read "$r" && return 0` | `-t 'names another id'` | the stub half: `a reader that parses it as another id’s opens no lock: expected true to be false` |
 | T9.6 | Fold read rc 3 into `quarantine-kept`: in `_ws_collect_records_judge`, delete the `  (( rc != 3 )) \|\| { _ws_collect_unmeasured quarantine …` line | `-t 'cannot be resolved'` | `expected 0 to be 1` (it answers `quarantine-kept`, journaled) |
-| T9.7 | Delete the `.child`/`.uuid` peek: `  _ws_reclaim_absent "$REG/$id.child" && _ws_reclaim_absent "$REG/$id.uuid" && [[ -r "$REG" ]] \` becomes `  [[ -r "$REG" ]] \` | `-t 'cannot be measured'` | `expected 0 to be 1` (`witness-mismatch` is journaled with no lock). The plain `.uuid` and `.child` rows stay GREEN, because `_ws_slug_free` sees both (`child-uuid-peek-pinned-by-an-unmeasurable-child`) |
+| T9.7 | Delete the `.child`/`.uuid` peek: the peek's first line `  _ws_reclaim_absent "$REG/$id.child" && _ws_reclaim_absent "$REG/$id.uuid" \` becomes `  : \` | `-t 'cannot be measured'` | `expected 0 to be 1` (`witness-mismatch` is journaled with no lock). The plain `.uuid` and `.child` rows stay GREEN, because `_ws_slug_free` sees both (`child-uuid-peek-pinned-by-an-unmeasurable-child`) |
 | T9.8 | Delete the `_ws_slug_free` arm: `    && _ws_slug_free "${id%-*}" "${id##*-}" \|\| return 0` becomes `    \|\| return 0` | `-t 'registry row'` | the `.hold`, `.reaping` and dot-family rows: `registered keeps its place ahead of witness-mismatch: expected 'witness-mismatch' to be 'registered'`. The `.uuid` and `.child` rows stay green |
-| T9.9 | Delete the `-r "$REG"` arm: the peek's first line becomes `  _ws_reclaim_absent "$REG/$id.child" && _ws_reclaim_absent "$REG/$id.uuid" \` | `-t 'searched but not listed'` | `expected 0 to be 1` (`witness-mismatch` over the unseen `.hold`, with no lock) |
+| T9.9 | Delete the listing control's arm: delete the peek's line `    && [[ ${#ctl[@]} -eq 1 && "${ctl[0]}" == "$REG/tmproots" ]] \` | `-t 'searched but not listed'` | `expected 0 to be 1` (`witness-mismatch` over the unseen `.hold`, with no lock) |
 | T9.10 | Delete the witness `return 0`: delete the line `  _ws_tmproot_witness_read "$id" && return 0` | `-t 'still take the lock'` | the witness half: `expected 1 to be 0` (unmeasured `witness`, read sound on a second look) |
 | T9.11 | `_ws_collect_registered`: replace `  _ws_collect_slug_askable "$id" \|\| return 2` with the two lines 3b removed | `-t 'spelled once'` | `the sentence is spelled once: expected 2 to be 1`, and `expected '…' to contain '_ws_collect_slug_askable "$id" \|\| return 2'` |
 | T9.12 | `_ws_collect_prelock`: add `  echo "ccd: the pre-lock pass of $id" >&2` directly after `  _ws_collect_reset` | `-t 'prints nothing'` | `it prints nothing: expected '…' not to match /\b(?:printf\|echo)\b/` |
@@ -6741,7 +6783,7 @@ L=.superpowers/sdd/2026-10-12-path-identity-w1b-ccd-id-hardening/progress.md
 | ws-add | 2 of 8 | `--actor`/`--surface` become project `agent` and create a workspace. The other ids are refused `not a git repo` (green) |
 | stop | 15 of 16 | the id-first order with `--surface` stops `pwa`. Every other id is stopped literally. The `--surface`-first order with id `--surface` is refused by arity (green) |
 | stopPair | 15 of 16 (id-first builder) or 14 of 16 (W1a builder) | a dash wrapper or project composes `<dash>-demo` or `claude-a-<dash>` and stops it. The `--surface` project redirects to `claude-a-pwa` |
-| start, enable | 8 of 16 each | argv 2, a dash project with its directory present, creates `claude-a-<dash>`. Argv 1, a dash wrapper, is refused `unknown wrapper` (green) |
+| start, enable | 8 of 16 each | argv 2, a dash project with its directory present, creates `claude-a-<dash>`. Argv 1, a dash wrapper, is refused `unknown wrapper` (green). This probe filters the journal by decoy id, so it cannot see enable's own row for `<dash>-demo`; Task 5's `ccd-project-dash.test.ts` pins that enable now refuses the wrapper before any journal line or lock |
 | forget, swap, swapCross, wsAudit | 0 | refused by `unrecognised flag`, `:?usage` or `no registry`. Plain ws-audit audits the literal id |
 | wsReclaimAudit, wsExpireAudit, wsCollectAudit | up to 8 each, unmeasured | red wherever the pre-wave answer is a document at exit 0 without `"refused"`. Record which |
 | the anti-whitelist, positional-coverage and control cases | 0 | they read no ccd verdict, or the prose path was never narrowed |
@@ -7568,8 +7610,8 @@ measured at the wave's tip unless it says otherwise.
   identity arm refuses anything itself, and a value is never scanned again as a flag.
 - Every post-loop id check in those eight verbs refuses a leading `-` through `_reg_id_ok`. A call whose id spells a
   flag may now answer `bad session id` where it answered a usage line or a "needs a value" line. A call that spells
-  no id as a flag answers as before, byte for byte (measured: every existing suite of these verbs ran unedited and
-  green), except where a value itself spells a flag and is now taken whole: a token or run id at the token verbs
+  no id as a flag answers as before, byte for byte (measured: every existing suite of these verbs ran green with no
+  assertion edited; the one edit, in `ccd-actor-flags.test.ts`, rewords a comment), except where a value itself spells a flag and is now taken whole: a token or run id at the token verbs
   answers `bad token` or `bad run id` where it answered a usage line, a ws-rename `--branch` value answers
   `bad-branch` where the surface word became the new branch name, and a hold reason is held verbatim where the
   surface word was held or a usage line answered.
@@ -7592,15 +7634,17 @@ measured at the wave's tip unless it says otherwise.
   project spelled `--actor` without any change to the server's builder order.
 
 **The predicates (SEC4).**
-- `_ws_project_valid` refuses a leading `-` on a line of its own, beside its leading-`.` line. The three callers that
-  print its refusal say "no LEADING dot or dash". This closes the only mint path for a dash-leading id. Before the
+- `_ws_project_valid` refuses a leading `-` on a line of its own, beside its leading-`.` line. Its four callers that
+  print its refusal, `enable`'s new project check among them, say "no LEADING dot or dash". This closes the only mint path for a dash-leading id. Before the
   edit, the wave's entry check counted no dash-leading name in the registry, `pools/`, `tmproots/`,
   `tmpquarantine/`, the project directories or the worktrees, on either box (measured; counts only, listed in the
   pull request).
 - `_ws_tmproot_id_ok` is `_reg_id_ok` plus no leading `.`. It is ccd's mirror of `isTmpRootId` without the length
   rule, pinned against it name by name.
 - `enable <wrapper> <project>` checks its project with `_ws_project_valid` before it journals anything. It refuses
-  more than before: a dot- or dash-leading project leaves no `enable` row.
+  more than before: a dot- or dash-leading project leaves no `enable` row. Ahead of it, enable asks its wrapper with
+  `cmd_start`'s own check and words, so an unrostered or flag-spelled wrapper leaves no `enable` row and no reap lock
+  either.
 
 **Dots (SEC6).**
 - ws-reclaim, ws-expire and ws-collect refuse a dot-leading id at entry through `_ws_tmproot_id_ok`. So do
@@ -7803,9 +7847,11 @@ test titles cite the spec, never this contract.
 
 **SEC4 (the project predicate).**
 - `_ws_project_valid` refuses a leading `-`, after the entry check counted no dash-leading name on either box. Its
-  three callers say "no LEADING dot or dash".
+  four callers, `enable`'s new project check among them, say "no LEADING dot or dash".
 - `enable-validates-its-project`: `enable <wrapper> <project>` calls `_ws_project_valid` before it journals, so a dot-
-  or dash-leading project leaves no `enable` row. It refuses more than before.
+  or dash-leading project leaves no `enable` row. It refuses more than before. It asks its wrapper first, with
+  `cmd_start`'s own check and words, so an unrostered or flag-spelled wrapper leaves no `enable` row and no reap lock
+  either.
 
 **SEC5 (the cap).**
 - `id-cap-from-the-name-census`: the cap is derived from a census of every name derived from an id, not from the slot
@@ -8218,7 +8264,7 @@ Wave 2 of 4 of the path-identity programme (spec `docs/superpowers/specs/2026-10
 - Task 2: ws-reclaim, ws-expire and ws-collect take `--session` and their token keys as whole pairs, and refuse a dash-leading id before any lock.
 - Task 3: stop refuses a dash-leading `--surface` value, a dash-leading residue token, and a composed id `_reg_id_ok` refuses.
 - Task 4: ws-release, ws-archive, ws-restore, ws-hold and ws-rename take their identity pairs whole (line-neutral).
-- Task 5: no project or temp-root id begins with a dash; `enable`'s two-argument form validates its project before it journals.
+- Task 5: no project or temp-root id begins with a dash; `enable`'s two-argument form validates its wrapper and its project before it journals or locks.
 - Task 6: ws-add refuses a second `--actor` and a dash-leading `--surface` value (line-neutral).
 - Task 7: `_REG_ID_MAX` = {{cap}}, from the derived-name census (widest overhead {{W}}) and the hook's id gate; each of ws-add, start and enable dies before anything is created.
 - Task 8: ws-reclaim, ws-expire, ws-collect and the two token audits refuse a dot-leading id at entry.
@@ -8340,7 +8386,7 @@ Read all ten loops, `_reg_id_ok`, `_ws_tmproot_id_ok`, stop and ws-add at the ti
 ### 2. The frozen corpus, the stamp and the vocabularies (opus, high)
 
 **Re-derive:**
-- Every function above `cmd_start()` keeps its start line and line count, and the five census passes are green with no number edited. ws-rename's shifted `local`/`while`/`case` lines carry no anchor.
+- Every function above R15's insertion (`# THE ID A VERB MAY BIND`) keeps its start line, every function between it and `cmd_start()` moves by one common shift (Task 13 (3b)), every function above `cmd_start()` keeps its line count, and the five census passes are green with no number edited. ws-rename's shifted `local`/`while`/`case` lines carry no anchor.
 - The stamp was regenerated, never typed.
 - `SANCTIONED` is still 16, `collect-readers` matches in both directions, the WS-AUDIT-COLLECT block has three `_lc_emit` lines, nonpoison still scans 55, and the surface set is spelled twice.
 - Every backticked name in a new comment exists.

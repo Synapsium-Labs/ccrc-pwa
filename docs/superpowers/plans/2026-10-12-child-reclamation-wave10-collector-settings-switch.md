@@ -221,6 +221,7 @@ R1 to R19 are the coordinator's wave-10 rulings (SW-R1 to SW-R19), renumbered.
   - Off with the latch set is accepted even when the registry is unlistable or the epoch moved.
   - The 409 confirm bodies carry `{ok:false, error, facts, confirmKey}`. Every other refusal carries `{ok:false, error, detail?}` and never a path or an errno.
   - When the store says written but the post-write proof fails: the event is recorded, then the route answers 503 `write-failed` and logs one `console.warn('ccrc-server: …')`.
+  - When the store throws before its append (a defect, or `BEGIN IMMEDIATE` still busy past `busy_timeout = 5000`): the store keeps propagating it, and the route catches it around its one `setCollectLane(` call and answers 503 `write-failed` with one `console.warn('ccrc-server: …')`, never a 500 and never the driver's message.
   - The accepted POST's feed row:
     - title `temp root collector setting changed`;
     - `kind:'coord'`, `sessionId:''`, `runId:null`;
@@ -252,9 +253,13 @@ R1 to R19 are the coordinator's wave-10 rulings (SW-R1 to SW-R19), renumbered.
   - They live in `watch.ts`'s port implementation.
   - They are keyed per safety-stop reason, plus `marker-recreated`.
   - A coherent resolution clears them, as the stall-settings warn latch does.
+  - **Extended by the coordinator (2026-10-12), with the latch outcomes.** The coordinator extended R16's warn keys with the latch helper's non-success outcomes: `latch-refused`, `latch-failed` and `latch-store-threw`.
+    - A store throw before the append, which `setCollectLane` propagates by design (Task 6), is answered by `collectRetireLatch` as the L1 arm `{ kind: 'store-threw' }` (Task 2's table, admitted by `isCollectLaneKebab`; Task 7's try/catch). It never escapes into the executor's "may have acted" log or the pass's swallowed rejection.
+    - Task 8's `collectLatchNote` warns once per non-success kind through `collectControlWarned`, fed by the pass's latch. Those keys are cleared on `retired`, never by a coherent resolution. The executor's outcome is not fed: it re-reads, and the pass's latch on the next listing meets the same store.
 - **R17. Stated residual.**
   - An Off accepted after an act's argv was handed to `runCcd` cannot stop that act. This extends `marker-removal-after-the-last-listing-still-composes`.
   - The 200 says the choice "applies from the collector's next check".
+  - A second stated residual (coordinator ruling at plan review): `pre-latch-snapshot-repair-readopts-an-unset-latch`. After a database-only restore to a pre-latch snapshot, the only repair is a confirmed Live, and Task 2's Live arm copies the restored row's unset latch. So a standing or re-created legacy file arms the lane again, on any node, and Off is refused again, until a coherent same-epoch listing shows the file absent and retires it. It is stated in both as-built notes and the PR body. Neither L0 nor the confirm facts change.
 - **R18. Carries.**
   - Item 40: "latest change" becomes "rebuilt" at the four measured sites.
   - Item 38: the lane case's title says "ahead of the forgotten-id return".
@@ -344,7 +349,7 @@ R20 to R38 were **proposed by the frame** to settle conflicts between the ground
 
 1. **The lane composes `ws-collect` when nothing arms it for this node and epoch.**
    - **Inputs:** a stored Live for another node; a node unknown after a reconnect; an epoch move during the final listing, during observation 2, or between the job's queueing and its start; a journal behind or ahead; a pre-latch database snapshot with a re-created marker; Off or a state change during observation 2.
-   - **Expected:** nothing is composed. The one exception is the stated residual: an Off that lands after the argv.
+   - **Expected:** nothing is composed. The one exception is the stated residual: an Off that lands after the argv. The pre-latch snapshot composes nothing while it stands. The second stated residual, `pre-latch-snapshot-repair-readopts-an-unset-latch`, starts only after a confirmed Live repairs it. From then on the standing file arms the lane again, as an arm, and that case is not a failure of this item.
    - **Pinned by:** Task 3's resolver table, Task 7's executor cases and Task 8's lane cases.
 2. **The latch retires wrongly, or never.**
    - **Inputs:** it heals a mismatch in either direction; it retires on a paused, unlistable or other-epoch listing; it retires from the POST; it never retires on an idle lane (so Off stays refused forever).
@@ -619,11 +624,12 @@ export type CollectLaneWriteDecision =
 export function decideCollectLaneWrite(req: CollectLaneWriteRequest, before: CollectLaneRowRead,
   journal: CollectLaneJournalRead, at: number): CollectLaneWriteDecision;
 /** The one latch helper's answer (R3, R30). Declared here so its kinds come from an L1 table; L3's
- *  `collectRetireLatch` returns it. */
+ *  `collectRetireLatch` returns it. `store-threw`: the store threw before its append (R16's extension). */
 export type CollectLatchOutcome =
   | { readonly kind: 'not-due' } | { readonly kind: 'retired' }
   | { readonly kind: 'refused'; readonly code: CollectLaneWriteRefusal }
-  | { readonly kind: 'failed'; readonly phase: 'append' | 'update' | 'commit' };
+  | { readonly kind: 'failed'; readonly phase: 'append' | 'update' | 'commit' }
+  | { readonly kind: 'store-threw' };
 export const COLLECT_LATCH_OUTCOME_KINDS: readonly CollectLatchOutcome['kind'][];   // derived from its table
 /** Raw, bigint-aware comparison of two reads (the `sameStallSettingsRead` idiom). */
 export function sameCollectLaneRow(a: CollectLaneRowRead, b: CollectLaneRowRead): boolean;
@@ -837,7 +843,8 @@ export function collectControlNow(c: Pick<CollectControlDeps, 'coord' | 'journal
   { readonly row: CollectLaneRowRead; readonly journal: CollectLaneJournalRead; readonly control: CollectLaneControl };
 // CollectLatchOutcome is L1's (Task 2), imported from ../collectLane.js.
 /** R3/R22: THE one latch helper. Synchronous. Calls `setCollectLane` with a retire request only when collectLatchDue;
- *  calls latchRetired(collectLatchFeedBody(COLLECT_ACTOR)) exactly once on `retired`. Never heals. */
+ *  calls latchRetired(collectLatchFeedBody(COLLECT_ACTOR)) exactly once on `retired`. Never heals. A throw from
+ *  `setCollectLane` (only ever before its append) answers `store-threw` (R16's extension): the helper never throws. */
 export function collectRetireLatch(c: CollectControlDeps, switches: CollectSwitches, epoch: CollectEpochPair): CollectLatchOutcome;
 /** R23: for the route and the GET only. */
 export function collectLaneCaps(state: FleetState | undefined): CollectLaneCaps;
@@ -857,7 +864,8 @@ export function collectLaneCaps(state: FleetState | undefined): CollectLaneCaps;
   - `private collectAttentionInput()` (Task 8, extracted; `collectAttention()` calls it);
   - `private collectControlDeps(coord: CoordStore): CollectControlDeps` (Task 7);
   - `private collectRecordCoordFeed(coord: CoordStore, title: string, body: string): void` (Task 7);
-  - `private collectControlNote(r: CollectLaneSettled): void` (Task 8: R16's warn latches over `collectControlWarned`, called first from the port's `flipped`).
+  - `private collectControlNote(r: CollectLaneSettled): void` (Task 8: R16's warn latches over `collectControlWarned`, called first from the port's `flipped`);
+  - `private collectLatchNote(o: CollectLatchOutcome): void` (Task 8: R16's extension, one warn per non-success latch kind over `collectControlWarned`, fed by the pass's latch, cleared on `retired`).
 - **Wiring:**
   - `runInventory`: the remote arm gets `fleet: { io, state, identity: this.deps.fleetIdentity }`; the local arm gets `ownIdentity: this.deps.fleetIdentity` (Task 5).
   - `collectAct`'s deps gain `control: this.collectControlDeps(coord)` and `link: this.deps.fleetIdentity ?? NO_FLEET_IDENTITY` (Task 7).
@@ -900,7 +908,7 @@ export function collectLanePostRefusal(err: unknown): CollectLanePostRefusal;
 export function useCollectLaneView(pollMs?: number): CollectLanePoll;
 // pwa/src/fleet/collectLaneWords.ts — Task 11 is the one producer, and Task 12 imports exactly these names (it defines no copy):
 export type CollectEffectiveState = CollectLaneView['effective']['state'];
-export const COLLECT_SECTION_TEXT: { title; notAvailable; unread; stale; legend; off; live; reconfirm; confirmTitle; confirmLabel };
+export const COLLECT_SECTION_TEXT: { title; notAvailable; unread; stale; legend; off; live; reconfirm; confirmTitle; confirmLabel; unanswered; refused };
 export const COLLECT_STATE_TEXT: Readonly<Record<CollectEffectiveState, { readonly label: string; readonly line: string }>>;
 export const COLLECT_ARMED_BY_TEXT: Readonly<Record<CollectArmedBy, string>>;
 export const COLLECT_WARN_TEXT: { recreated; otherNode; mismatch; unknownChoice };
@@ -1571,7 +1579,8 @@ Expected: `5 passed`. Re-measure the skipped count. A red here means a cited byt
   export type CollectLatchOutcome =
     | { readonly kind: 'not-due' } | { readonly kind: 'retired' }
     | { readonly kind: 'refused'; readonly code: CollectLaneWriteRefusal }
-    | { readonly kind: 'failed'; readonly phase: 'append' | 'update' | 'commit' };
+    | { readonly kind: 'failed'; readonly phase: 'append' | 'update' | 'commit' }
+    | { readonly kind: 'store-threw' };                                                       // R16's extension
   export const COLLECT_LATCH_OUTCOME_KINDS: readonly CollectLatchOutcome['kind'][];          // Object.keys(its table)
   export function sameCollectLaneRow(a: CollectLaneRowRead, b: CollectLaneRowRead): boolean;
   export function sameCollectLaneJournal(a: CollectLaneJournalRead, b: CollectLaneJournalRead): boolean;
@@ -2064,7 +2073,7 @@ describe('the write decision (§5.2, §5.4, §5.6)', () => {
     const WHYS = ['row-absent', 'row-unreadable', 'row-malformed', 'journal-missing', 'journal-malformed',
       'journal-unreadable', 'journal-not-regular', 'journal-not-configured'];
     const REFUSALS = ['conflict', 'marker-still-controls', 'state-unmeasurable', 'not-coherent'];
-    const LATCH_KINDS = ['not-due', 'retired', 'refused', 'failed'];
+    const LATCH_KINDS = ['not-due', 'retired', 'refused', 'failed', 'store-threw'];
     expect([...COLLECT_LANE_JOURNAL_KINDS].sort()).toEqual([...JOURNAL_KINDS].sort());
     expect([...COLLECT_LANE_JOURNAL_FAULTS].sort()).toEqual([...FAULTS].sort());
     expect([...COLLECT_LANE_UNMEASURABLE_WHYS].sort()).toEqual([...WHYS].sort());
@@ -2462,13 +2471,18 @@ export function decideCollectLaneWrite(req: CollectLaneWriteRequest, before: Col
  *  - `not-due`: the listing or the control state did not prove the marker retirable, and the store was not asked;
  *  - `retired`: the store wrote the latch;
  *  - `refused`: the store refused the retire request, with its word;
- *  - `failed`: the store failed at a phase after its decision. */
+ *  - `failed`: the store failed at a phase after its decision;
+ *  - `store-threw`: the store threw BEFORE its append (`BEGIN IMMEDIATE` busy past its timeout, an I/O fault at
+ *    `BEGIN`, a read or a decision that threw), which `setCollectLane` propagates by design. Nothing was appended or
+ *    written. The helper answers it rather than rethrowing, so its callers re-read and go on (R16's extension, the
+ *    coordinator, 2026-10-12). */
 export type CollectLatchOutcome =
   | { readonly kind: 'not-due' } | { readonly kind: 'retired' }
   | { readonly kind: 'refused'; readonly code: CollectLaneWriteRefusal }
-  | { readonly kind: 'failed'; readonly phase: 'append' | 'update' | 'commit' };
+  | { readonly kind: 'failed'; readonly phase: 'append' | 'update' | 'commit' }
+  | { readonly kind: 'store-threw' };
 const COLLECT_LATCH_OUTCOME_KIND_TABLE: Readonly<Record<CollectLatchOutcome['kind'], true>> = {
-  'not-due': true, retired: true, refused: true, failed: true,
+  'not-due': true, retired: true, refused: true, failed: true, 'store-threw': true,
 };
 export const COLLECT_LATCH_OUTCOME_KINDS: readonly CollectLatchOutcome['kind'][] =
   Object.keys(COLLECT_LATCH_OUTCOME_KIND_TABLE) as CollectLatchOutcome['kind'][];
@@ -3691,7 +3705,7 @@ grep -n "^export function measureCollectLaneRow\|^export function collectLaneCon
 grep -n "^export function collectLaneEffective\|^export type CollectLaneSwitches\|^export type CollectCurrentNode\|^export type CollectLaneStopWhy\|^export interface CollectLaneCounts\|^export interface CollectEpochPair\|^export interface CollectLaneCaps" server/src/collectLane.ts   # Task 3: seven hits
 grep -n "^export interface CollectLaneView\b\|^export interface CollectLaneConfirmRequired\|^export interface CollectLaneRequest\|^export function isCollectLaneChoice" shared/api.ts   # Task 1: four hits
 grep -c "^} from '../../shared/api.js';$" server/src/collectLane.ts       # 1: the closing line edit (a) anchors on
-grep -c "isCollectLaneChoice" server/src/collectLane.ts                   # >= 1: Task 2 merged it into the import
+grep -c "isCollectLaneChoice" server/src/collectLane.ts                   # >= 1: Task 3 Step 3 (a) added it to the import (Task 2 imports no choice guard)
 grep -c "CollectLaneRequest\|CollectLaneView\b\|CollectLaneConfirmRequired\|decideCollectLaneBody\|collectConfirmKey\|collectLaneView(" server/src/collectLane.ts   # 0
 grep -n "^const hasOwn\|^const isObject\|childReclaimDetailText," server/src/collectLane.ts   # the two file-local helpers and the sanitiser import
 grep -c "collectLaneEffective(" server/src/collectLane.ts                 # 1: Task 3's definition only, no caller yet
@@ -7900,6 +7914,7 @@ Name these by slug in the wave-done:
 - **R6 and R23 (capabilities).** Step 6 measures both capabilities once, as the inline literal pair. That keeps `collect-lane-scans.test.ts`'s rule of at least two literal gates. A resolver `not-running` answers `answered(6, 'caps')` with `cleared('caps')`, at the point where the switch is resolved. `collectLaneCaps` is exported for the route and the GET, so neither ever spells the capability.
 - **R21 (stops versus safety-stopped).** `raised`, `unlistable`, `epoch-changed` and `unknown-fleet` are stops. A stop means no flip, no feed row and a lane-wide clear (`paused`, `epoch` or `node`). Only control incoherence is `safety-stopped`. It is a flip candidate, and it composes nothing.
 - **R22 (the latch is decided apart from the arm).** `collectRetireLatch` decides through L1 `collectLatchDue` alone. It runs after the final listing and before the resolution. The executor then reads the row and the journal again (spec §5.5).
+- **R16's extension (the coordinator, 2026-10-12).** `collectRetireLatch` wraps the store's writer in try/catch. A throw, which `setCollectLane` raises only before its append (`BEGIN IMMEDIATE` busy past its timeout, an I/O fault at `BEGIN`), answers L1's `{ kind: 'store-threw' }`. So the executor's job never rejects from the latch: `collectAct` no longer reads a busy database at latch time as a job that "may have acted". The pass's latch (Task 8) never rejects the pass either. The executor still discards the outcome and re-reads; Task 8 warns on the pass's outcome.
 - **R3 (the latch row).** The latch row is one `kind:'coord'` row, titled `temp root collector setting changed`. Its body is `collectLatchFeedBody('collect sweep')` (R36). `watch.ts` writes it, through `latchRetired`. `watch.ts` still never names the marker constant.
 - **R37 (the job's epoch).** `CollectJob` gains `epoch`. `collectAct` reads it from the link's `epochNow()` at queue time, outside the queue callback (Task 8 moves it onto `collectSeenEpoch`). Step 6's pair is `{before: job.epoch, after: epochNow()}`, taken after the final listing. The read before the final listing stays, because spec §5.2 says so. Epochs only rise, so a comparison against that read is already covered by the pair. The read is used only to word the `epoch-changed` detail.
 - **R31 (the switch body).** `watch.ts` moves onto `collectSwitchFeedBody(r)`. `collectFeedSwitchBody(live)` is deleted, and the lane's `flipRows` matches by the kept prefixes.
@@ -7972,7 +7987,8 @@ Name these by slug in the wave-done:
   export type CollectLatchOutcome =
     | { readonly kind: 'not-due' } | { readonly kind: 'retired' }
     | { readonly kind: 'refused'; readonly code: CollectLaneWriteRefusal }
-    | { readonly kind: 'failed'; readonly phase: 'append' | 'update' | 'commit' };
+    | { readonly kind: 'failed'; readonly phase: 'append' | 'update' | 'commit' }
+    | { readonly kind: 'store-threw' };
   // Task 3 — server/src/collectLane.ts (L1)
   export type CollectLaneSwitches =
     | { readonly paused: false; readonly marker: boolean }
@@ -8844,6 +8860,25 @@ describe('the one latch helper (§5.4)', () => {
     expect(b.writes).toEqual([]);
   });
 
+  it('a store that throws before its append answers store-threw, writes nothing, and never throws', () => {
+    // A REAL throw from the store's own BEGIN: a transaction already open on its connection makes `BEGIN IMMEDIATE` throw
+    // at once, as a busy database does after its timeout. `setCollectLane` propagates a throw before its append by design
+    // (Task 6); the helper answers it (R16's extension, the coordinator, 2026-10-12).
+    const b = built({ beforeWrite: (coord) => { coord.db.exec('BEGIN'); } });
+    let out: unknown;
+    try {
+      expect(() => { out = collectRetireLatch(b.c, ABSENT, SAME); }, 'the helper never throws').not.toThrow();
+    } finally {
+      b.coord.db.exec('ROLLBACK');
+    }
+    expect(out).toEqual({ kind: 'store-threw' });
+    expect(b.writes, 'the store was asked once').toHaveLength(1);
+    expect(b.answers, 'and answered nothing: it threw').toEqual([]);
+    expect(b.rows, 'no row on a throw').toEqual([]);
+    expect(b.journal.read(), 'nothing appended').toEqual({ kind: 'missing' });
+    expect(measureCollectLaneRow(b.coord.collectLaneRow()).kind, 'the row is untouched').toBe('seed');
+  });
+
   it('it is synchronous', () => {
     const out: unknown = collectRetireLatch(built().c, ABSENT, SAME);
     expect(out instanceof Promise, 'a Promise: something awaits inside the helper').toBe(false);
@@ -9489,7 +9524,7 @@ After:
   return own(COLLECT_OUTCOME_KINDS) || own(COLLECT_NOT_ASKED_WHYS) || own(COLLECT_ANSWERED_WHYS)
     || own(COLLECT_AUDIT_KINDS) || own(COLLECT_RESOLVED_KINDS) || (COLLECT_HOLD_WHYS as readonly string[]).includes(v);
 ```
-The latch's `not-due` and the journal's `not-configured`, which this file now also quotes, are admitted by Task 6's L1 `isCollectLaneKebab`, the scanner's next union. They are never re-spelled into a table here.
+The latch's `not-due` and `store-threw` and the journal's `not-configured`, which this file now also quotes, are admitted by Task 6's L1 `isCollectLaneKebab`, the scanner's next union. They are never re-spelled into a table here.
 
 (a9) The words. Before:
 ```ts
@@ -9585,12 +9620,21 @@ export function collectControlNow(c: Pick<CollectControlDeps, 'coord' | 'journal
  *  On `retired`, and on nothing else, it hands the lane the latch's row body, once. It never heals a mismatch: an
  *  incoherent state is never due, and the writer refuses one anyway. Its callers are the executor's step 6 and the
  *  lane's pass, each right after a registry listing, never the route. Whatever it answers, the caller reads the control
- *  state again before deciding anything. */
+ *  state again before deciding anything. A throw from the writer, which the store raises only before its append, is
+ *  answered `store-threw` (R16's extension, the coordinator, 2026-10-12): the helper never throws, so neither the
+ *  executor's job nor the lane's pass rejects on it. */
 export function collectRetireLatch(c: CollectControlDeps, switches: CollectSwitches, epoch: CollectEpochPair): CollectLatchOutcome {
   const seen = collectControlNow(c);
   if (c.journal === null || !collectLatchDue(switches, epoch, seen.control)) return { kind: 'not-due' };
-  const w = c.coord.setCollectLane({ kind: 'retire', expected: seen.row, expectedJournal: seen.journal }, c.wallNow(),
-    c.journal);
+  let w: ReturnType<CollectControlDeps['coord']['setCollectLane']>;
+  try {
+    w = c.coord.setCollectLane({ kind: 'retire', expected: seen.row, expectedJournal: seen.journal }, c.wallNow(),
+      c.journal);
+  } catch {
+    // A throw BEFORE the store's append (`BEGIN IMMEDIATE` busy past its timeout, an I/O fault at `BEGIN`): nothing was
+    // appended or written, and the store propagates it by design. Answered, never rethrown; the caller re-reads.
+    return { kind: 'store-threw' };
+  }
   switch (w.kind) {
     case 'written':
       c.latchRetired(collectLatchFeedBody(COLLECT_ACTOR));
@@ -9661,7 +9705,7 @@ After:
   // path-identity spec 2026-10-12 §5.5). ──
   const epoch: CollectEpochPair = { before: queuedUnder, after: deps.link.epochNow() };
   // The marker's latch, through its ONE helper, decided apart from the arm (§5.4). Whatever it answers, the row and the
-  // journal are read again below, so a refused or failed retire is resolved from what now stands.
+  // journal are read again below, so a refused, failed or thrown (`store-threw`) retire is resolved from what now stands.
   collectRetireLatch(deps.control, last, epoch);
   const caps: CollectLaneCaps = {
     collect: capSupported(deps.fleetState, COLLECT_CAP), reclaimPause: capSupported(deps.fleetState, RECLAIM_PAUSE_CAP),
@@ -9952,6 +9996,8 @@ The worker measures every red text. Where the measured text differs, it replaces
 | 21 | The safety stop deleted: remove `if (lane.kind === 'safety-stopped') return answered(5, 'safety-stopped', …);` | `X -t 'never calls retire'`, `X -t 'journal appended'` | `expected { kind: 'would-collect', … } to match object { kind: 'answered', step: 5, why: 'safety-stopped' }` |
 | 22 | The would-collect gate narrowed to Off: `if (!collectLaneLive(lane))` becomes `if (lane.kind === 'shadowed' && lane.why === 'off')` | `X -t 'shadowed with no flip'` | both arms: `expected { kind: 'acted', … } to match object { kind: 'would-collect' }`. E's "SHADOW: no marker" stays green, because Off alone cannot see this |
 | 23 | The would-collect gate deleted: remove `if (!collectLaneLive(lane)) return { kind: 'would-collect', audit: observed };` | `E -t 'SHADOW: no marker'`, `X -t 'shadowed with no flip'` | `expected { kind: 'acted', … } to match object { kind: 'would-collect', … }` |
+| 24 | The store throw rethrown: in `collectRetireLatch`, delete the `try {` and the whole `} catch { … }`, leaving `w = c.coord.setCollectLane(…);` bare | `L -t 'throws before its append'` | `the helper never throws: expected [Function] to not throw an error but 'Error: cannot start a transaction within a transaction' was thrown` |
+| 25 | The throw read as not due: the `catch` answers `{ kind: 'not-due' }` | `L -t 'throws before its append'` | `expected { kind: 'not-due' } to deeply equal { kind: 'store-threw' }` |
 
 The compiler holds two guards, not a case. Record them as such:
 - Deleting the `if (lane.kind === 'not-running') { … }` block makes `deps.lane.flipped(lane)` a TS2345, because a `not-running` is no `CollectLaneSettled`.
@@ -9973,7 +10019,7 @@ Expected:
 - Every file PASSES, and both `tsc` runs print nothing.
 - The `test/collect-` run covers every collector suite: wave 9's, and Tasks 2 to 6's `collect-lane-*` files.
 - `single-definition.test.ts`'s wave-9 marker pin stays green. Its holders are still the definer and the executor, and the executor still matches no `WRITE` pattern, because its one write goes through `setCollectLane(`. Its comment saying neither file "reaches a write" is now false for the store write; Task 10 amends it line-neutrally.
-- `mail-routes.test.ts` admits this file's new words through `isCollectExecutorKebab` (`switch-flip`, `epoch-changed`, `unknown-fleet`, `safety-stopped`, `not-running`) and through Task 6's `isCollectLaneKebab` (`not-due`, `not-configured`). A red there naming one of them means a table above lost it.
+- `mail-routes.test.ts` admits this file's new words through `isCollectExecutorKebab` (`switch-flip`, `epoch-changed`, `unknown-fleet`, `safety-stopped`, `not-running`) and through Task 6's `isCollectLaneKebab` (`not-due`, `store-threw`, `not-configured`). A red there naming one of them means a table above lost it.
 - `ws-collect-wiring.test.ts` still lists `COLLECT_CAP`'s holders as `['ccdargv.ts', 'coord/collectTempRoot.ts', 'watch.ts']`.
 
 - [ ] **Step 8: Commit**
@@ -9993,7 +10039,9 @@ nothing awaited, it:
 - retires the legacy marker's latch through one synchronous helper,
   collectRetireLatch. The helper writes through the store's one writer,
   journal first, and only on a coherent, unpaused, same-epoch listing
-  that proves the marker absent;
+  that proves the marker absent. A store that throws before its append
+  is answered as store-threw, never rethrown, so the job goes on and
+  re-reads;
 - measures both capabilities;
 - reads the Settings row, its generation journal and the node measured
   on the current connection;
@@ -10034,6 +10082,7 @@ Name these departures, by slug, in the wave-done: `epoch-with-pause-reports-the-
   - The pass reads the epoch at its head. An epoch that differs from the last pass's clears every pair.
   - The gather is bracketed by epoch reads. A move during the gather clears every pair and ends the pass with no latch.
 - **The job's epoch (R37).** `collectAct` queues the job under `collectSeenEpoch`, captured outside the queue callback. Task 7 used the link's `epochNow()` at queue time.
+- **Latch warns (R16's extension, the coordinator, 2026-10-12).** The pass's latch outcome feeds `collectLatchNote`. It warns once per non-success kind, keyed `latch-refused`, `latch-failed` or `latch-store-threw`, and clears those keys on `retired` only. A coherent resolution never clears them.
 - **Warn latches (R16).** They live in the port's `flipped`. Each safety-stop reason warns once, and so does `marker-recreated`. A coherent resolution clears them.
 - **Counts (R12, R26).**
   - `currentCollectCounts()` is built on `collectAttentionInput()`, which is extracted from `collectAttention()`.
@@ -10112,7 +10161,8 @@ Name these departures, by slug, in the wave-done: `epoch-with-pause-reports-the-
   private collectControlWarned = new Set<string>();
   FleetWatcher.currentCollectCounts(): CollectLaneCounts | null;          // null while collectPop === null (R12, R26)
   private collectAttentionInput(): Parameters<typeof collectAttentionItems>[0];
-  private collectControlNote(r: CollectLaneSettled): void;               // R16's latches (an Interface addition)
+  private collectControlNote(r: CollectLaneSettled): void;
+  private collectLatchNote(o: CollectLatchOutcome): void;                 // R16's extension: the latch outcomes' warns               // R16's latches (an Interface addition)
   // server/test/collectLaneFixture.ts (rig members, additive)
   identity: FleetIdentityCell;
   laneJournal: CollectLaneJournal & { readonly logPath: string };        // the rig's deps.collectLane.journal
@@ -10137,7 +10187,7 @@ grep -nE "^  collectLaneRow\(\): CollectLaneRowRead|^  setCollectLane\(req: Coll
 grep -n "private collectControlDeps(coord: CoordStore): CollectControlDeps\|private collectRecordCoordFeed(\|      flipped: (r) => {\|NO_FLEET_IDENTITY\|{ id, epoch }" server/src/watch.ts
 grep -n "epochNow()" server/src/watch.ts      # exactly ONE line: Task 7's queue-time capture in collectAct
 grep -n "  private collectLastSeenLive = false;\|^} from './collectLane.js';\|^} from './coord/collectTempRoot.js';\|  private async collectPass(\|  private collectAttention(): ChildReclaimCollectInput {\|  currentCollectLane(): {\|IT SHIPS SHADOWED\. Until the operator touches the live marker by hand\|  /\*\* The runner the lane hands its calls" server/src/watch.ts
-grep -n "collectSeenEpoch\|collectControlWarned\|currentCollectCounts\|collectAttentionInput\|collectControlNote\|collectRetireLatch\|collectLaneCounts\|CollectLaneCounts\|CollectLaneSettled\|COLLECT_LANE_LIVE_MARKER\|collect-lane-live" server/src/watch.ts   # prints NOTHING
+grep -n "collectSeenEpoch\|collectControlWarned\|currentCollectCounts\|collectAttentionInput\|collectControlNote\|collectLatchNote\|CollectLatchOutcome\|collectRetireLatch\|collectLaneCounts\|CollectLaneCounts\|CollectLaneSettled\|COLLECT_LANE_LIVE_MARKER\|collect-lane-live" server/src/watch.ts   # prints NOTHING
 grep -c "the live marker as the last act job read it" server/src/watch.ts   # 1 if Task 7 left the bullet as main has it; 0 if it reworded it
 # the lane rig as Task 7 left it
 grep -n "collectLane:\|collectLaneJournalAt(\|fleetIdentity\|FleetIdentityCell\|laneJournal\|knowNode\|bumpEpoch\|setLive\|setOff" server/test/collectLaneFixture.ts
@@ -10250,7 +10300,7 @@ with:
       'CONTROL: a second reader is seen').toHaveLength(3);
     expect(handed(pass), 'the pass hands its listing to collectRetireLatch( alone').toEqual([
       'const [listings, switches] = gathered;',
-      expect.stringMatching(/^collectRetireLatch\([^;]*\bswitches\b[^;]*\);$/),
+      expect.stringMatching(/^this\.collectLatchNote\(collectRetireLatch\([^;]*\bswitches\b[^;]*\)\);$/),
     ]);
   });
 ```
@@ -10539,6 +10589,35 @@ describe('flips and warn latches (§5.5)', () => {
       .toHaveLength(2);
     expect(f.collects()).toEqual([]);
   });
+
+  it('a latch the store cannot retire warns once per outcome while passes retry, a coherent resolution keeps it, and a retire clears it', async () => {
+    // R16's extension (the coordinator, 2026-10-12): a stuck latch keeps Off refused, so it is said once per outcome,
+    // never silent and never on every pass. The act jobs resolve the seed coherently (Off, shadowed) all the while.
+    const f = await collectRig();
+    f.pastHoldOff();
+    for (const id of ['demo-a', 'demo-b']) f.witness(id);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const store = vi.spyOn(f.coord, 'setCollectLane').mockImplementation(() => {
+      throw Object.assign(new Error('database is locked'), { code: 'ERR_SQLITE_ERROR' });
+    });
+    const jobs = actJobs(f);
+    await f.passesUntil(() => jobs.n >= 2);
+    expect(store.mock.calls.length, 'the retire was retried').toBeGreaterThanOrEqual(2);
+    expect(latchOf(f), 'nothing was written').toBeNull();
+    expect(warnedOf(warn.mock.calls, 'threw before its append'), 'one warn, across passes and coherent resolutions')
+      .toHaveLength(1);
+    store.mockImplementation(() => ({ kind: 'failed', phase: 'append', code: 'ENOSPC' }));
+    const at = jobs.n;
+    await f.passesUntil(() => jobs.n >= at + 2);
+    expect(warnedOf(warn.mock.calls, 'failed at append'), 'its own key, warned once').toHaveLength(1);
+    store.mockRestore();
+    f.next(); await f.pass(); await f.settled();
+    expect(latchOf(f), 'the store answers again: the pass retired the latch').not.toBeNull();
+    expect(latchRows(f)).toHaveLength(1);
+    const warned = (f.watcher as unknown as { collectControlWarned: Set<string> }).collectControlWarned;
+    expect([...warned].filter((k) => k.startsWith('latch-')), 'a retire clears the latch keys').toEqual([]);
+    expect(f.collects()).toEqual([]);
+  });
 });
 
 describe('the counts accessor (§5.7)', () => {
@@ -10586,7 +10665,8 @@ cd server && ./node_modules/.bin/vitest run test/collect-switch-lane.test.ts tes
 
 Expected: FAIL. Each red text below is derived; measure it and record it.
 
-**`collect-switch-lane`:** 10 of its 12 cases fail.
+**`collect-switch-lane`:** 11 of its 13 cases fail.
+- **The latch-warn case:** `one warn, across passes and coherent resolutions: expected [] to have a length of 1 but got 0`. With Task 7 alone, only the executor calls the helper, which answers `store-threw`, and the outcome is discarded.
 - **The handoff case:** `step 4: the pass’s own listing retired the latch, before the job ran: expected null not to be null`.
 - **The idle-lane case:** `retired by the pass’s own listing: expected null not to be null`.
 - **The re-created-marker case:** `expected null not to be null` (the first latch check).
@@ -10608,7 +10688,7 @@ Any other case that passes here is a defect in that case: report it and fix the 
 **(a) Imports.** Directly above the line `} from './collectLane.js';`, insert:
 
 ```ts
-  collectLaneCounts, type CollectLaneCounts, type CollectLaneSettled,
+  collectLaneCounts, type CollectLaneCounts, type CollectLaneSettled, type CollectLatchOutcome,
 ```
 
 Directly above the line `} from './coord/collectTempRoot.js';`, insert:
@@ -10617,7 +10697,7 @@ Directly above the line `} from './coord/collectTempRoot.js';`, insert:
   collectRetireLatch,
 ```
 
-Step 1 showed that none of these four names is imported yet.
+Step 1 showed that none of these five names is imported yet.
 
 **(b) The lane memory docstring and its two fields.**
 
@@ -10650,7 +10730,8 @@ insert:
    *    §5.5), re-read at each pass's head and after its gather. A move clears every pair; an act job is queued under it
    *    (`collectAct`), so its executor composes nothing once the epoch it reads after its final listing differs.
    *  - `collectControlWarned`: the switch's warn latches (§5.5, `collectControlNote`): each safety-stop reason, and
-   *    `marker-recreated`, warned once until a coherent resolution clears it.
+   *    `marker-recreated`, warned once until a coherent resolution clears it. The latch's outcomes (`collectLatchNote`,
+   *    R16's extension) warn once under `latch-<kind>`, until a retire clears them.
 ```
 
 Then replace:
@@ -10771,8 +10852,9 @@ with:
     // THE LATCH (path-identity spec 2026-10-12 §5.4): this listing, coherent, unpaused and on one epoch, proving the legacy
     // marker absent while the latch is unset, retires it through the one latch helper and the store's one writer, with
     // one feed row, so an idle lane follows a removed marker within one pass. The helper decides (`collectLatchDue`), it
-    // never heals a mismatch, and the listing is handed to it and to nothing else.
-    collectRetireLatch(this.collectControlDeps(coord), switches, { before: head, after });
+    // never heals a mismatch, and the listing is handed to it and to nothing else. Its outcome is said once per
+    // non-success kind (`collectLatchNote`, R16's extension), so a latch that cannot retire is never silent.
+    this.collectLatchNote(collectRetireLatch(this.collectControlDeps(coord), switches, { before: head, after }));
 ```
 
 **(f) `collectAct`: the job's epoch moves onto `collectSeenEpoch` (R37).** In `collectAct`, Task 7 binds `epoch` before `void this.deps.queue.run(id, () => collectTempRoot({`, outside the callback. It is the one `epochNow()` line Step 1 found, which the Interfaces section describes as:
@@ -10817,13 +10899,13 @@ insert:
   /** THE SWITCH'S WARN LATCHES (path-identity spec 2026-10-12 §5.5), called first from the port's `flipped`, which every
    *  settled resolution passes through: a safety stop warns once per reason, and a legacy file re-created after its latch
    *  warns once, so a stuck read state is said once rather than on every act job. A coherent resolution (live or
-   *  shadowed) clears every latch but the one it raises again, as the stall-settings latch re-arms when a read applies.
+   *  shadowed) clears every latch but the one it raises again and the latch helper's own (`latch-…`, `collectLatchNote`), as the stall-settings latch re-arms when a read applies.
    *  The stopped arms (pause, unlistable, epoch, unknown fleet) never reach it, and change none. It decides nothing about
    *  the lane: the resolution is L1's. */
   private collectControlNote(r: CollectLaneSettled): void {
     const key = r.kind === 'safety-stopped' ? r.why : r.notes.markerRecreated ? 'marker-recreated' : null;
     if (r.kind !== 'safety-stopped') {
-      for (const k of [...this.collectControlWarned]) if (k !== key) this.collectControlWarned.delete(k);
+      for (const k of [...this.collectControlWarned]) if (k !== key && !k.startsWith('latch-')) this.collectControlWarned.delete(k);
     }
     if (key === null || this.collectControlWarned.has(key)) return;
     this.collectControlWarned.add(key);
@@ -10831,6 +10913,28 @@ insert:
       ? `ccrc-server: sweepTempRootCollect: the collector's control state is safety-stopped (${r.why}) — it removes `
         + 'nothing until its database row and generation journal are proved coherent'
       : "ccrc-server: sweepTempRootCollect: the fleet box's legacy file was re-created; this server no longer honours it");
+  }
+
+  /** THE LATCH'S WARN LATCHES (R16, extended by the coordinator 2026-10-12): the pass's latch outcome, said once per
+   *  non-success kind. A latch the store keeps refusing, failing or throwing on is reported once, neither silent nor
+   *  repeated on every pass. Off stays refused until the latch retires, so this line is the operator's only reason for
+   *  it. Its keys are `latch-<kind>`. They are cleared on `retired` and never by a coherent resolution
+   *  (`collectControlNote` skips them). `not-due` changes nothing. It decides nothing: the helper already did, and the
+   *  pass goes on either way. */
+  private collectLatchNote(o: CollectLatchOutcome): void {
+    if (o.kind === 'not-due') return;
+    if (o.kind === 'retired') {
+      for (const k of [...this.collectControlWarned]) if (k.startsWith('latch-')) this.collectControlWarned.delete(k);
+      return;
+    }
+    const key = `latch-${o.kind}`;
+    if (this.collectControlWarned.has(key)) return;
+    this.collectControlWarned.add(key);
+    const why = o.kind === 'refused' ? `the store refused it (${o.code})`
+      : o.kind === 'failed' ? `the store failed at ${o.phase}`
+      : 'the store threw before its append (a busy database or a read fault)';
+    console.warn(`ccrc-server: sweepTempRootCollect: the legacy file's latch could not be retired: ${why}; `
+      + 'Off stays refused until a later pass retires it');
   }
 
 ```
@@ -10878,6 +10982,7 @@ with:
 grep -n "epochNow()" server/src/watch.ts                         # exactly two: the pass's `head` and `after`
 grep -c "const epoch = this.collectSeenEpoch;" server/src/watch.ts # 1
 grep -c "collectRetireLatch(" server/src/watch.ts                 # 1: the pass
+grep -c "this.collectLatchNote(collectRetireLatch(" server/src/watch.ts   # 1: the pass's outcome feeds its warn
 grep -c "COLLECT_LANE_LIVE_MARKER\|collect-lane-live" server/src/watch.ts   # 0: watch.ts still never names the marker
 ```
 
@@ -10894,7 +10999,7 @@ git diff HEAD | grep -cE "D-[0-9]"                                # 0
 ```
 
 Expected:
-- **The first command:** `Test Files  2 passed (2)`. `collect-switch-lane` has 12 cases, and `collect-lane-pass` keeps the count Task 7 left. The counts are derived; re-measure them.
+- **The first command:** `Test Files  2 passed (2)`. `collect-switch-lane` has 13 cases, and `collect-lane-pass` keeps the count Task 7 left. The counts are derived; re-measure them.
 - **`test/collect-`** runs every collector suite: wave 9's and Tasks 2 to 7's, the `collect-lane-*`, `collect-switch-*`, `collect-latch` and `collect-temp-root*` files among them. All green.
   - `collect-lane-slot` and `collect-lane-leaving` arm through `goLive` or `{ armed: true }`, before any pass, so the pass's latch never meets their marker.
   - Their shadow cases retire the latch on the first pass, which is harmless: only titled rows are counted.
@@ -10920,7 +11025,7 @@ Make each mutation alone, record its red, and revert it before the next one.
 
 | # | Mutation (exact edit) | File | Expected red |
 |---|---|---|---|
-| T8.1 | Delete `collectPass`'s line `collectRetireLatch(this.collectControlDeps(coord), switches, { before: head, after });` | L, P | L: the idle case, `retired by the pass’s own listing: expected null not to be null`; the handoff case, `step 4: …: expected null not to be null`; the re-created case and the three `settingsLive` cases at their first latch check. P, the pin: `the pass hands its listing to collectRetireLatch( alone: expected [ 'const [listings, switches] = gathered;' ] to deeply equal [ …(2) ]` |
+| T8.1 | Delete `collectPass`'s line `this.collectLatchNote(collectRetireLatch(this.collectControlDeps(coord), switches, { before: head, after }));` | L, P | L: the idle case, `retired by the pass’s own listing: expected null not to be null`; the handoff case, `step 4: …: expected null not to be null`; the re-created case and the three `settingsLive` cases at their first latch check; the latch-warn case, `one warn…: expected [] to have a length of 1 but got 0`. P, the pin: `the pass hands its listing to collectRetireLatch( alone: expected [ 'const [listings, switches] = gathered;' ] to deeply equal [ …(2) ]` |
 | T8.2 | Delete the whole head block `if (head !== this.collectSeenEpoch) { … }` | L | `an epoch move between passes…`: `no act job: the pair it would spend was cleared: expected 3 to be 1`. The executor's own epoch stop still clears, so the lane-generation line stays green |
 | T8.3 | In the head block, delete `this.collectClearPairs();` only | L | `an epoch move between passes…`: `a lane-wide clear: expected <g> to be greater than <g>`, and `expected [ {…} ] to deeply equal []` (demo-a would-collects on a pair from the old connection) |
 | T8.4 | Delete the whole bracket `if (after !== head) { … }` | L | `an epoch move during the gather…`: `the pass ended: no act job: expected 3 to be 1`, and `nothing queued: expected [ …(2) ] to have a length of 1 but got 2` |
@@ -10933,9 +11038,13 @@ Make each mutation alone, record its red, and revert it before the next one.
 | T8.11 | In `flipped`, delete Task 7's `this.collectClearPairs();` | L | `Settings live to Off…`: `the flip cleared every pair: expected <g> to be greater than <g>`, and `and the job that saw it observed nothing: expected {…} to be null` |
 | T8.12 | In `currentCollectCounts`, delete `if (this.collectPop === null) return null;` | L | `null before the first population`: `expected { wouldCollect: 0, held: 0, boxLines: 0 } to be null` |
 | T8.13 | `collectLaneCounts(this.collectAttentionInput())` becomes `collectLaneCounts({ ...this.collectAttentionInput(), entries: new Map() })` | L | `matches collectLaneCounts…`: `expected { wouldCollect: 0, held: 0, boxLines: 1 } to deeply equal { wouldCollect: 1, held: 0, boxLines: 1 }` |
-| T8.14 | The latch line becomes `if (!switches.marker) collectRetireLatch(this.collectControlDeps(coord), switches, { before: head, after });` | P | the pin: `the marker is the executor’s and the latch helper’s to read, never the pass’s: expected '…' not to match /\.marker\b/` |
+| T8.14 | The latch line becomes `if (!switches.marker) this.collectLatchNote(collectRetireLatch(this.collectControlDeps(coord), switches, { before: head, after }));` | P | the pin: `the marker is the executor’s and the latch helper’s to read, never the pass’s: expected '…' not to match /\.marker\b/` |
 | T8.15 | After the latch line, insert `void [switches];` | P | the pin: `the pass hands its listing to collectRetireLatch( alone: expected [ …(3) ] to deeply equal [ …(2) ]` |
 | T8.16 | Test side: in the re-shaped case, move `f.touch(COLLECT_LANE_LIVE_MARKER);` back below the first `await f.pass(); await f.settled();` | P | the re-shaped case: `vi.waitFor` gives up, with `expected false to be true`. The first pass retired the latch, and the touch is a re-created file the lane ignores. This shows why the re-shape is needed |
+| T8.17 | In `collectLatchNote`, delete `if (this.collectControlWarned.has(key)) return;` | L | the latch-warn case: `one warn, across passes and coherent resolutions: expected [ …(n) ] to have a length of 1 but got <n>` |
+| T8.18 | In `collectControlNote`, `if (k !== key && !k.startsWith('latch-'))` becomes `if (k !== key)` | L | the latch-warn case: the same red. Each act job's coherent (shadowed) resolution clears the latch key, so the next pass warns again |
+| T8.19 | In `collectLatchNote`, delete the `retired` arm's `for (const k of [...this.collectControlWarned]) …` line | L | the latch-warn case: `a retire clears the latch keys: expected [ 'latch-store-threw', 'latch-failed' ] to deeply equal []` |
+| T8.20 | The pass's latch line drops the note: `this.collectLatchNote(collectRetireLatch(…));` becomes `collectRetireLatch(…);` | L, P | L: the latch-warn case, `one warn…: expected [] to have a length of 1 but got 0`; P: the pin, `the pass hands its listing to collectRetireLatch( alone: expected [ …, 'collectRetireLatch(…);' ] to deeply equal [ …, StringMatching{…} ]` |
 
 After each mutation, revert it. Then re-run Step 5's first command, green.
 
@@ -10964,6 +11073,8 @@ ignored.
 
 The port's flip warns once per safety-stop reason and once for a
 re-created marker, until a coherent resolution clears the latches. The
+pass's latch outcome warns once per non-success kind (refused, failed,
+threw before its append) until a retire clears it. The
 watcher gains currentCollectCounts(): the switch view's would-collect,
 held and box-line counts over the same input the published attention
 items read, null until a population is measured.
@@ -11003,7 +11114,7 @@ This route is the only door through which an operator can arm the collector's de
   9. 503 `write-failed`
   10. 200, after a synchronous re-read
 
-  L1 makes every one of these decisions. The handler measures and maps.
+  L1 makes every one of these decisions. The handler measures and maps. A throw from the store before its append (Task 6 lets it propagate: a defect, or a `BEGIN IMMEDIATE` still busy past `busy_timeout`) is answer 9 too: the handler catches it around its one store call, so the POST never answers a 500.
 - **R24 and R38.** Off never reads the listing. Live answers 503 before any 409 when any of these holds:
   - the registry cannot be listed;
   - the epoch moved during the POST's own await;
@@ -11707,6 +11818,25 @@ describe('GET and POST /api/coord/collect-lane (path-identity spec §5.6)', () =
     }
   });
 
+  it('a throw from the store before its append (a busy BEGIN IMMEDIATE) answers 503 write-failed, never a 500; exactly one console.warn', async () => {
+    const t = await rig({ authEnabled: true });
+    const rowBefore = t.coord.collectLaneRow();
+    const k = await keyFor(t.app);
+    vi.spyOn(t.coord, 'setCollectLane').mockImplementation(() => {
+      throw Object.assign(new Error('database is locked'), { code: 'ERR_SQLITE_ERROR' });
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await post(t.app, { choice: 'live', confirm: k.confirmKey });
+    expect(res.statusCode, res.body).toBe(503);
+    expect(res.json()).toMatchObject({ ok: false, error: 'write-failed' });
+    expect(res.body, 'the driver\'s message stays off the wire').not.toMatch(/locked|ERR_SQLITE/);
+    expect(serverWarns(warn)).toHaveLength(1);
+    expect(t.coord.collectLaneRow()).toEqual(rowBefore);
+    expect(journalText(t)).toBeNull();
+    expect(t.coord.feedEvents(10)).toEqual([]);
+    vi.restoreAllMocks();
+  });
+
   it('a 200 needs the re-read proof: a row changed before return answers 503 write-failed, with the event recorded', async () => {
     const t = await rig({ authEnabled: true });
     const k = await keyFor(t.app);
@@ -12211,6 +12341,9 @@ with:
    *    row, inside one transaction. A refusal or a no-op consumes no generation (§5.2).
    *  - A 200 follows only a synchronous re-read that proves the requested state. When the store answered written and
    *    the re-read does not prove it, the feed row stands and the answer is 503 `write-failed`.
+   *  - A throw from the store before its append (a defect, or `BEGIN IMMEDIATE` still busy past `busy_timeout`) is
+   *    caught around the one store call and answers 503 `write-failed` too, never a 500. The store keeps propagating
+   *    it; only the answer is mapped here, and the driver's message stays in the log line, off the wire.
    *  - A refusal carries `{ok, error, detail?}` and never a path or an errno. The two confirm answers carry the sheet's
    *    facts and the key. A failed write, an unproved write and a store `not-coherent` each log one bounded line
    *    through `console.warn`. A refusal over a standing control fault logs nothing more here: the GET's latch below
@@ -12302,7 +12435,13 @@ with:
     if (decided.kind === 'unmeasurable') return collectRefuse(reply, 503, 'state-unmeasurable', decided.detail);
     if (decided.kind === 'marker') return collectRefuse(reply, 409, 'marker-still-controls');
     if (decided.kind === 'confirm') return reply.code(409).send(decided.body);
-    const w = coord.setCollectLane(decided.request, Date.now(), lane.journal);
+    let w: ReturnType<typeof coord.setCollectLane>;
+    try {
+      w = coord.setCollectLane(decided.request, Date.now(), lane.journal);
+    } catch (err) {
+      collectWarn(`the ${decided.request.kind} write could not begin (${err instanceof Error ? err.message : String(err)})`);
+      return collectRefuse(reply, 503, 'write-failed', 'the write could not begin');
+    }
     if (w.kind === 'refused') {
       if (w.code === 'conflict') return collectRefuse(reply, 409, 'conflict', w.detail);
       if (w.code === 'marker-still-controls') return collectRefuse(reply, 409, 'marker-still-controls', w.detail);
@@ -12414,6 +12553,7 @@ The worker measures every red text. Where the measured text differs, it replaces
 | 21 | Insert a second `deviceActor(sessionAuth(req).device)` read into the POST (e.g. `const label = deviceActor(sessionAuth(req).device);` above the 403 check) | `R -t 'exactly one deviceActor'` | `expected 2 to be 1` |
 | 22 | POST: move `const before = link.epochNow();` below `const switches = await collectSwitches(…)`, so both epoch reads follow the listing | `R -t 'the POST answers 503'` | `an epoch moved inside the held listing, live: expected 409 to be 503` (the old-epoch key answers `confirm-stale`, and the move itself is never refused) |
 | 23 | GET: the same move of its own `const before = link.epochNow();` | `R -t 'its own listing'` | `the connection moved while the GET listed: expected { state: 'live', armedBy: 'settings' } to deeply equal { state: 'unknown-fleet', armedBy: 'neither' }` |
+| 24 | POST: replace the `let w: ReturnType<typeof coord.setCollectLane>;` declaration and its `try { … } catch (err) { … }` with `const w = coord.setCollectLane(decided.request, Date.now(), lane.journal);` | `R -t 'never a 500'` | `expected 500 to be 503` (Fastify answers the store's throw itself) |
 
 The compiler holds two more guards rather than a case, so record them as such:
 - Narrowing `collectLaneView`'s `row` depends on the absent check. Row 9's mutant is a TS2322 under `tsc`.
@@ -12458,7 +12598,9 @@ Off wins over a concurrent Live, and a key minted before any change
 answers confirm-stale. The one store writer appends to the journal
 before it updates the row. A 200 follows a synchronous re-read that
 proves the requested state. If the store says written but the proof
-fails, the route answers 503 write-failed and the feed row stands.
+fails, the route answers 503 write-failed and the feed row stands. A
+throw from the store before its append, a busy BEGIN IMMEDIATE
+included, also answers 503 write-failed, never a 500.
 Refusals never carry a path or an errno. The GET answers 503 for an
 absent row only, and 200 with a safety-stopped view for every other
 unmeasurable state, warning once per standing fault.
@@ -13189,7 +13331,7 @@ EOF
   - Malformed and unreadable are never folded.
 - **R25 and R34.** The 409 confirm body's `facts` are the sheet's projection: node id and `measuredAt`, both capabilities, the pause, the marker, the repair and the counts. They carry no nonce and no epoch. `notice` is `null` on the GET and is a string on a 200 POST.
 - **Spec §5.7.** The six Now lines, the recreated-file sentence and the pre-latch Off sentence are copied exactly. The PWA never spells the marker's name, and no string names a device.
-- **Task 12 edits no words file.** Every sentence the section, its sheet and its pause control render lands here, so Task 12 imports and never adds a word (`collect-words-carry-the-sections-copy`).
+- **Task 12 edits no words file.** Every sentence the section, its sheet, its write flow and its pause control render lands here: the legend, the radio labels, the read lines, the unanswered-write line, the unknown-refusal template and the pause control's passing labels included. Task 12 imports these by Task 11's exported names and never adds a word or keeps a words table of its own (`collect-words-carry-the-sections-copy`).
 
 **Entry:** Task 1 is committed on this branch: the L0 block at the foot of `shared/api.ts`.
 
@@ -13265,7 +13407,8 @@ EOF
 
   // pwa/src/fleet/collectLaneWords.ts
   export type CollectEffectiveState = CollectLaneView['effective']['state'];                         // interface addition
-  export const COLLECT_SECTION_TEXT: { title; notAvailable; unread; stale; legend; off; live; reconfirm; confirmTitle; confirmLabel };   // addition
+  export const COLLECT_SECTION_TEXT: { title; notAvailable; unread; stale; legend; off; live; reconfirm; confirmTitle; confirmLabel;
+    unanswered; refused };   // addition; `refused` carries one `{detail}` slot
   export const COLLECT_STATE_TEXT: Readonly<Record<CollectEffectiveState, { readonly label: string; readonly line: string }>>;
   export const COLLECT_ARMED_BY_TEXT: Readonly<Record<CollectArmedBy, string>>;
   export const COLLECT_WARN_TEXT: { recreated; otherNode; mismatch; unknownChoice };                  // addition
@@ -13974,6 +14117,13 @@ describe('the words (path-identity spec §5.7)', () => {
     expect(COLLECT_REFUSAL_TEXT['not-configured']).toBe('Not available on this server.');
   });
 
+  it('the write lines: an unanswered write, and a refusal whose code this build does not know', () => {
+    expect(COLLECT_SECTION_TEXT.unanswered)
+      .toBe('The server did not answer, so the choice may or may not have been saved; the section re-read it.');
+    expect(COLLECT_SECTION_TEXT.refused).toBe('Nothing was changed: {detail}');
+    expect(COLLECT_SECTION_TEXT.refused.split('{detail}'), 'exactly one detail slot').toHaveLength(2);
+  });
+
   it('every refusal word has its own sentence, and the pre-latch refusal is the spec text', () => {
     expect(Object.keys(COLLECT_REFUSAL_TEXT).sort()).toEqual([...COLLECT_LANE_REFUSALS].sort());
     for (const code of COLLECT_LANE_REFUSALS) expect(COLLECT_REFUSAL_TEXT[code].trim().length, code).toBeGreaterThan(0);
@@ -14445,7 +14595,9 @@ type MarkerListing = CollectLaneView['marker']['listing'];
 type StoredFault = Exclude<CollectLaneView['stored'], { read: 'row' }>['read'];
 type Line = { text: string; tone: 'head' | 'note' | 'warn' };
 
-/** The section's frame and controls. `notAvailable` is the spec's exact sentence for an older server. */
+/** The section's frame, controls and write lines. `notAvailable` is the spec's exact sentence for an older server.
+ *  `unanswered` is a write that never reached an answer; `refused` is a refusal whose code this build does not know,
+ *  with one `{detail}` slot for the server's detail. */
 export const COLLECT_SECTION_TEXT = {
   title: 'Temp root collector',
   notAvailable: 'Not available on this server.',
@@ -14457,6 +14609,8 @@ export const COLLECT_SECTION_TEXT = {
   reconfirm: 'Confirm Live again',
   confirmTitle: 'Set the temp root collector to Live?',
   confirmLabel: 'Set Live',
+  unanswered: 'The server did not answer, so the choice may or may not have been saved; the section re-read it.',
+  refused: 'Nothing was changed: {detail}',
 } as const;
 
 /** The six Now lines, the spec's exact labels and lines (§5.7). */
@@ -14687,6 +14841,7 @@ The worker measures every red text. Where the measured text differs from the dra
 | 20 | `collectLaneWords.ts`: in `collectConfirmLines`, replace the `caps` ternary with `t.capsBoth` (the capability branch dropped) | `W -t 'confirm lines'` | `expected "The fleet box's ccd lists collect-v1 and …" to be "The fleet box's ccd does not list collect-v1: …"` |
 | 21 | `collectLaneWords.ts`: `COLLECT_PAUSE_TEXT.stops` drops `, the dead-coordinator lane` | `W -t 'all four lanes'` | `the dead-coordinator lane: expected 'Pauses all cleanup: …' to contain 'the dead-coordinator lane'` |
 | 22 | `collectLaneWords.ts`: delete `if (v.marker.latch === 'unmeasured') return COLLECT_OFF_NOTE_TEXT.unmeasured;` in `collectOffNote` | `W -t 'collectOffNote'` | `a latch that did not read claims no control: expected "The fleet box's legacy file still controls this lane. …" to be "Whether the fleet box's legacy file still controls this lane …"` |
+| 23 | `collectLaneWords.ts`: `COLLECT_SECTION_TEXT.refused` becomes `'Nothing was changed.'` (the `{detail}` slot dropped) | `W -t 'write lines'` | `expected 'Nothing was changed.' to be 'Nothing was changed: {detail}'` |
 
 Two guards are held by the compiler, not by a case:
 - **An entry deleted from any `keysOf<…>({ … })` table in the hook** is a TS2345 missing-property error under `tsc --noEmit` (Step 6). It has no runtime red, because the table is the list.
@@ -14743,6 +14898,7 @@ collectLaneWords holds the section's words:
   pre-latch Off sentence, exactly;
 - "Pause all cleanup", naming all four lanes it stops;
 - the confirm sheet's lines;
+- the section's frame, read and write lines, so the section adds none;
 - the server's counts line.
 Every table is total over its union, and a type test pins that. No new
 file names a device, spells the legacy file's name or reads an
@@ -14796,12 +14952,12 @@ Name these departures, by slug, in the wave-done:
 **Entry (measured in Step 0):** Task 11 is committed on this branch. It provides:
 - `api.collectLane` and `api.setCollectLane`;
 - `useCollectLaneView.ts` with `useCollectLaneView`, `asCollectLaneView`, `collectLanePostRefusal` and `CollectLanePoll`;
-- `collectLaneWords.ts` with the five functions and the word constants listed under Interfaces.
+- `collectLaneWords.ts`, the section's one words home, with the seven functions and the six word tables listed under Interfaces. Task 12 uses Task 11's exported names exactly and keeps no words table of its own.
 
 Task 1's L0 names are at the foot of `shared/api.ts`.
 
 **Files:**
-- Create: `pwa/src/fleet/CollectLaneSection.tsx`. It holds the section frame, the body with its write flow, and a private `PauseAllCleanup` control. It also exports `COLLECT_SECTION_WORDS`, the section's own chrome words (the legend, the two radio labels, the read lines, the unanswered and other-refusal lines, and the pause control's two passing labels). It imports nothing from `screens/` except `settingsText.ts`'s `UNCONFIRMED_TEXT`, and it never imports `UpdateMoveSheet`.
+- Create: `pwa/src/fleet/CollectLaneSection.tsx`. It holds the section frame, the body with its write flow, and a private `PauseAllCleanup` control. It exports no words and defines none: every line it renders comes from Task 11's `collectLaneWords.ts`, the legend, the two radio labels, the read lines, the unanswered and other-refusal lines and the pause control's two passing labels included (`COLLECT_SECTION_TEXT` and `COLLECT_PAUSE_TEXT`). It imports nothing from `screens/` except `settingsText.ts`'s `UNCONFIRMED_TEXT`, and it never imports `UpdateMoveSheet`.
 - Modify: `pwa/src/screens/SettingsScreen.tsx`. No line of this file is cited by line anywhere (measured: no `SettingsScreen.tsx:<n>` in `server/test/session-hook.test.ts`, `README.md` or `CLAUDE.md`), so lines may be added. The edits:
   - the header comment: the anchor `// design 2026-09-20 §13). Four sections: Updates (the channel, auto-install,` and the two lines ending `` `StallWatchSection.tsx`, with its own read. ``;
   - the import, after `import { StallWatchSection } from './StallWatchSection';`;
@@ -14844,28 +15000,22 @@ Task 1's L0 names are at the foot of `shared/api.ts`.
     | { kind: 'unconfirmed' };
   export function collectLanePostRefusal(err: unknown): CollectLanePostRefusal;
   export function useCollectLaneView(pollMs?: number): CollectLanePoll;
-  // Task 11, pwa/src/fleet/collectLaneWords.ts: the five functions (canonical) and the word constants (see Drafter notes)
-  export function collectNowLines(v: CollectLaneView): { text: string; tone: 'head' | 'note' | 'warn' }[];
+  // Task 11, pwa/src/fleet/collectLaneWords.ts: the section's one words home, exactly as Task 11's Interfaces produce it
+  export type CollectEffectiveState = CollectLaneView['effective']['state'];
+  export const COLLECT_SECTION_TEXT: { title; notAvailable; unread; stale; legend; off; live; reconfirm; confirmTitle; confirmLabel;
+    unanswered; refused };   // 'Temp root collector', 'Not available on this server.', …, 'Confirm Live again', …; refused has one {detail}
+  export const COLLECT_STATE_TEXT: Readonly<Record<CollectEffectiveState, { readonly label: string; readonly line: string }>>;
+  export const COLLECT_WARN_TEXT: { recreated; otherNode; mismatch; unknownChoice };
+  export const COLLECT_OFF_NOTE_TEXT: Readonly<Record<'stands' | 'absent' | 'unmeasured', string>>;   // stands: the spec's pre-latch Off sentence
+  export const COLLECT_REFUSAL_TEXT: Readonly<Record<CollectLaneRefusal, string>>;
+  export const COLLECT_PAUSE_TEXT: { label; stops; paused; pausing; unconfirmed };   // label 'Pause all cleanup'; stops names the four lanes (R13)
+  export function collectStateHead(state: CollectEffectiveState): string;           // the spec's one Now line, "Label: line"
+  export function collectNowLines(v: CollectLaneView): { text: string; tone: 'head' | 'note' | 'warn' }[];   // first line: collectStateHead
+  export function collectUnmeasurableLines(detail: string): { text: string; tone: 'head' | 'note' | 'warn' }[];   // the 503 arm's lines
   export function collectOffNote(v: CollectLaneView): string | null;
   export function collectOffersReconfirm(v: CollectLaneView): boolean;
   export function collectConfirmLines(facts: CollectLaneConfirmRequired['facts'], stale: boolean, now: number): string[];
   export function collectCountLine(a: CollectLaneView['attention']): string;
-  export const COLLECT_SECTION_TITLE: string;            // 'Temp root collector'
-  export const COLLECT_NOT_AVAILABLE_TEXT: string;       // 'Not available on this server.'
-  export const COLLECT_NOW_TEXT: Readonly<Record<CollectLaneView['effective']['state'], { label: string; does: string }>>;
-  export const COLLECT_OFF_HELD_TEXT: string;            // the spec's pre-latch Off sentence
-  export const COLLECT_OFF_PENDING_TEXT: string;
-  export const COLLECT_OFF_UNMEASURED_TEXT: string;
-  export const COLLECT_OTHER_NODE_TEXT: string;
-  export const COLLECT_MISMATCH_TEXT: string;
-  export const COLLECT_UNKNOWN_CHOICE_TEXT: string;
-  export const COLLECT_PAUSE_LABEL: string;              // 'Pause all cleanup'
-  export const COLLECT_PAUSE_TEXT: string;               // names the four lanes (R13)
-  export const COLLECT_PAUSED_TEXT: string;
-  export const COLLECT_CONFIRM_AGAIN_LABEL: string;      // 'Confirm Live again'
-  export const COLLECT_CONFIRM_TITLE: string;
-  export const COLLECT_CONFIRM_LABEL: string;
-  export const COLLECT_REFUSAL_TEXT: Readonly<Record<CollectLaneRefusal, string>>;
   // Existing, at 837a099c0
   QuickConfirm(props: { title; consequence: string | string[]; confirmLabel; onConfirm; open; onClose })   // components/QuickConfirm.tsx
   export function childReclaimMarker(coord: unknown): MarkerState | null;    // fleet/childReclaimWords.ts
@@ -14879,12 +15029,7 @@ Task 1's L0 names are at the foot of `shared/api.ts`.
   ```
 - Produces:
   ```ts
-  // pwa/src/fleet/CollectLaneSection.tsx
-  export const COLLECT_SECTION_WORDS: {
-    readonly legend: 'Choice'; readonly choice: { readonly off: 'Off'; readonly live: 'Live' };
-    readonly unread: string; readonly stale: string; readonly unanswered: string; readonly refused: string;
-    readonly pausing: 'pausing…'; readonly unconfirmed: 'unconfirmed — check /runs';
-  };
+  // pwa/src/fleet/CollectLaneSection.tsx (no words table: every word is collectLaneWords.ts's)
   export function CollectLaneSection(props?: { store?: typeof useFleetStore;
     childReclaimPause?: (state: 'on' | 'off') => Promise<void>; pollMs?: number }): ReactNode;
   ```
@@ -14895,8 +15040,9 @@ From the workspace root:
 
 ```bash
 grep -c '^export function useCollectLaneView\|^export function asCollectLaneView\|^export function collectLanePostRefusal\|^export interface CollectLanePoll' pwa/src/fleet/useCollectLaneView.ts   # 4
-grep -c '^export function collectNowLines\|^export function collectOffNote\|^export function collectOffersReconfirm\|^export function collectConfirmLines\|^export function collectCountLine' pwa/src/fleet/collectLaneWords.ts   # 5
-for n in COLLECT_SECTION_TITLE COLLECT_NOT_AVAILABLE_TEXT COLLECT_NOW_TEXT COLLECT_OFF_HELD_TEXT COLLECT_OFF_PENDING_TEXT COLLECT_OFF_UNMEASURED_TEXT COLLECT_OTHER_NODE_TEXT COLLECT_MISMATCH_TEXT COLLECT_UNKNOWN_CHOICE_TEXT COLLECT_PAUSE_LABEL COLLECT_PAUSE_TEXT COLLECT_PAUSED_TEXT COLLECT_CONFIRM_AGAIN_LABEL COLLECT_CONFIRM_TITLE COLLECT_CONFIRM_LABEL COLLECT_REFUSAL_TEXT; do echo "$n $(grep -c "^export const $n\b" pwa/src/fleet/collectLaneWords.ts)"; done   # each 1
+grep -c '^export function collectNowLines\|^export function collectOffNote\|^export function collectOffersReconfirm\|^export function collectConfirmLines\|^export function collectCountLine\|^export function collectStateHead\|^export function collectUnmeasurableLines' pwa/src/fleet/collectLaneWords.ts   # 7
+for n in COLLECT_SECTION_TEXT COLLECT_STATE_TEXT COLLECT_WARN_TEXT COLLECT_OFF_NOTE_TEXT COLLECT_REFUSAL_TEXT COLLECT_PAUSE_TEXT; do echo "$n $(grep -c "^export const $n\b" pwa/src/fleet/collectLaneWords.ts)"; done   # each 1
+grep -c "^  unanswered: \|^  refused: 'Nothing was changed: {detail}',\|^  pausing: \|^  unconfirmed: " pwa/src/fleet/collectLaneWords.ts   # 4: the write and pause lines this section reads
 grep -c "collectLane: () => getJson<CollectLaneView>('/api/coord/collect-lane')" pwa/src/lib/api.ts   # 1
 grep -c "^export interface CollectLaneConfirmRequired\|^export const COLLECT_LANE_CHOICES\|^export interface CollectLaneRequest" shared/api.ts   # 3
 grep -c '<StallWatchSection />' pwa/src/screens/SettingsScreen.tsx   # 1
@@ -14905,7 +15051,7 @@ grep -rn 'collect-lane-live' pwa/src shared/api.ts | grep -v '^\s*//' | wc -l   
 ```
 
 What to do when a count is off:
-- If Task 11 spelled a constant differently, use Task 11's spelling everywhere in this task, and name the departure `task-11-word-names-differ` in the wave-done.
+- If Task 11 spelled a constant or a key differently, use Task 11's spelling everywhere in this task, and name the departure `task-11-word-names-differ` in the wave-done. If a word this section renders has no home in `collectLaneWords.ts`, STOP: it belongs in Task 11's file and tests, never in a table here.
 - If a function or the hook is missing, STOP: Task 11 has not landed.
 - If the last line prints anything but 0, STOP.
 
@@ -14918,21 +15064,19 @@ What to do when a count is off:
 // Task 12). The section reads its own endpoint through its own hook, so every case spies `api.collectLane` and
 // `api.setCollectLane` and renders the section alone. Each case injects a fleet store (never the singleton, whose coord
 // frame would leak between cases, settings-screen.test.tsx's afterEach resetting neither `coord` nor
-// `coordFrameSeen`) and a cleanup-pause seam. Every word comes from `collectLaneWords.ts` or the section's
-// `COLLECT_SECTION_WORDS`. Only the spec's two exact sentences, the pre-latch Off note and the not-available line, are
-// written out here, so a softened copy reds.
+// `coordFrameSeen`) and a cleanup-pause seam. Every word comes from `collectLaneWords.ts`, by its exported names; the
+// section has no words of its own. Only the spec's two exact sentences, the pre-latch Off note and the not-available
+// line, are written out here, so a softened copy reds.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { CollectLaneConfirmRequired, CollectLaneView, CoordStatus } from '../../shared/api';
-import { COLLECT_SECTION_WORDS, CollectLaneSection } from '../src/fleet/CollectLaneSection';
+import { CollectLaneSection } from '../src/fleet/CollectLaneSection';
 import {
-  COLLECT_CONFIRM_AGAIN_LABEL, COLLECT_CONFIRM_LABEL, COLLECT_MISMATCH_TEXT, COLLECT_NOT_AVAILABLE_TEXT,
-  COLLECT_NOW_TEXT, COLLECT_OFF_HELD_TEXT, COLLECT_OFF_PENDING_TEXT, COLLECT_OFF_UNMEASURED_TEXT,
-  COLLECT_OTHER_NODE_TEXT, COLLECT_PAUSE_LABEL, COLLECT_PAUSE_TEXT, COLLECT_PAUSED_TEXT, COLLECT_REFUSAL_TEXT,
-  COLLECT_SECTION_TITLE, COLLECT_UNKNOWN_CHOICE_TEXT, collectConfirmLines, collectCountLine, collectOffNote,
-  collectOffersReconfirm,
+  COLLECT_OFF_NOTE_TEXT, COLLECT_PAUSE_TEXT, COLLECT_REFUSAL_TEXT, COLLECT_SECTION_TEXT, COLLECT_STATE_TEXT,
+  COLLECT_WARN_TEXT, collectConfirmLines, collectCountLine, collectOffNote, collectOffersReconfirm, collectStateHead,
+  collectUnmeasurableLines,
 } from '../src/fleet/collectLaneWords';
 import { COORD_CONFIRM_MS } from '../src/fleet/coordWords';
 import { ApiError, COORD_UNSUPPORTED_TEXT, api } from '../src/lib/api';
@@ -14947,7 +15091,7 @@ afterEach(() => {
 });
 
 type State = CollectLaneView['effective']['state'];
-const STATES = Object.keys(COLLECT_NOW_TEXT) as State[];
+const STATES = Object.keys(COLLECT_STATE_TEXT) as State[];
 const NOW = 1_800_000_000_000;
 const NOTICE = "The choice applies from the collector's next check; a removal already handed to ccd is not stopped.";
 
@@ -15028,11 +15172,11 @@ const confirm409 = (error: 'confirm-required' | 'confirm-stale', confirmKey: str
 
 // `hidden: true`: an open sheet marks the page behind it aria-hidden, and these cases read the radios under it.
 const section = (): HTMLElement =>
-  screen.getByRole('heading', { name: COLLECT_SECTION_TITLE, hidden: true }).closest('section')!;
+  screen.getByRole('heading', { name: COLLECT_SECTION_TEXT.title, hidden: true }).closest('section')!;
 const choiceGroup = (): Promise<HTMLElement> =>
-  within(section()).findByRole('group', { name: COLLECT_SECTION_WORDS.legend, hidden: true });
+  within(section()).findByRole('group', { name: COLLECT_SECTION_TEXT.legend, hidden: true });
 const radio = (c: 'off' | 'live'): HTMLElement =>
-  within(section()).getByRole('radio', { name: COLLECT_SECTION_WORDS.choice[c], hidden: true });
+  within(section()).getByRole('radio', { name: COLLECT_SECTION_TEXT[c], hidden: true });
 const repoll = async (): Promise<void> => {
   Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
   await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
@@ -15047,16 +15191,14 @@ const mount = async (first: CollectLaneView,
 };
 
 describe('the Temp root collector section (path-identity spec §5.7, §5.9)', () => {
-  it("each of the six states shows its label and line, and no other state's", async () => {
+  it("each of the six states shows its one Now line, \"Label: line\", and no other state's", async () => {
     expect(STATES).toHaveLength(6);
     for (const state of STATES) {
       await mount(cv({ effective: { state, armedBy: state === 'live' ? 'legacy-marker' : 'neither' } }));
       const s = section();
-      expect(within(s).getByText(COLLECT_NOW_TEXT[state].label, { selector: 'p' }), state).toBeInTheDocument();
-      expect(within(s).getByText(COLLECT_NOW_TEXT[state].does), state).toBeInTheDocument();
+      expect(within(s).getByText(collectStateHead(state), { selector: 'p' }), state).toBeInTheDocument();
       for (const other of STATES.filter((o) => o !== state)) {
-        expect(within(s).queryByText(COLLECT_NOW_TEXT[other].label, { selector: 'p' }), `${state} shows ${other}`).toBeNull();
-        expect(within(s).queryByText(COLLECT_NOW_TEXT[other].does), `${state} shows ${other}`).toBeNull();
+        expect(within(s).queryByText(collectStateHead(other), { selector: 'p' }), `${state} shows ${other}`).toBeNull();
       }
       cleanup();
       vi.restoreAllMocks();
@@ -15064,20 +15206,20 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
   });
 
   it('404 and 501 show only "Not available on this server.", replacing a landed Live view', async () => {
-    expect(COLLECT_NOT_AVAILABLE_TEXT).toBe('Not available on this server.');
+    expect(COLLECT_SECTION_TEXT.notAvailable).toBe('Not available on this server.');
     const { read, store } = await mount(LIVE_HERE);
     seen(store, coord());
     expect(radio('live')).toBeChecked();
-    expect(within(section()).getByRole('button', { name: COLLECT_PAUSE_LABEL })).toBeInTheDocument();
+    expect(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label })).toBeInTheDocument();
     const onlyTheLine = (): void => {
       expect(within(section()).queryByRole('radio', { hidden: true })).toBeNull();
       expect(within(section()).queryByRole('button', { hidden: true })).toBeNull();
-      expect([...section().querySelectorAll('p')].map((p) => p.textContent)).toEqual([COLLECT_NOT_AVAILABLE_TEXT]);
+      expect([...section().querySelectorAll('p')].map((p) => p.textContent)).toEqual([COLLECT_SECTION_TEXT.notAvailable]);
     };
 
     read.mockRejectedValue(new ApiError(404, { ok: false, error: 'not-found' }));
     await repoll();
-    expect(await within(section()).findByText(COLLECT_NOT_AVAILABLE_TEXT)).toBeInTheDocument();
+    expect(await within(section()).findByText(COLLECT_SECTION_TEXT.notAvailable)).toBeInTheDocument();
     onlyTheLine();
 
     read.mockResolvedValue(LIVE_HERE);
@@ -15086,28 +15228,29 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
 
     read.mockRejectedValue(new ApiError(501, { ok: false, error: 'not-configured' }));
     await repoll();
-    expect(await within(section()).findByText(COLLECT_NOT_AVAILABLE_TEXT)).toBeInTheDocument();
+    expect(await within(section()).findByText(COLLECT_SECTION_TEXT.notAvailable)).toBeInTheDocument();
     onlyTheLine();
   });
 
-  it('a GET 503 state-unmeasurable shows the Safety-stopped label and line with the detail, replacing a landed Live view, and offers no radio write', async () => {
+  it("a GET 503 state-unmeasurable shows collectUnmeasurableLines (the Safety-stopped Now line and the server's detail), replacing a landed Live view, and offers no radio write", async () => {
     const { read } = await mount(LIVE_HERE);
     const write = vi.spyOn(api, 'setCollectLane').mockReturnValue(new Promise(() => {}));
     const detail = 'the collector switch row is absent';
     read.mockRejectedValue(new ApiError(503, { ok: false, error: 'state-unmeasurable', detail }));
     await repoll();
-    expect(await within(section()).findByText(detail)).toBeInTheDocument();
-    expect(within(section()).getByText(COLLECT_NOW_TEXT['safety-stopped'].label, { selector: 'p' })).toBeInTheDocument();
-    expect(within(section()).getByText(COLLECT_NOW_TEXT['safety-stopped'].does)).toBeInTheDocument();
-    expect(within(section()).queryByText(COLLECT_NOW_TEXT.live.does)).toBeNull();
+    const lines = collectUnmeasurableLines(detail);
+    expect(lines.some((l) => l.text.includes(detail)), "the lines carry the server's detail").toBe(true);
+    for (const line of lines) expect(await within(section()).findByText(line.text, { selector: 'p' })).toBeInTheDocument();
+    expect(within(section()).getByText(collectStateHead('safety-stopped'), { selector: 'p' })).toBeInTheDocument();
+    expect(within(section()).queryByText(collectStateHead('live'), { selector: 'p' })).toBeNull();
     expect(within(section()).queryByRole('radio', { hidden: true })).toBeNull();
-    expect(within(section()).queryByRole('button', { name: COLLECT_CONFIRM_AGAIN_LABEL, hidden: true })).toBeNull();
-    expect(within(section()).queryByText(COLLECT_NOT_AVAILABLE_TEXT)).toBeNull();
+    expect(within(section()).queryByRole('button', { name: COLLECT_SECTION_TEXT.reconfirm, hidden: true })).toBeNull();
+    expect(within(section()).queryByText(COLLECT_SECTION_TEXT.notAvailable)).toBeNull();
     expect(write).not.toHaveBeenCalled();
   });
 
   it("before the latch Off is disabled; its note is the spec's text while the marker stands, pending while it is absent, unmeasured otherwise; Live stays enabled", async () => {
-    expect(COLLECT_OFF_HELD_TEXT).toBe(
+    expect(COLLECT_OFF_NOTE_TEXT.stands).toBe(
       "The fleet box's legacy file still controls this lane. Remove it by hand before Settings can turn the collector off.");
     const write = vi.spyOn(api, 'setCollectLane').mockReturnValue(new Promise(() => {}));
     const stands = cv();
@@ -15118,8 +15261,8 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
     };
     expect(radio('off')).toBeDisabled();
     expect(radio('off')).toBeChecked();
-    expect(noteOf()).toBe(COLLECT_OFF_HELD_TEXT);
-    expect(collectOffNote(stands)).toBe(COLLECT_OFF_HELD_TEXT);
+    expect(noteOf()).toBe(COLLECT_OFF_NOTE_TEXT.stands);
+    expect(collectOffNote(stands)).toBe(COLLECT_OFF_NOTE_TEXT.stands);
     expect(radio('live')).toBeEnabled();
     expect(radio('live').getAttribute('aria-describedby')).toBeNull();
     fireEvent.click(radio('off'));
@@ -15127,13 +15270,13 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
 
     read.mockResolvedValue(cv({ marker: { listing: 'absent', latch: 'unset' }, effective: { state: 'shadowed', armedBy: 'neither' } }));
     await repoll();
-    await waitFor(() => expect(noteOf()).toBe(COLLECT_OFF_PENDING_TEXT));
+    await waitFor(() => expect(noteOf()).toBe(COLLECT_OFF_NOTE_TEXT.absent));
     expect(radio('off')).toBeDisabled();
     expect(radio('live')).toBeEnabled();
 
     read.mockResolvedValue(cv({ marker: { listing: 'unmeasured', latch: 'unset' }, effective: { state: 'unknown-fleet', armedBy: 'neither' } }));
     await repoll();
-    await waitFor(() => expect(noteOf()).toBe(COLLECT_OFF_UNMEASURED_TEXT));
+    await waitFor(() => expect(noteOf()).toBe(COLLECT_OFF_NOTE_TEXT.unmeasured));
     expect(radio('off')).toBeDisabled();
     expect(radio('live')).toBeEnabled();
   });
@@ -15166,27 +15309,27 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
   it('a stored Live for another node shows its line and "Confirm Live again", which posts {choice:\'live\'} with no key', async () => {
     await mount(LIVE_HERE);
     expect(collectOffersReconfirm(LIVE_HERE)).toBe(false);
-    expect(within(section()).queryByRole('button', { name: COLLECT_CONFIRM_AGAIN_LABEL })).toBeNull();
+    expect(within(section()).queryByRole('button', { name: COLLECT_SECTION_TEXT.reconfirm })).toBeNull();
     cleanup();
     vi.restoreAllMocks();
 
     await mount(OTHER_NODE);
     expect(collectOffersReconfirm(OTHER_NODE)).toBe(true);
-    expect(within(section()).getByText(COLLECT_OTHER_NODE_TEXT)).toBeInTheDocument();
+    expect(within(section()).getByText(COLLECT_WARN_TEXT.otherNode)).toBeInTheDocument();
     expect(radio('live')).toBeChecked();
     const write = vi.spyOn(api, 'setCollectLane').mockReturnValue(new Promise(() => {}));
-    fireEvent.click(within(section()).getByRole('button', { name: COLLECT_CONFIRM_AGAIN_LABEL }));
+    fireEvent.click(within(section()).getByRole('button', { name: COLLECT_SECTION_TEXT.reconfirm }));
     expect(write).toHaveBeenCalledTimes(1);
     expect(write.mock.calls[0]![0]).toStrictEqual({ choice: 'live' });
   });
 
   it('a mismatch shows the mismatch line, the remedy and the re-confirm button', async () => {
     await mount(MISMATCH);
-    expect(within(section()).getByText(COLLECT_MISMATCH_TEXT)).toBeInTheDocument();
+    expect(within(section()).getByText(COLLECT_WARN_TEXT.mismatch)).toBeInTheDocument();
     expect(within(section()).getByText(REMEDY)).toBeInTheDocument();
     expect(collectOffersReconfirm(MISMATCH)).toBe(true);
     const write = vi.spyOn(api, 'setCollectLane').mockReturnValue(new Promise(() => {}));
-    fireEvent.click(within(section()).getByRole('button', { name: COLLECT_CONFIRM_AGAIN_LABEL }));
+    fireEvent.click(within(section()).getByRole('button', { name: COLLECT_SECTION_TEXT.reconfirm }));
     expect(write).toHaveBeenCalledTimes(1);
     expect(write.mock.calls[0]![0]).toStrictEqual({ choice: 'live' });
   });
@@ -15220,7 +15363,7 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
     }));
     expect(radio('off')).not.toBeChecked();
     expect(radio('live')).not.toBeChecked();
-    expect(within(section()).getByText(COLLECT_UNKNOWN_CHOICE_TEXT)).toBeInTheDocument();
+    expect(within(section()).getByText(COLLECT_WARN_TEXT.unknownChoice)).toBeInTheDocument();
   });
 
   it('Live opens the sheet from the 409 with the node, freshness, both capabilities and the checklist; Cancel sends nothing; Set re-posts the key; 200 settles to Live', async () => {
@@ -15245,7 +15388,7 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
 
     fireEvent.click(radio('live'));
     const again = await screen.findByRole('dialog');
-    fireEvent.click(within(again).getByRole('button', { name: COLLECT_CONFIRM_LABEL }));
+    fireEvent.click(within(again).getByRole('button', { name: COLLECT_SECTION_TEXT.confirmLabel }));
     await waitFor(() => expect(radio('live')).toBeChecked());
     expect(write).toHaveBeenCalledTimes(3);
     expect(write.mock.calls[0]![0]).toStrictEqual({ choice: 'live' });
@@ -15269,12 +15412,12 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
     fireEvent.click(radio('live'));
     const first = await screen.findByRole('dialog');
     for (const l of lead) expect(within(first).queryByText(l)).toBeNull();
-    fireEvent.click(within(first).getByRole('button', { name: COLLECT_CONFIRM_LABEL }));
+    fireEvent.click(within(first).getByRole('button', { name: COLLECT_SECTION_TEXT.confirmLabel }));
     await waitFor(() => expect(write).toHaveBeenCalledTimes(2));
 
     const reopened = await screen.findByRole('dialog');
     for (const l of collectConfirmLines(fresh, true, NOW)) expect(await within(reopened).findByText(l)).toBeInTheDocument();
-    fireEvent.click(within(reopened).getByRole('button', { name: COLLECT_CONFIRM_LABEL }));
+    fireEvent.click(within(reopened).getByRole('button', { name: COLLECT_SECTION_TEXT.confirmLabel }));
     await waitFor(() => expect(radio('live')).toBeChecked());
     expect(write.mock.calls[1]![0]).toStrictEqual({ choice: 'live', confirm: 'a1b2c3d4' });
     expect(write.mock.calls[2]![0]).toStrictEqual({ choice: 'live', confirm: 'e5f60718' });
@@ -15344,34 +15487,34 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
   describe('Pause all cleanup: nothing before a coord frame; a tap calls \'on\' once; "pausing…" until a frame reads set; unconfirmed after COORD_CONFIRM_MS; 501 inline; no Resume control', () => {
     it('renders nothing before a coord frame, and the button with its four-lane text once a clear frame lands', async () => {
       const { store } = await mount(LIVE_HERE);
-      expect(within(section()).queryByRole('button', { name: COLLECT_PAUSE_LABEL })).toBeNull();
-      expect(within(section()).queryByText(COLLECT_PAUSE_TEXT)).toBeNull();
+      expect(within(section()).queryByRole('button', { name: COLLECT_PAUSE_TEXT.label })).toBeNull();
+      expect(within(section()).queryByText(COLLECT_PAUSE_TEXT.stops)).toBeNull();
       seen(store, coord());
-      expect(within(section()).getByRole('button', { name: COLLECT_PAUSE_LABEL })).toBeEnabled();
-      expect(within(section()).getByText(COLLECT_PAUSE_TEXT)).toBeInTheDocument();
+      expect(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label })).toBeEnabled();
+      expect(within(section()).getByText(COLLECT_PAUSE_TEXT.stops)).toBeInTheDocument();
     });
 
     it("a tap calls 'on' exactly once and reads pausing… until a later frame reads set; then no Resume control", async () => {
       const pause = vi.fn<(state: 'on' | 'off') => Promise<void>>().mockResolvedValue(undefined);
       const { store } = await mount(LIVE_HERE, pause);
       seen(store, coord());
-      fireEvent.click(within(section()).getByRole('button', { name: COLLECT_PAUSE_LABEL }));
-      const pending = await within(section()).findByRole('button', { name: COLLECT_SECTION_WORDS.pausing });
+      fireEvent.click(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label }));
+      const pending = await within(section()).findByRole('button', { name: COLLECT_PAUSE_TEXT.pausing });
       expect(pending).toBeDisabled();
       fireEvent.click(pending);
       expect(pause).toHaveBeenCalledTimes(1);
       expect(pause).toHaveBeenCalledWith('on');
       seen(store, coord({ reclaim: 'clear', childReclaimAttention: [] }));   // a frame, still disagreeing
-      expect(within(section()).getByRole('button', { name: COLLECT_SECTION_WORDS.pausing })).toBeInTheDocument();
+      expect(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.pausing })).toBeInTheDocument();
       seen(store, coord({ reclaim: 'set' }));
-      expect(await within(section()).findByText(COLLECT_PAUSED_TEXT)).toBeInTheDocument();
-      expect(within(section()).queryByRole('button', { name: COLLECT_SECTION_WORDS.pausing })).toBeNull();
+      expect(await within(section()).findByText(COLLECT_PAUSE_TEXT.paused)).toBeInTheDocument();
+      expect(within(section()).queryByRole('button', { name: COLLECT_PAUSE_TEXT.pausing })).toBeNull();
       expect(within(section()).queryByRole('button', { name: /resume/i })).toBeNull();
       expect(pause).not.toHaveBeenCalledWith('off');
     });
 
     it('reads "unconfirmed — check /runs" when no frame confirms inside COORD_CONFIRM_MS', async () => {
-      expect(COLLECT_SECTION_WORDS.unconfirmed).toBe('unconfirmed — check /runs');
+      expect(COLLECT_PAUSE_TEXT.unconfirmed).toBe('unconfirmed — check /runs');
       vi.useFakeTimers();
       try {
         const store = makeStore();
@@ -15380,11 +15523,11 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
         render(<CollectLaneSection store={store} childReclaimPause={pause} />);
         await act(async () => { await vi.advanceTimersByTimeAsync(0); });
         seen(store, coord());
-        fireEvent.click(within(section()).getByRole('button', { name: COLLECT_PAUSE_LABEL }));
+        fireEvent.click(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label }));
         await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-        expect(within(section()).getByRole('button', { name: COLLECT_SECTION_WORDS.pausing })).toBeDisabled();
+        expect(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.pausing })).toBeDisabled();
         await act(async () => { await vi.advanceTimersByTimeAsync(COORD_CONFIRM_MS); });
-        expect(within(section()).getByRole('button', { name: COLLECT_SECTION_WORDS.unconfirmed })).toBeEnabled();
+        expect(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.unconfirmed })).toBeEnabled();
         expect(pause).toHaveBeenCalledTimes(1);
       } finally {
         vi.useRealTimers();
@@ -15396,18 +15539,18 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
         .mockRejectedValue(new ApiError(501, { ok: false, error: 'unsupported' }));
       const { store } = await mount(LIVE_HERE, pause);
       seen(store, coord());
-      fireEvent.click(within(section()).getByRole('button', { name: COLLECT_PAUSE_LABEL }));
+      fireEvent.click(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label }));
       expect(await within(section()).findByText(COORD_UNSUPPORTED_TEXT)).toBeInTheDocument();
-      expect(within(section()).getByRole('button', { name: COLLECT_PAUSE_LABEL })).toBeEnabled();
+      expect(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label })).toBeEnabled();
       expect(document.querySelector('.toast')).toBeNull();
     });
 
     it('offers Pause only: an unreadable switch still offers Pause, a paused one offers no Resume, and the file never asks off', async () => {
       const { store } = await mount(LIVE_HERE);
       seen(store, { ...coord(), reclaim: 'quarantined' } as unknown as CoordStatus);
-      expect(within(section()).getByRole('button', { name: COLLECT_PAUSE_LABEL })).toBeInTheDocument();
+      expect(within(section()).getByRole('button', { name: COLLECT_PAUSE_TEXT.label })).toBeInTheDocument();
       seen(store, coord({ reclaim: 'set' }));
-      expect(within(section()).getByText(COLLECT_PAUSED_TEXT)).toBeInTheDocument();
+      expect(within(section()).getByText(COLLECT_PAUSE_TEXT.paused)).toBeInTheDocument();
       expect(within(section()).queryByRole('button', { name: /resume/i })).toBeNull();
       const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'CollectLaneSection.tsx'), 'utf8');
       expect(src).not.toMatch(/childReclaimPause\(\s*'off'/);
@@ -15531,7 +15674,7 @@ Create `pwa/src/fleet/CollectLaneSection.tsx`:
 //     body with "Not available on this server." and nothing else, even over a view that landed before: after a
 //     rollback to a build without the route, a Live radio must not stay checked.
 //   * AN UNMEASURABLE STATE IS A STOP, NEVER A CHOICE. A read answered 503 state-unmeasurable (no stored row) draws
-//     the Safety-stopped label and line with the server's detail, and offers no radio.
+//     `collectUnmeasurableLines`: the Safety-stopped Now line and the server's detail. It offers no radio.
 //   * THE SERVER'S ANSWER IS WHAT IS SHOWN. The checked radio is the stored choice the server read, never the tap,
 //     and only while control is coherent: a stored token this build does not know, or a row the journal disagrees
 //     with, checks neither, so Off stays a tap that can repair a mismatch once the latch is set (spec §5.6). A write
@@ -15564,27 +15707,15 @@ import { childReclaimMarker } from './childReclaimWords';
 import { inlinePauseError } from './CoordBanner';
 import { COORD_CONFIRM_MS } from './coordWords';
 import {
-  COLLECT_CONFIRM_AGAIN_LABEL, COLLECT_CONFIRM_LABEL, COLLECT_CONFIRM_TITLE, COLLECT_NOT_AVAILABLE_TEXT,
-  COLLECT_NOW_TEXT, COLLECT_PAUSE_LABEL, COLLECT_PAUSE_TEXT, COLLECT_PAUSED_TEXT, COLLECT_REFUSAL_TEXT,
-  COLLECT_SECTION_TITLE, collectConfirmLines, collectCountLine, collectNowLines, collectOffNote,
-  collectOffersReconfirm,
+  COLLECT_PAUSE_TEXT, COLLECT_REFUSAL_TEXT, COLLECT_SECTION_TEXT, collectConfirmLines, collectCountLine,
+  collectNowLines, collectOffNote, collectOffersReconfirm, collectUnmeasurableLines,
 } from './collectLaneWords';
 import { asCollectLaneView, collectLanePostRefusal, useCollectLaneView, type CollectLanePoll } from './useCollectLaneView';
 import './fleet.css';
 
-/** The section's own chrome: the words `collectLaneWords.ts` does not carry. These are the legend, the two radio
- *  labels, the two read lines, the unanswered and other-refusal lines, and the pause control's two passing labels
- *  (ChildReclaimBanner's own). Every state, warn, count, sheet and route-refusal line is that module's. */
-export const COLLECT_SECTION_WORDS = {
-  legend: 'Choice',
-  choice: { off: 'Off', live: 'Live' } satisfies Readonly<Record<CollectLaneChoice, string>>,
-  unread: "The collector's state could not be read.",
-  stale: 'The last read failed; this is the answer before it.',
-  unanswered: 'The server did not answer, so the choice may or may not have been saved; the section re-read it.',
-  refused: 'Nothing was changed: {detail}',
-  pausing: 'pausing…',
-  unconfirmed: 'unconfirmed — check /runs',
-} as const;
+// This file has no words of its own. Every line it renders, the legend, the radio labels, the read and write lines
+// and the pause control's passing labels included, is `collectLaneWords.ts`'s (`COLLECT_SECTION_TEXT`,
+// `COLLECT_PAUSE_TEXT` and the line builders), read by its exported name and never retyped.
 
 /** A server detail into a `{detail}` slot, inserted literally (a replacer function, so a `$` is never a pattern). */
 const fillDetail = (text: string, detail: string): string => text.replace('{detail}', () => detail);
@@ -15615,20 +15746,18 @@ export function CollectLaneSection({
   const { view, failure } = poll;
   return (
     <section className="settings-section" aria-labelledby={titleId}>
-      <h2 id={titleId} className="settings-section-title">{COLLECT_SECTION_TITLE}</h2>
+      <h2 id={titleId} className="settings-section-title">{COLLECT_SECTION_TEXT.title}</h2>
       {failure !== null && failure.kind === 'not-configured' ? (
-        <p className="settings-note">{COLLECT_NOT_AVAILABLE_TEXT}</p>
+        <p className="settings-note">{COLLECT_SECTION_TEXT.notAvailable}</p>
       ) : failure !== null && failure.kind === 'state-unmeasurable' ? (
         <>
-          <p className={NOW_CLASS.head}>{COLLECT_NOW_TEXT['safety-stopped'].label}</p>
-          <p className={NOW_CLASS.note}>{COLLECT_NOW_TEXT['safety-stopped'].does}</p>
-          <p className={NOW_CLASS.warn}>{failure.detail}</p>
+          {collectUnmeasurableLines(failure.detail).map((line, i) => <p key={i} className={NOW_CLASS[line.tone]}>{line.text}</p>)}
           <PauseAllCleanup store={store} childReclaimPause={childReclaimPause} />
         </>
       ) : view !== null ? (
         <CollectLaneBody view={view} stale={failure !== null} poll={poll} store={store} childReclaimPause={childReclaimPause} />
       ) : failure !== null ? (
-        <p className="settings-note">{COLLECT_SECTION_WORDS.unread}</p>
+        <p className="settings-note">{COLLECT_SECTION_TEXT.unread}</p>
       ) : (
         <Skeleton lines={3} />
       )}
@@ -15675,12 +15804,12 @@ function CollectLaneBody({ view, stale, poll, store, childReclaimPause }: {
             setPending(refusal.confirm);
             return;
           }
-          if (refusal.kind === 'unconfirmed') toast(COLLECT_SECTION_WORDS.unanswered);
+          if (refusal.kind === 'unconfirmed') toast(COLLECT_SECTION_TEXT.unanswered);
           else if (refusal.code === 'marker-still-controls') setInline(COLLECT_REFUSAL_TEXT['marker-still-controls']);
           else {
             toast(refusal.code !== null
               ? `${COLLECT_REFUSAL_TEXT[refusal.code]} (${refusal.detail})`
-              : fillDetail(COLLECT_SECTION_WORDS.refused, refusal.detail), 'error');
+              : fillDetail(COLLECT_SECTION_TEXT.refused, refusal.detail), 'error');
           }
           reload();
         },
@@ -15700,12 +15829,12 @@ function CollectLaneBody({ view, stale, poll, store, childReclaimPause }: {
 
   return (
     <>
-      {stale && <p className="settings-note settings-catalogue--amber">{COLLECT_SECTION_WORDS.stale}</p>}
+      {stale && <p className="settings-note settings-catalogue--amber">{COLLECT_SECTION_TEXT.stale}</p>}
       {collectNowLines(view).map((line, i) => <p key={i} className={NOW_CLASS[line.tone]}>{line.text}</p>)}
       {view.notice !== null && <p className="settings-note" role="status">{view.notice}</p>}
       <p className="settings-note">{collectCountLine(view.attention)}</p>
       <fieldset className="settings-fieldset" disabled={locked}>
-        <legend className="settings-legend">{COLLECT_SECTION_WORDS.legend}</legend>
+        <legend className="settings-legend">{COLLECT_SECTION_TEXT.legend}</legend>
         {COLLECT_LANE_CHOICES.map((c) => {
           const held = c === 'off' && offHeld;
           return (
@@ -15719,7 +15848,7 @@ function CollectLaneBody({ view, stale, poll, store, childReclaimPause }: {
                 aria-describedby={held && offNote !== null ? offNoteId : undefined}
                 onChange={() => choose(c)}
               />
-              <span className="settings-option-sentence">{COLLECT_SECTION_WORDS.choice[c]}</span>
+              <span className="settings-option-sentence">{COLLECT_SECTION_TEXT[c]}</span>
             </label>
           );
         })}
@@ -15733,15 +15862,15 @@ function CollectLaneBody({ view, stale, poll, store, childReclaimPause }: {
           disabled={locked}
           onClick={() => { if (!locked) write({ choice: 'live' }); }}
         >
-          {COLLECT_CONFIRM_AGAIN_LABEL}
+          {COLLECT_SECTION_TEXT.reconfirm}
         </button>
       )}
       <PauseAllCleanup store={store} childReclaimPause={childReclaimPause} />
       <QuickConfirm
         open={pending !== null}
-        title={COLLECT_CONFIRM_TITLE}
+        title={COLLECT_SECTION_TEXT.confirmTitle}
         consequence={pending === null ? [] : collectConfirmLines(pending.facts, pending.error === 'confirm-stale', now)}
-        confirmLabel={COLLECT_CONFIRM_LABEL}
+        confirmLabel={COLLECT_SECTION_TEXT.confirmLabel}
         onConfirm={() => { if (pending !== null) write({ choice: 'live', confirm: pending.confirmKey }); }}
         onClose={() => setPending(null)}
       />
@@ -15784,7 +15913,7 @@ function PauseAllCleanup({ store, childReclaimPause }: { store: typeof useFleetS
   useEffect(() => () => clearTimer(), []);
 
   if (!coordFrameSeen || coord === null || marker === null) return null;
-  if (marker === 'set') return <p className="settings-note" role="status">{COLLECT_PAUSED_TEXT}</p>;
+  if (marker === 'set') return <p className="settings-note" role="status">{COLLECT_PAUSE_TEXT.paused}</p>;
 
   const onPause = (): void => {
     if (phase === 'pausing') return;
@@ -15807,13 +15936,13 @@ function PauseAllCleanup({ store, childReclaimPause }: { store: typeof useFleetS
     });
   };
 
-  const label = phase === 'pausing' ? COLLECT_SECTION_WORDS.pausing
-    : phase === 'unconfirmed' ? COLLECT_SECTION_WORDS.unconfirmed
-    : COLLECT_PAUSE_LABEL;
+  const label = phase === 'pausing' ? COLLECT_PAUSE_TEXT.pausing
+    : phase === 'unconfirmed' ? COLLECT_PAUSE_TEXT.unconfirmed
+    : COLLECT_PAUSE_TEXT.label;
 
   return (
     <>
-      <p className="settings-note">{COLLECT_PAUSE_TEXT}</p>
+      <p className="settings-note">{COLLECT_PAUSE_TEXT.stops}</p>
       <button type="button" className="btn-ghost settings-check" disabled={phase === 'pausing'} onClick={onPause}>
         {label}
       </button>
@@ -15912,7 +16041,7 @@ The worker measures every red text. Where the measured text differs, it replaces
 | # | Mutation (exact edit in `CollectLaneSection.tsx` unless named) | Command | Expected red |
 |---|---|---|---|
 | 1 | The not-available arm dropped: delete the chain's first arm, from `failure !== null && failure.kind === 'not-configured' ? (` through the `) : ` after its one `<p>`, so the chain opens at the state-unmeasurable arm. (The hook's rule that a landed view never outlives a not-available answer is pinned by Task 11's row 5.) | `S -t 'Not available'` | `Unable to find an element with the text: Not available on this server.` (the unread line shows instead) |
-| 2 | The 503 read rendered as a generic failure: delete the whole `failure.kind === 'state-unmeasurable' ? ( … ) :` arm | `S -t 'state-unmeasurable'` | `Unable to find an element with the text: the collector switch row is absent` |
+| 2 | The 503 read rendered as a generic failure: delete the whole `failure.kind === 'state-unmeasurable' ? ( … ) :` arm | `S -t 'state-unmeasurable'` | `Unable to find an element with the text: Safety-stopped: collector control state cannot be proved coherent; removes nothing.` (the unread line shows instead) |
 | 3 | Off's `disabled` removed: `disabled={held}` becomes `disabled={false}` | `S -t 'before the latch'` | `expected element to be disabled` (the Off radio) |
 | 4 | The note unlinked: `aria-describedby={held && offNote !== null ? offNoteId : undefined}` becomes `aria-describedby={undefined}` | `S -t 'before the latch'` | `expected null to be "The fleet box's legacy file still controls this lane. …"` |
 | 5 | The first tap sends a key: in `choose`, `write({ choice })` becomes `write({ choice, confirm: '' })` | `S -t 'Off posts exactly'`, then `S -t 'Live opens the sheet'` | `expected { choice: 'off', confirm: '' } to strictly equal { choice: 'off' }`; and `expected { choice: 'live', confirm: '' } to strictly equal { choice: 'live' }` |
@@ -15928,7 +16057,7 @@ The worker measures every red text. Where the measured text differs, it replaces
 | 15 | The timeout dropped: delete the `timerRef.current = setTimeout(…, COORD_CONFIRM_MS);` statement | `S -t 'COORD_CONFIRM_MS'` | `Unable to find an accessible element with the role "button" and name "unconfirmed — check /runs"` |
 | 16 | A Resume control added: the paused line becomes `<button type="button" onClick={() => { void childReclaimPause('off'); }}>Resume cleanup</button>` | `S -t 'offers Pause only'` | `expected <button …>Resume cleanup</button> to be null`, and the source scan `expected '…' not to match /childReclaimPause\(\s*'off'/` |
 | 17 | The mount line dropped: in `SettingsScreen.tsx`, delete `      <CollectLaneSection />` | `T -t 'state'` | LOADING: `expected [ 'Updates', 'Notifications', 'Stall watch' ] to deeply equal [ …, 'Temp root collector' ]`; LANDED likewise |
-| 18 | A device word in the section: `unread: "The collector's state could not be read."` becomes `unread: "The collector's state could not be read on this phone."` | `T -t 'P6'` | `CollectLaneSection.tsx: expected '…' not to match /\b(phones?\|…)\b/i` |
+| 18 | A device word in the section: in the header comment, `and the one choice that moves it.` becomes `and the one choice that moves it from a phone.` (the section file keeps no words, so its comment is the line to mutate) | `T -t 'P6'` | `CollectLaneSection.tsx: expected '…' not to match /\b(phones?\|…)\b/i` |
 | 19 | The 200's notice not shown: delete `{view.notice !== null && <p …>{view.notice}</p>}` | `S -t 'Off posts exactly'` | `Unable to find an element with the text: The choice applies from the collector's next check; …` |
 | 20 | A mismatch's stored choice checks a radio again: `view.stored.read === 'row' && view.control.state === 'coherent' ? view.stored.choice : null` becomes `view.stored.read === 'row' ? view.stored.choice : null` | `S -t 'mismatch with Off stored'` | `expected element not to be checked` (Off); with that assertion skipped, `expected "spy" to be called 1 times, but got 0 times` |
 
@@ -15979,7 +16108,7 @@ MSG
 )"
 ```
 
-Name these departures, by slug, in the wave-done: `collect-section-chrome-words-local` (only the unanswered and other-refusal lines are the section's own) and `pause-all-cleanup-case-split`.
+Name this departure, by slug, in the wave-done: `pause-all-cleanup-case-split`. The section keeps no words of its own: every line, the unanswered and other-refusal lines included, is Task 11's (`collect-words-carry-the-sections-copy`).
 
 ---
 
@@ -16925,7 +17054,7 @@ MSG
 - **R9 and spec §5.3.** No backup copies the journal. Restore wording says to leave it in place. The whole-state restore boundary is stated where the operator reads it.
 - **R3, R4 and spec §5.4.** The README describes the hand transition (four steps), the latch, the re-created file being ignored and Off being refused before the latch. "Removing the file shadows it again" is true only before the latch, so it is reworded.
 - **R13.** The Settings tour names the section, "Pause all cleanup" (four lanes) and "Not available on this server." It names no device. Task 11's or 12's tests already pin the PWA words, so the README quotes only labels Step 0 measures.
-- **R17.** The stated residual goes into both as-built notes.
+- **R17.** Both stated residuals go into both as-built notes: the Off after the argv, and `pre-latch-snapshot-repair-readopts-an-unset-latch`, which is a confirmed Live that repairs a pre-latch database snapshot and keeps its unset latch.
 - **R18.** Item 40 ("latest change" becomes "rebuilt") at its four measured sites. Item 38's case title.
 - **R19.** Run 354 holds `CLAUDE.md`, #351 holds `watch.ts`, and W1a may hold `README.md`. Every edit here is located by content. The `watch.ts` edit is one comment line, outside #351's hunks (Task 0 (f3)).
 - **Plan rulings vs the contract.** This plan's ruling numbers (R1 to R38) are not the contract's R-numbers (the contract runs past R98). The spec and the contract therefore never cite a plan ruling by number. They describe each reconciliation in words. The contract note cites only its own R82, R96 and R98.
@@ -17125,6 +17254,7 @@ describe("the switch's prose is true (path-identity spec §5)", () => {
     expect(note).toContain("the 409's facts carry neither the nonce nor the epoch");
     expect(note).toContain("An Off accepted after an act's argv was handed to ccd cannot stop that act.");
     expect(note).toContain('`marker-removal-after-the-last-listing-still-composes`');
+    expect(note).toContain('`pre-latch-snapshot-repair-readopts-an-unset-latch`');
     expect(note).toContain('**Departures found while building.**');
   });
 
@@ -17140,6 +17270,7 @@ describe("the switch's prose is true (path-identity spec §5)", () => {
       + 'fleet, never shadowed');
     expect(note).toContain("An Off accepted after an act's argv was handed to ccd cannot stop that act.");
     expect(note).toContain('`marker-removal-after-the-last-listing-still-composes`');
+    expect(note).toContain('`pre-latch-snapshot-repair-readopts-an-unset-latch`');
     expect(note).toContain('**Departures found while building.**');
   });
 
@@ -17425,6 +17556,15 @@ the code keeps each:
 **The stated residual.** An Off accepted after an act's argv was handed to ccd cannot stop that act. This extends
 wave 9's `marker-removal-after-the-last-listing-still-composes` from the file to the switch.
 
+**A second stated residual: `pre-latch-snapshot-repair-readopts-an-unset-latch`.** Suppose `coord.db` is restored on its
+own from a snapshot taken before the latch was recorded, and the later journal stays beside it. The lane is then
+safety-stopped (§5.3). Its only repair is a confirmed Live, because Off is refused while the latch is unset and the latch
+never heals a mismatch. That Live keeps the restored row's unset latch. Once it has repaired the mismatch, a standing or
+re-created legacy file arms the lane again, on any node, and Off is refused again. This lasts until the next coherent,
+unpaused, same-epoch listing shows the file absent and retires the latch. So §5.3's "the restored null latch cannot
+revive the marker" holds only until that repair. The window needs the file to stand, and the confirm sheet does not
+name it.
+
 **Carried, not fixed.** The coordinator skill's `references/resume.md` still names the newest `coord.db` snapshot as
 the restore path with no word on the journal: skill text is outside this wave, and a restore that follows it fails
 safe, because no backup holds the journal. The manual-downgrade hint's copy of `coord.db` over a live write-ahead log is left as it was;
@@ -17441,7 +17581,9 @@ Step 8 replaces the `None.` line when this wave recorded any departure. Measure 
 - `switch-flip` in `COLLECT_ANSWERED_WHYS`;
 - the 501 arm in `routes.ts`;
 - the FNV and nonce in `collectConfirmKey`;
-- the four lanes in Task 11's words.
+- the four lanes in Task 11's words;
+- the pre-latch repair residual: the Live arm of `decideCollectLaneWrite` copies `row.markerRetiredAt`, and Off's
+  `marker-still-controls` refusal still applies while that copy is null.
 
 Correct the text to the code, never the reverse.
 
@@ -17527,6 +17669,14 @@ consults no box token, and no skill names the route or the file.
 **The stated residual.** An Off accepted after an act's argv was handed to ccd cannot stop that act. It extends
 `marker-removal-after-the-last-listing-still-composes` (§16 as built) from the file to the switch, and a 200 says the
 choice applies from the collector's next check.
+
+**A second stated residual: `pre-latch-snapshot-repair-readopts-an-unset-latch`.** Suppose `coord.db` is restored on its
+own from a snapshot taken before the latch was recorded, and the later journal stays beside it. The lane is then
+safety-stopped (path-identity design §5.3). Its only repair is a confirmed Live, because Off is refused while the latch
+is unset and the latch never heals a mismatch. That Live keeps the restored row's unset latch. Once it has repaired the
+mismatch, a standing or re-created legacy file arms the lane again, on any node, and Off is refused again. This lasts
+until the next coherent, unpaused, same-epoch listing shows the file absent and retires the latch. The window needs the
+file to stand, and the confirm sheet does not name it.
 
 **Carried, not fixed.** The coordinator skill's `references/resume.md`, which names the newest `coord.db` snapshot as
 the restore path with no word on the journal (skill text is outside this wave; a restore that follows it fails safe,
@@ -17695,8 +17845,12 @@ place.
 The path-identity spec gains "§5 as built", the CCR-15 spec gains wave 10's
 paragraph in §5.10 and its row in §8, and the contract gains "§17 as built"
 after R98. Each names the reconciliations settled before the build, the
-departures found while building by slug, and the stated residual: an Off
-accepted after an act's argv was handed to ccd does not stop that act.
+departures found while building by slug, and the two stated residuals:
+an Off accepted after an act's argv was handed to ccd does not stop that
+act; and a confirmed Live that repairs a database restored from before the
+latch keeps the latch unset, so a standing legacy file arms the lane again
+until the next coherent listing retires it
+(pre-latch-snapshot-repair-readopts-an-unset-latch).
 
 CLAUDE.md's coord.db bullet lists the collector switch among what a lost
 database loses, and says the journal is never copied into or restored with
@@ -17993,6 +18147,15 @@ git diff --name-only origin/main...HEAD -- ccd/ccd ccd/ccrc-api ccd/coordinator-
 
 Expected: both print nothing.
 
+The plan's own path is on that allowlist only for its `## Deviations found`, the last section, which the coordinator writes at a fix round. No task edits the plan, so everything above that heading must match the merge base:
+
+```bash
+P=docs/superpowers/plans/2026-10-12-child-reclamation-wave10-collector-settings-switch.md
+diff <(git show "$(git merge-base origin/main HEAD):$P" | sed '/^## Deviations found$/,$d') <(git show "HEAD:$P" | sed '/^## Deviations found$/,$d') && echo "plan-body-unchanged"
+```
+
+Expected: `plan-body-unchanged`. Any other output is an edit to the plan's rulings, boundary or tasks, which no task makes: STOP and name it by slug `plan-body-edited` in the wave-done.
+
 The new files are exactly the File Structure's:
 
 ```bash
@@ -18184,7 +18347,7 @@ The temp-root collector (wave 9, #354) is armed today only by a file the operato
 
 ### Boundary
 
-- Edits only `server/`, the foot of `shared/api.ts`, `pwa/`, `ccd/ccrc`'s usage, comments and one downgrade echo, README, two CLAUDE.md bullets, the two specs' as-built notes, the contract's "§17 as built" and the plan.
+- Edits only `server/`, the foot of `shared/api.ts`, `pwa/`, `ccd/ccrc`'s usage, comments and one downgrade echo, README, two CLAUDE.md bullets, the two specs' as-built notes and the contract's "§17 as built". No task edits this plan; only the coordinator writes its `## Deviations found`, at a fix round.
 - Never edits `ccd/ccd`, `agent/`, `deploy/`, `ccd/ccrc-api`, any skill text, workspace-lifecycle's four files, the auth gate's `EXEMPT` table, `UpdateMoveSheet.tsx`, `cmd_rollout`'s report, README's cleanup-pause row or CLAUDE.md's SAFETY bullet.
 - Adds two routes, one table in one migration, and one server-owned file. Adds no ccd verb, capability token, agent grant, box-token door, `EXEMPT` row, `FLEET_PROTO` bump, `NotifyEvent` field or writer of the legacy file. No update or rollout announcement.
 
@@ -18206,6 +18369,7 @@ Until step 4, Off answers `409 marker-still-controls`; "Pause all cleanup" is th
 ### Residuals
 
 - An Off accepted after an act's argv was handed to ccd cannot stop that act. This extends `marker-removal-after-the-last-listing-still-composes`; the 200 says the choice applies from the collector's next check.
+- `pre-latch-snapshot-repair-readopts-an-unset-latch`: a confirmed Live that repairs a database restored alone from before the latch keeps the latch unset. A standing or re-created legacy file then arms the lane again, and Off is refused again, until the next coherent, same-epoch listing shows the file absent and retires the latch.
 - Whole-state restore: restoring `coord.db` and the journal together to one older point is coherent, and this design cannot detect it. After such a restore, raise the cleanup pause and make a fresh confirmed Settings transition before allowing Live.
 - The copy-over-WAL hazard in the existing downgrade hint is carried, not fixed here.
 
@@ -18297,7 +18461,7 @@ These lenses run IN ADDITION to the held-out panel (`ccd/coordinator-skill/refer
   - the pause; local mode;
   - a server restart with Live stored.
   
-  None may compose `ws-collect`, except the stated residual (an Off after the argv).
+  None may compose `ws-collect`, except the stated residual (an Off after the argv). A pre-latch snapshot composes nothing until a confirmed Live repairs it. After that repair, the standing file arms the lane again, which is the second stated residual, `pre-latch-snapshot-repair-readopts-an-unset-latch`, and not a finding.
 - **The latch.** It retires only from a coherent, unpaused, listed, same-epoch absence. It never heals either direction. It never runs from the POST. It follows a removed marker on an idle lane within one pass.
 - **The flip.** A handoff writes no row and keeps the pairs. A stop arm writes no row. A boolean flip clears every pair.
 
