@@ -25,7 +25,7 @@ removed on 2026-09-10 was not.
 | 6 | `ws-reclaim` repaired (R48): the ONE removal helper and the in-use wait/keep of a temp root (R49); the positive witness `$REG/tmproots/<id>` (R50); F6 and the harness strip (R51); journaling `probe-unmeasured` and the id-tied pre-lock dies (R52); the three-way gone-branch read (R53); the `recorded` placement basis (R54); the vanish re-read's second trigger (R55) | **AGENT-FIRST** | #326 | **deployed** v0.0.124 (`b0647d850`, both boxes by 13:40 on 10-08) — run 291 closed `done`; reviews 335, 341 and 346 |
 | 7 | the temp-root collector verb, inert (R57, R66–R68): audit + token, quarantine-by-rename under the reap lock, the `$REG/tmpquarantine` record, destructive verb, cap token, agent grant, entry guard; plus the ccd halves (R69 `containment-refuted`, R70 `crumb`, rung 8, the reason cap, X1's generation input) | **AGENT-FIRST** | #344 | **deployed** fleet box v0.0.145 (`7609221a4`, merged 2026-10-11 00:55; the updater's auto move 01:10–01:12, agent restarted 01:10:52; `ccd caps` advertises `collect-v1` and `ws-collect`) — run 347, reviews 369, 374, 376 |
 | 8 | reclaim's server half (R65): X1 and X3 generation keying, R61's closure, the `crumb` verb and audit readers, the `clipsKept`/`tmpRootKept` reader, R69's `stuck` class, the persistent-failure tier | server | #349 | **deployed** v0.0.147 (`d0c2b7803`, merged 2026-10-11 12:13; both boxes current by 12:23, through the updater) — run 348 (`ccrc-pwa-quiet-prairie`), plan `0d9f1b042`; reviews 378, 379 |
-| 9 | the collector's server lane (the old R58), after the fleet advertises wave 7's token and wave 8 has merged; SAFETY and SECURITY lenses | server | — | **in review** 2026-10-12 01:14 — run 380 (`ccrc-pwa-quiet-hollow`), PR #354 at `c7dfbbf69`, review run 386 done 04:41 (22 findings), FIX ROUND 1 sent 05:19 (4267); plan `d9647b76b` (#352); rulings contract §16 (R82–R92); ships SHADOWED |
+| 9 | the collector's server lane (the old R58), after the fleet advertises wave 7's token and wave 8 has merged; SAFETY and SECURITY lenses | server | — | **in review** 2026-10-12 01:14 — run 380 (`ccrc-pwa-quiet-hollow`), PR #354 at `c7dfbbf69`, review run 386 done 04:41 (22 findings), FIX ROUND 1 sent 05:19 (4267), done at `241cbb873`, scoped review run 387 working; plan `d9647b76b` (#352); rulings contract §16 (R82–R92); ships SHADOWED |
 
 **Rule 3 is enforced at the end of wave 2** with no destructive verb in existence: a second bind on a
 PR-bearing child refuses. **Wave 3's `ws-reclaim` and wave 7's collector are the only verbs that destroy anything** (R38, R48). Waves 3 and 4 do nothing on a
@@ -46,6 +46,18 @@ clause 11): it names a departure in its wave-done mail and the coordinator assig
 Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (reviews **170**, **171**, **172**); wave 4 = **174**. Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
 
 ## Decisions & deviations
+
+- **2026-10-12 06:29 — the fold is in (4273, acked): PR #354 at `241cbb873`. Run 380 is at `awaiting-review`, and SCOPED REVIEW RUN 387 is DISPATCHED to `ccrc-pwa-plain-prairie` (claude-corp, Anthropic; Opus `xhigh`) and advanced to `working`.**
+  - **The fold.** `241cbb873` is docs only: the plan's `## Deviations found` and the "§16 as built" note.
+    - It folds the new slugs into 4850, 4851 and 4853, and adds two residuals.
+    - It corrects my ruling's clause on `registered-id-with-only-an-unparseable-record-stays-hidden`: the refused-names line COUNTS such a name and never names it.
+  - **Re-measured.** 10 commits since `c7dfbbf69`, the boundary clean, `merge-tree` clean, mergeable. CI at this tip has started.
+  - **The review's brief** (`review-387-brief.md`, 6712 bytes) names:
+    - SAFETY (Opus `xhigh`) on F1, F2 and F4/F11, and SECURITY on F5;
+    - the held-out panel;
+    - each ruling checked at the tip;
+    - the 61 deviation entries and the folded slugs;
+    - the boundary.
 
 - **2026-10-12 06:26 — FIX ROUND 1's wave-done (4271, acked; archived in `wave9-fr1/`): PR #354 at `4007a2439`.**
   - **Re-measured.** 9 commits and 17 files since `c7dfbbf69`, no merge of main. The boundary is clean (no `ccd/`, `store.ts`, `CLAUDE.md` or `session-hook.test.ts`), `merge-tree` is clean, and the PR is mergeable.
