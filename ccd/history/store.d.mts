@@ -2,7 +2,7 @@
 // compact-card.d.mts precedent). Hand-written; grows with each task. Nothing
 // machine-checks it against store.mjs, so every export is declared here.
 import type { DatabaseSync } from 'node:sqlite';
-import type { MigrationVerdict, PairIndex, Presence, StoreFacts } from './lib.mjs';
+import type { FkRow, MigrationVerdict, PairIndex, Presence, StoreFacts } from './lib.mjs';
 
 export const CODEC: 'br5';
 export class StoreError extends Error {
@@ -82,3 +82,9 @@ export function removeStaleBackupTemps(home: string): void;
 export function writeBackup(db: DatabaseSync, home: string, i: { nowMs: number }): {
   name: string; sizeBytes: number; copyBps: number;
 };
+
+export function integrityCheck(db: DatabaseSync): string[];
+export function foreignKeyRows(db: DatabaseSync): FkRow[];
+export function ftsMeasure(db: DatabaseSync): { tables: Set<string>; columns: Record<string, string[]> };
+export function dropFtsTables(db: DatabaseSync): void;
+export function setCounter(db: DatabaseSync, name: string, n: number): void;

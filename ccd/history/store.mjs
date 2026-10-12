@@ -24,7 +24,7 @@ import {
 import { dirname } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as Z, createBrotliCompress, createBrotliDecompress } from 'node:zlib';
-import { BUSY_TIMEOUT_MS, CONTROL_FILE_MAX, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_VERSION, SIDECAR_WHOLE_MAX, UUID_RE, WRITER_RE, backupNameOf, blobOverDecodeCap, ftsTextOf, historyPaths, jsonWithinStructureBound, newSha256, sidecarIndexText } from './lib.mjs';
+import { BUSY_TIMEOUT_MS, CONTROL_FILE_MAX, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_VERSION, SIDECAR_WHOLE_MAX, UUID_RE, WRITER_RE, backupNameOf, blobOverDecodeCap, FTS_SHADOWS, ftsTextOf, historyPaths, jsonWithinStructureBound, newSha256, sidecarIndexText } from './lib.mjs';
 
 /** The codec word every blob row records: Brotli at quality 5 (RV6). */
 export const CODEC = 'br5';
@@ -1303,4 +1303,54 @@ export function writeBackup(db, home, i) {
   const copyBps = Math.max(1, Math.round(sizeBytes / Math.max(seconds, 0.001)));
   withTx(db, 'NORMAL', () => { setMeta(db, 'copy_bps', copyBps); });
   return { name, sizeBytes, copyBps };
+}
+
+// ── doctor --repair's measurements (§8.4; W1-B2 Task 23) ─────────────────────────────────────────
+
+/** PRAGMA integrity_check's rows as text: exactly ['ok'] for a sound store. */
+export function integrityCheck(db) {
+  return db.prepare('PRAGMA integrity_check').all().map((r) => String(r.integrity_check));
+}
+
+/** PRAGMA foreign_key_check's rows, the input of lib's diffForeignKeys (P21): one per child row whose parent is
+ *  missing. The writer runs with foreign keys ON (WRITER_PRAGMAS), so a violation here was written with them off
+ *  or deferred — a store restored from elsewhere, a hand edit, or a bug. No v1 table is WITHOUT ROWID, so a v1
+ *  table's `rowid` is never null. */
+export function foreignKeyRows(db) {
+  return db.prepare('PRAGMA foreign_key_check').all().map((r) => ({
+    table: r.table ?? null,
+    rowid: r.rowid === null || r.rowid === undefined ? null : Number(r.rowid),
+    parent: r.parent ?? null,
+    fkid: r.fkid === null || r.fkid === undefined ? null : Number(r.fkid),
+  }));
+}
+
+/** What lib's ftsTablesHealthy reads (P24): every FTS table and shadow table present, and each FTS table's
+ *  columns. */
+export function ftsMeasure(db) {
+  const tables = new Set(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()
+    .map((r) => String(r.name)).filter((n) => n.startsWith('blobs_fts') || n.startsWith('nodes_fts')));
+  const columns = {};
+  for (const t of ['blobs_fts', 'nodes_fts']) {
+    if (tables.has(t)) columns[t] = db.prepare(`PRAGMA table_info(${t})`).all().map((r) => String(r.name));
+  }
+  return { tables, columns };
+}
+
+/** Drop both FTS tables, then any shadow a missing main table left behind — P24's sequence, the table and then
+ *  each shadow if it exists. A live table's shadows go with it, and node:sqlite's defensive mode refuses to
+ *  drop one by name, so only an orphaned shadow is ever dropped here. The caller holds the transaction and
+ *  recreates the tables with createFtsTables.
+ *  derived from lossless-claw src/db/migration.ts @ e05d8d3, MIT, see LICENSE.lossless-claw */
+export function dropFtsTables(db) {
+  db.exec('DROP TABLE IF EXISTS blobs_fts');
+  db.exec('DROP TABLE IF EXISTS nodes_fts');
+  for (const names of Object.values(FTS_SHADOWS)) for (const n of names) db.exec(`DROP TABLE IF EXISTS "${n}"`);
+}
+
+/** A counter set to `n` by a re-measure, inside the caller's transaction (W1-B2 Task 23; D-4723 (history-counter-resets-after-cure)):
+ *  0 deletes its row, which every reader reads as 0 (sweep.mjs's counterOf, status's counters). */
+export function setCounter(db, name, n) {
+  if (n === 0) db.prepare('DELETE FROM counters WHERE name = ?').run(name);
+  else db.prepare('INSERT INTO counters (name, n) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET n = excluded.n').run(name, n);
 }

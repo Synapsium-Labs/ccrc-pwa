@@ -4207,3 +4207,180 @@ describe('O59 (W1-B2 Task 7B): the substring belt in the index (spec §6.2, §8.
     } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
   });
 });
+
+// ── W1-B2 Task 23: a repair rebuild leaves the belt due, and the next tick closes it (spec §6.2 "The belt"; O59) ──────
+describe('O59 (W1-B2 Task 23): a doctor --repair rebuild leaves the belt due, and the next tick closes it', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  it('the rebuild records the belt state due; the next scheduled pass runs a belt generation and records BELT_VERSION', async () => {
+    const { sweep, store, lib } = await IX.api();
+    const S = sweep as unknown as {
+      makeIngestCtx(home: string, homes: string[], nowMs: number, ids: object): Record<string, unknown>;
+      secretsStep(db: DatabaseSync, ictx: object, files: string[]): { pairIdx: unknown };
+      newBudget(): object;
+      ftsRebuildJob(db: DatabaseSync, ictx: object, o: { stepVersion: number; budget: object }): Promise<{ done: boolean }>;
+    };
+    const box = IX.newBox('ccrc-hist-belt-r-');
+    try {
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, 'zqrepair one', 1)]));
+      IX.sweepTwice(box);
+      const P = lib.historyPaths(box.home);
+      const ids = { storeId: fs.readFileSync(P.storeId, 'utf8').trim(), writer: fs.readFileSync(P.writer, 'utf8').trim() };
+      const beltOf = (db: DatabaseSync): string | undefined =>
+        (db.prepare('SELECT v FROM meta WHERE k = ?').get(lib.BELT_META) as { v: string } | undefined)?.v;
+      const w = store.openWriter(P.dbFile);
+      try {
+        expect(lib.parseBeltState(beltOf(w))?.v, 'CONTROL: the ticks recorded the belt').toBe(lib.BELT_VERSION);
+        const ictx = S.makeIngestCtx(box.home, box.homes, Date.now(), ids);
+        ictx['pairIdx'] = S.secretsStep(w, ictx, []).pairIdx;
+        ictx['fts'] = true;
+        expect((await S.ftsRebuildJob(w, ictx, { stepVersion: Date.now(), budget: S.newBudget() })).done).toBe(true);
+        expect(lib.parseBeltState(beltOf(w))).toEqual({ v: 0, rids: [], gen: null });
+      } finally { w.close(); }
+      const r = runSweep(box);
+      expect(r.code, r.stderr).toBe(0);
+      const db = openStoreRO(box);
+      try { expect(lib.parseBeltState(beltOf(db))?.v).toBe(lib.BELT_VERSION); } finally { db.close(); }
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  });
+});
+
+// ── W1-B2 Task 23: a resumed rebuild re-checks the belt state (spec §6.2 "The belt"; O59) ──
+describe('O59 (W1-B2 Task 23): a resumed rebuild whose belt lacks a unit the belt state records as covered records the belt due', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  it('the second pass starts past the first chunk, with the unit unreadable, and still records the belt due', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file regardless of its mode
+    const { sweep, store, lib } = await IX.api();
+    const S = sweep as unknown as {
+      makeIngestCtx(home: string, homes: string[], nowMs: number, ids: object): Record<string, unknown>;
+      secretsStep(db: DatabaseSync, ictx: object, files: string[]): { pairIdx: unknown };
+      newBudget(now?: () => number, limits?: { maxBytes?: number }): object;
+      ftsRebuildJob(db: DatabaseSync, ictx: object, o: { stepVersion: number; budget: object }): Promise<{ done: boolean }>;
+      stampBeltWitness(db: DatabaseSync): void;
+    };
+    const AL = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    const v = `QP${Array.from(globalThis.crypto.getRandomValues(new Uint8Array(29)), (b) => AL[b % AL.length]!).join('')}7`;
+    const box = IX.newBox('ccrc-hist-belt-rr-');
+    try {
+      const sec = path.join(box.home, '.cc-secrets');
+      fs.mkdirSync(sec, { recursive: true, mode: 0o700 });
+      const file = path.join(sec, 'rr.env');
+      fs.writeFileSync(file, `ZQ_RR=${v}\n`, { mode: 0o600 });
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl([IX.user(IX.uuidN(1), null, `zqresume ab${v}cd one`, 1)]));
+      IX.sweepTwice(box);
+      const P = lib.historyPaths(box.home);
+      const ids = { storeId: fs.readFileSync(P.storeId, 'utf8').trim(), writer: fs.readFileSync(P.writer, 'utf8').trim() };
+      const rawBelt = (): string | undefined => {
+        const db = openStoreRO(box);
+        try { return (db.prepare('SELECT v FROM meta WHERE k = ?').get(lib.BELT_META) as { v: string } | undefined)?.v; } finally { db.close(); }
+      };
+      const covered = rawBelt();
+      expect(lib.parseBeltState(covered)?.v, 'CONTROL: the ticks completed a belt generation').toBe(lib.BELT_VERSION);
+      expect(lib.parseBeltState(covered)?.rids.length, 'CONTROL: recording the one unit covered').toBe(1);
+      /** One repair pass in this process: the pass's own pair index (secretsStep), then one ftsRebuildJob call. */
+      const pass = async (limits?: { maxBytes: number }): Promise<boolean> => {
+        const w = store.openWriter(P.dbFile);
+        try {
+          const ictx = S.makeIngestCtx(box.home, box.homes, Date.now(), ids);
+          ictx['pairIdx'] = S.secretsStep(w, ictx, []).pairIdx;
+          ictx['fts'] = true;
+          const budget = limits === undefined ? S.newBudget() : S.newBudget(Date.now, limits);
+          return (await S.ftsRebuildJob(w, ictx, { stepVersion: Date.now(), budget })).done;
+        } finally { w.close(); }
+      };
+      // Pass 1, every unit loaded: its one chunk takes the store's few blobs, so the phase moves past `blobs`, and the
+      // 1-byte budget ends the call there.
+      expect(await pass({ maxBytes: 1 }), 'CONTROL: the first pass stops after its first chunk').toBe(false);
+      expect(lib.parseBeltState(rawBelt()), 'CONTROL: the first chunk recorded the belt due').toEqual({ v: 0, rids: [], gen: null });
+      // What a tick's belt generation that completes between the two passes leaves: the state the ticks recorded above,
+      // planted back as it was read, so the case does not hang on a tick's budget.
+      const w = store.openWriter(P.dbFile);
+      try { w.prepare('UPDATE meta SET v = ? WHERE k = ?').run(covered!, lib.BELT_META); store.withTx(w, 'NORMAL', () => { S.stampBeltWitness(w); }); } finally { w.close(); }
+      const p = lib.parseBeltState(rawBelt()); const c = lib.parseBeltState(covered)!; expect({ v: p?.v, rids: p?.rids, gen: p?.gen }, 'CONTROL: the state names the unit covered again, stamped as a tick leaves it').toEqual({ v: c.v, rids: c.rids, gen: c.gen });
+      // Pass 2, the unit's file unreadable: it resumes past the start, so the first chunk's record never runs again.
+      fs.chmodSync(file, 0o000);
+      try {
+        let done = false;
+        for (let k = 0; k < 8 && !done; k += 1) done = await pass();
+        expect(done, 'CONTROL: the resumed rebuild completed').toBe(true);
+      } finally { fs.chmodSync(file, 0o600); }
+      expect(lib.parseBeltState(rawBelt()), 'the resumed pass wrote rows without that unit\'s belt: the belt is due')
+        .toEqual({ v: 0, rids: [], gen: null });
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  }, 240_000);
+});
+
+// ── W1-B2 Task 23: the rebuild deletes a blob's row before it inserts it (FTS5 merges a second insert of one rowid) ──
+describe('W1-B2 Task 23: a rebuild spread over two passes replaces the row a tick wrote between them, never merges into it', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  it('the tail blob, which the first pass did not reach and a tick re-derived, keeps only the second pass\'s text', async () => {
+    const { sweep, store, lib } = await IX.api();
+    const S = sweep as unknown as {
+      makeIngestCtx(home: string, homes: string[], nowMs: number, ids: object): Record<string, unknown>;
+      secretsStep(db: DatabaseSync, ictx: object, files: string[]): { pairIdx: unknown };
+      newBudget(now?: () => number, limits?: { maxBytes?: number }): object;
+      ftsRebuildJob(db: DatabaseSync, ictx: object, o: { stepVersion: number; budget: object }): Promise<{ done: boolean }>;
+    };
+    const AL = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    /** A value no shape matches (C49's shape): only its pair, learned from a secret file, masks it. */
+    const mint = (): string => `${Array.from(globalThis.crypto.getRandomValues(new Uint8Array(30)), (b) => AL[b % AL.length]!).join('')}7`;
+    const X = mint();   // a secret only from the second rebuild pass on
+    const Y = mint();   // a secret from the tick between the two passes on
+    // More indexable blobs than one rebuild chunk takes (REBUILD_BATCH = 2048), each its own text; the last one holds X and Y.
+    const N = 2100;
+    const rows = Array.from({ length: N }, (_, k) => {
+      const i = k + 1;
+      return IX.user(IX.uuidN(i), i === 1 ? null : IX.uuidN(i - 1), i === N ? `zqdeltail ${X} and ${Y} end` : `zqdelrow ${i}`, i);
+    });
+    const box = IX.newBox('ccrc-hist-t23-del-');
+    try {
+      IX.plantCopy(box.homes[0]!, IX.U, IX.jsonl(rows));
+      const P = lib.historyPaths(box.home);
+      const match = (q: string): number => {
+        const db = openStoreRO(box);
+        try {
+          return (db.prepare('SELECT count(*) AS n FROM blobs_fts WHERE blobs_fts MATCH ?').get(`"${q}"`) as { n: number }).n;
+        } finally { db.close(); }
+      };
+      const tickUntil = (done: () => boolean): void => {
+        for (let k = 0; k < 8 && !done(); k += 1) {
+          const r = runSweep(box);
+          expect(r.code, r.stderr).toBe(0);
+        }
+      };
+      tickUntil(() => fs.existsSync(P.dbFile) && match('zqdeltail') === 1);
+      expect(match('zqdeltail'), 'CONTROL: every row was ingested and indexed').toBe(1);
+      expect(match(X), 'CONTROL: X is no secret yet, so it is a term').toBe(1);
+      const ids = { storeId: fs.readFileSync(P.storeId, 'utf8').trim(), writer: fs.readFileSync(P.writer, 'utf8').trim() };
+      /** One repair pass in this process: the pass's own pair index (secretsStep), then one ftsRebuildJob call. */
+      const pass = async (limits?: { maxBytes: number }): Promise<boolean> => {
+        const w = store.openWriter(P.dbFile);
+        try {
+          const ictx = S.makeIngestCtx(box.home, box.homes, Date.now(), ids);
+          ictx['pairIdx'] = S.secretsStep(w, ictx, []).pairIdx;
+          ictx['fts'] = true;
+          const budget = limits === undefined ? S.newBudget() : S.newBudget(Date.now, limits);
+          return (await S.ftsRebuildJob(w, ictx, { stepVersion: Date.now(), budget })).done;
+        } finally { w.close(); }
+      };
+      // Pass 1: the first chunk (2048 blobs) charges more than one byte, so the budget is spent after it.
+      expect(await pass({ maxBytes: 1 }), 'CONTROL: the first pass stops after one chunk').toBe(false);
+      expect(match('zqdeltail'), 'CONTROL: the first chunk did not reach the tail blob').toBe(0);
+      // Y becomes a secret. The ticks record its pair, and B1's rederiveFts re-derives the tail blob, whose text holds Y,
+      // into the NEW table: delete (nothing there yet), then insert, with X still unknown.
+      const sec = path.join(box.home, '.cc-secrets');
+      fs.mkdirSync(sec, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(sec, 't23-y.env'), `ZQ_T23_Y=${Y}\n`, { mode: 0o600 });
+      tickUntil(() => match('zqdeltail') === 1);
+      expect(match('zqdeltail'), 'CONTROL: a tick wrote the tail blob\'s row between the two passes').toBe(1);
+      expect(match(X), 'CONTROL: the tick\'s row holds X as a term').toBe(1);
+      expect(match(Y), 'CONTROL: and Y redacted').toBe(0);
+      // X becomes a secret too; the second pass learns its pair and finishes the rebuild.
+      fs.writeFileSync(path.join(sec, 't23-x.env'), `ZQ_T23_X=${X}\n`, { mode: 0o600 });
+      let done = false;
+      for (let k = 0; k < 8 && !done; k += 1) done = await pass();
+      expect(done, 'CONTROL: the rebuild completed').toBe(true);
+      expect(match('zqdeltail'), 'the tail blob keeps its row').toBe(1);
+      expect(match(X), 'the second pass replaced the tick\'s row (deleted first): X is no term').toBe(0);
+    } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
+  }, 240_000);
+});

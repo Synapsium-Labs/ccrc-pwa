@@ -2778,7 +2778,7 @@ export const HEALTH_META = Object.freeze({
 
 /** Counters `status` reads for a health word, spelled once for the writer (sweep.mjs), the reader (cli.mjs) and the
  *  doctor fixtures that plant them. D-4346 (history-permanent-failures-classified). Like `blob_undecodable` and
- *  `drain_rejected`, `spool_displaced`, `spool_blocked` and `spool_unreadable` are never reset in B1 (B2's repair owns resets). */
+ *  `drain_rejected`, `spool_displaced`, `spool_blocked` and `spool_unreadable` are never reset by the pass that counts them: W1-B2's re-measure resets or raises them (decideCounterResets, D-4723 (`history-counter-resets-after-cure`)). */
 export const HEALTH_COUNTERS = Object.freeze({
   blobUndecodable: 'blob_undecodable',
   drainRejected: 'drain_rejected',
@@ -2883,7 +2883,7 @@ export const HEALTH_REMEDIES = Object.freeze({
   'journal-growth': `read the sweep: ${SWEEP_LOG}; the journal grows faster than twice its estimate`,
   'blob-undecodable': `the store's copy of that text is damaged (storage corruption) and nothing repairs it in place: keep ~/.ccrc/history as it is; ccrc history doctor --repair, which detects storage corruption, arrives with W1-B2`,
   'drain-rejected': `the files are kept in ~/.ccrc/history/spool/.draining/rejected/ and their lines in the journal, and nothing in this build drains them again; the refusal is in the sweep's log: ${SWEEP_LOG}`,
-  // D-4347 (history-planted-entries-never-wedge). Never reset in B1, like drain-rejected and blob-undecodable: B2's repair owns resets.
+  // D-4347 (history-planted-entries-never-wedge). Re-measured by doctor --repair and a recovery's close, like drain-rejected and blob-undecodable (W1-B2, D-4723 (`history-counter-resets-after-cure`)).
   'spool-planted': `remove a link or file that stands at ~/.ccrc/history/spool itself (the next pass makes the directory again), any FIFO, link, directory or other non-regular node that stands at ~/.ccrc/history/spool/<id>.jsonl (that id spools again once it is gone), and the planted entries under ~/.ccrc/history/spool/.draining/ (each drain's set-asides are under planted/<tickMs>.<pid>/, and their files are kept there undrained); nothing in this build drains a displaced file again; a file the sweep cannot read stays in .draining/ with its .obs sidecar until both are readable by this user (chmod 600, or chown them) or removed, and its id's later files drain once it does; the sweep's log names each one: ${SWEEP_LOG}`,
 });
 
@@ -6170,11 +6170,12 @@ export const SEARCH_REACH = `grep reaches at most the first ${reachSize(ENTRY_FT
  *  - an absent module is 7 fts5-absent;
  *  - no blobs_fts yet, or a backfill ('fts', 1) that has not completed, is 7 fts-pending, so a partial index
  *    never answers 3 for text the store holds but has not indexed yet.
+ *  - an open FTS_REBUILD_STEP row (doctor --repair, W1-B2 Task 23) is 7 fts-pending too: the recreated tables hold only what the rebuild has re-indexed so far.
  *  D-4714 (history-grep-pending-until-backfilled) */
-export function decideGrepIndex({ probe, table, completed }) {
+export function decideGrepIndex({ probe, table, completed, rebuilding = false }) {
   if (probe === 'threw') return { ok: false, exit: EXIT.DB, reason: 'probe-failed' };
   if (probe !== 'present') return { ok: false, exit: EXIT.FTS_UNAVAILABLE, reason: 'fts5-absent' };
-  if (!table || !completed) return { ok: false, exit: EXIT.FTS_UNAVAILABLE, reason: 'fts-pending' };
+  if (!table || !completed || rebuilding) return { ok: false, exit: EXIT.FTS_UNAVAILABLE, reason: 'fts-pending' };
   return { ok: true };
 }
 
@@ -6929,4 +6930,44 @@ export function schemaAdditive(schema, measured) {
 export function paneReadWanted(form, pane) {
   return form !== null && Object.hasOwn(WRITING_FORMS, form) && WRITING_FORMS[form].irreversible === true
     && typeof pane === 'string' && PANE_RE.test(pane);
+}
+
+// ── doctor --repair's rebuild step (W1-B2 Task 23; spec §8.4, §9.1) ───────────────────────────────
+
+/** derivation_state step of the resumable FTS rebuild (doctor --repair, and the recovery step's reindex phase);
+ *  its version is the ms the job started. The sweep writes it; grep's index gate reads it, so grep answers
+ *  7 fts-pending while one is open (history-grep-pending-until-backfilled). Spelled once, here. */
+export const FTS_REBUILD_STEP = 'fts-rebuild';
+
+// ── B1's health counters, re-measured after a cure (W1-B2 Task 23; D-4723 (history-counter-resets-after-cure)) ─────
+
+/** How each of B1's HEALTH_COUNTERS counts, so a re-measure knows what it may write. `item`: each standing thing once
+ *  (a blob, a set-aside file), so a standing count above the stored one raises it (a restored or rebuilt store lost
+ *  the count). `pass`: every drain that meets the condition again, so only its cure writes. Spelled once, here. */
+export const COUNTER_STANDING = Object.freeze({
+  [HEALTH_COUNTERS.blobUndecodable]: 'item',
+  [HEALTH_COUNTERS.drainRejected]: 'item',
+  [HEALTH_COUNTERS.spoolDisplaced]: 'item',
+  [HEALTH_COUNTERS.spoolBlocked]: 'pass',
+  [HEALTH_COUNTERS.spoolUnreadable]: 'pass',
+});
+
+/** What a re-measure writes (D-4723 (history-counter-resets-after-cure)). For each name in `standing` (how many of what it
+ *  counts stand now; null = unmeasured, never 0) against `counters[name]` (0 when absent): unmeasured writes nothing;
+ *  0 resets a non-zero counter to 0, because the condition is cured; an `item` counter is raised to a larger standing
+ *  count; anything else writes nothing (an item count is never lowered while any stands, and a `pass` count keeps its
+ *  history while the condition stands, the next drain counting it again). A name outside COUNTER_STANDING, or a count
+ *  that is not a non-negative integer, throws: no other counter is reset by a re-measure. */
+export function decideCounterResets(counters, standing) {
+  const writes = [];
+  for (const [name, m] of Object.entries(standing)) {
+    const kind = Object.hasOwn(COUNTER_STANDING, name) ? COUNTER_STANDING[name] : undefined;
+    if (kind === undefined) throw new TypeError(`decideCounterResets: ${name} is not one of HEALTH_COUNTERS`);
+    const have = Number(counters[name] ?? 0);
+    if (m === null) continue;
+    if (!Number.isSafeInteger(m) || m < 0) throw new TypeError(`decideCounterResets: ${name} measured ${String(m)}`);
+    if (m === 0) { if (have !== 0) writes.push({ name, n: 0 }); continue; }
+    if (kind === 'item' && m > have) writes.push({ name, n: m });
+  }
+  return writes;
 }

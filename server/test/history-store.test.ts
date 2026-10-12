@@ -17,12 +17,12 @@ import { DatabaseSync } from 'node:sqlite';
 import { brotliCompressSync, constants as Z } from 'node:zlib';
 import { mkTmp } from './tmpHelpers.js';
 import { recordDirFsyncs, recordOpenFlags } from './historyHelpers.js';
-import { MAX_INTERRUPTED_ATTEMPTS, SCHEMA_ADDED, SCHEMA_VERSION, UUID_RE, WRITER_RE, decideStoreOpen, historyPaths } from '../../ccd/history/lib.mjs';
+import { MAX_INTERRUPTED_ATTEMPTS, SCHEMA_ADDED, SCHEMA_VERSION, UUID_RE, WRITER_RE, decideStoreOpen, historyPaths, FTS_SHADOWS, ftsTablesHealthy } from '../../ccd/history/lib.mjs';
 import {
   CODEC, MIGRATIONS, StoreError, openWriter, openReader, userVersion, probeFts5, withTx, brotli, unbrotli,
   measuredSize, getMeta, setMeta, bump, closeWriter, schemaOf,
   mintStoreId, mintWriter, writeFileAtomic, peekStoreId, measureStoreFacts, removeStaleTemps, removeStaleMigrationTemps, createStore,
-  finishPending, dropPending, syncWriterMirror, createFtsTables,
+  finishPending, dropPending, syncWriterMirror, createFtsTables, integrityCheck, foreignKeyRows, ftsMeasure, dropFtsTables, setCounter,
   pruneProtected, pruneCandidates, pruneBatch, pruneDryRun, incrementalVacuum, pruneApply,
   readAttempts, clearDoneMarkers, assertAdditive, runMigration, removeEntry, readBounded, removeStaleAtomicTemps, mkdirDurable,
   writeBackup,
@@ -1218,5 +1218,48 @@ describe('store.mjs: writeBackup (W1-B2 Task 22)', () => {
       expect(fs.readFileSync(finalPath, 'utf8'), 'the operator file is as it was').toBe('an operator file');
       expect(fs.readdirSync(P.backups).filter((n) => n.endsWith('.tmp')), 'the refused copy left no temp').toEqual([]);
     } finally { fs.existsSync = realExists; syncBuiltinESMExports(); closeWriter(db); }
+  });
+});
+
+// ── W1-B2 Task 23: doctor --repair's measurements (spec 2026-10-05 §8.4; P21, P24) ─────────────────
+describe('store.mjs: the repair measurements (W1-B2 Task 23)', () => {
+  it('integrityCheck reads ok, foreignKeyRows names a planted dangling reference, and ftsMeasure and dropFtsTables see and remove both FTS tables with their own shadows', (ctx) => {
+    const home = mkTmp('ccrc-history-repair-');
+    createStore(home);
+    const db = openWriter(historyPaths(home).dbFile);
+    try {
+      if (probeFts5(db) === 'absent') ctx.skip();
+      expect(integrityCheck(db)).toEqual(['ok']);
+      expect(foreignKeyRows(db)).toEqual([]);
+      db.exec('PRAGMA foreign_keys = OFF');
+      db.prepare("INSERT INTO file_paths (path, file_id, last_seen_ms) VALUES ('/fk-test', 2147483647, 0)").run();
+      db.exec('PRAGMA foreign_keys = ON');
+      expect(foreignKeyRows(db)).toEqual([{ table: 'file_paths', rowid: 1, parent: 'ingest_files', fkid: 0 }]);
+      withTx(db, 'NORMAL', () => { createFtsTables(db); });
+      const m = ftsMeasure(db);
+      expect([...m.tables].sort()).toEqual(['blobs_fts', ...FTS_SHADOWS.blobs_fts, 'nodes_fts', ...FTS_SHADOWS.nodes_fts].sort());
+      expect(m.columns).toEqual({ blobs_fts: ['body'], nodes_fts: ['gist', 'topics', 'refs'] });
+      expect(ftsTablesHealthy(m)).toEqual({ blobs: true, nodes: true });
+      withTx(db, 'NORMAL', () => { dropFtsTables(db); });
+      expect(ftsMeasure(db).tables.size, 'both tables and every shadow are gone').toBe(0);
+      expect(ftsTablesHealthy(ftsMeasure(db))).toEqual({ blobs: false, nodes: false });
+      withTx(db, 'NORMAL', () => { dropFtsTables(db); });   // with nothing left it is a no-op, never a throw
+    } finally { closeWriter(db); }
+  });
+});
+
+describe('store.mjs: setCounter (W1-B2 Task 23)', () => {
+  it('sets a counter to n, and 0 removes its row, which every reader reads as 0', () => {
+    const home = mkTmp('ccrc-history-setcounter-');
+    createStore(home);
+    const db = openWriter(historyPaths(home).dbFile);
+    try {
+      const n = (name: string): number | undefined => (db.prepare('SELECT n FROM counters WHERE name = ?').get(name) as { n: number } | undefined)?.n;
+      withTx(db, 'NORMAL', () => { bump(db, 'drain_rejected', 3); setCounter(db, 'spool_blocked', 2); });
+      expect([n('drain_rejected'), n('spool_blocked')]).toEqual([3, 2]);
+      withTx(db, 'NORMAL', () => { setCounter(db, 'drain_rejected', 1); setCounter(db, 'spool_blocked', 0); });
+      expect(n('drain_rejected')).toBe(1);
+      expect(n('spool_blocked'), 'a reset leaves no row').toBeUndefined();
+    } finally { closeWriter(db); }
   });
 });

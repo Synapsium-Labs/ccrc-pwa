@@ -57,6 +57,7 @@ import {
   REASONS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker, parseOpVerbArgs, BIND_KINDS, paneReadWanted,
   HARNESS_TABLE, exportDates, exportHorizonDays, planExport, retentionLowered, parseJournalRecord,
   decideRecallOff, recallOffPath, decideReparse, REPARSE_MAX_TARGETS, planCopy, STORE_DB_REL,
+  diffForeignKeys, ftsTablesHealthy, FTS_REBUILD_STEP, decideCounterResets,
 } from './lib.mjs';
 import {
   MIGRATIONS, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
@@ -64,9 +65,10 @@ import {
   syncWriterMirror, userVersion, withTx, writeFileAtomic, removeEntry, readBounded, removeStaleAtomicTemps, mkdirDurable,
   CODEC, brotli, unbrotli, unbrotliPrefix, compressFdRange, probeFts5, createFtsTables, recoverStepAt, storedVersionAt,
   pruneApply, pruneDryRun, writeBackup, removeStaleBackupTemps,
+  integrityCheck, foreignKeyRows, ftsMeasure, dropFtsTables, setStep, setCounter,
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
-import { deriveNodes, reparseTargets, reparseLeaves, clearLeafCrashes } from './derive.mjs';
+import { deriveNodes, reparseTargets, reparseLeaves, clearLeafCrashes, indexNodesFts, NODES_FTS_STEP } from './derive.mjs';
 
 const USAGE = 'usage: sweep.mjs [--op <verb> <op-args...>] [--roster-unreadable] --secrets <file...> -- <home...>';
 
@@ -3879,7 +3881,7 @@ export function ftsPrepare(db, nowMs) {
       });
       row = d.sel.get(FTS_STEP, 1);
     }
-    state = row !== undefined && row.completed_ms !== null ? 'ready' : 'fts-pending';
+    state = row !== undefined && row.completed_ms !== null && openFtsRebuild(db) === null ? 'ready' : 'fts-pending';
   } else {
     state = probe === 'absent' ? 'fts5-absent' : 'probe-failed';
   }
@@ -3931,7 +3933,7 @@ export async function deriveFts(db, ctx, budget) {
         cursor = reached;
         if (done) {
           d.done.run(ctx.nowMs, String(cursor), FTS_STEP, 1);
-          setMeta(db, 'fts', 'ready');
+          if (openFtsRebuild(db) === null) setMeta(db, 'fts', 'ready');   // W1-B2 Task 23: never ready under an open rebuild
         } else {
           d.cursor.run(String(cursor), FTS_STEP, 1);
         }
@@ -4246,7 +4248,7 @@ export function mergeSteps(db, ctx, budget) {
 
 /** The --op verbs this build runs (§8.4). Each B2 verb joins in the task that ships its path (Tasks 20–28): a verb
  *  named here has an entry in OP_HANDLERS or BINDING_PASSES, and one in OP_DRY_RUNS when it has a dry run. */
-const OP_VERBS = new Set(['import', 'migrate', 'prune', 'reparse', 'backup']);
+const OP_VERBS = new Set(['import', 'migrate', 'prune', 'reparse', 'backup', 'repair']);
 
 /** adopt, restore and rebuild (§8.4): they run BEFORE openStore, which refuses exactly the states they exist to
  *  repair (store-unbound, store-missing, store-recoverable, store-zero-byte, store-schema-missing, …). */
@@ -4277,6 +4279,7 @@ const OP_HANDLERS = Object.freeze({
   prune: (c) => pruneApplyOp(c.db, c.ctx, c.args),
   reparse: (c) => reparseApplyOp(c.db, c.ctx, c.args),
   backup: (c) => backupOp(c.db, c.ctx),
+  repair: (c) => repairOp(c.db, c.ctx),   // a Promise: opPass awaits every handler
 });
 
 /** The binding verbs' place, run in place of openStore and a handler. Empty in this task, so adopt, restore and
@@ -5331,6 +5334,328 @@ export async function backupOp(db, ctx) {
     return { rc: EXIT.REFUSED, reason: 'backup-refused' };
   }
   ctx.out(`history-sweep: backup written: ~/${STORE_DB_REL}/backups/${r.name} (${r.sizeBytes} bytes, ${r.copyBps} B/s); the operator puts it back with ccrc history doctor --restore ${r.name}, from a terminal outside any session`);
+  return { rc: EXIT.OK };
+}
+
+// ── doctor --repair (W1-B2 Task 23) ────────────────────────────────────────────────────────────────
+// §8.4 "doctor --repair": PRAGMA integrity_check, then a foreign_key_check baseline diff that refuses on NEW
+// violations (lib's diffForeignKeys, P21), then the FTS self-heal as a resumable job. Irreversible (a TTY, no
+// cc- pane), refused under CLAUDECODE and history-off, and run only at the code's version (Task 19's
+// OP_NEEDS_CODE_VERSION).
+//
+// The self-heal REBUILDS both FTS tables from the store, never row by row (history-repair-rebuilds-fts-whole):
+// an index that holds a term indexed before its redaction pair was learned — a sessions.json token, whose pair
+// has no value to phrase-search (B1 Task 23) — cannot be cleaned in place, and a dropped or damaged table
+// (P24's checks, shadows per table) has nothing to clean. It also indexes the blobs B1's backfill cursor had
+// already passed. The job is the derivation step (lib's FTS_REBUILD_STEP, <start ms>); its state commits with
+// each chunk, so a killed repair resumes where it stopped when it is run again. While a rebuild is open,
+// ftsPrepare keeps meta fts at fts-pending and grep's index gate reads the open step itself (recall.mjs's
+// indexGate), so grep answers exit 7 rather than miss what the new index lacks.
+//
+// foreign_key_check runs twice per job (RB7): the baseline, measured once before the first chunk and kept in the
+// step's cursor, and the diff at completion, inside the completion's transaction. A chunk never runs one: inside a
+// chunk a new violation can only come deferred, and a deferred one fails that chunk's COMMIT, which the job maps
+// to a refusal.
+
+/** Blobs per rebuild transaction: larger than the backfill's 256, because a repair is an operator's act that
+ *  runs to completion in one pass. Chosen. */
+const REBUILD_BATCH = 2048;
+/** The rebuild's phases after its start, in order. */
+const REBUILD_PHASES = Object.freeze(['blobs', 'nodes', 'merge']);
+
+/** A completion whose baseline diff found foreign-key violations the job's baseline does not hold (C61, RB7). */
+class ForeignKeyRefusal extends Error {
+  constructor(rows) {
+    super(`${rows.length} new foreign-key violation(s)`);
+    this.name = 'ForeignKeyRefusal';
+    this.rows = rows;
+  }
+}
+
+/** A chunk's COMMIT refused by a deferred foreign-key violation: SQLITE_CONSTRAINT_FOREIGNKEY, errcode 787
+ *  (measured, 24.14.1); the message is matched too, for a build whose error carries no errcode. withTx has
+ *  already rolled the chunk back. */
+function isForeignKeyCommitFailure(e) {
+  return e !== null && typeof e === 'object' && (e.errcode === 787 || /FOREIGN KEY constraint failed/.test(String(e.message)));
+}
+
+/** B1's four spool counters' standing conditions (D-4723 (history-counter-resets-after-cure)), by lstat, readdir and access(2),
+ *  never through a link and never opening a file (B1's D-4347 rules):
+ *  - drain_rejected: the entries in .draining/rejected/ (B1's D-4346);
+ *  - spool_displaced: the regular files with a draining name in any .draining/planted/<area>/;
+ *  - spool_blocked: the draining files whose .obs or .obs.tmp name holds a directory;
+ *  - spool_unreadable: the other draining files this user cannot read, or whose regular .obs it cannot.
+ *  null = unmeasured, never 0: a spool/ or .draining that is a link or other non-directory, one this user cannot use,
+ *  or any lstat or listing that fails. A spool/ or .draining that is absent holds nothing: 0 for all four. */
+export function measureSpoolStanding(home) {
+  const H = HEALTH_COUNTERS;
+  const all = (v) => ({ [H.drainRejected]: v, [H.spoolDisplaced]: v, [H.spoolBlocked]: v, [H.spoolUnreadable]: v });
+  const P = historyPaths(home);
+  try {
+    const spool = dirKind(P.spool);
+    if (spool === 'absent') return all(0);
+    if (spool === 'other' || spoolUnusable(home)) return all(null);
+    const dr = dirKind(P.draining);
+    if (dr === 'absent') return all(0);
+    if (dr === 'other') return all(null);
+    const kind = (p) => {
+      try { const st = lstatSync(p); return st.isDirectory() ? 'dir' : st.isFile() ? 'file' : 'other'; }
+      catch (e) { if (e && e.code === 'ENOENT') return 'absent'; throw e; }
+    };
+    const readable = (p) => { try { accessSync(p, constants.R_OK); return true; } catch { return false; } };
+    const sub = (name, count) => {
+      const k = dirKind(`${P.draining}/${name}`);
+      return k === 'absent' ? 0 : k === 'other' ? null : count(`${P.draining}/${name}`);
+    };
+    const rejected = sub(REJECTED_DIR, (d) => readdirSync(d).length);
+    const displaced = sub(PLANTED_DIR, (d) => {
+      let n = 0;
+      for (const area of readdirSync(d)) {
+        if (kind(`${d}/${area}`) !== 'dir') continue;
+        for (const name of readdirSync(`${d}/${area}`)) if (drainingNameParts(name) !== null && kind(`${d}/${area}/${name}`) === 'file') n += 1;
+      }
+      return n;
+    });
+    let blocked = 0;
+    let unreadable = 0;
+    for (const name of readdirSync(P.draining)) {
+      if (drainingNameParts(name) === null) continue;
+      const file = `${P.draining}/${name}`;
+      if (kind(file) !== 'file') continue;
+      const stem = file.slice(0, -'.jsonl'.length);
+      if (kind(`${stem}.obs`) === 'dir' || kind(`${stem}.obs.tmp`) === 'dir') blocked += 1;
+      else if (!readable(file) || (kind(`${stem}.obs`) === 'file' && !readable(`${stem}.obs`))) unreadable += 1;
+    }
+    return { [H.drainRejected]: rejected, [H.spoolDisplaced]: displaced, [H.spoolBlocked]: blocked, [H.spoolUnreadable]: unreadable };
+  } catch {
+    return all(null);
+  }
+}
+
+/** Inside the caller's transaction: lib's decideCounterResets over `standing`, written with store.mjs's setCounter.
+ *  Answers { standing, before, writes } for the caller's report (D-4723 (history-counter-resets-after-cure)). */
+export function applyCounterResets(db, standing) {
+  const before = {};
+  for (const name of Object.keys(standing)) before[name] = counterOf(db, name);
+  const writes = decideCounterResets(before, standing);
+  for (const w of writes) setCounter(db, w.name, w.n);
+  return { standing, before, writes };
+}
+
+/** The four spool counters re-measured against the spool as it stands, in one transaction. */
+function spoolCounterResets(db, home) {
+  const standing = measureSpoolStanding(home);
+  return withTx(db, 'NORMAL', () => applyCounterResets(db, standing));
+}
+
+/** doctor --repair's line for each re-measured counter it wrote, or that still holds a count. */
+function reportCounterResets(ctx, r) {
+  for (const [name, m] of Object.entries(r.standing)) {
+    const w = r.writes.find((x) => x.name === name);
+    const had = r.before[name];
+    if (w !== undefined) ctx.out(`history-sweep: repair: ${name} ${had} -> ${w.n}: ${w.n === 0 ? 'nothing it counts stands now' : `${m} stand now`}`);
+    else if (had > 0) ctx.out(`history-sweep: repair: ${name} stays ${had}: ${m === null ? 'what it counts could not be measured' : `${m} still stand`}`);
+  }
+}
+
+/** The open rebuild — its version and its state `{ phase, blobId, baseline, undecodable }` (the cursor's JSON;
+ *  `undecodable`: the blobs that did not decode so far in this job) — or null.
+ *  A state that does not parse reads as phase `start`: the next chunk drops and recreates the tables again
+ *  rather than insert into an index it cannot place a cursor in. */
+export function openFtsRebuild(db) {
+  const r = db.prepare('SELECT version, cursor FROM derivation_state WHERE step = ? AND completed_ms IS NULL ORDER BY version DESC LIMIT 1')
+    .get(FTS_REBUILD_STEP);
+  if (r === undefined) return null;
+  let s = null;
+  try { s = JSON.parse(r.cursor ?? 'null'); } catch { s = null; }
+  const ok = s !== null && typeof s === 'object' && REBUILD_PHASES.includes(s.phase) && Number.isSafeInteger(s.blobId)
+    && (s.baseline === null || Array.isArray(s.baseline)) && Number.isSafeInteger(s.undecodable) && s.undecodable >= 0;
+  return { version: Number(r.version), state: ok ? s : { phase: 'start', blobId: 0, baseline: null, undecodable: 0 } };
+}
+
+/** One round of the rebuild within `i.budget` (B1's newBudget): the start, the blobs phase, nodes_fts, then
+ *  merge steps to completion. The FIRST chunk, in ONE transaction, drops both tables (store.mjs's
+ *  dropFtsTables), recreates them, resets derive.mjs's nodes_fts backfill, marks meta fts pending, indexes the
+ *  first batch and saves the step — so a first chunk whose COMMIT fails leaves the old index exactly as it was.
+ *  Each blobs chunk indexes every blob that a row of INDEXED_PROVENANCE or a sidecar references, its plain text
+ *  redacted with `ictx.pairIdx` (B1's indexBlob); it deletes the blob's row first, because a tick that ran
+ *  between two repair passes may already have indexed a new blob into the new table, and FTS5 merges a second
+ *  insert of one rowid instead of refusing it. Two refusals (RB7), each a value, never a throw:
+ *  - a chunk whose COMMIT fails on a deferred foreign-key violation is rolled back by withTx and answers
+ *    `refused: { at: 'chunk' }`; the step keeps its last committed cursor;
+ *  - with a baseline (FkRow[]) in its state, the completion runs diffForeignKeys inside its own transaction, and
+ *    a new violation rolls the completion back (the step stays open, meta fts stays fts-pending) and answers
+ *    `refused: { at: 'completion', rows }`.
+ *  Each blob's index text is B1's ftsTextOfBlob (async: a sidecar's window is read through unbrotliPrefix, and
+ *  redacted before its cut), so a chunk's texts are computed BEFORE its transaction opens, as B1's deriveFts does:
+ *  an await inside withTx's callback would let the COMMIT run first. As in B1's backfill (B1's D-4312), the pick
+ *  selects ids and compressed sizes only, each `z` is fetched one at a time and charged to the budget by its
+ *  compressed size, and a chunk stops taking blobs once its text reaches B1's FTS_GROUP_CHARS, so a chunk never
+ *  holds a batch's bodies or 2048 sidecar windows. Each `ftsTextOfBlob` call passes the blob's stored raw_len (B1's
+ *  D-4346): a body that does not decode keeps no row and is counted in the state's
+ *  `undecodable`, and an over-cap body is marked indexed with no row (B1's indexBlob `overCap`).
+ *  The first chunk also records meta fts_belt due (§6.2 "The belt"), since the rebuilt rows carry only the belt of the
+ *  units loaded now, and every call first applies recordBeltDueIfUncovered (the operator passes' belt-state rule), so
+ *  a resumed call whose belt lacks a unit a tick's generation recorded since records the belt due as well.
+ *  `i.baseline` is used only when the job starts. Answers { done, refused }. When done, the completion's transaction
+ *  also re-measures blob_undecodable (applyCounterResets) and the answer carries that result as counters. */
+export async function ftsRebuildJob(db, ictx, i) {
+  // spec §6.2 "The belt" (R-oppass-belt): the tick's belt-state rule, on EVERY call and before any row is written. A resumed
+  // call never runs the first chunk's record again, and a tick's belt generation may have completed since it did.
+  withTx(db, 'NORMAL', () => { recordBeltDueIfUncovered(db, ictx.pairIdx); });   // the op pass's belt rule (rebuild)
+  const open = openFtsRebuild(db);
+  const version = open?.version ?? i.stepVersion;
+  let st = open?.state ?? { phase: 'start', blobId: 0, baseline: i.baseline ?? null, undecodable: 0 };
+  if (st.phase === 'start' && st.baseline === null && i.baseline != null) st = { ...st, baseline: i.baseline };
+  const pick = db.prepare(`SELECT b.blob_id AS blob_id, length(b.z) AS zlen, ${FTS_IS_SIDECAR_SQL} AS is_sidecar FROM blobs b WHERE b.blob_id > ? AND ${FTS_ELIGIBLE_SQL} ORDER BY b.blob_id LIMIT ?`);
+  const save = db.prepare(`INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES (?, ?, ?, NULL)
+    ON CONFLICT(step, version) DO UPDATE SET cursor = excluded.cursor, completed_ms = NULL`);
+  const check = (s) => {
+    if (s.baseline === null) return;
+    const d = diffForeignKeys(s.baseline, foreignKeyRows(db));
+    if (d.newViolations.length > 0) throw new ForeignKeyRefusal(d.newViolations);
+  };
+  try {
+    while (budgetLeft(i.budget)) {
+      if (st.phase === 'start' || st.phase === 'blobs') {
+        const starting = st.phase === 'start';
+        const from = starting ? 0 : st.blobId;
+        const batch = pick.all(from, ...INDEXED_PROVENANCE, ...INDEXED_PROVENANCE, REBUILD_BATCH);
+        const baseline = st.baseline;
+        // The texts first, outside any transaction (B1's ftsTextOfBlob is async); one z at a time.
+        const texts = [];
+        let chars = 0;
+        let bad = 0;   // blobs of this chunk whose stored bytes do not decode (B1's D-4346)
+        for (const b of batch) {
+          const zr = derivStmts(db).blobZ.get(b.blob_id);   // B1's blobZ reads z and raw_len
+          const t = zr === undefined || zr.z === null ? null : await ftsTextOfBlob(zr.z, b.is_sidecar === 1, ictx.pairIdx, zr.raw_len);
+          if (t !== null && t.undecodable) bad += 1;
+          // An undecodable blob keeps no row; an over-cap one is marked indexed with no row (B1's indexBlob `overCap`).
+          texts.push({
+            id: Number(b.blob_id), text: t === null || t.undecodable ? null : t.text, overCap: t !== null && t.overCap === true,
+            undecodable: t !== null && t.undecodable === true, mode: b.is_sidecar === 1 ? 'sidecar' : 'entry',
+          });
+          i.budget.bytes += Number(b.zlen);
+          chars += t === null || t.text === null ? 0 : t.text.length;
+          if (chars >= FTS_GROUP_CHARS) break;
+        }
+        const whole = texts.length === batch.length;
+        st = withTx(db, 'NORMAL', () => {
+          if (starting) {
+            dropFtsTables(db);
+            createFtsTables(db);
+            setStep(db, NODES_FTS_STEP, 1, '0', null);
+            setMeta(db, 'fts', 'fts-pending');
+            // The rebuilt rows carry the belt of the units loaded now, which may lack one whose file is unreadable: record
+            // the belt due, so the next tick's belt generation re-derives with the units loaded then (§6.2 "The belt";
+            // W1-B2 Task 7B). A recovery reindex rebuilds through here too.
+            setMeta(db, BELT_META, formatBeltState({ v: 0, rids: [], gen: null }));
+          }
+          const f = ftsStmts(db);
+          let last = from;
+          for (const t of texts) {
+            last = t.id;
+            f.del.run(last);
+            if (t.text !== null) indexBlob(db, last, t.text, ictx.pairIdx, t.overCap);
+            // D-4346 F3, as deriveFts classifies it: the decoder mode that failed this blob. No bump: the completion re-measures.
+            else if (t.undecodable) setMeta(db, ftsUndecodableKey(t.id), t.mode);
+          }
+          const next = { phase: whole && batch.length < REBUILD_BATCH ? 'nodes' : 'blobs', blobId: last, baseline, undecodable: st.undecodable + bad };
+          save.run(FTS_REBUILD_STEP, version, JSON.stringify(next));
+          return next;
+        });
+        continue;
+      }
+      if (st.phase === 'nodes') {
+        if (indexNodesFts(db, ictx, i.budget) > 0) continue;
+        const next = { ...st, phase: 'merge' };
+        withTx(db, 'NORMAL', () => {
+          save.run(FTS_REBUILD_STEP, version, JSON.stringify(next));
+          derivStmts(db).pending.run(MERGE_STEP, 1);
+        });
+        st = next;
+        continue;
+      }
+      mergeSteps(db, ictx, i.budget);
+      const m = derivStmts(db).sel.get(MERGE_STEP, 1);
+      if (m !== undefined && m.completed_ms === null) continue;
+      const finished = st;
+      const counters = withTx(db, 'NORMAL', () => {
+        db.prepare('UPDATE derivation_state SET completed_ms = ?, cursor = NULL WHERE step = ? AND version = ?')
+          .run(ictx.nowMs, FTS_REBUILD_STEP, version);
+        check(finished);
+        // D-4723 (history-counter-resets-after-cure): this job read every blob B1's blob_undecodable can count (INDEXED_PROVENANCE
+        // and every sidecar, z not NULL), so its count is the standing one: 0 resets the counter, more raises it.
+        return applyCounterResets(db, { [HEALTH_COUNTERS.blobUndecodable]: finished.undecodable });
+      });
+      return { done: true, refused: null, counters };
+    }
+    return { done: false, refused: null };
+  } catch (e) {
+    if (e instanceof ForeignKeyRefusal) return { done: false, refused: { at: 'completion', rows: e.rows } };
+    if (isForeignKeyCommitFailure(e)) return { done: false, refused: { at: 'chunk' } };
+    throw e;
+  }
+}
+
+/** `--op repair`: integrity first (a store that fails it is a restore's or a rebuild's, never an index's), then
+ *  the FK baseline (measured once, before the first chunk; a resumed job keeps the one in its cursor), then the
+ *  rebuild in budget-bounded rounds with the journal half between them, then ftsPrepare to set meta fts back to
+ *  ready, then B1's health counters re-measured (D-4723 (history-counter-resets-after-cure): blob_undecodable by the
+ *  rebuild's completion, the four spool counters against the spool as it stands; with FTS5 absent, the spool's four
+ *  only; a refused repair writes none). The pair index is this pass's full one (B1's secretsStep: every pair ever recorded plus the frozen list
+ *  and the shim's --secrets), so no value known now is ever a term. */
+export async function repairOp(db, ctx) {
+  const problems = integrityCheck(db);
+  if (problems.length !== 1 || problems[0] !== 'ok') {
+    for (const p of problems.slice(0, 5)) ctx.out(`history-sweep: integrity_check: ${p}`);
+    ctx.out('history-sweep: repair-refused: the store fails PRAGMA integrity_check, which no index rebuild can fix; the operator restores a backup (ccrc history doctor --restore <file>) or rebuilds from the journal (ccrc history doctor --rebuild), from a terminal outside any session');
+    return { rc: EXIT.REFUSED, reason: 'repair-refused' };
+  }
+  const ictx = makeIngestCtx(ctx.home, ctx.homes, ctx.now(), ctx.ids);
+  const prep = ftsPrepare(db, ictx.nowMs);
+  if (!prep.tables) {
+    const present = foreignKeyRows(db).length;
+    ctx.out(`history-sweep: repair: integrity_check ok; ${present} foreign-key violation(s) present; FTS5 is ${prep.state} on this Node, so there is no index to heal`);
+    reportCounterResets(ctx, spoolCounterResets(db, ctx.home));   // blob_undecodable stays as it is: no rebuild read the blobs
+    return { rc: EXIT.OK };
+  }
+  ictx.pairIdx = secretsStep(db, ictx, ctx.parsed.secrets).pairIdx;
+  ictx.fts = true;
+  const open = openFtsRebuild(db);
+  const baseline = open === null || open.state.phase === 'start' ? foreignKeyRows(db) : null;
+  if (open === null) {
+    const health = ftsTablesHealthy(ftsMeasure(db));
+    ctx.out(`history-sweep: repair: integrity_check ok; ${baseline.length} foreign-key violation(s) already present, kept as the baseline`);
+    ctx.out(`history-sweep: repair: blobs_fts ${health.blobs ? 'healthy' : 'damaged or missing'}, nodes_fts ${health.nodes ? 'healthy' : 'damaged or missing'}; rebuilding both from the store`);
+  } else {
+    ctx.out(`history-sweep: repair: resuming the index rebuild started ${new Date(open.version).toISOString()} at its ${open.state.phase} phase`);
+  }
+  let rebuilt = null;
+  for (;;) {
+    const r = await ftsRebuildJob(db, ictx, { stepVersion: ictx.nowMs, budget: newBudget(ctx.now), baseline });
+    if (r.refused !== null && r.refused.at === 'chunk') {
+      ctx.out(`history-sweep: repair-refused: a rebuild chunk would have committed a foreign-key violation (FOREIGN KEY constraint failed at COMMIT); that chunk was rolled back, and ${openFtsRebuild(db) === null
+        ? 'nothing was rebuilt: the old index stands'
+        : 'the rebuild stays open: grep answers fts-pending until a repair finishes'}`);
+      return { rc: EXIT.REFUSED, reason: 'repair-refused' };
+    }
+    if (r.refused !== null) {
+      const named = r.refused.rows.slice(0, 5).map((v) => `${v.table} -> ${v.parent}`).join(', ');
+      ctx.out(`history-sweep: repair-refused: ${r.refused.rows.length} new foreign-key violation(s) (${named}) since this rebuild's baseline; the rebuilt index stays pending (grep answers fts-pending), and a repair refuses again until the violation is removed; the operator may instead restore the store (ccrc history doctor --restore <file>) or rebuild it (ccrc history doctor --rebuild), from a terminal outside any session`);
+      return { rc: EXIT.REFUSED, reason: 'repair-refused' };
+    }
+    if (r.done) { rebuilt = r; break; }
+    if (runJournalHalf(ctx.home, ctx.ids, ctx.now)) throw new JournalError('append-failed');
+  }
+  ftsPrepare(db, ctx.now());
+  // The pass's own writes witnessed (Task 7B's stampBeltWitness; ruling R-rollback): its secretsStep can record pairs and
+  // it writes no ticks row; it ran secretsStep's witness check first, so the stamp hides no other build's writes.
+  withTx(db, 'NORMAL', () => { stampBeltWitness(db); });   // the op pass's witness (repair)
+  ctx.out('history-sweep: repaired: both FTS tables rebuilt from the store with the full redaction index, and merged');
+  // D-4723 (history-counter-resets-after-cure): the rebuild re-measured blob_undecodable at its completion; the spool's four now.
+  reportCounterResets(ctx, rebuilt.counters);
+  reportCounterResets(ctx, spoolCounterResets(db, ctx.home));
   return { rc: EXIT.OK };
 }
 

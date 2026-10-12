@@ -758,7 +758,7 @@ export const SEARCH_REACH: string;
 export type GrepIndexVerdict =
   | { ok: true }
   | { ok: false; exit: 5 | 7; reason: 'probe-failed' | 'fts5-absent' | 'fts-pending' };
-export function decideGrepIndex(i: { probe: 'present' | 'absent' | 'threw'; table: boolean; completed: boolean }): GrepIndexVerdict;
+export function decideGrepIndex(i: { probe: 'present' | 'absent' | 'threw'; table: boolean; completed: boolean; rebuilding?: boolean }): GrepIndexVerdict;
 export interface GrepArgs {
   words: string[]; regex: string | null; role: string | null; tool: string | null; sinceMs: number | null; beforeMs: number | null;
   node: string | null; sort: 'recency' | 'relevance' | 'hybrid'; limit: number; cursor: string | null; includeRecall: boolean; json: boolean;
@@ -808,3 +808,9 @@ export function schemaAdditive(schema: Readonly<Record<number, SchemaVersionAdde
 
 // ── W1-B2 Task 19: the operator door's pane read ──
 export function paneReadWanted(form: string | null, pane: string | null): boolean;
+// --- W1-B2 Task 23: doctor --repair's rebuild step
+export const FTS_REBUILD_STEP: 'fts-rebuild';
+// --- W1-B2 Task 23: B1's health counters re-measured after a cure
+export const COUNTER_STANDING: Readonly<Record<string, 'item' | 'pass'>>;
+export function decideCounterResets(counters: Readonly<Record<string, number>>, standing: Readonly<Record<string, number | null>>):
+  Array<{ name: string; n: number }>;

@@ -1142,3 +1142,278 @@ describe('doctor --backup: 0600 from the first byte, temp then publish, the copy
     expect(maintNames(historyPaths(box.home).backups), 'nothing written').toEqual([]);
   }, HEAVY);
 });
+
+describe('doctor --repair: integrity, the foreign-key baseline, the resumable FTS rebuild (W1-B2 Task 23)', () => {
+  skipOnDarwin();
+  /** A bound store whose family's one operator row ('zebrafish') is indexed: FTS ready. */
+  function healable(prefix: string): HistoryBox {
+    const box = makeHistoryBox(prefix, { role: 'fleet', shim: true });
+    seedFamily(box, { id: ID, project: 'demo', uuid: MAINT_U1, rows: [
+      userRow({ uuid: MAINT_QUOKKA, ts: maintIso(MAINT_DAY), sessionId: MAINT_U1, text: 'zebrafish words for the index' }),
+    ] });
+    expect(runSweep(box).code).toBe(0);
+    return box;
+  }
+  /** The store opened read-write by the test, with no sweep running: the seam for a planted state. */
+  function writable(box: HistoryBox, fn: (db: DatabaseSync) => void): void {
+    const db = new DatabaseSync(historyPaths(box.home).dbFile);
+    try { fn(db); } finally { db.close(); }
+  }
+  /** A term in the index that no stored blob holds: what an early-indexed value leaves behind. */
+  const plantStale = (box: HistoryBox): void => writable(box, (db) => {
+    db.prepare('INSERT INTO blobs_fts (rowid, body) VALUES (?, ?)').run(987_654_321, 'staleword planted before its pair was known');
+  });
+  const rebuilds = (box: HistoryBox): Array<{ completed_ms: number | null }> =>
+    maintQ(box, "SELECT completed_ms FROM derivation_state WHERE step = 'fts-rebuild' ORDER BY version");
+
+  it('§8.3 layer 4: the rebuild re-indexes through the pass\'s belt, so a letter-glued value a row held is no term after it', async (ctx) => {
+    const AN = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const v = `${Array.from({ length: 29 }, () => AN[Math.floor(Math.random() * AN.length)]!).join('')}7`;
+    const box = makeHistoryBox('ccrc-hist-c61belt-', { role: 'fleet', shim: true });
+    fs.mkdirSync(`${box.home}/.cc-secrets`, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(`${box.home}/.cc-secrets/belt.env`, `ZQ_BELT=${v}\n`, { mode: 0o600 });
+    seedFamily(box, { id: ID, project: 'demo', uuid: MAINT_U1, rows: [
+      userRow({ uuid: MAINT_QUOKKA, ts: maintIso(MAINT_DAY), sessionId: MAINT_U1, text: `zebrafish ab${v}cd words` }),
+    ] });
+    expect(runSweep(box).code).toBe(0);
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();
+    expect(maintMatch(box, `"ab${v}cd"`), 'CONTROL: the belt kept it out at ingest').toBe(0);
+    // The row as an index with no belt wrote it (a B1 store, or a tick whose file was unreadable).
+    writable(box, (db) => {
+      const id = (db.prepare('SELECT blob_id FROM entries WHERE uuid = ?').get(MAINT_QUOKKA) as { blob_id: number }).blob_id;
+      db.prepare('DELETE FROM blobs_fts WHERE rowid = ?').run(id);
+      db.prepare('INSERT INTO blobs_fts (rowid, body) VALUES (?, ?)').run(id, `zebrafish ab${v}cd words`);
+    });
+    expect(maintMatch(box, `"ab${v}cd"`), 'CONTROL: the planted row holds the glued value').toBe(1);
+    const r = await maintPty(box, 'shim', ['--op', 'repair']);
+    expect(lastResult(r.out), r.out).toEqual({ rc: 0 });
+    expect(maintMatch(box, `"ab${v}cd"`), 'the rebuild indexed through the belt').toBe(0);
+    expect(maintMatch(box, 'zebrafish'), 'and re-indexed the row').toBe(1);
+    // The repair pass ends with stampBeltWitness (ruling R-rollback), so the due record carries the pass's witness `w`
+    // beside v, rids and gen: read the three apart from it.
+    const due = JSON.parse(maintMeta(box, 'fts_belt') ?? 'null') as { v: number; rids: number[]; gen: number[] | null; w?: string } | null;
+    expect({ v: due?.v, rids: due?.rids, gen: due?.gen }, 'the rebuild leaves the belt due').toEqual({ v: 0, rids: [], gen: null });
+    expect(typeof due?.w, 'the repair pass ends stamped with its own witness').toBe('string');
+  }, HEAVY);
+
+  it('C61: a violation present before the run is the baseline and passes; the rebuild drops the stale term and re-indexes the store', async (ctx) => {
+    const box = healable('ccrc-hist-c61a-');
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();          // a Node without FTS5 has no index to heal
+    writable(box, (db) => {
+      db.exec('PRAGMA foreign_keys = OFF');
+      db.prepare("INSERT INTO file_paths (path, file_id, last_seen_ms) VALUES ('/fk-pre', 2147483646, 0)").run();
+    });
+    plantStale(box);
+    expect(maintMatch(box, 'staleword'), 'CONTROL: the stale term is in the index').toBe(1);
+    const r = await maintPty(box, 'shim', ['--op', 'repair']);
+    expect(r.code, r.out).toBe(0);
+    expect(lastResult(r.out)).toEqual({ rc: 0 });
+    expect(r.out).toMatch(/history-sweep: repair: integrity_check ok; 1 foreign-key violation\(s\) already present, kept as the baseline/);
+    expect(maintMatch(box, 'staleword'), 'a whole rebuild leaves no term the store does not hold').toBe(0);
+    expect(maintMatch(box, 'zebrafish'), 'and re-indexes what it does hold').toBe(1);
+    expect(maintQ(box, 'PRAGMA foreign_key_check'), 'repair never hides a violation it did not make').toHaveLength(1);
+    expect(rebuilds(box).map((x) => x.completed_ms !== null)).toEqual([true]);
+    expect(maintMeta(box, 'fts')).toBe('ready');
+  }, HEAVY);
+
+  it('C61: a chunk whose COMMIT fails on a new violation is refused repair-refused and rolled back, and with it the first chunk\'s drop: nothing is repaired', async (ctx) => {
+    const box = healable('ccrc-hist-c61b-');
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();
+    plantStale(box);
+    const r = await maintPty(box, 'shim', ['--op', 'repair'], {
+      preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_FK_INJECT: 'INSERT INTO blobs_fts (rowid, body)' },
+    });
+    expect(r.code, r.out).toBe(2);
+    expect(lastResult(r.out)).toEqual({ rc: 2, reason: 'repair-refused' });
+    expect(r.out).toMatch(/history-sweep: repair-refused: a rebuild chunk would have committed a foreign-key violation \(FOREIGN KEY constraint failed at COMMIT\); that chunk was rolled back, and nothing was rebuilt: the old index stands/);
+    expect(maintMatch(box, 'staleword'), 'the old index stands: the refused chunk rolled its drop back too').toBe(1);
+    expect(maintMatch(box, 'zebrafish')).toBe(1);
+    expect(rebuilds(box), 'no rebuild was registered').toEqual([]);
+    expect(maintQ(box, "SELECT path FROM file_paths WHERE path = '/fk-inject'")).toEqual([]);
+    expect(maintMeta(box, 'fts')).toBe('ready');
+  }, HEAVY);
+
+  it('C61: a violation that appears during the rebuild is refused repair-refused at completion; the rebuild stays open and grep pending, a rerun refuses against the original baseline, and once the row is gone the next run finishes', async (ctx) => {
+    const box = healable('ccrc-hist-c61c-');
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();
+    const pane = withPane(box, ID);
+    const r = await maintPty(box, 'shim', ['--op', 'repair'], {
+      preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_FK_PLANT: 'b.blob_id > ? AND b.z IS NOT NULL' },
+    });
+    expect(r.code, r.out).toBe(2);
+    expect(lastResult(r.out)).toEqual({ rc: 2, reason: 'repair-refused' });
+    expect(r.out).toMatch(/history-sweep: repair-refused: 1 new foreign-key violation\(s\) \(file_paths -> ingest_files\) since this rebuild's baseline; the rebuilt index stays pending/);
+    expect(maintQ(box, "SELECT path FROM file_paths WHERE path = '/fk-plant'"), 'CONTROL: the seam committed its row').toHaveLength(1);
+    expect(rebuilds(box).map((x) => x.completed_ms), 'the completion rolled back; the step is open').toEqual([null]);
+    expect(maintMeta(box, 'fts')).toBe('fts-pending');
+    const mid = runCli(box, ['grep', 'zebrafish', '--json'], { env: pane });
+    expect([mid.code, mid.json?.['reason']], 'a refused completion keeps grep pending').toEqual([7, 'fts-pending']);
+    const again = await maintPty(box, 'shim', ['--op', 'repair']);
+    expect(lastResult(again.out), `the original baseline still refuses it:\n${again.out}`).toEqual({ rc: 2, reason: 'repair-refused' });
+    writable(box, (db) => { db.prepare("DELETE FROM file_paths WHERE path = '/fk-plant'").run(); });
+    const done = await maintPty(box, 'shim', ['--op', 'repair']);
+    expect(done.code, done.out).toBe(0);
+    expect(done.out).toMatch(/history-sweep: repair: resuming the index rebuild started \S+ at its merge phase/);
+    expect(rebuilds(box).map((x) => x.completed_ms !== null)).toEqual([true]);
+    expect(maintMeta(box, 'fts')).toBe('ready');
+    expect(runCli(box, ['grep', 'zebrafish', '--json'], { env: pane }).code).toBe(0);
+  }, 1.5 * HEAVY);
+
+  it('an integrity_check that is not ok is refused repair-refused before anything is rebuilt', async (ctx) => {
+    const box = healable('ccrc-hist-rpi-');
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();
+    plantStale(box);
+    const r = await maintPty(box, 'shim', ['--op', 'repair'], {
+      preloads: [PRELOADS.statfs, PRELOADS.faults],
+      env: { HISTORY_TEST_INTEGRITY: '*** in database main *** Page 7: btreeInitPage() returns error code 11' },
+    });
+    expect(r.code, r.out).toBe(2);
+    expect(lastResult(r.out)).toEqual({ rc: 2, reason: 'repair-refused' });
+    expect(r.out).toContain('history-sweep: integrity_check: *** in database main *** Page 7');
+    expect(rebuilds(box)).toEqual([]);
+    expect(maintMatch(box, 'staleword'), 'nothing was rebuilt').toBe(1);
+  }, HEAVY);
+
+  it('a dropped blobs_fts: grep answers fts-pending; doctor --repair through the CLI recreates and refills it', async (ctx) => {
+    const box = healable('ccrc-hist-rpd-');
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();
+    writable(box, (db) => { db.exec('DROP TABLE blobs_fts'); });
+    const pane = withPane(box, ID);
+    const before = runCli(box, ['grep', 'zebrafish', '--json'], { env: pane });
+    expect(before.code, before.stderr).toBe(7);
+    expect(before.json?.['reason']).toBe('fts-pending');
+    const r = await maintPty(box, 'cli', ['doctor', '--repair']);
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).toContain('blobs_fts damaged or missing');
+    const after = runCli(box, ['grep', 'zebrafish', '--json'], { env: pane });
+    expect(after.code, after.stderr).toBe(0);
+  }, HEAVY);
+
+  it('a read beside an open write transaction answers from committed rows and never exits 1 (review focus 5)', async (ctx) => {
+    const box = healable('ccrc-hist-rpw-');
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();
+    const pane = withPane(box, ID);
+    writable(box, (db) => {
+      db.exec('PRAGMA busy_timeout = 0');
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        db.prepare('INSERT INTO blobs_fts (rowid, body) VALUES (?, ?)').run(987_654_322, 'uncommittedword held by an open writer');
+        const seen = runCli(box, ['grep', 'zebrafish', '--json'], { env: pane });
+        expect(seen.code, seen.stderr).toBe(0);
+        const unseen = runCli(box, ['grep', 'uncommittedword', '--json'], { env: pane });
+        expect(unseen.code, 'an uncommitted row is not visible, and the reader neither waits it out nor fails').toBe(3);
+      } finally {
+        db.exec('ROLLBACK');
+      }
+    });
+  }, HEAVY);
+
+  it('a repair killed at its merge phase keeps grep at fts-pending, across a scheduled tick too; run again, it resumes there and finishes', async (ctx) => {
+    const box = healable('ccrc-hist-rpe-');
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();
+    plantStale(box);
+    const killed = await maintPty(box, 'shim', ['--op', 'repair'], {
+      preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_KILL_SQL: "VALUES ('merge'" },
+    });
+    expect(killed.signal === 9 || killed.code === 137, `killed at the merge statement:\n${killed.out}`).toBe(true);
+    expect(rebuilds(box).map((x) => x.completed_ms), 'the rebuild is open').toEqual([null]);
+    expect(runSweep(box).code).toBe(0);                          // a scheduled tick between two repair passes
+    expect(maintMeta(box, 'fts'), 'the tick keeps the index pending while a rebuild is open').toBe('fts-pending');
+    // B1's other writer of `ready` is deriveFts' completion: a ('fts', 1) backfill re-opened while the rebuild is open
+    // (B1's resetFtsPending re-opens it so) completes in the next tick, and must leave the index pending too.
+    const reopen = new DatabaseSync(historyPaths(box.home).dbFile);
+    try {
+      reopen.prepare("UPDATE derivation_state SET completed_ms = NULL WHERE step = 'fts' AND version = 1").run();
+    } finally { reopen.close(); }
+    expect(runSweep(box).code).toBe(0);
+    expect(maintMeta(box, 'fts'), 'a backfill completing under an open rebuild keeps the index pending').toBe('fts-pending');
+    const pane = withPane(box, ID);
+    const mid = runCli(box, ['grep', 'zebrafish', '--json'], { env: pane });
+    expect(mid.code, mid.stderr).toBe(7);
+    expect(mid.json?.['reason']).toBe('fts-pending');
+    const r = await maintPty(box, 'shim', ['--op', 'repair']);
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).toMatch(/history-sweep: repair: resuming the index rebuild started \S+ at its merge phase/);
+    expect(rebuilds(box).map((x) => x.completed_ms !== null)).toEqual([true]);
+    expect(maintMatch(box, 'staleword')).toBe(0);
+    const done = runCli(box, ['grep', 'zebrafish', '--json'], { env: pane });
+    expect(done.code, done.stderr).toBe(0);
+  }, 1.5 * HEAVY);
+
+  it('RB6: while a recovery step is registered, doctor --repair answers recovering and rebuilds nothing', async () => {
+    const box = healable('ccrc-hist-rb6rr-');
+    maintRecovering(box);
+    const r = await maintPty(box, 'shim', ['--op', 'repair']);
+    expect(r.code, r.out).toBe(2);
+    expect(lastResult(r.out)).toEqual({ rc: 2, reason: 'recovering' });
+    expect(rebuilds(box), 'no rebuild registered under a replay').toEqual([]);
+  }, HEAVY);
+
+  it('a completed repair re-measures B1\'s health counters: it resets what is cured, keeps what still stands, and never lowers an item count while any stands', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                   // root reads a 000 file
+    const box = healable('ccrc-hist-rcm-');
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();
+    const counts = (): Record<string, number> => Object.fromEntries(
+      (maintQ(box, 'SELECT name, n FROM counters') as Array<{ name: string; n: number }>).map((r) => [r.name, Number(r.n)]));
+    writable(box, (db) => {
+      const put = db.prepare('INSERT INTO counters (name, n) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET n = excluded.n');
+      for (const [name, n] of [['blob_undecodable', 2], ['drain_rejected', 2], ['spool_displaced', 1], ['spool_blocked', 3], ['spool_unreadable', 4]] as const) put.run(name, n);
+    });
+    // What stands now: one of the two refused files (the operator removed the other), an emptied planted area, no
+    // blocked file, and one draining file this user cannot read.
+    const dr = historyPaths(box.home).draining;
+    fs.mkdirSync(path.join(dr, 'rejected'), { recursive: true, mode: 0o700 });
+    const refused = path.join(dr, 'rejected', `${ID}.1700000000001.4242.jsonl`);
+    fs.writeFileSync(refused, '\n', { mode: 0o600 });
+    fs.mkdirSync(path.join(dr, 'planted', '1700000000002.4242'), { recursive: true, mode: 0o700 });
+    const locked = path.join(dr, `${ID}.1700000000003.4242.jsonl`);
+    fs.writeFileSync(locked, '\n', { mode: 0o000 });
+    try {
+      const r = await maintPty(box, 'shim', ['--op', 'repair']);
+      expect(r.code, r.out).toBe(0);
+      const c = counts();
+      expect(c['blob_undecodable'], 'every blob decodes: cured').toBeUndefined();
+      expect(c['drain_rejected'], 'one refused file still stands, and an item count is never lowered while any does').toBe(2);
+      expect(c['spool_displaced'], 'nothing displaced stands: cured').toBeUndefined();
+      expect(c['spool_blocked'], 'no blocked file stands: cured').toBeUndefined();
+      expect(c['spool_unreadable'], 'the 000 file still stands').toBe(4);
+      expect(r.out).toMatch(/history-sweep: repair: blob_undecodable 2 -> 0: nothing it counts stands now/);
+      expect(r.out).toMatch(/history-sweep: repair: drain_rejected stays 2: 1 still stand/);
+      expect(r.out).toMatch(/history-sweep: repair: spool_blocked 3 -> 0: nothing it counts stands now/);
+      // The operator cures the rest: the refused file removed (its lines stay in the journal), the locked one readable.
+      fs.rmSync(refused);
+      fs.chmodSync(locked, 0o600);
+      const again = await maintPty(box, 'shim', ['--op', 'repair']);
+      expect(again.code, again.out).toBe(0);
+      expect(counts()['drain_rejected']).toBeUndefined();
+      expect(counts()['spool_unreadable']).toBeUndefined();
+    } finally {
+      if (fs.existsSync(locked)) fs.chmodSync(locked, 0o600);
+    }
+  }, 1.5 * HEAVY);
+
+  it('a blob that no longer decodes is counted by the rebuild that read it, raising a count the store lost, and a spool it cannot measure is left as it is', async (ctx) => {
+    const box = healable('ccrc-hist-rcb-');
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();
+    const counts = (): Record<string, number> => Object.fromEntries(
+      (maintQ(box, 'SELECT name, n FROM counters') as Array<{ name: string; n: number }>).map((r) => [r.name, Number(r.n)]));
+    writable(box, (db) => {
+      db.prepare('UPDATE blobs SET z = ? WHERE blob_id = (SELECT blob_id FROM entries WHERE uuid = ?)').run(Buffer.from('not a brotli stream'), MAINT_QUOKKA);
+      db.prepare("INSERT INTO counters (name, n) VALUES ('spool_blocked', 5) ON CONFLICT (name) DO UPDATE SET n = excluded.n").run();
+    });
+    // A link at .draining is never listed through (B1's D-4347), so the spool is unmeasured.
+    const P = historyPaths(box.home);
+    fs.mkdirSync(P.spool, { recursive: true, mode: 0o700 });
+    fs.rmSync(P.draining, { recursive: true, force: true });
+    fs.symlinkSync(path.join(box.home, 'no-such-dir'), P.draining);
+    const r = await maintPty(box, 'shim', ['--op', 'repair']);
+    expect(r.code, r.out).toBe(0);
+    expect(counts()['blob_undecodable'], 'one blob read and did not decode').toBe(1);
+    const bid = maintQ<{ blob_id: number }>(box, 'SELECT blob_id FROM entries WHERE uuid = ?', MAINT_QUOKKA)[0]!.blob_id;
+    expect(maintMeta(box, `fts_undecodable:${bid}`), 'the decoder mode that failed it is classified, as the backfill classifies it (D-4346 F3)').toBe('entry');
+    expect(counts()['spool_blocked'], 'unmeasured, so never reset').toBe(5);
+    expect(r.out).toMatch(/history-sweep: repair: blob_undecodable 0 -> 1: 1 stand now/);
+    expect(r.out).toMatch(/history-sweep: repair: spool_blocked stays 5: what it counts could not be measured/);
+    expect(maintMatch(box, 'zebrafish'), 'CONTROL: the blob that does not decode keeps no row').toBe(0);
+  }, HEAVY);
+});

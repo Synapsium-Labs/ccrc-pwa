@@ -375,3 +375,60 @@ import { DatabaseSync as DatabaseSyncR21 } from 'node:sqlite';
     };
   }
 }
+
+// ── W1-B2 Task 23: doctor --repair seams (C61) ───────────────────────────────────────────────────
+// HISTORY_TEST_FK_INJECT=<substring>: the first time a prepared statement whose SQL contains <substring> RUNS
+//   (inside a rebuild chunk's transaction), switch that connection's foreign keys to deferred
+//   (PRAGMA defer_foreign_keys, legal inside a transaction) and insert one dangling file_paths row first: a chunk
+//   that would commit a NEW violation, which fails that chunk's COMMIT (errcode 787).
+// HISTORY_TEST_FK_PLANT=<substring>: the first time a prepared statement whose SQL contains <substring> is read with
+//   `all` (the rebuild's pick, which runs OUTSIDE any transaction), commit one dangling file_paths row with foreign
+//   keys off, then turn them back on: a violation that appears after the job's baseline and before its
+//   completion, which only the completion's baseline diff can see.
+// HISTORY_TEST_INTEGRITY=<text>: `PRAGMA integrity_check` answers one row holding <text> instead of 'ok'.
+// All three patch DatabaseSync.prototype.prepare on top of whatever an earlier block installed.
+import { DatabaseSync as DatabaseSyncR23 } from 'node:sqlite';
+{
+  const fkInjectR23 = process.env.HISTORY_TEST_FK_INJECT ?? '';
+  const fkPlantR23 = process.env.HISTORY_TEST_FK_PLANT ?? '';
+  const integrityR23 = process.env.HISTORY_TEST_INTEGRITY ?? '';
+  if (fkInjectR23 !== '' || fkPlantR23 !== '' || integrityR23 !== '') {
+    const protoR23 = DatabaseSyncR23.prototype;
+    const realPrepareR23 = protoR23.prepare;
+    let injectedR23 = false;
+    let plantedR23 = false;
+    protoR23.prepare = function prepareR23(sql) {
+      const st = realPrepareR23.call(this, sql);
+      const text = String(sql);
+      const conn = this;
+      if (integrityR23 !== '' && /PRAGMA\s+integrity_check/i.test(text)) {
+        st.all = () => [{ integrity_check: integrityR23 }];
+        return st;
+      }
+      if (fkInjectR23 !== '' && text.includes(fkInjectR23)) {
+        const realRunR23 = st.run.bind(st);
+        st.run = (...args) => {
+          if (!injectedR23) {
+            injectedR23 = true;
+            realPrepareR23.call(conn, 'PRAGMA defer_foreign_keys = ON').run();
+            realPrepareR23.call(conn, "INSERT INTO file_paths (path, file_id, last_seen_ms) VALUES ('/fk-inject', 2147483647, 0)").run();
+          }
+          return realRunR23(...args);
+        };
+      }
+      if (fkPlantR23 !== '' && text.includes(fkPlantR23)) {
+        const realAllR23 = st.all.bind(st);
+        st.all = (...args) => {
+          if (!plantedR23) {
+            plantedR23 = true;
+            realPrepareR23.call(conn, 'PRAGMA foreign_keys = OFF').run();
+            realPrepareR23.call(conn, "INSERT INTO file_paths (path, file_id, last_seen_ms) VALUES ('/fk-plant', 2147483645, 0)").run();
+            realPrepareR23.call(conn, 'PRAGMA foreign_keys = ON').run();
+          }
+          return realAllR23(...args);
+        };
+      }
+      return st;
+    };
+  }
+}

@@ -14,7 +14,7 @@
 // It reads no environment variable and has no entry guard: cli.mjs imports it.
 import {
   EXIT, OUTPUT_CAP, TREE_DEPTH_MAX, SCOPE_FAMILIES_JSON_MAX, selectColumns, displayPrefixes, headerLine, scopeLag, recallEnvelope, capOutput, redactForDisplay, redactFinal, readEnvelope, nextLine,
-  REASONS, INDEXED_PROVENANCE, SEARCHABLE_PROVENANCE, FTS_STEP, RANK_POOL, decideGrepIndex, sanitizeFtsQuery, snippetTerms, regexSyntaxIn, regexSyntaxHint, ftsOrderBy, displaySnippet, snippetLine, escapeXmlText, redactField, extractNodeId, resolveScopedId, SEARCH_REACH, parseGrepArgs,
+  REASONS, INDEXED_PROVENANCE, SEARCHABLE_PROVENANCE, FTS_STEP, FTS_REBUILD_STEP, RANK_POOL, decideGrepIndex, sanitizeFtsQuery, snippetTerms, regexSyntaxIn, regexSyntaxHint, ftsOrderBy, displaySnippet, snippetLine, escapeXmlText, redactField, extractNodeId, resolveScopedId, SEARCH_REACH, parseGrepArgs,
   GREP_LIMIT_DEFAULT, encodeCursor, decodeCursor, canonicalJson, sha256Hex,
   guardRegex, regexPrefilter, REGEX_BUDGET_MS, REGEX_MAX_LEN, historyPaths,
   DESCRIBE_EXCERPT, costRow, producerOf, pickHoldingCopy, redactDisplayWindow, parseDescribeArgs,
@@ -496,7 +496,9 @@ function indexGate(rc) {
     ? rc.db.prepare(`SELECT ${selectColumns(rc.version, 'derivation_state', ['completed_ms'], rc.schema)} FROM derivation_state
         WHERE step = ? AND version = 1`).get(FTS_STEP)
     : undefined;
-  return decideGrepIndex({ probe, table, completed: row !== undefined && row.completed_ms !== null });
+  // An open doctor --repair rebuild (W1-B2 Task 23): its recreated tables hold only what it has re-indexed so far.
+  const rebuilding = table && rc.db.prepare('SELECT 1 AS x FROM derivation_state WHERE step = ? AND completed_ms IS NULL LIMIT 1').get(FTS_REBUILD_STEP) !== undefined;
+  return decideGrepIndex({ probe, table, rebuilding, completed: row !== undefined && row.completed_ms !== null });
 }
 
 /** A blob's z, its recorded size (blobPlainText's decode bound, and its sidecar and body caps) and pruned time. */

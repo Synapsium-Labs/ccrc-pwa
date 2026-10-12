@@ -55,6 +55,7 @@ import * as t17sqlite from 'node:sqlite';
 import * as t17fs from 'node:fs';
 import * as t17path from 'node:path';
 import * as t19lib from '../../ccd/history/lib.mjs';
+import * as libRebuild from '../../ccd/history/lib.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LIB = join(REPO, 'ccd', 'history', 'lib.mjs');
@@ -6143,5 +6144,39 @@ describe('lib: paneReadWanted, the one rule both operator doors read a pane by (
       ['prune-apply', ''], ['prune-apply', null], ['prune-apply', '3'], ['prune-apply', '%3;x'], ['prune-apply', '%'],
     ];
     for (const [form, pane] of no) expect(t19lib.paneReadWanted(form, pane), `${String(form)} ${String(pane)}`).toBe(false);
+  });
+});
+
+// ── W1-B2 Task 23: the FTS rebuild step and grep's gate while it is open (IN-2) ────────────────────
+describe('lib: FTS_REBUILD_STEP and the grep gate during a rebuild (W1-B2 Task 23)', () => {
+  it('FTS_REBUILD_STEP is fts-rebuild; an open rebuild holds grep at 7 fts-pending whatever the backfill row says, after the probe\'s own words', () => {
+    const d = libRebuild.decideGrepIndex;
+    expect(libRebuild.FTS_REBUILD_STEP).toBe('fts-rebuild');
+    expect(d({ probe: 'present', table: true, completed: true, rebuilding: true })).toEqual({ ok: false, exit: 7, reason: 'fts-pending' });
+    expect(d({ probe: 'present', table: true, completed: true, rebuilding: false })).toEqual({ ok: true });
+    expect(d({ probe: 'present', table: true, completed: true }), 'an absent input reads as no rebuild').toEqual({ ok: true });
+    expect(d({ probe: 'threw', table: true, completed: true, rebuilding: true })).toEqual({ ok: false, exit: 5, reason: 'probe-failed' });
+    expect(d({ probe: 'absent', table: true, completed: true, rebuilding: true })).toEqual({ ok: false, exit: 7, reason: 'fts5-absent' });
+  });
+});
+
+// ── W1-B2 Task 23: B1's health counters re-measured after a cure (D-4723 (history-counter-resets-after-cure)) ─────────
+describe('lib: decideCounterResets resets a counter only once what it counts is cured (W1-B2 Task 23)', () => {
+  it('unmeasured writes nothing; 0 resets; an item count is raised, never lowered while any stands; a pass count keeps its history', () => {
+    const d = libRebuild.decideCounterResets;
+    const H = libRebuild.HEALTH_COUNTERS;
+    expect(Object.keys(libRebuild.COUNTER_STANDING).sort(), 'every B1 health counter, and only those').toEqual(Object.values(H).sort());
+    expect(d({ [H.drainRejected]: 3 }, { [H.drainRejected]: null }), 'unmeasured is never 0').toEqual([]);
+    expect(d({ [H.drainRejected]: 3 }, { [H.drainRejected]: 0 })).toEqual([{ name: 'drain_rejected', n: 0 }]);
+    expect(d({}, { [H.drainRejected]: 0 }), 'nothing to reset').toEqual([]);
+    expect(d({ [H.spoolDisplaced]: 1 }, { [H.spoolDisplaced]: 2 }), 'a store that lost the count').toEqual([{ name: 'spool_displaced', n: 2 }]);
+    expect(d({ [H.spoolDisplaced]: 5 }, { [H.spoolDisplaced]: 2 }), 'never lowered while any stands').toEqual([]);
+    expect(d({}, { [H.blobUndecodable]: 4 })).toEqual([{ name: 'blob_undecodable', n: 4 }]);
+    expect(d({ [H.spoolBlocked]: 7 }, { [H.spoolBlocked]: 1 }), 'a pass count stands as it is').toEqual([]);
+    expect(d({}, { [H.spoolBlocked]: 3 }), 'and is never raised: the next drain counts it').toEqual([]);
+    expect(d({ [H.spoolUnreadable]: 2 }, { [H.spoolUnreadable]: 0 })).toEqual([{ name: 'spool_unreadable', n: 0 }]);
+    expect(() => d({}, { parser_crash: 0 }), 'no other counter').toThrow(TypeError);
+    expect(() => d({}, { toString: 0 }), 'nor an inherited name').toThrow(TypeError);
+    expect(() => d({}, { [H.drainRejected]: -1 })).toThrow(TypeError);
   });
 });

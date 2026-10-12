@@ -158,3 +158,10 @@ upstream: src/prune.ts
 commit: e05d8d3
 upstream-sha256: d443f116d8e13d4ef215dd645058259aa6dea1650c6653eac40417d6cf385d4f
 changed: JavaScript; the dry-run default and the batched BEGIN IMMEDIATE loop (upstream lines 346-384) are kept, but a batch tombstones blobs by referrer age instead of deleting conversations, the batch loop calls back between batches for the journal half, the closing VACUUM becomes a per-batch incremental vacuum, and upstream's wal_checkpoint(TRUNCATE) runs after every batch
+
+item: FTS table drop before a rebuild (P24)
+ours: ccd/history/store.mjs
+upstream: src/db/migration.ts
+commit: e05d8d3
+upstream-sha256: 0a272a2d4b29ce79954003cdb8b5db4152f8b6001401938713b2987417a856f1
+changed: JavaScript; upstream's drop sequence (lines 1134-1137: the table, then each shadow table if it exists) is kept for both tables, with the shadow names per table from lib.mjs's FTS_SHADOWS; the recreate is createFtsTables and the reseed is sweep.mjs's resumable rebuild, never an in-transaction seed
