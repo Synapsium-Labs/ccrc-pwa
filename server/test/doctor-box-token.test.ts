@@ -1,12 +1,14 @@
-// `ccrc doctor`'s `box-token` check (box-token lifecycle, wave 1, Task B5; spec 4.8; D-4391).
+// `ccrc doctor`'s `box-token` check (box-token lifecycle, wave 1, Task B5; spec 4.8; D-4391; armed by row 2a).
 //
-// WAVE 1 PRINTS PASS OR SKIP ONLY. Every state that will be a FAIL or a WARN once the arms ship (held, failed,
-// a pending value past its deadline, an owed rotation, proof-unmeasured, a failed boot mint, a boot recovery not
-// yet followed by a rotation, a retired value presented, a broken file) prints `SKIP box-token: …` with its
-// reason word, never PASS: a PASS there is the one way an operator reads a stalled first retirement as healthy
-// (Review Focus 4). The FAIL and WARN arms are compiled in behind the file-level constant `_BT_ARMS_ON=0`; this
-// file proves they are reachable by running the same fixtures against a COPY of the checks file with the
-// constant flipped, so the follow-up PR that flips it ships arms that already ran.
+// THE ARMS ARE ON. Every state that is a FAIL or a WARN (held, failed, a pending value past its deadline, an owed
+// rotation, proof-unmeasured, a failed boot mint, a boot recovery not yet followed by a rotation, a retired value
+// presented, a broken file, an absent token) prints `FAIL box-token: …` or `WARN box-token: …` with its reason word and
+// a `remedy:` line, and a FAIL counts in doctor's exit code. Wave 1 shipped them switched off (`_BT_ARMS_ON=0`, printing
+// `SKIP` with its word, never PASS); row 2a flipped the constant. It stays in the file as a one-line kill switch, and
+// this file keeps the SKIP branch pinned by running the same fixtures against a COPY of the checks file with the
+// constant flipped back to 0 (`disarmed()`): the kill switch must print SKIP with its word, and never PASS.
+// What must stay PASS is the healthy box, server, fleet and both, which the first describe measures on the shipped
+// (armed) file, and a fresh box (no token, no history) is a PASS with its sentence, never a WARN or a FAIL (4553, D-139).
 //
 // HOW THE CHECK IS RUN. `ccd/ccrc` is sourced (it is source-able: its dispatch sits under the `BASH_SOURCE`
 // guard), then the checks file, then `_check_box-token` alone, under a fixture HOME and a PATH holding only
@@ -26,6 +28,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { TOKEN_HOLDS, OWED_REASONS, TOKEN_ORIGINS } from '../../shared/box-token.js';
 import { GENERATION_ID_HEX, NODE_FILES, TOKEN_SYNC_OP_ERRORS, TOKEN_TRANSPORTS } from '../../shared/agent-protocol.js';
 import { TOKEN_FILE_PROBLEMS } from '../../shared/box-token.js';
+import { PLACEHOLDER_TOKEN } from '../src/coord/token.js';
 import { DRIVER_TICK_MS, FAILURES_FOR_BANNER, PENDING_HARD_CAP, type BoxTokenState } from '../src/token/policy.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -40,7 +43,7 @@ const realBin = (name: string): string => {
   return p;
 };
 
-const SKIP_TAIL = '; reported as SKIP until the FAIL and WARN arms ship';
+const SKIP_TAIL = '; the FAIL and WARN arms are switched off (_BT_ARMS_ON=0)';
 const ID_OLD = 'a1b2c3d4e5f60718';
 const ID_CUR = '0123456789abcdef';
 const MIN = 60_000;
@@ -48,19 +51,19 @@ const MIN = 60_000;
 interface Box { home: string; value: string; fleetValue: string }
 interface Run { code: number; stdout: string; stderr: string }
 
-/** The shipped checks file, or a copy of it with `_BT_ARMS_ON=0` flipped to 1 (exactly one line moves). */
-function armedCopy(): string {
+/** A copy of the shipped checks file with `_BT_ARMS_ON=1` flipped to 0 (exactly one line moves): the kill switch. */
+function disarmedCopy(): string {
   const src = readFileSync(CHECKS_SRC, 'utf8');
-  const flipped = src.replace(/^_BT_ARMS_ON=0$/m, '_BT_ARMS_ON=1');
-  if (flipped === src) throw new Error('the checks file carries no `_BT_ARMS_ON=0` line to flip');
-  const d = mkTmp('ccrc-bt-armed-');
+  const flipped = src.replace(/^_BT_ARMS_ON=1$/m, '_BT_ARMS_ON=0');
+  if (flipped === src) throw new Error('the checks file carries no `_BT_ARMS_ON=1` line to flip');
+  const d = mkTmp('ccrc-bt-disarmed-');
   writeFileSync(join(d, 'ccrc-doctor-checks'), flipped);
   return join(d, 'ccrc-doctor-checks');
 }
-let ARMED: string | null = null;
-const armed = (): string => (ARMED ??= armedCopy());
+let DISARMED: string | null = null;
+const disarmed = (): string => (DISARMED ??= disarmedCopy());
 
-function runCheck(b: Box, checks = CHECKS_SRC): Run {
+function runCheck(b: Box, checks = CHECKS_SRC, locale = 'C'): Run {
   const bin = join(b.home, 'bt-bin');
   mkdirSync(bin, { recursive: true });
   for (const n of ['python3', 'stat']) {
@@ -68,7 +71,7 @@ function runCheck(b: Box, checks = CHECKS_SRC): Run {
   }
   const script = ['set -uo pipefail', `. ${shq(CCRC_SRC)}`, `. ${shq(checks)}`, '_check_box-token'].join('\n');
   const r = spawnSync(BASH, ['-c', script], {
-    encoding: 'utf8', env: { HOME: b.home, PATH: bin, LC_ALL: 'C', TMPDIR: join(b.home, 'tmp') },
+    encoding: 'utf8', env: { HOME: b.home, PATH: bin, LC_ALL: locale, TMPDIR: join(b.home, 'tmp') },
   });
   const out = { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
   // Never a value, nor its sha256 — on any path, armed or not.
@@ -194,11 +197,11 @@ describe('doctor box-token: PASS, and only on a measured healthy box', () => {
     expect(runCheck(b).stdout).toBe('PASS box-token: server: generation #1, minted 60 min ago (no rotation yet), fleet confirmed\n');
   });
 
-  it('transport http is printed on the PASS line and never changes the verdict, armed or not', () => {
+  it('transport http is printed on the PASS line and never changes the verdict, armed or disarmed', () => {
     const b = box({ role: 'fleet' });
     plantReport(b, { transport: 'http' });
     const want = 'PASS box-token: fleet: token file 0600, generation recorded, last sync proved, transport http\n';
-    for (const checks of [CHECKS_SRC, armed()]) {
+    for (const checks of [CHECKS_SRC, disarmed()]) {
       const r = runCheck(b, checks);
       expect(r.stdout).toBe(want);
       expect(r.code).toBe(0);
@@ -206,14 +209,23 @@ describe('doctor box-token: PASS, and only on a measured healthy box', () => {
   });
 });
 
-// ── every armed-later state: SKIP now, FAIL or WARN once armed ─────────────
+// ── every armed state: FAIL or WARN with its word (SKIP only in the disarmed copy) ──
 
 interface Row { label?: string; word: string; arm: 'server' | 'fleet'; armedClass: 'FAIL' | 'WARN'; plant: (b: Box) => void }
 const now = (): number => Date.now();
 const ROWS: Row[] = [
-  { arm: 'server', word: 'token-absent', armedClass: 'FAIL', plant: (b) => rmSync(dot(b, 'mail.token')) },
+  // 4553 (D-139 ruled over Decision 2 (a), 2026-10-12): the class of an absent token comes from the box's history, read
+  // after the state read. A server that has a state file once held a value and lost it: FAIL. One with no state file has
+  // never run the lifecycle: it is no finding at all, and reads PASS with its sentence (the `never handed` describe
+  // below, not a row here, since a row is an armed FAIL or WARN with a remedy). A state it cannot read still says there
+  // was one: FAIL (fail closed).
+  { arm: 'server', word: 'token-absent', label: 'token-absent (with history: a state file)', armedClass: 'FAIL', plant: (b) => rmSync(dot(b, 'mail.token')) },
+  { arm: 'server', word: 'token-absent', label: 'token-absent (with history: a state file it cannot read)', armedClass: 'FAIL',
+    plant: (b) => { rmSync(dot(b, 'mail.token')); plantState(b, '{"v":1,'); } },
   { arm: 'server', word: 'token-mode', armedClass: 'FAIL', plant: (b) => chmodSync(dot(b, 'mail.token'), 0o644) },
   { arm: 'server', word: 'token-unusable', armedClass: 'FAIL', plant: (b) => writeFileSync(dot(b, 'mail.token'), '# no value line\n\n', { mode: 0o600 }) },
+  { arm: 'server', word: 'token-unusable', label: 'token-unusable (the shipped placeholder)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(dot(b, 'mail.token'), `# comment first\n${PLACEHOLDER_TOKEN}\n`, { mode: 0o600 }) },
   { arm: 'server', word: 'state-absent', armedClass: 'WARN', plant: (b) => rmSync(dot(b, 'box-token.json')) },
   { arm: 'server', word: 'state-unreadable', armedClass: 'FAIL', plant: (b) => plantState(b, '{"v":1,') },
   // Fix round 1 (minor 4): `v` must be the integer 1, and a `retiring` entry must be {sha256: 64 hex, at: number}.
@@ -243,15 +255,78 @@ const ROWS: Row[] = [
   }) },
   { arm: 'server', word: 'retiring-unlanded:45', armedClass: 'FAIL', plant: (b) => editState(b, (s) => { s.retiring = [{ sha256: 'ab'.repeat(32), at: now() - 45 * MIN }]; }) },
   { arm: 'server', word: 'recovered', armedClass: 'WARN', plant: (b) => editState(b, (s) => { s.lastBootRecovery = { at: now() - MIN, source: 'previous' }; }) },
-  { arm: 'server', word: 'retired-presented', armedClass: 'FAIL', plant: (b) => editState(b, (s) => { s.counters.retiredPresented = 2; }) },
+  // 4552 (Option A): a retired presentation is a finding only while it is unanswered, newer than the last rotation.
+  { arm: 'server', word: 'retired-presented', label: 'retired-presented (unanswered: newer than the last rotation)', armedClass: 'FAIL',
+    plant: (b) => editState(b, (s) => { s.counters = { previousPresented: 0, retiredPresented: 2, retiredPresentedAt: s.lastRotationAt! + MIN }; }) },
+  { arm: 'server', word: 'retired-presented', label: 'retired-presented (a state from before 4552: a count, no stamp)', armedClass: 'FAIL',
+    plant: (b) => editState(b, (s) => { s.counters = { previousPresented: 0, retiredPresented: 2 }; }) },
+  { arm: 'server', word: 'retired-presented', label: 'retired-presented (after a restart: count 0, the stamp unanswered)', armedClass: 'FAIL',
+    plant: (b) => editState(b, (s) => { s.counters = { previousPresented: 0, retiredPresented: 0, retiredPresentedAt: s.lastRotationAt! + MIN }; }) },
+  { arm: 'server', word: 'retired-presented', label: 'retired-presented (a count with a null stamp)', armedClass: 'FAIL',
+    plant: (b) => editState(b, (s) => { s.counters = { previousPresented: 0, retiredPresented: 1, retiredPresentedAt: null }; }) },
+  // `lr is None or rp > lr`: a server that has never completed a rotation has no answer to a stamped presentation.
+  { arm: 'server', word: 'retired-presented', label: 'retired-presented (no rotation has completed: a stamp, lastRotationAt null)', armedClass: 'FAIL',
+    plant: (b) => editState(b, (s) => { s.lastRotationAt = null; s.counters = { previousPresented: 0, retiredPresented: 0, retiredPresentedAt: now() - MIN }; }) },
   { arm: 'server', word: 'fleet-behind', armedClass: 'WARN', plant: (b) => editState(b, (s) => { s.fleetConfirmed = ID_OLD; }) },
   // Added at plan assembly (review findings):
   { arm: 'server', word: 'fleet-unconfirmed', armedClass: 'WARN', plant: (b) => editState(b, (s) => { s.current.id = null; s.fleetConfirmed = null; }) },
   { arm: 'server', word: 'file:changed', armedClass: 'FAIL', plant: (b) => editState(b, (s) => { s.fileProblem = { at: now() - MIN, file: 'current', word: 'changed' }; }) },
   { arm: 'server', word: 'file:retired', armedClass: 'FAIL', plant: (b) => editState(b, (s) => { s.fileProblem = { at: now() - MIN, file: 'current', word: 'retired' }; }) },
-  { arm: 'fleet', word: 'fleet-token-absent', armedClass: 'FAIL', plant: (b) => rmSync(fleetFile(b)) },
+  // 4553: a fleet box that was never handed a value (no generation file and no sync report) reads PASS with its sentence
+  // (the `never handed` describe below); any trace of a handed value (either file, readable or not) makes the lost token
+  // a FAIL.
+  { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (with history: a generation file and a sync report)', armedClass: 'FAIL', plant: (b) => rmSync(fleetFile(b)) },
+  // Review 383 F12: the history of holding a value is a generation file, or a report that records a value WRITTEN: a
+  // `synced` result, a proof result (`proof-failed`, `proof-unmeasured`: the value was written, then not proved), or any
+  // report carrying a generation (a refusal after the write, `ccrc-token-sync`'s `write-failed` at its last two sites). A
+  // report that records only a refusal with no generation leaves the box never-handed (the `never handed` describe).
+  { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (with history: a synced report only)', armedClass: 'FAIL',
+    plant: (b) => { rmSync(fleetFile(b)); rmSync(dot(b, NODE_FILES.tokenGeneration)); } },
+  { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (with history: a proof-unmeasured report only)', armedClass: 'FAIL',
+    plant: (b) => { rmSync(fleetFile(b)); rmSync(dot(b, NODE_FILES.tokenGeneration)); plantReport(b, { result: 'proof-unmeasured', generation: null, proof: 'proof-unmeasured' }); } },
+  { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (with history: a proof-failed report only)', armedClass: 'FAIL',
+    plant: (b) => { rmSync(fleetFile(b)); rmSync(dot(b, NODE_FILES.tokenGeneration)); plantReport(b, { result: 'proof-failed', generation: null, proof: 'proof-failed' }); } },
+  { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (with history: a refusal that carries a generation, written after the value)', armedClass: 'FAIL',
+    plant: (b) => { rmSync(fleetFile(b)); rmSync(dot(b, NODE_FILES.tokenGeneration)); plantReport(b, { result: 'write-failed', generation: ID_CUR, transport: null, proof: null }); } },
+  { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (with history: a generation file only)', armedClass: 'FAIL',
+    plant: (b) => { rmSync(fleetFile(b)); rmSync(dot(b, 'token-sync.json')); } },
+  { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (with history: a sync report it cannot read, no generation file)', armedClass: 'FAIL',
+    plant: (b) => { rmSync(fleetFile(b)); rmSync(dot(b, NODE_FILES.tokenGeneration)); plantReport(b, '{"v":2}'); } },
   { arm: 'fleet', word: 'fleet-token-mode', armedClass: 'FAIL', plant: (b) => chmodSync(fleetFile(b), 0o640) },
   { arm: 'fleet', word: 'fleet-token-unusable', armedClass: 'FAIL', plant: (b) => writeFileSync(fleetFile(b), '# comment only\n', { mode: 0o600 }) },
+  // R.1 (run 377, Task R): the file `deploy/ccrc-mail.token.example` ships, copied and never edited, is no token.
+  // The comparison is on the trimmed value, the way `extractToken` trims (a BOM or a no-break space in front still
+  // reads as the placeholder, since the server's reader would call it the placeholder too).
+  { arm: 'fleet', word: 'fleet-token-unusable', label: 'fleet-token-unusable (the shipped placeholder)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(fleetFile(b), `# comment first\n${PLACEHOLDER_TOKEN}\n`, { mode: 0o600 }) },
+  { arm: 'fleet', word: 'fleet-token-unusable', label: 'fleet-token-unusable (the placeholder behind a BOM)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(fleetFile(b), Buffer.from(`\uFEFF${PLACEHOLDER_TOKEN}\n`), { mode: 0o600 }) },
+  { arm: 'fleet', word: 'fleet-token-unusable', label: 'fleet-token-unusable (the placeholder behind a no-break space)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(fleetFile(b), Buffer.from(`\u00A0${PLACEHOLDER_TOKEN}\u00A0\n`), { mode: 0o600 }) },
+  // Review I1 (Task R): extractToken trims FIRST and only then tells a blank or `#` line apart, so a BOM ahead of the
+  // preamble (or of a blank line) still leaves the placeholder as the value line it picks. The first row reads the
+  // actual shipped example, so the shipped bytes themselves are under test.
+  { arm: 'fleet', word: 'fleet-token-unusable', label: 'fleet-token-unusable (a BOM, then the actual shipped example file)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(fleetFile(b), Buffer.concat([Buffer.from('\uFEFF'), readFileSync(join(REPO, 'deploy', 'ccrc-mail.token.example'))]), { mode: 0o600 }) },
+  { arm: 'fleet', word: 'fleet-token-unusable', label: 'fleet-token-unusable (a BOM before the # comment line)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(fleetFile(b), Buffer.from(`\uFEFF# comment\n${PLACEHOLDER_TOKEN}\n`), { mode: 0o600 }) },
+  { arm: 'fleet', word: 'fleet-token-unusable', label: 'fleet-token-unusable (a BOM-only line before the placeholder)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(fleetFile(b), Buffer.from(`\uFEFF\n${PLACEHOLDER_TOKEN}\n`), { mode: 0o600 }) },
+  // Review 383 F6: the has-a-value pass strips the same set as the placeholder pass (`extractToken` strips FIRST, ASCII and
+  // `_BT_UNI_WS`, and only then tells a blank or `#` line apart), so a file with no value line to `extractToken` is unusable
+  // whatever its bytes: only a BOM, only a no-break space, a BOM then only a comment. Never PASS, on both arms.
+  { arm: 'fleet', word: 'fleet-token-unusable', label: 'fleet-token-unusable (only a BOM)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(fleetFile(b), Buffer.from('\uFEFF\n'), { mode: 0o600 }) },
+  { arm: 'fleet', word: 'fleet-token-unusable', label: 'fleet-token-unusable (only a no-break space)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(fleetFile(b), Buffer.from('\u00A0\n'), { mode: 0o600 }) },
+  { arm: 'fleet', word: 'fleet-token-unusable', label: 'fleet-token-unusable (a BOM, then only a # comment)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(fleetFile(b), Buffer.from('\uFEFF# comment only\n'), { mode: 0o600 }) },
+  { arm: 'server', word: 'token-unusable', label: 'token-unusable (only a BOM)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(dot(b, 'mail.token'), Buffer.from('\uFEFF\n'), { mode: 0o600 }) },
+  { arm: 'server', word: 'token-unusable', label: 'token-unusable (only a no-break space)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(dot(b, 'mail.token'), Buffer.from('\u00A0\n'), { mode: 0o600 }) },
+  { arm: 'server', word: 'token-unusable', label: 'token-unusable (a BOM, then only a # comment)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(dot(b, 'mail.token'), Buffer.from('\uFEFF# comment only\n'), { mode: 0o600 }) },
   { arm: 'fleet', word: 'no-generation', armedClass: 'WARN', plant: (b) => rmSync(dot(b, NODE_FILES.tokenGeneration)) },
   { arm: 'fleet', word: 'generation-malformed', armedClass: 'WARN', plant: (b) => writeFileSync(dot(b, NODE_FILES.tokenGeneration), 'not-an-id\n') },
   { arm: 'fleet', word: 'never-synced', armedClass: 'WARN', plant: (b) => rmSync(dot(b, 'token-sync.json')) },
@@ -261,12 +336,12 @@ const ROWS: Row[] = [
   { arm: 'fleet', word: 'sync-unreadable', armedClass: 'WARN', plant: (b) => plantReport(b, '{"v":2}') },
 ];
 
-describe('doctor box-token: every armed-later state is SKIP with its reason word, never PASS (D-4391)', () => {
+describe('doctor box-token: disarmed in a copy, every armed state is SKIP with its word (the kill switch)', () => {
   for (const row of ROWS) {
     it(`${row.arm}: ${row.label ?? row.word}`, () => {
       const b = box({ role: row.arm });
       row.plant(b);
-      const r = runCheck(b);
+      const r = runCheck(b, disarmed());
       const lines = r.stdout.split('\n').filter(Boolean);
       expect(lines, r.stdout).toHaveLength(1);
       expect(lines[0]).toMatch(/^SKIP box-token: /);
@@ -280,12 +355,204 @@ describe('doctor box-token: every armed-later state is SKIP with its reason word
   }
 });
 
-describe('doctor box-token: the FAIL and WARN arms are compiled in (the constant flipped in a copy)', () => {
+// ── a rotation answers a retired presentation (4552, Decision 1 Option A) ──
+
+describe('doctor box-token: a rotation answers a retired presentation (4552)', () => {
+  const plantCounters = (b: Box, f: (lr: number) => { retiredPresented: number; retiredPresentedAt?: number | null }): void =>
+    editState(b, (s) => { s.counters = { previousPresented: 0, ...f(s.lastRotationAt!) }; });
+  const finding = (b: Box, checks: string): string => {
+    const r = runCheck(b, checks);
+    const lines = r.stdout.split('\n').filter(Boolean);
+    return lines[0] ?? '';
+  };
+
+  for (const name of ['shipped (armed)', 'disarmed'] as const) {
+    describe(name, () => {
+      // Resolved per case, so a checks file with no `_BT_ARMS_ON=1` line reds the cases instead of the whole collection.
+      const checksFile = (): string => (name === 'disarmed' ? disarmed() : CHECKS_SRC);
+      const wantFinding = (line: string): void => {
+        if (name !== 'disarmed') expect(line).toMatch(/^FAIL box-token: /);
+        else expect(line).toMatch(/^SKIP box-token: /);
+        expect(line).toContain('server: retired-presented — ');
+      };
+      const wantPass = (b: Box): void => {
+        const r = runCheck(b, checksFile());
+        expect(r.stdout).toBe(`PASS box-token: ${SERVER_PASS}\n`);
+        expect(r.code).toBe(0);
+      };
+
+      it('a stamp older than the last rotation, with a count, is answered: PASS', () => {
+        const b = box({ role: 'server' });
+        plantCounters(b, (lr) => ({ retiredPresented: 2, retiredPresentedAt: lr - 10 * MIN }));
+        wantPass(b);
+      });
+
+      it('a null stamp with count 0 is PASS, and so is an absent key with count 0', () => {
+        const b = box({ role: 'server' });
+        plantCounters(b, () => ({ retiredPresented: 0, retiredPresentedAt: null }));
+        wantPass(b);
+        plantCounters(b, () => ({ retiredPresented: 0 }));
+        wantPass(b);
+      });
+
+      it('edge: a stamp 30 s before the last rotation is PASS, 30 s after it is a finding', () => {
+        const b = box({ role: 'server' });
+        plantCounters(b, (lr) => ({ retiredPresented: 0, retiredPresentedAt: lr - 30_000 }));
+        wantPass(b);
+        plantCounters(b, (lr) => ({ retiredPresented: 0, retiredPresentedAt: lr + 30_000 }));
+        wantFinding(finding(b, checksFile()));
+      });
+
+      // 'x' alone would also red with the validator gone (a str-int comparison crashes the reader into the same
+      // word), so the values that compare quietly are the pin: true, a negative, a float.
+      it("a stamp that is not a non-negative integer or null is 'server: state-unreadable'", () => {
+        for (const bad of ['x', true, -5, 1.5]) {
+          const b = box({ role: 'server' });
+          editState(b, (s) => { (s.counters as unknown as Record<string, unknown>).retiredPresentedAt = bad; });
+          const line = finding(b, checksFile());
+          expect(line, String(bad)).toContain('server: state-unreadable — ');
+          expect(line, String(bad)).not.toContain('retired-presented');
+        }
+      });
+    });
+  }
+
+  it('the sentence: a stamped finding says how long ago and that no rotation has completed; a stampless one says it records no time', () => {
+    const stamped = box({ role: 'server' });
+    plantCounters(stamped, (lr) => ({ retiredPresented: 2, retiredPresentedAt: lr + MIN }));
+    const a = runCheck(stamped, CHECKS_SRC);
+    expect(a.stdout).toContain('ago and no rotation has completed since');
+    expect(a.stdout).toContain('(2 since the server started)');
+    const legacy = box({ role: 'server' });
+    plantCounters(legacy, () => ({ retiredPresented: 2 }));
+    expect(runCheck(legacy, CHECKS_SRC).stdout).toContain('records no time for it');
+    const nul = box({ role: 'server' });
+    plantCounters(nul, () => ({ retiredPresented: 1, retiredPresentedAt: null }));
+    expect(runCheck(nul, CHECKS_SRC).stdout).toContain('records no time for it');
+  });
+
+  it('the remedy names no hand rotation and says what clears the line', () => {
+    const b = box({ role: 'server' });
+    plantCounters(b, (lr) => ({ retiredPresented: 2, retiredPresentedAt: lr + MIN }));
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(/remedy: .*this line clears when that rotation completes/);
+    expect(r.stdout).not.toMatch(/resync that box/);
+    expect(r.stdout).not.toMatch(/Rotate now/);
+  });
+});
+
+describe('doctor box-token: the placeholder fleet file (R.1)', () => {
+  it('the sentence names the placeholder, not a missing value line; a fleet-role box runs no server arm', () => {
+    const b = box({ role: 'fleet' });
+    writeFileSync(fleetFile(b), `# comment first\n${PLACEHOLDER_TOKEN}\n`, { mode: 0o600 });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toContain('fleet: fleet-token-unusable — ');
+    expect(r.stdout).toContain('placeholder');
+    expect(r.stdout).not.toContain('carries no value line');
+    expect(r.stdout).not.toContain(PLACEHOLDER_TOKEN);
+  });
+
+  it('a server-role mail.token holding the placeholder is FAIL token-unusable, never PASS: the server refuses to boot on it (final review, Minor 2)', () => {
+    const b = box({ role: 'server' });
+    writeFileSync(dot(b, 'mail.token'), `${PLACEHOLDER_TOKEN}\n`, { mode: 0o600 });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(/^FAIL box-token: server: token-unusable — /);
+    expect(r.stdout).toContain('placeholder');
+    expect(r.stdout).not.toMatch(/^PASS /m);
+    expect(r.stdout).not.toContain(PLACEHOLDER_TOKEN);
+    expect(r.code).toBe(1);
+    // Review 383 F8: the remedy says what is true. A server that holds the placeholder never boots (it refuses with
+    // `MailTokenPlaceholderUnedited`), so "Rotate now on the console's Box token card" is a remedy nobody can reach.
+    const remedy = r.stdout.split('\n').find((l) => /^ {2}remedy: /.test(l)) ?? '';
+    expect(remedy).toContain('refuses to boot on the placeholder');
+    expect(remedy).toMatch(/replace the file with a value, or remove it, and the next boot mints one/);
+    expect(remedy).not.toContain('Rotate now');
+  });
+
+  it('a real-looking value that merely starts like the placeholder is still ok', () => {
+    const b = box({ role: 'fleet' });
+    writeFileSync(fleetFile(b), `${PLACEHOLDER_TOKEN}-x\n`, { mode: 0o600 });
+    expect(runCheck(b, CHECKS_SRC).stdout).toBe(`PASS box-token: ${FLEET_PASS}\n`);
+  });
+});
+
+describe('doctor box-token: the has-a-value test reads the way extractToken reads (review 383 F6)', () => {
+  // The answer must not depend on the locale `[[:space:]]` happens to run under: a lone U+3000 line used to FAIL under
+  // C.UTF-8 and PASS under C. Every locale gives the same verdict.
+  const LOCALES = ['C', 'C.UTF-8', 'en_US.UTF-8'];
+  const unusable: Array<[string, string]> = [
+    ['only a BOM', '\uFEFF\n'], ['only a no-break space', '\u00A0\n'], ['only an ideographic space', '\u3000\n'],
+    ['a BOM, then only a # comment', '\uFEFF# comment only\n'], ['a no-break space, then a # comment, then blank', '\u00A0# c\n\uFEFF\n'],
+  ];
+  for (const locale of LOCALES) {
+    for (const [name, text] of unusable) {
+      it(`${locale}: a token file of ${name} is FAIL unusable on both arms, never PASS`, () => {
+        const f = box({ role: 'fleet' });
+        writeFileSync(fleetFile(f), Buffer.from(text), { mode: 0o600 });
+        const rf = runCheck(f, CHECKS_SRC, locale);
+        expect(rf.stdout).toMatch(/^FAIL box-token: fleet: fleet-token-unusable — .* carries no value line/);
+        expect(rf.code).toBe(1);
+        const s = box({ role: 'server' });
+        writeFileSync(dot(s, 'mail.token'), Buffer.from(text), { mode: 0o600 });
+        const rs = runCheck(s, CHECKS_SRC, locale);
+        expect(rs.stdout).toMatch(/^FAIL box-token: server: token-unusable — .* carries no value line/);
+        expect(rs.code).toBe(1);
+      });
+    }
+    it(`${locale}: a real value behind a BOM (and a preamble comment) is still a value: PASS`, () => {
+      const f = box({ role: 'fleet' });
+      writeFileSync(fleetFile(f), Buffer.from(`\uFEFF# preamble\n\u00A0${f.fleetValue}\u3000\n`), { mode: 0o600 });
+      expect(runCheck(f, CHECKS_SRC, locale).stdout).toBe(`PASS box-token: ${FLEET_PASS}\n`);
+      const s = box({ role: 'server' });
+      writeFileSync(dot(s, 'mail.token'), Buffer.from(`\uFEFF${s.value}\n`), { mode: 0o600 });
+      expect(runCheck(s, CHECKS_SRC, locale).stdout).toBe(`PASS box-token: ${SERVER_PASS}\n`);
+    });
+  }
+});
+
+// Review 383 F4 (for `_BT_UNI_WS`): one GENERATED row per code point of `extractToken`'s trim set. The set is derived here,
+// never listed by hand: every code point `String.prototype.trim` removes (`extractToken` trims with it), so a code point
+// an engine adds, or one deleted from the shell's strip, reds its own row. The ASCII members are the `[[:space:]]` class's
+// (the shell strips them first), the rest `_BT_UNI_WS`'s. Each row plants the code point (a) around the shipped
+// placeholder: doctor must still read the placeholder (placeholder pass), (b) alone on the file's only line: doctor must
+// read no value line (value pass), and (c) around a real value: doctor must read it and PASS. Fleet and server arms.
+describe('doctor box-token: every code point of extractToken\'s trim set is stripped (review 383 F4)', () => {
+  const TRIM_SET: number[] = [];
+  for (let c = 0; c <= 0xffff; c++) if (String.fromCodePoint(c).trim() === '') TRIM_SET.push(c);
+  const hex = (c: number): string => `U+${c.toString(16).toUpperCase().padStart(4, '0')}`;
+  it('the generated trim set is the one the rows were written for (25 code points, the ASCII six and U+00A0, U+1680, U+2000-200A, U+2028, U+2029, U+202F, U+205F, U+3000, U+FEFF)', () => {
+    expect(TRIM_SET.length).toBe(25);
+    expect(TRIM_SET).toContain(0x0b);
+    expect(TRIM_SET).toContain(0xa0);
+    expect(TRIM_SET).toContain(0x2000);
+    expect(TRIM_SET).toContain(0xfeff);
+  });
+  it.each(TRIM_SET.map((c) => [hex(c), c] as const))('%s is stripped: the placeholder behind it is still the placeholder, a line of only it has no value, a real value inside it is the value', (h, c) => {
+    const cp = String.fromCodePoint(c);
+    const plant = (b: Box, arm: 'fleet' | 'server', text: string): void =>
+      writeFileSync(arm === 'fleet' ? fleetFile(b) : dot(b, 'mail.token'), Buffer.from(text, 'utf8'), { mode: 0o600 });
+    for (const arm of ['fleet', 'server'] as const) {
+      const word = arm === 'fleet' ? 'fleet-token-unusable' : 'token-unusable';
+      const b = box({ role: arm });
+      plant(b, arm, `${cp}${PLACEHOLDER_TOKEN}${cp}\n`);
+      const ph = runCheck(b, CHECKS_SRC);
+      expect(ph.stdout, `${arm}: the placeholder around ${h} read as a value`).toMatch(new RegExp(`^FAIL box-token: ${arm}: ${word} — .* carries the placeholder value`));
+      plant(b, arm, `${cp}\n`);
+      const none = runCheck(b, CHECKS_SRC);
+      expect(none.stdout, `${arm}: a line of only ${h} read as a value`).toMatch(new RegExp(`^FAIL box-token: ${arm}: ${word} — .* carries no value line`));
+      plant(b, arm, `${cp}${arm === 'fleet' ? b.fleetValue : b.value}${cp}\n`);
+      const ok = runCheck(b, CHECKS_SRC);
+      expect(ok.stdout, `${arm}: a real value inside ${h} was not read as the value`).toBe(`PASS box-token: ${arm === 'fleet' ? FLEET_PASS : SERVER_PASS}\n`);
+    }
+  });
+});
+
+describe('doctor box-token: the FAIL and WARN arms are on in the shipped file', () => {
   for (const row of ROWS) {
     it(`${row.arm}: ${row.label ?? row.word} -> ${row.armedClass}`, () => {
       const b = box({ role: row.arm });
       row.plant(b);
-      const r = runCheck(b, armed());
+      const r = runCheck(b, CHECKS_SRC);
       const lines = r.stdout.split('\n').filter(Boolean);
       expect(lines, r.stdout).toHaveLength(2);
       expect(lines[0]).toMatch(new RegExp(`^${row.armedClass} box-token: `));
@@ -296,9 +563,9 @@ describe('doctor box-token: the FAIL and WARN arms are compiled in (the constant
     });
   }
 
-  it('the shipped file carries the constant once, off', () => {
+  it('the shipped file carries the constant once, on', () => {
     const src = readFileSync(CHECKS_SRC, 'utf8');
-    expect(src.match(/^_BT_ARMS_ON=.*$/gm)).toEqual(['_BT_ARMS_ON=0']);
+    expect(src.match(/^_BT_ARMS_ON=.*$/gm)).toEqual(['_BT_ARMS_ON=1']);
   });
 });
 
@@ -311,15 +578,17 @@ describe('doctor box-token: which arm runs', () => {
     expect(r.stdout).not.toMatch(/hosts no sessions/);
   });
 
-  it('both arms on one line, the worse verdict wins: a healthy server and a never-synced fleet is SKIP, armed WARN', () => {
+  it('both arms on one line, the worse verdict wins: a healthy server and a never-synced fleet is WARN, rc 2 and no SKIP tail; disarmed it is SKIP, rc 3', () => {
     const b = box({ role: 'both', fleet: 'remote', agentEnv: true });
     rmSync(dot(b, 'token-sync.json'));
     const r = runCheck(b);
-    expect(r.stdout).toMatch(new RegExp(`^SKIP box-token: ${SERVER_PASS}; fleet: never-synced — .*${SKIP_TAIL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n$`));
-    expect(r.code).toBe(3);
-    const a = runCheck(b, armed());
-    expect(a.stdout).toMatch(/^WARN box-token: server: generation #2.*; fleet: never-synced — /);
-    expect(a.code).toBe(2);
+    expect(r.stdout).toMatch(/^WARN box-token: server: generation #2.*; fleet: never-synced — /);
+    expect(r.stdout).not.toContain(SKIP_TAIL);
+    expect(r.stdout).toMatch(/\n {2}remedy: \S/);
+    expect(r.code).toBe(2);
+    const d = runCheck(b, disarmed());
+    expect(d.stdout).toMatch(new RegExp(`^SKIP box-token: ${SERVER_PASS}; fleet: never-synced — .*${SKIP_TAIL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n$`));
+    expect(d.code).toBe(3);
   });
 
   it('no role recorded: the server arm when a server-side file exists, the fleet arm when agent.env does', () => {
@@ -329,8 +598,8 @@ describe('doctor box-token: which arm runs', () => {
     expect(runCheck(f).stdout).toBe(`PASS box-token: ${FLEET_PASS}\n`);
   });
 
-  it('no role recorded and nothing of either side: SKIP no-role, and it stays SKIP when armed', () => {
-    for (const checks of [CHECKS_SRC, armed()]) {
+  it('no role recorded and nothing of either side: SKIP no-role, armed or disarmed', () => {
+    for (const checks of [CHECKS_SRC, disarmed()]) {
       const r = runCheck(box({ role: null }), checks);
       expect(r.stdout).toMatch(/^SKIP box-token: no-role — /);
       expect(r.stdout).not.toContain(SKIP_TAIL);
@@ -351,7 +620,7 @@ describe('doctor box-token: the state shape is the merged one', () => {
       s.retiring = [{ sha256: 'ab'.repeat(32), at: now() }];   // fresh: the append is about to land
     });
     const r = runCheck(b);
-    expect(r.stdout).toMatch(/^SKIP box-token: server: pending-overdue — /);
+    expect(r.stdout).toMatch(/^WARN box-token: server: pending-overdue — /);
     expect(r.stdout).not.toContain('state-unreadable');
   });
 
@@ -361,7 +630,7 @@ describe('doctor box-token: the state shape is the merged one', () => {
       const t = now() - 20 * MIN;
       s.pending = Array.from({ length: PENDING_HARD_CAP + 1 }, (_, k) => k + 1).map((i) => ({ id: `${i}`.repeat(16), seq: 2 + i, stagedAt: t, handedOutAt: t, confirmBy: t + 5 * MIN, write: { dev: 1, ino: 10 + i, writtenAtMs: t } }));
     });
-    expect(runCheck(b).stdout).toMatch(/^SKIP box-token: server: state-unreadable — /);
+    expect(runCheck(b).stdout).toMatch(/^FAIL box-token: server: state-unreadable — /);
   });
 });
 
@@ -389,10 +658,11 @@ describe('doctor box-token: a retirement in grace is not a retirement past its h
     expect(runCheck(b).stdout).toBe(`PASS box-token: ${SERVER_PASS}\n`);
   });
 
-  it('retire-overdue wins over a PASS tail and is never "in grace": the SKIP line names it and has no PASS part', () => {
+  it('retire-overdue wins over a PASS tail and is never "in grace": the FAIL line names it and has no PASS part', () => {
     const b = box({ role: 'server' });
     editState(b, (s) => { s.previous = prev(now() - 90 * MIN, now() - 30 * MIN); });
     const out = runCheck(b).stdout;
+    expect(out).toMatch(/^FAIL box-token: server: retire-overdue:30 — /);
     expect(out).not.toContain('in grace');
     expect(out).not.toContain('retired value refused');
   });
@@ -407,12 +677,14 @@ describe('doctor box-token: where the files are, and what marks a fleet box (D-4
     renameSync(dot(b, 'box-token.json'), join(alt, 'box-token.json'));
     writeFileSync(dot(b, 'ccrc.env'), `CCRC_ROLE=server\nCCRC_FLEET=local\nCCRC_MAIL_TOKEN_PATH=${join(alt, 'custom.token')}\n`, { mode: 0o600 });
     expect(runCheck(b).stdout).toBe(`PASS box-token: ${SERVER_PASS}\n`);
-    // The same override with the files left at the default place: both are absent where the check looks.
+    // The same override with the files left at the default place: both are absent where the check looks, so it is a
+    // server that never ran (PASS with its sentence, D-139), and it names the path it looked at.
     const c = box({ role: 'server' });
-    writeFileSync(dot(c, 'ccrc.env'), `CCRC_ROLE=server\nCCRC_FLEET=local\nCCRC_MAIL_TOKEN_PATH=${join(c.home, 'elsewhere', 'custom.token')}\n`, { mode: 0o600 });
+    const elsewhere = join(c.home, 'elsewhere', 'custom.token');
+    writeFileSync(dot(c, 'ccrc.env'), `CCRC_ROLE=server\nCCRC_FLEET=local\nCCRC_MAIL_TOKEN_PATH=${elsewhere}\n`, { mode: 0o600 });
     const out = runCheck(c).stdout;
-    expect(out).toContain('server: token-absent — ');
-    expect(out).toContain('server: state-absent — ');
+    expect(out).toContain(`server: token-absent — ${elsewhere} does not exist`);
+    expect(out).toMatch(/^PASS box-token: /);
   });
 
   const bothLocal = (): Box => { const b = box({ role: 'both' }); rmSync(dot(b, 'token-sync.json')); return b; };
@@ -436,6 +708,181 @@ describe('doctor box-token: where the files are, and what marks a fleet box (D-4
       writeFileSync(dot(c, 'agent.env'), 'CCRC_SERVER_URL=ws://127.0.0.1:7788\n', { mode: 0o000 });
       expect(runCheck(c).stdout).toContain('fleet: never-synced — ');
     }
+  });
+});
+
+// 4553, as D-139 rules it (operator, 2026-10-12): a box never handed a value is not unhealthy, it is new. The fact stays
+// named in the detail (doctor's `auth` and `provenance` precedents: only the verdict moves) and the line is PASS with no
+// `remedy:`. A box that once held a value and lost it stays FAIL. The history is read from the arm's own reads.
+const SERVER_NEVER = 'no value has been minted here yet, and the server mints one at boot';
+const FLEET_NEVER = "no value has been handed to this box yet, and the server's next rotation hands one";
+describe('doctor box-token: a box never handed a value reads PASS with its sentence, a box that lost its value FAILs (4553, D-139)', () => {
+  const dropServer = (b: Box): void => { for (const f of ['mail.token', 'box-token.json']) rmSync(dot(b, f)); };
+  const dropFleet = (b: Box): void => { for (const f of [fleetFile(b), dot(b, NODE_FILES.tokenGeneration), dot(b, 'token-sync.json')]) rmSync(f); };
+  const never = (kind: 'server' | 'fleet'): string => `${kind}: ${kind === 'server' ? 'token-absent' : 'fleet-token-absent'} — .* ${kind === 'server' ? SERVER_NEVER : FLEET_NEVER}`;
+  it('server role: no mail.token and no state is PASS rc 0, naming the fact, with no remedy; the kill switch prints the same PASS (it is no arm finding)', () => {
+    const b = box({ role: 'server' });
+    dropServer(b);
+    for (const checks of [CHECKS_SRC, disarmed()]) {
+      const r = runCheck(b, checks);
+      expect(r.stdout).toMatch(new RegExp(`^PASS box-token: ${never('server')}\\n$`));
+      expect(r.stdout).not.toMatch(/remedy:|WARN|FAIL|SKIP|state-absent/);
+      expect(r.code).toBe(0);
+      expect(r.stderr).toBe('');
+    }
+  });
+  it('fleet role: no token file, no generation file and no sync report is PASS rc 0, naming the fact, with no remedy; disarmed the same', () => {
+    const b = box({ role: 'fleet' });
+    dropFleet(b);
+    for (const checks of [CHECKS_SRC, disarmed()]) {
+      const r = runCheck(b, checks);
+      expect(r.stdout).toMatch(new RegExp(`^PASS box-token: ${never('fleet')}\\n$`));
+      expect(r.stdout).not.toMatch(/remedy:|WARN|FAIL|SKIP|no-generation|never-synced/);
+      expect(r.code).toBe(0);
+    }
+  });
+  // Review 383 F12: `ccrc-token-sync`'s `_ts_refuse` writes token-sync.json on refusals where nothing was claimed or
+  // written, so a report is not by itself the history of a value. The refusal still shows as its own `sync:<word>`, at its
+  // armed class (WARN: a fault a person can act on); only `fleet-token-absent` takes the never-handed PASS form.
+  const REFUSALS = ['bad-code', 'stale-client', 'claim-refused', 'write-failed', 'code-used', 'busy', 'spawn-failed'];
+  for (const word of REFUSALS) {
+    it(`f-failed-first-sync: fleet role, no token file, no generation file, a first sync refused (${word}) is the refusal's WARN beside a never-handed fleet-token-absent, not a FAIL`, () => {
+      const b = box({ role: 'fleet' });
+      dropFleet(b);
+      plantReport(b, { result: word, generation: null, transport: null, proof: null });
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout).toMatch(new RegExp(`^WARN box-token: ${never('fleet')}; fleet: sync:${word} — `));
+      expect(r.stdout).not.toMatch(/no-generation|never-synced/);
+      expect(r.stdout).toMatch(/\n {2}remedy: \S/);
+      expect(r.code).toBe(2);
+      const d = runCheck(b, disarmed());
+      expect(d.stdout).toMatch(new RegExp(`^SKIP box-token: ${never('fleet')}; fleet: sync:${word} — .*${SKIP_TAIL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n$`));
+      expect(d.code).toBe(3);
+    });
+  }
+  it('both role, local: nothing of either side is two PASS parts on one line, rc 0', () => {
+    const b = box({ role: 'both' });
+    dropServer(b); dropFleet(b);
+    for (const checks of [CHECKS_SRC, disarmed()]) {
+      const r = runCheck(b, checks);
+      expect(r.stdout).toMatch(new RegExp(`^PASS box-token: ${never('server')}; ${never('fleet')}\\n$`));
+      expect(r.code).toBe(0);
+    }
+  });
+  it('both role, local: the same box with a generation file left behind lost its value, a FAIL on the fleet arm', () => {
+    const b = box({ role: 'both' });
+    for (const f of [fleetFile(b), dot(b, 'token-sync.json'), dot(b, 'mail.token'), dot(b, 'box-token.json')]) rmSync(f);
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(/^FAIL box-token: server: token-absent — .*; fleet: fleet-token-absent — /);
+    expect(r.code).toBe(1);
+  });
+  // Review 383 F1: on an own-write box the fleet file, the generation file and `fleetConfirmed` are written together by
+  // the server, so a state that is PRESENT proves the hand-out whatever the generation file says. The generation file
+  // alone is not the history; the server arm's state read outranks it (the narrowing reads never-handed only when that
+  // read was itself `absent`).
+  it('both role, local, own-write: a valid state at generation #2 (fleet confirmed, a rotation recorded) and the fleet and generation files gone is a FAIL, never never-handed', () => {
+    const b = box({ role: 'both' });
+    for (const f of [fleetFile(b), dot(b, NODE_FILES.tokenGeneration), dot(b, 'token-sync.json')]) rmSync(f);
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(/^FAIL box-token: server: generation #2.*; fleet: fleet-token-absent — .* does not exist, so this box's calls to the server carry no box token/);
+    expect(r.stdout).not.toContain(FLEET_NEVER);
+    expect(r.stdout).toMatch(/\n {2}remedy: \S/);
+    expect(r.code).toBe(1);
+  });
+  it('both role, local, own-write: the same loss under a state that records no hand-out yet (minted, no rotation, nothing confirmed) is a FAIL too: any present state outranks the generation file', () => {
+    const b = box({ role: 'both' });
+    editState(b, (s) => { s.origin = 'minted'; s.lastRotationAt = null; s.fleetConfirmed = null; s.lastSync = null; s.retiredRefusedAt = null; });
+    for (const f of [fleetFile(b), dot(b, NODE_FILES.tokenGeneration), dot(b, 'token-sync.json')]) rmSync(f);
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(/^FAIL box-token: /);
+    expect(r.stdout).not.toContain(FLEET_NEVER);
+    expect(r.code).toBe(1);
+  });
+  it('both role, local, own-write: a state it cannot read is no `absent` read either, so the lost fleet value stays FAIL', () => {
+    const b = box({ role: 'both' });
+    plantState(b, '{"v":1,');
+    for (const f of [fleetFile(b), dot(b, NODE_FILES.tokenGeneration), dot(b, 'token-sync.json')]) rmSync(f);
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(/^FAIL box-token: /);
+    expect(r.stdout).not.toContain(FLEET_NEVER);
+    expect(r.code).toBe(1);
+  });
+  it('both role, remote: the worse arm wins, so a fresh server with a fleet that lost its value is a FAIL', () => {
+    const b = box({ role: 'both', fleet: 'remote', agentEnv: true });
+    for (const f of [fleetFile(b), dot(b, 'mail.token'), dot(b, 'box-token.json')]) rmSync(f);
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(/^FAIL box-token: /);
+    expect(r.code).toBe(1);
+  });
+  it('a never-handed arm beside a WARN keeps the line WARN: the PASS part is not a finding, the WARN is (fresh server, healthy fleet with no proof)', () => {
+    const b = box({ role: 'both', fleet: 'remote', agentEnv: true });
+    dropServer(b);
+    plantReport(b, { result: 'proof-unmeasured', proof: 'proof-unmeasured' });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(new RegExp(`^WARN box-token: ${never('server')}; fleet: proof-unmeasured — `));
+    expect(r.code).toBe(2);
+  });
+});
+
+// Review 383 F5: `[ -e ]` is false for ENOENT and for EACCES alike, so a token file inside a directory this process cannot
+// search (mode 0600: no search bit) read as ABSENT, which the never-handed lowering turned into a WARN, and whose
+// sentence ("does not exist") was false. Absent is a measured ENOENT; a parent that exists and cannot be searched is
+// UNMEASURED, the arm's existing unreadable word (FAIL). A root runner can search any directory, so these rows skip there
+// (the suite's own idiom, as the agent.env case above).
+describe('doctor box-token: an unsearchable parent directory is unreadable, never absent (review 383 F5)', () => {
+  const itNonRoot = process.getuid && process.getuid() === 0 ? it.skip : it;
+  const unsearchable = (dir: string, f: () => void): void => {
+    chmodSync(dir, 0o600);
+    try { f(); } finally { chmodSync(dir, 0o700); }
+  };
+  const noFleetHistory = (b: Box): void => { for (const f of [dot(b, NODE_FILES.tokenGeneration), dot(b, 'token-sync.json')]) rmSync(f); };
+  itNonRoot('fleet: ~/.cc-secrets at mode 0600 holding the token file, with no generation file and no sync report, is FAIL fleet-token-unusable (cannot be read), not a never-handed box', () => {
+    const b = box({ role: 'fleet' });
+    noFleetHistory(b);
+    unsearchable(join(b.home, '.cc-secrets'), () => {
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout).toMatch(/^FAIL box-token: fleet: fleet-token-unusable — .* cannot be read/);
+      expect(r.stdout).not.toMatch(/ccrc-mail\.token does not exist/);
+      expect(r.stdout).not.toContain(FLEET_NEVER);
+      expect(r.stdout).toMatch(/\n {2}remedy: \S/);
+      expect(r.code).toBe(1);
+      const d = runCheck(b, disarmed());
+      expect(d.stdout).toMatch(/^SKIP box-token: fleet: fleet-token-unusable — /);
+      expect(d.code).toBe(3);
+    });
+  });
+  itNonRoot('fleet: the same directory with the generation file and the report present stays FAIL, and its sentence no longer says "does not exist"', () => {
+    const b = box({ role: 'fleet' });
+    unsearchable(join(b.home, '.cc-secrets'), () => {
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout).toMatch(/^FAIL box-token: fleet: fleet-token-unusable — .* cannot be read/);
+      expect(r.stdout).not.toMatch(/ccrc-mail\.token does not exist/);
+      expect(r.code).toBe(1);
+    });
+  });
+  itNonRoot('fleet: a directory that is only missing is still absent (ENOENT), so the never-handed PASS holds when ~/.cc-secrets does not exist at all', () => {
+    const b = box({ role: 'fleet' });
+    noFleetHistory(b);
+    rmSync(join(b.home, '.cc-secrets'), { recursive: true });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(new RegExp(`^PASS box-token: fleet: fleet-token-absent — .* ${FLEET_NEVER}\\n$`));
+    expect(r.code).toBe(0);
+  });
+  itNonRoot('server: a token path inside a directory that cannot be searched (CCRC_MAIL_TOKEN_PATH) is FAIL token-unusable (cannot be read), never absent, and its state beside it is unreadable too', () => {
+    const b = box({ role: 'server' });
+    const alt = join(b.home, 'alt-dir');
+    mkdirSync(alt, { recursive: true, mode: 0o700 });
+    renameSync(dot(b, 'mail.token'), join(alt, 'custom.token'));
+    renameSync(dot(b, 'box-token.json'), join(alt, 'box-token.json'));
+    writeFileSync(dot(b, 'ccrc.env'), `CCRC_ROLE=server\nCCRC_FLEET=local\nCCRC_MAIL_TOKEN_PATH=${join(alt, 'custom.token')}\n`, { mode: 0o600 });
+    unsearchable(alt, () => {
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout).toMatch(/^FAIL box-token: server: token-unusable — .* cannot be read/);
+      expect(r.stdout).toContain('server: state-unreadable — ');
+      expect(r.stdout).not.toMatch(/custom\.token does not exist/);
+      expect(r.stdout).not.toContain(SERVER_NEVER);
+      expect(r.code).toBe(1);
+    });
   });
 });
 
@@ -491,7 +938,9 @@ describe('doctor box-token: the shell spellings are pinned to L0', () => {
     expect(at, 'the box-token block marker moved: re-point the pin').toBeGreaterThanOrEqual(0);
     return src.slice(at);
   };
-  /** Every bracket class whose admitted set is hex digits (and `-`) and holds at least one hex letter, in any spelling:
+  /** Every QUANTIFIED bracket class (one followed by `{n}` or `{n,m}`; a class with no such quantifier is not seen, and
+   *  neither is a hex shape spelled some other way, such as a `\x` escape or a literal alternation) whose admitted set is
+   *  hex digits (and `-`) and holds at least one hex letter, however the class spells that set:
    *  ranges, listed letters, `\d`, `[:digit:]`, `[:xdigit:]`, a `\-` literal, bare or inside `(?:…)`, in the block's code
    *  lines, less the exact `[0-9a-f]{64}` digest spelling (a different thing); a 4th spelling in another class reds (review
    *  of fix 1; review 365 R3). The class body admits `[` only as a `[:name:]`, so the bash `[[ "$g" =~ ^[0-9a-f]{16}$ ]]`

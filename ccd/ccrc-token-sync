@@ -278,6 +278,11 @@ if not isinstance(value, str) or re.fullmatch(value_re, value) is None:
     out("bad", "the value is not 64 lowercase hex")
 if not isinstance(gen, str) or re.fullmatch(gen_re, gen) is None:
     out("bad", "the generation is not 16 lowercase hex")
+# This guard is lexical: abspath normalises the two strings and resolves no link, so it compares where the paths
+# are WRITTEN, not where they land. That suffices because the caller builds both from ONE literal $SECRETS prefix
+# (the temp file by mktemp under $SECRETS, the destination as $SECRETS/ccrc-mail.token), so they share a directory
+# by construction, link or no link. The guard exists to refuse a caller that ever stops doing that: a temp file in
+# another directory may sit on another filesystem, where rename is not atomic (it fails with EXDEV). A link at the destination itself is refused just below, by lexists and islink.
 if os.path.dirname(os.path.abspath(tmp)) != os.path.dirname(os.path.abspath(dest)):
     out("fail", "the temp file is not beside the token file")
 preamble = comment + "\n"

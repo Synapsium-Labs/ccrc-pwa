@@ -35,8 +35,16 @@ umask 077
 TOKEN_FILE="${CCRC_MAIL_TOKEN_FILE:-$HOME/.cc-secrets/ccrc-mail.token}"
 unset tok   # a caller that exported `tok` would keep it exported through the assignment below
 tok=""
+# `extractToken` trims with `String.prototype.trim`, which also strips what `[:space:]` never matches in a byte-wise
+# tool: the no-break space and the BOM first, then U+1680, U+2000-200A, U+2028, U+2029, U+202F, U+205F and U+3000
+# (review 375 F1). `sed` removes those byte sequences BEFORE the comment
+# and blank lines are told apart, as the server's trim runs before its `#` test. Without it a placeholder behind a BOM
+# was POSTed (a guaranteed 401 under `|| true`). Why it is portable: bash's `printf` turns the octal escapes into raw
+# bytes before `sed` runs, and `LC_ALL=C` makes GNU and BSD `sed` match those bytes literally; `sed` never sees octal.
 if [ -r "$TOKEN_FILE" ]; then
-  tok="$(grep -v '^[[:space:]]*#' "$TOKEN_FILE" | grep -v '^[[:space:]]*$' | head -n1 | tr -d '[:space:]')"
+  _uws="$(printf 's/\302\240//g;s/\357\273\277//g;s/\341\232\200//g;s/\342\200[\200-\212\250\251\257]//g;s/\342\201\237//g;s/\343\200\200//g')"
+  tok="$(LC_ALL=C sed "$_uws" "$TOKEN_FILE" | grep -v '^[[:space:]]*#' | grep -v '^[[:space:]]*$' | head -n1 | tr -d '[:space:]')"
+  unset _uws
 fi
 
 # Address resolution: CCRC_ADDR env > ~/.ccrc/ccrc.env's CCRC_HOST+CCRC_PORT.

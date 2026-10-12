@@ -140,6 +140,9 @@ function isBoxTokenState(v: unknown): v is BoxTokenState {
   if (v.hold !== null && !(TOKEN_HOLDS as readonly unknown[]).includes(v.hold)) return false;
   if (!isStrOrNull(v.fleetConfirmed) || !isNum(v.nextSeq) || !isNumOrNull(v.lastRotationAt) || !isNum(v.failures)) return false;
   if (!isObj(v.counters) || !isNum(v.counters.previousPresented) || !isNum(v.counters.retiredPresented)) return false;
+  // 4552: optional when read (absent is a state written before it); null or a non-negative number when present.
+  if ('retiredPresentedAt' in v.counters && v.counters.retiredPresentedAt !== null
+    && !(isNum(v.counters.retiredPresentedAt) && v.counters.retiredPresentedAt >= 0)) return false;
   const fp = v.fileProblem;   // optional (A9's re-read): absent and null both read; anything else must be the shape
   if (fp !== undefined && fp !== null && !(isObj(fp) && isNum(fp.at) && ['current', 'pending', 'previous'].includes(fp.file as string)
     && (TOKEN_FILE_PROBLEMS as readonly unknown[]).includes(fp.word))) return false;
