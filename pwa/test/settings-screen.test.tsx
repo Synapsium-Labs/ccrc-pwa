@@ -2279,10 +2279,20 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
   };
   const radio = (name: string): HTMLElement => within(section()).getByRole('radio', { name, hidden: true });
 
-  it('is the third section, after Notifications, titled Stall watch', async () => {
+  it('LOADING state (api.updates never resolves, so no Box token card): Stall watch comes after Notifications, titled Stall watch', async () => {
     await mount(swView());
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
     expect(headings).toEqual(['Updates', 'Notifications', STALL_SECTION_TEXT.title]);
+  });
+
+  it('LANDED state (api.updates answered, so the Box token card renders): the order is Updates, Box token, Notifications, Stall watch', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(t7View());
+    vi.spyOn(api, 'stallWatch').mockResolvedValue(swView());
+    render(<SettingsScreen />);
+    await screen.findByRole('heading', { name: 'Box token', level: 2 });
+    await levelGroup();
+    const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
+    expect(headings).toEqual(['Updates', 'Box token', 'Notifications', STALL_SECTION_TEXT.title]);
   });
 
   it('P1: pending is a skeleton, a failed first read says so, and a view renders — three states, never folded', async () => {
