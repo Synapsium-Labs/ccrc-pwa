@@ -3542,7 +3542,9 @@ call under the 600 s limit (13 rows).
 > now `Settings then has a further section, **Stall watch**`). Mutation row L's idea is unchanged: move the whole Stall
 > watch block to before the Notifications sentence. The expectation is now **1 failed**, with the row named "names the
 > Stall watch section, once, after the Notifications section". The second red above came from the "phone-push bell"
-> text, which `main` re-worded to "the push bell", so the device row stays green under this mutation. The device row
+> text, which this branch re-worded to "the push bell" (`a5771e471`, the operator's 2026-10-05 directive; `main` still
+> reads "phone-push bell", and the absorb merge kept this branch's wording), so the device row stays green under this
+> mutation. The device row
 > is exercised by its own mutation: revert "the push bell" to "the phone-push bell" and exactly "names no device, as the
 > section itself names none (§2, 2026-10-05)" reds (1 failed). Both measured at R35 (`fr4-mut-f1.py`, README restored
 > with `cmp`). Row G's appended sentence and the `Settings has a third section` wording in rows A and G are first-cut
