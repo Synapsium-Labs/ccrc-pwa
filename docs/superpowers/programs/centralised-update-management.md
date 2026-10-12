@@ -1324,6 +1324,24 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - Wave 15 (run 300) is still held by the open PR #351 (`ccd/ccd`) alone.
       - STATUS: fleet and server v0.0.155, newest v0.0.155, backups fleet 170M/server 649M, disk free fleet 215G/work
         volume 241G/server 33G, no anomalies at 19:42.
+    - **2026-10-12 20:46 UTC: v0.0.156 to v0.0.158 auto-converged unattended.** No action was taken.
+      - The releases were three docs and governance merges: v0.0.156 (#357) at 19:56:02, v0.0.157 at 20:05:37 and v0.0.158
+        at 20:13:38.
+      - The server followed the fleet by auto each time:
+        - v0.0.156: the fleet ran 20:04:09 to 20:06:09, and the server 20:06:35 to 20:06:58.
+        - v0.0.157: the fleet ran 20:07:51 to 20:09:58, and the server 20:10:23 to 20:10:45.
+        - v0.0.158: the fleet ran 20:41:13 to 20:43:11, and the server 20:43:43 to 20:44:07.
+
+        So the gate that stalled at 19:19 released in about 30 seconds three times. The stall stays a defect of a
+        process's lanes, as the entry above says.
+      - The 20:42 hourly probe landed mid-move: "boxes differ", and the fleet row `pending` and `incomplete`. That is
+        transient. v0.0.158's 27-minute start lag is the 30-minute poller: the server's v0.0.157 install restarted it at
+        20:10:45, and its next poll fell at about 20:40:45.
+      - Both boxes read `box-token` PASS. Server doctor: 25 passed, 0 warned, 0 failed. Fleet doctor: 33 passed, 6
+        warned, 0 failed.
+      - Wave 15 (run 300) is still held by the open PR #351 (`ccd/ccd`).
+      - STATUS: fleet and server v0.0.158, newest v0.0.158, backups fleet 172M/server 660M, disk free fleet 217G/work
+        volume 244G/server 33G, no anomalies at 20:45.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
