@@ -1,12 +1,12 @@
 # Rich Docs reader and a shared renderer — design
 
-**Spec** · 2026-10-12 · Status: Draft · Owner: the operator · Linear: none · Related: docs/superpowers/specs/2026-10-01-native-docs-reader-design.md, docs/superpowers/programs/native-docs-reader.md
+**Spec** · 2026-10-12 · Status: Approved by the operator 2026-10-12 (R-g) · Owner: the operator · Linear: none · Related: docs/superpowers/specs/2026-10-01-native-docs-reader-design.md, docs/superpowers/programs/native-docs-reader.md
 
 ## In short
 
 This spec amends the 2026-10-01 Docs reader spec (the "base spec") in two ways.
 
-- **One shared renderer.** The rich reading layout becomes one small public library, named `docserver` and published as `@<scope>/docserver` under the MIT licence. It is pure and pinned by exact version. ccrc and other viewers each keep their own transport, auth, content source and hosting.
+- **One shared renderer.** The rich reading layout becomes one small public library, named `docserver` and published as `@synapsium-labs/docserver` under the MIT licence. It is pure and pinned by exact version. ccrc and other viewers each keep their own transport, auth, content source and hosting.
 - **ccrc's reader becomes your docs server.** It runs at ccrc's own public address, behind the same passkey session, at feature parity. It replaces the tailnet-only standalone docs server for you.
 
 What changes in ccrc:
@@ -34,6 +34,7 @@ This section covers the rulings, what is already built, and why the standalone d
 | R-d | 13:15, in your words: "doc's address - yes". | Page URLs may carry a commit as `at=<sha>` for the version view. This amends the base rule "page URLs never carry a commit". G6 is unconditional in W5b (§6, A14). |
 | R-e | 13:15, in your words: "[the docs server's] roots - move". | Roots outside ccd's projects root are moved under it. This is your step in the retirement gate, done only when no live session works in them (§6 G3, §9). |
 | R-f | 13:16, in your words: "name: docserver". | The library and its repo are named `docserver`. The unscoped npm name is taken, so the package is `@<scope>/docserver`. The scope is the only naming item still waiting. W4's M7.9 forbids the word in the PWA, so A21 amends it (§7). |
+| R-g | About 14:07, in this session: start the library programme now; the `docserver` repo stays private until v1 and becomes public with v1; the npm scope is `@synapsium-labs`; the spec is approved as written. | The package is `@synapsium-labs/docserver` (§3.6). The library programme starts at once (§8). Its first public release is v1, which ccrc's W8 pins. |
 
 ### 1.2 What exists
 
@@ -61,7 +62,7 @@ There is no Docs UI on `main` yet. The PWA has `react-markdown`, `remark-gfm` an
 |---|---|
 | Base spec | `docs/superpowers/specs/2026-10-01-native-docs-reader-design.md` |
 | The library | The shared rendering library this spec introduces |
-| `docserver` | Since R-f, the name of the shared library and its repo, and nothing else. Its package is `@<scope>/docserver`. This spec never uses the word for the standalone docs server. |
+| `docserver` | Since R-f, the name of the shared library and its repo, and nothing else. Its package is `@synapsium-labs/docserver`. This spec never uses the word for the standalone docs server. |
 | Reader frame | ccrc's `<iframe sandbox="allow-scripts" srcdoc>` that runs the library's layout |
 | Bridge | The one `MessagePort` between the reader frame and the PWA |
 | Nonce | A fresh random value the parent puts only in the srcdoc's seed. The frame echoes it in `ready`, which ties the port to that srcdoc. |
@@ -103,7 +104,7 @@ flowchart TB
 | Layer | Owner | Holds | Never holds |
 |---|---|---|---|
 | 1. Server half | ccrc | The ccd verbs and routes, unchanged in kind, plus the parity additions in §6 | Rendering |
-| 2. Library | Its own public repo | Rules, layout, CSS, fonts, a Mermaid build, the frame document builder, the frame bootstrap and click guard, the host helper for other viewers, the corpus | Network, storage backends, auth, git, URLs, hosting |
+| 2. Library | Its own repo: private until v1, public from v1 (R-g) | Rules, layout, CSS, fonts, a Mermaid build, the frame document builder, the frame bootstrap and click guard, the host helper for other viewers, the corpus | Network, storage backends, auth, git, URLs, hosting |
 | 3. Host | ccrc | The parse-worker job, the reader frame, the bridge, the asset inlining, the fallback, ccrc's own chrome | A second Markdown renderer for docs, apart from the fallback |
 
 ## 3. The shared library
@@ -126,7 +127,7 @@ This section says what the library holds, its API, what it leaves out, its rules
 
 Footing: the sizes were measured on the standalone server's files on 2026-10-12 (research A and D).
 
-### 3.2 API (Proposed)
+### 3.2 API (Agreed)
 
 All entry points are ESM with `.d.ts`. Only `./enhance` and `./host` touch the DOM.
 
@@ -191,7 +192,7 @@ These `enhance` options replace today's defaults, which read `location`, `localS
 - Product vocabulary turned on by default (see the scrub list in §3.7).
 - The standalone server's other layouts: the design-prototype variants and the old `classic` layout. Only the default layout ships.
 
-### 3.4 Rules (Proposed)
+### 3.4 Rules (Agreed)
 
 The library uses CommonMark plus GFM on markdown-it, with raw HTML off. One allowlist applies, the same one the standalone server uses today.
 
@@ -226,15 +227,15 @@ The library uses CommonMark plus GFM on markdown-it, with raw HTML off. One allo
 
 | Item | Choice | Why | Status |
 |---|---|---|---|
-| Name | The library and its repo are `docserver`. The package is `@<scope>/docserver`. | R-f. The unscoped npm name is taken. | Ruled; the scope is waiting |
-| Registry | npm with provenance, through trusted publishing (OIDC, no stored token). Each release also carries a GitHub build attestation of its tarball. | The lock keeps a sha512 `integrity`, like all 636 entries in today's PWA lock. A git dependency loses `integrity` (measured with npm 11.11.0) and would build in every CI shard, because the shard action runs `npm ci` in `pwa/`. | Proposed |
-| Pin | Exact version in `pwa/package.json`, with no `^`. Bumped only by its own PR, which runs the full suite because it changes `package.json`. | There is no dependency policy in a test today. This spec is the explicit ruling a new dependency needs. | Proposed |
-| CI check | In the `build-pwa` leg (`.github/workflows/ci.yml:646`): `npm audit signatures`, then a check that the pinned tarball's provenance names the library's own repo and release workflow (for example `gh attestation verify` with `--repo` and `--signer-workflow`) | Nothing verifies registry signatures today. The release build runs `npm ci --no-audit` (`deploy/build-release.sh:85`). A valid signature alone would also pass a package published from someone else's repo. | Proposed |
-| Precache | Mermaid's directory is in the service worker's `globIgnores`, an entry A21 allows. The core library and the woff2 fonts are precached (A9). | The parent reads these files to inline them, and those reads do pass through the worker. A bundled Mermaid would put 116 chunks (5.1 MB) in the precache, about four times today's shell. | Proposed |
+| Name | The library and its repo are `docserver`. The package is `@synapsium-labs/docserver`. | R-f. The unscoped npm name is taken. | Ruled; the scope is waiting |
+| Registry | npm with provenance, through trusted publishing (OIDC, no stored token). Each release also carries a GitHub build attestation of its tarball. | The lock keeps a sha512 `integrity`, like all 636 entries in today's PWA lock. A git dependency loses `integrity` (measured with npm 11.11.0) and would build in every CI shard, because the shard action runs `npm ci` in `pwa/`. | Agreed |
+| Pin | Exact version in `pwa/package.json`, with no `^`. Bumped only by its own PR, which runs the full suite because it changes `package.json`. | There is no dependency policy in a test today. This spec is the explicit ruling a new dependency needs. | Agreed |
+| CI check | In the `build-pwa` leg (`.github/workflows/ci.yml:646`): `npm audit signatures`, then a check that the pinned tarball's provenance names the library's own repo and release workflow (for example `gh attestation verify` with `--repo` and `--signer-workflow`) | Nothing verifies registry signatures today. The release build runs `npm ci --no-audit` (`deploy/build-release.sh:85`). A valid signature alone would also pass a package published from someone else's repo. | Agreed |
+| Precache | Mermaid's directory is in the service worker's `globIgnores`, an entry A21 allows. The core library and the woff2 fonts are precached (A9). | The parent reads these files to inline them, and those reads do pass through the worker. A bundled Mermaid would put 116 chunks (5.1 MB) in the precache, about four times today's shell. | Agreed |
 | Licence | MIT | R-c. It is one-way compatible with AGPL ccrc. | Ruled |
-| Fonts | SIL OFL 1.1 with `OFL.txt` and notices. Use unmodified upstream files, or the fontsource packages with their LICENSE. | The OFL requires the licence text to travel with the fonts. The current copies lack it. | Proposed |
-| Mermaid | MIT, plus `THIRD-PARTY-NOTICES` for everything bundled with it | Its bundle carries third-party code | Proposed |
-| elkjs | Check whether it is in the Mermaid build. If it is, exclude it. | It is EPL-2.0. The flowchart chunk set carries an `elk` chunk of 1.6 MB. | Proposed |
+| Fonts | SIL OFL 1.1 with `OFL.txt` and notices. Use unmodified upstream files, or the fontsource packages with their LICENSE. | The OFL requires the licence text to travel with the fonts. The current copies lack it. | Agreed |
+| Mermaid | MIT, plus `THIRD-PARTY-NOTICES` for everything bundled with it | Its bundle carries third-party code | Agreed |
+| elkjs | Check whether it is in the Mermaid build. If it is, exclude it. | It is EPL-2.0. The flowchart chunk set carries an `elk` chunk of 1.6 MB. | Agreed |
 
 The release lane ships `dist-pwa` in the tarball and MANIFEST (`deploy/build-release.sh:104-116`, `:162-188`). The library therefore reaches the boxes as built files, never as a box-side install.
 
@@ -269,7 +270,7 @@ These operator-specific parts of today's layout are removed or made into options
 
 This section is layer 3: the frame's shape, its CSP, how bytes reach it, the bridge, what happens when it fails, and what ccrc imports from the library. It lands in W8 (§8).
 
-### 4.1 Shape (Proposed)
+### 4.1 Shape (Agreed)
 
 | Property | Value |
 |---|---|
@@ -282,7 +283,7 @@ This section is layer 3: the frame's shape, its CSP, how bytes reach it, the bri
 | Remount | Every new document, ref or `at=` commit is a remount: a new React key, a new `MessageChannel` and a new nonce. ccrc never updates a srcdoc in place. |
 | Chrome | ccrc's header, truth line, banners and sheets stay outside the frame |
 
-### 4.2 `READER_CSP` (Proposed)
+### 4.2 `READER_CSP` (Agreed)
 
 ```ts
 export const READER_CSP =
@@ -313,14 +314,14 @@ The frame never fetches (A8). The PWA fetches every docs byte through its own fu
 - **Order.** The click guard, the seed and the bootstrap come first in the body, in that order, before any content. The bootstrap runs before any content exists. It reads the seed by position: the element just before its own script. It never looks the seed up by id, so a heading id cannot stand in for the seed (M8.3, M8.8).
 - **Footing.** Lab E4 measured srcdocs up to 11.2 M characters rendering in 0.18-1.35 s. The worst reader page (a 2 MiB doc, 5 MiB of images and Mermaid) could come near that size. W8 measures the worst case and lowers the reader's image budget if it is over.
 
-### 4.4 The bridge (Proposed)
+### 4.4 The bridge (Agreed)
 
 - **Handshake.** The parent creates a `MessageChannel`. On the frame's **first** `load` only, it calls `contentWindow.postMessage({t:'hello', v:1}, '*', [port2])`. The target is `'*'` because an opaque origin cannot be named. `hello` carries no secret. This is the parent's only `contentWindow.postMessage` per mount. Every later parent message goes on the port, and is `prefs` or `changes.result`.
 - **Binding the port to the srcdoc.** The parent puts a fresh 128-bit nonce in the seed, and only there. The frame's `ready` must echo it. Until a `ready` with the right nonce arrives, the parent drops every other op. A wrong or missing nonce counts as a watchdog failure and falls back. So if some engine lets the frame navigate before its first `load`, the document that receives the port cannot act through it.
 - **No window listener.** The parent registers no window `message` listener anywhere in `pwa/src`. A stray `parent.postMessage` from the frame is therefore ignored. M8.B5 checks this at run time, which also covers bundled dependencies.
 - **Teardown.** A second `load` (lab E11) or an unmount closes the port.
 - **Checking.** Every message goes through one pure L0 parser, `parseBridgeMessage`, in `shared/`. The parser refuses unknown ops, extra keys, `__proto__`, oversize values, a wrong version, and data that is not a plain object of strings and numbers. It also refuses a message that carries ports (`ports.length > 0`). A `messageerror` counts as a refused message.
-- **Limits (Proposed).** At most 20 messages per second over a 1-second window, with a burst of 40. At most 10 `store.set` per second. One `changes` in flight; a second one is dropped. `navigate` and `version` are coalesced: the latest within 250 ms wins. After 16 refused messages in one mount, the parent closes the port and falls back. Ordinary reading never meets this limit: `hash` accepts every id the layout can jump to (the fragment grammar), so contents and heading links are never refused.
+- **Limits (Agreed).** At most 20 messages per second over a 1-second window, with a burst of 40. At most 10 `store.set` per second. One `changes` in flight; a second one is dropped. `navigate` and `version` are coalesced: the latest within 250 ms wins. After 16 refused messages in one mount, the parent closes the port and falls back. Ordinary reading never meets this limit: `hash` accepts every id the layout can jump to (the fragment grammar), so contents and heading links are never refused.
 - **What the caps bound.** The browser deserialises a message before the parser sees it. The caps therefore bound effects, not the cost of the clone. The frame is the only sender on the port.
 
 | Op | Direction | Payload | Parent check | Effect |
@@ -391,8 +392,8 @@ sequenceDiagram
 | No library assets (for example a build without them) | Plain pipeline |
 
 - **What the watchdog can bound.** It only bounds a frame that yields. If the frame shares the parent's event loop (WebKit/iOS, UNMEASURED, E17), the parent's timer cannot fire while the frame spins, and the parent cannot unmount it until then. The parse is therefore bounded in the worker, and the frame runs only `enhance()` and Mermaid.
-- **The Mermaid gate (Proposed).** Before inlining Mermaid, the parent reads the worker's counts. A doc gets Mermaid only with at most 24 fences, at most 16 KiB per fence and at most 128 KiB in all. A fence over the per-fence cap shows as its source with a note. A doc over the count or total cap renders with every figure as source. The library's `maxTextSize` and `maxEdges` also bound each diagram (§3.4). W8 re-measures these numbers against the committed specs.
-- **Budget (Proposed).** The same formula as `DOCS_PARSE_BUDGET_MS` (base §4.9), plus a Mermaid allowance that W8 measures on your phone (E17).
+- **The Mermaid gate (Agreed).** Before inlining Mermaid, the parent reads the worker's counts. A doc gets Mermaid only with at most 24 fences, at most 16 KiB per fence and at most 128 KiB in all. A fence over the per-fence cap shows as its source with a note. A doc over the count or total cap renders with every figure as source. The library's `maxTextSize` and `maxEdges` also bound each diagram (§3.4). W8 re-measures these numbers against the committed specs.
+- **Budget (Agreed).** The same formula as `DOCS_PARSE_BUDGET_MS` (base §4.9), plus a Mermaid allowance that W8 measures on your phone (E17).
 - **Contingency `reader-mermaid-on-tap`.** If E17 shows the console stops answering, this lands as a W8 fix before W8 merges. Each figure shows its source with a Render button. Mermaid runs only on that tap, one figure at a time. It mirrors base `mockup-scripts-confirm`.
 - **The fallback** is W4/W5's `DocMarkdown` on W4's parse worker, docs profile, with `<br>` as a line break. W4's foundation therefore stays load-bearing for docs as well as chat.
 
@@ -471,15 +472,15 @@ These close the gaps found against the standalone docs server (research B). Each
 
 | Gap | What changes | Wave | Amends | Status |
 |---|---|---|---|---|
-| G1 sections | `vision: 'docs/vision'` and `promise: 'docs/promise'` join `DOC_SECTIONS` (`shared/docs.ts:20`) and ccd's parity literal `SECTIONS` (`ccd/ccd:34676`). Everything derived from them follows. In the PWA, `SECTION_ORDER` in `docs/docsTree.ts` gains two entries, and the project and index views show six section rows and counts. A new cap token `docs-sections-v2` keeps the rule that a new server only ever under-calls an old fleet: without the token it answers `unsupported`. W5b is rolled `--server-first` (A23). With fleet first, and W5b after W5 as recommended, ccd would list the two new sections to W5's server and PWA, whose `SECTION_ORDER` and page grammar know only four. Between ccd's swap and the agent's restart, `docs-log` can answer `not-granted` (manual retry), as base §7.1 describes. The largest measured project has 712 entries across six sections, under `DOCS_MAX_ENTRIES` (5000) and the 1 MiB listing cap. | W5b | §0 Scope, non-goal and `sections`, §1 `shared/docs.ts` row, §2 (a), §4.1, §4.3, §7.1, §7.5 "four" | Proposed |
-| G4 history | A new read verb, `docs-log --project P --commit C --section S --path X`. It is read by fixed index under its own cap, `docs-log-v1`. The grant is `['docs-log','--project']`. It adds a runner budget row and the shared redactor. `log` joins `READ_ALLOW` only with fixed flags. The verb logs the fixed section with `--name-only -z` and no `-n`. The helper keeps the first 100 entries whose path equals the doc's by exact bytes, then stops, so the caller's path never enters an argv. The helper deadline and the 16 MiB stdout cap bound the walk. If either ends it first, the answer carries `truncated: true` rather than a silently short list. Each entry carries sha, first parent, ISO date, author and subject. Measured on this repo's largest section (2223 commits): the full section log takes 0.17 s cold and 0.01 s warm. The route is `GET /api/docs/:project/history`, with at most 100 entries, subjects of at most 200 characters (redacted), and a wire cap of about 128 KiB. | W5b | §2 (a) verbs, the "Never used" list, row 16, §3.4 routes, §3.13 census, §7.2 doctor | Proposed |
-| G5 changes since | No new verb. The PWA reads the base and head through two existing `docs-show` pins and diffs the lines itself, keyed to `data-line`. The base may be any 40 or 64 hex commit, because a committed pin reads any commit, still inside the sections (base §0 `evidence`). "Since last visit" sends the stored served commit, and the oldest day window sends a commit's parent; neither need be in the doc's history. A draft answers "unavailable". `diff` stays on the never-used list. The alternative is a `docs-diff` verb. | W8 | §4 gains a pure diff module | Proposed |
+| G1 sections | `vision: 'docs/vision'` and `promise: 'docs/promise'` join `DOC_SECTIONS` (`shared/docs.ts:20`) and ccd's parity literal `SECTIONS` (`ccd/ccd:34676`). Everything derived from them follows. In the PWA, `SECTION_ORDER` in `docs/docsTree.ts` gains two entries, and the project and index views show six section rows and counts. A new cap token `docs-sections-v2` keeps the rule that a new server only ever under-calls an old fleet: without the token it answers `unsupported`. W5b is rolled `--server-first` (A23). With fleet first, and W5b after W5 as recommended, ccd would list the two new sections to W5's server and PWA, whose `SECTION_ORDER` and page grammar know only four. Between ccd's swap and the agent's restart, `docs-log` can answer `not-granted` (manual retry), as base §7.1 describes. The largest measured project has 712 entries across six sections, under `DOCS_MAX_ENTRIES` (5000) and the 1 MiB listing cap. | W5b | §0 Scope, non-goal and `sections`, §1 `shared/docs.ts` row, §2 (a), §4.1, §4.3, §7.1, §7.5 "four" | Agreed |
+| G4 history | A new read verb, `docs-log --project P --commit C --section S --path X`. It is read by fixed index under its own cap, `docs-log-v1`. The grant is `['docs-log','--project']`. It adds a runner budget row and the shared redactor. `log` joins `READ_ALLOW` only with fixed flags. The verb logs the fixed section with `--name-only -z` and no `-n`. The helper keeps the first 100 entries whose path equals the doc's by exact bytes, then stops, so the caller's path never enters an argv. The helper deadline and the 16 MiB stdout cap bound the walk. If either ends it first, the answer carries `truncated: true` rather than a silently short list. Each entry carries sha, first parent, ISO date, author and subject. Measured on this repo's largest section (2223 commits): the full section log takes 0.17 s cold and 0.01 s warm. The route is `GET /api/docs/:project/history`, with at most 100 entries, subjects of at most 200 characters (redacted), and a wire cap of about 128 KiB. | W5b | §2 (a) verbs, the "Never used" list, row 16, §3.4 routes, §3.13 census, §7.2 doctor | Agreed |
+| G5 changes since | No new verb. The PWA reads the base and head through two existing `docs-show` pins and diffs the lines itself, keyed to `data-line`. The base may be any 40 or 64 hex commit, because a committed pin reads any commit, still inside the sections (base §0 `evidence`). "Since last visit" sends the stored served commit, and the oldest day window sends a commit's parent; neither need be in the doc's history. A draft answers "unavailable". `diff` stays on the never-used list. The alternative is a `docs-diff` verb. | W8 | §4 gains a pure diff module | Agreed |
 | G6 version view | Page URLs gain `at=<sha>` (40 or 64 hex), a change to "page URLs never carry a commit". The page opens a committed pin at that commit, and the truth line names it and links back to the latest. "Only this day" keeps its base, and "Back to the latest" its ref, in `history.state` for the visit, not in the URL. Inside the frame, the `version` op asks for a version (§4.4). | W5b (the key and the page), W8 (the menu) | §0 `http` row, §3.1, §4.3, M3.2 | Ruled |
-| G7 reader state | Theme, width, marks and last visit live in ccrc's own localStorage, per device, under the reader prefix `ccrc:reader:v1:`, which no console key uses. They are written through the allow-listed `store.set` and seeded back on mount. Reader prefs are kept apart from console prefs. No server storage in v1. | W8 | §4 gains `docs/reader/store.ts` | Proposed |
+| G7 reader state | Theme, width, marks and last visit live in ccrc's own localStorage, per device, under the reader prefix `ccrc:reader:v1:`, which no console key uses. They are written through the allow-listed `store.set` and seeded back on mount. Reader prefs are kept apart from console prefs. No server storage in v1. | W8 | §4 gains `docs/reader/store.ts` | Agreed |
 | G3 roots outside ccd's projects root | Moved under it as git repos (R-e). This is your step in the retirement gate (§9 Step 1), done only when no live session works in them. Two small non-git directories (28 files) are affected. One stale entry has nothing to move. Once moved, ccd serves them like any other project. | none: your step | None: restates base §0 | Ruled |
-| G9 HTML specs and mockups | They use W6's mockup frame unchanged. An HTML spec that loads a CDN script needs two taps: Run scripts, then Load external. The sandbox is deliberately stricter than the standalone server's. | W6 | None | Proposed |
+| G9 HTML specs and mockups | They use W6's mockup frame unchanged. An HTML spec that loads a CDN script needs two taps: Run scripts, then Load external. The sandbox is deliberately stricter than the standalone server's. | W6 | None | Agreed |
 
-**Parity, capability by capability.** "Yes" means the base spec already covers it. "Proposed" means a gap that this spec closes. "Dropped" is an accepted loss.
+**Parity, capability by capability.** "Yes" means the base spec already covers it. "Agreed" means a gap that this spec closes. "Dropped" is an accepted loss.
 
 | Capability of the standalone docs server | Verdict | Where |
 |---|---|---|
@@ -491,16 +492,16 @@ These close the gaps found against the standalone docs server (research B). Each
 | GitHub link | Yes, base §3.11 | |
 | Honest errors | Yes, base §4.7 | |
 | Render-failure fallback | Yes, base §4.10 | The plain pipeline |
-| Six sections | Proposed, G1 | W5b |
-| Per-doc history | Proposed, G4 | W5b |
-| Changes since | Proposed, G5 | W8 |
-| Version view, "only this day", "Back to the latest" | Proposed, G6 | W5b and W8 |
-| Read marks, last visit, reader settings | Proposed, G7 | W8 |
-| Rich layout (G8) | Proposed, the library plus W8 | |
-| Figures: Play, Animate edges, Full screen, Copy Mermaid | Proposed, W8 | |
-| Keys (`/`, `?`, j/k and the rest) | Proposed, W8 | The parent focuses the frame on mount (§4.1) |
-| Front matter strip | Proposed, §3.4 | |
-| Footnotes | Proposed, L2 adds styles | They have no styles today |
+| Six sections | Agreed, G1 | W5b |
+| Per-doc history | Agreed, G4 | W5b |
+| Changes since | Agreed, G5 | W8 |
+| Version view, "only this day", "Back to the latest" | Agreed, G6 | W5b and W8 |
+| Read marks, last visit, reader settings | Agreed, G7 | W8 |
+| Rich layout (G8) | Agreed, the library plus W8 | |
+| Figures: Play, Animate edges, Full screen, Copy Mermaid | Agreed, W8 | |
+| Keys (`/`, `?`, j/k and the rest) | Agreed, W8 | The parent focuses the frame on mount (§4.1) |
+| Front matter strip | Agreed, §3.4 | |
+| Footnotes | Agreed, L2 adds styles | They have no styles today |
 | Fonts | Yes, same as today | Latin subsets only; other scripts fall back to system fonts |
 | HTML specs and mockups | Yes, base §5.6, with a stricter sandbox (G9) | |
 | The `classic` old layout and the design-prototype variants | Dropped | Only the default layout ships (§3.3) |
@@ -516,30 +517,30 @@ One table holds every rule this spec changes. New mutation rows are numbered M8.
 
 | # | Base rule | Change | Why | Rows | Status |
 |---|---|---|---|---|---|
-| A1 | §5.6.1 "No message channel in either direction" | It stays for `MockupFrame`. A new `ReaderFrame` and `docs/reader/bridge.ts` are the only holders of a port. | Parity needs write-back | M8.6 | Proposed |
-| A2a | M5.16 source scans (W6) | `postMessage(` and `.onmessage` are allowed in `lib/markdownWorker.ts` and `lib/markdownRunner.ts` only (W4 plan, refinement (w)). This spec owns this carve-out. The pending Share/Export amendment, which edits other parts of M5.16, does not repeat it, so M5.16 changes once. | W4's worker files would make M5.16 red the day W6 lands | M9.14 | Proposed |
-| A2b | M5.16 source scans (W8) | `<iframe` and `srcDoc` only in `MockupFrame.tsx` and `ReaderFrame.tsx`. In `pwa/src/docs`, `postMessage(`, `MessageChannel` and `.onmessage` only in `reader/bridge.ts`. Across all of `pwa/src`: no `addEventListener('message'`, no `window.onmessage`, and no `self.onmessage` outside `lib/markdownWorker.ts`. Library import specifiers are limited to §4.7's list. | The reader's port, and no second channel anywhere in the console | M8.10 | Proposed |
-| A3 | §5.6.1 shell meta, M5.19 | The meta is unchanged: exactly `frame-src 'none'`. New rule: never add `script-src`, `default-src`, `style-src` or `font-src` to it without re-measuring. | The frame inherits and intersects the shell's policy | M8.13, M8.B6 | Proposed |
-| A4 | §5.6.5 scripts off, M5.13, M5.14 | These do not apply to the reader. The reader's tokens are exactly `['allow-scripts']`. | The library is first-party code | M8.1 | Proposed |
-| A5 | §5.6.4 `MOCKUP_CSP` | A separate `READER_CSP` with hashes only. `default-src 'none'` may appear in `reader/policy.ts` too. | A mockup widening must never reach the reader | M8.2 | Proposed |
-| A6 | §4.10 "the worker is the only time bound" | It stays true for parsing. On the reader path, the library's `render()` runs in W4's `docsRunner` as a new job kind, under `DOCS_PARSE_BUDGET_MS`, with terminate and respawn. The `ready` watchdog bounds only `enhance()` and Mermaid, and only when the frame yields; E17 measures whether it can fire on WebKit. W4's worker purity scan gains the one specifier `@<scope>/docserver/render`. Chat is unchanged. | The parent cannot terminate a hung frame the way it terminates a worker | M8.11, M8.17, M8.21 | Proposed |
-| A7 | §4.11 images | Reader images go through §5.6.3's planner, pin rule and budgets, as `data:`. No per-image op. | One asset rule | M5.8-M5.12 apply | Proposed |
-| A8 | §5.4, §3.8 | One sentence: the reader frame never fetches, and receives strings only | Keeps provenance whole | M8.4, M8.B2 | Proposed |
-| A9 | §3.10 "No configuration change", §7.3 | Precache `woff2`. Mermaid's directory goes in `globIgnores`. | A bundled Mermaid would quadruple the precache | M8.14 | Proposed |
-| A10 | §5.0 labs | Add E14-E18 | They measure the UNMEASURED rows of §5.2 | M8.B1-B8 | Proposed |
-| A11 | §0 Scope paragraph, `sections` and non-goals; §1 `shared/docs.ts` row ("the four slugs"); §2 `SECTIONS`; §4.1 and §4.3 (`SECTION_ORDER`, the section rows); §7.5 | Six sections, plus `docs-sections-v2` | G1 | M9.2, M9.3 | Proposed |
-| A12 | §0 `approach` "four narrow verbs", §2 (a), the "Never used" list, row 16, §3.4, §3.13, §6.1, §7.2 | Add `docs-log`; `log` with fixed flags and no `-n`, the 100-entry stop living in the helper; a fifth route; the census and doctor token | G4 | M9.4-M9.9, M9.12, M9.13 | Proposed |
-| A13 | §4 | A pure client line diff over two committed pins | G5 | M9.10 | Proposed |
+| A1 | §5.6.1 "No message channel in either direction" | It stays for `MockupFrame`. A new `ReaderFrame` and `docs/reader/bridge.ts` are the only holders of a port. | Parity needs write-back | M8.6 | Agreed |
+| A2a | M5.16 source scans (W6) | `postMessage(` and `.onmessage` are allowed in `lib/markdownWorker.ts` and `lib/markdownRunner.ts` only (W4 plan, refinement (w)). This spec owns this carve-out. The pending Share/Export amendment, which edits other parts of M5.16, does not repeat it, so M5.16 changes once. | W4's worker files would make M5.16 red the day W6 lands | M9.14 | Agreed |
+| A2b | M5.16 source scans (W8) | `<iframe` and `srcDoc` only in `MockupFrame.tsx` and `ReaderFrame.tsx`. In `pwa/src/docs`, `postMessage(`, `MessageChannel` and `.onmessage` only in `reader/bridge.ts`. Across all of `pwa/src`: no `addEventListener('message'`, no `window.onmessage`, and no `self.onmessage` outside `lib/markdownWorker.ts`. Library import specifiers are limited to §4.7's list. | The reader's port, and no second channel anywhere in the console | M8.10 | Agreed |
+| A3 | §5.6.1 shell meta, M5.19 | The meta is unchanged: exactly `frame-src 'none'`. New rule: never add `script-src`, `default-src`, `style-src` or `font-src` to it without re-measuring. | The frame inherits and intersects the shell's policy | M8.13, M8.B6 | Agreed |
+| A4 | §5.6.5 scripts off, M5.13, M5.14 | These do not apply to the reader. The reader's tokens are exactly `['allow-scripts']`. | The library is first-party code | M8.1 | Agreed |
+| A5 | §5.6.4 `MOCKUP_CSP` | A separate `READER_CSP` with hashes only. `default-src 'none'` may appear in `reader/policy.ts` too. | A mockup widening must never reach the reader | M8.2 | Agreed |
+| A6 | §4.10 "the worker is the only time bound" | It stays true for parsing. On the reader path, the library's `render()` runs in W4's `docsRunner` as a new job kind, under `DOCS_PARSE_BUDGET_MS`, with terminate and respawn. The `ready` watchdog bounds only `enhance()` and Mermaid, and only when the frame yields; E17 measures whether it can fire on WebKit. W4's worker purity scan gains the one specifier `@synapsium-labs/docserver/render`. Chat is unchanged. | The parent cannot terminate a hung frame the way it terminates a worker | M8.11, M8.17, M8.21 | Agreed |
+| A7 | §4.11 images | Reader images go through §5.6.3's planner, pin rule and budgets, as `data:`. No per-image op. | One asset rule | M5.8-M5.12 apply | Agreed |
+| A8 | §5.4, §3.8 | One sentence: the reader frame never fetches, and receives strings only | Keeps provenance whole | M8.4, M8.B2 | Agreed |
+| A9 | §3.10 "No configuration change", §7.3 | Precache `woff2`. Mermaid's directory goes in `globIgnores`. | A bundled Mermaid would quadruple the precache | M8.14 | Agreed |
+| A10 | §5.0 labs | Add E14-E18 | They measure the UNMEASURED rows of §5.2 | M8.B1-B8 | Agreed |
+| A11 | §0 Scope paragraph, `sections` and non-goals; §1 `shared/docs.ts` row ("the four slugs"); §2 `SECTIONS`; §4.1 and §4.3 (`SECTION_ORDER`, the section rows); §7.5 | Six sections, plus `docs-sections-v2` | G1 | M9.2, M9.3 | Agreed |
+| A12 | §0 `approach` "four narrow verbs", §2 (a), the "Never used" list, row 16, §3.4, §3.13, §6.1, §7.2 | Add `docs-log`; `log` with fixed flags and no `-n`, the 100-entry stop living in the helper; a fifth route; the census and doctor token | G4 | M9.4-M9.9, M9.12, M9.13 | Agreed |
+| A13 | §4 | A pure client line diff over two committed pins | G5 | M9.10 | Agreed |
 | A14 | §0 `http` row and §3.1 "page URLs never carry a commit", §4.3, M3.2 | Add the page key `at=<sha>`. The other pin keys stay refused. | G6, R-d | M9.11 | Ruled |
-| A15 | §4 | Reader state in ccrc's localStorage via `store.set`, under the reader prefix | G7 | M8.15 | Proposed |
-| A16 | §4.10 step 3, docs profile only | `<br>`, `<br/>` and `<br />` with no attributes become a real `br` element, never parsed HTML. All other raw HTML stays text. Chat is unchanged. W5 also amends W4's profile-equality case (W4 plan, refinement (f)): the two profiles' outcomes are equal, except on inputs that hold `<br>`, which differ only by `br` elements in the docs profile. | W5 ruling | M9.1 | Proposed |
-| A17 | §1 units, §4.1 files | Add `docs/ReaderFrame.tsx`, `docs/reader/{bridge,policy,store,seed,diff}.ts`, the L0 `parseBridgeMessage`, the `docsRunner` render job, the exact library pin in `pwa/package.json`, and §4.7's import rule: ccrc never imports `./host`, `./enhance` or `./render` into the main thread | Layer 3 | M8.10, M8.12 | Proposed |
-| A18 | §7.4 | A retirement gate before the base steps (§9) | R-b at parity | none | Proposed |
-| A19 | §7.7 | Waves W5b and W8 and their dependencies (§8) | Sequencing | none | Proposed |
-| A20 | §0 `features` | The rich layout, history, changes since and the version view join what carries over from the old preview | R-b | none | Proposed |
-| A21 | §7.10 M7.9 (W4's row; W4 plan, refinement (v)) | The PWA name rule gains one exception. The exact specifier `@<scope>/docserver` and its subpaths may appear as an import specifier in `pwa/src`, in `pwa/package.json` and `pwa/package-lock.json`, and in the `globIgnores` entry of `pwa/vite.config.ts`. Every other occurrence, in any case, stays red. The directory needle is unchanged. It lands in W8, which edits M7.9's block in `docs-parity.test.ts` in place: the one exception to that file's append-only header, recorded in W8's plan. | R-f: the word now names the library | M8.18 | Proposed |
-| A22 | §4.10 steps 2-5; §4.11's `detachUrls`, `DocLink` and `DocImage` contract and "no heading ids are generated"; §7.5 README "rendering" bullet | These apply to the plain fallback only. On the reader path, §3.4's rules (the inline and block HTML allowlists, heading ids, `data-line`) apply inside the opaque frame, whose walls are §5.1. The parent re-resolves every link through `navigate`. A `repo` answer maps to `githubBlobUrl`, as in §4.11. W8 amends the README's "rendering" bullet. | The reader renders allowlisted markup inside the frame | M8.7, M8.B1 | Proposed |
-| A23 | §7.1 "No wave needs `--server-first`" | W5b is rolled `--server-first`. Every other wave stays fleet first. | With W5b after W5 (recommended), G1's new slugs would reach W5's PWA before it knows them. If you rule W5b before W5, the order stays, and the reason narrows to W3's server, whose `DOC_SECTIONS` would otherwise meet two unknown slugs (§8). | M9.3 | Proposed |
+| A15 | §4 | Reader state in ccrc's localStorage via `store.set`, under the reader prefix | G7 | M8.15 | Agreed |
+| A16 | §4.10 step 3, docs profile only | `<br>`, `<br/>` and `<br />` with no attributes become a real `br` element, never parsed HTML. All other raw HTML stays text. Chat is unchanged. W5 also amends W4's profile-equality case (W4 plan, refinement (f)): the two profiles' outcomes are equal, except on inputs that hold `<br>`, which differ only by `br` elements in the docs profile. | W5 ruling | M9.1 | Agreed |
+| A17 | §1 units, §4.1 files | Add `docs/ReaderFrame.tsx`, `docs/reader/{bridge,policy,store,seed,diff}.ts`, the L0 `parseBridgeMessage`, the `docsRunner` render job, the exact library pin in `pwa/package.json`, and §4.7's import rule: ccrc never imports `./host`, `./enhance` or `./render` into the main thread | Layer 3 | M8.10, M8.12 | Agreed |
+| A18 | §7.4 | A retirement gate before the base steps (§9) | R-b at parity | none | Agreed |
+| A19 | §7.7 | Waves W5b and W8 and their dependencies (§8) | Sequencing | none | Agreed |
+| A20 | §0 `features` | The rich layout, history, changes since and the version view join what carries over from the old preview | R-b | none | Agreed |
+| A21 | §7.10 M7.9 (W4's row; W4 plan, refinement (v)) | The PWA name rule gains one exception. The exact specifier `@synapsium-labs/docserver` and its subpaths may appear as an import specifier in `pwa/src`, in `pwa/package.json` and `pwa/package-lock.json`, and in the `globIgnores` entry of `pwa/vite.config.ts`. Every other occurrence, in any case, stays red. The directory needle is unchanged. It lands in W8, which edits M7.9's block in `docs-parity.test.ts` in place: the one exception to that file's append-only header, recorded in W8's plan. | R-f: the word now names the library | M8.18 | Agreed |
+| A22 | §4.10 steps 2-5; §4.11's `detachUrls`, `DocLink` and `DocImage` contract and "no heading ids are generated"; §7.5 README "rendering" bullet | These apply to the plain fallback only. On the reader path, §3.4's rules (the inline and block HTML allowlists, heading ids, `data-line`) apply inside the opaque frame, whose walls are §5.1. The parent re-resolves every link through `navigate`. A `repo` answer maps to `githubBlobUrl`, as in §4.11. W8 amends the README's "rendering" bullet. | The reader renders allowlisted markup inside the frame | M8.7, M8.B1 | Agreed |
+| A23 | §7.1 "No wave needs `--server-first`" | W5b is rolled `--server-first`. Every other wave stays fleet first. | With W5b after W5 (recommended), G1's new slugs would reach W5's PWA before it knows them. If you rule W5b before W5, the order stays, and the reason narrows to W3's server, whose `DOC_SECTIONS` would otherwise meet two unknown slugs (§8). | M9.3 | Agreed |
 
 ### 7.1 Mutation rows: the reader frame and packaging (W8)
 
@@ -554,7 +555,7 @@ One table holds every rule this spec changes. New mutation rows are numbered M8.
 | M8.7 | `navigate` | `javascript:`, `data:`, `//h/x`, `/api/x`, backslash forms and `../` above the root are refused. A doc routes in-app, with its query dropped. An external link, or a `repo` answer through `githubBlobUrl`, opens only the external-link sheet. `window.open` runs only from the sheet's Open tap. The sheet names the host and highlights a foreign registrable name. | Pass `href` straight to the router or `window.open`; open an external link without the sheet; keep the query |
 | M8.8 | Seed serialiser and placement | A value with `</script><script>` and U+2028 round-trips inert. The bootstrap reads the seed as the element immediately before its own script. A heading or anchor whose id matches the seed's or a library global changes nothing. | Raw `JSON.stringify`; read the seed by id |
 | M8.9 | `changes` | Any 40 or 64 hex commit is accepted, including a stored served-commit base and a commit's parent. A non-hex sha is refused. The funnel request carries the marker. The frame never receives a URL. The reply is `changes.result`. | Restrict the base to the history list; forward a path; drop the marker |
-| M8.10 | Source scans (A2b) | As A2b, with planted controls: a `postMessage(` planted in `MockupFrame.tsx`, an `addEventListener('message'` planted in `lib/`, and an import of `@<scope>/docserver/host` planted in `pwa/src` are each red | Add any of them |
+| M8.10 | Source scans (A2b) | As A2b, with planted controls: a `postMessage(` planted in `MockupFrame.tsx`, an `addEventListener('message'` planted in `lib/`, and an import of `@synapsium-labs/docserver/host` planted in `pwa/src` are each red | Add any of them |
 | M8.11 | Watchdog | A frame that never sends `ready`, or sends a wrong nonce, is unmounted, and the plain pipeline renders once. The fallback note is the fixed text, and `why` appears nowhere in the DOM. | Remove the timer; remount in a loop; show `why` |
 | M8.12 | Library pin | An exact version with no `^`. The CSP hashes equal the embedded script bytes. `assets.json` sha256 matches. | Change one library byte without its hash |
 | M8.13 | Shell meta (M5.19 extended) | Exactly one CSP meta, exactly `frame-src 'none'` | Add `script-src`, `default-src` or `'self'` |
@@ -562,7 +563,7 @@ One table holds every rule this spec changes. New mutation rows are numbered M8.
 | M8.15 | `store.set` | Keys land under the reader prefix. A value over 64 KiB is refused. A frame-supplied doc key for another doc lands under the current doc's key. A flood past the 1 MiB budget evicts only reader-prefix keys and leaves `ccrc.fleet-snapshot.v1` writable. The seed holds only reader-prefix keys. | Store the raw key; trust the frame's doc key; skip the cap or the budget |
 | M8.16 | CI signatures and provenance | `ci.yml`'s `build-pwa` leg runs `npm audit signatures` after `npm ci`, then the provenance identity check. A tarball attested by another repo is red. | Delete either step; accept any repo |
 | M8.17 | Gate before mount | A doc over the size gate, or one the pre-scan refuses, mounts no frame | Mount first, then gate |
-| M8.18 | M7.9's library exception (A21) | Planted controls: an import of `@<scope>/docserver/frame` in a `pwa/src` file, and the exact `globIgnores` entry, stay green. The bare word in a `pwa/src` comment, in a string that is not an import specifier, under another scope (`@other/docserver`), as a longer name (`@<scope>/docserverx`), and in `pwa/vite.config.ts` outside the `globIgnores` entry, are each red. The directory needle is unchanged. | Allow any line that holds the word; allow the specifier anywhere in a file; drop the scope check |
+| M8.18 | M7.9's library exception (A21) | Planted controls: an import of `@synapsium-labs/docserver/frame` in a `pwa/src` file, and the exact `globIgnores` entry, stay green. The bare word in a `pwa/src` comment, in a string that is not an import specifier, under another scope (`@other/docserver`), as a longer name (`@synapsium-labs/docserverx`), and in `pwa/vite.config.ts` outside the `globIgnores` entry, are each red. The directory needle is unchanged. | Allow any line that holds the word; allow the specifier anywhere in a file; drop the scope check |
 | M8.19 | Copy hygiene | Text with ESC, a bidi control or a zero-width character is never passed straight to `writeText`. The sheet shows each one as a marker, with the warning. Clean text is written directly. | Call `writeText` on any text |
 | M8.20 | Mermaid gate | A doc over the fence count or total cap gets no Mermaid inlined and shows its figures as source. A fence over the per-fence cap shows as source. | Inline Mermaid for every fence; skip a cap |
 | M8.21 | Render in the worker | The library's `render()` is called only through `docsRunner`. A render over budget terminates the worker and mounts no frame. | Call `render()` on the main thread; skip the budget |
@@ -630,13 +631,13 @@ flowchart LR
 |---|---|---|---|---|
 | W4 | As planned: extraction, `RenderBoundary`, chat hardening, `docs-sw` | W1 | Its own. Later waves amend three of them: A16 (W5), A6 and A21 (W8). | Kept |
 | W5 | The Docs screen, plain, plus the docs-profile `<br>` (A16), plus Share and Export as already decided. It amends W4's profile-equality case. | W3, W4 | Base rows plus M9.1 | Amended |
-| W5b | G1, G4 and G6, on ccd, the server and the PWA. PWA files (with W5b after W5): `shared/docs.ts` (`DOC_SECTIONS`, the `at` page key, `parseDocsPage`, `docsPageUrl`, `docsApi.history`), `docs/docsTree.ts` (`SECTION_ORDER`), the index and project section counts, `DocsScreen` and `useDocsVisit` opening the `at=` commit, and `api.docs.history`. `ccd/ccd` is restamped. The rollout is `--server-first` (A23), and the agent restarts for the grant. | W3; and W5, waiting on your ruling (RD23; after recommended) | M9.2-M9.9, M9.11-M9.13 | Proposed; placement Waiting |
+| W5b | G1, G4 and G6, on ccd, the server and the PWA. PWA files (with W5b after W5): `shared/docs.ts` (`DOC_SECTIONS`, the `at` page key, `parseDocsPage`, `docsPageUrl`, `docsApi.history`), `docs/docsTree.ts` (`SECTION_ORDER`), the index and project section counts, `DocsScreen` and `useDocsVisit` opening the `at=` commit, and `api.docs.history`. `ccd/ccd` is restamped. The rollout is `--server-first` (A23), and the agent restarts for the grant. | W3; and W5, waiting on your ruling (RD23; after recommended) | M9.2-M9.9, M9.11-M9.13 | Agreed; placement Waiting |
 | W6 | Mockups, plus the M5.16 worker carve-out (A2a) | W5 | Base rows plus M9.14 | Amended |
 | W7 | Docs and release, unchanged | W6 | Base rows | Kept |
-| W8 | Reader frame, bridge, `READER_CSP`, library pin, the `docsRunner` render job and its purity-scan specifier (A6), asset inlining, the Mermaid gate, fallback, G5, G7, the version menu, labs E14-E18, A21's change to M7.9, and README prose for the reader (A22) | W5b, W6, W7, library v1 | M8.1-M8.22, M8.B1-B8, M9.10 | Proposed |
-| L1 | Scaffold, the corpus generated from today's Python renderer (golden, hostile, hostile Mermaid and clobbering cases), the markdown-it rules | none | Library CI | Proposed |
-| L2 | The layout made embeddable: options, namespaced keys, scrubbed defaults, footnote styles; a self-hosted single-file Mermaid with elkjs checked, `secure` extended and `maxTextSize`/`maxEdges` pinned; fonts with the OFL | L1 | Library CI | Proposed |
-| L3 | `frameDocument`, the frame bootstrap and click guard as hashed assets, and `host` for other viewers; v1 published with provenance and a build attestation | L2 | Library CI | Proposed |
+| W8 | Reader frame, bridge, `READER_CSP`, library pin, the `docsRunner` render job and its purity-scan specifier (A6), asset inlining, the Mermaid gate, fallback, G5, G7, the version menu, labs E14-E18, A21's change to M7.9, and README prose for the reader (A22) | W5b, W6, W7, library v1 | M8.1-M8.22, M8.B1-B8, M9.10 | Agreed |
+| L1 | Scaffold, the corpus generated from today's Python renderer (golden, hostile, hostile Mermaid and clobbering cases), the markdown-it rules | none | Library CI | Agreed |
+| L2 | The layout made embeddable: options, namespaced keys, scrubbed defaults, footnote styles; a self-hosted single-file Mermaid with elkjs checked, `secure` extended and `maxTextSize`/`maxEdges` pinned; fonts with the OFL | L1 | Library CI | Agreed |
+| L3 | `frameDocument`, the frame bootstrap and click guard as hashed assets, and `host` for other viewers; v1 published with provenance and a build attestation | L2 | Library CI | Agreed |
 
 **If you rule W5b before W5.** W5b then depends on W3 only, and no Docs screen exists yet.
 - **Files.** W5b ships its ccd, server and `shared/docs.ts` parts only. `docs/docsTree.ts`, the section counts, `DocsScreen`, `useDocsVisit` and `api.docs.history` are W5's new files (base §4.1), so W5 builds them with six sections and the `at=` key from the start.
@@ -699,7 +700,7 @@ flowchart TB
 
 ## 10. Decisions
 
-Rows marked Ruled restate R-a to R-f. Rows marked Proposed are the coordinator's and need your approval. Rows marked Waiting need your ruling.
+Rows marked Ruled restate R-a to R-f. Rows marked Agreed are the coordinator's and need your approval. Rows marked Waiting need your ruling.
 
 | # | Decision | Options considered | Chosen, and why | Status |
 |---|---|---|---|---|
@@ -707,33 +708,33 @@ Rows marked Ruled restate R-a to R-f. Rows marked Proposed are the coordinator's
 | RD2 | What stays per product | Share transport or hosting; keep them apart | Each keeps transport, auth, content source and hosting (R-a) | Ruled |
 | RD3 | Your docs server | Keep the standalone server; ccrc's reader | ccrc's reader at `CCRC_ORIGIN` behind the passkey, at parity (R-b) | Ruled |
 | RD4 | W4 and W5 | Fold the library into W4 or W5 | W4 unchanged, W5 plain plus `<br>` (R-a) | Ruled |
-| RD5 | Layering | Library with I/O; pure library | Three layers, with the library pure (§2) | Proposed |
-| RD6 | Library API | Today's script as is; adapters | `render`, `frameDocument`, `enhance`, `host`, `assets`, `conformance`; versioned bridge | Proposed |
-| RD7 | Rules | Python port; markdown-it in TypeScript | CommonMark plus GFM on markdown-it, with today's allowlist | Proposed |
-| RD8 | Highlighter | Pygments CSS; highlight.js | highlight.js, already a PWA dependency. Code tokens are compared as text. | Proposed |
-| RD9 | Distribution | Git dependency; vendoring; npm | npm with provenance, exact pin, `npm audit signatures`, a provenance identity check, Mermaid kept out of the precache | Proposed |
-| RD10 | Licence and name | MIT; Apache-2.0 | MIT (R-c). The library and its repo are `docserver`, the package `@<scope>/docserver` (R-f). | Ruled |
-| RD11 | Third-party licences | Ship as is; fix | Fonts with the OFL text, Mermaid notices, elkjs excluded if present | Proposed |
-| RD12 | Frame shape | Same-origin frame; opaque srcdoc | `sandbox="allow-scripts"` srcdoc, `READER_CSP` with hashes only | Proposed |
-| RD13 | Bytes into the frame | Frame fetches; parent fetches | Parent only. Images and fonts as `data:`. Mermaid only when there is a fence and the doc passes the Mermaid gate. | Proposed |
-| RD14 | Bridge | Window messages; one port | One `MessageChannel` on first load, bound by a nonce; 8 frame-to-parent ops and 3 parent-to-frame ops; an L0 parser with stated limits | Proposed |
-| RD15 | Failure path | Error page; plain pipeline | A watchdog, then W4/W5's plain pipeline | Proposed |
-| RD16 | G1 sections | Keep four; add two | Add `vision` and `promise`, with `docs-sections-v2` | Proposed |
-| RD17 | G4 history | Literal pathspec; section-wide filter | New `docs-log` verb, filtered over the section, stopping after 100 matches | Proposed |
-| RD18 | G5 changes since | A `docs-diff` verb; a client diff | Client diff of two `docs-show` reads | Proposed |
+| RD5 | Layering | Library with I/O; pure library | Three layers, with the library pure (§2) | Agreed |
+| RD6 | Library API | Today's script as is; adapters | `render`, `frameDocument`, `enhance`, `host`, `assets`, `conformance`; versioned bridge | Agreed |
+| RD7 | Rules | Python port; markdown-it in TypeScript | CommonMark plus GFM on markdown-it, with today's allowlist | Agreed |
+| RD8 | Highlighter | Pygments CSS; highlight.js | highlight.js, already a PWA dependency. Code tokens are compared as text. | Agreed |
+| RD9 | Distribution | Git dependency; vendoring; npm | npm with provenance, exact pin, `npm audit signatures`, a provenance identity check, Mermaid kept out of the precache | Agreed |
+| RD10 | Licence and name | MIT; Apache-2.0 | MIT (R-c). The library and its repo are `docserver`, the package `@synapsium-labs/docserver` (R-f). | Ruled |
+| RD11 | Third-party licences | Ship as is; fix | Fonts with the OFL text, Mermaid notices, elkjs excluded if present | Agreed |
+| RD12 | Frame shape | Same-origin frame; opaque srcdoc | `sandbox="allow-scripts"` srcdoc, `READER_CSP` with hashes only | Agreed |
+| RD13 | Bytes into the frame | Frame fetches; parent fetches | Parent only. Images and fonts as `data:`. Mermaid only when there is a fence and the doc passes the Mermaid gate. | Agreed |
+| RD14 | Bridge | Window messages; one port | One `MessageChannel` on first load, bound by a nonce; 8 frame-to-parent ops and 3 parent-to-frame ops; an L0 parser with stated limits | Agreed |
+| RD15 | Failure path | Error page; plain pipeline | A watchdog, then W4/W5's plain pipeline | Agreed |
+| RD16 | G1 sections | Keep four; add two | Add `vision` and `promise`, with `docs-sections-v2` | Agreed |
+| RD17 | G4 history | Literal pathspec; section-wide filter | New `docs-log` verb, filtered over the section, stopping after 100 matches | Agreed |
+| RD18 | G5 changes since | A `docs-diff` verb; a client diff | Client diff of two `docs-show` reads | Agreed |
 | RD19 | G6 commit in page URLs | In-visit state; `at=<sha>` | `at=<sha>` (R-d). `only` and `latest` stay in-visit state. | Ruled |
-| RD20 | G7 reader state | Server storage; per-device | ccrc localStorage through `store.set`, per device, under its own prefix and budget | Proposed |
+| RD20 | G7 reader state | Server storage; per-device | ccrc localStorage through `store.set`, per device, under its own prefix and budget | Agreed |
 | RD21 | G3 outside roots | Serve non-git trees; move; drop | Moved under ccd's projects root by you, as a retirement-gate step (R-e) | Ruled |
-| RD22 | G9 HTML specs | A looser sandbox; W6's frame | W6's frame, unchanged | Proposed |
+| RD22 | G9 HTML specs | A looser sandbox; W6's frame | W6's frame, unchanged | Agreed |
 | RD23 | W5b placement | Before W5; after W5 | After W5 recommended. §8 says what changes if you rule before. | Waiting |
-| RD24 | When the frame lands | In W5; a new W8 | W8, gated on library v1 | Proposed |
+| RD24 | When the frame lands | In W5; a new W8 | W8, gated on library v1 | Agreed |
 | RD25 | Library programme start | After W5; now | Now, in parallel with W4 and W5, recommended | Waiting |
-| RD26 | Retirement | ccrc acts; you act | A parity gate, then your steps only, mapping removed first | Proposed |
+| RD26 | Retirement | ccrc acts; you act | A parity gate, then your steps only, mapping removed first | Agreed |
 | RD27 | npm scope | Any scope you hold | Your choice | Waiting |
-| RD28 | Where `render()` runs | In the frame; in W4's parse worker | The parse worker, which can be terminated. Only `enhance()` and Mermaid run in the frame. | Proposed |
-| RD29 | W5b rollout order | Fleet first, with W5 dropping unknown slugs; server first | Server first, so W5 needs no change | Proposed |
-| RD30 | Port binding | First load only; first load plus a nonce echoed in `ready` | The nonce, because the first-load rule rests on desktop Chromium labs only | Proposed |
-| RD31 | External links from the frame | Open on the frame's tap; a parent sheet | A parent sheet that names the host and supplies the tap | Proposed |
+| RD28 | Where `render()` runs | In the frame; in W4's parse worker | The parse worker, which can be terminated. Only `enhance()` and Mermaid run in the frame. | Agreed |
+| RD29 | W5b rollout order | Fleet first, with W5 dropping unknown slugs; server first | Server first, so W5 needs no change | Agreed |
+| RD30 | Port binding | First load only; first load plus a nonce echoed in `ready` | The nonce, because the first-load rule rests on desktop Chromium labs only | Agreed |
+| RD31 | External links from the frame | Open on the frame's tap; a parent sheet | A parent sheet that names the host and supplies the tap | Agreed |
 
 ## Where things stand
 
@@ -745,14 +746,13 @@ Rows marked Ruled restate R-a to R-f. Rows marked Proposed are the coordinator's
 - The library is MIT (R-c).
 - Page URLs may carry a commit as `at=<sha>` for the version view (R-d).
 - Roots outside ccd's projects root are moved under it, by you, as a retirement-gate step, only when no live session works in them (R-e).
-- The library and its repo are named `docserver`, and the package is `@<scope>/docserver` (R-f).
+- The library and its repo are named `docserver`, and the package is `@<scope>/docserver` (R-f), with the scope `@synapsium-labs` (R-g).
+- The library programme starts now. The repo is private until v1 and public from v1 (R-g).
+- This spec, its Agreed rows in §10 and its Agreed amendments in §7, approved as written (R-g). Each wave's plan still comes to you for review.
 
 ### Waiting on you
 
-1. The npm scope for `@<scope>/docserver`.
-2. W5b's placement, before or after W5 (after recommended; §8 says what changes if you rule before).
-3. Whether the library programme starts now, in parallel with W4 and W5 (yes recommended).
-4. Approval of the Proposed rows in §10 and of the Proposed amendments in §7.
+1. W5b's placement, before or after W5 (after recommended; §8 says what changes if you rule before).
 
 ### Later
 
