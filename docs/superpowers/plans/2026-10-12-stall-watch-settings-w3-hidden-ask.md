@@ -351,9 +351,24 @@ held in reserve, and assigned to this wave by the coordinator's ruling R38. Two 
   gate's sender, for as long as the dialog stands (3 h measured).
 - **Not done:** carrying every state. Background work after the main Stop keeps writing `working`, which the card,
   the dispatch busy check and the operator's reading of a session rely on; the operator has not ruled that away.
-- **Pinned by:** `server/test/session-hook-subagent-ask.test.ts`; mutation rows, measured out of tree at the Task 1 commit: M1 (delete the block) → 4 failed (a subagent PreToolUse after a PermissionRequest question leaves waiting and the questions; a subagent PostToolUse does too, and so do many in a row; the PreToolUse question arm is kept the same way; an approval dialog is kept the same way); M2 (drop `"$prev_state" == waiting &&`) → 1 failed (scope: a subagent tool event over done still writes working, as before); M3 (drop `-n "$paid" &&`) → 1 failed (control: the main thread answering (its own PostToolUse) ends the wait and clears the ask).
+- **Pinned by:** `server/test/session-hook-subagent-ask.test.ts` (13 cases); mutation rows, measured out of tree at the
+  fix-round-1 commit (hook + test), each restored and `cmp`-checked:
+  M1 (delete the carry block) → 7 failed (a subagent PreToolUse after a PermissionRequest question leaves waiting and the questions; a subagent PostToolUse does too, and so do many in a row; the PreToolUse question arm is kept the same way; an approval dialog is kept the same way; the stamp and the event still move, for the delegates hold and the frozen arm; a main-thread wait survives a SubagentStop and a SubagentStart, and is not flipped to subagent-raised; the interrupted flag is carried with the wait);
+  M2 (drop `"$prev_state" == waiting &&`) → 1 failed (scope: a subagent tool event over done still writes working, as before);
+  M3 (drop `-n "$paid" &&` from the carry condition) → 1 failed (control: the main thread answering (its own PostToolUse) ends the wait and clears the ask);
+  M7 (drop the event-type conjunct) → 1 failed (Review Focus 1 scope pin: a subagent PermissionRequest over a main-thread question writes its own approval);
+  M8 (drop the `interrupted` carry in the block) → 1 failed (the interrupted flag is carried with the wait);
+  M9 (drop the provenance condition, `w_by != subagent`) → 2 failed (a subagent's own approved dialog ends at its next tool event (working, no ask); the same holds after a Stop, and across a SubagentStop that carries the provenance);
+  M10 (stop preserving `waitBy` in the SubagentStart/SubagentStop block) → 1 failed (the same holds after a Stop, and across a SubagentStop that carries the provenance);
+  M11 (never record `waitBy` on a fresh subagent wait) → 3 failed (a subagent's own approved dialog ends at its next tool event (working, no ask); the same holds after a Stop, and across a SubagentStop that carries the provenance; Review Focus 1 scope pin: a subagent PermissionRequest over a main-thread question writes its own approval).
+- **Departure `carry-only-a-main-thread-wait` (task review, Important 1):** the carry now applies only to a wait the
+  main thread raised. The hook records an additive hookstate key `waitBy: "subagent"` when a subagent's own event freshly
+  sets `waiting`, preserves it across the SubagentStart/SubagentStop carry, and the D-4039 block skips a stored
+  subagent-raised wait, so a subagent's approved dialog ends at its next tool event as it did before. It took no number.
 - **Cost if wrong:** a stale `waiting` survives background work after a dialog was dismissed without a main-thread
-  event; the next main-thread event clears it, as it would without subagents.
+  event; the next main-thread event clears it, as it would without subagents. A residual race remains: a subagent hook
+  run that reads `prev_state` before the main thread's PermissionRequest renames its file, and renames after it, still
+  erases the ask (the window is one hook run; the file is last-writer-wins by design).
 
 ### D-4040 `dialog-cap-clock-ignores-inbound-mail`
 
