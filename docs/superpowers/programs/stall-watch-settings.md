@@ -28,7 +28,7 @@ time.
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
 | 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merged `6e4524164` 2026-10-12; run 322 closed `done`, `final:true` (R37) |
-| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | review 397 accepted; fix round 1 (R40): a carried wait keeps its stamp |
+| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | fix round 1 (R40) at `24e4eebc6`; review run 402 dispatched (R41) |
 
 ## Decisions & deviations
 
@@ -874,6 +874,24 @@ time.
     4. F4 and F5: words. Review Focus 2 is corrected.
   - Not merging as is. The three new cells (the race, repeat pushes, stale minting) are user-visible, and item 1
     removes or narrows each at the cost of four small files.
+
+- **R41 (2026-10-12 20:40)**, wave 3's fix round 1 is verified, and its scoped review is dispatched.
+  - Run 394's move back to `working` was refused `cap-concurrency` (7 of 7) at 19:47. A bounded waiter moved it at
+    20:14:08; the worker had the fix-round mail (4394) and a correction (4395) and worked meanwhile.
+  - Wave-done, mail 4407 from `ccrc-pwa-bright-cove`. `suite: unrun`, no full suite; per-file tables green,
+    `session-hook.test.ts` 450/450 alone, both `tsc` clean, citation instrument identical.
+    - Item 1: the carry keeps `updatedAt` and `event`, writes `aliveAt`, and is decided from one fresh read. The age
+      cut reads the later of `updatedAt` and `aliveAt`, and `HookState` is unchanged. The race's main-write-first
+      variant now ends `working` (pinned). The read-to-`mv` variant and the erase direction are named residuals.
+    - Item 2: SubagentStart/SubagentStop forks 7 (base), 8, now 6. A subagent tool event over `waiting` pays +1.
+    - Items 3 and 4: words, as ruled.
+    - Two of the new mutation rows cannot red; the worker calls them unreachable redundant checks.
+    - The worker routes, unedited: README :5413-5417 ("a write older than 30 minutes") is now imprecise under
+      claim 1197; plan lines outside the round's permitted edits read stale (:53, :46-47, the Task 1 snippet).
+  - Re-measured: tip = PR #362's head = `24e4eebc6`, `merge-tree` clean against `main` `2d1835188`, eight commits
+    in five files since `efb4842b7`. The server accepted the fingerprint: run 394 `awaiting-review`. CI was running.
+  - Review run 402 dispatched 20:40:32 to the fresh `ccrc-pwa-brisk-prairie`, scoped to the round with ten checks,
+    the panel, and whole-wave properties; brief `.superpowers/sdd/stall-watch-settings/w3-fr1-review-brief.md`.
 
 ## Carried constraints (reviewers get these)
 
