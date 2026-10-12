@@ -558,7 +558,9 @@ export const collectEvidenceOf = (a: CollectAudit): CollectEvidence | null =>
  *    under the next ask.
  *  - `streak`, `die`, `held`, `presence`: the four continuity clocks attention reads.
  *  - `evidence`: the latest document's.
- *  - `feedEpisode`: the key of the feed episode whose row was written, or none (`collectFeedStep`). */
+ *  - `feedEpisode`: the key of the feed episode whose row was written, or none (`collectFeedStep`).
+ *  - `feedOutlivesObservations`: whether that episode is one an observation does not end (a refusal's or a die's, which
+ *    the act's cue says so itself); false with no episode. Read only by `collectFeedStep`'s observe arm. */
 export interface CollectEntry {
   readonly idGen: number;
   readonly obs: CollectObservation | null;
@@ -577,6 +579,7 @@ export interface CollectEntry {
   readonly presence: CollectPresence | null;
   readonly evidence: CollectEvidence;
   readonly feedEpisode: string | null;
+  readonly feedOutlivesObservations: boolean;
 }
 
 /** A first sighting, and every id after a restart: nothing observed, nothing counted, due at once. `gen` is a clear
@@ -586,6 +589,7 @@ export const collectFirstSighting = (gen: number): CollectEntry => ({
   failing: COLLECT_RUN_NONE, verbFailed: COLLECT_RUN_NONE, terminal: COLLECT_RUN_NONE,
   scheduleMono: null, refusedAtMono: null, wouldCollectAtMono: null, dieAtMono: null,
   streak: null, die: null, held: null, presence: null, evidence: { runId: null, leaf: null }, feedEpisode: null,
+  feedOutlivesObservations: false,
 });
 
 /** One step's context: `now` is the answer's ARRIVAL (or the executor's decision), read in its own callback; `gen`
@@ -710,7 +714,8 @@ export function collectAfterAct(e: CollectEntry, r: CollectResult, s: CollectSte
   };
   switch (r.kind) {
     case 'collected':
-      return { ...collectFirstSighting(s.gen), evidence: e.evidence, feedEpisode: e.feedEpisode };
+      return { ...collectFirstSighting(s.gen), evidence: e.evidence, feedEpisode: e.feedEpisode,
+        feedOutlivesObservations: e.feedOutlivesObservations };
     case 'refused': {
       const silent = isCollectVerdictWord(r.word) && COLLECT_VERDICT_TABLE[r.word].pace === 'silent';
       const runs: Partial<CollectEntry> = silent
@@ -872,11 +877,15 @@ export function collectAttentionCauses(e: CollectEntry): CollectAttentionCause[]
 
 /** What one step means for the feed (spec §5.9's quiet-on-repeat, as the collector reads it). Task 5's
  *  `collectFeedCueOfAudit` and `collectFeedCueOfAct` say which cue each answer carries.
- *  - `row`: one row per episode of `key`; a repeat is quiet, and any other key ends the episode.
- *  - `observe`: an observation of `token`: no row; a would-collect episode of that token stands, any other ends.
+ *  - `row`: one row per episode of `key`; a repeat is quiet, and any other key ends the episode. A row cue with
+ *    `outlivesObservations` opens an episode that an observation does not end: only an act's refusal or die says so,
+ *    because ccd answers the same refusal every cycle between two collectable audits. It still ends at any row cue of
+ *    another key, at forgetting the id and at a restart.
+ *  - `observe`: an observation of `token`: no row. It ends an episode, except a would-collect episode of that token and
+ *    an episode that outlives observations, which stand.
  *  - `quiet`: no row, and the standing episode stands. */
 export type CollectFeedCue =
-  | { readonly kind: 'row'; readonly key: string }
+  | { readonly kind: 'row'; readonly key: string; readonly outlivesObservations?: true }
   | { readonly kind: 'observe'; readonly token: CollectToken }
   | { readonly kind: 'quiet' };
 
@@ -890,18 +899,22 @@ export const collectWouldCollectKey = (token: CollectToken): string => `${COLLEC
 export const collectWouldCollectStands = (e: CollectEntry): boolean =>
   e.feedEpisode !== null && e.feedEpisode.startsWith(COLLECT_WOULD_COLLECT_PREFIX);
 
-/** The feed episode after one step: the entry, and the key of the episode it opened (a row is due), or null. */
+/** The feed episode after one step: the entry, and the key of the episode it opened (a row is due), or null. The row
+ *  arm stores the cue's own `outlivesObservations` beside the key, for a repeat of the key as for a new one; the observe
+ *  arm reads that flag and never the key's text, because an audit verdict is any string ccd prints. */
 export function collectFeedStep(e: CollectEntry, cue: CollectFeedCue): { readonly entry: CollectEntry; readonly opened: string | null } {
   switch (cue.kind) {
     case 'quiet': return { entry: e, opened: null };
     case 'observe':
-      return e.feedEpisode === null || e.feedEpisode === collectWouldCollectKey(cue.token)
+      return e.feedEpisode === null || e.feedEpisode === collectWouldCollectKey(cue.token) || e.feedOutlivesObservations
         ? { entry: e, opened: null }
-        : { entry: { ...e, feedEpisode: null }, opened: null };
-    case 'row':
+        : { entry: { ...e, feedEpisode: null, feedOutlivesObservations: false }, opened: null };
+    case 'row': {
+      const outlives = cue.outlivesObservations === true;
       return e.feedEpisode === cue.key
-        ? { entry: e, opened: null }
-        : { entry: { ...e, feedEpisode: cue.key }, opened: cue.key };
+        ? { entry: e.feedOutlivesObservations === outlives ? e : { ...e, feedOutlivesObservations: outlives }, opened: null }
+        : { entry: { ...e, feedEpisode: cue.key, feedOutlivesObservations: outlives }, opened: cue.key };
+    }
   }
 }
 
@@ -1348,9 +1361,12 @@ export function collectFeedAnswerBody(id: string, runId: number | null, word: st
 }
 
 /** The feed cue of one AUDIT answer (spec §5.10: one row per (id, word) episode, quiet on repeats), which the lane
- *  hands Task 4's `collectFeedStep` after each fold. A `collectable` answer is an observation: no row, and a
- *  would-collect episode of its own token stands. Every other answer is a row keyed by its word. A key is memory
- *  only, compared and never shown. A shadow would-collect is `{ kind: 'row', key: collectWouldCollectKey(token) }`. */
+ *  hands Task 4's `collectFeedStep` after each fold. A `collectable` answer is an observation: no row; a would-collect
+ *  episode of its own token stands, and so does a refusal's or a die's (`outlivesObservations`, set by the ACT's cue),
+ *  while every other episode ends. Every other answer is a row keyed by its word, and none outlives an observation: an
+ *  audit verdict spelled like an act's key (`refused in-use`) is still an audit's episode, which the flag, never the
+ *  key's text, decides. A key is memory only, compared and never shown. A shadow would-collect is
+ *  `{ kind: 'row', key: collectWouldCollectKey(token) }`. */
 export function collectFeedCueOfAudit(a: CollectAudit): CollectFeedCue {
   switch (a.kind) {
     case 'collectable': return { kind: 'observe', token: a.token };
@@ -1361,13 +1377,16 @@ export function collectFeedCueOfAudit(a: CollectAudit): CollectFeedCue {
 }
 
 /** The feed cue of one ACT outcome (spec §5.10): every outcome is a row keyed by its kind and word, an act's
- *  `no-document` apart from an audit's. */
+ *  `no-document` apart from an audit's. A refusal and a die, of any word, `flock-unavailable` included, outlive the
+ *  observations between acts: ccd answers the same refusal every cycle, behind a collectable audit each time, so the
+ *  one row of the episode stands until another row cue ends it. `failed` and an act's `no-document` do not, because
+ *  each may have acted: one row per act. */
 export function collectFeedCueOfAct(r: CollectResult): CollectFeedCue {
   switch (r.kind) {
     case 'collected': return { kind: 'row', key: 'collected' };
-    case 'refused': return { kind: 'row', key: `refused ${r.word}` };
+    case 'refused': return { kind: 'row', key: `refused ${r.word}`, outlivesObservations: true };
     case 'failed': return { kind: 'row', key: `failed ${r.token}` };
-    case 'die': return { kind: 'row', key: `die ${r.word}` };
+    case 'die': return { kind: 'row', key: `die ${r.word}`, outlivesObservations: true };
     case 'no-document': return { kind: 'row', key: 'act no-document' };
   }
 }

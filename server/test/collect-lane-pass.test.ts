@@ -17,12 +17,13 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CHILD_RECLAIM_SWEEP_MS, COLLECT_AUDIT_STALL_MS, COLLECT_OBSERVE_INTERVAL_MS } from '../src/watch.js';
+import { CHILD_RECLAIM_DEFER_CEILING_MS } from '../src/childReclaimSweep.js';
 import {
   COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, COLLECT_LANE_LIVE_MARKER, collectFeedSwitchBody,
 } from '../src/collectLane.js';
 import { COLLECT_CAP, RECLAIM_PAUSE_CAP } from '../src/ccdargv.js';
 import { COLLECT_BOX_LABELS } from '../../shared/api.js';
-import { collectRig, type CollectRig } from './collectLaneFixture.js';
+import { collectRig, type CcdAnswer, type CollectRig } from './collectLaneFixture.js';
 import { FULL_CAPS } from './collectTempRootFixture.js';
 import { codeOnly } from './sourceScan.js';
 
@@ -401,5 +402,60 @@ describe('the collector’s items reach the frame through the list’s ONE write
     late.release(); await f.settled();                      // pass 1's last call answers no document, after pass 2 published
     expect(f.boxWide(await f.attention()).map((a) => a.word), 'pass 2’s answers stand: pass 1 never publishes over them')
       .not.toContain('no-document');
+  });
+});
+
+describe('a refusal or a die that repeats every cycle writes ONE feed row, and paces as ever (spec §5.10, §5.9)', () => {
+  /** ccd's `ws-collect` refusal document, with a detail a case counts its rows by. */
+  const refusal = (detail: string): CcdAnswer => ({ code: 0, stdout: JSON.stringify({ refused: 'in-use', detail, paths: [] }) });
+  /** ccd's exit-0 audit verdict document, as `_ws_collect_audit_doc` prints it for a refusal word. */
+  const verdictDoc = (f: CollectRig, id: string, word: string, detail: string): CcdAnswer => ({ code: 0, stdout: JSON.stringify({
+    session: id, mode: 'collect', exists: true, collect: { leaf: path.join(f.home, '.cc-tmp', id), records: [], witness: null },
+    verdict: word, detail }) });
+  /** The collector's answer rows for `id` that carry `said`. */
+  const rowsSaying = (f: CollectRig, id: string, said: string) =>
+    f.feed().filter((e) => e.sessionId === id && e.title === COLLECT_FEED_TITLE.answer && e.body.includes(said));
+  /** The gaps between an id's consecutive ws-collect calls. */
+  const gaps = (f: CollectRig, id: string): number[] => {
+    const at = f.collects(id).map((c) => c.mono);
+    return at.slice(1).map((m, i) => m - at[i]!);
+  };
+  const live = async (): Promise<CollectRig> => {
+    const f = await collectRig();
+    f.pastHoldOff(); await f.goLive();
+    f.witness('demo-a');
+    return f;
+  };
+
+  it('a retryable refusal on every act: one row over three cycles, and the cycles stay a ceiling apart', async () => {
+    const f = await live();
+    f.scripts.set('demo-a', (verb) => (verb === 'collect' ? refusal('refusal-d') : undefined));
+    await f.passesUntil(() => f.collects('demo-a').length >= 3, 200);
+    expect(rowsSaying(f, 'demo-a', 'refusal-d'), 'one row, not one per cycle').toHaveLength(1);
+    expect(f.collects('demo-a').length).toBeGreaterThanOrEqual(3);
+    for (const gap of gaps(f, 'demo-a')) expect(gap, 'the pacing is unmoved').toBeGreaterThanOrEqual(CHILD_RECLAIM_DEFER_CEILING_MS);
+  });
+
+  it('a recognised pre-lock die on every act: one row over three cycles, and the cycles stay a ceiling apart', async () => {
+    const f = await live();
+    f.scripts.set('demo-a', (verb) => (verb === 'collect' ? f.answers.lockUnopenable('demo-a') : undefined));
+    await f.passesUntil(() => f.collects('demo-a').length >= 3, 200);
+    expect(rowsSaying(f, 'demo-a', 'lock-unopenable'), 'one row, not one per cycle').toHaveLength(1);
+    expect(f.collects('demo-a').length).toBeGreaterThanOrEqual(3);
+    for (const gap of gaps(f, 'demo-a')) expect(gap, 'the pacing is unmoved').toBeGreaterThanOrEqual(CHILD_RECLAIM_DEFER_CEILING_MS);
+  });
+
+  it('CONTROL: an audit verdict between two refusals ends the episode, so the refusal writes a second row', async () => {
+    const f = await live();
+    let audited = 0;
+    f.scripts.set('demo-a', (verb) => {
+      if (verb === 'collect') return refusal('refusal-d');
+      audited += 1;
+      return audited === 3 ? verdictDoc(f, 'demo-a', 'in-use', 'audit-d') : undefined;   // after the first refusal's cycle
+    });
+    await f.passesUntil(() => f.collects('demo-a').length >= 3, 200);
+    expect(audited, 'the verdict was answered').toBeGreaterThanOrEqual(3);
+    expect(rowsSaying(f, 'demo-a', 'audit-d'), 'the audit verdict\'s own row').toHaveLength(1);
+    expect(rowsSaying(f, 'demo-a', 'refusal-d'), 'a refusal before it and a refusal after it').toHaveLength(2);
   });
 });

@@ -75,9 +75,9 @@ describe('the feed cue of each answer (spec §5.10): an observation writes no ro
 
   it('acts', () => {
     expect(collectFeedCueOfAct(COLLECTED)).toEqual({ kind: 'row', key: 'collected' });
-    expect(collectFeedCueOfAct(refusedAct('in-use'))).toEqual({ kind: 'row', key: 'refused in-use' });
+    expect(collectFeedCueOfAct(refusedAct('in-use'))).toEqual({ kind: 'row', key: 'refused in-use', outlivesObservations: true });
     expect(collectFeedCueOfAct(failedAct('probe-unmeasured'))).toEqual({ kind: 'row', key: 'failed probe-unmeasured' });
-    expect(collectFeedCueOfAct(DIE)).toEqual({ kind: 'row', key: 'die lock-unopenable' });
+    expect(collectFeedCueOfAct(DIE)).toEqual({ kind: 'row', key: 'die lock-unopenable', outlivesObservations: true });
     expect(collectFeedCueOfAct(ACT_NO_DOCUMENT)).toEqual({ kind: 'row', key: 'act no-document' });
   });
 

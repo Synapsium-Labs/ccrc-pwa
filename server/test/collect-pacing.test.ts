@@ -14,7 +14,8 @@ import {
 import {
   COLLECT_CHANGED_RECENTLY_SPAN_MS, COLLECT_PROBE_CLASS, COLLECT_RUN_NONE, COLLECT_VERDICT_TABLE, COLLECT_VERDICT_WORDS,
   collectAfterAct, collectAfterAudit, collectAfterHold, collectAfterPresence, collectAfterWouldCollect,
-  collectAttentionCauses, collectDue, collectFeedStep, collectFirstSighting, collectIdleSchedule, collectLicence,
+  collectAttentionCauses, collectDue, collectFeedCueOfAct, collectFeedCueOfAudit, collectFeedStep, collectFirstSighting,
+  collectIdleSchedule, collectLicence,
   collectNextAskMono, collectRefusalClass, collectRipe, collectRunTier, collectWouldCollectKey, collectWouldCollectStands,
   type CollectAudit, type CollectEntry, type CollectResult,
 } from '../src/collectLane.js';
@@ -527,6 +528,81 @@ describe('the hold and the presence defer', () => {
   });
 });
 
+describe('every answer but a collectable one ends the hold\'s, presence\'s and the die\'s continuity, and the schedule too unless it is changed-recently\'s own (spec §5.10, pacing)', () => {
+  const IDLE = WALL0 / 1000 + 3600;
+  /** A: a changed-recently streak with its schedule, then a hold. B: a die, then a presence defer. */
+  const setups = () => ({
+    a: id().audit(verdict('changed-recently', IDLE), 0).hold(MIN),
+    b: id().act(DIE, 0).presence(MIN),
+  });
+  const readA = (e: CollectEntry) => [e.held, e.streak?.sinceMono ?? null, e.scheduleMono];
+  const readB = (e: CollectEntry) => [e.die, e.presence];
+  const apply = (a: CollectAudit, mono = 2 * MIN) => {
+    const { a: ia, b: ib } = setups();
+    ia.audit(a, mono); ib.audit(a, mono);
+    return { a: ia.e(), b: ib.e() };
+  };
+
+  it('the setups hold what the rows below end', () => {
+    const { a, b } = setups();
+    expect(a.e().held, 'A: the hold').not.toBeNull();
+    expect(a.e().streak?.sinceMono, 'A: the changed-recently streak').toBe(0);
+    expect(a.e().scheduleMono, 'A: the schedule').not.toBeNull();
+    expect(b.e().die, 'B: the die').not.toBeNull();
+    expect(b.e().presence, 'B: the presence defer').not.toBeNull();
+  });
+
+  const ENDING: readonly (readonly [string, CollectAudit])[] = [
+    ['a terminal verdict (quarantine-kept)', verdict('quarantine-kept')],
+    ['not-witnessed', verdict('not-witnessed')],
+    ['an unmeasured box-wide probe', unmeasured('flock')],
+    ['an unmeasured per-leaf probe', unmeasured('mode')],
+    ['an unmeasured load-sensitive probe', unmeasured('checkouts')],
+    ['no document', NO_DOCUMENT],
+    ['an unreadable document', UNREADABLE],
+    ['a verdict no build knows', verdict('a-verdict-no-build-knows')],
+  ];
+  it.each(ENDING)('%s ends every clock and the schedule', (_l, answer) => {
+    const { a, b } = apply(answer);
+    expect(readA(a)).toEqual([null, null, null]);
+    expect(readB(b)).toEqual([null, null]);
+  });
+
+  it('in-use, a deferral word: the hold and the schedule end, a NEW streak starts at the answer, and the die and presence end', () => {
+    const { a, b } = apply(verdict('in-use'));
+    expect(readA(a)).toEqual([null, 2 * MIN, null]);
+    expect(readB(b)).toEqual([null, null]);
+  });
+
+  it('changed-recently with an idleAt: the hold ends, the streak continues from its first answer, and the schedule is the new answer\'s', () => {
+    const later = IDLE + 600;
+    const { a, b } = apply(verdict('changed-recently', later));
+    const at = collectIdleSchedule(later, { monoMs: 2 * MIN, wallMs: WALL0 + 2 * MIN }, PASS);
+    expect(at.kind).toBe('at');
+    expect(readA(a)).toEqual([null, 0, at.kind === 'at' ? at.monoMs : null]);
+    expect(a.scheduleMono, 'not A\'s old schedule').not.toBe(setups().a.e().scheduleMono);
+    expect(readB(b)).toEqual([null, null]);
+  });
+
+  it('changed-recently with no idleAt: the hold ends, the streak continues, and there is NO schedule, not A\'s old one', () => {
+    const { a, b } = apply(verdict('changed-recently', null));
+    expect(readA(a)).toEqual([null, 0, null]);
+    expect(readB(b)).toEqual([null, null]);
+  });
+
+  it('CONTROL: a collectable answer, fresh or stale, ends the streak and the schedule but not the hold, the die or presence', () => {
+    for (const observes of [true, false]) {
+      const { a: ia, b: ib } = setups();
+      const a = collectAfterAudit(ia.e(), collectable(T1), step(2 * MIN, 50), observes);
+      const b = collectAfterAudit(ib.e(), collectable(T1), step(2 * MIN, 50), observes);
+      expect(a.held, `A, observes=${observes}: the hold stands`).toEqual(ia.e().held);
+      expect([a.streak, a.scheduleMono], `A, observes=${observes}: the streak and the schedule end`).toEqual([null, null]);
+      expect(b.die, `B, observes=${observes}: the die stands`).toEqual(ib.e().die);
+      expect(b.presence, `B, observes=${observes}: presence stands`).toEqual(ib.e().presence);
+    }
+  });
+});
+
 describe('the deferral words\' own attention', () => {
   it('in-use at once; registered and in-progress past the ceiling; paused never', () => {
     expect(collectAttentionCauses(id().audit(verdict('in-use'), 0).e())).toEqual([{ kind: 'in-use', detail: 'in-use: d', sinceMono: 0 }]);
@@ -541,8 +617,25 @@ describe('the deferral words\' own attention', () => {
     expect(collectAttentionCauses(changed.e()), 'a streak is of one word').toEqual([]);
   });
 
-  it('not-witnessed raises nothing and ends nothing it did not clear', () => {
-    expect(collectAttentionCauses(id().audit(verdict('not-witnessed'), 0).e())).toEqual([]);
+  it('not-witnessed raises nothing: it clears the three runs, advances the deferral count and ends the continuity clocks, as every answer but a collectable one does, and leaves every floor and the feed episode standing', () => {
+    expect(collectAttentionCauses(id().audit(verdict('not-witnessed'), 0).e()), 'a fresh entry raises nothing').toEqual([]);
+    // every field the title names, seeded through the transitions: the three floors, the three runs, the deferral
+    // count, the hold's and the die's continuity, and a feed episode that outlives observations
+    const i = id().wouldCollect(0).act(refusedAct('quarantine-kept'), 0).act(failedAct(), MIN)
+      .audit(unmeasured('checkouts'), 2 * MIN).act(DIE, 3 * MIN).hold(4 * MIN);
+    const before = collectFeedStep(i.e(), { kind: 'row', key: 'x', outlivesObservations: true }).entry;
+    expect([before.terminal.kind, before.verbFailed.kind, before.failing.kind], 'the three runs stand').toEqual(['run', 'run', 'run']);
+    expect([before.deferrals, before.deferredAtMono], 'a deferral count').toEqual([1, 3 * MIN]);
+    expect([before.held === null, before.die === null], 'the hold and the die clocks').toEqual([false, false]);
+    expect([before.wouldCollectAtMono, before.refusedAtMono, before.dieAtMono], 'the three floors').toEqual([0, 0, 3 * MIN]);
+    expect([before.feedEpisode, before.feedOutlivesObservations], 'the feed episode').toEqual(['x', true]);
+    const after = collectAfterAudit(before, verdict('not-witnessed'), step(5 * MIN, 99), true);
+    expect(after).toEqual({
+      ...before, idGen: 99, obs: null, evidence: { runId: 7, leaf: '/home/u/.cc-tmp/demo-a' },
+      failing: COLLECT_RUN_NONE, verbFailed: COLLECT_RUN_NONE, terminal: COLLECT_RUN_NONE,
+      deferrals: 2, deferredAtMono: 5 * MIN,
+      held: null, presence: null, streak: null, scheduleMono: null, die: null,
+    });
   });
 });
 
@@ -583,6 +676,61 @@ describe('the feed episode', () => {
     const inUse = collectFeedStep(collectFirstSighting(1), { kind: 'row', key: 'in-use' }).entry;
     expect(collectFeedStep(inUse, { kind: 'observe', token: T1 }).entry.feedEpisode).toBeNull();
     expect(collectFeedStep(inUse, { kind: 'quiet' }).entry.feedEpisode).toBe('in-use');
+  });
+
+  it('a refusal or a die episode outlives observations; every other act episode does not', () => {
+    const observe = { kind: 'observe', token: T1 } as const;
+    const outlasts: readonly CollectResult[] = [
+      refusedAct('in-use'), refusedAct('containment-unproven'), DIE, { kind: 'die', word: 'flock-unavailable' },
+    ];
+    for (const r of outlasts) {
+      const cue = collectFeedCueOfAct(r);
+      const opened = collectFeedStep(collectFirstSighting(1), cue);
+      expect(opened.opened, `${r.kind}: its row`).toBe(cue.kind === 'row' ? cue.key : null);
+      const twice = collectFeedStep(collectFeedStep(opened.entry, observe).entry, { kind: 'observe', token: T2 }).entry;
+      expect(twice.feedEpisode, `${r.kind}: two observations of two tokens end nothing`).toBe(opened.opened);
+      expect(collectFeedStep(twice, cue).opened, `${r.kind}: and the same cue then writes nothing`).toBeNull();
+    }
+    const ends: readonly CollectResult[] = [COLLECTED, failedAct(), failedAct('quarantine-kept'), ACT_NO_DOCUMENT];
+    for (const r of ends) {
+      const cue = collectFeedCueOfAct(r);
+      const opened = collectFeedStep(collectFirstSighting(1), cue);
+      expect(opened.opened, `${r.kind}: its row`).not.toBeNull();
+      const after = collectFeedStep(opened.entry, observe).entry;
+      expect([after.feedEpisode, after.feedOutlivesObservations], `${r.kind}: an observation ends it`).toEqual([null, false]);
+      expect(collectFeedStep(after, cue).opened, `${r.kind}: and the same cue writes its row again`).toBe(opened.opened);
+    }
+  });
+
+  it('a refusal episode still ends at any row cue of another key: an audit answer, another act outcome or a would-collect', () => {
+    const refused = collectFeedStep(collectFirstSighting(1), collectFeedCueOfAct(refusedAct('in-use'))).entry;
+    expect(refused.feedOutlivesObservations).toBe(true);
+    const audit = collectFeedStep(refused, collectFeedCueOfAudit(verdict('in-use')));
+    expect([audit.opened, audit.entry.feedEpisode, audit.entry.feedOutlivesObservations], 'an audit in-use opens its own episode')
+      .toEqual(['in-use', 'in-use', false]);
+    const wc = collectFeedStep(refused, { kind: 'row', key: collectWouldCollectKey(T1) });
+    expect([wc.opened, wc.entry.feedOutlivesObservations], 'a would-collect opens').toEqual([collectWouldCollectKey(T1), false]);
+    expect(collectFeedStep(wc.entry, { kind: 'observe', token: T2 }).entry.feedEpisode, 'and ends at another token\'s observation').toBeNull();
+    const failed = collectFeedStep(refused, collectFeedCueOfAct(failedAct()));
+    expect([failed.opened, failed.entry.feedOutlivesObservations], 'another act outcome opens').toEqual(['failed probe-unmeasured', false]);
+    expect(collectFeedStep(refused, { kind: 'quiet' }).entry, 'a quiet step ends nothing').toBe(refused);
+  });
+
+  it('the flag, never the key\'s text, decides: an AUDIT verdict spelled like an act\'s key is ended by an observation', () => {
+    const audit = collectFeedStep(collectFirstSighting(1), collectFeedCueOfAudit(verdict('refused in-use')));
+    expect([audit.opened, audit.entry.feedOutlivesObservations]).toEqual(['refused in-use', false]);
+    expect(collectFeedStep(audit.entry, { kind: 'observe', token: T1 }).entry.feedEpisode).toBeNull();
+    // the same key from an act's cue is the same episode (quiet), and the act's cue says it outlives observations
+    const act = collectFeedStep(audit.entry, collectFeedCueOfAct(refusedAct('in-use')));
+    expect([act.opened, act.entry.feedOutlivesObservations], 'the repeat of a key stores the cue\'s own flag').toEqual([null, true]);
+    expect(collectFeedStep(act.entry, { kind: 'observe', token: T1 }).entry.feedEpisode).toBe('refused in-use');
+  });
+
+  it('a first sighting starts with no episode and no flag, and a collected act carries the flag beside the episode', () => {
+    expect(collectFirstSighting(1)).toMatchObject({ feedEpisode: null, feedOutlivesObservations: false });
+    const refused = collectFeedStep(collectFirstSighting(1), collectFeedCueOfAct(refusedAct('in-use'))).entry;
+    expect(collectAfterAct(refused, COLLECTED, step(MIN, 9)))
+      .toMatchObject({ feedEpisode: 'refused in-use', feedOutlivesObservations: true });
   });
 
   it('a would-collect episode stands, for Task 5\'s projection, until another key or another token\'s observation ends it', () => {
