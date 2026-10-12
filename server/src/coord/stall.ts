@@ -491,8 +491,8 @@ export type CoordinatorState = 'alive' | 'dead' | 'unmeasurable';
  *  it as it stands, a structural match, and the lane passes that one read through whole. */
 export interface StallEventRow { readonly at: number; readonly fromState: string; readonly toState: string }
 /** The primary run's newest RE-activation (planning departure `quiet-restarts-on-reactivation` (D-3788)). Three words,
- *  never folded: `reactivated` restarts the episode key and the quiet clocks (never the dialog and limit caps, which
- *  keep `capQuietSince` and keys no re-activation moves); `none` changes nothing; `unmeasured` (the newest entry's time is not a
+ *  never folded: `reactivated` restarts the episode key and the quiet clocks (never the dialog and limit caps, whose
+ *  clocks (`dialogQuietSince`, `capQuietSince`) and keys no re-activation moves); `none` changes nothing; `unmeasured` (the newest entry's time is not a
  *  non-negative safe integer) holds at §10 step 2c, beside a null `dispatchedAt`. */
 export type StallActivation =
   | { readonly kind: 'reactivated'; readonly at: number }
@@ -732,8 +732,8 @@ export function stallBackoff(input: StallInput): { readonly streak: number; read
 
 /** The limit cap's clock: the worker's and inbound mail terms, from the live stamp whatever the word. The caller
  *  passes a MEASURED stamp: a null one is hold `unmeasured` before this is reached, never a 0. It carries NO
- *  re-activation term, and neither cap's key moves with one (coordinator ruling on `quiet-restarts-on-reactivation`
- *  (D-3788)): a dialog that blocked the pane through the review still blocks the fix-round brief. */
+ *  re-activation term (coordinator ruling on `quiet-restarts-on-reactivation` (D-3788)). The dialog cap has its own
+ *  clock, `dialogQuietSince`. */
 function capQuietSince(input: StallInput, f: StallFacts, liveSince: number): number {
   return Math.max(liveSince, f.workerLast?.at ?? 0, f.inboundLast?.at ?? 0, input.subject.primary.dispatchedAt ?? 0);
 }
@@ -741,7 +741,8 @@ function capQuietSince(input: StallInput, f: StallFacts, liveSince: number): num
 /** `dialog-cap-clock-ignores-inbound-mail` (D-4040, finding 4063): the dialog cap's clock, `capQuietSince` less the
  *  inbound term. Mail cannot land on a pane a dialog holds (spec §10 step 2b: "neither can land on `waiting`"), and mail
  *  that did land re-stamps the live word, so a coordinator's nudge to a parked worker never restarts the 2 h. The
- *  worker's own mail still counts: it is the worker acting. No re-activation term, as `capQuietSince` (D-3788). */
+ *  worker's own mail still counts: it is the worker acting. It carries NO re-activation term, and the dialog cap's key
+ *  moves with none (D-3788): a dialog that blocked the pane through the review still blocks the fix-round brief. */
 function dialogQuietSince(input: StallInput, f: StallFacts, liveSince: number): number {
   return Math.max(liveSince, f.workerLast?.at ?? 0, input.subject.primary.dispatchedAt ?? 0);
 }
@@ -1065,7 +1066,7 @@ function stallVerdictInner(input: StallInput, now: number): StallVerdict {
   const dialogShaped = live.word === 'waiting' || w.dialogPending;
   if (dialogShaped && (w.hookAsk.kind === 'unmeasured' || w.askRow.kind === 'unmeasured')) return holdVerdict('unmeasured');
   const capQuiet = now - capQuietSince(input, f, live.since);
-  const capKey = f.capKeyMs; // the caps keep the spec's clock, the limit cap its key (`quiet-restarts-on-reactivation` (D-3788))
+  const capKey = f.capKeyMs; // `capQuiet` times the limit cap only (the dialog cap has `dialogQuietSince`, D-4040); the limit cap keeps its key (`quiet-restarts-on-reactivation` (D-3788))
   // The dialog cap's key is its own dialog's live stamp, or the episode's when that is later (`dialog-cap-keyed-on-the-dialog` (D-3799)).
   const dialogKey = Math.max(capKey, live.since);
   // (4) hold 2a (a question, uncapped), then 2b (a dialog with no ask, capped once per dialog). An `approval` is 2b.

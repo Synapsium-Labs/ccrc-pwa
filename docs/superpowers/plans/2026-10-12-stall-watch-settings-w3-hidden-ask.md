@@ -341,8 +341,8 @@ held in reserve, and assigned to this wave by the coordinator's ruling R38. Two 
 
 ### D-4039 `subagent-tool-event-keeps-the-waiting-ask`
 
-- **Departs from:** the hook's own rule that a transition to `working` clears the ask (`ccd/session-hook.sh`, the line
-  after the SubagentStart/SubagentStop block), as applied to a subagent's tool events — the overwrite spec §3.3
+- **Departs from:** the hook's own rule that a transition to `working` clears the ask (`ccd/session-hook.sh`, the
+  comment "Transitions to working/done clear the ask" and the code under it), as applied to a subagent's tool events — the overwrite spec §3.3
   measured and finding 4063 traced to an erased question (ledger R32).
 - **What W3 does:** a PreToolUse or PostToolUse carrying `agent_id`, arriving while the hookstate reads `waiting` and
   that wait does not carry `waitBy: "subagent"` (it was raised by the main thread), keeps `waiting`, the ask and
@@ -369,9 +369,14 @@ held in reserve, and assigned to this wave by the coordinator's ruling R38. Two 
   sets `waiting`, preserves it across the SubagentStart/SubagentStop carry, and the D-4039 block skips a stored
   subagent-raised wait, so a subagent's approved dialog ends at its next tool event as it did before. It took no number.
 - **Cost if wrong:** a stale `waiting` survives background work after a dialog was dismissed without a main-thread
-  event; the next main-thread event clears it, as it would without subagents. A residual race remains: a subagent hook
-  run that reads `prev_state` before the main thread's PermissionRequest renames its file, and renames after it, still
-  erases the ask (the window is one hook run; the file is last-writer-wins by design).
+  event; the next main-thread event clears it, as it would without subagents. A residual race remains and runs both
+  ways: a subagent hook run that reads `prev_state` before the main thread's PermissionRequest renames its file, and
+  renames after it, still erases the ask; one that read `waiting` before the main thread's answer can write
+  `waiting` back over it, resurrecting an answered wait until the next main-thread event heals it (the window is one
+  hook run; the file is last-writer-wins by design).
+  A carried `waiting` also moves `updatedAt` on every subagent tool call. A coordinator's answer to a held ask can
+  therefore refuse `ask-moved` more often (it fails safe: nothing is pressed, and a retry works). The fleet's
+  unseen-attention badge, which takes its time from `updatedAt`, can re-fire after an ack for as long as the subagent works.
 
 ### D-4040 `dialog-cap-clock-ignores-inbound-mail`
 
