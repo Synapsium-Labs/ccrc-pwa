@@ -76,7 +76,7 @@ import {
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { renderCcdEntry } from './ccdWsHelpers.js';
@@ -86,6 +86,8 @@ import { describeLinux, describeDarwin, itLinux, itDarwin, python3ProgramArm, IS
 import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
 import { TREE_STUBS, installFixtureTree, installVersionedTree, keepDigest, rsyncRecorder } from './installTreeFixture.js';
 import { verifyMarker } from '../../shared/mark.mjs';
+import { FLEET_TOKEN_FILE_COMMENT } from '../../shared/box-token.js';
+import { NODE_FILES } from '../../shared/agent-protocol.js';
 import {
   plantFakeRuntime, codexRoster, plantSystemd, killLaneProcesses, spawnListener, adoptPlantedSystemd,
   assertSpineFrontContained, spineSystemctlArms, spineSystemdRun, SPINE_CONTAINMENT_PROBE, managerCalls,
@@ -146,6 +148,20 @@ const RSYNC = realPath('rsync');
  *  pin spawns this directly, bypassing the fixture PATH, so its parent argv
  *  is genuinely `python3 <path>/ccrc update`, not the fixture's poison. */
 const PYTHON3 = realPath('python3');
+
+/** The box-token doctor check's two JSON readers (`_BT_PY_STATE`, `_BT_PY_FLEET` in `ccd/ccrc-doctor-checks`), read
+ *  from the shipped file so the stub's `python3 -I -c` arm is an EXACT-text allow-list: those two programs, and only
+ *  those, go to the real interpreter, because a refused `python3` makes them read `state-unreadable` and
+ *  `sync-unreadable` (a FAIL once the arms are on). A third program, or an edited one, still reaches the refusal. */
+const BT_PY_ARM = ((): string => {
+  const src = readFileSync(join(REPO, 'ccd', 'ccrc-doctor-checks'), 'utf8');
+  const progs = ['_BT_PY_STATE', '_BT_PY_FLEET'].map((n) => {
+    const m = new RegExp(`^${n}='([^']*)'$`, 'm').exec(src);
+    if (!m) throw new Error(`ccd/ccrc-doctor-checks no longer holds ${n}='…' in the shape this stub reads`);
+    return `'${m[1]}'`;
+  });
+  return `if [ "$1" = "-I" ] && [ "$2" = "-c" ]; then case "$3" in ${progs.join('|')}) exec '${PYTHON3}' "$@" ;; esac; fi`;
+})();
 
 /** `<home>/checkout` — the shipped tree this box installs FROM. */
 const treeRoot = (home: string): string => join(home, 'checkout');
@@ -689,6 +705,8 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   writeFileSync(join(home, 'fixture-vacuous-python'), VACUOUS_RUNTIME_PYTHON, { mode: 0o755 });
   plant('python3', [
     '#!/bin/sh',
+    // The box-token doctor readers, ahead of the argv log (their program text is not an argv a case asserts on).
+    BT_PY_ARM,
     'printf \'%s\\n\' "$*" >> "$HOME/python3-argv"',
     'if [ "$1" = "-m" ] && [ "$2" = "venv" ] && [ -n "$3" ]; then',
     '  case "$3" in',
@@ -2210,6 +2228,17 @@ describe('ccrc install: the executables and files it installs', () => {
     const { home } = installed;
     const bin = join(home, '.local', 'bin', 'ccd-scope-sweep');
     expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-scope-sweep')));
+    expect(mode(bin)).toBe(0o755);
+  });
+
+  itLinux('ccd-history-sweep lands too (history spec §9.5) — the one sweep shim role-gated off server boxes', () => {
+    // `_inst_bins` places it behind a one-line `[ "$INST_ROLE" = server ] ||`
+    // test: doctor and the CLI read its presence as "this box can hold a
+    // store". This install is role `both`, so it lands; the `--role server`
+    // case pins its absence, the fleet describe its presence there.
+    const { home } = installed;
+    const bin = join(home, '.local', 'bin', 'ccd-history-sweep');
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-history-sweep')));
     expect(mode(bin)).toBe(0o755);
   });
 
@@ -4191,6 +4220,10 @@ const UNIT_FILES: Array<[string, string]> = [
   // Claude Code sessions, so it has no /tmp/claude-<uid> to reap.
   ['ccd-tmp-sweep.service', 'deploy/systemd/ccd-tmp-sweep.service'],
   ['ccd-tmp-sweep.timer', 'deploy/systemd/ccd-tmp-sweep.timer'],
+  // history spec 2026-10-05 §9.5: the history sweep's pair, ROLE-GATED `!= server`
+  // for its own reason — a server box hosts no sessions, so it keeps no store.
+  ['ccd-history-sweep.service', 'deploy/systemd/ccd-history-sweep.service'],
+  ['ccd-history-sweep.timer', 'deploy/systemd/ccd-history-sweep.timer'],
   // The pane-scope sweep: ROLE-GATED on the reaper's terms — a server box runs no pane scopes.
   ['ccd-scope-sweep.service', 'deploy/systemd/ccd-scope-sweep.service'],
   ['ccd-scope-sweep.timer', 'deploy/systemd/ccd-scope-sweep.timer'],
@@ -4505,6 +4538,9 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       // C5: a FIFTH enable, role-gated on the same terms and degrading the
       // same way — a server box has no lanes for this timer to refresh.
       '--user enable --now ccrc-models.timer',
+      // history spec §9.5: the history sweep's timer, on its unit files' gate,
+      // degrading rather than dying like every timer in this list.
+      '--user enable --now ccd-history-sweep.timer',
       // W4a Task 9: the server-role watchdog's timer — `!= fleet`, so this
       // role enables it — degrading rather than dying like every timer in
       // this list, and taking no restart (a oneshot holds no code).
@@ -5009,7 +5045,8 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         // `ccd-update-sync` joins on the same terms, and this set is the
         // mutation site for its line too (spec §18 "the puller is installed
         // where its timer looks").
-        : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep',
+        // history spec §9.5: `ccd-history-sweep` joins on the timer-bound names' terms, behind its role gate (this install is `both`).
+        : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-history-sweep',
            'ccd-pool-sync', 'ccd-scope-sweep', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep', 'ccd-update-sync', 'ccd-usage-sweep',
            'ccd-usage-sweep.py', 'ccrc', 'graphify', ...GPT_LANE_BINS].sort());
   });
@@ -5310,7 +5347,7 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     expect(r.stdout).toMatch(/^PASS tmux_skew: client 9\.9, running server 9\.9 — versions agree$/m);
   });
 
-  it('ends with doctor, and a box that passes every check exits 0', () => {
+  it('ends with doctor, and a fresh box ends green: 0 warned (D-139), 0 failed, exit 0', () => {
     const home = freshBox('ccrc-install-doctor-ok-');
     const r = runInstall(home);
     expect(r.code, r.stderr).toBe(0);
@@ -5332,12 +5369,24 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     // this verb could have avoided: `linger` has no counterpart on a platform
     // where a LaunchAgent lives and dies with the login session. `0 failed` is
     // the part that means "this install worked", and it holds on both.
+    // The box-token arming (row 2a, 4553) keeps that: a fresh BOTH-role install has neither the server's token and state
+    // files nor a fleet token file, and `box-token` reads PASS with its sentence (operator, D-139 over Decision 2 (a),
+    // 2026-10-12): no value has been minted here yet and the server mints one at boot. Only a box that once held a value
+    // and lost it is a FAIL. So the count is `0 warned` again (the one `linger` warn on macOS), and `0 failed`.
     const warned = process.platform === 'darwin' ? 1 : 0;
     expect(r.stdout).toMatch(new RegExp(
       `^summary: \\d+ checks \\(\\d+ skipped\\), \\d+ verdicts — \\d+ passed, ${warned} warned, 0 failed$`, 'm'));
+    expect(r.stdout, 'box-token reads PASS on a fresh box, naming the fact').toMatch(
+      /^PASS box-token: server: token-absent — .* no value has been minted here yet, and the server mints one at boot; fleet: fleet-token-absent — .* no value has been handed to this box yet, and the server's next rotation hands one$/m);
+    expect(r.stdout.split('\n').filter((l) => /^WARN /.test(l)).filter((l) => !l.startsWith('WARN linger: '))).toEqual([]);
     // …and the gate check really RAN and really found the box uncredentialed:
     // `0 warned` must not be reachable by the check having vanished.
     expect(r.stdout).toMatch(/^PASS auth: no passphrase file at .*nothing is gated/m);
+    // …and `history` (spec 2026-10-05 §9.6) is among the checks that PASSed, on its grace word: the shim landed
+    // seconds ago and no sweep has ticked. A WARN there would turn every fresh install yellow again
+    // (D-4168). macOS places no shim, so the check SKIPs there.
+    if (process.platform === 'darwin') expect(r.stdout).toMatch(/^SKIP history: /m);
+    else expect(r.stdout).toMatch(/^PASS history: first-tick-pending: /m);
   });
 
   it('writes ~/.ccrc/installed LAST, naming the stamped sha — and a spine that dies before its end leaves none', () => {
@@ -6060,6 +6109,8 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     expect(argv).toContain('--user enable --now ccd-tmp-sweep.timer');
     // and the pane-scope sweep, on the reaper's gate.
     expect(argv).toContain('--user enable --now ccd-scope-sweep.timer');
+    // history spec §9.5: fleet is not server, so the history sweep's timer arms here.
+    expect(argv).toContain('--user enable --now ccd-history-sweep.timer');
     // Ruling T4-R1: and the pool-sync timer, which enables on THIS ROLE ONLY
     // — the role whose install wrote the `~/.ccrc/agent.env` the binary
     // refuses without. `--role both` and `--role server` below assert the
@@ -6078,6 +6129,15 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     expect(argv.join('\n')).not.toContain('ccrc-update-watchdog');
     expect(r.stdout).toContain(
       'install: services: ccrc-agent.service and ccd-cap-scopes.timer enabled, and ccrc-agent.service restarted onto the tree this run placed');
+  });
+
+  itLinux('places the history sweep\'s shim, and the closing line names it — a fleet box hosts sessions (history spec §9.5)', async () => {
+    const { home, r } = await fleet();
+    const bin = join(home, '.local', 'bin', 'ccd-history-sweep');
+    expect(existsSync(bin), '--role fleet did not place ccd-history-sweep').toBe(true);
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-history-sweep')));
+    expect(statSync(bin).mode & 0o777).toBe(0o755);
+    expect(r.stdout).toMatch(/^install: bins: .*(?<![\w-])ccd-history-sweep(?![\w-])/m);
   });
 
   it('skips the server-only landing lines — no PWA address, no passphrase gate', async () => {
@@ -6161,6 +6221,7 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user enable --now ccd-account-health.timer',
       '--user enable --now ccd-telemetry-keepalive.timer',
       '--user enable --now ccrc-models.timer',
+      '--user enable --now ccd-history-sweep.timer',
       // W4a Task 9: the server-role watchdog's timer — `!= fleet`, so this
       // role enables it — degrading rather than dying like every timer in
       // this list, and taking no restart (a oneshot holds no code).
@@ -6188,7 +6249,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     for (const [dest] of UNIT_FILES) {
       if (dest.startsWith('ccd-graph-sweep.') || dest.startsWith('ccd-account-health.')
         || dest.startsWith('ccd-telemetry-keepalive.') || dest.startsWith('ccrc-models.')
-        || dest.startsWith('ccd-tmp-sweep.') || dest.startsWith('ccd-scope-sweep.') || dest.startsWith('ccrc-codex-usage@')) continue;
+        || dest.startsWith('ccd-tmp-sweep.') || dest.startsWith('ccd-scope-sweep.') || dest.startsWith('ccd-history-sweep.') || dest.startsWith('ccrc-codex-usage@')) continue;
       expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
     }
     expect(existsSync(unitDir(home, 'ccd-graph-sweep.service'))).toBe(false);
@@ -6209,6 +6270,12 @@ describe('ccrc install --role: the refusals and the default', () => {
     // The pane-scope sweep: a server box runs no pane scopes.
     expect(existsSync(unitDir(home, 'ccd-scope-sweep.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-scope-sweep.timer'))).toBe(false);
+    // history spec §9.5: no shim, no unit pair and no enable on a server box —
+    // it hosts no sessions and must never hold a store D-4183.
+    expect(existsSync(join(home, '.local', 'bin', 'ccd-history-sweep')), '--role server placed ccd-history-sweep').toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-history-sweep.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-history-sweep.timer'))).toBe(false);
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-history-sweep');
     // Ruling T4-R1: the pool-sync pair is gated OUT here too — but on a
     // NARROWER gate than the four pairs above it. Those are `!= server`;
     // this one is `= fleet`, because `both` gets no agent.env either. A
@@ -6244,6 +6311,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     const bins = r.stdout.split('\n').find((l) => l.startsWith('install: bins:'));
     expect(bins, 'no `install: bins:` line in the transcript').toBeDefined();
     expect(bins!, 'the server-role closing line claims a GPT-lane executable').not.toMatch(/ccgpt|ccrc-codex/);
+    expect(bins!, 'the server-role closing line names a history shim it never placed').not.toContain('ccd-history-sweep');
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=server$/m);
     expect(r.stdout).toMatch(/^install: gate: /m);
   });
@@ -6361,10 +6429,12 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
 
   // Each wave's spine ADDS its own words (design 2026-09-20 §9): W1's three,
   // W4's four — `detach` on Linux only (decision 17: `--detach` refuses on
-  // Darwin) — and W6's `versions`, so a Linux install writes eight words and
-  // a Darwin one seven. LITERALS, not a read of ccd/ccrc's arrays: a pin
+  // Darwin) — W6's `versions`, and the box-token lifecycle's `token-sync`
+  // (design 2026-10-07 §4.5; every os, because the op runs the verb in the
+  // foreground), so a Linux install writes nine words and a Darwin one eight.
+  // LITERALS, not a read of ccd/ccrc's arrays: a pin
   // derived from the list it pins could never red on the list being wrong.
-  const CAPS_ALL = ['verify', 'node-id', 'floor', 'update-json', 'update-gate', 'rollback', 'versions'];
+  const CAPS_ALL = ['verify', 'node-id', 'floor', 'update-json', 'update-gate', 'rollback', 'versions', 'token-sync'];
   const CAPS_LINUX = [...CAPS_ALL, 'detach'];
   const CAPS_HERE = process.platform === 'darwin' ? CAPS_ALL : CAPS_LINUX;
 
@@ -6393,7 +6463,7 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     expect(readFileSync(join(home, '.ccrc', 'node-id'), 'utf8')).toBe('not-a-uuid\n');
   });
 
-  it('ccrc-caps: line 1 is the os, then each wave\'s words — W1\'s three, W4\'s four, W6\'s versions, detach on Linux only (§18 "_inst_caps writes each wave\'s words")', () => {
+  it('ccrc-caps: line 1 is the os, then each wave\'s words — W1\'s three, W4\'s four, W6\'s versions, token-sync, detach on Linux only (§18 "_inst_caps writes each wave\'s words")', () => {
     const home = freshBox('ccrc-install-caps-');
     gitInit(treeRoot(home));
     const r = runInstall(home);
@@ -6409,7 +6479,7 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     expect(r.stdout.split('\n').filter((l) => l.startsWith('install: caps:')).join('\n')).not.toContain(home);
   });
 
-  it('ccrc-caps: eight words on Linux, seven on Darwin, whichever box runs this suite — both arms of the real _inst_caps', () => {
+  it('ccrc-caps: nine words on Linux, eight on Darwin, whichever box runs this suite — both arms of the real _inst_caps', () => {
     // A real install reaches only the host's own arm. The other is reached by
     // running the real `_inst_caps` and `_ccrc_cap_words` out of ccd/ccrc with
     // CCD_OS set — the extraction harness the `_inst_installed` cases below
@@ -6470,6 +6540,8 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
       rollback: [/^cmd_rollback\(\) \{/m, /^\s*rollback\)\s+cmd_rollback "\$@" ;;$/m],
       // W6 Task 4: a kept version is a flip — restore arm 1 and rollback by flip.
       versions: [/^_upd_restore_arm1\(\) \{/m, /^_ver_flip_back\(\) \{/m],
+      // Box-token lifecycle wave 1: the verb ccrc-agent's token-sync op spawns, dispatched to its sibling body.
+      'token-sync': [/^cmd_token\(\) \{/m, /^\s*token\)\s+cmd_token "\$@" ;;$/m, /"\$CCRC_HERE\/ccrc-token-sync"/],
       detach: [/^_upd_detach\(\) \{/m, /^\s*--detach\) detach=1 ;;$/m],
     };
     const arr = (name: string): string[] => {
@@ -6487,6 +6559,8 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     // on Darwin (Task 3's `_upd_detach_os_check`): the two statements agree.
     expect(arr('CCRC_CAP_WORDS')).not.toContain('detach');
     expect(src).toMatch(/_ccrc_die "--detach is Linux-only \(decision 17\)"/);
+    // …and `token-sync`'s body ships beside ccd/ccrc, where `cmd_token` looks for it.
+    expect(statSync(join(REPO, 'ccd', 'ccrc-token-sync')).isFile(), 'ccd/ccrc-token-sync does not ship').toBe(true);
   });
 
   it('floor: written by the LAST step from the stamped tag; only ever raised (§18 "the floor never lowers")', () => {
@@ -8230,6 +8304,28 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  three. RE-MEASURED once more when doctor gained `scope-sweep` (session-continuity
  *  wave 4): the three maps each gained `"scope-sweep": "SKIP"` (the fixture's
  *  runtime dir holds no verdict record) and nothing else moved.
+ *  RE-MEASURED again when doctor gained its `history` check (spec 2026-10-05
+ *  §9.6): the three maps each gained `"history": "PASS"` (`first-tick-pending`:
+ *  the shim landed seconds before, and no sweep has ticked) and nothing else
+ *  moved. RE-MEASURED once more
+ *  when doctor gained `box-token` (box-token lifecycle Task B5), by the same case: the
+ *  three maps each gained `"box-token": "SKIP"` (wave 1 reports a box with no token
+ *  subject, and every state that will be a FAIL or WARN once armed, as SKIP; the live
+ *  shape's own word was not read off the case) and nothing else moved.
+ *  RE-MEASURED once more when doctor's `box-token` arms went on (row 2a), by Step 3's
+ *  case on a disposable copy of the tip (the copy's own `liveBox`, which now holds the
+ *  fleet side part B leaves on every live fleet box: the fleet token file, the
+ *  generation file and the proved sync report, plus the upstream account's setup-token
+ *  file once `~/.cc-secrets` exists): the three maps each moved `"box-token"` from `SKIP`
+ *  to `PASS` and `"credentials"` from `SKIP` to `PASS` (the second only because that
+ *  directory now exists, which ends `credentials`' fresh-box SKIP), nothing else; both
+ *  refreshes, all three codes and every other class are equal. A box without the fleet
+ *  files is a fresh box, `box-token` PASS with its sentence (D-139, below), and its own case
+ *  below keeps that measured. RE-MEASURED once more in fix round 1, after the operator's D-139
+ *  ruling moved the never-handed state from WARN to PASS: on a disposable copy of the tip
+ *  outside any git repo, by a MEASURE-only case that builds `liveBox()` itself, with the old
+ *  literal re-serialised byte-identical first, and nothing moved (the live shape holds the
+ *  fleet files, so it never was a never-handed box): zero differing lines.
  *  It is a golden: nothing re-measures
  *  it, so a merge-up that moves a doctor check's class on the live shape reds
  *  the live-shape case until Step 3 is re-run on a disposable copy of the new
@@ -8249,12 +8345,13 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "classes": {
         "accounts": "PASS",
         "auth": "SKIP",
+        "box-token": "PASS",
         "build": "PASS",
         "caddy": "SKIP",
         "caddyfile": "SKIP",
         "cert": "SKIP",
         "config": "PASS",
-        "credentials": "SKIP",
+        "credentials": "PASS",
         "disk": "PASS",
         "docs": "PASS",
         "exposure": "SKIP",
@@ -8266,6 +8363,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "git_email": "PASS",
         "graphify": "PASS",
         "graphify-path": "PASS",
+        "history": "PASS",
         "jq": "PASS",
         "jq_regex": "PASS",
         "linger": "PASS",
@@ -8298,12 +8396,13 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "classes": {
         "accounts": "PASS",
         "auth": "SKIP",
+        "box-token": "PASS",
         "build": "PASS",
         "caddy": "SKIP",
         "caddyfile": "SKIP",
         "cert": "SKIP",
         "config": "PASS",
-        "credentials": "SKIP",
+        "credentials": "PASS",
         "disk": "PASS",
         "docs": "PASS",
         "exposure": "SKIP",
@@ -8315,6 +8414,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "git_email": "PASS",
         "graphify": "PASS",
         "graphify-path": "PASS",
+        "history": "PASS",
         "jq": "PASS",
         "jq_regex": "PASS",
         "linger": "PASS",
@@ -8417,12 +8517,13 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
     "classes": {
       "accounts": "PASS",
       "auth": "SKIP",
+      "box-token": "PASS",
       "build": "PASS",
       "caddy": "SKIP",
       "caddyfile": "SKIP",
       "cert": "SKIP",
       "config": "PASS",
-      "credentials": "SKIP",
+      "credentials": "PASS",
       "disk": "PASS",
       "docs": "PASS",
       "exposure": "SKIP",
@@ -8434,6 +8535,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "git_email": "PASS",
       "graphify": "PASS",
       "graphify-path": "PASS",
+      "history": "PASS",
       "jq": "PASS",
       "jq_regex": "PASS",
       "linger": "PASS",
@@ -8501,13 +8603,35 @@ const usageRow = (): string =>
  *  reason: with no stamp `_inst_installed` writes no record), and its agent env
  *  is present so `--role fleet` never prompts. The runtime template is planted
  *  so that a later flip can build; with no codex lane it is never used. Step 3's
- *  MEASURE case builds its box with exactly these calls. */
-function liveBox(prefix: string, opts: { systemd?: boolean } = {}): string {
+ *  MEASURE case builds its box with exactly these calls.
+ *
+ *  Since the box-token arming (row 2a) the box also holds what part B leaves on
+ *  every live fleet box (a live box is not a fresh one, and a fleet box that once
+ *  held a value and lost it would FAIL): the fleet token file (0600: the comment
+ *  line, then a runtime-random 64-hex value, so no fixture value is a literal here),
+ *  the generation file (16 hex) and the proved sync report. `{ fleetFiles: false }`
+ *  is the fresh box, which reads PASS with its sentence (a box never handed a value,
+ *  D-139), and the fresh-fleet case below keeps that class measured. */
+function liveBox(prefix: string, opts: { systemd?: boolean; fleetFiles?: boolean } = {}): string {
   const home = freshBox(prefix);
   gitInit(treeRoot(home));
   mkdirSync(join(home, '.ccrc'), { recursive: true });
   writeFileSync(join(home, '.ccrc', 'agent.env'),
     'CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=fixture-not-a-real-token\n');
+  if (opts.fleetFiles !== false) {
+    mkdirSync(join(home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    // The directory's existence is what ends `credentials`' fresh-box SKIP ("no $HOME/.cc-secrets directory"): a box that
+    // holds the fleet token file is provisioned, and the roster's one upstream account then owes its own setup-token file
+    // (a runtime-random value, never a literal), exactly as a live fleet box holds it.
+    writeFileSync(join(home, '.cc-secrets', 'claude-oauth.env'),
+      `CLAUDE_CODE_OAUTH_TOKEN=${randomBytes(32).toString('hex')}\n`, { mode: 0o600 });
+    writeFileSync(join(home, '.cc-secrets', 'ccrc-mail.token'),
+      `${FLEET_TOKEN_FILE_COMMENT}\n${randomBytes(32).toString('hex')}\n`, { mode: 0o600 });
+    const generation = randomBytes(8).toString('hex');
+    writeFileSync(join(home, '.ccrc', NODE_FILES.tokenGeneration), `${generation}\n`, { mode: 0o600 });
+    writeFileSync(join(home, '.ccrc', 'token-sync.json'),
+      JSON.stringify({ v: 1, at: epochS() - 3600, result: 'synced', generation, transport: 'https', proof: 'proved' }), { mode: 0o600 });
+  }
   plantLiveShape(home, (argv) => runInstall(home, argv, REHEARSAL_ENV, { from: REPO_CCRC }));
   plantRuntimeTemplate(home, { verdict: 'pass', version: '1.101.0' });
   if (opts.systemd === true) plantSystemd(home, { userManager: true });
@@ -8584,6 +8708,20 @@ describeLinux('Plan 3a Task 10 — the cutover rehearsal', () => {
       expect(o.probeCalls.map((c) => c.env['CHATGPT_TOKEN_DIR']),
         'the base did not probe the external lane through its default token directory').toEqual(['~/.handoff/chatgpt-auth']);
     }
+  });
+
+  it('a fresh fleet box (the live shape without the fleet token file, generation file and sync report) keeps box-token measured: PASS with its sentence and no remedy (D-139), and the install exits 0 (4553)', () => {
+    const home = liveBox('ccrc-rehearsal-fresh-', { fleetFiles: false });
+    homes.push(home);
+    const r = runInstall(home, ['install', '--role', 'fleet'], REHEARSAL_ENV);
+    expect(r.code, `a fresh box's install:\n${r.stdout}\n${r.stderr}`).toBe(0);
+    expect(r.stdout).toMatch(/^PASS box-token: fleet: fleet-token-absent — .* no value has been handed to this box yet, and the server's next rotation hands one$/m);
+    expect(r.stdout).not.toMatch(/box-token: .*(no-generation|never-synced)/);
+    expect(r.stdout).not.toMatch(/^box-token remedy|remedy:[^\n]*Box token card/m);
+    expect(r.stdout).not.toMatch(/^FAIL /m);
+    expect(doctorClasses(r.stdout), 'only credentials differs from the live shape').toEqual({
+      ...BASE_LIVE_SHAPE.install[0]!.classes, credentials: 'SKIP', codex: 'SKIP',
+    });
   });
 
   it('live shape: two installs, both hourly refreshes, doctor and uninstall do exactly what the base did, and init codex on an external lane refuses (rulings Z1, Z3, Z7)', async () => {

@@ -196,7 +196,8 @@ describe('a vanished worktree is reclaimed from what is left; a directory git do
     expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'branch').toBe('');
     expect(h.git(c.main, 'worktree', 'list', '--porcelain'), 'git’s stale record was cleared').not.toMatch(/^prunable /m);
     expect(fs.existsSync(path.join(h.home, '.cc-clips', CHILD_ID)), 'clips').toBe(false);
-    expect(fs.existsSync(path.join(h.home, '.cc-tmp', CHILD_ID)), 'temp root').toBe(false);
+    // Darwin keeps the temp root: the in-use probe answers unmeasured there (spec §5.6).
+    if (process.platform !== 'darwin') expect(fs.existsSync(path.join(h.home, '.cc-tmp', CHILD_ID)), 'temp root').toBe(false);
     for (const field of ['uuid', 'child', 'reaping', 'workdir']) expect(h.reg(CHILD_ID, field), field).toBeNull();
     // Unsupervise and the ANCHORED kill run FIRST on this arm too (spec §5.6).
     expect(unsupervised()).toEqual([`unsupervise ${CHILD_ID} agent agent`]);
@@ -331,7 +332,7 @@ describe('the tail proves the tree is the child’s own at removal time, on EVER
     fs.writeFileSync(path.join(h.home, '.cc-sessions', 'demo-twin.workdir'), c.wt);
     let r = childReclaimVerb(h, tok);
     expect(fs.existsSync(path.join(c.wt, 'f1.txt')), 'the tree the other row names survives').toBe(true);
-    expect(JSON.parse(r.stdout).failed).toBe('worktree-remove-failed');
+    expect(JSON.parse(r.stdout).failed).toBe('containment-refuted');
     expect(JSON.parse(r.stdout).detail).toContain('demo-twin');
     fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-twin.uuid'));
     fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-twin.workdir'));
@@ -369,7 +370,7 @@ describe('the tail proves the tree is the child’s own at removal time, on EVER
       }
       expect(r.code, r.stdout + r.stderr).toBe(1);
       const o = JSON.parse(r.stdout) as { failed: string; detail: string };
-      expect(o.failed).toBe('worktree-remove-failed');
+      expect(o.failed).toBe('containment-refuted');
       expect(o.detail, 'the detail names the session to end or purge').toContain('demo-nested');
       expect(o.detail).toContain('rooted inside');
       failedPairAgrees(r);
@@ -389,7 +390,7 @@ describe('the tail proves the tree is the child’s own at removal time, on EVER
     expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the child’s branch survives').toContain(CHILD_BRANCH);
     expect(r.code, r.stdout + r.stderr).toBe(1);
     const o = JSON.parse(r.stdout) as { failed: string; detail: string };
-    expect(o.failed).toBe('worktree-remove-failed');
+    expect(o.failed).toBe('containment-refuted');
     expect(o.detail).toContain(`registry row(s) demo-up spell their workdir through ${c.wt}, not as one plain path`);
     expect(o.detail).not.toContain('rooted inside');
     failedPairAgrees(r);
@@ -410,7 +411,7 @@ describe('the tail proves the tree is the child’s own at removal time, on EVER
     expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the child’s branch survives').toContain(CHILD_BRANCH);
     expect(r.code, r.stdout + r.stderr).toBe(1);
     const o = JSON.parse(r.stdout) as { failed: string; detail: string };
-    expect(o.failed).toBe('worktree-remove-failed');
+    expect(o.failed).toBe('containment-refuted');
     expect(o.detail).toContain(`registry row(s) demo-up spell their workdir through ${c.wt}, not as one plain path`);
     expect(o.detail).not.toContain('rooted inside');
     failedPairAgrees(r);
@@ -446,7 +447,7 @@ describe('the tail proves the tree is the child’s own at removal time, on EVER
     repoint('demo2', c.main);
     let r = childReclaimVerb(h, tok);
     expect(fs.existsSync(path.join(c.main, 'main-work.txt')), 'the main checkout survives').toBe(true);
-    expect(JSON.parse(r.stdout).failed).toBe('worktree-remove-failed');
+    expect(JSON.parse(r.stdout).failed).toBe('containment-refuted');
     expect(JSON.parse(r.stdout).detail).toContain('main checkout');
     // (b) the resolved path: the row names the project directory, a linked
     // worktree that is not the first stanza.
@@ -454,7 +455,7 @@ describe('the tail proves the tree is the child’s own at removal time, on EVER
     repoint('demo2', demo2);
     r = childReclaimVerb(h, tok);
     expect(fs.existsSync(path.join(demo2, 'proj-work.txt')), 'the project directory survives').toBe(true);
-    expect(JSON.parse(r.stdout).failed).toBe('worktree-remove-failed');
+    expect(JSON.parse(r.stdout).failed).toBe('containment-refuted');
     expect(JSON.parse(r.stdout).detail).toContain('project directory');
   }, 90_000);
 });
@@ -528,7 +529,7 @@ describe('an OTHER row whose workdir is not absolute, or opens with or resolves 
       intact(c);
     }, 90_000);
 
-    it(`${label}: the same row stops a RESUMED tail with \`worktree-remove-failed\` — the tree byte-identical, the breadcrumb kept`, () => {
+    it(`${label}: the same row stops a RESUMED tail with \`worktree-remove-failed\` or \`containment-refuted\` — the tree byte-identical, the breadcrumb kept`, () => {
       const c = makeChild(h);
       plantNested(c);
       interrupted(c, 'worktree');
@@ -541,7 +542,7 @@ describe('an OTHER row whose workdir is not absolute, or opens with or resolves 
       expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the child’s branch survives').toContain(CHILD_BRANCH);
       expect(r.code, r.stdout + r.stderr).toBe(1);
       const o = JSON.parse(r.stdout) as { failed: string; detail: string };
-      expect(o.failed).toBe('worktree-remove-failed');
+      expect(o.failed).toBe(unplaceable(value) ? 'worktree-remove-failed' : 'containment-refuted');
       expect(o.detail).toContain(unplaceable(value)
         ? 'registry row(s) demo-nested name no plain absolute workdir' : 'registry row(s) demo-nested rooted inside');
       expect(o.detail, 'the row’s value is never printed').not.toContain(value);
@@ -585,7 +586,7 @@ describe('an OTHER row whose workdir is not absolute, or opens with or resolves 
     intact(c);
   }, 90_000);
 
-  it('the same child stops a RESUMED tail with `worktree-remove-failed` — the tree byte-identical, the breadcrumb kept', () => {
+  it('the same child stops a RESUMED tail with `worktree-remove-failed` or `containment-refuted` — the tree byte-identical, the breadcrumb kept', () => {
     const c = makeChild(h);
     plantNested(c);
     interrupted(c, 'worktree');
@@ -597,7 +598,7 @@ describe('an OTHER row whose workdir is not absolute, or opens with or resolves 
     expect(treeOf(c.wt), 'the child’s tree, and the other session’s inside it, survive byte for byte').toEqual(before);
     expect(r.code, r.stdout + r.stderr).toBe(1);
     const o = JSON.parse(r.stdout) as { failed: string; detail: string };
-    expect(o.failed).toBe('worktree-remove-failed');
+    expect(o.failed).toBe(kept ? 'worktree-remove-failed' : 'containment-refuted');
     if (kept) expect(o.detail).toContain(`${CHILD_ID}'s own workdir resolves to a path opening with //`);
     expect(h.calls(), 'it stops AFTER the kill: the child’s pane is down, nothing deleted').toContain(KILL);
     failedPairAgrees(r);

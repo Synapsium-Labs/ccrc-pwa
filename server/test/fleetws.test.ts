@@ -658,6 +658,9 @@ describe('fleet REST + WS', () => {
   describe('the `runs` frame', () => {
     it('a connecting client receives hello, then fleet, then runs — and a later transition re-emits it', async () => {
       const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      // The claimant is a registered session (workspace lifecycle wave 4): an open run's claimant with NO registry row
+      // and no journal history is listed by the dead-coordinator lane, and that list rides the coord frame.
+      seedSession(home, 'ccrc-pwa-coordinator', 'claude-a');
       const opened = coord.openRun({
         program: 'build7', title: 'Fleet coordination', project: 'ccrc-pwa',
         wave: 1, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator',
@@ -701,6 +704,9 @@ describe('fleet REST + WS', () => {
     // correctly against what was last actually broadcast.
     it('skips the frame when a run row is UNREADABLE, and resumes once it is not', async () => {
       const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      // The claimant is a registered session (workspace lifecycle wave 4): an open run's claimant with NO registry row
+      // and no journal history is listed by the dead-coordinator lane, and that list rides the coord frame.
+      seedSession(home, 'ccrc-pwa-coordinator', 'claude-a');
       const opened = coord.openRun({
         program: 'build7', title: 'Fleet coordination', project: 'ccrc-pwa',
         wave: 1, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator',
@@ -775,6 +781,9 @@ describe('fleet REST + WS', () => {
 
     it('drops the frame from the broadcast when the JSON is unchanged', async () => {
       const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      // The claimant is a registered session (workspace lifecycle wave 4): an open run's claimant with NO registry row
+      // and no journal history is listed by the dead-coordinator lane, and that list rides the coord frame.
+      seedSession(home, 'ccrc-pwa-coordinator', 'claude-a');
       coord.openRun({
         program: 'build7', title: 'Fleet coordination', project: 'ccrc-pwa',
         wave: 1, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator',
@@ -916,7 +925,7 @@ describe('fleet REST + WS', () => {
       // the wire order every client relies on is hello, fleet, runs, coord.
       const frame = await next();
       expect(frame.type).toBe('coord');
-      expect(frame.coord).toEqual({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [] });
+      expect(frame.coord).toEqual({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
       ws.close();
     });
 
@@ -946,7 +955,7 @@ describe('fleet REST + WS', () => {
       await watcher.tick();
       const frame = await next();
       expect(frame.type).toBe('coord');
-      expect(frame.coord).toEqual({ pause: 'set', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [] });
+      expect(frame.coord).toEqual({ pause: 'set', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
       ws.close();
     });
 
@@ -955,11 +964,11 @@ describe('fleet REST + WS', () => {
       const { ws, next, watcher } = await connect();
       expect((await next()).type).toBe('hello');
       expect((await next()).type).toBe('fleet');
-      expect((await next()).coord).toEqual({ pause: 'clear', mail: 'set', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [] });
+      expect((await next()).coord).toEqual({ pause: 'clear', mail: 'set', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
 
       marker('coordinator-paused');
       await watcher.tick();
-      expect((await next()).coord).toEqual({ pause: 'set', mail: 'set', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [] });
+      expect((await next()).coord).toEqual({ pause: 'set', mail: 'set', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
       ws.close();
     });
 
@@ -972,12 +981,12 @@ describe('fleet REST + WS', () => {
       expect((await next()).type).toBe('hello');
       expect((await next()).type).toBe('fleet');
       expect((await next()).coord).toEqual(
-        { pause: 'clear', mail: 'clear', reclaim: 'set', childReclaimAttention: [], expiryAttention: [] });
+        { pause: 'clear', mail: 'clear', reclaim: 'set', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
 
       marker('coordinator-paused');
       await watcher.tick();
       expect((await next()).coord).toEqual(
-        { pause: 'set', mail: 'clear', reclaim: 'set', childReclaimAttention: [], expiryAttention: [] });
+        { pause: 'set', mail: 'clear', reclaim: 'set', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
       ws.close();
     });
 
@@ -992,7 +1001,7 @@ describe('fleet REST + WS', () => {
       await watcher.tick();
       const frame = await next();
       expect(frame.type).toBe('coord');
-      expect(frame.coord).toEqual({ pause: 'unmeasurable', mail: 'unmeasurable', reclaim: 'unmeasurable', childReclaimAttention: [], expiryAttention: [] });
+      expect(frame.coord).toEqual({ pause: 'unmeasurable', mail: 'unmeasurable', reclaim: 'unmeasurable', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
       ws.close();
     });
 
@@ -1007,20 +1016,20 @@ describe('fleet REST + WS', () => {
       const { ws, next, watcher } = await connect({ io: flaky });
       expect((await next()).type).toBe('hello');
       expect((await next()).type).toBe('fleet');
-      expect((await next()).coord).toEqual({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [] });
+      expect((await next()).coord).toEqual({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
 
       listable = false;
       await watcher.tick();     // this tick returns early — and still reports
       const frame = await next();
       expect(frame.type).toBe('coord');
-      expect(frame.coord).toEqual({ pause: 'unmeasurable', mail: 'unmeasurable', reclaim: 'unmeasurable', childReclaimAttention: [], expiryAttention: [] });
+      expect(frame.coord).toEqual({ pause: 'unmeasurable', mail: 'unmeasurable', reclaim: 'unmeasurable', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
 
       // And nothing ELSE was broadcast on that tick: the fail-shut return still
       // skips the fleet snapshot, exactly as it did before this frame existed.
       listable = true;
       marker('coordinator-paused');
       await watcher.tick();
-      expect((await next()).coord).toEqual({ pause: 'set', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [] });
+      expect((await next()).coord).toEqual({ pause: 'set', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], expiryAttention: [], deadCoordinatorAttention: [] });
       ws.close();
     });
 

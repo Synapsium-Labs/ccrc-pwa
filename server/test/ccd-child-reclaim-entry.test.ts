@@ -28,6 +28,7 @@ import { itLinux } from './platformFixtures.js';
 import {
   CHILD_BRANCH, CHILD_ENV, CHILD_ID, CHILD_RUN, CHILD_STUBS, evalOf, makeChild, type Child,
 } from './childReclaimFixture.js';
+import { inheritedEnv } from './gitEnvStrip.js';
 
 let h: PrHarness;
 let de: DirectEntry;
@@ -111,7 +112,7 @@ const plantModels = (): void => {
 const STARTUP_KEYS = ['BASH_ENV', 'ENV', 'SHELLOPTS', 'BASHOPTS', 'CDPATH', 'GLOBIGNORE'];
 const cleanEnv = (): NodeJS.ProcessEnv => {
   const env: NodeJS.ProcessEnv = {};
-  for (const [k, v] of Object.entries(process.env)) {
+  for (const [k, v] of Object.entries(inheritedEnv())) {
     if (k.startsWith('BASH_FUNC_') || STARTUP_KEYS.includes(k)) continue;
     env[k] = v;
   }
@@ -472,7 +473,7 @@ const echoed = (): { flags: string; argv: string[] } => {
 // The fourth column is where a MALFORMED audit shape must die: ordinary at
 // both entries, and still refused by `cmd_ws_audit`'s own parse (plan:112) —
 // so a dispatcher that wrongly accepted one cannot leave this table green.
-const USAGE = /^ccd: usage: ccd ws-audit --session <id> \[--reclaim \[--defer-expired\] \| --expire\]$/m;
+const USAGE = /^ccd: usage: ccd ws-audit --session <id> \[--reclaim \[--defer-expired\] \| --expire \| --collect\]$/m;
 const GRAMMAR: ReadonlyArray<readonly [string, readonly string[], boolean, RegExp | null]> = [
   ['ws-reclaim alone', ['ws-reclaim'], true, null],
   ['ws-reclaim with the full tail', ['ws-reclaim', '--expect', ANY_TOKEN, '--child-of', '7', '--session', 'x'], true, null],

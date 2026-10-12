@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 /** The header every box->server POST carries. Lowercase because Fastify
  *  normalises incoming header names, and a mixed-case constant here would read
@@ -28,8 +28,11 @@ export const MAIL_TOKEN_HEADER = 'x-ccrc-mail-token';
  * Skipping `#`-comment lines is what lets `ccrc-mail.token.example` carry
  * that comment preamble and still resolve to exactly one value — the line
  * below it — on both boxes, rather than the whole blob.
+ *
+ * Exported since the box-token lifecycle (Task A3): `token/files.ts`'s measured
+ * read extracts with this same rule rather than spelling it a second time.
  */
-function extractToken(raw: string): string | null {
+export function extractToken(raw: string): string | null {
   for (const line of raw.split(/\r?\n/)) {
     const t = line.trim();
     if (t === '' || t.startsWith('#')) continue;
@@ -45,9 +48,10 @@ function extractToken(raw: string): string | null {
  *  this is PRESENT-but-unusable, the same class of state the non-`ENOENT`
  *  arm below already refuses to collapse into "never configured", and for
  *  the identical reason — `checkMailToken(null, …)` answers `'unconfigured'`,
- *  which `/api/notify` still treats as a pass-through, so answering `null`
- *  here would disarm THAT gate too on a truncated `openssl rand -hex 32 > …`
- *  redirect, with nothing red anywhere. Deliberately NOT caught anywhere:
+ *  which `/api/notify` treated as a pass-through until the box-token lifecycle
+ *  removed it, so answering `null` here would have disarmed THAT gate too on a
+ *  truncated `openssl rand -hex 32 > …` redirect, with nothing red anywhere.
+ *  Deliberately NOT caught anywhere:
  *  `index.ts` lets it kill the process, the same stance `coord/db.ts`'s
  *  `CoordDbUnmigratable` takes for a 0-byte `coord.db` (Task 2/D-24 is the precedent this mirrors — a
  *  refusal, not a default). NOT what an un-edited `ccrc-mail.token.example`
@@ -156,16 +160,183 @@ export function readMailToken(tokenPath: string): string | null {
   return token;
 }
 
+/** The accept-set's five slots, in the fixed order every match compares them
+ *  (box-token lifecycle spec 4.3). */
+export type TokenSlot = 'current' | 'pending0' | 'pending1' | 'pending2' | 'previous';
+/** Five slots since D-4413: the third pending slot exists only for the pending cap's exit (a forward rotation staged
+ *  while both cap values are past `confirmBy`). `token/policy.ts`'s `PENDING_HARD_CAP` is the count of the three. */
+export const TOKEN_SLOTS: readonly TokenSlot[] = ['current', 'pending0', 'pending1', 'pending2', 'previous'];
+
+const PENDING_SLOTS = TOKEN_SLOTS.filter((s) => s.startsWith('pending')).length;
+
+/** What the driver and the boot hand the holder: the values themselves, never
+ *  their digests (those are the holder's own, in memory only). */
+export interface HolderSlots {
+  current: string | null;
+  /** At most three (`PENDING_HARD_CAP`); a fourth is a programming error and throws. */
+  pending: readonly { id: string; value: string }[];
+  /** `until` is the hard bound (ms since the epoch); at and after it the slot
+   *  compares a dummy. The driver removes the slot at retirement. */
+  previous: { value: string; until: number } | null;
+}
+
+const sha256 = (value: string): Buffer => createHash('sha256').update(value, 'utf8').digest();
+
+/** One random 32-byte dummy per slot, per process. An empty slot compares one of
+ *  these, so an empty slot costs the same compare as a filled one and matches
+ *  nothing: never the digest of '' or of any value a caller can send. Never
+ *  persisted, never printed. */
+const SLOT_DUMMIES: readonly Buffer[] = TOKEN_SLOTS.map(() => randomBytes(32));
+
+/** The retired-presentation warning's cap: at most one line a minute. */
+const RETIRED_WARN_EVERY_MS = 60_000;
+
+/**
+ * The index of the first slot equal to `presented`, or -1. CONSTANT TIME over
+ * the slots: every slot is compared on every call, and each result is folded
+ * into numbers with `|=`, so neither which slot matched nor whether any did
+ * changes how many compares run. The combine below carries no `||`, `&&`,
+ * `||=`, `&&=`, ternary, `return`, `break`, `some` or `find`;
+ * `coord-token.test.ts` scans the region between its two markers for each.
+ * Every slot and `presented` must be the same length (sha256 digests, 32
+ * bytes), which `timingSafeEqual` requires. `compare` is injected by tests to
+ * count calls.
+ */
+export function matchDigestSlots(presented: Buffer, slots: readonly Buffer[],
+  compare: (a: Buffer, b: Buffer) => boolean = timingSafeEqual): number {
+  let index = 0;
+  let found = 0;
+  // combine:begin
+  for (let i = 0; i < slots.length; i++) {
+    const hit = Number(compare(presented, slots[i]!));
+    index |= (i + 1) * (hit & (found ^ 1));
+    found |= hit;
+  }
+  // combine:end
+  return index - 1;
+}
+
+/**
+ * The box token's accept-set, held in memory and mutated in place by the boot
+ * and the driver, so every lane that reads `deps.mailToken ?? null` at request
+ * time sees a rotation with no restart (spec 4.2). It holds the five values and
+ * their sha256 digests; the digests are recomputed by {@link setSlots} and never
+ * written anywhere. It records which slot matched (for the console's "previous
+ * still presented" count and the grace rule); that record never promotes
+ * anything. It also holds the retired digests (`box-token-retired.json`), so a
+ * value the accept-set refuses can be recognised as retired and counted per lane.
+ */
+export class BoxTokenHolder {
+  private readonly now: () => number;
+  private readonly compare: (a: Buffer, b: Buffer) => boolean;
+  private slots: HolderSlots = { current: null, pending: [], previous: null };
+  private digests: Buffer[] = [...SLOT_DUMMIES];
+  private retired: Buffer[] = [];
+  private readonly matched: Record<TokenSlot, number> = { current: 0, pending0: 0, pending1: 0, pending2: 0, previous: 0 };
+  private retiredTotal = 0;
+  private readonly retiredLanes: Record<string, number> = {};
+  private lastRetiredWarnAt: number | null = null;
+
+  constructor(opts: { now?: () => number; compare?: (a: Buffer, b: Buffer) => boolean } = {}) {
+    this.now = opts.now ?? Date.now;
+    this.compare = opts.compare ?? timingSafeEqual;
+  }
+
+  setSlots(s: HolderSlots): void {
+    if (s.pending.length > PENDING_SLOTS) throw new RangeError(`BoxTokenHolder: at most ${PENDING_SLOTS} pending generations`);
+    this.slots = { current: s.current, pending: [...s.pending], previous: s.previous };
+    const p0 = s.pending[0];
+    const p1 = s.pending[1];
+    const p2 = s.pending[2];
+    this.digests = [
+      s.current === null ? SLOT_DUMMIES[0]! : sha256(s.current),
+      p0 === undefined ? SLOT_DUMMIES[1]! : sha256(p0.value),
+      p1 === undefined ? SLOT_DUMMIES[2]! : sha256(p1.value),
+      p2 === undefined ? SLOT_DUMMIES[3]! : sha256(p2.value),
+      s.previous === null ? SLOT_DUMMIES[4]! : sha256(s.previous.value),
+    ];
+  }
+
+  setRetired(digestsHex: readonly string[]): void {
+    this.retired = BoxTokenHolder.decodeDigests(digestsHex);
+  }
+
+  /** Adds digests to the retired list in memory (deduplicated), keeping every one already held. The driver uses it for
+   *  the digests still waiting for their append (box-token.json's `retiring` record) when the file cannot be read back. */
+  addRetired(digestsHex: readonly string[]): void {
+    const have = new Set(this.retired.map((b) => b.toString('hex')));
+    this.retired = [...this.retired, ...BoxTokenHolder.decodeDigests(digestsHex.filter((d) => !have.has(d)))];
+  }
+
+  private static decodeDigests(digestsHex: readonly string[]): Buffer[] {
+    const bufs = digestsHex.map((d) => Buffer.from(d, 'hex'));
+    // A round trip, not a regex: a sha256 digest is 32 bytes whose lowercase hex
+    // is exactly the string given (a malformed entry decodes short or differently).
+    bufs.forEach((b, i) => {
+      if (b.length !== 32 || b.toString('hex') !== digestsHex[i]) {
+        throw new RangeError('BoxTokenHolder: a retired digest is not a lowercase sha256 hex digest');
+      }
+    });
+    return bufs;
+  }
+
+  hasCurrent(): boolean { return this.slots.current !== null; }
+
+  /** The claim door's value source: memory, never the pending file. */
+  pendingValue(id: string): string | null {
+    return this.slots.pending.find((p) => p.id === id)?.value ?? null;
+  }
+
+  /** For the both-role writer and the retirement self-check only. */
+  currentValue(): string | null { return this.slots.current; }
+
+  /** The slot `presented` matches, or null. All five slots are compared every
+   *  time; the previous slot compares its dummy at and after its hard bound. */
+  match(presented: string): TokenSlot | null {
+    const prev = this.slots.previous;
+    const live = prev !== null && this.now() < prev.until
+      ? this.digests
+      : [this.digests[0]!, this.digests[1]!, this.digests[2]!, this.digests[3]!, SLOT_DUMMIES[4]!];
+    const i = matchDigestSlots(sha256(presented), live, this.compare);
+    if (i < 0) return null;
+    const slot = TOKEN_SLOTS[i]!;
+    this.matched[slot]++;
+    return slot;
+  }
+
+  isRetired(presented: string): boolean {
+    return matchDigestSlots(sha256(presented), this.retired, this.compare) >= 0;
+  }
+
+  /** Counts one retired presentation against `lane` and warns at most once a
+   *  minute, naming the lane and the counts. The value, its digest and the
+   *  caller are never printed (proxy trust is none, so every caller has the
+   *  proxy's address). */
+  noteRetiredPresented(lane: string): void {
+    this.retiredTotal++;
+    this.retiredLanes[lane] = (this.retiredLanes[lane] ?? 0) + 1;
+    const now = this.now();
+    if (this.lastRetiredWarnAt !== null && now - this.lastRetiredWarnAt < RETIRED_WARN_EVERY_MS) return;
+    this.lastRetiredWarnAt = now;
+    console.warn(`ccrc-server: box token: a retired value was presented on ${lane} ` +
+      `(${this.retiredLanes[lane]} on this lane, ${this.retiredTotal} in all since boot); it was refused`);
+  }
+
+  counters(): { matched: Record<TokenSlot, number>; retired: number; retiredByLane: Readonly<Record<string, number>> } {
+    return { matched: { ...this.matched }, retired: this.retiredTotal, retiredByLane: { ...this.retiredLanes } };
+  }
+}
+
 /**
  * `'ok' | 'legacy' | 'bad' | 'unconfigured'`.
  *
  * `'legacy'` means "no token was presented, but the server HAS one" and is
  * deliberately its own state rather than folded into `'bad'` — but it is
- * NOT, by itself, a license to proceed. It is a state precisely because
- * exactly ONE caller, `/api/notify`, is granted a tolerance for it: the
+ * NOT a license to proceed for ANY caller. It became a state because exactly
+ * ONE caller, `/api/notify`, was once granted a tolerance for it: the
  * operator ruling's one-deploy-generation window (spec:150-155), because a
- * fleet host still running yesterday's `notify.sh` presents NO token and the
- * hook must not go dark between the server deploy and the agent deploy.
+ * fleet host still running yesterday's `notify.sh` presented NO token. That
+ * tolerance is removed (see REMOVED below); every caller now refuses it.
  *
  * `'unconfigured'` means "the server itself was never given a token"
  * (`expected === null`) and is ALSO its own state, split out from `'ok'`
@@ -177,13 +348,10 @@ export function readMailToken(tokenPath: string): string | null {
  * `deploy/ccrc-mail.token` file was never minted — reachable by omission
  * (a fresh checkout, `ship_secret`'s only guard is `[ -f "$local_file" ]`,
  * `deploy.sh` exits 0), not by an operator's active choice, and permanent
- * rather than a rollout window. `/api/notify` DOES still treat
- * `'unconfigured'` as pass-through — it has a pre-existing deployed caller
- * (`notify.sh`) that must not go dark before a token is ever minted, the
- * same reason it gets `'legacy'` — so `server.ts`'s `/api/notify` handler is
- * UNCHANGED by this split: neither of its `if (verdict === 'bad' | ===
- * 'legacy')` arms matches `'unconfigured'`, so it falls through to the same
- * silent accept `'ok'` used to give it.
+ * rather than a rollout window. `/api/notify` went on treating
+ * `'unconfigured'` as pass-through after this split, for its pre-existing
+ * deployed caller (`notify.sh`), until the box-token lifecycle removed that
+ * arm too (REMOVED, below).
  *
  * FIX-ROUND FINDING 3/5 (Task 6) + FINDING 3 (Task 7, D-39): `/api/mail` and
  * `/api/mail/:id/ack` are NOT grantees of EITHER tolerance and must treat
@@ -204,21 +372,41 @@ export function readMailToken(tokenPath: string): string | null {
  * closing for the `'legacy'` arm; leaving `'unconfigured'` open was the other
  * half of the identical hole.
  *
- * REMOVE `/api/notify`'S `'legacy'` TOLERANCE ONE DEPLOY AFTER THIS SHIPS. It
- * is not a permanent accommodation: while it stands, that one ingress is
- * still open to anything on the tailnet presenting no token, which is the
- * hole this whole task exists to close. The README's coordination section
- * names the deploy that removes it. `/api/notify`'s `'unconfigured'`
- * pass-through has no such removal date — it is the honest "this box has
- * never been told a secret" state, not a rollout artefact — and
- * `/api/mail`/`/api/mail/:id/ack` never had either hole open, so they have
- * nothing to remove.
+ * REMOVED: `/api/notify`'s `'legacy'` tolerance AND its `'unconfigured'`
+ * pass-through (box-token lifecycle, spec 4.3 and the decision row "/api/notify
+ * tolerance: remove both arms"). This paragraph used to schedule the removal of
+ * `'legacy'` one deploy after it shipped, and to say `'unconfigured'` had no
+ * removal date because it was the honest "this box has never been told a
+ * secret" state. That reason is gone: the server mints its own token at boot,
+ * so a server with no current value is one whose mint FAILED, and every lane,
+ * `/api/notify` included, answers 401 there until a mint succeeds. No caller
+ * of this function grants either tolerance any more; the two words stay
+ * distinct so a refusal can say which condition it met.
  *
  * `timingSafeEqual` needs equal lengths, so the length check comes first and
  * leaks only the length — which a caller can measure anyway by sending one.
+ * That is the LITERAL-STRING arm, kept exactly as it was so the many tests that
+ * inject a string keep their meaning.
+ *
+ * A {@link BoxTokenHolder} (box-token lifecycle, spec 4.3) answers the same four
+ * words: no current value is `'unconfigured'`; an absent value is `'legacy'`; a
+ * value in the accept-set (current, either pending, previous before its hard
+ * bound) is `'ok'`, compared over sha256 digests so no length leaks either; any
+ * other value is `'bad'`, and one whose digest is retired is also counted
+ * against `lane` (the caller's route key, `'unnamed'` when absent), the only
+ * signal of an outside holder.
  */
-export function checkMailToken(expected: string | null, presented: unknown): 'ok' | 'legacy' | 'bad' | 'unconfigured' {
+export function checkMailToken(expected: string | BoxTokenHolder | null, presented: unknown,
+  lane?: string): 'ok' | 'legacy' | 'bad' | 'unconfigured' {
   if (expected === null) return 'unconfigured';        // the server was never given a token
+  if (expected instanceof BoxTokenHolder) {
+    if (!expected.hasCurrent()) return 'unconfigured';
+    if (presented === undefined || presented === null || presented === '') return 'legacy';
+    if (typeof presented !== 'string') return 'bad';
+    if (expected.match(presented) !== null) return 'ok';
+    if (expected.isRetired(presented)) expected.noteRetiredPresented(lane ?? 'unnamed');
+    return 'bad';
+  }
   if (presented === undefined || presented === null || presented === '') return 'legacy';
   if (typeof presented !== 'string') return 'bad';
   const a = Buffer.from(presented, 'utf8');

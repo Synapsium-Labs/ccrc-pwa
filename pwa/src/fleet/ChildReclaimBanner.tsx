@@ -31,6 +31,7 @@ import {
 } from './childReclaimWords';
 import { inlinePauseError } from './CoordBanner';
 import { ExpiryAttention } from './ExpiryAttention';
+import { DeadCoordinatorAttention } from './DeadCoordinatorAttention';
 import { api, apiErrorText } from '../lib/api';
 import { toast } from '../components/Toast';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
@@ -156,6 +157,9 @@ export function ChildReclaimBanner({
       {/* Workspace lifecycle wave 3b: the expiry lane's own list, under the children's — the same switch stops both
           lanes, and the two lists stay two (child reclamation's run chip never reads this one). */}
       <ExpiryAttention coord={coord} />
+      {/* Workspace lifecycle wave 4: the dead-coordinator lane's own list, under the expiry lane's — the same switch stops
+          all three lanes, and each list stays its own. */}
+      <DeadCoordinatorAttention coord={coord} />
     </div>
   );
 }

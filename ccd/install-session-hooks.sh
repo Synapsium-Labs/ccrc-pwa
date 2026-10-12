@@ -23,6 +23,17 @@ set -euo pipefail
 # the fleet host; $HOME is left unexpanded (single-quoted) so it resolves
 # per-session at hook-run time, not to this installer's own $HOME.
 HOOK_CMD='bash "$HOME/.cc-sessions/session-hook.sh"'
+# HOOK_TIMEOUT_S bounds every managed hook run but SessionEnd's (D-4418, review 316 F24).
+# One open(2) no builtin can make non-blocking remains in the hook: the history spool
+# append, if a FIFO is swapped in between its regular-file test and its `>>`. Claude Code
+# kills a command hook at its entry's `timeout`; 600 s is its own default (measured, history
+# spec §4.1), so writing it changes nothing today and keeps the bound this tree's. A shorter
+# bound would move every managed path's fail-open point (the merge deny, the compaction
+# card): an operator decision, not this fix's. SessionEnd's entry carries NONE: Claude Code
+# runs SessionEnd hooks under its own 1.5 s budget (CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS,
+# measured on 2.1.292), which a configured `timeout` RAISES, to min(timeout, 60 s), on every
+# exit and /clear; and the spool append never runs on SessionEnd.
+HOOK_TIMEOUT_S=600
 # Same discipline as HOOK_CMD: $HOME left unexpanded, resolved per-session.
 STATUSLINE_CMD='bash "$HOME/.claude/statusline-command.sh"'
 # Events that get a matcher-less managed entry. PreToolUse is handled
@@ -87,8 +98,8 @@ JQ_UNMANAGED='def unmanaged: map(select((.hooks // []) | any(.command | tostring
 JQ_PROGRAM="$JQ_UNMANAGED"'
 .hooks = ((.hooks // {})
   | with_entries(.value |= unmanaged)
-  | reduce $events[] as $ev (.; .[$ev] = ((.[$ev] // []) + [{hooks:[{type:"command", command:$cmd}]}]))
-  | .PreToolUse = ((.PreToolUse // []) + [{matcher:"*", hooks:[{type:"command", command:$cmd}]}])
+  | reduce $events[] as $ev (.; .[$ev] = ((.[$ev] // []) + [{hooks:[{type:"command", command:$cmd} + (if $ev == "SessionEnd" then {} else {timeout:$tmo} end)]}]))
+  | .PreToolUse = ((.PreToolUse // []) + [{matcher:"*", hooks:[{type:"command", command:$cmd, timeout:$tmo}]}])
   | with_entries(select(.value != [])))
 | if has("statusLine") then . else .statusLine = {type:"command", command:$sl} end
 '
@@ -117,7 +128,7 @@ for dir in "${homes[@]}"; do
 
   prog="$JQ_PROGRAM"
   [[ "$MODE" == remove ]] && prog="$JQ_REMOVE"
-  next=$(jq --arg cmd "$HOOK_CMD" --argjson events "$EVENTS_JSON" --arg sl "$STATUSLINE_CMD" "$prog" <<<"$cur") \
+  next=$(jq --arg cmd "$HOOK_CMD" --argjson events "$EVENTS_JSON" --argjson tmo "$HOOK_TIMEOUT_S" --arg sl "$STATUSLINE_CMD" "$prog" <<<"$cur") \
     || { echo "install-session-hooks: merge failed for $f" >&2; rc=1; continue; }
 
   # Converged already? Do not touch the file (idempotence is byte-level: the

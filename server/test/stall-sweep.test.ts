@@ -25,16 +25,16 @@ import {
   BACKLOG_HORIZON_MS, DEAD_GRACE_MS, FAILED_IDLE_MS, MAIL_STUCK_MS, MARKER_UNREADABLE_MS, ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS,
   FROZEN_NO_EVENT_MS, ORPHAN_PUSH_MS, STALL_FAILED_PREFIX, stallFailedSubject,
   STALL_CHECK_PREFIX, STALL_ESCALATE_MS, STALL_OPERATOR_MS, STALL_ORPHANED_PREFIX, STALL_QUIET_MS, STALL_REPORT_PREFIX,
-  parseStallDetail, stallArmingOf, stallDetail, COORD_DEAF_MS, type StallArming,
+  parseStallDetail, stallArmingOf, stallDetail, COORD_DEAF_MS, STALL_MARKERS, type StallArming,
 } from '../src/coord/stall.js';
-import { parseStallSettings, stallBusyClock, type StallBoxArming, type StallSettingsPatch } from '../src/coord/stallsettings.js';
+import { parseStallSettings, resolveStallWatch, stallBoxArmingOf, stallBusyClock, type StallBoxArming, type StallSettingsPatch } from '../src/coord/stallsettings.js';
 import type { PushPayload } from '../src/push.js';
 import { MAIL_REPLAY_MS, STALL_LEVELS, WAVE_DONE_SUBJECT, type FleetSession } from '../../shared/api.js';
 import { tmuxTarget } from '../../shared/tmux-target.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO } from './ioDoubles.js';
-import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, mailTurnModeOf } from '../src/turnidle.js';
+import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER, mailTurnModeOf } from '../src/turnidle.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -333,7 +333,7 @@ describe('sweepStalls: gating', () => {
     expect(reads).toEqual([]);
   });
 
-  it('a throw outside the per-subject catch (the arming read) resolves, warns ONCE, and frees the in-flight flag', async () => {
+  it("a throw outside the per-subject catch (a listing's `includes`) resolves, warns ONCE, and frees the in-flight flag", async () => {
     // The tick calls `sweepStalls(...).catch(() => {})`, so a throw that escaped the lane would kill it every
     // minute with no trace. The lane's own outer catch is what leaves one line behind.
     const { coord, w } = await rig();
@@ -2238,6 +2238,65 @@ describe('sweepStalls: the stall-watch settings (stall watch settings §9)', () 
       expect({ mailMode, ...(busySince === undefined ? {} : { busySince }) }, level)
         .toStrictEqual(stallBusyClock(answerMode, applied.lastApplied as typeof answerMode | null, applied.busySince));
     }
+  });
+
+  /** The resolver's catch arm, forced: a store whose `stallSettings()` throws. The method is private, so it is reached
+   *  through a cast, as `tap` does; a rename makes the call throw and the rows red. */
+  const resolveWithFaultyStore = (coord: CoordStore, w: FleetWatcher, names: readonly string[], mailDisabled: boolean): Resolution => {
+    vi.restoreAllMocks();                                    // a repeat call re-spies, never stacks
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(coord, 'stallSettings').mockImplementation(() => { throw new Error('store fault'); });
+    const f = w as unknown as { stallResolveNow: (...a: unknown[]) => Resolution };
+    return f.stallResolveNow(coord, names, mailDisabled);
+  };
+
+  it('the catch arm answers the files-only reading, the one `stallBoxArmingOf` gives, and the built-in quiet time (M5e)', async () => {
+    const [KILL_FILE] = STALL_MARKERS as unknown as [string];
+    expect(stallArmingOf([KILL_FILE]).disabled, 'premise: the kill file is STALL_MARKERS[0]').toBe(true);
+    const listings: [string, readonly string[]][] = [
+      ['none', []],
+      ['strict', [MAIL_GATE_STRICT_MARKER]],
+      ['busy', [MAIL_GATE_BUSY_MARKER]],
+      ['busy-shadow', [MAIL_GATE_BUSY_SHADOW_MARKER]],
+      ['live', LIVE],
+      ['armed', ARMED],
+      ['wave 2', W2],
+      ['wave 2 live only', W2_LIVE],
+      ['kill file', [KILL_FILE]],
+      ['kill file over armed busy', [...W2, KILL_FILE, MAIL_GATE_BUSY_MARKER]],
+      ['armed busy', [...W2, MAIL_GATE_BUSY_MARKER]],
+    ];
+    const { coord, w } = await rig();               // one rig: the store's fault stands for every listing
+    for (const [label, names] of listings) {
+      for (const mailDisabled of [false, true]) {
+        const answer = resolveWithFaultyStore(coord, w, names, mailDisabled);
+        expect(answer.arming, `${label}, mailDisabled ${mailDisabled}`).toStrictEqual(stallBoxArmingOf(names, mailDisabled));
+        expect(answer.quietMs, `${label}, mailDisabled ${mailDisabled}`).toBe(STALL_QUIET_MS);
+      }
+    }
+  });
+
+  it('the answer carries where the level came from: the resolver\'s value on the success arm, `files` on the catch arm (spec §9)', async () => {
+    const seen = new Set<string>();
+    for (const [label, level, names] of [
+      ['follow', 'follow', []],
+      ['chosen', 'all', []],
+      ['held by strict', 'all', [MAIL_GATE_STRICT_MARKER]],
+    ] as const) {
+      const { h, coord, w } = await rig();
+      for (const n of names) touch(h, n);
+      choose(coord, { level });
+      const listed = listing(h);
+      const f = w as unknown as { stallResolveNow: (...a: unknown[]) => Resolution };
+      const answer = f.stallResolveNow(coord, listed, false);
+      const expected = resolveStallWatch(stallBoxArmingOf(listed, false), parseStallSettings(coord.stallSettings())).levelSource;
+      expect(answer.levelSource, label).toBe(expected);
+      seen.add(answer.levelSource);
+    }
+    expect([...seen].sort(), 'premise: the three values are each reached').toEqual(['chosen', 'files', 'held']);
+    const { coord, w } = await rig();
+    choose(coord, { level: 'all' });
+    expect(resolveWithFaultyStore(coord, w, [], false).levelSource).toBe('files');
   });
 
   /** One raise into busy delivery while a mail has been held past MAIL_STUCK_MS (M8). The mail sweep applies the

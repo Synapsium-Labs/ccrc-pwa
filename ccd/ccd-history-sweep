@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# ccd-history-sweep — the history store's writer, as the timer and the operator
+# run it (spec docs/superpowers/specs/2026-10-05-ccrc-history-lossless-dag-design.md
+# §5.1). A shim, for two reasons: a copy placed in ~/.local/bin cannot resolve
+# sweep.mjs's relative imports, so it execs the placed tree's file through the
+# ~/ccrc link; and it is the ONE lock taker — nothing else, hook, CLI or sweep,
+# ever takes this lock (RV13).
+#
+# IN ORDER (§5.1):
+#   1. umask 077: every file the pass makes is 0600, every directory 0700.
+#   2. the lock. A scheduled pass that finds it held is a SUCCESS — exit 0 with
+#      one line — because the pass that holds it is doing this pass's work; an
+#      `--op` pass gets 75, which the CLI answers as exit 4 `writer-busy`
+#      (D-4223). Two
+#      conditions stay two answers (the ccd-account-health rule): a lock that
+#      cannot be OPENED is a broken box, loud, exit 1; a lock another pass holds
+#      is the healthy overlap.
+#   3. history-off ends a SCHEDULED pass here. An `--op` pass goes on: its gate
+#      in sweep.mjs answers `history-off` by name for every form but the
+#      binding verbs, so the operator reads why (D-4181).
+#   4. the roster, only when ~/.ccrc/accounts.sh is a regular, readable file
+#      (`-f` first: sourcing a FIFO blocks in open(2) while the lock is held,
+#      D-4347 (history-planted-entries-never-wedge); a swap between the test and
+#      the source is a residual race bash cannot close without a subprocess)
+#      and defines _ccrc_cfg_dir: each account's home and its declared secrets file. An
+#      unreadable roster is passed on as --roster-unreadable with no homes —
+#      counted by the sweep, never read as an empty roster (FE4).
+#   5. exec node on the placed tree's sweep.mjs, the lock's fd 9 inherited.
+#
+# Every carrier must kill a pass that outlives CARRIER_KILL_S (lib.mjs); on
+# systemd that is the unit's TimeoutStartSec. Linux-only by product shape (no
+# timer installs on the Darwin arm); written to pass macos-platform.test.ts's
+# GNU-spelling scan anyway.
+set -uo pipefail
+umask 077
+
+op=""
+[ "${1:-}" = --op ] && op="${2:-}"
+LOCK="$HOME/.ccrc/history-sweep.lock"
+ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
+
+command -v flock >/dev/null 2>&1 || { echo "history-sweep: flock is not on PATH — nothing was swept" >&2; exit 1; }
+command -v node >/dev/null 2>&1 || { echo "history-sweep: node is not on PATH — nothing was swept" >&2; exit 1; }
+
+mkdir -p "$HOME/.ccrc" || { echo "history-sweep: cannot make \$HOME/.ccrc — nothing was swept" >&2; exit 1; }
+exec 9>"$LOCK" || { echo "history-sweep: cannot open the lock at \$HOME/.ccrc/history-sweep.lock — nothing was swept" >&2; exit 1; }
+flock -n 9 || { [ -n "$op" ] && exit 75; echo "history-sweep: another pass holds the lock"; exit 0; }
+
+[ -z "$op" ] && [ -e "$HOME/.ccrc/history-off" ] && exit 0
+
+homes=()
+secrets=()
+rflag=""
+# shellcheck source=/dev/null
+if [ -f "$ACCOUNTS_SH" ] && [ -r "$ACCOUNTS_SH" ] && . "$ACCOUNTS_SH" 2>/dev/null && declare -F _ccrc_cfg_dir >/dev/null 2>&1; then
+  for a in ${CCRC_ACCOUNTS[@]+"${CCRC_ACCOUNTS[@]}"}; do
+    d="$(_ccrc_cfg_dir "$a")"
+    [ -n "$d" ] && homes+=("$d")
+    # _ccrc_secrets_file is the version probe as well as the reader: an
+    # accounts.sh generated before it existed names no secrets file at all.
+    if declare -F _ccrc_secrets_file >/dev/null 2>&1; then
+      sf="$(_ccrc_secrets_file "$a")"
+      [ -n "$sf" ] && secrets+=("$HOME/$sf")
+    fi
+  done
+else
+  rflag=--roster-unreadable
+fi
+
+exec node --no-warnings "$HOME/ccrc/ccd/history/sweep.mjs" "$@" ${rflag:+"$rflag"} \
+  --secrets ${secrets[@]+"${secrets[@]}"} -- ${homes[@]+"${homes[@]}"}

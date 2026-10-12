@@ -1263,6 +1263,33 @@ export const MIGRATIONS: readonly string[] = [
   INSERT INTO stall_settings (id, level, quietMs, updatedAt) VALUES (1, 'follow', NULL, 0);
   CREATE INDEX IF NOT EXISTS run_events_by_at ON run_events(at);
   `,
+  // ── 18: user_version 17 -> 18 ─────────────────────────────────────────────
+  // The dead-coordinator lane's DURABLE first-dead anchor (workspace lifecycle spec 2026-09-24 §5.4, "The hour is the
+  // lane's own observation, made durable"): one row per claimant the lane last measured CRASHED — `firstDeadAt`, the
+  // first pass of the episode, and `lastDeadAt`, the latest — written on a crashed pass and deleted on any alive,
+  // unmeasurable or non-crash answer (`CoordStore.setDeadAnchor`/`deleteDeadAnchor`, the table's one writer pair).
+  // Epoch ms, the server's clock. The table survives restarts; `.supervised`'s stamp may only RAISE the anchor
+  // (`deadCoordinatorSince`).
+  //
+  // A NEW TABLE AND NOTHING ELSE, and that is the choice that keeps a ROLLBACK bootable — `ccrc-update-watchdog` can
+  // roll a server box back with no human in the loop. MEASURED against `origin/main`'s own `db.ts` (wave 4's plan,
+  // Pre-flight): an older build opening a file at `user_version 18` takes rule 3 — it warns, reads as-is, migrates
+  // nothing, and its runs, mail, claims and ledger reads and writes work unchanged, because it never names this table
+  // and every read names its columns. An `ALTER TABLE runs ADD COLUMN … NOT NULL` would have been the dangerous shape:
+  // an older build's `INSERT INTO runs` names no such column. What the older build cannot do is keep the anchors, so
+  // rows it leaves behind are an episode nobody measured — which is why `lastDeadAt` rides beside `firstDeadAt`, and
+  // the lane restarts an episode whose last crashed pass is older than `DEAD_COORDINATOR_GAP_MS` (the departure
+  // `dead-anchor-restarts-after-an-unobserved-gap`).
+  //
+  // MIGRATIONS[0..16] are frozen: `db.ts` iterates from the live `user_version`, so an edit to an applied entry never
+  // runs. THIS ENTRY WAS SLOT 17 WHEN ITS PLAN WAS WRITTEN. Stall-watch-settings W1 (#320) merged first and took
+  // `user_version 16 -> 17`, so this one moved up a slot rather than sharing an index, as entry 12 did before it.
+  // RE-MEASURE immediately before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE dead_claimants (claimantId TEXT NOT NULL PRIMARY KEY, firstDeadAt INTEGER NOT NULL, lastDeadAt INTEGER NOT NULL);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

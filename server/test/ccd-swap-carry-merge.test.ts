@@ -310,7 +310,8 @@ describe('the copy fallback', () => {
       expect(ino(DST('tool-results/r.txt'))).not.toBe(ino(s));
       expect(fs.statSync(DST('tool-results/r.txt')).mtimeMs, 'copy2 keeps the mtime the quick check reads')
         .toBe(fs.statSync(s).mtimeMs);
-      expect(verdict()).toBe('(merged +1 ~0 !0)');
+      // The copy names its cause and bytes (D-4501): two filesystems by stat.
+      expect(verdict()).toBe('(merged +1 ~0 !0, copy: exdev-other-fs 1 files 2 bytes)');
     } finally {
       fs.rmSync(vol, { recursive: true, force: true });
     }

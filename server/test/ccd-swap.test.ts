@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { asManagerCalls } from './platformFixtures.js';
+import { bindFixture, plantFakeKernel } from './fixtures/fakeMountKernel.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-swap-'); });
@@ -202,7 +203,27 @@ describe('cmd_swap carries the sidecars', () => {
     expect(fs.existsSync(real), 'the file must land at the real mirrored path, not nested').toBe(true);
     expect(fs.readFileSync(real, 'utf8')).toBe('RESULT\n');
     expect(fs.existsSync(dstAt(mdir, path.join(UUID, UUID))), 'a <uuid>/<uuid> nest must not exist').toBe(false);
-    expect(swapLog()).toContain('(copy)');
+    // The copy names its cause and its bytes (D-4501). The harness hands ccd an
+    // ABSENT mount table (`FIXTURE_MOUNTINFO`), so the route's answer is
+    // `mounts-absent` on Linux and macOS alike.
+    expect(swapLog()).toMatch(/\(copy: mounts-absent \d+ bytes\)/);
+  });
+
+  it('links the sidecar through the common mount, and the transcript is still a copy (D-4500)', () => {
+    // The fleet's geometry, faked (`fixtures/fakeMountKernel.ts`): each account
+    // root its own mount of one filesystem, which is also mounted whole and
+    // read-write. The sidecar's failed `cp -al` routes through the whole mount
+    // and shares one inode; the transcript is APPENDED to, so it keeps its copy
+    // semantics (`_swap_carry_jsonl`'s header) and never shares one.
+    const mdir = seed('claude');
+    const t = plant('.claude', mdir, 'HISTORY\n');
+    const src = sidecar('.claude', mdir, 'tool-results/r.json', 'RESULT\n');
+    const k = plantFakeKernel(h.home);
+    h.sh(`${SWAP} ${k.cpStub} cmd_swap ${ID} claude-d`, { TMUX: '', ...bindFixture(h.home), ...k.env });
+    expect(swapLog()).toContain('(link: via-mount)');
+    expect(fs.statSync(dstAt(mdir, path.join(UUID, 'tool-results/r.json'))).ino).toBe(fs.statSync(src).ino);
+    expect(fs.readFileSync(dstAt(mdir, `${UUID}.jsonl`), 'utf8')).toBe('HISTORY\n');
+    expect(fs.statSync(dstAt(mdir, `${UUID}.jsonl`)).ino, 'the transcript is a copy').not.toBe(fs.statSync(t).ino);
   });
 });
 

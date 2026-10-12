@@ -660,8 +660,8 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 17 — never hand-edited beside a growing array', () => {
-    // Bumped to 17 by seven migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
+  it('COORD_SCHEMA_VERSION derives to 18 — never hand-edited beside a growing array', () => {
+    // Bumped to 18 by eight migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
     // design 2026-09-14 §5.1), MIGRATIONS[11] (runs.coordProject, board
     // placement wave 1 Task 1), MIGRATIONS[12] (pool_edges/pool_epoch,
     // account-pool membership wave 1 Task 6), MIGRATIONS[13] (releases,
@@ -669,10 +669,11 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // update management W2 Task 3), MIGRATIONS[14] (the stall mail read's
     // indexes, worker stall watch wave 5), MIGRATIONS[15]
     // (runs.sessionBornAt / runs.sessionBornFor — child-reclamation spec §5.1,
-    // §5.3) and MIGRATIONS[16] (stall_settings and run_events_by_at — stall
-    // watch settings design 2026-10-05 §8).
-    expect(COORD_SCHEMA_VERSION).toBe(17);
-    expect(MIGRATIONS.length).toBe(17);
+    // §5.3), MIGRATIONS[16] (stall_settings and run_events_by_at — stall
+    // watch settings design 2026-10-05 §8) and MIGRATIONS[17] (dead_claimants,
+    // workspace lifecycle spec §5.4).
+    expect(COORD_SCHEMA_VERSION).toBe(18);
+    expect(MIGRATIONS.length).toBe(18);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -727,13 +728,50 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     const db = openCoordDb(p);
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
       .toBe(COORD_SCHEMA_VERSION);
-    // 17 since MIGRATIONS[14] (the stall read's indexes), MIGRATIONS[15]
+    // 18 since MIGRATIONS[14] (the stall read's indexes), MIGRATIONS[15]
     // (runs.sessionBornAt/sessionBornFor, child-reclamation spec §5.1, §5.3)
-    // and MIGRATIONS[16] (stall_settings and run_events_by_at, stall watch
-    // settings §8); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(17);
+    // MIGRATIONS[16] (stall_settings and run_events_by_at, stall watch
+    // settings §8) and MIGRATIONS[17] (dead_claimants); the migration above is
+    // still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(18);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
+    db.close();
+  });
+});
+
+describe('coord.db: dead_claimants, the dead-coordinator lane’s durable anchor (workspace lifecycle §5.4)', () => {
+  /** This entry's slot, found by its DDL and never hard-coded (the rule the stall-watch settings entry's case states):
+   *  whichever of two branches holding one slot merges second moves up, and that renumber must not edit a line here. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('dead_claimants')) + 1;
+  interface ColumnInfo { name: string; type: string; notnull: number; pk: number }
+  it('a NEW TABLE and nothing else: three columns, the claimant its key — no column on an older build’s tables', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates dead_claimants').toBeGreaterThanOrEqual(18);
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const cols = (db.prepare("SELECT name, type, \"notnull\", pk FROM pragma_table_info('dead_claimants')").all() as unknown as ColumnInfo[])
+      .map((c) => [c.name, c.type, c.notnull, c.pk]);
+    expect(cols).toEqual([['claimantId', 'TEXT', 1, 1], ['firstDeadAt', 'INTEGER', 1, 0], ['lastDeadAt', 'INTEGER', 1, 0]]);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim(), 'the migration CREATEs one table and alters nothing')
+      .toMatch(/^CREATE TABLE dead_claimants \([^;]*\);$/);
+    db.close();
+  });
+
+  it('reaches a database ALREADY at the version before it and leaves every existing row as it was', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates dead_claimants').toBeGreaterThanOrEqual(18);
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('p', 'P', 1, 'active')");
+      raw.exec("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('p', 1, 1, 'demo', 'working', 'c', 1)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM dead_claimants').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT claimedBy, state FROM runs').get()).toEqual({ claimedBy: 'c', state: 'working' });
     db.close();
   });
 });
@@ -1395,9 +1433,14 @@ describe('coord.db: migration 16 — runs.sessionBornAt / runs.sessionBornFor (c
 });
 
 describe('coord.db: stall_settings and run_events_by_at (stall watch settings W1, design 2026-10-05 §8)', () => {
-  /** This entry's slot, found by its DDL and never hard-coded (the stall mail indexes' rule above): whichever of two
-   *  branches holding one slot merges second moves up, and that renumber must not have to edit a line here. */
-  const SLOT = MIGRATIONS.findIndex((m) => m.includes('stall_settings')) + 1;
+  /** This entry's slot, found by its DDL, `CREATE TABLE stall_settings (` (the first entry that spells it), and never
+   *  hard-coded (the stall mail indexes' rule above): whichever of two branches holding one slot merges second moves
+   *  up, and that renumber must not have to edit a line here. The bare name would not do: a later migration may name
+   *  the table without creating it. The needle stops at the NAME, not at a prefix of it: `_` is a word character, so
+   *  the lookahead names it, and `CREATE TABLE stall_settings_new` (SQLite's table-rebuild idiom, a legitimate later
+   *  migration) is not a second create of this table. */
+  const CREATE = /CREATE TABLE stall_settings(?![A-Za-z0-9_])/;
+  const SLOT = MIGRATIONS.findIndex((m) => CREATE.test(m)) + 1;
   const NAMES = ['run_events_by_at', 'stall_settings'];
   const objectNames = (db: DatabaseSync): string[] =>
     (db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table', 'index') AND name NOT LIKE 'sqlite_%'").all() as
@@ -1422,8 +1465,15 @@ describe('coord.db: stall_settings and run_events_by_at (stall watch settings W1
 
   it('is its own entry, after every entry main carried when it was written', () => {
     expect(SLOT, 'no MIGRATIONS entry creates stall_settings').toBeGreaterThanOrEqual(17);
-    expect(MIGRATIONS.slice(0, SLOT - 1).some((m) => NAMES.some((n) => m.includes(n))),
-      'a name of this entry was amended into a frozen one').toBe(false);
+    // Exactly one entry CREATEs the table. A later legitimate migration may name it (an ALTER, an index), and that is
+    // no fault; only a second CREATE is, so the count is of the DDL and not of the name.
+    expect(MIGRATIONS.filter((m) => CREATE.test(m)).length,
+      'more than one MIGRATIONS entry carries CREATE TABLE stall_settings: a later migration may name the table (an ALTER is fine), but only one entry may create it').toBe(1);
+    // SLOT is found by the DDL, so this scan is meaningful: a name amended into a frozen entry reds here.
+    expect(MIGRATIONS.slice(0, SLOT - 1).some((m) => m.includes('stall_settings')),
+      'stall_settings was amended into a frozen entry').toBe(false);
+    expect(MIGRATIONS.slice(0, SLOT - 1).some((m) => m.includes('run_events_by_at')),
+      'run_events_by_at was amended into a frozen entry').toBe(false);
   });
 
   it('the entry alone adds exactly stall_settings and run_events_by_at, and seeds one follow/NULL row', () => {

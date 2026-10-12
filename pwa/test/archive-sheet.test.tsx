@@ -52,7 +52,10 @@ describe('the confirm reads by case', () => {
     const onArchived = vi.fn();
     const { onClose } = mount(s(), { archive, onArchived });
     expect(screen.getByText('Archive this workspace?')).toBeInTheDocument();
-    expect(screen.getByText('It goes offline and folds into Archived. Restore brings it back for 7 days; after that it is cleaned up.')).toBeInTheDocument();
+    // True before and after the operator arms the expiry lane, under the cleanup pause, and on an older box (review 313,
+    // parked item 2): the promise is conditional, as README and the skill already say it.
+    expect(screen.getByText('It goes offline and folds into Archived. Restore brings it back; once automatic cleanup is on, '
+      + 'it is cleaned up seven days after its archive.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(archive).toHaveBeenCalledWith('demo-amber', {});

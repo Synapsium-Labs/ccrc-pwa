@@ -1,24 +1,26 @@
-# The Build 7 box token. Copy to `deploy/ccrc-mail.token` (gitignored, never
-# committed), REPLACE THE LINE BELOW with a real value, and `deploy.sh` ships
-# it to BOTH boxes:
-#   fleet host  -> ~/.cc-secrets/ccrc-mail.token   (notify.sh + every session)
-#   server box  -> ~/.ccrc/mail.token              (read at boot)
+# The box token's placeholder. You do not need a copy of this file.
 #
-# Mint with:  openssl rand -hex 32
+# The server mints the box token itself at its first boot (`~/.ccrc/mail.token`,
+# mode 0600) and rotates it. On a two-box fleet it hands the fleet box its copy
+# (`~/.cc-secrets/ccrc-mail.token`) over the agent link (`ccrc token sync`); on
+# a single box recorded as `CCRC_ROLE=both` it writes that copy itself.
+# `deploy.sh` ships no token, and a hand-made value found at boot is adopted
+# once and retired by the first rotation. Never copy either file by hand, and
+# check them with `ls -l`, never `cat`.
 #
-# This authenticates THE BOX, not a session: every fleet session runs as one
-# UNIX user and can read the file. Per-session identity is attribution
+# This file stays because its one value line below is the placeholder the
+# server refuses BY NAME: a token file whose value is that line throws
+# `MailTokenPlaceholderUnedited` at boot, because the line is committed to this
+# public repo and authenticates nobody.
+#
+# The token authenticates THE BOX, not a session: every fleet session runs as
+# one UNIX user and can read the file. Per-session identity is attribution
 # (`{fromId, fromUuid}` checked against the registry), and the spec says so.
 #
-# Both boxes' readers (coord/token.ts, notify.sh) take the first line here
-# that is neither blank nor a `#`-comment as THE TOKEN, so this file's shape
-# — comments, then exactly one value line — already IS the deployable shape:
-# a real value on the line below is enough, no other edit needed. DO NOT SHIP
-# THE PLACEHOLDER BELOW AS-IS — it is committed to this public repo, so it
-# authenticates nobody. If you instead DELETE the line below and ship only
-# comments (or truncate the file to 0 bytes), both readers refuse to treat
-# that as "unconfigured": a PRESENT file with no extractable value throws
-# loudly at boot rather than silently opening the ingress (fix-round finding
-# 4) — "never shipped a token" and "shipped an empty one" are different
-# mistakes and must not read the same.
+# Every reader (coord/token.ts, notify.sh, ccrc-api and the two sync timers)
+# takes the first line that is neither blank nor a `#`-comment as THE TOKEN,
+# whitespace stripped from it everywhere. A present file with no such line is
+# refused at boot rather than read as "unconfigured" (fix-round finding 4):
+# "no token" and "an empty one" are different mistakes and must not read the
+# same.
 REPLACE-THIS-LINE-WITH-THE-OUTPUT-OF-openssl-rand--hex-32
