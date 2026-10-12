@@ -1246,6 +1246,25 @@ describe('store.mjs: the repair measurements (W1-B2 Task 23)', () => {
       withTx(db, 'NORMAL', () => { dropFtsTables(db); });   // with nothing left it is a no-op, never a throw
     } finally { closeWriter(db); }
   });
+
+  it('dropFtsTables removes a table left at a shadow\'s name when its FTS table is gone, so createFtsTables can run (P24)', (ctx) => {
+    const home = mkTmp('ccrc-history-repair-orphan-');
+    createStore(home);
+    const db = openWriter(historyPaths(home).dbFile);
+    try {
+      if (probeFts5(db) === 'absent') ctx.skip();
+      withTx(db, 'NORMAL', () => { createFtsTables(db); });
+      db.exec('DROP TABLE blobs_fts');                       // takes its own shadows with it
+      db.exec('CREATE TABLE blobs_fts_idx (x)');             // allowed: no FTS table owns that name now
+      db.exec('SAVEPOINT control');
+      expect(() => createFtsTables(db), 'CONTROL: the orphan blocks the re-create').toThrow(/already exists/);
+      db.exec('ROLLBACK TO control');
+      db.exec('RELEASE control');
+      withTx(db, 'NORMAL', () => { dropFtsTables(db); });
+      expect(() => withTx(db, 'NORMAL', () => { createFtsTables(db); })).not.toThrow();
+      expect([...ftsMeasure(db).tables]).toContain('blobs_fts');
+    } finally { closeWriter(db); }
+  });
 });
 
 describe('store.mjs: setCounter (W1-B2 Task 23)', () => {

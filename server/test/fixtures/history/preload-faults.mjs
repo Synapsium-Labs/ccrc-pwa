@@ -385,7 +385,8 @@ import { DatabaseSync as DatabaseSyncR21 } from 'node:sqlite';
 //   `all` (the rebuild's pick, which runs OUTSIDE any transaction), commit one dangling file_paths row with foreign
 //   keys off, then turn them back on: a violation that appears after the job's baseline and before its
 //   completion, which only the completion's baseline diff can see.
-// HISTORY_TEST_INTEGRITY=<text>: `PRAGMA integrity_check` answers one row holding <text> instead of 'ok'.
+// HISTORY_TEST_INTEGRITY=<text>: `PRAGMA integrity_check` answers one row holding <text> instead of 'ok'; a <text> beginning
+//   `throw:` makes the pragma's `.all` throw an Error whose message is the rest (a vtab whose own tables are gone, D-4591).
 // All three patch DatabaseSync.prototype.prepare on top of whatever an earlier block installed.
 import { DatabaseSync as DatabaseSyncR23 } from 'node:sqlite';
 {
@@ -402,7 +403,9 @@ import { DatabaseSync as DatabaseSyncR23 } from 'node:sqlite';
       const text = String(sql);
       const conn = this;
       if (integrityR23 !== '' && /PRAGMA\s+integrity_check/i.test(text)) {
-        st.all = () => [{ integrity_check: integrityR23 }];
+        st.all = integrityR23.startsWith('throw:')
+          ? () => { throw new Error(integrityR23.slice('throw:'.length)); }
+          : () => [{ integrity_check: integrityR23 }];
         return st;
       }
       if (fkInjectR23 !== '' && text.includes(fkInjectR23)) {

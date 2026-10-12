@@ -6180,3 +6180,20 @@ describe('lib: decideCounterResets resets a counter only once what it counts is 
     expect(() => d({}, { [H.drainRejected]: -1 })).toThrow(TypeError);
   });
 });
+
+// ── W1-B2 Task 23 fix round 1: doctor --repair's integrity gate (D-4591) ─────────────────────────────
+describe('lib: decideIntegrity, doctor --repair\'s integrity gate (W1-B2 Task 23 fix round 1; D-4591)', () => {
+  it('ok is exactly [ok]; rows naming only blobs_fts or nodes_fts are index damage; anything else, a mix, another table or no rows is store damage', () => {
+    const d = libRebuild.decideIntegrity;
+    const page = '*** in database main *** Page 7: btreeInitPage() returns error code 11';
+    const idx = 'malformed inverted index for FTS5 table main.blobs_fts';
+    expect(d(['ok'])).toEqual({ verdict: 'ok', rows: [] });
+    expect(d([idx])).toEqual({ verdict: 'index', rows: [idx] });
+    const data = 'fts5: corruption found reading blob 10 from table "nodes_fts"';
+    expect(d([data]).verdict).toBe('index');
+    expect(d([page])).toEqual({ verdict: 'store', rows: [page] });
+    expect(d([idx, page]).verdict, 'a mix is the store\'s').toBe('store');
+    expect(d(['malformed inverted index for FTS5 table main.other_fts']).verdict, 'not our table').toBe('store');
+    expect(d([]).verdict).toBe('store');
+  });
+});

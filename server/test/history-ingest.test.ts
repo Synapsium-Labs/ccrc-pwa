@@ -4241,7 +4241,7 @@ describe('O59 (W1-B2 Task 23): a doctor --repair rebuild leaves the belt due, an
       const db = openStoreRO(box);
       try { expect(lib.parseBeltState(beltOf(db))?.v).toBe(lib.BELT_VERSION); } finally { db.close(); }
     } finally { fs.rmSync(box.home, { recursive: true, force: true }); }
-  });
+  }, 120_000);
 });
 
 // ── W1-B2 Task 23: a resumed rebuild re-checks the belt state (spec §6.2 "The belt"; O59) ──

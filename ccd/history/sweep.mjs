@@ -57,7 +57,7 @@ import {
   REASONS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker, parseOpVerbArgs, BIND_KINDS, paneReadWanted,
   HARNESS_TABLE, exportDates, exportHorizonDays, planExport, retentionLowered, parseJournalRecord,
   decideRecallOff, recallOffPath, decideReparse, REPARSE_MAX_TARGETS, planCopy, STORE_DB_REL,
-  diffForeignKeys, ftsTablesHealthy, FTS_REBUILD_STEP, decideCounterResets,
+  diffForeignKeys, ftsTablesHealthy, FTS_REBUILD_STEP, decideCounterResets, decideIntegrity,
 } from './lib.mjs';
 import {
   MIGRATIONS, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
@@ -5606,11 +5606,24 @@ export async function ftsRebuildJob(db, ictx, i) {
  *  only; a refused repair writes none). The pair index is this pass's full one (B1's secretsStep: every pair ever recorded plus the frozen list
  *  and the shim's --secrets), so no value known now is ever a term. */
 export async function repairOp(db, ctx) {
-  const problems = integrityCheck(db);
-  if (problems.length !== 1 || problems[0] !== 'ok') {
+  // D-4591 (history-repair-heals-index-integrity-rows): rows naming only blobs_fts or nodes_fts are index damage the rebuild below replaces.
+  let problems;
+  try {
+    problems = integrityCheck(db);
+  } catch (e) {
+    if (isBusy(e) || !(e instanceof Error)) throw e;
+    ctx.out(`history-sweep: integrity_check could not run: ${e && e.message ? e.message : String(e)}`);
+    ctx.out('history-sweep: repair-refused: an FTS index whose own tables are missing cannot be opened, dropped or rebuilt by a repair; the operator restores a backup (ccrc history doctor --restore <file>) or rebuilds from the journal (ccrc history doctor --rebuild), from a terminal outside any session');
+    return { rc: EXIT.REFUSED, reason: 'repair-refused' };
+  }
+  const gate = decideIntegrity(problems);
+  if (gate.verdict === 'store') {
     for (const p of problems.slice(0, 5)) ctx.out(`history-sweep: integrity_check: ${p}`);
     ctx.out('history-sweep: repair-refused: the store fails PRAGMA integrity_check, which no index rebuild can fix; the operator restores a backup (ccrc history doctor --restore <file>) or rebuilds from the journal (ccrc history doctor --rebuild), from a terminal outside any session');
     return { rc: EXIT.REFUSED, reason: 'repair-refused' };
+  }
+  if (gate.verdict === 'index') {
+    for (const p of gate.rows.slice(0, 5)) ctx.out(`history-sweep: integrity_check: ${p} (index damage: the rebuild replaces it)`);
   }
   const ictx = makeIngestCtx(ctx.home, ctx.homes, ctx.now(), ctx.ids);
   const prep = ftsPrepare(db, ictx.nowMs);

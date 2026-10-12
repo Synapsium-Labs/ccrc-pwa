@@ -1416,4 +1416,64 @@ describe('doctor --repair: integrity, the foreign-key baseline, the resumable FT
     expect(r.out).toMatch(/history-sweep: repair: spool_blocked stays 5: what it counts could not be measured/);
     expect(maintMatch(box, 'zebrafish'), 'CONTROL: the blob that does not decode keeps no row').toBe(0);
   }, HEAVY);
+
+  it('D-4591: an integrity_check row naming blobs_fts is index damage the repair heals: it rebuilds and passes', async (ctx) => {
+    const box = healable('ccrc-hist-d4591a-');
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();
+    plantStale(box);
+    expect(maintMatch(box, 'staleword'), 'CONTROL: the stale term is in the index').toBe(1);
+    const row = 'malformed inverted index for FTS5 table main.blobs_fts';
+    const r = await maintPty(box, 'shim', ['--op', 'repair'], {
+      preloads: [PRELOADS.statfs, PRELOADS.faults],
+      env: { HISTORY_TEST_INTEGRITY: row },
+    });
+    expect(r.code, r.out).toBe(0);
+    expect(lastResult(r.out)).toEqual({ rc: 0 });
+    expect(r.out).toContain(`history-sweep: integrity_check: ${row} (index damage: the rebuild replaces it)`);
+    expect(rebuilds(box).map((x) => x.completed_ms !== null), 'the rebuild ran to its end').toEqual([true]);
+    expect(maintMatch(box, 'staleword'), 'a whole rebuild leaves no term the store does not hold').toBe(0);
+    expect(maintMatch(box, 'zebrafish'), 'and re-indexes what it does hold').toBe(1);
+    expect(maintMeta(box, 'fts')).toBe('ready');
+  }, HEAVY);
+
+  it('D-4591: real FTS5 damage (blobs_fts_idx gone) is healed, and integrity_check reads ok afterwards', async (ctx) => {
+    const box = healable('ccrc-hist-d4591b-');
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();
+    const dbFile = historyPaths(box.home).dbFile;
+    let raw: DatabaseSync | null = null;
+    try {
+      raw = new DatabaseSync(dbFile, { defensive: false });
+      raw.exec('DROP TABLE blobs_fts_idx');
+    } catch {
+      try { raw?.close(); } catch { /* nothing to close */ }
+      ctx.skip();                                  // a node:sqlite with no defensive option (the 22.16 floor) cannot plant it
+    }
+    raw!.close();
+    const integrity = (): string[] => {
+      const ro = new DatabaseSync(dbFile, { readOnly: true });
+      try { return (ro.prepare('PRAGMA integrity_check').all() as Array<{ integrity_check: string }>).map((x) => x.integrity_check); } finally { ro.close(); }
+    };
+    const damaged = integrity();
+    expect(damaged, 'CONTROL: integrity_check names the damaged index').toHaveLength(1);
+    expect(damaged[0]).toContain('blobs_fts');
+    const r = await maintPty(box, 'shim', ['--op', 'repair']);
+    expect(r.code, r.out).toBe(0);
+    expect(lastResult(r.out)).toEqual({ rc: 0 });
+    expect(integrity(), 'the repair replaced the damaged index').toEqual(['ok']);
+    expect(maintMatch(box, 'zebrafish'), 'and it holds what the store holds').toBe(1);
+  }, HEAVY);
+
+  it('an integrity_check that cannot run (a vtab whose own tables are gone) is refused repair-refused with its remedies, never exit 1', async (ctx) => {
+    const box = healable('ccrc-hist-d4591c-');
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();
+    const r = await maintPty(box, 'shim', ['--op', 'repair'], {
+      preloads: [PRELOADS.statfs, PRELOADS.faults],
+      env: { HISTORY_TEST_INTEGRITY: 'throw:vtable constructor failed: blobs_fts' },
+    });
+    expect(r.code, r.out).toBe(2);
+    expect(lastResult(r.out)).toEqual({ rc: 2, reason: 'repair-refused' });
+    expect(r.out).toContain('history-sweep: integrity_check could not run: vtable constructor failed: blobs_fts');
+    expect(r.out).toContain('ccrc history doctor --restore <file>');
+    expect(rebuilds(box)).toEqual([]);
+  }, HEAVY);
 });

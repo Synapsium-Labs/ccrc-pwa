@@ -814,3 +814,4 @@ export const FTS_REBUILD_STEP: 'fts-rebuild';
 export const COUNTER_STANDING: Readonly<Record<string, 'item' | 'pass'>>;
 export function decideCounterResets(counters: Readonly<Record<string, number>>, standing: Readonly<Record<string, number | null>>):
   Array<{ name: string; n: number }>;
+export function decideIntegrity(rows: readonly string[]): { verdict: 'ok' | 'index' | 'store'; rows: string[] };

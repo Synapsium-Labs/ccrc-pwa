@@ -6971,3 +6971,17 @@ export function decideCounterResets(counters, standing) {
   }
   return writes;
 }
+
+// ── doctor --repair's integrity gate (W1-B2 Task 23 fix round 1; D-4591 (history-repair-heals-index-integrity-rows)) ──
+/** An integrity_check row that names one of the store's own FTS5 tables: FTS5's xIntegrity (SQLite 3.44+) reports a
+ *  damaged inverted index or data blob this way, and the repair's drop-and-rebuild replaces exactly those tables. */
+const INDEX_DAMAGE_RE = /(?:\bFTS5 table main\.|\bfrom table ")(?:blobs_fts|nodes_fts)\b/;
+/** What PRAGMA integrity_check's rows decide for doctor --repair: `ok` (exactly ['ok']); `index` when every row names
+ *  blobs_fts or nodes_fts (the rebuild heals them, D-4591); `store` for anything else, a mix included (no index
+ *  rebuild can fix it). Pure: the caller runs the pragma. */
+export function decideIntegrity(rows) {
+  if (rows.length === 1 && rows[0] === 'ok') return { verdict: 'ok', rows: [] };
+  const bad = rows.filter((r) => r !== 'ok');
+  if (bad.length > 0 && bad.every((r) => INDEX_DAMAGE_RE.test(r))) return { verdict: 'index', rows: bad };
+  return { verdict: 'store', rows: bad.length > 0 ? bad : rows };
+}
