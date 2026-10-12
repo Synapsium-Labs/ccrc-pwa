@@ -66,20 +66,23 @@ describe('the spec says what a restart does to the dead-coordinator lane (review
     expect(para, 'the fallback is flagged, not an instant (review 382, R2)').not.toContain('at that pass\'s instant');
     expect(para, 'the lost backoff is no longer called the one thing (review 382, R3)').not.toContain('the one thing that can bring an act sooner');
     expect(para, 'the lost backoff is not the one way (review 382, fix round 3)').not.toContain('the one way a restarted lane can act sooner');
-    for (const item of ['A restart keeps the lane\'s first-dead anchor (a gap of more than ten minutes re-anchors it, as above)', 'and the breaker\'s hold (the record above, read back at the first pass',
-      'a record it cannot read makes the lane hold every claimant that pass does not release, each flagged, and write a fresh record, with a warn line and a feed row saying so',
+    expect(para, 'the older record is no longer seeded (D-4857)').not.toContain('seeds the older record');
+    for (const item of ['A restart keeps the lane\'s first-dead anchor (a gap of more than ten minutes re-anchors it, as above)', 'and the breaker\'s hold (the typed state above, read back at the first pass',
+      'a state that is dirty, absent or cannot be read makes the lane hold every claimant that pass does not release, each flagged, beside every member, instant and flag it can still read, and write an exact record, with a warn line and a feed row saying so',
       'a flagged claimant clusters with any other crashed or held claimant, whatever the instants, until evidence releases it, so every claimant a readable record would hold is held too, at the cost that while one stands a claimant that crashes is swept into the hold and is flagged itself, until evidence releases it or fewer than two stand',
       'restarts the run of crashed passes, which delays an act', 'drops the backoff after a stuck or thrown act, which can bring an abandon back sooner',
-      'A restart that lands while a held-set write is failing, or a process that dies between a pass\'s anchors and its record, seeds the older record, which can hold less than the process did; on its first pass the lane therefore flags every claimant whose durable anchor began after that record row was written, and holds it with every recorded member until evidence releases one, a safe over-hold (D-4826)',
-      'The lane composes no act on a pass whose held-set record did not land, so the record never lags an act',
+      'Every pass that changes an anchor or the held set first marks the state dirty, alone, then writes the exact snapshot, every anchor change and the state clean in one transaction, so a restart finds the last complete state, a dirty one or the new complete one, never a clean state missing a hold the process had (D-4857); under a clean state the first pass still flags every claimant whose durable anchor began after the snapshot was written (D-4826)',
+      'The lane composes no act on a pass whose commit did not land, so the durable state never lags an act',
       're-measure before and after the fleet act']) expect(para, item).toContain(item);
   });
-  it('§5.4\'s breaker bullet names the record: a run_events observation row, written when the set changes, shadow included, no migration', () => {
+  it('§5.4\'s breaker bullet names the typed state (D-4857) and the run_events record beside it, written when the set changes, shadow included', () => {
     const at = spec.indexOf('- **The breaker remembers.**');
     expect(at).toBeGreaterThan(-1);
     const para = spec.slice(at, spec.indexOf('- **One claimant a pass**', at));
-    for (const item of ['a `run_events` observation row', 'written whenever the held set changes, in shadow too', 'no new table or column',
-      'first-dead instants', 'ids percent-escaped, so any claimant id is carried',
+    expect(para, 'a typed table now (D-4857)').not.toContain('no new table or column');
+    for (const item of ['a `run_events` observation row', 'whenever the held set changes, in shadow too',
+      'kept in `coord.db`\'s typed breaker state, `dead_coordinator_breaker_state`',
+      'first-dead instants', 'ids percent-escaped by a total encoding (a lone surrogate is `%u` and four hex digits), so any claimant id is carried',
       // Review 384, F1: the clustering is monotone, and its cost.
       'Its clustering is monotone: a member keeps every first-dead instant it has carried while held, adds its current anchor each time it is crashed and anchored, and clusters at all of them, and two entries cluster when any instant of one is within the window of any instant of the other',
       'so a held instant never replaces a re-anchored one, and, for the passes and evidence both lanes share, a restarted lane\'s breaker stands wherever an unrestarted lane\'s does, under the conditions §12 names; anchors and releases are pass-sampled (review 384, F1; review 385, F3)',
@@ -123,21 +126,25 @@ describe('the spec says what a restart does to the dead-coordinator lane (review
     expect(para, 'no unconditional comparison (review 384, G1)').not.toContain('when both read the same anchors and the restarted lane');
     expect(para, 'the returning-id corner is closed, not open (D-4825)').not.toContain('One case is open, not argued, and not claimed to be the only one');
     expect(para, 'no released build reads the record (review 384, F2)').not.toContain('an older build reads the flagged record as unreadable and stops');
+    expect(para, 'the write-failure class is closed (D-4857)').not.toContain('ARMING BLOCKER');
+    expect(para, 'no older record is seeded (D-4857)').not.toContain('seeds the older record');
+    expect(para, 'a failed commit withholds the act (D-4857)').not.toContain('a failed checkpoint of an unchanged set withholds no act');
     for (const item of ['The dead-coordinator lane keeps two things across a restart',
       'One is its first-dead anchor (`dead_claimants`), which is re-anchored after a gap of more than ten minutes (`DEAD_COORDINATOR_GAP_MS`) in which no pass measured the claimant crashed, or when evidence of a later life shows (D-4825, D-4827), so a restart shorter than that keeps the hour',
-      'The other is the breaker\'s hold: its held set is a `run_events` row in `coord.db`, written when the set changes (in shadow too) and read back at the lane\'s first pass',
-      'A record the lane cannot read does not stop it: for that pass the lane holds every claimant the pass does not release, each flagged in the new record (a `*` after its complete `+` list of instants), and writes that record over the bad one, so the bad row is never read again',
+      'The other is the breaker\'s hold: its typed state in `coord.db` (`dead_coordinator_breaker_state`, `clean` with the exact held snapshot or `dirty`), written by every pass that changes an anchor or the held set (in shadow too), with a `run_events` record of each change, and read back at the lane\'s first pass',
+      'A state the lane finds dirty, absent or unreadable does not stop it: for that pass the lane holds every claimant the pass does not release, each flagged in the new record (a `*` after its complete `+` list of instants), beside every member, instant and flag it can still read, and writes an exact record before the state is clean or anything acts',
       'A flagged claimant clusters with any other crashed or held claimant, whatever the instants, until evidence releases it, so every claimant a readable record would hold is held too; the cost is that while one stands a coordinator that crashes is swept into the hold and is flagged itself, until evidence releases it or fewer than two entries stand',
-      'The server logs a `ccrc-server: sweepDeadCoordinators could not read the breaker\'s record of its hold` warning, once per bad row, and writes one feed row, "dead coordinator: breaker record unreadable", which is the operator\'s sign',
+      'The server logs one warning and writes one feed row saying which, the operator\'s sign: "dead coordinator: no breaker state yet" when there is no state, "dead coordinator: breaker state left dirty", or, with a `ccrc-server: sweepDeadCoordinators could not read the breaker\'s record of its hold` warning, "dead coordinator: breaker record unreadable"',
       'releases on what releases it without a restart', 'the run of crashed passes starts again, which delays an act',
-      'a restarted lane can ask for that abandon SOONER than an unrestarted one would, and a server that restarts while a held-set write is failing, or a process that dies between step five (a fresh anchor written) and step six (the record written), seeds the older record, which can hold less than the process did, and so on its first pass the lane flags, at its anchor instant, every claimant of the population whose durable anchor began after that record row was written (no row: every anchor), beside every recorded member, instant and flag (D-4826)',
+      'a restarted lane can ask for that abandon SOONER than an unrestarted one would',
+      'Every pass that changes an anchor or the held set marks the state dirty first, alone, and then commits the exact snapshot, every anchor change and the state clean in one transaction; a mark that fails changes no anchor and acts on nothing, and a commit that fails leaves the state dirty and acts on nothing, so a restart finds the last complete state, a dirty one or the new complete one, never a clean state missing a hold (D-4857)',
+      'Under a clean state the first pass also flags, at its anchor instant, every claimant of the population whose durable anchor began after the snapshot was written (D-4826); since every anchor change of this release commits with its snapshot, that is only an older build\'s anchor, written after a rollback',
       'Anchors and releases are pass-sampled: an anchor sits on its lane\'s own pass, up to one cadence after the crash, evidence that releases a hold is seen only at a pass, and a restart moves the pass grid as any start does, so a pair near the ten-minute window\'s edge can cluster or release in one lane and not in the other, the lane with more passes may act sooner, and the comparison below is claimed only for the passes and evidence both lanes share',
       'The breaker\'s clustering is monotone (§5.4), so for the passes, anchors and evidence both lanes share a restarted lane\'s breaker stands wherever an unrestarted lane\'s does when the restarted lane\'s population differs only by claimants the unrestarted lane has already ended. A claimant the unrestarted lane ended that returns under a new run is covered by the episode boundary: a supervisor heartbeat later than its durable anchor starts a fresh anchor at its next crash, so the restarted lane carries the new instant beside every one it remembers (D-4825). That rests on a heartbeat or a journaled successful spawn (D-4827): a return that leaves neither is not seen, in remote mode a fleet clock behind the server\'s can hide one, and no claim is made that no other corner exists',
       'The lost backoff has a knock-on: if the unrestarted lane backs off a stuck claimant while the restarted lane, its backoff lost, ends it, the unrestarted lane keeps that claimant as an extra entry that can cluster with a new crash, so the restarted lane can end a third claimant the unrestarted lane holds',
-      'One class is an unresolved ARMING BLOCKER, not an accepted residual: the dead-coordinator lane must not be armed until it is closed. A held instant that lives only in memory because held-set writes failed while anchor writes landed (a held id that cannot be spelled, such as one with a lone surrogate, or a run_events INSERT failing while dead_claimants UPDATEs land) is lost with its anchor if a doubt deletes that anchor before a restart, and the restart\'s recovery cannot see it; the act stays withheld while the write fails, so only a restart in that state exposes it. The storage design that closes it is with the operator',
-      'A pass that starts an anchor (a first crash, a gap re-anchor or a fresh episode) also writes the held record when the set is unchanged, a checkpoint whose write time moves past every anchor that pass started, so a restart flags only the anchors started after the last LANDED record: those of a pass that died before its write, or whose write failed. The cost is one extra observation row per pass that starts an anchor and none on a quiet pass, and, after such a loss, safe over-holding: two crashed claimants whose anchors began after the last landed record are held, flagged, until evidence releases one, though they never clustered. The record is written with the write-time clock, so an anchor of the pass that landed it is not flagged, and the lane records before it acts; a failed checkpoint of an unchanged set withholds no act. The limit: a server clock that steps backwards across a restart can make a later anchor read earlier than the record',
-
-      'The lane composes no act on a pass whose held-set record did not land, so the record never lags an act, and every act is still behind the claimant\'s re-measure before and after the fleet act']) {
+      'The class mail 4266 measured is CLOSED, not accepted (D-4857): a held instant that lived only in memory because held-set writes failed while anchor writes landed, its anchor deleted by a doubt before a restart, cannot arise, because no anchor change lands without the snapshot that holds it, a commit that fails leaves the state dirty, which a restart reads as fail-shut, and every claimant id, a lone surrogate included, has a spelling',
+      'The snapshot is written with the write-time clock of the commit that carries the pass\'s anchor changes, so an anchor of that pass is not flagged. The cost is the conservative seed\'s: after a restart over a dirty state, every claimant the pass does not release is held, flagged, until evidence releases it, and while the breaker\'s writes keep failing no anchor change lands, so an hour counts only from a committed anchor. The limit: a server clock that steps backwards across a restart can make a later anchor read earlier than the snapshot',
+      'The lane composes no act on a pass whose commit did not land, so the durable state never lags an act, and every act is still behind the claimant\'s re-measure before and after the fleet act']) {
       expect(para, item).toContain(item);
     }
   });
@@ -223,8 +230,12 @@ describe('the specs', () => {
       '(4) A restart drops the in-memory backoff and retry population (`nextAskAt`, `attempts`), so a restarted lane can let another claimant proceed sooner',
       'it still re-audits, waits its durable hour, re-measures before and after the act, and is blocked by the durable breaker hold',
       '(5) A later life that leaves neither a supervisor heartbeat nor a journaled successful spawn is not seen, and in remote mode a fleet clock running behind the server\'s can hide one',
-      '(6) After a lost record write the recovery over-holds (two crashed claimants whose anchors began after the last landed record are held until evidence), and a server clock that steps backwards across a restart can make a later anchor read earlier than the record',
-      'One class is not on this list because it is not an accepted residual: it is an unresolved ARMING BLOCKER (the memory bullet above names it), and the lane must not be armed until it is closed',
+      '(6) A restart over a dirty, absent or unreadable breaker state holds every claimant its first pass does not release, flagged, until evidence releases each (the deploy that creates the table is one such pass), while the breaker\'s writes keep failing an hour counts only from a committed anchor, and a server clock that steps backwards across a restart can make a later anchor read earlier than the snapshot',
+      'The class mail 4266 measured is not on this list because it is closed, not accepted (D-4857)',
+      '**The deploy that creates the breaker\'s table holds once, conservatively.**',
+      'one conservative pass',
+      'Those flagged coordinators stand until evidence releases each: an operator arming later should expect that hold while they are still crashed, and it releases through the doors that already exist: revive, reclaim or abandon',
+      'an older build neither reads nor writes `dead_coordinator_breaker_state`',
       '**A permanently unreadable generation pins the mirror `stale`**',
       // Review 384, F2: a rollback fails open.
       '**Roll back below this release only with the lane disarmed.**',
@@ -235,6 +246,7 @@ describe('the specs', () => {
     // Review 384, F1: R5's corner is closed by the monotone breaker, so it is no residual.
     expect(b).not.toContain('**Three residuals stand.**');
     expect(b, 'H1 is an arming blocker, not a question pending a ruling').not.toContain('pending a ruling');
+    expect(b, 'and the blocker is closed (D-4857)').not.toContain('unresolved ARMING BLOCKER');
     expect(b, 'no count, no blanket closure (review 385, G2)').not.toContain('**Two residuals stand.**');
     expect(b).not.toContain('**Its arming blockers are closed** (wave 5)');
     expect(b).not.toContain('A third, a breaker corner');

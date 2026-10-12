@@ -398,9 +398,14 @@ export interface DeadCoordinatorBreakerMember {
  *  act, whereas its lost backoff makes it act SOONER, and that is a path of its own: if U backs off a stuck claimant P
  *  while R, its backoff lost, ends P, U keeps P as an extra entry that can cluster with a new crash, so R can end a third
  *  claimant Q that U holds. THE HYPOTHESIS: every id U holds, R holds with at least U's instants, or flagged. At the seed
- *  it holds: a plain restart reads U's own record (and flags every claimant whose anchor began after it, D-4826), and the
- *  fallback holds every claimant the pass does not release, flagged, a superset of anything U holds (a held member is
- *  always unreleased and in the population). Each step: both see the same anchors and release the same members on the
+ *  it holds, because of how U writes (D-4857): U marks its typed state dirty, alone, before it changes any anchor, and
+ *  turns it clean only in the one transaction that writes its exact held snapshot with every anchor change; a mark that
+ *  fails leaves U's hold where it was, and a commit that fails leaves the state dirty. So at every instant the state is
+ *  either clean with U's exact hold or dirty. Over a clean state R seeds U's own snapshot (and flags every claimant whose
+ *  anchor began after it, D-4826: since every anchor change of this release commits with its snapshot, only an older
+ *  build's); over a dirty, absent or unreadable one the conservative seed holds every claimant the pass does not
+ *  release, flagged, beside every member, instant and flag it can still read, a superset of anything U holds (a held
+ *  member is always unreleased and in the population). Each step: both see the same anchors and release the same members on the
  *  same evidence (alive, stopped, deliberate, left the population), so R's entries are a superset of U's as (id, instant)
  *  pairs and flags; by the property R trips whenever U does, with members ⊇ U's; and each member's next instants are its
  *  held instants plus this pass's anchor on both sides, so R's remain ⊇ U's (or R's is flagged, and every member of a
@@ -410,16 +415,14 @@ export interface DeadCoordinatorBreakerMember {
  *  or a journaled successful spawn is later than R's durable anchor, so R anchors it afresh at its next crash, as U, which
  *  deleted the anchor, does — R then carries U's new instant beside every one it remembers. That rests on one of the two:
  *  a return that leaves neither is not seen, in remote mode a fleet clock behind the server's can hide one, and this does
- *  not claim to cover them, nor claim that no other corner exists. A process that dies between step five (a fresh anchor
- *  written) and step six (the record written), or whose write kept failing, seeds the older record; the lane's first pass
- *  therefore flags every claimant whose durable anchor began after that record row was written (D-4826), so the holds it
- *  formed and lost are held again, flagged. A pass that starts an anchor also writes the record when the set is unchanged
- *  (a checkpoint, so the write time moves past that pass's anchors), which leaves only the anchors of a pass that died before
- *  its write, or whose write failed, newer than the record: the cost is holding two such crashed claimants, though they never
- *  clustered, until evidence releases one. A server clock that steps backwards across a restart can make a later anchor read
- *  earlier than the record. One class is an unresolved ARMING BLOCKER, not an accepted residual (the lane must not be armed until it is closed): a held
- *  instant that lived in memory alone because held-set writes failed while anchor writes landed, its anchor then deleted by a
- *  doubt before the restart, is invisible to that recovery. The all-unmeasurable arm diverges as measured: R's extra claimant can be measured while all of
+ *  not claim to cover them, nor claim that no other corner exists. The class mail 4266 measured — a held instant that
+ *  lived in memory alone because held-set writes failed while anchor writes landed, its anchor then deleted by a doubt
+ *  before the restart — is CLOSED by the typed state (D-4857), not by D-4826's recovery: no anchor change lands without
+ *  the snapshot that holds it, a failed commit leaves the state dirty, and every id has a spelling. The cost is that a
+ *  restart over a dirty state, and the first pass after the deploy that creates the table, hold every claimant the pass
+ *  does not release, flagged, until evidence releases each; and while the breaker's writes keep failing, no anchor change
+ *  lands, so an hour counts only from a committed anchor. A server clock that steps backwards across a restart can make a
+ *  later anchor read earlier than the snapshot. The all-unmeasurable arm diverges as measured: R's extra claimant can be measured while all of
  *  U's are not, so R does not trip there, but every other claimant is as unmeasured in R as in U, so R can act there only
  *  on the claimant U already ended. The cost of the accumulation is more holding: a member held at an old instant that
  *  crashes anew also clusters near its new instant, a held member's instants and its record grow by one per re-anchor
@@ -480,8 +483,9 @@ export const deadCoordinatorBreakerKey = (b: DeadCoordinatorBreaker): string | n
 
 // ── the breaker's hold, made durable (review 381, F1) ─────────────────────────
 
-/** The head of the `run_events` observation row that carries the breaker's held set across a restart (the stall watch's
- *  "Durable dedupe, no migration" shape: `fromState = toState`, so nothing pushes it). After the head: the members as
+/** The head of the breaker's held-set detail: the typed state's exact snapshot (`dead_coordinator_breaker_state.held`,
+ *  D-4857) and the `run_events` observation row that records each change of it (the stall watch's "Durable dedupe"
+ *  shape: `fromState = toState`, so nothing pushes it) carry the same text. After the head: the members as
  *  `id@firstDeadAt` (several instants `+`-joined, review 384, F1-N1; a fallback member, review 382, R2, with a `*` after the list), comma-joined, ids ascending; an EMPTY list is the hold cleared. `parseStallDetail` reads any detail
  *  with other than four colon-separated parts as null, and this one has two, so the stall count never sees it. */
 export const DEAD_COORDINATOR_BREAKER_HELD_HEAD = 'dead-coordinator-breaker-held:';
@@ -691,13 +695,11 @@ export type DeadCoordinatorReport =
 
 /** The lane's memory of one claimant — IN MEMORY ONLY (the anchor is the durable half). A restart drops the run of
  *  crashed passes, which DELAYS an act, and the backoff (`nextAskAt`, `attempts`), which can bring an abandon back
- *  SOONER after a stuck or thrown act (review 381, F10). A restart while a held-set write is failing, or a death between a
- *  pass's anchors and its record, seeds the older record, which can hold less than the process did: the first pass flags
- *  every claimant whose durable anchor began after it (D-4826), though not a held instant that lived in memory alone
- *  with its anchor deleted by a doubt (an unresolved ARMING BLOCKER: the lane must not be armed until it is closed). The lane composes no act on a pass whose held-set record
- *  did not land, so the record never lags an act; the
- *  act is still behind the claimant's re-measure before and after the fleet act. The breaker's hold is not in this entry: it survives a restart (review
- *  381, F1), and an unreadable record of it seeds a conservative fallback (review 382, R2). */
+ *  SOONER after a stuck or thrown act (review 381, F10). The breaker's hold is not in this entry: it survives a restart in
+ *  the typed state (review 381, F1; D-4857), which a pass marks dirty before it changes any anchor and turns clean only
+ *  with the exact snapshot, so a restart finds the last complete hold or a dirty state, and a dirty, absent or unreadable
+ *  state seeds the conservative hold (review 382, R2). The lane composes no act on a pass whose commit did not land, so the
+ *  durable state never lags an act; the act is still behind the claimant's re-measure before and after the fleet act. */
 export interface DeadCoordinatorEntry {
   /** Consecutive passes that measured it crashed. */
   readonly crashedPasses: number;

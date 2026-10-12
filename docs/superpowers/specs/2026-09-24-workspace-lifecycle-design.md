@@ -666,10 +666,13 @@ each item is a departure named there).
   stopped, a deliberate act) or when it leaves the population, so one pass that cannot measure a member — which deletes
   that member's anchor — does not dissolve the cluster. "Fleet-wide" is what the pass measured: tmux not answering for
   any claimant trips it whatever the count; a registry that will not list stops the tick before the lane runs. The held
-  set is kept in `coord.db` as a `run_events` observation row (the stall watch's "Durable dedupe, no migration" shape: no
-  new table or column; `fromState = toState`, so nothing pushes it; ids percent-escaped, so any claimant id is
-  carried), written whenever the held set changes, in shadow too, with each member's first-dead instants (several instants of one member are `+`-joined; a member the
-  fallback below holds carries a `*` after the list), and read back once per process at the first pass (review 381, F1).
+  set is kept in `coord.db`'s typed breaker state, `dead_coordinator_breaker_state` (one row: a generation, `clean` or
+  `dirty`, the exact held snapshot and its write time; a new table, the operator's choice over a sentinel claimant row or
+  an untyped marker), and recorded beside it as a `run_events` observation row (`fromState = toState`, so nothing pushes
+  it) whenever the held set changes, in shadow too; both carry each member's first-dead instants with ids
+  percent-escaped by a total encoding (a lone surrogate is `%u` and four hex digits), so any claimant id is carried and
+  reads back exactly (several instants of one member are `+`-joined; a member the
+  fallback below holds carries a `*` after the list), and the state is read back once per process at the first pass (review 381, F1; D-4857).
   Its clustering is monotone: a member keeps every first-dead instant it has carried while held, adds its current anchor
   each time it is crashed and anchored, and clusters at all of them, and two entries cluster when any instant of one is
   within the window of any instant of the other, so a held instant never replaces a re-anchored one, and, for the
@@ -684,9 +687,8 @@ each item is a departure named there).
   the anchor, as a pass's would.
 - **The attention list is the lane's own memory** (the expiry lane's shape): would-end, unmeasured, stuck and the
   breaker, rebuilt over the passes after a restart. A restart keeps the lane's first-dead anchor (a gap of more than ten
-  minutes re-anchors it, as above) and the breaker's hold (the record above, read back at the first pass; a record it
-  cannot read makes the lane hold every claimant that pass does not release, each flagged, and write a fresh record, with a warn line and a feed row saying so: a flagged claimant clusters with any other crashed or held claimant, whatever the instants, until evidence releases it, so every claimant a readable record would hold is held too, at the cost that while one stands a claimant that crashes is swept into the hold and is flagged itself, until evidence releases it or fewer than two stand), restarts the run of crashed passes, which delays an act, and drops the backoff after a stuck or thrown act, which can bring an abandon back sooner. A restart that lands while a held-set write is failing, or a process that dies between a pass's anchors and its record, seeds the older record, which can hold less than the process did; on its first pass the lane therefore flags every claimant whose durable anchor began after that record row was written, and holds it with every recorded member until evidence releases one, a safe over-hold (D-4826).
-  The lane composes no act on a pass whose held-set record did not land, so the record never lags an act. Every act is still behind the claimant's re-measure before and after the fleet act.
+  minutes re-anchors it, as above) and the breaker's hold (the typed state above, read back at the first pass; a state that is dirty, absent or cannot be read makes the lane hold every claimant that pass does not release, each flagged, beside every member, instant and flag it can still read, and write an exact record, with a warn line and a feed row saying so: a flagged claimant clusters with any other crashed or held claimant, whatever the instants, until evidence releases it, so every claimant a readable record would hold is held too, at the cost that while one stands a claimant that crashes is swept into the hold and is flagged itself, until evidence releases it or fewer than two stand), restarts the run of crashed passes, which delays an act, and drops the backoff after a stuck or thrown act, which can bring an abandon back sooner. Every pass that changes an anchor or the held set first marks the state dirty, alone, then writes the exact snapshot, every anchor change and the state clean in one transaction, so a restart finds the last complete state, a dirty one or the new complete one, never a clean state missing a hold the process had (D-4857); under a clean state the first pass still flags every claimant whose durable anchor began after the snapshot was written (D-4826).
+  The lane composes no act on a pass whose commit did not land, so the durable state never lags an act. Every act is still behind the claimant's re-measure before and after the fleet act.
 - **The lane never pushes.** The stall watch notifies about a dead coordinator's stalled workers — r3
   (`coordinator-dead`) and, once its wave-2 arms are armed, `coord-deaf`, one push per worker, each naming the
   coordinator; this lane's feed rows (each with the claimant's first-dead instant, and one per breaker trip) are records
@@ -869,32 +871,19 @@ collects them.
   audit and ccd's in-lock re-proof. A kept-leaf entry is lost with it (question (i)).
   The dead-coordinator lane keeps two things across a restart. One is its first-dead anchor (`dead_claimants`), which is
   re-anchored after a gap of more than ten minutes (`DEAD_COORDINATOR_GAP_MS`) in which no pass measured the
-  claimant crashed, or when evidence of a later life shows (D-4825, D-4827), so a restart shorter than that keeps the hour. The other is the breaker's hold: its held set is a
-  `run_events` row in `coord.db`, written when the set changes (in shadow too) and read back at the lane's first pass.
-  A record the lane cannot read does not stop it: for that pass the lane holds every claimant the pass does not release,
-  each flagged in the new record (a `*` after its complete `+` list of instants), and writes that record over the bad one, so the bad row is
-  never read again. A flagged claimant clusters with any other crashed or held claimant, whatever the instants, until
+  claimant crashed, or when evidence of a later life shows (D-4825, D-4827), so a restart shorter than that keeps the hour. The other is the breaker's hold: its typed state in `coord.db` (`dead_coordinator_breaker_state`, `clean` with the exact held snapshot or `dirty`), written by every pass that changes an anchor or the held set (in shadow too), with a `run_events` record of each change, and read back at the lane's first pass.
+  A state the lane finds dirty, absent or unreadable does not stop it: for that pass the lane holds every claimant the pass does not release,
+  each flagged in the new record (a `*` after its complete `+` list of instants), beside every member, instant and flag it can still read, and writes an exact record before the state is clean or anything acts. A flagged claimant clusters with any other crashed or held claimant, whatever the instants, until
   evidence releases it, so every claimant a readable record would hold is held too; the cost is that while one stands a
   coordinator that crashes is swept into the hold and is flagged itself, until evidence releases it or fewer than two
-  entries stand. The server logs a `ccrc-server: sweepDeadCoordinators could not read the
-  breaker's record of its hold` warning, once per bad row, and writes one feed row, "dead coordinator: breaker record
-  unreadable", which is the operator's sign. The hold releases on what releases it without a restart: evidence that the
+  entries stand. The server logs one warning and writes one feed row saying which, the operator's sign: "dead coordinator: no breaker state yet" when there is no state, "dead coordinator: breaker state left dirty", or, with a `ccrc-server: sweepDeadCoordinators could not read the breaker's record of its hold` warning, "dead coordinator: breaker record unreadable". The hold releases on what releases it without a restart: evidence that the
   claimant is alive, stopped or was stopped on purpose, or the claimant leaving the population. For that lane a restart
   also means the run of crashed passes starts again, which delays an act, and the backoff after a stuck or thrown act
-  (`nextAskAt`, `attempts`) is lost, so a restarted lane can ask for that abandon SOONER than an unrestarted one would,
-  and a server that restarts while a held-set write is failing, or a process that dies between step five (a fresh anchor
-  written) and step six (the record written), seeds the older record, which can hold less than the process did, and so
-  on its first pass the lane flags, at its anchor instant, every claimant of the population whose durable anchor began
-  after that record row was written (no row: every anchor), beside every recorded member, instant and flag (D-4826).
-  A pass that starts an anchor (a first crash, a gap re-anchor or a fresh episode) also writes the held record when the
-  set is unchanged, a checkpoint whose write time moves past every anchor that pass started, so a restart flags only the
-  anchors started after the last LANDED record: those of a pass that died before its write, or whose write failed. The
-  cost is one extra observation row per pass that starts an anchor and none on a quiet pass, and, after such a loss, safe
-  over-holding: two crashed claimants whose anchors began after the last landed record are held, flagged, until evidence
-  releases one, though they never clustered. The record is written with the write-time clock, so an anchor of the pass
-  that landed it is not flagged, and the lane records before it acts; a failed checkpoint of an unchanged set withholds
-  no act. The limit: a server clock that steps backwards across a restart can make a later anchor read earlier than the
-  record. One class is an unresolved ARMING BLOCKER, not an accepted residual: the dead-coordinator lane must not be armed until it is closed. A held instant that lives only in memory because held-set writes failed while anchor writes landed (a held id that cannot be spelled, such as one with a lone surrogate, or a run_events INSERT failing while dead_claimants UPDATEs land) is lost with its anchor if a doubt deletes that anchor before a restart, and the restart's recovery cannot see it; the act stays withheld while the write fails, so only a restart in that state exposes it. The storage design that closes it is with the operator.
+  (`nextAskAt`, `attempts`) is lost, so a restarted lane can ask for that abandon SOONER than an unrestarted one would.
+  Every pass that changes an anchor or the held set marks the state dirty first, alone, and then commits the exact snapshot, every anchor change and the state clean in one transaction; a mark that fails changes no anchor and acts on nothing, and a commit that fails leaves the state dirty and acts on nothing, so a restart finds the last complete state, a dirty one or the new complete one, never a clean state missing a hold (D-4857).
+  Under a clean state the first pass also flags, at its anchor instant, every claimant of the population whose durable anchor began after the snapshot was written (D-4826); since every anchor change of this release commits with its snapshot, that is only an older build's anchor, written after a rollback.
+  The snapshot is written with the write-time clock of the commit that carries the pass's anchor changes, so an anchor of that pass is not flagged. The cost is the conservative seed's: after a restart over a dirty state, every claimant the pass does not release is held, flagged, until evidence releases it, and while the breaker's writes keep failing no anchor change lands, so an hour counts only from a committed anchor. The limit: a server clock that steps backwards across a restart can make a later anchor read earlier than the snapshot.
+  The class mail 4266 measured is CLOSED, not accepted (D-4857): a held instant that lived only in memory because held-set writes failed while anchor writes landed, its anchor deleted by a doubt before a restart, cannot arise, because no anchor change lands without the snapshot that holds it, a commit that fails leaves the state dirty, which a restart reads as fail-shut, and every claimant id, a lone surrogate included, has a spelling.
   Anchors and releases are
   pass-sampled: an anchor sits on its lane's own pass, up to one cadence after the crash, evidence that releases a hold is
   seen only at a pass, and a restart moves the pass grid as any start does, so a pair near the ten-minute window's edge
@@ -907,8 +896,7 @@ collects them.
   every one it remembers (D-4825). That rests on a heartbeat or a journaled successful spawn (D-4827): a return that leaves neither is not seen, in remote
   mode a fleet clock behind the server's can hide one, and no claim is made that no other corner exists. The lost backoff has a knock-on: if the unrestarted lane backs off a stuck claimant
   while the restarted lane, its backoff lost, ends it, the unrestarted lane keeps that claimant as an extra entry that can
-  cluster with a new crash, so the restarted lane can end a third claimant the unrestarted lane holds. The lane composes no act on a pass whose held-set record did not
-  land, so the record never lags an act, and every act is still behind the claimant's re-measure before and after the fleet act.
+  cluster with a new crash, so the restarted lane can end a third claimant the unrestarted lane holds. The lane composes no act on a pass whose commit did not land, so the durable state never lags an act, and every act is still behind the claimant's re-measure before and after the fleet act.
 - **`$REG/reclaim-paused` stops both lanes at once**, shadow included: the cleanup row's toggle on `/runs`.
 
 **The expiry lane (`$REG/expire-lane-live`).**
@@ -980,17 +968,21 @@ collects them.
   stuck claimant while the restarted one ends it, the first keeps it as an extra entry that can cluster with a new
   crash; it still re-audits, waits its durable hour, re-measures before and after the act, and is blocked by the durable
   breaker hold. (5) A later life that leaves neither a supervisor heartbeat nor a journaled successful spawn is not
-  seen, and in remote mode a fleet clock running behind the server's can hide one. (6) After a lost record write the
-  recovery over-holds (two crashed claimants whose anchors began after the last landed record are held until evidence),
-  and a server clock that steps backwards across a restart can make a later anchor read earlier than the
-  record. One class is not on this list because it is not an accepted residual: it is an unresolved ARMING BLOCKER (the memory
-  bullet above names it), and the lane must not be armed until it is closed. Each of (1), (2), (5) and (6) only delays an act or holds more; (3) and (4) can bring an act sooner; none
+  seen, and in remote mode a fleet clock running behind the server's can hide one. (6) A restart over a dirty, absent or unreadable breaker state holds every claimant its first pass does not release, flagged, until evidence releases each (the deploy that creates the table is one such pass), while the breaker's writes keep failing an hour counts only from a committed anchor, and a server clock that steps backwards across a restart can make a later anchor read earlier than the snapshot. The class mail 4266 measured is not on this list because it is closed, not accepted (D-4857). Each of (1), (2), (5) and (6) only delays an act or holds more; (3) and (4) can bring an act sooner; none
   bypasses the lane's own fresh audit, hour, journal, re-measure or breaker decision. The one action to take before a
   rollback is the next item's.
+- **The deploy that creates the breaker's table holds once, conservatively.** The table this release creates has no
+  row, and the lane reads no row as dirty: its first pass holds every coordinator it does not see alive, stopped or put
+  down on purpose, flagged, writes the first exact record and says so ("dead coordinator: no breaker state yet"). That is
+  one conservative pass, while both lanes are shadowed. Those flagged coordinators stand until evidence releases each: an operator arming later should expect that hold while they are still crashed, and it releases through the doors that already exist: revive, reclaim or abandon.
 - **Roll back below this release only with the lane disarmed.** No released build before this one reads the breaker's
   held-set record, so a rollback below it (`ccrc rollback`, or the unattended update watchdog) starts with no hold, the
   restart hole failing open: arm the lane only on a release that carries the reader, and before rolling back below it
-  remove `$REG/dead-coordinator-lane-live`: the lane then only records, and never acts.
+  remove `$REG/dead-coordinator-lane-live`: the lane then only records, and never acts. Nor does an older build keep the
+  typed state: an older build neither reads nor writes `dead_coordinator_breaker_state`, and it changes `dead_claimants`
+  outside it, so on rolling forward again the state reads as the last commit this release made, and only the anchors the
+  older build started are flagged (D-4826), not a hold it formed in memory and lost; read the shadow list and any breaker
+  trip again before re-arming, as at the first arming.
 - **A permanently unreadable generation pins the mirror `stale`**, with no diagnostic of its own: the lane then decides
   nothing at all, which fails shut. `/api/fleet/health`'s lifecycle state shows it.
 - **An accepted abstention** (§5.4): a child's pre-start `reclaim` failure reads as a deliberate act.

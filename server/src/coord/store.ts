@@ -3384,8 +3384,9 @@ export class CoordStore {
     this.db.prepare('DELETE FROM dead_claimants WHERE claimantId = ?').run(claimantId);
   }
 
-  /** The dead-coordinator breaker's held set, made durable (review 381, F1) — the stall watch's "Durable dedupe, no
-   *  migration" shape: ONE `run_events` observation row, `fromState = toState` = the carrier run's current state (so
+  /** The RECORD of the dead-coordinator breaker's held set (review 381, F1; since D-4857 the typed state,
+   *  `deadCoordinatorBreakerState`, is the authority and this row records each change of it) — the stall watch's
+   *  "Durable dedupe" shape: ONE `run_events` observation row, `fromState = toState` = the carrier run's current state (so
    *  `pushNewRuns` skips it), `causedBy` `operator`, `detail` `deadCoordinatorBreakerHeldDetail`'s encoding. NO dedupe
    *  on `(runId, detail)`: a held set can recur after a clear, and the LATEST row is the truth
    *  (`deadCoordinatorBreakerHeldLatest`). The carrier is ANY existing run, whatever its state — the detail carries the
@@ -3410,11 +3411,11 @@ export class CoordStore {
   /** The LATEST held-set row (`ORDER BY id DESC LIMIT 1` over the head): the members and the run that carries it. No row
    *  at all is `{ ok: true, held: [], runId: null }`; a row this build cannot parse, or whose integers it cannot prove
    *  (`persistedInt`, D-2545's rule), is `{ ok: false }` — ALL-OR-FAILURE like `deadAnchors`, never an empty set and
-   *  never an older row's. The lane then seeds its hold CONSERVATIVELY and writes a fresh record (review 382, R2), so it
-   *  never reads that row twice. The unreadable answer carries the row it could not read, `eventId` (`null` for a read
-   *  that threw before any row was found) and the `runId` it sits on (`null` when none, or when the run id itself cannot
-   *  be proved) — the lane warns once per row, and, when the fallback's set comes out empty, writes that empty set on
-   *  that run (a non-empty set goes on the lowest open run a member coordinates). A member the fallback held carries a
+   *  never an older row's. Since D-4857 the lane reads it only beside the typed state: for the run an empty set is written
+   *  on (its `runId`, readable or not), and, under a state that is not clean, for the members, instants and flags it still
+   *  carries, which the conservative seed keeps. The unreadable answer carries the row it could not read, `eventId`
+   *  (`null` for a read that threw before any row was found) and the `runId` it sits on (`null` when none, or when the run
+   *  id itself cannot be proved). A member the fallback held carries a
    *  `*` after its complete `+` list of instants and reads back `fallback: true`. NO RELEASED BUILD READS THIS RECORD AT ALL (the build that
    *  first had a reader, before the flag, never shipped), so a rollback to a released build starts with no hold: the
    *  restart hole, failing OPEN — the spec's §12 says to disarm the lane before rolling back. A thrown statement is
