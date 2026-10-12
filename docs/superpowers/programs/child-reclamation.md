@@ -47,6 +47,13 @@ Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews 
 
 ## Decisions & deviations
 
+- **2026-10-12 02:20 — CI on PR #354 at `c7dfbbf69` is GREEN on every Linux leg.**
+  - **The Linux legs:** `test (server)` across shards 1/5 to 5/5, `test (agent)`, `test (pwa)`, `typecheck (server)`, `build-pwa`, `node floor` and `select tests`.
+  - **The macOS legs, advisory, are red only in files this wave does not touch:**
+    - the `ccd-child-reclaim-*` and `ccd-leaf-remove` suites, `ccd-review-335-pins` and `ccd-docs-tree`, through APFS `EILSEQ` names and owner bits;
+    - `platform-hazards`' BSD deadline-shim candidate.
+  - **Checked:** none of these files is among the 36 test files the range changes.
+
 - **2026-10-12 01:16 — review run 386 is DISPATCHED to `ccrc-pwa-calm-delta` (claude-corp, Anthropic; Opus `xhigh`) and advanced to `working`.**
   - **The brief** (7826 bytes) names the held-out panel, plus the plan's four lenses with SAFETY (Opus `xhigh`) and SECURITY mandatory.
   - **It adds three SAFETY rows**, each with a mutation row:
