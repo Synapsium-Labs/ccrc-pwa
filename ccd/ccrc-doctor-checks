@@ -7616,6 +7616,12 @@ except Exception:
 if not ok:
     unreadable()
 age = max(0, now - at)
+# Does the report record a value WRITTEN to this box? A `synced` result, a proof result (the value was written, then not
+# proved), or any report that carries a generation (a `write-failed` of `ccrc-token-sync` after the write). A report that
+# records only a refusal, no generation (`bad-code`, `stale-client`, `claim-refused`, `code-used`, `busy`, `spawn-failed`,
+# or a `write-failed` before anything was written), says nothing was ever handed to this box: it is no history.
+if res not in ("synced", "proof-failed", "proof-unmeasured") and gen is None:
+    say("refusal-only")
 if res == "synced":
     if pf != "proved" or tr is None:
         unreadable()
@@ -7844,7 +7850,7 @@ _bt_server_arm() {   # <token path> <state path>
 
 _bt_fleet_arm() {   # <own-write: 0|1>
   local own="$1" ff="$HOME/.cc-secrets/ccrc-mail.token" gen="$HOME/.ccrc/box-token-generation" rep="$HOME/.ccrc/token-sync.json"
-  local before="${#BT_CLASS[@]}" out="" kw w n x bad=0 tr="" ownseen=0 tai=-1 nogen=0 nosync=0
+  local before="${#BT_CLASS[@]}" out="" kw w n x bad=0 tr="" ownseen=0 tai=-1 nogen=0 nosync=0 refonly=0
   _bt_value_file "$ff"
   case "$BT_TF" in
     absent) tai="${#BT_CLASS[@]}"; _bt_find fleet fleet-token-absent "$ff" ;;
@@ -7858,6 +7864,7 @@ _bt_fleet_arm() {   # <own-write: 0|1>
   while IFS=' ' read -r kw w n x; do
     case "$kw" in
       own) ownseen=1 ;;
+      refusal-only) refonly=1 ;;
       synced) if _bt_member "$w" "${_BT_TRANSPORTS[@]}" && _bt_num "$n"; then tr="$w"; else bad=1; fi ;;
       finding)
         case "$w" in
@@ -7872,15 +7879,17 @@ _bt_fleet_arm() {   # <own-write: 0|1>
     esac
   done <<< "$out"
   if [ "$bad" -eq 1 ]; then _bt_find fleet sync-unreadable "$rep"; return 0; fi
-  # 4553, as D-139 rules it: an absent token on a box with no generation file and no sync report (an own-write box reads
-  # no report, so the generation file alone speaks for it) was never handed a value, a fresh install. It is PASS with its
-  # sentence, never WARN; its two companions (`no-generation`, `never-synced`) say the same fact and are dropped. Any
-  # trace of a value, a malformed generation file or an unreadable report included, leaves the FAIL.
+  # 4553, as D-139 rules it: an absent token on a box with no generation file and no sync report was never handed a value,
+  # a fresh install. It is PASS with its sentence, never WARN; its two companions (`no-generation`, `never-synced`) say
+  # the same fact and are dropped. A report that records only a refusal (`refusal-only`: no value written, no
+  # generation) is no history either (review 383 F12): the refusal stays as its own `sync:<word>` finding, at its class,
+  # and only the absent token reads never-handed. Any trace of a value, a malformed generation file or an unreadable
+  # report included, leaves the FAIL.
   # An own-write box (both, local, no agent.env) writes the fleet file, the generation file and `fleetConfirmed` together,
   # so the server arm's state outranks the generation file alone (review 383 F1): it reads never-handed only when that
   # state read was itself `absent`. Any present state, readable or not, records or may record the hand-out. The state is
   # read once, by the server arm, which runs first on such a box.
-  if [ "$tai" -ge 0 ] && [ "$nogen" -eq 1 ] && { [ "$nosync" -eq 1 ] || { [ "$ownseen" -eq 1 ] && [ "$BT_SERVER_STATE" = absent ]; }; }; then
+  if [ "$tai" -ge 0 ] && [ "$nogen" -eq 1 ] && { [ "$nosync" -eq 1 ] || [ "$refonly" -eq 1 ] || { [ "$ownseen" -eq 1 ] && [ "$BT_SERVER_STATE" = absent ]; }; }; then
     BT_PART[tai]="fleet: fleet-token-absent — $ff does not exist: no value has been handed to this box yet, and the server's next rotation hands one"
     BT_CLASS[tai]=PASS; BT_FIX[tai]=""
     _bt_drop "fleet: no-generation — "; _bt_drop "fleet: never-synced — "

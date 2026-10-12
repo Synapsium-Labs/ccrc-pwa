@@ -276,8 +276,18 @@ const ROWS: Row[] = [
   // (the `never handed` describe below); any trace of a handed value (either file, readable or not) makes the lost token
   // a FAIL.
   { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (with history: a generation file and a sync report)', armedClass: 'FAIL', plant: (b) => rmSync(fleetFile(b)) },
-  { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (with history: a sync report only)', armedClass: 'FAIL',
+  // Review 383 F12: the history of holding a value is a generation file, or a report that records a value WRITTEN: a
+  // `synced` result, a proof result (`proof-failed`, `proof-unmeasured`: the value was written, then not proved), or any
+  // report carrying a generation (a refusal after the write, `ccrc-token-sync`'s `write-failed` at its last two sites). A
+  // report that records only a refusal with no generation leaves the box never-handed (the `never handed` describe).
+  { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (with history: a synced report only)', armedClass: 'FAIL',
     plant: (b) => { rmSync(fleetFile(b)); rmSync(dot(b, NODE_FILES.tokenGeneration)); } },
+  { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (with history: a proof-unmeasured report only)', armedClass: 'FAIL',
+    plant: (b) => { rmSync(fleetFile(b)); rmSync(dot(b, NODE_FILES.tokenGeneration)); plantReport(b, { result: 'proof-unmeasured', generation: null, proof: 'proof-unmeasured' }); } },
+  { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (with history: a proof-failed report only)', armedClass: 'FAIL',
+    plant: (b) => { rmSync(fleetFile(b)); rmSync(dot(b, NODE_FILES.tokenGeneration)); plantReport(b, { result: 'proof-failed', generation: null, proof: 'proof-failed' }); } },
+  { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (with history: a refusal that carries a generation, written after the value)', armedClass: 'FAIL',
+    plant: (b) => { rmSync(fleetFile(b)); rmSync(dot(b, NODE_FILES.tokenGeneration)); plantReport(b, { result: 'write-failed', generation: ID_CUR, transport: null, proof: null }); } },
   { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (with history: a generation file only)', armedClass: 'FAIL',
     plant: (b) => { rmSync(fleetFile(b)); rmSync(dot(b, 'token-sync.json')); } },
   { arm: 'fleet', word: 'fleet-token-absent', label: 'fleet-token-absent (with history: a sync report it cannot read, no generation file)', armedClass: 'FAIL',
@@ -639,6 +649,25 @@ describe('doctor box-token: a box never handed a value reads PASS with its sente
       expect(r.code).toBe(0);
     }
   });
+  // Review 383 F12: `ccrc-token-sync`'s `_ts_refuse` writes token-sync.json on refusals where nothing was claimed or
+  // written, so a report is not by itself the history of a value. The refusal still shows as its own `sync:<word>`, at its
+  // armed class (WARN: a fault a person can act on); only `fleet-token-absent` takes the never-handed PASS form.
+  const REFUSALS = ['bad-code', 'stale-client', 'claim-refused', 'write-failed', 'code-used', 'busy', 'spawn-failed'];
+  for (const word of REFUSALS) {
+    it(`f-failed-first-sync: fleet role, no token file, no generation file, a first sync refused (${word}) is the refusal's WARN beside a never-handed fleet-token-absent, not a FAIL`, () => {
+      const b = box({ role: 'fleet' });
+      dropFleet(b);
+      plantReport(b, { result: word, generation: null, transport: null, proof: null });
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout).toMatch(new RegExp(`^WARN box-token: ${never('fleet')}; fleet: sync:${word} — `));
+      expect(r.stdout).not.toMatch(/no-generation|never-synced/);
+      expect(r.stdout).toMatch(/\n {2}remedy: \S/);
+      expect(r.code).toBe(2);
+      const d = runCheck(b, disarmed());
+      expect(d.stdout).toMatch(new RegExp(`^SKIP box-token: ${never('fleet')}; fleet: sync:${word} — .*${SKIP_TAIL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\n$`));
+      expect(d.code).toBe(3);
+    });
+  }
   it('both role, local: nothing of either side is two PASS parts on one line, rc 0', () => {
     const b = box({ role: 'both' });
     dropServer(b); dropFleet(b);
