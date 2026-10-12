@@ -1540,6 +1540,28 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     missed the alive pass, plus a restart/durable-record case. If existing evidence cannot expose and preserve that boundary
     without a migration or new durable identity, stop and report; do not silently fall back to documenting it.
   - Both lanes remain SHADOWED.
+- **2026-10-12 01:02 — fix round 3 done at `6bef07fd7` (plain-ridge's 4258); final scoped review run 385 dispatched.**
+  - The branch, remote ref, PR #351 head and handoff commit all measure
+    `6bef07fd76cbfe41df14e6585545d0b56e0eb107`; the PR is OPEN and MERGEABLE. `merge-tree` with main
+    `d9647b76b` is clean, so main was not absorbed. Run 358 is `awaiting-review`, with 12/12 items done.
+  - **4824:** breaker entries now carry accumulated anchor instants. Distinct ids cluster when any instant pair is
+    within the window; an id never self-clusters. The held record is `id@t1+t2+t3*`, strictly ordered, with the old
+    one-instant spelling retained. The two review-384 probes are committed and green.
+  - **4825:** a later supervisor heartbeat than the durable anchor starts a fresh episode anchor, adds it beside every
+    remembered instant, and survives restart without a migration. The exact returning-id sequence, including a lane that
+    misses the alive pass, is pinned; neither lane ends Q.
+  - **The worker raised two pass-grid facts rather than silently claiming them safe.** G1 says pass-sampled anchors can
+    differ across lanes whose pass grids differ near the ten-minute edge. G2 says a restart's lost backoff can remove an
+    extra clustering entry and thereby let it act sooner. These are not accepted residuals. Review 385 is asked to judge
+    them, the unstamped-return limit and the pre-record death window as possible before-arming blockers.
+  - The round has four commits, no merge. The worker reports every F1/E/R/M mutation row measured at the final tests,
+    named guards green, server and PWA tsc green, no migration, no live-marker writer, and both lanes SHADOWED. PR CI's
+    required server shards were still running at dispatch; the earlier unrelated `ccrc-codex` L0d red is not carried as
+    a new result.
+  - **Review run 385** reviews 358. Its 6.5 KB brief starts with 4824's cross-pass induction, 4825's episode evidence
+    and both review-384 probes; it then attacks the record grammar and durability, every earlier ruling and mutation row,
+    and the G1/G2 arming facts. It uses the full held-out panel and was dispatched to `ccrc-pwa-warm-cove` on the first
+    try (`skillState: present`), with workflow on. Mail 4260 tells the worker to stay idle.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
