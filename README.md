@@ -976,9 +976,25 @@ generation, its transport (`http` said as unencrypted), the previous and retired
 proof that the retired value is refused, a boot recovery, a token-file finding from the last re-read, an
 alert after three failures in a row or a stall (a failed mint, a rotation owed for a day), and **Rotate now**
 (`POST /api/token/rotate`, session-only). Settings then has
-a further section, **Notifications**: the phone-push bell for this browser (the same
+a further section, **Notifications**: the push bell for this browser (the same
 toggle as the fleet header's) and **Release notifications** — `on my channel`, `stable only` or `off`, written
-as the fleet intent's `notify` through `POST /api/updates/intent`. In remote mode the foot of the fleet screen always
+as the fleet intent's `notify` through `POST /api/updates/intent`. Settings then has a further section, **Stall watch**
+(stall-watch-settings W2), read and written through `/api/coord/stall-watch` by a poll of its own, once a minute and
+whenever the page is shown again. It shows the watch's level now, what it does and where it comes from (following
+the fleet box's files, chosen here, or chosen but held back by the fleet box's kill switch or strict mail gate), the
+next step and what it waits on, and the notice counts for the last 48 h, sent and shadow, on runs only. Its two
+controls are the **Level** — `Follow the fleet box's files` (the default, today's behaviour) or one of six levels,
+each including the ones below it: `Off`, `Log only`, `Check silent workers`, `Alert coordinator and you`,
+`Deliver mail to busy sessions`, `Everything` — and the **Quiet time before a worker check** (built-in 2 h; 30 min
+to 12 h in 30 min steps), which also times the pushes about a dialog left open. The checked option is the stored
+answer, never the tap. The server answers 409, with what the write would do, to any write that would turn something
+on, leave the further checks, or move the quiet time below what it was, and to every write
+while the fleet box's files cannot be read; the section opens one confirm sheet from that answer, and **Set**
+re-sends the write with the server's key, so nothing is written until the operator has confirmed what the server
+will do. The choice is one row in `coord.db` and applies to the whole fleet. It never overrides
+`stall-watch-disabled`, `mail-disabled` or `mail-gate-strict`; a lost row, or a field of it that cannot be read,
+means the files and the built-in quiet time.
+A server without the route shows the section as not available. In remote mode the foot of the fleet screen always
 carries `BuildLine`: `fleet <version> · server <version>`, read from the node inventory. A side reads
 `unversioned (<sha>)` for a stamp with no tag and adds `dirty` for a dirty tree; it is amber unless the side
 is a clean versioned release, and `—` when that node's stamp cannot be stated (never measured, unread, or the
@@ -3759,7 +3775,7 @@ is a startup boundary, not a sandbox: `PATH` and every binary it selects are tru
 who replaces both files is not stopped. `ws-expire`, `ws-collect`, `ws-audit --session <id> --expire` and
 `ws-audit --session <id> --collect` are decided the same way.
 
-**The temp-root collector (child reclamation wave 7, shipped inert).** A child's temp root,
+**The temp-root collector (child reclamation waves 7 and 9; the lane ships shadowed).** A child's temp root,
 `$HOME/.cc-tmp/<id>`, that outlives its workspace — a reclaim tail kept it because a process still used it or ccd's
 removal refused it, or a human verb left it — is taken back by
 `ccd ws-collect --expect <token> --session <id>`, with the token that `ccd ws-audit --session <id> --collect` minted;
@@ -3777,8 +3793,38 @@ exit code), re-proves, and removes only the slot's inode, so a spawn that re-min
 of losing its leaf. It drops the witness by compare-and-drop and the record last. A record or slot that ccd can neither
 finish nor undo is kept and listed as `quarantine-kept`, and no session acts on one. It is Linux-only, needing GNU
 `mv` with `--no-copy` (coreutils 9.2 or later); on Darwin the audit measures nothing. `ccd caps` advertises
-`collect-v1` and `ws-collect`, the agent grants `['ws-collect','--expect']`, and no server code composes the verb
-until the collector's lane lands (wave 9).
+`collect-v1` and `ws-collect`, and the agent grants `['ws-collect','--expect']`.
+
+**The collector's lane (child reclamation wave 9) ships shadowed.** The server's sweep is the verb's one composer, behind
+`$REG/collect-lane-live`: until the operator touches that file by hand in the registry the server reads (the fleet
+box's, through the agent, when the server runs `CCRC_FLEET=remote`; nothing in this tree writes it), the lane audits
+and records what it would collect — a feed row and an entry in the cleanup row on `/runs` — and never composes
+`ws-collect`. Removing the file shadows it again. An act job reads the file only at its last check, once its second audit has
+licensed the act. A job that finds the file changed since the last such read writes one feed row saying which way it now stands,
+clears every id's pair and composes nothing, so the first act after a change it sees waits for two fresh audits. A change undone
+between two such reads is never seen and writes no row, and an arming writes its row only when the first id is ready to act.
+Each pass the lane lists `$REG/tmproots` and `$REG/tmpquarantine`, never `~/.cc-tmp`, and
+runs at most two learning audits and one act job. It composes `ws-collect` for an id only after two audits at least a
+sweep interval apart minted the same token, the second in the act's own job, and only on a box whose ccd advertises
+both `collect-v1` and `reclaim-pause-v1`. Armed, at most one `ws-collect` is composed per pass and one runs
+fleet-wide, and no act job, shadow included, is offered in the first eight minutes after the server starts.
+`$REG/reclaim-paused` stops the lane, shadow included. It leaves alone an id
+someone is viewing, an id an open run names, and an id whose witness names a run that is still open, that the
+coordination database does not hold, or that opened after the witness was written. It never kills a holder. A temp
+root it cannot take — in use, changing for a day, kept in quarantine, refused or unmeasurable — is listed in the
+cleanup row, and an answer that stands for the whole box is listed once.
+
+**Before arming it**, read the shadow feed rows, and arm only when:
+- `ccd caps` on the box whose ccd the server drives (the fleet box under `CCRC_FLEET=remote`) lists both `collect-v1` and
+  `reclaim-pause-v1`: without either the lane does not run at all, shadow included, so it writes no row and no line, and an
+  empty shadow feed proves nothing;
+- every "would collect" names an orphan whose run is closed;
+- no box-wide line stands in the cleanup row, except the one for temp roots whose runs the coordination database
+  cannot vouch for, which may stand once you have read it: those ids stay held, armed or not, until a person removes
+  them;
+- you know that any process of this uid can touch `$REG/collect-lane-live`, as it can `expire-lane-live`, and that the
+  lane reports a change only when an act job next reads the file, so a missing "now live" or "now shadowed" row means not
+  yet seen, never unchanged.
 
 **Reclaim's tail, corrected in wave 7 (it is shared with `ws-expire`).** `containment-refuted` is the failed word the
 tail prints when it proves that what it would remove is not only the child's own (another session's row or tree at,
@@ -4198,7 +4244,7 @@ hold, a human's included, keeps the child. The sweep's switch is
 `/runs` (`POST /api/coord/reclaim-pause`, session-gated, no box token), or run
 `ccd reclaim-pause --state on` on the fleet host; `--state off` lowers it. While
 it stands the sweep and the close path ask for nothing, `ws-reclaim` itself
-refuses `paused` on the box, and the expiry of archived workspaces stops too, as does the dead-coordinator lane. The same row lists the children that need a
+refuses `paused` on the box, and the expiry of archived workspaces stops too, as does the dead-coordinator lane, and so does the temp-root collector’s lane (`ws-collect` itself refuses `paused` on the box). The same row lists the children that need a
 human's eye: each under a terminal refusal, each whose reclaim ccd proved is blocked by a tree or registry
 row that is not the child's own (`containment-refuted`, listed at once and retried on a persistent tier that
 waits up to four hours between asks), each whose reclaim has kept failing for 15 minutes, each the sweep
@@ -5304,7 +5350,7 @@ implements — that list is the authority; the table below is a map:
 | `ws-archive` · `ws-restore` — `--session <id>` | fold an idle workspace out of the live fleet / back in — costs the tmux pane, deletes nothing |
 | `ws-audit --session <id>` · `ws-reap --expect <token> --session <id>` | the read-only reap preview, which mints a token; the human-confirmed removal, every guard re-proved on the box |
 | `ws-reclaim …` | the server's removal of a CHILD workspace a run minted — never run by hand or by a session |
-| `ws-collect --expect <token> --session <id>` | the server's removal of an orphaned, witnessed child TEMP ROOT, by quarantine rename — never run by hand or by a session; its audit is `ws-audit --session <id> --collect`, and nothing composes it yet |
+| `ws-collect --expect <token> --session <id>` | the server's removal of an orphaned, witnessed child TEMP ROOT, by quarantine rename — never run by hand or by a session; its audit is `ws-audit --session <id> --collect`, and the server's collector lane composes it only once the operator has armed it (`$REG/collect-lane-live`) |
 | `ws-rm [--reason <text>] <id>` · `ws-gc [--prune]` | terminal-only: tear one workspace down, refusing anything it might destroy; report every worktree's state, size and idle time (`--prune` acts on each row, reclaiming or declining it) |
 | `ws-attic --session <id>` · `ws-attic --drop <id>` | list / drop the commits a removal pinned under `refs/ccrc/attic/<id>/` |
 | `coord-pause --state on\|off` · `reclaim-pause --state on\|off` · `project-pool --project <p> --pool <name>\|--clear` | raise / lower the coordinator pause; raise / lower the cleanup pause (`$REG/reclaim-paused`: child reclamation, the expiry of archived workspaces and the dead-coordinator lane); tag / untag a project's pool |
@@ -5314,8 +5360,7 @@ implements — that list is the authority; the table below is a map:
 
 `ws-rm`, `ws-gc` and `ws-attic --drop` cross no wire (the agent grants none of
 them), `ws-reap` crosses it only behind the token `ws-audit` minted, and
-`ws-reclaim`, token-gated the same way, is composed by the server alone, and `ws-collect`, gated on its own token, will
-be (nothing composes it in this build).
+`ws-reclaim` and `ws-collect`, each token-gated the same way, are composed by the server alone, `ws-collect` only once the operator has armed its lane.
 
 **A screenshot from a Mac.** `ccd/ccclip` is the Mac-side helper: bound to a
 global hotkey (or run directly), it takes the clipboard image with `pngpaste`,

@@ -3273,3 +3273,305 @@ composes when a gate forbids it, and 9 more items (three silent-wedge paths amon
     one kill grace is paid, about 73 s, or 78 s at the 8 s grace (ledger, 10-11 00:05).
   - **"§16 as built" and the numbers.** The worker writes "§16 as built (wave 9, run 380)", naming departures by slug,
     with no number. The coordinator assigns the numbers at the fix round, singly.
+
+### §16 as built (wave 9, run 380)
+
+Where wave 9's code and the plan's text narrowed or spelled out this section's rulings above, they now read as
+follows. This note amends; it edits no earlier text. It names each departure by slug and carries no number: the
+coordinator assigns this wave's numbers from the block run 380 was issued, and the wave 9 plan's `## Deviations found`
+defines them. This wave's committed comments and test titles cite §5.10 of the design spec, and §5.7 and §5.9 where the
+lane reuses reclaim's pacing and attention. The spec text this wave adds is in §5.10, with edits to §5.2, §7, §8 and
+Appendix A. The fix wave and fix round 1 refreshed this note so that it reads as the tip stands: each departure they
+made, and each residual they stated, is named under the rule it touches.
+
+**R82 (the lane's marker).**
+- `flip-rows-are-for-changes-an-act-job-sees`: R82's "the operator sees every change" reads "every change an act job
+  sees". The executor reads the marker once, at the act's last check, in step 5's registry listing, and an act job is
+  offered only to a ripe id. A job that finds the file changed since the last such read writes one feed row saying which
+  way it now stands, clears every id's pair and composes nothing, so the first act after a change it sees waits for two
+  fresh audits. A change undone between two such reads is never seen and writes no row, and an arming writes its row only
+  when the first id is ready to act. This is no safety gap: no act is composed without a seen flip.
+- `marker-removal-after-the-last-listing-still-composes` (a stated residual): the marker is read once, in step 5's
+  registry listing, with no await before the argv. A removal after that listing, while the frame crosses the link or
+  while `ws-collect` runs, still composes or completes, because ccd never reads the marker. R82's "A marker removed
+  between the audit and the act composes nothing" holds for a removal the step-5 listing sees.
+
+**R83 (the population).**
+- `population-cap-counts-the-raw-listing`: the 1024 cap counts the raw listing, dot-leading names included, before the lane's own drops. The
+  executor's read has already dropped non-string names, so those are not counted. Only stricter.
+- `junk-quarantine-names-are-refused-names`: a non-dot name in `tmpquarantine` that is no record of an id the lane may
+  take (junk, or a dash-leading id's record) is counted among the refused names, as a refused witness name is.
+- `population-ids-and-candidates-split`: the population carries its ids, which forgetting reads, apart from its
+  candidates, the ids less the pre-filter, so a pre-filtered id keeps its pacing and its episodes.
+- `collector-records-unread`: the pass keeps the `sweepTempRootCollect(records, names)` signature, and does not read
+  `records`; the population comes from the two listings alone.
+- `an-answer-for-a-forgotten-id-is-dropped` (narrowed by `a-collected-act-always-writes-its-row`): forgetting an id does
+  not wait for its in-flight call. That call's late answer folds nothing for the id, but what it says of the box still
+  counts (the probes, a pass's tally, an act's box word), and a `collected` act still writes its row, worded from the
+  job's own observation 2.
+- `a-collected-act-always-writes-its-row`: a `collected` act whose id was forgotten while its `ws-collect` was out writes
+  the same feed row a remembered id gets, built from the job's own observation 2. Every other outcome for a forgotten id
+  folds nothing.
+- `learn-collect-asks-no-id-predicate`: the learning audit does not re-assert the id predicate; the population's check
+  and the act job's step 1 are the two checks this rule names.
+- `population-reads-tmproots-before-tmpquarantine`: the executor's two listings are read one after the other, `tmproots`
+  first, never together. ccd writes the quarantine record, then drops the witness, then drops the record, so a record
+  listing taken first could see neither for an id ccd is collecting between the two and forget it once.
+- `population-cap-bounds-the-lane-not-the-frame` (a stated residual): the 1024 cap bounds what the lane audits and
+  remembers, not the listing itself. The agent's `readdir` returns every name in one frame, as the registry's own `$REG`
+  listing already does every tick, so R83's "cannot bloat the agent frame" holds for the lane's memory only.
+- `cc-tmp-scan-display-only`: the scan pins three things, because a value handed to `io` cannot be followed across
+  lines as text: the pass, the lane and the executor spell `.cc-tmp` only as the display form `~/.cc-tmp`, never beside
+  an `io` call or a path join, and the lane and the executor never read the home directory.
+
+**R84 (the readers).**
+- `exists-not-carried`: the audit reader does not carry the document's `exists`, since nothing gates on it.
+
+**R85 (the licence).**
+- `a-stale-answer-paces-but-never-observes`: a stale answer is never an observation, but its pacing still applies, so a
+  lane-wide clear landing between a terminal audit's compose and its answer cannot buy another journaled terminal audit.
+- `observation-wait-in-the-next-ask`: while observation 1 stands, the id's next ask is its ripening instant, so a holder
+  ripens into the act job instead of taking a learning audit that could only repeat observation 1. §16 now says this.
+- `hold-reported-ahead-of-the-licence`: the executor judges the open-run hold on every collectable observation 2,
+  licensed or not, and reports `held` whenever it stands, so a held id never seeds a pair. Only slower.
+- `lane-bounds-decided-in-l1`: the offers and the slot's freeing rules are pure functions in the lane's L1 file; the
+  slot's state stays in the sweep.
+- `start-hold-off-asked-at-the-offer`: no act job is offered within `CHILD_RECLAIM_STALL_MS` of the lane's start, shadow
+  included, so a restarted lane's first would-collect waits eight minutes; the executor asks no hold-off. Only slower.
+- `unsettled-bound-counts-from-the-queue`: the unsettled bounds (twice the 90 s row, and `CHILD_RECLAIM_STALL_MS`) count
+  from the lane's enqueue of the call or job, not from ccd's composition.
+- `a-thrown-job-reads-as-no-document`: a rejected job or learning audit is folded as an audit with no document; a thrown
+  act job keeps the slot and its id until `CHILD_RECLAIM_STALL_MS` after it settled, since its composition time is
+  unknown.
+- `fold-failure-resets-the-pair-and-floors`: an act job that settled but whose fold threw, by its outcome arm or its
+  threw arm, resets the id's pair under a new generation and takes the refusal floor, and nothing else moves. The lane
+  does not know what the job did, and a fold defect that recurred on every act would otherwise buy a licensed
+  `ws-collect` about every second pass, against R87's bound. The slot is left as it was. The learning audit's catch and
+  the tick's catch are left alone: neither can leave a pair standing.
+- `settle-throw-before-the-slot-write-wedges-the-slot` (a stated residual): a throw inside the settle step before its
+  slot write leaves the slot held by the job, with no flight and no line. It is gated by a defect, and closing it would
+  make that path faster.
+- `collect-fresh-returns-boolean`: `collectFresh` returns a plain `boolean`, not a type predicate: its false arm is
+  "forgotten or stale", and a stale answer's entry is still the id's to pace.
+- `older-pass-guard-is-shadowed-by-the-prune`: `collectSettled`'s older-pass guard cannot be reached while the tally
+  prune stands, because publishing a pass deletes every tally numbered below it. Their pin holds the two together.
+- `collect-act-cap-after-last-await-pinned`: a textual pin of step 6. The act job asks `COLLECT_CAP` at least twice, and
+  the last ask follows the job's last await and precedes the argv's statement.
+
+**R86 (the gates).**
+- `pass-reads-its-switches-in-its-gather`: the pause read "at the pass's start" is the registry listing inside the
+  pass's one gather, before any audit, so an unlistable registry's clear is reachable at the pass.
+- `unplaced-witness-instant-holds`: a collectable document whose witness names a run but carries no instant holds under
+  (c)'s word, `run-after-witness`, because whether that run minted the temp root cannot be said.
+- `audit-gate-refusal-clears-as-caps`: the one audit site refuses when `ws-audit` is not advertised; that refusal is
+  reported as a missing capability and clears the pairs as one. A ccd that advertises `collect-v1` never reaches it.
+- `collect-switches-tells-raised-from-unlistable`: `CollectSwitches` carries `why: 'raised' | 'unlistable'` on its paused
+  arm, so each outcome detail says which; both stop a job alike, and neither is ever shadow.
+- `collect-audit-names-its-refusing-gate`: the audit site says which gate refused, `collect-v1` or `ws-audit`, and step 4's
+  detail names it.
+- `learn-collect-not-asked-keeps-one-caps-word`: the learning audit answers both refusing gates with the one `caps` word,
+  since the lane handles them alike.
+- `h6-scan-follows-the-reshaped-audit-site`: recorded, not a departure. The scans that bind the act's first argument to
+  the executor's own second observation matched the reshaped audit site with no change to either pattern.
+- `ccdargv-collect-docstrings-rewritten`: `ccdargv.ts`'s two docstrings that said nothing composes `ws-collect` and
+  nothing reads `COLLECT_CAP` were rewritten, line for line, in the commit that composes the verb.
+- `outcome-detail-is-diagnostic`: a `CollectJobOutcome`'s `detail` is diagnostic. Tests and reports read it, and the lane
+  surfaces no sentence from it, so the raised and unlistable distinction and the capability and verb distinction are
+  carried, not shown. A comment, no behaviour.
+- `destructive-builder-fence-reads-whole-files`: the fence that keeps the files holding the `ws-reclaim` and `ws-expire`
+  sites from naming a collector type or reader reads each scanned file whole, not the one function holding the site, so
+  a same-file caller that hands a collector value is seen. A control plants such a caller, and the plan's case title is
+  retitled to say so. A narrowing of the whole-file read back to the site's function is caught by no case in the
+  tree, the control included: only a caller planted in a real file shows it, a row measured once in a scratch copy (a
+  `CollectToken`-typed parameter at a caller in `coord/childReclaim.ts`, outside the function holding the `wsReclaim`
+  site, reds the whole-file check while the site's own check stays green).
+
+**R87 (pacing).**
+- `collector-l1-imports-the-formula-file`: the lane's L1 file imports `../../shared/api.js` and `./childReclaimSweep.js`
+  and nothing else, one way, and the pacing suite pins exactly those two.
+- `changed-recently-without-idleat-is-a-deferral`: a `changed-recently` whose `idleAt` is not a finite non-negative
+  integer advances the deferral count instead of clearing it, so the leaf is not re-walked every pass.
+- `failing-run-stays-on-the-tier-once-entered`: a failing run marked stuck by a per-leaf deterministic answer stays on
+  the tier until the run clears, so a later load-sensitive answer cannot take it off.
+- `unreadable-and-unknown-verdict-are-failures`: an unreadable document and an exit-0 verdict word the reader does not
+  know each advance the failing run, as §16 now says.
+- `verb-terminal-refusal-advances-the-terminal-run`: a verb refusal or failure whose word is terminal advances the
+  terminal run, ahead of the refusal and verb-failed rows, as §16 now says.
+- `continuity-measured-answer-to-answer`: a span "continuously past" is measured from a streak's first answer to its
+  latest, never to now, and is inclusive at the span.
+- `hold-and-presence-continuity-survive-observations`: a collectable observation never ends the hold's or presence's
+  continuity, since a held id is re-observed between holds; every other answer, and every act outcome, ends both.
+- `collect-sweeping-is-the-overtaken-guard`: the one-pass-at-a-time `collectSweeping` guard spans the gather, so no pass
+  counter is added, as §16 now says.
+- `budget-test-pins-the-read-values`: `collect-audit-budget.test.ts` pins the six values it reads (30, 10, 30, 3, 8 and
+  90) as well as the inequality, so a change to any bound reds it and the sum is argued again.
+- `flock-unavailable-takes-no-floor` (H13): a `flock-unavailable` die takes no refusal floor and starts no die streak.
+  It latches box-wide instead and waits the ramp alone.
+- `would-collect-ends-the-die-streak` (H13): a shadow would-collect ends a recurring die's streak, as every act outcome
+  but the same die does.
+- `terminal-refusal-keeps-the-refusal-floor` (H13): a verb refusal whose word is terminal advances the terminal run and
+  keeps the refusal row's deferral and floor beside it.
+- `terminal-failure-clears-the-deferral-count` (H13): a verb failure whose word is terminal (`failed quarantine-kept`)
+  advances the terminal run and clears the deferral count, as every other verb failure does.
+
+**R88 (attention and the feed).**
+- `collect-many-arm-declared`: the collapsed per-id collector line is a new L0 arm, `ChildReclaimCollectMany`, whose word
+  begins `collect:`, declared in the one rewrite of the attention union's last line.
+- `collect-many-word-type-pinned-by-ts-expect-error`: a `@ts-expect-error` pin on an unprefixed collapsed-line word reds
+  the mutation that widens it to `string`.
+- `terminal-collapsed-and-count-lines-past-tense`: the collapsed terminal lead and the run-less count prefix read in the
+  past tense, true after a terminal answer and a later collectable alike ("ccd has answered its temp root with a terminal
+  word, so it is listed for you to look at; its feed row names that word and what ccd found."; "N are listed under
+  <word>").
+- `count-line-word-through-detail-text`: the count line's word goes through the one bounded plain-text reader.
+- `would-collect-body-calls-collect-who`: the would-collect feed body takes its run clause from the one helper the other
+  bodies use, byte for byte.
+- `clips-clause-wrapped-in-one-sentence`: the leaf's clips clause is carried verbatim inside one wrapper sentence that
+  is true of both of its shapes.
+- `stuck-end-exported`: `childReclaimStuckEnd` gains the `export` keyword and nothing else.
+- `unvouched-line-waits-the-ceiling`: ids held because the database cannot vouch for their runs join the one box line
+  once held past the ceiling, the rule every per-id hold keeps.
+- `no-run-lines-share-one-label`: run-less collector items over the limit share ONE `no-run` line, with one clause per
+  word.
+- `box-probe-line-clears-on-a-passing-answer`: a box-wide probe line stands until an answer passes every rung. It also
+  clears when both listings are measured and the population holds no id (`box-lines-clear-when-their-ids-leave`,
+  `box-line-clears-need-both-listings-measured`).
+- `box-lines-clear-when-their-ids-leave` (retires `pass-scoped-box-lines-stand-until-the-next-call`): a pass-scoped box
+  line drops once none of its ids is still a candidate, with both listings measured, and the probe line clears once the
+  population holds no id. With both listings measured and no id in the population, nothing carries the condition. The
+  line is memory only, so a restart already clears it, and the next id's first audit raises it again before any
+  observation can form. R87's "never heal by themselves" is about an id's condition, which still needs the operator.
+- `box-line-clears-need-both-listings-measured`: both of those clears read absence, so both need both listings measured,
+  the rule forgetting uses. An unmeasured listing changes nothing.
+- `older-answer-never-clears-a-newer-probe`: an answer that arrived before the box probes' latest change says nothing of
+  them, at every fold. A tie applies. The stamp moves to an answer's arrival whenever `collectBoxProbesAfter` rebuilds
+  the probes from it (a box-wide probe, a re-assertion of a standing one included, and any answer that passed every
+  rung), since each is a newer word about the box, and never for an answer that leaves them as they were (a per-id
+  probe, a non-passing verdict, no document). So an act job's box effect, applied at its answer's arrival, cannot wipe
+  a probe that a later answer raised or re-asserted.
+- `reader-made-words-are-ccrcs`: the words `''`, `unreadable` and `no-document` are this build's reader's, so their detail
+  is ccrc's text or text ccrc saw, and a sentence leads "What ccrc saw:" for them and "What ccd said:" for a word ccd
+  printed. No sentence prints empty brackets. The feed rows for them are chosen by kind, never by word, and say in
+  ccrc's words that ccd answered nothing, or that ccrc could not read or accept ccd's answer, then what ccrc saw.
+- `a-ccd-word-spelled-like-a-reader-word-reads-as-ccrcs` (a stated residual): the attention lead is chosen by word, so a
+  ccd verdict or token spelled exactly `unreadable` or `no-document` is led "What ccrc saw:". The text is still escaped,
+  and the feed rows are chosen by kind, so they are unaffected.
+- `a-registered-id-projects-no-item`: while an id's exact `<id>.child` or `<id>.uuid` row stands and the measured
+  `tmpquarantine` names no record of the id, the id projects no per-id item, a terminal one included. That narrows H8's
+  "a terminal item stands while the terminal run stands". Its pacing memory is kept, and its item returns as it stood
+  once the row goes. The hide is gated: while `tmpquarantine` is unmeasured or over its cap it does not apply, so the
+  `quarantine-kept` item and a reclaim item's second clause stand for such an id, as does any other remembered item of
+  it. An absent `tmpquarantine` counts as measured, and a `tmproots` in doubt alone does not lift the hide.
+- `registered-id-with-only-an-unparseable-record-stays-hidden` (a stated residual): a quarantine name that fails
+  `parseCollectRecordName` is a refused name, not a record id, so a registered id with only such a record stays
+  hidden. The refused-names box line counts it, and never names it.
+- `a-refusal-or-die-episode-outlives-observations`: R88's "one row per (id, word) episode, quiet on repeats" holds for a
+  refusal or a die. A collectable observation, fresh or stale, no longer ends a `refused` or `die` episode, terminal and
+  silent words and `flock-unavailable` included. Every audit-opened episode, `collected`, `failed` and
+  `act no-document`, and a would-collect of another token still end on an observation. A refused or die episode ends
+  at another row key, at forgetting the id, or at a restart. The die streak and every pacing floor are unchanged.
+- `a-retryable-refusal-says-once` (a stated residual): after that, a retryable refusal such as `in-use` writes one row and
+  has no attention arm, so ccd may refuse it silently up to 96 times a day. A die is covered by its streak's attention, and
+  a terminal refusal by its terminal item.
+- `failed-flag-not-pinned-at-the-lane` (a stated residual): two mutants of that rule, the flag set on the `failed` arm
+  and an observation keeping every episode, red at L1 only. The lane case covers a refusal and a die.
+- `act-failure-rows-repeat-per-act` (a stated residual): `failed <token>` and `act no-document` keep one row per act,
+  because each may have acted. The verb-failed ramp and tier bound them.
+- `would-collect-verdict-collides` (a stated residual, pre-existing): an audit verdict spelled `would-collect <token>`
+  would read as a standing would-collect.
+- `reclaim-kept-many-member-with-a-clause-stays-single`: a reclaim kept-many member carrying a second clause leaves the
+  line and stays single, and the rest are relisted.
+- `watch-interim-empty-collector`: until the lane's sweep landed, the publish call passed `CHILD_RECLAIM_COLLECT_NONE`.
+
+**R90 (the carried list).**
+- `census-title-control-pins-its-width`: the kept-word census's retitle is held by one CONTROL line. A double-quoted list
+  is outside the census, as its title says.
+
+**R91 (the L0 edits).**
+- `collect-lane-fields-beside-the-child-reclaim-lane`: the lane's fields follow `childReclaimLeaves` in the watcher, and
+  its `currentCollectLane()` follows `currentChildReclaimDoneAt()`, off the regions workspace lifecycle's wave 6 edits.
+- `attention-doc-pair-counts-the-collector`: `ChildReclaimAttention`'s doc pair was rewritten in place, line for line,
+  so it counts the collector's arms; no README anchor moved.
+
+**R92 (amendments).**
+- `r92-section-7-lines-are-section-5-10s`: the four lines R92 lists under §7 lie in §5.10's own residual list, and were
+  edited there.
+- `spec-stale-sentences-beyond-the-r92-list`: four more sentences of the same class are corrected: §5.10's
+  `not-witnessed` paragraph, the "on every pass" device line, the "worst case can exceed" residual, and §7 item 6's echo
+  of the old budget figures.
+- `collect-lane-prose-pins`: `collect-lane-prose.test.ts` pins the sentences this wave wrote and the stale ones it
+  removed. Run 358's prose files are run, never edited.
+- `commit-subject-follows-the-frame`: each task's commit subject reads `child-reclamation wave 9 task N: …`, the
+  implementer frame's style, and not the draft's `feat(…)` subjects.
+- `spec-5-8-pause-sentence-untouched`: §5.8's pause sentence is not in R92's list and is pinned by run 358's suites. It
+  is read as R86 reads README `:5310`: "child reclamation" covers the collector.
+- `no-pass-fails-shut-clear`: the spec's list of what clears the observation pairs names no "pass that fails shut", and
+  the code's comments no longer do: a missing capability at a pass, a job or a learning audit is one clear. This
+  contract's older lines and the plan keep the phrase as history.
+- `r23-sweep-of-contract-and-ruling-tokens`: the fix wave replaced every contract and ruling token in this wave's code
+  comments and test titles with the spec section it argues (§5.10), or dropped it where the sentence stands without it.
+- `arming-checklist-names-the-capabilities`: the README's checklist before arming and the spec's list name both
+  capabilities: `ccd caps` on the box whose ccd the server drives lists `collect-v1` and `reclaim-pause-v1`, since
+  without either the lane does not run at all, shadow included, and an empty shadow feed proves nothing. It is worded as
+  a fact the operator checks, never a step ccrc enforces.
+
+**Plan-text corrections and measured red shapes**, per task (some are also named above under their rules):
+- Task 1: `attention-doc-pair-counts-the-collector`, `collect-many-word-type-pinned-by-ts-expect-error`,
+  `collect-l0-red-at-collection`, `step3-attention-case-reds-at-runtime`, `step3-tsc-shape-differs` and
+  `t1-9-dated-directive-stays-consumed`.
+- Task 2: `lock-die-mixed-bash-lines-row-added` and `t2-16-longer-id-row-reds`.
+- Task 3: `population-header-in-task-2-style`.
+- Task 4: `licence-header-in-task-2-style`, `presence-null-already-red`, `r23-sweep-of-contract-and-ruling-tokens`, and
+  fix round 1's pacing pins (each answer's effect on the hold, the presence defer and the continuity clocks, and the
+  rewritten not-witnessed case), and `changed-recently-row-uses-a-later-idleat`; fix round 2's wording of who reads the
+  episode flag.
+- Task 5: `stuck-end-exported`, `would-collect-body-calls-collect-who`, `watch-interim-empty-collector`, and fix round
+  1's comment above the run-less count line, on which of its words are ccd's own and which are this build's labels;
+  fix round 1's shape choices `reasons-hide-row-per-test`, `records-in-doubt-takes-the-doubts`,
+  `collect-said-word-nullable` and `collect-read-what-exported`, a CONTROL lane row (an act `failed` with a non-empty
+  token keeps the answer body), and three one-clause docstrings beyond the three ruled, indented at fix round 2.
+- Task 6: `outcome-detail-is-diagnostic` and `ccdargv-collect-docstrings-rewritten`.
+- Task 7: `collect-lane-fields-beside-the-child-reclaim-lane`, `older-pass-guard-is-shadowed-by-the-prune`,
+  `t7-38-act-queue-pinned-by-the-registry-listing-count`, `t7-22-reds-as-a-timeout`,
+  `publish-docstring-returns-rewrapped`, fix round 1's lane cases for a pause seen at step 5, the learning audit's
+  `not-asked` and a learning call that never settles, its two comments on the flip row, and fix round 1's
+  `box-probe-stamp-is-a-new-map`, `probes-read-where-they-live-mid-sequence`, `f4-answers-arrive-a-whole-interval-apart`
+  and `f4-step-5-hold-armed-after-the-probe-pass`; fix round 2's lane case for a forgotten id's `collected` act, its L1
+  row for an empty pass, and its docstrings on the fold-failure floor and on a rebuilt stamp.
+- Task 8: `collect-act-cap-after-last-await-pinned`, `budget-test-pins-the-read-values`,
+  `census-title-control-pins-its-width`, `h6-scan-follows-the-reshaped-audit-site`,
+  `destructive-builder-fence-reads-whole-files`, fix round 1's pin that the act slot's bound covers twice
+  `ws-collect`'s remote runner row, and its comment naming the excused vocabularies of the door-code scan; fix round
+  2's comment saying twice the row is margin.
+- Task 9: `collect-lane-prose-pins`, `r92-section-7-lines-are-section-5-10s`, `spec-stale-sentences-beyond-the-r92-list`,
+  `spec-5-8-pause-sentence-untouched`, `no-pass-fails-shut-clear`, `flip-rows-are-for-changes-an-act-job-sees`, this
+  note's refresh, `arming-checklist-names-the-capabilities`, and fix round 2's two residuals and slug lists.
+- Task 10: `task-10-shards-run-as-halves-after-an-oom` and `commit-subject-follows-the-frame`, the whole-wave one.
+
+**Ruled at fix round 1** (the seven open items the wave-done raised):
+- `hold-presence-alternation-can-starve-attention`: not a finding. H9's `hold-and-presence-continuity-survive-observations`
+  stands: a hold and a presence defer end each other's continuity clock.
+- `collectable-alternation-is-silent`: not a finding as worded. Its feed cost was real and is fixed by
+  `a-refusal-or-die-episode-outlives-observations`.
+- `lane-silent-without-capabilities`: specified behaviour, the shape of the sibling lanes. The README's checklist and the
+  spec's list now name both capabilities (`arming-checklist-names-the-capabilities`).
+- `flip-row-filed-under-a-job-id`: prescribed, and nothing reads that attribution.
+- `registered-id-with-a-kept-record-hidden-while-quarantine-is-unmeasured`: fixed, by the gate under
+  `a-registered-id-projects-no-item`.
+- `ccd-collect-budget-comment-sums-a-grace-per-probe`: carried, not fixed here, because `ccd/` is outside this wave and
+  generated, so the carrying wave restamps it. The collector's per-probe grace sum and "A budget keyed on the mode is
+  wave 9's" (in the header "BOUNDED, AND NOT ALWAYS INSIDE THE RUNNER'S ROW"), and COLLECT-V1's "ships it inert", go to
+  the path-identity follow-up. EXPIRE-V1's "wave 3b composes it, this wave ships it inert" is workspace-lifecycle's. The
+  budget the wave's test pins, about 73 s, or 78 s at the widest grace, is the right one.
+- `spec-ws-expire-crumb-sentence-after-wl-w6`: the sentence is true at the tip. Whichever of wave 9 and
+  workspace-lifecycle wave 6 lands second re-reads the spec's `ws-expire` crumb sentence.
+
+`pass-scoped-box-lines-stand-until-the-next-call` is struck: `box-lines-clear-when-their-ids-leave` retired it. Also
+retired: `collect-many-word-type-unpinned-by-a-red` (see `collect-many-word-type-pinned-by-ts-expect-error`) and
+`projection-hides-items-while-a-listing-is-unmeasured` (narrowed into `a-registered-id-projects-no-item`). Void:
+`ws-collect-cap-entry-is-a-classification`.
+
+**Test citations, as built.** §16 and the plan's rulings cite `ws-collect-wiring.test.ts:25-26` and `:39` and
+`ccdargv-dec-parity.test.ts:161`, the base lines before Task 1 added its type import. Measured at the tip, the plain-token
+`wsCollect` calls in `ws-collect-wiring.test.ts` stand at `:26`, `:27` and `:40`, the token's one cast at its declaration,
+`:16`; and `ccdargv-dec-parity.test.ts`'s cast stands inline at `:162`. Neither file's lines were edited to make them hold.

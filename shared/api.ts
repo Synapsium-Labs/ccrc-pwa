@@ -3794,8 +3794,8 @@ export interface ChildReclaimKeptMember { readonly sessionId: string; readonly r
 /** One entry of the fleet-level attention list (child-reclamation spec §5.9):
  *  a child that automatic reclamation has left standing, or one whose reclaim
  *  keeps failing. A REPORT, never a tap: nothing waits on it, and ignoring it
- *  costs disk rather than correctness. The four arms below and the three this file's foot declares (stuck, and
- *  kept leaves) are told apart by `kind`, save the two that share `kept-many`, which only `word` tells apart:
+ *  costs disk rather than correctness. The four arms below and the five this file's foot declares (stuck, kept
+ *  leaves, the collector's) are told apart by `kind`, save the three that share `kept-many`, which only `word` tells apart:
  *
  *  - `terminal`: a TERMINAL reclaim refusal left the child standing.
  *  - `failing`: the child's reclaim has kept FAILING past the defer ceiling,
@@ -3829,9 +3829,9 @@ export interface ChildReclaimKeptMember { readonly sessionId: string; readonly r
  *  vocabularies are held disjoint server-side. On the three journal arms (`terminal`, `failing`, `stuck`) `token`
  *  is the refusal's or the failure's (empty when ccd journaled a failure with none) and rides beside it for a
  *  maintainer's grep, never for a renderer's
- *  switch. `runId` is the minting run the registry marker names, or null when
- *  the marker no longer reads as a child (a `kept` item's `runId` is never
- *  null).
+ *  switch. `runId` is the run the item's own evidence names, else null: the registry marker's minting run on
+ *  `terminal`, `failing`, `stuck` and `kept` (never null on `kept`), the journal line's `meas.childOf` on
+ *  `leaf-kept`, and the collect audit's `collect.witness.run` on `collect`; a box-wide `collect` line has none.
  *
  *  `at` (epoch ms) is ccd's clock alone, and only `terminal`, `failing`, `stuck` and `leaf-kept` carry it: a refusal's
  *  journal line, the first failure of the run that ccd placed, a stuck line's own, or a kept leaf's line, which is
@@ -3853,7 +3853,7 @@ export type ChildReclaimAttention =
   | { readonly kind: 'kept'; readonly sessionId: string; readonly runId: number;
       readonly word: ChildReclaimKeptWord; readonly sentence: string }
   | { readonly kind: 'kept-many'; readonly word: ChildReclaimKeptWord;
-      readonly members: readonly ChildReclaimKeptMember[]; readonly sentence: string } | ChildReclaimStuckAttention | ChildReclaimLeafKeptAttention | ChildReclaimLeafKeptMany;
+      readonly members: readonly ChildReclaimKeptMember[]; readonly sentence: string } | ChildReclaimStuckAttention | ChildReclaimLeafKeptAttention | ChildReclaimLeafKeptMany | ChildReclaimCollectAttention | ChildReclaimCollectMany;
 
 /** One ARCHIVED WORKSPACE the expiry lane reports (workspace lifecycle spec 2026-09-24 §5.3, wave 3b): one the lane
  *  WOULD clean up while it runs shadowed (`would-expire`), one held past its seven days (`held`), one a process keeps
@@ -9364,12 +9364,13 @@ export function archivedFoldSince(s: Pick<FleetSession, 'bucket' | 'bucketSince'
 export const MAIL_REPLAY_MS = 600_000;
 
 // ── Stall watch settings (design 2026-10-05, §5, §5.1, §12) ────────────────────────────────────────────────────────
-// The whole block stands at the END of this file, below `MAIL_REPLAY_MS`, for that constant's own reason: README and
-// the compaction card cite this file by line, and an insertion above them moves every anchor under it. Every string
+// The whole block was APPENDED below `MAIL_REPLAY_MS` (later blocks follow it), for that constant's own reason: README
+// and the compaction card cite this file by line, and an insertion above them moves every anchor under it. Every string
 // the Settings page's Stall watch section shows is one of the constants below, and no other file spells one. A
 // `{name}` slot is filled by the PWA's one helper, `fillStallText`. No text spells a registry marker name, a rung
-// code, a wave number or a duration: the durations live in code alone, and the window reaches the counts heading
-// from the wire. The ladder's flag and mail-mode columns are L1's (`STALL_LADDER`, `server/src/coord/stallsettings.ts`),
+// code or a wave number; the level `does` and stage `stops` and `gate` texts (`stall-settings.test.ts` pins them)
+// spell no duration, and `unread` below does name one. The counts heading takes its window from the wire. The ladder's
+// flag and mail-mode columns are L1's (`STALL_LADDER`, `server/src/coord/stallsettings.ts`),
 // keyed by the same `StallLevel`, so a level added to one Record and not the other is a compile error.
 
 /** The six ladder levels, in ladder order, each with its label and what it does (§5). Each includes the ones below it
@@ -9571,6 +9572,9 @@ export const STALL_CONFIRM_TEXT = {
   quietDialogs: 'A dialog left open longer than {value} is pushed to you from the next sweep, and repeat pushes about one open dialog can come {value} apart.',
   unknown: "The fleet box's files could not be read, so what this choice turns on cannot be shown.",
   refused: 'Nothing was changed: {detail}',
+  // A write with no answer (a network failure): unanswered-write-has-its-own-l0-line (D-4043). The 2xx-unreadable
+  // arm keeps the PWA's shared UNCONFIRMED_TEXT.
+  unanswered: 'Not confirmed — the server did not answer; the screen will re-check.',
 } as const;
 export const STALL_RUNLESS_FOOTNOTE = 'Counts notices on runs only. Notices about a session on no run, or about a coordinator itself, sent or shadow, are not counted here; shadow ones appear only in the server log.';
 /** The section's headings and small words. `counts` takes the window from the reply's `windowMs`, so no text copies
@@ -9671,3 +9675,81 @@ export const LEAF_KEPT_WORDS: readonly LeafKeptWord[] = Object.keys(LEAF_KEPT_WO
 export function leafKeptWord(v: unknown): LeafKeptWord {
   return typeof v === 'string' && (LEAF_KEPT_WORDS as readonly string[]).includes(v) ? v as LeafKeptWord : 'unmeasured';
 }
+
+/* ── child-workspace reclamation: the temp-root collector's server lane (wave 9, spec §5.9, §5.10) ───────────────
+ * APPENDED at the foot for wave 8's reason above: README and the frozen spec and plan corpus cite this file by line.
+ * The three edits above (`ChildReclaimAttention`'s doc line pair, its `runId` sentence and its last arm's line) are
+ * rewritten in place, line for line. */
+
+/** The longest temp-root id (spec §5.10): 255 characters.
+ *  - A session id is a FILE NAME component (`$REG/<id>.uuid`, `$REG/tmproots/<id>`), and no file system this runs on
+ *    takes a component over 255 bytes. The session-id shape is ASCII, so a character is a byte.
+ *  - ccd's own names run out sooner: `.reap-<id>.lock` past 244, and a slot's or a record's name sooner still (spec §7).
+ *  - The coordination store's displacement parsers bound a candidate id by it too. */
+export const TMPROOT_ID_MAX_CHARS = 255;
+
+/** THE ONE PREDICATE of a temp-root id (spec §5.10): ccd's `_ws_tmproot_id_ok` (a session id's shape, no leading
+ *  `.`), plus NO LEADING `-` and at most `TMPROOT_ID_MAX_CHARS` characters.
+ *  - The leading `-` is a SAFETY rule, not defence in depth. ccd's destructive verbs read their decision flags from any
+ *    position, `--session`'s value included, and every such flag begins `--`. The shape refuses `=`, so no
+ *    `--flag=value` can be an id either.
+ *  - The collector asks it of every listed name before any argv, and again of a job's id before its audit or its act.
+ *  - The kept-leaf reader asks it before it names a leaf, so an id the collector never audits is not listed there
+ *    either.
+ *  - A non-string is not an id. The length is asked first, so a long string never reaches the shape's regex. */
+export function isTmpRootId(id: unknown): id is string {
+  return typeof id === 'string' && id.length <= TMPROOT_ID_MAX_CHARS && isSessionIdShape(id)
+    && !id.startsWith('.') && !id.startsWith('-');
+}
+
+declare const collectTokenBrand: unique symbol;
+/** The consent `ws-collect` spends (spec §5.10): a `ws-audit --collect` token, 64 lowercase hex characters.
+ *  - The brand is PHANTOM, so it costs nothing at run time.
+ *  - The shipped tree's one cast to it is the collect audit's reader (`parseCollectAudit`, `server/src/collectLane.ts`).
+ *  - `CCD_ARGV.wsCollect` takes nothing else, so a token from anywhere else does not compile into that argv.
+ *  - It is a `string` underneath, so it is assignable to one. It does not keep itself out of another builder's
+ *    string parameter. */
+export type CollectToken = string & { readonly [collectTokenBrand]: true };
+
+/** One arm of `ChildReclaimAttention` (spec §5.9, §5.10): an item of the temp-root collector's.
+ *  - `sessionId` is the temp-root id on a per-id item. On a box-wide line it is a `COLLECT_BOX_LABELS` label, which no
+ *    session id can equal.
+ *  - `word` is the collector's word for the line, beside the sentence, for a maintainer's grep and never for a
+ *    renderer's switch.
+ *  - `runId` is the latest collect audit's `collect.witness.run`, or null: a quarantine record's run is not on the wire,
+ *    and a box-wide line has none.
+ *  - It carries no `at`. The item is built from the server's memory, which holds no ccd clock. */
+export interface ChildReclaimCollectAttention {
+  readonly kind: 'collect'; readonly sessionId: string; readonly runId: number | null;
+  readonly word: string; readonly sentence: string;
+}
+
+/** One arm of `ChildReclaimAttention` (spec §5.9): many per-id collector items collapsed into one line, whose
+ *  sentence states the count.
+ *  - It has `kept-many`'s shape and member type, so the PWA's one reader renders it unchanged.
+ *  - Its word begins `collect:`, which no `ChildReclaimKeptWord` and not `'leaf-kept'` does. The PWA keys a collapsed
+ *    line by its word.
+ *  - A member needs a number `runId`. A collector item with no run never joins one. */
+export interface ChildReclaimCollectMany {
+  readonly kind: 'kept-many'; readonly word: `collect:${string}`;
+  readonly members: readonly ChildReclaimKeptMember[]; readonly sentence: string;
+}
+
+/** The fixed `sessionId` of each BOX-WIDE collector line (spec §5.9, §5.10): one line per condition, never one per id.
+ *  - Each label holds a `/`, which no file name under $REG (so no registry id) and no session id's shape can carry.
+ *  - Each is distinct, because the banner keys a single line by its `sessionId`.
+ *  - The labels are spelled once, in this total table, and the list of lines is derived. */
+export const COLLECT_BOX_LABELS = {
+  tmproots: '~/.cc-sessions/tmproots',
+  tmpquarantine: '~/.cc-sessions/tmpquarantine',
+  'refused-names': 'unusable names under ~/.cc-sessions',
+  'box-probe': 'collector / the fleet box',
+  'no-document': 'collector / audits that printed nothing',
+  lock: 'collector / temp-root reap locks',
+  flock: 'collector / flock on the fleet box',
+  unsettled: 'collector / calls still running',
+  unvouched: 'collector / temp roots coord.db cannot vouch for',
+  'no-run': 'collector / temp roots with no run',
+} as const;
+export type CollectBoxLine = keyof typeof COLLECT_BOX_LABELS;
+export const COLLECT_BOX_LINES: readonly CollectBoxLine[] = Object.keys(COLLECT_BOX_LABELS) as CollectBoxLine[];

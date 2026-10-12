@@ -24,7 +24,7 @@ describe('childReclaimDetailText replaces one character from each class it names
   });
 
   it('the CONTROL: the characters just outside each class pass through unchanged', () => {
-    for (const n of [0x20, 0x7e, 0xa0, 0x2027, 0x202f, 0x2065, 0x206a]) {
+    for (const n of [0x20, 0x7e, 0xa0, 0x2027, 0x202f, 0x2065, 0x2070]) {
       expect(childReclaimDetailText(`left${cp(n)}right`), n.toString(16)).toBe(`left${cp(n)}right`);
     }
   });
