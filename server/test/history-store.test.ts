@@ -27,6 +27,8 @@ import {
   readAttempts, clearDoneMarkers, assertAdditive, runMigration, removeEntry, readBounded, removeStaleAtomicTemps, mkdirDurable,
   writeBackup,
 } from '../../ccd/history/store.mjs';
+import { adoptStore, stageRestore, commitRestore, abortRestore } from '../../ccd/history/store.mjs';
+import { parseJournalRecord } from '../../ccd/history/lib.mjs';
 
 /** A delete-mode (rollback-journal) v1 store built by hand, the shape a
  *  `VACUUM INTO` restore leaves: no createStore, no binding files. */
@@ -1281,4 +1283,412 @@ describe('store.mjs: setCounter (W1-B2 Task 23)', () => {
       expect(n('spool_blocked'), 'a reset leaves no row').toBeUndefined();
     } finally { closeWriter(db); }
   });
+});
+
+// ── W1-B2 Task 24: the binding verbs' store sequences (spec §8.4 adopt, restore, rebuild; §6.2) ────────────────
+describe('store.mjs: the binding verbs\' sequences (W1-B2 Task 24)', () => {
+  const STORE_MJS = path.resolve(__dirname, '../../ccd/history/store.mjs');
+  const FAULTS_MJS = path.resolve(__dirname, 'fixtures/history/preload-faults.mjs');
+  /** One fixed bind time, so every `bound:<ms>`, recover step and `bind` record below is named exactly. */
+  const T = 1_791_000_000_000;
+  const RESTORE_BODY = 'const s = S.stageRestore(process.argv[1], process.argv[2]); '
+    + 'S.commitRestore(process.argv[1], s, { nowMs: Number(process.argv[3]) });';
+  const ADOPT_BODY = 'S.adoptStore(process.argv[1], { nowMs: Number(process.argv[2]) });';
+  const REBUILD_BODY = "S.createStore(process.argv[1], { storeId: process.argv[2], bind: { kind: 'rebuild', nowMs: Number(process.argv[3]) } });";
+  const home = (): string => mkTmp('ccrc-history-bindverb-');
+
+  /** `body` in a child that imports store.mjs as `S`, SIGKILLed by the fault preload at `kill`. The `timeout`
+   *  ends a child that hangs instead, with SIGTERM, so a hang is never read as the planned SIGKILL. */
+  const killedAt = (h: string, kill: string, body: string, args: string[]): ReturnType<typeof spawnSync> => spawnSync(
+    process.execPath,
+    ['--no-warnings', '--import', pathToFileURL(FAULTS_MJS).href, '--input-type=module', '-e',
+      `import * as S from ${JSON.stringify(pathToFileURL(STORE_MJS).href)}; ${body}`, ...args],
+    { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '', HOME: h, HISTORY_TEST_KILL: kill }, timeout: 60_000, killSignal: 'SIGTERM' },
+  );
+
+  /** A store, a `VACUUM INTO` backup of it under its own db/backups/, then the box as a loss leaves it. The DB,
+   *  its sidecars and store.writer are gone, and store.id is gone too unless `keepStoreId`. */
+  const backedUp = (h: string, name: string, keepStoreId: boolean): { storeId: string; oldWriter: string } => {
+    const { storeId, writer } = createStore(h);
+    const P = historyPaths(h);
+    const db = openWriter(P.dbFile);
+    bump(db, 'fixture_rows', 3);
+    fs.mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+    db.prepare('VACUUM INTO ?').run(path.join(P.backups, name));
+    closeWriter(db);
+    for (const f of [P.dbFile, P.wal, P.shm, P.writer, ...(keepStoreId ? [] : [P.storeId])]) fs.rmSync(f, { force: true });
+    return { storeId, oldWriter: writer };
+  };
+
+  /** A backup whose middle page is overwritten. integrity_check reports such damage as rows at the offsets chosen
+   *  below (it throws at others, so the loop checks), and meta.store_id still reads. So only the integrity check can refuse it. */
+  const corruptBackup = (h: string, name: string): void => {
+    const P = historyPaths(h);
+    const db = openWriter(P.dbFile);
+    const ins = db.prepare('INSERT INTO counters (name, n) VALUES (?, ?)');
+    withTx(db, 'NORMAL', () => {
+      for (let i = 0; i < 4000; i += 1) ins.run(`fixture_counter_${String(i).padStart(5, '0')}_${'x'.repeat(60)}`, i);
+    });
+    fs.mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+    const out = path.join(P.backups, name);
+    db.prepare('VACUUM INTO ?').run(out);
+    closeWriter(db);
+    const pages = Math.floor(fs.statSync(out).size / 4096);
+    const whole = fs.readFileSync(out);
+    // Some page offsets make integrity_check THROW 'database disk image is malformed' (measured, 24.14.1, at the middle
+    // page's byte 8), and a throw would hide the integrity check's own verdict from the case. So the first damage that
+    // integrity_check answers as rows, and not as the one row `ok`, is the one used.
+    const answers = (): string[] | null => {
+      const probe = new DatabaseSync(out, { readOnly: true });
+      try { return probe.prepare('PRAGMA integrity_check').all().map((r) => String(Object.values(r)[0])); } catch { return null; } finally { probe.close(); }
+    };
+    for (const [page, off] of [[Math.floor(pages / 2), 100], [Math.floor(pages / 2), 8], [Math.floor(pages / 4), 8], [Math.floor(pages / 4), 100]] as const) {
+      fs.writeFileSync(out, whole);
+      const fd = fs.openSync(out, 'r+');
+      try { fs.writeSync(fd, Buffer.alloc(200, 0xff), 0, 200, page * 4096 + off); } finally { fs.closeSync(fd); }
+      const got = answers();
+      if (got !== null && !(got.length === 1 && got[0] === 'ok')) return;
+    }
+    throw new Error('fixture: no candidate damage reads as integrity_check rows');
+  };
+
+  /** What a binding left INSIDE a DB file, read through a read-only handle. */
+  const inside = (dbFile: string): {
+    storeId: string | null; writer: string | null; journalMode: string;
+    bound: Array<Record<string, unknown>>; recover: Array<Record<string, unknown>>; binds: Array<Record<string, unknown>>;
+  } => {
+    const db = new DatabaseSync(dbFile, { readOnly: true });
+    try {
+      return {
+        storeId: getMeta(db, 'store_id'),
+        writer: getMeta(db, 'writer'),
+        journalMode: String(pragma(db, 'journal_mode')),
+        bound: db.prepare("SELECT k, v FROM meta WHERE k LIKE 'bound:%' ORDER BY k").all().map((r) => ({ ...r })),
+        recover: db.prepare("SELECT version, cursor, completed_ms FROM derivation_state WHERE step = 'recover' ORDER BY version")
+          .all().map((r) => ({ ...r })),
+        binds: db.prepare('SELECT rec FROM journal_outbox ORDER BY seq').all().flatMap((r) => {
+          const p = parseJournalRecord(String(r['rec']));
+          return p.kind === 'record' ? [{ ...p.rec }] : [];
+        }),
+      };
+    } finally {
+      db.close();
+    }
+  };
+  const bindRecord = (kind: string, writer: string, t = T): Record<string, unknown> =>
+    ({ v: 1, k: 'verdict', t, event_key: 'none', kind: 'bind', bind: kind, writer });
+
+  it('adoptStore: the bind commits inside the DB, then store.writer, then store.id; a fresh token and no recovery step', () => {
+    const h = home();
+    const P = historyPaths(h);
+    const { storeId, writer: oldWriter } = createStore(h);
+    fs.rmSync(P.storeId);
+    fs.rmSync(P.writer);
+    expect(decideStoreOpen(measureStoreFacts(h, 'fleet'))).toEqual({ act: 'refuse', word: 'store-unbound' });
+    const got = adoptStore(h, { nowMs: T });
+    expect(got.storeId).toBe(storeId);
+    expect(got.writer).toMatch(WRITER_RE);
+    expect(got.writer).not.toBe(oldWriter);
+    expect(fs.readFileSync(P.storeId, 'utf8').trim()).toBe(storeId);
+    expect(fs.readFileSync(P.writer, 'utf8').trim()).toBe(got.writer);
+    expect(mode(P.storeId)).toBe(0o600);
+    const f = inside(P.dbFile);
+    expect(f.writer).toBe(got.writer);
+    expect(f.bound).toEqual([{ k: `bound:${T}`, v: 'adopt' }]);
+    expect(f.recover, 'adopt registers no recovery step (RC16)').toEqual([]);
+    expect(f.binds).toEqual([bindRecord('adopt', got.writer)]);
+    expect(decideStoreOpen(measureStoreFacts(h, 'fleet'))).toEqual({ act: 'open' });
+  });
+
+  it('adoptStore killed right after store.id lands finds the bind already committed; killed before it, the store stays unbound and a second adopt binds it', () => {
+    const h = home();
+    const P = historyPaths(h);
+    createStore(h);
+    fs.rmSync(P.storeId);
+    fs.rmSync(P.writer);
+    // writeFileAtomic(store.id) renames `store.id.tmp.<pid>`: the first rename naming `store.id.tmp`.
+    const r = killedAt(h, 'renameSync:store.id.tmp:1:after', ADOPT_BODY, [h, String(T)]);
+    expect(r.signal, String(r.stderr)).toBe('SIGKILL');
+    expect(fs.existsSync(P.storeId)).toBe(true);
+    const f = inside(P.dbFile);
+    expect(f.bound, 'the bind committed before store.id named the store').toEqual([{ k: `bound:${T}`, v: 'adopt' }]);
+    expect(f.binds).toHaveLength(1);
+    expect(f.writer).toBe(fs.readFileSync(P.writer, 'utf8').trim());
+
+    const h2 = home();
+    const P2 = historyPaths(h2);
+    createStore(h2);
+    fs.rmSync(P2.storeId);
+    fs.rmSync(P2.writer);
+    const r2 = killedAt(h2, 'renameSync:store.id.tmp:1', ADOPT_BODY, [h2, String(T)]);
+    expect(r2.signal, String(r2.stderr)).toBe('SIGKILL');
+    expect(fs.existsSync(P2.storeId)).toBe(false);
+    expect(decideStoreOpen(measureStoreFacts(h2, 'fleet'))).toEqual({ act: 'refuse', word: 'store-unbound' });
+    const again = adoptStore(h2, { nowMs: T + 1 });
+    expect(fs.readFileSync(P2.storeId, 'utf8').trim()).toBe(again.storeId);
+    const f2 = inside(P2.dbFile);
+    expect(f2.binds).toHaveLength(2);
+    expect(f2.writer).toBe(again.writer);
+    expect(fs.readFileSync(P2.writer, 'utf8').trim()).toBe(again.writer);
+    expect(decideStoreOpen(measureStoreFacts(h2, 'fleet'))).toEqual({ act: 'open' });
+  }, 120_000);
+
+  it('restore onto a fresh box: a 0600 copy measured, then made WAL with every binding fact inside it, linked, and bound through the pending marker', () => {
+    const h = home();
+    const P = historyPaths(h);
+    const name = '20261001T000000Z.db';
+    const { storeId, oldWriter } = backedUp(h, name, false);
+    const prev = process.umask(0o002);
+    let staged: ReturnType<typeof stageRestore> | null = null;
+    let tempMode = 0;
+    let got: { storeId: string; writer: string } | null = null;
+    try {
+      staged = stageRestore(h, name);
+      tempMode = mode(staged.tempPath);
+      got = commitRestore(h, staged, { nowMs: T });
+    } finally {
+      process.umask(prev);
+    }
+    expect(tempMode, 'the copy is 0600 under any umask').toBe(0o600);
+    expect(path.basename(staged!.tempPath)).toMatch(/^\.history\.db\.restore\.[0-9]+$/);
+    expect(staged).toMatchObject({ storeId: { state: 'value', value: storeId }, userVersion: SCHEMA_VERSION, integrityOk: true });
+    expect(staged!.sizeBytes).toBe(fs.statSync(path.join(P.backups, name)).size);
+    const bound = got!;
+    expect(bound.storeId).toBe(storeId);
+    expect(bound.writer).toMatch(WRITER_RE);
+    expect(bound.writer).not.toBe(oldWriter);
+    expect(fs.readFileSync(P.storeId, 'utf8').trim()).toBe(storeId);
+    expect(fs.readFileSync(P.writer, 'utf8').trim()).toBe(bound.writer);
+    expect(fs.existsSync(P.pending)).toBe(false);
+    expect(fs.readdirSync(P.dbDir).filter((n) => n.startsWith('.history.db.restore.'))).toEqual([]);
+    expect(mode(P.dbFile)).toBe(0o600);
+    const f = inside(P.dbFile);
+    expect(f).toMatchObject({
+      storeId, writer: bound.writer, journalMode: 'wal',
+      bound: [{ k: `bound:${T}`, v: 'restore' }],
+      recover: [{ version: T, cursor: null, completed_ms: null }],
+    });
+    expect(f.binds).toEqual([bindRecord('restore', bound.writer)]);
+    expect(decideStoreOpen(measureStoreFacts(h, 'fleet'))).toEqual({ act: 'open' });
+  });
+
+  it('restore with store.id already naming the backup\'s store writes no pending marker, and a kill right after the link finds the binding and the recovery step inside history.db', () => {
+    const h = home();
+    const P = historyPaths(h);
+    const name = '20261002T000000Z.db';
+    const { storeId } = backedUp(h, name, true);
+    const r = killedAt(h, 'linkSync:.history.db.restore.:1:after', RESTORE_BODY, [h, name, String(T)]);
+    expect(r.signal, String(r.stderr)).toBe('SIGKILL');
+    expect(fs.existsSync(P.pending), 'store.id already names the store: no marker').toBe(false);
+    expect(fs.readFileSync(P.storeId, 'utf8').trim()).toBe(storeId);
+    const f = inside(P.dbFile);
+    expect(f.recover, 'the recovery step was inside the copy before it was linked').toEqual([{ version: T, cursor: null, completed_ms: null }]);
+    expect(f.bound).toEqual([{ k: `bound:${T}`, v: 'restore' }]);
+    expect(f.writer).toBe(fs.readFileSync(P.writer, 'utf8').trim());
+    expect(decideStoreOpen(measureStoreFacts(h, 'fleet'))).toEqual({ act: 'open' });
+    // The temp the kill left (a second name of the same inode) goes with the next lock-holding pass; the store stays.
+    expect(removeStaleTemps(h).some((n) => n.startsWith('.history.db.restore.'))).toBe(true);
+    expect(peekStoreId(P.dbFile)).toEqual({ state: 'value', value: storeId });
+  }, 120_000);
+
+  it('restore onto a fresh box killed between the link and the pending rename: the next pass finishes it, the recovery step already inside', () => {
+    const h = home();
+    const P = historyPaths(h);
+    const name = '20261003T000000Z.db';
+    const { storeId } = backedUp(h, name, false);
+    // The FIRST rename naming store.id.pending is the marker's own temp rename; the SECOND is the rename to store.id.
+    const r = killedAt(h, 'renameSync:store.id.pending:2', RESTORE_BODY, [h, name, String(T)]);
+    expect(r.signal, String(r.stderr)).toBe('SIGKILL');
+    expect(fs.existsSync(P.storeId)).toBe(false);
+    expect(fs.readFileSync(P.pending, 'utf8').trim()).toBe(storeId);
+    expect(decideStoreOpen(measureStoreFacts(h, 'fleet'))).toEqual({ act: 'finish-pending' });
+    const f = inside(P.dbFile);
+    expect(f.recover).toEqual([{ version: T, cursor: null, completed_ms: null }]);
+    expect(f.bound).toEqual([{ k: `bound:${T}`, v: 'restore' }]);
+  }, 120_000);
+
+  it('restore killed before the link: no history.db, a tick would refuse store-recoverable rather than create, the temp goes with the next pass, and a second restore completes', () => {
+    const h = home();
+    const P = historyPaths(h);
+    const name = '20261004T000000Z.db';
+    const { storeId } = backedUp(h, name, false);
+    const r = killedAt(h, 'linkSync:.history.db.restore.:1', RESTORE_BODY, [h, name, String(T)]);
+    expect(r.signal, String(r.stderr)).toBe('SIGKILL');
+    expect(fs.existsSync(P.dbFile)).toBe(false);
+    expect(decideStoreOpen(measureStoreFacts(h, 'fleet'))).toEqual({ act: 'refuse', word: 'store-recoverable' });
+    const removed = removeStaleTemps(h);
+    expect(removed.length).toBeGreaterThan(0);
+    expect(removed.every((n) => n.startsWith('.history.db.restore.'))).toBe(true);
+    const s2 = stageRestore(h, name);
+    commitRestore(h, s2, { nowMs: T + 1 });
+    expect(decideStoreOpen(measureStoreFacts(h, 'fleet'))).toEqual({ act: 'open' });
+    expect(fs.readFileSync(P.storeId, 'utf8').trim()).toBe(storeId);
+    expect(inside(P.dbFile).recover).toEqual([{ version: T + 1, cursor: null, completed_ms: null }]);
+  }, 120_000);
+
+  it('restore puts every journal-known redact pair into the copy before the link and starts the step +pairs; a pair the backup already holds adds nothing (spec §8.4 and §9.14)', () => {
+    const shaA = 'a1'.repeat(32);   // recorded before the backup was taken: the backup holds it
+    const shaB = 'b2'.repeat(32);   // learned after it: only the journal holds it
+    /** A store holding pair A, its VACUUM INTO backup under db/backups/, then the box as a loss leaves it. */
+    const withPairA = (h: string, name: string): void => {
+      const P = historyPaths(h);
+      createStore(h);
+      const db = openWriter(P.dbFile);
+      try {
+        db.prepare('INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, ?)').run(32, Buffer.from(shaA, 'hex'), T - 10);
+        fs.mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+        db.prepare('VACUUM INTO ?').run(path.join(P.backups, name));
+      } finally { closeWriter(db); }
+      for (const f of [P.dbFile, P.wal, P.shm, P.writer, P.storeId]) fs.rmSync(f, { force: true });
+    };
+    const pairsIn = (dbFile: string): Array<Record<string, unknown>> => {
+      const db = new DatabaseSync(dbFile, { readOnly: true });
+      try {
+        return db.prepare('SELECT len, lower(hex(sha256)) AS sha FROM redact_hashes ORDER BY len').all().map((r) => ({ ...r }));
+      } finally { db.close(); }
+    };
+    const PAIRS_BODY = 'const s = S.stageRestore(process.argv[1], process.argv[2]); '
+      + 'S.commitRestore(process.argv[1], s, { nowMs: Number(process.argv[3]), pairs: JSON.parse(process.argv[4]) });';
+
+    // Killed right before the link: the copy the kill leaves already holds both pairs and the +pairs cursor.
+    const h = home();
+    const P = historyPaths(h);
+    const name = '20261005T000000Z.db';
+    withPairA(h, name);
+    const both = JSON.stringify([{ len: 32, sha256: shaA, t: T - 10 }, { len: 40, sha256: shaB, t: T - 5 }]);
+    const r = killedAt(h, 'linkSync:.history.db.restore.:1', PAIRS_BODY, [h, name, String(T), both]);
+    expect(r.signal, String(r.stderr)).toBe('SIGKILL');
+    expect(fs.existsSync(P.dbFile), 'CONTROL: killed before the link').toBe(false);
+    const temps = fs.readdirSync(P.dbDir).filter((n) => /^\.history\.db\.restore\.[0-9]+$/.test(n));
+    expect(temps.length, 'CONTROL: the kill left the copy').toBe(1);
+    const copy = path.join(P.dbDir, temps[0]!);
+    expect(pairsIn(copy), 'both pairs are inside the copy before it is linked').toEqual([{ len: 32, sha: shaA }, { len: 40, sha: shaB }]);
+    expect(inside(copy).recover, 'the journal-only pair starts the step +pairs, so the reindex phase still runs')
+      .toEqual([{ version: T, cursor: 'index+pairs', completed_ms: null }]);
+
+    // Every pair the journal knows already in the backup: nothing added, and the step starts at NULL as before.
+    const h2 = home();
+    const P2 = historyPaths(h2);
+    withPairA(h2, name);
+    commitRestore(h2, stageRestore(h2, name), { nowMs: T, pairs: [{ len: 32, sha256: shaA, t: T - 10 }] });
+    expect(pairsIn(P2.dbFile)).toEqual([{ len: 32, sha: shaA }]);
+    expect(inside(P2.dbFile).recover).toEqual([{ version: T, cursor: null, completed_ms: null }]);
+    // A malformed pair is a caller's bug, refused before anything is written.
+    const h3 = home();
+    withPairA(h3, name);
+    const s3 = stageRestore(h3, name);
+    expect(() => commitRestore(h3, s3, { nowMs: T, pairs: [{ len: 40, sha256: 'not hex', t: T }] })).toThrow(TypeError);
+    expect(fs.existsSync(historyPaths(h3).dbFile), 'nothing linked').toBe(false);
+    abortRestore(s3);
+  }, 120_000);
+
+  it('restore runs the caller\'s belt hooks inside the FULL bind transaction: the check before any binding fact or pair, the stamp after the pairs; a throw links nothing (ruling R-witness-restore)', () => {
+    const shaB = 'b2'.repeat(32);   // a journal-only pair: the backup lacks it
+    const name = '20261006T000000Z.db';
+    const h = home();
+    const P = historyPaths(h);
+    backedUp(h, name, false);
+    const seen: Array<{ hook: string; pairs: number; recover: number; inTx: boolean }> = [];
+    const look = (hook: string) => (db: DatabaseSync): void => {
+      seen.push({
+        hook,
+        pairs: Number((db.prepare('SELECT count(*) AS n FROM redact_hashes').get() as { n: number }).n),
+        recover: Number((db.prepare("SELECT count(*) AS n FROM derivation_state WHERE step = 'recover'").get() as { n: number }).n),
+        inTx: (() => { try { db.exec('BEGIN'); } catch { return true; } db.exec('ROLLBACK'); return false; })(),
+      });
+    };
+    commitRestore(h, stageRestore(h, name), { nowMs: T, pairs: [{ len: 40, sha256: shaB, t: T - 5 }], belt: { check: look('check'), stamp: look('stamp') } });
+    expect(seen, 'the check sees the copy as the backup left it, the stamp sees every write, both inside the transaction').toEqual([
+      { hook: 'check', pairs: 0, recover: 0, inTx: true },
+      { hook: 'stamp', pairs: 1, recover: 1, inTx: true },
+    ]);
+    expect(inside(P.dbFile).recover, 'CONTROL: the restore committed').toEqual([{ version: T, cursor: 'index+pairs', completed_ms: null }]);
+
+    // A throw from the stamp rolls the whole bind back: nothing is linked, and the copy holds none of it.
+    const h2 = home();
+    backedUp(h2, name, false);
+    const s2 = stageRestore(h2, name);
+    expect(() => commitRestore(h2, s2, { nowMs: T, pairs: [{ len: 40, sha256: shaB, t: T - 5 }], belt: {
+      check: () => {}, stamp: () => { throw new Error('fixture: the stamp failed'); },
+    } })).toThrow('fixture: the stamp failed');
+    expect(fs.existsSync(historyPaths(h2).dbFile), 'nothing linked').toBe(false);
+    expect(inside(s2.tempPath).recover, 'the bind rolled back with the stamp').toEqual([]);
+    abortRestore(s2);
+    // A belt without both hooks is a caller's bug, refused before anything is written.
+    const h3 = home();
+    backedUp(h3, name, false);
+    const s3 = stageRestore(h3, name);
+    expect(() => commitRestore(h3, s3, { nowMs: T, belt: { check: () => {} } as never })).toThrow(TypeError);
+    expect(inside(s3.tempPath).bound, 'nothing written').toEqual([]);
+    abortRestore(s3);
+  });
+
+  it('stageRestore measures the copy and never trusts it: damage reads integrityOk false, a file that is no store reads its store_id unreadable, a link or a path is refused, and abortRestore takes the temp', () => {
+    const h = home();
+    const P = historyPaths(h);
+    const { storeId } = createStore(h);
+    corruptBackup(h, 'corrupt.db');
+    const s = stageRestore(h, 'corrupt.db');
+    expect(s.storeId, 'meta still reads: only the integrity check can refuse this copy').toEqual({ state: 'value', value: storeId });
+    expect(s.integrityOk).toBe(false);
+    abortRestore(s);
+    expect(fs.existsSync(s.tempPath)).toBe(false);
+
+    fs.writeFileSync(path.join(P.backups, 'text.db'), 'this is not a database file at all, it is text\n'.repeat(400));
+    const t = stageRestore(h, 'text.db');
+    expect(t).toMatchObject({ storeId: { state: 'unreadable' }, userVersion: null, integrityOk: false });
+    abortRestore(t);
+
+    fs.symlinkSync(path.join(P.backups, 'corrupt.db'), path.join(P.backups, 'link.db'));
+    expect(wordOf(() => stageRestore(h, 'link.db')), 'a symlink is never followed (O_NOFOLLOW)').toBe('restore-refused');
+    expect(wordOf(() => stageRestore(h, '../store.id'))).toBe('restore-refused');
+    expect(fs.readdirSync(P.dbDir).filter((n) => n.startsWith('.history.db.restore.'))).toEqual([]);
+  });
+
+  it('createStore with a store_id and a rebuild bind: that id, the binding and the recovery step inside, store.id through the pending marker; none when store.id already names it; B1\'s plain creation unchanged', () => {
+    const S1 = mintStoreId();
+    const h = home();
+    const P = historyPaths(h);
+    const got = createStore(h, { storeId: S1, bind: { kind: 'rebuild', nowMs: T } });
+    expect(got.storeId).toBe(S1);
+    expect(fs.readFileSync(P.storeId, 'utf8').trim()).toBe(S1);
+    expect(fs.existsSync(P.pending)).toBe(false);
+    const f = inside(P.dbFile);
+    expect(f).toMatchObject({
+      storeId: S1, writer: got.writer, journalMode: 'wal',
+      bound: [{ k: `bound:${T}`, v: 'rebuild' }],
+      recover: [{ version: T, cursor: null, completed_ms: null }],
+    });
+    expect(f.binds).toEqual([bindRecord('rebuild', got.writer)]);
+
+    // store.id already names the store: a kill right after the link leaves no marker, and the store opens.
+    const h2 = home();
+    const P2 = historyPaths(h2);
+    fs.mkdirSync(P2.root, { recursive: true, mode: 0o700 });
+    writeFileAtomic(P2.storeId, `${S1}\n`);
+    const r = killedAt(h2, 'linkSync:history.db.new.:1:after', REBUILD_BODY, [h2, S1, String(T)]);
+    expect(r.signal, String(r.stderr)).toBe('SIGKILL');
+    expect(fs.existsSync(P2.pending)).toBe(false);
+    expect(decideStoreOpen(measureStoreFacts(h2, 'fleet'))).toEqual({ act: 'open' });
+    expect(inside(P2.dbFile).recover).toEqual([{ version: T, cursor: null, completed_ms: null }]);
+
+    // B1's first install: no bound row, no recovery step, an empty outbox.
+    const h3 = home();
+    createStore(h3);
+    expect(inside(historyPaths(h3).dbFile)).toMatchObject({ bound: [], recover: [], binds: [] });
+  }, 120_000);
+
+  it('createStore with a rebuild bind killed between the link and the pending rename: finish-pending, the recovery step already inside', () => {
+    const S1 = mintStoreId();
+    const h = home();
+    const P = historyPaths(h);
+    const r = killedAt(h, 'renameSync:store.id.pending:2', REBUILD_BODY, [h, S1, String(T)]);
+    expect(r.signal, String(r.stderr)).toBe('SIGKILL');
+    expect(fs.existsSync(P.storeId)).toBe(false);
+    expect(decideStoreOpen(measureStoreFacts(h, 'fleet'))).toEqual({ act: 'finish-pending' });
+    const f = inside(P.dbFile);
+    expect(f.storeId).toBe(S1);
+    expect(f.recover).toEqual([{ version: T, cursor: null, completed_ms: null }]);
+    expect(f.bound).toEqual([{ k: `bound:${T}`, v: 'rebuild' }]);
+  }, 120_000);
 });

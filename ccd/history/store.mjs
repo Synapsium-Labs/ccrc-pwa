@@ -24,7 +24,7 @@ import {
 import { dirname } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as Z, createBrotliCompress, createBrotliDecompress } from 'node:zlib';
-import { BUSY_TIMEOUT_MS, CONTROL_FILE_MAX, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_VERSION, SIDECAR_WHOLE_MAX, UUID_RE, WRITER_RE, backupNameOf, blobOverDecodeCap, FTS_SHADOWS, ftsTextOf, historyPaths, jsonWithinStructureBound, newSha256, sidecarIndexText } from './lib.mjs';
+import { BUSY_TIMEOUT_MS, CONTROL_FILE_MAX, MAX_INTERRUPTED_ATTEMPTS, RECOVER_PHASES, SCHEMA_VERSION, SIDECAR_WHOLE_MAX, UUID_RE, WRITER_RE, backupNameOf, blobOverDecodeCap, FTS_SHADOWS, formatRecoverCursor, ftsTextOf, historyPaths, journalRecord, jsonWithinStructureBound, newSha256, sidecarIndexText } from './lib.mjs';
 
 /** The codec word every blob row records: Brotli at quality 5 (RV6). */
 export const CODEC = 'br5';
@@ -728,38 +728,49 @@ export function removeStaleMigrationTemps(home) {
 }
 
 /** First creation (§6.2), run only on `decideStoreOpen`'s `create` (or after
- *  `dropPending` on `drop-pending-create`), under the shim's lock:
+ *  `dropPending` on `drop-pending-create`), under the shim's lock. Since
+ *  W1-B2 it is also run by `doctor --rebuild` (§8.4), which passes the
+ *  journal's store_id as `opts.storeId` and a `bind` (D-4694 (history-rebuild-verb)):
  *
  *   1. root and db/ exist, 0700;
- *   2. mint the store_id and the writer token; `store.writer` first, then
- *      `store.id.pending`, each temp-then-rename and fsynced (§9.14: the token
- *      is on disk before any marker names the store);
+ *   2. the store_id (`opts.storeId`, else minted) and a fresh writer token.
+ *      `store.writer` is written first, then `store.id.pending`. The marker is
+ *      skipped when `store.id` already names the store, as a rebuild's may.
+ *      Each is written temp-then-rename and fsynced (§9.14: the token is on
+ *      disk before any marker names the store);
  *   3. `history.db.new.<pid>` created O_CREAT|O_EXCL 0600 — a temp whose name
  *      exists, or whose sidecars exist, is never opened;
  *   4. auto_vacuum, WAL, the v1 DDL, meta store_id and writer, user_version 1,
- *      in ONE transaction; close (the WAL is checkpointed away);
+ *      and with `opts.bind` every DB-side fact of the binding (`bound:<ms>`,
+ *      the ('recover', <ms>) step, the `bind` outbox row), all in ONE
+ *      transaction; then close (the WAL is checkpointed away);
  *   5. fsync the temp, `link()` it to history.db (fails if one appeared), unlink
  *      the temp, fsync db/;
- *   6. rename `store.id.pending` to `store.id`, fsync the root.
+ *   6. when step 2 wrote the marker, rename `store.id.pending` to `store.id`
+ *      and fsync the root.
  *
- *  A kill at any step leaves a state `decideStoreOpen` decides: before step 5
- *  no history.db exists and the pending marker is dropped (`drop-pending-create`,
- *  DM33); between 5 and 6 the DB carries the marker's id and the next pass
- *  finishes the rename (`finish-pending`, DM33b).
+ *  A kill at any step leaves a state `decideStoreOpen` decides:
+ *  - before step 5, no history.db exists. The pending marker is dropped
+ *    (`drop-pending-create`, DM33). For a rebuild, its journal makes the box
+ *    `store-recoverable`, and the operator runs the verb again;
+ *  - between 5 and 6, the DB carries the marker's id, and the next pass
+ *    finishes the rename (`finish-pending`, DM33b). A rebuild's binding and
+ *    recovery step are already inside it (D-4724 (history-binding-facts-before-link)).
  *
  *  D-4219 (the store.id / meta.store_id marker: a DB beside a marker naming
  *  another store is refused, never restarted empty, §6.5) D-4220 (store.writer
  *  is written before store.id.pending). */
-export function createStore(home) {
+export function createStore(home, opts = {}) {
   const P = historyPaths(home);
   mkdirDurable(P.dbDir);
   chmodSync(P.root, 0o700);
   if (lstatSync(P.dbDir).isDirectory()) chmodSync(P.dbDir, 0o700);
 
-  const storeId = mintStoreId();
+  const storeId = opts.storeId ?? mintStoreId();
   const writer = mintWriter();
+  const viaPending = readBindingFile(P.storeId, UUID_RE).state === 'absent';
   writeFileAtomic(P.writer, `${writer}\n`);
-  writeFileAtomic(P.pending, `${storeId}\n`);
+  if (viaPending) writeFileAtomic(P.pending, `${storeId}\n`);
 
   const tmp = `${P.dbDir}/history.db.new.${process.pid}`;
   for (const s of ['-wal', '-shm', '-journal']) {
@@ -776,6 +787,7 @@ export function createStore(home) {
       const put = db.prepare('INSERT INTO meta (k, v) VALUES (?, ?)');
       put.run('store_id', storeId);
       put.run('writer', writer);
+      if (opts.bind !== undefined) insertBindFacts(db, { kind: opts.bind.kind, nowMs: opts.bind.nowMs, writer, recover: true });
       db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
       db.exec('COMMIT');
     } catch (err) {
@@ -790,8 +802,10 @@ export function createStore(home) {
   linkSync(tmp, P.dbFile);
   unlinkSync(tmp);
   fsyncDir(P.dbDir);
-  renameSync(P.pending, P.storeId);
-  fsyncDir(P.root);
+  if (viaPending) {
+    renameSync(P.pending, P.storeId);
+    fsyncDir(P.root);
+  }
   return { storeId, writer };
 }
 
@@ -1353,4 +1367,216 @@ export function dropFtsTables(db) {
 export function setCounter(db, name, n) {
   if (n === 0) db.prepare('DELETE FROM counters WHERE name = ?').run(name);
   else db.prepare('INSERT INTO counters (name, n) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET n = excluded.n').run(name, n);
+}
+
+// ── The binding verbs' sequences: adopt, restore, rebuild (spec §8.4, §6.2, §9.14; W1-B2) ───────────────────
+// lib's decideBind decides each verb's preconditions from measureStoreFacts' facts (L1). These functions only
+// execute the sequence §8.4 names, in its order (L3).
+//
+// The rule all three share (rev 3.2 review, DI3; D-4724 (history-binding-facts-before-link)): every DB-side fact of a
+// binding is committed INSIDE the database before any binding file names it. The facts are:
+//   - `bound:<ms>` = the verb, so a later merger can see that the store moved;
+//   - a new writer token as meta.writer, the mirror of store.writer (D-4226,
+//     D-4220);
+//   - for a restore or a rebuild, the ('recover', <ms>) derivation step the following ticks run (§9.14);
+//   - the `bind` verdict in journal_outbox, which the first pass to open the store flushes into
+//     journal/<store_id>/ under the new token.
+// So a kill leaves one of two states (D-4184):
+//   - an unbound store, which a second run binds;
+//   - a store whose binding and recovery are already inside it, which the pending-marker path finishes (§6.2).
+// It never leaves a bound store under a departed box's token, and never a restore whose replay is skipped.
+
+/** The size of one read and one write while a restore copies its backup. */
+const RESTORE_PIECE = 1 << 20;
+/** A journal-known redact pair into the staged copy (spec §8.4 and §9.14): the same row the
+ *  recovery step's index phase inserts, so that phase finds it present. */
+const RESTORE_PAIR_INSERT = 'INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, ?) ON CONFLICT (len, sha256) DO NOTHING';
+const PAIR_SHA_RE = /^[0-9a-f]{64}$/;
+
+/** Every DB-side fact of one binding, inside the CALLER's transaction. A second call for the same verb and
+ *  millisecond rewrites meta.writer and adds its `bind` row; the `bound:<ms>` row and the recover row stay single. */
+function insertBindFacts(db, b) {
+  setMeta(db, `bound:${b.nowMs}`, b.kind);
+  setMeta(db, 'writer', b.writer);
+  if (b.recover) {
+    db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL) ON CONFLICT (step, version) DO NOTHING")
+      .run(b.nowMs);
+  }
+  db.prepare('INSERT INTO journal_outbox (rec) VALUES (?)')
+    .run(journalRecord('verdict', b.nowMs, { event_key: 'none', kind: 'bind', bind: b.kind, writer: b.writer }));
+}
+
+/** `doctor --adopt` (§8.4; D-4692 (history-adopt-verb)), once decideBind admitted it: the present DB's own
+ *  meta.store_id becomes this box's store. In order:
+ *  1. the bind commits FULL: `bound:<ms>` = adopt, the new token, the `bind` row. No recovery step: the store is
+ *     whole, it only moved (RC16);
+ *  2. store.writer;
+ *  3. store.id.
+ *  A kill between 1 and 3 leaves the store unbound, and a second adopt binds it. Never a bound store under the
+ *  departed box's token. */
+export function adoptStore(home, { nowMs }) {
+  const P = historyPaths(home);
+  const writer = mintWriter();
+  const db = openWriter(P.dbFile);
+  try {
+    const storeId = getMeta(db, 'store_id');
+    if (storeId === null || !UUID_RE.test(storeId)) {
+      throw new StoreError('adopt-refused', `${P.dbFile} carries no readable meta.store_id`);
+    }
+    withTx(db, 'FULL', () => { insertBindFacts(db, { kind: 'adopt', nowMs, writer, recover: false }); });
+    writeFileAtomic(P.writer, `${writer}\n`);
+    writeFileAtomic(P.storeId, `${storeId}\n`);
+    return { storeId, writer };
+  } finally {
+    closeWriter(db);
+  }
+}
+
+/** What a staged restore copy says about itself, measured on the COPY, never on the backup: its user_version, its
+ *  meta.store_id (a value, absent, or unreadable for a file that is no store) and whether PRAGMA integrity_check
+ *  answers exactly one row, `ok`. A file that will not open as a database reads as unreadable and not ok. */
+function measureStaged(tempPath) {
+  const out = { storeId: { state: 'unreadable' }, userVersion: null, integrityOk: false };
+  let db;
+  try {
+    db = openReader(tempPath);
+    out.userVersion = userVersion(db);
+    const row = db.prepare("SELECT v FROM meta WHERE k = 'store_id'").get();
+    if (row === undefined) out.storeId = { state: 'absent' };
+    else if (UUID_RE.test(String(row.v))) out.storeId = { state: 'value', value: String(row.v) };
+    const rows = db.prepare('PRAGMA integrity_check').all();
+    out.integrityOk = rows.length === 1 && String(Object.values(rows[0])[0]) === 'ok';
+  } catch {
+    // A file that is no database, or whose meta cannot be read: what was measured stands, the rest stays unread.
+  } finally {
+    try { db?.close(); } catch { /* read-only: nothing to lose */ }
+  }
+  return out;
+}
+
+/** `doctor --restore <name>`, first half (§8.4; D-4693 (history-restore-verb)). Copy db/backups/<name> to
+ *  db/.history.db.restore.<pid>:
+ *  - the backup is opened O_NOFOLLOW|O_NONBLOCK and must be a regular file;
+ *  - the temp is created O_EXCL and fchmodded 0600, so it is 0600 from its first byte under any umask;
+ *  - the copy is fsynced, then measured (measureStaged) for decideBind's second look.
+ *  A bare name only: anything with a `/` is refused here as in lib's restoreNameOk. The caller removes the temp on
+ *  any refusal (abortRestore), and the next lock-holding pass's removeStaleTemps catches a kill. */
+export function stageRestore(home, name) {
+  const P = historyPaths(home);
+  if (typeof name !== 'string' || name === '' || name === '.' || name === '..' || name.includes('/')) {
+    throw new StoreError('restore-refused', `${JSON.stringify(name)} is not a bare file name under db/backups`);
+  }
+  const src = `${P.backups}/${name}`;
+  const tempPath = `${P.dbDir}/.history.db.restore.${process.pid}`;
+  for (const s of ['', '-wal', '-shm', '-journal']) {
+    if (existsSync(`${tempPath}${s}`)) throw new Error(`${tempPath}${s} exists; a temp is never reopened`);
+  }
+  let from;
+  try {
+    from = openSync(src, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK);
+  } catch (e) {
+    throw new StoreError('restore-refused', `${src} cannot be opened as a regular file without following a link (${e && e.code ? e.code : 'error'})`);
+  }
+  let sizeBytes = 0;
+  try {
+    if (!fstatSync(from).isFile()) throw new StoreError('restore-refused', `${src} is not a regular file`);
+    const to = openSync(tempPath, FS.O_CREAT | FS.O_EXCL | FS.O_WRONLY, 0o600);
+    try {
+      fchmodSync(to, 0o600);
+      const buf = Buffer.allocUnsafe(RESTORE_PIECE);
+      for (;;) {
+        const n = readSync(from, buf, 0, buf.length, null);
+        if (n === 0) break;
+        writeAll(to, buf.subarray(0, n));
+        sizeBytes += n;
+      }
+      fsyncSync(to);
+    } finally {
+      closeSync(to);
+    }
+  } finally {
+    closeSync(from);
+  }
+  return { tempPath, ...measureStaged(tempPath), sizeBytes };
+}
+
+/** `doctor --restore`, second half, once decideBind admitted the staged copy (D-4218,
+ *  D-4724 (history-binding-facts-before-link)). In order:
+ *  1. on the COPY: `PRAGMA journal_mode=WAL`, because a VACUUM INTO output is a rollback-journal database (M,
+ *     22.16.0);
+ *  2. still on the copy, ONE FULL transaction: `bound:<ms>` = restore, a new writer token, the ('recover', <ms>)
+ *     step and the `bind` outbox row, and every journal-known redact pair `i.pairs` carries (W1-B2 Task 25's
+ *     journalRedactPairs, which Task 27's restore reads under its lock) into redact_hashes. A pair the copy lacked
+ *     starts the step's cursor `+pairs` (lib's formatRecoverCursor), so the reindex phase still re-derives what the
+ *     pair masks, although the index phase will find every pair already present
+ *     (spec §8.4 and §9.14). So no read verb ever serves the restored store without a pair the
+ *     journal knows: they answer while the step is registered, and their pair index is the store's redact_hashes.
+ *     The pair insert raises a value the belt's witness reads, so with `i.belt` that transaction opens with
+ *     `belt.check(db)` and closes with `belt.stamp(db)` (spec §6.2 "The belt"; coordinator ruling R-witness-restore:
+ *     a belt-aware writer that changes witnessed values checks the witness first, then writes, then stamps). Task 27
+ *     passes sweep.mjs's check and Task 7B's stampBeltWitness; store.mjs owns the order only;
+ *  3. close it, which checkpoints its own -wal away, and fsync it;
+ *  4. store.writer, then store.id.pending when store.id is absent (decideBind refused a store.id naming another
+ *     store);
+ *  5. `link()` the copy to history.db, which fails if one appeared; unlink the temp;
+ *  6. rename the marker to store.id.
+ *  A kill anywhere leaves either no history.db, or one whose binding and recovery step are already inside it. */
+export function commitRestore(home, staged, { nowMs, pairs = [], belt = null }) {
+  const P = historyPaths(home);
+  if (staged.storeId.state !== 'value') {
+    throw new StoreError('restore-refused', `${staged.tempPath} carries no readable meta.store_id`);
+  }
+  for (const pr of pairs) {
+    if (!Number.isSafeInteger(pr.len) || pr.len <= 0 || !PAIR_SHA_RE.test(String(pr.sha256)) || !Number.isSafeInteger(pr.t)) {
+      throw new TypeError(`commitRestore: a redact pair is { len, sha256 (64 hex), t }: ${JSON.stringify(pr)}`);
+    }
+  }
+  if (belt !== null && (typeof belt?.check !== 'function' || typeof belt?.stamp !== 'function')) {
+    throw new TypeError('commitRestore: a belt is null or { check(db), stamp(db) }');
+  }
+  const storeId = staged.storeId.value;
+  const writer = mintWriter();
+  const db = new DatabaseSync(staged.tempPath);
+  try {
+    db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+    db.exec('PRAGMA journal_mode = WAL');
+    if (journalModeOf(db) !== 'wal') {
+      throw new StoreError('store-not-wal', `${staged.tempPath} would not change to WAL mode`);
+    }
+    withTx(db, 'FULL', () => {
+      // spec §6.2 "The belt" (R-witness-restore): the witness checked before this transaction writes anything.
+      if (belt !== null) belt.check(db);
+      insertBindFacts(db, { kind: 'restore', nowMs, writer, recover: true });
+      // spec §8.4 and §9.14 (R-restore-pairs): every journal-known pair, inside the copy, before the link.
+      const ins = db.prepare(RESTORE_PAIR_INSERT);
+      let added = 0;
+      for (const pr of pairs) added += Number(ins.run(pr.len, Buffer.from(pr.sha256, 'hex'), pr.t).changes);
+      if (added > 0) {
+        db.prepare("UPDATE derivation_state SET cursor = ? WHERE step = 'recover' AND version = ?")
+          .run(formatRecoverCursor({ phase: RECOVER_PHASES[0], file: null, offset: 0, blobId: null, pairsAdded: true }), nowMs);
+      }
+      // ... and stamped after its last write, so the first recovery pass never reads the pairs as another build's.
+      if (belt !== null) belt.stamp(db);
+    });
+  } finally {
+    db.close();
+  }
+  const fd = openSync(staged.tempPath, FS.O_RDONLY);
+  try { fsyncSync(fd); } finally { closeSync(fd); }
+  writeFileAtomic(P.writer, `${writer}\n`);
+  const needsPending = readBindingFile(P.storeId, UUID_RE).state === 'absent';
+  if (needsPending) writeFileAtomic(P.pending, `${storeId}\n`);
+  linkSync(staged.tempPath, P.dbFile);
+  unlinkSync(staged.tempPath);
+  fsyncDir(P.dbDir);
+  if (needsPending) {
+    renameSync(P.pending, P.storeId);
+    fsyncDir(P.root);
+  }
+  return { storeId, writer };
+}
+
+/** A refused restore's copy, removed with its sidecars: SQLite pairs a WAL with its file by name (DI13). */
+export function abortRestore(staged) {
+  for (const s of ['', '-wal', '-shm', '-journal']) removeEntry(`${staged.tempPath}${s}`);
 }

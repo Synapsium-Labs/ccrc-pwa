@@ -37,7 +37,7 @@ export function peekStoreId(dbPath: string): Presence<string>;
 export function measureStoreFacts(home: string, role: string): StoreFacts;
 export function removeStaleTemps(home: string): string[];
 export function removeStaleMigrationTemps(home: string): { removed: string[]; bytes: number };
-export function createStore(home: string): { storeId: string; writer: string };
+export function createStore(home: string, opts?: { storeId?: string; bind?: { kind: 'rebuild'; nowMs: number } }): { storeId: string; writer: string };
 export function finishPending(home: string): void;
 export function dropPending(home: string): void;
 export function syncWriterMirror(db: DatabaseSync, home: string): void;
@@ -88,3 +88,17 @@ export function foreignKeyRows(db: DatabaseSync): FkRow[];
 export function ftsMeasure(db: DatabaseSync): { tables: Set<string>; columns: Record<string, string[]> };
 export function dropFtsTables(db: DatabaseSync): void;
 export function setCounter(db: DatabaseSync, name: string, n: number): void;
+
+// ── W1-B2 Task 24: the binding verbs' sequences ──
+export function adoptStore(home: string, i: { nowMs: number }): { storeId: string; writer: string };
+export interface StagedRestore {
+  readonly tempPath: string; readonly storeId: Presence<string>; readonly userVersion: number | null;
+  readonly integrityOk: boolean; readonly sizeBytes: number;
+}
+export function stageRestore(home: string, name: string): StagedRestore;
+/** The caller's belt-witness hooks (ruling R-witness-restore): `check` first in the bind transaction, `stamp` last. */
+export interface RestoreBelt { check(db: DatabaseSync): void; stamp(db: DatabaseSync): void }
+export function commitRestore(home: string, staged: StagedRestore, i: {
+  nowMs: number; pairs?: readonly { len: number; sha256: string; t: number }[]; belt?: RestoreBelt | null;
+}): { storeId: string; writer: string };
+export function abortRestore(staged: StagedRestore): void;
