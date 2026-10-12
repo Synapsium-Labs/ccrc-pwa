@@ -1108,12 +1108,16 @@ export function storedVersionAt(dbFile) {
 // ── prune: tombstones by referrer age (§6.6; W1-B2 Task 20) ──────────────────────────────────────
 
 /** The blob ids that are structure, never content (§6.6): every native summary a node names
- *  (nodes.summary_blob_id) and every kept list (boundaries.kept_blob_id). Read once per pass: nodes has no
- *  index on summary_blob_id, so a probe per candidate would scan it once per blob. */
+ *  (nodes.summary_blob_id), every kept list (boundaries.kept_blob_id) and, D-4590
+ *  (history-prune-protects-compact-summaries), every compact-summary entry's own blob: that blob is structure from
+ *  its capture, before any leaf names it, because node derivation can lag behind (a cap or floor pause, an
+ *  unconfirmed epoch, a pending receipt). Read once per pass: nodes has no index on summary_blob_id, so a probe per
+ *  candidate would scan it once per blob. */
 export function pruneProtected(db) {
   const ids = new Set();
   for (const r of db.prepare('SELECT summary_blob_id AS id FROM nodes WHERE summary_blob_id IS NOT NULL').all()) ids.add(Number(r.id));
   for (const r of db.prepare('SELECT kept_blob_id AS id FROM boundaries WHERE kept_blob_id IS NOT NULL').all()) ids.add(Number(r.id));
+  for (const r of db.prepare('SELECT blob_id AS id FROM entries WHERE is_compact_summary = 1 AND blob_id IS NOT NULL').all()) ids.add(Number(r.id));
   return ids;
 }
 

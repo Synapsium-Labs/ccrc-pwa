@@ -2583,7 +2583,10 @@ function stmts(db) {
   if (s !== undefined) return s;
   s = {
     blobId: db.prepare('SELECT blob_id, fts_indexed FROM blobs WHERE sha256 = ?'),
-    blobIns: db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, ?, ?, ?) ON CONFLICT(sha256) DO NOTHING'),
+    // D-4589 (history-prune-revives-a-tombstone-on-recapture): a tombstone holds no body, so "already stored" means a row whose
+    // z is not NULL (blobLive), and the insert revives a tombstone; a stored body is never rewritten.
+    blobLive: db.prepare('SELECT blob_id FROM blobs WHERE sha256 = ? AND z IS NOT NULL'),
+    blobIns: db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, ?, ?, ?) ON CONFLICT(sha256) DO UPDATE SET codec = excluded.codec, z = excluded.z, raw_len = excluded.raw_len, pruned_ms = NULL WHERE blobs.z IS NULL'),
     blobZ: db.prepare('SELECT z, raw_len FROM blobs WHERE blob_id = ?'),
     entrySel: db.prepare('SELECT entry_id, blob_id FROM entries WHERE uuid = ?'),
     entryUpsert: db.prepare(ENTRY_UPSERT),
@@ -2761,7 +2764,7 @@ function compressMissing(db, rows) {
   const need = (sha, make) => {
     const hex = sha.toString('hex');
     if (blobs.has(hex)) return;
-    if (s.blobId.get(sha) !== undefined) { blobs.set(hex, { sha, z: null, rawLen: 0 }); return; }
+    if (s.blobLive.get(sha) !== undefined) { blobs.set(hex, { sha, z: null, rawLen: 0 }); return; }
     blobs.set(hex, { sha, ...make() });
   };
   const fromJson = (body) => () => ({ z: brotli(Buffer.from(body, 'utf8')), rawLen: rowRawLen(body) });
@@ -3453,13 +3456,13 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
       const buf = readAt(a.fd, 0, size);
       if (buf.length < size) return null;                 // it shrank under the read: next tick
       sha = blobShaOfBytes(buf);
-      if (stmts(db).blobId.get(sha) === undefined) z = brotli(buf);
+      if (stmts(db).blobLive.get(sha) === undefined) z = brotli(buf);
       if (unindexed(sha)) text = sidecarIndexText(buf, ctx.pairIdx);
     } else {
       const c = await compressFdRange(a.fd, 0, size);
       if (c === null) return null;
       sha = c.sha;
-      if (stmts(db).blobId.get(sha) === undefined) z = c.z;
+      if (stmts(db).blobLive.get(sha) === undefined) z = c.z;
       // D-4312 (history-sidecar-redact-before-cut): the redaction window, decoded from the compressed bytes by the backfill's own bounded reader
       if (unindexed(sha)) text = (await ftsTextOfBlob(c.z, true, ctx.pairIdx, size)).text;
     }

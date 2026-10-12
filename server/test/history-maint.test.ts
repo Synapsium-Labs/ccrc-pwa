@@ -16,7 +16,7 @@ import { DatabaseSync } from 'node:sqlite';
 import * as pty from 'node-pty';
 import { beltWidth, historyPaths, floorThreshold } from '../../ccd/history/lib.mjs';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
-import { userRow, compactionSequence } from './historyFixtures.js';
+import { userRow, compactionSequence, toolResultRow } from './historyFixtures.js';
 import {
   makeHistoryBox, runSweep, runShim, runCli, plantSession, plantTranscript, openStoreRO, stubShim, holdLock,
   PASS_DRIVER, SHIM, withPane, seedFamily, preloadOptions, PRELOADS, CLI, skipOnDarwin, type HistoryBox,
@@ -597,6 +597,8 @@ describe('prune: dry run by default, tombstones by referrer age, the floor, the 
       .map((t) => maintQ<{ n: number }>(box, `SELECT count(*) AS n FROM ${t}`)[0]!.n);
     const before = counts();
     expect(maintMatch(box, 'quokkaprune'), 'CONTROL: indexed before the prune').toBe(1);
+    expect(maintQ<{ step: string }>(box, "SELECT step FROM derivation_state WHERE step = 'fts-merge' AND completed_ms IS NULL"),
+      'CONTROL: no merge step is pending before the prune').toHaveLength(0);
     const r = await maintPty(box, 'cli', ['prune', '--older-than', '90d', '--apply']);
     expect(r.code, r.out).toBe(0);
     expect(r.out).toMatch(/history-sweep: pruned [1-9][0-9]* blob\(s\)/);
@@ -611,6 +613,61 @@ describe('prune: dry run by default, tombstones by referrer age, the floor, the 
     const ex = runCli(box, ['expand', leaf!], { env: withPane(box, ID) });
     expect(ex.code, ex.stderr).toBe(0);
     expect(ex.stdout).toContain(`content pruned on ${new Date(blob.pruned_ms!).toISOString().slice(0, 10)}`);
+  }, HEAVY);
+
+  it('D-4589: content captured again after a prune is stored again — the tombstone is revived, searchable and expandable, never linked as pruned', async (ctx) => {
+    // The pinned path is the whole-file SIDECAR arm (ingestSidecar): two sessions, each with a tool result naming a
+    // sidecar file of byte-identical content, so the second capture meets the first's tombstone through its sha.
+    const box = makeHistoryBox('ccrc-hist-d4589-', { role: 'fleet', shim: true });
+    const ID2 = 'claude-a-maint2';
+    const U2 = '11111111-1111-4111-8111-1111111111a2';
+    const OLD_TR = 'c0000000-0000-4000-8000-0000000000b1';
+    const NEW_TR = 'c0000000-0000-4000-8000-0000000000b2';
+    const BODY = 'zqrevive20 the distinctive bytes of one large tool result\n';
+    const account = Object.keys(box.accountHome)[0]!;
+    const sidecar = (uuid: string): void => {
+      const dir = path.join(box.accountHome[account]!, 'projects', '-home-u-tree-demo', uuid, 'tool-results');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'zzrevive20.txt'), BODY);
+    };
+    const sidecarBlob = (uuid: string): { blob_id: number; z: Uint8Array | null; pruned_ms: number | null } | undefined =>
+      maintQ<{ blob_id: number; z: Uint8Array | null; pruned_ms: number | null }>(box,
+        `SELECT b.blob_id, b.z, b.pruned_ms FROM sidecars s JOIN blobs b ON b.blob_id = s.blob_id
+         JOIN transcripts t ON t.transcript_pk = s.transcript_pk WHERE t.cc_session_uuid = ?`, uuid)[0];
+    // 1. An old capture, 200 days back: a tool result naming the file, and the file.
+    sidecar(MAINT_U1);
+    seedFamily(box, { id: ID, project: 'demo', uuid: MAINT_U1, rows: [
+      toolResultRow({ uuid: OLD_TR, ts: maintIso(200 * MAINT_DAY), sessionId: MAINT_U1, toolUseId: 'toolu_01REVIVEOLD',
+        content: 'Output too large. Full output saved to: /home/u/x/tool-results/zzrevive20.txt' }),
+    ] });
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();
+    const old = sidecarBlob(MAINT_U1);
+    expect(old, 'CONTROL: the old sidecar is captured').toBeDefined();
+    expect(old!.z, 'CONTROL: the old sidecar holds its bytes').not.toBeNull();
+    expect(maintMatch(box, 'zqrevive20'), 'CONTROL: indexed before the prune').toBe(1);
+    // 2. Prune it.
+    const r = await maintPty(box, 'cli', ['prune', '--older-than', '90d', '--apply']);
+    expect(r.code, r.out).toBe(0);
+    const pruned = sidecarBlob(MAINT_U1)!;
+    expect(pruned.z, 'CONTROL: the sidecar blob is a tombstone').toBeNull();
+    expect(pruned.pruned_ms, 'CONTROL: the tombstone is stamped').toBeGreaterThan(0);
+    expect(maintMatch(box, 'zqrevive20'), 'CONTROL: the tombstone left the index').toBe(0);
+    // 3. A young capture of the SAME bytes.
+    sidecar(U2);
+    seedFamily(box, { id: ID2, project: 'demo', uuid: U2, rows: [
+      toolResultRow({ uuid: NEW_TR, ts: maintIso(MAINT_DAY), sessionId: U2, toolUseId: 'toolu_01REVIVENEW',
+        content: 'Output too large. Full output saved to: /home/u/x/tool-results/zzrevive20.txt' }),
+    ] });
+    const young = sidecarBlob(U2);
+    expect(young, 'the young sidecar is captured').toBeDefined();
+    expect(young!.blob_id, 'content-addressed: the young sidecar names the same blob row').toBe(pruned.blob_id);
+    expect(young!.z, 'the tombstone is revived: the bytes are stored again').not.toBeNull();
+    expect(young!.pruned_ms, 'a revived blob is no longer pruned').toBeNull();
+    expect(maintMatch(box, 'zqrevive20'), 'the revived text is searchable again').toBe(1);
+    const ex = runCli(box, ['expand', NEW_TR], { env: withPane(box, ID2) });
+    expect(ex.code, ex.stderr).toBe(0);
+    expect(ex.stdout).toContain('zqrevive20');
+    expect(ex.stdout).not.toContain('content pruned');
   }, HEAVY);
 
   it('DM27: deleting a transcript prunes nothing its age does not', async () => {

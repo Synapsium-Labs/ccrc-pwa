@@ -8,7 +8,7 @@
 // no carrier, and the children are plain node.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -973,7 +973,7 @@ describe('store.mjs: prune tombstones by referrer age (W1-B2 Task 20)', () => {
   /** A bound store holding one referrer arrangement per DM15 clause, planted by SQL on the writer handle.
    *  Blob ids are assigned in this order: old-only 1, shared 2, young 3, summary 4, kept 5, boundary 6,
    *  null-ts 7, variant-host-old 8, variant-of-old 9, variant-host-new 10, variant-of-new 11,
-   *  sidecar-unlinked 12, orphan 13. */
+   *  sidecar-unlinked 12, orphan 13, summary-no-leaf 14. */
   function planted(): { home: string; db: DatabaseSync; blob: Record<string, number>; close: () => void } {
     const home = mkTmp('ccrc-history-prune-');
     createStore(home);
@@ -1021,17 +1021,23 @@ describe('store.mjs: prune tombstones by referrer age (W1-B2 Task 20)', () => {
     db.prepare('INSERT INTO sidecars (transcript_pk, name, blob_id, entry_id, first_seen_ms) VALUES (?, ?, ?, NULL, ?)')
       .run(tp, 'toolu_01unlinked.txt', mkBlob('sidecar-unlinked'), OLD);
     mkBlob('orphan');
+    // D-4590: an old compact-summary entry whose own blob no node names yet (derivation lags a cap or floor pause)
+    const lagging = db.prepare(`INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns,
+        struct_file_id, blob_id, ts_ms, is_compact_summary) VALUES (?, ?, 'user', 'operator', 1, ?, 1, ?, ?, 1)`);
+    n += 1;
+    lagging.run(`e${String(n).padStart(4, '0')}`, tp, n, mkBlob('summary-no-leaf'), OLD);
     return { home, db, blob, close: () => closeWriter(db) };
   }
   const PRUNED = ['boundary', 'old-only', 'variant-host-old', 'variant-of-old'];
-  const KEPT = ['shared', 'young', 'summary', 'kept', 'null-ts', 'variant-host-new', 'variant-of-new', 'sidecar-unlinked', 'orphan'];
+  const KEPT = ['shared', 'young', 'summary', 'kept', 'null-ts', 'variant-host-new', 'variant-of-new', 'sidecar-unlinked', 'orphan', 'summary-no-leaf'];
 
   it('DM15: a blob is a candidate only when every referrer is older than the cutoff; shared, NULL-time, unlinked-sidecar, unreferenced and structure blobs stay', () => {
     const { db, blob, close } = planted();
     try {
       const protectedIds = pruneProtected(db);
-      expect([...protectedIds].sort((a, b) => a - b), 'structure: the native summary and the kept list')
-        .toEqual([blob['summary']!, blob['kept']!].sort((a, b) => a - b));
+      expect(protectedIds.has(blob['summary-no-leaf']!), 'D-4590: a compact summary with no leaf yet is structure').toBe(true);
+      expect([...protectedIds].sort((a, b) => a - b), 'structure: the native summary, the kept list and a compact summary no leaf names yet')
+        .toEqual([blob['summary']!, blob['kept']!, blob['summary-no-leaf']!].sort((a, b) => a - b));
       const c = pruneCandidates(db, { cutoffMs: CUTOFF, afterBlobId: 0, limit: 100, protectedIds });
       const name = (id: number): string => Object.keys(blob).find((k) => blob[k] === id)!;
       expect(c.blobIds.map(name).sort()).toEqual(PRUNED);
@@ -1076,7 +1082,7 @@ describe('store.mjs: prune tombstones by referrer age (W1-B2 Task 20)', () => {
       expect(r).toEqual({ blobs: 4, bytes: expect.any(Number), fts: true });
       expect(walSizes, 'one call after each batch that tombstoned something, the WAL truncated before each').toEqual([0, 0, 0]);
       expect(registered, 'every batch that deleted index rows registers the merge step with them').toBe(3);
-      expect(mergePending(), 'the pass\'s onDeleted registration left exactly one pending merge step').toBe(1);
+      expect(mergePending(), 'a registration written inside onDeleted committed with the batch').toBe(1);
       const state = (tag: string): { z: Uint8Array | null; pruned_ms: number | null; fts_indexed: number } =>
         db.prepare('SELECT z, pruned_ms, fts_indexed FROM blobs WHERE blob_id = ?').get(blob[tag]!) as never;
       for (const tag of PRUNED) expect(state(tag), tag).toEqual({ z: null, pruned_ms: NOW, fts_indexed: 0 });
@@ -1089,6 +1095,41 @@ describe('store.mjs: prune tombstones by referrer age (W1-B2 Task 20)', () => {
       expect(pruneApply(db, { cutoffMs: CUTOFF, nowMs: NOW, batch: 2, vacuumPages: 64, between: () => {} }).blobs,
         'a second pass finds nothing left').toBe(0);
     } finally { close(); }
+  });
+
+  it('pruneApply returns the pages its batches free: the freelist is empty after it, so the store file shrinks', () => {
+    const arrange = (): { db: DatabaseSync; close: () => void } => {
+      const home = mkTmp('ccrc-history-prune-vac-');
+      createStore(home);
+      const db = openWriter(historyPaths(home).dbFile);
+      const tp = Number(db.prepare('INSERT INTO transcripts (cc_session_uuid) VALUES (?)')
+        .run('22222222-2222-4222-8222-222222222222').lastInsertRowid);
+      for (let k = 0; k < 4; k += 1) {
+        const z = randomBytes(64 * 1024);   // incompressible: each blob spans many pages
+        const b = Number(db.prepare("INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, 'br5', ?, ?)")
+          .run(createHash('sha256').update(z).digest(), z, z.length).lastInsertRowid);
+        db.prepare(`INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns,
+            struct_file_id, blob_id, ts_ms) VALUES (?, ?, 'user', 'operator', 1, ?, 1, ?, ?)`)
+          .run(`v${String(k)}`, tp, k + 1, b, OLD);
+      }
+      return { db, close: () => closeWriter(db) };
+    };
+    const pragma = (db: DatabaseSync, name: string): number =>
+      Number((db.prepare(`PRAGMA ${name}`).get() as Record<string, number>)[name]);
+    const a = arrange();
+    try {
+      const pages = pragma(a.db, 'page_count');
+      const r = pruneApply(a.db, { cutoffMs: CUTOFF, nowMs: NOW, batch: 500, vacuumPages: 65_536, between: () => {}, onDeleted: () => {} });
+      expect(r.blobs, 'CONTROL: the four old blobs were tombstoned').toBe(4);
+      expect(pragma(a.db, 'freelist_count'), 'the vacuum returned every freed page').toBe(0);
+      expect(pragma(a.db, 'page_count'), 'the store file shrank').toBeLessThan(pages);
+    } finally { a.close(); }
+    const b = arrange();
+    try {
+      const c = pruneCandidates(b.db, { cutoffMs: CUTOFF, afterBlobId: 0, limit: 500, protectedIds: pruneProtected(b.db) });
+      pruneBatch(b.db, { blobIds: c.blobIds, nowMs: NOW, fts: false, onDeleted: () => {} });
+      expect(pragma(b.db, 'freelist_count'), 'CONTROL: a tombstone batch alone leaves free pages, so the fixture frees pages').toBeGreaterThan(0);
+    } finally { b.close(); }
   });
 
   it('incrementalVacuum returns what it freed and refuses a page count that is not a positive integer', () => {
