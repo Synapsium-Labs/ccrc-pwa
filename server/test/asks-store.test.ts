@@ -24,12 +24,13 @@ describe('the asks table', () => {
     // read's indexes, worker stall watch wave 5), MIGRATIONS[15]
     // (`runs.sessionBornAt`/`sessionBornFor`, child-reclamation spec §5.1,
     // §5.3), MIGRATIONS[16] (`stall_settings` and `run_events_by_at`, stall
-    // watch settings §8) and MIGRATIONS[17] (`dead_claimants`, workspace
-    // lifecycle §5.4). None touches the asks table. This pin only needs the
+    // watch settings §8), MIGRATIONS[17] (`dead_claimants`, workspace
+    // lifecycle §5.4) and MIGRATIONS[18] (`dead_coordinator_breaker_state`,
+    // workspace lifecycle §5.4). None touches the asks table. This pin only needs the
     // CURRENT total — it asserts "no migration after the one this test knows
     // about has changed the asks table's columns", not anything about any of
     // the eight.
-    expect(COORD_SCHEMA_VERSION).toBe(18);
+    expect(COORD_SCHEMA_VERSION).toBe(19);
     const cols = (db.prepare("SELECT name FROM pragma_table_info('asks')").all() as
       { name: string }[]).map((r) => r.name).sort();
     expect(cols).toEqual([

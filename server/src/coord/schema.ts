@@ -1290,6 +1290,43 @@ export const MIGRATIONS: readonly string[] = [
   `
   CREATE TABLE dead_claimants (claimantId TEXT NOT NULL PRIMARY KEY, firstDeadAt INTEGER NOT NULL, lastDeadAt INTEGER NOT NULL);
   `,
+  // ── 19: user_version 18 -> 19 ─────────────────────────────────────────────
+  // The dead-coordinator breaker's TYPED STATE (workspace lifecycle spec 2026-09-24 §5.4 and §12; the operator's ruling
+  // 4286, which chose a dedicated typed table over a sentinel claimant row or an untyped `run_events` marker). ONE ROW,
+  // `CHECK (id = 1)`, the `coordinator_state` and `stall_settings` idiom: it is control state, never a claimant, so no
+  // `claimedBy` can collide with it.
+  //   - `state` is `dirty` or `clean`. The lane writes `dirty` ALONE, in its own statement, before it changes any anchor
+  //     (`CoordStore.markDeadCoordinatorBreakerDirty`), and `clean` only in the ONE transaction that also writes the
+  //     breaker's exact held snapshot and every anchor change of the pass (`CoordStore.commitDeadCoordinatorBreakerState`).
+  //   - `generation` moves on at every write, so a commit lands only over the dirty mark it was handed.
+  //   - `held` is that snapshot, in `deadCoordinatorBreakerHeldDetail`'s encoding (the `run_events` record's): NULL only
+  //     on a row marked dirty before any snapshot landed.
+  //   - `writtenAt` is the write-time clock of the last write (epoch ms, the server's clock).
+  // NO SEED ROW. An absent row reads as dirty (`CoordStore.deadCoordinatorBreakerState`'s `absent`), so the first pass
+  // after the deploy that creates this table holds every claimant it does not release, flagged, and writes the first
+  // exact snapshot: a database whose lane ran on an older build carries no record of that lane's hold, and an empty
+  // seed would read as "nothing held". Dirty, absent and unreadable all fail shut; nothing clears dirty by comparing
+  // timestamps.
+  //
+  // A NEW TABLE AND NOTHING ELSE, entry 18's argument: an older build opening a file at `user_version 19` takes rule 3
+  // (it warns, reads as-is, migrates nothing) and never names this table, so its runs, mail, claims and ledger work
+  // unchanged. What it cannot do is keep the breaker's hold — which is why the spec's §12 says to disarm the lane before
+  // rolling back below this release.
+  //
+  // MIGRATIONS[0..17] are frozen. THIS ENTRY IS SLOT 19 AS WRITTEN, measured against origin/main (28e8dc1b2, 18 entries)
+  // at this fix round's first step; whichever branch holding the same slot merges second moves up. RE-MEASURE
+  // immediately before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE dead_coordinator_breaker_state (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    generation INTEGER NOT NULL,
+    state      TEXT NOT NULL CHECK (state IN ('clean', 'dirty')),
+    held       TEXT,
+    writtenAt  INTEGER NOT NULL
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

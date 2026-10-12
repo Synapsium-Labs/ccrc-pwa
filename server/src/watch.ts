@@ -4489,7 +4489,7 @@ export class FleetWatcher {
           this.deadCoordinatorBreakerHeldRunId = runId;
           return true;
         }
-        if (w.why === 'unencodable') break;
+        if (w.why === 'invalid') break;
       }
       console.warn(unchanged
         ? 'ccrc-server: sweepDeadCoordinators could not checkpoint the breaker\'s held set — the set did not change, so the act stands; a restart before the next checkpoint flags this pass\'s anchors'

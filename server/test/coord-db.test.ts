@@ -660,8 +660,8 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 18 — never hand-edited beside a growing array', () => {
-    // Bumped to 18 by eight migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
+  it('COORD_SCHEMA_VERSION derives to 19 — never hand-edited beside a growing array', () => {
+    // Bumped to 19 by nine migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
     // design 2026-09-14 §5.1), MIGRATIONS[11] (runs.coordProject, board
     // placement wave 1 Task 1), MIGRATIONS[12] (pool_edges/pool_epoch,
     // account-pool membership wave 1 Task 6), MIGRATIONS[13] (releases,
@@ -670,10 +670,11 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // indexes, worker stall watch wave 5), MIGRATIONS[15]
     // (runs.sessionBornAt / runs.sessionBornFor — child-reclamation spec §5.1,
     // §5.3), MIGRATIONS[16] (stall_settings and run_events_by_at — stall
-    // watch settings design 2026-10-05 §8) and MIGRATIONS[17] (dead_claimants,
-    // workspace lifecycle spec §5.4).
-    expect(COORD_SCHEMA_VERSION).toBe(18);
-    expect(MIGRATIONS.length).toBe(18);
+    // watch settings design 2026-10-05 §8), MIGRATIONS[17] (dead_claimants,
+    // workspace lifecycle spec §5.4) and MIGRATIONS[18]
+    // (dead_coordinator_breaker_state, the breaker's typed state, §5.4/§12).
+    expect(COORD_SCHEMA_VERSION).toBe(19);
+    expect(MIGRATIONS.length).toBe(19);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -728,12 +729,12 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     const db = openCoordDb(p);
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
       .toBe(COORD_SCHEMA_VERSION);
-    // 18 since MIGRATIONS[14] (the stall read's indexes), MIGRATIONS[15]
+    // 19 since MIGRATIONS[14] (the stall read's indexes), MIGRATIONS[15]
     // (runs.sessionBornAt/sessionBornFor, child-reclamation spec §5.1, §5.3)
     // MIGRATIONS[16] (stall_settings and run_events_by_at, stall watch
-    // settings §8) and MIGRATIONS[17] (dead_claimants); the migration above is
-    // still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(18);
+    // settings §8), MIGRATIONS[17] (dead_claimants) and MIGRATIONS[18]
+    // (dead_coordinator_breaker_state); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(19);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -772,6 +773,45 @@ describe('coord.db: dead_claimants, the dead-coordinator lane’s durable anchor
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
     expect(db.prepare('SELECT count(*) AS n FROM dead_claimants').get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT claimedBy, state FROM runs').get()).toEqual({ claimedBy: 'c', state: 'working' });
+    db.close();
+  });
+});
+
+describe('coord.db: dead_coordinator_breaker_state, the breaker\'s typed state (workspace lifecycle §5.4, §12; D-4857)', () => {
+  /** Found by its DDL, never hard-coded (the dead_claimants case's rule). */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE dead_coordinator_breaker_state')) + 1;
+  interface ColumnInfo { name: string; type: string; notnull: number; pk: number }
+  it('a NEW TABLE and nothing else: one typed row — generation, a clean/dirty state, the snapshot, the write time — and NO seed row', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates dead_coordinator_breaker_state').toBeGreaterThanOrEqual(19);
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const cols = (db.prepare("SELECT name, type, \"notnull\", pk FROM pragma_table_info('dead_coordinator_breaker_state')").all() as unknown as ColumnInfo[])
+      .map((c) => [c.name, c.type, c.notnull, c.pk]);
+    expect(cols).toEqual([['id', 'INTEGER', 0, 1], ['generation', 'INTEGER', 1, 0], ['state', 'TEXT', 1, 0], ['held', 'TEXT', 0, 0], ['writtenAt', 'INTEGER', 1, 0]]);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim(), 'the migration CREATEs one table, seeds nothing and alters nothing')
+      .toMatch(/^CREATE TABLE dead_coordinator_breaker_state \([^;]*\);$/);
+    expect(db.prepare('SELECT count(*) AS n FROM dead_coordinator_breaker_state').get(), 'an absent row is the lane\'s dirty').toEqual({ n: 0 });
+    // typed: one row, two state words
+    expect(() => db.exec("INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (2, 1, 'dirty', NULL, 1)")).toThrow();
+    expect(() => db.exec("INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (1, 1, 'paused', NULL, 1)")).toThrow();
+    db.exec("INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (1, 1, 'dirty', NULL, 1)");
+    db.close();
+  });
+
+  it('reaches a database ALREADY at the version before it and leaves every existing row as it was', () => {
+    expect(SLOT).toBeGreaterThanOrEqual(19);
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO dead_claimants (claimantId, firstDeadAt, lastDeadAt) VALUES ('c', 5, 6)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM dead_coordinator_breaker_state').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT claimantId, firstDeadAt, lastDeadAt FROM dead_claimants').get()).toEqual({ claimantId: 'c', firstDeadAt: 5, lastDeadAt: 6 });
     db.close();
   });
 });

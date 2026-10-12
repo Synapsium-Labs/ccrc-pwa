@@ -486,14 +486,16 @@ export const deadCoordinatorBreakerKey = (b: DeadCoordinatorBreaker): string | n
  *  with other than four colon-separated parts as null, and this one has two, so the stall count never sees it. */
 export const DEAD_COORDINATOR_BREAKER_HELD_HEAD = 'dead-coordinator-breaker-held:';
 
-/** THE ID IS PERCENT-ESCAPED (review 381, part A review item 2): every UTF-8 byte outside `[A-Za-z0-9._-]` is `%` and two
- *  UPPERCASE hex digits, `%` itself included, so no claimant id can break the separators (`@`, `,`, the head's `:`) and
- *  every id with a UTF-8 spelling is writable and reads back as written, a leading U+FEFF included — `claimedBy` is not
- *  shape-checked at `POST /api/runs`, and a set that dropped to memory alone for one odd id would be the restart hole again. The empty id is the empty string. The one string with no spelling is a
- *  lone surrogate (UTF-8 cannot carry it, so it would not read back). Ids ascend by the DECODED string's code units,
- *  on write and on read alike. */
+/** THE ID IS PERCENT-ESCAPED, AND THE ENCODING IS TOTAL (review 381, part A review item 2; operator ruling 4286, item 6):
+ *  every string has exactly one spelling, and every spelling reads back as the string it was written from. Per UTF-16
+ *  code unit, left to right: one of `[A-Za-z0-9._-]` stays as it is; a LONE surrogate (one with no partner beside it) is
+ *  `%u` and four UPPERCASE hex digits; anything else — a whole character, a surrogate pair taken together — is its
+ *  UTF-8 bytes, each `%` and two UPPERCASE hex digits, `%` itself included. So no claimant id can break the separators
+ *  (`@`, `,`, the head's `:`), a leading U+FEFF reads back (review 382, R1), and a lone surrogate, which UTF-8 cannot
+ *  carry, has a spelling of its own: a valid held set always has a record (`claimedBy` is not shape-checked at
+ *  `POST /api/runs`). `%u` cannot be read as a byte escape: `u` is not a hex digit. The empty id is the empty string.
+ *  Ids ascend by the DECODED string's code units, on write and on read alike. */
 const BREAKER_HELD_SAFE = /^[A-Za-z0-9._-]*$/;
-const BREAKER_HELD_LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 /** A fallback member's mark, after the complete `+` list of its instants (review 382, R2): `id@<t1+t2…>*`. `*` is outside the escaped-id alphabet
  *  and is not a digit, so it can never be part of an id or an instant. No released build reads this record at all (the
  *  build that first had a reader, before the mark, never shipped), so a rollback to a released build starts with no hold,
@@ -502,37 +504,69 @@ const BREAKER_HELD_FALLBACK_MARK = '*';
 /** Several instants of one member (review 384, F1-N1): `id@t1+t2+t3`, ascending, no repeats; the mark, if any, after the
  *  whole list. `+` is outside the escaped-id alphabet and is not a digit. A row with one instant is the old spelling. */
 const BREAKER_HELD_INSTANT_JOIN = '+';
-const BREAKER_HELD_ESCAPED = /^(?:[A-Za-z0-9._-]|%[0-9A-F]{2})*$/;
+const BREAKER_HELD_ESCAPED = /^(?:[A-Za-z0-9._-]|%[0-9A-F]{2}|%u[0-9A-F]{4})*$/;
 
-const escapeBreakerHeldId = (id: string): string | null => {
-  if (BREAKER_HELD_LONE_SURROGATE.test(id)) return null;
+const isHighSurrogate = (c: number): boolean => c >= 0xD800 && c <= 0xDBFF;
+const isLowSurrogate = (c: number): boolean => c >= 0xDC00 && c <= 0xDFFF;
+const utf8Escaped = (text: string): string =>
+  [...new TextEncoder().encode(text)].map((b) => `%${b.toString(16).toUpperCase().padStart(2, '0')}`).join('');
+
+const escapeBreakerHeldId = (id: string): string => {
   if (BREAKER_HELD_SAFE.test(id)) return id;
   let out = '';
-  for (const b of new TextEncoder().encode(id)) {
-    const c = String.fromCharCode(b);
-    out += b < 128 && /[A-Za-z0-9._-]/.test(c) ? c : `%${b.toString(16).toUpperCase().padStart(2, '0')}`;
+  for (let i = 0; i < id.length; i += 1) {
+    const c = id.charCodeAt(i);
+    if (isHighSurrogate(c) && i + 1 < id.length && isLowSurrogate(id.charCodeAt(i + 1))) {
+      out += utf8Escaped(id.slice(i, i + 2));
+      i += 1;
+    } else if (isHighSurrogate(c) || isLowSurrogate(c)) {
+      out += `%u${c.toString(16).toUpperCase().padStart(4, '0')}`;
+    } else {
+      const ch = id[i]!;
+      out += /^[A-Za-z0-9._-]$/.test(ch) ? ch : utf8Escaped(ch);
+    }
   }
   return out;
 };
 
 /** The id an escaped text spells, or `null` for anything that is not exactly what `escapeBreakerHeldId` writes: a
- *  character outside the alphabet, a lowercase or short escape, bytes that are not UTF-8, or an escape of a character
- *  that is written plain (the decode must re-encode to the same text). */
+ *  character outside the alphabet, a lowercase or short escape, bytes that are not UTF-8, a `%u` escape of a code unit
+ *  that is not a surrogate, or any other spelling of a string that has one (the decode must re-encode to the same text:
+ *  two `%u` halves of a valid pair, an escape of a character that is written plain). */
 const unescapeBreakerHeldId = (text: string): string | null => {
   if (!BREAKER_HELD_ESCAPED.test(text)) return null;
-  const bytes: number[] = [];
-  for (let i = 0; i < text.length; i += 1) {
-    if (text[i] === '%') { bytes.push(parseInt(text.slice(i + 1, i + 3), 16)); i += 2; } else bytes.push(text.charCodeAt(i));
-  }
-  let id: string;
   // `ignoreBOM: true` keeps a LEADING U+FEFF as part of the id — the default strips it, and an id that begins with one
   // would be written and then read as unreadable (review 382, R1).
-  try { id = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(Uint8Array.from(bytes)); } catch { return null; }
+  const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+  let id = '';
+  let bytes: number[] = [];
+  const flush = (): boolean => {
+    if (bytes.length === 0) return true;
+    try { id += decoder.decode(Uint8Array.from(bytes)); } catch { return false; }
+    bytes = [];
+    return true;
+  };
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === '%' && text[i + 1] === 'u') {
+      const unit = parseInt(text.slice(i + 2, i + 6), 16);
+      if (!(isHighSurrogate(unit) || isLowSurrogate(unit)) || !flush()) return null;
+      id += String.fromCharCode(unit);
+      i += 5;
+    } else if (text[i] === '%') {
+      bytes.push(parseInt(text.slice(i + 1, i + 3), 16));
+      i += 2;
+    } else {
+      if (!flush()) return null;
+      id += text[i];
+    }
+  }
+  if (!flush()) return null;
   return escapeBreakerHeldId(id) === text ? id : null;
 };
 
-/** The held set's detail, or `null` when a member cannot be carried exactly (a string with no UTF-8 spelling, or an
- *  instant that is not a positive safe integer) or two members share an id. */
+/** The held set's detail, or `null` when the set is not one a pass builds: an instant that is not a positive safe
+ *  integer, or two members with one id. Every id has a spelling (the encoding is total), so a valid set always has
+ *  one. */
 export function deadCoordinatorBreakerHeldDetail(members: readonly DeadCoordinatorBreakerMember[]): string | null {
   const sorted = [...members].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const parts: string[] = [];
@@ -540,7 +574,7 @@ export function deadCoordinatorBreakerHeldDetail(members: readonly DeadCoordinat
     const m = sorted[i]!;
     const id = escapeBreakerHeldId(m.id);
     const ats = [...new Set([m.firstDeadAt, ...(m.instants ?? [])])].sort((x, y) => x - y);
-    if (id === null || ats.some((at) => !Number.isSafeInteger(at) || at < 1)) return null;
+    if (ats.some((at) => !Number.isSafeInteger(at) || at < 1)) return null;
     if (i > 0 && sorted[i - 1]!.id === m.id) return null;
     parts.push(`${id}@${ats.join(BREAKER_HELD_INSTANT_JOIN)}${m.fallback === true ? BREAKER_HELD_FALLBACK_MARK : ''}`);
   }

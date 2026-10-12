@@ -884,6 +884,40 @@ const persistedInt = (text: string, column: string): PersistedInt => {
     : { ok: false, detail: `${column} is not a positive safe integer` };
 };
 
+/** A held-set detail (`deadCoordinatorBreakerHeldDetail`'s encoding, the `run_events` record's and the typed state's
+ *  snapshot alike) read back into members, ALL-OR-FAILURE: a text `splitDeadCoordinatorBreakerHeld` refuses, or an
+ *  instant this process cannot prove (`persistedInt`, D-2545's rule), is a failure, never a smaller set. */
+const parseBreakerHeld = (detail: string):
+  { ok: true; members: DeadCoordinatorBreakerMember[] } | { ok: false; detail: string } => {
+  const parts = splitDeadCoordinatorBreakerHeld(detail);
+  if (parts === null) return { ok: false, detail: 'the breaker held-set row is malformed' };
+  const members: DeadCoordinatorBreakerMember[] = [];
+  for (const p of parts) {
+    const ats: number[] = [];
+    for (const text of p.texts) {
+      const at = persistedInt(text, 'breaker held firstDeadAt');
+      if (!at.ok) return { ok: false, detail: at.detail };
+      ats.push(at.value);
+    }
+    members.push({ id: p.id, firstDeadAt: ats[0]!, ...(ats.length > 1 ? { instants: ats } : {}), ...(p.fallback ? { fallback: true as const } : {}) });
+  }
+  return { ok: true, members };
+};
+
+/** What the breaker's typed state row still carries as its snapshot (`deadCoordinatorBreakerState`'s `dirty` arm): the
+ *  members of the last landed snapshot, `none` before any landed, or a text it cannot read. Three answers, never folded. */
+export type DeadCoordinatorBreakerSnapshot =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'members'; readonly members: readonly DeadCoordinatorBreakerMember[] }
+  | { readonly kind: 'unreadable'; readonly detail: string };
+
+/** `deadCoordinatorBreakerState`'s answer (D-4857). */
+export type DeadCoordinatorBreakerStateRead =
+  | { readonly kind: 'clean'; readonly generation: number; readonly held: readonly DeadCoordinatorBreakerMember[]; readonly writtenAt: number }
+  | { readonly kind: 'dirty'; readonly generation: number; readonly snapshot: DeadCoordinatorBreakerSnapshot }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'unreadable'; readonly detail: string };
+
 /** `setStallSettings`' answer: written, with the read before and the read after (equal on a no-op), or a conflict
  *  carrying the read it found and wrote nothing over. */
 export type StallSettingsWrite =
@@ -3333,7 +3367,9 @@ export class CoordStore {
     return { ok: true, anchors };
   }
 
-  /** Write one claimant's anchor — the lane's crashed pass. One statement, an upsert keyed by the claimant. */
+  /** Write one claimant's anchor — the lane's crashed pass. One statement, an upsert keyed by the claimant, and NO
+   *  transaction of its own: the lane writes anchors only inside `commitDeadCoordinatorBreakerState`, with the breaker's
+   *  exact snapshot and its state turning clean (D-4857). */
   setDeadAnchor(claimantId: string, a: DeadAnchor): void {
     this.db.prepare(
       'INSERT INTO dead_claimants (claimantId, firstDeadAt, lastDeadAt) VALUES (?, ?, ?) ' +
@@ -3342,7 +3378,8 @@ export class CoordStore {
   }
 
   /** Delete one claimant's anchor — an alive, unmeasurable or non-crash answer, or a claimant that left the
-   *  population. Deleting a row that is not there is a no-op. */
+   *  population. Deleting a row that is not there is a no-op. Like `setDeadAnchor`, the lane calls it only inside
+   *  `commitDeadCoordinatorBreakerState` (D-4857): a delete never lands without the snapshot that still holds it. */
   deleteDeadAnchor(claimantId: string): void {
     this.db.prepare('DELETE FROM dead_claimants WHERE claimantId = ?').run(claimantId);
   }
@@ -3352,15 +3389,16 @@ export class CoordStore {
    *  `pushNewRuns` skips it), `causedBy` `operator`, `detail` `deadCoordinatorBreakerHeldDetail`'s encoding. NO dedupe
    *  on `(runId, detail)`: a held set can recur after a clear, and the LATEST row is the truth
    *  (`deadCoordinatorBreakerHeldLatest`). The carrier is ANY existing run, whatever its state — the detail carries the
-   *  whole set. Ids are percent-escaped, so every claimant id is carried. `run-gone` is an absent run; `unencodable` is
-   *  an instant that is not a positive safe integer or an id with no UTF-8 spelling (a lone surrogate): nothing is
-   *  written then, the in-memory hold stands for that process alone, and the lane composes no act on that pass (review
-   *  382, R3). Synchronous, like every write on this store. */
+   *  whole set. Ids are percent-escaped and the encoding is total (a lone surrogate included, D-4857), so every claimant
+   *  id is carried. `run-gone` is an absent run; `invalid` is a set no pass builds (an instant that is not a positive safe
+   *  integer, or two members with one id): nothing is written then. NO transaction of its own: the lane writes this row
+   *  only inside `commitDeadCoordinatorBreakerState`, so it is a RECORD of the typed state's snapshot, never the truth
+   *  itself. Synchronous, like every write on this store. */
   recordDeadCoordinatorBreakerHeld(
     runId: number, held: readonly DeadCoordinatorBreakerMember[], at: number,
-  ): { recorded: true; eventId: number } | { recorded: false; why: 'run-gone' | 'unencodable' } {
+  ): { recorded: true; eventId: number } | { recorded: false; why: 'run-gone' | 'invalid' } {
     const detail = deadCoordinatorBreakerHeldDetail(held);
-    if (detail === null) return { recorded: false, why: 'unencodable' };
+    if (detail === null) return { recorded: false, why: 'invalid' };
     const run = this.db.prepare('SELECT state FROM runs WHERE id = ?').get(runId) as { state: string } | undefined;
     if (run === undefined) return { recorded: false, why: 'run-gone' };
     const res = this.db.prepare(
@@ -3398,19 +3436,9 @@ export class CoordStore {
       const run = persistedInt(row.runText, 'run_events runId');
       if (!run.ok) return { ok: false, detail: run.detail, eventId, runId };
       runId = run.value;
-      const parts = splitDeadCoordinatorBreakerHeld(row.detail);
-      if (parts === null) return { ok: false, detail: 'the breaker held-set row is malformed', eventId, runId };
-      const held: DeadCoordinatorBreakerMember[] = [];
-      for (const p of parts) {
-        const ats: number[] = [];
-        for (const text of p.texts) {
-          const at = persistedInt(text, 'breaker held firstDeadAt');
-          if (!at.ok) return { ok: false, detail: at.detail, eventId, runId };
-          ats.push(at.value);
-        }
-        held.push({ id: p.id, firstDeadAt: ats[0]!, ...(ats.length > 1 ? { instants: ats } : {}), ...(p.fallback ? { fallback: true as const } : {}) });
-      }
-      return { ok: true, held, runId: run.value };
+      const parsed = parseBreakerHeld(row.detail);
+      if (!parsed.ok) return { ok: false, detail: parsed.detail, eventId, runId };
+      return { ok: true, held: parsed.members, runId: run.value };
     } catch (err) {
       return { ok: false, detail: err instanceof Error ? err.message : String(err), eventId, runId };
     }
@@ -3429,6 +3457,107 @@ export class CoordStore {
       if (row === undefined) return { ok: true, at: null };
       const at = persistedInt(row.atText, 'run_events at');
       return at.ok ? { ok: true, at: at.value } : { ok: false, detail: at.detail };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** THE BREAKER'S TYPED STATE (`dead_coordinator_breaker_state`, migration 19; the operator's ruling 4286, D-4857):
+   *  the one row, as the lane reads it at its first pass. FOUR answers, never folded:
+   *   - `clean`: the last commit landed, and `held` is its EXACT snapshot, written at `writtenAt` (the write-time clock)
+   *     in the one transaction that also wrote every anchor change that pass made. Only this answer is seeded as it
+   *     reads;
+   *   - `dirty`: a pass marked the state before changing anchors and its commit has not landed (or a process died
+   *     between the two). `snapshot` is what the row still carries — the last landed one, `none` before any landed, or
+   *     `unreadable` — and the lane keeps whatever of it it can read;
+   *   - `absent`: no row: a database no lane of this release has written yet (the deploy that creates the table);
+   *   - `unreadable`: a row this build cannot read — an integer it cannot prove, a state word it does not know, a clean
+   *     row with no readable snapshot — or a read that threw.
+   *  The last three FAIL SHUT the same way (the lane holds every claimant the pass does not release, flagged), and keep
+   *  their own words. Nothing is cleared by comparing timestamps. Synchronous, like every read on this store. */
+  deadCoordinatorBreakerState(): DeadCoordinatorBreakerStateRead {
+    try {
+      const row = this.db.prepare(
+        'SELECT CAST(generation AS TEXT) AS genText, CAST(state AS TEXT) AS state, CAST(held AS TEXT) AS held, ' +
+        'CAST(writtenAt AS TEXT) AS atText FROM dead_coordinator_breaker_state WHERE id = 1',
+      ).get() as { genText: string | null; state: string | null; held: string | null; atText: string | null } | undefined;
+      if (row === undefined) return { kind: 'absent' };
+      const gen = persistedInt(row.genText ?? '', 'breaker state generation');
+      if (!gen.ok) return { kind: 'unreadable', detail: gen.detail };
+      const at = persistedInt(row.atText ?? '', 'breaker state writtenAt');
+      if (!at.ok) return { kind: 'unreadable', detail: at.detail };
+      const parsed = row.held === null ? null : parseBreakerHeld(row.held);
+      const snapshot: DeadCoordinatorBreakerSnapshot = parsed === null ? { kind: 'none' }
+        : parsed.ok ? { kind: 'members', members: parsed.members } : { kind: 'unreadable', detail: parsed.detail };
+      if (row.state === 'dirty') return { kind: 'dirty', generation: gen.value, snapshot };
+      if (row.state !== 'clean') return { kind: 'unreadable', detail: 'the breaker state word is not one this build knows' };
+      if (snapshot.kind !== 'members') {
+        return { kind: 'unreadable', detail: snapshot.kind === 'none' ? 'a clean breaker state carries no snapshot' : snapshot.detail };
+      }
+      return { kind: 'clean', generation: gen.value, held: snapshot.members, writtenAt: at.value };
+    } catch (err) {
+      return { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** MARK THE BREAKER'S STATE DIRTY (D-4857), ALONE, before the lane changes any anchor: ONE statement, its own
+   *  transaction, so it is durable when it returns. It creates the row (generation 1, no snapshot) or moves the
+   *  generation on and keeps the snapshot it carries. Its answer is the generation the commit must find, or a failure —
+   *  and on a failure the lane changes no anchor and acts on nothing that pass. A malformed generation is overwritten
+   *  by a dirty one, which fails shut. */
+  markDeadCoordinatorBreakerDirty(at: number): { ok: true; generation: number } | { ok: false; detail: string } {
+    try {
+      const row = this.db.prepare(
+        "INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (1, 1, 'dirty', NULL, ?) " +
+        "ON CONFLICT(id) DO UPDATE SET generation = CAST(generation AS INTEGER) + 1, state = 'dirty', writtenAt = excluded.writtenAt " +
+        'RETURNING CAST(generation AS TEXT) AS genText',
+      ).get(at) as { genText: string } | undefined;
+      const gen = persistedInt(row?.genText ?? '', 'breaker state generation');
+      return gen.ok ? { ok: true, generation: gen.value } : { ok: false, detail: gen.detail };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** THE COMMIT (D-4857): in ONE synchronous `BEGIN IMMEDIATE` transaction, the breaker's EXACT held snapshot, every
+   *  anchor change of the pass (`upserts`, then the staged `deletes`) and the state turned `clean` with the generation
+   *  moved on — and, when `record` names carrier runs and one still exists, the `run_events` record of the set
+   *  (`recordDeadCoordinatorBreakerHeld`; the first carrier that exists takes it, and with none the table alone carries
+   *  the snapshot). It commits only over the dirty mark it was handed: the row must read `dirty` at `generation`, so a
+   *  mark it did not make (another writer's) refuses it. ANY failure — that refusal, a set no pass builds, a statement
+   *  that throws, a COMMIT that throws — rolls the whole of it back: no anchor moved, the snapshot and the run_events
+   *  record as they were, the state still dirty. Only `{ ok: true }` lets the lane update what it knows was committed,
+   *  or act. */
+  commitDeadCoordinatorBreakerState(c: {
+    readonly generation: number;
+    readonly upserts: readonly (readonly [string, DeadAnchor])[];
+    readonly deletes: readonly string[];
+    readonly held: readonly DeadCoordinatorBreakerMember[];
+    readonly at: number;
+    readonly record: readonly number[] | null;
+  }): { ok: true; generation: number; recordedOn: number | null } | { ok: false; detail: string } {
+    const detail = deadCoordinatorBreakerHeldDetail(c.held);
+    if (detail === null) return { ok: false, detail: 'the held set is not one a pass builds' };
+    try {
+      return tx(this.db, () => {
+        const row = this.db.prepare(
+          'SELECT CAST(generation AS TEXT) AS genText, CAST(state AS TEXT) AS state FROM dead_coordinator_breaker_state WHERE id = 1',
+        ).get() as { genText: string | null; state: string | null } | undefined;
+        if (row === undefined || row.state !== 'dirty' || row.genText !== String(c.generation)) {
+          throw new Error('the breaker state is not the dirty mark this pass made');
+        }
+        this.db.prepare(
+          "UPDATE dead_coordinator_breaker_state SET generation = ?, state = 'clean', held = ?, writtenAt = ? WHERE id = 1",
+        ).run(c.generation + 1, detail, c.at);
+        for (const [id, a] of c.upserts) this.setDeadAnchor(id, a);
+        let recordedOn: number | null = null;
+        for (const runId of c.record ?? []) {
+          const w = this.recordDeadCoordinatorBreakerHeld(runId, c.held, c.at);
+          if (w.recorded) { recordedOn = runId; break; }
+        }
+        for (const id of c.deletes) this.deleteDeadAnchor(id);
+        return { ok: true as const, generation: c.generation + 1, recordedOn };
+      });
     } catch (err) {
       return { ok: false, detail: err instanceof Error ? err.message : String(err) };
     }

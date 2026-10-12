@@ -13,7 +13,7 @@ import {
   deadCoordinatorBackoffMs, deadCoordinatorBreaker, deadCoordinatorNewEpisode, deadCoordinatorBreakerFeedRow, deadCoordinatorBreakerKey,
   deadCoordinatorCrash, deadCoordinatorDue, deadCoordinatorEntry, deadCoordinatorFeedRows, deadCoordinatorJournal, deadCoordinatorJournalSpawnedAt,
   deadCoordinatorNextEntry, deadCoordinatorReportSentence, deadCoordinatorSighted, deadCoordinatorSince, deadCoordinatorThrewFeedRow,
-  deadCoordinatorThrew, isDeadCoordinatorKebab,
+  deadCoordinatorThrew, isDeadCoordinatorKebab, deadCoordinatorBreakerHeldDetail, splitDeadCoordinatorBreakerHeld,
   type ClaimantReading, type DeadCoordinatorJournal, type DeadCoordinatorJournalRow, type DeadCoordinatorJournalTrust,
 } from '../src/deadCoordinator.js';
 import { LIFECYCLE_ACTS } from '../../shared/api.js';
@@ -653,6 +653,36 @@ describe('the words', () => {
       expect(isDeadCoordinatorKebab(w), w).toBe(true);
     }
     expect(isDeadCoordinatorKebab('claimant-alive')).toBe(false);
+  });
+});
+
+describe('the held set\'s encoding is TOTAL and canonical (operator ruling 4286, item 6; D-4857)', () => {
+  /** A seeded walk over UTF-16 code units: the safe alphabet, the separators, `%`, `u`, BMP characters, both halves of a
+   *  surrogate pair, each alone, and pairs. */
+  const units = [0x41, 0x7a, 0x30, 0x2d, 0x2e, 0x5f, 0x25, 0x75, 0x40, 0x2c, 0x3a, 0x2a, 0x2b, 0x20, 0xe9, 0xfeff, 0x4e2d,
+    0xd800, 0xdbff, 0xdc00, 0xdfff, 0xd83d, 0xde00];
+  let seed = 7;
+  const rand = (n: number): number => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  const ids = (): string[] => {
+    const out = new Set<string>(['', '\ud800', '\udc00', '\ud800\udc00', '\udc00\ud800', 'x\ud800', '\ud800\ud800\udc00', '%uD800', 'u']);
+    while (out.size < 400) out.add(String.fromCharCode(...Array.from({ length: 1 + rand(6) }, () => units[rand(units.length)]!)));
+    return [...out];
+  };
+  it('EVERY string, lone surrogates included, has a spelling, and reads back as the string it was written from', () => {
+    const all = ids();
+    for (const id of all) {
+      const detail = deadCoordinatorBreakerHeldDetail([{ id, firstDeadAt: 10 }]);
+      expect(detail, JSON.stringify(id)).not.toBeNull();
+      expect(splitDeadCoordinatorBreakerHeld(detail!), JSON.stringify(id)).toEqual([{ id, texts: ['10'], fallback: false }]);
+    }
+    const set = all.map((id, i) => ({ id, firstDeadAt: i + 1 }));
+    const back = splitDeadCoordinatorBreakerHeld(deadCoordinatorBreakerHeldDetail(set)!);
+    expect(back?.map((p) => p.id).sort()).toEqual([...all].sort());
+  });
+  it('exactly ONE spelling per id: a spelling the writer would not produce reads as malformed, never as another id', () => {
+    for (const bad of ['%uD83D%uDE00', '%ud800', '%u0041', '%uD80', '%ED%A0%80', '%41', '%u', '%uZZZZ']) {
+      expect(splitDeadCoordinatorBreakerHeld(`dead-coordinator-breaker-held:${bad}@10`), bad).toBeNull();
+    }
   });
 });
 
