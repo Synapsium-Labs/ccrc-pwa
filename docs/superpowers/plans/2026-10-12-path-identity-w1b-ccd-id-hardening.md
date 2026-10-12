@@ -14,7 +14,10 @@
 - **stop and ws-add close their positional redirects.**
   - stop refuses a dash-leading `--surface` value, a dash-leading residue token, and a composed id that `_reg_id_ok` refuses.
   - ws-add refuses a second `--actor` and a dash-leading `--surface` value.
-  - A call that spells no id as a flag answers as today, with the same bytes. A call whose id spells a flag may now answer `bad session id` where it answered a usage line or a "needs a value" line. `--actor` and `--reason` prose, and a hold reason, may still begin with `-`.
+  - A call that spells no id as a flag answers as today, with the same bytes, except where a VALUE itself spells a flag and is now taken whole: a token or run id at the token verbs answers `bad token` or `bad run id` where it answered the usage line (`flag-spelled-token-answers-a-malformed-value`), a ws-rename `--branch` value answers `bad-branch` where the surface word became the new branch name (`rename-branch-value-taken-whole`), and a ws-hold reason is held verbatim where the surface word was held or the usage line answered (`hold-reason-spelling-a-flag-is-held-verbatim`). A call whose id spells a flag may now answer `bad session id` where it answered a usage line or a "needs a value" line. `--actor` and `--reason` prose, and a hold reason, may still begin with `-`.
+  - Every identity key now takes its value whole (spec §2.4), so two more inputs change bytes:
+    - A token or run id that spells a flag answers `bad token` or `bad run id` where it answered the usage line, and ws-reclaim journals that refusal against the real id. No server builder composes such a token or run id (`flag-spelled-token-answers-a-malformed-value`, Task 2).
+    - A hold reason that is itself a flag spelling is held verbatim, where the `--surface` arm ate it or the arity rule refused it (`hold-reason-spelling-a-flag-is-held-verbatim`, Task 4).
 - **ccd mints no dash-leading name.**
   - `_ws_project_valid` and `_ws_tmproot_id_ok` refuse a leading `-`. This is gated on Task 0's re-count on both boxes.
   - `ccd enable`'s two-argument form validates its project before it journals anything.
@@ -92,7 +95,7 @@ Each line binds every task.
 
 - **Fixtures and fixture HOMEs only.** No test or scratch command runs ccd against the live `$HOME`. Every ccd call goes through `makeCcdHarness` or `makePrHarness`, or through Task 10's `bash -p` runner with `ghContainedEnv`. Never run a destructive verb outside a fixture HOME. Never touch tmux, `~/.cc-sessions` (Task 0's `ls` counts excepted), `~/.cc-limits` or `claude-session@*.service`. Quote every path, and never pass an unquoted `~` to a ccd verb.
 - **The spawn census.** Every new file whose name matches `/^ccd.*\.ts$/` falls under `ccd-workspaces.test.ts`'s containment scan, and that includes Task 10's `ccdargv-dash-id-parity.test.ts`. Every direct `execFileSync('bash'`, `spawnSync('bash'` or `spawn('bash'` in such a file must have `ghContainedEnv(`, `systemd: true` and `tmux: true` in the scan's window around the call.
-- **Rings.** No `server/src` or `shared` file changes. Tests import read-only: from `shared/api.js` only in Task 5's parity case (`isTmpRootId`), and from `server/src/ccdargv.js` only in Task 10 (`CCD_ARGV`, `ActorFlags`). ccd keeps its own grammar: no adapter narrows a distinction it received, and no overloaded answer at a seam. A refusal and an unmeasured answer stay two answers.
+- **Rings.** No `server/src` or `shared` file changes. Tests import read-only: from `shared/api.js` only in Task 5's parity case (`isTmpRootId`), and from `server/src/ccdargv.js` only in Task 6 (`CCD_ARGV.wsAddWorker`, `ActorFlags`; departure slug `ws-add-dash-test-imports-ccdargv`) and Task 10 (`CCD_ARGV`, `ActorFlags`). ccd keeps its own grammar: no adapter narrows a distinction it received, and no overloaded answer at a seam. A refusal and an unmeasured answer stay two answers.
 - **Wire.** No frame, field or capability changes, and no `FLEET_PROTO` bump. ccd's JSON documents keep their shape and their word sets. `collect-readers.test.ts` and `wsaudit.test.ts` stay green unedited.
 - **Single definition.**
   - One spelling of the dash rule: `_reg_id_ok`.
@@ -244,11 +247,11 @@ R1 to R14 are the coordinator's W1b rulings, renumbered. R15 onward were **propo
    - Pinned by Tasks 2, 3, 4 and 6, and by Task 10's real-binary matrix.
 2. **The fix narrows what it must not.**
    - Input: `--actor`, `--reason` or a hold reason beginning with `-`; flags in any position; a lone trailing key; a dot-leading id at the five `--session` verbs.
-   - Expected: accepted, or refused, exactly as today, with today's bytes.
+   - Expected: accepted, or refused, exactly as today, with today's bytes. The one exception is a hold reason that is itself a flag spelling: it is now held verbatim (`hold-reason-spelling-a-flag-is-held-verbatim`), where the server's argv held the surface word. The two stated exceptions are the Goal's: a token or run id spelled as a flag, and a hold reason that is itself a flag spelling.
    - Pinned by Task 1's `.hidden` row, Task 4's prose rows, and every existing suite run unedited.
 3. **A line moves under the frozen corpus.**
    - Input: any edit in a function that starts above `cmd_start()`.
-   - Expected: each such function still starts on its `origin/main` line, and the five census passes stay green with no number edited.
+   - Expected: each such function above R15's insertion point (`# THE ID A VERB MAY BIND`) still starts on its `origin/main` line. A function between that point and `cmd_start()` moves only by the lines R15's helpers add (Task 1 Step 9, Task 13 (3b)). Every line-neutral task leaves every start where its pre-task `HEAD` had it. The five census passes stay green with no number edited.
    - Pinned by session-hook's passes in Tasks 4, 5, 6 and 13, and by Task 13's start-line table.
 4. **The collector's pre-lock pass changes an answer, or still creates a lock for junk.**
    - Input: a junk witness, a junk record, two records, a well-formed record naming another id, a record whose `~/.cc-tmp` cannot be resolved, a dash-free id, a junk witness beside a live `.uuid`, `.hold`, `.reaping` or dot-family row, a junk witness beside an unlistable registry, a junk witness with the pause standing, a sound witness, a sound record.
@@ -269,7 +272,7 @@ Every file this wave touches. Each task's own **Files** block stays the authorit
 |---|---|
 | `ccd/ccd` | 1, 2, 3, 4, 5, 6, 7, 8, 9, 11 (each restamps) |
 | `ccd/ccrc-doctor-checks` | 5 (one comment, line-neutral) |
-| `server/test/dashIdFixture.ts` (new) | 1 (created), 2, 3, 4, 6, 10 (consume) |
+| `server/test/dashIdFixture.ts` (new) | 1 (created), 2, 3, 4, 6, 8, 10 (consume) |
 | `server/test/ccd-reg-id-ok.test.ts` (new) | 1 |
 | `server/test/ccd-token-verbs-dash-id.test.ts` (new) | 2 |
 | `server/test/ccd-stop-dash-id.test.ts` (new) | 3 |
@@ -284,6 +287,7 @@ Every file this wave touches. Each task's own **Files** block stays the authorit
 | `server/test/ccd-collect-prelock.test.ts` (new) | 9 |
 | `server/test/ccdargv-dash-id-parity.test.ts` (new) | 10 |
 | `server/test/ccd-collect-header-prose.test.ts` (new) | 11 |
+| `server/test/path-identity-w1b-prose.test.ts` (new) | 12 |
 | `docs/superpowers/specs/2026-10-12-path-identity-design.md` | 12 (§2.9 and §7 status cells) |
 | `docs/superpowers/programs/child-reclamation-contract.md` | 12 ("§17 as built" only) |
 | this plan, under `docs/superpowers/plans/` | rides in the PR as the brief directs; its body is not edited |
@@ -547,6 +551,7 @@ echo "uuid-rows=$(ls -A -- "$REG/" 2>/dev/null | grep -c -- '\.uuid$')"
 echo "uuid-dash=$(ls -A -- "$REG/" 2>/dev/null | grep -c -- '^-.*\.uuid$')"
 echo "uuid-dot=$(ls -A -- "$REG/" 2>/dev/null | grep -c -- '^\..*\.uuid$')"
 echo "uuid-double-dash=$(ls -A -- "$REG/" 2>/dev/null | grep -- '\.uuid$' | grep -c -- '--')"
+echo "uuid-outside-charset=$(ls -Ab -- "$REG/" 2>/dev/null | sed -n 's/\.uuid$//p' | LC_ALL=C grep -vcE '^[A-Za-z0-9._-]+$')"
 echo "reap-locks=$(ls -A -- "$REG/" 2>/dev/null | grep -c -- '^\.reap-.*\.lock$')"
 echo "reap-dash=$(ls -A -- "$REG/" 2>/dev/null | grep -c -- '^\.reap--') reap-dot=$(ls -A -- "$REG/" 2>/dev/null | grep -c -- '^\.reap-\.')"
 echo "reap-nodash=$(ls -A -- "$REG/" 2>/dev/null | sed -n 's/^\.reap-\(.*\)\.lock$/\1/p' | grep -vc -- '-')"
@@ -557,7 +562,7 @@ echo "max-id-len=$(ls -A -- "$REG/" 2>/dev/null | sed -n 's/\.uuid$//p' | awk 'l
 
 **STOP rule (R25).** Any non-zero value in the list below STOPs the wave. Do not edit `_ws_project_valid` or `_ws_tmproot_id_ok`. Report the counts, never names, to the coordinator.
 - every `dash=` count (registry, pools, tmproots, tmpquarantine, projects, worktrees);
-- `uuid-dash` and `uuid-dot`;
+- `uuid-dash`, `uuid-dot` and `uuid-outside-charset` (a row whose id fails the registry charset: Task 3's composed-id check makes `ccd stop` refuse it, so it would be stranded);
 - `reap-dash`, `reap-dot` and `reap-nodash`;
 - `tmproots-nodash` and `tmpquarantine-nodash`.
 
@@ -796,7 +801,10 @@ describe('_reg_id_ok: the id a verb may bind is never dash-leading (path-identit
   });
 
   it('refuses what the registry charset refuses', () => {
-    const OUTSIDE = ['', 'a/b', 'a b', 'a=b'];
+    // A control byte is outside the charset too, a trailing newline included: bash's `=~` anchors `$` at the end of
+    // the word, never before a final newline. The bytes are built with String.fromCharCode, so no escape is decoded.
+    const ctl = (code: number): string => String.fromCharCode(code);
+    const OUTSIDE = ['', 'a/b', 'a b', 'a=b', `demo-quiet-basin${ctl(10)}`, `demo${ctl(9)}quiet`, `demo${ctl(27)}[0m`];
     expect(rcOf(OUTSIDE)).toEqual(each(OUTSIDE, 1));
     // No argument at all is refused too. Under ccd's own `set -u` the helper neither dies nor prints: it is a
     // predicate, and every caller writes its own refusal.
@@ -921,7 +929,7 @@ Never edit line 2 by hand. If the restamp fails, **STOP** and report `restamp-fa
 
 Expected: PASS, 7 tests, or 6 with 1 skipped where the box has no wide-letter locale. Record which in the ledger. A skip there means the T1.2 locale red below cannot be shown on this box, and the text pin carries that rule alone.
 
-- [ ] **Step 8: Mutation table.** Apply each mutation alone, run the file, see the red, and restore. Each row is ONE Bash call, because shell state does not persist between calls. Paste the three fixed lines below, then the row's `MUT=` line, then the run line. The restore is the inverse swap. `mark.mjs --check` exiting 0 afterwards proves the file is byte-identical to the stamped one. The red texts were drafted, not measured: record what you measure.
+- [ ] **Step 8: Mutation table.** Apply each mutation alone, run the file, see the red, and restore. Each row is ONE Bash call, because shell state does not persist between calls. Paste the two fixed lines below, then the row's `MUT=` line, then the run line. The restore is the inverse swap. `mark.mjs --check` exiting 0 afterwards proves the file is byte-identical to the stamped one. The red texts were drafted, not measured: record what you measure.
 
 Fixed lines (identical in every row):
 
@@ -1044,7 +1052,7 @@ Every prediction below was made at planning, on the read-only export, and is unm
 - **Create `server/test/ccd-token-verbs-dash-id.test.ts`.**
 - **Run, never edit:**
   - the scans: `ccd-refusal-scan`, `collect-readers`, `child-reclaim`, `archived-expiry-policy`, `ccd-wsaudit-nonpoison`, `wsaudit`;
-  - the parity and reclaim suites: `ccdargv-dec-parity`, `ccd-child-reclaim-verb`, `ccd-child-reclaim-prelock-journal`, and the six other `ccd-child-reclaim-*` files that call `cmd_ws_reclaim`;
+  - the parity and reclaim suites: `ccdargv-dec-parity`, `ccd-child-reclaim-verb`, `ccd-child-reclaim-prelock-journal`, and every other file that calls `cmd_ws_reclaim`, `cmd_ws_expire` or `cmd_ws_collect`, directly or through `childReclaimVerb`, `expireVerb` or `collectVerb`. Step 7 lists them, as measured at the export by `grep -lE 'cmd_ws_(reclaim|expire|collect) |childReclaimVerb\(|expireVerb\(|collectVerb\(' server/test/*.test.ts`;
   - the expire suites: `ccd-ws-expire-verb`, `ccd-ws-expire-ladder`, `ccd-ws-expire-return-race`, `ccd-lifecycle-purge`;
   - every `ccd-ws-collect-*` and `ccd-collect-*` file;
   - the guards: `session-hook`'s five passes, `ccd-workspaces`' spawn census case, `ownership`, `mark-check`, `typecheck-tests`.
@@ -1121,10 +1129,11 @@ grep -n 'export const CHILD_RUN\|export function childReclaimVerb' server/test/c
 // `--session` value again as a flag:
 //   - an id of `--actor`, `--surface` or `--reason` lost its value to the dec arm, and the sweeps' surface word,
 //     `agent`, bound as the id;
-//   - an id of `--expect`, `--child-of`, `--defer-expired`, `--session` or `--branch` stayed literal, passed the old
-//     id regex, and opened `$REG/.reap---<x>.lock` before the token refused. A reap lock is never unlinked
+//   - an id of `--expect`, `--child-of`, `--session` or `--branch` (and, at ws-expire and ws-collect, `--defer-expired`)
+//     stayed literal, passed the old id regex, and could open `$REG/.reap---<x>.lock` before the token refused (at
+//     ws-reclaim, an id of `--defer-expired` was eaten by its own arm and answered the usage line). A reap lock is never unlinked
 //     (path-identity spec §2.5), so each such call left one for good.
-// A call that spells no id as a flag answers as before: a lone key, a key given twice and a pair out of order still
+// A call that spells no id, token or run id as a flag answers as before: a lone key, a key given twice and a pair out of order still
 // reach the exact-arity rule and answer the usage line, and the dec ladder still runs first.
 //
 // FIXTURE HOMEs ONLY. Every call runs the SOURCED function in `makePrHarness`'s HOME. `CHILD_STUBS` records the unit
@@ -1402,7 +1411,7 @@ describe('ws-collect takes --session whole: a flag-spelled id dies "bad session 
 - [ ] **Step 2: Run it and see it fail**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/ccd-token-verbs-dash-id.test.ts      # foreground, timeout >= 600000 ms
+(cd server && ./node_modules/.bin/vitest run test/ccd-token-verbs-dash-id.test.ts)    # foreground, timeout >= 600000 ms; the subshell keeps the cwd at the workspace root
 ```
 
 **Expected: FAIL in 9 cases.** In each of the three describes, these three cases are red:
@@ -1563,14 +1572,14 @@ awk '/^[A-Za-z_][A-Za-z0-9_]*\(\) \{/{f=$1} /^  \[\[ \$id =~ \^\[A-Za-z0-9\._-\]
 - [ ] **Step 5: Run the new file green**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/ccd-token-verbs-dash-id.test.ts      # foreground, timeout >= 600000 ms
+(cd server && ./node_modules/.bin/vitest run test/ccd-token-verbs-dash-id.test.ts)    # foreground, timeout >= 600000 ms; the subshell keeps the cwd at the workspace root
 ```
 
 Expected: PASS. All 21 cases pass on Linux, which is seven per verb. Off Linux, collect's control is skipped.
 
 - [ ] **Step 6: Mutation table**
-  - Keep the restamped file outside the tree first: `S=$(mktemp -d) && cp ccd/ccd "$S/ccd.task2"`.
-  - Apply each mutation alone to `ccd/ccd`, run its command from `server/`, and see the red. Then restore with `cp "$S/ccd.task2" ccd/ccd`.
+  - Keep the restamped file outside the tree first, at a FIXED path, because shell variables do not survive between Bash calls: `mkdir -p "${TMPDIR:-/tmp}/ccrc-w1b-task2" && cp ccd/ccd "${TMPDIR:-/tmp}/ccrc-w1b-task2/ccd.task2"`.
+  - Apply each mutation alone to `ccd/ccd` from the workspace root, run its command as `(cd server && <command>)` so the cwd stays at the root, and see the red. Then restore with `cp "${TMPDIR:-/tmp}/ccrc-w1b-task2/ccd.task2" ccd/ccd`, and check that the restore landed: `cmp ccd/ccd "${TMPDIR:-/tmp}/ccrc-w1b-task2/ccd.task2"` prints nothing.
   - Never use `git checkout -- ccd/ccd`: it would drop this task's uncommitted edits.
   - Every red text below was drafted, not measured. Measure each one and record it in the ledger.
 
@@ -1588,11 +1597,12 @@ Expected: PASS. All 21 cases pass on Linux, which is seven per verb. Off Linux, 
 | T2.10 | `cmd_ws_reclaim`'s arm pattern `--expect\|--child-of\|--session)` becomes `--child-of\|--session)` | `… -t 'ws-reclaim takes'` | "a token or run id…": the `--expect --surface` row answers usage instead of `ccd: bad token` |
 | T2.11 | The same pattern becomes `--expect\|--session)` | `… -t 'ws-reclaim takes'` | "a token or run id…": the `--child-of --surface` row answers usage instead of `ccd: bad run id` |
 | T2.12 | `cmd_ws_expire`'s arm pattern `--expect\|--session)` becomes `--session)` | `… -t 'ws-expire takes'` | "a token or run id…": usage instead of `ccd: bad token` |
+| T2.13 | `cmd_ws_collect`'s arm pattern loses its `--expect` alternative, leaving `--session)` | `… -t 'ws-collect takes'` | "a token or run id…": usage instead of `ccd: bad token` (the `--surface` arm takes `--session` as its value) |
 
 After the last row:
 
 ```bash
-cp "$S/ccd.task2" ccd/ccd && cmp ccd/ccd "$S/ccd.task2" && rm -r "$S"
+cp "${TMPDIR:-/tmp}/ccrc-w1b-task2/ccd.task2" ccd/ccd && cmp ccd/ccd "${TMPDIR:-/tmp}/ccrc-w1b-task2/ccd.task2" && rm -r "${TMPDIR:-/tmp}/ccrc-w1b-task2"
 node shared/mark.mjs --check ccd/ccd; echo "stamp rc=$?"                                                          # rc=0
 (cd server && ./node_modules/.bin/vitest run test/ccd-token-verbs-dash-id.test.ts)                                # PASS
 ```
@@ -1601,7 +1611,7 @@ A mutation row that stays green is reported by slug, for example `t2-arm-pattern
 
 - [ ] **Step 7: The other named suites and guards, unedited and green**
 
-Run each command from `server/`, in the foreground, with a timeout of at least 600000 ms. If a batch outruns that ceiling, run its files one per call. Re-run a CLAUDE.md load flake alone before calling it a break.
+Run each command as `(cd server && <command>)` from the workspace root, so Step 8's root-relative paths still resolve. Run each in the foreground, with a timeout of at least 600000 ms. If a batch outruns that ceiling, run its files one per call. Re-run a CLAUDE.md load flake alone before calling it a break.
 
 ```bash
 ./node_modules/.bin/vitest run test/ccd-refusal-scan.test.ts test/collect-readers.test.ts test/child-reclaim.test.ts test/archived-expiry-policy.test.ts test/ccd-wsaudit-nonpoison.test.ts test/wsaudit.test.ts
@@ -1611,6 +1621,10 @@ Run each command from `server/`, in the foreground, with a timeout of at least 6
 ./node_modules/.bin/vitest run test/ccd-child-reclaim-verb.test.ts
 ./node_modules/.bin/vitest run test/ccd-child-reclaim-crumb.test.ts test/ccd-child-reclaim-hardening.test.ts test/ccd-child-reclaim-tail-contained.test.ts
 ./node_modules/.bin/vitest run test/ccd-child-reclaim-leaf-moved.test.ts test/ccd-child-reclaim-leaf-moved-resume.test.ts test/ccd-child-reclaim-recovery.test.ts
+./node_modules/.bin/vitest run test/ccd-child-reclaim-audit.test.ts test/ccd-child-reclaim-done-kept.test.ts test/ccd-child-reclaim-gone-branch.test.ts test/ccd-child-reclaim-ladder.test.ts test/ccd-child-reclaim-leaf-rows.test.ts test/ccd-child-reclaim-row-generation.test.ts test/ccd-child-reclaim-silent-omission.test.ts
+./node_modules/.bin/vitest run test/ccd-child-reclaim-tmproot-wait.test.ts test/ccd-child-reclaim-unmeasured-journal.test.ts test/ccd-child-reclaim-verb-reflogs.test.ts test/ccd-child-reclaim-verb-tail.test.ts test/ccd-child-reclaim-why-cap.test.ts test/ccd-child-reclaim-leaf-moved-expire.test.ts
+./node_modules/.bin/vitest run test/ccd-reclaim-tail-refuted.test.ts test/ccd-expire-tail-refuted.test.ts test/ccd-review-335-pins.test.ts test/ccd-leaf-remove.test.ts test/ccd-child-tmproot-witness.test.ts test/ccd-child-tmproot-witness-drop.test.ts
+./node_modules/.bin/vitest run test/ccd-ws-expire-audit.test.ts test/ccd-ws-expire-consent-branch.test.ts
 ./node_modules/.bin/vitest run test/ccd-ws-expire-verb.test.ts test/ccd-ws-expire-ladder.test.ts test/ccd-ws-expire-return-race.test.ts test/ccd-lifecycle-purge.test.ts
 ./node_modules/.bin/vitest run test/ccd-ws-collect-verb.test.ts test/ccd-ws-collect-reach.test.ts test/ccd-ws-collect-move.test.ts
 ./node_modules/.bin/vitest run test/ccd-ws-collect-order.test.ts test/ccd-ws-collect-reprove.test.ts test/ccd-ws-collect-resume.test.ts
@@ -1639,10 +1653,12 @@ fix(ccd): ws-reclaim, ws-expire and ws-collect take their id whole and refuse a 
 The server appends its decision flags after the id, and the three token
 verbs' loops scanned the --session value again as a flag. An id of
 --actor, --surface or --reason lost to the dec arm, and the sweeps'
-surface word bound as the id. An id of --expect, --child-of,
---defer-expired, --session or --branch stayed literal, passed the id
-regex, and created a reap lock, which is never unlinked, before the token
-refused.
+surface word bound as the id. An id of --expect, --child-of, --session
+or --branch (and, at ws-expire and ws-collect, --defer-expired) stayed
+literal, passed the id regex, and could create a reap lock, which is
+never unlinked, before the token refused. At ws-reclaim an id of
+--defer-expired was eaten by that verb's own arm and answered the usage
+line.
 
 - Each loop takes --session and --expect (and ws-reclaim's --child-of)
   with its value as one pair into the residue. A key with no value goes
@@ -1659,6 +1675,12 @@ No die literal, refusal word or journal act is added (path-identity spec
 sections 2.2 and 2.4).
 EOF
 ```
+
+Name these, by slug, in the wave-done: the byte change `flag-spelled-token-answers-a-malformed-value` (see the Goal), and the controls `token-verb-controls-use-a-wrong-token` and `collect-control-runs-on-linux-only`.
+
+Name these, by slug, in the wave-done:
+- the substantive departure `flag-spelled-token-answers-a-malformed-value`: a token or run id spelled as a flag is taken whole and refused as malformed (`bad token`, `bad run id`) where it answered the usage line, and at ws-reclaim that refusal is journaled against the real id (`token-malformed`, `run-id-malformed`) where the usage die journaled nothing. The server cannot compose such an argv;
+- the extra pins `token-verb-controls-use-a-wrong-token` and `collect-control-runs-on-linux-only`.
 
 ---
 
@@ -1681,7 +1703,7 @@ EOF
 **Entry (measured in Step 0):** Tasks 1 and 2 are committed on this branch: `_reg_id_ok` in `ccd/ccd`, `server/test/dashIdFixture.ts`, and Task 2's commit.
 
 **Files:**
-- Modify `ccd/ccd`, the function `cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <project>`. It is at export `:25887` and about `:25890` after Task 1's three lines. That number is a hint only: locate it with `grep -n '^cmd_stop() {' ccd/ccd`. Three edits, each located by quoted content in Step 3:
+- Modify `ccd/ccd`, the function `cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <project>`. It is at export `:25887` and about `:25891` after Task 1's four lines. That number is a hint only: locate it with `grep -n '^cmd_stop() {' ccd/ccd`. Three edits, each located by quoted content in Step 3:
   - (A) The header. A paragraph on order independence goes after the paragraph ending `does not exist while the real one keeps running.` The phrase `FLAGS ARE STRIPPED BEFORE THE ARITY RULE` stays, because ws-release and ws-archive tell readers to grep it.
   - (B) The loop:
     - the arity comment above the `--surface)` arm (3 lines become 5);
@@ -1730,7 +1752,7 @@ Run from the workspace root:
 git log --oneline -1 | grep -c 'ws-reclaim, ws-expire and ws-collect take their id whole'   # (a0) 1: Task 2 is the last commit
 grep -n '^_reg_id_ok() ' ccd/ccd                                                            # (a) one line: Task 1's helper
 grep -nE '^export (const|function) (DASH_IDS|DECOY_IDS|plantRow|regListing)\b' server/test/dashIdFixture.ts   # (b) four lines
-grep -n '^cmd_stop() {' ccd/ccd                                                             # (c) one line: record it (hint about 25890)
+grep -n '^cmd_stop() {' ccd/ccd                                                             # (c) one line: record it (hint about 25891)
 grep -n '^  stop) *shift; cmd_stop "\$@" ;;' ccd/ccd                                         # (d) one line: the dispatcher passes argv through unparsed
 sed -n '/^cmd_stop() {/,/^}/p' ccd/ccd | grep -c 'FLAGS ARE STRIPPED BEFORE THE ARITY RULE'  # (e) 1
 sed -n '/^cmd_stop() {/,/^}/p' ccd/ccd | grep -cF -e '--surface)   [[ $# -ge 2 ]] || die "usage: ccd stop [--surface <word>] <id> | ccd stop [--surface <word>] <wrapper> <project>"'   # (f) 1
@@ -2115,14 +2137,14 @@ Expected: `Tests  15 passed (15)`, and both stamp files PASS. Run each line in t
 Before the first mutation, keep the stamped file aside. From the workspace root:
 
 ```bash
-S=$(mktemp -d) && cp ccd/ccd "$S/ccd.task3" && echo "$S"
+mkdir -p "${TMPDIR:-/tmp}/ccrc-w1b-task3" && cp ccd/ccd "${TMPDIR:-/tmp}/ccrc-w1b-task3/ccd.task3"
 ```
 
 For each row:
 1. Make the edit in `ccd/ccd`.
 2. Run `T`, which is `(cd server && ./node_modules/.bin/vitest run test/ccd-stop-dash-id.test.ts)`.
 3. See the red.
-4. Restore with `cp "$S/ccd.task3" ccd/ccd` before the next row.
+4. Restore with `cp "${TMPDIR:-/tmp}/ccrc-w1b-task3/ccd.task3" ccd/ccd` before the next row. Shell variables do not survive between Bash calls, so the path is spelled out each time and never held in a variable.
 
 The suite sources ccd, so a mutant needs no restamp. Every red text is measured by the worker; where the measured text differs, it replaces the draft's.
 
@@ -2140,9 +2162,9 @@ The suite sources ccd, so a mutant needs no restamp. Every red text is measured 
 After the last row:
 
 ```bash
-cp "$S/ccd.task3" ccd/ccd && node shared/mark.mjs --check ccd/ccd; echo "rc=$?"   # rc=0: the stamped file is back
+cp "${TMPDIR:-/tmp}/ccrc-w1b-task3/ccd.task3" ccd/ccd && node shared/mark.mjs --check ccd/ccd; echo "rc=$?"   # rc=0: the stamped file is back
 git diff --stat -- ccd/ccd                                                          # the same stat as before the first mutation
-rm -r "$S"
+rm -r "${TMPDIR:-/tmp}/ccrc-w1b-task3"
 ```
 
 - [ ] **Step 7: The gates and the boundary**
@@ -2214,6 +2236,7 @@ MSG
 Name these, by slug, in the wave-done:
 - the substantive departures this task carries: `surface-dash-rule-at-stop-and-ws-add-only` (stop's half) and `stop-checks-its-residue-and-composed-id`;
 - the plan-text correction `stop-residue-red-is-the-pair-form`;
+- the spec correction `stop-pair-project-surface-redirected`: before W1a's order, `stopPair` with a project of `--surface` composed `stop <wrapper> --surface --surface pwa`, which stopped `<wrapper>-pwa`. That is a second stop redirect that spec §2.2's stop row does not list. Case 5's last row pins it refused, and Task 12's §2.9 should record it beside the `stop --surface pwa --surface` correction;
 - the extra pins `stop-extra-pins`.
 
 ---
@@ -2239,6 +2262,7 @@ Name these, by slug, in the wave-done:
 - `hold-and-rename-flag-ids-answer-bad-session-id`
 - `hold-reason-spelling-a-flag-is-held-verbatim`
 - `strip-reason-mutant-measured`
+- `rename-branch-value-taken-whole`
 
 **Files:**
 - Modify `ccd/ccd`. Every edit is located by content and is line-neutral:
@@ -2537,6 +2561,22 @@ describe('ws-rename binds its identity pair whole (path-identity spec §2.2, §2
       expect.soft(docOf(r.stdout), id).toEqual({ refused: 'bad-args', detail: `bad session id: ${id}`, paths: [] });
     }
   });
+
+  // EXTRA PIN, for the arm's `--branch` half: both cases above stay green when the arm is narrowed to `--session)`.
+  // The naming sweep's branch name is derived from model output. A branch value that spells a flag used to lose to a
+  // dec arm, and the surface word became the NEW name (`--branch --actor --surface agent …` asked for `agent`). Taken
+  // whole, the value reaches `_ws_branch_valid`, stubbed here to refuse every name, so the detail shows which was asked.
+  it('a --branch value spelled as a flag is taken whole, never replaced by the surface word', () => {
+    plantWorkspace(REAL, null);
+    for (const value of REDIRECT_IDS) {
+      const r = run(`${RENAME_STUBS} _ws_branch_valid() { return 1; }; `
+        + `cmd_ws_rename --session ${REAL} --branch '${value}' ${decTail('agent', true)}`);
+      expect.soft(r.code, value).toBe(0);
+      expect.soft(docOf(r.stdout), value)
+        .toEqual({ refused: 'bad-branch', detail: `invalid branch name: ${value}`, paths: [] });
+    }
+    expect(h.reg(REAL, 'branch'), 'the branch field is untouched').toBe('ws/demo-quiet-basin');
+  });
 });
 
 describe('the identity arms narrow nothing else (path-identity spec §2.4)', () => {
@@ -2585,10 +2625,10 @@ describe('the identity arms narrow nothing else (path-identity spec §2.4)', () 
 - [ ] **Step 2: Run the tests and see them fail**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/ccd-session-verbs-dash-id.test.ts
+(cd server && ./node_modules/.bin/vitest run test/ccd-session-verbs-dash-id.test.ts)
 ```
 
-Expected: 11 tests, **9 failed and 2 passed**. The two that pass are the narrowing describe's `prose may lead with a dash` and `order and duplicates still refuse with today's words`. Both are green today and are pinned against over-tightening. The red cases and why:
+Expected: 12 tests, **10 failed and 2 passed**. The two that pass are the narrowing describe's `prose may lead with a dash` and `order and duplicates still refuse with today's words`. Both are green today and are pinned against over-tightening. The red cases and why:
 
 | Case | Today's answer |
 |---|---|
@@ -2601,6 +2641,7 @@ Expected: 11 tests, **9 failed and 2 passed**. The two that pass are the narrowi
 | ws-hold, reason `--surface` | `held demo-quiet-basin: agent` |
 | ws-rename, `--branch` | a later refusal, not `bad session id: --branch` |
 | ws-rename, `--actor`, `--surface` and `--reason` | the usage detail |
+| ws-rename, a `--branch` value spelled as a flag | `invalid branch name: agent`: the surface word was asked for as the new name |
 
 A case that fails for any other reason (an import, a missing fixture export, a harness error) is a defect in Step 1 or in an earlier task. Fix it, or STOP and report it by slug. Do not go on.
 
@@ -2935,27 +2976,27 @@ grep -cE '\[\[ \$id =~ \^\[A-Za-z0-9\._-\]\+\$ \]\]' ccd/ccd                    
 grep -cE '\[\[ ! \$id =~' ccd/ccd                                                    # 0 (was 1)
 grep -cE '^      --session\)   if \(\( \$# >= 2 \)\); then lc_args\+=\("\$1" "\$2"\)' ccd/ccd   # 3: release, archive, restore
 grep -cE '^      --session\|(--reason|--branch)\) if \(\( \$# >= 2 \)\); then lc_args\+=\("\$1" "\$2"\)' ccd/ccd   # 2: hold, rename
-grep -c '_reg_id_ok "\$id"' ccd/ccd                                                  # 5 plus Task 2's three call lines: 8
+grep -c '_reg_id_ok "\$id"' ccd/ccd                                                  # 5, plus Task 2's three entry lines and Task 3's stop line: 9
 # ccd-actor-flags.test.ts: only comment lines changed
 git diff -U0 -- server/test/ccd-actor-flags.test.ts | grep -E '^[-+][^-+]' | grep -vE '^[-+] *//' || echo "only comments changed"
 ```
 
 Expected: every `echo` prints, and the counts are as commented.
-- The `_reg_id_ok "$id"` count is 8 only if Task 2 wrote its three entries as `_reg_id_ok "$id"`. Record the measured value whatever it is.
+- The `_reg_id_ok "$id"` count is 9 only if Task 2 wrote its three entries as `_reg_id_ok "$id"` and Task 3 wrote its composed-id check as `_reg_id_ok "$id" || die "bad session id: $id"`. Record the measured value whatever it is.
 - If either `diff` prints a line, a function moved. Find the edit that changed a line count and make it line-neutral. Never edit a census number. If an edit cannot be made line-neutral, STOP: R9's fallback needs the coordinator's recorded agreement.
 
 - [ ] **Step 10: Run the tests green**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/ccd-session-verbs-dash-id.test.ts test/ccd-actor-flags.test.ts
+(cd server && ./node_modules/.bin/vitest run test/ccd-session-verbs-dash-id.test.ts test/ccd-actor-flags.test.ts)
 ```
 
-Expected: PASS, all 11 new cases and every existing `ccd-actor-flags.test.ts` case, with that file's assertions unchanged.
+Expected: PASS, all 12 new cases and every existing `ccd-actor-flags.test.ts` case, with that file's assertions unchanged.
 
 - [ ] **Step 11: The citation census, and R9's ws-rename record**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'CITATION DEBT|README HAS ITS OWN CENSUS|LOCATION INDEXES|ROW PASS|RANGE BOUND|backticked _identifier'
+(cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'CITATION DEBT|README HAS ITS OWN CENSUS|LOCATION INDEXES|ROW PASS|RANGE BOUND|backticked _identifier')
 ```
 
 Expected: PASS, with no number in `session-hook.test.ts` edited. `git diff --name-only -- server/test/session-hook.test.ts` prints nothing.
@@ -3003,7 +3044,7 @@ mkdir -p "${TMPDIR:-/tmp}/ccrc-w1b-task4" && cp ccd/ccd "${TMPDIR:-/tmp}/ccrc-w1
 
 For each row:
 1. Apply the mutation from the workspace root.
-2. Run the command. Each one is its own call: `cd server && ./node_modules/.bin/vitest run …`.
+2. Run the command. Each one is its own call, in a subshell so the cwd stays at the workspace root for the mutation and the restore: `(cd server && ./node_modules/.bin/vitest run …)`.
 3. See the expected red.
 4. Restore with `cp "${TMPDIR:-/tmp}/ccrc-w1b-task4/ccd.green" ccd/ccd`.
 
@@ -3014,10 +3055,16 @@ For each row:
 | 3 | Delete ws-restore's arm: `sed -i '/^cmd_ws_restore() {/,/^}/{/^      --session)   if (( \$# >= 2 ));/d;}' ccd/ccd` | `… -t 'ws-restore binds'` | a `not-archived` row names `agent`, and `.reap-agent.lock` exists |
 | 4 | Delete ws-hold's arm: `sed -i '/^cmd_ws_hold() {/,/^}/{/^      --session|--reason) if/d;}' ccd/ccd` | `… -t 'ws-hold binds'` | the `--actor`/`--surface` case (usage line), and the reason case (`held demo-quiet-basin: agent`) |
 | 5 | Delete ws-rename's arm: `sed -i '/^cmd_ws_rename() {/,/^}/{/^      --session|--branch) if/d;}' ccd/ccd` | `… -t 'ws-rename binds'` | the `--actor`/`--surface`/`--reason` case (the usage detail) |
+| 5b | ws-rename's arm pattern loses its `--branch` alternative, leaving `--session)` | `… -t 'ws-rename binds'` | "a --branch value spelled as a flag…": `invalid branch name: agent` where `invalid branch name: --actor` is expected |
 | 6 | Delete ws-release's `_reg_id_ok` call: `sed -i '/^cmd_ws_release() {/,/^}/{/^  _reg_id_ok "\$id" || die "bad session id"$/d;}' ccd/ccd` | `… -t 'ws-release binds'` | `a planted dash-leading row is never acted on`: `released --actor`, and the planted hold is gone |
 | 7 | Make ws-hold's arm refuse a dash-leading value: `sed -i 's/^      --session|--reason) if (( \$# >= 2 )); then /      --session|--reason) [[ ${2-} != -* ]] \|\| die "bad session id"; if (( $# >= 2 )); then /' ccd/ccd` | `… -t 'narrow nothing else\|ws-hold binds'` | `prose may lead with a dash` (`--program:x wave:1/4` is refused) and the flag-spelled hold reason case |
 | 8 | Make ws-hold's arm STRIP `--reason` as a decision reason: `sed -i 's/^      --session|--reason) if (( \$# >= 2 )); then /      --session|--reason) if [[ $1 == --reason \&\& $# -ge 2 ]]; then shift 2; elif (( $# >= 2 )); then /' ccd/ccd` | `test/ccd-actor-flags.test.ts -t 'does NOT strip --reason'` | the case refuses with `usage: ccd ws-hold …` (this proves Step 8's reworded comment) |
 | 9 | Insert one blank line inside ws-restore's window: `awk '{print} /^cmd_ws_restore\(\) \{/{f=1} f && !d && /# FIX ROUND 3 \(operator escalation/{print ""; d=1}' ccd/ccd > "${TMPDIR:-/tmp}/ccrc-w1b-task4/ccd.mut" && cp "${TMPDIR:-/tmp}/ccrc-w1b-task4/ccd.mut" ccd/ccd` | `test/session-hook.test.ts -t 'CITATION DEBT\|README HAS ITS OWN CENSUS\|LOCATION INDEXES\|ROW PASS\|RANGE BOUND\|backticked _identifier'` | at least one census pass goes red (its exact count or set changes). If every pass stays green, report `census-blind-at-ws-restore` |
+| 10 | In `cmd_ws_archive`, the post-loop check's `_reg_id_ok "$id"` becomes `[[ $id =~ ^[A-Za-z0-9._-]+$ ]]` (the dash rule dropped; its `die` and the arm stay) | `… -t 'ws-archive binds'` | the planted `--actor` row binds as the literal id and goes on past the id check (archived, or refused by a later rung), not `ccd: bad session id` |
+| 11 | In `cmd_ws_restore`, the post-loop check's `_reg_id_ok "$id"` becomes `[[ $id =~ ^[A-Za-z0-9._-]+$ ]]` (its `_lc_refuse` stays) | `… -t 'ws-restore binds'` | the planted `--actor` row answers `ccd: not archived: --actor`, `.reap---actor.lock` is created, and the refusal rows are no longer all `bad-session-id` |
+| 12 | In `cmd_ws_hold`, the post-loop check's `_reg_id_ok "$id"` becomes `[[ $id =~ ^[A-Za-z0-9._-]+$ ]]` | `… -t 'ws-hold binds'` | "an id of --reason…": the planted `--reason` row is held (`held --reason: program:x wave:1/4`) |
+| 13 | In `cmd_ws_rename`, `if ! _reg_id_ok "$id"; then` becomes `if [[ ! $id =~ ^[A-Za-z0-9._-]+$ ]]; then` | `… -t 'ws-rename binds'` | "an id of --branch…": the planted `--branch` row passes the id check, and the answer is a later one, not `bad session id: --branch` |
+| 14 | ws-hold's arm pattern loses its `--reason` alternative, leaving `--session)` | `… -t 'ws-hold binds'` | "a hold reason the server spells as a flag…": `held demo-quiet-basin: agent`, the surface word, where `--surface` is expected |
 
 - Rows 7 and 9 are written with `\|` inside the table only; type them with a bare `|`. The sed replacement in row 7 is `[[ ${2-} != -* ]] || die "bad session id"; if (( $# >= 2 )); then `, and row 9's `-t` pattern is the one in Step 11.
 - Before each run, check that the mutation landed: `cmp -s ccd/ccd "${TMPDIR:-/tmp}/ccrc-w1b-task4/ccd.green" && echo "MUTATION DID NOT APPLY"` must print nothing. A row whose mutation did not apply is re-applied, never counted.
@@ -3036,6 +3083,12 @@ Record each row's measured red, as the failing case names, in the SDD ledger.
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/ccd-session-verbs-dash-id.test.ts test/ccd-actor-flags.test.ts test/ccd-reg-id-ok.test.ts test/ccd-hold.test.ts test/ccd-ws-rename.test.ts test/ccd-archive.test.ts test/ccd-restore-reap-lock.test.ts test/ccd-ws-restore-supersede.test.ts test/ccd-lifecycle-sites.test.ts test/ccd-lifecycle-pairs.test.ts test/ccd-refusal-scan.test.ts test/ccd-die-containment.test.ts test/wsaudit.test.ts test/ccd-wsaudit-nonpoison.test.ts test/archive-ccd-words.test.ts test/ccdargv-dec-parity.test.ts test/ownership.test.ts test/mark-check.test.ts
+```
+```bash
+# Every other suite that calls one of the five verbs (measured at the export: grep -lE 'cmd_ws_(release|archive|restore|hold|rename) ' server/test/*.test.ts). ccd-ws-gc and ccd-bounded-reads are CLAUDE.md load flakes: re-run alone before calling a red a break.
+(cd server && ./node_modules/.bin/vitest run test/ccd-prhistory.test.ts test/ccd-lifecycle-purge.test.ts test/ccd-ws-audit.test.ts test/ccd-ws-expire-spawn.test.ts test/ccd-unarchive-on-spawn.test.ts test/ccd-ws-reap.test.ts test/ccd-operator-choice.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/ccd-workspaces.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/ccd-ws-gc.test.ts test/ccd-bounded-reads.test.ts)
 ```
 ```bash
 cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'CITATION DEBT|README HAS ITS OWN CENSUS|LOCATION INDEXES|ROW PASS|RANGE BOUND|backticked _identifier'
@@ -3240,12 +3293,18 @@ done`);
   it('enable refuses a dash- or dot-leading project before it journals', () => {
     for (const p of ['-lead', '.hidden']) {
       fs.mkdirSync(path.join(h.home, 'projects', p), { recursive: true });
+      // An archive marker planted for the composed id. The check must precede `_ws_expire_refuse_return`: that gate
+      // opens a permanent `.reap-<id>.lock` for an archived id and clears its archive, journaling `unarchive`.
+      fs.writeFileSync(path.join(regDir(), `claude-b-${p}.archived`), '1700000000\n');
       const r = shFail(`${START_STUBS} cmd_enable claude-b ${p}`);
       expect(r.code, `${p}: ${r.stdout}`).not.toBe(0);
       expect(r.stderr, p).toContain(`invalid project '${p}'`);
       expect(readJournal(h.home).filter((e) => e['id'] === `claude-b-${p}`), `${p}: a journal row names the id`)
         .toEqual([]);
+      expect(fs.existsSync(path.join(regDir(), `claude-b-${p}.archived`)), `${p}: the planted archive marker was cleared`)
+        .toBe(true);
     }
+    expect(reapLocks(), 'a reap lock was opened for a refused id').toEqual([]);
     expect(eventsOf(h.home, 'enable'), 'an enable row was journaled').toEqual([]);
     expect(startedIds(), 'a supervised start was asked for').toEqual([]);
     // The CONTROL: a plain project journals exactly one enable row, so the reader above can see one.
@@ -3796,13 +3855,18 @@ Expected: PASS, with 10 of 10 in `ccd-project-dash.test.ts`.
 | # | Mutation (exact edit in `ccd/ccd`) | Command | Expected red |
 |---|---|---|---|
 | T5.1 | Delete the line `  [[ "$1" != -* ]] \|\| return 1` in `_ws_project_valid` | `./node_modules/.bin/vitest run test/ccd-project-dash.test.ts test/pool-name-parity.test.ts` | ccd-project-dash: the `_ws_project_valid` row (`'-lead accept'`), and the ws-add, start, enable, project-pool and "each refusal" rows (exit 0, or an `enable` row journaled). pool-name-parity: the exact table (`'accept omit'`), "disagree on none" (`[ '-lead' ]`), the dash-line case, and "ccd refuses to create" (`threw` false). The three `_ws_tmproot_id_ok` rows and the collect-audit row stay GREEN, because their dash rule is `_reg_id_ok`'s. |
-| T5.2 | In `cmd_enable`, replace the line `    _ws_project_valid "$2" \|\| die "invalid project '$2' — …"` with `    :` | `./node_modules/.bin/vitest run test/ccd-project-dash.test.ts -t 'enable refuses'` | `-lead: a journal row names the id: expected [ { act: 'enable', id: 'claude-b--lead', … } ] to deeply equal []` |
+| T5.2 | In `cmd_enable`, replace the line `    _ws_project_valid "$2" \|\| die "invalid project '$2' — …"` with `    :` | `./node_modules/.bin/vitest run test/ccd-project-dash.test.ts -t 'enable refuses'` | `-lead: a journal row names the id: expected [ { act: 'unarchive', id: 'claude-b--lead', … }, { act: 'enable', id: 'claude-b--lead', … } ] to deeply equal []`: the expiry gate clears the planted archive under a reap lock before enable journals |
 | T5.3 | Restore `_ws_tmproot_id_ok`'s old body: `_ws_tmproot_id_ok() { local LC_ALL=C; [[ "${1-}" =~ ^[A-Za-z0-9._-]+$ && "${1-}" != .* ]]; }` | `./node_modules/.bin/vitest run test/ccd-project-dash.test.ts -t '_ws_tmproot_id_ok\|collect audit'` | The refuses row (`'-x-y ok'`); the derivation pin; the collect-audit row (exit not 1, or a document on stdout, and `.reap--x-y.lock` where `mv --no-copy` exists); parity (`"-x-y": true` against `false`) |
 | T5.4 | Drop the dot clause: `_ws_tmproot_id_ok() { _reg_id_ok "${1-}"; }` | same | The refuses row (`'.x-y ok'`); the derivation pin; parity (`".x-y": true` against `false`) |
 | T5.5 | Fold the dash rule into the charset line: replace `  [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] \|\| return 1` with `  [[ "$1" =~ ^[A-Za-z0-9._-]+$ && "$1" != -* ]] \|\| return 1`, and delete the separate dash line | `./node_modules/.bin/vitest run test/pool-name-parity.test.ts` | "both files spell one charset": `_ws_project_valid no longer holds an anchored ^[…]+$ test on "$1": expected undefined to be truthy`. The dash-line case: `expected '…' to contain '[[ "$1" != -* ]] \|\| return 1'`. `ccd-project-dash` stays GREEN, because the behaviour is identical; that is why the text pin exists. |
 | T5.6 | Restore `cmd_start`'s die text to `…, and no LEADING dot"` | `./node_modules/.bin/vitest run test/ccd-project-dash.test.ts -t 'no LEADING dot or dash'` | `start: expected '…and no LEADING dot\n' to contain 'and no LEADING dot or dash'` |
 | T5.7 | Restore `cmd_ws_add`'s die text to `…, and no LEADING dot (a dot-leading id aliases ccd's own hidden registry files — see _ws_project_valid)"` | same | `ws-add: expected '…' to contain 'and no LEADING dot or dash'` |
 | T5.8 | Insert one blank line inside `_ws_project_valid`, directly after `  local LC_ALL=C` | `./node_modules/.bin/vitest run test/session-hook.test.ts -t 'CITATION DEBT\|README HAS ITS OWN CENSUS\|LOCATION INDEXES\|ROW PASS\|RANGE BOUND\|backticked _identifier'` | At least one census pass reds: the corpus cites lines below the function, which move. Measure once. If every pass stays green, report `census-blind-at-ws-project-valid` in the wave-done. |
+| T5.9 | Move Task 5's three-line `if [[ $# -ge 2 ]]; then … fi` block in `cmd_enable` from directly after the `local id` line to directly after the `  _ws_expire_refuse_return "$id" enable` line, so it still precedes `_lc_done enable` | `./node_modules/.bin/vitest run test/ccd-project-dash.test.ts -t 'enable refuses'` | `-lead: a journal row names the id`: an `unarchive` row, written by the expiry gate the check now follows. Past it, the planted archive marker is gone and `.reap-claude-b--lead.lock` stands. The check must precede that gate, because the gate opens a permanent reap lock for an archived id |
+
+In the table, `\|` is a Markdown table escape, in the mutation text and in the `-t` filters alike: type a plain `|`. Typed as `\|`, a `-t` filter matches no title, every case is skipped, and the row reads green.
+
+In the table, each `\|` is a Markdown escape. Type a plain `|`, in each `||` and in each `-t` pattern. vitest reads `-t` as a regular expression, where `\|` is a literal bar that matches no title, so a row typed with it runs nothing and reads green.
 
 After the last mutation, restore once more and re-run Step 8's command: green. Then `rm -rf "$S"`.
 
@@ -3925,7 +3989,7 @@ grep -c '(( ! lc_ga ))' ccd/ccd                                                 
 awk '/^_ws_project_valid\(\) \{/{f=1} f&&/^\}/{exit} f&&/\[\[ "\$1" != -\* \]\] \|\| return 1/{print NR}' ccd/ccd   # one line: Task 5's dash line
 awk '/^cmd_ws_add\(\) \{/{f=1} f&&/no LEADING dot or dash/{print NR; exit}' ccd/ccd   # one line: Task 5's die text in cmd_ws_add
 grep -nF '      --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-add' ccd/ccd          # one line (hint 6950)
-grep -nF '      --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;' ccd/ccd   # one line (hint 6952): ws-add's; stop's arm differs after Task 3
+awk '/^cmd_ws_add\(\) \{/{f=1} f&&/^      --surface=\*\) lc_gs=1; lc_surface="\$\{1#--surface=\}"; shift ;;$/{print NR; exit}' ccd/ccd   # one line (hint 6952): ws-add's own; the other verbs keep the identical arm, so a whole-file grep prints several
 grep -nF '      --actor)     [[ $# -ge 2 ]] || die "usage: ccd ws-add' ccd/ccd          # one line (hint 6953)
 awk '/^cmd_ws_add\(\) \{/{f=1} f&&/^      --actor=\*\)   lc_ga=1; lc_actor="\$\{1#--actor=\}"; shift ;;$/{print NR; exit}' ccd/ccd   # one line (hint 6955)
 grep -nF "wsAddWorker: (p: string, dec: ActorFlags | null" server/src/ccdargv.ts       # one line
@@ -4756,7 +4820,7 @@ describe('a new id fits every name ccd derives from it (path-identity spec §2.6
     expect(supervisedStarts(), 'no supervised start').toEqual([]);
   }, 60_000);
 
-  it('enable refuses one more before it journals', () => {
+  it('enable refuses one more before it journals, and enables exactly _REG_ID_MAX', () => {
     const over = 'q'.repeat(CAP - 'claude-b-'.length + 1);
     const overId = `claude-b-${over}`;
     fs.mkdirSync(path.join(h.home, 'projects', over), { recursive: true });
@@ -4766,6 +4830,15 @@ describe('a new id fits every name ccd derives from it (path-identity spec §2.6
     expect(eventsOf(h.home, 'enable'), 'no enable row: the cap answers before the journal').toEqual([]);
     expect(eventsOf(h.home, 'start'), 'and start was never reached').toEqual([]);
     expect(supervisedStarts(), 'no supervised start').toEqual([]);
+    // THE ACCEPT HALF (path-identity spec §2.8: one pin at the cap and one past it, at every mint site).
+    const ok = 'q'.repeat(CAP - 'claude-b-'.length);
+    const okId = `claude-b-${ok}`;
+    expect(okId).toHaveLength(CAP);
+    fs.mkdirSync(path.join(h.home, 'projects', ok), { recursive: true });
+    const a = run(`${STUBS} cmd_enable claude-b ${ok}`);
+    expect(a.code, a.stderr).toBe(0);
+    expect(eventsOf(h.home, 'enable').map((e) => e['id']), 'the id at the cap was enabled').toEqual([okId]);
+    expect(supervisedStarts()).toContain(`supervised_start ${okId}`);
   }, 60_000);
 });
 ```
@@ -4798,7 +4871,7 @@ Before, as Tasks 1 and 5 left it (blank line as Task 1 left it, the witness bloc
 ```bash
 _reg_id_ok() { local LC_ALL=C; [[ "${1-}" =~ ^[A-Za-z0-9._-]+$ && "${1-}" != -* ]]; }   # word -> 0 iff a --session or positional id may bind it
 
-# THE ID A WITNESS MAY BE NAMED FOR: the tail's own id shape, never
+# THE ID A WITNESS MAY BE NAMED FOR (path-identity spec §2.4): an id `_reg_id_ok` accepts, so never
 ```
 
 After:
@@ -4815,9 +4888,10 @@ _reg_id_ok() { local LC_ALL=C; [[ "${1-}" =~ ^[A-Za-z0-9._-]+$ && "${1-}" != -* 
 # session silently loses its card and its listing. So the cap is 128, the lower of the two.
 # ccd-id-cap.test.ts holds the census of every such name, and this number.
 #
-# BYTES under LC_ALL=C, as `_lc_dec_ok` counts its text. Three sites call it, each before
-# anything is created or journaled, each with its own die line: ws-add (on its slug line),
-# start's creating form (even when the row exists) and enable's two-argument form.
+# BYTES under LC_ALL=C, as `_lc_dec_ok` counts its text. Three sites call it, each before any
+# row, worktree, branch or journal line exists, each with its own die line: ws-add (on its slug
+# line, after the per-project add lock, which every later ws-add refusal also leaves), start's
+# creating form (even when the row exists) and enable's two-argument form.
 # `start <id>` and `enable <id>` name a row that already exists and are not capped, so a
 # row planted by hand above the cap stays startable that way.
 _REG_ID_MAX=128
@@ -4829,7 +4903,7 @@ _reg_id_cap() {   # id -> 0 iff its BYTES fit _REG_ID_MAX; 1 sets _REG_ID_CAP_WH
   return 1
 }
 
-# THE ID A WITNESS MAY BE NAMED FOR: the tail's own id shape, never
+# THE ID A WITNESS MAY BE NAMED FOR (path-identity spec §2.4): an id `_reg_id_ok` accepts, so never
 ```
 
 The comment rules:
@@ -4937,13 +5011,13 @@ For each row:
 | M2 | Delete start's line: `sed -i '/^    _reg_id_cap "\$id" \|\| die "\$_REG_ID_CAP_WHY — choose a shorter project; nothing was created"$/d' ccd/ccd` | `start creates _REG_ID_MAX, and refuses one more …`; `start refuses an over-cap id even when its row already exists`; `each mint site …` |
 | M3 | Delete enable's line: `sed -i '/^  if (( \$# >= 2 )); then _reg_id_cap "\$id"/d' ccd/ccd` | `enable refuses one more before it journals` (an `enable` row is journaled before `cmd_start` refuses); `each mint site …` |
 | M4 | Raise the cap by one: `sed -i 's/^_REG_ID_MAX=128$/_REG_ID_MAX=129/' ccd/ccd` | `the cap is the value …` (129 ≠ 128); `ws-add refuses one byte more, …`; `start creates … refuses one more …`; `start refuses an over-cap id …`; `enable refuses one more …` |
-| M5 | `<=` to `<`: `sed -i 's/(( \${#id} <= _REG_ID_MAX ))/(( \${#id} < _REG_ID_MAX ))/' ccd/ccd` | `ws-add creates an id of exactly _REG_ID_MAX`; `start creates _REG_ID_MAX, …` (its accept half) |
+| M5 | `<=` to `<`: `sed -i 's/(( \${#id} <= _REG_ID_MAX ))/(( \${#id} < _REG_ID_MAX ))/' ccd/ccd` | `ws-add creates an id of exactly _REG_ID_MAX`; `start creates _REG_ID_MAX, …` (its accept half); `enable refuses one more …, and enables exactly _REG_ID_MAX` (its accept half) |
 | M6 | Drop a template from the table: `sed -i "/template: 'slot.<id>.<ns>.<pid>'/d" server/test/ccd-id-cap.test.ts` | `every name template that embeds an id is in the census table` (`ccd/ccd:<n> slot.<id>.<ns>.<pid>` is uncovered) |
-| M7 | Drop the byte count's locale: `sed -i 's/^  local LC_ALL=C id="\${1-}"$/  local id="${1-}"/' ccd/ccd` | `each mint site carries its own die line` (the `local LC_ALL=C` pin) |
+| M7 | Drop the byte count's locale, inside `_reg_id_cap` only (another function already holds the identical `local` line, so an unscoped `sed` changes two): `sed -i '/^_reg_id_cap() {/,/^}$/s/^  local LC_ALL=C id="\${1-}"$/  local id="${1-}"/' ccd/ccd` | `each mint site carries its own die line` (the `local LC_ALL=C` pin) |
 
 In M1 and M2 the `|` inside the table is escaped for Markdown only. Type the commands with a bare `||`.
 
-Each `sed` changes exactly one line. Before running, confirm it with `diff "$S/ccd.good" ccd/ccd | grep -c '^[<>]'`: 1 for M1, M4, M5 and M7 (a change shows as one `<` and one `>` line, so read 2 there), and 1 for M2 and M3.
+Each `sed` changes exactly one line. Before running, confirm it with `diff "$S/ccd.good" ccd/ccd | grep -c '^[<>]'`: 2 for M1, M4, M5 and M7 (a changed line shows as one `<` and one `>` line), and 1 for M2 and M3 (a deleted line shows as one `<`).
 
 After the last row:
 
@@ -4961,11 +5035,11 @@ cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts
 
 `session-hook.test.ts` runs whole. That includes its `a peer id longer than CCRC_ID_MAX is excluded …` case, unedited, and the five citation passes (`CITATION DEBT|README HAS ITS OWN CENSUS|LOCATION INDEXES|ROW PASS|RANGE BOUND|backticked _identifier`), with no number edited. Re-run a CLAUDE.md load flake in isolation before calling it a break.
 
-**Line neutrality.** `cmd_ws_add` and every function from it up to `cmd_start()` start on their `origin/main` lines. From the workspace root:
+**Line neutrality.** `cmd_ws_add`, and every function above R15's insertion point (`# THE ID A VERB MAY BIND`), start on their `origin/main` lines. Functions between that point and `cmd_start()` move by exactly the lines R15's helpers add, and Task 13 (3b) measures them. From the workspace root:
 
 ```bash
-diff <(git show origin/main:ccd/ccd | awk '/^cmd_start\(\) \{/{exit} /^[A-Za-z_][A-Za-z0-9_]*\(\) *\{/{print NR": "$1}') \
-     <(awk '/^cmd_start\(\) \{/{exit} /^[A-Za-z_][A-Za-z0-9_]*\(\) *\{/{print NR": "$1}' ccd/ccd) && echo "starts unmoved"
+diff <(git show origin/main:ccd/ccd | awk '/^# THE ID A WITNESS MAY BE NAMED FOR/{exit} /^[A-Za-z_][A-Za-z0-9_]*\(\) *\{/{print NR": "$1}') \
+     <(awk '/^# THE ID A VERB MAY BIND/{exit} /^[A-Za-z_][A-Za-z0-9_]*\(\) *\{/{print NR": "$1}' ccd/ccd) && echo "starts unmoved"
 ```
 
 Expected: `starts unmoved`. A difference means the ws-add edit added a line. Fix it in place and do not re-measure the census (R9).
@@ -4978,7 +5052,10 @@ Record in `.superpowers/sdd/2026-10-12-path-identity-w1b-ccd-id-hardening/progre
 - `CENSUS_EXCLUDED` with its reason;
 - each mutation row's red titles;
 - the `starts unmoved` line;
-- the R27 arm built.
+- the R27 arm built;
+- the departure slug `ws-add-lock-precedes-the-cap`: ws-add takes its per-project add lock before it chooses the slug, so a cap refusal leaves that lock file, as every ws-add refusal after the lock already does. The row, the worktree and the branch are never created.
+
+Name these departures by slug in the wave-done: `id-cap-census-table-measured-at-the-export`, `census-compares-normalised-shapes`, `census-excludes-the-token-generation-file`, `history-spool-names-outside-the-census-patterns`, `reg-id-cap-under-lc-all-c-pinned`, `enable-cap-written-as-an-if`, and `ws-add-lock-precedes-the-cap`. On the last: ws-add's per-project `.ws-add-<project>.lock` already exists when the cap refuses, as it does for every ws-add refusal after the lock. So "nothing was created" holds for the row, the worktree and the branch, but not for that lock file.
 
 ```bash
 git add ccd/ccd server/test/ccd-id-cap.test.ts
@@ -5069,13 +5146,14 @@ grep -n 'consent' .superpowers/sdd/2026-10-12-path-identity-w1b-ccd-id-hardening
 ```
 
 What each check should print:
-- (c) prints `_reg_id_ok "$id" || die "bad session id"`.
+- (c) prints `_reg_id_ok "$id"                       || die "bad session id"`: Task 2's padded spelling, its `||` aligned with the `[[ $token =~ … ]]` line below it.
 - (d) prints the same text.
-- (e) prints `_reg_id_ok "$id" && _ws_tmproot_id_ok "$id" || die "bad session id"`.
-- If Task 2 kept a column padding between `"$id"` and `||`, (c) and (d) print it. The before text of Step 4's edits A and B then carries that padding exactly as printed.
+- (e) prints `_reg_id_ok "$id" && _ws_tmproot_id_ok "$id"               || die "bad session id"`: Task 2's padded spelling.
+- Step 4's edits A, B and C replace each line exactly as (c), (d) and (e) print it, and their before blocks carry Task 2's padding. If the measured padding differs, the printed line is the before text. Every after line is unpadded, because Step 4's count `^  _ws_tmproot_id_ok "\$id" \|\| die "bad session id"$` reads that exact spelling.
 
 **STOP** in either of these cases:
-- (a), (b), (j) or (k) prints nothing;
+- (a), (b) or (j) prints nothing;
+- (k) prints nothing, and the dispatch brief does not carry workspace-lifecycle's consent to the three ws-expire edits either (Task 0 Step 6 requires the brief to carry it; when only the brief has it, copy that line into the ledger and go on);
 - (c), (d) or (e) prints a different call.
 
 In both cases, report the measured lines. A line number that differs from a hint is not a STOP.
@@ -5213,11 +5291,11 @@ Any other red set is reported by slug before going on.
 
 - [ ] **Step 4: Implement: five in-place line edits in `ccd/ccd`**
 
-**Edit A: `cmd_ws_reclaim`'s entry.** If Step 1 (c) printed a padded line, use it as printed.
+**Edit A: `cmd_ws_reclaim`'s entry.** The before line is Task 2's padded spelling, as Step 1 (c) printed it.
 
 Before:
 ```bash
-  _reg_id_ok "$id" || die "bad session id"
+  _reg_id_ok "$id"                       || die "bad session id"
   [[ $token =~ ^[0-9a-f]{64}$ ]]         || _lc_refuse reclaim "$id" token-malformed "bad token"
 ```
 After:
@@ -5226,11 +5304,11 @@ After:
   [[ $token =~ ^[0-9a-f]{64}$ ]]         || _lc_refuse reclaim "$id" token-malformed "bad token"
 ```
 
-**Edit B: `cmd_ws_expire`'s entry.** If Step 1 (d) printed a padded line, use it as printed.
+**Edit B: `cmd_ws_expire`'s entry.** The before line is Task 2's padded spelling, as Step 1 (d) printed it.
 
 Before:
 ```bash
-  _reg_id_ok "$id" || die "bad session id"
+  _reg_id_ok "$id"                       || die "bad session id"
   _json_str probe >/dev/null 2>&1 \
     || die "python3 unavailable — cannot quote the expiry record safely"
 ```
@@ -5243,9 +5321,9 @@ After:
 
 **Edit C: `cmd_ws_collect`'s entry.** `_ws_tmproot_id_ok` now carries `_reg_id_ok`, so the pair becomes the one call.
 
-Before:
+Before (Task 2's padded spelling, as Step 1 (e) printed it):
 ```bash
-  _reg_id_ok "$id" && _ws_tmproot_id_ok "$id" || die "bad session id"
+  _reg_id_ok "$id" && _ws_tmproot_id_ok "$id"               || die "bad session id"
 ```
 After:
 ```bash
@@ -5320,6 +5398,8 @@ For each row:
 
 Never use `git checkout -- ccd/ccd`: it would discard this task's uncommitted edits.
 
+In the table, `\|` is a Markdown table escape, in the mutation text and in the `-t` filters alike: type a plain `|`. Typed as `\|`, a `-t` filter matches no title, every case is skipped, and the row reads green.
+
 | # | Mutation (before → after, in `ccd/ccd`) | Command (from `server/`) | Expected red |
 |---|---|---|---|
 | M1 | Edit A reverted: `  _ws_tmproot_id_ok "$id" \|\| die "bad session id"` directly above `[[ $token =~ ^[0-9a-f]{64}$ ]]         \|\| _lc_refuse reclaim` → `  _reg_id_ok "$id" \|\| die "bad session id"` | `./node_modules/.bin/vitest run test/ccd-token-verbs-dot-id.test.ts -t 'ws-reclaim --session'` | stderr says `bad token`, and a `token-malformed` row is journaled against `.hidden-x`. With the well-formed token, `.reap-.hidden-x.lock` exists |
@@ -5329,6 +5409,8 @@ Never use `git checkout -- ccd/ccd`: it would discard this task's uncommitted ed
 | M5 | Edit E reverted: `cmd_ws_audit`'s id line → `  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] \|\| die "bad session id"` | `./node_modules/.bin/vitest run test/ccd-token-verbs-dot-id.test.ts -t 'ws-audit --reclaim and\|dash-leading id still dies'` | at `ws-audit --reclaim` for `.x-y` and for `-x-y`: a document on stdout, and `alive …` recorded |
 | M6 | Edit E over-tightened: `cmd_ws_audit`'s id line → `  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] && _ws_tmproot_id_ok "$id" \|\| die "bad session id"` (the rule in every mode) | `./node_modules/.bin/vitest run test/ccd-token-verbs-dot-id.test.ts -t 'plain ws-audit'` | exit 1 with `bad session id`, where today's `no-such-session` document was |
 | M7 | The delegation broken: in `_ws_tmproot_id_ok`'s line, `_reg_id_ok "${1-}" && [[ "${1-}" != .* ]]` → `local LC_ALL=C; [[ "${1-}" =~ ^[A-Za-z0-9._-]+$ && "${1-}" != .* ]]` (the pre-Task-5 body) | `./node_modules/.bin/vitest run test/ccd-token-verbs-dot-id.test.ts -t 'dash-leading id still dies'` | at `ws-reclaim -x-y`: no `bad session id`, and `.reap--x-y.lock` exists |
+
+In the table, each `\|` is a Markdown escape. Type a plain `|`, in each `||` and in each `-t` pattern, where `\|` would match no title and the row would read green.
 
 Afterwards, from the workspace root:
 
@@ -5428,7 +5510,8 @@ git log -1 --format=%B | grep -cE 'D-[0-9]'                               # 0
   - Restamp.
 - Create the test `server/test/ccd-collect-prelock.test.ts`.
 - Run, never edit: every `ccd-collect-*` and `ccd-ws-collect-*` file, `collect-readers`, `collect-pacing`, `wsaudit`, `ccd-wsaudit-nonpoison`, `ccd-refusal-scan`, `ccd-die-containment`, `ccd-child-reclaim-pause`, `macos-platform`, `ccdargv-dec-parity`, `ownership` and `mark-check`.
-- NOT edited: the WS-AUDIT-COLLECT header comment (Task 11 owns items 29 to 31), `_ws_collect_locked`, `server/src/**`, `shared/**`, and every existing test file (HARD BOUNDARY).
+- In the WS-AUDIT-COLLECT header, the two lines that open its THE LOCK paragraph (`# THE LOCK. Inside the population the audit takes …`), which 3f makes false: 3h. They are below every frozen anchor, so a line may be added.
+- NOT edited: the rest of the WS-AUDIT-COLLECT header comment (Task 11 owns items 29 to 31), `_ws_collect_locked`, `server/src/**`, `shared/**`, and every existing test file (HARD BOUNDARY).
 
 **Interfaces:**
 - Produces (`ccd/ccd`; the four canonical names):
@@ -5556,6 +5639,30 @@ describe.skipIf(!LINUX)('the collector opens the reap lock only after an advisor
       expect(refusalsOf(h.home)).toEqual([{ act: 'collect', token: 'quarantine-kept' }]);
       expect(locked(), 'no reap lock for a record nothing vouches for').toBe(false);
       expect(fs.readFileSync(rec, 'utf8'), 'the record stands as it was').toBe(JUNK_RECORD);
+    }, 60_000);
+
+    it('a junk record beside a sound witness answers quarantine-kept, reports the witness, and leaves no lock', () => {
+      makeOrphan(h);
+      plantRecord(h, recName(), JUNK_RECORD);
+      const a = collectAudit(h);
+      expect(a.code, a.stderr).toBe(0);
+      expect(verdictOf(a)).toBe('quarantine-kept');
+      expect(collectOf(a)['witness'], 'the document reports the witness, as the fork’s resume arm does').not.toBeNull();
+      expect(locked(), 'no reap lock for a record nothing vouches for').toBe(false);
+    }, 60_000);
+
+    it('a junk witness beside quarantine records that cannot be listed answers unmeasured records, exit 1, with no lock', () => {
+      makeOrphan(h);
+      junkWitness();
+      const elsewhere = path.join(h.home, 'not-the-records');
+      fs.mkdirSync(elsewhere);
+      fs.symlinkSync(elsewhere, recordsDir(h));
+      const a = collectAudit(h);
+      expect(a.code, a.stdout).toBe(1);
+      expect(verdictOf(a)).toBe('unmeasured');
+      expect(collectOf(a)['unmeasured']).toBe('records');
+      expect(readJournal(h.home), 'unmeasured is journaled nowhere').toEqual([]);
+      expect(locked(), 'records that cannot be listed prove no absence: no lock, and no witness word').toBe(false);
     }, 60_000);
 
     it('two junk records answer quarantine-kept, naming both, with no lock', () => {
@@ -5779,7 +5886,9 @@ FAIL:
   - the two junk records: `expected true to be false`;
   - the other id: `the record on the disk opens no lock: expected true to be false`;
   - `~/.cc-tmp`: `no lock until a body is parsed and its slot derived: expected true to be false`;
-  - no dash: `no reap lock for an id that names no slug: expected true to be false`.
+  - no dash: `no reap lock for an id that names no slug: expected true to be false`;
+  - the junk record beside a sound witness: `no reap lock for a record nothing vouches for: expected true to be false`;
+  - the unlistable records: `records that cannot be listed prove no absence: no lock, and no witness word: expected true to be false`.
 - The verb:
   - the junk witness: `expected 'the witness … cannot be read as ccd writes it - …' to match /^no lock was taken: the witness /`;
   - the pause: `the pass answers before the pause, which is read under the lock: expected 'paused' to be 'witness-mismatch'`;
@@ -6052,6 +6161,22 @@ After:
   # ws-expire and ws-restore take, so none of them runs on this id at once.
 ```
 
+**3h. The header's THE LOCK paragraph**, in the WS-AUDIT-COLLECT header. It says the audit takes the lock anywhere inside the population, which 3f makes false.
+
+Before:
+```bash
+# THE LOCK. Inside the population the audit takes `$REG/.reap-<id>.lock`,
+# `-n` — the lock every verb that removes anything of the id takes. It writes
+```
+After:
+```bash
+# THE LOCK. Inside the population, and only once `_ws_collect_prelock`'s
+# advisory parse lets it (path-identity spec §2.5: a reap lock is never
+# unlinked, so that parse decides whether one is ever made), the audit takes
+# `$REG/.reap-<id>.lock`, `-n` — the lock every verb that removes anything of
+# the id takes. It writes
+```
+
 Check that the moved sentences moved rather than doubled:
 
 ```bash
@@ -6076,27 +6201,27 @@ Expected: `bash -n` and `--check` exit 0; both suites PASS.
 cd server && ./node_modules/.bin/vitest run test/ccd-collect-prelock.test.ts
 ```
 
-Expected: PASS, 20 tests. As root it is 19 passed and 1 skipped (the unlistable case).
+Expected: PASS, 22 tests. As root it is 21 passed and 1 skipped (the unlistable case).
 
 - [ ] **Step 6: Mutation table**
 
 First copy the restamped file to a scratch directory outside the tree:
 
 ```bash
-S=$(mktemp -d) && cp ccd/ccd "$S/ccd.task9"
+S="${TMPDIR:-/tmp}/path-identity-w1b-task9"; mkdir -p "$S" && cp ccd/ccd "$S/ccd.task9"
 ```
 
 Then, for each row:
 - apply the mutation alone with the Edit tool;
-- run its command from `server/`;
+- run its command from the workspace root as `(cd server && ./node_modules/.bin/vitest run test/ccd-collect-prelock.test.ts <the row's -t filter>)`;
 - see the red;
-- restore with `cp "$S/ccd.task9" ccd/ccd`.
+- restore with `cp "${TMPDIR:-/tmp}/path-identity-w1b-task9/ccd.task9" ccd/ccd`, from the workspace root. Shell state, `S` included, does not carry from one Bash call to the next.
 
 No mutation is restamped (no suite in these commands reads the stamp). Every red below was drafted, not measured: record the measured text. A different count is not a departure; a case that stays green is a STOP, reported by its row number.
 
 | # | Mutation (exact edit, in `ccd/ccd`) | Command (`./node_modules/.bin/vitest run test/ccd-collect-prelock.test.ts …`) | Expected red |
 |---|---|---|---|
-| T9.1 | `_ws_collect_audit_contained`: delete the line `  _ws_collect_prelock "$id" \|\| { _ws_collect_audit_doc "$id"; return; }` | `-t 'the audit, ws-audit'` | every audit "no lock" case: junk witness, junk record, two records, other id, `~/.cc-tmp` and no dash (`expected true to be false`). The registered, unmeasurable, unlistable and control cases stay green |
+| T9.1 | `_ws_collect_audit_contained`: delete the line `  _ws_collect_prelock "$id" \|\| { _ws_collect_audit_doc "$id"; return; }` | `-t 'the audit, ws-audit'` | every audit "no lock" case: junk witness, junk record, junk record beside a sound witness, unlistable records, two records, other id, `~/.cc-tmp` and no dash (`expected true to be false`). The registered, unmeasurable, unlistable and control cases stay green |
 | T9.2 | `cmd_ws_collect`: delete the whole `if ! _ws_collect_prelock "$id"; then` … `fi` block | `-t 'the verb, ws-collect'` | junk witness: `expected '…' to match /^no lock was taken: the witness /`; pause: `expected 'paused' to be 'witness-mismatch'`; junk record: `expected '…' to match /^no lock was taken: the quarantine record /`; no dash: `expected 'nodash names no project …' to be 'no lock was taken, …'` |
 | T9.3 | `_ws_collect_prelock`: delete `  _ws_collect_slug_askable "$id" \|\| { _ws_collect_unmeasured registry "$_WS_COLLECT_REG_WHY"; return 1; }` | `-t 'no dash'` | audit: `no reap lock for an id that names no slug: expected true to be false`; verb: `expected 'nodash names no project …' to be 'no lock was taken, …'` |
 | T9.4 | Delete the record-parse `return 0`: `      _ws_collect_record_read "$r" && [[ "${_WS_QREC_ID-}" == "$id" ]] && return 0` becomes `      _ws_collect_record_read "$r" && [[ "${_WS_QREC_ID-}" == "$id" ]]` | `-t 'still take the lock'` | the record half: `expected 1 to be 0` (it answers unmeasured `records`, read sound on a second look, and takes no lock) |
@@ -6108,12 +6233,14 @@ No mutation is restamped (no suite in these commands reads the stamp). Every red
 | T9.10 | Delete the witness `return 0`: delete the line `  _ws_tmproot_witness_read "$id" && return 0` | `-t 'still take the lock'` | the witness half: `expected 1 to be 0` (unmeasured `witness`, read sound on a second look) |
 | T9.11 | `_ws_collect_registered`: replace `  _ws_collect_slug_askable "$id" \|\| return 2` with the two lines 3b removed | `-t 'spelled once'` | `the sentence is spelled once: expected 2 to be 1`, and `expected '…' to contain '_ws_collect_slug_askable "$id" \|\| return 2'` |
 | T9.12 | `_ws_collect_prelock`: add `  echo "ccd: the pre-lock pass of $id" >&2` directly after `  _ws_collect_reset` | `-t 'prints nothing'` | `it prints nothing: expected '…' not to match /\b(?:printf\|echo)\b/` |
+| T9.13 | `_ws_collect_prelock`: delete its line `  (( rc == 0 )) \|\| { _ws_collect_unmeasured records "the quarantine records of $id could not be listed"; return 1; }`, the one directly below the pass's `  out=$(_ws_collect_records_of "$id"); rc=$?` (`_ws_collect_fork` holds a twin of both lines; leave it) | `-t 'cannot be listed answers unmeasured records'` | `expected 0 to be 1`: an unlistable records directory reads as no record, and the junk witness is journaled `witness-mismatch` |
+| T9.14 | `_ws_collect_prelock`: delete the line `    _ws_tmproot_witness_read "$id" \|\| :   # the document reports it, as the fork's resume arm reads it` | `-t 'reports the witness'` | `the document reports the witness, as the fork’s resume arm does: expected null not to be null` (`prelock-reads-the-witness-for-the-document`) |
 
 After the last row:
 
 ```bash
-cmp ccd/ccd "$S/ccd.task9" && node shared/mark.mjs --check ccd/ccd && rm -r "$S"
-cd server && ./node_modules/.bin/vitest run test/ccd-collect-prelock.test.ts
+S="${TMPDIR:-/tmp}/path-identity-w1b-task9"; cmp ccd/ccd "$S/ccd.task9" && node shared/mark.mjs --check ccd/ccd && rm -r "$S"
+(cd server && ./node_modules/.bin/vitest run test/ccd-collect-prelock.test.ts)
 ```
 
 Expected: `cmp` is silent, `--check` exits 0, and the file is green.
@@ -6121,15 +6248,15 @@ Expected: `cmp` is silent, `--check` exits 0, and the file is green.
 - [ ] **Step 7: Run the task's other suites and guards, unedited, with the pass in place**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/ccd-collect- test/ccd-ws-collect-
-cd server && ./node_modules/.bin/vitest run test/ccd-collect-audit-resume.test.ts -t 'VANISHES|no witness at all is resumed|quarantine-kept: TERMINAL'
-cd server && ./node_modules/.bin/vitest run test/collect-readers.test.ts test/collect-pacing.test.ts test/wsaudit.test.ts \
+(cd server && ./node_modules/.bin/vitest run test/ccd-collect- test/ccd-ws-collect-)
+(cd server && ./node_modules/.bin/vitest run test/ccd-collect-audit-resume.test.ts -t 'VANISHES|no witness at all is resumed|quarantine-kept: TERMINAL')
+(cd server && ./node_modules/.bin/vitest run test/collect-readers.test.ts test/collect-pacing.test.ts test/wsaudit.test.ts \
   test/ccd-wsaudit-nonpoison.test.ts test/ccd-refusal-scan.test.ts test/ccd-die-containment.test.ts \
   test/ccd-child-reclaim-pause.test.ts test/macos-platform.test.ts test/ccdargv-dec-parity.test.ts \
   test/ccd-token-verbs-dash-id.test.ts test/ccd-token-verbs-dot-id.test.ts test/ccd-project-dash.test.ts \
-  test/ownership.test.ts test/mark-check.test.ts
-cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'backticked _identifier'
-cd server && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts
+  test/ownership.test.ts test/mark-check.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'backticked _identifier')
+(cd server && ./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts)
 ```
 
 Expected: PASS everywhere.
@@ -6200,6 +6327,7 @@ EOF
   - From `./dashIdFixture.js` (Task 1): `DASH_IDS`, `DECOY_IDS`, `regDirOf(home): string`, `plantRow(home, id, fields?)`, `reapLocks(home): string[]` and `regListing(home): string[]`.
   - From `./ccdWsHelpers.js`: `CCD`, `ghContainedEnv`, `harnessBin`, `makeCcdHarness` and `type CcdHarness`.
   - From `./lifecycleHelpers.js`: `readJournal`, `eventsOf` and `decOf`.
+  - From `./gitEnvStrip.js`: `inheritedEnv`. It strips git's inherited repository variables, so the pre-wave run's real `git fetch` and `git worktree add` stay in the fixture repository.
 - **Produces (file-local, the names §Interfaces fixes):**
   - `const DEC_WITH_REASON: ActorFlags = { surface: 'agent', actor: 'probe:dec parity', reason: 'probe reason' }`
   - `interface DashProbe { argv: (id: string, dec: ActorFlags) => readonly (readonly string[])[]; decoy: () => void; untouched: (id: string) => void }`
@@ -6289,6 +6417,7 @@ import { fileURLToPath } from 'node:url';
 import { CCD, ghContainedEnv, harnessBin, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { CCD_ARGV, type ActorFlags } from '../src/ccdargv.js';
 import { decOf, eventsOf, readJournal } from './lifecycleHelpers.js';
+import { inheritedEnv } from './gitEnvStrip.js';
 import { DASH_IDS, DECOY_IDS, plantRow, reapLocks, regDirOf, regListing } from './dashIdFixture.js';
 
 const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src');
@@ -6378,7 +6507,7 @@ const runCcd = (args: readonly string[]): { code: number; out: string } => {
   const opts = {
     encoding: 'utf8' as const, cwd: h.home,
     env: ghContainedEnv(h.home,
-      { ...process.env, HOME: h.home, PATH: `${stub}:${process.env.PATH ?? ''}` },
+      { ...inheritedEnv(), HOME: h.home, PATH: `${stub}:${process.env.PATH ?? ''}` },
       { systemd: true, tmux: true }),
   };
   let res: { code: number; out: string };
@@ -6683,7 +6812,7 @@ How to run the rows:
   ```
   Red: 6 rows, `.reap-agent.lock`.
 - **T10.6 Delete ws-collect's identity arm** (occurrence 2 of 2). Use the same command with nth `2` and filter `-t 'ws-collect refuses id'`.
-  Red: 6 rows. The registry peek finds `agent.uuid`, so the lock opens: `.reap-agent.lock`. A `registered` refusal is journaled against `agent`.
+  Red: 6 rows. The redirect binds `agent`, which holds no `-`, so Task 9's pre-lock pass answers unmeasured `registry` before any lock: exit 1, no `.reap-agent.lock`, and a `collect` failure line (`probe-unmeasured`) journaled against `agent` (`a journal line names a decoy or the probed id`).
 - **T10.7 Delete `_reg_id_ok`'s dash clause:**
   ```bash
   S="${TMPDIR:-/tmp}/path-identity-w1b-task10"; node "$S/mutate.mjs" ccd/ccd "$S/m.ccd" '_reg_id_ok() { local LC_ALL=C; [[ "${1-}" =~ ^[A-Za-z0-9._-]+$ && "${1-}" != -* ]]; }' '_reg_id_ok() { local LC_ALL=C; [[ "${1-}" =~ ^[A-Za-z0-9._-]+$ ]]; }' && bash -n "$S/m.ccd" && (cd server && DASH_PARITY_CCD="$S/m.ccd" ./node_modules/.bin/vitest run test/ccdargv-dash-id-parity.test.ts)
@@ -7059,7 +7188,7 @@ Expected: `4 passed`.
 Set up once, from the workspace root. This takes a byte copy of the restamped, green `ccd/ccd`, and writes a one-anchor replacer:
 
 ```bash
-S=$(mktemp -d)
+S="${TMPDIR:-/tmp}/path-identity-w1b-task11"; mkdir -p "$S"
 cp ccd/ccd "$S/ccd.good"
 cat > "$S/mut.mjs" <<'EOF'
 // usage: node mut.mjs <file> <old> <new>: replaces the ONE occurrence of <old>; refuses zero or two.
@@ -7072,7 +7201,7 @@ writeFileSync(f, s.replace(a, () => b));
 EOF
 ```
 
-Apply each row alone. Run the row's mutation, then `(cd server && ./node_modules/.bin/vitest run test/ccd-collect-header-prose.test.ts)`, see the red, then restore with `cp "$S/ccd.good" ccd/ccd`. A `mut:` error means the anchor is not unique: fix the anchor, never the test. The red texts below were drafted, not measured, so record the measured ones.
+Apply each row alone, from the workspace root, and set `S="${TMPDIR:-/tmp}/path-identity-w1b-task11"` at the start of every Bash call, because shell state does not carry from one call to the next. Run the row's mutation, then `(cd server && ./node_modules/.bin/vitest run test/ccd-collect-header-prose.test.ts)`, see the red, then restore with `cp "$S/ccd.good" ccd/ccd`. A `mut:` error means the anchor is not unique: fix the anchor, never the test. The red texts below were drafted, not measured, so record the measured ones.
 
 | # | Mutation (from the workspace root) | Expected red |
 |---|---|---|
@@ -7089,7 +7218,7 @@ In M2 the `\|\|` is the table's escape for `||`. Type it as `||` inside the `$'�
 After the last row:
 
 ```bash
-cp "$S/ccd.good" ccd/ccd && cmp ccd/ccd "$S/ccd.good" && node shared/mark.mjs --check ccd/ccd; echo "restored rc=$?"   # rc=0
+S="${TMPDIR:-/tmp}/path-identity-w1b-task11"; cp "$S/ccd.good" ccd/ccd && cmp ccd/ccd "$S/ccd.good" && node shared/mark.mjs --check ccd/ccd; echo "restored rc=$?"   # rc=0
 rm -rf "$S"
 (cd server && ./node_modules/.bin/vitest run test/ccd-collect-header-prose.test.ts)                                   # 4 passed
 ```
@@ -7097,10 +7226,10 @@ rm -rf "$S"
 - [ ] **Step 7: The gates (unedited, green)**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/collect-readers.test.ts test/collect-audit-budget.test.ts test/ccd-collect-audit.test.ts test/ownership.test.ts test/mark-check.test.ts
-cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'CITATION DEBT|README HAS ITS OWN CENSUS|LOCATION INDEXES|ROW PASS|RANGE BOUND|backticked _identifier'
-cd server && ./node_modules/.bin/vitest run test/ccd-workspaces.test.ts -t 'routes EVERY bash call site'
-cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts
+(cd server && ./node_modules/.bin/vitest run test/collect-readers.test.ts test/collect-audit-budget.test.ts test/ccd-collect-audit.test.ts test/ownership.test.ts test/mark-check.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'CITATION DEBT|README HAS ITS OWN CENSUS|LOCATION INDEXES|ROW PASS|RANGE BOUND|backticked _identifier')
+(cd server && ./node_modules/.bin/vitest run test/ccd-workspaces.test.ts -t 'routes EVERY bash call site')
+(cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts)
 ```
 
 Expected: PASS, all of it. Run each in the foreground with a timeout of at least 600000 ms.
@@ -7281,7 +7410,7 @@ const DEPARTURES = ['surface-dash-rule-at-stop-and-ws-add-only', 'dot-rule-exten
 /** The residuals that stand whatever the code says next. */
 const BASE_RESIDUALS = ['dot-rule-only-at-the-token-verbs', 'verbs-outside-sec1-keep-the-inline-regex',
   'enable-one-arg-journals-an-unchecked-id', 'hand-planted-ids-over-the-cap', 'files-outside-the-name-census',
-  'projects-over-64-get-no-hook-card', 'btime-less-witness-takes-the-lock', 'btime-less-record-takes-the-lock'];
+  'projects-over-64-get-no-hook-card', 'btime-less-witness-takes-the-lock'];
 
 /** The residuals the records must name at this tip: the fixed list, plus each conditional one while the code still
  *  shows it. These are a server docstring that calls ccd's predicate dot-only, the EXPIRE-V1 note that says it ships
@@ -7440,7 +7569,10 @@ measured at the wave's tip unless it says otherwise.
 - Every post-loop id check in those eight verbs refuses a leading `-` through `_reg_id_ok`. A call whose id spells a
   flag may now answer `bad session id` where it answered a usage line or a "needs a value" line. A call that spells
   no id as a flag answers as before, byte for byte (measured: every existing suite of these verbs ran unedited and
-  green).
+  green), except where a value itself spells a flag and is now taken whole: a token or run id at the token verbs
+  answers `bad token` or `bad run id` where it answered a usage line, a ws-rename `--branch` value answers
+  `bad-branch` where the surface word became the new branch name, and a hold reason is held verbatim where the
+  surface word was held or a usage line answered.
 - `--actor` and `--reason` prose, and a hold reason, may still begin with `-`.
 - No refusal word, probe word, journal act or sanctioned `die` sentence was added. The verbs reuse `bad session id`
   and their usage lines. Stop's two new refusals print `bad session id: ` followed by the token or the id they
@@ -7512,7 +7644,7 @@ measured at the wave's tip unless it says otherwise.
   nothing and writes nothing. In order:
   1. The id must contain a `-`. If it does not, the answer is unmeasured `registry`, in the same words the locked
      evaluation uses.
-  2. Records are listed. A record whose body parses and names the id lets the lock open. If records exist but none
+  2. Records are listed, and a listing that fails is unmeasured `records`. A record whose body parses and names the id lets the lock open. If records exist but none
      both parses and names the id, the answer is the one the locked resume gives, word and detail byte for byte:
      `quarantine-kept`, or unmeasured `records` or `quarantine`.
   3. With no record, a witness whose body parses lets the lock open.
@@ -7549,7 +7681,7 @@ measured at the wave's tip unless it says otherwise.
 | ws-rename | `--branch` | Bound the literal id `--branch` | Refused before any act |
 | stop, in the order a server before W1a composes | `--surface` | Bound `pwa` as the id | Refused before any unit call |
 | ws-add | `--actor`, `--surface` | Bound project `agent`, which is a create | Refused before any worktree |
-| Every other verb and id | None | Refused, or answered for the literal id only | Refused, as before |
+| Every other verb and id | None | Refused before any lookup, lock or act | Refused, as before |
 
 *Table 1. The decision-carrying verbs, under a decision with and without a reason (ws-add without only).*
 
@@ -7573,7 +7705,8 @@ measured at the wave's tip unless it says otherwise.
 - `dot-rule-only-at-the-token-verbs`: release, archive, restore, hold, rename and stop still accept a dot-leading id.
   Refusing it there is an operator option.
 - `verbs-outside-sec1-keep-the-inline-regex`: ws-attic, pr-open, plain ws-audit, ws-reap, forget and `start <id>`
-  keep the id check they had. Plain ws-audit audits a dash-leading id literally and acts on no other row (pinned).
+  keep the id check they had, and `ensure <id>` and `pr-state --session <id>`, which have no flag loop, bind the id
+  they are given literally. Plain ws-audit audits a dash-leading id literally and acts on no other row (pinned).
 - `enable-one-arg-journals-an-unchecked-id`: `enable <id>` journals its row before any id check, beside `start <id>`,
   which takes its id unchecked.
 - `hand-planted-ids-over-the-cap`: a row planted by hand above `_REG_ID_MAX` is not refused. ccd never mints one.
@@ -7582,8 +7715,6 @@ measured at the wave's tip unless it says otherwise.
   `CCRC_PROJ_MAX` still gets no compaction card.
 - `btime-less-witness-takes-the-lock`: a witness that parses but records no birth time opens the lock. Its
   `witness-mismatch` stays an answer given under the lock.
-- `btime-less-record-takes-the-lock`: a record that parses and names the id but records no birth time opens the lock,
-  and only then answers `quarantine-kept`.
 - `server-docstrings-call-ccds-predicate-dot-only`: the docstrings of `isTmpRootId` (`shared/api.ts`) and
   `childReclaimLeafKept` (`server/src/childReclaimSweep.ts`) still describe ccd's `_ws_tmproot_id_ok` as refusing a
   leading `.` only. They are carried to the next wave that edits those files.
@@ -7612,7 +7743,7 @@ Then correct the block to the tip. The code wins over this draft, never the reve
 ```bash
 grep -n '^_reg_id_ok()\|^_ws_tmproot_id_ok()\|^_REG_ID_CAP_WHY=\|^_ws_collect_prelock()\|^_ws_project_valid()' ccd/ccd
 grep -n 'no LEADING dot or dash' ccd/ccd | wc -l                                    # 4: three callers and enable
-grep -n 'nothing was created' ccd/ccd | wc -l                                       # 3: one per mint site
+grep -c '_REG_ID_CAP_WHY — .*nothing was created' ccd/ccd                           # 3: one per mint site (ws-add's older compaction-lock die also says 'nothing was created')
 grep -n 'no lock was taken' ccd/ccd | head                                          # the verb's pre-lock detail
 grep -n 'export function childReclaimLeafKept\|export function isTmpRootId' server/src/childReclaimSweep.ts shared/api.ts
 ```
@@ -7709,13 +7840,13 @@ test titles cite the spec, never this contract.
 **Stated residuals**, named with no number; spec §2.9 says each one in full.
 - `dot-rule-only-at-the-token-verbs`: release, archive, restore, hold, rename and stop still accept a dot-leading id.
 - `verbs-outside-sec1-keep-the-inline-regex`: ws-attic, pr-open, plain ws-audit, ws-reap, forget and `start <id>`
-  keep the id check they had.
+  keep the id check they had; `ensure <id>` and `pr-state --session <id>` bind the id they are given literally.
 - `enable-one-arg-journals-an-unchecked-id`: `enable <id>` journals before any id check.
 - `hand-planted-ids-over-the-cap`: a row planted by hand above `_REG_ID_MAX` is not refused.
 - `files-outside-the-name-census`: the files the cap's census left out.
 - `projects-over-64-get-no-hook-card`: the cap bounds the composed id, not the project.
-- `btime-less-witness-takes-the-lock` and `btime-less-record-takes-the-lock`: a parsed witness or record with no birth
-  time opens the lock, and its answer is given under it.
+- `btime-less-witness-takes-the-lock`: a parsed witness with no birth time opens the lock, and its answer is given
+  under it.
 - `server-docstrings-call-ccds-predicate-dot-only`: two server docstrings still call ccd's predicate dot-only, carried
   to the next wave that edits those files.
 - `expire-v1-note-ships-it-inert`: workspace lifecycle's text, reported to that programme.
@@ -7746,8 +7877,8 @@ Expected: PASS, 8 of 8.
 - [ ] **Step 7: Run every suite that reads either document, plus the ledger and publicness guards.** None of these is edited by this task except the new file.
 
 ```bash
-cd server && grep -l '2026-10-12-path-identity-design\|child-reclamation-contract' test/*.ts          # expected: collect-lane-prose.test.ts and path-identity-w1b-prose.test.ts; run every file it lists
-cd server && ./node_modules/.bin/vitest run test/path-identity-w1b-prose.test.ts test/collect-lane-prose.test.ts test/ccd-id-cap.test.ts test/deviation-refs.test.ts test/dtbd.test.ts test/topology-clean.test.ts
+(cd server && grep -l '2026-10-12-path-identity-design\|child-reclamation-contract' test/*.ts)          # expected: collect-lane-prose.test.ts and path-identity-w1b-prose.test.ts; run every file it lists
+(cd server && ./node_modules/.bin/vitest run test/path-identity-w1b-prose.test.ts test/collect-lane-prose.test.ts test/ccd-id-cap.test.ts test/deviation-refs.test.ts test/dtbd.test.ts test/topology-clean.test.ts)
 git diff -U0 HEAD -- docs/superpowers/specs/2026-10-12-path-identity-design.md docs/superpowers/programs/child-reclamation-contract.md | grep '^+' | grep -cE 'D-[0-9]|[0-9]{4} ?(–|\.\.|-) ?[0-9]{4}'   # 0
 git diff -U0 HEAD -- docs/superpowers/specs/2026-10-12-path-identity-design.md docs/superpowers/programs/child-reclamation-contract.md | grep '^+' | grep -cE '/home/|/mnt/|\.ts\.net|100\.[0-9]+\.[0-9]+\.[0-9]+'   # 0: no box path, tailnet name or address
 git diff --name-only HEAD                                                            # exactly the spec, the contract and (untracked, so shown by git status) the new test
@@ -7819,7 +7950,7 @@ EOF
 - Scratch: `.superpowers/sdd/2026-10-12-path-identity-w1b-ccd-id-hardening/task13/`. It is gitignored, never committed, and called `$L` below. Every command runs from the workspace root. Each Bash call sets `L` again, because shell state does not carry from one call to the next.
 
 **Interfaces:**
-- Consumes the eight `ccd/ccd` names exactly as §Interfaces spells them: `_reg_id_ok`, `_REG_ID_MAX`, `_reg_id_cap`, `_REG_ID_CAP_WHY`, `_ws_collect_slug_askable`, `_ws_collect_witness_judge`, `_ws_collect_records_judge` and `_ws_collect_prelock`. It also consumes the re-derived `_ws_tmproot_id_ok`, the twelve new `server/test` files of Tasks 1 to 11, and these Task 0 records in the ledger's `progress.md`: (c1) the `'ccd/ccd': <n>` line, Step 4's counts for both boxes, and Step 5's W and cap.
+- Consumes the eight `ccd/ccd` names exactly as §Interfaces spells them: `_reg_id_ok`, `_REG_ID_MAX`, `_reg_id_cap`, `_REG_ID_CAP_WHY`, `_ws_collect_slug_askable`, `_ws_collect_witness_judge`, `_ws_collect_records_judge` and `_ws_collect_prelock`. It also consumes the re-derived `_ws_tmproot_id_ok`, the thirteen new `server/test` files of Tasks 1 to 12 (Task 12 adds `path-identity-w1b-prose.test.ts`), and these Task 0 records in the ledger's `progress.md`: (c1) the `'ccd/ccd': <n>` line, Step 4's counts for both boxes, and Step 5's W and cap.
 - Produces:
   - the suite verdict, which becomes the wave-done's `suite:` line;
   - the pushed branch tip;
@@ -8021,7 +8152,7 @@ git diff --name-only origin/main...HEAD -- docs/superpowers/plans/
 git diff --diff-filter=DR --name-only origin/main...HEAD
 git diff --diff-filter=M --name-only origin/main...HEAD -- server/test
 git diff --diff-filter=A --name-only origin/main...HEAD -- server/test | LC_ALL=C sort > "$L/added-tests"
-printf '%s\n' server/test/dashIdFixture.ts server/test/ccd-reg-id-ok.test.ts server/test/ccd-token-verbs-dash-id.test.ts server/test/ccd-stop-dash-id.test.ts server/test/ccd-session-verbs-dash-id.test.ts server/test/ccd-project-dash.test.ts server/test/ccd-ws-add-dash-id.test.ts server/test/ccd-id-cap.test.ts server/test/ccd-token-verbs-dot-id.test.ts server/test/ccd-collect-prelock.test.ts server/test/ccdargv-dash-id-parity.test.ts server/test/ccd-collect-header-prose.test.ts | LC_ALL=C sort | diff - "$L/added-tests" && echo "added tests exact"
+printf '%s\n' server/test/dashIdFixture.ts server/test/ccd-reg-id-ok.test.ts server/test/ccd-token-verbs-dash-id.test.ts server/test/ccd-stop-dash-id.test.ts server/test/ccd-session-verbs-dash-id.test.ts server/test/ccd-project-dash.test.ts server/test/ccd-ws-add-dash-id.test.ts server/test/ccd-id-cap.test.ts server/test/ccd-token-verbs-dot-id.test.ts server/test/ccd-collect-prelock.test.ts server/test/ccdargv-dash-id-parity.test.ts server/test/ccd-collect-header-prose.test.ts server/test/path-identity-w1b-prose.test.ts | LC_ALL=C sort | diff - "$L/added-tests" && echo "added tests exact"
 git diff --name-only origin/main...HEAD -- server/src shared agent pwa deploy ccd/ccrc ccd/session-hook.sh ccd/compact-card.mjs ccd/ccd-entry.py ccd/coordinator-skill ccd/worker-skill ccd/reviewer-skill README.md CLAUDE.md docs/superpowers/programs/path-identity.md docs/superpowers/specs/2026-09-09-graphify-compaction-card-design.md docs/superpowers/plans/2026-09-10-graphify-compaction-card-plan-a.md server/test/session-hook.test.ts server/test/single-definition.test.ts server/test/ccd-ws-reap.test.ts server/test/ccd-wsaudit-nonpoison.test.ts server/test/ccdargv-dec-parity.test.ts
 git ls-files .superpowers | wc -l
 ```
@@ -8097,7 +8228,7 @@ Wave 2 of 4 of the path-identity programme (spec `docs/superpowers/specs/2026-10
 - Task 12: the spec's 2.9 and section 7 status cells; the contract's "§17 as built".
 
 ### Boundary
-`ccd/ccd` (restamped with `bash ccd/ccrc restamp ccd/ccd`); one line-neutral comment in `ccd/ccrc-doctor-checks`; twelve new files under `server/test/`, and three existing ones edited only where a pinned behaviour inverts or a comment became false (`ccd-actor-flags`, `ccd-workspaces`, `pool-name-parity`); the spec and the contract's as-built note; this plan. No server, shared, agent, PWA or deploy source; no route, table, capability word, ccd verb, agent grant or wire field.
+`ccd/ccd` (restamped with `bash ccd/ccrc restamp ccd/ccd`); one line-neutral comment in `ccd/ccrc-doctor-checks`; thirteen new files under `server/test/`, and three existing ones edited only where a pinned behaviour inverts or a comment became false (`ccd-actor-flags`, `ccd-workspaces`, `pool-name-parity`); the spec and the contract's as-built note; this plan. No server, shared, agent, PWA or deploy source; no route, table, capability word, ccd verb, agent grant or wire field.
 
 ### Suite
 - suite: {{green|red}} on the first full run after implementation: {{N_FILES}} server test files in 24 shards; agent and PWA green unchanged.
@@ -8108,7 +8239,7 @@ Wave 2 of 4 of the path-identity programme (spec `docs/superpowers/specs/2026-10
 - server box: {{the brief's line}}
 
 ### Stated residuals
-- `dot-rule-only-at-the-token-verbs`, `verbs-outside-sec1-keep-the-inline-regex`, `enable-one-arg-journals-an-unchecked-id`, `hand-planted-ids-over-the-cap`, `projects-over-64-get-no-hook-card`, `btime-less-witness-takes-the-lock`, `btime-less-record-takes-the-lock`, `server-docstrings-call-ccds-predicate-dot-only`, `expire-v1-note-ships-it-inert`.
+- `dot-rule-only-at-the-token-verbs`, `verbs-outside-sec1-keep-the-inline-regex`, `enable-one-arg-journals-an-unchecked-id`, `hand-planted-ids-over-the-cap`, `projects-over-64-get-no-hook-card`, `btime-less-witness-takes-the-lock`, `server-docstrings-call-ccds-predicate-dot-only`, `expire-v1-note-ships-it-inert`.
 - `files-outside-the-name-census`: {{each CENSUS_EXCLUDED file, with its reason}}.
 
 ### Departures (by slug; numbers are assigned at the fix round)
@@ -8253,6 +8384,9 @@ None are defined yet. These are expected, named by slug so that the coordinator 
 - `section-2-2-verdicts-measured-at-task-10` (R20)
 - `dash-parity-in-its-own-file` (R19)
 - `collect-verb-prelock-refusal-precedes-the-pause` (R28)
+- `flag-spelled-token-answers-a-malformed-value` (R16, R17; Task 2): a token or run id spelled as a flag is taken whole and refused as malformed, where it answered the usage line; at ws-reclaim the refusal is journaled against the real id
+- `hold-reason-spelling-a-flag-is-held-verbatim` (R17; Task 4): a hold reason that spells a flag is held verbatim, where the server's argv held the surface word, and a trailing one no longer answers the usage line
+- `rename-branch-value-taken-whole` (R17; Task 4): a `--branch` value that spells a flag reaches `_ws_branch_valid` and answers `bad-branch`, where the surface word became the new branch name
 
 ### Plan-text corrections and extra pins, one number per task
 
@@ -8260,13 +8394,13 @@ None are defined yet. Each task that has any gets one number.
 
 **Named, with no number: stated residuals.**
 - `dot-rule-only-at-the-token-verbs`: release, archive, restore, hold, rename and stop still accept a dot-leading id. This is an operator option (R3).
-- `verbs-outside-sec1-keep-the-inline-regex`: ws-attic, pr-open, plain ws-audit, ws-reap, forget and `start <id>` keep today's id check. Plain ws-audit audits a dash-leading id literally (pinned by Task 10).
+- `verbs-outside-sec1-keep-the-inline-regex`: ws-attic, pr-open, plain ws-audit, ws-reap, forget and `start <id>` keep today's id check, and `ensure <id>` and `pr-state --session <id>` bind the id they are given literally. Plain ws-audit audits a dash-leading id literally (pinned by Task 10).
 - `enable-one-arg-journals-an-unchecked-id`: `enable <id>` journals `_lc_done enable "$id"` before any id check, beside `start <id>`.
 - `hand-planted-ids-over-the-cap`: a row planted by hand above `_REG_ID_MAX` is not refused (SEC5's residual).
 - `files-outside-the-name-census`: each file Task 0 left out of the census, with its reason (`CENSUS_EXCLUDED`).
 - `ids-over-128-invisible-to-the-hook-peer-census`: only if the coordinator chooses R27 (b).
 - `projects-over-64-get-no-hook-card`: the hook's `CCRC_PROJ_MAX` gate, under either R27 choice.
 - `btime-less-witness-takes-the-lock`: its `witness-mismatch` stays an under-lock answer (R21).
-- `btime-less-record-takes-the-lock`: a record that parses and names the id but records no birth time opens the lock, and only then answers `quarantine-kept`.
-- `server-docstrings-call-ccds-predicate-dot-only`: the comments at `isTmpRootId` (`shared/api.ts`) and `leafIdOk` (`server/src/childReclaimSweep.ts`) are carried to the next wave that edits those files.
+- `server-docstrings-call-ccds-predicate-dot-only`: the comments at `isTmpRootId` (`shared/api.ts`) and `childReclaimLeafKept` (`server/src/childReclaimSweep.ts`) are carried to the next wave that edits those files.
 - `expire-v1-note-ships-it-inert`: workspace-lifecycle's text, reported to that programme.
+- `comments-say-ccd-scans-the-session-value`: the `isTmpRootId` docstring (`shared/api.ts`) and the comment above `collect-l0.test.ts`'s dash-leading rows still say ccd's destructive verbs read their decision flags from `--session`'s value. At this wave's tip the token verbs take the pair whole, so that holds only for a box on an older ccd. Neither file is in this wave's HARD BOUNDARY; both are carried to the next wave that edits them.

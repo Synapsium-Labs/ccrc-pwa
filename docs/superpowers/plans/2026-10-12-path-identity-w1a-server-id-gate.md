@@ -104,6 +104,7 @@ Each line binds every task.
   - A fold row on an exhaustive switch is measured against an UNLISTED bad id (R15).
   - An arm masked by an outer gate answers the safe word, and its comment names the mask. It gets no second pin (R17).
 - **Run vitest in the foreground, from `server/`:** `./node_modules/.bin/vitest run test/<file>`, with a timeout of at least 600000 ms. Never bare `npx vitest`.
+  - Run every command line written `cd server && …` as `(cd server && …)`, in a subshell. The worker's shell keeps its working directory between calls, so a bare `cd server` makes the next `cd server` line fail and runs the next root-relative command (`grep … server/src`, `git add server/…`) from the wrong directory. A mutation table's `S` or "from `server/`" command runs the same way.
   - Re-run a CLAUDE.md load flake in isolation before calling it a break.
   - New cases go in NEW files (the precedent of the CCR-15 waves). Edit an existing file only where a task names it: a literal shape, a pin of the old order, or a test the new gate breaks.
 - **Modules.** An isolated worktree installs server modules only. Run `npm ci` in `pwa/` or `agent/` before any command there.
@@ -341,6 +342,7 @@ Every file this wave touches, taken from each task's **Files** block. That block
 | `server/test/whitelist-subset.test.ts` | 14 (`EXPECTED`'s two stop rows, two `isExecAllowed` literals) |
 | `server/test/lifecycle.test.ts` | 14 (the six stop rows and two comments), 7 (only if a `listProjects` equality needs `registry`) |
 | `server/test/fleetws.test.ts` | 7 (only if the cold-start order pin names a fleet frame on an unlistable registry) |
+| `server/test/fleet-health.test.ts` | 7 (two live-arm cases seed an empty registry directory; slug `fleet-health-fixtures-list-their-registry`) |
 | `server/test/id-argv-census.test.ts` (new) | 15 |
 | `README.md` | 16 (the stop prose, only if #351 merged before Task 0) |
 | `docs/superpowers/plans/2026-10-12-path-identity-w1a-server-id-gate.md` | 16 (the as-built section) |
@@ -426,6 +428,8 @@ export type CloseOutcome    = /* …today's members… */ | { ok: false; kind: '
 //   { ok: true, id, state: 'failed', released: false, childReclaim: 'not-queued', childReclaimWhy: 'marker-unreadable' }
 ```
 - `abandonMove` and `abandonRefusal` keep their signatures and code. `abandonRefusal`'s docstring gains one sentence for R6.
+- `childGateAtClose` becomes exported (Task 4, R17 as amended). Its signature is unchanged: `export async function childGateAtClose(deps: CloseRunDeps, run: RunRow, sessionId: string, siblings: OpenSiblingsResult, final: boolean, state: 'done' | 'failed', verifiedLine: CcdPrLine | null): Promise<ChildGate>`. `ChildGate` stays module-private, and the function's one caller outside `close.ts` is its pin.
+- `childGateAtClose` (Task 4) becomes `export async function childGateAtClose(deps: CloseRunDeps, run: RunRow, sessionId: string, siblings: OpenSiblingsResult, final: boolean, state: 'done' | 'failed', verifiedLine: CcdPrLine | null): Promise<ChildGate>`. Its signature is unchanged. It is exported for its direct pin (R17 amendment), and `ChildGate` stays module-private.
 - `CloseOutcome.released`'s docstring today lists four ways to get `false`. It gains a fifth: "5. an ABANDON of a run whose stored `sessionId` is not a registry id: NO fleet act, the same as (4), but the run HAD a session id."
 
 **L3, `server/src/lifecycle.ts`** (Task 7):
@@ -486,6 +490,8 @@ export const EDGE_ACCEPTED_IDS: readonly string[];   // ['a--actor', 'a.--actor'
 
 `server/test/idGateFixture.ts` (Task 2; Task 3 adds `storedRun`):
 ```ts
+export const ID_GATE_TOKEN: string;   // 'f'.repeat(64): the box token appFor builds every server with (send it as x-ccrc-mail-token)
+export const ID_GATE_TOKEN: string;   // 'f'.repeat(64): the box token appFor builds every server with
 export function seedRow(home: string, id: string, fields?: Record<string, string>): void;   // coord-abandon.test.ts's `seed` shape, any id
 export function recorder(cfg?: { fail?: ReadonlySet<string> }): { run: Runner; calls: string[][] };
 export function appFor(home: string, run: Runner, over?: Partial<Omit<Deps, 'cfg'>>): Promise<{ app: FastifyInstance; coord: CoordStore; cfg: CcrcConfig }>;
@@ -948,16 +954,16 @@ export function isTmpRootId(id: unknown): id is string {
 After (38 lines):
 
 ```ts
-/** The longest registry id (spec §2.3): 255 characters, one file-name component (`$REG/<id>.uuid`); the session-id
+/** The longest registry id (spec 2026-10-12 §2.3): 255 characters, one file-name component (`$REG/<id>.uuid`); the session-id
  *  shape is ASCII, so a character is a byte.
  *  - No file system this runs on takes a component over 255 bytes. A temp root is named by the same id
  *    (`$REG/tmproots/<id>`), so the collector's cap below is this one.
  *  - ccd's own names run out sooner: `.reap-<id>.lock` past 244, and a slot's name sooner still. A tighter cap belongs
- *    where ccd mints an id (spec §2.6), not here: this cap is the longest name the registry can hold at all. */
+ *    where ccd mints an id (spec 2026-10-12 §2.6), not here: this cap is the longest name the registry can hold at all. */
 export const REGISTRY_ID_MAX_CHARS = 255;
 
-/** THE ONE PREDICATE of a registry id (spec §2.3): length first, then the session-id shape, then no leading `.` or `-`.
- *  - The leading `-` is a SAFETY rule, not defence in depth (spec §2.1). ccd's verbs read their decision flags from any
+/** THE ONE PREDICATE of a registry id (spec 2026-10-12 §2.3): length first, then the session-id shape, then no leading `.` or `-`.
+ *  - The leading `-` is a SAFETY rule, not defence in depth (spec 2026-10-12 §2.1). ccd's verbs read their decision flags from any
  *    position, `--session`'s value included, and every such flag begins `--`. An id of `--actor` is read as a flag,
  *    and the verb binds another token as its id. The shape refuses `=`, so no `--flag=value` can be an id either.
  *  - The leading `.` keeps `.`, `..` and a hidden name out, as ccd's own `_ws_tmproot_id_ok` does.
@@ -976,8 +982,8 @@ export function isRegistryId(id: unknown): id is string {
  *    this name, and their move to `REGISTRY_ID_MAX_CHARS` waits for a wave that edits the store. */
 export const TMPROOT_ID_MAX_CHARS = REGISTRY_ID_MAX_CHARS;
 
-/** THE ONE PREDICATE of a temp-root id (spec §5.10) is the registry id predicate, so the dash, dot and length clauses
- *  are written once (spec §2.3) and the accepted set is unchanged.
+/** THE ONE PREDICATE of a temp-root id (spec 2026-09-22 §5.10) is the registry id predicate, so the dash, dot and length clauses
+ *  are written once (spec 2026-10-12 §2.3) and the accepted set is unchanged.
  *  - The collector asks it of every listed name before any argv, and again of a job's id before its audit or its act.
  *  - The kept-leaf reader asks it before it names a leaf, so an id the collector never audits is not listed there
  *    either.
@@ -1050,7 +1056,7 @@ Make each mutation alone, run its command, record the red in the SDD ledger, and
 | T1.5 | `export const TMPROOT_ID_MAX_CHARS = REGISTRY_ID_MAX_CHARS;` → `export const TMPROOT_ID_MAX_CHARS = 255;` | same | `TMPROOT_ID_MAX_CHARS is the alias, never a second literal` (`expected '255;' to be 'REGISTRY_ID_MAX_CHARS;'`). `registry-id-l0`'s cap case stays green (255 equals 255); that is why the alias pin exists. |
 | T1.6 | In `server/src/registry.ts`, add the line `const REGISTRY_ID_MAX_CHARS = 255;` directly after `} from '../../shared/api.js';` | same | `isRegistryId and REGISTRY_ID_MAX_CHARS are declared in shared/api.ts and nowhere else` (`expected [ 'server/src/registry.ts', 'shared/api.ts' ] to deeply equal [ 'shared/api.ts' ]`) |
 | T1.7 | `export const REGISTRY_ID_MAX_CHARS = 255;` → `= 256;` | `(cd server && ./node_modules/.bin/vitest run test/registry-id-l0.test.ts test/collect-population.test.ts)` | `its cap is 255 characters, hardcoded` (`expected 256 to be 255`), `256 characters -> false`, the lists case, and `collect-population`'s `HARDCODED on purpose` case (`expected 256 to be 255`) |
-| T1.8 | Replace `export function isTmpRootId(id: unknown): id is string {` / `  return isRegistryId(id);` / `}` with `export const isTmpRootId = isRegistryId;` | `(cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts -t 'temp-root id predicate and its cap are defined once\|path identity W1a')` | wave 9's `isTmpRootId and TMPROOT_ID_MAX_CHARS are declared in shared/api.ts and nowhere else` (`expected [] to deeply equal [ 'shared/api.ts' ]`), and this block's body pin (`isTmpRootId is not declared as a function in shared/api.ts: expected null not to be null`) |
+| T1.8 | Replace `export function isTmpRootId(id: unknown): id is string {` / `  return isRegistryId(id);` / `}` with `export const isTmpRootId = isRegistryId;` | `(cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts)` (the whole file: an alternation needs a bare pipe, which this table cannot carry, and `\|` is a literal pipe to vitest) | wave 9's `isTmpRootId and TMPROOT_ID_MAX_CHARS are declared in shared/api.ts and nowhere else` (`expected [] to deeply equal [ 'shared/api.ts' ]`), and this block's body pin (`isTmpRootId is not declared as a function in shared/api.ts: expected null not to be null`) |
 
 After reverting each mutation, run Step 5's first two commands again and see them green. Then check that `git diff --stat` names only the four files Step 8 adds.
 
@@ -1726,6 +1732,7 @@ grep -c "  if (!hold.ok) return hold;" server/src/coord/dispatch.ts             
 grep -c "if (run.kind === 'review') return closeReviewRun(" server/src/coord/close.ts   # (c13) 1
 grep -c "return fresh.run.claimedBy === g.claimedBy" server/src/coord/close.ts          # 1: the sweep gate the R6 branch follows
 grep -c "isRegistryId" server/src/coord/close.ts server/src/coord/dispatch.ts server/src/coord/routes.ts   # 0 each
+grep -c "CCD_ARGV\." server/src/coord/close.ts server/src/coord/dispatch.ts server/src/coord/routes.ts   # record each: Step 4 compares close.ts against this base (7 at 837a099c0)
 grep -n "kind: 'bad-session'" server/src/coord/*.ts                                    # nothing
 grep -c "        unbound: r.unbound });" server/src/coord/routes.ts                    # 1 (the childSpent arm Step 4 (j) stays away from)
 ls server/test/stored-row-id-gates.test.ts 2>/dev/null || echo "absent, as expected"
@@ -2331,8 +2338,9 @@ with:
     // argv, so this arm takes no fleet act for it: no sibling read, no child gate, no hold and no release.
     //
     // It still CLOSES the run. This arm is the release valve of three doors: the operator's abandon, the archive
-    // door's programme end and the dead-coordinator sweep. A valve that refused would leave such a run holding its
-    // slot for good.
+    // door's programme end and the dead-coordinator sweep. A coordinator's own `POST /api/runs/:id/close` whose body
+    // is `{ intent: 'abandon' }` reaches this arm too, and closes such a run the same way. A valve that refused would
+    // leave such a run holding its slot for good.
     //
     // The order: the sweep's gate runs first, as it does before any act; then the store's close, with the sweep's
     // compare-and-set; and only once that commits, ONE run event, so the trail tells this close from an ordinary
@@ -2463,7 +2471,7 @@ Make each edit, run it, see the red, and revert before the next. Record each bef
 | 3 | `close.ts`: delete `if (!isRegistryId(run.sessionId)) return { ok: false, kind: 'bad-session' };` | `S -t 'closeRun refuses'` | See the list below this table. |
 | 4 | `close.ts`: move that line below `if (run.kind === 'review') return closeReviewRun(…);` | `S -t 'review run whose stored'` | `expected { ok: true, … released: true … } to deeply equal { ok: false, kind: 'bad-session' }` |
 | 5 | `close.ts`: delete the whole R6 block (`if (run.sessionId !== null && !isRegistryId(run.sessionId)) { … }` in the abandon arm) | `S -t 'abandon arm'` | Operator case: `expected { …, released: true, childReclaim: 'not-queued', childReclaimWhy: 'not-a-child' } to deeply equal { …, released: false, …, childReclaimWhy: 'marker-unreadable' }`, with `[ 'ws-release', '--session', '--actor' ]` composed. Programme end: `calls` also holds that release. |
-| 6 | `close.ts`: make the R6 block's body `return { ok: false, kind: 'bad-session' };` | `S -t 'operator abandon\|programme end'` | Operator case: `expected 409 to be 200`. Programme end: `the door refused: {"status":409,"body":{"ok":false,"error":"programme-partly-ended",…` |
+| 6 | `close.ts`: make the R6 block's body `return { ok: false, kind: 'bad-session' };` | `S -t 'operator abandon'`, then `S -t 'programme end'` (two runs: a bare pipe cannot sit in this table, and `\|` is a literal pipe to vitest) | Operator case: `expected 409 to be 200`. Programme end: `the door refused: {"status":409,"body":{"ok":false,"error":"programme-partly-ended",…` |
 | 7 | `close.ts`: make the R6 block's return `return { ok: true, id, state: 'failed', released: false, ...handOffChildReclaim(deps, NO_CHILD_GATE) };` | `S -t 'operator abandon'` | `childReclaimWhy: 'not-a-child'` where `'marker-unreadable'` is expected |
 | 8 | `close.ts`: delete `coord.recordRunEvent(id, causedBy, 'fleet-act-omitted:bad-session');` | `S -t 'abandon arm'` | Operator case: the event list lacks its third row. Sweep case: `expected [] to deeply equal [ [ 'sweep', 'failed', 'failed', 'fleet-act-omitted:bad-session' ] ]`. Programme end: `expected [] to have a length of 1`. |
 | 9 | `close.ts`: delete the R6 block's `if (sweep !== undefined) { … }` | `S -t 'sweep'` | Revived case: `expected { ok: true, … state: 'failed' … } to deeply equal { ok: false, kind: 'sweep-stopped', … }`. Re-measure case: `the claimant is re-measured once, before the close: expected 0 to be 1`. |
@@ -3796,7 +3804,7 @@ with
 (a) `server/test/registry.test.ts`. Replace every occurrence of each string below (the Edit tool's `replace_all`):
 - `{ found: false, reason: 'absent' }` → `{ kind: 'absent' }` (four places);
 - `{ found: false, reason: 'unlistable' }` → `{ kind: 'unlistable' }` (one);
-- `{ found: true, record: whole.find((r) => r.id === 'claude-a-MekWarLive') }` → `{ kind: 'found', record: whole.find((r) => r.id === 'claude-a-MekWarLive') }` (one);
+- `{ found: true, record: whole.find(` → `{ kind: 'found', record: whole.find(` (one: the whole-registry equality case; the rest of that line, its id literal included, stays byte for byte);
 - `single.found && ` → `single.kind === 'found' && ` (two);
 - `rec.found && rec.record.held` → `rec.kind === 'found' && rec.record.held` (one);
 - in the titles, `{found:false, reason:\'absent\'}` → `{kind:\'absent\'}` (four), and `{found:false, reason:\'unlistable\'}` → `{kind:\'unlistable\'}` (one).
@@ -3881,7 +3889,7 @@ cd server && ./node_modules/.bin/vitest run test/mail-routes.test.ts test/diverg
   test/unattended-actor.test.ts test/verb-gate.test.ts test/stored-row-id-gates.test.ts test/knownid-registry-id.test.ts
 cd server && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json
 cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts
-grep -rnE "\bread\.found\b|incoming\.found\b|reason === 'unlistable'" server/src --include=*.ts      # prints nothing
+grep -rnE "\bread\.found\b|incoming\.found\b|reason === 'unlistable'" server/src --include=*.ts      # one line only: server/src/watch.ts's worktree census (`read.reason === 'unreachable' || read.reason === 'unlistable'`), a different read that this task does not touch
 grep -rn "case 'bad-id'" server/src --include=*.ts | wc -l                                            # 14: one arm per caller
 grep -rnE 'readSessionRecord\(' server/src --include=*.ts | grep -vE 'export async function|^\S+:[0-9]+:\s+(//|\*)' | wc -l   # 14: unchanged
 git diff --stat HEAD -- shared ccd agent pwa README.md server/src/watch.ts server/src/coord/dispatch.ts server/src/coord/store.ts   # prints nothing
@@ -3892,6 +3900,7 @@ Expected:
 - Every other listed suite is green. `registry` re-checks the `[registry-read-census:*]` claims in the docstrings this task touched.
 - `typecheck-tests` and `stall-sweep` are known load flakes: re-run either in isolation before calling it red.
 - Both `tsc` runs print nothing. The greps print as stated, and the `git diff --stat` prints nothing.
+- An existing suite may go red because its fixture hands one of the fourteen callers an id that fails the predicate (a leading `-` or `.`, a space, more than 255 characters). The read is then right, and the fixture predates it. STOP and report `existing-fixture-id-fails-the-predicate` with the file and the title. Do not loosen the read.
 
 - [ ] **Step 7: Mutation table**
 
@@ -3900,7 +3909,7 @@ Apply each mutation alone, run its command from `server/`, see the red, and reve
 | # | Mutation (exact edit) | Command | Expected red |
 |---|---|---|---|
 | T4.1 | `readSessionRecord`: delete `if (!isRegistryId(id)) return { kind: 'bad-id' };` | S | Every case but the control. The zero-listing case: `expected { kind: 'found', record: { … } } to deeply equal { kind: 'bad-id' }`. `measureClaimant` (unlisted): `dead`. The lane: `expected 'failed' to be 'working'`. `childBindGate`: `{ ok: true }`. `reclaimChild`: `gone`. `childGateAtClose`: `not-a-child`. The routes: `/kickoff` `expected 200 to be 400`. The reclaim door: `expected 404 to be 400`. The ask: `expected 200 to be 409` (the answer is taken) |
-| T4.2 | `readSessionRecord`: move the guard to just below `noteWholeFleetListing(names !== null, now);` | S | the zero-listing case only: `no listing is spent on an id ccd could read as a flag: expected 1 to be 0` |
+| T4.2 | `readSessionRecord`: move the guard to just below `noteWholeFleetListing(names !== null, now);` | S | two cases, each on its listing count only: the zero-listing case (`no listing is spent on an id ccd could read as a flag: expected 1 to be 0`), and `childGateAtClose(--actor) …` (`nothing ever listed this id, so nothing is re-listed for it: expected 1 to be 0`), whose io counts every `readdir` |
 | T4.3 | `measureClaimant`: fold — delete the `case 'bad-id':` arm and write `case 'absent': case 'bad-id': break;` (rung 1's `if (read.kind !== 'found')` then admits it) | S | `measureClaimant('--actor') is unmeasurable, never dead`: `expected { state: 'dead', cause: 'absent', … } to deeply equal { state: 'unmeasurable', … }`; `with its row planted`: rung 1's listed-but-unassembled `why`; the lane: `never abandoned: expected 'failed' to be 'working'` |
 | T4.4 | `childBindGate`: fold — delete the `case 'bad-id':` arm and write `case 'absent': case 'bad-id': {` | S | `expected { ok: true } to deeply equal { ok: false, code: 'spent-unmeasured', … }` |
 | T4.5 | `childReclaimOutcome`: fold — delete the `case 'bad-id':` arm and write `case 'absent': case 'bad-id': {` | S | `expected { kind: 'gone', sessionId: '--actor' } to deeply equal { kind: 'deferred', … }` (the mail is cancelled) |
@@ -4827,12 +4836,12 @@ Then confirm the counts:
 ```bash
 grep -rc '\[registry-refused:unplaced\]' server/src | awk -F: '{ s += $2 } END { print s }'   # 19
 grep -rc '\[registry-refused:wrapper\]' server/src | awk -F: '{ s += $2 } END { print s }'    # 1
-grep -rn '\[registry-refused:' server/src | grep '[0-9].*registry-refused\|registry-refused[^0-9]*[0-9]' | grep -v '^[^:]*:[0-9]*:' | wc -l   # 0
+grep -rh '\[registry-refused:' server/src | grep -c '[0-9]'   # 0
 grep -rnE 'readRegistryMeasured\(' server/src --include=*.ts | grep -vc 'export async function'     # (c5) still 8
 grep -rnE '(await|\?\?|\() *readRegistry\(' server/src --include=*.ts | grep -vE '^\S+:[0-9]+:\s+(//|\*)' | wc -l   # (c6) still 12
 ```
 
-The third line checks that no tag line carries a digit after the `file:line:` prefix grep adds. If it prints anything other than `0`, read the lines it names and remove the digit.
+The third line counts the tag lines that carry a digit. `-h` drops the file name and there is no `-n`, so only each line's own text is matched. If it prints anything other than `0`, list the tag lines with `grep -rn '\[registry-refused:' server/src`, and remove the digit from each tag line that carries one.
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
@@ -4860,6 +4869,8 @@ The worker measures every red text. Where the measured text differs from the dra
 | 6 | Add an untagged reader call. In `server/src/commands.ts`, insert `  await readRegistry(deps.io, deps.cfg);` as the first statement of `sessionCommands`, ABOVE its tag line | C | `an untagged reader call: expected [ 'commands.ts:<n>' ] to deeply equal []`. The multiset gains `commands.ts \| sessionCommands \| readRegistry \| null` |
 | 7 | A word outside the vocabulary. In `sweepNames`' tag, `[registry-refused:unplaced]` becomes `[registry-refused:unplacd]` | C | `a word outside the census vocabulary: expected [ 'watch.ts:<n> unplacd' ] to deeply equal []` |
 | 8 | A tag with no call. Insert `// [registry-refused:holds] stray` as a new line directly above `export async function listProjects(` in `server/src/lifecycle.ts` | C | `a [registry-refused:*] tag that stands above no reader call: expected 21 to be 20` |
+| 9 | Drop the prune. In `noteRefused`, delete the line `for (const id of refusedLogged) if (!refused.has(id)) refusedLogged.delete(id);` | `R -t 'leaves and returns'` | the third assertion: one line where two were expected (`expected [ 'ccrc-server: registry lists "--actor.uuid", … ] to deeply equal [ …, … ]`), because a name that left and came back is never logged again |
+| 10 | Drop the quoting. In `noteRefused`'s `console.warn`, ``${JSON.stringify(`${id}.uuid`)}`` becomes `"${id}.uuid"` | `R -t 'logged once'` | the line equality fails on the `x\ny` name (a raw newline where the escaped `\n` was expected), and `A newline in a file name cannot forge a second log line` reads `expected false to be true` |
 
 - [ ] **Step 7: Typecheck and the neighbouring suites**
 
@@ -5370,30 +5381,36 @@ describe('mail holds a delivery to a refused recipient (spec §2.3)', () => {
 });
 ```
 
-(b) In `server/test/registry-refused-census.test.ts`, the classified-set table (Task 5's case `the classified set is exactly these 20 sites`): change exactly these eight rows. Match each row by its file and enclosing function. Keep Task 5's own row spelling (its key names and path form); only the `reader` and `word` values change. The `wrapper` row and the eleven other `unplaced` rows stay as they are, and so does the count of 20.
+(b) In `server/test/registry-refused-census.test.ts`, change exactly these eight rows of the classified-set list `EXPECTED_SITES` (Task 5's case `the classified set is exactly these 20 sites`).
+- Each row is one string in Task 5's spelling, `'<file under server/src> | <enclosing> | <reader> | <word>'`.
+- Match each row by its whole string, wherever it stands; the case sorts both sides.
+- The `wrapper` row and the eleven other `unplaced` rows stay as they are, and the count stays 20.
+- `coord/dispatch.ts` has three `dispatchRun` rows: one `readRegistry` and two `readRegistryMeasured`. They become two `refuses` rows and one `gated` row. The `refuses` rows are the pre-spawn read, now measured, and the post-spawn read; the `gated` row is the resume arm.
 
-| File | Enclosing function | Reader, before → after | Word, before → after |
-|---|---|---|---|
-| `server/src/coord/fingerprint.ts` | `resolveDoneBranch` | `readRegistryMeasured` (unchanged) | `unplaced` → `holds` |
-| `server/src/coord/dispatch.ts` | `dispatchRun` (pre-spawn) | `readRegistry` → `readRegistryMeasured` | `unplaced` → `refuses` |
-| `server/src/coord/dispatch.ts` | `dispatchRun` (post-spawn) | `readRegistryMeasured` | `unplaced` → `refuses` |
-| `server/src/coord/dispatch.ts` | `dispatchRun` (resume) | `readRegistryMeasured` | `unplaced` → `gated` |
-| `server/src/watch.ts` | `tick` | `readRegistryMeasured` | `unplaced` → `omits` |
-| `server/src/watch.ts` | `sweepHookStates` | `readRegistryMeasured` | `unplaced` → `tests-only` |
-| `server/src/watch.ts` | `sweepTasks` | `readRegistryMeasured` | `unplaced` → `omits` |
-| `server/src/watch.ts` | `sweepMail` | `readRegistryMeasured` | `unplaced` → `holds` |
-
-In the `{file, site, reader, word}` spelling, the eight rows read:
+Before:
 
 ```ts
-  { file: 'server/src/coord/fingerprint.ts', site: 'resolveDoneBranch', reader: 'readRegistryMeasured', word: 'holds' },
-  { file: 'server/src/coord/dispatch.ts', site: 'dispatchRun', reader: 'readRegistryMeasured', word: 'refuses' },
-  { file: 'server/src/coord/dispatch.ts', site: 'dispatchRun', reader: 'readRegistryMeasured', word: 'refuses' },
-  { file: 'server/src/coord/dispatch.ts', site: 'dispatchRun', reader: 'readRegistryMeasured', word: 'gated' },
-  { file: 'server/src/watch.ts', site: 'tick', reader: 'readRegistryMeasured', word: 'omits' },
-  { file: 'server/src/watch.ts', site: 'sweepHookStates', reader: 'readRegistryMeasured', word: 'tests-only' },
-  { file: 'server/src/watch.ts', site: 'sweepTasks', reader: 'readRegistryMeasured', word: 'omits' },
-  { file: 'server/src/watch.ts', site: 'sweepMail', reader: 'readRegistryMeasured', word: 'holds' },
+  'coord/fingerprint.ts | resolveDoneBranch | readRegistryMeasured | unplaced',
+  'coord/dispatch.ts | dispatchRun | readRegistry | unplaced',
+  'coord/dispatch.ts | dispatchRun | readRegistryMeasured | unplaced',
+  'coord/dispatch.ts | dispatchRun | readRegistryMeasured | unplaced',
+  'watch.ts | sweepHookStates | readRegistryMeasured | unplaced',
+  'watch.ts | sweepMail | readRegistryMeasured | unplaced',
+  'watch.ts | sweepTasks | readRegistryMeasured | unplaced',
+  'watch.ts | tick | readRegistryMeasured | unplaced',
+```
+
+After:
+
+```ts
+  'coord/fingerprint.ts | resolveDoneBranch | readRegistryMeasured | holds',
+  'coord/dispatch.ts | dispatchRun | readRegistryMeasured | refuses',
+  'coord/dispatch.ts | dispatchRun | readRegistryMeasured | refuses',
+  'coord/dispatch.ts | dispatchRun | readRegistryMeasured | gated',
+  'watch.ts | sweepHookStates | readRegistryMeasured | tests-only',
+  'watch.ts | sweepMail | readRegistryMeasured | holds',
+  'watch.ts | sweepTasks | readRegistryMeasured | omits',
+  'watch.ts | tick | readRegistryMeasured | omits',
 ```
 
 Then append this block at the END of the same file. Make sure the file imports `readFileSync` (`node:fs`), `path` (`node:path`), `fileURLToPath` (`node:url`) and `codeOnly` (`./sourceScan.js`). Add any missing one to the existing import block, and never import a name twice.
@@ -5707,7 +5724,7 @@ Expected: both files PASS. Run it in the foreground, with a timeout of at least 
 
 - [ ] **Step 5: Mutation check**
 
-Record `git diff --stat` before row 1. Make each edit, run it, see the red, and revert it by hand before the next row. After each revert, `git diff --stat` must print exactly what it printed before row 1. Record each row's before and after in the SDD ledger. Run every command from `server/`:
+Record `git diff --stat` before row 1. Make each edit, run it, see the red, and revert it by hand before the next row. In this table `\|` is Markdown's escape for `|`: rows 4 to 6 edit the code's `||`. After each revert, `git diff --stat` must print exactly what it printed before row 1. Record each row's before and after in the SDD ledger. Run every command from `server/`:
 - C is `./node_modules/.bin/vitest run test/registry-refused-callers.test.ts`.
 - K is `./node_modules/.bin/vitest run test/registry-refused-census.test.ts`.
 
@@ -5730,7 +5747,7 @@ The compiler holds one guard, not a case; record it as such. Deleting only `if (
 - [ ] **Step 6: Run the task's other suites, and the typecheck**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/registry-refused-callers.test.ts test/registry-refused-census.test.ts test/coord-fingerprint.test.ts
+cd server && ./node_modules/.bin/vitest run test/registry-refused-callers.test.ts test/registry-refused-census.test.ts test/coord-fingerprint.test.ts test/registry.test.ts
 cd server && ./node_modules/.bin/vitest run test/dispatch-adopt.test.ts test/dispatch-route.test.ts test/run-routes.test.ts
 cd server && ./node_modules/.bin/vitest run test/mail-sweep.test.ts test/fleetws.test.ts test/divergence-sweep.test.ts
 cd server && ./node_modules/.bin/vitest run test/unattended-actor.test.ts test/verb-gate.test.ts test/mail-routes.test.ts test/typecheck-tests.test.ts
@@ -5781,7 +5798,7 @@ MSG
 )"
 ```
 
-Name these departures, by slug, in the wave-done: `pre-spawn-listing-is-the-second` and `registry-unmeasurable-docstring-names-the-pre-spawn-refusal`.
+Name these departures, by slug, in the wave-done: `pre-spawn-listing-is-the-second` and `registry-unmeasurable-docstring-names-the-pre-spawn-refusal`. Also carry one more row under R24's `wave-lifecycle-rows-carried`: a review close whose WORK run's stored `sessionId` is not a registry id answers `tip-unmeasurable` on every retry, so the coordinator closes that review `failed`.
 
 ---
 
@@ -6182,23 +6199,27 @@ describe('fleet, projects and peers report what they could not measure (spec §2
 
 - [ ] **Step 3: Extend the census `server/test/registry-refused-census.test.ts`**
 
-(a) Task 5's case `the classified set is exactly these 20 sites` still counts 20 (Task 6 moved one row and kept the count). Retitle it `the classified set is exactly these 23 sites`. In its expected list, written in Task 5's row shape (`{ file, scope, reader, word }`; keep Task 5's own field names and scope labels if they differ), make these changes:
+(a) Task 5's case `the classified set is exactly these 20 sites` still counts 20: Task 6 changed eight words and one reader, and kept the count. Make these changes to it:
+- Retitle it `the classified set is exactly these 23 sites`.
+- Change its `expect(EXPECTED_SITES).toHaveLength(20);` to `expect(EXPECTED_SITES).toHaveLength(23);`.
+- In `EXPECTED_SITES`, replace three rows and add three, as shown below. Each row is one string in Task 5's spelling, `'<file under server/src> | <enclosing> | <reader> | <word>'`. A route's enclosing is `<METHOD> <path>`, as Task 5's `enclosingOf` writes it. Match each row by its whole string, wherever it stands; the case sorts both sides.
 
-Replace:
+Replace these three rows:
 ```ts
-  { file: 'fleet.ts', scope: 'assembleFleet', reader: 'readRegistry', word: 'unplaced' },
-  { file: 'lifecycle.ts', scope: 'listProjects', reader: 'readRegistry', word: 'unplaced' },
-  { file: 'coord/routes.ts', scope: 'GET /api/peers', reader: 'readRegistry', word: 'unplaced' },
+  'fleet.ts | assembleFleet | readRegistry | unplaced',
+  'lifecycle.ts | listProjects | readRegistry | unplaced',
+  'coord/routes.ts | GET /api/peers | readRegistry | unplaced',
 ```
-with:
+with these six:
 ```ts
-  { file: 'fleet.ts', scope: 'assembleFleet', reader: 'readRegistryMeasured', word: 'tests-only' },
-  { file: 'lifecycle.ts', scope: 'listProjects', reader: 'readRegistryMeasured', word: 'reports' },
-  { file: 'coord/routes.ts', scope: 'GET /api/peers', reader: 'readRegistryMeasured', word: 'reports' },
-  { file: 'coord/routes.ts', scope: 'POST /api/claims', reader: 'readRegistryMeasured', word: 'reports' },
-  { file: 'server.ts', scope: 'GET /api/fleet', reader: 'readRegistryMeasured', word: 'stale' },
-  { file: 'server.ts', scope: '/ws/fleet', reader: 'readRegistryMeasured', word: 'stale' },
+  'fleet.ts | assembleFleet | readRegistryMeasured | tests-only',
+  'lifecycle.ts | listProjects | readRegistryMeasured | reports',
+  'coord/routes.ts | GET /api/peers | readRegistryMeasured | reports',
+  'coord/routes.ts | POST /api/claims | readRegistryMeasured | reports',
+  'server.ts | GET /api/fleet | readRegistryMeasured | stale',
+  'server.ts | GET /ws/fleet | readRegistryMeasured | stale',
 ```
+The ws route is registered as `app.get('/ws/fleet', { websocket: true }, …)`, so Task 5's `ROUTE` regex names it `GET /ws/fleet`.
 
 (b) Add these four lines directly below the file's last `import` line. The aliases cannot collide with any name Task 5 declared, and a module may import the same binding twice under two names:
 ```ts
@@ -6859,7 +6880,7 @@ Tasks 2 and 5 built all of this behaviour. Task 8 changes eight tag words, adds 
   - inside `const requireAttribution = async (`;
   - inside `app.post('/api/mail', …)`;
   - inside `app.post('/api/mail/:id/ack', …)`.
-- Modify `server/test/registry-refused-census.test.ts`: replace its content with the final file in Step 2. It restates the Task 5, 6 and 7 cases at their final placement, adds `no site is unplaced`, and extends the `tick` describe to `detectDialogs(`.
+- Modify `server/test/registry-refused-census.test.ts`: replace its content with the final file in Step 2, except the two blocks Tasks 6 and 7 appended at its foot, which Step 2 keeps verbatim. The new content restates Task 5's cases at their final placement, keeps Task 5's orphan-tag pin, adds `no site is unplaced`, and pins `tick` handing its `records` to `detectDialogs(`.
 - Create `server/test/registry-retained-callers.test.ts`.
 - Not edited: `shared/api.ts`, `server/src/registry.ts`, `server/test/idGateFixture.ts`, and every file outside this list.
 
@@ -7197,9 +7218,18 @@ describe('the raw-name ladders read a refused row as unmeasurable, never as abse
 
 - [ ] **Step 2: Bring the census to its final placement, `server/test/registry-refused-census.test.ts`**
 
-Before replacing the file, keep Step 0 (g)'s title list. Replace the file's whole content with the code below. Then run Step 0 (g)'s grep again. Every title from the first list must appear in the second, with one exception: Task 7's "exactly these 23 sites" title, which this file keeps verbatim.
-- If Task 6 or Task 7 titled a pin differently from this file (the `tick` hand-off, or the production `assembleFleet(` calls), use their title in place of this file's.
-- If a title is missing because an earlier task wrote an extra case, copy that `it` back verbatim into the describe it came from.
+Before replacing the file, keep Step 0 (g)'s title list. Then set aside, byte for byte, the two blocks Tasks 6 and 7 appended at its foot:
+- Task 6's block: from the line `// Path identity W1a, Task 6 (spec §2.3, R19's precedent): …` through the closing `});` of its describe `tick hands its records to the lanes that would otherwise read the registry again (spec §2.3)`.
+- Task 7's block: its four aliased import lines (`t7ReadFileSync`, `t7path`, `t7FileURLToPath`, `t7CodeOnly`), and everything from `// PATH IDENTITY W1a, TASK 7 (spec §2.3).` through the closing `});` of its describe `Task 7: the migrated readers and the six production assembleFleet calls (spec §2.3)`.
+
+Replace the file's whole content with the code below. Put Task 7's four import lines directly under this file's last `import`. Then append both blocks, unchanged, at the file's foot, Task 6's first.
+- Their names (`TICK_WATCH_TS`, `TICK_HEAD`, `TICK_STRINGS`, `tickCode`, `tickBodyOf`, `T7_SRC` and the `t7…` helpers) collide with nothing below.
+- This file already imports everything Task 6's block uses.
+- Both blocks stay green, because this task changes tag words only.
+- They keep pins this file does not restate: the two CONTROL cases that prove the brace slicer and the argument splitter measure something, and Task 7's per-file placed words with its `readRegistry(` and `readRegistryMeasured(` call counts (8 and 15).
+- A case copied back without its helpers would not compile, so the blocks move whole.
+
+Then run Step 0 (g)'s grep again. Every title from the first list must appear in the second; Task 7's "exactly these 23 sites" title is this file's own. If a title is still missing because an earlier task wrote a case outside those two blocks, copy that `it` back verbatim, with every helper it uses, into the describe it came from.
 
 Record the comparison in the SDD ledger.
 
@@ -7358,6 +7388,11 @@ describe('every registry reader call is classified for refused rows (spec §2.3)
 
   it('each readRegistry( and readRegistryMeasured( call carries a [registry-refused:<word>] tag within three lines above it', () => {
     expect(ALL.filter((s) => !WORDS.has(s.word)).map((s) => `${s.file}:${s.line} ${s.reader} ${s.word}`)).toEqual([]);
+    // Task 5's orphan pin, kept: every `[registry-refused:*]` tag on a `//` comment line stands above a reader
+    // call. A stale tag left above a deleted call, or a tag that is only a string, is red.
+    const tagLines = sources().reduce((n, f) => n + read(f).split('\n')
+      .filter((l) => /^\s*\/\/.*\[registry-refused:[A-Za-z-]+\]/.test(l)).length, 0);
+    expect(tagLines, 'a [registry-refused:*] tag that stands above no reader call').toBe(ALL.length);
   });
 
   it('the classified set is exactly these 23 sites', () => {
@@ -7507,12 +7542,12 @@ Expected: PASS, both files.
 
 - [ ] **Step 6: Mutation table**
 
-Apply each mutation alone and run its command from `server/`. See the red, then revert by undoing exactly that edit. After each revert, `git diff --numstat -- server/src` shows Step 4's eight lines only. Do not use `git checkout --` on `server.ts`, `watch.ts` or `coord/routes.ts`: it would discard Step 4's tags too. Every red text below was drafted, not measured. Measure each and record the measured text in the SDD ledger; a different count is not a departure.
+Apply each mutation alone and run its command from `server/`. See the red, then revert by undoing exactly that edit. In this table `\|` is Markdown's escape for `|`: type T8.2's filter as `-t 'sweepNames|sweepPr|pane'`. A literal `\|` in a vitest `-t` pattern matches a `|` character, so no test would run and the row would show no red. After each revert, `git diff --numstat -- server/src` shows Step 4's eight lines only. Do not use `git checkout --` on `server.ts`, `watch.ts` or `coord/routes.ts`: it would discard Step 4's tags too. Every red text below was drafted, not measured. Measure each and record the measured text in the SDD ledger; a different count is not a departure.
 
 | # | Mutation (exact edit) | Command | Expected red |
 |---|---|---|---|
 | T8.1 | `server.ts` `knownId`: delete its first statement, `if (!isRegistryId(id)) return false;` (Task 2) | `./node_modules/.bin/vitest run test/registry-retained-callers.test.ts -t 'commands and GET /pr'` | `expected 200 to be 404` on `/commands`. Measure `/pr` too by commenting out the `/commands` pair for one run, then restore it: `expected 200 to be 404` |
-| T8.2 | `registry.ts` `readRegistryMeasured`: let the loop build every listed id. Where Task 5 builds `ids` from the listing with an `isRegistryId` filter, drop that filter so `ids` keeps every `.uuid` id, sorted, refused ones included. `refused` stays as it is | `./node_modules/.bin/vitest run test/registry-retained-callers.test.ts -t 'sweepNames\|sweepPr\|pane'` | sweepNames: `expected [ [ 'ws-rename', '--session', '--actor', '--branch', 'ws/brainstorm-helix-and-slide-notes' ] ] to deeply equal []`. sweepPr: `expected [ [ 'pr-state', '--project', 'solo' ] ] to deeply equal []`. tick: `expected [ '=cc---actor:', '=cc-demo-quiet-basin:' ] not to include '=cc---actor:'` |
+| T8.2 | `registry.ts` `readRegistryMeasured`: let the loop build every listed id. `const ids = listedIds.filter((x) => isRegistryId(x));` becomes `const ids = listedIds;` (Task 5's mutation row 1), so `ids` keeps every `.uuid` id, sorted, refused ones included. `refused` stays as it is | `./node_modules/.bin/vitest run test/registry-retained-callers.test.ts -t 'sweepNames\|sweepPr\|pane'` | sweepNames: `expected [ [ 'ws-rename', '--session', '--actor', '--branch', 'ws/brainstorm-helix-and-slide-notes' ] ] to deeply equal []`. sweepPr: `expected [ [ 'pr-state', '--project', 'solo' ] ] to deeply equal []`. tick: `expected [ '=cc---actor:', '=cc-demo-quiet-basin:' ] not to include '=cc---actor:'` |
 | T8.3 | `watch.ts` `tick`: `const pending = await this.detectDialogs(this.primed, records);` becomes `const pending = await this.detectDialogs(this.primed);` | `./node_modules/.bin/vitest run test/registry-refused-census.test.ts -t 'detectDialogs'` | `expected '…' to match /this\.detectDialogs\([^)]*\brecords\s*\)/`. The behaviour case stays green, because the fallback omits refused rows as well; this census case is the pin |
 | T8.4 | `coord/routes.ts` `requireAttribution`: delete the `if (names.includes(\`${whoId}.uuid\`)) { … return false; }` block inside `if (!row) {` | `./node_modules/.bin/vitest run test/registry-retained-callers.test.ts -t 'claims'` | `expected 403 to be 502` (`unknown-sender`) |
 | T8.5 | `coord/routes.ts` `POST /api/mail`, check 5: delete the `if (names.includes(\`${fromId}.uuid\`)) { return refuse(…); }` block inside `if (!sender) {` | `./node_modules/.bin/vitest run test/registry-retained-callers.test.ts -t 'mail from'` | `expected 403 to be 502` (`unknown-sender`) |
@@ -7520,7 +7555,8 @@ Apply each mutation alone and run its command from `server/`. See the red, then 
 | T8.7 | `coord/routes.ts` `POST /api/mail/:id/ack`: delete the `if (names.includes(\`${fromId}.uuid\`)) { return refuse(…); }` block inside `if (!sender) {` | `./node_modules/.bin/vitest run test/registry-retained-callers.test.ts -t 'ack'` | `expected 403 to be 502` (`unknown-sender`) |
 | T8.8 | `commands.ts`: Step 4 edit 1's tag word goes back to `unplaced` | `./node_modules/.bin/vitest run test/registry-refused-census.test.ts` | `the classified set is exactly these 23 sites`: the diff names `commands.ts \| sessionCommands \| readRegistry \| unplaced`. `no site is unplaced`: `expected [ 'commands.ts \| sessionCommands \| readRegistry \| unplaced' ] to deeply equal []` |
 | T8.9 | `watch.ts`: delete Step 4 edit 5's whole tag line | same | `each … call carries a … tag`: `expected [ 'watch.ts:NN readRegistry UNTAGGED' ] to deeply equal []`, and the 23-site diff |
-| T8.10 | `commands.ts` `sessionCommands`: add a second line, `const again = await readRegistry(deps.io, deps.cfg); void again;`, directly under its tagged call | same | the 23-site case (a 24th row, `commands.ts \| sessionCommands \| readRegistry \| knownId`, because the tag is within three lines of both calls). The second call's tag is shared, so this row measures the multiset, not the tag rule |
+| T8.10 | `commands.ts` `sessionCommands`: add a second line, `const again = await readRegistry(deps.io, deps.cfg); void again;`, directly under its tagged call | same | the 23-site case (a 24th row, `commands.ts \| sessionCommands \| readRegistry \| knownId`, because the tag is within three lines of both calls). The second call shares that tag, so the word rule cannot see it. The multiset carries this row, together with the kept orphan count (`a [registry-refused:*] tag that stands above no reader call: expected 23 to be 24`) and Task 7's kept count case (`readRegistry( call sites in server/src: expected 9 to be 8`) |
+| T8.11 | `lifecycle.ts`: insert `// [registry-refused:holds] stray` as a new line directly above `export async function listProjects(` (Task 5's row 8, kept through Step 2) | same | `a [registry-refused:*] tag that stands above no reader call: expected 24 to be 23` |
 
 Revert each mutation, then run Step 5's command again: green.
 
@@ -7567,6 +7603,8 @@ The census reaches its final placement: 23 sites, the 22 consumer sites
 and readRegistry's own wrapper call, with no site left unplaced.
 EOF
 ```
+
+Name this carried line, by slug, in the wave-done: `raw-name-refused-detail-says-transient`. The three raw-name ladders answer a refused row 502 `registry-unmeasurable`. That word is right (spec §2.3: never absence), but the detail says "listed but unreadable — transient", which is never true of a refused id. This task edits tag lines only, so the clearer detail is a later wave's.
 
 ---
 
@@ -7617,7 +7655,7 @@ grep -n "^export function isRegistryId" shared/api.ts                           
 grep -n "^export const REFUSED_IDS" server/test/registryIdCases.ts                                 # (b) one line (Task 1)
 grep -n "^export function seedRow\|^export function recorder\|^export function storedRun" server/test/idGateFixture.ts   # (c) three lines (Tasks 2, 3)
 grep -n "kind: 'bad-session'; which: 'heir'" server/src/coord/reclaim.ts                           # (d) one line: Task 4's member
-grep -c "which: 'heir'" server/src/coord/reclaim.ts                                                # (e) 2: the member and the heir return
+grep -c "which: 'heir'" server/src/coord/reclaim.ts                                                # (e) 3: the member, rung 3's docstring line, and the heir return
 awk '/reclaimRun\(reclaimDeps, id, to\)/,/const _exhaustive: never = r;/' server/src/coord/routes.ts | grep -c "case 'bad-session':"   # (f) 1: Task 4's reclaim arm
 grep -n "isRegistryId" server/src/coord/routes.ts | head -3                                        # (g) the shared/api.js import names it (Task 7's peers check); record whether it does
 grep -c "if (from === null) return { ok: false, kind: 'no-claimant' };" server/src/coord/reclaim.ts   # (h) 1
@@ -7861,7 +7899,7 @@ After:
 import { isRegistryId, lifecycleIsDead, sessionLifecycle, type SessionLifecycle } from '../../../shared/api.js';
 ```
 
-3b. The member. Locate it with `grep -n "kind: 'bad-session'; which: 'heir'" server/src/coord/reclaim.ts`. Replace that member's line, and any doc comment Task 4 put directly above it, with the lines below. Keep the line's own trailing punctuation: `;` if it is the union's last member, nothing if it is not.
+3b. The member. Locate it with `grep -n "kind: 'bad-session'; which: 'heir'" server/src/coord/reclaim.ts`. Replace that member's line and the three `//` comment lines Task 4 put directly above it (the first begins `// path identity (spec §2.3): an id`) with the lines below. Task 4 left the member as the union's last, so the new member line ends with `;`, as shown.
 
 ```ts
   /** spec §2.3. `which` names the side that is not a registry id. `heir` is this
@@ -7869,7 +7907,7 @@ import { isRegistryId, lifecycleIsDead, sessionLifecycle, type SessionLifecycle 
    *  listing; the route answers 400. `claimant` is the run's STORED `claimedBy`,
    *  a row no retry heals; the route answers 409, and `detail` names the abandon
    *  door, the one way to end such a programme. */
-  | { ok: false; kind: 'bad-session'; which: 'heir' | 'claimant'; detail: string }
+  | { ok: false; kind: 'bad-session'; which: 'heir' | 'claimant'; detail: string };
 ```
 
 3c. The ladder. In `reclaimRun`'s docstring, locate by content. Before:
@@ -7912,7 +7950,7 @@ After:
   if (!isRegistryId(from)) {
     return { ok: false, kind: 'bad-session', which: 'claimant',
       detail: 'the run\'s stored claimedBy is not a registry id, so it is never measured or composed: '
-        + 'end the programme through POST /api/runs/:id/abandon' };
+        + 'end the programme by abandoning each of its open runs through POST /api/runs/:id/abandon' };
   }
 ```
 
@@ -8047,7 +8085,7 @@ Expected: PASS. In particular:
 - `single-definition`'s `REDERIVED` scan stays green, because the project check never names `isSessionIdShape`.
 - `run-routes` opens every run with registry-shaped ids.
 
-If a test outside this list posts a non-registry `claimedBy` or `sessionId` through `POST /api/runs` and goes red, re-seed it through `coord.openRun` and keep its title's intent, as Step 5 does. Record it in the ledger.
+If a test outside this list posts a non-registry `claimedBy` or `sessionId` through `POST /api/runs` and goes red, re-seed it through `coord.openRun` and keep its title's intent, as Step 5 does. Record it in the ledger, and add its file to Step 9's `git add`.
 
 - [ ] **Step 9: Commit**
 
@@ -8083,7 +8121,7 @@ EOF
 
 **Why:**
 - `POST /api/runs/:id/route` composes `CCD_ARGV.route(sid, …)` or `CCD_ARGV.routeSet(sid, …)`. Here `sid` is a STORED `run.sessionId` (the worker target) or a stored `run.claimedBy` (the coordinator target).
-- Today the door checks `sid` with `isSessionIdShape`. That accepts `--actor`, because `SESSION_ID_SEGMENT` is `[A-Za-z0-9._-]+`. So a stored `--actor` reaches `route --session --actor`, and ccd could read the id as a flag (spec §2.1).
+- Today the door checks `sid` with `isSessionIdShape`. That accepts `--actor`, because `SESSION_ID_SEGMENT` is `[A-Za-z0-9._-]+`. So a stored `--actor` reaches `route --session --actor`. ccd's `route` consumes each key with its value atomically (spec §2.1), so it binds `--actor` whole and nothing redirects today; the door is gated because spec §2.3 puts every stored-row argv seam behind the one predicate.
 - Task 9's `POST /api/runs` check covers new rows only. A row written before that check still stands, so the door re-checks what it reads.
 - **The change:** the same 409 `bad-session`, now decided by `isRegistryId` (spec §2.3). No new word, no new route, no wire change.
 - **What the tests must do:**
@@ -8140,7 +8178,7 @@ Run from the workspace root:
 ```bash
 grep -c "if (!isSessionIdShape(sid)) {" server/src/coord/routes.ts                                   # (c11) 1
 grep -n "isSessionIdShape" server/src/coord/routes.ts                                                # two lines: the import (:48) and the gate (:2021)
-grep -rn "isSessionIdShape" server/src --include=*.ts | wc -l                                        # 2: the same two lines, and nothing else in server/src
+grep -rn "isSessionIdShape" server/src --include=*.ts | wc -l                                        # 3: the same two lines, plus one prose mention in coord/store.ts's docstring (outside this wave's boundary); no other code use
 grep -c "^export function isRegistryId(id: unknown): id is string {$" shared/api.ts                  # 1 (Task 1)
 grep -c "^export const REFUSED_IDS" server/test/registryIdCases.ts                                   # 1 (Task 1)
 grep -cE "^export (async )?function (seedRow|recorder|appFor|storedRun)\b" server/test/idGateFixture.ts   # 4 (Tasks 2 and 3)
@@ -8151,7 +8189,7 @@ node -e 'const s=require("fs").readFileSync("server/src/coord/routes.ts","utf8")
 **What to do with the results:**
 - If (c11) prints 0, the gate site has moved. STOP and report `gate-site-moved`.
 - If a count or line number differs only because #351 or run 400 has landed, re-point by content and record it in the SDD ledger.
-- If `isSessionIdShape` has a third use anywhere in `server/src`, keep it in `routes.ts`'s import only when that use is in `routes.ts`. Record it.
+- If `isSessionIdShape` has a use in `server/src` beyond those three lines, keep it in `routes.ts`'s import only when that use is code in `routes.ts`. Record it.
 - If any of the Task 1/2/3 counts is 0, a prior task is not on this branch. STOP and report `tree-not-ready`.
 
 - [ ] **Step 1: Write the failing test**
@@ -8392,7 +8430,7 @@ After:
       // `ROUTE_EVENT_DETAIL_RE` group accepts only `[A-Za-z0-9._-]+`. The
       // predicate keeps that guarantee and closes what the shape let through:
       // a stored `--actor` would reach `CCD_ARGV.route`/`routeSet` as
-      // `route --session --actor`, an id ccd could read as a flag (spec §2.1).
+      // `route --session --actor`, an id the one predicate refuses (spec §2.3).
       // A manual-field write reads no registry field, so nothing but this
       // check stands between a bad stored id and that argv. `no-session`
       // (nothing to route to) and `bad-session` (something to route to, but
@@ -8408,7 +8446,7 @@ After:
 ```bash
 grep -c "if (!isRegistryId(sid)) {" server/src/coord/routes.ts          # 1
 grep -c "isSessionIdShape" server/src/coord/routes.ts                   # 0
-grep -rn "isSessionIdShape" server/src --include=*.ts | wc -l           # 0
+grep -rn "isSessionIdShape" server/src --include=*.ts | wc -l           # 1: coord/store.ts's docstring prose only; no code use remains
 git diff --stat                                                         # server/src/coord/routes.ts only (the new test is untracked)
 ```
 
@@ -8427,6 +8465,8 @@ cd server && ./node_modules/.bin/vitest run test/mail-routes.test.ts test/unatte
 - `single-definition`: the `REDERIVED` scan sees no line that combines the shape with a leading-character test.
 
 If a file reds, re-run a CLAUDE.md load flake in isolation before calling it a break.
+
+Four prose texts outside this edit still name `isSessionIdShape` as the door's check, or say `POST /api/runs` has no charset guard: the docstring above `SESSION_ID_SEGMENT` in `shared/api.ts` (above the foot block), `coord/store.ts`'s docstring (never edited), the comment above `run-signals-routing.test.ts`'s `describe('isSessionIdShape (shared/api.ts)'`, and the comment above `run-route-route.test.ts`'s `'bad claimant'` case. Each stays true in substance, because `isRegistryId` includes the shape check. Leave them unedited. Record the slug `door-check-prose-names-the-shape` in the SDD ledger, naming the four, so that Task 16 lists it under the departures recorded while building.
 
 - [ ] **Step 5: Mutation check**
 
@@ -8460,7 +8500,7 @@ cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts
 ```
 
 **Expected:** no output from either `tsc`, and `typecheck-tests` passes.
-- An unused-import error on `isSessionIdShape` means Step 3 (a) was skipped.
+- `tsc` does not report an unused import (the server tsconfig sets no `noUnusedLocals`), so a skipped Step 3 (a) shows only in Step 3 (c): `grep -c "isSessionIdShape" server/src/coord/routes.ts` must print 0.
 - `Cannot find name 'isRegistryId'` means the `not-imported` arm was needed.
 
 - [ ] **Step 7: Commit**
@@ -8539,7 +8579,7 @@ Run from the workspace root:
 
 ```bash
 grep -n "if (to === 'awaiting-review' || to === 'merging') {" server/src/coord/routes.ts   # (c14) one line (1865 at 837a099c0; Tasks 7, 9, 10 move it)
-grep -n "const verdict = await verifyDone(" server/src/coord/routes.ts                       # two lines: close's helper path and advance; the advance one is the line after (c14)
+grep -n "const verdict = await verifyDone(" server/src/coord/routes.ts                       # one line, the line after (c14): advance's call (close's own call is in coord/close.ts)
 grep -n "isRegistryId" server/src/coord/routes.ts                                            # >= 2: one import line from ../../../shared/api.js, plus the gates of Tasks 7, 9 and 10
 grep -n "^export function isRegistryId(id: unknown): id is string {" shared/api.ts           # one line (Task 1)
 grep -n "isRegistryId(run.sessionId)" server/src/coord/fingerprint.ts                        # one line (Task 6, resolveDoneBranch's first statement)
@@ -8759,7 +8799,7 @@ Expected: every file passes.
 
 - [ ] **Step 6: Mutation check**
 
-Make each edit in `server/src/coord/routes.ts`, run the command from `server/`, see the red, and restore with `git checkout -- server/src/coord/routes.ts` (run from the workspace root) before the next row. Record each before and after in the SDD ledger. Every red text below is a draft, and the measured text replaces it.
+Make each edit in `server/src/coord/routes.ts`, run the command from `server/`, see the red, and undo the edit by hand before the next row. Never use `git checkout -- server/src/coord/routes.ts`: this task's change is not committed yet, and a checkout would discard it along with the mutation. Before the first row, record `git diff --stat`; after each undo it must print the same lines. Record each before and after in the SDD ledger. Every red text below is a draft, and the measured text replaces it.
 
 `A` is `./node_modules/.bin/vitest run test/advance-registry-id.test.ts`. `RR` is `./node_modules/.bin/vitest run test/run-routes.test.ts -t 'DOES re-measure'`.
 
@@ -9090,7 +9130,7 @@ export async function learnExpiry(deps: Pick<ExpireArchivedDeps, 'runCcd' | 'fle
 Check the diff:
 
 ```bash
-git diff --stat -- server/src/coord/expireArchived.ts     # 1 file changed, 12 insertions(+), 0 deletions
+git diff --stat -- server/src/coord/expireArchived.ts     # 1 file changed, 11 insertions(+), 0 deletions
 git diff -- server/src/coord/expireArchived.ts | grep '^-[^-]' | wc -l   # 0: nothing removed
 ```
 
@@ -9104,7 +9144,7 @@ Expected: `Tests  21 passed (21)`.
 
 - [ ] **Step 5: Mutation check**
 
-Make each edit, run the command, see the red, record it in the SDD ledger, and revert before the next row. The worker measures every red text, and a measured text replaces the draft's where they differ. Every command runs from `server/`, and `X` stands for `./node_modules/.bin/vitest run test/expire-id-boundary.test.ts`.
+Make each edit, run the command, see the red, record it in the SDD ledger, and undo the edit by hand before the next row. Never `git checkout` the file: this task's change is not committed yet, and a checkout would discard it. The worker measures every red text, and a measured text replaces the draft's where they differ. Every command runs from `server/`, and `X` stands for `./node_modules/.bin/vitest run test/expire-id-boundary.test.ts`.
 
 | # | Mutation (in `server/src/coord/expireArchived.ts`) | Command | Expected red |
 |---|---|---|---|
@@ -9116,7 +9156,7 @@ Make each edit, run the command, see the red, record it in the SDD ledger, and r
 Afterwards, check that the tree is restored:
 
 ```bash
-git diff --stat -- server/src/coord/expireArchived.ts     # the Step 3 diff only: 12 insertions(+)
+git diff --stat -- server/src/coord/expireArchived.ts     # the Step 3 diff only: 11 insertions(+)
 cd server && ./node_modules/.bin/vitest run test/expire-id-boundary.test.ts   # 21 passed
 ```
 
@@ -9156,14 +9196,15 @@ the expire audit or the expire verb.
 - both details say the server refused the id and composed no call.
 The lane's population is registry-derived and already omits such a row.
 This is the executor boundary's own re-check, pinned directly against
-every refused id, with the expire capability and without it. A dash-led
-id, a 255-character id and a dot inside the id still compose their audit.
+every refused id, with the expire capability and without it. An id with
+inner dashes, one with an inner dot and a 255-character id still compose
+their audit.
 Spec §2.3.
 MSG
 )"
 ```
 
-Name no departure in the wave-done for this task, unless Step 0 re-pointed an anchor after #351 merged. In that case, record the re-point in the SDD ledger.
+Record one slug in the SDD ledger, `expiry-composition-words-misread-a-server-refusal`. The lane's report (`archivedExpiry.ts`, outside this boundary) and `expireFeedBody`'s `composition` arm both describe `composition` as a call ccd rejected, so this refusal reads "the server composed a call ccd rejected: the server refused this session id …". Production cannot reach it while the lane's population omits refused rows (Task 5), so it is carried, not fixed here (R16 keeps this file's hunk small). Task 16 lists it under the departures recorded while building. Name no other departure for this task, unless Step 0 re-pointed an anchor after #351 merged. In that case, record the re-point in the SDD ledger.
 
 ---
 
@@ -9176,7 +9217,7 @@ Name no departure in the wave-done for this task, unless Step 0 re-pointed an an
   - `collectRig` from `server/test/collectLaneFixture.ts`, the lane's watcher rig with a scripted ccd behind the real exec whitelist;
   - `rig` from `server/test/collectTempRootFixture.ts`, the executor's rig. It records every argv at `runCcd` in `r.attempts`, before the whitelist.
 - Mutated, measured, restored, and NEVER committed (HARD BOUNDARY: this wave never edits these files):
-  - `server/src/collectLane.ts`: the population gate, located by its content `if (isTmpRootId(n)) witnessed.add(n); else refusedNames += 1;`. The file's two other `isTmpRootId(` calls, in `parseCollectRecordName` and in the box listing's `if (!isTmpRootId(id)) continue;`, are not touched.
+  - `server/src/collectLane.ts`: the population gate, located by its content `if (isTmpRootId(n)) witnessed.add(n); else refusedNames += 1;`. Row 3 also mutates the population's record half, `parseCollectRecordName`'s `return id !== undefined && isTmpRootId(id) ? id : null;`, measured on the existing `collect-population.test.ts` pins. The box listing's `if (!isTmpRootId(id)) continue;` is not touched.
   - `server/src/coord/collectTempRoot.ts`: the executor's step-1 id check, located by its content `if (!isTmpRootId(job.id)) return { kind: 'not-asked', step: 1, why: 'id-refused', detail: COLLECT_ID_REFUSED };`.
 - No other file is modified.
 
@@ -9210,6 +9251,7 @@ From the workspace root:
 ```bash
 grep -c "if (isTmpRootId(n)) witnessed.add(n); else refusedNames += 1;" server/src/collectLane.ts                 # (c20) 1: the population gate
 grep -c "isTmpRootId(" server/src/collectLane.ts                                                                 # 3: the gate, parseCollectRecordName, the box listing
+grep -c "return id !== undefined && isTmpRootId(id) ? id : null;" server/src/collectLane.ts                        # 1: the record half (Row 3)
 grep -c "if (!isTmpRootId(job.id)) return { kind: 'not-asked', step: 1, why: 'id-refused', detail: COLLECT_ID_REFUSED };" server/src/coord/collectTempRoot.ts   # 1: the executor's step 1
 grep -c 'return isRegistryId(id);' shared/api.ts                                                                  # 1: Task 1 derived isTmpRootId
 grep -c '^export const REFUSED_IDS' server/test/registryIdCases.ts                                                # 1: Task 1's lists exist
@@ -9313,7 +9355,7 @@ A red here means a gate does not stand as R10 says. Do NOT edit source: STOP and
 
 - [ ] **Step 4: Mutation rows (each a temporary edit, measured, then restored)**
 
-Make each edit from the workspace root, run its commands from `server/`, record the red text in the SDD ledger, and restore before the next row. The worker measures every red text. Where the measured text differs from the draft below, the measured text replaces it.
+Make each edit from the workspace root, and run every line below as its own Bash call starting there: each `cd server && …` line enters `server/` for that call only. In a shell that keeps its directory between calls, write those lines as `(cd server && …)`, or the next `cd server` fails and the restore's `server/src/…` path misses. Record the red text in the SDD ledger, and restore before the next row. The worker measures every red text. Where the measured text differs from the draft below, the measured text replaces it.
 
 **Row 1: the population gate becomes `true`.**
 
@@ -9366,7 +9408,29 @@ Restore:
 git checkout -- server/src/coord/collectTempRoot.ts
 ```
 
-**After both rows, prove the tree is restored:**
+**Row 3: the population's record half drops its predicate.** The lane case plants witnesses only. A quarantine record's name is the population's other way to an id, and so to the learning audit, so its gate is measured too, on the existing pins.
+
+```bash
+node -e '
+const fs = require("node:fs");
+const f = "server/src/collectLane.ts";
+const a = "return id !== undefined && isTmpRootId(id) ? id : null;";
+const s = fs.readFileSync(f, "utf8");
+if (s.split(a).length !== 2) throw new Error("record-name gate not found exactly once");
+fs.writeFileSync(f, s.replace(a, "return id !== undefined ? id : null;"));
+'
+cd server && ./node_modules/.bin/vitest run test/collect-population.test.ts -t 'dash-leading|redirect flag'
+```
+
+Expected red (derived; the measured text replaces it): the parse table's `a dash-leading id` and `a redirect flag` rows (`expected '-x' to be null`, `expected '--actor' to be null`), and "a dash-leading name is never an id, as a witness or as a record, and is counted" (`recordIds` gains the eight redirect ids, and `refusedNames` reads 8, not 16).
+
+Restore:
+
+```bash
+git checkout -- server/src/collectLane.ts
+```
+
+**After all three rows, prove the tree is restored:**
 
 ```bash
 git diff --exit-code -- server/src/collectLane.ts server/src/coord/collectTempRoot.ts; echo "rc=$?"   # rc=0
@@ -9829,20 +9893,20 @@ The body of `stopArgvFor` does not change.
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/ccd-stop-argv-order.test.ts test/whitelist-subset.test.ts test/lifecycle.test.ts
-cd server && grep -rnE "'stop', (id|w, p), '--surface'|'--surface', 'pwa'\]\]" src test | wc -l    # 0: no trailing-form spelling is left in code or tests
+cd server && grep -rnE "'stop', (id|w, p), '--surface'|'--surface', 'pwa'\]\]" src test | grep -v 'old trailing spelling' | wc -l    # 0: no trailing-form spelling is left in code or tests; stopArgvFor's docstring names the old order once, as history, on its "old trailing spelling" line, which the grep -v drops
 ```
 
 Expected: every file PASSES. Run it in the foreground, with a timeout of at least 600000 ms.
 
 - [ ] **Step 6: Mutation check**
 
-Make each edit, run it, see the red, and revert before the next. Commands run from `server/`. Let S be `./node_modules/.bin/vitest run test/ccd-stop-argv-order.test.ts test/whitelist-subset.test.ts test/lifecycle.test.ts`. Record the before (green) and the after (red) in the SDD ledger. The red texts are derived; the measured text replaces them.
+Make each edit, run it, see the red, and revert before the next. Revert each row by its inverse edit, never with `git checkout -- src/ccdargv.ts`: until Step 8 commits, that file holds Step 4(a)'s uncommitted change, and a checkout would discard it. Commands run from `server/`. Let S be `./node_modules/.bin/vitest run test/ccd-stop-argv-order.test.ts test/whitelist-subset.test.ts test/lifecycle.test.ts`. Record the before (green) and the after (red) in the SDD ledger. The red texts are derived; the measured text replaces them.
 
 | # | Mutation (exact edit in `server/src/ccdargv.ts`) | Command | Expected red |
 |---|---|---|---|
 | 1 | In `stopId`, `['stop', '--surface', surface, id]` becomes `['stop', id, '--surface', surface]` (the trailing order) | S | `ccd-stop-argv-order`: "cmd_stop run on stopId's argv …" (the argv-shape assertion), and "an id spelled --surface …" with `pwa was stopped: the id was read as the flag: expected '<10 digits> unknown' to be null`. `whitelist-subset`: `stopId builds the exact argv, token for token`. `lifecycle`: `POST /api/sessions/:id/stop passes a WORKSPACE id whole, never a reversed one` |
 | 2 | In `stopPair`, `['stop', '--surface', surface, w, p]` becomes `['stop', w, p, '--surface', surface]` | S | `ccd-stop-argv-order`: "cmd_stop run on stopPair's argv …" (argv shape), and "a project spelled --surface …" with `claude-a-pwa was stopped: the project was read as the flag: expected '<10 digits> unknown' to be null`. `whitelist-subset`: `stopPair builds the exact argv, token for token`. `lifecycle`: the other five cases listed in Step 2(c) |
-| 3 | In `stopId`, the `null` arm `['stop', id]` becomes `['stop', '--surface', 'cli', id]` (a flag sent with no evidence) | S | `ccd-stop-argv-order`: "with no surface, the bare form still stops": `expected [ 'stop', '--surface', 'cli', 'demo-quiet-mesa' ] to deeply equal [ 'stop', 'demo-quiet-mesa' ]`. `lifecycle`: `no evidence at all (ccdVerbs: null) sends the bare argv, never --surface — asymmetric cost, asymmetric default` and the other bare-argv cases with a workspace id, if any. This row pins that the reorder never touched the skew arm |
+| 3 | In `stopId`, the `null` arm `['stop', id]` becomes `['stop', '--surface', 'cli', id]` (a flag sent with no evidence) | S, then `./node_modules/.bin/vitest run test/archive-door.test.ts` | `ccd-stop-argv-order`: "with no surface, the bare form still stops": `expected [ 'stop', '--surface', 'cli', 'demo-quiet-mesa' ] to deeply equal [ 'stop', 'demo-quiet-mesa' ]`. `lifecycle` and `whitelist-subset` stay GREEN: every bare `lifecycle` row is the legacy pair form (`stopPair`), and `whitelist-subset` builds `stopId` with `'pwa'` only. `archive-door` (derived): its workspace-id stop rows, `['stop', 'demo-amber']`, receive the flagged argv and red. This row pins that the reorder never touched the skew arm |
 
 After the last revert, `git diff --stat -- server/src/ccdargv.ts` must show only Step 4(a)'s hunk.
 
@@ -9927,11 +9991,11 @@ Name this task's plan-text corrections and extra pins in the wave-done, by slug:
   - `server/src/coord/close.ts`:
     - the abandon branch's `isRegistryId(run.sessionId)` check, followed by its `'fleet-act-omitted:bad-session'` event (Task 3, R27);
     - the non-abandon gate's `!isRegistryId(run.sessionId)) … kind: 'bad-session' …;` straight above `if (run.kind === 'review') return closeReviewRun(` (Task 3).
-  - `server/src/coord/fingerprint.ts`: `resolveDoneBranch`'s `if (!isRegistryId(run.sessionId)) return { ok: false, code: 'tip-unmeasurable'` (Task 6).
+  - `server/src/coord/fingerprint.ts`: `resolveDoneBranch`'s block `if (!isRegistryId(run.sessionId)) {`, whose first statement is `return { ok: false, code: 'tip-unmeasurable', …` (Task 6).
   - `server/src/coord/childReclaim.ts`: `childReclaimOutcome`'s `deferred('marker-unreadable', 'the session id is not a registry id')` (Task 4).
   - `server/src/coord/expireArchived.ts`: `!isRegistryId(sessionId)` with `EXPIRE_ID_REFUSED`, ahead of `capSupported(deps.fleetState, EXPIRE_CAP)`, in both `expireArchived` and `learnExpiry` (Task 12, R28).
   - `server/src/coord/collectTempRoot.ts`: `if (!isTmpRootId(job.id)) return { kind: 'not-asked', step: 1, why: 'id-refused'` (existing; pinned by Task 13).
-  - `server/src/collectLane.ts`: `if (isTmpRootId(n)) witnessed.add(n); else refusedNames += 1;` inside `collectPopulation` (existing; pinned by Task 13).
+  - `server/src/collectLane.ts`: `if (isTmpRootId(n)) witnessed.add(n); else refusedNames += 1;` inside `collectPopulation`, and its record half `return id !== undefined && isTmpRootId(id) ? id : null;` inside `parseCollectRecordName` (both existing; pinned by Task 13, Rows 1 and 3).
 - NOT edited: anything under `server/src/`, `shared/`, `ccd/`, `agent/`, `pwa/`, and every existing test file.
 
 **Interfaces:**
@@ -9971,7 +10035,7 @@ grep -c '!isRegistryId(claimedBy)' src/coord/routes.ts
 grep -c '!isRegistryId(sessionId)' src/coord/routes.ts                                  # >= 1
 grep -c 'if (!isRegistryId(sid)) {' src/coord/routes.ts
 grep -c "if (!isRegistryId(run.sessionId)) return reply.code(409).send({ ok: false, reject: { code: 'bad-session' } });" src/coord/routes.ts
-grep -c "if (!isRegistryId(run.sessionId)) return { ok: false, code: 'tip-unmeasurable'" src/coord/fingerprint.ts
+grep -A1 -F 'if (!isRegistryId(run.sessionId)) {' src/coord/fingerprint.ts | grep -c "return { ok: false, code: 'tip-unmeasurable',"   # 1: Task 6's block, its return on the next line
 grep -c "deferred('marker-unreadable', 'the session id is not a registry id')" src/coord/childReclaim.ts
 grep -c 'EXPIRE_ID_REFUSED' src/coord/expireArchived.ts                                  # 3: the constant and two uses
 grep -c "if (!isTmpRootId(job.id)) return { kind: 'not-asked', step: 1, why: 'id-refused'" src/coord/collectTempRoot.ts
@@ -10297,7 +10361,7 @@ const GATES = {
   /** `resolveDoneBranch` holds a refused id (`tip-unmeasurable`), so a review close reaches no `pr-state` for it. */
   'fingerprint-check': {
     file: 'coord/fingerprint.ts', scope: 'resolveDoneBranch',
-    re: /if \(!isRegistryId\(run\.sessionId\)\) return \{ ok: false, code: 'tip-unmeasurable'/,
+    re: /if \(!isRegistryId\(run\.sessionId\)\) \{\s*return \{ ok: false, code: 'tip-unmeasurable'/,
   },
   /** The child-reclaim executor defers a bad id before either of its builders. */
   'child-reclaim-outcome': {
@@ -10313,10 +10377,15 @@ const GATES = {
     file: 'coord/collectTempRoot.ts', scope: 'collectTempRoot',
     re: /if \(!isTmpRootId\(job\.id\)\) return \{ kind: 'not-asked', step: 1, why: 'id-refused'/,
   },
-  /** The collector's population gate, the learning audit's only id check. */
+  /** The population gate's witness half; with the record half below, the learning audit's only id check. */
   'collector-population': {
     file: 'collectLane.ts', scope: 'collectPopulation',
     re: /if \(isTmpRootId\(n\)\) witnessed\.add\(n\); else refusedNames \+= 1;/,
+  },
+  /** The population gate's record half: a quarantine record names an id only when that id passes the predicate. */
+  'collector-record-name': {
+    file: 'collectLane.ts', scope: 'parseCollectRecordName',
+    re: /return id !== undefined && isTmpRootId\(id\) \? id : null;/,
   },
 } as const satisfies Readonly<Record<string, GateHome>>;
 
@@ -10355,7 +10424,7 @@ const CENSUS: readonly CensusRow[] = [
   { file: 'coord/close.ts', scope: 'closeReviewRun', builder: 'wsHold', id: 'sessionId', origin: ['stored'], gate: ['close-gate'] },
   { file: 'coord/close.ts', scope: 'closeReviewRun', builder: 'wsRelease', id: 'sessionId', origin: ['stored'], gate: ['close-gate'] },
   // coord/collectTempRoot.ts: the learning audit is reached from the population and from the executor's step 1.
-  { file: 'coord/collectTempRoot.ts', scope: 'collectAudit', builder: 'wsCollectAudit', id: 'id', origin: ['collector'], gate: ['collector-step-1', 'collector-population'] },
+  { file: 'coord/collectTempRoot.ts', scope: 'collectAudit', builder: 'wsCollectAudit', id: 'id', origin: ['collector'], gate: ['collector-step-1', 'collector-population', 'collector-record-name'] },
   { file: 'coord/collectTempRoot.ts', scope: 'collectTempRoot', builder: 'wsCollect', id: 'job.id', origin: ['collector'], gate: ['collector-step-1'] },
   // coord/dispatch.ts: refuseSpentChild's only caller is dispatchRun, below its gate; the fresh winner is a listed, valid row.
   { file: 'coord/dispatch.ts', scope: 'refuseSpentChild', builder: 'wsHold', id: 'run.sessionId', origin: ['stored'], gate: ['dispatch-gate'] },
@@ -10502,6 +10571,33 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
     expect(importers).toEqual([...GATE_FILES].sort());
   });
 
+  it('each helper whose gate stands in its caller is called only from that caller', () => {
+    // A row whose gate's home is another scope, and that carries no `entry`, is guarded only through its callers, as
+    // `stopArgvFor` is (the case above). A new CALL of a builder is the scan's to find; a new CALLER of such a helper,
+    // one that skips the gate, is this case's.
+    const CALLERS: Readonly<Record<string, readonly string[]>> = {
+      closeReviewRun: ['coord/close.ts | closeRun'],
+      refuseSpentChild: ['coord/dispatch.ts | dispatchRun'],
+      expireAudit: ['coord/expireArchived.ts | expireArchived', 'coord/expireArchived.ts | learnExpiry'],
+      expireAct: ['coord/expireArchived.ts | expireArchived'],
+      childReclaimAudit: ['coord/childReclaim.ts | childReclaimOutcome'],
+      childReclaimAct: ['coord/childReclaim.ts | childReclaimOutcome'],
+      collectAudit: ['coord/collectTempRoot.ts | collectTempRoot', 'coord/collectTempRoot.ts | learnCollect'],
+    };
+    for (const [callee, want] of Object.entries(CALLERS)) {
+      const call = new RegExp(`\\b${callee}\\(`);
+      const def = new RegExp(`\\bfunction ${callee}\\(`);
+      const found = sourcesUnder(srcRoot).flatMap((f) => {
+        const code = codeOnly(readFileSync(f, 'utf8'));
+        const heads = headsOf(code.split('\n'));
+        return blankStrings(code).split('\n').flatMap((l, i) => (call.test(l) && !def.test(l)
+          ? [`${rel(f)} | ${lastHeadAtOrBefore(heads, i)?.name ?? '(no scope)'}`]
+          : []));
+      });
+      expect(found.sort(), `${callee}'s callers`).toEqual([...want].sort());
+    }
+  });
+
   it('CONTROL: the scan sees a call, and ignores a comment, a string and a definition', () => {
     const src = [
       'export async function sample(deps: Deps, id: string): Promise<void> {',
@@ -10548,7 +10644,7 @@ Notes on the code:
 cd server && ./node_modules/.bin/vitest run test/id-argv-census.test.ts
 ```
 
-Expected: `Test Files  1 passed (1)`, `Tests  7 passed (7)`. Run it in the foreground with a timeout of at least 600000 ms.
+Expected: `Test Files  1 passed (1)`, `Tests  8 passed (8)`. Run it in the foreground with a timeout of at least 600000 ms.
 
 This census measures code that Tasks 2 to 14 already built, so its first run is green. Task 13 has the same shape. Step 4's mutation rows are this task's red-first proof.
 
@@ -10569,17 +10665,17 @@ Run every row from `server/`, with `./node_modules/.bin/vitest run test/id-argv-
 | M4 | `src/server.ts`: delete `knownId`'s first statement, `if (!isRegistryId(id)) return false;` | `every gate stands …`: `knownId: the gate's text is gone from server.ts knownId` | `git checkout -- src/server.ts` |
 | M5 | `src/server.ts`, in `POST /api/sessions/:id/swap`: move the cross arm's `isRegistryId(id)` check from first inside `if (body.crossPool === true) {` to just below the `capSupported(deps.fleetState, POOLS_CAP)` block | `every gate stands …`: `cross-arm-head: the gate's text is gone from server.ts POST /api/sessions/:id/swap` | `git checkout -- src/server.ts` |
 | M6 | `src/coord/close.ts`: delete the statement that records `'fleet-act-omitted:bad-session'` | `every gate stands …`: `close-abandon-branch: the gate's text is gone from coord/close.ts closeRun` | `git checkout -- src/coord/close.ts` |
+| M7 | `src/coord/expireArchived.ts`, in `learnExpiry`: above `  return expireAudit(deps, sessionId);` insert `  void expireAct(deps as never, sessionId, 'probe');` (a second caller that skips the act's step 0) | `each helper whose gate stands in its caller …`: `expireAct's callers: expected [ 'coord/expireArchived.ts \| expireArchived', 'coord/expireArchived.ts \| learnExpiry' ] to deeply equal [ 'coord/expireArchived.ts \| expireArchived' ]` | `git checkout -- src/coord/expireArchived.ts` |
 
-M1 to M3 are the scope's three rows. M4 to M6 prove that the gate homes are load-bearing. Each source-side mutation leaves the census file itself untouched.
+M1 to M3 are the scope's three rows. M4 to M6 prove that the gate homes are load-bearing. M7 proves the caller pin. Each source-side mutation leaves the census file itself untouched.
 
 - [ ] **Step 5: Run the task's other suites**
 
 ```bash
-cd server
-./node_modules/.bin/vitest run test/id-argv-census.test.ts
-./node_modules/.bin/vitest run test/typecheck-tests.test.ts
-./node_modules/.bin/vitest run test/whitelist-subset.test.ts
-git status --short    # exactly: ?? server/test/id-argv-census.test.ts
+(cd server && ./node_modules/.bin/vitest run test/id-argv-census.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/whitelist-subset.test.ts)
+git status --short    # from the workspace root, exactly: ?? server/test/id-argv-census.test.ts
 ```
 
 All three should be green, in the foreground, with a timeout of at least 600000 ms. `typecheck-tests` is the gate on `ID_BUILDERS`'s and `ID_PROBE`'s `satisfies` clauses. `whitelist-subset` shares `CCD_ARGV`'s key set with this file's first case. This task edits no file under `server/src`, so `unattended-actor` and `verb-gate` are not required. A red in a known load flake is re-run in isolation first.
@@ -10640,7 +10736,7 @@ git log --format=%s --no-merges origin/main..HEAD   # (e1) one subject per task,
                                                     # "test(server): census every id-taking argv call, its origin and its gate" newest
 P=docs/superpowers/plans/2026-10-12-path-identity-w1a-server-id-gate.md
 grep -c '^## Deviations found$' "$P"                # (e2) 1
-grep -c '^## As built (W1a, run 399)$' "$P"         # (e3) 0
+awk '/^## Deviations found$/{f=1} f && $0 == "## As built (W1a, run 399)"{n++} END{print n+0}' "$P"         # (e3) 0
 grep -n '^### Plan-text corrections and extra pins, one number per task$' "$P"   # (e4) one line, the file's last heading
 tail -c 1 "$P" | od -An -c                          # (e5) \n: the file ends in a newline
 ```
@@ -10674,13 +10770,15 @@ const fs = require("node:fs");
 const f = "docs/superpowers/plans/2026-10-12-path-identity-w1a-server-id-gate.md";
 const t = fs.readFileSync(f, "utf8");
 const bad = [];
-const heads = t.split("\n").filter((l) => l === "## As built (W1a, run 399)").length;
-if (heads !== 1) bad.push("the as-built heading appears " + heads + " times, not once");
-const at = t.indexOf("\n## As built (W1a, run 399)\n");
 const dev = t.indexOf("\n## Deviations found\n");
 if (dev < 0) bad.push("no Deviations found section");
-if (at >= 0 && at < dev) bad.push("the as-built section stands above Deviations found");
-const s = at < 0 ? "" : t.slice(at);
+// Step 3 of this task holds the section as a heredoc template ABOVE Deviations found, so only the text below
+// Deviations found can be the appended section.
+const below = dev < 0 ? "" : t.slice(dev);
+const heads = below.split("\n").filter((l) => l === "## As built (W1a, run 399)").length;
+if (heads !== 1) bad.push("the as-built heading appears " + heads + " times below Deviations found, not once");
+const at = below.indexOf("\n## As built (W1a, run 399)\n");
+const s = at < 0 ? "" : below.slice(at);
 if (/\bD-\d/.test(s)) bad.push("a deviation token");
 if (/\d{4} ?(–|\.\.|-) ?\d{4}/.test(s)) bad.push("a number range");
 if (/\/home\/|\/Users\/|\.ts\.net|\b100\.\d+\.\d+\.\d+/.test(s)) bad.push("a host or a home path");
@@ -10705,9 +10803,9 @@ process.exitCode = bad.length === 0 ? 0 : 1;
 echo "check rc=$?"
 ```
 
-Expected: `as-built RED: the as-built heading appears 0 times, not once; slug registry-id-at-foot missing; …`, then `check rc=1`.
+Expected: `as-built RED: the as-built heading appears 0 times below Deviations found, not once; slug registry-id-at-foot missing; …`, then `check rc=1`.
 
-What `answerRows` counts: the section's table body rows, which are 12 reader rows, 8 masked-arm rows and 20 answer rows, 40 in all. The floor of 26 only proves that the answers table is not missing. The exact pins are `siteRows`, the slugs and the names.
+What `answerRows` counts: the section's table body rows, which are 12 reader rows, 8 masked-arm rows and 21 answer rows, 41 in all. The floor of 26 only proves that the answers table is not missing. The exact pins are `siteRows`, the slugs and the names.
 
 - [ ] **Step 2: Measure what the section states, at the tip**
 
@@ -10758,11 +10856,8 @@ Then fill "Departures recorded while building":
 Correct every number and name to Step 2's answers, and leave no other text changed. Then append:
 
 ```bash
+printf '\n---\n\n%s\n' '## As built (W1a, run 399)' >> docs/superpowers/plans/2026-10-12-path-identity-w1a-server-id-gate.md
 cat >> docs/superpowers/plans/2026-10-12-path-identity-w1a-server-id-gate.md <<'EOF'
-
----
-
-## As built (W1a, run 399)
 
 This note records where wave 1 of the path-identity programme (the spec's W1a) differs, as built, from the spec
 `docs/superpowers/specs/2026-10-12-path-identity-design.md`, and what it carries to later waves. The spec is not edited:
@@ -10871,8 +10966,9 @@ ccd's half of spec §2 stays open.
 
 ### The masked arms and their masks
 
-These arms answer the safe word, and their comments name the mask. None has a pin of its own: their pins are the
-mask's cases and `readSessionRecord`'s zero-listing case (R17).
+These arms answer the safe word, and their comments name the mask. Unless the last column names a pin of the arm's
+own (R17 as amended, and the exported functions' unit pins), their pins are the mask's cases and
+`readSessionRecord`'s zero-listing case (R17).
 
 | Arm | Its answer for `bad-id` | Its mask | Pinned by |
 |---|---|---|---|
@@ -10963,8 +11059,15 @@ Notes on the table:
   - At dispatch, a stored `project` reaches `CCD_ARGV.wsAddWorker(run.project, …)` with no server re-check.
   - Measured: 0 such rows at Task 0, and the `POST /api/runs` check covers every new row.
   - W1b's ws-add loop and `_ws_project_valid` close it.
+- **The expiry lane's words for the executor's own refusal (`expiry-composition-words-misread-a-server-refusal`).** R9 answers a non-registry id with `composition`, whose detail says no call was composed, but `expireFeedBody`'s `composition` arm still says "ccd rejected the call this server composed" and `archivedExpiry.ts`'s lane report says "the server composed a call ccd rejected". The lane's population omits refused rows (Task 5), so production does not reach it. `archivedExpiry.ts` is outside this boundary and Task 12 keeps its hunk to the guards while #351 shares the file, so this is carried.
 - **The real-binary parity rows.** Spec §2.8's `ccdargv-dec-parity` rows on the real binary, with the ids `--actor`,
   `--surface`, `--reason`, `--expect` and `--defer-expired`, go green only with W1b's loops, so they ride W1b.
+- **Prose that still calls `POST /api/runs` unguarded (`session-shape-prose-predates-the-id-gate`).** After Tasks 9 and 10, these comments still say that `POST /api/runs` checks `claimedBy`/`sessionId` only for a non-empty string, or that the routing door asks `isSessionIdShape`:
+  - `shared/api.ts`'s docstring above `SESSION_ID_SEGMENT`, which sits above the foot block;
+  - `coord/store.ts`'s docstring of the `reclaim:` event reader, a file this wave never edits;
+  - the comments in `run-signals-routing.test.ts` (above its `isSessionIdShape` describe), `run-route-route.test.ts` (above the `'bad claimant'` case) and `child-reclaim-paused-at-server.test.ts` (above its `from` round-trip cases).
+
+  Legacy rows can still hold such ids, so each comment's conclusion stands; only its description of the route is stale. Carried to the first wave that edits each file.
 - **The full rename of `TMPROOT_ID_MAX_CHARS`.** It touches `coord/store.ts`, so it waits until after #351. Until
   then, the alias stands.
 - **SEC2 C and D.** A `RegistryId` brand on every builder, or an assertion inside each id-taking builder, stays in the
@@ -10978,7 +11081,7 @@ EOF
 ```
 
 What the heredoc does to the file:
-- It starts with one empty line, so the `---` cannot join the file's last line as a setext heading (Step 0's (e5)).
+- The `printf` before it starts with one empty line, so the `---` cannot join the file's last line as a setext heading (Step 0's (e5)). It writes the section's heading itself, outside the heredoc, so that this plan's own text never holds that heading at the start of a line: Step 0's (e3), Step 1's check and Step 5's `sed` range each find the appended heading and nothing else.
 - Delete the bullet that does not apply, from "README stop prose" (one of the two).
 - If Step 2 listed no extra slug, delete the last heading and its sentence. Otherwise, add one bullet per slug below that sentence, in the form ``- `<slug>`: <one sentence, measured at the tip>.``
 
@@ -11028,7 +11131,7 @@ Expected: `as-built ok`, then `check rc=0`.
 Then:
 
 ```bash
-sed -n '/^## As built (W1a, run 399)$/,$p' docs/superpowers/plans/2026-10-12-path-identity-w1a-server-id-gate.md | grep -cE 'D-[0-9]|[0-9]{4} ?(–|\.\.|-) ?[0-9]{4}'   # 0
+awk '/^## Deviations found$/{f=1} f && $0 == "## As built (W1a, run 399)"{p=1} p' docs/superpowers/plans/2026-10-12-path-identity-w1a-server-id-gate.md | grep -cE 'D-[0-9]|[0-9]{4} ?(–|\.\.|-) ?[0-9]{4}'   # 0
 git diff --stat -- docs/superpowers/plans/2026-10-12-path-identity-w1a-server-id-gate.md   # insertions only
 git diff -- docs/superpowers/plans/2026-10-12-path-identity-w1a-server-id-gate.md | grep -c '^-[^-]'   # 0: nothing above the section changed
 ```
@@ -11133,7 +11236,7 @@ This task adds no guard, so it has no failing test of its own and no mutation ro
 
 This run's verdict is the wave-done's `suite:` line (worker clause 15). Record it in the SDD ledger before any fix. A later fix never changes it.
 
-Run each line below as its own Bash call, with a timeout of 600000 ms and never in the background:
+Run each line below as its own Bash call from the workspace root, with a timeout of 600000 ms and never in the background. Each `cd server && …` (or `cd agent`, `cd pwa`) line here and in Steps 2 and 3 assumes it starts at the workspace root: in a shell that keeps its directory between calls, write it as `(cd server && …)`, or every line after the first fails on `cd`:
 
 ```bash
 cd server && npm ci
@@ -11262,7 +11365,7 @@ Run as one call:
 
 ```bash
 git fetch origin
-git diff --name-only origin/main...HEAD | grep -vE '^(server/src/|server/test/|shared/api\.ts$|README\.md$|docs/superpowers/plans/2026-10-12-path-identity-w1a-server-id-gate\.md$)'
+git diff --name-only origin/main...HEAD | grep -vE '^(server/src/(server|registry|fleet|sessionws|commands|lifecycle|watch|ccdargv)\.ts$|server/src/coord/(routes|close|dispatch|reclaim|childBind|childReclaim|fingerprint|expireArchived)\.ts$|server/test/|shared/api\.ts$|README\.md$|docs/superpowers/plans/2026-10-12-path-identity-w1a-server-id-gate\.md$)'
 git diff --name-only origin/main...HEAD -- ccd/ agent/ pwa/ deploy/ CLAUDE.md docs/superpowers/specs/ docs/superpowers/programs/ server/src/coord/store.ts server/src/coord/schema.ts server/src/archivedExpiry.ts server/src/deadCoordinator.ts server/src/coord/endDeadCoordinator.ts server/src/coord/archiveDoor.ts server/src/coord/childSpent.ts server/src/collectLane.ts server/src/coord/collectTempRoot.ts server/src/childReclaimSweep.ts
 git diff origin/main...HEAD -- docs/superpowers/plans/2026-10-12-path-identity-w1a-server-id-gate.md | grep -cE '^-[^-]'
 MB=$(git merge-base origin/main HEAD)
@@ -11272,7 +11375,7 @@ FOOT_HEAD=$(grep -nF "/* ── child-workspace reclamation: the temp-root colle
 echo "foot merge-base=$FOOT_MB origin/main=$FOOT_MAIN head=$FOOT_HEAD"
 git diff -U0 "$MB" HEAD -- shared/api.ts | awk -v foot="$FOOT_MB" '/^@@ / { split($2, a, ","); s = substr(a[1], 2) + 0; n++; if (s < foot) bad++ } END { printf "hunks %d, above-foot %d\n", n, bad + 0 }'
 git show origin/main:README.md | grep -n 'shared/api\.ts:[0-9]'
-git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD; echo "merge-tree rc=$?"
+git merge-tree --write-tree --name-only --no-messages HEAD origin/main; echo "merge-tree rc=$?"
 gh pr view 351 --json state -q .state
 gh pr list --state all --json number,state,title -q '.[] | "\(.number) \(.state) \(.title)"' | grep -i 'collector' | grep -i 'wave 10\|settings'
 ```
@@ -11294,7 +11397,7 @@ Run as one call:
 BR=$(git branch --show-current)
 git push -u origin "$BR"
 EXISTING=$(gh pr list --head "$BR" --state open --json number -q '.[0].number')
-SUITE_LINE='suite: green — 680 files over 24 shards, all passed; agent and pwa green unchanged'   # REPLACE with the ledger's Step 1 record, verbatim
+SUITE_LINE='REPLACE with the Step 1 record from the ledger, verbatim (its shape: suite: green, 680 files over 24 shards, all passed; agent and pwa green unchanged)'
 EXTRA_SLUGS=''   # each further departure slug recorded in the ledger during Tasks 0 to 16, comma-separated, or empty
 if git diff --quiet origin/main...HEAD -- README.md; then README_CARRY="- README's two \`stop\` prose lines still show the old argument order; they ride the next README edit after #351 (R14)."; else README_CARRY="- README's two \`stop\` prose lines were updated here, line-neutral (R14)."; fi
 BODY=$(mktemp)
@@ -11396,7 +11499,7 @@ rm -f "$BODY"
 ```
 
 Before running it:
-- set `SUITE_LINE` from the ledger's Step 1 record, verbatim, and delete the `REPLACE` comment. The scan refuses a body that still holds `REPLACE`;
+- set `SUITE_LINE` to the ledger's Step 1 record, verbatim. Its placeholder value holds `REPLACE`, and the scan refuses a body that still holds `REPLACE`, so an unset suite line is never posted;
 - set `EXTRA_SLUGS` to any further slug the ledger recorded.
 
 Expected: the push succeeds, the body scan prints nothing, and `gh pr create` prints the PR URL.
@@ -11454,7 +11557,7 @@ Expected: the client prints `{"ok":true,…}`. A `stale-uuid` means the uuid was
 
 Then stop pushing (clause 9). Do not end the turn to wait for CI: CI is the coordinator's re-measure. End the turn only on a wake you can name (clause 17).
 
-**Commit:** none. Step 1 may produce a `fix(server): <the case it fixes>` commit for a red that `main` does not show, recorded in the ledger. Its body names the failing case and the measured cause. It carries no `D-` token and no trailer.
+**Commit:** none. Step 1 may produce a `fix(server): <the case it fixes>` commit for a red that `main` does not show, recorded in the ledger. Its body names the failing case and the measured cause. It carries no `D-` token; the worker appends its session's required attribution trailer, as on every commit of this plan.
 
 ---
 
@@ -11527,7 +11630,9 @@ This wave's numbers come from the block the allocator issued for run 399 on 2026
   - `fleet-fallback-is-tests-only` and `cold-start-skips-an-unmeasured-fleet` (R19);
   - `bad-id-is-not-a-code` (R20);
   - `wave-lifecycle-rows-carried` (R24);
-  - `resume-dispatch-refuses-not-holds` (Task 3);
+  - `over-long-request-ids-stop-at-the-router` (Task 2);
+  - `resume-dispatch-refuses-not-holds` and `overlong-id-plants-no-row` (Task 3);
+  - `generation-pin-follows-kind` (Task 4);
   - `abandon-sheet-misreads-an-omitted-fleet-act` and `work-run-project-reaches-ws-add-unchecked` (Task 16's carried lines);
 - from Task 0's STOP rules: `tree-not-ready`, `contract-17-not-on-main`, `registry-id-owned-elsewhere`, `registry-unmeasured`, `registry-rows-fail-the-predicate`, `stored-rows-unmeasured`, `stored-rows-fail-the-predicate`, `gate-site-moved`, `claim-overlap` and `stop-surface-loop-postdates-token`.
 

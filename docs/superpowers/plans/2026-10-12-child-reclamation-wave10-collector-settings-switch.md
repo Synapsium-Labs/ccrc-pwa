@@ -71,7 +71,7 @@ Task 14 writes this wave's as-built note into §5. `docs/superpowers/specs/2026-
 - `ccd/ccrc`: usage text, comments and `_upd_report`'s downgrade echo only (Task 13);
 - `README.md` (Task 14's sentences);
 - `CLAUDE.md`: the box-token bullet's session-only sentence (Task 9), the coord.db bullet (Task 14), and line 10's README numeral only if Task 14's re-measure moves it;
-- the path-identity spec's and the CCR-15 spec's as-built notes, the contract's "§17 as built" note, and this plan (Task 14).
+- the path-identity spec's and the CCR-15 spec's as-built notes, the contract's "§17 as built" note (Task 14); and this plan's `## Deviations found`, which only the coordinator writes, at a fix round (no task edits this plan).
 
 **It never edits:**
 - `ccd/ccd`, anything under `agent/` or `deploy/`, `ccd/ccrc-api`, or any skill text (`ccd/*-skill/**`);
@@ -120,6 +120,7 @@ Each line binds every task.
   - Run it in the foreground, from the package directory: `./node_modules/.bin/vitest run test/<file>`, with a timeout of at least 600000 ms. Never use bare `npx vitest`.
   - New cases go in NEW files, unless the precedent appends to the file that holds the harness. The file-local harnesses are the skill suites, `ccrc-update.test.ts` and `ccrc-uninstall.test.ts`.
   - Re-run a known load flake in isolation before calling it a break.
+  - In a Markdown table cell, `\|` is the escape for `|`. Type a bare `|` wherever a cell shows `\|`: in code, in a mutation and in a `-t` pattern. vitest reads `\|` in a `-t` pattern as a literal pipe, so a copied `-t 'a\|b'` selects no case and the mutation reads green.
 - **`shared/api.ts`:** declarations at the foot, after the last line. Any rewrite above it keeps every line number. After each such commit, run session-hook's citation cases.
 - **No `D-` token and no number range.** Neither appears in code, comments, tests or commit messages. Name a departure by kebab-case slug; the coordinator assigns its number.
 - **Branch discipline:** one commit per task, on this workspace's own branch. Absorb `main` only with `git merge`. Every commit leaves every suite it touches green.
@@ -408,7 +409,7 @@ Every file the wave touches. Each task's own **Files** block stays the authority
 | `server/test/asks-store.test.ts` | 6 (the version pin) |
 | `server/test/mail-routes.test.ts` | 6 (`isCollectLaneKebab`, the next union), 9 (`isCollectLaneRefusal`, the union after it) |
 | `server/test/collectTempRootFixture.ts` | 7 |
-| `server/test/collectLaneFixture.ts` | 7 |
+| `server/test/collectLaneFixture.ts` | 7 (the journal, `collectLane` in `deps`, `journal` in the rig), 8 (the identity cell as `deps.fleetIdentity`, six rig members) |
 | `server/test/collect-temp-root.test.ts` | 7 (`switch-flip` renames, latch assertions, the job's epoch) |
 | `server/test/collect-temp-root-reads.test.ts` | 7 (four `marker` assertions) |
 | `server/test/collect-feed-body.test.ts` | 7 (the switch case moves to the new body) |
@@ -438,6 +439,8 @@ Every file the wave touches. Each task's own **Files** block stays the authority
 | `pwa/test/not-available.test.ts` (new) | 11 |
 | `pwa/test/use-collect-lane-view.test.tsx` (new) | 11 |
 | `pwa/test/collect-lane-words.test.ts` (new) | 11 |
+| `pwa/test/collect-lane-words.test-d.ts` (new) | 11 |
+| `pwa/test/collect-lane-words.test-d.ts` (new) | 11 |
 | `pwa/src/fleet/CollectLaneSection.tsx` (new) | 12 |
 | `pwa/src/screens/SettingsScreen.tsx` | 12 |
 | `pwa/test/collect-lane-section.test.tsx` (new) | 12 |
@@ -580,6 +583,7 @@ export type CollectLaneJournalRead =
   | { readonly kind: 'unreadable'; readonly code: string }              // errno word only (EFBIG past 1 MiB)
   | { readonly kind: 'not-regular'; readonly fileKind: 'symlink' | 'directory' | 'other' }
   | { readonly kind: 'not-configured' };                                // L3's `collectControlNow` only (R28)
+export const COLLECT_LANE_JOURNAL_KINDS: readonly CollectLaneJournalRead['kind'][];   // derived from its table (R30)
 /** Total over every string; never throws. */
 export function parseCollectLaneJournal(text: string): Extract<CollectLaneJournalRead, { kind: 'ok' | 'malformed' }>;
 /** L2, declared by its consumers (store, executor, route). `read` never throws; `appendGeneration` writes exactly
@@ -589,6 +593,7 @@ export interface CollectLaneJournal { read(): CollectLaneJournalRead; appendGene
 export type CollectLaneUnmeasurable =
   | 'row-absent' | 'row-unreadable' | 'row-malformed' | 'journal-missing' | 'journal-malformed'
   | 'journal-unreadable' | 'journal-not-regular' | 'journal-not-configured';
+export const COLLECT_LANE_UNMEASURABLE_WHYS: readonly CollectLaneUnmeasurable[];   // derived from its table (R30)
 export type CollectLaneControl =
   | { readonly kind: 'coherent'; readonly row: CollectLaneRow; readonly generation: number; readonly bootstrap: boolean }
   | { readonly kind: 'mismatch'; readonly row: CollectLaneRow; readonly journalMax: number; readonly rowGeneration: number }
@@ -701,13 +706,15 @@ export function decideCollectLanePost(i: CollectPostInput): CollectPostDecision;
 export function collectLaneSettingChange(before: CollectLaneRowRead, after: CollectLaneRowRead,
   journalBefore: CollectLaneJournalRead): string;
 /** `generation` null = the store answered unchanged: the proof is a coherent re-read showing exactly the requested
- *  choice (and node, for Live) at the unchanged generation. A number: a coherent re-read at that generation and target. */
+ *  choice (and node, for Live) at the expected row's generation; Off, which carries no expectation, needs only a
+ *  coherent off with no node. A number: a coherent re-read at that generation and target. */
 export function collectLaneWriteProved(request: CollectLaneWriteRequest, generation: number | null,
   row: CollectLaneRowRead, journal: CollectLaneJournalRead): boolean;
 export const COLLECT_LANE_APPLIES_TEXT: string;   // "… applies from the collector's next check; a removal already handed to ccd is not stopped."
 export interface CollectLaneViewInput {
   readonly row: Exclude<CollectLaneRowRead, { kind: 'absent' }>;   // the route answers 503 for an absent row (R38)
-  readonly journal: CollectLaneJournalRead; readonly switches: CollectLaneSwitches;
+  readonly journal: Exclude<CollectLaneJournalRead, { kind: 'not-configured' }>;   // the route answers 501 without a journal
+  readonly switches: CollectLaneSwitches;
   readonly epoch: CollectEpochPair; readonly node: CollectCurrentNode; readonly caps: CollectLaneCaps;
   readonly counts: CollectLaneCounts | null; readonly notice: string | null;
 }
@@ -849,7 +856,8 @@ export function collectLaneCaps(state: FleetState | undefined): CollectLaneCaps;
   - `currentCollectCounts(): CollectLaneCounts | null`, which is `null` while `collectPop === null` (Task 8);
   - `private collectAttentionInput()` (Task 8, extracted; `collectAttention()` calls it);
   - `private collectControlDeps(coord: CoordStore): CollectControlDeps` (Task 7);
-  - `private collectRecordCoordFeed(coord: CoordStore, title: string, body: string): void` (Task 7).
+  - `private collectRecordCoordFeed(coord: CoordStore, title: string, body: string): void` (Task 7);
+  - `private collectControlNote(r: CollectLaneSettled): void` (Task 8: R16's warn latches over `collectControlWarned`, called first from the port's `flipped`).
 - **Wiring:**
   - `runInventory`: the remote arm gets `fleet: { io, state, identity: this.deps.fleetIdentity }`; the local arm gets `ownIdentity: this.deps.fleetIdentity` (Task 5).
   - `collectAct`'s deps gain `control: this.collectControlDeps(coord)` and `link: this.deps.fleetIdentity ?? NO_FLEET_IDENTITY` (Task 7).
@@ -890,7 +898,20 @@ export type CollectLanePostRefusal =
   | { kind: 'unconfirmed' };
 export function collectLanePostRefusal(err: unknown): CollectLanePostRefusal;
 export function useCollectLaneView(pollMs?: number): CollectLanePoll;
-// pwa/src/fleet/collectLaneWords.ts — Record<state | CollectArmedBy | CollectLaneRefusal, …> tables and:
+// pwa/src/fleet/collectLaneWords.ts — Task 11 is the one producer, and Task 12 imports exactly these names (it defines no copy):
+export type CollectEffectiveState = CollectLaneView['effective']['state'];
+export const COLLECT_SECTION_TEXT: { title; notAvailable; unread; stale; legend; off; live; reconfirm; confirmTitle; confirmLabel };
+export const COLLECT_STATE_TEXT: Readonly<Record<CollectEffectiveState, { readonly label: string; readonly line: string }>>;
+export const COLLECT_ARMED_BY_TEXT: Readonly<Record<CollectArmedBy, string>>;
+export const COLLECT_WARN_TEXT: { recreated; otherNode; mismatch; unknownChoice };
+export const COLLECT_STORED_FAULT_TEXT: Readonly<Record<'malformed' | 'unreadable', string>>;
+export const COLLECT_OFF_NOTE_TEXT: Readonly<Record<'stands' | 'absent' | 'unmeasured', string>>;
+export const COLLECT_REFUSAL_TEXT: Readonly<Record<CollectLaneRefusal, string>>;
+export const COLLECT_PAUSE_TEXT: { label; stops; paused; pausing; unconfirmed };
+export const COLLECT_CONFIRM_TEXT: { staleLead; capsBoth; capsNoCollect; capsNoReclaimPause; capsNeither; paused; markerStands; markerAbsent; repair; checklist };
+export const COLLECT_COUNT_TEXT: { unmeasured };
+export function collectStateHead(state: CollectEffectiveState): string;
+export function collectUnmeasurableLines(detail: string): { text: string; tone: 'head' | 'note' | 'warn' }[];
 export function collectNowLines(v: CollectLaneView): { text: string; tone: 'head' | 'note' | 'warn' }[];
 export function collectOffNote(v: CollectLaneView): string | null;          // R32
 export function collectOffersReconfirm(v: CollectLaneView): boolean;        // R32
@@ -898,7 +919,7 @@ export function collectConfirmLines(facts: CollectLaneConfirmRequired['facts'], 
 export function collectCountLine(a: CollectLaneView['attention']): string;
 // pwa/src/fleet/CollectLaneSection.tsx
 export function CollectLaneSection(props?: { store?: typeof useFleetStore;
-  childReclaimPause?: (state: 'on' | 'off') => Promise<void>; pollMs?: number }): JSX.Element;
+  childReclaimPause?: (state: 'on' | 'off') => Promise<void>; pollMs?: number }): ReactNode;
 ```
 `useStallWatchView.ts` keeps `StallWatchFailure` as an alias of `SettingsReadFailure`, and imports `settingsReadFailure` in place of its private `failureOf`.
 
@@ -1248,8 +1269,8 @@ describe("the collector switch's L0 vocabulary (path-identity spec §5.7)", () =
 - [ ] **Step 3: Run the test to verify it fails**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/collect-lane-l0.test.ts
-cd server && ./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json 2>&1 | grep 'collect-lane-l0'
+(cd server && ./node_modules/.bin/vitest run test/collect-lane-l0.test.ts)
+(cd server && ./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json 2>&1 | grep 'collect-lane-l0')
 ```
 
 Expected: FAIL, 6 failed and 2 passed. vitest resolves a missing named export to `undefined`, so:
@@ -1378,10 +1399,10 @@ The block is L0 and imports nothing. No prose in it quotes the absent and unread
 - [ ] **Step 5: Run the test, the type-checks and the neighbours**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/collect-lane-l0.test.ts test/peers-claims-l0.test.ts test/collect-l0.test.ts test/stall-settings.test.ts test/collect-readers.test.ts
-cd server && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json
-cd pwa && { [ -d node_modules ] || npm ci; } && ./node_modules/.bin/tsc --noEmit -p .
-cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts test/typecheck-tests.test.ts
+(cd server && ./node_modules/.bin/vitest run test/collect-lane-l0.test.ts test/peers-claims-l0.test.ts test/collect-l0.test.ts test/stall-settings.test.ts test/collect-readers.test.ts)
+(cd server && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json)
+(cd pwa && { [ -d node_modules ] || npm ci; } && ./node_modules/.bin/tsc --noEmit -p .)
+(cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts test/typecheck-tests.test.ts)
 ```
 
 Expected:
@@ -1408,10 +1429,10 @@ Make each mutation alone, run its command from `server/`, record the red, and re
 |---|---|---|---|
 | T1.1 | In `isCollectLaneChoice`, `(COLLECT_LANE_CHOICES as readonly string[]).includes(v)` → `v in COLLECT_LANE_CHOICE_TABLE` | `./node_modules/.bin/vitest run test/collect-lane-l0.test.ts` | `isCollectLaneChoice refuses every prototype name` (`constructor: expected true to be false`), and `its body is the includes form` (`isCollectLaneChoice's body: expected '  return typeof v === \'string\' && v in COLLECT_LANE_CHOICE_TABLE;' to be …`) |
 | T1.2 | `{ off: true, live: true }` → `{ off: true, live: true, shadowed: true }` in `COLLECT_LANE_CHOICE_TABLE` | the same, then `./node_modules/.bin/tsc --noEmit -p .` | vitest: the accept case (`shadowed: expected true to be false`) and the derived case (`expected [ 'off', 'live', 'shadowed' ] to deeply equal [ 'off', 'live' ]`). tsc: `error TS2353: Object literal may only specify known properties, and 'shadowed' does not exist in type 'Readonly<Record<CollectLaneChoice, true>>'`. `typecheck-tests` reds with it |
-| T1.3 | T1.2, plus `export type CollectLaneChoice = 'off' \| 'live' \| 'shadowed';` | `./node_modules/.bin/vitest run test/collect-lane-l0.test.ts && ./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json` | vitest: the accept case and the derived case, as in T1.2. tsc: `collect-lane-l0.test.ts` TS2741 (`Property 'shadowed' is missing`) at the `total` literal, and TS2578 on the `shadowed` request's directive |
+| T1.3 | T1.2, plus `export type CollectLaneChoice = 'off' \| 'live' \| 'shadowed';` | `./node_modules/.bin/vitest run test/collect-lane-l0.test.ts; ./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json` | vitest: the accept case and the derived case, as in T1.2. tsc: `collect-lane-l0.test.ts` TS2741 (`Property 'shadowed' is missing`) at the `total` literal, and TS2578 on the `shadowed` request's directive |
 | T1.4 | `export const COLLECT_LANE_CHOICES: readonly CollectLaneChoice[] =` plus its `Object.keys(…)` line → `export const COLLECT_LANE_CHOICES: readonly CollectLaneChoice[] = ['off', 'live'];` | `./node_modules/.bin/vitest run test/collect-lane-l0.test.ts` | `COLLECT_LANE_CHOICES is derived from its table`: `COLLECT_LANE_CHOICES is not Object.keys of its table` (and, with that line restored, `is hand-typed as a literal array`) |
 | T1.5 | Delete `'confirm-stale': true, ` from `COLLECT_LANE_REFUSAL_TABLE` | the same, then `./node_modules/.bin/tsc --noEmit -p .` | vitest: `isCollectLaneRefusal admits exactly the nine route words` (`expected [ …(8) ] to deeply equal [ …(9) ]`). tsc: `error TS2741: Property ''confirm-stale'' is missing in type …` |
-| T1.6 | Append the code line `export const COLLECT_LANE_FILE_ECHO = 'collect-lane-live';` at the foot | `./node_modules/.bin/vitest run test/collect-lane-l0.test.ts && ./node_modules/.bin/vitest run test/single-definition.test.ts -t 'live switch has no writer'` | `no L0 code line spells the marker` (`expected [ 'export const COLLECT_LANE_FILE_ECHO = \'collect-lane-live\';' ] to deeply equal []`). Then single-definition's wave-9 block: `spelled on a code line outside server/src/collectLane.ts` |
+| T1.6 | Append the code line `export const COLLECT_LANE_FILE_ECHO = 'collect-lane-live';` at the foot | `./node_modules/.bin/vitest run test/collect-lane-l0.test.ts; ./node_modules/.bin/vitest run test/single-definition.test.ts -t 'live switch has no writer'` | `no L0 code line spells the marker` (`expected [ 'export const COLLECT_LANE_FILE_ECHO = \'collect-lane-live\';' ] to deeply equal []`). Then single-definition's wave-9 block: `spelled on a code line outside server/src/collectLane.ts` |
 | T1.7 | Move the line `export type CollectArmedBy = 'settings' \| 'legacy-marker' \| 'both' \| 'neither';` to directly above `export type CollectBoxLine = keyof typeof COLLECT_BOX_LABELS;` | `./node_modules/.bin/vitest run test/collect-lane-l0.test.ts` | `the block sits at the foot…`: `^export type CollectArmedBy =  is declared above the foot: expected <a> to be greater than <b>` |
 | T1.8 | In `isCollectLaneRefusal`, `(COLLECT_LANE_REFUSALS as readonly string[]).includes(v)` → `v in COLLECT_LANE_REFUSAL_TABLE` | the same | the nine-words case (`toString: expected true to be false`), and the body case (`isCollectLaneRefusal's body: expected …`) |
 | T1.9 | In `CollectLaneView.stored`, add the arm `\| { readonly read: 'absent' }` | `./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json` | `test/collect-lane-l0.test.ts(…): error TS2578: Unused '@ts-expect-error' directive.` at the absent row |
@@ -1446,7 +1467,7 @@ MSG
 - [ ] **Step 9: Run session-hook's citation cases on the committed tree**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'CITATION DEBT|README HAS ITS OWN CENSUS|LOCATION INDEXES|ROW PASS|RANGE BOUND'
+(cd server && ./node_modules/.bin/vitest run test/session-hook.test.ts -t 'CITATION DEBT|README HAS ITS OWN CENSUS|LOCATION INDEXES|ROW PASS|RANGE BOUND')
 git status --short -- shared server/test                                       # prints nothing
 ```
 
@@ -2081,7 +2102,7 @@ describe('the write decision (§5.2, §5.4, §5.6)', () => {
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/collect-lane-control.test.ts
+(cd server && ./node_modules/.bin/vitest run test/collect-lane-control.test.ts)
 ```
 
 Expected: FAIL, 42 of 42. The count is drafted, not measured; re-measure it. Vitest binds a missing named export to `undefined` and raises no SyntaxError, so the file collects and every case fails on its own:
@@ -2496,7 +2517,7 @@ Checks on what you wrote:
 - [ ] **Step 4: Run to pass**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/collect-lane-control.test.ts
+(cd server && ./node_modules/.bin/vitest run test/collect-lane-control.test.ts)
 ```
 
 Expected: PASS, 42 of 42 (re-measure). Run it in the foreground with a timeout of at least 600000 ms.
@@ -2509,7 +2530,7 @@ Make each edit alone, run its command from `server/`, see the red, and revert be
 |---|---|---|---|
 | 1 | `collectLaneControl`: `journal.max === row.row.generation` becomes `row.row.generation === Math.max(journal.max, row.row.generation)` | `C -t 'are mismatches'` | `the named regression: row == max(journal, row) would call this coherent: expected { kind: 'coherent', … } to match object { kind: 'mismatch', journalMax: 4, rowGeneration: 5 }` |
 | 2 | `parseCollectLaneJournal`: delete `if (generation <= max) return { kind: 'malformed', fault: 'order', record };` | `C -t 'non-increasing'` | `expected { kind: 'ok', max: 1, records: 2 } to deeply equal { kind: 'malformed', fault: 'order', record: 2 }` |
-| 3 | Allow blank records: insert `if (rec === '') continue;` as the loop body's first statement | `C -t 'whitespace and blank'` | `"\n": expected { kind: 'ok', max: 0, records: 1 } to deeply equal { kind: 'malformed', fault: 'blank', record: 1 }` |
+| 3 | Allow blank records: insert `if (rec === '') continue;` directly after `const record = i + 1;` in the loop body | `C -t 'whitespace and blank'` | `"\n": expected { kind: 'ok', max: 0, records: 1 } to deeply equal { kind: 'malformed', fault: 'blank', record: 1 }` |
 | 4 | `.trim()` before the compare: delete `\|\| COLLECT_JOURNAL_BLANK.test(rec)`, and parse `JSON.parse(rec.trim())` | `C -t 'CR and surrounding'` | `"{\"generation\":1}\r\n": expected { kind: 'ok', max: 1, records: 1 } to deeply equal { kind: 'malformed', fault: 'blank', record: 1 }` |
 | 5 | `measureCollectLaneRow`: `const seed = …` becomes `const seed = generation === 0;` | `C -t 'single-field deviation'`, then `C -t 'journal-missing'` | `{"updatedAt":"1n"}: expected { kind: 'seed', … } to deeply equal { kind: 'row', … }`; then `{"updatedAt":"1n"}: expected { kind: 'coherent', …, bootstrap: true } to deeply equal { kind: 'unmeasurable', why: 'journal-missing' }` |
 | 6 | Off arm: delete `if (row.markerRetiredAt === null) { return collectRefuse('marker-still-controls', …); }` | `C -t 'marker-still-controls'` | `the seed: expected { kind: 'unchanged' } to match object { kind: 'refuse', code: 'marker-still-controls' }` |
@@ -2529,6 +2550,9 @@ Make each edit alone, run its command from `server/`, see the red, and revert be
 | 20 | `COLLECT_LANE_JOURNAL_FAULTS` becomes the hand list `['empty', 'blank', 'json', 'shape', 'generation', 'order']` | `C -t 'derived from its table'` | `COLLECT_LANE_JOURNAL_FAULTS: expected '…' to match /export const COLLECT_LANE_JOURNAL_FAULTS: [^=]+=\s*Object\.keys\(COLLECT_LANE_JOURNAL_FAULT_TABLE\) as /` |
 | 21 | `sameCollectLaneJournal`: the `ok` arm drops `&& a.records === b.records` | `C -t 'every field of their arm'` | `{"kind":"ok","max":3,"records":3} vs {"kind":"ok","max":3,"records":2}: expected true to be false` |
 | 22 | Retire arm: delete `if (row.markerRetiredAt !== null) return COLLECT_LANE_UNCHANGED;` | `C -t 'already set'`, then `C -t 'null over a set value'` | `expected { kind: 'write', generation: 4, next: { …markerRetiredAt: 1790000000000 } } to deeply equal { kind: 'unchanged' }`; then `retire over "1789000000000n" beside {"kind":"ok","max":3,"records":1}: expected 1790000000000 to be 1789000000000` |
+| 23 | An empty file read as a journal: delete `if (text === '') return { kind: 'malformed', fault: 'empty', record: 1 };` | `C -t 'whitespace and blank'` | `expected { kind: 'ok', max: 0, records: 0 } to deeply equal { kind: 'malformed', fault: 'empty', record: 1 }` (an empty file beside any generation-0 row would then read coherent) |
+| 24 | Off's no-op ignores a mismatch: in the Off arm, delete `control.kind === 'coherent' && ` from the unchanged test | `C -t 'latch kept, at'` | `an off row behind its journal: expected { kind: 'unchanged' } to deeply equal { kind: 'write', generation: 4, next: { choice: 'off', fleetNodeId: null, markerRetiredAt: 1789000000000 } }` |
+| 25 | Retire skips its expected compare: `if (req.kind !== 'off') {` becomes `if (req.kind === 'live') {` | `C -t 'conflicts on a changed expectation'` | `the row: expected { kind: 'write', generation: 2, … } to match object { kind: 'refuse', code: 'conflict' }` |
 
 Row 8's first command is `-t 'latch kept, at'`, so it does not also select the Live case "…the latch kept".
 
@@ -2539,10 +2563,10 @@ The compiler holds two more guards, with no runtime red, because `tsc` refuses t
 - [ ] **Step 6: The neighbours, the import pins and the types**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/collect-pacing.test.ts test/collect-readers.test.ts test/collect-lane-scans.test.ts
-cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts
-cd server && ./node_modules/.bin/vitest run test/collect-
-cd server && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json
+(cd server && ./node_modules/.bin/vitest run test/collect-pacing.test.ts test/collect-readers.test.ts test/collect-lane-scans.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/collect-)
+(cd server && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json)
 ```
 
 Expected: every file PASSES, and both `tsc` commands print nothing. Run each line in the foreground, with a timeout of at least 600000 ms. The third line runs every collector suite: vitest's filter is a path substring.
@@ -2616,7 +2640,7 @@ Name these departures by slug in the wave-done: `control-state-calls-no-choice-g
 
 **Files:**
 - Modify: `server/src/collectLane.ts`:
-  - the one `from '../../shared/api.js'` statement gains `type CollectArmedBy`. Its anchor is `type ChildReclaimCollectAttention, type CollectBoxLine,`, and the line count does not change;
+  - the one `from '../../shared/api.js'` statement gains `isCollectLaneChoice` and `type CollectArmedBy`, rewrapped inside its own three specifier lines (Step 3 (a)), so the line count does not change;
   - the section header that begins `// ── the live switch (spec §5.10) ` becomes "the switch and its resolver", on the same single line;
   - `COLLECT_LANE_LIVE_MARKER`'s five-line docstring (`/** The lane's live switch: the marker FILE …` through `… tests import it from here. */`) is reworded inside the same five lines;
   - a new section, "the Settings switch: resolver, latch, bodies, counts", is appended after the file's last line. That line closes Task 2's section if Task 2 appended at the foot, or `collectForgottenActRow` otherwise.
@@ -2704,7 +2728,7 @@ Name these departures by slug in the wave-done: `control-state-calls-no-choice-g
 grep -c "^export type CollectArmedBy = 'settings' | 'legacy-marker' | 'both' | 'neither';" shared/api.ts      # (a) 1: Task 1
 grep -c '^export function isCollectLaneChoice(v: unknown): v is CollectLaneChoice {' shared/api.ts            # (b) 1: Task 1
 grep -c '^export function collectLaneControl(\|^export function measureCollectLaneRow(\|^export type CollectLaneUnmeasurable =\|^export type CollectLaneControl =' server/src/collectLane.ts   # (c) 4: Task 2
-grep -c 'isCollectLaneChoice' server/src/collectLane.ts                                                        # (d) >= 1: Task 2 merged it into the shared/api.js statement; 0 → Step 3 (a) adds it
+grep -c 'isCollectLaneChoice' server/src/collectLane.ts                                                        # (d) 0: Task 2 imports no choice guard (control-state-calls-no-choice-guard); Step 3 (a) adds it
 grep -c 'type ChildReclaimCollectAttention, type CollectBoxLine,' server/src/collectLane.ts                     # (e) 1: the import anchor
 grep -c '^// ── the live switch (spec §5.10) ' server/src/collectLane.ts                                       # (f) 1
 grep -c "^export const COLLECT_LANE_LIVE_MARKER = 'collect-lane-live';" server/src/collectLane.ts             # (g) 1
@@ -2714,7 +2738,7 @@ grep -c 'collectLaneEffective\|collectLatchDue\|collectSwitchFeedBody\|collectLa
 ls server/test/collect-lane-effective.test.ts server/test/collect-switch-bodies.test.ts server/test/collect-lane-counts.test.ts 2>&1 | grep -c 'No such file'   # (k) 3
 ```
 
-Any other answer for (a), (b), (c), (e) to (k) means STOP: Tasks 1 and 2 are not on the branch as the Interfaces section states. Report that by slug. A different line number is not a STOP; locate by content.
+Any other answer for (a) to (k) means STOP: Tasks 1 and 2 are not on the branch as the Interfaces section states. Report that by slug. A different line number is not a STOP; locate by content.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2858,6 +2882,14 @@ const FIGURE_5: readonly (readonly [string, readonly Case[]])[] = [
   ['off with the node unknown is shadowed, never unknown-fleet', [
     [inputs({ switches: ABSENT, control: OFF_LATCHED, node: UNMEASURED }), { kind: 'shadowed', why: 'off', notes: N }],
     [inputs({ switches: ABSENT, control: OFF_LATCHED, node: COLLISION }), { kind: 'shadowed', why: 'off', notes: N }],
+  ]],
+  ['a stored node arms only beside an exact live, and a live with no stored node never arms', [
+    [inputs({ switches: ABSENT, node: KNOWN_A, control: control({ fleetNodeId: NODE_A, markerRetiredAt: 800n,
+      generation: 4n, updatedAt: 900n }, J(4)) }), { kind: 'shadowed', why: 'off', notes: N }],
+    [inputs({ switches: ABSENT, node: KNOWN_A, control: control({ choice: 'live', markerRetiredAt: 800n,
+      generation: 4n, updatedAt: 900n }, J(4)) }), { kind: 'shadowed', why: 'other-node', notes: N }],
+    [inputs({ switches: ABSENT, node: UNMEASURED, control: control({ choice: 'live', markerRetiredAt: 800n,
+      generation: 4n, updatedAt: 900n }, J(4)) }), { kind: 'stopped', why: 'unknown-fleet' }],
   ]],
 ];
 
@@ -3178,19 +3210,27 @@ If the CONTROL case reds, Task 2's coherence rule answers differently from the I
 
 - [ ] **Step 3: Implement (`server/src/collectLane.ts`)**
 
-(a) **The L0 import.** Inside the one `from '../../shared/api.js'` statement, keep the line count and replace this text:
+(a) **The L0 import.** Rewrap the one `from '../../shared/api.js'` statement inside its own five lines. Before, as Task 2 leaves it:
 
 ```ts
-  type ChildReclaimCollectAttention, type CollectBoxLine,
+import {
+  CHILD_RUN_ID, COLLECT_BOX_LABELS, COLLECT_BOX_LINES, TMPROOT_ID_MAX_CHARS, isPositiveDecimalSafeInteger, isTmpRootId,
+  lcRefusalWord, type ChildReclaimCollectAttention, type CollectBoxLine, type CollectLaneChoice, type CollectToken,
+  type LcRefusalToken,
+} from '../../shared/api.js';
 ```
 
-with:
+After. It gains `isCollectLaneChoice`, which Task 2 deliberately did not import, and `type CollectArmedBy`. The line count is unchanged:
 
 ```ts
-  type ChildReclaimCollectAttention, type CollectArmedBy, type CollectBoxLine,
+import {
+  CHILD_RUN_ID, COLLECT_BOX_LABELS, COLLECT_BOX_LINES, TMPROOT_ID_MAX_CHARS, isCollectLaneChoice,
+  isPositiveDecimalSafeInteger, isTmpRootId, lcRefusalWord, type ChildReclaimCollectAttention, type CollectArmedBy,
+  type CollectBoxLine, type CollectLaneChoice, type CollectToken, type LcRefusalToken,
+} from '../../shared/api.js';
 ```
 
-If Step 0 (d) answered 0, also replace `isTmpRootId, lcRefusalWord,` in the same statement with `isCollectLaneChoice, isTmpRootId, lcRefusalWord,`. Add no third import statement and no other specifier.
+Add no third import statement and no other specifier.
 
 (b) **The marker's header and docstring, line-neutral.** Replace the whole header line that begins `// ── the live switch (spec §5.10) ` (115 characters) with this line:
 
@@ -3448,12 +3488,14 @@ Expected: every file passes, and both `tsc` runs print nothing. What each check 
 
 - [ ] **Step 6: Prove the edits above the foot are line-neutral**
 
+From the worktree root. A pathspec is relative to the current directory, so from `server/` this prints nothing:
+
 ```bash
 git diff -U0 -- server/src/collectLane.ts | grep '^@@'
 ```
 
 Expected:
-- The import line's hunk, the header's hunk (`-28 +28` at `837a099c0` numbering, or as Task 2 left it) and the docstring's hunk (`-30,5 +30,5`) each have equal old and new counts.
+- The import's hunk (`-14,3 +14,3`: its three specifier lines), the header's hunk (`-29 +29` as Task 2 left it; `:28` at `837a099c0`) and the docstring's hunk (`-31,5 +31,5` as Task 2 left it; `:30-34` at `837a099c0`) each have equal old and new counts.
 - Exactly one hunk is a pure addition at the file's end (`-<last>,0 +<last+1>,<n>`).
 
 Any other shape moved a line above the foot. Re-do (a) or (b) inside the existing lines.
@@ -3485,12 +3527,21 @@ The red texts below are drafts. The worker records the measured text for each ro
 | 14 | The closed parse bypassed: `const choice = isCollectLaneChoice(c.row.choice) ? c.row.choice : null;` becomes `const choice = c.row.choice as 'off' \| 'live';` | `E -t 'future tokens'` | `expected { kind: 'shadowed', why: 'other-node', … } to deeply equal { kind: 'shadowed', why: 'future-choice', … }` |
 | 15 | A terminal item counted by its ccd word: `if (t === null \|\| collectItemTerminal(t)) continue;` becomes `if (t === null) continue;` | `C -t 'terminal item'` | `expected { wouldCollect: 1, held: 1, boxLines: 0 } to deeply equal { wouldCollect: 0, held: 0, boxLines: 0 }` |
 | 16 | A reason missing from the table: delete the `'journal-not-configured': …,` entry of `COLLECT_SAFETY_SAID` | `B -t 'total table'`, then `./node_modules/.bin/tsc --noEmit -p .` | B: `a reason missing from the table: expected '…: undefined, so …' not to contain 'undefined'`. tsc: `TS2741: Property 'journal-not-configured' is missing` |
+| 17 | A raised pause ignored: `if (s.paused) return { kind: 'stopped', why: s.why };` becomes `if (s.paused && s.why === 'unlistable') return { kind: 'stopped', why: s.why };` | `E -t 'raised pause'` | `expected { kind: 'live', armedBy: 'both', … } to deeply equal { kind: 'stopped', why: 'raised' }` |
+| 18 | A mismatch reaches the arms (it compiles: the mismatch arm carries `row`): delete `  if (c.kind === 'mismatch') return { kind: 'safety-stopped', why: 'generation-mismatch' };` | `E -t 'suppresses the marker'` | "{journal:4,row:5} suppresses the marker": `expected { kind: 'live', armedBy: 'both', … } to deeply equal { kind: 'safety-stopped', why: 'generation-mismatch' }` |
+| 19 | Settings arms on any stored token: delete `choice === 'live' && ` from `const settingsArms = …` | `E -t 'never arms'`, then `E -t 'future tokens'` | `expected { kind: 'live', armedBy: 'settings', … } to deeply equal { kind: 'shadowed', why: 'off', … }`; then `… to deeply equal { kind: 'shadowed', why: 'future-choice', … }` |
+| 20 | A null stored node meets a null measured node: delete `nodeNow !== null && ` from `const settingsArms = …` | `E -t 'never arms'` | the third row (stored `live` with no node, node unmeasured): `expected { kind: 'live', armedBy: 'settings', … } to deeply equal { kind: 'stopped', why: 'unknown-fleet' }` |
+| 21 | The latch retires over a standing marker: in `collectLatchDue`, delete `!switches.marker && ` | `E -t 'not due when any one condition fails'` | `marker stands: expected true to be false` |
+| 22 | The latch retires across a reconnect: in `collectLatchDue`, delete ` && epoch.before === epoch.after` | `E -t 'not due when any one condition fails'` | `epoch moved: expected true to be false` |
 
-The compiler holds two guards, not a case. Record them as such:
+The compiler holds three guards, not a case. Record them as such:
 - `collectSwitchFeedBody`'s `default: { const unnamed: never = r; … }`: a fourth settled arm is a TS2322 there.
+- `collectLaneEffective`'s `if (c.kind === 'unmeasurable') …` line: deleting it is a TS2339 at `c.row`, because the `unmeasurable` arm carries no row. vitest strips types, so at run time the rows of "every unmeasurable control state suppresses the marker" red with `TypeError: Cannot read properties of undefined (reading 'markerRetiredAt')`.
 - The three reason tables are typed `Record<…>`: a new reason with no words is a TS2741 (row 16's tsc half).
 
 - [ ] **Step 8: Commit**
+
+From the worktree root:
 
 ```bash
 git status --short    # exactly the four paths below
@@ -3567,7 +3618,7 @@ Name no departure in the wave-done for this task unless Step 0 or Step 2 stopped
 - Consumes:
   ```ts
   // Task 1, shared/api.ts foot (L0)
-  export function isCollectLaneChoice(v: unknown): v is CollectLaneChoice;      // already imported by Task 2
+  export function isCollectLaneChoice(v: unknown): v is CollectLaneChoice;      // already imported by Task 3 (its Step 3 (a))
   export interface CollectLaneRequest { readonly choice: CollectLaneChoice; readonly confirm?: string }
   export interface CollectLaneView { /* the Interfaces section's L0 block, verbatim */ }
   export interface CollectLaneConfirmRequired { /* ok:false; error; confirmKey; facts {node, caps, paused, marker, repair, attention} */ }
@@ -3644,6 +3695,7 @@ grep -c "isCollectLaneChoice" server/src/collectLane.ts                   # >= 1
 grep -c "CollectLaneRequest\|CollectLaneView\b\|CollectLaneConfirmRequired\|decideCollectLaneBody\|collectConfirmKey\|collectLaneView(" server/src/collectLane.ts   # 0
 grep -n "^const hasOwn\|^const isObject\|childReclaimDetailText," server/src/collectLane.ts   # the two file-local helpers and the sanitiser import
 grep -c "collectLaneEffective(" server/src/collectLane.ts                 # 1: Task 3's definition only, no caller yet
+grep -c "from '" server/src/collectLane.ts                               # record it: Step 5 must print the same number
 grep -rn "collectLane.ts:[0-9]" README.md docs/superpowers/specs/2026-09-09-graphify-compaction-card-design.md docs/superpowers/plans/2026-09-10-graphify-compaction-card-plan-a.md | wc -l   # 0: session-hook's frozen corpus cites no line of this file
 ```
 
@@ -3895,6 +3947,11 @@ describe('the POST decision follows R11 and R24', () => {
     const coherent = input({ row: liveRow(2, OTHER), journal: ok(2) });
     expect(confirmOf(decideCollectLanePost(coherent)).confirmKey, 'a used, coherent journal keys its maximum').toBe(collectConfirmKey({
       boot: BOOT, epoch: 3, node: NODE, row: { choice: 'live', fleetNodeId: OTHER, markerRetiredAt: null, generation: 2 },
+      journal: 2, marker: 'absent', caps: { collect: true, reclaimPause: true }, paused: false,
+    }));
+    const latched = input({ row: liveRow(2, OTHER, 9n), journal: ok(2) });
+    expect(confirmOf(decideCollectLanePost(latched)).confirmKey, 'a set latch is keyed').toBe(collectConfirmKey({
+      boot: BOOT, epoch: 3, node: NODE, row: { choice: 'live', fleetNodeId: OTHER, markerRetiredAt: 9, generation: 2 },
       journal: 2, marker: 'absent', caps: { collect: true, reclaimPause: true }, paused: false,
     }));
     const counted = confirmOf(decideCollectLanePost(input({ counts: { wouldCollect: 2, held: 1, boxLines: 3 } })));
@@ -4569,10 +4626,10 @@ function collectNodeView(node: CollectCurrentNode, epochNow: number, row: Collec
 
 /** The remedy for a control state no Settings write can repair: what to do, by hand, outside the route. */
 const COLLECT_LANE_UNMEASURABLE_REMEDY: Readonly<Record<CollectLaneUnmeasurable, string>> = {
-  'row-absent': "The collector's settings row is missing, and the server never inserts one. Re-insert the seed row by hand; a confirmed Live then repairs the generation.",
+  'row-absent': "The collector's settings row is missing, and the server never inserts one. Re-insert the seed row by hand, with markerRetiredAt set if the legacy file was ever retired; a confirmed Live then repairs the generation.",
   'row-unreadable': "The collector's settings row cannot be read. The collector removes nothing until the database answers.",
   'row-malformed': "The collector's settings row holds a value this build cannot read. Repair the row by hand; Settings cannot.",
-  'journal-missing': "The collector's generation journal on the server box is missing beside a settings row that has been used. It is never rebuilt from the database: restore it by hand, then confirm a choice again.",
+  'journal-missing': "The collector's generation journal on the server box is missing beside a settings row that has been used. Write one record above the row's generation by hand, then confirm a choice again.",
   'journal-malformed': "The collector's generation journal on the server box is malformed. Repair it by hand; Settings cannot.",
   'journal-unreadable': "The collector's generation journal on the server box cannot be read. Repair it by hand; Settings cannot.",
   'journal-not-regular': "The collector's generation journal on the server box is not a regular file. Replace it by hand; Settings cannot.",
@@ -4584,7 +4641,8 @@ const COLLECT_LANE_MISMATCH_REMEDY = {
 } as const;
 const COLLECT_LANE_RECREATED_REMEDY =
   `The fleet box's legacy file ${COLLECT_LANE_LIVE_MARKER} was re-created, and this server ignores it: remove it by hand on the fleet box.`;
-const COLLECT_LANE_NOT_RUNNING_REMEDY = "The fleet box's ccd lacks a capability this collector needs; update the fleet box.";
+const COLLECT_LANE_NOT_RUNNING_REMEDY =
+  "The fleet box's ccd has not reported a capability this collector needs, so it removes nothing; if this persists, update the fleet box.";
 
 /** The one remedy the view carries, most pressing first: an unmeasurable control state, a mismatch, a re-created
  *  marker, a missing capability. Null otherwise: the pause is deliberate, a stored Live for another node and a standing
@@ -4632,18 +4690,18 @@ export function collectLaneView(i: CollectLaneViewInput): CollectLaneView {
 - [ ] **Step 5: Run to green: the new files, the neighbours, the pins and the types**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/collect-lane-route-l1.test.ts test/collect-lane-view.test.ts
-cd server && ./node_modules/.bin/vitest run test/collect-lane-control.test.ts test/collect-lane-effective.test.ts test/collect-switch-bodies.test.ts test/collect-lane-counts.test.ts
-cd server && ./node_modules/.bin/vitest run test/collect-readers.test.ts test/collect-pacing.test.ts test/collect-lane-scans.test.ts test/single-definition.test.ts
-cd server && ./node_modules/.bin/tsc --noEmit -p .
-cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts
-grep -c "collectLaneEffective(" src/collectLane.ts        # 2 here: Task 3's definition and collectLaneView's one call (R27)
-grep -c "from '" src/collectLane.ts                       # unchanged from Step 0's tree: no new import statement
-grep -n "collect-lane-live\|collect-lane-generation\|'collect-v1'\|'reclaim-pause-v1'" src/collectLane.ts   # only the existing COLLECT_LANE_LIVE_MARKER definer line
+( cd server && ./node_modules/.bin/vitest run test/collect-lane-route-l1.test.ts test/collect-lane-view.test.ts )
+( cd server && ./node_modules/.bin/vitest run test/collect-lane-control.test.ts test/collect-lane-effective.test.ts test/collect-switch-bodies.test.ts test/collect-lane-counts.test.ts )
+( cd server && ./node_modules/.bin/vitest run test/collect-readers.test.ts test/collect-pacing.test.ts test/collect-lane-scans.test.ts test/single-definition.test.ts )
+( cd server && ./node_modules/.bin/tsc --noEmit -p . )
+( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )
+grep -c "collectLaneEffective(" server/src/collectLane.ts        # 2 here: Task 3's definition and collectLaneView's one call (R27)
+grep -c "from '" server/src/collectLane.ts                       # the number Step 0 recorded: no new import statement
+grep -n "collect-lane-live\|collect-lane-generation\|'collect-v1'\|'reclaim-pause-v1'" server/src/collectLane.ts   # two existing lines only: the marker's docstring line (as Task 3 left it) and its definer
 ```
 
 Run each command in the FOREGROUND, with a timeout of at least 600000 ms. Expected results:
-- The two new files are green: 27 cases in `collect-lane-route-l1`, counting `it.each` rows, and 21 in `collect-lane-view`. Re-measure the counts and record them.
+- The two new files are green: 39 cases in `collect-lane-route-l1`, counting `it.each` rows, and 30 in `collect-lane-view`. Re-measure the counts and record them.
 - Task 2's and Task 3's suites are unchanged and green.
 - `collect-readers`, `collect-pacing` and `collect-lane-scans` are green. They pin the two-specifier import, no `**`, and no `./coord/` import.
 - `single-definition` is green. Its wave-9 marker pin still finds exactly the definer and the executor as holders, and none of the new code lines matches its WRITE pattern.
@@ -4654,7 +4712,7 @@ Run each command in the FOREGROUND, with a timeout of at least 600000 ms. Expect
 
 Save the green file first: `cp server/src/collectLane.ts "${TMPDIR:-/tmp}/collectLane.task4.ts"`. Then for each row:
 1. Make the edit alone.
-2. Run the named file from `server/` in the FOREGROUND (`./node_modules/.bin/vitest run test/<file>`) and see the stated red.
+2. Run the named file in the FOREGROUND from the workspace root as `( cd server && ./node_modules/.bin/vitest run test/<file> )`, so the shell stays where the copy and restore paths point, and see the stated red.
 3. Restore with `cp "${TMPDIR:-/tmp}/collectLane.task4.ts" server/src/collectLane.ts && cmp server/src/collectLane.ts "${TMPDIR:-/tmp}/collectLane.task4.ts"`.
 
 Never restore with `git checkout`: it would discard the uncommitted task. The red texts below were not measured at planning time. Record each measured text in the SDD ledger.
@@ -4664,7 +4722,7 @@ Never restore with `git checkout`: it would discard the uncommitted task. The re
 | 1 | In `decideCollectLaneBody`, delete the whole `for (const k of Object.keys(body)) { … }` loop | route-l1 | `an unknown key is refused, naming it`: `expected true to be false` |
 | 2 | `!COLLECT_CONFIRM_KEY_RE.test(confirm)` → `confirm === ''` | route-l1 | `confirm must be 8 lowercase hex`: `XYZ: expected true to be false` |
 | 3 | In `collectConfirmKey`, `collectCanonicalJson(facts)` → `JSON.stringify(facts)` | route-l1 | `stable under key-order permutation` and `equals an independent FNV-1a over the canonical JSON`: two different 8-hex strings |
-| 4 | One fact at a time, in `collectConfirmKey`: `collectCanonicalJson(facts)` → `collectCanonicalJson({ ...facts, boot: '' })`; then each alone: `epoch: 0`, `node: ''`, `row: { ...facts.row, choice: '' }`, `row: { ...facts.row, fleetNodeId: null }`, `row: { ...facts.row, markerRetiredAt: null }`, `row: { ...facts.row, generation: 0 }`, `journal: 'missing'`, `marker: 'absent'`, `caps: { ...facts.caps, collect: true }`, `caps: { ...facts.caps, reclaimPause: true }`, `paused: false` | route-l1 | `it changes when each fact changes alone: <that fact>`: `expected '<k>' not to be '<k>'` (thirteen rows, one per edit; `journal` and `journal maximum` both red under the `journal` edit) |
+| 4 | One fact at a time, in `collectConfirmKey`: `collectCanonicalJson(facts)` → `collectCanonicalJson({ ...facts, boot: '' })`; then each alone: `epoch: 0`, `node: ''`, `row: { ...facts.row, choice: '' }`, `row: { ...facts.row, fleetNodeId: null }`, `row: { ...facts.row, markerRetiredAt: null }`, `row: { ...facts.row, generation: 0 }`, `journal: 'missing'`, `marker: 'absent'`, `caps: { ...facts.caps, collect: true }`, `caps: { ...facts.caps, reclaimPause: true }`, `paused: false` | route-l1 | `it changes when each fact changes alone: <that fact>`: `expected '<k>' not to be '<k>'` (twelve edits and thirteen red rows: one row per edit, except that `journal` and `journal maximum` both red under the `journal` edit) |
 | 5 | `error: 'confirm-stale'` → `error: 'confirm-required'` | route-l1 | `Live with a wrong key is confirm-stale, with fresh facts and key`: `expected 'confirm-required' to be 'confirm-stale'` |
 | 6 | Off reads the listing: insert `if (collectListingOf(i.switches) === 'unmeasured' \|\| i.epoch.before !== i.epoch.after) return { kind: 'unmeasurable', detail: 'listing' };` as the first line inside `if (i.request.choice === 'off') {` | route-l1 | `Off with the latch set writes, even unlistable or epoch-moved`: `a coherent Live, latched; an unlistable registry: expected { kind: 'unmeasurable', … } to deeply equal { kind: 'write', … }` |
 | 7 | Off ignores the latch: `if (control.row.markerRetiredAt === null) return { kind: 'marker' };` → delete the line | route-l1 | `Off with the latch null is marker, whatever the listing`: `the seed; listed, the marker absent: expected { kind: 'write', … } to deeply equal { kind: 'marker' }` |
@@ -4678,6 +4736,11 @@ Never restore with `git checkout`: it would discard the uncommitted task. The re
 | 15 | In `collectNodeView`, delete ` && node.connectionEpoch === epochNow` | view | `node known with stored this, other, none or unread; unmeasured and collision`: `a node measured on an earlier connection is not this connection's: expected { state: 'known', … } to deeply equal { state: 'unmeasured', stored: 'none' }` |
 | 16 | In `collectLaneView`, `latch: control.kind === 'unmeasurable' ? 'unmeasured' : …` → `latch: collectRowOf(measured)?.markerRetiredAt === null ? 'unset' : 'set'` | view | `marker listing and latch are three-valued`: `a latch no journal vouches for: expected 'unset' to be 'unmeasured'` |
 | 17 | Widen `CollectLaneViewInput.journal` to `CollectLaneJournalRead` (and add `case 'not-configured': return { read: 'missing' };` to `collectJournalView` so it compiles) | `cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts` | `Unused '@ts-expect-error' directive` at `collect-lane-view.test.ts`, the `notConfigured` line |
+| 18 | Delete `if (i.request.confirm !== confirmKey) return { kind: 'confirm', body: { ok: false, error: 'confirm-stale', confirmKey, facts } };` (any well-formed key then writes) | route-l1 | `Live with a wrong key is confirm-stale, with fresh facts and key`: `Error: expected a confirm decision, got write` |
+| 19 | Delete `if (listing === 'unmeasured') return collectLiveUnmeasurable('unlistable');` (tsc also refuses the `marker: listing` fact; vitest strips types) | route-l1 | `Live is unmeasurable on …`: `an unlistable registry, confirm undefined: expected 'confirm' to be 'unmeasurable'` |
+| 20 | Delete `if (node.kind === 'unmeasured') return collectLiveUnmeasurable('node-unmeasured');`; then, alone, `if (node.kind === 'collision') return collectLiveUnmeasurable('node-collision');` | route-l1 | the same case: `a node not measured yet, confirm undefined: expected 'confirm' to be 'unmeasurable'`; then `a node id in collision, confirm undefined: …` |
+| 21 | Delete `if (control.kind === 'unmeasurable') return { kind: 'unmeasurable', detail: COLLECT_LANE_UNMEASURABLE_TEXT[control.why] };` | route-l1 | `control unmeasurable is unmeasurable for both choices`: `TypeError: Cannot read properties of undefined (reading 'markerRetiredAt')` |
+| 22 | In `decideCollectLanePost`'s key, `markerRetiredAt: r.markerRetiredAt` becomes `markerRetiredAt: null` | route-l1 | `Live without a key is confirm-required, …`: `a set latch is keyed: expected '<k>' to be '<k'>'` |
 
 - [ ] **Step 7: Commit**
 
@@ -5433,8 +5496,9 @@ describe('identity is published only from the direct read, under the captured ep
 // are text pins over the composition root and the inventory's deps builder, in the idiom of
 // `update-inventory.test.ts`'s "index.ts composes the update lanes", each beside the behaviour it stands for.
 import { describe, expect, it, vi } from 'vitest';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
 import { Bus } from '../src/bus.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -5515,6 +5579,21 @@ describe('the composition root wires the identity cell (path-identity spec §5.2
     await rw.inventoryNow();
     expect(remotePublish.mock.calls.map(([, m]) => m)).toEqual([{ kind: 'known', nodeId: U2, measuredAt: expect.any(Number) }]);
     expect(remoteCell.current()).toMatchObject({ kind: 'known', connectionEpoch: 1, nodeId: U2 });
+  });
+
+  it('only the inventory publishes into the cell, and only the fleet client invalidates it', () => {
+    // fleetidentity.ts's header and client.ts's field docstring say so; this case is the mechanism. Code only, every
+    // server/src .ts file; `__`-prefixed transients are skipped (boot.test.ts's mutant copy of index.ts).
+    const SRC = fileURLToPath(new URL('../src/', import.meta.url));
+    const files = readdirSync(SRC, { recursive: true, encoding: 'utf8' })
+      .filter((f) => f.endsWith('.ts') && !path.basename(f).startsWith('__'));
+    const holders = (re: RegExp): string[] => files.flatMap((f) => {
+      const n = (codeOnly(readFileSync(path.join(SRC, f), 'utf8')).match(re) ?? []).length;
+      return n === 0 ? [] : [`${f.split(path.sep).join('/')}:${n}`];
+    }).sort();
+    expect('identity.cell.publish(identity.captured, m);'.match(/\.publish\s*\(/g), 'CONTROL: a publish call is seen').toHaveLength(1);
+    expect(holders(/\.publish\s*\(/g), 'a second publisher of the fleet identity').toEqual(['update/inventory.ts:2']);
+    expect(holders(/\.invalidate\s*\(/g), 'a second invalidator of the fleet identity').toEqual(['remote/client.ts:3']);
   });
 
   it('refreshCaps is built with fleet.identity', () => {
@@ -6059,13 +6138,13 @@ After:
 cd server && ./node_modules/.bin/vitest run test/fleet-identity.test.ts test/fleet-identity-client.test.ts test/refreshcaps-epoch.test.ts test/refreshcaps.test.ts test/inventory-identity.test.ts test/fleet-identity-composition.test.ts
 ```
 
-Expected: PASS, 32 tests:
+Expected: PASS, 33 tests:
 - `fleet-identity`: 10;
 - `fleet-identity-client`: 6;
 - `refreshcaps-epoch`: 1;
 - `refreshcaps`: 2;
 - `inventory-identity`: 10;
-- `fleet-identity-composition`: 3.
+- `fleet-identity-composition`: 4.
 
 If a scan or a pin reds on the code Steps 7 to 13 wrote, never loosen the test to pass. Fix the code to the text above. If the text cannot hold, **STOP** and report by slug with the measured output.
 
@@ -6094,6 +6173,7 @@ If a scan or a pin reds on the code Steps 7 to 13 wrote, never loosen the test t
 | T5.19 | `index.ts`: delete the remote literal's `fleetIdentity: fleet.identity,` | `./node_modules/.bin/vitest run test/fleet-identity-composition.test.ts -t 'deps literals'` | `expected '  deps = {…' to match /^    fleetIdentity: fleet\.identity,$/m` |
 | T5.20 | `index.ts`: `makeRefreshCaps(fleet.client, fleet.state, fleet.identity)` becomes `makeRefreshCaps(fleet.client, fleet.state, new FleetIdentityCell())` | `./node_modules/.bin/vitest run test/fleet-identity-composition.test.ts` | "refreshCaps is built with fleet.identity": the regex mismatch. "both deps literals…": `expected [ 'new FleetIdentityCell(', 'new FleetIdentityCell(' ] to have a length of 1 but got 2` |
 | T5.21 | `fleetidentity.ts`: add the arm `\| { readonly kind: 'retired'; readonly connectionEpoch: number }` to `CurrentFleetIdentity` | `./node_modules/.bin/vitest run test/typecheck-tests.test.ts` | `server/test/ has type errors: … test/fleet-identity.test.ts(…): error TS2322: Type 'CurrentFleetIdentity' is not assignable to type 'CollectCurrentNode'` |
+| T5.22 | `index.ts`: directly after `const localFleetIdentity = new FleetIdentityCell();`, add `localFleetIdentity.publish(0, { kind: 'unmeasured', why: 'no-ready' });` | `./node_modules/.bin/vitest run test/fleet-identity-composition.test.ts -t 'only the inventory'` | `a second publisher of the fleet identity: expected [ 'index.ts:1', 'update/inventory.ts:2' ] to deeply equal [ 'update/inventory.ts:2' ]` |
 
 Revert each mutation, then re-run Step 14's command: it must be green.
 
@@ -6621,6 +6701,15 @@ describe('the journal adapter (path-identity spec 2026-10-12 §5.2, §5.3)', () 
     expect(code).toMatch(/\bparseCollectLaneJournal\(/);
     expect(code).not.toMatch(/\bJSON\.parse\(/);
   });
+
+  it('the durability acts stand in the code: the file fsync, the directory fsync on create, a reopen without O_CREAT', () => {
+    // No test can intercept a direct `node:fs` sync call, so these are pinned by text (codeOnly: comments stripped,
+    // strings kept). Deleting one, or adding `O_CREAT` to the reopen, reds this case.
+    const code = codeOnly(readFileSync(ADAPTER, 'utf8'));
+    expect(code.match(/\bfsyncSync\(fd\)/g) ?? [], 'the file fsync').toHaveLength(1);
+    expect(code, 'the directory fsync on create').toMatch(/if \(created\) \{\s*const dfd = openSync\(dir, FS\.O_RDONLY\);\s*try \{ fsyncSync\(dfd\); \}/);
+    expect(code, 'the reopen after EEXIST').toMatch(/^\s*fd = openSync\(logPath, FS\.O_RDWR \| FS\.O_APPEND \| FS\.O_NOFOLLOW\);$/m);
+  });
 });
 ```
 
@@ -7068,7 +7157,8 @@ Run it in the foreground, with a timeout of at least 600000 ms. Expected:
   - the columns case with `expected [] to deeply equal [ [ 'id', 'INTEGER', 0, null, 1 ], … ]`;
   - the singleton case with `no such table` in place of the CHECK;
   - "no SQL check" with `no such table: collect_lane_settings`;
-  - the older-build case with `collectLaneRow is not a function`.
+  - the older-build case with `collectLaneRow is not a function`;
+  - "openCoordDb reaches a database one version before it" with `no such table: programs`, thrown by its plant (no entry exists to stop it at).
 - `collect-lane-composition.test.ts` runs 2 tests, and both FAIL: `expected [] to have a length of 1 but got +0`, and `expected '  deps = {…' to match /^\s+collectLane,$/m`.
 - A load error on `../src/collectLane.js`, or a missing export from it, means Tasks 2 and 3 are not on the branch: STOP (Step 0).
 
@@ -7729,7 +7819,7 @@ The worker measures every red text. Where the measured text differs, it replaces
 | 18 | `index.ts`: delete `    collectLane,` from the remote literal | CMP | `expected '  deps = {\n    cfg, build, runCcd: …' to match /^\s+collectLane,$/m` |
 | 19 | `mail-routes.test.ts`: delete the `\|\| isCollectLaneKebab(tok)` arm, so the chain ends at `\|\| isCollectExecutorKebab(tok),` again | `MR -t 'every quoted kebab token'` | `not-regular is not a declared MailRejectCode, … or collector switch word: expected false to be true` |
 
-Three durability acts have no runtime red, and the PR records them as held by review. Each is a direct `node:fs` sync call that a test cannot intercept:
+Three durability acts have no runtime red, because each is a direct `node:fs` sync call that a test cannot intercept. They are pinned by text in JNL's `the durability acts stand in the code` case. Deleting `fsyncSync(fd);`, deleting the `if (created) { … }` block, or adding `| FS.O_CREAT` to the reopen each turns that case red (measure each red and record it). The PR records their runtime effect as held by review:
 - the file's `fsyncSync(fd)`;
 - the directory's `fsyncSync(dfd)` on create;
 - the reopen's absence of `O_CREAT`.
@@ -8515,6 +8605,17 @@ describe('step 6: the switch resolved after the last await (path-identity spec �
     expect(r.attempts).toEqual([AUDIT]);
   });
 
+  it('a pre-latch database snapshot beside the later journal, the marker standing, is safety-stopped: the marker arms nothing', async () => {
+    const r = rig();                                        // the marker stands, and the lane last saw it live
+    // path-identity spec 2026-10-12 §5.3: the latch's retirement was journaled as generation 1. The restored row is the
+    // untouched seed again, its latch null, beside that journal, and the marker was re-created by hand.
+    r.setJournal('{"generation":1}\n');
+    expect(await collectTempRoot(r.deps, r.job())).toMatchObject({ kind: 'answered', step: 5, why: 'switch-flip' });
+    expect(r.lane.seen.at(-1)).toMatchObject({ kind: 'safety-stopped', why: 'generation-mismatch' });
+    expect(r.writes, 'nothing is retired or repaired').toEqual([]);
+    expect(r.attempts).toEqual([AUDIT]);
+  });
+
   it('a mismatch with the marker absent never calls retire', async () => {
     const r = rig({ live: false });
     r.setRow({ generation: 5, updatedAt: WALL0 });
@@ -8523,6 +8624,18 @@ describe('step 6: the switch resolved after the last await (path-identity spec �
     expect(r.writes, 'the latch never heals a mismatch').toEqual([]);
     expect(measureCollectLaneRow(r.coord.collectLaneRow()))
       .toMatchObject({ kind: 'row', row: { generation: 5, markerRetiredAt: null } });
+    expect(r.attempts).toEqual([AUDIT]);
+  });
+
+  it.each<[string, (r: Rig) => void, 'other-node' | 'future-choice']>([
+    ['Live stored for another node', (r) => { settingsLive(r, { measured: false }); r.setNode(known(OTHER)); }, 'other-node'],
+    ['a choice this build does not know', (r) => { settingsLive(r); r.setRow({ choice: 'LIVE' }); }, 'future-choice'],
+  ])('shadowed with no flip reaches the per-id checks and stops at would-collect, never the argv: %s', async (_what, plant, why) => {
+    const r = rig({ live: false, lastSeenLive: false });     // the lane last saw shadow, so this resolution is no flip
+    plant(r);
+    expect(await collectTempRoot(r.deps, r.job())).toMatchObject({ kind: 'would-collect' });
+    expect(r.lane.seen.at(-1)).toMatchObject({ kind: 'shadowed', why });
+    expect(r.lane.flips).toEqual([]);
     expect(r.attempts).toEqual([AUDIT]);
   });
 
@@ -8562,7 +8675,7 @@ describe('through the lane: the watcher’s port, its control and the latch row 
   const portOf = (f: CollectRig, id: string): CollectLanePort =>
     (f.watcher as unknown as { collectPortFor(coord: CoordStore, id: string): CollectLanePort }).collectPortFor(f.coord, id);
 
-  it('an act job that sees the marker gone retires the latch: one kind:coord row, no session, no run, the setting title and the lane’s actor; then one shadowed flip', async () => {
+  it('a lane that sees the marker gone retires the latch: one kind:coord row, no session, no run, the setting title and the lane’s actor; then one shadowed flip', async () => {
     const f = await collectRig({ armed: true });
     f.pastHoldOff(); f.witness('demo-a');
     await f.passesUntil(() => f.lane().lastSeenLive);
@@ -8753,7 +8866,7 @@ describe('collectControlNow reads the switch as it stands (path-identity spec §
 ```ts
 // CCR-15 wave 10 (path-identity spec 2026-10-12 §5.5, §5.9): the executor's final re-read, read as TEXT. These are the
 // orderings a type cannot hold:
-//   - nothing is awaited between the switch's resolution and the argv;
+//   - nothing is awaited from the final listing's answer to the argv, the latch, the reads and the resolution included;
 //   - the control and identity reads stand after the job's last await;
 //   - the pair's `before` is the epoch the job was queued under, bound from `job.epoch`, never a later read;
 //   - the epoch is read before the final listing and again after it;
@@ -8813,6 +8926,11 @@ const awaitAfterResolution = (j: Job): string | null => {
   const at = j.body.lastIndexOf('collectLaneEffective(');
   if (at < 0 || at > j.argv) return 'no collectLaneEffective( call before the argv';
   return /\bawait\b/.test(j.body.slice(at, j.argv)) ? 'an await stands between the resolution and the argv' : null;
+};
+const awaitAfterListing = (j: Job): string | null => {
+  const end = j.body.indexOf(';', j.lastListing);
+  if (end < 0 || end > j.argv) return 'the final listing’s statement does not end before the argv';
+  return /\bawait\b/.test(j.body.slice(end + 1, j.argv)) ? 'an await stands between the final listing and the argv' : null;
 };
 const readsBeforeListing = (j: Job): string | null => {
   const control = indicesOf(j.body, /\bcollectControlNow\s*\(/);
@@ -8879,6 +8997,14 @@ describe('nothing awaits between the final reads and the argv (§5.5, §5.9)', (
     expect(awaitAfterResolution(planted(GOOD.replace('  const now = deps.lane.clock();',
       '  await Promise.resolve();\n  const now = deps.lane.clock();'))), 'CONTROL: an inserted await is seen').not.toBeNull();
     expect(awaitAfterResolution(executor())).toBeNull();
+  });
+
+  it('no await stands between the final listing’s answer and CCD_ARGV.wsCollect(: the latch, the reads and the resolution included', () => {
+    const early = GOOD.replace('  const epoch = { before: queuedUnder', '  await Promise.resolve();\n  const epoch = { before: queuedUnder');
+    expect(awaitAfterListing(planted(GOOD)), 'CONTROL: the planted job passes').toBeNull();
+    expect(awaitAfterListing(planted(early)), 'CONTROL: an await before the latch is seen').not.toBeNull();
+    expect(awaitAfterResolution(planted(early)), 'CONTROL: the resolution-to-argv scan alone cannot see it').toBeNull();
+    expect(awaitAfterListing(executor())).toBeNull();
   });
 
   it('every collectControlNow( and .link.current( in collectTempRoot follows the last await collectSwitches(', () => {
@@ -9127,6 +9253,7 @@ Expected:
 - `collect-latch.test.ts`: every case FAILS with `TypeError: … collectRetireLatch is not a function` (or `collectControlNow`).
 - `collect-switch-scans.test.ts`:
   - the five executor scans FAIL, for example `expected 'no collectLaneEffective( call before the argv' to be null` and `expected 'job.epoch is bound 0 times, not once' to be null`;
+  - the final-listing await scan PASSES at this step. Wave 9's executor already holds that rule, and the scan's CONTROL rows show it can see a red. It pins the window that this task fills with the latch, the reads and the resolution;
   - the collectAct scan FAILS with `expected 'the job’s epoch is not bound before the queue callback' to be null`;
   - every CONTROL assertion inside them passes.
 - `collect-switch-executor.test.ts`:
@@ -9782,7 +9909,7 @@ cd server && ./node_modules/.bin/vitest run test/collect-temp-root.test.ts test/
 
 Expected: every file PASSES.
 - If `collect-lane-pass.test.ts`'s "each flip writes ONE row, either way…" goes red, check the lane rig's `collectLane` dep (Step 1 (b)). Without it, the lane reads control as `journal-not-configured`, safety-stops, and never flips live.
-- If `collect-switch-executor.test.ts`'s "an act job that sees the marker gone…" goes red with no setting row, check `collectControlDeps`' `latchRetired` (Step 4 (c4)).
+- If `collect-switch-executor.test.ts`'s "a lane that sees the marker gone…" goes red with no setting row, check `collectControlDeps`' `latchRetired` (Step 4 (c4)).
 - Re-run a known load flake in isolation before calling it a break.
 
 - [ ] **Step 6: Mutation check**
@@ -9810,6 +9937,7 @@ The worker measures every red text. Where the measured text differs, it replaces
 | 8a | The fake's `flipped` compares the source (`collectTempRootFixture.ts`): `if (live === lastSeenLive) return false;` becomes `if (live === lastSeenLive && !(r.kind === 'live' && r.armedBy !== 'legacy-marker')) return false;` | `X -t 'handoff'` | `expected { …why: 'switch-flip' } to match object { kind: 'acted' }` |
 | 8b | `watch.ts`'s `flipped`, the same edit on `if (live === this.collectLastSeenLive) return false;` | `X -t 'effective boolean'` | `the source changed, the boolean did not: expected true to be false` |
 | 9 | `await Promise.resolve();` inserted directly above `if (!collectLaneLive(lane)) return { kind: 'would-collect', audit: observed };` | `S -t 'no await stands'`, `C -t 'asks COLLECT_CAP again'` | S: `expected 'an await stands between the resolution and the argv' to be null`; C: `an await stands between the last capability check and the argv` |
+| 9b | `await Promise.resolve();` inserted directly below `const last = await collectSwitches(deps.io, deps.cfg.registryDir);` | `S -t 'between the final listing'` | `expected 'an await stands between the final listing and the argv' to be null`. S's resolution scan and C's capability scan stay green, because the await stands before both of them |
 | 10 | The unlistable arm given a field: `return { paused: true, why: 'unlistable' };` becomes `return { paused: true, why: 'unlistable', marker: false };` | `R -t 'cannot rule a raised pause out'` | `expected { paused: true, why: 'unlistable', marker: false } to strictly equal { paused: true, why: 'unlistable' }`. tsc may also refuse it (an excess property on the discriminated arm); record which |
 | 11 | `unknown-fleet` mapped to a flip: the arm's last two lines become `return deps.lane.flipped({ kind: 'shadowed', why: 'other-node', notes: { latchDue: false, markerRecreated: false } }) ? answered(5, 'switch-flip', COLLECT_FLIPPED) : answered(5, unknownFleet, COLLECT_UNKNOWN_FLEET);` | `X -t 'unknown-fleet'` | `expected { …why: 'switch-flip' } to match object { …why: 'unknown-fleet' }` |
 | 12 | The epoch clear deleted: remove `deps.lane.cleared('epoch');` | `X -t 'during the last await is epoch-changed'` | `expected [] to deeply equal [ 'epoch' ]` |
@@ -9822,6 +9950,8 @@ The worker measures every red text. Where the measured text differs, it replaces
 | 19 | `watch.ts`: `collectControlDeps`' `journal: this.deps.collectLane?.journal ?? null` becomes `journal: null` | `X -t 'sees the marker gone'` | `Error: not reached within 30 passes`: the lane safety-stops and never flips live |
 | 20 | The flip deleted: remove `if (deps.lane.flipped(lane)) return answered(5, 'switch-flip', COLLECT_FLIPPED);` | `E -t 'marker touched during the audit'`, `X -t 'Settings live changed to off'` | E: `expected { kind: 'acted', … } to match object { kind: 'answered', step: 5, why: 'switch-flip' }`; X: `expected { kind: 'would-collect', … } to match object { …why: 'switch-flip' }` |
 | 21 | The safety stop deleted: remove `if (lane.kind === 'safety-stopped') return answered(5, 'safety-stopped', …);` | `X -t 'never calls retire'`, `X -t 'journal appended'` | `expected { kind: 'would-collect', … } to match object { kind: 'answered', step: 5, why: 'safety-stopped' }` |
+| 22 | The would-collect gate narrowed to Off: `if (!collectLaneLive(lane))` becomes `if (lane.kind === 'shadowed' && lane.why === 'off')` | `X -t 'shadowed with no flip'` | both arms: `expected { kind: 'acted', … } to match object { kind: 'would-collect' }`. E's "SHADOW: no marker" stays green, because Off alone cannot see this |
+| 23 | The would-collect gate deleted: remove `if (!collectLaneLive(lane)) return { kind: 'would-collect', audit: observed };` | `E -t 'SHADOW: no marker'`, `X -t 'shadowed with no flip'` | `expected { kind: 'acted', … } to match object { kind: 'would-collect', … }` |
 
 The compiler holds two guards, not a case. Record them as such:
 - Deleting the `if (lane.kind === 'not-running') { … }` block makes `deps.lane.flipped(lane)` a TS2345, because a `not-running` is no `CollectLaneSettled`.
@@ -9836,7 +9966,7 @@ cd server && ./node_modules/.bin/vitest run test/collect-
 cd server && ./node_modules/.bin/vitest run test/ws-collect-wiring.test.ts test/single-definition.test.ts test/mail-routes.test.ts test/verb-gate.test.ts
 cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts
 cd server && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json
-grep -rn "collectFeedSwitchBody\|'marker-flip'" server/src server/test   # no hits
+git grep --untracked -nE "collectFeedSwitchBody|'marker-flip'" -- ':/server/src' ':/server/test'   # no hits; the ':/' pathspecs resolve from the repository root, whatever the cwd
 ```
 
 Expected:
@@ -10007,7 +10137,7 @@ grep -nE "^  collectLaneRow\(\): CollectLaneRowRead|^  setCollectLane\(req: Coll
 grep -n "private collectControlDeps(coord: CoordStore): CollectControlDeps\|private collectRecordCoordFeed(\|      flipped: (r) => {\|NO_FLEET_IDENTITY\|{ id, epoch }" server/src/watch.ts
 grep -n "epochNow()" server/src/watch.ts      # exactly ONE line: Task 7's queue-time capture in collectAct
 grep -n "  private collectLastSeenLive = false;\|^} from './collectLane.js';\|^} from './coord/collectTempRoot.js';\|  private async collectPass(\|  private collectAttention(): ChildReclaimCollectInput {\|  currentCollectLane(): {\|IT SHIPS SHADOWED\. Until the operator touches the live marker by hand\|  /\*\* The runner the lane hands its calls" server/src/watch.ts
-grep -n "collectSeenEpoch\|collectControlWarned\|currentCollectCounts\|collectAttentionInput\|collectControlNote\|collectRetireLatch\|COLLECT_LANE_LIVE_MARKER\|collect-lane-live" server/src/watch.ts   # prints NOTHING
+grep -n "collectSeenEpoch\|collectControlWarned\|currentCollectCounts\|collectAttentionInput\|collectControlNote\|collectRetireLatch\|collectLaneCounts\|CollectLaneCounts\|CollectLaneSettled\|COLLECT_LANE_LIVE_MARKER\|collect-lane-live" server/src/watch.ts   # prints NOTHING
 grep -c "the live marker as the last act job read it" server/src/watch.ts   # 1 if Task 7 left the bullet as main has it; 0 if it reworded it
 # the lane rig as Task 7 left it
 grep -n "collectLane:\|collectLaneJournalAt(\|fleetIdentity\|FleetIdentityCell\|laneJournal\|knowNode\|bumpEpoch\|setLive\|setOff" server/test/collectLaneFixture.ts
@@ -10071,7 +10201,8 @@ The line that follows, Task 7's `monotonicMs: () => mono` with its `collectLane`
      *  unmeasured until a case measures a node or reconnects. A TICK's inventory sweep publishes this box's own node into
      *  it (local mode), so a case that measures a node never ticks. */
     identity,
-    /** The lane's generation journal: the adapter the watcher's `collectLane` was built with, under the fixture HOME. */
+    /** The lane's generation journal: the adapter the watcher's `collectLane` was built with, under the fixture HOME. It is
+     *  the SAME object as the rig's `journal` (Task 7), named here for `collect-switch-lane.test.ts`; never a second journal. */
     laneJournal: deps.collectLane.journal,
     /** The current connection measured `nodeId` directly, now (an inventory completion under the current epoch). */
     knowNode: (nodeId: string): void => {
@@ -10844,6 +10975,8 @@ MSG
 )"
 ```
 
+Name these departures, by slug, in the wave-done: `lane-rig-gains-the-identity-cell-and-switch-handles`, `queue-to-start-cases-are-pins`, `gather-move-re-seats-the-seen-epoch`, `three-passes-measured-as-three-act-jobs` and `pass-case-title-first-sees-the-marker`.
+
 ---
 
 ### Task 9: The route, and the censuses that must land with it
@@ -11543,6 +11676,37 @@ describe('GET and POST /api/coord/collect-lane (path-identity spec §5.6)', () =
     }
   });
 
+  it('Off: 503 write-failed on an append failure and on a database failure after the append; the row and its latch unchanged; exactly one console.warn', async () => {
+    const failing = (real: CollectLaneJournal): CollectLaneJournal => ({
+      read: () => real.read(),
+      appendGeneration: () => { throw Object.assign(new Error('EIO: injected append failure'), { code: 'EIO' }); },
+    });
+    const cases: [string, RigOpts, (t: Rig) => void, string][] = [
+      ['an append failure', { journal: failing }, () => {}, '{"generation":1}\n{"generation":2}\n'],
+      ['a database failure after the append', {}, (t) => {
+        t.db.exec("CREATE TRIGGER collect_lane_refuse BEFORE UPDATE ON collect_lane_settings BEGIN SELECT RAISE(ABORT, 'injected'); END");
+      }, '{"generation":1}\n{"generation":2}\n{"generation":3}\n'],
+    ];
+    for (const [name, o, bend, journalAfter] of cases) {
+      const t = await rig(o);
+      // Through the real journal: the failing one is the ROUTE's alone.
+      retire(t);
+      storeLive(t, NODE_A);
+      const rowBefore = t.coord.collectLaneRow();
+      bend(t);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const res = await post(t.app, { choice: 'off' });
+      expect(res.statusCode, `${name}: ${res.body}`).toBe(503);
+      expect(res.json(), name).toMatchObject({ ok: false, error: 'write-failed' });
+      expect(res.body, `${name}: no errno on the wire`).not.toMatch(/EIO|ERR_SQLITE/);
+      expect(serverWarns(warn), name).toHaveLength(1);
+      expect(t.coord.collectLaneRow(), `${name}: the row, its latch included, is unchanged`).toEqual(rowBefore);
+      expect(journalText(t), name).toBe(journalAfter);
+      expect(t.coord.feedEvents(10), name).toEqual([]);
+      vi.restoreAllMocks();
+    }
+  });
+
   it('a 200 needs the re-read proof: a row changed before return answers 503 write-failed, with the event recorded', async () => {
     const t = await rig({ authEnabled: true });
     const k = await keyFor(t.app);
@@ -11593,6 +11757,18 @@ describe('GET and POST /api/coord/collect-lane (path-identity spec §5.6)', () =
     const ev = c.coord.feedEvents(10).at(-1)!;
     expect(ev.body).toContain('repairing');
     expect(ev.body.endsWith('; by flag-off')).toBe(true);
+  });
+
+  it('the GET resolves under the epoch pair of its own listing: a reconnect inside it reads unknown-fleet', async () => {
+    const t = await rig({ authEnabled: true });
+    const k = await keyFor(t.app);
+    expect((await post(t.app, { choice: 'live', confirm: k.confirmKey })).statusCode).toBe(200);
+    expect(viewOf(await getView(t.app)).effective, 'steady: Live for this node').toEqual({ state: 'live', armedBy: 'settings' });
+    epochMovesInside(t);
+    expect(viewOf(await getView(t.app)).effective, 'the connection moved while the GET listed')
+      .toEqual({ state: 'unknown-fleet', armedBy: 'neither' });
+    expect(viewOf(await getView(t.app)).effective, 'the next read, on the new connection, measured the same node')
+      .toEqual({ state: 'live', armedBy: 'settings' });
   });
 
   it('the 200 carries the notice', async () => {
@@ -11684,6 +11860,7 @@ describe('the feed event: on a change only, with its actor, flushed in finally',
     const ev = t.coord.feedEvents(10).at(-1)!;
     expect(ev.title).toBe(COLLECT_SETTING_FEED_TITLE);
     expect(ev.body).toContain(NODE_A);
+    expect(ev.body, 'a coherent write repairs nothing').not.toContain('repairing');
     expect(ev.body.endsWith('; by device:probe-browser')).toBe(true);
   });
 
@@ -11942,12 +12119,12 @@ Then the message. `grep -c 'word\`).toBe(true);' server/test/mail-routes.test.ts
 
 - [ ] **Step 3: Run the tests to verify they fail**
 
-From `server/`, in the foreground, with a timeout of at least 600000 ms:
+From the workspace root, each line in its own subshell, in the foreground, with a timeout of at least 600000 ms:
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/collect-lane-route.test.ts
-cd server && ./node_modules/.bin/vitest run test/coord-pause-route.test.ts test/auth-gate.test.ts
-cd server && ./node_modules/.bin/vitest run test/box-token-census.test.ts test/coordinator-skill.test.ts test/mail-routes.test.ts
+(cd server && ./node_modules/.bin/vitest run test/collect-lane-route.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/coord-pause-route.test.ts test/auth-gate.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/box-token-census.test.ts test/coordinator-skill.test.ts test/mail-routes.test.ts)
 ```
 
 Expected:
@@ -12035,7 +12212,9 @@ with:
    *  - A 200 follows only a synchronous re-read that proves the requested state. When the store answered written and
    *    the re-read does not prove it, the feed row stands and the answer is 503 `write-failed`.
    *  - A refusal carries `{ok, error, detail?}` and never a path or an errno. The two confirm answers carry the sheet's
-   *    facts and the key. The bounded detail goes to the server's log, through `console.warn`.
+   *    facts and the key. A failed write, an unproved write and a store `not-coherent` each log one bounded line
+   *    through `console.warn`. A refusal over a standing control fault logs nothing more here: the GET's latch below
+   *    and the lane's own warn latches already log that fault once.
    *  - The GET answers 503 `state-unmeasurable` for an absent row alone, because the server never inserts one. Every
    *    other unmeasurable state is a 200 with a safety-stopped view, warned once per standing fault.
    *
@@ -12088,8 +12267,12 @@ with:
       return collectRefuse(reply, 503, 'state-unmeasurable',
         'the collector setting row is absent, and the server never inserts one');
     }
+    const journal = read.journal;
+    // `not-configured` is the lane's word for a server built without the journal, which answered 501 above. The view
+    // admits no such read (`CollectLaneViewInput`), so it is narrowed here, never folded.
+    if (journal.kind === 'not-configured') return notConfigured(reply);
     return reply.code(200).send({ ok: true, ...collectLaneView({
-      row, journal: read.journal, switches, epoch: { before, after: link.epochNow() }, node: link.current(),
+      row, journal, switches, epoch: { before, after: link.epochNow() }, node: link.current(),
       caps: collectLaneCaps(deps.fleetState), counts: watcher?.currentCollectCounts() ?? null, notice: null,
     }) });
   });
@@ -12151,13 +12334,15 @@ with:
     }
     const proof = collectControlNow({ coord, journal: lane.journal });
     const proofRow = proof.row;
-    if (!collectLaneWriteProved(decided.request, w.kind === 'written' ? w.generation : null, proofRow, proof.journal)
-      || proofRow.kind === 'absent') {
+    const proofJournal = proof.journal;
+    // `not-configured` cannot be reached here (501 above); the view admits no such read, so it is narrowed, never folded.
+    if (!collectLaneWriteProved(decided.request, w.kind === 'written' ? w.generation : null, proofRow, proofJournal)
+      || proofRow.kind === 'absent' || proofJournal.kind === 'not-configured') {
       collectWarn(`a ${decided.request.kind} write answered ${w.kind}, and the re-read after it does not show the requested state`);
       return collectRefuse(reply, 503, 'write-failed', 'the re-read after the write does not show the requested state');
     }
     return reply.code(200).send({ ok: true, ...collectLaneView({
-      row: proofRow, journal: proof.journal, switches, epoch, node, caps, counts, notice: COLLECT_LANE_APPLIES_TEXT,
+      row: proofRow, journal: proofJournal, switches, epoch, node, caps, counts, notice: COLLECT_LANE_APPLIES_TEXT,
     }) });
   });
 
@@ -12177,12 +12362,12 @@ The kebab literals the block spells are `'bad-request'`, `'sign-in-unarmed'`, `'
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
-From `server/`, in the foreground, with a timeout of at least 600000 ms:
+From the workspace root, each line in its own subshell, in the foreground, with a timeout of at least 600000 ms:
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/collect-lane-route.test.ts
-cd server && ./node_modules/.bin/vitest run test/coord-pause-route.test.ts test/box-token-census.test.ts test/auth-gate.test.ts
-cd server && ./node_modules/.bin/vitest run test/mail-routes.test.ts test/stall-settings-route.test.ts test/coordinator-skill.test.ts
+(cd server && ./node_modules/.bin/vitest run test/collect-lane-route.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/coord-pause-route.test.ts test/box-token-census.test.ts test/auth-gate.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/mail-routes.test.ts test/stall-settings-route.test.ts test/coordinator-skill.test.ts)
 ```
 
 Expected: every file PASSES, and `stall-settings-route.test.ts` passes byte-for-byte unchanged.
@@ -12215,7 +12400,7 @@ The worker measures every red text. Where the measured text differs, it replaces
 | 7 | `const change = …`'s `: null;` becomes `: collectLaneSettingChange(w.before, w.before, read.journal);` (an event on `unchanged`) | `R -t 'no-op'` | no-op Live: `expected [ {…}, {…} ] to have a length of 1 but got 2`. The feed case "a no-op and every refusal record nothing": `expected [ {…} ] to deeply equal []` |
 | 8 | GET: `if (row.kind === 'absent')` becomes `if (read.control.kind === 'unmeasurable')` | `R -t 'safety-stopped view'` | `a malformed row: expected 503 to be 200` |
 | 9 | Delete the GET's absent-row `if` block | `R -t 'absent row'` | `expected 200 to be 503`, or 500 if the view composer throws on the absent arm |
-| 10 | `collectLaneSettingChange(w.before, w.after, w.journalBefore)` becomes `(w.before, w.after, w.journalAfter)` | `R -t 'repair'` | the behind case: `expected '…' to contain 'repairing'` |
+| 10 | `collectLaneSettingChange(w.before, w.after, w.journalBefore)` becomes `(w.before, w.after, w.journalAfter)` | `R -t 'Live armed records'` | `a coherent write repairs nothing: expected '…' not to contain 'repairing'`. The seed read beside the journal the write just appended is a mismatch, so every write would say repairing. The `repair` case stays green under this mutant, because a repairing write's row before disagrees with the journal after as well |
 | 11 | In the `failed` branch, `collectWarn(…)` becomes `req.log.warn(…)` with the same template | `R -t 'write-failed on an append failure'` | `an append failure: expected [] to have a length of 1 but got 0` |
 | 12 | GET: `async (_req, reply)` becomes `async (req, reply)`, with first statement `if (!requireMailToken(req, reply, 'GET /api/coord/collect-lane')) return;` | `R -t 'box token'` | `expected '401 …' to match /^200 .* \| 409 /`. With that line removed, the scan: `app.get('/api/coord/collect-lane' consults the box token: expected '…' not to match /requireMailToken\(req/`. Also red: `coord-token.test.ts` "all fourteen pass a lane" (`expected [ …(15) ] to have a length of 14`) |
 | 13 | The `unmeasurable` return becomes `collectRefuse(reply, 503, 'state-unmeasurable', \`${decided.detail} under ${deps.cfg.ccrcDir}\`)` | `R -t 'the POST answers 503'` | `a malformed journal: the fixture home: expected '…' not to contain '<fixture home>'` |
@@ -12227,6 +12412,8 @@ The worker measures every red text. Where the measured text differs, it replaces
 | 19 | The POST 200's `notice: COLLECT_LANE_APPLIES_TEXT` becomes `notice: null` | `R -t 'the 200 carries the notice'` | `expected null to be '…'` |
 | 20 | Move the 403 check above `decideCollectLaneBody(…)` and make it refuse every dark POST: `if (!(deps.cfg.authEnabled && sessionAuth(req).reason === 'session')) return collectRefuse(reply, 403, 'sign-in-unarmed');` | `A -t 'EXACTLY the gated routes'` | a drift line naming `POST /api/coord/collect-lane` (dark 403, armed-with-session 400) |
 | 21 | Insert a second `deviceActor(sessionAuth(req).device)` read into the POST (e.g. `const label = deviceActor(sessionAuth(req).device);` above the 403 check) | `R -t 'exactly one deviceActor'` | `expected 2 to be 1` |
+| 22 | POST: move `const before = link.epochNow();` below `const switches = await collectSwitches(…)`, so both epoch reads follow the listing | `R -t 'the POST answers 503'` | `an epoch moved inside the held listing, live: expected 409 to be 503` (the old-epoch key answers `confirm-stale`, and the move itself is never refused) |
+| 23 | GET: the same move of its own `const before = link.epochNow();` | `R -t 'its own listing'` | `the connection moved while the GET listed: expected { state: 'live', armedBy: 'settings' } to deeply equal { state: 'unknown-fleet', armedBy: 'neither' }` |
 
 The compiler holds two more guards rather than a case, so record them as such:
 - Narrowing `collectLaneView`'s `row` depends on the absent check. Row 9's mutant is a TS2322 under `tsc`.
@@ -12234,12 +12421,12 @@ The compiler holds two more guards rather than a case, so record them as such:
 
 - [ ] **Step 7: The other named suites, the census neighbours and the typecheck**
 
-From `server/`, in the foreground, with a timeout of at least 600000 ms:
+From the workspace root, each line in its own subshell, in the foreground, with a timeout of at least 600000 ms:
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/coord-token.test.ts test/crossrepo-prose.test.ts test/routes.test.ts
-cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts test/typecheck-tests.test.ts
-cd server && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json
+(cd server && ./node_modules/.bin/vitest run test/coord-token.test.ts test/crossrepo-prose.test.ts test/routes.test.ts)
+(cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts test/typecheck-tests.test.ts)
+(cd server && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json)
 ```
 
 Expected: every file PASSES, and neither `tsc` prints output. `coord-token` still finds exactly fourteen lanes, because this door consults no token. `crossrepo-prose` still finds the same routes reading `runEvents`. The `composeChildReclaim` block moved from the stall-watch POST's slice into this POST's slice, and neither slice reads `runEvents`.
@@ -12721,6 +12908,29 @@ describe('the switch’s SQL has one writer (path-identity spec 2026-10-12 §5.9
     expect(blankCommentsAndStrings(read(path.join('coord', 'collectLaneJournal.ts'))))
       .toMatch(/^export function collectLaneJournalAt\(/m);
   });
+
+  it('the journal path is composed once, in index.ts, and only the adapter and db.ts hold its basename', () => {
+    // One append adapter is one writer only while no other file can reach the file by name. A second composition of
+    // the path, or a file joining the basename to a directory, could truncate or rebuild the journal without ever
+    // calling appendGeneration (path-identity spec 2026-10-12 §5.2: the journal is never reconstructed from the row).
+    // db.ts holds the basename for its restore wording only (Task 13).
+    const PATH_CALL = /(?<!function\s+)\bdefaultCollectLaneJournalPath\s*\(/g;
+    const planted = 'export function defaultCollectLaneJournalPath(d: string) {}\nconst p = defaultCollectLaneJournalPath(d);\n// defaultCollectLaneJournalPath(d)\n';
+    expect([...blankCommentsAndStrings(planted).matchAll(PATH_CALL)].length, 'CONTROL: a call, not the declaration or a comment')
+      .toBe(1);
+    const sites = files().flatMap((f) => {
+      const n = [...blankCommentsAndStrings(readFileSync(f, 'utf8')).matchAll(PATH_CALL)].length;
+      return n === 0 ? [] : [`${path.relative(srcRoot, f)}:${n}`];
+    }).sort();
+    expect(sites, 'a second composition of the journal path').toEqual(['index.ts:1']);
+    const ALLOWED = [path.join('coord', 'collectLaneJournal.ts'), path.join('coord', 'db.ts')];
+    const holders = files()
+      .filter((f) => /\bCOLLECT_LANE_JOURNAL_BASENAME\b/.test(blankCommentsAndStrings(readFileSync(f, 'utf8'))))
+      .map((f) => path.relative(srcRoot, f));
+    expect(holders, 'the definer no longer holds the basename: this scan is over nothing')
+      .toContain(path.join('coord', 'collectLaneJournal.ts'));
+    expect(holders.filter((h) => !ALLOWED.includes(h)), 'a file that could join the basename to a directory').toEqual([]);
+  });
 });
 ```
 
@@ -12866,7 +13076,7 @@ cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts test/
 
 Run it in the foreground, with a timeout of at least 600000 ms. Expected: PASS. In particular:
 - **`single-definition`** is exactly as green as at Step 0 (m), plus the new block's seven cases. The wave-9 pin `the files that name its constant are the definer and the executor, and neither reaches a write` is green, with its title and assertions unchanged.
-- **`collect-lane-writers`** passes 3 cases.
+- **`collect-lane-writers`** passes 4 cases.
 - **Each skill suite** passes its previous count plus one.
 
 These pins cover code that Tasks 6 to 9 shipped, so there is no red first run here. The red half is Step 6. If a case is RED here, the shipped shape differs from the canonical one. **STOP** and report the measured lines, using the slugs from Step 0's STOP conditions. Never loosen a scan to make it pass.
@@ -12909,6 +13119,8 @@ Expected:
 | T10.15 | `coordinator-skill.test.ts`, in the new case: replace `named(allSkillText)` with `` named(`${allSkillText}\nPOST /api/coord/collect-lane\n`) ``, a mention planted in an in-memory scratch copy (`skill-plant-in-memory-copy`) | `./node_modules/.bin/vitest run test/coordinator-skill.test.ts -t 'collector switch'` | `expected [ '/api/coord/collect-lane', 'POST /api/coord/collect-lane', 'collect-lane' ] to deeply equal []` |
 | T10.16 | `worker-skill.test.ts`, in the new case: replace `named(skill)` with `named(skill + COLLECT_LANE_LIVE_MARKER)` | `./node_modules/.bin/vitest run test/worker-skill.test.ts -t 'collector switch'` | `expected [ 'collect-lane-live', 'collect-lane' ] to deeply equal []` |
 | T10.17 | `reviewer-skill.test.ts`, in the new case: replace `named(skill)` with `` named(`${skill}\nGET /api/coord/collect-lane\n`) `` | `./node_modules/.bin/vitest run test/reviewer-skill.test.ts -t 'collector switch'` | `expected [ '/api/coord/collect-lane', 'GET /api/coord/collect-lane', 'collect-lane' ] to deeply equal []` |
+| T10.18 | `coord/routes.ts`: in the collect-lane GET handler, add `void defaultCollectLaneJournalPath(deps.cfg.ccrcDir);`, adding the import from `./collectLaneJournal.js` | `./node_modules/.bin/vitest run test/collect-lane-writers.test.ts` | "the journal path is composed once…": `a second composition of the journal path: expected [ 'coord/routes.ts:1', 'index.ts:1' ] to deeply equal [ 'index.ts:1' ]` |
+| T10.19 | `watch.ts`: import `COLLECT_LANE_JOURNAL_BASENAME` from `./coord/collectLaneJournal.js`, and add `void COLLECT_LANE_JOURNAL_BASENAME;` as `collectPass`'s first statement | same | "the journal path is composed once…": `a file that could join the basename to a directory: expected [ 'watch.ts' ] to deeply equal []` |
 
 After every row is reverted, re-run Step 4's command: green. Then run `git diff --stat -- server/src` again: it prints nothing.
 
@@ -13696,7 +13908,8 @@ describe('the words (path-identity spec §5.7)', () => {
     expect(collectOffNote(view({ marker: { listing: 'stands', latch: 'unset' } }))).toBe(COLLECT_OFF_NOTE_TEXT.stands);
     expect(collectOffNote(view({ marker: { listing: 'absent', latch: 'unset' } }))).toBe(COLLECT_OFF_NOTE_TEXT.absent);
     expect(collectOffNote(view({ marker: { listing: 'unmeasured', latch: 'unset' } }))).toBe(COLLECT_OFF_NOTE_TEXT.unmeasured);
-    expect(collectOffNote(view({ marker: { listing: 'stands', latch: 'unmeasured' } }))).toBe(COLLECT_OFF_NOTE_TEXT.stands);
+    expect(collectOffNote(view({ marker: { listing: 'stands', latch: 'unmeasured' } })), 'a latch that did not read claims no control')
+      .toBe(COLLECT_OFF_NOTE_TEXT.unmeasured);
     expect(new Set(Object.values(COLLECT_OFF_NOTE_TEXT)).size).toBe(3);
   });
 
@@ -13894,14 +14107,13 @@ export function settingsReadFailure(err: unknown): SettingsReadFailure {
    export type StallWatchFailure = SettingsReadFailure;
    ```
    The three docstring lines above it stay as they are.
-3. Delete the whole private block between `stallWriteRefusal`'s closing `}` and the `/**` that opens the hook's docstring (`` * `GET /api/coord/stall-watch` every `pollMs` and whenever the page becomes visible. ``). The block is about lines 202 to 212 at `837a099c0`. It is:
-   - the docstring that starts `/** The two answers that mean "not available on this server", each status with its own code: 501 \`not-configured\` (no`;
+3. Delete the private constant and helper between `stallWriteRefusal`'s closing `}` and the `/**` that opens the hook's docstring (`` * `GET /api/coord/stall-watch` every `pollMs` and whenever the page becomes visible. ``). The block is about lines 202 to 212 at `837a099c0`. Its four-line comment STAYS, byte for byte: its third line carries the stall section's departure reference, and CLAUDE.md says a source file's departure references are history that is never deleted. Add one line directly above that comment: `// Moved to ../lib/notAvailable.ts (settingsReadFailure); the comment below stays for its history.` Then delete the rest of the block:
+   - (kept, as above, never deleted) the comment that starts `/** The two answers that mean "not available on this server", each status with its own code: 501 \`not-configured\` (no`;
    - `const NOT_CONFIGURED_ANSWERS: ReadonlyArray<readonly [number, string]> = [[501, 'not-configured'], [404, 'not-found']];`;
    - the blank line after it;
    - the five lines of `const failureOf = (err: unknown): StallWatchFailure =>` through `    : 'failed';`;
-   - the one blank line that follows.
 
-   Exactly one blank line then separates `stallWriteRefusal`'s `}` from the hook's docstring. The block's argument now lives in `notAvailable.ts`'s docstring, in the same words.
+   The blank line after `failureOf` stays, so exactly one blank line separates the kept comment from the hook's docstring. The block's argument also lives in `notAvailable.ts`'s docstring, in the same words.
 4. Before:
    ```ts
              const failure = failureOf(err);
@@ -14283,7 +14495,7 @@ export const COLLECT_STORED_FAULT_TEXT: Readonly<Record<StoredFault, string>> = 
 export const COLLECT_OFF_NOTE_TEXT: Readonly<Record<MarkerListing, string>> = {
   stands: "The fleet box's legacy file still controls this lane. Remove it by hand before Settings can turn the collector off.",
   absent: "The fleet box's legacy file is gone; Settings can turn the collector off once the collector's next check records that.",
-  unmeasured: "Whether the fleet box's legacy file still stands cannot be measured now, so Settings cannot turn the collector off yet.",
+  unmeasured: "Whether the fleet box's legacy file still controls this lane cannot be measured now, so Settings cannot turn the collector off yet.",
 };
 
 /** A refused write, by the server's code. The detail the server sent is the section's to show beside it. */
@@ -14318,7 +14530,7 @@ export const COLLECT_CONFIRM_TEXT = {
   capsNoReclaimPause: "The fleet box's ccd does not list reclaim-pause-v1: the collector will not run until it does.",
   capsNeither: "The fleet box's ccd lists neither collect-v1 nor reclaim-pause-v1: the collector will not run until it does.",
   paused: 'All cleanup is paused now: the collector removes nothing until the pause is lifted on Runs.',
-  markerStands: "The fleet box's legacy file also arms the lane until you remove it by hand; after that only this setting does.",
+  markerStands: "The fleet box's legacy file stands. Until this server records its removal it also arms the lane; once that is recorded, only this setting does, and a re-created file is ignored.",
   markerAbsent: "The fleet box's legacy file is gone, so this setting alone arms the lane.",
   repair: "This also repairs the collector's control state: its database and monotonic journal disagree.",
   checklist: [
@@ -14378,6 +14590,9 @@ export function collectUnmeasurableLines(detail: string): { text: string; tone: 
  *  unmeasured line otherwise (path-identity spec §5.4). */
 export function collectOffNote(v: CollectLaneView): string | null {
   if (v.marker.latch === 'set') return null;
+  // A latch that did not read is no proof that the legacy file controls anything: the row is unmeasurable and the lane
+  // is safety-stopped, so the note says control cannot be measured, whatever the listing shows.
+  if (v.marker.latch === 'unmeasured') return COLLECT_OFF_NOTE_TEXT.unmeasured;
   return COLLECT_OFF_NOTE_TEXT[v.marker.listing];
 }
 
@@ -14427,8 +14642,8 @@ export function collectConfirmLines(facts: CollectLaneConfirmRequired['facts'], 
 Run each line in the foreground, with a timeout of at least 600000 ms:
 
 ```bash
-cd pwa && ./node_modules/.bin/vitest run test/not-available.test.ts test/use-collect-lane-view.test.tsx test/collect-lane-words.test.ts test/collect-lane-words.test-d.ts
-cd pwa && ./node_modules/.bin/vitest run test/use-stall-watch-view.test.tsx test/settings-screen.test.tsx test/box-token-card.test.tsx
+(cd pwa && ./node_modules/.bin/vitest run test/not-available.test.ts test/use-collect-lane-view.test.tsx test/collect-lane-words.test.ts test/collect-lane-words.test-d.ts)
+(cd pwa && ./node_modules/.bin/vitest run test/use-stall-watch-view.test.tsx test/settings-screen.test.tsx test/box-token-card.test.tsx)
 ```
 
 Expected: every file PASSES.
@@ -14471,6 +14686,7 @@ The worker measures every red text. Where the measured text differs from the dra
 | 19 | `collectLaneWords.ts`: delete `if (v.control.state === 'mismatch') return true;` in `collectOffersReconfirm` | `W -t 'collectOffersReconfirm'` | `expected false to be true` |
 | 20 | `collectLaneWords.ts`: in `collectConfirmLines`, replace the `caps` ternary with `t.capsBoth` (the capability branch dropped) | `W -t 'confirm lines'` | `expected "The fleet box's ccd lists collect-v1 and …" to be "The fleet box's ccd does not list collect-v1: …"` |
 | 21 | `collectLaneWords.ts`: `COLLECT_PAUSE_TEXT.stops` drops `, the dead-coordinator lane` | `W -t 'all four lanes'` | `the dead-coordinator lane: expected 'Pauses all cleanup: …' to contain 'the dead-coordinator lane'` |
+| 22 | `collectLaneWords.ts`: delete `if (v.marker.latch === 'unmeasured') return COLLECT_OFF_NOTE_TEXT.unmeasured;` in `collectOffNote` | `W -t 'collectOffNote'` | `a latch that did not read claims no control: expected "The fleet box's legacy file still controls this lane. …" to be "Whether the fleet box's legacy file still controls this lane …"` |
 
 Two guards are held by the compiler, not by a case:
 - **An entry deleted from any `keysOf<…>({ … })` table in the hook** is a TS2345 missing-property error under `tsc --noEmit` (Step 6). It has no runtime red, because the table is the list.
@@ -14478,9 +14694,11 @@ Two guards are held by the compiler, not by a case:
 
 - [ ] **Step 6: Typecheck and the neighbouring guards**
 
+From the workspace root, each line in its own subshell, in the foreground, with a timeout of at least 600000 ms:
+
 ```bash
-cd pwa && ./node_modules/.bin/tsc --noEmit -p .
-cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts
+(cd pwa && ./node_modules/.bin/tsc --noEmit -p .)
+(cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts)
 ```
 
 Expected:
@@ -14973,6 +15191,25 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
     expect(write.mock.calls[0]![0]).toStrictEqual({ choice: 'live' });
   });
 
+  it("a mismatch with Off stored checks neither radio, so Off (latch set) posts {choice:'off'} to repair it", async () => {
+    const offMismatch = cv({
+      stored: { read: 'row', choice: 'off', fleetNodeId: null, markerRetiredAt: 1_500, generation: 3, updatedAt: 2_000 },
+      journal: { read: 'ok', max: 5 },
+      control: { state: 'mismatch', journal: 'ahead' },
+      effective: { state: 'safety-stopped', armedBy: 'neither' },
+      marker: { listing: 'absent', latch: 'set' },
+      remedy: REMEDY,
+    });
+    await mount(offMismatch);
+    expect(radio('off')).not.toBeChecked();
+    expect(radio('live')).not.toBeChecked();
+    expect(radio('off')).toBeEnabled();
+    const write = vi.spyOn(api, 'setCollectLane').mockReturnValue(new Promise(() => {}));
+    fireEvent.click(radio('off'));
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write.mock.calls[0]![0]).toStrictEqual({ choice: 'off' });
+  });
+
   it('an unknown stored choice checks neither radio and says so', async () => {
     await mount(cv({
       stored: { read: 'row', choice: 'shadowed', fleetNodeId: null, markerRetiredAt: 1_500, generation: 1, updatedAt: 1_500 },
@@ -15048,7 +15285,7 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
     vi.spyOn(api, 'setCollectLane').mockRejectedValue(
       new ApiError(403, { ok: false, error: 'sign-in-unarmed', detail: 'Live needs sign-in armed on this server' }));
     fireEvent.click(radio('live'));
-    expect(await screen.findByText(COLLECT_REFUSAL_TEXT['sign-in-unarmed'])).toBeInTheDocument();
+    expect(await screen.findByText(`${COLLECT_REFUSAL_TEXT['sign-in-unarmed']} (Live needs sign-in armed on this server)`)).toBeInTheDocument();
     await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
     expect(radio('live')).not.toBeChecked();
     expect(radio('off')).toBeChecked();
@@ -15079,7 +15316,7 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
     await waitFor(() => expect(radio('live')).toBeEnabled());
 
     fireEvent.click(radio('live'));
-    expect(await screen.findByText(COLLECT_REFUSAL_TEXT.conflict)).toBeInTheDocument();
+    expect(await screen.findByText(`${COLLECT_REFUSAL_TEXT.conflict} (the stored row changed)`)).toBeInTheDocument();
     await waitFor(() => expect(read).toHaveBeenCalledTimes(3));
     expect(radio('live')).not.toBeChecked();
     expect(radio('off')).toBeChecked();
@@ -15295,9 +15532,10 @@ Create `pwa/src/fleet/CollectLaneSection.tsx`:
 //     rollback to a build without the route, a Live radio must not stay checked.
 //   * AN UNMEASURABLE STATE IS A STOP, NEVER A CHOICE. A read answered 503 state-unmeasurable (no stored row) draws
 //     the Safety-stopped label and line with the server's detail, and offers no radio.
-//   * THE SERVER'S ANSWER IS WHAT IS SHOWN. The checked radio is the stored choice the server read, never the tap;
-//     a stored token this build does not know checks neither. A write settles its reply; a refused or unreadable
-//     write re-reads.
+//   * THE SERVER'S ANSWER IS WHAT IS SHOWN. The checked radio is the stored choice the server read, never the tap,
+//     and only while control is coherent: a stored token this build does not know, or a row the journal disagrees
+//     with, checks neither, so Off stays a tap that can repair a mismatch once the latch is set (spec §5.6). A write
+//     settles its reply; a refused or unreadable write re-reads.
 //   * THE SERVER DECIDES THE CONFIRM. Live goes out as {choice:'live'} with no key. A 409 confirm-required or
 //     confirm-stale opens the sheet from the facts the server measured, and Set sends the server's key. Off before
 //     the legacy file's retirement is disabled, with `collectOffNote`'s note, because the server refuses it.
@@ -15414,7 +15652,7 @@ function CollectLaneBody({ view, stale, poll, store, childReclaimPause }: {
   // - A 2xx the guard cannot read was answered and may have landed: UNCONFIRMED_TEXT, then a re-read.
   // - A 409 the reader takes as a confirm opens the sheet.
   // - Off refused before the latch is shown inline under the choice.
-  // - Any other refusal is toasted, then re-read.
+  // - Any other refusal is toasted, its words with the server's detail beside them, then re-read.
   // - A rejection that never reached an answer may not even have left, so it gets its own line, then the same
   //   re-read.
   const write = (request: CollectLaneRequest): void => {
@@ -15441,7 +15679,7 @@ function CollectLaneBody({ view, stale, poll, store, childReclaimPause }: {
           else if (refusal.code === 'marker-still-controls') setInline(COLLECT_REFUSAL_TEXT['marker-still-controls']);
           else {
             toast(refusal.code !== null
-              ? COLLECT_REFUSAL_TEXT[refusal.code]
+              ? `${COLLECT_REFUSAL_TEXT[refusal.code]} (${refusal.detail})`
               : fillDetail(COLLECT_SECTION_WORDS.refused, refusal.detail), 'error');
           }
           reload();
@@ -15453,7 +15691,10 @@ function CollectLaneBody({ view, stale, poll, store, childReclaimPause }: {
     if (!locked) write({ choice });   // the disabled fieldset stops a finger; this stops a second call
   };
 
-  const stored = view.stored.read === 'row' ? view.stored.choice : null;
+  // A radio is checked only under coherent control. A mismatch's stored choice is not what the lane runs on, and a
+  // radio already checked fires no change: with `off` stored, Off could never be sent to repair the mismatch
+  // (path-identity spec §5.6: Off may repair it once the latch permits Off).
+  const stored = view.stored.read === 'row' && view.control.state === 'coherent' ? view.stored.choice : null;
   const offHeld = view.marker.latch !== 'set';   // Off is refused before the latch, whatever the listing says
   const offNote = collectOffNote(view);
 
@@ -15670,7 +15911,7 @@ The worker measures every red text. Where the measured text differs, it replaces
 
 | # | Mutation (exact edit in `CollectLaneSection.tsx` unless named) | Command | Expected red |
 |---|---|---|---|
-| 1 | Not-configured no longer checked first: `failure !== null && failure.kind === 'not-configured' ? (` becomes `failure !== null && failure.kind === 'not-configured' && view === null ? (` | `S -t 'Not available'` | `Unable to find an element with the text: Not available on this server.` (the landed Live view stays) |
+| 1 | The not-available arm dropped: delete the chain's first arm, from `failure !== null && failure.kind === 'not-configured' ? (` through the `) : ` after its one `<p>`, so the chain opens at the state-unmeasurable arm. (The hook's rule that a landed view never outlives a not-available answer is pinned by Task 11's row 5.) | `S -t 'Not available'` | `Unable to find an element with the text: Not available on this server.` (the unread line shows instead) |
 | 2 | The 503 read rendered as a generic failure: delete the whole `failure.kind === 'state-unmeasurable' ? ( … ) :` arm | `S -t 'state-unmeasurable'` | `Unable to find an element with the text: the collector switch row is absent` |
 | 3 | Off's `disabled` removed: `disabled={held}` becomes `disabled={false}` | `S -t 'before the latch'` | `expected element to be disabled` (the Off radio) |
 | 4 | The note unlinked: `aria-describedby={held && offNote !== null ? offNoteId : undefined}` becomes `aria-describedby={undefined}` | `S -t 'before the latch'` | `expected null to be "The fleet box's legacy file still controls this lane. …"` |
@@ -15683,12 +15924,13 @@ The worker measures every red text. Where the measured text differs, it replaces
 | 11 | The lock dropped: `const locked = busy \|\| pending !== null;` becomes `const locked = pending !== null;` | `S -t 'second tap'` | `expected element to be disabled`, then `expected "spy" to be called 1 times, but got 2 times` |
 | 12 | The pause settles on the tap's resolve: `childReclaimPause('on').catch(` becomes `childReclaimPause('on').then(() => { clearTimer(); setPhase('idle'); }).catch(` | `S -t 'pausing… until a later frame'` | `Unable to find an accessible element with the role "button" and name "pausing…"` (after the disagreeing frame) |
 | 13 | The pause renders before a frame: delete `if (!coordFrameSeen \|\| coord === null \|\| marker === null) return null;` | `S -t 'nothing before a coord frame'` | `expected <button …>Pause all cleanup</button> to be null` |
-| 14 | The 501 toasted: replace `if (shown !== null) { setError(shown); return; }` with nothing | `S -t '501'` | `Unable to find an element with the text: the fleet host needs the newer ccd` |
+| 14 | The 501 toasted: in `onPause`'s catch, delete the four-line block from `if (shown !== null) {` to its closing `}` (its `setError(shown);` and `return;` included) | `S -t '501'` | `Unable to find an element with the text: the fleet host needs the newer ccd` |
 | 15 | The timeout dropped: delete the `timerRef.current = setTimeout(…, COORD_CONFIRM_MS);` statement | `S -t 'COORD_CONFIRM_MS'` | `Unable to find an accessible element with the role "button" and name "unconfirmed — check /runs"` |
 | 16 | A Resume control added: the paused line becomes `<button type="button" onClick={() => { void childReclaimPause('off'); }}>Resume cleanup</button>` | `S -t 'offers Pause only'` | `expected <button …>Resume cleanup</button> to be null`, and the source scan `expected '…' not to match /childReclaimPause\(\s*'off'/` |
 | 17 | The mount line dropped: in `SettingsScreen.tsx`, delete `      <CollectLaneSection />` | `T -t 'state'` | LOADING: `expected [ 'Updates', 'Notifications', 'Stall watch' ] to deeply equal [ …, 'Temp root collector' ]`; LANDED likewise |
 | 18 | A device word in the section: `unread: "The collector's state could not be read."` becomes `unread: "The collector's state could not be read on this phone."` | `T -t 'P6'` | `CollectLaneSection.tsx: expected '…' not to match /\b(phones?\|…)\b/i` |
 | 19 | The 200's notice not shown: delete `{view.notice !== null && <p …>{view.notice}</p>}` | `S -t 'Off posts exactly'` | `Unable to find an element with the text: The choice applies from the collector's next check; …` |
+| 20 | A mismatch's stored choice checks a radio again: `view.stored.read === 'row' && view.control.state === 'coherent' ? view.stored.choice : null` becomes `view.stored.read === 'row' ? view.stored.choice : null` | `S -t 'mismatch with Off stored'` | `expected element not to be checked` (Off); with that assertion skipped, `expected "spy" to be called 1 times, but got 0 times` |
 
 - [ ] **Step 7: Typecheck and the server-side marker pin**
 
@@ -15737,7 +15979,7 @@ MSG
 )"
 ```
 
-Name these departures, by slug, in the wave-done: `collect-section-returns-reactnode`, `collect-section-chrome-words-local` and `pause-all-cleanup-case-split`.
+Name these departures, by slug, in the wave-done: `collect-section-chrome-words-local` (only the unanswered and other-refusal lines are the section's own) and `pause-all-cleanup-case-split`.
 
 ---
 
@@ -15811,8 +16053,8 @@ grep -n 'child reclamation wave 10: the collector switch has one writer, one jou
 tail -n 1 server/test/single-definition.test.ts                                    # (d) `});`, the end of Task 10's describe
 awk '/^usage\(\) \{$/{u=NR} u && /^EOF$/ {print NR; exit}' ccd/ccrc                 # (e) record: the usage heredoc's EOF line (2263 at 837a099c0)
 for re in '^_upd_backup_pairs() {' '^_upd_restore_arm3() {' '^_upd_report() {' '^# ── _rollout_need'; do grep -n "$re" ccd/ccrc | cut -d: -f1; done   # (f) record four numbers (20170, 20444, 21473, 21498 at 837a099c0)
-sed -n '5217p;6531p;7129,7130p;9663p;10990p;11635p' ccd/ccrc | sha256sum > "$TMPDIR/t13-anchors"   # (g) the frozen anchors' bytes
-wc -l < ccd/ccrc > "$TMPDIR/t13-lines"                                             # (h) record
+sed -n '5217p;6531p;7129,7130p;9663p;10990p;11635p' ccd/ccrc | sha256sum > "${TMPDIR:-/tmp}/t13-anchors"   # (g) the frozen anchors' bytes
+wc -l < ccd/ccrc > "${TMPDIR:-/tmp}/t13-lines"                                             # (h) record
 ```
 
 - If (a) prints nothing, Task 6 did not land the constant. **STOP** and report `journal-basename-not-landed`.
@@ -16305,7 +16547,7 @@ Expected:
   - `every holder line …` is RED (`held.length` 0 < 3).
 - **`ccrc-update`:**
   - The downgrade case and the rollback case are RED on `LEAVE_JOURNAL_LINE`.
-  - The arm-3 case and the watchdog case are GREEN. They pin today's behaviour, so nothing touches the journal yet. Their red is measured in Step 7, rows 3 and 7 (departure `journal-pins-green-at-entry`).
+  - The arm-3 case and the watchdog case are GREEN. They pin today's behaviour, so nothing touches the journal yet. Their red is measured in Step 7: the arm-3 case's in row 3, the watchdog case's in row 10 (departure `journal-pins-green-at-entry`). Row 7 cannot red the watchdog case: its rollback runs through the describe's stub launcher, so only a journal act inside `cmd_watchdog` itself reaches it.
 - **`ccrc-uninstall`:** both cases GREEN for the same reason. Their red is measured in Step 7, row 2.
 
 A test that fails for any other reason (a `TypeError`, an import error, a fixture that never ran) is a fixture fault. Fix it before going on.
@@ -16587,8 +16829,8 @@ From the workspace root:
 ```bash
 awk '/^usage\(\) \{$/{u=NR} u && /^EOF$/ {print NR; exit}' ccd/ccrc                 # same number as Step 0 (e)
 for re in '^_upd_backup_pairs() {' '^_upd_restore_arm3() {' '^_upd_report() {' '^# ── _rollout_need'; do grep -n "$re" ccd/ccrc | cut -d: -f1; done   # the first three as in Step 0 (f); the fourth is Step 0's + 1
-sed -n '5217p;6531p;7129,7130p;9663p;10990p;11635p' ccd/ccrc | sha256sum | diff - "$TMPDIR/t13-anchors" && echo anchors-unmoved   # anchors-unmoved
-echo $(( $(wc -l < ccd/ccrc) - $(cat "$TMPDIR/t13-lines") ))                       # 1: the echo, and nothing else
+sed -n '5217p;6531p;7129,7130p;9663p;10990p;11635p' ccd/ccrc | sha256sum | diff - "${TMPDIR:-/tmp}/t13-anchors" && echo anchors-unmoved   # anchors-unmoved
+echo $(( $(wc -l < ccd/ccrc) - $(cat "${TMPDIR:-/tmp}/t13-lines") ))                       # 1: the echo, and nothing else
 git diff -U0 -- ccd/ccrc | grep '^@@'                                              # U1 n=n; U2 11→9; B 6→8; H2, H5, P, A3 n=n; E +1
 grep -n 'collect-lane-generation' ccd/ccrc | grep -E '\b(rm|cp|mv|ln|install|tee|truncate|dd|rsync)\b|>' || echo no-act-on-the-journal   # no-act-on-the-journal
 ```
@@ -16606,11 +16848,11 @@ From `server/`, in the foreground, with a timeout of at least 600000 ms:
 ./node_modules/.bin/vitest run test/ccrc-uninstall.test.ts -t "path-identity spec 2026-10-12"
 ```
 
-All GREEN. Record `git diff --stat > "$TMPDIR/t13-stat"` from the workspace root before Step 7.
+All GREEN. Record `git diff --stat > "${TMPDIR:-/tmp}/t13-stat"` from the workspace root before Step 7.
 
 - [ ] **Step 7: The mutation rows (measure red, then restore)**
 
-For each row: apply the mutation with the Edit tool, run the named command from `server/`, see the named red, then apply the inverse edit. After the last row, `git diff --stat | diff - "$TMPDIR/t13-stat"` prints nothing.
+For each row: apply the mutation with the Edit tool, run the named command from `server/`, see the named red, then apply the inverse edit. After the last row, `git diff --stat | diff - "${TMPDIR:-/tmp}/t13-stat"` prints nothing.
 
 | # | Mutation (exact) | Command | Expected red |
 |---|---|---|---|
@@ -16623,6 +16865,7 @@ For each row: apply the mutation with the Edit tool, run the named command from 
 | 7 | After line (E), add `      rm -f "$HOME/.ccrc/collect-lane-generation.log"` | `single-definition.test.ts -t "wave 10: only ccrc"`; `ccrc-update.test.ts -t "path-identity spec 2026-10-12"` | `every holder line …` fails: an act, outside usage and echo. The downgrade case and the rollback case fail in `expectJournalUntouched` (the journal is removed) |
 | 8 | Move line (E) below the `fi` that closes the snapshot arm, so it prints for every downgrade | `ccrc-update.test.ts -t "path-identity spec 2026-10-12"` | The downgrade case's no-coord.db CONTROL fails: `not.toMatch(LEAVE_JOURNAL_LINE)` |
 | 9 | In (U1), split the last line `            names who started it` into `            names who` and `            started it` (one line added above every frozen anchor) | `session-hook.test.ts -t "the compaction card"` | `THE CITATION DEBT this task creates is measured, per cited file`: the `ccd/ccrc` count moves. Step 5's `anchors-unmoved` also fails |
+| 10 | In `cmd_watchdog`, insert `  rm -f "$HOME/.ccrc/collect-lane-generation.log"` on its own line directly above `  env -u CCRC_UPDATE_LOCK_HELD "$HOME/.local/bin/ccrc" rollback --from watchdog \|\| rrc=$?` | `ccrc-update.test.ts -t "path-identity spec 2026-10-12"`; `single-definition.test.ts -t "wave 10: only ccrc"` | The watchdog case fails in `expectJournalUntouched` (`the watchdog removed the journal`). `every holder line …` fails: an act, outside usage and echo |
 
 If row 9 stays green, record it as departure `usage-shift-unpinned-by-citations` in the wave-done. Step 5's anchor hash is then the measurement, and the edit stays line-neutral anyway.
 
@@ -16721,7 +16964,7 @@ MSG
 - **Consumes:**
   - `COLLECT_LANE_LIVE_MARKER` (`server/src/collectLane.ts`, wave 9);
   - `COLLECT_LANE_JOURNAL_BASENAME` (`server/src/coord/collectLaneJournal.ts`, Task 6);
-  - the shipped PWA labels from Tasks 11 and 12 ("Pause all cleanup", "Confirm Live again", "Set" and "Not available on this server."), quoted only as Step 0 measures them;
+  - the shipped PWA labels from Tasks 11 and 12 ("Pause all cleanup", "Confirm Live again", "Set Live" and "Not available on this server."), quoted only as Step 0 measures them;
   - `COLLECT_LANE_APPLIES_TEXT` (Task 4), whose "applies from the collector's next check" the prose paraphrases;
   - the departure slugs this wave recorded for Tasks 0 to 13 (Step 8).
 - **Produces:** prose only, and `server/test/collect-switch-prose.test.ts`. No code name.
@@ -16733,12 +16976,12 @@ git log --oneline -15                                                           
 grep -n "export const COLLECT_LANE_JOURNAL_BASENAME = 'collect-lane-generation.log';" server/src/coord/collectLaneJournal.ts   # 1 hit (Task 6)
 grep -n "^export const COLLECT_LANE_LIVE_MARKER = 'collect-lane-live';" server/src/collectLane.ts                             # 1 hit
 grep -n "COLLECT_LANE_APPLIES_TEXT" server/src/collectLane.ts | head -2                                                     # read its words; the prose paraphrases them
-grep -rn "Pause all cleanup\|Confirm Live again\|Not available on this server\.\|'Set'" pwa/src/fleet/collectLaneWords.ts pwa/src/fleet/CollectLaneSection.tsx pwa/src/lib/notAvailable.ts   # the labels the README quotes
+grep -rn "Pause all cleanup\|Confirm Live again\|Not available on this server\.\|'Set Live'" pwa/src/fleet/collectLaneWords.ts pwa/src/fleet/CollectLaneSection.tsx pwa/src/lib/notAvailable.ts   # the labels the README quotes
 grep -n "Removing the file shadows it again\." README.md                                # 1 hit
 grep -n "yet seen, never unchanged\.$" README.md                                        # 1 hit: the checklist's last line
 grep -n "^\*\*Reclaim's tail, corrected in wave 7" README.md                            # 1 hit
 grep -n "^A server without the route shows the section as not available\. In remote mode the foot of the fleet screen always$" README.md   # 1 hit
-grep -n "composes it only once the operator has armed it (\`\$REG/collect-lane-live\`) |$" README.md   # 1 hit: the ws-collect row
+grep -n 'composes it only once the operator has armed it (`\$REG/collect-lane-live`) |$' README.md   # 1 hit: the ws-collect row
 grep -n "^\`coord.db\`\.$" README.md                                                    # 1 hit: the Deploy backup paragraph's last line
 grep -n "update intents, the stall-watch settings choice —$" CLAUDE.md                 # 1 hit
 grep -n "README.md\` (~" CLAUDE.md; wc -l < README.md                                   # the numeral and the length before this task
@@ -16750,7 +16993,7 @@ grep -n "^- \*\*R98 — corrections\.\*\*" docs/superpowers/programs/child-recla
 grep -n "probes' latest$" server/src/collectLane.ts                                     # 1 hit: collectBoxProbesAtArrival's docstring
 grep -n "an answer older than the probes' latest change is skipped, as$" server/src/watch.ts   # 1 hit
 grep -n "latest change\|before its id is looked up" server/test/collect-lane-leaving.test.ts   # 3 hits: :11, :155, :231 at 837a099c0
-grep -n "armed only by \`\$REG/collect-lane-live\`;$" server/src/ccdargv.ts             # 1 hit
+grep -n 'armed only by `\$REG/collect-lane-live`;$' server/src/ccdargv.ts             # 1 hit
 ```
 
 Check that `watch.ts`'s hit is outside #351's hunks, as recorded in Task 0 (f3). If #351 has merged into this branch, re-run the grep and edit the line where it now stands.
@@ -16840,15 +17083,15 @@ describe("the switch's prose is true (path-identity spec §5)", () => {
     const s = switchBlock();
     expect(s).toContain(`but no backup copies \`${COLLECT_LANE_JOURNAL_BASENAME}\`, and no restore, rollback or watchdog `
       + 'moves it: leave it in place when you put a `coord.db` snapshot back.');
-    expect(s).toContain('A database restored alone then disagrees with the journal and is safety-stopped, so an older '
-      + 'snapshot cannot arm the collector again.');
+    expect(s).toContain("A database restored alone from before the switch's last change then disagrees with the journal "
+      + 'and is safety-stopped, so an older snapshot cannot arm the collector again.');
     expect(s).toContain('A restore that rolls both files back together, a whole home or a whole file system, is outside '
       + 'this proof: after one, raise the cleanup pause and make a fresh confirmed change in Settings before allowing Live.');
     const deploy = flat(between('README, the Deploy backup paragraph', README,
       'Never restore one half of `ccd` alone', '## Live end-to-end tests'));
     expect(deploy).toContain(`\`coord.db\`. Leave ${JOURNAL} in place when you put that snapshot back: no backup copies `
-      + 'it, and a `coord.db` restored alone then disagrees with it, so the temp-root collector stays safety-stopped until '
-      + 'a fresh confirmed change in Settings.');
+      + "it, and a `coord.db` restored alone from before the switch's last change then disagrees with it, so the temp-root "
+      + 'collector stays safety-stopped until a fresh change in Settings.');
   });
 
   it('README no longer says removing the file always shadows it', () => {
@@ -16863,7 +17106,8 @@ describe("the switch's prose is true (path-identity spec §5)", () => {
       '- `~/.ccrc/coord.db`:', '- **Zero new ccd verbs'));
     expect(bullet).toContain('update intents, the stall-watch settings choice, the collector switch — is gone without the snapshot');
     expect(bullet).toContain(`The switch's \`${COLLECT_LANE_JOURNAL_BASENAME}\` is never copied into a snapshot or restored `
-      + 'with one: leave it in place, so a database restored alone is safety-stopped and never re-arms the collector.');
+      + "with one: leave it in place, so a database restored alone never re-arms the collector (one from before the switch's "
+      + 'last change is safety-stopped).');
   });
 
   it('the path-identity spec carries §5 as built', () => {
@@ -16982,12 +17226,14 @@ The file must collect, and both imports must resolve. A `Failed to load` error m
 
     A raised cleanup pause, a registry that cannot be listed, a connection that changed under a check, and a missing
     `collect-v1` or `reclaim-pause-v1` beat both arms. Since wave 10 the act job's last check reads the whole switch, not
-    the file alone: a feed row is written only when the lane flips between live and not live, so a move from the file to
+    the file alone: a transition row is written only when the lane flips between live and not live (the file's retirement
+    writes its own row), so a move from the file to
     Settings while both arm writes no row and keeps every pair. The choice is one row in `coord.db`, and every accepted
     change, the file's retirement included, first appends one generation to `~/.ccrc/collect-lane-generation.log`, a file
     the server owns and nothing else writes. The row and the journal must agree exactly. The untouched row with no journal
     is the one starting state; any other disagreement, or a journal that cannot be read, is safety-stopped and composes
-    nothing. A fresh confirmed change in Settings repairs a journal that is ahead of or behind the row; a journal that is
+    nothing. A fresh change in Settings (a confirmed Live, or Off once the file's retirement is recorded) repairs a
+    journal that is ahead of or behind the row; a journal that is
     missing after use, malformed or unreadable cannot be repaired from Settings, and the server never rebuilds it from
     the row.
 
@@ -17008,8 +17254,8 @@ The file must collect, and both imports must resolve. A `Failed to load` error m
 
     **What a restore can and cannot undo.** Every `ccrc update` and `ccrc backup` snapshots `coord.db`, but no backup
     copies `collect-lane-generation.log`, and no restore, rollback or watchdog moves it: leave it in place when you put a
-    `coord.db` snapshot back. A database restored alone then disagrees with the journal and is safety-stopped, so an
-    older snapshot cannot arm the collector again. A restore that rolls both files back together, a whole home or a
+    `coord.db` snapshot back. A database restored alone from before the switch's last change then disagrees with the
+    journal and is safety-stopped, so an older snapshot cannot arm the collector again. A restore that rolls both files back together, a whole home or a
     whole file system, is outside this proof: after one, raise the cleanup pause and make a fresh confirmed change in
     Settings before allowing Live.
 
@@ -17027,13 +17273,13 @@ The file must collect, and both imports must resolve. A `Failed to load` error m
     the cleanup pause, safety-stopped, not running, or unknown fleet), what armed it (Settings, the fleet box's legacy
     file, both during the handoff, or neither), whether that file's retirement is recorded, and the would-collect and held
     counts. Live opens a confirm sheet from the server's 409, naming the fleet node, how fresh its measurement is and both
-    capabilities, and **Set** re-sends the write with the server's key; a stored Live for another node, or a database and
+    capabilities, and **Set Live** re-sends the write with the server's key; a stored Live for another node, or a database and
     journal that disagree, offers **Confirm Live again**. Off stays disabled until the file's retirement is recorded, and
     the section offers **Pause all cleanup**, which stops child reclamation, archived-workspace expiry, the dead-coordinator
     lane and this collector; Resume stays on `/runs`. A server without the route shows "Not available on this server."
     In remote mode the foot of the fleet screen always
     ```
-    If Step 0's grep of the PWA files spells a label differently ("Set", "Confirm Live again", "Pause all cleanup"), use the shipped label here and in the test. Write no device word: `stall-settings-readme.test.ts` scans this whole paragraph.
+    If Step 0's grep of the PWA files spells a label differently ("Set Live", "Confirm Live again", "Pause all cleanup"), use the shipped label here and in the test. Write no device word: `stall-settings-readme.test.ts` scans this whole paragraph.
   - (d) The verb table's `ws-collect` row. Before:
     ```markdown
     | `ws-collect --expect <token> --session <id>` | the server's removal of an orphaned, witnessed child TEMP ROOT, by quarantine rename — never run by hand or by a session; its audit is `ws-audit --session <id> --collect`, and the server's collector lane composes it only once the operator has armed it (`$REG/collect-lane-live`) |
@@ -17051,8 +17297,8 @@ The file must collect, and both imports must resolve. A `Failed to load` error m
     ```markdown
     stopped, and only to recover data: migrations are forward-only, and an older server reads a newer
     `coord.db`. Leave `~/.ccrc/collect-lane-generation.log` in place when you put that snapshot back: no backup copies
-    it, and a `coord.db` restored alone then disagrees with it, so the temp-root collector stays safety-stopped until a
-    fresh confirmed change in Settings.
+    it, and a `coord.db` restored alone from before the switch's last change then disagrees with it, so the temp-root
+    collector stays safety-stopped until a fresh change in Settings.
     ```
   - (f) Check that nothing pinned moved:
     ```bash
@@ -17080,8 +17326,8 @@ The file must collect, and both imports must resolve. A `Failed to load` error m
       what it adds on top — mail, claims, asks, central pool edges, update intents, the stall-watch settings choice,
       the collector switch — is gone without the snapshot every `ccrc update` (and `ccrc backup`) takes into
       `~/ccrc-backups/<ts>/` (`pool-edges.log` is never replayed). The switch's `collect-lane-generation.log` is never
-      copied into a snapshot or restored with one: leave it in place, so a database restored alone is safety-stopped
-      and never re-arms the collector.
+      copied into a snapshot or restored with one: leave it in place, so a database restored alone never re-arms the
+      collector (one from before the switch's last change is safety-stopped).
     ```
   - (b) `server/test/stall-settings-prose.test.ts`, the coord.db case. Before:
     ```ts
@@ -17179,7 +17425,9 @@ the code keeps each:
 **The stated residual.** An Off accepted after an act's argv was handed to ccd cannot stop that act. This extends
 wave 9's `marker-removal-after-the-last-listing-still-composes` from the file to the switch.
 
-**Carried, not fixed.** The manual-downgrade hint's copy of `coord.db` over a live write-ahead log is left as it was;
+**Carried, not fixed.** The coordinator skill's `references/resume.md` still names the newest `coord.db` snapshot as
+the restore path with no word on the journal: skill text is outside this wave, and a restore that follows it fails
+safe, because no backup holds the journal. The manual-downgrade hint's copy of `coord.db` over a live write-ahead log is left as it was;
 this wave adds only the line that leaves the journal in place.
 
 **Departures found while building.**
@@ -17280,7 +17528,9 @@ consults no box token, and no skill names the route or the file.
 `marker-removal-after-the-last-listing-still-composes` (§16 as built) from the file to the switch, and a 200 says the
 choice applies from the collector's next check.
 
-**Carried, not fixed.** The manual-downgrade hint's copy of `coord.db` over a live write-ahead log; this wave adds only
+**Carried, not fixed.** The coordinator skill's `references/resume.md`, which names the newest `coord.db` snapshot as
+the restore path with no word on the journal (skill text is outside this wave; a restore that follows it fails safe,
+since no backup holds the journal). The manual-downgrade hint's copy of `coord.db` over a live write-ahead log; this wave adds only
 the line that leaves the journal in place.
 
 **Departures found while building.**
@@ -17718,7 +17968,7 @@ git merge-tree --write-tree --name-only --no-messages HEAD origin/HEAD; echo "rc
 
 2. **rc=1** (a conflict, normally in `schema.ts`, `coord-db.test.ts` or `asks-store.test.ts`): the clause licenses one absorption. Run `git merge origin/HEAD`, never a rebase, then resolve as follows. M is the count `origin/main` printed; the example uses M = 19, from one migration landing first.
    - **`server/src/coord/schema.ts`:** keep every `origin/main` entry exactly as it is. Place this wave's `collect_lane_settings` entry after the last of them. Renumber its header line, `  // ── 19: user_version 18 -> 19 ─…`, to `  // ── 20: user_version 19 -> 20 ─…`, keeping the dash rule's width. In the entry's own comment, change "SLOT 19 AS WRITTEN" to "SLOT 20 AS WRITTEN (moved up: second lander)".
-   - **`server/test/coord-db.test.ts`:** set the pins in the case titled `COORD_SCHEMA_VERSION derives to …` to M + 1 (here `20`): the title, `expect(COORD_SCHEMA_VERSION).toBe(…)` and `expect(MIGRATIONS.length).toBe(…)`. Its comment lists `MIGRATIONS[18]` as main's entry and `MIGRATIONS[19]` as `collect_lane_settings`, path-identity spec §5.2. Apply the same pin and comment change to the second `expect(COORD_SCHEMA_VERSION).toBe(…)` pin, in the case whose comment begins `// 18 since MIGRATIONS[14]`.
+   - **`server/test/coord-db.test.ts`:** set the pins in the case titled `COORD_SCHEMA_VERSION derives to …` to M + 1 (here `20`): the title, `expect(COORD_SCHEMA_VERSION).toBe(…)` and `expect(MIGRATIONS.length).toBe(…)`. Its comment lists `MIGRATIONS[18]` as main's entry and `MIGRATIONS[19]` as `collect_lane_settings`, path-identity spec §5.2. Apply the same pin and comment change to the second `expect(COORD_SCHEMA_VERSION).toBe(…)` pin, in the case whose comment begins `// 19 since MIGRATIONS[14]` (as Task 6 leaves it).
    - **`server/test/asks-store.test.ts`:** set `expect(COORD_SCHEMA_VERSION).toBe(…)` to M + 1, with the same comment list.
    - Resolve every other conflict as the source it is. Then run:
 
@@ -17749,8 +17999,8 @@ The new files are exactly the File Structure's:
 git diff --name-only --diff-filter=A origin/main...HEAD | LC_ALL=C sort > "${TMPDIR:-/tmp}/w10-added.txt"
 printf '%s\n' \
   pwa/src/fleet/CollectLaneSection.tsx pwa/src/fleet/collectLaneWords.ts pwa/src/fleet/useCollectLaneView.ts \
-  pwa/src/lib/notAvailable.ts pwa/test/collect-lane-section.test.tsx pwa/test/collect-lane-words.test.ts \
-  pwa/test/not-available.test.ts pwa/test/use-collect-lane-view.test.tsx \
+  pwa/src/lib/notAvailable.ts pwa/test/collect-lane-section.test.tsx pwa/test/collect-lane-words.test.ts pwa/test/collect-lane-words.test-d.ts \
+  pwa/test/collect-lane-words.test-d.ts pwa/test/not-available.test.ts pwa/test/use-collect-lane-view.test.tsx \
   server/src/coord/collectLaneJournal.ts server/src/fleetidentity.ts \
   server/test/collect-lane-composition.test.ts server/test/collect-lane-control.test.ts server/test/collect-lane-counts.test.ts \
   server/test/collect-lane-effective.test.ts server/test/collect-lane-journal.test.ts server/test/collect-lane-l0.test.ts \
@@ -17800,7 +18050,7 @@ git diff -U0 origin/main...HEAD -- server/src/auth/gate.ts | grep -c '^@@ -8 +8 
 
 Expected: `1`, then `1`.
 
-`ccd/ccrc` changes only usage text, comment lines and echo lines inside `_upd_report`. `cmd_rollout` is untouched, and only `_upd_report` changes the line count:
+`ccd/ccrc` changes only usage text, comment lines and echo lines inside `_upd_report`. `cmd_rollout` is untouched, the usage function keeps its total line count (its paragraphs may rewrap), and only `_upd_report` changes the file's line count:
 
 ```bash
 node -e '
@@ -17820,13 +18070,14 @@ const side = (ref) => {
 const inR = (n, r) => n >= r[0] && n <= r[1];
 const O = side("origin/main"), N = side("HEAD");
 const bad = [];
+if (O.usage[1] - O.usage[0] !== N.usage[1] - N.usage[0]) bad.push("the usage function changed its line count");
 let o = 0, n = 0, net = 0;
 for (const line of git("diff", "-U0", "origin/main...HEAD", "--", "ccd/ccrc").split("\n")) {
   const m = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
   if (m) {
     o = Number(m[1]); n = Number(m[3]);
     const oc = m[2] === undefined ? 1 : Number(m[2]), nc = m[4] === undefined ? 1 : Number(m[4]);
-    if (oc !== nc) { net += nc - oc; if (!inR(n, N.report)) bad.push("line count moves outside _upd_report: " + line); }
+    if (oc !== nc) { net += nc - oc; if (!inR(n, N.report) && !inR(n, N.usage)) bad.push("line count moves outside _upd_report and the usage text: " + line); }
     continue;
   }
   if (line.startsWith("---") || line.startsWith("+++")) continue;
