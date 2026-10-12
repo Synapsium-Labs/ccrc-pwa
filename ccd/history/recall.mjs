@@ -741,7 +741,7 @@ function childFailed(detail) {
 export function runRegex(rc, a, deps = {}) {
   const guard = guardRegex(a.regex);
   if (!guard.ok) {
-    return refusal('regex-refused', `--regex refused (${guard.why}): keep the pattern under ${REGEX_MAX_LEN} characters, valid, and with no repeated group over a variable quantifier or an alternation`);
+    return refusal('regex-refused', `--regex refused (${guard.why}): keep the pattern to at most ${REGEX_MAX_LEN} characters, valid, and with no repeated group over a variable quantifier or an alternation`);
   }
   const key = grepKey(rc, a);
   const pos = cursorPos(a.cursor, key);
@@ -766,7 +766,8 @@ export function runRegex(rc, a, deps = {}) {
   };
   const budgetMs = deps.budgetMs ?? REGEX_BUDGET_MS;
   const spawn = deps.spawn ?? spawnSync;
-  // No `env` option: the child inherits this process's environment, and no env is ever passed whole.
+  // No `env` option: the child inherits this process's environment, as every child of the CLI does; it reads no
+  //  variable, and the job's values (pairs, belt units) travel on stdin only (D-4702).
   const r = spawn(process.execPath, ['--no-warnings', WORKER_PATH], {
     input: JSON.stringify(job), encoding: 'utf8', timeout: budgetMs, killSignal: 'SIGKILL', maxBuffer: WORKER_MAX_BUFFER,
   });
@@ -776,7 +777,12 @@ export function runRegex(rc, a, deps = {}) {
   if (r.error || r.status !== 0) {
     return childFailed(r.error ? r.error.message : `exit ${r.status}${r.signal ? ` (${r.signal})` : ''}: ${String(r.stderr ?? '').trim().slice(0, 300)}`);
   }
-  const lines = String(r.stdout).split('\n').filter((l) => l !== '').map((l) => JSON.parse(l));
+  let lines;
+  try {
+    lines = String(r.stdout).split('\n').filter((l) => l !== '').map((l) => JSON.parse(l));
+  } catch {
+    return childFailed('its output is not JSON lines');   // fixed words: V8's message would quote the line
+  }
   const done = lines.at(-1);
   if (done === undefined || done.done !== true) return childFailed('it ended without its done line');
   const matched = new Map(lines.slice(0, -1).map((m) => [m.blob_id, m.match]));

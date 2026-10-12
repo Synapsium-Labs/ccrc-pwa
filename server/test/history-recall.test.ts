@@ -2069,3 +2069,49 @@ describe("grep's reach is the index window for both forms, and its exit 3 says s
     expect(hints(plain)).toEqual([`hint: ${lib.SEARCH_REACH}`]);
   }, 180_000);
 });
+
+describe('task 14 fix round 1: grep --regex pins the job pairs leg and guards the child output parse (W1-B2 task 14)', () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  const T = 0x43;
+  const ALPHA = 'abcdefghjkmnpqrstuvwxyz23456789';
+  /** A 40-char value: `zqpo` then 36 chars of the unambiguous alphabet by an index formula, so it is one [A-Za-z0-9_-] run. */
+  const PV = `zqpo${Array.from({ length: 36 }, (_, i) => ALPHA[(i * 7 + 3) % ALPHA.length]).join('')}`;
+  let box: rH.HistoryBox;
+  beforeAll(() => {
+    if (process.platform === 'darwin') return;
+    box = rH.makeHistoryBox('ccrc-hist-regex-pairs-');
+    GRX.seed(box, T, GRX.idA, 'demo', [GRX.user(T, 1, `the pair-only value ${PV} sits here`)]);
+  }, 120_000);
+
+  it('a pair-only secret is no regex hit: the job carries the pairs, so the child masks a value no belt unit knows', async () => {
+    const pattern = 'zqpo[a-z2-9]{36}';
+    expect(PV).toHaveLength(40);
+    expect(new RegExp(`^${pattern}$`).test(PV), 'CONTROL: the pattern matches the value').toBe(true);
+    expect(libRead.regexPrefilter(pattern), 'CONTROL: no prefilter, so the child scans every candidate').toBeNull();
+    const recall = await GRX.recall();
+    const rc = await GRX.rc(box, GRX.idA);
+    try {
+      rc.pairIdx = libRead.makePairIndex([]);
+      const open = recall.runGrep(rc, await GRX.grepArgs(['--regex', pattern]), { budgetMs: 60_000 });
+      expect([open.exit, open.items.length], 'CONTROL: with no pairs the text is there and the pattern matches it').toEqual([0, 1]);
+      rc.pairIdx = libRead.makePairIndex(libRead.secretPairs([PV]).pairs);
+      const belt = (rc.pairIdx as { belt?: { texts: unknown[] } | null }).belt;
+      expect(belt == null || belt.texts.length === 0, 'CONTROL: the index has no belt, so only the pairs leg can mask').toBe(true);
+      const r = recall.runGrep(rc, await GRX.grepArgs(['--regex', pattern]), { budgetMs: 60_000 });
+      expect([r.exit, r.hint]).toEqual([3, libRead.SEARCH_REACH]);
+    } finally { rc.db.close(); }
+  }, 180_000);
+
+  it('a malformed child output line is exit 1 with its fixed words, never a throw', async () => {
+    const recall = await GRX.recall();
+    const rc = await GRX.rc(box, GRX.idA);
+    try {
+      const spawn = (() => ({ status: 0, signal: null, error: undefined, stdout: 'not json\n', stderr: '' })) as unknown as GrepDeps['spawn'];
+      let res: GrepVerbResult | undefined;
+      const a = await GRX.grepArgs(['--regex', 'zq[0-9]+x']);
+      expect(() => { res = recall.runGrep(rc, a, { spawn }); }).not.toThrow();
+      expect(res?.exit).toBe(1);
+      expect(res?.hint).toContain('not JSON lines');
+    } finally { rc.db.close(); }
+  }, 60_000);
+});
