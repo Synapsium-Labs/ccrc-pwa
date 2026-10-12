@@ -3768,7 +3768,7 @@ waitby=""
 # (a negative prints with its `-` and fails it; mutation N2 pins it). The `type == "number"` here is POSITIONAL, not a
 # guard: `floor` on a string, array, object, null or boolean aborts the jq program, which would blank every line printed after
 # `updatedAt` (today only `event`, unused while `fr_upd` is empty); it keeps a later field safe if one is ever added.
-# A jq that fails on its first output (a non-object root, an unparseable file) prints nothing: every field comes up
+# A jq that fails on its first output (a root that is neither an object nor null, or an unparseable file) prints nothing: every field comes up
 # empty, which both arms read as "nothing to carry". Lines printed before a later error still come out.
 fr_state="" fr_by="" fr_ask="" fr_int="" fr_upd="" fr_ev=""
 _hook_fresh_read() {
@@ -3787,7 +3787,8 @@ _hook_fresh_read() {
 # row's `askAt` and the stall watch's hold 2a read) and gains the additive `aliveAt` = now (the liveness the aged door,
 # `hookstate.ts`, reads, so a long wait with subagents working stays fresh). Every other write has no `aliveAt`, and a
 # file whose `updatedAt` is negative, is not a number (null, a boolean, a string), or is a value jq prints in exponent
-# form (1e17 and above) fails the `^[0-9]+$` test below and keeps nothing: it is written as before, with a fresh stamp.
+# form (such as 1e16 or 1e300: which values print that way follows jq's number formatting, not a size cut) fails the
+# `^[0-9]+$` test below and keeps nothing: it is written as before, with a fresh stamp.
 # A fractional value keeps its floor: the hook writes integer milliseconds only, so one is a foreign or corrupt file,
 # and the floor moves the stamp by under 1 ms.
 w_ev="" w_upd="" w_alive=""
