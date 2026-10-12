@@ -45,7 +45,7 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   // predates the warn row and must keep rendering exactly as it did.
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
             lastRejectCode: null, briefQueued: true, clearError: null,
-            coordKickoffPendingSince: null }, ...over,
+            coordKickoffPendingSince: null }, childReclaim: null, ...over,
 });
 
 /** `[what, depth]` per row, in display order — a session row by its id, a

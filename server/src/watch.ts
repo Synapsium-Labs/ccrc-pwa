@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
@@ -10,12 +11,12 @@ import { hasMenu, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
-import { CCD_ARGV, RECLAIM_CAP, RECLAIM_PAUSE_CAP, capSupported, verbSupported, sweepDec } from './ccdargv.js';
+import { CCD_ARGV, EXPIRE_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, capSupported, verbSupported, sweepDec } from './ccdargv.js';
 import {
   isFullLine, parsePrLines, phaseFor, queueFor, repoCellFor, type CcdPrFailure, type PrQueueRead,
 } from './prstate.js';
 import { readLiveState, readLiveStateMeasured } from './livestate.js';
-import { mailTurnIdle, mailTurnModeOf, mailTurnReadsMark } from './turnidle.js';
+import { mailTurnIdle, mailTurnModeOf, mailTurnReadsMark, type MailTurnMode } from './turnidle.js';
 import { readTurnMarkMeasured } from './turnmark.js';
 import { readHookState, readHookStateRawMeasured, type HookState, type HookStateRawRead } from './hookstate.js';
 import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
@@ -29,14 +30,14 @@ import { askActions, askKey } from './askkey.js';
 import { ASK_ANSWERING_MAX_MS, ASK_GRACE_MS } from './askwindow.js';
 import type { SessionRecord } from './registry.js';
 import type {
-  ChildReclaimAttention, CoordStatus, Dialog, FleetSession, HookAsk, HookAskQuestion, LifecycleHealth,
-  MailGate, MirroredLifecycleEvent, NotifyEvent, ProjectPoolsWire, ProjectRepoWire, PrState, RunSummary,
+  ChildMark, ChildReclaimAttention, ChildReclaimGeneration, ChildReclaimKeptWord, CoordStatus, DeadCoordinatorAttention, Dialog, ExpiryAttention, FleetSession, HookAsk, HookAskQuestion,
+  LifecycleHealth, MailGate, MirroredLifecycleEvent, NotifyEvent, ProjectPoolsWire, ProjectRepoWire, PrState, RunSummary,
   SessionStatus, SessionUsage, TaskProgress,
 } from '../../shared/api.js';
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
-import { FLEET_SCOPE, LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
+import { FLEET_SCOPE, LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
@@ -53,7 +54,7 @@ import { ccdIdForWorktree, divergences, unclaimedWorktrees, type DivergenceInput
 import { claimExpiry, type LivenessProbe } from './coord/claims.js';
 import { measureClaimant } from './coord/reclaim.js';
 import {
-  BACKLOG_HORIZON_MS, STALL_CHECK_PREFIX, STALL_REPLY_PREFIX, parseStallDetail, stallArmingOf,
+  BACKLOG_HORIZON_MS, STALL_CHECK_PREFIX, STALL_QUIET_MS, STALL_REPLY_PREFIX, parseStallDetail, stallArmingOf,
   stallCheckMail, stallCitedCheck, stallCoordinatorSubjects, stallDeadShaped, stallDetail, stallFacts,
   stallFailedVerdict, stallLastCheck, stallMailClass, stallMailStuckVerdicts, stallMarkUnreadable,
   stallNotifyDelivery, stallOrphanDCandidate, stallOrphanDVerdict, stallOrphanEVerdict, stallPushRoute, stallPushText, stallReportKind, stallReportMail, stallReportTitle,
@@ -63,6 +64,10 @@ import {
   type StallInput, type StallNotice, type StallNotify, type StallRunRow, type StallSessionInput, type StallSubject,
   type StallVerdict, type StallWorker, type TurnMarkRead,
 } from './coord/stall.js';
+import {
+  parseStallSettings, resolveStallWatch, stallBoxArmingOf, stallBusyClock,
+  type StallBoxArming, type StallResolved, type StallSettingsParsed, type StallSettingsRead,
+} from './coord/stallsettings.js';
 // `floorFromScan` owns the seed arithmetic (max + LEDGER_SEED_GAP) and the
 // evidence string alike — the sweep below only feeds it files and applies
 // its answer, so LEDGER_SEED_GAP itself is not imported here.
@@ -81,19 +86,45 @@ import { renderMailNudge } from './coord/envelope.js';
 import { configDirFor } from './config.js';
 import { refusalSentence } from './wsaudit.js';
 import {
-  childReclaimGeneration, childReclaimLatest, childReclaimTokenKind, reclaimChild, releaseRetiredChildHold,
-  type ChildReclaimOutcome, type ChildReclaimReleaseOutcome, type ChildReclaimReleaseRequest,
-  type ChildReclaimRequest,
+  childMarkLeftListing, childReclaimBornAt, childReclaimGeneration, childReclaimGenerationRead, childReclaimLatest, childReclaimRowUuid,
+  childReclaimSweepOutcomeOf, childReclaimTokenKind, isChildReclaimStuckToken, reclaimChild,
+  recordChildReclaimKeptFeed, recordChildReclaimLeafKeptFeed, releaseRetiredChildHold, type ChildReclaimOutcome, type ChildReclaimReleaseOutcome,
+  type ChildReclaimReleaseRequest, type ChildReclaimRequest,
 } from './coord/childReclaim.js';
 import {
-  childReclaimAttention, childReclaimDeferExpired, childReclaimDue, childReclaimFirstSighting,
-  childReclaimHoldRead, childReclaimJournalRow, childReclaimNextEntry, childReclaimSweepVerdict,
-  childReclaimTerminalRefusal, type ChildReclaimHoldCandidate, type ChildReclaimHoldCandidatesRead,
-  type ChildReclaimHoldOpenRead, type ChildReclaimHoldRead, type ChildReclaimJournalRow,
-  type ChildReclaimMintingRunRead, type ChildReclaimReviewedRunRead, type ChildReclaimSiblingsRead,
-  type ChildReclaimSweepEntry, type ChildReclaimSweepSkip,
+  childReclaimAskOrder, childReclaimAttention, childReclaimAttentionWithKept, childReclaimDeferExpired, childReclaimDue,
+  childReclaimFeedQuiet, childReclaimFirstSighting, childReclaimHoldRead, childReclaimJournalRow, childReclaimKeptItems,
+  childReclaimHoldRetiredStep, childReclaimNextEntry, childReclaimSameGeneration, isChildReclaimGenerationKey,
+  childReclaimSweepVerdict, childReclaimTerminalRefusal, type ChildReclaimAsk, type ChildReclaimCoordinatorClaim,
+  childReclaimKeptVerdicts, type ChildReclaimHoldCandidate,
+  type ChildReclaimHoldCandidatesRead, type ChildReclaimHoldOpenRead, type ChildReclaimHoldRead,
+  type ChildReclaimGenerationIdentity, type ChildReclaimJournalAttention, type ChildReclaimJournalRow,
+  type ChildReclaimKeptAttention,
+  type ChildReclaimLaneNow, type ChildReclaimMintingRunRead,
+  type ChildReclaimReviewedRunRead, type ChildReclaimSiblingsRead, type ChildReclaimSweepEntry,
+  type ChildReclaimSweepOutcome, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
+  childReclaimAttentionWithLeaves, childReclaimLeafKept, childReclaimLeafKeptSince, type ChildReclaimLeafKept,
+  CHILD_RECLAIM_SWEEP_REJECTED, childReclaimTierSeed,
 } from './childReclaimSweep.js';
 import { CHILD_BIRTH_SKEW_MS } from './coord/childSpent.js';
+import {
+  EXPIRE_AUDITS_PER_PASS, archivedExpiryDue, archivedExpiryEntryFor, archivedExpiryLearned, archivedExpiryNextEntry,
+  archivedExpiryOutcomeKey, archivedExpirySighted, archivedExpiryVerdict, expiryAttention,
+  type ArchivedExpiryEntry, type ExpiryStoreRead,
+} from './archivedExpiry.js';
+import { expireArchived, expiryReviewing, learnExpiry, recordExpireFeed } from './coord/expireArchived.js';
+import {
+  deadAnchorNext, deadCoordinatorAttention, deadCoordinatorBreaker,
+  deadCoordinatorBreakerKey, deadCoordinatorCrash, deadCoordinatorDue, deadCoordinatorEntry, deadCoordinatorJournal,
+  deadCoordinatorNextEntry, deadCoordinatorOutcomeKey, deadCoordinatorSighted, deadCoordinatorSince, deadCoordinatorThrew,
+  type ClaimantDeadCause, type DeadAnchor, type DeadCoordinatorActOutcome, type DeadCoordinatorBreaker,
+  type DeadCoordinatorBreakerMember, type DeadCoordinatorEntry, type DeadCoordinatorJournal,
+} from './deadCoordinator.js';
+import {
+  DeadCoordinatorActThrew, deadCoordinatorLaneArmed, endDeadCoordinator, readDeadCoordinatorJournalTrust, recordDeadCoordinatorBreaker,
+  recordDeadCoordinatorFeed, recordDeadCoordinatorThrew,
+} from './coord/endDeadCoordinator.js';
+import type { CoordRoutesHandle } from './coord/routes.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
@@ -103,6 +134,24 @@ import type { MoveFeedRecord } from './update/dispatch.js';
 import { releasePushCopy, releaseToNotify, type ReleaseNotification } from './update/notify.js';
 import { remoteSides, statedOf, summaryFromSides, versionSides } from '../../shared/update-summary.js';
 import { CATALOGUE_POLL_INTERVAL_MS } from './update/catalogue.js';
+// THE TEMP-ROOT COLLECTOR'S LANE (child reclamation wave 9, spec §5.10). A block of its own, so no import line above
+// changes: `ccdargv.js` and `childReclaimSweep.js` are imported a second time here, by name.
+import { COLLECT_CAP } from './ccdargv.js';
+import type { ChildReclaimCollectInput } from './childReclaimSweep.js';
+import {
+  COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, collectAfterAct, collectAfterAudit, collectAfterFoldFailed, collectAfterHold,
+  collectAfterPresence, collectAfterWouldCollect, collectAttentionItems, collectAttentionViews, collectBoxAfterPopulation,
+  collectBoxProbesAtArrival, collectCandidateOf, collectClearPair, collectFeedAnswerBody, collectFeedCollectedBody,
+  collectFeedCueOfAct, collectFeedCueOfAudit, collectFeedReadBody, collectFeedStep, collectFeedSwitchBody,
+  collectFeedWouldCollectBody,
+  collectFirstSighting, collectForgets, collectForgottenActRow, collectFresh, collectJobEffects, collectOffers,
+  collectPassClass, collectPopulation, collectWouldCollectKey, type CollectAudit, type CollectEntry, type CollectFeedCue,
+  type CollectPassClass, type CollectPopulation, type CollectResult, type CollectStep, type CollectUnsettledKind,
+} from './collectLane.js';
+import {
+  collectSwitches, collectTempRoot, learnCollect, readCollectPopulation,
+  type CollectClock, type CollectGenerations, type CollectJobOutcome, type CollectLanePort,
+} from './coord/collectTempRoot.js';
 
 const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see detectDialogs's own comment
 
@@ -146,6 +195,12 @@ const DIVERGENCE_SWEEP_MS = 60_000;
  *  constant. */
 export const CHILD_RECLAIM_SWEEP_MS = 60_000;
 
+/** The temp-root collector's observation interval (spec §5.10): the lane spends a token only when its executor's own
+ *  audit ARRIVED at least this long after an earlier audit of the id answered that same token, on this process's
+ *  monotonic clock. The child lane's cadence, for that lane's reason, and DERIVED from it, never a second literal; L1
+ *  takes it as an argument (it imports no L4 constant). EXPORTED for its suite. */
+export const COLLECT_OBSERVE_INTERVAL_MS = CHILD_RECLAIM_SWEEP_MS;
+
 /** At most this many lane-asked reclaims outstanding at once. Close-path
  *  reclaims are not counted, and neither is a hold-release job: the bound is
  *  the LANE's own concurrency, not the fleet's — one destructive verb from
@@ -161,8 +216,40 @@ export const CHILD_RECLAIM_MAX_IN_FLIGHT = 1;
  *  budget's grace before the lane treats it as stuck. It STAYS in flight —
  *  nothing here cancels or forgets it — and is
  *  logged once, not once a pass, so a fleet host that never answers does not
- *  fill the log forever. */
+ *  fill the log forever. The temp-root collector (spec §5.10) spends the same constant three times: its act is not
+ *  offered until this long after the lane's start, a settled act job that may have acted keeps the act slot this long,
+ *  and an act job still unsettled this long after it took the slot is listed; `collect-lane-pass.test.ts` pins it at
+ *  or above twice `ws-collect`'s remote runner row. */
 export const CHILD_RECLAIM_STALL_MS = 480_000;
+
+/** How long a collector AUDIT (`ws-audit --collect`, a learning audit or the executor's own) may stay unsettled before
+ *  the lane lists it (spec §5.10): twice `ws-audit`'s remote runner row, 90 s (`remote/runner.ts`, whose table is not
+ *  exported, so the suite reads the row and pins this against it). Local mode's runner has no timeout, so a call can
+ *  hang for ever; the id is never asked again until it settles. An act JOB's bound, whatever it has out (its act, its
+ *  own audit, or nothing yet), is `CHILD_RECLAIM_STALL_MS`, asked first. Counted from when the lane QUEUED the call
+ *  (`unsettled-bound-counts-from-the-queue`).
+ *  EXPORTED for its suite. */
+export const COLLECT_AUDIT_STALL_MS = 2 * 90_000;
+
+/** One collector call or job the lane has queued and not heard back on (spec §5.10), with the monotonic instant it
+ *  was QUEUED:
+ *  - `learn`: a learning audit;
+ *  - `act`: the executor's job, whose `phase` says what is out: `queued` (waiting on the id's key, or between its
+ *    calls), `audit` (its own `ws-audit`) or `act` (its `ws-collect`). The runner the lane hands the executor sets it
+ *    (`collectRunCcd`), so the unsettled line can list the executor's own audit at the audit's bound; at STALL the job
+ *    is listed as holding the act slot, whatever is out. */
+export interface CollectFlight {
+  readonly kind: 'learn' | 'act';
+  readonly sinceMono: number;
+  readonly phase: 'queued' | 'audit' | 'act';
+}
+
+/** The collector's fleet-wide act slot (spec §5.10): free; taken by the act job queued for `id`; or KEPT, with its id,
+ *  until `untilMono`, after an act that may have acted. */
+export type CollectSlot =
+  | { readonly kind: 'free' }
+  | { readonly kind: 'job'; readonly id: string; readonly sinceMono: number }
+  | { readonly kind: 'kept'; readonly id: string; readonly untilMono: number };
 
 /** How long the FIRST fleet assembly after boot waits for the first HEAD
  *  sweep (`headBranches`) before shipping without it. Bounded because that
@@ -189,11 +276,19 @@ export const LC_SWEEP_MS = 5_000;
 const CLAIM_SWEEP_MS = 60_000;
 
 /** The stall watch's lane (spec 2026-09-29 §4.2, §10). It runs at `CLAIM_SWEEP_MS`'s cadence, for that
- *  constant's reason: a 2 h threshold does not need the 2 s tick. EXPORTED for its suite, as `LC_SWEEP_MS`
- *  and `READINESS_SWEEP_MS` are. */
+ *  constant's reason: a threshold of the quiet time (2 h built-in, 30 min at the least, stall watch settings §7)
+ *  does not need the 2 s tick. EXPORTED for its suite, as `LC_SWEEP_MS` and `READINESS_SWEEP_MS` are. */
 export const STALL_SWEEP_MS = CLAIM_SWEEP_MS;
 /** The gap rule's threshold (slug `stall-clocks-drop-on-an-unobserved-gap` (D-3750)): between one missed sweep (~120 s, clocks survive) and two (~180 s, clocks drop). */
 const STALL_CLOCK_GAP_MS = STALL_SWEEP_MS * 5 / 2;
+
+/** What `FleetWatcher.stallResolveNow` answers each sweep (stall watch settings §9): the arming, which always carries
+ *  a `mailMode`; the quiet time that r1, the dialog cap and the backoff base read; and where the level came from. */
+interface StallResolution {
+  readonly arming: StallBoxArming;
+  readonly quietMs: number;
+  readonly levelSource: StallResolved['levelSource'];
+}
 
 /**
  * What `tick()` already measured, handed to the stall lane so it reads neither again (worker stall watch wave 2, M6;
@@ -750,8 +845,25 @@ export class FleetWatcher {
    *  a HEALTHY fleet is a frame rather than a silence. */
   private lastDivergenceSweep = 0;
   private lastDivergenceJson: string | null = null;
-  /** The child-reclaim lane's clock (child-reclamation wave 4). */
-  private lastChildReclaimSweep = 0;
+  /** The child-reclaim lane's clock (child-reclamation wave 4): the MONOTONIC
+   *  time of the last pass, `null` before the first. Two writers stamp it
+   *  (spec §5.5, §5.7): the gate stamp of a pass that the throttle let in,
+   *  which is all a pass still gathering or overtaken during its gather ever
+   *  writes; and the decision clock of the last pass that was NOT overtaken,
+   *  which re-stamps it after the gather. Not the other lanes' `0`
+   *  never-run idiom, because a monotonic source may start at 0, which would
+   *  make `0` a real stamp. Monotonic so that a backward wall step cannot
+   *  freeze the lane, and a forward one cannot run a pass early: the
+   *  twice-observed rule's interval is real time. */
+  private lastChildReclaimSweep: number | null = null;
+  /** The child-reclaim lane's pass counter (spec §5.5, §5.7), bumped as each pass starts its generation gather,
+   *  the one await before its loop. A pass whose number is no longer the latest when its gather settles was
+   *  OVERTAKEN by a newer pass, and decides nothing. A pass that was NOT overtaken re-stamps the throttle
+   *  (`lastChildReclaimSweep`) with its own decision clock, read after the gather, so the next pass cannot start
+   *  until a whole interval after this one decided. Together the two keep any two passes that decide at least
+   *  one interval apart on the monotonic clock, so one interval never counts as two sightings, however long a
+   *  gather takes. */
+  private childReclaimPassSeq = 0;
   /** Per marked child: the twice-observed sighting, the two deferral clocks
    *  (the first deferral of any kind, which each request carries; the first
    *  PRESENCE deferral, which alone the ceiling reads), the run of failed
@@ -759,7 +871,15 @@ export class FleetWatcher {
    *  (`lastAskedAt`) — `ChildReclaimSweepEntry`. IN MEMORY ONLY, deliberately:
    *  a restart loses it, and losing it can only DELAY a reclaim (two passes
    *  rebuild eligibility, the ceiling clock restarts) or retry a failing one
-   *  sooner, which ccd's re-proof on the box makes safe — never cause one. */
+   *  sooner, which ccd's re-proof on the box makes safe — never cause one.
+   *  The persistent tier is re-read at every first sighting
+   *  (`childReclaimTierSeed`), so a lost memory costs a tier child one extra
+   *  ask, never a fresh tier wait.
+   *  Its decision clocks are this process's monotonic clock; `firstDeferredAt`
+   *  and `lastPresenceWallAt` are wall-clock epoch ms and `bornAt` is ccd's
+   *  clock, compared for equality only (`ChildReclaimSweepEntry`). An entry
+   *  describes one workspace generation; a new birth, a marker naming a new
+   *  run or a new registry generation replaces it with a first sighting. */
   private childReclaimSweepState = new Map<string, ChildReclaimSweepEntry>();
   /** Children whose reclaim this lane has asked for and not heard back on. A
    *  pass never asks a child already in this set twice: the executor can hold
@@ -770,7 +890,8 @@ export class FleetWatcher {
   private childReclaimInFlight = new Set<string>();
   /** When each in-flight dispatch was sent — `CHILD_RECLAIM_STALL_MS`'s own
    *  clock, and the reason a request that never settles stops holding the
-   *  lane's one slot forever. */
+   *  lane's one slot forever. MONOTONIC: a forward wall-clock step must never
+   *  free the one slot while a reclaim is still running. */
   private childReclaimInFlightSince = new Map<string, number>();
   /** Session ids whose stall past `CHILD_RECLAIM_STALL_MS` this process has
    *  already logged once — never once a pass, for the reason
@@ -782,18 +903,25 @@ export class FleetWatcher {
    *  `<why> <id>`, because an absent minting run and an absent reviewed run
    *  are two conditions with two sentences. */
   private childReclaimAbsentLogged = new Set<string>();
-  /** Per marked child: has THIS lane already seen a `hold-retired` verdict for
-   *  it once, with no other verdict in between? A `hold-retired` verdict a
-   *  SECOND consecutive pass finds queues the release job; any other verdict
-   *  — eligible or any other ineligibility — clears the entry, so the two
-   *  sightings must be back to back. IN MEMORY ONLY, the `childReclaimSweepState`
-   *  idiom: a restart only delays a release by one more sighting, never causes
-   *  one — the job's own re-reads, and ccd's rung 4, prove everything again
-   *  before anything is written. A child already in `childReclaimInFlight`
-   *  (its release job dispatched, or its ordinary reclaim in flight) is never
-   *  touched here — the lane has no re-entrancy guard beyond that one set, and
-   *  an overlapping pass must not turn "two further passes" into one. */
-  private childReclaimHoldRetiredSeen = new Set<string>();
+  /** Per marked child: the workspace generation in which THIS lane has seen a
+   *  `hold-retired` verdict for it once, with no other verdict in between. The
+   *  key is the child's birth, the run its marker names and its generation
+   *  file's value (`ChildReclaimGenerationIdentity`; spec §5.7).
+   *  A `hold-retired` verdict that a SECOND consecutive pass finds for the SAME
+   *  generation queues the release job, carrying that generation, which the
+   *  job re-reads nearest its argv. A sighting of ANOTHER generation is a
+   *  first sighting, and its key REPLACES the stored one.
+   *  `childReclaimHoldRetiredStep` (L1) decides which; this lane applies it.
+   *  Any other verdict, eligible or any other ineligibility, deletes the
+   *  entry, so the two sightings must be back to back. IN MEMORY ONLY, the
+   *  `childReclaimSweepState` idiom: a restart only delays a release by one
+   *  more sighting, never causes one, because the job's own re-reads and ccd's
+   *  rung 4 prove everything again before anything is written. A child already
+   *  in `childReclaimInFlight` (its release job dispatched, or its ordinary
+   *  reclaim in flight) is never touched here: the lane has no re-entrancy
+   *  guard beyond that one set, and an overlapping pass must not turn "two
+   *  further passes" into one. */
+  private childReclaimHoldRetiredSeen = new Map<string, ChildReclaimGenerationIdentity>();
   /** Per marked child: has its retired-hold release job ANSWERED since this
    *  lane last saw it eligible? Set where the job settles, beside the delete
    *  of its sweep entry; CONSUMED by the next eligible verdict, which seeds
@@ -807,11 +935,95 @@ export class FleetWatcher {
    *  (the mirror or coordination-history fail-shut, and the switches and
    *  capabilities return), and the vanished-row loop, so a mark never
    *  outlives its child. An INELIGIBLE verdict deletes the entry but KEEPS
-   *  the mark, deliberately: the listing that matters most is the stale HELD
-   *  one, read before ccd unlinked the hold, and spending the mark there
-   *  would reopen the window it exists to close. Keeping it costs at most one
-   *  pass, once. IN MEMORY ONLY, the `childReclaimSweepState` idiom. */
+   *  the mark — a choice, not a safety need: ticks are serialised (`tick()`'s
+   *  `ticking` guard), this lane's one await before its loop is the generation
+   *  gather, and a pass overtaken during it decides nothing (`childReclaimPassSeq`),
+   *  so only one pass's listing can predate a release answer; that pass's held row
+   *  seeds nothing anyway, and the next listing postdates the answer, so
+   *  spending the mark there would still leave two fresh unheld passes.
+   *  Keeping it costs at most one pass, once. IN MEMORY ONLY, the
+   *  `childReclaimSweepState` idiom. */
   private childReclaimReleaseAnswered = new Set<string>();
+  /** The sweep's verdicts (spec §5.9): one per marked row the last JUDGING pass listed, L1's own
+   *  `ChildReclaimSweepVerdict`, recorded and never re-decided here. A pass that judged nothing
+   *  (`reclaim-paused` raised, a reclaim capability missing, the mirror or coordination read
+   *  failed) — the same places the sweep state is cleared — reduces it to its KEPT verdicts
+   *  (`childReclaimKeptVerdicts`, L1): the attention list keeps listing those, so the chip keeps
+   *  saying them. Each kept verdict carries the run its marker named, and both surfaces read it
+   *  only while the marker still names that run: a recycled slug's next workspace is not the old
+   *  one's (spec §5.6). `null` until this process's first judging pass. IN MEMORY ONLY. Replaced
+   *  whole, never mutated. Read by the run chip, through `currentChildReclaimVerdicts()`, and by
+   *  the attention list's one write: its kept arm, and the failing items it withholds for a held
+   *  child. */
+  private childReclaimJudged: ReadonlyMap<string, ChildReclaimSweepVerdict> | null = null;
+  /** Which kept words this process has fed for which child: one `child reclaim kept` feed row per
+   *  child, per word, per process (spec §5.9). A child is a session id under ONE marker's run: an
+   *  item whose run differs from the one recorded is a recycled slug's next workspace (spec §5.6),
+   *  a new child, and starts a new set, whether or not any pass between saw the id unlisted. Pruned
+   *  on every pass whose mirror read succeeds, a paused one included: an id that pass's listing no
+   *  longer carries is dropped. A pass whose mirror read fails returns before the prune, and prunes
+   *  nothing. What neither the key nor the prune tells apart is the same run minting the same slug
+   *  again with no pruning pass between. IN MEMORY ONLY: a restart feeds each kept child once more. */
+  private childReclaimKeptReported =
+    new Map<string, { readonly runId: number; readonly words: Set<ChildReclaimKeptWord> }>();
+  /** The kept-leaf items (spec §5.6, §5.9), as the sweep's last successful kept-leaf read derived them.
+   *  Kept, never erased, across a read that failed. `[]` until the first pass. Derived from the mirror on
+   *  every pass that gets past the fail-shut try, so a restart rebuilds them on its first pass. */
+  private childReclaimLeaves: readonly ChildReclaimLeafKept[] = [];
+  /** THE TEMP-ROOT COLLECTOR'S LANE (spec §5.10, child reclamation wave 9): its clocks and memory, its OWN — never the
+   *  child lane's, the expiry lane's or the dead-coordinator lane's. IN MEMORY ONLY, deliberately: a restart loses all of
+   *  it, and losing it can only DELAY a collection (two fresh observations, the start hold-off), never cause one. STATED
+   *  RESIDUAL (spec §5.10, pacing): a restart re-enters each terminal and verb-failed id at j = 0, about eight extra
+   *  terminal audits or failing acts per such id after it.
+   *  - `lastCollectSweep`: the throttle, on the MONOTONIC clock; `null` before the first pass.
+   *  - `collectSweeping`: one pass at a time (`sweepTempRootCollect`), over the gather and the decide-and-enqueue only.
+   *  - `collectStartMono`: this lane's start (the watcher's construction), monotonic. No act job is offered until
+   *    `CHILD_RECLAIM_STALL_MS` after it.
+   *  - `collectGen`: the ONE counter every generation is drawn from, the lane-wide one and every id's (Task 4).
+   *  - `collectLaneGen`: the lane-wide clear generation (`collectClearPairs`).
+   *  - `collectState`: per id, `CollectEntry` (L1): the observation pair and its generation, the deferral count, the
+   *    failing, verb-failed and terminal runs, the continuity clocks, the latest document's evidence and the feed
+   *    episode. An entry is created only when a call for the id is queued.
+   *  - `collectInFlight`: per id, the ONE call or job queued and not heard back on (`CollectFlight`). No further call is
+   *    queued for an id in it.
+   *  - `collectSlot`: the fleet-wide act slot (`CollectSlot`).
+   *  - `collectUnsettledLogged`: the ids whose call this process has logged as unsettled, once.
+   *  - `collectFlockLatched`: an act answered ccd's `flock-unavailable`: no act job is offered again in this process, and
+   *    a box-wide line says so, so an armed lane is never silently off.
+   *  - `collectLastSeenLive`: the live marker as the last act job read it. It starts SHADOWED, so an arming made while the
+   *    server was down, or before a restart no job saw, is still a flip, and still writes its row.
+   *  - `collectPop`: the last measured pass's population, for the box-wide listing and refused-name lines; `null` before
+   *    one. `collectPopNames`: the registry listing that pass's pre-filter read, for attention's projection.
+   *  - `collectBoxProbes`: the box-wide probes standing (through `collectBoxProbesAtArrival`: every answer but one older
+   *    than their latest rebuild; the population's clear, `collectBoxAfterPopulation`, also drops them).
+   *    `collectBoxProbesAtMono`: the ARRIVAL of the answer that last rebuilt them (a new map: a change, a re-assertion
+   *    or an empty pass; `collectBoxProbesAtArrival`), so an answer older than that says nothing of them.
+   *  - `collectPassSeq`, `collectPassTally`, `collectPassPublished`, `collectPassAudits`: each pass's audits by class
+   *    (Task 5's `collectPassClass`), keyed by the pass that queued them; the latest pass whose calls have all settled is
+   *    the one the pass-scoped box lines read. */
+  private lastCollectSweep: number | null = null;
+  private collectSweeping = false;
+  private readonly collectStartMono: number;
+  private collectGen = 0;
+  private collectLaneGen = 0;
+  private collectState = new Map<string, CollectEntry>();
+  private collectInFlight = new Map<string, CollectFlight>();
+  private collectSlot: CollectSlot = { kind: 'free' };
+  private collectUnsettledLogged = new Set<string>();
+  private collectFlockLatched = false;
+  private collectLastSeenLive = false;
+  private collectPop: CollectPopulation | null = null;
+  private collectPopNames: ReadonlySet<string> = new Set();
+  private collectBoxProbes: ReadonlyMap<string, string> = new Map();
+  private collectBoxProbesAtMono = Number.NEGATIVE_INFINITY;
+  private collectPassSeq = 0;
+  private collectPassTally = new Map<number, { pending: number; readonly audits: Map<string, CollectPassClass> }>();
+  private collectPassPublished = 0;
+  private collectPassAudits: ReadonlyMap<string, CollectPassClass> = new Map();
+  /** The mirror rows (`ChildReclaimLeafKept.source`) whose kept-leaf feed row this process has written: one
+   *  row per source row per process, so a restart writes it once more. Never pruned, because an ended item
+   *  never returns. */
+  private readonly childReclaimLeafFed = new Set<number>();
   /** The seventh lane's clock — the journal mirror. `sweepLifecycle` below
    *  carries the lane's own docstring; this is only the clock field, same
    *  shape as `lastNameSweep`/`lastDivergenceSweep` above it. */
@@ -845,6 +1057,23 @@ export class FleetWatcher {
   /** Warn-once keys, `<sessionId>|<what>`: a run-less shadow rung, `failed-unknown`, and the defensive r2-with-no-r1
    *  line (`applyStall`; no real input reaches it today). */
   private stallWarned = new Set<string>();
+  /** The busy clock (stall watch settings §9, `busy-clock-starts-when-busy-delivery-starts` (D-4024)). Written by
+   *  `sweepMail` alone, on a mode it applies, and read by `sweepStalls` through `stallBusyClock`. `lastApplied` is the
+   *  mail gate mode last applied, `null` before the first. `busySince` is when the mail sweep moved into busy delivery
+   *  from a known non-busy mode, and `null` whenever no such move has been seen since the server started. The
+   *  unlistable return and the `MAIL_DISABLED_MARKER` return write neither: neither says anything about the mode, so
+   *  a passing listing failure never restarts the clock. IN MEMORY: after a restart the stall sweep judges exactly as
+   *  before this clock existed, until busy delivery begins again while the server runs. */
+  private lastApplied: MailTurnMode | null = null;
+  private busySince: number | null = null;
+  /** The last settings resolution that fell back on a throw (§9): when, and why. `null` once a resolution succeeds.
+   *  Read only through `stallFallback()`. */
+  private lastFallback: { readonly at: number; readonly reason: string } | null = null;
+  /** The settings row's warn latch (§8): the read states already warned (`absent`, `unreadable`, `level`, `quiet`),
+   *  cleared when a read applies again, so a row that stays unusable warns once, not every 10 s. */
+  private stallSettingsWarned = new Set<string>();
+  /** Set by the first settings read that is not unreadable: the boot trace runs once (§8). */
+  private stallSettingsTraced = false;
   /** The ledger lanes' clocks (build 9 wave 7, D13). */
   private lastLedgerFloor = 0;
   private lastLedgerReconcile = 0;
@@ -1013,19 +1242,65 @@ export class FleetWatcher {
    *  tick measures — see `currentCoord()`. */
   private coord: CoordStatus | null = null;
   private lastCoordJson: string | null = null;
-  /** The reclaim attention list as `sweepChildReclaim` last derived it from
-   *  the lifecycle mirror (child-reclamation wave 4). `emitCoord` reads it on
-   *  every tick; the sweep's MIRROR DERIVATION is its ONLY writer, on its own
-   *  slower clock, so a frame never waits on a database read. A cache of that
-   *  derivation's result, never a memo of anything else: no executor answer
-   *  writes it (spec §5.9: "derived from the lifecycle mirror so a restart
-   *  does not lose it" — every terminal refusal reaches the mirror through
-   *  ccd's own journal line, `ws-reclaim`'s or the one `ws-audit --reclaim`
-   *  writes for a terminal verdict, and every failure through `ws-reclaim`'s
-   *  `_lc_fail`; the mirror is the ONLY source). `[]` until the first
-   *  sweep — which runs on the first tick after a restart, so the list is
-   *  rebuilt from the mirror within one tick rather than lost. */
+  /** Child-reclamation wave 5: each LISTED registry row's `ChildMark`, off the
+   *  listing `tick()` already made. `null` until the first listed tick, which is
+   *  `currentCoord()`'s "never measured" and not "no children". Retained, not
+   *  erased, across an unlistable tick, the same retain-don't-erase rule the
+   *  fail-shut return in `tick()` applies to every map it guards. */
+  private childMarks: ReadonlyMap<string, ChildMark> | null = null;
+  /** The reclaim attention list (spec §5.9), as `sweepChildReclaim` last wrote it. `emitCoord` reads
+   *  it on every tick; it is written in ONE place, `childReclaimPublishAttention`, on the sweep's own
+   *  slower clock, so a frame never waits on a database read.
+   *  - Its `terminal` and `failing` arms are derived from the lifecycle mirror by EVERY pass, so a
+   *    restart does not lose them.
+   *  - Its `kept` and `kept-many` arms come from the verdicts as they stand: the last judging pass's,
+   *    or its kept verdicts alone after a pass that judged nothing, so a raised switch or a missing
+   *    capability does not erase them.
+   *  - A child has one item: a kept item replaces its failing item, and a terminal item stands. A
+   *    child whose recorded verdict is `held` has no failing item; with no verdict recorded, the
+   *    failing arm stands.
+   *  - It is never fed by an executor answer, and never by a sweep entry (`ChildReclaimSweepEntry`).
+   *  - Its `leaf-kept` items, and their `kept-many` collapse, come from the mirror on every pass that gets
+   *    past the fail-shut try. They are never filtered by the listing, and they yield to any other item
+   *    for the same child.
+   *  - Its `collect` items come from the temp-root collector's memory, read at the same one write (spec §5.10): that lane
+   *    never assigns this list, and its items reach the frame only when the child lane publishes.
+   *  `[]` until the first sweep — which runs on the first tick after a restart, so the mirror arms are
+   *  rebuilt within one tick, and the kept arm at the first judging pass, rather than lost. */
   private childReclaimAttentionList: readonly ChildReclaimAttention[] = [];
+  /** The expiry lane's attention list (workspace lifecycle wave 3b) as `sweepArchivedExpiry` last derived it from its
+   *  own memory — never child reclamation's list, so nothing that reads that one sees an expiry. `[]` until the lane's
+   *  first pass. */
+  private expiryAttentionList: readonly ExpiryAttention[] = [];
+  /** The expiry lane's clock and memory (wave 3b): its OWN — never the child lane's map, which wave 5's chip reads.
+   *  Per archived workspace, `ArchivedExpiryEntry` (L1): the instant ccd gave for THIS archive, the twice-observed
+   *  sighting, the last outcome (for change-only feed rows), the in-use and failure runs and the report. IN MEMORY
+   *  ONLY: a restart can only DELAY an expiry. */
+  private lastArchivedExpirySweep = 0;
+  private archivedExpiryState = new Map<string, ArchivedExpiryEntry>();
+  /** ONE PASS AT A TIME. `tick()` dispatches the lane with `void`, and a pass whose audits and act outlast the cadence
+   *  would otherwise run beside the next one: two acts in one window, and the older pass acting on a `due` list the
+   *  newer has already answered. A pass that finds another running returns at once — so at most one expiry act is
+   *  ever in flight, fleet-wide, and every act's answer is folded onto the entry it was asked for. */
+  private archivedExpirySweeping = false;
+  /** `flock-unavailable`, once a box has answered it: the lane composes nothing more there (this process). */
+  private archivedExpiryBoxRefused: string | null = null;
+  /** THE DEAD-COORDINATOR LANE (workspace lifecycle wave 4): its clock; ONE PASS AT A TIME, the expiry lane's reason;
+   *  its memory per claimant (IN MEMORY: the run of crashed passes, the backoff, the last outcome and the report — the
+   *  durable half, the first-dead anchor, is `coord.db`'s `dead_claimants`); its breaker as the last pass measured it;
+   *  and its attention list, which `emitCoord` reads. */
+  private lastDeadCoordinatorSweep = 0;
+  private deadCoordinatorSweeping = false;
+  private deadCoordinatorState = new Map<string, DeadCoordinatorEntry>();
+  private deadCoordinatorBreakerState: DeadCoordinatorBreaker = { tripped: false };
+  /** The breaker's memory: the members it holds with their ORIGINAL first-dead instants, released only on evidence
+   *  (`breaker-remembers-its-cluster`); and the key of the trip its feed row last recorded. */
+  private deadCoordinatorBreakerHeld: readonly DeadCoordinatorBreakerMember[] = [];
+  private deadCoordinatorBreakerRecorded: string | null = null;
+  private deadCoordinatorAttentionList: readonly DeadCoordinatorAttention[] = [];
+  /** The coordination serialiser's sweep handle (`CoordRoutesHandle.withSweepAbandon`), handed over by `buildServer`
+   *  once `registerCoordRoutes` has built it. Until then the lane measures and records, and ends nothing. */
+  private deadCoordinatorSerial: CoordRoutesHandle['withSweepAbandon'] | null = null;
   /** `emitPools`'s byte-equality guard and last measured value — `lastCoordJson`
    *  and `coord`'s idiom, for their reasons. `null` until a tick has measured,
    *  and `currentPools()` sends NOTHING while it is: a fabricated empty map
@@ -1073,6 +1348,8 @@ export class FleetWatcher {
     this.cachePath = cachePath ?? deps.stateCachePath ?? defaultCachePath();
     this.transcripts = new TranscriptResolver(deps.io);
     this.headsSettled = new Promise<void>((resolve) => { this.settleHeads = resolve; });
+    // The collector lane's start (spec §5.10): its act hold-off counts from here, on the lane's monotonic clock.
+    this.collectStartMono = deps.monotonicMs?.() ?? performance.now();
   }
 
   start(): void {
@@ -1515,11 +1792,67 @@ export class FleetWatcher {
     return this.coord;
   }
 
+  /** The child marks off the last LISTED registry read, for `GET /api/runs`'s
+   *  reclaim chip (wave 5), or null when no tick has listed one. In memory, and
+   *  the reason is cost: a route-time `readRegistry` is ~721 agent-WS operations
+   *  per board load in remote mode. */
+  currentChildMarks(): ReadonlyMap<string, ChildMark> | null {
+    return this.childMarks;
+  }
+
+  /** Child-reclamation wave 6 (spec §5.9): the journal mirror's newest
+   *  committed reclaim end, or null when no mirror exists yet or it has
+   *  committed none. In memory; read by `emitCoord` alone. */
+  currentChildReclaimDoneAt(): number | null {
+    return this.mirror?.childReclaimDoneAt() ?? null;
+  }
+
+  /** The collector lane's memory, read-only (child reclamation wave 9, spec §5.10) — for its tests. No decision outside
+   *  the lane reads it. */
+  currentCollectLane(): {
+    readonly entries: ReadonlyMap<string, CollectEntry>; readonly inFlight: ReadonlyMap<string, CollectFlight>;
+    readonly slot: CollectSlot; readonly laneGen: number; readonly lastSeenLive: boolean; readonly flockLatched: boolean;
+  } {
+    return { entries: this.collectState, inFlight: this.collectInFlight, slot: this.collectSlot,
+      laneGen: this.collectLaneGen, lastSeenLive: this.collectLastSeenLive, flockLatched: this.collectFlockLatched };
+  }
+
   /** The sweep's in-memory state, read-only (child-reclamation wave 4) — what
    *  wave 5's run chip reads to tell `deferred` from `pending`. Empty after a
-   *  restart, by design: see `childReclaimSweepState`'s own docstring. */
+   *  restart, by design: see `childReclaimSweepState`'s own docstring. Its
+   *  `firstDeferredAt` is wall-clock epoch ms, the one field a reader outside the lane may
+   *  read as a time. `lastPresenceWallAt` (wall clock) and `bornAt` (ccd's clock, compared for
+   *  equality only) are the lane's own; every other clock in it is this process's monotonic clock. */
   currentChildReclaimDefers(): ReadonlyMap<string, ChildReclaimSweepEntry> {
     return this.childReclaimSweepState;
+  }
+
+  /** The sweep's last verdict per marked child, for `GET /api/runs`' chip (spec §5.9). TWO answers
+   *  that are never folded:
+   *  - `null` is "no verdict yet" for every child: no judging pass since this process started.
+   *  - A map is the last judging pass's verdicts, or — after a pass that judged nothing (the
+   *    switch, a missing capability, a failed read) — that pass's KEPT verdicts alone. An id absent
+   *    from it has no verdict yet. A kept verdict carries the run its marker named, and says
+   *    nothing of any other run (spec §5.6).
+   *  Neither is "eligible". Read-only; replaced whole. */
+  currentChildReclaimVerdicts(): ReadonlyMap<string, ChildReclaimSweepVerdict> | null {
+    return this.childReclaimJudged;
+  }
+
+  /** The expiry lane's memory, read-only (wave 3b) — for its tests. NEVER read by the child lane's chip. */
+  currentArchivedExpiry(): ReadonlyMap<string, ArchivedExpiryEntry> {
+    return this.archivedExpiryState;
+  }
+
+  /** The dead-coordinator lane's memory, read-only (wave 4) — for its tests. */
+  currentDeadCoordinators(): ReadonlyMap<string, DeadCoordinatorEntry> {
+    return this.deadCoordinatorState;
+  }
+
+  /** `buildServer` hands the lane the coordination serialiser's sweep handle (workspace lifecycle spec §5.4: "the lane
+   *  runs on the coordination serialiser, exported from `registerCoordRoutes`"). The lane's ONLY way to end a run. */
+  useCoordSerialiser(h: Pick<CoordRoutesHandle, 'withSweepAbandon'>): void {
+    this.deadCoordinatorSerial = h.withSweepAbandon;
   }
 
   /** The last measured project-pool sweep, or null if none has been taken yet
@@ -1657,6 +1990,18 @@ export class FleetWatcher {
         return;
       }
       const records = registryRead.records;
+      // Wave 5: the reclaim chip's registry answer, off THIS listing. Never a
+      // second read; see `childMarks`.
+      const childMarks = new Map(records.map((r) => [r.id, r.child] as const));
+      // Wave 6 (spec §5.9): a child that left the listing was, almost
+      // always, just reclaimed, and ccd journals the reclaim's end AFTER the
+      // purge. Reset the mirror's clock, so the `sweepLifecycle` dispatch below
+      // sweeps on THIS tick, and the coord frame's `childReclaimDoneAt` usually
+      // moves one tick later. An assignment, never an await: the tick's order
+      // and its timing are unchanged. Only on a LISTED tick, below the fail-shut
+      // return: an unlistable registry proves no child gone.
+      if (childMarkLeftListing(this.childMarks, childMarks)) this.lastLifecycleSweep = 0;
+      this.childMarks = childMarks;
       // hook states FIRST, dialogs second — the order is load-bearing and there
       // is a test on it. `detectDialogs` composes the ask push, and the actions
       // it attaches come from `this.hookStates`; with the old ordering that map
@@ -1716,6 +2061,20 @@ export class FleetWatcher {
       // ccd re-reads `$REG/reclaim-paused` inside `ws-reclaim`'s lock at the
       // instant of deletion, which is the read that makes the switch real.
       void this.sweepChildReclaim(records, registryRead.names)
+        .catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the child lane's reasons: the EXPIRY lane (workspace lifecycle wave 3b) — a SIBLING pass on
+      // the same tick's registry read, at the same cadence, under the same switch, sharing nothing else.
+      void this.sweepArchivedExpiry(records, registryRead.names)
+        .catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the DEAD-COORDINATOR lane (workspace lifecycle wave 4) — a third sibling on
+      // this tick's registry read, cadence and switch, sharing nothing else; its act waits on the coordination
+      // serialiser behind whatever write route is running.
+      void this.sweepDeadCoordinators(records, registryRead.names)
+        .catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the TEMP-ROOT COLLECTOR's lane (child reclamation wave 9, spec §5.10) — a fourth
+      // sibling at this tick's cadence and under its switch. Its population is its own two listings, read in its own
+      // gather; this listing feeds its pre-filter, which is economy and never a permission.
+      void this.sweepTempRootCollect(records, registryRead.names)
         .catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
       // joins the per-session KeyedQueue AND calls sendPrompt, whose worst case
@@ -2044,15 +2403,28 @@ export class FleetWatcher {
    *  array scan, a `JSON.stringify` and a `bus.emit`, and the bus's own
    *  listeners are the two socket writers `emitRuns` already trusts. The
    *  attention list is a cached field, not a read: this method still touches
-   *  no `node:sqlite` and no I/O. */
+   *  no `node:sqlite` and no I/O.
+   *
+   *  Wave 6: it also carries the mirror's newest committed reclaim end
+   *  (childReclaimDoneAt), omitted while there is none; the byte-equality guard
+   *  re-emits the frame on the tick after it changes. */
   private emitCoord(names: readonly string[] | null): void {
-    const status: CoordStatus = names === null
+    const base: CoordStatus = names === null
       ? { pause: 'unmeasurable', mail: 'unmeasurable', reclaim: 'unmeasurable',
-          childReclaimAttention: this.childReclaimAttentionList }
+          childReclaimAttention: this.childReclaimAttentionList, expiryAttention: this.expiryAttentionList,
+          deadCoordinatorAttention: this.deadCoordinatorAttentionList }
       : { pause: names.includes(COORDINATOR_PAUSE_MARKER) ? 'set' : 'clear',
           mail: names.includes(MAIL_DISABLED_MARKER) ? 'set' : 'clear',
           reclaim: names.includes(RECLAIM_PAUSE_MARKER) ? 'set' : 'clear',
-          childReclaimAttention: this.childReclaimAttentionList };
+          childReclaimAttention: this.childReclaimAttentionList, expiryAttention: this.expiryAttentionList,
+          deadCoordinatorAttention: this.deadCoordinatorAttentionList };
+    // Wave 6 (spec §5.9): the mirror's newest committed reclaim end, on BOTH
+    // arms, because it is the mirror's measurement and not the listing's.
+    // OMITTED, never null, while there is none: absence is the one meaning
+    // the PWA's reader gives it, whether the server restarted or predates the
+    // field. Still no I/O and no `node:sqlite`: it is an in-memory field.
+    const doneAt = this.currentChildReclaimDoneAt();
+    const status: CoordStatus = doneAt === null ? base : { ...base, childReclaimDoneAt: doneAt };
     const json = JSON.stringify(status);
     if (json === this.lastCoordJson) return;
     this.lastCoordJson = json;
@@ -3058,8 +3430,9 @@ export class FleetWatcher {
    * this child's own runs, whose accounting has since retired (spec §5.7's
    * "no hold" conjunct) — never reaches the ordinary reclaim path directly:
    * `ws-reclaim`'s own rung 4 refuses any hold. Instead, on the SECOND
-   * consecutive pass this pass answers it, the child's own `release` payload
-   * is queued as its own job (`releaseRetiredChildHold`, `coord/childReclaim.
+   * consecutive pass this pass answers it for the SAME workspace generation
+   * (spec §5.7), the child's own `release` payload is queued as its own job
+   * (`releaseRetiredChildHold`, `coord/childReclaim.
    * ts`) on the child's `KeyedQueue` key — which re-proves every fact it
    * relies on before it ever composes `ws-release`, and whose own outcome
    * (`released`/`not-held`/`changed`/`failed`) writes back nothing but the
@@ -3075,12 +3448,50 @@ export class FleetWatcher {
   async sweepChildReclaim(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
     const coord = this.deps.coord;
     if (!coord) return;
-    const now = Date.now();
-    if (this.lastChildReclaimSweep !== 0 && now - this.lastChildReclaimSweep < CHILD_RECLAIM_SWEEP_MS) return;
-    this.lastChildReclaimSweep = now;
+    // THE THROTTLE, stamped BEFORE the gather below (spec §5.7), on the
+    // monotonic clock: a tick that lands while this pass gathers is throttled,
+    // so no second pass starts within the interval.
+    const gate = this.childReclaimLaneNow().monoMs;
+    if (this.lastChildReclaimSweep !== null && gate - this.lastChildReclaimSweep < CHILD_RECLAIM_SWEEP_MS) return;
+    this.lastChildReclaimSweep = gate;
+    // THE PASS'S ONE AWAIT BEFORE ITS LOOP (spec §5.5): every marked row's
+    // registry generation, read concurrently. Gathered whole, here, so the
+    // per-child loop below stays synchronous: no await sits between a row's
+    // entry read and its write. A pass that a newer one OVERTOOK while it
+    // gathered (a read slower than the throttle) decides nothing.
+    // THE RECORDS ARE OLDER THAN THE GATHER, A STATED RESIDUAL (spec §7): the tick read `records` before it
+    // awaited its other lanes, and the generation is read only here. So a re-mint inside that gap gives the
+    // new workspace's FIRST sighting the OLD row's fields (its hold, workspace and identity) under the new
+    // generation, and the twice-observed rule covers the new row's own fields on one pass, not two. The
+    // executor's generation re-read cannot tell this case apart: both sightings carry the new generation.
+    // What keeps it safe: the pass that asks judges the new row's own records in full; the entry and its
+    // presence episode are keyed to the generation, so no episode the old workspace ripened licenses the
+    // new one; the executor re-reads the row's marker, open runs, switch and presence before it asks the
+    // box; and ccd's audit judges the row's own hold, attachment and tree, and re-proves them in its lock.
+    const pass = ++this.childReclaimPassSeq;
+    const regGenerations = await this.childReclaimGatherGenerations(records);
+    if (pass !== this.childReclaimPassSeq) return;
+    // The lane's two clocks, read ONCE for the pass's decisions (spec §5.7),
+    // AFTER the gather, so no decision clock is older than the evidence it
+    // judges. `mono` is the in-flight stall clock and the entry's own instants
+    // (`ChildReclaimSweepEntry` names the exceptions). `now`, the wall clock,
+    // is what is compared with another process's stamps (the generation
+    // fences, the attention list, the verdict's spawn-stall window), and what
+    // L1 stamps from `ask.at.wallMs`: the displayed `firstDeferredAt` and
+    // `lastPresenceWallAt`, the presence gap's second operand (the gap reads
+    // the larger of the monotonic and the wall-clock difference).
+    const asked = this.childReclaimLaneNow();
+    const now = asked.wallMs;
+    const mono = asked.monoMs;
+    // THE THROTTLE, RE-STAMPED with this pass's decision clock (spec §5.7):
+    // the pass was not overtaken, so it decides now, and the next pass must
+    // start a whole interval after THIS decision, not after the gate stamped
+    // above. Without it, a gather that settled just short of an interval would
+    // let the next pass decide a moment later: two sightings in one interval.
+    this.lastChildReclaimSweep = mono;
 
-    // ONE — the attention list, and the pass's coordination-history read,
-    // from the mirror ALONE (spec §5.9: "derived from the lifecycle mirror so
+    // ONE — the attention list's mirror arms, and the pass's coordination-history
+    // read, from the mirror ALONE (spec §5.9: "derived from the lifecycle mirror so
     // a restart does not lose it"), BEFORE either early return below: a
     // paused fleet, or a fleet host without both `reclaim-v1` and
     // `reclaim-pause-v1`, still has children standing under terminal
@@ -3096,34 +3507,51 @@ export class FleetWatcher {
     // attempt in flight, or one that died mid-way, lists nothing), as the L1
     // input row.
     //
-    // ONE STORE READ of every `claimedBy` per pass too — the sessions that
-    // have ever coordinated a run (spec §1 rule 4: manual cleanup is reserved
-    // for a coordinator's OWN workspace) — in the SAME try as the mirror
-    // read: a throw here proves as little about who has coordinated as a
-    // failed mirror read proves about who is terminal, so BOTH READS TOGETHER
-    // fail the WHOLE pass shut: an exception from either one is caught below,
-    // this pass makes NO reclaim decision for ANY child (the whole per-child
-    // loop is downstream of this try succeeding), and the twice-observed
-    // memory is dropped so nothing is asked on the strength of a partial
-    // measurement.
+    // ONE STORE READ of every coordinator claim per pass too — each session's
+    // claims folded to their latest instant, which the verdict fences to the
+    // child's own generation, so a child counts as coordinating only when it
+    // has coordinated in its own generation (`childReclaimHasCoordinated`'s
+    // fence, `childReclaimCoordinated`; spec §1 rule 4: manual cleanup is
+    // reserved for a coordinator's OWN workspace; spec §5.6: slugs recycle) —
+    // in the SAME try as the mirror read: a throw here proves as little about
+    // who has coordinated as a failed mirror read proves about who is
+    // terminal, so BOTH READS TOGETHER fail the WHOLE pass shut: an exception
+    // from either one is caught below, this pass makes NO reclaim decision
+    // for ANY child (the whole per-child loop is downstream of this try
+    // succeeding), and the twice-observed memory is dropped so nothing is
+    // asked on the strength of a partial measurement.
     let latest: ChildReclaimJournalRow[];
-    let coordinating: ReadonlySet<string>;
+    let claims: ReadonlyMap<string, ChildReclaimCoordinatorClaim>;
+    // THE PERSISTENT TIER'S SEED (spec §5.7) reads each child's CURRENT generation, the slice this read already
+    // cuts: kept per id for the first sightings below, never read again.
+    const tierGenerations = new Map<string, readonly MirroredLifecycleEvent[]>();
     try {
       const withReclaim = coord.childReclaimSessionIds();
-      coordinating = coord.childReclaimCoordinatorIds();
+      claims = coord.childReclaimCoordinatorClaims();
       latest = [];
       for (const r of records) {
         if (!withReclaim.has(r.id)) continue;
         const gen = childReclaimGeneration(this.childReclaimAttentionGenerationRows(coord, r.id), now);
+        tierGenerations.set(r.id, gen);
         const row = childReclaimJournalRow(gen, childReclaimLatest(gen));
         if (row !== null) latest.push(row);
       }
     } catch (err) {
-      // FAIL SHUT, and keep the last list: a failed read proves nothing about
-      // which children are terminal or which have coordinated, so this pass
-      // neither reports differently nor decides anything — and the
-      // twice-observed memory is dropped, so no child acts on the strength of
-      // a pass that measured nothing.
+      // FAIL SHUT: a failed read proves nothing about which children are
+      // terminal or which have coordinated in their own generation. So this
+      // pass decides nothing, and publishes no attention list: the last one
+      // stands. It drops the sweep state (`childReclaimSweepState`, the
+      // twice-observed memory), so no child acts on the strength of a pass
+      // that measured nothing. That state is also the chip's defer source, so
+      // a deferring or failing child's chip loses its defer sentence, which
+      // returns only once the sweep asks again and the child defers or fails
+      // again. And it reduces the recorded verdicts to the kept ones
+      // (`childReclaimKeptVerdicts`), so until the next judging pass the chip
+      // holds no verdict for any other child: where nothing else answers (a
+      // journal event, a review child, or the switch, which already reads
+      // `paused`), a held or doubt child's reads "no verdict yet", where it
+      // gave its hold or doubt sentence.
+      if (this.childReclaimJudged !== null) this.childReclaimJudged = childReclaimKeptVerdicts(this.childReclaimJudged);
       console.warn(`ccrc-server: sweepChildReclaim could not read the lifecycle mirror or the coordination history (${err instanceof Error ? err.message : String(err)}) — no reclaim decisions this pass`);
       this.childReclaimSweepState.clear();
       this.childReclaimHoldRetiredSeen.clear();
@@ -3132,11 +3560,37 @@ export class FleetWatcher {
     }
     const live = new Map<string, number | null>(
       records.map((r): [string, number | null] => [r.id, r.child.kind === 'child' ? r.child.runId : null]));
-    // The ONLY write of the list: the mirror derivation's result. No executor
+    // A kept word is fed once per child per process, and "per child" ends with the registry row (spec
+    // §5.9). A row still listed under a marker naming another run is a new child too: the feed below
+    // keys the run (spec §5.6).
+    for (const id of [...this.childReclaimKeptReported.keys()]) if (!live.has(id)) this.childReclaimKeptReported.delete(id);
+    // The mirror arms; the list itself is written once, by `childReclaimPublishAttention`. No executor
     // answer ever writes it (spec §5.9 — see the `.then` below).
-    this.childReclaimAttentionList = childReclaimAttention({
-      latest, live, kindOf: childReclaimTokenKind, sentenceFor: refusalSentence, nowMs: now,
+    const mirrorArms = childReclaimAttention({
+      latest, live, kindOf: childReclaimTokenKind, stuckOf: isChildReclaimStuckToken, sentenceFor: refusalSentence, nowMs: now,
     });
+    // ONE-b: the kept-leaf items (spec §5.6, §5.9). They are the clips directories and temp roots ccd kept
+    // on a reclaim that completed. Read from the mirror ALONE, so a restart rebuilds them, and NEVER filtered
+    // by `live`: after a `done`, ccd has purged the registry row, so no listing names the child.
+    // ITS OWN TRY, AFTER THE FAIL-SHUT TRY ABOVE. The items gate nothing: no verdict, due set, lease or
+    // request reads them. So a failed read here never fails the pass shut. It keeps the last items, as a
+    // failed mirror read keeps the whole list, and the pass decides exactly as it would have. When the
+    // fail-shut try failed, this read is never reached, and that pass publishes nothing.
+    // BEFORE the two early returns below, so a paused or capability-less pass lists them too.
+    try {
+      const rows = coord.lifecycleReclaimRowsSince(childReclaimLeafKeptSince(now));
+      this.childReclaimLeaves = childReclaimLeafKept({
+        rows, ends: coord.lifecycleLeafEndsFor(rows.map((r) => r.sessionId)), nowMs: now });
+    } catch (err) {
+      console.warn(`ccrc-server: sweepChildReclaim could not read the kept leaves (${err instanceof Error ? err.message : String(err)}) — the last kept-leaf items stand, and no reclaim decision reads them`);
+    }
+    // The feed keeps the record once an item has ended (spec §5.9): one row per source row per process.
+    // Recorded, never pushed.
+    for (const k of this.childReclaimLeaves) {
+      if (this.childReclaimLeafFed.has(k.source)) continue;
+      this.childReclaimLeafFed.add(k.source);
+      recordChildReclaimLeafKeptFeed({ coord, notifyLog: this.deps.notifyLog }, k);
+    }
 
     // TWO — the switches (spec §5.8, "the fourth [reader] is the one that
     // matters" — the box itself, not merely the server): BOTH caps must be
@@ -3150,6 +3604,8 @@ export class FleetWatcher {
     // (or the box gains the missing capability).
     if (!capSupported(this.deps.fleetState, RECLAIM_CAP) || !capSupported(this.deps.fleetState, RECLAIM_PAUSE_CAP)
         || names.includes(RECLAIM_PAUSE_MARKER)) {
+      if (this.childReclaimJudged !== null) this.childReclaimJudged = childReclaimKeptVerdicts(this.childReclaimJudged);
+      this.childReclaimPublishAttention(mirrorArms, live);
       this.childReclaimSweepState.clear();
       this.childReclaimHoldRetiredSeen.clear();
       this.childReclaimReleaseAnswered.clear();
@@ -3166,7 +3622,9 @@ export class FleetWatcher {
     // refusal found at AUDIT time: wave 3's `cmd_ws_audit --reclaim` journals
     // exactly the terminal verdicts (`verb ws-audit`), so the mirror holds
     // them as it holds `ws-reclaim`'s. A retryable verdict found there is
-    // journaled nowhere and needs no exclusion — it is retried by design.
+    // journaled nowhere and needs no exclusion — it is retried by design. Its
+    // unmeasured answer is journaled now, as a `failed` line (spec §5.9), which
+    // the TERMINAL set never reads.
     // Between the executor's `refused` answer and the mirror lane's ingest
     // (`LC_SWEEP_MS`) the child's entry is KEPT, not forgotten:
     // `childReclaimNextEntry` stamps its `refusedAt`, and `childReclaimDue`
@@ -3175,7 +3633,8 @@ export class FleetWatcher {
     const terminal = new Set(latest
       .filter((row) => childReclaimTerminalRefusal(row, childReclaimTokenKind)).map((row) => row.sessionId));
     const seen = new Set<string>();
-    const due: { r: SessionRecord; entry: ChildReclaimSweepEntry; runId: number }[] = [];
+    const judged = new Map<string, ChildReclaimSweepVerdict>();
+    const due: { r: SessionRecord; entry: ChildReclaimSweepEntry; runId: number; id: string }[] = [];
     // Declared here, not at section FOUR below, so the hold-release job (a
     // SEPARATE dispatch from the ordinary reclaim gathered into `due`) can be
     // pushed onto it from inside this same per-child loop, the instant its
@@ -3255,17 +3714,14 @@ export class FleetWatcher {
           // is not proof of that same correspondence — it could equally be a
           // coincidence with a run this rebuilt database never actually
           // minted this workspace with. The child's own birth is the OPENING
-          // `create` of its current generation — `lifecycleCreatesFor` is
-          // uncapped, so a failing child's `create` is findable for the life
-          // of the workspace, never just for as long as it fits a page (the
-          // birth fence's own reason `lifecycleCreatesFor` exists rather than
-          // reusing `lifecycleFor` here). `childReclaimGeneration` over a
-          // CREATE-ONLY list answers a single-row slice whose one element IS
-          // that opening row — a generation is a contiguous slice of ONE
-          // array, so its first element, when the slice is non-empty, is
-          // always index 0, whatever the fence would otherwise have sliced
-          // around it.
-          childBornAt = childReclaimGeneration(coord.lifecycleCreatesFor(r.id), now)[0]?.at ?? null;
+          // `create` of its current generation, unless a `purge` that is not
+          // this row's own follows it (spec §5.7). It is read uncapped
+          // by `lifecycleBirthEventsFor`, so a failing child's `create` is
+          // findable for the life of the workspace. It is placed through
+          // `childReclaimBornAt`, the ONE placement that this fence, the
+          // coordination fence and the entry's own `bornAt` all read, and it
+          // is told this row's uuid.
+          childBornAt = childReclaimBornAt(coord, r.id, now, childReclaimRowUuid(r));
         } catch (err) {
           // `node:sqlite` throws synchronously; an unread run is not an
           // absent one. Every read this try attempted is discarded together —
@@ -3275,11 +3731,16 @@ export class FleetWatcher {
           mintingRun = { ok: false, detail: err instanceof Error ? err.message : String(err) };
         }
       }
+      // The row's registry generation as this pass gathered it (spec §5.5). A
+      // row the gather holds no answer for reads `unreadable`, the unmeasured
+      // default, never an optimistic `absent`.
+      const regGeneration: ChildReclaimGeneration = regGenerations.get(r.id) ?? { kind: 'unreadable' };
       const v = childReclaimSweepVerdict({
-        sessionId: r.id, child: r.child, identityMeasured: r.unmeasured.length === 0, workspace: r.workspace,
-        held, terminal: terminal.has(r.id), mintingRun, reviewedRun, siblings,
-        coordinating: coordinating.has(r.id), childBornAt, skewMs: CHILD_BIRTH_SKEW_MS, nowMs: now,
+        sessionId: r.id, child: r.child, identityMeasured: r.unmeasured.length === 0, generation: regGeneration,
+        workspace: r.workspace, held, terminal: terminal.has(r.id), mintingRun, reviewedRun, siblings,
+        coordinatorClaim: claims.get(r.id), childBornAt, skewMs: CHILD_BIRTH_SKEW_MS, nowMs: now,
       });
+      judged.set(r.id, v);
       if (!v.eligible) {
         this.childReclaimSweepState.delete(r.id);
         // A hold this build proved belongs to one of this child's own runs,
@@ -3294,13 +3755,20 @@ export class FleetWatcher {
         // too would let an overlapping pass turn two sightings into one.
         if (v.why === 'hold-retired') {
           if (!this.childReclaimInFlight.has(r.id)) {
-            if (this.childReclaimHoldRetiredSeen.has(r.id)) {
-              this.childReclaimHoldRetiredSeen.delete(r.id);
+            // TWO SIGHTINGS OF ONE GENERATION (spec §5.7). L1 decides what this sighting does to the
+            // memory (`childReclaimHoldRetiredStep`). A `first` stores its key, REPLACING whatever an
+            // earlier generation left. A `second` or a `forget` deletes it. Only a `second` queues the
+            // job, and the job carries the generation.
+            const step = childReclaimHoldRetiredStep(
+              this.childReclaimHoldRetiredSeen.get(r.id), childBornAt, v.runId, regGeneration);
+            if (step.kind === 'first') this.childReclaimHoldRetiredSeen.set(r.id, step.key);
+            else this.childReclaimHoldRetiredSeen.delete(r.id);
+            if (step.kind === 'second') {
               this.childReclaimInFlight.add(r.id);
               const release = v.release;
               acts.push(this.execChildReclaimRelease(coord, {
                 sessionId: r.id, runId: v.runId, reason: release.reason, program: release.program,
-                accountedRunId: release.accountedRunId,
+                accountedRunId: release.accountedRunId, generation: step.generation,
               }).then(
                 (outcome) => {
                   // A `failed` answer composes no argv on the box and leaves
@@ -3330,8 +3798,6 @@ export class FleetWatcher {
                 this.childReclaimReleaseAnswered.add(r.id);
                 this.childReclaimInFlight.delete(r.id);
               }));
-            } else {
-              this.childReclaimHoldRetiredSeen.add(r.id);
             }
           }
           continue;
@@ -3347,17 +3813,46 @@ export class FleetWatcher {
       // The first eligible verdict after a release ANSWERED seeds nothing: its
       // listing may predate the answer (`childReclaimReleaseAnswered`).
       if (this.childReclaimReleaseAnswered.delete(r.id)) continue;
+      // An eligible verdict's generation is a key: the verdict answered
+      // `identity-unmeasured` for an unreadable one (L1). This narrows the type
+      // and decides nothing (spec §5.5: an unreadable generation seeds no entry).
+      if (!isChildReclaimGenerationKey(regGeneration)) { this.childReclaimSweepState.delete(r.id); continue; }
       const entry = this.childReclaimSweepState.get(r.id);
-      if (entry === undefined) {
-        this.childReclaimSweepState.set(r.id, childReclaimFirstSighting(now));
+      // A birth this entry does not describe, a marker naming a run it was not
+      // sighted under, or a registry generation it does not carry, is a
+      // recycled slug's NEW workspace (spec §5.5, §5.7): it starts from a first
+      // sighting, never from the old workspace's sighting or presence. The run
+      // and the generation change first: ws-add mints the generation and writes
+      // the new marker before the mirror can place the new birth.
+      // `v.runId` is the marker's own (`childReclaimSweepVerdict`).
+      if (entry === undefined || !childReclaimSameGeneration(entry, childBornAt, v.runId, regGeneration)) {
+        // A LOST MEMORY NEVER RESETS THE PERSISTENT TIER (spec §5.7): the sighting is seeded from the mirror's
+        // current generation, with `lastFailedAt` left null, so a tier child is asked once on its next due pass
+        // and then waits its tier pace. It never waits a fresh tier pace, and never falls back to the 15-minute ramp
+        // unless the seed cannot read it (no placed birth, a reclaim done/unknown line, or a slice windowed short).
+        this.childReclaimSweepState.set(r.id, childReclaimFirstSighting(mono, childBornAt, v.runId, regGeneration,
+          childReclaimTierSeed(tierGenerations.get(r.id) ?? [], childBornAt, isChildReclaimStuckToken, childReclaimTokenKind)));
         continue;
       }
       if (this.childReclaimInFlight.has(r.id)) continue;
       // THE ONE "MAY I ASK AGAIN" QUESTION (`childReclaimDue`, L1): folds the
       // failure backoff (spec §5.9: "retries back off in between") AND the
       // terminal-refusal pacing — L4 decides no pacing of its own.
-      if (!childReclaimDue(entry, now, CHILD_RECLAIM_SWEEP_MS)) continue;
-      due.push({ r, entry, runId: v.runId });
+      if (!childReclaimDue(entry, mono, CHILD_RECLAIM_SWEEP_MS)) continue;
+      due.push({ r, entry, runId: v.runId, id: r.id });
+    }
+    this.childReclaimJudged = judged;
+    // The list's second publish, and the kept feed row: judging passes only, so a paused or capability-less
+    // pass lists what it kept and writes nothing (spec §5.9). Recorded, never pushed.
+    for (const a of this.childReclaimPublishAttention(mirrorArms, live)) {
+      // An item's run is its marker's: a run other than the one fed for is a recycled slug's next
+      // workspace, a new child (spec §5.6).
+      const fed = this.childReclaimKeptReported.get(a.sessionId);
+      const words = fed !== undefined && fed.runId === a.runId ? fed.words : new Set<ChildReclaimKeptWord>();
+      if (words.has(a.word)) continue;
+      words.add(a.word);
+      this.childReclaimKeptReported.set(a.sessionId, { runId: a.runId, words });
+      recordChildReclaimKeptFeed({ coord, notifyLog: this.deps.notifyLog }, a);
     }
 
     // FOUR — the bound: at most `CHILD_RECLAIM_MAX_IN_FLIGHT` destructive
@@ -3366,15 +3861,16 @@ export class FleetWatcher {
     // to ask the box for ten deletions before the first one has even
     // answered). A dispatch that has not settled after `CHILD_RECLAIM_STALL_MS`
     // stops counting against the bound (it stays in flight; nothing here
-    // cancels it) and is logged once. Due children are sorted `lastAskedAt`
-    // (never-asked first), then `firstEligibleAt`, then id, so a child that
-    // defers every pass cannot hog the one slot forever — the never-asked and
-    // the longest-waiting go first, and among children tied on `lastAskedAt`
-    // (both never asked, or asked at the identical instant) the one sighted
-    // EARLIER still goes first rather than falling through to id order.
+    // cancels it) and is logged once. Due children are asked in
+    // `childReclaimAskOrder`'s order (L1). The presence lease's holder comes
+    // first: the senior presence-held child, asked on every pass it is due,
+    // so its ceiling is reachable however many children are due (spec §5.7).
+    // Then never-asked, `lastAskedAt`, `firstEligibleAt`, id, so a child that
+    // defers every pass cannot hog the one slot outside a lease, and a holder
+    // that forfeits goes to the back.
     let activeInFlight = 0;
     for (const [id, since] of this.childReclaimInFlightSince) {
-      if (now - since < CHILD_RECLAIM_STALL_MS) { activeInFlight += 1; continue; }
+      if (mono - since < CHILD_RECLAIM_STALL_MS) { activeInFlight += 1; continue; }
       if (!this.childReclaimStalledLogged.has(id)) {
         this.childReclaimStalledLogged.add(id);
         console.warn(`ccrc-server: sweepChildReclaim: the reclaim of ${id} has not settled after `
@@ -3383,30 +3879,19 @@ export class FleetWatcher {
       }
     }
     const freeSlots = Math.max(0, CHILD_RECLAIM_MAX_IN_FLIGHT - activeInFlight);
-    due.sort((a, b) => {
-      const la = a.entry.lastAskedAt;
-      const lb = b.entry.lastAskedAt;
-      // `lastAskedAt` first, null (never asked) sorting before any instant —
-      // but ONLY when the two differ: two children tied on this key (both
-      // null, or asked at the identical instant) fall through to
-      // `firstEligibleAt` rather than straight to id, so a never-asked child
-      // sighted earlier is still asked before one sighted later.
-      if (la !== lb) {
-        if (la === null) return -1;
-        if (lb === null) return 1;
-        return la - lb;
-      }
-      if (a.entry.firstEligibleAt !== b.entry.firstEligibleAt) return a.entry.firstEligibleAt - b.entry.firstEligibleAt;
-      return a.r.id < b.r.id ? -1 : a.r.id > b.r.id ? 1 : 0;
-    });
-    for (const { r, entry, runId } of due.slice(0, freeSlots)) {
+    const { order, holderId } = childReclaimAskOrder(due);
+    for (const { r, entry, runId, id } of order.slice(0, freeSlots)) {
+      const ask: ChildReclaimAsk = {
+        at: asked, licensed: childReclaimDeferExpired(entry, asked, CHILD_RECLAIM_SWEEP_MS), asHolder: id === holderId,
+      };
       const req: ChildReclaimRequest = {
         sessionId: r.id, runId, trigger: 'sweep',
         // THE CEILING READS THE PRESENCE CLOCK ALONE (spec §5.7, "Presence,
         // and its bound": the ceiling bounds presence and nothing else), and
-        // licenses only a CONTINUOUS episode whose latest presence answer is
-        // recent, measured in this lane's own pass intervals.
-        deferExpired: childReclaimDeferExpired(entry, now, CHILD_RECLAIM_SWEEP_MS),
+        // licenses only a CONTINUOUS episode whose latest answer's request is
+        // recent, measured in this lane's own pass intervals on the larger of
+        // its two clocks, its span on the monotonic clock.
+        deferExpired: ask.licensed,
         // THE ELAPSED DEFER RIDES THE REQUEST. Spec §5.7: past the ceiling
         // "the feed row says how long it waited and why"; §5.9: a deferral is
         // shown "with its elapsed time". So it is the FIRST deferral of ANY
@@ -3415,32 +3900,49 @@ export class FleetWatcher {
         // In memory, so a restart restarts it: a later `deferredSinceMs`,
         // never an earlier one.
         deferredSinceMs: entry.firstDeferredAt,
+        // WHAT THE FEED ALREADY SAYS (spec §5.9): the child's non-presence deferral
+        // episode, from this entry, and the failure word of its item on the list
+        // this pass has just published. The executor only declines to repeat them
+        // in its own feed row; it decides nothing on it, and neither does the lane.
+        feedQuiet: childReclaimFeedQuiet(entry, this.childReclaimAttentionList, r.id),
+        // THE GENERATION THIS REQUEST WAS JUDGED UNDER (spec §5.5): the
+        // entry's own key, which this pass's read matched. Every sweep request
+        // carries it, licensed or not, and the executor re-proves it.
+        licenceGeneration: entry.generation,
       };
       this.childReclaimInFlight.add(r.id);
-      this.childReclaimInFlightSince.set(r.id, now);
+      this.childReclaimInFlightSince.set(r.id, mono);
       acts.push(this.execChildReclaim(coord, req).then(
         (outcome) => {
+          const answered = this.childReclaimLaneNow();
+          // `answered` is read FIRST, at the answer's arrival, never the
+          // pass's `asked`. The episode starts at its first answer's arrival,
+          // and continuity runs from this arrival back to the previous
+          // request (spec §5.7, "continuous deferral").
+          //
           // A terminal refusal, or a failure, needs no memory here beyond the
           // entry, and gets none: ccd journalled it, and the mirror is where
           // the attention list and the terminal exclusion read it (spec
-          // §5.9 — an executor answer never feeds `CoordStatus`). The entry:
-          // write back ONLY when it is still the live one. A pass that ran
-          // while this was in flight may have cleared the memory (switch
-          // raised, capability lost, mirror unread, row unlisted, child
-          // ineligible); re-seeding it from a stale entry would let the child
-          // be asked for on the FIRST pass after, and "two FRESH passes"
-          // would be false.
-          if (this.childReclaimSweepState.get(r.id) !== entry) return;
-          // `licensed` — this REQUEST's own `deferExpired`: whether this
-          // attempt was sent past the previous presence ceiling, which is
-          // what lets a presence-class answer RESTART the episode rather than
-          // silently keep skipping ccd's presence rungs forever (spec §5.7).
-          const nextEntry = childReclaimNextEntry(entry, outcome, now, req.deferExpired, CHILD_RECLAIM_SWEEP_MS);
-          if (nextEntry === null) this.childReclaimSweepState.delete(r.id);
-          else this.childReclaimSweepState.set(r.id, nextEntry);
+          // §5.9 — an executor answer never feeds `CoordStatus`). `ask`
+          // carries this REQUEST's own `deferExpired` (`licensed`): whether
+          // this attempt was sent past the previous presence ceiling, which
+          // is what lets a presence-class answer RESTART the episode rather
+          // than silently keep skipping ccd's presence rungs forever (spec
+          // §5.7), and whether it went to the lease's holder.
+          this.childReclaimWriteBack(r.id, entry, childReclaimSweepOutcomeOf(outcome), ask, answered);
         },
         (err: unknown) => {
-          console.warn(`ccrc-server: sweepChildReclaim: the reclaim of ${r.id} threw (${err instanceof Error ? err.message : String(err)}) — left for the next pass`);
+          const answered = this.childReclaimLaneNow();
+          // A rejection is a defect the executor could not name
+          // (`reclaimChild` never throws for a condition it can name). It is
+          // written as a FAILED attempt. That ends the presence episode, so a
+          // licensed request that rejects is never followed by a second
+          // licence on the same episode. It forfeits a holder's lease. And it
+          // backs off, so a child whose every attempt rejects cannot hog the
+          // one slot. It is written only while the entry is still the live
+          // one, like the answer. It names no word, so it leaves the persistent tier as it stands.
+          console.warn(`ccrc-server: sweepChildReclaim: the reclaim of ${r.id} threw (${err instanceof Error ? err.message : String(err)}) — recorded as a failed attempt; the sweep retries after its backoff`);
+          this.childReclaimWriteBack(r.id, entry, CHILD_RECLAIM_SWEEP_REJECTED, ask, answered);
         },
       ).finally(() => {
         this.childReclaimInFlight.delete(r.id);
@@ -3452,13 +3954,59 @@ export class FleetWatcher {
     for (const id of [...this.childReclaimSweepState.keys()]) {
       if (!seen.has(id)) this.childReclaimSweepState.delete(id);
     }
-    for (const id of [...this.childReclaimHoldRetiredSeen]) {
+    for (const id of [...this.childReclaimHoldRetiredSeen.keys()]) {
       if (!seen.has(id)) this.childReclaimHoldRetiredSeen.delete(id);
     }
     for (const id of [...this.childReclaimReleaseAnswered]) {
       if (!seen.has(id)) this.childReclaimReleaseAnswered.delete(id);
     }
     await Promise.all(acts);
+  }
+
+  /** Every MARKED row's registry generation (spec §5.5), read concurrently
+   *  through `childReclaimGenerationRead`: the pass's one await before its
+   *  loop. A row whose marker does not read as a child is not read, because
+   *  its verdict answers before identity is asked. Only the remote adapter's
+   *  read has a timer (its request timeout); a local read has none. The pass
+   *  counter (`childReclaimPassSeq`) and the throttle's re-stamp after the
+   *  gather are what keep a slow gather from bringing two deciding passes
+   *  within one interval. The reader lets a rejecting port propagate (spec §5.5),
+   *  so a rejecting read folds to `unreadable` for its row HERE: one row's
+   *  rejection is that row's `identity-unmeasured`, never the pass's. */
+  private async childReclaimGatherGenerations(
+    records: readonly SessionRecord[],
+  ): Promise<ReadonlyMap<string, ChildReclaimGeneration>> {
+    const marked = records.filter((r) => r.child.kind === 'child');
+    const reads = await Promise.all(
+      marked.map((r) => childReclaimGenerationRead(this.deps.io, this.deps.cfg.registryDir, r.id)
+        .catch((): ChildReclaimGeneration => ({ kind: 'unreadable' }))));
+    return new Map(marked.map((r, i): [string, ChildReclaimGeneration] => [r.id, reads[i]!]));
+  }
+
+  /** The child-reclaim lane's two clocks, read together
+   *  (`ChildReclaimLaneNow`): this process's monotonic clock
+   *  (`Deps.monotonicMs`, or `performance.now()` in production) and the wall
+   *  clock. Synchronous, so the pass that reads it awaits nothing. */
+  private childReclaimLaneNow(): ChildReclaimLaneNow {
+    return { monoMs: this.deps.monotonicMs?.() ?? performance.now(), wallMs: Date.now() };
+  }
+
+  /** Writes one settled request back into the lane's memory (spec §5.7): the
+   *  answer's and the rejection's ONE path. Only while the entry is still the
+   *  live one. A pass that ran while this was in flight may have cleared the
+   *  memory (switch raised, capability lost, mirror unread, row unlisted,
+   *  child ineligible) or replaced the entry (a recycled slug's new
+   *  workspace); re-seeding it from a stale entry would let the child be
+   *  asked for on the FIRST pass after, and "two FRESH passes" would be
+   *  false. `null` forgets the child. */
+  private childReclaimWriteBack(
+    id: string, entry: ChildReclaimSweepEntry, outcome: ChildReclaimSweepOutcome, ask: ChildReclaimAsk,
+    answered: ChildReclaimLaneNow,
+  ): void {
+    if (this.childReclaimSweepState.get(id) !== entry) return;
+    const next = childReclaimNextEntry(entry, outcome, ask, answered, CHILD_RECLAIM_SWEEP_MS);
+    if (next === null) this.childReclaimSweepState.delete(id);
+    else this.childReclaimSweepState.set(id, next);
   }
 
   /** `ChildReclaimHoldCandidatesRead` for one child (spec §5.7's "no hold"
@@ -3522,9 +4070,8 @@ export class FleetWatcher {
    *  (rare — the mirror's own dedupe degrades to its raw bytes for exactly
    *  that row) may appear twice, which costs `childReclaimGeneration`
    *  nothing: a duplicate boundary answers the same boundary. The birth
-   *  fence (above, in the per-child loop) does NOT use this — it reads
-   *  `lifecycleCreatesFor` alone, where a single-row generation IS the
-   *  opening create, and merging in window rows would only cost a query. */
+   *  (above, in the per-child loop) does NOT use this: it reads
+   *  `lifecycleBirthEventsFor` through `childReclaimBornAt`. */
   private childReclaimAttentionGenerationRows(coord: CoordStore, sessionId: string): MirroredLifecycleEvent[] {
     const window = coord.lifecycleFor({ sessionId });
     const creates = coord.lifecycleCreatesFor(sessionId);
@@ -3534,21 +4081,41 @@ export class FleetWatcher {
     return extra.length === 0 ? window : [...extra, ...window];
   }
 
+  /** THE ONE WRITE of the attention list (spec §5.9): the mirror arms this pass derived, then the kept
+   *  arm from the verdicts as they stand (the last judging pass's, or its kept verdicts alone), filtered
+   *  to this listing and to the verdicts judged under the run its marker names, with no failing item for
+   *  a child whose recorded verdict is `held`; then the kept leaves, and the temp-root collector's items, read from that
+   *  lane's memory here (spec §5.10). L1 decides every item and the precedence between them; this method only assigns.
+   *  Returns the kept items it listed, for the feed row. */
+  private childReclaimPublishAttention(mirrorArms: readonly ChildReclaimJournalAttention[],
+    live: ReadonlyMap<string, number | null>): ChildReclaimKeptAttention[] {
+    const verdicts = this.childReclaimJudged ?? new Map<string, ChildReclaimSweepVerdict>();
+    const kept = childReclaimKeptItems({ verdicts, live, mirrorArms });
+    this.childReclaimAttentionList = childReclaimAttentionWithLeaves(
+      childReclaimAttentionWithKept(mirrorArms, kept, verdicts), this.childReclaimLeaves, this.collectAttention());
+    return kept;
+  }
+
   /** Absence is logged and skipped (spec §5.7) — ONCE per child per condition
    *  per process. Three conditions, three sentences: an absent MINTING run is
    *  never eligible, because a lost or rebuilt database makes every child's
    *  minting run absent at once; an absent REVIEWED run keeps a review child,
    *  because a run the database does not hold is not proven terminal and the
-   *  report in the child's clips may still be cited; a child whose own birth
-   *  cannot be PLACED (no placed `create` row at all) cannot be proven to
-   *  match its marker's run id, so it is skipped rather than guessed at
+   *  report in the child's clips may still be cited; a child whose own birth cannot be PLACED (no placed
+   *  `create` row at all, or a removal journaled after its placed create that is not the row's own and that no
+   *  newer create has replaced) cannot be proven to match its marker's run id, so it is skipped rather than guessed at
    *  (spec §5.1: the marker's run id and the argv the server composed are the
-   *  two authorities, and neither alone authorises anything). Every other
-   *  skip is an ordinary state of the world and says nothing
+   *  two authorities, and neither alone authorises anything). A FOURTH, not an
+   *  absence but logged the same way: a child that has coordinated in its
+   *  current generation (`coordinating`, spec §1 rule 4: manual cleanup is
+   *  reserved for a coordinator's own workspace) is never reclaimed
+   *  automatically, and says so once (spec §5.9). Every other skip says
+   *  nothing here: the run chip and the attention list carry it
    *  (`minting-run-postdates-child` has its OWN log, `childReclaimLogBirthSkip`,
    *  below — a different sentence with different evidence to name). */
   private childReclaimLogAbsence(r: SessionRecord, why: ChildReclaimSweepSkip, reviewedId: number | null): void {
-    if (why !== 'minting-run-absent' && why !== 'reviewed-run-absent' && why !== 'child-birth-unplaced') return;
+    if (why !== 'minting-run-absent' && why !== 'reviewed-run-absent' && why !== 'child-birth-unplaced'
+        && why !== 'coordinating') return;
     const key = `${why} ${r.id}`;
     if (this.childReclaimAbsentLogged.has(key)) return;
     this.childReclaimAbsentLogged.add(key);
@@ -3557,8 +4124,10 @@ export class FleetWatcher {
       console.warn(`ccrc-server: sweepChildReclaim: ${r.id} is marked as a child of run ${runId}, which coord.db does not hold — never eligible, because a lost or rebuilt database makes every child's minting run absent at once, the live ones included`);
     } else if (why === 'reviewed-run-absent') {
       console.warn(`ccrc-server: sweepChildReclaim: ${r.id} is a review child of run ${runId}, which reviews run ${reviewedId ?? '?'}, which coord.db does not hold — kept, because an absent reviewed run is not a terminal one and its report may still be cited`);
+    } else if (why === 'coordinating') {
+      console.warn(`ccrc-server: sweepChildReclaim: ${r.id} is marked as a child of run ${runId}, but it has held a coordinator's chair since about when it was created, holds one now, or held one at a time that cannot be placed — never reclaimed automatically; a person removes it once nothing still needs it`);
     } else {
-      console.warn(`ccrc-server: sweepChildReclaim: ${r.id} is marked as a child of run ${runId}, but the lifecycle mirror holds no placed 'create' row for it — its own birth cannot be placed, so the run-id fence cannot prove the marker's run minted this workspace; skipped until a placed create row appears (a workspace minted before the mirror existed, or whose create line carried no ccd clock)`);
+      console.warn(`ccrc-server: sweepChildReclaim: ${r.id} is marked as a child of run ${runId}, but its own birth cannot be placed: the lifecycle mirror holds no placed 'create' row for it (a workspace minted before the mirror existed, or whose create line carried no ccd clock), or a removal journaled after its placed create, not the row's own, that ccrc has not yet seen replaced by a newer creation — so the run-id fence cannot prove the marker's run minted this workspace; skipped, and looked at again on the next pass`);
     }
   }
 
@@ -3597,6 +4166,823 @@ export class FleetWatcher {
       coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd,
       fleetState: this.deps.fleetState, presence: this.deps.presence, notifyLog: this.deps.notifyLog,
     }, req));
+  }
+
+  /**
+   * THE TEMP-ROOT COLLECTOR'S LANE (spec §5.10; child reclamation wave 9): the first AUTOMATIC composer of `ws-collect`.
+   * A FOURTH sibling of `sweepChildReclaim` on the tick, at its cadence (`CHILD_RECLAIM_SWEEP_MS`) and under its switch
+   * (`reclaim-paused`, the fleet's one cleanup switch), and nothing else: its own population (`$REG/tmproots` and
+   * `$REG/tmpquarantine`, read in its own gather, never the registry rows and never `~/.cc-tmp`), its own memory, its
+   * executor (`collectTempRoot`), its feed rows, and its attention items, which reach the frame only through the child
+   * lane's one write (`childReclaimPublishAttention`).
+   *
+   * IT SHIPS SHADOWED. Until the operator touches the live marker by hand, a token the lane would spend is RECORDED — a
+   * feed row once per (id, token) episode, and an attention item — and nothing is composed. The marker is read by the
+   * executor alone, nearest the argv; this pass never reads it.
+   *
+   * WHAT IT ASKS. Each pass, at most ONE ACT JOB and at most `COLLECT_AUDITS_PER_PASS` LEARNING audits, chosen by
+   * `collectOffers` (L1): the act first, to the earliest ripe id by ripening instant; then learning audits to due ids by
+   * next-ask instant; each by id after that, and each skipping an id with a call pending. Every call rides the id's
+   * `KeyedQueue` key, the key the reclaim and expiry executors use, so no two lanes touch one id at once, and no further
+   * call is queued for an id whose last call has not settled (`collectInFlight`). The executor captures each request's
+   * generations when it is COMPOSED; its answer is an OBSERVATION only if both still stand when it arrives (L1's
+   * `collectFresh`). The act job spends only its OWN audit's token (observation 2), the token an earlier audit answered
+   * (observation 1) at least `COLLECT_OBSERVE_INTERVAL_MS` before it, with only that token answered between.
+   *
+   * IT NEVER AWAITS A CALL IT QUEUED. `collectSweeping` spans the gather and the decide-and-enqueue only. Each call is
+   * tracked by its queued-at stamp (`collectInFlight`), and every pass derives the unsettled lines from those stamps, so a
+   * call or job that never settles never stops a later pass.
+   *
+   * THE SLOT. At most one act job in flight fleet-wide. It is taken when the job is queued; `collectJobEffects` (L1) says
+   * whether the settled job frees it or keeps it, with its id, until `CHILD_RECLAIM_STALL_MS` after an act that may have
+   * acted. A job that never settles keeps it for as long as it stands, and is listed. No act job is offered until
+   * `CHILD_RECLAIM_STALL_MS` after this lane's start, because a restart forgets the slot while the previous process's
+   * act may still be running on the box. STATED RESIDUALS (spec §7): in local mode that rests on the server unit's
+   * default `KillMode=control-group`; and a killed ccd's orphaned children are not counted against the slot (they hold
+   * the id's reap lock, so ccd answers `in-progress` for it).
+   *
+   * PUBLIC for `sweepDivergences`'s reason: `tick()` dispatches it with `void`. `records` is NOT read — the population is
+   * the two listings — and is kept for the siblings' signature. `names` is the tick's listing, which feeds the
+   * pre-filter alone: economy, never permission.
+   */
+  async sweepTempRootCollect(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord || this.collectSweeping) return;
+    // THE THROTTLE, on the MONOTONIC clock (spec §5.10): stamped BEFORE the gather, so a pass a gate stops still spends
+    // its interval, and re-stamped after it (`collectPass`) with the pass's decision clock.
+    const gate = this.childReclaimLaneNow().monoMs;
+    if (this.lastCollectSweep !== null && gate - this.lastCollectSweep < CHILD_RECLAIM_SWEEP_MS) return;
+    this.lastCollectSweep = gate;
+    // ONE PASS AT A TIME (spec §5.10): held over the gather and the decide-and-enqueue, so no pass is ever overtaken
+    // while it gathers. The calls a pass queues are NOT under it, and are never awaited: they settle on their own.
+    this.collectSweeping = true;
+    try {
+      await this.collectPass(coord, names);
+    } finally {
+      this.collectSweeping = false;
+    }
+  }
+
+  /** One pass of the collector's lane, run only while no other pass runs. Its ONE await is the gather. It queues its
+   *  calls and never awaits them (`sweepTempRootCollect`). */
+  private async collectPass(coord: CoordStore, names: readonly string[]): Promise<void> {
+    // ONE — the capabilities (spec §5.10): both, or the lane never runs — never an automatic destructive lane on a box the
+    // phone cannot pause. A missing one clears every pair, so each id needs two FRESH observations once it returns.
+    if (!capSupported(this.deps.fleetState, COLLECT_CAP) || !capSupported(this.deps.fleetState, RECLAIM_PAUSE_CAP)) {
+      this.collectClearPairs();
+      return;
+    }
+    // TWO — THE ONE GATHER (spec §5.10): the population's two listings and the switches' own registry listing, together.
+    // The pause is read from THIS listing, not the tick's, because the tick never hands a lane a registry that did not
+    // list, and this lane must read one as a pause. Neither read rejects: a port that does makes THAT listing unmeasured,
+    // or the registry paused. So no catch stands here: a guard no case can reach has no red.
+    const gathered = await Promise.all([
+      readCollectPopulation(this.deps.io, this.deps.cfg.registryDir),
+      collectSwitches(this.deps.io, this.deps.cfg.registryDir),
+    ]);
+    // The pass's decision clock, read AFTER the gather; the throttle re-stamped with it, so any two deciding passes are at
+    // least one interval apart however long a gather takes.
+    const mono = this.childReclaimLaneNow().monoMs;
+    this.lastCollectSweep = mono;
+    const [listings, switches] = gathered;
+    // THREE — the switch: a raised pause, or a registry that did not list, stops the pass before any audit and clears
+    // every pair. Only `paused` is read: the live marker in the same listing is the executor's, at its act.
+    if (switches.paused) {
+      this.collectClearPairs();
+      return;
+    }
+    // FOUR — the population (L1): the ids to consider, from the MEASURED listings only, pre-filtered on the tick's exact
+    // `<id>.child` and `<id>.uuid` names unless a measured record names the id. Kept for the box-wide lines. An id is
+    // forgotten — its pacing and episodes with it, and no feed row — only when `collectForgets` says so (both listings
+    // measured, neither names it); an answer still out for it then finds no entry, and is dropped, save a `collected`
+    // act's row (`collectForgottenActRow`). The box-wide lines whose ids have all left are dropped with them (L1's
+    // `collectBoxAfterPopulation`), so no line stands on evidence no later answer can clear.
+    const pop = collectPopulation({ ...listings, registryNames: new Set(names) });
+    this.collectPop = pop;
+    this.collectPopNames = new Set(names);
+    for (const id of [...this.collectState.keys()]) if (collectForgets(pop, id)) this.collectState.delete(id);
+    const box = collectBoxAfterPopulation(pop, this.collectPassAudits, this.collectBoxProbes);
+    this.collectPassAudits = box.passAudits;
+    this.collectBoxProbes = box.boxProbes;
+    // FIVE — the slot's kept deadline, and each call past its bound, logged once (its line is derived at the publish).
+    if (this.collectSlot.kind === 'kept' && mono >= this.collectSlot.untilMono) this.collectSlot = { kind: 'free' };
+    this.collectLogUnsettled(mono);
+    // SIX — who is asked (L1), and the calls, each on its id's queue key, the act first. None is awaited.
+    const busy = new Set<string>(this.collectInFlight.keys());
+    if (this.collectSlot.kind === 'kept') busy.add(this.collectSlot.id);
+    const offers = collectOffers({
+      candidates: pop.candidates.map((id) => collectCandidateOf(id, this.collectState.get(id), mono,
+        CHILD_RECLAIM_SWEEP_MS, COLLECT_OBSERVE_INTERVAL_MS)),
+      busy, nowMono: mono, auditsMax: COLLECT_AUDITS_PER_PASS,
+      act: { slotFree: this.collectSlot.kind === 'free', flockLatched: this.collectFlockLatched,
+        startMono: this.collectStartMono, holdOffMs: CHILD_RECLAIM_STALL_MS },
+    });
+    const calls = offers.learn.length + (offers.act === null ? 0 : 1);
+    if (calls === 0) return;
+    const pass = ++this.collectPassSeq;
+    this.collectPassTally.set(pass, { pending: calls, audits: new Map() });
+    if (offers.act !== null) this.collectAct(coord, offers.act, pass, mono);
+    for (const id of offers.learn) this.collectLearn(coord, id, pass, mono);
+  }
+
+  /** One LEARNING audit (spec §5.10): `learnCollect` on the id's queue key, never awaited. The executor captures the
+   *  generations as it composes, through the port. An answer folds through Task 4's `collectAfterAudit`, an observation
+   *  only under its capture; a missing capability is a lane-wide clear; a rejection is a defect the reader could not
+   *  name, folded as an audit with no document that observes nothing (`a-thrown-job-reads-as-no-document`). */
+  private collectLearn(coord: CoordStore, id: string, pass: number, mono: number): void {
+    this.collectEntryOf(id);
+    this.collectInFlight.set(id, { kind: 'learn', sinceMono: mono, phase: 'queued' });
+    void this.deps.queue.run(id, () => learnCollect({
+      runCcd: this.collectRunCcd(id), fleetState: this.deps.fleetState, lane: this.collectPortFor(coord, id),
+    }, id))
+      .then((answer) => {
+        if (answer.kind === 'not-asked') { this.collectClearPairs(); return; }
+        this.collectFoldAudit(coord, id, pass, answer.audit.value, answer.audit.arrived, answer.audit.composed);
+      }, (err: unknown) => {
+        this.collectFoldAudit(coord, id, null, { kind: 'no-document', stderr: err instanceof Error ? err.message : String(err) },
+          this.collectClock(), null);
+      })
+      .catch((err: unknown) => {
+        console.warn(`ccrc-server: sweepTempRootCollect: folding the learning audit for ${id} failed (${err instanceof Error ? err.message : String(err)})`);
+      })
+      .finally(() => { this.collectSettled(id, pass); });
+  }
+
+  /** The ONE act job (spec §5.10): `collectTempRoot`'s six steps on the id's queue key, the fleet-wide slot taken as it
+   *  is queued, never awaited. The deps are composed INSIDE the queue callback, `execChildReclaim`'s idiom, so the job
+   *  reads `deps`'s current answer when it runs. It reaches this lane's memory through `collectPortFor` alone. Its
+   *  answer is folded for the LANE first (`collectJobEffects`: the slot, the latch), then for its id
+   *  (`collectFoldJob`). */
+  private collectAct(coord: CoordStore, id: string, pass: number, mono: number): void {
+    this.collectEntryOf(id);
+    this.collectInFlight.set(id, { kind: 'act', sinceMono: mono, phase: 'queued' });
+    this.collectSlot = { kind: 'job', id, sinceMono: mono };
+    void this.deps.queue.run(id, () => collectTempRoot({
+      coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.collectRunCcd(id), fleetState: this.deps.fleetState,
+      presence: this.deps.presence, lane: this.collectPortFor(coord, id), observeIntervalMs: COLLECT_OBSERVE_INTERVAL_MS,
+    }, { id }))
+      .then((outcome) => { this.collectSettleJob(coord, id, pass, outcome); }, (err: unknown) => {
+        const detail = err instanceof Error ? err.message : String(err);
+        console.warn(`ccrc-server: sweepTempRootCollect: the collector's job for ${id} threw (${detail}) — read as one that may have acted: the act slot and ${id} wait CHILD_RECLAIM_STALL_MS`);
+        this.collectSettleJob(coord, id, pass, { kind: 'threw', detail });
+      })
+      .catch((err: unknown) => {
+        // The job settled and its fold failed, so the lane does not know what the job did: the pair resets under a new
+        // generation and the id takes the refusal floor (`collectAfterFoldFailed`), before the line is written. The
+        // slot is left as the settle made it, or as it was if the settle threw before its slot write (a stated residual).
+        const e = this.collectState.get(id);
+        if (e !== undefined) this.collectState.set(id, collectAfterFoldFailed(e, this.collectStepAt(this.collectClock())));
+        console.warn(`ccrc-server: sweepTempRootCollect: folding the collector's job for ${id} failed (${err instanceof Error ? err.message : String(err)}) — ${e !== undefined ? `its observation pair is reset, and ${id} waits CHILD_RECLAIM_DEFER_CEILING_MS` : `${id} was forgotten while the job was out, so nothing is reset`}`);
+      })
+      .finally(() => { this.collectSettled(id, pass); });
+  }
+
+  /** A settled act job (spec §5.10): its LANE effects first (L1's `collectJobEffects`: the slot, the latch), then its
+   *  fold for the id. A lane-wide clear the job saw was applied through the port the instant it saw it, never here. */
+  private collectSettleJob(coord: CoordStore, id: string, pass: number,
+    s: CollectJobOutcome | { readonly kind: 'threw'; readonly detail: string }): void {
+    const clock = this.collectClock();
+    const fx = collectJobEffects(s, clock.mono, CHILD_RECLAIM_STALL_MS);
+    this.collectSlot = fx.keptUntilMono === null ? { kind: 'free' } : { kind: 'kept', id, untilMono: fx.keptUntilMono };
+    if (fx.latchFlock) this.collectFlockLatched = true;
+    this.collectFoldJob(coord, id, pass, s, clock);
+  }
+
+  /** THE FOLD TABLE (spec §5.10): each of the executor's outcome arms through Task 4's transitions, each transition at
+   *  the answer's ARRIVAL under a generation the lane never used before, and each answer's word about the BOX only
+   *  when no later answer has changed the box-wide probes since it arrived (`collectBoxProbesAtArrival`). Nothing here
+   *  decides a pace; L1 does.
+   *  - `not-asked`: caps and paused were cleared through the port already, and a refused id has nothing to pace;
+   *    presence (step 3) is `collectAfterPresence`.
+   *  - every arm that carries observation 2's answer folds it first (`collectFoldAudit`): an observation only under its
+   *    capture, so a stale, paused, flipped, capability-less or cleared job's answer paces and never observes; then
+   *    `answered` presence (step 6) is `collectAfterPresence`, `held` is `collectAfterHold`, `would-collect` is
+   *    `collectAfterWouldCollect` with its once-per-(id, token) row, and `acted` is `collectAfterAct` with its row.
+   *  - an id forgotten while the job was out: every fold is dropped but an `acted` outcome's word about the box and a
+   *    `collected` act's row (`collectForgottenActRow`), worded from the job's own observation-2 document.
+   *  - `threw`: an audit with no document, which observes nothing. */
+  private collectFoldJob(coord: CoordStore, id: string, pass: number,
+    s: CollectJobOutcome | { readonly kind: 'threw'; readonly detail: string }, clock: CollectClock): void {
+    if (s.kind === 'threw') {
+      this.collectFoldAudit(coord, id, null, { kind: 'no-document', stderr: s.detail }, clock, null);
+      return;
+    }
+    if (s.kind === 'not-asked') {
+      const e = this.collectState.get(id);
+      if (s.why === 'presence' && e !== undefined) this.collectState.set(id, collectAfterPresence(e, this.collectStepAt(clock)));
+      return;
+    }
+    const e = this.collectFoldAudit(coord, id, pass, s.audit.value, s.audit.arrived, s.audit.composed);
+    // What an act says of the BOX counts whatever became of its id, as an audit's does (`collectFoldAudit`). It is the
+    // only clear for a probe raised between observation 2's arrival and a `collected` act's answer, which observation 2's
+    // own fold (a collectable answer, older than that probe) leaves standing. It stays ahead of the forgotten-id branch.
+    if (s.kind === 'acted') this.collectBoxProbesAnswered(s.result, s.arrived.mono);
+    if (e === null) {
+      // The id was forgotten while the job was out: its fold is dropped, save the row L1 says a deletion still owes.
+      const row = collectForgottenActRow(id, s, s.audit.value);
+      if (row !== null) this.collectRecordFeed(coord, { sessionId: id, ...row });
+      return;
+    }
+    const at = this.collectStepAt(s.audit.arrived);
+    switch (s.kind) {
+      case 'answered':
+        if (s.why === 'presence') this.collectState.set(id, collectAfterPresence(e, at));
+        return;
+      case 'held':
+        this.collectState.set(id, collectAfterHold(e, s.hold.why, at));
+        return;
+      case 'would-collect': {
+        const next = collectAfterWouldCollect(e, at);
+        this.collectFeedAfter(coord, id, next, { kind: 'row', key: collectWouldCollectKey(s.audit.value.token) },
+          () => ({ title: COLLECT_FEED_TITLE['would-collect'],
+            body: collectFeedWouldCollectBody(id, next.evidence.runId, next.evidence.leaf) }));
+        return;
+      }
+      case 'acted': {
+        const next = collectAfterAct(e, s.result, this.collectStepAt(s.arrived));
+        this.collectFeedAfter(coord, id, next, collectFeedCueOfAct(s.result), () => this.collectActRow(id, next, s.result));
+        return;
+      }
+      default: { const unnamed: never = s; return unnamed; }
+    }
+  }
+
+  /** Folds one AUDIT answer (spec §5.10). What it says of the BOX counts whatever became of the id: the box-wide probes,
+   *  by the answer's ARRIVAL (`collectBoxProbesAnswered`: an answer older than the probes' latest change is skipped, as
+   *  an act job's observation 2 can be, folded when its job settles) and, for an answer a pass queued, that pass's tally
+   *  (`collectPassClass`). Then the id's entry, through Task 4's `collectAfterAudit`: an OBSERVATION only when
+   *  `composed` is given and both generations it captured still stand (`collectFresh`); then the feed cue. An id
+   *  forgotten while the call was out has no entry, and the answer is dropped for it
+   *  (`an-answer-for-a-forgotten-id-is-dropped`): the entry written, or null. */
+  private collectFoldAudit(coord: CoordStore, id: string, pass: number | null, a: CollectAudit, arrived: CollectClock,
+    composed: CollectGenerations | null): CollectEntry | null {
+    this.collectBoxProbesAnswered(a, arrived.mono);
+    if (pass !== null) this.collectPassTally.get(pass)?.audits.set(id, collectPassClass(a));
+    const entry = this.collectState.get(id);
+    if (entry === undefined) return null;
+    const observes = composed !== null && collectFresh(composed, this.collectLaneGen, entry);
+    const next = collectAfterAudit(entry, a, this.collectStepAt(arrived), observes);
+    return this.collectFeedAfter(coord, id, next, collectFeedCueOfAudit(a), () => ({ title: COLLECT_FEED_TITLE.answer,
+      body: this.collectAuditBody(id, next, a) }));
+  }
+
+  /** The ONE write of the box-wide probes from an ANSWER (spec §5.10): both fields together, through L1's
+   *  `collectBoxProbesAtArrival`, so no answer's word about the box is applied without its arrival. The population's
+   *  clear (`collectBoxAfterPopulation`) is the only other write, and it leaves the stamp alone. */
+  private collectBoxProbesAnswered(a: CollectAudit | CollectResult, arrivedMono: number): void {
+    const next = collectBoxProbesAtArrival(
+      { probes: this.collectBoxProbes, changedAtMono: this.collectBoxProbesAtMono }, a, arrivedMono);
+    this.collectBoxProbes = next.probes;
+    this.collectBoxProbesAtMono = next.changedAtMono;
+  }
+
+  /** Writes `next` back after one step's feed cue (Task 4's `collectFeedStep`, over Task 5's cue), and writes the
+   *  episode's ONE row only when the step opened one: a repeat is quiet. */
+  private collectFeedAfter(coord: CoordStore, id: string, next: CollectEntry, cue: CollectFeedCue,
+    row: () => { readonly title: string; readonly body: string }): CollectEntry {
+    const stepped = collectFeedStep(next, cue);
+    this.collectState.set(id, stepped.entry);
+    if (stepped.opened !== null) {
+      const r = row();
+      this.collectRecordFeed(coord, { sessionId: id, runId: stepped.entry.evidence.runId, title: r.title, body: r.body });
+    }
+    return stepped.entry;
+  }
+
+  /** An audit answer's row body, worded by Task 5's builder (spec §5.10). A collectable answer opens no row. A document
+   *  that was not one (`no-document`, `unreadable`) is worded as ccrc's, by KIND, never as a word ccd said. */
+  private collectAuditBody(id: string, e: CollectEntry, a: CollectAudit): string {
+    const runId = e.evidence.runId;
+    switch (a.kind) {
+      case 'verdict': return collectFeedAnswerBody(id, runId, a.verdict, a.detail, []);
+      case 'unmeasured': return collectFeedAnswerBody(id, runId, a.probe, a.detail, []);
+      case 'no-document': return collectFeedReadBody(id, runId, 'no-document', a.stderr);
+      case 'unreadable': return collectFeedReadBody(id, runId, 'unreadable', a.detail);
+      case 'collectable': return collectFeedAnswerBody(id, runId, a.kind, null, []);
+      default: { const unnamed: never = a; return unnamed; }
+    }
+  }
+
+  /** An act's row, titled and worded by Task 5 (spec §5.10): `collected` its own; a `failed` with no word and an act that
+   *  answered no document are ccrc's words, chosen by KIND; every other outcome ccd's word. */
+  private collectActRow(id: string, e: CollectEntry, r: CollectResult): { readonly title: string; readonly body: string } {
+    const runId = e.evidence.runId;
+    switch (r.kind) {
+      case 'collected':
+        return { title: COLLECT_FEED_TITLE.collected, body: collectFeedCollectedBody(id, runId, e.evidence.leaf, r) };
+      case 'refused': return { title: COLLECT_FEED_TITLE.answer, body: collectFeedAnswerBody(id, runId, r.word, r.detail, r.paths) };
+      case 'failed': return { title: COLLECT_FEED_TITLE.answer, body: r.token === ''
+        ? collectFeedReadBody(id, runId, 'unaccepted', r.detail) : collectFeedAnswerBody(id, runId, r.token, r.detail, []) };
+      case 'die': return { title: COLLECT_FEED_TITLE.answer, body: collectFeedAnswerBody(id, runId, r.word, null, []) };
+      case 'no-document': return { title: COLLECT_FEED_TITLE.answer, body: collectFeedReadBody(id, runId, 'no-document', r.stderr) };
+      default: { const unnamed: never = r; return unnamed; }
+    }
+  }
+
+  /** The collector's feed rows (spec §5.10): written HERE, never by the definer (`collectLane.ts`) or the executor
+   *  (`coord/collectTempRoot.ts`), in `recordExpireFeed`'s idiom — a `run` row, recorded and archived, never pushed; a
+   *  failed archive write is said and never stops the lane; the log is flushed whatever happened. */
+  private collectRecordFeed(coord: CoordStore, row: {
+    readonly sessionId: string; readonly runId: number | null; readonly title: string; readonly body: string;
+  }): void {
+    const log = this.deps.notifyLog;
+    if (!log) return;
+    try {
+      const ev = log.record({ kind: 'run', sessionId: row.sessionId, runId: row.runId, title: row.title, body: row.body });
+      coord.recordFeedEvent(log.epoch, ev);
+    } catch (err) {
+      console.warn('ccrc-server: recordFeedEvent failed '
+        + `(${err instanceof Error ? err.message : String(err)}) — temp-root collector ${row.title}, feed archive degraded`);
+    } finally {
+      void log.flush();
+    }
+  }
+
+  /** The executor's view of this lane's memory (spec §5.10; `CollectLanePort`, declared by the executor). Every member is
+   *  synchronous, so the executor's step 6 reads observation 1 with no await between that read and its argv, and its step
+   *  5 records the marker with none between the read and the flip. `id` is the job's, which the flip's row names. */
+  private collectPortFor(coord: CoordStore, id: string): CollectLanePort {
+    return {
+      clock: () => this.collectClock(),
+      generations: (of) => ({ lane: this.collectLaneGen, id: this.collectState.get(of)?.idGen ?? -1 }),
+      observation: (of) => this.collectState.get(of)?.obs ?? null,
+      cleared: () => { this.collectClearPairs(); },
+      flipped: (live) => {
+        // THE LAST-SEEN-LIVE FLAG (spec §5.10). A change either way is a FLIP: every pair clears, ONE feed row says so —
+        // any same-uid session can touch the marker, so every change an act job SEES is said; one undone between two
+        // step-5 reads is never seen — and the job that saw it composes nothing. It starts SHADOWED, so an arming the
+        // lane never saw is a flip too.
+        if (live === this.collectLastSeenLive) return false;
+        this.collectLastSeenLive = live;
+        this.collectClearPairs();
+        this.collectRecordFeed(coord, { sessionId: id, runId: null, title: COLLECT_FEED_TITLE.switch,
+          body: collectFeedSwitchBody(live) });
+        return true;
+      },
+    };
+  }
+
+  /** The runner the lane hands its calls (spec §5.10): `deps.runCcd`, marking the id's flight with what is out — an
+   *  audit (`argv[0]` is `ws-audit`) or the act (anything else the executor composes) — and back to `queued` when the
+   *  call settles, so the unsettled line can tell the executor's audit from its act and from a job that has composed
+   *  nothing. It decides nothing and composes nothing. */
+  private collectRunCcd(id: string): Deps['runCcd'] {
+    return async (argv) => {
+      this.collectPhase(id, argv[0] === 'ws-audit' ? 'audit' : 'act');
+      try {
+        return await this.deps.runCcd(argv);
+      } finally {
+        this.collectPhase(id, 'queued');
+      }
+    };
+  }
+
+  private collectPhase(id: string, phase: CollectFlight['phase']): void {
+    const f = this.collectInFlight.get(id);
+    if (f !== undefined) this.collectInFlight.set(id, { ...f, phase });
+  }
+
+  /** The lane's two clocks, read together (Task 6's `CollectClock`). */
+  private collectClock(): CollectClock {
+    const n = this.childReclaimLaneNow();
+    return { mono: n.monoMs, wall: n.wallMs };
+  }
+
+  /** One transition's context (Task 4's `CollectStep`): the answer's ARRIVAL, and a generation drawn from the ONE
+   *  counter, never used before. */
+  private collectStepAt(arrived: CollectClock): CollectStep {
+    return { now: { monoMs: arrived.mono, wallMs: arrived.wall }, gen: ++this.collectGen, passIntervalMs: CHILD_RECLAIM_SWEEP_MS };
+  }
+
+  /** The id's entry, a first sighting (L1) the first time the lane queues a call for it, under a fresh generation. */
+  private collectEntryOf(id: string): CollectEntry {
+    const known = this.collectState.get(id);
+    if (known !== undefined) return known;
+    const fresh = collectFirstSighting(++this.collectGen);
+    this.collectState.set(id, fresh);
+    return fresh;
+  }
+
+  /** A LANE-WIDE CLEAR (spec §5.10): a raised pause or an unlistable registry, a missing capability, a marker flip.
+   *  The lane's generation moves to a value never used before, so the answer to any call composed
+   *  before it is no observation, and every entry goes through Task 4's `collectClearPair`: the PAIRS only. Each id's
+   *  next ask, its runs, its clocks and its feed episodes survive; only a restart loses them. */
+  private collectClearPairs(): void {
+    this.collectLaneGen = ++this.collectGen;
+    for (const [id, e] of this.collectState) this.collectState.set(id, collectClearPair(e));
+  }
+
+  /** One call or job settled: its flight ends, and its pass's tally counts it. The latest pass whose calls have all
+   *  settled becomes the one the pass-scoped box lines read; an older pass still open is dropped then. */
+  private collectSettled(id: string, pass: number): void {
+    this.collectInFlight.delete(id);
+    this.collectUnsettledLogged.delete(id);
+    const t = this.collectPassTally.get(pass);
+    if (t === undefined) return;
+    t.pending -= 1;
+    if (t.pending > 0) return;
+    this.collectPassTally.delete(pass);
+    if (pass < this.collectPassPublished) return;
+    this.collectPassPublished = pass;
+    this.collectPassAudits = t.audits;
+    for (const p of [...this.collectPassTally.keys()]) if (p < pass) this.collectPassTally.delete(p);
+  }
+
+  /** The ids whose collector call or job has not settled within its bound (spec §5.10), by kind, each counted from when
+   *  it was QUEUED. An act JOB not settled `CHILD_RECLAIM_STALL_MS` after it took the slot is asked FIRST, whatever it
+   *  has out: its `ws-collect` (`act`), or its own audit or nothing yet (`job`) — spec §5.10: "whether or not the job's
+   *  `ws-collect` is out" — and Task 5's line says the act slot is held for both. Short of that, an audit (a learning
+   *  audit, or the job's own) is listed at `COLLECT_AUDIT_STALL_MS`. The two kinds differ only in the process log's
+   *  noun. */
+  private collectUnsettled(mono: number): Map<string, CollectUnsettledKind> {
+    const out = new Map<string, CollectUnsettledKind>();
+    for (const [id, f] of [...this.collectInFlight].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+      const age = mono - f.sinceMono;
+      if (f.kind === 'act' && age >= CHILD_RECLAIM_STALL_MS) out.set(id, f.phase === 'act' ? 'act' : 'job');
+      else if ((f.kind === 'learn' || f.phase === 'audit') && age >= COLLECT_AUDIT_STALL_MS) out.set(id, 'audit');
+    }
+    return out;
+  }
+
+  /** Each unsettled call is logged ONCE per unsettled episode (spec §5.10): when it first passes its bound, and again
+   *  only after it has settled and a later call for that id passes its bound. Its attention line is derived at the
+   *  publish. */
+  private collectLogUnsettled(mono: number): void {
+    for (const [id, kind] of this.collectUnsettled(mono)) {
+      if (this.collectUnsettledLogged.has(id)) continue;
+      this.collectUnsettledLogged.add(id);
+      console.warn(`ccrc-server: sweepTempRootCollect: the collector's ${kind === 'job' ? 'job' : 'call'} for ${id} has not `
+        + `settled within its bound — nothing further is queued for ${id} until it does`
+        + `${this.collectSlot.kind === 'job' && this.collectSlot.id === id ? ', and the act slot stays taken' : ''}`);
+    }
+  }
+
+  /** The collector's attention (spec §5.10), derived from this lane's memory when the child lane publishes its list:
+   *  each remembered id L1 projects (`collectAttentionViews`: all but a re-registered id), and the box facts. L1
+   *  decides every item; the list's ONE write merges them (`childReclaimPublishAttention`). A stated residual: they
+   *  reach the frame only at that publish, and stand unchanged while the child lane's pass fails shut. */
+  private collectAttention(): ChildReclaimCollectInput {
+    const nowMono = this.collectClock().mono;
+    const entries = collectAttentionViews(this.collectState, this.collectPop, this.collectPopNames);
+    return collectAttentionItems({ entries, nowMono, box: {
+      unmeasured: this.collectPop?.unmeasured ?? [], refusedNames: this.collectPop?.refusedNames ?? 0,
+      boxProbes: this.collectBoxProbes, passAudits: this.collectPassAudits, flockLatched: this.collectFlockLatched,
+      unsettled: this.collectUnsettled(nowMono),
+    } });
+  }
+
+  /**
+   * THE EXPIRY LANE (workspace lifecycle spec 2026-09-24 §5.3 "The lane", wave 3b): ARCHIVED workspaces, seven days
+   * after their archive. A SIBLING of `sweepChildReclaim` on the same tick — its registry read, its cadence
+   * (`CHILD_RECLAIM_SWEEP_MS`) and its switch (`reclaim-paused`, now the fleet's ONE cleanup switch) — and nothing else:
+   * its own memory, verdict (`archivedExpiryVerdict`, L1), executor (`expireArchived`), feed rows and attention list.
+   * A sibling pass, not a branch inside the child lane's, so neither lane's early return (the mirror unread, a
+   * capability missing) can silence the other (the departure `expiry-lane-is-a-sibling-pass`).
+   *
+   * IT SHIPS SHADOWED (the coordinator's safety ruling (E)). Until the operator touches `$REG/expire-lane-live` by
+   * hand, a due row is AUDITED and RECORDED — "would expire <id>", a feed row and an attention entry — and `ws-expire`
+   * is never composed; the executor re-reads the file at the act. `reclaim-paused` stops the lane ENTIRELY, shadow
+   * included: no audit, no record.
+   *
+   * THE THRESHOLD IS NEVER TYPED HERE. A row's instant is LEARNED from ccd (`learnExpiry`: the audit's `expiresAt`,
+   * read through ONE reader), once per archive, at most `EXPIRE_AUDITS_PER_PASS` rows a pass; a row is not audited
+   * again before its instant unless its archive changes. A box whose ccd predates the key answers no evidence, and
+   * nothing is composed for that row.
+   *
+   * WHAT IT ASKS FOR. A row twice-observed eligible (`archivedExpiryVerdict` on two passes) is DUE; AT MOST ONE act
+   * runs per pass, fleet-wide, and ONE PASS runs at a time, so never two acts at once. Every outcome is folded into
+   * memory by L1 (`archivedExpiryNextEntry`); a feed row is written when a row's outcome CHANGES. Presence defers with
+   * no ceiling; a standing `in-use` is reported, naming what holds it, and never killed.
+   */
+  async sweepArchivedExpiry(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord || this.archivedExpirySweeping) return;
+    const now = Date.now();
+    if (this.lastArchivedExpirySweep !== 0 && now - this.lastArchivedExpirySweep < CHILD_RECLAIM_SWEEP_MS) return;
+    this.lastArchivedExpirySweep = now;
+    this.archivedExpirySweeping = true;
+    try {
+      await this.archivedExpiryPass(coord, records, names, now);
+    } finally {
+      this.archivedExpirySweeping = false;
+    }
+  }
+
+  /** One pass of the expiry lane — `sweepArchivedExpiry`'s body, run only while no other pass runs. */
+  private async archivedExpiryPass(
+    coord: CoordStore, records: readonly SessionRecord[], names: readonly string[], now: number,
+  ): Promise<void> {
+    const forgetSightings = (): void => {
+      for (const [id, e] of this.archivedExpiryState) {
+        if (e.eligibleSince !== null) this.archivedExpiryState.set(id, { ...e, eligibleSince: null });
+      }
+    };
+    // ONE — the switch and the capability. Either way the twice-observed sightings are dropped: a row needs two
+    // FRESH passes once the switch is lowered or the box proves the verb. What was learned and reported stands.
+    if (names.includes(RECLAIM_PAUSE_MARKER) || !capSupported(this.deps.fleetState, EXPIRE_CAP)) {
+      forgetSightings();
+      return;
+    }
+    // TWO — the population, and the store's answers for it, read ONCE (`lastRunBySession`). A read that fails makes
+    // every row ineligible this pass. (The executor re-reads them for its one row at the act.)
+    const archived = records.filter((r) => r.workspace !== null && r.archivedAt !== null);
+    let store: { ok: true; workers: ReadonlySet<string>; claimants: ReadonlySet<string> } | { ok: false; detail: string };
+    try {
+      const last = coord.lastRunBySession(archived.map((r) => r.id));
+      store = last.ok ? { ok: true, workers: new Set(last.openWorkers), claimants: new Set(last.openClaimants) }
+        : { ok: false, detail: last.detail };
+    } catch (err) {
+      store = { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+    const seen = new Set<string>();
+    const learn: string[] = [];
+    const due: string[] = [];
+    for (const r of archived) {
+      seen.add(r.id);
+      let entry = archivedExpiryEntryFor(this.archivedExpiryState.get(r.id), r.archivedAt!);
+      const past = entry.expiresAt !== null && now >= entry.expiresAt * 1000;
+      const read: ExpiryStoreRead = !store.ok ? { ok: false, detail: store.detail } : this.archivedExpiryStoreRead(
+        coord, r.id, store.workers.has(r.id), store.claimants.has(r.id), past);
+      const v = archivedExpiryVerdict({
+        sessionId: r.id, workspace: r.workspace, archivedAt: r.archivedAt, child: r.child,
+        identityMeasured: r.unmeasured.length === 0, held: r.held, store: read, expiresAt: entry.expiresAt, nowMs: now,
+      });
+      entry = archivedExpirySighted(entry, v, r.held, now);
+      this.archivedExpiryState.set(r.id, entry);
+      if (!v.eligible && v.why === 'expiry-unknown' && now >= entry.nextAskAt) learn.push(r.id);
+      if (archivedExpiryDue(entry, now)) due.push(r.id);
+    }
+    // A row that left the population is forgotten — save one whose expiry COMPLETED and kept a leaf (wave 5): it is gone
+    // from the registry by definition, and its report is the only trace of what stays on disk until a restart.
+    for (const [id, e] of [...this.archivedExpiryState]) if (!seen.has(id) && e.report?.kind !== 'kept') this.archivedExpiryState.delete(id);
+    // THREE — learn: one audit at a time, each on its session's queue. The slots go in `nextAskAt` order — a row never
+    // asked (0) first, then the rows asked longest ago — never registry order, so rows that keep failing cannot take
+    // every slot from a row behind them (review 313, parked item 1). The sort is stable: ties keep registry order.
+    learn.sort((a, b) => this.archivedExpiryState.get(a)!.nextAskAt - this.archivedExpiryState.get(b)!.nextAskAt);
+    for (const id of learn.slice(0, EXPIRE_AUDITS_PER_PASS)) {
+      try {
+        const read = await this.deps.queue.run(id, () => learnExpiry(this.deps, id));
+        const e = this.archivedExpiryState.get(id);
+        if (e !== undefined) this.archivedExpiryState.set(id, archivedExpiryLearned(e, read, Date.now(), CHILD_RECLAIM_SWEEP_MS));
+      } catch (err) {
+        console.warn(`ccrc-server: sweepArchivedExpiry: learning ${id}'s expiry threw (${err instanceof Error ? err.message : String(err)})`);
+      }
+    }
+    // FOUR — the act: at most ONE per pass, fleet-wide, never on a box that answered `flock-unavailable`. Never asked
+    // first: the row whose `nextAskAt` is earliest, then the oldest instant. No other pass runs meanwhile, so the
+    // answer is folded onto the very entry the act was asked for.
+    if (this.archivedExpiryBoxRefused === null && due.length > 0) {
+      const pick = due.map((id) => [id, this.archivedExpiryState.get(id)!] as const)
+        .sort(([ia, a], [ib, b]) => a.nextAskAt - b.nextAskAt || (a.expiresAt ?? 0) - (b.expiresAt ?? 0) || (ia < ib ? -1 : 1))[0]!;
+      const [id, entry] = pick;
+      try {
+        const result = await this.deps.queue.run(id, () => expireArchived({
+          coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState,
+          presence: this.deps.presence, notifyLog: this.deps.notifyLog,
+        }, { sessionId: id, archivedAt: entry.archivedAt, expiresAt: entry.expiresAt! }));
+        if (result.kind === 'box' && result.word === 'flock-unavailable') this.archivedExpiryBoxRefused = result.detail;
+        if (archivedExpiryOutcomeKey(result) !== entry.lastOutcome) recordExpireFeed({ coord, notifyLog: this.deps.notifyLog }, result);
+        const next = archivedExpiryNextEntry(entry, result, Date.now(), CHILD_RECLAIM_SWEEP_MS);
+        if (next === null) this.archivedExpiryState.delete(id); else this.archivedExpiryState.set(id, next);
+      } catch (err) {
+        console.warn(`ccrc-server: sweepArchivedExpiry: the expiry of ${id} threw (${err instanceof Error ? err.message : String(err)}) — left for the next pass`);
+      }
+    }
+    // FIVE — the attention list, from the lane's memory alone.
+    this.expiryAttentionList = expiryAttention(this.archivedExpiryState);
+  }
+
+  /** One archived row's store answers in the lane's pass (spec §5.3's run conjuncts). `reviewing` — a REVIEW run
+   *  naming this row whose reviewed run is not terminal (`expiryReviewing`, the executor's own read) — is read only
+   *  for a row PAST its instant (`past`), the only rows it can decide; a read that fails is the store's failure for
+   *  this row. */
+  private archivedExpiryStoreRead(
+    coord: CoordStore, id: string, openWorker: boolean, openClaimant: boolean, past: boolean,
+  ): ExpiryStoreRead {
+    if (!past || openWorker || openClaimant) return { ok: true, openWorker, openClaimant, reviewing: false };
+    const review = expiryReviewing(coord, id);
+    return review.ok ? { ok: true, openWorker, openClaimant, reviewing: review.reviewing } : review;
+  }
+
+  /**
+   * THE DEAD-COORDINATOR LANE (workspace lifecycle spec 2026-09-24 §5.4, wave 4): a coordinator that CRASHED and has
+   * stayed dead an hour, with no successor, has its open runs closed `failed` — and CCR-15 then reclaims its marked
+   * children. A THIRD SIBLING of `sweepChildReclaim` on the same tick, with its registry read, its cadence
+   * (`CHILD_RECLAIM_SWEEP_MS`) and its switch (`reclaim-paused`, the fleet's one cleanup switch) — and nothing else:
+   * its own memory, verdicts (`deadCoordinator.ts`, L1), executor (`endDeadCoordinator`), feed rows and attention list
+   * (the expiry lane's shape, `expiry-lane-is-a-sibling-pass`).
+   *
+   * IT SHIPS SHADOWED (the coordinator's safety ruling (B)). Until the operator touches `$REG/dead-coordinator-lane-live`
+   * by hand, a due claimant is RECORDED — "would end programme <slug> (<n> runs)", a feed row and an attention entry —
+   * and `closeRun`'s abandon arm is never reached; the executor re-reads the file inside the serialiser. The anchors and
+   * the breaker are kept in shadow too, so the operator sees them before arming. `reclaim-paused` stops it ENTIRELY.
+   *
+   * WHO IT MEASURES: the distinct claimants of non-terminal runs, each with the reclaim door's own ladder
+   * (`measureClaimant`, its dead arm carrying `cause`), plus ONE store read of the journal clause for the dead ones.
+   * A crash, and only a crash, writes the durable first-dead anchor; any other answer deletes it — and a journal the
+   * lane cannot trust to hold every deliberate act is no crash. DUE when an hour has passed since
+   * `max(firstDeadAt, .supervised)` and the two latest passes both measured it crashed. Armed, AT MOST ONE claimant is
+   * acted on per pass, the longest dead first; in shadow every due one is recorded; never while the circuit breaker
+   * stands.
+   *
+   * IT NEVER PUSHES. The stall watch is what notifies about a dead coordinator: per stalled worker, its r3
+   * (`coordinator-dead`, "Reclaim the run") and — once its wave-2 arms are armed — `coord-deaf` for a worker's unacked
+   * ball-passing mail, each naming the worker's workspace and the coordinator. This lane's rows are records and
+   * attention entries keyed by the same claimant id, so they read as that incident's outcome, never a second one.
+   */
+  async sweepDeadCoordinators(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord || this.deadCoordinatorSweeping) return;
+    const now = Date.now();
+    if (this.lastDeadCoordinatorSweep !== 0 && now - this.lastDeadCoordinatorSweep < CHILD_RECLAIM_SWEEP_MS) return;
+    this.lastDeadCoordinatorSweep = now;
+    this.deadCoordinatorSweeping = true;
+    try {
+      await this.deadCoordinatorPass(coord, records, names, now);
+    } finally {
+      this.deadCoordinatorSweeping = false;
+    }
+  }
+
+  /** One pass of the dead-coordinator lane — `sweepDeadCoordinators`'s body, run only while no other pass runs. */
+  private async deadCoordinatorPass(
+    coord: CoordStore, records: readonly SessionRecord[], names: readonly string[], now: number,
+  ): Promise<void> {
+    const forget = (): void => {
+      for (const [id, e] of this.deadCoordinatorState) {
+        if (e.crashedPasses !== 0) this.deadCoordinatorState.set(id, { ...e, crashedPasses: 0 });
+      }
+    };
+    // ONE — the switch. `reclaim-paused` stops the lane entirely, shadow included: nothing is measured, recorded or
+    // written. The run of crashed passes is forgotten, so a lowered switch needs two FRESH passes; the durable anchors
+    // stand (the next crashed pass continues them, or the gap restarts them).
+    if (names.includes(RECLAIM_PAUSE_MARKER)) { forget(); return; }
+    // TWO — the journal's own trust (`readDeadCoordinatorJournalTrust`): a mirror not swept yet, or gone stale,
+    // decides NOTHING this pass — no anchor is written or deleted, and the run of crashed passes starts again.
+    const journal = await readDeadCoordinatorJournalTrust({ coord, io: this.deps.io, cfg: this.deps.cfg }, this.lifecycleHealth());
+    if (journal.hold !== null) {
+      console.warn(`ccrc-server: sweepDeadCoordinators: ${journal.hold} — no decisions this pass`);
+      forget();
+      return;
+    }
+    // THREE — the population, the anchors: one statement each. Either failing decides nothing this pass.
+    let ids: string[];
+    let anchors: ReadonlyMap<string, DeadAnchor>;
+    try {
+      ids = [...new Set(coord.openCoordinatorIds())].sort();
+      const a = coord.deadAnchors();
+      if (!a.ok) throw new Error(a.detail);
+      anchors = a.anchors;
+    } catch (err) {
+      console.warn(`ccrc-server: sweepDeadCoordinators could not read the coordination store (${err instanceof Error ? err.message : String(err)}) — no decisions this pass`);
+      forget();
+      return;
+    }
+    // FOUR — each claimant, measured by the reclaim door's own ladder, one at a time, through a tmux port that notes
+    // a tmux that did not answer (a FLEET-wide doubt the breaker reads); then the journal clause for the dead ones in
+    // ONE store read. A read that throws is `unreadable` for each of them — never "no history".
+    const fleetDoubt: string[] = [];
+    const tmux = {
+      sessionVerdict: async (id: string) => {
+        const v = await this.deps.tmux.sessionVerdict(id);
+        if (v.verdict === 'unknown') fleetDoubt.push(`tmux did not answer for ${id}: ${v.detail}`);
+        return v;
+      },
+    };
+    // EACH claimant is measured at the instant it is measured — a fresh `Date.now()`, never the pass's `now`, which is
+    // older by every awaited read before it: a supervisor heartbeat landing mid-pass would read as a FUTURE stamp, and a
+    // coordinator being brought back would read crashed. That instant is that claimant's own through step five (its
+    // anchor, its hour, its sighting); the pass's `now` stays the instant of what is the pass's — the cadence stamp, the
+    // breaker's clock, the due test, the feed rows.
+    const measured = new Map<string, Awaited<ReturnType<typeof measureClaimant>>>();
+    const measuredAt = new Map<string, number>();
+    for (const id of ids) {
+      const at = Date.now();
+      measuredAt.set(id, at);
+      measured.set(id, await measureClaimant({ coord, io: this.deps.io, cfg: this.deps.cfg, tmux }, id, at));
+    }
+    const dead = ids.filter((id) => measured.get(id)!.state === 'dead');
+    let journalOf: (id: string) => DeadCoordinatorJournal;
+    try {
+      const rows = coord.deadCoordinatorJournalRows(dead);
+      journalOf = (id) => {
+        const j = rows.get(id);
+        return j === undefined ? { kind: 'no-history' } : deadCoordinatorJournal(j.rows, j.hasHistory, journal.trust);
+      };
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      journalOf = () => ({ kind: 'unreadable', detail });
+    }
+    // FIVE — a crash and only a crash keeps (or starts) the durable anchor; any other answer deletes it.
+    const crashed: { id: string; firstDeadAt: number; since: number; cause: Exclude<ClaimantDeadCause, 'stopped'> }[] = [];
+    const unmeasurable: string[] = [];
+    /** Claimants this pass gave EVIDENCE about — alive, stopped, a deliberate act: the breaker releases them. */
+    const released = new Set<string>();
+    for (const id of ids) {
+      const c = deadCoordinatorCrash(measured.get(id)!, journalOf(id));
+      if (c.kind === 'unmeasurable') unmeasurable.push(id);
+      if (c.kind === 'alive' || c.kind === 'stopped' || c.kind === 'deliberate') released.add(id);
+      const at = measuredAt.get(id)!;
+      let entry = deadCoordinatorSighted(this.deadCoordinatorState.get(id) ?? deadCoordinatorEntry(), c, at);
+      try {
+        if (c.kind === 'crashed') {
+          const a = deadAnchorNext(anchors.get(id) ?? null, at);
+          coord.setDeadAnchor(id, a);
+          const supervisedAt = records.find((r) => r.id === id)?.supervisedAt ?? null;
+          crashed.push({ id, firstDeadAt: a.firstDeadAt, since: deadCoordinatorSince(a, supervisedAt, at), cause: c.cause });
+        } else if (anchors.has(id)) {
+          coord.deleteDeadAnchor(id);
+        }
+      } catch (err) {
+        // An anchor this pass could not write is an hour nobody can count: the run of crashed passes starts again.
+        console.warn(`ccrc-server: sweepDeadCoordinators could not keep ${id}'s anchor (${err instanceof Error ? err.message : String(err)})`);
+        entry = { ...entry, crashedPasses: 0 };
+      }
+      this.deadCoordinatorState.set(id, entry);
+    }
+    // A claimant that left the population (its runs closed, or reclaimed by an heir) is forgotten, anchor and all.
+    for (const id of [...this.deadCoordinatorState.keys()]) if (!ids.includes(id)) this.deadCoordinatorState.delete(id);
+    for (const id of anchors.keys()) {
+      if (!ids.includes(id)) {
+        try { coord.deleteDeadAnchor(id); } catch { /* the next pass deletes it */ }
+      }
+    }
+    // SIX — the circuit breaker, evaluated in shadow too, WITH ITS MEMORY: a member stays held until this pass gave
+    // evidence about it or it left the population; a pass that only doubted it keeps it, at its first instant.
+    const held = this.deadCoordinatorBreakerHeld.filter((m) => ids.includes(m.id) && !released.has(m.id));
+    const breaker = deadCoordinatorBreaker(crashed, held, unmeasurable, ids.length,
+      fleetDoubt.length === 0 ? null : fleetDoubt.join('; '), now);
+    this.deadCoordinatorBreakerState = breaker;
+    this.deadCoordinatorBreakerHeld = breaker.tripped ? breaker.members : [];
+    const key = deadCoordinatorBreakerKey(breaker);
+    if (breaker.tripped && key !== this.deadCoordinatorBreakerRecorded) {
+      recordDeadCoordinatorBreaker({ coord, notifyLog: this.deps.notifyLog }, breaker);
+    }
+    this.deadCoordinatorBreakerRecorded = key;
+    // SEVEN — the act, never while the breaker stands, the longest dead first. ARMED, at most ONE claimant a pass. In
+    // SHADOW every due claimant is recorded — a would-end touches nothing on the box, and the shadow list is what the
+    // operator arms on (the shadow half of `one-dead-coordinator-per-pass`). The executor decides shadow from its own listing, so
+    // an outcome that is not a would-end ends the pass however this pass's listing read.
+    if (!breaker.tripped) {
+      const due = crashed.filter((c) => {
+        const e = this.deadCoordinatorState.get(c.id)!;
+        return deadCoordinatorDue(c.since, e.crashedPasses, now) && now >= e.nextAskAt;
+      }).sort((a, b) => a.since - b.since || (a.id < b.id ? -1 : 1));
+      const armed = deadCoordinatorLaneArmed(names);
+      for (const pick of due) {
+        const out = await this.deadCoordinatorAct(coord, pick, now);
+        if (armed || out?.kind !== 'would-end') break;
+      }
+    }
+    // EIGHT — the attention list, from the lane's memory and its breaker alone.
+    this.deadCoordinatorAttentionList = deadCoordinatorAttention(this.deadCoordinatorState, this.deadCoordinatorBreakerState);
+  }
+
+  /** The act — or its shadow — for one due claimant, on the coordination serialiser. Its outcome, or `null` when it
+   *  was not asked (no serialiser) or threw. */
+  private async deadCoordinatorAct(
+    coord: CoordStore, pick: { id: string; since: number; cause: Exclude<ClaimantDeadCause, 'stopped'> }, now: number,
+  ): Promise<DeadCoordinatorActOutcome | null> {
+    const serial = this.deadCoordinatorSerial;
+    if (serial === null) {
+      console.warn(`ccrc-server: sweepDeadCoordinators: ${pick.id} is due, but no coordination serialiser is wired — nothing ended or recorded`);
+      return null;
+    }
+    const deps = { coord, io: this.deps.io, cfg: this.deps.cfg, tmux: this.deps.tmux, notifyLog: this.deps.notifyLog,
+      // Each re-measure reads the clock as it measures (the watcher's own source, `Date.now`), never the pass's `now`.
+      now: (): number => Date.now(),
+      // WHOLE — the hold with the trust — so a mirror gone stale since the pass is a `hold` stop (review 339, F4).
+      journalTrust: () => readDeadCoordinatorJournalTrust({ coord, io: this.deps.io, cfg: this.deps.cfg }, this.lifecycleHealth()) };
+    try {
+      const out = await serial(coord, (abandon) => endDeadCoordinator({ ...deps, abandon }, pick.id, now));
+      const e = this.deadCoordinatorState.get(pick.id) ?? deadCoordinatorEntry();
+      // An act is always news; a shadow record or a pause is written when it CHANGES.
+      if (out.kind === 'ended' || deadCoordinatorOutcomeKey(out) !== e.lastOutcome) {
+        recordDeadCoordinatorFeed({ coord, notifyLog: this.deps.notifyLog }, pick.id, out, pick.since);
+      }
+      this.deadCoordinatorState.set(pick.id, deadCoordinatorNextEntry(e, out, pick.cause, pick.since, Date.now(), CHILD_RECLAIM_SWEEP_MS));
+      // A re-measure that found it NOT crashed is evidence: its hour starts again from the next crash (ruling E: any
+      // answer but a crash deletes the anchor, and `deadCoordinatorNextEntry` forgets the run of crashed passes).
+      if (out.kind === 'ended' && out.stoppedBy?.kind === 'remeasured') {
+        try { coord.deleteDeadAnchor(pick.id); } catch { /* the next pass's own answer deletes or keeps it */ }
+      }
+      return out;
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      console.warn(`ccrc-server: sweepDeadCoordinators: the act on ${pick.id} threw (${detail}) — asked again after a backoff`);
+      const e = this.deadCoordinatorState.get(pick.id) ?? deadCoordinatorEntry();
+      // The runs the act closed before it threw ARE closed: their feed rows are written, and the entry says what closed.
+      const done = err instanceof DeadCoordinatorActThrew ? err.outcome : null;
+      if (done !== null && done.programmes.length > 0) {
+        recordDeadCoordinatorFeed({ coord, notifyLog: this.deps.notifyLog }, pick.id, done, pick.since);
+      }
+      // EVERY thrown act is recorded, whatever it had done (review 339, F13): one that released a worker and then threw,
+      // having closed nothing, is otherwise only an in-memory entry a restart loses.
+      recordDeadCoordinatorThrew({ coord, notifyLog: this.deps.notifyLog }, pick.id, done, detail, pick.since);
+      this.deadCoordinatorState.set(pick.id, deadCoordinatorThrew(e, detail, Date.now(), CHILD_RECLAIM_SWEEP_MS,
+        done !== null && done.programmes.length > 0 ? { closed: done.programmes, released: [], reheld: [], stop: null } : undefined));
+      return null;
+    }
   }
 
   /** The hold-release job's own executor: `releaseRetiredChildHold` on the
@@ -3785,7 +5171,10 @@ export class FleetWatcher {
     try {
       // `mail-disabled` reaches L1 as a fact, and `stallMailDisabledHold` decides what it holds (slug
       // `lane-honours-mail-disabled` (D-3636)). The module-local literal, never rundefs' export: see the import note.
-      const arming: StallArming = { ...stallArmingOf(names), mailDisabled: names.includes(MAIL_DISABLED_MARKER), mailMode: mailTurnModeOf(names) };
+      // The arming is the one settings resolution the mail sweep also calls (stall watch settings §9). The busy clock
+      // then decides the mode the verdicts judge, and when mail-stuck's busy idle start begins (D-4024).
+      const r = this.stallResolveNow(store, names, names.includes(MAIL_DISABLED_MARKER));
+      const arming: StallArming = { ...r.arming, ...stallBusyClock(r.arming.mailMode, this.lastApplied, this.busySince) };
       if (arming.disabled) return;
       const paused = names.includes(COORDINATOR_PAUSE_MARKER);
       let candidates: ReturnType<CoordStore['stallCandidates']>;
@@ -3813,7 +5202,7 @@ export class FleetWatcher {
       this.pruneStallMemory(workerIds, judged, new Set([...judged, ...tick.records.map((r) => r.id)]));
       for (const subject of workers) {
         try {
-          await this.judgeStall(store, subject, sessions, tick, arming, paused, now);
+          await this.judgeStall(store, subject, sessions, tick, arming, paused, now, r.quietMs);
         } catch (err) {
           console.warn(`ccrc-server: stall-watch run ${subject.primary.id} (${subject.primary.sessionId}) failed (${err instanceof Error ? err.message : String(err)}) — the next subject still runs`);
         }
@@ -3834,8 +5223,8 @@ export class FleetWatcher {
         }
       }
     } catch (err) {
-      // A throw outside the per-subject catches (`stallArmingOf`, `stallSubjects`) would reach the tick's silent
-      // `.catch`, and the lane would die every minute with no trace. One line per bad sweep instead.
+      // A throw outside the per-subject catches (a listing's `includes`, `stallSubjects`, `stallCoordinatorSubjects`, `pruneStallMemory`)
+      // would reach the tick's silent `.catch`, and the lane would die every minute with no trace. One line per bad sweep instead.
       console.warn(`ccrc-server: stall-watch sweep failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
     } finally {
       // A judged sweep is stamped when it ENDS, its error path included, so the next start measures only unobserved time.
@@ -3844,11 +5233,87 @@ export class FleetWatcher {
     }
   }
 
+  /**
+   * The stall-watch settings, resolved once for one sweep over that sweep's own listing (stall watch settings §9):
+   * the box arming (`stallBoxArmingOf`), the stored row (`store.stallSettings()`), its parse and the one resolver, then
+   * the warn latch and the boot trace (§8). Of the sweeps, `sweepStalls` and `sweepMail` both call it and neither reads
+   * the row any other way, so the two cannot read it differently. Three readers stand outside them: the GET view
+   * (`stallWatchView`, `coord/routes.ts`) composes the same reading in parallel, calling `store.stallSettings()`,
+   * `parseStallSettings` and `resolveStallWatch` itself; the POST handler reads the row to measure a write's effect;
+   * and `CoordStore.setStallSettings` reads it again inside the write. The view agrees with the sweeps by calling the
+   * same L1 parse and resolver over the same row, not by calling this method.
+   *
+   * It NEVER THROWS. `sweepMail` runs under `void this.sweepMail().catch(() => {})`, so a throw here would stop all
+   * mail delivery fleet-wide with no line. On any throw (a store, parse or resolver bug, or a fault in the latch or
+   * the trace) it answers the expression both sweeps ran before settings existed, over the same listing, with the
+   * built-in quiet time and `files`, so the fallback adds nothing that can throw where that did not. The catch calls
+   * nothing that can throw: `reason` is composed in its own `try`, keeping a fixed word when even reading the error
+   * throws, and its one warn is a bare `console.warn` in its own `try`, printed only when no fallback stood, and never
+   * through the latch, which may be the fault. It records `lastFallback`; a resolution that succeeds clears it.
+   */
+  private stallResolveNow(store: CoordStore, names: readonly string[], mailDisabled: boolean): StallResolution {
+    try {
+      const box = stallBoxArmingOf(names, mailDisabled);
+      const read = store.stallSettings();
+      const parsed = parseStallSettings(read);
+      const r = resolveStallWatch(box, parsed);
+      this.stallSettingsNotes(read, parsed, r);
+      this.lastFallback = null;
+      return { arming: r.arming, quietMs: r.quietMs, levelSource: r.levelSource };
+    } catch (err) {
+      let reason = 'an unreadable fault';
+      try {
+        reason = (err instanceof Error ? err.message : String(err)).slice(0, 200);
+      } catch { /* even reading the error threw: the fixed word stands */ }
+      if (this.lastFallback === null) {
+        try {
+          console.warn(`ccrc-server: stall-watch settings not applied (${reason}) — following the box files and the built-in quiet time`);
+        } catch { /* a log line must not stop a sweep */ }
+      }
+      this.lastFallback = { at: Date.now(), reason };
+      return { arming: { ...stallArmingOf(names), mailDisabled, mailMode: mailTurnModeOf(names) }, quietMs: STALL_QUIET_MS, levelSource: 'files' };
+    }
+  }
+
+  /** The warn latch and the boot trace (§8), for one read that resolved. A read that does not apply warns once per
+   *  read state, in its own words, and a read that applies re-arms every latch. The first read that is not
+   *  unreadable traces a stored choice that applies, once, so a roll-forward or a restored `coord.db` leaves a line. */
+  private stallSettingsNotes(read: StallSettingsRead, parsed: StallSettingsParsed, r: StallResolved): void {
+    const states: (readonly [string, string])[] = read.kind === 'absent' ? [['absent', 'no stored choice']]
+      : read.kind === 'unreadable' ? [['unreadable', `stored choice unreadable: ${read.detail.slice(0, 200)}`]]
+      : [
+        ...(parsed.level.kind === 'unreadable' ? [['level', 'stored level unreadable'] as const] : []),
+        ...(parsed.quiet.kind === 'unreadable' ? [['quiet', 'stored quiet time unreadable'] as const] : []),
+      ];
+    if (states.length === 0) this.stallSettingsWarned.clear();
+    for (const [state, words] of states) this.stallSettingsWarn(state, words);
+    if (this.stallSettingsTraced || read.kind === 'unreadable') return;
+    this.stallSettingsTraced = true;
+    if (r.chosen === null && r.quietSource !== 'chosen') return;
+    const level = r.chosen === null ? STALL_FOLLOW_LABEL : STALL_LEVEL_TEXT[r.chosen].label;
+    const quiet = `${r.quietMs / 60_000} min${r.quietSource === 'chosen' ? '' : ' (built-in)'}`;
+    console.warn(`ccrc-server: stall-watch level ${level} / quiet time ${quiet} chosen in Settings overrides the box files`);
+  }
+
+  /** The latch itself: one line per read state until a read applies again. `stallResolveNow`'s catch never calls it. */
+  private stallSettingsWarn(state: string, words: string): void {
+    if (this.stallSettingsWarned.has(state)) return;
+    this.stallSettingsWarned.add(state);
+    console.warn(`ccrc-server: stall-watch settings not applied (${words}) — following the box files and the built-in quiet time`);
+  }
+
+  /** The settings view's seam (stall watch settings §9, §10): the last resolution that fell back on a throw, or
+   *  `null` once one succeeds. PUBLIC for `registerCoordRoutes`' optional watcher, as `releaseHeldAsk` is. */
+  stallFallback(): { readonly at: number; readonly reason: string } | null {
+    return this.lastFallback;
+  }
+
   /** One run worker: read, decide, apply — the run verdict first, then its session verdicts in the spec's order
-   *  (orphan E, failed, each mail stuck, orphan D). Its throws are the caller's to catch. */
+   *  (orphan E, failed, each mail stuck, orphan D). Its throws are the caller's to catch. `quietMs` is the resolved
+   *  quiet time (stall watch settings §7), set on the run verdict's input; the session verdicts use fixed constants. */
   private async judgeStall(
     store: CoordStore, subject: StallSubject, sessions: readonly FleetSession[], tick: StallTick,
-    arming: StallArming, paused: boolean, now: number,
+    arming: StallArming, paused: boolean, now: number, quietMs: number,
   ): Promise<void> {
     const primary = subject.primary;
     const id = primary.sessionId;
@@ -3875,7 +5340,7 @@ export class FleetWatcher {
     const notices = this.stallNoticesOf(events);
     const markUnreadableSince = this.stallMarkUnreadableSince.get(id) ?? null;
     let input: StallInput = {
-      subject, worker, mail: stallRunMail(read.mail, runIds), notices, arming, coordinationPaused: paused,
+      subject, worker, mail: stallRunMail(read.mail, runIds), notices, arming, quietMs, coordinationPaused: paused,
       coordinator: null, activation: stallReactivation(events),
       w2: {
         mark, hook: stallHookFactOf(raw), deliveries: read.deliveries,
@@ -4540,10 +6005,19 @@ export class FleetWatcher {
     const listing = await this.deps.io.readdir(this.deps.cfg.registryDir);
     if (listing === null || listing.includes(MAIL_DISABLED_MARKER)) return;
     // The gate's mode comes from this SAME listing (worker stall watch §4.1,
-    // `turnidle.ts`). An unlistable registry has already returned above, so a
+    // `turnidle.ts`), through the one settings resolution the stall sweep also
+    // calls (stall watch settings §9): a chosen level can set it, and strict
+    // still wins. An unlistable registry has already returned above, so a
     // mode is never read from a listing that failed: the strict marker fails
-    // shut at no extra cost.
-    const mode = mailTurnModeOf(listing);
+    // shut at no extra cost. `false` is measured, not assumed: the return
+    // above proved `MAIL_DISABLED_MARKER` absent from this listing.
+    const mode = this.stallResolveNow(store, listing, false).arming.mailMode;
+    // The busy clock (D-4024), on the mode just applied: a move into busy from
+    // a known non-busy mode starts it, busy over busy keeps it, and any other
+    // mode clears it. The first busy after a start leaves it null.
+    if (mode !== 'busy') this.busySince = null;
+    else if (this.lastApplied !== null && this.lastApplied !== 'busy') this.busySince = now;
+    this.lastApplied = mode;
 
     const unacked = store.deliveredUnacked();
     const dueBefore = store.dueDeliveries(now, MAIL_REPLAY_MS);

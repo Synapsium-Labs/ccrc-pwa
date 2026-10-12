@@ -1,0 +1,153 @@
+{
+ "v": 1,
+ "version": "2.1.292",
+ "scenario": "swap-resume",
+ "labels": [
+  "s1",
+  "s2"
+ ],
+ "notes": [],
+ "events": [
+  {
+   "seq": 1,
+   "dtMs": 0,
+   "event": "SessionStart",
+   "envSid": "c761f381-b56d-47b0-93b6-6d0a26659133",
+   "payload": {
+    "session_id": "c761f381-b56d-47b0-93b6-6d0a26659133",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/c761f381-b56d-47b0-93b6-6d0a26659133.jsonl",
+    "cwd": "/rig/repo",
+    "hook_event_name": "SessionStart",
+    "source": "startup",
+    "model": "claude-opus-5-5"
+   }
+  },
+  {
+   "seq": 2,
+   "dtMs": 301,
+   "event": "UserPromptSubmit",
+   "envSid": "c761f381-b56d-47b0-93b6-6d0a26659133",
+   "payload": {
+    "session_id": "c761f381-b56d-47b0-93b6-6d0a26659133",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/c761f381-b56d-47b0-93b6-6d0a26659133.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "7d1a158c-9cc4-453c-9f19-c7def3cb006f",
+    "permission_mode": "default",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "dlg s1"
+   }
+  },
+  {
+   "seq": 3,
+   "dtMs": 631,
+   "event": "Stop",
+   "envSid": "c761f381-b56d-47b0-93b6-6d0a26659133",
+   "payload": {
+    "session_id": "c761f381-b56d-47b0-93b6-6d0a26659133",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/c761f381-b56d-47b0-93b6-6d0a26659133.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "7d1a158c-9cc4-453c-9f19-c7def3cb006f",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "DLG-S1",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 4,
+   "dtMs": 911,
+   "event": "SessionEnd",
+   "envSid": "c761f381-b56d-47b0-93b6-6d0a26659133",
+   "payload": {
+    "session_id": "c761f381-b56d-47b0-93b6-6d0a26659133",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/c761f381-b56d-47b0-93b6-6d0a26659133.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "7d1a158c-9cc4-453c-9f19-c7def3cb006f",
+    "hook_event_name": "SessionEnd",
+    "reason": "prompt_input_exit"
+   }
+  },
+  {
+   "seq": 5,
+   "dtMs": 7170,
+   "event": "SessionStart",
+   "envSid": "c761f381-b56d-47b0-93b6-6d0a26659133",
+   "payload": {
+    "session_id": "c761f381-b56d-47b0-93b6-6d0a26659133",
+    "transcript_path": "/rig/fixhome/cfg2/projects/-rig-repo/c761f381-b56d-47b0-93b6-6d0a26659133.jsonl",
+    "cwd": "/rig/repo",
+    "hook_event_name": "SessionStart",
+    "source": "resume",
+    "seconds_since_last_response": 6,
+    "context_tokens": 1208,
+    "prompt_cache_likely_expired": false,
+    "estimated_cache_write_usd": 0.006
+   }
+  },
+  {
+   "seq": 6,
+   "dtMs": 7556,
+   "event": "UserPromptSubmit",
+   "envSid": "c761f381-b56d-47b0-93b6-6d0a26659133",
+   "payload": {
+    "session_id": "c761f381-b56d-47b0-93b6-6d0a26659133",
+    "transcript_path": "/rig/fixhome/cfg2/projects/-rig-repo/c761f381-b56d-47b0-93b6-6d0a26659133.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "73e1b188-0a04-4daf-93a2-c63a7f274a9d",
+    "permission_mode": "default",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "dlg s2"
+   }
+  },
+  {
+   "seq": 7,
+   "dtMs": 8643,
+   "event": "Stop",
+   "envSid": "c761f381-b56d-47b0-93b6-6d0a26659133",
+   "payload": {
+    "session_id": "c761f381-b56d-47b0-93b6-6d0a26659133",
+    "transcript_path": "/rig/fixhome/cfg2/projects/-rig-repo/c761f381-b56d-47b0-93b6-6d0a26659133.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "73e1b188-0a04-4daf-93a2-c63a7f274a9d",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "DLG-S2",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 8,
+   "dtMs": 9031,
+   "event": "SessionEnd",
+   "envSid": "c761f381-b56d-47b0-93b6-6d0a26659133",
+   "payload": {
+    "session_id": "c761f381-b56d-47b0-93b6-6d0a26659133",
+    "transcript_path": "/rig/fixhome/cfg2/projects/-rig-repo/c761f381-b56d-47b0-93b6-6d0a26659133.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "73e1b188-0a04-4daf-93a2-c63a7f274a9d",
+    "hook_event_name": "SessionEnd",
+    "reason": "prompt_input_exit"
+   }
+  }
+ ],
+ "disk": {
+  "admin": {},
+  "worktreesLeft": [],
+  "branches": [
+   "main"
+  ],
+  "worktreeList": "worktree /rig/repo\nHEAD e10bc9b9b91ab41901b6c2813e77cb3cbcf500fd\nbranch refs/heads/main",
+  "metas": {},
+  "snapshots": {}
+ }
+}

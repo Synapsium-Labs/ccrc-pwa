@@ -3,7 +3,8 @@
 
 Run by hand on the fleet box, as the fleet user; it opens every file it reads
 read-only, writes nothing anywhere, never runs `ccd`, never touches tmux or a
-unit. It grows with the programme: each wave adds the §9 rows it owns as one
+unit (`--stage 6` reads the user journal by one read-only `journalctl --user`
+run, unless `--journal` names an export of it). It grows with the programme: each wave adds the §9 rows it owns as one
 function registered in STAGES (`N: stageN`), in the same PR as the mechanism
 those rows measure. `stageN(ctx)` returns a dict of named sections.
 
@@ -29,6 +30,7 @@ import json
 import mmap
 import os
 import re
+import subprocess
 import sys
 import time
 
@@ -74,6 +76,20 @@ def read_lines(path):
 #         alone. The deferred counts are split the same way, so the stranded
 #         backlog draining (deferred on a stranded pair) is told apart from a
 #         steady state that still overruns the budget.
+#         WHY A CARRY COPIED, AND HOW MUCH (D-4500, D-4501). A first carry
+#         that linked through the common mount logs `(link: via-mount)`
+#         (counted as `link`, and in `link_via_mount`); one that copied logs
+#         `(copy: <cause> <bytes|?> bytes)` (counted as `copy`); a merge appends
+#         `, via-mount V` and one `, copy: <cause> <F> files <B> bytes` per
+#         cause. `copy_by_cause` sums, per cause word, the first carries, the
+#         merged files and their bytes; `copied_bytes` splits the bytes by
+#         first carry and merge; `merged_via_mount` sums V. A bare `(copy)` —
+#         what ccd wrote before D-4501 — is `copy_legacy`, and a copy whose
+#         size ccd could not measure (`?`) is `copy_unsized`: both are copies,
+#         neither carries a byte figure. Causes are read generically
+#         (`[a-z-]+`), so a word ccd adds later is counted, never `other`.
+#         §9's stage-1 target: `exdev-*` copies at 0 on a box whose filesystem
+#         has a read-write mount exposing every account root.
 # resume  every Workflow tool call carrying `resumeFromRunId`, deduplicated by
 #         tool-use id across the account-root copies a swapping session
 #         accumulates, classified by its tool result: ok, journal-missing
@@ -96,7 +112,11 @@ def in_window(t, ctx):
 CARRY = re.compile(TS + r" sidecar (\S+) -> (.+) \(([^()]*)\)$")
 DIVERGED = re.compile(TS + r" sidecar (\S+) diverged (.+) longer (.+)$")
 SWAP = re.compile(TS + r" swap \S+: (\S+) -> (\S+) \(uuid (\S+)\)$")
-MERGED = re.compile(r"^merged \+(\d+) ~(\d+) !(\d+)(?:, deferred (\d+))?$")
+MERGED = re.compile(r"^merged \+(\d+) ~(\d+) !(\d+)(?:, deferred (\d+))?"
+                    r"((?:, via-mount \d+|, copy: [a-z-]+ \d+ files \d+ bytes)*)$")
+MERGED_VIA = re.compile(r", via-mount (\d+)")
+MERGED_COPY = re.compile(r", copy: ([a-z-]+) (\d+) files (\d+) bytes")
+COPY = re.compile(r"^copy: ([a-z-]+) (\d+|\?) bytes$")
 KEPT_REASONS = ("busy", "budget", "error")
 
 
@@ -104,14 +124,42 @@ def carry_counts(modes_seen):
     modes = {"link": 0, "copy": 0, "merged": 0, "kept": 0,
              "kept: busy": 0, "kept: budget": 0, "kept: error": 0, "other": 0}
     added = replaced = diverged = deferred_carries = deferred_actions = 0
+    link_via = merged_via = copy_legacy = copy_unsized = 0
+    by_cause = {}
+    copied_bytes = {"first_carry": 0, "merge": 0}
+
+    def cause_row(cause):
+        return by_cause.setdefault(cause, {"first_carries": 0, "merged_files": 0, "bytes": 0})
+
     for mode in modes_seen:
         mm = MERGED.match(mode)
+        cm = COPY.match(mode)
         if mm:
             modes["merged"] += 1
             added += int(mm.group(1)); replaced += int(mm.group(2)); diverged += int(mm.group(3))
             k = int(mm.group(4) or 0)
             deferred_carries += 1 if k else 0
             deferred_actions += k
+            merged_via += sum(int(v) for v in MERGED_VIA.findall(mm.group(5)))
+            for cause, files, nbytes in MERGED_COPY.findall(mm.group(5)):
+                row = cause_row(cause)
+                row["merged_files"] += int(files); row["bytes"] += int(nbytes)
+                copied_bytes["merge"] += int(nbytes)
+        elif mode == "link: via-mount":
+            modes["link"] += 1
+            link_via += 1
+        elif cm:
+            modes["copy"] += 1
+            row = cause_row(cm.group(1))
+            row["first_carries"] += 1
+            if cm.group(2) == "?":
+                copy_unsized += 1
+            else:
+                row["bytes"] += int(cm.group(2))
+                copied_bytes["first_carry"] += int(cm.group(2))
+        elif mode == "copy":
+            modes["copy"] += 1
+            copy_legacy += 1
         elif mode in modes:
             modes[mode] += 1
         else:
@@ -126,6 +174,9 @@ def carry_counts(modes_seen):
         "kept_other_than_busy_budget": modes["kept"] + modes["kept: error"],
         "merged_added": added, "merged_replaced": replaced, "merged_diverged": diverged,
         "deferred_carries": deferred_carries, "deferred_actions": deferred_actions,
+        "link_via_mount": link_via, "merged_via_mount": merged_via,
+        "copy_legacy": copy_legacy, "copy_unsized": copy_unsized,
+        "copy_by_cause": by_cause, "copied_bytes": copied_bytes,
     }
 
 
@@ -293,6 +344,7 @@ def stage4(ctx):
     except FileNotFoundError:
         return {"rescue": {"swap_log": "absent"}}
     rescues, landings, carried = [], collections.defaultdict(list), []
+    moves, landed_moves, chain_opens = collections.defaultdict(list), collections.defaultdict(list), collections.defaultdict(list)
     opened, ended = collections.Counter(), collections.Counter()
     chain_neither, near_swap = 0, 0
     # §11 item 6, ruled 2026-09-24 "leave it and count it": a STALLED session
@@ -324,12 +376,15 @@ def stage4(ctx):
             t = s4_epoch(m.group(1))
             if t is not None:
                 landings[m.group(2)].append(t)
+                landed_moves[m.group(2)].append((t, m.group(3), m.group(4)))
             continue
         m = S4_RESCUE.match(line)
         if m:
             t = s4_epoch(m.group(1))
             if inwin(t):
                 rescues.append((t, m.group(2), dict(S4_TOKEN.findall(m.group(5)))))
+            if t is not None:
+                moves[m.group(2)].append((t, m.group(3), m.group(4), dict(S4_TOKEN.findall(m.group(5)))))
             continue
         m = S4_CARRIED.match(line)
         if m:
@@ -342,6 +397,8 @@ def stage4(ctx):
             t = s4_epoch(m.group(1))
             if inwin(t):
                 opened[m.group(3)] += 1
+            if t is not None and m.group(3) == "chain":
+                chain_opens[m.group(2)].append(t)
             if upto(t):
                 pending[m.group(2)] = (m.group(3), m.group(5))
             continue
@@ -379,6 +436,39 @@ def stage4(ctx):
         past.append(("open", ref - int(reset)))
     past_by_end = collections.Counter(end for end, _ in past)
 
+    # §9's stage-4 target, restated 2026-10-03 (review 246's F6): no session
+    # takes a FOURTH rescue inside an hour that no chain wait preceded. Rule 3
+    # counts LANDED rescues (a dispatch whose swap was refused never left), so
+    # this row does too: a rescue landed when the session's next `swap <id>:
+    # <from> -> <to>` line, before its next rescue, names the same move. Only a
+    # fourth rescue the chain wait could have held is asked about — one on a
+    # dated block (`reset=` and `type=` on its line) not past its five-hour
+    # reset's grace, the chain wait's own gate; "preceded" is a `kind=chain`
+    # entry line for that session between the third rescue and the fourth. A
+    # `reset=` that is not one to twelve digits is no date: any session can
+    # append to swap.log, and `int()` of a forged token raises.
+    # Named cost: a Codex-lane session is never chain-waited, by rule, and the
+    # log does not say which lane a source account is, so a dated fourth rescue
+    # of one counts here; its line names its source account.
+    unchained = 0
+    for sid, mv in moves.items():
+        mv.sort(key=lambda x: x[0])
+        lands = sorted(landed_moves.get(sid, []))
+        done = []
+        for k, (t, src, dst, tok) in enumerate(mv):
+            nxt = mv[k + 1][0] if k + 1 < len(mv) else float("inf")
+            if any(t <= lt < nxt and (ls, ld) == (src, dst) for lt, ls, ld in lands):
+                done.append((t, tok))
+        for i in range(3, len(done)):
+            t, tok = done[i]
+            if not inwin(t) or t - done[i - 3][0] >= 3600 or not re.fullmatch(r"\d{1,12}", tok.get("reset", "")) or "type" not in tok:
+                continue
+            if tok.get("type") == "five_hour" and t >= int(tok["reset"]) + S4_GRACE:
+                continue
+            if not any(done[i - 1][0] <= c <= t for c in chain_opens.get(sid, [])):
+                unchained += 1
+                break
+
     # Sessions with RESCUE_CHAIN_COUNT + 1 (= 4) or more auto-rescues inside any 60 minutes.
     by_sess = collections.defaultdict(list)
     for t, sid, _ in rescues:
@@ -412,6 +502,7 @@ def stage4(ctx):
         "rescues": len(rescues),
         "sessions_with_4plus_rescues_in_an_hour": four_plus,
         "max_rescues_in_an_hour": worst,
+        "sessions_with_an_unchained_4th_rescue_in_an_hour": unchained,
         "chain_waits_ending_in_neither_swap_nor_reset": chain_neither,
         "rescues_on_a_carried_in_banner": on_carried,
         "rescues_with_a_dated_row": dated,
@@ -427,7 +518,320 @@ def stage4(ctx):
     }}
 
 
-STAGES = {1: stage1, 4: stage4}
+# ── stage 6 (wave 4): the OOM stops of the pressure reap's own class ─────────
+# §9's stage-6 row, baseline B: OOM stops of pane scopes whose session had been
+# idle 30 minutes or more with a live background shell — the class Claude Code's
+# background-shell pressure reap chooses by (spec §1.3) — with every pane-scope
+# OOM stop beside it. B is the count over the week that starts at wave 4's
+# deploy, with the reap still on (wave 4b ships the variable that disables it).
+# Four sources, all read-only:
+#   the user journal  every `tmux-spawn-*.scope` record: its start (JOB_TYPE
+#                     start, JOB_RESULT done) and its OOM stop (UNIT_RESULT
+#                     oom-kill — under OOMPolicy=stop the kill of any process in
+#                     a pane scope ends the scope and its session). Read from
+#                     `--journal FILE` (`journalctl -o json` lines) when given,
+#                     else by ONE read-only `journalctl --user` run.
+#   .lifecycle/       ccd's own `spawn` events: a scope is the session whose
+#                     spawn event landed in the S6_SPAWN_SLOP seconds AFTER the
+#                     scope's start (the event follows the settle: measured on
+#                     the fleet box, 2–6 s after the scope for most spawns) —
+#                     exactly one session, or the stop is `unmapped`. The same
+#                     event dates that Claude Code's process.
+#   <id>.uuid         the session's transcript (the largest copy, as stage 1).
+#   the transcript    idle: no user or assistant row in the S6_IDLE seconds
+#                     before the stop; a live background shell: a Bash
+#                     `run_in_background` start ("Command running in background
+#                     with ID: X") after the spawn and at or before the stop,
+#                     with no `<task-notification>` for X at or before it.
+# Named costs: a scope whose start fell out of the journal's retention, or whose
+# spawn shared its window with another session's, is `unmapped`; ccd writes no
+# spawn event for a respawn within five minutes with an unchanged rc, so that
+# scope is `unmapped`, or — when another session's spawn falls in its window —
+# caught by the reverse check (a spawn that two scope starts precede is claimed
+# by neither: both stops are `unmapped`, never guessed); a session whose
+# transcript changed uuid since the stop (a /clear) reads the newer file, which
+# holds no row before the stop, so it reads as idle with no shell; a background
+# shell ended by Claude Code without a notification row reads as live.
+# §9's second stage-6 metric, dead ccd scopes that pass the inert test yet
+# survive a day, is read from a FIFTH source, at the moment of the reading (the
+# record keeps no history, so `--since`/`--until` do not apply to it):
+#   ccd-scope-sweep.state  the sweep's verdict record ($XDG_RUNTIME_DIR): its
+#                     `dead` lines whose verdict says every stop predicate held
+#                     (`would-stop`, `held`, `stop-failed`), and of those the
+#                     ones first seen dead a day or more before its tick. While
+#                     the stop is shadowed every inert scope survives by design:
+#                     the count is reported, and its target of 0 applies once the
+#                     operator arms the stop. An absent record is `absent`, never 0.
+S6_IDLE = 1800
+S6_SPAWN_SLOP = 10
+S6_DAY = 86400
+S6_HDR = re.compile(r"# ccd-scope-sweep v1 tick=(\d+) up=(\d+) mode=(shadow|live)")
+S6_DEAD = re.compile(r"dead tmux-spawn-\S+\.scope first=(\d+) cpu0=\d+ verdict=([a-z-]+) ")
+S6_INERT = ("would-stop", "held", "stop-failed")
+S6_TS = re.compile(rb'"timestamp":"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)')
+S6_ROW = re.compile(rb'"type":"(?:user|assistant)"')
+S6_BG = re.compile(rb"Command running in background with ID: ([A-Za-z0-9_-]+)")
+S6_NOTE = re.compile(rb"<task-notification>(?:\\n|\s)*<task-id>([A-Za-z0-9_-]+)</task-id>")
+
+
+def s6_iso(t):
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)).encode()
+
+
+def s6_journal(ctx):
+    """The journal's pane-scope records as dicts, or None when they cannot be read."""
+    try:
+        if ctx.get("journal"):
+            with open(ctx["journal"], "rb") as fh:
+                raw = fh.read()
+        else:
+            # Two FIELD matches, OR'd (`+`), never `-u 'tmux-spawn-*.scope'`: a unit glob
+            # walks the whole journal (5 min 41 s on the fleet box, 2026-10-06, against
+            # this call's own 600 s bound), the indexed matches take 23 s, and the
+            # tmux-spawn records they return are the same 6,115 (filtered below).
+            p = subprocess.run(["journalctl", "--user", "--no-pager", "-o", "json",
+                                "--output-fields=USER_UNIT,UNIT_RESULT,JOB_TYPE,JOB_RESULT",
+                                "JOB_TYPE=start", "+", "UNIT_RESULT=oom-kill"], capture_output=True, timeout=600)
+            if p.returncode != 0:
+                return None
+            raw = p.stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = []
+    for line in raw.decode("utf-8", "replace").splitlines():
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(e, dict) and str(e.get("USER_UNIT", "")).startswith("tmux-spawn-"):
+            out.append(e)
+    return out
+
+
+def s6_spawns(ctx):
+    """ccd's lifecycle `spawn` events: (epoch seconds, session id), oldest first."""
+    out = []
+    for f in sorted(glob.glob(os.path.join(ctx["home"], ".cc-sessions", ".lifecycle", "journal-*.ndjson"))):
+        try:
+            lines = read_lines(f)
+        except OSError:
+            continue
+        for line in lines:
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(e, dict) and e.get("act") == "spawn" and e.get("outcome") == "done" \
+                    and isinstance(e.get("at"), int) and isinstance(e.get("id"), str):
+                out.append((e["at"] / 1000.0, e["id"]))
+    return sorted(out)
+
+
+def s6_transcript(ctx, sid):
+    try:
+        with open(os.path.join(ctx["home"], ".cc-sessions", sid + ".uuid"), "rb") as fh:
+            uuid = fh.read().decode("utf-8", "replace").strip()
+    except OSError:
+        return []
+    if not re.fullmatch(r"[0-9a-f-]{36}", uuid):
+        return []
+    best = []
+    for p in glob.glob(os.path.join(ctx["home"], ".claude*", "projects", "*", uuid + ".jsonl")):
+        try:
+            best.append((os.path.getsize(p), p))
+        except OSError:
+            pass
+    best.sort(reverse=True)
+    return [p for _, p in best] if ctx["all_copies"] else [p for _, p in best[:1]]
+
+
+def s6_classify(paths, born, at):
+    """-> busy | idle-no-shell | reap-class, read off the transcript's own rows."""
+    lo, hi, born_iso = s6_iso(at - S6_IDLE), s6_iso(at), s6_iso(born)
+    started, ended, busy = set(), set(), False
+    for p in paths:
+        with open(p, "rb") as fh:
+            if os.fstat(fh.fileno()).st_size == 0:
+                continue
+            mm = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
+            try:
+                def row_at(pos):
+                    a = mm.rfind(b"\n", 0, pos) + 1
+                    b = mm.find(b"\n", pos)
+                    line = mm[a:b if b >= 0 else len(mm)]
+                    m = S6_TS.search(line)
+                    return line, (m.group(1) if m else None)
+                for m in S6_TS.finditer(mm):
+                    ts = m.group(1)
+                    if lo < ts <= hi and not busy:
+                        line, _ = row_at(m.start())
+                        busy = bool(S6_ROW.search(line))
+                for m in S6_BG.finditer(mm):
+                    _, ts = row_at(m.start())
+                    if ts is not None and born_iso <= ts <= hi:
+                        started.add(m.group(1))
+                for m in S6_NOTE.finditer(mm):
+                    _, ts = row_at(m.start())
+                    if ts is not None and ts <= hi:
+                        ended.add(m.group(1))
+            finally:
+                mm.close()
+    if busy:
+        return "busy"
+    return "reap-class" if started - ended else "idle-no-shell"
+
+
+def s6_inert():
+    """The sweep's verdict record, read once: its dead, its inert, and its inert dead a day or more."""
+    rec = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/run/user/%d" % os.getuid(), "ccd-scope-sweep.state")
+    try:
+        lines = read_lines(rec)
+    except FileNotFoundError:
+        return {"record": "absent"}
+    except OSError:
+        return {"record": "unreadable"}
+    m = S6_HDR.fullmatch(lines[0]) if lines else None
+    if not m:
+        return {"record": "unreadable"}
+    up, dead, inert, day = int(m.group(2)), 0, 0, 0
+    for line in lines[1:]:
+        d = S6_DEAD.match(line)
+        if not d:
+            continue
+        dead += 1
+        if d.group(2) in S6_INERT:
+            inert += 1
+            if up - int(d.group(1)) >= S6_DAY:
+                day += 1
+    return {"mode": m.group(3), "dead": dead, "inert": inert, "inert_dead_a_day_or_more": day}
+
+
+def stage6(ctx):
+    return {"reap_class_oom": s6_reap(ctx), "inert_scopes": s6_inert()}
+
+
+def s6_reap(ctx):
+    recs = s6_journal(ctx)
+    if recs is None:
+        return {"journal": "unreadable"}
+    born, stops = {}, []
+    for e in recs:
+        try:
+            t = int(e["__REALTIME_TIMESTAMP"]) / 1e6
+        except (KeyError, TypeError, ValueError):
+            continue
+        u = e["USER_UNIT"]
+        if e.get("JOB_TYPE") == "start" and e.get("JOB_RESULT") == "done":
+            born[u] = t
+        elif e.get("UNIT_RESULT") == "oom-kill" and in_window(int(t), ctx):
+            stops.append((t, u))
+    spawns = s6_spawns(ctx)
+    counts, unmapped, sessions = collections.Counter(), collections.Counter(), collections.Counter()
+    for at, unit in sorted(stops):
+        t0 = born.get(unit)
+        if t0 is None:
+            unmapped["no start record"] += 1
+            continue
+        near = [(s, sid) for s, sid in spawns if t0 <= s <= t0 + S6_SPAWN_SLOP]
+        if len({sid for _, sid in near}) != 1:
+            unmapped["no spawn" if not near else "two sessions spawned together"] += 1
+            continue
+        spawned, sid = near[-1]
+        # The same window seen from the spawn's side: ccd writes no spawn event for a
+        # same-rc respawn within 300 s, so a scope can hold another session's spawn.
+        if sum(1 for b in born.values() if spawned - S6_SPAWN_SLOP <= b <= spawned) != 1:
+            unmapped["two scopes started before one spawn"] += 1
+            continue
+        paths = s6_transcript(ctx, sid)
+        if not paths:
+            counts["unmeasured"] += 1
+            continue
+        try:
+            cls = s6_classify(paths, spawned, at)
+        except (OSError, ValueError):
+            counts["unmeasured"] += 1
+            continue
+        counts[cls] += 1
+        if cls == "reap-class":
+            sessions[sid] += 1
+    return {
+        "pane_scope_oom_stops": len(stops),
+        "reap_class": counts["reap-class"],
+        "idle_without_a_live_background_shell": counts["idle-no-shell"],
+        "busy_within_the_idle_window": counts["busy"],
+        "unmapped": sum(unmapped.values()),
+        "unmapped_by_reason": dict(sorted(unmapped.items())),
+        "unmeasured": counts["unmeasured"],
+        "reap_class_by_session": dict(sorted(sessions.items())),
+    }
+
+
+# ── stage 7 (wave 3): the operator's choice survives a restart ──────────────
+# §9's stage-7 row, "restarts that revert an operator's /model", read off
+# swap.log. Before a stop that a spawn follows, ccd writes an operator's own
+# `/model` or `/effort` to the route record (`route <id>: <field> <old> -> <new>
+# [actor=operator-session]`), or says why it could not: a value outside the
+# vocabulary, or one the record's own checks refused (`operator-choice <id>: …`).
+# Those two are the keep-time stops at which ccd KNOWS it reverted the operator's
+# choice, so they are the row. It counts STOPS (keeps), not distinct choices or restarts: a
+# `/model` ccd cannot keep is logged again at every later keep until a newer
+# command replaces it or its field is written after it (it reverts again at each).
+# The row's key, `restarts_that_reverted_an_operator_model`, keeps its wave-3 name
+# although what it counts is those keep-time STOPS. The writes are reported
+# beside the row, and so are the stops where ccd could not read at all
+# (`operator-choice <id>: unmeasured (…)`), which MAY have reverted one — never
+# folded into the row, never dropped. The field `stops_that_could_not_read_the_transcript`
+# (its name kept too) counts KEEPS that could not measure, one per such line: keeps at a spawn count,
+# so does the acknowledgement-drift line, and a refused command repeats at every
+# keep until a later operator command of its kind is acknowledged or its field is
+# written after it. Named cost: a
+# supervisor revival reads the transcript before its spawn and logs like a stop,
+# but a session on a non-Anthropic lane is skipped and leaves no line, so its
+# `/model` is never counted.
+# Self-contained, as stage 4.
+S7_WRITE = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) route (\S+): (class|effort) .+? -> (\S+) \[actor=operator-session\]")
+S7_SKIP = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) operator-choice (\S+): /(model|effort) .*(outside the \S+ vocabulary|refused by the route record)")
+S7_UNMEASURED = re.compile(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) operator-choice (\S+): unmeasured \(")
+
+
+def stage7(ctx):
+    since, until = ctx["since"], ctx["until"]
+    path = ctx["swap_log"] or os.path.join(ctx["home"], ".cc-sessions", "swap.log")
+    try:
+        with open(path, "rb") as fh:
+            lines = [raw.decode("utf-8", "replace").rstrip("\n") for raw in fh]
+    except FileNotFoundError:
+        return {"operator_choice": {"swap_log": "absent"}}
+    def inwin(stamp):
+        try:
+            t = int(time.mktime(time.strptime(stamp, "%Y-%m-%d %H:%M:%S")))
+        except (ValueError, OverflowError):
+            return False
+        return (since is None or t >= since) and (until is None or t < until)
+    written, outside, refused = collections.Counter(), collections.Counter(), collections.Counter()
+    unmeasured = 0
+    for line in lines:
+        m = S7_WRITE.match(line)
+        if m and inwin(m.group(1)):
+            written[m.group(3)] += 1
+            continue
+        m = S7_SKIP.match(line)
+        if m and inwin(m.group(1)):
+            (outside if m.group(4).startswith("outside") else refused)[m.group(3)] += 1
+            continue
+        m = S7_UNMEASURED.match(line)
+        if m and inwin(m.group(1)):
+            unmeasured += 1
+    return {"operator_choice": {
+        "restarts_that_reverted_an_operator_model": outside["model"] + refused["model"],
+        "operator_choices_written_by_field": dict(sorted(written.items())),
+        "operator_values_outside_the_vocabulary_by_kind": dict(sorted(outside.items())),
+        "operator_choices_refused_by_kind": dict(sorted(refused.items())),
+        "stops_that_could_not_read_the_transcript": unmeasured,
+    }}
+
+
+STAGES = {1: stage1, 4: stage4, 6: stage6, 7: stage7}
 
 
 def when(s):
@@ -451,13 +855,14 @@ def main(argv):
     ap.add_argument("--until", type=when, help="YYYY-MM-DD[ HH:MM[:SS]] (local), exclusive")
     ap.add_argument("--deployed", type=when, help="the stage's rollout time (local): splits out pairs stranded before it")
     ap.add_argument("--all-copies", action="store_true", help="read every transcript copy, not the largest per uuid")
+    ap.add_argument("--journal", help="stage 6: a `journalctl --user -o json` export to read instead of running journalctl")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     ctx = {
         "home": a.home,
         "swap_log": a.swap_log or os.path.join(a.home, ".cc-sessions", "swap.log"),
         "since": a.since, "until": a.until, "deployed": a.deployed,
-        "all_copies": a.all_copies,
+        "all_copies": a.all_copies, "journal": a.journal,
     }
     out = {f"stage{n}": STAGES[n](ctx) for n in (a.stage or sorted(STAGES))}
     if a.json:

@@ -1286,7 +1286,7 @@ describe('updateErrorText — the update routes\' refusals, read code-first (W3 
     // up as this describe's OWN sentence disagreeing with the composed one, never as a silent pass.
     'no-bundle': noBundleRollbackText(null),
     'agent-predates-update-op': 'That node’s agent predates the update op — update the node once by hand, then it can be moved from here.',
-    halted: 'An update failed or was reverted — acknowledge that node before moving any other.',
+    halted: 'An update failed or was reverted, and nothing moves until that node is acknowledged — tap Ack on it in the halt banner on the fleet screen, or on its row in Settings.',
     'no-previous': 'That node records no previous release to roll back to — pick a tag from the release list.',
     'no-desired': 'That node has no resolved release to install — choose a tag, or check its channel and pin.',
   };

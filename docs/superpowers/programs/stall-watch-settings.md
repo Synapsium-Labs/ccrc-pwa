@@ -5,6 +5,7 @@ Plans: `docs/superpowers/plans/2026-10-05-stall-watch-settings-w1-server.md` (wa
 `docs/superpowers/plans/2026-10-05-stall-watch-settings-w2-pwa.md` (wave 2)
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-calm-harbor`   Workspace: **a fresh child per wave**
 Predecessor: `stall-watch`, complete (its ledger's R38).
+**Status: complete** (R37, 2026-10-12). Wave 1 merged as `7f7bf4afc` (#320), and wave 2 as `6e4524164` (#322).
 
 **What this program is.** The Settings page gains a **Stall watch** section with one arming ladder and one quiet
 time.
@@ -24,7 +25,7 @@ time.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
-| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merge approved by the operator; last round at `21b754fd0`; review run 392 dispatched (R36) |
+| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merged `6e4524164` 2026-10-12; run 322 closed `done`, `final:true` (R37) |
 
 ## Decisions & deviations
 
@@ -718,6 +719,58 @@ time.
     `39c42f503..<tip>` with everything else kept as residue.
   - Next: `review-done`. Then this session merges with `--match-head-commit` at the reviewed tip, under the
     operator's R33 approval, unless the review finds a behaviour defect.
+- **R37 (2026-10-12 14:15)**, wave 2 is merged, and the programme is complete.
+  - Review run 392 (`ccrc-pwa-keen-hollow`, mail 4333) reviewed `21b754fd0`, scoped to R35's round, with the held-out
+    panel: 36 agents, no lens unverified, 8 confirmed and 3 refuted, all minor.
+    - All six R35 items are done as ruled, each re-measured by mutation.
+    - "None of them changes behaviour in shipped code."
+    - Its one in-scope finding, F1, is a comment: `box-token-card.test.tsx:52-53` says no mount issues a live fetch,
+      while `main`'s exposure banner still fetches `/api/auth/status`.
+    - Lanes are clean, and the citation instrument agrees with `main` at `7 passed | 443 skipped`.
+    - Run 392 closed `done`. The report is copied to `w2-review-392-report.md`.
+  - The merge. PR #322 merged at 2026-10-12 14:13:18Z as `6e4524164`, by `--admin --squash --match-head-commit
+    21b754fd0`, under the operator's R33 approval. Before it:
+    - the head equalled the reviewed tip, and `merge-tree` was clean against `main` `28e8dc1b2`;
+    - every required check was green, and only the advisory macOS legs failed;
+    - the PR was `MERGEABLE`, and `BLOCKED` was covered by `--admin`;
+    - no commit message carried a D-number range.
+  - Run 322 closed `done` with `final:true`, released, with `childReclaim` queued. The worker's workspace evidence
+    was copied first to `w2-final-child-evidence-close/`. Both work runs, 295 and 322, are `done`.
+  - The wave's three fix-round numbers are now defined on `main`, in the W2 plan's Deviations:
+    - D-4042, `malformed-optional-block-is-dropped` (R24);
+    - D-4043, `unanswered-write-has-its-own-l0-line` (R27);
+    - D-4044, `pinned-built-in-value-is-its-own-option` (R29).
+    The reserve number 4045, and W1's 4039, 4040 and 4041, were never assigned.
+  - The two wordings. This session recommended keeping both. The operator approved the merge and gave no other
+    wording, so both ship as they stand:
+    - a write with no answer says "Not confirmed — the server did not answer; the screen will re-check.";
+    - an unreadable 2xx keeps the Settings screen's shared "Saved — the server's answer could not be read; the
+      screen will re-check.".
+    Either may change in a follow-up. The second is shared by two older Settings writes.
+  - Release: the release workflow for `6e4524164` started at 14:13:21, and v0.0.149 is the latest published. The
+    fleet box reads v0.0.149 (`28e8dc1b2`). The updater moves the boxes; this session never rolls out by hand.
+  - Follow-up, none of it behaviour and none of it blocking:
+    - Comments:
+      - `box-token-card.test.tsx`'s header and :52-53 overclaim no live fetch; the remaining `/api/auth/status`
+        fetch comes from `main`'s banner, in the box-token lane;
+      - `MAIL_REPLAY_MS`'s docstring still says it stands at the end of `shared/api.ts`.
+    - W2 plan snapshots:
+      - X37 and X38's counts, X41 and X43's old title (X43 now reds 27), and X59's anchor;
+      - Task 4's "5 failed (5)", and post-merge step 3's "third section", read as "after Notifications";
+      - the File Structure rows for `box-token-card.test.tsx` and the `shared/api.ts` lead;
+      - row L's runner, which is outside the tree by design.
+    - Tests:
+      - the source-`default` row's title says "under a fallback" over a fixture with none;
+      - the README pin repeats the PWA's device-word list;
+      - "fourth heading" holds only once the poll lands.
+    - Code: `quietText` duplicates the server's `stallQuietWords`.
+    - Finding 4063 (R32), the larger follow-up:
+      - (1) the session hook must not let a subagent's tool events overwrite the main thread's `waiting` and ask,
+        which belongs to the ask lane's owner;
+      - (2) the stall watch's dialog-cap clock must not count undelivered mail, which is a stall-watch follow-up;
+      - (3) arming stays the operator's.
+  - Next: this ledger lands on `main` by a docs PR from this branch, after `main` is merged in (its plan taken as
+    `main` has it). Then the deploy is checked read-only once v0.0.150 is published.
 
 ## Carried constraints (reviewers get these)
 
@@ -756,3 +809,4 @@ time.
     as confirmed in R21 (mail 3874).
   - At wave-done: re-measure, advance, then a review run with the held-out panel. The merge is the operator's call.
     Wave 2 is the last wave, so its close carries `final:true`.
+  - Done: merged as `6e4524164` (#322), and run 322 closed `done` with `final:true` (R37).

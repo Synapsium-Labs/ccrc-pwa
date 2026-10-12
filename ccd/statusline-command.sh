@@ -279,8 +279,8 @@ fi
 #    person would watch; on expiry `tname` is empty, which is the same silent
 #    no-sidecar path as a pane outside tmux. If NEITHER spelling of the bound is
 #    on the box the call is SKIPPED, not run unguarded: `tname` is empty — the
-#    same silence again, never a stall. (`session-hook.sh` carries the unguarded
-#    idiom deliberately: it runs per hook EVENT, not per render.)
+#    same silence again, never a stall. (`session-hook.sh` carries the same
+#    selection and the same skip, for a sharper reason: it asks per hook EVENT.)
 #
 #    AND THE BOUND IS SPELLED PORTABLY. `timeout` is GNU; macOS ships it only as
 #    `gtimeout` (coreutils). This file is installed ALONE into ~/.claude with no

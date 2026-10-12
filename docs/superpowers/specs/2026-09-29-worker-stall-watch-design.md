@@ -1,6 +1,9 @@
 # Worker stall watch — the server notices a silent session, delivers mail past background work, and escalates — design
 
 **Status:** rev 3.1, APPROVED by the operator 2026-09-29 11:58 UTC (§11 records the rulings). Wave 1 is being planned. Amended by the operator 2026-10-04: §6.1's coordinator clause only (§11 decision 13).
+- **Amended 2026-10-05 by `2026-10-05-stall-watch-settings-design.md`** (stall-watch settings): a level and a quiet
+  time chosen in Settings can override the arming markers and `STALL_QUIET_MS`; §4.2's marker paragraph and §10's
+  constants line and kill rules say so.
 - **Rev 3.1** applies the MekWarLive coordinator's read-back of S4 (mail 2526), checked against the worker's and the
   implementer's transcripts. §3.2 gains the measured self-resume contrast. §6.2's clause stops counting an agent whose
   completion says it may resume on its own as a wake; rev 3's text would have allowed S4's last turn-end. §2 prices the
@@ -473,7 +476,8 @@ registry is the fleet box's `~/.cc-sessions`, which the server lists through the
 
 Every marker is touched and removed by hand on the fleet box, the `mail-disabled` precedent:
 `ssh <fleet-host> 'touch ~/.cc-sessions/stall-watch-live'`, and `rm -f` to remove. The lane reads it at its next 60 s
-tick.
+tick. No marker gains a writer, but a level chosen in Settings can now override the arming markers, though
+never `stall-watch-disabled`, `mail-disabled` or `mail-gate-strict` (stall-watch settings design 2026-10-05, §6.3).
 
 **Effect on the recorded silences** (lane ≤ 60 s, mail sweep ≤ 10 s):
 
@@ -836,7 +840,8 @@ and one per held delivery per mail sweep.
 ## 10. Measurement, targets, and sequencing
 
 **Constants** (all in `stall.ts`, L1, except `STALL_SWEEP_MS` in `watch.ts` and `MAIL_TURN_HOLD_MS` beside
-`MAIL_ARMED_HOLD_MS`; the PWA renders none):
+`MAIL_ARMED_HOLD_MS`; the PWA renders none of them but the quiet time, which Settings shows and sets, stall-watch
+settings design 2026-10-05 §7):
 
 | Constant | Value | Basis |
 |---|---|---|
@@ -872,8 +877,11 @@ pure verdicts over the marker and apply holds 1, 2 and the limit hold only; mail
 **Shadow and targets.** Each shadow period is compared with the census: about 3.5 r1 fires and 0.4 orphan fires a day;
 every shadow fire is hand-classified stall or legit against its transcript, which settles the census's circular
 precision (strict 0.48, loose 0.69 at 2 h). The kill rules (proposed, not measured, §11 decision 12): if armed r1 fires
-exceed 10 a day for two days, `rm stall-watch-live`; if more than half of a week's hand-classified r2 fires are
-legitimate waits, `rm stall-watch-escalate`; then re-derive.
+exceed 10 a day for two days, `rm stall-watch-live` while Settings follows the fleet box's files; otherwise lower the
+level in Settings, or on the fleet box touch `mail-gate-strict` (busy delivery) or `stall-watch-disabled` (the whole
+lane). If more than half of a week's hand-classified r2 fires are legitimate waits, `rm stall-watch-escalate` while
+Settings follows the fleet box's files; otherwise lower the level in Settings, or on the fleet box touch
+`mail-gate-strict` (busy delivery) or `stall-watch-disabled` (the whole lane). Then re-derive.
 
 **Tests.** Every guard ships with the test that reds when it is deleted, measured before and after (mutation-table
 discipline). The golden fixtures are the measured timestamps: S1–S4, Case D, run 129's shell-gated mail 2407, the 4.6 h

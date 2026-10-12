@@ -1509,6 +1509,42 @@ describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN
       'the probe ran with codex inputs').toEqual([]);
   });
 
+  // Plan 3b Task A1 (D-4046): a roster whose codex rows the lane library cannot
+  // tell is refused HERE, in that library's own word, line and rc, and the probe
+  // never runs. Read as "not codex", an exec.kind "codex" row went down the
+  // external fetch, whose token directory has a default: another lane's
+  // (D-3706's class).
+  it.each([[1, 'roster-invalid'], [2, 'missing-dependency']] as const)(
+    'a roster whose codex lanes cannot be told (the lane library answers rc %i) is refused at the probe-input seam with its own %s line and rc — never "not codex", and the probe never runs (Plan 3b Task A1)',
+    async (rc, word) => {
+      home = await codexBox(['codex-a']);
+      const r = sourced(`_codex_lanes() { _codex_say ${word} "fixture: which roster lanes are codex lanes cannot be told"; return ${rc}; }; _models_run_probe codex-a env`, []);
+      expect(r.code, r.stderr).toBe(rc);
+      expect(r.stderr).toMatch(new RegExp(`^ccrc codex: ${word}: fixture: which roster lanes are codex lanes cannot be told$`, 'm'));
+      expect(r.stdout, 'the probe ran').toBe('');
+    });
+
+  // Residual round (R-2): an ABSENT roster is "not codex" only at the dispatcher, whose external arm then refuses
+  // roster-absent. At THIS seam it would hand a would-be codex lane to the external fetch and its default token
+  // directory (D-3706's class), so it is refused, in the remedy's own word, and the probe never runs.
+  it('an ABSENT roster at the probe-input seam is refused roster-absent with its remedy — never "not codex", and the probe never runs (Plan 3b Task A1)', async () => {
+    home = await codexBox(['codex-a']);
+    fs.rmSync(join(home, '.ccrc', 'accounts.json'));
+    const r = sourced('_models_run_probe codex-a env', []);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc codex: roster-absent: \$HOME\/\.ccrc\/accounts\.json does not exist, so whether lane codex-a is exec\.kind "codex" cannot be told, and its probe does not run: .* Run 'ccrc install' — it seeds one and never overwrites an existing one\.$/m);
+    expect(r.stdout, 'the probe ran').toBe('');
+  });
+
+  it('the REAL lane library over a roster it cannot read: its own roster-invalid sentence reaches the caller, rc 1, and the probe never runs (Plan 3b Task A1)', async () => {
+    home = await codexBox(['codex-a']);
+    fs.writeFileSync(join(home, '.ccrc', 'accounts.json'), '{"version":1,"accounts":{}}\n');
+    const r = sourced('_models_run_probe codex-a env', []);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc codex: roster-invalid: \$HOME\/\.ccrc\/accounts\.json could not be read as a roster, so its codex lanes are unknown — 'ccrc wrappers' prints the validator's own sentence for it\.$/m);
+    expect(r.stdout, 'the probe ran').toBe('');
+  });
+
   // Fix round 1: on a dead refresh token, litellm LOGS its own warning (the
   // token endpoint's answer in it) before the guard refuses. The refresh row's
   // reason and the stale catalogue's lastError both keep the remedy, and carry
@@ -2182,7 +2218,14 @@ describe('ccrc models litellm', () => {
 
     it('a roster whose codex lanes cannot be told refuses the stop too: undecidable is never "no codex lane"', () => {
       pgrep(true);
-      const r = sourced('_codex_lanes() { return 1; }; cmd_models litellm ext-a', []);
+      // Plan 3b Task A1: the dispatcher asks `_codex_lanes` FIRST now, and refuses
+      // an undecidable roster before either arm (its own cases are in the codex-kind
+      // describe below). This case keeps its subject, Z4's own undecidable arm, with a
+      // roster that turns unreadable BETWEEN the two reads: the first answers "no codex
+      // lane", the second rc 1. The count is a file, because each read runs in its own `$(…)`.
+      const counted = `_codex_lanes() { local n; n=$(( $(cat "$HOME/lanes-reads" 2>/dev/null || echo 0) + 1 )); printf '%s\\n' "$n" > "$HOME/lanes-reads"; [ "$n" -eq 1 ] && return 0; return 1; }`;
+      const r = sourced(`${counted}; cmd_models litellm ext-a`, []);
+      expect(fs.readFileSync(join(home, 'lanes-reads'), 'utf8'), 'the dispatcher and the stop guard each read once').toBe('2\n');
       expect(r.code).toBe(1);
       const b = oneObject(r);
       expect(b['error']).toBe('restart-failed');
@@ -2260,6 +2303,27 @@ describe('refresh runs the litellm step for a codex lane (§5)', () => {
     expect(rows[0]!.reason).toMatch(/could not be stopped/);
     expect(fs.existsSync(join(home, '.ccrc', 'models', 'gpt.json'))).toBe(true);
     expect(fs.existsSync(configPath())).toBe(false);
+  });
+
+  // Plan 3b Task A4 (D-4051): a render that
+  // FAILS with no `.detail` to read — no stdout at all (a killed subshell), an
+  // envelope with no `detail`, or bytes that are not JSON — is a FAILED row
+  // naming its exit, never `ok:true` with the `skipped` default and never the
+  // reason "null". Every case above reaches `_models_refuse`, which always prints
+  // a body, so none of them could see this. The function is redefined after
+  // `ccd/ccrc` is sourced, the idiom the Z4 case uses for `_codex_lanes`.
+  it.each([
+    ['no stdout at all', '_models_litellm() { return 1; }', 1],
+    ['an envelope with no detail', '_models_litellm() { printf \'%s\\n\' \'{"ok":false}\'; return 5; }', 5],
+    ['bytes that are not JSON', '_models_litellm() { printf \'%s\\n\' \'not json\'; return 1; }', 1],
+  ])('Plan 3b Task A4: a render that fails with %s is a FAILED row naming its exit, never ok:true with litellm "skipped"', (_what, stub, rc) => {
+    const r = sourced(`${stub}\ncmd_models refresh ${LEGACY_EXTERNAL_ID}`, [], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    expect(r.code, r.stderr).toBe(1);
+    const b = oneObject(r);
+    expect(b['ok']).toBe(false);
+    expect(b['refreshed']).toEqual([{ id: LEGACY_EXTERNAL_ID, ok: false, reason: `_models_litellm exited ${rc} with no answer` }]);
+    expect(r.stderr, 'the block\'s own jq spoke on stderr').not.toMatch(/parse error/);
+    expect(fs.existsSync(join(home, '.ccrc', 'models', `${LEGACY_EXTERNAL_ID}.json`)), 'the probe\'s catalogue stands').toBe(true);
   });
 });
 
@@ -2360,6 +2424,65 @@ describe('ccrc models litellm — a codex-kind lane renders its own config and r
     expect(fs.statSync(lanePath('codex-a')).mode & 0o777).toBe(0o600);
     expect(fs.existsSync(boxGlobal())).toBe(false);
     expect(fs.existsSync(lanePath('codex-b')), 'the other lane is untouched').toBe(false);
+    for (const name of ['pgrep', 'ccgpt', 'systemd-run']) expect(poisonLog(name), name).toEqual([]);
+  });
+
+  // Plan 3b Task A1: the dispatcher takes NEITHER arm on a roster whose codex
+  // rows cannot be told. Before it, this row fell through to the external arm,
+  // which asked pgrep and rendered codex-a's model list into the box-global
+  // file another repository's LiteLLM reads.
+  it.each([[1, 'roster-invalid'], [2, 'missing-dependency']] as const)(
+    'a roster whose codex lanes cannot be told (the lane library answers rc %i) is refused %s before either arm — never the box-global file, pgrep, ccgpt or systemd-run (Plan 3b Task A1)',
+    (rc, word) => {
+      const r = sourced(`_codex_lanes() { _codex_say ${word} "fixture: which roster lanes are codex lanes cannot be told"; return ${rc}; }; cmd_models litellm codex-a`, []);
+      expect(r.code, r.stderr).toBe(1);
+      const b = oneObject(r);
+      expect(b['error']).toBe(word);
+      expect(String(b['detail'])).toContain('so whether lane codex-a is exec.kind "codex" cannot be told, and neither LiteLLM arm was taken');
+      expect(String(b['detail'])).toMatch(/Nothing was written and nothing was stopped\.$/);
+      expect(r.stderr).toMatch(new RegExp(`^ccrc codex: ${word}: fixture: which roster lanes are codex lanes cannot be told$`, 'm'));
+      expect(fs.existsSync(boxGlobal()), 'the codex row was rendered into the box-global file').toBe(false);
+      expect(fs.existsSync(lanePath('codex-a'))).toBe(false);
+      for (const name of ['pgrep', 'ccgpt', 'systemd-run']) expect(poisonLog(name), name).toEqual([]);
+    });
+
+  // Final-review fix wave (MF4, D-4046): an ABSENT roster is not undecidable — with no roster, no row is codex —
+  // so it keeps the base's answer and remedy: the external arm's own read refuses `roster-absent` ("run ccrc
+  // install"), never `roster-invalid` ("fix the roster"). Two conditions, two remedies, two words.
+  it('an ABSENT roster is not undecidable: the dispatcher answers the external arm\'s roster-absent, never roster-invalid (Plan 3b Task A1)', () => {
+    fs.rmSync(join(home, '.ccrc', 'accounts.json'));
+    const r = run(['models', 'litellm', 'codex-a']);
+    expect(r.code, r.stderr).toBe(1);
+    expect(oneObject(r)['error']).toBe('roster-absent');
+    expect(r.stderr, 'the lane library was asked about a roster that is not there').not.toMatch(/^ccrc codex: roster-invalid/m);
+    expect(fs.existsSync(boxGlobal())).toBe(false);
+    expect(fs.existsSync(lanePath('codex-a'))).toBe(false);
+    for (const name of ['pgrep', 'ccgpt', 'systemd-run']) expect(poisonLog(name), name).toEqual([]);
+  });
+
+  // …and its control: a roster that is a DANGLING link is there and cannot be read, so it stays undecidable.
+  it('a roster that is a dangling link is still undecidable: refused roster-invalid before either arm, never read as absent (Plan 3b Task A1)', () => {
+    const roster = join(home, '.ccrc', 'accounts.json');
+    fs.rmSync(roster);
+    fs.symlinkSync(join(home, 'no-such-roster.json'), roster);
+    const r = run(['models', 'litellm', 'codex-a']);
+    expect(r.code, r.stderr).toBe(1);
+    expect(oneObject(r)['error']).toBe('roster-invalid');
+    expect(fs.existsSync(boxGlobal())).toBe(false);
+    for (const name of ['pgrep', 'ccgpt', 'systemd-run']) expect(poisonLog(name), name).toEqual([]);
+  });
+
+  // Plan 3b Task A1: the refresh row of such a roster is a FAILED row whose reason
+  // is the lane library's own forwarded line. The probe never runs, so the row is
+  // never fetched down the external path, and neither LiteLLM arm is taken.
+  it('refresh over a roster whose codex lanes cannot be told: the row is ok:false with the lane library\'s roster-invalid line as its reason, exit 1, and no pgrep, ccgpt or systemd-run call (Plan 3b Task A1)', () => {
+    const r = sourced('_codex_lanes() { _codex_say roster-invalid "fixture: which roster lanes are codex lanes cannot be told"; return 1; }; cmd_models refresh codex-a', [],
+      { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    expect(r.code, r.stderr).toBe(1);
+    const rows = oneObject(r)['refreshed'] as { id: string; probe?: string; ok: boolean; reason?: string }[];
+    expect(rows).toEqual([{ id: 'codex-a', probe: 'codex', ok: false, reason: expect.any(String) }]);
+    expect(rows[0]!.reason).toContain('ccrc codex: roster-invalid: fixture: which roster lanes are codex lanes cannot be told');
+    expect(fs.existsSync(boxGlobal()), 'the codex row was rendered into the box-global file').toBe(false);
     for (const name of ['pgrep', 'ccgpt', 'systemd-run']) expect(poisonLog(name), name).toEqual([]);
   });
 
@@ -2910,6 +3033,16 @@ describe('ccrc models litellm — a codex-kind lane renders its own config and r
     const rows = oneObject(r)['refreshed'] as { id: string; ok: boolean; reason?: string }[];
     expect(rows).toEqual([{ id: 'codex-a', ok: false, reason: expect.any(String) }]);
     expect(rows[0]!.reason).toMatch(/could not be stopped/);
+    expect(fs.readFileSync(lanePath('codex-a'), 'utf8')).toBe(OLD);
+  });
+
+  it('Plan 3b Task A4: refresh — a codex lane whose render dies with no answer is a FAILED row naming its exit, and its tier is never asked', () => {
+    fs.writeFileSync(lanePath('codex-a'), OLD);
+    const r = sourced('_models_litellm() { return 137; }\ncmd_models refresh codex-a', ['lock', 'ours', 'stop', 'start'],
+      { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
+    expect(r.code, r.stderr).toBe(1);
+    expect(oneObject(r)['refreshed']).toEqual([{ id: 'codex-a', ok: false, reason: '_models_litellm exited 137 with no answer' }]);
+    expect(laneCalls(), 'a stubbed render reached the lane library').toEqual([]);
     expect(fs.readFileSync(lanePath('codex-a'), 'utf8')).toBe(OLD);
   });
 

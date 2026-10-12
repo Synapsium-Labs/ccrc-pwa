@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { FleetIO } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
@@ -5,29 +6,45 @@ import type { Deps } from '../server.js';
 import type { Presence } from '../presence.js';
 import type { NotifyLog } from '../notifylog.js';
 import { CCD_ARGV, RECLAIM_CAP, capSupported, sweepDec, verbSupported } from '../ccdargv.js';
-import { readSessionRecord } from '../registry.js';
+import { readSessionRecord, type SessionRecord } from '../registry.js';
 import { refusalSentence } from '../wsaudit.js';
-import type { ChildSpentVerdict } from './childSpent.js';
+import { CHILD_BIRTH_SKEW_MS, type ChildSpentVerdict } from './childSpent.js';
+import {
+  CHILD_RECLAIM_PRE_LOCK_TOKEN, CHILD_RECLAIM_SKIP, childReclaimCoordinated, childReclaimFailingPastCeiling,
+  childReclaimFailingSentence, childReclaimFailingWord, childReclaimFailureLine, childReclaimJournalRow,
+  childReclaimSameGenerationKey, isChildReclaimKeptVerdict, type ChildReclaimFeedQuiet, type ChildReclaimKeptAttention,
+  type ChildReclaimPreLockToken, type ChildReclaimSweepSkip, type ChildReclaimSweepVerdict,
+  childReclaimDetailText, type ChildReclaimLeafKept,
+  CHILD_RECLAIM_STUCK_RETRY, childReclaimStuckHeld, childReclaimStuckRow, childReclaimStuckSentence,
+  type ChildReclaimSweepOutcome,
+} from '../childReclaimSweep.js';
 import type { CoordStore, OpenSiblingsResult } from './store.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import {
-  CHILD_RUN_ID, LC_REASON_MAX_BYTES, TERMINAL_RUN_STATES, holdReason, type ChildMark, type LifecycleAct, type LifecycleOutcome,
-  type MarkerState, type MirroredLifecycleEvent, type RunState,
+  CHILD_RUN_ID, LC_REASON_MAX_BYTES, REG_GENERATION_SHAPE, TERMINAL_RUN_STATES, holdReason, type ChildMark,
+  type ChildReclaimGeneration, type ChildReclaimGenerationKey, type LifecycleAct, type LifecycleOutcome,
+  type ChildReclaimStatus, type MarkerState, type MirroredLifecycleEvent, type RunState, type RunSummary, lcRefusalWord, type LcRefusalToken,
+  isChildReclaimKeptWord,
 } from '../../../shared/api.js';
 
 /**
  * CHILD-WORKSPACE RECLAMATION, the server half (spec 2026-09-22 §5.5–§5.7).
  *
  * `close.ts`'s kind of file: an L1 decision reached through declared ports.
- * Three things live here and nowhere else —
+ * Five things live here and nowhere else —
  *   - the fourteen words `ccd ws-reclaim` and `ccd ws-audit --reclaim` answer
  *     with, and what each one MEANS to the server (gone / terminal / retry);
+ *   - `childReclaimGeneration` and `childReclaimLatest`, the one fence and the
+ *     one latest-event pick every read of the lifecycle mirror goes through
+ *     (spec §5.6: slugs recycle);
  *   - `childReclaimDecision`, the pure "has the coordinator finished with this
  *     child" predicate `closeRun` asks inside the coordination mutex;
  *   - `reclaimChild`, THE ONE EXECUTOR. The close path hands it a request on
  *     the session's own queue; wave 4's sweep hands it the same request. So
  *     presence, the capability gate and the feed row behave identically
- *     however a reclaim was started.
+ *     however a reclaim was started;
+ *   - `childReclaimStatus` and `withChildReclaim`, THE ONE DERIVATION of a
+ *     closed run's chip (spec §5.9), in the wave-5 section at the end.
  *
  * NAMING: every identifier here says `childReclaim`, never a bare `reclaim` —
  * `coord/reclaim.ts` already means handing a dead coordinator's claim to an
@@ -127,9 +144,10 @@ const RECLAIM_ACT: LifecycleAct = 'reclaim';
  *  `done` is a create that never completed.
  *
  *  THE ONE IMPLEMENTATION. The sweep's attention list calls it with `at` =
- *  now; the birth fence calls it over `lifecycleCreatesFor` alone, so its
- *  single-row answer is the opening `create` itself; wave 5's run chip
- *  imports it and calls it with `at` = the run's `closedAt`.
+ *  now; the birth (`childReclaimBornAt`) opens at the same create over the
+ *  birth read's rows, and `child-reclaim-birth-removal.test.ts` holds the two
+ *  equal; wave 5's run chip imports it and calls it with `at` = the run's
+ *  `closedAt`.
  *  `child-reclaim-generation.test.ts` scans for a second. */
 export function childReclaimGeneration(
   events: readonly MirroredLifecycleEvent[], at: number,
@@ -169,24 +187,112 @@ export function childReclaimLatest(events: readonly MirroredLifecycleEvent[]): M
   return null;
 }
 
+/** The listed row's current `.uuid`, as the birth's own-purge test reads it (spec §5.7). It is the measured
+ *  value, or null when this read could not measure the uuid. A caller with no row at all passes null too.
+ *  Both nulls are handled ONE way: every `purge` counts, which is the doubt direction. Only the uuid's own doubt
+ *  matters here. Another identity field's does not. */
+export function childReclaimRowUuid(rec: Pick<SessionRecord, 'uuid' | 'unmeasured'>): string | null {
+  return rec.unmeasured.includes('uuid') ? null : rec.uuid;
+}
+
+/** The birth (spec §5.7): the opening `create` of the session's CURRENT generation, on ccd's clock, or null when
+ *  it cannot be placed. It is the one placement shared by the birth fence, the coordination fence and the sweep
+ *  entry's `bornAt`.
+ *
+ *  THE OPENING CREATE is the placed `done` create (`at !== null`, `at <= nowMs`) with the highest mirror id. That
+ *  is the create `childReclaimGeneration` opens the generation at, over the same creates.
+ *
+ *  A REMOVAL UNPLACES IT (spec §5.7). A recycled slug's new `create` can be missing from the mirror
+ *  while its row and marker are already listed: it is not ingested yet, or its `at` is ahead of this server's
+ *  clock. The older generation's create would then stand in for the birth. So the answer is null (doubt) when a
+ *  `purge` FOLLOWS the opening create, which means all three of these hold:
+ *  - its mirror id is higher. The id orders, never `at`.
+ *  - ccd's own clock does not place it first: NOT (`purge.at !== null && purge.at < create.at`). A purge with a
+ *    null `at` counts, because doubt is the safe direction. ccd always stamps `at`, so only a hand-written or
+ *    foreign line reaches that arm.
+ *  - it is not the row's OWN purge. ccd journals `purge done` BEFORE it unlinks the row, so a purge that died
+ *    mid-way, or one that stopped at rc 3, leaves this same generation's row listed with its own purge after its
+ *    own create. A purge whose `uuid` equals `rowUuid` leaves the birth placed: the sweep asks again, and ccd
+ *    resumes from its breadcrumb. A purge with no `uuid` counts, and so does every purge when `rowUuid` is null.
+ *
+ *  DOWNSTREAM, A STATED RESIDUAL. An unplaced birth makes any earlier numeric coordinator claim read
+ *  "coordinated" (`childReclaimCoordinated` keeps a child whose birth is null).
+ *  - The sweep never shows it, because its `child-birth-unplaced` check comes first.
+ *  - The executor's step 2a defers `siblings-open`, close declines `has-coordinated`, and the release job answers
+ *    `changed`.
+ *  Each of the three is the safe direction, and each ends once the new create is placed. */
+export function childReclaimBornAt(
+  coord: Pick<CoordStore, 'lifecycleBirthEventsFor'>, sessionId: string, nowMs: number, rowUuid: string | null,
+): number | null {
+  const events = coord.lifecycleBirthEventsFor(sessionId);
+  let openId = Number.NEGATIVE_INFINITY;
+  let openAt: number | null = null;
+  for (const e of events) {
+    if (e.act === 'create' && e.at !== null && e.at <= nowMs && e.id > openId) { openId = e.id; openAt = e.at; }
+  }
+  if (openAt === null) return null;
+  const createAt = openAt;
+  for (const e of events) {
+    if (e.act !== 'purge' || e.id <= openId) continue;
+    if (e.at !== null && e.at < createAt) continue;        // ccd's own clock places it before the create
+    if (rowUuid !== null && e.uuid === rowUuid) continue;   // the row's own unfinished purge
+    return null;
+  }
+  return createAt;
+}
+/** THE reader for one session (spec §1 rule 4). Throws when a store read throws; each caller keeps its own
+ *  unreadable answer. `rowUuid` is the uuid of the row the caller read (`childReclaimRowUuid`), passed through to
+ *  the birth. */
+export function childReclaimHasCoordinated(
+  coord: Pick<CoordStore, 'childReclaimCoordinatorClaims' | 'lifecycleBirthEventsFor'>, sessionId: string,
+  nowMs: number, rowUuid: string | null,
+): boolean {
+  return childReclaimCoordinated(coord.childReclaimCoordinatorClaims().get(sessionId),
+    () => childReclaimBornAt(coord, sessionId, nowMs, rowUuid), CHILD_BIRTH_SKEW_MS);
+}
+
 /** Why a reclaim did not happen YET. The server's own reasons first, then the
  *  seven retryable box words — exactly the `retry` rows above, so a deferral
- *  always says which condition it is waiting on. */
+ *  always says which condition it is waiting on. `generation-changed` is the
+ *  server's own word too: the workspace under this name is not the generation
+ *  the request was judged under (spec §5.5), found by the executor's
+ *  re-read or in the audit's own `generation`. */
 export type ChildReclaimDeferWhy =
   | 'presence' | 'siblings-open' | 'siblings-unreadable' | 'marker-unreadable' | 'marker-mismatch'
-  | 'unsupported' | 'paused-at-server'
+  | 'unsupported' | 'paused-at-server' | 'generation-changed'
   | Extract<ChildReclaimToken, 'paused' | 'held' | 'attached' | 'tree-busy' | 'state-changed' | 'in-progress' | 'reap-in-progress'>;
 
 const CHILD_RECLAIM_DEFER_WHY: Readonly<Record<ChildReclaimDeferWhy, true>> = {
   presence: true, 'siblings-open': true, 'siblings-unreadable': true, 'marker-unreadable': true,
-  'marker-mismatch': true, unsupported: true, 'paused-at-server': true,
+  'marker-mismatch': true, unsupported: true, 'paused-at-server': true, 'generation-changed': true,
   paused: true, held: true, attached: true, 'tree-busy': true, 'state-changed': true, 'in-progress': true,
   'reap-in-progress': true,
 };
+/** The defer words as a runtime list (spec §5.7), derived from the table's keys and never listed again. */
+export const CHILD_RECLAIM_DEFER_WHYS = Object.keys(CHILD_RECLAIM_DEFER_WHY) as readonly ChildReclaimDeferWhy[];
 
 export function isChildReclaimDeferWhy(v: unknown): v is ChildReclaimDeferWhy {
   return typeof v === 'string' && Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_DEFER_WHY, v);
 }
+
+/** `generation-changed`'s sentence (spec §5.5): what the feed row says after the word, wherever the
+ *  executor finds it. Defined once; each detail that carries it first says what was measured. Worded by what
+ *  was MEASURED, never by a cause: the executor sees only that the generation file now reads differently from
+ *  the licence. ccd can change that file with no removal (`_reg_generation_init` minting into an absence on a
+ *  standing row; `_reg_purge` unlinking `.generation` last with the row still listed), so "removed and made
+ *  again" would be a false cause on those rows. */
+export const CHILD_RECLAIM_GENERATION_CHANGED_SENTENCE =
+  'The workspace under this name no longer carries the generation the sweep judged it under, so this request '
+  + 'is not used, and the sweep judges the workspace afresh.';
+
+/** A generation key, in a detail's words. */
+const childReclaimGenerationWords = (g: ChildReclaimGenerationKey): string =>
+  (g.kind === 'value' ? `generation ${g.v}` : 'no generation');
+
+/** Step 5a's `unsupported` detail (spec §5.5): a licensed request is never spent on a token that binds
+ *  no generation. */
+const CHILD_RECLAIM_AUDIT_UNBOUND = 'this fleet host’s ws-audit prints no generation, so the licence cannot be '
+  + 'bound to one; a licensed reclaim waits until the fleet host’s ccd is updated';
 
 /** `wip`, discriminated (review 170 F21): a bare `string | null | 'unreadable'`
  *  collapses in TypeScript to `string | null` — the `'unreadable'` sentinel is
@@ -204,47 +310,128 @@ export type ChildReclaimWip =
   | { readonly kind: 'commit'; readonly sha: string }
   | { readonly kind: 'unreadable' };
 
-/** Replaces a `resumable: boolean` + `preLockDie: boolean` pair (review 170
+/** What a failed attempt promises about the NEXT one (spec §5.6, §5.9). It
+ *  replaces a `resumable: boolean` + `preLockDie: boolean` pair (review 170
  *  fr-I m1): the pair admitted `{resumable:true, preLockDie:true}`, a state no
- *  producer ever built, and the seam rule this same round's F21 is about says
- *  two conditions a caller handles differently must not share a
- *  representation that also permits a THIRD, impossible one. One discriminant
- *  makes it unrepresentable:
- *   - `resumable`: ccd's own destructive tail genuinely started and left a
- *     breadcrumb — its own `{failed:…}` document at exit 1, or a call cut
- *     short with nothing printed. The next attempt resumes FROM there.
- *   - `not-resumable`: a substance refusal — `ws-audit --reclaim` itself (a
- *     non-destructive verb that never reaches the reap lock), an unrecognised
- *     refusal word, or a `reclaimed` document naming another session. ccd's
- *     own ladder never advanced this session's state, but a plain retry MIGHT
- *     still succeed (a race, a version gap this build cannot name yet).
+ *  producer ever built, and the seam rule says two conditions a caller handles
+ *  differently must not share a representation that also permits a THIRD,
+ *  impossible one. One discriminant makes it unrepresentable:
+ *   - `resumable`: the act had started, so the box's next attempt resumes from
+ *     its breadcrumb. Four producers:
+ *       - a `{failed:…}` document saying `"crumb":true`. It says the act's
+ *         breadcrumb was WRITTEN, never that it stands now (spec §5.6);
+ *       - a `{failed:…}` document with NO `crumb` key (an older ccd, or a
+ *         breadcrumb that stood but could not be read) whose word is outside
+ *         `CHILD_RECLAIM_PRE_CRUMB_FAILED`;
+ *       - a call cut short with nothing printed;
+ *       - an exit-1 `ws-audit --reclaim` whose `unmeasured` document names a
+ *         breadcrumb phase in `resume`: a breadcrumb stood when the audit read
+ *         it, and ccd's next attempt resumes from it
+ *         (`parseChildReclaimAuditFailed`).
+ *   - `not-resumable`: nothing the next attempt could resume from was shown,
+ *     but a plain retry MIGHT still succeed (a race, a version gap this build
+ *     cannot name yet). Its producers:
+ *       - a `{failed:…}` document saying `"crumb":false`, printed before the
+ *         breadcrumb;
+ *       - a `CHILD_RECLAIM_PRE_CRUMB_FAILED` word with no `crumb` key;
+ *       - an exit-1 audit whose `unmeasured` document names no phase, and
+ *         every audit answer this build cannot read;
+ *       - a verb answer that is a refusal in substance: an unrecognised
+ *         refusal word, or a `reclaimed` document naming another session.
  *   - `pre-lock-die`: a recognised PRE-LOCK die of `cmd_ws_reclaim` (a usage
  *     error, a malformed token/run id/session id, a missing `python3`, a
  *     missing `flock` binary, or an unopenable lock file — ccd's RECLAIM
- *     region, before `_ws_reclaim_locked` runs). Also never advanced
- *     anything, but UNLIKE `not-resumable` it recurs IDENTICALLY until
- *     whatever caused it changes — not a race, so the feed must say
- *     something DIFFERENT from both other cases. */
-export type ChildReclaimResume = 'resumable' | 'not-resumable' | 'pre-lock-die';
+ *     region, before `_ws_reclaim_locked` runs). It never advanced anything,
+ *     but UNLIKE `not-resumable` it recurs IDENTICALLY until whatever caused
+ *     it changes — not a race, so the feed says something different again.
+ *   - `stuck`: ccd PROVED that another tree or row is in the way
+ *     (`CHILD_RECLAIM_STUCK_TOKENS`), decided by the word whatever `crumb`
+ *     says. A retry finds the same until that tree or row is moved or removed,
+ *     and the box resumes from its breadcrumb once it is.
+ *  `purge-incomplete` has no value of its own: its `resume` is read like any
+ *  other word's, and what the feed says of it is decided by its WORD
+ *  (`childReclaimFailedTail`).
+ *  Stated residuals (spec §7, item 6), each a wrong feed sentence and never a
+ *  wrong act: with no `crumb` key, a pre-breadcrumb `pin-failed` or
+ *  `tombstone-unwritable` reads `resumable` and a resumed arm's
+ *  `probe-unmeasured` reads `not-resumable`; and an audit over a breadcrumb it
+ *  could not read prints no `resume`, so it reads `not-resumable`. */
+export type ChildReclaimResume = 'resumable' | 'not-resumable' | 'pre-lock-die' | 'stuck';
 
 const CHILD_RECLAIM_RESUME: Readonly<Record<ChildReclaimResume, true>> = {
-  resumable: true, 'not-resumable': true, 'pre-lock-die': true,
+  resumable: true, 'not-resumable': true, 'pre-lock-die': true, stuck: true,
 };
 
 export function isChildReclaimResume(v: unknown): v is ChildReclaimResume {
   return typeof v === 'string' && Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_RESUME, v);
 }
 
-/** The ONE ccd `{failed:…}` word `parseChildReclaimResult` gives its own
- *  treatment: the presence rungs' own in-lock tmux probe (spec §5.7,
- *  "Presence, and its bound" — rungs 5 and 6) failing BEFORE any act, which —
- *  because no breadcrumb can exist yet at that point (spec §5.6, "The tail,
- *  the breadcrumb and the resume") — unlike every other
- *  post-start failure word, free ccd text this file never compares against a
- *  literal — decides `ChildReclaimResume` itself (`not-resumable`, never
- *  `resumable`: nothing was left to resume from). Named so
- *  `isChildReclaimKebab` admits it without a second hand-kept literal. */
-const CHILD_RECLAIM_PROBE_UNMEASURED = 'probe-unmeasured';
+/** ccd's journal word for a probe the reclaim ladder needs that could not run
+ *  or be read (spec §5.7, §5.9): the verb's fresh-arm `{failed:…}` word, and
+ *  the word `ws-audit --reclaim` journals for its own `unmeasured` answer
+ *  (verb `ws-audit`). Spelled once, so the pre-crumb set below and the audit's
+ *  exit-1 arm cannot drift apart. */
+export const CHILD_RECLAIM_PROBE_UNMEASURED = 'probe-unmeasured' as const satisfies LcRefusalToken;
+
+/** The FALLBACK for a `{failed:…}` document that carries no `crumb` key — an
+ *  older ccd, or a breadcrumb that stood but could not be read (spec §5.6).
+ *  These are the words `cmd_ws_reclaim` prints BEFORE the tombstone and the
+ *  breadcrumb on its FRESH arm, so with nothing else to go on they read
+ *  `not-resumable`, and every other word reads `resumable`. A document that
+ *  says `crumb` is decided by it instead, and these words decide nothing there.
+ *   - `probe-unmeasured`: on the fresh arm, the presence rungs' own in-lock
+ *     tmux probe (spec §5.7, rungs 5 and 6) failing before any act. On the
+ *     RESUMED arm the locked recomputation prints it too, over a standing
+ *     breadcrumb, and a ccd that prints `crumb` says `true` there.
+ *   - `state-changed`: the consent binding (spec §5.5) — the in-lock recompute
+ *     and the pin read different branch states, so the act stopped before the
+ *     tombstone. Printed on the fresh arm only, because only the fresh arm runs
+ *     the pin phase. Also a `refused` word (`CHILD_RECLAIM_TOKEN_KIND`), which
+ *     is why this set is typed against both vocabularies.
+ *  `pin-failed` and `tombstone-unwritable` are deliberately NOT here: each is
+ *  printed once in the fresh path's pin phase, before the breadcrumb, and also
+ *  by the tail after it, so the word alone cannot tell the two apart. ccd's
+ *  `crumb` does, and only a document without it falls back here.
+ *  Named so `isChildReclaimKebab` admits `probe-unmeasured` without a second
+ *  hand-kept literal. */
+const CHILD_RECLAIM_PRE_CRUMB_FAILED = [CHILD_RECLAIM_PROBE_UNMEASURED, 'state-changed'] as const satisfies
+  readonly (LcRefusalToken | ChildReclaimToken)[];
+
+function isChildReclaimPreCrumbFailed(v: unknown): boolean {
+  return typeof v === 'string' && (CHILD_RECLAIM_PRE_CRUMB_FAILED as readonly string[]).includes(v);
+}
+
+/** The `stuck` words (spec §5.6, §5.9): ccd PROVED at the tail's removal-time
+ *  re-ask that another tree or registry row lies at, inside or through what it
+ *  would delete. The session was stopped and nothing further was deleted; a
+ *  retry finds the same until that tree or row is moved or removed. Spelled
+ *  ONCE, here. The sweep carries the class to L1 as a tier field, and never
+ *  re-spells the word. Never a `CHILD_RECLAIM_TOKEN_KIND` key:
+ *  `childReclaimTokenKind('containment-refuted')` stays null, because it is a
+ *  `{failed:…}` word and never a refusal. */
+export const CHILD_RECLAIM_STUCK_TOKENS = ['containment-refuted'] as const satisfies readonly LcRefusalToken[];
+export type ChildReclaimStuckToken = typeof CHILD_RECLAIM_STUCK_TOKENS[number];
+
+export function isChildReclaimStuckToken(v: unknown): v is ChildReclaimStuckToken {
+  return typeof v === 'string' && (CHILD_RECLAIM_STUCK_TOKENS as readonly string[]).includes(v);
+}
+
+/** ccd's word for a reclaim that COMPLETED and purged its registry row, while
+ *  something beside the row would not unlink (spec §5.6). Its `detail` names
+ *  what still stands. Spelled once: the feed's failed tail reads it first. */
+export const CHILD_RECLAIM_PURGE_INCOMPLETE = 'purge-incomplete' as const satisfies LcRefusalToken;
+
+/** A `{failed:…}` document's `resume`, the WORD first and then `crumb` (spec
+ *  §5.6). `crumb` is read strictly: only the two booleans count, and any other
+ *  value (absent, a string, a number, null) is absence, never either value.
+ *  This reader is `ws-reclaim`'s alone; a `ws-collect` document carries no
+ *  `crumb`, and this is never applied to one. */
+function childReclaimFailedResume(word: string, crumb: unknown): ChildReclaimResume {
+  if (isChildReclaimStuckToken(word)) return 'stuck';
+  if (crumb === true) return 'resumable';
+  if (crumb === false) return 'not-resumable';
+  return isChildReclaimPreCrumbFailed(word) ? 'not-resumable' : 'resumable';
+}
 
 export type ChildReclaimOutcome =
   | { readonly kind: 'reclaimed'; readonly sessionId: string; readonly runId: number;
@@ -253,24 +440,64 @@ export type ChildReclaimOutcome =
   | { readonly kind: 'refused'; readonly sessionId: string; readonly runId: number; readonly token: ChildReclaimToken; readonly sentence: string; readonly detail: string }
   | { readonly kind: 'gone'; readonly sessionId: string }
   | { readonly kind: 'failed'; readonly sessionId: string; readonly runId: number;
-      readonly resume: ChildReclaimResume; readonly detail: string };
+      readonly resume: ChildReclaimResume; readonly detail: string; readonly token: string | null };
+
+/** The executor's answer as the sweep's memory needs it (spec §5.7, the persistent tier). The ONE projection:
+ *  `failed` carries ccd's own word and whether it is in the stuck class, decided HERE by the class's one spelling
+ *  (`isChildReclaimStuckToken`). The lane hands the same predicate, and the same token kind the executor's
+ *  refusal arm reads (`childReclaimTokenKind`), to the restart seed (`childReclaimTierSeed`), so the live memory
+ *  and the seed never classify one word two ways. Every other arm
+ *  carries what the memory reads, and nothing else. */
+export function childReclaimSweepOutcomeOf(o: ChildReclaimOutcome): ChildReclaimSweepOutcome {
+  switch (o.kind) {
+    case 'reclaimed': case 'gone': return { kind: o.kind };
+    case 'refused': return { kind: 'refused', token: o.token };
+    case 'deferred': return { kind: 'deferred', why: o.why };
+    case 'failed': return { kind: 'failed', token: o.token, stuck: isChildReclaimStuckToken(o.token) };
+  }
+}
 
 /** `runId` is the MINTING run — the one the child's `.child` marker names and
  *  the value composed as `--child-of`. On the close path it is read off the
  *  marker, never assumed to be the run being closed: a child that handed over
  *  across waves was minted by wave 1 and is closed by wave N.
  *
- *  `deferredSinceMs`: epoch ms of the FIRST deferral the sweep
- *  saw for this child, or `null` — close's value, always a first attempt. It
- *  exists so the feed row can say how long the child waited and why (spec
- *  §5.7, §5.9); the executor decides nothing on it. `deferExpired` is the
- *  sweep's own verdict on the same clock, carried separately because it is a
- *  fingerprint input on the box and this is not. */
+ *  `feedQuiet`: what the feed already says for this child (spec §5.9): the
+ *  non-presence deferral episode it is in, and the failure word the
+ *  attention list shows for it. The executor decides nothing on it but
+ *  whether its own feed row repeats them (`childReclaimFeedSkips`). Close
+ *  sends `CHILD_RECLAIM_FEED_QUIET_NONE`.
+ *
+ *  `deferredSinceMs`: epoch ms of the FIRST deferral of ANY kind
+ *  (`firstDeferredAt`) since the sweep's in-memory entry for this child was
+ *  last created — every reset of that entry, a restart included, starts it
+ *  again — or `null`: close's value, always a first attempt. It exists so
+ *  the feed row can say how long the child waited and why (spec §5.7,
+ *  §5.9); the executor decides nothing on it. `deferExpired` is the sweep's
+ *  verdict on a DIFFERENT clock — the current presence episode, which
+ *  `childReclaimDeferExpired` reads — so a long wait here never implies a
+ *  licence. It is carried separately because it is a fingerprint input on
+ *  the box and this is not.
+ *
+ *  `licenceGeneration`: the registry generation (`$REG/<id>.generation`,
+ *  spec §5.5) this request was judged under. The sweep sends its entry's key,
+ *  a value or `absent`, on EVERY request, licensed or not. Close sends `none`
+ *  (`CHILD_RECLAIM_LICENCE_NONE`): close queues only when the minting run names
+ *  this session and no other open run does, so no re-mint of the slug by that
+ *  run can follow it. */
 export interface ChildReclaimRequest {
   readonly sessionId: string; readonly runId: number;
   readonly trigger: 'close' | 'sweep'; readonly deferExpired: boolean;
   readonly deferredSinceMs: number | null;
+  readonly feedQuiet: ChildReclaimFeedQuiet;
+  readonly licenceGeneration: ChildReclaimGenerationKey | { readonly kind: 'none' };
 }
+
+/** Close's generation (spec §5.5): it judged no generation, and none is compared. */
+export const CHILD_RECLAIM_LICENCE_NONE: ChildReclaimRequest['licenceGeneration'] = { kind: 'none' };
+
+/** Nothing the feed already says (spec §5.9): close's value, and any first attempt's. */
+export const CHILD_RECLAIM_FEED_QUIET_NONE: ChildReclaimFeedQuiet = { deferWhy: null, failureToken: null };
 
 /** The executor's ports (L2, declared by this consumer). `presence` is
  *  narrowed to the one question asked of it; `notifyLog` is optional exactly
@@ -281,7 +508,13 @@ export interface ChildReclaimDeps {
   io: FleetIO; cfg: CcrcConfig; runCcd: Deps['runCcd']; fleetState?: FleetState;
   presence?: Pick<Presence, 'isVisible'>;
   notifyLog?: NotifyLog;
-  /** The clock the feed row's wait is rendered against (spec §5.7). Absent: `Date.now`. */
+  /** The wall clock, epoch ms. Absent: `Date.now`. It renders the feed row's wait (spec §5.7), and
+   *  it feeds two DECISIONS: it is the `nowMs` of the coordination fence (`childReclaimHasCoordinated`,
+   *  spec §1 rule 4, §5.6) at the executor's step 2a and at `releaseRetiredChildHold`'s step 5, the
+   *  instant at which the workspace's current generation, and so its birth, is placed. A clock that
+   *  reads earlier than every `create` (a monotonic one, say) or reads NaN places no birth. Any
+   *  coordinator claim on the session then keeps the child, an earlier workspace's included: step
+   *  2a defers and step 5 answers `changed`. Such a clock fails shut. */
   now?: () => number;
 }
 
@@ -385,18 +618,21 @@ export interface ChildReclaimDecisionInput {
    *  re-dates to `unspent` can still say WHY it is not finished —
    *  `not-finished-merge-commit` — rather than the ordinary unspent hand-over. */
   readonly spentFastPath: boolean;
-  /** Whether this session has EVER been named `claimedBy` of a run, or was the
-   *  session a reclaim DISPLACED from a programme's chair (`CoordStore.
-   *  childReclaimCoordinatorIds`'s own union — the heir side is already
-   *  covered by being `claimedBy` itself; the set's one EXTRA member is the
-   *  `from` side of a `reclaim:` displacement) (spec §1 rule 4): a
-   *  coordinator's own workspace, cleaned up by a human, never reclaimed
-   *  automatically. `'unreadable'` when the caller's store read itself
-   *  failed — decided at the SAME place the sibling check ranks (right after
-   *  it, never ahead of `not-a-child`/`marker-unreadable`), so a throw folds
-   *  into the existing `siblings-unreadable` only where an unreadable
-   *  sibling list already would, never on every close. No overloaded
-   *  boolean: `true`/`false`/`'unreadable'` are three answers, never two. */
+  /** Whether this session has coordinated in its own generation
+   *  (`childReclaimHasCoordinated`): named `claimedBy` of a run, or the session
+   *  a reclaim DISPLACED from a programme's chair (`CoordStore.
+   *  childReclaimCoordinatorClaims` — the heir side is dated by its
+   *  displacement, because its claim on already-terminal runs began after
+   *  their `closedAt`; the `from` side of a `reclaim:` displacement is dated
+   *  there too), at or after this workspace's birth less the skew (spec §1
+   *  rule 4; spec §5.6: slugs recycle): a coordinator's own workspace, cleaned
+   *  up by a human, never reclaimed automatically. `'unreadable'` when the
+   *  caller's store read itself failed — decided at the SAME place the
+   *  sibling check ranks (right after it, never ahead of
+   *  `not-a-child`/`marker-unreadable`), so a throw folds into the existing
+   *  `siblings-unreadable` only where an unreadable sibling list already
+   *  would, never on every close. No overloaded boolean:
+   *  `true`/`false`/`'unreadable'` are three answers, never two. */
   readonly hasCoordinated: boolean | 'unreadable';
   /** No OTHER open run of this run's program: `CoordStore.programOpenRunCount`
    *  with this run excluded — D-51's predicate, not a second spelling. */
@@ -405,7 +641,7 @@ export interface ChildReclaimDecisionInput {
 
 /**
  * Has the coordinator FINISHED with this child? (spec §5.7). Eligible iff
- * child ∧ no open sibling ∧ never coordinated ∧ (final ∨
+ * child ∧ no open sibling ∧ not coordinated in its own generation ∧ (final ∨
  * spent-and-proven-this-incarnation ∨ an abandon ∨ this close retires the
  * program). "No open sibling" ALONE is also true on the ordinary non-final
  * close, which is claiming the child for wave N+1 — reclaiming on it would be
@@ -437,8 +673,9 @@ export interface ChildReclaimDecisionInput {
  * or `not-finished-merge-commit` (the fast path's own answer was re-dated
  * `unspent`) — otherwise plain `not-finished`, the ordinary unspent hand-over.
  *
- * A child that has EVER coordinated a run (spec §1 rule 4) is never
- * reclaimed automatically, whatever else this close would otherwise decide:
+ * A child that has coordinated in its own generation
+ * (`childReclaimHasCoordinated`; spec §1 rule 4) is never reclaimed
+ * automatically, whatever else this close would otherwise decide:
  * checked right after the sibling read, the same place that read's own
  * unreadable answer ranks — so a `hasCoordinated: 'unreadable'` input folds
  * into `siblings-unreadable` only there, never ahead of `not-a-child` or
@@ -477,13 +714,14 @@ export function childReclaimDecision(input: ChildReclaimDecisionInput): ChildRec
  *  any of these types is accepted and a typo is not. `ChildReclaimResume`'s
  *  own `isChildReclaimResume` guard, not a second hand-kept list here: the
  *  same reason every other member of this function is a guard call, never an
- *  inline set. Deliberately NOT named `isChildReclaimWord`: wave 5 owns that
- *  name, in `shared/api.ts`, as the type guard of the run chip's
- *  `ChildReclaimWord` vocabulary (spec §5.9) — a different set with a
- *  different meaning. */
+ *  inline set. The stuck words and `purge-incomplete` are admitted through
+ *  their one spelling each (spec §5.6). Deliberately NOT named
+ *  `isChildReclaimWord`: wave 5 owns that name, in `shared/api.ts`, as the type
+ *  guard of the run chip's `ChildReclaimWord` vocabulary (spec §5.9) — a
+ *  different set with a different meaning. */
 export function isChildReclaimKebab(v: unknown): boolean {
   return isChildReclaimToken(v) || isChildReclaimDeferWhy(v) || isChildReclaimResume(v)
-    || v === CHILD_RECLAIM_PROBE_UNMEASURED
+    || isChildReclaimPreCrumbFailed(v) || isChildReclaimStuckToken(v) || v === CHILD_RECLAIM_PURGE_INCOMPLETE
     || (typeof v === 'string' && (Object.prototype.hasOwnProperty.call(CHILD_RECLAIM_NOT_WHY, v) || v === 'not-queued'));
 }
 
@@ -497,13 +735,35 @@ const TOKEN_SHAPE = /^[0-9a-f]{64}$/;
  *  "no WIP was pinned" (fix round 1, review minor #2). */
 const WIP_SHAPE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
+/** What a token-bearing `ws-audit --reclaim` document says of the row's generation (spec §5.5): the value
+ *  ccd bound into the token it minted, or `unprinted`, an older ccd's document with no `generation` key at
+ *  all. Never folded into the generation file's own `absent` (`ChildReclaimGenerationKey`), which is a
+ *  different fact from a different read: wave 7's ccd mints no token over a row with no generation. */
+export type ChildReclaimAuditGeneration =
+  | { readonly kind: 'value'; readonly v: string }
+  | { readonly kind: 'unprinted' };
+
 /** `ccd ws-audit --session <id> --reclaim [--defer-expired]`'s answer, read
  *  for exactly what the executor needs. `unreadable` is its own arm: a
  *  document this build cannot read is not a refusal and never a token. */
 export type ChildReclaimAuditRead =
-  | { readonly kind: 'token'; readonly token: string; readonly childOf: number }
+  | { readonly kind: 'token'; readonly token: string; readonly childOf: number;
+      readonly generation: ChildReclaimAuditGeneration }
   | { readonly kind: 'refused'; readonly token: ChildReclaimToken; readonly detail: string }
   | { readonly kind: 'unreadable'; readonly detail: string };
+
+/** The audit's own `unmeasured` answer, read off an exit-1 document (spec
+ *  §5.7, §5.9). `resume` is `resumable` exactly when the document names a
+ *  breadcrumb phase (a non-empty string `resume`): a breadcrumb stood when the
+ *  audit read it. Nothing else is read from it. No hand-kept phase list. */
+export type ChildReclaimAuditUnmeasured = {
+  readonly kind: 'unmeasured'; readonly resume: 'resumable' | 'not-resumable'; readonly detail: string };
+
+/** What an exit-1 audit document can answer: its `unmeasured` answer or
+ *  `unreadable`. It has NO `token` arm and no `refused` arm, so no exit-1
+ *  document is ever spent, a token-bearing one included, and that holds by type,
+ *  not by convention. */
+export type ChildReclaimAuditFailedRead = ChildReclaimAuditUnmeasured | Extract<ChildReclaimAuditRead, { kind: 'unreadable' }>;
 
 /** `sessionId` is checked against the document's own `id` field exactly as
  *  `parseChildReclaimResult` checks `reclaimed`/`refused` against it (fix
@@ -535,12 +795,46 @@ export function parseChildReclaimAudit(sessionId: string, stdout: string): Child
     if (typeof v.childOf !== 'number' || !CHILD_RUN_ID.test(String(v.childOf))) {
       return { kind: 'unreadable', detail: 'ws-audit --reclaim said reclaimable with no childOf run id' };
     }
-    return { kind: 'token', token: v.token, childOf: v.childOf };
+    // THE GENERATION (spec §5.5), in four arms decided by `hasOwnProperty`, never by `?? null`. An older
+    // ccd prints no key at all (`unprinted`). That is not the null wave 7's ccd prints, and it prints null
+    // only on a document that mints no token. On a token-bearing document, a null, or a value that is not
+    // exactly one generation (`REG_GENERATION_SHAPE`, 36 characters, nothing trimmed), makes the WHOLE
+    // document unreadable, so its token is never spent. The executor compares a value with the
+    // request's licence (`childReclaimOutcome`'s step 5a). A refused document's key gates nothing.
+    if (!Object.prototype.hasOwnProperty.call(v, 'generation')) {
+      return { kind: 'token', token: v.token, childOf: v.childOf, generation: { kind: 'unprinted' } };
+    }
+    if (v.generation === null) {
+      return { kind: 'unreadable', detail: 'ws-audit --reclaim said reclaimable with a null generation' };
+    }
+    if (typeof v.generation !== 'string' || !REG_GENERATION_SHAPE.test(v.generation)) {
+      return { kind: 'unreadable',
+        detail: 'ws-audit --reclaim said reclaimable with a generation that is not one 36-character lowercase UUID' };
+    }
+    return { kind: 'token', token: v.token, childOf: v.childOf, generation: { kind: 'value', v: v.generation } };
   }
   if (isChildReclaimToken(v.verdict)) {
     return { kind: 'refused', token: v.verdict, detail: typeof v.detail === 'string' ? v.detail : '' };
   }
   return { kind: 'unreadable', detail: `ws-audit --reclaim answered a verdict this build does not know: ${String(v.verdict)}` };
+}
+
+/** `ws-audit --reclaim`'s document at a NON-ZERO exit (spec §5.7, §5.9). ccd
+ *  prints its `unmeasured` answer, then journals `failed probe-unmeasured`
+ *  (verb `ws-audit`) and exits 1; it prints `"resume":<phase>` whenever it read
+ *  a `reclaim:` breadcrumb. This applies `parseChildReclaimAudit`'s identity
+ *  rules (a JSON object, `id === sessionId`, `mode === 'reclaim'`) and accepts
+ *  ONLY `verdict === 'unmeasured'`. Every other shape is `unreadable`, a
+ *  token-bearing document first of all. `detail` is the same at every arm:
+ *  ccd's stderr, which names what was not measured. */
+export function parseChildReclaimAuditFailed(sessionId: string, stdout: string, stderr: string): ChildReclaimAuditFailedRead {
+  const detail = `ws-audit --reclaim failed: ${stderr.trim()}`;
+  let v: unknown;
+  try { v = JSON.parse(stdout.trim()); } catch { return { kind: 'unreadable', detail }; }
+  if (!isRecord(v) || v.id !== sessionId || v.mode !== 'reclaim' || v.verdict !== 'unmeasured') {
+    return { kind: 'unreadable', detail };
+  }
+  return { kind: 'unmeasured', resume: typeof v.resume === 'string' && v.resume !== '' ? 'resumable' : 'not-resumable', detail };
 }
 
 /** The exact stderr shape ccd's own `die` calls print for the SIX single-line
@@ -556,14 +850,19 @@ export function parseChildReclaimAudit(sessionId: string, stdout: string): Child
  *  `.test` against a substring: an EXTENDED die — ccd rewords a message and
  *  APPENDS to it — must not match (review 170 fr-I I2), only an exact
  *  rewording reds the pin `child-reclaim.test.ts` reads straight off ccd's
- *  own text. */
-const CHILD_RECLAIM_PRE_LOCK_DIE_PATTERNS: readonly RegExp[] = [
-  /^usage: ccd ws-reclaim --expect <token> --child-of <runId> --session <id> \[--defer-expired\] \[--surface <word>\] \[--actor <text>\] \[--reason <text>\]$/,
-  /^bad token$/,
-  /^bad run id$/,
-  /^bad session id$/,
-  /^python3 unavailable — cannot quote the reclaim record safely$/,
-  /^flock \(util-linux\) is unavailable — refusing to run the destructive verb unserialised$/,
+ *  own text.
+ *
+ *  `token` is the refusal word ccd journals for the same die (`_lc_refuse`),
+ *  which the attention list shows as the failure's word (spec §5.9), or null
+ *  for a die ccd journals nothing for. */
+const CHILD_RECLAIM_PRE_LOCK_DIE_PATTERNS: readonly { readonly re: RegExp; readonly token: ChildReclaimPreLockToken | null }[] = [
+  { re: /^usage: ccd ws-reclaim --expect <token> --child-of <runId> --session <id> \[--defer-expired\] \[--surface <word>\] \[--actor <text>\] \[--reason <text>\]$/, token: null },
+  { re: /^bad token$/, token: CHILD_RECLAIM_PRE_LOCK_TOKEN.token },
+  { re: /^bad run id$/, token: CHILD_RECLAIM_PRE_LOCK_TOKEN.runId },
+  { re: /^bad session id$/, token: null },
+  { re: /^python3 unavailable — cannot quote the reclaim record safely$/, token: null },
+  { re: /^flock \(util-linux\) is unavailable — refusing to run the destructive verb unserialised$/,
+    token: CHILD_RECLAIM_PRE_LOCK_TOKEN.flock },
 ];
 
 /** The lock-unopenable die's REAL shape, MEASURED (review 170 fr-I I1) by
@@ -593,14 +892,19 @@ function matchChildReclaimLockUnopenableDie(err: string): string | null {
 
 /** The one recogniser `parseChildReclaimResult`'s fallback calls: the SEVEN
  *  pre-lock dies, whichever shape each one takes. Returns ccd's own message
- *  (never `null`) on a match, so the caller never re-derives it. */
-function matchChildReclaimPreLockDie(stderr: string): string | null {
+ *  (never `null`) on a match, so the caller never re-derives it, with the
+ *  word ccd journals for that die (`token`; null for a die it journals none
+ *  for). */
+function matchChildReclaimPreLockDie(
+  stderr: string,
+): { readonly msg: string; readonly token: ChildReclaimPreLockToken | null } | null {
   const err = stderr.trim();
   if (err === '') return null;
   const lock = matchChildReclaimLockUnopenableDie(err);
-  if (lock !== null) return lock;
+  if (lock !== null) return { msg: lock, token: CHILD_RECLAIM_PRE_LOCK_TOKEN.lock };
   const msg = err.startsWith('ccd: ') ? err.slice('ccd: '.length) : err;
-  return CHILD_RECLAIM_PRE_LOCK_DIE_PATTERNS.some((p) => p.test(msg)) ? msg : null;
+  const hit = CHILD_RECLAIM_PRE_LOCK_DIE_PATTERNS.find((p) => p.re.test(msg));
+  return hit === undefined ? null : { msg, token: hit.token };
 }
 
 /** `ccd ws-reclaim …`'s answer. Three documents (spec §5.6): `reclaimed` and
@@ -617,10 +921,15 @@ export type ChildReclaimVerbRead =
    *  dropped a secret did leave something uncommitted, and the feed says so. */
   | { readonly kind: 'reclaimed'; readonly wip: ChildReclaimWip; readonly secretsDropped: number | 'unreadable' }
   | { readonly kind: 'refused'; readonly token: ChildReclaimToken; readonly detail: string }
-  /** `resume` (review 170 F20; three-way since fr-I m1 — see
-   *  `ChildReclaimResume`'s own docstring). `matchChildReclaimPreLockDie`,
-   *  above, is what decides `pre-lock-die` here. */
-  | { readonly kind: 'failed'; readonly resume: ChildReclaimResume; readonly detail: string };
+  /** `resume` (review 170 F20; three-way since fr-I m1, four-way since
+   *  `stuck` — see `ChildReclaimResume`'s own docstring). `matchChildReclaimPreLockDie`,
+   *  above, is what decides `pre-lock-die` here. `token` (spec §5.9) is
+   *  ccd's own failure word: the mirror line's `refusal` for the same
+   *  attempt, since ccd writes both from one word. Null where ccd named none
+   *  — a call cut short, a die it journals nothing for, a read this build
+   *  made a failure of its own. */
+  | { readonly kind: 'failed'; readonly resume: ChildReclaimResume; readonly detail: string;
+      readonly token: string | null };
 
 export function parseChildReclaimResult(sessionId: string, stdout: string, stderr: string): ChildReclaimVerbRead {
   let v: unknown = null;
@@ -628,7 +937,7 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
   if (isRecord(v)) {
     if (typeof v.reclaimed === 'string') {
       if (v.reclaimed !== sessionId) {
-        return { kind: 'failed', resume: 'not-resumable',
+        return { kind: 'failed', resume: 'not-resumable', token: null,
           detail: `ws-reclaim reported reclaiming ${v.reclaimed}, not ${sessionId}` };
       }
       const wip: ChildReclaimWip = v.wip === null ? { kind: 'none' }
@@ -642,27 +951,22 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
       const detail = typeof v.detail === 'string' ? v.detail : '';
       return isChildReclaimToken(v.refused)
         ? { kind: 'refused', token: v.refused, detail }
-        : { kind: 'failed', resume: 'not-resumable',
+        : { kind: 'failed', resume: 'not-resumable', token: null,
             detail: `ws-reclaim refused with a word this build does not know: ${v.refused}` };
     }
     if (typeof v.failed === 'string') {
       // Fix round 2, review minor C: an empty `detail` must not render
       // "…failed: ." — omit the separator rather than leave it dangling.
       const detail = typeof v.detail === 'string' ? v.detail : '';
-      // `probe-unmeasured` (spec §5.7's presence rungs, §5.6's breadcrumb) is the
-      // presence rungs' own in-lock tmux probe failing BEFORE any act — the
-      // destructive tail never started, so unlike every other post-start
-      // `{failed:…}` document there is no breadcrumb to resume from. A retry
-      // starts completely afresh, exactly as `not-resumable` already reads
-      // (`childReclaimFeedBody`'s tail text: "It is retried from the start.").
-      const resume: ChildReclaimResume = v.failed === CHILD_RECLAIM_PROBE_UNMEASURED ? 'not-resumable' : 'resumable';
-      return { kind: 'failed', resume, detail: detail === '' ? v.failed : `${v.failed}: ${detail}` };
+      // The word first, then ccd's `crumb` (spec §5.6; `childReclaimFailedResume`).
+      const resume = childReclaimFailedResume(v.failed, v.crumb);
+      return { kind: 'failed', resume, detail: detail === '' ? v.failed : `${v.failed}: ${detail}`, token: v.failed };
     }
   }
   const err = stderr.trim();
-  const dieMsg = matchChildReclaimPreLockDie(err);
-  if (dieMsg !== null) return { kind: 'failed', resume: 'pre-lock-die', detail: dieMsg };
-  return { kind: 'failed', resume: 'resumable',
+  const die = matchChildReclaimPreLockDie(err);
+  if (die !== null) return { kind: 'failed', resume: 'pre-lock-die', detail: die.msg, token: die.token };
+  return { kind: 'failed', resume: 'resumable', token: null,
     detail: err === '' ? 'ws-reclaim answered nothing — it may have been cut short; the next attempt resumes it' : err };
 }
 
@@ -671,14 +975,17 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
 /**
  * Reclaim ONE child, from either trigger (spec §5.7). Re-reads everything it
  * decides on — the marker against `req.runId`, the open siblings, the
- * reclaim switch (`childReclaimPauseRead`, wave 4), presence, the
- * capability — then `ws-audit --reclaim` → token → `ws-reclaim`. On
- * `reclaimed` — and on a row step 1 measures ABSENT, whose earlier attempt's
- * box half finished without its cancel — it cancels every outstanding
- * delivery addressed to the child.
- * Every outcome but `gone` writes exactly ONE feed row, HERE — this function
- * is the single exit every outcome takes, so a new condition added to
- * `childReclaimOutcome` inherits its row rather than having to remember one.
+ * reclaim switch (`childReclaimPauseRead`, wave 4), a sweep request's
+ * workspace generation (spec §5.5), presence, the capability — then
+ * `ws-audit --reclaim` → token, its generation held to the request's →
+ * `ws-reclaim`. On `reclaimed` — and on a row step 1 measures ABSENT, whose
+ * earlier attempt's box half finished without its cancel — it cancels every
+ * outstanding delivery addressed to the child.
+ * Every outcome but `gone` writes one feed row, unless it repeats the deferral
+ * episode or the listed failure the request names (`childReclaimFeedSkips`),
+ * HERE — this function is the single exit every outcome takes, so a new
+ * condition added to `childReclaimOutcome` inherits its row rather than
+ * having to remember one.
  *
  * NEVER THROWS for a condition it can name: a failed read is a deferral or a
  * failure with a detail. What it cannot name (a bug) rejects, and the close
@@ -686,7 +993,7 @@ export function parseChildReclaimResult(sessionId: string, stdout: string, stder
  */
 export async function reclaimChild(deps: ChildReclaimDeps, req: ChildReclaimRequest): Promise<ChildReclaimOutcome> {
   const outcome = await childReclaimOutcome(deps, req);
-  if (outcome.kind !== 'gone') recordChildReclaimFeed(deps, outcome, req);
+  if (outcome.kind !== 'gone' && !childReclaimFeedSkips(outcome, req)) recordChildReclaimFeed(deps, outcome, req);
   return outcome;
 }
 
@@ -704,6 +1011,29 @@ export async function childReclaimPauseRead(
   const names = await io.readdir(registryDir);
   if (names === null) return 'unmeasurable';
   return names.includes(RECLAIM_PAUSE_MARKER) ? 'set' : 'clear';
+}
+
+/** THE ONE READ of a registry row's generation, `$REG/<id>.generation` (spec §5.5): the sweep's third key, the
+ *  executor's re-read before presence, and the hold-release job's re-read all answer through it. BYTE-EXACT: the
+ *  content is taken as `readFileMeasured` returns it, with no trim, no newline strip and no NUL strip, and it is a
+ *  `value` only when it is exactly `REG_GENERATION_SHAPE`. `fieldMeasured` is never used here: its trim would accept
+ *  a trailing newline and a leading byte-order mark that ccd's own read refuses. `absent` is a PROVEN ENOENT only;
+ *  every other failure the port REPORTS is `unreadable`. A port that REJECTS is not caught here (as
+ *  `childReclaimPauseRead`): each caller's try answers it (spec §5.5). The sweep's gather folds it to `unreadable`
+ *  for its row, the executor's re-read defers `marker-unreadable`, and the release job answers `failed`.
+ *
+ *  THE STATED RESIDUAL: a symlink at the name is not refused here, where ccd's read refuses every link. What it
+ *  answers depends on the adapter. The local adapter follows the link: a link to a valid file reads as that value,
+ *  and a dangling link reads `absent`. The remote adapter's agent resolves the link before its read whitelist: a
+ *  link whose target stays under a read root reads as that value, a link whose target leaves every read root
+ *  answers `forbidden`, which reads `unreadable`, and a dangling link reads `absent`. ccd writes none of these
+ *  shapes. A ccd that binds the generation then audits such a row `unmeasured`, and nothing is spent on it. */
+export async function childReclaimGenerationRead(
+  io: Pick<FleetIO, 'readFileMeasured'>, registryDir: string, id: string,
+): Promise<ChildReclaimGeneration> {
+  const read = await io.readFileMeasured(path.join(registryDir, `${id}.generation`));
+  if (!read.ok) return read.reason === 'absent' ? { kind: 'absent' } : { kind: 'unreadable' };
+  return REG_GENERATION_SHAPE.test(read.content) ? { kind: 'value', v: read.content } : { kind: 'unreadable' };
 }
 
 async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequest): Promise<ChildReclaimOutcome> {
@@ -753,24 +1083,25 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   }
   // 2a — COORDINATING, ANY STATE (spec §1, rule 4: manual cleanup is
   // reserved for a coordinator's OWN workspace, never a sub-workspace a sweep
-  // may act on). A child that has EVER been named `claimedBy` of a run — the
-  // session a reclaim made an heir, the session the SAME reclaim displaced, or
-  // any nested coordinator — is never reclaimed automatically, whatever state
-  // that run reaches later (`childReclaimCoordinatorIds`'s own docstring
-  // states what "ever" covers and its one residual). Read after the sibling
-  // re-read (which answers a narrower, LIVE question) and before the pause: an
-  // unreadable coordination table is `siblings-unreadable`, the same word
-  // this function already uses for an unreadable `openRunsForSession` — never
-  // silently treated as "never coordinated".
-  let coordinated: ReadonlySet<string>;
+  // may act on). A child that has coordinated in its own generation
+  // (`childReclaimHasCoordinated`) — named `claimedBy` of a run, the session a
+  // reclaim made an heir, the session the SAME reclaim displaced, or any
+  // nested coordinator, at or after this workspace's birth less the skew
+  // (spec §5.6: slugs recycle) — is never reclaimed automatically, whatever
+  // state that run reaches later (`CoordStore.childReclaimCoordinatorClaims`'s
+  // own docstring states what a claim covers and its one residual). Read
+  // after the sibling re-read (which answers a narrower, LIVE question) and
+  // before the pause: an unreadable coordination table or mirror is
+  // `siblings-unreadable`, the same word this function already uses for an
+  // unreadable `openRunsForSession` — never silently treated as "never
+  // coordinated".
   try {
-    coordinated = deps.coord.childReclaimCoordinatorIds();
+    if (childReclaimHasCoordinated(deps.coord, sessionId, (deps.now ?? Date.now)(), childReclaimRowUuid(read.record))) {
+      return deferred('siblings-open', `${sessionId} has coordinated run(s)`);
+    }
   } catch (err) {
     return deferred('siblings-unreadable', `whether ${sessionId} has coordinated a run could not be read `
       + `(${err instanceof Error ? err.message : String(err)})`);
-  }
-  if (coordinated.has(sessionId)) {
-    return deferred('siblings-open', `${sessionId} has coordinated run(s)`);
   }
   // 2b — THE SWITCH, READ BY THE SERVER (spec §5.8: "the close path skips").
   // After the marker and sibling re-reads and BEFORE presence, the capability
@@ -797,6 +1128,36 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
       ? `${RECLAIM_PAUSE_MARKER} is raised: automatic reclamation is paused fleet-wide`
       : `the registry did not list, so a raised ${RECLAIM_PAUSE_MARKER} cannot be ruled out`);
   }
+  // 2c — THE GENERATION, RE-READ (spec §5.5). A sweep request was judged over ONE workspace
+  // generation (`licenceGeneration`, the sweep's own byte-exact read of `<id>.generation`), and it may
+  // have waited on the session's queue since. The same run can remove the slug and mint it again
+  // meanwhile, and every check above passes for the new workspace. So EVERY sweep request, licensed
+  // or not, re-reads it here: after the switch, and BEFORE presence, so that a licence never reaches a
+  // re-minted workspace. It does not promise more: a re-mint that lands between this read and step 3 can
+  // still credit that one presence answer to the old entry, and the next pass reads the new generation
+  // and replaces that entry. A different value, or `absent` against a value, is `generation-changed`.
+  // A read that failed is `marker-unreadable`, never "changed": it says the box could not be read, not
+  // that the workspace moved. Close's requests carry `none`, and skip this step and step 5a's
+  // comparison. Close queues only when the minting run names this session and no other open run does,
+  // so that run is the one being closed or is already terminal, and no re-mint by it can follow.
+  const licence = req.licenceGeneration;
+  if (licence.kind !== 'none') {
+    let current: ChildReclaimGeneration;
+    try {
+      current = await childReclaimGenerationRead(deps.io, deps.cfg.registryDir, sessionId);
+    } catch (err) {
+      return deferred('marker-unreadable', `${sessionId}.generation could not be read `
+        + `(${err instanceof Error ? err.message : String(err)}), so which workspace stands under this name cannot be said`);
+    }
+    if (current.kind === 'unreadable') {
+      return deferred('marker-unreadable',
+        `${sessionId}.generation could not be read, so which workspace stands under this name cannot be said`);
+    }
+    if (!childReclaimSameGenerationKey(licence, current)) {
+      return deferred('generation-changed', `the workspace now carries ${childReclaimGenerationWords(current)}, `
+        + `and this request was judged under ${childReclaimGenerationWords(licence)}. ${CHILD_RECLAIM_GENERATION_CHANGED_SENTENCE}`);
+    }
+  }
   // 3 — a human looking at it, unless the defer's ceiling was reached.
   if (!req.deferExpired && deps.presence?.isVisible(sessionId) === true) {
     return deferred('presence', 'someone is viewing this session');
@@ -809,17 +1170,41 @@ async function childReclaimOutcome(deps: ChildReclaimDeps, req: ChildReclaimRequ
   // 5 — the token, minted by the ladder on the box.
   const audit = await childReclaimAudit(deps, req);
   if (audit.kind === 'unreadable') {
-    return { kind: 'failed', sessionId, runId, resume: 'not-resumable', detail: audit.detail };
+    return { kind: 'failed', sessionId, runId, resume: 'not-resumable', detail: audit.detail, token: null };
+  }
+  // The audit's own `unmeasured` answer at exit 1 carries the word ccd journaled
+  // for it, so the feed's quiet and the sweep's failure count see the same word
+  // the mirror holds (spec §5.9).
+  if (audit.kind === 'unmeasured') {
+    return { kind: 'failed', sessionId, runId, resume: audit.resume, detail: audit.detail,
+      token: CHILD_RECLAIM_PROBE_UNMEASURED };
   }
   if (audit.kind === 'refused') return childReclaimRefusal(req, audit.token, audit.detail);
   if (audit.childOf !== runId) {
     return deferred('marker-mismatch', `ws-audit read the child marker as run ${audit.childOf}, not run ${runId}`);
   }
+  // 5a — THE AUDIT'S GENERATION (spec §5.5): the generation ccd bound into the token it just minted,
+  // against the one this request was judged under. A different value, `absent` against a value
+  // included, is `generation-changed`: the slug was minted again between step 2c and the audit, and the
+  // token is over the new workspace. An older ccd prints no generation (`unprinted`). A LICENSED request
+  // is never spent on such a token: it skips presence on the strength of a judgement over one
+  // generation, and nothing on the box would hold it to that generation. So it defers `unsupported`
+  // until the fleet host's ccd is updated. An unlicensed request relies on step 2c. Its stated
+  // residual, on an older ccd only, is the gap from step 2c's read to the act (spec §5.5). Close's
+  // `none` is never compared.
+  if (licence.kind !== 'none') {
+    if (audit.generation.kind === 'unprinted') {
+      if (req.deferExpired) return deferred('unsupported', CHILD_RECLAIM_AUDIT_UNBOUND);
+    } else if (!childReclaimSameGenerationKey(licence, audit.generation)) {
+      return deferred('generation-changed', `ws-audit minted its token over ${childReclaimGenerationWords(audit.generation)}, `
+        + `and this request was judged under ${childReclaimGenerationWords(licence)}. ${CHILD_RECLAIM_GENERATION_CHANGED_SENTENCE}`);
+    }
+  }
   // 6 — the act. ccd re-proves the token inside the reap lock.
   const act = await childReclaimAct(deps, req, audit.token);
   if (act === 'unsupported') return deferred('unsupported', `the fleet host does not advertise ${RECLAIM_CAP}`);
   if (act.kind === 'failed') {
-    return { kind: 'failed', sessionId, runId, resume: act.resume, detail: act.detail };
+    return { kind: 'failed', sessionId, runId, resume: act.resume, detail: act.detail, token: act.token };
   }
   if (act.kind === 'refused') return childReclaimRefusal(req, act.token, act.detail);
   // 7 — the child is gone: nothing may still be waiting to be typed into it,
@@ -900,7 +1285,7 @@ function childReclaimRefusal(req: ChildReclaimRequest, token: ChildReclaimToken,
     // answered as a failure, never cast into a reason it is not.
     case 'retry': return isChildReclaimDeferWhy(token)
       ? { kind: 'deferred', sessionId, runId, why: token, detail }
-      : { kind: 'failed', sessionId, runId, resume: 'not-resumable',
+      : { kind: 'failed', sessionId, runId, resume: 'not-resumable', token: null,
           detail: `${token} is marked retry but is no defer reason` };
     case 'terminal': return { kind: 'refused', sessionId, runId, token, sentence: refusalSentence(token), detail };
   }
@@ -908,16 +1293,19 @@ function childReclaimRefusal(req: ChildReclaimRequest, token: ChildReclaimToken,
 
 /** The audit — its own function so the verb-gate scanner reads its own gate:
  *  `ws-audit` is an old verb, asked the old question. The FLAG's question
- *  (`reclaim-v1`) was already answered in step 4. The EXIT STATUS is read
- *  before a byte of stdout: ANY exit 1 — the audit's own unmeasured answer, a
- *  reclaim document saying `"verdict":"unmeasured"`, included — is
- *  `unreadable` here and `failed` to the executor, whatever the document says,
- *  so no exit-1 document (a token-bearing one included) is ever spent. */
-async function childReclaimAudit(deps: ChildReclaimDeps, req: ChildReclaimRequest): Promise<ChildReclaimAuditRead> {
+ *  (`reclaim-v1`) was already answered in step 4. The EXIT STATUS decides which
+ *  reader runs. At exit 0 it is `parseChildReclaimAudit`, the only reader that
+ *  can answer a token. At any other exit it is `parseChildReclaimAuditFailed`,
+ *  whose answer type has no token arm: the audit's own `unmeasured` answer,
+ *  resumable when it names a breadcrumb phase, or `unreadable`. So no exit-1
+ *  document, a token-bearing one included, is ever spent (spec §5.7, §5.9). */
+async function childReclaimAudit(
+  deps: ChildReclaimDeps, req: ChildReclaimRequest,
+): Promise<ChildReclaimAuditRead | ChildReclaimAuditUnmeasured> {
   const argv = CCD_ARGV.wsReclaimAudit(req.sessionId, req.deferExpired);
   if (!verbSupported(deps.fleetState, argv)) return { kind: 'unreadable', detail: 'the fleet host cannot answer ws-audit' };
   const res = await deps.runCcd(argv);
-  if (!res.ok) return { kind: 'unreadable', detail: `ws-audit --reclaim failed: ${res.stderr.trim()}` };
+  if (!res.ok) return parseChildReclaimAuditFailed(req.sessionId, res.stdout, res.stderr);
   return parseChildReclaimAudit(req.sessionId, res.stdout);
 }
 
@@ -949,6 +1337,9 @@ export interface ChildReclaimReleaseRequest {
   readonly reason: string;
   readonly program: string;
   readonly accountedRunId: number;
+  /** The workspace generation both `hold-retired` sightings were made under (spec §5.7): the sweep's
+   *  own byte-exact read, a value or `absent`, never unreadable. Step 7 re-reads it. */
+  readonly generation: ChildReclaimGenerationKey;
 }
 
 /** `releaseRetiredChildHold`'s answer. `released`/`not-held` are ccd's own two
@@ -998,13 +1389,25 @@ export function childReclaimReleaseActor(runId: number, program: string): string
  *      immutable (see the check's own comment below);
  *   3. that run's programme — still zero open runs;
  *   4. the child's own open runs — still none;
- *   5. the coordinator read — this child has still never coordinated a run;
+ *   5. the coordinator read — this child has still not coordinated in its own
+ *      generation (`childReclaimHasCoordinated`, the fence the close and the
+ *      executor's step 2a decide through);
  *   6. the reclaim switch (`childReclaimPauseRead`, the read the executor's
  *      own step 2b makes) — still down. A release queued behind the child's
  *      `KeyedQueue` before an operator raised `reclaim-paused` must not
  *      remove the hold the operator may have raised the switch to keep:
  *      `cmd_ws_release` does not read the marker itself. `set` answers
  *      `changed`; `unmeasurable` answers `failed`.
+ *   7. the generation (`childReclaimGenerationRead`, the read the executor's
+ *      own step 2c makes) — still the one both sightings were made under (spec
+ *      §5.7). Read LAST, nearest the argv. It is defence in depth: the job is
+ *      queued only once the minting run is terminal, so that run cannot mint
+ *      the slug again, and a re-mint by any other run fails step 1. The read
+ *      binds the job to the generation its sightings were made under all the
+ *      same, so a workspace they never judged (a run id reused after coord.db
+ *      was rebuilt, say) answers `changed`, never `released`. A different
+ *      value, or `absent` against a value, answers `changed`; an unreadable
+ *      read answers `failed`.
  * A throw or an `ok:false` from any of these answers `failed` and composes no
  * argv — never a guess standing in for a read this process could not finish.
  * Only once every one of them agrees does it compose `ws-release`, gated by
@@ -1020,7 +1423,10 @@ export function childReclaimReleaseActor(runId: number, program: string): string
  * last-written claim is treated as that claim — this job cannot tell the two
  * apart, and nothing here tries to: parsing a hold back is exactly what this
  * whole lane refuses to do (`run-routes.test.ts`'s "NOTHING in the tree
- * parses one back").
+ * parses one back"). The gap from step 7's read to ccd's unlink is the same
+ * residual for a re-mint, because `ws-release` carries no token and no
+ * generation. Releasing a re-minted workspace's hold that way cannot reclaim
+ * it: its own minting run is live, so the sweep answers `minting-run-open`.
  *
  * NEVER PARSES a hold: every comparison below is byte equality against a
  * RENDERING (`holdReason`), never a scan for structure inside the text
@@ -1097,19 +1503,21 @@ export async function releaseRetiredChildHold(
   if (!sib.ok) return 'failed';
   if (sib.siblings.length > 0) return 'changed';
 
-  // 5 — the coordinator read: this child has still never coordinated a run.
-  let coordinating: ReadonlySet<string>;
+  // 5 — the coordinator read: this child has still not coordinated in its own
+  // generation (`childReclaimHasCoordinated`; spec §1 rule 4, spec §5.6). The
+  // same fence the sweep's verdict reads, so a child the sweep calls
+  // `hold-retired` is never `changed` here on a claim an earlier workspace
+  // under the same slug made.
   try {
-    coordinating = deps.coord.childReclaimCoordinatorIds();
+    if (childReclaimHasCoordinated(deps.coord, sessionId, (deps.now ?? Date.now)(), childReclaimRowUuid(read.record))) return 'changed';
   } catch (err) {
     console.warn(`ccrc-server: releaseRetiredChildHold: re-reading ${sessionId}'s coordination history failed `
       + `(${err instanceof Error ? err.message : String(err)})`);
     return 'failed';
   }
-  if (coordinating.has(sessionId)) return 'changed';
 
-  // 6 — the reclaim switch: still down. Read last, nearest the argv, like
-  // the executor's own step 2b.
+  // 6 — the reclaim switch: still down. Read just before the generation
+  // (step 7), like the executor's own step 2b.
   let pause: MarkerState;
   try {
     pause = await childReclaimPauseRead(deps.io, deps.cfg.registryDir);
@@ -1120,6 +1528,22 @@ export async function releaseRetiredChildHold(
   }
   if (pause === 'set') return 'changed';
   if (pause !== 'clear') return 'failed';
+
+  // 7 — the generation: still the one both sightings were made under (spec §5.7). Read LAST,
+  // nearest the argv. Defence in depth: `hold-retired` needs the minting run terminal, so that run cannot
+  // mint the slug again, and a re-mint by any other run fails step 1. This read binds the job to the
+  // generation it was judged under whatever else could put the same marker and hold text on another
+  // workspace (a run id reused after coord.db was rebuilt, say).
+  let current: ChildReclaimGeneration;
+  try {
+    current = await childReclaimGenerationRead(deps.io, deps.cfg.registryDir, sessionId);
+  } catch (err) {
+    console.warn(`ccrc-server: releaseRetiredChildHold: reading ${sessionId}'s generation failed `
+      + `(${err instanceof Error ? err.message : String(err)})`);
+    return 'failed';
+  }
+  if (current.kind === 'unreadable') return 'failed';
+  if (!childReclaimSameGenerationKey(req.generation, current)) return 'changed';
 
   // Only now: the one write this job may ever compose. It deletes nothing
   // but the hold file (`cmd_ws_release`'s own docstring).
@@ -1182,6 +1606,45 @@ function childReclaimWipText(wip: ChildReclaimWip, dropped: number | 'unreadable
   }
 }
 
+/** What a failed attempt's feed row promises next (spec §5.9): ONE decision,
+ *  the WORD first and then `resume`, every value spoken by its own arm.
+ *  `purge-incomplete` is decided by its word whatever `resume` it carries: the
+ *  reclaim completed and its registry row was purged, and ccd's detail (rendered
+ *  just before this sentence) names what still stands. The sentence is
+ *  CONDITIONAL: the sweep asks again only if the row's own files still stand.
+ *  It never says that nothing retries it, nor that the box resumes.
+ *  The `never` guard makes a `ChildReclaimResume` value added without a
+ *  sentence a compile error, never the old ternary's silent "retried from the
+ *  start". */
+export function childReclaimFailedTail(o: { readonly resume: ChildReclaimResume; readonly token: string | null }): string {
+  if (o.token === CHILD_RECLAIM_PURGE_INCOMPLETE) {
+    return 'The reclaim itself completed and its registry row was purged; what still stands is named above. If the row’s own files still stand, the sweep asks again.';
+  }
+  switch (o.resume) {
+    // `pre-lock-die` (review 170 F20, wording per fr-I m2, corrected per fr-I
+    // rereview-r1 m2): the recogniser covers THREE families — an argv/version
+    // die (usage, a malformed token/run id/session id), a missing binary
+    // (python3, flock), and a lock/registry state die (lock-unopenable: EISDIR,
+    // EACCES, a missing `$REG`) — and no single named list of causes is true of
+    // all three. The sentence stays CAUSE-NEUTRAL and leaves the cause to ccd's
+    // own message, rendered immediately before it.
+    case 'pre-lock-die':
+      return 'ccd refused the call before anything started; nothing was touched, and it refuses the same way every time until that changes.';
+    // The act had started, or the audit read a standing breadcrumb.
+    case 'resumable': return 'It is retried; the box resumes where it stopped.';
+    // Nothing to resume from was shown; a plain retry might still work.
+    case 'not-resumable': return 'It is retried from the start.';
+    // ccd proved another tree or row is in the way, and its detail says which.
+    // Conditional, like the failing sentence: the switch can stop the retries.
+    case 'stuck':
+      return CHILD_RECLAIM_STUCK_RETRY;
+    default: {
+      const _exhaustive: never = o.resume;
+      return _exhaustive;
+    }
+  }
+}
+
 function childReclaimFeedBody(o: Exclude<ChildReclaimOutcome, { kind: 'gone' }>, req: ChildReclaimRequest,
   nowMs: number): string {
   const who = `${o.sessionId}, child of run #${o.runId}`;
@@ -1191,40 +1654,28 @@ function childReclaimFeedBody(o: Exclude<ChildReclaimOutcome, { kind: 'gone' }>,
       return `${who}, was reclaimed (${req.trigger}). ${childReclaimWipText(o.wip, o.secretsDropped)}${wait}`;
     case 'deferred': return `${who}: reclaim deferred (${o.why}) — ${childReclaimSentence(o.detail)}${wait}`;
     case 'refused': return `${who}: ${o.sentence}${o.detail === '' ? '' : ` (${o.detail})`}${wait}`;
-    // `resume` says what to promise the reader (fix round 1 review minor #4,
-    // corrected fix round 2 minor C; three-way since review 170 fr-I m1).
     // `childReclaimSentence` (not a bare `.`) avoids doubling the punctuation
     // when `o.detail` already ends a sentence.
-    case 'failed': {
-      // `pre-lock-die` (review 170 F20, wording per fr-I m2, corrected per
-      // fr-I rereview-r1 m2): the recogniser covers THREE families — an
-      // argv/version die (usage, a malformed token/run id/session id), a
-      // missing binary (python3, flock), and a lock/registry state die
-      // (lock-unopenable: EISDIR, EACCES, a missing `$REG`) — and no single
-      // named list of causes ("its own arguments, or ccd/python3/flock") is
-      // true of all three; naming only that list pointed an operator at the
-      // wrong thing for the third. The sentence stays CAUSE-NEUTRAL instead
-      // and leaves the cause to `o.detail` — ccd's own message, rendered
-      // immediately before this sentence — which already names it.
-      const tail = o.resume === 'pre-lock-die'
-        ? 'ccd refused the call before anything started; nothing was touched, and it refuses the same way every time until that changes.'
-        // `resumable`: ccd's own tail genuinely started and left a
-        // breadcrumb. `not-resumable`: an audit failure (never reached the
-        // destructive path) or a verb answer that is a REFUSAL in substance
-        // (an unrecognised word, or `reclaimed` naming another session) —
-        // neither advanced this session's state, so neither has anything to
-        // resume, but unlike a pre-lock die a plain retry MIGHT still work.
-        : o.resume === 'resumable' ? 'It is retried; the box resumes where it stopped.' : 'It is retried from the start.';
-      return `${who}: reclaim failed — ${childReclaimSentence(o.detail)} ${tail}${wait}`;
-    }
+    case 'failed':
+      return `${who}: reclaim failed — ${childReclaimSentence(o.detail)} ${childReclaimFailedTail(o)}${wait}`;
   }
 }
 
+/** Does this outcome repeat what the feed already says (spec §5.9)? A ceiling-expired attempt
+ *  always writes: its row states the wait it ended. */
+export function childReclaimFeedSkips(o: Exclude<ChildReclaimOutcome, { kind: 'gone' }>, req: ChildReclaimRequest): boolean {
+  if (req.deferExpired) return false;
+  if (o.kind === 'deferred') return req.feedQuiet.deferWhy === o.why;
+  if (o.kind === 'failed') return o.token !== null && req.feedQuiet.failureToken === o.token;
+  return false;
+}
+
 /**
- * ONE explicit feed row per outcome (spec §5.9). Explicit because it does not
- * come for free: a reclaim on an already-closed run is an observation, not a
- * transition, and the run-event lane skips observations — a design that
- * assumed a row would have delivered none. `kind: 'run'`, recorded and NEVER
+ * One explicit feed row per outcome `childReclaimFeedSkips` does not skip
+ * (spec §5.9). Explicit because it does not come for free: a reclaim on an
+ * already-closed run is an observation, not a transition, and the run-event
+ * lane skips observations — a design that assumed a row would have delivered
+ * none. `kind: 'run'`, recorded and NEVER
  * pushed (the operator's ruling: every reclaim lands in the feed; no push per
  * reap). The `POST /api/coord/caps` pattern exactly: a missing log degrades
  * the record and never the act, `recordFeedEvent` throws synchronously and is
@@ -1246,3 +1697,499 @@ function recordChildReclaimFeed(
     void log.flush();
   }
 }
+
+/** The title of the one feed row a kept child writes (spec §5.9). */
+export const CHILD_RECLAIM_KEPT_FEED_TITLE = 'child reclaim kept';
+
+/**
+ * ONE feed row for a child the sweep keeps on purpose (spec §5.9), in `recordChildReclaimFeed`'s idiom
+ * exactly: `kind: 'run'`, recorded and NEVER pushed; a missing log degrades the record and never the
+ * sweep; `recordFeedEvent` throws synchronously and is caught; the flush is in a `finally`. The caller
+ * decides when to write it — once per child, per word, per process — so this writes whatever it is
+ * handed, and the row says what the attention item says.
+ */
+export function recordChildReclaimKeptFeed(
+  deps: Pick<ChildReclaimDeps, 'coord' | 'notifyLog'>, a: ChildReclaimKeptAttention,
+): void {
+  const log = deps.notifyLog;
+  if (!log) return;
+  try {
+    const ev = log.record({ kind: 'run', sessionId: a.sessionId, runId: a.runId,
+      title: CHILD_RECLAIM_KEPT_FEED_TITLE, body: `${a.sessionId}, child of run #${a.runId}: ${a.sentence}` });
+    deps.coord.recordFeedEvent(log.epoch, ev);
+  } catch (err) {
+    console.warn('ccrc-server: recordFeedEvent failed '
+      + `(${err instanceof Error ? err.message : String(err)}) — child reclaim kept, feed archive degraded`);
+  } finally {
+    void log.flush();
+  }
+}
+
+/** The title of the one feed row a kept leaf writes (spec §5.9). */
+export const CHILD_RECLAIM_LEAF_KEPT_FEED_TITLE = 'child reclaim leaf kept';
+
+/** The kept-leaf feed row's body (spec §5.9): the item's own sentence, then ccd's own line for the row. That
+ *  line names what was kept and why, and a line cut to fit usually keeps it, because the encoder drops
+ *  `meas` before `detail`, except in its last-resort line, which keeps neither. ccd's line goes through
+ *  `childReclaimDetailText`: one line, control and bidi characters replaced, bounded by `LC_LINE_MAX`. Once
+ *  the item has ended, this row is the record. */
+export function childReclaimLeafKeptFeedBody(k: ChildReclaimLeafKept): string {
+  const a = k.item;
+  const who = a.runId === null ? a.sessionId : `${a.sessionId}, child of run #${a.runId}`;
+  const line = k.detail === null ? '' : childReclaimDetailText(k.detail);
+  const said = line === '' ? 'ccd recorded no detail.' : `ccd recorded: ${line}`;
+  return `${who}: ${a.sentence} ${said}`;
+}
+
+/**
+ * ONE feed row for a kept leaf (spec §5.9), in `recordChildReclaimKeptFeed`'s idiom exactly: `kind: 'run'`,
+ * recorded and NEVER pushed; a missing log degrades the record and never the sweep; `recordFeedEvent`
+ * throws synchronously and is caught; the flush is in a `finally`. The caller decides when to write it:
+ * once per source row, per process.
+ */
+export function recordChildReclaimLeafKeptFeed(
+  deps: Pick<ChildReclaimDeps, 'coord' | 'notifyLog'>, k: ChildReclaimLeafKept,
+): void {
+  const log = deps.notifyLog;
+  if (!log) return;
+  try {
+    const ev = log.record({ kind: 'run', sessionId: k.item.sessionId, runId: k.item.runId,
+      title: CHILD_RECLAIM_LEAF_KEPT_FEED_TITLE, body: childReclaimLeafKeptFeedBody(k) });
+    deps.coord.recordFeedEvent(log.epoch, ev);
+  } catch (err) {
+    console.warn('ccrc-server: recordFeedEvent failed '
+      + `(${err instanceof Error ? err.message : String(err)}) — child reclaim leaf kept, feed archive degraded`);
+  } finally {
+    void log.flush();
+  }
+}
+
+// ── Wave 5: the closed run's chip (spec §5.9) ───────────────────────────────
+//
+// THE ONE DERIVATION. `GET /api/runs` composes `RunSummary.childReclaim` through
+// `withChildReclaim` and nothing else decides a word. Every sentence is the
+// server's: a journal token's comes from `childReclaimTokenSentence` (the two
+// server maps in their one documented order), or, past the failure ceiling,
+// from the attention list's own `childReclaimFailingWord`, which reads the
+// same two in the same order; a sweep verdict's comes from
+// `CHILD_RECLAIM_SKIP`, the table every surface reads (spec §5.9); the words
+// that have neither have theirs below. The generation fence, the latest-event
+// pick and the token-kind lookup are wave 4's exports above, each the
+// programme's one copy (spec §5.6: slugs recycle, so every read of the mirror is
+// one generation's), called here and never re-spelled.
+
+/** The chip's sentences for the answers neither a ws-reclaim token nor a sweep
+ *  verdict carries. Each one is a claim the operator will act on, so each is
+ *  true of a CHILD specifically:
+ *   - `reclaimed`: the pin phase attic-pins before any destructive act (spec
+ *     §5.5) and the transcripts are kept (spec §1);
+ *   - `pending`: said only when the sweep's last verdict was eligible or an
+ *     ordinary skip, never for a child it keeps or holds (spec §5.9);
+ *   - `unjudged`: the watcher holds no verdict for the child yet (a restart, or
+ *     a pass that judged nothing), so whether it will be reclaimed is not known
+ *     and the sentence says that, never "waiting to be reclaimed" (spec §5.9);
+ *   - `sweepDeferred`: a sweep defer is retried on its own, and it says what
+ *     ends a wait on presence and promises no time (spec §5.7: only that wait
+ *     has a ceiling, and the ceiling is on continuous deferral);
+ *   - `sweepFailing`: the sweep's own attempts keep failing and ccd recorded no
+ *     outcome for them, so the journal cannot say; the sweep backs off between
+ *     tries (spec §5.9: "retries back off in between");
+ *   - `failed`: a failure is left to the sweep (spec §5.7, "Any failure is
+ *     recorded and left to the sweep");
+ *   - `refusedNoReason`: ccd refused and journaled no token;
+ *   - `fleetPaused`: the fleet-wide switch stops reclamation and nothing else.
+ *     It says what the switch does and promises nothing about what follows,
+ *     because it also stands over children the sweep keeps for a person
+ *     (spec §5.8);
+ *   - `reviewKept`: a review child outlives its own run until the run it
+ *     reviewed is terminal (spec §5.7, "A review child is finished later than
+ *     its own run"). */
+export const CHILD_RECLAIM_STATUS_SENTENCE = {
+  reclaimed: 'This workspace was reclaimed after its run closed. Its commits are pinned in the attic and its transcripts are kept.',
+  pending: 'This run has closed. Its workspace is waiting to be reclaimed.',
+  unjudged: 'This run has closed. The sweep has not judged its workspace yet, so whether it will be reclaimed is not known.',
+  sweepDeferred: 'Reclamation of this workspace was put off, and the sweep retries it on its own. A wait on someone using it ends once the sweep has watched it continuously for 15 minutes, one such workspace at a time. Any other wait lasts until its cause clears.',
+  sweepFailing: 'The sweep’s recent attempts to reclaim this workspace failed, and ccd recorded no outcome for them. It tries again on its own, backing off in between.',
+  failed: 'The last reclamation attempt stopped partway. The sweep tries again on its own.',
+  refusedNoReason: 'Reclamation was refused, and ccd recorded no reason for it.',
+  fleetPaused: 'Reclamation is paused fleet-wide. This workspace is kept while the switch stands.',
+  reviewKept: 'This review’s workspace is kept until the run it reviewed is known to have closed, because the report the coordinator cites lives in it. It is reclaimed once that run closes.',
+} as const;
+
+/** The one ws-reclaim token the chip reads as its own word rather than as a
+ *  defer: `paused` is retryable, and saying `deferred` would hide the switch. */
+const PAUSED_TOKEN: ChildReclaimToken = 'paused';
+
+/** What every answer that promises the sweep will act on its own becomes while
+ *  the fleet-wide switch stands (spec §5.8: pausing stops reclamation
+ *  fleet-wide): nothing acts until it comes down. No time: the switch's own is
+ *  not a fact this read has. */
+const CHILD_RECLAIM_SWITCH_PAUSED: ChildReclaimStatus = {
+  word: 'paused', sentence: CHILD_RECLAIM_STATUS_SENTENCE.fleetPaused, at: null,
+};
+
+/** A journal token's sentence, in the lookup order `lcRefusalWord`'s own
+ *  docstring prescribes: `LC_REFUSAL_WORD` first, then the audit's `SENTENCES`
+ *  through `refusalSentence`. Wave 3 journals a post-start failure
+ *  (`pin-failed`, `unit-still-active`, ws-reap's reused `purge-*`) as an
+ *  `LcRefusalToken`, whose word `SENTENCES` does not hold, so `refusalSentence`
+ *  alone answers it `ccrc declined: <token>.`. The maps are disjoint
+ *  (`lifecycle-refusal-word.test.ts`), so the order changes no ws-reclaim
+ *  refusal's sentence. For a token this build cannot classify, that fallback
+ *  is the sentence: the chip reads "refused with the sentence" (spec §5.9)
+ *  rather than vanishing. */
+const childReclaimTokenSentence = (token: string): string =>
+  lcRefusalWord(token) ?? refusalSentence(token);
+
+/** The five fields of a mirror row the chip reads; `detail` only for a stuck line's sentence (spec §5.9). */
+export type ChildReclaimEvent = Pick<MirroredLifecycleEvent, 'act' | 'outcome' | 'refusal' | 'at' | 'detail'>;
+
+/**
+ * What the registry says of a run's session, as the watcher last listed it.
+ * FIVE answers, because the chip treats "never listed" and "listed, no row"
+ * differently from a row, and a row's `ChildMark` is itself three-way (spec
+ * §5.1). None of them folds into another.
+ */
+export type ChildReclaimRowView =
+  | { readonly kind: 'unmeasured' }                       // the watcher has not listed the registry yet
+  | { readonly kind: 'absent' }                           // listed; no row for this session
+  | { readonly kind: 'row'; readonly child: ChildMark };  // listed; the row's own marker
+
+/** The sweep's last verdict for this child, as the chip reads it (spec §5.9). `unjudged`: the
+ *  watcher holds no verdict for this row. Either no judging pass has run since the server started,
+ *  or the last one did not judge this row, or a pass that judged nothing (the switch, a missing
+ *  capability, a failed read) dropped it because it was not a kept word, or it is a kept word judged
+ *  under another run's marker: a recycled slug's earlier workspace (spec §5.6). NEVER read as
+ *  `eligible`. */
+export type ChildReclaimChipVerdict =
+  | { readonly kind: 'unjudged' }
+  | { readonly kind: 'eligible' }
+  | { readonly kind: 'skip'; readonly why: ChildReclaimSweepSkip };
+
+export interface ChildReclaimStatusInput {
+  readonly run: Pick<RunSummary, 'id' | 'state' | 'sessionId'>;
+  /** The latest `reclaim` row of THIS run's workspace generation, of ANY
+   *  outcome and an `intent` included, as wave 4's `childReclaimLatest` picks it
+   *  from `childReclaimGeneration` at the run's `closedAt`; or null when that
+   *  generation holds none. */
+  readonly event: ChildReclaimEvent | null;
+  readonly row: ChildReclaimRowView;
+  /** A non-terminal run names this session: the child was handed to the next
+   *  wave, and is in use rather than waiting. */
+  readonly sessionHasOpenRun: boolean;
+  /** This is a review run and the work run it reviews (`RunSummary.reviews`)
+   *  is NOT KNOWN TO BE TERMINAL: open in the list, or absent from it. The
+   *  child holds the report the coordinator cites (spec §5.7, "A review child
+   *  is finished later than its own run"), and doubt keeps it. */
+  readonly reviewedRunNotTerminal: boolean;
+  /** The fleet-wide switch stands (`CoordStatus.reclaim === 'set'`, wave 4). */
+  readonly fleetPaused: boolean;
+  /** When wave 4's sweep FIRST deferred this session, for any reason
+   *  (`firstDeferredAt`), or null when it holds no defer. Never the
+   *  presence-only clock that drives the ceiling. */
+  readonly deferredSince: number | null;
+  /** The sweep's last recorded verdict for this child, or `unjudged` when the watcher holds none for this
+   *  run (spec §5.9). */
+  readonly verdict: ChildReclaimChipVerdict;
+  /** The sweep's in-memory entry is in a run of failed attempts (`consecutiveFailures > 0`). */
+  readonly sweepFailing: boolean;
+  /** When THIS generation's unbroken run of failure lines (`childReclaimFailureLine`) began,
+   *  ONLY when that run has lasted the ceiling at the composer's clock; else null. */
+  readonly journalFailingSince: number | null;
+}
+
+/**
+ * THE ONE DERIVATION of a closed run's chip (spec §5.9, with §5.6's recycled
+ * slugs, §5.7's review child and deferrals, and §5.8's switch). First match
+ * wins:
+ *
+ * 1. A run that is not terminal, or has no session, says nothing. That rule is
+ *    what makes the store's `childReclaim: null` on every other emitter the
+ *    same answer rather than a second meaning (`RunSummary.childReclaim`).
+ * 2. SETTLED, from the generation's latest event, of any outcome: done →
+ *    reclaimed; a refusal whose token is of kind `gone` → nothing; a TERMINAL
+ *    refusal (`no-worktree-record` among them) → refused. None of these reads
+ *    the registry: a reclaimed child's row is gone by design, and the mirror is
+ *    the durable record (spec §5.9). A terminal refusal is ccd's own settled
+ *    word, and the attention list's terminal arm lists the child in the same
+ *    sentence.
+ * 2a. STUCK, where the gate holds: the generation's latest event is a failure carrying a stuck word
+ *    (`childReclaimStuckRow`) → deferred, with the attention item's own sentence and the line's time.
+ *    It outranks the verdict (3) and every remaining event (4), and is never `refused`. A KEPT verdict
+ *    swaps the retry clause for the kept reason, and the switch never replaces that answer.
+ *    A HELD verdict swaps it for the hold's clause (`childReclaimStuckHeld`), and the
+ *    switch replaces that answer as it replaces the hold's own deferred one.
+ * 3. THE SWEEP'S LAST VERDICT, where the gate holds (the registry, as last
+ *    listed, still carries a `ChildMark` naming THIS run, and no open run names
+ *    the session): a KEPT word → refused, never replaced by the switch; a
+ *    DOUBT or HELD word → deferred. It answers ahead of every event below it,
+ *    because an older answer must not promise a retry the sweep will not make
+ *    (a person's hold, or a coordinator's chair, outlasts a failure).
+ * 4. THE REMAINING EVENTS:
+ *    - a FAILURE LINE (`childReclaimFailureLine`: `failed`, or a refusal with
+ *      one of the pre-lock tokens), where the gate holds → deferred, in
+ *      the attention list's own sentence once its run has lasted the ceiling;
+ *    - refused with no token → refused;
+ *    - the `paused` token, where the gate holds → paused;
+ *    - retry, where the gate holds → deferred;
+ *    - a token this build cannot classify → refused, through
+ *      `refusalSentence`'s fallback;
+ *    - `intent` / `unknown` (an act with no recorded end, an attempt in flight
+ *      or one that died mid-way) → the row rule, because a registry row still
+ *      carrying this run's marker is evidence the workspace is still there.
+ *    The failure line, the `paused` token and retry each promise that the
+ *    sweep acts again, and the chip speaks for the sweep only of a child that
+ *    still stands (spec §5.9). So where the gate fails, each answers nothing
+ *    of its own and falls through to the row rule, like `intent`. The gate
+ *    fails for, among others: a registry not yet listed (the window after a
+ *    restart), no row, a row with no marker or an unreadable one, a marker
+ *    naming another run, and a session handed to an open run. Such an event
+ *    never reaches the unclassified-token `refused` either. The two `refused`
+ *    answers that promise nothing (no token; a token this build cannot
+ *    classify) are not gated.
+ * 5. THE ROW RULE, where the gate holds:
+ *    - a review child whose reviewed run is not known to be terminal → pending,
+ *      kept for the report;
+ *    - a run of sweep failures → deferred;
+ *    - a sweep defer → deferred;
+ *    - an eligible verdict, or an ordinary skip → pending;
+ *    - no verdict yet → pending, with its own sentence and never the eligible
+ *      one.
+ *    Anything short of the gate says nothing, whatever rule 4's failure,
+ *    `paused` or retry event said. An unreadable marker, or one naming another
+ *    run (a recycled slug, or the hand-over wave's own row), cannot be said to
+ *    be this run's.
+ *
+ * THE SWITCH replaces every answer that promises the sweep will act on its own
+ * (pending, and every deferred) with `CHILD_RECLAIM_SWITCH_PAUSED`, and nothing
+ * else: a settled answer stays settled, a kept one stays kept, the on-box
+ * `paused` token keeps its own sentence and time, and a review child is kept by
+ * its reviewed run, not by the switch.
+ */
+export function childReclaimStatus(input: ChildReclaimStatusInput): ChildReclaimStatus | null {
+  const { run, event } = input;
+  if (run.sessionId === null || !isChildReclaimTerminalState(run.state)) return null;
+  const waiting = (s: ChildReclaimStatus): ChildReclaimStatus => (input.fleetPaused ? CHILD_RECLAIM_SWITCH_PAUSED : s);
+  const token = event === null || event.refusal === null || event.refusal === '' ? null : event.refusal;
+  const kind = token === null ? null : childReclaimTokenKind(token);
+  // SETTLED (spec §5.9): a done reclaim, a row ccd found gone, and a TERMINAL refusal. The last is
+  // what the attention list's terminal arm lists for this child, in the same sentence.
+  if (event !== null) {
+    if (event.outcome === 'done') {
+      return { word: 'reclaimed', sentence: CHILD_RECLAIM_STATUS_SENTENCE.reclaimed, at: event.at };
+    }
+    if (event.outcome === 'refused' && token !== null) {
+      if (kind === 'gone') return null;
+      if (kind === 'terminal') return { word: 'refused', sentence: childReclaimTokenSentence(token), at: event.at };
+    }
+  }
+  const row = input.row;
+  const marked = row.kind === 'row' && row.child.kind === 'child' && row.child.runId === run.id
+    && !input.sessionHasOpenRun;
+  // STUCK (spec §5.9): ccd PROVED another tree or registry row stands in this workspace's way. The chip
+  // says what the attention item says, from the same composer, at the line's own time. `deferred`, never
+  // `refused`: the PWA treats `refused` as settled and never re-reads it, and a fixed tree completes on a
+  // later pass. It answers ahead of the sweep's verdict, because the stuck item outranks a kept or held
+  // item on the banner. Like every failure line, it speaks only for a child that still stands as this
+  // run's (`marked`). For a child the sweep KEEPS, the sentence drops the retry clause and names the kept
+  // reason instead; it promises no retry, so the switch leaves it as it leaves every kept answer. For a
+  // child the sweep HOLDS, the sentence drops the retry clause for the hold's: no retry while the hold
+  // stands, the long backoff once it lifts. The same rewrite the banner makes (`childReclaimStuckHeld`).
+  // It still says the sweep acts once the hold lifts, so, like the verdict arm's own held answer, the
+  // switch turns it to `paused`. Every other stuck answer promises a retry, and the switch turns it to
+  // `paused`.
+  if (event !== null && marked && childReclaimStuckRow(event, isChildReclaimStuckToken)) {
+    const kept = input.verdict.kind === 'skip' && isChildReclaimKeptWord(input.verdict.why) ? input.verdict.why : null;
+    const held = input.verdict.kind === 'skip' && input.verdict.why === 'held';
+    const sentence = childReclaimStuckSentence(event.refusal, event.detail, refusalSentence, kept);
+    const stuck: ChildReclaimStatus = {
+      word: 'deferred', sentence: held ? childReclaimStuckHeld(sentence) : sentence, at: event.at };
+    return kept === null ? waiting(stuck) : stuck;
+  }
+  // THE SWEEP'S LAST VERDICT (spec §5.9), ahead of every retryable or failure event: a measured
+  // reason the sweep keeps or waits on outranks an older answer that promises a retry it will not make.
+  if (marked && input.verdict.kind === 'skip') {
+    const skip = CHILD_RECLAIM_SKIP[input.verdict.why];
+    // KEPT: a standing answer (`CHILD_RECLAIM_SKIP`'s class notes say what ends one). The switch never
+    // replaces it.
+    if (skip.class === 'kept') return { word: 'refused', sentence: skip.sentence, at: null };
+    if (skip.class !== 'ordinary') return waiting({ word: 'deferred', sentence: skip.sentence, at: null });
+  }
+  if (event !== null) {
+    // A FAILURE LINE (spec §5.9): `failed`, or a refusal with one of the pre-lock tokens, which
+    // the executor and the sweep retry. The SAME predicate the attention list's failing arm reads.
+    // It promises the sweep acts again, and so do the `paused` and retry arms below. All three
+    // answer only for a child that still stands as this run's (`marked`, the row rule's gate; spec
+    // §5.9). Any other child falls through to the row rule. That includes a pre-lock refusal, which
+    // never reaches the refused arm.
+    const failureLine = childReclaimFailureLine(event);
+    if (failureLine && marked) {
+      if (input.journalFailingSince !== null) {
+        // The attention list's own sentence, its word from the list's own derivation, so an empty
+        // token reads here as it reads there.
+        const listed = childReclaimFailingWord(event.refusal, refusalSentence);
+        return waiting({ word: 'deferred', sentence: childReclaimFailingSentence(listed), at: input.journalFailingSince });
+      }
+      const word = token === null ? null : childReclaimTokenSentence(token);
+      return waiting({ word: 'deferred', sentence: word ?? CHILD_RECLAIM_STATUS_SENTENCE.failed, at: event.at });
+    }
+    if (!failureLine && event.outcome === 'refused') {
+      if (token === null) {
+        return { word: 'refused', sentence: CHILD_RECLAIM_STATUS_SENTENCE.refusedNoReason, at: event.at };
+      }
+      const retryable = token === PAUSED_TOKEN || kind === 'retry';
+      if (retryable && marked) {
+        if (token === PAUSED_TOKEN) return { word: 'paused', sentence: childReclaimTokenSentence(token), at: event.at };
+        return waiting({ word: 'deferred', sentence: childReclaimTokenSentence(token), at: event.at });
+      }
+      // A token this build was never compiled to know (`kind` null) and not a pre-lock token:
+      // refused, through `refusalSentence`'s fallback naming it (spec §5.9).
+      if (!retryable) return { word: 'refused', sentence: childReclaimTokenSentence(token), at: event.at };
+    }
+    // `intent` / `unknown`: an act with no recorded end, newer than any outcome in this
+    // generation. An older attempt's answer is not this one's: fall through to the row rule.
+  }
+  if (!marked) return null;
+  if (input.reviewedRunNotTerminal) return { word: 'pending', sentence: CHILD_RECLAIM_STATUS_SENTENCE.reviewKept, at: null };
+  if (input.sweepFailing) return waiting({ word: 'deferred', sentence: CHILD_RECLAIM_STATUS_SENTENCE.sweepFailing, at: null });
+  if (input.deferredSince !== null) {
+    return waiting({ word: 'deferred', sentence: CHILD_RECLAIM_STATUS_SENTENCE.sweepDeferred, at: input.deferredSince });
+  }
+  // `unjudged` is never `eligible`: "waiting to be reclaimed" only after a verdict says so.
+  return waiting({ word: 'pending',
+    sentence: input.verdict.kind === 'unjudged' ? CHILD_RECLAIM_STATUS_SENTENCE.unjudged : CHILD_RECLAIM_STATUS_SENTENCE.pending,
+    at: null });
+}
+
+/**
+ * Child-reclamation wave 6 (spec §5.9): did a CHILD leave the registry
+ * listing between two LISTED ticks? A child's row is purged by its reclaim, and
+ * ccd journals the reclaim's `done` only after that purge, so the watcher answers
+ * a `true` by resetting the journal mirror's clock. The mirror then sweeps on
+ * that same tick instead of up to `LC_SWEEP_MS` later.
+ *
+ * Only a `child` mark counts. A row marked `none` is no child, and an
+ * `unreadable` one is not known to be a child. `prev` null is the first listing
+ * this process has made: there is nothing to compare, so nothing left.
+ */
+export function childMarkLeftListing(
+  prev: ReadonlyMap<string, ChildMark> | null, next: ReadonlyMap<string, ChildMark>,
+): boolean {
+  if (prev === null) return false;
+  for (const [id, mark] of prev) if (mark.kind === 'child' && !next.has(id)) return true;
+  return false;
+}
+
+/** The sessions whose mirror rows a board needs: terminal rows that carry both a
+ *  session and a `closedAt`, each once. A row without `closedAt` (a
+ *  reconstructed one) has no generation to fence, so nothing is asked for it. */
+export function childReclaimSessions(runs: readonly RunSummary[]): string[] {
+  const out = new Set<string>();
+  for (const r of runs) {
+    if (r.sessionId !== null && r.closedAt !== null && isChildReclaimTerminalState(r.state)) out.add(r.sessionId);
+  }
+  return [...out];
+}
+
+/** What `withChildReclaim` composes from. Every piece is already in memory
+ *  or already read, so composition does no I/O of its own. */
+export interface ChildReclaimSources {
+  /** `CoordStore.childReclaimEvents(childReclaimSessions(runs))`, which answers every id it was asked. */
+  readonly events: ReadonlyMap<string, readonly MirroredLifecycleEvent[]>;
+  /** The watcher's last LISTED registry read, or null when it has listed none. */
+  readonly marks: ReadonlyMap<string, ChildMark> | null;
+  /** Wave 4's sweep state, read-only (`FleetWatcher.currentChildReclaimDefers()`),
+   *  and read structurally, for two fields: `firstDeferredAt`, the FIRST
+   *  deferral of any kind, and `consecutiveFailures`, the entry's run of failed
+   *  attempts. The entry's decision clocks, among them the presence-only one
+   *  that drives the defer ceiling (spec §5.7), are deliberately not declared
+   *  here: the chip dates a defer from its start, whatever its cause.
+   *  THE MAP'S LIMITS: it is in memory, so a restart empties it; it is cleared
+   *  whole while the switch stands, when a capability is missing and when the
+   *  mirror read fails; an entry exists only after an eligible verdict, and an
+   *  ineligible verdict deletes it; and `firstDeferredAt` never resets within an
+   *  entry's life. An entry whose `firstDeferredAt` is null is tracked but NOT
+   *  deferring. */
+  readonly defers: ReadonlyMap<string, { readonly firstDeferredAt: number | null; readonly consecutiveFailures: number }>;
+  /** `FleetWatcher.currentChildReclaimVerdicts()`: null is "no judging pass since this process
+   *  started", never an empty map; an id absent from a map was not judged. A kept verdict carries the
+   *  run its marker named, and is read only for that run. */
+  readonly verdicts: ReadonlyMap<string, ChildReclaimSweepVerdict> | null;
+  /** Wave 4's fleet-wide switch as the watcher last measured it
+   *  (`currentCoord()?.reclaim === 'set'`). `unmeasurable` and "never
+   *  measured" are false: the chip then says what it would say anyway, and
+   *  claims no switch it did not see. */
+  readonly fleetPaused: boolean;
+  /** The composer's wall clock (epoch ms), for the failure ceiling. An argument: this file decides, it reads no clock. */
+  readonly nowMs: number;
+}
+
+/**
+ * `RunSummary[]` → the same rows with `childReclaim` composed. "Another run is
+ * open on this session" and "the run this review reviewed is terminal" are
+ * both derived from THIS list. `GET /api/runs?closed=1` carries every open run
+ * uncapped (`CoordStore.runs`'s asymmetric clamp), so "open on this session" is
+ * complete wherever a terminal row can appear. "Terminal" is not: the list
+ * caps closed runs, so a reviewed run it does not carry is NOT KNOWN to be
+ * terminal, and the review child is kept (spec §5.7: its report outlives its
+ * own run). The cost of that direction is a stale "kept" on a child the sweep
+ * reclaims, which the next read corrects off the mirror; the other direction
+ * would promise a reclaim of a report still being cited. A list without
+ * `?closed=1` carries no terminal row, so every answer there is null anyway.
+ *
+ * THE EVENT is wave 4's `childReclaimLatest` over wave 4's
+ * `childReclaimGeneration`, read at the run's own `closedAt` (spec §5.6: slugs
+ * recycle): the attention list reads the same two functions at now, and
+ * nothing here re-implements either. THE FAILURE RUN is
+ * `childReclaimJournalRow`'s, read over that same generation, so the chip and
+ * the attention list date a run of failures from the same line.
+ */
+export function withChildReclaim(runs: readonly RunSummary[], src: ChildReclaimSources): RunSummary[] {
+  const open = new Set<string>();
+  const terminalRunIds = new Set<number>();
+  for (const r of runs) {
+    if (isChildReclaimTerminalState(r.state)) { terminalRunIds.add(r.id); continue; }
+    if (r.sessionId !== null) open.add(r.sessionId);
+  }
+  return runs.map((run) => {
+    const sid = run.sessionId;
+    // `?? []` is not a default for a missing key: `childReclaimEvents` answers
+    // every id `childReclaimSessions` names, and a session it was not asked
+    // about belongs to a row the derivation answers null for before reading this.
+    const gen = sid === null || run.closedAt === null
+      ? [] : childReclaimGeneration(src.events.get(sid) ?? [], run.closedAt);
+    const event = childReclaimLatest(gen);
+    const journal = childReclaimJournalRow(gen, event);
+    const mark = sid === null || src.marks === null ? undefined : src.marks.get(sid);
+    const row: ChildReclaimRowView = src.marks === null
+      ? { kind: 'unmeasured' }
+      : mark === undefined ? { kind: 'absent' } : { kind: 'row', child: mark };
+    const recorded = sid === null || src.verdicts === null ? undefined : src.verdicts.get(sid);
+    // A KEPT verdict is the word of the workspace it was judged on, and a pass that judged nothing keeps
+    // it while the registry moves on. A marker naming THIS run beside a kept verdict judged under another
+    // is a recycled slug's next workspace (spec §5.6): no verdict yet, never the old workspace's word
+    // (spec §5.9).
+    const judged = recorded !== undefined && isChildReclaimKeptVerdict(recorded) && recorded.runId !== run.id
+      ? undefined : recorded;
+    const entry = sid === null ? undefined : src.defers.get(sid);
+    return {
+      ...run,
+      childReclaim: childReclaimStatus({
+        run, event, row,
+        sessionHasOpenRun: sid !== null && open.has(sid),
+        // `reviews` names the work run a review run reads, and is null on a work
+        // run, which reviews nothing. A reviewed run ABSENT from this list is
+        // not known terminal, so it keeps the child.
+        reviewedRunNotTerminal: typeof run.reviews === 'number' && !terminalRunIds.has(run.reviews),
+        fleetPaused: src.fleetPaused,
+        deferredSince: entry?.firstDeferredAt ?? null,
+        verdict: judged === undefined ? { kind: 'unjudged' }
+          : judged.eligible ? { kind: 'eligible' } : { kind: 'skip', why: judged.why },
+        sweepFailing: (entry?.consecutiveFailures ?? 0) > 0,
+        journalFailingSince: journal !== null && childReclaimFailingPastCeiling(journal, src.nowMs)
+          ? journal.failingSince : null,
+      }),
+    };
+  });
+}
+// ── end wave 5 chip ──

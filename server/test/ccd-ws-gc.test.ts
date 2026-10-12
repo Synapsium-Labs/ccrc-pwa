@@ -1270,6 +1270,32 @@ describe('archived and reaping workspaces', () => {
     expect(out).toMatch(/declined .*quiet-mesa is mid-cleanup/);
     expect(fs.existsSync(wt)).toBe(true);
   });
+
+  // Workspace lifecycle wave 3b (the carried row): the two advisory lines told an operator to run a verb that REFUSES
+  // the breadcrumb (ws-reap refuses `expire:` and `reclaim:`), and that an archived workspace is removed "never on a
+  // timer" — false once the server expires it seven days after its archive. Reworded in place, line for line.
+  it('an `expire:` or `reclaim:` breadcrumb is not ws-reap’s to finish — the decline says whose it is', () => {
+    h.makeRepo('demo');
+    const wt = addWs('demo', 'quiet-mesa');
+    for (const crumb of ['expire:worktree', 'reclaim:worktree']) {
+      h.sh(`_reg_set demo-quiet-mesa reaping ${crumb}`);
+      const out = h.sh(`${ARCH} cmd_ws_gc --prune`);
+      expect(out).toMatch(/declined .*quiet-mesa is mid-cleanup/);
+      expect(out).toContain('the verb that left it finishes it');
+      expect(out).not.toContain('re-run ccd ws-reap to finish it');
+      expect(fs.existsSync(wt)).toBe(true);
+    }
+  });
+
+  it('an archived workspace’s decline no longer says "never on a timer" — the server cleans it up seven days on', () => {
+    h.makeRepo('demo');
+    addWs('demo', 'quiet-mesa');
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-mesa`);
+    const out = h.sh(`${ARCH} cmd_ws_gc --prune`);
+    expect(out).toMatch(/declined .*quiet-mesa is archived/);
+    expect(out).toContain('seven days after its archive');
+    expect(out).not.toContain('never on a timer');
+  });
 });
 
 // Pre-merge fix round, finding F — the ninth instance of the

@@ -1431,7 +1431,12 @@ describe('ccd-account-auth — openai-login for a CODEX lane runs ccrc\'s own ve
   // file, so under root the gate reads this launcher and the case measures
   // nothing (final review, C1).
   it.skipIf(process.getuid?.() === 0).each([
-    ['a BINARY launcher (P18)', (wrapper: string): void => { fs.copyFileSync('/bin/true', wrapper); }],
+    // `/usr/bin/true` first: macOS has no `/bin/true` (ENOENT on the macOS
+    // runner), and a usr-merged Linux answers both; `/bin/true` stays the
+    // fallback for a Linux whose /bin is not merged.
+    ['a BINARY launcher (P18)', (wrapper: string): void => {
+      fs.copyFileSync(['/usr/bin/true', '/bin/true'].find((p) => fs.existsSync(p)) ?? '/usr/bin/true', wrapper);
+    }],
     ['a SCRIPT launcher (P18b)', (wrapper: string): void => {
       fs.writeFileSync(wrapper, '#!/usr/bin/env bash\necho hi\nexit 0\n');
     }],

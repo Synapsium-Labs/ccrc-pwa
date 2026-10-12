@@ -1,0 +1,49 @@
+  line 43 of a long reply that fills the screen
+  line 44 of a long reply that fills the screen
+  line 45 of a long reply that fills the screen
+  line 46 of a long reply that fills the screen
+  line 47 of a long reply that fills the screen
+  line 48 of a long reply that fills the screen
+  line 49 of a long reply that fills the screen
+  line 50 of a long reply that fills the screen
+  line 51 of a long reply that fills the screen
+  line 52 of a long reply that fills the screen
+  line 53 of a long reply that fills the screen
+  line 54 of a long reply that fills the screen
+  line 55 of a long reply that fills the screen
+  line 56 of a long reply that fills the screen
+  line 57 of a long reply that fills the screen
+  line 58 of a long reply that fills the screen
+  line 59 of a long reply that fills the screen
+  line 60 of a long reply that fills the screen
+  line 61 of a long reply that fills the screen
+  line 62 of a long reply that fills the screen
+  line 63 of a long reply that fills the screen
+  line 64 of a long reply that fills the screen
+  line 65 of a long reply that fills the screen
+  line 66 of a long reply that fills the screen
+  line 67 of a long reply that fills the screen
+  line 68 of a long reply that fills the screen
+  line 69 of a long reply that fills the screen
+
+✻ Crunched for 4s · done 1:05 PM
+
+❯ /model
+  ⎿  Set model to Fable 5.1 for this session only
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  👤 cfg │ 🤖 Fable 5.1 · high │ 🎯 repo │ ▓ ctx ░░░░░░░░ 0% │ 💲 $0.0213                                                                                                     Set model to Fable 5.1 for this session only
+  ⏸ manual mode on · ← for agents
+
+
+
+
+
+
+
+
+
+
+

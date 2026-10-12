@@ -79,10 +79,12 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
-import { ghContainedEnv, renderCcdEntry } from './ccdWsHelpers.js';
-import { describeLinux, describeDarwin, itLinux, itDarwin, python3ProgramArm } from './platformFixtures.js';
+import { renderCcdEntry } from './ccdWsHelpers.js';
+import { ccrcContainedEnv } from './ccrcContainment.js';
+import { CONTAINED_TOOLS, assertNoRealTool, plantPoison } from './containedTools.js';
+import { describeLinux, describeDarwin, itLinux, itDarwin, python3ProgramArm, IS_DARWIN } from './platformFixtures.js';
 import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
-import { TREE_STUBS, installFixtureTree, installVersionedTree, keepDigest } from './installTreeFixture.js';
+import { TREE_STUBS, installFixtureTree, installVersionedTree, keepDigest, rsyncRecorder } from './installTreeFixture.js';
 import { verifyMarker } from '../../shared/mark.mjs';
 import {
   plantFakeRuntime, codexRoster, plantSystemd, killLaneProcesses, spawnListener, adoptPlantedSystemd,
@@ -94,6 +96,20 @@ import {
   stateCallsNaming, liveShapeRefreshes, foreignCcgptCalls, foreignProbeCalls, assertForeignFront, FOREIGN_MARK,
   withForeignProxyRunning, type ForeignEntry, type RefreshObservation, type StubRc, type LanePorts,
 } from './codexLaneFixture.js';
+import { docsProbeProgram } from './docsHelperPy.js';
+import { DOCS_INDEX_READY } from './docsIndexFixtures.js';
+
+/** The two python3 invocations ccd's Docs front makes when the closing
+ *  doctor's `docs` check runs the installed ccd (Docs W1a): the floor probe,
+ *  read off the shipped ccd/ccd so it is never re-typed, and the ready line
+ *  the doctor suite's own stub prints. The `python3` stub below embeds both
+ *  in single quotes, so a quote or a newline in either is refused here,
+ *  before a stub that parses differently is ever written. */
+const DOCS_PROBE = docsProbeProgram();
+const DOCS_READY_LINE = JSON.stringify(DOCS_INDEX_READY);
+if (/['\n]/.test(DOCS_PROBE + DOCS_READY_LINE)) {
+  throw new Error('the docs probe or the ready line holds a quote or a newline; the python3 stub cannot embed it');
+}
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -284,7 +300,7 @@ function healthyDoctorBox(home: string, opts: { upstream?: boolean } = {}): void
 /** The names `healthyDoctorBox` and the runner between them put in
  *  `~/.local/bin`. Everything else there was written by the verb — which is
  *  what the "the default roster generates no wrappers" assertion measures. */
-const FIXTURE_BINS = ['gh', 'curl', 'journalctl', 'systemctl', 'loginctl', 'npm', 'rsync',
+const FIXTURE_BINS = [...new Set(['gh', 'curl', 'journalctl', 'systemctl', 'loginctl', 'npm', 'rsync',
   'df', 'claude', 'tmux',
   // graphify Task 2: `python3 -m venv` is stubbed here, never real.
   'python3',
@@ -298,7 +314,10 @@ const FIXTURE_BINS = ['gh', 'curl', 'journalctl', 'systemctl', 'loginctl', 'npm'
   'launchctl', 'plutil', 'flock',
   // Plan 2b-2 Task 10: the transient-unit launcher's FRONT (every run), and
   // the pair a test's `plantSystemd` left, moved aside as the delegate.
-  'systemd-run', '.codex-systemctl', '.codex-systemd-run'];
+  'systemd-run', '.codex-systemctl', '.codex-systemd-run',
+  // Wave 9 R10d (D-3818): every contained name — `ccrcContainedEnv` plants `ssh` and `scp` poisons beside the rest —
+  // derived from the one list, so the exact-listing readers do not read a poison as the verb's.
+  ...CONTAINED_TOOLS])];
 
 /** A box with a shipped tree on it and nothing else — no `~/.ccrc`, no
  *  `~/.local/bin` beyond the stubs the runner plants. Doctor-healthy, because
@@ -351,7 +370,10 @@ const VACUOUS_RUNTIME_PYTHON = [
 ].join('\n') + '\n';
 
 function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
-  const env = ghContainedEnv(home, { ...process.env, HOME: home });
+  // Wave 9 R10d (D-3818): a SPINE builder, so `managers: false` — it fronts its own systemctl/systemd-run below,
+  // after `adoptPlantedSystemd`, which would rename an unmarked poison to a `.codex-*` delegate (`assertSpineFrontContained`
+  // pins those two names). The curl below is a poison, planted over `ccrcContainedEnv`'s.
+  const env = ccrcContainedEnv(home, process.env, { managers: false, curl: 'poison' });
   // Task 11's `graphify` doctor check makes `command -v graphify` a real
   // finding (a WARN when PATH resolves it anywhere but the pinned venv), and
   // unlike gh/curl/systemctl below there is no stub-bin entry that can
@@ -630,13 +652,14 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   plant('npm',
     '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/npm-argv"\n'
     + 'printf \'%s\\n\' "$PWD" >> "$HOME/npm-cwd"\nmkdir -p node_modules\nexit 0\n');
-  // `rsync` is a RECORDER, not a poison: it logs its argv and then EXECS THE
-  // REAL BINARY. Both halves are load-bearing. Asserting on argv alone passes
+  // `rsync` is a RECORDER, not a poison: it logs the argv of each call ccrc
+  // makes and then EXECS THE REAL BINARY (`rsyncRecorder`, which skips only the
+  // implementation's own `--server` re-exec — wave 9 M6). Both halves are
+  // load-bearing. Asserting on argv alone passes
   // against a step that composes a perfect command line and copies nothing;
   // asserting on the placed tree alone cannot tell "the excludes are spelled
   // correctly" from "the fixture happened to hold nothing they match".
-  plant('rsync',
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/rsync-argv"\nexec ${RSYNC} "$@"\n`);
+  plant('rsync', rsyncRecorder(RSYNC));
   // ── python3: graphify's engine venv, contained the same way (Task 2) ─────
   // `_inst_graphify_engine` (graphify Task 2) now runs, on every role but
   // `server`, `python3 -m venv "$venv"` followed by a REAL
@@ -695,9 +718,15 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     // leg dies at its preflight); any other `-c` falls through to the
     // refusal below, which is this stub's contract.
     ...python3ProgramArm(PYTHON3),
+    // ccd's Docs front, reached by the closing doctor's `docs` check through the
+    // INSTALLED ccd (Docs W1a): the 3.8 floor probe passes, and the helper
+    // prints the canned ready answer. Canned rather than forwarded to the real
+    // python3, so the install stays hermetic and reads no projects root.
+    `[ "$1" = -c ] && [ "$2" = '${DOCS_PROBE}' ] && exit 0`,
+    `[ "$1" = /dev/fd/3 ] && [ "$2" = docs-index ] && { printf '%s\\n' '${DOCS_READY_LINE}'; exit 0; }`,
     'echo "fixture python3: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
-  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
+  for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_DOCTOR_DOCS_TIMEOUT', 'CCRC_VERSIONS_KEEP', 'CCRC_CODEX_PROBE_S', 'CCRC_CODEX_READY_S']) delete env[k];
   // `verify-service.sh`'s own knobs, at the values its header says a test uses:
   // the production defaults sleep 3 + 5 seconds per call, and `_inst_enable`
   // makes one call per install. Zeroed here rather than per test, for the
@@ -771,6 +800,7 @@ function runInstall(home: string, args: string[] = ['install'],
   extraEnv: NodeJS.ProcessEnv = {},
   opts: {
     umask?: string; omit?: string[]; from?: string; stubs?: Record<string, string>;
+    noManager?: true;
   } = {}): Result {
   const env = { ...ccrcEnv(home, opts.omit ?? []), ...extraEnv };
   replantDoctorStubs(home);
@@ -780,12 +810,18 @@ function runInstall(home: string, args: string[] = ['install'],
   // Fix round 2 (N1/N5): on the FINAL merged env — after extraEnv, the
   // doctor-stub replant and opts.stubs have all landed, immediately before
   // the spawn. `opts.omit`'s own `systemctl`/`systemd-run` entries (if any)
-  // are the ONLY legitimate "this call reaches no manager at all" case in
-  // this file (`ccrc install: a box with no systemd`, which also strips
-  // both names from every real PATH directory via `pathWithout`) — every
-  // other call keeps the full strict check.
-  const expectAbsent = (opts.omit ?? []).filter((n) => n === 'systemctl' || n === 'systemd-run');
+  // are one of exactly TWO legitimate "this call reaches no manager at all"
+  // cases in this file (`ccrc install: a box with no systemd`, which also
+  // strips both names from every real PATH directory via `pathWithout`). The
+  // other is `opts.noManager` (wave 9 M7, D-3812): the `describeDarwin`
+  // missing-dependency block's PATH deliberately drops `~/.local/bin`, so
+  // neither `systemctl` nor `systemd-run` resolves. Every other call keeps the
+  // full strict check.
+  const expectAbsent = opts.noManager
+    ? ['systemd-run', 'systemctl']
+    : (opts.omit ?? []).filter((n) => n === 'systemctl' || n === 'systemd-run');
   assertSpineFrontContained(env, home, { expectAbsent });
+  assertNoRealTool(env, home);
   const ccrc = opts.from ?? ccrcIn(treeRoot(home));
   const r = opts.umask === undefined
     ? spawnSync(BASH, [ccrc, ...args], { env, encoding: 'utf8' })
@@ -805,10 +841,19 @@ const SHA256_TOOL = process.platform === 'darwin' ? 'shasum' : 'sha256sum';
  *  `cmd_version` reading nothing but files kept that harmless. `ccrcEnv`
  *  fronts them, and the check refuses the env if it did not. */
 function runLauncherVersion(home: string): Result {
+  // Wave 9 R10d: `ccrc-uninstall.test.ts`'s N2c pin wants `const r = ` on the line after the spine check (a literal
+  // shape), so the real-tool check rides the spawn's own `env` argument: it still runs on the final env, before the spawn.
   const env = ccrcEnv(home);
   assertSpineFrontContained(env, home);
-  const r = spawnSync(BASH, [join(home, '.local', 'bin', 'ccrc'), 'version'], { env, encoding: 'utf8' });
+  const r = spawnSync(BASH, [join(home, '.local', 'bin', 'ccrc'), 'version'],
+    { env: checkedEnv(env, home), encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
+/** `env`, after `assertNoRealTool` has passed on it (it throws otherwise) — for a spawn that checks inline. */
+function checkedEnv(env: NodeJS.ProcessEnv, home: string): NodeJS.ProcessEnv {
+  assertNoRealTool(env, home);
+  return env;
 }
 
 /** A PATH with everything this verb shells out to EXCEPT one named tool: the
@@ -990,6 +1035,44 @@ function gitInit(root: string): string {
   return spawnSync('git', ['-C', root, 'rev-parse', 'HEAD'], { env, encoding: 'utf8' })
     .stdout.trim();
 }
+
+// Wave 9 M6 (D-3811). openrsync — macOS's /usr/bin/rsync — copies locally by
+// forking `rsync --server …` through PATH, so a recorder first on PATH is
+// reached a second time by the implementation's own re-exec. Samba rsync on
+// Linux copies in-process and never does, so this twin runs a fake that DOES
+// re-exec on every platform. The recorder must log the call ccrc made and
+// hand the `--server` call straight on.
+describe('the rsync recorder logs only the call ccrc made (wave 9 M6)', () => {
+  const setup = (fakeBody: string): { dir: string; env: NodeJS.ProcessEnv } => {
+    const dir = mkTmp('ccrc-rsync-recorder-');
+    mkdirSync(join(dir, 'bin'));
+    mkdirSync(join(dir, 'poison'));
+    writeFileSync(join(dir, 'bin', 'rsync'), rsyncRecorder(join(dir, 'fake-openrsync')), { mode: 0o755 });
+    writeFileSync(join(dir, 'fake-openrsync'), fakeBody, { mode: 0o755 });
+    // A recorder that was not executable would fall through to this, never to the real rsync.
+    writeFileSync(join(dir, 'poison', 'rsync'),
+      '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/rsync-poison"\nexit 97\n', { mode: 0o755 });
+    return { dir, env: { HOME: dir, PATH: `${dir}/bin:${dir}/poison:/usr/bin:/bin` } };
+  };
+
+  it('a local copy that re-execs `rsync --server` through PATH reaches the recorder twice and is logged once', () => {
+    const { dir, env } = setup('#!/bin/sh\nif [ "$1" = --server ]; then touch "$HOME/server-ran"; exit 0; fi\n'
+      + 'rsync --server --sender -logDtpre.iLsfxC . "$2"\nexit 0\n');
+    const r = spawnSync('sh', [join(dir, 'bin', 'rsync'), '-a', 'src/', 'dst/'], { env, encoding: 'utf8' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(readFileSync(join(dir, 'rsync-argv'), 'utf8')).toBe('-a src/ dst/\n');
+    expect(existsSync(join(dir, 'server-ran')), 'the fake\'s --server arm never ran through the recorder').toBe(true);
+    expect(existsSync(join(dir, 'rsync-poison')), 'the recorder fell through to the poison').toBe(false);
+  });
+
+  it('control: a copy that never re-execs is logged once too', () => {
+    const { dir, env } = setup('#!/bin/sh\nexit 0\n');
+    const r = spawnSync('sh', [join(dir, 'bin', 'rsync'), '-a', 'src/', 'dst/'], { env, encoding: 'utf8' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(readFileSync(join(dir, 'rsync-argv'), 'utf8')).toBe('-a src/ dst/\n');
+    expect(existsSync(join(dir, 'rsync-poison'))).toBe(false);
+  });
+});
 
 describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
   // WHY THE TREE IS COPIED AT ALL, since the verb is already running out of
@@ -1764,11 +1847,26 @@ describeLinux('ccrc install: a box with no systemd', () => {
   });
 });
 
+describe('ccrcEnv: containment (wave 9 R10d)', () => {
+  it('ccrcEnv hands out no env under which a real ssh, scp, systemctl, systemd-run, launchctl, tmux, gh or curl can run, and no real user bus (wave 9 R10d)', () => {
+    const home = mkTmp('ccrc-install-contained-');
+    expect(() => assertNoRealTool(ccrcEnv(home), home)).not.toThrow();
+  });
+});
+
 // The same probe, on the platform where the missing dependency is real. macOS
 // ships neither tmux nor flock, and its /bin/bash is 3.2.57 — so on this
 // platform the refusal an operator actually meets is one of THOSE, and it
 // carries the same three promises the systemd one does: by name, before the
 // first write, with a remedy that works.
+// Wave 9 M7 (D-3812): runInstall's `noManager` option.
+describe('runInstall: the noManager option (wave 9 M7)', () => {
+  itLinux('noManager makes the final-env check require BOTH manager names absent — under ccrcEnv they resolve to the fixture front, so it refuses (wave 9 M7)', () => {
+    expect(() => runInstall(freshBox('ccrc-install-nomgr-'), ['install'], {}, { noManager: true }))
+      .toThrow(/systemd-run was expected absent/);
+  }, 60_000);   // freshBox builds a whole tree: measured past the 20 s default under load 30-50 (final review)
+});
+
 describeDarwin('ccrc install: a macOS box missing what ccd needs', () => {
   // `omit` alone is not enough here: `runInstall` calls `replantDoctorStubs`
   // on every run, which copies `healthyDoctorBox`'s stubs back into
@@ -1785,18 +1883,30 @@ describeDarwin('ccrc install: a macOS box missing what ccd needs', () => {
   // the stub, the gate never fired, and the run died at the wrappers step for
   // a reason this test is not about.)
   //
-  // Dropping it costs nothing HERE and only here: every one of these probes
+  // Dropping it costs nothing HERE as to STUBS: every one of these probes
   // runs BEFORE the first of the fourteen steps, so no step is reached that
-  // would want `claude`, `gh` or any other planted stub.
+  // would want `claude`, `gh` or any other planted stub. It DOES cost something
+  // on the macOS runner (wave 9 R10d, D-3821): `pathMissing` would keep only
+  // `<home>/no-<tool>-bin`, which symlinks real binaries (`pathWithout`'s list)
+  // — always `tmux` and, on darwin, `launchctl` — so with `~/.local/bin` gone a
+  // real tmux and a real launchctl would resolve (gh, curl and ssh resolve
+  // nowhere). So the PATH leads with a poison dir of its own, FIRST: a recording
+  // poison for every contained name but the tool this case removes and the two
+  // managers (the case reaches no manager — `noManager`). The probes only ask
+  // `command -v` (the darwin dependency probes in ccd/ccrc), so a poison satisfies
+  // a probe it is not the subject of.
   const pathMissing = (home: string, tool: string): string => {
     const full = pathWithout(home, tool);
-    return full.split(':').slice(1).join(':');
+    const poison = join(home, `no-${tool}-poison-bin`);
+    mkdirSync(poison, { recursive: true });
+    for (const n of CONTAINED_TOOLS) if (n !== tool && n !== 'systemctl' && n !== 'systemd-run') plantPoison(poison, n);
+    return [poison, ...full.split(':').slice(1)].join(':');
   };
 
   it('refuses by name BEFORE the first write when tmux is absent', () => {
     const home = freshBox('ccrc-install-notmux-');
     const r = runInstall(home, ['install'], { PATH: pathMissing(home, 'tmux') },
-      { omit: ['tmux'] });
+      { omit: ['tmux'], noManager: true });
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/tmux is required by ccrc/);
     expect(r.stderr).toMatch(/brew install tmux/);
@@ -1811,7 +1921,7 @@ describeDarwin('ccrc install: a macOS box missing what ccd needs', () => {
   it('refuses when flock is absent, naming the formula that provides it', () => {
     const home = freshBox('ccrc-install-noflock-');
     const r = runInstall(home, ['install'], { PATH: pathMissing(home, 'flock') },
-      { omit: ['flock'] });
+      { omit: ['flock'], noManager: true });
     expect(r.code).toBe(1);
     // ccd already refuses BY NAME at three workspace sites without it, so the
     // outcome this prevents is a box that installs cleanly and then cannot
@@ -1825,7 +1935,7 @@ describeDarwin('ccrc install: a macOS box missing what ccd needs', () => {
   it('refuses when launchctl is absent — systemd\'s probe, on this platform', () => {
     const home = freshBox('ccrc-install-nolaunchctl-');
     const r = runInstall(home, ['install'], { PATH: pathMissing(home, 'launchctl') },
-      { omit: ['launchctl'] });
+      { omit: ['launchctl'], noManager: true });
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/launchctl is required by 'ccrc install'/);
     // The two conditions stay apart, exactly as they do on Linux: this is not
@@ -2091,6 +2201,26 @@ describe('ccrc install: the executables and files it installs', () => {
     const { home } = installed;
     const bin = join(home, '.local', 'bin', 'ccd-tmp-sweep');
     expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-tmp-sweep')));
+    expect(mode(bin)).toBe(0o755);
+  });
+
+  itLinux('ccd-scope-sweep lands beside it too (the pane-scope sweep) — every role, but not Darwin', () => {
+    // Mirrors the reaper's case above: its only runner is a systemd timer and it
+    // reads /proc and cgroups. Its UNIT and ENABLE are role-gated (server skips both).
+    const { home } = installed;
+    const bin = join(home, '.local', 'bin', 'ccd-scope-sweep');
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-scope-sweep')));
+    expect(mode(bin)).toBe(0o755);
+  });
+
+  itLinux('ccd-history-sweep lands too (history spec §9.5) — the one sweep shim role-gated off server boxes', () => {
+    // `_inst_bins` places it behind a one-line `[ "$INST_ROLE" = server ] ||`
+    // test: doctor and the CLI read its presence as "this box can hold a
+    // store". This install is role `both`, so it lands; the `--role server`
+    // case pins its absence, the fleet describe its presence there.
+    const { home } = installed;
+    const bin = join(home, '.local', 'bin', 'ccd-history-sweep');
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-history-sweep')));
     expect(mode(bin)).toBe(0o755);
   });
 
@@ -2486,15 +2616,20 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
    *  POISONED at the head of PATH: a snippet that got further than it should
    *  (the red run of the crashed-arm case, say) must fail loudly, never fetch
    *  or copy for real. */
-  const sourced = (home: string, ccrc: string, snippet: string): Result => {
+  const sourcedEnv = (home: string): NodeJS.ProcessEnv => {
     const poison = join(home, 'sourced-poison');
     mkdirSync(poison, { recursive: true });
     for (const t of ['npm', 'rsync', 'curl', 'systemctl', 'launchctl']) {
       writeFileSync(join(poison, t), `#!/bin/sh\necho "sourced harness: ${t} must not run" >&2\nexit 97\n`, { mode: 0o755 });
     }
-    const env = ghContainedEnv(home, { ...process.env, HOME: home });
+    // Wave 9 R10d (D-3818): from `ccrcContainedEnv`, with its own `sourced-poison` still prepended — it answers first.
+    const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
     env['PATH'] = `${poison}:${env['PATH'] ?? ''}`;
     for (const k of Object.keys(env)) if (k.startsWith('CCRC_')) delete env[k];
+    return env;
+  };
+  const sourced = (home: string, ccrc: string, snippet: string): Result => {
+    const env = sourcedEnv(home);
     const r = spawnSync(BASH, ['-c', `source "$1" || exit 99\n${snippet}`, 'sourced', ccrc],
       { env, encoding: 'utf8' });
     return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
@@ -2532,6 +2667,11 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
    *  call-site half of spec §18's "the flip is a rename" — `_inst_tree` must
    *  stage `~/ccrc.new` and rename it, never `ln -sfn` onto `~/ccrc` itself. */
   const lnRecorder = `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/ln-argv"\nexec ${realPath('ln')} "$@"\n`;
+
+  it('sourcedEnv hands out no env under which a real ssh, scp, systemctl, systemd-run, launchctl, tmux, gh or curl can run, and no real user bus (wave 9 R10d)', () => {
+    const home = mkTmp('ccrc-sourced-contained-');
+    expect(() => assertNoRealTool(sourcedEnv(home), home)).not.toThrow();
+  });
 
   it('_ver_layout: seven words, one per shape of ~/ccrc — and a WHY built from its own words, never the link\'s', () => {
     const home = mkTmp('ccrc-ver-layout-');
@@ -3208,6 +3348,24 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(r.stdout).not.toMatch(/removed the box's stamp/);
     expect(read(join(home, '.ccrc', 'build.json'))).toBe(boxStamp);
+  });
+
+  // Wave 9 R8i (D-3828): a skip writes nothing, so a box stamp that is still there afterwards STAYS — and the
+  // skip line must not say `ccrc version will say unstamped` over it. The run is FROM the version `~/ccrc` points
+  // at, so `_inst_tree` itself answers `running` (INST_TREE_HOW is set in-process, never read from the environment)
+  // and `_inst_stamp_unname` returns 1 for it before it touches the stamp; the tree carries no `build.json`, the
+  // kept stamp beside it is the fallback `_inst_stamp_shipped` reads, that version is NOT kept (no digest, rc 2),
+  // and git is off PATH, so `_inst_stamp` lands on its no-git skip with the box's stamp still on disk.
+  it('a skipped stamp over a box stamp that STAYS says so — the launcher run, no build.json in the tree, the version not kept, git off PATH: the line names the existing stamp, never `unstamped` (wave 9 R8i, D-3828)', () => {
+    const { home, boxStamp } = writtenThroughBox('ccrc-install-stamp-stays-skip-', { digest: false });
+    expect(existsSync(join(home, 'ccrc', 'build.json')), 'the control is broken: the tree must carry no build.json').toBe(false);
+    expect(keptAnswer(home, 'v9.9.0'), 'the control is broken: the version must be not kept').toMatch(/^rc=2 why=no kept digest /);
+    const r = runInstall(home, ['install'], { PATH: pathWithout(home, 'git') }, { from: join(home, 'ccrc', 'ccd', 'ccrc') });
+    expect(r.stdout).toMatch(/^install: tree: already running from \$HOME\/ccrc$/m);
+    expect(r.stdout).toMatch(
+      /^install: stamp: skipped \(no git on PATH\) — the box's existing stamp \(~\/\.ccrc\/build\.json\) stays — ccrc version reports what it says$/m);
+    expect(r.stdout, 'a stamp that stays was called unstamped').not.toMatch(/will say unstamped/);
+    expect(read(join(home, '.ccrc', 'build.json')), 'the skip rewrote or removed the stamp').toBe(boxStamp);
   });
 
   // ── N1 (re-review of fix round 1): the removal is for a stamp that names
@@ -4044,6 +4202,13 @@ const UNIT_FILES: Array<[string, string]> = [
   // Claude Code sessions, so it has no /tmp/claude-<uid> to reap.
   ['ccd-tmp-sweep.service', 'deploy/systemd/ccd-tmp-sweep.service'],
   ['ccd-tmp-sweep.timer', 'deploy/systemd/ccd-tmp-sweep.timer'],
+  // history spec 2026-10-05 §9.5: the history sweep's pair, ROLE-GATED `!= server`
+  // for its own reason — a server box hosts no sessions, so it keeps no store.
+  ['ccd-history-sweep.service', 'deploy/systemd/ccd-history-sweep.service'],
+  ['ccd-history-sweep.timer', 'deploy/systemd/ccd-history-sweep.timer'],
+  // The pane-scope sweep: ROLE-GATED on the reaper's terms — a server box runs no pane scopes.
+  ['ccd-scope-sweep.service', 'deploy/systemd/ccd-scope-sweep.service'],
+  ['ccd-scope-sweep.timer', 'deploy/systemd/ccd-scope-sweep.timer'],
   // W4a Task 9 (design §11): the server-role watchdog's pair — ROLE-GATED the
   // OTHER way round from the pairs above: `_inst_units` places it on `server`
   // and `both` (this list's role) and never on `fleet`, whose node the
@@ -4347,6 +4512,7 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       // The temp-dir reaper's timer, on the same gate and the same
       // degrade-rather-than-die idiom as the two sweeps above it.
       '--user enable --now ccd-tmp-sweep.timer',
+      '--user enable --now ccd-scope-sweep.timer',
       '--user enable --now ccd-account-health.timer',
       // spec 2026-09-07 §C: a FOURTH enable, role-gated exactly as the sweep's
       // and degrading rather than dying for the same reason.
@@ -4354,6 +4520,9 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       // C5: a FIFTH enable, role-gated on the same terms and degrading the
       // same way — a server box has no lanes for this timer to refresh.
       '--user enable --now ccrc-models.timer',
+      // history spec §9.5: the history sweep's timer, on its unit files' gate,
+      // degrading rather than dying like every timer in this list.
+      '--user enable --now ccd-history-sweep.timer',
       // W4a Task 9: the server-role watchdog's timer — `!= fleet`, so this
       // role enables it — degrading rather than dying like every timer in
       // this list, and taking no restart (a oneshot holds no code).
@@ -4858,8 +5027,9 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         // `ccd-update-sync` joins on the same terms, and this set is the
         // mutation site for its line too (spec §18 "the puller is installed
         // where its timer looks").
-        : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep',
-           'ccd-pool-sync', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep', 'ccd-update-sync', 'ccd-usage-sweep',
+        // history spec §9.5: `ccd-history-sweep` joins on the timer-bound names' terms, behind its role gate (this install is `both`).
+        : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-history-sweep',
+           'ccd-pool-sync', 'ccd-scope-sweep', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep', 'ccd-update-sync', 'ccd-usage-sweep',
            'ccd-usage-sweep.py', 'ccrc', 'graphify', ...GPT_LANE_BINS].sort());
   });
 
@@ -5187,6 +5357,11 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     // …and the gate check really RAN and really found the box uncredentialed:
     // `0 warned` must not be reachable by the check having vanished.
     expect(r.stdout).toMatch(/^PASS auth: no passphrase file at .*nothing is gated/m);
+    // …and `history` (spec 2026-10-05 §9.6) is among the checks that PASSed, on its grace word: the shim landed
+    // seconds ago and no sweep has ticked. A WARN there would turn every fresh install yellow again
+    // (D-4168). macOS places no shim, so the check SKIPs there.
+    if (process.platform === 'darwin') expect(r.stdout).toMatch(/^SKIP history: /m);
+    else expect(r.stdout).toMatch(/^PASS history: first-tick-pending: /m);
   });
 
   it('writes ~/.ccrc/installed LAST, naming the stamped sha — and a spine that dies before its end leaves none', () => {
@@ -5371,10 +5546,12 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
   // either file with the later one winning, names the file that decides, and
   // so does the OFF remedy — it names ccrc.env by default, or the exposure
   // file when that is the one that would arm it. With no passphrase file, a
-  // measured CCRC_AUTH=on names the file that decides too; every other case —
-  // including an exposure file that sets CCRC_AUTH to anything but on, or one
-  // that cannot be read — prints main's else-arm line unchanged, naming
-  // ccrc.env.
+  // measured CCRC_AUTH=on names the file that decides too. Wave 9 R10b
+  // (D-3829) corrects the rest of this block: there, an exposure file that
+  // cannot be read prints its own "not measured" line (G2g), and an exposure
+  // file that decides the flag without turning it on gets an arming remedy
+  // naming that file (G2h); every other case (the flag read from ccrc.env, or
+  // no file at all) prints main's else-arm line, naming ccrc.env.
   const gateLine = (out: string): string => out.split('\n').find((l) => l.startsWith('install: gate: ')) ?? '';
 
   it('G2b: a passphrase file at the default path with the flag OFF — "a PWA passphrase file is at", and the OFF remedy names ccrc.env', () => {
@@ -5436,6 +5613,76 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     expect(line, r.stdout).toContain('the gate is failing SHUT');
     expect(line).toContain(`CCRC_AUTH=on in ${join(home, '.ccrc', 'exposure.env')}`);
     expect(line).not.toContain('To arm the gate');
+  });
+
+  // ── wave 9 R10b (D-3829): the no-passphrase arm's two own lines ──────────
+  // D-3598 kept the no-passphrase line byte-identical in every case but a measured `on`. Two cases now print their
+  // own: the exposure file there and unreadable (rc 2) — "not measured", as the present-passphrase arm says — and
+  // the exposure file deciding the flag (`BUE_SRC` is the exposure file), whose arming remedy names that file, as
+  // that arm's `gate_how` already does. The fresh-box line (the pin above) is byte-identical in every other case.
+  it.skipIf(IS_DARWIN || process.getuid?.() === 0)('G2g: no passphrase and an UNREADABLE exposure file — "not measured", naming the file, never the fresh-box arming line (wave 9 R10b)', () => {
+    const home = freshBox('ccrc-install-gate-nopass-exp-unreadable-');
+    const exposure = join(home, '.ccrc', 'exposure.env');
+    preexisting(home, 'exposure.env', 'CCRC_ORIGIN=https://box.example.com\nCCRC_RP_ID=box.example.com\nCCRC_AUTH=on\n');
+    chmodSync(exposure, 0o000);
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    expect(line, r.stdout).toBe(
+      `install: gate: this box has NO PWA passphrase, and ${exposure} is there and cannot be read, so whether CCRC_AUTH is on (and the gate failing shut) was not measured — ccrc doctor's auth check says what to do`);
+    expect(line).not.toContain('To arm the gate');
+  });
+
+  it('G2h: no passphrase and the exposure file CCRC_AUTH=off — the arming remedy names the exposure file, which overrides ccrc.env, not ccrc.env alone (wave 9 R10b)', () => {
+    const home = freshBox('ccrc-install-gate-nopass-exp-off-');
+    const exposure = join(home, '.ccrc', 'exposure.env');
+    preexisting(home, 'exposure.env', 'CCRC_ORIGIN=https://box.example.com\nCCRC_RP_ID=box.example.com\nCCRC_AUTH=off\n');
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    expect(line, r.stdout).toMatch(new RegExp(
+      `^install: gate: this box has NO PWA passphrase — install never writes one\\. To arm the gate: ccrc passwd, then set CCRC_AUTH=on in ${
+        exposure.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}, which overrides ${
+        join(home, '.ccrc', 'ccrc.env').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\(ccrc expose writes it with CCRC_RP_ID and CCRC_ORIGIN\\), then: .+$`));
+    expect(line).not.toContain('together with CCRC_RP_ID and CCRC_ORIGIN in');
+    expect(line).not.toContain('not measured');
+  });
+
+  // ── wave 9 R10e (D-3823): a SECOND unmeasured state, rc 3 ─────────────────
+  // A readable env file names the flag in a shape the reader cannot decide (on macOS: either file is not plain
+  // assignments). The line says so from `_box_unit_env`'s own `BUE_WHY`, in both arms; it never borrows the rc-2
+  // sentence ("is there and cannot be read"), which is about an exposure file the reader cannot open.
+  /** The platform's own clause of a not-measured verdict about `file` (ccrc-doctor.test.ts's `expectUndecided`). */
+  const expectUndecided = (detail: string, file: string): void => {
+    expect(detail).toContain(file);
+    expect(detail).toContain('was not measured');
+    expect(detail).not.toContain('cannot be read');
+    if (IS_DARWIN) expect(detail).toContain(`${file} line `);
+    else expect(detail).toContain('in a shape this reader does not decide');
+  };
+
+  it('I1: a passphrase present and the exposure file `CCRC_AUTH = on` — "not measured", worded from the reader\'s own cause, never as an unreadable file', () => {
+    const home = freshBox('ccrc-install-gate-exp-spaced-');
+    preexisting(home, 'auth.scrypt', 'fixture-not-a-real-secret\n');
+    const exposure = join(home, '.ccrc', 'exposure.env');
+    preexisting(home, 'exposure.env', 'CCRC_ORIGIN=https://box.example.com\nCCRC_RP_ID=box.example.com\nCCRC_AUTH = on\n');
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    expect(line, r.stdout).toMatch(new RegExp(
+      `^install: gate: a PWA passphrase file is at .*auth\\.scrypt, and ${exposure.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    expect(line).toContain('so whether CCRC_AUTH is on was not measured');
+    expectUndecided(line, exposure);
+  });
+
+  it('I2: no passphrase and ccrc.env `CCRC_AUTH = on` — the rc-3 line naming ccrc.env, not the fresh-box line', () => {
+    const home = freshBox('ccrc-install-gate-env-spaced-');
+    preexisting(home, 'ccrc.env', 'CCRC_FLEET=local\nCCRC_AUTH = on\n');
+    const envFile = join(home, '.ccrc', 'ccrc.env');
+    const r = runInstall(home);
+    const line = gateLine(r.stdout);
+    expect(line, r.stdout).toMatch(new RegExp(
+      `^install: gate: this box has NO PWA passphrase, and ${envFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    expect(line).toContain('so whether CCRC_AUTH is on was not measured');
+    expectUndecided(line, envFile);
+    expect(line).not.toContain('install never writes one');
   });
 
   it('reads the PWA address back out of the env file it installed', () => {
@@ -5695,6 +5942,7 @@ function runInstallTty(home: string, args: string[], entries: string[]): Promise
   // Fix round 2 (N5): on the final env, before the pty spawn below — this
   // runner has no `omit`/PATH-override path, so the full strict check applies.
   assertSpineFrontContained(env, home);
+  assertNoRealTool(env, home);
   return new Promise((resolve) => {
     const p = pty.spawn(BASH, [ccrcIn(treeRoot(home)), ...args], {
       name: 'xterm-color', cols: 200, rows: 40, cwd: home, env,
@@ -5834,6 +6082,10 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     expect(argv).toContain('--user enable --now ccrc-models.timer');
     // Fleet is the role that runs sessions, so the temp-dir reaper arms here.
     expect(argv).toContain('--user enable --now ccd-tmp-sweep.timer');
+    // and the pane-scope sweep, on the reaper's gate.
+    expect(argv).toContain('--user enable --now ccd-scope-sweep.timer');
+    // history spec §9.5: fleet is not server, so the history sweep's timer arms here.
+    expect(argv).toContain('--user enable --now ccd-history-sweep.timer');
     // Ruling T4-R1: and the pool-sync timer, which enables on THIS ROLE ONLY
     // — the role whose install wrote the `~/.ccrc/agent.env` the binary
     // refuses without. `--role both` and `--role server` below assert the
@@ -5852,6 +6104,15 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     expect(argv.join('\n')).not.toContain('ccrc-update-watchdog');
     expect(r.stdout).toContain(
       'install: services: ccrc-agent.service and ccd-cap-scopes.timer enabled, and ccrc-agent.service restarted onto the tree this run placed');
+  });
+
+  itLinux('places the history sweep\'s shim, and the closing line names it — a fleet box hosts sessions (history spec §9.5)', async () => {
+    const { home, r } = await fleet();
+    const bin = join(home, '.local', 'bin', 'ccd-history-sweep');
+    expect(existsSync(bin), '--role fleet did not place ccd-history-sweep').toBe(true);
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-history-sweep')));
+    expect(statSync(bin).mode & 0o777).toBe(0o755);
+    expect(r.stdout).toMatch(/^install: bins: .*(?<![\w-])ccd-history-sweep(?![\w-])/m);
   });
 
   it('skips the server-only landing lines — no PWA address, no passphrase gate', async () => {
@@ -5931,9 +6192,11 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user enable --now ccd-graph-sweep.timer',
       '--user enable --now ccd-usage-sweep.timer',
       '--user enable --now ccd-tmp-sweep.timer',
+      '--user enable --now ccd-scope-sweep.timer',
       '--user enable --now ccd-account-health.timer',
       '--user enable --now ccd-telemetry-keepalive.timer',
       '--user enable --now ccrc-models.timer',
+      '--user enable --now ccd-history-sweep.timer',
       // W4a Task 9: the server-role watchdog's timer — `!= fleet`, so this
       // role enables it — degrading rather than dying like every timer in
       // this list, and taking no restart (a oneshot holds no code).
@@ -5961,7 +6224,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     for (const [dest] of UNIT_FILES) {
       if (dest.startsWith('ccd-graph-sweep.') || dest.startsWith('ccd-account-health.')
         || dest.startsWith('ccd-telemetry-keepalive.') || dest.startsWith('ccrc-models.')
-        || dest.startsWith('ccd-tmp-sweep.') || dest.startsWith('ccrc-codex-usage@')) continue;
+        || dest.startsWith('ccd-tmp-sweep.') || dest.startsWith('ccd-scope-sweep.') || dest.startsWith('ccd-history-sweep.') || dest.startsWith('ccrc-codex-usage@')) continue;
       expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
     }
     expect(existsSync(unitDir(home, 'ccd-graph-sweep.service'))).toBe(false);
@@ -5979,6 +6242,15 @@ describe('ccrc install --role: the refusals and the default', () => {
     // The temp-dir reaper: a server box runs no sessions, so no temp dir to reap.
     expect(existsSync(unitDir(home, 'ccd-tmp-sweep.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccd-tmp-sweep.timer'))).toBe(false);
+    // The pane-scope sweep: a server box runs no pane scopes.
+    expect(existsSync(unitDir(home, 'ccd-scope-sweep.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-scope-sweep.timer'))).toBe(false);
+    // history spec §9.5: no shim, no unit pair and no enable on a server box —
+    // it hosts no sessions and must never hold a store D-4183.
+    expect(existsSync(join(home, '.local', 'bin', 'ccd-history-sweep')), '--role server placed ccd-history-sweep').toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-history-sweep.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-history-sweep.timer'))).toBe(false);
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-history-sweep');
     // Ruling T4-R1: the pool-sync pair is gated OUT here too — but on a
     // NARROWER gate than the four pairs above it. Those are `!= server`;
     // this one is `= fleet`, because `both` gets no agent.env either. A
@@ -6000,6 +6272,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccgpt-usage');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccrc-codex-usage');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-tmp-sweep');
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-scope-sweep');
     // W4a Task 9: the watchdog is the SERVER's — its pair landed through the
     // UNIT_FILES loop above (not skipped there), and its timer is enabled.
     expect(systemctlCalls(home).map((c) => c.argv)).toContain('--user enable --now ccrc-update-watchdog.timer');
@@ -6013,6 +6286,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     const bins = r.stdout.split('\n').find((l) => l.startsWith('install: bins:'));
     expect(bins, 'no `install: bins:` line in the transcript').toBeDefined();
     expect(bins!, 'the server-role closing line claims a GPT-lane executable').not.toMatch(/ccgpt|ccrc-codex/);
+    expect(bins!, 'the server-role closing line names a history shim it never placed').not.toContain('ccd-history-sweep');
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=server$/m);
     expect(r.stdout).toMatch(/^install: gate: /m);
   });
@@ -6085,6 +6359,7 @@ describe('install.sh: the bootstrap that hands off to ccrc install', () => {
     // means this spawn never reaches a manager either way, but the check is
     // cheap and this is still a runner that spawns install.sh with a planted spine.
     assertSpineFrontContained(env, home);
+    assertNoRealTool(env, home);
     const r = spawnSync(BASH, [join(root, 'install.sh')], { env, encoding: 'utf8' });
     expect(r.status ?? -1, r.stderr ?? '').toBe(0);
 
@@ -6129,10 +6404,12 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
 
   // Each wave's spine ADDS its own words (design 2026-09-20 §9): W1's three,
   // W4's four — `detach` on Linux only (decision 17: `--detach` refuses on
-  // Darwin) — and W6's `versions`, so a Linux install writes eight words and
-  // a Darwin one seven. LITERALS, not a read of ccd/ccrc's arrays: a pin
+  // Darwin) — W6's `versions`, and the box-token lifecycle's `token-sync`
+  // (design 2026-10-07 §4.5; every os, because the op runs the verb in the
+  // foreground), so a Linux install writes nine words and a Darwin one eight.
+  // LITERALS, not a read of ccd/ccrc's arrays: a pin
   // derived from the list it pins could never red on the list being wrong.
-  const CAPS_ALL = ['verify', 'node-id', 'floor', 'update-json', 'update-gate', 'rollback', 'versions'];
+  const CAPS_ALL = ['verify', 'node-id', 'floor', 'update-json', 'update-gate', 'rollback', 'versions', 'token-sync'];
   const CAPS_LINUX = [...CAPS_ALL, 'detach'];
   const CAPS_HERE = process.platform === 'darwin' ? CAPS_ALL : CAPS_LINUX;
 
@@ -6161,7 +6438,7 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     expect(readFileSync(join(home, '.ccrc', 'node-id'), 'utf8')).toBe('not-a-uuid\n');
   });
 
-  it('ccrc-caps: line 1 is the os, then each wave\'s words — W1\'s three, W4\'s four, W6\'s versions, detach on Linux only (§18 "_inst_caps writes each wave\'s words")', () => {
+  it('ccrc-caps: line 1 is the os, then each wave\'s words — W1\'s three, W4\'s four, W6\'s versions, token-sync, detach on Linux only (§18 "_inst_caps writes each wave\'s words")', () => {
     const home = freshBox('ccrc-install-caps-');
     gitInit(treeRoot(home));
     const r = runInstall(home);
@@ -6177,7 +6454,7 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     expect(r.stdout.split('\n').filter((l) => l.startsWith('install: caps:')).join('\n')).not.toContain(home);
   });
 
-  it('ccrc-caps: eight words on Linux, seven on Darwin, whichever box runs this suite — both arms of the real _inst_caps', () => {
+  it('ccrc-caps: nine words on Linux, eight on Darwin, whichever box runs this suite — both arms of the real _inst_caps', () => {
     // A real install reaches only the host's own arm. The other is reached by
     // running the real `_inst_caps` and `_ccrc_cap_words` out of ccd/ccrc with
     // CCD_OS set — the extraction harness the `_inst_installed` cases below
@@ -6206,7 +6483,11 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
       const caps = join(home, '.ccrc', 'ccrc-caps');
       const p = spawnSync('bash', ['-c', [
         'set -uo pipefail', ...harness, `CCD_OS=${os}`, `BOX_CAPS_FILE=${JSON.stringify(caps)}`, '_inst_caps',
-      ].join('\n')], { encoding: 'utf8', env: { ...process.env, HOME: home } });
+      ].join('\n')], {
+        // Wave 9 R10d (D-3818): an extracted-function harness (`_inst_caps` and its helpers call builtins plus
+        // mkdir/mv/rm/date), so it is exempt from assertNoRealTool — but it no longer inherits the real bus or tools.
+        encoding: 'utf8', env: ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' }),
+      });
       expect(p.status, `${os}: ${p.stderr}`).toBe(0);
       expect(readFileSync(caps, 'utf8'), os).toBe(`os ${os}\n${words.join('\n')}\n`);
       // W6 Task 8A, F6: the path is the box's own home, so it is spelled `~` —
@@ -6234,6 +6515,8 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
       rollback: [/^cmd_rollback\(\) \{/m, /^\s*rollback\)\s+cmd_rollback "\$@" ;;$/m],
       // W6 Task 4: a kept version is a flip — restore arm 1 and rollback by flip.
       versions: [/^_upd_restore_arm1\(\) \{/m, /^_ver_flip_back\(\) \{/m],
+      // Box-token lifecycle wave 1: the verb ccrc-agent's token-sync op spawns, dispatched to its sibling body.
+      'token-sync': [/^cmd_token\(\) \{/m, /^\s*token\)\s+cmd_token "\$@" ;;$/m, /"\$CCRC_HERE\/ccrc-token-sync"/],
       detach: [/^_upd_detach\(\) \{/m, /^\s*--detach\) detach=1 ;;$/m],
     };
     const arr = (name: string): string[] => {
@@ -6251,6 +6534,8 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     // on Darwin (Task 3's `_upd_detach_os_check`): the two statements agree.
     expect(arr('CCRC_CAP_WORDS')).not.toContain('detach');
     expect(src).toMatch(/_ccrc_die "--detach is Linux-only \(decision 17\)"/);
+    // …and `token-sync`'s body ships beside ccd/ccrc, where `cmd_token` looks for it.
+    expect(statSync(join(REPO, 'ccd', 'ccrc-token-sync')).isFile(), 'ccd/ccrc-token-sync does not ship').toBe(true);
   });
 
   it('floor: written by the LAST step from the stamped tag; only ever raised (§18 "the floor never lowers")', () => {
@@ -7373,14 +7658,17 @@ describe('ccrc install: the codex tier restart step, measured in isolation (_ins
  *  call made any other way still reaches the wall. It answers
  *  `enable --now` and `disable --now` as a manager does, by planting and
  *  removing the timer's `timers.target.wants` link, so the converge's own
- *  reads see its own acts. A unit listed in `refuse` is refused. `enabled`,
+ *  reads see its own acts. A unit listed in `refuse` is refused. A unit listed
+ *  in `keepLink` (Plan 3b Task A2) is a disable the manager ANSWERS 0 while its
+ *  link stays — the shape `ccrc-account.test.ts`'s C15 pins for account
+ *  removal. `enabled`,
  *  `foreign` and `flatForeign` plant links before the step runs. `shape:
  *  false` (fix round 1) sources no `ccrc-wrapper-shape` and points
  *  `CCRC_HERE` at an empty directory, so `_codex_shape` cannot load the
  *  contract: the box whose tree lost the file. */
 function runUsageStep(c: {
   lanes?: string[]; lanesRc?: number; role?: 'both' | 'fleet' | 'server'; os?: 'linux' | 'darwin';
-  enabled?: string[]; foreign?: string[]; flatForeign?: boolean; refuse?: string[]; shape?: boolean;
+  enabled?: string[]; foreign?: string[]; flatForeign?: boolean; refuse?: string[]; keepLink?: string[]; shape?: boolean;
 }): StepRun & { links: string[] } {
   const home = mkTmp('ccrc-codex-usage-step-');
   const units = join(home, '.config', 'systemd', 'user');
@@ -7391,6 +7679,7 @@ function runUsageStep(c: {
   for (const id of c.foreign ?? []) link(`ccgpt-usage@${id}.timer`, 'ccgpt-usage@.timer');
   if (c.flatForeign === true) link('ccgpt-usage.timer', 'ccgpt-usage.timer');
   writeFileSync(join(home, 'refuse'), (c.refuse ?? []).map((u) => `${u}\n`).join(''));
+  writeFileSync(join(home, 'keeplink'), (c.keepLink ?? []).map((u) => `${u}\n`).join(''));
   const noShape = join(home, 'no-shape-contract');
   mkdirSync(noShape);
   const r = runStepHarness(home, [
@@ -7408,7 +7697,7 @@ function runUsageStep(c: {
     '  if grep -qxF -- "$4" "$HOME/refuse"; then echo "Failed to $2 unit $4: fixture" >&2; return 1; fi',
     '  case "$2" in',
     '    enable) ln -sfn "$HOME/.config/systemd/user/${4%%@*}@.timer" "$HOME/.config/systemd/user/timers.target.wants/$4"; return 0 ;;',
-    '    disable) rm -f -- "$HOME/.config/systemd/user/timers.target.wants/$4"; return 0 ;;',
+    '    disable) grep -qxF -- "$4" "$HOME/keeplink" || rm -f -- "$HOME/.config/systemd/user/timers.target.wants/$4"; return 0 ;;',
     '  esac',
     '  echo "fixture systemctl: unexpected argv: $*" >&2; return 90',
     '}',
@@ -7586,6 +7875,28 @@ describe('ccrc install: the codex usage converge, measured in isolation (_inst_c
     const r = runUsageStep({ os: 'darwin', lanes: [] });
     expect(r.stdout).toBe('');
     expect(ctl(r)).toEqual([]);
+  });
+
+  it('a withdrawal the manager answers 0 while its link stays is NOT withdrawn: the could-not-disable line, NOT CONVERGED, and one degraded step — measured, never read off the exit code (Plan 3b Task A2)', () => {
+    const r = runUsageStep({ lanes: [], enabled: ['ext-a'], keepLink: [T('ext-a')] });
+    expect(ctl(r)).toEqual([DIS('ext-a')]);
+    expect(r.links, 'the stand-in removed the link it was told to keep').toEqual([T('ext-a')]);
+    expect(r.degraded).toEqual(['codex-usage']);
+    expect(r.stderr).toMatch(/^install: codex-usage: could not disable ccrc-codex-usage@ext-a\.timer — account ext-a is no longer a codex lane, so its timer must not poll; run: systemctl --user disable --now ccrc-codex-usage@ext-a\.timer$/m);
+    expect(r.stdout, 'a withdrawal the link contradicts was claimed').toBe(
+      'install: codex-usage: NOT CONVERGED — ccrc\'s own usage timer is still enabled for ext-a, which this run had to withdraw and systemd would not disable (the could-not-disable line above names each, with its command). This install continues. Run those commands, then re-run: ccrc install\n');
+  });
+
+  it('on the foreign arm too: a disable answered 0 with the link still there says both publishers are armed, never "this run disabled it" (Plan 3b Task A2)', () => {
+    const r = runUsageStep({ lanes: ['codex-a'], enabled: ['codex-a'], foreign: ['codex-a'], keepLink: [T('codex-a')] });
+    expect(ctl(r)).toEqual([DIS('codex-a')]);
+    expect(r.links).toEqual(['ccgpt-usage@codex-a.timer', T('codex-a')]);
+    expect(r.degraded).toEqual(['codex-usage']);
+    expect(r.stderr).toMatch(/^install: codex-usage: could not disable ccrc-codex-usage@codex-a\.timer — run: systemctl --user disable --now ccrc-codex-usage@codex-a\.timer$/m);
+    expect(r.stdout).toMatch(/^install: codex-usage: NOT ENABLED for codex-a — .* ccrc's own ccrc-codex-usage@codex-a\.timer is enabled too, and this run could not disable it, so both publishers are armed\. ccrc never disables another tool's unit: /m);
+    expect(r.stdout).not.toMatch(/this run disabled it/);
+    expect(r.stdout).toMatch(/^install: codex-usage: enabled for no lane; withheld from codex-a; withdrawn from no lane$/m);
+    expect(r.stdout).toMatch(/^install: codex-usage: NOT CONVERGED — ccrc's own usage timer is still enabled for codex-a, which this run had to withdraw and systemd would not disable/m);
   });
 });
 
@@ -7949,7 +8260,34 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  it is a measurement of this table that FAILs nothing.
  *
  *  MEASURED ON `1f9fa22d`, the plan's base and this branch's merge-base with
- *  `origin/main` (`$SCRATCH/t10-base`). It is a golden: nothing re-measures
+ *  `origin/main` (`$SCRATCH/t10-base`). RE-MEASURED when doctor gained its
+ *  `timeout` check, by Step 3's case on a disposable copy of that tree: the
+ *  three maps each gained `"timeout": "PASS"` and nothing else moved — every
+ *  other class, both codes and both refreshes equal. RE-MEASURED again on the merge of
+ *  `origin/main` into native Docs W1, when doctor gained its `docs` check, by the same
+ *  case on a disposable copy of the merged tree: the three maps each gained
+ *  `"docs": "PASS"` and nothing else moved (`codex: SKIP`, which the measurement
+ *  also prints, stays out: the live cases spread it over this golden). RE-MEASURED
+ *  again when doctor gained its `model-default` check, the same way, on a disposable
+ *  `git archive` copy of `36438851d`'s tree (the commit that added the check,
+ *  on `b3b5a73ed`): the three maps each gained `"model-default": "PASS"` and
+ *  nothing else moved. RE-MEASURED once more on that branch's merge of
+ *  `origin/main` (`b27fabc15`), which carries both checks, by the same case on a
+ *  disposable `git archive` copy of the merged tree (`git write-tree` of the
+ *  resolved index): exactly `origin/main`'s three maps plus `"model-default":
+ *  "PASS"` in each — both codes 0, both refreshes equal, `codex` `SKIP` in all
+ *  three. RE-MEASURED once more when doctor gained `scope-sweep` (session-continuity
+ *  wave 4): the three maps each gained `"scope-sweep": "SKIP"` (the fixture's
+ *  runtime dir holds no verdict record) and nothing else moved.
+ *  RE-MEASURED again when doctor gained its `history` check (spec 2026-10-05
+ *  §9.6): the three maps each gained `"history": "PASS"` (`first-tick-pending`:
+ *  the shim landed seconds before, and no sweep has ticked) and nothing else
+ *  moved. RE-MEASURED once more
+ *  when doctor gained `box-token` (box-token lifecycle Task B5), by the same case: the
+ *  three maps each gained `"box-token": "SKIP"` (wave 1 reports a box with no token
+ *  subject, and every state that will be a FAIL or WARN once armed, as SKIP; the live
+ *  shape's own word was not read off the case) and nothing else moved.
+ *  It is a golden: nothing re-measures
  *  it, so a merge-up that moves a doctor check's class on the live shape reds
  *  the live-shape case until Step 3 is re-run on a disposable copy of the new
  *  base, never hand-edited (it held on the final fix wave's merge of
@@ -7968,6 +8306,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "classes": {
         "accounts": "PASS",
         "auth": "SKIP",
+        "box-token": "SKIP",
         "build": "PASS",
         "caddy": "SKIP",
         "caddyfile": "SKIP",
@@ -7975,6 +8314,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "config": "PASS",
         "credentials": "SKIP",
         "disk": "PASS",
+        "docs": "PASS",
         "exposure": "SKIP",
         "fleet": "SKIP",
         "flock": "PASS",
@@ -7984,9 +8324,12 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "git_email": "PASS",
         "graphify": "PASS",
         "graphify-path": "PASS",
+        "history": "PASS",
         "jq": "PASS",
+        "jq_regex": "PASS",
         "linger": "PASS",
         "memory": "PASS",
+        "model-default": "PASS",
         "models": "PASS",
         "name": "SKIP",
         "node": "PASS",
@@ -7997,9 +8340,11 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "python3": "PASS",
         "rc": "PASS",
         "routing": "PASS",
+        "scope-sweep": "SKIP",
         "scopes": "SKIP",
         "services": "PASS",
         "skills": "PASS",
+        "timeout": "PASS",
         "tmux": "PASS",
         "tmux_skew": "PASS",
         "update-exposure": "SKIP",
@@ -8012,6 +8357,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "classes": {
         "accounts": "PASS",
         "auth": "SKIP",
+        "box-token": "SKIP",
         "build": "PASS",
         "caddy": "SKIP",
         "caddyfile": "SKIP",
@@ -8019,6 +8365,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "config": "PASS",
         "credentials": "SKIP",
         "disk": "PASS",
+        "docs": "PASS",
         "exposure": "SKIP",
         "fleet": "SKIP",
         "flock": "PASS",
@@ -8028,9 +8375,12 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "git_email": "PASS",
         "graphify": "PASS",
         "graphify-path": "PASS",
+        "history": "PASS",
         "jq": "PASS",
+        "jq_regex": "PASS",
         "linger": "PASS",
         "memory": "PASS",
+        "model-default": "PASS",
         "models": "PASS",
         "name": "SKIP",
         "node": "PASS",
@@ -8041,9 +8391,11 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "python3": "PASS",
         "rc": "PASS",
         "routing": "PASS",
+        "scope-sweep": "SKIP",
         "scopes": "SKIP",
         "services": "PASS",
         "skills": "PASS",
+        "timeout": "PASS",
         "tmux": "PASS",
         "tmux_skew": "PASS",
         "update-exposure": "SKIP",
@@ -8126,6 +8478,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
     "classes": {
       "accounts": "PASS",
       "auth": "SKIP",
+      "box-token": "SKIP",
       "build": "PASS",
       "caddy": "SKIP",
       "caddyfile": "SKIP",
@@ -8133,6 +8486,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "config": "PASS",
       "credentials": "SKIP",
       "disk": "PASS",
+      "docs": "PASS",
       "exposure": "SKIP",
       "fleet": "SKIP",
       "flock": "PASS",
@@ -8142,9 +8496,12 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "git_email": "PASS",
       "graphify": "PASS",
       "graphify-path": "PASS",
+      "history": "PASS",
       "jq": "PASS",
+      "jq_regex": "PASS",
       "linger": "PASS",
       "memory": "PASS",
+      "model-default": "PASS",
       "models": "PASS",
       "name": "SKIP",
       "node": "PASS",
@@ -8155,9 +8512,11 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "python3": "PASS",
       "rc": "PASS",
       "routing": "PASS",
+      "scope-sweep": "SKIP",
       "scopes": "SKIP",
       "services": "PASS",
       "skills": "PASS",
+      "timeout": "PASS",
       "tmux": "PASS",
       "tmux_skew": "PASS",
       "update-exposure": "SKIP",

@@ -25,10 +25,11 @@ import {
 } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { ccrcContainedEnv } from './ccrcContainment.js';
+import { assertNoRealTool } from './containedTools.js';
 import { PKG_DESCRIPTION, skillMd } from './graphifySkillFixture.js';
-import { installFixtureTree } from './installTreeFixture.js';
+import { installFixtureTree, rsyncRecorder } from './installTreeFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -124,9 +125,11 @@ function freshBox(prefix: string): string {
 
 interface Result { code: number; stdout: string; stderr: string }
 
-/** `ccrc-install.test.ts`'s `ccrcEnv`, copied unchanged. */
+/** `ccrc-install.test.ts`'s `ccrcEnv`, copied unchanged — and, since wave 9 R10d (D-3818), starting from the same
+ *  `ccrcContainedEnv(…, { managers: true, curl: 'poison' })`: this copy has no `adoptPlantedSystemd` and no
+ *  systemd-run front, so it takes the manager poisons — its own systemctl below replaces that one. */
 function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
-  const env = ghContainedEnv(home, { ...process.env, HOME: home });
+  const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
   const plant = (name: string, body: string): void => {
     if (omit.includes(name)) { rmSync(join(home, '.local', 'bin', name), { force: true }); return; }
     writeFileSync(join(home, '.local', 'bin', name), body, { mode: 0o755 });
@@ -297,8 +300,7 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   plant('npm',
     '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/npm-argv"\n'
     + 'printf \'%s\\n\' "$PWD" >> "$HOME/npm-cwd"\nmkdir -p node_modules\nexit 0\n');
-  plant('rsync',
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/rsync-argv"\nexec ${RSYNC} "$@"\n`);
+  plant('rsync', rsyncRecorder(RSYNC));
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT']) delete env[k];
   env['CCRC_VERIFY_SETTLE'] = '0';
   env['CCRC_VERIFY_WINDOW'] = '0';
@@ -336,6 +338,8 @@ function runInstall(home: string, args: string[] = ['install'],
   for (const [name, body] of Object.entries(opts.stubs ?? {})) {
     writeFileSync(join(home, '.local', 'bin', name), body, { mode: 0o755 });
   }
+  // Wave 9 R10d: on the FINAL env, as `ccrc-install.test.ts`'s runner does.
+  assertNoRealTool(env, home);
   const ccrc = ccrcIn(treeRoot(home));
   const r = spawnSync(BASH, [ccrc, ...args], { env, encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
@@ -387,6 +391,13 @@ function plantFakeVenv(home: string, version = '0.9.9'): string {
     { mode: 0o755 });
   return bin;
 }
+
+describe('ccrcEnv: containment (wave 9 R10d)', () => {
+  it('ccrcEnv hands out no env under which a real ssh, scp, systemctl, systemd-run, launchctl, tmux, gh or curl can run, and no real user bus (wave 9 R10d)', () => {
+    const home = mkTmp('ccrc-graphify-contained-');
+    expect(() => assertNoRealTool(ccrcEnv(home), home)).not.toThrow();
+  });
+});
 
 describe('ccrc install: graphify engine step', () => {
   it('installs the pin into the venv and writes the stamp', () => {
@@ -2066,3 +2077,11 @@ describe('ccrc install: ~/.local/bin/graphify converges onto the pinned venv (R3
     expect(existsSync(link(home)), 'a server box runs no graphify').toBe(false);
   });
 });
+
+// R20a's opt-in (tmpHelpers' `removeTmpFixturesEachTest`), for the same reason as `ccrc-update.test.ts`: every
+// `mkTmp` in this file is inside a test, no test reads another's home and none registers an `onTestFinished`, so
+// each test's homes can go when it ends. Its one `afterAll` was otherwise left 41 homes, 584 MB and about 15,900
+// entries, measured at 6.4 s on a loaded dev box and at 0.65 s on a re-run at load ~50: an end-of-file removal's
+// cost swings tenfold with load and how cold the metadata has gone, not with the bytes alone. At the END of the
+// file so no line above moves.
+removeTmpFixturesEachTest();

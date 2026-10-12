@@ -10,7 +10,7 @@ const INSTALLER = path.resolve(__dirname, '../../ccd/install-session-hooks.sh');
 
 // The MEASURED real-world shape (2026-08-05): SessionStart with a compact
 // matcher + a matcher-less entry, SessionEnd; one home carries an extra
-// cloneme SessionEnd entry. The installer must preserve every byte of these.
+// cloneme SessionEnd entry. Every foreign entry survives byte-identically; managed ones are appended after them.
 const EXISTING = {
   hooks: {
     SessionStart: [
@@ -50,11 +50,11 @@ describe('install-session-hooks', () => {
   // after confirming the red. Main found the same gap independently (D-306 (was D-B8-10))
   // and made the pairing a mechanism: the derived-set test below fails on any
   // divergence between EVENTS_JSON and the hook's own case arms.
-  it('registers the eleven measured events and preserves existing entries byte-identically', () => {
+  it('registers the twelve measured events and preserves existing entries byte-identically', () => {
     run();
     const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
     for (const ev of ['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PermissionRequest',
-      'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'SessionStart']) {
+      'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'SessionStart', 'SessionEnd']) {
       const entries = s.hooks[ev] as any[];
       expect(entries.some((e) => e.hooks?.some((h: any) => String(h.command).includes('/session-hook.sh'))),
         ev).toBe(true);
@@ -70,7 +70,10 @@ describe('install-session-hooks', () => {
     expect(s.hooks.SessionStart.slice(0, EXISTING.hooks.SessionStart.length))
       .toEqual(EXISTING.hooks.SessionStart);
     expect(s.hooks.SessionStart).toHaveLength(EXISTING.hooks.SessionStart.length + 1);
-    expect(s.hooks.SessionEnd).toEqual(EXISTING.hooks.SessionEnd);
+    expect(s.hooks.SessionEnd.slice(0, EXISTING.hooks.SessionEnd.length)).toEqual(EXISTING.hooks.SessionEnd);
+    expect(s.hooks.SessionEnd).toHaveLength(EXISTING.hooks.SessionEnd.length + 1);   // one managed entry, appended (delegation broker §5.3)
+    expect(s.hooks.WorktreeCreate).toBeUndefined();   // registering either REPLACES Claude Code's own worktree handling (delegation broker §3.1)
+    expect(s.hooks.WorktreeRemove).toBeUndefined();
     expect(s.statusLine).toEqual(EXISTING.statusLine);
   });
   it('re-running converges (second run is a byte no-op)', () => {
@@ -239,5 +242,62 @@ describe('installer wiring cannot drift from the hook it installs (D-306)', () =
   it('the derivation is real: it reads SessionStart out of the hook source', () => {
     expect(handledEvents()).toContain('SessionStart');
     expect(handledEvents().length).toBeGreaterThanOrEqual(10);
+  });
+});
+
+describe('every managed hook entry but SessionEnd\'s carries HOOK_TIMEOUT_S, a bounded timeout (D-4418)', () => {
+  const SRC = fs.readFileSync(INSTALLER, 'utf8');
+  const CLAUDE_CODE_DEFAULT_S = 600;   // a command hook's default timeout, measured on 2.1.289 (history spec §4.1, Tl=600000)
+  const timeoutS = (): number => Number(/^HOOK_TIMEOUT_S=(\d+)$/m.exec(SRC)![1]);
+  /** `run`, with the session environment scrubbed (Global Constraints: test isolation). */
+  const runScrubbed = (): void => {
+    execFileSync('bash', [INSTALLER, '--homes', path.join(home, '.claude'), path.join(home, '.claude-personal')], {
+      env: { ...process.env, HOME: home, CLAUDECODE: '', CLAUDE_CONFIG_DIR: '', TMUX: '', TMUX_PANE: '',
+        ...Object.fromEntries(Object.keys(process.env).filter((k) => k.startsWith('CCRC_RECALL_')).map((k) => [k, ''])) },
+    });
+  };
+
+  it('defined once, a positive integer no larger than Claude Code\'s default', () => {
+    expect([...SRC.matchAll(/^HOOK_TIMEOUT_S=(\d+)$/gm)]).toHaveLength(1);
+    expect(timeoutS()).toBeGreaterThan(0);
+    expect(timeoutS()).toBeLessThanOrEqual(CLAUDE_CODE_DEFAULT_S);
+  });
+
+  it('every event\'s managed entry but SessionEnd\'s, PreToolUse\'s included, carries timeout === HOOK_TIMEOUT_S; SessionEnd\'s and every foreign entry carry none', () => {
+    runScrubbed();
+    const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    let managed = 0;
+    for (const [ev, entries] of Object.entries(s.hooks as Record<string, any[]>)) {
+      for (const entry of entries) {
+        for (const h of entry.hooks as any[]) {
+          if (String(h.command).includes('/session-hook.sh')) {
+            managed++;
+            if (ev === 'SessionEnd') expect(h, ev).not.toHaveProperty('timeout');
+            else expect(h.timeout, ev).toBe(timeoutS());
+          } else {
+            expect(h, ev).not.toHaveProperty('timeout');
+          }
+        }
+      }
+    }
+    expect(managed).toBe((JSON.parse(/^EVENTS_JSON='(.*)'$/m.exec(SRC)![1]!) as string[]).length + 1);   // +1: PreToolUse
+  });
+
+  it('managed entries written in another timeout shape converge, and the next run is a byte no-op', () => {
+    const s = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    s.hooks.Stop = [{ hooks: [{ type: 'command', command: 'bash "$HOME/.cc-sessions/session-hook.sh"' }] }];
+    s.hooks.SessionEnd.push({ hooks: [{ type: 'command', command: 'bash "$HOME/.cc-sessions/session-hook.sh"', timeout: 600 }] });
+    fs.writeFileSync(cfg('.claude'), JSON.stringify(s, null, 2));
+    runScrubbed();
+    const after = JSON.parse(fs.readFileSync(cfg('.claude'), 'utf8'));
+    const managedIn = (ev: string): any[] => (after.hooks[ev] as any[]).flatMap((e) => e.hooks as any[])
+      .filter((h) => String(h.command).includes('/session-hook.sh'));
+    expect(managedIn('Stop')).toHaveLength(1);
+    expect(managedIn('Stop')[0].timeout).toBe(timeoutS());
+    expect(managedIn('SessionEnd')).toHaveLength(1);
+    expect(managedIn('SessionEnd')[0]).not.toHaveProperty('timeout');
+    const bytes = fs.readFileSync(cfg('.claude'), 'utf8');
+    runScrubbed();
+    expect(fs.readFileSync(cfg('.claude'), 'utf8')).toBe(bytes);
   });
 });

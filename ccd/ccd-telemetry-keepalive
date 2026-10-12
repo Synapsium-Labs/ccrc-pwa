@@ -484,8 +484,8 @@ _ka_pane_probe() {   # <session id> -> KA_PANE_VERDICT=live|gone|unknown,
   # A bare `timeout`, like the turn's — Linux-only on the record (PORTABILITY
   # above); ccd's `type -t tmux == function` arm has no twin here, since a
   # timer-spawned sibling cannot see a caller's shell function (the suite stubs
-  # tmux on PATH). The target is EXACT — `=` + name + `:`, `.`/`:` -> `_` — as
-  # ccd's `_tmux_at` spells it: a bare name is a tmux prefix SEARCH (D-3525).
+  # tmux on PATH). The target is EXACT — `=` + name + `:` — and `.`/`:` -> `_` as ccd's
+  # `_tmux_at` spells it; ccd now creates the name sanitised too. A bare name is a prefix SEARCH (D-3525).
   out="$(timeout "$KA_PANE_DEADLINE" tmux has-session -t "=${KA_TMUX_PREFIX}${1//[.:]/_}:" 2>&1)"; rc=$?
   if [ "$rc" -eq 0 ]; then KA_PANE_VERDICT=live; KA_PANE_DETAIL=""; return 0; fi
   # rc 124 with nothing said is `timeout`'s own kill: tmux printed no words, so

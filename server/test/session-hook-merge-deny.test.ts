@@ -38,9 +38,20 @@ const hold = (text: string): void => { fs.writeFileSync(path.join(home, '.cc-ses
 /** The child marker, as `cmd_ws_add --child 17` writes it. */
 const marker = (): void => { fs.writeFileSync(path.join(home, '.cc-sessions', `${ID}.child`), '17'); };
 
+/** The payload cap, READ from the hook (never re-typed here): a command longer
+ *  than this many bytes is never parsed (landing-order wave 3). */
+const CAP = ((): number => {
+  const m = /^MERGE_PARSE_CAP=(\d+)$/m.exec(fs.readFileSync(HOOK, 'utf8'));
+  if (m === null) throw new Error('the hook no longer defines MERGE_PARSE_CAP as a bare integer');
+  return Number(m[1]);
+})();
+/** `unit` repeated, then `tail`, cut to exactly `bytes` bytes (ASCII units). */
+const sized = (unit: string, tail: string, bytes: number): string =>
+  unit.repeat(Math.ceil(bytes / unit.length)).slice(0, bytes - tail.length) + tail;
+
 /** One PreToolUse Bash call through the real hook. Exit 0 and a silent stderr
  *  are the hook's standing contract, asserted on every call. */
-const bash = (command: string): { deny: string | null; stdout: string } => {
+const bash = (command: string, nulStderr = false): { deny: string | null; stdout: string } => {
   const r = spawnSync('bash', [HOOK], {
     input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: home }),
     encoding: 'utf8',
@@ -48,7 +59,12 @@ const bash = (command: string): { deny: string | null; stdout: string } => {
       TMUX_PANE: '%1', CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION },
   });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
-  expect(r.stderr, 'the hook contract: silent on stderr').toBe('');
+  // A NUL in the command makes bash warn on stderr when a read of the payload decodes it: the
+  // graph-search read (a payload matching rg|grep|ag|ack|find|fd) and the merge arm (a payload
+  // holding `merge`). `echo hi\0there` is silent; this fixture's cwd carries `merge` (and so
+  // `rg`), so a NUL command here warns from both reads under the cap, and from the graph-search
+  // read only over it (over the cap `capped` hands the merge arm nothing to decode).
+  if (!nulStderr) expect(r.stderr, 'the hook contract: silent on stderr').toBe('');
   const line = r.stdout.trim();
   if (line === '') return { deny: null, stdout: '' };
   const j = JSON.parse(line) as { hookSpecificOutput: { permissionDecision?: string; permissionDecisionReason?: string } };
@@ -181,24 +197,32 @@ describe('the worker merge deny', () => {
     }
   });
 
-  it('answers a 100 KB adversarial command in bounded time — the head match restarts at every separator', () => {
+  it('denies none of a cap-sized adversarial command, in bounded time — the separator walks the cap now bounds', () => {
     // A token class that can cross a separator, or a blank class that includes
     // the newline, makes every `;a=` / `\na=` / `;gh -R ` start walk to the end
     // of the payload: 5 to 9 s at 36 KB, and 1.6 s at 36 KB for the gh-flag
-    // classes alone (so 100 KB, where a walk costs ~12 s and the fix ~0.2 s). An
-    // unterminated `<<a` is the strip's own walk: a heredoc that had to find its
-    // terminator would scan to the end once per `<<`. The tail carries `merge`
+    // classes alone, before the payload cap. Since the cap nothing longer than
+    // MERGE_PARSE_CAP bytes is parsed, so these run at exactly the cap, the
+    // largest command the strip and the head match still read; the cap's own
+    // cases below keep everything longer out. At this size those walks cost too
+    // little for the clock to catch (wave 2's rows H20, H21 and H39 measure
+    // green here, at 2048 and at 8192): the cap, not this clock, is their guard
+    // now, and this case is the no-false-deny and time check at the cap; the
+    // boundary itself is held by the payload cap's boundary case.
+    // An unterminated `<<a` is the strip's own walk. The tail carries `merge`
     // outside any quote or comment, so the prefilter lets the match run and a
-    // regex that matched any `merge` would deny; none is a merge. The hold makes
-    // a wrong match a deny this case can see (review 241 F6).
+    // regex that matched any `merge` would deny; none is a merge. The hold
+    // makes a wrong match a deny this case can see (review 241 F6).
     hold(WAVE_HOLD);
     const units = [';', '\n'].flatMap((sep) => ['a=', 'gh ', 'gh -R ', 'timeout 1 '].map((unit) => `${sep}${unit}`));
     for (const u of [...units, '<<a\n']) {
+      const c = sized(u, '\necho merge origin', CAP);
+      expect(Buffer.byteLength(c)).toBe(CAP);
       const t0 = Date.now();
-      const r = bash(u.repeat(Math.ceil(100000 / u.length)) + '\necho merge origin');
+      const r = bash(c);
       const ms = Date.now() - t0;
       expect(r.deny, `a non-merge was denied: ${JSON.stringify(u)}`).toBeNull();
-      expect(ms, `the hook took ${ms} ms on ${JSON.stringify(u)}`).toBeLessThan(3000);
+      expect(ms, `the hook took ${ms} ms on ${JSON.stringify(u)}`).toBeLessThan(1500);
     }
   }, 60000);
 
@@ -207,18 +231,291 @@ describe('the worker merge deny', () => {
     // that never closes is kept raw, not stripped again: either one recursing
     // walks the rest of the payload once per `<<` (2.4 to 3.8 s and 0.4 to
     // 0.6 GB at 16 KB, measured on the strip alone; 15 s and 2.9 GB at 36 KB).
+    // Each payload is whole units up to the cap, the largest command parsed.
     hold(WAVE_HOLD);
     // The second payload's heredoc never terminates, so the strip keeps the
     // whole text raw from its `<<` without reading the `$(`s (the top level
-    // has no `$(` arm of its own); the substitution reader never runs here.
-    for (const [pre, u] of [['', '<<a '], ['cat <<a\n', '$(cat <<a\n']]) {
+    // has no `$(` arm of its own). The third has its `a` terminator line
+    // (review 249 F1): the heredoc completes, its unquoted body goes to the
+    // substitution reader, and the first `$(` there never closes, so it is
+    // kept raw once. Re-stripping it would cost ~300 ms here against ~80
+    // (measured at the cap), inside any bound a loaded box can hold, so the
+    // next case pins the rule itself.
+    for (const [pre, u, end] of [['', '<<a ', '\n'], ['cat <<a\n', '$(cat <<a\n', ''], ['cat <<a\n', '$(cat <<a\n', 'a\n']]) {
+      const tail = `${end}echo merge origin`;
+      const c = pre + u.repeat(Math.floor((CAP - pre.length - tail.length) / u.length)) + tail;
+      expect(Buffer.byteLength(c)).toBeLessThanOrEqual(CAP);
       const t0 = Date.now();
-      const r = bash(pre + u.repeat(Math.ceil(16000 / u.length)) + '\necho merge origin');
+      const r = bash(c);
       const ms = Date.now() - t0;
-      expect(r.deny, `a non-merge was denied: ${JSON.stringify(u)}`).toBeNull();
-      expect(ms, `the hook took ${ms} ms on ${JSON.stringify(u)}`).toBeLessThan(1500);
+      expect(r.deny, `a non-merge was denied: ${JSON.stringify(u + end)}`).toBeNull();
+      expect(ms, `the hook took ${ms} ms on ${JSON.stringify(u + end)}`).toBeLessThan(1500);
     }
   }, 60000);
+
+  // THE PAYLOAD CAP (landing-order wave 3). Over MERGE_PARSE_CAP bytes nothing
+  // is parsed: the raw command is asked only whether, in one segment of it
+  // (split on the four command separators `;` `&` `|` and the newline,
+  // fixed-string), `gh`, `pr` and `merge` stand as words in that order
+  // (`ocwords`), and a held or child session's command that does is refused
+  // unread.
+  describe('the payload cap', () => {
+    /** `c`, then a filler of `a`s that carries it past the cap and touches no
+     *  separator, so the segment holding `c` is the one the rule reads. */
+    const over = (c: string): string => `${c} ${'a'.repeat(CAP)}`;
+    const MENTION = 'echo "then gh pr merge 42 later" ';
+    it('parses a command of exactly the cap, and refuses one byte more unread — naming both numbers', () => {
+      hold(WAVE_HOLD);
+      expect(bash(sized(MENTION, 'x', CAP)).deny, 'at the cap the strip reads the quoted mention as text').toBeNull();
+      const refused = bash(sized(MENTION, 'x', CAP + 1)).deny;
+      expect(refused, 'one byte over the cap, a command spelling `gh pr merge` was let through').not.toBeNull();
+      expect(refused).toContain(`this command is ${CAP + 1} bytes`);
+      expect(refused).toContain(`${CAP}-byte parse cap`);
+      expect(refused).toContain(WAVE_HOLD);
+      expect(refused).toContain('the coordinator merges, workers never do');
+      expect(refused).toContain('or rephrase it');
+      // A real merge at the cap is read, and refused for what it is.
+      const real = bash(sized('gh pr merge 42 ', ' ', CAP)).deny;
+      expect(real).not.toBeNull();
+      expect(real, 'a merge at the cap was refused unread: the parse did not run').not.toContain('parse cap');
+    });
+
+    it('counts bytes, not characters', () => {
+      hold(WAVE_HOLD);
+      // Each `é` is two bytes: fewer characters than the cap, more bytes.
+      const c = 'echo gh pr merge ' + 'é'.repeat(Math.ceil(CAP / 2));
+      expect(c.length).toBeLessThan(CAP);
+      expect(Buffer.byteLength(c)).toBeGreaterThan(CAP);
+      const d = bash(c).deny;
+      expect(d, 'a command over the cap in BYTES was parsed as if it were under it').not.toBeNull();
+      expect(d).toContain(`this command is ${Buffer.byteLength(c)} bytes`);
+    });
+
+    it('lets an over-cap command through unparsed unless its raw text spells a word-bounded `gh pr merge`', () => {
+      hold(WAVE_HOLD);
+      // The fixture's cwd carries `merge`, so the arm's substring prefilter
+      // passes whatever the command says, and the jq program is reached.
+      expect(home).toContain('merge');
+      // Prose holding both substrings: the rule the coordinator replaced
+      // would have refused this (landing-order wave 3's amendment).
+      expect(bash(sized('though the branch merged, the high road held; ', ' ', CAP + 1)).deny, 'prose holding `gh` and `merge` as substrings').toBeNull();
+      expect(bash(sized('echo merge ', ' ', CAP + 1)).deny, 'no `gh` in it').toBeNull();
+      expect(bash(sized('gh pr view 42; echo merge ', ' ', CAP + 1)).deny, 'gh and merge, but not `gh pr merge`').toBeNull();
+      expect(bash(sized('echo xgh pr merge 42 ', ' ', CAP + 1)).deny, 'a `gh` that is the tail of another word').toBeNull();
+      expect(bash(sized('echo gh pr merged it ', ' ', CAP + 1)).deny, 'a `merge` that is the head of another word').toBeNull();
+    });
+
+    it.each([
+      'gh -R o/r pr merge 42',
+      'gh --repo o/r pr merge 42',
+      'gh --repo=o/r pr merge 42',
+      'gh pr -R o/r merge 42',
+    ])('refuses gh\'s own flags between the words over the cap, as main\'s full parse does — %s (review 267 F3)', (c) => {
+      hold(WAVE_HOLD);
+      const d = bash(over(c)).deny;
+      expect(d, `an over-cap ${c} was let through`).not.toBeNull();
+      expect(d).toContain('parse cap');
+      expect(d).toContain('or rephrase it');
+    });
+
+    it.each([
+      ['an operator after `merge`: `;`', 'gh pr merge;echo ok'],
+      ['an operator after `merge`: `)` closing a substitution', 'x=$(gh pr merge)'],
+      ['an operator after `merge`: a bare `)`', 'gh pr merge)'],
+      ['an operator after `merge`: `|`', 'gh pr merge|cat'],
+      ['an operator after `merge`: `&&`', 'gh pr merge&&echo ok'],
+      ['a redirection after `merge`: `>`', 'gh pr merge>out'],
+      ['a redirection after `merge`: `<`', 'gh pr merge<in'],
+      ['a paren after `merge`: `(`', 'gh pr merge(x)'],
+      ['a subshell: `(gh pr merge)`', '(gh pr merge)'],
+      ['a TAB between the words', 'gh\tpr\tmerge 42'],
+    ])('refuses %s over the cap (review 267 F4)', (_n, c) => {
+      hold(WAVE_HOLD);
+      const d = bash(over(c)).deny;
+      expect(d, `an over-cap ${JSON.stringify(c)} was let through`).not.toBeNull();
+      expect(d).toContain('parse cap');
+    });
+
+    // A flag's VALUE may hold a substitution, a redirection or a paren, and main's
+    // full parse refuses all of them (review 267 I1): only `;` `&` `|` and the newline
+    // split a command, so none of these splits the three words apart.
+    it.each([
+      'gh -R $(echo o/r) pr merge 42',
+      'gh -R "$(git remote get-url origin)" pr merge 42',
+      'gh --repo=$(echo o/r) pr merge 42',
+      'gh pr -R $(echo o/r) merge 42',
+      'gh -R o/r<x pr merge 42',
+      'gh pr --repo o/r>x merge 42',
+    ])('refuses a flag value that holds a substitution or a redirection over the cap — %s (review 267 I1)', (c) => {
+      hold(WAVE_HOLD);
+      const d = bash(over(c)).deny;
+      expect(d, `an over-cap ${c} was let through`).not.toBeNull();
+      expect(d).toContain('parse cap');
+    });
+
+    it.each([
+      ['a separator inside a quoted flag value', 'gh pr -R "a;b" merge 42'],
+    ])('LISTED over-cap pass, not a closure: %s', (_n, c) => {
+      hold(WAVE_HOLD);
+      expect(bash(over(c)).deny, `the listed pass ${JSON.stringify(c)} was refused: update the hook header's list`).toBeNull();
+    });
+
+    it('LISTED over-cap pass, not a closure: a NUL next to the word is denied under the cap and passes over it', () => {
+      hold(WAVE_HOLD);
+      // bash strips NUL from command text and warns on stderr: under the cap from both reads (the
+      // graph-search read, the payload holding `merge` and so `rg`, and the merge arm's read);
+      // over the cap from the graph-search read only, since `ocwords` is false there.
+      expect(bash('gh pr merge\u0000 42', true).deny, 'under the cap the strip reads it').not.toBeNull();
+      expect(bash(over('gh pr merge\u0000 42'), true).deny, 'the listed pass was refused: update the hook header\'s list').toBeNull();
+    });
+
+    it('reads a merge after multi-byte text: the in-order search slices by codepoint offsets', () => {
+      hold(WAVE_HOLD);
+      expect(bash(over('é😀 gh -R o/r pr merge 42')).deny, 'a multi-byte prefix misaligned the slice').not.toBeNull();
+      expect(bash(over('é😀 gh pr view 3 merged')).deny).toBeNull();
+    });
+
+    // The case above cannot red for a byte-offset slice: its ` -R o/r` between `gh` and
+    // `pr` absorbs the 4-character overshoot a byte slice makes after `é😀` (review 273 F1).
+    // This fixture has nothing between the words to absorb it.
+    it('reads a TIGHT `gh pr merge` after multi-byte text: a byte-offset slice misses it (review 273 F1)', () => {
+      hold(WAVE_HOLD);
+      const d = bash(over('é😀 gh pr merge 42')).deny;
+      expect(d, 'a byte-offset slice after é😀 skipped past the `pr` and let the merge through').not.toBeNull();
+      expect(d).toContain('parse cap');
+    });
+
+    it('refuses a bare backtick `gh pr merge` over the cap — a STRICTER over-cap reading, not a closure: under the cap it passes', () => {
+      hold(WAVE_HOLD);
+      expect(bash('echo `gh pr merge`').deny, 'under the cap a legacy backtick is the listed pass').toBeNull();
+      const d = bash(over('echo `gh pr merge`')).deny;
+      expect(d, 'the end class holds a backtick, so the over-cap rule reads it').not.toBeNull();
+      expect(d).toContain('parse cap');
+    });
+
+    it.each([
+      ['prose with `gh` and `merge` inside other words', 'though it merged high'],
+      ['`gh` but not a merge', 'gh pr view 3'],
+      ['`(merge)` is not a merge word: a blank must precede it', 'gh pr view 3 (merge)'],
+      ['a `gh` that is the tail of another word', 'sigh pr merge it'],
+      ['`gh`, `pr` and `merge` on three lines: bash reads three commands, none a merge', 'gh\npr\nmerge'],
+    ])('lets an over-cap command through that is not a merge — %s', (_n, c) => {
+      hold(WAVE_HOLD);
+      expect(bash(over(c)).deny, `an over-cap ${JSON.stringify(c)} was refused`).toBeNull();
+    });
+
+    // Each at 100 KB, through the whole hook, held: none is a merge, and each
+    // must clear the 1500 ms whole-hook bound the sync advisory is held to.
+    // `splits` over `;` or `gh;` took 43 to 52 s and 14 s here (jq 1.7); the
+    // fixed-string split and the prefilter cost 90 to 320 ms (the first five
+    // shapes), and 343 to 384 ms on the costliest, at load ~15; a review
+    // measured ~600 ms once (review 267 F3). Three of the six (`;` only, `gh;`
+    // repeated, newlines only) never reach the split: the whole-command
+    // `contains("gh") and contains("merge")` prefilter is false for each, so
+    // the `splits` timings describe a rule without the prefilter. What guards
+    // `splits` is the structural `splits(` ban below and mutation row SP, not
+    // these three clocks (review 273 F5 (b)).
+    // The last shape is the costliest measured: many segments that pass the prefilter.
+    it.each([
+      ['`;` only', ';'],
+      ['`gh;` repeated', 'gh;'],
+      ['`gh pr merged;` repeated', 'gh pr merged;'],
+      ['newlines only', '\n'],
+      ['one long line holding `gh` and `merge` as words, no separator', 'gh merge '],
+      ['`gh merge;` repeated: many segments that pass the prefilter (the costliest shape measured)', 'gh merge;'],
+    ])('answers 100 KB of %s over the cap in bounded time, denying none of it', (_n, unit) => {
+      hold(WAVE_HOLD);
+      const c = sized(unit, '', 100000);
+      expect(Buffer.byteLength(c)).toBe(100000);
+      const t0 = Date.now();
+      const r = bash(c);
+      const ms = Date.now() - t0;
+      expect(r.deny, `a non-merge was denied: ${JSON.stringify(unit)}`).toBeNull();
+      expect(ms, `the hook took ${ms} ms on 100 KB of ${JSON.stringify(unit)}`).toBeLessThan(1500);
+    }, 60000);
+
+    it('refuses only where the deny applies: a session with no wave hold and no marker is never asked', () => {
+      expect(bash(sized('gh pr merge 42 ', ' ', CAP + 1)).deny).toBeNull();
+      marker();
+      const r = bash(sized('gh pr merge 42 ', ' ', CAP + 1)).deny;
+      expect(r, 'a marked child\'s over-cap merge went through').not.toBeNull();
+      expect(r).toContain('child marker');
+      expect(r).toContain('parse cap');
+    });
+
+    it('refuses an over-cap body that QUOTES `gh pr merge` — the accepted cost — and says to split or rephrase', () => {
+      hold(WAVE_HOLD);
+      const mail = (pad: number): string => "ccrc-api mail send --json - <<'J'\n" +
+        sized('the wave is done and the suite is green. ', '', pad) + '\nthe coordinator then runs `gh pr merge 42`.\nJ';
+      // Under the cap the same body is a quoted heredoc's text, and passes.
+      expect(bash(mail(200)).deny, 'a short quoted body was refused: the parse did not run').toBeNull();
+      const c = mail(CAP);
+      expect(Buffer.byteLength(c)).toBeGreaterThan(CAP);
+      const d = bash(c).deny;
+      expect(d, 'an over-cap body spelling `gh pr merge` went through').not.toBeNull();
+      expect(d).toContain('parse cap');
+      expect(d).toContain('or rephrase it');
+      expect(d).toContain('Write tool');
+      // The way out for a long MAIL is named, not only a PR body's (review 273 F2): the file
+      // goes to `ccrc-api mail send --json`, which keeps the command short.
+      expect(d, 'the refusal does not name the mail file way out').toContain('send it with `ccrc-api mail send --json <file>`');
+      expect(d).toContain('gh pr create --body-file <file>');
+      expect(d).toContain('prose that names gh, pr and merge in that order reads as one');
+      expect(d).toContain('A landing is the operator\'s, from their own shell.');
+    });
+
+    // THE ACCEPTED CLASS (review 273 F2, ruling 3510): over the cap, any ONE segment that names
+    // `gh`, then `pr`, then `merge` as words is refused, prose included. Not a closure and not a
+    // bug: it is the hook header's THE COST sentence. A narrowing (only flags between the words)
+    // would need a repeated group, the nested quantifier the rule exists to avoid.
+    it.each([
+      ['a one-line JSON mail body that only MENTIONS the words in that order', (pad: number): string =>
+        'ccrc-api mail send --json - <<JSON\n{"body":"' + sized('the wave is done and the suite is green. ', '', pad) +
+        'I read PR state with gh pr view 248 and gh pr checks, and the coordinator may merge it after the panel"}\nJSON'],
+      ['a trailing `# comment` that says merge', (pad: number): string =>
+        'gh pr create --title x --body-file /tmp/b.md --base main ' + sized('--label wave ', '', pad) + ' # merge later'],
+    ])('refuses %s over the cap, the ACCEPTED cost (review 273 F2, ruling 3510: see the hook header\'s THE COST sentence) — and passes it under the cap', (_n, build) => {
+      hold(WAVE_HOLD);
+      const short = build(0);
+      expect(Buffer.byteLength(short), 'the unpadded shape is under the cap').toBeLessThanOrEqual(CAP);
+      expect(bash(short).deny, 'under the cap the parse reads it as text or a non-merge').toBeNull();
+      const c = build(CAP);
+      expect(Buffer.byteLength(c)).toBeGreaterThan(CAP);
+      const d = bash(c).deny;
+      expect(d, 'the accepted over-cap class was let through: the hook header\'s THE COST sentence is stale').not.toBeNull();
+      expect(d).toContain('parse cap');
+      expect(d).toContain('send it with `ccrc-api mail send --json <file>`');
+    });
+
+    it('answers an over-cap quote-dense command in bounded time — the strip never reads it', () => {
+      // `"$(<)"` repeated is the costliest shape measured per byte (one nested
+      // strip per span): ~350 ms of CPU at 2048 bytes, so 36 KB parsed would
+      // take seconds. Over the cap it costs one linear regex scan.
+      hold(WAVE_HOLD);
+      for (const [unit, tail, denied] of [['"$(<)"', '\ngh pr merge 42', true], ['"', '\necho merge origin', false]] as const) {
+        const c = sized(unit, tail, 36000);
+        const t0 = Date.now();
+        const r = bash(c);
+        const ms = Date.now() - t0;
+        expect(r.deny !== null, `${JSON.stringify(unit)}: denied ${r.deny !== null}`).toBe(denied);
+        expect(ms, `the hook took ${ms} ms on 36 KB of ${JSON.stringify(unit)}`).toBeLessThan(1500);
+      }
+    }, 60000);
+  });
+
+  // Review 249 F1, pinned as a rule rather than a clock: a `$(` that never
+  // closes inside an UNQUOTED heredoc body (which the substitution reader
+  // reads) keeps its RAW text, and is never stripped again. Re-stripping it
+  // would drop the '…' span below and the merge line inside it. Bash runs
+  // neither (it stops at the unclosed `$(`), so this deny is the fail-closed
+  // rule's named cost; what the case proves is that the raw text is kept.
+  it.each([
+    ['a \'…\' span', "cat <<a\n$(echo 'x\ngh pr merge 42\n'\na"],
+    ['a "…" span', 'cat <<a\n$(echo "x\ngh pr merge 42\n"\na'],
+  ])('keeps an unclosed `$(` in an unquoted heredoc body raw, never stripped again — %s (review 249 F1)', (_n, c) => {
+    hold(WAVE_HOLD);
+    expect(bash(c).deny, `the unclosed $( was stripped again: ${c}`).not.toBeNull();
+  });
 
   // Review 241 F1: the strip once kept a "…" span that held a `$(` whole, so
   // its CLOSING quote opened a new span that swallowed the merge after it; and
@@ -318,9 +615,11 @@ describe('the worker merge deny', () => {
 
   // The merge word may be followed by an operator with no blank between: `;`
   // `&` `|` `(` `)` `<` `>` end it as a blank does (review 247 F3; bare `gh pr
-  // merge` merges the current branch's PR, a worker's own wave PR).
+  // merge` merges the current branch's PR, a worker's own wave PR). Every
+  // member of the end class has its own case (review 249 F2).
   it.each([
     ['gh pr merge;echo ok'], ['gh pr merge&&echo ok'], ['x=$(gh pr merge)'], ['(gh pr merge)'],
+    ['gh pr merge|cat'], ['gh pr merge>/tmp/o'], ['gh pr merge</dev/null'],
   ])('refuses a merge word that an operator ends: %j', (c) => {
     hold(WAVE_HOLD);
     expect(bash(c).deny, `not denied: ${c}`).not.toBeNull();
@@ -361,5 +660,194 @@ describe('the worker merge deny', () => {
     ]) {
       expect(bash(c).deny, `denied: ${c}`).toBeNull();
     }
+  });
+});
+
+// ---- the jq `as` checker, used by the last describe in this file ----
+type JqTok = { k: 'str' | 'op' | 'open' | 'close' | 'stop' | 'as' | 'word'; s: string };
+/** The binary operators (`and` and `or` are words, read in the identifier arm
+ *  below), longest first: `//=` before `//` before `/`. `|` is a stop, not one. */
+const JQ_SYMBOLS = ['?//', '//=', '|=', '+=', '-=', '*=', '/=', '%=', '==', '!=', '<=', '>=', '//',
+  '+', '-', '*', '/', '%', '<', '>', '=', ','];
+const JQ_STOP_WORDS = new Set(['then', 'else', 'elif', 'if', 'reduce', 'foreach', 'label', 'def', 'catch']);
+
+/** The index just past the jq string literal that opens at `i` (a `"`); each
+ *  `\(…)` interpolation's source is pushed on `subs`, so it is checked too. */
+const jqString = (src: string, i: number, subs: string[]): number => {
+  let j = i + 1;
+  while (j < src.length) {
+    const ch = src[j];
+    if (ch === '"') return j + 1;
+    if (ch === '\\' && src[j + 1] === '(') {
+      let depth = 1;
+      let k = j + 2;
+      while (k < src.length && depth > 0) {
+        if (src[k] === '"') { k = jqString(src, k, subs); continue; }
+        if (src[k] === '(') depth++;
+        else if (src[k] === ')') depth--;
+        k++;
+      }
+      subs.push(src.slice(j + 2, k - 1));
+      j = k;
+    } else j += ch === '\\' ? 2 : 1;
+  }
+  throw new Error(`an unterminated jq string in: ${src.slice(i, i + 60)}`);
+};
+
+const jqTokens = (src: string, subs: string[]): JqTok[] => {
+  const out: JqTok[] = [];
+  let i = 0;
+  while (i < src.length) {
+    const rest = src.slice(i);
+    const c = src[i] as string;
+    let m: RegExpExecArray | null;
+    if (/\s/.test(c)) { i++; continue; }
+    if (c === '#') { while (i < src.length && src[i] !== '\n') i++; continue; }
+    if (c === '"') { i = jqString(src, i, subs); out.push({ k: 'str', s: '"' }); continue; }
+    if ((m = /^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/.exec(rest)) !== null) { out.push({ k: 'word', s: m[0] }); i += m[0].length; continue; }
+    if ((m = /^\.\.|^\.[A-Za-z_][A-Za-z0-9_]*|^\$[A-Za-z_][A-Za-z0-9_:]*/.exec(rest)) !== null) { out.push({ k: 'word', s: m[0] }); i += m[0].length; continue; }
+    if ((m = /^[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*/.exec(rest)) !== null) {
+      const w = m[0];
+      out.push({ k: w === 'as' ? 'as' : w === 'and' || w === 'or' ? 'op' : JQ_STOP_WORDS.has(w) ? 'stop' : 'word', s: w });
+      i += w.length; continue;
+    }
+    if (c === '(' || c === '[' || c === '{') { out.push({ k: 'open', s: c }); i++; continue; }
+    if (c === ')' || c === ']' || c === '}') { out.push({ k: 'close', s: c }); i++; continue; }
+    if (c === ';' || c === ':') { out.push({ k: 'stop', s: c }); i++; continue; }
+    if (rest.startsWith('|') && !rest.startsWith('|=')) { out.push({ k: 'stop', s: '|' }); i++; continue; }
+    const sym = JQ_SYMBOLS.find((s) => rest.startsWith(s));
+    if (sym !== undefined) { out.push({ k: 'op', s: sym }); i += sym.length; continue; }
+    out.push({ k: 'word', s: c }); i++;
+  }
+  return out;
+};
+
+/** Every `as` binding in `program` whose source term, read leftwards from the
+ *  keyword to where the term starts, holds a binary operator at depth 0: jq 1.7
+ *  binds `as` to the nearest term, jq 1.8 to the whole chain, so most of these mean
+ *  two different programs. It flags every binary operator, including one both
+ *  versions read alike (`,`), so a reader never has to know which. The source ends at an unmatched opener, a `|`, `;`, `:`,
+ *  or a keyword that precedes a term (`then`, `reduce`, …), or the start. */
+const jqAmbiguousAs = (program: string): Array<{ binding: string; op: string }> => {
+  const subs: string[] = [];
+  const t = jqTokens(program, subs);
+  const found: Array<{ binding: string; op: string }> = [];
+  t.forEach((tok, i) => {
+    if (tok.k !== 'as') return;
+    let depth = 0;
+    for (let j = i - 1; j >= 0; j--) {
+      const x = t[j] as JqTok;
+      if (x.k === 'close') depth++;
+      else if (x.k === 'open') { if (depth === 0) break; depth--; }
+      else if (depth > 0) continue;
+      else if (x.k === 'stop') break;
+      else if (x.k === 'op') { found.push({ binding: `as ${(t[i + 1] as JqTok | undefined)?.s ?? ''}`, op: x.s }); break; }
+    }
+  });
+  for (const sub of subs) found.push(...jqAmbiguousAs(sub));
+  return found;
+};
+
+/** Every jq program in a shell script: a single-quoted span on a line that holds
+ *  `jq`, and a single-quoted `NAME='…'` assignment (the programs the hook keeps
+ *  in variables). Comments and double-quoted text are skipped, so an apostrophe
+ *  in either opens nothing; a `$'…'` span is skipped with its `\'` escapes. */
+const jqPrograms = (sh: string): Array<{ name: string; body: string }> => {
+  const out: Array<{ name: string; body: string }> = [];
+  let i = 0;
+  let lineStart = 0;
+  while (i < sh.length) {
+    const c = sh[i] as string;
+    if (c === '\n') { lineStart = ++i; continue; }
+    if (c === '\\') { i += 2; continue; }
+    if (c === '#' && (i === 0 || /\s/.test(sh[i - 1] as string))) { while (i < sh.length && sh[i] !== '\n') i++; continue; }
+    if (c === '"') {
+      i++;
+      while (i < sh.length && sh[i] !== '"') { if (sh[i] === '\\') i++; if (sh[i] === '\n') lineStart = i + 1; i++; }
+      i++; continue;
+    }
+    if (c === '\'') {
+      const ansi = sh[i - 1] === '$';
+      const prefix = sh.slice(lineStart, i);
+      let j = i + 1;
+      while (j < sh.length && sh[j] !== '\'') { if (ansi && sh[j] === '\\') j++; j++; }
+      const named = /^[A-Z][A-Z0-9_]*=$/.exec(prefix);
+      if (!ansi && (named !== null || /(^|[^A-Za-z0-9_])jq([^A-Za-z0-9_]|$)/.test(prefix))) {
+        const line = sh.slice(0, i).split('\n').length;
+        out.push({ name: named !== null ? prefix.slice(0, -1) : `jq at line ${line}`, body: sh.slice(i + 1, j) });
+      }
+      for (let k = i; k < j; k++) if (sh[k] === '\n') lineStart = k + 1;
+      i = j + 1; continue;
+    }
+    i++;
+  }
+  return out;
+};
+
+describe('every jq `as $name` binding in the hook is parenthesised on its own (jq 1.8 binds `as` to the whole binary chain left of it)', () => {
+  const asBindings = (programs: Array<{ body: string }>): number =>
+    programs.reduce((n, p) => n + (p.body.match(/\bas \$/g) ?? []).length, 0);
+
+  it('the checker flags an `as` after a binary operator, whether jq 1.7 and 1.8 read it differently (`//`) or alike (`,`), and accepts a parenthesised or leading `as`', () => {
+    for (const bad of [
+      '1 + (2) as $x | $x', 'true and ((.w) + ")") as $wp | $wp',
+      'if . then 1 else 2 + (3) as $x | $x end', '"\\(1 + (2) as $x | $x)"',
+    ]) expect(jqAmbiguousAs(bad), `flagged: ${bad}`).not.toEqual([]);
+    // Measured on {"a":5,"b":2} (review 273 F5 (c)): jq 1.7 and 1.8.2 read `//` differently,
+    // `.a // (.b) as $x | [$x]` giving `5` on 1.7 and `[5]` on 1.8.2 (with a bare `| $x` body
+    // both give `5`, which hides it). They read `,` alike: `.a, (.b) as $x | [$x]` gives `5`
+    // then `[2]` on both. The checker flags both, so a reader never has to know which
+    // operators bind loosely.
+    for (const flagged of ['.a // (.b) as $x | [$x]', '.a // (.b) as $x | $x', '.a, (.b) as $x | $x']) {
+      expect(jqAmbiguousAs(flagged), `flagged: ${flagged}`).not.toEqual([]);
+    }
+    expect(jqAmbiguousAs('true and ((.w) + ")") as $wp | $wp').map((f) => f.op)).toEqual(['and']);
+    for (const ok of [
+      '1 + ((2) as $x | $x)', '(.a + .b) as $x | $x', '.x as $v | $v', 'reduce (1, 2) as $s (0; . + $s)',
+      '"a and b" as $s | $s', '.a | (.b + 1) as $y | $y', 'def f(a; b): (a + b) as $z | $z; 1',
+      '[.[] | select(. > 1) as $v | $v]', 'foreach (1, 2) as $i (0; . + $i)', '"\\((.a + 1) as $x | $x)"',
+    ]) expect(jqAmbiguousAs(ok), `accepted: ${ok}`).toEqual([]);
+  });
+
+  it('the extractor reads a jq program in a quote, a variable, a multi-line quote or after a backslash-newline, and nothing in a comment or a double quote', () => {
+    const sh = [
+      '# a jq that isn\'t here: \'x as $a\'',
+      "NAME='1 + (2) as $x | $x'",
+      "echo \"it's\" # it's a comment",
+      "v=$(jq -r --arg n \"$n\" '.a as $b",
+      "  | $b' <<<\"$p\")",
+      "printf '%s' \"$x\" | jq -c \"$DEFS\"'.k as $k | $k'",
+      // The shape the hook's program near line 1908 relies on: the program
+      // opens on the line AFTER a backslash-newline that continues `jq -r`.
+      "w=$(jq -r \\",
+      "  '.c as $c | $c' <<<\"$p\")",
+    ].join('\n');
+    expect(jqPrograms(sh).map((p) => [p.name, p.body])).toEqual([
+      ['NAME', '1 + (2) as $x | $x'], ['jq at line 4', '.a as $b\n  | $b'], ['jq at line 6', '.k as $k | $k'],
+      ['jq at line 8', '.c as $c | $c'],
+    ]);
+  });
+
+  it('no jq program in ccd/session-hook.sh binds `as` to a binary chain', () => {
+    const hook = fs.readFileSync(HOOK, 'utf8');
+    const programs = jqPrograms(hook);
+    expect(programs.map((p) => p.name), 'the merge strip is among them').toContain('MERGE_STRIP_JQ');
+    // A FLOOR, so the scan can never go vacuous: a deleted jq call lowers these, and the
+    // number is then re-measured here rather than silently accepted.
+    expect(programs.length, 'jq programs found').toBeGreaterThanOrEqual(52);
+    expect(asBindings(programs), '`as $` bindings found').toBeGreaterThanOrEqual(33);
+    // Coverage by EQUALITY, not floors: every `as $` in a non-comment line of the hook
+    // sits inside a program the extractor read, so a binding it cannot reach reds here.
+    const bindingsInHook = hook.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n').match(/\bas \$/g)!.length;
+    expect(asBindings(programs), 'every `as $` in the hook\'s non-comment lines is inside an extracted program').toBe(bindingsInHook);
+    expect(hook.split('\n').filter((l) => /\bjq\b[^'\n#]*"[^"\n]*\bas \$/.test(l)),
+      'a double-quoted jq program with a binding is outside the extractor').toEqual([]);
+    // The over-cap rule splits on FIXED strings: `splits` is a regex-global walk, measured
+    // superlinear on jq 1.7 (43 to 52 s at 100 KB of `;`), and a timeout fails the deny open.
+    expect(programs.filter((p) => p.body.includes('splits(')).map((p) => p.name),
+      'a jq program uses `splits(`: split on a fixed string with `split(` (review 267 F3)').toEqual([]);
+    expect(programs.find((p) => p.name === 'MERGE_STRIP_JQ')?.body, 'the over-cap rule splits on a fixed string').toContain('map(split($s))');
+    const findings = programs.flatMap((p) => jqAmbiguousAs(p.body).map((f) => `${p.name}: \`${f.binding}\` follows \`${f.op}\``));
+    expect(findings, 'an `as` after a binary operator reads differently on jq 1.7 and 1.8: parenthesise it on its own').toEqual([]);
   });
 });

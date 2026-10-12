@@ -1,0 +1,13 @@
+[Unit]
+Description=Sweep dead ccd pane scopes every minute, beside ccd-cap-scopes
+[Timer]
+# Its OWN timer, never ccd-cap-scopes': a slow stop or a fault here must never
+# delay capping a new scope (session-continuity spec §5.6). `OnActiveSec=`, not
+# `OnBootSec=`, for ccd-tmp-sweep.timer's reason: armed by a deploy on a box up
+# for days, a boot-relative first elapse is already past and would fire at once,
+# on top of the deploy's own supervisor sweep.
+OnActiveSec=2min
+OnUnitActiveSec=60s
+AccuracySec=10s
+[Install]
+WantedBy=timers.target

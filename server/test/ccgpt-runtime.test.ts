@@ -796,9 +796,12 @@ describe.skipIf(!PY)('ccgpt-runtime: the builder\'s decisions, over a scripted r
       'set -u', "say() { printf '%s\\n' \"$1\" >&2; }", fnSource('_rt_fail'), `RT=${JSON.stringify(rt)}`,
       ...[outside, other, inside].map((d) => `_rt_fail pip ${JSON.stringify(d)} fixture`),
     ].join('\n');
-    const r = spawnSync(BASH, ['-c', prog], { encoding: 'utf8', env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } });
+    // cwd and HOME as `runOpts` gives every sibling that passes on macOS; the
+    // stderr rides the message so a fourth line names itself (macOS run
+    // 36960555979 saw 4 lines and printed none of them).
+    const r = spawnSync(BASH, ['-c', prog], { encoding: 'utf8', cwd: home, env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home } });
     expect(r.status, r.stderr).toBe(0);
-    expect(r.stderr.split('\n').filter(Boolean)).toHaveLength(3);
+    expect(r.stderr.split('\n').filter(Boolean), r.stderr).toHaveLength(3);
     expect(existsSync(outside), 'a gen-shaped path OUTSIDE $RT was deleted').toBe(true);
     expect(existsSync(other), 'a non-generation under $RT was deleted').toBe(true);
     expect(existsSync(inside), 'control: the half-built generation itself').toBe(false);

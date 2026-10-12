@@ -90,9 +90,26 @@ const UNGATED_BY_DECISION: ReadonlySet<string> = new Set([
  * argv. `reclaim-pause` (wave 4): its route gates on
  * `capSupported(deps.fleetState, RECLAIM_PAUSE_CAP)` alone. For both, a box
  * that echoes the token necessarily dispatches the verb, so `route`'s
- * argument above holds for each of them unchanged.
+ * argument above holds for each of them unchanged. `ws-expire` (workspace
+ * lifecycle wave 3b): the expiry executor composes it only behind
+ * `capSupported(deps.fleetState, EXPIRE_CAP)`, asked again in the act's own
+ * scope (`coord/expireArchived.ts`), and the same argument holds.
+ *
+ * The four Docs verbs (docs W2, spec 2026-10-01 section 2 (a)) argue it once more: a box that echoes `docs-v1`
+ * dispatches all four at their final arity, so the token is the gate, and `capSupported` refuses on no evidence where
+ * `verbSupported` would permit. Their two call-site functions (`docs/ccdsource.ts`'s `readDocs` and `fetchDocs`)
+ * carry the token check behind a `caps` arm of their own, which this scan does not read: `docs-source.test.ts` pins
+ * that arm by behaviour.
+ *
+ * `ws-collect` (child reclamation wave 9, spec 2026-09-22 §5.10) argues it once more: the collector lane's act job
+ * (`coord/collectTempRoot.ts`'s `collectTempRoot`) composes it only behind `capSupported(deps.fleetState, COLLECT_CAP)`,
+ * asked at the job's start and again after its last await. The job's own `ws-audit` is composed in `collectAudit`, a
+ * separate function, so this scope holds no `verbSupported(` and this entry is the act site's gate here; the second
+ * ask's place is pinned in `collect-lane-scans.test.ts`.
  */
-const CAP_GATED_VERBS: ReadonlySet<string> = new Set(['route', 'ws-reclaim', 'reclaim-pause']);
+const CAP_GATED_VERBS: ReadonlySet<string> = new Set([
+  'route', 'ws-reclaim', 'reclaim-pause', 'ws-expire', 'ws-collect', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch',
+]);
 
 /**
  * Args that make each `CCD_ARGV` entry build without throwing, keyed by
@@ -183,7 +200,7 @@ function isHandlerHead(head: string): boolean {
   return /\)\s*(?::[^{]*)?\{\s*$/.test(head);
 }
 
-interface Site { file: string; line: number; key: string; verb: string; gated: boolean; scope: string | null }
+interface Site { file: string; line: number; key: string; verb: string; gated: boolean; scope: string | null; body: string }
 
 function scanCcdCallSites(text: string, file: string): Site[] {
   const code = blankCommentsAndStrings(text);
@@ -230,7 +247,7 @@ function scanCcdCallSites(text: string, file: string): Site[] {
       if (isHandlerHead(code.slice(lineStart(b), b + 1))) { open = b; break; }
     }
     if (open === null) {
-      sites.push({ file, line: lineOf(m.index), key, verb: VERB_OF[key] ?? key, gated: false, scope: null });
+      sites.push({ file, line: lineOf(m.index), key, verb: VERB_OF[key] ?? key, gated: false, scope: null, body: '' });
       continue;
     }
     let depth = 0; let end = code.length;
@@ -245,6 +262,7 @@ function scanCcdCallSites(text: string, file: string): Site[] {
       gated: /verbSupported\s*\(/.test(scopeText)
         || (CAP_GATED_VERBS.has(verb) && /capSupported\s*\(/.test(scopeText)),
       scope: text.slice(text.lastIndexOf('\n', open) + 1, open + 1).trim(),
+      body: scopeText,
     });
   }
   return sites;
@@ -392,12 +410,43 @@ describe('every ccd call site in server/src answers the version-skew question', 
     // `capSupported(RECLAIM_CAP)` — CAP_GATED_VERBS above — because a verb
     // that never existed must REFUSE on no evidence, and `verbSupported`
     // permits on none. Named here so the site cannot vanish or lose its gate.
+    // The four Docs verbs (docs W2) join for `ws-reclaim`'s reason: each is gated by `capSupported(DOCS_CAP)` in
+    // CAP_GATED_VERBS above, and naming them here reds a vanished call site or a lost gate.
+    // `ws-collect` (child reclamation wave 9) joins for the same reason: naming it reds a vanished act site or a lost gate.
 const NEW_GENERATION = ['pr-state', 'pr-open', 'ws-archive', 'ws-restore', 'ws-audit', 'ws-reap', 'project-pool',
-  'ws-reclaim'];
+  'ws-reclaim', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch', 'ws-collect'];
     for (const verb of NEW_GENERATION) {
       const sites = ALL_SITES.filter((s) => s.verb === verb);
       expect(sites.length, `${verb} has no call site at all`).toBeGreaterThan(0);
       expect(sites.filter((s) => !s.gated).map(show), verb).toEqual([]);
     }
+  });
+});
+
+// Child reclamation wave 9 (spec 2026-09-22 §5.10). The collector's audit is the OLD verb `ws-audit`, so the scan
+// above already requires `verbSupported(` in its scope. The FLAG's question, `collect-v1`, is asked there too, as
+// `learnExpiry` asks `EXPIRE_CAP` before its audit: a box that stopped advertising the token is never audited. The
+// one site is the executor's `collectAudit`, which the learning audit and the act job both call.
+// `ws-audit` itself is never added to CAP_GATED_VERBS.
+describe('every wsCollectAudit( scope asks the collector’s capability too (spec §5.10)', () => {
+  const COLLECT_GATE = /capSupported\s*\(\s*[\w.]+\s*,\s*COLLECT_CAP\s*\)/;
+  const sites = ALL_SITES.filter((s) => s.key === 'wsCollectAudit');
+
+  it('CONTROL: the gate pattern sees the call, not another token, and not prose', () => {
+    expect(COLLECT_GATE.test('if (!capSupported(deps.fleetState, COLLECT_CAP)) return x;')).toBe(true);
+    expect(COLLECT_GATE.test('if (!capSupported(deps.fleetState, RECLAIM_PAUSE_CAP)) return x;')).toBe(false);
+    const [s] = scanCcdCallSites('export function f(deps: D) {\n  // capSupported(deps.fleetState, COLLECT_CAP)\n'
+      + '  return deps.runCcd(CCD_ARGV.wsCollectAudit(id));\n}\n', 'f.ts');
+    expect(COLLECT_GATE.test(s!.body), 'a comment is not a gate').toBe(false);
+  });
+
+  it('the one site is the executor’s collectAudit, shared by the learning audit and the act job', () => {
+    expect([...new Set(sites.map((s) => s.file))]).toEqual(['coord/collectTempRoot.ts']);
+    expect(sites.length).toBe(1);
+  });
+
+  it('each holds capSupported(…, COLLECT_CAP) and verbSupported( in its own scope', () => {
+    expect(sites.filter((s) => !COLLECT_GATE.test(s.body)).map(show)).toEqual([]);
+    expect(sites.filter((s) => !/verbSupported\s*\(/.test(s.body)).map(show)).toEqual([]);
   });
 });

@@ -4,7 +4,7 @@
 // dispatch time, a mail id or time the census does not give) is marked `chosen` where it is defined.
 import { describe, it, expect } from 'vitest';
 import {
-  stallVerdict, stallFacts, stallSubjects, isStallKebab,
+  stallVerdict, stallFacts, stallSubjects, isStallKebab, stallQuietMs,
   STALL_QUIET_MS, STALL_ESCALATE_MS, STALL_OPERATOR_MS, LIMIT_HOLD_CAP_MS, AUTO_CONTINUE_RECENT_MS,
   COORD_BALL_CAP_MS, ASK_DIALOG_SLACK_MS,
   STALL_CHECK_PREFIX, STALL_REPLY_PREFIX, STALL_REPLY_WAITING_PREFIX, STALL_REPORT_PREFIX, STALL_WAIT_PREFIX,
@@ -67,7 +67,7 @@ function notice(mode: StallMode, arm: StallArm, rung: 1 | 2 | 3, key: number, at
 interface Over {
   primary?: Partial<StallRunRow>; runs?: readonly StallRunRow[]; subject?: StallSubject; worker?: StallWorker;
   mail?: readonly StallMailRow[]; notices?: readonly StallNotice[]; arming?: StallArming;
-  coordinationPaused?: boolean; coordinator?: CoordinatorState | null; activation?: StallActivation;
+  coordinationPaused?: boolean; coordinator?: CoordinatorState | null; activation?: StallActivation; quietMs?: number;
 }
 function stallInput(over: Over = {}): StallInput {
   const primary = runRow(over.primary);
@@ -80,6 +80,7 @@ function stallInput(over: Over = {}): StallInput {
     coordinationPaused: over.coordinationPaused ?? false,
     coordinator: over.coordinator ?? null,
     activation: over.activation ?? { kind: 'none' },
+    ...(over.quietMs !== undefined ? { quietMs: over.quietMs } : {}),
   };
 }
 
@@ -1937,5 +1938,46 @@ describe('dialog-cap-keyed-on-the-dialog (D-3799): the dialog cap is pushed once
     });
     expect(stallFacts(input).capKeyMs, 'CONTROL: the wait moved the cap key past the stamp').toBe(D2 + 3 * H);
     expect(stallVerdict(input, D2 + 6 * H)).toEqual(hold('dialog'));
+  });
+});
+
+// ── stall-watch settings (design 2026-10-05 §7, M9): the chosen quiet time reaches r1 and the dialog cap ─────────────
+// `StallInput.quietMs` is optional: absent reads the built-in `STALL_QUIET_MS`, so every literal above keeps its meaning.
+describe('the chosen quiet time: wave 1\'s r1 and the dialog cap read input.quietMs (stall-watch settings §7, M9)', () => {
+  const S = t('2026-09-27T00:00:00Z');   // chosen: the live word turned idle (or waiting) here, after the dispatch
+  const idle = workerAt({ live: liveWord('idle', S) });
+  const menu = workerAt({ live: liveWord('waiting', S) });
+
+  it('stallQuietMs reads the chosen value, and the built-in when none is given', () => {
+    expect(stallQuietMs(stallInput())).toBe(STALL_QUIET_MS);
+    expect(stallQuietMs(stallInput({ quietMs: 30 * MIN }))).toBe(30 * MIN);
+    expect(stallQuietMs(stallInput({ quietMs: 12 * H }))).toBe(12 * H);
+  });
+
+  it.each([
+    ['the built-in (absent)', undefined, STALL_QUIET_MS],
+    ['a chosen 30 min', 30 * MIN, 30 * MIN],
+    ['a chosen 12 h', 12 * H, 12 * H],
+  ] as const)('r1 under wave 1\'s ladder falls due at %s of quiet, not a millisecond sooner', (_name, quietMs, due) => {
+    const over: Over = quietMs === undefined ? { worker: idle } : { worker: idle, quietMs };
+    expect(stallVerdict(stallInput(over), S + due - 1)).toEqual(NONE);
+    expect(stallVerdict(stallInput(over), S + due)).toEqual(r1(RUN67_DISPATCHED));
+  });
+
+  it.each([
+    ['the built-in (absent)', undefined, STALL_QUIET_MS],
+    ['a chosen 30 min', 30 * MIN, 30 * MIN],
+    ['a chosen 12 h', 12 * H, 12 * H],
+  ] as const)('the dialog cap pushes once a dialog has stood %s, and holds before', (_name, quietMs, due) => {
+    const over: Over = quietMs === undefined ? { worker: menu } : { worker: menu, quietMs };
+    expect(stallVerdict(stallInput(over), S + due - 1)).toEqual(hold('dialog'));
+    expect(stallVerdict(stallInput(over), S + due)).toEqual(capOf('dialog-cap', S));
+  });
+
+  it('CONTROL: the two chosen values differ from the built-in on both sides, so no row above is the default in disguise', () => {
+    expect(30 * MIN).toBeLessThan(STALL_QUIET_MS);
+    expect(12 * H).toBeGreaterThan(STALL_QUIET_MS);
+    expect(stallVerdict(stallInput({ worker: idle }), S + 30 * MIN)).toEqual(NONE);
+    expect(stallVerdict(stallInput({ worker: idle, quietMs: 12 * H }), S + STALL_QUIET_MS)).toEqual(NONE);
   });
 });

@@ -818,3 +818,52 @@ describe('mail-stuck under the mail gate in force (gate-held-mail-is-not-stuck (
     expect(stallMailStuckVerdicts(input, T + DELEGATE_CAP_MS + MAIL_STUCK_MS)).toEqual([stuck(3148), stuck(3156), stuck(3177)]);
   });
 });
+
+// ── busy-clock-starts-when-busy-delivery-starts (D-4024): under `busy`, mail-stuck's idle clock is bounded by busySince ──
+// stall-watch settings §9. `StallArming.busySince` is when the mail sweep first applied busy delivery after a non-busy
+// mode in this server's life. Absent, the clock is today's (the stop). A number bounds it: max(stop, busySince), so held
+// mail gets the full MAIL_STUCK_MS from the moment busy delivery began. The busy-shadow line is untouched.
+describe('mail-stuck under busy delivery is timed from when it began (busy-clock-starts-when-busy-delivery-starts (D-4024))', () => {
+  const doneAt = (stopAt: number): TurnMarkRead => mark({ at: stopAt, turnAt: stopAt - 10 * MIN, stopAt });
+  /** A worker whose turn ended at `stopAt`, live `busy` since five minutes later; one mail queued at `mailAt`, still queued. */
+  const busyOver = (stopAt: number, mailAt: number, arming: StallArming): StallSessionInput => sessionInput({
+    worker: workerAt('busy', stopAt + 5 * MIN), mark: doneAt(stopAt), arming,
+    mail: [mailRow(501, mailAt, COORD, WORKER, 'brief', 67)], deliveries: [delivery(901, 501)],
+  });
+  const stuck: StallVerdict = { act: 'notify', arm: 'mail-stuck', rung: 1, key: 901, to: 'operator' };
+  const STOP = NOW - 2 * H;
+  const MAIL_AT = NOW - 3 * H;
+
+  it('busySince absent under busy: the stop, exactly today\'s clock', () => {
+    expect(stallMailStuckVerdicts(busyOver(STOP, MAIL_AT, { ...W2, mailMode: 'busy' }), NOW)).toEqual([stuck]);
+  });
+
+  it('busySince after the stop bounds the clock: nothing reads stuck until MAIL_STUCK_MS after busy delivery began', () => {
+    const since = NOW - 30 * MIN;
+    const a: StallArming = { ...W2, mailMode: 'busy', busySince: since };
+    expect(stallMailStuckVerdicts(busyOver(STOP, MAIL_AT, a), NOW), 'half an hour into busy delivery').toEqual([NONE]);
+    expect(stallMailStuckVerdicts(busyOver(STOP, MAIL_AT, a), since + MAIL_STUCK_MS - 1), 'a millisecond short').toEqual([NONE]);
+    expect(stallMailStuckVerdicts(busyOver(STOP, MAIL_AT, a), since + MAIL_STUCK_MS), 'at the bound').toEqual([stuck]);
+  });
+
+  it('busySince before the stop: the stop still bounds it (max, not busySince alone)', () => {
+    const stop = NOW - 60 * MIN;   // an hour ago: inside MAIL_STUCK_MS, so nothing is stuck yet on the stop's clock
+    const a: StallArming = { ...W2, mailMode: 'busy', busySince: NOW - 2 * H };
+    expect(stallMailStuckVerdicts(busyOver(stop, MAIL_AT, a), NOW)).toEqual([NONE]);
+    expect(stallMailStuckVerdicts(busyOver(stop, MAIL_AT, a), stop + MAIL_STUCK_MS)).toEqual([stuck]);
+  });
+
+  it('busy-shadow ignores busySince: the clock starts DELEGATE_CAP_MS after the stop, as the gate holds that mail', () => {
+    const a: StallArming = { ...W2, mailMode: 'busy-shadow', busySince: NOW - 3 * H };
+    expect(stallMailStuckVerdicts(busyOver(STOP, MAIL_AT, a), NOW)).toEqual([NONE]);
+    expect(stallMailStuckVerdicts(busyOver(STOP, MAIL_AT, a), STOP + DELEGATE_CAP_MS + MAIL_STUCK_MS - 1)).toEqual([NONE]);
+    expect(stallMailStuckVerdicts(busyOver(STOP, MAIL_AT, a), STOP + DELEGATE_CAP_MS + MAIL_STUCK_MS)).toEqual([stuck]);
+  });
+
+  it('an idle or shell word is untouched by busySince: the live stamp, as today', () => {
+    const a: StallArming = { ...W2, mailMode: 'busy', busySince: NOW - 10 * MIN };
+    const idle = sessionInput({ worker: workerAt('idle', STOP), mark: doneAt(STOP), arming: a,
+      mail: [mailRow(501, MAIL_AT, COORD, WORKER, 'brief', 67)], deliveries: [delivery(901, 501)] });
+    expect(stallMailStuckVerdicts(idle, NOW)).toEqual([stuck]);
+  });
+});

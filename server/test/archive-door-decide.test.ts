@@ -136,7 +136,7 @@ describe('decideArchive — every check that can refuse runs before any act', ()
     expect(await decideArchive(port({ worker: { ok: true, siblings: [run(4)] } }).p, 'demo-a', NONE, IDLE_WS))
       .toEqual({ ok: false, reply: { status: 409, body: { ok: false, error: 'run-open', runs: [run(4)] } } });
     expect(await decideArchive(port({ worker: UNREADABLE }).p, 'demo-a', NONE, IDLE_WS))
-      .toEqual({ ok: false, reply: { status: 409, body: { ok: false, error: 'run-open', runs: [] } } });
+      .toEqual({ ok: false, reply: { status: 409, body: { ok: false, error: 'run-open', runs: [], detail: 'runs.wave' } } });
     const forced = port({ worker: { ok: true, siblings: [run(4)] } });
     expect(await decideArchive(forced.p, 'demo-a', { ...NONE, force: true }, IDLE_WS)).toMatchObject({ ok: true });
     expect(forced.seen).toEqual(['claimant:demo-a']);
@@ -152,16 +152,16 @@ describe('decideArchive — every check that can refuse runs before any act', ()
   it('an unreadable store refuses fail-shut with `runs: []` — even with `programme:"end"`', async () => {
     const { p, seen } = port({ claimed: UNREADABLE });
     expect(await decideArchive(p, 'demo-c', { ...NONE, programmeEnd: true }, IDLE_WS)).toEqual({ ok: false,
-      reply: { status: 409, body: { ok: false, error: 'coordinator-has-open-runs', runs: [] } } });
+      reply: { status: 409, body: { ok: false, error: 'coordinator-has-open-runs', runs: [], detail: 'runs.wave' } } });
     expect(seen.filter((s) => s.startsWith('abandon'))).toEqual([]);
   });
 
   it('a store read that THROWS is an unreadable store — the same fail-shut refusals, never a rejection (a 500)', async () => {
     expect(await decideArchive(port({ throws: { worker: true } }).p, 'demo-a', NONE, IDLE_WS))
-      .toEqual({ ok: false, reply: { status: 409, body: { ok: false, error: 'run-open', runs: [] } } });
+      .toEqual({ ok: false, reply: { status: 409, body: { ok: false, error: 'run-open', runs: [], detail: 'database is not open' } } });
     const { p, seen } = port({ throws: { claimed: true } });
     expect(await decideArchive(p, 'demo-c', { ...NONE, force: true, programmeEnd: true }, IDLE_WS)).toEqual({ ok: false,
-      reply: { status: 409, body: { ok: false, error: 'coordinator-has-open-runs', runs: [] } } });
+      reply: { status: 409, body: { ok: false, error: 'coordinator-has-open-runs', runs: [], detail: 'database is not open' } } });
     expect(seen).toEqual(['claimant:demo-c']);
   });
 

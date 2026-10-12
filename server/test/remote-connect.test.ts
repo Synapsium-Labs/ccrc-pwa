@@ -41,15 +41,16 @@ describe('connectFleet — connection lifecycle', () => {
     // `rosterFp`/`build`, a real agent NEVER omits this field — the fixture
     // home has no `~/.cc-sessions/pool-epoch`, so `readObservedEpoch` answers
     // "never synced" (`null`), sent on the wire explicitly, not "no evidence".
-    // `agentOps: ['update']`: the REAL agent advertises the one op it answers
-    // beyond the closed set (design 2026-09-20 §10, programme wave 5 Task 2),
-    // read through `readReadyOps`. This literal read `[]` while the agent sent
+    // `agentOps: ['update', 'token-sync']`: the REAL agent advertises the ops it
+    // answers beyond the closed set (design 2026-09-20 §10, programme wave 5
+    // Task 2; `token-sync` from box-token lifecycle wave 1, spec 4.4), read
+    // through `readReadyOps`. This literal read `[]` while the agent sent
     // no `ops`; a ready frame that stops sending the word reds HERE — §18 "an
     // agent without the op is never sent it", on the agent's side.
     await vi.waitFor(
       () => expect(fleet!.state).toEqual({
         connected: true, downSince: null, ccdVerbs: [], rosterFp: null, build: null, observedEpoch: null,
-        agentOps: ['update'],
+        agentOps: ['update', 'token-sync'],
       }),
       { timeout: 3000 });
   });

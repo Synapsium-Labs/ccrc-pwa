@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { groupFleet, releasedByProgramme } from '../src/fleet/groupFleet';
+import { groupFleet, inReleasedFold, releasedByProgramme } from '../src/fleet/groupFleet';
 import type { FleetSession, ReleasedFrom } from '../../shared/api';
 
 const s = (over: Partial<FleetSession>): FleetSession => ({
@@ -337,6 +337,19 @@ describe('the Archived fold takes stopped main checkouts (workspace lifecycle sp
     const [g] = groupFleet([ws('demo-r', { status: 'dead', archivedAt: 1, bucket: 'archived', bucketSince: 10,
       releasedFrom: released })], []);
     expect(g!.archived.map((x) => x.id)).toEqual(['demo-r']);
+    expect(g!.released).toEqual([]);
+  });
+
+  // FM7 (workspace lifecycle wave 3b, the carried follow-up): the two folds are disjoint BY THE PWA'S OWN PREDICATES,
+  // not only because the server leaves `releasedFrom` null on an archived row. A row the wire marks released that is
+  // ALSO in the Archived fold — a stopped main checkout, whose bucket is `dead`, not `archived` — sits in Archived
+  // alone: `inReleasedFold` excludes `inArchivedFold`, the one predicate, never the bucket by hand.
+  it('a stopped main checkout the wire calls released is in Archived alone — the folds never share a row (FM7)', () => {
+    const released = { runId: 4, program: 'lifecycle', programTitle: null, claimedBy: 'demo-c', closedAt: 9, child: false };
+    const row = main('claude2-demo', { stoppedBy: STOP(5), releasedFrom: released });
+    expect(inReleasedFold(row)).toBe(false);
+    const [g] = groupFleet([row], []);
+    expect(g!.archived.map((x) => x.id)).toEqual(['claude2-demo']);
     expect(g!.released).toEqual([]);
   });
 

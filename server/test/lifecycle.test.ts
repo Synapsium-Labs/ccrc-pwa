@@ -7,12 +7,13 @@ import { buildServer } from '../src/server.js';
 import { loadConfig, type CcrcConfig } from '../src/config.js';
 import { Tmux, UNMEASURED, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
-import { ccd, ccdRunner, cutShort, listProjects, type CcdResult } from '../src/lifecycle.js';
+import { ccd, ccdEnding, ccdRunner, cutShort, listProjects, type CcdEnding, type CcdResult } from '../src/lifecycle.js';
 import { CCD_ARGV } from '../src/ccdargv.js';
 import { readLocalCcdCaps } from '../src/localcaps.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import type { BuildInfo } from '../../shared/buildinfo.js';
 import { LIFECYCLE } from '../../shared/lifecycle.js';
+import { RUN_PREFIX, RUN_QUIET_S } from './run-tmp.globalsetup.mjs';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import type { FleetReadiness } from '../src/readiness.js';
@@ -1015,6 +1016,16 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.collector).toContain('ccd-tmp-sweep');
     expect(c!.root).toContain('claude-<uid>');
   });
+  it('declares the pane-scope sweep\'s verdict record, a rolling class its own writer rewrites', () => {
+    // Session-continuity wave 4: `ccd-scope-sweep` keeps one record in the
+    // runtime dir, and `ccrc doctor` reads it. An unassigned artifact class is a
+    // defect (policy §1.2), so it is declared the day it ships.
+    const c = LIFECYCLE.find((x) => x.name === 'scope-sweep-verdicts');
+    expect(c, 'shared/lifecycle.ts declares no scope-sweep-verdicts class').toBeTruthy();
+    expect(c!.pattern).toBe('R');
+    expect(c!.creators).toEqual(['ccd-scope-sweep']);
+    expect(c!.root).toBe('$XDG_RUNTIME_DIR/ccd-scope-sweep.state');
+  });
   it('declares project-pool-tag, and it is a collector-less class with an operator ruling', () => {
     // `docs/superpowers/specs/2026-08-11-artifact-lifecycle-policy.md` §1.2
     // makes an unassigned artifact class a defect, and this one has NO
@@ -1035,5 +1046,158 @@ describe('shared/lifecycle.ts — the policy §4(a) manifest', () => {
     expect(c!.ruling).toContain('ccd project-pool');
     expect(c!.ruling).toContain('pools-stale');
     expect(c!.root).toContain('pools/');
+  });
+
+  // ── ccrc history (spec 2026-10-05 §9.4, pin O17) ────────────────────────
+  // Thirteen classes, landed across six PRs. `LifecycleClass` has no "lands in" field — the manifest says what
+  // IS, not what a plan will add — so which PR adds which row lives here, beside the assertion that reads it.
+  // Each later PR appends its key to HISTORY_LANDED in the commit that adds its rows.
+  const HISTORY_ROWS_BY_PR = {
+    B1: ['history-store', 'history-migration-snapshot', 'history-store-id', 'history-spool', 'history-journal', 'history-switches'],
+    B2: ['history-backups'],
+    B3: ['history-scope-markers', 'history-card-files'],
+    B4: ['history-export'],
+    W2: ['history-recall-off', 'history-replay-out'],
+    W3: ['history-steer-files'],
+  } as const;
+  type HistoryPr = keyof typeof HISTORY_ROWS_BY_PR;
+  const HISTORY_LANDED: readonly HistoryPr[] = ['B1'];
+
+  it('the history classes are §9.4\'s thirteen, each declared by the PR its Lands-in column names, and none before it (O17)', () => {
+    const all: string[] = Object.values(HISTORY_ROWS_BY_PR).flat();
+    expect(new Set(all).size, 'a history class is listed under two PRs').toBe(all.length);
+    expect(all).toHaveLength(13);
+    const declared = new Set(LIFECYCLE.map((c) => c.name));
+    for (const pr of Object.keys(HISTORY_ROWS_BY_PR) as HistoryPr[]) {
+      for (const n of HISTORY_ROWS_BY_PR[pr]) {
+        expect(declared.has(n), HISTORY_LANDED.includes(pr)
+          ? `${n} lands in ${pr}, which has landed, and shared/lifecycle.ts declares no such class`
+          : `${n} lands in ${pr} and is declared before it`).toBe(HISTORY_LANDED.includes(pr));
+      }
+    }
+    expect(LIFECYCLE.map((c) => c.name).filter((n) => n.startsWith('history-')).sort(), 'a history class outside the table')
+      .toEqual(HISTORY_LANDED.flatMap((pr) => [...HISTORY_ROWS_BY_PR[pr]]).sort());
+  });
+
+  it('every history class names its creators and its tier', () => {
+    for (const c of LIFECYCLE.filter((x) => x.name.startsWith('history-'))) {
+      expect(c.creators.length, `${c.name} names no creator`).toBeGreaterThan(0);
+      for (const w of c.creators) expect(w.trim(), `${c.name} has a blank creator`).not.toBe('');
+      expect(c.tier.trim(), `${c.name} has no tier`).not.toBe('');
+      expect(c.bound.trim(), `${c.name} has no bound`).not.toBe('');
+    }
+  });
+
+  it('declares history-store: an O class whose collector is the operator verb prune, created by the sweep through store.mjs', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-store');
+    expect(c, 'shared/lifecycle.ts declares no history-store class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.creators).toEqual(['ccd/history/sweep.mjs (through store.mjs)']);
+    expect(c!.collector).toContain('ccrc history prune');
+    expect(c!.collector).toContain('stale temp');
+    expect(c!.root).toContain('~/.ccrc/history/db/history.db');
+    expect(c!.root).toContain('history.db.new.<pid>');
+    expect(c!.root).toContain('.history.db.restore.<pid>');
+    expect(c!.tier).toContain('default 50');
+  });
+
+  it('declares history-migration-snapshot: an R class the sweep collects, keeping the newest snapshot', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-migration-snapshot');
+    expect(c, 'shared/lifecycle.ts declares no history-migration-snapshot class').toBeTruthy();
+    expect(c!.pattern).toBe('R');
+    expect(c!.creators).toEqual(['ccd/history/sweep.mjs']);
+    expect(c!.collector).toContain('ccd-history-sweep');
+    expect(c!.collector).toContain('keeps the newest');
+    expect(c!.root).toContain('backups/pre-v<N>.db');
+    expect(c!.root).toContain('.pre-v<N>.attempt');
+  });
+
+  it('declares history-store-id: collector-less, kept with the store and removed only with it', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-store-id');
+    expect(c, 'shared/lifecycle.ts declares no history-store-id class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.collector).toBeNull();
+    expect(c!.ruling).toContain('kept with the store; removed only with it');
+    for (const f of ['store.id', 'store.writer', 'store.id.pending', 'op']) expect(c!.root).toContain(f);
+  });
+
+  it('declares history-spool: an R class written by the hook, the CLI and the sweep, collected by the two-phase drain', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-spool');
+    expect(c, 'shared/lifecycle.ts declares no history-spool class').toBeTruthy();
+    expect(c!.pattern).toBe('R');
+    expect(c!.creators).toEqual(['ccd/session-hook.sh', 'ccd/history/cli.mjs', 'ccd/history/sweep.mjs']);
+    expect(c!.collector).toContain('two-phase drain');
+    expect(c!.collector).toContain('journaled and fsynced before');
+    expect(c!.root).toContain('~/.ccrc/history/spool/');
+    expect(c!.root).toContain('.draining/');
+  });
+
+  it('declares history-journal: collector-less, removed only with the store by --purge --purge-history', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-journal');
+    expect(c, 'shared/lifecycle.ts declares no history-journal class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.collector).toBeNull();
+    expect(c!.ruling).toContain('kept with the store; removed only with it');
+    expect(c!.ruling).toContain('--purge --purge-history');
+    expect(c!.root).toBe('~/.ccrc/history/journal/<store_id>/<YYYY-MM>.<writer>.jsonl');
+    expect(c!.tier).toContain('journal-growth');
+  });
+
+  it('declares history-switches: operator files with no writer in the tree, touched by hand', () => {
+    const c = LIFECYCLE.find((x) => x.name === 'history-switches');
+    expect(c, 'shared/lifecycle.ts declares no history-switches class').toBeTruthy();
+    expect(c!.pattern).toBe('O');
+    expect(c!.creators).toEqual(['operator shell']);
+    expect(c!.collector).toBeNull();
+    expect(c!.ruling).toContain('touched by hand; persists until removed');
+    // B1's two; W2 adds headless-on and W3 the steer markers, each to this root in its own PR
+    expect(c!.root).toBe('~/.ccrc/history-off, ~/.ccrc/history-max-gb');
+  });
+
+  it('declares the server suite\'s per-run temp parent, an E class its own creator collects (#316)', () => {
+    // One `ccrc-testrun-XXXXXX` directory per server vitest run, removed at teardown, by the signal arm, or by a
+    // later run's reap. L0 cannot import the prefix, so the row's `root` is the one textual second copy of it,
+    // and this case is what keeps the two in step. The quiet window has no copy at all: the row names it.
+    const c = LIFECYCLE.find((x) => x.name === 'server-test-run-dirs');
+    expect(c, 'shared/lifecycle.ts declares no server-test-run-dirs class').toBeTruthy();
+    expect(c!.pattern).toBe('E');
+    expect(c!.root).toContain(RUN_PREFIX);
+    expect(c!.collector).toContain('run-tmp.globalsetup.mjs');
+    expect(c!.collector).toContain('RUN_QUIET_S');
+    expect(`${c!.collector} ${c!.bound}`, 'the row carries a copy of RUN_QUIET_S\'s number').not.toContain(String(RUN_QUIET_S));
+  });
+});
+
+describe('docs W2 — ccdEnding: the single reader of killed and signal, and cutShort read through it', () => {
+  const r = (killed: CcdResult['killed'], signal: CcdResult['signal']): CcdResult =>
+    ({ ok: false, stdout: '', stderr: '', killed, signal });
+  const U = UNMEASURED;
+  // Every (killed, signal) cell, killed in {true, false, UNMEASURED} by signal in {null, SIGKILL, SIGTERM, UNMEASURED}.
+  // The UNMEASURED signal column is the token trap: `UNMEASURED` is a string, so a reader that tests the signal by
+  // its javascript type reads the token as a signal name.
+  const TABLE: readonly (readonly [CcdResult['killed'], CcdResult['signal'], CcdEnding])[] = [
+    [true, null, { kind: 'deadline' }],
+    [true, 'SIGKILL', { kind: 'deadline' }],
+    [true, 'SIGTERM', { kind: 'deadline' }],
+    [true, U, { kind: 'deadline' }],
+    [false, null, { kind: 'exited' }],
+    [false, 'SIGKILL', { kind: 'signal', signal: 'SIGKILL' }],
+    [false, 'SIGTERM', { kind: 'signal', signal: 'SIGTERM' }],
+    [false, U, { kind: 'unmeasured' }],
+    [U, null, { kind: 'exited' }],
+    [U, 'SIGKILL', { kind: 'signal', signal: 'SIGKILL' }],
+    [U, 'SIGTERM', { kind: 'signal', signal: 'SIGTERM' }],
+    [U, U, { kind: 'unmeasured' }],
+  ];
+
+  it.each(TABLE)('killed %s, signal %s ends as %j', (killed, signal, want) => {
+    expect(ccdEnding(r(killed, signal))).toEqual(want);
+  });
+
+  it('cutShort answers what the ending says, cell for cell: deadline and signal adopt, unmeasured is UNMEASURED', () => {
+    for (const [killed, signal, ending] of TABLE) {
+      const want = ending.kind === 'unmeasured' ? UNMEASURED : ending.kind !== 'exited';
+      expect(cutShort(r(killed, signal)), `killed ${String(killed)}, signal ${String(signal)}`).toBe(want);
+    }
   });
 });

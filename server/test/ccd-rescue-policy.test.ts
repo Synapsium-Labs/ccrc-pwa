@@ -87,7 +87,10 @@ const DRAFT_SAYS_IT = `${STALLED.split('\n')[0]}\n${BORDER}\n❯ ok, continuing 
 /** tmux answers ONE pane for every capture — `pane`, written to `$HOME/pane.txt`
  *  line for line — and, while `TMUX_CREATED` is set, the pane's
  *  `session_created`; `_pane_box_draft` finds no draft; the dispatch and every
- *  keystroke LOG. `target` stubs `_swap_target` (null = leave it real). */
+ *  keystroke LOG. `target` stubs `_swap_target` (null = leave it real). The
+ *  dispatch also LANDS, as the detached `cmd_swap` does: it writes that verb's
+ *  own `swap <id>:` line and ends an open wait `swap` — since wave 3 the rescue
+ *  arm writes no end itself, and rule 3 counts a rescue only once it landed. */
 const STUBS = (pane: string, target: string | null = 'claude-a'): string => {
   fs.writeFileSync(path.join(h.home, 'pane.txt'), pane + '\n');
   return `
@@ -96,7 +99,8 @@ const STUBS = (pane: string, target: string | null = 'claude-a'): string => {
     display-message) [ -n "\${TMUX_CREATED:-}" ] && echo "$TMUX_CREATED" ;; esac; return 0; };
   _pane_box_draft() { printf ''; };
   ${target === null ? '' : `_swap_target() { [[ -n ${JSON.stringify(target)} ]] && echo ${JSON.stringify(target)}; return 0; };`}
-  _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };`;
+  _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls";
+    echo "$(date '+%F %T') swap $1: $(_reg_get "$1" wrapper) -> $2 (uuid ${UUID})" >> "$REG/swap.log"; _rescuewait_close "$1" swap; };`;
 };
 /** This pane's process was born a day ago — before every row a case writes. */
 const BORN = (): Record<string, string> => ({ TMUX_CREATED: String(now() - 86400) });
@@ -725,9 +729,17 @@ describe('a completed swap ends an open wait as a swap, whoever asked for it', (
 
 // ── RULE 3 — spread, do not bounce, chain-wait ────────────────────────────────
 
-/** A swap.log line at `ago` seconds in the past, in the log's own LOCAL-time format. */
-const pastLog = (ago: number, rest: string): void => {
-  h.sh(`printf '%(%F %T)T %s\\n' "$(( $(date +%s) - ${ago} ))" ${JSON.stringify(rest)} >> "$REG/swap.log"`);
+/** A swap.log line at `ago` seconds in the past, in the log's own LOCAL-time format.
+ *  A rescue of THIS session is written as it LANDED — its `auto-rescue` line and,
+ *  five seconds later, `cmd_swap`'s own landing line — because rule 3 counts only
+ *  those (wave 3); `dispatchedOnly` writes the dispatch alone, a swap that was refused. */
+const pastLog = (ago: number, rest: string, dispatchedOnly = false): void => {
+  const at = (a: number, line: string): void => {
+    h.sh(`printf '%(%F %T)T %s\\n' "$(( $(date +%s) - ${a} ))" ${JSON.stringify(line)} >> "$REG/swap.log"`);
+  };
+  at(ago, rest);
+  const m = new RegExp(`^auto-rescue ${ID}: (\\S+) \\(blocked\\) -> (\\S+) `).exec(rest);
+  if (m && !dispatchedOnly) at(ago - 5, `swap ${ID}: ${m[1]} -> ${m[2]} (uuid ${UUID})`);
 };
 
 describe('rule 3: spread, no bounce, and the chain wait', () => {
@@ -1117,5 +1129,88 @@ describe('the do-not-bounce strand names the account it will not take back', () 
     expect(ask('claude-b', 'claude-a'), 'room the skip did not remove').toBe('1|');
     expect(ask('', 'claude-a'), 'no room at all').toBe('1|');
     expect(ask('claude', 'claude'), 'the account it sits on').toBe('1|');
+  });
+});
+
+// ── WAVE 2'S RESIDUE (review 246, carried to wave 3's first commit) ───────────
+// F1: the rescue arm writes no `end=swap` — `_dispatch_swap` only starts a
+// detached unit, and `cmd_swap` can still refuse; the wait ends `swap` at the
+// landing alone. Minor 5, decided with it: rule 3 counts a rescue, and marks the
+// account it left, only once that landing line follows it. F2: the do-not-bounce
+// cause names the probe's BEST account with room, which may be one of several.
+// F5: a not-blocked tick with no record never forks into the close. Minor 3: a
+// forged `reset=` cannot crash the history read.
+describe('wave 2\'s residue: the wait ends at the landing, and rule 3 counts landed rescues', () => {
+  const lanes = (): void => {
+    const t = now();
+    for (const [w, five] of [['claude', 100], ['claude-a', 10], ['claude-b', 20], ['claude-d', 30]] as const) {
+      fs.writeFileSync(path.join(h.home, '.cc-limits', `${w}.json`),
+        JSON.stringify({ five, seven: 5, ts: t, fiveResetAt: t + 10000, sevenResetAt: t + 400000 }));
+    }
+  };
+
+  it('a REFUSED auto-rescue leaves the wait open: neither the rescue arm nor the refusal writes an end', () => {
+    seed(); const t = now(); const R = t - 30;
+    writeTranscript([limitRow(t - 500, R, 'five_hour')]);
+    openWait('noroom', t - 500, R);
+    // The REAL cmd_swap behind the dispatch, refused at its pre-flight (no
+    // transcript found for the uuid): nothing moves, and `_swap_refuse` restarts
+    // the session where it was.
+    const REFUSED = `_dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls";
+      systemctl() { :; }; launchctl() { :; }; sleep() { :; }; _transcript_matches() { :; };
+      CCD_SWAP_AUTO=1 TMUX= cmd_swap "$1" "$2" >/dev/null 2>&1; };`;
+    h.sh(`${STUBS(STALLED, 'claude-a')} ${REFUSED} _auto_swap_check ${ID}`, BORN());
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a`]);
+    expect(h.reg(ID, 'wrapper'), 'nothing moved').toBe('claude');
+    expect(fs.existsSync(regFile(`${ID}.swapblocked`)), 'the swap was refused').toBe(true);
+    expect(field(h.reg(ID, 'rescuewait'), 'state')).toBe('open');
+    expect(logLines('rescuewait-end'), 'stage 4 would count a move that never happened').toEqual([]);
+  });
+
+  it('a dispatched rescue that never landed neither counts toward the chain wait nor marks the account it left', () => {
+    seed(); lanes(); const t = now();
+    writeTranscript([limitRow(t - 5, t + 9000, 'five_hour')]);
+    for (const ago of [3000, 2500, 2000]) pastLog(ago, `auto-rescue ${ID}: claude-a (blocked) -> claude [home=claude]`, true);
+    pastLog(1990, `swap ${ID}: claude-a -> claude-b (uuid ${UUID})`);   // a landing of ANOTHER move binds none of them
+    tick(STALLED, null);
+    expect(h.reg(ID, 'rescuewait'), 'three refused dispatches took a chain wait').toBeNull();
+    expect(dispatches(), 'claude-a was never left, so it is not skipped').toEqual([`dispatch ${ID} -> claude-a`]);
+  });
+
+  it('after two rescues the do-not-bounce cause names the BEST account with room, never "the only" one', () => {
+    seed(); const t = now();
+    writeTranscript([limitRow(t - 5, t + 9000, 'five_hour')]);
+    for (const [w, five] of [['claude', 100], ['claude-a', 10], ['claude-b', 20], ['claude-d', 100]] as const) {
+      fs.writeFileSync(path.join(h.home, '.cc-limits', `${w}.json`),
+        JSON.stringify({ five, seven: 5, ts: t, fiveResetAt: t + 10000, sevenResetAt: t + 400000 }));
+    }
+    pastLog(1200, `auto-rescue ${ID}: claude-b (blocked) -> claude [home=claude]`);
+    pastLog(900, `auto-rescue ${ID}: claude-a (blocked) -> claude [home=claude]`);
+    tick(STALLED, null);
+    expect(dispatches()).toEqual([]);
+    const marker = fs.readFileSync(regFile(`${ID}.stranded`), 'utf8');
+    expect(marker).toMatch(/its best account with room, claude-a,/);
+    expect(marker).not.toMatch(/only account/);
+  });
+
+  it('a not-blocked tick with no record never reaches the close; with an open record it still ends it `clear`', () => {
+    seed();
+    const TRACED = `eval "$(declare -f _rescuewait_close | sed '1s/^_rescuewait_close/_rwc_real/')";
+      _rescuewait_close() { echo "close $2" >> "$HOME/ccd-calls"; _rwc_real "$@"; };`;
+    h.sh(`${STUBS(PROMPT)} ${TRACED} _auto_swap_check ${ID}`, BORN());
+    expect(h.calls().filter((l) => l.startsWith('close ')), 'a fork on every tick of every session').toEqual([]);
+    openWait('near', now() - 100, now() + 200);
+    h.sh(`${STUBS(PROMPT)} ${TRACED} _auto_swap_check ${ID}`, BORN());
+    expect(h.calls().filter((l) => l.startsWith('close '))).toEqual(['close clear']);
+    expect(field(h.reg(ID, 'rescuewait'), 'end')).toBe('clear');
+  });
+
+  it('a forged reset= of 5000 digits is no reset: the history is measured and the account stays skipped', () => {
+    seed();
+    // Leading zeros: its first twelve digits alone would read as a reset long
+    // past, which would lift the skip — so only a cap that refuses a thirteenth
+    // digit keeps the answer, not the cap alone.
+    pastLog(900, `auto-rescue ${ID}: claude-a (blocked) -> claude [home=claude] via=transcript reset=${'0'.repeat(12)}${'1'.repeat(4988)} type=five_hour row=1`);
+    expect(h.sh(`_rescue_history ${ID}; echo "$?|$RESCUE_COUNT|$RESCUE_SKIP_LEFT"`)).toBe('0|1|claude-a');
   });
 });

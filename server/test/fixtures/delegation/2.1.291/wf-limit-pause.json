@@ -1,0 +1,229 @@
+{
+ "v": 1,
+ "version": "2.1.291",
+ "scenario": "wf-limit-pause",
+ "labels": [
+  "main-call",
+  "l1-limited",
+  "l1-done"
+ ],
+ "notes": [],
+ "events": [
+  {
+   "seq": 1,
+   "dtMs": 0,
+   "event": "SessionStart",
+   "envSid": "00321b1f-a347-427f-9981-212d13e8fb6f",
+   "payload": {
+    "session_id": "00321b1f-a347-427f-9981-212d13e8fb6f",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/00321b1f-a347-427f-9981-212d13e8fb6f.jsonl",
+    "cwd": "/rig/repo",
+    "hook_event_name": "SessionStart",
+    "source": "startup",
+    "model": "claude-opus-5-5"
+   }
+  },
+  {
+   "seq": 2,
+   "dtMs": 634,
+   "event": "UserPromptSubmit",
+   "envSid": "00321b1f-a347-427f-9981-212d13e8fb6f",
+   "payload": {
+    "session_id": "00321b1f-a347-427f-9981-212d13e8fb6f",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/00321b1f-a347-427f-9981-212d13e8fb6f.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "6560227e-f0fb-49e9-ac45-0bcfefd02939",
+    "permission_mode": "default",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "dlg wf-limit-pause"
+   }
+  },
+  {
+   "seq": 3,
+   "dtMs": 1498,
+   "event": "PreToolUse",
+   "envSid": "00321b1f-a347-427f-9981-212d13e8fb6f",
+   "payload": {
+    "session_id": "00321b1f-a347-427f-9981-212d13e8fb6f",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/00321b1f-a347-427f-9981-212d13e8fb6f.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "6560227e-f0fb-49e9-ac45-0bcfefd02939",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PreToolUse",
+    "tool_name": "Workflow",
+    "tool_input": {
+     "script": "export const meta = { name: 'dlgwfl', description: 'dlg wf limit' }\nconst r = await agent('dlg-wf-l1', { label: 'l1', isolation: 'worktree' })\nreturn r\n"
+    },
+    "tool_use_id": "toolu_rig000001"
+   }
+  },
+  {
+   "seq": 4,
+   "dtMs": 1616,
+   "event": "PostToolUse",
+   "envSid": "00321b1f-a347-427f-9981-212d13e8fb6f",
+   "payload": {
+    "session_id": "00321b1f-a347-427f-9981-212d13e8fb6f",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/00321b1f-a347-427f-9981-212d13e8fb6f.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "6560227e-f0fb-49e9-ac45-0bcfefd02939",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "PostToolUse",
+    "tool_name": "Workflow",
+    "tool_input": {
+     "script": "export const meta = { name: 'dlgwfl', description: 'dlg wf limit' }\nconst r = await agent('dlg-wf-l1', { label: 'l1', isolation: 'worktree' })\nreturn r\n"
+    },
+    "tool_response": {
+     "status": "async_launched",
+     "taskId": "wf1fl6vbt",
+     "taskType": "local_workflow",
+     "workflowName": "dlgwfl",
+     "runId": "wf_34c030b1-88b",
+     "summary": "dlg wf limit",
+     "transcriptDir": "/rig/fixhome/cfg/projects/-rig-repo/00321b1f-a347-427f-9981-212d13e8fb6f/subagents/workflows/wf_34c030b1-88b",
+     "scriptPath": "/rig/fixhome/cfg/projects/-rig-repo/00321b1f-a347-427f-9981-212d13e8fb6f/workflows/scripts/dlgwfl-wf_34c030b1-88b.js"
+    },
+    "tool_use_id": "toolu_rig000001",
+    "duration_ms": 8
+   }
+  },
+  {
+   "seq": 5,
+   "dtMs": 2259,
+   "event": "Stop",
+   "envSid": "00321b1f-a347-427f-9981-212d13e8fb6f",
+   "payload": {
+    "session_id": "00321b1f-a347-427f-9981-212d13e8fb6f",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/00321b1f-a347-427f-9981-212d13e8fb6f.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "6560227e-f0fb-49e9-ac45-0bcfefd02939",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "DLG-WAIT",
+    "background_tasks": [
+     {
+      "id": "wf1fl6vbt",
+      "type": "workflow",
+      "status": "running",
+      "description": "dlg wf limit",
+      "name": "dlgwfl"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 6,
+   "dtMs": 2810,
+   "event": "SubagentStart",
+   "envSid": "00321b1f-a347-427f-9981-212d13e8fb6f",
+   "payload": {
+    "session_id": "00321b1f-a347-427f-9981-212d13e8fb6f",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/00321b1f-a347-427f-9981-212d13e8fb6f.jsonl",
+    "cwd": "/rig/repo/.claude/worktrees/wf_34c030b1-88b-1",
+    "prompt_id": "6560227e-f0fb-49e9-ac45-0bcfefd02939",
+    "agent_id": "a65a8e9ac311eb4ba",
+    "agent_type": "workflow-subagent",
+    "hook_event_name": "SubagentStart"
+   }
+  },
+  {
+   "seq": 7,
+   "dtMs": 63312,
+   "event": "SubagentStop",
+   "envSid": "00321b1f-a347-427f-9981-212d13e8fb6f",
+   "payload": {
+    "session_id": "00321b1f-a347-427f-9981-212d13e8fb6f",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/00321b1f-a347-427f-9981-212d13e8fb6f.jsonl",
+    "cwd": "/rig/repo/.claude/worktrees/wf_34c030b1-88b-1",
+    "prompt_id": "6560227e-f0fb-49e9-ac45-0bcfefd02939",
+    "permission_mode": "default",
+    "agent_id": "a65a8e9ac311eb4ba",
+    "agent_type": "workflow-subagent",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "SubagentStop",
+    "stop_hook_active": false,
+    "agent_transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/00321b1f-a347-427f-9981-212d13e8fb6f/subagents/workflows/wf_34c030b1-88b/agent-a65a8e9ac311eb4ba.jsonl",
+    "last_assistant_message": "DLG-WF-L1",
+    "background_tasks": [
+     {
+      "id": "wf1fl6vbt",
+      "type": "workflow",
+      "status": "running",
+      "description": "dlg wf limit",
+      "name": "dlgwfl"
+     }
+    ],
+    "session_crons": []
+   }
+  },
+  {
+   "seq": 8,
+   "dtMs": 63605,
+   "event": "UserPromptSubmit",
+   "envSid": "00321b1f-a347-427f-9981-212d13e8fb6f",
+   "payload": {
+    "session_id": "00321b1f-a347-427f-9981-212d13e8fb6f",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/00321b1f-a347-427f-9981-212d13e8fb6f.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "9c3e01f9-9032-4d66-a50f-c37394bd5a3c",
+    "permission_mode": "default",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "<task-notification>\n<task-id>wf1fl6vbt</task-id>\n<tool-use-id>toolu_rig000001</tool-use-id>\n<output-file>/rig/tmp/claude-1000/-rig-repo/00321b1f-a347-427f-9981-212d13e8fb6f/tasks/wf1fl6vbt.output</output-file>\n<status>completed</status>\n<summary>Dynamic workflow \"dlg wf limit\" completed</summary>\n<result>\"DLG-WF-L1\"</result>\n<diagnostics>Per-agent results: /rig/fixhome/cfg/projects/-rig-repo/00321b1f-a347-427f-9981-212d13e8fb6f/subagents/workflows/wf_34c030b1-88b/journal.jsonl — one {\"type\":\"result\",...} line per completed agent with its full return value.\nIf the result above is empty or unexpected, Read this file BEFORE diagnosing — do not assume agents returned non-empty results.\nTo re-run with edited post-processing: Workflow({scriptPath: '/rig/fixhome/cfg/projects/-rig-repo/00321b1f-a347-427f-9981-212d13e8fb6f/workflows/scripts/dlgwfl-wf_34c030b1-88b.js', resumeFromRunId: 'wf_34c030b1-88b'}) — agents whose (prompt, opts) are unchanged replay from cache.</diagnostics>\n<usage><agent_count>1</agent_count><agents_done>1</agents_done><agents_error>0</agents_error><agents_skipped>0</agents_skipped><agents_empty_result>0</agents_empty_result><subagent_tokens>1201</subagent_tokens><tool_uses>0</tool_uses><duration_ms>61947</duration_ms></usage>\n</task-notification>"
+   }
+  },
+  {
+   "seq": 9,
+   "dtMs": 63753,
+   "event": "Stop",
+   "envSid": "00321b1f-a347-427f-9981-212d13e8fb6f",
+   "payload": {
+    "session_id": "00321b1f-a347-427f-9981-212d13e8fb6f",
+    "transcript_path": "/rig/fixhome/cfg/projects/-rig-repo/00321b1f-a347-427f-9981-212d13e8fb6f.jsonl",
+    "cwd": "/rig/repo",
+    "prompt_id": "9c3e01f9-9032-4d66-a50f-c37394bd5a3c",
+    "permission_mode": "default",
+    "effort": {
+     "level": "medium"
+    },
+    "hook_event_name": "Stop",
+    "stop_hook_active": false,
+    "last_assistant_message": "DLG-WAIT",
+    "background_tasks": [],
+    "session_crons": []
+   }
+  }
+ ],
+ "disk": {
+  "admin": {},
+  "worktreesLeft": [],
+  "branches": [
+   "main"
+  ],
+  "worktreeList": "worktree /rig/repo\nHEAD e10bc9b9b91ab41901b6c2813e77cb3cbcf500fd\nbranch refs/heads/main",
+  "metas": {
+   "cfg/-rig-repo/00321b1f-a347-427f-9981-212d13e8fb6f/subagents/workflows/wf_34c030b1-88b/agent-a65a8e9ac311eb4ba.meta.json": {
+    "agentType": "workflow-subagent",
+    "worktreePath": "/rig/repo/.claude/worktrees/wf_34c030b1-88b-1",
+    "spawnedWithWorktree": true,
+    "description": "l1",
+    "spawnDepth": 1,
+    "requestShape": "foreground",
+    "requestNonInteractive": false
+   }
+  },
+  "snapshots": {}
+ }
+}

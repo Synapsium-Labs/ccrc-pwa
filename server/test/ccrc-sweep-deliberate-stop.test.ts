@@ -1,225 +1,108 @@
-// The move INTO wave 10 (centralised update management, R12's script half):
-// `main`'s CURRENT `_upd_sweep`, sourced WITHOUT an edit, run against the NEW
-// `deploy/verify-service.sh`.
+// The move INTO wave 11 (centralised update management, R12's script half; R13 f, D-3982): the PRE-wave-11
+// `_upd_sweep` — FROZEN in `fixtures/upd-sweep-pre-wave11.bash`, exactly as every release from v0.0.60 through
+// v0.0.84 ships it — sourced over this tree's `ccd/ccrc` and run against THIS tree's `deploy/verify-service.sh`.
 //
-// WHY THIS FILE EXISTS. The live auto-update that carries wave 10 runs the OLD
-// sweep with the NEW script, by construction:
-//   - the detached update re-execs the launcher (`ccd/ccrc:18026`);
-//   - the launcher execs `~/ccrc/ccd/ccrc` BEFORE the flip:
-//     `exec "$CCRC_SHIPPED" "$@"` (`ccd/ccrc:13695`);
+// WHY THIS FILE EXISTS. The live auto-update that carries a release runs the box's OLD sweep with the NEW script,
+// by construction. Every citation below is by CONTENT (a function and its quoted line), never by line number:
+//   - the detached update re-execs the launcher: `_upd_detach`'s
+//     `_svc_run_detached /bin/sh -c 'PATH="$HOME/.local/bin:$PATH" exec "$HOME/.local/bin/ccrc" "$@"'`;
+//   - the launcher execs `~/ccrc/ccd/ccrc` BEFORE the flip: `_inst_shim`'s heredoc line
+//     `exec "$CCRC_SHIPPED" "$@"`;
 //   - the old sweep resolves the script at the moment it calls it:
-//     `local verify="$BOX_TREE_DIR/deploy/verify-service.sh"` (`ccd/ccrc:20619`),
-//     with `BOX_TREE_DIR="$HOME/ccrc"` (`ccd/ccrc:1588`) — and by then the link
-//     names the NEW tree.
-// The old caller dies on any non-zero exit (`|| _ccrc_die "$u was restarted and
-// did not stay up …`), so only an exit 0 from the script protects that move.
-// agent/test/deploy-verify.test.ts proves the script's exit; THIS file proves
-// the old caller, unedited, honours it: a stamped stop returns 0, a purged one
-// returns 0, an unstamped one dies exactly as it does today.
+//     `local verify="$BOX_TREE_DIR/deploy/verify-service.sh"`,
+//     with `BOX_TREE_DIR="$HOME/ccrc"` — and by then the link names the NEW tree.
+// The old caller dies on any non-zero exit (`|| _ccrc_die "$u was restarted and did not stay up …`), so only an
+// exit 0 from the script protects that move. agent/test/deploy-verify.test.ts proves the script's exit; THIS file
+// proves the old caller, byte for byte, honours it: a stamped stop returns 0, a purged one returns 0, an
+// unstamped one dies exactly as it did.
 //
-// THE TECHNIQUE is `ccrc-update.test.ts`'s `sourcedCcrc`, COPIED and not
-// imported (importing a .test.ts module registers its cases a second time): a
-// shell that SOURCES `ccd/ccrc` — its dispatch is guarded by `BASH_SOURCE[0] ==
-// $0`, so sourcing defines functions and runs no verb — and then calls
-// `_upd_sweep` directly, on a fixture HOME whose `systemctl` is a stub.
+// THE MOVE INTO WAVE 11 runs the frozen bytes with this tree's script. Wave 10's version of this file sourced
+// `main`'s CURRENT sweep and said so ("re-home it on a frozen copy when wave 11 reshapes the sweep"); wave 11
+// reshapes it, so the sweep under test is the fixture's text, not the tree's. X0 pins the fixture's sha256, X0c
+// pins the seven tree helpers the frozen function calls (a helper the tree changes is frozen into the fixture
+// first), and X0b pins that the next move still resolves the script at call time.
 //
-// THE PRECONDITION (X0). This proves the move INTO wave 10 only while the sweep
-// is the serial shape that move runs. When wave 11 reshapes `_upd_sweep`, X0
-// goes red on purpose: re-home the case on a frozen copy of the pre-wave-11
-// sweep (coordinator ruling 2, Reading 2), or retire it.
+// THE TECHNIQUE is `ccrc-update.test.ts`'s `sourcedCcrc`: a shell that SOURCES `ccd/ccrc` — its dispatch is
+// guarded by `BASH_SOURCE[0] == $0`, so sourcing defines functions and runs no verb — then sources the frozen
+// file, which redefines `_upd_sweep`, and calls it, on a fixture HOME whose `systemctl` is a stub. The builders
+// live in `sweepFixture.ts` (wave 11's window file uses them too).
 //
-// SAFETY. A fixture HOME only, and an env built from scratch (never
-// `...process.env`). Every tool the sweep or the script could reach that is not
-// a stub is a POISON that records to `$HOME/<name>-poison` and exits 97, and
-// `assertContained` proves, before every spawn, that each one resolves inside
-// the fixture's bin. Nothing here runs a real ccd, ccrc, systemctl, journalctl,
-// tmux, gh or ssh, or reads a real registry.
-import { describe, it, expect } from 'vitest';
-import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
+// SAFETY. A fixture HOME only, and an env built from scratch (never `...process.env`). Every tool the sweep or
+// the script could reach that is not a stub is a POISON that records to `$HOME/<name>-poison` and exits 97, and
+// `assertContained` proves, before every spawn, that each one resolves inside the fixture's bin and that the user
+// bus names sit under the fixture HOME. Nothing here runs a real ccd, ccrc, systemctl, journalctl, tmux, gh or
+// ssh, or reads a real registry.
+import { describe, expect } from 'vitest';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv, harnessBin } from './ccdWsHelpers.js';
 import { itLinux } from './platformFixtures.js';
-
-const here = dirname(fileURLToPath(import.meta.url));
-const REPO = resolve(here, '..', '..');
-
-/** The one name for the sourced `ccd/ccrc`: X0 reads it and the spawn passes it as `$1`. */
-const CCRC_SRC = join(REPO, 'ccd', 'ccrc');
-/** The script the fixture's `~/ccrc/deploy/verify-service.sh` is a copy of. */
-const VERIFY_SRC = join(REPO, 'deploy', 'verify-service.sh');
-
-function realPath(name: string): string {
-  const p = spawnSync('bash', ['-c', `command -v ${name}`], { encoding: 'utf8' }).stdout.trim();
-  if (p === '') throw new Error(`this box has no ${name} — the fixture needs it`);
-  return p;
-}
-const BASH = realPath('bash');
-
-/** What gets a poison planted. `gh` is not here: `ghContainedEnv` plants it. */
-const POISONS = ['tmux', 'ccd', 'launchctl', 'loginctl', 'systemd-run', 'ssh', 'scp', 'curl', 'npm'] as const;
-/** Every tool that must resolve INSIDE the fixture bin, spelled out on its own so
- *  that dropping a poison above is a red case, not a quiet shrinking of this list. */
-const CONTAINED = [
-  'systemctl', 'journalctl', 'tmux', 'ccd', 'launchctl', 'loginctl', 'systemd-run', 'ssh', 'scp', 'curl', 'npm', 'gh',
-] as const;
+import {
+  CCRC_SRC, FROZEN_SWEEP, SWEEP_OK, makeBox, assertContained, runSweep, calls, poisonFiles, type UnitPlant,
+} from './sweepFixture.js';
 
 const DEMO_GOOD = 'claude-session@demo-good.service';
 const DEMO_GONE = 'claude-session@demo-gone.service';
 const STAMP = '1791151850 ccd';
 
-interface Box { home: string; env: NodeJS.ProcessEnv }
+const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex');
 
-interface Plant {
-  /** `demo-gone`'s `is-active` answers, in call order; the last one repeats. */
-  goneActive: string[];
-  /** `demo-gone`'s `show -p MainPID --value` answers, in call order; the last one repeats. */
-  goneMainPid: string[];
-  /** Registry files to plant under `~/.cc-sessions/`. */
-  registry: Record<string, string>;
-}
+/** The four strings the header cites by content (X0b): each must be in `ccd/ccrc` and in this file's own header. */
+const CITED = [
+  `_svc_run_detached /bin/sh -c 'PATH="$HOME/.local/bin:$PATH" exec "$HOME/.local/bin/ccrc" "$@"'`,
+  'exec "$CCRC_SHIPPED" "$@"',
+  'local verify="$BOX_TREE_DIR/deploy/verify-service.sh"',
+  'BOX_TREE_DIR="$HOME/ccrc"',
+] as const;
 
-/** The stub `systemctl`, after `ccrc-update.test.ts:391-392` and `:460`: it records
- *  `$*` before any shift, requires `--user`, shifts it off, and answers each verb
- *  the sweep and the script make. `is-active` and MainPID are answered per unit
- *  from lists the plant wrote, one answer per call, the last repeating. */
-const SYSTEMCTL_STUB = [
-  '#!/bin/sh',
-  'printf \'%s\\n\' "$*" >> "$HOME/systemctl-calls"',
-  '[ "$1" = "--user" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
-  'shift',
-  'nth() {   # $1 = list file, $2 = counter file -> the answer for this call',
-  '  n=0; [ -f "$2" ] && IFS= read -r n < "$2"',
-  '  n=$((n + 1)); echo "$n" > "$2"',
-  '  w=$(sed -n "${n}p" "$1")',
-  '  [ -n "$w" ] || w=$(tail -n 1 "$1")',
-  '  printf \'%s\\n\' "$w"',
-  '}',
-  'case "$1" in',
-  '  list-units)',
-  '    [ "$2" = "claude-session@*" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
-  '    state=""',
-  '    for a in "$@"; do case "$a" in --state=*) state="${a#--state=}" ;; esac; done',
-  '    case "$state" in',
-  '      failed) exit 0 ;;',
-  '      ""|active)',
-  `        echo "${DEMO_GOOD} loaded active running x"`,
-  `        echo "${DEMO_GONE} loaded active running x"`,
-  '        exit 0 ;;',
-  '    esac',
-  '    echo "fixture systemctl: unexpected argv: $*" >&2; exit 90 ;;',
-  '  show)',
-  '    [ "$2" = "-p" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
-  '    case "$3" in',
-  '      KillMode) echo "KillMode=process"; exit 0 ;;',
-  '      MainPID)',
-  '        [ "$4" = "--value" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
-  '        for u; do :; done',
-  '        [ -f "$HOME/fx/$u.pid" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
-  '        nth "$HOME/fx/$u.pid" "$HOME/fx/$u.pid.n"; exit 0 ;;',
-  '    esac',
-  '    echo "fixture systemctl: unexpected argv: $*" >&2; exit 90 ;;',
-  '  try-restart) exit 0 ;;',
-  '  status) exit 0 ;;',
-  '  is-active)',
-  '    u="$2"',
-  '    [ -f "$HOME/fx/$u.active" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
-  '    w=$(nth "$HOME/fx/$u.active" "$HOME/fx/$u.active.n")',
-  '    echo "$w"; [ "$w" = active ] && exit 0; exit 3 ;;',
-  'esac',
-  'echo "fixture systemctl: unexpected argv: $*" >&2; exit 90',
-  '',
-].join('\n');
+/** The released bytes' digest (v0.0.60 through v0.0.84, the same at every tag measured). */
+const FROZEN_SWEEP_SHA = 'd01e0a056196d5dc113ed51976d38959f893a11bb99821bd4f6758c039dacd42';
 
-const JOURNALCTL_STUB = [
-  '#!/bin/sh',
-  'printf \'%s\\n\' "$*" >> "$HOME/journalctl-calls"',
-  'echo "fixture journal line"',
-  'exit 0',
-  '',
-].join('\n');
+/** The helpers the frozen sweep (and its die) call, as v0.0.84 shipped them (X0c). */
+const HELPER_SHAS: ReadonlyArray<readonly [string, string]> = [
+  ['_ccrc_die', 'e7e1f481267223048b0910f900cd7a3f7a48d569d82f1bdb963a1a6dd0fdc018'],
+  ['_upd_redact', '572ccbf1220059570ce48128c6e45152bb76f5472bcd894cfdbac8b550a40586'],
+  ['_upd_phase', 'd6d3453123096c8e8d99b032464bad7e7f5782b47bd7e5e5627d57c596e8ce52'],
+  ['_upd_json_str', 'fb88a5e9d342a2ebef1eb4e4ffde92841d5d117de713507ac6f88f2ce495dff2'],
+  ['_tmp_guard', 'e82e65af95b11acd398aa3d83f0522f31f8e3567e801c4c2d70f04e25c659104'],
+  ['_exit_add', '6936453d935739d982dc714dd0b44ce8fd1947e59cf6bb4638a2ffca8bbca0f8'],
+  ['_exit_run', '2691a2221fb27401bec42bb08c2f42a8078c58a845a367efe5ebe9e1c001a1aa'],
+];
 
-function poisonStub(name: string): string {
-  return '#!/bin/sh\n'
-    + `printf '%s\\n' "$*" >> "$HOME/${name}-poison"\n`
-    + `echo "the ${name} poison: no case here may reach a real ${name}" >&2\nexit 97\n`;
-}
-
-/** Build the fixture box: HOME, the copied script, the stubs, the poisons, the env. */
-function makeBox(plant: Plant, poisons: readonly string[] = POISONS): Box {
-  const home = mkTmp('ccrc-sweep-stop-');
-  mkdirSync(join(home, 'ccrc', 'deploy'), { recursive: true });
-  cpSync(VERIFY_SRC, join(home, 'ccrc', 'deploy', 'verify-service.sh'));
-  mkdirSync(join(home, 'run'), { recursive: true });
-  const reg = join(home, '.cc-sessions');
-  mkdirSync(reg, { recursive: true });
-  for (const [name, body] of Object.entries(plant.registry)) writeFileSync(join(reg, name), body);
-
-  const fx = join(home, 'fx');
-  mkdirSync(fx, { recursive: true });
-  const lists: Array<[string, string[]]> = [
-    [`${DEMO_GOOD}.active`, ['active']],
-    [`${DEMO_GOOD}.pid`, ['4242']],
-    [`${DEMO_GONE}.active`, plant.goneActive],
-    [`${DEMO_GONE}.pid`, plant.goneMainPid],
-  ];
-  for (const [name, answers] of lists) {
-    if (answers.length > 0) writeFileSync(join(fx, name), answers.join('\n') + '\n');
+/** X0c's one extraction rule: a one-line `^<name>() {.*}$` is its line; otherwise the text from `^<name>() [{(]`
+ *  through the first later line that is exactly `}` or `)`, each line plus `\n`. */
+function extractHelper(src: string, name: string): string | null {
+  const lines = src.split('\n');
+  const one = new RegExp(`^${name}\\(\\) \\{.*\\}$`);
+  const open = new RegExp(`^${name}\\(\\) [{(]`);
+  const i = lines.findIndex((l) => open.test(l));
+  if (i < 0) return null;
+  if (one.test(lines[i]!)) return `${lines[i]!}\n`;
+  let out = '';
+  for (let j = i; j < lines.length; j++) {
+    out += `${lines[j]!}\n`;
+    if (j > i && (lines[j] === '}' || lines[j] === ')')) return out;
   }
-
-  const bin = harnessBin(home);
-  writeFileSync(join(bin, 'systemctl'), SYSTEMCTL_STUB, { mode: 0o755 });
-  writeFileSync(join(bin, 'journalctl'), JOURNALCTL_STUB, { mode: 0o755 });
-  for (const name of poisons) writeFileSync(join(bin, name), poisonStub(name), { mode: 0o755 });
-
-  const base: NodeJS.ProcessEnv = {
-    HOME: home,
-    PATH: process.env['PATH'] ?? '',
-    LANG: 'C',
-    XDG_RUNTIME_DIR: join(home, 'run'),
-    DBUS_SESSION_BUS_ADDRESS: `unix:path=${join(home, 'run', 'bus')}`,
-    CCRC_VERIFY_SETTLE: '0',
-    CCRC_VERIFY_WINDOW: '0',
-    CCRC_VERIFY_LOG_LINES: '5',
-    CCRC_VERIFY_STOP_INTERVAL: '0',
-  };
-  return { home, env: ghContainedEnv(home, base) };
+  return null;
 }
 
-/** Refuse to spawn unless every tool resolves inside the fixture's bin. */
-function assertContained(box: Box): void {
-  const r = spawnSync(BASH, ['-c', `command -v ${CONTAINED.join(' ')}`],
-    { env: box.env, encoding: 'utf8', timeout: 15_000 });
-  const got = (r.stdout ?? '').split('\n').filter((l) => l !== '');
-  const want = CONTAINED.map((n) => join(box.home, '.local', 'bin', n));
-  if (JSON.stringify(got) !== JSON.stringify(want)) {
-    throw new Error(`containment refused: expected every tool inside ${join(box.home, '.local', 'bin')}\n`
-      + `want ${JSON.stringify(want)}\ngot  ${JSON.stringify(got)}`);
-  }
-}
+const goodUnit: UnitPlant = { unit: DEMO_GOOD, active: ['active'], mainPid: ['4242'] };
+const goneUnit = (active: string[], mainPid: string[]): UnitPlant => ({ unit: DEMO_GONE, active, mainPid });
 
-interface Result { code: number; stdout: string; stderr: string }
-
-/** `_upd_sweep` out of the sourced `ccd/ccrc`, on the Linux arm, contained. */
-function sweep(box: Box): Result {
-  assertContained(box);
-  const r = spawnSync(BASH, ['-c',
-    '. "$1"; CCD_OS=linux; UPD_BACKUP_DIR="$HOME/ccrc-backups/fixture"; _upd_sweep',
-    'ccrc-under-test', CCRC_SRC],
-  { env: box.env, encoding: 'utf8', timeout: 45_000 });
-  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
-}
-
-function calls(box: Box): string[] {
-  const f = join(box.home, 'systemctl-calls');
-  return existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter((l) => l !== '') : [];
-}
-
-function poisonFiles(box: Box): string[] {
-  return readdirSync(box.home).filter((n) => n.endsWith('-poison'));
-}
+const stampedStop = () => makeBox({
+  units: [goodUnit, goneUnit(['active', 'inactive', 'inactive'], ['5151'])],
+  registry: { 'demo-good.uuid': 'u1\n', 'demo-gone.uuid': 'u2\n', 'demo-gone.stopped': `${STAMP}\n` },
+});
+const unstampedStop = () => makeBox({
+  units: [goodUnit, goneUnit(['active', 'inactive', 'inactive'], ['5151'])],
+  registry: { 'demo-good.uuid': 'u1\n', 'demo-gone.uuid': 'u2\n' },
+});
+// A `demo-gone.generation` with no `.uuid`: a MID-PURGE registry shape the script never reads. D-2605 removes
+// `.generation` last, so a FULLY purged row has none; this plant is not a fact the purge keeps (F6).
+const purgedBeforeLoop = () => makeBox({
+  units: [goodUnit, goneUnit(['inactive', 'inactive'], [])],
+  registry: { 'demo-good.uuid': 'u1\n', 'demo-gone.generation': '1\n' },
+});
 
 /** The call log up to and including demo-good's second verification: the first 11 lines of every case. */
 const FIRST_11 = [
@@ -247,57 +130,64 @@ const X2_LOG = [
 
 const STATUS_LINE = `--user status --no-pager --lines=0 ${DEMO_GONE}`;
 
-const SWEEP_OK = 'update: sweep: every live claude-session@ supervisor now runs the ccd this update installed '
-  + '(KillMode=process verified per unit before any restart; panes untouched)';
 const GOOD_LINE = `verified: ${DEMO_GOOD} active, MainPID 4242 stable across 0s`;
 const STAMPED_LINE = `stopped on purpose: ${DEMO_GONE} settled 'inactive', and ccd's stop stamp `
   + `~/.cc-sessions/demo-gone.stopped is present (reads '${STAMP}') — a deliberate stop, not a crash`;
 const PURGED_LINE = `stopped on purpose: ${DEMO_GONE} settled 'inactive', and its registry row is purged `
   + '(no ~/.cc-sessions/demo-gone.uuid) — a deliberate stop, not a crash';
 
-const stampedStop = (): Plant => ({
-  goneActive: ['active', 'inactive', 'inactive'],
-  goneMainPid: ['5151'],
-  registry: { 'demo-good.uuid': 'u1\n', 'demo-gone.uuid': 'u2\n', 'demo-gone.stopped': `${STAMP}\n` },
-});
-const unstampedStop = (): Plant => ({
-  goneActive: ['active', 'inactive', 'inactive'],
-  goneMainPid: ['5151'],
-  registry: { 'demo-good.uuid': 'u1\n', 'demo-gone.uuid': 'u2\n' },
-});
-const purgedBeforeLoop = (): Plant => ({
-  goneActive: ['inactive', 'inactive'],
-  goneMainPid: [],
-  registry: { 'demo-good.uuid': 'u1\n', 'demo-gone.generation': '1\n' },
-});
+describe('the move INTO wave 11: the pre-wave-11 _upd_sweep (frozen, v0.0.60–v0.0.84), sourced over this tree\'s ccd/ccrc, with this tree\'s verify-service.sh', () => {
+  itLinux('X0 the frozen bytes are the released bytes', () => {
+    const frozen = readFileSync(FROZEN_SWEEP, 'utf8');
+    const m = /^_upd_sweep\(\) \{\n[\s\S]*?\n\}\n/m.exec(frozen);
+    expect(m, 'the fixture holds no `_upd_sweep() { … }` text').not.toBeNull();
+    const body = m![0];
+    expect(sha256(body), 'the frozen sweep is no longer the released text — it is never edited; restore it from `git show v0.0.84:ccd/ccrc`').toBe(FROZEN_SWEEP_SHA);
+    expect(body).toContain('local verify="$BOX_TREE_DIR/deploy/verify-service.sh"');
+    expect(body).toContain('bash "$verify" "$u" \\');
+    // The Linux arm's own quote, not the plan's shorter prefix (D-3950): the Darwin arm carries that prefix too.
+    expect(body).toContain('|| _ccrc_die "$u was restarted and did not stay up — read: systemctl --user status $u.');
+  }, 60_000);
 
-describe('the move INTO wave 10: main\'s _upd_sweep, sourced unedited, with the new verify-service.sh', () => {
-  itLinux('X0 precondition: _upd_sweep is still the serial shape this case proves the move through', () => {
+  itLinux('X0b the header\'s content citations hold in this tree', () => {
     const ccrc = readFileSync(CCRC_SRC, 'utf8');
+    const header = readFileSync(fileURLToPath(import.meta.url), 'utf8').split('\nimport ')[0]!;
+    for (const quoted of CITED) {
+      expect(ccrc, `ccd/ccrc no longer holds the cited text: ${quoted}`).toContain(quoted);
+      expect(header, `this file's header no longer cites: ${quoted}`).toContain(quoted);
+    }
+    // The NEXT move still resolves the script at call time: the tree's own sweep keeps the line.
     const m = /_upd_sweep\(\) \{([\s\S]*?)\n\}/.exec(ccrc);
-    const hint = 'this case proves the move INTO wave 10 only while the sweep has this shape, '
-      + 're-home it on a frozen copy of the pre-wave-11 sweep (Reading 2)';
-    expect(m, `_upd_sweep() { … } not found: ${hint}`).not.toBeNull();
-    const body = m![1]!;
-    expect(body, hint).toContain('local verify="$BOX_TREE_DIR/deploy/verify-service.sh"');
-    expect(body, hint).toContain('bash "$verify" "$u" \\');
-    // The Linux arm's own quote, not the plan's shorter prefix (D-3950): the Darwin arm
-    // carries that prefix too, so the short form could not go red when only this arm changes.
-    expect(body, hint).toContain('|| _ccrc_die "$u was restarted and did not stay up — read: systemctl --user status $u.');
-    expect(ccrc, hint).toContain('BOX_TREE_DIR="$HOME/ccrc"');
+    expect(m, '_upd_sweep() { … } not found in ccd/ccrc').not.toBeNull();
+    expect(m![1]!).toContain('local verify="$BOX_TREE_DIR/deploy/verify-service.sh"');
+  }, 60_000);
+
+  itLinux('X0c the frozen sweep\'s helpers are v0.0.84\'s', () => {
+    const ccrc = readFileSync(CCRC_SRC, 'utf8');
+    for (const [name, want] of HELPER_SHAS) {
+      const text = extractHelper(ccrc, name);
+      expect(text, `${name} not found in ccd/ccrc`).not.toBeNull();
+      expect(sha256(text!), `${name} differs from v0.0.84's copy — freeze v0.0.84's copy into `
+        + 'fixtures/upd-sweep-pre-wave11.bash (below the function) before changing it').toBe(want);
+    }
   }, 60_000);
 
   itLinux('X1 containment: every tool resolves inside the fixture bin, and the bus names sit under the fixture HOME', () => {
-    const box = makeBox(stampedStop());
+    const box = stampedStop();
     assertContained(box);
     expect(box.env['XDG_RUNTIME_DIR']!.startsWith(box.home)).toBe(true);
     expect(box.env['DBUS_SESSION_BUS_ADDRESS']!.startsWith(`unix:path=${box.home}`)).toBe(true);
     expect(box.env['HOME']).toBe(box.home);
+    // The check covers the env the spawn carries: an override that moves the bus off the fixture HOME is refused
+    // BEFORE any spawn (no systemctl call is recorded).
+    expect(() => runSweep(box, { frozen: FROZEN_SWEEP, env: { XDG_RUNTIME_DIR: '/run/user/0' } }))
+      .toThrow(/assertNoRealTool: XDG_RUNTIME_DIR=\/run\/user\/0/);
+    expect(calls(box)).toEqual([]);
   }, 60_000);
 
   itLinux('X2 stamped stop caught in the window: the sweep returns 0', () => {
-    const box = makeBox(stampedStop());
-    const r = sweep(box);
+    const box = stampedStop();
+    const r = runSweep(box, { frozen: FROZEN_SWEEP });
     expect(r.code, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(0);
     expect(r.stdout).toContain(GOOD_LINE);
     expect(r.stdout).toContain(STAMPED_LINE);
@@ -308,9 +198,9 @@ describe('the move INTO wave 10: main\'s _upd_sweep, sourced unedited, with the 
     expect(poisonFiles(box)).toEqual([]);
   }, 60_000);
 
-  itLinux('X3 unstamped stop: dies as today (characterisation)', () => {
-    const box = makeBox(unstampedStop());
-    const r = sweep(box);
+  itLinux('X3 unstamped stop: dies with the old bytes\' own sentence (characterisation)', () => {
+    const box = unstampedStop();
+    const r = runSweep(box, { frozen: FROZEN_SWEEP });
     expect(r.code, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(1);
     expect(r.stderr).toContain(`ccrc: ${DEMO_GONE} was restarted and did not stay up — read: `
       + `systemctl --user status ${DEMO_GONE}. The pre-update backup is complete at ${box.home}/ccrc-backups/fixture`);
@@ -321,15 +211,15 @@ describe('the move INTO wave 10: main\'s _upd_sweep, sourced unedited, with the 
   }, 60_000);
 
   itLinux('X3b unstamped stop under the new script: the exact call log, classifier re-read then status', () => {
-    const box = makeBox(unstampedStop());
-    sweep(box);
+    const box = unstampedStop();
+    runSweep(box, { frozen: FROZEN_SWEEP });
     expect(calls(box)).toEqual([...X2_LOG, STATUS_LINE]);
     expect(poisonFiles(box)).toEqual([]);
   }, 60_000);
 
   itLinux('X4 reclaimed and purged before the loop reaches it (v0.0.79\'s shape): returns 0', () => {
-    const box = makeBox(purgedBeforeLoop());
-    const r = sweep(box);
+    const box = purgedBeforeLoop();
+    const r = runSweep(box, { frozen: FROZEN_SWEEP });
     expect(r.code, `stdout:\n${r.stdout}\nstderr:\n${r.stderr}`).toBe(0);
     expect(r.stdout).toContain(GOOD_LINE);
     expect(r.stdout).toContain(PURGED_LINE);
@@ -339,6 +229,7 @@ describe('the move INTO wave 10: main\'s _upd_sweep, sourced unedited, with the 
       ...FIRST_11,
       `--user is-active ${DEMO_GONE}`,
       `--user is-active ${DEMO_GONE}`,
+      `--user show -p LoadState --value ${DEMO_GONE}`,
     ]);
     expect(poisonFiles(box)).toEqual([]);
   }, 60_000);

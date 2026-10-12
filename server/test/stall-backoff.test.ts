@@ -6,7 +6,9 @@ import { describe, it, expect } from 'vitest';
 import {
   stallBackoff, stallVerdict, STALL_WORKING_BACKOFF_CAP, STALL_QUIET_MS,
   STALL_CHECK_PREFIX, STALL_REPLY_PREFIX, STALL_REPLY_WAITING_PREFIX,
+  STALL_BACKOFF_CEILING_MS, BACKLOG_HORIZON_MS, STALL_BOUND_MS, STALL_OPERATOR_MS, STALL_ESCALATE_MS,
 } from '../src/coord/stall.js';
+import { STALL_QUIET_MAX_MS, STALL_QUIET_MIN_MS } from '../src/coord/stallsettings.js';
 import type {
   StallArming, StallInput, StallMailRow, StallRunRow, StallVerdict, StallW2Facts, StallWorker, TurnMarkRead,
 } from '../src/coord/stall.js';
@@ -48,12 +50,13 @@ function w2(mark: TurnMarkRead): StallW2Facts {
     markUnreadableSince: null };
 }
 
-function input(mail: readonly StallMailRow[], over: { arming?: StallArming; w2?: StallW2Facts } = {}): StallInput {
+function input(mail: readonly StallMailRow[], over: { arming?: StallArming; w2?: StallW2Facts; quietMs?: number } = {}): StallInput {
   const primary = runRow();
   return {
     subject: { primary, runs: [primary] }, worker: workerIdleSince(NOW - 3 * H), mail, notices: [],
     arming: over.arming ?? ARMED, coordinationPaused: false, coordinator: null, activation: { kind: 'none' },
     ...(over.w2 !== undefined ? { w2: over.w2 } : {}),
+    ...(over.quietMs !== undefined ? { quietMs: over.quietMs } : {}),
   };
 }
 
@@ -148,5 +151,67 @@ describe('the back-off applies on the marker branch only (w2Live and a readable 
 
   it('without a marker (no wave-2 facts) the verdict is wave 1\'s too, even with w2Live', () => {
     expect(stallVerdict(input([check(1), working(2)], { arming: W2_LIVE }), NOW)).toEqual(r1(NOW - 3 * H));
+  });
+});
+
+// ── stall-watch settings (design 2026-10-05 §7): the chosen quiet time is the base (M9), under the ceiling (M9b) ─────
+// `backoff-ceiling-from-the-horizon` (D-4025): the computed threshold never passes STALL_BACKOFF_CEILING_MS, derived from
+// the mail read's horizon, so a 12 h quiet time cannot push the ladder out of the read that keys its episode.
+describe('the back-off base is the chosen quiet time: times 1, 2 and 4 (M9)', () => {
+  const ladder = [[], [check(1), working(2)], [check(1), working(2), check(3), working(4)],
+    [check(1), working(2), check(3), working(4), check(5), working(6)]] as const;
+
+  it.each([
+    ['a chosen 30 min', 30 * MIN, [30 * MIN, 60 * MIN, 120 * MIN, 120 * MIN]],
+    ['a chosen 3 h', 3 * H, [3 * H, 6 * H, 12 * H, 12 * H]],
+    ['the built-in (absent)', undefined, [2 * H, 4 * H, 8 * H, 8 * H]],
+  ] as const)('%s: streaks 0 to 3', (_name, quietMs, want) => {
+    const got = ladder.map((mail) => stallBackoff(input(mail, quietMs === undefined ? {} : { quietMs })).quietMs);
+    expect(got).toEqual(want);
+  });
+
+  it('on the marker branch a chosen 30 min with one working-answered check sends r1 at 1 h of quiet, not 4 h', () => {
+    const quiet3h = { w2: w2(doneMark(NOW - 3 * H)), arming: W2_LIVE, quietMs: 30 * MIN };
+    expect(stallVerdict(input([check(1), working(2)], quiet3h), NOW - 2 * H - 1)).toEqual(NONE);
+    expect(stallVerdict(input([check(1), working(2)], quiet3h), NOW - 2 * H)).toEqual(r1(NOW - 3 * H));
+  });
+});
+
+describe('the back-off ceiling (backoff-ceiling-from-the-horizon (D-4025), M9b)', () => {
+  it('is 16 h, derived from the horizon less twice the marker ladder\'s span after r1', () => {
+    expect(STALL_BACKOFF_CEILING_MS).toBe(16 * H);
+    expect(STALL_BACKOFF_CEILING_MS).toBe(BACKLOG_HORIZON_MS - 2 * (STALL_BOUND_MS + STALL_OPERATOR_MS));
+  });
+
+  it('relation 1: the built-in\'s peak sits under it, so the default is byte-for-byte unchanged', () => {
+    expect(STALL_QUIET_MS * 2 ** STALL_WORKING_BACKOFF_CAP).toBeLessThanOrEqual(STALL_BACKOFF_CEILING_MS);
+  });
+  it('relation 2: the largest quiet time a write may store sits under it, so a stored value is never what is capped', () => {
+    expect(STALL_QUIET_MAX_MS).toBeLessThanOrEqual(STALL_BACKOFF_CEILING_MS);
+  });
+  it('relation 3: the marker ladder after a capped r1 (r2 by the bound, r3 an hour on) ends inside the mail read', () => {
+    expect(STALL_BACKOFF_CEILING_MS + STALL_BOUND_MS + STALL_OPERATOR_MS).toBeLessThan(BACKLOG_HORIZON_MS);
+  });
+  it('relation 4: wave 1\'s ladder at the largest quiet time (r1, r2 an hour on, r3 an hour after) ends inside it too', () => {
+    expect(STALL_QUIET_MAX_MS + STALL_ESCALATE_MS + STALL_OPERATOR_MS).toBeLessThan(BACKLOG_HORIZON_MS);
+  });
+
+  it.each([
+    ['12 h, streak 0', 12 * H, 0, 12 * H],
+    ['12 h, streak 1 (24 h computed)', 12 * H, 1, 16 * H],
+    ['12 h, streak 2 (48 h computed)', 12 * H, 2, 16 * H],
+    ['8 h, streak 1 (exactly the ceiling)', 8 * H, 1, 16 * H],
+    ['6 h, streak 2 (24 h computed)', 6 * H, 2, 16 * H],
+    ['the smallest quiet time, streak 2', STALL_QUIET_MIN_MS, 2, 4 * STALL_QUIET_MIN_MS],
+  ] as const)('caps only the computed threshold: %s', (_name, quietMs, streak, want) => {
+    const mail = [[], [check(1), working(2)], [check(1), working(2), check(3), working(4)]][streak]!;
+    expect(stallBackoff(input(mail, { quietMs }))).toEqual({ streak, quietMs: want });
+  });
+
+  it('on the marker branch a 12 h quiet time with a streak of 2 sends r1 at 16 h of quiet, not 48 h', () => {
+    const mail = [check(1), working(2), check(3), working(4)];
+    const quiet3h = { w2: w2(doneMark(NOW - 3 * H)), arming: W2_LIVE, quietMs: 12 * H };
+    expect(stallVerdict(input(mail, quiet3h), NOW + 13 * H - 1)).toEqual(NONE);
+    expect(stallVerdict(input(mail, quiet3h), NOW + 13 * H)).toEqual(r1(NOW - 3 * H));
   });
 });

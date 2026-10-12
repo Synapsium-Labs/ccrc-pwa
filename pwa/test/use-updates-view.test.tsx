@@ -403,6 +403,109 @@ describe('useUpdatesView — the one poll of /api/updates', () => {
   });
 });
 
+// D-4273: the poll's issue-number signal. `seq` is the issue number of the read that set `view`, and `reload()` answers
+// the number it issued, so a caller can tell a read issued after some event from one issued before it.
+describe('useUpdatesView — the issue-number signal (D-4273)', () => {
+  it('seq is 0 before any read, and a good read sets it to that read\'s issue number (the mount read is 1)', async () => {
+    const first = Promise.withResolvers<UpdatesView>();
+    vi.spyOn(api, 'updates').mockReturnValueOnce(first.promise);
+    const { result } = renderHook(() => useUpdatesView());
+    expect(result.current.seq).toBe(0);
+    await act(async () => {});
+    expect(result.current.seq, 'issued, not yet answered').toBe(0);
+    await act(async () => { first.resolve(view()); await first.promise; });
+    expect(result.current.seq).toBe(1);
+  });
+
+  it('reload() answers the number it issued (the first after mount is 2), and its good answer sets seq to it', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(view());
+    const { result } = renderHook(() => useUpdatesView());
+    await act(async () => {});
+    expect(result.current.seq).toBe(1);
+    let issued = -1;
+    await act(async () => { issued = result.current.reload(); });
+    expect(issued).toBe(2);
+    expect(result.current.seq).toBe(2);
+    await act(async () => { issued = result.current.reload(); });
+    expect(issued).toBe(3);
+    expect(result.current.seq).toBe(3);
+  });
+
+  it('a failed, a malformed and a 501 read each leave seq (and the view) where it was', async () => {
+    const good = view();
+    vi.spyOn(api, 'updates')
+      .mockResolvedValueOnce(good)
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce({ ...good, nodes: {} } as unknown as UpdatesView)
+      .mockRejectedValueOnce(new ApiError(501, { ok: false, error: 'not-configured' }));
+    const { result } = renderHook(() => useUpdatesView());
+    await act(async () => {});
+    expect(result.current.seq).toBe(1);
+    await act(async () => { result.current.reload(); });
+    expect(result.current).toMatchObject({ view: good, failure: 'failed', seq: 1 });
+    await act(async () => { result.current.reload(); });
+    expect(result.current).toMatchObject({ view: good, failure: 'failed', seq: 1 });
+    await act(async () => { result.current.reload(); });
+    expect(result.current).toMatchObject({ view: good, failure: 'not-configured', seq: 1 });
+  });
+
+  it('seq stays 0 while no read has ever been good: a failed first read does not advance it', async () => {
+    vi.spyOn(api, 'updates').mockRejectedValue(new TypeError('Failed to fetch'));
+    const { result } = renderHook(() => useUpdatesView());
+    await act(async () => {});
+    expect(result.current).toMatchObject({ view: null, failure: 'failed', seq: 0 });
+  });
+
+  it('an older read resolving after a newer one was issued does not move seq (newest-issued guard)', async () => {
+    const older = Promise.withResolvers<UpdatesView>();
+    const newer = Promise.withResolvers<UpdatesView>();
+    vi.spyOn(api, 'updates').mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    const { result } = renderHook(() => useUpdatesView());
+    let issued = -1;
+    act(() => { issued = result.current.reload(); });
+    expect(issued).toBe(2);
+    const newest = view({ catalogue: { lastOkAt: 2_000, lastError: null } });
+    await act(async () => { newer.resolve(newest); await newer.promise; });
+    expect(result.current).toMatchObject({ view: newest, seq: 2 });
+    await act(async () => { older.resolve(view()); await older.promise; });
+    expect(result.current.view).toBe(newest);
+    expect(result.current.seq).toBe(2);
+  });
+
+  it('numbers stay monotonic across a pollMs change: the counter is not reset by the effect', async () => {
+    vi.spyOn(api, 'updates').mockResolvedValue(view());
+    const { result, rerender } = renderHook(({ ms }) => useUpdatesView(ms), { initialProps: { ms: UPDATES_POLL_MS } });
+    await act(async () => {});
+    expect(result.current.seq).toBe(1);
+    rerender({ ms: UPDATES_POLL_MS + 1 });
+    await act(async () => {});
+    expect(result.current.seq, 'the re-run effect issues its own mount read: number 2, not 1 again').toBe(2);
+  });
+
+  it('pollMs <= 0 (the injected mode): reload() answers 0, seq stays 0, nothing is requested', async () => {
+    const spy = vi.spyOn(api, 'updates').mockResolvedValue(view());
+    for (const pollMs of [0, -1]) {
+      const { result, unmount } = renderHook(() => useUpdatesView(pollMs));
+      let issued = -1;
+      await act(async () => { issued = result.current.reload(); });
+      expect(issued, `pollMs ${pollMs}`).toBe(0);
+      expect(result.current.seq).toBe(0);
+      expect(spy).not.toHaveBeenCalled();
+      unmount();
+    }
+  });
+
+  it('after unmount a stale reload() answers 0 and issues nothing', async () => {
+    const spy = vi.spyOn(api, 'updates').mockResolvedValue(view());
+    const { result, unmount } = renderHook(() => useUpdatesView());
+    await act(async () => {});
+    const reload = result.current.reload;
+    unmount();
+    expect(reload()).toBe(0);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
 // Task 9 (D-3307): a stamp the sweep could not READ is
 // an unmeasured current, not an unversioned one — W2's toNodeWire sets
 // `current` to null for it, and nodeVersion alone cannot tell the two apart.

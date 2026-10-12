@@ -270,7 +270,7 @@ function tierArms(home: string): string[] {
  *  `litellmEvidence` and `killLaneProcesses` read. */
 export const fakeLitellmSource = (dir: string): string => [
   '# fake LiteLLM proxy: codexLaneFixture.ts, Plan 2b-2 Task 5. NOT litellm.',
-  'import http.server, json, os, re, sys, time',
+  'import http.server, json, os, re, socketserver, sys, time',
   `DIR = ${JSON.stringify(dir)}`,
   'args = sys.argv[1:]',
   'def opt(name):',
@@ -314,7 +314,15 @@ export const fakeLitellmSource = (dir: string): string => [
   'if os.path.exists(resist):',
   '    import signal',
   '    signal.signal(signal.SIGTERM, lambda *_: None)',
-  'server = http.server.ThreadingHTTPServer((opt("--host") or "127.0.0.1", port), Handler)',
+  // `HTTPServer.server_bind` asks `socket.getfqdn(host)` AFTER bind and BEFORE
+  // listen; on the macOS runner that reverse lookup of 127.0.0.1 takes ~35 s
+  // (ccd/ccgpt-proxy.py's `_Server`), so the port refused every connect past
+  // each caller's bound. TCPServer's own bind, then the two attributes.
+  'class Server(http.server.ThreadingHTTPServer):',
+  '    def server_bind(self):',
+  '        socketserver.TCPServer.server_bind(self)',
+  '        self.server_name, self.server_port = self.server_address[:2]',
+  'server = Server((opt("--host") or "127.0.0.1", port), Handler)',
   'expire = os.path.join(DIR, "litellm-self-expiry")',
   'if os.path.exists(expire):',
   '    with open(expire) as f:',
@@ -1060,7 +1068,9 @@ export function registerLaneCleanup(
  *  one clause reds exactly one case. */
 export type ListenerAnswer = 'json' | 'json-extra' | 'json-as-text' | 'json-500' | 'text' | '404';
 
-const LISTENER_PY = `import json, sys
+/** EXPORTED for ccrc-codex.test.ts' no-reverse-lookup pin. Its `Server` is
+ *  `fakeLitellmSource`'s: no `socket.getfqdn` between bind and listen. */
+export const LISTENER_PY = `import json, socketserver, sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 ARGS = sys.argv[1:]
 def opt(name, default):
@@ -1091,7 +1101,11 @@ class Handler(BaseHTTPRequestHandler):
             if ANSWER == "text":
                 return self._send(200, "text/plain", LANE.encode())
         return self._send(404, "application/json", b'{"error": "not found"}')
-server = ThreadingHTTPServer(("127.0.0.1", int(opt("--listen-port", "0"))), Handler)
+class Server(ThreadingHTTPServer):
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+server = Server(("127.0.0.1", int(opt("--listen-port", "0"))), Handler)
 print("READY %d" % server.server_address[1], flush=True)
 server.serve_forever()
 `;

@@ -35,9 +35,10 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { type CoordCapsView, type FleetSession, graphReadCount, type RunSummary, unmeasuredFields } from '../../../shared/api';
-import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, crossingNote, dispatchWindow, isRunClosed, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runKindChip, runWarnings, runClosedAt, runItems, runState, runsByProgram, waveLabel } from '../fleet/runWords';
+import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, childReclaimChip, childReclaimDoneRefreshDue, childReclaimGone, childReclaimRefreshDue, childReclaimTitle, childRunsSeen, crossingNote, dispatchWindow, isRunClosed, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runKindChip, runWarnings, runClosedAt, runItems, runState, runsByProgram, waveLabel } from '../fleet/runWords';
+import { childReclaimDoneAtOf } from '../fleet/childReclaimWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
-import { AbandonSheet } from '../fleet/AbandonSheet';
+import { AbandonSheet, abandonChildOf } from '../fleet/AbandonSheet';
 import { CoordBanner } from '../fleet/CoordBanner';
 import { ChildReclaimBanner } from '../fleet/ChildReclaimBanner';
 import { CapsControl } from '../fleet/CapsControl';
@@ -178,6 +179,10 @@ function RunRow({
   // a server that has never heard of `health`. This component picks no words and
   // compares no thresholds; it lays out what it was handed.
   const warnings = runWarnings(run, nowMs);
+  // Child-reclamation wave 5 (spec §5.9): what became of this run's CHILD
+  // workspace. `childReclaimChip` is the one reader. The word and the sentence
+  // are the server's, and this component picks neither.
+  const reclaim = childReclaimChip(run);
   const body = (
     <>
       <span className="run-glyph" aria-hidden="true">{RUN_GLYPH[state]}</span>
@@ -257,6 +262,23 @@ function RunRow({
         <span className="run-resumed" data-cleared={String(resume.cleared)} title={resume.title}>
           {resume.word}
         </span>
+      )}
+      {/* Wave 5: the reclaim chip, `.run-kind`'s shape (glyph + word, the long
+          form in `title`). Informational, so it lives inside `body` and
+          therefore inside `.run-open`, like `.run-warn`: the sibling rule
+          binds controls, and this is prose. */}
+      {reclaim !== null && (
+        <span className="run-child-reclaim" data-child-reclaim={reclaim.word}
+          title={childReclaimTitle(reclaim, nowSec)}>
+          <span className="run-child-reclaim-glyph" aria-hidden="true">{reclaim.glyph}</span>
+          {reclaim.label}
+        </span>
+      )}
+      {/* A refusal's sentence on its own wrapped line (`flex-basis: 100%`,
+          `.run-warn`'s idiom). The chip decides when there is one; this lays
+          out what it was handed. */}
+      {reclaim !== null && reclaim.line !== null && (
+        <span className="run-child-reclaim-sentence">{reclaim.line}</span>
       )}
       {degradedFields.length > 0 && (
         <span
@@ -373,7 +395,12 @@ function RunRow({
   // or hides what the row now says while the spawn is under way. Making the
   // row tappable to let the affordance through would have traded a true
   // sentence for a dead tap onto a session id that does not exist yet.
-  return run.sessionId === null
+  //
+  // A reclaimed child's session no longer exists either (spec §5.9: the row
+  // "stops offering to open its session"). It gets the same inert row, for the
+  // same reason. `resumeButton` and `abandonButton` keep their place: neither
+  // is about the worker's session.
+  return run.sessionId === null || childReclaimGone(reclaim)
     ? <li className="run-row" data-inert="true">{body}{resumeButton}{abandonButton}</li>
     : (
       <li className="run-row">
@@ -407,6 +434,8 @@ export function RunsScreen({
   const sessions = store((s) => s.sessions);
   const fleetFrameSeen = store((s) => s.fleetFrameSeen);
   const conn = store((s) => s.conn);
+  const coordFrame = store((s) => s.coord);
+  const coordFrameSeen = store((s) => s.coordFrameSeen);
   const [cold, setCold] = useState<RunSummary[] | null>(null);
   // Review finding 19: `cold`'s own `null` used to mean BOTH "still loading"
   // and "every attempt has failed" — the same collapse `MailScreen`'s `feed`
@@ -465,10 +494,33 @@ export function RunsScreen({
     return () => { aliveRef.current = false; };
   }, []);
 
-  const loadCold = (): Promise<void> =>
-    loadRunsRef.current()
-      .then((r) => { if (aliveRef.current) { setCold(r.runs); setColdState('ok'); } })
-      .catch(() => { if (aliveRef.current) setColdState('error'); });
+  // THE RACE, AND ITS GUARD (spec §5.9). A reclaim now puts two archive reads in
+  // flight a tick or two apart: the vanish read (the child's session leaving the
+  // fleet frame) and the board's second trigger (the coord frame's newest reclaim
+  // end). Responses can arrive in any order, and `loadCold` used to apply
+  // whichever landed last, so a slow older read overwrote a newer one and the
+  // row showed the stale "workspace pending" chip again. Each call takes a
+  // sequence number from `issued`; a read may set `cold` only when it is NEWER
+  // than the last one applied (`applied`, the high-water mark). The `catch` is
+  // held to the same mark, so a rejection from a read older than an applied one
+  // cannot set `error` over the newer answer. A rejection does NOT advance the
+  // mark: it carries no reading to be newer than, so a newer success still wins
+  // over an older error in either arrival order, and an older success still
+  // lands after a newer failure (the freshest answer there is).
+  const issued = useRef(0);
+  const applied = useRef(0);
+  const loadCold = (): Promise<void> => {
+    const seq = ++issued.current;
+    return loadRunsRef.current()
+      .then((r) => {
+        // The body is read BEFORE the mark moves: a success whose body cannot be
+        // read (a `null` answer) throws here, reaches the `catch` below as an
+        // error for this same `seq`, and so cannot advance the mark first.
+        const rows = r.runs;
+        if (aliveRef.current && seq > applied.current) { applied.current = seq; setCold(rows); setColdState('ok'); }
+      })
+      .catch(() => { if (aliveRef.current && seq > applied.current) setColdState('error'); });
+  };
 
   useEffect(() => {
     // UNCONDITIONAL — the earlier gate (`if (store.getState().runs.length >
@@ -506,7 +558,62 @@ export function RunsScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live, runsFrameSeen]);
 
+  // Child-reclamation wave 5 (spec §5.9): a finished row's reclaim chip changes
+  // AFTER its run closed (pending → reclaimed), and `finished` has one source,
+  // the cold read. A reclaim purges the child's registry row, so its session
+  // leaves the next fleet frame. That vanish is the trigger: a diff against the
+  // PREVIOUS fleet frame, exactly like the run-id diff above. It is not a poll:
+  // it fires only on a real transition. The decision is `childReclaimRefreshDue`'s.
+  // The dependencies are the fleet frame's, deliberately: a cold read landing is
+  // not a transition of the fleet, and re-running on it would compare a frame
+  // with itself. A re-read changes `cold`, never `sessions`, so it cannot loop.
+  const prevSessionIdsRef = useRef<Set<string> | null>(null);
+  useEffect(() => {
+    if (!fleetFrameSeen) return;
+    const ids = new Set(sessions.map((s) => s.id));
+    const prev = prevSessionIdsRef.current;
+    prevSessionIdsRef.current = ids;
+    if (prev !== null && childReclaimRefreshDue(cold ?? [], prev, ids)) void loadCold();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessions, fleetFrameSeen]);
+
+  // Child-reclamation wave 6 (spec §5.9): the SECOND trigger. ccd purges a
+  // reclaimed child's registry row before it journals the reclaim's end, and
+  // the server's journal mirror is never awaited, so the vanish read above
+  // usually lands first and the row comes back with no chip. The coord frame
+  // carries the newest reclaim end the mirror has committed. When THAT changes,
+  // and a finished row is still unsettled, the board reads its archive once.
+  // It is not a poll: it fires once per change of a value the server measured.
+  // A null (a restarted server, or one older than the field) is never a reason
+  // to read, and the first value this board sees is its baseline, not a change.
+  //
+  // Which runs had a child is remembered across frames (`childRunsSeen`). This
+  // effect is declared first, so it runs first in a commit that changes both.
+  const childRunsRef = useRef<ReadonlySet<number>>(new Set<number>());
+  useEffect(() => {
+    childRunsRef.current = childRunsSeen(childRunsRef.current, sessions, cold ?? []);
+  }, [sessions, cold]);
+  // `undefined` = no coord frame seen yet by this board; null = seen, no value.
+  const prevDoneAtRef = useRef<number | null | undefined>(undefined);
+  useEffect(() => {
+    if (!coordFrameSeen) return;
+    const after = childReclaimDoneAtOf(coordFrame);
+    const before = prevDoneAtRef.current;
+    prevDoneAtRef.current = after;
+    if (before !== undefined && childReclaimDoneRefreshDue(cold ?? [], childRunsRef.current, before, after)) {
+      void loadCold();
+    }
+    // The coord frame's dependencies only, as wave 5's effect takes the fleet
+    // frame's: a cold read landing is not a change of the value, and a re-read
+    // changes `cold`, never `coordFrame`, so it cannot loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coordFrame, coordFrameSeen]);
+
   const sessionById = new Map(sessions.map((s) => [s.id, s] as const));
+  // CCR-15 wave 5 (spec §5.7): the abandon sheet's confirm line branches on the
+  // run's workspace's child mark, read off the fleet row this board already looks up.
+  const abandonSession = abandonTarget === null || abandonTarget.sessionId === null
+    ? undefined : sessionById.get(abandonTarget.sessionId);
   // ACTIVE reads `live` the instant the socket has said anything at all
   // (`runsFrameSeen`) — including an honest `[]`, which is what a run
   // closing broadcasts. Falling back to `live.length > 0 ? live : cold`
@@ -765,7 +872,8 @@ export function RunsScreen({
           own vanish-diff (above) also fires for the same close, and both
           landing is harmless because they feed separate slices (`active`
           from `live`, `finished` from `cold`, never merged). */}
-      <AbandonSheet run={abandonTarget} onClose={() => setAbandonTarget(null)} onDone={() => { void loadCold(); }} />
+      <AbandonSheet run={abandonTarget} workspaceChild={abandonChildOf(abandonSession)}
+        onClose={() => setAbandonTarget(null)} onDone={() => { void loadCold(); }} />
       {/* Spec §7.3: `onDone` re-runs `loadCold()` for the same reason the
           abandon sheet's does — a reclaim rewrites `claimedBy` on EVERY run of
           the program, terminal ones included (contract R1), and the finished

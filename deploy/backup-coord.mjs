@@ -6,7 +6,7 @@
 // recent, which is worse than no backup because it reads as one. VACUUM INTO
 // folds the WAL into a single self-contained file, works from a readOnly
 // connection, and needs no sqlite3 CLI (the server box has none — node:sqlite
-// is already this repo's floor, ci.yml pins node >=22.13.0 for exactly it).
+// is already this repo's floor: engines >=22.16.0, whose first reason it is).
 //
 // The filename is a bound parameter, not string splicing: VACUUM INTO takes an
 // expression, and a path with a quote in it must not be able to become SQL.

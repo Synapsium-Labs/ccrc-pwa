@@ -679,6 +679,13 @@ describe('the worker skill: the routing clauses (routing slice 2)', () => {
   it('never names the reclaim switch — neither the route nor the bare ccd verb', () => {
     expect(skill).not.toContain('reclaim-pause');
   });
+
+  // The stall watch's level and quiet time are the operator's alone (stall-watch
+  // settings design 2026-10-05 §10). The skill never names the door that sets
+  // them.
+  it('never names the stall-watch settings door — the worker a check is about is the session most motivated to lower the watch', () => {
+    expect(skill).not.toContain('/api/coord/stall-watch');
+  });
 });
 
 // ── Worker stall watch, wave 3 (spec 2026-09-29 §6.2) ────────────────────────

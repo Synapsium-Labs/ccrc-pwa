@@ -9,7 +9,7 @@
 // status), the newest mail to it at 21:19:17Z (#2510 answer), its main loop idle since 21:56:31Z, r1 due at
 // 23:56:31Z.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Bus } from '../src/bus.js';
@@ -25,15 +25,16 @@ import {
   BACKLOG_HORIZON_MS, DEAD_GRACE_MS, FAILED_IDLE_MS, MAIL_STUCK_MS, MARKER_UNREADABLE_MS, ORPHAN_D_IDLE_MS, ORPHAN_E_IDLE_MS,
   FROZEN_NO_EVENT_MS, ORPHAN_PUSH_MS, STALL_FAILED_PREFIX, stallFailedSubject,
   STALL_CHECK_PREFIX, STALL_ESCALATE_MS, STALL_OPERATOR_MS, STALL_ORPHANED_PREFIX, STALL_QUIET_MS, STALL_REPORT_PREFIX,
-  parseStallDetail, stallDetail, COORD_DEAF_MS,
+  parseStallDetail, stallArmingOf, stallDetail, COORD_DEAF_MS, STALL_MARKERS, type StallArming,
 } from '../src/coord/stall.js';
+import { parseStallSettings, resolveStallWatch, stallBoxArmingOf, stallBusyClock, type StallBoxArming, type StallSettingsPatch } from '../src/coord/stallsettings.js';
 import type { PushPayload } from '../src/push.js';
-import { MAIL_REPLAY_MS, WAVE_DONE_SUBJECT, type FleetSession } from '../../shared/api.js';
+import { MAIL_REPLAY_MS, STALL_LEVELS, WAVE_DONE_SUBJECT, type FleetSession } from '../../shared/api.js';
 import { tmuxTarget } from '../../shared/tmux-target.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO } from './ioDoubles.js';
-import { MAIL_GATE_BUSY_MARKER } from '../src/turnidle.js';
+import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_MARKER, mailTurnModeOf } from '../src/turnidle.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -332,7 +333,7 @@ describe('sweepStalls: gating', () => {
     expect(reads).toEqual([]);
   });
 
-  it('a throw outside the per-subject catch (the arming read) resolves, warns ONCE, and frees the in-flight flag', async () => {
+  it("a throw outside the per-subject catch (a listing's `includes`) resolves, warns ONCE, and frees the in-flight flag", async () => {
     // The tick calls `sweepStalls(...).catch(() => {})`, so a throw that escaped the lane would kill it every
     // minute with no trace. The lane's own outer catch is what leaves one line behind.
     const { coord, w } = await rig();
@@ -2122,5 +2123,226 @@ describe('sweepStalls: one dialog-cap push per dialog (dialog-cap-keyed-on-the-d
     await again.sweepStalls([fleetRow(WORKER)], ARMED, tickOf());
     expect(spy2.sent.map((p) => p.tag)).toEqual([`stall-${runId}-dialog-cap-1-${S2}`]);
     expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'dialog-cap', 1, IDLE_AT), stallDetail('live', 'dialog-cap', 1, S2)]);
+  });
+});
+
+// ── stall watch settings (design 2026-10-05 §9): one resolution for both sweeps, the busy clock, the quiet time ─────────
+describe('sweepStalls: the stall-watch settings (stall watch settings §9)', () => {
+  type Resolution = { readonly arming: StallBoxArming; readonly quietMs: number; readonly levelSource: string };
+  const touch = (h: Harness, name: string): void => { writeFileSync(path.join(h.home, '.cc-sessions', name), ''); };
+  /** The registry listing as `tick()` hands it to both sweeps: the box files and the session field files. */
+  const listing = (h: Harness): string[] => readdirSync(path.join(h.home, '.cc-sessions'));
+  /** A stored choice, written through the store's one write as the route writes it. */
+  const choose = (coord: CoordStore, patch: StallSettingsPatch): void => {
+    const r = coord.setStallSettings(patch, Date.now(), coord.stallSettings());
+    if (r.kind !== 'written') throw new Error(`fixture write refused: ${JSON.stringify(r)}`);
+  };
+  /** The watcher's two busy-clock fields. A rename reads `undefined`, so the rows that read it red, never pass. */
+  const clock = (w: FleetWatcher): { lastApplied: string | null; busySince: number | null } => {
+    const f = w as unknown as { lastApplied: string | null; busySince: number | null };
+    return { lastApplied: f.lastApplied, busySince: f.busySince };
+  };
+  /** Wraps the private resolver and `judgeStall`, passing through: every answer the resolver gave, and the arming
+   *  every worker verdict received. A renamed method makes `.bind` throw, so the rows red. */
+  const tap = (w: FleetWatcher): { answers: Resolution[]; armings: StallArming[] } => {
+    const answers: Resolution[] = [];
+    const armings: StallArming[] = [];
+    const f = w as unknown as {
+      stallResolveNow: (...a: unknown[]) => Resolution; judgeStall: (...a: unknown[]) => Promise<void>;
+    };
+    const resolve = f.stallResolveNow.bind(w);
+    f.stallResolveNow = (...a) => { const r = resolve(...a); answers.push(r); return r; };
+    const judge = f.judgeStall.bind(w);
+    f.judgeStall = (...a) => { armings.push(a[4] as StallArming); return judge(...a); };
+    return { answers, armings };
+  };
+
+  it('the migrated database seeds Follow and the built-in quiet time, so the S4 verdicts are today\'s (M12)', async () => {
+    const { coord, w } = await rig();
+    const runId = seedRun(coord, { program: 'demo-program' });
+    at(R1_AT - STALL_SWEEP_MS);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
+    expect(operatorMail(coord)).toEqual([]);
+    at(R1_AT);
+    await w.sweepStalls([fleetRow(WORKER)], LIVE, tickOf());
+    expect(operatorMail(coord).map((m) => m.at)).toEqual([R1_AT]);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'quiet', 1, KEY)]);
+    expect(parseStallSettings(coord.stallSettings()))
+      .toMatchObject({ stored: 'row', level: { kind: 'follow' }, quiet: { kind: 'default' } });
+  });
+
+  it('at boot the verdicts receive today\'s exact arming, with no busySince key: the box files on busy delivery, and with mail-disabled (M4)', async () => {
+    for (const extra of [[], ['mail-disabled']]) {
+      const { h, coord, w } = await rig();
+      seedRun(coord, { program: 'demo-program' });
+      for (const n of [...W2, MAIL_GATE_BUSY_MARKER, ...extra]) touch(h, n);
+      const t = tap(w);
+      const names = listing(h);
+      at(R1_AT);
+      await w.sweepStalls([fleetRow(WORKER)], names, tickOf());
+      const today = { ...stallArmingOf(names), mailDisabled: names.includes('mail-disabled'), mailMode: mailTurnModeOf(names) };
+      expect(today.mailMode, 'premise: the box files deliver on busy').toBe('busy');
+      expect(t.armings, extra.join()).toHaveLength(1);
+      expect(t.armings[0], extra.join()).toStrictEqual(today);
+      expect(Object.keys(t.armings[0]!), extra.join()).not.toContain('busySince');
+    }
+  });
+
+  it('a chosen level keeps mail-disabled: r1 is held, while the chosen wave-2 step pushes mail-stuck (M2)', async () => {
+    const { coord, w, sent } = await rig();
+    const runId = seedRun(coord, { program: 'demo-program' });
+    choose(coord, { level: 'all' });
+    // Queued at 21:19:17Z and never delivered: 2 h past the worker's idle start at r1's time.
+    const m = coord.insertMail({ fromId: 'demo-boss', fromUuid: 'u', toId: WORKER, runId: null, kind: 'finding', subject: 'hi', body: 'b', artifacts: [] });
+    const d = coord.queueDelivery(m.id, WORKER, 'envelope');
+    at(R1_AT);
+    await w.sweepStalls([fleetRow(WORKER)], ['mail-disabled'], tickOf());
+    expect(operatorMail(coord)).toEqual([]);          // r1 would send under the chosen level: held `mail-disabled`
+    expect(sent.map((p) => p.tag)).toEqual([`stall-${runId}-mail-stuck-1-${d.id}`]);
+    expect(stallRows(coord, runId)).toEqual([stallDetail('live', 'mail-stuck', 1, d.id)]);
+  });
+
+  it('a stored quiet time reaches the verdict: 30 min chosen, a worker quiet 31 min draws its r1 under Log (M9c)', async () => {
+    const { coord, w } = await rig();
+    const runId = seedRun(coord, { program: 'demo-program' });
+    choose(coord, { quiet: { kind: 'set', ms: 30 * 60_000 } });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    at(IDLE_AT + 31 * 60_000);
+    await w.sweepStalls([fleetRow(WORKER)], [], tickOf());
+    expect(stallRows(coord, runId)).toEqual([stallDetail('shadow', 'quiet', 1, KEY)]);
+  });
+
+  it('one resolution for both sweeps: for every choice the two answers agree, the mail gate applies its mode, and the verdicts differ only by the busy clock (M8a)', async () => {
+    for (const level of ['follow', ...STALL_LEVELS] as const) {
+      const { h, coord, w } = await rig();
+      seedRun(coord, { program: 'demo-program' });
+      for (const n of [...ARMED, MAIL_GATE_BUSY_SHADOW_MARKER]) touch(h, n);
+      choose(coord, { level });
+      const t = tap(w);
+      at(R1_AT);
+      await w.sweepMail();
+      const applied = clock(w);
+      await w.sweepStalls([fleetRow(WORKER)], listing(h), tickOf());
+      expect(t.answers, level).toHaveLength(2);
+      expect(t.answers[1], level).toEqual(t.answers[0]);
+      const answer = t.answers[0]!;
+      expect(applied.lastApplied, level).toBe(answer.arming.mailMode);
+      if (answer.arming.disabled) {
+        expect(t.armings, level).toEqual([]);
+        continue;
+      }
+      expect(t.armings, level).toHaveLength(1);
+      const { mailMode, busySince, ...rest } = t.armings[0]!;
+      const { mailMode: answerMode, ...answerRest } = answer.arming;
+      expect(rest, level).toStrictEqual(answerRest);
+      expect({ mailMode, ...(busySince === undefined ? {} : { busySince }) }, level)
+        .toStrictEqual(stallBusyClock(answerMode, applied.lastApplied as typeof answerMode | null, applied.busySince));
+    }
+  });
+
+  /** The resolver's catch arm, forced: a store whose `stallSettings()` throws. The method is private, so it is reached
+   *  through a cast, as `tap` does; a rename makes the call throw and the rows red. */
+  const resolveWithFaultyStore = (coord: CoordStore, w: FleetWatcher, names: readonly string[], mailDisabled: boolean): Resolution => {
+    vi.restoreAllMocks();                                    // a repeat call re-spies, never stacks
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(coord, 'stallSettings').mockImplementation(() => { throw new Error('store fault'); });
+    const f = w as unknown as { stallResolveNow: (...a: unknown[]) => Resolution };
+    return f.stallResolveNow(coord, names, mailDisabled);
+  };
+
+  it('the catch arm answers the files-only reading, the one `stallBoxArmingOf` gives, and the built-in quiet time (M5e)', async () => {
+    const [KILL_FILE] = STALL_MARKERS as unknown as [string];
+    expect(stallArmingOf([KILL_FILE]).disabled, 'premise: the kill file is STALL_MARKERS[0]').toBe(true);
+    const listings: [string, readonly string[]][] = [
+      ['none', []],
+      ['strict', [MAIL_GATE_STRICT_MARKER]],
+      ['busy', [MAIL_GATE_BUSY_MARKER]],
+      ['busy-shadow', [MAIL_GATE_BUSY_SHADOW_MARKER]],
+      ['live', LIVE],
+      ['armed', ARMED],
+      ['wave 2', W2],
+      ['wave 2 live only', W2_LIVE],
+      ['kill file', [KILL_FILE]],
+      ['kill file over armed busy', [...W2, KILL_FILE, MAIL_GATE_BUSY_MARKER]],
+      ['armed busy', [...W2, MAIL_GATE_BUSY_MARKER]],
+    ];
+    const { coord, w } = await rig();               // one rig: the store's fault stands for every listing
+    for (const [label, names] of listings) {
+      for (const mailDisabled of [false, true]) {
+        const answer = resolveWithFaultyStore(coord, w, names, mailDisabled);
+        expect(answer.arming, `${label}, mailDisabled ${mailDisabled}`).toStrictEqual(stallBoxArmingOf(names, mailDisabled));
+        expect(answer.quietMs, `${label}, mailDisabled ${mailDisabled}`).toBe(STALL_QUIET_MS);
+      }
+    }
+  });
+
+  it('the answer carries where the level came from: the resolver\'s value on the success arm, `files` on the catch arm (spec §9)', async () => {
+    const seen = new Set<string>();
+    for (const [label, level, names] of [
+      ['follow', 'follow', []],
+      ['chosen', 'all', []],
+      ['held by strict', 'all', [MAIL_GATE_STRICT_MARKER]],
+    ] as const) {
+      const { h, coord, w } = await rig();
+      for (const n of names) touch(h, n);
+      choose(coord, { level });
+      const listed = listing(h);
+      const f = w as unknown as { stallResolveNow: (...a: unknown[]) => Resolution };
+      const answer = f.stallResolveNow(coord, listed, false);
+      const expected = resolveStallWatch(stallBoxArmingOf(listed, false), parseStallSettings(coord.stallSettings())).levelSource;
+      expect(answer.levelSource, label).toBe(expected);
+      seen.add(answer.levelSource);
+    }
+    expect([...seen].sort(), 'premise: the three values are each reached').toEqual(['chosen', 'files', 'held']);
+    const { coord, w } = await rig();
+    choose(coord, { level: 'all' });
+    expect(resolveWithFaultyStore(coord, w, [], false).levelSource).toBe('files');
+  });
+
+  /** One raise into busy delivery while a mail has been held past MAIL_STUCK_MS (M8). The mail sweep applies the
+   *  pre-raise mode, the raise lands, a stall sweep runs before the mail sweep applies busy at T, and two run after. */
+  const raise = async (label: string, before: (h: Harness, coord: CoordStore) => void, after: (h: Harness, coord: CoordStore) => void): Promise<void> => {
+    const { h, coord, w } = await rig();
+    const runId = seedRun(coord, { program: 'demo-program' });
+    seedLiveState(h.home, { status: 'busy', statusUpdatedAt: IDLE_AT + 300_000, startedAt: STARTED_AT });
+    seedTurnMark(h.home, WORKER);                     // done, its Stop at IDLE_AT
+    const m = coord.insertMail({ fromId: 'demo-boss', fromUuid: 'u', toId: WORKER, runId: null, kind: 'finding', subject: 'hi', body: 'b', artifacts: [] });
+    const d = coord.queueDelivery(m.id, WORKER, 'envelope');
+    const T = IDLE_AT + MAIL_STUCK_MS + 600_000;     // the mail has been held 82 min past the turn's Stop
+    // Never due to the mail sweep, so it stays undelivered throughout; the mail sweep still applies its mode.
+    coord.backOff(d.id, 'held by the fixture', T + 2 * MAIL_STUCK_MS, false);
+    const stuck = (): string[] => stallRows(coord, runId).filter((x) => x.includes('mail-stuck'));
+    const sweep = async (): Promise<void> => { await w.sweepStalls([fleetRow(WORKER, { status: 'busy' })], listing(h), tickOf()); };
+    before(h, coord);
+    at(T - 70_000);
+    await w.sweepMail();                              // applies the pre-raise mode
+    after(h, coord);                                  // the raise
+    at(T - 59_000);
+    await sweep();
+    expect(stuck(), `${label}: a stall sweep before the mail sweep applies busy`).toEqual([]);
+    at(T);
+    await w.sweepMail();                              // busy delivery begins
+    expect(clock(w), label).toEqual({ lastApplied: 'busy', busySince: T });
+    at(T + 1_000);
+    await sweep();
+    expect(stuck(), `${label}: T + 1 s`).toEqual([]);
+    at(T + MAIL_STUCK_MS);
+    await sweep();
+    expect(stuck(), `${label}: T + MAIL_STUCK_MS`).toEqual([stallDetail('live', 'mail-stuck', 1, d.id)]);
+    expect(coord.delivery(d.id)?.state, `${label}: premise, still undelivered`).toBe('queued');
+  };
+
+  it('the busy clock: a chosen Alert raised to Everything waits MAIL_STUCK_MS from the start of busy delivery (M8)', async () => {
+    await raise('alert -> all', (_h, coord) => choose(coord, { level: 'alert' }), (_h, coord) => choose(coord, { level: 'all' }));
+  });
+
+  it('the busy clock: Follow over files armed for Everything, from a chosen Alert, gets the same grace (M8)', async () => {
+    await raise('alert -> follow',
+      (h, coord) => { for (const n of [...W2, MAIL_GATE_BUSY_MARKER]) touch(h, n); choose(coord, { level: 'alert' }); },
+      (_h, coord) => choose(coord, { level: 'follow' }));
+  });
+
+  it('the busy clock: mail-gate-busy touched by hand under Follow gets the same grace (M8)', async () => {
+    await raise('touched busy', (h) => { for (const n of W2) touch(h, n); }, (h) => touch(h, MAIL_GATE_BUSY_MARKER));
   });
 });

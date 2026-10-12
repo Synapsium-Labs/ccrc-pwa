@@ -19,7 +19,8 @@
 //  - The answer is `accepted` only once the `--detach` parent exited 0.
 //    Anything else is `spawn-failed`, carrying the parent's first stderr line
 //    (D-3372); a parent killed at the bound is decided by re-measurement (D-3413).
-//  - The ready frame advertises exactly `['update']`.
+//  - The ready frame advertises exactly `['update', 'token-sync']` (the second word is box-token lifecycle wave 1's,
+//    pinned with its op in `token-sync-op.test.ts`).
 //  - The op reaches no exec path. This is a SOURCE scan, because no behavioural
 //    case can see an extra call whose answer comes out the same.
 import { describe, it, expect, afterEach, vi } from 'vitest';
@@ -394,12 +395,12 @@ describe('the update op', () => {
     });
   });
 
-  it("the ready frame advertises exactly ['update'] (§18 \"an agent without the op is never sent it\", the agent half)", async () => {
+  it("the ready frame advertises exactly ['update', 'token-sync'] (§18 \"an agent without the op is never sent it\", the agent half)", async () => {
     fixture = makeFixture();
     agent = await boot(fixture, { spawnUpdate: recorder().spawn });
     const c = new TestClient(agent.port);
     clients.push(c);
-    expect((await c.hello() as AgentReady).ops).toEqual(['update']);
+    expect((await c.hello() as AgentReady).ops).toEqual(['update', 'token-sync']);
   });
 
   describe('the op reaches no exec path (§18 "the op never execs") — read from the source', () => {

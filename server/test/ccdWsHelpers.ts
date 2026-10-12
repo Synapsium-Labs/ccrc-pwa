@@ -11,6 +11,7 @@ import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { asManagerCalls } from './platformFixtures.js';
+import { inheritedEnv } from './gitEnvStrip.js';
 
 /** The home-able ids of the test roster — the set ccd reads as `CCRC_HOME_ABLE`
  *  out of the roster `seedAccountsSh` writes below. Derived, not hand-typed,
@@ -491,6 +492,19 @@ export const WIDE_PANE_IF_UP =
  *  rather than through a file. */
 export const DEAD_PANE = 'case "$*" in *pane_active*) return 1 ;; esac;';
 
+/** THE MOUNT TABLE EVERY `sh()` HANDS ccd, relative to the fixture HOME
+ *  (D-4500). The sidecar carry's link route reads `CCD_MOUNTINFO`, else
+ *  `/proc/self/mountinfo`, the moment a link fails, and decides link-or-copy
+ *  from it. Left to the default, a verdict would depend on the HOST — a Linux
+ *  runner answers from its own table, macOS from none — so the same case would
+ *  log one cause on CI and another on a laptop, and a test that names a cause
+ *  would be measuring the machine. The harness therefore points every snippet at
+ *  this path inside HOME, which is ABSENT until a test writes a table there
+ *  (`fixtures/fakeMountKernel.ts`): the route answers `mounts-absent` on every
+ *  host alike. A snippet's own `CCD_MOUNTINFO` wins over it; `''` restores the
+ *  real table, which only the probe-gated real-kernel case asks for. */
+export const FIXTURE_MOUNTINFO = '.fixture-mountinfo';
+
 export interface CcdHarness {
   home: string;
   sh(snippet: string, env?: NodeJS.ProcessEnv): string;
@@ -544,7 +558,7 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   ghContainedEnv(home, {}, { systemd: true, tmux: true });
 
   const gitEnv = (): NodeJS.ProcessEnv => ({
-    ...process.env, HOME: home,
+    ...inheritedEnv(), HOME: home,
     GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@x',
     GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@x',
   });
@@ -557,8 +571,8 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   const makeRepoAt = (name: string): string => {
     const origin = path.join(home, 'origins', `${name}.git`);
     const main = path.join(home, 'projects', name);
-    execFileSync('git', ['init', '--bare', '-b', 'main', origin]);
-    execFileSync('git', ['init', '-b', 'main', main]);
+    execFileSync('git', ['init', '--bare', '-b', 'main', origin], { env: inheritedEnv() });
+    execFileSync('git', ['init', '-b', 'main', main], { env: inheritedEnv() });
     fs.writeFileSync(path.join(main, 'README.md'), 'hi\n');
     git(main, 'add', 'README.md');
     git(main, 'commit', '-m', 'init');
@@ -583,7 +597,10 @@ export function makeCcdHarness(prefix: string): CcdHarness {
     sh: (snippet, env = {}) =>
       execFileSync('bash', ['-c', `source "${CCD}"; ${snippet}`],
         { encoding: 'utf8', cwd: home,
-          env: ghContainedEnv(home, { ...process.env, HOME: home, ...env }, { systemd: true, tmux: true }) }).trim(),
+          // `CCD_MOUNTINFO` sits BEFORE `...env` so a snippet can override it:
+          // see `FIXTURE_MOUNTINFO` for why the host's table never decides a verdict.
+          env: ghContainedEnv(home, { ...inheritedEnv(), HOME: home,
+            CCD_MOUNTINFO: path.join(home, FIXTURE_MOUNTINFO), ...env }, { systemd: true, tmux: true }) }).trim(),
     reg: (id, field) => {
       const p = path.join(home, '.cc-sessions', `${id}.${field}`);
       return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').trim() : null;
@@ -633,3 +650,14 @@ export function makeCcdHarness(prefix: string): CcdHarness {
     cleanup: () => { fs.rmSync(home, { recursive: true, force: true }); },
   };
 }
+
+/** A shell prefix that runs `<secs> <argv…>` under a cross-platform alarm and, on
+ *  the alarm, kills the child's WHOLE process group, reaps it and exits 142 (the
+ *  old form's code); otherwise it exits as the child did. Perl is on both
+ *  supported userlands. The old `perl -e 'alarm shift; exec @ARGV'` BECAME the
+ *  child, so the alarm signalled bash alone and a `tail` bash had forked —
+ *  blocked opening a FIFO whenever a mutation removed a detector's guard —
+ *  outlived every timed-out run; the fleet box's dead pane scopes held such
+ *  processes for weeks (session-continuity spec §1.3, §5.6 item 3). perl now
+ *  forks the child into a process group of its own and kills that group. */
+export const BOUNDED = `perl -e '$t = shift; $p = fork; die "fork: $!" unless defined $p; if (!$p) { setpgrp(0, 0); exec @ARGV; exit 127 } $SIG{ALRM} = sub { kill "KILL", -$p; waitpid($p, 0); exit 142 }; alarm $t; waitpid($p, 0); exit($? & 127 ? 128 + ($? & 127) : $? >> 8)'`;

@@ -35,7 +35,8 @@ import { ghContainedEnv } from './ccdWsHelpers.js';
 import { pythonOrSkip, spawnPy } from './ccgptHarness.js';
 import { describeLinux, IS_DARWIN, itLinux } from './platformFixtures.js';
 import {
-  alive, codexAuthDir, codexRoster, eventually, failUnitStop, fakeUnit, freePorts, killLaneProcesses, laneAnswer,
+  alive, codexAuthDir, codexRoster, eventually, failUnitStop, fakeLitellmSource, fakeUnit, freePorts, killLaneProcesses, laneAnswer,
+  LISTENER_PY,
   litellmEvidence, litellmTeardownEvents, plantCodexBins, plantFakeRuntime, plantLaneConfig, plantSystemd, portAccepts, psArgs,
   refuseLitellmStart, registerLaneCleanup, resistLitellmTerm, slowLitellmListen, spawnFakeLitellm, spawnListener, systemctlCalls, systemdRunArgv,
   systemdRunCalls, trackChild, unitPid,
@@ -601,6 +602,61 @@ describe('_codex_runtime_env_ensure — the lane\'s gateway key file (spec §5.4
     expect(fs.lstatSync(join(dir, tmps[0]!)).isSymbolicLink()).toBe(true);
     expect(fs.readFileSync(join(dir, 'decoy-target'), 'utf8')).toBe('not a key\n');
   });
+});
+
+// Both stand-ins are stdlib `HTTPServer`s, whose `server_bind` asks
+// `socket.getfqdn(host)` between bind and listen. On the macOS runner that
+// reverse lookup of 127.0.0.1 took ~35 s in every new process (the measurement
+// ccd/ccgpt-proxy.py's `_Server` cites), past spawnListener's 10 s READY,
+// spawnFakeLitellm's 10 s accept and a start's 20 s readiness bound: 39 reds
+// in daily run 36960555979, green on Linux, where the lookup is instant.
+// The driver makes any getfqdn call fatal and stops at serve_forever, so each
+// stand-in must reach its serve loop without asking — on any box.
+describe('the fixture stand-ins start without a reverse lookup of their bind address', () => {
+  const NO_FQDN_DRIVER = [
+    'import runpy, socket, socketserver, sys',
+    'def _refuse(*a, **k):',
+    '    raise AssertionError("stand-in called socket.getfqdn%r" % (a,))',
+    'socket.getfqdn = _refuse',
+    'def _stop(self, *a, **k):',
+    '    print("reached serve_forever", flush=True)',
+    '    raise SystemExit(0)',
+    'socketserver.BaseServer.serve_forever = _stop',
+    'sys.argv = sys.argv[1:]',
+    'runpy.run_path(sys.argv[0], run_name="__main__")',
+    '',
+  ].join('\n');
+  const cases: Array<[string, (dir: string) => { script: string; args: string[] }]> = [
+    ['spawnListener\'s listener.py', (dir) => {
+      const script = join(dir, 'listener.py');
+      fs.writeFileSync(script, LISTENER_PY);
+      return { script, args: ['--answer', '404', '--listen-port', '0'] };
+    }],
+    ['the fake LiteLLM (spawnFakeLitellm and the runtime\'s tier)', (dir) => {
+      const script = join(dir, 'fake-litellm.py');
+      fs.writeFileSync(script, fakeLitellmSource(dir));
+      const config = join(dir, 'litellm.yaml');
+      fs.writeFileSync(config, 'model_list: []\n');
+      return { script, args: ['-m', 'litellm.proxy.proxy_cli', '--config', config, '--host', '127.0.0.1', '--port', '0'] };
+    }],
+  ];
+  for (const [what, plant] of cases) {
+    it.skipIf(!PY)(`${what} reaches serve_forever and never calls socket.getfqdn`, () => {
+      const h = box('ccrc-codex-nofqdn-');
+      const dir = join(h, 'fake-procs');
+      fs.mkdirSync(dir, { recursive: true });
+      const driver = join(dir, 'no-fqdn-driver.py');
+      fs.writeFileSync(driver, NO_FQDN_DRIVER);
+      const { script, args } = plant(dir);
+      const r = spawnSync(PY!, ['-B', driver, script, ...args], {
+        cwd: h, encoding: 'utf8', timeout: 20_000,
+        env: { PATH: process.env['PATH'] ?? '/usr/bin:/bin', HOME: h, PYTHONDONTWRITEBYTECODE: '1' },
+      });
+      expect(r.stderr).not.toMatch(/getfqdn/);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toContain('reached serve_forever');
+    });
+  }
 });
 
 describe('_codex_port_listening', () => {
@@ -1982,7 +2038,10 @@ describe.skipIf(!PY)('ccrc codex start|stop|status: the lane runs, in fixtures (
     expect(await portAccepts(a.litellmPort)).toBe(false);
   }, 60_000);
 
-  it('L0e fixture cleanup calls the real product stop before direct handles', async () => {
+  // Linux only: the product stop is measured through the fake `systemctl`'s
+  // `--user stop` record, and on macOS ccrc's manager is launchctl, so that
+  // record stays empty there (PR #240's test-macos 2/2), as L16's does.
+  itLinux('L0e fixture cleanup calls the real product stop before direct handles', async () => {
     const { home, lanes } = await lifeBox({ userManager: true, ids: ['codex-a'] });
     const a = lanes['codex-a']!;
     const started = codex(home, ['start', 'codex-a']);

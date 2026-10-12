@@ -17,17 +17,18 @@
  *   - `:` makes it "the current window of exactly this session" — without it,
  *     `list-panes`/`resize-window` still prefix-match and `capture-pane`,
  *     `send-keys` and `display-message` FAIL on a session that exists;
- *   - `.` and `:` become `_`, because tmux rewrites them that way in a session
- *     NAME (`-s cc-w-my.site` creates `cc-w-my_site`) — anchoring the unrewritten
- *     name answers `can't find session` for a LIVE session, i.e. `gone`.
+ *   - the NAME is created already sanitised (`.` and `:` become `_`: tmux 3.4
+ *     rewrites them itself, tmux 3.7c keeps them), so the target is exact on any
+ *     tmux version — an unsanitised anchor would answer `can't find session` for
+ *     a LIVE session, i.e. `gone`.
  * A missing session answers `can't find session: cc-x` under this form for
  * every command the adapter runs — the one message the classifiers read as
  * death.
  */
 export function tmuxName(id: string): string {
-  return `cc-${id}`;
+  return `cc-${id}`.replace(/[.:]/g, '_');
 }
 
 export function tmuxTarget(id: string): string {
-  return `=${tmuxName(id).replace(/[.:]/g, '_')}:`;
+  return `=${tmuxName(id)}:`;
 }

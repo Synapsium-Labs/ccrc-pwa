@@ -162,6 +162,18 @@ describe('the five answers', () => {
     expect(sweep().queue).toBe('none');
   });
 
+  it('none — a CLOSED PR that never merged: in neither window, but its line already says closed (review 241 F10(b))', () => {
+    const tip = workspaceWithCommit('demo', 'quiet-basin');
+    h.ghRows([openRow({ state: 'CLOSED', headRefOid: tip })]);
+    setQueue(answer([node(7, 'OPEN', true, 'AddedToMergeQueueEvent')]));
+    const o = sweep();
+    expect(o.phase).toBe('closed');
+    expect(o.queue).toBe('none');
+    expect('queueAt' in o).toBe(false);
+    // …and a call that did not answer is still unmeasured, closed or not.
+    expect(sweep('return 1').queue).toBe('unmeasured');
+  });
+
   it('unmeasured — the bound PR is outside both windows', () => {
     const tip = workspaceWithCommit('demo', 'quiet-basin');
     h.ghRows([openRow({ headRefOid: tip })]);

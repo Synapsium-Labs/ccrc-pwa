@@ -13,7 +13,10 @@ import { PushService } from './push.js';
 import { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
 import { KeyedQueue } from './inject/queue.js';
-import { readMailToken } from './coord/token.js';
+import { bootBoxToken } from './token/boot.js';
+import { BoxTokenDriver } from './token/driver.js';
+import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js';
+import { gateRowsOver, generationReaderOver, tokenSyncLinkOver } from './token/link.js';
 import { openCoordDb } from './coord/db.js';
 import { CoordStore } from './coord/store.js';
 import { PoolEdgeLog, defaultPoolEdgeLogPath } from './coord/pooledgelog.js';
@@ -44,23 +47,18 @@ const push = cfg.vapidPublic && cfg.vapidPrivate
 const notifyLog = new NotifyLog(path.join(cfg.home, '.ccrc', 'notify-log.json'));
 const presence = new Presence();
 
-// D-57 (Task 11 review): this line said /api/notify AND /api/mail "accept
-// unauthenticated callers" — true the day it landed (eb9c88a), false since
-// D-39 (Task 7 fix round) made `checkMailToken(null, …)` answer
-// `'unconfigured'`, which BOTH mail gates (`routes.ts`'s ingress and ack)
-// treat as `verdict !== 'ok'` and refuse with 401 — in their own words,
-// "/api/mail fails shut on an unconfigured token, it does not fail open."
-// Only `/api/notify` still passes an unconfigured token through (`server.ts`
-// has no `'unconfigured'` arm on that gate, and logs nothing on that path
-// either). The two routes now have OPPOSITE postures on a missing token, and
-// this was the one line an operator would grep the journal for.
-const mailToken = readMailToken(cfg.mailTokenPath);
-if (mailToken === null) {
-  console.warn(`ccrc-server: no box token at ${cfg.mailTokenPath} — /api/notify accepts ` +
-    'unauthenticated callers (its one-deploy legacy tolerance), while /api/mail and ' +
-    '/api/mail/:id/ack FAIL SHUT and refuse every caller with 401 — the mail bus is dead, not ' +
-    'open. Ship a token with deploy.sh (see deploy/ccrc-mail.token.example).');
-}
+// The box token (spec 4.2, D-4388): minted, adopted or recovered by `bootBoxToken`,
+// which refuses a hand-made unusable or placeholder file exactly as
+// `readMailToken` did and never adopts a retired value. Every warning it
+// returns is one line with paths and words only. The holder replaces the old
+// string: every call site still reads `deps.mailToken ?? null` at request time,
+// and the driver below mutates the holder in place.
+const tokenBoot = await bootBoxToken({
+  mailTokenPath: cfg.mailTokenPath, home: cfg.home, role: cfg.role, roleSource: cfg.roleSource,
+  fleetMode: cfg.fleetMode, now: Date.now(),
+});
+for (const line of tokenBoot.warnings) console.warn(line);
+const mailToken = tokenBoot.holder;
 
 // Opened at the root, before the watcher: a database that cannot be migrated
 // must stop the process, not be discovered by the first sweep that touches
@@ -215,9 +213,27 @@ const watcher = new FleetWatcher(deps, bus);
 // inventory lane's clock starts at 0.
 fleetClient?.onConnected(() => watcher.triggerInventory());
 
+// The box-token driver (spec §5): its own unref'd 60 s timer, never a lane in
+// watch.ts. Built before buildServer so the claim door and the rotate route read
+// it from `deps.tokenDriver`; started after listen. `lastReadyAt` is the time
+// of the last agent handshake, which re-probes a learned hold and resets backoff.
+let lastReadyAt: number | null = null;
+fleetClient?.onConnected(() => { lastReadyAt = Date.now(); });
+const tokenStore = fileTokenStore(tokenPaths(cfg.mailTokenPath, cfg.home));
+const tokenDriver = new BoxTokenDriver({
+  store: tokenStore, holder: tokenBoot.holder,
+  link: fleetClient === null ? null : tokenSyncLinkOver(fleetClient),
+  generation: fleetClient === null ? null : generationReaderOver(deps.io, cfg.ccrcDir, Date.now),
+  rows: gateRowsOver(coord, () => cfg.fleetMode === 'remote' && (deps.fleetState?.connected ?? false), () => lastReadyAt),
+  env: { fleetMode: cfg.fleetMode, role: cfg.role, roleSource: cfg.roleSource, agentEnvMarksFleet: tokenBoot.agentEnvMarksFleet },
+  bothWriter: tokenBoot.bothWriterArmed ? fileBothRoleWriter(tokenStore.paths) : null,
+}, tokenBoot);
+deps.tokenDriver = tokenDriver;
+
 const app = await buildServer(deps, bus, watcher);
 watcher.start();
 await app.listen({ host: cfg.host, port: cfg.port });
+tokenDriver.start();
 console.log(`ccrc-server on ${cfg.host}:${cfg.port} (fleet=${cfg.fleetMode})`);
 
 // Said once at boot, beside the line above: a role DERIVED because CCRC_ROLE

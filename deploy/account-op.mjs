@@ -678,7 +678,13 @@ const OPS = {
     keys: ['file', 'id', 'rehomed', 'kept', 'removed', 'operator-step'],
     repeat: ['rehomed', 'kept', 'removed', 'operator-step'],
   },
-  'refuse-live': { keys: ['id', 'live'], repeat: ['live'] },
+  // `--stands` here is `drop`'s key at a second address and for its reason: a
+  // removal that waited for a usage poll has already disabled that lane's timer
+  // when its second census finds a live session (Plan 3b, D-4050), and this
+  // envelope, re-emitted verbatim, is the only place the operator reads that.
+  // Absence-permitting: the first census passes none, and the sentence is the one
+  // it always was.
+  'refuse-live': { keys: ['id', 'live', 'stands'], repeat: ['live'] },
   // `live` REPEATS — `candidates`' pair at a third address, and for its reason:
   // one JSON blob on argv would put a value bash built with `printf` back into
   // the JSON-shaped position this file owns. `measured` is a separate key from
@@ -2110,7 +2116,8 @@ function main(argv) {
   if (op === 'refuse-live') {
     if (a['id'] === undefined) { refuse('bad-argv', 'refuse-live needs --id'); return 2; }
     const live = a['live'] ?? [];
-    const detail = `${a['id']} has ${live.length} live session(s) — stop or swap each one first`;
+    const detail = `${a['id']} has ${live.length} live session(s) — stop or swap each one first`
+      + (a['stands'] === undefined ? '' : `. ${a['stands']}`);
     out({ ok: false, error: 'live-sessions', detail, live });
     process.stderr.write(`${SELF}: ${detail} (live-sessions)\n`);
     return 0;

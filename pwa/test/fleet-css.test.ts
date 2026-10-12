@@ -380,7 +380,11 @@ describe('selection is polarity, status is hue', () => {
                         // The context-pressure chip (D-2011): its own
                         // `--status-attention-text` (and `--status-dead-text`
                         // on the wedge variant, D-2016) strands the same way.
-                        '.sess-ctxpressure']) {
+                        '.sess-ctxpressure',
+                        // Child-reclamation wave 5's label: its own
+                        // `color: var(--ink-tertiary)` strands on the slab exactly
+                        // like `.sess-substrate`'s would without its entry here.
+                        '.sess-child']) {
       expect(group).toContain(`.sess-line--active ${cell}`);
     }
   });
@@ -499,6 +503,29 @@ describe('selection is polarity, status is hue', () => {
     // text-overflow:ellipsis, no `flex: none`), and §2.4 lengthens what it holds
     // in the same build. A chip without `flex: none` truncates it first.
     expect(ruleFor('.sess-spawn')).toContain('flex: none');
+  });
+
+  it('gives the child-of-run label .sess-substrate\'s shape, in a rule of its own (wave 5, spec §5.9)', () => {
+    // The ruled shape: `color: var(--ink-tertiary); flex: none`, no truncation. Fixed
+    // words beside the hold reason, the row's one shrinkable cell, so the label
+    // never truncates and never steals the hold reason's room. Its OWN rule,
+    // not a second selector on .sess-substrate's: that rule's key is
+    // grandfathered in contrast.test.ts's uncovered census, and renaming it
+    // would read as a new blind spot.
+    const substrate = ruleFor('.sess-substrate');
+    const child = ruleFor('.sess-child');
+    for (const prop of ['color', 'flex']) {
+      expect(declValue(child, prop), prop).not.toBeNull();
+      expect(declValue(child, prop), prop).toBe(declValue(substrate, prop));
+    }
+    const props = stripComments(child).split(';').map((d) => d.split(':')[0]!.trim()).filter((p) => p !== '');
+    expect(props.sort(), 'no truncation, and nothing beyond the ruled shape').toEqual(['color', 'flex']);
+    expect(selectorsOf(css, '.sess-child')).toEqual(['.sess-child']);
+    // No truncation from ANY rule that targets the label — the active-slab group
+    // and a later rule of the same name included, not only the one read above.
+    for (const prop of ['text-overflow', 'overflow', 'overflow-x', 'overflow-y', 'white-space']) {
+      expect(declaredValues(css, '.sess-child', prop), prop).toEqual([]);
+    }
   });
 
   // The list above names cells; this names the RULE that keeps producing them.
@@ -654,12 +681,22 @@ describe('runs are not living panes', () => {
       // grounded for the contrast gate by the named-ancestor route, so they
       // need no `INHERITED_GROUNDS` entry of their own, but that route is
       // silent about glow — nothing else asserted these rules exist at all.
-      '.run-row .run-project', '.run-row .run-crossing', '.run-row .run-crossing-glyph']) {
+      '.run-row .run-project', '.run-row .run-crossing', '.run-row .run-crossing-glyph',
+      // Child-reclamation wave 5's chip and its refusal line join the list: the
+      // line carries the attention hue, the shape that tends to acquire a glow next.
+      '.run-row .run-child-reclaim', '.run-row .run-child-reclaim-glyph', '.run-row .run-child-reclaim-sentence']) {
       const rule = norm(stripComments(ruleIn(css, sel)));
       expect(rule, sel).not.toContain('--glow');
       expect(rule, sel).not.toContain('animation');
       expect(rule, sel).not.toContain('box-shadow');
     }
+  });
+
+  it('inks the reclaim chip from pairs already priced — no new colour pair (wave 5)', () => {
+    expect(declValue(ruleFor('.run-row .run-child-reclaim'), 'color')).toBe('var(--ink-secondary)');
+    expect(declValue(ruleFor('.run-row .run-child-reclaim-glyph'), 'color')).toBe('var(--ink-tertiary)');
+    expect(declValue(ruleFor('.run-row .run-child-reclaim-sentence'), 'color')).toBe('var(--status-attention-text)');
+    expect(declValue(ruleFor('.run-row .run-child-reclaim-sentence'), 'flex')).toBe('1 0 100%');
   });
 });
 

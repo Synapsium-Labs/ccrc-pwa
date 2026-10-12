@@ -77,7 +77,7 @@ const runFor = (sessionId: string, id: number, program: string,
   // predates the warn row and must keep rendering exactly as it did.
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
             lastRejectCode: null, briefQueued: true, clearError: null,
-            coordKickoffPendingSince: null },
+            coordKickoffPendingSince: null }, childReclaim: null,
 });
 
 /** A session whose PR is MERGED and whose workspace is NOT archived — the one
