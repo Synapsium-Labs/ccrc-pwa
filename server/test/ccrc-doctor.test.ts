@@ -13711,8 +13711,8 @@ describe('ccrc doctor: history — the relay (O15: every word, and the one rule 
 // The check's states are `doctor-box-token.test.ts`'s; these pin what only the real runner can: that the check is
 // in the table, that a no-role box is counted as a skip (exactly one SKIP line, rc 3), that a `CCRC_ROLE=server` box
 // runs the server arm rather than the D-3111 "hosts no sessions" skip, and that the armed classes reach the runner:
-// a fresh server (no token, no state: 4553) is a WARN with its remedy line and does not move doctor's exit code,
-// and a server that lost its token (a state file beside it) is a FAIL, which does.
+// a fresh server (no token, no state: 4553, D-139) is a PASS with its sentence, no remedy line and no change to doctor's
+// exit code, and a server that lost its token (a state file beside it) is a FAIL, which does move it.
 describe('ccrc doctor: box-token', () => {
   it('healthy() records no role and holds no token file: one SKIP no-role line, counted as a skip, rc 0', () => {
     const r = runDoctor(healthy('ccrc-doctor-bt-norole-'));
@@ -13723,16 +13723,16 @@ describe('ccrc doctor: box-token', () => {
     expect(r.code).toBe(0);
   });
 
-  it('a CCRC_ROLE=server box with no mail.token and no state runs the server arm: a fresh box, WARN with a remedy line, rc 0', () => {
+  it('a CCRC_ROLE=server box with no mail.token and no state runs the server arm: a fresh box, PASS with its sentence and no remedy line, rc 0', () => {
     const home = healthy('ccrc-doctor-bt-server-');
     writeCcrcEnv(home, ['CCRC_ROLE=server', 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
     const r = runDoctor(home);
     const line = anyVerdictFor(r.stdout, 'box-token');
-    expect(line).toMatch(/^WARN box-token: server: token-absent — .*; server: state-absent — /);
+    expect(line).toMatch(/^PASS box-token: server: token-absent — .* no value has been minted here yet, and the server mints one at boot$/);
     expect(line).not.toMatch(/hosts no sessions/);
     expect(line).not.toMatch(/switched off/);
-    expect(lineAfter(r.stdout, 'WARN box-token: ')).toMatch(/^ {2}remedy: \S/);
-    expect(r.stdout).not.toMatch(/^FAIL box-token: /m);
+    expect(r.stdout).not.toMatch(/^(WARN|FAIL) box-token: /m);
+    expect(r.stdout).not.toMatch(/remedy:[^\n]*mints a value at boot/);
     expect(r.code).toBe(0);
   });
 

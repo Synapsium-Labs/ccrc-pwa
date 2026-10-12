@@ -5347,7 +5347,7 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     expect(r.stdout).toMatch(/^PASS tmux_skew: client 9\.9, running server 9\.9 — versions agree$/m);
   });
 
-  it('ends with doctor, and a fresh box whose one Linux warn is the ruled box-token WARN exits 0 with 0 failed', () => {
+  it('ends with doctor, and a fresh box ends green: 0 warned (D-139), 0 failed, exit 0', () => {
     const home = freshBox('ccrc-install-doctor-ok-');
     const r = runInstall(home);
     expect(r.code, r.stderr).toBe(0);
@@ -5369,15 +5369,16 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     // this verb could have avoided: `linger` has no counterpart on a platform
     // where a LaunchAgent lives and dies with the login session. `0 failed` is
     // the part that means "this install worked", and it holds on both.
-    // Since the box-token arming (row 2a, 4553) a fresh BOTH-role install carries one more warn, and it is the ruled
-    // one (operator, Decision 2 (a)): this box has neither the server's token and state files nor a fleet token file, so
-    // `box-token` WARNs (never FAILs, so the exit code stays 0) until the server's first boot writes them (on a both-role
-    // box that boot writes the fleet copy too). Still `0 failed`.
-    const warned = (process.platform === 'darwin' ? 1 : 0) + 1;
+    // The box-token arming (row 2a, 4553) keeps that: a fresh BOTH-role install has neither the server's token and state
+    // files nor a fleet token file, and `box-token` reads PASS with its sentence (operator, D-139 over Decision 2 (a),
+    // 2026-10-12): no value has been minted here yet and the server mints one at boot. Only a box that once held a value
+    // and lost it is a FAIL. So the count is `0 warned` again (the one `linger` warn on macOS), and `0 failed`.
+    const warned = process.platform === 'darwin' ? 1 : 0;
     expect(r.stdout).toMatch(new RegExp(
       `^summary: \\d+ checks \\(\\d+ skipped\\), \\d+ verdicts — \\d+ passed, ${warned} warned, 0 failed$`, 'm'));
-    expect(r.stdout, 'the one fresh-box warn is box-token').toMatch(/^WARN box-token: server: token-absent — .*; server: state-absent — /m);
-    expect(r.stdout.split('\n').filter((l) => /^WARN /.test(l)).filter((l) => !l.startsWith('WARN box-token: ') && !l.startsWith('WARN linger: '))).toEqual([]);
+    expect(r.stdout, 'box-token reads PASS on a fresh box, naming the fact').toMatch(
+      /^PASS box-token: server: token-absent — .* no value has been minted here yet, and the server mints one at boot; fleet: fleet-token-absent — .* no value has been handed to this box yet, and the server's next rotation hands one$/m);
+    expect(r.stdout.split('\n').filter((l) => /^WARN /.test(l)).filter((l) => !l.startsWith('WARN linger: '))).toEqual([]);
     // …and the gate check really RAN and really found the box uncredentialed:
     // `0 warned` must not be reachable by the check having vanished.
     expect(r.stdout).toMatch(/^PASS auth: no passphrase file at .*nothing is gated/m);
@@ -8704,16 +8705,17 @@ describeLinux('Plan 3a Task 10 — the cutover rehearsal', () => {
     }
   });
 
-  it('a fresh fleet box (the live shape without the fleet token file, generation file and sync report) keeps box-token measured: WARN with a remedy, never FAIL, and the install still exits 0 (4553)', () => {
+  it('a fresh fleet box (the live shape without the fleet token file, generation file and sync report) keeps box-token measured: PASS with its sentence and no remedy (D-139), and the install exits 0 (4553)', () => {
     const home = liveBox('ccrc-rehearsal-fresh-', { fleetFiles: false });
     homes.push(home);
     const r = runInstall(home, ['install', '--role', 'fleet'], REHEARSAL_ENV);
     expect(r.code, `a fresh box's install:\n${r.stdout}\n${r.stderr}`).toBe(0);
-    expect(r.stdout).toMatch(/^WARN box-token: fleet: fleet-token-absent — .*; fleet: no-generation — .*; fleet: never-synced — /m);
-    expect(r.stdout).toMatch(/^WARN box-token: .*\n {2}remedy: \S/m);
+    expect(r.stdout).toMatch(/^PASS box-token: fleet: fleet-token-absent — .* no value has been handed to this box yet, and the server's next rotation hands one$/m);
+    expect(r.stdout).not.toMatch(/box-token: .*(no-generation|never-synced)/);
+    expect(r.stdout).not.toMatch(/^box-token remedy|remedy:[^\n]*Box token card/m);
     expect(r.stdout).not.toMatch(/^FAIL /m);
-    expect(doctorClasses(r.stdout), 'only box-token and credentials differ from the live shape').toEqual({
-      ...BASE_LIVE_SHAPE.install[0]!.classes, 'box-token': 'WARN', credentials: 'SKIP', codex: 'SKIP',
+    expect(doctorClasses(r.stdout), 'only credentials differs from the live shape').toEqual({
+      ...BASE_LIVE_SHAPE.install[0]!.classes, credentials: 'SKIP', codex: 'SKIP',
     });
   });
 
