@@ -10,6 +10,9 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const flat = (f: string): string => readFileSync(path.join(root, f), 'utf8').replace(/\s+/g, ' ');
 const SPEC = 'docs/superpowers/specs/2026-09-22-child-workspace-reclamation-design.md';
+// The capability item of the arming checklist, as the README's list and the spec's "Before arming" list both carry it
+// (a fact the operator checks, never a step the server enforces). Without the final `;` or `.`, which the list sets.
+const CAPABILITY_ITEM = '`ccd caps` on the box whose ccd the server drives (the fleet box under `CCRC_FLEET=remote`) lists both `collect-v1` and `reclaim-pause-v1`: without either the lane does not run at all, shadow included, so it writes no row and no line, and an empty shadow feed proves nothing';
 
 describe('README: the temp-root collector', () => {
   const readme = flat('README.md');
@@ -26,11 +29,21 @@ describe('README: the temp-root collector', () => {
     expect(readme).toContain('runs at most two learning audits and one act job');
     expect(readme).toContain('no act job, shadow included, is offered in the first eight minutes after the server starts');
   });
-  it('carries the three-item checklist before arming', () => {
+  it('says a flip is reported only for a change an act job sees, at its last check (spec §5.10)', () => {
+    for (const gone of ['writes one feed row for each change', 'writes a feed row for each change', 'the next act job to read the file']) {
+      expect(readme, gone).not.toContain(gone);
+    }
+    expect(readme).toContain('An act job reads the file only at its last check, once its second audit has licensed the act.');
+    expect(readme).toContain('so the first act after a change it sees waits for two fresh audits');
+    expect(readme).toContain('A change undone between two such reads is never seen and writes no row, and an arming writes its row only when the first id is ready to act');
+  });
+  it('carries the four-item checklist before arming', () => {
     expect(readme).toContain('**Before arming it**, read the shadow feed rows, and arm only when:');
+    expect(readme).toContain(CAPABILITY_ITEM);
     expect(readme).toContain('every "would collect" names an orphan whose run is closed;');
     expect(readme).toContain('except the one for temp roots whose runs the coordination database cannot vouch for, which may stand once you have read it');
-    expect(readme).toContain('you know that any process of this uid can touch `$REG/collect-lane-live`');
+    expect(readme).toContain('you know that any process of this uid can touch `$REG/collect-lane-live`, as it can `expire-lane-live`, and that the lane reports a change only when an act job next reads the file, so a missing "now live" or "now shadowed" row means not yet seen, never unchanged');
+    expect(readme).toContain('A change undone between two such reads is never seen and writes no row');
   });
   it('names the collector among what the cleanup pause stops, keeping run 358’s pinned words', () => {
     expect(readme).toContain('and the expiry of archived workspaces stops too, as does the dead-coordinator lane, and so does the temp-root collector’s lane');
@@ -52,6 +65,11 @@ describe('the design spec', () => {
     expect(s).not.toContain('about 79 seconds');
     expect(s).toContain('about 73 seconds, or 78 at the widest grace');
   });
+  it('says a flip is seen by the next act job to reach its last check, and lists the capabilities before arming (as built, wave 9)', () => {
+    expect(s).not.toContain('Each flip is seen by the next act job to read the file');
+    expect(s).toContain('A flip is seen by the next act job to reach its last check, which writes one feed row, clears every observation pair, and composes nothing.');
+    expect(s).toContain(CAPABILITY_ITEM);
+  });
   it('states the offer order, the start hold-off at the offer, the flat hold and the restart residual (as built, wave 9)', () => {
     expect(s).toContain("No act job, shadow's would-collect included, is offered within eight minutes of the lane's start.");
     expect(s).toContain('Each pass offers the act job first, to the earliest ripe id by its ripening instant and then id');
@@ -69,10 +87,38 @@ describe('the design spec', () => {
 });
 
 describe('the programme’s rulings file', () => {
+  const c = readFileSync(path.join(root, 'docs/superpowers/programs/child-reclamation-contract.md'), 'utf8');
+  const at = c.indexOf('### §16 as built (wave 9, run 380)');
+  // Flattened: the file wraps its sentences, so an unflattened `not.toContain` on a wrapped sentence can never red.
+  const note = c.slice(at).replace(/\s+/g, ' ');
+  // Every departure the fix wave and fix round 1 made, and every residual they stated, by slug.
+  const FIX_SLUGS = ['a-collected-act-always-writes-its-row', 'box-lines-clear-when-their-ids-leave',
+    'box-line-clears-need-both-listings-measured', 'a-registered-id-projects-no-item', 'outcome-detail-is-diagnostic',
+    'r23-sweep-of-contract-and-ruling-tokens', 'no-pass-fails-shut-clear', 'fold-failure-resets-the-pair-and-floors',
+    'a-refusal-or-die-episode-outlives-observations', 'older-answer-never-clears-a-newer-probe',
+    'reader-made-words-are-ccrcs', 'destructive-builder-fence-reads-whole-files', 'arming-checklist-names-the-capabilities',
+    'flip-rows-are-for-changes-an-act-job-sees', 'marker-removal-after-the-last-listing-still-composes',
+    'settle-throw-before-the-slot-write-wedges-the-slot', 'a-retryable-refusal-says-once',
+    'act-failure-rows-repeat-per-act', 'would-collect-verdict-collides',
+    'registered-id-with-only-an-unparseable-record-stays-hidden'];
   it('carries the wave’s as-built note, naming slugs and no number', () => {
-    const c = readFileSync(path.join(root, 'docs/superpowers/programs/child-reclamation-contract.md'), 'utf8');
-    const at = c.indexOf('### §16 as built (wave 9, run 380)');
     expect(at, 'the as-built note is missing').toBeGreaterThan(-1);
-    expect(c.slice(at)).not.toMatch(/\bD-\d/);
+    expect(note).not.toMatch(/\bD-\d/);
+  });
+  it('names every fix-wave and fix-round slug', () => {
+    for (const slug of FIX_SLUGS) expect(note, slug).toContain(slug);
+  });
+  it('rules the seven open items, and strikes the one the fix wave retired', () => {
+    expect(note).not.toContain("Left open for the coordinator's ruling");
+    expect(note).toContain('Ruled at fix round 1');
+    for (const slug of ['hold-presence-alternation-can-starve-attention', 'collectable-alternation-is-silent',
+      'lane-silent-without-capabilities', 'flip-row-filed-under-a-job-id',
+      'registered-id-with-a-kept-record-hidden-while-quarantine-is-unmeasured',
+      'ccd-collect-budget-comment-sums-a-grace-per-probe', 'spec-ws-expire-crumb-sentence-after-wl-w6',
+      'pass-scoped-box-lines-stand-until-the-next-call']) expect(note, slug).toContain(slug);
+  });
+  it('says a forgotten id’s late answer still counts for the box, and no longer says it is dropped', () => {
+    expect(note).not.toContain("that call's late answer is dropped.");
+    expect(note).toContain("That call's late answer folds nothing for the id, but what it says of the box still counts");
   });
 });

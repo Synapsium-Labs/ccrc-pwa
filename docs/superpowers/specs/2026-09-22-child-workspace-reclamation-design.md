@@ -1293,7 +1293,7 @@ the lock before anything moves:
 | no registry row lies at, inside or through the leaf, and the id has no row of its own | likewise |
 | reclamation is not paused | the audit last, so a pause stops the act and not the measurement; the verb first, inside the lock |
 
-**The server's lane (wave 9), as built.** The lane is the verb's one composer, in the server's sweep. It ships shadowed: it composes `ws-collect` only while `$REG/collect-lane-live` exists, a file nothing in the tree writes and the operator touches by hand. Without it, the lane audits under every rule below and records "would collect" where it would spend, one feed row per id and token. The executor reads the file from the same registry listing as `reclaim-paused`, nearest the argv. The lane keeps a last-seen flag that starts at shadowed, so an arming it has not yet seen, a restart's included, is a flip. Each flip is seen by the next act job to read the file, which writes one feed row, clears every observation pair, and composes nothing.
+**The server's lane (wave 9), as built.** The lane is the verb's one composer, in the server's sweep. It ships shadowed: it composes `ws-collect` only while `$REG/collect-lane-live` exists, a file nothing in the tree writes and the operator touches by hand. Without it, the lane audits under every rule below and records "would collect" where it would spend, one feed row per id and token. The executor reads the file from the same registry listing as `reclaim-paused`, nearest the argv. The lane keeps a last-seen flag that starts at shadowed, so an arming it has not yet seen, a restart's included, is a flip. A flip is seen by the next act job to reach its last check, which writes one feed row, clears every observation pair, and composes nothing.
 - **The population** is read every pass, inside the pass's one gather, from two listings, `<registryDir>/tmproots` and `<registryDir>/tmpquarantine`, never `~/.cc-tmp`.
   - Each is `lstat`ed first. A proven absence is an empty listing. A link, a file or a failed answer makes that listing unmeasured, and only a real directory is listed.
   - A null listing is resolved by a measured stat, so only a proven absence is empty.
@@ -1341,6 +1341,7 @@ the lock before anything moves:
   - Every string ccd prints reaches a sentence only through the one bounded plain-text reader.
   - Feed rows are one per episode.
 - **Before arming** (README, "Before arming it"), the operator:
+  - checks that `ccd caps` on the box whose ccd the server drives (the fleet box under `CCRC_FLEET=remote`) lists both `collect-v1` and `reclaim-pause-v1`: without either the lane does not run at all, shadow included, so it writes no row and no line, and an empty shadow feed proves nothing;
   - reads the shadow feed rows;
   - checks that every "would collect" names an orphan whose run is closed;
   - checks that no box-wide line stands but the one for ids whose runs the database cannot vouch for;

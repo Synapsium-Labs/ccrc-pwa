@@ -3783,8 +3783,11 @@ finish nor undo is kept and listed as `quarantine-kept`, and no session acts on 
 `$REG/collect-lane-live`: until the operator touches that file by hand in the registry the server reads (the fleet
 box's, through the agent, when the server runs `CCRC_FLEET=remote`; nothing in this tree writes it), the lane audits
 and records what it would collect — a feed row and an entry in the cleanup row on `/runs` — and never composes
-`ws-collect`. Removing the file shadows it again; the next act job to read the file writes one feed row for each change, and the first act after
-either waits for two fresh audits. Each pass the lane lists `$REG/tmproots` and `$REG/tmpquarantine`, never `~/.cc-tmp`, and
+`ws-collect`. Removing the file shadows it again. An act job reads the file only at its last check, once its second audit has
+licensed the act. A job that finds the file changed since the last such read writes one feed row saying which way it now stands,
+clears every id's pair and composes nothing, so the first act after a change it sees waits for two fresh audits. A change undone
+between two such reads is never seen and writes no row, and an arming writes its row only when the first id is ready to act.
+Each pass the lane lists `$REG/tmproots` and `$REG/tmpquarantine`, never `~/.cc-tmp`, and
 runs at most two learning audits and one act job. It composes `ws-collect` for an id only after two audits at least a
 sweep interval apart minted the same token, the second in the act's own job, and only on a box whose ccd advertises
 both `collect-v1` and `reclaim-pause-v1`. Armed, at most one `ws-collect` is composed per pass and one runs
@@ -3796,12 +3799,16 @@ root it cannot take — in use, changing for a day, kept in quarantine, refused 
 cleanup row, and an answer that stands for the whole box is listed once.
 
 **Before arming it**, read the shadow feed rows, and arm only when:
+- `ccd caps` on the box whose ccd the server drives (the fleet box under `CCRC_FLEET=remote`) lists both `collect-v1` and
+  `reclaim-pause-v1`: without either the lane does not run at all, shadow included, so it writes no row and no line, and an
+  empty shadow feed proves nothing;
 - every "would collect" names an orphan whose run is closed;
 - no box-wide line stands in the cleanup row, except the one for temp roots whose runs the coordination database
   cannot vouch for, which may stand once you have read it: those ids stay held, armed or not, until a person removes
   them;
-- you know that any process of this uid can touch `$REG/collect-lane-live`, as it can `expire-lane-live`, which is
-  why the next act job to read the file writes a feed row for each change.
+- you know that any process of this uid can touch `$REG/collect-lane-live`, as it can `expire-lane-live`, and that the
+  lane reports a change only when an act job next reads the file, so a missing "now live" or "now shadowed" row means not
+  yet seen, never unchanged.
 
 **Reclaim's tail, corrected in wave 7 (it is shared with `ws-expire`).** `containment-refuted` is the failed word the
 tail prints when it proves that what it would remove is not only the child's own (another session's row or tree at,
