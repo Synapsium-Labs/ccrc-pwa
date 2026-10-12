@@ -24,7 +24,7 @@ time.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
-| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merge approved by the operator; `main` absorbed at `39c42f503`; one last bounded round from review 390 (R35) |
+| 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merge approved by the operator; last round at `21b754fd0`; review run 392 dispatched (R36) |
 
 ## Decisions & deviations
 
@@ -696,6 +696,28 @@ time.
     first.
   - The bound: this is the last round. Its review is scoped to this round's diff, and anything it leaves goes to a
     follow-up after the merge. Run 322 is back at `working` (fingerprint `39c42f503`), with mail 4314.
+- **R36 (2026-10-12 13:09)**, the last round is verified, and its review is dispatched.
+  - Mail 4325 claims `21b754fd0`, eight commits over eight files. They are F1 to F5, R1, and two of the worker's
+    re-review corrections (M1, M2).
+    - The worker measured each mutation as R35 asked. Without box-token-card's spy, 30 live fetches recur across
+      its 61 cases.
+    - `suite: red` is load once more: 23 timeouts in 13 files, none of them touched by the round, each green alone.
+      CI's `test (pwa)` is green.
+    - The worker's own scoped Opus re-review approved the round, with four notes (N1 to N4) for the follow-up.
+  - Re-measured:
+    - `origin/ws/calm-basin`, the workspace `HEAD` and PR #322's head all read `21b754fd0`, the workspace is clean,
+      and the PR is `MERGEABLE`.
+    - Only the advisory macOS legs were pending.
+    - `main` is unmoved at `28e8dc1b2`, and `merge-tree` is clean.
+    - `server/src` is untouched.
+    - The server took the fingerprint, and run 322 is `awaiting-review`.
+    - The evidence is copied to `w2-final-child-evidence/`. Claims 1180, 1181 and 1182 are held, and README is
+      licensed.
+  - Review run 392 is dispatched to `ccrc-pwa-keen-hollow` (the cap read 14 of 24), with the registry route opus,
+    high effort, sonnet subagents, workflow on and compact 40. Its brief is `w2-final-review-brief.md`, scoped to
+    `39c42f503..<tip>` with everything else kept as residue.
+  - Next: `review-done`. Then this session merges with `--match-head-commit` at the reviewed tip, under the
+    operator's R33 approval, unless the review finds a behaviour defect.
 
 ## Carried constraints (reviewers get these)
 
