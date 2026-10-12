@@ -126,6 +126,17 @@ describe('a subagent tool event keeps the main thread waiting (D-4039)', () => {
     expect(after).not.toHaveProperty('waitBy');
   });
 
+  it('a subagent AskUserQuestion over a main-thread question leaves the main wait, still main-owned', () => {
+    askViaPermission();
+    run({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_input: Q, ...SUB });
+    expect(readState()).toMatchObject({ state: 'waiting', ask: { questions: Q.questions } });
+    expect(readState()).not.toHaveProperty('waitBy');
+    run({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_input: { file_path: '/x' }, ...SUB });
+    const s = readState();
+    expect(s).toMatchObject({ state: 'waiting', ask: { questions: Q.questions } });
+    expect(s).not.toHaveProperty('waitBy');
+  });
+
   it('Review Focus 1 scope pin: a subagent PermissionRequest over a main-thread question writes its own approval', () => {
     askViaPermission();
     run({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls' }, ...SUB });
