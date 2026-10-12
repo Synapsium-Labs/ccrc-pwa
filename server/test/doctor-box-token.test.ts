@@ -63,7 +63,7 @@ function disarmedCopy(): string {
 let DISARMED: string | null = null;
 const disarmed = (): string => (DISARMED ??= disarmedCopy());
 
-function runCheck(b: Box, checks = CHECKS_SRC): Run {
+function runCheck(b: Box, checks = CHECKS_SRC, locale = 'C'): Run {
   const bin = join(b.home, 'bt-bin');
   mkdirSync(bin, { recursive: true });
   for (const n of ['python3', 'stat']) {
@@ -71,7 +71,7 @@ function runCheck(b: Box, checks = CHECKS_SRC): Run {
   }
   const script = ['set -uo pipefail', `. ${shq(CCRC_SRC)}`, `. ${shq(checks)}`, '_check_box-token'].join('\n');
   const r = spawnSync(BASH, ['-c', script], {
-    encoding: 'utf8', env: { HOME: b.home, PATH: bin, LC_ALL: 'C', TMPDIR: join(b.home, 'tmp') },
+    encoding: 'utf8', env: { HOME: b.home, PATH: bin, LC_ALL: locale, TMPDIR: join(b.home, 'tmp') },
   });
   const out = { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
   // Never a value, nor its sha256 — on any path, armed or not.
@@ -312,6 +312,21 @@ const ROWS: Row[] = [
     plant: (b) => writeFileSync(fleetFile(b), Buffer.from(`\uFEFF# comment\n${PLACEHOLDER_TOKEN}\n`), { mode: 0o600 }) },
   { arm: 'fleet', word: 'fleet-token-unusable', label: 'fleet-token-unusable (a BOM-only line before the placeholder)', armedClass: 'FAIL',
     plant: (b) => writeFileSync(fleetFile(b), Buffer.from(`\uFEFF\n${PLACEHOLDER_TOKEN}\n`), { mode: 0o600 }) },
+  // Review 383 F6: the has-a-value pass strips the same set as the placeholder pass (`extractToken` strips FIRST, ASCII and
+  // `_BT_UNI_WS`, and only then tells a blank or `#` line apart), so a file with no value line to `extractToken` is unusable
+  // whatever its bytes: only a BOM, only a no-break space, a BOM then only a comment. Never PASS, on both arms.
+  { arm: 'fleet', word: 'fleet-token-unusable', label: 'fleet-token-unusable (only a BOM)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(fleetFile(b), Buffer.from('\uFEFF\n'), { mode: 0o600 }) },
+  { arm: 'fleet', word: 'fleet-token-unusable', label: 'fleet-token-unusable (only a no-break space)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(fleetFile(b), Buffer.from('\u00A0\n'), { mode: 0o600 }) },
+  { arm: 'fleet', word: 'fleet-token-unusable', label: 'fleet-token-unusable (a BOM, then only a # comment)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(fleetFile(b), Buffer.from('\uFEFF# comment only\n'), { mode: 0o600 }) },
+  { arm: 'server', word: 'token-unusable', label: 'token-unusable (only a BOM)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(dot(b, 'mail.token'), Buffer.from('\uFEFF\n'), { mode: 0o600 }) },
+  { arm: 'server', word: 'token-unusable', label: 'token-unusable (only a no-break space)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(dot(b, 'mail.token'), Buffer.from('\u00A0\n'), { mode: 0o600 }) },
+  { arm: 'server', word: 'token-unusable', label: 'token-unusable (a BOM, then only a # comment)', armedClass: 'FAIL',
+    plant: (b) => writeFileSync(dot(b, 'mail.token'), Buffer.from('\uFEFF# comment only\n'), { mode: 0o600 }) },
   { arm: 'fleet', word: 'no-generation', armedClass: 'WARN', plant: (b) => rmSync(dot(b, NODE_FILES.tokenGeneration)) },
   { arm: 'fleet', word: 'generation-malformed', armedClass: 'WARN', plant: (b) => writeFileSync(dot(b, NODE_FILES.tokenGeneration), 'not-an-id\n') },
   { arm: 'fleet', word: 'never-synced', armedClass: 'WARN', plant: (b) => rmSync(dot(b, 'token-sync.json')) },
@@ -453,6 +468,40 @@ describe('doctor box-token: the placeholder fleet file (R.1)', () => {
     writeFileSync(fleetFile(b), `${PLACEHOLDER_TOKEN}-x\n`, { mode: 0o600 });
     expect(runCheck(b, CHECKS_SRC).stdout).toBe(`PASS box-token: ${FLEET_PASS}\n`);
   });
+});
+
+describe('doctor box-token: the has-a-value test reads the way extractToken reads (review 383 F6)', () => {
+  // The answer must not depend on the locale `[[:space:]]` happens to run under: a lone U+3000 line used to FAIL under
+  // C.UTF-8 and PASS under C. Every locale gives the same verdict.
+  const LOCALES = ['C', 'C.UTF-8', 'en_US.UTF-8'];
+  const unusable: Array<[string, string]> = [
+    ['only a BOM', '\uFEFF\n'], ['only a no-break space', '\u00A0\n'], ['only an ideographic space', '\u3000\n'],
+    ['a BOM, then only a # comment', '\uFEFF# comment only\n'], ['a no-break space, then a # comment, then blank', '\u00A0# c\n\uFEFF\n'],
+  ];
+  for (const locale of LOCALES) {
+    for (const [name, text] of unusable) {
+      it(`${locale}: a token file of ${name} is FAIL unusable on both arms, never PASS`, () => {
+        const f = box({ role: 'fleet' });
+        writeFileSync(fleetFile(f), Buffer.from(text), { mode: 0o600 });
+        const rf = runCheck(f, CHECKS_SRC, locale);
+        expect(rf.stdout).toMatch(/^FAIL box-token: fleet: fleet-token-unusable — .* carries no value line/);
+        expect(rf.code).toBe(1);
+        const s = box({ role: 'server' });
+        writeFileSync(dot(s, 'mail.token'), Buffer.from(text), { mode: 0o600 });
+        const rs = runCheck(s, CHECKS_SRC, locale);
+        expect(rs.stdout).toMatch(/^FAIL box-token: server: token-unusable — .* carries no value line/);
+        expect(rs.code).toBe(1);
+      });
+    }
+    it(`${locale}: a real value behind a BOM (and a preamble comment) is still a value: PASS`, () => {
+      const f = box({ role: 'fleet' });
+      writeFileSync(fleetFile(f), Buffer.from(`\uFEFF# preamble\n\u00A0${f.fleetValue}\u3000\n`), { mode: 0o600 });
+      expect(runCheck(f, CHECKS_SRC, locale).stdout).toBe(`PASS box-token: ${FLEET_PASS}\n`);
+      const s = box({ role: 'server' });
+      writeFileSync(dot(s, 'mail.token'), Buffer.from(`\uFEFF${s.value}\n`), { mode: 0o600 });
+      expect(runCheck(s, CHECKS_SRC, locale).stdout).toBe(`PASS box-token: ${SERVER_PASS}\n`);
+    });
+  }
 });
 
 describe('doctor box-token: the FAIL and WARN arms are on in the shipped file', () => {

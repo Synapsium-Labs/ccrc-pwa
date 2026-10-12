@@ -7665,26 +7665,20 @@ _bt_value_file() {
   BT_TF_MODE="$(_plat_mode -- "$p" 2>/dev/null)" || BT_TF_MODE=""
   if [ ! -r "$p" ]; then BT_TF=unreadable; return 0; fi
   BT_TF=no-value
+  # One pass, the way `extractToken` reads: strip FIRST (ASCII whitespace and the `_BT_UNI_WS` set, so the answer never
+  # depends on what `[[:space:]]` covers in the running locale), and only then tell a blank or `#` line apart. The first
+  # line left is the value line: BT_TF is `ok`, and BT_TF_PLACEHOLDER says whether it is the shipped placeholder. A BOM
+  # ahead of the preamble, or a BOM-only line, must not hide the value line it picks (review I1), and a file of only a BOM,
+  # only a no-break space, or a BOM then only a comment has none (review 383 F6).
   while IFS= read -r line || [ -n "$line" ]; do
-    t="${line//[[:space:]]/}"
-    [ -n "$t" ] || continue
-    case "$t" in \#*) continue ;; esac
-    BT_TF=ok; break
+    u="${line//[[:space:]]/}"
+    for w in "${_BT_UNI_WS[@]}"; do u="${u//"$w"/}"; done
+    [ -n "$u" ] || continue
+    case "$u" in \#*) continue ;; esac
+    BT_TF=ok
+    [ "$u" = "$_BT_PLACEHOLDER" ] && BT_TF_PLACEHOLDER=1
+    break
   done < "$p" 2>/dev/null || BT_TF=unreadable
-  line=""; t=""
-  # The placeholder decision is its own pass, because `extractToken` strips FIRST (ASCII and the `_BT_UNI_WS` set) and only
-  # then tells a blank or `#` line apart: a BOM ahead of the preamble, or a BOM-only line, must not hide the value line it
-  # picks (review I1). The loop above keeps its ASCII "has a value" meaning, which the server arm reads unchanged.
-  if [ "$BT_TF" = ok ]; then
-    while IFS= read -r line || [ -n "$line" ]; do
-      u="${line//[[:space:]]/}"
-      for w in "${_BT_UNI_WS[@]}"; do u="${u//"$w"/}"; done
-      [ -n "$u" ] || continue
-      case "$u" in \#*) continue ;; esac
-      [ "$u" = "$_BT_PLACEHOLDER" ] && BT_TF_PLACEHOLDER=1
-      break
-    done < "$p" 2>/dev/null
-  fi
   line=""; u=""
   return 0
 }
