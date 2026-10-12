@@ -148,14 +148,14 @@ describe('the sweep’s verdicts are read by no decision (spec §5.9)', () => {
     const FRAME = 'childReclaimAttention: this.childReclaimAttentionList';
     const FEED_QUIET = 'childReclaimFeedQuiet(entry, this.childReclaimAttentionList, r.id)';
     const WRITE = 'this.childReclaimAttentionList = childReclaimAttentionWithLeaves(\n'
-      + '      childReclaimAttentionWithKept(mirrorArms, kept, verdicts), this.childReclaimLeaves.map((k) => k.item))';
+      + '      childReclaimAttentionWithKept(mirrorArms, kept, verdicts), this.childReclaimLeaves, this.collectAttention())';
     expect(expressionHits(/\bchildReclaimAttentionList\b/, [DECLARATION, FRAME, FEED_QUIET, WRITE])).toEqual([
       `watch.ts: ${DECLARATION}`,
       // `emitCoord`: the coord frame's two arms (unmeasurable, measured).
       `watch.ts: ${FRAME}`, `watch.ts: ${FRAME}`,
       // `sweepChildReclaim`: what the feed already says, for a request's `feedQuiet`.
       `watch.ts: ${FEED_QUIET}`,
-      // `childReclaimPublishAttention`: its one write.
+      // `childReclaimPublishAttention`: its one write, which merges the temp-root collector's items (spec §5.10).
       `watch.ts: ${WRITE}`,
     ].sort());
   });

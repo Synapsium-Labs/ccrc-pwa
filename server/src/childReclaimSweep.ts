@@ -12,7 +12,8 @@
 // at the instant of deletion — this file narrows the window, it does not close it.
 import {
   CHILD_RECLAIM_KEPT_WORDS, SPAWN_STALL_MS, TERMINAL_RUN_STATES, holdReason, isChildReclaimKeptWord, lcRefusalWord,
-  CHILD_RUN_ID, LC_LINE_MAX, isSessionIdShape, leafKeptWord,
+  CHILD_RUN_ID, COLLECT_BOX_LABELS, LC_LINE_MAX, isTmpRootId, leafKeptWord,
+  type ChildReclaimCollectAttention, type ChildReclaimCollectMany,
   type ChildMark, type ChildReclaimAttention, type ChildReclaimGeneration, type ChildReclaimGenerationKey,
   type ChildReclaimKeptWord, type LcRefusalToken, type LifecycleAct,
   type ChildReclaimLeafKeptAttention, type ChildReclaimLeafKeptMany, type LeafKeptWord, type LifecycleMeas,
@@ -915,7 +916,7 @@ export function childReclaimTierOf(t: ChildReclaimTierState): ChildReclaimTierSt
 }
 
 /** The ONE derivation of membership and j from a run, shared by the live memory and the restart seed. */
-function childReclaimTierFrom(token: string | null, run: number, stuck: boolean): ChildReclaimTierState {
+export function childReclaimTierFrom(token: string | null, run: number, stuck: boolean): ChildReclaimTierState {
   const tier = stuck || run >= CHILD_RECLAIM_TIER_ENTRY_RUN;
   return { tier, tierToken: token, tierJ: tier ? Math.max(0, run - CHILD_RECLAIM_TIER_ENTRY_RUN) : 0, tierRun: run };
 }
@@ -1226,7 +1227,7 @@ export const childReclaimStuckRow = <R extends { readonly outcome: string; reado
 ): row is R & { readonly refusal: string } => row.outcome === FAILED && row.refusal !== null && stuckOf(row.refusal);
 
 /** A sentence end for ccd's detail. An ellipsis ends a detail `childReclaimDetailText` cut, so it takes no stop. */
-const childReclaimStuckEnd = (t: string): string => (/[.!?…]$/.test(t) ? t : `${t}.`);
+export const childReclaimStuckEnd = (t: string): string => (/[.!?…]$/.test(t) ? t : `${t}.`);
 
 /** The ONE rewrite of a stuck sentence's last clause (spec §5.9): the retry clause, which by construction
  *  ends every `childReclaimStuckSentence` composed with no kept word, gives way to `clause`. A sentence that
@@ -1494,13 +1495,16 @@ export function childReclaimFeedQuiet(
 // `done` ccd has purged the registry row, so this item is derived from the lifecycle mirror alone and
 // never filtered by the listing. A REPORT, gating nothing: no verdict, due set, lease or request reads it.
 
-/** The characters ccd's journal `detail` may not carry onto a banner, a chip or a feed row: the C0 controls (a
- *  newline among them), DEL and the C1 controls, the two Unicode line and paragraph separators, and the bidi
- *  embeddings, overrides and isolates (U+202A to U+202E, U+2066 to U+2069), which reorder what an operator reads.
- *  Spelled as code points, so no escape sits here for a file write to decode. */
+/** What a ccd-sourced string may not carry onto a banner, a chip or a feed row (spec §5.9, §5.10): every code point of
+ *  general category Cc (the C0 and C1 controls, DEL, a newline among them), Cf (format characters: the bidi marks,
+ *  embeddings, overrides and isolates, the zero-width characters, the byte-order mark, the soft hyphen, the invisible
+ *  operators, the deprecated format characters and the interlinear annotation characters), Zl and Zp (the line and
+ *  paragraph separators) and Cs (a lone surrogate); plus U+034F, the combining grapheme joiner (category Mn), and the
+ *  whole tag block U+E0000 to U+E007F by range, because its unassigned points are Cn. Named by property and by code
+ *  point, so no escape sits here for a file write to decode. */
+const DETAIL_UNSAFE_CATEGORY = /^[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}]$/u;
 const detailUnsafe = (c: number): boolean =>
-  c <= 0x1f || (c >= 0x7f && c <= 0x9f) || c === 0x2028 || c === 0x2029
-  || (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069);
+  DETAIL_UNSAFE_CATEGORY.test(String.fromCodePoint(c)) || c === 0x034f || (c >= 0xe0000 && c <= 0xe007f);
 
 /** ccd's journal `detail` as banner, chip and feed text (spec §5.9): ONE plain line, bounded. The mirror reads
  *  whole lines, `journalparse.ts` takes `detail` as any string, and any session can append a line, so the server
@@ -1601,6 +1605,17 @@ const LEAF_PHRASE: Readonly<Record<LeafKeptWord, string>> = {
 };
 const LEAF_HORIZON = `This line ends when the id is used for a new workspace, or ${LEAF_DAYS} days after ccd recorded `
   + 'the reclaim; the feed keeps the record.';
+/** What a kept clips directory's half tells a person (spec §5.9): ccrc never removes one. */
+const LEAF_CLIPS_STAYS = 'ccrc never removes the clips directory; a person removes it once nothing still uses it.';
+/** What a kept temp root's half tells a person (spec §5.9, §5.10). True whether the temp-root collector is shadowed,
+ *  armed, paused, or on a fleet box whose ccd cannot collect. */
+const LEAF_TMP_COLLECTOR = 'ccrc’s temp-root collector removes the temp root once it has stood idle, but only while '
+  + 'the collector is switched on, the fleet box’s ccd can collect and cleanup is not paused, and only if ccrc recorded '
+  + 'handing that directory out; until then, or if the collector lists it for you, a person removes it once nothing '
+  + 'still uses it. The temp root leaves this line once it is collected.';
+/** The clips half's own clause: the sentence below quotes it, and so does a winning item's second clause. */
+const leafClipsPart = (sessionId: string, word: LeafKeptWord): string =>
+  `its clips directory ~/.cc-clips/${sessionId} (${word}: ${LEAF_PHRASE[word]})`;
 
 /** The kept-leaf item's sentence (spec §5.9): what stands, why, and what ends the line. A cut line says it
  *  was cut. It points to the feed row only when the row carries ccd's `detail`: ccd's last-resort line keeps
@@ -1622,13 +1637,12 @@ export function childReclaimLeafKeptSentence(
   }
   const tmpWord = tmp !== 'collected' && tmp.kind === 'kept' ? tmp.word : null;
   const parts = [
-    ...(clips.kind === 'kept'
-      ? [`its clips directory ~/.cc-clips/${sessionId} (${clips.word}: ${LEAF_PHRASE[clips.word]})`] : []),
+    ...(clips.kind === 'kept' ? [leafClipsPart(sessionId, clips.word)] : []),
     ...(tmpWord === null ? [] : [`its temp root ~/.cc-tmp/${sessionId} (${tmpWord}: ${LEAF_PHRASE[tmpWord]})`]),
   ];
-  return `The reclaim of this child completed, but ccd kept ${parts.join(' and ')}. `
-    + 'What was kept stays on disk and ccrc deletes nothing more of it; a person removes it once nothing still uses it.'
-    + (tmpWord === null ? '' : ' The temp root leaves this line once it is collected.') + ` ${LEAF_HORIZON}`;
+  return `The reclaim of this child completed, but ccd kept ${parts.join(' and ')}. What was kept stays on disk.`
+    + (clips.kind === 'kept' ? ` ${LEAF_CLIPS_STAYS}` : '')
+    + (tmpWord === null ? '' : ` ${LEAF_TMP_COLLECTOR}`) + ` ${LEAF_HORIZON}`;
 }
 
 /** One derived item, with what the lane's feed row needs: the mirror row it came from (the feed's
@@ -1637,10 +1651,10 @@ export interface ChildReclaimLeafKept {
   readonly item: ChildReclaimLeafKeptAttention;
   readonly source: number;
   readonly detail: string | null;
+  /** The clips half's clause, which a winning item carries as its second clause (spec §5.10): the kept clips part,
+   *  the unknown clause for a line cut to fit, or null when clips was `none-or-unreported`. */
+  readonly clipsClause: string | null;
 }
-
-/** ccd's own id rule (`_ws_tmproot_id_ok`): a session id's shape, and no leading `.`. */
-const leafIdOk = (id: string): boolean => isSessionIdShape(id) && !id.startsWith('.');
 
 const leafRunOf = (childOf: string | null): number | null =>
   (childOf !== null && CHILD_RUN_ID.test(childOf) ? Number(childOf) : null);
@@ -1654,14 +1668,13 @@ const leafRunOf = (childOf: string | null): number | null =>
  *    new workspace now.
  *  - A later `collect` `done` ends the temp-root half only. The collector never takes a clips directory.
  *
- *  A row whose id fails ccd's own id rule lists nothing, so no feed row is written for it: any session can
+ *  A row whose id fails the temp-root id rule lists nothing, so no feed row is written for it. Any session can
  *  append a journal line, so the mirror's id is attribution, and this item puts it in a path a person is told
- *  to remove. The rule is ccd's `_ws_tmproot_id_ok`: a session id's shape (`isSessionIdShape`) and no leading
- *  `.`. Without the second clause `.` would name `~/.cc-clips` (or `~/.cc-tmp`) itself, and `..` the directory
- *  above it, as the thing a person removes. It sets no length cap
- *  of its own: the id rides one journal line, and ccd writes every line within `LC_LINE_MAX`. A line appended
- *  by hand is not cut by the mirror's ingest, so a forged id's length is bounded only by one read of the
- *  journal (a stated residual): it is still one plain line, with no separator and no dot-leading name.
+ *  to remove. The rule is L0's `isTmpRootId` (spec §5.10):
+ *  - ccd's `_ws_tmproot_id_ok`, a session id's shape and no leading `.`. Without the dot clause, `.` would name
+ *    `~/.cc-clips` (or `~/.cc-tmp`) itself as the thing a person removes, and `..` the directory above it;
+ *  - no leading `-`, and at most 255 characters. These two clauses are the collector's, and here they change only
+ *    what is listed: an id the collector never audits is not listed either.
  *
  *  `runId` is `meas.childOf` read through `CHILD_RUN_ID`, else null. The purge failures do not carry it,
  *  and a cut line has no `meas` at all. Ordered by session id. Pure and deterministic, so the coord frame's
@@ -1674,7 +1687,7 @@ export function childReclaimLeafKept(i: {
   const since = childReclaimLeafKeptSince(i.nowMs);
   const latest = new Map<string, ChildReclaimLeafSourceRow>();
   for (const r of i.rows) {
-    if (r.at < since || !childReclaimLeafSource(r) || !leafIdOk(r.sessionId)) continue;
+    if (r.at < since || !childReclaimLeafSource(r) || !isTmpRootId(r.sessionId)) continue;
     const had = latest.get(r.sessionId);
     if (had === undefined || r.id > had.id) latest.set(r.sessionId, r);
   }
@@ -1687,10 +1700,12 @@ export function childReclaimLeafKept(i: {
     const tmpRead = childReclaimMirrorLeaf(r, 'tmpRootKept');
     const tmp = collected && tmpRead.kind !== 'none-or-unreported' ? 'collected' as const : tmpRead;
     if (clips.kind === 'none-or-unreported' && (tmp === 'collected' || tmp.kind === 'none-or-unreported')) continue;
+    const clipsClause = clips.kind === 'kept' ? leafClipsPart(r.sessionId, clips.word)
+      : clips.kind === 'truncated' ? `whether its clips directory ~/.cc-clips/${r.sessionId} was kept is not known` : null;
     out.push({
       item: { kind: 'leaf-kept', sessionId: r.sessionId, runId: leafRunOf(r.meas?.childOf ?? null),
         sentence: childReclaimLeafKeptSentence(r.sessionId, clips, tmp, r.detail), at: r.at },
-      source: r.id, detail: r.detail,
+      source: r.id, detail: r.detail, clipsClause,
     });
   }
   return out.sort((a, b) => childReclaimBySession(a.item, b.item));
@@ -1703,7 +1718,9 @@ export const CHILD_RECLAIM_LEAF_KEPT_MANY_WORD: ChildReclaimLeafKeptMany['word']
 /** The sentence of a collapsed kept-leaf line (spec §5.9). */
 export function childReclaimLeafKeptManySentence(n: number): string {
   return `${n} reclaimed child workspaces have a clips directory or a temp root that ccd kept on disk. `
-    + 'Each stays until a person removes it, and the feed row of each names what was kept and why. '
+    + 'Each clips directory stays until a person removes it; each temp root stays until ccrc’s temp-root collector '
+    + 'removes it, while the collector is switched on and cleanup is not paused, or until a person does. '
+    + 'The feed row of each names what was kept and why. '
     + `Each one leaves this line when its id is used for a new workspace, or ${LEAF_DAYS} days after ccd recorded its reclaim.`;
 }
 
@@ -1721,17 +1738,131 @@ export function childReclaimLeafKeptList(items: readonly ChildReclaimLeafKeptAtt
   ];
 }
 
-/** The list with its kept-leaf items (spec §5.9): ONE item per child across every arm. A leaf item yields
- *  to any item the list already holds for the id, as a single or as a collapsed line's member, because
- *  that item is about the row that stands now. The rest are appended after the list, in
- *  `childReclaimLeafKeptList`'s order. */
+/** What the merge takes from the temp-root collector (spec §5.10). It has three parts:
+ *  - its per-id items, ONE per id and NOT yet collapsed, because only the merge knows which of them carry a second
+ *    clause;
+ *  - for each word a per-id item uses, the clause a collapsed line says of every member;
+ *  - its box-wide lines, each a single `collect` item under a fixed label (`COLLECT_BOX_LABELS`) that no session id
+ *    can equal.
+ *  Declared HERE, by its consumer, in L0 terms: `collectLane.ts` builds it and imports this file, never the reverse. */
+export interface ChildReclaimCollectInput {
+  readonly perId: readonly ChildReclaimCollectAttention[];
+  readonly manyLead: Readonly<Record<string, string>>;
+  readonly box: readonly ChildReclaimCollectAttention[];
+}
+
+/** No collector input: the merge is wave 8's. */
+export const CHILD_RECLAIM_COLLECT_NONE: ChildReclaimCollectInput = { perId: [], manyLead: {}, box: [] };
+
+/** A collapsed collector line's word is `collect:<word>`: no kept word, and never `'leaf-kept'` (spec §5.10). */
+export const CHILD_RECLAIM_COLLECT_MANY_PREFIX = 'collect:';
+
+/** The collector word whose sentence a reclaim item carries (spec §5.10): a kept quarantine record is never silent. */
+const COLLECT_RECORD_KEPT: LcRefusalToken = 'quarantine-kept';
+
+/** Ids named in one line (spec §5.9, §5.10): at most `CHILD_RECLAIM_KEPT_MANY_OVER`, in order, then how many more. */
+export function childReclaimIdsNamed(ids: readonly string[]): string {
+  const shown = ids.slice(0, CHILD_RECLAIM_KEPT_MANY_OVER).join(', ');
+  const more = ids.length - CHILD_RECLAIM_KEPT_MANY_OVER;
+  return more > 0 ? `${shown}, and ${more} more` : shown;
+}
+
+/** The second clause a winner carries for a leaf's clips directory (spec §5.9, §5.10). The clips leaf is never the
+ *  collector's, and a reclaim item is about the row that stands now, so neither would otherwise say it. The clause is
+ *  the leaf's own, verbatim, in one sentence true of both shapes (kept, or not known on a cut line). */
+export const childReclaimClipsSecond = (clipsClause: string): string =>
+  `Also, an earlier reclaim of this id may have left a clips directory on disk: ${clipsClause}. ${LEAF_CLIPS_STAYS}`;
+
+/** The sentence of a collapsed collector line (spec §5.10): the count, then what each member's word says. */
+export const childReclaimCollectManySentence = (n: number, lead: string): string =>
+  `${n} temp roots are listed for the same reason. For each one: ${lead}`;
+
+/** A sentence with each second clause it does not already give, in order. */
+const withSecond = (sentence: string, clauses: readonly string[]): string =>
+  clauses.reduce((s, c) => (s.includes(c) ? s : `${s} ${c}`), sentence);
+
+/** The whole list (spec §5.9, §5.10): ONE item per id across every arm.
+ *  - A reclaim item (about the row that stands) wins. It carries a collector `quarantine-kept` item's sentence and a
+ *    leaf's clips clause. A reclaim `kept-many` member that would carry one leaves the line as a single `kept` item,
+ *    and the rest list as the kept arm lists them.
+ *  - A collector item wins over a leaf item, and carries the leaf's clips clause.
+ *  - An item that carries a second clause never collapses. The rest of the collector's items collapse by word: more
+ *    than `CHILD_RECLAIM_KEPT_MANY_OVER` with a run into a `collect:<word>` line; more than that with no run into ONE
+ *    box-wide count line naming at most that many ids.
+ *  - The collector's box lines take no id.
+ *  - The leaf items left list as `childReclaimLeafKeptList` lists them.
+ *  The order is reclaim, the collector's per-id items, its collapsed lines, its count line, its box lines, then the
+ *  kept leaves. Pure and deterministic, so the coord frame's byte-equality guard emits once per change. */
 export function childReclaimAttentionWithLeaves(
-  list: readonly ChildReclaimAttention[], leaves: readonly ChildReclaimLeafKeptAttention[],
+  list: readonly ChildReclaimAttention[], leaves: readonly ChildReclaimLeafKept[], collect: ChildReclaimCollectInput,
 ): ChildReclaimAttention[] {
+  const clips = new Map<string, string>();
+  for (const l of leaves) if (l.clipsClause !== null) clips.set(l.item.sessionId, childReclaimClipsSecond(l.clipsClause));
+  const records = new Map<string, string>();
+  for (const c of collect.perId) if (c.word === COLLECT_RECORD_KEPT) records.set(c.sessionId, c.sentence);
+  const reclaimSecond = (id: string): string[] =>
+    [records.get(id), clips.get(id)].filter((s): s is string => s !== undefined);
   const taken = new Set<string>();
+  const reclaim: ChildReclaimAttention[] = [];
   for (const a of list) {
-    if (a.kind === 'kept-many') for (const m of a.members) taken.add(m.sessionId);
-    else taken.add(a.sessionId);
+    if (a.kind !== 'kept-many') {
+      taken.add(a.sessionId);
+      reclaim.push({ ...a, sentence: withSecond(a.sentence, reclaimSecond(a.sessionId)) });
+      continue;
+    }
+    for (const m of a.members) taken.add(m.sessionId);
+    const word = a.word;
+    if (!isChildReclaimKeptWord(word) || !a.members.some((m) => reclaimSecond(m.sessionId).length > 0)) {
+      reclaim.push(a);
+      continue;
+    }
+    const kept: ChildReclaimKeptAttention[] = a.members.map((m) => ({ kind: 'kept', sessionId: m.sessionId,
+      runId: m.runId, word, sentence: CHILD_RECLAIM_SKIP[word].sentence }));
+    reclaim.push(
+      ...kept.filter((k) => reclaimSecond(k.sessionId).length > 0)
+        .map((k) => ({ ...k, sentence: withSecond(k.sentence, reclaimSecond(k.sessionId)) })),
+      ...childReclaimKeptList(kept.filter((k) => reclaimSecond(k.sessionId).length === 0)));
   }
-  return [...list, ...childReclaimLeafKeptList(leaves.filter((l) => !taken.has(l.sessionId)))];
+  const singles: ChildReclaimCollectAttention[] = [];
+  const loose: ChildReclaimCollectAttention[] = [];
+  for (const c of [...collect.perId].sort(childReclaimBySession)) {
+    if (taken.has(c.sessionId)) continue;
+    taken.add(c.sessionId);
+    const second = clips.get(c.sessionId);
+    if (second !== undefined) singles.push({ ...c, sentence: withSecond(c.sentence, [second]) });
+    else loose.push(c);
+  }
+  const groups: ChildReclaimCollectMany[] = [];
+  const counted: string[] = [];
+  for (const word of [...new Set(loose.map((c) => c.word))].sort()) {
+    const these = loose.filter((c) => c.word === word);
+    const lead = Object.hasOwn(collect.manyLead, word) ? collect.manyLead[word] : undefined;
+    const members = these.flatMap((c) => (c.runId === null ? [] : [{ sessionId: c.sessionId, runId: c.runId }]));
+    const runless = these.filter((c) => c.runId === null);
+    if (lead !== undefined && members.length > CHILD_RECLAIM_KEPT_MANY_OVER) {
+      const many: ChildReclaimCollectMany['word'] = `${CHILD_RECLAIM_COLLECT_MANY_PREFIX}${word}`;
+      groups.push({ kind: 'kept-many', word: many, members, sentence: childReclaimCollectManySentence(members.length, lead) });
+    } else {
+      singles.push(...these.filter((c) => c.runId !== null));
+    }
+    if (lead !== undefined && runless.length > CHILD_RECLAIM_KEPT_MANY_OVER) {
+      // Tense-neutral, so a terminal word stays true after a later `collectable` (spec §5.10). Only a terminal word is
+      // ccd's own, copied from its answer; every other word is a fixed label of this build (`per-leaf`, `failing`,
+      // `verb-failed`, `die`, `held`, `presence`, `would-collect`, and `in-use`, `registered`, `in-progress` and
+      // `changed-recently`, which spell ccd's verdict words). This seam takes any string, so every word goes through
+      // `childReclaimDetailText` alike.
+      counted.push(`${runless.length} are listed under ${childReclaimDetailText(word)}: `
+        + `${childReclaimIdsNamed(runless.map((c) => c.sessionId))}. For each one: ${lead}`);
+    } else {
+      singles.push(...runless);
+    }
+  }
+  const countLine: ChildReclaimCollectAttention[] = counted.length === 0 ? [] : [{ kind: 'collect',
+    sessionId: COLLECT_BOX_LABELS['no-run'], runId: null, word: 'no-run',
+    sentence: `Temp roots with no recorded run are listed together. ${counted.join(' ')}` }];
+  const leftLeaves = leaves.map((l) => l.item).filter((l) => !taken.has(l.sessionId));
+  return [
+    ...reclaim, ...[...singles].sort(childReclaimBySession), ...groups, ...countLine, ...collect.box,
+    ...childReclaimLeafKeptList(leftLeaves),
+  ];
 }

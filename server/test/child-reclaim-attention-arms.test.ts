@@ -37,7 +37,7 @@ describe('leafKeptWord, the one kept-leaf classifier (spec §5.6)', () => {
     expect(leafKeptWord(v)).toBe(word);
   });
 
-  it('is declared once, in shared/api.ts, and no other file spells the three words as a set', () => {
+  it('is declared once, in shared/api.ts; no other file has one code line naming all three words, each single-quoted or a bare key, nor wave 5’s names', () => {
     const DECL = /^\s*(?:export\s+)?(?:function|const|let|var)\s+leafKeptWord\b/m;
     expect(ALL.filter((f) => DECL.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/api.ts']);
     // A second copy of the word list is a second classifier waiting to drift: one CODE line naming all three,
@@ -46,6 +46,7 @@ describe('leafKeptWord, the one kept-leaf classifier (spec §5.6)', () => {
     const SET = (l: string): boolean => SPELLED.every((re) => re.test(l));
     expect(SET("const W = ['refused', 'unmeasured', 'in-use'];"), 'CONTROL: a quoted list').toBe(true);
     expect(SET("const T = { refused: true, unmeasured: true, 'in-use': true };"), 'CONTROL: a table, bare keys').toBe(true);
+    expect(SET('const W = ["refused", "unmeasured", "in-use"];'), 'CONTROL: double quotes are outside this census, as the title says').toBe(false);
     const holders = ALL.filter((f) => codeOnly(readFileSync(f, 'utf8')).split('\n').some(SET)).map(rel);
     expect(holders).toEqual(['shared/api.ts']);
     // Workspace lifecycle's word half (spec §5.6), by NAME (its list, its word type, its reader), so a copy wrapped over
