@@ -248,18 +248,6 @@ describe('the breaker’s held set — a run_events observation, no migration (r
     expect(s.recordDeadCoordinatorBreakerHeld(run, [{ id: 'demo-c-a', firstDeadAt: 10, instants: [10, 0] }], 300), 'an instant that is not a positive safe integer').toEqual({ recorded: false, why: 'invalid' });
   });
 
-  it('the latest record\'s WRITE time is readable: null with no row, the row\'s `at` after one, and an unprovable time is a failed read (D-4826)', () => {
-    const { db, s, open } = store();
-    expect(s.deadCoordinatorBreakerHeldWrittenAt()).toEqual({ ok: true, at: null });
-    const run = open('demo-c-a');
-    expect(s.recordDeadCoordinatorBreakerHeld(run, members, 1234)).toMatchObject({ recorded: true });
-    expect(s.deadCoordinatorBreakerHeldWrittenAt()).toEqual({ ok: true, at: 1234 });
-    expect(s.recordDeadCoordinatorBreakerHeld(run, [], 5678)).toMatchObject({ recorded: true });
-    expect(s.deadCoordinatorBreakerHeldWrittenAt(), 'the LATEST row').toEqual({ ok: true, at: 5678 });
-    db.exec(`INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) VALUES (${run}, 0, 'planned', 'planned', 'operator', 'dead-coordinator-breaker-held:')`);
-    expect(s.deadCoordinatorBreakerHeldWrittenAt()).toMatchObject({ ok: false });
-  });
-
   it('a malformed LATEST row fails the WHOLE read — never a partial set, never an older row’s', () => {
     const { db, s, open } = store();
     const run = open('demo-c-a');

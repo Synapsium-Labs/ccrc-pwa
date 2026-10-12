@@ -923,17 +923,33 @@ export function deadCoordinatorBreakerFeedRow(b: Extract<DeadCoordinatorBreaker,
   return { title: 'dead coordinator: breaker tripped', body: `${deadCoordinatorBreakerSentence(b)} (holding since ${iso(b.since)})` };
 }
 
-/** The feed row for a pass that could not read its record of the breaker's hold (review 382, R2): written once per bad row,
- *  through `recordRows` — a record, never a push, and no new attention kind. `held` is who the breaker held that pass as
- *  members; `tripped` is whether it tripped at all (review 382, N3: the words key on the breaker, not on `held` — a trip
- *  on a fleet-wide doubt has no members). `reason` is already a bounded string, never the row's content. */
-export function deadCoordinatorBreakerUnreadableFeedRow(
-  held: readonly string[], tripped: boolean, eventId: number | null, reason: string,
+/** WHY the lane's first pass seeds its hold conservatively (D-4857; review 382, R2): its typed breaker state is
+ *  `absent` (no lane of this release has written it — the deploy that creates the table), `dirty` (a pass marked it
+ *  before changing anchors and its commit did not land) or `unreadable` (`reason`: a bounded string, never the row's
+ *  content). Three causes, three sets of words, one rule: hold every claimant the pass does not release, flagged. */
+export type DeadCoordinatorSeedCause =
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'dirty'; readonly generation: number }
+  | { readonly kind: 'unreadable'; readonly reason: string };
+
+/** The feed row for a pass that seeded its hold conservatively: written once, by the pass that seeds, through
+ *  `recordRows` — a record, never a push, and no new attention kind. `held` is who the breaker held that pass as members;
+ *  `tripped` is whether it tripped at all (review 382, N3: the words key on the breaker, not on `held` — a trip on a
+ *  fleet-wide doubt has no members). */
+export function deadCoordinatorBreakerSeedFeedRow(
+  cause: DeadCoordinatorSeedCause, held: readonly string[], tripped: boolean,
 ): { readonly title: string; readonly body: string } {
-  const lead = `The lane could not read its record of the breaker's hold (${eventId === null ? 'no row' : `event ${eventId}`}: ${reason}), `;
-  const tail = 'It writes a fresh record, and ends nothing until that record is written.';
+  const [title, lead] = cause.kind === 'absent'
+    ? ['dead coordinator: no breaker state yet',
+      'The lane has no breaker state yet (the deploy that creates its table, or a database no lane of this release has written), ']
+    : cause.kind === 'dirty'
+      ? ['dead coordinator: breaker state left dirty',
+        `The lane found its breaker state left dirty (generation ${cause.generation}: a pass marked it before changing anchors, and its commit did not land), `]
+      : ['dead coordinator: breaker record unreadable',
+        `The lane could not read its record of the breaker's hold (the breaker state row: ${cause.reason}), `];
+  const tail = `It writes ${cause.kind === 'absent' ? 'the first' : 'a fresh'} record, and ends nothing until that record is written.`;
   const none = 'so it held every coordinator this pass did not see alive, stopped or put down on purpose, but fewer than two stood, so no cluster formed';
-  return { title: 'dead coordinator: breaker record unreadable',
+  return { title,
     body: held.length > 0
       ? `${lead}so it held every coordinator this pass did not see alive, stopped or put down on purpose (${held.join(', ')}), `
         + 'each flagged: a flagged coordinator clusters with any other crashed or held coordinator until evidence releases it, '

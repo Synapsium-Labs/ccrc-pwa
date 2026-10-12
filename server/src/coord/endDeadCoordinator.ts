@@ -9,9 +9,9 @@ import { measureClaimant, type ReclaimDeps } from './reclaim.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import { LC_DIR_NAME, LC_ERRORS_NAME, type LifecycleHealth } from '../../../shared/api.js';
 import {
-  DEAD_COORDINATOR_LANE_LIVE_MARKER, deadCoordinatorBreakerFeedRow, deadCoordinatorBreakerUnreadableFeedRow, deadCoordinatorCrash, deadCoordinatorFeedRows,
+  DEAD_COORDINATOR_LANE_LIVE_MARKER, deadCoordinatorBreakerFeedRow, deadCoordinatorBreakerSeedFeedRow, deadCoordinatorCrash, deadCoordinatorFeedRows,
   deadCoordinatorJournal, deadCoordinatorThrewFeedRow,
-  type DeadCoordinatorActOutcome, type DeadCoordinatorBreaker, type DeadCoordinatorJournal,
+  type DeadCoordinatorActOutcome, type DeadCoordinatorBreaker, type DeadCoordinatorSeedCause, type DeadCoordinatorJournal,
   type DeadCoordinatorJournalTrust, type DeadCoordinatorProgramme, type DeadCoordinatorStop,
 } from '../deadCoordinator.js';
 
@@ -310,11 +310,12 @@ export function recordDeadCoordinatorBreaker(
   recordRows(deps, b.claimants[0] ?? 'fleet', [deadCoordinatorBreakerFeedRow(b)], 'breaker');
 }
 
-/** The feed row for a pass that could not read its record of the breaker's hold (review 382, R2), written once per bad
- *  row under the first claimant the fallback held (else the first of the population, else `fleet`). */
-export function recordDeadCoordinatorBreakerUnreadable(
-  deps: Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, held: readonly string[], tripped: boolean, population: readonly string[],
-  eventId: number | null, reason: string,
+/** The feed row for a pass that seeded the breaker's hold conservatively (D-4857; review 382, R2): its typed state
+ *  absent, dirty or unreadable. Written once, by the pass that seeds, under the first claimant held (else the first of
+ *  the population, else `fleet`). */
+export function recordDeadCoordinatorBreakerSeed(
+  deps: Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, cause: DeadCoordinatorSeedCause, held: readonly string[],
+  tripped: boolean, population: readonly string[],
 ): void {
-  recordRows(deps, held[0] ?? population[0] ?? 'fleet', [deadCoordinatorBreakerUnreadableFeedRow(held, tripped, eventId, reason)], 'breaker record unreadable');
+  recordRows(deps, held[0] ?? population[0] ?? 'fleet', [deadCoordinatorBreakerSeedFeedRow(cause, held, tripped)], 'breaker seed');
 }

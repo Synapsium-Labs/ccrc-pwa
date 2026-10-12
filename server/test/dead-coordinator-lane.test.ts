@@ -50,6 +50,9 @@ const fixture = async (opts: {
   onCcd?: (args: string[]) => void;
   /** Called as tmux is asked about a pane, before it answers — time passing, or a write landing, mid-pass. */
   onHasSession?: (id: string) => void;
+  /** The breaker's typed state the database starts with (D-4857): `clean` (default) — a deployment whose lane has run
+   *  before, nothing held — or `absent`, a database no lane of this release has written (the deploy that creates it). */
+  breakerState?: 'clean' | 'absent';
 } = {}) => {
   let clock = T0;
   vi.spyOn(Date, 'now').mockImplementation(() => clock);
@@ -81,6 +84,12 @@ const fixture = async (opts: {
   };
   const dbPath = path.join(home, '.ccrc', 'coord.db');
   const coord = new CoordStore(openCoordDb(dbPath));
+  // A deployment whose lane has run before: its breaker state reads clean, nothing held (D-4857). A fresh database has no
+  // row and its first pass is the conservative one (the `absent` cases). Seeded only where this build has the table, so
+  // the file measures red-first against a parent that predates it; `coord-db.test.ts` pins that this build has it.
+  if (opts.breakerState !== 'absent' && coord.db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'dead_coordinator_breaker_state'").get() !== undefined) {
+    coord.db.exec(`INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (1, 1, 'clean', 'dead-coordinator-breaker-held:', ${T0})`);
+  }
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
   await notifyLog.load();
   const base = testDeps(home, run);
@@ -147,6 +156,44 @@ const fixture = async (opts: {
     holdTmux: (): (() => void) => { let release = (): void => {}; gate = new Promise<void>((r) => { release = r; }); return () => { gate = null; release(); }; } };
 };
 type Fixture = Awaited<ReturnType<typeof fixture>>;
+
+/** Make every prepared statement whose SQL matches `re` throw — a statement failure, or a crash at that statement, inside
+ *  the store. Returns the restore. */
+const failSql = (f: Fixture, re: RegExp, why = 'injected: disk I/O error'): (() => void) => {
+  const db = f.coord.db;
+  const real = db.prepare.bind(db);
+  const spy = vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+    if (re.test(sql)) throw new Error(why);
+    return real(sql);
+  });
+  return () => spy.mockRestore();
+};
+/** The COMMIT itself throws (the transaction rolls back). Returns the restore. */
+const failCommit = (f: Fixture): (() => void) => {
+  const db = f.coord.db;
+  const real = db.exec.bind(db);
+  const spy = vi.spyOn(db, 'exec').mockImplementation((sql: string) => {
+    if (sql === 'COMMIT') throw new Error('injected: disk I/O error at COMMIT');
+    return real(sql);
+  });
+  return () => spy.mockRestore();
+};
+/** The breaker's durable record cannot be written: the `run_events` record throws (what the parent build wrote alone) and
+ *  so does the typed state's snapshot (D-4857: the commit that carries it). Returns the restore. */
+const failBreakerWrites = (f: Fixture, why = 'database or disk is full'): (() => void) => {
+  const record = vi.spyOn(f.coord, 'recordDeadCoordinatorBreakerHeld').mockImplementation(() => { throw new Error(why); });
+  const state = failSql(f, /^UPDATE dead_coordinator_breaker_state/, why);
+  return () => { record.mockRestore(); state(); };
+};
+/** The breaker's record cannot be READ: a latest `run_events` record this build cannot parse (what the parent read) and,
+ *  where this build has it, a typed state whose snapshot cannot be read (D-4857). */
+const plantBadRecord = (f: Fixture, runId: number, id: string = A): void => {
+  f.coord.db.exec(`INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) SELECT runId, at, state, state, 'operator', ` +
+    `'dead-coordinator-breaker-held:${id}@soon' FROM (SELECT ${runId} AS runId, ${T0} AS at, state FROM runs WHERE id = ${runId})`);
+  if (f.coord.db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'dead_coordinator_breaker_state'").get() !== undefined) {
+    f.coord.db.exec(`UPDATE dead_coordinator_breaker_state SET held = 'dead-coordinator-breaker-held:${id}@soon' WHERE id = 1`);
+  }
+};
 
 /** Passes across `ms`, nine minutes apart — every gap inside the episode bound, as a live lane's minute passes are. */
 const walk = async (f: Fixture, ms: number, o: { mirror?: boolean } = {}): Promise<void> => {
@@ -704,12 +751,8 @@ describe('the breaker’s hold survives a RESTART (review 381, F1)', () => {
     expect(members, 'held at the instants the record carries, not at this pass').toEqual([{ id: A, firstDeadAt: T0 }, { id: B, firstDeadAt: T0 }]);
   });
 
-  /** A latest held-set row this build cannot read, written behind the trip's own record, on the run it sits on. */
-  const plantMalformed = (f: Fixture, runId: number): void => {
-    const db = (f.coord as unknown as { db: { exec(sql: string): void } }).db;
-    db.exec(`INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) SELECT runId, at, state, state, 'operator', ` +
-      `'dead-coordinator-breaker-held:${A}@soon' FROM (SELECT ${runId} AS runId, ${T0} AS at, state FROM runs WHERE id = ${runId})`);
-  };
+  /** A record this build cannot read: the latest held-set row on the run it sits on, and the typed state's snapshot. */
+  const plantMalformed = (f: Fixture, runId: number): void => plantBadRecord(f, runId);
   const heldRows = (f: Fixture, runId: number) =>
     f.coord.runEvents(runId).filter((e) => (e.detail ?? '').startsWith('dead-coordinator-breaker-held:'));
   const unreadableBody = (f: Fixture): string =>
@@ -742,7 +785,7 @@ describe('the breaker’s hold survives a RESTART (review 381, F1)', () => {
     expect(f.coord.deadCoordinatorBreakerHeldLatest()).toMatchObject({ ok: true, runId: ra, held: [{ id: A }, { id: B }] });
     const warned = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('record of its hold'));
     expect(warned, 'ONE warn line for the bad row').toHaveLength(1);
-    expect(warned[0], 'names the row').toMatch(/event \d+/);
+    expect(warned[0], 'names the row it could not read').toContain('the breaker state row');
     expect(unreadableRows(f), 'and ONE feed row').toEqual([[A, 'dead coordinator: breaker record unreadable']]);
     expect(unreadableBody(f), 'the row says who was held, flagged').toContain(`(${A}, ${B}), each flagged`);
     warn.mockClear();
@@ -783,12 +826,12 @@ describe('the breaker’s hold survives a RESTART (review 381, F1)', () => {
   it('a read that THROWS seeds the fallback too, and warns once per process, its reason bounded to 64 characters (review 382, R2)', async () => {
     const f = await fixture();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    vi.spyOn(f.coord, 'deadCoordinatorBreakerHeldLatest').mockReturnValue({ ok: false, detail: 'x'.repeat(200), eventId: null, runId: null });
+    vi.spyOn(f.coord, 'deadCoordinatorBreakerState').mockReturnValue({ kind: 'unreadable', detail: 'x'.repeat(200) });
     f.plant(A); f.plant(B);
     const ra = f.working(A); f.working(B);
     await anHourDead(f);
     expect(f.attention(), 'both held as one cluster').toEqual([['breaker', [A, B]]]);
-    expect(f.coord.deadCoordinatorBreakerHeldLatest).toHaveBeenCalledTimes(1);
+    expect(f.coord.deadCoordinatorBreakerState).toHaveBeenCalledTimes(1);
     const warned = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('record of its hold'));
     expect(warned).toHaveLength(1);
     expect(warned[0], 'the reason is cut at 64 characters').toContain(`: ${'x'.repeat(64)})`);
@@ -895,14 +938,13 @@ describe('the breaker’s hold survives a RESTART (review 381, F1)', () => {
     const rb = f.working(B);
     await anHourDead(f);                               // tripped on {A, B}: the hold is recorded
     expect([ra, rb].map(f.stateOf)).toEqual(['working', 'working']);
-    const write = vi.spyOn(f.coord, 'recordDeadCoordinatorBreakerHeld').mockReturnValue({ recorded: false, why: 'run-gone' });
+    const restore = failBreakerWrites(f);
     f.live.add(B);                                     // B back: the set changes to empty, A alone is due
     f.next(); await f.pass();
-    expect(write, 'the write was tried').toHaveBeenCalled();
     expect(f.stateOf(ra), 'not ended while its release of B is unrecorded').toBe('working');
     expect(f.acts(), 'no act composed at all').toBe(0);
     expect(warn.mock.calls.map((c) => String(c[0])).some((m) => m.includes('no act this pass'))).toBe(true);
-    write.mockRestore();
+    restore();
     f.next(); await f.pass();
     expect(f.coord.deadCoordinatorBreakerHeldLatest(), 'the clear landed').toEqual({ ok: true, runId: ra, held: [] });
     expect(f.stateOf(ra), 'the pass whose write landed acts').toBe('failed');
@@ -916,11 +958,11 @@ describe('the breaker’s hold survives a RESTART (review 381, F1)', () => {
     await anHourDead(f);
     const wouldEnd = () => f.feed().filter(([, t]) => t === 'dead coordinator: programme would be ended');
     expect(wouldEnd()).toEqual([]);
-    const write = vi.spyOn(f.coord, 'recordDeadCoordinatorBreakerHeld').mockImplementation(() => { throw new Error('database or disk is full'); });
+    const restore = failBreakerWrites(f);
     f.live.add(B);
     f.next(); await f.pass();
     expect(wouldEnd(), 'nothing recorded while the hold is unrecorded').toEqual([]);
-    write.mockRestore();
+    restore();
     f.next(); await f.pass();
     expect(wouldEnd().map(([s]) => s)).toEqual([A]);
   });
@@ -967,9 +1009,7 @@ describe('a restarted lane never ends a claimant the unrestarted lane\'s breaker
     const breaker = () => f.attention().filter(([k]) => k === 'breaker');
     await f.pass();                                             // m0: X crashes; U unmeasurable
     if (restart === 'fallback') {
-      const db = (f.coord as unknown as { db: { exec(sql: string): void } }).db;
-      db.exec(`INSERT INTO run_events (runId, at, fromState, toState, causedBy, detail) SELECT id, ${T0}, state, state, 'operator', ` +
-        `'dead-coordinator-breaker-held:${X}@soon' FROM runs WHERE id = ${r[X]}`);
+      plantBadRecord(f, r[X]!, X);
       f.restart();
     }
     await to(1);                                                // the fallback holds {U*, X*}; a plain lane trips on nothing yet
@@ -1112,9 +1152,9 @@ describe('a restart after a lost held-set write holds what it cannot prove it di
       if (ps.has(t)) {
         // a process that dies between step five (anchors written) and step six (the record written): the record write does
         // not land on this pass, and the process is restarted before the next one.
-        const spy = [o.failWriteAt ?? []].flat().includes(t) ? vi.spyOn(f.coord, 'recordDeadCoordinatorBreakerHeld').mockImplementation(() => { throw new Error('process died here'); }) : null;
+        const restore = [o.failWriteAt ?? []].flat().includes(t) ? failBreakerWrites(f, 'process died here') : null;
         await f.pass();
-        spy?.mockRestore();
+        restore?.();
       }
     }
     return { states: Object.fromEntries(ids.map((id) => [id, f.stateOf(r[id]!)])), breaker: f.attention().filter(([k]) => k === 'breaker') };
@@ -1193,12 +1233,12 @@ describe('a restart after a lost held-set write holds what it cannot prove it di
     const to = async (target: number): Promise<void> => {
       while (m < target) { const d = Math.min(9, target - m); f.advance(d * 60_000); m += d; await f.pass(); }
     };
-    const spy = failWrites ? vi.spyOn(f.coord, 'recordDeadCoordinatorBreakerHeld').mockImplementation(() => { throw new Error('store is broken'); }) : null;
+    const restore = failWrites ? failBreakerWrites(f, 'store is broken') : null;
     await f.pass();                                  // A crashed, anchored at 0; B alive
     await to(27);
     f.live.delete(B);                                // B crashes at 27, anchored at the pass at 36
     await to(45);
-    spy?.mockRestore();
+    restore?.();
     f.restart();
     await to(90);
     return { f, ra, rb, held: f.attention().filter(([k]) => k === 'breaker') };
@@ -1212,18 +1252,23 @@ describe('a restart after a lost held-set write holds what it cannot prove it di
     const rows = f.coord.runEvents(ra).filter((e) => (e.detail ?? '').startsWith('dead-coordinator-breaker-held:'));
     expect(rows.length, 'the first crash and B\'s crash each checkpointed, and nothing else').toBeLessThanOrEqual(3);
   });
-  it('...a failed checkpoint withholds nothing (the set did not change), and a restart then flags only the anchors newer than the last LANDED record', async () => {
-    // The same world with every write failing: no record ever lands, so after the restart both anchors are newer than it,
-    // flagged, and held until evidence — the cost that remains, said out loud.
+  it('...a store whose breaker writes keep failing leaves the state DIRTY, so the restart holds every claimant it does not release, flagged, until evidence (D-4857)', async () => {
+    // The same world with every breaker write failing: no commit ever lands, the state stays dirty, so after the restart both
+    // crashed claimants are held, flagged, until evidence — the cost that remains, said out loud.
     const { f, ra, rb, held } = await apart(true);
     expect([ra, rb].map(f.stateOf), 'held until evidence, not ended').toEqual(['working', 'working']);
     expect(held).toEqual([['breaker', [A, B]]]);
     f.live.add(B);                                   // B comes back: evidence
     f.next(); await f.pass();
     f.next(); await f.pass();
-    expect(f.stateOf(ra), 'released by evidence on B, A alone ends').toBe('failed');
+    // No commit landed before the restart, so A's anchor never did either: its hour counts from the first commit after it
+    // (the pass at 54), never from an anchor nobody made durable.
+    expect(f.anchorOf(A), 'A\'s durable anchor is the first committed one').toMatchObject({ firstDeadAt: T0 + 54 * 60_000 });
+    expect(f.stateOf(ra), 'released by evidence on B, but not an hour since that anchor').toBe('working');
+    await walk(f, 30 * 60_000);
+    expect(f.stateOf(ra), 'A alone ends once it is').toBe('failed');
   });
-  it('R3\'s act gate is unchanged for an UNCHANGED set: a pass that starts an anchor whose checkpoint write fails still acts on the claimant that is due', async () => {
+  it('a pass whose commit fails acts on NOTHING, even with the held set unchanged, and the next pass whose commit lands acts (D-4857: commit success is the only permission to act)', async () => {
     const f = await fixture();
     f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
     vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -1236,9 +1281,280 @@ describe('a restart after a lost held-set write holds what it cannot prove it di
     };
     await f.pass(); await to(54);                    // A crashed since 0, due at the pass at 63
     f.live.delete(B);                                // B crashes at 54: its anchor starts at the pass at 63
-    vi.spyOn(f.coord, 'recordDeadCoordinatorBreakerHeld').mockImplementation(() => { throw new Error('store is broken'); });
+    const restore = failBreakerWrites(f, 'store is broken');
     await to(63);
-    expect(f.stateOf(ra), 'the set did not change, so the failed checkpoint withholds nothing').toBe('failed');
+    expect(f.stateOf(ra), 'due, but the pass that starts B\'s anchor did not commit: no act').toBe('working');
+    restore();
+    await to(72);
+    expect(f.stateOf(ra), 'the next pass commits, and acts').toBe('failed');
+  });
+});
+
+/** THE TYPED BREAKER STATE (D-4857, the operator's ruling 4286). Every pass that changes anything durable marks the
+ *  breaker's typed state DIRTY alone, then writes the exact held snapshot, every anchor change and the state CLEAN in one
+ *  transaction; only a landed commit permits an act; a restart over a state that is dirty, absent or unreadable holds every
+ *  claimant it does not release, flagged, beside every member, instant and flag it can still read. */
+describe('the breaker\'s typed state: dirty before any anchor change, clean only with the exact snapshot (D-4857)', () => {
+  const [M, N, Q, Z] = ['demo-coord-m', 'demo-coord-n', 'demo-coord-q', 'demo-coord-z'];
+  const HEAVY = 180_000;
+  const stateOf = (f: Fixture) => f.coord.deadCoordinatorBreakerState();
+  const doubt = (f: Fixture, id: string) => rmSync(path.join(f.reg, `${id}.uuid`));
+  const undoubt = (f: Fixture, id: string) => writeFileSync(path.join(f.reg, `${id}.uuid`), `u-${id}`);
+  const putState = (f: Fixture, state: 'clean' | 'dirty', held: string | null, generation = 7, at = 1): void => {
+    f.coord.db.exec('DELETE FROM dead_coordinator_breaker_state');
+    f.coord.db.prepare('INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (1, ?, ?, ?, ?)').run(generation, state, held, at);
+  };
+  const feedTitles = (f: Fixture) => f.feed().map(([, t]) => t).filter((t) => t.startsWith('dead coordinator: no breaker state') || t.startsWith('dead coordinator: breaker state') || t.startsWith('dead coordinator: breaker record'));
+  const warned = (w: { mock: { calls: unknown[][] } }) => w.mock.calls.map((c) => String(c[0]));
+
+  /** One scripted world, ARMED, its passes at the given minutes; `fail(minute)` may inject a failure into that pass only;
+   *  `restartAfter` restarts the lane right after that minute's pass. */
+  const scripted = async (o: {
+    ids: string[]; dead: string[]; events: Record<number, (f: Fixture) => void>; passes: number[];
+    fail?: (f: Fixture, minute: number) => (() => void) | null; restartAfter?: number; atRestart?: (f: Fixture) => void;
+  }) => {
+    const f = await fixture();
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (const id of o.ids) { f.plant(id); if (!o.dead.includes(id)) f.live.add(id); }
+    const r = Object.fromEntries(o.ids.map((id) => [id, f.working(id)])) as Record<string, number>;
+    const times = [...new Set([...Object.keys(o.events).map(Number), ...o.passes])].sort((a, b) => a - b);
+    let m = 0;
+    for (const t of times) {
+      f.advance((t - m) * 60_000); m = t;
+      o.events[t]?.(f);
+      if (o.passes.includes(t)) {
+        const restore = o.fail?.(f, t) ?? null;
+        await f.pass();
+        restore?.();
+      }
+      if (o.restartAfter === t) { o.atRestart?.(f); f.restart(); }
+    }
+    return { f, states: Object.fromEntries(o.ids.map((id) => [id, f.stateOf(r[id]!)])), breaker: f.attention().filter(([k]) => k === 'breaker') };
+  };
+
+  // MAIL 4266'S TRACE (measured at bcb39b146): M and N crash at 0 (the trip is recorded); Q crashes at 30 (anchored, and the
+  // record checkpointed, at 30); from 40 to 63 the held-set record cannot be written while anchor changes could land; M is
+  // doubted at 45 (its anchor deleted), crashes again at 55 (U holds M at {0, 55}, unrecorded), is doubted again at 63 (that
+  // anchor deleted too); R restarts right after 63; Z crashes at 64; N is back at 70. U holds [M, Z] (55 and 64 cluster), so
+  // Q, due at 90, must not be ended — by either lane.
+  const PASSES_4266 = [0, 9, 18, 27, 30, 36, 40, 45, 50, 54, 55, 60, 63, 64, 70, 72, 79, 81, 88, 90, 95];
+  const events4266: Record<number, (f: Fixture) => void> = {
+    30: (f) => { f.live.delete(Q); },
+    45: (f) => { doubt(f, M); },
+    55: (f) => { undoubt(f, M); },
+    63: (f) => { doubt(f, M); },
+    64: (f) => { f.live.delete(Z); },
+    70: (f) => { f.live.add(N); },
+  };
+  it('MAIL 4266\'S TRACE: the anchor written, the held write failed, a doubt deleted the anchor, a restart — neither lane ends Q', async () => {
+    const recordFails = (f: Fixture, minute: number) => (minute >= 40 && minute <= 63 ? failSql(f, /^INSERT INTO run_events/) : null);
+    const u = await scripted({ ids: [M, N, Q, Z], dead: [M, N], events: events4266, passes: PASSES_4266, fail: recordFails });
+    expect(u.states[Q], 'the lane that never restarted holds Q').toBe('working');
+    expect(u.breaker).toEqual([['breaker', [M, Z]]]);
+    vi.restoreAllMocks();
+    let atRestart: string | null = null;
+    const r = await scripted({ ids: [M, N, Q, Z], dead: [M, N], events: events4266, passes: PASSES_4266, fail: recordFails, restartAfter: 63,
+      atRestart: (f) => { atRestart = stateOf(f).kind; } });
+    expect(atRestart, 'the commits that could not write the record left the state dirty').toBe('dirty');
+    expect(r.states[Q], 'the restarted lane must not end Q').toBe('working');
+    expect(r.breaker.length, 'its breaker stands').toBe(1);
+    expect(feedTitles(r.f)).toEqual(['dead coordinator: breaker state left dirty']);
+  }, HEAVY);
+
+  // EACH BOUNDARY OF THE COMMIT (the ruling's item 7), on the pass that re-anchors M at 55 (the witness: M held at {0, 55}),
+  // and a restart right after it. A failure exposes the old complete state, dirty; no failure, the new complete state.
+  const PASSES_B = [0, 9, 18, 27, 30, 36, 45, 54, 55, 60, 64, 70, 72, 79, 81, 88, 90, 95];
+  const eventsB: Record<number, (f: Fixture) => void> = {
+    30: (f) => { f.live.delete(Q); }, 45: (f) => { doubt(f, M); }, 55: (f) => { undoubt(f, M); }, 56: (f) => { doubt(f, M); },
+    64: (f) => { f.live.delete(Z); }, 70: (f) => { f.live.add(N); },
+  };
+  const boundaries: [string, ((f: Fixture) => () => void) | null][] = [
+    ['right after the dirty mark (the commit\'s first statement)', (f) => failSql(f, /^SELECT CAST\(generation AS TEXT\) AS genText, CAST\(state AS TEXT\) AS state FROM/)],
+    ['after an anchor write, inside the transaction (the record that follows it)', (f) => failSql(f, /^INSERT INTO run_events/)],
+    ['during the exact-snapshot write', (f) => failSql(f, /^UPDATE dead_coordinator_breaker_state/)],
+    ['at the COMMIT', (f) => failCommit(f)],
+    ['after clean (the commit landed)', null],
+  ];
+  for (const [where, inject] of boundaries) {
+    it(`a crash ${where} exposes the old complete state, dirty, or the new complete one — never clean without the witness — and the restarted lane ends nothing`, async () => {
+      let at: ReturnType<typeof stateOf> | null = null;
+      let anchorM: unknown = null;
+      const r = await scripted({ ids: [M, N, Q, Z], dead: [M, N], events: eventsB, passes: PASSES_B, restartAfter: 55,
+        fail: (f, minute) => (minute === 55 && inject !== null ? inject(f) : null),
+        atRestart: (f) => { at = stateOf(f); anchorM = f.anchorOf(M); } });
+      const s = at as unknown as ReturnType<typeof stateOf>;
+      if (inject === null) {
+        expect(s, 'the new complete state carries the witness').toMatchObject({ kind: 'clean' });
+        const m = s.kind === 'clean' ? s.held.find((x) => x.id === M) : undefined;
+        expect(m?.instants, 'M at both instants').toEqual([T0, T0 + 55 * 60_000]);
+        expect(anchorM, 'and its anchor').toMatchObject({ firstDeadAt: T0 + 55 * 60_000 });
+      } else {
+        expect(s, 'dirty, the last landed snapshot (M at 0 alone)').toMatchObject({ kind: 'dirty', snapshot: { kind: 'members' } });
+        const m = s.kind === 'dirty' && s.snapshot.kind === 'members' ? s.snapshot.members.find((x) => x.id === M) : undefined;
+        expect(m, 'the old complete state').toEqual({ id: M, firstDeadAt: T0 });
+        expect(anchorM, 'no anchor written outside the commit').toBeNull();
+      }
+      expect(r.states[Q], 'Q is never ended').toBe('working');
+      expect(r.breaker.length).toBe(1);
+    }, HEAVY);
+  }
+
+  it('A LONE-SURROGATE claimant is held across a restart: its id has a spelling, so the record lands and the act is not withheld for it', async () => {
+    const S = 'demo-coord-\ud800';
+    const f = await fixture();
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    f.plant(A);
+    const ra = f.working(A);
+    // `claimedBy` cannot carry a lone surrogate through SQLite (it reads back U+FFFD), so the population and the journal
+    // clause are given it directly: S has no registry row and, for the first pass only, a journaled successful spawn —
+    // so it reads crashed (its row gone) at 0, and unmeasured (no history) after, its anchor deleted.
+    let sCrashed = true;
+    const ids = f.coord.openCoordinatorIds.bind(f.coord);
+    vi.spyOn(f.coord, 'openCoordinatorIds').mockImplementation(() => [...ids(), S]);
+    const rows = f.coord.deadCoordinatorJournalRows.bind(f.coord);
+    vi.spyOn(f.coord, 'deadCoordinatorJournalRows').mockImplementation((asked: readonly string[]) => {
+      const m = rows(asked.filter((id) => id !== S));
+      if (asked.includes(S)) {
+        m.set(S, sCrashed ? { hasHistory: true, rows: [{ act: 'spawn', outcome: 'done', at: T0 - 7_200_000, gen: '1790000000000000000',
+          dec: { surface: 'none' }, meas: { rc: 0 }, raw: '{}' }] } : { rows: [], hasHistory: false });
+      }
+      return m;
+    });
+    await f.pass();                                      // A and S crash together: the trip {A, S}
+    expect(f.attention().filter(([k]) => k === 'breaker')).toEqual([['breaker', [A, S].sort()]]);
+    sCrashed = false;
+    f.next(); await f.pass();                            // S unmeasured: its anchor goes, the hold is memory and the record
+    const st = f.coord.deadCoordinatorBreakerState();
+    expect(st.kind === 'clean' && st.held.map((m) => m.id).sort(), 'the snapshot carries S exactly').toEqual([A, S].sort());
+    f.restart();
+    await walk(f, 2 * HOUR);
+    expect(f.stateOf(ra), 'A is not ended: S is held across the restart').toBe('working');
+    expect(f.attention().filter(([k]) => k === 'breaker')).toEqual([['breaker', [A, S].sort()]]);
+  }, HEAVY);
+
+  it('a DIRTY state with a READABLE snapshot: every member, instant and flag it carries is kept, every unreleased claimant is added flagged, an exact record is written before clean — and nothing is cleared by its age', async () => {
+    const f = await fixture();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const C = 'demo-coord-c'; const Y = 'demo-coord-y';
+    f.plant(A); f.plant(B); f.plant(C); f.live.add(C);
+    f.working(A); f.working(B); f.working(C);
+    const t1 = T0 - 120 * 60_000; const t2 = T0 - 100 * 60_000;
+    putState(f, 'dirty', `dead-coordinator-breaker-held:${A}@${t1}+${t2},${C}@${t2},${Y}@${t2}*`, 7, 1);   // written at time 1: ancient
+    await f.pass();
+    expect(stateOf(f), 'clean, with the exact replacement').toEqual({ kind: 'clean', generation: 9, writtenAt: T0, held: [
+      { id: A, firstDeadAt: t1, instants: [t1, t2, T0], fallback: true },     // its instants kept, its anchor added, flagged
+      { id: B, firstDeadAt: T0, fallback: true },                               // unreleased, named nowhere: held at the pass
+    ] });                                                                       // C alive: released; Y left the population
+    expect(warned(warn).filter((m) => m.includes('left dirty (generation 7)')), 'one warn line').toHaveLength(1);
+    expect(feedTitles(f)).toEqual(['dead coordinator: breaker state left dirty']);
+  });
+
+  const seeds: [string, (f: Fixture, ra: number) => void, string][] = [
+    ['an ABSENT row (the deploy that creates the table)', () => {}, 'dead coordinator: no breaker state yet'],
+    ['a dirty row with NO snapshot', (f) => { putState(f, 'dirty', null); }, 'dead coordinator: breaker state left dirty'],
+    ['a dirty row with a MALFORMED snapshot', (f) => { putState(f, 'dirty', `dead-coordinator-breaker-held:${A}@soon`); }, 'dead coordinator: breaker state left dirty'],
+    ['a clean row with a MALFORMED snapshot (unreadable)', (f) => { putState(f, 'clean', `dead-coordinator-breaker-held:${A}@soon`); }, 'dead coordinator: breaker record unreadable'],
+  ];
+  for (const [what, plant, title] of seeds) {
+    it(`${what}: every unreleased claimant held, flagged, beside what the latest readable record carries — and its own words`, async () => {
+      const f = await fixture({ breakerState: 'absent' });
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      f.plant(A); f.plant(B);
+      const ra = f.working(A); f.working(B);
+      const t1 = T0 - 30 * 60_000;
+      expect(f.coord.recordDeadCoordinatorBreakerHeld(ra, [{ id: A, firstDeadAt: t1 }], t1)).toMatchObject({ recorded: true });
+      plant(f, ra);
+      await f.pass();
+      expect(stateOf(f)).toEqual({ kind: 'clean', generation: expect.any(Number), writtenAt: T0, held: [
+        { id: A, firstDeadAt: t1, instants: [t1, T0], fallback: true }, { id: B, firstDeadAt: T0, fallback: true }] });
+      expect(feedTitles(f)).toEqual([title]);
+    });
+  }
+
+  it('THE DEPLOY\'S ONE CONSERVATIVE PASS: with no state yet, every claimant the first pass does not release is held, flagged, and stays held until evidence releases it — across a restart — then the lane resumes', async () => {
+    const f = await fixture({ breakerState: 'absent' });
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    f.plant(A);                                          // A crashed; B has no registry row and no history: unmeasured
+    const ra = f.working(A); const rb = f.working(B);
+    await f.pass();
+    expect(warned(warn).filter((m) => m.includes('no breaker state yet')), 'said once').toHaveLength(1);
+    expect(feedTitles(f)).toEqual(['dead coordinator: no breaker state yet']);
+    await walk(f, HOUR);
+    f.restart();
+    await walk(f, HOUR);
+    expect([ra, rb].map(f.stateOf), 'two hours: A is not ended while B, flagged, is unreleased').toEqual(['working', 'working']);
+    expect(f.attention().filter(([k]) => k === 'breaker')).toEqual([['breaker', [A, B]]]);
+    f.plant(B); f.live.add(B);                           // evidence: B is alive
+    f.next(); await f.pass();
+    f.next(); await f.pass();
+    expect([ra, rb].map(f.stateOf), 'released through the door that exists: A alone ends').toEqual(['failed', 'working']);
+  }, HEAVY);
+
+  it('an EMPTY population with no state yet: the pass writes the exact empty snapshot and turns the state clean, no carrier needed; an anchor left behind is deleted in the same commit', async () => {
+    const f = await fixture({ breakerState: 'absent' });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    f.coord.setDeadAnchor('demo-coord-gone', { firstDeadAt: T0 - 60_000, lastDeadAt: T0 - 60_000 });
+    await f.pass();
+    expect(stateOf(f)).toEqual({ kind: 'clean', generation: 2, writtenAt: T0, held: [] });
+    expect(f.coord.deadAnchors()).toEqual({ ok: true, anchors: new Map() });
+    expect(f.coord.deadCoordinatorBreakerHeldLatest(), 'no run carries a record: the table alone does').toEqual({ ok: true, held: [], runId: null });
+  });
+
+  /** A dead since 0 (due at the pass at 63); B crashed at 30 (anchored 36, never clustering with A) and back at 63, so the
+   *  pass at 63 both moves A's anchor and deletes B's. The failure is injected into that pass only. */
+  const dueAt63 = async (inject: (f: Fixture) => () => void) => {
+    const f = await fixture();
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    f.plant(A); f.plant(B); f.live.add(B);
+    const ra = f.working(A); f.working(B);
+    let m = 0;
+    const to = async (target: number): Promise<void> => {
+      while (m < target) { const d = Math.min(9, target - m); f.advance(d * 60_000); m += d; await f.pass(); }
+    };
+    await f.pass(); await to(27);
+    f.live.delete(B);
+    await to(54);
+    f.live.add(B);
+    const anchorsBefore = f.coord.deadAnchors();
+    const before = stateOf(f);
+    const restore = inject(f);
+    await to(63);
+    restore();
+    return { f, ra, warn, anchorsBefore, before, to };
+  };
+  it('a STATEMENT failure inside the commit: no act, the state dirty, no anchor moved or deleted — and the next pass re-sends every change, commits and acts', async () => {
+    const { f, ra, warn, anchorsBefore, to } = await dueAt63((f) => failSql(f, /^UPDATE dead_coordinator_breaker_state/));
+    expect(f.stateOf(ra), 'due, and the commit failed: no act').toBe('working');
+    expect(stateOf(f)).toMatchObject({ kind: 'dirty' });
+    expect(f.coord.deadAnchors(), 'neither A\'s move nor B\'s delete landed').toEqual(anchorsBefore);
+    expect(warned(warn).some((m) => m.includes('could not commit the breaker\'s state'))).toBe(true);
+    await to(72);
+    expect(stateOf(f)).toMatchObject({ kind: 'clean' });
+    expect(f.anchorOf(B), 'the delete was re-sent').toBeNull();
+    expect(f.stateOf(ra)).toBe('failed');
+  });
+  it('a COMMIT failure: the same — no act, dirty, nothing moved — and the next pass commits and acts', async () => {
+    const { f, ra, anchorsBefore, to } = await dueAt63((f) => failCommit(f));
+    expect(f.stateOf(ra)).toBe('working');
+    expect(stateOf(f)).toMatchObject({ kind: 'dirty' });
+    expect(f.coord.deadAnchors()).toEqual(anchorsBefore);
+    await to(72);
+    expect(f.stateOf(ra)).toBe('failed');
+  });
+  it('a DIRTY MARK that cannot be written: no anchor change at all, no act, the state as it was — and the next pass marks, commits and acts', async () => {
+    const { f, ra, warn, anchorsBefore, before, to } = await dueAt63((f) => failSql(f, /^INSERT INTO dead_coordinator_breaker_state/));
+    expect(f.stateOf(ra)).toBe('working');
+    expect(f.coord.deadAnchors(), 'no anchor moved or deleted').toEqual(anchorsBefore);
+    expect(stateOf(f), 'the state as it was').toEqual(before);
+    expect(warned(warn).some((m) => m.includes('could not mark the breaker\'s state dirty'))).toBe(true);
+    // A pass not taken leaves A's durable `lastDeadAt` at 54, so the next pass must come inside the episode gap (a minute
+    // later, as a live lane's does) to continue the hour; a later one restarts it, as a skipped pass would.
+    await to(64);
+    expect(f.stateOf(ra)).toBe('failed');
   });
 });
 
