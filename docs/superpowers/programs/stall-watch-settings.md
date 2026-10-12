@@ -28,7 +28,7 @@ time.
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
 | 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merged `6e4524164` 2026-10-12; run 322 closed `done`, `final:true` (R37) |
-| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | — | opened (R38) |
+| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | — | run 394 dispatched 2026-10-12 14:51 to `ccrc-pwa-bright-cove` (R38) |
 
 ## Decisions & deviations
 
@@ -811,7 +811,9 @@ time.
   - Routing is unchanged from wave 2: Opus high for the main loop, Sonnet high for implementers, Opus high for each
     task's reviewer, Haiku for scouts, workflows off, compact at 40.
   - Dispatch: the concurrency cap stood at 7 of 7 at 14:40 (runs 354, 358, 367, 372, 373, 389, 391) and the daily
-    cap at 15 of 24. Run 3 is opened now and dispatched by a bounded waiter when a slot frees.
+    cap at 15 of 24. Wave 3 opened as run 394, and a bounded waiter dispatched it when a slot freed: 14:51:54, to the
+    fresh child `ccrc-pwa-bright-cove`, brief queued, worker skill present. The brief is
+    `.superpowers/sdd/stall-watch-settings/w3-wave-brief.md`; the plan is blob `5d9622c25` at `3da7ea0e5`.
   - Deploy class: both. The updater moves the fleet box first, which this wave needs, since the server reads what
     the hook writes. This session never rolls out by hand.
 
