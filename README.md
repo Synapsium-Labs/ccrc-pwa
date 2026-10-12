@@ -541,6 +541,8 @@ single box whose role is only derived as `both` (placed by `deploy.sh`, or a dev
 nothing and `ccrc-api` answers `no-token`; the server warns at boot, and the remedy is to record
 `CCRC_ROLE=both` in `~/.ccrc/ccrc.env` and then restart `ccrc.service` (the role is read only at boot).
 A `deploy.sh` box re-ships a local `deploy/ccrc.env` over that file, so record the role there too.
+A two-box fleet placed by `deploy.sh` alone has no `~/.ccrc/node-id` on the fleet box, so the rotation gate holds
+`node-id-unmeasured` and no rotation runs; `ccrc install` (or `ccrc update`) on that fleet box mints it.
 
 The block below is the single-box form of the two steps:
 
@@ -586,7 +588,7 @@ ends with. A `server`-role box SKIPs the checks that measure per-account or per-
 | `pool-sync`, `update-sync` | a fleet box's two pulled projections, present and in lease |
 | `graphify`, `graphify-path` | the pinned graph engine, its skill and the sweep's last census; `graphify` on `PATH` resolving to that engine |
 | `build`, `provenance`, `fleet` | the running server's build against the stamp; whether this install was verified (never a FAIL); in remote mode, whether the two boxes agree |
-| `box-token` | the box token's lifecycle on each box (the server's token and state files; the fleet's copy and its last sync). PASS or SKIP only in wave 1: a finding that will be a FAIL or WARN prints as a SKIP with its word, and a SKIP is never counted in doctor's exit code |
+| `box-token` | the box token's lifecycle on each box (the server's token and state files; the fleet's copy and its last sync). The FAIL and WARN arms are on: a FAIL counts in doctor's exit code and a WARN does not. A fresh box that was never handed a value (no fleet generation file and no sync report that records a value written, or no server state file) has that finding read PASS with its sentence, never WARN or FAIL: the server mints at its first boot, and its next rotation hands the fleet one. A box that once held a value and lost it is a FAIL |
 
 `ccrc doctor --fix` cures the failing checks that know how — `skills`, `wrappers` and `codex`, each by
 the shipped tree's own installer — and measures them again; the second verdict is the one that counts (D-3113). Without the flag

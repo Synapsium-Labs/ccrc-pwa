@@ -7394,13 +7394,20 @@ _check_history() {
 # child, hashed or kept. The two JSON files hold no secret and are read by `python3 -I -c` (isolated: no cwd or environment on its path), whose output is
 # words and numbers this function validates again before any of it reaches a line.
 #
-# WAVE 1 PRINTS PASS OR SKIP ONLY (D-4391; the operator's ruling of 2026-10-07, 15:30). Every state that will
-# be a FAIL or a WARN prints `SKIP box-token: <arm>: <word> — <sentence>; reported as SKIP until the FAIL and
-# WARN arms ship`, never PASS: a PASS there is the one way an operator reads a stalled first retirement as
-# healthy. The arms are compiled in behind `_BT_ARMS_ON` and proven by `doctor-box-token.test.ts`, which flips
-# it in a copy of this file; the follow-up PR flips it here, before the weekly schedule ships. There is no
-# flag file, because a flag nobody writes is a hand step. `transport http` is printed on a PASS line and is
-# never a verdict.
+# THE FAIL AND WARN ARMS ARE ON (row 2a; wave 1 shipped them off, D-4391, the operator's ruling of 2026-10-07,
+# 15:30). Every finding prints `FAIL` or `WARN box-token: <arm>: <word> — <sentence>` with a `remedy:` line, and a
+# FAIL counts in doctor's exit code. `_BT_ARMS_ON` stays as a one-line kill switch: set to 0 it prints `SKIP`
+# with the same words and a tail saying so, never PASS (a PASS there is the one way an operator reads a stalled
+# first retirement as healthy), and `doctor-box-token.test.ts` pins that branch in a disarmed copy of this file.
+# There is no flag file, because a flag nobody writes is a hand step. A box that is healthy reads PASS, and a
+# FRESH box (never handed a value) reads PASS too, with its sentence, never WARN or FAIL (D-139, the operator's ruling
+# of 2026-10-12: a fresh install ends green): an absent token takes its class from the box's history (4553;
+# `_bt_server_arm`, `_bt_fleet_arm`). With no history it is not a finding, only a fact named in the detail (the server
+# mints at boot; the server's next rotation hands the fleet its value), the way `auth` and `provenance` name theirs.
+# A box that once held a value and lost it stays FAIL. That PASS is not an arm's finding, so the kill switch leaves it
+# PASS as well; every real finding is SKIP there. An absent token on a box without `python3` FAILs, by fail-closed
+# design: nothing can be read to class it lower.
+# `transport http` is printed on a PASS line and is never a verdict.
 #
 # THE WORDS ARE L0's, pinned by `doctor-box-token.test.ts`: `_BT_HOLDS` is `TOKEN_HOLDS`, `_BT_OWED` is
 # `OWED_REASONS`, `_BT_ORIGINS` is `TOKEN_ORIGINS` (`shared/box-token.ts`); `_BT_SYNC_ERRORS` is
@@ -7417,7 +7424,17 @@ _check_history() {
 # `set +x` is the function's first statement, not the file's: this file is sourced into `ccrc`, and doctor runs
 # each check in its own `$( … )`, so it cannot leak; it writes nothing, so it sets no umask (a file-level
 # `umask 077` would reach every `--fix` writer).
-_BT_ARMS_ON=0
+_BT_ARMS_ON=1
+# The value line `deploy/ccrc-mail.token.example` ships. A copy of `PLACEHOLDER_TOKEN` (`server/src/coord/token.ts`),
+# held to it by a text pin in `coord-token.test.ts`. Both arms read it: a token file carrying it is no token.
+_BT_PLACEHOLDER='REPLACE-THIS-LINE-WITH-THE-OUTPUT-OF-openssl-rand--hex-32'
+# What `String.prototype.trim` strips beyond ASCII (`extractToken` trims with it), as byte sequences: no-break space,
+# BOM, U+1680, U+2000-200A, U+2028, U+2029, U+202F, U+205F, U+3000. `_bt_value_file` strips it (with ASCII whitespace) from
+# every line before it tells a blank or `#` line apart, and compares the value line to the placeholder; `doctor-box-token.test.ts`
+# pins every code point of the trim set, derived there, one row each.
+_BT_UNI_WS=($'\xc2\xa0' $'\xef\xbb\xbf' $'\xe1\x9a\x80' $'\xe2\x80\x80' $'\xe2\x80\x81' $'\xe2\x80\x82' $'\xe2\x80\x83'
+  $'\xe2\x80\x84' $'\xe2\x80\x85' $'\xe2\x80\x86' $'\xe2\x80\x87' $'\xe2\x80\x88' $'\xe2\x80\x89' $'\xe2\x80\x8a'
+  $'\xe2\x80\xa8' $'\xe2\x80\xa9' $'\xe2\x80\xaf' $'\xe2\x81\x9f' $'\xe3\x80\x80')
 _BT_HOLDS=(update-in-flight agent-predates-op verb-missing stale-client fleet-rows node-id-unmeasured link-down pending-cap no-coord role-unrecorded mint-failed)
 _BT_OWED=(adopted fleet-behind confirm-deadline retired-written-back recovered aux-unusable unverifiable-files code-used claim-misbound retired-presented)
 _BT_ORIGINS=(adopted minted rotated)
@@ -7428,7 +7445,7 @@ _BT_LOST_WORDS=(timeout disconnected aborted mint-failed)
 _BT_FAIL_AT=3
 _BT_PENDING_CAP=3
 _BT_TICK_MS=60000
-_BT_SKIP_TAIL='; reported as SKIP until the FAIL and WARN arms ship'
+_BT_SKIP_TAIL='; the FAIL and WARN arms are switched off (_BT_ARMS_ON=0)'
 
 # The server's state record, read strictly: any field missing or of the wrong kind is `unreadable`, never a
 # default. Prints `absent`, `unreadable`, or `ok` then `<key> <value>` lines and `finding <word> [<n>] [<node>]`.
@@ -7486,6 +7503,7 @@ try:
         and opt(s["hold"], lambda w: w in holds) and opt(s["holdNode"], lambda w: type(w) is str)
         and opt(ls, lambda x: d(x) and n(x["at"]) and type(x["word"]) is str)
         and d(k) and n(k["previousPresented"]) and n(k["retiredPresented"])
+        and ("retiredPresentedAt" not in k or on(k["retiredPresentedAt"]))
         and on(s["mintFailedAt"]) and opt(br, lambda x: d(x) and n(x["at"]))
         and on(s["retiredRefusedAt"])
         and opt(fp, lambda x: d(x) and n(x["at"]) and x["file"] in ("current", "pending", "previous") and x["word"] in fileprobs)
@@ -7528,8 +7546,17 @@ if ls is not None and ls["word"] == "proof-unmeasured" and not (f > 0 and lf == 
     say("finding", "proof-unmeasured", age(ls["at"]))
 if br is not None and (lr is None or lr < br["at"]):
     say("finding", "recovered", age(br["at"]))
-if k["retiredPresented"] > 0:
-    say("finding", "retired-presented", k["retiredPresented"])
+# 4552: a retired presentation is a finding while it is UNANSWERED, newer than the last completed rotation. The
+# stamp is on the driver clock, the same one lastRotationAt is on. Presence first, then null: an absent key is a state
+# written before 4552 (a count with no stamp reads unanswered), null is "no presentation recorded".
+if "retiredPresentedAt" in k:
+    rp = k["retiredPresentedAt"]
+    if rp is not None and (lr is None or rp > lr):
+        say("finding", "retired-presented", k["retiredPresented"], age(rp))
+    elif rp is None and k["retiredPresented"] > 0:
+        say("finding", "retired-presented", k["retiredPresented"], "-")
+elif k["retiredPresented"] > 0:
+    say("finding", "retired-presented", k["retiredPresented"], "-")
 if fp is not None:
     say("finding", "file:" + fp["word"], age(fp["at"]), fp["file"])
 if c["id"] is not None and s["fleetConfirmed"] != c["id"]:
@@ -7591,6 +7618,12 @@ except Exception:
 if not ok:
     unreadable()
 age = max(0, now - at)
+# Does the report record a value WRITTEN to this box? A `synced` result, a proof result (the value was written, then not
+# proved), or any report that carries a generation (a `write-failed` of `ccrc-token-sync` after the write). A report that
+# records only a refusal, no generation (`bad-code`, `stale-client`, `claim-refused`, `code-used`, `busy`, `spawn-failed`,
+# or a `write-failed` before anything was written), says nothing was ever handed to this box: it is no history.
+if res not in ("synced", "proof-failed", "proof-unmeasured") and gen is None:
+    say("refusal-only")
 if res == "synced":
     if pf != "proved" or tr is None:
         unreadable()
@@ -7612,22 +7645,43 @@ _bt_age() {   # <seconds> -> "45 s", "12 min", "3 h", "2 d"
 }
 
 # <path> -> BT_TF: ok | absent | not-regular | unreadable | no-value, and BT_TF_MODE (octal, empty if unread).
-# Absent is `! -e` AND `! -L`: a dangling link is present and not a regular file, never absent.
+# Also BT_TF_PLACEHOLDER (1 when BT_TF is ok and the value line, trimmed as `extractToken` trims, is the shipped
+# placeholder; else 0). It is a measurement: both arms act on it.
+# Absent is `! -e` AND `! -L` AND a MEASURED absence: `[ -e ]` is false for ENOENT and for EACCES alike, so a path
+# that is not there is absent only when its nearest existing ancestor is a directory this process can search (review
+# 383 F5; the python readers do the same, mapping only FileNotFoundError to absent). A parent that exists and cannot be
+# searched (or is not a directory) leaves the file UNMEASURED: `unreadable`, never absent. A dangling link is present
+# and not a regular file, never absent.
 _bt_value_file() {
-  local p="$1" line="" t=""
-  BT_TF=""; BT_TF_MODE=""
-  if [ ! -e "$p" ] && [ ! -L "$p" ]; then BT_TF=absent; return 0; fi
+  local p="$1" line="" t="" u="" w="" d=""
+  BT_TF=""; BT_TF_MODE=""; BT_TF_PLACEHOLDER=0
+  if [ ! -e "$p" ] && [ ! -L "$p" ]; then
+    d="${p%/*}"; [ "$d" != "$p" ] || d=.; [ -n "$d" ] || d=/
+    while [ -n "$d" ] && [ ! -e "$d" ] && [ ! -L "$d" ]; do
+      case "$d" in */*) d="${d%/*}"; [ -n "$d" ] || d=/ ;; *) d=. ;; esac
+    done
+    if [ -d "$d" ] && [ -x "$d" ]; then BT_TF=absent; else BT_TF=unreadable; fi
+    return 0
+  fi
   if [ -L "$p" ] || [ ! -f "$p" ]; then BT_TF=not-regular; return 0; fi
   BT_TF_MODE="$(_plat_mode -- "$p" 2>/dev/null)" || BT_TF_MODE=""
   if [ ! -r "$p" ]; then BT_TF=unreadable; return 0; fi
   BT_TF=no-value
+  # One pass, the way `extractToken` reads: strip FIRST (ASCII whitespace and the `_BT_UNI_WS` set, so the answer never
+  # depends on what `[[:space:]]` covers in the running locale), and only then tell a blank or `#` line apart. The first
+  # line left is the value line: BT_TF is `ok`, and BT_TF_PLACEHOLDER says whether it is the shipped placeholder. A BOM
+  # ahead of the preamble, or a BOM-only line, must not hide the value line it picks (review I1), and a file of only a BOM,
+  # only a no-break space, or a BOM then only a comment has none (review 383 F6).
   while IFS= read -r line || [ -n "$line" ]; do
-    t="${line//[[:space:]]/}"
-    [ -n "$t" ] || continue
-    case "$t" in \#*) continue ;; esac
-    BT_TF=ok; break
+    u="${line//[[:space:]]/}"
+    for w in "${_BT_UNI_WS[@]}"; do u="${u//"$w"/}"; done
+    [ -n "$u" ] || continue
+    case "$u" in \#*) continue ;; esac
+    BT_TF=ok
+    [ "$u" = "$_BT_PLACEHOLDER" ] && BT_TF_PLACEHOLDER=1
+    break
   done < "$p" 2>/dev/null || BT_TF=unreadable
-  line=""; t=""
+  line=""; u=""
   return 0
 }
 
@@ -7637,7 +7691,7 @@ _bt_find() {
   local arm="$1" word="$2" a="${3:-}" b="${4:-}" say="" cls=WARN fix=""
   local card="Rotate now on the console's Box token card"
   case "$arm:$word" in
-    server:token-absent) cls=FAIL
+    server:token-absent) cls=FAIL   # 4553: `_bt_server_arm` lowers it to WARN once the state read shows no state file
       say="$a does not exist, so every box-token lane on this server answers 401"
       fix="restart the server (ccrc.service), which mints a value at boot; if it still has none, its log names the failed mint" ;;
     server:token-mode|fleet:fleet-token-mode) cls=FAIL
@@ -7646,9 +7700,14 @@ _bt_find() {
       case "$b" in
         not-regular) say="$a is not a regular file" ;;
         unreadable) say="$a cannot be read" ;;
+        placeholder) say="$a carries the placeholder value the example file ships, not a token" ;;
         *) say="$a carries no value line" ;;
       esac
-      fix="look at what is there without printing it (ls -l $a); a file the server wrote is rewritten by its next rotation ($card)" ;;
+      fix="look at what is there without printing it (ls -l $a); a file the server wrote is rewritten by its next rotation ($card)"
+      # A server that holds the placeholder never boots (`MailTokenPlaceholderUnedited`), so no console card exists to
+      # rotate from: its remedy is the true one (review 383 F8).
+      [ "$arm:$b" = server:placeholder ] && fix="the server refuses to boot on the placeholder value $a carries; replace the file with a value, or remove it, and the next boot mints one"
+      ;;
     server:state-absent)
       say="$a does not exist, so this server has not run the token lifecycle (a build before it, or not restarted since)"
       fix="update this box (ccrc update), which restarts the server; it writes the file at boot" ;;
@@ -7686,8 +7745,9 @@ _bt_find() {
       say="a retired value's digest has waited $a min to be appended to box-token-retired.json, and box-token.json is its only durable copy"
       fix="look at box-token-retired.json beside box-token.json without printing it (ls -l); the driver retries the append each tick, and an unusable file there is set aside at the next restart" ;;
     server:retired-presented) cls=FAIL
-      say="a retired value was presented $a time(s) since the server started"
-      fix="something still holds a retired value: read the server's log for the lane that presented it, then resync that box ($card)" ;;
+      if [ "$b" = - ]; then say="a retired value was presented $a time(s) since the server started, and this state records no time for it"
+      else say="a retired value was presented $(_bt_age "$b") ago and no rotation has completed since ($a since the server started)"; fi
+      fix="the server owes a forward rotation for it, at most one an hour, and this line clears when that rotation completes; if it stays past an hour, read the server's log for the lane that presented it" ;;
     server:fleet-behind)
       say="the fleet has not confirmed the current generation"
       fix="run ccrc doctor on the fleet box; $card resyncs it" ;;
@@ -7697,7 +7757,7 @@ _bt_find() {
     server:file:*) cls=FAIL
       say="on re-read ($(_bt_age "$a") ago) the server's $b token file was found ${word#file:}; the last good value is kept in memory"
       fix="look at the file without printing it (ls -l); the next rotation rewrites the server's token files ($card), and a restart re-reads them" ;;
-    fleet:fleet-token-absent) cls=FAIL
+    fleet:fleet-token-absent) cls=FAIL   # 4553: `_bt_fleet_arm` lowers it to WARN for a box never handed a value
       say="$a does not exist, so this box's calls to the server carry no box token"
       fix="the server writes it at its next rotation ($card); a single box records CCRC_ROLE=both in ~/.ccrc/ccrc.env and restarts the server, which writes it at boot" ;;
     fleet:no-generation)
@@ -7717,20 +7777,45 @@ _bt_find() {
   BT_PART+=("$arm: $word — $say"); BT_CLASS+=("$cls"); BT_FIX+=("$fix")
 }
 
+# Drops every finding whose part starts with <prefix> from BT_PART, BT_CLASS and BT_FIX (the caller's, by dynamic scope).
+_bt_drop() {
+  local i n="${#BT_PART[@]}" pre="$1"
+  local -a p=() c=() f=()
+  for ((i = 0; i < n; i++)); do
+    case "${BT_PART[i]}" in "$pre"*) continue ;; esac
+    p+=("${BT_PART[i]}"); c+=("${BT_CLASS[i]}"); f+=("${BT_FIX[i]}")
+  done
+  BT_PART=(${p[@]+"${p[@]}"}); BT_CLASS=(${c[@]+"${c[@]}"}); BT_FIX=(${f[@]+"${f[@]}"})
+}
+
 _bt_server_arm() {   # <token path> <state path>
-  local tok="$1" state="$2" before="${#BT_CLASS[@]}" out="" kw w n node seq="" since="" rot="" rotating=0 grace=0 refused=0 bad=0
+  local tok="$1" state="$2" before="${#BT_CLASS[@]}" out="" kw w n node seq="" since="" rot="" rotating=0 grace=0 refused=0 bad=0 tai=-1
   _bt_value_file "$tok"
   case "$BT_TF" in
-    absent) _bt_find server token-absent "$tok" ;;
-    ok) [ "$BT_TF_MODE" = 600 ] || _bt_find server token-mode "$tok" "${BT_TF_MODE:-unreadable}" ;;
+    absent) tai="${#BT_CLASS[@]}"; _bt_find server token-absent "$tok" ;;
+    # A placeholder `mail.token` is a file the server refuses to boot on (`MailTokenPlaceholderUnedited`), so it is never a PASS
+    # (final review, Minor 2); it takes the fleet arm's sentence, tested before the mode as that arm tests it.
+    ok) if [ "$BT_TF_PLACEHOLDER" = 1 ]; then _bt_find server token-unusable "$tok" placeholder
+        elif [ "$BT_TF_MODE" != 600 ]; then _bt_find server token-mode "$tok" "${BT_TF_MODE:-unreadable}"; fi ;;
     *) _bt_find server token-unusable "$tok" "$BT_TF" ;;
   esac
+  BT_SERVER_STATE=unreadable
   if ! command -v python3 >/dev/null 2>&1; then _bt_find server state-unreadable "$state" no-python; return 0; fi
   out="$(python3 -I -c "$_BT_PY_STATE" "$state" "${_BT_ORIGINS[*]}" "${_BT_HOLDS[*]}" "${_BT_OWED[*]}" \
     "${_BT_SYNC_ERRORS[*]} ${_BT_LOST_WORDS[*]}" "${_BT_TRANSPORTS[*]}" "${_BT_FILE_PROBLEMS[*]}" \
     "$_BT_PENDING_CAP" "$_BT_TICK_MS" 2>/dev/null)" || out=""
+  case "${out%%$'\n'*}" in absent) BT_SERVER_STATE=absent ;; ok) BT_SERVER_STATE=ok ;; esac   # anything else stays unreadable
   case "${out%%$'\n'*}" in
-    absent) _bt_find server state-absent "$state"; return 0 ;;
+    # 4553, as D-139 rules it (operator, 2026-10-12): an absent token beside an absent state is a server that has never run
+    # the lifecycle (a fresh install). It is PASS with its sentence, never WARN: the fact stays named in the detail, only
+    # the verdict moves, and the server's own `state-absent` is not a second line for it. Every other state read (ok,
+    # unreadable, no python3 above) leaves the token's FAIL, because a state file means there was a value once; an
+    # unreadable one still says so, and an undecidable history fails closed.
+    absent) if [ "$tai" -ge 0 ]; then
+              BT_PART[tai]="server: token-absent — $tok does not exist, and neither does the server's state file: no value has been minted here yet, and the server mints one at boot"
+              BT_CLASS[tai]=PASS; BT_FIX[tai]=""
+            else _bt_find server state-absent "$state"; fi
+            return 0 ;;
     ok) ;;
     *) _bt_find server state-unreadable "$state"; return 0 ;;
   esac
@@ -7745,7 +7830,8 @@ _bt_server_arm() {   # <token path> <state path>
       refused) [ "$w" = 1 ] && refused=1 ;;
       finding)
         case "$w" in
-          mint-failed|pending-overdue|proof-unmeasured|recovered|retired-presented) _bt_num "$n" && _bt_find server "$w" "$n" || bad=1 ;;
+          retired-presented) if _bt_num "$n" && { [ "$node" = - ] || _bt_num "$node"; }; then _bt_find server "$w" "$n" "$node"; else bad=1; fi ;;
+          mint-failed|pending-overdue|proof-unmeasured|recovered) _bt_num "$n" && _bt_find server "$w" "$n" || bad=1 ;;
           retire-overdue|retiring-unlanded) _bt_num "$n" && _bt_find server "$w:$n" "$n" || bad=1 ;;
           fleet-behind|fleet-unconfirmed) _bt_find server "$w" ;;
           file:*) if _bt_member "${w#file:}" "${_BT_FILE_PROBLEMS[@]}" && _bt_num "$n" && [[ "$node" =~ ^(current|pending|previous)$ ]]; then
@@ -7775,11 +7861,12 @@ _bt_server_arm() {   # <token path> <state path>
 
 _bt_fleet_arm() {   # <own-write: 0|1>
   local own="$1" ff="$HOME/.cc-secrets/ccrc-mail.token" gen="$HOME/.ccrc/box-token-generation" rep="$HOME/.ccrc/token-sync.json"
-  local before="${#BT_CLASS[@]}" out="" kw w n x bad=0 tr="" ownseen=0
+  local before="${#BT_CLASS[@]}" out="" kw w n x bad=0 tr="" ownseen=0 tai=-1 nogen=0 nosync=0 refonly=0
   _bt_value_file "$ff"
   case "$BT_TF" in
-    absent) _bt_find fleet fleet-token-absent "$ff" ;;
-    ok) [ "$BT_TF_MODE" = 600 ] || _bt_find fleet fleet-token-mode "$ff" "${BT_TF_MODE:-unreadable}" ;;
+    absent) tai="${#BT_CLASS[@]}"; _bt_find fleet fleet-token-absent "$ff" ;;
+    ok) if [ "$BT_TF_PLACEHOLDER" = 1 ]; then _bt_find fleet fleet-token-unusable "$ff" placeholder
+        elif [ "$BT_TF_MODE" != 600 ]; then _bt_find fleet fleet-token-mode "$ff" "${BT_TF_MODE:-unreadable}"; fi ;;
     *) _bt_find fleet fleet-token-unusable "$ff" "$BT_TF" ;;
   esac
   if ! command -v python3 >/dev/null 2>&1; then _bt_find fleet sync-unreadable "$rep" no-python; return 0; fi
@@ -7788,11 +7875,12 @@ _bt_fleet_arm() {   # <own-write: 0|1>
   while IFS=' ' read -r kw w n x; do
     case "$kw" in
       own) ownseen=1 ;;
+      refusal-only) refonly=1 ;;
       synced) if _bt_member "$w" "${_BT_TRANSPORTS[@]}" && _bt_num "$n"; then tr="$w"; else bad=1; fi ;;
       finding)
         case "$w" in
-          no-generation|generation-malformed) _bt_find fleet "$w" "$gen" ;;
-          never-synced|sync-unreadable) _bt_find fleet "$w" "$rep" ;;
+          no-generation|generation-malformed) [ "$w" = no-generation ] && nogen=1; _bt_find fleet "$w" "$gen" ;;
+          never-synced|sync-unreadable) [ "$w" = never-synced ] && nosync=1; _bt_find fleet "$w" "$rep" ;;
           proof-unmeasured) _bt_num "$n" && _bt_find fleet "$w" "$n" || bad=1 ;;
           sync:*) if _bt_member "${w#sync:}" "${_BT_SYNC_ERRORS[@]}" && _bt_num "$n"; then _bt_find fleet "$w" "$n"; else bad=1; fi ;;
           *) bad=1 ;;
@@ -7802,6 +7890,21 @@ _bt_fleet_arm() {   # <own-write: 0|1>
     esac
   done <<< "$out"
   if [ "$bad" -eq 1 ]; then _bt_find fleet sync-unreadable "$rep"; return 0; fi
+  # 4553, as D-139 rules it: an absent token on a box with no generation file and no sync report was never handed a value,
+  # a fresh install. It is PASS with its sentence, never WARN; its two companions (`no-generation`, `never-synced`) say
+  # the same fact and are dropped. A report that records only a refusal (`refusal-only`: no value written, no
+  # generation) is no history either (review 383 F12): the refusal stays as its own `sync:<word>` finding, at its class,
+  # and only the absent token reads never-handed. Any trace of a value, a malformed generation file or an unreadable
+  # report included, leaves the FAIL.
+  # An own-write box (both, local, no agent.env) writes the fleet file, the generation file and `fleetConfirmed` together,
+  # so the server arm's state outranks the generation file alone (review 383 F1): it reads never-handed only when that
+  # state read was itself `absent`. Any present state, readable or not, records or may record the hand-out. The state is
+  # read once, by the server arm, which runs first on such a box.
+  if [ "$tai" -ge 0 ] && [ "$nogen" -eq 1 ] && { [ "$nosync" -eq 1 ] || [ "$refonly" -eq 1 ] || { [ "$ownseen" -eq 1 ] && [ "$BT_SERVER_STATE" = absent ]; }; }; then
+    BT_PART[tai]="fleet: fleet-token-absent — $ff does not exist: no value has been handed to this box yet, and the server's next rotation hands one"
+    BT_CLASS[tai]=PASS; BT_FIX[tai]=""
+    _bt_drop "fleet: no-generation — "; _bt_drop "fleet: never-synced — "
+  fi
   [ "${#BT_CLASS[@]}" -eq "$before" ] || return 0
   if [ "$ownseen" -eq 1 ]; then
     BT_PART+=("fleet: token file 0600, generation recorded, written by this box's server")
@@ -7832,7 +7935,7 @@ _bt_agent_env_marks_fleet() {
 
 _check_box-token() {
   { set +x; } 2>/dev/null
-  local role="" fmode="" tok="" dir state arms="" own=0 c worst=PASS detail fix="" x
+  local role="" fmode="" tok="" dir state arms="" own=0 c worst=PASS detail fix="" x BT_SERVER_STATE=""
   local -a BT_PART=() BT_CLASS=() BT_FIX=()
   # The role, the fleet mode and the token path, read as `_check_timeout` reads the role: `ccrc`'s one reader,
   # only when it is loaded and the file is there. Anything else is "not recorded", which picks arms by presence.

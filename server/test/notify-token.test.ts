@@ -44,6 +44,13 @@ describe('POST /api/notify with a box token', () => {
     const logged = warn.mock.calls.flat().join(' ');
     expect(logged).toContain('ccrc token probe');
     expect(logged).not.toContain('deploy/ccrc-mail.token');
+    // R.3 (review 375 F2, F4): the advice holds BOTH halves. The doctor half names its line; the probe half names
+    // the file AND `--url <server>`, because a box with no `~/.ccrc/agent.env` has no address for `ccrc token probe`
+    // to default to (its `--url` is optional only where `CCRC_SERVER_URL` is there to read: ccd/ccrc-token-sync).
+    expect(logged).toContain('run ccrc doctor on both boxes (its box-token line)');
+    expect(logged).toContain(
+      'ccrc token probe --file ~/.cc-secrets/ccrc-mail.token on the fleet box ' +
+      '(add --url <server> on a box with no ~/.ccrc/agent.env)');
   });
 
   it('a REJECTED notify never reaches the bus or the session stream — the negative half of the ' +
