@@ -3379,6 +3379,14 @@ describe("README's Settings paragraph names the Stall watch section (design 2026
 });
 ```
 
+> **Snapshot note (R35, 2026-10-12; first-cut text above stands as written).** The block above is the first cut. It is
+> not what ships. The shipped `server/test/stall-settings-readme.test.ts` differs in four ways. `SECOND` is `main`'s
+> `Settings then has a further section, **Notifications**` (the absorb merge `39c42f503` took it). `THIRD` is renamed
+> `STALL_LEAD` and reads `Settings then has a further section, **Stall watch**`, with no ordinal. The rows and
+> assertion messages say "the Stall watch section", not "a third section". The header docstring says that the lead and
+> `SECOND` are anchor words copied from the README's own sentences. A count of sections is not an anchor word, because
+> no build value backs it. The shipped files govern. This note takes no D-number.
+
 - [ ] **Step 3: Run it red**
 
 ```bash
@@ -3526,6 +3534,19 @@ call under the 600 s limit (13 rows).
 | K | The step is the shipped step | `STALL_QUIET_STEP_MS` 30 min → 60 min | stall-settings-readme | 1 failed: the same row as C |
 | L | The section comes after Notifications | move the third section's sentences, whole, to just before "Settings has a second section, **Notifications**" | stall-settings-readme | 2 failed: "names a third section, once, after the Notifications section"; "names no device, as the section itself names none (§2, 2026-10-05)" (the moved block's sentences now run to "In remote mode" across the Notifications sentence, whose "phone-push bell" the device row finds) |
 | M | No device word, plural or brand | "shown again" → "shown again, on Android too" | stall-settings-readme | 1 failed: "names no device, as the section itself names none (§2, 2026-10-05)" (the earlier six-word pattern passed this row) |
+
+> **Snapshot note on row L (R35, 2026-10-12; the row above is the first cut).** Since the absorb merge (`39c42f503`)
+> the anchor is `main`'s `Settings then has a further section, **Notifications**`. The script's
+> `s.index('Settings has a second section, **Notifications**')` no longer exists in the README and raises
+> `ValueError`; its `'Settings has a third section, **Stall watch**'` lookup is stale for the same reason (the lead is
+> now `Settings then has a further section, **Stall watch**`). Mutation row L's idea is unchanged: move the whole Stall
+> watch block to before the Notifications sentence. The expectation is now **1 failed**, with the row named "names the
+> Stall watch section, once, after the Notifications section". The second red above came from the "phone-push bell"
+> text, which `main` re-worded to "the push bell", so the device row stays green under this mutation. The device row
+> is exercised by its own mutation: revert "the push bell" to "the phone-push bell" and exactly "names no device, as the
+> section itself names none (§2, 2026-10-05)" reds (1 failed). Both measured at R35 (`fr4-mut-f1.py`, README restored
+> with `cmp`). Row G's appended sentence and the `Settings has a third section` wording in rows A and G are first-cut
+> text. The same rename applies, and the shipped lead is the one to append.
 
 The last line prints `' M README.md\n?? server/test/stall-settings-readme.test.ts\n'`. Rows B, C and D also red W1's
 `stall-settings.test.ts` and the PWA suites that read those constants; the runner runs the pin alone, by design.
@@ -3880,6 +3901,13 @@ coordinator by slug, never a slot taken in this wave.
 
   If `pools-prose` reds on the size claim, re-measure CLAUDE.md :10 to the nearest hundred and commit it with the merge
   (Task 4's remedy).
+
+  > **Snapshot note (R35, 2026-10-12; no D-number).** The first absorb (R33, merge `39c42f503` of `origin/main`
+  > `28e8dc1b2`) moved the pin's `SECOND` anchor to `main`'s `Settings then has a further section, **Notifications**`.
+  > Review 390 then found the Stall watch lead's ordinal false: `main`'s Box token card is a section on screen, so
+  > Stall watch is the fourth `<h2>`. The R35 fix round moved the Stall watch lead to `Settings then has a further
+  > section, **Stall watch**` and renamed the constant `THIRD` to `STALL_LEAD`. Rows, messages and the header docstring
+  > follow it (commit `5756b3b29`). The history above is left as written.
 
 **After any absorb, re-run each alone, in the foreground:**
 - PWA: `use-stall-watch-view`, `primitives`, `settings-screen`, `api`, `use-updates-view`, `caps-control`, `app` and
