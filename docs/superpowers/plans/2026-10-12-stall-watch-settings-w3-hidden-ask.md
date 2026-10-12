@@ -351,7 +351,7 @@ held in reserve, and assigned to this wave by the coordinator's ruling R38. Two 
   gate's sender, for as long as the dialog stands (3 h measured).
 - **Not done:** carrying every state. Background work after the main Stop keeps writing `working`, which the card,
   the dispatch busy check and the operator's reading of a session rely on; the operator has not ruled that away.
-- **Pinned by:** `server/test/session-hook-subagent-ask.test.ts`; mutation rows M1-M3 (filled in at Task 1 Step 5).
+- **Pinned by:** `server/test/session-hook-subagent-ask.test.ts`; mutation rows, measured out of tree at the Task 1 commit: M1 (delete the block) → 4 failed (a subagent PreToolUse after a PermissionRequest question leaves waiting and the questions; a subagent PostToolUse does too, and so do many in a row; the PreToolUse question arm is kept the same way; an approval dialog is kept the same way); M2 (drop `"$prev_state" == waiting &&`) → 1 failed (scope: a subagent tool event over done still writes working, as before); M3 (drop `-n "$paid" &&`) → 1 failed (control: the main thread answering (its own PostToolUse) ends the wait and clears the ask).
 - **Cost if wrong:** a stale `waiting` survives background work after a dialog was dismissed without a main-thread
   event; the next main-thread event clears it, as it would without subagents.
 
