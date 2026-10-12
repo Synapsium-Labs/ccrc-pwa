@@ -1,7 +1,13 @@
 // The Markdown pre-scan and the UTF-8 byte count (native Docs reader, W4 Task 3; design 2026-10-01 section 4.10).
 // `prescanMarkdown` runs before any parse, in chat's synchronous path and in the parse worker: one iterative pass
-// over the lines that refuses the two shapes that overflow the parser's stack, deep containers on one line and a
-// long run of one emphasis delimiter. It bounds depth, not time; the worker's budget is the only time bound.
+// over the lines that refuses two shapes. The first is more container markers on one line than the spec allows: a
+// `>` run of 10 000 makes the parser throw a RangeError, so this is the shape the pre-scan exists for. Container
+// depth is counted on every line, fenced or not, and a tab advances to the next multiple of 4 columns as CommonMark
+// does. The second is a run of one emphasis delimiter longer than the spec allows: a bound the spec sets, not a
+// measured overflow. The pre-scan is a cheap first line, not a proof. Nesting built across lines by indentation
+// is not seen by it, and it does not claim to prevent every overflow. What bounds the rest is, in order: this
+// pre-scan for the shapes it covers; `parseMarkdown`'s try/catch, which turns any exception into 'threw';
+// `MD_MAX_TREE_DEPTH`, which turns a deep tree into 'too-deep'; and the worker's budget, the only time bound.
 //
 // Imports only `markdownLimits.ts`: the parse worker's closure reaches this file (`markdown-purity.test.ts`).
 import { MD_MAX_CONTAINER_DEPTH, MD_MAX_DELIMITER_RUN } from './markdownLimits';
@@ -41,41 +47,68 @@ function fenceCloses(line: string, ch: string, len: number): boolean {
 const isDigit = (c: number): boolean => c >= 0x30 && c <= 0x39;
 const isBlank = (c: number): boolean => c === 0x20 || c === 0x09;
 
-/** The container depth of one line: repeatedly skip up to 3 spaces, then consume `>` (and one optional space) or
- *  a list marker (`-`, `+`, `*`, or 1-9 digits then `.` or `)`) together with the space or tab it needs. The count
- *  runs to the end of the markers, so a refusal reports the line's whole depth. */
+/** The columns a blank at `line[i]` spans when it starts at column `col`: a space is 1, a tab runs to the next
+ *  multiple of 4, anything else 0. */
+function blankWidth(line: string, i: number, col: number): number {
+  const c = line.charCodeAt(i);
+  return c === 0x20 ? 1 : c === 0x09 ? 4 - (col % 4) : 0;
+}
+
+/** The container depth of one line, with tabs counted by column as CommonMark does. Repeatedly: skip up to 3
+ *  columns of indentation, then consume `>` (and one optional space or tab column) or a list marker (`-`, `+`, `*`,
+ *  or 1-9 digits then `.` or `)`) together with the blanks it needs. A tab after `>` is only partly used by the
+ *  optional space; the rest of its columns count as indentation for the next marker. After a list marker, 1 to 4
+ *  columns of blanks are its padding and 5 or more make what follows indented code. The count runs to the end of
+ *  the markers, so a refusal reports the line's whole depth. */
 function containerDepth(line: string): number {
   let depth = 0;
   let i = 0;
+  let col = 0;
+  let carried = 0;
   for (;;) {
-    let s = 0;
-    while (s < 3 && line.charCodeAt(i) === 0x20) {
+    let indent = carried;
+    carried = 0;
+    for (;;) {
+      const w = blankWidth(line, i, col);
+      if (w === 0 || indent + w > 3) break;
       i += 1;
-      s += 1;
+      col += w;
+      indent += w;
     }
     const c = line.charCodeAt(i);
     if (c === 0x3e /* > */) {
       i += 1;
-      if (line.charCodeAt(i) === 0x20) i += 1;
+      col += 1;
       depth += 1;
+      const w = blankWidth(line, i, col);
+      if (w > 0) {
+        i += 1;
+        col += w;
+        carried = w - 1;
+      }
       continue;
     }
+    let end = -1;
     if ((c === 0x2d /* - */ || c === 0x2b /* + */ || c === 0x2a /* * */) && isBlank(line.charCodeAt(i + 1))) {
-      i += 2;
-      depth += 1;
-      continue;
-    }
-    if (isDigit(c)) {
+      end = i + 1;
+    } else if (isDigit(c)) {
       let j = i;
       while (isDigit(line.charCodeAt(j))) j += 1;
       const d = line.charCodeAt(j);
-      if (j - i <= 9 && (d === 0x2e /* . */ || d === 0x29 /* ) */) && isBlank(line.charCodeAt(j + 1))) {
-        i = j + 2;
-        depth += 1;
-        continue;
-      }
+      if (j - i <= 9 && (d === 0x2e /* . */ || d === 0x29 /* ) */) && isBlank(line.charCodeAt(j + 1))) end = j + 1;
     }
-    return depth;
+    if (end < 0) return depth;
+    depth += 1;
+    col += end - i;
+    let k = end;
+    let cols = 0;
+    for (let w = blankWidth(line, k, col + cols); w > 0; w = blankWidth(line, k, col + cols)) {
+      k += 1;
+      cols += w;
+    }
+    if (cols > 4) return depth;
+    i = k;
+    col += cols;
   }
 }
 
@@ -103,24 +136,25 @@ export interface PrescanLimits {
   readonly delimiterRun: number;
 }
 
-/** One pass over the lines (LF, CRLF and CR each end one), skipping fenced blocks for both checks: the first line
- *  whose container depth is over `limits.containerDepth`, or whose longest delimiter run is over
- *  `limits.delimiterRun`, refuses, with its 1-based number and its measured value. An unclosed fence runs to the
- *  end, as it does for the parser. Production calls it only through `prescanMarkdown`; tests call it with lower
+/** One pass over the lines (LF, CRLF and CR each end one): the first line whose container depth is over
+ *  `limits.containerDepth`, or whose longest delimiter run is over `limits.delimiterRun`, refuses, with its 1-based
+ *  number and its measured value. The depth is counted on every line, because this scan does not know where the
+ *  parser's containers end, so it cannot know where a fence really does; only the delimiter-run check skips fenced
+ *  blocks (a fence is tracked by its own delimiter run). An unclosed fence runs to the end. Production calls it only through `prescanMarkdown`; tests call it with lower
  *  limits to measure how deep a real document goes. */
 export function prescanWithin(src: string, limits: PrescanLimits): PrescanResult {
   const lines = src.split(/\r\n|\r|\n/);
   let fence: { ch: string; len: number } | undefined;
   for (let n = 0; n < lines.length; n += 1) {
     const line = lines[n]!;
+    const depth = containerDepth(line);
+    if (depth > limits.containerDepth) return { ok: false, why: 'container-depth', line: n + 1, value: depth };
     if (fence !== undefined) {
       if (fenceCloses(line, fence.ch, fence.len)) fence = undefined;
       continue;
     }
     fence = fenceOpen(line);
     if (fence !== undefined) continue;
-    const depth = containerDepth(line);
-    if (depth > limits.containerDepth) return { ok: false, why: 'container-depth', line: n + 1, value: depth };
     const run = longestRun(line);
     if (run > limits.delimiterRun) return { ok: false, why: 'delimiter-run', line: n + 1, value: run };
   }
