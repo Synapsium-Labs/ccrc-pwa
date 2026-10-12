@@ -551,34 +551,40 @@ Limits no test can see, named in the commit: dropping only the `-r` test, or onl
 
 ## Deviations found
 
-- **4554** (amends 4553 rule (1); review 391 F1, ruled by the coordinator for row 2c under the operator's "merge now, fix both after" of 2026-10-12).
-  - **The rule.** The server arm lowers an absent `mail.token` beside an absent state to the never-handed PASS only when nothing beside the state file shows that a value was once held there:
+- **4554** (amends 4553 rule (1); review 391 F1, ruled by the coordinator for row 2c under the operator's "merge now, fix both after" of 2026-10-12). Settled to what Tasks 4 and 5 shipped.
+  - **The rule.** The server arm lowers an absent `mail.token` beside an absent state to the never-minted PASS only when nothing beside the state file shows that a value was once held there:
     - no `box-token-retired.json`;
     - no `mail-previous.token`;
     - no copy boot set aside (`box-token-retired.json.unusable-*` or `box-token.json.unusable-*`).
 
-    Each is tested by existence and by name in a directory listing, never by content.
-  - **A trace** keeps `token-absent` at FAIL, with a sentence naming it and the existing remedy. A token directory that exists and cannot be listed (search but no read) is FAIL too, because an undecidable history fails closed; its sentence and remedy say that the server refuses to boot until the directory can be listed (boot's `setAsideNames`). A directory that does not exist holds no trace: the fresh PASS stands.
-  - **The fleet arm agrees.** The server arm then records its state read as `trace`, not `absent`, so an own-write box's fleet arm (4553 rule (3)) does not read never-handed either.
-  - **The names** are held to `tokenPaths`, `SET_ASIDE_MARK` (`server/src/token/files.ts`) and boot's set-aside list (`server/src/token/boot.ts`) by a parity pin.
+    Each is tested by existence and by name in a directory listing (`-e`, `-L`, a glob over names), never by content: `mail-previous.token` holds a value and is never opened. A dangling link counts as present.
+  - **The sentences (as `ccd/ccrc-doctor-checks` spells them).**
+    - Fresh, PASS: `… does not exist, and neither does the server's state file: no value has been minted here yet, and the server mints one at boot, or its log says why that mint failed`. The tail after `at boot` is F3 (Task 5); D-139's words are its prefix.
+    - A trace, FAIL: `… but <dir>/<trace> does: this server held a value once and lost it; the server mints a new one at its next boot, and the fleet must then be handed it`, with the existing restart remedy.
+    - Unlistable, FAIL: `… and <dir> cannot be listed, so a value held here once cannot be ruled out, and the server refuses to boot until it can list it`, remedy `give <dir> its read bit (chmod u+r <dir>); the server then boots and mints a value`. A token directory that exists and cannot be listed (search, no read) fails closed, because boot refuses to start on it (`setAsideNames`). A directory that does not exist holds no trace: the fresh PASS stands.
+  - **The fleet arm agrees.** The server arm records its state read as `trace`, not `absent`, so an own-write box's fleet arm (4553 rule (3)) does not read never-handed either. The both-role rows (retired, set-aside, unlistable) assert the fleet part itself.
+  - **The names** (`_BT_TRACES`, `_BT_ASIDE`) are held to `tokenPaths`, `SET_ASIDE_MARK` (`server/src/token/files.ts`) and boot's set-aside list (`server/src/token/boot.ts`) by a parity pin.
   - **Why:** D-139's own sentence, "a box that once held a value and lost it stays FAIL". A retired list or a previous value exists only after a rotation. Review 391 measured the PASS, and the operator ruled to fix it.
   - **Limits:**
-    - Boot still treats this disk as a first install (`server/src/token/boot.ts:165-167`), so doctor and boot disagree by design until row 3 rules on boot.
-    - A trace that exists and cannot be read (an unreadable retired list) refuses boot; doctor's readable-trace sentence and remedy are wrong there, and the verdict is right.
+    - Boot still treats this disk as a first install (`server/src/token/boot.ts:165-167`), so doctor and boot disagree by design until row 3 rules on boot. It fails closed.
+    - A trace that exists and cannot be read (an unreadable `box-token-retired.json`) refuses boot; the readable-trace sentence and its restart remedy are wrong there, and the verdict (FAIL) is right. Doctor tests traces by existence only.
+    - (a) A token directory that is unlistable but also holds a named trace (`box-token-retired.json` or `mail-previous.token`) reads the readable-trace sentence and the restart remedy, because named traces are tested before the unlisted test. Boot refuses there, so that remedy is wrong; the verdict is FAIL either way.
+    - (b) The read bit stands in for "can be listed". An opendir failure that `[ -r ]` cannot see (an LSM denial, EIO, EMFILE or ENOMEM) globs empty and reads the fresh PASS while boot refuses on the same failure: a narrow fail-open that no shell glob can tell from "no match".
     - A pending value file (`mail-pending-<id>.token`) is not a trace. The coordinator kept it out of row 2c; row 3 decides.
-    - No ccrc code path reaches this state by itself. It needs files lost by hand or to the disk while no server runs.
-    - No live box changes. The live server holds a state, so this branch is never reached there.
-  - Task 6 settles the final text to what Tasks 4 and 5 measured.
-- **4555** (amends 4553 rule (4); review 391 F2, ruled by the coordinator for row 2c).
-  - **The writer.** `ccrc-token-sync`'s report gains an optional `held`. It is written only by a run that wrote no value (`R_GEN` empty), and only when the box holds a generation at that moment: the generation file's first line, else the previous report's `generation`, else its `held`. These are read in bash, from regular non-link readable files only, bounded and silent. The key is never `null`, and absent otherwise.
-  - **What stays byte for byte:** a synced report, every report of a run that wrote a value, and every report of a box that held nothing. The verb's stdout, its exit codes and its stderr lines are unchanged, and no stderr line is added.
-  - **The reader.** Doctor's refusal-only rule requires `held` to be absent. A `held` that is not 16 lowercase hex makes the report unreadable, and the lost token stays FAIL.
+    - No row runs with `nullglob` set, and the unlistable rows skip under a root runner (no mode bit stops root). The `[ -L ]` half of the existence test is pinned by two dangling-link rows (the retired list; a set-aside link), each with a mutant that reds it.
+    - A no-role box whose only file is a trace still reads `SKIP no-role`, not PASS.
+    - No ccrc code path reaches this state by itself. It needs files lost by hand or to the disk while no server runs. No live box changes: the live server holds a state, so this branch is never reached there.
+- **4555** (amends 4553 rule (4); review 391 F2, ruled by the coordinator for row 2c). Settled to what Tasks 2, 3 and 5 shipped.
+  - **The writer.** `ccrc-token-sync`'s report gains an optional field named `held` (16 lowercase hex, never `null`). `_ts_report` writes it only for a run that wrote no value (`R_GEN` empty), and only when `_ts_held` finds a generation this box holds at that moment: the generation file's first line, else the previous report's `generation`, else its `held`. They are read in bash only (the two bad-code refusals run before the `python3` check), from regular, non-link, readable files only, with bounded `read -n`, stderr silenced before each open, and nothing printed. The key is absent otherwise.
+  - **What stays byte for byte:** a synced report, every report of a run that wrote a value, and every report of a box that held nothing. The verb's stdout line, its exit codes and its first stderr lines are unchanged, no stderr line is added, and the verb keeps exactly three `python3 -I -c` lines.
+  - **The reader.** Doctor's refusal-only rule requires `held` to be absent. `held` is validated strictly, through `g16` (the block's third generation-id literal, so the shape is still spelled three times): absent, or one 16-hex id. Anything else makes the report unreadable (`sync-unreadable`), which fails closed, and the lost token stays FAIL. A healthy box with a refusal report reads the same with or without `held`.
   - **Why:** a refusal rewrote the report with `generation: null`, so a box that synced, then refused, then lost its token file and its generation file read never-handed. That was WARN beside the refusal's own `sync:<word>`, though 4553 said PASS. D-139 says it stays FAIL.
   - **Limits:**
-    - A report that a refusal overwrote on a build before 4555 still reads WARN.
-    - A refusal on a box whose generation file is gone and whose report cannot be read (or is a link or a FIFO) carries no `held`, so a later loss of the token file reads WARN.
-    - Uninstall removes both node records by design.
+    - A report that a refusal overwrote on a build before 4555 still reads WARN. 4555 is not retroactive.
+    - A refusal on a box whose generation file is gone and whose report is unreadable (or is a link or a FIFO) carries no `held`, so a later loss of the token file reads WARN.
+    - After a refusal AFTER the write (a `write-failed` once the token file was replaced but the generation file was not), the generation file is stale. A later refusal's `held` then names that stale id, although the previous report's `generation` names the value in the token file. Doctor tests only `held`'s presence, so the verdict is unaffected.
+    - Uninstall removes both node records (the generation file and the report) by design, so a reinstalled box's history starts afresh.
     - An older doctor ignores `held` (today's WARN).
     - The report keeps one run, so `held` carries the history forward by chain, one report at a time.
-    - The `ok`-with-a-bad-generation branch at `ccd/ccrc-token-sync:399` clears `R_GEN` after the writer wrote, so its report would carry the old generation as `held`. That is still history, and review 391 measured the branch unreachable, because `_TS_WRITE_PY` validates the generation first.
-  - Task 6 settles the final text to what Tasks 2 and 3 measured.
+    - The `ok`-with-a-bad-generation branch at `ccd/ccrc-token-sync:432` clears `R_GEN` after the writer wrote, so its report would carry the old generation as `held`. That is still history, and review 391 measured the branch unreachable, because `_TS_WRITE_PY` validates the generation first.
+    - Equivalent mutants no test can see (each measured fully green): dropping only the `-r` test, or only the `2>/dev/null`, at either path (each alone keeps stderr clean); the order between the report's `generation` and its `held` (no report the verb writes carries both, because a report with `held` has `generation` null); and `g16`'s `type(x) is str` guard (without it `re.fullmatch` raises inside the `try`, which still reads unreadable).
