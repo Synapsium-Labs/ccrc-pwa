@@ -995,9 +995,9 @@ export class FleetWatcher {
    *  - `collectPop`: the last measured pass's population, for the box-wide listing and refused-name lines; `null` before
    *    one. `collectPopNames`: the registry listing that pass's pre-filter read, for attention's projection.
    *  - `collectBoxProbes`: the box-wide probes standing (through `collectBoxProbesAtArrival`: every answer but one older
-   *    than their latest change; the population's clear, `collectBoxAfterPopulation`, also drops them).
-   *    `collectBoxProbesAtMono`: the ARRIVAL of the answer that last changed them (`collectBoxProbesAtArrival`), so an
-   *    answer older than that change says nothing of them.
+   *    than their latest rebuild; the population's clear, `collectBoxAfterPopulation`, also drops them).
+   *    `collectBoxProbesAtMono`: the ARRIVAL of the answer that last rebuilt them (a new map: a change, a re-assertion
+   *    or an empty pass; `collectBoxProbesAtArrival`), so an answer older than that says nothing of them.
    *  - `collectPassSeq`, `collectPassTally`, `collectPassPublished`, `collectPassAudits`: each pass's audits by class
    *    (Task 5's `collectPassClass`), keyed by the pass that queued them; the latest pass whose calls have all settled is
    *    the one the pass-scoped box lines read. */
@@ -4450,7 +4450,7 @@ export class FleetWatcher {
   }
 
   /** An audit answer's row body, worded by Task 5's builder (spec §5.10). A collectable answer opens no row. A document
- *  that was not one (`no-document`, `unreadable`) is worded as ccrc's, by KIND, never as a word ccd said. */
+   *  that was not one (`no-document`, `unreadable`) is worded as ccrc's, by KIND, never as a word ccd said. */
   private collectAuditBody(id: string, e: CollectEntry, a: CollectAudit): string {
     const runId = e.evidence.runId;
     switch (a.kind) {
@@ -4464,7 +4464,7 @@ export class FleetWatcher {
   }
 
   /** An act's row, titled and worded by Task 5 (spec §5.10): `collected` its own; a `failed` with no word and an act that
- *  answered no document are ccrc's words, chosen by KIND; every other outcome ccd's word. */
+   *  answered no document are ccrc's words, chosen by KIND; every other outcome ccd's word. */
   private collectActRow(id: string, e: CollectEntry, r: CollectResult): { readonly title: string; readonly body: string } {
     const runId = e.evidence.runId;
     switch (r.kind) {

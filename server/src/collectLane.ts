@@ -558,14 +558,16 @@ export const collectEvidenceOf = (a: CollectAudit): CollectEvidence | null =>
  *  - `deferrals`, `deferredAtMono`: the DEFERRAL count and its last arrival; it never enters a tier.
  *  - `failing`, `verbFailed`, `terminal`: the three runs.
  *  - `scheduleMono`: a `changed-recently` answer's next ask, or none.
- *  - `refusedAtMono`, `wouldCollectAtMono`, `dieAtMono`: the last verb refusal's, the last would-collect's and the last
- *    pre-lock die's (`flock-unavailable` aside) arrival, each the origin of a floor of `CHILD_RECLAIM_DEFER_CEILING_MS`
- *    under the next ask.
+ *  - `refusedAtMono`, `wouldCollectAtMono`, `dieAtMono`: the last verb refusal's arrival, or the fold-failure
+ *    catch's own clock (`collectAfterFoldFailed`), the last would-collect's and the last pre-lock die's
+ *    (`flock-unavailable` aside) arrival, each the origin of a floor of `CHILD_RECLAIM_DEFER_CEILING_MS` under the next
+ *    ask.
  *  - `streak`, `die`, `held`, `presence`: the four continuity clocks attention reads.
  *  - `evidence`: the latest document's.
  *  - `feedEpisode`: the key of the feed episode whose row was written, or none (`collectFeedStep`).
  *  - `feedOutlivesObservations`: whether that episode is one an observation does not end (a refusal's or a die's, as
- *    the act's cue itself says); false with no episode. Only `collectFeedStep` reads it. */
+ *    the act's cue itself says); false with no episode. Only `collectFeedStep` decides on it; `collectAfterAct`'s
+ *    `collected` arm carries it. */
 export interface CollectEntry {
   readonly idGen: number;
   readonly obs: CollectObservation | null;
@@ -782,7 +784,8 @@ export function collectAfterWouldCollect(e: CollectEntry, s: CollectStep): Colle
  *  - the `changed-recently` schedule;
  *  - the hold's wait: the ceiling, flat (no count of its own);
  *  - presence's wait: the ramp over its own count;
- *  - the refusal, die and shadow floors, the ceiling after each;
+ *  - the refusal, die and shadow floors, the ceiling after each (the refusal floor's origin is a verb refusal's
+ *    arrival, or the fold-failure catch's own clock);
  *  - while observation 1 stands, the observation interval after its arrival, so a holder is not offered again
  *    before its partner may be composed.
  *  null when no wait applies: the id is due at once. */
@@ -1102,7 +1105,8 @@ export function collectBoxProbesAfter(prev: ReadonlyMap<string, string>, a: Coll
   return passed ? new Map() : prev;
 }
 
-/** The box-wide probes standing, with the arrival of the answer that last CHANGED them (spec §5.10). */
+/** The box-wide probes standing, with the arrival of the answer that last REBUILT them (spec §5.10): a new map, by a
+ *  change, a re-assertion or an empty pass. */
 export interface CollectBoxProbeState {
   readonly probes: ReadonlyMap<string, string>;
   readonly changedAtMono: number;

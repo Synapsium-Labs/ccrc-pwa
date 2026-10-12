@@ -228,6 +228,26 @@ describe('an answer older than the box-wide probes’ latest change says nothing
     expect(await boxWords(f)).not.toContain('box-probe');
   });
 
+  it('a forgotten id’s collected act still clears a probe raised while it was out: the act’s answer counts for the box before its id is looked up', async () => {
+    const f = await live();
+    const act = f.hold('collect', 'demo-a');
+    f.next(); await f.pass();                               // the act job: observation 2 answered, then ws-collect, held
+    await vi.waitFor(() => expect(act.reached()).toBe(true));
+    f.unwitness('demo-a');                                  // nothing names demo-a now: the next gather forgets it
+    f.next();
+    f.witness('demo-b');
+    f.scripts.set('demo-b', (verb) => (verb === 'audit' ? boxProbe(f, 'demo-b', 'mv') : undefined));
+    await f.pass(); await f.settled();                      // demo-a is forgotten, and demo-b answers mv
+    expect(f.lane().entries.has('demo-a'), 'forgotten while its act was out').toBe(false);
+    expect([...probesOf(f).keys()], 'the probe stands while the act is out').toEqual(['mv']);
+    f.advance(1);
+    act.release(); await f.settled();                       // ws-collect answers collected, for an id the lane forgot
+    expect(f.coord.feedEvents(500).filter((e) => e.title === COLLECT_FEED_TITLE.collected).map((e) => e.sessionId),
+      'the forgotten id’s row is still written').toEqual(['demo-a']);
+    expect(probesOf(f).size, 'the collected answer passed every rung after the probe, its id forgotten or not').toBe(0);
+    expect(await boxWords(f)).not.toContain('box-probe');
+  });
+
   it('control: an act answer that passes no rung leaves that probe standing', async () => {
     const f = await live();
     f.scripts.set('demo-a', (verb) => (verb === 'collect' ? refusedInUse() : undefined));

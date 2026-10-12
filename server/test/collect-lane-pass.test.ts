@@ -61,7 +61,8 @@ describe('the lane’s constants are derived, and the tick dispatches it (spec �
     expect(row, 'ws-collect’s runner row is gone').not.toBeNull();
     // At LEAST twice the row, never exactly: the constant is shared with the reclaim lane's own bound, so a raise is
     // allowed (it only makes the collector slower to end its start hold-off, free the slot and list a stuck job, never
-    // faster). A value below twice the row would let all three fire inside a `ws-collect` the runner still lets run.
+    // faster). Twice the row is margin, not the threshold: it covers the runner's row, its client slack and the job's
+    // own steps around `ws-collect`.
     expect(CHILD_RECLAIM_STALL_MS).toBeGreaterThanOrEqual(2 * Number(row![1]!.replace(/_/g, '')));
   });
 

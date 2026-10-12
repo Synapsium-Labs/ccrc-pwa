@@ -300,7 +300,7 @@ describe('collectBoxProbesAtArrival: an answer older than the probes\' latest ch
     expect([got.probes.size, got.changedAtMono]).toEqual([0, STAMP]);
   });
 
-  it('an answer that leaves the probes as they were (a per-id probe, a non-passing verdict, no document) never moves the stamp: the very state comes back', () => {
+  it('an answer collectBoxProbesAfter returns the standing map for (a per-id probe, a non-passing verdict, no document) never moves the stamp: the very state comes back (an empty pass is a new map, below)', () => {
     const s = standing();
     for (const a of [unmeasured('checkouts'), verdict('registered'), NO_DOCUMENT]) {
       expect(collectBoxProbesAtArrival(s, a, STAMP + 500), JSON.stringify(a)).toBe(s);
@@ -322,6 +322,14 @@ describe('collectBoxProbesAtArrival: an answer older than the probes\' latest ch
     expect([...s2.probes]).toEqual([...s1.probes]);
     expect(s2.changedAtMono).toBe(150);
     expect(collectBoxProbesAtArrival(s2, collectable(T1), 100)).toBe(s2);
+  });
+
+  it('an empty pass is a new map: a passing answer with nothing standing moves the stamp, so an older raise folded after it is skipped', () => {
+    const empty: CollectBoxProbeState = { probes: new Map(), changedAtMono: Number.NEGATIVE_INFINITY };
+    const passed = collectBoxProbesAtArrival(empty, collectable(T1), 100);
+    expect([passed.probes.size, passed.changedAtMono], 'nothing stood, and the stamp moved').toEqual([0, 100]);
+    expect(collectBoxProbesAtArrival(passed, unmeasured('mv'), 50), 'a raise that arrived before the pass')
+      .toBe(passed);
   });
 
   it('a passing answer older than a later set is skipped, and one at or after it clears', () => {

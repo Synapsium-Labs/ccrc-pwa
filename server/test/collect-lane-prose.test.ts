@@ -100,7 +100,8 @@ describe('the programme’s rulings file', () => {
     'flip-rows-are-for-changes-an-act-job-sees', 'marker-removal-after-the-last-listing-still-composes',
     'settle-throw-before-the-slot-write-wedges-the-slot', 'a-retryable-refusal-says-once',
     'act-failure-rows-repeat-per-act', 'would-collect-verdict-collides',
-    'registered-id-with-only-an-unparseable-record-stays-hidden'];
+    'registered-id-with-only-an-unparseable-record-stays-hidden', 'failed-flag-not-pinned-at-the-lane',
+    'a-ccd-word-spelled-like-a-reader-word-reads-as-ccrcs'];
   it('carries the wave’s as-built note, naming slugs and no number', () => {
     expect(at, 'the as-built note is missing').toBeGreaterThan(-1);
     expect(note).not.toMatch(/\bD-\d/);
@@ -133,7 +134,12 @@ describe('the programme’s rulings file', () => {
     'destructive-builder-fence-reads-whole-files', 'collect-lane-prose-pins', 'r92-section-7-lines-are-section-5-10s',
     'spec-stale-sentences-beyond-the-r92-list', 'spec-5-8-pause-sentence-untouched', 'no-pass-fails-shut-clear',
     'flip-rows-are-for-changes-an-act-job-sees', 'arming-checklist-names-the-capabilities',
-    'task-10-shards-run-as-halves-after-an-oom', 'commit-subject-follows-the-frame'];
+    'task-10-shards-run-as-halves-after-an-oom', 'commit-subject-follows-the-frame',
+    // Fix round 1's fold of the worker's new slugs into the per-task corrections.
+    'changed-recently-row-uses-a-later-idleat', 'reasons-hide-row-per-test', 'records-in-doubt-takes-the-doubts',
+    'collect-said-word-nullable', 'collect-read-what-exported', 'box-probe-stamp-is-a-new-map',
+    'probes-read-where-they-live-mid-sequence', 'f4-answers-arrive-a-whole-interval-apart',
+    'f4-step-5-hold-armed-after-the-probe-pass'];
   it('names every task’s plan-text corrections on the one corrections line', () => {
     const from = note.indexOf('**Plan-text corrections and measured red shapes**');
     expect(from, 'the corrections line is missing').toBeGreaterThan(-1);

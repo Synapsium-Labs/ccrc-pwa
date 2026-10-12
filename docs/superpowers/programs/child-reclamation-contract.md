@@ -3453,6 +3453,9 @@ made, and each residual they stated, is named under the rule it touches.
   is ccrc's text or text ccrc saw, and a sentence leads "What ccrc saw:" for them and "What ccd said:" for a word ccd
   printed. No sentence prints empty brackets. The feed rows for them are chosen by kind, never by word, and say in
   ccrc's words that ccd answered nothing, or that ccrc could not read or accept ccd's answer, then what ccrc saw.
+- `a-ccd-word-spelled-like-a-reader-word-reads-as-ccrcs` (a stated residual): the attention lead is chosen by word, so a
+  ccd verdict or token spelled exactly `unreadable` or `no-document` is led "What ccrc saw:". The text is still escaped,
+  and the feed rows are chosen by kind, so they are unaffected.
 - `a-registered-id-projects-no-item`: while an id's exact `<id>.child` or `<id>.uuid` row stands and the measured
   `tmpquarantine` names no record of the id, the id projects no per-id item, a terminal one included. That narrows H8's
   "a terminal item stands while the terminal run stands". Its pacing memory is kept, and its item returns as it stood
@@ -3470,6 +3473,8 @@ made, and each residual they stated, is named under the rule it touches.
 - `a-retryable-refusal-says-once` (a stated residual): after that, a retryable refusal such as `in-use` writes one row and
   has no attention arm, so ccd may refuse it silently up to 96 times a day. A die is covered by its streak's attention, and
   a terminal refusal by its terminal item.
+- `failed-flag-not-pinned-at-the-lane` (a stated residual): two mutants of that rule, the flag set on the `failed` arm
+  and an observation keeping every episode, red at L1 only. The lane case covers a refusal and a die.
 - `act-failure-rows-repeat-per-act` (a stated residual): `failed <token>` and `act no-document` keep one row per act,
   because each may have acted. The verb-failed ramp and tier bound them.
 - `would-collect-verdict-collides` (a stated residual, pre-existing): an audit verdict spelled `would-collect <token>`
@@ -3518,26 +3523,29 @@ made, and each residual they stated, is named under the rule it touches.
 - Task 3: `population-header-in-task-2-style`.
 - Task 4: `licence-header-in-task-2-style`, `presence-null-already-red`, `r23-sweep-of-contract-and-ruling-tokens`, and
   fix round 1's pacing pins (each answer's effect on the hold, the presence defer and the continuity clocks, and the
-  rewritten not-witnessed case), and `changed-recently-row-uses-a-later-idleat`.
+  rewritten not-witnessed case), and `changed-recently-row-uses-a-later-idleat`; fix round 2's wording of who reads the
+  episode flag.
 - Task 5: `stuck-end-exported`, `would-collect-body-calls-collect-who`, `watch-interim-empty-collector`, and fix round
   1's comment above the run-less count line, on which of its words are ccd's own and which are this build's labels;
   fix round 1's shape choices `reasons-hide-row-per-test`, `records-in-doubt-takes-the-doubts`,
   `collect-said-word-nullable` and `collect-read-what-exported`, a CONTROL lane row (an act `failed` with a non-empty
-  token keeps the answer body), and three one-clause docstrings beyond the three ruled.
+  token keeps the answer body), and three one-clause docstrings beyond the three ruled, indented at fix round 2.
 - Task 6: `outcome-detail-is-diagnostic` and `ccdargv-collect-docstrings-rewritten`.
 - Task 7: `collect-lane-fields-beside-the-child-reclaim-lane`, `older-pass-guard-is-shadowed-by-the-prune`,
   `t7-38-act-queue-pinned-by-the-registry-listing-count`, `t7-22-reds-as-a-timeout`,
   `publish-docstring-returns-rewrapped`, fix round 1's lane cases for a pause seen at step 5, the learning audit's
   `not-asked` and a learning call that never settles, its two comments on the flip row, and fix round 1's
   `box-probe-stamp-is-a-new-map`, `probes-read-where-they-live-mid-sequence`, `f4-answers-arrive-a-whole-interval-apart`
-  and `f4-step-5-hold-armed-after-the-probe-pass`.
+  and `f4-step-5-hold-armed-after-the-probe-pass`; fix round 2's lane case for a forgotten id's `collected` act, its L1
+  row for an empty pass, and its docstrings on the fold-failure floor and on a rebuilt stamp.
 - Task 8: `collect-act-cap-after-last-await-pinned`, `budget-test-pins-the-read-values`,
   `census-title-control-pins-its-width`, `h6-scan-follows-the-reshaped-audit-site`,
   `destructive-builder-fence-reads-whole-files`, fix round 1's pin that the act slot's bound covers twice
-  `ws-collect`'s remote runner row, and its comment naming the excused vocabularies of the door-code scan.
+  `ws-collect`'s remote runner row, and its comment naming the excused vocabularies of the door-code scan; fix round
+  2's comment saying twice the row is margin.
 - Task 9: `collect-lane-prose-pins`, `r92-section-7-lines-are-section-5-10s`, `spec-stale-sentences-beyond-the-r92-list`,
   `spec-5-8-pause-sentence-untouched`, `no-pass-fails-shut-clear`, `flip-rows-are-for-changes-an-act-job-sees`, this
-  note's refresh, and `arming-checklist-names-the-capabilities`.
+  note's refresh, `arming-checklist-names-the-capabilities`, and fix round 2's two residuals and slug lists.
 - Task 10: `task-10-shards-run-as-halves-after-an-oom` and `commit-subject-follows-the-frame`, the whole-wave one.
 
 **Ruled at fix round 1** (the seven open items the wave-done raised):
