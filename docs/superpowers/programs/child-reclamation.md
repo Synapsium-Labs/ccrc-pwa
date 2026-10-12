@@ -25,7 +25,7 @@ removed on 2026-09-10 was not.
 | 6 | `ws-reclaim` repaired (R48): the ONE removal helper and the in-use wait/keep of a temp root (R49); the positive witness `$REG/tmproots/<id>` (R50); F6 and the harness strip (R51); journaling `probe-unmeasured` and the id-tied pre-lock dies (R52); the three-way gone-branch read (R53); the `recorded` placement basis (R54); the vanish re-read's second trigger (R55) | **AGENT-FIRST** | #326 | **deployed** v0.0.124 (`b0647d850`, both boxes by 13:40 on 10-08) — run 291 closed `done`; reviews 335, 341 and 346 |
 | 7 | the temp-root collector verb, inert (R57, R66–R68): audit + token, quarantine-by-rename under the reap lock, the `$REG/tmpquarantine` record, destructive verb, cap token, agent grant, entry guard; plus the ccd halves (R69 `containment-refuted`, R70 `crumb`, rung 8, the reason cap, X1's generation input) | **AGENT-FIRST** | #344 | **deployed** fleet box v0.0.145 (`7609221a4`, merged 2026-10-11 00:55; the updater's auto move 01:10–01:12, agent restarted 01:10:52; `ccd caps` advertises `collect-v1` and `ws-collect`) — run 347, reviews 369, 374, 376 |
 | 8 | reclaim's server half (R65): X1 and X3 generation keying, R61's closure, the `crumb` verb and audit readers, the `clipsKept`/`tmpRootKept` reader, R69's `stuck` class, the persistent-failure tier | server | #349 | **deployed** v0.0.147 (`d0c2b7803`, merged 2026-10-11 12:13; both boxes current by 12:23, through the updater) — run 348 (`ccrc-pwa-quiet-prairie`), plan `0d9f1b042`; reviews 378, 379 |
-| 9 | the collector's server lane (the old R58), after the fleet advertises wave 7's token and wave 8 has merged; SAFETY and SECURITY lenses | server | — | **MERGED** 2026-10-12 07:28 — #354 = `28e8dc1b2` (squash of `ec9d63aa7`); run 380 (`ccrc-pwa-quiet-hollow`) at `merging`; review run 386 done 04:41 (22 findings), FIX ROUND 1 at `241cbb873` (review 387: no class (a)), FIX ROUND 2 at `ec9d63aa7` (review 388: no class (a)); plan `d9647b76b` (#352); rulings contract §16 (R82–R92); ships SHADOWED |
+| 9 | the collector's server lane (the old R58), after the fleet advertises wave 7's token and wave 8 has merged; SAFETY and SECURITY lenses | server | — | **MERGED** 2026-10-12 07:28 — #354 = `28e8dc1b2` (squash of `ec9d63aa7`), **DEPLOYED** v0.0.149 on both boxes by 08:01 (updater); run 380 (`ccrc-pwa-quiet-hollow`) at `merging`; review run 386 done 04:41 (22 findings), FIX ROUND 1 at `241cbb873` (review 387: no class (a)), FIX ROUND 2 at `ec9d63aa7` (review 388: no class (a)); plan `d9647b76b` (#352); rulings contract §16 (R82–R92); ships SHADOWED |
 
 **Rule 3 is enforced at the end of wave 2** with no destructive verb in existence: a second bind on a
 PR-bearing child refuses. **Wave 3's `ws-reclaim` and wave 7's collector are the only verbs that destroy anything** (R38, R48). Waves 3 and 4 do nothing on a
@@ -46,6 +46,14 @@ clause 11): it names a departure in its wave-done mail and the coordinator assig
 Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**, **147**); wave 3 = **148** (reviews **170**, **171**, **172**); wave 4 = **174**. Numbers defined so far: D-3330 … D-3339 in the wave-1 plan, D-3340 … D-3351 in the wave-2 plan. Wave 3 draws from the rest of the block.
 
 ## Decisions & deviations
+
+- **2026-10-12 08:01 — WAVE 9 IS DEPLOYED: v0.0.149 (`28e8dc1b2`) on both boxes, by the updater. Nobody rolled it out by hand.**
+  - **Release.** `release-main` published prerelease v0.0.149 at 07:29:38.
+  - **Fleet box.** It moved `from: pwa` (the auto move). `~/ccrc` points at `ccrc-versions/v0.0.149` from 07:58. At 07:59 it read `[incomplete]` while the update restarted the agent, and at 08:01 it read `[current]`. The phase is `done`.
+  - **Server box.** At 08:01 it read `[current]` at v0.0.149 (`28e8dc1b`).
+  - **Measured read-only.** `ccrc rollout --to v0.0.149 --check` every 2 minutes from 07:30, plus `ccrc version` and `~/.ccrc/update.json`.
+  - **The lane is SHADOWED.** `$REG/collect-lane-live` is absent (checked with `ls` only), and nothing in the tree writes it.
+  - **Run 380 stays at `merging`.** It closes final only after the next run opens, per the operator's answer on programme shape. Closing it with no other run open would retire CCR-15.
 
 - **2026-10-12 07:29 — REVIEW 388 IS DONE (4281, acked; run 388 closed `done`, released; report `reviews/review-388-ec9d63aa.md`). WAVE 9 IS MERGED: #354 = `28e8dc1b2` (07:28:38Z), a squash of `ec9d63aa7`, by `--admin --match-head-commit`. Run 380 is at `merging`.**
   - **No class (a) finding.** 34 agents ran, with no lens unverified.
