@@ -650,8 +650,11 @@ each item is a departure named there).
   succeeded (it was started and never ran); a horizon with no spawn row at all still reads crashed.
 - **The anchor restarts after a gap nobody measured.** `dead_claimants` carries `lastDeadAt` beside `firstDeadAt`; an
   episode whose last crashed pass is older than ten minutes (a server down, an older build running after a rollback,
-  which never writes the table) starts again at the pass that measures it. The table is a new table and nothing else,
-  so a rolled-back build boots on it.
+  which never writes the table) starts again at the pass that measures it. A claimant crashed with a supervisor
+  heartbeat later than its anchor has been supervised again since the anchor began, so that crash starts a fresh anchor,
+  as a first crash does, and the hour counts from it; the breaker adds that instant to every instant it remembers, so a
+  lane that skipped the pass that saw it alive no longer keeps the old episode alone (D-4825). The table is a new table
+  and nothing else, so a rolled-back build boots on it.
 - **The breaker holds the whole lane**, not only the claimants it names, and it **clears through the doors that
   already exist**: the claimants fall back under the threshold when the operator revives them, reclaims their
   programmes or abandons their runs. No new route.
@@ -666,7 +669,7 @@ each item is a departure named there).
   Its clustering is monotone: a member keeps every first-dead instant it has carried while held, adds its current anchor
   each time it is crashed and anchored, and clusters at all of them, and two entries cluster when any instant of one is
   within the window of any instant of the other, so a held instant never replaces a re-anchored one, and a restarted
-  lane's breaker stands wherever an unrestarted lane's does, but for the open corner named in §12 (review 384, F1); the
+  lane's breaker stands wherever an unrestarted lane's does, under the conditions §12 names (review 384, F1); the
   cost is that a member held at an old instant that crashes anew also clusters near its new instant, and a held member's
   instants, and its record, grow by one per re-anchor while it is held.
 - **One claimant a pass**, the longest dead first, ARMED; in shadow every due claimant is recorded.
@@ -877,9 +880,11 @@ collects them.
   and a server that restarts while a held-set write is failing seeds the older record, which can hold less than the
   process did, which needs a store whose writes keep failing at that moment. The breaker's clustering is monotone (§5.4),
   so after a restart its breaker stands wherever an unrestarted lane's does when both read the same anchors and the
-  restarted lane's population differs only by claimants the unrestarted lane has already ended. One case is open, not
-  argued, and not claimed to be the only one: a claimant the unrestarted lane ended that returns under a new run while
-  the restarted lane, its act delayed by the lost backoff, still holds or anchors the old episode. The lane composes no act on a pass whose held-set record did not land,
+  restarted lane's population differs only by claimants the unrestarted lane has already ended. A claimant the
+  unrestarted lane ended that returns under a new run is covered by the episode boundary: a supervisor heartbeat later
+  than its durable anchor starts a fresh anchor at its next crash, so the restarted lane carries the new instant beside
+  every one it remembers (D-4825). That rests on the heartbeat: a return that stamps none is not seen, and no claim is
+  made that no other corner exists. The lane composes no act on a pass whose held-set record did not land,
   so the record never lags an act, and every act is still behind the claimant's re-measure before and after the fleet act.
 - **`$REG/reclaim-paused` stops both lanes at once**, shadow included: the cleanup row's toggle on `/runs`.
 

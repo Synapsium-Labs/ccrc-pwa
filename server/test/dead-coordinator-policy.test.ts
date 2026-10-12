@@ -10,7 +10,7 @@ import {
   DEAD_COORDINATOR_AFTER_MS, DEAD_COORDINATOR_BACKOFF_CEILING_MS, DEAD_COORDINATOR_BREAKER_WINDOW_MS,
   DEAD_COORDINATOR_DELIBERATE_ACTS, DEAD_COORDINATOR_GAP_MS, DEAD_COORDINATOR_JOURNAL_ACTS,
   DEAD_COORDINATOR_JOURNAL_MARGIN_MS, DEAD_COORDINATOR_JOURNAL_TRUSTED, deadAnchorNext, deadCoordinatorAttention,
-  deadCoordinatorBackoffMs, deadCoordinatorBreaker, deadCoordinatorBreakerFeedRow, deadCoordinatorBreakerKey,
+  deadCoordinatorBackoffMs, deadCoordinatorBreaker, deadCoordinatorNewEpisode, deadCoordinatorBreakerFeedRow, deadCoordinatorBreakerKey,
   deadCoordinatorCrash, deadCoordinatorDue, deadCoordinatorEntry, deadCoordinatorFeedRows, deadCoordinatorJournal,
   deadCoordinatorNextEntry, deadCoordinatorReportSentence, deadCoordinatorSighted, deadCoordinatorSince, deadCoordinatorThrewFeedRow,
   deadCoordinatorThrew, isDeadCoordinatorKebab,
@@ -195,6 +195,20 @@ describe('the hour, made durable', () => {
     expect(deadCoordinatorDue(NOW, 2, NOW + DEAD_COORDINATOR_AFTER_MS)).toBe(true);
     expect(deadCoordinatorDue(NOW, 2, NOW + DEAD_COORDINATOR_AFTER_MS - 1)).toBe(false);
     expect(deadCoordinatorDue(NOW, 1, NOW + 10 * DEAD_COORDINATOR_AFTER_MS), 'one pass is never enough').toBe(false);
+  });
+});
+
+describe('a new spawn starts a new episode (D-4825)', () => {
+  const anchor = { firstDeadAt: NOW, lastDeadAt: NOW + PASS };
+  const sec = (ms: number): number => Math.floor(ms / 1000);
+  it('a heartbeat later than the anchor and not after now is a spawn since it began; nothing else is', () => {
+    const now = NOW + 30 * PASS;
+    expect(deadCoordinatorNewEpisode(anchor, sec(NOW + 5 * PASS), now)).toBe(true);
+    expect(deadCoordinatorNewEpisode(anchor, sec(NOW - PASS), now), 'a heartbeat from before the anchor is this episode').toBe(false);
+    expect(deadCoordinatorNewEpisode(anchor, sec(NOW), now), 'the same second is not later').toBe(false);
+    expect(deadCoordinatorNewEpisode(anchor, sec(now + PASS), now), 'a stamp from the future is no evidence').toBe(false);
+    expect(deadCoordinatorNewEpisode(null, sec(NOW + 5 * PASS), now), 'no anchor: the first crash anchors as it always did').toBe(false);
+    for (const bad of [null, 0, -5, 1.5, Number.NaN]) expect(deadCoordinatorNewEpisode(anchor, bad, now), String(bad)).toBe(false);
   });
 });
 

@@ -82,10 +82,18 @@ describe('the spec says what a restart does to the dead-coordinator lane (review
       'first-dead instants', 'ids percent-escaped, so any claimant id is carried',
       // Review 384, F1: the clustering is monotone, and its cost.
       'Its clustering is monotone: a member keeps every first-dead instant it has carried while held, adds its current anchor each time it is crashed and anchored, and clusters at all of them, and two entries cluster when any instant of one is within the window of any instant of the other',
-      'so a held instant never replaces a re-anchored one, and a restarted lane\'s breaker stands wherever an unrestarted lane\'s does, but for the open corner named in §12 (review 384, F1)',
+      'so a held instant never replaces a re-anchored one, and a restarted lane\'s breaker stands wherever an unrestarted lane\'s does, under the conditions §12 names (review 384, F1)',
       'the cost is that a member held at an old instant that crashes anew also clusters near its new instant, and a held member\'s instants, and its record, grow by one per re-anchor while it is held',
       '(several instants of one member are `+`-joined; a member the fallback below holds carries a `*` after the list)']) expect(para, item).toContain(item);
     expect(para, 'a member no longer keeps only its first instant (review 384, F1-N1)').not.toContain('keeps its remembered first-dead instant and, while it is also crashed');
+    expect(para, 'the returning-id corner is closed, not left open (D-4825)').not.toContain('but for the open corner named in §12');
+  });
+  it('§5.4\'s anchor bullet: a heartbeat later than the anchor starts a fresh anchor, a new episode (D-4825)', () => {
+    const at = spec.indexOf('- **The anchor restarts after a gap nobody measured.**');
+    expect(at).toBeGreaterThan(-1);
+    const para = spec.slice(at, spec.indexOf('- **The breaker holds the whole lane**', at));
+    for (const item of ['A claimant crashed with a supervisor heartbeat later than its anchor has been supervised again since the anchor began, so that crash starts a fresh anchor, as a first crash does, and the hour counts from it',
+      'the breaker adds that instant to every instant it remembers', 'a lane that skipped the pass that saw it alive no longer keeps the old episode alone']) expect(para, item).toContain(item);
     expect(para, 'the held instant no longer wins over a re-anchored one').not.toContain('held wins');
   });
   it('§12 says it per lane: the anchor and the hold survive, an unreadable record seeds a fallback and is logged, no act waits on an unrecorded hold, and the lost backoff can bring an abandon sooner', () => {
@@ -101,6 +109,7 @@ describe('the spec says what a restart does to the dead-coordinator lane (review
     expect(para, 'the lost backoff is not the only way, now it is (review 382, R3)').not.toContain('the one way a restart can bring an act forward, still behind');
     expect(para, 'two ways, not one (review 382, fix round 3)').not.toContain('the one way a restart can bring an act forward');
     expect(para, 'no count of the ways (review 384, F1)').not.toContain('those are the two ways a restart can bring an act forward');
+    expect(para, 'the returning-id corner is closed, not open (D-4825)').not.toContain('One case is open, not argued, and not claimed to be the only one');
     expect(para, 'no released build reads the record (review 384, F2)').not.toContain('an older build reads the flagged record as unreadable and stops');
     for (const item of ['The dead-coordinator lane keeps two things across a restart',
       'One is its first-dead anchor (`dead_claimants`), which is re-anchored only after a gap of more than ten minutes (`DEAD_COORDINATOR_GAP_MS`) in which no pass measured the claimant crashed, so a restart shorter than that keeps the hour',
@@ -110,7 +119,7 @@ describe('the spec says what a restart does to the dead-coordinator lane (review
       'The server logs a `ccrc-server: sweepDeadCoordinators could not read the breaker\'s record of its hold` warning, once per bad row, and writes one feed row, "dead coordinator: breaker record unreadable", which is the operator\'s sign',
       'releases on what releases it without a restart', 'the run of crashed passes starts again, which delays an act',
       'a restarted lane can ask for that abandon SOONER than an unrestarted one would, and a server that restarts while a held-set write is failing seeds the older record, which can hold less than the process did, which needs a store whose writes keep failing at that moment',
-      'The breaker\'s clustering is monotone (§5.4), so after a restart its breaker stands wherever an unrestarted lane\'s does when both read the same anchors and the restarted lane\'s population differs only by claimants the unrestarted lane has already ended. One case is open, not argued, and not claimed to be the only one: a claimant the unrestarted lane ended that returns under a new run while the restarted lane, its act delayed by the lost backoff, still holds or anchors the old episode',
+      'The breaker\'s clustering is monotone (§5.4), so after a restart its breaker stands wherever an unrestarted lane\'s does when both read the same anchors and the restarted lane\'s population differs only by claimants the unrestarted lane has already ended. A claimant the unrestarted lane ended that returns under a new run is covered by the episode boundary: a supervisor heartbeat later than its durable anchor starts a fresh anchor at its next crash, so the restarted lane carries the new instant beside every one it remembers (D-4825). That rests on the heartbeat: a return that stamps none is not seen, and no claim is made that no other corner exists',
 
       'The lane composes no act on a pass whose held-set record did not land, so the record never lags an act, and every act is still behind the claimant\'s re-measure before and after the fleet act']) {
       expect(para, item).toContain(item);

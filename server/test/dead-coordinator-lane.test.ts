@@ -278,7 +278,7 @@ describe('the hour, made durable', () => {
     expect(f.stateOf(r)).toBe('working');
   });
 
-  it('the supervisor stamp RAISES the anchor: a heartbeat after the first crashed pass delays the act', async () => {
+  it('the supervisor stamp RAISES the anchor: a heartbeat after the first crashed pass starts a new episode, and the hour counts from the pass that sees it (D-4825)', async () => {
     const f = await fixture();
     f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
     f.plant(A);
@@ -288,6 +288,8 @@ describe('the hour, made durable', () => {
     await walk(f, 36 * 60_000);
     expect(f.stateOf(r), 'an hour since firstDeadAt, but not since the stamp').toBe('working');
     await walk(f, 18 * 60_000);
+    expect(f.stateOf(r), 'nor an hour since the fresh anchor, taken at the pass that saw the later stamp (minute 36)').toBe('working');
+    await walk(f, 27 * 60_000);
     expect(f.stateOf(r)).toBe('failed');
   });
 });
@@ -1011,6 +1013,75 @@ describe('a restarted lane never ends a claimant the unrestarted lane\'s breaker
   it('...and when a member made one by an EARLIER anchor is later unmeasurable, its LATER instant still clusters (plain restart; review 384, F1-N1)', async () => { await against('plain', true); });
   it('...the same after a restart over an unreadable record (review 384, F1-N1)', async () => { await against('fallback', true); });
   it('...and the instants are DURABLE: a restart after the anchor is gone, when only the record carries the later instant, changes nothing (review 384, F1-N1)', async () => { await against('plain', true, true); });
+});
+
+/** THE RETURNING-ID SEAM (D-4825). One scripted world, run as two lanes that differ only in the passes they take. Q is
+ *  crashed from minute 4 (anchored at 9) and is due at the pass at 72. X is crashed from 22 (anchored at 27), is ALIVE for
+ *  a few minutes (64-70) with its supervisor stamping a heartbeat, and crashes again; Z crashes at 70. Lane U takes a pass
+ *  INSIDE X's alive window (minute 66): X reads alive and its anchor is deleted, so at 72 its crash starts a FRESH anchor
+ *  and clusters with Z, and the breaker holds Q. Lane R takes no pass inside the window (the passes it skips, a restart's
+ *  downtime, a stale mirror), so it sees X crashed throughout and keeps X's OLD anchor (27): without the episode boundary
+ *  X@27 and Z@72 do not cluster, and R ends Q while U's breaker on {X, Z} stands. The evidence for the boundary is what
+ *  the lane already reads: the claimant's supervisor heartbeat (`supervisedAt`) is LATER than its durable anchor's
+ *  `firstDeadAt`. */
+describe('a new spawn starts a new episode (D-4825)', () => {
+  const [X, Z, Q] = ['demo-coord-x', 'demo-coord-z', 'demo-coord-q'];
+  const world = async (lane: 'U' | 'R', o: { restartAt?: number } = {}) => {
+    const f = await fixture();
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (const id of [X, Z, Q]) f.plant(id);
+    for (const id of [X, Z, Q]) f.live.add(id);
+    const r = Object.fromEntries([X, Z, Q].map((id) => [id, f.working(id)])) as Record<string, number>;
+    const events: Record<number, () => void> = {
+      4: () => { f.live.delete(Q); },                            // Q crashes (anchored at the pass at 9)
+      22: () => { f.live.delete(X); },                           // X crashes (anchored at the pass at 27)
+      64: () => { f.live.add(X); writeFileSync(path.join(f.reg, `${X}.supervised`), String(Math.floor((T0 + 65 * 60_000) / 1000))); },
+      70: () => { f.live.delete(X); f.live.delete(Z); },         // X crashes again, its heartbeat stays at minute 65; Z crashes
+    };
+    const passes = new Set([0, 9, 18, 27, 36, 45, 54, 63, 72, 81, 90, 99, 108, 117, 126, 135, 144, ...(lane === 'U' ? [66] : [])]);
+    const times = [...new Set([...Object.keys(events).map(Number), ...passes, ...(o.restartAt === undefined ? [] : [o.restartAt])])].sort((a, b) => a - b);
+    let m = 0;
+    for (const t of times) {
+      f.advance((t - m) * 60_000); m = t;
+      events[t]?.();
+      if (o.restartAt === t) f.restart();
+      if (passes.has(t)) await f.pass();
+    }
+    return { states: [X, Z, Q].map((id) => f.stateOf(r[id]!)),
+      breaker: f.attention().filter(([k]) => k === 'breaker'), anchorX: f.anchorOf(X) };
+  };
+  const together = async (o: { restartAt?: number } = {}): Promise<void> => {
+    const u = await world('U');
+    vi.restoreAllMocks();
+    const r = await world('R', o);
+    expect(u.breaker, 'the lane that saw X alive trips on {X, Z}').toEqual([['breaker', [X, Z]]]);
+    expect(u.states, 'and ends nothing').toEqual(['working', 'working', 'working']);
+    expect(r.breaker, 'the lane that skipped the alive pass stands on the same breaker').toEqual(u.breaker);
+    expect(r.states, 'and ends nothing either: X, Z and Q all stay').toEqual(['working', 'working', 'working']);
+  };
+  it('the lane that missed the alive pass starts a fresh anchor from the later heartbeat, clusters X with Z, and ends neither X nor Q while the other lane\'s breaker stands', async () => { await together(); });
+  it('...and a restart after the fresh anchor was written changes nothing: the anchor and the held record carry the boundary', async () => { await together({ restartAt: 75 }); });
+
+  it('a new episode\'s hour counts from its FRESH anchor: the claimant is not ended before it, and is ended after it, not never', async () => {
+    const f = await fixture();
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    f.plant(X);
+    const rx = f.working(X);
+    let m = 0;
+    const to = async (target: number): Promise<void> => {
+      while (m < target) { const d = Math.min(9, target - m); f.advance(d * 60_000); m += d; await f.pass(); }
+    };
+    await f.pass(); await to(18);                               // X crashed since minute 0
+    writeFileSync(path.join(f.reg, `${X}.supervised`), String(Math.floor((T0 + 20 * 60_000) / 1000)));   // it was supervised again at 20, and died again
+    await to(36);                                               // the pass at 27 sees a heartbeat later than the anchor: a new episode, anchored there
+    expect(f.anchorOf(X), 'the anchor is the fresh one, durably').toMatchObject({ firstDeadAt: T0 + 27 * 60_000 });
+    await to(81);
+    expect(f.stateOf(rx), 'an hour has not passed since the fresh anchor (27 + 60 = 87)').toBe('working');
+    await to(99);
+    expect(f.stateOf(rx), 'it ends once the hour since the fresh anchor has').toBe('failed');
+  });
 });
 
 describe('the one cleanup switch', () => {

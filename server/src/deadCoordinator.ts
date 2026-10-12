@@ -260,6 +260,22 @@ export function deadAnchorNext(prev: DeadAnchor | null, nowMs: number): DeadAnch
   return { firstDeadAt: prev.firstDeadAt, lastDeadAt: nowMs };
 }
 
+/** A NEW EPISODE (D-4825, the returning-id seam): the claimant is crashed this pass, and its supervisor stamped a heartbeat
+ *  (`supervisedAt`, epoch SECONDS, the evidence of a spawn the lane already reads) LATER than its durable anchor's
+ *  `firstDeadAt` and not after now — so it was supervised again after that anchor began, and what is crashed now is a
+ *  later death, not the one the anchor counts. The lane then starts a FRESH anchor at this crash, as for a first crash
+ *  (`deadAnchorNext(null, now)`), and the breaker adds that instant to every instant it remembers. A lane that saw the
+ *  claimant alive in between would have deleted the anchor and anchored afresh; one that skipped that pass, or was
+ *  restarting, did not, and keeps the old episode's instant — which this makes the same. Stateless: the heartbeat and the
+ *  anchor are both durable or registry-read, so it survives a restart, and once the fresh anchor is written the heartbeat
+ *  is no longer later than it, so it fires once. The hour then counts from the fresh anchor, exactly as for a first crash. */
+export function deadCoordinatorNewEpisode(prev: DeadAnchor | null, supervisedAtS: number | null, nowMs: number): boolean {
+  if (prev === null) return false;
+  if (supervisedAtS === null || !Number.isSafeInteger(supervisedAtS) || supervisedAtS <= 0) return false;
+  const stamp = supervisedAtS * 1000;
+  return stamp <= nowMs && stamp > prev.firstDeadAt;
+}
+
 /** SINCE WHEN the claimant has been dead, for the hour: `max(firstDeadAt, .supervised's stamp)`. The stamp may only
  *  RAISE the anchor, never lower it: it freezes whenever a session runs unsupervised (a unit crash-looped to FAILED, a
  *  darwin bootout), so a pane that died later would read `orphan` with a days-old stamp. An absent, unparseable or
@@ -341,23 +357,26 @@ export interface DeadCoordinatorBreakerMember {
  *  never drops a member. The unmeasurable arm names `unmeasurable ∪ crashed ∪ members`, and its trigger (`fleetDoubt`,
  *  `allUnmeasurable`) reads only the pass's own measurements, so the superset stays a superset there too.
  *  WHAT IT GIVES A RESTARTED LANE R against an unrestarted one U, UNDER TWO ASSUMPTIONS. (A1) Both read the same durable
- *  anchors (a restart longer than the episode gap re-anchors every crashed coordinator, which the spec's residuals
- *  already name, and which this does not argue about). (A2) R's population differs from U's only by claimants U has
- *  ended and R, its act delayed by the lost backoff, has not yet — extra ids, never an id that returns. THE HYPOTHESIS:
- *  every id U holds, R holds with at least U's instants, or flagged. At the seed it holds: a plain restart reads U's own
- *  record, and the fallback holds every claimant the pass does not release, flagged, a superset of anything U holds (a
- *  held member is always unreleased and in the population). Each step: both see the same anchors and release the same
- *  members on the same evidence (alive, stopped, deliberate, left the population), so R's entries are a superset of U's
- *  as (id, instant) pairs and flags; by the property R trips whenever U does, with members ⊇ U's; and each member's next
- *  instants are its held instants plus this pass's anchor on both sides, so R's remain ⊇ U's (or R's is flagged, and
- *  every member of a flagged trip is). So U's breaker standing implies R's stands, and R acts only when U's would. The
- *  all-unmeasurable arm diverges as measured: R's extra claimant can be measured while all of U's are not, so R does not
- *  trip there, but every other claimant is as unmeasured in R as in U, so R can act there only on the claimant U already
- *  ended. OPEN, NOT ARGUED, and not claimed to be the only one: an id that U ended and that RETURNS under a new run while
- *  R still holds or anchors the old episode (A2 fails: R's instants for it are the old episode's, U's are fresh, and R
- *  may lack U's). The cost of the accumulation is more holding: a member held at an old instant that crashes anew also
- *  clusters near its new instant, and while a flagged member stands a coordinator that crashes is swept into the hold and
- *  flagged itself, until evidence releases it or fewer than two entries stand. */
+ *  anchors for a claimant's current episode (a restart longer than the episode gap re-anchors every crashed coordinator,
+ *  which the spec's residuals already name, and which this does not argue about). (A2) R's population differs from U's
+ *  only by claimants U has ended and R, its act delayed by the lost backoff, has not yet. THE HYPOTHESIS: every id U
+ *  holds, R holds with at least U's instants, or flagged. At the seed it holds: a plain restart reads U's own record, and
+ *  the fallback holds every claimant the pass does not release, flagged, a superset of anything U holds (a held member is
+ *  always unreleased and in the population). Each step: both see the same anchors and release the same members on the
+ *  same evidence (alive, stopped, deliberate, left the population), so R's entries are a superset of U's as (id, instant)
+ *  pairs and flags; by the property R trips whenever U does, with members ⊇ U's; and each member's next instants are its
+ *  held instants plus this pass's anchor on both sides, so R's remain ⊇ U's (or R's is flagged, and every member of a
+ *  flagged trip is). So U's breaker standing implies R's stands, and R acts only when U's would. A claimant that U ended
+ *  and that RETURNS (a new spawn, a new run) while R still holds its old episode is covered by `deadCoordinatorNewEpisode`
+ *  (D-4825): its supervisor's heartbeat is later than R's durable anchor, so R anchors it afresh at its next crash, as U,
+ *  which deleted the anchor, does — R then carries U's new instant beside every one it remembers. That rests on the
+ *  heartbeat: a return that stamps none is not seen, and this does not claim to cover it, nor claim that no other corner
+ *  exists. The all-unmeasurable arm diverges as measured: R's extra claimant can be measured while all of U's are not, so R
+ *  does not trip there, but every other claimant is as unmeasured in R as in U, so R can act there only on the claimant U
+ *  already ended. The cost of the accumulation is more holding: a member held at an old instant that crashes anew also
+ *  clusters near its new instant, a held member's instants and its record grow by one per re-anchor while it is held, and
+ *  while a flagged member stands a coordinator that crashes is swept into the hold and flagged itself, until evidence
+ *  releases it or fewer than two entries stand. */
 export function deadCoordinatorBreaker(
   crashed: readonly DeadCoordinatorBreakerMember[], held: readonly DeadCoordinatorBreakerMember[],
   unmeasurable: readonly string[], measured: number, fleetDoubt: string | null, nowMs: number,

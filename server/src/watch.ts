@@ -114,7 +114,7 @@ import {
 } from './archivedExpiry.js';
 import { expireArchived, expiryReviewing, learnExpiry, recordExpireFeed } from './coord/expireArchived.js';
 import {
-  deadAnchorNext, deadCoordinatorAttention, deadCoordinatorBreaker,
+  deadAnchorNext, deadCoordinatorNewEpisode, deadCoordinatorAttention, deadCoordinatorBreaker,
   deadCoordinatorBreakerHeldKey, deadCoordinatorBreakerKey, deadCoordinatorCrash, deadCoordinatorDue, deadCoordinatorEntry, deadCoordinatorJournal,
   deadCoordinatorNextEntry, deadCoordinatorOutcomeKey, deadCoordinatorSighted, deadCoordinatorSince, deadCoordinatorThrew,
   type ClaimantDeadCause, type DeadAnchor, type DeadCoordinatorActOutcome, type DeadCoordinatorBreaker,
@@ -4333,9 +4333,12 @@ export class FleetWatcher {
       let entry = deadCoordinatorSighted(this.deadCoordinatorState.get(id) ?? deadCoordinatorEntry(), c, at);
       try {
         if (c.kind === 'crashed') {
-          const a = deadAnchorNext(anchors.get(id) ?? null, at);
-          coord.setDeadAnchor(id, a);
           const supervisedAt = records.find((r) => r.id === id)?.supervisedAt ?? null;
+          // A heartbeat LATER than the anchor is a spawn since it began: a new episode, anchored afresh (D-4825).
+          const prev = anchors.get(id) ?? null;
+          const fresh = deadCoordinatorNewEpisode(prev, supervisedAt, at);
+          const a = deadAnchorNext(fresh ? null : prev, at);
+          coord.setDeadAnchor(id, a);
           crashed.push({ id, firstDeadAt: a.firstDeadAt, since: deadCoordinatorSince(a, supervisedAt, at), cause: c.cause });
         } else if (anchors.has(id)) {
           coord.deleteDeadAnchor(id);
