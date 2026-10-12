@@ -3149,3 +3149,209 @@ describe.skipIf(process.platform === 'darwin')('expand fix round 1 (Task 16): on
     expect(parentList).toEqual(childLists.flat());
   }, HEAVY);
 });
+
+// ── W1-B2 Task 17: version-aware reads; coverage and store identity ─────────────────────────────────────────
+// DM44 runs IN-PROCESS: recall.mjs sets no umask, so it is imported here and handed a ReadContext whose schema
+// (and verbTables) is a test-only seam, over a REAL fixture store whose v1 tables had two columns dropped. DM17's
+// CLI half and C45 run through the CLI, as a session runs it.
+const t17ts = (i: number): string => new Date(Date.UTC(2026, 9, 2, 10, 0, i)).toISOString();
+const t17uuid = (tag: string, i: number): string => `${tag}-0000-4000-8000-${String(i).padStart(12, '0')}`;
+/** One family with one leaf: a user row, a tool_use, its result, an assistant row, a manual boundary keeping no
+ *  row, and the summary its anchor names. */
+function t17family(box: rH.HistoryBox, id: string, tag: string, generation: string): { uuid: string; e: (i: number) => string } {
+  const U = t17uuid(tag, 0);
+  const e = (i: number): string => t17uuid(tag, i);
+  const summary = ['<summary>', '1. Primary Request and Intent:', `   zq${tag} intent`, '8. Current Work:', `   zq${tag} current work`,
+    '9. Optional Next Step:', `   zq${tag} next step`, '</summary>'].join('\n');
+  rH.seedFamily(box, { id, project: 'demo', generation, uuid: U, rows: [
+    rFx.userRow({ uuid: e(1), ts: t17ts(1), sessionId: U, text: `zqx17seam ${tag} words for every verb` }),
+    rFx.toolUseRow({ uuid: e(2), ts: t17ts(2), parentUuid: e(1), sessionId: U, toolUseId: `toolu_01${tag}`, name: 'Bash', input: { command: 'ls' } }),
+    rFx.toolResultRow({ uuid: e(3), ts: t17ts(3), parentUuid: e(2), sessionId: U, toolUseId: `toolu_01${tag}`, content: 'zqx17seam listing' }),
+    rFx.assistantRow({ uuid: e(4), ts: t17ts(4), parentUuid: e(3), sessionId: U, text: 'zqx17seam answered' }),
+    rFx.boundaryRow({ uuid: e(5), ts: t17ts(5), parentUuid: e(4), sessionId: U, trigger: 'manual', headUuid: e(4), anchorUuid: e(6), tailUuid: e(4), allUuids: [] }),
+    rFx.summaryRow({ uuid: e(6), ts: t17ts(6), parentUuid: e(5), sessionId: U, text: summary }),
+  ] });
+  const r = rH.runSweep(box);
+  expect(r.code, r.stderr).toBe(0);
+  return { uuid: U, e };
+}
+function t17leafOf(box: rH.HistoryBox, id: string): string {
+  const db = rH.openStoreRO(box);
+  try {
+    const row = db.prepare(`SELECT n.node_id AS node_id FROM nodes n JOIN sessions s ON s.session_pk = n.session_pk
+      WHERE s.ccrc_id = ? AND n.kind <> 'condensed'`).get(id) as { node_id: string } | undefined;
+    expect(row?.node_id, `CONTROL: ${id}'s leaf was derived`).toMatch(/^L[0-9a-f]{20}$/);
+    return row!.node_id;
+  } finally { db.close(); }
+}
+
+describe.skipIf(process.platform === 'darwin')('DM44: the read verbs answer an older store by its own version (Task 17, in-process)', () => {
+  interface Ctx {
+    db: { close(): void }; version: number; schema: unknown; verbTables?: unknown; storeId: string | null; nowMs: number;
+    home: string; id: string; gen: string | null; scopeArgs: string[]; pairIdx: unknown;
+    scope: { kind: 'family'; id: string; generation: string | null; project: string | null; workdir: string | null;
+      sessionPks: number[]; transcriptPks: number[]; families: { sessionPk: number; ccrcId: string; generation: string; firstSeenMs: number }[] };
+  }
+  interface Result { exit: number; reason?: string; items: Record<string, unknown>[] }
+  interface Recall {
+    runGrep(rc: Ctx, a: Record<string, unknown>): Result | Promise<Result>;
+    runDescribe(rc: Ctx, a: Record<string, unknown>): Result | Promise<Result>;
+    runExpand(rc: Ctx, a: Record<string, unknown>): Result | Promise<Result>;
+    runTree(rc: Ctx, a: Record<string, unknown>): Result | Promise<Result>;
+  }
+  const ID = 'claude-a-x17';
+  let box: rH.HistoryBox;
+  let leaf = '';
+  let e: (i: number) => string = () => '';
+  let R: Recall;
+  // The seam: v1 lacks entries.role and nodes.directive_flag, and v2 adds them back with a table one verb needs.
+  const V1 = libRead.SCHEMA_ADDED[1]!;
+  const SEAM = {
+    1: { heavy: false, tables: { ...V1.tables,
+      entries: V1.tables['entries']!.filter((c) => c !== 'role'), nodes: V1.tables['nodes']!.filter((c) => c !== 'directive_flag') } },
+    2: { heavy: false, tables: { entries: ['role'], nodes: ['directive_flag'], seam_table: ['x'] } },
+  };
+
+  /** A ReadContext for `id`'s family, measured from the store as Task 10's readContext measures it. */
+  async function contextFor(schema: unknown, verbTables?: unknown): Promise<Ctx> {
+    const store = await import('../../ccd/history/store.mjs');
+    const db = store.openReader(libRead.historyPaths(box.home).dbFile);
+    const version = store.userVersion(db);
+    const fams = db.prepare('SELECT session_pk, ccrc_id, generation, first_seen_ms FROM sessions WHERE ccrc_id = ? AND merged_into IS NULL ORDER BY session_pk')
+      .all(ID) as { session_pk: number; ccrc_id: string; generation: string; first_seen_ms: number }[];
+    const sessionPks = fams.map((f) => Number(f.session_pk));
+    const transcriptPks: number[] = [];
+    for (const pk of sessionPks) {
+      for (const t of db.prepare(`SELECT DISTINCT t.transcript_pk AS pk FROM epochs e JOIN transcripts t ON t.cc_session_uuid = e.cc_session_uuid
+        WHERE e.session_pk = ? AND e.confirmed_ms IS NOT NULL`).all(pk) as { pk: number }[]) transcriptPks.push(Number(t.pk));
+    }
+    expect(transcriptPks.length, 'CONTROL: the family has a confirmed transcript').toBeGreaterThan(0);
+    const storeId = (db.prepare("SELECT v FROM meta WHERE k = 'store_id'").get() as { v: string } | undefined)?.v ?? null;
+    return {
+      db, version, schema, ...(verbTables === undefined ? {} : { verbTables }), storeId, nowMs: Date.now(), home: box.home, id: ID,
+      gen: fams[0]?.generation ?? null, scopeArgs: [], pairIdx: libRead.makePairIndex([]),
+      scope: { kind: 'family', id: ID, generation: fams[0]?.generation ?? null, project: 'demo', workdir: null, sessionPks, transcriptPks,
+        families: fams.map((f) => ({ sessionPk: Number(f.session_pk), ccrcId: f.ccrc_id, generation: f.generation, firstSeenMs: Number(f.first_seen_ms) })) },
+    };
+  }
+
+  beforeAll(async () => {
+    box = rH.makeHistoryBox('ccrc-hist-x17-');
+    e = t17family(box, ID, 'a1700001', '0189abcd-1234-4678-9abc-00000000a017').e;
+    leaf = t17leafOf(box, ID);
+    // The store becomes what an older build would have left: the two columns the seam calls new are gone.
+    const w = new DatabaseSync(libRead.historyPaths(box.home).dbFile);
+    try {
+      w.exec('ALTER TABLE entries DROP COLUMN role');
+      w.exec('ALTER TABLE nodes DROP COLUMN directive_flag');
+    } finally { w.close(); }
+    R = (await import('../../ccd/history/recall.mjs')) as unknown as Recall;
+  }, 240_000);
+
+  it('grep, describe and expand answer 0 with the column the store lacks as null; the verb needing the missing table answers 5 migration-pending; never 1, never a SQL error', async () => {
+    const rc = await contextFor(SEAM);
+    try {
+      const fts = (rc.db as unknown as { prepare(s: string): { get(): unknown } }).prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'blobs_fts'").get();
+      expect(fts, 'CONTROL: the fixture store has blobs_fts').toBeDefined();
+      const g = await Promise.resolve(R.runGrep(rc, { words: ['zqx17seam'], regex: null, role: null, tool: null, sinceMs: null, beforeMs: null,
+        node: null, sort: 'recency', limit: 20, cursor: null, includeRecall: false, json: true }));
+      expect(g.exit, JSON.stringify(g)).toBe(0);
+      const d = await Promise.resolve(R.runDescribe(rc, { target: leaf, full: false, cursor: null, json: true }));
+      expect(d.exit, JSON.stringify(d)).toBe(0);
+      expect(d.items[0]!['directive_flag']).toBeNull();
+      const x = await Promise.resolve(R.runExpand(rc, { target: leaf, around: null, before: 5, after: 5, cursor: null, json: true }));
+      expect(x.exit, JSON.stringify(x)).toBe(0);
+      expect(x.items.find((it) => it['uuid'] === e(1))!['role']).toBeNull();
+      const t = await Promise.resolve(R.runTree(rc, { depth: 2, json: true }));
+      expect(t.exit, 'CONTROL: tree needs no seam table, so it answers').toBe(0);
+    } finally { rc.db.close(); }
+    const pending = await contextFor(SEAM, { ...libRead.VERB_TABLES, tree: [...libRead.VERB_TABLES.tree, 'seam_table'] });
+    try {
+      const t = await Promise.resolve(R.runTree(pending, { depth: 2, json: true }));
+      expect([t.exit, t.reason]).toEqual([5, 'migration-pending']);
+    } finally { pending.db.close(); }
+  });
+
+  it('status answers the same older store with its own version and migration word, never exit 1', () => {
+    // A spawned status reads lib's SCHEMA_VERSION; the v2 seam above is in-process only (see Choices).
+    const st = rH.runCli(box, ['status', '--json']);
+    expect(st.code, st.stderr).toBe(0);
+    expect(st.json?.['user_version']).toBe(1);
+    expect(st.json?.['migration']).toBe('none');
+  }, HEAVY);
+});
+
+describe.skipIf(process.platform === 'darwin')('DM17 (CLI half) and C45: a newer store is read; coverage and store_id on every verb (Task 17)', () => {
+  const ID = 'claude-a-x17c';
+  const FRESH = 'claude-a-x17fresh';
+  const G = '0189abcd-1234-4678-9abc-00000000b017';
+  let box: rH.HistoryBox;
+  let leaf = '';
+  let e: (i: number) => string = () => '';
+  const cli = (args: string[], id = ID) => rH.runCli(box, args, { env: rH.withPane(box, id) });
+  /** Every node-id-shaped string anywhere in a --json envelope. */
+  const nodeIds = (v: unknown, out: string[] = []): string[] => {
+    if (typeof v === 'string' && /^[LN][0-9a-f]{6,20}$/.test(v)) out.push(v);
+    else if (Array.isArray(v)) for (const x of v) nodeIds(x, out);
+    else if (v !== null && typeof v === 'object') for (const x of Object.values(v)) nodeIds(x, out);
+    return out;
+  };
+
+  beforeAll(() => {
+    box = rH.makeHistoryBox('ccrc-hist-x17c-');
+    e = t17family(box, ID, 'a1700002', G).e;
+    leaf = t17leafOf(box, ID);
+    rH.plantSession(box, FRESH, { project: 'demo', generation: '0189abcd-1234-4678-9abc-00000000c017' });
+  }, 240_000);
+
+  it('C45: every read verb\'s header carries coverage=this-box; --json node ids are the full 20 hex', () => {
+    for (const args of [['grep', 'zqx17seam'], ['describe', leaf], ['expand', leaf], ['tree']]) {
+      const r = cli(args);
+      expect(r.code, `${args.join(' ')}: ${r.stderr}`).toBe(0);
+      expect(r.stdout, args.join(' ')).toMatch(/^scope=family\(.*\) coverage=this-box indexed-through=\S+ lag=\S+$/m);
+      const j = cli([...args, '--json']);
+      expect(j.code, args.join(' ')).toBe(0);
+      expect(j.json?.['store_id'], args.join(' ')).toBe(storeIdOf(box));
+      expect(j.json?.['coverage'], args.join(' ')).toBe('this-box');
+    }
+    const ids = [...nodeIds(cli(['tree', '--json']).json), ...nodeIds(cli(['describe', leaf.slice(0, 7), '--json']).json)];
+    expect(ids.length, 'CONTROL: the envelopes name nodes').toBeGreaterThan(0);
+    for (const id of ids) expect(id, 'a --json node id is never a display prefix').toMatch(/^[LN][0-9a-f]{20}$/);
+  }, HEAVY);
+
+  it('C45: the envelope of exits 2, 3, 5, 6 and 8 carries store_id and coverage too', () => {
+    const keysOf = (r: { json: Record<string, unknown> | null }): string[] => Object.keys(r.json ?? {});
+    const two = cli(['expand', 'zz', '--json']);
+    const three = cli(['grep', 'zqnothinganywhere', '--json']);
+    const six = cli(['tree', '--json'], FRESH);
+    const eight = ((): ReturnType<typeof cli> => {
+      fs.mkdirSync(hist(box, 'recall-off'), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(hist(box, 'recall-off', ID), G);
+      try { return cli(['tree', '--json']); } finally { fs.rmSync(hist(box, 'recall-off', ID)); }
+    })();
+    const five = ((): ReturnType<typeof cli> => {
+      const real = storeIdOf(box);
+      fs.writeFileSync(hist(box, 'store.id'), '99999999-9999-4999-8999-999999999999\n');
+      try { return cli(['tree', '--json']); } finally { fs.writeFileSync(hist(box, 'store.id'), `${real}\n`); }
+    })();
+    for (const [want, r] of [[2, two], [3, three], [5, five], [6, six], [8, eight]] as const) {
+      expect(r.code, `exit ${want}`).toBe(want);
+      expect(keysOf(r), `exit ${want}`).toEqual(expect.arrayContaining(['store_id', 'coverage']));
+      expect(r.json?.['coverage'], `exit ${want}`).toBe('this-box');
+    }
+    expect(five.json?.['reason']).toBe('store-mismatch');
+  }, HEAVY);
+
+  it('DM17 (CLI half): a store at user_version 2 is read by every verb, and status reports its version and migration', () => {
+    const w = new DatabaseSync(libRead.historyPaths(box.home).dbFile);
+    try { w.exec('PRAGMA user_version = 2'); } finally { w.close(); }
+    for (const args of [['describe', leaf], ['expand', leaf], ['expand', e(1)], ['tree']]) {
+      const r = cli(args);
+      expect(r.code, `${args.join(' ')}: ${r.stderr}`).toBe(0);
+    }
+    expect([0, 3], 'grep reads it too (0 or no hits, never 5)').toContain(cli(['grep', 'zqx17seam']).code);
+    const st = rH.runCli(box, ['status', '--json']);
+    expect(st.json?.['user_version']).toBe(2);
+    expect(st.json?.['migration']).toBe('refuse-newer');
+  }, HEAVY);
+});

@@ -799,3 +799,9 @@ export function toolUseInputPath(content: unknown, toolUseId: string): { found: 
 export function renderEntryText(body: unknown): string;
 export const EXPLORE_READ_MAX: number;
 export function exploreOutline(text: string, kind: ExploreKind, fileName: string | undefined, idx: PairIndex): string;
+// ── W1-B2 Task 17: version-aware reads ──
+export const VERB_TABLES: Readonly<Record<'grep' | 'describe' | 'expand' | 'tree', readonly string[]>>;
+export function missingTablesAt(version: number, verb: string, schema?: Readonly<Record<number, SchemaVersionAdded>>,
+  verbTables?: Readonly<Record<string, readonly string[]>>): string[];
+export function schemaAdditive(schema: Readonly<Record<number, SchemaVersionAdded>>,
+  measured?: Readonly<Record<number, Readonly<Record<string, readonly string[]>>>>): { ok: true } | { ok: false; lost: string[] };

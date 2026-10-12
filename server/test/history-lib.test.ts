@@ -50,6 +50,10 @@ import * as libDescribe from '../../ccd/history/lib.mjs';
 import * as t16lib from '../../ccd/history/lib.mjs';
 import * as t16crypto from 'node:crypto';
 import * as t16f from '../../ccd/history/lib.mjs';
+import * as t17lib from '../../ccd/history/lib.mjs';
+import * as t17sqlite from 'node:sqlite';
+import * as t17fs from 'node:fs';
+import * as t17path from 'node:path';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LIB = join(REPO, 'ccd', 'history', 'lib.mjs');
@@ -6033,5 +6037,78 @@ describe('lib: expand fix round 1 (W1-B2 Task 16)', () => {
     expect(at(50, 50)).toEqual({ target: null, around: U, before: 50, after: 50 });
     expect(at(51, 0)).toBeNull();
     expect(at(0, 99)).toBeNull();
+  });
+});
+
+describe('lib: version-aware reads (W1-B2 Task 17; spec §6.11 "The CLI keeps answering", DM44)', () => {
+  type Schema = Readonly<Record<number, { heavy: boolean; tables: Readonly<Record<string, readonly string[]>> }>>;
+  const V1 = t17lib.SCHEMA_ADDED[1]!;
+
+  it('VERB_TABLES covers exactly the read verbs and names only tables SCHEMA_ADDED declares, so a v1 store misses none', () => {
+    expect(Object.keys(t17lib.VERB_TABLES).sort()).toEqual([...t17lib.READ_VERBS].sort());
+    for (const [verb, tables] of Object.entries(t17lib.VERB_TABLES)) {
+      expect(t17lib.missingTablesAt(t17lib.SCHEMA_VERSION, verb), verb).toEqual([]);
+      for (const t of tables) expect(Object.keys(V1.tables), `${verb}.${t}`).toContain(t);
+    }
+  });
+
+  it('missingTablesAt reads the STORE version: a table a later version adds is missing below it, and a newer store misses nothing', () => {
+    const seam: Schema = { ...t17lib.SCHEMA_ADDED, 2: { heavy: false, tables: { seam_table: ['x'] } } };
+    const vt = { ...t17lib.VERB_TABLES, tree: [...t17lib.VERB_TABLES.tree, 'seam_table'] };
+    expect(t17lib.missingTablesAt(1, 'tree', seam, vt)).toEqual(['seam_table']);
+    expect(t17lib.missingTablesAt(2, 'tree', seam, vt)).toEqual([]);
+    expect(t17lib.missingTablesAt(3, 'tree', seam, vt)).toEqual([]);
+    expect(t17lib.missingTablesAt(1, 'grep', seam, vt), 'only the verb that needs it').toEqual([]);
+    expect(() => t17lib.missingTablesAt(1, 'touched')).toThrow(TypeError);
+  });
+
+  it('schemaAdditive: the real SCHEMA_ADDED is additive and equals what MIGRATIONS build; a rename, a drop, a re-listed column, an unknown key or a gap is refused', async () => {
+    const store = await import('../../ccd/history/store.mjs');
+    const measure = (migrations: readonly string[]): Record<number, Record<string, string[]>> => {
+      const db = new t17sqlite.DatabaseSync(':memory:');
+      try {
+        const out: Record<number, Record<string, string[]>> = {};
+        migrations.forEach((m, i) => { db.exec(m); out[i + 1] = store.schemaOf(db); });
+        return out;
+      } finally { db.close(); }
+    };
+    expect(t17lib.schemaAdditive(t17lib.SCHEMA_ADDED, measure(store.MIGRATIONS))).toEqual({ ok: true });
+    const lostOf = (r: { ok: boolean; lost?: string[] }): string[] => (r.ok ? [] : r.lost!);
+    const renamed: Schema = { ...t17lib.SCHEMA_ADDED, 2: { heavy: false, tables: { nodes: ['gist2'] } } };
+    expect(lostOf(t17lib.schemaAdditive(renamed, measure([...store.MIGRATIONS, 'ALTER TABLE nodes RENAME COLUMN gist TO gist2']))))
+      .toContain('nodes.gist lost at v2');
+    const dropped: Schema = { ...t17lib.SCHEMA_ADDED, 2: { heavy: false, tables: {} } };
+    expect(lostOf(t17lib.schemaAdditive(dropped, measure([...store.MIGRATIONS, 'ALTER TABLE nodes DROP COLUMN topics']))))
+      .toContain('nodes.topics lost at v2');
+    expect(lostOf(t17lib.schemaAdditive({ ...t17lib.SCHEMA_ADDED, 2: { heavy: false, tables: { nodes: ['gist'] } } })))
+      .toContain('nodes.gist re-listed at v2');
+    const unknownKey = { ...t17lib.SCHEMA_ADDED, 2: { heavy: false, tables: {}, drops: { nodes: ['gist'] } } } as unknown as Schema;
+    expect(lostOf(t17lib.schemaAdditive(unknownKey))).toContain('v2 has keys drops,heavy,tables');
+    expect(lostOf(t17lib.schemaAdditive({ ...t17lib.SCHEMA_ADDED, 3: { heavy: false, tables: { seam: ['x'] } } }))).toContain('versions are not 1..N');
+    const undeclared = measure([...store.MIGRATIONS, 'CREATE TABLE seam_extra (x INTEGER)']);
+    expect(lostOf(t17lib.schemaAdditive({ ...t17lib.SCHEMA_ADDED, 2: { heavy: false, tables: {} } }, undeclared))).toContain('seam_extra.x undeclared at v2');
+  });
+});
+
+describe('C43: no ccd/history module prepares SELECT * (W1-B2 Task 17; the server/src/coord/db.ts rule)', () => {
+  /** Star selects in code, with comments removed: a block comment, and a line comment not preceded by `:` (a
+   *  URL) or a quote. */
+  const starSelects = (src: string): string[] => {
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');
+    return [...code.matchAll(/\bSELECT\s+(?:DISTINCT\s+)?(?:[A-Za-z_][A-Za-z0-9_]*\.)?\*/gi)].map((m) => m[0]);
+  };
+
+  it('CONTROL: the scan sees a star select on one line and across a line break, and none inside a comment', () => {
+    expect(starSelects('db.prepare("SELECT * FROM x")')).toHaveLength(1);
+    expect(starSelects('db.prepare(`SELECT\n  e.* FROM entries e`)')).toHaveLength(1);
+    expect(starSelects('db.prepare("select distinct * from x")')).toHaveLength(1);
+    expect(starSelects('// queries never SELECT * here\n/** nor SELECT * here */\nconst u = "https://x/y";')).toEqual([]);
+  });
+
+  it('every ccd/history/*.mjs names its columns', () => {
+    const dir = t17path.join(REPO, 'ccd', 'history');
+    const files = t17fs.readdirSync(dir).filter((f) => f.endsWith('.mjs')).sort();
+    expect(files).toEqual(expect.arrayContaining(['cli.mjs', 'derive.mjs', 'lib.mjs', 'recall.mjs', 'regex-worker.mjs', 'store.mjs', 'sweep.mjs']));
+    for (const f of files) expect(starSelects(t17fs.readFileSync(t17path.join(dir, f), 'utf8')), f).toEqual([]);
   });
 });

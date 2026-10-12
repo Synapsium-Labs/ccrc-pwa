@@ -38,6 +38,7 @@ import { basename as xbasename } from 'node:path';
  * @property {import('node:sqlite').DatabaseSync} db   the read-only handle (openReader); cli.mjs closes it
  * @property {number} version                          the store's user_version
  * @property {object} schema                           SCHEMA_ADDED (an in-process test injects a seam)
+ * @property {Readonly<Record<string, readonly string[]>>} [verbTables]  VERB_TABLES; only an in-process test injects a seam (DM44)
  * @property {string | null} storeId
  * @property {number} nowMs
  * @property {string} home
@@ -224,6 +225,8 @@ function jsonPrefixCount(rc, head, items, total, nextFor) {
  *  the scope (minimum 6), its kind, its time range and its gist in an envelope. N counts every node in scope,
  *  so `shown K of N` is honest when the depth or the cap hides some. */
 export function runTree(rc, a) {
+  const pending = pendingFor(rc, 'tree');
+  if (pending !== null) return pending;
   const db = rc.db;
   const head = scopeHeader(rc);
   const cols = selectColumns(rc.version, 'nodes', NODE_COLS, rc.schema);
@@ -677,6 +680,8 @@ function renderHits(rc, pool, termsOf, a, page, deps = {}) {
  *  5. the ranked pool and the true count;
  *  6. one grouped, capped page. */
 export function runGrep(rc, a, deps = {}) {
+  const pending = pendingFor(rc, 'grep');
+  if (pending !== null) return pending;
   if (a.regex !== null) return runRegex(rc, a, deps);
   const raw = a.words.join(' ');
   const syntax = regexSyntaxIn(raw);
@@ -743,6 +748,8 @@ function childFailed(detail) {
 
 /** `grep --regex <pattern>`. `deps.budgetMs` and `deps.spawn` are in-process test seams (history-test-seams-not-env). */
 export function runRegex(rc, a, deps = {}) {
+  const pending = pendingFor(rc, 'grep');
+  if (pending !== null) return pending;
   const guard = guardRegex(a.regex);
   if (!guard.ok) {
     return refusal('regex-refused', `--regex refused (${guard.why}): keep the pattern to at most ${REGEX_MAX_LEN} characters, valid, and with no repeated group over a variable quantifier or an alternation`);
@@ -989,6 +996,8 @@ function describePageEnd(text, off, room, json, show) {
 
 /** `describe <id | prefix | pasted line>` (§8.4). */
 export function runDescribe(rc, a, deps = {}) {
+  const pending = pendingFor(rc, 'describe');
+  if (pending !== null) return pending;
   const budget = (deps.cap ?? OUTPUT_CAP) - FRAME_RESERVE;
   const ex = extractNodeId(a.target);
   if (!ex.ok) return refusal('bad-args', hintLine(redactField(`${ex.error}${ex.hint ? ` ${ex.hint}` : ''}`, rc.pairIdx)));
@@ -1457,6 +1466,8 @@ function expandRenderItem(rc, s, it, pos, total, o) {
 
 /** `expand` over a ReadContext. Returns a VerbResult whose `shown` is the position of the last item reached. */
 export function runExpand(rc, a) {
+  const pending = pendingFor(rc, 'expand');
+  if (pending !== null) return pending;
   const s = expandStmts(rc);
   const decoded = a.cursor === null ? null : xlib.decodeCursor(a.cursor, 'expand');
   if (a.cursor !== null && decoded === null) return refusal('bad-args', 'that --cursor is not one expand printed');
@@ -1498,4 +1509,18 @@ export function expandVerb(rc, parsed) {
   const p = xlib.expandArgsOf(parsed);
   if (!p.ok) return refusal('bad-args', EXPAND_TARGET_HINT);
   return runExpand(rc, { ...p.args, json: parsed.opts.json === true });
+}
+
+// ── version-aware reads (W1-B2 Task 17) ─────────────────────────────────────────────────────────────────
+// Spec §6.11 "The CLI keeps answering" (slug history-cli-reads-store-version): every select above names its
+// columns through selectColumns (with its alias argument, for a join) at the STORE's version, so a column an
+// older store lacks reads as NULL. A verb that needs a TABLE the store lacks answers exit 5 migration-pending
+// here, before any statement is prepared — never exit 1, never "no such table".
+
+/** null when `verb` can answer a store at rc.version; otherwise the migration-pending VerbResult. rc.schema and
+ *  rc.verbTables default to the build's own; only a test sets them (the DM44 seam). */
+export function pendingFor(rc, verb) {
+  const missing = xlib.missingTablesAt(rc.version, verb, rc.schema ?? xlib.SCHEMA_ADDED, rc.verbTables ?? xlib.VERB_TABLES);
+  if (missing.length === 0) return null;
+  return refusal('migration-pending', `this store is at schema v${rc.version} and has no ${missing.join(', ')}: the next scheduled tick migrates it, or the operator runs ${xlib.HISTORY_CMD} doctor --migrate`);
 }

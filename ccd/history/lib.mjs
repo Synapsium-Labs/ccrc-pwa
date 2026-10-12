@@ -6839,3 +6839,76 @@ export function exploreOutline(text, kind, fileName, idx) {
   if (t.length > EXPLORE_READ_MAX) return exploreCountsOnePass(t);
   return explore(redactDisplayWindow(t, 0, t.length, idx), kind, fileName);
 }
+
+// ── version-aware reads (W1-B2 Task 17) ─────────────────────────────────────────────────────────────────
+// Spec §6.11 "The CLI keeps answering" (slug history-cli-reads-store-version): the CLI reads user_version first
+// and builds its named-column queries for THAT version from SCHEMA_ADDED. A column the store lacks is selected
+// as NULL (Task 10's selectColumns, with its alias argument for a join), and a verb that cannot answer without a
+// newer table answers exit 5 migration-pending. Migrations are additive only, so an older store's columns are
+// always a subset (DM44); schemaAdditive is the test that refuses one that is not.
+
+/** What every read verb reads before its own statements: the scope (sessions, epochs, transcripts and the entries
+ *  that say a transcript holds rows), the header (ingest_files' end-of-file marks, derivation_state's recover step),
+ *  and cli.mjs's context (the store id in meta, the redaction index's redact_hashes). Measured at the base by
+ *  reading recall.mjs's familiesOf, transcriptsOf and scopeHeader and cli.mjs's readContext. */
+const READ_CONTEXT_TABLES = Object.freeze(['meta', 'redact_hashes', 'sessions', 'epochs', 'transcripts', 'entries', 'ingest_files', 'derivation_state']);
+
+/** Every table each read verb's path reads (recall.mjs, the store.mjs functions it calls, and grep --regex's
+ *  child, regex-worker.mjs): the shared context above plus the verb's own statements. All are v1 tables today;
+ *  a version that adds a table a verb needs adds it here, in the same PR. blobs_fts is a virtual table the sweep
+ *  creates, not a SCHEMA_ADDED one: grep's index gate answers its absence as fts-pending. */
+export const VERB_TABLES = Object.freeze({
+  grep: Object.freeze([...READ_CONTEXT_TABLES, 'blobs', 'entry_variants', 'sidecars', 'nodes', 'node_sources', 'node_children']),
+  describe: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_refs', 'node_sources', 'node_children', 'blobs', 'boundaries', 'memberships']),
+  expand: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children', 'node_sources', 'blobs', 'entry_variants', 'sidecars', 'memberships']),
+  tree: Object.freeze([...READ_CONTEXT_TABLES, 'nodes', 'node_children']),
+});
+
+/** The tables a store at `version` has: every SCHEMA_ADDED entry at or below it. A newer store has all this
+ *  build knows. */
+function tablesThrough(version, schema) {
+  const have = new Set();
+  for (const [v, entry] of Object.entries(schema)) if (Number(v) <= version) for (const t of Object.keys(entry.tables)) have.add(t);
+  return have;
+}
+
+/** The tables `verb` needs that a store at `version` lacks; [] when it can answer. */
+export function missingTablesAt(version, verb, schema = SCHEMA_ADDED, verbTables = VERB_TABLES) {
+  if (!Object.hasOwn(verbTables, verb)) throw new TypeError(`missingTablesAt: ${JSON.stringify(verb)} is not a read verb`);
+  const have = tablesThrough(version, schema);
+  return verbTables[verb].filter((t) => !have.has(t));
+}
+
+/** Whether a SCHEMA_ADDED is additive only (slug history-schema-additive-measured, NEW). Its shape: versions
+ *  1..N, each exactly {heavy, tables}, no column listed twice. Given `measured` (B1's schemaOf after each
+ *  migration, by version), each version must build exactly what SCHEMA_ADDED declares up to it: a rename or a
+ *  drop shows as a column `lost`, a column nothing declared as `undeclared`. */
+export function schemaAdditive(schema, measured) {
+  const lost = [];
+  const versions = Object.keys(schema).map(Number).sort((a, b) => a - b);
+  if (versions.some((v, i) => v !== i + 1)) lost.push('versions are not 1..N');
+  const cum = new Map();
+  const cumAt = new Map();
+  for (const v of versions) {
+    const entry = schema[v];
+    const keys = Object.keys(entry).sort();
+    if (keys.join(',') !== 'heavy,tables' || typeof entry.heavy !== 'boolean') lost.push(`v${v} has keys ${keys.join(',')}`);
+    for (const [t, cols] of Object.entries(entry.tables ?? {})) {
+      const have = cum.get(t) ?? new Set();
+      for (const c of cols) {
+        if (have.has(c)) lost.push(`${t}.${c} re-listed at v${v}`);
+        have.add(c);
+      }
+      cum.set(t, have);
+    }
+    cumAt.set(v, new Map([...cum].map(([t, set]) => [t, new Set(set)])));
+  }
+  for (const [vs, tables] of Object.entries(measured ?? {})) {
+    const v = Number(vs);
+    const want = cumAt.get(v);
+    if (want === undefined) { lost.push(`v${v} measured but not declared`); continue; }
+    for (const [t, cols] of want) for (const c of cols) if (!(tables[t] ?? []).includes(c)) lost.push(`${t}.${c} lost at v${v}`);
+    for (const [t, cols] of Object.entries(tables)) for (const c of cols) if (!(want.get(t)?.has(c) ?? false)) lost.push(`${t}.${c} undeclared at v${v}`);
+  }
+  return lost.length === 0 ? { ok: true } : { ok: false, lost };
+}
