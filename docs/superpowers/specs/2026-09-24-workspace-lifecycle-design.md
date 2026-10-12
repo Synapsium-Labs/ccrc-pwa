@@ -886,10 +886,15 @@ collects them.
   written) and step six (the record written), seeds the older record, which can hold less than the process did, and so
   on its first pass the lane flags, at its anchor instant, every claimant of the population whose durable anchor began
   after that record row was written (no row: every anchor), beside every recorded member, instant and flag (D-4826).
-  The cost is safe over-holding: after a restart two crashed claimants whose anchors began after the last record are
-  held, flagged, until evidence releases one, though they never clustered. The record is written with the write-time
-  clock, so an anchor of the pass that landed it is not flagged, and the lane records before it acts. The limit: a server
-  clock that steps backwards across a restart can make a later anchor read earlier than the record.
+  A pass that starts an anchor (a first crash, a gap re-anchor or a fresh episode) also writes the held record when the
+  set is unchanged, a checkpoint whose write time moves past every anchor that pass started, so a restart flags only the
+  anchors started after the last LANDED record: those of a pass that died before its write, or whose write failed. The
+  cost is one extra observation row per pass that starts an anchor and none on a quiet pass, and, after such a loss, safe
+  over-holding: two crashed claimants whose anchors began after the last landed record are held, flagged, until evidence
+  releases one, though they never clustered. The record is written with the write-time clock, so an anchor of the pass
+  that landed it is not flagged, and the lane records before it acts; a failed checkpoint of an unchanged set withholds
+  no act. The limit: a server clock that steps backwards across a restart can make a later anchor read earlier than the
+  record.
   Anchors and releases are
   pass-sampled: an anchor sits on its lane's own pass, up to one cadence after the crash, evidence that releases a hold is
   seen only at a pass, and a restart moves the pass grid as any start does, so a pair near the ten-minute window's edge
@@ -975,8 +980,9 @@ collects them.
   stuck claimant while the restarted one ends it, the first keeps it as an extra entry that can cluster with a new
   crash; it still re-audits, waits its durable hour, re-measures before and after the act, and is blocked by the durable
   breaker hold. (5) A later life that leaves neither a supervisor heartbeat nor a journaled successful spawn is not
-  seen, and in remote mode a fleet clock running behind the server's can hide one. (6) The lost-write recovery
-  over-holds, and a server clock that steps backwards across a restart can make a later anchor read earlier than the
+  seen, and in remote mode a fleet clock running behind the server's can hide one. (6) After a lost record write the
+  recovery over-holds (two crashed claimants whose anchors began after the last landed record are held until evidence),
+  and a server clock that steps backwards across a restart can make a later anchor read earlier than the
   record. Each of (1), (2), (5) and (6) only delays an act or holds more; (3) and (4) can bring an act sooner; none
   bypasses the lane's own fresh audit, hour, journal, re-measure or breaker decision. The one action to take before a
   rollback is the next item's.

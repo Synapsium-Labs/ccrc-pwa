@@ -736,8 +736,9 @@ describe('the breaker’s hold survives a RESTART (review 381, F1)', () => {
     expect([ra, rb].map(f.stateOf), 'neither is ended: the fallback held both, at one instant').toEqual(['working', 'working']);
     expect(f.calls, 'nothing composed on the box').toEqual([]);
     const fresh = heldRows(f, ra).filter((e) => !(e.detail ?? '').endsWith('@soon'));
-    expect(fresh, 'ONE readable record, not rewritten each pass').toHaveLength(1);
-    expect(fresh[0]!.detail, 'exactly A and B (C lives), each flagged, each at the instants it carries (its anchor, and the pass\'s)').toMatch(new RegExp(`^dead-coordinator-breaker-held:${A}@[0-9+]+\\*,${B}@[0-9+]+\\*$`));
+    expect(fresh.length, 'checkpoints on the passes that started an anchor, then the fallback\'s record — never one per pass').toBeLessThanOrEqual(5);
+    const rowsBefore = fresh.length;
+    expect(fresh.at(-1)!.detail, 'exactly A and B (C lives), each flagged, each at the instants it carries (its anchor, and the pass\'s)').toMatch(new RegExp(`^dead-coordinator-breaker-held:${A}@[0-9+]+\\*,${B}@[0-9+]+\\*$`));
     expect(f.coord.deadCoordinatorBreakerHeldLatest()).toMatchObject({ ok: true, runId: ra, held: [{ id: A }, { id: B }] });
     const warned = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('record of its hold'));
     expect(warned, 'ONE warn line for the bad row').toHaveLength(1);
@@ -749,7 +750,7 @@ describe('the breaker’s hold survives a RESTART (review 381, F1)', () => {
     await walk(f, HOUR);
     expect([ra, rb].map(f.stateOf)).toEqual(['working', 'working']);
     expect(warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('record of its hold')), 'seeded from the record, no warn').toEqual([]);
-    expect(heldRows(f, ra).filter((e) => !(e.detail ?? '').endsWith('@soon')), 'and nothing rewritten').toHaveLength(1);
+    expect(heldRows(f, ra).filter((e) => !(e.detail ?? '').endsWith('@soon')), 'and nothing rewritten').toHaveLength(rowsBefore);
     expect(unreadableRows(f)).toHaveLength(1);
   });
 
@@ -1180,23 +1181,64 @@ describe('a restart after a lost held-set write holds what it cannot prove it di
     expect(latest, 'B was anchored after the pass began').toBeGreaterThan(T0);
     expect(row.at, 'the record is no earlier than any anchor of its pass').toBeGreaterThanOrEqual(latest);
   });
-  it('THE COST, said out loud: after a restart two crashed claimants whose anchors began after the last record are held, flagged, until evidence — though they never clustered', async () => {
+  /** A and B crash on separate passes, 30 minutes apart (they never cluster); the lane's passes every nine minutes. */
+  const apart = async (failWrites: boolean) => {
     const f = await fixture();
     f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     f.plant(A); f.plant(B);
     f.live.add(B);
     const ra = f.working(A); const rb = f.working(B);
+    let m = 0;
+    const to = async (target: number): Promise<void> => {
+      while (m < target) { const d = Math.min(9, target - m); f.advance(d * 60_000); m += d; await f.pass(); }
+    };
+    const spy = failWrites ? vi.spyOn(f.coord, 'recordDeadCoordinatorBreakerHeld').mockImplementation(() => { throw new Error('store is broken'); }) : null;
     await f.pass();                                  // A crashed, anchored at 0; B alive
-    f.advance(30 * 60_000); f.live.delete(B); await f.pass();   // B crashes 30 minutes later: no cluster, no record
+    await to(27);
+    f.live.delete(B);                                // B crashes at 27, anchored at the pass at 36
+    await to(45);
+    spy?.mockRestore();
     f.restart();
-    await walk(f, 3 * HOUR);
+    await to(90);
+    return { f, ra, rb, held: f.attention().filter(([k]) => k === 'breaker') };
+  };
+  it('A QUIET SYSTEM holds nothing after a restart: a pass that starts an anchor checkpoints the unchanged record, so two crashed claimants that never clustered are not held, and the due one ends on schedule (the checkpoint)', async () => {
+    const { f, ra, rb, held } = await apart(false);
+    expect(held, 'no breaker').toEqual([]);
+    expect(f.stateOf(ra), 'A: dead since 0, due at the pass at 63 (two passes after the restart)').toBe('failed');
+    expect(f.stateOf(rb), 'B: not before its own hour (36 + 60)').toBe('working');
+    // one observation row per pass that STARTED an anchor, none on a quiet pass
+    const rows = f.coord.runEvents(ra).filter((e) => (e.detail ?? '').startsWith('dead-coordinator-breaker-held:'));
+    expect(rows.length, 'the first crash and B\'s crash each checkpointed, and nothing else').toBeLessThanOrEqual(3);
+  });
+  it('...a failed checkpoint withholds nothing (the set did not change), and a restart then flags only the anchors newer than the last LANDED record', async () => {
+    // The same world with every write failing: no record ever lands, so after the restart both anchors are newer than it,
+    // flagged, and held until evidence — the cost that remains, said out loud.
+    const { f, ra, rb, held } = await apart(true);
     expect([ra, rb].map(f.stateOf), 'held until evidence, not ended').toEqual(['working', 'working']);
-    expect(f.attention().filter(([k]) => k === 'breaker')).toEqual([['breaker', [A, B]]]);
+    expect(held).toEqual([['breaker', [A, B]]]);
     f.live.add(B);                                   // B comes back: evidence
     f.next(); await f.pass();
     f.next(); await f.pass();
     expect(f.stateOf(ra), 'released by evidence on B, A alone ends').toBe('failed');
+  });
+  it('R3\'s act gate is unchanged for an UNCHANGED set: a pass that starts an anchor whose checkpoint write fails still acts on the claimant that is due', async () => {
+    const f = await fixture();
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    f.plant(A); f.plant(B);
+    f.live.add(B);
+    const ra = f.working(A); f.working(B);
+    let m = 0;
+    const to = async (target: number): Promise<void> => {
+      while (m < target) { const d = Math.min(9, target - m); f.advance(d * 60_000); m += d; await f.pass(); }
+    };
+    await f.pass(); await to(54);                    // A crashed since 0, due at the pass at 63
+    f.live.delete(B);                                // B crashes at 54: its anchor starts at the pass at 63
+    vi.spyOn(f.coord, 'recordDeadCoordinatorBreakerHeld').mockImplementation(() => { throw new Error('store is broken'); });
+    await to(63);
+    expect(f.stateOf(ra), 'the set did not change, so the failed checkpoint withholds nothing').toBe('failed');
   });
 });
 

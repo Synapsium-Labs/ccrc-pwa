@@ -4288,9 +4288,12 @@ export class FleetWatcher {
         // hold that was never recorded has a member whose anchor began after the record (a claimant doubted at the record's
         // pass re-anchors later, and an anchor leaves with its claimant). The record is written with the write-time clock,
         // never before a same-pass anchor, so an anchor of the pass that landed it is not flagged. This also covers a write
-        // that kept failing before a restart: its anchors began after the last LANDED record. The cost is safe over-holding:
-        // after a restart two crashed claimants whose anchors began after the last record are held, flagged, until evidence
-        // releases one (alive, stopped, deliberate, left the population), even if they were never a cluster. The limits: a
+        // that kept failing before a restart: its anchors began after the last LANDED record. A pass that STARTS an anchor also
+        // writes the record when the set is unchanged (the checkpoint, step six), so its write time moves past that pass's
+        // anchors and a restart flags only the anchors of a pass that died before its write or whose write failed — not every
+        // crashed claimant of a quiet system. The cost after such a loss is safe over-holding: two crashed claimants whose
+        // anchors began after the last LANDED record are held, flagged, until evidence releases one (alive, stopped,
+        // deliberate, left the population), even if they were never a cluster. The limits: a
         // server clock that steps BACKWARDS across a restart can make a later anchor read earlier than the record, and the
         // comparison is by the lane's own clock on both sides. A readable but unprovable record time reads as no row.
         const wrote = coord.deadCoordinatorBreakerHeldWrittenAt();
@@ -4354,6 +4357,9 @@ export class FleetWatcher {
     const unmeasurable: string[] = [];
     /** Claimants this pass gave EVIDENCE about — alive, stopped, a deliberate act: the breaker releases them. */
     const released = new Set<string>();
+    /** A pass that STARTED an anchor (a first crash, a gap re-anchor, a fresh episode) writes the held record even when the
+     *  set is unchanged — a CHECKPOINT whose write time moves past every anchor this pass started (fix round 4, D-4826). */
+    let anchorStarted = false;
     for (const id of ids) {
       const c = deadCoordinatorCrash(measured.get(id)!, journalOf(id));
       if (c.kind === 'unmeasurable') unmeasurable.push(id);
@@ -4370,6 +4376,7 @@ export class FleetWatcher {
           const fresh = deadCoordinatorNewEpisode(prev, supervisedAt, at, spawnedAt);
           const a = deadAnchorNext(fresh ? null : prev, at);
           coord.setDeadAnchor(id, a);
+          if (prev === null || a.firstDeadAt !== prev.firstDeadAt) anchorStarted = true;
           crashed.push({ id, firstDeadAt: a.firstDeadAt, since: deadCoordinatorSince(a, supervisedAt, at), cause: c.cause });
         } else if (anchors.has(id)) {
           coord.deleteDeadAnchor(id);
@@ -4413,7 +4420,7 @@ export class FleetWatcher {
     const before = this.deadCoordinatorBreakerHeld;
     this.deadCoordinatorBreakerHeld = breaker.tripped ? breaker.members : [];
     // R3: the act waits for a pass whose durable record matches the hold it just computed.
-    const recorded = this.recordDeadCoordinatorBreakerHeldChange(coord, before, ids, now);
+    const recorded = this.recordDeadCoordinatorBreakerHeldChange(coord, before, ids, anchorStarted);
     if (unreadable !== null) this.noteDeadCoordinatorRecordUnreadable(coord, unreadable, this.deadCoordinatorBreakerHeld.map((m) => m.id), breaker.tripped, ids);
     const key = deadCoordinatorBreakerKey(breaker);
     if (breaker.tripped && key !== this.deadCoordinatorBreakerRecorded) {
@@ -4445,16 +4452,22 @@ export class FleetWatcher {
    *  last record sits on, else a run any claimant in the population (the members `before` the change first) coordinates.
    *  Answers whether the durable record NOW matches the held set (review 382, R3): `true` when the set did not change
    *  (its key is what the record carries) or the write landed; `false` for a write that cannot land (no carrier, a throw,
-   *  a set with no spelling). The caller composes NO act on a `false` pass, so the record never lags an act. A restart that
+   *  a set with no spelling). The caller composes NO act on a `false` pass, so the record never lags an act. A pass that
+   *  STARTED an anchor (`checkpoint`) writes the record even when the set is unchanged, so the record's write time moves
+   *  past every anchor that pass started: a restart then flags only the anchors of a pass that died before its write or whose
+   *  write failed, not every crashed claimant of a quiet system. R3's gate is unchanged for an unchanged set: a failed
+   *  checkpoint returns `true`, since the durable record still carries the hold and a restart flags the pass's anchors. The
+   *  cost is one extra observation row per pass that starts an anchor, and none on a quiet pass. A restart that
    *  lands while writes keep failing seeds the older record, which can hold less than the process did: the first pass then
    *  flags every claimant whose durable anchor began after that record row (D-4826). A `false` is warned, leaves the key unchanged so the next pass tries again, and
    *  leaves the in-memory hold standing for this process. */
   private recordDeadCoordinatorBreakerHeldChange(
-    coord: CoordStore, before: readonly DeadCoordinatorBreakerMember[], ids: readonly string[], now: number,
+    coord: CoordStore, before: readonly DeadCoordinatorBreakerMember[], ids: readonly string[], checkpoint: boolean,
   ): boolean {
     const held = this.deadCoordinatorBreakerHeld;
     const key = deadCoordinatorBreakerHeldKey(held);
-    if (key === this.deadCoordinatorBreakerHeldKey) return true;
+    const unchanged = key === this.deadCoordinatorBreakerHeldKey;
+    if (unchanged && !checkpoint) return true;
     try {
       const candidates: number[] = [];
       if (held.length === 0 && this.deadCoordinatorBreakerHeldRunId !== null) candidates.push(this.deadCoordinatorBreakerHeldRunId);
@@ -4473,11 +4486,18 @@ export class FleetWatcher {
         }
         if (w.why === 'unencodable') break;
       }
-      console.warn('ccrc-server: sweepDeadCoordinators could not record the breaker\'s held set — no act this pass; it stands in memory until a pass records it');
+      console.warn(unchanged
+        ? 'ccrc-server: sweepDeadCoordinators could not checkpoint the breaker\'s held set — the set did not change, so the act stands; a restart before the next checkpoint flags this pass\'s anchors'
+        : 'ccrc-server: sweepDeadCoordinators could not record the breaker\'s held set — no act this pass; it stands in memory until a pass records it');
     } catch (err) {
-      console.warn(`ccrc-server: sweepDeadCoordinators could not record the breaker's held set (${err instanceof Error ? err.message : String(err)}) — no act this pass`);
+      const why = err instanceof Error ? err.message : String(err);
+      console.warn(unchanged
+        ? `ccrc-server: sweepDeadCoordinators could not checkpoint the breaker's held set (${why}) — the set did not change, so the act stands; a restart before the next checkpoint flags this pass's anchors`
+        : `ccrc-server: sweepDeadCoordinators could not record the breaker's held set (${why}) — no act this pass`);
     }
-    return false;
+    // A CHANGED set that did not land withholds the act (R3); an UNCHANGED one needs no gate — the durable record still
+    // carries the hold, and a failed checkpoint only leaves this pass's anchors newer than it, which a restart flags.
+    return unchanged;
   }
 
   /** The words for a record the lane could not read (review 382, R2): ONE warn line and ONE feed row, naming the row and

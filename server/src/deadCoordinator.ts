@@ -413,8 +413,10 @@ export interface DeadCoordinatorBreakerMember {
  *  not claim to cover them, nor claim that no other corner exists. A process that dies between step five (a fresh anchor
  *  written) and step six (the record written), or whose write kept failing, seeds the older record; the lane's first pass
  *  therefore flags every claimant whose durable anchor began after that record row was written (D-4826), so the holds it
- *  formed and lost are held again, flagged, at the cost of holding two crashed claimants whose anchors merely postdate the
- *  record until evidence releases one. A server clock that steps backwards across a restart can make a later anchor read
+ *  formed and lost are held again, flagged. A pass that starts an anchor also writes the record when the set is unchanged
+ *  (a checkpoint, so the write time moves past that pass's anchors), which leaves only the anchors of a pass that died before
+ *  its write, or whose write failed, newer than the record: the cost is holding two such crashed claimants, though they never
+ *  clustered, until evidence releases one. A server clock that steps backwards across a restart can make a later anchor read
  *  earlier than the record. The all-unmeasurable arm diverges as measured: R's extra claimant can be measured while all of
  *  U's are not, so R does not trip there, but every other claimant is as unmeasured in R as in U, so R can act there only
  *  on the claimant U already ended. The cost of the accumulation is more holding: a member held at an old instant that
