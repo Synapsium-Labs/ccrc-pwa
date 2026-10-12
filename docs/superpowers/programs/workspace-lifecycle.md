@@ -1634,6 +1634,53 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - **Ruling:** the "second lander merges main" terms of 4227 and 4296 are met by measurement, and neither is a
     clause-16 trigger. Plain-ridge absorbs main again only on its clause 16: a conflict, or a required check red while
     main passes. The 4288 merge (`404398ce4`) remains the second-lander merge after #354.
+- **2026-10-12 20:38 — fix round 4 done at `6f1942bbc` (plain-ridge's 4404); run 358 is at `awaiting-review`; review run
+  401 opened, its dispatch waiting on the fleet cap.**
+  - **Re-measured:** the branch, remote ref, PR #351 head and handoff commit are all
+    `6f1942bbceef874d7b43d310d0cb706e9259b112`. The PR is OPEN and MERGEABLE, with CI pending at dispatch. Merge-tree
+    against main `2d1835188` is clean; no clause-16 trigger applies, so main was not absorbed. The worker's tree is
+    clean.
+  - **The claim (4857, the operator's typed table):**
+    - Migration 19 adds `dead_coordinator_breaker_state`, a single-row table holding a generation, the clean or dirty
+      state, the exact snapshot and its write time.
+    - The dirty mark lands alone, before any anchor change. One BEGIN IMMEDIATE transaction then carries the snapshot,
+      the anchor upserts, the staged deletes, the record and the clean state. The lane acts only on a landed commit.
+    - Claimant-id encoding is total: a lone surrogate is written `%uXXXX`.
+    - 4266's class is reported CLOSED, not accepted.
+    - The worker's internal Opus review found that a failed mark dropped pending changes. That is now fixed: a failed
+      mark keeps the changes pending and moves the hold, as a failed commit does, and a conservative seed continues
+      no anchor. The re-review APPROVED the result.
+  - **The 4288 items** are in: the merge `404398ce4`, the crumb sentence, and EXPIRE-V1's comment plus restamp.
+  - **Measured by the worker:** 37 named suites, each run alone, every rc 0; tsc green for server and PWA. Mutation
+    rows: 43 of 43 red, each restored. Its suite line stays `red, shallow`, carried from the first full run. Review 401
+    runs the full server suite once.
+  - **Residual (7) needs a ruling and is NOT ruled yet.** A restart after a dirty mark that could not be written, and
+    before a later mark lands, seeds the last landed clean state. A trip, doubt or release seen since is lost, so the
+    restarted lane can end a claimant at its old hour. Two conditions are both required:
+    - a failed write;
+    - a restart whose first crashed pass falls within ten minutes of the claimant's last committed crashed instant.
+  - **The two readings of (7):**
+    - The worker read it as 4286 semantics 7's permitted "old complete state".
+    - Its re-reviewer disagreed, citing the operator's rejection of an accepted F1 residual.
+    - The only closure offered, conservative-on-every-start, restarts every crashed claimant's hour on every start. It
+      also holds the lane flagged while two or more claimants are crashed.
+  - **What review 401 must answer before the ruling:**
+    - Reproduce (7) and bound it.
+    - Classify it, with evidence: the old-complete state plus G2's in-memory class (accepted at 02:20), or the F1/4266
+      class the operator ruled must close.
+    - Measure conservative-on-every-start's cost.
+    - Say whether a narrower closure exists, such as a state sealed only by a graceful, nothing-pending shutdown.
+  - **Who rules:** if the review places (7) inside an existing ruling, I rule it. If it is a new tradeoff, it goes to the
+    operator. Until then (7) is an open item, and both lanes stay SHADOWED.
+  - **Review run 401** carries the full held-out panel. Its 7.4 KB brief covers:
+    - 4266's trace and the crash points;
+    - 4286's semantics 1–7, encoding, migration 19 and the rollback words;
+    - (7);
+    - 4824–4827 and the 4288 items;
+    - words, numbers and scope;
+    - the full suite once, every mutation row plus 4286's missing rows, and PR CI.
+  - **Dispatch:** refused `cap-concurrency` (7/7) at 20:38. A waiter retries every five minutes. Plain-ridge was told
+    to stay idle (4406).
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
