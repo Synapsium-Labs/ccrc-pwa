@@ -10788,10 +10788,145 @@ Expected: `<n> rows; 0 not exactly once`, `<n>` being 171 plus the new ids Step 
 
 Close the record: fill every `outcome` and `rows`, add a last line `Findings: raised <n>, survived <m>, fixed <f>, carried <c>, not a defect <d>, asked <a>, ruled departures <r>. Commits: <list of shas>. Panel tip <TIP>; fix-wave tip $(git rev-parse HEAD).` (`survived` = the findings not ruled NOT A DEFECT), and copy `<SCRATCH>/review` and every Step 5 row measurement into `.superpowers/sdd/2026-10-09-native-docs-reader-w4-pwa-foundation/task-11-review/`. Task 12's results cite the record's last line, its Carried list takes every CARRIED line, and an unanswered ask is listed there too. No push and no pull request here: Task 12 is the close, and its results commit must be the tip.
 
-**Mutation rows this task contributes** (none until a Step 5 fix adds one: this task carries no code of its own. Each row a fix adds is measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at the fix's commit, then `git -C <copy> init -q`, `pwa/node_modules` and `server/node_modules` linked in; `pkg` is the package the `tests` run in; `old` is unique in `file` at that commit; `red` is the measured summary and the cases that went red. A fix that re-spells an earlier row's anchor repeats that row here with the same id and the new `old`, and says so above this block; Task 12's extractor keeps the last occurrence of an id). Rows that Step 5 adds are appended to this array by the fix that adds them.
+**Mutation rows this task contributes** (none until a Step 5 fix adds one: this task carries no code of its own. Each row a fix adds is measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at the fix's commit, then `git -C <copy> init -q`, `pwa/node_modules` and `server/node_modules` linked in; `pkg` is the package the `tests` run in; `old` is unique in `file` at that commit; `red` is the measured summary and the cases that went red. A fix that re-spells an earlier row's anchor repeats that row here with the same id and the new `old`, and says so above this block; Task 12's extractor keeps the last occurrence of an id). Rows that Step 5 adds are appended to this array by the fix that adds them. Rows from the review rounds before this task, recorded here so the extractor reads them: W4-X1-M1 to W4-X1-M8 (the pre-scan hardening), W4-T6-M27 and W4-T6-M28 (the chat image predicate and the note guard), W4-X2-M1 (docs-sw's linear extraction), and W4-T3-M9 re-anchored on the hardened skip loop (its earlier text no longer exists).
 
 ```json
-[]
+[
+ {
+  "id": "W4-X1-M1",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownGuard.ts",
+  "old": "      const w = blankWidth(line, i, col);\n      if (w === 0 || indent + w > 3) break;\n",
+  "new": "      const w = line.charCodeAt(i) === 0x20 ? 1 : 0;\n      if (w === 0 || indent + w > 3) break;\n",
+  "tests": [
+   "test/markdown-guard.test.ts"
+  ],
+  "red": "pwa markdown-guard: 1 failed | 56 passed (57) — 'a tab after a marker is part of its indentation' (the '> <tab>' chain: a tab in the leading indentation is not skipped)"
+ },
+ {
+  "id": "W4-X1-M2",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownGuard.ts",
+  "old": "      const w = blankWidth(line, i, col);\n      if (w > 0) {\n",
+  "new": "      const w = line.charCodeAt(i) === 0x20 ? 1 : 0;\n      if (w > 0) {\n",
+  "tests": [
+   "test/markdown-guard.test.ts"
+  ],
+  "red": "pwa markdown-guard: 1 failed | 56 passed (57) — 'a tab after a marker is part of its indentation' (a tab right after '>' is not treated as the optional space; the leading skip still covers the bare '>' tab input, so this row reds on the carry-over cases only)"
+ },
+ {
+  "id": "W4-X1-M3",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownGuard.ts",
+  "old": "        carried = w - 1;\n",
+  "new": "        carried = 0;\n",
+  "tests": [
+   "test/markdown-guard.test.ts"
+  ],
+  "red": "pwa markdown-guard: 1 failed | 56 passed (57) — 'a tab after a marker is part of its indentation' (the '>' tab then two spaces case: the tab's leftover columns are not carried)"
+ },
+ {
+  "id": "W4-X1-M4",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownGuard.ts",
+  "old": "    if (cols > 4) return depth;\n",
+  "new": "",
+  "tests": [
+   "test/markdown-guard.test.ts"
+  ],
+  "red": "pwa markdown-guard: 1 failed | 56 passed (57) — 'a tab after a list marker advances to the next multiple of 4, and 5 or more columns of padding is code' (the 5-space and the tab-tab control chains)"
+ },
+ {
+  "id": "W4-X1-M5",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownGuard.ts",
+  "old": "c === 0x09 ? 4 - (col % 4) : 0;",
+  "new": "c === 0x09 ? 4 : 0;",
+  "tests": [
+   "test/markdown-guard.test.ts"
+  ],
+  "red": "pwa markdown-guard: 1 failed | 56 passed (57) — 'a tab after a marker is part of its indentation' (a tab always 4 columns)"
+ },
+ {
+  "id": "W4-X1-M6",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownGuard.ts",
+  "old": "c === 0x09 ? 4 - (col % 4) : 0;",
+  "new": "c === 0x09 ? 1 : 0;",
+  "tests": [
+   "test/markdown-guard.test.ts"
+  ],
+  "red": "pwa markdown-guard: 2 failed | 55 passed (57) — 'a tab after a list marker advances ...' and 'a tab after a marker is part of its indentation' (a tab always 1 column)"
+ },
+ {
+  "id": "W4-X1-M7",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownGuard.ts",
+  "old": "    const depth = containerDepth(line);\n",
+  "new": "    const depth = fence === undefined ? containerDepth(line) : 0;\n",
+  "tests": [
+   "test/markdown-guard.test.ts"
+  ],
+  "red": "pwa markdown-guard: 5 failed | 52 passed (57) — the five 'is refused on its deep line' cases of 'container depth is counted inside fenced blocks' (the review's three (b) inputs, a plain unclosed fence and a tilde fence)"
+ },
+ {
+  "id": "W4-X1-M8",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownGuard.ts",
+  "old": "c === 0x09 ? 4 - (col % 4) : 0;",
+  "new": "0;",
+  "tests": [
+   "test/markdown-guard.test.ts"
+  ],
+  "red": "pwa markdown-guard: 4 failed | 53 passed (57) — \"the list marker - then a tab counts as a container\", \"'>' then a tab, repeated, counts every marker (the review's input (a))\", and the two other tab cases (a tab is no blank at all: the pre-fix behaviour)"
+ },
+ {
+  "id": "W4-T3-M9",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownGuard.ts",
+  "old": "      if (w === 0 || indent + w > 3) break;\n",
+  "new": "      if (w === 0) break;\n",
+  "tests": [
+   "test/markdown-guard.test.ts"
+  ],
+  "red": "pwa markdown-guard: 2 failed | 55 passed (57) — 'skips up to three spaces before a marker, never four' and 'a tab after a marker is part of its indentation' (re-anchored: the 3-column indentation cap now lives on the tab-aware skip loop's break line)"
+ },
+ {
+  "id": "W4-T6-M27",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdown.tsx",
+  "old": "  if (outcome !== null && !pending) return <MsgPlain text={text} note={chatPlainNote(outcome)} />;",
+  "new": "  if (outcome !== null) return <MsgPlain text={text} note={chatPlainNote(outcome)} />;",
+  "tests": [
+   "test/chat-hardening.test.tsx"
+  ],
+  "red": "pwa chat-hardening: 1 failed | 59 passed (60) — 'a non-tree outcome for an older text never puts its note under a newer text that is still parsing' (the old text's timeout note shows under the new text while it parses). Distinct from W4-T6-M12, which drops the note and so is red elsewhere."
+ },
+ {
+  "id": "W4-T6-M28",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdown.tsx",
+  "old": "  if (/^https?:(?![/\\\\]{2})/i.test(src.slice(i))) return true;\n",
+  "new": "",
+  "tests": [
+   "test/chat-hardening.test.tsx"
+  ],
+  "red": "pwa chat-hardening: 7 failed | 53 passed (60) — the M4.C3 rendering case for a same-scheme special-relative 'https:/' source (img and auto-embed) and the six table rows 'https:/api/x', 'HTTPS:/api/x', 'https:\\\\api\\\\x', '  https:/api/x', 'http:/x.png', tab-led 'https:/api/x'"
+ },
+ {
+  "id": "W4-X2-M1",
+  "pkg": "server",
+  "file": "ccd/ccrc-doctor-checks",
+  "old": "  [[ $body =~ $re_open ]] && after=\"${BASH_REMATCH[1]}\"\n",
+  "new": "  after=\"${body#*\"$open\"}\"\n",
+  "tests": [
+   "test/ccrc-doctor.test.ts",
+   "-t",
+   "reads a large worker in linear time"
+  ],
+  "red": "server ccrc-doctor -t 'reads a large worker in linear time': 1 failed | 907 skipped (908) — 'reads a large worker in linear time: a ~300 KB precache manifest BEFORE the one denylist still PASSes within the bound' (the quadratic ${body#*\"$open\"} does not finish in the spawn's 20 s: killed, empty verdict; measured 25.9 s)"
+ }
+]
 ```
 
 ---
