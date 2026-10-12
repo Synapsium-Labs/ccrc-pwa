@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c95dbdbe32ed08f8d043f4ec5a787875d7913a4d6316ba01ff4f89d24a54afb3
+# ccrc:generated 1 sha256=817d7ec2d5b4e9be32a742e4b0c180c72ac8d91fc948abb5e7b58bf7e5f721d2
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -32177,8 +32177,9 @@ _ws_expire_return_gap() { :; }
 # the spawn gate — one ccd inode, one token. (`ws-reclaim` meets an `expire:`
 # breadcrumb only on a row that carries a child marker, which this verb
 # refuses to touch; its fork answers it `reap-in-progress`, unchanged.) The server composes the destructive verb ONLY behind
-# `capSupported(state, 'expire-v1')`, which refuses on no evidence; wave 3b
-# composes it, this wave ships it inert.
+# `capSupported(state, 'expire-v1')`, which refuses on no evidence; its expiry
+# lane (workspace lifecycle wave 3b) composes it already, SHADOWED until the
+# `expire-lane-live` marker exists.
 # ── end archived-workspace expiry ───────────────────────────────────────────── EXPIRE-END ──
 
 # ── temp-root collection: ws-collect (spec 2026-09-22 §5.2, §5.10) ────────────── COLLECT-BEGIN ──
