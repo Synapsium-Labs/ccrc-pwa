@@ -19,7 +19,7 @@ spec's after wave 1.
 | 1 | 1, part A | Server authority and its files; the accept-set check; boot mint and recovery; the claim door and its census set; the `token-sync` agent op; the both-role writer | 320 | #330 | **MERGED** `f82cb9fbc` (PR #330, 2026-10-09 06:44:52 UTC; run 320 done, child reclaim queued; released as v0.0.133 at 06:45:52). The merged tree is byte-identical to `git merge-tree` of the reviewed tip `d9adc2c5a` onto `main` at `d33a566bb` (`4512d88d`). That tip is `fa384df19`, which review 352 read, plus a clean merge of `main`. Every Linux leg was green. Was: **MERGE RULED** 2026-10-09 06:25 UTC by the operator, on scoped review 352 at `fa384df19`: its F1 to F13 and number 4411's wording become part B's first task. The worker merges `main` (`d33a566bb`) and re-runs the shared pins first (mail 4084); the run is back at `working` for that step. Was: **FIX ROUND 1 DONE** 2026-10-08 20:56 UTC at `fa384df19` (mail 4039; seven fix commits on `f3d151e42` and a merge of `main` at `226bb881c`, docs only); numbers 4410 to 4413 spent, bare: defined on the worker branch; reserve 4414 to 4417 unspent. Scoped review run 352 dispatched 20:59 UTC to `ccrc-pwa-amber-river`. Was: **FIX ROUND 1 SENT** 2026-10-08 17:46 UTC (mail 4029, `rulings-run320-fix1.md`) on review 349 at `f3d151e42`: F1 meets class 3, so the bar gives the one round; numbers 4410 to 4413 ruled, reserve 4414 to 4417 (bare until defined on the worker branch). A scoped review follows. Was: **IN REVIEW** 2026-10-08 17:18 UTC: wave-done at `f3d151e42` (mail 4023), re-measured; the bar is in the 17:18 entry; D-4400 to D-4409 spent; review run 349 dispatched 17:20 UTC to `ccrc-pwa-still-meadow` (the held-out panel plus two lenses: security; state machine and live safety). Was: DISPATCHED 2026-10-08 13:26 UTC to `ccrc-pwa-bright-mesa`; plan D-4388 to D-4399, worker reserve 4400 to 4409 |
 | 2 | 1, part B | `ccrc token sync`; doctor `box-token` (PASS or SKIP only); the console card and the rotate route; `deploy.sh` stops shipping the token; notify's tolerance removed; README | 350 | #341 | **LANDED LIVE** 2026-10-10 21:10:39 UTC: the first rotation retired the leaked value with no human act, and the §10.3 proof passed (`probe: 401 refused`). **MERGED** `928f5938b` (PR #341, 2026-10-10 20:39:50 UTC; run 350 done) on the operator's "merge now, pin in row 2a". Its tree is byte-identical to the merge-tree of the reviewed tip `7424434c6` onto `main` at `5c922c866`, which was tested before the merge. Was: **TO THE OPERATOR** 2026-10-09 17:26 UTC: scoped review 365 found R1 and R2, class 11 (pins short of a near variant; code correct; live rotation 29 of 29). Was: **FIX ROUND 1 DONE** 2026-10-09 16:10 UTC at `7424434c6` (mail 4134; six fix commits and a merge of `main` at `7c71244db`); no number spent, reserve 4552 to 4560 untouched. Scoped review run 365 dispatched 16:13 UTC to `ccrc-pwa-keen-cove`. Was: **FIX ROUND 1 SENT** 2026-10-09 14:32 UTC (mail 4124, `rulings-run350-fix1.md`) on review 362 at `569bb148c`: F1 meets class 6, so the bar gives the one round; no number assigned (reserve 4552 to 4560). A scoped review follows. Was: **IN REVIEW** 2026-10-09 12:00 UTC: wave-done at `569bb148c` (mail 4115), re-measured; the bar is in the 12:00 entry; numbers 4414 and 4551 defined, bare until #341 merges; review run 362 dispatched 12:04 UTC to `ccrc-pwa-brisk-delta` (the held-out panel plus three lenses: security; the first live rotation; what the operator sees). Was: **DISPATCHED** 2026-10-09 06:50 UTC to `ccrc-pwa-brisk-basin` (8 items: R0, then B1 to B7; route Opus·high / Sonnet / workflow off / compact 40; worker reserve 4551 to 4560). Was: **Run 350 open, planned** 2026-10-08 17:21 UTC, before run 320 closes. Deviation block 4551 to 4570 (bare until defined). Dispatch waits on #330's merge, and on the I3, I4 and sec-M2 rulings |
 | 2a | 1, follow-up | Part 1 of the arming plan (`docs/superpowers/plans/2026-10-10-box-token-lifecycle-w1-arming.md`): review 365's R1 and R2 pins, red-first; R3 and R4; review 362's R-f and R-g; the token-line stripper's quote state; the 12:00 entry's residue 3 and 5, and residue 2, 4 and 6(a) if claim 1141 is gone. The arms stay off | 370 | #348 | **MERGED** `c6e8c5d8d` (PR #348, 2026-10-11 00:43:17 UTC; run 370 done) on review 375, clean by the 23:59 bar. Its tree is byte-identical to the reviewed tip `b747f3681`, since `main` had not moved. Was: **IN REVIEW** 2026-10-10 23:59 UTC: wave-done at `b747f3681` (mail 4193), re-measured; review run 375 dispatched 10-11 00:02 UTC to `ccrc-pwa-warm-summit`; Task 11 not taken (claim 1141 live), so it moves to part 2; the bar is in the 23:59 entry. Was: **DISPATCHED** 2026-10-10 22:20 UTC to `ccrc-pwa-amber-harbor` (9 items: Tasks 1, 2, 5 to 10, and 11 only if claim 1141 is gone; route Opus·high / Sonnet / workflow off / compact 40). The plan reached `main` in #347. Was: **PLANNED** 2026-10-10 22:15 UTC: the plan was drafted, attacked (26 breaks: 23 applied, 1 risk note, 1 rejected) and split. The brief goes out once the plan reaches `main`. Was: **Run 370 open, planned** 2026-10-10 20:33 UTC, before run 350 closed |
-| 2b | 1, follow-up | Part 2 of the arming plan: `retired-presented` clears when a rotation answers it (number 4552), then the flip, `_BT_ARMS_ON` 0 to 1, with the fresh-box classes (number 4553 if ruled). Bound: merged before row 3's first PR | 377 | #353 | **IN REVIEW** 2026-10-11 18:06 UTC: wave-done at `f167754b1` (mail 4244), re-measured; the bar is in the 18:06 entry. Was: **DISPATCHED** 2026-10-11 13:20 UTC to `ccrc-pwa-clear-harbor` (6 items: the rulings into the plan, Tasks 3, 4, 11, R and 12; route Opus·high / Sonnet / workflow off / compact 40); README consent granted (mail 4227) and the operator's Plan 4 ruling made (option 2, mail 4225), both forwarded in mail 4229. Was: **Run 377 open, planned** 2026-10-11 00:42 UTC, before run 370 closed. waits on: the operator's Decisions 1 and 2; the operator's ruling on the GPT-lane Plan 4 soak (`ccrc-pwa-clear-mesa` recommends accepting `box-token` WARNs by name on the sampler's doctor baseline; the window closes about 10-21 10:31 UTC); rulings on residue 8(a) and R-i; claim 1141 |
+| 2b | 1, follow-up | Part 2 of the arming plan: `retired-presented` clears when a rotation answers it (number 4552), then the flip, `_BT_ARMS_ON` 0 to 1, with the fresh-box classes (number 4553 if ruled). Bound: merged before row 3's first PR | 377 | #353 | **FIX ROUND 1 SENT** 2026-10-12 10:03 UTC (mail 4287, `rulings-run377-fix1.md`) on review 383 at `f167754b1`: F1, F5 and F12 meet class 3, F2 class 1, F3 class 7; the operator ruled D-139 wins (never-handed reads PASS with its sentence); run 377 back to `working`. Was: **IN REVIEW** 2026-10-11 18:06 UTC: wave-done at `f167754b1` (mail 4244), re-measured; the bar is in the 18:06 entry. Was: **DISPATCHED** 2026-10-11 13:20 UTC to `ccrc-pwa-clear-harbor` (6 items: the rulings into the plan, Tasks 3, 4, 11, R and 12; route Opus·high / Sonnet / workflow off / compact 40); README consent granted (mail 4227) and the operator's Plan 4 ruling made (option 2, mail 4225), both forwarded in mail 4229. Was: **Run 377 open, planned** 2026-10-11 00:42 UTC, before run 370 closed. waits on: the operator's Decisions 1 and 2; the operator's ruling on the GPT-lane Plan 4 soak (`ccrc-pwa-clear-mesa` recommends accepting `box-token` WARNs by name on the sampler's doctor baseline; the window closes about 10-21 10:31 UTC); rulings on residue 8(a) and R-i; claim 1141 |
 | 3 | 2 | The weekly schedule; the agent link token by the same code-then-HTTPS claim | — | — | later |
 | 4 | 3 | A token per box, stored as hashes | — | — | later |
 
@@ -878,6 +878,55 @@ spec's after wave 1.
       nothing, and review 362's 29 cases re-run at the tip;
     - **the driver's new owe rule:** storm, wedge, restart, legacy and clock;
     - **doctor's classes and the kill switch,** plus secrets and notify.
+- **2026-10-12 10:03 UTC: review 383 closed (row 2b at `f167754b1`); the one fix round sent, by the committed bar; the
+  operator ruled D-139 over (a)'s WARN.**
+  - **The panel:** the held-out three lenses, the brief's three, and a closures lens. 89 agents ran, with none dead
+    and none unexamined. 12 findings were raised and 3 refuted. Every briefed suite passed: `ccrc-install` 299
+    and `ccrc-doctor` 891, each over all its describe blocks, run with `-t`.
+  - **The live boxes after the release (classes 1 and 2): none found.**
+    - In today's live shape, both armed arms print `PASS`.
+    - The tip's server, booted from that state, owes nothing: its first tick writes only `retiredPresentedAt:
+      null`.
+    - Review 362's 29 cases pass at the tip.
+    - No update, rollout or install exit code changes.
+  - **Classes met:**
+    - **F1, class 3:** on a both/local box with a valid state that records the hand-out, the fleet and generation
+      files gone read WARN, not FAIL. The own-write narrowing hides a lost value.
+    - **F2, class 1:** a `retiredPresentedAt` ahead of the clock, after a clock step back and a restart, is never
+      answered. That means hourly rotations and a doctor FAIL until the wall clock passes it.
+    - **F3, class 7:** the equivalent presence-collapse mutant is still listed as a pin.
+    - **F5, class 3:** an unsearchable `~/.cc-secrets` reads as an absent token, and is lowered to WARN.
+    - **F12, class 3:** a first sync that was refused writes a report, so a never-handed box FAILs.
+  - **The operator's ruling,** answered at about 10:00 UTC, about 16 hours after the 18:10 question: **D-139 wins.**
+    A fresh install ends green. The never-handed state prints `PASS` with its sentence, following the auth and
+    unsigned precedents, and a box that lost a value stays FAIL. This replaces (a)'s WARN for the never-handed
+    state, and 4553 is amended to say so.
+  - **Rulings** (`rulings-run377-fix1.md`):
+    - F1: the server's record outranks the generation file alone.
+    - F2: a stamp ahead of the clock is clamped to `now` in `noteCounters`, and 4552 is amended.
+    - F3: the row is delisted or reworded, and the limit named.
+    - F5: absent is told from unmeasured, and an unsearchable parent is FAIL.
+    - F12: only a generation file or a `synced` report is history. A refused sync still shows its own `sync:<word>`.
+    - F4 is not class 7 (a coverage gap), but is fixed with a generated row per trim-set code point, for both copies.
+    - F6 (pre-existing) is fixed: the has-a-value pass strips like the placeholder pass.
+    - F7 is accepted as a cost, at one an hour.
+    - F8, F9 and F11 are prose fixes.
+    - F10 disappears under D-139.
+    - The restart pair is the ruled design.
+    - The worker's reserve for anything else is 4554 to 4558.
+  - **A safety incident, reported by the reviewer itself.**
+    - One review subagent, reproducing F2, passed `--file ~/.cc-secrets/ccrc-mail.token` unquoted. The shell
+      expanded `~` to the live HOME, so the token-sync verb's probe read the LIVE fleet token file.
+    - It sent the value to `--url http://127.0.0.1:9`, where nothing listens, and the result was `probe: 000
+      unmeasured`.
+    - The value was not printed, hashed or stored, and the live server was not contacted.
+    - **Ruling:** by the letter it is a read of the live file, a breach of the brief's "never read `~/.cc-secrets/`".
+      Nothing was exposed: the value went to curl on stdin, and curl reached no listener. So no rotation is owed for
+      it, and the operator rules out a hand rotation anyway.
+    - **Prevention:** from this review on, every review brief tells lenses to run each verb with `HOME` exported to
+      a fixture HOME and with every path quoted. The operator is told.
+  - **Run 377 was advanced back to `working`** at `f167754b1`. A scoped review of the fix range follows. After it, a
+    bar-class finding stops the merge and goes to the operator.
 - **Model auto-advance is not this programme's.** The operator assigned it to `ccrc-pwa-clear-mesa` at 11:25 UTC. The
   shared operator-window marker that coordinator proposed is off by the 13:28 ruling.
 
