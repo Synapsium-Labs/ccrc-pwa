@@ -3381,8 +3381,10 @@ made, and each residual they stated, is named under the rule it touches.
 - `destructive-builder-fence-reads-whole-files`: the fence that keeps the files holding the `ws-reclaim` and `ws-expire`
   sites from naming a collector type or reader reads each scanned file whole, not the one function holding the site, so
   a same-file caller that hands a collector value is seen. A control plants such a caller, and the plan's case title is
-  retitled to say so. A narrowing of the whole-file read back to the site's function is caught only by a caller planted
-  in a real file, not by the control.
+  retitled to say so. A narrowing of the whole-file read back to the site's function is caught by no case in the
+  tree, the control included: only a caller planted in a real file shows it, a row measured once in a scratch copy (a
+  `CollectToken`-typed parameter at a caller in `coord/childReclaim.ts`, outside the function holding the `wsReclaim`
+  site, reds the whole-file check while the site's own check stays green).
 
 **R87 (pacing).**
 - `collector-l1-imports-the-formula-file`: the lane's L1 file imports `../../shared/api.js` and `./childReclaimSweep.js`
@@ -3442,26 +3444,29 @@ made, and each residual they stated, is named under the rule it touches.
 - `box-line-clears-need-both-listings-measured`: both of those clears read absence, so both need both listings measured,
   the rule forgetting uses. An unmeasured listing changes nothing.
 - `older-answer-never-clears-a-newer-probe`: an answer that arrived before the box probes' latest change says nothing of
-  them, at every fold. A tie applies, and an answer that changes nothing never moves the stamp. So an act job's box
-  effect, applied at its answer's arrival, cannot wipe a probe that a later answer raised.
+  them, at every fold. A tie applies. The stamp moves to an answer's arrival whenever `collectBoxProbesAfter` rebuilds
+  the probes from it (a box-wide probe, a re-assertion of a standing one included, and any answer that passed every
+  rung), since each is a newer word about the box, and never for an answer that leaves them as they were (a per-id
+  probe, a non-passing verdict, no document). So an act job's box effect, applied at its answer's arrival, cannot wipe
+  a probe that a later answer raised or re-asserted.
 - `reader-made-words-are-ccrcs`: the words `''`, `unreadable` and `no-document` are this build's reader's, so their detail
   is ccrc's text or text ccrc saw, and a sentence leads "What ccrc saw:" for them and "What ccd said:" for a word ccd
-  printed. No sentence prints empty brackets. The feed rows for them are chosen by kind, never by word, and say what
-  ccrc could not read or accept.
+  printed. No sentence prints empty brackets. The feed rows for them are chosen by kind, never by word, and say in
+  ccrc's words that ccd answered nothing, or that ccrc could not read or accept ccd's answer, then what ccrc saw.
 - `a-registered-id-projects-no-item`: while an id's exact `<id>.child` or `<id>.uuid` row stands and the measured
   `tmpquarantine` names no record of the id, the id projects no per-id item, a terminal one included. That narrows H8's
   "a terminal item stands while the terminal run stands". Its pacing memory is kept, and its item returns as it stood
   once the row goes. The hide is gated: while `tmpquarantine` is unmeasured or over its cap it does not apply, so the
   `quarantine-kept` item and a reclaim item's second clause stand for such an id, as does any other remembered item of
   it. An absent `tmpquarantine` counts as measured, and a `tmproots` in doubt alone does not lift the hide.
-- `registered-id-with-only-an-unparseable-record-stays-hidden` (a stated residual): a record whose name fails ccd's
-  record parse is a refused name, not a record id, so its registered id stays hidden. The refused-names box line
-  discloses the name.
-- `a-refusal-or-die-episode-outlives-observations`: R88's "one row per episode, quiet on a repeat" holds for a refusal or
-  a die. A collectable observation, fresh or stale, no longer ends a `refused` or `die` episode, terminal and silent
-  words and `flock-unavailable` included. Every audit-opened episode, `collected`, `failed` and `act no-document`, and a
-  would-collect of another token still end on an observation. A refused or die episode ends at another row key, at
-  forgetting the id, or at a restart. The die streak and every pacing floor are unchanged.
+- `registered-id-with-only-an-unparseable-record-stays-hidden` (a stated residual): a quarantine name that fails
+  `parseCollectRecordName` is a refused name, not a record id, so a registered id with only such a record stays
+  hidden. The refused-names box line counts it, and never names it.
+- `a-refusal-or-die-episode-outlives-observations`: R88's "one row per (id, word) episode, quiet on repeats" holds for a
+  refusal or a die. A collectable observation, fresh or stale, no longer ends a `refused` or `die` episode, terminal and
+  silent words and `flock-unavailable` included. Every audit-opened episode, `collected`, `failed` and
+  `act no-document`, and a would-collect of another token still end on an observation. A refused or die episode ends
+  at another row key, at forgetting the id, or at a restart. The die streak and every pacing floor are unchanged.
 - `a-retryable-refusal-says-once` (a stated residual): after that, a retryable refusal such as `in-use` writes one row and
   has no attention arm, so ccd may refuse it silently up to 96 times a day. A die is covered by its streak's attention, and
   a terminal refusal by its terminal item.
@@ -3515,7 +3520,7 @@ made, and each residual they stated, is named under the rule it touches.
   fix round 1's pacing pins (each answer's effect on the hold, the presence defer and the continuity clocks, and the
   rewritten not-witnessed case).
 - Task 5: `stuck-end-exported`, `would-collect-body-calls-collect-who`, `watch-interim-empty-collector`, and fix round
-  1's comment on the verdict words of a reclaim item's collector clause.
+  1's comment above the run-less count line, on which of its words are ccd's own and which are this build's labels.
 - Task 6: `outcome-detail-is-diagnostic` and `ccdargv-collect-docstrings-rewritten`.
 - Task 7: `collect-lane-fields-beside-the-child-reclaim-lane`, `older-pass-guard-is-shadowed-by-the-prune`,
   `t7-38-act-queue-pinned-by-the-registry-listing-count`, `t7-22-reds-as-a-timeout`,
