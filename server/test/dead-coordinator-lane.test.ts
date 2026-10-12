@@ -1084,6 +1084,118 @@ describe('a new spawn starts a new episode (D-4825)', () => {
   });
 });
 
+/** THE LOST HOLD (D-4826). The record is written at step six, after step five wrote the pass's anchors, so a process that
+ *  died between the two, or whose write kept failing before a restart, leaves holds no record carries. On its first pass the
+ *  restarted lane flags every claimant whose durable anchor STARTED after the latest record row was written. Each case runs
+ *  one scripted world as two lanes, both ARMED: U never dies; R's record write at the dying pass throws and R restarts
+ *  right after. Q (crashed from 4, anchored 9, due at 72) must stay `working` in both. */
+describe('a restart after a lost held-set write holds what it cannot prove it did not hold (D-4826)', () => {
+  type Ev = Record<number, (f: Fixture) => void>;
+  const scripted = async (ids: string[], events: Ev, passes: number[], o: { failWriteAt?: number | number[]; restartAfter?: number } = {}) => {
+    const f = await fixture();
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (const id of ids) { f.plant(id); f.live.add(id); }
+    const r = Object.fromEntries(ids.map((id) => [id, f.working(id)])) as Record<string, number>;
+    const ps = new Set(passes);
+    const times = [...new Set([...Object.keys(events).map(Number), ...passes, ...(o.restartAfter === undefined ? [] : [o.restartAfter])])].sort((a, b) => a - b);
+    let m = 0;
+    for (const t of times) {
+      f.advance((t - m) * 60_000); m = t;
+      events[t]?.(f);
+      if (o.restartAfter === t) f.restart();
+      if (ps.has(t)) {
+        // a process that dies between step five (anchors written) and step six (the record written): the record write does
+        // not land on this pass, and the process is restarted before the next one.
+        const spy = [o.failWriteAt ?? []].flat().includes(t) ? vi.spyOn(f.coord, 'recordDeadCoordinatorBreakerHeld').mockImplementation(() => { throw new Error('process died here'); }) : null;
+        await f.pass();
+        spy?.mockRestore();
+      }
+    }
+    return { states: Object.fromEntries(ids.map((id) => [id, f.stateOf(r[id]!)])), breaker: f.attention().filter(([k]) => k === 'breaker') };
+  };
+  const [P, X, Z, Q, Y] = ['demo-coord-p', 'demo-coord-x', 'demo-coord-z', 'demo-coord-q', 'demo-coord-y'];
+  const sup = (f: Fixture, id: string, minute: number) => writeFileSync(path.join(f.reg, `${id}.supervised`), String(Math.floor((T0 + minute * 60_000) / 1000)));
+  const doubt = (f: Fixture, id: string) => rmSync(path.join(f.reg, `${id}.uuid`));
+  const undoubt = (f: Fixture, id: string) => writeFileSync(path.join(f.reg, `${id}.uuid`), `u-${id}`);
+  const PASSES = [0, 9, 18, 27, 36, 45, 54, 63, 72, 81, 90];
+  const bothHold = async (ids: string[], ev: Ev, failWriteAt: number | number[], restartAfter: number): Promise<void> => {
+    const u = await scripted(ids, ev, PASSES);
+    vi.restoreAllMocks();
+    const r = await scripted(ids, ev, PASSES, { failWriteAt, restartAfter });
+    expect(u.states[Q], 'the lane that never died holds Q').toBe('working');
+    expect(r.states[Q], 'the lane restarted over a lost write must not end it').toBe('working');
+  };
+  // P and X die at 20 (anchored 27, the trip {P, X} is recorded at 27); P is doubted from 30 (held by memory alone). X
+  // returns 46-52 unseen (heartbeat at 47) and dies with Z at 52: the pass at 54 starts X's fresh episode and trips
+  // {P, X, Z}; R dies there, between step five and step six. From 55 P is back (released) and X is doubted.
+  const fresh: Ev = {
+    4: (f) => { f.live.delete(Q); },
+    20: (f) => { f.live.delete(X); f.live.delete(P); },
+    30: (f) => { doubt(f, P); },
+    46: (f) => { f.live.add(X); sup(f, X, 47); },
+    52: (f) => { f.live.delete(X); f.live.delete(Z); },
+    55: (f) => { undoubt(f, P); f.live.add(P); doubt(f, X); },
+  };
+  it('the fresh-instant form: the new episode\'s instant, lost with the write, is not lost with the restart', async () => { await bothHold([P, X, Z, Q], fresh, 54, 55); });
+  it('...doubted on the first pass after the restart ONLY, and crashed again later: the loss does not return with the anchor', async () => {
+    await bothHold([P, X, Z, Q], { ...fresh, 64: (f) => { undoubt(f, X); } }, 54, 55);
+  });
+  // The generic form, no new episode: X and Z die at 40 (anchored 45, the trip); R dies between five and six at 45; X doubted from 46.
+  it('the generic form: every hold formed on the dying pass, not only a fresh instant', async () => {
+    await bothHold([X, Z, Q], {
+      4: (f) => { f.live.delete(Q); },
+      40: (f) => { f.live.delete(X); f.live.delete(Z); },
+      46: (f) => { doubt(f, X); },
+    }, 45, 46);
+  });
+  // Writes that keep failing lose more than the hold of one pass: P (recorded at 27, held by memory through a doubt) is
+  // re-anchored at 54 and doubted again, so its later instant lives in memory alone; X dies at 62 (anchored 63, within the
+  // window of P's 54) and the cluster {P, X} outlives Y, who is back at 64. The restart seeds P@27 alone: only X, flagged
+  // as an anchor newer than the record, still holds with it.
+  it('...writes that keep failing lose a recorded member\'s LATER instant too: the flagged anchor holds with the member as recorded', async () => {
+    await bothHold([P, Y, X, Q], {
+      4: (f) => { f.live.delete(Q); },
+      20: (f) => { f.live.delete(P); f.live.delete(Y); },
+      30: (f) => { doubt(f, P); },
+      52: (f) => { undoubt(f, P); },                    // P crashed again: re-anchored at the pass at 54
+      57: (f) => { doubt(f, P); },                      // doubted at 63: its anchor goes, its instants live in memory
+      62: (f) => { f.live.delete(X); },                 // X anchored at 63
+      64: (f) => { f.live.add(Y); },
+    }, [54, 63], 64);
+  });
+  it('the record\'s time is the WRITE-time clock: no anchor of the pass that landed it reads as started after it', async () => {
+    const f = await fixture({ onHasSession: (id) => { if (id === A) f.advance(3000); } });   // each claimant is measured at its own, later instant
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    f.plant(A); f.plant(B);
+    const ra = f.working(A); f.working(B);
+    await f.pass();
+    const row = f.coord.runEvents(ra).find((e) => (e.detail ?? '').startsWith('dead-coordinator-breaker-held:'))!;
+    const anchors = f.coord.deadAnchors();
+    const latest = anchors.ok ? Math.max(...[...anchors.anchors.values()].map((a) => a.firstDeadAt)) : -1;
+    expect(latest, 'B was anchored after the pass began').toBeGreaterThan(T0);
+    expect(row.at, 'the record is no earlier than any anchor of its pass').toBeGreaterThanOrEqual(latest);
+  });
+  it('THE COST, said out loud: after a restart two crashed claimants whose anchors began after the last record are held, flagged, until evidence — though they never clustered', async () => {
+    const f = await fixture();
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    f.plant(A); f.plant(B);
+    f.live.add(B);
+    const ra = f.working(A); const rb = f.working(B);
+    await f.pass();                                  // A crashed, anchored at 0; B alive
+    f.advance(30 * 60_000); f.live.delete(B); await f.pass();   // B crashes 30 minutes later: no cluster, no record
+    f.restart();
+    await walk(f, 3 * HOUR);
+    expect([ra, rb].map(f.stateOf), 'held until evidence, not ended').toEqual(['working', 'working']);
+    expect(f.attention().filter(([k]) => k === 'breaker')).toEqual([['breaker', [A, B]]]);
+    f.live.add(B);                                   // B comes back: evidence
+    f.next(); await f.pass();
+    f.next(); await f.pass();
+    expect(f.stateOf(ra), 'released by evidence on B, A alone ends').toBe('failed');
+  });
+});
+
 describe('the one cleanup switch', () => {
   it('`reclaim-paused` stops the lane ENTIRELY, shadow included: nothing measured, recorded or written — and a lowered switch needs two FRESH passes', async () => {
     const f = await fixture();

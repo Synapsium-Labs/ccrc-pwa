@@ -4277,7 +4277,33 @@ export class FleetWatcher {
     if (!this.deadCoordinatorBreakerSeeded) {
       const seed = coord.deadCoordinatorBreakerHeldLatest();
       if (seed.ok) {
-        this.deadCoordinatorBreakerHeld = seed.held;
+        // RECOVERY OF A LOST WRITE (fix round 4, D-4826): the record is written at step six, after step five wrote the
+        // pass's anchors, so a process that died between the two (or whose write kept failing) left holds that no record
+        // carries. Every claimant of this pass's population whose durable anchor was STARTED after the record row was
+        // written (its `firstDeadAt`; no row at all means every anchor) is therefore added to the seed, FLAGGED — a wildcard
+        // that clusters with any other entry — at its anchor instant, beside every readable recorded member, instant and
+        // flag. Why `firstDeadAt` and not `lastDeadAt`: `lastDeadAt` is rewritten on every crashed pass, so it would flag
+        // every crashed claimant after every restart. A hold formed after the last landed record needs a pairing that did
+        // not exist at that record, a pairing needs an instant, and a held instant only ever comes from an anchor: so a
+        // hold that was never recorded has a member whose anchor began after the record (a claimant doubted at the record's
+        // pass re-anchors later, and an anchor leaves with its claimant). The record is written with the write-time clock,
+        // never before a same-pass anchor, so an anchor of the pass that landed it is not flagged. This also covers a write
+        // that kept failing before a restart: its anchors began after the last LANDED record. The cost is safe over-holding:
+        // after a restart two crashed claimants whose anchors began after the last record are held, flagged, until evidence
+        // releases one (alive, stopped, deliberate, left the population), even if they were never a cluster. The limits: a
+        // server clock that steps BACKWARDS across a restart can make a later anchor read earlier than the record, and the
+        // comparison is by the lane's own clock on both sides. A readable but unprovable record time reads as no row.
+        const wrote = coord.deadCoordinatorBreakerHeldWrittenAt();
+        const recordAt = wrote.ok ? wrote.at : null;
+        const seeded = new Map(seed.held.map((m) => [m.id, m]));
+        for (const id of ids) {
+          const a = anchors.get(id);
+          if (a === undefined || (recordAt !== null && a.firstDeadAt <= recordAt)) continue;
+          const had = seeded.get(id);
+          const all = [...new Set([...(had === undefined ? [] : [had.firstDeadAt, ...(had.instants ?? [])]), a.firstDeadAt])].sort((x, y) => x - y);
+          seeded.set(id, { id, firstDeadAt: all[0]!, ...(all.length > 1 ? { instants: all } : {}), fallback: true as const });
+        }
+        this.deadCoordinatorBreakerHeld = [...seeded.values()];
         this.deadCoordinatorBreakerHeldKey = deadCoordinatorBreakerHeldKey(seed.held);
         this.deadCoordinatorBreakerHeldRunId = seed.runId;
         this.deadCoordinatorBreakerSeeded = true;
@@ -4415,8 +4441,8 @@ export class FleetWatcher {
    *  Answers whether the durable record NOW matches the held set (review 382, R3): `true` when the set did not change
    *  (its key is what the record carries) or the write landed; `false` for a write that cannot land (no carrier, a throw,
    *  a set with no spelling). The caller composes NO act on a `false` pass, so the record never lags an act. A restart that
-   *  lands while writes keep failing still seeds the older record, which can hold less than the process did (review 382,
-   *  R3's residual: it needs a store whose writes keep failing at that moment). A `false` is warned, leaves the key unchanged so the next pass tries again, and
+   *  lands while writes keep failing seeds the older record, which can hold less than the process did: the first pass then
+   *  flags every claimant whose durable anchor began after that record row (D-4826). A `false` is warned, leaves the key unchanged so the next pass tries again, and
    *  leaves the in-memory hold standing for this process. */
   private recordDeadCoordinatorBreakerHeldChange(
     coord: CoordStore, before: readonly DeadCoordinatorBreakerMember[], ids: readonly string[], now: number,
@@ -4432,7 +4458,9 @@ export class FleetWatcher {
         if (open.ok && open.siblings.length > 0) { candidates.push(open.siblings[0]!.id); break; }
       }
       for (const runId of candidates) {
-        const w = coord.recordDeadCoordinatorBreakerHeld(runId, held, now);
+        // The WRITE-TIME clock, never the pass's `now`: a same-pass anchor (measured at its own, later instant) must not
+        // read as started after this record (fix round 4, D-4826).
+        const w = coord.recordDeadCoordinatorBreakerHeld(runId, held, Date.now());
         if (w.recorded) {
           this.deadCoordinatorBreakerHeldKey = key;
           this.deadCoordinatorBreakerHeldRunId = runId;

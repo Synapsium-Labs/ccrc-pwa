@@ -380,8 +380,10 @@ export interface DeadCoordinatorBreakerMember {
  *  afresh at its next crash, as U, which deleted the anchor, does — R then carries U's new instant beside every one it
  *  remembers. That rests on the heartbeat: a return that stamps none is not seen, and this does not claim to cover it, nor
  *  claim that no other corner exists. A process that dies between step five (a fresh anchor written) and step six (the
- *  record written) seeds the older record: the new instant is lost only if the claimant is doubted on that very pass, and
- *  no act runs under it (R3's residual, the same class as a failing write). The all-unmeasurable arm diverges as measured:
+ *  record written), or whose write kept failing, seeds the older record; the lane's first pass therefore flags every
+ *  claimant whose durable anchor began after that record row was written (D-4826), so the holds it formed and lost are
+ *  held again, flagged, at the cost of holding two crashed claimants whose anchors merely postdate the record until evidence
+ *  releases one. A server clock that steps backwards across a restart can make a later anchor read earlier than the record. The all-unmeasurable arm diverges as measured:
  *  R's extra claimant can be measured while all of U's are not, so R does not trip there, but every other claimant is as
  *  unmeasured in R as in U, so R can act there only on the claimant U already ended. The cost of the accumulation is more
  *  holding: a member held at an old instant that crashes anew also clusters near its new instant, a held member's instants
@@ -619,9 +621,10 @@ export type DeadCoordinatorReport =
 
 /** The lane's memory of one claimant — IN MEMORY ONLY (the anchor is the durable half). A restart drops the run of
  *  crashed passes, which DELAYS an act, and the backoff (`nextAskAt`, `attempts`), which can bring an abandon back
- *  SOONER after a stuck or thrown act (review 381, F10). Another way a restarted lane acts sooner is a restart while a
- *  held-set write is failing: it seeds the older record, which can hold less than the process did (review 382, R3's
- *  residual). The lane composes no act on a pass whose held-set record did not land, so the record never lags an act; the
+ *  SOONER after a stuck or thrown act (review 381, F10). A restart while a held-set write is failing, or a death between a
+ *  pass's anchors and its record, seeds the older record, which can hold less than the process did: the first pass flags
+ *  every claimant whose durable anchor began after it (D-4826). The lane composes no act on a pass whose held-set record
+ *  did not land, so the record never lags an act; the
  *  act is still behind the claimant's re-measure before and after the fleet act. The breaker's hold is not in this entry: it survives a restart (review
  *  381, F1), and an unreadable record of it seeds a conservative fallback (review 382, R2). */
 export interface DeadCoordinatorEntry {

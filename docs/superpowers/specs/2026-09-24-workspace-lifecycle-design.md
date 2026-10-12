@@ -681,7 +681,7 @@ each item is a departure named there).
 - **The attention list is the lane's own memory** (the expiry lane's shape): would-end, unmeasured, stuck and the
   breaker, rebuilt over the passes after a restart. A restart keeps the lane's first-dead anchor (a gap of more than ten
   minutes re-anchors it, as above) and the breaker's hold (the record above, read back at the first pass; a record it
-  cannot read makes the lane hold every claimant that pass does not release, each flagged, and write a fresh record, with a warn line and a feed row saying so: a flagged claimant clusters with any other crashed or held claimant, whatever the instants, until evidence releases it, so every claimant a readable record would hold is held too, at the cost that while one stands a claimant that crashes is swept into the hold and is flagged itself, until evidence releases it or fewer than two stand), restarts the run of crashed passes, which delays an act, and drops the backoff after a stuck or thrown act, which can bring an abandon back sooner. A restart that lands while a held-set write is failing seeds the older record, which can hold less than the process did: another, narrow way to act sooner, which needs a store whose writes keep failing at that moment.
+  cannot read makes the lane hold every claimant that pass does not release, each flagged, and write a fresh record, with a warn line and a feed row saying so: a flagged claimant clusters with any other crashed or held claimant, whatever the instants, until evidence releases it, so every claimant a readable record would hold is held too, at the cost that while one stands a claimant that crashes is swept into the hold and is flagged itself, until evidence releases it or fewer than two stand), restarts the run of crashed passes, which delays an act, and drops the backoff after a stuck or thrown act, which can bring an abandon back sooner. A restart that lands while a held-set write is failing, or a process that dies between a pass's anchors and its record, seeds the older record, which can hold less than the process did; on its first pass the lane therefore flags every claimant whose durable anchor began after that record row was written, and holds it with every recorded member until evidence releases one, a safe over-hold (D-4826).
   The lane composes no act on a pass whose held-set record did not land, so the record never lags an act. Every act is still behind the claimant's re-measure before and after the fleet act.
 - **The lane never pushes.** The stall watch notifies about a dead coordinator's stalled workers — r3
   (`coordinator-dead`) and, once its wave-2 arms are armed, `coord-deaf`, one push per worker, each naming the
@@ -878,8 +878,15 @@ collects them.
   claimant is alive, stopped or was stopped on purpose, or the claimant leaving the population. For that lane a restart
   also means the run of crashed passes starts again, which delays an act, and the backoff after a stuck or thrown act
   (`nextAskAt`, `attempts`) is lost, so a restarted lane can ask for that abandon SOONER than an unrestarted one would,
-  and a server that restarts while a held-set write is failing seeds the older record, which can hold less than the
-  process did, which needs a store whose writes keep failing at that moment. Anchors are pass-sampled: an anchor sits on
+  and a server that restarts while a held-set write is failing, or a process that dies between step five (a fresh anchor
+  written) and step six (the record written), seeds the older record, which can hold less than the process did, and so
+  on its first pass the lane flags, at its anchor instant, every claimant of the population whose durable anchor began
+  after that record row was written (no row: every anchor), beside every recorded member, instant and flag (D-4826).
+  The cost is safe over-holding: after a restart two crashed claimants whose anchors began after the last record are
+  held, flagged, until evidence releases one, though they never clustered. The record is written with the write-time
+  clock, so an anchor of the pass that landed it is not flagged, and the lane records before it acts. The limit: a server
+  clock that steps backwards across a restart can make a later anchor read earlier than the record.
+  Anchors are pass-sampled: an anchor sits on
   its lane's own pass, up to one cadence after the crash, and a restart moves the pass grid as any start does, so a pair
   near the ten-minute window's edge can cluster in one lane and not in the other, and the comparison below is claimed
   only for anchors both lanes share. The breaker's clustering is monotone (§5.4), so for anchors both lanes share a
@@ -890,9 +897,7 @@ collects them.
   every one it remembers (D-4825). That rests on the heartbeat: a return that stamps none is not seen, and no claim is
   made that no other corner exists. The lost backoff has a knock-on: if the unrestarted lane backs off a stuck claimant
   while the restarted lane, its backoff lost, ends it, the unrestarted lane keeps that claimant as an extra entry that can
-  cluster with a new crash, so the restarted lane can end a third claimant the unrestarted lane holds. A process that
-  dies between a fresh anchor and its record seeds the older record: the new instant is lost only if the claimant is
-  doubted on that very pass, and no act runs under it. The lane composes no act on a pass whose held-set record did not
+  cluster with a new crash, so the restarted lane can end a third claimant the unrestarted lane holds. The lane composes no act on a pass whose held-set record did not
   land, so the record never lags an act, and every act is still behind the claimant's re-measure before and after the fleet act.
 - **`$REG/reclaim-paused` stops both lanes at once**, shadow included: the cleanup row's toggle on `/runs`.
 

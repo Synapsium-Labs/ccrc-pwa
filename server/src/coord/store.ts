@@ -3416,6 +3416,24 @@ export class CoordStore {
     }
   }
 
+  /** WHEN the latest held-set row was written (`run_events.at`, the write-time clock `recordDeadCoordinatorBreakerHeld`
+   *  is handed; fix round 4, D-4826): `{ ok: true, at: null }` with no row at all, `{ ok: false }` for a row whose `at`
+   *  cannot be proved a positive safe integer or a thrown read. The lane compares it with the durable anchors on its first
+   *  pass, to find the holds a pass formed and never recorded. An additive read of the existing column: no schema change. */
+  deadCoordinatorBreakerHeldWrittenAt(): { ok: true; at: number | null } | { ok: false; detail: string } {
+    try {
+      const row = this.db.prepare(
+        'SELECT CAST(at AS TEXT) AS atText FROM run_events ' +
+        "WHERE causedBy = 'operator' AND substr(detail, 1, ?) = ? ORDER BY id DESC LIMIT 1",
+      ).get(DEAD_COORDINATOR_BREAKER_HELD_HEAD.length, DEAD_COORDINATOR_BREAKER_HELD_HEAD) as { atText: string } | undefined;
+      if (row === undefined) return { ok: true, at: null };
+      const at = persistedInt(row.atText, 'run_events at');
+      return at.ok ? { ok: true, at: at.value } : { ok: false, detail: at.detail };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   /** Per session id, the LATEST instant it held a coordinator's chair. This is
    *  what the coordination fence reads (spec §1 rule 4, with spec §5.6's
    *  recycled slugs: "ever coordinated" means this incarnation of the
