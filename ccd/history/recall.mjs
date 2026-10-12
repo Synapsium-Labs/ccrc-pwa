@@ -17,6 +17,7 @@ import {
   REASONS, INDEXED_PROVENANCE, SEARCHABLE_PROVENANCE, FTS_STEP, RANK_POOL, decideGrepIndex, sanitizeFtsQuery, snippetTerms, regexSyntaxIn, regexSyntaxHint, ftsOrderBy, displaySnippet, snippetLine, escapeXmlText, redactField, extractNodeId, resolveScopedId, SEARCH_REACH, parseGrepArgs,
   GREP_LIMIT_DEFAULT, encodeCursor, decodeCursor, canonicalJson, sha256Hex,
   guardRegex, regexPrefilter, REGEX_BUDGET_MS, REGEX_MAX_LEN, historyPaths,
+  DESCRIBE_EXCERPT, costRow, producerOf, pickHoldingCopy, redactDisplayWindow, parseDescribeArgs,
 } from './lib.mjs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -791,4 +792,293 @@ export function runRegex(rc, a, deps = {}) {
   if ('result' in found) return found.result;
   if (found.total === 0) return grepNotFound();
   return renderHits(rc, found.pool, (h) => [matched.get(h.blob_id) ?? ''], a, { pos, total: found.total, key }, deps);
+}
+
+// ---------------------------------------------------------------------------------------------
+// describe (spec §8.4, §8.2, §8.3; W1-B2 Task 15). One node, resolved INSIDE the scope from a full id, a display
+// prefix or a pasted card line (§11 P28, lib's extractNodeId). It prints:
+//  - the node's kind, depth, status, time range, producing model family (§6.2) and parent;
+//  - its gist, topics, refs and files;
+//  - each child (a condensed node) or source (a leaf) as one line with chars= and fits=in|over (§11 P13: costs
+//    in characters, against the output cap);
+//  - for a leaf with a summary, the summary's first DESCRIBE_EXCERPT characters, with --full paging the rest by a
+//    cursor bound to the node.
+// Every recalled field is redacted first, then cut, then enveloped (history-redaction-before-cut). The summary is
+// read RAW, and the excerpt and each --full page are redacted as windows with ENTRY_REDACT_MARGIN each side (lib's
+// redactDisplayWindow; spec §8.3 and §8.4), never the whole summary. A flagged gist is printed
+// unchanged: the flag only marks it (§7.4 item 9).
+// ---------------------------------------------------------------------------------------------
+
+/** The nodes columns describe reads, named through selectColumns. */
+const DESCRIBE_NODE_COLS = Object.freeze(['node_id', 'session_pk', 'transcript_pk', 'kind', 'depth', 'status', 'gist', 'topics',
+  'summary_blob_id', 'boundary_entry_id', 'earliest_ms', 'latest_ms', 'src_chars', 'desc_count', 'desc_chars',
+  'directive_flag', 'capped']);
+/** Room a --full page keeps for its own label line and the envelope's tag. */
+const PAGE_FRAME = 300;
+/** The hint a refused describe cursor carries. */
+const DESCRIBE_STALE_CURSOR = 'that --cursor pages another node, or ran past its summary; describe the node again with --full';
+
+function nodeRow(rc, id) {
+  return rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', DESCRIBE_NODE_COLS, rc.schema)} FROM nodes WHERE node_id = ?`).get(id);
+}
+
+/** nodes.topics as a list: the JSON array derivation writes, or, for a value that is not one, its lines. */
+function topicsOf(text) {
+  if (text === null || text === undefined || text === '') return [];
+  try {
+    const v = JSON.parse(text);
+    if (Array.isArray(v)) return v.filter((t) => typeof t === 'string');
+  } catch { /* not JSON: one topic per line */ }
+  return String(text).split('\n').map((t) => t.trim()).filter((t) => t !== '');
+}
+
+function refsOf(rc, id) {
+  return rc.db.prepare(`SELECT ${selectColumns(rc.version, 'node_refs', ['kind', 'value', 'origin'], rc.schema)} FROM node_refs
+    WHERE node_id = ? ORDER BY kind, value`).all(id);
+}
+
+/** A leaf's sources in order, each with its blob's raw length. */
+function sourcesOf(rc, id) {
+  return rc.db.prepare(`SELECT e.uuid AS uuid, e.type AS type, e.role AS role, b.raw_len AS raw_len
+      FROM ${versioned(rc, 'node_sources', 'ns', ['node_id', 'entry_id', 'ord'])}
+        JOIN ${versioned(rc, 'entries', 'e', ['entry_id', 'uuid', 'type', 'role', 'blob_id'])} ON e.entry_id = ns.entry_id
+        JOIN ${versioned(rc, 'blobs', 'b', ['blob_id', 'raw_len'])} ON b.blob_id = e.blob_id
+      WHERE ns.node_id = ? ORDER BY ns.ord`).all(id);
+}
+
+/** A condensed node's children in order (Task 9's node_children, parent → children). */
+function childRowsOf(rc, id) {
+  const st = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', DESCRIBE_NODE_COLS, rc.schema)} FROM nodes WHERE node_id = ?`);
+  return childrenOf(rc.db, id).slice().sort((x, y) => x.ord - y.ord).map((c) => st.get(c.childId)).filter((r) => r !== undefined);
+}
+
+/** The line of a leaf's summary row in its holding copy `at` ({ file_id, line: the boundary's }), picked as lib's
+ *  summaryRowFor picks it for derivation (Task 8): the row the boundary's anchor_uuid names; when the anchor is the
+ *  boundary itself, the first compact summary after the boundary. A `<local-command-stdout>` echo (a harness user row,
+ *  summaryRowFor's isEcho) is never the pick. null for no pick: the producer is then counted after the boundary, as
+ *  derivation counts it. Spelled in SQL so a describe never loads the whole copy. */
+function summaryLine(rc, boundaryEntryId, at) {
+  const bd = rc.db.prepare(`SELECT b.anchor_uuid AS anchor_uuid, e.uuid AS uuid
+      FROM ${versioned(rc, 'boundaries', 'b', ['entry_id', 'anchor_uuid'])}
+        JOIN ${versioned(rc, 'entries', 'e', ['entry_id', 'uuid'])} ON e.entry_id = b.entry_id
+      WHERE b.entry_id = ?`).get(boundaryEntryId);
+  if (bd === undefined || typeof bd.anchor_uuid !== 'string' || bd.anchor_uuid === '') return null;
+  const inCopy = `FROM ${versioned(rc, 'memberships', 'mb', ['file_id', 'entry_id', 'line'])}
+        JOIN ${versioned(rc, 'entries', 'e', ['entry_id', 'uuid', 'type', 'provenance', 'is_compact_summary'])} ON e.entry_id = mb.entry_id
+      WHERE mb.file_id = ? AND NOT (e.type = 'user' AND e.provenance = 'harness')`;
+  const hit = bd.anchor_uuid === bd.uuid
+    ? rc.db.prepare(`SELECT mb.line AS line ${inCopy} AND mb.line > ? AND e.is_compact_summary = 1 ORDER BY mb.line LIMIT 1`)
+      .get(at.file_id, at.line)
+    : rc.db.prepare(`SELECT mb.line AS line ${inCopy} AND e.uuid = ?`).get(at.file_id, bd.anchor_uuid);
+  return hit === undefined ? null : hit.line;
+}
+
+/** The producing model family of a leaf's span (§6.2, §8.3), derived as Task 8's leafFields derives it:
+ *  - the copy: lib's pickHoldingCopy over the files of the node's transcript, the rule Task 8's holdingCopy decides
+ *    by (among the files that hold the boundary, a live copy, source_key '', first, then the lowest file_id);
+ *  - the witnesses: every assistant row after the summary pick (summaryLine), else after the boundary, to the end of
+ *    the copy, in file order. B1's producerOf answers at the first whose backend is not `unknown`, so the lazy
+ *    iterate() behind `models` reads only as far as that row. No row cap: a first real reply far past the summary
+ *    still counts, as it does for derivation.
+ *  memberships is reached by its primary key (file_id, entry_id) and its memberships_order (file_id, line) index; it
+ *  has no entry_id index, deliberately. */
+function producerOfLeaf(rc, n) {
+  if (n.boundary_entry_id === null || n.transcript_pk === null) return 'unknown';
+  const copies = rc.db.prepare(`SELECT f.file_id AS file_id, f.source_key AS source_key, mb.line AS line
+      FROM ${versioned(rc, 'ingest_files', 'f', ['file_id', 'transcript_pk', 'source_key'])}
+        LEFT JOIN ${versioned(rc, 'memberships', 'mb', ['file_id', 'entry_id', 'line'])} ON mb.file_id = f.file_id AND mb.entry_id = ?
+      WHERE f.transcript_pk = ? ORDER BY f.file_id`)
+    .all(n.boundary_entry_id, n.transcript_pk);
+  const held = pickHoldingCopy(copies.map((c) => ({ fileId: Number(c.file_id), live: c.source_key === '', holds: c.line !== null })));
+  if (held === null) return 'unknown';
+  const at = copies.find((c) => Number(c.file_id) === held);
+  const from = summaryLine(rc, n.boundary_entry_id, at) ?? at.line;
+  const after = rc.db.prepare(`SELECT e.model AS model
+      FROM ${versioned(rc, 'memberships', 'mb', ['file_id', 'entry_id', 'line'])}
+        JOIN ${versioned(rc, 'entries', 'e', ['entry_id', 'type', 'model'])} ON e.entry_id = mb.entry_id
+      WHERE mb.file_id = ? AND mb.line > ? AND e.type = 'assistant' ORDER BY mb.line`);
+  function* models() {
+    for (const r of after.iterate(at.file_id, from)) yield r.model;
+  }
+  return producerOf(models());
+}
+
+/** A condensed node's producer is its newest leaf's: down each level's last child. */
+function producerOfNode(rc, n) {
+  let cur = n;
+  for (let hops = 0; cur !== undefined && cur.depth > 0 && hops < 16; hops += 1) {
+    const kids = childrenOf(rc.db, cur.node_id);
+    if (kids.length === 0) return 'unknown';
+    cur = nodeRow(rc, kids.reduce((x, y) => (y.ord > x.ord ? y : x)).childId);
+  }
+  return cur === undefined || cur.depth > 0 ? 'unknown' : producerOfLeaf(rc, cur);
+}
+
+/** A node's native summary as RAW plain text, or null for a node with none (a raw leaf, a condensed node). It is
+ *  never shown as it is: the excerpt and each --full page are redactDisplayWindow's windows of it, so describe's
+ *  cost is a window's, whatever the summary's length (spec §8.3 and §8.4). */
+function summaryOf(rc, n) {
+  if (n.summary_blob_id === null) return null;
+  // An absent or tombstoned summary blob is store corruption (the spec says summaries are never pruned), which the
+  // doctor reports; describe shows it as no summary.
+  const b = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'blobs', ['z', 'raw_len'], rc.schema)} FROM blobs WHERE blob_id = ?`).get(n.summary_blob_id);
+  if (b === undefined || b.z === null) return null;
+  return blobPlainText(b.z, false, rc.pairIdx, Number(b.raw_len));
+}
+
+/** `end`, moved off the middle of a surrogate pair: when the character at `end` is a pair's low half, back one, or,
+ *  when that would leave nothing after `start`, forward one. So a page or an excerpt never ends with half an astral
+ *  character, which human output would print as U+FFFD. */
+function pairSafeEnd(text, start, end) {
+  if (end <= start || end >= text.length) return end;
+  const c = text.charCodeAt(end);
+  if (c < 0xdc00 || c > 0xdfff) return end;
+  return end - 1 > start ? end - 1 : end + 1;
+}
+
+/** What `text[k]` prints at most, escaped for the envelope (escapeXmlText: `&` 5 characters, `<` and `>` 4) or
+ *  JSON-encoded (JSON.stringify: `"` and `\` 2, a control character 2 or 6, a surrogate half without its pair 6). A
+ *  redaction, a decode and a removed sequence never print longer than the raw characters they came from, except a
+ *  mark longer than what it replaced. */
+function describeCharCost(text, k, json) {
+  const c = text.charCodeAt(k);
+  if (!json) return c === 0x26 ? 5 : c === 0x3c || c === 0x3e ? 4 : 1;
+  if (c === 0x22 || c === 0x5c) return 2;
+  if (c < 0x20) return c === 0x08 || c === 0x09 || c === 0x0a || c === 0x0c || c === 0x0d ? 2 : 6;
+  if (c >= 0xd800 && c <= 0xdbff) {
+    const n = text.charCodeAt(k + 1);
+    return n >= 0xdc00 && n <= 0xdfff ? 1 : 6;
+  }
+  if (c >= 0xdc00 && c <= 0xdfff) {
+    const p = text.charCodeAt(k - 1);
+    return p >= 0xd800 && p <= 0xdbff ? 1 : 6;
+  }
+  return 1;
+}
+
+/** The --full page that starts at `off`, and its shown window: as much of the RAW `text` as fits `room` once shown
+ *  (`show(off, end)`, redactDisplayWindow's) and printed, either escaped for the envelope or JSON-encoded. The raw end
+ *  is sized in one pass by what each raw character prints (describeCharCost), so ONE window is redacted per page
+ *  (finding V19: a shrink step that redacted the window again each time cost a page 18 windows). Only a mark longer
+ *  than what it replaced, a cut that keeps an edge's mark or slack, or an inexact window's note line prints past the
+ *  room; the page then halves and is redacted again, as expand's page does. The end never splits a surrogate pair, and
+ *  at least one character (or one pair) is always paged. Named apart from Task 16's lib pageEnd, which pages expand's
+ *  text by its own cost rule. */
+function describePageEnd(text, off, room, json, show) {
+  const printed = (s) => (json ? JSON.stringify(s).length : escapeXmlText(s).length);
+  const limit = Math.max(1, room - (json ? 2 : 0));
+  let end = off;
+  for (let used = 0; end < text.length; end += 1) {
+    const c = describeCharCost(text, end, json);
+    if (used + c > limit) break;
+    used += c;
+  }
+  end = pairSafeEnd(text, off, Math.max(end, off + 1));
+  let page = show(off, end);
+  while (end > off + 1 && printed(page) > room) {
+    const shorter = pairSafeEnd(text, off, off + Math.max(1, (end - off) >> 1));
+    if (shorter >= end) break;
+    end = shorter;
+    page = show(off, end);
+  }
+  return { end, page };
+}
+
+/** `describe <id | prefix | pasted line>` (§8.4). */
+export function runDescribe(rc, a, deps = {}) {
+  const budget = (deps.cap ?? OUTPUT_CAP) - FRAME_RESERVE;
+  const ex = extractNodeId(a.target);
+  if (!ex.ok) return refusal('bad-args', hintLine(redactField(`${ex.error}${ex.hint ? ` ${ex.hint}` : ''}`, rc.pairIdx)));
+  const found = resolveNodeInScope(rc, ex.id);
+  if (!found.ok) return found.result;
+  const id = found.id;
+  const n = nodeRow(rc, id);
+  if (n === undefined) return notFound();
+  const pre = scopePrefixes(rc);
+  const disp = (x) => pre.get(x) ?? x;
+  const parent = parentOf(rc.db, id);
+  const producer = producerOfNode(rc, n);
+  const summary = summaryOf(rc, n);
+  /** A window of the raw summary as shown: redacted with its margins, never the whole summary first. */
+  const shownSummary = (from, to) => redactDisplayWindow(summary, from, to, rc.pairIdx);
+  const env = (src, text) => recallEnvelope({ src, id: disp(id), ts: n.latest_ms, role: null, text });
+  const nodeLine = `node ${disp(id)} ${n.kind} depth ${n.depth} status ${n.status} ${iso(n.earliest_ms)} → ${iso(n.latest_ms)} producer ${producer}`
+    + `${n.directive_flag === 1 ? ' directive-flag' : ''}${n.capped === 1 ? ' capped' : ''}`;
+  const base = {
+    node_id: id, kind: n.kind, depth: n.depth, status: n.status, parent_id: parent,
+    earliest_ms: n.earliest_ms, latest_ms: n.latest_ms, producer,
+  };
+  const tailArgs = [...scopeArgs(rc), ...(a.json ? ['--json'] : [])];
+
+  if (a.full) {
+    if (summary === null) return refusal('bad-args', `${disp(id)} has no summary to page; describe it without --full`);
+    let off = 0;
+    if (a.cursor !== null) {
+      const c = decodeCursor(a.cursor, 'describe');
+      if (c === null || c.node !== id || !Number.isSafeInteger(c.off) || c.off < 0 || c.off >= summary.length) {
+        return refusal('bad-args', DESCRIBE_STALE_CURSOR);
+      }
+      off = c.off;
+    }
+    const { end, page } = describePageEnd(summary, off, budget - nodeLine.length - PAGE_FRAME, a.json, shownSummary);
+    return {
+      exit: EXIT.OK, header: null,
+      blocks: [nodeLine, `summary, characters ${off + 1} to ${end} of ${summary.length}:`, env('summary', page)],
+      items: [{ ...base, summary_chars: summary.length, summary_page: { offset: off, text: page }, trust: 'untrusted' }],
+      shown: 1, total: 1,
+      next: end < summary.length
+        ? ['describe', id, '--full', ...tailArgs, '--cursor', encodeCursor({ v: 1, resource: 'describe', node: id, off: end })]
+        : null,
+    };
+  }
+
+  const gist = n.gist === null ? null : redactForDisplay(n.gist, rc.pairIdx);
+  const topics = topicsOf(n.topics).map((t) => redactForDisplay(t, rc.pairIdx));
+  const refs = refsOf(rc, id).map((r) => ({ kind: r.kind, value: redactForDisplay(r.value, rc.pairIdx), origin: r.origin }));
+  const files = refs.filter((r) => r.kind === 'path').map((r) => r.value);
+  const excerptEnd = summary === null ? 0 : Math.min(summary.length, pairSafeEnd(summary, 0, DESCRIBE_EXCERPT));
+  const excerpt = summary === null ? null : shownSummary(0, excerptEnd);
+  const head = [
+    nodeLine,
+    ...(parent === null ? [] : [`parent ${disp(parent)}`]),
+    ...(gist === null ? [] : [`gist ${env('node', gist)}`]),
+    ...(topics.length === 0 ? [] : [`topics ${env('node', topics.join(' · '))}`]),
+    ...(refs.length === 0 ? [] : [`refs ${env('node', refs.map((r) => `${r.kind} ${r.value}`).join(' · '))}`]),
+    ...(files.length === 0 ? [] : [`files ${env('node', files.join(' · '))}`]),
+  ];
+  const tail = excerpt === null ? [] : [`summary, the first ${excerptEnd} of ${summary.length} characters:`, env('summary', excerpt)];
+  const label = n.depth > 0 ? 'children' : 'sources';
+  const listed = n.depth > 0
+    ? childRowsOf(rc, id).map((k) => {
+      const c = costRow(Number((k.depth === 0 ? k.src_chars : k.desc_chars) ?? 0));
+      return { line: `  ${disp(k.node_id)} ${k.kind} chars=${c.chars} fits=${c.fits}`, item: { id: k.node_id, kind: k.kind, chars: c.chars, fits: c.fits } };
+    })
+    : sourcesOf(rc, id).map((s) => {
+      const c = costRow(Number(s.raw_len ?? 0));
+      return { line: `  ${s.uuid} ${s.type} ${s.role ?? '-'} chars=${c.chars} fits=${c.fits}`, item: { uuid: s.uuid, type: s.type, role: s.role, chars: c.chars, fits: c.fits } };
+    });
+  const itemOf = (k) => ({
+    ...base, gist, topics, refs, files, directive_flag: n.directive_flag, capped: n.capped,
+    [label]: listed.slice(0, k).map((x) => x.item), [`${label}_total`]: listed.length,
+    ...(excerpt === null ? {} : { summary_excerpt: excerpt, summary_chars: summary.length }),
+    trust: 'untrusted',
+  });
+  const blocksOf = (k) => [...head, `${label} (${k} of ${listed.length} listed):`, ...listed.slice(0, k).map((x) => x.line), ...tail];
+  // The fixed parts first, then as many child or source lines as still fit: a running total, so a leaf of thousands
+  // of rows costs one pass.
+  const each = listed.map((x) => (a.json ? JSON.stringify(x.item).length + 1 : x.line.length + 1));
+  let used = a.json ? JSON.stringify(itemOf(0)).length : blocksOf(0).join('\n').length;
+  let k = 0;
+  while (k < listed.length && used + each[k] <= budget) { used += each[k]; k += 1; }
+  return {
+    exit: EXIT.OK, header: null, blocks: blocksOf(k), items: [itemOf(k)], shown: 1, total: 1,
+    next: excerpt !== null && excerptEnd < summary.length ? ['describe', id, '--full', ...tailArgs] : null,
+  };
+}
+
+/** cli.mjs's READ_RUNNERS.describe (W1-B2 Task 15): describe's own grammar (lib parseDescribeArgs) re-reads the
+ *  verb's argv after Task 10's whitelist; a refused value is exit 2 bad-args. */
+export function describeVerb(rc, argv) {
+  const d = parseDescribeArgs(argv);
+  return d.ok ? runDescribe(rc, d.args) : refusal('bad-args');
 }

@@ -6010,9 +6010,10 @@ export const READ_OPTIONS = Object.freeze({
       ...COMMON_READ_OPTIONS,
       '--full': readOpt('flag', 'full'),
       '--cursor': readOpt('value', 'cursor'),
+      '--node': readOpt('value', 'node'),
     }),
-    defaults: Object.freeze({ full: false, cursor: null }),
-    positional: Object.freeze({ min: 1, max: ANY_COUNT }),
+    defaults: Object.freeze({ full: false, cursor: null, node: null }),
+    positional: Object.freeze({ min: 0, max: ANY_COUNT }),
   }),
   expand: Object.freeze({
     options: Object.freeze({
@@ -6085,6 +6086,7 @@ export function parseReadArgs(verb, argv) {
   }
   if (positional.length < spec.positional.min || positional.length > spec.positional.max) return BAD_READ_ARGS;
   if (verb === 'grep' && positional.length === 0 && opts.regex === null) return BAD_READ_ARGS;
+  if (verb === 'describe' && positional.length === 0 && opts.node === null) return BAD_READ_ARGS;
   if (verb === 'expand' && positional.length === 0 && opts.around === null && opts.cursor === null) return BAD_READ_ARGS;
   return { ok: true, verb, positional: Object.freeze(positional), opts: Object.freeze(opts) };
 }
@@ -6569,4 +6571,42 @@ export function displaySnippet(text, terms, idx) {
   const prefix = from > 0 && !shown.startsWith('...') ? '...' : '';
   const suffix = to < content.length && !shown.endsWith('...') ? '...' : '';
   return `${w.exact ? '' : `${DISPLAY_INEXACT_NOTE} `}${prefix}${shown}${suffix}`;
+}
+
+// ── describe: arguments (W1-B2 Task 15; spec §8.4) ────────────────────────────────────────────────────
+
+/** describe's option grammar, over the argv after the verb word. The target is one of:
+ *  - a full id, a display prefix or a pasted card line. A pasted line's words are joined with one space, so an
+ *    unquoted line still reads (extractNodeId takes it apart);
+ *  - `--node <id>`.
+ *  `--full` pages the native summary, and `--cursor` continues a page, so it is valid only with --full. The scope
+ *  flags (--project, --workspace, --session <id>) are consumed and passed over, as grep's are: readContext decides
+ *  them. */
+export function parseDescribeArgs(argv) {
+  const a = { target: '', full: false, cursor: null, json: false };
+  const bad = { ok: false, reason: 'bad-args' };
+  const words = [];
+  const seen = new Set();
+  let node = null;
+  for (let i = 0; i < argv.length; i += 1) {
+    const t = argv[i];
+    if (t === '--') { words.push(...argv.slice(i + 1)); break; }
+    if (!t.startsWith('--')) { words.push(t); continue; }
+    if (seen.has(t)) return bad;
+    seen.add(t);
+    if (t === '--json') { a.json = true; continue; }
+    if (t === '--full') { a.full = true; continue; }
+    if (t === '--project' || t === '--workspace') continue;
+    if (i + 1 >= argv.length) return bad;
+    i += 1;
+    const v = argv[i];
+    if (t === '--session') continue;
+    if (t === '--node') { node = v; continue; }
+    if (t === '--cursor') { a.cursor = v; continue; }
+    return bad;
+  }
+  if ((node === null) === (words.length === 0)) return bad;
+  if (a.cursor !== null && !a.full) return bad;
+  a.target = node ?? words.join(' ');
+  return { ok: true, args: a };
 }

@@ -772,3 +772,6 @@ export const DISPLAY_EDGE_SLACK: 32;
 export const DISPLAY_INEXACT_NOTE: string;
 export function redactDisplayWindow(text: string, from: number, to: number, idx: PairIndex): string;
 export function displaySnippet(text: string, terms: readonly string[], idx: PairIndex): string;
+// --- W1-B2 Task 15: describe's arguments
+export interface DescribeArgs { target: string; full: boolean; cursor: string | null; json: boolean }
+export function parseDescribeArgs(argv: readonly string[]): { ok: true; args: DescribeArgs } | { ok: false; reason: 'bad-args' };

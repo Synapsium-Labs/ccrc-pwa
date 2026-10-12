@@ -61,7 +61,7 @@ import {
   readEnvelope, shownLine, nextLine,
 } from './lib.mjs';
 import { loadSecrets } from './sweep.mjs';
-import { runTree, grepVerb, familiesOf, transcriptsOf, scopeHeader } from './recall.mjs';
+import { runTree, grepVerb, describeVerb, familiesOf, transcriptsOf, scopeHeader } from './recall.mjs';
 
 process.umask(0o077);
 
@@ -696,6 +696,7 @@ export async function readContext(home, verb, parsed, nowMs = Date.now()) {
 const READ_RUNNERS = Object.freeze({
   tree: (rc, p) => runTree(rc, { depth: Number(p.opts.depth) }),
   grep: (rc, p, argv) => grepVerb(rc, argv),
+  describe: (rc, p, argv) => describeVerb(rc, argv),
 });
 
 function refusalLine(exit, reason) {

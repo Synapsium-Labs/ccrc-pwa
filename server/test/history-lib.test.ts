@@ -46,6 +46,7 @@ import { DatabaseSync as ReplaySqlite } from 'node:sqlite';
 import * as libGrep from '../../ccd/history/lib.mjs';
 import { randomBytes as libGrepRandom } from 'node:crypto';
 import { spawnSync as libGrepSpawn } from 'node:child_process';
+import * as libDescribe from '../../ccd/history/lib.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LIB = join(REPO, 'ccd', 'history', 'lib.mjs');
@@ -5827,5 +5828,26 @@ describe('lib: a window of a longer text, redacted for display (W1-B2 task 12; c
     expect(big.length, 'CONTROL: the text is within DISPLAY_READINGS_MAX').toBeLessThanOrEqual(libGrep.DISPLAY_READINGS_MAX);
     expect(inexact(out), 'a window past the bound that is not the whole text').toBe(true);
     expect(libGrep.redactDisplayWindow(big, 0, big.length, idx) === libGrep.redactForDisplay(big, idx), 'the whole text').toBe(true);
+  });
+});
+
+describe('lib: describe\'s arguments (W1-B2 task 15)', () => {
+  it('parseDescribeArgs: one target (an id, a prefix, a pasted line\'s words or --node), --full, --cursor only with --full, scope flags passed over', () => {
+    const ok = (argv: string[]) => {
+      const r = libDescribe.parseDescribeArgs(argv);
+      expect(r.ok, argv.join(' ')).toBe(true);
+      return r.ok ? r.args : null;
+    };
+    expect(ok(['L0123456789abcdef0123'])).toEqual({ target: 'L0123456789abcdef0123', full: false, cursor: null, json: false });
+    expect(ok(['History:', 'node', 'L0123ab…', '(this', 'compaction)'])?.target).toBe('History: node L0123ab… (this compaction)');
+    expect(ok(['--node', 'L0123ab', '--json'])).toEqual({ target: 'L0123ab', full: false, cursor: null, json: true });
+    expect(ok(['--full', '--cursor', 'abc', 'L0123ab', '--workspace', '--session', 'claude-b-demo']))
+      .toEqual({ target: 'L0123ab', full: true, cursor: 'abc', json: false });
+    for (const bad of [
+      [], ['--json'], ['--node', 'L0123ab', 'L0123ab'], ['--full', '--full', 'L0123ab'], ['--frob', 'L0123ab'],
+      ['L0123ab', '--cursor'], ['--cursor', 'abc', 'L0123ab'],
+    ]) {
+      expect(libDescribe.parseDescribeArgs(bad), JSON.stringify(bad)).toEqual({ ok: false, reason: 'bad-args' });
+    }
   });
 });
