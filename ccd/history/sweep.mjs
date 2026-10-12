@@ -59,7 +59,7 @@ import {
   decideRecallOff, recallOffPath, decideReparse, REPARSE_MAX_TARGETS, planCopy, STORE_DB_REL,
   diffForeignKeys, ftsTablesHealthy, FTS_REBUILD_STEP, decideCounterResets, decideIntegrity,
   RECOVER_PHASES, formatRecoverCursor, parseRecoverCursor, orderJournalFiles, indexRecord, replayStep, nextUnmovedTicks, HEALTH_META,
-  mergeJournalByTime,
+  mergeJournalByTime, decideBind,
 } from './lib.mjs';
 import {
   MIGRATIONS, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
@@ -67,7 +67,7 @@ import {
   syncWriterMirror, userVersion, withTx, writeFileAtomic, removeEntry, readBounded, removeStaleAtomicTemps, mkdirDurable,
   CODEC, brotli, unbrotli, unbrotliPrefix, compressFdRange, probeFts5, createFtsTables, recoverStepAt, storedVersionAt,
   pruneApply, pruneDryRun, writeBackup, removeStaleBackupTemps,
-  integrityCheck, foreignKeyRows, ftsMeasure, dropFtsTables, setStep, setCounter,
+  integrityCheck, foreignKeyRows, ftsMeasure, dropFtsTables, setStep, setCounter, adoptStore,
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
 import { deriveNodes, reparseTargets, reparseLeaves, clearLeafCrashes, indexNodesFts, NODES_FTS_STEP } from './derive.mjs';
@@ -2742,6 +2742,132 @@ export async function recoverPass(db, ctx, failedAtStart) {
   return EXIT.OK;
 }
 
+// ── The binding verbs: doctor --adopt here; --restore and --rebuild from W1-B2 Tasks 27 and 28 (spec §8.4) ──────
+// They run as --op passes under the shim's lock, and BEFORE openStore, which refuses exactly the states they exist to
+// repair (store-unbound, store-missing, store-recoverable). By then runOpPass has already run:
+//   - decideOpGate: CLAUDECODE, a TTY, not a cc- pane. The three binding forms alone pass under history-off
+//     (D-4181);
+//   - the role check;
+//   - the lock-take journal half and the statfs probe;
+//   - decideOpGate again with a registered recovery step measured (recoverStepAt): adopt is refused `recovering` on a
+//     bound store and passes on an unbound one, store.id absent, which no pass can open until it is bound (RB14);
+//     restore and rebuild are never refused, and they replace the step (RB6; D-4698 (history-ops-refused-while-recovering)).
+// Each verb then:
+//   1. removes the writer temps a killed pass left. The lock is held, so every temp is stale (§9.4);
+//   2. measures the store's facts, its stored user_version among them, and lets lib's decideBind decide (L1). A
+//      store newer than this build is decideBind's refusal too (RB17): no arm compares versions itself;
+//   3. writes the op marker and runs store.mjs's sequence (L3). Every DB-side binding fact is committed before a
+//      binding file names the store (D-4724 (history-binding-facts-before-link));
+//   4. finishBind: opens the store as any pass does, then flushes its outbox, so the `bind` record lands in
+//      journal/<store_id>/<YYYY-MM>.<new writer>.jsonl (D-4226). Then the release
+//      journal half. An exit 0 therefore means the bind is in the fsynced journal (§8.4 "Every writing form
+//      flushes its outbox before it exits 0").
+
+/** decideBind's inputs (lib BindFacts): measureStoreFacts, measured afresh on every call, plus this build's schema
+ *  version, history.db's own user_version (storedVersionAt, a Presence: absent with no DB, unreadable when it will
+ *  not read; RB17's fact), and what the verb names. measureStoreFacts goes first: its -wal/-shm reads must come before
+ *  any read-only open, which creates both. `extra` carries what the verb names: a backup (restore, Task 27), a
+ *  --store-id and the journal directories (rebuild, Task 28). adopt names none of them, so they stay empty. */
+function bindFactsOf(home, role, deps, extra = {}) {
+  return {
+    ...measureStoreFacts(home, role),
+    // openStore's own expression (B1 sweep.mjs `const code = …`), as Task 19's RB6 fact counts it: deps.schemaAdded
+    // and deps.migrations are separate seams, so a bare MIGRATIONS length would only coincide with it.
+    codeVersion: deps.migrations === undefined ? SCHEMA_VERSION : deps.migrations.length,
+    storedVersion: storedVersionAt(historyPaths(home).dbFile),
+    storeIdArg: null,
+    journalDirs: [],
+    backup: null,
+    ...extra,
+  };
+}
+
+/** A binding verb's close, once history.db is visible and bound:
+ *  - the ordinary open, which also finishes a pending marker, removes stale temps and syncs meta.writer;
+ *  - the `bind` record, flushed into journal/<store_id>/ under the new writer token;
+ *  - the release journal half.
+ *  A store that does not open answers its word when the word is an exit-5 REASONS word, else exit 1, as runOpPass
+ *  answers it; the bind waits in the outbox for a pass that opens the store. A newer schema never gets here:
+ *  decideBind refuses it before any write, adopt's newer store from bindFactsOf's storedVersion (RB17) and restore's
+ *  newer backup from the staged copy, and rebuild creates at this build's version. A journal that cannot be appended is exit 1, as runOpPass answers it; the bind row stays in the
+ *  outbox, and the next pass flushes it. That answer carries `counted: true`: the failure is said and counted here, on
+ *  the open store, so opPass's `released` (which runs the half at release once more, with the writer closed) does not
+ *  say it twice, as B1's opBody hands its own `counted` to it. */
+function finishBind(home, P, role, deps, out, now) {
+  const opened = openStore(home, P, role, deps);
+  if ('word' in opened) {
+    out(`history-sweep: the store is bound but does not open yet: ${opened.word}`);
+    return REASONS[opened.word] === EXIT.DB ? { rc: EXIT.DB, reason: opened.word } : { rc: EXIT.INTERNAL };
+  }
+  const { db, ids } = opened;
+  try {
+    if (ids === null) {
+      out('history-sweep: store.writer cannot be read, so the bind record could not be journaled');
+      return { rc: EXIT.DB, reason: 'store-unmeasured' };
+    }
+    flushOutbox(db, home, ids, now());
+    if (runJournalHalf(home, ids, now)) throw new JournalError('append-failed');
+    return { rc: EXIT.OK };
+  } catch (e) {
+    if (!(e instanceof JournalError)) throw e;
+    bump(db, 'journal_write_failed');
+    out('history-sweep: journal-unwritable');
+    return { rc: EXIT.INTERNAL, counted: true };
+  } finally {
+    closeWriter(db);
+  }
+}
+
+/** `doctor --adopt` (§8.4; D-4692 (history-adopt-verb)): bind a store that is present without store.id to this box.
+ *  It is the only binding of an unbound store; the sweep never adopts (D-4186).
+ *  decideBind refuses (rc 2 adopt-refused) when:
+ *  - store.id is present, whether equal (nothing to adopt) or not (two stores claim this box);
+ *  - a pending marker names the DB's own id (the next tick finishes that creation);
+ *  - the DB has no readable meta.store_id;
+ *  - the DB's user_version is newer than this build's: refused before the op marker or any write, as openStore
+ *    refuses it before ITS writer's open (G9; DM17 "no write"). The comparison is decideBind's (L1, RB17), over
+ *    bindFactsOf's storedVersion; this arm only measures and relays.
+ *  It refuses with rc 5 store-unmeasured when a binding input, the user_version included, cannot be read.
+ *  On success, store.mjs's adoptStore commits `bound:<ms>` = adopt, a new writer token and the `bind` row, then
+ *  writes store.writer, then store.id (D-4220). Adopt registers no recovery step: the store
+ *  is whole, it only moved (RC16). The carry line repeats §8.4's remedy, because the journal and the export are
+ *  keyed by the store's id, not by this box; adopt prints it itself (RB11), and HEALTH_REMEDIES is unchanged. */
+export async function adoptArm(home, P, args, deps, out) {
+  const now = deps.now ?? Date.now;
+  const role = readRole(P);
+  removeStaleTemps(home);
+  const d = decideBind('adopt', bindFactsOf(home, role, deps));
+  if (!d.ok) {
+    out(`history-sweep: ${d.reason}: ${d.detail}`);
+    return { rc: d.rc, reason: d.reason };
+  }
+  writeOpMarker(P, 'adopt', now());
+  try {
+    const bound = adoptStore(home, { nowMs: now() });
+    const id = bound.storeId;
+    out(`history-sweep: adopt: store ${id} is this box's now, under writer ${bound.writer}`);
+    out(`history-sweep: the operator, from a terminal outside any session: if the box this store left still has ~/.ccrc/history/journal/${id}/ or ~/.ccrc/history/export/${id}/, copy each to the same path here (~/.ccrc/history/journal/${id}/, ~/.ccrc/history/export/${id}/); their file names never collide with this box's`);
+    return finishBind(home, P, role, deps, out, now);
+  } catch (e) {
+    if (!(e instanceof StoreError)) throw e;
+    out(`history-sweep: adopt stopped: ${e.message}`);
+    return REASONS[e.word] === undefined ? { rc: EXIT.INTERNAL } : { rc: REASONS[e.word], reason: e.word };
+  } finally {
+    // B1's type-aware removal, as opPass's own finally and removeStaleOpMarker use (B1's
+    // history-planted-entries-never-wedge): an rmSync with force throws EISDIR on a directory planted at `op`.
+    removeEntry(P.op);
+  }
+}
+
+/** The binding verbs' one entry from runOpPass. It is called for every BINDING_OPS member, after the gate and the
+ *  lock-take journal half, before openStore. `args` is the op's parsed OpArgs (lib parseOpVerbArgs, Task 6); adopt
+ *  takes none. W1-B2 Tasks 27 and 28 put their `restore` and `rebuild` dispatch lines first in this body. */
+export async function bindingPass(home, P, op, args, deps, out) {
+  if (op === 'adopt') return adoptArm(home, P, args, deps, out);
+  out(`history-sweep: ${op} is not a binding verb this build runs`);
+  return { rc: EXIT.REFUSED, reason: 'bad-args' };
+}
+
 /**
  * What one tick of a bound, open store carries. runPass builds it; tick and the steps below read it.
  * @typedef {object} TickCtx
@@ -5044,8 +5170,8 @@ export function mergeSteps(db, ctx, budget) {
 // answers 75 for an --op pass (§5.1).
 
 /** The --op verbs this build runs (§8.4). Each B2 verb joins in the task that ships its path (Tasks 20–28): a verb
- *  named here has an entry in OP_HANDLERS or BINDING_PASSES, and one in OP_DRY_RUNS when it has a dry run. */
-const OP_VERBS = new Set(['import', 'migrate', 'prune', 'reparse', 'backup', 'repair']);
+ *  named here has an entry in OP_HANDLERS, or an arm in bindingPass, and one in OP_DRY_RUNS when it has a dry run. */
+const OP_VERBS = new Set(['import', 'migrate', 'prune', 'reparse', 'backup', 'repair', 'adopt']);
 
 /** adopt, restore and rebuild (§8.4): they run BEFORE openStore, which refuses exactly the states they exist to
  *  repair (store-unbound, store-missing, store-recoverable, store-zero-byte, store-schema-missing, …). */
@@ -5078,11 +5204,6 @@ const OP_HANDLERS = Object.freeze({
   backup: (c) => backupOp(c.db, c.ctx),
   repair: (c) => repairOp(c.db, c.ctx),   // a Promise: opPass awaits every handler
 });
-
-/** The binding verbs' place, run in place of openStore and a handler. Empty in this task, so adopt, restore and
- *  rebuild answer bad-args; W1-B2 Task 26 replaces this table and its branch in opPass with one call to
- *  bindingPass, which Tasks 26–28 fill. */
-const BINDING_PASSES = Object.freeze({});
 
 /** B1's name, kept: a verb's arguments by lib's one grammar (parseOpVerbArgs), or null when refused. opPass
  *  reads parseOpVerbArgs itself, for the refusal's word. */
@@ -5520,11 +5641,23 @@ async function opPass(parsed, deps, out) {
     const held = decideOpGate(form, { ...gateEnv, ...recovery }, tty, paneName);
     if (!held.ok) return released(held.rc, held.reason);
   }
+  // W1-B2 Task 26: the binding verbs (adopt; restore and rebuild from Tasks 27 and 28) run here, under the lock and
+  // after the gate, and never reach openStore, which refuses the very states they repair (§8.4). Their outcome, a
+  // refusal included, answers through B1's `released` like every answer after the lock-take half (RF5a F19). The ids
+  // are read from the files NOW: a bind writes a new store.writer (restore and rebuild may write another store.id), so
+  // the half journals under the binding this pass leaves. `db` is null (finishBind closed the writer), and a journal
+  // failure finishBind already said and counted is `counted`, so it is not said twice. A throw out of the binding pass
+  // that is no answer of its own (removeStaleTemps' readdir of db/, which fails loudly; a StoreError an arm does not
+  // catch) is answered as B1 answers openStore's throw: opThrowResult maps it to one {"rc":…} line, through `released`,
+  // so the half at release still runs (RF5a F19). Left to runOpPass's wrapper, it would skip that half.
   if (BINDING_OPS.has(parsed.op)) {
-    const bind = BINDING_PASSES[parsed.op];
-    if (bind === undefined) return released(EXIT.REFUSED, 'bad-args');
-    const r = await bind({ home, P, parsed, args, deps, out, now, free, role });
-    return released(r.rc, r.reason);
+    let b;
+    try {
+      b = await bindingPass(home, P, parsed.op, args, deps, out);
+    } catch (e) {
+      return opThrowResult(e, (rc, reason) => released(rc, reason));
+    }
+    return released(b.rc, b.reason, null, idsFromFiles(P), b.counted === true);
   }
   const handler = OP_HANDLERS[parsed.op];
   if (handler === undefined) return released(EXIT.REFUSED, 'bad-args');

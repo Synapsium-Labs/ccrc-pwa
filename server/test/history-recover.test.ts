@@ -16,12 +16,12 @@ import * as pty from 'node-pty';
 import {
   makeHistoryBox, runSweep, runShim, runDriver, skipOnDarwin, openStoreRO, counters, journalRecords, plantSession,
   plantTranscript, spoolLine, preloadOptions, PRELOADS, CLI, recoverRow, boundEmptyStore,
-  runCli, withPane, seedFamily, type HistoryBox,
+  runCli, withPane, seedFamily, journalDirOf, type HistoryBox,
 } from './historyHelpers.js';
 import { userRow } from './historyFixtures.js';
-import { removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { removeTmpFixturesEachTest, mkTmp } from './tmpHelpers.js';
 import {
-  HEALTH_META, RECOVER_PHASES, RECOVERY_STALL_TICKS, WRITING_FORMS, floorThreshold, historyPaths, journalRecord, mergeJournalByTime,
+  HEALTH_META, RECOVER_PHASES, RECOVERY_STALL_TICKS, SCHEMA_VERSION, WRITING_FORMS, floorThreshold, historyPaths, journalRecord, mergeJournalByTime,
 } from '../../ccd/history/lib.mjs';
 import { closeWriter, createStore, getMeta, openWriter, setMeta } from '../../ccd/history/store.mjs';
 
@@ -783,4 +783,155 @@ describe('the recovery step\'s close re-measures the spool counters (W1-B2 Tasks
     expect(recoverRow(box)!.completed_ms, 'CONTROL: the step completed').not.toBeNull();
     expect(counters(box)['drain_rejected']).toBe(1);
   }, HEAVY);
+});
+
+// ── W1-B2 Task 26: doctor --adopt (C55) ──────────────────────────────────────────────────────────────────────
+/** A store made unbound as a moved volume or a rebuilt home leaves it (§6.9): created by a pass, then store.id and
+ *  store.writer gone. */
+function unboundBox(prefix: string): { box: HistoryBox; storeId: string; oldWriter: string } {
+  const box = makeHistoryBox(prefix);
+  pass(box);
+  const P = historyPaths(box.home);
+  const storeId = fs.readFileSync(P.storeId, 'utf8').trim();
+  const oldWriter = fs.readFileSync(P.writer, 'utf8').trim();
+  fs.rmSync(P.storeId);
+  fs.rmSync(P.writer);
+  return { box, storeId, oldWriter };
+}
+/** A session and its transcript, for "the next tick ingests" after the adopt. */
+const plantWork = (box: HistoryBox, uuid: string, rowUuid: string): void => {
+  plantSession(box, ID, { uuid, generation: u(0xd1), project: 'demo', workdir: WORK });
+  plantTranscript(box, 'claude-a', SLUG, uuid, [userRow({ uuid: rowUuid, ts: new Date(Date.now() - MIN).toISOString(), text: 'adopted' })]);
+};
+
+describe('C55: doctor --adopt (W1-B2 Task 26; spec §8.4)', () => {
+  it('DB present, store.id absent → doctor --adopt on a terminal binds it under a new writer, journals the bind before answering 0, and the next tick ingests', async () => {
+    const { box, storeId, oldWriter } = unboundBox('ccrc-history-adopt-');
+    const P = historyPaths(box.home);
+    plantWork(box, u(0x81), u(0x2001));
+    const unbound = runSweep(box);
+    expect(unbound.code, unbound.stderr).toBe(5);
+    expect(unbound.stdout).toContain('history-sweep: store-unbound');
+    expect(countOf(box, 'entries'), 'an unbound store captures nothing').toBe(0);
+
+    const r = await cliOnPty(box, ['doctor', '--adopt']);
+    expect(r.code, r.out).toBe(0);
+    // RB11: adopt prints the carry remedy itself, naming where each directory goes on this box.
+    expect(r.out.replace(/\r/g, '')).toContain(
+      `copy each to the same path here (~/.ccrc/history/journal/${storeId}/, ~/.ccrc/history/export/${storeId}/)`);
+    expect(fs.readFileSync(P.storeId, 'utf8').trim()).toBe(storeId);
+    const writer = fs.readFileSync(P.writer, 'utf8').trim();
+    expect(writer).toMatch(/^[0-9a-f]{8}$/);
+    expect(writer, 'a fresh token at every binding').not.toBe(oldWriter);
+    expect(metaOf(box, 'writer')).toBe(writer);
+    expect(rows(box, "SELECT k, v FROM meta WHERE k LIKE 'bound:%'")).toEqual([{ k: expect.stringMatching(/^bound:[0-9]+$/), v: 'adopt' }]);
+    expect(countOf(box, "derivation_state WHERE step = 'recover'"), 'adopt registers no recovery step').toBe(0);
+    // §8.4: the bind is in the fsynced journal before the verb answers 0, under the NEW token's file.
+    expect(countOf(box, 'journal_outbox')).toBe(0);
+    expect(journalRecords(box).filter((x) => x['k'] === 'verdict' && x['kind'] === 'bind'))
+      .toEqual([expect.objectContaining({ bind: 'adopt', writer, event_key: 'none' })]);
+    expect(fs.readdirSync(journalDirOf(box)).filter((n) => n.endsWith(`.${writer}.jsonl`))).toHaveLength(1);
+    expect(fs.existsSync(P.op), 'the op marker goes with the pass').toBe(false);
+
+    // The next tick ingests; a driver clock 31 minutes ahead makes the registry scan due.
+    const next = runDriver(box, { offsetMs: 31 * MIN });
+    expect(next.code, `${next.stdout}\n${next.stderr}`).toBe(0);
+    expect(countOf(box, 'entries')).toBeGreaterThan(0);
+  }, HEAVY);
+
+  it('a container rebuilt with its volume (the DB kept on db/\'s volume, the home new) adopts the same way, and the next tick ingests', async () => {
+    const vol = mkTmp('ccrc-history-volume-');
+    const a = makeHistoryBox('ccrc-history-adopt-old-');
+    fs.mkdirSync(a.root, { recursive: true, mode: 0o700 });
+    fs.symlinkSync(vol, historyPaths(a.home).dbDir);
+    pass(a);
+    const storeId = fs.readFileSync(path.join(a.root, 'store.id'), 'utf8').trim();
+
+    const b = makeHistoryBox('ccrc-history-adopt-new-');
+    fs.mkdirSync(b.root, { recursive: true, mode: 0o700 });
+    fs.symlinkSync(vol, historyPaths(b.home).dbDir);
+    plantWork(b, u(0x82), u(0x2101));
+    const unbound = runSweep(b);
+    expect(unbound.code, unbound.stderr).toBe(5);
+    expect(unbound.stdout).toContain('history-sweep: store-unbound');
+
+    const r = await cliOnPty(b, ['doctor', '--adopt']);
+    expect(r.code, r.out).toBe(0);
+    expect(fs.readFileSync(path.join(b.root, 'store.id'), 'utf8').trim(), 'identity follows the store').toBe(storeId);
+    expect(rows(b, "SELECT v FROM meta WHERE k LIKE 'bound:%'")).toEqual([{ v: 'adopt' }]);
+    const next = runDriver(b, { offsetMs: 31 * MIN });
+    expect(next.code, `${next.stdout}\n${next.stderr}`).toBe(0);
+    expect(countOf(b, `entries WHERE uuid = '${u(0x2101)}'`)).toBe(1);
+  }, HEAVY);
+
+  it('store.id present and naming another store → exit 2 adopt-refused at both doors, nothing written', async () => {
+    const { box } = unboundBox('ccrc-history-adopt-other-');
+    const P = historyPaths(box.home);
+    fs.writeFileSync(P.storeId, `${u(0x99)}\n`, { mode: 0o600 });
+    const before = ccrcSnapshot(box);
+    const cli = await cliOnPty(box, ['doctor', '--adopt']);
+    expect(cli.code, cli.out).toBe(2);
+    const shim = await shimOnPty(box, ['--op', 'adopt']);
+    expect(shim.code, shim.out).toBe(2);
+    expect(lastRc(shim.out)).toEqual({ rc: 2, reason: 'adopt-refused' });
+    expect(ccrcSnapshot(box)).toEqual(before);
+  }, HEAVY);
+
+  it('under CLAUDECODE → exit 2 apply-in-session at both doors, nothing written', async () => {
+    const { box } = unboundBox('ccrc-history-adopt-session-');
+    const before = ccrcSnapshot(box);
+    const cli = await cliOnPty(box, ['doctor', '--adopt'], { CLAUDECODE: '1' });
+    expect(cli.code, cli.out).toBe(2);
+    const shim = await shimOnPty(box, ['--op', 'adopt'], { CLAUDECODE: '1' });
+    expect(lastRc(shim.out)).toEqual({ rc: 2, reason: 'apply-in-session' });
+    expect(ccrcSnapshot(box)).toEqual(before);
+    expect(fs.existsSync(historyPaths(box.home).storeId)).toBe(false);
+  }, HEAVY);
+
+  it('a store whose user_version is newer than this build → exit 2 adopt-refused at both doors, before anything is written (G9)', async () => {
+    const { box } = unboundBox('ccrc-history-adopt-newer-');
+    const P = historyPaths(box.home);
+    // As a rollback past a migration leaves it: this build's openStore refuses such a store before its writer's open
+    // (schema-newer), and adopt must not write meta, the outbox or the binding files into it either. The refusal is
+    // decideBind's (RB17; its pure case is Task 6's): this case pins that adoptArm measures and relays it.
+    const db = new DatabaseSync(P.dbFile);
+    try { db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`); } finally { db.close(); }
+    const before = ccrcSnapshot(box);
+    const cli = await cliOnPty(box, ['doctor', '--adopt']);
+    expect(cli.code, cli.out).toBe(2);
+    const shim = await shimOnPty(box, ['--op', 'adopt']);
+    expect(lastRc(shim.out)).toEqual({ rc: 2, reason: 'adopt-refused' });
+    expect(shim.out.replace(/\r/g, '')).toContain('adopt it with the build that wrote it');
+    expect(ccrcSnapshot(box)).toEqual(before);
+    expect(fs.existsSync(P.storeId)).toBe(false);
+  }, HEAVY);
+
+  it('RB14: a registered recovery step refuses adopt on a bound store at both doors, and lets it bind an unbound one, whose step then runs', async () => {
+    // Refused arm: store.id present. The gate answers first, so the word is recovering, never adopt-refused, and
+    // nothing is written.
+    const bound = makeHistoryBox('ccrc-history-adopt-rec-bound-');
+    pass(bound);
+    registerRecovery(bound, Date.now());
+    const before = ccrcSnapshot(bound);
+    const refusedCli = await cliOnPty(bound, ['doctor', '--adopt', '--json']);
+    expect(lastEnvelope(refusedCli.out), refusedCli.out).toEqual({ exit: 2, reason: 'recovering' });
+    const refusedShim = await shimOnPty(bound, ['--op', 'adopt']);
+    expect(lastRc(refusedShim.out)).toEqual({ rc: 2, reason: 'recovering' });
+    expect(ccrcSnapshot(bound)).toEqual(before);
+
+    // Exempt arm: store.id absent (a store moved mid-recovery). No pass opens it, so its step cannot run until adopt
+    // binds it. The CLI door is the whole proof here: the CLI's pre-check passes it, and the sweep's authoritative
+    // half re-measures store.id before bindingPass, so a success means both halves let it through.
+    const { box, storeId } = unboundBox('ccrc-history-adopt-recovering-');
+    registerRecovery(box, Date.now());
+    const held = runSweep(box);
+    expect(held.code, held.stderr).toBe(5);
+    expect(held.stdout, 'CONTROL: unbound, the step cannot run').toContain('history-sweep: store-unbound');
+    const r = await cliOnPty(box, ['doctor', '--adopt']);
+    expect(r.code, r.out).toBe(0);
+    expect(fs.readFileSync(historyPaths(box.home).storeId, 'utf8').trim()).toBe(storeId);
+    expect(countOf(box, "derivation_state WHERE step = 'recover' AND completed_ms IS NULL"), 'adopt leaves the step registered').toBe(1);
+    pass(box);   // bound now: the store opens, and the scheduled pass takes its recover arm instead of store-unbound
+    const after = recoverRow(box)!; expect(after.cursor !== null || after.completed_ms !== null, 'the step ran once bound').toBe(true);
+  }, 1.5 * HEAVY);
 });

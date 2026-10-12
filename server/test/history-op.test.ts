@@ -1599,3 +1599,64 @@ describe('Task 26F item 6: the journal audit says when it cannot read a month fi
     expect(metaOf(box, 'journal_audit_ms'), 'a followed link would have let the audit finish and advance its clock').toBe(before);
   });
 });
+
+// ── W1-B2 Task 26: a binding pass answers through the half at release (RF5a F19) ───────────────────────────────
+describe('W1-B2 Task 26: the binding branch answers through B1\'s released (RF5a F19), and the op marker leaves by removeEntry', () => {
+  /** A hook's line landing in spool/ once the pass has taken its lock-take half and made its first probe (B1's `mid`). */
+  const mid = [{ rel: '.ccrc/history/spool/claude-a-demo.jsonl', text: '\n' + JSON.stringify(startup(U1, { reg: U1 })) + '\n' }];
+  const spooled = (box: HistoryBox): string[] => names(paths(box).spool).filter((n) => n.endsWith('.jsonl'));
+
+  it('a refused adopt (store.id already names this store) still renames, observes and journals a line spooled during the pass', async () => {
+    const box = boundBox('ccrc-hist-t26-rel-a-');
+    plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+    // adopt is irreversible, so its gate needs a TTY: the driver runs on a pty, as B1's operator-form rows do.
+    const op = await driverPty(box, { afterFirstStatfs: mid }, ['--op', 'adopt']);
+    expect(lastResult(op.out), op.out).toEqual({ rc: 2, reason: 'adopt-refused' });
+    expect(spooled(box), 'the release half renamed it').toEqual([]);
+    const held = draining(box);
+    expect(held, 'and holds it in .draining/').toHaveLength(1);
+    expect(names(paths(box).draining), 'observed: its .obs beside it').toContain(held[0]!.replace(/\.jsonl$/, '.obs'));
+    expect(recs(box).filter((r) => r.k === 'spool'), 'journaled under the binding the pass left').toHaveLength(1);
+  }, 60_000);
+
+  it('a bind whose journal appends all fail says journal-unwritable once and counts it once: finishBind said it, the release half does not repeat it', async () => {
+    const box = boundBox('ccrc-hist-t26-rel-b-');
+    fs.rmSync(paths(box).storeId);
+    fs.rmSync(path.join(paths(box).root, 'store.writer'));
+    const before = counter(box, 'journal_write_failed');
+    // Every open under journal/ fails once the first probe has answered: the bind record's flush (finishBind's), then
+    // the release half's append of the mid-pass line. appendJournal makes any such throw a JournalError.
+    const op = await driverPty(box, { afterFirstStatfs: mid, throwTimesAfterFirstStatfs: { fn: 'openSync', needle: '/journal/', code: 'ENOSPC', times: 1000 } },
+      ['--op', 'adopt']);
+    const out = op.out.replace(/\r/g, '');
+    expect(lastResult(out), out).toEqual({ rc: 1 });
+    expect(out.match(/^history-sweep: journal-unwritable$/gm) ?? [], out).toHaveLength(1);
+    expect(counter(box, 'journal_write_failed') - before, 'counted once, on the open store').toBe(1);
+    expect(spooled(box), 'the release half still ran').toEqual([]);
+  }, 60_000);
+
+  it('a throw out of the binding pass that is no StoreError (removeStaleTemps\' readdir of db/) answers rc 1, and the half at release still runs', async () => {
+    const box = boundBox('ccrc-hist-t26-rel-c-');
+    plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+    // Once the probe has answered, the first readdirSync under db/ throws EIO: adoptArm's removeStaleTemps, the first
+    // thing it does after readRole and before decideBind, the op marker or any write. It fails loudly (B1's rule).
+    const op = await driverPty(box, { afterFirstStatfs: mid, throwTimesAfterFirstStatfs: { fn: 'readdirSync', needle: '/history/db', code: 'EIO', times: 1 } },
+      ['--op', 'adopt']);
+    const out = op.out.replace(/\r/g, '');
+    expect(lastResult(out), `CONTROL: the injected EIO reached the pass (a refused adopt answers 2): ${out}`).toEqual({ rc: 1 });
+    expect(fs.existsSync(path.join(paths(box).root, 'op')), 'no op marker: the throw came before writeOpMarker').toBe(false);
+    expect(spooled(box), 'the release half renamed the mid-pass line').toEqual([]);
+    const held = draining(box);
+    expect(held, 'and holds it in .draining/').toHaveLength(1);
+    expect(names(paths(box).draining), 'observed: its .obs beside it').toContain(held[0]!.replace(/\.jsonl$/, '.obs'));
+    expect(recs(box).filter((r) => r.k === 'spool'), 'journaled under the binding the pass left').toHaveLength(1);
+  }, 60_000);
+
+  it('sweep.mjs calls no rmSync, and adoptArm removes its op marker with removeEntry (B1\'s history-planted-entries-never-wedge)', () => {
+    const src = fs.readFileSync(new URL('../../ccd/history/sweep.mjs', import.meta.url), 'utf8');
+    expect(src.match(/\brmSync\(/g) ?? [], 'rmSync(…, { force: true }) throws EISDIR on a directory planted at a name').toEqual([]);
+    const arm = src.slice(src.indexOf('export async function adoptArm('), src.indexOf('export async function bindingPass('));
+    expect(arm, 'CONTROL: adoptArm precedes bindingPass').not.toBe('');
+    expect(arm).toMatch(/\} finally \{\n(?:\s*\/\/.*\n)*\s*removeEntry\(P\.op\);\n/);
+  });
+});

@@ -389,7 +389,8 @@ describe.skipIf(process.platform === 'darwin')('the --op pass\'s tables, through
     expect(lastResult(runSweep(box, ['--op', 'migrate', 'extra']).stdout)).toEqual({ rc: 2, reason: 'bad-args' });
     expect(lastResult(runSweep(box, ['--op', 'import', '--session', '../x', '--file', `/home/u/x/${U1}.jsonl`, '--apply']).stdout))
       .toEqual({ rc: 2, reason: 'bad-id' });
-    expect(lastResult(runSweep(box, ['--op', 'adopt']).stdout)).toEqual({ rc: 2, reason: 'bad-args' });
+    expect(lastResult(runSweep(box, ['--op', 'frobnicate']).stdout)).toEqual({ rc: 2, reason: 'bad-args' });
+    expect(lastResult(runSweep(box, ['--op', 'adopt']).stdout), 'adopt is a verb now, irreversible').toEqual({ rc: 2, reason: 'needs-tty' });
   }, HEAVY);
 
   it('migration-pending refuses a verb whose rows the code\'s version shapes, never migrate itself', () => {
