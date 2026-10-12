@@ -1745,10 +1745,12 @@ than guess which was meant. `ccrc models` needs `node` and `jq`, and has no PWA 
 **ccrc can run a ChatGPT/Codex subscription as a lane, end to end.** Claude Code talks to a loopback **shim**
 (`ccgpt-proxy.py`) on the lane's `proxyPort`, which forwards to the lane's own **LiteLLM gateway** on
 `litellmPort`, which speaks to the Codex backend with the lane's OAuth. The shim exists because Codex refuses
-`system` messages through either door Claude Code sends them by: it folds the top-level `system` field and
-every mid-conversation `role: "system"` entry into user turns, sets `reasoning.effort` per request (the
-client's own, else the lane's `set-effort` default for that model), and answers `400` or `415` for a body it
-cannot parse or an encoding it does not implement rather than forward it unexamined.
+a mid-conversation `role: "system"` entry, which Claude Code sends: it turns each such entry into a user turn,
+in place. The top-level `system` field is kept as the system prompt — one plain string behind a lead line
+telling the model it runs inside Claude Code, not the Codex CLI — so LiteLLM carries it in Codex's
+`instructions`, after the Codex CLI prompt LiteLLM always puts there. The shim also sets `reasoning.effort`
+per request (the client's own, else the lane's `set-effort` default for that model), and answers `400` or
+`415` for a body it cannot parse or an encoding it does not implement rather than forward it unexamined.
 
 **Adding one is a roster edit** — `ccrc account add` does not create this kind. Add an entry to
 `~/.ccrc/accounts.json` (`homeAble: false` keeps it an overflow lane, as above; `true` lets placement pick it;

@@ -4,30 +4,35 @@ that fronts a ChatGPT/Codex subscription lane.
 
 Binds a port, answers its own identity, and forwards every request
 byte-for-byte — except a POST body on a path ending `/messages`, which is
-parsed as JSON and rewritten. Codex refuses a `system` entry by EITHER of the
-two doors Claude Code sends one through, and both are folded, in this order:
+parsed as JSON and rewritten. Claude Code sends a system instruction through
+two doors, and the shim handles each one differently:
 
   1. `_fold_midturn_system` — every mid-conversation `role: "system"` entry
-     inside `messages` becomes `role: "user"`, in place. Because the entry is
-     replayed with the conversation history, one unfolded injection fails
-     every later turn of that session.
-  2. `_fold_system` — the top-level Anthropic `system` field is removed and
-     folded into the conversation's own leading turn: MERGED into an
-     existing leading `user` message when there is one, otherwise inserted
-     as a new one (spec §6.1 item 2, "folds into the leading user turn";
-     production's own hybrid, adopted here — D-3152).
+     inside `messages` becomes `role: "user"`, in place. Codex refuses such
+     an entry, and because it is replayed with the conversation history, one
+     unfolded injection fails every later turn of that session.
+  2. `_system_as_instructions` — the top-level Anthropic `system` field is
+     KEPT top-level, as the system prompt: flattened to one plain string
+     behind `SYSTEM_LEAD`, so LiteLLM carries it in the Responses
+     `instructions` field after the Codex CLI base prompt. LiteLLM's chatgpt
+     provider always fills `instructions` with its own "You are Codex ...
+     running in the Codex CLI" prompt and appends whatever `instructions`
+     the request carries after it; its Anthropic adapter maps a top-level
+     `system` that is a plain string (or text blocks) to `instructions` —
+     measured offline on LiteLLM 1.101.0 and on 1.104.0. `messages` is not
+     touched: nothing is merged into or inserted before the first turn.
 
-Mid-turn conversion runs FIRST, deliberately, and this is not merely a
-documentation convention — it changes which branch `_fold_system` takes. A
-`role: "system"` entry sitting at `messages[0]` has already become `user` by
-the time the top-level fold runs, so the MERGE branch fires and the
-top-level instruction lands first inside that turn. Run in the reverse
-order, `messages[0]` is still `role: "system"` when `_fold_system` looks, its
-`role == "user"` check is false, and the INSERT branch fires instead —
-structurally different output, not a cosmetic reordering. D-3152 records
-that an unconditional insert (no merge branch) was tried first and measured
-to make the two folds commute regardless of call order on every input
-tested, which is why this function does not take that simpler shape.
+The top-level door used to be a fold as well (`_fold_system`): `system` was
+removed and merged into, or inserted as, the conversation's leading user
+turn. Claude Code's whole system prompt — a subagent's role, its tool rules,
+its report contract — then reached the model as user text, below the Codex
+prompt, and lost every conflict with it. Spec §22 retires that fold and
+supersedes the two arguments this file carried for it: D-3152's (the fold's
+merge branch made the two steps' call order load-bearing) and D-3156's
+acceptance of the merge prepending a text block ahead of a leading
+`tool_result`. The two steps now write disjoint fields — the first only the
+roles inside `messages`, the second only `system` — so their order is no
+longer load-bearing.
 
 A body on that path the shim cannot parse at all is REFUSED, never forwarded
 unexamined. D-3151 — three silent passthrough arms, one in
@@ -42,9 +47,9 @@ own CLOSED entry there (durable, unlike the gitignored `task-7a-rulings.md`
 this paragraph also cites) for what retired them.
 
 A `/messages` POST body carrying `Content-Encoding: gzip` or `deflate` is
-decompressed before the two folds above run and the folded result is
-re-compressed in the same encoding before forwarding — the identical fold
-pipeline, never a second one built for compressed input. An absent or
+decompressed before the two system steps above run and the rewritten result
+is re-compressed in the same encoding before forwarding — the identical
+rewrite pipeline, never a second one built for compressed input. An absent or
 `identity` `Content-Encoding` is left alone, exactly as an unencoded body
 already was: folded and forwarded like any other. Any OTHER encoding this
 shim does not implement — `br`, or the list/trailing-comma forms
@@ -55,7 +60,7 @@ as one is refused with an HTTP 400 naming what was wrong (see
 `_decode_body`) — neither a fourth D-3151 arm nor left to drop the
 connection the way a malformed chunked frame does (see `_read_chunked_body`).
 
-Once a `/messages` body is safely parsed and both system folds have run,
+Once a `/messages` body is safely parsed and both system doors are handled,
 `_apply_effort` resolves Codex's own `reasoning.effort`: an explicit client
 `output_config.effort` — any value except `"auto"`, ccrc's own first-class
 synonym for "the lane decides", which is treated as absent (task-8 fix round 1,
@@ -140,7 +145,7 @@ def _required_port(name: str) -> int:
 
 
 class _UnusableBody(Exception):
-    """Raised when a `/messages` body cannot be safely folded at all: not
+    """Raised when a `/messages` body cannot be safely rewritten at all: not
     JSON, not a JSON object once parsed, or a `messages` field present but
     not a list. Raised by `_rewrite_messages_body` and the
     `_fold_midturn_system` it calls, caught by `_relay` alone, which answers
@@ -181,8 +186,9 @@ def _fold_midturn_system(data):
     and D-3151 arm 3's own census — the plan's and the deleted comment's —
     was always "present but not a list", never "absent". A body carrying
     only a top-level `system` and no `messages` at all is one this shim
-    folds perfectly well (`_fold_system`'s `data.get("messages") or []`
-    turns the missing key into `[]` and inserts one leading `user` turn),
+    forwards perfectly well (`_system_as_instructions` writes `system` alone
+    and never reads `messages`, so an absent key stays absent and an
+    explicit `null` stays `null` — no turn is manufactured for either),
     so refusing it is the over-refusal task-7a-rulings.md §6 (fix round 1,
     C-1) exists to prevent — it buys nothing, since a `messages` key that is not there
     cannot hide an unfolded mid-turn `system` entry either. `None` is
@@ -194,7 +200,7 @@ def _fold_midturn_system(data):
     msgs = data.get("messages")
     if msgs is None:
         # Absent key or explicit `null` — not D-3151 arm 3's condition, see
-        # above. `_fold_system`'s `or []` handles this exactly as before.
+        # above. Forwarded as sent; nothing downstream invents a list for it.
         return data
     if not isinstance(msgs, list):
         raise _UnusableBody("ccgpt-proxy: 'messages' is present but not a list")
@@ -213,7 +219,7 @@ def _system_to_text(system):
     sequence, not concatenated ad hoc — and a non-dict entry or a block with
     no string `text` contributes nothing rather than raising, since this
     function's caller must never let a malformed block crash a request that
-    a well-formed one would have folded cleanly.
+    a well-formed one would have carried cleanly.
     """
     if isinstance(system, str):
         return system
@@ -226,103 +232,64 @@ def _system_to_text(system):
     return ""
 
 
-def _fold_system(data):
-    """Remove the top-level `system` field and fold its content into the
-    conversation's own leading turn (spec §6.1 item 2, "folds into the
-    leading user turn"; production's own hybrid, adopted here — D-3152):
-    MERGE into an existing leading `role: "user"` message when there is one,
-    otherwise INSERT a new one.
+# The one line put ahead of Claude Code's own system prompt. LiteLLM's chatgpt
+# provider writes its Codex CLI base prompt into the Responses `instructions`
+# FIRST and appends the request's own after it, so "above" in this line is
+# that base prompt, and this line is what tells the model which of the two
+# wins where they conflict (spec §22). ASCII only, one line: it is compared
+# byte for byte by `ccgpt-proxy.test.ts`, which spells it as its own literal.
+SYSTEM_LEAD = "You are running inside Claude Code, not the Codex CLI. What follows is Claude Code's system prompt for this session: wherever it differs from the Codex CLI instructions above, follow it."
 
-    Must run AFTER `_fold_midturn_system` has already processed the same
-    `data` — not just a documentation convention, but what decides which
-    branch fires. In the documented order, a `role: "system"` entry sitting
-    at `messages[0]` has already become `user` by the time this runs, so the
-    MERGE branch fires and the top-level text lands first, folded INTO that
-    turn. Called before `_fold_midturn_system` (the order this fold must
-    never run in), `messages[0].role` is still `"system"`, the merge
-    branch's own `role == "user"` check is false, and the INSERT branch
-    fires instead — a new leading `user` message ahead of the
-    still-`system` entry, which `_fold_midturn_system` then converts
-    afterwards. That is a structurally different forwarded body, not a
-    cosmetic reordering, which is what makes call order genuinely
-    load-bearing here (D-3152's measurement: an unconditional insert with no
-    merge branch was tried first, and made the two folds commute regardless
-    of order on every input tested — this hybrid is why that shape was
-    rejected).
 
-    Merging a string `content` prepends `sys_text` with a blank-line
-    separator; merging a content-block-list `content` prepends a new text
-    block instead of stringifying. Either way the top-level instruction
-    reads first, ahead of what was already in that turn.
+def _system_as_instructions(data):
+    """Keep the top-level `system` field as the system prompt, as ONE plain
+    string led by `SYSTEM_LEAD` (spec §22, D-4858).
 
-    task-9 fix round 1 M-1: that same unconditional prepend is what the
-    plan's `## Deviations found` accepts as D-3156 when the block-list
-    branch's `content` already starts with a `tool_result` block — a shape
-    the Anthropic API requires to lead a user message, so this fold pushes
-    it to index 1 instead of 0. Measured in Task 9; the entry (not this
-    docstring) carries the full argument for why that is accepted rather
-    than fixed, audited and rewritten once already — read D-3156 before
-    changing this branch, not this sentence alone.
+    LiteLLM's Anthropic adapter maps a top-level `system` that is a plain
+    string, or a list of text blocks, to the Responses `instructions` field,
+    and its chatgpt provider writes its own Codex CLI prompt there first and
+    appends the request's after it — measured offline on LiteLLM 1.101.0 and
+    on 1.104.0, the two ends of the runtime's range. So the value is
+    flattened by `_system_to_text` (a string as is, text blocks joined with a
+    blank line, anything else to nothing) and written back as a string: the
+    one shape the mapping is measured for, whatever shape the client sent.
+    The blocks' own extra keys (`cache_control`, say) do not survive — the
+    field they land in is a single string.
 
-    Codex refuses the FIELD, not merely a non-empty value of it, so the key
-    is popped unconditionally whenever it is present. An absent, null, or
-    empty `system` — or a content-block list with no usable text — folds to
-    no text at all, and no leading turn is invented for an instruction that
-    said nothing.
+    `messages` is NOT touched. Nothing is merged into the first turn and
+    nothing is inserted ahead of it — the old `_fold_system` did both, and
+    that is what spec §22 retires: Claude Code's whole system prompt reached
+    the model as user text, below the Codex prompt, and lost every conflict
+    with it. Two consequences of that fold no longer exist: its merge branch
+    made call order against `_fold_midturn_system` load-bearing (D-3152's
+    argument), and its block-list merge prepended a text block ahead of a
+    leading `tool_result` (D-3156's acceptance). Both are superseded by spec
+    §22; `ccgpt-proxy.test.ts` pins the second as a regression case.
 
-    `messages` absent or `null` folds to `[]` before the branch above runs,
-    so a request with only a top-level `system` and no history still gets
-    one leading `user` turn, not none (task-7a fix round 1, C-1: this sentence was
-    briefly false between the parent commit and this fix — see
-    `_fold_midturn_system`'s own docstring for the defect and the remedy;
-    re-verified true again here, not merely re-asserted). A non-empty list
-    whose first entry is not a dict is genuinely malformed — nothing safe
-    to fold into — so `system` stays popped (removed either way) and
-    `messages` is forwarded untouched. This guard is written as `not
-    isinstance(msgs, list) or (msgs and not isinstance(msgs[0], dict))`,
-    but by the time this function runs its only caller
-    (`_rewrite_messages_body`) has already run `_fold_midturn_system`,
-    which returns `data` unmodified for an ABSENT or `null` `messages` and
-    raises `_UnusableBody` for a PRESENT non-list `messages` (fix round 1,
-    task-7a C-1) — so `data.get("messages")` here is always either `None` or an
-    actual list by the time `msgs = data.get("messages") or []` runs,
-    never a present-but-wrong-type value, and `not isinstance(msgs, list)`
-    can never be True: defensive dead code from this call site, same shape
-    as `_decode_body`/`_encode_body`'s own unreachable tails below, not a
-    D-3151 arm and never was — the Tasks 5+6 review's §6 census confirmed
-    exactly three arms, and this pre-existing pair (this branch, and the
-    identical-shaped empty-`sys_text` early return above it) is not among
-    them. The `first entry not a dict` half remains live and is left
-    exactly as it was.
+    A `system` that flattens to no text — absent, `null`, an empty string,
+    or a block list carrying no string `text` — is popped and NOT re-added:
+    the lead line is never sent alone, since it would announce a system
+    prompt that is not there.
     """
-    sys_text = _system_to_text(data.pop("system", None))
-    if not sys_text:
+    text = _system_to_text(data.pop("system", None))
+    if not text:
         return data
-    msgs = data.get("messages") or []
-    if not isinstance(msgs, list) or (msgs and not isinstance(msgs[0], dict)):
-        return data
-    if msgs and msgs[0].get("role") == "user":
-        content = msgs[0].get("content")
-        if isinstance(content, str):
-            msgs[0]["content"] = f"{sys_text}\n\n{content}"
-        elif isinstance(content, list):
-            msgs[0]["content"] = [{"type": "text", "text": sys_text}] + content
-        else:
-            msgs[0]["content"] = sys_text
-    else:
-        msgs.insert(0, {"role": "user", "content": sys_text})
-    data["messages"] = msgs
+    data["system"] = f"{SYSTEM_LEAD}\n\n{text}"
     return data
 
 
 def _rewrite_messages_body(body: bytes) -> bytes:
-    """The `/messages`-path rewrite: fold mid-conversation `system` turns,
-    then the top-level `system` field, then resolve `_apply_effort`'s own
+    """The `/messages`-path rewrite: turn mid-conversation `system` entries
+    into `user` ones in place (`_fold_midturn_system`), then keep the
+    top-level `system` field as the system prompt — one plain string behind
+    `SYSTEM_LEAD`, which LiteLLM carries in Codex's `instructions`
+    (`_system_as_instructions`, spec §22; it used to be folded into the
+    leading user turn) — then resolve `_apply_effort`'s own
     `reasoning.effort` (task-8 fix round 1, I-1 — this line used to stop at
-    "then re-encode" three steps early, 33 lines above the `_apply_effort`
+    "then re-encode" three steps early, above the `_apply_effort`
     call this function actually makes), then re-encode. `ensure_ascii=False`
     (commit 8009b4f4 fix round 1, M-5): the default would re-escape every non-ASCII byte the
-    client sent even when nothing needed folding, and a proxy that rewrites
+    client sent even when nothing needed rewriting, and a proxy that rewrites
     more of the wire than it must is a proxy whose diffs are harder to reason
     about — keep the forwarded body as close to what arrived as re-encoding
     allows.
@@ -345,13 +312,13 @@ def _rewrite_messages_body(body: bytes) -> bytes:
         raise _UnusableBody(f"ccgpt-proxy: malformed JSON body: {e}") from None
     if not isinstance(data, dict):
         raise _UnusableBody("ccgpt-proxy: top-level JSON value is not an object")
-    # Order is the whole point (module docstring): mid-turn conversion runs
-    # FIRST, so a system entry already sitting at messages[0] has become
-    # `user` by the time the top-level fold decides where to insert — the
-    # top-level instruction then lands ABOVE it, not reordered beneath it.
+    # The two system steps touch disjoint fields — `_fold_midturn_system` the
+    # roles inside `messages`, `_system_as_instructions` the top-level
+    # `system` alone — so their order is no longer load-bearing (spec §22:
+    # the retired `_fold_system`'s merge branch is what made it so, D-3152).
     data = _fold_midturn_system(data)
     if "system" in data:
-        data = _fold_system(data)
+        data = _system_as_instructions(data)
     data = _apply_effort(data)
     return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
@@ -435,7 +402,7 @@ def _lane_effort_map() -> dict:
         default, for the identical reason. Deliberately NOT shaped like
         `_UnusableBody`/`_BadEncoding`: those answer a CLIENT body this shim
         cannot use; this is ccrc's own local file, and the client's request
-        is examined and folded exactly as always regardless of what this
+        is examined and rewritten exactly as always regardless of what this
         function returns.
     Either way this function returns `{}` WITHOUT writing the cache slot
     (task-8 fix round 1, M-2 — a caching bug in the original round: a FAILURE
@@ -478,8 +445,9 @@ def _lane_effort_map() -> dict:
 def _apply_effort(data: dict) -> dict:
     """Resolve `reasoning.effort` and strip both client-side effort fields,
     IN PLACE, on an already-parsed `/messages` body. Called from
-    `_rewrite_messages_body` alone, AFTER both system folds — task-8-
-    rulings.md (commit e5318e97) §4: this must run only where the folds already run, a POST
+    `_rewrite_messages_body` alone, AFTER both system doors are handled
+    (`_fold_midturn_system`, then `_system_as_instructions`) — task-8-
+    rulings.md (commit e5318e97) §4: this must run only where those two already run, a POST
     body on a path ending `/messages`, and nowhere else, and it introduces
     no new "cannot use this body" condition of its own — nothing here
     raises.
@@ -522,7 +490,7 @@ def _apply_effort(data: dict) -> dict:
 
     Malformed client shapes (a non-dict `output_config`, a `model` that is
     not a string) are tolerated, never refused — this is the SAME body the
-    two folds above already accepted; effort resolution adds no new refusal
+    two system steps above already accepted; effort resolution adds no new refusal
     surface (task-8-rulings.md (commit e5318e97) §4).
     """
     output_config = data.pop("output_config", None)
@@ -855,8 +823,9 @@ def _decode_body(body: bytes, encoding: str) -> bytes:
       forward a body that was read to completion and simply is not JSON
       once decoded; forwarding STILL-COMPRESSED, unrewritten bytes here
       instead would repeat, byte for byte, the exact production hazard this
-      task closes — the client's original `system` field would still be
-      sitting inside them, compressed but intact.
+      task closes — the client's mid-conversation `role: "system"` entries
+      would still be sitting inside them, compressed and unconverted (and
+      its top-level `system` would arrive without `SYSTEM_LEAD`).
     - It is not `_read_chunked_body`'s let-it-raise-and-drop-the-connection
       shape either. That shape is accepted there only because chunk framing
       is the sole description of where the body ends, so a malformed frame
@@ -1132,11 +1101,15 @@ class Handler(BaseHTTPRequestHandler):
         # three ways before forwarding, all inside `_rewrite_messages_body`
         # below — Codex refuses a mid-conversation `role: "system"` entry
         # inside its `messages` (`_fold_midturn_system` converts each one to
-        # `user`, in place); the top-level `system` field folds into the
-        # leading turn (`_fold_system`); and Codex's own `reasoning.effort`
-        # is resolved from the client's `output_config` or this lane's own
-        # default (`_apply_effort`, task-8 fix round 1, M-5 — this comment
-        # used to name the system fold alone and under-describe the branch).
+        # `user`, in place); the top-level `system` field is KEPT top-level,
+        # as one plain string behind `SYSTEM_LEAD`, so LiteLLM carries it in
+        # Codex's `instructions` after the Codex CLI base prompt
+        # (`_system_as_instructions`, spec §22 — it used to be folded into
+        # the leading user turn, below that prompt); and Codex's own
+        # `reasoning.effort` is resolved from the client's `output_config`
+        # or this lane's own default (`_apply_effort`, task-8 fix round 1,
+        # M-5 — this comment used to name the system fold alone and
+        # under-describe the branch).
         #
         # Suffix match, not the exact literal `/v1/messages` (fix round 1,
         # commit 8903d18a M-4): spec §6.4 speaks of
