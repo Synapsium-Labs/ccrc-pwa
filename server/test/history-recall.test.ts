@@ -1359,6 +1359,7 @@ describe("grep's snippet localization and Task 12 helper seam (W1-B2 task 12 fix
       GRX.user(T, 2, `${FILLER}café closes the accent hit`),
       GRX.user(T, 3, `${FILLER}studies are archived`),
       GRX.user(T, 4, `${FILLER}relational data follows`),
+      GRX.user(T, 5, `\u1ed9 earlyhead ${FILLER}o closes the true default-fold hit`),
     ]);
   }, HEAVY);
 
@@ -1383,6 +1384,14 @@ describe("grep's snippet localization and Task 12 helper seam (W1-B2 task 12 fix
   it('F2: a plain `cafe` locates the accented source token far beyond the initial window', async () => {
     const s = await snippetOf(['cafe']);
     expect(s).toContain('café');
+    expect(s.startsWith('filler filler filler')).toBe(false);
+  }, HEAVY);
+
+  it('F2 round 2: default diacritic folding keeps U+1ED9 distinct, so `o` is shown at the later true hit, not the early U+1ED9', async () => {
+    const s = await snippetOf(['o']);
+    expect(s).toContain('o closes the true default-fold hit');
+    expect(s).not.toContain('\u1ed9');
+    expect(s).not.toContain('earlyhead');
     expect(s.startsWith('filler filler filler')).toBe(false);
   }, HEAVY);
 

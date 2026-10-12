@@ -3750,11 +3750,20 @@ function porterStem(word) {
   return stem;
 }
 
-/** The comparison form of one unicode61 token candidate, as FTS5's default `porter unicode61` (remove_diacritics)
- *  compares it: lowercased, canonically decomposed, combining diacritical marks (U+0300 to U+036F) removed. It is a
- *  comparison value only: the candidate's span in the source text is never rebuilt from it (Task 12 fix round 1, F2). */
+/** The comparison form of one unicode61 token candidate, as FTS5's default `porter unicode61` (remove_diacritics=1)
+ *  compares it: lowercased, then folded per ORIGINAL code point. An explicit combining mark (U+0300 to U+036F) is
+ *  removed; a code point whose canonical decomposition is a base plus ONE such mark folds to the base; one whose
+ *  decomposition holds MORE THAN ONE mark (U+1ED9) stays as it is, which is the default mode's own refusal to fold it
+ *  (mode 2 would). It is a comparison value only: the candidate's span in the source text is never rebuilt from it
+ *  (Task 12 fix round 1, F2; round 2, F2). */
 function foldToken(word) {
-  return word.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  let out = '';
+  for (const ch of word.toLowerCase()) {
+    if (/^[\u0300-\u036f]$/.test(ch)) continue;
+    const d = ch.normalize('NFD');
+    out += (d.match(/[\u0300-\u036f]/g) ?? []).length > 1 ? ch : d.replace(/[\u0300-\u036f]/g, '');
+  }
+  return out;
 }
 
 /** Unicode61 token candidates with their original code-unit spans. Combining diacritical marks belong to the token

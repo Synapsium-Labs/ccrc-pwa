@@ -3798,6 +3798,17 @@ describe('snippetTerms and unicode61 diacritic comparison: prefix markers surviv
     expect(libSearch.snippetSpan(pre, ['cafe']).at, 'folding changes no source offset').toBe(pre.indexOf('cafe'));
     expect(libSearch.snippetSpan(`${'a'.repeat(100)} caf\u00e9 stud\u00efes`, libSearch.snippetTerms('stud*')).at).toBe(`${'a'.repeat(100)} caf\u00e9 `.length);
   });
+  it('F2 round 2: default remove_diacritics=1 keeps a precomposed multi-mark code point (U+1ED9) distinct from `o`, while an explicit decomposed `o` + U+0323 + U+0302 and a one-mark U+1ECD fold to `o`', () => {
+    const early = `\u1ed9 head ${'a'.repeat(100)} o tail`;
+    expect(libSearch.snippetSpan(early, ['o']), 'the later ASCII o, not the early U+1ED9').toEqual({ at: early.indexOf(' o ') + 1, len: 1 });
+    const decomposed = `${'a'.repeat(100)} o\u0323\u0302 tail`;
+    expect(libSearch.snippetSpan(decomposed, ['o']), 'explicit marks stay individually stripped').toEqual({ at: decomposed.indexOf('o\u0323'), len: 3 });
+    const oneMark = `${'a'.repeat(100)} \u1ecd tail`;
+    expect(libSearch.snippetSpan(oneMark, ['o']), 'an ordinary one-mark code point still folds').toEqual({ at: oneMark.indexOf('\u1ecd'), len: 1 });
+    const self = `${'a'.repeat(100)} \u1ed9 tail`;
+    expect(libSearch.snippetSpan(self, ['\u1ed9']), 'the multi-mark query matches itself').toEqual({ at: self.indexOf('\u1ed9'), len: 1 });
+    expect(libSearch.snippetSpan(self, ['o']).at, 'and is not an o').toBe(-1);
+  });
 });
 
 describe('parseTimeBound: --since and --before (spec 8.4)', () => {
