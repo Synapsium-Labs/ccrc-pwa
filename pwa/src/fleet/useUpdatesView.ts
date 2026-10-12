@@ -159,6 +159,9 @@ export function asUpdatesView(raw: unknown): UpdatesView | null {
   console.warn(`ccrc: /api/updates dropped ${dropped} malformed element(s) it could not read — the rest still rendered.`);
   return {
     catalogue: catalogue as unknown as UpdatesView['catalogue'], releases: okReleases, nodes: okNodes, intent: okIntent,
+    // The box-token card's field (D-4392) rides through untouched: this guard does not judge it, its ONE reader
+    // (`readBoxTokenView`, lib/api.ts) does, and a rebuild that dropped it would blank the card for a bad node row.
+    ...(raw.boxToken !== undefined ? { boxToken: raw.boxToken as UpdatesView['boxToken'] } : {}),
   };
 }
 

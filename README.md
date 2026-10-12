@@ -172,7 +172,7 @@ Download it, or use `bash <(curl -fsSL …)`.
   All three packages declare the same floor and a test pins it.
 - **git**, **tmux**, **bash**, **curl**, **rsync**, **diff** — `ccrc install` refuses by
   name without `rsync` (it places the tree) or `diff` (every skill installer compares
-  with it). **`openssl`** only mints the box and agent tokens by hand (`openssl rand -hex 32`).
+  with it). **`openssl`** only mints the agent token by hand (`openssl rand -hex 32`).
 - **`gh`** (the GitHub CLI, authenticated with `repo` scope: `gh auth login --scopes repo`)
   — PR state, opening a PR and the merges your sessions make go through it. Doctor FAILs
   without it, or with a token that lacks `repo`, so the install's own exit code does too.
@@ -491,7 +491,7 @@ way; the refusal on a missing `diff` comes from the skill installers it then run
 The role's service and `ccd-cap-scopes.timer` must enable or the install fails; any other timer that
 will not enable prints the `systemctl --user enable --now` line to run, is named by its unit among the
 closing line's degraded steps (`install: done — converged with N degraded steps (…)`), and the install
-carries on. A `stable` build can predate some of these units; `ccrc version` says what a box runs.
+carries on. A `stable` build can predate some of these units; `ccrc version` says what a box runs. Also running on `fleet` and `both` boxes, outside the table: `ccd-history-sweep.timer` (every 2 min), which copies session text verbatim, secrets a session printed included, into `~/.ccrc/history`; its pause file is `~/.ccrc/history-off`. A rollback to a build with no `ccd/history/` leaves this timer enabled and failing every 2 minutes (the store is untouched): run `systemctl --user disable --now ccd-history-sweep.timer` on that box, as the timer unit's header says; the next install of a build with history re-enables it.
 `ccrc expose duckdns` adds `ccrc-ddns.timer` (every five minutes; on macOS the launchd job
 `app.ccrc.ccrc-ddns`). `deploy.sh agent` arms the fleet set minus `ccd-update-sync` and the
 `ccrc-codex-usage@<id>.timer` instances — it places that template and enables none; `ccrc install` does,
@@ -519,37 +519,40 @@ Claude Code session you start there, while the hook entries act only inside a `c
 `cc-<id>` tmux session and exit at once anywhere else.
 
 **What the install does not place.** Coordination — runs, mail, claims, asks, and a fleet box's pool
-and update pulls — needs three things the install leaves to you, once per box; without them the
-console still drives sessions, but the box-token routes answer `401` and the clients refuse before
-they call:
+and update pulls — needs two things the install leaves to you, once per box; without them the
+console still drives sessions, but the clients refuse before they call:
 
-- **The box token**, one shared secret: `~/.ccrc/mail.token` for the server (`CCRC_MAIL_TOKEN_PATH`
-  overrides) and the same value at `~/.cc-secrets/ccrc-mail.token` for the fleet side — both files
-  on a single box, one on each of two. Only `deploy.sh`'s secret lane ships it. What the server does
-  without it: "The mail bus and its token", under "Fleet coordination" below.
 - **`CCRC_SERVER_URL`** in `~/.ccrc/agent.env` — the server's address, which the skills' client,
   `ccd-pool-sync` and `ccd-update-sync` read and never guess. `ccrc install --role fleet` prompts
   for it; a single (`both`) box gets no `agent.env` at all.
 - **`~/.local/bin/ccrc-api`**, the closed client every skill calls instead of `curl` ("Programs,
   runs and mail"). `deploy.sh agent` installs it; `ccrc install` and `ccrc update` do not.
 
-The block below is the single-box form: it mints the token on this box and puts it at both paths. On
-two boxes mint the value once (`openssl rand -hex 32`) and place that same value at
-`~/.ccrc/mail.token` on the server box and at `~/.cc-secrets/ccrc-mail.token` on the fleet box;
-minted separately the two disagree and every box-token call answers `401` (`wrong box token`).
+**The box token needs nothing from you.** The server mints `~/.ccrc/mail.token` (mode `0600`;
+`CCRC_MAIL_TOKEN_PATH` moves it) at its first boot and rotates it. On two boxes it hands the fleet
+box its copy at `~/.cc-secrets/ccrc-mail.token` over the agent link (`ccrc token sync`, run by the
+agent); on a single box whose role is recorded as `CCRC_ROLE=both` in `~/.ccrc/ccrc.env` it writes
+that copy itself. Never mint, copy or edit either file by hand: a value found at boot is adopted
+once and retired by the first rotation. Check them with `ls -l`, never `cat`; `ccrc doctor`'s
+`box-token` check and the console's Settings card report both. What the server does when a mint
+fails: "The mail bus and its token", under "Fleet coordination" below. One case is the exception: a
+single box whose role is only derived as `both` (placed by `deploy.sh`, or a dev launch with
+`CCRC_FLEET` unset and no `CCRC_ROLE` recorded) never gets the fleet copy written, so `notify.sh` sends
+nothing and `ccrc-api` answers `no-token`; the server warns at boot, and the remedy is to record
+`CCRC_ROLE=both` in `~/.ccrc/ccrc.env` and then restart `ccrc.service` (the role is read only at boot).
+A `deploy.sh` box re-ships a local `deploy/ccrc.env` over that file, so record the role there too.
+
+The block below is the single-box form of the two steps:
 
 ```bash
-( umask 077; mkdir -p ~/.cc-secrets
-  openssl rand -hex 32 > ~/.ccrc/mail.token            # never print it: ls -l, not cat
-  cp ~/.ccrc/mail.token ~/.cc-secrets/ccrc-mail.token  # two boxes: this value, at this path, on the fleet box
-  # single box only (a fleet box's install wrote its agent.env):
-  [ -e ~/.ccrc/agent.env ] || echo 'CCRC_SERVER_URL=http://127.0.0.1:7788' > ~/.ccrc/agent.env )
+# single box only (a fleet box's install wrote its agent.env):
+( umask 077; [ -e ~/.ccrc/agent.env ] || echo 'CCRC_SERVER_URL=http://127.0.0.1:7788' > ~/.ccrc/agent.env )
 ln -sfn ~/ccrc/ccd/ccrc-api ~/.local/bin/ccrc-api        # on the box the sessions run on; a link follows every update
-systemctl --user restart ccrc.service                     # the server reads the token once, at boot
 ```
 
-Creating `~/.cc-secrets` has one side effect on `ccrc doctor`: its `credentials` check SKIPs while
-that directory is absent, and once it exists FAILs for the seeded account — the roster marks it
+`~/.cc-secrets` has one side effect on `ccrc doctor`: its `credentials` check SKIPs while that
+directory is absent, and once it exists (the box token's first write creates it) FAILs for the
+seeded account — the roster marks it
 `"telemetry": "anthropic"`, so the health probe measures it — until its setup token is at
 `~/.cc-secrets/<id>-oauth.env` (`<id>` is `claude` in the seed): mode `0600`, one
 `export CLAUDE_CODE_OAUTH_TOKEN=…` line holding what `claude setup-token` prints. "Connecting an
@@ -583,6 +586,7 @@ ends with. A `server`-role box SKIPs the checks that measure per-account or per-
 | `pool-sync`, `update-sync` | a fleet box's two pulled projections, present and in lease |
 | `graphify`, `graphify-path` | the pinned graph engine, its skill and the sweep's last census; `graphify` on `PATH` resolving to that engine |
 | `build`, `provenance`, `fleet` | the running server's build against the stamp; whether this install was verified (never a FAIL); in remote mode, whether the two boxes agree |
+| `box-token` | the box token's lifecycle on each box (the server's token and state files; the fleet's copy and its last sync). PASS or SKIP only in wave 1: a finding that will be a FAIL or WARN prints as a SKIP with its word, and a SKIP is never counted in doctor's exit code |
 
 `ccrc doctor --fix` cures the failing checks that know how — `skills`, `wrappers` and `codex`, each by
 the shipped tree's own installer — and measures them again; the second verdict is the one that counts (D-3113). Without the flag
@@ -771,8 +775,9 @@ server's exposed origin ("Exposure", above), or a private address once the serve
 (`ccrc.service` binds loopback by default, and doctor's `update-exposure` check then wants the session gate
 armed) — and a fresh agent token (`openssl rand -hex 32`). Then set `CCRC_AGENT_HOST` in the fleet box's
 `~/.ccrc/agent.env` and restart `ccrc-agent.service` ("Config", under "Remote fleet mode", below), and place
-the box token and `ccrc-api` by hand as "What the install does not place" (under "Install", above) shows — the
-token is the SAME value on both boxes. Finally set `CCRC_FLEET=remote`,
+`ccrc-api` by hand as "What the install does not place" (under "Install", above) shows; the box token
+needs no hand step, because the server hands the fleet box its copy over the agent link once the link is up.
+Finally set `CCRC_FLEET=remote`,
 `CCRC_AGENT_URL=ws://<fleet address>:7789/agent` and the same `CCRC_AGENT_TOKEN` in the server box's
 `~/.ccrc/ccrc.env`, restart `ccrc.service`, and check the link as "Verifying a remote-mode deploy" (below)
 shows.
@@ -964,7 +969,14 @@ notes as plain text, never markup) and the node inventory (what each node runs a
 and its state; **Ack** returns a settled node to idle and clears its request and refusals). Every control
 that would move a node — Install, Roll back, Update, Update all — opens one confirm sheet
 (below). A red banner warns when the sign-in gate is off and the page was reached over a non-loopback
-address. Settings has a second section, **Notifications**: the push bell for this browser (the same
+address. A **Box token** card follows, read from the same answer's `boxToken` field: the current value's
+generation and age, the last rotation, the state (idle, rotating, grace, held with the server's reason,
+failed with its word), whether a rotation is owed and why, whether the fleet confirmed the current
+generation, its transport (`http` said as unencrypted), the previous and retired values still presented, the
+proof that the retired value is refused, a boot recovery, a token-file finding from the last re-read, an
+alert after three failures in a row or a stall (a failed mint, a rotation owed for a day), and **Rotate now**
+(`POST /api/token/rotate`, session-only). Settings then has
+a further section, **Notifications**: the push bell for this browser (the same
 toggle as the fleet header's) and **Release notifications** — `on my channel`, `stable only` or `off`, written
 as the fleet intent's `notify` through `POST /api/updates/intent`. Settings has a third section, **Stall watch**
 (stall-watch-settings W2), read and written through `/api/coord/stall-watch` by a poll of its own, once a minute and
@@ -1095,6 +1107,7 @@ and the answer was bad, 2 a usage error — `update` adds 3 and 4, and `rollback
 | `memory [--apply]` | census each project's memory, then converge it into one store ("One memory store per project", below) |
 | `models <id> <subcommand>`, `models refresh <id>\|--all`, `models litellm <id>` | a lane's model-class registry, and the provider catalogue it is classified against |
 | `codex start\|stop\|status\|login <id>` | a Codex lane's LiteLLM gateway and shim; refused on a server-role box |
+| `token sync\|probe` | the box token's fleet side: `sync --from agent` is ccrc-agent's token-sync op (a one-time code on stdin, trade for the new value, write `~/.cc-secrets/ccrc-mail.token`, prove it with one call); `probe --file <path> [--url <base>]` presents a file's value once and prints only the HTTP status and accepted, refused or unmeasured |
 | `restamp <file>` | re-stamp a file carrying a `ccrc:generated` marker after its body changed |
 
 **The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same directory shape, pruned
@@ -1112,12 +1125,13 @@ backup; unmanaged entries survive byte-identically), marker-verified wrappers on
 `~/.cc-sessions` file-by-file, `~/ccrc`, a staged `~/ccrc.new` link (D-3452), every kept tree under `~/ccrc-versions`
 and a leftover `~/ccrc.migrating`, and the installed executables — and preserves `~/.ccrc` (less the node's
 install-state files — `installed`, `node-id`, `ccrc-caps`, `floor`, `previous`, `install-step`, `update.json`,
-`update.lock`, `update-intent`, `migrating-to` — which leave with the tree), the registry rows and operator switches,
+`update.lock`, `update-intent`, `migrating-to`, `box-token-generation`, `token-sync.json` — which leave with the
+tree), `~/.cc-secrets/ccrc-mail.token` (never touched), the registry rows and operator switches,
 worktrees and `~/ccrc-backups`, printing (never running) the keep-aside restore commands. `--purge` additionally
 removes `~/.ccrc`'s config (roster, identity, `ccrc.env`, `build.json`, …) and `~/ccrc-backups` — but **preserves
 `~/.ccrc/memory`** (every project's durable memory, the sole live copy since `ccrc memory --apply`;
 a session's prose is not configuration) unless `--purge-memory` is also given, which extends `--purge`
-to remove it too; never worktrees, never tmux state. It also removes graphify's skill from every rostered home,
+to remove it too; it likewise preserves `~/.ccrc/history` (the session-history store: verbatim session text, which Claude Code's retention may already have deleted elsewhere) and the `~/.ccrc/history-*` operator files, which only `--purge-history` (refused without `--purge`) removes, and `--purge-memory` never reaches them; never worktrees, never tmux state. It also removes graphify's skill from every rostered home,
 ccrc's `~/.local/bin/graphify` link and the Codex runtime under `~/.ccrc/runtime/codex`, and stops any Codex lane
 tier it can prove is that lane's own. It leaves, for you to remove by hand, the three ccrc skills — `skills/ccrc-coordinator`,
 `skills/ccrc-worker`, `skills/ccrc-reviewer` — in each account home, a hand-placed `~/.local/bin/ccrc-api`, and
@@ -1199,14 +1213,16 @@ step 10 of
 What is gated, and what is not: **everything except** `/health` (deploy's own
 liveness gate reads the shipped sha out of it), the twenty-seven machine lanes the
 fleet host reaches (twenty-four box-token-consulting coordination routes plus
-`/api/notify`, which still tolerates an absent token for one deploy generation,
+`/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
 `/api/runs/:id/signals`, `/api/feed`, `/api/lifecycle`, `/api/peers`, `/api/claims`,
 `/api/asks`, `/api/pools/epoch`, `/api/updates/intent/:nodeId`) take a live session
 cookie **or** the token, which is how a coordinator reads its own wave ledger from
-the fleet host), the login and passkey-assertion doors themselves,
+the fleet host), `POST /api/token/claim` (the box token's claim door, which
+authenticates by a single-use code the server issued over the agent link), the
+login and passkey-assertion doors themselves,
 `GET /api/auth/status` (with a minimized anonymous body), and `GET /*`, the
 static bundle a browser has to
 download before it can show a login screen. Enrolling a passkey is **not**
@@ -2393,7 +2409,8 @@ operator's switch was undone by the next swap (§1.4: Opus typed by hand, Fable 
 
 A swap carries more than the transcript: beside it sits the session's sidecar directory — every subagent
 transcript, workflow journal and tool result it wrote. A first carry onto an account copies that tree whole
-(`cp -al`, falling back to `cp -a`; `swap.log` says `(link)` or `(copy)`). A return visit — a session carried back
+(`cp -al`, then the link route below, falling back to `cp -a`; `swap.log` says `(link)`, `(link: via-mount)` or
+`(copy: <cause> <bytes> bytes)`). A return visit — a session carried back
 onto an account it once left — used to find the directory already there and log `(kept)`, leaving everything
 written since on the source: 774 of 1,310 carries in the measured window, and every "journal not on disk" resume
 refusal measured came after `(kept)` carries only. Now the carry walks the source file by file and deletes
@@ -2411,6 +2428,36 @@ rest, newest first within each — so what does not fit is deferred whole to the
 the first action alone overruns the budget, or `(kept: error)` — no `flock`, no `python3`, a destination that is
 not a real directory, or the walker's own failure. `python3 deploy/measure-continuity.py --stage 1` reads it back,
 read-only.
+
+**A link that the mounts refuse goes through a common mount, and a copy says why (issue #317).** `link(2)` answers
+`EXDEV` between two mounts even when both are one filesystem, so on a box where each `~/.claude-*` is its own bind
+mount every carry used to copy. When a direct link fails — a first carry's `cp -al`, or the walk's link of an absent
+file, and then only for `EXDEV` — ccd reads the kernel's mount table (`/proc/self/mountinfo`), looks for a read-write
+mount of the same filesystem under which both trees appear, and links through it only when each alias is provably the
+same directory (equal device and inode). A mount stacked over the alias, or one inside either tree, rules it out, and
+a read-only destination mount is never routed around. Nothing is asked while linking works. A wrong table costs a copy,
+never a link into another tree: the inode proof covers both roots, and beneath them the alias shows the same files
+only if the table lists every mount inside the trees — the kernel's own table always does. A first carry that
+linked this way logs `(link: via-mount)`; a merge adds `, via-mount V`. Every copy that remains names its cause and
+its bytes — `(copy: <cause> <bytes> bytes)` (`?` when the tree could not be sized), and on a merge one
+`, copy: <cause> <F> files <B> bytes` per cause — with the same sentence on stderr. A bare `(copy)` is a line written
+before this change.
+
+| cause | what it means | the fix |
+|---|---|---|
+| `exdev-other-fs` | the two roots are on different filesystems (by `stat`, or their mounts name different devices) | put both roots on one filesystem |
+| `exdev-no-root` | separate mounts, and no read-write mount of that filesystem exposes both | mount the filesystem, or a directory above every account root, read-write at a second path |
+| `root-unreachable` | the alias could not be stat'ed | give the fleet user search permission along the common mount's path |
+| `root-mismatch` | the alias is another directory, or a mount sits inside a tree (also when one mount holds both trees) | inspect `findmnt`: a mount inside an account tree makes every carry of it copy; nothing was written through the alias |
+| `root-failed` | the link failed through a proved alias | check the filesystem is writable, and for EMLINK, ENOSPC or a quota |
+| `mounts-absent` | no mount table: expected on macOS; on Linux, no `/proc` | nothing on macOS; on Linux, mount `/proc` |
+| `mounts-unreadable` | the table could not be read, no line in it parses, or no mount in it holds a tree | check that the fleet user can read `/proc/self/mountinfo`; otherwise report it |
+| `link-failed` | the link failed on one mount for a reason other than `EXDEV` (EMLINK, ENOSPC, EPERM), or the destination's own mount is read-only | check the disk and the link counts, and whether the destination account root is mounted read-only |
+| `route-error` | `python3` is missing, the route program crashed, or it answered outside its shape | read the swap's stderr: `ccd: carry route failed:` or a traceback names a crash; with neither, install `python3` if the box has none, else report it (a malformed answer is a defect) |
+
+Transcripts still copy (they are appended to, so a shared inode would grow a conversation the other account never
+had). `--stage 1` counts the new forms: `link_via_mount`, `merged_via_mount`, `copy_by_cause` (first carries, merged
+files and bytes per cause), `copied_bytes`, `copy_legacy` for a bare `(copy)` and `copy_unsized` for `?`.
 
 ### Account health and the telemetry keepalive
 
@@ -2556,7 +2603,13 @@ is never answered, and that apply ends `apply-unconfirmed`. A switch counts only
 `(currently …)` plus ` (default)`. A class the pane already runs needs no keystroke: when the session's usage
 sidecar (below) is under 30 minutes old, was written after `routeapplied` was last stamped (a spawn, an apply, a
 read-back), belongs to the session's own `uuid`, and names a model of the pending class, the tick records the class
-applied, clears its retry count and refusal note, and writes one `route-readback` line to swap.log. An effort level
+applied, clears its retry count and refusal note, and writes one `route-readback` line to swap.log. When the sidecar
+cannot answer, an idle pane's case, the session's transcript is asked instead, and only when it has changed: its
+newest `/model`, acknowledged after both this pane's tmux session was created and the stamp, naming a model of the
+pending class that no later sidecar reading contradicts, is recorded the same way, and a fresh sidecar is overruled
+only by a newer `/model` there naming another class. A conclusive refusal is kept in `$REG/<id>.readbackseen`
+(purged with the row) so an unchanged transcript is not read again, and `apply-gave-up` names it (`; transcript:
+before-spawn`). Clearing the retry count re-opens an effort still pending, which the same tick may type. An effort level
 never reads back, since the status line shows a model's default level the same way as one that was set, and the
 tick types it. `default` never reads back either, since no model id names it. `haiku` takes no effort level, and
 the pair is refused whichever order it arrives in. A session
@@ -2989,8 +3042,9 @@ general remote-shell:
   and checks it's still under an allowed canonical prefix — closing the
   classic symlink-escape hole. Reads: `$HOME/.cc-sessions/`,
   `$HOME/.cc-limits/`, `$HOME/.cc-clips/`, `$HOME/.claude*/` (glob), the
-  fleet's projects root, and exactly the eight `$HOME/.ccrc` node files by
-  name (`NODE_FILES`, `shared/agent-protocol.ts`) — a live symlink inside
+  fleet's projects root, and exactly the nine `$HOME/.ccrc` node files by
+  name (`NODE_FILES`, `shared/agent-protocol.ts`; the ninth,
+  `box-token-generation`, holds a generation id, never a token) — a live symlink inside
   `$HOME/.ccrc` carrying one is refused, or admitted through another prefix's own arm with `lstat` reporting `symlink`, which the update inventory refuses to read as that file; never `$HOME/.ccrc` itself. Writes: `$HOME/.cc-clips/` only. **This
   list did not widen for the transcript resolver or the supervisor
   heartbeat**: the resolver's uuid search (rungs 5 and 6 of its ladder)
@@ -3002,6 +3056,11 @@ general remote-shell:
   `--to <tag> --detach --from pwa`, with the tag checked by the one release-tag guard
   first — never through the exec whitelist, never an arbitrary command. The agent
   names it in its ready frame, and the server sends it to no agent that does not.
+- **Token-sync op**: `token-sync` only ever spawns `~/.local/bin/ccrc token sync --from agent`,
+  with the one-time claim code (checked by the one code guard first) on the child's stdin, never
+  argv, and an environment of exactly `HOME`, `PATH` and `LANG`, so the agent's own bearer never
+  reaches the verb. The verb, not the agent, claims and writes the token; the agent reads and
+  writes no secret file. It is named in the ready frame beside `update`.
 
 ### Degraded mode
 
@@ -3117,10 +3176,12 @@ tmux pane and the registry and refuses rather than name another session. The
 four operator doors that carry no box token (`POST /api/coord/pause`,
 `POST /api/runs/:id/abandon`, `POST /api/claims/:id/break`,
 `POST /api/runs/:id/reclaim`) have no verb in it, by decision.
-`deploy/deploy.sh`'s agent arm installs it beside `ccd` and ships the token
-when `deploy/ccrc-mail.token` exists; `ccrc install` and `ccrc update` place
-neither. On a box placed by the release lane, neither is there until you place
-them ("What the install does not place", under Install).
+`deploy/deploy.sh`'s agent arm installs it beside `ccd`; `ccrc install` and
+`ccrc update` do not, so on a box placed by the release lane it is not there
+until you place it ("What the install does not place", under Install). The
+token it reads is the server's to place: minted at boot, handed to the fleet
+box over the agent link (or written by the server itself on a box recorded as
+`CCRC_ROLE=both`), never shipped by `deploy.sh`.
 
 **Three surfaces.** `/runs` is the board — runs grouped by program, with their
 own status words (a run is a lifecycle position, not an attention state, so it
@@ -3156,9 +3217,9 @@ what it cannot.
    an unmeasured marker must not read as "running". The cleanup row beneath it
    keeps the same discipline for `$REG/reclaim-paused`, the fleet's one cleanup
    switch (`POST /api/coord/reclaim-pause`), and lists the children reclamation
-   could not clean up (**The reclaim sweep, and how to stop it**, below) and the
+   could not clean up (**The reclaim sweep, and how to stop it**, below), the
    archived workspaces the expiry lane reports (the expiry lane, further
-   below).
+   below) and the coordinators the dead-coordinator lane reports (just after it).
 2. **Abandon a wedged run.** Two taps, naming the run and its workspace.
    It **releases** the hold; it never archives, and there is no archive
    control anywhere on the sheet. A CHILD goes further: an abandon finishes
@@ -3499,7 +3560,45 @@ composed. Armed, at most one expiry runs per sweep pass, fleet-wide. `$REG/recla
 workspace someone is viewing is left alone for as long as they are; one a process is working in (a forgotten dev
 server, a tmux or fsmonitor daemon) is refused `in-use` on every pass and, after a few, listed with the process's id,
 its command and its path. The lane never kills: find out what the process is first — the fleet's own tmux server is
-also a `tmux: server`. A workspace held past its seven days is listed, never touched.
+also a `tmux: server`. A workspace held past its seven days is listed, never touched. A cleanup that completed but kept
+the workspace's clips or temp root (ccd's removal refused it, could not measure it, or a process still used it) is
+listed, saying what was kept and why, until the server restarts; a fleet box whose ccd predates that report says so in
+the feed row only. A cleanup the box keeps failing in a way it says it can resume is listed after an hour (a box answer at
+once) and retried, backing off; after a day it becomes a standing entry, with the first failure, the attempts and the last
+error, asked again every four hours, never stopping. The entry stays through a hold, a shadow audit or any other answer that
+ends no attempt, until an attempt completes, finds that none had begun or stops for good, or the workspace is archived again.
+
+**A coordinator that crashed is ended after an hour** (workspace lifecycle spec §5.4). A coordinator whose pane is
+gone with nothing bringing it back (`orphan`, `never-started`), or whose registry row is gone, with no deliberate act
+journaled since its last successful spawn — a stop, an archive, a reap, a destroy, a purge, a forget, a reclaim, an
+expiry, or an unsupervise somebody declared — and that has stayed so for an hour on two passes in a row, has its open
+runs closed `failed` by the server once the operator has armed the lane with `$REG/dead-coordinator-lane-live`; until
+then the lane only records what it would end. The hour counts from the first pass that measured the crash, kept in
+`coord.db` across restarts and raised, never lowered, by a later supervisor heartbeat. A lane gap of more than ten
+minutes (a restart, a pause, a stale mirror) starts the hour afresh, and trips the breaker when two or more coordinators
+were crashed, since each re-anchors on the same pass. A stopped coordinator is never
+ended, nor one a supervisor is bringing back, nor one the server cannot measure. A coordinator whose journal the
+server cannot trust to hold every deliberate act — the lifecycle mirror `unavailable` (the fleet's ccd does not journal), a gap it recorded since the
+coordinator's last start, a journal line ccd could not write — is listed and never acted on, and so are one with no
+registry row and no journal history, one that never started, and one whose journal holds a failed spawn and no successful one; while the mirror has not swept since a restart, or has
+gone stale, a pass decides nothing at all. The act runs on the coordination serialiser: it re-measures the coordinator
+immediately before each run's fleet act and again before its commit, and commits only while the run still names it, so
+a successor is never failed and a coordinator revived meanwhile keeps its programme — all but a revive that lands
+inside that last round trip.
+Each closed run's event says the sweep did it (`causedBy: sweep`), CCR-15 reclaims each marked worker whose run closed
+(a worker mid-turn loses its turn; its work is pinned in the attic), an unmarked worker is released, and one feed row
+per programme says so. **The lane ships shadowed**: until the operator touches `$REG/dead-coordinator-lane-live` by
+hand in the registry the server reads (the fleet box's, through the agent, when the server runs `CCRC_FLEET=remote`;
+nothing in this tree writes it), a due coordinator is recorded — a feed row and an entry in the cleanup row on `/runs`
+naming the programmes it would end — and no run is closed. Two or more coordinators first seen crashed within ten
+minutes of each other trip a circuit breaker: the lane ends nothing at all, lists them once, and resumes when fewer
+than two remain — revive them, reclaim their programmes or abandon their runs. A coordinator it holds stays held
+through a pass that cannot measure it, and a pass on which tmux does not answer trips it too. Armed, at most one
+coordinator is ended per pass; in shadow every due one is recorded. `$REG/reclaim-paused` stops this lane too, shadow
+included. It never pushes: the stall watch's pushes about a dead coordinator's stalled workers — one per worker, each
+naming the coordinator — are the notifications, and this lane's rows (each with the instant the coordinator was first
+seen dead, and one when the breaker trips) are records of the same incident. A mirror that goes stale between the pass
+and the act stops the act and keeps the hour, and every act that fails writes a feed row, whatever it had done.
 
 **What a crossing costs.** Caps stay global: one row, whole box, no per-project
 and no per-programme cap. Running-worker concurrency counts dispatched runs in
@@ -3650,7 +3749,7 @@ raised and that nobody is viewing it in the PWA; the box then defers rather than
 act on a pane a terminal is attached to, a hold, `$REG/reclaim-paused` (raised
 and lowered by `ccd reclaim-pause --state on|off` — from the cleanup row on
 `/runs` through `POST /api/coord/reclaim-pause`, or on the fleet host — it
-pauses every reclamation and every expiry fleet-wide), a git operation in progress, a lock, or
+pauses every reclamation, every expiry and the dead-coordinator lane fleet-wide), a git operation in progress, a lock, or
 a token gone stale, and refuses outright what waiting will not change — not a
 child, containment unproven, a directory git does not record as a worktree.
 Every outcome but `gone` is a feed row naming its condition, and pinned work
@@ -3673,7 +3772,72 @@ functions, inherited shell options) stripped, and the body refuses them
 (`ccd: refused (entry-unprivileged)`, exit 125) when it was not started that way — an imported
 `find` that answered "no rows" once turned an honest `containment-unproven` into `reclaimable`. It
 is a startup boundary, not a sandbox: `PATH` and every binary it selects are trusted, and a writer
-who replaces both files is not stopped.
+who replaces both files is not stopped. `ws-expire`, `ws-collect`, `ws-audit --session <id> --expire` and
+`ws-audit --session <id> --collect` are decided the same way.
+
+**The temp-root collector (child reclamation waves 7 and 9; the lane ships shadowed).** A child's temp root,
+`$HOME/.cc-tmp/<id>`, that outlives its workspace — a reclaim tail kept it because a process still used it or ccd's
+removal refused it, or a human verb left it — is taken back by
+`ccd ws-collect --expect <token> --session <id>`, with the token that `ccd ws-audit --session <id> --collect` minted;
+the server composes it and no session runs it (spec §5.10). Only a *witnessed* leaf is a candidate: the witness
+`$REG/tmproots/<id>` that ccd writes each time it hands a child its temp root (spec §5.2) must still match the leaf's
+device, inode and birth time. Every leaf without one — made before the witness shipped, or row-less — and every kept
+clips directory is the operator's and is never touched, and the collector takes only a real directory, never a link
+or a file. The audit refuses until the leaf has stayed unchanged for a floor of 24 hours (the newest *change* time under
+it, never the modification time; `WS_COLLECT_IDLE_FLOOR_S` can only raise the floor, and a value that is not a whole
+number is unmeasured, not 24 hours), no process of this uid uses the leaf, no registry row names the id or lies at,
+inside or through the leaf, and `$REG/reclaim-paused` is not raised. The verb then writes a quarantine record
+(`$REG/tmpquarantine/<id>.<ns>.<pid>`, the resume authority after a crash), renames the leaf into a quarantine slot
+(`~/.cc-tmp/.ccd-quarantine/slot.<id>.<ns>.<pid>/leaf`, one `mv -T -n --no-copy`, proven by `lstat` and never by `mv`'s
+exit code), re-proves, and removes only the slot's inode, so a spawn that re-mints the slug gets a new inode instead
+of losing its leaf. It drops the witness by compare-and-drop and the record last. A record or slot that ccd can neither
+finish nor undo is kept and listed as `quarantine-kept`, and no session acts on one. It is Linux-only, needing GNU
+`mv` with `--no-copy` (coreutils 9.2 or later); on Darwin the audit measures nothing. `ccd caps` advertises
+`collect-v1` and `ws-collect`, and the agent grants `['ws-collect','--expect']`.
+
+**The collector's lane (child reclamation wave 9) ships shadowed.** The server's sweep is the verb's one composer, behind
+`$REG/collect-lane-live`: until the operator touches that file by hand in the registry the server reads (the fleet
+box's, through the agent, when the server runs `CCRC_FLEET=remote`; nothing in this tree writes it), the lane audits
+and records what it would collect — a feed row and an entry in the cleanup row on `/runs` — and never composes
+`ws-collect`. Removing the file shadows it again. An act job reads the file only at its last check, once its second audit has
+licensed the act. A job that finds the file changed since the last such read writes one feed row saying which way it now stands,
+clears every id's pair and composes nothing, so the first act after a change it sees waits for two fresh audits. A change undone
+between two such reads is never seen and writes no row, and an arming writes its row only when the first id is ready to act.
+Each pass the lane lists `$REG/tmproots` and `$REG/tmpquarantine`, never `~/.cc-tmp`, and
+runs at most two learning audits and one act job. It composes `ws-collect` for an id only after two audits at least a
+sweep interval apart minted the same token, the second in the act's own job, and only on a box whose ccd advertises
+both `collect-v1` and `reclaim-pause-v1`. Armed, at most one `ws-collect` is composed per pass and one runs
+fleet-wide, and no act job, shadow included, is offered in the first eight minutes after the server starts.
+`$REG/reclaim-paused` stops the lane, shadow included. It leaves alone an id
+someone is viewing, an id an open run names, and an id whose witness names a run that is still open, that the
+coordination database does not hold, or that opened after the witness was written. It never kills a holder. A temp
+root it cannot take — in use, changing for a day, kept in quarantine, refused or unmeasurable — is listed in the
+cleanup row, and an answer that stands for the whole box is listed once.
+
+**Before arming it**, read the shadow feed rows, and arm only when:
+- `ccd caps` on the box whose ccd the server drives (the fleet box under `CCRC_FLEET=remote`) lists both `collect-v1` and
+  `reclaim-pause-v1`: without either the lane does not run at all, shadow included, so it writes no row and no line, and an
+  empty shadow feed proves nothing;
+- every "would collect" names an orphan whose run is closed;
+- no box-wide line stands in the cleanup row, except the one for temp roots whose runs the coordination database
+  cannot vouch for, which may stand once you have read it: those ids stay held, armed or not, until a person removes
+  them;
+- you know that any process of this uid can touch `$REG/collect-lane-live`, as it can `expire-lane-live`, and that the
+  lane reports a change only when an act job next reads the file, so a missing "now live" or "now shadowed" row means not
+  yet seen, never unchanged.
+
+**Reclaim's tail, corrected in wave 7 (it is shared with `ws-expire`).** `containment-refuted` is the failed word the
+tail prints when it proves that what it would remove is not only the child's own (another session's row or tree at,
+inside or through it, a workdir that is the main checkout, a link or non-directory at the workdir); the session was
+stopped and nothing further was deleted, and a retry finds the same thing until the other tree or row is moved or
+removed. What could not be asked stays `worktree-remove-failed`. The failed document carries `crumb`, saying whether
+the failure was printed past the act's breadcrumb, and omits it where that is not known (`ws-expire`'s own
+pre-breadcrumb documents, its resumed arm's `probe-unmeasured`, every `ws-collect` document). Git's silence about a worktree record is no longer believed
+without reading its admin entries, so `no-worktree-record` becomes a retried unmeasured answer when an entry could not
+be read, and a vanished tree whose record names the all-zero head is unmeasured at the audit. The reclaim token also
+binds the row's generation (`ws-audit --reclaim` prints it as `generation`), so a token minted over one row is never
+spent on a re-mint of its id; a `.child` row without a valid generation is unmeasured on every pass. An all-zero
+tombstone tip or recorded head is `branch-unmeasured` before the branch's compare-and-swap, never a delete.
 
 **Routing (routing slice 2).** Clause 13 makes every brief name the wave's shape and the routing
 `ccd/coordinator-skill/references/routing-matrix.md` (spec §3, verbatim) derives from it, and makes
@@ -3962,15 +4126,13 @@ and the token is a key of neither). It lives at
 `~/.cc-secrets/ccrc-mail.token` on the **fleet host** (read by
 `deploy/notify.sh`, and by `ccrc-api`, the client the coordinator, worker and
 reviewer skills call) and at `~/.ccrc/mail.token` on the **server**
-(`CCRC_MAIL_TOKEN_PATH` moves the file; it never carries the value); both are
-shipped from one locally-gitignored `deploy/ccrc-mail.token`
-(`openssl rand -hex 32` to mint it, or
-`cp deploy/ccrc-mail.token.example deploy/ccrc-mail.token && edit`) by
-`deploy/deploy.sh`'s secret-shipping lane. `ccrc install` and `ccrc update`
-write neither file: on a box placed by the release lane, place the secret by
-hand — the server path on the server box, the fleet path on the fleet host,
-both on a single box — mode `0600`, as "What the install does not place"
-(under "Install", above) shows, and check it with `ls -l`, never `cat`.
+(`CCRC_MAIL_TOKEN_PATH` moves the file; it never carries the value). The
+server mints its file at boot and rotates it, and writes the fleet copy too:
+over the agent link in remote fleet mode (`ccrc token sync`), itself on a
+single box recorded as `CCRC_ROLE=both`. Nothing ships it: `deploy/deploy.sh`
+no longer copies a gitignored `deploy/ccrc-mail.token` to either box, and
+`ccrc install` and `ccrc update` place neither file, as "What the install does
+not place" (under "Install", above) says. Check both with `ls -l`, never `cat`.
 **The run routes were
 unauthenticated for a stretch of this build's own history** — an earlier
 design note argued they were no worse than the pre-existing, also-open
@@ -3983,20 +4145,22 @@ has. None of the lanes enumerated above tolerates a missing token — a request
 with none is `401 unauthenticated`, full stop. (The operator doors excepted just
 above are the other half of that sentence, and they are not an oversight in it:
 they are reachable from a phone precisely because the party a wedge locks out is
-the party holding the box token.) `/api/notify` alone still accepts a request
-with **no** token header, logged as `legacy`
-(`ccrc-server: /api/notify accepted a request with NO box token …`) so a
-fleet host whose `notify.sh` predates its token read cannot go dark; it was
-meant as a one-deploy rollout bridge and has not been removed yet. A request
-carrying the WRONG token is refused `401` and logged as such. And on a server
-with no token file at all, every token-gated lane above refuses every caller
-while `/api/notify` passes everything — the boot line
-`ccrc-server: no box token at …` says so.
-**Minting the token file matters as much as having one:**
-`deploy/ccrc-mail.token.example`'s own placeholder value line
-must actually be replaced — copying the example verbatim is refused loudly
-at server boot (`MailTokenPlaceholderUnedited`), not silently accepted,
-because that exact placeholder is committed to this public repo.
+the party holding the box token.) `/api/notify` is no exception any more: it
+once accepted a request with **no** token header (logged as `legacy`) and passed
+everything on a server with no token, as a rollout bridge for a fleet host whose
+`notify.sh` predated its token read, and the box-token lifecycle removed both. A
+request with no token, or with the WRONG token, is refused `401` and logged as
+such (`ccrc-server: /api/notify refused …`). And on a server that holds no token
+value, every token-gated lane above, `/api/notify` included, refuses every
+caller, and the server says so at boot.
+**Minting the token file matters as much as having one,** which is why the
+server does it. A hand-made value it finds at boot is adopted once and retired
+by the first rotation, and a retired value written back (an older checkout's
+`deploy.sh` copying a stale `deploy/ccrc-mail.token`) is never adopted again.
+`deploy/ccrc-mail.token.example` stays only for its placeholder value line: a
+token file holding that line is refused loudly at server boot
+(`MailTokenPlaceholderUnedited`), not silently accepted, because that exact
+placeholder is committed to this public repo.
 
 **Programme mail at scale.** `toId: 'coordinator'` has a sibling: `toId: 'worker'`,
 resolved at send time to that run's own session. `worker` requires a `runId` —
@@ -4080,9 +4244,17 @@ hold, a human's included, keeps the child. The sweep's switch is
 `/runs` (`POST /api/coord/reclaim-pause`, session-gated, no box token), or run
 `ccd reclaim-pause --state on` on the fleet host; `--state off` lowers it. While
 it stands the sweep and the close path ask for nothing, `ws-reclaim` itself
-refuses `paused` on the box, and the expiry of archived workspaces stops too. The same row lists the children that need a
-human's eye: each under a terminal refusal, each whose reclaim has kept failing
-for 15 minutes, and each the sweep keeps for a person while its reason stands.
+refuses `paused` on the box, and the expiry of archived workspaces stops too, as does the dead-coordinator lane, and so does the temp-root collector’s lane (`ws-collect` itself refuses `paused` on the box). The same row lists the children that need a
+human's eye: each under a terminal refusal, each whose reclaim ccd proved is blocked by a tree or registry
+row that is not the child's own (`containment-refuted`, listed at once and retried on a persistent tier that
+waits up to four hours between asks), each whose reclaim has kept failing for 15 minutes, each the sweep
+keeps for a person while its reason stands, and each reclaimed child whose clips directory or temp root ccd
+kept (listed from the lifecycle journal for seven days, after the registry row is gone). A request that
+waited in the queue is spent only on the workspace it was judged over: the sweep binds it to the registry
+row's generation, and the executor and the audit re-prove it, so a slug minted again is never reclaimed on
+the old licence by a licensed request, nor by any request on a ccd whose audit binds the generation. On an
+older ccd an unlicensed request keeps the gap from the executor's re-read to the act, the spec's stated
+residual.
 
 **Landing order (landing-order wave 1).** Every merge of `main` into a branch restarts that branch's
 CI, so a session absorbs `main` only on a licence. Worker clause 16 names three, each read after one
@@ -4779,8 +4951,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7833-7835`), each with an operator sentence of its own at `:7875`,
-`:7883` and `:7896`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7878-7880`), each with an operator sentence of its own at `:7930`,
+`:7938` and `:7951`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -4830,7 +5002,7 @@ plan's job.
   of racing it — the remedy is to re-run from a `PATH` where `flock` resolves — while a row with NO generation
   purges exactly as it did before, because no hook on it ever held one. `ws-reclaim`, a server-composed verb,
   reaches `_reg_purge` only as its last step, so every refusal it gets back — `purge-mechanism-absent` among
-  them — is reported after the worktree, branch, clips and temp root are already gone, never as an up-front
+  them — is reported once the worktree and branch are gone and the clips and temp root gone or kept, never as an up-front
   refusal. `ws-add`, `ws-restore` and `ws-reap` keep the fail-closed refusals they already shipped.
 - **Silence, and the kill-switch.** Every arm is silent by contract: a missing `flock`, an absent helper,
   an expired eight-second helper deadline or lock contention is a MISSED MEASUREMENT — no journal line —
@@ -5096,7 +5268,7 @@ you need to reason about one.*
   installer with its default noise list; `ccrc-api`, the closed client
   sessions reach the coordination API through; the timer-driven helpers
   (`ccd-cap-scopes`, `ccd-pool-sync`, `ccd-update-sync`, `ccd-graph-sweep`,
-  `ccd-tmp-sweep`, `ccd-scope-sweep`, `ccd-usage-sweep`, `ccd-account-health`,
+  `ccd-tmp-sweep`, `ccd-scope-sweep`, `ccd-usage-sweep`, `ccd-account-health`, `ccd-history-sweep`,
   `ccd-telemetry-keepalive`) and `ccrc-models-probe`, which
   `ccrc models refresh` runs per lane; `ccd-account-auth` (drives one account's
   sign-in and publishes its progress); the Codex-lane runtime (`ccrc-codex`,
@@ -5107,8 +5279,9 @@ you need to reason about one.*
   `systemd/` (every timer pair, and the session, slice and agent drop-ins);
   `ccrc.env.example` / `ccrc-agent.env.example` (env templates — copy to
   `ccrc.env` / `ccrc-agent.env`, gitignored, to supply real tokens),
-  `ccrc-mail.token.example` (the box token's placeholder, copied the same way
-  to `deploy/ccrc-mail.token`), `ccclip.env.example` (the Mac helper's config,
+  `ccrc-mail.token.example` (the box token's placeholder, which the server
+  refuses at boot by name; never copied, because the server mints the token),
+  `ccclip.env.example` (the Mac helper's config,
   below) and `accounts.default.json` (the seeded roster); the release scripts
   (`build-release.sh`, `release-main.sh`, `release-stable.sh`,
   `verify-provenance.mjs` with its `sigstore-trusted-root.jsonl`); the
@@ -5177,16 +5350,17 @@ implements — that list is the authority; the table below is a map:
 | `ws-archive` · `ws-restore` — `--session <id>` | fold an idle workspace out of the live fleet / back in — costs the tmux pane, deletes nothing |
 | `ws-audit --session <id>` · `ws-reap --expect <token> --session <id>` | the read-only reap preview, which mints a token; the human-confirmed removal, every guard re-proved on the box |
 | `ws-reclaim …` | the server's removal of a CHILD workspace a run minted — never run by hand or by a session |
+| `ws-collect --expect <token> --session <id>` | the server's removal of an orphaned, witnessed child TEMP ROOT, by quarantine rename — never run by hand or by a session; its audit is `ws-audit --session <id> --collect`, and the server's collector lane composes it only once the operator has armed it (`$REG/collect-lane-live`) |
 | `ws-rm [--reason <text>] <id>` · `ws-gc [--prune]` | terminal-only: tear one workspace down, refusing anything it might destroy; report every worktree's state, size and idle time (`--prune` acts on each row, reclaiming or declining it) |
 | `ws-attic --session <id>` · `ws-attic --drop <id>` | list / drop the commits a removal pinned under `refs/ccrc/attic/<id>/` |
-| `coord-pause --state on\|off` · `reclaim-pause --state on\|off` · `project-pool --project <p> --pool <name>\|--clear` | raise / lower the coordinator pause; raise / lower the cleanup pause (`$REG/reclaim-paused`: child reclamation and the expiry of archived workspaces); tag / untag a project's pool |
+| `coord-pause --state on\|off` · `reclaim-pause --state on\|off` · `project-pool --project <p> --pool <name>\|--clear` | raise / lower the coordinator pause; raise / lower the cleanup pause (`$REG/reclaim-paused`: child reclamation, the expiry of archived workspaces and the dead-coordinator lane); tag / untag a project's pool |
 | `pr-open --session <id> …` · `pr-state --session <id>\|--project <p>` | open the workspace's PR — the one PR write; read PR state |
 | `account-pane --id <id> [--method setup-token\|openai-login] [--cancel]` | open or cancel an account's sign-in pane, on the box (the agent grants no `account-pane`) |
 | `caps` · `version` | the verbs this copy implements; this box's build stamp |
 
 `ws-rm`, `ws-gc` and `ws-attic --drop` cross no wire (the agent grants none of
 them), `ws-reap` crosses it only behind the token `ws-audit` minted, and
-`ws-reclaim`, token-gated the same way, is composed by the server alone.
+`ws-reclaim` and `ws-collect`, each token-gated the same way, are composed by the server alone, `ws-collect` only once the operator has armed its lane.
 
 **A screenshot from a Mac.** `ccd/ccclip` is the Mac-side helper: bound to a
 global hotkey (or run directly), it takes the clipboard image with `pngpaste`,
@@ -5542,6 +5716,16 @@ which resolves a global copy with no jsdom and reports "no tests" — and in the
 are load-sensitive, and a known handful flake under parallel load, so re-run one in isolation before
 calling it a break.
 
+Every server run keeps its temp writes under one directory of its own, `$TMPDIR/ccrc-testrun-XXXXXX/tmp`
+(`server/test/run-tmp.globalsetup.mjs`, vitest's `globalSetup`; #316): the workers, every fixture and every
+child they spawn inherit that `TMPDIR`. Three things remove it — the run's teardown; a SIGTERM, SIGINT or
+SIGHUP to vitest's main process (GNU `timeout`, Ctrl-C, a closed tmux pane) or a crash of it; and, for a run
+killed outright, the next run under the same `TMPDIR`, which removes a run directory whose owner socket
+refuses once it has been quiet for ten minutes (`CCRC_TEST_RUN_QUIET_S` overrides that, for tests only). A
+`TMPDIR` too long for a unix socket — a base over about 74 characters on macOS, 78 on Linux — or a sandbox
+that refuses one prints `ccrc-test: per-run temp dir refused (<code>)` and keeps the old behaviour, fixtures
+loose in `TMPDIR`; `run-tmp.test.ts` is red in such a run.
+
 Run the server against a fixture home with `CCRC_HOME=<tree> npm run dev` in `server/`; the tree needs
 `.ccrc/accounts.json` (copy `deploy/accounts.default.json` — the server refuses to boot without a
 roster). `CCRC_HOME` moves what the server reads, not what its children act on: in the default `local`
@@ -5852,3 +6036,12 @@ triggers nothing; you owe source only when you both modify it and expose it to o
 Source files carry no per-file licence headers. Every file in this repository opens with a
 comment explaining the reasoning behind its design, and a boilerplate header on top of that
 would compete with the thing the reader is actually there for. This section is the notice.
+
+**Third-party code.** A few helpers under `ccd/history/` are derived from lossless-claw
+(Martian Engineering, MIT-licensed; Copyright (c) 2026 Josh Lehman / Martian Engineering), at
+upstream commit `e05d8d3`. MIT material may be combined into this AGPL-3.0 program as long as
+its notice travels with every copy, so the upstream licence sits byte for byte in
+`ccd/history/LICENSE.lossless-claw`, beside the code it covers, and ships in every release
+tarball. `ccd/history/PROVENANCE` names each copied item, its upstream file and what changed,
+and each copied function carries a one-line comment saying where it came from: a rationale
+comment, not a licence header.

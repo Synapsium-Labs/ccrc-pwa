@@ -19,7 +19,10 @@ import type { StallObservationRow, StallSettingsPatch, StallSettingsRead } from 
 // The coordination fence's claim shape is declared by its CONSUMER, the L1
 // sweep file's `childReclaimCoordinated` (the same port rule as above); the
 // read below implements it.
-import type { ChildReclaimCoordinatorClaim } from '../childReclaimSweep.js';
+import {
+  CHILD_RECLAIM_LEAF_FAILED_TOKENS, type ChildReclaimCoordinatorClaim, type ChildReclaimLeafEndRow,
+  type ChildReclaimLeafSourceRow,
+} from '../childReclaimSweep.js';
 // Type-only: ties `AUTO_CONTINUE_ARMED_LAST_ERROR` below to the send adapter's
 // own refusal word, so a rename there is a compile error here, not a silent miss.
 import type { SendResult } from '../inject/send.js';
@@ -39,6 +42,9 @@ import {
   type HoldReasonVerdict,
 } from './rundefs.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
+import {
+  DEAD_COORDINATOR_JOURNAL_ACTS, type DeadAnchor, type DeadCoordinatorJournalRow,
+} from '../deadCoordinator.js';
 import {
   CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_AUTHORITY_CODES,
   isAskState, isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason,
@@ -70,12 +76,12 @@ import {
   parseWaveDoneSignals,
   PROGRAM_KICKOFF_SUBJECT,
   RUN_HOLD_NUMBER_MAX,
-  IDLE_RUN_STATES, transitionsFor, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES,
+  IDLE_RUN_STATES, transitionsFor, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES, TMPROOT_ID_MAX_CHARS,
   WAVE_DONE_SUBJECT,
   type AskState,
   type ClaimConflict, type ClaimState, type ClaimSummary,
   type CoordCaps, type DeviationAllocation, type DeviationAllocState,
-  type LifecycleAct, type LifecycleGap, type LifecycleGapReason,
+  type LifecycleAct, type LifecycleGap, type LifecycleGapReason, type LifecycleOutcome,
   type MailDeliveryState, type MailGate,
   type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
   type NotifyEvent, type PeerDeliverable, type ProgramState,
@@ -188,7 +194,10 @@ class OpenRunHoldRefused extends Error {
 export type AdvanceResult =
   | { ok: true; from: RunState; to: RunState }
   | { ok: false; error: 'bad-transition'; from: RunState; to: RunState }
-  | { ok: false; error: 'unknown-run' };
+  | { ok: false; error: 'unknown-run' }
+  /** `closeRun`'s compare-and-set (workspace lifecycle spec 2026-09-24 §5.4, "No successor"): the run's `claimedBy`
+   *  is no longer the id the caller expected — a successor took the programme — so nothing was written. */
+  | { ok: false; error: 'claimant-changed'; claimedBy: string | null };
 
 /** `setAccountPools`'s answer (T6-R4, fix round 1; `error`'s vocabulary moved
  *  to `shared/api.ts`'s `SetAccountPoolsRefuseCode` in fix round 2 — see C1
@@ -1466,7 +1475,7 @@ class IntentJournalFault extends Error {
  *  note, which is exactly the "hand-written" case this function throws on.
  *
  *  THE LENGTH BOUND. A candidate longer than
- *  `CHILD_RECLAIM_MAX_SESSION_ID_CHARS` (255) is never returned, and the
+ *  `TMPROOT_ID_MAX_CHARS` (255) is never returned, and the
  *  search stops at the first occurrence past that offset. Safe because a
  *  session id is a FILENAME component — the registry holds `<id>.uuid`, and
  *  no filesystem this runs on takes a component over 255 bytes, which no
@@ -1481,7 +1490,7 @@ class IntentJournalFault extends Error {
  *  sweep pass and every close. The bound makes the work per row
  *  proportional to 255, not to the row. `null` still means "no ` -> ` at
  *  all"; a row whose every candidate is too long parses to `[]`. */
-const CHILD_RECLAIM_MAX_SESSION_ID_CHARS = 255;
+/* The bound is L0's `TMPROOT_ID_MAX_CHARS` (spec §5.10), the one temp-root id cap, imported above. */
 function childReclaimDisplacedCandidates(detail: string): string[] | null {
   const prefix = 'reclaim:';
   if (!detail.startsWith(prefix)) return null;
@@ -1489,7 +1498,7 @@ function childReclaimDisplacedCandidates(detail: string): string[] | null {
   const first = body.indexOf(' -> ');
   if (first === -1) return null;
   const out: string[] = [];
-  for (let i = first; i !== -1 && i <= CHILD_RECLAIM_MAX_SESSION_ID_CHARS; i = body.indexOf(' -> ', i + 1)) {
+  for (let i = first; i !== -1 && i <= TMPROOT_ID_MAX_CHARS; i = body.indexOf(' -> ', i + 1)) {
     out.push(body.slice(0, i));
   }
   return out;
@@ -1503,7 +1512,7 @@ function childReclaimDisplacedCandidates(detail: string): string[] | null {
  *  included, and the writer's own separator is always one of them. It searches
  *  from the END (`lastIndexOf`, resuming one character before each hit), so the
  *  suffixes come shortest first, and it stops at the first one longer than
- *  `CHILD_RECLAIM_MAX_SESSION_ID_CHARS` — every later one is longer still, and
+ *  `TMPROOT_ID_MAX_CHARS` — every later one is longer still, and
  *  no session id can be (that bound's own docstring, above). The extra readings
  *  over-protect, which is the fail-shut direction. */
 function childReclaimDisplacedHeirCandidates(detail: string): string[] | null {
@@ -1513,11 +1522,32 @@ function childReclaimDisplacedHeirCandidates(detail: string): string[] | null {
   const last = body.lastIndexOf(' -> ');
   if (last === -1) return null;
   const out: string[] = [];
-  for (let i = last; i !== -1 && body.length - (i + 4) <= CHILD_RECLAIM_MAX_SESSION_ID_CHARS;
+  for (let i = last; i !== -1 && body.length - (i + 4) <= TMPROOT_ID_MAX_CHARS;
     i = i === 0 ? -1 : body.lastIndexOf(' -> ', i - 1)) {
     out.push(body.slice(i + 4));
   }
   return out;
+}
+
+/** The acts the birth read returns (spec §5.7: a creation is placed, or it is doubt). `create` opens a generation,
+ *  and `purge` is the one removal. Every removal of a row ends in ccd's `_reg_purge`, which journals `purge done`
+ *  BEFORE it unlinks the row's files, and that line carries the row's `meas.uuid`. `collect` never purges: it
+ *  removes the leftover temp root of a row that is already gone. So it is not here, by construction. The
+ *  runtime list derives from the map. */
+export type LifecycleBirthAct = Extract<LifecycleAct, 'create' | 'purge'>;
+const LIFECYCLE_BIRTH_ACT: Readonly<Record<LifecycleBirthAct, true>> = { create: true, purge: true };
+const LIFECYCLE_BIRTH_ACTS = Object.keys(LIFECYCLE_BIRTH_ACT) as LifecycleBirthAct[];
+const isLifecycleBirthAct = (v: string): v is LifecycleBirthAct =>
+  Object.prototype.hasOwnProperty.call(LIFECYCLE_BIRTH_ACT, v);
+
+/** One row of the birth read: a `done` `create` or `done` `purge` of one session. `id` is the mirror's own row id
+ *  (ingest order, never ccd's clock). `at` is ccd's clock. `uuid` is the line's `meas.uuid`, or null when the
+ *  line carried none. */
+export interface LifecycleBirthEvent {
+  readonly id: number;
+  readonly act: LifecycleBirthAct;
+  readonly at: number | null;
+  readonly uuid: string | null;
 }
 
 /**
@@ -2545,8 +2575,18 @@ export class CoordStore {
   closeRun(input: {
     runId: number; finalState: 'done' | 'failed'; causedBy: string;
     handoffCommit: string | null; program: string; viaClosing: boolean;
+    /** THE COMPARE-AND-SET (workspace lifecycle spec 2026-09-24 §5.4, "No successor"): when given, the close commits
+     *  only while the run's `claimedBy` still equals it, read INSIDE this transaction; otherwise `claimant-changed`
+     *  and nothing is written. The dead-coordinator lane passes the crashed id; every other caller passes nothing. */
+    expectClaimedBy?: string;
   }): AdvanceResult {
     return tx(this.db, () => {
+      if (input.expectClaimedBy !== undefined) {
+        const row = this.db.prepare('SELECT claimedBy FROM runs WHERE id = ?').get(input.runId) as
+          { claimedBy: string | null } | undefined;
+        if (row === undefined) return { ok: false, error: 'unknown-run' };
+        if (row.claimedBy !== input.expectClaimedBy) return { ok: false, error: 'claimant-changed', claimedBy: row.claimedBy };
+      }
       // `viaClosing: false` is the ABANDON of a `planned` run (D-281 (was D-B4-8)).
       // `RUN_TRANSITIONS.planned` has a `failed` edge and deliberately no
       // `closing` one (`shared/api.ts`'s own docstring), and that table is NOT
@@ -3273,6 +3313,39 @@ export class CoordStore {
     ).all() as { claimedBy: string }[]).map((r) => r.claimedBy);
   }
 
+  /** The dead-coordinator lane's durable anchors (`dead_claimants`, migration 18; workspace lifecycle spec §5.4) —
+   *  EVERY row, one statement. Both integers ride CAST to TEXT and are proven, ALL-OR-FAILURE (D-2545's rule): an
+   *  anchor misread is how an hour gets counted that nobody measured, so one bad row fails the read and the lane acts
+   *  on nothing that pass. */
+  deadAnchors(): { ok: true; anchors: Map<string, DeadAnchor> } | { ok: false; detail: string } {
+    const rows = this.db.prepare(
+      'SELECT claimantId, CAST(firstDeadAt AS TEXT) AS firstText, CAST(lastDeadAt AS TEXT) AS lastText FROM dead_claimants',
+    ).all() as unknown as { claimantId: string; firstText: string; lastText: string }[];
+    const anchors = new Map<string, DeadAnchor>();
+    for (const r of rows) {
+      const first = persistedInt(r.firstText, 'firstDeadAt');
+      if (!first.ok) return { ok: false, detail: first.detail };
+      const last = persistedInt(r.lastText, 'lastDeadAt');
+      if (!last.ok) return { ok: false, detail: last.detail };
+      anchors.set(r.claimantId, { firstDeadAt: first.value, lastDeadAt: last.value });
+    }
+    return { ok: true, anchors };
+  }
+
+  /** Write one claimant's anchor — the lane's crashed pass. One statement, an upsert keyed by the claimant. */
+  setDeadAnchor(claimantId: string, a: DeadAnchor): void {
+    this.db.prepare(
+      'INSERT INTO dead_claimants (claimantId, firstDeadAt, lastDeadAt) VALUES (?, ?, ?) ' +
+      'ON CONFLICT(claimantId) DO UPDATE SET firstDeadAt = excluded.firstDeadAt, lastDeadAt = excluded.lastDeadAt',
+    ).run(claimantId, a.firstDeadAt, a.lastDeadAt);
+  }
+
+  /** Delete one claimant's anchor — an alive, unmeasurable or non-crash answer, or a claimant that left the
+   *  population. Deleting a row that is not there is a no-op. */
+  deleteDeadAnchor(claimantId: string): void {
+    this.db.prepare('DELETE FROM dead_claimants WHERE claimantId = ?').run(claimantId);
+  }
+
   /** Per session id, the LATEST instant it held a coordinator's chair. This is
    *  what the coordination fence reads (spec §1 rule 4, with spec §5.6's
    *  recycled slugs: "ever coordinated" means this incarnation of the
@@ -3354,7 +3427,7 @@ export class CoordStore {
     // `DISTINCT`: `reclaimProgram` writes one identical row (one `at` for the
     // act) per run of the programme it moves, so N runs would otherwise parse
     // the same text N times; the candidate length bound is the parsers' own
-    // (`CHILD_RECLAIM_MAX_SESSION_ID_CHARS`, whose docstring states why dropping
+    // (`TMPROOT_ID_MAX_CHARS`, whose docstring states why dropping
     // a longer one is safe). There is no SQL `MAX`: each row's instant is
     // proven before the fold compares it.
     const displacements = this.db.prepare(
@@ -5718,20 +5791,20 @@ export class CoordStore {
     return rows.map((r) => CoordStore.reviveLifecycleRow(r));
   }
 
-  /** One session's `create` rows ALONE, oldest-first, UNCAPPED by
-   *  `LIFECYCLE_PAGE_MAX` (child-reclamation wave 4, spec §5.1's birth fence):
-   *  a failing child's ordinary window (`lifecycleFor`, 500 rows) scrolls past
-   *  its own opening `create` in days of retried refusals, and the run-id fence
-   *  needs that row for the LIFE of the workspace, not for as long as it fits
-   *  a page. Bounded to one ACT: `lifecycle_by_session` is `(sessionId, id)`,
-   *  so this still walks every row of the session (filtering `act` after the
-   *  index narrows to the session) rather than a narrower index on `act`
-   *  itself — a cost bound on the SESSION, not the whole table, and never
-   *  the oldest `create` either, which would skip every recycled slug
-   *  (spec §5.6): `childReclaimGeneration`, this read's one caller, is what
-   *  narrows "every create this session ever had" down to the CURRENT
-   *  generation's own opening row. Same column set, same reviver, as
-   *  `lifecycleFor` — `reviveLifecycleRow` is the one definition both share. */
+  /** One session's `create` rows ALONE, oldest-first, UNCAPPED by `LIFECYCLE_PAGE_MAX` (child-reclamation wave 4,
+   *  spec §5.9).
+   *  - Why uncapped: a failing child's ordinary window (`lifecycleFor`, 500 rows) scrolls past its own opening
+   *    `create` in days of retried refusals, and the attention list's generation needs that row for the LIFE
+   *    of the workspace.
+   *  - Its one caller is the sweep's attention rows (`childReclaimAttentionGenerationRows`), which merge it into
+   *    the window. The birth reads `lifecycleBirthEventsFor` instead, which adds the `purge` rows
+   *    (spec §5.7).
+   *  - Cost: bounded to one ACT. `lifecycle_by_session` is `(sessionId, id)`, so this still walks every row of
+   *    the session (it filters `act` after the index narrows to the session), not a narrower index on `act`.
+   *    The bound is on the SESSION, never the whole table.
+   *  - It never answers the oldest `create`, which would skip every recycled slug (spec §5.7).
+   *    `childReclaimGeneration` cuts "every create this session ever had" down to the CURRENT generation.
+   *  - Same column set and same reviver as `lifecycleFor`: `reviveLifecycleRow` is the one definition both share. */
   lifecycleCreatesFor(sessionId: string): MirroredLifecycleEvent[] {
     const c = CoordStore.LC_COLS;
     const act: LifecycleAct = 'create';
@@ -5745,6 +5818,36 @@ export class CoordStore {
       obsJson: string | null; decJson: string | null; measJson: string | null; raw: string;
     }[];
     return rows.map((r) => CoordStore.reviveLifecycleRow(r));
+  }
+
+  /** THE ONE SPELLING of `lifecycleBirthEventsFor`'s statement. It is public so that its test reads the text this
+   *  method runs: the hint is present, and the plan seeks. `INDEXED BY lifecycle_by_session` is
+   *  `childReclaimEventsSql`'s idiom: the table is never pruned, so this read costs one session's own history. */
+  static readonly LIFECYCLE_BIRTH_EVENTS_SQL =
+    'SELECT id, act, at, measJson FROM lifecycle_events INDEXED BY lifecycle_by_session ' +
+    `WHERE sessionId = ? AND act IN (${placeholders(LIFECYCLE_BIRTH_ACTS.length)}) AND outcome = ? ` +
+    'ORDER BY id ASC';
+
+  /** The birth's rows for one session (spec §5.7): every `done` `create` and every `done` `purge`, oldest
+   *  first by the mirror's own `id`.
+   *  - UNCAPPED, like `lifecycleCreatesFor` and for its reason: the opening create must stay findable for the
+   *    life of the workspace.
+   *  - A refused or intent row of either act is not returned. A refused ws-add minted nothing, and an intent
+   *    without its done never completed.
+   *  - It decides nothing. Which create opens the generation, and which purge follows it, is
+   *    `childReclaimBornAt`'s decision.
+   *  - It throws when the statement returns an act it never asked for. Every caller already reads a throw as
+   *    unreadable. */
+  lifecycleBirthEventsFor(sessionId: string): readonly LifecycleBirthEvent[] {
+    const done: LifecycleOutcome = 'done';
+    const rows = this.db.prepare(CoordStore.LIFECYCLE_BIRTH_EVENTS_SQL).all(sessionId, ...LIFECYCLE_BIRTH_ACTS, done) as
+      { id: number; act: string; at: number | null; measJson: string | null }[];
+    return rows.map((r) => {
+      if (!isLifecycleBirthAct(r.act)) {
+        throw new Error(`lifecycleBirthEventsFor: the statement returned act ${JSON.stringify(r.act)}, which it never asks for`);
+      }
+      return { id: r.id, act: r.act, at: r.at, uuid: reviveMeas(jsonOrNull(r.measJson))?.uuid ?? null };
+    });
   }
 
   /** The reviver `lifecycleFor` and `lifecycleCreatesFor` share, extracted so
@@ -5864,6 +5967,110 @@ export class CoordStore {
       if (r.sessionId !== null) out.get(r.sessionId)?.push(CoordStore.reviveLifecycleRow(r));
     }
     return out;
+  }
+
+  /** THE ONE SPELLING of `lifecycleReclaimRowsSince`'s statement, public so its test runs EXPLAIN over the
+   *  text this method runs. `INDEXED BY lifecycle_by_at`, `recentProvenance`'s idiom and its reason: the
+   *  table is NEVER PRUNED, and the planner prefers a scan that orders by `id` for free over a seek plus a
+   *  sort. `at >= ?` also excludes an undated row, which the horizon cannot place. */
+  static lifecycleReclaimRowsSinceSql(): string {
+    return `SELECT ${CoordStore.LC_COLS} FROM lifecycle_events INDEXED BY lifecycle_by_at ` +
+      'WHERE at >= ? AND act = ? AND sessionId IS NOT NULL ' +
+      `AND (outcome = ? OR (outcome = ? AND refusal IN (${placeholders(CHILD_RECLAIM_LEAF_FAILED_TOKENS.length)}))) ` +
+      'AND (measJson IS NOT NULL OR truncated = 1) ORDER BY id';
+  }
+
+  /**
+   * The kept-leaf item's SOURCE (child-reclamation spec §5.6, §5.9): every `reclaim` row ccd dated at or
+   * after `atMs` that may carry the two kept-leaf keys. These are a `done`, or a failure whose token is one
+   * of `CHILD_RECLAIM_LEAF_FAILED_TOKENS` (the act completed, then only the purge failed), carrying a `meas`
+   * or cut to fit. ONE statement, bounded by the window and never by the table. Oldest first, by this
+   * table's own `id`.
+   *
+   * Nothing is decided here: which row of an id stands, what it kept and what ends it are L1's
+   * (`childReclaimLeafKept`). Each row keeps `meas` and `truncated` exactly as the mirror holds them, so a
+   * cut line and a line with nothing measured never collapse into one value.
+   */
+  lifecycleReclaimRowsSince(atMs: number): ChildReclaimLeafSourceRow[] {
+    const act: LifecycleAct = 'reclaim';
+    const done: LifecycleOutcome = 'done';
+    const failed: LifecycleOutcome = 'failed';
+    const rows = this.db.prepare(CoordStore.lifecycleReclaimRowsSinceSql())
+      .all(atMs, act, done, failed, ...CHILD_RECLAIM_LEAF_FAILED_TOKENS) as unknown as
+        ({ id: number } & Parameters<typeof CoordStore.reviveLifecycleRow>[0])[];
+    return rows.flatMap((r) => {
+      // The WHERE excludes both; the row type cannot know it.
+      if (r.sessionId === null || r.at === null) return [];
+      const e = CoordStore.reviveLifecycleRow(r);
+      return [{ id: r.id, sessionId: r.sessionId, at: r.at, outcome: e.outcome, refusal: e.refusal,
+        truncated: e.truncated, meas: e.meas, detail: e.detail }];
+    });
+  }
+
+  /** THE ONE SPELLING of `lifecycleLeafEndsFor`'s statement. `INDEXED BY lifecycle_by_session`, as
+   *  `childReclaimEventsSql` is: the cost is bounded by the asked sessions' own histories. */
+  static lifecycleLeafEndsSql(sessions: number): string {
+    return 'SELECT id, sessionId, act, at FROM lifecycle_events INDEXED BY lifecycle_by_session ' +
+      `WHERE sessionId IN (${placeholders(sessions)}) AND act IN (?, ?) AND outcome = ? ORDER BY sessionId, id`;
+  }
+
+  /** What may END a kept-leaf item (spec §5.9): each asked id's `done` `create` and `collect` rows, oldest
+   *  first, with the mirror's id and ccd's nullable `at`. ONE statement whatever the id count. EVERY asked
+   *  id gets an entry, `[]` included (`childReclaimEvents`' rule). Whether a row FOLLOWS an item's source,
+   *  and whether a create is placed, are L1's. */
+  lifecycleLeafEndsFor(sessionIds: readonly string[]): Map<string, ChildReclaimLeafEndRow[]> {
+    const ids = [...new Set(sessionIds)];
+    const out = new Map<string, ChildReclaimLeafEndRow[]>(ids.map((id) => [id, []]));
+    if (ids.length === 0) return out;
+    const create: ChildReclaimLeafEndRow['act'] = 'create';
+    const collect: ChildReclaimLeafEndRow['act'] = 'collect';
+    const done: LifecycleOutcome = 'done';
+    const rows = this.db.prepare(CoordStore.lifecycleLeafEndsSql(ids.length))
+      .all(...ids, create, collect, done) as { id: number; sessionId: string; act: string; at: number | null }[];
+    for (const r of rows) {
+      const act = r.act === create ? create : r.act === collect ? collect : null;
+      if (act !== null) out.get(r.sessionId)?.push({ id: r.id, act, at: r.at });
+    }
+    return out;
+  }
+
+  /** THE JOURNAL CLAUSE'S ONE READ (workspace lifecycle spec 2026-09-24 §5.4, the dead-coordinator lane): for each
+   *  asked claimant, its rows of the acts the clause reads (`DEAD_COORDINATOR_JOURNAL_ACTS`), in this table's own id
+   *  order (INGEST order — the clause itself orders them by generation, then this id), and whether the mirror holds
+   *  ANY row for it — "no history at all" is a fact the clause turns on (an absent row with none is unmeasured), and it is not the same fact as "none of the clause's acts". TWO
+   *  statements whatever the claimant count, each `INDEXED BY lifecycle_by_session` (`recentProvenance`'s idiom: the
+   *  table is never pruned). EVERY asked id gets an entry. A failing read THROWS, and the lane reads that as
+   *  `unreadable` — never as no history. */
+  deadCoordinatorJournalRows(sessionIds: readonly string[]): Map<string, { rows: DeadCoordinatorJournalRow[]; hasHistory: boolean }> {
+    const ids = [...new Set(sessionIds)];
+    const out = new Map<string, { rows: DeadCoordinatorJournalRow[]; hasHistory: boolean }>(
+      ids.map((id) => [id, { rows: [], hasHistory: false }]));
+    if (ids.length === 0) return out;
+    const rows = this.db.prepare(
+      `SELECT ${CoordStore.LC_COLS} FROM lifecycle_events INDEXED BY lifecycle_by_session ` +
+      `WHERE sessionId IN (${placeholders(ids.length)}) AND act IN (${placeholders(DEAD_COORDINATOR_JOURNAL_ACTS.length)}) ` +
+      'ORDER BY sessionId, id',
+    ).all(...ids, ...DEAD_COORDINATOR_JOURNAL_ACTS) as unknown as Parameters<typeof CoordStore.reviveLifecycleRow>[0][];
+    for (const r of rows) {
+      const e = r.sessionId === null ? undefined : out.get(r.sessionId);
+      if (e === undefined) continue;
+      const ev = CoordStore.reviveLifecycleRow(r);
+      e.rows.push({ act: ev.act, outcome: ev.outcome, at: ev.at, gen: ev.gen, dec: ev.dec, meas: ev.meas, raw: ev.raw });
+    }
+    const any = this.db.prepare(
+      'SELECT DISTINCT sessionId FROM lifecycle_events INDEXED BY lifecycle_by_session ' +
+      `WHERE sessionId IN (${placeholders(ids.length)})`,
+    ).all(...ids) as { sessionId: string }[];
+    for (const r of any) { const e = out.get(r.sessionId); if (e !== undefined) e.hasHistory = true; }
+    return out;
+  }
+
+  /** EVERY generation the mirror recorded lost bytes in, distinct, one statement — the dead-coordinator lane's journal
+   *  trust (workspace lifecycle spec §5.4, the departure `journal-loss-reads-as-unmeasured`): a gap in a generation
+   *  that is not older than a claimant's last successful spawn may have lost a deliberate act. Never limited: a gap
+   *  the read did not return is a gap the lane would trust past. A failing read THROWS, and the lane trusts nothing. */
+  lifecycleGapGens(): string[] {
+    return (this.db.prepare('SELECT DISTINCT gen FROM lifecycle_gaps').all() as { gen: string }[]).map((r) => r.gen);
   }
 
   /** The holes, newest-first — a timeline with a hole in it says so. */

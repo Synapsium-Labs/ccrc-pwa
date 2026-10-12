@@ -347,8 +347,9 @@ worktree. It deletes:
 This is not the 2026-09-23 manual procedure, which tarred ignored files and refused dirty trees. The operator
 accepted the difference (§2).
 
-**The lane.** CCR-15 wave 4's `sweepChildReclaim` pass hosts a second population. It shares the pass's registry
-read, its cadence (`CHILD_RECLAIM_SWEEP_MS`) and the switch, and nothing else. It has:
+**The lane.** A sibling of CCR-15 wave 4's `sweepChildReclaim` pass, on the same tick, never a population inside it
+(wave 3b's sibling pass). It shares the pass's registry read, its cadence (`CHILD_RECLAIM_SWEEP_MS`) and the switch,
+and nothing else. It has:
 - its own L1 verdict, `archivedExpiryVerdict`, in its own file;
 - its own entry map and clocks. Wave 5's chip reads the child lane's defer map, and it must never see an expiry
   entry;
@@ -445,7 +446,9 @@ each item is a departure named there).
 - **The words carry the arming condition** (the coordinator's ruling). README, `wave-lifecycle.md` §6 and coordinator
   clause 3 say that an archived workspace is cleaned up seven days after its archive once the operator has armed the
   lane, and that until then the lane only records what it would expire, so they are true before and after the arming.
-  The PWA's archive-confirm copy says what an armed fleet does; whether to hedge it until then is the operator's.
+  The PWA's archive-confirm copy said what an armed fleet does until wave 4 hedged it the same way (review 313,
+  parked item 2, the operator's ruling): "Restore brings it back; once automatic cleanup is on, it is cleaned up
+  seven days after its archive", and Archive all's "…each is cleaned up seven days after its archive".
 - **The lane ships shadowed** (the coordinator's safety ruling, the scope sweep's precedent). Until `$REG/expire-lane-live`
   exists — touched by the operator by hand on the fleet box; nothing in the tree writes it — a due workspace is audited
   and recorded ("would expire", a feed row and an attention entry naming its archive, its expiry instant and how many
@@ -464,10 +467,55 @@ each item is a departure named there).
 - **A standing `in-use` is expected.** It is asked again every pass and, after a few, listed with the pid, its command
   and its path; the text never tells an operator to end a pid without naming what it is (the fleet's own tmux server is
   also a `tmux: server`). The lane never kills.
+- **Review 313's residue, closed by wave 4** (each a departure named in the wave-4 plan,
+  `docs/superpowers/plans/2026-10-07-workspace-lifecycle-wave4-dead-coordinator-lane.md`). A learn audit that cannot be
+  read, or reads no archive from a ccd that prints the instant, backs off on the failure ladder and is listed (an older
+  ccd's audit with no `expiresAt` key reads as no evidence first, never as a failure), and learn slots go in
+  `nextAskAt` order; a failure ccd says will not resume is listed at once and never asked again for that archive; an
+  ineligible sighting ends the row's would-expire, in-use and held reports and the row is re-audited as soon as it is
+  due again, while the verdicts the box itself gave (refused, failing, no evidence) stand on a sighting that is not held;
+  a hold replaces a non-final report (a would-expire, an in-use or a retryable failing one) and the row is re-audited as
+  soon as it is due again after the release, and a hold never replaces a report whose row the lane has stopped asking; a refusal whose audit names another archive is a row that moved; and the
+  held sentence names its instant (`due <instant>`), never a period.
 - **The attention list is the lane's own memory.** Child reclamation derives its list from the lifecycle mirror alone; the
   expiry's entries (a shadow `would-expire`, a `held` row past its instant, a standing `in-use`, a refusal, a failure, no
   evidence) are mostly never journaled, so the lane lists them from its own passes and a restart rebuilds the list over
   the next ones, which can delay an expiry and never cause one.
+- **As wave 5 closes the lane's follow-ups** (each a departure named in the wave-5 plan,
+  `docs/superpowers/plans/2026-10-08-workspace-lifecycle-wave5-residue-and-expiry-follow-ups.md`).
+  - **The consent binds the branch.** Inside its lock `ws-expire` reads the branch three ways at the recompute and
+    again at the pin; if the two reads differ (a branch made in between, or, with HEAD not symbolic to `ws/<slug>`
+    (detached, on another branch, or with the worktree gone), one deleted) it stops
+    there, `failed` `state-changed`, after the pin, which only keeps, and before the tombstone and the breadcrumb.
+    With HEAD symbolic to `ws/<slug>`, a branch deleted inside the lock is refused earlier, at the pin, as
+    `pin-failed`, which is resumable. A branch already absent when the token was minted reads absent twice and expires
+    with its work in the attic. A branch deleted between the fresh pin and the tail's settle is as wave 6 of CCR-15
+    left it: its tip was pinned at the fresh pin.
+  - **A `failed` `state-changed` is audited afresh.** ccd prints that document only on a fresh expiry, before the
+    tombstone and the breadcrumb, so nothing started. As on the reclaim side, "not resumable" means start over, not
+    final: the lane forgets the instant it learned and its sightings and returns to learning, so a later pass's audit
+    mints a fresh token over what stands, and the row is asked again only once seen eligible twice past its instant. A
+    feed row records it, and nothing is listed. `probe-unmeasured` is still read as final, but ccd prints it on a
+    resumed expiry too, after an earlier attempt's breadcrumb (a tombstone it cannot read, or a tmux probe that did not
+    answer), so there it can stop the lane on a part-expired archive until a restart. That is a known gap, routed to
+    this programme's wave 6 once CCR-15 wave 7's `crumb` field is on `main`, and an arming blocker for the lane until
+    then. `pin-failed` and `tombstone-unwritable` stay resumable, because the shared tail prints each after the
+    breadcrumb too; the `crumb` field is what can tell those apart.
+  - **A kept leaf is listed.** The `expired` document's `clipsKept` and `tmpRootKept` are read by name. A kept word
+    (`refused`, `unmeasured`, `in-use`) lists the archive, though its row is gone, saying what was kept and why, until
+    the server restarts. An absent key (an older ccd) is recorded in the feed row as unmeasured and lists nothing, so a
+    rollout skew raises no alarm on every expiry.
+  - **A day of resumable failures slows the asking.** After 24 hours of `failed` (resumable) or `lock-unopenable`
+    answers to the act on one archive, the row moves to a persistent tier. A failure of the act's own audit never
+    reaches the persistent tier, only the verb's does: the tier's day and its attempts count the verb's failures
+    alone. Its report stands on the list, naming the first failure, the attempts and the last detail, saying the
+    expiry may have stopped part-way (the server cannot yet tell), and suggesting no destructive verb. The lane asks
+    again every four hours, never stopping. No answer that ends no attempt replaces the entry or resets its run: a
+    hold, a deferral, a shadow audit (its feed row's "nothing was deleted" is about that audit alone), a refusal the
+    box retries, an in-use, ccd's "not yet", an older ccd's silence.
+    The entry goes when an attempt completes, finds that none had begun (a `failed` `state-changed`, which ccd prints
+    only before the breadcrumb) or stops for good, or when the workspace is archived again; a restart re-learns. A
+    terminal refusal and a composition error are still never asked again.
 
 ### 5.4 Stage 4 — the dead-coordinator lane (L4)
 
@@ -530,7 +578,10 @@ lane's backoff. The abandon arm aims every non-planned work run at `closing`, so
 an hour; programme `<slug>` ended, `<n>` runs closed failed".
 
 **What follows, stated so nobody is surprised.**
-- The programme retires as `abandoned`, permanently.
+- The programme retires as `abandoned`. Opening a run does not change that: a coordinator revived under the crashed id
+  can still open a new run under its fenced slug (`openRun`'s conflict arm updates only the title), and while that run
+  is open the programme row still reads `abandoned`. The row is rewritten only when a later close ends the programme's
+  last open run, to `done` or `abandoned` by that close (measured in a fixture store, wave 5).
 - Outstanding deliveries naming those runs are cancelled.
 - The slug stays fenced to the crashed id until someone reclaims it.
 - CCR-15 wave 3 reclaims each marked child whose run closed. That includes a worker mid-turn: its work is committed
@@ -540,6 +591,70 @@ an hour; programme `<slug>` ended, `<n>` runs closed failed".
 **Cost.** The lane measures only the distinct claimants of non-terminal runs, a handful, at the child lane's
 60-second cadence. Each measurement is a registry listing, about 27 field reads and one tmux call, which is an
 agent frame in remote mode.
+
+**As wave 4 builds the lane** (amended with its plan, `docs/superpowers/plans/2026-10-07-workspace-lifecycle-wave4-dead-coordinator-lane.md`;
+each item is a departure named there).
+- **The lane ships shadowed** (the coordinator's safety ruling, the expiry lane's precedent). Until
+  `$REG/dead-coordinator-lane-live` exists — touched by the operator by hand in the registry the server reads (the fleet
+  box's through the agent in remote mode); nothing in the tree writes it — the lane measures, keeps its anchors, trips
+  its breaker and records "would end programme <slug> (<n> runs)" as a feed row and an attention entry, and never
+  reaches `closeRun`'s abandon arm or the reclaim port. The executor re-reads the file inside the serialiser.
+  `reclaim-paused` stops it entirely, shadow included.
+- **The last start is read off the spawn line itself.** ccd's encoder writes every `meas` value as a string and the
+  mirror keeps `meas.rc` only as a number, so the typed field is null on every real line; the clause reads the `spawn`
+  line's own bytes, strictly — `"0"` is a start, anything else proves none, and then every row in the horizon counts.
+- **Doubt in the journal is deliberate.** An act this build cannot name (`unknown`) and an `unsupervise` whose surface
+  cannot be read count as deliberate acts: doubt never reads as a crash.
+- **A journal that may have lost the act is unreadable.** The clause also reads the journal's own trust: the mirror's
+  health (`unavailable`, or not swept since a restart, or `stale` — the last two make a pass decide nothing at all), a
+  gap the mirror recorded in a generation not older than the claimant's last successful spawn, and a journal line ccd
+  counted as unwritten after it (`$REG/.lifecycle/errors`' instant). Each makes the claimant unmeasured: listed, never
+  acted on.
+- **A never-started row with no successful spawn never ran.** `never-started` is a crash only when the journal holds a
+  successful spawn for it; otherwise — an heir the operator reclaimed a programme onto and has not started yet reads so —
+  it is unmeasured. So is an `orphan` or `absent` claimant whose journal holds a spawn that failed and none that
+  succeeded (it was started and never ran); a horizon with no spawn row at all still reads crashed.
+- **The anchor restarts after a gap nobody measured.** `dead_claimants` carries `lastDeadAt` beside `firstDeadAt`; an
+  episode whose last crashed pass is older than ten minutes (a server down, an older build running after a rollback,
+  which never writes the table) starts again at the pass that measures it. The table is a new table and nothing else,
+  so a rolled-back build boots on it.
+- **The breaker holds the whole lane**, not only the claimants it names, and it **clears through the doors that
+  already exist**: the claimants fall back under the threshold when the operator revives them, reclaims their
+  programmes or abandons their runs. No new route.
+- **The breaker remembers.** It keeps each member's first-dead instant and releases a member only on evidence (alive,
+  stopped, a deliberate act) or when it leaves the population, so one pass that cannot measure a member — which deletes
+  that member's anchor — does not dissolve the cluster. "Fleet-wide" is what the pass measured: tmux not answering for
+  any claimant trips it whatever the count; a registry that will not list stops the tick before the lane runs.
+- **One claimant a pass**, the longest dead first, ARMED; in shadow every due claimant is recorded.
+- **The re-measure runs inside the arm.** A compare-and-set on `claimedBy` cannot see a revive of the same id, so the
+  abandon arm re-measures the claimant immediately before each run's fleet act and again after it, before the commit;
+  a revive that lands inside that last round trip is the residual. A re-measure that reads anything but a crash deletes
+  the anchor, as a pass's would.
+- **The attention list is the lane's own memory** (the expiry lane's shape): would-end, unmeasured, stuck and the
+  breaker, rebuilt over the passes after a restart, which can delay an act and never cause one.
+- **The lane never pushes.** The stall watch notifies about a dead coordinator's stalled workers — r3
+  (`coordinator-dead`) and, once its wave-2 arms are armed, `coord-deaf`, one push per worker, each naming the
+  coordinator; this lane's feed rows (each with the claimant's first-dead instant, and one per breaker trip) are records
+  of that incident and its entries are a list.
+- **Not changed:** the reclaim door and the stall watch ignore the verdict's new `cause`; landing reads a run the sweep
+  failed exactly as one the operator abandoned (it keys on open runs, never on `causedBy`).
+
+**As wave 5 corrects the lane** (review 339's residue; each a departure named in the wave-5 plan,
+`docs/superpowers/plans/2026-10-08-workspace-lifecycle-wave5-residue-and-expiry-follow-ups.md`).
+- **A second crash is a second record.** A reading that ends an episode (anything but a crash) forgets the last
+  recorded outcome, so a coordinator that crashes, is revived and crashes again is recorded again in shadow.
+- **A release and a re-hold are two acts.** An act the re-measure stopped after its fleet act says which one ran: a
+  released worker is unheld until its coordinator re-holds it, and a worker re-held under a surviving run stays claimed.
+- **Every thrown act is recorded.** Each thrown act writes one feed row naming the runs it closed, the run whose
+  abandon failed, and that nothing more is known.
+- **A generation the mirror could not read is not a successful sweep.** One failed read is absorbed; a failure that
+  persists turns the mirror's health `stale`, so the lane decides nothing.
+- **A mirror gone stale at the act is a hold.** The act stops, the anchor and the run of crashed passes stand (the
+  adapter's own rule: a slow mirror never deletes an anchor), and the act waits a pass.
+- **An accepted abstention.** The journal clause counts any non-refused `reclaim` row as deliberate, so a child's
+  pre-start `reclaim` `failed` `probe-unmeasured` row reads as a deliberate act and the lane abstains from that
+  claimant. Abstention ends nothing. It is reachable only by a marked child that becomes a claimant or an heir before
+  any successful reclaim of it.
 
 ## 6. What this changes outside itself
 
@@ -558,8 +673,12 @@ agent frame in remote mode.
   4. Wave 3's "exactly ONE addition" to `ws-reap`'s resume fork: the `expire:` arm is a second (§5.3). Amended by
      this design's wave 3 (3965): CCR-15's §6 now names `ws-reap`'s `expire-in-progress` refusal beside its `reclaim:`
      mirror, and `ws-restore`'s refusal of an expiry in progress.
-  5. `closeRun`'s `causedBy` vocabulary gains `'sweep'` (§5.4).
-  6. Wave 4's lane gains a second population (§5.3).
+  5. `closeRun`'s `causedBy` vocabulary gains `'sweep'` (§5.4). Amended by this design’s wave 4: CCR-15's texts name no
+     `causedBy` vocabulary (measured); the set is written in the build-4 design (`2026-08-11-build4-conversation-and-controls-design.md`),
+     which now names the third word, and in `close.ts`'s `CloseCause`.
+  6. Wave 4's lane gains a second population (§5.3). Amended by this design’s wave 3b, recorded by wave 4: the expiry
+     lane is a SIBLING pass on the same tick, never a population inside `sweepChildReclaim`, so CCR-15's sweep and its
+     text are unchanged.
   7. The contract's `shared/api.ts` line citations (R9), which waves 1 and 2 must place below or re-point (§4).
 - **CLAUDE.md** (§5.3), and its box-token census for the archive route (§5.2).
 - **Landing-order.** Its stage 5 keys landing entries and intents to runs, and stage 4's lane can fail such a run.

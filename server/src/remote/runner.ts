@@ -56,6 +56,17 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // Archived-workspace expiry (spec 2026-09-24 §5.3): ws-reclaim's machinery — the pin phase, the settle and the same
   // teardown — on an archived workspace, so it earns the same budget.
   'ws-expire': 240_000,
+  // The child temp-root collector (spec 2026-09-22 §5.10): its probes, a quarantine move, and the removal of a tree that
+  // can hold gigabytes, all under the reap lock. It earns ws-reclaim's budget, not the flat 90 s it would silently
+  // inherit without this row. Its audit is `ws-audit` and keeps that verb's row. A fresh collection runs eight bounded
+  // probes, at most about 180 s in all: the evaluation's 70 s (the idle walk 30, the in-use probe 10, the checkout scan
+  // 30), step 3a's checkout scan 30, step 5's two in-use probes 2 x 10, and the removal's 60 (its checkout scan 30, then
+  // the permission pass `_ws_reclaim_normalise`'s bounded walk, 30). A probe that reaches its bound ends the act, so at
+  // most ONE TERM-to-KILL grace is paid (3 s by default, 8 s at the widest): about 183 s, or 188 s. The rest of the row,
+  // about 57 s (52 s at the widest grace), is shared by work no bound caps: the permission pass's second walk, which
+  // looks for what is still unreadable, the registry row passes, and the `rm` itself. A big leaf can outrun the row, and
+  // it fails safe: it may need several passes, and nothing is lost, because the quarantine record carries the next pass.
+  'ws-collect': 240_000,
   // The two SPAWNING verbs, and the reason they need the agent's MAXIMUM
   // (`MAX_EXEC_TIMEOUT_MS`, agent/src/server.ts) rather than a merely larger
   // number (F8, found live 2026-08-12). Both end in `_spawn`, which blocks in
@@ -120,6 +131,24 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // it, and a carry slower than 300 s is still killed mid-flight. Closing it
   // needs a ccd-side bound and is not this row's job.
   swap: 300_000,
+  // The four Docs verbs (spec 2026-10-01 section 2 (a), Budgets). ccd's python helper bounds each one itself: a
+  // whole-verb deadline (`HELPER_DEADLINE_S` in ccd/ccd: index 12 s, tree 12 s, show 7 s, fetch 45 s), at which it
+  // sends SIGTERM to every git process group it started and SIGKILL `KILL_GRACE_S` (2 s) later. Each budget below
+  // is strictly greater than that deadline + the 2 s grace + 5 s; `docs-budget.test.ts` reads both sides from
+  // source and holds the inequality, and docs-show's margin is the thinnest (exactly 1 s).
+  //
+  // Why the margin must stay positive: these budgets exist so the AGENT never kills ccd in normal operation. The
+  // agent's deadline (`runExec`'s `execFile` timeout) kills only its direct child, so a kill landing while the
+  // helper still waits on git would orphan git's process group (`git-remote-https`, ssh, `git-lfs`) rather than
+  // let the helper's own `killpg` reap it. The helper's deadline must always fire first. Without these rows a
+  // docs verb silently inherits the flat 90 s.
+  //
+  // The docs-index budget is also doctor's wait: ccd/ccrc-doctor-checks defaults `CCRC_DOCTOR_DOCS_TIMEOUT` to it
+  // in seconds, so doctor waits exactly as long as a Docs page would; `docs-budget.test.ts` holds the two equal.
+  'docs-index': 20_000,
+  'docs-tree': 20_000,
+  'docs-show': 15_000,
+  'docs-fetch': 60_000,
 };
 
 function timeoutMsFor(cmd: string, args: string[]): number {

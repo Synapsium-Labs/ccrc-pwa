@@ -4,7 +4,8 @@ import { lifecycleInputFor } from '../fleet.js';
 import type { FleetIO } from '../io.js';
 import { fieldMeasured, readSessionRecord } from '../registry.js';
 import type { CoordStore } from './store.js';
-import { lifecycleIsDead, sessionLifecycle } from '../../../shared/api.js';
+import { lifecycleIsDead, sessionLifecycle, type SessionLifecycle } from '../../../shared/api.js';
+import type { ClaimantDeadCause } from '../deadCoordinator.js';
 
 /**
  * L1 decision function (architecture doc increment 4 — "deciding split from
@@ -74,9 +75,17 @@ export interface ReclaimDeps {
  *                     `LIFECYCLE_DEAD` draws for its own `unmeasurable` key (shared/api.ts:2108-2110),
  *                     drawn again for the whole ladder. */
 export type ClaimantVerdict =
-  | { state: 'dead'; why: string }
+  | { state: 'dead'; cause: ClaimantDeadCause; why: string }
   | { state: 'alive'; why: string }
   | { state: 'unmeasurable'; why: string };
+
+/** The dead arm's `cause` (workspace lifecycle spec 2026-09-24 §5.4, "The verdict is widened, not re-derived"): D-1145
+ *  below says the THIRD consumer that needs WHICH death must widen the type rather than re-split the prose `why` by
+ *  hand, and the dead-coordinator lane is that consumer — it acts on `orphan`, `never-started` and `absent`, never on
+ *  `stopped`. Set HERE, in this ladder, and nowhere else: rung 1's proven absence is `absent`, and a dead lifecycle is
+ *  its own word (`ClaimantDeadCause`, the lane's L1 file, which `coord-reclaim.test.ts` holds equal to `['absent',
+ *  ...DEAD_LIFECYCLES]`). The reclaim door and the stall watch read `state` alone and ignore it. */
+const isDeadLifecycle = (lc: SessionLifecycle): lc is Exclude<ClaimantDeadCause, 'absent'> => lifecycleIsDead(lc);
 
 /**
  * Is the session that owns this program still there?
@@ -173,7 +182,7 @@ export async function measureClaimant(
         why: `the registry lists ${id}.uuid but the row behind it could not be assembled — a session `
           + 'mid-write or mid-teardown, transient, not a fact about the claimant' };
     }
-    return { state: 'dead', why: 'no registry row in a directory that listed cleanly' };
+    return { state: 'dead', cause: 'absent', why: 'no registry row in a directory that listed cleanly' };
   }
   const sv = await deps.tmux.sessionVerdict(id);
   if (sv.verdict === 'live') return { state: 'alive', why: 'tmux reports the pane live' };
@@ -192,8 +201,8 @@ export async function measureClaimant(
   // splitting a fourth arm off would buy nothing — every caller branches on
   // these identically. `why` names which of the three produced it, because the
   // sheet renders `detail` and not the code alone.
-  return lifecycleIsDead(lc)
-    ? { state: 'dead', why: `the pane is gone and the lifecycle reads ${lc}` }
+  return isDeadLifecycle(lc)
+    ? { state: 'dead', cause: lc, why: `the pane is gone and the lifecycle reads ${lc}` }
     : { state: 'alive', why: `the pane is gone but the lifecycle reads ${lc}` };
 }
 

@@ -11,6 +11,7 @@ import {
   CHILD_RECLAIM_MARKER_GLYPH, CHILD_RECLAIM_MARKER_WORD, childReclaimAttentionOf, childReclaimMarker,
 } from '../src/fleet/childReclaimWords';
 import { EXPIRY_KIND_WORD, expiryAttentionOf } from '../src/fleet/expiryWords';
+import { DEAD_COORDINATOR_KIND_WORD, deadCoordinatorAttentionOf } from '../src/fleet/deadCoordinatorWords';
 import { COORD_CONFIRM_MS } from '../src/fleet/coordWords';
 import { ApiError, COORD_UNSUPPORTED_TEXT } from '../src/lib/api';
 import { ToastHost } from '../src/components/Toast';
@@ -556,5 +557,42 @@ describe('the one cleanup switch (wave 3b)', () => {
     seen(store, { ...coord(), expiryAttention: [] });
     render(<ChildReclaimBanner store={store} />);
     expect(screen.queryByRole('list', { name: 'archived workspaces the cleanup is reporting' })).toBeNull();
+  });
+});
+
+describe('the dead-coordinator lane’s list (workspace lifecycle wave 4)', () => {
+  it('lists what the lane reports, under the expiry lane’s list — the breaker naming every claimant it holds — and is never a tap', () => {
+    const store = makeStore();
+    seen(store, { ...coord(), deadCoordinatorAttention: [
+      { kind: 'breaker', claimants: ['demo-coord-a', 'demo-coord-b'], at: 5,
+        sentence: '2 coordinators read crashed within 10 minutes of each other (demo-coord-a, demo-coord-b) — a box fault is likelier than 2 crashes, so the lane ends nothing.' },
+      { kind: 'would-end', claimants: ['demo-coord-c'], at: 4,
+        sentence: 'coordinator demo-coord-c crashed (its pane is gone and nothing is bringing it back) and has stayed dead since 2026-10-07 10:00 UTC.' },
+    ] });
+    render(<ChildReclaimBanner store={store} />);
+    const list = screen.getByRole('list', { name: 'coordinators the cleanup is reporting' });
+    expect(list.textContent).toContain(`${DEAD_COORDINATOR_KIND_WORD.breaker} · demo-coord-a, demo-coord-b`);
+    expect(list.textContent).toContain(`${DEAD_COORDINATOR_KIND_WORD['would-end']} · demo-coord-c`);
+    expect(list.textContent).toContain('so the lane ends nothing');
+    expect(list.querySelectorAll('button, a'), 'a report, never a tap').toHaveLength(0);
+    expect(screen.queryByRole('list', { name: 'archived workspaces the cleanup is reporting' }), 'never the expiry lane’s list').toBeNull();
+  });
+
+  it('the one reader: an absent field reads as no items, a malformed member is dropped alone, an unknown kind is "reported"', () => {
+    expect(deadCoordinatorAttentionOf(coord())).toEqual([]);
+    expect(deadCoordinatorAttentionOf({ deadCoordinatorAttention: [
+      { kind: 'stuck', claimants: ['a'], sentence: 's' }, { kind: 'stuck', claimants: [7], sentence: 's' }, { kind: 'stuck' }] }))
+      .toEqual([{ kind: 'stuck', claimants: ['a'], sentence: 's' }]);
+    const store = makeStore();
+    seen(store, { ...coord(), deadCoordinatorAttention: [{ kind: 'newer-kind', claimants: ['x'], sentence: 's' }] });
+    render(<ChildReclaimBanner store={store} />);
+    expect(screen.getByRole('list', { name: 'coordinators the cleanup is reporting' }).textContent).toContain('reported · x');
+  });
+
+  it('renders no list when there is nothing to report', () => {
+    const store = makeStore();
+    seen(store, { ...coord(), deadCoordinatorAttention: [] });
+    render(<ChildReclaimBanner store={store} />);
+    expect(screen.queryByRole('list', { name: 'coordinators the cleanup is reporting' })).toBeNull();
   });
 });

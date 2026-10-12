@@ -4,7 +4,8 @@
 > `superpowers:subagent-driven-development` (or `superpowers:executing-plans`) with
 > `superpowers:test-driven-development` for every code step. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Programme:** `delegation-broker`, **wave 1 of 6** (ledger `docs/superpowers/programs/delegation-broker.md`).
+**Programme:** `delegation-broker`, **wave 1 of 6** (ledger `docs/superpowers/programs/delegation-broker.md`; of 7
+since the 2026-10-07 renumbering, see the numbering note at the top of "Mutation table").
 Deploy class: the hook and installer change reach homes through `ccrc update`; everything else is tests, a test
 rig and committed fixtures. One PR from a fresh child workspace.
 
@@ -23,10 +24,10 @@ worktrees and their subagent metadata, path-free.
 no dependencies (`mockapi.mjs`, `sanitize.mjs`, `build-matrix.mjs`, `deploy/*.mjs`), vitest from `server/`.
 
 **Spec:** `docs/superpowers/specs/2026-10-04-delegation-broker-design.md` — covers §3.1 (re-measured), §5.3's
-`SessionEnd` registration, §7 stage 1, §8.1 (questions 1-8 and 10 measured, two of their situations only by a
-proxy — a parent OOM by a SIGKILL of the parent, an account swap by a config-dir swap (D-4066); 9 by a proxy
-(D-4001)), §8.2 (the fixture corpus and its rig). Lists
-ten pre-planned entries under "Deviations found": eight departures from the spec (stage placement of `SessionEnd`,
+`SessionEnd` registration, §7 stage 1, §8.1 (questions 1-8 and 10 measured, except that one situation of Q5,
+compaction, is unmeasured (D-4364), and two of their situations only by a proxy — a parent OOM by a SIGKILL of the
+parent, an account swap by a config-dir swap (D-4066); 9 by a proxy (D-4001)), §8.2 (the fixture corpus and its rig).
+Lists ten pre-planned entries under "Deviations found": eight departures from the spec (stage placement of `SessionEnd`,
 the matrix's shape, the rig's committed payloads, and five smaller ones) and two method notes that depart from no
 spec sentence (D-3994, D-3995).
 
@@ -3041,6 +3042,15 @@ git commit -m "docs(delegation-broker): the wave-1 measurement matrix and its am
 
 ## Mutation table
 
+**Wave numbers in this plan (the 2026-10-07 renumbering, #313).** The programme was six waves and is now seven: the
+measurement close-out (run 306) is wave 2, and the observe stage, which was wave 2, is wave 3, so the old waves 3 to 6
+are now 4 to 7. A "wave 2" here means the close-out where the passage is marked as the close-out's: the "Wave 2
+close-out (review 304)" and "Wave 2 fix round (review 318)" sub-tables below, any passage that cites review 304 or
+review 318, and, wherever they stand, "wave 2's close-out", "wave 2's tree", "Corrected in wave 2", "Extended in
+wave 2" and "reworded in wave 2". Every other "wave 2" in this plan was written before 2026-10-07 and means the
+observe stage, now wave 3, and every other "wave 3" to "wave 6" there is one lower than today's number. Those
+passages stay as the dated snapshots they are; a sentence that could be read either way says which.
+
 Each row was given in its task; this is the index the wave-done reports against.
 
 | Task | Rows | Guards |
@@ -3091,48 +3101,195 @@ guard that cannot have a row says so); the wave-done reports the cells.
 
 **Fix round 2 (review 296).** Every guard arm the round added or touched, each measured red by mutating that arm alone
 in a scratch copy. The counts are the implementers', over the filter each task ran (the sanitiser's: its block and the
-corpus row), unless a row names another run. Each task's reviewer re-measured them, task A's follow-up arms
-(`12f7c4aac`) included: its re-review ran 26 mutations of its own, and every count matches. Two counts carry no
-reviewer's re-run, and their rows say so: the residue-bearing-key arm's and the implementer's base64 decode (task A's
-review measured both with mutations of its own). Two rows are the controller's measurements: Task 8's ENOTDIR fold
-(re-run by the write-up's reviewer: 1 red of 27) and the `--scan` file index row (first `a4d1da74f`, hardened after the write-up's
-re-review 2 to plant every fixture of a version; its counts are in its row). From `12f7c4aac` every known limit the sanitiser's header declares is pinned by a row that reds when the
-limit closes (at `858caf47d` the `\u` half of the one-pass limit was not: 0 red, task A's review).
+corpus row), unless a row names another run, and each is the count AT THE COMMIT it was taken at: a guard's row set
+grows as later rows land, so the same mutation re-measured at a later commit can red more rows. Each task's reviewer
+re-measured them, task A's follow-up arms (`12f7c4aac`) included: its re-review ran 26 mutations of its own.
+
+Review 304 re-measured the rows at `3efb0ac37`. Every count its report lists reproduced exactly except five, which came
+out higher and never lower (the old `%2F`-only decode 6 to 7, the closing-tag lookahead 8 to 9, `--scan`'s scan call 6
+to 7, pointer findings named by text 4 to 5, every lstat failure null 1 to 2), and the F11 block-wide counts, which
+read differently because they are dated by their row counts (73 rows at `858caf47d`, 77 at `3efb0ac37`: a letter 39, a
+digit 40 and `.` 3 where the plan has 37, 38 and 2). Its report lists no re-run of three figures: the 14 that task A's
+review found a broader base64 decode to red, and the two taken at `858caf47d` (the `\u` half's 0, and the first two m4
+deletions reddening nothing), which no later tree reproduces. Each of the five cells below gives both numbers and names
+the extra row, and the F11 cell gives both row counts. The dated number of each of the five was re-run at its dated
+commit in wave 2's close-out, and the F11 counts were re-run at `858caf47d`.
+
+A commit beside a count means one of two things. "at X" is a commit the count was measured at, by the cell's own words
+or by a re-run. "written at X" is only the commit whose plan text first carried the count: the implementer's own run
+may be a task commit earlier, and what is established is what the plan says and when. No count here is re-measured on
+wave 2's tree.
+
+Two counts carry no task reviewer's re-run in fix round 2, and their rows say so: the residue-bearing-key arm's and the
+implementer's base64 decode (task A's review measured both with mutations of its own, and review 304 reproduced both:
+3 and 1). Two rows are the controller's measurements: Task 8's ENOTDIR fold (re-run by the write-up's reviewer: 1 red
+of 27) and the `--scan` file index row (first `a4d1da74f`, hardened after the write-up's re-review 2 to plant every
+fixture of a version; its counts are in its row). From `12f7c4aac` every known limit the sanitiser's header declares is
+pinned by a row that reds when the limit closes (at `858caf47d` the `\u` half of the one-pass limit was not: 0 red,
+task A's review).
 
 | Task | Finding | Guard | Row |
 |---|---|---|---|
-| 4 | F2 | `answerDialog`'s else arm: a dialog that never shows is a failure note, and nothing is pressed (D-4058) | "answerDialog: a dialog that never appears sends no key and writes a failure note, so the run is unmeasured and not a measured zero (F2)" and the notes census "rig.sh writes nine notes …" (the else line deleted: 2 red) |
-| 7 | F2 | `FAIL_NOTE`'s `answerDialog: no dialog:` alternative (D-4058) | "answerDialog: a dialog that never appears …", and for the new note the "rig.sh writes %j: a run carrying it is unmeasured …" row and its "with text after it" twin (the alternative removed: 3 red) |
-| 4 | F2 (task B review C1) | an `answerDialog` step only where every committed fixture of its scenario recorded it answered, and interrupt-exit's answered in every version (D-4058, `wf-dialog-step-replaced-by-sleep`) | "a scenario carries an answerDialog step only if EVERY committed fixture of it holds that dialog's answered note, and interrupt-exit's step is answered in every version (C1)": 1 red each for the old workflow step put back (all nine `*/wf-plain` named), an unanswered step on another scenario, interrupt-exit losing its step, one interrupt-exit fixture unanswered, and a version without one |
-| 4 | F8 | `wait_run_quiet` waits before it kills (D-4062) | "wait_run_quiet WAITS, within its bound, … (F10d)": a wait that returns at once (`returned after 3 ms`) and round 1's `end=$SECONDS` each red it (1 red each in the F10d filter, re-measured after M1; over the whole file the first reds 3, F10d with the stuck-holder and F10c rows, task B's re-review) |
-| 4 | F8 (task B review M1) | F10d's timer starts before the go file | F10d: the old order with a 1 s stall injected reds a correct wait (1 red); the new order with the same stall stays green |
-| 4 | F10 | `claude_pid` compares against the physically resolved versions directory, keeps the spelling when it cannot resolve it, and still compares (D-4006) | "claude_pid finds the Claude Code process when HOME is spelled through a symlink … (F10)", Linux-only: 1 red each for the unresolved comparison, the fallback widened to empty, and the comparison deleted |
-| 5 | F1 | every `%XX` is decoded (D-4007) | the three "a percent-escaped spelling of %s is residue as a value …" rows, "the same percent-escaped string as a KEY …", "decodes every `%XX`, in either case …" and "the user's name with its first letter percent-escaped …" (the old `%2F`-only decode: 6 red) |
-| 5 | F1 | the decode never throws | "what the percent decode leaves alone passes …" (a `decodeURIComponent` decode: 1 red) |
-| 5 | F1 | one decode pass per kind: the percent kind twice is not chased (a known limit) | "a double-encoded spelling is NOT chased …" (the percent pass applied twice: 1 red) |
+| 4 | F2 | `answerDialog`'s else arm: a dialog that never shows is a failure note, and nothing is pressed (D-4058) | "answerDialog: a dialog that never appears sends no key and writes a failure note, so the run is unmeasured and not a measured zero (F2)" and the notes census "rig.sh writes nine notes …" (the else line deleted: 2 red, written at `0d38a6549`) |
+| 7 | F2 | `FAIL_NOTE`'s `answerDialog: no dialog:` alternative (D-4058) | "answerDialog: a dialog that never appears …", and for the new note the "rig.sh writes %j: a run carrying it is unmeasured …" row and its "with text after it" twin (the alternative removed: 3 red, written at `0d38a6549`) |
+| 4 | F2 (task B review C1) | an `answerDialog` step only where every committed fixture of its scenario recorded it answered, and interrupt-exit's answered in every version (D-4058, `wf-dialog-step-replaced-by-sleep`) | "a scenario carries an answerDialog step only if EVERY committed fixture of it holds that dialog's answered note, and interrupt-exit's step is answered in every version (C1)": 1 red each for the old workflow step put back (all nine `*/wf-plain` named), an unanswered step on another scenario, interrupt-exit losing its step, one interrupt-exit fixture unanswered, and a version without one (written at `0d38a6549`) |
+| 4 | F8 | `wait_run_quiet` waits before it kills (D-4062) | "wait_run_quiet WAITS, within its bound, … (F10d)": a wait that returns at once (`returned after 3 ms`) and round 1's `end=$SECONDS` each red it (1 red each in the F10d filter, re-measured after M1, written at `0d38a6549`; over the whole file the first reds 3, F10d with the stuck-holder and F10c rows, task B's re-review, written at `c532060ee`) |
+| 4 | F8 (task B review M1) | F10d's timer starts before the go file | F10d: the old order with a 1 s stall injected reds a correct wait (1 red); the new order with the same stall stays green (both written at `0d38a6549`) |
+| 4 | F10 | `claude_pid` compares against the physically resolved versions directory, keeps the spelling when it cannot resolve it, and still compares (D-4006) | "claude_pid finds the Claude Code process when HOME is spelled through a symlink … (F10)", Linux-only: 1 red each for the unresolved comparison, the fallback widened to empty, and the comparison deleted (written at `0d38a6549`) |
+| 5 | F1 | every `%XX` is decoded (D-4007) | the three "a percent-escaped spelling of %s is residue as a value …" rows, "the same percent-escaped string as a KEY …", "decodes every `%XX`, in either case …" and "the user's name with its first letter percent-escaped …" (the old `%2F`-only decode: 6 red at `0d38a6549`, where it was written; 7 at `12f7c4aac` and at `3efb0ac37`, review 304: the extra red is "an escape IS chased where an earlier pass produces a later kind …", the row `12f7c4aac` added after the count was written) |
+| 5 | F1 | the decode never throws | "what the percent decode leaves alone passes …" (a `decodeURIComponent` decode: 1 red, written at `0d38a6549`) |
+| 5 | F1 | one decode pass per kind: the percent kind twice is not chased (a known limit) | "a double-encoded spelling is NOT chased …" (the percent pass applied twice: 1 red, written at `c532060ee`; at `0d38a6549` the plan read "the decode applied twice: 1 red", the whole decode) |
 | 5 | F1 (task A review m1) | the `\u` kind twice is not chased (a known limit) | "a double-encoded spelling is NOT chased …" (a second `\u` pass appended: 1 red, from `12f7c4aac`; 0 at `858caf47d`) |
-| 5 | F1 (task A review m1) | the pass order `\uXXXX`, `%XX`, `\/` (a later kind producing an earlier one is not chased; an earlier one producing a later one is) | "a double-encoded spelling is NOT chased …" and "an escape IS chased where an earlier pass produces a later kind …" (the `%` pass moved before the `\u` pass: 2 red); "an escape IS chased …" (the `\/` pass moved before the `%` pass: 1 red) |
-| 5 | F11 (task A review m2) | a complete closing tag `</name>` is a tag, not a path (a known limit; D-4010's exemption) | "a complete closing tag `</name>` is a tag, not a path (declared limit, not a guarantee) …", "reads a closing tag as a tag, not a path …", the unplanted `--scan` control, both planted-value `--scan` rows, the planted-KEY and not-JSON `--scan` rows and the corpus row (the lookahead deleted from `ABS`: 8 red, since the committed fixtures hold closing tags) |
-| 5 | F1 | either case | "decodes every `%XX`, in either case …" and the user's-name row (upper-case hex only: 2 red) |
-| 5 | F9 | `--scan` runs the bundle scan over the committed corpus (D-4007) | "--scan of an unplanted copy …", the two "--scan names the file and the pointer of %s planted …" rows, "--scan reads KEYS too …", "--scan reads the matrix.json …" and the build-matrix row "the committed corpus covers every scenario on at least one version, and carries no residue" (the scan call deleted: 6 red) |
-| 5 | F9 | `--scan` reads `matrix.json` | "--scan reads the matrix.json …" and the corpus row (2 red) |
-| 5 | F9 | a residue-bearing key is a finding (the shared `scan()`) | "names a leaking KEY by its index …", the F1 KEY row and "--scan reads KEYS too …" (the key finding deleted: 3 red, the implementer's count; task A's review, guarding that finding off in `--scan` mode only, reds 1, "--scan reads KEYS too …") |
-| 5 | F9 | a file that is not JSON, a badly named version directory or file, nothing to scan, the argument count | "--scan fails closed on a fixture file that is not JSON …"; "--scan fails closed on a directory that is not a version and on a fixture file whose name is not a name …" (each name arm); "--scan of a directory with nothing to scan fails …"; "--scan refuses a missing directory argument and a surplus one …" (each way): 1 red each |
-| 5 | F9 | the string and key tallies | "--scan of an unplanted copy …" and the corpus row (2 red each) |
-| 5 | F9 (task A re-review n1/n2; re-review 2 m2) | the `--scan` file index is a file's place in its directory's code-unit order (`LC_ALL=C ls`) | "--scan names a file by its place in the code-unit-sorted list of its directory: every fixture of a version, each planted, pairs index and file exactly (F9)" — all 14 fixtures of a version planted under keys that name them: the pointer finding's `#${i}` made `#0` reds 1; a punctuation-blind locale sort reds 2 (this row and the bad-names row); deleting `jsonIn`'s `.sort()` is an EQUIVALENT mutant (0 red): Node's `readdirSync` already returns names in `strcmp` order (libuv sorts scandir; `ls -U` lists the same directory otherwise, measured). The controller's measurements, at the row's final form |
-| 5 | F9 (task A review m3) | `--scan` refuses a fixture file name with residue, and reads no further into it | "--scan refuses a fixture file whose name passes the shape test but carries residue, named by index and never by its text (m3)" (` \|\| residue(base)` deleted: 1 red; the `return` after the name finding deleted: 1 red, its planted-body half) |
-| 5 | F9 (task A review m3) | `--scan` names every file by index, never by its name | "--scan fails closed on a fixture file that is not JSON …" (the unreadable-JSON finding named by text: 1 red); the two planted-value rows, the planted-KEY row and "--scan reads the matrix.json …" (pointer findings named by text: 4 red) |
-| 5 | F9 (task A review m4) | main mode's argument check: a surplus argument, a missing fixtures directory, a missing raw root | "refuses missing arguments with exit 2, and a surplus one, and an empty one (m4)": 1 red each for ` \|\| args.length > 2`, `!outDir` and `!raw` deleted (at `858caf47d` the first two reddened nothing, task A's review) |
-| 5 | F11 | the declared glue set is exactly `ABS`'s lookbehind (a known limit) | "a `/` glued after a letter, a digit, `.`, `_`, `~` or `-` is not scanned (declared limit, not a guarantee) …" reds for each of the six characters dropped from the lookbehind, and for `@` added. Counted in that one row: 1 each. Over the sanitiser block and the corpus row (73 rows, task A's review): `~`, `_`, `-` and `@` 1 each, `.` 2 (also the corpus row, a committed fixture's shell command), a letter 37, a digit 38 |
-| 5 | F12 | `MUNGED_FOREIGN`'s ten tops (a known limit) | "a munged foreign path whose top MUNGED_FOREIGN does not list passes (declared limit, not a guarantee) …": 1 red each for `data`, `media` or `/i` added, and for `proc` dropped |
-| 5 | header (`base64-pin-row`) | base64 is not decoded (a known limit) | "base64 of residue is not decoded (declared limit, not a guarantee) …" (a base64 decode of runs of 12 or more characters added: 1 red, the implementer's count; task A's review, decoding more broadly, reds 14, this row among them) |
-| 8 | F13 | an lstat ENOENT is "nothing there" (D-4065) | "a ref: HEAD resolves through packed-refs when there is no loose ref …" and "still answers from packed-refs when nothing at all is at the loose path …" (every lstat failure unreadable: 2 red) |
-| 8 | F13 | an lstat failing other than ENOENT is unreadable | "reports 'unmeasured' when the loose path cannot be examined at all (its parent directory refuses search) …" (every lstat failure null: 1 red; skipped as root); "reports 'unmeasured' when a parent component of the loose path is a file (lstat ENOTDIR) …" (ENOTDIR folded into nothing-there: 1 red, the controller's measurement) |
-| 8 | F13 | a real directory falls through to `packed-refs` | "a ref: HEAD resolves through packed-refs when there is no loose ref …", its directory assertion (1 red) |
-| 8 | F13 | a failed read is unreadable | round 1's "reports 'unmeasured' for a loose ref that exists but cannot be read …", the DANGLING-symlink row, the symlink-to-a-DIRECTORY row and the KNOWN LIMIT text-link row (4 red) |
-| 8 | F13 | lstat, not stat | the DANGLING, DIRECTORY-symlink and KNOWN LIMIT rows (3 red) |
-| 8 | F13 | a symlink is never a directory | the DANGLING, DIRECTORY-symlink, VALID-symlink and KNOWN LIMIT rows (4 red) |
-| 8 | F13 | a valid symlink to a file is followed, as git follows it | "follows a loose ref that is a VALID symlink, as git does …" (a symlink refused: 1 red) |
+| 5 | F1 (task A review m1) | the pass order `\uXXXX`, `%XX`, `\/` (a later kind producing an earlier one is not chased; an earlier one producing a later one is) | "a double-encoded spelling is NOT chased …" and "an escape IS chased where an earlier pass produces a later kind …" (the `%` pass moved before the `\u` pass: 2 red); "an escape IS chased …" (the `\/` pass moved before the `%` pass: 1 red) (both written at `c532060ee`) |
+| 5 | F11 (task A review m2) | a complete closing tag `</name>` is a tag, not a path (a known limit; D-4010's exemption) | "a complete closing tag `</name>` is a tag, not a path (declared limit, not a guarantee) …", "reads a closing tag as a tag, not a path …", the unplanted `--scan` control, both planted-value `--scan` rows, the planted-KEY and not-JSON `--scan` rows and the corpus row (the lookahead deleted from `ABS`: 8 red, since the committed fixtures hold closing tags, at `12f7c4aac` and at `c532060ee`, where it was written; 9 at `3efb0ac37`, review 304: the extra red is the `--scan` file-index row, which `a4d1da74f` added and `00fd9df34` reworked) |
+| 5 | F1 | either case | "decodes every `%XX`, in either case …" and the user's-name row (upper-case hex only: 2 red, written at `0d38a6549`) |
+| 5 | F9 | `--scan` runs the bundle scan over the committed corpus (D-4007) | "--scan of an unplanted copy …", the two "--scan names the file and the pointer of %s planted …" rows, "--scan reads KEYS too …", "--scan reads the matrix.json …" and the build-matrix row "the committed corpus covers every scenario on at least one version, and carries no residue" (the scan call deleted: 6 red at `0d38a6549`, where it was written, and the same 6 at `858caf47d`, `12f7c4aac` and `c532060ee`; 7 at `3efb0ac37`, review 304: the extra red is the `--scan` file-index row) |
+| 5 | F9 | `--scan` reads `matrix.json` | "--scan reads the matrix.json …" and the corpus row (2 red, written at `0d38a6549`) |
+| 5 | F9 | a residue-bearing key is a finding (the shared `scan()`) | "names a leaking KEY by its index …", the F1 KEY row and "--scan reads KEYS too …" (the key finding deleted: 3 red, the implementer's count, written at `0d38a6549`; task A's review, guarding that finding off in `--scan` mode only, reds 1, "--scan reads KEYS too …", written at `3900782cc`) |
+| 5 | F9 | a file that is not JSON, a badly named version directory or file, nothing to scan, the argument count | "--scan fails closed on a fixture file that is not JSON …"; "--scan fails closed on a directory that is not a version and on a fixture file whose name is not a name …" (each name arm); "--scan of a directory with nothing to scan fails …"; "--scan refuses a missing directory argument and a surplus one …" (each way): 1 red each (written at `0d38a6549`) |
+| 5 | F9 | the string and key tallies | "--scan of an unplanted copy …" and the corpus row (2 red each, written at `0d38a6549`) |
+| 5 | F9 (task A re-review n1/n2; re-review 2 m2) | the `--scan` file index is a file's place among its directory's `*.json` regular files, in UTF-16 code-unit order (the same as `LC_ALL=C ls` gives over them only for BMP-only names) | "--scan names a file by its place in the code-unit-sorted list of its directory: every fixture of a version, each planted, pairs index and file exactly (F9)" — all 14 fixtures of a version planted under keys that name them: the pointer finding's `#${i}` made `#0` reds 1; a punctuation-blind locale sort reds 2 (this row and the bad-names row); deleting `jsonIn`'s `.sort()` is an EQUIVALENT mutant (0 red): Node's `readdirSync` already returns names in `strcmp` order (libuv sorts scandir; `ls -U` lists the same directory otherwise, measured). The controller's measurements, at the row's final form in wave 1 (`00fd9df34`), written at `3efb0ac37`, where review 304 reproduced all three |
+| 5 | F9 (task A review m3) | `--scan` refuses a fixture file name with residue, and reads no further into it | "--scan refuses a fixture file whose name passes the shape test but carries residue, named by index and never by its text (m3)" (` \|\| residue(base)` deleted: 1 red; the `return` after the name finding deleted: 1 red, its planted-body half; both written at `c532060ee`) |
+| 5 | F9 (task A review m3) | `--scan` names every file by index, never by its name | "--scan fails closed on a fixture file that is not JSON …" (the unreadable-JSON finding named by text: 1 red, written at `c532060ee`); the two planted-value rows, the planted-KEY row and "--scan reads the matrix.json …" (pointer findings named by text: 4 red at `12f7c4aac` and at `c532060ee`, where it was written; 5 at `3efb0ac37`, review 304: the extra red is the `--scan` file-index row) |
+| 5 | F9 (task A review m4) | main mode's argument check: a surplus argument, a missing fixtures directory, a missing raw root | "refuses missing arguments with exit 2, and a surplus one, and an empty one (m4)": 1 red each for ` \|\| args.length > 2`, `!outDir` and `!raw` deleted, written at `c532060ee` (at `858caf47d` the first two reddened nothing, task A's review) |
+| 5 | F11 | the declared glue set is exactly `ABS`'s lookbehind (a known limit) | "a `/` glued after a letter, a digit, `.`, `_`, `~` or `-` is not scanned (declared limit, not a guarantee) …" reds for each of the six characters dropped from the lookbehind, and for `@` added. Counted in that one row: 1 each, written at `c532060ee`. Over the sanitiser block and the corpus row (73 rows at `858caf47d`, task A's review, written at `c532060ee`): `~`, `_`, `-` and `@` 1 each, `.` 2 (also the corpus row, a committed fixture's shell command), a letter 37, a digit 38. At `3efb0ac37` the same block and row are 77 rows, and review 304 reads a letter 39, a digit 40 and `.` 3, the rest 1 each, as dated |
+| 5 | F12 | `MUNGED_FOREIGN`'s ten tops (a known limit) | "a munged foreign path whose top MUNGED_FOREIGN does not list passes (declared limit, not a guarantee) …": 1 red each for `data`, `media` or `/i` added, and for `proc` dropped (written at `0d38a6549`) |
+| 5 | header (`base64-pin-row`) | base64 is not decoded (a known limit) | "base64 of residue is not decoded (declared limit, not a guarantee) …" (a base64 decode of runs of 12 or more characters added: 1 red, the implementer's count, written at `0d38a6549`; task A's review, decoding more broadly, reds 14, this row among them, written at `c532060ee`) |
+| 8 | F13 | an lstat ENOENT is "nothing there" (D-4065) | "a ref: HEAD resolves through packed-refs when there is no loose ref …" and "still answers from packed-refs when nothing at all is at the loose path …" (every lstat failure unreadable: 2 red, written at `0d38a6549`) |
+| 8 | F13 | an lstat failing other than ENOENT is unreadable | "reports 'unmeasured' when the loose path cannot be examined at all (its parent directory refuses search) …" (every lstat failure null: 1 red at `b51022014`, before `d87b3263d` added the ENOTDIR row below; written at `0d38a6549`, after it, when the count was already 2; 2 at `d87b3263d`, at `0d38a6549` and at `3efb0ac37`, review 304: the extra red is the ENOTDIR row, census test `:430` at that commit; skipped as root); "reports 'unmeasured' when a parent component of the loose path is a file (lstat ENOTDIR) …" (ENOTDIR folded into nothing-there: 1 red, the controller's measurement, written at `0d38a6549`) |
+| 8 | F13 | a real directory falls through to `packed-refs` | "a ref: HEAD resolves through packed-refs when there is no loose ref …", its directory assertion (1 red, written at `0d38a6549`) |
+| 8 | F13 | a failed read is unreadable | round 1's "reports 'unmeasured' for a loose ref that exists but cannot be read …", the DANGLING-symlink row, the symlink-to-a-DIRECTORY row and the KNOWN LIMIT text-link row (4 red, written at `0d38a6549`) |
+| 8 | F13 | lstat, not stat | the DANGLING, DIRECTORY-symlink and KNOWN LIMIT rows (3 red, written at `0d38a6549`) |
+| 8 | F13 | a symlink is never a directory | the DANGLING, DIRECTORY-symlink, VALID-symlink and KNOWN LIMIT rows (4 red, written at `0d38a6549`) |
+| 8 | F13 | a valid symlink to a file is followed, as git follows it | "follows a loose ref that is a VALID symlink, as git does …" (a symlink refused: 1 red, written at `0d38a6549`) |
+
+**Wave 2 close-out (review 304).** Every guard arm this wave added or touched has either a red-capable row or a recorded
+equivalence argument (the "arms with no row" line below). An arm with a row was measured red by deleting that arm alone
+in a scratch snapshot (`git archive` of the commit with `server/node_modules` linked); each count counts rows red, not
+assertions. Each line is dated by the commit it names and counted over the rows its own task chose, so no one sha or
+filter governs the table: task A's lines (`A`, the rig scripts) are dated `e56a9e0ef` and count the rows whose names carry
+`(review 304 F7)` or `(review 304 F12 …)` (`vitest run test/delegation-rig.test.ts -t 'F7|F12'`); task B's lines (`5`, the
+sanitiser) are dated `c51428ae8` and `b93dc9894` and count over `test/delegation-rig.test.ts`, whose rows include ones
+outside that filter, among them the `--scan` file-index row, the build-matrix corpus row and the N1, I3b and m1 rows; task
+C's lines (`8`, the census) are dated `b0b0c78db` and count over `test/delegation-census.test.ts`. The Task column reads `A`
+for task A's lines and, for tasks B and C, the wave-1 task whose code the arm lives in (5 the sanitiser, 8 the census).
+Later close-out tasks append their lines here.
+
+| Task | Finding | Guard | Row |
+|---|---|---|---|
+| A | F7 | `cmd_run` refuses a version that is not installed, before it makes anything (`need_version "$VER"`) | the six "run refuses … (F7)" rows and "run asks about the binary first and the scenario second …" (the call deleted: 7 red), `e56a9e0ef` |
+| A | F7 | that refusal comes before `check_scenario` | "run asks about the binary first and the scenario second …" (moved after `check_scenario`: 1 red), `e56a9e0ef` |
+| A | F7 | that refusal comes before the run root and the out-dir exist | the six "run refuses … (F7)" rows, "no run root, no tmux directory, no out-dir" (moved after `mktemp`: 7 red; after `guard_out`: 7 red), `e56a9e0ef` |
+| A | F7 | `version_ok`: the `x.y.z` shape, anchored at both ends | the four "run refuses a version spelled with two numbers / that climbs out / with a leading letter / with trailing text" rows, "all refuses a malformed version …", "which versions all runs" and the `rig.sh versions` rows (the arm deleted: 12 red; loosened to digits and dots: 3; unanchored: 8; the end unanchored: 7; the start unanchored: 1), `e56a9e0ef` |
+| A | F7 | `version_ok`: the entry is executable (`-x`) | "run refuses a version whose entry is not executable …", "all refuses a version whose entry is not executable …", the `which versions all runs` and `rig.sh versions` rows (the arm deleted: 20 red; `-x` loosened to `-e`: 10), `e56a9e0ef` |
+| A | F7 | `need_version` dies, naming the version, rather than returning | the "run refuses …" and "all refuses …" rows (the `die` replaced by a no-op: 22 red), `e56a9e0ef` |
+| A | F7 | `pick_versions` checks every named version before it returns | the four "all refuses …" rows and "rig.sh versions refuses the first bad version it is given …" (the loop deleted: 15 red), `e56a9e0ef` |
+| A | F7 | named versions are in numeric order | "with versions named, runs only those, in numeric order and once each …", "rig.sh versions … given versions …", and recapture.sh's "--dry-run with versions named …" (not sorted: 4 red; sorted lexically: 3), `e56a9e0ef` |
+| A | F7 | named versions are de-duplicated | the same three rows (`uniq` deleted: 3 red), `e56a9e0ef` |
+| A | F7 | the installed listing is in numeric order, and holds only installed, version-shaped, executable entries | "with no version named, runs every installed … entry, in numeric order …", "rig.sh versions lists every installed … entry …", recapture.sh's "--dry-run, no version named …" (sorted lexically: 3 red; not sorted: 3; the filter deleted: 5), `e56a9e0ef` |
+| A | F7 | a missing versions directory is "none installed", not an error printed | "rig.sh versions lists nothing, and succeeds, for an empty versions directory and for a HOME with none" (`ls`'s stderr not suppressed: 1 red), `e56a9e0ef` |
+| A | F7 | `cmd_all` takes its versions from `pick_versions` (and shifts the raw root off first) | "which versions all runs …" rows, the four "all refuses …" rows (the call deleted: 9 red; the `shift` deleted: 7; the loop over every installed version, ignoring the pick: 3), `e56a9e0ef` |
+| A | F7 | `cmd_all` checks the versions before it makes the raw root, reaps, or removes `.done` | "all refuses …" (four rows, "no raw root") and "all checks the versions it is given before it reaps or removes anything …" (after `guard_out`: 4 red; after `cmd_reap`: 6; after `rm -f .done`: 6), `e56a9e0ef` |
+| A | F7 (found in passing) | `cmd_all`'s failed-run line reads `$?` before the `$(basename)` resets it (it printed `rc=0` for every failure) | "a failed run is reported with its rc and does not stop the sweep, and .done is still written" (the old order: 1 red), `e56a9e0ef` |
+| A | F7 | `cmd_all`'s failed-run arm keeps the sweep going; `.done` is written last | the same row (the arm deleted: 1 red); the three sweep rows (`.done` not written: 3 red), `e56a9e0ef` |
+| A | F7 | the `versions` verb prints the selection, one per line | the four `rig.sh versions` rows, recapture.sh's selection rows and its real runs (the verb deleted: 28 red; printing nothing: 17), `e56a9e0ef` |
+| A | F7 | the usage text is the whole header, and not the code after it | "an unknown verb prints the header as the usage …" (the range one line short: 1 red; one line long: 1), `e56a9e0ef` |
+| A | F12 | `recapture.sh` is an executable bash script, and its corpus and scenarios paths are the real ones | "is an executable bash script, and names the committed corpus and the rig's scenarios directory as its own" (`chmod -x`: 1 red; a non-bash shebang: 1), `e56a9e0ef` |
+| A | F12 | the options: `--dry-run`, `--missing`, an unknown option refused, versions taken as arguments, `--missing` with versions refused | the `--dry-run` and `--missing` rows and the "(an option it does not know)", "(--missing together with a version)" and named-version refusal rows (`--dry-run` ignored: 4 red; `--missing` ignored: 4; the unknown-option arm deleted: 2; named versions dropped: 14; the conflict arm deleted: 2), `e56a9e0ef` |
+| A | F12 | the versions come from `rig.sh versions`, and its refusal stops the script (exit 2, nothing made) | the refusal rows, dry run and real (`$( )` made forgiving: 8 red); "with no Claude Code version installed it refuses …" (the arm deleted: 1; an empty selection read as one empty version: 1), `e56a9e0ef` |
+| A | F12 | `--missing`: the installed versions the corpus has no directory for; nothing missing says so, exits 0, makes nothing | "--dry-run --missing selects …" and "--missing with every installed version already in the corpus says so …" (the filter inverted: 3 red; deleted: 2; the nothing-missing block skipped: 1; it exits 1: 1; its line not printed: 1), `e56a9e0ef` |
+| A | F12 | the five steps, each in the printed list and in the real run | the `--dry-run` rows and "a real run makes the raw root, runs the five steps in the printed order on it …" (step 1 deleted: 13 red; step 2: 12; step 3: 10; step 4: 9; step 5: 8), `e56a9e0ef` |
+| A | F12 | step 1: `mktemp -d` of `ccrc-dlg-raw.*`, with the versions and the start time recorded | the same rows (the prefix changed: 6 red; `mktemp` without `-d`: 12; the versions not recorded: 6; the start time not recorded: 6), `e56a9e0ef` |
+| A | F12 | step 2: stderr folded into `all.log`, the output teed, `.done` required | the same rows (`2>&1` dropped: 6 red; the `tee` dropped: 6; the `.done` requirement dropped: 6), and "stops at rig.sh all finishing without its .done …", `e56a9e0ef` |
+| A | F12 | steps 4 and 5: `--write`, and the corpus scan's `--scan` | the same rows (`--write` dropped: 7 red; `--scan` dropped: 8), `e56a9e0ef` |
+| A | F12 | a failing step stops the script with its exit, names the step and its label, and keeps and names the raw root; a success says nothing on stderr | the five "stops at … " rows, "a failure before the raw root exists …", the clean-run `stderr` assertions (`set -e` removed: 15 red; `pipefail` removed: 2; the EXIT trap deleted: 6; the failed-step line deleted: 6; its label emptied: 6; the next step's label: 6; the kept-root line deleted: 5; printed with no root: 1; the failed-step line printed on success: 3), `e56a9e0ef` |
+| A | F12 | `<raw>` is the real raw root in a real run; `--dry-run` runs nothing; the root is told after step 1 and at the end | "a real run makes the raw root …", the `--dry-run` rows, "--dry-run makes nothing and runs nothing …" (`<raw>` not replaced: 7 red; `--dry-run` runs the steps: 4; the root not told after step 1: 1; the closing path line deleted: 2; the closing UNSANITISED line deleted: 2), `e56a9e0ef` |
+| A | F12 | the dry-run header: its notice, the versions line, the fixtures and scenarios directories; the step numbers | "--dry-run, no version named …" and its siblings (the notice deleted: 1 red; the versions line: 3; the fixtures line: 2; the scenarios line: 1; the numbering off by one: 12), `e56a9e0ef` |
+| A | F12 | every path resolved from the script's own location (`HERE`, `TREE`, `FIX`, `SCEN`) | "resolves every path from its own location …" and every row over the scratch tree (`HERE` from the caller's directory: 24 red; `TREE` one level short: 8; `FIX` another directory: 9; `SCEN` another directory: 8), `e56a9e0ef` |
+| A | F12 | `--dry-run` needs no tmux, node or mock | "--dry-run needs no tmux, no node and no mock …" (a `tmux` call inserted before the steps: 1 red; an INSERTION, since there is no arm to delete), `e56a9e0ef` |
+| A | F12 | the steps run over the REAL sanitiser and matrix builder | "end to end over the REAL sanitiser and matrix builder …" (it reds, among the arms above, when any of the five steps is deleted, `--write` or `--scan` is dropped, `mktemp` loses `-d`, `<raw>` is not replaced, a path constant is wrong, the `--missing` filter is inverted or the `versions` verb is gone: 16 of the mutations measured, and it is the row that would red if the real tools' argument shapes changed), `e56a9e0ef` |
+| A | F7, F12 | arms with no row | `pick_versions`'s `VERS=()` reset and `cmd_all`'s `${VERS[@]+"${VERS[@]}"}` (equivalent on bash 4.4 and later, and one call per process); `launch_cmd`'s own `-x` check, untouched (it guards `relaunch`, a step of a live pane, which no hermetic row can reach). This line used to list five more arms as having no row: `CUR=0`, `on_exit`'s `CUR > 0` and the three path-quoting arms (`:64`, `:66`, `:84`). They have rows now, and their lines are in the review-318 sub-table below; the earlier "equivalent" reading of the first two was wrong (a closed stdout fails after the trap and before `CUR=1`). Measured `e56a9e0ef` |
+| 5 | F1 | a `..` stays caught only at the string's start or right after a `/` (the known limit: `DOTDOT` is not widened) | "a `..` that is not at the start of the string or right after a `/` is not scanned (declared limit, not a guarantee) … (review 304 F1)" (`DOTDOT` widened to `/(^\|[^A-Za-z0-9._~-])\.\.(\/\|$)/`: 3 red: that row, "--scan names a file by its place in the code-unit-sorted list of its directory …" and the build-matrix row "the committed corpus covers every scenario on at least one version, and carries no residue"), `c51428ae8` |
+| 5 | F1 | the committed corpus holds the ` ../raw-wt` spelling the header names | the same F1 row, its last assertion (every ` ../raw-wt` in the corpus respelled ` /rig/raw-wt`: 1 red, that row), `c51428ae8` |
+| 5 | F1 | a `..` at the start of the string or after a `/` is residue (`if (DOTDOT.test(s)) return true`) | the retitled "fails closed on a `..` path segment at the string's start or right after a `/`, however the path before it reads (review 304 F1)" and the F1 limit row's two controls, `../srv/acme` and `cd ../../srv/acme` (the check deleted: 4 red: those two rows, "scans the decoded spelling of an escaped string …" and "decodes every `%XX`, in either case …"), `c51428ae8` |
+| 5 | F4 | an absolute path whose first segment starts outside `ABS`'s class stays unscanned (the known limit: `ABS` is not closed) | "an absolute path whose first segment starts outside `[A-Za-z0-9._-]` is not scanned (declared limit, not a guarantee) … (review 304 F4)" (a `/` followed by a character outside the class, and not an end character, made residue: 2 red: that row and "scans the decoded spelling of a JSON-escaped slash … (N1)", whose benign `\/\/` controls (`a \/\/ b`) the broad form refuses; the same with `\` left out of the character set: 1 red, that row; the corpus row stays green, 0 such strings), `c51428ae8` |
+| 5 | F5 | an empty `--scan` directory argument is a usage error: exit 2 and the usage text, not the internal-error line | "--scan refuses an EMPTY directory argument with exit 2 and the usage text, not the internal-error line (review 304 F5)" (`\|\| !outDir` deleted from the scan arm of the argument check: 1 red), `c51428ae8` |
+| 5 | F6 | `jsonIn` counts only regular files: a `*.json` directory or dangling link is skipped, uncounted and unnamed (the header's wording) | "--scan skips a `*.json` entry that is not a regular file, uncounted and unnamed: a later file keeps its index among the regular files (review 304 F6)" (the `isFile` filter deleted, which reddened nothing before this row: 1 red; the filter moved into `readAll`, so the skipped entries are counted: 1 red), `c51428ae8` |
+| 5 | F4 | only the FIRST segment goes unscanned: a later `/` is scanned like any other (the header's wording, task B fix round 1) | the F4 row's refused side, `x /@/srv/acme`, `x /~x:/srv/acme`, `x /~x@/srv/acme`, `x /~x=/srv/acme`, `x //~someone/acme` (`ABS`'s lookbehind widened by `@`: 2 red, that row and "a `/` glued after a letter, a digit, `.`, `_`, `~` or `-` is not scanned … (F11)"; the `DOUBLE_ODD` check deleted: 4 red, that row, "a `//` at a host position followed by a character that cannot start a name is residue … (I3b)", "scans the decoded spelling of a JSON-escaped slash … (N1)" and "an escape IS chased where an earlier pass produces a later kind … (m1)"; the three mutations of the F1 and F4 pin lines above, re-measured at this sha, give the same 3, 2 and 1 red), `b93dc9894` |
+| 5 | F6 | `jsonIn` stats, it does not lstat: a link to a regular file is a file of its directory, counted and read (the header's "a stat, so a link to one counts") | "--scan counts a link to a regular file and reads it: residue behind the link is named by the link's index among the regular files (review 304 F6)" (`jsonIn` on an lstat: 1 red; it reddened nothing before this row), `b93dc9894` |
+| 5 | F6 | a directory named `*.json` in the top directory is judged as a version directory: a finding named by index, never skipped (the header's "one in the top directory is judged as a version directory") | "--scan judges a directory named `*.json` in the top directory as a version directory: a finding named by index, never skipped (review 304 F6)" (the version-directory pass skipping a `*.json` name: 1 red; it reddened nothing before this row), `b93dc9894` |
+| 8 | F8 | `json()` answers UNREADABLE for a read that fails (EACCES, EISDIR), where it answered MALFORMED | the five F8 rows: "marks an agent meta that cannot be READ unreadable …", "marks a workflow meta that cannot be READ on its run …", "a workflow run that holds a good meta beside an unreadable one and an unparsable one …", "marks an agent meta and a workflow meta whose file refuses to be read (mode 000) …" and "an unreadable meta contributes no keys and no path comparison …" (the failed read folded back into MALFORMED: 5 red; the mode-000 row is skipped as root), `b0b0c78db` |
+| 8 | F8 | `json()` keeps MALFORMED for a parse failure (the control) | the two existing malformed rows, now with `unreadable: false` ("marks an unparsable agent meta malformed …", "marks a malformed workflow meta and a path-less one …") and the four F8 rows' unparsable controls (a parse failure answered UNREADABLE: 6 red), `b0b0c78db` |
+| 8 | F8 | `json()` keeps MALFORMED for a value that parses and is not an object | "marks a malformed workflow meta and a path-less one …", its `[1,2]` meta (a parsed non-object answered UNREADABLE: 1 red), `b0b0c78db` |
+| 8 | F8 | a workflow run's unreadable meta marks the run (`wfUnreadableRuns`) | "marks a workflow meta that cannot be READ on its run …", "a workflow run that holds a good meta beside an unreadable one …" and the mode-000 row (the arm deleted, so the meta falls through to the path-less arm: 3 red), `b0b0c78db` |
+| 8 | F8 | the not-found `metaSummary` shape carries `unreadable` | "marks a workflow meta that cannot be READ on its run …" and the mode-000 row (`unreadable: false` in that shape: 2 red), `b0b0c78db` |
+| 8 | F8 | the found shape carries `unreadable` from the record's own metas | "marks an agent meta that cannot be READ unreadable …", the mode-000 row and "an unreadable meta contributes no keys …" (only the run's marker kept: 3 red), `b0b0c78db` |
+| 8 | F8 | the found shape carries the run's `unreadable` marker | "a workflow run that holds a good meta beside an unreadable one and an unparsable one …" (the run's marker dropped, only the record's own metas kept: 1 red; no row reached this arm before), `b0b0c78db` |
+| 8 | F8 | the found shape keeps the run's `malformed` marker (an arm no row reached before: at `60ec0a706`, `runMalformed ||` dropped from that line gave 0 red) | the same row (the run's marker dropped: 1 red), `b0b0c78db` |
+| 8 | F8 | an unreadable meta is not `valid`: no keys, no `worktreePath` comparison, not path-less | "marks an agent meta that cannot be READ unreadable …" (`pathless`, `worktreePathEquals: null`), the mode-000 row and "an unreadable meta contributes no keys …" (`worktreePathEquals: true` beside a valid one) (`valid` filtering MALFORMED only: 3 red), `b0b0c78db` |
+| 8 | F8 | an unreadable meta is not counted malformed, and an unparsable one not unreadable | the same three rows (the old `valid.length < list.length` formula for `malformed`: 3 red), `b0b0c78db` |
+| 8 | F8 | `totals.metaUnreadable` | the five F8 rows (the total fixed at 0: 5 red), `b0b0c78db` |
+| 8 | F8 | the workflow call site passes the run's `unreadable` marker to `metaSummary` | "marks a workflow meta that cannot be READ on its run …", "a workflow run that holds a good meta beside an unreadable one …" and the mode-000 row (`false` passed: 3 red), `b0b0c78db` |
+| 8 | F9 | `--home` goes through `path.resolve`, like `--repo` and `--ccd-root` | "resolves --home like --repo: one home spelled two ways is one home, not multiHome …" (`<h>`, `<h>/`, `<h>/.`; a second home still counts) and "counts one unreadable home spelled two ways once …" (skipped as root) (the resolve removed: 2 red), `b0b0c78db` |
+| 8 | F10 | `worktreeDir`: ENOENT and ENOTDIR are 'absent' | "reads a worktree path under a regular file (ENOTDIR) and a missing one (ENOENT) as 'absent' …" (ENOTDIR answered 'unreadable': 1 red; every failure answered 'unreadable': 2 red, that row and "classifies each admin record …"), `b0b0c78db` |
+| 8 | F10 | `worktreeDir`: any other stat failure is 'unreadable' | "reads a worktree directory that cannot be examined (its parent refuses search) as 'unreadable' …" (every failure answered 'absent': 1 red; skipped as root), `b0b0c78db` |
+| 8 | F10 | `totals.worktreeUnreadable` | the same row (the total fixed at 0: 1 red), `b0b0c78db` |
+| 8 | F10 | CLAUDE_BASE: ENOENT and ENOTDIR are 'absent' (`textMeasured`) | "is 'absent' when there is no CLAUDE_BASE (ENOENT) or the record is not a directory (ENOTDIR) …" (ENOTDIR answered unreadable: 1 red; every failure answered unreadable: 4 red, that row, "classifies each admin record …", "reports locked, a malformed HEAD and a malformed CLAUDE_BASE" and "keeps null only for a record with no valid CLAUDE_BASE …"), `b0b0c78db` |
+| 8 | F10 | CLAUDE_BASE: any other read failure is unreadable, not null (`textMeasured`) | the two "a CLAUDE_BASE that cannot be read" rows (a DIRECTORY, EISDIR; a mode-000 file, skipped as root) and the KNOWN LIMIT row's `claudeBase: 'unreadable'` (every failure answered null: 3 red), `b0b0c78db` |
+| 8 | F10 | `claudeBase: 'unreadable'` is its own value | the same three rows (answered 'absent': 3 red), `b0b0c78db` |
+| 8 | F10 | `movedFromBase` is 'unmeasured' for an unreadable CLAUDE_BASE, never null | the two "a CLAUDE_BASE that cannot be read" rows, over a detached HEAD and a resolvable `ref:` HEAD (the arm deleted: 2 red; answering `null`: 2 red), `b0b0c78db` |
+| 8 | F10 | `baseAgreesFirstLog` stays null for an unreadable CLAUDE_BASE | the same two rows, their first log line a valid sha (compared whenever a CLAUDE_BASE exists, so `false`: 2 red), `b0b0c78db` |
+| 8 | F10 | `text` folds an unreadable file to `null` for every read but CLAUDE_BASE (`gitdir`, `HEAD`, `logs/HEAD`, `packed-refs`): the convenience read over `textMeasured` | "reads a gitdir, HEAD, logs/HEAD or packed-refs that is a DIRECTORY (EISDIR) as an unreadable one, and still answers …" (EISDIR fails for root too, so this row runs as root) and the KNOWN LIMIT row (the fold removed, so the UNREADABLE symbol reaches a `.trim()`, a regex or a `.split` and the census dies on a TypeError: 2 red; before the EISDIR row existed only the KNOWN LIMIT row, which skips as root, reddened), `b0b0c78db` |
+| 8 | F10 | the known limit: three reads still fold a failure, `locked`, `baseAgreesFirstLog` and `gitdir` (the header names them; a pin, not a guard) | "KNOWN LIMIT: locked reads false when its stat fails, baseAgreesFirstLog null when logs/HEAD cannot be read, and an unreadable gitdir reads as an absent one …" (skipped as root) and, root-proof, "reads a gitdir, HEAD, logs/HEAD or packed-refs that is a DIRECTORY (EISDIR) …"; closing each makes a visible edit: `locked` made three-valued: 1 red (the KNOWN LIMIT row); `baseAgreesFirstLog` answering 'unmeasured' for an unreadable `logs/HEAD`: 2 red (both rows); an unreadable `gitdir` answering `worktreeDir: 'unreadable'`: 2 red (both rows), `b0b0c78db` |
+
+**Wave 2 fix round (review 318).** Every guard arm the fix round added or touched has either a red-capable row or a
+recorded equivalence argument (the two EQUIVALENT mutants below stay at 0 red). An arm with a row was measured red by
+deleting or mutating that arm alone in a scratch snapshot (`git archive` of the commit named, with `server/node_modules`
+linked); each count counts rows red over `test/delegation-rig.test.ts`, not assertions; the review 324 lines are
+appended to this table too, and a count on an older line is the one measured at its own sha, so it does not count a row
+added after that sha. Task 5's review-318 lines name the seven rows review 318's fix round
+added by a short name; each title is "--scan …" and ends "(review 318 F2)", and they sit together after "--scan
+refuses a fixture file whose name passes the shape test but carries residue …": the **version-file** row ("… fails closed
+on a file inside a version directory whose name is not valid UTF-8 …"), the **version-dir** row ("… fails closed on a
+version directory whose name is not valid UTF-8, and does not descend into it …"), the **top-file** row ("… fails closed
+on a plain file at the top of the fixtures directory whose name is not valid UTF-8 …"), the **index** row ("… names a
+valid entry by the index it has with no non-UTF-8 sibling …"), the **j** row ("… counts a directory's non-UTF-8 entries
+among themselves and not among its valid ones …"), the **kinds** row ("… makes a finding of every kind of entry whose name is not
+valid UTF-8, whatever its suffix …") and the **valid-names** row ("… does not call a valid UTF-8 name bad …"). The six
+rows that make a bad name (all but valid-names) skip, by the create throwing and nothing else, on a filesystem that
+refuses such a name; they run on this box (7 of 7 passed, none skipped).
+
+Task A's lines (review 318 F3) name four rows the fix round added to the `recapture.sh` rows, each title ending "(review 318 F3)":
+the **closed-stdout** row, and three rows over a tree named `ccrc-dlg-rc my tree-…` and, for the real runs, a `TMPDIR` named
+`ccrc-dlg-tmp my dir-…`, so that `HERE`, `RIG`, `FIX`, `SCEN` and the raw root all carry a space: the spaced **dry-run** row (the
+steps' paths as bash's own `printf %q` spells them, the header's paths as `%s` prints them), the spaced **real-run** row (each
+step handed its paths whole, read from a second log with one bracketed word per argument, which the space-joined log cannot
+show) and the spaced **end-to-end** row (the real sanitiser and matrix builder). They pin behaviour the unchanged scripts already
+have, so none of them is red against them: the counts below are the proof, each by mutating one arm in a scratch snapshot. The last line (F3c) records a guard of the wave itself, `rig.sh:451`, which the close-out sub-table above should have carried.
+
+| Task | Finding | Guard | Row |
+|---|---|---|---|
+| 5 | F2 (review 318) | `--scan` lists each directory's names as Buffers and decodes each with a fatal UTF-8 decoder; an entry that fails is a finding (a string read turned its name into U+FFFD, a path `isFile`/`isDir` answer false about, and skipped it) | the version-file, version-dir, top-file, index, j and kinds rows (the Buffer read replaced by the old string read, the guard deleted: 6 red; the decoder made non-fatal, so nothing throws: 6, and 7 at `ee41f7853`: those six and the review 324 F7 row below), `5971214f5` |
+| 5 | F2 (review 318) | the top directory's listing is checked (the root-level arm) | the version-dir, top-file and index rows (the root-level check deleted alone, the top listing read as strings: 3 red), `5971214f5` |
+| 5 | F2 (review 318) | each version directory's listing is checked (the version-level arm) | the version-file, index, j and kinds rows (the version-level check deleted alone: 4 red), `5971214f5` |
+| 5 | F2 (review 318) | a finding inside a version directory is named `<version>/#<j>` | the version-file, index, j and kinds rows (the `<version>/` prefix dropped: 4 red), `5971214f5` |
+| 5 | F2 (review 318) | the finding never prints the name, a byte of it, or U+FFFD | the six rows that make a bad name, each reading both streams as Buffers for a 0xff byte, a U+FFFD and any byte outside ASCII (the decoded name printed after the index: 6 red; its bytes printed as latin1: 6), `5971214f5` |
+| 5 | F2 (review 318) | a non-UTF-8 entry is in neither the `*.json` sequence nor the directory sequence | the j row, which holds a real valid file named `\u{FFFD}.json` (what a lossy decode of `\xff.json` spells) beside the bad `\xff.json` (the entry also kept in the name list under its lossy spelling, so that file is read twice: 1 red); and, for the two sequences themselves, a bad entry made to pass the stat so that it takes an index (SIMULATED, since on Linux a lossy spelling that is no other entry's names no path): counted as a `*.json` file, 5 red (the version-file, top-file, index, j and kinds rows); counted as a directory, 4 red (the version-dir, top-file, index and j rows), `5971214f5` |
+| 5 | F2 (review 318) | `j` counts the directory's non-UTF-8 entries among themselves | the version-file, version-dir, top-file, j and kinds rows (`j` the entry's place among ALL the directory's entries: 5 red); the index, j and kinds rows (`j` fixed at 0: 3 red), `5971214f5` |
+| 5 | F2 (review 318) | EVERY kind of entry is a finding, whatever its suffix or type | the version-dir, index and kinds rows (only a name ending `.json` flagged: 3 red; only a regular file flagged, so a directory and a link are skipped: 3 red), `5971214f5` |
+| 5 | F2 (review 318) | a directory's non-UTF-8 findings come ahead of its other findings | the index and j rows (them printed after the directory's file findings: 2 red), `5971214f5` |
+| 5 | F2 (review 318) | a valid UTF-8 name is not a bad one: a non-ASCII letter, U+FFFD itself and a leading U+FEFF, which the decoder keeps (`ignoreBOM`) | the valid-names row (a BOM stripped from the name, so `\u{FEFF}x.json` is `x.json`, a path that does not exist, and a BOM-led directory decodes to its BOM-less spelling, which names no path (or, beside a real twin, lists the twin twice), so its contents are never read: 1 red; any non-ASCII name flagged: 2 red, that row and the j row), `5971214f5` |
+| 5 | F2 (review 318) | the two `.sort`s of `namesIn`: `.sort(Buffer.compare)`, which orders `j`, and the valid names' `.sort()`, moved there from `jsonIn` | EQUIVALENT mutants, 0 red each (`j` in listing order; the valid names unsorted), `5971214f5`, for two different reasons. `.sort(Buffer.compare)` (`j` in listing order) is equivalent on every platform: every non-UTF-8 finding prints `<prefix>#<j> (entry name not UTF-8)` for j = 0, 1, … in that order, so any order of the bad entries prints the same lines. The sort fixes only which entry `#j` means (the j-th such name in `LC_ALL=C ls` order), which no output shows. The valid names' `.sort()` (names unsorted) is equivalent only because Node's `fs.readdirSync` returns names in `strcmp` (byte) order: libuv's scandir sorts them, while the directory's own order is not sorted (on ext4, `fs.opendirSync` and `ls -U` list a 300-entry directory in hash order, measured). Byte order and UTF-16 code-unit order also differ only between two non-ASCII names, each a `(fixture file name)` or `(version directory name)` finding of one text, while every name that passes NAME or VERSION is ASCII and keeps its rank. That `.sort()` is the guarantee that the index does not depend on the listing API, not dead code |
+| 5 | F2 (review 318) | a version directory whose name is not UTF-8 is not descended into | the version-dir row's one-finding assertion (the residue behind the bad name is never read). A descent added into such a directory over Buffer paths (it reads each `*.json` under the bad name and scans it): 1 red, the version-dir row, measured at review (at `5971214f5`) |
+| 5 | F9 (review 318) | wording only, no guard and no row: the `--scan` index is in UTF-16 code-unit order, the same as `LC_ALL=C ls` only for BMP-only names (a UTF-8 locale's `ls` may differ too) | the sanitiser's file header and the comment above `scanCorpus`, the comment above the index row in `test/delegation-rig.test.ts`, the D-4007 text and this plan's guard row for the index; nothing in the code changed for it |
+| A | F3 (review 318) | `CUR=0` before the first step (`recapture.sh:23`): a failure before step 1 names no step. NOT equivalent to `CUR=1`, as the close-out line above once said: the trap is installed at `:78` and the stdout `printf`s at `:80`-`:83` (`:80` on a dry run only) run before `CUR=1` at `:86`, so a closed stdout fails with `CUR` still 0 | the closed-stdout row ("with stdout CLOSED before step 1 it fails and names no step and no raw root …", a dry run and a real run, each with stdout closed by `exec 1>&-` and not redirected; its control runs the same arguments with stdout open) (`CUR=1`: 1 red, it prints "step 1 failed (exit 1): make the raw root …"), `6778b20a5` |
+| A | F3 (review 318) | `on_exit`'s `CUR > 0` (`recapture.sh:75`): no "step N failed" line for a failure that no step caused | the same row (`CUR > 0` dropped: 1 red, it prints "step 0 failed (exit 1): scan the committed corpus for residue", the last step's label through `WHY[-1]`), `6778b20a5` |
+| A | F3 (review 318) | step 2 hands `rig.sh` its path through `%q` (`:64`, `$(printf '%q' "$RIG")`) | the three rows that run over a tree whose path carries a space: the spaced `--dry-run` row, the spaced real-run row and the spaced end-to-end row (each title ends "(review 318 F3)") (`$RIG` bare: 3 red), `6778b20a5` |
+| A | F3 (review 318) | step 3 hands the sanitiser and the fixtures directory their paths through `%q` (`:66`) | the same three rows (both `%q` bare: 3 red), `6778b20a5` |
+| A | F3 (review 318) | steps 4 and 5 quote their paths the same way (`:68` the matrix builder, fixtures and scenarios; `:70` the scan) | the same three rows (each line bare, alone: 3 red, 3 red), `6778b20a5` |
+| A | F3 (review 318) | the `<raw>` substitution splices `"$RAW"` (`:84`, `rawref='"$RAW"'`), so a raw root whose path carries a space stays one word | the spaced real-run row and the spaced end-to-end row (`rawref='$RAW'`: 2 red; the spaced `--dry-run` row cannot see this arm, since a dry run prints `<raw>` and never substitutes it), `6778b20a5` |
+| A | F3c (review 318) | `rig.sh versions` prints nothing for an empty selection (`rig.sh:451`, `if (( ${#VERS[@]} )); then printf …; fi`); an unconditional `printf '%s\n' "${VERS[@]}"` would print one empty line. The guard and its row already existed; only this record was missing | "rig.sh versions … lists nothing, and succeeds, for an empty versions directory and for a HOME with none" (the guard replaced by an unconditional `printf`: 1 red), `6778b20a5` |
+| 5 | F7 (review 324) | the decoder keeps no state between names (each name decoded alone, never `{ stream: true }`) | the truncated-tail row ("--scan decodes each entry name on its own: a name ending in a truncated multibyte sequence, listed before a continuation-led one …", title ending "(review 324 F7)"): `zz.json\xe2\x82` (two bytes of a three-byte sequence, so a stream decoder holds them back and answers the name as valid) listed straight before `\xac.json` (the byte that completes them: `e2 82 ac` is U+20AC), both holding residue, beside the clean `agent-plain.json`; the row asserts that listing order, rc 1 and both findings `2.1.999/#0` and `2.1.999/#1`, and no 0xe2, 0x82, 0xac, 0xff, U+FFFD, `zz.json` or U+20AC in either stream. Every bad name in the seven review 318 rows carries an invalid lead byte, which throws even in stream mode, so none could tell the two decoders apart (`utf8.decode(b, { stream: true })` at `sanitize.mjs:391`: 1 red, this row only, which gets rc 0 "no residue" over two names it reads as `zz.json` and `\u{20AC}.json`, neither a file on disk; on the fleet box the row ran, it did not skip), `ee41f7853` |
 
 ## After the merge (coordinator): the real-lane cross-check
 
@@ -3177,6 +3334,8 @@ wave that ships each verb or route. `WorktreeCreate` / `WorktreeRemove` are neve
 
 Numbers are minted at run-open; the worker writes each issued number beside its slug, in this section, in its
 first commit (allocate and define in the same act), and cites only those. Each slug names what it departs from.
+A "wave 2" below means the close-out (run 306) where the passage is marked as the close-out's, and the observe stage
+(now wave 3) where it is not; see the numbering note at the top of "Mutation table".
 
 - **D-3992** — `sessionend-registered-in-stage-1` — spec §7's table ships hooks in stage 2. Measuring `SessionEnd` (§8.1 Q6)
   needs it registered, and its arm is inert outside a `-hookcap` session (Task 1's rows), so registering it now
@@ -3201,6 +3360,29 @@ first commit (allocate and define in the same act), and cites only those. Each s
   fields inside; Task 9's table maps scenarios back to §8.1's five sources.
 - **D-3999** — `recapture-steps-in-rig-readme` — spec §8.2 puts the capture steps "beside the fixtures"; they live in
   `server/test/delegation-rig/README.md` beside the rig that runs them, and the fixtures directory holds only data.
+  Corrected in wave 2 (review 304 F12): spec §8.2's "one re-capture script" now exists, `server/test/delegation-rig/recapture.sh`,
+  beside the rig (not beside the fixtures, which still hold only data), and the README's four-command recipe became that
+  script's steps: `recapture.sh [--dry-run] [--missing | <version>...]` resolves the versions once, makes the raw root,
+  runs `rig.sh all`, the sanitiser, the matrix builder and the corpus scan in order, stops at the first failing step with its
+  exit and keeps the raw root. `--missing` is every installed version the corpus has no `<version>/` directory for, and
+  `rig.sh all` gained an optional version list (and `rig.sh versions`, the one reader of "installed") for it. The rows are the
+  `recapture.sh (review 304 F12 …)` describe in `server/test/delegation-rig.test.ts` (its `--dry-run` rows over a scratch tree
+  of stub steps, the five "stops at …" rows, "a real run makes the raw root, runs the five steps in the printed order on it …"
+  and "end to end over the REAL sanitiser and matrix builder …") and, in the `(review 304 F7)` describe, "which versions all
+  runs" and "rig.sh versions".
+  Two follow-ups, ruled 2026-10-07 (review 318, the coordinator's fix-round mail) as tooling follow-ups and not part of
+  that fix round: `recapture.sh` exits 0 when single runs failed (`cmd_all` logs `failed rc=` and still writes `.done`;
+  a failed run that leaves a bundle builds `unmeasured` cells, and `--missing`, which keys on the version directory
+  existing, then skips that version), and `rig.sh versions` reads an unreadable versions directory as none installed
+  (recapture, given no version or `--missing`, still fails closed with exit 2; `rig.sh all <raw>` called directly with
+  no version list captures nothing, writes `.done` and exits 0). The observe stage's plan (wave 3) closes both before
+  a later capture relies on `--missing`; until then an unmeasured cell is not coverage.
+  A third, ruled 2026-10-07 (review 324): `recapture.sh`'s closing cleanup hint (`rm -rf %s`) prints the raw root
+  unescaped, so with a spaced `TMPDIR` the line, pasted, removes other paths and leaves the root. Wave 3 escapes it
+  before any later capture relies on it, red-first. The obvious `%q` change reds two existing rows, not one: the spaced
+  real-run row, which asserts the unescaped text, and the "--dry-run, no version named …" row, whose `<raw>`
+  placeholder `%q` turns into `\<raw\>`; that fix updates and proves both. `recapture.sh` is not edited in the fix
+  round for review 324.
 - **D-4000** — `q8-spool-cost-is-a-micro-benchmark` — the spool append's cost against the hook budget is measured as a bash
   micro-benchmark of the same operations; the hook itself is wave 2's, and its own timing pin lands there.
 - **D-4001** — `q9-parent-class-is-a-proxy` — §8.1 Q9 (the share of trees whose parent is not a ccd session) cannot be read
@@ -3245,16 +3427,26 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
   root's removal and removes its socket file, and `reap` removes stale `dlg<pid>` sockets.
   Fix round 2 captured 2.1.290 and 2.1.291 with the rig as it stood (`e47f3689f`): no adaptation was needed, and each
   version's labels and notes equal 2.1.289's on all 14 scenarios. The capture ran only the versions installed when it
-  started (2.1.285 to 2.1.291, two of them new to the corpus); a version installed later is wave 2's first step.
+  started (2.1.285 to 2.1.291, two of them new to the corpus); a version installed later was to be the observe stage's
+  first step (then wave 2, now wave 3), and the close-out took it instead.
+  Wave 2's close-out (run 306) captured 2.1.292 with the rig as it stood at `ccf0167b9` (`recapture.sh --missing`,
+  2026-10-07 10:11:46–10:20:55 UTC; the capture's `rig.sh`, scenarios, mock and `ccd/` are those of the snapshot, and
+  the rig directory at `e8a096253` differs from it in `sanitize.mjs` alone): no adaptation was needed, and its labels
+  and notes equal 2.1.291's on all 14 scenarios. The labels equal as sets: a fixture lists them in the order they were
+  reached and the matrix sorts them, and interrupt-exit's two hang labels were reached `sub-hang` first, as on 2.1.285
+  to 2.1.288 (2.1.280, 2.1.281 and 2.1.289 to 2.1.291 have `main-hang` first); the notes are the same two as before
+  (`dialog answered: Background work is running` on interrupt-exit, `probe ["r1-resumed"]: not reached` on
+  wf-iso-resume) and nothing else. The capture ran only the version the corpus lacked of those installed when it started
+  (2.1.285, 2.1.286, 2.1.287, 2.1.289, 2.1.290, 2.1.291, 2.1.292), which was 2.1.292 alone; a version installed later
+  waits for the next such capture.
 - **D-4005** — `scenario-agent-wait-covers-sub-done` (Task 4): on 2.1.289 the Agent call runs in the background even
   with `run_in_background: false` and its result reaches the main loop only inside a reminder-only turn, so the plan's
   `main-done` regex could not match; it gained `|^$`, and because that alone could end a step before the subagent's
   last reply (a false "worktree left" for Q6), the four Agent scenarios wait on `["sub-done","main-done"]`.
   Widened by Task 9 (the corpus): measured on every captured version (2.1.280, .281, .285, .286, .287, .288, .289,
-  and .290 and .291 from fix round 2's capture), in the rig every Agent call launches in the background
-  (`async_launched`), whether the mock set
-  `run_in_background` false (six scenarios) or true (agent-iso-bg), and the key never appears in PreToolUse input;
-  a foreground Agent call is unmeasured.
+  and .290 and .291 from fix round 2's capture, and .292 from wave 2's close-out), in the rig every Agent call launches
+  in the background (`async_launched`), whether the mock set `run_in_background` false (six scenarios) or true
+  (agent-iso-bg), and the key never appears in PreToolUse input; a foreground Agent call is unmeasured.
 - **D-4006** — `rig-guard-hardening-from-review` (Task 4 review): `reap` skips a `ccrc-dlg-rig.*` entry that is a symlink
   or not owned by the user before it resolves anything (roots now live in the shared `/tmp`); `setup` guards the
   PHYSICAL root as well as its spelling; `check-scenario` refuses an `answerDialog` or `type` that is not a one-line
@@ -3265,6 +3457,18 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
   clear-compact-resume). It now compares with the versions directory resolved physically (`cd -P`), as `guard_root`
   and `run-base` resolve HOME, and keeps the spelling when that cannot be resolved, never wider. The Linux-only
   behaviour row "claude_pid finds the Claude Code process when HOME is spelled through a symlink … (F10)" pins it.
+  Wave 2 (review 304 F7): `cmd_run` refuses a version that is not `x.y.z`-shaped or not installed (an executable under the
+  versions directory), exit 2, before it makes anything, because `launch_cmd`'s own check ran only inside
+  `bash -c "$(launch_cmd)"`, where its `exit 2` ended the command substitution's subshell and nothing else: `rig.sh run
+  <missing-version>` carried on with an empty pane command, waited out `waitReady`'s 60 s and landed an `unmeasured` bundle.
+  The six "run refuses … (F7)" rows and "run asks about the binary first and the scenario second …" pin it; `launch_cmd`'s
+  check stays, for `relaunch`.
+  Found in passing in the same fix (close-out task A, review 304 F7; recorded here in answer to review 318 F4):
+  `cmd_all`'s failed-run line now reads `$?` into `rc` before the `$(basename …)` command substitution resets it;
+  before, it printed `rc=0` for every failure. The row is "a failed run is reported with its rc and does not stop the
+  sweep, and .done is still written" (the old order: 1 red, `e56a9e0ef`; the "F7 (found in passing)" line of the
+  "Wave 2 close-out" sub-table). The shipped `cmd_all` departs in this way from Task 4's listing earlier in this plan,
+  which still shows the old order (`"$?"` after the substitution); that code block is left as written.
 - **D-4007** — `sanitize-leak-shapes-closed` (Task 5 and its review): the plan's T5-M3 row SURVIVED its own mutation
   (measured 0 red; the `(key)` finding is pushed by index whatever `seg` is) and now uses residue-bearing keys so it
   bites; and the plan's allowlist let residue through that a leak probe found — a `:`-joined path (the `ABS` lookbehind
@@ -3321,7 +3525,8 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
     escapes" above, and "every non-loopback URL is refused", did not hold of a percent-escaped spelling. Now EVERY
     `%XX` (two hex digits, either case) is decoded, after `\uXXXX` and before `\/`; a `%` not followed by two hex
     digits is left as it is, and nothing in the decode can throw. The corpus holds no percent escape (0 of 99 files
-    then, 0 of 127 now), so it was a guard gap, not a leak. Within the known limits below, "every non-loopback URL
+    then, 0 of 127 before `3cad0d2cd`, 0 of 141 at `3cad0d2cd`: counted over the `*.json` files, none holds a `%` followed
+    by two hex digits), so it was a guard gap, not a leak. Within the known limits below, "every non-loopback URL
     is refused" now holds of a percent-escaped spelling too.
   - **The sanitiser scans the committed corpus itself (F9).** `node sanitize.mjs --scan <fixtures-dir>` runs the same
     scan (the same `residue()` over every string value and every key, the same pointers) over every `*.json` in the
@@ -3329,8 +3534,9 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
     a file that is not JSON, a version directory or fixture file whose name has the wrong shape, and an empty or
     unreadable directory. From `12f7c4aac` it refuses a fixture file name by the test `main` applies to a scenario name
     (the NAME shape AND no residue in it), reads no further into a refused file, and names every file by
-    `<version>/#<index>` (or `#<index>`), never by its name, the index counting the directory's `*.json` files in
-    code-unit order, as `LC_ALL=C ls` lists them (`a4d1da74f`; a UTF-8 locale's `ls` may differ). The build-matrix row
+    `<version>/#<index>` (or `#<index>`), never by its name, the index counting the directory's `*.json` entries that
+    are regular files, in code-unit order (`a4d1da74f`; reworded in wave 2 to what the code counts, review 304 F6, in
+    the last paragraph of this entry). The build-matrix row
     "the committed corpus covers every scenario on at least one version, and carries no residue" runs it, so a fixture
     committed with residue reds the suite; before, that row checked only `/tmp/` outside `/rig` and six literals. At
     `158bc2227` it reads 127 files, 26,328 strings and 30,705 keys, and finds no residue.
@@ -3363,6 +3569,67 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
       not the class. "a munged foreign path whose top MUNGED_FOREIGN does not list passes (declared limit, not a
       guarantee) …" passes `-media-vol-client`, `-data-acme-client-proj`, `-Home-x` and `x -Mnt-vol-0000`, and
       refuses each of the ten listed tops.
+
+  Corrected in wave 2 (review 304 F1, F4, F5, F6): true from `c51428ae8`, and from `b93dc9894` where task B's fix round 1
+  narrowed F4's and F6's wording again (below); the coordinator ruled F1, F4, F5 and F6, and no number is issued for
+  them. The sanitiser's behaviour is unchanged except F5; the rest is claims narrowed to the code, each limit pinned by
+  a row that reds when it closes:
+  - **F1: a `..` is residue only at the string's start or right after a `/`.** The "`..` traversal" earlier in this
+    entry, and the header's "a `..` path segment", meant exactly that, what `DOTDOT = /(^|\/)\.\.(\/|$)/` catches
+    (`../srv/x`, `/rig/../srv/x`, `cd ../../srv/x`). A `..` after a space, `=` or a quote (`x ../srv/acme`,
+    `x=../srv/acme`, `"../srv/acme"` inside a longer string, `x ..`) is a KNOWN LIMIT, and since the `/` behind it
+    follows a `.` (F11's glued slash) the path after it is not scanned either. The committed corpus holds such
+    strings: raw-worktree's own ` ../raw-wt`, the rig's relative path to its own raw worktree, 20 of them in 10 files
+    (`grep -rhoF ' ../raw-wt'` over the corpus: 18 in 9 files measured at `c51428ae8`, 20 in 10 once `3cad0d2cd` added
+    2.1.292's). `DOTDOT` is not widened: that would red every one of the 20, two to a file in each version's
+    `raw-worktree.json` (10 files, one per version, 2.1.280 to 2.1.292), installed versions included. A re-capture could
+    respell the installed ones, but not the six in 2.1.280, 2.1.281 and 2.1.288, which are not installed now (the
+    ledger's lane read of 2026-10-07 12:38 UTC). "a `..` that is not at the start of the string or right after a `/` is
+    not scanned (declared limit, not a guarantee) … (review 304 F1)" passes `x ../srv/acme`, `x=../srv/acme`,
+    `cmd ../raw-wt`, `x ..` and `x "../srv/acme" y`, refuses `../srv/acme` and `cd ../../srv/acme`, and asserts that the
+    corpus does hold the ` ../raw-wt` spelling; the block's "fails closed on a `..` path segment …" row is retitled "…
+    at the string's start or right after a `/`, however the path before it reads (review 304 F1)", its assertions
+    unchanged.
+  - **F4: a first segment that starts outside `[A-Za-z0-9._-]` is not scanned.** `ABS` is a `/` followed by that class,
+    so `x /~someone-else/acme`, `"/~someone-else/acme"`, `cd /~someone-else/acme && ls`, `x /@scope/srv/acme`,
+    `x /$HOME/srv/acme`, `x /+x/srv/acme`, `x /=x/srv/acme` and `x /%7Esomeone-else/acme` pass, and `x /srv/acme` does
+    not. Only the FIRST segment goes unscanned: a later `/` is scanned like any other, so the rest of the path escapes
+    only where that `/` follows a name character (F11's glued slash; in each of the eight probes it does), and
+    `x /@/srv/acme`, `x /~x:/srv/acme`, `x /~x@/srv/acme`, `x /~x=/srv/acme` and `x //~someone/acme` are refused (task B's
+    fix round 1 narrowed the header's first wording, which said the whole path passes). It is a second exception to
+    fix round 2's "A `/` after any other character is scanned, except the `/` of a COMPLETE closing tag" above, which
+    presented its one exception as the only one, and the header's allowlist rule (an absolute path is residue unless its
+    first segment is `rig`, `usr` or `bin`) holds of a path whose first segment starts inside the class. Both header sentences are corrected, and the limit has its own header bullet. "an absolute
+    path whose first segment starts outside `[A-Za-z0-9._-]` is not scanned (declared limit, not a guarantee) …
+    (review 304 F4)" passes the eight probes and refuses the control and those five. The corpus holds none of these
+    shapes (0 in 127 files before `3cad0d2cd` added 2.1.292's 14; 0 in 141 files at `3cad0d2cd`, counted over all
+    29,254 strings and 34,120 keys of the `*.json` files: a `/` that `ABS`'s lookbehind lets start a match and that is
+    followed by a character outside its segment class).
+  - **F5: `--scan ''` is a usage error.** It passed the argument check, reached `readdirSync('')`, printed
+    `sanitize: internal error (no detail printed)` and exited 1, so a usage error and an I/O fault gave one answer. An
+    empty directory argument now prints the usage text and exits 2, as `--scan` with no argument and main mode's empty
+    argument already did. "--scan refuses an EMPTY directory argument with exit 2 and the usage text, not the
+    internal-error line (review 304 F5)" sits beside "--scan refuses a missing directory argument and a surplus one
+    with exit 2 (F9)", which keeps its title.
+  - **F6: the `--scan` index is worded as the code counts.** A file finding's index counts the directory's `*.json`
+    entries that are REGULAR FILES (`jsonIn` stats each one, so a link to a file counts), in UTF-16 code-unit order,
+    the same as `LC_ALL=C ls` gives over those entries only for names in the Basic Multilingual Plane (BMP-only
+    names); `ls` lists the entries that are not `*.json` regular files too, so its positions agree with the index only
+    where there are none (the sentence above, "as `LC_ALL=C ls` lists them", was corrected in place for that). An entry
+    named `*.json` that is not a regular file is not counted, and no file finding names it: a directory of that name
+    inside a version directory, and a dangling link anywhere, give no finding at all, and one in the top directory is
+    judged as a version directory (its name fails `VERSION`: a finding `#<i> (version directory name)`). That
+    finding, `#<i>` for a directory whose name fails `VERSION`, counts among the directories, a sequence of its own, told
+    apart from a file finding only by its suffix `(version directory name)`; a directory whose name passes is named by
+    its text. The header's `--scan` lines and the comment above `scanCorpus` say
+    so. No code changed; the wording is pinned by "--scan skips a `*.json` entry that is not a regular file, uncounted
+    and unnamed … (review 304 F6)", added because the `isFile` filter had no row (deleting it reddened nothing), and,
+    from `b93dc9894`, by one row for each of the two clauses that still had none: "--scan counts a link to a regular
+    file and reads it … (review 304 F6)" (an lstat in `jsonIn` reddened nothing before it) and "--scan judges a directory
+    named `*.json` in the top directory as a version directory … (review 304 F6)" (skipping such a directory in the
+    version-directory pass reddened nothing before it). The comment above `scanCorpus` had said a version directory is
+    named `#<i>` once it passes `VERSION`; it is the reverse, and is now worded as the code does: a name that FAILS
+    `VERSION` is `#<i>`, one that passes is named by its text.
 - **D-4008** — `census-malformed-and-unreadable-distinct` (Task 8 review): the plan's census folded an unparsable meta
   into `found:true, keys:[]` (identical to a valid meta with no `worktreePath` — an overloaded value at a seam), a
   malformed or path-less wf meta into `metaMissing`, and an unreadable home into "nothing there". It now reports
@@ -3372,6 +3639,55 @@ Found mid-wave (issued from the run's block; each defined in the commit after th
   id-shaped key name became `(unprintable)`); `--repo` / `--ccd-root` are resolved (a trailing slash had turned
   `main-checkout` into `other`) and a relative `gitdir` resolves against its admin record. Additive to the plan's
   `Census` shape; each with a row and a measured mutation.
+
+  Extended in wave 2 (review 304 F8, F9, F10): true from `5187caf52` (the third sibling, `gitdir`, and the root-proof row for
+  `text`'s fold from `b0b0c78db`, the task review's Minors 1 and 2); the coordinator ruled the three findings, and no number
+  is issued for them. The output stays additive (every field keeps its name and meaning) and prints no path, name, id or value:
+  - **F8: an unreadable meta is not a malformed one.** `json()` answered `MALFORMED` for any failure, a failed READ (EACCES,
+    EISDIR) included, so a meta the census could not read was counted as corruption. It now answers `UNREADABLE` (the symbol the
+    loose-ref read already used, moved up beside `MALFORMED`) for a read that fails, and `MALFORMED` only for a parse failure or a
+    value that is not an object. The marker is `meta.unreadable`, beside `meta.malformed` and `meta.pathless` (in that order
+    wherever the three appear) in both `metaSummary` shapes, the not-found one included; a workflow meta marks its run
+    (`wfUnreadableRuns`, as `wfMalformedRuns` does); and `totals.metaUnreadable` sits beside `totals.metaMalformed`. An unreadable
+    meta is not `valid`: it contributes no key and no `worktreePath` comparison, and counts as neither malformed nor path-less.
+    The header contradicted itself (it listed a path-less meta among the `meta.malformed` markers, then said a path-less one is
+    `meta.pathless`, not corruption); it now names each condition's own marker once. Rows: "marks an agent meta that cannot be
+    READ unreadable …" (a DIRECTORY named `agent-<id>.meta.json`, EISDIR, which runs as root too), "marks a workflow meta that
+    cannot be READ on its run …", "a workflow run that holds a good meta beside an unreadable one and an unparsable one …",
+    "marks an agent meta and a workflow meta whose file refuses to be read (mode 000) …" (skipped as root) and "an unreadable
+    meta contributes no keys and no path comparison …"; the controls are the two existing malformed rows, which now assert
+    `unreadable: false` on an unparsable meta.
+  - **F9: `--home` is resolved.** `--repo` and `--ccd-root` went through `path.resolve` and `--home` was kept as spelled, so
+    `--home <h> --home <h>/` read every meta twice, reported `homes: 2` and counted the record in `totals.multiHome` (the
+    F11(b) row claims distinct homes, but `homes` counted spellings). It goes through `path.resolve` the same way, which also makes
+    `homesUnreadable` count one home spelled twice once. Rows: "resolves --home like --repo …" (three spellings of one home are
+    one home; a second, different home still counts) and "counts one unreadable home spelled two ways once …" (skipped as root).
+  - **F10: an unreadable worktree directory or CLAUDE_BASE is not 'absent'.** `exists(wt)` folded every stat failure into "nothing
+    there". `worktreeDir` is now `'present'`, `'absent'` for ENOENT or ENOTDIR only (the census already reads ENOTDIR so for
+    homes), or `'unreadable'` for any other failure, with `totals.worktreeUnreadable` beside `totals.worktreeAbsent`. CLAUDE_BASE
+    is read three-valued too (`textMeasured`: `null` for ENOENT or ENOTDIR, `UNREADABLE` otherwise; `text` stays the convenience
+    read that folds both to `null`, for every other file): `claudeBase: 'unreadable'` for a failed read, `movedFromBase:
+    'unmeasured'` for it (D-4065's `null` means ONLY "no valid CLAUDE_BASE", and an unreadable one may be valid), and
+    `baseAgreesFirstLog` stays `null`. The header names both new values and extends the `movedFromBase` sentence. Rows: "reads a
+    worktree directory that cannot be examined (its parent refuses search) as 'unreadable' …" (skipped as root), "reads a
+    worktree path under a regular file (ENOTDIR) and a missing one (ENOENT) as 'absent' …", and the three rows of "a CLAUDE_BASE
+    that cannot be read": a DIRECTORY (EISDIR, runs as root too) and a mode-000 file (skipped as root), each over a detached HEAD
+    and a `ref:` HEAD, and the ENOENT and ENOTDIR 'absent' control. "reads a gitdir, HEAD, logs/HEAD or packed-refs that is a
+    DIRECTORY (EISDIR) …" (runs as root too) pins `text`'s fold: with the fold removed the UNREADABLE symbol reaches a `.trim()`,
+    a regex or a `.split` and the census dies on a TypeError.
+  - **Three siblings stay folded, named and pinned.** `locked` (false when its stat fails), `baseAgreesFirstLog` (null when
+    `logs/HEAD` cannot be read, as when it is absent) and `gitdir` (an unreadable one reads as an absent one: `worktreeDir:
+    'unmeasured'` and, for a workflow record, `meta.found: false`, counted in `totals.metaMissing`, although its meta is on disk)
+    still fold a failure into their "nothing there" value. The review did not ask for them and the ruling covers `worktreeDir`
+    and `CLAUDE_BASE` only, so they are left as they were; the header says so (KNOWN LIMIT), "KNOWN LIMIT: locked reads false
+    when its stat fails, baseAgreesFirstLog null when logs/HEAD cannot be read, and an unreadable gitdir reads as an absent one …"
+    (skipped as root) pins all three, and the EISDIR row above pins `baseAgreesFirstLog` and `gitdir` as root, so closing any of
+    them on purpose is a visible edit. (`HEAD` folds too, the other way round: an absent one reads `head: 'unreadable'`, which
+    is no "nothing there" value, so it stays out of the list.) Ruled 2026-10-07 (review 318, the coordinator's fix-round
+    mail): the three folds are accepted as named, pinned known limits within D-4008, and no new number is issued. The
+    observe stage (wave 3) treats each fold's value (`locked` false, `baseAgreesFirstLog` null, an unreadable `gitdir`
+    read as absent) as no positive cleanup or adoption evidence.
+  - Each guard arm's mutation, its rows and its red count are in the "Wave 2 close-out" sub-table of the mutation table (Task `8`).
 - **D-4009** — `matrix-unmeasured-arms-and-pins` (Task 7 review): the plan's builder counted an event with an
   unparseable payload in `events` but derived every question field without it, so a lost `SubagentStart` read as a
   MEASURED zero (Review Focus 4); it is now `unmeasured`, reason `unparseable payload`. Also: a corrupt fixture is
@@ -3558,6 +3874,28 @@ Fix round 2 (review 296; 4066–4067, the last two of fix round 1's block):
   interrupt-exit fixture in the corpus lists `main-hang` among its labels. Second, the scenario's final `sleep`,
   after the answered dialog, went from 5 s to 15 s (`fc2dd5ee9`), so that the stop of the background task, the
   parent's exit and its SessionEnd hook complete before the run is collected.
+
+Wave 2 close-out (run 306; the block 4364–4373, issued 2026-10-07). "Wave 2" is this close-out, as the numbering note
+at the top of "Mutation table" says; the observe stage was wave 2 in text written before 2026-10-07 and has been wave 3
+since the 2026-10-07 renumbering (#313), and that old text stays a dated snapshot:
+
+- **D-4364** — `compaction-is-unmeasured` (review 304 F2): departs from the spec's §8.1 (Measurement matrix, stage 1),
+  question 5 of "It must answer, per version", "how a session's Claude session id changes across `/clear`, compaction,
+  resume and account swaps" (`docs/superpowers/specs/2026-10-04-delegation-broker-design.md`), and so from §7's
+  (Rollout) stage-1 gate, the `1 Measure` row's "Gate to leave it" cell, "every §8.1 row filled for every version on the
+  fleet": the rig compacts a session (clear-compact-resume) but never measures how the id changes across compaction.
+  The hook exits in its SessionStart arm for a `compact` source before the capture arm (`ccd/session-hook.sh`, the
+  arm's `[[ "$src" == compact ]] && exit 0`; the stall-watch exclusion the capture arm's comment documents, "all but
+  SessionStart `compact`, which exits in its arm"), so a `compact` SessionStart is never captured. Compaction shows
+  only as PreCompact and PostCompact,
+  which carried the pre-compaction session id, and the rig's resume by that id continued under it (clear-compact-resume,
+  on every version in the corpus, all ten, 2.1.280 to 2.1.292: no fixture holds a `compact` SessionStart, each
+  PreCompact and PostCompact carries the id of the session that `/clear` began, and the `resume` SessionStart carries
+  the same id). So "rotates on compaction" is unmeasured, and the ledger's amendment
+  `compact-sessionstart-is-not-captured` names what the observe stage's spool (spec §7 stage 2; wave 3 since the
+  2026-10-07 renumbering) must do about it: write its line inside the arm, before the exit. As D-3997 numbers the
+  five-hour pause and D-4066 the two proxies, a §8.1 situation the corpus does not answer carries a number; the plan
+  header and the ledger's "Versions covered" now say that Q5's compaction is unmeasured.
 
 ## Self-review (record)
 

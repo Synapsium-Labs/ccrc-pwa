@@ -18,6 +18,7 @@ import {
   hasCommit, highCommit, looseCommits, makeChild, plantReflogNoise, type Child,
 } from './childReclaimFixture.js';
 import { verbHelpers } from './childReclaimVerbHelpers.js';
+import { inheritedEnv } from './gitEnvStrip.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-child-reclaim-verb-'); });
@@ -765,14 +766,14 @@ describe('a hidden-flag edit is kept, or dropped and RECORDED — never deleted 
   it('refuses — deletes nothing — a checkout of ANOTHER repository holding a hidden-flag edit (the review’s measured shape)', () => {
     const c = makeChild(h);
     const origin = path.join(h.home, 'origins', 'other.git');
-    execFileSync('git', ['init', '--bare', '-q', '-b', 'main', origin]);
+    execFileSync('git', ['init', '--bare', '-q', '-b', 'main', origin], { env: inheritedEnv() });
     const seedRepo = path.join(h.home, 'seed-other');
-    execFileSync('git', ['init', '-q', '-b', 'main', seedRepo]);
+    execFileSync('git', ['init', '-q', '-b', 'main', seedRepo], { env: inheritedEnv() });
     fs.writeFileSync(path.join(seedRepo, 'cfg.yml'), 'orig\n');
     h.git(seedRepo, 'add', 'cfg.yml'); h.git(seedRepo, 'commit', '-m', 'cfg');
     h.git(seedRepo, 'remote', 'add', 'origin', origin); h.git(seedRepo, 'push', '-q', 'origin', 'main');
     const clone = path.join(c.wt, 'vendor', 'other');
-    execFileSync('git', ['clone', '-q', origin, clone]);
+    execFileSync('git', ['clone', '-q', origin, clone], { env: inheritedEnv() });
     h.git(clone, 'update-index', '--skip-worktree', 'cfg.yml');
     // The token is minted while the file is unchanged — the audit's own
     // answer then; the verb's ladder, inside the lock, must refuse on its own.

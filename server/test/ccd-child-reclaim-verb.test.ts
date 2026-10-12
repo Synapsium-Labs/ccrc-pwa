@@ -62,7 +62,8 @@ describe('a fresh reclaim', () => {
     expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'branch').toBe('');
     for (const field of ['uuid', 'child', 'reaping', 'workdir']) expect(h.reg(CHILD_ID, field), field).toBeNull();
     expect(fs.existsSync(path.join(h.home, '.cc-clips', CHILD_ID)), 'clips').toBe(false);
-    expect(fs.existsSync(path.join(h.home, '.cc-tmp', CHILD_ID)), 'temp root').toBe(false);
+    // Darwin: the in-use probe answers unmeasured there, so the tail KEEPS the temp root (spec §5.6).
+    expect(fs.existsSync(path.join(h.home, '.cc-tmp', CHILD_ID)), 'temp root').toBe(process.platform === 'darwin');
     expect(fs.existsSync(path.join(residue, 'scratch.txt')), 'the residue is MEASURED, never deleted').toBe(true);
 
     // The work is in the attic, read back from git — not from the verb's word.
@@ -390,7 +391,7 @@ describe('the tail re-judges the workdir LEAF at removal time, on every arm (spe
     const r = childReclaimVerb(h, tok);
     expect(otherSnapshot(h, c, other), '`other` was neither removed nor committed into').toEqual(before);
     expect(r.code, r.stdout + r.stderr).toBe(1);
-    expect(JSON.parse(r.stdout).failed).toBe('worktree-remove-failed');
+    expect(JSON.parse(r.stdout).failed).toBe('containment-refuted');
     expect(JSON.parse(r.stdout).detail).toContain('symbolic link');
     expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the branch survives').toContain(CHILD_BRANCH);
     expect(h.reg(CHILD_ID, 'reaping'), 'the breadcrumb stays, for the retry').toBe('reclaim:worktree');
@@ -398,7 +399,7 @@ describe('the tail re-judges the workdir LEAF at removal time, on every arm (spe
   }, 90_000);
 
   for (const [label, dropRecord] of [['git’s record of it standing', false], ['git’s record of it gone', true]] as const) {
-    it(`(c2) a DANGLING link planted at resume phase \`worktree\`, ${label}, reaches the removal step and fails worktree-remove-failed — nothing removed`, () => {
+    it(`(c2) a DANGLING link planted at resume phase \`worktree\`, ${label}, reaches the removal step and fails containment-refuted — nothing removed`, () => {
       // The settle is skipped here (no directory stands at the path), so the
       // tail's identity rungs (`_ws_reclaim_owned`, asked on every arm) are what
       // stands between this link and the rest of the tail.
@@ -411,7 +412,7 @@ describe('the tail re-judges the workdir LEAF at removal time, on every arm (spe
       const r = childReclaimVerb(h, tok);
       expect(r.code, r.stdout + r.stderr).toBe(1);
       const o = JSON.parse(r.stdout) as { failed: string; detail: string };
-      expect(o.failed).toBe('worktree-remove-failed');
+      expect(o.failed).toBe('containment-refuted');
       expect(o.detail).toContain('symbolic link');
       expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the branch survives').toContain(CHILD_BRANCH);
       expect(h.reg(CHILD_ID, 'uuid'), 'the registry row survives').not.toBeNull();
@@ -438,7 +439,7 @@ describe('the tail re-judges the workdir LEAF at removal time, on every arm (spe
     expect(h.git(c.main, 'branch', '--list', CHILD_BRANCH), 'the branch survives').toContain(CHILD_BRANCH);
     expect(r.code, r.stdout + r.stderr).toBe(1);
     const o = JSON.parse(r.stdout) as { failed: string; detail: string };
-    expect(o.failed).toBe('worktree-remove-failed');
+    expect(o.failed).toBe('containment-refuted');
     expect(o.detail).toContain('plain absolute path');
     expect(h.reg(CHILD_ID, 'uuid')).not.toBeNull();
   }, 90_000);
@@ -449,7 +450,7 @@ describe('failures after the act started', () => {
     const c = makeChild(h);
     const r = childReclaimVerb(h, evalOf(h).token, { pre: '_ws_wip_commit() { RECLAIM_WIP_WHY="the disk is full"; return 1; };' });
     expect(r.code).toBe(1);
-    expect(JSON.parse(r.stdout)).toEqual({ failed: 'pin-failed', detail: 'the disk is full' });
+    expect(JSON.parse(r.stdout)).toEqual({ failed: 'pin-failed', detail: 'the disk is full', crumb: false });
     failedPairAgrees(r);
     expect(h.reg(CHILD_ID, 'reaping')).toBeNull();
     intact(c);
@@ -889,6 +890,15 @@ const lockedUnmeasured = (v: { code: number; stdout: string; stderr: string }, r
   expect.soft(o.detail, 'the printed document carries the remedy').toContain(PROJECTED_REMEDY);
   expect.soft(`${o.detail}${v.stderr}`, 'the row is named by its id; its spelling is never printed').not.toContain(raw);
 };
+/** An `AliasRow.snapshot()` taken after that answer, read against the one taken before it: the journal gained
+ *  exactly ONE failed line (spec §5.9), never a refusal and no intent, so it is checked here and emptied, and
+ *  everything else must stand as it did. */
+const sansTheFailure = (snap: Record<string, unknown>): Record<string, unknown> => {
+  expect.soft((snap['journal'] as Record<string, unknown>[]).map((e) => [e['outcome'], e['refusal'], e['verb']]),
+    'the unmeasured answer is ONE failed line, verb ws-reclaim (spec §5.9)')
+    .toEqual([['failed', 'probe-unmeasured', 'ws-reclaim']]);
+  return { ...snap, journal: [] };
+};
 
 it('locked recomputation rejects an old token after alias removal', () => {
   const c = makeChild(h);
@@ -905,7 +915,7 @@ it('locked recomputation rejects an old token after alias removal', () => {
   expect(before['tomb'] || before['breadcrumb'] !== null || before['attic'] !== '', 'the CONTROL: nothing started').toBe(false);
   const v = childReclaimVerb(h, tok);
   // What is on disk FIRST: a reclaim that went ahead shows here.
-  expect(a.snapshot(), 'no WIP, attic, tombstone or breadcrumb; no unsupervise or kill; the tree, branch and row stand')
+  expect(sansTheFailure(a.snapshot()), 'no WIP, attic, tombstone or breadcrumb; no unsupervise or kill; the tree, branch and row stand')
     .toEqual(before);
   lockedUnmeasured(v, a.raw);
   expect(v.stdout).not.toContain('state-changed');
@@ -993,7 +1003,7 @@ it('defer-expired does not bypass ambiguous alternate ownership', () => {
   // And the deferred token is rejected by the locked recomputation: the flag changes the fingerprint only.
   const before = a.snapshot();
   const v = childReclaimVerb(h, deferred, { extra: '--defer-expired' });
-  expect(a.snapshot(), 'nothing reached the pin or the removal').toEqual(before);
+  expect(sansTheFailure(a.snapshot()), 'nothing reached the pin or the removal').toEqual(before);
   lockedUnmeasured(v, a.raw);
 }, 90_000);
 
@@ -1017,7 +1027,7 @@ const livenessCase = (hh: PrHarness, plant: () => void, defer: 0 | 1): {
 const livenessSettles = (hh: PrHarness, a: AliasRow, tok: string, answer: ReturnType<typeof evalOf>, defer: 0 | 1): void => {
   const before = a.snapshot();
   const v = childReclaimVerb(hh, tok, defer ? { extra: '--defer-expired' } : {});
-  expect.soft(a.snapshot(), 'the tree, branch, competing row, tmux model and unit/pane actions stand').toEqual(before);
+  expect.soft(sansTheFailure(a.snapshot()), 'the tree, branch, competing row, tmux model and unit/pane actions stand').toEqual(before);
   lockedUnmeasured(v, a.raw);
   expect.soft(answer.token).toBe('');
   expect.soft(answer.detail, 'the placement seam answered, not rung 5').toContain(`registry row(s) ${ALT} `);

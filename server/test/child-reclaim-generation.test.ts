@@ -93,8 +93,8 @@ describe('childReclaimGeneration', () => {
     expect(labels(childReclaimGeneration(events, at))).toEqual(want);
   });
 
-  it('the birth fence\'s own use: over a CREATE-ONLY list, [0] IS the opening create', () => {
-    // `childReclaimBornAt` reads `childReclaimGeneration(coord.lifecycleCreatesFor(id), now)[0]?.at`
+  it('over a CREATE-ONLY list, [0] IS the opening create', () => {
+    // `childReclaimBornAt` opens at this same create over the birth read's rows (child-reclaim-birth-removal.test.ts holds the two equal)
     // — a single-row slice whose one element is the opening create itself,
     // because a create-only list has no later row to close it early.
     const creates = [
@@ -157,14 +157,26 @@ describe('one implementation each', () => {
       'its definition, step 2a and step 5; and the close').toEqual([
       ['server/src/coord/childReclaim.ts', 3], ['server/src/coord/close.ts', 1],
     ]);
-    const placement = 'childReclaimGeneration(coord.lifecycleCreatesFor';
+    // The birth's ONE placement (spec §5.7) works as follows. `childReclaimBornAt` alone reads the birth
+    // rows. The create-only read keeps its one other caller, the attention list. Each of the four consumers
+    // hands the placement the uuid of the row it read.
+    const placement = 'coord.lifecycleBirthEventsFor(';
     expect(src.map(([f, t]) => [f, count(t, placement)] as const).filter(([, n]) => n > 0), 'one birth placement')
       .toEqual([['server/src/coord/childReclaim.ts', 1]]);
     const childReclaimTs = src.find(([f]) => f === 'server/src/coord/childReclaim.ts')![1];
     const bornAtBody = /export function childReclaimBornAt\([^]*?\n}\n/.exec(childReclaimTs)?.[0] ?? '';
     expect(bornAtBody, 'the placement lives inside childReclaimBornAt').toContain(placement);
+    expect(holders('coord.lifecycleCreatesFor('), 'the create-only read serves the attention list alone')
+      .toEqual(['server/src/watch.ts']);
     const watchTs = src.find(([f]) => f === 'server/src/watch.ts')![1];
-    expect(count(watchTs, 'childReclaimBornAt(coord, r.id, now)'), 'the sweep places the birth through the helper').toBe(1);
+    expect(count(watchTs, 'childReclaimBornAt(coord, r.id, now, childReclaimRowUuid(r))'),
+      'the sweep places the birth through the helper, with its row\'s uuid').toBe(1);
+    expect(count(childReclaimTs,
+      'childReclaimHasCoordinated(deps.coord, sessionId, (deps.now ?? Date.now)(), childReclaimRowUuid(read.record))'),
+      'step 2a and the release job\'s step 5 each pass the row they read').toBe(2);
+    const closeTs = src.find(([f]) => f === 'server/src/coord/close.ts')![1];
+    expect(count(closeTs, 'childReclaimHasCoordinated(deps.coord, sessionId, Date.now(), '
+      + 'read.found ? childReclaimRowUuid(read.record) : null)'), 'close passes the row its mark read read').toBe(1);
     // The reader this fence replaced is gone from every file under server/ —
     // the needle is built in two halves so this file does not name it either.
     const retired = 'childReclaim' + 'CoordinatorIds';

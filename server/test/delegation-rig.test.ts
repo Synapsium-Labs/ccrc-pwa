@@ -147,8 +147,8 @@ const RIGSH = path.join(RIG, 'rig.sh');
 // process found by its working directory is skipped elsewhere. On macOS the reap's ownerless arm fails closed.
 const LINUX = process.platform === 'linux';
 const TREE = path.resolve(__dirname, '../..');
-const rigsh = (args: string[], env: NodeJS.ProcessEnv = {}, cwd?: string): { status: number | null; stdout: string; stderr: string } => {
-  const r = spawnSync('bash', [RIGSH, ...args], { encoding: 'utf8', env: { ...process.env, ...env }, timeout: 120_000, ...(cwd ? { cwd } : {}) });
+const rigsh = (args: string[], env: NodeJS.ProcessEnv = {}, cwd?: string, timeoutMs = 120_000): { status: number | null; stdout: string; stderr: string } => {
+  const r = spawnSync('bash', [RIGSH, ...args], { encoding: 'utf8', env: { ...process.env, ...env }, timeout: timeoutMs, ...(cwd ? { cwd } : {}) });
   return { status: r.status, stdout: r.stdout, stderr: r.stderr };
 };
 /** The text of rig.sh's own top-level definitions named here, so a row can run them without the case dispatch at
@@ -310,6 +310,567 @@ describe('rig.sh guards (the rig never names the real HOME or the default tmux s
     expect(r.status, r.stderr).toBe(0);
     expect(fs.existsSync(dead)).toBe(false);
     expect(fs.existsSync(live)).toBe(true);
+  }, 60_000);
+});
+
+/** A fixture HOME whose Claude Code versions directory holds `entries`: [name, mode] pairs, each a one-line shell script (a
+ *  stand-in no row runs: a row that could reach a binary is one that refuses first). A name may climb out of the directory
+ *  (`../x`), which is where a version spelled that way would land. */
+function versionsHome(entries: Array<[string, number]>): string {
+  const home = mkTmp('ccrc-dlg-home-');
+  const dir = path.join(home, '.local/share/claude/versions');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const [name, mode] of entries) {
+    const f = path.join(dir, name);
+    fs.writeFileSync(f, '#!/bin/sh\nexit 0\n');
+    fs.chmodSync(f, mode);
+  }
+  return home;
+}
+/** The same HOME's entries, as most rows below need them: three installed (out of numeric order), one not executable,
+ *  and three executables that are not versions (a word, two numbers, trailing text). */
+const MIXED: Array<[string, number]> = [['2.1.290', 0o755], ['2.1.9', 0o755], ['10.0.0', 0o755], ['2.1.997', 0o644], ['current', 0o755], ['2.1', 0o755], ['2.1.9x', 0o755]];
+
+describe('rig.sh run and all take only a version that is installed (review 304 F7)', () => {
+  const SCENARIO = path.join(RIG, 'scenarios', 'agent-plain.json');
+  /** Fresh private directories for what a run would make, so "made nothing" is a directory that stayed empty. */
+  const sandbox = () => ({ tmp: mkTmp('ccrc-dlg-tmp-'), tmux: mkTmp('ccrc-dlg-tmux-'), out: path.join(mkTmp('ccrc-dlg-out-'), 'out') });
+  const REFUSED: Array<[string, string]> = [   // [what, the version as spelled]; each executable-looking spelling HAS an executable entry
+    ['a version with no entry in the versions directory', '2.1.998'],
+    ['a version whose entry is not executable', '2.1.997'],
+    ['a version spelled with two numbers (an executable entry of that name exists)', '2.1'],
+    ['a version that climbs out of the versions directory (an executable file is there)', '../x'],
+    ['a version with a leading letter (an executable entry of that name exists)', 'v2.1.9'],
+    ['a version with trailing text (an executable entry of that name exists)', '2.1.9x'],
+  ];
+  for (const [what, ver] of REFUSED) {
+    it(`run refuses ${what}, exit 2, before it makes anything: no run root, no tmux directory, no out-dir (F7)`, () => {
+      const home = versionsHome([...MIXED, ['../x', 0o755], ['v2.1.9', 0o755]]);
+      const { tmp, tmux, out } = sandbox();
+      const r = rigsh(['run', ver, SCENARIO, out], { HOME: home, TMPDIR: tmp, TMUX_TMPDIR: tmux }, undefined, 20_000);
+      expect.soft(r.status, r.stderr).toBe(2);
+      expect.soft(r.stderr).toContain(`'${ver}' is not an installed Claude Code version`);
+      expect.soft(fs.readdirSync(tmp), 'no run root').toEqual([]);
+      expect.soft(fs.readdirSync(tmux), 'no tmux socket directory').toEqual([]);
+      expect.soft(fs.existsSync(out), 'no out-dir').toBe(false);
+    }, 60_000);
+  }
+
+  it('run asks about the binary first and the scenario second, and an installed version passes the first (F7)', () => {
+    const home = versionsHome(MIXED);
+    const bad = path.join(mkTmp('ccrc-dlg-sc-'), 'bad.json');
+    fs.writeFileSync(bad, '{}');
+    const { tmp, tmux, out } = sandbox();
+    const env = { HOME: home, TMPDIR: tmp, TMUX_TMPDIR: tmux };
+    const installed = rigsh(['run', '2.1.290', bad, out], env, undefined, 20_000);
+    expect.soft(installed.status, installed.stderr).toBe(2);
+    expect.soft(installed.stderr, 'an installed version reaches the scenario check').toContain('is malformed');
+    const missing = rigsh(['run', '2.1.998', bad, out], env, undefined, 20_000);
+    expect.soft(missing.status, missing.stderr).toBe(2);
+    expect.soft(missing.stderr).toContain("'2.1.998' is not an installed Claude Code version");
+    expect.soft(missing.stderr, 'the binary is asked about before the scenario').not.toContain('is malformed');
+  }, 60_000);
+
+  const BAD_ALL: Array<[string, string[], string]> = [   // [what, the versions named, the one the refusal must name]
+    ['an uninstalled version', ['2.1.998'], '2.1.998'],
+    ['a version whose entry is not executable', ['2.1.997'], '2.1.997'],
+    ['a malformed version (an executable entry of that name exists)', ['2.1.9x'], '2.1.9x'],
+    ['an installed version beside bad ones: the FIRST bad one is named', ['2.1.290', '2.1.998', '2.1.9x'], '2.1.998'],
+  ];
+  for (const [what, named, first] of BAD_ALL) {
+    it(`all refuses ${what}, exit 2, naming it, and makes nothing: no raw root, no run root`, () => {
+      const home = versionsHome(MIXED);
+      const { tmp, tmux } = sandbox();
+      const raw = path.join(mkTmp('ccrc-dlg-rawdir-'), 'raw');
+      const r = rigsh(['all', raw, ...named], { HOME: home, TMPDIR: tmp, TMUX_TMPDIR: tmux }, undefined, 20_000);
+      expect.soft(r.status, r.stderr).toBe(2);
+      expect.soft(r.stderr).toContain(`'${first}' is not an installed Claude Code version`);
+      expect.soft(fs.existsSync(raw), 'no raw root, and so no .done').toBe(false);
+      expect.soft(fs.readdirSync(tmp), 'no run root').toEqual([]);
+    }, 60_000);
+  }
+
+  it('all checks the versions it is given before it reaps or removes anything: a dead run root and a leftover .done stay (F7)', () => {
+    const home = versionsHome(MIXED);
+    const { tmp, tmux } = sandbox();
+    const dead = fs.mkdtempSync(path.join(tmp, 'ccrc-dlg-rig.'));
+    fs.writeFileSync(path.join(dead, '.owner'), `${spawnSync('true').pid}\n`);   // a finished child's pid: reap would remove it
+    const raw = mkTmp('ccrc-dlg-raw-');
+    fs.writeFileSync(path.join(raw, '.done'), 'earlier\n');
+    const r = rigsh(['all', raw, '2.1.998'], { HOME: home, TMPDIR: tmp, TMUX_TMPDIR: tmux }, undefined, 20_000);
+    expect.soft(r.status, r.stderr).toBe(2);
+    expect.soft(fs.existsSync(dead), 'reap did not run').toBe(true);
+    expect.soft(fs.readFileSync(path.join(raw, '.done'), 'utf8'), 'the earlier .done was not removed').toBe('earlier\n');
+  }, 60_000);
+
+  describe('which versions all runs (rig.sh\'s own cmd_all and what it calls, over a stub for `run` and for reap)', () => {
+    const sq = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
+    /** Runs cmd_all with `$0` a stub that logs `run <version> <scenario file> <out-dir under the raw root>` and fails for STUB_FAIL;
+     *  HERE a scratch tree with two scenarios. Returns the log, the raw root's entries and its .done. */
+    function runAll(home: string, args: string[], failFor = ''): { status: number | null; stderr: string; log: string[]; done: string | null } {
+      const dir = mkTmp('ccrc-dlg-all-');
+      fs.mkdirSync(path.join(dir, 'scenarios'));
+      for (const n of ['a', 'b']) fs.writeFileSync(path.join(dir, 'scenarios', `${n}.json`), '{}');
+      const stub = path.join(dir, 'stub.sh');
+      fs.writeFileSync(stub, '#!/usr/bin/env bash\nprintf \'%s %s %s %s\\n\' "$1" "$2" "$(basename "$3")" "${4#"$RAW"/}" >> "$LOG"\n[[ $2 != "${STUB_FAIL-}" ]]\n');
+      const raw = path.join(dir, 'raw');
+      const log = path.join(dir, 'log');
+      const script = ['set -euo pipefail', rigText('REAL_HOME', 'VERSIONS', 'VERSION_RE'), `HERE=${sq(dir)}`, `TREE=${sq(path.join(dir, 'tree'))}`,
+        'cmd_reap() { printf "reap\\n" >> "$LOG"; }', rigText('die', 'guard_out', 'version_ok', 'need_version', 'VERS', 'pick_versions', 'cmd_all'), 'cmd_all "$@"'].join('\n');
+      const r = spawnSync('bash', ['-c', script, stub, raw, ...args], { encoding: 'utf8', env: { ...process.env, HOME: home, LOG: log, RAW: raw, STUB_FAIL: failFor }, timeout: 60_000 });
+      const lines = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean) : [];
+      const doneFile = path.join(raw, '.done');
+      return { status: r.status, stderr: r.stderr, log: lines, done: fs.existsSync(doneFile) ? fs.readFileSync(doneFile, 'utf8') : null };
+    }
+    const sweep = (versions: string[]): string[] => ['reap', ...versions.flatMap((v) => ['a', 'b'].map((s) => `run ${v} ${s}.json ${v}/${s}`))];
+
+    it('with no version named, runs every installed, version-shaped, executable entry, in numeric order, each against every scenario, then writes .done', () => {
+      const r = runAll(versionsHome(MIXED), []);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.log).toEqual(sweep(['2.1.9', '2.1.290', '10.0.0']));
+      expect(r.done).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\n$/);
+    }, 60_000);
+
+    it('with versions named, runs only those, in numeric order and once each, then writes .done', () => {
+      const r = runAll(versionsHome(MIXED), ['10.0.0', '2.1.9', '10.0.0']);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.log).toEqual(sweep(['2.1.9', '10.0.0']));
+      expect(r.done).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\n$/);
+    }, 60_000);
+
+    it('a failed run is reported with its rc and does not stop the sweep, and .done is still written', () => {
+      const r = runAll(versionsHome(MIXED), ['2.1.9', '10.0.0'], '2.1.9');
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.log).toEqual(sweep(['2.1.9', '10.0.0']));
+      expect(r.stderr).toContain('rig: run 2.1.9 a.json failed rc=1');
+      expect(r.stderr).toContain('rig: run 2.1.9 b.json failed rc=1');
+      expect(r.stderr).not.toContain('rig: run 10.0.0');
+      expect(r.done).not.toBeNull();
+    }, 60_000);
+
+    it('refuses a bad version before it reaps or runs anything, and writes no .done', () => {
+      const r = runAll(versionsHome(MIXED), ['2.1.9', '2.1.998']);
+      expect(r.status, r.stderr).toBe(2);
+      expect(r.log).toEqual([]);
+      expect(r.done).toBeNull();
+    }, 60_000);
+  });
+
+  it('an unknown verb prints the header as the usage, exit 2, every verb named down to the last line and not the code after it', () => {
+    const r = rigsh(['bogus'], {}, undefined, 20_000);
+    expect.soft(r.status).toBe(2);
+    for (const line of ['rig.sh all <raw-root> [<version>...]', 'rig.sh versions [<version>...]', 'rig.sh reap', '(and a box with no /proc, where that cannot be measured, keeps them)']) expect.soft(r.stderr, line).toContain(line);
+    expect.soft(r.stderr).not.toContain('set -euo pipefail');
+  }, 60_000);
+
+  describe('rig.sh versions (the one reader of "installed": all and recapture.sh both ask it)', () => {
+    const ask = (home: string, ...named: string[]) => rigsh(['versions', ...named], { HOME: home }, undefined, 20_000);
+    it('lists every installed, version-shaped, executable entry, one per line, numerically (a word, a non-executable file and a malformed name left out)', () => {
+      const r = ask(versionsHome(MIXED));
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toBe('2.1.9\n2.1.290\n10.0.0\n');
+    }, 60_000);
+
+    it('given versions, lists exactly those: numerically, each once', () => {
+      const r = ask(versionsHome(MIXED), '10.0.0', '2.1.9', '10.0.0');
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toBe('2.1.9\n10.0.0\n');
+    }, 60_000);
+
+    it('refuses the first bad version it is given, exit 2, and lists nothing', () => {
+      const r = ask(versionsHome(MIXED), '2.1.9', '2.1.997', '2.1.9x');
+      expect.soft(r.status, r.stderr).toBe(2);
+      expect.soft(r.stderr).toContain("'2.1.997' is not an installed Claude Code version");
+      expect.soft(r.stdout).toBe('');
+    }, 60_000);
+
+    it('lists nothing, and succeeds, for an empty versions directory and for a HOME with none', () => {
+      expect.soft(ask(versionsHome([])).status).toBe(0);
+      expect.soft(ask(versionsHome([])).stdout).toBe('');
+      const bare = ask(mkTmp('ccrc-dlg-home-'));
+      expect.soft(bare.status, bare.stderr).toBe(0);
+      expect.soft(bare.stdout).toBe('');
+      expect.soft(bare.stderr, 'a missing versions directory is "none installed", not an error to print').toBe('');
+    }, 60_000);
+  });
+});
+
+const RECAPTURE = path.join(RIG, 'recapture.sh');
+
+/** A scratch copy of the tree recapture.sh finds from its own location: the script itself; a rig.sh that answers `versions`
+ *  with the REAL rig.sh (so "installed" is the rig's own answer) and logs `all` instead of running it; a sanitiser and a matrix
+ *  builder that log their argv (to `log`, joined by spaces, and to `log.argv`, one bracketed word per argument, so a path split
+ *  at a space shows); a corpus of empty version directories. `prefix` names `dir`, so a row can give the tree a path with a
+ *  space in it. Whatever a row runs for real, it writes only under `dir`. */
+function recaptureTree(corpus: string[] = ['2.1.290', '2.1.291'], prefix = 'ccrc-dlg-rc-'): { dir: string; rig: string; fix: string; scen: string; script: string; log: string } {
+  const dir = mkTmp(prefix);
+  const rig = path.join(dir, 'server/test/delegation-rig');
+  const fix = path.join(dir, 'server/test/fixtures/delegation');
+  const scen = path.join(rig, 'scenarios');
+  fs.mkdirSync(scen, { recursive: true });
+  for (const v of corpus) fs.mkdirSync(path.join(fix, v), { recursive: true });
+  fs.copyFileSync(RECAPTURE, path.join(rig, 'recapture.sh'));
+  const put = (name: string, text: string): void => { fs.writeFileSync(path.join(rig, name), text); fs.chmodSync(path.join(rig, name), 0o755); };
+  put('rig.sh', [
+    '#!/usr/bin/env bash',
+    'case ${1-} in',
+    '  versions) shift; exec bash "$REAL_RIG" versions "$@" ;;',
+    '  all)      shift; raw=$1; shift; printf "all %s\\n" "$raw $*" >> "$LOG"',
+    '            { printf all; printf " [%s]" "$raw" "$@"; echo; } >> "$LOG.argv"',   // one bracket pair per argument: a path split at a space shows
+    '            echo "stdout line from all"; echo "stderr line from all" >&2',
+    '            [[ ${STUB_ALL_RC:-0} == 0 ]] || exit "$STUB_ALL_RC"',
+    '            [[ -z ${STAGED-} ]] || cp -R "$STAGED/." "$raw/"',
+    '            [[ -n ${STUB_NO_DONE-} ]] || echo 2026-01-01T00:00:00Z > "$raw/.done" ;;',
+    'esac', '',
+  ].join('\n'));
+  const logger = (tag: string, rcVar: string, scanVar = ''): string => [
+    "import fs from 'node:fs';", 'const a = process.argv.slice(2);',
+    `fs.appendFileSync(process.env.LOG, \`${tag} \${a.join(' ')}\\n\`);`,
+    `fs.appendFileSync(process.env.LOG + '.argv', \`${tag}\${a.map((x) => \` [\${x}]\`).join('')}\\n\`);`,   // the same, one bracket pair per argument
+    `process.exit(Number((${scanVar ? `a[0] === '--scan' ? process.env.${scanVar} : ` : ''}process.env.${rcVar}) || 0));`, '',
+  ].join('\n');
+  put('sanitize.mjs', logger('sanitize', 'STUB_SANITIZE_RC', 'STUB_SCAN_RC'));
+  put('build-matrix.mjs', logger('matrix', 'STUB_MATRIX_RC'));
+  return { dir, rig, fix, scen, script: path.join(rig, 'recapture.sh'), log: path.join(dir, 'log') };
+}
+type Tree = ReturnType<typeof recaptureTree>;
+
+/** Every path under `dir` (files and directories), sorted: what a run left behind. */
+function treeListing(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (d: string): void => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const f = path.join(d, e.name); out.push(f); if (e.isDirectory()) walk(f); } };
+  walk(dir);
+  return out.sort();
+}
+
+describe('recapture.sh (review 304 F12: the corpus\'s one re-capture script)', () => {
+  /** HOME, TMPDIR and the stubs' log for one run of the tree's script. `tmpPrefix` names TMPDIR, so a row can give it a space. */
+  const ctx = (t: Tree, entries: Array<[string, number]>, tmpPrefix = 'ccrc-dlg-tmp-') => ({ home: versionsHome(entries), tmp: mkTmp(tmpPrefix), t });
+  /** `closedStdout`: the script runs with its standard output CLOSED (`exec 1>&-`, then the script), not redirected to a file
+   *  or to /dev/null, which is what Node's own `stdio: 'ignore'` would open: a write to it fails with EBADF. */
+  const recapture = (c: ReturnType<typeof ctx>, args: string[], env: NodeJS.ProcessEnv = {}, cwd?: string, closedStdout = false) => {
+    const argv = closedStdout ? ['-c', 'exec 1>&-; exec bash "$0" "$@"', c.t.script, ...args] : [c.t.script, ...args];
+    const r = spawnSync('bash', argv, { encoding: 'utf8', timeout: 60_000, ...(cwd ? { cwd } : {}),
+      env: { ...process.env, HOME: c.home, TMPDIR: c.tmp, LOG: c.t.log, REAL_RIG: RIGSH, ...env } });
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+  };
+  const stepLines = (stdout: string): string[] => stdout.split('\n').filter((l) => /^ {2}\d+\. /.test(l));
+  const logLines = (t: Tree): string[] => (fs.existsSync(t.log) ? fs.readFileSync(t.log, 'utf8').split('\n').filter(Boolean) : []);
+  /** What each step was handed, one bracketed word per argument (`[a b]` is ONE argument that carries a space). */
+  const argvLines = (t: Tree): string[] => (fs.existsSync(`${t.log}.argv`) ? fs.readFileSync(`${t.log}.argv`, 'utf8').split('\n').filter(Boolean) : []);
+  /** The five steps as the script prints them for `vs`, `<raw>` standing for the raw root. `q` spells a path the way the script
+   *  does: as it is (a tree whose path has nothing in it for `printf %q` to escape) or as bash's own `%q` spells it. */
+  const FIVE = (t: Tree, vs: string[], q: (p: string) => string = (p) => p): string[] => [
+    `  1. RAW=$(mktemp -d "\${TMPDIR:-/tmp}/ccrc-dlg-raw.XXXXXX") && { printf "# started %s\\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"; printf "%s\\n" ${vs.join(' ')}; } > <raw>/versions-at-start`,
+    `  2. bash ${q(`${t.rig}/rig.sh`)} all <raw> ${vs.join(' ')} 2>&1 | tee <raw>/all.log && [[ -e <raw>/.done ]]`,
+    `  3. node ${q(`${t.rig}/sanitize.mjs`)} <raw> ${q(t.fix)}`,
+    `  4. node ${q(`${t.rig}/build-matrix.mjs`)} ${q(t.fix)} ${q(t.scen)} --write`,
+    `  5. node ${q(`${t.rig}/sanitize.mjs`)} --scan ${q(t.fix)}`,
+  ];
+  /** bash's own `printf %q` of a path: the oracle for what the dry run must print for a path that needs escaping. */
+  const bashQ = (p: string): string => spawnSync('bash', ['-c', 'printf %q "$1"', '_', p], { encoding: 'utf8' }).stdout;
+  // The prefixes of a tree and of a TMPDIR whose paths carry a space (review 318 F3): `HERE`, `RIG`, `FIX` and `SCEN` carry
+  // the first, the raw root the second.
+  const SPACED_TREE = 'ccrc-dlg-rc my tree-';
+  const SPACED_TMP = 'ccrc-dlg-tmp my dir-';
+  // 2.1.290 and 2.1.291 are in the tree's corpus; 2.1.999 and the rest are not. 2.1.998 is not executable; the last two are no versions.
+  const ENTRIES: Array<[string, number]> = [['2.1.290', 0o755], ['2.1.999', 0o755], ['2.1.9', 0o755], ['10.0.0', 0o755], ['2.1.998', 0o644], ['current', 0o755], ['2.1.9x', 0o755]];
+  const FEW: Array<[string, number]> = [['2.1.290', 0o755], ['2.1.999', 0o755], ['2.1.998', 0o644], ['current', 0o755]];
+
+  it('is an executable bash script, and names the committed corpus and the rig\'s scenarios directory as its own', () => {
+    const text = fs.readFileSync(RECAPTURE, 'utf8');
+    expect(text.startsWith('#!/usr/bin/env bash\n')).toBe(true);
+    expect(text).toContain('\nset -euo pipefail\n');
+    expect(fs.statSync(RECAPTURE).mode & 0o111, 'executable by someone').not.toBe(0);
+    expect(text).toContain('\nFIX=$TREE/server/test/fixtures/delegation\n');
+    expect(text).toContain('\nSCEN=$HERE/scenarios\n');
+    expect(fs.existsSync(path.join(TREE, 'server/test/fixtures/delegation/matrix.json')), 'the corpus is where the script says').toBe(true);
+    expect(fs.existsSync(path.join(RIG, 'scenarios')), 'the scenarios are where the script says').toBe(true);
+  });
+
+  it('--dry-run, no version named: every installed, version-shaped, executable entry in numeric order, then the five steps in order, each naming the directories it acts on', () => {
+    const t = recaptureTree();
+    const r = recapture(ctx(t, ENTRIES), ['--dry-run']);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr, 'a clean run says nothing on stderr').toBe('');
+    const out = r.stdout.split('\n');
+    expect(out.slice(0, 4)).toEqual([
+      'recapture: dry run: nothing is made and nothing is run',
+      'recapture: 4 version(s), as installed now: 2.1.9 2.1.290 2.1.999 10.0.0',
+      `recapture: fixtures dir:  ${t.fix}`,
+      `recapture: scenarios dir: ${t.scen}`,
+    ]);
+    expect(stepLines(r.stdout)).toEqual(FIVE(t, ['2.1.9', '2.1.290', '2.1.999', '10.0.0']));
+    expect(out.slice(-3)).toEqual([
+      'recapture: raw root: <raw>',
+      'recapture: it holds UNSANITISED bundles: never commit it, never copy it off the box, remove it by hand once nothing needs it: rm -rf <raw>',
+      '',
+    ]);
+  }, 60_000);
+
+  it('--dry-run --missing selects the installed versions the corpus has no directory for: 2.1.999, and not 2.1.290', () => {
+    const t = recaptureTree();
+    const r = recapture(ctx(t, FEW), ['--dry-run', '--missing']);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout).toContain('recapture: 1 version(s), as installed now: 2.1.999\n');
+    expect(stepLines(r.stdout)).toEqual(FIVE(t, ['2.1.999']));
+    expect(r.stdout, 'a version the corpus holds is not named anywhere').not.toContain('2.1.290');
+  }, 60_000);
+
+  it('--missing with every installed version already in the corpus says so, exits 0 and makes nothing, dry run or not', () => {
+    const t = recaptureTree();
+    const before = treeListing(t.dir);
+    for (const args of [['--dry-run', '--missing'], ['--missing']]) {
+      const c = ctx(t, [['2.1.290', 0o755], ['2.1.291', 0o755]]);
+      const r = recapture(c, args);
+      expect.soft(r.status, `${args.join(' ')}: ${r.stderr}`).toBe(0);
+      expect.soft(r.stdout, args.join(' ')).toBe('recapture: the corpus already covers every installed version (2.1.290 2.1.291); nothing to capture\n');
+      expect.soft(fs.readdirSync(c.tmp), `${args.join(' ')}: no raw root`).toEqual([]);
+      expect.soft(logLines(t), `${args.join(' ')}: nothing ran`).toEqual([]);
+      expect.soft(treeListing(t.dir), `${args.join(' ')}: the tree is as it was`).toEqual(before);
+    }
+  }, 60_000);
+
+  it('--dry-run with versions named selects exactly those: a named version already in the corpus too, in numeric order, each once', () => {
+    const t = recaptureTree();
+    const one = recapture(ctx(t, ENTRIES), ['--dry-run', '2.1.999']);
+    expect.soft(one.status, one.stderr).toBe(0);
+    expect.soft(one.stdout).toContain('recapture: 1 version(s), as installed now: 2.1.999\n');
+    expect.soft(stepLines(one.stdout)).toEqual(FIVE(t, ['2.1.999']));
+    const many = recapture(ctx(t, ENTRIES), ['--dry-run', '2.1.999', '2.1.290', '2.1.999']);
+    expect.soft(many.status, many.stderr).toBe(0);
+    expect.soft(stepLines(many.stdout)).toEqual(FIVE(t, ['2.1.290', '2.1.999']));
+  }, 60_000);
+
+  const REFUSED: Array<[string, string[], string]> = [   // [what, the arguments, the text the refusal must carry]
+    ['a version that is not installed', ['2.1.5'], "'2.1.5' is not an installed Claude Code version"],
+    ['a version whose entry is not executable', ['2.1.998'], "'2.1.998' is not an installed Claude Code version"],
+    ['a malformed version (an executable entry of that name exists)', ['2.1.9x'], "'2.1.9x' is not an installed Claude Code version"],
+    ['the first bad version among good ones', ['2.1.999', '2.1.5', '2.1.998'], "'2.1.5' is not an installed Claude Code version"],
+    ['--missing together with a version', ['--missing', '2.1.999'], '--missing and named versions do not mix'],
+    ['an option it does not know', ['--bogus'], "unknown option '--bogus'"],
+  ];
+  for (const [what, args, text] of REFUSED) {
+    for (const dry of [true, false]) {
+      it(`${dry ? '--dry-run ' : ''}${args.join(' ')} (${what}): exit 2, the refusal named, and nothing made or run`, () => {
+        const t = recaptureTree();
+        const c = ctx(t, ENTRIES);
+        const before = treeListing(t.dir);
+        const r = recapture(c, [...(dry ? ['--dry-run'] : []), ...args]);
+        expect.soft(r.status, r.stderr).toBe(2);
+        expect.soft(r.stderr).toContain(text);
+        expect.soft(r.stderr, 'rig.sh\'s refusal stops this script; it is not read as "nothing installed"').not.toContain('no Claude Code version is installed');
+        expect.soft(r.stdout).toBe('');
+        expect.soft(fs.readdirSync(c.tmp), 'no raw root').toEqual([]);
+        expect.soft(logLines(t), 'nothing ran').toEqual([]);
+        expect.soft(treeListing(t.dir), 'the tree is as it was').toEqual(before);
+      }, 60_000);
+    }
+  }
+
+  it('with no Claude Code version installed it refuses, exit 2, and makes nothing', () => {
+    const t = recaptureTree();
+    const c = ctx(t, [['2.1.998', 0o644], ['current', 0o755]]);
+    const r = recapture(c, []);
+    expect.soft(r.status, r.stderr).toBe(2);
+    expect.soft(r.stderr).toContain('no Claude Code version is installed to capture');
+    expect.soft(fs.readdirSync(c.tmp)).toEqual([]);
+    expect.soft(logLines(t)).toEqual([]);
+  }, 60_000);
+
+  it('--dry-run makes nothing and runs nothing: TMPDIR stays empty, the tree is unchanged, no step ran', () => {
+    const t = recaptureTree();
+    const c = ctx(t, ENTRIES);
+    const before = treeListing(t.dir);
+    const r = recapture(c, ['--dry-run']);
+    expect.soft(r.status, r.stderr).toBe(0);
+    expect.soft(fs.readdirSync(c.tmp), 'no raw root').toEqual([]);
+    expect.soft(treeListing(t.dir), 'the tree is as it was').toEqual(before);
+    expect.soft(logLines(t), 'no step ran').toEqual([]);
+  }, 60_000);
+
+  it('a real run makes the raw root, runs the five steps in the printed order on it, never deletes it, and ends by naming it', () => {
+    const t = recaptureTree();
+    const c = ctx(t, ENTRIES);
+    const dry = recapture(c, ['--dry-run', '2.1.999', '2.1.9']);
+    const r = recapture(c, ['2.1.999', '2.1.9']);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr, 'a clean run says nothing on stderr').toBe('');
+    const made = fs.readdirSync(c.tmp);
+    expect(made, 'exactly one raw root, nothing else in TMPDIR').toHaveLength(1);
+    const raw = path.join(c.tmp, made[0] as string);
+    expect(path.basename(raw)).toMatch(/^ccrc-dlg-raw\.[A-Za-z0-9]{6}$/);
+    expect(fs.statSync(raw).mode & 0o777, 'mktemp -d: 0700').toBe(0o700);
+    // the steps ran on that root, with the versions it recorded, in order, each with its directories
+    expect(logLines(t).map((l) => l.split(raw).join('<raw>'))).toEqual([
+      'all <raw> 2.1.9 2.1.999',
+      `sanitize <raw> ${t.fix}`,
+      `matrix ${t.fix} ${t.scen} --write`,
+      `sanitize --scan ${t.fix}`,
+    ]);
+    // the very list a dry run prints is the list that ran, and the root's path is told as soon as it exists
+    expect(stepLines(r.stdout)).toEqual(stepLines(dry.stdout));
+    const out = r.stdout.split('\n');
+    expect(out.indexOf(`recapture: raw root: ${raw}`), 'told right after step 1, before step 2').toBe(out.findIndex((l) => l.startsWith('  1. ')) + 1);
+    expect(out.slice(-3)).toEqual([
+      `recapture: raw root: ${raw}`,
+      `recapture: it holds UNSANITISED bundles: never commit it, never copy it off the box, remove it by hand once nothing needs it: rm -rf ${raw}`,
+      '',
+    ]);
+    // the raw root's own record: the start time, then the versions, one per line; and the capture's output, both streams
+    expect(fs.readFileSync(path.join(raw, 'versions-at-start'), 'utf8')).toMatch(/^# started \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\n2\.1\.9\n2\.1\.999\n$/);
+    expect(fs.readFileSync(path.join(raw, 'all.log'), 'utf8')).toBe('stdout line from all\nstderr line from all\n');
+    expect(r.stdout, 'the capture\'s output reaches the operator too').toContain('stdout line from all\n');
+    expect(fs.existsSync(path.join(raw, '.done')), 'the raw root and what it holds are still there').toBe(true);
+  }, 60_000);
+
+  const kinds = (t: Tree): string[] => logLines(t).map((l) => (l.startsWith('sanitize --scan') ? 'scan' : (l.split(' ')[0] as string)));
+  const FAILS: Array<[string, NodeJS.ProcessEnv, number, string[], string]> = [   // [what, env, the script's exit, the steps that ran, the failure it reports]
+    ['rig.sh all failing with its own status', { STUB_ALL_RC: '2' }, 2, ['all'], 'step 2 failed (exit 2): capture every version against every scenario (rig.sh all; its .done must exist)'],
+    ['rig.sh all finishing without its .done', { STUB_NO_DONE: '1' }, 1, ['all'], 'step 2 failed (exit 1): capture every version against every scenario (rig.sh all; its .done must exist)'],
+    ['the sanitiser refusing (it fails closed), whatever its status', { STUB_SANITIZE_RC: '3' }, 3, ['all', 'sanitize'], 'step 3 failed (exit 3): sanitise the raw bundles into the corpus (fails closed on any residue)'],
+    ['the matrix builder failing', { STUB_MATRIX_RC: '4' }, 4, ['all', 'sanitize', 'matrix'], 'step 4 failed (exit 4): rebuild matrix.json from the corpus'],
+    ['the corpus scan finding residue', { STUB_SCAN_RC: '5' }, 5, ['all', 'sanitize', 'matrix', 'scan'], 'step 5 failed (exit 5): scan the committed corpus for residue'],
+  ];
+  for (const [what, env, code, ran, failed] of FAILS) {
+    it(`stops at ${what}: exit ${code}, the later steps not run, the raw root kept and named`, () => {
+      const t = recaptureTree();
+      const c = ctx(t, ENTRIES);
+      const r = recapture(c, ['2.1.999'], env);
+      expect.soft(r.status, r.stderr).toBe(code);
+      expect.soft(kinds(t), 'the steps that ran').toEqual(ran);
+      const made = fs.readdirSync(c.tmp);
+      expect.soft(made, 'the raw root is kept').toHaveLength(1);
+      const raw = path.join(c.tmp, made[0] as string);
+      expect.soft(r.stderr).toContain(failed);
+      expect.soft(r.stderr).toContain(`recapture: the raw root ${raw} is kept; it holds UNSANITISED bundles`);
+    }, 60_000);
+  }
+
+  it('a failure before the raw root exists (no usable TMPDIR) stops at step 1 and names no root', () => {
+    const t = recaptureTree();
+    const c = ctx(t, ENTRIES);
+    const r = recapture(c, ['2.1.999'], { TMPDIR: path.join(c.tmp, 'no-such-dir') });
+    expect.soft(r.status, r.stderr).not.toBe(0);
+    expect.soft(r.stderr).toContain(`step 1 failed (exit ${r.status}): make the raw root and record the versions and the start time`);
+    expect.soft(r.stderr).not.toContain('is kept');
+    expect.soft(logLines(t), 'nothing ran').toEqual([]);
+  }, 60_000);
+
+  /** The end-to-end run, over a tree named `treePrefix` and a TMPDIR named `tmpPrefix`: the REAL sanitiser and matrix builder. */
+  const endToEnd = (treePrefix: string, tmpPrefix: string): void => {
+    const t = recaptureTree([], treePrefix);
+    for (const n of ['sanitize.mjs', 'build-matrix.mjs']) fs.copyFileSync(path.join(RIG, n), path.join(t.rig, n));   // the real ones over the logging stubs
+    fs.cpSync(path.join(RIG, 'scenarios'), t.scen, { recursive: true });
+    const ROOT = '/tmp/ccrc-dlg-rig.Zz99Yy';
+    const staged = mkTmp('ccrc-dlg-stage-');   // what rig.sh all would have left in the raw root: one bundle, the run root spelled in it
+    rawBundle(staged, ROOT, '2.1.999', 'agent-plain', [
+      ['SessionStart', 10, { hook_event_name: 'SessionStart', session_id: 's', cwd: `${ROOT}/repo`, transcript_path: `${ROOT}/fixhome/cfg/projects/${ROOT.replace(/[^A-Za-z0-9]/g, '-')}-repo/s.jsonl` }],
+      ['Stop', 20, { hook_event_name: 'Stop', session_id: 's' }],
+    ]);
+    const c = ctx(t, [['2.1.999', 0o755]], tmpPrefix);
+    const r = recapture(c, ['--missing'], { STAGED: staged });
+    expect(r.status, r.stderr).toBe(0);
+    const fixture = JSON.parse(fs.readFileSync(path.join(t.fix, '2.1.999', 'agent-plain.json'), 'utf8'));
+    expect(fixture).toMatchObject({ v: 1, version: '2.1.999', scenario: 'agent-plain' });
+    expect(fixture.events[0].payload.cwd, 'the run root became /rig').toBe('/rig/repo');
+    const matrix = JSON.parse(fs.readFileSync(path.join(t.fix, 'matrix.json'), 'utf8'));
+    expect(matrix.versions).toEqual(['2.1.999']);
+    expect(r.stdout).toContain('sanitize: scanned 2 file(s)');
+    expect(r.stdout).toContain('no residue');
+    expect(fs.existsSync(path.join(c.tmp, fs.readdirSync(c.tmp)[0] as string, '2.1.999/agent-plain/version')), 'the raw root is kept').toBe(true);
+  };
+  it('end to end over the REAL sanitiser and matrix builder: the capture\'s bundle becomes a fixture, matrix.json is rebuilt to hold it, and the corpus scan passes', () => {
+    endToEnd('ccrc-dlg-rc-', 'ccrc-dlg-tmp-');
+  }, 60_000);
+
+  it('end to end over the REAL sanitiser and matrix builder, in a tree and a TMPDIR whose paths carry a space: the bundle still becomes a fixture, and the scan passes (review 318 F3)', () => {
+    endToEnd(SPACED_TREE, SPACED_TMP);
+  }, 60_000);
+
+  it('--dry-run needs no tmux, no node and no mock: it runs with a PATH of bash, ls, sort, uniq and dirname alone', () => {
+    const t = recaptureTree();
+    const c = ctx(t, ENTRIES);
+    const bin = mkTmp('ccrc-dlg-bin-');
+    const found = spawnSync('sh', ['-c', 'for t in bash ls sort uniq dirname; do command -v "$t"; done'], { encoding: 'utf8' }).stdout.trim().split('\n');
+    expect(found, 'the five tools are on this box').toHaveLength(5);
+    for (const f of found) fs.symlinkSync(f, path.join(bin, path.basename(f)));
+    const r = spawnSync(path.join(bin, 'bash'), [t.script, '--dry-run', '2.1.999'], { encoding: 'utf8', timeout: 60_000,
+      env: { PATH: bin, HOME: c.home, TMPDIR: c.tmp, LOG: t.log, REAL_RIG: RIGSH } });
+    expect.soft(r.status, r.stderr).toBe(0);
+    expect.soft(stepLines(r.stdout)).toEqual(FIVE(t, ['2.1.999']));
+    expect.soft(r.stderr).toBe('');
+  }, 60_000);
+
+  it('resolves every path from its own location, never from the caller\'s directory', () => {
+    const t = recaptureTree();
+    const c = ctx(t, ENTRIES);
+    const elsewhere = mkTmp('ccrc-dlg-cwd-');
+    const r = recapture(c, ['--dry-run', '2.1.999'], {}, elsewhere);
+    expect(r.status, r.stderr).toBe(0);
+    expect(stepLines(r.stdout)).toEqual(FIVE(t, ['2.1.999']));
+    expect(r.stdout).toContain(`recapture: fixtures dir:  ${t.fix}\n`);
+  }, 60_000);
+
+  // review 318 F3: the arms the rows above could not see. The first is the one failure that can meet the EXIT trap before a
+  // step has begun; the others run over a path with a space in it, which the quoting of every path the script hands a step is for.
+  it('with stdout CLOSED before step 1 it fails and names no step and no raw root: nothing had begun, so no step "failed" (review 318 F3)', () => {
+    for (const dry of [true, false]) {
+      const who = dry ? '--dry-run' : 'a real run';
+      const args = [...(dry ? ['--dry-run'] : []), '2.1.999'];
+      const t = recaptureTree();
+      const c = ctx(t, ENTRIES);
+      const r = recapture(c, args, {}, undefined, true);
+      expect.soft(r.status, `${who}: ${r.stderr}`).not.toBe(0);
+      expect.soft(r.stderr, `${who}: the script itself said nothing (the shell's own write error is all there is; a refusal would print "recapture: …")`).not.toMatch(/^recapture: /m);
+      expect.soft(r.stderr, `${who}: no step has begun, so none failed (not "step 0", not "step 1")`).not.toMatch(/step \d+ failed/);
+      expect.soft(r.stderr, `${who}: no raw root was made, so none is named`).not.toContain('is kept');
+      expect.soft(fs.readdirSync(c.tmp), `${who}: no raw root`).toEqual([]);
+      expect.soft(logLines(t), `${who}: nothing ran`).toEqual([]);
+      // the control: the same arguments with stdout open succeed, so it is the closed stdout that failed above
+      const open = recapture(ctx(recaptureTree(), ENTRIES), args);
+      expect.soft(open.status, `${who}, stdout open: ${open.stderr}`).toBe(0);
+    }
+  }, 60_000);
+
+  it('--dry-run over a tree whose own path carries a space prints each step\'s paths %q-escaped, and the header\'s paths as they are (review 318 F3)', () => {
+    const t = recaptureTree(undefined, SPACED_TREE);
+    expect(t.dir, 'the tree\'s own path carries a space').toContain(' ');
+    const r = recapture(ctx(t, ENTRIES), ['--dry-run', '2.1.999']);
+    expect.soft(r.status, r.stderr).toBe(0);
+    expect.soft(r.stderr).toBe('');
+    expect.soft(stepLines(r.stdout)).toEqual(FIVE(t, ['2.1.999'], bashQ));
+    expect.soft(stepLines(r.stdout).join('\n'), 'the escape is a backslash before each space').toContain('ccrc-dlg-rc\\ my\\ tree-');
+    expect.soft(r.stdout, 'the header prints the same paths with %s, unescaped').toContain(`recapture: fixtures dir:  ${t.fix}\nrecapture: scenarios dir: ${t.scen}\n`);
+  }, 60_000);
+
+  it('a real run over a tree and a TMPDIR whose paths carry a space hands every step its paths whole, the raw root\'s too (review 318 F3)', () => {
+    const t = recaptureTree(undefined, SPACED_TREE);
+    const c = ctx(t, ENTRIES, SPACED_TMP);
+    expect(t.dir, 'the tree\'s own path carries a space').toContain(' ');
+    expect(c.tmp, 'TMPDIR carries a space').toContain(' ');
+    const r = recapture(c, ['2.1.999', '2.1.9']);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr, 'a clean run says nothing on stderr').toBe('');
+    const made = fs.readdirSync(c.tmp);
+    expect(made, 'exactly one raw root, nothing else in TMPDIR: no directory was made by splitting its path').toHaveLength(1);
+    const raw = path.join(c.tmp, made[0] as string);
+    expect(raw, 'the raw root\'s path carries the space').toContain(' ');
+    // one bracketed word per argument: a path the script split at its space would show as two
+    expect(argvLines(t).map((l) => l.split(raw).join('<raw>'))).toEqual([
+      'all [<raw>] [2.1.9] [2.1.999]',
+      `sanitize [<raw>] [${t.fix}]`,
+      `matrix [${t.fix}] [${t.scen}] [--write]`,
+      `sanitize [--scan] [${t.fix}]`,
+    ]);
+    // step 1 wrote where it said, step 2 teed where it said and found the .done the capture left, and the "raw root:" line names the
+    // root whole. The closing "rm -rf" line prints the root with `%s`, as it is and not shell-escaped, so a path with a space must be
+    // quoted by hand before it is pasted: this row records that line as it stands, it does not say the line is right.
+    expect(fs.readFileSync(path.join(raw, 'versions-at-start'), 'utf8')).toMatch(/^# started \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\n2\.1\.9\n2\.1\.999\n$/);
+    expect(fs.readFileSync(path.join(raw, 'all.log'), 'utf8')).toBe('stdout line from all\nstderr line from all\n');
+    expect(fs.existsSync(path.join(raw, '.done'))).toBe(true);
+    expect(r.stdout).toContain(`recapture: raw root: ${raw}\n`);
+    expect(r.stdout).toContain(`rm -rf ${raw}\n`);
   }, 60_000);
 });
 
@@ -854,7 +1415,7 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     expect(r.written).toEqual([]);
   };
 
-  it('fails closed on a `..` path segment, however the path before it reads', () => {
+  it('fails closed on a `..` path segment at the string\'s start or right after a `/`, however the path before it reads (review 304 F1)', () => {
     for (const leak of ['/rig/../srv/acme', '/usr/../mnt/x', '/dev/null/../../srv/x', '../../srv/acme', '..']) {
       expectNamed(leakRun({ note: leak }), '/events/0/payload/note', 'srv/acme');
     }
@@ -1143,6 +1704,43 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     }
     for (const leak of ['x </srv/x> y', '</srv.corp>', 'x </srv y', 'x /srv> y']) expectNamed(leakRun({ note: leak }), NOTE, 'srv');
   });
+
+  // Review 304 F1 (ruled: narrow the claim, pin the limit; DOTDOT is NOT widened). DOTDOT is `(^|/)\.\.(/|$)`: a `..` segment is caught
+  // only at the string's START or right after a `/`. A `..` after a space, `=` or a quote is not, and the `/` behind it follows a `.`
+  // (ABS's lookbehind skips it), so the path after it is not scanned either. The committed corpus holds such strings, raw-worktree's own
+  // ` ../raw-wt` (the rig's relative path to its own raw worktree), so widening DOTDOT to `[^A-Za-z0-9._~-]` before the `..` reds this
+  // row, the corpus row and the `--scan` file-index row. The `..` row near the top of this block pins what IS caught.
+  it('a `..` that is not at the start of the string or right after a `/` is not scanned (declared limit, not a guarantee): `x ../srv/acme`, `x=../srv/acme`, `cmd ../raw-wt` (review 304 F1)', () => {
+    for (const fine of ['x ../srv/acme', 'x=../srv/acme', 'cmd ../raw-wt', 'x ..', 'x "../srv/acme" y']) {
+      const r = leakRun({ note: fine });
+      expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
+      expect(r.written, fine).toEqual(['2.1.999']);
+    }
+    // while the same path behind a `..` at the start, or behind a `/`, is refused: the pin is about WHERE the `..` stands
+    for (const leak of ['../srv/acme', 'cd ../../srv/acme']) expectNamed(leakRun({ note: leak }), NOTE, 'srv/acme');
+    // and the header's sentence that the committed corpus holds this shape is true: raw-worktree's command, in the fixtures
+    const corpus = path.resolve(__dirname, 'fixtures/delegation');
+    const holders = fs.readdirSync(corpus, { recursive: true }).map(String)
+      .filter((n) => n.endsWith('.json') && fs.readFileSync(path.join(corpus, n), 'utf8').includes(' ../raw-wt'));
+    expect(holders.length, 'fixtures holding " ../raw-wt"').toBeGreaterThan(0);
+  }, 60_000);
+
+  // Review 304 F4 (ruled: a known limit, pinned). ABS is a `/` followed by `[A-Za-z0-9._-]+`, so the FIRST segment of an absolute path
+  // that starts with any other character is never scanned: what FOLLOWS the `/` is a second exception to "a `/` after any other
+  // character is scanned". The control, the same path with a plain first segment, is refused.
+  it('an absolute path whose first segment starts outside `[A-Za-z0-9._-]` is not scanned (declared limit, not a guarantee): `/~someone-else/acme`, `/@scope/srv/acme`, `/$HOME/srv/acme` (review 304 F4)', () => {
+    for (const fine of ['x /~someone-else/acme', '"/~someone-else/acme"', 'cd /~someone-else/acme && ls', 'x /@scope/srv/acme', 'x /$HOME/srv/acme',
+      'x /+x/srv/acme', 'x /=x/srv/acme', 'x /%7Esomeone-else/acme']) {
+      const r = leakRun({ note: fine });
+      expect(r.status, `${fine}: ${r.stderr}`).toBe(0);
+      expect(r.written, fine).toEqual(['2.1.999']);
+    }
+    // while a first segment inside the class is refused: the pin is about the FIRST CHARACTER of the segment
+    expectNamed(leakRun({ note: 'x /srv/acme' }), NOTE, 'srv/acme');
+    // and only about the FIRST segment: a LATER `/` is scanned like any other, so the path escapes only where that `/` follows a name
+    // character (the glued-slash limit, F11), as it does in every probe above; after `@`, `:`, `=`, or behind a `//`, it is residue
+    for (const leak of ['x /@/srv/acme', 'x /~x:/srv/acme', 'x /~x@/srv/acme', 'x /~x=/srv/acme', 'x //~someone/acme']) expectNamed(leakRun({ note: leak }), NOTE, 'srv/acme');
+  }, 60_000);
 
   it.skipIf(USER.length < 4)('scans the decoded spelling of an escaped string: \\uXXXX and %2F', () => {
     const esc = (w: string): string => [...w].map((c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`).join('');
@@ -1495,12 +2093,15 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     expect(snap(base)).toBe(before);
   });
 
-  // The index is the file's place in its directory's `*.json` list in CODE-UNIT order (`LC_ALL=C ls`). Every one of a version's
+  // The index is the file's place among its directory's `*.json` REGULAR FILES in UTF-16 CODE-UNIT order (the same as `LC_ALL=C ls` gives
+  // over them only for BMP-only names; an entry that is not a regular file is not counted: the F6 rows below). Every one of a version's
   // fixtures is copied in with residue planted under a key that names it, so each finding pairs an index with a file: an index
   // taken in another order (a locale's punctuation-blind order swaps `wf-iso-resume.json` and `wf-iso.json`: `-` < `.` by code
-  // unit), or a fixed one, misnames a file. Deleting `jsonIn`'s `.sort()` is an EQUIVALENT mutant under Node: `readdirSync`
-  // already returns names in `strcmp` order (libuv sorts scandir; measured: `ls -U` lists the same directory otherwise), so no
-  // row can red it; the `.sort()` states the order the index promises (per-task re-review n1/n2 and re-review 2 m2).
+  // unit), or a fixed one, misnames a file. Deleting `namesIn`'s `.sort()` (it was `jsonIn`'s until review 318 F2) is an EQUIVALENT
+  // mutant under Node: `readdirSync` already returns names in `strcmp` order (libuv sorts scandir; measured: `ls -U` lists the same
+  // directory otherwise), and the only names that order and UTF-16 code-unit order place differently are non-ASCII ones, every one of
+  // which is a `(fixture file name)` finding of one text, so no row can red it; the `.sort()` states the order the index promises
+  // (per-task re-review n1/n2 and re-review 2 m2).
   it('--scan names a file by its place in the code-unit-sorted list of its directory: every fixture of a version, each planted, pairs index and file exactly (F9)', () => {
     const { dir, v } = plantedCorpus(() => {});
     const names = fs.readdirSync(path.join(CORPUS, v)).filter((n) => n.endsWith('.json'));
@@ -1515,6 +2116,49 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     const r = scanRun('--scan', dir);
     expect(r.status).toBe(1);
     expect(r.stderr).toBe(sorted.map((n, i) => `sanitize: residue in ${v}/#${i} /p_${n.slice(0, -'.json'.length)}\n`).join(''));
+  });
+
+  // Review 304 F6 (wording, as the code behaves): the index counts the directory's `*.json` entries that are REGULAR FILES. An entry of that
+  // name that is not one (a directory, a dangling link) is neither counted nor named, so a later file keeps the index `ls` would not give it.
+  it('--scan skips a `*.json` entry that is not a regular file, uncounted and unnamed: a later file keeps its index among the regular files (review 304 F6)', () => {
+    const { dir, v } = plantedCorpus(() => {});
+    const vdir = path.join(dir, v);
+    fs.mkdirSync(path.join(vdir, 'a-dir.json'));                                  // sorts before agent-plain.json
+    fs.symlinkSync(path.join(vdir, 'no-such-target'), path.join(vdir, 'ab-link.json'));   // a dangling link, sorts before it too
+    const clean = scanRun('--scan', dir);
+    expect(clean.status, clean.stderr).toBe(0);
+    expect(clean.stdout).toMatch(/^sanitize: scanned 1 file\(s\), /);
+    expect(clean.stderr).toBe('');
+    fs.writeFileSync(path.join(vdir, 'zz.json'), `${JSON.stringify({ p: 'x /opt/acme/x' })}\n`);
+    const r = scanRun('--scan', dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr, 'agent-plain.json is #0 and zz.json #1: the two skipped entries are not counted').toBe(`sanitize: residue in ${v}/#1 /p\n`);
+  });
+
+  // Review 304 F6, the header's "a stat, so a link to one counts": `jsonIn` stats each `*.json` entry, so a symbolic link to a regular file is
+  // a file of its directory, counted in the index and READ. With an lstat the link would be skipped, and residue behind it would pass unread.
+  it('--scan counts a link to a regular file and reads it: residue behind the link is named by the link\'s index among the regular files (review 304 F6)', () => {
+    const { base, dir, v } = plantedCorpus(() => {});
+    const target = path.join(base, 'target.json');
+    fs.writeFileSync(target, `${JSON.stringify({ p: 'fine' })}\n`);
+    fs.symlinkSync(target, path.join(dir, v, 'zz-link.json'));
+    const clean = scanRun('--scan', dir);
+    expect(clean.status, clean.stderr).toBe(0);
+    expect(clean.stdout, 'agent-plain.json and the link').toMatch(/^sanitize: scanned 2 file\(s\), /);
+    fs.writeFileSync(target, `${JSON.stringify({ p: 'x /opt/acme/x' })}\n`);
+    const r = scanRun('--scan', dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr, 'agent-plain.json is #0 and the link #1').toBe(`sanitize: residue in ${v}/#1 /p\n`);
+  });
+
+  // Review 304 F6, the header's "one in the top directory is judged as a version directory": a directory named `*.json` in the TOP directory
+  // is not skipped as a non-file (`jsonIn` drops it) but read as a version directory, whose name fails VERSION: a finding, named by index.
+  it('--scan judges a directory named `*.json` in the top directory as a version directory: a finding named by index, never skipped (review 304 F6)', () => {
+    const { dir, v } = plantedCorpus(() => {});
+    fs.mkdirSync(path.join(dir, 'a.json'));
+    const r = scanRun('--scan', dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr, `${v} is #0 among the directories and a.json #1: no name printed`).toBe('sanitize: residue in #1 (version directory name)\n');
   });
 
   it('--scan reads KEYS too: a residue-bearing key of a committed fixture is named by index, never by its text (F9)', () => {
@@ -1580,6 +2224,180 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     expect(both.stderr).toBe(`sanitize: residue in ${v}/#0 (fixture file name)\n`);
   });
 
+  // Review 318 F2: `--scan` read a directory's names as strings, so a name that is not valid UTF-8 came back as U+FFFD, `isFile`/`isDir`
+  // statted a path that does not exist and answered false, and the entry was skipped as though it were not a regular file: `\xff.json`
+  // holding residue gave "no residue", rc 0, where `Bad.json` gave rc 1. EVERY entry whose name is not valid UTF-8, at the top or
+  // immediately inside a version directory, whatever its type or suffix, is now a finding `#<j> (entry name not UTF-8)` (`<version>/#<j> ...`
+  // inside a version directory), `j` its place among THAT directory's such entries, never its bytes. These rows make the names with Buffer
+  // paths; a filesystem that refuses such a name (macOS APFS and ZFS `utf8only` answer EILSEQ; some answer EINVAL) skips a row, decided by the
+  // create throwing one of those two codes and by nothing else: any other error is the row's own setup failing, and fails it.
+  const badAt = (dir: string, bytes: number[]): Buffer => Buffer.concat([Buffer.from(`${dir}/`), Buffer.from(bytes)]);
+  const mustMake = (ctx: { skip: () => unknown }, make: () => void): void => {
+    try { make(); } catch (e) { if (['EILSEQ', 'EINVAL'].includes((e as NodeJS.ErrnoException).code ?? '')) ctx.skip(); else throw e; }
+  };
+  const scanRunBytes = (dir: string): { status: number | null; stdout: Buffer; stderr: Buffer } => {
+    const r = spawnSync(process.execPath, [SANITIZE, '--scan', dir]);
+    return { status: r.status, stdout: r.stdout, stderr: r.stderr };
+  };
+  /** Neither stream carries a byte of the name: no 0xff, no U+FFFD (EF BF BD), and nothing outside ASCII at all (every line here is ASCII). */
+  const noNameBytes = (r: { stdout: Buffer; stderr: Buffer }): void => {
+    for (const out of [r.stdout, r.stderr]) {
+      expect(out.includes(0xff), 'no 0xff byte').toBe(false);
+      expect(out.includes(Buffer.from('\u{FFFD}')), 'no U+FFFD').toBe(false);
+      expect([...out].every((b) => b < 0x80), 'only ASCII').toBe(true);
+    }
+  };
+  const cleanBody = (): string => `${JSON.stringify({ p: 'fine' })}\n`;
+  const residueBody = (): string => `${JSON.stringify({ p: 'x /opt/acme/x' })}\n`;
+  const NOT_UTF8 = '(entry name not UTF-8)';
+  /** A fixtures directory with one version directory `2.1.999` holding `agent-plain.json` (clean). */
+  const oneVersion = (): { dir: string; vdir: string } => {
+    const dir = path.join(mkTmp('ccrc-dlg-scan-'), 'fix');
+    const vdir = path.join(dir, '2.1.999');
+    fs.mkdirSync(vdir, { recursive: true });
+    fs.writeFileSync(path.join(vdir, 'agent-plain.json'), cleanBody());
+    return { dir, vdir };
+  };
+
+  it('--scan fails closed on a file inside a version directory whose name is not valid UTF-8: a redacted finding by index, never skipped, no byte of the name printed (review 318 F2)', (ctx) => {
+    const { dir, vdir } = oneVersion();
+    mustMake(ctx, () => fs.writeFileSync(badAt(vdir, [0xff, 0x2e, 0x6a, 0x73, 0x6f, 0x6e]), residueBody()));   // \xff.json, residue in its body
+    const r = scanRunBytes(dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr.toString()).toBe(`sanitize: residue in 2.1.999/#0 ${NOT_UTF8}\n`);
+    expect(r.stdout.toString()).toBe('');
+    noNameBytes(r);
+  });
+
+  it('--scan fails closed on a version directory whose name is not valid UTF-8, and does not descend into it: a redacted finding by index (review 318 F2)', (ctx) => {
+    const { dir } = oneVersion();
+    mustMake(ctx, () => {
+      fs.mkdirSync(badAt(dir, [0xfe, 0xff]));
+      fs.writeFileSync(Buffer.concat([badAt(dir, [0xfe, 0xff]), Buffer.from('/agent-plain.json')]), residueBody());
+    });
+    const r = scanRunBytes(dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr.toString(), 'one finding: the residue behind the bad name is not read, the valid version is clean').toBe(`sanitize: residue in #0 ${NOT_UTF8}\n`);
+    expect(r.stdout.toString()).toBe('');
+    noNameBytes(r);
+  });
+
+  it('--scan fails closed on a plain file at the top of the fixtures directory whose name is not valid UTF-8, beside a clean matrix.json (review 318 F2)', (ctx) => {
+    const dir = mkTmp('ccrc-dlg-scan-');
+    fs.writeFileSync(path.join(dir, 'matrix.json'), cleanBody());
+    mustMake(ctx, () => fs.writeFileSync(badAt(dir, [0xfe, 0x2e, 0x6a, 0x73, 0x6f, 0x6e]), residueBody()));   // \xfe.json
+    const r = scanRunBytes(dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr.toString()).toBe(`sanitize: residue in #0 ${NOT_UTF8}\n`);
+    expect(r.stdout.toString()).toBe('');
+    noNameBytes(r);
+  });
+
+  it('--scan names a valid entry by the index it has with no non-UTF-8 sibling: a bad name that sorts first, at the top, among the version directories and among a version\'s files, shifts nothing (review 318 F2)', (ctx) => {
+    const dir = path.join(mkTmp('ccrc-dlg-scan-'), 'fix');
+    const vdir = path.join(dir, '2.1.999');
+    fs.mkdirSync(vdir, { recursive: true });
+    fs.mkdirSync(path.join(dir, 'latest'));                                         // a directory that is not a version: #1 among the directories
+    fs.writeFileSync(path.join(dir, 'matrix.json'), residueBody());                       // #0 at the top
+    fs.writeFileSync(path.join(vdir, 'agent-plain.json'), cleanBody());                 // #0 in the version
+    fs.writeFileSync(path.join(vdir, 'zz.json'), residueBody());                          // #1 in the version
+    const alone = scanRunBytes(dir);
+    const expected = ['sanitize: residue in #0 /p', 'sanitize: residue in 2.1.999/#1 /p', 'sanitize: residue in #1 (version directory name)'];
+    expect(alone.status).toBe(1);
+    expect(alone.stderr.toString().trimEnd().split('\n'), 'the baseline, with no bad sibling').toEqual(expected);
+    // `0` + 0xff sorts before every letter and before `2.1.999`: by byte or by code unit, ahead of each valid sibling
+    mustMake(ctx, () => {
+      fs.writeFileSync(badAt(dir, [0x30, 0xff, 0x2e, 0x6a, 0x73, 0x6f, 0x6e]), residueBody());   // top file `0\xff.json`
+      fs.mkdirSync(badAt(dir, [0x30, 0xff]));                                          // top directory `0\xff`
+      fs.writeFileSync(badAt(vdir, [0x30, 0xff, 0x2e, 0x6a, 0x73, 0x6f, 0x6e]), residueBody());  // version file `0\xff.json`
+    });
+    const r = scanRunBytes(dir);
+    expect(r.status).toBe(1);
+    const lines = r.stderr.toString().trimEnd().split('\n');
+    expect(lines.filter((l) => !l.endsWith(NOT_UTF8)), 'every valid entry keeps its index').toEqual(expected);
+    expect(lines.filter((l) => l.endsWith(NOT_UTF8))).toEqual([`sanitize: residue in #0 ${NOT_UTF8}`, `sanitize: residue in #1 ${NOT_UTF8}`, `sanitize: residue in 2.1.999/#0 ${NOT_UTF8}`]);
+    // and a directory's non-UTF-8 findings come first among that directory's own, before its file findings
+    expect(lines).toEqual([
+      `sanitize: residue in #0 ${NOT_UTF8}`, `sanitize: residue in #1 ${NOT_UTF8}`, 'sanitize: residue in #0 /p',
+      `sanitize: residue in 2.1.999/#0 ${NOT_UTF8}`, 'sanitize: residue in 2.1.999/#1 /p', 'sanitize: residue in #1 (version directory name)',
+    ]);
+    noNameBytes(r);
+  });
+
+  it('--scan counts a directory\'s non-UTF-8 entries among themselves and not among its valid ones: two bad files around a valid one are #0 and #1, and a valid file named U+FFFD is neither (review 318 F2)', (ctx) => {
+    const { dir, vdir } = oneVersion();
+    fs.writeFileSync(path.join(vdir, '\u{FFFD}.json'), cleanBody());   // valid UTF-8 (EF BF BD): what a lossy decode of `\xff.json` would spell
+    mustMake(ctx, () => {
+      fs.writeFileSync(badAt(vdir, [0xff, 0x2e, 0x6a, 0x73, 0x6f, 0x6e]), residueBody());   // \xff.json, after agent-plain.json
+      fs.writeFileSync(badAt(vdir, [0x30, 0xff, 0x2e, 0x6a, 0x73, 0x6f, 0x6e]), residueBody());   // 0\xff.json, before it
+    });
+    const r = scanRunBytes(dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr.toString(), 'agent-plain.json is clean and unnamed; the bad ones are #0 and #1, not #0 and #2; the U+FFFD file is #1 among the valid ones, once').toBe(`sanitize: residue in 2.1.999/#0 ${NOT_UTF8}\nsanitize: residue in 2.1.999/#1 ${NOT_UTF8}\nsanitize: residue in 2.1.999/#1 (fixture file name)\n`);
+    noNameBytes(r);
+  });
+
+  it('--scan makes a finding of every kind of entry whose name is not valid UTF-8, whatever its suffix: a directory, a dangling link, a link to a fixture, a file with no `.json` (review 318 F2)', (ctx) => {
+    const { base, dir, vdir } = (() => { const o = oneVersion(); return { ...o, base: path.dirname(o.dir) }; })();
+    fs.writeFileSync(path.join(base, 'target.json'), residueBody());
+    mustMake(ctx, () => {
+      fs.mkdirSync(badAt(vdir, [0xff]));                                                           // a directory
+      fs.symlinkSync(path.join(vdir, 'no-such-target'), badAt(vdir, [0xfe, 0x2e, 0x6a, 0x73, 0x6f, 0x6e]));   // a dangling link named `*.json`
+      fs.symlinkSync(path.join(base, 'target.json'), badAt(vdir, [0xfd, 0x2e, 0x6a, 0x73, 0x6f, 0x6e]));      // a link to a fixture holding residue
+      fs.writeFileSync(badAt(vdir, [0xfc]), 'not json\n');                                           // a file with no suffix
+      fs.writeFileSync(badAt(vdir, [0xfb, 0x2e, 0x74, 0x78, 0x74]), 'not json\n');                   // a `.txt` file
+    });
+    const r = scanRunBytes(dir);
+    expect(r.status).toBe(1);
+    expect(r.stderr.toString(), 'five bad entries, #0 to #4; the link to a fixture is not read as one').toBe([0, 1, 2, 3, 4].map((j) => `sanitize: residue in 2.1.999/#${j} ${NOT_UTF8}\n`).join(''));
+    noNameBytes(r);
+  });
+
+  it('--scan does not call a valid UTF-8 name bad: a name with a non-ASCII letter, with U+FFFD itself, and with a leading BOM stay (fixture file name) findings, and a BOM-led directory is not read as its BOM-less twin (review 318 F2)', () => {
+    const { dir, vdir } = oneVersion();
+    fs.writeFileSync(path.join(vdir, '\u{E9}.json'), cleanBody());           // é
+    fs.writeFileSync(path.join(vdir, '\u{FFFD}.json'), cleanBody());         // the character U+FFFD, a valid name (EF BF BD)
+    fs.writeFileSync(path.join(vdir, '\u{FEFF}x.json'), cleanBody());        // a leading BOM is a name character, not a marker to strip
+    fs.mkdirSync(path.join(dir, '\u{FEFF}2.1.998'));
+    fs.writeFileSync(path.join(dir, '\u{FEFF}2.1.998', 'agent-plain.json'), residueBody());
+    const r = scanRun('--scan', dir);
+    expect(r.status).toBe(1);
+    // sorted by code unit: agent-plain, é (E9), BOM-x (FEFF), U+FFFD (FFFD); the directories: 2.1.999, then the BOM-led one
+    expect(r.stderr).toBe('sanitize: residue in 2.1.999/#1 (fixture file name)\nsanitize: residue in 2.1.999/#2 (fixture file name)\nsanitize: residue in 2.1.999/#3 (fixture file name)\nsanitize: residue in #1 (version directory name)\n');
+    expect(r.stderr).not.toContain('not UTF-8');
+  });
+
+  // Review 324 F7: every bad name above carries an invalid LEAD byte (0xff to 0xfb), which a decoder throws on even in `{ stream: true }`
+  // mode, so no row told a decoder that keeps no state from one that does. In stream mode a name that ENDS in a truncated multibyte
+  // sequence does not throw: the decoder holds the tail back and answers the name as valid, and the held bytes then join the next name's
+  // leading continuation bytes. Here `zz.json\xe2\x82` (two bytes of a three-byte sequence) is listed straight before `\xac.json`; joined,
+  // `e2 82 ac` is U+20AC, so the mutant answers "zz.json" and "\u{20AC}.json", two valid names that are no file on disk, and the scan
+  // passes with rc 0 over residue it never read. A `decode` call without `{ stream: true }` flushes the decoder, so each name is judged alone.
+  it('--scan decodes each entry name on its own: a name ending in a truncated multibyte sequence, listed before a continuation-led one, is a finding and so is that one (review 324 F7)', (ctx) => {
+    const { dir, vdir } = oneVersion();
+    const truncated = badAt(vdir, [0x7a, 0x7a, 0x2e, 0x6a, 0x73, 0x6f, 0x6e, 0xe2, 0x82]);   // zz.json + the first two bytes of E2 82 AC
+    const continuation = badAt(vdir, [0xac, 0x2e, 0x6a, 0x73, 0x6f, 0x6e]);                // \xac.json: begins with the byte that would complete it
+    mustMake(ctx, () => {
+      fs.writeFileSync(truncated, residueBody());
+      fs.writeFileSync(continuation, residueBody());
+    });
+    // the mutant joins the two only when the listing hands them over in this order; the shipped code does not care, so say what the order is
+    const listed = fs.readdirSync(vdir, { encoding: 'buffer' });
+    const at = (full: Buffer): number => listed.findIndex((n) => Buffer.concat([Buffer.from(`${vdir}/`), n]).equals(full));
+    expect(at(truncated), 'the truncated name is listed').toBeGreaterThanOrEqual(0);
+    expect(at(continuation), 'the truncated name is listed straight before the continuation-led one').toBe(at(truncated) + 1);
+    const r = scanRunBytes(dir);
+    expect(r.status, 'the residue behind both names is never read, and neither name passes').toBe(1);
+    expect(r.stderr.toString(), 'both are findings, by index, in byte order').toBe(`sanitize: residue in 2.1.999/#0 ${NOT_UTF8}\nsanitize: residue in 2.1.999/#1 ${NOT_UTF8}\n`);
+    expect(r.stdout.toString()).toBe('');
+    noNameBytes(r);
+    for (const out of [r.stdout, r.stderr]) {
+      for (const b of [0xe2, 0x82, 0xac]) expect(out.includes(b), `no 0x${b.toString(16)} byte`).toBe(false);
+      expect(out.includes(Buffer.from('zz.json')), 'no decoded name').toBe(false);
+      expect(out.includes(Buffer.from('\u{20AC}')), 'no joined decode').toBe(false);
+    }
+  });
+
   it('--scan of a directory with nothing to scan fails (a mistyped path must not pass): exit 1, one fixed line (F9)', () => {
     const dir = mkTmp('ccrc-dlg-scan-');
     fs.writeFileSync(path.join(dir, 'README.md'), 'not json\n');
@@ -1602,6 +2420,17 @@ describe('sanitize.mjs (raw bundles -> committed fixtures, fail-closed)', () => 
     expect(scanRun('--scan').status).toBe(2);
     expect(scanRun('--scan', mkTmp('ccrc-dlg-scan-'), 'extra').status).toBe(2);
     expect(scanRun('--scan', mkTmp('ccrc-dlg-scan-'), mkTmp('ccrc-dlg-scan-')).status).toBe(2);
+  });
+
+  // Review 304 F5: `--scan ''` passed the argument check, reached `readdirSync('')` and printed the internal-error line, so a usage
+  // error and an I/O fault gave the same answer. An empty directory argument is a usage error, as `--scan` alone and main mode's empty one are.
+  it('--scan refuses an EMPTY directory argument with exit 2 and the usage text, not the internal-error line (review 304 F5)', () => {
+    const USAGE = 'usage: node sanitize.mjs <raw-root> <fixtures-dir>\n       node sanitize.mjs --scan <fixtures-dir>\n';
+    const empty = scanRun('--scan', '');
+    expect(empty.status).toBe(2);
+    expect(empty.stderr).toBe(USAGE);
+    expect(empty.stdout).toBe('');
+    expect(scanRun('--scan').stderr, 'the same text a missing argument gets').toBe(USAGE);
   });
 });
 

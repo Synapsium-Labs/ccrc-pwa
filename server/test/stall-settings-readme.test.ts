@@ -30,7 +30,7 @@ function settingsParagraph(): string {
   return README.slice(start, end === -1 ? undefined : end).replace(/\s+/g, ' ');
 }
 
-const SECOND = 'Settings has a second section, **Notifications**';
+const SECOND = 'Settings then has a further section, **Notifications**';
 const THIRD = `Settings has a third section, **${STALL_SECTION_TEXT.title}**`;
 
 /** The third section's sentences: from its lead to the paragraph's next topic, the fleet screen's `BuildLine`. */

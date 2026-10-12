@@ -718,6 +718,32 @@ export function childReclaimRefreshDue(
   return false;
 }
 
+/**
+ * Should the board re-read its archive because the server's newest reclaim end
+ * moved (child-reclamation wave 6, spec §5.9)? The vanish trigger above
+ * races the server's journal mirror: ccd purges the child's row before it
+ * journals the end, so that read can come back with no chip. This is the
+ * second trigger, on the fact the race was waiting for.
+ *
+ * Due exactly when `after` is a value, it differs from `before` (a CHANGE,
+ * never only an increase, because a restarted server reads null first), and
+ * some FINISHED row is unsettled:
+ *   • its chip is pending, deferred or paused; or
+ *   • it has no chip and `hadChild` holds its run, which is the race's own row.
+ * An open row is never counted: its chip is blank by design.
+ */
+export function childReclaimDoneRefreshDue(
+  runs: readonly RunSummary[], hadChild: ReadonlySet<number>, before: number | null, after: number | null,
+): boolean {
+  if (after === null || after === before) return false;
+  for (const run of runs) {
+    if (!isRunClosed(run)) continue;
+    const chip = childReclaimChip(run);
+    if (chip === null ? hadChild.has(run.id) : CHILD_RECLAIM_UNSETTLED.has(chip.word)) return true;
+  }
+  return false;
+}
+
 /** What a fleet row's `child` field says — four answers, never folded. `child`: a
  *  marker naming run `runId`. `none`: no marker — or no key at all, which only a
  *  server predating child marks sends, and such a server reclaims nothing.
@@ -730,11 +756,12 @@ export type ChildMarkRead =
   | { readonly kind: 'unrecognised' };
 
 /** THE ONE READER of `FleetSession.child` in `pwa/src`. Optional here although the
- *  wire type requires it: the live `fleet` frame is cast, never revived. Two
- *  callers: `childOfRunLabel` (the fleet line) and `abandonChildOf` (the abandon
- *  sheet). The label says nothing for `none` OR `unrecognised`; the sheet must
- *  hedge on `unrecognised` and not on `none`. So this answers four ways, and the
- *  label's `null` is never reused as a mark. */
+ *  wire type requires it: the live `fleet` frame is cast, never revived. Three
+ *  callers: `childOfRunLabel` (the fleet line), `abandonChildOf` (the abandon
+ *  sheet) and `childRunsSeen` (the board's memory of which runs had a child).
+ *  The label says nothing for `none` OR `unrecognised`; the sheet must hedge on
+ *  `unrecognised` and not on `none`; the board's memory keeps `child` alone. So
+ *  this answers four ways, and the label's `null` is never reused as a mark. */
 export const childMarkOf = (session: { child?: ChildMark }): ChildMarkRead => {
   const c: unknown = session.child;
   if (c === undefined) return { kind: 'none' };
@@ -747,6 +774,26 @@ export const childMarkOf = (session: { child?: ChildMark }): ChildMarkRead => {
   if (o.kind === 'unreadable') return { kind: 'unreadable' };
   return { kind: 'unrecognised' };
 };
+
+/**
+ * The run ids this board knows had a child (child-reclamation wave 6). A fleet
+ * frame's child mark names its minting run, and a finished row carries a chip
+ * only for a child. By the time the reclaim's end reaches the coord frame, the
+ * child has left the fleet frame and its row may carry no chip, so the board
+ * accumulates the answer across frames and reads. Never forgets: the set lives
+ * as long as the board, and holds a few integers. Returns a new set.
+ */
+export function childRunsSeen(
+  seen: ReadonlySet<number>, sessions: readonly { child?: ChildMark }[], runs: readonly RunSummary[],
+): ReadonlySet<number> {
+  const out = new Set(seen);
+  for (const s of sessions) {
+    const m = childMarkOf(s);
+    if (m.kind === 'child') out.add(m.runId);
+  }
+  for (const run of runs) if (childReclaimChip(run) !== null) out.add(run.id);
+  return out;
+}
 
 export interface ChildOfRunLabel {
   readonly text: string;
