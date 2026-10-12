@@ -461,6 +461,12 @@ describe('doctor box-token: the placeholder fleet file (R.1)', () => {
     expect(r.stdout).not.toMatch(/^PASS /m);
     expect(r.stdout).not.toContain(PLACEHOLDER_TOKEN);
     expect(r.code).toBe(1);
+    // Review 383 F8: the remedy says what is true. A server that holds the placeholder never boots (it refuses with
+    // `MailTokenPlaceholderUnedited`), so "Rotate now on the console's Box token card" is a remedy nobody can reach.
+    const remedy = r.stdout.split('\n').find((l) => /^ {2}remedy: /.test(l)) ?? '';
+    expect(remedy).toContain('refuses to boot on the placeholder');
+    expect(remedy).toMatch(/replace the file with a value, or remove it, and the next boot mints one/);
+    expect(remedy).not.toContain('Rotate now');
   });
 
   it('a real-looking value that merely starts like the placeholder is still ok', () => {

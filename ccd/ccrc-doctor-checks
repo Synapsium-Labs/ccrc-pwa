@@ -7703,7 +7703,11 @@ _bt_find() {
         placeholder) say="$a carries the placeholder value the example file ships, not a token" ;;
         *) say="$a carries no value line" ;;
       esac
-      fix="look at what is there without printing it (ls -l $a); a file the server wrote is rewritten by its next rotation ($card)" ;;
+      fix="look at what is there without printing it (ls -l $a); a file the server wrote is rewritten by its next rotation ($card)"
+      # A server that holds the placeholder never boots (`MailTokenPlaceholderUnedited`), so no console card exists to
+      # rotate from: its remedy is the true one (review 383 F8).
+      [ "$arm:$b" = server:placeholder ] && fix="the server refuses to boot on the placeholder value $a carries; replace the file with a value, or remove it, and the next boot mints one"
+      ;;
     server:state-absent)
       say="$a does not exist, so this server has not run the token lifecycle (a build before it, or not restarted since)"
       fix="update this box (ccrc update), which restarts the server; it writes the file at boot" ;;
