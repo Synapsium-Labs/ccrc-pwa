@@ -18,9 +18,16 @@ two doors, and the shim handles each one differently:
      provider always fills `instructions` with its own "You are Codex ...
      running in the Codex CLI" prompt and appends whatever `instructions`
      the request carries after it; its Anthropic adapter maps a top-level
-     `system` that is a plain string (or text blocks) to `instructions` —
-     measured offline on LiteLLM 1.101.0 and on 1.104.0. `messages` is not
-     touched: nothing is merged into or inserted before the first turn.
+     `system` to `instructions` only when it is a PLAIN STRING — measured
+     offline on LiteLLM 1.101.0 and 1.104.0, and re-measured on every
+     runtime build by the behaviour probe (`top-system-in-instructions`).
+     A block-list `system` is not mapped: on a lane's path (the
+     chat-completions bridge, since provider chatgpt is not a
+     direct-Responses provider) it becomes a `role: "system"` input item,
+     which Codex refuses ("System messages are not allowed") — measured
+     offline on both versions. So the flattening is load-bearing, not
+     cosmetic. `messages` is not touched: nothing is merged into or
+     inserted before the first turn.
 
 The top-level door used to be a fold as well (`_fold_system`): `system` was
 removed and merged into, or inserted as, the conversation's leading user
@@ -216,17 +223,19 @@ def _system_to_text(system):
     Same two shapes `_fold_midturn_system` already tolerates on a message's
     own `content`: a plain string, or a list of Anthropic content blocks.
     Blocks are joined in the order the sender wrote them — one instruction in
-    sequence, not concatenated ad hoc — and a non-dict entry or a block with
-    no string `text` contributes nothing rather than raising, since this
-    function's caller must never let a malformed block crash a request that
-    a well-formed one would have carried cleanly.
+    sequence, not concatenated ad hoc — and a non-dict entry, a block with
+    no string `text`, or a block whose `text` is the empty string
+    contributes nothing (it is skipped, not joined as an empty part) rather
+    than raising, since this function's caller must never let a malformed
+    block crash a request that a well-formed one would have carried cleanly.
+    The text it keeps is returned as written, never stripped.
     """
     if isinstance(system, str):
         return system
     if isinstance(system, list):
         parts = [
-            b.get("text", "") for b in system
-            if isinstance(b, dict) and isinstance(b.get("text"), str)
+            b["text"] for b in system
+            if isinstance(b, dict) and isinstance(b.get("text"), str) and b["text"]
         ]
         return "\n\n".join(parts)
     return ""
@@ -245,16 +254,22 @@ def _system_as_instructions(data):
     """Keep the top-level `system` field as the system prompt, as ONE plain
     string led by `SYSTEM_LEAD` (spec §22, D-4858).
 
-    LiteLLM's Anthropic adapter maps a top-level `system` that is a plain
-    string, or a list of text blocks, to the Responses `instructions` field,
-    and its chatgpt provider writes its own Codex CLI prompt there first and
-    appends the request's after it — measured offline on LiteLLM 1.101.0 and
-    on 1.104.0, the two ends of the runtime's range. So the value is
-    flattened by `_system_to_text` (a string as is, text blocks joined with a
-    blank line, anything else to nothing) and written back as a string: the
-    one shape the mapping is measured for, whatever shape the client sent.
-    The blocks' own extra keys (`cache_control`, say) do not survive — the
-    field they land in is a single string.
+    LiteLLM's Anthropic adapter maps a top-level `system` to the Responses
+    `instructions` field only when it is a PLAIN STRING, and its chatgpt
+    provider writes its own Codex CLI prompt there first and appends the
+    request's after it — measured offline on LiteLLM 1.101.0 and 1.104.0;
+    the runtime's behaviour probe re-measures that mapping on every build
+    (`top-system-in-instructions`). A block-list `system` is not mapped: on
+    a lane's path (the chat-completions bridge, since provider chatgpt is
+    not a direct-Responses provider) it becomes a `role: "system"` input
+    item, which Codex refuses ("System messages are not allowed") —
+    measured offline on both versions. So the flattening is load-bearing,
+    not cosmetic: the value is flattened by `_system_to_text` (a string as
+    is, non-empty text blocks joined with a blank line, anything else to
+    nothing) and written back as a string, the one shape the mapping holds
+    for, whatever shape the client sent. The blocks' own extra keys
+    (`cache_control`, say) do not survive — the field they land in is a
+    single string.
 
     `messages` is NOT touched. Nothing is merged into the first turn and
     nothing is inserted ahead of it — the old `_fold_system` did both, and
@@ -266,13 +281,15 @@ def _system_as_instructions(data):
     leading `tool_result` (D-3156's acceptance). Both are superseded by spec
     §22; `ccgpt-proxy.test.ts` pins the second as a regression case.
 
-    A `system` that flattens to no text — absent, `null`, an empty string,
-    or a block list carrying no string `text` — is popped and NOT re-added:
-    the lead line is never sent alone, since it would announce a system
-    prompt that is not there.
+    A `system` whose flattened text is empty or whitespace only — absent,
+    `null`, an empty or whitespace-only string, or a block list carrying no
+    string `text`, only empty text or only whitespace — is popped and NOT
+    re-added: the lead line is never sent with nothing behind it, since it
+    would announce a system prompt that is not there. The text that is kept
+    is sent as flattened, not stripped.
     """
     text = _system_to_text(data.pop("system", None))
-    if not text:
+    if not text.strip():
         return data
     data["system"] = f"{SYSTEM_LEAD}\n\n{text}"
     return data

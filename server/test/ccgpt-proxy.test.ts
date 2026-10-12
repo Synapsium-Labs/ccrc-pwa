@@ -982,16 +982,20 @@ describe.skipIf(!PY)('ccgpt-proxy: the top-level system door', () => {
     expect(seen.messages).toBeNull();                            // forwarded as sent, no turn invented
   });
 
-  // A `system` that flattens to no text at all — null, an empty string, or a
-  // block list carrying no string `text` — is DROPPED: the lead line is never
-  // sent alone, since it would introduce a system prompt that is not there.
-  // Each row's own `messages` reaches upstream untouched, with no turn
-  // invented for an instruction that said nothing.
+  // A `system` whose flattened text is empty or whitespace only — null, an
+  // empty or whitespace-only string, or a block list carrying no string
+  // `text`, only empty text, or only whitespace — is DROPPED: the lead line
+  // is never sent with nothing behind it, since it would introduce a system
+  // prompt that is not there. Each row's own `messages` reaches upstream
+  // untouched, with no turn invented for an instruction that said nothing.
   const NO_TEXT: [string, unknown][] = [
     ['null', null],
     ['an empty string', ''],
+    ['a whitespace-only string', ' \n\t '],
     ['a block list with only an image block', [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }]],
     ['a block list whose text block carries no string text', [{ type: 'text' }]],
+    ['a block list holding only empty text blocks', [{ type: 'text', text: '' }, { type: 'text', text: '' }]],
+    ['a block list holding only whitespace text', [{ type: 'text', text: '  \n ' }]],
   ];
   it.each(NO_TEXT)('drops a system that is %s, never sending the lead line alone', async (_label, system) => {
     if (!pythonOrSkip()) return;
@@ -1041,9 +1045,10 @@ describe.skipIf(!PY)('ccgpt-proxy: the top-level system door', () => {
   });
 
   // Several text blocks join in the order the sender wrote them, with a
-  // blank line between each; a block that carries no string `text`
-  // contributes nothing, and the blocks' own extra keys (`cache_control`)
-  // do not survive the flattening — `instructions` is one string.
+  // blank line between each; a block that carries no string `text`, or an
+  // empty one, contributes nothing (it is skipped, not joined as an empty
+  // part), and the blocks' own extra keys (`cache_control`) do not survive
+  // the flattening — `instructions` is one string.
   it('joins a multi-block system with blank lines, in order, skipping blocks with no text', async () => {
     if (!pythonOrSkip()) return;
     const home = mkTmp('ccgpt-proxy-top-multiblock-');
@@ -1059,6 +1064,7 @@ describe.skipIf(!PY)('ccgpt-proxy: the top-level system door', () => {
         system: [
           { type: 'text', text: 'FIRST' },
           { type: 'text' },
+          { type: 'text', text: '' },
           { type: 'text', text: 'SECOND', cache_control: { type: 'ephemeral' } },
         ],
         messages: [{ role: 'user', content: 'hi' }],
