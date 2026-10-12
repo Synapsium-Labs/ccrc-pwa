@@ -1,12 +1,14 @@
 /**
  * STALL WATCH SETTINGS, the README's Settings paragraph (design 2026-10-05, §18 W2). The paragraph that tours
- * `/settings` gains its third section, and these rows pin what that sentence states to the values the build ships:
+ * `/settings` gains a Stall watch section, and these rows pin what that sentence states to the values the build ships:
  * the section's title, its route, the Follow choice and the six level labels in the ladder's order, the quiet time's
  * built-in value, bounds and step, and the counts' window. A renamed level, a moved bound or a new window reds here
- * instead of leaving the README telling an old story. The labels come from L0 and the numbers from L1, so this file
- * copies no text but its anchor words.
+ * instead of leaving the README telling an old story. The labels come from L0 and the numbers from L1. The only text
+ * this file copies is its anchor words: the Notifications lead (`SECOND`) and the Stall watch lead (`STALL_LEAD`) are
+ * quoted from the README's own sentences, and neither carries an ordinal, because an ordinal is a count no build value
+ * backs and the paragraph's sections change with the screen.
  *
- * Two rows are worth a word. The label row reads the third section's sentences only, and names the section's two
+ * Two rows are worth a word. The label row reads the Stall watch sentences only, and names the section's two
  * controls and the confirm button by their shipped labels (Level, Quiet time before a worker check, Set). The device
  * row alone scans the WHOLE Settings paragraph, so the Notifications sentence's "push bell" cannot go back to naming a
  * device.
@@ -31,15 +33,15 @@ function settingsParagraph(): string {
 }
 
 const SECOND = 'Settings then has a further section, **Notifications**';
-const THIRD = `Settings has a third section, **${STALL_SECTION_TEXT.title}**`;
+const STALL_LEAD = `Settings then has a further section, **${STALL_SECTION_TEXT.title}**`;
 
-/** The third section's sentences: from its lead to the paragraph's next topic, the fleet screen's `BuildLine`. */
+/** The Stall watch section's sentences: from its lead to the paragraph's next topic, the fleet screen's `BuildLine`. */
 function stallSentences(): string {
   const p = settingsParagraph();
-  const start = p.indexOf(THIRD);
-  expect(start, 'the Settings paragraph names no third section').toBeGreaterThan(-1);
+  const start = p.indexOf(STALL_LEAD);
+  expect(start, 'the Settings paragraph names no Stall watch section').toBeGreaterThan(-1);
   const end = p.indexOf('In remote mode', start);
-  expect(end, 'the third section runs to the end of the paragraph').toBeGreaterThan(start);
+  expect(end, 'the Stall watch section runs to the end of the paragraph').toBeGreaterThan(start);
   return p.slice(start, end);
 }
 
@@ -55,11 +57,11 @@ function duration(ms: number): string {
 }
 
 describe("README's Settings paragraph names the Stall watch section (design 2026-10-05, §18 W2)", () => {
-  it('names a third section, once, after the Notifications section', () => {
+  it('names the Stall watch section, once, after the Notifications section', () => {
     const p = settingsParagraph();
     expect(p.indexOf(SECOND)).toBeGreaterThan(-1);
-    expect(p.indexOf(THIRD)).toBeGreaterThan(p.indexOf(SECOND));
-    expect(README.replace(/\s+/g, ' ').split(THIRD).length - 1).toBe(1);
+    expect(p.indexOf(STALL_LEAD)).toBeGreaterThan(p.indexOf(SECOND));
+    expect(README.replace(/\s+/g, ' ').split(STALL_LEAD).length - 1).toBe(1);
   });
 
   it('names the route the section reads and writes', () => {

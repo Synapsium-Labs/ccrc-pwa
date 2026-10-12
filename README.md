@@ -978,7 +978,7 @@ alert after three failures in a row or a stall (a failed mint, a rotation owed f
 (`POST /api/token/rotate`, session-only). Settings then has
 a further section, **Notifications**: the push bell for this browser (the same
 toggle as the fleet header's) and **Release notifications** — `on my channel`, `stable only` or `off`, written
-as the fleet intent's `notify` through `POST /api/updates/intent`. Settings has a third section, **Stall watch**
+as the fleet intent's `notify` through `POST /api/updates/intent`. Settings then has a further section, **Stall watch**
 (stall-watch-settings W2), read and written through `/api/coord/stall-watch` by a poll of its own, once a minute and
 whenever the page is shown again. It shows the watch's level now, what it does and where it comes from (following
 the fleet box's files, chosen here, or chosen but held back by the fleet box's kill switch or strict mail gate), the
