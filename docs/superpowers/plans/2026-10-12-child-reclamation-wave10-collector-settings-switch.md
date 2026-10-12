@@ -435,7 +435,7 @@ Every file the wave touches. Each task's own **Files** block stays the authority
 | `server/test/ccrc-update.test.ts` | 13 |
 | `server/test/ccrc-uninstall.test.ts` | 13 |
 | `server/test/collect-lane-restore-wording.test.ts` (new) | 13 |
-| `server/test/session-hook.test.ts` | 13 (the `ccd/ccrc` citation count, only if it moves; re-measured and argued) |
+| `server/test/session-hook.test.ts` | 13 (run, never edited: the `ccd/ccrc` edits are line-neutral, so its count does not move) |
 | `pwa/src/lib/api.ts` | 11 |
 | `pwa/src/lib/notAvailable.ts` (new) | 11 |
 | `pwa/src/fleet/useStallWatchView.ts` | 11 (imports the shared helper; no behaviour change) |
@@ -444,7 +444,6 @@ Every file the wave touches. Each task's own **Files** block stays the authority
 | `pwa/test/not-available.test.ts` (new) | 11 |
 | `pwa/test/use-collect-lane-view.test.tsx` (new) | 11 |
 | `pwa/test/collect-lane-words.test.ts` (new) | 11 |
-| `pwa/test/collect-lane-words.test-d.ts` (new) | 11 |
 | `pwa/test/collect-lane-words.test-d.ts` (new) | 11 |
 | `pwa/src/fleet/CollectLaneSection.tsx` (new) | 12 |
 | `pwa/src/screens/SettingsScreen.tsx` | 12 |
@@ -472,14 +471,14 @@ The tasks run in order: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15. Ea
 | 3 L1 resolver, latch predicate, bodies, counts | 1, 2 | `opus`, xhigh | Figure 5 and the three unknown-node cases (R2) |
 | 4 L1 route decisions and view | 1, 2, 3 | `opus`, high | The key over every safety fact, and the POST's rule order |
 | 5 Connection-bound identity | 3 (the `CollectCurrentNode` assignability pin) | `opus`, xhigh | The node the Settings arm binds to; split from the executor so each has its own review |
-| 6 Persistence | 2 | `opus`, xhigh | Journal before database, one writer, no insert of an absent row |
+| 6 Persistence | 2, 3 (`collectLaneEffective`, tests only) | `opus`, xhigh | Journal before database, one writer, no insert of an absent row |
 | 7 Executor's final re-read and the latch helper | 3, 5, 6 | `opus`, xhigh | The destructive decision; `watch.ts`'s port changes must ride it to compile |
 | 8 Lane wiring | 5, 6, 7 | `opus`, xhigh | The pass's latch (R3), the epoch-move clear, the job's epoch, warn latches, counts |
 | 9 The route and its mandatory censuses | 4, 5, 6, 7, 8 | `opus`, xhigh | `SESSION_ONLY`, the CLAUDE.md sentence, the gate counts and the skill `EXEMPT` entries must land with the route, or the commit is red |
 | 10 Pins | 6, 7, 8, 9 | `opus`, high | Single writer, single journal, single resolver, skill silence |
 | 11 PWA data | 1 | `sonnet`, high | Client, hook, readers, shared 404/501 helper, words; split from 12 so each fits one implementer |
 | 12 PWA section | 11 | `opus`, high | The confirm sheet and the pre-latch Off policy are safety copy |
-| 13 `ccd/ccrc` and `db.ts` wording | 6 | `sonnet`, high | R9, pinned against the real `ccrc` in fixture HOMEs |
+| 13 `ccd/ccrc` and `db.ts` wording | 6, 10 (its `single-definition.test.ts` block goes after Task 10's) | `sonnet`, high | R9, pinned against the real `ccrc` in fixture HOMEs |
 | 14 Docs and carries | 1 to 13 | `sonnet`, high | README, both specs, "§17 as built", CLAUDE.md, items 38 and 40 |
 | 15 Whole-branch verification and the PR | 0 to 14 | `sonnet`, high | The wave-done's `suite:` line |
 
@@ -867,7 +866,7 @@ export function collectLaneCaps(state: FleetState | undefined): CollectLaneCaps;
   - `private collectControlNote(r: CollectLaneSettled): void` (Task 8: R16's warn latches over `collectControlWarned`, called first from the port's `flipped`);
   - `private collectLatchNote(o: CollectLatchOutcome): void` (Task 8: R16's extension, one warn per non-success latch kind over `collectControlWarned`, fed by the pass's latch, cleared on `retired`).
 - **Wiring:**
-  - `runInventory`: the remote arm gets `fleet: { io, state, identity: this.deps.fleetIdentity }`; the local arm gets `ownIdentity: this.deps.fleetIdentity` (Task 5).
+  - `runInventory`: the remote arm gets `fleet: { io, state, identity: this.deps.fleetIdentity }`; `ownIdentity` is `cfg.fleetMode === 'remote' ? undefined : this.deps.fleetIdentity`, so only the local arm's own sweep publishes into the cell (Task 5; the unconditional form is mutation T5.17).
   - `collectAct`'s deps gain `control: this.collectControlDeps(coord)` and `link: this.deps.fleetIdentity ?? NO_FLEET_IDENTITY` (Task 7).
   - `collectAct` queues `{ id, epoch }`, with `epoch` captured outside the queue callback. In Task 7 it is the link's `epochNow()` at queue time; in Task 8 it is `collectSeenEpoch` (R37).
 
@@ -10161,8 +10160,8 @@ Name these departures, by slug, in the wave-done: `epoch-with-pause-reports-the-
   private collectControlWarned = new Set<string>();
   FleetWatcher.currentCollectCounts(): CollectLaneCounts | null;          // null while collectPop === null (R12, R26)
   private collectAttentionInput(): Parameters<typeof collectAttentionItems>[0];
-  private collectControlNote(r: CollectLaneSettled): void;
-  private collectLatchNote(o: CollectLatchOutcome): void;                 // R16's extension: the latch outcomes' warns               // R16's latches (an Interface addition)
+  private collectControlNote(r: CollectLaneSettled): void;                // R16's latches (an Interface addition)
+  private collectLatchNote(o: CollectLatchOutcome): void;                 // R16's extension: the latch outcomes' warns
   // server/test/collectLaneFixture.ts (rig members, additive)
   identity: FleetIdentityCell;
   laneJournal: CollectLaneJournal & { readonly logPath: string };        // the rig's deps.collectLane.journal
@@ -10899,7 +10898,8 @@ insert:
   /** THE SWITCH'S WARN LATCHES (path-identity spec 2026-10-12 §5.5), called first from the port's `flipped`, which every
    *  settled resolution passes through: a safety stop warns once per reason, and a legacy file re-created after its latch
    *  warns once, so a stuck read state is said once rather than on every act job. A coherent resolution (live or
-   *  shadowed) clears every latch but the one it raises again and the latch helper's own (`latch-…`, `collectLatchNote`), as the stall-settings latch re-arms when a read applies.
+   *  shadowed) clears every latch but the one it raises again and the latch helper's own (`latch-…`,
+   *  `collectLatchNote`), as the stall-settings latch re-arms when a read applies.
    *  The stopped arms (pause, unlistable, epoch, unknown fleet) never reach it, and change none. It decides nothing about
    *  the lane: the resolution is L1's. */
   private collectControlNote(r: CollectLaneSettled): void {
@@ -12495,7 +12495,7 @@ Check the block against the placement trap before moving on. This must print `0`
 awk '/\/\*\* `GET`\/`POST \/api\/coord\/collect-lane`/,/app.get\(.\/api\/coord\/collect-lane./' server/src/coord/routes.ts | grep -ci 'phone\|requireMailToken(\|checkMailToken('
 ```
 
-The kebab literals the block spells are `'bad-request'`, `'sign-in-unarmed'`, `'state-unmeasurable'`, `'marker-still-controls'`, `'not-coherent'`, `'write-failed'` and `'flag-off'`. Each is admitted by `isCollectLaneRefusal`, by `isCollectLaneKebab` (Task 6) or by `isStallSettingsKebab`. Every kebab word in the docstring is backticked.
+The kebab literals the block spells are `'bad-request'`, `'sign-in-unarmed'`, `'state-unmeasurable'`, `'marker-still-controls'`, `'not-coherent'`, `'write-failed'`, `'not-configured'` (the two journal-read narrowings) and `'flag-off'`. Each is admitted by `isCollectLaneRefusal`, by `isCollectLaneKebab` (Task 6) or by `isStallSettingsKebab`. Every kebab word in the docstring is backticked.
 
 (c) `server/src/auth/gate.ts`, line 8. Replace ` * THE GATE. One \`onRequest\` hook stands in front of all 94 routes, the static` with ` * THE GATE. One \`onRequest\` hook stands in front of all 96 routes, the static`. Nothing else in `gate.ts` changes. The `EXEMPT` table gains no row.
 
@@ -13322,7 +13322,7 @@ EOF
   - The 404/501 decision is shared with the stall section through one helper, with no change to stall behaviour.
   - No announcement goes in the apply sheet or the rollout report. This task touches neither.
 - **R32: the PWA's details.**
-  - Off is disabled whenever `marker.latch` is not `set`, and its note follows the listing.
+  - Off is disabled whenever `marker.latch` is not `set`, and its note follows the listing. A latch that did not read (`unmeasured`: the row or the journal is unmeasurable, so the lane is safety-stopped and the legacy file arms nothing) gets the unmeasured line whatever the listing shows, never the spec's "still controls" sentence (`collect-off-note-unmeasured-latch-claims-no-control`).
   - "Confirm Live again" is offered for a stored Live for another node, or for a control mismatch.
   - The shared helper lives at `pwa/src/lib/notAvailable.ts`.
 - **R38: the GET's answers.**
@@ -14911,7 +14911,8 @@ Name these departures, by slug, in the wave-done:
 - `collect-words-carry-the-sections-copy`;
 - `collect-words-totality-pin-in-a-test-d-file`;
 - `collect-view-reader-checks-armed-by-agrees`;
-- `collect-confirm-lines-name-the-pause`.
+- `collect-confirm-lines-name-the-pause`;
+- `collect-off-note-unmeasured-latch-claims-no-control` (R32 maps the note by the listing; a latch that did not read gets the unmeasured line whatever the listing shows).
 
 ---
 
@@ -14938,7 +14939,7 @@ Name these departures, by slug, in the wave-done:
   - The 404/501 decision is shared through Task 11's helper.
   - No announcement goes in the update apply sheet or the rollout report. `UpdateMoveSheet.tsx` and `ccd/ccrc` are untouched.
 - **R32.**
-  - Off is disabled whenever `marker.latch` is not `set`, and its note follows the listing (`collectOffNote`).
+  - Off is disabled whenever `marker.latch` is not `set`, and its note follows the listing, or is the unmeasured line when the latch did not read (`collectOffNote`).
   - "Confirm Live again" is offered for another node's Live or a mismatch (`collectOffersReconfirm`).
 - **R34.** The 200's `notice` is shown. It is `null` on every GET, so the next poll clears it.
 - **R38.** A GET 503 `state-unmeasurable` (an absent row) is drawn as Safety-stopped with the server's detail, never as a generic failure, and it offers no radio.
@@ -15647,9 +15648,9 @@ Then replace both `  spyStallWatch();` (inside `mount`) and `    spyStallWatch()
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-cd pwa && ./node_modules/.bin/vitest run test/collect-lane-section.test.tsx
-cd pwa && ./node_modules/.bin/vitest run test/settings-screen.test.tsx
-cd pwa && ./node_modules/.bin/vitest run test/box-token-card.test.tsx
+(cd pwa && ./node_modules/.bin/vitest run test/collect-lane-section.test.tsx)
+(cd pwa && ./node_modules/.bin/vitest run test/settings-screen.test.tsx)
+(cd pwa && ./node_modules/.bin/vitest run test/box-token-card.test.tsx)
 ```
 
 Run each line in the foreground with a timeout of at least 600000 ms. Expected:
@@ -16018,10 +16019,10 @@ Nothing else in `SettingsScreen.tsx` changes. In particular, it imports no `Quic
 - [ ] **Step 5: Run the tests to verify they pass**
 
 ```bash
-cd pwa && ./node_modules/.bin/vitest run test/collect-lane-section.test.tsx
-cd pwa && ./node_modules/.bin/vitest run test/settings-screen.test.tsx test/box-token-card.test.tsx
-cd pwa && ./node_modules/.bin/vitest run test/use-collect-lane-view.test.tsx test/collect-lane-words.test.ts test/not-available.test.ts test/use-stall-watch-view.test.tsx
-cd pwa && ./node_modules/.bin/vitest run test/update-move-sheet.test.tsx test/halt-banner.test.tsx test/app.test.tsx test/use-updates-view.test.tsx test/child-reclaim-banner.test.tsx
+(cd pwa && ./node_modules/.bin/vitest run test/collect-lane-section.test.tsx)
+(cd pwa && ./node_modules/.bin/vitest run test/settings-screen.test.tsx test/box-token-card.test.tsx)
+(cd pwa && ./node_modules/.bin/vitest run test/use-collect-lane-view.test.tsx test/collect-lane-words.test.ts test/not-available.test.ts test/use-stall-watch-view.test.tsx)
+(cd pwa && ./node_modules/.bin/vitest run test/update-move-sheet.test.tsx test/halt-banner.test.tsx test/app.test.tsx test/use-updates-view.test.tsx test/child-reclaim-banner.test.tsx)
 ```
 
 Expected: every file PASSES. Run each line in the foreground, with a timeout of at least 600000 ms.
@@ -16064,8 +16065,8 @@ The worker measures every red text. Where the measured text differs, it replaces
 - [ ] **Step 7: Typecheck and the server-side marker pin**
 
 ```bash
-cd pwa && ./node_modules/.bin/tsc --noEmit
-cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts -t 'live switch has no writer'
+(cd pwa && ./node_modules/.bin/tsc --noEmit)
+(cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts -t 'live switch has no writer')
 ```
 
 Expected:
@@ -16091,8 +16092,9 @@ precedence:
   counts line, the Off and Live radios checked from the stored choice,
   and "Confirm Live again" for another node's Live or a mismatch.
 
-Off is disabled while the legacy file's latch is unset, and its note
-follows the listing. Live goes out with no key. A 409 confirm-required
+Off is disabled until the legacy file's latch reads set, and its note
+follows the listing, or reads unmeasured when the latch did not read.
+Live goes out with no key. A 409 confirm-required
 or confirm-stale opens the sheet from the server's facts, and Set sends
 the server's key; a stale answer reopens the sheet with the fresh key.
 Off refused before the latch shows inline. Every other refusal toasts
@@ -17531,7 +17533,9 @@ the code keeps each:
 - **Step 6's order (§5.5).** Resolution and the flip come first, right after the final listing, as the file's flip
   did; the per-id checks follow, and no await stands between the final listing and the argv. Both `collect-v1` and
   `reclaim-pause-v1` are read again at step 6. The executor's flip word is now `switch-flip`. Warn latches are kept per
-  safety-stop reason and for a re-created file, and a coherent resolution re-arms them.
+  safety-stop reason and for a re-created file, and a coherent resolution re-arms them. A latch the store refuses,
+  fails or throws on before its append (a busy database) never rejects the job or the pass: the pass's outcome is
+  warned once per kind until the latch retires, and Off stays refused meanwhile.
 - **Local mode (§5.2).** The epoch is a constant 0, and the node is the server box's own, measured directly. The
   connection label is never identity.
 - **Storage (§5.2, §5.3).** The row's columns are camelCase (`choice`, `fleetNodeId`, `markerRetiredAt`, `generation`,

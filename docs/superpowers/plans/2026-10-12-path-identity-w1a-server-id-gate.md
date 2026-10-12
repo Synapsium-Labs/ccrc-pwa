@@ -9,7 +9,7 @@
 - **The registry readers can tell a refused id from an absent one.**
   - `readSessionRecord` answers `bad-id` before any listing. Every caller that acts on absence treats `bad-id` as unmeasured, never as absent.
   - `readRegistryMeasured` names its refused rows. It never reads or builds them, and it logs each one once.
-  - Every reader call site is classified: the 19 consumer sites, plus `readRegistry`'s own wrapper call. A census pins the classification.
+  - Every reader call site is classified: the 22 consumer sites (the 19 at `837a099c0`, plus the three reads Task 7 adds), plus `readRegistry`'s own wrapper call. A census pins the classification.
 - **Every request id is checked before it reaches an argv:** `knownId`'s 18 routes, `/ensure`, the cross-pool swap, `/stop`, `/swap`, `/kickoff`, `POST /api/runs` and the reclaim door.
 - **Every stored run row is re-checked where it enters an id-taking flow:**
   - dispatch;
@@ -326,6 +326,8 @@ Every file this wave touches, taken from each task's **Files** block. That block
 | `server/test/stored-row-id-gates.test.ts` (new) | 3 |
 | `server/test/single-read-bad-id.test.ts` (new) | 4 |
 | `server/test/registry.test.ts`, `coord-reclaim.test.ts`, `child-reclaim.test.ts`, `child-reclaim-spent.test.ts`, `child-reclaim-mark.test.ts` | 4 (`.found` literal shapes become `.kind`; any further file the compiler names) |
+| `server/test/child-reclaim-generation.test.ts` | 4 (the close's text pin follows `read.kind === 'found'`; slug `generation-pin-follows-kind`) |
+| `server/test/child-reclaim-generation.test.ts` | 4 (the one `read.found` text pin; slug `generation-pin-follows-kind`) |
 | `server/test/mail-routes.test.ts` | 4 (`'bad-id'` joins `NOT_CODES`) |
 | `server/test/registry-refused.test.ts` (new) | 5 |
 | `server/test/registry-refused-census.test.ts` (new) | 5, 6, 7, 8 |
@@ -340,8 +342,8 @@ Every file this wave touches, taken from each task's **Files** block. That block
 | `server/test/collect-id-pins.test.ts` (new) | 13 |
 | `server/test/ccd-stop-argv-order.test.ts` (new) | 14 |
 | `server/test/whitelist-subset.test.ts` | 14 (`EXPECTED`'s two stop rows, two `isExecAllowed` literals) |
-| `server/test/lifecycle.test.ts` | 14 (the six stop rows and two comments), 7 (only if a `listProjects` equality needs `registry`) |
-| `server/test/fleetws.test.ts` | 7 (only if the cold-start order pin names a fleet frame on an unlistable registry) |
+| `server/test/lifecycle.test.ts` | 14 (the six stop rows and two comments) |
+| `server/test/fleetws.test.ts` | 7 (the case `reports unmeasurable for BOTH markers when the registry cannot be listed` loses its `fleet` expectation) |
 | `server/test/fleet-health.test.ts` | 7 (two live-arm cases seed an empty registry directory; slug `fleet-health-fixtures-list-their-registry`) |
 | `server/test/id-argv-census.test.ts` (new) | 15 |
 | `README.md` | 16 (the stop prose, only if #351 merged before Task 0) |
@@ -356,14 +358,14 @@ The tasks run in order, Task 0 to Task 17. Each task is one commit on the worksp
 | 0 Entry conditions | — | `sonnet`, medium | Before any edit: the registry's charset (R4), the stored rows, #351's and run 400's state, and stop-surface's history |
 | 1 L0 predicate | 0 | `opus`, high | Every later gate types against it |
 | 2 Request-id routes | 1 | `opus`, high | Closes the console path first, and masks the reader arms behind `knownId` before they exist (R17) |
-| 3 Stored-row gates: dispatch, close, abandon | 1 | `opus`, xhigh | The destructive flows. Lands before the reader widening, so close's child gate and the resume bind are masked from birth (R17) |
+| 3 Stored-row gates: dispatch, close, abandon | 1, 2 | `opus`, xhigh | The destructive flows. Lands before the reader widening, so close's child gate and the resume bind are masked from birth (R17) |
 | 4 `SingleRead.kind` and 14 callers | 1–3 | `opus`, xhigh | One commit, because the type change breaks compile. Every absence-acting caller holds |
 | 5 `RegistryRead.refused` and the census | 4 | `opus`, high | Refused rows leave every reader at once. The census starts `unplaced` (R25) |
 | 6 The seven measured callers, and the pre-spawn read | 5 | `opus`, xhigh | Each caller holds, refuses or omits, placed. The pre-spawn read moves with the post-spawn clause (R18) |
 | 7 Three migrations | 5, 6 | `opus`, high | Fleet, projects and peers report what they could not measure (R12, R19) |
 | 8 The eight retained callers | 2, 5, 7 | `sonnet`, high | Pins only, plus zero `unplaced` |
 | 9 `POST /api/runs` and the reclaim door | 4 | `opus`, high | The request ingress and the stored claimant (R5, R8, R21) |
-| 10 The routing door | 1 | `sonnet`, high | One predicate swap and its pins |
+| 10 The routing door | 1, 2, 3, 9 | `sonnet`, high | One predicate swap and its pins |
 | 11 The advance gate | 1, 6 | `sonnet`, high | Before `verifyDone`, so no rejection mail is sent to a bad id |
 | 12 The expiry boundary | 1 | `sonnet`, high | Two guards in a file #351 shares |
 | 13 Collector pins | 1 | `sonnet`, medium | No source change (R10) |
@@ -429,7 +431,6 @@ export type CloseOutcome    = /* …today's members… */ | { ok: false; kind: '
 ```
 - `abandonMove` and `abandonRefusal` keep their signatures and code. `abandonRefusal`'s docstring gains one sentence for R6.
 - `childGateAtClose` becomes exported (Task 4, R17 as amended). Its signature is unchanged: `export async function childGateAtClose(deps: CloseRunDeps, run: RunRow, sessionId: string, siblings: OpenSiblingsResult, final: boolean, state: 'done' | 'failed', verifiedLine: CcdPrLine | null): Promise<ChildGate>`. `ChildGate` stays module-private, and the function's one caller outside `close.ts` is its pin.
-- `childGateAtClose` (Task 4) becomes `export async function childGateAtClose(deps: CloseRunDeps, run: RunRow, sessionId: string, siblings: OpenSiblingsResult, final: boolean, state: 'done' | 'failed', verifiedLine: CcdPrLine | null): Promise<ChildGate>`. Its signature is unchanged. It is exported for its direct pin (R17 amendment), and `ChildGate` stays module-private.
 - `CloseOutcome.released`'s docstring today lists four ways to get `false`. It gains a fifth: "5. an ABANDON of a run whose stored `sessionId` is not a registry id: NO fleet act, the same as (4), but the run HAD a session id."
 
 **L3, `server/src/lifecycle.ts`** (Task 7):
@@ -491,7 +492,6 @@ export const EDGE_ACCEPTED_IDS: readonly string[];   // ['a--actor', 'a.--actor'
 `server/test/idGateFixture.ts` (Task 2; Task 3 adds `storedRun`):
 ```ts
 export const ID_GATE_TOKEN: string;   // 'f'.repeat(64): the box token appFor builds every server with (send it as x-ccrc-mail-token)
-export const ID_GATE_TOKEN: string;   // 'f'.repeat(64): the box token appFor builds every server with
 export function seedRow(home: string, id: string, fields?: Record<string, string>): void;   // coord-abandon.test.ts's `seed` shape, any id
 export function recorder(cfg?: { fail?: ReadonlySet<string> }): { run: Runner; calls: string[][] };
 export function appFor(home: string, run: Runner, over?: Partial<Omit<Deps, 'cfg'>>): Promise<{ app: FastifyInstance; coord: CoordStore; cfg: CcrcConfig }>;
@@ -1098,9 +1098,9 @@ becomes a derived alias, so the store is not edited, and isTmpRootId stays a
 function whose body calls isRegistryId, so the collector accepts the same set
 (its suites pass unchanged). A new test file pins the predicate's answers on
 the collector's table and the dash ids. A shared case list holds the ids the
-later gate tests plant. single-definition pins the pair's one definer, no re-derivation split
-across lines, the
-derived body and the alias.
+later gate tests plant. single-definition pins the pair's one definer,
+the derived body and the alias, and that no file re-derives the rule,
+even split across lines.
 MSG
 )"
 ```
@@ -2672,7 +2672,7 @@ grep -rnE "\bread\.found\b|incoming\.found\b|reason === 'unlistable'" server/src
 
 - A different count or line is not a departure: re-point by content and record it.
 - A missing Task 1–3 name is a STOP: `entry-not-met`.
-- If run 400 has merged and changed `mail-routes.test.ts`'s `NOT_CODES`, re-point Step 5 (h) by content (R30).
+- If run 400 has merged and changed `mail-routes.test.ts`'s `NOT_CODES`, re-point Step 5 (f) by content (R30).
 
 - [ ] **Step 1: Write the failing tests: `server/test/single-read-bad-id.test.ts`**
 
@@ -9331,7 +9331,7 @@ MSG
 
 ### Task 14: stop's builder order
 
-**Model routing:** `opus`, effort `high`. This is the one positional redirect in the server's argv set, and it is pinned on the real binary. The server's id gates already refuse an id spelled `--surface` before either builder runs: `/stop` through `readSessionRecord`'s `bad-id` (Task 4), and the archive door through `knownId` (Task 2). This task reorders the builders so that the argv itself refuses such an id. It is the second lock for an id or a project spelled `--surface`, and it also covers any future caller of `stopId`. It does not close a legacy registry field spelled `--surface=<word>` in the pair form: that gap is carried to W1b's stop loop (`stop-pair-registry-field-redirect`, Task 16).
+**Model routing:** `opus`, effort `high`. This is the one positional redirect in the server's argv set, and it is pinned on the real binary. The server's id gates already refuse an id spelled `--surface` before either builder runs: `/stop` through `readSessionRecord`'s `bad-id` (Task 4), and the archive door through `knownId` (Task 2). This task reorders the builders so that the argv itself refuses such an id. It is the second lock for an id spelled `--surface`, and the only lock for a legacy row's `.project` spelled `--surface`, a field no id gate reads. It also covers any future caller of `stopId`. It does not close a legacy registry field spelled `--surface=<word>` in the pair form: that gap is carried to W1b's stop loop (`stop-pair-registry-field-redirect`, Task 16).
 
 **Why:** spec §2.3 says the stop builders move to `['stop', '--surface', surface, id]` and `['stop', '--surface', surface, w, p]`. Spec §2.4 gives the reason: with the id first, `cmd_stop`'s loop cannot tell an id spelled `--surface` from the key. R14 binds the two shapes, and every pin of today's order is updated in this same commit. README's two stop prose lines are Task 16's, under R14's condition, and this task does not touch them.
 
@@ -10564,7 +10564,7 @@ turns the suite red."
 - **R7 and R3.** The spec is not edited. Its §2.3 corrections are recorded here instead: `knownId` is not the one choke point, and the watches omit a refused id rather than keep its earlier state.
 - **R1, R17 (as amended), R18, R19, R20 and Task 3.** Each departure these name is listed by slug, and none gets a number. The departures are `registry-id-at-foot`, `masked-arms-pinned-by-their-masks`, `fleet-fallback-is-tests-only`, `cold-start-skips-an-unmeasured-fleet`, `bad-id-is-not-a-code` and `resume-dispatch-refuses-not-holds`.
 - **R13.** The answers table is restated as built.
-- **R14 and R24, plus Task 16's own carried lines.** These are README's stop prose (when it is not edited here), the coordinator skill's rows, the abandon sheet, the reclaim sheet, a stored work-run `project`, the parity rows on the real binary, the rename, a flag-shaped registry field in stop's pair form, and SEC2 C and D.
+- **R14 and R24, plus Task 16's own carried lines.** These are README's stop prose (when it is not edited here), the coordinator skill's rows, the abandon sheet, the reclaim sheet, a stored work-run `project`, the parity rows on the real binary, the rename, a flag-shaped registry field in stop's pair form, the expiry lane's words for the executor's own refusal, the prose that still calls `POST /api/runs` unguarded, and SEC2 C and D.
 
 **Files:**
 - Modify: `docs/superpowers/plans/2026-10-12-path-identity-w1a-server-id-gate.md`. APPEND the section `## As built (W1a, run 399)` after the last line of the file. That line closes `## Deviations found`, whose last subsection is `### Plan-text corrections and extra pins, one number per task`. Nothing above it is edited, including `## Deviations found` (the coordinator owns it until the fix round).
@@ -11071,8 +11071,10 @@ It lists the 23 classified registry reader sites, the masked arms and
 their masks, and the answers this wave adds. It also lists the carried
 lines: the coordinator skill's bad-session rows, the abandon sheet's
 reading of an omitted fleet act, the reclaim sheet's dropped bad-session
-detail, a stored work-run project reaching ws-add, the real-binary parity
-rows, the alias's rename, and SEC2 C and D.
+detail, a stored work-run project reaching ws-add, a flag-shaped registry
+field in stop's pair form, the expiry lane's words for a server refusal,
+prose that predates the id gate, the real-binary parity rows, the alias's
+rename, and SEC2 C and D.
 Departures are named by slug and carry no number.
 
 README's two stop prose lines spell the leading order when #351 had

