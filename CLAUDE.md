@@ -11,6 +11,21 @@ spec → plan → subagent execution with per-PR review lenses + whole-branch pa
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
+## This repository is public — nothing private goes in it
+Everything here is public: code, test fixtures, docs, commit messages, branch names, issues, PRs and comments.
+Sessions working in other projects often file ccrc issues and PRs about what they saw on a fleet. Describe the
+behaviour, not the deployment. Never include:
+- names of other projects, products, clients or programmes, or of workspaces built from them;
+- lane, account or login names (new test fixtures use neutral ones, such as `lane-a`);
+- hostnames, IP addresses, tailnet names, cloud volume IDs or absolute home paths;
+- other private repositories, or their branches, PR numbers or issue numbers;
+- links to private trackers, or their ticket IDs (refer to ccrc work by its GitHub `#n`);
+- commercial or legal matters of any deployment;
+- people's names, emails or secrets.
+
+Use neutral stand-ins instead, such as `project-a`, `lane-a`, `the fleet box` or `<projects-root>`. Check the text before posting:
+GitHub keeps every revision of an edited issue, PR or comment, and its API cannot delete them.
+
 ## Two-box topology (the single most load-bearing fact)
 Two physical boxes; the live server runs `CCRC_FLEET=remote` as standing config. This section speaks ROLES —
 real values: `deploy/reference-fleet.md` (gitignored).

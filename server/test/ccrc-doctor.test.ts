@@ -1035,6 +1035,21 @@ function runDoctor(home: string, args: string[] = ['doctor'], extraEnv: NodeJS.P
  *  `_check_skills`' subject. One list for `healthy()` and `healthyCodexBox()`. */
 const SHIPPED_SKILLS = [['coordinator-skill', 'ccrc-coordinator'], ['worker-skill', 'ccrc-worker'], ['reviewer-skill', 'ccrc-reviewer']] as const;
 
+/** `python3 -I -c <program>` for the two programs `_check_box-token` runs (`_BT_PY_STATE`, `_BT_PY_FLEET` in
+ *  `ccd/ccrc-doctor-checks`), handed to the real interpreter; the text is read from the shipped file so a third or an
+ *  edited program still reaches the stub's bare `exit 0`. Empty when this box has no python3 (the check then says so). */
+const BT_PY_ARM = ((): string => {
+  const real = spawnSync('bash', ['-c', 'command -v python3'], { encoding: 'utf8' }).stdout.trim();
+  if (real === '') return '';
+  const src = readFileSync(join(REPO, 'ccd', 'ccrc-doctor-checks'), 'utf8');
+  const progs = ['_BT_PY_STATE', '_BT_PY_FLEET'].map((n) => {
+    const m = new RegExp(`^${n}='([^']*)'$`, 'm').exec(src);
+    if (!m) throw new Error(`ccd/ccrc-doctor-checks no longer holds ${n}='…' in the shape this stub reads`);
+    return `'${m[1]}'`;
+  });
+  return `if [ "$1" = "-I" ] && [ "$2" = "-c" ]; then case "$3" in ${progs.join('|')}) exec '${real}' "$@" ;; esac; fi\n`;
+})();
+
 /** A box where every check passes. Each per-check test starts here and breaks
  *  exactly ONE thing, so a red line is attributable to that one removal. */
 function healthy(prefix: string): string {
@@ -1047,7 +1062,11 @@ function healthy(prefix: string): string {
   containedPath(home);   // plant the poisoned gh FIRST; ghStub overwrites it below
   writePkg(home, '>=1.0.0');
   stubNode(home, 'v22.20.0');
-  for (const b of ['python3', 'flock']) stub(home, b, 'exit 0');
+  stub(home, 'flock', 'exit 0');
+  // `python3` is a presence stub, except for the box-token check's two JSON readers, which go to the real interpreter
+  // by EXACT program text (read from the shipped checks file): a stub that prints nothing makes them read `state-unreadable`
+  // and `sync-unreadable`, which are FAIL and WARN now that the arms are on.
+  stub(home, 'python3', `${BT_PY_ARM}exit 0`);
   // jq is REAL here, not a presence stub (Stage 4, Task 9): `_check_build`
   // reads the box's stamp through ccrc's one parser (`_box_build_fields`),
   // which parses with jq — a stub that exits 0 printing nothing would make
@@ -13696,10 +13715,12 @@ describe('ccrc doctor: history — the relay (O15: every word, and the one rule 
   });
 });
 
-// ── box-token, through `ccrc doctor` (box-token lifecycle Task B5) ────────
-// The check's states are `doctor-box-token.test.ts`'s; these two pin what only the real runner can: that the
-// check is in the table, that its SKIP is counted as a skip (exactly one SKIP line, rc 3), and that a
-// `CCRC_ROLE=server` box runs the server arm rather than the D-3111 "hosts no sessions" skip.
+// ── box-token, through `ccrc doctor` (box-token lifecycle Task B5; armed by row 2a) ────────
+// The check's states are `doctor-box-token.test.ts`'s; these pin what only the real runner can: that the check is
+// in the table, that a no-role box is counted as a skip (exactly one SKIP line, rc 3), that a `CCRC_ROLE=server` box
+// runs the server arm rather than the D-3111 "hosts no sessions" skip, and that the armed classes reach the runner:
+// a fresh server (no token, no state: 4553, D-139) is a PASS with its sentence, no remedy line and no change to doctor's
+// exit code, and a server that lost its token (a state file beside it) is a FAIL, which does move it.
 describe('ccrc doctor: box-token', () => {
   it('healthy() records no role and holds no token file: one SKIP no-role line, counted as a skip, rc 0', () => {
     const r = runDoctor(healthy('ccrc-doctor-bt-norole-'));
@@ -13710,12 +13731,40 @@ describe('ccrc doctor: box-token', () => {
     expect(r.code).toBe(0);
   });
 
-  it('a CCRC_ROLE=server box with no mail.token runs the server arm: token-absent, reported as SKIP in wave 1', () => {
+  it('a CCRC_ROLE=server box with no mail.token and no state runs the server arm: a fresh box, PASS with its sentence and no remedy line, rc 0', () => {
     const home = healthy('ccrc-doctor-bt-server-');
     writeCcrcEnv(home, ['CCRC_ROLE=server', 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
-    const line = anyVerdictFor(runDoctor(home).stdout, 'box-token');
-    expect(line).toMatch(/^SKIP box-token: server: token-absent — .*; reported as SKIP until the FAIL and WARN arms ship$/);
+    const r = runDoctor(home);
+    const line = anyVerdictFor(r.stdout, 'box-token');
+    expect(line).toMatch(/^PASS box-token: server: token-absent — .* no value has been minted here yet, and the server mints one at boot$/);
     expect(line).not.toMatch(/hosts no sessions/);
+    expect(line).not.toMatch(/switched off/);
+    expect(r.stdout).not.toMatch(/^(WARN|FAIL) box-token: /m);
+    expect(r.stdout).not.toMatch(/remedy:[^\n]*mints a value at boot/);
+    expect(r.code).toBe(0);
+  });
+
+  it('a CCRC_ROLE=server box that lost its mail.token but keeps a state file is a FAIL with a remedy line, and doctor exits 1', () => {
+    const home = healthy('ccrc-doctor-bt-lost-');
+    writeCcrcEnv(home, ['CCRC_ROLE=server', 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
+    // A VALID state (the shape `doctor-box-token.test.ts`'s `healthyState` plants), so the FAIL comes from token-absent
+    // alone: under an unreadable one, "state-unreadable" would also hold the line at FAIL.
+    const t = Date.now(), m = 60_000, id = '0123456789abcdef';
+    writeFileSync(join(home, '.ccrc', 'box-token.json'), JSON.stringify({
+      v: 1, origin: 'rotated', rotationOwed: false, owedWhy: null,
+      current: { id, seq: 2, since: t - 60 * m, write: { dev: 1, ino: 2, writtenAtMs: t - 60 * m } },
+      pending: [], previous: null, promoting: null, recovering: null,
+      fleetConfirmed: id, nextSeq: 3, lastRotationAt: t - 60 * m,
+      failures: 0, lastFailure: null, hold: null, holdNode: null,
+      lastSync: { at: t - 60 * m, word: 'synced', transport: 'https' },
+      counters: { previousPresented: 0, retiredPresented: 0 },
+      retiredRefusedAt: t - 50 * m, mintFailedAt: null, lastBootRecovery: null,
+    }), { mode: 0o600 });
+    const r = runDoctor(home);
+    expect(anyVerdictFor(r.stdout, 'box-token')).toMatch(/^FAIL box-token: server: token-absent — /);
+    expect(anyVerdictFor(r.stdout, 'box-token')).not.toContain('state-');
+    expect(lineAfter(r.stdout, 'FAIL box-token: ')).toMatch(/^ {2}remedy: \S/);
+    expect(r.code).toBe(1);
   });
 });
 
