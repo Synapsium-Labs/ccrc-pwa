@@ -1894,6 +1894,14 @@ export function registerCoordRoutes(
     // Forward motion toward a review claim re-measures; retreating to
     // `working` does not — see this route's own docstring.
     if (to === 'awaiting-review' || to === 'merging') {
+      // Spec §2.3: a STORED sessionId is re-checked where the row enters an
+      // id-taking flow. `verifyDone` composes `pr-state --session <id>`, and a
+      // refusal from it records a rejection and queues mail to that id, so
+      // this check stands before it and outside it. A row written before
+      // POST /api/runs checked its ids can hold an id ccd would read as a
+      // flag. Retreating to `working` composes no argv, so such a row can
+      // still be sent back: the check guards this block alone.
+      if (!isRegistryId(run.sessionId)) return reply.code(409).send({ ok: false, reject: { code: 'bad-session' } });
       const verdict = await verifyDone(
         { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
         { sessionId: run.sessionId, project: run.project, branch: run.branch ?? '' },
