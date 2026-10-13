@@ -1745,6 +1745,39 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     merged.
   - **It does NOT license merging the current head `6f1942bbc`:** the operator's 01:50 ruling puts the seal and F2's
     fix into this fix round, before the merge.
+- **2026-10-13 02:44 — review 401 accepted and ruled (keen-canyon's 4483). Run 358 is back at `working`; fix round 5 is
+  sent (mail 4484).**
+  - **The review:** report `.superpowers/sdd/coordinator-evidence/run358/review-401-6f1942bb.md`, with its probes,
+    panel output and mutation lines.
+    - The held-out panel ran 27 agents: 0 unverified, 0 refuted, 8 findings confirmed and merged into F1–F5. The
+      reviewer added F6 and F7, each with three refuters.
+    - All 58 mutation rows were measured: the worker's 43 plus 15 for 4286's list. 56 are red. X2 is green, which is
+      F6; X9 is green and apparently an equivalent mutant, which is F7.
+    - The full suite is CI run 38304571039: 664 files green.
+    - 4266's trace and every crash boundary are closed. The migration, encoding, merge and 4288 items found nothing.
+    - Review run 401 closed `done`.
+  - **R1, residual (7) (4916):** classified as the F1/4266 class. It closes by the OPERATOR's seal.
+    - Migration 19 gains `sealed`, edited in place while it is unmerged.
+    - A generation-checked seal writer runs only when nothing is in flight or pending, the state is durably clean, the
+      held key equals the committed key, and this process has landed a write.
+    - A SIGTERM/SIGINT handler in `index.ts` seals within a bound and keeps today's exit semantics.
+    - A start trusts only `sealed`.
+    - The unseal is EAGER: my refinement, which narrows review 401's residual (a) to a process none of whose writes
+      ever lands.
+    - Nothing acts, and the `unchanged` fast path does not run, until a write of this process has landed.
+    - The cost of an unclean exit is named as a cost, not a residual.
+  - **R2, F2 (important):** a hold the pass has computed is never dropped by an exception; the review's P7 probe is
+    pinned red-first.
+  - **R3–R6:**
+    - F1 and F3–F5 are words; a conservative seed holds only with two or more unreleased claimants.
+    - F6 gets a pin for the staged delete on the act path.
+    - X9 is re-measured after R1.6.
+  - **Number 4916** was allocated for the seal. Rulings: `fix-round-5-rulings.md`.
+  - **Claims:** `server/src/index.ts` is under calm-mesa's claim 1218 (run 400), so a consent was requested (4485). The
+    worker waits for it before touching `index.ts`. README stays under claim 1204 (run 398, bright-river); any README
+    words are asked for first.
+  - Both lanes remain SHADOWED. After this round: a re-measured wave-done, a scoped review, green required checks, then
+    the operator-authorized admin merge.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
