@@ -331,15 +331,27 @@ export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: s
   // A degraded row must never answer 'dead' — the interrupt route's own
   // "not busy" refusal reads THIS, and reporting dead-by-drop on a session
   // this read simply could not measure would let it refuse an interrupt on a
-  // plainly busy one. `!read.found` (genuinely absent, or the whole
-  // directory unlistable) is still 'dead': there is no pane to ask about
-  // either way, the same answer this gave before the ladder existed.
+  // plainly busy one. `absent` and `unlistable` (genuinely absent, or the
+  // whole directory unlistable) are still 'dead': there is no pane to ask
+  // about either way, the same answer this gave before the ladder existed.
   // D-309 (was D-B8-13): `hasSession` here deliberately collapses `unknown` into 'dead' —
   // which this route turns into a REFUSED interrupt, the safe direction this
   // function's own comment above already argues for. Splitting the pair for
   // the operator's view is the substrate-unreachable spec's job (a state word
   // through shared/server/pwa), not a guard's.
-  if (!read.found || !(await tmux.hasSession(id))) return 'dead';
+  switch (read.kind) {
+    case 'found': break;
+    case 'absent': case 'unlistable': return 'dead';
+    // Masked by `knownId` (spec §2.3): `POST /api/sessions/:id/interrupt`,
+    // this function's one consumer, refuses an id `isRegistryId` refuses
+    // before it calls here. 'dead' all the same: it refuses the interrupt.
+    case 'bad-id': return 'dead';
+    default: {
+      const _x: never = read;
+      return _x;
+    }
+  }
+  if (!(await tmux.hasSession(id))) return 'dead';
   const rec = read.record;
   const pid = await tmux.panePid(id);
   // Unmeasured wrapper => 'idle', via the EXISTING `!cfgDir` fallback: a

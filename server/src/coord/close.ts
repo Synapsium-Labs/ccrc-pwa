@@ -794,22 +794,48 @@ const NO_CHILD_GATE: ChildGate = { decision: { reclaim: false, why: 'not-a-child
  * `verifyDone`), falls back to fetching fresh, exactly as before this task —
  * the fetch is still a live read taken inside this same mutex section, so a
  * PR opened in the gap can only HOLD the child, never make one vanish.
+ *
+ * A NON-REGISTRY ID (path identity, spec §2.3) reads `unreadable`, never
+ * `none`. `readSessionRecord` answers `bad-id` before any listing. The
+ * `absent` arm's re-listing would find nothing for an id nothing lists, and
+ * would answer `not-a-child`, a verdict nobody measured. No second listing is
+ * taken, and the coordination fence gets a `null` uuid. `closeRun` checks the
+ * stored id on every arm before it gets here, so no close reaches this arm
+ * today.
+ *
+ * EXPORTED FOR ITS PIN, and for nothing else: no file outside `close.ts`
+ * calls it. Spec §2.3 asks for a pin at each absence-acting caller, and with
+ * the arm masked no flow can reach it, so the pin calls this function directly
+ * (`single-read-bad-id.test.ts`).
  */
-async function childGateAtClose(
+export async function childGateAtClose(
   deps: CloseRunDeps, run: RunRow, sessionId: string, siblings: OpenSiblingsResult,
   final: boolean, state: 'done' | 'failed', verifiedLine: CcdPrLine | null,
 ): Promise<ChildGate> {
   const read = await readSessionRecord(deps.io, deps.cfg, sessionId);
   let mark: ChildMark;
-  if (read.found) {
-    mark = read.record.child;
-  } else if (read.reason === 'unlistable') {
-    mark = { kind: 'unreadable' };
-  } else {
-    // A6/P5: `absent` is re-listed once, folding ONLY `.child` (never
-    // `.uuid`) — the close's own question, distinct from the executor's.
-    const listing = await childReclaimRowListing(deps, sessionId);
-    mark = listing.kind === 'unlistable' || listing.child ? { kind: 'unreadable' } : { kind: 'none' };
+  switch (read.kind) {
+    case 'found':
+      mark = read.record.child;
+      break;
+    case 'unlistable':
+      mark = { kind: 'unreadable' };
+      break;
+    case 'absent': {
+      // A6/P5: `absent` is re-listed once, folding ONLY `.child` (never
+      // `.uuid`) — the close's own question, distinct from the executor's.
+      const listing = await childReclaimRowListing(deps, sessionId);
+      mark = listing.kind === 'unlistable' || listing.child ? { kind: 'unreadable' } : { kind: 'none' };
+      break;
+    }
+    // Masked by `closeRun`'s stored-id checks; see the docstring.
+    case 'bad-id':
+      mark = { kind: 'unreadable' };
+      break;
+    default: {
+      const _x: never = read;
+      return _x;
+    }
   }
   const minting: ChildReclaimMinting = mark.kind === 'child' ? mintingRowOf(deps.coord, mark.runId) : { kind: 'absent' };
   const reviewed = reviewedRowOf(deps.coord, minting);
@@ -832,7 +858,7 @@ async function childGateAtClose(
     // The birth is told the row that this close read (spec §5.7): its own unfinished purge never unplaces it.
     // An unplaced birth with an earlier claim declines `has-coordinated` here. That is fail-safe: the sweep
     // judges the child again on its next pass.
-    hasCoordinated = childReclaimHasCoordinated(deps.coord, sessionId, Date.now(), read.found ? childReclaimRowUuid(read.record) : null);
+    hasCoordinated = childReclaimHasCoordinated(deps.coord, sessionId, Date.now(), read.kind === 'found' ? childReclaimRowUuid(read.record) : null);
   } catch (err) {
     console.warn(`ccrc-server: the coordination fence (childReclaimHasCoordinated) failed at close `
       + `(${err instanceof Error ? err.message : String(err)}) — ${sessionId}'s coordination history unreadable`);
@@ -846,7 +872,7 @@ async function childGateAtClose(
     retiresProgram: deps.coord.programOpenRunCount(run.program, run.id) === 0,
   };
   let decision = childReclaimDecision(input);
-  if (!decision.reclaim && decision.why === 'not-finished' && read.found && minting.kind === 'row') {
+  if (!decision.reclaim && decision.why === 'not-finished' && read.kind === 'found' && minting.kind === 'row') {
     // The minting row is guaranteed present here — `childReclaimDecision`
     // only answers `not-finished` past its own `minting.kind==='row'` check —
     // so `minting.sessionBornAt`/`minting.sessionBornFor`/

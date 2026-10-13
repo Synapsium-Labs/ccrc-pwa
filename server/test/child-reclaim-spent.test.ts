@@ -69,7 +69,7 @@ const harness = (
 };
 const recordOf = async (deps: ChildSpentDeps): Promise<SessionRecord> => {
   const r = await readSessionRecord(deps.io, deps.cfg, ID);
-  if (!r.found) throw new Error(`fixture row not found: ${r.reason}`);
+  if (r.kind !== 'found') throw new Error(`fixture row not found: ${r.kind}`);
   return r.record;
 };
 /** This child's birth — its minting run's `sessionBornAt` (migration 16) — for

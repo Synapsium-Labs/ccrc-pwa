@@ -1749,6 +1749,11 @@ export function registerCoordRoutes(
         return reply.code(409).send({ ok: false, refused: 'claimant-alive', by: r.by, detail: r.detail });
       case 'heir-is-a-worker':
         return reply.code(409).send({ ok: false, refused: 'heir-is-a-worker', by: r.by });
+      // Path identity (spec §2.3): the heir is not a registry id. That is a
+      // request defect, answered 400 in `POST /api/runs`' own word, before any
+      // listing. `detail` rides along because L1 measured it.
+      case 'bad-session':
+        return reply.code(400).send({ ok: false, error: 'bad-session', detail: r.detail });
       default: {
         const _exhaustive: never = r;
         return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });

@@ -1622,7 +1622,20 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // `registry.ts`'s `readSessionRecord`.
     readAsk: async (id: string) => {
       const read = await readSessionRecord(deps.io, deps.cfg, id);
-      if (!read.found) return null;
+      switch (read.kind) {
+        case 'found': break;
+        case 'absent': case 'unlistable': return null;
+        // Masked on both of its paths (spec §2.3): `knownId` refuses a
+        // non-registry id on `POST /api/sessions/:id/ask`, and on
+        // `POST /api/asks/:id/answer` `freshAskAt`'s own `bad-id` answers
+        // `child-unmeasurable` before `answerAsk` reaches this read. `null`,
+        // the safe word, all the same.
+        case 'bad-id': return null;
+        default: {
+          const _x: never = read;
+          return _x;
+        }
+      }
       // Display/connectivity — DEGRADE-AND-HEAL: an unmeasured uuid would
       // look up hookstate under a value that matches no real file, reading
       // as "no ask" rather than "we don't know" — null here is the honest
@@ -2088,11 +2101,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // the sheet's only remaining act would be to give up. Same split, and the
     // same two bodies, as `POST /api/sessions/:id/stop` below.
     const read = await readSessionRecord(deps.io, deps.cfg, id);
-    if (!read.found) {
-      return reply.code(read.reason === 'unlistable' ? 503 : 404).send({
-        ok: false,
-        error: read.reason === 'unlistable' ? 'registry-unmeasurable' : 'unknown-session',
-      });
+    switch (read.kind) {
+      case 'found': break;
+      case 'unlistable': return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+      case 'absent': return reply.code(404).send({ ok: false, error: 'unknown-session' });
+      // An id `isRegistryId` refuses (spec §2.3) is a malformed request, never an unknown session: 400 in
+      // this file's request-shape word, the one `isSafeSessionId` above answers.
+      case 'bad-id': return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+      default: {
+        const _x: never = read;
+        return reply.code(500).send({ ok: false, error: 'internal', kind: (_x as { kind: string }).kind });
+      }
     }
     const out = queueProgramKickoff({ coord }, id,
       { slug: kickoff.slug, title: kickoff.title }, kickoff.resume);
@@ -3015,19 +3034,26 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const { id } = req.params as { id: string };
     // C0.3: one session's own row, not the whole registry.
     const read = await readSessionRecord(deps.io, deps.cfg, id);
-    if (!read.found) {
-      // Fix (blocking review finding 3): `reason: 'unlistable'` is the SAME
-      // registry-unmeasurable fact the identity gate three lines below
-      // already answers 503 for — the whole-fleet cousin of a degraded row,
-      // and just as much not a proof this session is unknown ("404 would be
-      // a LIE" applies here too: the whole-fleet collapse proves nothing
-      // about THIS id one way or the other). Only `reason: 'absent'` — a
-      // listing that plainly does not name this id at all — earns the
-      // terminal unknown-session answer; a route that answered 404 for both
-      // would be reopening the exact overloaded-null this 503 gate exists
-      // to close, one branch over.
-      return reply.code(read.reason === 'unlistable' ? 503 : 404)
-        .send({ ok: false, error: read.reason === 'unlistable' ? 'registry-unmeasurable' : 'unknown-session' });
+    switch (read.kind) {
+      case 'found': break;
+      // Fix (blocking review finding 3): `unlistable` is the SAME
+      // registry-unmeasurable fact the identity gate below already answers
+      // 503 for — the whole-fleet cousin of a degraded row, and just as much
+      // not a proof this session is unknown ("404 would be a LIE" applies
+      // here too: the whole-fleet collapse proves nothing about THIS id one
+      // way or the other). Only `absent` — a listing that plainly does not
+      // name this id at all — earns the terminal unknown-session answer; a
+      // route that answered 404 for both would be reopening the exact
+      // overloaded-null this 503 gate exists to close, one branch over.
+      case 'unlistable': return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+      case 'absent': return reply.code(404).send({ ok: false, error: 'unknown-session' });
+      // This read is the ONLY gate in front of `stopArgvFor` (spec §2.3), so an id `isRegistryId` refuses
+      // is refused here, before any argv: 400, this file's request-shape word, never a proven absence's 404.
+      case 'bad-id': return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+      default: {
+        const _x: never = read;
+        return reply.code(500).send({ ok: false, error: 'internal', kind: (_x as { kind: string }).kind });
+      }
     }
     // REFUSE, not degrade: this is identity, and stopPair below RECOMPUTES a
     // wrapper/project pair from these very fields to kill a tmux session by
@@ -3156,9 +3182,16 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // not the fleet; the ladder is `/stop`'s because an unlistable registry
       // proves nothing about THIS id and 404 would be a lie.
       const read = await readSessionRecord(deps.io, deps.cfg, id);
-      if (!read.found) {
-        return reply.code(read.reason === 'unlistable' ? 503 : 404)
-          .send({ ok: false, error: read.reason === 'unlistable' ? 'registry-unmeasurable' : 'unknown-session' });
+      switch (read.kind) {
+        case 'found': break;
+        case 'unlistable': return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+        case 'absent': return reply.code(404).send({ ok: false, error: 'unknown-session' });
+        // The ordinary arm's id gate (spec §2.3): an id `isRegistryId` refuses is a malformed request.
+        case 'bad-id': return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+        default: {
+          const _x: never = read;
+          return reply.code(500).send({ ok: false, error: 'internal', kind: (_x as { kind: string }).kind });
+        }
       }
       const pool = poolFor(await readProjectPools(
         deps.io,
@@ -3325,9 +3358,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // below can only answer if the registry goes unreadable between the two reads (503 too). The identity fields are a
     // separate arm: an unmeasured one is refused rather than guessed at — the stop argv recomputes a tmux name from them.
     const read = await readSessionRecord(deps.io, deps.cfg, id);
-    if (!read.found) {
-      return reply.code(read.reason === 'unlistable' ? 503 : 404)
-        .send({ ok: false, error: read.reason === 'unlistable' ? 'registry-unmeasurable' : 'unknown-session' });
+    switch (read.kind) {
+      case 'found': break;
+      case 'unlistable': return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+      case 'absent': return reply.code(404).send({ ok: false, error: 'unknown-session' });
+      // Masked by `knownId` above (spec §2.3), which answers 404 for an id `isRegistryId` refuses before
+      // its listing. This arm answers the request-shape word all the same.
+      case 'bad-id': return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+      default: {
+        const _x: never = read;
+        return reply.code(500).send({ ok: false, error: 'internal', kind: (_x as { kind: string }).kind });
+      }
     }
     const identity = measuredIdentity(read.record);
     if (identity === null) return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });

@@ -31,19 +31,20 @@ interface Resolved {
 }
 
 /**
- * `resolve()`'s own three-way (registry ladder, Task 2) — same `ok`+`reason`
- * shape `SingleRead` (registry.ts) already draws, deliberately not a new
- * vocabulary. `ok: false, reason: 'unmeasurable'` covers BOTH of
+ * `resolve()`'s own three-way (registry ladder, Task 2) — `SingleRead`'s
+ * (registry.ts) answers folded into this stream's `ok`+`reason`, deliberately
+ * not a new vocabulary. `ok: false, reason: 'unmeasurable'` covers BOTH of
  * `SingleRead`'s own `unlistable` (the whole-directory collapse — the LARGER
  * cousin of a degraded row, and just as much not proof this session is
  * gone) and a listed-but-degraded identity triple (`measuredIdentity`
  * answering null): in either case this read simply could not say, so the
  * client is told to wait, never that the session is unknown.
  * `ok: false, reason: 'absent'` covers a PROVEN absence (`SingleRead`'s own
- * `absent`) and the wrapper/config-dir mapping gap this function has always
- * folded into the same answer (see its own comment below) — neither is
+ * `absent`), an id `isRegistryId` refuses (`SingleRead`'s `bad-id`, spec
+ * §2.3), and the wrapper/config-dir mapping gap this function has always
+ * folded into the same answer (see its own comment below) — none is
  * registry-unmeasurable, so retrying this same 2 s poll can never heal
- * either one.
+ * any of them.
  */
 type Resolution =
   | { ok: true; data: Resolved }
@@ -492,12 +493,23 @@ export class SessionStream {
     // C0.3: one session's own row, not the whole registry — this stream only
     // ever asks about `this.id`, every 2 s, for as long as the socket is open.
     const read = await readSessionRecord(this.deps.io, this.deps.cfg, this.id);
-    if (!read.found) {
+    switch (read.kind) {
+      case 'found': break;
       // `unlistable` is the SAME whole-fleet collapse `RegistryRead`'s own
       // `listed: false` types elsewhere in this build — it proves nothing
       // about whether THIS id exists, only that this read could not say.
       // Only a proven `absent` earns the terminal "unknown session".
-      return read.reason === 'unlistable' ? { ok: false, reason: 'unmeasurable' } : { ok: false, reason: 'absent' };
+      case 'unlistable': return { ok: false, reason: 'unmeasurable' };
+      case 'absent': return { ok: false, reason: 'absent' };
+      // An id `isRegistryId` refuses (spec §2.3) is terminal too: it never
+      // heals by polling, so no poll is installed. It answers exactly as
+      // `absent` does, by design, so folding it there changes nothing
+      // observable; its pin is `readSessionRecord`'s zero-listing case.
+      case 'bad-id': return { ok: false, reason: 'absent' };
+      default: {
+        const _x: never = read;
+        return _x;
+      }
     }
     // Display/connectivity — DEGRADE-AND-HEAL, not a refusal: a degraded
     // `uuid`/`workdir` would resolve `transcriptPath` against `''`, a path

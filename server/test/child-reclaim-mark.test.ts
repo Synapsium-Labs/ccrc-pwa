@@ -41,7 +41,7 @@ const cfg = () => loadConfig({ CCRC_HOME: home });
 const mark = (content: string): void => writeFileSync(path.join(reg, `${ID}.child`), content);
 const record = async (io: FleetIO = localIO): Promise<SessionRecord> => {
   const r = await readSessionRecord(io, cfg(), ID);
-  if (!r.found) throw new Error(`fixture row not found: ${r.reason}`);
+  if (r.kind !== 'found') throw new Error(`fixture row not found: ${r.kind}`);
   return r.record;
 };
 

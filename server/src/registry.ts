@@ -3,7 +3,7 @@ import type { CcrcConfig } from './config.js';
 import type { FleetIO, MeasuredRead, ReadFailure } from './io.js';
 import { readHookState } from './hookstate.js';
 import {
-  CHILD_RUN_ID, isPrPhase, isStopSurface, ROUTE_WRITABLE_FIELDS,
+  CHILD_RUN_ID, isPrPhase, isRegistryId, isStopSurface, ROUTE_WRITABLE_FIELDS,
   type ChildMark, type IdentityField, type LifecycleField,
   type PrPhase, type RouteField, type RouteFields, type RouteReadField, type StopSurface,
 } from '../../shared/api.js';
@@ -352,11 +352,11 @@ export interface SessionRecord {
    * the row for. A listed marker that reads back absent — the exact race
    * this paragraph is about — now answers `unreadable` (F4/D-3348), not
    * `none`, WHEN the rest of the record still resolves: `readSessionRecord`
-   * returns `found:true` with `child:unreadable`, and the caller (the bind
+   * returns `kind:'found'` with `child:unreadable`, and the caller (the bind
    * gate) refuses, retryably. That is NOT the outcome for every ordering: if
    * the same purge also carries off `<id>.uuid` — a full teardown, not
    * merely the marker — the identity triple's own drop retires the WHOLE row
-   * first (`readSessionRecord` answers `found:false, reason:'absent'`
+   * first (`readSessionRecord` answers `kind:'absent'`
    * without ever reaching this function), and `childBindGate`'s OWN second
    * listing decides from there: once that later listing no longer names
    * `<id>.child` either, the bind is permitted — correctly, because there is
@@ -1182,14 +1182,25 @@ export async function readRegistry(io: FleetIO, cfg: CcrcConfig): Promise<Sessio
 }
 
 /** `readSessionRecord`'s widened result (architecture doc, increment 1's
- *  second half): the same three-way split `RegistryRead` draws for the
- *  whole fleet, narrowed to one id. `found: true` may still carry a
- *  `record.unmeasured` — a caller that needs identity, not just presence,
- *  reaches it through `measuredIdentity`, never through this shape alone. */
+ *  second half): the three-way split `RegistryRead` draws for the whole
+ *  fleet, narrowed to one id, plus a fourth answer about the id itself
+ *  (path identity, spec §2.3). There is a `kind` per answer and no boolean,
+ *  so every caller places each answer in an exhaustive switch, rather than
+ *  letting a new answer fall into whatever its `else` already did.
+ *   - `found` may still carry a `record.unmeasured`: a caller that needs
+ *     identity, not just presence, reaches it through `measuredIdentity`,
+ *     never through this shape alone.
+ *   - `absent` keeps its fold of three conditions: no `.uuid` in the
+ *     listing, a row `buildRecord` dropped, and a twice-observed retirement.
+ *   - `unlistable` is the whole-directory collapse, never a proven absence.
+ *   - `bad-id` is an id `isRegistryId` refuses, answered before any listing.
+ *     It says nothing about the registry, so a caller that acts on absence
+ *     reads it as unmeasured, never as absent. */
 export type SingleRead =
-  | { found: true; record: SessionRecord }
-  | { found: false; reason: 'absent' }
-  | { found: false; reason: 'unlistable' };
+  | { kind: 'found'; record: SessionRecord }
+  | { kind: 'absent' }        // no `.uuid` listed, a dropped row, or a twice-observed retirement (the existing fold)
+  | { kind: 'unlistable' }
+  | { kind: 'bad-id' };       // isRegistryId(id) is false; answered before any readdir
 
 /**
  * `readRegistry`, narrowed to ONE session (C0.3). Its baseline is one
@@ -1202,10 +1213,10 @@ export type SingleRead =
  * subtraction over the rest of the fleet. Built from the SAME `buildRecord`
  * loop body `readRegistry` uses, so there remains exactly one parser.
  *
- * `reason: 'absent'` covers both of `readRegistry`'s old ways to answer
+ * `kind: 'absent'` covers both of `readRegistry`'s old ways to answer
  * `undefined` for one id — no `.uuid` in the listing at all, and a dropped
  * (narrowed, see `buildRecord`'s own docstring) entry — collapsed into one
- * shape at the source instead of two. `reason: 'unlistable'` is the SEPARATE
+ * shape at the source instead of two. `kind: 'unlistable'` is the SEPARATE
  * whole-directory collapse, never conflated with a proven absence.
  *
  * Carries the SAME hold-reconfirm discipline as `readRegistry` (see
@@ -1217,25 +1228,33 @@ export type SingleRead =
  * what lands in this reconfirm is a real fault, or — until the fleet host's
  * agent is redeployed — the fail-shut collapse that still cannot tell a
  * race from a fault, exactly as for the whole-fleet sweep. Twice-observed
- * absence there retires the record to `{found:false, reason:'absent'}`,
- * never a silent degrade-forever.
+ * absence there retires the record to `{kind:'absent'}`, never a silent
+ * degrade-forever.
+ *
+ * `kind: 'bad-id'` (path identity, spec §2.3) is answered FIRST, from the id
+ * string alone: no clock, no listing, no `noteWholeFleetListing`, no field
+ * read. An id `isRegistryId` refuses is one ccd could read as a flag. It is
+ * never listed for, never built and never composed. It proves nothing about
+ * the registry, so every caller that acts on absence reads it as unmeasured,
+ * never as absent.
  */
 export async function readSessionRecord(io: FleetIO, cfg: CcrcConfig, id: string): Promise<SingleRead> {
+  if (!isRegistryId(id)) return { kind: 'bad-id' };
   const now = Date.now();
   const names = await io.readdir(cfg.registryDir);
   noteWholeFleetListing(names !== null, now);
-  if (names === null) return { found: false, reason: 'unlistable' };
-  if (!names.includes(`${id}.uuid`)) return { found: false, reason: 'absent' };   // no field reads worth making
+  if (names === null) return { kind: 'unlistable' };
+  if (!names.includes(`${id}.uuid`)) return { kind: 'absent' };   // no field reads worth making
   const rec = await buildRecord(io, cfg, names, id, now);
-  if (rec === null) return { found: false, reason: 'absent' };
+  if (rec === null) return { kind: 'absent' };
   if (rec.held === HOLD_UNREADABLE || rec.unmeasured.length > 0) {
     const again = await io.readdir(cfg.registryDir);
     if (again !== null) {
       if (rec.held === HOLD_UNREADABLE && !again.includes(`${id}.hold`)) rec.held = null;
-      if (rec.unmeasured.length > 0 && !again.includes(`${id}.uuid`)) return { found: false, reason: 'absent' };
+      if (rec.unmeasured.length > 0 && !again.includes(`${id}.uuid`)) return { kind: 'absent' };
     }
   }
-  return { found: true, record: rec };
+  return { kind: 'found', record: rec };
 }
 
 /** `freshAskAt`'s "I could not measure this child" answer, spelled ONCE
@@ -1300,7 +1319,20 @@ export const UNMEASURED_ASK_AT = -1;
  */
 export async function freshAskAt(io: FleetIO, cfg: CcrcConfig, childId: string): Promise<number> {
   const read = await readSessionRecord(io, cfg, childId);
-  if (!read.found) return UNMEASURED_ASK_AT;
+  switch (read.kind) {
+    case 'found': break;
+    case 'absent': case 'unlistable': return UNMEASURED_ASK_AT;
+    // An id `isRegistryId` refuses (spec §2.3) is a child this box did not
+    // measure, exactly as the two above: it answers as they do, by design.
+    // Its pins are `readSessionRecord`'s zero-listing case and, end to end,
+    // `POST /api/asks/:id/answer`'s `child-unmeasurable` for a stored
+    // non-registry `childId`.
+    case 'bad-id': return UNMEASURED_ASK_AT;
+    default: {
+      const _x: never = read;
+      return _x;
+    }
+  }
   const identity = measuredIdentity(read.record);
   if (identity === null) return UNMEASURED_ASK_AT;
   const hs = await readHookState(io, cfg.registryDir, childId, identity.uuid, Date.now());
