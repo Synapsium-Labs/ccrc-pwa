@@ -27,6 +27,7 @@ import sql from 'highlight.js/lib/languages/sql';
 import dockerfile from 'highlight.js/lib/languages/dockerfile';
 import rust from 'highlight.js/lib/languages/rust';
 import go from 'highlight.js/lib/languages/go';
+import php from 'highlight.js/lib/languages/php';
 import { remarkAlerts } from './remarkAlerts';
 import {
   CHAT_PARSE_BUDGET_MS, CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, MD_HIGHLIGHT_BLOCK_MAX_CHARS,
@@ -77,9 +78,12 @@ export function openExternal(e: React.MouseEvent, href: string | undefined): voi
   window.open(absolute(href), '_blank', 'noopener,noreferrer');
 }
 
+// Registering a grammar also registers any aliases IT declares — that is where
+// `golang` comes from, and why it is not in the list below. The php grammar
+// declares none, so `php` is the only fence word that reaches it.
 for (const [name, def] of Object.entries({
   bash, typescript, javascript, json, python, css, xml,
-  yaml, markdown, diff, sql, dockerfile, rust, go,
+  yaml, markdown, diff, sql, dockerfile, rust, go, php,
 })) hljs.registerLanguage(name, def);
 hljs.registerAliases(['zsh', 'shell'], { languageName: 'bash' });
 hljs.registerAliases(['tsx'], { languageName: 'typescript' });
@@ -92,7 +96,7 @@ export const LANG_LABEL: Readonly<Record<string, string>> = {
   json: 'JSON', python: 'Python', py: 'Python', css: 'CSS',
   xml: 'XML', html: 'HTML', yaml: 'YAML', yml: 'YAML',
   markdown: 'Markdown', md: 'Markdown', diff: 'diff', sql: 'SQL',
-  dockerfile: 'Dockerfile', rust: 'Rust', go: 'Go',
+  dockerfile: 'Dockerfile', rust: 'Rust', go: 'Go', php: 'PHP',
 };
 
 /** Flatten a react-markdown child tree to source text (for copy + highlight). */

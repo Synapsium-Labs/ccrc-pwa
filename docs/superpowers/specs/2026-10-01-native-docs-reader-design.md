@@ -2,11 +2,13 @@
 
 **Status:** approved design (brainstorm 2026-09-29 → 2026-10-01). Every decision in §0's log is ruled; what remains unmeasured is listed as risks, not as choices.
 
+**Amended 2026-10-13: Share and Export.** Written in place, as the operator ruled on 2026-10-07 for amendments to this spec. It folds in the operator's sharing ruling of 2026-10-06, the drafts ruling of 2026-10-07 (option (b)) and the twelve Share/Export rulings of 2026-10-13 (§0 `sharing`, `share-drafts`, `share-export`). It touches §0, §1, §3.1, §3.11, §3.14, §4 (with two new sections, §4.16 Share and §4.17 Export, placed after §4.15 so that earlier numbers stay stable), §5 Summary, §5.0, §5.4, §5.6.1-§5.6.4, §5.6.7, §5.6.8, a new §5.6.9, §5.7, §5.8, §7.1, §7.5, §7.7 and §7.9. Text it adds cites `28cb18d53`, not `c62e22b9a`. The Share/Export design was drafted on 2026-10-07, outside this repository; wherever it had gone stale against `main`, the text below says what changed and why. The coordinator's three rulings of 2026-10-13 on the amendment's open questions are folded in too (§0 `share-export`), and the edits this amendment makes to the 2026-10-12 spec are made in the same change (§7.7).
+
 **Supersedes:** the 2026-08-22 tooling decision brief's T3 ("a standalone docs server as a public service: not in v1"; `docs/superpowers/specs/2026-08-22-ccrc-tooling-decision-brief.md`). ccrc now owns a gated docs reader.
 
 **Citations:** every `file:line` into this repository is as measured at `c62e22b9a`. Line numbers are hints: each citation also names its function, constant or test, so it can be found again after `main` moves.
 
-**Scope.** ccrc gains a Docs reader: a session-gated screen in the PWA that reads the four documentation sections (`docs/superpowers/specs`, `docs/superpowers/plans`, `docs/product-design`, `docs/conventions`) of each project under ccd's projects root on the install's own fleet box. A page serves the origin default branch by default, or any branch named by `?ref=`. A ref view overlays uncommitted drafts from the one worktree that holds that branch, when that worktree sits on the served commit. Pages render Markdown, images, text and sandboxed HTML mockups, and refresh from origin on open when stale or on demand. On the fleet side the feature is four narrow verbs in `ccd`: three reads and one fetch. On the server it is four routes behind the existing session gate. The exec surface, the agent protocol and `FLEET_PROTO` are unchanged. ccrc ships the reader, never the documents.
+**Scope.** ccrc gains a Docs reader: a session-gated screen in the PWA that reads the four documentation sections (`docs/superpowers/specs`, `docs/superpowers/plans`, `docs/product-design`, `docs/conventions`) of each project under ccd's projects root on the install's own fleet box. A page serves the origin default branch by default, or any branch named by `?ref=`. A ref view overlays uncommitted drafts from the one worktree that holds that branch, when that worktree sits on the served commit. Pages render Markdown, images, text and sandboxed HTML mockups, and refresh from origin on open when stale or on demand. A page can be shared as a GitHub permalink at the commit it opened, and a leaf can be exported as one self-contained, inert HTML file that the operator saves (amended 2026-10-13; §4.16, §4.17); neither adds a verb, a route or a wire field. On the fleet side the feature is four narrow verbs in `ccd`: three reads and one fetch. On the server it is four routes behind the existing session gate. The exec surface, the agent protocol and `FLEET_PROTO` are unchanged. ccrc ships the reader, never the documents.
 
 **Reading order.**
 1. §0 says what was decided and why.
@@ -22,7 +24,7 @@ A W1 implementer reads §2, then §6.1 and §7.1, which set the final argv, the 
 
 1. **Each install reads its own projects' docs.** That means whatever ccd's projects root holds on that install's fleet box, behind that install's own session gate.
 2. **Reading docs stops needing a tailnet, a forwarder and a standalone server.** The reader uses the server-to-agent link ccrc already has.
-3. **ccrc never bundles, mirrors or redistributes documents.** The repository is public. Docs stay in the operator's repositories and reach only the operator's signed-in browser.
+3. **ccrc never bundles, mirrors or redistributes documents.** The repository is public. Docs stay in the operator's repositories and reach only the operator's signed-in browser. The one way document bytes leave that browser is a file the operator explicitly saves with Export (amended 2026-10-13, §4.17). It is built in the browser from what the page already holds, ccrc stores nothing for it, and Share sends only a GitHub URL.
 4. **A page says exactly what it served.** It shows the full refname, the commit, why that ref was chosen, and whether a draft overlays it. A `?ref=` that cannot be served is an honest error, never a 200 showing something else.
 5. **Docs never starves the console.** Every docs byte shares the agent socket with the terminals, so docs traffic is bounded to keep it from doing so.
 
@@ -34,6 +36,7 @@ A W1 implementer reads §2, then §6.1 and §7.1, which set the final argv, the 
 - **More than one fleet node.** This build has one agent link. The seam for more is reserved and not built: the `/docs/@<node>` page segment and node-keyed internals (§3.12).
 - **Editing docs.** The reader writes nothing in any working tree, index or local ref.
 - **Offline reading.** Offline, a Docs page shows the shell and its failure state only.
+- **Share links that ccrc hosts** (amended 2026-10-13). Share sends a GitHub URL only. Expiring links served by ccrc, and Export of a section or directory as a bundle, are deferred (§4.13).
 
 ### Decision log
 
@@ -41,7 +44,7 @@ A W1 implementer reads §2, then §6.1 and §7.1, which set the final argv, the 
 |---|---|---|---|
 | `product` | What ccrc ships | A session-gated Docs reader for each install's own project docs. It never bundles docs. | The standalone server it replaces sat outside ccrc's authentication, and its `?ref=` drove unbounded fetches: T3's reasons. ccrc already owns a gate, a link to the fleet and ccd. A public AGPL repository must not carry anyone's documents. |
 | `sections` | What is addressable | `specs`, `plans`, `product-design`, `conventions`, and nothing else (`DOC_SECTIONS`) | These are the four sections the old preview served. Ledgers and the rest of `docs/` stay out (non-goals). |
-| `features` | What carries over from the old preview | `?ref=` previews, drafts, HTML mockups | They are why an operator reads docs through a server rather than GitHub: unmerged branches, uncommitted specs, design mockups. |
+| `features` | What carries over from the old preview | `?ref=` previews, drafts, HTML mockups. Amended 2026-10-13: Share and Export (`sharing`, `share-drafts`, `share-export`) | They are why an operator reads docs through a server rather than GitHub: unmerged branches, uncommitted specs, design mockups. |
 | `approach` | How it is built | A native feature: four narrow verbs in ccd (three reads and `docs-fetch`). `EXEC_COMMANDS` stays `['tmux','ccd']`. No proxy to the old server. | The exec surface is closed by design (`agent/src/whitelist.ts:192`). A proxy would put an unauthenticated listener's raw HTML on the ccrc origin. |
 | `Q1` | Drafts: what overlays, and where drafts come from | **The effective working-tree file wins**: badged, with "open committed version".<br>**Default view**: the origin default branch only, never drafts. When a worktree on the local default branch has uncommitted docs, a hint links `?ref=refs/heads/<branch>`.<br>**Ref view**: drafts come from the ONE worktree holding `refs/heads/<name>`, wherever it is on disk. A detached worktree never holds. Two holders make the view `ambiguous`: committed content only. Drafts overlay iff the holder's HEAD equals the served commit; otherwise the page shows the base hint. | An overlay on a different base is false of the served content. In one project whose main checkout is 1705 commits behind, a literal overlay would show 23 phantom deletions and 13 files rebuilt.<br>The default view means "what is on the default branch". The authoring case stays one tap away; one project's main checkout holds 36 uncommitted docs.<br>In a ref view the bases differ only when origin is served over a stale local branch. 0 of 166 worktree-held branches measured were behind origin. |
 | `session-links` | Which branch a session's Docs link names | The branch the worktree holds now | Workspaces are usually renamed away from `ws/<slug>`: 168 of 260 measured. |
@@ -55,9 +58,12 @@ A W1 implementer reads §2, then §6.1 and §7.1, which set the final argv, the 
 | `U3` | How much of the hardening chat gets | (b):<br>- error boundaries;<br>- iterative `remarkAlerts`;<br>- the highlight cap;<br>- the nesting pre-scan;<br>- the parse worker for messages over 4 KiB;<br>- refusal of root-relative and protocol-relative image sources. | Chat shares the renderer. Measured: 10 KB of `>` overflows the stack, and 40 KB of nested emphasis freezes the page for 42.7 s. A same-origin image source fires a GET carrying the operator's cookie. |
 | `U4` | Real-browser proof | (a): a required `browser (pwa)` headless-Chrome leg in `full-suite` | The mockup and byte-delivery guarantees rest on browser behaviour that jsdom cannot show: the sandbox, CSP, `srcdoc` and navigation headers. |
 | `U5` | The pre-existing defects outside Docs | (a): two small PRs after W3, both outside the Docs waves and both disclosed once merged:<br>1. the pre-existing route defect, reported privately first, then fixed on its own;<br>2. a global baseline security-header hook.<br>The error boundary and the Docs-route headers are fixed inside the programme. | The repository and its issue mirror are public, so a live defect is reported privately before anything else. Keeping both fixes out of the Docs waves keeps each wave's review scoped. |
-| `rollout` | Rollout and retirement (§7) | - Fleet box first.<br>- Doctor gains two checks, `docs` and `docs-sw`.<br>- The build refuses a `CCRC_SW_DENYLIST` entry covering `/docs`.<br>- Retiring a standalone docs server is operator steps only. ccrc never touches its units, its proxy mapping or the operator's global `CLAUDE.md`. The `/docs` proxy mapping comes off first, before the forwarder and the server stop.<br>- Seven waves, W1–W7. | Every server read is gated on `docs-v1` before any exec, so a new server can only under-call an old fleet. A denylisted `/docs` breaks Docs on every hard load. While the mapping stays, one URL is answered by two apps. |
+| `rollout` | Rollout and retirement (§7) | - Fleet box first.<br>- Doctor gains two checks, `docs` and `docs-sw`.<br>- The build refuses a `CCRC_SW_DENYLIST` entry covering `/docs`.<br>- Retiring a standalone docs server is operator steps only. ccrc never touches its units, its proxy mapping or the operator's global `CLAUDE.md`. The `/docs` proxy mapping comes off first, before the forwarder and the server stop.<br>- Seven waves, W1–W7. The 2026-10-12 rich-docs spec adds W5b and W8, and W5b follows W5 (operator, 2026-10-13). Share and Export ride W5 and W6, and the ccd slug fix is a small PR outside the waves (§7.7). | Every server read is gated on `docs-v1` before any exec, so a new server can only under-call an old fleet. A denylisted `/docs` breaks Docs on every hard load. While the mapping stays, one URL is answered by two apps. |
 | `s2-remedies` | The adversarial review of §2 | Every remedy aimed at §2 is folded in:<br>- holder and leaf trust;<br>- shared-repo discovery;<br>- argv read by fixed index;<br>- fsck on fetch;<br>- auto-refresh only for a resolved ref;<br>- the lock's age;<br>- one redactor;<br>- a path grammar built on Unicode categories;<br>- degrading the draft phase rather than failing the tree;<br>- commit provenance;<br>- the asset rule.<br>The remaining remedies moved to §4–§7. | The git core survived every attack. The gaps were at its edges, and each remedy is an addition with its own mutation row. |
 | `evidence` | Settled on evidence, not put to the user | - An ambiguous holder serves committed only, with the candidates listed.<br>- The fetch stamp lives in ccd's registry at `$REG/docs/`.<br>- Any commit object may be read, still only within the four sections, so pins survive force-pushes; `onRef` says whether the commit is still on the branch.<br>- `DOCS_MAX_FILE_BYTES` stays the 4 MiB ccd ceiling, above the 2 MiB class caps. | All three review lenses agreed on the first. The approved §1 has ccd report the fetch age. Reading any commit is no wider than what a session holder can already do on the fleet. |
+| `sharing` | Sending a page to someone (operator, 2026-10-06) | A Share action and a self-contained Export, folded into W5 and W6.<br>- Share is the native share sheet or copy-link, carrying the GitHub permalink at the served commit. §4.16 reads "served commit" as the commit the page actually opened (goal 4).<br>- Export is a single HTML file with inlined images and scripts off.<br>- Expiring share links come later, as their own designed wave with a threat model (§4.13). | A durable pointer to one commit was already a GitHub URL (`http`). A reader wants to send a page to someone who has no ccrc session, and a GitHub permalink needs nothing from ccrc to open. |
+| `share-drafts` | Drafts in Share and Export (operator, 2026-10-07, option (b)) | In a view with drafts, Export may include them under a visible "Draft, not committed" banner naming the base commit. Share always sends the committed permalink, with a warning that drafts are not included. | GitHub holds no copy of a draft, so a link can only ever be committed. A file can carry exactly what was on screen, as long as it says so. |
+| `share-export` | The twelve Share/Export choices (operator, 2026-10-13; each the option the design recommended) | 1. Share always opens a sheet: URL, notes, Share…, Copy link (§4.16).<br>2. W6's planner lists absolute `https` import specifiers found in inline script text as census-only origins, so Load external appears. A template change is optional and outside ccrc. Vendoring a diagram library is rejected. If Mermaid cannot draw under `mockupCsp`, diagrams stay as source and `MOCKUP_CSP` is never widened (§5.6.3, §5.6.4).<br>3. Export waits up to 10 s for images already loading; the rest become placeholders; Export never fetches (§4.17).<br>4. `DOCS_EXPORT_MAX_BYTES` = 10 MiB (§4.17).<br>5. A mockup export is a React wrapper plus `<iframe sandbox="" srcdoc>`; one flat document is the recorded contingency (§5.6.9).<br>6. Export on leaf pages only; Download stays the raw-bytes path (§4.17).<br>7. Export is two-phase: build, then a Save click that saves synchronously; contingency `export-share-file` (§4.17, §5.4).<br>8. The repository-access note always shows (§4.16).<br>9. `MOCKUP_MAX_OPEN_FORMATTING` first, then `MOCKUP_MAX_TAGS` re-derived; `MOCKUP_MAX_DEPTH` stays 256 (§5.6.2).<br>10. An unpushed served commit gets no link, and Export is offered (§3.11).<br>11. The ccd slug fix is a small standalone PR, made now, rolled fleet first, independent of the waves (§3.11, §7.7).<br>12. `<html data-theme>` follows the exporter's resolved theme (§4.17).<br>Also ruled, on W4's Q2: W6's M5.16 exempts W4's worker files, `lib/markdownWorker.ts` and `lib/markdownRunner.ts`, and this amendment is where M5.16 is edited; M5.16 owns that carve-out (§5.8).<br>Also ruled, on the amendment's open questions (coordinator, 2026-10-13): `bad-slug` and `bad-target` are two words on `GithubLink` and `GithubPermalink` (§3.11); W5 bounds W4's r10, r11 and 2-2 in the shared Markdown components, because Docs pages render arbitrary repository documents through them (§4.10, §4.17); and the edits to the 2026-10-12 spec are made in the same change (§7.7). | Each ruling builds on `sharing` and `share-drafts`. Two premises changed after the design was drafted on 2026-10-07. New specs have been Markdown since 2026-10-08, so decision 9 no longer rests on spec size: it rests on the parser shape alone (§5.6.2). W3 merged on 2026-10-09, so decision 11's option to fold the fix into W3 no longer existed when it was ruled. |
 
 ### Defects found along the way
 
@@ -84,6 +90,10 @@ Three pre-existing defects outside Docs, verified at `c62e22b9a`. U5 decides how
 - **Pin.** What a file read names: either a `CommittedPin {project, commit, servedRef, section, path}` or a `DraftPin {project, branch, head, section, path, fp}`. `fp` is the sha256 of the draft's bytes (§2 (e)).
 - **baseEqual.** True when the holder's HEAD equals the served commit. A ref view overlays drafts iff it holds.
 - **Hint.** The one-line banner that names uncommitted docs the page does not show, and links the view that does.
+- **Permalink** (amended 2026-10-13). A GitHub URL that names a full commit id, never a branch: `https://github.com/<slug>/blob/<commit>/<path>`, or `/tree/<commit>/...`. Share sends one (§3.11, §4.16). View on GitHub keeps branch URLs.
+- **Opened pin.** The pin of the file answer a leaf actually shows. For a moment it can differ from `pinFor(tree, page)`, the pin the current tree implies (§4.3), while a re-list is in flight.
+- **Export and Download.** Download saves a file's original bytes (`downloadDocFile`, §5.4). Export saves a new, self-contained HTML file built from what the leaf shows (§4.17).
+- **Closed label.** A worktree label drawn from a fixed set: "main checkout", "workspace <last segment>" or "another worktree". It never carries other path segments. Export uses it (§4.17).
 - **Provenance shorthands.** `s2-decisions`, used in §3 and §4, means the §2 rulings in the decision log above (`Q1`–`Q4`, `s2-remedies`, `evidence`). "attack <n>" and "challenge accepted" name items of the design reviews whose remedies are folded in place. None of them names a separate document.
 
 ## §1 Architecture and units
@@ -92,7 +102,7 @@ Units by ring. Approved 2026-09-29, and updated only where §2–§7 moved a res
 
 | Unit | Ring | Job |
 |---|---|---|
-| `shared/docs.ts` | L0 | Imports nothing. It declares once:<br>- `DOC_SECTIONS`: the four slugs mapped to repo paths;<br>- the `/docs/...` page grammar (`parseDocsPage`, `docsPageUrl`) and the one API URL builder (`docsApi`), used by the PWA and the server;<br>- the value grammars and caps;<br>- the wire types and the failure words (`DOCS_FAILURES`), with their retry class `DOCS_FAILURE_RETRY`;<br>- `admitDraft` and `entryView`;<br>- `contentClass` and the raster table;<br>- `resolveDocRef`;<br>- `githubBlobUrl`;<br>- `DOCS_RESPONSE_HEADERS`. |
+| `shared/docs.ts` | L0 | Imports nothing. It declares once:<br>- `DOC_SECTIONS`: the four slugs mapped to repo paths;<br>- the `/docs/...` page grammar (`parseDocsPage`, `docsPageUrl`) and the one API URL builder (`docsApi`), used by the PWA and the server;<br>- the value grammars and caps;<br>- the wire types and the failure words (`DOCS_FAILURES`), with their retry class `DOCS_FAILURE_RETRY`;<br>- `admitDraft` and `entryView`;<br>- `contentClass` and the raster table;<br>- `resolveDocRef`;<br>- `githubBlobUrl` and, amended 2026-10-13, `githubPermalink`, which share one private URL assembler (§3.11);<br>- `DOCS_RESPONSE_HEADERS`. |
 | `ccd docs-index` / `docs-tree` / `docs-show` / `docs-fetch` | fleet | The ONLY code that touches git or doc files, through one embedded python helper, `_docs_py`.<br>- `docs-tree` resolves a ref to a commit and lists the four sections. It reports the drafts of the one worktree that has that branch checked out, as facts; whether a draft overlays is decided by L0 `entryView`, never by ccd.<br>- `docs-show` returns one file's bytes from a commit or from that worktree, and reports whether the commit is on the served ref.<br>- `docs-fetch` fetches the default branch or one named branch, with a fixed refspec.<br>- `docs-index` lists every project's shape. |
 | `server/src/docs/policy.ts` | L1 | Pure decisions: API query, ref and path validation (built from the L0 predicates); request provenance; the response representation for each content class; cache keys; `refreshDue` given the last fetch; `fetchBranchFor`; lane admission and wire estimates; the HTTP status (`DOCS_FAILURE_HTTP`). |
 | `server/src/docs/ports.ts` | L2 | Two ports, `DocsReader {index, tree, show}` and `DocsFetcher {fetch}`, declared for the docs routes, which consume them. Each operation has its own failure union, with no shared null. Each is keyed by `DocsSourceId {node, project}`. |
@@ -100,7 +110,7 @@ Units by ring. Approved 2026-09-29, and updated only where §2–§7 moved a res
 | `server/src/docs/routes.ts` (+ `hooks.ts`, `lane.ts`, `cache.ts`) | L4 | `GET /api/docs/projects`, `GET /api/docs/:project/tree`, `GET /api/docs/:project/file`, `POST /api/docs/:project/refresh`.<br>- They form one encapsulated plugin, registered beside `registerUpdateRoutes` (`server/src/server.ts:1629`).<br>- The hooks apply provenance and the response policy.<br>- They are session-gated and not `EXEMPT`.<br>- They decide nothing. |
 | docs cache | L4-owned, L1-keyed | In memory and bounded. Committed content is keyed by (node, repo, blob), learned from (project, commit, path) through a listing map. Drafts are never cached. |
 | `pwa/src/lib/markdown.tsx` (+ the parse pipeline in `pwa/src/lib/`) | PWA | The chat renderer, extracted from `MessageBubble` so that chat and docs share one pipeline that never renders raw HTML. Under U3 the pipeline carries the pre-scan, the parse worker, iterative `remarkAlerts` and `RenderBoundary`. |
-| `pwa/src/screens/DocsScreen.tsx` (+ `pwa/src/docs/`) | PWA | The index, project, section and file views, and the mockup viewer.<br>- `router.ts` gains a search channel for `?ref=` (`useLocation`, `navigate`).<br>- `app.tsx` gains a route arm.<br>- The fleet header gains a Docs door, and session surfaces gain a "Docs on <branch>" row. |
+| `pwa/src/screens/DocsScreen.tsx` (+ `pwa/src/docs/`) | PWA | The index, project, section and file views, and the mockup viewer.<br>- `router.ts` gains a search channel for `?ref=` (`useLocation`, `navigate`).<br>- `app.tsx` gains a route arm.<br>- The fleet header gains a Docs door, and session surfaces gain a "Docs on <branch>" row.<br>- Amended 2026-10-13: Share (`docs/share.ts`, `ShareSheet`) and Export (`docs/export/`, `ExportSheet`), in the PWA only (§4.16, §4.17). |
 
 **Request flow.**
 1. Open `/docs/<p>/specs/x.md?ref=ws/foo`. The service worker serves the shell.
@@ -113,6 +123,8 @@ Units by ring. Approved 2026-09-29, and updated only where §2–§7 moved a res
    - The class cap travels as `--max-bytes`.
    - Because of the pin, a listing and its contents can never straddle a ref move.
 6. The page renders. When the tree answer says `refreshDue`, the PWA fires one `POST /api/docs/<p>/refresh` (a fetch, then a fresh tree) and re-renders.
+
+**Share and Export** (amended 2026-10-13) issue no docs request of their own. Share builds a GitHub URL from the tree and file answers already held. Export builds a file from the parse outcome and image bytes the visit already holds (§4.16, §4.17).
 
 **Rulings recorded with §1.**
 - This design supersedes the 2026-08-22 brief's T3.
@@ -1317,7 +1329,7 @@ Measured at `c62e22b9a`. Browser facts come from Chromium 153 driven headless th
 - `#fragment`: passed through untouched to §4.
 
 **Refused, never canonicalised:**
-- any pin key (`commit`, `servedRef`, `branch`, `head`, `fp`) gives `commit-in-page`. The page grammar never carries a commit (s2-decisions); a durable pointer to one exact commit is a GitHub URL (3.11);
+- any pin key (`commit`, `servedRef`, `branch`, `head`, `fp`) gives `commit-in-page`. The page grammar never carries a commit (s2-decisions); a durable pointer to one exact commit is a GitHub URL (3.11), which Share builds (§4.16). Share and Export add no page key;
 - any other key gives `unknown-param`; a repeated key gives `repeated-param`;
 - a bad value gives `bad-ref`, `bad-view` or `bad-frame`.
 
@@ -1501,7 +1513,12 @@ No configuration change is needed. `navigateFallback: '/index.html'` gives `/doc
 
 ### 3.11 View on GitHub
 
-**Where the slug comes from.** `docs-tree` and each `docs-index` row gain `github`. The helper computes it from `remote.origin.url`, read with its hardened runner (`config --get` is already on §2's allowlist), by the same rule as `_gh_repo_slug` in `ccd/ccd`: strip one trailing `.git`; require that exactly one of the three GitHub prefixes matches, and strip it; require `owner/name` over the ASCII characters `A-Z a-z 0-9 . _ -`; and refuse a segment that is `.`, `..` or starts with `.` (decision 11 of the Share/Export design, since the slug is spent as `gh --repo` on a write-scoped token as well as here). The bash function stays the one definition for ccd's write paths; the helper's copy is bound to it by a corpus-verdict parity row (M3.12), the house pattern for a python copy. `none` means "no GitHub-shaped origin was read", never "no repository".
+**Where the slug comes from.** `docs-tree` and each `docs-index` row gain `github`. The helper computes it from `remote.origin.url`, read with its hardened runner (`config --get` is already on §2's allowlist), by the same rule as `_gh_repo_slug` (`ccd/ccd:5397-5412` at `28cb18d53`): strip `.git`, strip exactly one of the three GitHub prefixes, which must match, require `owner/name` over `A-Z a-z 0-9 . _ -`, and refuse a dot segment. That is the rule as the slug fix below amends it; at `28cb18d53` the prefixes are stripped in turn and none is required. The bash function stays the one definition for ccd's write paths; the helper's copy is bound to it by a corpus-verdict parity row (M3.12), the house pattern for a python copy. `none` means "no GitHub-shaped origin was read", never "no repository".
+
+**The slug rule, amended 2026-10-13 (decision 11).** At `28cb18d53` both copies strip each prefix in turn and require none to match. A relative-path origin such as `upstream/repo` therefore reads as the slug `upstream/repo`, a stacked prefix such as `git@github.com:https://github.com/o/r` reads as `o/r`, and a dot segment (`../x`) passes the charset. The two copies are `_gh_repo_slug` (`ccd/ccd:5397-5412`) and the helper's `slug_from_url` (`ccd/ccd:35419-35431`).
+- **The fix.** A small standalone ccd PR, made now and outside the waves (§7.7), changes both copies in lockstep. Exactly one of the three prefixes is stripped, and one must match. A slug segment that is exactly `.` or `..` is refused, and so is an owner segment that starts with `.`, which no GitHub owner name does. A repository name may start with `.`, so `org/.github` stays a slug. M3.12's corpus gains those cases, so parity holds across the change.
+- **Its blast radius.** The bash function's answer is also spent as `gh --repo` on ccd's write paths. Every slug that passes today keeps its verdict, unless it is a relative-path origin, a stacked prefix or a dot segment.
+- **Defence in depth.** Whether or not that PR has landed, W5's L0 assembler refuses a dot-segment slug as `bad-slug` (below). Only the ccd fix covers a relative-path origin and a stacked prefix.
 
 `ProjectRow.repo` is not used: it reads `unmeasured` for every project the PR sweep has not reached, which includes every project with no workspaces (`server.ts:2448-2452`), a common case for a docs reader.
 
@@ -1510,12 +1527,60 @@ No configuration change is needed. `navigateFallback: '/index.html'` gives `/doc
 | Condition | Result |
 |---|---|
 | `github.state === 'none'` | no link (`no-github-origin`) |
+| a slug segment is `.` or `..`, or the owner starts with `.` (amended 2026-10-13) | no link (`bad-slug`) |
+| an `at` or path segment is empty, `.` or `..` (amended 2026-10-13) | no link (`bad-target`) |
 | `relation === 'local-only'`, or `via` is `default:local-main` / `default:local-master` | no link; note "not pushed" (`not-on-origin`) |
 | the leaf opens a new draft with no committed entry | no link (`uncommitted`) |
 | `side === 'origin'`, or `relation === 'equal'` | link |
 | `side === 'local'` with `relation` in `local-ahead`, `local-behind`, `diverged`, `unmeasured` | link, plus the note "GitHub's copy may differ from this view" |
 
-The link is `https://github.com/<slug>/blob/<ref.name>/<repoPath>` for a leaf and `.../tree/<ref.name>/<sectionPath>` for a section or directory, each path segment encoded. Branch-name URLs, not commit permalinks, per the durable-link convention. The PWA never offers a docs page URL as a share link, and no docs page URL is written into tracked text.
+The link is `https://github.com/<slug>/blob/<ref.name>/<repoPath>` for a leaf or a `repo` target, `.../tree/<ref.name>/<sectionPath>` for a section or directory, and `.../tree/<ref.name>` for the `root` target, each path segment encoded. **View on GitHub uses branch URLs, per the durable-link convention; Share uses a commit permalink (below; operator, 2026-10-06 and 2026-10-13).** The PWA never offers a docs page URL as a share link, and no docs page URL is written into tracked text.
+
+**The target, widened (amended 2026-10-13; W5's first L0 task).** `GithubTarget` gains two kinds, additively, and `GithubLink` gains one refusal:
+
+```ts
+export type GithubTarget =
+  | { kind: 'leaf'; section: DocSectionSlug; path: string; uncommitted: boolean }
+  | { kind: 'section'; section: DocSectionSlug }
+  | { kind: 'dir'; section: DocSectionSlug; path: string }
+  | { kind: 'repo'; repoPath: string }      // resolveDocRef's in-repo, out-of-section kind (§4.11)
+  | { kind: 'root' };                        // the repository itself: the project page
+export type GithubLink =
+  | { ok: true; url: string; note: 'may-differ' | null }
+  | { ok: false; why: 'no-github-origin' | 'not-on-origin' | 'uncommitted' | 'bad-slug' | 'bad-target' };
+```
+
+- **`repo`** closes the carried constraint that `GithubTarget` could not express `resolveDocRef`'s `repo` kind. Its first consumer is `DocLink`'s `repo` arm (§4.11), through `githubBlobUrl`, so it lands in W5 with that consumer. Export's link table (§4.17) uses it through `githubPermalink`. The 2026-10-12 spec's reader (W8) maps a `repo` answer through `githubBlobUrl` too.
+- **`root`** lets the project page carry View on GitHub and Share (§4.4).
+- **`githubBlobUrl` handles both.** `repo` builds `/blob/<at>/<repoPath>` and `root` builds `/tree/<at>`. Its `repoPath` expression covers only leaf, section and directory at `28cb18d53`, so the widening is a compile error until it covers the new kinds.
+- **`bad-slug` and `bad-target`** are two words, confirmed (coordinator, 2026-10-13), and both are additive. At `28cb18d53` nothing outside `shared/docs.ts` and its tests reads `GithubLink`. `bad-slug` judges the slug; `bad-target` judges the commit and the path, which come from the page, so a caller can tell the two apart.
+
+**The permalink builder** (amended 2026-10-13; operator 2026-10-06, decisions 10 and 11):
+
+```ts
+export type GithubPermalink =
+  | { ok: true; url: string; commit: string }
+  | { ok: false; why: 'no-github-origin' | 'not-on-origin' | 'unmeasured' | 'uncommitted' | 'bad-slug' | 'bad-target' };
+export function githubPermalink(github: DocsGithub, ref: DocsTreeOk['ref'], commit: string, target: GithubTarget): GithubPermalink;
+```
+
+`commit` is the commit the page opened; §4.16 says which, page by page. `Sha` in `shared/docs.ts` is an unexported alias of `string`, so the type checks nothing: the `bad-target` row refuses a short, empty or malformed commit at run time. The rows are checked in order, and the first match wins:
+
+| Condition | Result |
+|---|---|
+| `github.state === 'none'` | `no-github-origin` |
+| a slug segment is `.` or `..`, or the owner starts with `.` | `bad-slug` |
+| `commit` is not 40 or 64 lowercase hex, or an `at` or path segment is empty, `.` or `..` | `bad-target` |
+| `relation === 'local-only'`, or `via` is `default:local-main` / `default:local-master` | `not-on-origin` |
+| a leaf target with `uncommitted` | `uncommitted` |
+| `side === 'origin'` (which covers `origin-only`), or `relation` is `equal` or `local-behind` | link |
+| `side === 'local'` with `relation` `local-ahead` or `diverged` | `not-on-origin` (decision 10) |
+| `relation === 'unmeasured'` | `unmeasured` |
+
+- **This table differs from View on GitHub's on purpose.** View on GitHub links `local-ahead`, `diverged` and `unmeasured`, with the caution "GitHub's copy may differ", because a branch URL still opens something useful. A permalink names one commit. A commit that is not on origin opens GitHub's 404, so Share refuses rather than send a link that cannot work (decision 10; goal 4). Its sentence says "push it to share" (§4.16), and Export stays offered.
+- **URL shapes.** `/blob/<commit>/<repoPath>` for a leaf or `repo` target, `/tree/<commit>/<path>` for a section or directory, and `/tree/<commit>` for `root`. The full commit id is always written, never `ref.name`, and a `#fragment` is dropped.
+- **One assembler.** Both builders call one private `githubUrlAt(slug, at, target)`. It holds the file's one `'https://github.com/'` literal, encodes each segment with `encodeURIComponent`, and refuses a dot-segment slug (`bad-slug`) and an empty, `.` or `..` segment in `at` or the path (`bad-target`). `encodeURIComponent('..')` is `..`, so before this amendment a dot segment reached the URL unchanged, and the browser would normalise the URL to another page. Where both builders answer ok, their URLs differ only in the `at` segment (M3.17).
+- **The single-definition pin.** The new `GithubPermalink` type and `githubPermalink` function are pinned by a describe appended at the end of `server/test/single-definition.test.ts`. The docs block's `TYPES` and `FUNCTIONS` lists are not edited mid-file, because `session-hook.test.ts`'s citation audit cites that file by line.
 
 ### 3.12 Multi-node seam (reserved, not built)
 
@@ -1553,17 +1618,20 @@ A second agent connection would add `@<label>` pages keyed by its inventory labe
 | M3.8 | Gate before provenance | armed, no cookie, no marker gives the gate's 401 with `verdict` | register provenance as a root hook before `installGate` |
 | M3.9 | Refresh fetch mapping | `docs-policy.test.ts` `fetchBranchFor` table; `refs/heads/b` gives `skipped` with zero fetch execs | always fetch |
 | M3.10 | `refreshDue` shape | L1 table: ok tree only; `false` for `refs/heads/...`; §2's stale and floor rules | compute it on a failure, or for a local ref |
-| M3.11 | GitHub link | `githubBlobUrl` table over `side` x `relation` x `github` x new-draft | link a `local-only` view |
-| M3.12 | Slug parity | `docs-parity.test.ts` runs `_gh_repo_slug` and the helper over one corpus of origin URLs; identical verdicts | edit either copy |
+| M3.11 | GitHub link | `githubBlobUrl` table over `side` x `relation` x `github` x new-draft. Amended 2026-10-13 (W5): the `repo` and `root` kinds, and the `bad-slug` and `bad-target` rows | link a `local-only` view |
+| M3.12 | Slug parity | `docs-parity.test.ts` runs `_gh_repo_slug` and the helper over one corpus of origin URLs; identical verdicts. Amended 2026-10-13 with the standalone ccd fix (§3.11): the corpus gains a relative origin (`upstream/repo`), a prefix that does not match, a stacked prefix (`git@github.com:https://github.com/o/r`) and dot segments after a real prefix (`../x`, an owner `.x`, `a/..`), each refused by both copies, and `org/.github`, accepted by both | edit either copy |
 | M3.13 | Node key | `docs-cache.test.ts`: the same (repoKey, blob) under two injected node values gives two entries; same for single-flight | drop the node from a key |
 | M3.14 | Route census | the `auth-gate` count lines and the COMPLETE describe; no `/docs` server route (scan) | register a docs route in an unscanned file, or under `/docs` |
 | M3.15 | Box-token lane | `DOCS_DOORS` both directions, zero box-token calls, planted controls | add a box-token call; drop the lane |
+| M3.16 | Permalink rows (W5) | `docs-shared.test.ts`: `githubPermalink` over `side` x `relation` x `via` x `github` x target kind. A link always names the full commit, never `ref.name`. `local-ahead` and `diverged` give `not-on-origin`, and `unmeasured` gives `unmeasured`. An origin side reading `origin-only` links. The slugs `../x`, `.x/y` and `a/..` give `bad-slug`, and `org/.github` links. A commit that is short, empty, uppercase or `..`, and an `at` or path segment that is empty, `.` or `..`, give `bad-target` | use `ref.name`; link `local-ahead`; drop the dot check; drop the commit or path check |
+| M3.17 | One assembler (W5) | same file: exactly one `'https://github.com/'` literal in `shared/docs.ts`; on every row where both builders answer ok, their URLs differ only in the `at` segment | a second assembler |
+| M3.18 | New target kinds (W5) | same file: `repo` gives `/blob/<at>/<repoPath>` (for example `README.md`) and `root` gives `/tree/<at>`, in both builders | drop a kind |
 
 ---
 
 ## §4 PWA screen & Markdown
 
-§4 covers everything the operator's browser does: the router's search channel, the Docs screen, its truth line and banners, the doors into Docs, the Markdown extraction, the docs link and image policy, and render hardening (including what chat gets, per U3). Names used from other sections are theirs: `parseDocsPage`, `docsPageUrl`, `DocPin`, `docsApi` (§3.2); `contentClass`, `DOCS_RASTER_TYPES` (§5.1); the lanes and caps (§6).
+§4 covers everything the operator's browser does: the router's search channel, the Docs screen, its truth line and banners, the doors into Docs, the Markdown extraction, the docs link and image policy, and render hardening (including what chat gets, per U3). Names used from other sections are theirs: `parseDocsPage`, `docsPageUrl`, `DocPin`, `docsApi` (§3.2); `contentClass`, `DOCS_RASTER_TYPES` (§5.1); the lanes and caps (§6). Share (§4.16) and Export (§4.17), added 2026-10-13, follow §4.15 so that earlier numbers stay stable; their mutation rows are in §4.15.
 
 Measurements quoted here were taken in Node 24 on a server-class CPU with the lockfile's exact versions (react-markdown 10.1.0, remark-gfm 4.0.1, highlight.js 11.11.1, React 19.2.7). Phone CPU and stack depth are UNMEASURED; the worker and the depth check are why that does not affect correctness.
 
@@ -1578,7 +1646,7 @@ Paths are under `pwa/src/` unless stated.
 | `main.tsx` | changed | the root `RenderBoundary` |
 | `components/RenderBoundary.tsx` | new | the one error-boundary class |
 | `lib/remarkAlerts.ts` | new | iterative `remarkAlerts`, React-free so the worker can import it |
-| `lib/markdown.tsx` | new | extracted from `session/MessageBubble.tsx`: hljs registration, `CodeBlock`, `TableWrap`, shared `code`/`pre`/`table`, `CHAT_COMPONENTS`, `openExternal`, `absolute`, `isImageUrl`, `ChatMarkdown`; imports `../session/chat.css` |
+| `lib/markdown.tsx` | new | extracted from `session/MessageBubble.tsx`: hljs registration, `CodeBlock`, `TableWrap`, shared `code`/`pre`/`table`, `CHAT_COMPONENTS`, `openExternal`, `absolute`, `isImageUrl`, `ChatMarkdown`; imports `../session/chat.css`, and from W5 `./markdown.css` instead (§4.14) |
 | `lib/markdownLimits.ts` | new | every PWA render limit, declared once |
 | `lib/markdownGuard.ts` | new | `prescanMarkdown(src)` |
 | `lib/markdownParse.ts` | new | `parseMarkdown(src, profile)`: pure, no DOM, no React |
@@ -1587,18 +1655,24 @@ Paths are under `pwa/src/` unless stated.
 | `lib/api.ts` | changed | `api.docs.*` (4.3, §5.4) |
 | `session/MessageBubble.tsx`, `session/ChatList.tsx` | changed | import from `lib/markdown.tsx`; per-item boundary in `ChatItemView` |
 | `screens/DocsScreen.tsx` | new | the route component |
-| `docs/useDocsVisit.ts` | new | per-visit tree and file slots, single-flight, auto-refresh bookkeeping |
-| `docs/DocsHead.tsx`, `docs/DocsBanners.tsx` | new | back, breadcrumb, truth line, freshness chip, actions; banners |
+| `docs/useDocsVisit.ts` | new | per-visit tree and file slots, single-flight, auto-refresh bookkeeping; `pinFor` and the per-leaf `ExportAssets` registry (§4.3) |
+| `docs/DocsHead.tsx`, `docs/DocsBanners.tsx` | new | back, breadcrumb, truth line, freshness chip, actions (View on GitHub, Share, Export, Open committed version); banners |
 | `docs/DocsIndexView.tsx`, `docs/DocsTreeView.tsx`, `docs/DocsLeaf.tsx` | new | the views |
-| `docs/DocMarkdown.tsx`, `docs/DocImage.tsx`, `docs/fetchQueue.ts` | new | docs renderer, gate and plain fallback; the image loader; the per-screen fetch queue shared with §5 |
-| `docs/docsLinks.ts`, `docs/docsTree.ts` | new | link and image policy over L0 `resolveDocRef`; `sessionDocsHref`; `listDir`, `SECTION_ORDER` |
-| `docs/docsText.ts`, `docs/DocsFailureView.tsx`, `docs/failures.ts` | new | every sentence map; failure rendering; client-only words (§5.4) |
+| `docs/DocMarkdown.tsx`, `docs/DocImage.tsx`, `docs/fetchQueue.ts` | new | docs renderer, gate and plain fallback, and the settled outcome it publishes for Export (§4.10); the image loader, which also fills `ExportAssets`; the per-screen fetch queue shared with §5 |
+| `docs/docsLinks.ts`, `docs/docsTree.ts` | new | link and image policy over L0 `resolveDocRef`, including `imagePinFor`, the one derivation of the pin rule (§4.11); `sessionDocsHref`; `listDir`, `SECTION_ORDER` |
+| `docs/docsText.ts`, `docs/DocsFailureView.tsx`, `docs/failures.ts` | new | every sentence map, `SHARE_SENTENCE` and the closed `EXPORT_MISSING_SENTENCE` included (§4.7); failure rendering; client-only words (§5.4) |
 | `docs/docs.css` | new | tokens only |
+| `lib/markdown.css` | new (W5, 2026-10-13) | the Markdown, table, code-block and hljs rules moved out of `session/chat.css` (§4.14) |
+| `docs/share.ts`, `docs/ShareSheet.tsx` | new (W5, 2026-10-13) | `shareTargetFor`, `copyText`; the share sheet (§4.16) |
+| `docs/ExportSheet.tsx` | new (W5, 2026-10-13) | the two-phase build, then a synchronous Save (§4.17) |
+| `docs/export/buildExport.tsx`, `exportMarkdown.tsx`, `provenance.ts`, `filename.ts`, `policy.ts`, `export.css` | new (W5, 2026-10-13) | the React shell (and, from W6, the mockup wrapper's arm); `EXPORT_COMPONENTS`; the provenance block and closed label; the filename grammar; `DOCS_EXPORT_CSP` and the export limits; the export chrome, tokens only (§4.17) |
+| `docs/objectUrls.ts` | new | `rasterObjectUrl`, `downloadDocFile` and, from W5 (2026-10-13), `saveBytes` and `downloadExport` (§5.4) |
+| `docs/mockup/exportMockup.ts` | new (W6, 2026-10-13) | the mockup export's clone, strip, CSS neutralising and link removal (§5.6.9) |
 | `screens/FleetScreen.tsx`, `fleet/fleet.css` | changed | the Docs door |
 | `fleet/SessionActionsSheet.tsx`, `session/SessionHeader.tsx` | changed | the "Docs on <branch>" row |
 | `pwa/vite.config.ts` | changed | `worker: { format: 'es' }` |
 | `pwa/package.json` | changed | five direct dependencies already in the lockfile, pinned to its versions: `unified` 11.0.5, `remark-parse` 11.0.0, `remark-rehype` 11.1.2, `hast-util-to-jsx-runtime` 2.3.6, `html-url-attributes` 3.0.1. `package-lock.json` changes only in its root dependency list |
-| `design/audit.mjs`, `test/contrast.test.ts` | changed | ground registrations for `docs.css` |
+| `design/audit.mjs`, `test/contrast.test.ts` | changed | ground registrations for `docs.css`; from W5 (2026-10-13) also the Share and Export chrome and `export.css`, and the `chat.css` Markdown entries re-keyed to `markdown.css` (§4.14) |
 
 ### 4.2 Router search channel and the app arm
 
@@ -1663,8 +1737,10 @@ type TreeSlot =
 2. **File slots.** Committed bodies are keyed by `blob`, so a file unchanged across a moving default branch is not re-downloaded. Drafts are keyed by `(branch, head, section, path, fp)`. Every request carries the current pin.
 3. **Auto-refresh.** `autoRefreshed: Set<key>` in a `useRef`, checked and added synchronously before the POST, so StrictMode's double effect cannot fire twice. It dies with the mount; a mount is one screen open.
 4. **Retry bookkeeping.** `autoRetried: Set<key + word>`.
+5. **The leaf's expected pin** (amended 2026-10-13). `pinFor(tree, page): DocPin | null` is pure. It answers the pin the current tree implies for the page's leaf: a `CommittedPin` at `ref.commit`, or a `DraftPin` when `entryView` opens the draft, or `null` when the leaf opens nothing. The file slot's own pin is the **opened pin**. A raster leaf has no file answer: `DocImage` loads it through `docs.raster`, which answers bytes and a MIME only (§5.4). Its opened pin is the pin `DocImage` loaded, and wherever Share and Export need "the file slot is `ok`", a raster leaf reads "the image is loaded". The two pins differ only while a re-list is in flight (the auto-refresh paragraph below), and Share and Export are disabled while they differ (§4.16, §4.17).
+6. **`ExportAssets`** (amended 2026-10-13): one registry per leaf pin, holding the raster `Blob`s and SVG `data:` strings that `DocImage` already holds for display. Each entry is keyed by the image's own full `DocPin`: a `CommittedPin`'s commit, section and path, or a `DraftPin`'s branch, head, section, path and `fp`. Export looks an entry up only by `imagePinFor`'s answer for that image (§4.11), so an entry holding earlier bytes, for example a drafted image whose `fp` changed while the leaf's pin did not, never matches. It holds them by reference and never copies them. It is cleared when the leaf's pin changes and dies with the visit, so it holds no more than the page does. That bound is the page's, not a count: Load image can take a page past `DOCS_MAX_IMAGES_PER_PAGE` (§4.11), and each entry is within its own class cap.
 
-**Auto-refresh** (s2-decisions Q4 and attack 10): when a tree slot becomes `ok` with `refreshDue` true and the key is not in `autoRefreshed`, add it, then `POST refresh {ref: docsRefText(page.ref) or null, reason:'auto'}`. Only an ok tree triggers it; an `unresolved-ref` page offers a manual **Fetch from origin** (`reason:'manual'`). On the answer: an ok `tree` replaces the slot; a `fetch` failure changes only the freshness chip; a `tree` failure keeps the old listing and shows "re-list failed: <sentence>" in the chip. If the new tree changes the leaf's pin the leaf re-reads, keeping scroll, with an inline note "Updated to <short commit>".
+**Auto-refresh** (s2-decisions Q4 and attack 10): when a tree slot becomes `ok` with `refreshDue` true and the key is not in `autoRefreshed`, add it, then `POST refresh {ref: docsRefText(page.ref) or null, reason:'auto'}`. Only an ok tree triggers it; an `unresolved-ref` page offers a manual **Fetch from origin** (`reason:'manual'`). On the answer: an ok `tree` replaces the slot; a `fetch` failure changes only the freshness chip; a `tree` failure keeps the old listing and shows "re-list failed: <sentence>" in the chip. If the new tree changes the leaf's pin the leaf re-reads, keeping scroll, with an inline note "Updated to <short commit>". Until the re-read answers, Share and Export read "Updating to <short commit>…" and are disabled (amended 2026-10-13; §4.16, §4.17).
 
 **Auth.** On a 401 the slot becomes `auth` and the page says "Sign in to read Docs."; `onAuthRegained` re-fetches (nothing else re-fetches screens after sign-in today: `LoginScreen.tsx:200`).
 
@@ -1677,9 +1753,9 @@ type TreeSlot =
 | View | Data | Content |
 |---|---|---|
 | Index `/docs` | `loaders.projects()` | A text filter. `ready` rows sorted by name, then the rest. Each row: name, default branch and short commit, four section counts (`12 specs · 40 plans · 3 design · 0 conventions`; `null` shows `?`), fetch age. Other states in words: "part of <owner>" with a link (linked worktree, shared repo), partial clone, not a git repository, no default branch, unreadable. Projects with no docs collapse under "Projects with no docs (N)". Footer: "N folders not listed (names Docs cannot address)". Header: "Each project's default branch, read from the fleet box." |
-| Project `/docs/<p>` | tree | Truth line (4.5). Four section rows in `DOC_SECTIONS` order: label, repo path, count, draft count; `absent` says "not in this repository at <short commit>"; `not-a-directory` says "is not a directory at <short commit>". Notes for `unlisted` and for `drafts.opaque` |
-| Section or directory | tree | Truth line, View on GitHub (3.11), a filter, rows from `listDir(entries, section, dir, mode, drafts)`: folders first with listed-entry counts, then files. `SECTION_ORDER`: `specs` and `plans` newest first (name descending; names are date-prefixed), the other two alphabetical |
-| Leaf | tree, then file | Truth line, banners, actions. Body by `contentClass(path)`: `markdown` gives `DocMarkdown` (4.10); `raster` gives one `DocImage`; `svg` gives the §5.5 image viewer; `html` gives §5's `MockupView`; `text` gives UTF-8 text in `<pre class="doc-plain">` (highlighted through `CodeBlock` under the 64 Ki-char rule when a registered language matches the extension); `other` gives "No preview (N KiB)" with Download (§5.4) |
+| Project `/docs/<p>` | tree | Truth line (4.5). View on GitHub and Share, through the `root` target (amended 2026-10-13; §3.11, §4.16). Four section rows in `DOC_SECTIONS` order: label, repo path, count, draft count; `absent` says "not in this repository at <short commit>"; `not-a-directory` says "is not a directory at <short commit>". Notes for `unlisted` and for `drafts.opaque` |
+| Section or directory | tree | Truth line, View on GitHub (3.11), Share (§4.16), a filter, rows from `listDir(entries, section, dir, mode, drafts)`: folders first with listed-entry counts, then files. `SECTION_ORDER`: `specs` and `plans` newest first (name descending; names are date-prefixed), the other two alphabetical |
+| Leaf | tree, then file | Truth line, banners, actions (§4.5; Share and Export, §4.16, §4.17). Body by `contentClass(path)`: `markdown` gives `DocMarkdown` (4.10); `raster` gives one `DocImage`; `svg` gives the §5.5 image viewer; `html` gives §5's `MockupView`; `text` gives UTF-8 text in `<pre class="doc-plain">` (highlighted through `CodeBlock` under the 64 Ki-char rule when a registered language matches the extension); `other` gives "No preview (N KiB)" with Download (§5.4) |
 
 A leaf whose listed size exceeds `DOCS_CLASS_CAP[contentClass(path)]` (§6.1) shows the `too-large` sentence **without** requesting it.
 
@@ -1739,6 +1815,12 @@ A leaf whose listed size exceeds `DOCS_CLASS_CAP[contentClass(path)]` (§6.1) sh
 
 **Actions.** View on GitHub (3.11; opened with `openExternal` on tap). **Open committed version**, shown iff `entryView(...).offersCommitted`, navigates to the same leaf with `view=committed` (URL state, so Back returns to the draft and a reload keeps the choice; the commit itself is never in the URL, it is resolved from this visit's tree).
 
+**Share and Export** (amended 2026-10-13):
+- **Share** sits after View on GitHub and before Open committed version, on project, section, directory and leaf pages. It is never on the index, and never in `frame=full`, which has no header.
+- **Export** follows Share, on leaf pages only (decision 6).
+- **When they are available.** Both are hidden until the tree slot is `ok`. On a leaf both are disabled while the opened pin differs from `pinFor(tree, page)` (§4.3), reading "Updating to <short>…". A tap on Share always opens the share sheet (§4.16). Export's own conditions are in §4.17.
+- **One clipboard writer.** The truth line's "copy commit" and the share sheet's Copy link both go through `copyText` in `docs/share.ts` (M4.SH7).
+
 ### 4.6 `entryView`: one function for rows and leaves (L0, `shared/docs.ts`)
 
 Moved to L0 from §2's L1 wording (challenge accepted): the PWA can import only `shared/`, and a second copy would break the single-source rule. The server-side table test imports it from `shared/docs.ts`.
@@ -1781,6 +1863,11 @@ export function entryView(e: DocsEntry, d: DraftsFacts, mode: EntryMode): EntryV
 - `linked-worktree` / `shared-repo` redirect with `navigate(docsPageUrl({...page, project: owner, ref: {kind:'bare', name: branch}}), {replace: true})`; `owner === null` renders the sentence only. When `branch` is `null` (the linked checkout is detached), the redirect goes to the owner's default view (`ref: null`) and the page shows "that checkout is detached; showing <owner>'s default branch".
 - **Placement:** a tree failure replaces the listing and keeps the crumbs; a file failure replaces the body and keeps the header and truth line; a fetch failure appears only in the chip; an image failure is a per-image chip.
 - **Non-docs slots:** `auth` "Sign in to read Docs."; `unreachable` as 4.3; `no-docs-route` "This server predates Docs; update the server box."; `unexpected-response` "The server answered {status} ({contentType})."
+- **Share and Export sentences** (amended 2026-10-13) are two more maps in `docs/docsText.ts`, each exhaustive by type:
+  - `SHARE_SENTENCE: Record<ShareRefusal, string>`, over Share's closed refusal words, and `SHARE_NOTE: Record<ShareNote, string>`, over the sheet's notes (§4.16);
+  - `EXPORT_MISSING_SENTENCE`, over the placeholder words (§4.17). It is **closed**: no `{field}` placeholder. So a failure's `detail`, `stderrHead`, `candidates`, `root`, `errno` and paths never reach a saved file.
+
+  M4.F1's 20-character rule still covers `DOCS_FAILURES` and `DocsPageParseFailure` only. The new maps are pinned by M4.SH6 (`SHARE_SENTENCE`, `SHARE_NOTE`) and M4.EX5 (`EXPORT_MISSING_SENTENCE`).
 
 ### 4.8 Doors and links into Docs
 
@@ -1791,7 +1878,7 @@ export function entryView(e: DocsEntry, d: DraftsFacts, mode: EntryMode): EntryV
 - otherwise the default view, label `Docs, default branch`; the string `null` never reaches a URL.
 - Two surfaces call it and there is no second builder: `SessionActionsSheet` (a `btn-ghost` row after Restart, `onClose()` then `navigate`) and `SessionHeader`'s menu (`menu-item` "Docs" with `menu-hint` = branch or `default`, through `menuAct`). Use `session.project`, not the card the session renders on (`boardHome`).
 
-**GitHub links** come from the tree answer's `github` through `githubBlobUrl` (3.11). No fetch of `/api/projects` is needed.
+**GitHub links** come from the tree answer's `github` through `githubBlobUrl` (3.11). No fetch of `/api/projects` is needed. Share's and Export's links (amended 2026-10-13) come from the same field through `githubPermalink` (3.11). Neither ever carries the ccrc origin, a `/docs` or `/api` URL, a worktree path, a session id or a box name (M4.SH1, M4.EX5).
 
 ### 4.9 Markdown extraction (chat behaviour unchanged)
 
@@ -1809,7 +1896,7 @@ export function entryView(e: DocsEntry, d: DraftsFacts, mode: EntryMode): EntryV
 | `MD_MAX_DELIMITER_RUN` | 64 | real max 3; a hostile 4 096-run costs 1.1 s at 8 KiB |
 | `MD_MAX_TREE_DEPTH` | 64 | exact post-parse hast depth; real max 9 |
 | `DOCS_MAX_RENDER_ELEMENTS` | 20 000 | element nodes in a parsed tree, both profiles. Real docs sit far below it; 510 KiB of thematic breaks parses inside its budget yet yields 104 448 `<hr>` elements that the main thread would build synchronously (measured) |
-| `MD_HIGHLIGHT_BLOCK_MAX_CHARS` | 65 536 | approved; hljs is linear, about 43 ms at 64 KiB |
+| `MD_HIGHLIGHT_BLOCK_MAX_CHARS` | 65 536 | approved; hljs is linear on ordinary code, about 43 ms at 64 KiB. It is not linear on one long identifier run (W4's r10), which W5 bounds (§4.10; amended 2026-10-13) |
 | `DOCS_HIGHLIGHT_PAGE_MAX_CHARS` | 524 288 | caps main-thread hljs per page at about 0.25 s |
 | `DOCS_PARSE_BUDGET_MS` | `min(10 000, 2 000 + 1 000 x floor(bytes / 65 536))` | approved 2 s for every input under 64 KiB, which is where every measured hostile shape lives; larger real docs (0.6-0.9 s on a server CPU at 200-500 KB) get room on a phone. Off the main thread, a longer budget never freezes the UI |
 | `DOCS_PARSE_BUDGET_LARGE_MS` | 30 000 | Format anyway |
@@ -1839,7 +1926,7 @@ export type ParseOutcome =
 1. Pre-scan; refused ends here.
 2. `unified().use(remarkParse).use([remarkGfm, remarkAlerts]).use(remarkRehype, {allowDangerousHtml: true})`, then `runSync(parse(file), file)`: react-markdown's own processor (`react-markdown/lib/index.js:123`, `:262`). This is the same pipeline, called stage by stage so the parse can run in a worker (challenge accepted; M4.P10 pins identical output).
 3. Replace each `raw` node with a `text` node, iteratively (react-markdown's `post()` default, `:360-365`). **Raw HTML renders as literal text, never as markup;** `skipHtml` is not used, because 90 raw nodes in 48 real docs are mostly angle-bracket placeholders that `skipHtml` would silently delete.
-4. Drop `position`, and compute depth and element count in one iterative walk. Over `MD_MAX_TREE_DEPTH` gives `too-deep`, protecting the recursive `toJsxRuntime` on the main thread. Over `DOCS_MAX_RENDER_ELEMENTS` gives `too-wide`, so a tree that parsed within its budget can never make the main thread build an unbounded DOM. The byte gate stays as the first check; the element cap is the one that bounds render cost.
+4. Drop `position`, and compute depth and element count in one iterative walk. Over `MD_MAX_TREE_DEPTH` gives `too-deep`, protecting the recursive `toJsxRuntime` on the main thread. Over `DOCS_MAX_RENDER_ELEMENTS` gives `too-wide`, so a tree that parsed within its budget can never make the main thread build an unbounded DOM. The byte gate stays as the first check; the element cap is the one that bounds render cost, together with the component bounds below, because it counts a code span as one element (W4's 2-2; amended 2026-10-13).
 5. Any exception gives `threw`.
 
 **Worker and runner.** Protocol `{id, src, profile}` to the worker, `{id, outcome}` back; the worker wraps both the parse and the `postMessage` (a `DataCloneError` becomes `threw`). `createMarkdownRunner({spawn, setTimer, clearTimer})` gives `{parse(src, {profile, budgetMs, signal}), prewarm(), dispose()}`:
@@ -1857,9 +1944,27 @@ export type ParseOutcome =
 5. Notes: refused "Line {line} nests {value} levels deep (limit 32); shown as plain text." or the delimiter-run equivalent; `too-deep`; `too-wide` "This document would draw {elements} elements (limit 20 000); shown as plain text."; `threw` "could not be formatted ({error})"; `timeout` "Formatting took longer than {s} s" with **Format anyway** (only after the normal budget); `worker-unavailable`; `worker-failed` with **Retry**.
 6. A `.md` that arrived as base64 is decoded with a non-fatal `TextDecoder('utf-8')` and shown as plain text: "Not valid UTF-8."
 
+**`DOC_COMPONENTS`** is `{...SHARED_COMPONENTS, a: DocLink, img: DocImage}` (§4.11).
+
+**The settled outcome** (amended 2026-10-13). `DocMarkdown` publishes three things through a context that the leaf's actions read: the outcome it rendered, the pin and text that outcome answers, and the `DetachedUrls` map `detachUrls` built for it.
+- `useParsedMarkdown` returns `{outcome, lastGood, pending}`. While `pending` is true, the tree on screen may answer an earlier text (W4's carried window: a reply can show under the next text between a commit and its effect, and after texts A, B, A a newer text shows B's tree while it parses).
+- Export therefore reads the outcome only when `pending` is false and the outcome answers the opened pin's text (§4.17, M4.EX15). The 2026-10-07 design took the tree from `useDocsVisit`, but the parse lives in this hook, so this is where Export reads it.
+- Export reuses the tree and the map as they are. It never runs `detachUrls` again, because a second run finds no URLs.
+
 `renderHast(tree, {components, urlTransform?})` is react-markdown's `post()` minus the raw step; when `urlTransform` is given (chat passes react-markdown's `defaultUrlTransform`) it is applied to each `html-url-attributes` key as `post()` does; then `toJsxRuntime(tree, {Fragment, jsx, jsxs, components, ignoreInvalidStyle: true, passKeys: true, passNode: true})`.
 
 **Highlighting.** `CodeBlock` highlights only when the language is registered, `highlight !== false`, and the block is at most `MD_HIGHLIGHT_BLOCK_MAX_CHARS`; an over-cap block labels itself "{label} · not highlighted ({KiB} KiB)". Docs add the per-page budget: `detachUrls` sums `pre > code` text in document order and marks every block past `DOCS_HIGHLIGHT_PAGE_MAX_CHARS` as `highlight:false`. Measured: 4 of 21 651 real code blocks exceed 64 KiB.
+
+**Bounds on the shared components** (amended 2026-10-13; W5, coordinator ruling). W4's reviews measured three costs in `SHARED_COMPONENTS` that no cap above bounds on crafted input. Each is pre-existing at base:
+- **r10:** highlight.js is quadratic on one long identifier run. A 32 KiB `ts` fence holds the main thread for about 12 s, under `MD_HIGHLIGHT_BLOCK_MAX_CHARS`.
+- **r11:** `keystrokeParts` splits on `/\s*\+\s*/` before its part cap, and the split is quadratic over a long run of whitespace with no `+`. A code span of `a`, 80 000 spaces and `b` holds the main thread for about 12 s in the render.
+- **2-2:** the keystroke cap is per span, and the parse counts each code span as one element, so `DOCS_MAX_RENDER_ELEMENTS` does not bound what the components draw from many spans. About 204 850 elements, 102 400 of them `<kbd>`, are drawn from a 205 KB message.
+
+W5 bounds all three in the shared Markdown components, because Docs pages render arbitrary repository documents through them.
+- **Values.** W5 measures each shape and states each bound's value, with its basis, in its plan. This spec does not fix the values. Any constant a bound adds is declared once in `lib/markdownLimits.ts`.
+- **Rows.** Each bound ships with a case and a mutation row in W5's plan.
+- **Chat.** Chat renders through the same components, so it gains the same bounds.
+- **Export.** Export renders through the same components too, so the bounds cover it (§4.17).
 
 ### 4.11 Docs link and image policy
 
@@ -1883,18 +1988,18 @@ Steps: trim leading and trailing ASCII whitespace and C0 controls (as a browser 
 - `doc`: `<a href>` built with `docsPageUrl` for the same project, the page's `ref`, `view` dropped; a plain left click is prevented and navigated in-app; modifier and middle clicks are left to the browser (a new tab onto `/docs/...`). An `.html` target reaches §5's viewer through the leaf.
 - `fragment`: `<a href="#id">` whose click scrolls the matching element inside the article (`CSS.escape`), no history entry. Only ids the pipeline emits exist (GFM footnotes); no heading ids are generated (2 fragment links in 899 real docs).
 - `external`: `target="_blank" rel="noopener noreferrer"`, opened with `openExternal` on tap only; nothing prefetches.
-- `repo`: a GitHub link through `githubBlobUrl` with a trailing "↗ GitHub" mark when one exists, else inert.
+- `repo`: a GitHub link through `githubBlobUrl` with a trailing "↗ GitHub" mark when one exists, else inert. The `repo` target it needs is the 2026-10-13 widening of `GithubTarget` (§3.11). That is why the widening is W5's first L0 task.
 - everything else: `<span className="doc-link-inert" title="<sentence>: <raw>">`, no `href`.
 
 **Markdown `img` (`DocImage`):**
 - `doc` of class `raster` or `svg`, then the **pin rule** (s2-decisions asset rule), with `e` the tree entry at `(section, path)` (none gives refused `absent`):
   - **committed page** (every default-view page, every `view=committed` leaf, and every ref-view leaf that opens committed): needs `e.committed.kind` in file/exec, giving `CommittedPin{commit: ref.commit, servedRef: ref.served, section, path}`; otherwise refused `absent`. If `mode === 'ref'` and `admitDraft(e, drafts)`, the image wears "uncommitted change not shown";
-  - **draft page**: `entryView(e, drafts, 'ref').opens === 'draft'` gives `DraftPin{branch: drafts.branch, head: drafts.worktree.head, section, path, fp: e.draft.fp}` with a `draft` chip, counted in the page banner; an entry whose draft is `deleted` is missing (`deleted-in-worktree`); a `typechange`, withheld or `fp: null` draft is missing (`draft-withheld`), never a silent fallback to the committed bytes (a missing image renders as a refused one, with that reason); an entry with no draft is committed at C (`baseEqual` makes H equal C) under the same file/exec condition as a committed page; no entry is refused `absent`. This is the one asset rule, shared with mockup assets (§5.6.3).
+  - **draft page**: `entryView(e, drafts, 'ref').opens === 'draft'` gives `DraftPin{branch: drafts.branch, head: drafts.worktree.head, section, path, fp: e.draft.fp}` with a `draft` chip, counted in the page banner; an entry whose draft is `deleted` is missing (`deleted-in-worktree`); a `typechange`, withheld or `fp: null` draft is missing (`draft-withheld`), never a silent fallback to the committed bytes (a missing image renders as a refused one, with that reason); an entry with no draft is committed at C (`baseEqual` makes H equal C) under the same file/exec condition as a committed page; no entry is refused `absent`. This is the one asset rule, shared with mockup assets (§5.6.3). It is derived once, by `imagePinFor(e, tree, page)` in `docs/docsLinks.ts` (amended 2026-10-13). `DocImage`, Export (§4.17) and, from W6, the mockup planner all call it (M4.EX11).
 - `doc` of any other class: refused `not-image`; an `html` target also gets **Open in viewer** (its leaf route).
 - `external` http(s): refused `external` with **Open image externally** (`openExternal` on tap).
 - everything else: refused with its reason.
 - Image index at or beyond `DOCS_MAX_IMAGES_PER_PAGE` (30): `deferred`, a **Load image** button.
-- Loading: pinned images join the per-screen `fetchQueue` (concurrency 2, shared with mockup assets; §6 owns the real bound). A raster goes through `loaders.raster` and becomes an object URL through `rasterObjectUrl` (§5.4), revoked on unmount or replacement; an SVG goes through `loaders.file` and becomes a `data:image/svg+xml;base64,...` URL, never a `blob:` (§5.5).
+- Loading: pinned images join the per-screen `fetchQueue` (concurrency 2, shared with mockup assets; §6 owns the real bound). A raster goes through `loaders.raster` and becomes an object URL through `rasterObjectUrl` (§5.4), revoked on unmount or replacement; an SVG goes through `loaders.file` and becomes a `data:image/svg+xml;base64,...` URL, never a `blob:` (§5.5). A loaded image's `Blob` or `data:` string is also recorded in the leaf's `ExportAssets` (§4.3; amended 2026-10-13).
 - Rendered as `<button className="doc-img-link" onClick={() => navigate(<the image's own leaf>)}><img src alt className="msg-img" /></button>` plus its chip. Tapping opens the image's leaf in-app; there is never a top-level navigation to `/api/...`. The fetch goes through the funnel, so a 401 raises the login overlay, which a bare `<img src>` could not do.
 - Failure: a chip with the failure sentence, "unexpected response" (§5.4), or "could not reach the server". Refused: `<span className="doc-img-refused" role="img" aria-label={alt}>` with "Image not loaded: {reason}".
 
@@ -1909,7 +2014,7 @@ Steps: trim leading and trailing ASCII whitespace and C0 controls (as a browser 
 | `DocMarkdown` around the doc body | pin key | `DocPlain` "This document could not be displayed; shown as plain text." |
 | `ChatList.tsx` `ChatItemView`, per item | message text / item key | message: `<pre className="msg-plain">` + "could not render"; other items: "This item could not be shown." (covers virtualised and not, since `ChatListInner` shares `ChatItemView`) |
 
-**Chat (ruling U3 = (b)).** Boundaries, the iterative `remarkAlerts` and the 64 Ki-char highlight cap reach chat by construction. Added for chat:
+**Chat (ruling U3 = (b)).** Boundaries, the iterative `remarkAlerts`, the 64 Ki-char highlight cap and, from W5, the component bounds of §4.10 (amended 2026-10-13) reach chat by construction. Added for chat:
 1. `prescanMarkdown` in front of the synchronous path; a refusal renders `<pre className="msg-plain">` (0 of 7 879 real chat blocks trip it).
 2. Messages at most `CHAT_SYNC_MAX_BYTES` (UTF-8) render exactly as today: `<Markdown remarkPlugins={[remarkGfm, remarkAlerts]} components={CHAT_COMPONENTS}>`.
 3. Longer messages (about 1% of blocks) parse through `chatRunner` with a 2 s budget: `msg-plain` until the first outcome, then the **last good** tree while newer streaming text parses (at most one running and one queued job per hook; the queued one is replaced); a tree renders through `renderHast(tree, {components: CHAT_COMPONENTS, urlTransform: defaultUrlTransform})`, byte-identical to the sync path (M4.P10); any other outcome renders `msg-plain` with a one-line note; no Format-anyway in chat; the streaming caret stays after the body.
@@ -1921,12 +2026,33 @@ Steps: trim leading and trailing ASCII whitespace and C0 controls (as a browser 
 - **StartProgramSheet gets no link:** its only path is a programme ledger, which is not a section and does not exist before the run.
 - **No ProjectCard Docs link** in this programme; the index and the session rows cover it.
 
+Deferred by the Share and Export amendment (2026-10-13):
+- **Expiring share links** (operator, 2026-10-06: later, as their own designed wave with a threat model). Nothing is designed for them.
+  - **What keeps the option open.** Share's result is a discriminated union, so a link kind with an expiry can be added as one more arm. The export builder is pure, and its `ccrc-docs-export/1` generator meta versions the format. Share and Export spend no page key, route or census entry, and write no durable state.
+  - **Questions recorded for the threat model.** Drafts served at a public URL. Revocation storage, against `coord.db`'s rule of refusing to start rather than open empty. A snapshot at share time, against a live read through ccd: a live read would be an unauthenticated path to a fleet exec. Inlined hidden assets (§5.6.9) in a public snapshot.
+- **Export of a section, directory or project as a bundle** (decision 6). A bundle is a different artefact with different limits.
+- **Share in the full-screen bar** (`frame=full`). The bar is deliberately thin, and the leaf header is one Close away.
+- **The options not taken.** The native share sheet on the first tap (decision 1, option (b)). Export fetching images that are not loaded (decision 3, option (b)). `navigator.share({files})` as Export's first route (decision 7, option (b)); it stays as the contingency `export-share-file`.
+- **Export after W8.** On the 2026-10-12 spec's reader path, a page renders inside a sandboxed frame and produces no hast tree. Export builds from the plain pipeline's tree, so it would no longer export exactly what a reader-path page shows. W8 must decide between two options: keep Export on the plain render, with the provenance saying so; or the no-JS static variant that spec lists under Later. Until W8, every page uses the plain pipeline, and the two are the same. That spec's W8 row carries this decision, edited in the same change (§7.7).
+- **W8's copy op.** That spec's reader copy op (its M8.19) calls `writeText` from the parent, under `pwa/src/docs`. M4.SH7 allows `clipboard.writeText(` there only in `docs/share.ts`, so the copy op must go through `copyText`. M8.19's hidden-character check then wraps the one writer, and covers Share's Copy link and "copy commit" too. That spec's W8 row says so, edited in the same change (§7.7).
+- **Share on a version view (W5b).** The 2026-10-12 spec's `at=<sha>` page (W5b, after W5) opens a commit that need not be the served ref's tip. Share's rows judge `ref.relation`, which describes the tip, so W5b re-derives Share's rows for version views. W5's Share never sees one.
+
 ### 4.14 CSS, contrast, tap targets
 
 - `docs/docs.css` uses tokens only (`--sp-*`, `--tap-min`, `--ink-*`, `--bg-*`, the existing tint/text pairs, `--r-sm`); no literal colours.
-- The doc body is `.doc-body.msg-assist`, inheriting every contrast-measured markdown pair and the reading measure (`chat.css:928+`; `.msg-assist` is grounded on `--bg-page`, `design/audit.mjs:486`).
+- The doc body is `.doc-body.msg-assist`, inheriting every contrast-measured markdown pair and the reading measure (`chat.css:928+`; `.msg-assist` is grounded on `--bg-page`, `design/audit.mjs:486`). From W5 those rules live in `lib/markdown.css` (below), and these citations move with them.
 - New chrome is registered in `design/audit.mjs` `GROUNDS` with a `why`, following `.settings-*` (`audit.mjs:753-804`): `.docs-door` (+`:active`), `.docs-back`, `.docs-crumb`, `.docs-truth`, `.docs-fresh[data-state=*]`, `.docs-row`, `.docs-badge`, `.doc-link-inert`, `.doc-img-refused`, `.doc-plain`, `.doc-plain-note`, `.msg-plain`, and §5's `.docs-mockup-*` chrome. `.docs-door` also gets `.shell-nav`'s `--bg-surface` ground, as `.settings-door` does. The frozen census admits no unregistered identity (`contrast.test.ts:1162-1165`).
 - `docs.css` sets no `overflow` on `.shell-detail` (`shell-css.test.ts`).
+- **The Markdown rules move** (amended 2026-10-13, W5), so that Export can include them without the rest of chat's 2 799 lines.
+  - **What moves.** The Markdown block of `session/chat.css`, about lines 925-1225 at `28cb18d53`, which W5 re-measures: its `.msg-assist*` rules, `.msg-plain`, `.md-table-wrap`, the `.code-block*` rules and the hljs rules. It goes to `lib/markdown.css`.
+  - **Imports.** `lib/markdown.tsx` imports `./markdown.css` in place of `../session/chat.css`. `chat.css` keeps its other importers (19 at `28cb18d53`: `SessionScreen.tsx` and 18 files under `session/`); only `lib/markdown.tsx` switches. The 2026-10-07 design had `chat.css` `@import` the new file instead. A direct import needs no `@import`, which `chat.css` has never used.
+  - **Re-keying.** The audit keys its entries by file and selector, and `audit.mjs` reds a key that matches no rule. So the move re-keys every registered `chat.css` Markdown entry to `markdown.css`: in `audit.mjs`, in `contrast.test.ts`'s grandfathered block, and in the contrast mutations that edit `chat.css`.
+  - **The guard.** The census unchanged in content (M4.S1), plus a comparison of the built stylesheet before and after the move (M4.EX14). M4.M1 is not the guard: it compares markup and reads no CSS.
+- **Export's stylesheet** (amended 2026-10-13) is derived, never typed twice.
+  - It is `tokens.css`, `lib/markdown.css` and `docs/export/export.css`, imported with Vite's `?inline` at build time. Nothing in `pwa/src` or `vite.config.ts` uses `?inline` at `28cb18d53`, so whether it works under the Tailwind plugin and under vitest is a W5 measurement (§4.17).
+  - `export.css` uses tokens only. It restates the body ground and ink that `styles/base.css` gives the app, which the export does not include, and it is registered in `GROUNDS` like the rest.
+  - No hex literal appears in `docs/export/*.ts` (M4.EX10).
+- **Share and Export chrome** (amended 2026-10-13) joins the registrations and both halves of `tap-targets.test.tsx`: `.docs-share*` and `.docs-export*`, meaning the two sheets, Share…, Copy link, Save, Retry and the draft-asset confirm. Both sheets use the existing `components/Sheet.tsx`.
 - Every new control gets both halves of `tap-targets.test.tsx` (CSS scrape of `min-height: var(--tap-min)` and a render assertion): door, back, crumb, row, chip, gate buttons, Load image, banner actions, the session-sheet and menu rows, and §5's toolbar buttons.
 
 ### 4.15 Mutation rows (§4; PWA tests under `pwa/test/`)
@@ -1968,7 +2094,7 @@ Steps: trim leading and trailing ASCII whitespace and C0 controls (as a browser 
 | M4.T4 | Drafts-state banners | parametrised over ambiguous, untrusted, unreadable, unsettled, too-many, none-with-skipped | drop any banner |
 | M4.T5 | `onRef` | `not-contained` shows its banner | drop it |
 | M4.T6 | Open committed version | the button navigates to `view=committed`; the loader gets `CommittedPin(C)`; no commit appears in `location.href` | put the commit in the URL |
-| M4.T7 | One badge function | row and leaf badge text equal for every draft fixture; a source scan finds no `.draft.state` read in `pwa/src/docs/**` outside `entryView` | a second badge derivation |
+| M4.T7 | One badge function | row and leaf badge text equal for every draft fixture; a source scan finds no `.draft.state` read in `pwa/src/docs/**` outside `entryView`. Amended 2026-10-13: the text `share.ts`, `provenance.ts` and `buildExport.tsx` produce equals the row badge for every draft fixture, and the scan covers them | a second badge derivation |
 | M4.F1 | Sentences exhaustive | typecheck `Record<DocsFailure, string>`; every `DOCS_FAILURES` key has a sentence of 20+ chars; same for `DocsPageParseFailure` | delete a key |
 | M4.F2 | Unknown word kept | `{failure:'brand-new-word'}` renders a sentence containing it | fold it into a known one |
 | M4.F3 | Retry classes | parametrised over `DOCS_FAILURE_RETRY` | retry `none`; retry forever |
@@ -1985,7 +2111,275 @@ Steps: trim leading and trailing ASCII whitespace and C0 controls (as a browser 
 | M4.C1 | Chat pre-scan (U3 b) | an assistant `'>'.repeat(4000)` renders `.msg-plain` | delete it |
 | M4.C2 | Chat worker threshold (U3 b) | runner spy called for 5 000 B, not for 4 000 B | always sync |
 | M4.C3 | Chat image refusal (U3 b) | `![](/api/example/x)` gives no `img[src^="/api"]`; the `https` image case in `message-links.test.tsx` stays green | delete the clause |
-| M4.S1 | Contrast registrations | `contrast.test.ts`: census unchanged, `.docs-door` measured on its second ground | drop a registration |
+| M4.S1 | Contrast registrations | `contrast.test.ts`: census unchanged, `.docs-door` measured on its second ground. Amended 2026-10-13: the moved Markdown entries re-keyed to `markdown.css`, and the Share and Export chrome and `export.css` registered | drop a registration |
+| M4.SH1 | Only GitHub URLs leave (W5) | `docs-share.test.ts`: every share argument (`url`, `title`, `text`) over the page fixtures. The URL is `https://github.com/<owner>/<name>/blob/` or `/tree/`, then a full commit of 40 or 64 hex, then nothing or `/`. No ccrc origin, `/docs/`, `/api/`, worktree path or session id appears in any argument. `title` and `text` follow §4.16's rule for each kind, the project page included (`title` is the project, `text` is `<project> at <short>`). A leaf's `title` is the repo path's basename even when the doc's h1 is hostile (`Re-authenticate at https://a.example`, bidi controls). A raster leaf's link names the commit of the pin `DocImage` loaded | share a page URL; use the h1 |
+| M4.SH2 | Drafts warning (W5) | a ref-view leaf opening a draft with a committed side gives the committed permalink at C plus "Drafts are not included…"; the default view gives no warning | drop or misplace the warning |
+| M4.SH3 | New drafts (W5) | `added` or `untracked` with `fp`: no link (`new-draft`), Export enabled. A withheld new file (`opens === 'none'`): no link (`new-withheld`), and Export absent | link a new draft; offer Export with no bytes |
+| M4.SH4 | Activation kept for Share (W5) | a spy records `navigator.share` inside the Share… click's synchronous turn, with no microtask boundary before it | an `await` before the call |
+| M4.SH5 | Fallbacks (W5) | no Web Share: Copy link only. `AbortError`: nothing. Any other rejection: the inline notice. `copyText` rejecting: a selected read-only field holding the URL | swallow a rejection; drop the field |
+| M4.SH6 | Notes and sentences (W5) | every `ShareNote` key's note on its fixture; `SHARE_SENTENCE` exhaustive over `ShareRefusal` and `SHARE_NOTE` over `ShareNote`, by type; `uncommitted` becomes `new-draft` or `new-withheld` by `entryView(...).opens`. The access note shows on every sheet that has a slug, link or refusal (`not-on-origin`, `unmeasured`, `bad-target`, `new-draft`, `new-withheld`), and on none for `no-github-origin` or `bad-slug` | drop a note; make the access note show only with a link; fold the two new-file words |
+| M4.SH7 | One share door (W5) | `docs-scans.test.ts`, with planted controls: `navigator.share(` only in `docs/ShareSheet.tsx`; `clipboard.writeText(` under `pwa/src/docs` only in `docs/share.ts` (`copyText`, used by Share and by "copy commit"); Share and Export add no `postMessage(` and no `'message'` listener. If the contingency `export-share-file` fires, it adds exactly one file, `docs/objectUrls.ts`, to the `navigator.share(` allowance, with its own planted control. W8's reader copy op goes through `copyText` (§4.13) | a second caller |
+| M4.SH8 | Where Share and Export sit (W5) | `docs-screen.test.tsx`: no Share on `/docs` or in `frame=full`; a leaf's actions read View on GitHub, Share, Export, Open committed version, in that order; the project page carries View on GitHub and Share through `root`; while the tree slot is loading, Share and Export are hidden; Export is not offered for class `other`, nor for `html` in W5 | render Share on the index; drop the root View on GitHub; show Share before the tree slot is `ok` |
+| M4.EX1 | CSP first (W5) | `docs-export.test.tsx`: the file begins with `<!doctype html>`, with no byte before it. In the parsed export, the first `head` child after `meta charset` is the CSP meta, whose content is exactly `DOCS_EXPORT_CSP`. The policy is also checked re-tokenised: `default-src 'none'` is present; no `script-src`, `script-src-elem`, `script-src-attr`, `connect-src`, `frame-src`, `child-src` or `worker-src` directive, and no `'self'`, appears anywhere; `img-src`, `style-src` and `font-src` hold exactly the sources §4.17 lists; `base-uri` and `form-action` are `'none'` | move it; add a `script-src` or `connect-src` to `DOCS_EXPORT_CSP`; drop `default-src 'none'`; drop the doctype |
+| M4.EX2 | Inert by construction (W5) | **structural**: DOMParser over the export of a hostile corpus. The corpus holds an h1 `</title><meta http-equiv=refresh…><style>.ccrc-export-draft{display:none}</style>`, a worktree segment holding `<"`, raw HTML, a bare `<br>` and an attributed `<br class=x>`, hostile link and image targets, and a hostile SVG leaf (a `<script>`, an `onload` and an external `href`). The export has 0 `script`, `iframe`, `object`, `embed`, `base`, `form`, `button` or `svg` elements, and no `on*` attribute. Every URL-bearing attribute is checked, not only `href` and `src`: `img[src]` alone may hold a URL, and only `data:image/`; `a[href]` alone may hold `#`, `https:`, `http:` or `mailto:`; `srcset`, `poster`, `cite`, `background`, `action`, `formaction`, `ping`, `data` and `xlink:href` are absent; nothing holds `blob:` or `/api/`. No `style` attribute, and no `<style>` text, holds `@import` or a `url(` other than `data:`. An `svg` or `raster` leaf exports as exactly one `img[src^="data:image/"]`. There is exactly one `meta[http-equiv]` and one `style`. The banner is present on a draft. The title text equals the input. **Scan** (`docs-scans.test.ts`, with planted controls): §4.17's token list over `docs/export/**`, `docs/ExportSheet.tsx`, `docs/share.ts` and `docs/ShareSheet.tsx` (W6 adds `docs/mockup/exportMockup.ts`) | build the shell from strings; serialise the live DOM; emit a `srcset` or a `style` `url()`; add a `dangerouslySetInnerHTML`; inline an SVG leaf as markup |
+| M4.EX3 | Images from memory (W5) | every exported image is `data:<mime>` from `ExportAssets`, with the MIME from `DOCS_RASTER_TYPES`; the loader spies see 0 calls; with fake timers, a pending load is awaited up to `DOCS_EXPORT_IMAGE_WAIT_MS` and then becomes a placeholder. An image whose `fp` changes while the leaf's pin does not exports as a placeholder or the new bytes, never the old ones | fetch on export; take the MIME from `Blob.type`; key `ExportAssets` by path |
+| M4.EX4 | Link table (W5) | every row of §4.17's link table, including a `doc` target absent from the listing (an inert span), a `repo` target (a permalink) and a fragment (kept) | link a missing doc |
+| M4.EX5 | No path leaks (W5) | the **whole file**, over every placeholder state: `ambiguous-worktree` with candidates, and a `git-failed` `stderrHead` and a worktree path that each name a fixture home directory and user. Neither that directory nor that user name appears. `EXPORT_MISSING_SENTENCE` is exhaustive, and no value holds `{` | render `detail`; a path-segment label |
+| M4.EX6 | Exports what is shown (W5) | a draft leaf exports the draft, with the banner and a `-draft` filename; `view=committed` exports the committed bytes with no banner | export the draft on `view=committed` |
+| M4.EX7 | Size budget (W5) | images are inlined in document order while the file fits `DOCS_EXPORT_MAX_BYTES`, and later ones become placeholders. A body alone over the cap drops highlighting, then says "Too large to export; use Download". The body is never cut | truncate the body |
+| M4.EX8 | Octet-stream only (W5) | `saveBytes` and `downloadExport` build `application/octet-stream` blobs only (with M5.17) | a `text/html` blob |
+| M4.EX9 | Filename grammar (W5) | `<project>_<section>_<path, '/' as '__'>_<short8>[-draft].html`, only `[A-Za-z0-9._-]`, at most 150 characters, over a corpus with non-ASCII and long paths | pass a path character through |
+| M4.EX10 | Derived CSS and theme (W5) | `export.css` is registered in `audit.mjs`; no hex literal in `docs/export/*.ts`; a light exporter gives `<html data-theme="light">`, a dark one no attribute | type a palette; emit `data-theme="dark"` |
+| M4.EX11 | One pin rule (W5) | `imagePinFor` is the only derivation: `DocImage` and Export call it (and the mockup planner, from W6), and a scan finds no second | a second derivation |
+| M4.EX12 | Pin mismatch (W5) | with the tree swapped to C2 while the file is at C1, Share and Export are disabled and read "Updating to"; once they are enabled, the provenance commit equals the opened pin's commit, which equals the file answer's `commit`. A raster leaf: both wait for the image to load, and use the commit of the pin `DocImage` loaded | use `tree.ref.commit` on a leaf |
+| M4.EX13 | Activation kept for Save (W5) | a spy on `HTMLAnchorElement.prototype.click` records the download click inside the Save click's synchronous turn, with no microtask boundary before it; under `export-share-file`, a spy on `navigator.share` does the same. A spy on `saveBytes` alone does not satisfy the row | an `await` before the call, in `downloadExport` or inside `saveBytes` |
+| M4.EX14 | The CSS move (W5) | `contrast.test.ts`'s census is unchanged in content, and its `chat.css` Markdown keys are re-keyed to `markdown.css`. The production build's stylesheet, compared before and after the move, holds the same rules; any difference is listed in the W5 plan | drop a moved rule; leave a stale `chat.css` key |
+| M4.EX15 | Settled outcome only (W5) | while `useParsedMarkdown` is `pending`, or its outcome answers another text, Export is disabled; once settled, the exported body's text equals the rendered body's | export `lastGood` |
+| M4.EX16 | Export confinement (W5) | `docs-scans.test.ts`, each clause with its own planted control:<br>- `URL.createObjectURL(`, as M4.EX16 has it from W5;<br>- `new Blob(` and `new File(` under `pwa/src/docs` and `lib/markdown*` only in `docs/objectUrls.ts`, whose types M5.17 pins;<br>- `<iframe` and `srcDoc` nowhere in `pwa/src` (W6's M5.16 adds its two files);<br>- `react-dom/server` and `renderToStaticMarkup` only in `docs/export/buildExport.tsx`;<br>- `buildExport.tsx` exports only `buildExport` and types, and `buildExport` is imported only by `docs/ExportSheet.tsx`, which passes its result's bytes only to `downloadExport`;<br>- no `srcDoc`, `dangerouslySetInnerHTML`, `innerHTML`, `document.write` or `window.open` in `docs/ExportSheet.tsx` | a second importer of `buildExport`; render the export in the sheet; a second blob builder |
+
+### 4.16 Share (amended 2026-10-13; W5)
+
+Share sends a link to the page: a GitHub permalink at the commit the page opened (§0 `sharing`, `share-drafts`, `share-export`). It runs entirely in the PWA. It adds no route, wire field, page key or census entry, and writes no durable state.
+
+```mermaid
+flowchart TD
+  A["Tap Share on a project, section, directory or leaf page"] --> B{"Tree slot ok, and the opened pin equals pinFor?"}
+  B -- "no" --> X["Share hidden, or disabled: Updating to the new commit"]
+  B -- "yes" --> C["shareTargetFor: page, entry and opened answer give a GithubTarget and a commit"]
+  C --> D["githubPermalink with github, ref, commit and target"]
+  D -- "refused" --> E["Sheet shows the reason, and Export when a body is open"]
+  D -- "ok: blob or tree at the full commit" --> F["ShareSheet: URL, notes, access note"]
+  F --> G{"Web Share usable?"}
+  G -- "yes" --> H["Share: navigator.share called synchronously in the click"]
+  G -- "no" --> I["Copy link only"]
+  H -- "AbortError" --> J["Nothing"]
+  H -- "other rejection" --> K["Inline notice, Copy link remains"]
+  I -- "copy fails" --> L["Read-only field with the URL selected"]
+```
+*Figure 1. Share, from the tap to the native share sheet or a copied link. Every link is a GitHub permalink at the commit the page opened.*
+
+**Which commit.** Goal 4 applied to Share: the link names what the page served.
+- **A leaf that opens committed** (every default-view leaf, every `view=committed` leaf, every ref-view leaf that opens committed) uses the opened pin's commit, the `commit` of its `CommittedPin` (§4.3). For a leaf with a file answer, that is the commit `DocsShowOk.commit` echoes (present on committed answers only), and M4.EX12 checks that they agree. A raster leaf has no file answer: its opened pin is the pin `DocImage` loaded, Share waits for that image instead of a file slot, and no `onRef` note applies.
+- **A leaf that opens a draft with a committed side** uses that committed side at C. `baseEqual` holds whenever a draft opens, so the holder's head equals C. The link opens the committed version, with the drafts warning.
+- **Section, directory and project pages** use `tree.ref.commit`, because those pages show the tree.
+
+`githubPermalink`'s rows (§3.11) then judge `ref.side` and `ref.relation`, which describe the served ref whose tip that commit is.
+
+**`shareTargetFor`** (`docs/share.ts`, pure) maps `(tree, page, entry, opened)` to `{ok: true; url; title; text; notes: ShareNote[]} | {ok: false; why: ShareRefusal}`.
+- **Refusal words.** `ShareRefusal` is `no-github-origin | bad-slug | bad-target | not-on-origin | unmeasured | new-draft | new-withheld`. Each `GithubPermalink` refusal maps to the word of the same name, except `uncommitted`, which splits by `entryView(...).opens`: `new-draft` for a readable new draft (`fp` set), and `new-withheld` for a withheld new file (`opens === 'none'`). They need different sentences, so they are different words.
+- **Note words.** `ShareNote` is `access | html-source | onRef-not-contained | onRef-unmeasured | drafts-excluded | view-committed | admitted-committed | dir-drafts`, one per note in the table below.
+- **Draft words.** Every draft-state word comes from `entryView(e, drafts, mode)` (its `opens`, `badge` and `withheld`), through `ENTRY_BADGE_TEXT` and `WITHHELD_SENTENCE`. It never reads `.draft.state` (M4.T7).
+- **Title.** By kind: a leaf's is its repo path's basename, which the path grammar already checks; a directory's or a section's is the last segment of its repo path; the project page's is the project name. It is never the document's h1 or `<title>`, which the document's author controls.
+- **Text.** `<project> · <repoPath> at <short commit>` for a leaf, a directory or a section, with the section's or directory's own repo path; `<project> at <short commit>` for the project page.
+- **What never appears.** The ccrc origin, `/docs` and `/api` URLs, worktree paths, session ids and box names (M4.SH1).
+- **Shape.** The result is a discriminated union, so a later kind of link (§4.13's expiring links) adds an arm without changing callers.
+
+**The sheet** (`docs/ShareSheet.tsx`, on `components/Sheet.tsx`). Decision 1: Share always opens it. It shows the URL and the notes, with two buttons:
+- **Share…** appears only when Web Share is usable. It calls `navigator.share({url, title, text})` synchronously in its click, with no `await` before it (M4.SH4). `AbortError` does nothing. Any other rejection shows an inline notice and leaves Copy link.
+- **Copy link** calls `copyText(url)`. That is `docs/share.ts`'s one clipboard writer under `pwa/src/docs`, shared with the truth line's "copy commit". If it fails, a read-only field holds the URL, selected.
+- **The access note shows on every sheet that has a slug** (decision 8): "Opens on GitHub (<slug>). People without access see GitHub's 404." It shows with a link and with every refusal except `no-github-origin` and `bad-slug`, which have no usable slug to name. ccrc makes no GitHub call (`gh` is deliberately not whitelisted), so it cannot know whether a repository is public.
+- A desktop browser without Web Share gets the same sheet, with Copy link only.
+
+**What Share sends, by page.** This is the operator's 2026-10-07 drafts ruling. `mode` is `default` iff `page.ref === null`. An entry is **admitted** iff `mode === 'ref' && admitDraft(e, tree.drafts)`. `view = entryView(e, drafts, mode)`. The labels in the notes are the closed labels of §4.17.
+
+| Page | Link | Note |
+|---|---|---|
+| A leaf that opens committed: the default view, or a ref view where the entry is not admitted | `/blob/<C>/<path>` | none |
+| `view=committed` on an admitted entry | `/blob/<C>/<path>` | `view-committed`: "Uncommitted changes in <label> are not included." |
+| `opens === 'draft'`, with a committed side | the committed permalink at C | `drafts-excluded`: "Drafts are not included: the link opens the committed version at <short C>; <label> has uncommitted changes to this doc." |
+| `opens === 'draft'`, a new file (`fp` set) | none (`new-draft`) | its refusal sentence, below |
+| `opens === 'none'`, a withheld new file | none (`new-withheld`) | its refusal sentence, below |
+| Admitted, but the leaf opens committed (`deleted`, `typechange`, withheld) | the permalink | `admitted-committed`: "<ENTRY_BADGE_TEXT> in <label>; the link opens the committed version." |
+| An `html` leaf | the permalink | `html-source`: "GitHub shows this page as source." From W6, it adds: "Export makes a viewable copy." |
+| A file answer with `onRef === 'not-contained'` | the permalink | `onRef-not-contained`: "Commit <short> is no longer on <served>; GitHub may stop serving it." |
+| A file answer with `onRef === 'unmeasured'` | the permalink | `onRef-unmeasured`: "Docs could not tell whether <short> is still on <served>." |
+| Section, directory or project | `/tree/<C>/<path>`, or `/tree/<C>` for the project | in a ref view with drafts, `dir-drafts`: "<k> uncommitted docs here are not included." |
+
+Every sheet that has a slug also carries the `access` note, above.
+
+**Refusals** (`SHARE_SENTENCE`, exhaustive over `ShareRefusal`):
+
+| Why | Sentence |
+|---|---|
+| `no-github-origin` | "No GitHub link for this project. Export makes a file you can send." |
+| `bad-slug` | the same sentence, under its own key |
+| `bad-target` | "Docs could not build a GitHub link for this page. Export makes a file you can send." |
+| `not-on-origin` | "Commit <short> is not on origin; push it to share." The truth line already gives the relation |
+| `unmeasured` | "Docs could not measure whether origin has <short>; Refresh, then share." |
+| `new-draft` | "Not committed yet, so GitHub has nothing to show. Export makes a file you can send." |
+| `new-withheld` | "Not committed yet, and Docs did not read it (<WITHHELD_SENTENCE>); nothing to share or export." |
+
+Where Export is not offered (section, directory and project pages, and leaves of §4.17's excluded kinds), the clause "Export makes a file you can send" is left out.
+
+**When Share is not offered.** Share is hidden while the tree slot is not `ok`. It is disabled, reading "Updating to <short>…", while the opened pin differs from `pinFor(tree, page)`. It is absent on the index and in `frame=full`.
+
+### 4.17 Export (amended 2026-10-13; W5 for Markdown, text and images, W6 for mockups)
+
+Export saves one self-contained HTML file: the leaf as shown, plus its provenance. It is offered on leaf pages only (decision 6). Download stays the way to send a file's original bytes (§5.4). Export makes no docs request, and writes nothing on the server or in the repository (goal 3).
+
+```mermaid
+sequenceDiagram
+  participant U as Operator
+  participant H as Leaf actions and ExportSheet
+  participant B as DocMarkdown and DocImage
+  participant X as Export builder
+  participant O as objectUrls
+  U->>H: tap Export
+  H->>B: settled outcome for the opened pin, and ExportAssets
+  B-->>H: detached tree, its URL map, image bytes already held
+  Note over B,X: no docs request, no re-parse, no live-DOM read
+  H->>X: buildExport with body, provenance and assets
+  X->>X: React shell and body through renderToStaticMarkup
+  X->>X: links through resolveDocRef and githubPermalink
+  X->>X: images to data URIs within 10 MiB
+  X-->>H: bytes, size, notes, placeholders
+  H-->>U: sheet with filename, size, provenance preview, notes, Save
+  U->>H: tap Save
+  H->>O: saveBytes called synchronously in the click
+  O-->>U: octet-stream file named .html
+```
+*Figure 2. Export is two-phase: build from what the visit already holds, then a synchronous Save. No request reaches the server.*
+
+**When it is offered.** On a leaf, once three things hold: the tree and file slots are `ok` (for a raster leaf, the image is loaded, §4.3); the opened pin equals `pinFor(tree, page)`; and the body is ready, which for Markdown means a settled outcome for that pin's text (§4.10), and for `html` (W6) means the plan is done (§5.6.9). Otherwise:
+
+| Case | Export |
+|---|---|
+| The tree slot is not `ok` | hidden |
+| The opened pin differs from `pinFor(tree, page)` | disabled: "Updating to <short>…" |
+| The parse is pending, or the outcome answers another text | disabled: "Formatting…" |
+| The render gate is waiting for a choice | disabled: "Choose Format or Show as text first" |
+| A withheld new file (`opens === 'none'`) | not offered: there are no bytes |
+| Class `other` | not offered: Download |
+| Class `html` | offered from W6 (§5.6.9); not offered in W5 |
+| Class `html` (W6), the auto-render gate waiting for its tap | disabled: "Render the mockup first" |
+| Class `html` (W6), the parse or the plan not done | disabled: "Preparing…" |
+| Class `html` (W6), assets still loading | offered: Export waits up to `DOCS_EXPORT_IMAGE_WAIT_MS`, then uses placeholders |
+| Class `html` (W6), the pre-scan refuses the page | offered: the source as `<pre>` text, with a note (§5.6.9 step 1) |
+
+**What the file holds, by content class.**
+
+| Class | Body |
+|---|---|
+| `markdown` | the settled tree, rendered with `EXPORT_COMPONENTS`. Any other outcome (refused, `too-deep`, `too-wide`, `threw`, `timeout`, the worker words, Show as text) becomes `<pre>` text with the reader's own note |
+| `text` | `<pre>` text, highlighted under the same 64 Ki-character block rule and page budget |
+| `raster`, `svg` | exactly one `img`, whose `src` is a `data:image/` URL of the bytes the page shows. An SVG is never inlined as markup |
+| `html` | W6: §5.6.9 |
+| `other` | not offered |
+
+**Built as React, never as strings.** `buildExport` (`docs/export/buildExport.tsx`) builds one React element, `<html>`, renders it with `renderToStaticMarkup`, and returns `ExportResult`: the bytes, their size, the notes and the placeholders. The element never leaves that file (M4.EX16).
+- **The doctype.** `renderToStaticMarkup` writes no doctype, and a top-level file without one opens in quirks mode. One named constant, `EXPORT_PREFIX`, which is `<!doctype html>`, is joined to the rendered markup in exactly one place, `buildExport`.
+- **The head:** `meta charset`, then the CSP meta, then `<title>`, the `ccrc:*` metas and one `<style>`. React 19's server renderer hoists `<meta>` and `<title>` and can reorder them, and nobody has measured what `renderToStaticMarkup` does with a whole `<html>`. That is a W5 measurement. If React moves either meta, the charset and CSP metas move into `EXPORT_PREFIX`, after the doctype and built from constants only, and M4.EX1 still pins their order in the parsed file.
+- **The stylesheet's text.** `EXPORT_CSS` enters the one `<style>` as its text child. Whether React 19 writes that child unescaped (the CSS holds `>`, quotes and `&`) is part of the same W5 measurement. If React escapes it, the one allowed exception is `dangerouslySetInnerHTML={{__html: EXPORT_CSS}}` on that `<style>` in `buildExport.tsx`. `EXPORT_CSS` is a build-time constant, and a test asserts it holds no `</style`.
+- **The body:** the banner, then the provenance, then the content.
+- **Escaping.** React escapes every interpolated value: the title, the labels and the sentences. A Markdown export is therefore inert by construction, and there is no string-level strip pass.
+- **The scan** (M4.EX2) covers `docs/export/**`, `docs/ExportSheet.tsx`, `docs/share.ts`, `docs/ShareSheet.tsx` and, from W6, `docs/mockup/exportMockup.ts`. They hold no `dangerouslySetInnerHTML` (apart from the one `<style>` exception, if it is taken), no assignment to `innerHTML` or `outerHTML`, no `insertAdjacentHTML` and no `document.write`. They hold no string or template literal that begins with `<` followed by a letter, `/` or `!`, apart from `EXPORT_PREFIX`. Highlighted code reaches an export only through the highlight component the page uses. At `28cb18d53` that is `lib/markdown.tsx`'s code component, whose `dangerouslySetInnerHTML` of highlight.js's escaped output is the one such call in `pwa/src`. There is never a second one under `docs/export/`.
+- **Loading.** `react-dom/server` is loaded with a dynamic `import()` on the first Export, so it stays out of the main chunk. The service worker still precaches it: `globPatterns` takes every `js` file, and there are no `globIgnores`. Its size is a W5 measurement.
+
+**The body** reuses what `DocMarkdown` already holds: the detached tree and its `DetachedUrls` map (§4.10, §4.11). It is rendered with `renderHast(tree, {components: EXPORT_COMPONENTS})`. `EXPORT_COMPONENTS` is `DOC_COMPONENTS` with four overrides:
+- `a`: the link table below;
+- `img`: images from `ExportAssets`;
+- a static `pre`, with no copy button, under the highlight decision `detachUrls` recorded;
+- table wrappers without the scroll control.
+
+The docs profile's `<br>` (the 2026-10-12 spec's A16, also in W5) passes through as a real `br`.
+
+**The main-thread cost.** The build runs synchronously on the main thread, through the same `SHARED_COMPONENTS` as the page. So it meets the three costs W4 carried to W5, which W5 bounds in those components (§4.10; coordinator, 2026-10-13):
+- highlight.js is quadratic on one long identifier run (W4's r10);
+- `keystrokeParts`' split is quadratic on a long run of whitespace (r11);
+- the keystroke cap is per span, which lets about 204 850 elements through from a 205 KB message (review 2-2).
+
+Export is offered only after the page has drawn the same tree with the same components, so a build repeats, as a string, work the page has already done once. So it is bounded by whatever bounds the page, and by nothing more. W5's bounds on those three costs therefore bound the page and Export alike, and chat as well. W5 measures and states each bound's value in its plan (§4.10). W5 also measures the build's time, with those bounds in place, at `DOCS_MAX_RENDER_ELEMENTS` and at a 10 MiB output on desktop Chromium, and records it in its plan. A time over the parse budget goes to the operator as a W5 finding. The sheet shows "Building…" in the meantime.
+
+**CSP.** `DOCS_EXPORT_CSP = "default-src 'none'; img-src data:; style-src 'unsafe-inline' data:; font-src data:; base-uri 'none'; form-action 'none'"`.
+- It lives in `docs/export/policy.ts`, beside the export limits. That follows `MOCKUP_CSP`'s precedent: a PWA policy lives in the PWA, not in `shared/`.
+- It has no `script-src`, so scripts fall back to `'none'`.
+- It is the first child of `<head>` after `meta charset` (M4.EX1).
+- `font-src data:` serves a mockup's inlined fonts (§5.6.9). A Markdown export uses system fonts only (`tokens.css` declares no `@font-face`).
+
+**Stylesheet and theme.** `EXPORT_CSS` is the three `?inline` stylesheets of §4.14 in one `<style>`. `tokens.css` is dark-first (`:root`), with a `[data-theme='light']` block and no `prefers-color-scheme` block. `lib/theme.ts` sets `data-theme="light"` for light, and removes the attribute for dark. The export does the same with the exporter's resolved theme (decision 12): `<html data-theme="light">`, or no attribute. The recipient sees what the sender saw, and no colour is typed or transformed twice. The content is `<article class="doc-body msg-assist">`.
+
+**Images: bytes already in memory, never fetched** (decision 3).
+- **Source.** Each `img` takes its bytes from the leaf's `ExportAssets` (§4.3), chosen by `imagePinFor` (§4.11). A raster becomes `data:<mime>;base64,…`, with the MIME from `DOCS_RASTER_TYPES`, never from `Blob.type`. An SVG keeps the `data:` string the page shows.
+- **Waiting.** An image still loading is awaited up to `DOCS_EXPORT_IMAGE_WAIT_MS` (10 000), and then becomes a placeholder.
+- **Placeholders.** Deferred images (past `DOCS_MAX_IMAGES_PER_PAGE`), refused, failed and external images become placeholders. When any is deferred, the sheet says "<k> images not loaded; tap Load image first."
+- **Placeholder text is closed.** `EXPORT_MISSING_SENTENCE: Record<ExportMissing, string>` has no `{field}` placeholder (§4.7, M4.EX5). Each word names a class of missing image, never an instance. The plan lists the words.
+- **Drafts.** A draft image carries a "draft" caption.
+
+The export limits live in `docs/export/policy.ts`, not in `lib/markdownLimits.ts`. That file's rule covers render limits, and these are limits on a saved file.
+
+**Links** (`EXPORT_COMPONENTS.a`; C is the commit the leaf opened, §4.16):
+
+| Resolution (`resolveDocRef`) | In the file |
+|---|---|
+| `doc`, target in `tree.entries` with a committed file or exec side | `githubPermalink` at C: `<a href rel="noopener noreferrer">`, or an inert span when it refuses |
+| `doc`, target absent from the listing, or not committed | an inert span: "not in this listing at <short C>" |
+| `repo` | `githubPermalink` with `{kind: 'repo', repoPath}` |
+| `fragment` | kept (`href="#…"`) |
+| `external` http(s) or mailto | `href`, with `target="_blank" rel="noopener noreferrer"` |
+| refused, or self-contained | the reader's inert span, with no `href` |
+
+**Provenance.** A block after the banner and before the content holds these facts. The same facts are written as `ccrc:*` metas, beside a `generator` meta reading `ccrc-docs-export/1`.
+- the project and the repo path;
+- `ref.served` and its `VIA_SENTENCE`;
+- the full commit, and the permalink or the reason there is none;
+- the source: committed, `view=committed`, or a draft with its badge;
+- the time it was exported (ISO 8601, UTC) and the build version;
+- notes: `onRef`, drafts not included, and how many images are not included.
+
+The worktree label is **closed**: "main checkout", "workspace <last segment>" (class `workspace` only), or "another worktree". It never carries other path segments, the absolute path, a host, the origin, a session id or a user name. That is deliberately less than the truth line shows (§4.5 gives the last two segments, and the full path in `title`): the truth line stays in the operator's browser, and the file may travel. So M4.T7's one-badge rule covers the badge text, not this label. The sheet previews all these facts before Save, because they leave with the file (goal 4).
+
+**Drafts** (§0 `share-drafts`; the inputs are those of §4.16's table):
+
+| View | Export |
+|---|---|
+| Default view, with a hint or without | committed, no banner |
+| Ref view, entry not admitted | committed |
+| `opens === 'draft'`, with or without a committed side | the draft, under the banner; the filename ends `-draft` |
+| `opens === 'none'`, a withheld new file | not offered |
+| Admitted, but the leaf opens committed (`deleted`, `typechange`, withheld) | committed, with the note "<ENTRY_BADGE_TEXT> in <label>; not included" |
+| `view=committed` on an admitted entry | committed, with the same note |
+
+**The banner** is the first child of `<body>`. For a mockup it is wrapper chrome, outside the frame (§5.6.9).
+
+> **Draft, not committed.** This copy includes uncommitted changes from <closed label> on <drafts.branch>. Based on commit <full C> (<ref.served>). It is not on GitHub. Content fingerprint sha256:<first 12 hex of fp>. Read <time>.
+
+- **Images.** It adds "It embeds <k> uncommitted images." when any image is a draft.
+- **The branch is never null here.** A holder always holds a named branch, so `drafts.branch` is set. The carried `branch: null`, which covers both a detached HEAD and an unmeasured read, never reaches this sentence.
+- **It matches the screen.** Export uses the bytes pinned by `fp`, and is disabled while the opened pin differs from `pinFor`. So the banner's C and fp are exactly what was on screen, and a later `draft-changed` never alters a file already saved.
+
+**Filename** (`docs/export/filename.ts`): `<project>_<section>_<path with '/' as '__'>_<short8>[-draft].html`. It uses only `[A-Za-z0-9._-]`; any other character becomes `-`. It is at most 150 characters, and the path part is cut first.
+
+**Size** (decision 4): `DOCS_EXPORT_MAX_BYTES` = 10 MiB of output, in `docs/export/policy.ts`.
+- Images are inlined in document order while the file fits. Later ones become placeholders.
+- The body is never cut. If the body alone is over, highlighting is dropped. If it is still over, the sheet says "Too large to export; use Download."
+- **A mockup export** (W6, §5.6.9) counts the final file: its inner document escaped into the wrapper's `srcdoc` attribute, where each `"` and `&` grows, plus the wrapper's chrome. Inlined assets are kept in DOM order while that file fits, and later ones become placeholders, each listed in the sheet and the provenance. If the stripped page with no assets is still over, the sheet says "Too large to export; use Download."
+- E4 measured up to 11.2 M characters of `data:` rendering in an in-app srcdoc, on desktop Chromium. How a recipient's browser opens a 10 MiB file is not measured, and nothing schedules it; the cap stays at 10 MiB until a measurement says otherwise.
+
+**Save** (decision 7). The sheet's **Save <filename> (<size>)** button calls `downloadExport(result)` synchronously in its click, with no `await` before it (M4.EX13). That calls `saveBytes(name, bytes)` (§5.4): an octet-stream blob, clicked through `<a download>`, never a `text/html` blob (E6). Contingency `export-share-file`: if W6's phone pass finds that Save does not land a usable file from an installed iOS app, the same synchronous click calls `navigator.share({files})`, from `docs/objectUrls.ts` (§5.4, M4.SH7).
+
+**Failures and limits:**
+
+| Case | Behaviour |
+|---|---|
+| The lazy `react-dom/server` chunk fails to load | "Export could not start ({error.name})", with Retry |
+| The build throws | "Export failed ({error.name})". The page is untouched: the build renders nothing into the page, so no `RenderBoundary` is involved |
+| An image still loading | awaited up to 10 s, then a placeholder |
+| Over 10 MiB | later images become placeholders. If the body alone is over: highlighting dropped, then "Too large to export; use Download." |
+| A 401 while an image is awaited | the login overlay rises, because that fetch goes through the funnel; the image becomes a placeholder |
+| Save from an installed iOS app lands no file | W6's phone pass; `export-share-file` |
+
+The disabled states are in the "When it is offered" table above.
+
+**What W5 and W6 must measure.** None of these is a fact yet.
+
+| What | Wave | If it fails |
+|---|---|---|
+| `?inline` stylesheet imports build under the Tailwind plugin and run under vitest | W5, first export task | the plan records the alternative it chose before any export test lands |
+| The build's main-thread time at `DOCS_MAX_RENDER_ELEMENTS` and at a 10 MiB output, and the size of `react-dom/server`'s chunk | W5 | recorded in the plan; a time over the parse budget goes to the operator as a W5 finding |
+| React 19's `renderToStaticMarkup` over the export's `<html>`: the head order, and whether a `<style>` text child is written unescaped | W5, first export task | the metas move into `EXPORT_PREFIX`; `EXPORT_CSS` takes the one named `dangerouslySetInnerHTML` exception |
+| The hostile export opened top-level from `file://` and from origin A with the session cookie set: no request reaches B or A's `/api/`. The construction-only build closes navigation too; the meta-only build closes every fetch-type channel, with navigation excluded by name (lab 3) (M5.B9) | W5 | a red required leg; W5 does not merge |
+| Share…, Copy link and Save on iOS (including an installed app) and Android; Save never shows the export inside the app's own origin | W6's phone pass (§5.7) | `export-share-file` |
+| How a recipient's browser opens a 10 MiB export | not scheduled | the cap stays at 10 MiB |
 
 ---
 
@@ -2002,6 +2396,8 @@ An HTML mockup is never served from a URL. The PWA pre-scans its text and refuse
 
 The PWA shell carries `frame-src 'none'`. That closes the one channel the frame's own CSP cannot close: the frame navigating itself away.
 
+A mockup Export (amended 2026-10-13; W6, §5.6.9) is a static snapshot in a saved file, never a URL. Its own CSP meta, a frame with an empty sandbox and the removal of its links keep it inert when it is opened top-level. It is saved as an octet-stream blob, never as an active type.
+
 ### 5.0 Measurements this section rests on
 
 Chromium 153 headless (desktop), Fastify 5.10 through `inject`, and a census of the fleet's committed sections. Firefox, WebKit/iOS and Android Chrome are UNMEASURED throughout. File:line citations into this repo are as measured at `c62e22b9a`.
@@ -2014,7 +2410,7 @@ Chromium 153 headless (desktop), Fastify 5.10 through `inject`, and a census of 
 | lab 6 | `<script src>` of A URLs whose body is valid JS, served as `text/plain`, `application/json` or `text/html`, from pages on A, B and C | without `nosniff`, the `text/plain` and `application/json` bodies execute on all three pages, cross-site C included; with `nosniff` none executes. The request reaches A in every case |
 | lab 7 | Sandbox flags | each of `allow-same-origin`, `allow-popups(-to-escape-sandbox)`, `allow-top-navigation*` and `allow-forms` gives the frame a capability it must not have |
 | lab 10 | A service worker on A at scope `/` with a navigation fallback | a sandboxed `srcdoc` child is not controlled by it (`navigator.serviceWorker` throws) and its requests go to the network; a sandboxed frame's navigation is never seen by the worker |
-| E1 | Parent `frame-src 'none'` as a header **or** a `<meta>`, srcdoc child | The child renders and runs. Blocked: script navigation, `<meta refresh>`, navigation to A's `/api/...`, a link click. `frame-src 'self'` still lets it navigate to A's `/api/...` (without cookies, cross-site). With no parent CSP, all four reach their target |
+| E1 | Parent `frame-src 'none'` as a header **or** a `<meta>`, srcdoc child | The child renders and runs. Blocked: script navigation, `<meta refresh>`, navigation to A's `/api/...`, a link click. `frame-src 'self'` still lets it navigate to A's `/api/...` (without cookies, cross-site). With no parent CSP, all four reach their target. Desktop Chromium only: whether an exported mockup's frame renders in iOS Safari and desktop Firefox is a W6 manual row (§5.6.9; amended 2026-10-13) |
 | E3 | `MOCKUP_CSP` (5.6.4) with `data:` assets | png, SVG-in-img, css, ttf font, classic script, module script and import-mapped `data:` module all work; the SVG's own script does not run; an unrewritten relative `<img>` makes 0 requests; **0/27 to A and to B** |
 | E4 | 1, 4 and 8 MiB PNG as `data:` in a srcdoc (up to 11.2 M chars) | rendered in 0.18, 1.24 and 1.35 s |
 | E5 | Link clicks under parent `frame-src 'none'` | With no guard, any click kills the frame (srcdoc resolves `#x` against the parent URL). With the capture-phase guard the frame survives and fragment links scroll |
@@ -2027,9 +2423,9 @@ Chromium 153 headless (desktop), Fastify 5.10 through `inject`, and a census of 
 | E12 | `DOMParser('text/html')` of hostile HTML | 0 requests, no handler or script runs, no refresh |
 | E13 | `DOMParser('text/html')` of deeply nested `<div>`s on the main thread | **660 KiB froze the whole console about 14 s.** Cost grows faster than size and is spent inside the native parse, which cannot be aborted. A flat 2 MiB page of short elements parses in 66 ms, so no byte gate can bound this |
 | F1 | Fastify encapsulated `onSend` | runs on the gate's 401/403 for plugin routes; replaces a `text/html` reply with a 500 JSON; forces `no-store` on a 404 that set `immutable`; runs on the default 500; does not run on unmatched paths or non-plugin routes |
-| K1 | The four sections at each origin default branch (one reader's snapshot, 2026-09-29) | 1 012 md, **3 html** (17, 62, 119 KB), 1 png, 1 json, 3 py, 1 sql, **0 svg**. Of the 3 html: one is self-contained, one loads a hosted font stylesheet, and one draws charts with a library from a CDN and loads hosted fonts too. On disk only: an uncommitted 3D viewer with import maps and `.glb` files up to 39.6 MB, over every cap |
+| K1 | The four sections at each origin default branch (one reader's snapshot, 2026-09-29) | 1 012 md, **3 html** (17, 62, 119 KB), 1 png, 1 json, 3 py, 1 sql, **0 svg**. Of the 3 html: one is self-contained, one loads a hosted font stylesheet, and one draws charts with a library from a CDN and loads hosted fonts too. On disk only: an uncommitted 3D viewer with import maps and `.glb` files up to 39.6 MB, over every cap. Amended 2026-10-13: HTML specs have been committed since this snapshot. This repository's one, measured at `28cb18d53`, is 157 020 bytes: 5 394 tags by the pre-scan's rule, depth 12, one inline `import(` of a CDN module, and no `script[src]` |
 
-jsdom has no CSP, no sandbox and no srcdoc browsing context. Every claim about **effect** is therefore pinned by the real-browser leg (5.7). The jsdom and `inject` rows pin the artefacts that the browser rows run.
+jsdom has no CSP, no sandbox and no srcdoc browsing context. Every claim about **effect** is therefore pinned by the real-browser leg (5.7). The jsdom and `inject` rows pin the artefacts that the browser rows run. Export (amended 2026-10-13) rests on E1, E4, E5 and E6. The rows it still needs are M5.B9 to M5.B11 (§5.8) and the manual rows of §5.7.
 
 ### 5.1 Content classes and the raster table (L0, `shared/docs.ts`)
 
@@ -2149,6 +2545,10 @@ These headers apply to docs routes only. The rest of the server gets a global ba
 - `rasterObjectUrl(bytes, mime)` builds `new Blob([bytes], {type: mime})`, and throws unless `mime` is one of the `DOCS_RASTER_TYPES` values.
 - `downloadDocFile(project, pin, basename)` gets bytes through `docs.file` (or `docs.raster`) and builds `new Blob([bytes], {type: 'application/octet-stream'})` for **every** class. It clicks a detached `<a download>` and revokes the URL after 30 s. E6: an octet-stream blob downloads; it never renders.
 - It **never** creates a `blob:` of `image/svg+xml`, `text/html` or any other active type. E6 measured the hazard: such a blob opened top-level is a same-origin document carrying the session.
+- `saveBytes(name, bytes)` (amended 2026-10-13, W5) is the one save primitive. It builds `new Blob([bytes], {type: 'application/octet-stream'})`, clicks a detached `<a download=name>`, and revokes the URL after 30 s. `downloadDocFile` uses it.
+- `downloadExport(result)` (amended 2026-10-13, W5) is the only consumer of the export builder's output (§4.17), and calls `saveBytes`. An Export is therefore saved as `.html` by name, but typed octet-stream: it is never a `text/html` blob (E6, M5.17).
+- **Activation.** The Save click calls `downloadExport` synchronously, with no `await` before it, so an installed iOS app keeps the click's user activation (M4.EX13). Whether Save then lands a usable file on iOS and Android is W6's phone pass (§5.7).
+- **Contingency `export-share-file`.** If it does not, the same synchronous click calls `navigator.share({files})` instead, from `docs/objectUrls.ts`, beside `saveBytes`, which builds the `File`. Firing it adds exactly that file to M4.SH7's `navigator.share(` allowance, with its own planted control, and M4.EX13's spy covers the call.
 
 ### 5.5 SVG
 
@@ -2169,7 +2569,7 @@ These headers apply to docs routes only. The rest of the server gets a global ba
 
 - **Sandbox tokens.** `MOCKUP_SANDBOX_STATIC = ''` and `MOCKUP_SANDBOX_SCRIPTED = 'allow-scripts'` (`pwa/src/docs/mockup/policy.ts`). The attribute is always present, because an absent `sandbox` means no sandbox. No other token is ever used (`allow-same-origin`, `allow-popups`, `allow-popups-to-escape-sandbox`, `allow-top-navigation*`, `allow-forms`, `allow-modals`, `allow-downloads`; lab 7). No `src`, `name`, `allow` or `allowfullscreen`.
 - **`csp` attribute.** This is Chromium's embedded enforcement; other browsers ignore it. It always equals the srcdoc `<meta>` policy, produced by the same function.
-- **No message channel in either direction.** The parent never calls `postMessage` and never listens for `message`. That makes lab 3's "self-navigate, then receive `postMessage('*')`" moot.
+- **No message channel in either direction.** The parent never calls `postMessage` and never listens for `message`. That makes lab 3's "self-navigate, then receive `postMessage('*')`" moot. A mockup Export's frame (amended 2026-10-13, §5.6.9) lives in the saved file, not in `MockupFrame`, and opens no channel either.
 
 **The parent wall.** `pwa/index.html` gains the line below immediately after `<meta charset="UTF-8" />` (line 4), preceded by an HTML comment naming this section:
 
@@ -2195,10 +2595,11 @@ These headers apply to docs routes only. The rest of the server gets a global ba
 
 ```ts
 export const MOCKUP_MAX_DEPTH = 256;
-export const MOCKUP_MAX_TAGS = 20_000;
+export const MOCKUP_MAX_TAGS = 20_000;                  // re-derived by W6 after the next limit lands (decision 9)
+export const MOCKUP_MAX_OPEN_FORMATTING: number;         // amended 2026-10-13, W6: value fixed by W6's measurement
 export type MockupPrescan =
-  | { ok: true; depth: number; tags: number }
-  | { ok: false; why: 'too-deep' | 'too-many-tags'; depth: number; tags: number };
+  | { ok: true; depth: number; tags: number; formatting: number }
+  | { ok: false; why: 'too-deep' | 'too-many-tags' | 'too-many-formatting'; depth: number; tags: number; formatting: number };
 export function prescanMockup(text: string): MockupPrescan;
 export function parseMockup(text: string): { ok: true; doc: Document; prescan: MockupPrescan } | { ok: false; prescan: MockupPrescan };
 ```
@@ -2208,9 +2609,21 @@ export function parseMockup(text: string): { ok: true; doc: Document; prescan: M
   - `depth` is the length of a stack of open element names. A start tag pushes its name unless it is a void element (`area base br col embed hr img input link meta source track wbr`). An end tag pops down through the nearest matching name, and is ignored when no name matches.
   - It skips nothing. Comments, attribute values and script text count too, so the scan errs toward refusing.
   - It stops as soon as either limit is exceeded.
+  - Amended 2026-10-13 (W6): `formatting` counts open formatting elements, and the scan also stops on that limit (below).
 - **The refusal.** "Too complex to render — shown as source", with the reason, the measured counts and both limits, the Source view and Download. There is no render-anyway control. `parseMockup` is the single call site, and it returns before constructing a parser.
 - **The time budget.** W6 measures DOMParser in Chromium at the chosen thresholds, on the worst (deep) shape they admit. If that parse exceeds about 1 s, W6 lowers the thresholds. A lowered limit fails safe: a larger mockup shows as source and never freezes the console. M5.B8 then pins the budget in CI. W6 also records the depth and tag counts of the committed mockups (K1), counts only, to show the limits refuse none of them.
-- **Caps on the page.** The html class cap is `DOCS_MAX_DOC_BYTES` (2 MiB), and the largest committed mockup is 119 KB (K1). The 1 MiB gate is about bytes only; the pre-scan is what bounds the parse.
+- **Caps on the page.** The html class cap is `DOCS_MAX_DOC_BYTES` (2 MiB), and the largest committed mockup is 119 KB (K1). The 1 MiB gate is about bytes only; the pre-scan is what bounds the parse. HTML specs committed since K1 are larger (K1's 2026-10-13 note: 157 KB, 5 394 tags). The pre-scan, not the byte gate, decides whether one renders.
+- **Formatting reconstruction** (amended 2026-10-13; W6, decision 9).
+  - **The shape.** An HTML parser reconstructs active formatting elements (`a`, `b`, `big`, `code`, `em`, `font`, `i`, `nobr`, `s`, `small`, `strike`, `strong`, `tt`, `u`). Take up to 255 `<b>` with distinct attributes opened inside a `<p>`, followed by many `<p>x</p>`. The parser clones those elements into every later paragraph, while the pre-scan's depth falls back at each `</p>` under the pop rule above.
+  - **Status.** The mechanism is derived from the parser's rules and the pop rule, not measured. It exists at today's `MOCKUP_MAX_TAGS`, whatever happens to the tag limit.
+  - **What W6 does, strictly in this order.**
+    1. It adds `MOCKUP_MAX_OPEN_FORMATTING`: a multiset of open formatting-element names, which only each element's own end tag decrements. Over the limit, the page is refused as `too-many-formatting`.
+    2. It covers the shape in M5.22 and M5.B8. It measures the reconstruction cost first, and fixes the limit's value from that measurement. The design's "for example 32" is an example, not a ruled value.
+    3. Only then does it re-derive `MOCKUP_MAX_TAGS`, recording what it measured.
+
+    `MOCKUP_MAX_DEPTH` stays 256.
+  - **What changed since the design.** The design weighed this when new specs were expected to be HTML. They have been Markdown since 2026-10-08, so the limit now rests on the parser shape alone. The script-text census (§5.6.3) still serves the HTML specs already committed.
+- **Export reads the same parse** (amended 2026-10-13). `mockup/exportMockup.ts` (§5.6.9) clones the planned inert Document, and `parse.ts` stays the only `new DOMParser(` (M5.16).
 
 #### 5.6.3 Relative assets
 
@@ -2225,6 +2638,7 @@ References resolve through L0 `resolveDocRef` (§4.11), which is shared with Mar
 | SVG `image`, `feImage` | `href`, `xlink:href` | image |
 | `link` with rel token `stylesheet` | `href` | css |
 | `script` | `src` | script, or module when `type=module`. A module's own relative imports cannot resolve from a `data:` URL and fail at runtime |
+| inline `script` (amended 2026-10-13, W6) | text: absolute `https` specifiers in `import(...)` and `import ... from` | census-only: an `external` origin with `via: 'script-text'`, never fetched or rewritten |
 | `style` element, `style` attribute | `url(...)`, `@import` | resolved relative to the page |
 | linked css text | `url(...)`, `@import` | resolved relative to the css file, depth at most `MOCKUP_MAX_CSS_DEPTH` = 3 |
 | `a`, `area` | `href` | never rewritten; listed under Links (5.6.6) |
@@ -2234,6 +2648,12 @@ References resolve through L0 `resolveDocRef` (§4.11), which is shared with Mar
 
 - `url(...)` with an unquoted, single-quoted or double-quoted argument;
 - `@import` followed by a quoted string.
+
+**The script-text census** (amended 2026-10-13; W6, decision 2).
+- **The scan.** `planMockup` scans each inline script's text in one linear pass, with a fixed-length capture, for absolute `https` specifiers in `import(` and `import … from`. An `http://` specifier is never listed. A match is listed only when its origin (scheme, host and optional port) ends inside the capture at a `/`, a quote or the end of the specifier. A host that runs past the capture is not listed, so a cut host such as `cdn.example.ev` is never offered in place of the one the script imports.
+- **What it yields.** Each origin found passes `parseHttpsOrigin` (5.6.4) and becomes a census row. Nothing is fetched or rewritten.
+- **Why.** Without the scan, an HTML spec whose inline module script imports a diagram library from a public CDN never offers Load external, because the planner reads only `script[src]`. Its diagrams would never draw. This repository's one committed HTML spec has exactly that shape (K1's note, §5.0).
+- **Another spec's claim depends on it.** The 2026-10-12 spec's G9 says such a spec needs two taps, Run scripts then Load external. That holds only once this census lands, and G9 now says so, edited in the same change (§7.7).
 
 Anything unmatched (escapes, comments, `image-set`) is left untouched, so it is blocked, never leaked. **The rewriter is a convenience and the CSP is the wall:** a form the rewriter misses fails closed, with the asset missing and no request made (E3).
 
@@ -2254,12 +2674,13 @@ An extension outside the table, or one that does not fit its element, is `unsupp
   - `deleted` is `missing:'deleted-in-worktree'`.
   - `typechange`, withheld, or `fp: null` is `missing:'draft-withheld'`, never a silent fallback (a typechange draft is never read, §2 (d)).
   - An asset with no draft is `CommittedPin(C, served, s, p)` iff its `committed.kind` is file or exec; otherwise it is `missing:'absent-at-commit'`.
+- The rule is computed by `imagePinFor` (§4.11), for mockup assets as for Markdown images (amended 2026-10-13).
 
 ```ts
 type MockupRefVerdict =
   | { v: 'inline'; pin: DocPin; kind: 'image' | 'css' | 'script' | 'module' | 'font'; mime: string; size: number; draft: boolean }
   | { v: 'kept'; why: 'fragment' | 'self-contained' }
-  | { v: 'external'; origin: string }
+  | { v: 'external'; origin: string; via: 'src' | 'script-text' }   // via: amended 2026-10-13 (W6)
   | { v: 'refused'; why: string }            // DocRefResolution's refused whys
   | { v: 'missing'; why: 'absent-at-commit' | 'deleted-in-worktree' | 'draft-withheld' }
   | { v: 'unsupported'; why: 'kind' | 'element' | 'css-depth' }
@@ -2292,6 +2713,11 @@ export function mockupCsp(extra: readonly HttpsOrigin[]): string;   // extra is 
   - **Load external (N)** opens a confirm sheet that lists the N origins: "those sites will see that you opened this". Confirming re-mounts the frame with `mockupCsp(origins)` for this view only.
   - The choice is never remembered: no storage, no URL key. A remount, a reload or another visit returns to `MOCKUP_CSP`.
 - **Origin validation.** `parseHttpsOrigin(url)` accepts only an exact `https` origin whose host contains a dot, is not an IP literal, is not `localhost` or `*.localhost`, and is not `location.hostname` at any port. The branded value holds no space, `;`, `'` or `*`. `mockupCsp` appends each origin to `script-src`, `style-src`, `img-src` and `font-src` only, never to `connect-src` or `default-src` (E9).
+- **Origins named in script text** (amended 2026-10-13, W6) follow the same rules.
+  - The confirm sheet lists them, marked "named in script text".
+  - Confirming appends them to the same four directives only, never to `connect-src` or `worker-src`. That holds in static and scripted mode alike, because `mockupCsp(origins)` does not depend on the mode.
+  - E9 measured a classic `<script src>` from origin B. A CORS module `import()` from a listed origin is not measured, so W6 adds M5.B11.
+  - Whether a diagram library then draws under this policy is a W6 manual measurement (§5.7). It may need `eval` or a worker, and `MOCKUP_CSP` admits neither. If it cannot draw, its diagrams stay as source, and `MOCKUP_CSP` is never widened (decision 2).
 
 #### 5.6.5 Scripts off by default
 
@@ -2329,7 +2755,8 @@ Top to bottom:
    - the ref as text (cut to 120 chars, non-ASCII marked);
    - its target or origin;
    - `MOCKUP_VERDICT_SENTENCE[verdict]` (exhaustive by type);
-   - size, and a draft chip.
+   - size, and a draft chip;
+   - for an origin found in inline script text, the mark "named in script text" (amended 2026-10-13, W6).
 
    In-section targets link to their leaf. Each embed is marked here, in PWA chrome that the frame cannot paint over.
 
@@ -2337,7 +2764,7 @@ A page the pre-scan refuses shows the header, the refusal line, Source and Downl
 
 - **Full screen** is the leaf URL with `frame=full` (§3.1): a thin bar with Close, and the frame at `100dvh`. Close goes `history.back()` when the previous history entry is this leaf; otherwise it navigates to the leaf.
 - **New tab** is `window.open(fullUrl, '_blank', 'noopener,noreferrer')`. The new top-level document is the ccrc shell, which re-resolves the page as a new visit (pre-scan included) and renders the same sandboxed srcdoc. No URL exists whose top-level document is the mockup, and the toolbar never offers an `/api/docs/...` link.
-- **Source** is the HTML as text (hljs `xml` under the 64 Ki-char rule). **Download** is `downloadDocFile`. **Open committed version** on a draft mockup renders the committed page at C with committed assets only.
+- **Source** is the HTML as text (hljs `xml` under the 64 Ki-char rule). **Download** is `downloadDocFile`. **Export** (amended 2026-10-13, W6) is in the leaf header's actions (§4.5), not in this toolbar. It saves a static snapshot (§5.6.9). Download stays the way to send the original bytes: an Export never carries script output, a drawn diagram or a Load external choice. **Open committed version** on a draft mockup renders the committed page at C with committed assets only.
 
 #### 5.6.8 Failures
 
@@ -2349,6 +2776,65 @@ A page the pre-scan refuses shows the header, the refusal line, Source and Downl
 | A budget or kind refusal | a census row, and no request |
 | A render error | §4's boundary |
 | Offline | the shell only |
+| Export of a page the pre-scan refuses, `too-many-formatting` included (amended 2026-10-13) | the file holds the source as `<pre>` text, with a note |
+| Export of a page with draft assets | Save waits for the confirm (§5.6.9) |
+| An asset still loading 10 s after Export | a placeholder with a closed sentence (§4.17) |
+
+#### 5.6.9 Exporting a mockup (amended 2026-10-13; W6, decision 5)
+
+A mockup export is a static snapshot. Script output, a drawn diagram and a Load external choice never carry over. Download stays the way to send the original bytes.
+
+```mermaid
+flowchart TD
+  P["Planned inert Document, after the data: rewrites"] --> Q["Clone, drop template, unwrap noscript"]
+  Q --> R["Strip scripts, frames, objects, base, http-equiv meta, on attributes, ping, non-data URLs per srcset candidate, SMIL href animations"]
+  R --> T["Neutralise CSS url and import rules that point off data:"]
+  T --> U["Remove every a and area href, and collect the targets"]
+  U --> V["Inner document: DOCS_EXPORT_CSP meta first"]
+  V --> W["React wrapper: provenance, draft banner, inlined-asset list, links list, then an iframe with an empty sandbox and srcdoc"]
+  W --> Y{"Any draft asset inlined?"}
+  Y -- "yes" --> Z["Confirm before Save"]
+  Y -- "no" --> S["Save"]
+  Z --> S
+```
+*Figure 3. The mockup export pipeline: every layer the saved file carries, and where the draft banner and the links list sit.*
+
+**Steps** (`mockup/exportMockup.ts`):
+1. **Inputs.** It needs `parseMockup` ok and the plan done, with assets settled within `DOCS_EXPORT_IMAGE_WAIT_MS`. A missing asset becomes a row in the sheet and a placeholder. A page the pre-scan refuses, `too-many-formatting` included, exports its source as `<pre>` text with a note.
+2. **Clone.** It clones the planned inert Document after its `data:` rewrites. `parse.ts` stays the only `new DOMParser(`.
+3. **Strip:**
+   - drop `template`, so declarative shadow DOM never reaches the recipient (DOMParser leaves it unattached, and `querySelectorAll` never enters it);
+   - unwrap `noscript`;
+   - drop `script`, `iframe`, `frame`, `object`, `embed`, `base` and `meta[http-equiv]`, and every `link` except a `data:` stylesheet;
+   - drop every `on*` attribute, and `srcdoc`, `action`, `formaction` and `ping`;
+   - check `srcset` candidate by candidate, and drop it unless every candidate is `data:`;
+   - **URL attributes, by allowlist.** Every other URL-bearing attribute is dropped unless its value is `data:`. That is the HTML URL attributes (`archive`, `background`, `cite`, `classid`, `codebase`, `data`, `href`, `icon`, `itemid`, `longdesc`, `manifest`, `poster`, `profile`, `src`, `usemap`), and `href` and `xlink:href` on every SVG element. The one other value kept is a same-document `#…` fragment on an SVG element other than `a` and `image` (a `use`, a gradient's template, a `textPath`), which loads nothing. `a` and `area` are step 5's;
+   - drop `animate`, `set`, `animateMotion` and `animateTransform` that target `href` or `xlink:href`.
+4. **CSS.** `mockup/css.ts`'s two patterns run in a strip mode over every `<style>`, every `style` attribute, every other attribute whose value holds `url(` (SVG presentation attributes such as `fill`, `filter` and `marker-end`), and every decoded `data:` stylesheet. A `url()` that is neither `data:` nor a same-document `#…` fragment becomes `url("data:,")`, and a non-`data:` `@import` is dropped.
+5. **Links.** Remove `href` and `xlink:href` from every `a`, HTML and SVG, and every `area` in the document, keep the text, and put the target in `title`. E5 and E1 are why: a click inside a srcdoc frame with no guard kills the frame, and an empty sandbox cannot open a popup. The wrapper lists "Links in this page" outside the frame, through §4.17's link table, as permalinks at C.
+6. **Inner document.** `DOCS_EXPORT_CSP`'s meta first, then the stripped document.
+7. **Wrapper** (decision 5). §4.17's React shell holds the provenance, the banner, the inlined-asset list and the links list, then `<iframe sandbox="" srcDoc={inner} title>`. That arm lives in `docs/export/buildExport.tsx`, whose output reaches only `downloadExport` (M4.EX16, and M5.16 for the file's `<iframe` allowance).
+
+**What is guaranteed.**
+- **Scripts are inert even without the CSP.** The strip removes every script element and every handler, and the sandbox is empty.
+- **CSS forms the scanner misses rely on the meta CSP and the sandbox.** For a mockup, "inert without the CSP" is claimed for scripts, element URL attributes, `link`, `meta` refresh, forms and `ping`. The CSS forms the scanner misses (`image-set()`, CSS escapes inside `url`) are named in M5.B10 and rest on the CSP.
+- **Size.** Over `DOCS_EXPORT_MAX_BYTES`, §4.17's mockup arm applies: assets are kept in DOM order while the escaped file fits, and later ones become placeholders.
+- **The wrapper's frame rests on E1**, which was measured in desktop Chromium only. W6's phone pass therefore adds iOS Safari (opening the file from Files) and desktop Firefox (§5.7). If either blanks the frame, mockup exports switch to the contingency `mockup-export-flat` (decision 5, option (b)): one flat document, with the banner first and styled `!important`. Until that pass, Firefox and Safari are recorded as unmeasured.
+- **The saved file has no ccrc shell around it,** so M5.B10 checks there that a click on a former link fires no second `load`.
+
+**Inlined files are listed.** The export sheet and the provenance list every asset the export inlines: its repo path, its size, and whether it is committed or a draft. That includes an asset the author's CSS hides on screen. Any `DraftPin` asset requires a confirm before Save: "This file includes <k> uncommitted files from <label>."
+
+**An HTML spec that imports a diagram library.** Some HTML specs are built from a template whose inline module script imports Mermaid from a CDN, inside a `try`, so that a failure leaves the source visible. In the viewer and in an export, such a spec behaves like this:
+
+| Mode | What shows |
+|---|---|
+| Default view (empty sandbox, `MOCKUP_CSP`) | Styles, headings, tables and callouts render. Each diagram shows its source. A table of contents the script would build stays empty. Run scripts is offered |
+| Run scripts alone | The script's own controls build. A Copy button reports failure, because the sandbox grants no clipboard write. The CDN import is blocked, so the diagrams stay as source |
+| Load external | Offered only once W6's script-text census (§5.6.3) lists the CDN's origin. The diagrams are then expected to draw after Load external and Run scripts. That is not measured (§5.6.4) |
+| Export | A static snapshot: diagrams as source, no table of contents, no links inside the frame. The provenance adds "<m> diagrams appear as source" |
+| Share | The permalink, with the note that GitHub shows the HTML as source |
+
+An operator may change their own template to load the library with a classic `script src`, which the planner already lists. That is outside ccrc (decision 2, option (b)).
 
 ### 5.7 The real-browser leg (U4)
 
@@ -2360,13 +2846,19 @@ A page the pre-scan refuses shows the header, the refusal line, Source and Downl
   It also gains `"test:browser": "vitest run --config vitest.browser.config.ts"`.
 - **Keeping it out of the hermetic run.** The hermetic config's `test` block (`pwa/vite.config.ts:84-92`) gains `exclude: [...configDefaults.exclude, 'browser/**']`. `pwa/test/browser-leg.test.ts` pins that the default config excludes the browser files and that the browser config includes at least one.
 - **Chrome.** Chrome resolves from `CCRC_CHROME`, else `/usr/bin/google-chrome`. If neither exists, `beforeAll` **throws**: the leg goes red, never skipped.
-- **Origins.** The harness serves origins A and B on loopback (same-site) and C on `localhost` (cross-site), on ephemeral ports. Server-side rows serve the fixture with `DOCS_RESPONSE_HEADERS` from `shared/docs.ts` over plain `node:http`, so the leg needs no Fastify. The `inject` rows (M5.4-M5.6) prove the hook applies exactly those values.
+- **Origins.** The harness serves origins A and B on loopback (same-site) and C on `localhost` (cross-site), on ephemeral ports. Server-side rows serve the fixture with `DOCS_RESPONSE_HEADERS` from `shared/docs.ts` over plain `node:http`, so the leg needs no Fastify. The `inject` rows (M5.4-M5.6) prove the hook applies exactly those values. From W5 (amended 2026-10-13, M5.B9), the harness also opens a saved export from `file://`, and serves one from origin A as a static server that sends no headers, with the harness's session cookie set for A.
 - **CI job.** `ci.yml` gains a job `browser-pwa`, named `browser (pwa)`:
   - `runs-on: ubuntu-latest`, with a `timeout-minutes` (15) as `oss-metadata.test.ts:158-185` requires;
   - the `CCRC_LEG` step-skip idiom of `test` and `build-pwa`;
   - steps: checkout, setup-node 22, `npm ci` in `pwa/`, then `./node_modules/.bin/vitest run --config vitest.browser.config.ts`.
 - **It is required.** It runs on every PR and is a required leg of `full-suite`: it joins `full-suite.needs` (`ci.yml:859`) and its `RESULTS` string. `verdict.mjs` therefore fails the daily run and the stable gate on a red browser leg.
-- **Manual phone pass.** Before the feature is called done, W6 includes one manual pass of the M5.B fixtures on the operator's phone (WebKit is not in the leg), plus the busy-loop fixture of 5.6.5.
+- **Manual phone pass.** Before the feature is called done, W6 includes one manual pass of the M5.B fixtures on the operator's phone (WebKit is not in the leg), plus the busy-loop fixture of 5.6.5. Amended 2026-10-13, the same pass also covers:
+  - Share (Share… and Copy link) and Export's Save, on iOS (including an installed app) and on Android, each landing as a usable `.html` (contingency `export-share-file`);
+  - Save, from the browser and from the installed app, never shows the export inside the app's own origin, for example by navigating to the `blob:` instead of downloading it;
+  - a mockup export opened in iOS Safari from Files and in desktop Firefox: the inner frame shows, or `mockup-export-flat` fires;
+  - a synthetic HTML spec shaped like the template of §5.6.9, with Load external (1) and Run scripts, on desktop Chromium and on the phone, recording whether its diagrams draw.
+
+  Every fixture is synthetic, because the repository is public: never a copy of a real spec or template.
 
 ### 5.8 Mutation rows (§5)
 
@@ -2381,7 +2873,7 @@ A page the pre-scan refuses shows the header, the refusal line, Source and Downl
 | M5.5 | Type wall | the hook on a bare Fastify with planted routes sending `text/html`, `text/html; charset=utf-8`, `image/svg+xml`, `text/plain`, `application/octet-stream` and `application/xml`: each answers 500 `response-type-refused`, `no-store`, with no `content-disposition`; PNG and JSON pass | drop the allowlist; widen it to an `image/` prefix |
 | M5.6 | Cache | a committed raster 200 is `immutable`; a committed JSON 200, draft 200s and every failure are `no-store`; a planted route setting `immutable` on a 404 answers `no-store` | drop the status branch; `immutable` on JSON or a draft |
 
-**PWA (jsdom: `docs-resolve.test.ts`, `docs-mockup-plan.test.ts`, `docs-mockup-build.test.ts`, `docs-mockup-frame.test.tsx`, `docs-mockup-prescan.test.ts`, `docs-bytes.test.ts`, `index-csp.test.ts`, `docs-scans.test.ts`)**
+**PWA (jsdom: `docs-resolve.test.ts`, `docs-mockup-plan.test.ts`, `docs-mockup-build.test.ts`, `docs-mockup-frame.test.tsx`, `docs-mockup-prescan.test.ts`, `docs-bytes.test.ts`, `index-csp.test.ts`, `docs-scans.test.ts`; amended 2026-10-13: `docs-mockup-export.test.ts`)**
 
 | # | Guard | Test | Mutation that goes red |
 |---|---|---|---|
@@ -2394,13 +2886,20 @@ A page the pre-scan refuses shows the header, the refusal line, Source and Downl
 | M5.13 | Frame attributes | static: `sandbox` present and empty; scripted: tokens exactly `['allow-scripts']`; `srcdoc` set; no `src`, `name`, `allow`, `allowfullscreen`; `referrerpolicy=no-referrer`; `csp` equals the meta | each forbidden token alone; `src=`; drop `sandbox` |
 | M5.14 | Scripts off | the first render is static; Run scripts re-mounts scripted; remounting DocsScreen is static; no storage is written | start scripted; persist the choice |
 | M5.15 | Load watcher | two `load` events show the notice without a re-mount | re-mount automatically |
-| M5.16 | Source scans with planted controls | in `pwa/src`: none of the forbidden sandbox tokens; `<iframe` and `srcDoc` only in `MockupFrame.tsx`; `new DOMParser(` only in `docs/mockup/parse.ts`; no `postMessage(` and no `'message'` listener in `pwa/src/docs` or `lib/markdown*`; `URL.createObjectURL(` only in `docs/objectUrls.ts` and the existing `session/useAttachImage.ts`; `default-src 'none'` only in `mockup/policy.ts` | add any of them |
-| M5.17 | Object-URL types | `rasterObjectUrl(b, 'image/svg+xml')` throws; the output type is canonical; `downloadDocFile` builds octet-stream for all six classes | pass the input type through |
+| M5.16 | Source scans with planted controls | in `pwa/src`:<br>- none of the forbidden sandbox tokens;<br>- `<iframe` and `srcDoc` only in `MockupFrame.tsx` and, amended 2026-10-13, `docs/export/buildExport.tsx` (the mockup export's wrapper, whose output M4.EX16 confines to `downloadExport`). This widens M4.EX16's W5 clause, which allows them nowhere;<br>- `new DOMParser(` only in `docs/mockup/parse.ts`;<br>- `postMessage(` and an `.onmessage` assignment only in `lib/markdownWorker.ts` and `lib/markdownRunner.ts` (W4's worker and its client; amended 2026-10-13), never in another `lib/markdown*` file or in `pwa/src/docs`;<br>- no `'message'` listener in `pwa/src/docs` or `lib/markdown*`;<br>- `URL.createObjectURL(` only in `docs/objectUrls.ts` and the existing `session/useAttachImage.ts`;<br>- `default-src 'none'` only in `mockup/policy.ts` and, amended 2026-10-13, `docs/export/policy.ts` (`DOCS_EXPORT_CSP`).<br>Each allowance has its own planted control: the same token in a third file is red.<br>**The worker carve-out** (amended 2026-10-13). Under the operator's ruling on W4's Q2, this row owns it, and the Share/Export amendment is where M5.16 is edited. The 2026-10-12 spec's A2a said that spec owns the carve-out and that this amendment does not repeat it; that sentence is superseded in the same change, and that spec's M9.14 is now a cross-reference to this clause (§7.7).<br>**W8** (the 2026-10-12 spec's A2b, A5 and M8.10) adds `ReaderFrame.tsx`, `reader/policy.ts` and the reader's bridge. A2b and M8.10 allowed `<iframe` and `srcDoc` in `MockupFrame.tsx` and `ReaderFrame.tsx` only. The same change edits them to keep `docs/export/buildExport.tsx`, and `docs/export/policy.ts`'s `default-src 'none'`, beside them (§7.7) | add any of them; widen an allowance to a directory |
+| M5.17 | Object-URL types | `rasterObjectUrl(b, 'image/svg+xml')` throws; the output type is canonical; `downloadDocFile` builds octet-stream for all six classes. Amended 2026-10-13 (W5): `saveBytes` and `downloadExport` build `application/octet-stream` only, never `text/html` (E6) | pass the input type through |
 | M5.18 | Raster client check | a 200 `text/html` with PNG bytes gives `unexpected-response`; a 200 `image/png` with GIF bytes gives `raster-mismatch` | drop either check |
 | M5.19 | Parent meta | `pwa/index.html` has exactly one CSP meta, with content exactly `frame-src 'none'`, in `<head>` before the module script; the `build-pwa` job greps `server/dist-pwa/index.html` for exactly one | remove it; `'self'`; move it to body; a build transform drops it |
 | M5.20 | SVG as `data:` | Markdown `![](d.svg)` and an svg leaf render `img[src^="data:image/svg+xml;base64,"]`, never `blob:` or `/api/` | use an object URL |
-| M5.21 | External opt-in | `parseHttpsOrigin` accepts `https://a.example` and `:8443`; refuses `http://`, wildcards, `;`/`'` injections, IP literals, `localhost`, `a.localhost`, single labels and `location.hostname`; the re-tokenised `mockupCsp` has no `connect-src`/`frame-src`, has `base-uri`/`form-action` `'none'`, and has the origins only in the four directives; Load external shows the confirm sheet listing exactly the plan's origins; a remount returns to the base CSP and nothing is stored | append to `default-src`; skip the validator; persist the choice; skip the sheet |
-| M5.22 | Pre-scan before parse | a deep-nested-div fixture gives `{ok:false, why:'too-deep'}` and a spy on `DOMParser.prototype.parseFromString` sees **zero** calls; a fixture with `MOCKUP_MAX_TAGS + 1` tags gives `too-many-tags`, also with zero calls; fixtures exactly at each limit are admitted and parsed once; the refusal renders Source and Download and no render control | parse before the pre-scan; drop either limit; offer render-anyway |
+| M5.21 | External opt-in | `parseHttpsOrigin` accepts `https://a.example` and `:8443`; refuses `http://`, wildcards, `;`/`'` injections, IP literals, `localhost`, `a.localhost`, single labels and `location.hostname`; the re-tokenised `mockupCsp` has no `connect-src`/`frame-src`, has `base-uri`/`form-action` `'none'`, and has the origins only in the four directives; Load external shows the confirm sheet listing exactly the plan's origins; a remount returns to the base CSP and nothing is stored. Amended 2026-10-13 (W6): an origin named in inline script text is listed once, with its "named in script text" mark, and appended to the four directives only, never to `connect-src` or `worker-src` | append to `default-src`; skip the validator; persist the choice; skip the sheet |
+| M5.22 | Pre-scan before parse | a deep-nested-div fixture gives `{ok:false, why:'too-deep'}` and a spy on `DOMParser.prototype.parseFromString` sees **zero** calls; a fixture with `MOCKUP_MAX_TAGS + 1` tags gives `too-many-tags`, also with zero calls; fixtures exactly at each limit are admitted and parsed once; the refusal renders Source and Download and no render control. Amended 2026-10-13 (W6): the formatting-reconstruction fixture (§5.6.2) is refused `too-many-formatting`, also with zero calls, and a fixture exactly at `MOCKUP_MAX_OPEN_FORMATTING` is admitted | parse before the pre-scan; drop any limit; offer render-anyway |
+| M5.EX1 | Mockup export strip (W6) | `docs-mockup-export.test.ts`: the wrapper has exactly one `iframe`, with `sandbox=""`. The inner document's first head child is the CSP meta.<br>**No URL leaves.** No attribute anywhere in the inner document holds a URL other than `data:`, except a same-document `#…` fragment on an SVG element other than `a` and `image`, and the link text moved into `title`. No `a` or `area`, HTML or SVG, holds `href` or `xlink:href`, and the wrapper lists its N links.<br>**One planted element per strip step, each with its own assertion that it is gone or neutralised:** `script`; an `on*` attribute; `template`; `noscript` (unwrapped); `<base href>`; `<meta http-equiv=refresh>` and an author `<meta http-equiv=Content-Security-Policy>`; `iframe srcdoc`; `object data`; `embed src`; `link rel=preload` and `rel=prefetch` to `https:`; `a ping`; `form action` and `button formaction`; `video poster` to `https:`; a mixed `srcset`; an SMIL `href` animation; SVG `<image href="https://x.example/p.png">` and `<use href="https://x.example/s.svg#a">`; `fill="url(https://x.example/g.svg#g)"`; `background:url(https://x.example/p.png)`; and `@import url(https://x.example/a.css)` in a `<style>` and in a `data:` stylesheet. The planted links point at `link.example`, and the export holds no `x.example` | drop any strip step, each alone: each goes red on its own fixture |
+| M5.EX2 | Template-shaped spec (W6) | a **synthetic** fixture: an inline module doing `await import('https://cdn.example/m.mjs')` inside `try`, two diagram `pre` blocks, and an empty table-of-contents `nav`. It is never a copy of a real spec or template. The export keeps the diagram source and holds no `cdn.example` | keep the import; drop the source |
+| M5.EX3 | Script-text census (W6) | the census lists `https://cdn.example` once, with `via: 'script-text'`; `mockupCsp` adds it to the four directives only; an `http://` specifier is not listed; a specifier whose host runs past the capture is not listed; a 2 MiB repetition of `import(` scans in under 50 ms | a backtracking pattern; add to `connect-src`; list `http://`; list a cut host |
+| M5.EX4 | Tag counts (W6) | a synthetic generator at depth 9 and 12, sized to the re-derived `MOCKUP_MAX_TAGS`, and this repository's committed HTML specs, are admitted; other projects' counts are recorded in the W6 plan as counts only | set a limit that refuses a committed spec |
+| M5.EX5 | Hidden and draft assets (W6) | a cross-section image hidden by `display:none`, and a draft asset, are listed in the sheet and the provenance; Save is blocked until the confirm. The click that completes the confirm calls the anchor's `click` (or, under `export-share-file`, `navigator.share`) inside its own synchronous turn, as M4.EX13 measures it | hide the list; skip the confirm; save after an `await` in the confirm |
+| M5.EX6 | Mockup Export availability (W6) | the auto-render gate waiting gives Export disabled, "Render the mockup first"; a pending parse or plan gives "Preparing…"; assets still loading are awaited up to `DOCS_EXPORT_IMAGE_WAIT_MS`; a pre-scan refusal is offered and exports the source as `<pre>` with a note | offer Export before the plan; hide it on a refusal |
+| M5.EX7 | Mockup export size (W6) | a fixture whose assets total `MOCKUP_MAX_ASSET_BYTES`, in a page heavy in `"` and `&`: the saved file is at most `DOCS_EXPORT_MAX_BYTES`; assets past the fit become placeholders in DOM order, each listed; a page over the cap with no assets gives "Too large to export; use Download" | measure before escaping; drop the placeholder pass |
 
 **Real browser (5.7).** Each row runs production artefacts: `buildSrcdoc`, `MockupFrame` via `renderToStaticMarkup`, the meta extracted from `pwa/index.html`, `parseMockup`, and `DOCS_RESPONSE_HEADERS`.
 
@@ -2413,7 +2912,10 @@ A page the pre-scan refuses shows the header, the refusal line, Source and Downl
 | M5.B5 | SVG | a `data:` SVG in the page: no script, no requests | a top-level `blob:image/svg+xml` runs as A with the cookie |
 | M5.B6 | Docs headers | pages B and C `<img>` a docs raster: width 0; an SVG body labelled `image/png` opened top-level runs no script; B's `<script src>` of a JSON docs response does not execute | without CORP both widths are 1; without nosniff the script runs |
 | M5.B7 | External opt-in | listed B's script runs; A and unlisted C stay at 0/27; B gets no connect channel | — |
-| M5.B8 | Parse budget | DOMParser in Chromium on the worst deep shape `prescanMockup` admits at `MOCKUP_MAX_DEPTH` and `MOCKUP_MAX_TAGS` finishes in at most 1 000 ms | the 660 KiB nested-div fixture of E13, parsed directly, exceeds 1 000 ms (proving the timer can see the hazard); through `parseMockup` it is refused with zero parses |
+| M5.B8 | Parse budget | DOMParser in Chromium on the worst deep shape `prescanMockup` admits at `MOCKUP_MAX_DEPTH` and `MOCKUP_MAX_TAGS` finishes in at most 1 000 ms. Amended 2026-10-13 (W6): so does the worst formatting-reconstruction shape it admits at `MOCKUP_MAX_OPEN_FORMATTING`, measured before the limit's value is fixed | the 660 KiB nested-div fixture of E13, parsed directly, exceeds 1 000 ms (proving the timer can see the hazard); through `parseMockup` it is refused with zero parses |
+| M5.B9 | Hostile export opened top-level (W5; amended 2026-10-13) | **The battery** is the channels a script-free document can open, each planted in M4.EX2's corpus and aimed at origin B: `img`; CSS `url()` and `@import`; `link rel=prefetch`, `preload` and `stylesheet`; `meta http-equiv=refresh`; `base`; a `form` submission; `object` and `embed`; `iframe`; and a click on a planted raw-HTML link. Author Markdown links to `https:` are the link table's feature, not a channel. The export is opened top-level from `file://` and from origin A, a static server that sends no headers, with the harness's session cookie set for A. **Three builds.** Production: no request reaches B, and none reaches A's `/api/`. Construction only (the meta removed): the same, navigation included, because nothing from the input becomes an element. Meta only (the construction mutated to string interpolation): every fetch-type channel is closed; navigation (`meta` refresh, the planted link) is excluded by name, because a CSP meta does not stop self-navigation (lab 3) | the same corpus built by string interpolation with no meta reaches B on at least one channel |
+| M5.B10 | Mockup export layers (W6; amended 2026-10-13) | M5.B1's battery, exported in three builds. All layers on: 0/27. The strip only (no CSP, no sandbox): no channel through script, element URL attributes (SVG `href` included), `link`, `meta` refresh, forms or `ping` reaches B; only the CSS forms the scanner misses, named here (`image-set()` and CSS escapes inside `url`), may reach B, because §5.6.9 rests them on the CSP, and any other channel reaching B is red. The CSP only: no fetch-type channel reaches B; self-navigation is excluded by name (lab 3). In each, a click on a former link fires no second `load` | the unstripped snapshot with no CSP reaches B; with step 3's URL allowlist dropped, the strip-only build reaches B through an SVG `image href` |
+| M5.B11 | Module import from a listed origin (W6; amended 2026-10-13) | a CORS module `import()` from a listed origin loads; under the base CSP, or from an unlisted origin, it is blocked | — |
 
 ## §6 Link protection, caching & limits
 
@@ -2662,7 +3164,7 @@ Measured at `c62e22b9a` unless marked UNMEASURED.
 | Docs, local mode | n/a | ccd copied by hand, no restart | stale boot list | `unsupported` until the server's service unit restarts; `ccrc update` restarts it itself |
 | Docs | Docs | Docs | list with `docs-v1` | works |
 
-**Release order: fleet box first, which is `ccrc rollout`'s default. No wave needs `--server-first`.**
+**Release order: fleet box first, which is `ccrc rollout`'s default. No wave of this spec needs `--server-first`.** The 2026-10-12 spec's W5b does (its A23; §7.7).
 
 - Every server read is gated on `docs-v1` before any exec, so a Docs server can only under-call an old fleet.
 - Fleet-first also hides the `not-granted` window, because the old server does not call docs verbs.
@@ -2805,6 +3307,7 @@ All of this text is public. Use placeholders only (`<your-origin>`, `<project>`,
    - what Docs writes in your repositories: one `refs/remotes/origin/<branch>` per refresh, with no `FETCH_HEAD`, prune or `set-head`;
    - what Docs writes in ccd's registry: `~/.cc-sessions/docs/fetch/...` stamps, mode 0600, safe to delete;
    - rendering: client-side Markdown with no raw HTML; HTML mockups only in a sandboxed srcdoc frame, pre-scanned, with scripts off until tapped and external origins loaded only by a per-view tap; SVG only as an image;
+   - Share and Export (amended 2026-10-13): what Share sends (a GitHub permalink at the commit the page opened), when it refuses, and the access note; what an Export holds (the leaf as shown, its provenance and its inlined images, and nothing of ccrc's); Download against Export; drafts under the banner; a mockup export as a static snapshot;
    - limits: the §2 and §6 caps, and the lanes;
    - offline and auth: shell only when offline; every route is session-gated, never exempt, and uses no box token;
    - requirements: python3 3.8+ on the fleet box and a ccd advertising `docs-v1`, measured by doctor's `docs` and `docs-sw`;
@@ -2819,7 +3322,7 @@ All of this text is public. Use placeholders only (`<your-origin>`, `<project>`,
    - Grep `server/test`, `pwa/test` and `agent/test` for pins on either phrase first. None were found; whether any exist elsewhere is UNMEASURED.
    - The known load flakes bullet gains `docs-console-latency` (§6.8).
    - No edit to the box-token bullet (C4).
-7. **`docs/superpowers/`:** this spec and its plans follow the same rules. A plan's deviations are minted by the allocator when they fire, never typed ahead. Contingencies are named by slug: `docs-chunked-reads`, `docs-fetch-keeplist`, `mockup-scripts-confirm`.
+7. **`docs/superpowers/`:** this spec and its plans follow the same rules. A plan's deviations are minted by the allocator when they fire, never typed ahead. Contingencies are named by slug: `docs-chunked-reads`, `docs-fetch-keeplist`, `mockup-scripts-confirm`, and, amended 2026-10-13, `export-share-file` (§4.17) and `mockup-export-flat` (§5.6.9).
 
 ### 7.6 Pre-existing defects
 
@@ -2833,11 +3336,23 @@ There are three, found in §2's decisions and verified at `c62e22b9a`. This prog
 
 ### 7.7 The implementation waves
 
-There are seven waves. Each is one run row, with one worker and one reviewer run.
+There are seven waves in this spec. W5b and W8 come from the 2026-10-12 spec (`docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md`, its §8), and are listed here too so that the order reads in one place (amended 2026-10-13). Each is one run row, with one worker and one reviewer run.
 
-- **Dependencies:** **W1 → W2 → W3 → W5 → W6 → W7**, and **W1 → W4 → W5**. W4 runs in parallel with W2 and W3.
+- **Dependencies:** **W1 → W2 → W3 → W5 → W6 → W7**, and **W1 → W4 → W5**. W4 runs in parallel with W2 and W3. W5b follows W5 (operator, 2026-10-13). W8 follows W5b, W6, W7 and the shared library's v1 (the 2026-10-12 spec's §8).
 - **Releases:** every merge to `main` becomes a prerelease. Boxes move only through `ccrc rollout`, fleet first.
 - **Outside the waves:** the two small PRs of 7.6 land after W3.
+- **The ccd slug fix** (amended 2026-10-13; decision 11, §3.11) is a third small PR, independent of the waves.
+  - It edits `_gh_repo_slug` and the helper's `slug_from_url` in lockstep, and keeps M3.12's parity with the new corpus cases.
+  - It follows W1's housekeeping below: restamp, citation re-measure, `session-hook`.
+  - It is made now, as ruled: a small standalone PR, rolled fleet first, independent of the waves.
+  - The waves do not wait on it. W5's L0 `bad-slug` refusal covers dot segments either way; only this fix covers a relative-path origin and a stacked prefix.
+- **Edits to the 2026-10-12 spec, made in the same change** (amended 2026-10-13; coordinator, 2026-10-13). This change edits that spec too. Each edit there is marked "(amended 2026-10-13, Share/Export)":
+  - A2a: the sentence saying that spec owns the worker carve-out, and that this amendment does not repeat it, is replaced. M5.16 owns the carve-out, and M9.14 is now a cross-reference to it.
+  - A2b and M8.10: `docs/export/buildExport.tsx` is kept beside `MockupFrame.tsx` and `ReaderFrame.tsx` for `<iframe` and `srcDoc`, and `docs/export/policy.ts` beside `mockup/policy.ts` and `reader/policy.ts` for `default-src 'none'`. M8.10's mutations gain dropping either allowance.
+  - Its W8 row: W8 owns the decision on what Export means on the reader path (§4.13), and its reader copy op goes through `copyText` (M4.SH7).
+  - G9: its two taps hold only once W6's script-text census lands (§5.6.3).
+  - RD23, W5b's placement, is answered: after W5. Its §8 sentence, Figure 3's edge and caption, the W5b row and "Waiting on you" now say so.
+  - Its decision log gains RD32, which records these edits.
 
 | Wave | Box | Ships | Rows | Gate / measurement | Rollout |
 |---|---|---|---|---|---|
@@ -2845,9 +3360,11 @@ There are seven waves. Each is one run row, with one worker and one reviewer run
 | **W2** grants and adapter | fleet (agent), server L1-L3 | `agent/src/whitelist.ts`: 4 `REQUIRED_VERB_FLAG` entries and grants, plus agent type tests. `server/src/ccdargv.ts`: `DOCS_CAP` and builders. `runner.ts`: 4 budget rows. `server/src/docs/policy.ts` (L1: query parser, provenance, lane admit, use of the headers table, cache-control, refreshDue, fetchBranchFor, `DOCS_FAILURE_HTTP`); `ports.ts` (L2, consumer-declared `DocsReader`/`DocsFetcher`); `ccdsource.ts` (L3: tri-state gate with C1, classification, redactor, checks 8-9). The docs ring guard appended to `single-definition.test.ts` | §2 rows 44, 45 (the gate cases, with `DOCS_CAP`), 46, 47, 53 (L1 half: the `refreshDue` table and `DOCS_FAILURE_HTTP` exhaustive), 62 (L3 half); M3.4 (L1 half), M3.9, M3.10; M6.1, M6.3-M6.5; M7.4 (runner-budget clause, with `docs-budget.test.ts`), M7.7, M7.10 | — | none needed; it rides a later rollout |
 | **W3** routes | server | `server/src/docs/routes.ts`, `hooks.ts` (provenance, response policy), `lane.ts`, `cache.ts`; the plugin registration beside `registerUpdateRoutes`; wiring in `index.ts`; census updates; `docs-console-latency.test.ts` | §2 rows 49-52; M3.4-M3.8, M3.13-M3.15; M5.1, M5.2, M5.4-M5.6; M6.2, M6.9-M6.12 | **R2 and R1** on the real link, after the dark rollout | **dark rollout to both boxes required**, fleet first: the API is live and session-gated, with no UI door |
 | **W4** PWA foundation | PWA + doctor file | golden test first; `lib/markdown.tsx` extraction with chat unchanged; iterative `remarkAlerts`; `RenderBoundary` (root, detail, chat item); `useLocation`; the `swDenylist` refusal with its prose and tests; `docs-sw`. Chat hardening (U3): the chat nesting pre-scan, the parse pipeline, the worker and runner for messages over 4 KiB, `renderHast`, the highlight cap, the five direct dependencies, and the chat refusal of root-relative and protocol-relative image sources | M4.R1, M4.R3, M4.M1, M4.M2, M4.P1-P8, M4.P10-P12, M4.H1, M4.B1, M4.B3, M4.B4, M4.C1-C3; M7.2, M7.3 (doctor half), M7.5, M7.6 (`docs-sw`), M7.9 | build verification: the worker chunk is emitted and precached | optional; phones update with no visible change beyond crash resilience |
-| **W5** Docs screen | PWA | `DocsScreen`; `api.docs.*` with the marker header; views, truth line, banners, failures; the door and session links; `DocMarkdown` with the docs URL and image policy; the image queue; raster object URLs and SVG `data:` images; text/other leaves; `view=committed`; GitHub links; auto-refresh; re-fetch on sign-in; contrast and tap-target registrations; the required `browser (pwa)` job (U4) with M5.B5 and M5.B6 | §2 rows 54, 60, 61 (PWA half: the 3 s retry and the stale-lock rendering), 66, 67; M4.R2, M4.R4, M4.L1, M4.L2, M4.P9, M4.H2, M4.U1-U7, M4.T1-T7, M4.F1-F6, M4.A1-A3, M4.B2, M4.S1; M5.3 (leaf-routing half), M5.17, M5.18, M5.20; M5.B5, M5.B6 | merge gate: **R1 and R2 recorded as passing** in the plan | fleet-first rollout; the feature is live on the dev channel. Retiring a standalone docs server (7.4) follows W7, because HTML mockups land only in W6 |
-| **W6** mockups | PWA | `MockupView`, `MockupFrame`, `mockup/{policy,prescan,parse,plan,css,load,origins}.ts`, `buildSrcdoc`, the click guard, the load watcher, the census, Source, Download, `frame=full` and New tab, and the per-view Load external opt-in (U2); the `frame-src 'none'` meta in `pwa/index.html` and the `build-pwa` grep step | M5.7 (mockup-resolution half), M5.8-M5.16, M5.19, M5.21, M5.22; M5.B1-B4, M5.B7, M5.B8 | DOMParser measured in Chromium on the worst deep shape at `MOCKUP_MAX_DEPTH`/`MOCKUP_MAX_TAGS`, with the limits lowered if it exceeds about 1 s; the committed mockups' counts recorded; one manual phone pass of the M5.B fixtures plus the busy-loop fixture (`mockup-scripts-confirm` if the phone does not isolate the frame) | fleet-first rollout |
-| **W7** docs and release | docs | README and `CLAUDE.md` (7.5); the whole-branch review | topology-clean; README citations (`session-hook`); deviation-refs; `box-token-census` (proves the bullet is untouched) | — | promote to `stable` (needs a green `full-suite` on the commit, which now includes `browser (pwa)`), then `ccrc rollout`. The operator's 7.4 follows; it is not a wave |
+| **W5** Docs screen, Share and Export | PWA + L0 (`shared/docs.ts`) | **First task, L0 (amended 2026-10-13):** the `GithubTarget` widening (`repo`, `root`), `githubPermalink`, the private `githubUrlAt`, and its two refusals `bad-slug` and `bad-target` (§3.11), with their rows in `server/test/docs-shared.test.ts` and a describe appended to `single-definition.test.ts`; its consumer `DocLink` follows in the same wave. Then: `DocsScreen`; `api.docs.*` with the marker header; views, truth line, banners, failures; the door and session links; `DocMarkdown` with the docs URL and image policy; the image queue; raster object URLs and SVG `data:` images; text/other leaves; `view=committed`; GitHub links; auto-refresh; re-fetch on sign-in; contrast and tap-target registrations; the required `browser (pwa)` job (U4) with M5.B5 and M5.B6. Amended 2026-10-13: Share (§4.16) and Markdown, text and image Export (§4.17), that is `share.ts`, `ShareSheet`, `ExportSheet`, `docs/export/*`, `saveBytes` and `downloadExport`, `ExportAssets`, `pinFor`, `imagePinFor` and the settled-outcome context; and the Markdown CSS move to `lib/markdown.css` (§4.14). From the 2026-10-12 spec: the docs-profile `<br>` (its A16, M9.1). Ruled 2026-10-13: the bounds on W4's r10, r11 and 2-2 in the shared Markdown components, which chat shares (§4.10) | §2 rows 54, 60, 61 (PWA half: the 3 s retry and the stale-lock rendering), 66, 67; M4.R2, M4.R4, M4.L1, M4.L2, M4.P9, M4.H2, M4.U1-U7, M4.T1-T7, M4.F1-F6, M4.A1-A3, M4.B2, M4.S1; M5.3 (leaf-routing half), M5.17, M5.18, M5.20; M5.B5, M5.B6. Amended 2026-10-13: M3.11 (its `repo`, `root`, `bad-slug` and `bad-target` rows), M3.16-M3.18; M4.SH1-SH8, M4.EX1-EX16; M4.T7, M4.S1 and M5.17 as amended; M5.B9; M9.1 (the 2026-10-12 spec's A16) and W4's profile-equality case as A16 amends it; and the W5 halves of rows W4 proved on stand-ins: M4.R1, M4.B1, M4.P1, M4.P6, M4.P7, and M4.P12 with its mutation "count only after render". Ruled 2026-10-13: a case and a mutation row in W5's plan for each of the r10, r11 and 2-2 bounds | merge gate: **R1 and R2 recorded as passing** in the plan. Amended 2026-10-13: §4.17's W5 measurements recorded (React's head order and `<style>` text among them), M5.B9 green; the r10, r11 and 2-2 bounds in place, each value measured and stated in the plan, and each case and mutation row green (§4.10); an Export build time, measured with those bounds, over the parse budget goes to the operator (§4.17) | fleet-first rollout (W5's L0 change is additive: no wire field, route or argv, so fleet first still holds); the feature is live on the dev channel. Retiring a standalone docs server (7.4) follows W7, because HTML mockups land only in W6 |
+| **W5b** parity, server half (the 2026-10-12 spec; amended 2026-10-13) | fleet (ccd), server, PWA | that spec's §8: the sections `vision` and `promise`, `docs-log` and its route, and the `at=<sha>` page key. It follows W5 (operator, 2026-10-13), so W5 builds four sections and no `at=` key. It re-derives Share's rows for a version view (§4.13) | that spec's M9.2-M9.9, M9.11-M9.13 | that spec's | `--server-first` (that spec's A23); the agent restarts for the grant |
+| **W6** mockups | PWA | `MockupView`, `MockupFrame`, `mockup/{policy,prescan,parse,plan,css,load,origins}.ts`, `buildSrcdoc`, the click guard, the load watcher, the census, Source, Download, `frame=full` and New tab, and the per-view Load external opt-in (U2); the `frame-src 'none'` meta in `pwa/index.html` and the `build-pwa` grep step. Amended 2026-10-13: mockup Export (§5.6.9: `mockup/exportMockup.ts` and the wrapper's arm of `export/buildExport.tsx`); the script-text census (§5.6.3); `MOCKUP_MAX_OPEN_FORMATTING`, then the re-derived `MOCKUP_MAX_TAGS` (§5.6.2); M5.16 as rewritten, with the worker carve-out and the export allowances | M5.7 (mockup-resolution half), M5.8-M5.16 (M5.16 as rewritten), M5.19, M5.21 and M5.22 (both as amended); M5.EX1-EX7; M5.B1-B4, M5.B7, M5.B8 (as amended), M5.B10, M5.B11 | DOMParser measured in Chromium on the worst deep shape at `MOCKUP_MAX_DEPTH`/`MOCKUP_MAX_TAGS`, with the limits lowered if it exceeds about 1 s; the committed mockups' counts recorded; one manual phone pass of the M5.B fixtures plus the busy-loop fixture (`mockup-scripts-confirm` if the phone does not isolate the frame). Amended 2026-10-13: the formatting-reconstruction shape measured before `MOCKUP_MAX_OPEN_FORMATTING`'s value is fixed, then `MOCKUP_MAX_TAGS` re-derived; the phone pass extended as §5.7 says (`export-share-file`, `mockup-export-flat`) | fleet-first rollout |
+| **W7** docs and release | docs | README and `CLAUDE.md` (7.5), including the Share and Export prose; the whole-branch review | topology-clean; README citations (`session-hook`); deviation-refs; `box-token-census` (proves the bullet is untouched) | — | promote to `stable` (needs a green `full-suite` on the commit, which now includes `browser (pwa)`), then `ccrc rollout`. The operator's 7.4 follows; it is not a wave |
+| **W8** reader frame (the 2026-10-12 spec; amended 2026-10-13) | PWA | that spec's §8: the shared rendering library, mounted in a sandboxed reader frame with a checked bridge, and the plain pipeline as its fallback. It owns the decision on what Export means on the reader path (§4.13), and appends its frame, policy and bridge to M5.16 while keeping this spec's allowances. The first is in that spec's W8 row, and the second in its A2b and M8.10, all edited in the same change (above) | that spec's M8.1-M8.22, M8.B1-B8, M9.10 | that spec's | that spec's |
 
 **W1 is the largest wave.** The plan splits it into W1a (runner, discovery, grammar, `docs-index`, `docs-tree`) and W1b (`docs-show`, `docs-fetch`), each with its own restamp and citation re-measure. Both halves are tasks inside the one W1 run row, with one worker and one reviewer; they are not separate waves.
 
@@ -2923,8 +3440,12 @@ Run in the foreground, with a timeout of at least 600 000 ms, single files via `
   - server: `ccrc-doctor`, `docs-parity`, `deploy-coordinates`.
 
   A `package.json` change runs the full CI suite by design.
-- **W5:** the full PWA suite, especially `docs-screen`, `fleet-screen`, `settings-screen`, `contrast`, `tap-targets`, `shell-css`, `offline`, `push-sw`; plus `browser-leg` and the browser config.
-- **W6:** the full PWA suite, especially `docs-mockup-prescan`; and the browser leg, including M5.B8.
+- **W5:** the full PWA suite, especially `docs-screen`, `fleet-screen`, `settings-screen`, `contrast`, `tap-targets`, `shell-css`, `offline`, `push-sw`; plus `browser-leg` and the browser config. Amended 2026-10-13:
+  - the Share and Export suites (`docs-share`, `docs-export`, `docs-scans`, or the names the plan chooses), and `contrast` after the CSS move;
+  - server: `docs-shared` (the L0 rows) and `single-definition` (the appended pin), and `docs-parity` if the ccd slug fix has landed;
+  - the browser leg, including M5.B9.
+- **W6:** the full PWA suite, especially `docs-mockup-prescan`; and the browser leg, including M5.B8. Amended 2026-10-13: `docs-mockup-export`, `docs-mockup-plan` (the script-text census) and `docs-scans` (M5.16 as rewritten), and M5.B10 and M5.B11 in the browser leg.
+- **The ccd slug fix** (amended 2026-10-13): `docs-parity`, `ownership`, `session-hook` after the re-measure, and the suites that exercise `_gh_repo_slug`'s callers, found by grep.
 - **W7:** `session-hook`, `box-token-census`, `topology-clean`.
 
 ### 7.10 Mutation rows (§7)
