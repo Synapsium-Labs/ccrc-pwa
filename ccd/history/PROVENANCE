@@ -165,3 +165,10 @@ upstream: src/db/migration.ts
 commit: e05d8d3
 upstream-sha256: 0a272a2d4b29ce79954003cdb8b5db4152f8b6001401938713b2987417a856f1
 changed: JavaScript; upstream's drop sequence (lines 1134-1137: the table, then each shadow table if it exists) is kept for both tables, with the shadow names per table from lib.mjs's FTS_SHADOWS; the recreate is createFtsTables and the reseed is sweep.mjs's resumable rebuild, never an in-transaction seed
+
+item: recall-policy sentences (V7)
+ours: ccd/history-skill/SKILL.md
+upstream: src/plugin/index.ts
+commit: e05d8d3
+upstream-sha256: f22c70550b715a91156dff1f6179d5fd58711bf09c5f5091586eaa8a2b3a69df
+changed: sentences from upstream lines 354-356, 367-371, 383, 392, 396-402 and 409-416 adapted into the skill's sections 1, 2, 4, 6 and 8: lossless-claw's expand tools become the ccrc history verbs, summaries become recalled text or a compacted summary, and line 416 keeps only its first clause

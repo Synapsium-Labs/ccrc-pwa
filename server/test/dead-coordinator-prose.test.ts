@@ -72,7 +72,7 @@ describe('the skill corpora', () => {
   });
 
   it('no skill file names the lane’s live switch — a session told about the dial could arm the end of a programme', () => {
-    const skills = ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill'];
+    const skills = ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill', 'ccd/history-skill'];
     const files = skills.flatMap((d) => readdirSync(path.join(root, d), { recursive: true, encoding: 'utf8' })
       .filter((f) => f.endsWith('.md')).map((f) => path.join(d, f)));
     expect(files.length, 'an empty corpus would pass vacuously').toBeGreaterThan(3);

@@ -4863,8 +4863,8 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
   // Each switch is touched and removed BY HAND (§9.7): no line of shell or .mjs may write one. `lib.mjs`'s
   // SWITCHES is the one sanctioned definer (the stall-watch MARKERS precedent above); the hook and the shim read
   // `history-off` with a bash test. `_uninst_purge` spells its kept set as the globs `history` and `history-*`
-  // and doctor names the cap file from `status --json`, so neither is a holder. B2 adds the skill's files to
-  // this corpus with the skill. KNOWN WIDTH: a name assembled from pieces is not seen. ONE named allowance
+  // and doctor names the cap file from `status --json`, so neither is a holder. W1-B2 added the skill's text to
+  // this corpus (SKILL_TEXT below). KNOWN WIDTH: a name assembled from pieces is not seen. ONE named allowance
   // (USAGE_PROSE below, FU5) lets `ccrc --help` spell the pause path as prose; it covers one function's lines
   // and nothing else, and a split spelling is pinned by the case that reads the literal back.
   // `recall-off/<id>` is O13's seventh name and is NOT in HOLDERS: spec O13 gives it exactly one writer,
@@ -4881,7 +4881,12 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
     ['steer-on', ['ccd/history/lib.mjs']],
     ['headless-on', ['ccd/history/lib.mjs']],
   ];
-  const CORPUS = [...new Set([...BASH, ...ALL_MJS])];
+  /** W1-B2: the skill's text joins the corpus with the skill (spec §9.11 O13 names "every bash, .mjs or skill
+   *  line"). Every line of it is read, comment or not, as a line a model may run (`code` below reads it whole).
+   *  It names a switch path on no line at all, so even a prose mention would be a holder the rows above do not
+   *  list; it is never a listed holder, so the language the rows' write check picks for it never applies. */
+  const SKILL_TEXT = [path.join(ccrcRoot, 'ccd', 'history-skill', 'SKILL.md')];
+  const CORPUS = [...new Set([...BASH, ...ALL_MJS, ...SKILL_TEXT])];
   /** A switch is a PATH, so a line names one only as `/<name>`. The bare words are vocabulary, not files: the
    *  exit-2 reason `history-off` (REASONS, Task 3; decideOpGate's refusal, Task 6) names the CONDITION, and
    *  lib.mjs spells it as a reason word, never as the file. */
@@ -4914,6 +4919,7 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
   /** A file's code lines, comment lines dropped in either language. The one allowance is applied here, so the
    *  holder count and the `writes()` classifier both skip it. */
   const code = (f: string): string[] => {
+    if (SKILL_TEXT.includes(f)) return readFileSync(f, 'utf8').split('\n');
     if (!BASH.includes(f)) return stallCode(f).split('\n');
     const text = readFileSync(f, 'utf8');   // once per call: ccd/ccrc is about 24k lines
     const skip = rel(f) === USAGE_PROSE.file ? usageProse(text).allowed : new Set<number>();
@@ -4984,6 +4990,13 @@ describe('ccrc history: the operator switches have readers only (spec 2026-10-05
   it('SWITCHES names every switch, so the rows below compare against a real definer', () => {
     const block = switchesBlock().join('\n');
     for (const [name] of HOLDERS) expect(block, `SWITCHES does not name ${name}`).toContain(name);
+  });
+
+  it('CONTROL (W1-B2): the skill text is in the corpus, read whole, and a write in it would be seen', () => {
+    expect(CORPUS.map(rel)).toContain('ccd/history-skill/SKILL.md');
+    expect(code(SKILL_TEXT[0]!).length, 'the skill text read as nearly empty').toBeGreaterThan(40);
+    expect(writes('touch ~/.ccrc/history-off', 'bash', 'history-off')).toBe(true);
+    expect('touch ~/.ccrc/history-off'.includes(needle('history-off'))).toBe(true);
   });
 
   it.each(HOLDERS)('%s: named on a code line only by its declaration and its readers %j, and never written', (name, want) => {

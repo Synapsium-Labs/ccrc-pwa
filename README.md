@@ -5929,11 +5929,11 @@ Source files carry no per-file licence headers. Every file in this repository op
 comment explaining the reasoning behind its design, and a boilerplate header on top of that
 would compete with the thing the reader is actually there for. This section is the notice.
 
-**Third-party code.** A few helpers under `ccd/history/` are derived from lossless-claw
-(Martian Engineering, MIT-licensed; Copyright (c) 2026 Josh Lehman / Martian Engineering), at
-upstream commit `e05d8d3`. MIT material may be combined into this AGPL-3.0 program as long as
-its notice travels with every copy, so the upstream licence sits byte for byte in
-`ccd/history/LICENSE.lossless-claw`, beside the code it covers, and ships in every release
-tarball. `ccd/history/PROVENANCE` names each copied item, its upstream file and what changed,
-and each copied function carries a one-line comment saying where it came from: a rationale
-comment, not a licence header.
+**Third-party code.** A few helpers under `ccd/history/`, and the recall-policy sentences of the
+`ccrc-history` skill in `ccd/history-skill/`, are derived from lossless-claw (Martian Engineering,
+MIT-licensed; Copyright (c) 2026 Josh Lehman / Martian Engineering), at upstream commit `e05d8d3`.
+MIT material may be combined into this AGPL-3.0 program as long as its notice travels with every
+copy, so the upstream licence sits byte for byte in `ccd/history/LICENSE.lossless-claw` and in
+`ccd/history-skill/LICENSE.lossless-claw`, beside the material it covers, and ships in every release
+tarball. `ccd/history/PROVENANCE` names each copied item, its upstream file and what changed, and
+each copied item carries a one-line comment saying where it came from: not a licence header.
