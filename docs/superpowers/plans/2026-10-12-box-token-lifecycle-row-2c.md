@@ -527,6 +527,7 @@ Limits no test can see, named in the commit: dropping only the `-r` test, or onl
    - An unlistable directory is FAIL, not PASS, with a sentence and remedy that match boot's refusal there. A missing directory is not unlistable.
    - The trace names are held to `tokenPaths`, `SET_ASIDE_MARK` and boot's own set-aside list by the parity row.
    - The own-write fleet arm reads `trace` as "not absent". The both-role rows (retired, set-aside, unlistable) assert the fleet part itself, because the server part alone would keep the line FAIL.
+   - On an own-write box only, the fleet token file and the generation file are traces too (review 405 F1), by existence alone (`-e`, `-L`); the fleet file is never opened for it. The agent.env, remote, server-role and fleet-role rows keep today's reading, and the server-role row pins the fresh PASS with both files present.
 4. **F2's reader.**
    - `held` is validated strictly: absent, or 16 hex.
    - The block still spells the shape exactly three times (`:987-990`), through `g16`.
@@ -540,14 +541,14 @@ Limits no test can see, named in the commit: dropping only the `-r` test, or onl
    - F3's sentence keeps D-139's words as its prefix, and its three goldens were changed red-first, then re-measured.
    - A fresh install still ends `0 warned, 0 failed` (the one `linger` warn on macOS).
 6. **Every mutation row reds** with the counts its commit message records. Every "green before the fix" row is named as such, with its mutant's red. The named equivalent mutants (Task 2's `-r`-alone and `2>/dev/null`-alone, the report's `generation`/`held` order) are in the commit messages.
-7. **Numbers (class 10).**
+7. **Scope (class 8).** Only the File Structure's files are edited. Nothing under `server/src/`, `agent/src/`, `shared/`, `deploy/` or `ccd/ccd`, and not the spec. The README change is only the `box-token` row's parenthetical. Any step dropped under the claims rule is named in the wave-done.
+8. **Numbers (class 9).**
    - Only 4554 and 4555 are defined, both bare, each first cited and defined in Task 1's commit and settled in Task 6.
    - 4552 and 4553 are amended in prose only.
    - `git grep -nE 'D-45(5[4-9]|6[0-9]|70)'` at the tip is empty.
    - `deviation-refs` is green against `origin/main`.
-8. **Scope (class 9).** Only the File Structure's files are edited. Nothing under `server/src/`, `agent/src/`, `shared/`, `deploy/` or `ccd/ccd`, and not the spec. The README change is only the `box-token` row's parenthetical. Any step dropped under the claims rule is named in the wave-done.
 9. **The prose is true:** F5's K7 wording ("no sooner than"), F6's re-measured counts, F9's re-measured count, F10's sentence, and 4553's three replaced limits.
-10. **Public repo.** No host, path, lane or account name in the diff, the commit messages or the PR body.
+10. **Public repo (class 10).** No host, path, lane or account name in the diff, the commit messages or the PR body.
 
 ## Deviations found
 
@@ -555,16 +556,17 @@ Limits no test can see, named in the commit: dropping only the `-r` test, or onl
   - **The rule.** The server arm lowers an absent `mail.token` beside an absent state to the never-minted PASS only when nothing beside the state file shows that a value was once held there:
     - no `box-token-retired.json`;
     - no `mail-previous.token`;
-    - no copy boot set aside (`box-token-retired.json.unusable-*` or `box-token.json.unusable-*`).
+    - no copy boot set aside (`box-token-retired.json.unusable-*` or `box-token.json.unusable-*`);
+    - on an own-write box only (role both, `CCRC_FLEET` not remote, and no `agent.env` marking the fleet: the same test as 4553 rule (3)), neither the fleet token file nor the generation file, which that box's own server wrote (review 405 F1, ruled by the coordinator).
 
-    Each is tested by existence and by name in a directory listing (`-e`, `-L`, a glob over names), never by content: `mail-previous.token` holds a value and is never opened. A dangling link counts as present.
+    Each is tested by existence and by name in a directory listing (`-e`, `-L`, a glob over names), never by content: `mail-previous.token` holds a value and the fleet file holds one, and neither is opened. A dangling link counts as present. The own-write test is passed to the trace explicitly, and the two fleet-side paths are spelled once (`_bt_fleet_paths`), which the fleet arm and the trace both read.
   - **The sentences (as `ccd/ccrc-doctor-checks` spells them).**
     - Fresh, PASS: `… does not exist, and neither does the server's state file: no value has been minted here yet, and the server mints one at boot, or its log says why that mint failed`. The tail after `at boot` is F3 (Task 5); D-139's words are its prefix.
-    - A trace, FAIL: `… but <dir>/<trace> does: this server held a value once and lost it; the server mints a new one at its next boot, and the fleet must then be handed it`, with the existing restart remedy.
+    - A trace, FAIL: `… but <trace path> does: this server held a value once and lost it; the server mints a new one at its next boot, and the fleet must then be handed it`, with the existing restart remedy. The path is the trace's full path: `<dir>/<name>` for the server's own files (the text it always printed), and the fleet file's or the generation file's own path on an own-write box.
     - Unlistable, FAIL: `… and <dir> cannot be listed, so a value held here once cannot be ruled out, and the server refuses to boot until it can list it`, remedy `give <dir> its read bit (chmod u+r <dir>); the server then boots and mints a value`. A token directory that exists and cannot be listed (search, no read) fails closed, because boot refuses to start on it (`setAsideNames`). A directory that does not exist holds no trace: the fresh PASS stands.
-  - **The fleet arm agrees.** The server arm records its state read as `trace`, not `absent`, so an own-write box's fleet arm (4553 rule (3)) does not read never-handed either. The both-role rows (retired, set-aside, unlistable) assert the fleet part itself.
+  - **The fleet arm agrees.** The server arm records its state read as `trace`, not `absent`, so an own-write box's fleet arm (4553 rule (3)) does not read never-handed either. The both-role rows (retired, set-aside, unlistable) assert the fleet part itself. The agreement runs the other way too (review 405 F1): on an own-write box the fleet token file and the generation file are a trace on the server part, so a server that lost its token and state while the fleet-side files its own boot wrote survive no longer reads the never-minted sentence beside a fleet part that says "written by this box's server". The fleet-only and generation-only variants name the file that remains.
   - **The names** (`_BT_TRACES`, `_BT_ASIDE`) are held to `tokenPaths`, `SET_ASIDE_MARK` (`server/src/token/files.ts`) and boot's set-aside list (`server/src/token/boot.ts`) by a parity pin.
-  - **Why:** D-139's own sentence, "a box that once held a value and lost it stays FAIL". A retired list or a previous value exists only after a rotation. Review 391 measured the PASS, and the operator ruled to fix it.
+  - **Why:** D-139's own sentence, "a box that once held a value and lost it stays FAIL". A retired list or a previous value exists only after a rotation. Review 391 measured the PASS, and the operator ruled to fix it. Review 405 measured the reverse case on an own-write box, where the server itself writes the fleet file and the generation file, and the coordinator ruled that they count.
   - **Limits:**
     - Boot still treats this disk as a first install (`server/src/token/boot.ts:165-167`), so doctor and boot disagree by design until row 3 rules on boot. It fails closed.
     - A trace that exists and cannot be read (an unreadable `box-token-retired.json`) refuses boot; the readable-trace sentence and its restart remedy are wrong there, and the verdict (FAIL) is right. Doctor tests traces by existence only.
@@ -574,6 +576,12 @@ Limits no test can see, named in the commit: dropping only the `-r` test, or onl
     - No row runs with `nullglob` set, and the unlistable rows skip under a root runner (no mode bit stops root). The `[ -L ]` half of the existence test is pinned by two dangling-link rows (the retired list; a set-aside link), each with a mutant that reds it.
     - A no-role box whose only file is a trace still reads `SKIP no-role`, not PASS.
     - No ccrc code path reaches this state by itself. It needs files lost by hand or to the disk while no server runs. No live box changes: the live server holds a state, so this branch is never reached there.
+    - **The own-write records (review 405 F1).**
+      - They count only on an own-write box. A both box whose `agent.env` marks the fleet, or whose fleet mode is remote, a server-role box and a fleet-role box keep today's reading, because there the fleet files are the fleet agent's, not this server's. The live boxes are such. A both-role fleet-remote box whose server lost its token and state therefore still reads the never-minted PASS on the server part, as before.
+      - Fresh boxes stay green, and no install or boot window opens the branch. Boot's first mint writes `mail.token` (`server/src/token/boot.ts:115`, `ctx.current` set at `:133`) before the both-role fleet write, which is gated on `ctx.current !== null` (`:233`, writes at `:236-237`), and the state file is written after. The only other writer is the driver's own-write promotion (`server/src/token/driver.ts:395-396` through `fileBothRoleWriter`, `server/src/token/files.ts:312-313`), which runs with a state present and replaces `mail.token` by an atomic rename afterwards (`driver.ts:426`). Wherever the fleet file or the generation file exists, `mail.token` exists, and no path writes either one while `mail.token` is absent. A failed first mint sets `ctx.current` to null, so the fleet files are not written then either.
+      - The reading after a deliberate fresh start on an own-write box is FAIL until the server next boots and mints: removing `mail.token` and the state file while leaving `~/.cc-secrets/ccrc-mail.token` and the generation file looks like a lost value, and it is the same disk. Uninstall removes the generation file but not the fleet file, so the fleet file alone is also a trace there. The restart remedy is the right one.
+      - A token directory that is unlistable and also holds a fleet-side trace reads the readable-trace sentence and the restart remedy, as limit (a) says for the named traces, because the own-write traces are tested before the unlisted test.
+      - The `[ -L ]` half is pinned by two dangling-link rows (the fleet file, the generation file), each with a mutant that reds it.
 - **4555** (amends 4553 rule (4); review 391 F2, ruled by the coordinator for row 2c). Settled to what Tasks 2, 3 and 5 shipped.
   - **The writer.** `ccrc-token-sync`'s report gains an optional field named `held` (16 lowercase hex, never `null`). `_ts_report` writes it only for a run that wrote no value (`R_GEN` empty), and only when `_ts_held` finds a generation this box holds at that moment: the generation file's first line, else the previous report's `generation`, else its `held`. They are read in bash only (the two bad-code refusals run before the `python3` check), from regular, non-link, readable files only, with bounded `read -n`, stderr silenced before each open, and nothing printed. The key is absent otherwise.
   - **What stays byte for byte:** a synced report, every report of a run that wrote a value, and every report of a box that held nothing. The verb's stdout line, its exit codes and its first stderr lines are unchanged, no stderr line is added, and the verb keeps exactly three `python3 -I -c` lines.
