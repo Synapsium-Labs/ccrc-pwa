@@ -1778,6 +1778,24 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     words are asked for first.
   - Both lanes remain SHADOWED. After this round: a re-measured wave-done, a scoped review, green required checks, then
     the operator-authorized admin merge.
+- **2026-10-13 02:47 — fix round 5's co-edits settled, except one (calm-mesa's 4489, plain-ridge's 4488).**
+  - **What happened to the claim:** plain-ridge's claim 1197 hit its eight-hour cap at about 01:53. Run 400's claims
+    1218 and 1219, and run 354's 1216, now hold the contested files. Plain-ridge's new claim 1221 covers the uncontested
+    ones, including a new `shutdown-seal.test.ts`.
+  - **`index.ts`: calm-mesa CONSENTS (4489).**
+    - The license: one additive block after `app.listen` and the boot logs, plus at most one import line.
+    - Run 400 adds no shutdown path, so #351's handler is the process's only one.
+    - Three of run 400's text pins must hold:
+      - one `randomUUID()` in `index.ts`;
+      - one each of `collectLaneJournalAt(`, `makeRefreshCaps(` and the `onConnected` line, and exactly two
+        `  deps = {` literals;
+      - no method named `publish` or `invalidate` anywhere in `server/src`.
+  - **watch.ts, store.ts, schema.ts and the coord-db and asks-store pins:** these are covered by the mutual R56 in
+    4454/4461. #351 edits only its fenced regions.
+  - **`dead-coordinator-prose.test.ts` (claim 1216, run 354, coordinator quiet-ridge): consent asked (4494, corrected
+    in 4495).** Run 354 edits only `:75`, in the case "the skill corpora", and #351 keeps off `:72-80`. Until consent
+    arrives, those edits stay local.
+  - Forwarded to plain-ridge in 4493 and 4496.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
