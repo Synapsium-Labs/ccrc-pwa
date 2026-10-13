@@ -206,3 +206,48 @@ describe('T11 review 1-2: a regex literal holding a backtick hides no import tha
     expect(refused).toContain('src/lib/remarkAlerts.ts: react');
   });
 });
+
+describe('T11 review 1-3: an import() or require() that cannot be proved pure, and import.meta.glob, are violations', () => {
+  it.each([
+    ["const n = 'react';\nexport const d = () => import(n);", /^2:\d+: import\(\) with an argument that is not a string literal$/],
+    ['export const d = (x: string) => import(`react-${x}`);', /^1:\d+: import\(\) with an argument that is not a string literal$/],
+    ['export const d = () => import();', /^1:\d+: import\(\) with an argument that is not a string literal$/],
+    ["const n = 'react';\nconst r = require(n);", /^2:\d+: require\(\) with an argument that is not a string literal$/],
+    ["export const g = import.meta.glob('../session/*.tsx', { eager: true });", /^1:\d+: import\.meta\.glob$/],
+    ["export const g = import.meta['globEager']('../session/*.tsx');", /^1:\d+: import\.meta\.globEager$/],
+  ])('%j is reported once, by position', (src, report) => {
+    const scan = scanModule(src, 'fixture.ts');
+    expect(scan.unprovable).toHaveLength(1);
+    expect(scan.unprovable[0]).toMatch(report);
+    expect(scan.specs).toEqual([]);
+  });
+
+  it.each([
+    ["export const d = () => import('react');", 'react'],
+    ['export const d = () => import(`react`);', 'react'],
+    ["const r = require('react');", 'react'],
+    ["import r = require('react');", 'react'],
+    ["export type T = import('react').FC;", 'react'],
+  ])('%j names %s and is not reported', (src, spec) => {
+    const scan = scanModule(src, 'fixture.ts');
+    expect(scan.specs).toEqual([spec]);
+    expect(scan.unprovable).toEqual([]);
+  });
+
+  it('does not report the other import.meta members', () => {
+    const scan = scanModule("export const u = import.meta.url + import.meta.env.MODE + import.meta['hot'];", 'fixture.ts');
+    expect(scan).toEqual({ specs: [], unprovable: [] });
+  });
+
+  it('refuses a glob and a variable import() appended to a closure file, each under file, line and column', () => {
+    const { refused } = closure(appendTo('markdownGuard.ts', [
+      "export const __g = import.meta.glob('../session/*.tsx', { eager: true });",
+      "const __n = 'react';",
+      'export const __d = () => import(__n);',
+    ].join('\n')));
+    const here = refused.filter((r) => r.startsWith('src/lib/markdownGuard.ts:'));
+    expect(here).toHaveLength(2);
+    expect(here[0]).toMatch(/^src\/lib\/markdownGuard\.ts:\d+:\d+: import\.meta\.glob$/);
+    expect(here[1]).toMatch(/^src\/lib\/markdownGuard\.ts:\d+:\d+: import\(\) with an argument that is not a string literal$/);
+  });
+});
