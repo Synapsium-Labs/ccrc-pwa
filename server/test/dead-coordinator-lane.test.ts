@@ -1968,24 +1968,34 @@ describe('the seal: a clean shutdown is trusted, an unclean one is not (D-4916)'
     await walk(f, 2 * HOUR);
     expect(f.stateOf(ra)).toBe('failed');
   }, HEAVY);
-  it('the `unchanged` fast path is refused before a write of THIS process has landed: a failed unseal in a quiet world goes through the mark and the commit', async () => {
+  it('NO ACT UNTIL THE UNSEAL ITSELF HAS LANDED (R1.5): with only the unseal failing, no later pass\'s mark or commit is written or counts — the state stays sealed, nothing acts however long the claimant has been dead — and once the unseal lands the lane commits what it decided and acts', async () => {
+    const f = await fixture();
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    f.plant(A);
+    const ra = f.working(A);
+    const restore = failSql(f, /^UPDATE dead_coordinator_breaker_state SET state = 'clean'/);   // the unseal ONLY; marks and commits would land
+    await f.pass(); await walk(f, 2 * HOUR);
+    expect(f.stateOf(ra), 'due long ago, and the mark and the commit could have landed: no act').toBe('working');
+    expect(stateOf(f), 'nothing was written: the state still reads sealed').toMatchObject({ kind: 'sealed', generation: 1 });
+    expect(f.anchorOf(A), 'and no anchor moved').toBeNull();
+    expect(warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('could not unseal')), 'said once').toHaveLength(1);
+    restore();
+    f.next(); await f.pass();
+    expect(stateOf(f), 'the unseal landed, then the pass committed its pending changes').toMatchObject({ kind: 'clean' });
+    expect(f.anchorOf(A), 'the anchor decided while the unseal failed was kept pending and lands: its hour is the one it counted').toMatchObject({ firstDeadAt: T0 });
+    f.next(); await f.pass();
+    expect(f.stateOf(ra), 'and the lane acts once a write of this process has landed').toBe('failed');
+  }, HEAVY);
+  it('the `unchanged` fast path is refused before the unseal has landed: a failed unseal in a quiet world writes nothing, and the next pass unseals', async () => {
     const f = await fixture();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const restore = failSql(f, /^UPDATE dead_coordinator_breaker_state SET state = 'clean'/);
     await f.pass();
     restore();
-    expect(stateOf(f), 'the mark and the commit wrote it: no longer sealed').toMatchObject({ kind: 'clean', generation: 3 });
-  });
-
-  it('`unchanged` also needs the state KNOWN clean (review 401, F7; D-4916): a failed unseal, a landed mark and a failed commit over a quiet world leave it dirty, and the next pass commits rather than skipping', async () => {
-    const f = await fixture();
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const restore = failSql(f, /^UPDATE dead_coordinator_breaker_state/);      // the unseal and the commit both fail; the mark lands
-    await f.pass();
-    restore();
-    expect(stateOf(f), 'dirty: the mark landed and nothing after it').toMatchObject({ kind: 'dirty' });
+    expect(stateOf(f), 'sealed still').toMatchObject({ kind: 'sealed', generation: 1 });
     f.next(); await f.pass();
-    expect(stateOf(f), 'the next pass wrote it clean again, no changes pending').toMatchObject({ kind: 'clean' });
+    expect(stateOf(f)).toMatchObject({ kind: 'clean', generation: 2 });
   });
 
   // ── the seal, and its refusals ─────────────────────────────────────────────────────────────────────────────────────

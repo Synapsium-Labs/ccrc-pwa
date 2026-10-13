@@ -1341,7 +1341,8 @@ export class FleetWatcher {
    *  stored snapshot ONLY when it reads `sealed`; `Generation` is the generation of the row this process last read or wrote;
    *  `UnsealPending` is a sealed start's first-pass duty, writing `clean` back (retried each pass until it lands); `Landed`
    *  says a write of THIS process has landed (the unseal, or a dirty mark): until it has, the `unchanged` fast path is
-   *  refused and nothing seals; `Sealed` says this process's seal landed; `Stopped` is set by the first seal attempt, after
+   *  refused and nothing seals, and a sealed start writes NOTHING else and acts on nothing until its unseal has landed
+   *  (a later mark does not count in its place: R1.5); `Sealed` says this process's seal landed; `Stopped` is set by the first seal attempt, after
    *  which no pass runs; `PassRun` is the pass in flight, which a seal attempt awaits with a bound. */
   private deadCoordinatorBreakerGeneration: number | null = null;
   private deadCoordinatorBreakerUnsealPending = false;
@@ -4918,9 +4919,12 @@ export class FleetWatcher {
       this.deadCoordinatorBreakerGeneration = w.generation;
       return;
     }
+    // A failed unseal re-reads the row, so a generation another writer moved does not wedge the retry for good.
+    const now = coord.deadCoordinatorBreakerState();
+    if (now.kind === 'sealed') this.deadCoordinatorBreakerGeneration = now.generation;
     if (!this.deadCoordinatorBreakerUnsealWarned) {
       this.deadCoordinatorBreakerUnsealWarned = true;
-      console.warn(`ccrc-server: sweepDeadCoordinators could not unseal the breaker's state (${w === null ? 'no generation' : w.detail}) — no act until a write of this process lands; retried each pass`);
+      console.warn(`ccrc-server: sweepDeadCoordinators could not unseal the breaker's state (${w === null ? 'no generation' : w.detail}) — no act and no write until the unseal lands; retried each pass`);
     }
   }
 
@@ -5154,6 +5158,8 @@ export class FleetWatcher {
    *  (`AnchorsPending`). Four answers:
    *   - `unchanged`: nothing to change — no anchor, the held set's key is what the last landed commit wrote, and the state
    *     is known clean. Nothing is written; the pass may act;
+   *   - `unseal-pending` (D-4916): a sealed start whose unseal has not landed. NOTHING is written and no act is composed;
+   *     the changes stay pending and the caller moves the in-memory hold; the next pass retries the unseal first;
    *   - `mark-failed`: the dirty mark did not land. NO anchor change and no act; the changes stay pending for the next
    *     commit, as on `commit-failed`, and the caller moves the in-memory hold. The state still reads as the last landed
    *     write left it (clean, if it was, and never sealed: the first pass of every process unseals), older than this
@@ -5170,14 +5176,23 @@ export class FleetWatcher {
   private commitDeadCoordinatorBreaker(
     coord: CoordStore, next: readonly DeadCoordinatorBreakerMember[], upserts: readonly (readonly [string, DeadAnchor])[],
     deletes: readonly string[], ids: readonly string[], before: readonly DeadCoordinatorBreakerMember[],
-  ): 'unchanged' | 'mark-failed' | 'commit-failed' | 'committed' {
+  ): 'unchanged' | 'unseal-pending' | 'mark-failed' | 'commit-failed' | 'committed' {
     const key = deadCoordinatorBreakerHeldKey(next);
     const changes = new Map(this.deadCoordinatorAnchorsPending);
     for (const [id, a] of upserts) changes.set(id, a);
     for (const id of deletes) changes.set(id, null);
-    // `unchanged` needs BOTH: a write of this process has landed (a sealed start's unseal, or a mark: D-4916) AND the state
-    // is known clean. The second is not redundant once the first exists: a failed unseal, a mark that lands and a commit that
-    // fails over a quiet world leave the state dirty with no change pending and the key equal (review 401, F7).
+    // A sealed start whose unseal has NOT landed writes nothing and acts on nothing (D-4916, R1.5): a later mark or commit of
+    // this process does not count in its place, and writing one would move the row off `sealed` and make the unseal
+    // impossible. The pass's changes go pending, the hold has moved, and the next pass retries the unseal first.
+    if (this.deadCoordinatorBreakerUnsealPending) {
+      for (const [id, a] of changes) this.deadCoordinatorAnchorsPending.set(id, a);
+      return 'unseal-pending';
+    }
+    // `unchanged` also needs a write of this process to have landed and the state known clean (D-4916; review 401, F7).
+    // Both terms are redundant HERE and kept as defence (X9, and this Landed term, measured equivalent): a sealed start's
+    // pass returned above until its unseal landed; a conservative seed's CommittedKey `''` matches no set's key, so its first
+    // pass commits; and the state is known unclean only after a mark whose commit did not land, whose anchor changes sit in
+    // `AnchorsPending` or whose key differs from `CommittedKey`, so no pass reaches here with it unclean and nothing to write.
     if (changes.size === 0 && key === this.deadCoordinatorBreakerCommittedKey && this.deadCoordinatorBreakerDurableClean
       && this.deadCoordinatorBreakerLanded) return 'unchanged';
     // NO EXCEPTION MAY DROP A COMPUTED HOLD (fix round 5, R2; review 401, F2): the changes go PENDING before the first
@@ -5191,9 +5206,8 @@ export class FleetWatcher {
         console.warn(`ccrc-server: sweepDeadCoordinators could not mark the breaker's state dirty (${mark.detail}) — no anchor changed and no act this pass; the changes stay pending`);
         return 'mark-failed';
       }
-      // The mark landed: a write of this process, and the state no longer reads `sealed`.
+      // The mark landed: a write of this process. (A sealed start never reaches here before its unseal has landed.)
       this.deadCoordinatorBreakerLanded = true;
-      this.deadCoordinatorBreakerUnsealPending = false;
       const record: number[] = [];
       if (key !== this.deadCoordinatorBreakerCommittedKey) {
         if (next.length === 0 && this.deadCoordinatorBreakerHeldRunId !== null) record.push(this.deadCoordinatorBreakerHeldRunId);
