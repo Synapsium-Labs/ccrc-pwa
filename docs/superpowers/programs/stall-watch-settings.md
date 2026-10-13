@@ -28,7 +28,7 @@ time.
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
 | 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merged `6e4524164` 2026-10-12; run 322 closed `done`, `final:true` (R37) |
-| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | fix round 3 verified at `5aa5dbadb`; scoped review 404 dispatched (R46) |
+| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | review 404 accepted; ready to merge at `5aa5dbadb` (R47) |
 
 ## Decisions & deviations
 
@@ -995,6 +995,36 @@ time.
   - Review run 404 (`ccrc-pwa-calm-hollow`) reads `3a28932a7..5aa5dbadb` with the panel. It checks that the
     diff is words only, items 1-7, the jq table behind item 1, the renamed title's plan rows and counts, and the
     wave's ledger properties.
+- **R47 (2026-10-13 00:35)**, review 404 is accepted; wave 3 is ready to merge at `5aa5dbadb`, the operator's call.
+  - Review run 404 (`ccrc-pwa-calm-hollow`, mail 4441) read `5aa5dbadb`, the live tip, with the panel (42 agents,
+    none unverified). Closed `done`; report copied to `w3-review-404-report.md`.
+    - Confirmed: the code diff is comments and the one title only; items 1-7 of mail 4434 are done; every suite
+      is green at the tip; the citation instrument equals `main`'s (`7 passed | 443 skipped`); D-4039, D-4040 and
+      D-4041 are each defined once; the 33 mutation rows keep their counts, and N2 reds with the new title.
+    - Item 1's substitution is correct by the reviewer's own jq-1.7 table: 1e16 is refused and 1.01e17 is kept.
+      R46 stands.
+  - Findings F1-F4, all words, each surviving its refuters:
+    - F1: the plan's D-4041 "Pinned by" bullet (:503) says the fractional floor is pinned. No case plants a
+      fractional stamp; removing the floor leaves the suite green.
+    - F2: the renamed title (`session-hook-subagent-ask.test.ts:220`) and its five plan rows name the same
+      unasserted floor.
+    - F3: "a fractional value keeps its floor" (hook :3792, plan :473) is false for a negative one: -0.5 floors to
+      -1 and is refused.
+    - F4: plan :368-369 and :521-522 say the rows kept identical titles across two measurements; the title was
+      renamed after both.
+  - Ruling: F1-F4 go to the post-merge residue list, as R45 ruled for any further wording finding. No fifth round.
+    - Why: behaviour is accepted and measured end to end (reviews 403 and 404). Each finding overstates what a
+      test pins, or scopes a sentence loosely; none changes what the hook does.
+    - Ruling on F2: the follow-up keeps the words and adds the case, rather than dropping the words. It plants a
+      non-negative fractional `updatedAt` (kept as its floor) and -0.5 (refused), so F1's bullet and F2's title
+      become true, and F3's sentence says "a non-negative fractional value". F4 gets one sentence naming the
+      rename.
+    - Cost if wrong: until the follow-up lands, one test title and one plan bullet claim a pin that does not
+      exist. The behaviour they describe is correct.
+  - Noted for the record, not a finding: in R45 item 4, D-2404 is the correction of the bump's mechanism, not the
+    bump itself. The test header's words are the ruling's; the follow-up may tighten them.
+  - Next: the operator merges #362 (`--admin --squash --match-head-commit 5aa5dbadb`). Then run 394 closes `done`
+    as the final wave, and the residue list goes to the programme's close.
 
 ## Carried constraints (reviewers get these)
 
