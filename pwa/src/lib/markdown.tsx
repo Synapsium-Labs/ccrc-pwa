@@ -7,7 +7,7 @@
 // Hardened per ruling U3 (W4 Task 6; section 4.12): a message of at most `CHAT_SYNC_MAX_BYTES` UTF-8 bytes is
 // pre-scanned, then rendered as before; a longer one parses in `chatRunner`'s worker; whatever is not formatted
 // shows as `MsgPlain` with `chatPlainNote`'s sentence; and `isRefusedChatImageSrc` keeps chat from drawing an
-// image whose source is root-relative or protocol-relative (`chat-hardening.test.tsx`).
+// image whose source is not an absolute http(s) URL (`chat-hardening.test.tsx`).
 import Markdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
@@ -42,24 +42,20 @@ import '../session/chat.css';
 export const IMG_EXT = /\.(png|jpe?g|gif|webp|svg|avif|bmp)(\?|#|$)/i;
 export const isImageUrl = (href: string | undefined): href is string => href !== undefined && IMG_EXT.test(href);
 
-/** Whether chat refuses `src` as an image source: true when it is root-relative or protocol-relative as the browser
- *  resolves it, including a same-scheme special-relative http(s): source. Leading ASCII whitespace and C0 controls
- *  are skipped, as a browser strips them from an attribute URL, and a leading backslash counts as a slash, as the
- *  parser reads it (`\\h/x` is `//h/x`). An http(s) scheme NOT followed by two slashes or backslashes
- *  (`https:/api/x`) is refused too: when it is the page's own scheme it resolves against the page's origin; when it
- *  is the other scheme the parser reads it as an absolute URL whose host is the next segment. The predicate does not
- *  know the page's scheme, so refusing the other scheme as well is a deliberate over-refusal. A refused source would
- *  be fetched from ccrc's own origin, or from a host the message names, carrying the operator's cookie. A
- *  path-relative source (`x.png`, `../x`) is not refused; absent (`undefined`) is not refused either.
- *  Takes the value after react-markdown's `defaultUrlTransform`. The ONE predicate: `img` and the auto-embed in `a`
- *  both call it. */
+/** Whether chat refuses `src` as an image source. Chat draws an image only when its source is an absolute http(s)
+ *  URL: after leading ASCII whitespace and C0 controls are skipped (as a browser strips them from an attribute URL),
+ *  the source must start with `http://` or `https://` (scheme in either case, then two forward slashes). Everything
+ *  else is refused: a path-relative source (`x.png`, `../api/x`), a root-relative one (`/x`), a protocol-relative one
+ *  (`//h/x`, and `\\h/x`, which a browser reads the same way), `https:/x` and `https:\\h/x` (one slash, or
+ *  backslashes), a `data:` URI, `mailto:` and every other scheme. A relative source would be fetched from ccrc's own
+ *  origin, or from a host the message names, carrying the operator's cookie. Absent (`undefined`) is not refused: the
+ *  `img` component then has no source to draw. Takes the value after react-markdown's `defaultUrlTransform`. The ONE
+ *  predicate: `img` and the auto-embed in `a` both call it; a refused source renders as the ordinary external link. */
 export function isRefusedChatImageSrc(src: string | undefined): boolean {
   if (src === undefined) return false;
   let i = 0;
   while (i < src.length && src.charCodeAt(i) <= 0x20) i += 1;
-  if (/^https?:(?![/\\]{2})/i.test(src.slice(i))) return true;
-  const lead = src.charAt(i);
-  return lead === '/' || lead === '\\';
+  return !/^https?:\/\//i.test(src.slice(i));
 }
 
 /** Absolute, scheme-qualified URL — a bare "example.com" would otherwise resolve

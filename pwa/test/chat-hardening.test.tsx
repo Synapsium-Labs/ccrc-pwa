@@ -273,11 +273,11 @@ describe('M4.C3: chat refuses a root-relative or protocol-relative image source'
   it.each([
     ['a backslash', '![](\\\\h.example/x.png)', '%5Ch.example/x.png'],
     ['a leading tab', `![](<${TAB}//h.example/x.png>)`, '%09//h.example/x.png'],
-  ])('the parser percent-encodes %s, so the image source is path-relative, never root- or protocol-relative', (_name, text, src) => {
+  ])('the parser percent-encodes %s, so the image source is path-relative: refused as any non-absolute source is', (_name, text, src) => {
     const { container } = assistant(text);
-    const imgs = [...container.querySelectorAll('img')];
-    expect(imgs.map((i) => i.getAttribute('src'))).toEqual([src]);
-    expect(isRefusedChatImageSrc(src)).toBe(false);
+    expect(container.querySelectorAll('img')).toHaveLength(0);
+    expect(screen.getByRole('link', { name: src }).getAttribute('href')).toBe(src);
+    expect(isRefusedChatImageSrc(src)).toBe(true);
   });
 
   it('a same-scheme special-relative https:/ source draws no image, as an img or as an auto-embed', () => {
@@ -310,7 +310,7 @@ describe('M4.C3: chat refuses a root-relative or protocol-relative image source'
   });
 });
 
-describe('isRefusedChatImageSrc: the URL parser\'s own reading of "root-relative or protocol-relative"', () => {
+describe('isRefusedChatImageSrc: chat draws an image only from an absolute http(s) URL', () => {
   const NUL = String.fromCharCode(0);
   const US = String.fromCharCode(0x1f);
   const LF = String.fromCharCode(10);
@@ -319,15 +319,18 @@ describe('isRefusedChatImageSrc: the URL parser\'s own reading of "root-relative
     `${TAB}//h.example/x.png`, ' /api/x', `${NUL}/api/x`, `${US}${LF}//h.example/x`, '/',
     // A same-scheme special-relative http(s) source resolves against the page's own origin.
     'https:/api/x', 'HTTPS:/api/x', 'https:\\api\\x', '  https:/api/x', 'http:/x.png', `${TAB}https:/api/x`,
+    // Chat draws an image only from an absolute http(s) URL (operator ruling 2026-10-13): path-relative sources,
+    // other schemes, a backslash-slashed authority and the empty source are refused too.
+    '../api/x', 'x.png', './x.png', '../api/example/x', 'data:image/png;base64,AA==', 'mailto:a@example.com',
+    'example.com/x.png', '%5Ch.example/x.png', 'https:\\\\h.example/x.png', '',
   ])('refuses %j', (src) => {
     expect(isRefusedChatImageSrc(src)).toBe(true);
   });
 
-  // Path-relative sources are NOT refused (refinement (k); widening is the operator's open question).
+  // Only an absolute http(s) URL is kept (operator ruling 2026-10-13, Q1), after leading whitespace and controls.
   it.each([
     'https://example.com/c.png', 'http://example.com/c.png', 'https://h.example/x.png', 'http://h.example/x.png',
-    'HTTPS://h.example/x.png', 'https:\\\\h.example/x.png', 'mailto:a@example.com', 'example.com/x.png', '../api/x',
-    'x.png', '%5Ch.example/x.png', '',
+    'HTTPS://h.example/x.png', 'HTTP://h.example/x.png', '  https://h.example/x.png', `${TAB}http://h.example/x.png`,
   ])('keeps %j', (src) => {
     expect(isRefusedChatImageSrc(src)).toBe(false);
   });
@@ -493,5 +496,46 @@ describe('T11 review 2-3 (operator ruling): a short message whose tables would d
     expect(plainOf(container)?.textContent).toBe(text);
     expect(noteOf(container)).toMatch(/^Shown as plain text: this message would draw \d+ elements/);
     expect(container.querySelector('table')).toBeNull();
+  });
+});
+
+describe('T11 review Q1 (operator ruling): chat shows an image only when its source is an absolute http(s) URL', () => {
+  // react-markdown's own url transform blanks a data: source before chat sees it, so the refused link has no href.
+  const REFUSED = [['../api/example/x', '../api/example/x'], ['./x.png', './x.png'], ['x.png', 'x.png'],
+    ['data:image/png;base64,AA==', '']] as const;
+
+  it.each(REFUSED)('an image with the source %s draws no <img> and renders the ordinary external link', (src, href) => {
+    const { container } = assistant(`![a](${src})`);
+    expect(container.querySelectorAll('img')).toHaveLength(0);
+    const link = container.querySelector('p > a')!;
+    expect(link.getAttribute('href')).toBe(href);
+    expect(link.textContent).toBe(href);
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(link.className).toBe('');
+  });
+
+  it.each(['../api/example/x.png', './x.png', 'x.png'])('a link to the image file %s is not auto-embedded', (href) => {
+    const { container } = assistant(`[x](${href})`);
+    expect(container.querySelectorAll('img')).toHaveLength(0);
+    const link = screen.getByRole('link', { name: 'x' });
+    expect(link.getAttribute('href')).toBe(href);
+    expect(link.className).toBe('');
+  });
+
+  it.each([
+    ['https', 'https://h.example/x.png', 'https://h.example/x.png'],
+    ['HTTP in capitals', 'HTTP://h.example/x.png', 'HTTP://h.example/x.png'],
+  ])('an image from an absolute http(s) URL (%s) still draws an <img>', (_name, written, src) => {
+    const { container } = assistant(`![ok](${written})`);
+    expect([...container.querySelectorAll('img')].map((i) => i.getAttribute('src'))).toEqual([src]);
+  });
+
+  // The parser percent-encodes leading whitespace in a destination, so it never reaches the predicate through a
+  // message; the predicate itself still skips it, as a browser does for an attribute URL.
+  it('a leading-whitespace source is kept by the predicate, and an https link to an image file still embeds', () => {
+    expect(isRefusedChatImageSrc('  https://h.example/x.png')).toBe(false);
+    const { container } = assistant('[x](https://h.example/x.png)');
+    expect(container.querySelectorAll('img')).toHaveLength(1);
   });
 });
