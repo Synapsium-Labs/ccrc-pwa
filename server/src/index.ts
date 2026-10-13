@@ -9,6 +9,7 @@ import { Bus } from './bus.js';
 import { FleetWatcher } from './watch.js';
 import { connectFleet, type FleetClient } from './remote/client.js';
 import { makeRefreshCaps } from './refreshcaps.js';
+import { FleetIdentityCell } from './fleetidentity.js';
 import { PushService } from './push.js';
 import { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
@@ -131,7 +132,8 @@ if (cfg.fleetMode === 'remote') {
     updateIntentLog,
     updateRunner: localUpdateSpawnFor(cfg.home),
     sendUpdateOp: (tag, kind) => fleet.client.request({ t: 'req', op: 'update', tag, kind }, UPDATE_OP_TIMEOUT_MS),
-    refreshCaps: makeRefreshCaps(fleet.client, fleet.state),
+    fleetIdentity: fleet.identity,
+    refreshCaps: makeRefreshCaps(fleet.client, fleet.state, fleet.identity),
   };
 } else {
   // Fix round 3 (task 14, Important #3): real evidence, not an absent
@@ -179,6 +181,11 @@ if (cfg.fleetMode === 'remote') {
   void readLocalCcdCaps(cfg.ccdBin).then((verbs) => {
     if (verbs !== null) fleetState.ccdVerbs = verbs;
   });
+  // Path-identity spec 2026-10-12 §5.2, local mode. There is no agent connection, so nothing invalidates this cell
+  // and its epoch stays 0. The inventory's own sweep publishes THIS box's directly read node-id into it
+  // (`runInventory`'s `ownIdentity`), because in local mode this box is the fleet node. A box whose node-id cannot
+  // be read stays unmeasured; the connection label is never an identity.
+  const localFleetIdentity = new FleetIdentityCell();
   deps = {
     cfg, build, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIO,
     spawnPty: attachPty, push, notifyLog, presence, queue, mailToken, coord,
@@ -186,6 +193,7 @@ if (cfg.fleetMode === 'remote') {
     catalogue,
     updateIntentLog,
     updateRunner: localUpdateSpawnFor(cfg.home),
+    fleetIdentity: localFleetIdentity,
     // `connected`/`downSince` are inert for local mode — every reader of
     // them is gated on `cfg.fleetMode === 'remote'` first (server.ts,
     // watch.ts) — so `true`/`null` are placeholders, never read as a claim

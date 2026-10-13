@@ -14,6 +14,7 @@ import { UPDATE_OP_DETAIL_MAX } from '../../../shared/agent-protocol.js';
 import { parseBuildInfo } from '../../../shared/buildinfo.js';
 import { validCapWords } from '../../../shared/api.js';
 import type { Runner } from '../exec.js';
+import { FleetIdentityCell } from '../fleetidentity.js';
 import type { FleetState } from '../fleetstate.js';
 import type { FleetIO } from '../io.js';
 import type { SpawnPty } from '../pty.js';
@@ -155,6 +156,11 @@ export class FleetClient {
     connected: false, downSince: null, ccdVerbs: null, rosterFp: null, build: null,
     observedEpoch: undefined, agentOps: undefined,
   };
+  /** The connection-bound fleet node identity (path-identity spec 2026-10-12 §5.2). It lives HERE, never on `state`
+   *  (whose whole shape `remote-connect.test.ts` pins) and never in a listener: index.ts registers its listeners after
+   *  `connectFleet` returns, so a ready accepted first would bump nothing. `onReady`, `onClose` and `close()`
+   *  invalidate it synchronously; only the inventory's fleet sweep publishes into it. */
+  readonly identity: FleetIdentityCell = new FleetIdentityCell();
 
   private readonly cfg: ResolvedConfig;
   private socket: WebSocket | null = null;
@@ -309,6 +315,10 @@ export class FleetClient {
       this.reconnectTimer = null;
     }
     this.stopHeartbeat();
+    // Path-identity spec 2026-10-12 §5.2: this path never reaches `onClose`. The socket is nulled below, so the
+    // 'close' event's handler returns at its stale-socket guard, and this path therefore invalidates on its own.
+    // `state.connected` is left as it was: changing it would change shutdown for every other reader.
+    this.identity.invalidate('link-down');
     this.rejectAllPending(new Error('disconnected'));
     this.tailListeners.clear();
     this.ptyListeners.clear();
@@ -393,6 +403,10 @@ export class FleetClient {
   }
 
   private onReady(frame: Record<string, unknown>): void {
+    // Path-identity spec 2026-10-12 §5.2: FIRST. It comes before every field below and before `setState` and the
+    // connect listeners that run synchronously at the end of this function, so every listener (index.ts's inventory
+    // trigger among them) already reads the new epoch, with nothing measured under it.
+    this.identity.invalidate('awaiting-inventory');
     this.ready = true;
     // Mutated directly rather than pushed through setState, whose change
     // detection compares only connected/downSince — a reconnect to an upgraded
@@ -499,6 +513,9 @@ export class FleetClient {
 
   private onClose(ws: WebSocket): void {
     if (ws !== this.socket) return; // a stale handler for a socket we already replaced
+    // Path-identity spec 2026-10-12 §5.2: right after the guard, before the pending rejections, the synthesized pty
+    // exits and `markDown`'s state listeners, so none of them can read the closed connection's node as known.
+    this.identity.invalidate('link-down');
     this.socket = null;
     this.ready = false;
     this.stopHeartbeat();
@@ -589,6 +606,9 @@ export interface ConnectedFleet {
   io: FleetIO;
   spawnPty: SpawnPty;
   state: FleetState;
+  /** The client's own identity cell (path-identity spec 2026-10-12 §5.2). The composition root hands it to the
+   *  inventory, which publishes into the very cell this client invalidates, and to the caps refresh. */
+  identity: FleetIdentityCell;
   onStateChange(cb: (s: FleetState) => void): () => void;
   close(): Promise<void>;
 }
@@ -602,6 +622,7 @@ export function connectFleet(cfg: RemoteFleetConfig): ConnectedFleet {
     io: createIo(client),
     spawnPty: createSpawnPty(client),
     state: client.state,
+    identity: client.identity,
     onStateChange: (cb) => client.onStateChange(cb),
     close: () => client.close(),
   };

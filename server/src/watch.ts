@@ -1557,9 +1557,15 @@ export class FleetWatcher {
     const coord = this.deps.coord;
     if (coord === undefined) return [];
     const { cfg, fleetState } = this.deps;
+    // Path-identity spec 2026-10-12 §5.2: the one identity cell goes to the sweep that measures the fleet node. In
+    // remote mode the agent connection's sweep publishes into it, and the server's own row never does. In local mode
+    // this box IS the fleet node, so its own sweep publishes into the never-invalidated cell. Absent: nothing is
+    // published.
     const inv: InventoryDeps = {
       store: coord, localIo: localIO, ccrcDir: cfg.ccrcDir, role: cfg.role,
-      fleet: cfg.fleetMode === 'remote' && fleetState !== undefined ? { io: this.deps.io, state: fleetState } : null,
+      fleet: cfg.fleetMode === 'remote' && fleetState !== undefined
+        ? { io: this.deps.io, state: fleetState, identity: this.deps.fleetIdentity } : null,
+      ownIdentity: cfg.fleetMode === 'remote' ? undefined : this.deps.fleetIdentity,
     };
     return this.sweepThenProject(inv, Date.now());
   }

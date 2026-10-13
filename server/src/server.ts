@@ -51,6 +51,7 @@ import type { SpawnPty } from './pty.js';
 import type { PushService } from './push.js';
 import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
+import type { FleetIdentityCell } from './fleetidentity.js';
 import type { ChildReclaimOutcome, ChildReclaimRequest } from './coord/childReclaim.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
@@ -275,6 +276,15 @@ export interface Deps {
    *  its absence is still the local/remote mode test for THIS field, even
    *  though `fleetState` itself is no longer the same tell. */
   refreshCaps?: () => Promise<void>;
+  /** The connection-bound fleet node identity (path-identity spec 2026-10-12 §5.2).
+   *  - Remote mode: the agent client's own cell (`fleet.identity`). It is invalidated on every ready and close, and
+   *    only the inventory's fleet sweep publishes into it, under the epoch it captured.
+   *  - Local mode: a cell nothing invalidates (epoch 0). The server row's own sweep publishes into it, because this
+   *    box is the fleet node.
+   *  It is optional so that the hand-built Deps in tests stay valid. A reader of an absent cell uses
+   *  `NO_FLEET_IDENTITY`, which is never known, so nothing arms through it. Production carries it in both arms
+   *  (text pins over index.ts). */
+  fleetIdentity?: FleetIdentityCell;
   /** The ONE per-session write queue for the process. Built in `index.ts` and
    *  handed to both `buildServer` and `FleetWatcher`, because the naming
    *  sweep's `ws-rename` has to serialise against `POST /workspace/reap` — and
