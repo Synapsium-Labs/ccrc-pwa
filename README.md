@@ -3862,6 +3862,24 @@ cannot be read, is safety-stopped and composes nothing. A fresh change in Settin
 file's retirement is recorded) repairs a journal that is ahead of or behind the row; a journal that is missing after
 use, malformed or unreadable cannot be repaired from Settings, and the server never rebuilds it from the row.
 
+A failed append undoes its own bytes. The server truncates the journal back to the length it measured before the failed
+write, or removes a file the failed write itself created, as a best effort, and reports the original error. So a failed
+write leaves the lane as it stood, and a failed Off over a stored Live leaves the collector armed; **Pause all cleanup**
+still stops it. The undo cannot cover three cases:
+- a kill or a power loss in the middle of a write can leave a torn, empty or zero-filled tail, which reads malformed;
+- a failure after the record is durable, or at the database update or commit, leaves the journal one generation ahead:
+  a mismatch that a fresh confirmed change repairs, and that arms nothing;
+- an undo that itself fails can leave a torn or empty file.
+
+If Settings reports the generation journal malformed after the server stopped mid-write:
+1. Raise the cleanup pause first (Pause all cleanup).
+2. On the server box, cut `~/.ccrc/collect-lane-generation.log` just after its last complete `{"generation":N}` record.
+   Remove only the bytes that follow that record, and never a complete record.
+3. If the file holds no complete record, delete it. That is valid only beside the untouched seed, which is what a crash
+   in the very first write leaves.
+4. Make a fresh confirmed change in Settings.
+5. Lower the pause.
+
 **Moving control to Settings** is one hand transition:
 1. Deploy a build with the switch.
 2. In Settings, confirm Live for the fleet node the server is connected to.
