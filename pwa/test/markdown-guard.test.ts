@@ -274,3 +274,13 @@ describe('T11 review 2-1: a footnote-definition label counts as a container', ()
     expect(prescanMarkdown('[^a\\[b]: ' + '> '.repeat(32) + 'x')).toEqual(refused(1, 33));
   });
 });
+
+// The tab-aligned padding after a list marker: a tab after two spaces runs only to the next multiple of 4 columns, so
+// '-  <tab>' is 3 columns of padding. Counting the tab from the marker's column instead (the tab as 3 columns, 5 in all)
+// reads it as indented code and stops the count at 1.
+describe('T11 review A-3: list-marker padding is measured from the column it starts at', () => {
+  it("'-  <tab>' repeated counts every marker", () => {
+    expect(prescanMarkdown('-  \t'.repeat(33) + 'x')).toEqual({ ok: false, why: 'container-depth', line: 1, value: 33 });
+    expect(prescanMarkdown('-  \t'.repeat(32) + 'x')).toEqual(ok);
+  });
+});
