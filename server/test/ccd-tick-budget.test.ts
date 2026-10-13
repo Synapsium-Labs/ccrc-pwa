@@ -34,17 +34,29 @@ import {
 /** Forks and execs per steady tick (ticks 2..N), per fixture. DECLARED ONCE.
  *  Calibrated on `main` at `300aedf8` (macOS, bash 5.3; Linux, bash 5.2: the
  *  same figures). Lowered only by a change that measures the new figure and
- *  states it in its PR's departure. */
+ *  states it in its PR's departure. D-4961 (Task 4, the clock seam) replaces
+ *  `$(date +%s)` with `_now_s_to` at 7 helper sites and 3 loop sites, so each
+ *  tick-path `date` read that reached `date` on bash 5 now reads `$EPOCHSECONDS`
+ *  (0 forks). Before -> after, measured on macOS bash 5.3:
+ *    idle-home       174/81 -> 166/73  (-8/-8)
+ *    busy            170/79 -> 163/72  (-7/-7)
+ *    narrow           77/31 ->  74/28  (-3/-3; 3 un-converted `date` sites remain)
+ *    away-over-ceiling 202/101 -> 192/91 (-10/-10)
+ *    hard-blocked    427/240 -> 405/218 (-22/-22; 2 un-converted `date` sites remain)
+ *    cooldown        100/40 ->  96/36  (-4/-4)
+ *    fable           162/72 -> 155/65  (-7/-7)
+ *    leaving         414/247 -> 391/224 (-23/-23)
+ *    fable-leaving   396/232 -> 375/211 (-21/-21) */
 const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
-  'idle-home': { forks: 174, execs: 81 },
-  busy: { forks: 170, execs: 79 },
-  narrow: { forks: 77, execs: 31 },
-  'away-over-ceiling': { forks: 202, execs: 101 },
-  'hard-blocked': { forks: 427, execs: 240 },
-  cooldown: { forks: 100, execs: 40 },
-  fable: { forks: 162, execs: 72 },
-  leaving: { forks: 414, execs: 247 },
-  'fable-leaving': { forks: 396, execs: 232 },
+  'idle-home': { forks: 166, execs: 73 },
+  busy: { forks: 163, execs: 72 },
+  narrow: { forks: 74, execs: 28 },
+  'away-over-ceiling': { forks: 192, execs: 91 },
+  'hard-blocked': { forks: 405, execs: 218 },
+  cooldown: { forks: 96, execs: 36 },
+  fable: { forks: 155, execs: 65 },
+  leaving: { forks: 391, execs: 224 },
+  'fable-leaving': { forks: 375, execs: 211 },
 };
 
 /** `_plat_timeout`'s `-k` probe, per tick inside the loop. On `main` it is 1 on

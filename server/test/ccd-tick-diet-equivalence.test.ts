@@ -95,8 +95,11 @@ const PLANNED_FORMS: Readonly<Record<string, string>> = {
   _home_measured_to: 'W3 Task 16 (D-4963)',
 };
 /** What has NOT landed in `ccd/ccd` yet: the planned forms, plus `_now_s`, the one printing form whose name is new.
- *  The task that lands a name deletes it here in the same commit (the header's "RED FIRST"). */
-const PENDING: ReadonlySet<string> = new Set([...Object.keys(PLANNED_FORMS), '_now_s']);
+ *  The task that lands a name deletes it here in the same commit (the header's "RED FIRST"). D-4961 (Task 4) landed
+ *  `_now_s_to` and `_now_s`; W2 and W3 remove theirs. */
+const PENDING: ReadonlySet<string> = new Set(
+  [...Object.keys(PLANNED_FORMS), '_now_s'].filter((n) => n !== '_now_s_to' && n !== '_now_s'),
+);
 
 const sha256 = (b: Buffer | string): string => createHash('sha256').update(b).digest('hex');
 /** Single-quotes one bash word. */
