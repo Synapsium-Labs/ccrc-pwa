@@ -19,11 +19,11 @@ import {
   REASONS, INDEXED_PROVENANCE, SEARCHABLE_PROVENANCE, FTS_STEP, FTS_REBUILD_STEP, RANK_POOL, decideGrepIndex, sanitizeFtsQuery, snippetTerms, regexSyntaxIn, regexSyntaxHint, ftsOrderBy, displaySnippet, snippetLine, escapeXmlText, redactField, extractNodeId, resolveScopedId, SEARCH_REACH, parseGrepArgs,
   GREP_LIMIT_DEFAULT, encodeCursor, decodeCursor, canonicalJson, sha256Hex,
   guardRegex, regexPrefilter, REGEX_BUDGET_MS, REGEX_MAX_LEN, historyPaths,
-  DESCRIBE_EXCERPT, GIST_MAX, costRow, producerOf, pickHoldingCopy, redactDisplayWindow, parseDescribeArgs, displayToken,
+  DESCRIBE_EXCERPT, GIST_MAX, costRow, producerOf, pickHoldingCopy, redactDisplayWindow, parseDescribeArgs, displayToken, topicsOfColumn,
 } from './lib.mjs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { childrenOf, parentOf, probeFts5, blobPlainText, lineageEntries } from './store.mjs';
+import { childrenOf, parentOf, probeFts5, blobPlainText, lineageEntries, recoverOpenOn } from './store.mjs';
 import * as xlib from './lib.mjs';
 import * as xstore from './store.mjs';
 import { basename as xbasename } from 'node:path';
@@ -154,7 +154,7 @@ const HEADERS = new WeakMap();
 export function scopeHeader(rc) {
   const known = HEADERS.get(rc);
   if (known !== undefined) return known;
-  const recovering = rc.db.prepare("SELECT 1 AS x FROM derivation_state WHERE step = 'recover' AND completed_ms IS NULL LIMIT 1").get() !== undefined;
+  const recovering = recoverOpenOn(rc.db);
   const lag = scopeLag({ eofMs: eofOf(rc.db, rc.scope.transcriptPks), nowMs: rc.nowMs, recovering });
   const line = headerLine({
     kind: rc.scope.kind, id: rc.scope.id, project: rc.scope.project, families: rc.scope.families.length,
@@ -868,16 +868,6 @@ function nodeRow(rc, id) {
   return rc.db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', DESCRIBE_NODE_COLS, rc.schema)} FROM nodes WHERE node_id = ?`).get(id);
 }
 
-/** nodes.topics as a list: the JSON array derivation writes, or, for a value that is not one, its lines. */
-function topicsOf(text) {
-  if (text === null || text === undefined || text === '') return [];
-  try {
-    const v = JSON.parse(text);
-    if (Array.isArray(v)) return v.filter((t) => typeof t === 'string');
-  } catch { /* not JSON: one topic per line */ }
-  return String(text).split('\n').map((t) => t.trim()).filter((t) => t !== '');
-}
-
 function refsOf(rc, id) {
   return rc.db.prepare(`SELECT ${selectColumns(rc.version, 'node_refs', ['kind', 'value', 'origin'], rc.schema)} FROM node_refs
     WHERE node_id = ? ORDER BY kind, value`).all(id);
@@ -1031,8 +1021,8 @@ function describeCharCost(text, k, json) {
  *  than what it replaced, a cut that keeps an edge's mark or slack, or an inexact window's note line prints past the
  *  room; the page then halves and is redacted again, as expand's page does. The end never splits a surrogate pair, and
  *  at least one character (or one pair) is always paged. Named apart from Task 16's lib pageEnd, which pages expand's
- *  text by its own cost rule. */
-function describePageEnd(text, off, room, json, show) {
+ *  text by its own cost rule. Exported as a test seam: a case counts `show` calls (HA2 H-16), where a wall clock would flake. */
+export function describePageEnd(text, off, room, json, show) {
   const printed = (s) => (json ? JSON.stringify(s).length : escapeXmlText(s).length);
   const limit = Math.max(1, room - (json ? 2 : 0));
   let end = off;
@@ -1111,7 +1101,7 @@ export function runDescribe(rc, a, deps = {}) {
   }
 
   const gistAll = n.gist === null ? null : redactForDisplay(n.gist, rc.pairIdx);
-  const topicsAll = topicsOf(n.topics).map((t) => redactForDisplay(t, rc.pairIdx));
+  const topicsAll = topicsOfColumn(n.topics).map((t) => redactForDisplay(t, rc.pairIdx));
   const refsAll = refsOf(rc, id).map((r) => ({ kind: r.kind, value: redactForDisplay(r.value, rc.pairIdx), origin: r.origin }));
   const filesAll = refsAll.filter((r) => r.kind === 'path').map((r) => r.value);
   const excerptMax = summary === null ? 0 : Math.min(summary.length, pairSafeEnd(summary, 0, DESCRIBE_EXCERPT));

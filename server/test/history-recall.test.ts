@@ -2383,7 +2383,7 @@ describe('describe: one node, resolved inside the scope (W1-B2 task 15)', () => 
     } finally { rc.db.close(); }
   }, 60_000);
 
-  it('a --full page of an ESC-, backslash- and &-dense summary redacts one window, not one per shrink step: under 6,000 ms and 1 GiB of RSS (finding V19)', async () => {
+  it('a --full page of an ESC-, backslash- and &-dense summary redacts one window, not one per shrink step: under 1 GiB of RSS, with a 60 s backstop (finding V19; the count is pinned below)', async () => {
     const recall = await GRX.recall();
     const lib = await import('../../ccd/history/lib.mjs');
     const parsed = lib.parseDescribeArgs([leaves[4]!, '--full']);
@@ -2398,10 +2398,24 @@ describe('describe: one node, resolved inside the scope (W1-B2 task 15)', () => 
       expect(Number(item.summary_chars), 'CONTROL: the stored summary holds the dense tail').toBeGreaterThan(dense.length);
       expect(page, 'CONTROL: the page reaches the run of &').toContain('&&&&&&&&');
       expect(lib.escapeXmlText(page).length, 'the shown page fits the cap').toBeLessThanOrEqual(lib.OUTPUT_CAP);
-      expect(ms < 6_000, `one --full page took ${ms} ms`).toBe(true);
+      expect(ms < 60_000, `one --full page took ${ms} ms`).toBe(true);
       expect(process.resourceUsage().maxRSS < 1_048_576, `peak RSS ${process.resourceUsage().maxRSS} KiB`).toBe(true);
     } finally { rc.db.close(); }
   }, 120_000);
+
+  it('describePageEnd redacts at most two windows for the dense summary, human and --json: the first, and at most one halving (HA2 H-16, finding V19)', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const recall = (await GRX.recall()) as unknown as { describePageEnd(text: string, off: number, room: number, json: boolean, show: (from: number, to: number) => string): { end: number; page: string } };
+    const idx = lib.makePairIndex([]);
+    for (const json of [false, true]) {
+      let calls = 0;
+      const show = (from: number, to: number): string => { calls += 1; return lib.redactDisplayWindow(dense, from, to, idx); };
+      const { end, page } = recall.describePageEnd(dense, 0, 15_000, json, show);
+      expect(end, 'CONTROL: the page is a real prefix of the dense text').toBeGreaterThan(1);
+      expect(page.length, 'CONTROL: and it printed something').toBeGreaterThan(0);
+      expect(calls, `json=${json}: windows redacted`).toBeLessThanOrEqual(2);
+    }
+  }, HEAVY);
 
   it('a --project --json --full page holds the cap with its envelope: 60 families, at most 3 named, families_total 60 (B4-5)', () => {
     const r = describeCli(GRX.idA, [leaves[1]!, '--full', '--project', '--json']);
@@ -4259,4 +4273,80 @@ describe.skipIf(process.platform === 'darwin')('HA1: the read verbs fit the cap,
       expect(t18leaks([res.hint!, libRead.redactFinal(res.hint!, idx)], P)).toEqual([]);
     } finally { rc.db.close(); }
   }, HEAVY);
+});
+
+// ── W1-B2 hardening HA2: the read verbs' envelope, errors and gates (H-3, H-24, H-21, H-32) ────────────────────
+// One family with one leaf (t17family). A case that damages the store puts it back in a finally.
+describe.skipIf(process.platform === 'darwin')('HA2: --json carries the hint, a damaged store answers 5, and stderr is redacted (W1-B2 hardening)', () => {
+  const HID = 'claude-a-ha2';
+  let box: rH.HistoryBox;
+  let leaf = '';
+  const cli = (args: string[], opts: rH.SpawnOpts = {}): CliRun => GRX.cli(box, HID, args, opts);
+  const writer = (): RDatabaseSync => new RDatabaseSync(libRead.historyPaths(box.home).dbFile);
+  /** Runs `body` with `sql` applied to the store and `undo` after it, whatever `body` does. */
+  function damaged(sql: string, undo: string, body: () => void): void {
+    const w = writer();
+    try { w.exec(sql); body(); } finally { w.exec(undo); w.close(); }
+  }
+  const token = (): string => `ghp_${t16random(27).toString('base64url').slice(0, 36).replace(/[-_]/g, 'q')}`;
+
+  beforeAll(() => {
+    box = rH.makeHistoryBox('ccrc-hist-ha2-');
+    t17family(box, HID, 'a2000001', '0189abcd-1234-4678-9abc-00000000a2a2');
+    leaf = t17leafOf(box, HID);
+  }, 3 * HEAVY);
+
+  it('H-3: a refusal or a not-found carries its hint under --json, a hit carries none (D-4595)', () => {
+    const hit = cli(['grep', 'zqx17seam', '--json']);
+    expect(hit.code, hit.stderr).toBe(0);
+    expect(hit.json && 'hint' in hit.json, 'CONTROL: a hit has no hint key').toBe(false);
+    const none = cli(['grep', 'zqnothinganywhere', '--json']);
+    expect(none.code, none.stderr).toBe(3);
+    expect(none.json?.['hint']).toBe(libRead.SEARCH_REACH);
+    const syntax = cli(['grep', 'a|b', '--json']);
+    expect([syntax.code, syntax.json?.['reason']]).toEqual([2, 'regex-syntax']);
+    expect(typeof syntax.json?.['hint'], 'the regex-syntax hint').toBe('string');
+    const stale = cli(['grep', 'zqx17seam', '--cursor', 'notacursor', '--json']);
+    expect(stale.code, stale.stderr).toBe(2);
+    expect(typeof stale.json?.['hint'], 'the stale-cursor hint').toBe('string');
+    // childFailed's detail was the only word an exit 1 carried: the child's own statement fails here.
+    const failed = cli(['grep', '--regex', 'zqx17[a-z]+', '--json'], { preloads: [PRELOADS.faults], env: { HISTORY_TEST_THROW_SQL: 'is_sidecar' } });
+    expect(failed.code, failed.stderr).toBe(1);
+    expect(failed.json?.['hint'], JSON.stringify(failed.json)).toContain('the --regex child failed');
+  }, 2 * HEAVY);
+
+  it('H-24: a store at user_version 0 answers 5 store-schema-missing on every read verb, never migration-pending (D-4599)', () => {
+    damaged('PRAGMA user_version = 0', 'PRAGMA user_version = 1', () => {
+      for (const args of [['describe', leaf], ['grep', 'zqx17seam'], ['expand', leaf], ['tree']]) {
+        const r = cli([...args, '--json']);
+        expect([args[0], r.code, r.json?.['reason']], r.stderr).toEqual([args[0], 5, 'store-schema-missing']);
+      }
+    });
+    const ok = cli(['describe', leaf, '--json']);
+    expect(ok.code, `CONTROL: restored, the store reads. ${ok.stderr}`).toBe(0);
+  }, 2 * HEAVY);
+
+  it('H-21: a store missing derivation_state or ingest_files answers 5 store-read-failed on every read verb, as tree does', () => {
+    for (const table of ['derivation_state', 'ingest_files']) {
+      damaged(`ALTER TABLE ${table} RENAME TO ${table}_gone`, `ALTER TABLE ${table}_gone RENAME TO ${table}`, () => {
+        for (const args of [['tree'], ['grep', 'zqx17seam'], ['describe', leaf], ['expand', leaf]]) {
+          const r = cli([...args, '--json']);
+          expect([table, args[0], r.code, r.json?.['reason']], r.stderr).toEqual([table, args[0], 5, 'store-read-failed']);
+          expect(r.stdout.trim().split('\n'), 'one answer').toHaveLength(1);
+        }
+      });
+    }
+    expect(cli(['describe', leaf, '--json']).code, 'CONTROL: restored, the store reads').toBe(0);
+  }, 3 * HEAVY);
+
+  it('H-32: the store-read-failed and internal-error lines of a read verb carry no planted token', () => {
+    const V = token();
+    const sq = cli(['tree', '--json'], { preloads: [PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: `SqliteError:${V}@FROM redact_hashes` } });
+    expect([sq.code, sq.json?.['reason']], sq.stderr).toEqual([5, 'store-read-failed']);
+    expect(sq.stderr, 'CONTROL: the line is written').toContain('ccrc history: store-read-failed: ');
+    const plain = cli(['tree', '--json'], { preloads: [PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: `Error:${V}@FROM redact_hashes` } });
+    expect(plain.code, plain.stderr).toBe(1);
+    expect(plain.stderr, 'CONTROL: the guard line is written').toContain('ccrc history: internal error: ');
+    expect(t18leaks([sq.stderr, sq.stdout, plain.stderr, plain.stdout], V)).toEqual([]);
+  }, 2 * HEAVY);
 });

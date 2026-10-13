@@ -17,7 +17,7 @@ import {
   LINE_MAX, NODE_PARSER_VERSION, blobOverDecodeCap, blockFields, blockStatus, capRefs, classifyRef, decideLeafId, directionOfSummaryRow,
   directiveFlag, eofAfterBoundary, FAN_IN, forkCounts, ftsPhrase, ftsTextOf, gistSha, leafId, leafReady, nativeGist, nativeTopics, nodeIndexTexts,
   parentId, parentRollup, parseBlocks, pickHoldingCopy, pickReceipt, planFanIn, planSpans, producerOfCopy, redactField, selectBlock,
-  secretUnits, summaryParts, summaryRowFor, withinBudget, BELT_NODES_STEP, REPARSE_MAX_TARGETS,
+  secretUnits, summaryParts, summaryRowFor, withinBudget, BELT_NODES_STEP, REPARSE_MAX_TARGETS, topicsOfColumn,
 } from './lib.mjs';
 import { bump, getStep, parentOf, setStep, unbrotli, withTx } from './store.mjs';
 
@@ -578,19 +578,6 @@ const MAX_FAN_DEPTH = 32;
 
 function parentsBudgetLeft(budget) {
   return withinBudget({ elapsedMs: budget.now() - budget.startMs, bytes: budget.bytes, maxMs: budget.maxMs, maxBytes: budget.maxBytes });
-}
-
-/** A node's `topics` column as a list. A parent writes a JSON array; a column that is not one reads as one
- *  topic per line. */
-function topicsOfColumn(text) {
-  if (text === null || text === undefined || text === '') return [];
-  try {
-    const v = JSON.parse(text);
-    if (Array.isArray(v)) return v.filter((x) => typeof x === 'string');
-  } catch {
-    // not JSON: one topic per line, below
-  }
-  return String(text).split('\n').map((t) => t.trim()).filter((t) => t !== '');
 }
 
 /** Tells the tick that nodes_fts rows were deleted (or replaced), so their term bytes wait in nodes_fts_data until FTS5

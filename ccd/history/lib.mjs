@@ -898,11 +898,16 @@ export function decideCliStore(f) {
  *  neither (Task 28F, ring rule: delivery measures, lib decides). A stored
  *  version newer than this build's is `refuse-newer` whatever the sweep recorded;
  *  otherwise the sweep's recorded word stands when it is a MIGRATION_VERDICTS
- *  member, and anything else is `none`. The two answers are independent. */
+ *  member, and anything else is `none`. A version below 1 is `store-schema-missing`
+ *  (D-4599). The two answers are independent. */
 export function decideStatusRead({ userVersion, journalMode, recordedMigration }) {
   const migration = userVersion > SCHEMA_VERSION
     ? 'refuse-newer'
     : (MIGRATION_VERDICTS.includes(recordedMigration) ? recordedMigration : 'none');
+  // D-4599 (history-read-refuses-a-missing-schema): the writer creates every store at user_version 1 or more, so a bound
+  // store at 0 or below (or one SQLite did not answer with an integer) is damage or tampering. It is the store-damage word,
+  // not a pending migration that would name tables the reader has just read.
+  if (!Number.isSafeInteger(userVersion) || userVersion < 1) return { exit: REASONS['store-schema-missing'], reason: 'store-schema-missing', migration: 'none' };
   if (journalMode !== 'wal') return { exit: REASONS['store-not-wal'], reason: 'store-not-wal', migration };
   return { exit: EXIT.OK, migration };
 }
@@ -4267,7 +4272,10 @@ export function readEnvelope(o) {
     throw new TypeError(`readEnvelope: exit ${o.exit} carries no reason, got ${String(o.reason)}`);
   }
   if (!Number.isSafeInteger(o.shown) || !Number.isSafeInteger(o.total) || o.shown < 0 || o.shown > o.total) throw new TypeError(`readEnvelope: shown ${String(o.shown)} of ${String(o.total)} is not a count`);
-  return { v: 1, exit: o.exit, ...(o.reason === undefined ? {} : { reason: o.reason }), store_id: o.storeId, coverage: COVERAGE[0], scope: o.scope, indexed_through_ms: o.header === null ? null : o.header.indexedThroughMs, lag_s: o.header === null ? null : o.header.lagS, items: o.items.map((item) => ({ ...item, trust: 'untrusted' })), shown: o.shown, total: o.total, next: o.next };
+  // D-4595 (history-json-envelope-carries-hint): a verb's hint rides --json as it rides the human form, so a refusal's
+  // detail (a regex child's failure, the reach line, a stale cursor) is not lost. Additive: absent when there is none.
+  if (o.hint !== undefined && typeof o.hint !== 'string') throw new TypeError(`readEnvelope: a hint is a string, got ${typeof o.hint}`);
+  return { v: 1, exit: o.exit, ...(o.reason === undefined ? {} : { reason: o.reason }), store_id: o.storeId, coverage: COVERAGE[0], scope: o.scope, indexed_through_ms: o.header === null ? null : o.header.indexedThroughMs, lag_s: o.header === null ? null : o.header.lagS, items: o.items.map((item) => ({ ...item, trust: 'untrusted' })), shown: o.shown, total: o.total, next: o.next, ...(o.hint === undefined ? {} : { hint: o.hint }) };
 }
 
 export const CURSOR_RESOURCES = Object.freeze(['grep', 'describe', 'expand']);
@@ -5958,6 +5966,20 @@ export function redactForDisplay(text, idx) {
   return t.replace(/[A-Za-z0-9_.\\-]+/g, (span) => (span.includes('\\') && /[A-Za-z0-9_-]/.test(span) && redactForIndex(span, idx) !== span ? REDACTED_MARK : span));
 }
 
+/** A node's `topics` column as a list (HA2 H-14). The writer stores a JSON array of strings; a column that is not
+ *  one reads as one topic per line. The ONE reader: derive.mjs (which writes the column) and recall.mjs (which shows
+ *  it) both import it, so a change to how the column is written is a change to one reader. */
+export function topicsOfColumn(text) {
+  if (text === null || text === undefined || text === '') return [];
+  try {
+    const v = JSON.parse(text);
+    if (Array.isArray(v)) return v.filter((x) => typeof x === 'string');
+  } catch {
+    // not JSON: one topic per line, below
+  }
+  return String(text).split('\n').map((t) => t.trim()).filter((t) => t !== '');
+}
+
 /** A nodes_fts row's three column texts (§6.2): the gist, each topic and each ref value through entryIndexText (B1's
  *  escape readings and window, the belt included), topics and refs then joined one per line, as Tasks 8 and 9 index
  *  them. Every nodes_fts writer calls it (Task 8's indexNode, Task 9's insertNodeFts, Task 29's redactNodeFields), so
@@ -7001,13 +7023,17 @@ export function schemaAdditive(schema, measured) {
     const v = Number(vs);
     const want = cumAt.get(v);
     if (want === undefined) { lost.push(`v${v} measured but not declared`); continue; }
-    for (const [t, cols] of want) for (const c of cols) if (!(tables[t] ?? []).includes(c)) lost.push(`${t}.${c} lost at v${v}`);
+    // H-25: a measured column set that is no array is named FIRST; the lost loop then reads it as empty, so it never
+    // throws on an object or matches a string by substring.
+    for (const [t, cols] of Object.entries(tables)) if (!Array.isArray(cols)) lost.push(`${t} at v${v} lists no array of columns`);
+    const listed = (t) => (Array.isArray(tables[t]) ? tables[t] : []);
+    for (const [t, cols] of want) for (const c of cols) if (!listed(t).includes(c)) lost.push(`${t}.${c} lost at v${v}`);
     for (const [t, cols] of Object.entries(tables)) {
-      if (!Array.isArray(cols)) { lost.push(`${t} at v${v} lists no array of columns`); continue; }
+      if (!Array.isArray(cols)) continue;
       for (const c of cols) if (!(want.get(t)?.has(c) ?? false)) lost.push(`${t}.${c} undeclared at v${v}`);
     }
   }
-  if (measured !== undefined) {
+  if (measured != null) {
     for (const v of versions) if (!Object.hasOwn(measured, String(v))) lost.push(`v${v} declared but not measured`);
   }
   return lost.length === 0 ? { ok: true } : { ok: false, lost };

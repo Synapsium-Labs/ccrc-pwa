@@ -293,6 +293,10 @@ import { DatabaseSync as DatabaseSyncF28 } from 'node:sqlite';
 //   `TypeError`  a plain TypeError, with no `code` — a programming defect in the reader, which `readStoreAnswered`
 //                (cli.mjs) must let escape as exit 1 rather than answer as a store word, or
 //   `StoreError:<word>`  a store.mjs StoreError carrying <word> (the reader's open refused), which it answers as that word.
+//   `SqliteError:<msg>`  an Error with message <msg> and code ERR_SQLITE_ERROR, as node:sqlite's own errors carry: the
+//                        message is a planted value a case looks for in stderr (HA2 H-32). <msg> holds no `@`.
+//   `Error:<msg>`        a plain Error with message <msg> and no `code`: a defect, which an operator verb must still
+//                        word as an operator line (HA2 H-37). <msg> holds no `@`.
 //   Every other statement runs for real. The substring is chosen past the binding read, so only readStore meets it.
 import { syncBuiltinESMExports as syncM30 } from 'node:module';
 import { DatabaseSync as DatabaseSyncM30 } from 'node:sqlite';
@@ -310,7 +314,9 @@ import { DatabaseSync as DatabaseSyncM30 } from 'node:sqlite';
       if (needleM30 !== '' && String(sql).includes(needleM30)) {
         if (kindM30 === 'TypeError') throw new TypeError('fixture-planted');
         if (kindM30.startsWith('StoreError:')) throw new StoreErrorM30(kindM30.slice('StoreError:'.length), 'injected store refusal (test preload)');
-        throw new Error(`preload-faults: HISTORY_TEST_THROW_PREPARE kind ${kindM30} is not TypeError or StoreError:<word>`);
+        if (kindM30.startsWith('SqliteError:')) throw Object.assign(new Error(kindM30.slice('SqliteError:'.length)), { code: 'ERR_SQLITE_ERROR' });
+        if (kindM30.startsWith('Error:')) throw new Error(kindM30.slice('Error:'.length));
+        throw new Error(`preload-faults: HISTORY_TEST_THROW_PREPARE kind ${kindM30} is not TypeError, StoreError:<word>, SqliteError:<msg> or Error:<msg>`);
       }
       return realPrepareM30.call(this, sql);
     };

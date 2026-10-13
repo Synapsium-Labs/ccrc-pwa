@@ -177,6 +177,25 @@ describe.skipIf(process.platform === 'darwin')('O54 (relay half): the CLI and th
     }
   }, HEAVY);
 
+  // HA2 H-37 (with H-32): an operator verb that THROWS (relayIndexOf rethrows a defect that is no StoreError and no SQLite
+  // error) exits 1 with ONE line that names the operator, and the message goes through redactFinal like every stderr line.
+  it('H-37: a defect thrown inside an operator verb is one exit-1 line that names the operator and leaks no planted token', () => {
+    const box = boundBox('ccrc-hist-ha2-h37-');
+    const V = `ghp_${randomBytes(27).toString('base64url').slice(0, 36).replace(/[-_]/g, 'q')}`;
+    const r = runCli(box, ['doctor', '--backup'], { preloads: [PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: `Error:${V}@FROM redact_hashes` } });
+    expect(r.code, r.stderr).toBe(1);
+    const lines = r.stderr.split('\n').filter((l) => /^ccrc history \S+: /.test(l));
+    expect(lines, 'one line').toHaveLength(1);
+    expect(lines[0], 'CONTROL: it is the thrown path').toContain('internal error: ');
+    expect(lines[0], 'it names the operator').toMatch(/; .*\bthe operator\b/);
+    const windows = Array.from({ length: V.length - 7 }, (_, i) => V.slice(i, i + 8));
+    expect(windows.filter((w) => r.stderr.includes(w) || r.stdout.includes(w))).toEqual([]);
+    const j = runCli(box, ['doctor', '--backup', '--json'], { preloads: [PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: `Error:${V}@FROM redact_hashes` } });
+    expect(j.code, j.stderr).toBe(1);
+    expect(j.json?.['exit'], 'under --json the envelope is still the answer').toBe(1);
+    expect(j.stderr.split('\n').filter((l) => /^ccrc history \S+: /.test(l))).toHaveLength(1);
+  }, HEAVY);
+
   it('a result line with no trailing newline is still the result: exit 0, and the line before it is relayed', () => {
     const box = boundBox('ccrc-hist-o54nn-');
     stubShim(box, { stdout: 'progress\n{"rc":0}', exit: 0 });

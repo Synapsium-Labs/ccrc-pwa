@@ -4174,7 +4174,7 @@ describe('the recall envelope: escaped attributes and text, one closing tag (spe
     expect(libOut.recallEnvelope({ src: 'tool', id: 'x\nnext: evil', ts: null, role: null, text: 't' })).not.toContain('\n');
   });
   it('displayToken keeps every real token as it is and prints any other as one bounded quoted line (HA1 H-10, H-19; D-4597)', () => {
-    const displayToken = (libOut as unknown as { displayToken(value: string, idx: libOut.PairIndex): string }).displayToken;
+    const { displayToken } = libOut;
     const idx = libOut.makePairIndex([]);
     for (const real of ['0189abcd-1234-4678-9abc-0123456789ab', 'x0123456789abcdef0123456789abcdef', 'user', 'assistant', 'tool_result', 'a/b:c.d-e', 'q'.repeat(128)]) {
       expect(displayToken(real, idx), real).toBe(real);
@@ -6437,5 +6437,52 @@ describe("R-token-comments: a token file's # lines are not secret values (D-4587
     const file = `${preamble()}${rndHexRtc(32)}\n`;
     expect(libRedact.extractSecretValues(file, 'env')).toEqual([]);
     expect(libRedact.extractSecretValues(file, 'json')).toEqual([]);
+  });
+});
+
+describe('lib: HA2, the read verbs\' envelope, schema word, shared readers and schema check (W1-B2 hardening)', () => {
+  const HIST = join(REPO, 'ccd', 'history');
+  const sources = (): Array<[string, string]> => readdirSync(HIST).filter((f) => f.endsWith('.mjs')).sort().map((f) => [f, readFileSync(join(HIST, f), 'utf8')]);
+  const envBase = { storeId: '0189abcd-1234-4678-9abc-0123456789ab', scope: null, header: null, items: [], shown: 0, total: 0, next: null };
+
+  it('H-3: readEnvelope carries a hint where the verb gave one, and no key where it did not (D-4595)', () => {
+    expect(libOut.readEnvelope({ ...envBase, exit: 3, hint: 'x' }).hint).toBe('x');
+    expect('hint' in libOut.readEnvelope({ ...envBase, exit: 3 }), 'absent when undefined').toBe(false);
+    expect('hint' in libOut.readEnvelope({ ...envBase, exit: 3, hint: undefined }), 'absent when undefined').toBe(false);
+    expect(() => libOut.readEnvelope({ ...envBase, exit: 3, hint: 7 as unknown as string }), 'a hint is a string').toThrow(TypeError);
+  });
+
+  it('H-24: a store at user_version 0 or below, or one that is no integer, answers 5 store-schema-missing, and a v1 store reads (D-4599)', () => {
+    const read = (userVersion: number) => libPlan.decideStatusRead({ userVersion, journalMode: 'wal', recordedMigration: undefined });
+    for (const v of [0, -1, Number.NaN, 1.5]) expect(read(v), String(v)).toEqual({ exit: 5, reason: 'store-schema-missing', migration: 'none' });
+    expect(read(1), 'CONTROL: version 1 is a store').toEqual({ exit: 0, migration: 'none' });
+    expect(libPlan.REASONS['store-schema-missing']).toBe(libPlan.EXIT.DB);
+  });
+
+  it('H-14: topicsOfColumn reads a JSON array of strings, else one topic per line, and lives in lib alone', () => {
+    const { topicsOfColumn } = libOut;
+    expect(topicsOfColumn('["a","b",3,null]')).toEqual(['a', 'b']);
+    expect(topicsOfColumn('  one \n\ntwo\n')).toEqual(['one', 'two']);
+    expect(topicsOfColumn('{"a":1}'), 'JSON that is no array reads as lines').toEqual(['{"a":1}']);
+    expect([topicsOfColumn(null), topicsOfColumn(undefined), topicsOfColumn('')]).toEqual([[], [], []]);
+    const holders = sources().filter(([, src]) => /\bfunction topicsOf(Column)?\s*\(/.test(src)).map(([f]) => f);
+    expect(holders, 'one reader of the topics column, in lib').toEqual(['lib.mjs']);
+  });
+
+  it("H-7: the open-recovery-step query is spelled once, in store.mjs", () => {
+    const literal = "step = 'recover' AND completed_ms IS NULL LIMIT 1";
+    const holders = sources().filter(([, src]) => src.includes(literal)).map(([f]) => f);
+    expect(holders).toEqual(['store.mjs']);
+  });
+
+  it('H-25: schemaAdditive names a measured column set that is no array, and reads a null measurement as none', () => {
+    const v1 = t17lib.SCHEMA_ADDED[1]!.tables as Record<string, string[]>;
+    expect(t17lib.schemaAdditive(t17lib.SCHEMA_ADDED, { 1: v1 }), 'CONTROL: the real v1 is additive').toEqual({ ok: true });
+    for (const bad of [{ gist: 1 }, 'gist', null]) {
+      const r = t17lib.schemaAdditive(t17lib.SCHEMA_ADDED, { 1: { ...v1, nodes: bad as unknown as string[] } });
+      expect(r.ok, JSON.stringify(bad)).toBe(false);
+      expect(r.ok ? [] : r.lost, JSON.stringify(bad)).toContain('nodes at v1 lists no array of columns');
+    }
+    expect(t17lib.schemaAdditive(t17lib.SCHEMA_ADDED, null as unknown as undefined), 'a null measurement is no measurement').toEqual({ ok: true });
   });
 });

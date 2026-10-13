@@ -1083,6 +1083,13 @@ export function blobPlainText(z, isSidecar, idx, rawLen) {
  *  history-ops-refused-while-recovering; lib's decideOpGate decides). */
 const RECOVER_OPEN_SQL = "SELECT 1 AS x FROM derivation_state WHERE step = 'recover' AND completed_ms IS NULL LIMIT 1";
 
+/** Whether this handle's store holds an open recovery step (HA2 H-7): the ONE spelling of the query. It lets a
+ *  SQLite error through (a store with no derivation_state throws), so each caller words that its own way:
+ *  recoverStepAt answers 'unmeasured', and recall's scopeHeader lets the read verb's failure answer reach exit 5. */
+export function recoverOpenOn(db) {
+  return db.prepare(RECOVER_OPEN_SQL).get() !== undefined;
+}
+
 /** Whether db/history.db holds an open recovery step, on its OWN read-only handle, closed before it returns, so it
  *  can run before any writer opens the store. Four answers, kept apart: 'absent' (no file), 'unmeasured' (the
  *  file would not open read-only, or has no derivation_state), 'none' and 'open'. A caller refuses on 'open' only
@@ -1092,7 +1099,7 @@ export function recoverStepAt(dbFile) {
   let db;
   try { db = openReader(dbFile); } catch { return 'unmeasured'; }
   try {
-    return db.prepare(RECOVER_OPEN_SQL).get() === undefined ? 'none' : 'open';
+    return recoverOpenOn(db) ? 'open' : 'none';
   } catch {
     return 'unmeasured';
   } finally {

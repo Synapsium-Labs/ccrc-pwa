@@ -522,14 +522,15 @@ export function scopeLag(i: { eofMs: readonly (number | null)[]; nowMs: number; 
 export interface ReadEnvelopeInput {
   exit: number; reason?: string; storeId: string | null; scope: Record<string, unknown> | null;
   header: { indexedThroughMs: number | null; lagS: number | null } | null;
-  items: readonly Record<string, unknown>[]; shown: number; total: number; next: string | null;
+  items: readonly Record<string, unknown>[]; shown: number; total: number; next: string | null; hint?: string;
 }
 export interface ReadEnvelope {
   v: 1; exit: number; reason?: string; store_id: string | null; coverage: string; scope: Record<string, unknown> | null;
   indexed_through_ms: number | null; lag_s: number | null; items: Record<string, unknown>[];
-  shown: number; total: number; next: string | null;
+  shown: number; total: number; next: string | null; hint?: string;
 }
 export function readEnvelope(o: ReadEnvelopeInput): ReadEnvelope;
+export function topicsOfColumn(text: string | null | undefined): string[];
 export type CursorResource = 'grep' | 'describe' | 'expand';
 export const CURSOR_RESOURCES: readonly CursorResource[];
 export type Cursor =
@@ -781,6 +782,7 @@ export const DISPLAY_EDGE_SLACK: 32;
 export const DISPLAY_INEXACT_NOTE: string;
 export function redactDisplayWindow(text: string, from: number, to: number, idx: PairIndex): string;
 export function displaySnippet(text: string, terms: readonly string[], idx: PairIndex): string;
+export function displayToken(value: string, idx: PairIndex): string;
 // --- W1-B2 Task 15: describe's arguments
 export interface DescribeArgs { target: string; full: boolean; cursor: string | null; json: boolean }
 export function parseDescribeArgs(argv: readonly string[]): { ok: true; args: DescribeArgs } | { ok: false; reason: 'bad-args' };

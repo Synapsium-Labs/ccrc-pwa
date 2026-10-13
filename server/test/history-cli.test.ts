@@ -11,6 +11,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { makeHistoryBox, runSweep, preloadOptions, PRELOADS, CLI, REPO, type HistoryBox } from './historyHelpers.js';
@@ -271,6 +272,64 @@ describe('ccrc history status (Linux)', () => {
     expect(r.stdout.trim().split('\n')).toHaveLength(1);
     expect([r.env.exit, r.env.reason]).toEqual([5, 'store-missing']);
     expect(r.env.store_id).toBe(storeIdOf(box));
+  });
+
+  // HA2 H-32 (spec §8.3, §12): stderr takes the final redaction pass as stdout does. The preload throws the planted
+  // value as the message of a SQLite error (the status read's store-read-failed line) or of a plain Error (the entry
+  // guard's internal-error line). A token shape the belt knows needs no registered pair.
+  const ha2Leak = (texts: string[], v: string): string[] => {
+    const windows = Array.from({ length: v.length - 7 }, (_, i) => v.slice(i, i + 8));
+    return texts.flatMap((t, i) => windows.filter((w) => t.includes(w)).slice(0, 1).map((w) => `#${i}: ${w}`));
+  };
+  const ha2Token = (): string => `ghp_${randomBytes(27).toString('base64url').slice(0, 36).replace(/[-_]/g, 'q')}`;
+
+  it('H-32: the store-read-failed line and the internal-error line of status carry no planted token', () => {
+    const box = boundBox('ccrc-hist-cli-ha2-h32-');
+    const V = ha2Token();
+    const sq = status(box, { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: `SqliteError:${V}@FROM counters` } });
+    expect([sq.code, sq.env.reason], sq.stderr).toEqual([5, 'store-read-failed']);
+    expect(sq.stderr, 'CONTROL: the line is written, with the message in its place').toContain('ccrc history: store-read-failed: ');
+    expect(ha2Leak([sq.stderr, sq.stdout], V)).toEqual([]);
+    const plain = status(box, { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: `Error:${V}@FROM counters` } });
+    expect(plain.code, plain.stderr).toBe(1);
+    expect(plain.stderr, 'CONTROL: the guard line is written').toContain('ccrc history: internal error: ');
+    expect(ha2Leak([plain.stderr, plain.stdout], V)).toEqual([]);
+  });
+
+  it('H-32: no stderr write in cli.mjs prints an error message except through errLine, which redacts', () => {
+    const src = fs.readFileSync(path.join(REPO, 'ccd', 'history', 'cli.mjs'), 'utf8');
+    const writes = [...src.matchAll(/process\.stderr\.write\(([^;]*?)\);/g)].map((m) => m[1]!);
+    expect(writes.length, 'the scan sees the writes').toBeGreaterThan(4);
+    expect(writes.filter((w) => /\.message|String\(e\)/.test(w)), 'a raw error text on stderr').toEqual([]);
+    const fn = /function errLine\([^)]*\) \{([\s\S]*?)\n\}/.exec(src);
+    expect(fn, 'errLine is defined').not.toBeNull();
+    expect(fn![1]).toContain('redactFinal(');
+    expect((src.match(/\berrLine\(/g) ?? []).length, 'the definition and the three message sites').toBeGreaterThanOrEqual(5);
+  });
+
+  // HA2 H-78 (D-4604): status's fts word is the word grep is gated by, both reading the same three facts.
+  it('H-78: status fts reads fts-pending while a repair rebuild is open or the backfill row is incomplete, as grep does', () => {
+    const box = boundBox('ccrc-hist-cli-ha2-h78-');
+    expect(status(box).env.fts, 'CONTROL: a finished backfill is ready').toBe('ready');
+    const db = new DatabaseSync(dbFile(box));
+    try {
+      db.exec("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('fts-rebuild', 1, NULL, NULL)");
+      expect(status(box).env.fts, 'an open rebuild row').toBe('fts-pending');
+      db.exec("DELETE FROM derivation_state WHERE step = 'fts-rebuild'");
+      expect(status(box).env.fts, 'CONTROL: the rebuild row closed').toBe('ready');
+      db.exec("UPDATE derivation_state SET completed_ms = NULL WHERE step = 'fts' AND version = 1");
+      expect(status(box).env.fts, 'a backfill that has not completed').toBe('fts-pending');
+    } finally { db.close(); }
+  });
+
+  // HA2 H-24 (D-4599): a bound store at user_version 0 is damage, not a pending migration.
+  it('H-24: status on a store at user_version 0 answers 5 store-schema-missing', () => {
+    const box = boundBox('ccrc-hist-cli-ha2-h24-');
+    const db = new DatabaseSync(dbFile(box));
+    try { db.exec('PRAGMA user_version = 0'); } finally { db.close(); }
+    const r = status(box);
+    expect([r.code, r.env.reason], r.stderr).toEqual([5, 'store-schema-missing']);
+    expect(r.env.user_version).toBe(0);
   });
 
   // FU4 M31 (review 316 F11 named "corrupt"): a bound store with the page at offset 2 * 4096 destroyed, the WAL checkpointed

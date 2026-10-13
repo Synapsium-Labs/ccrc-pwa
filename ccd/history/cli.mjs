@@ -36,7 +36,7 @@ import { pathToFileURL } from 'node:url';
 import {
   EXIT, COVERAGE, SCHEMA_VERSION, UUID_RE, HARNESSES, CLI_STAT_DEADLINE_MS,
   historyPaths, readBoxEnvValue, decideCliStore, CONTROL_FILE_MAX, decideStatusRead, capOf, floorThreshold, exportHorizonDays, parseOpMarker,
-  decideStatusReadFailure, RETENTION_STATE_META,
+  decideStatusReadFailure, RETENTION_STATE_META, decideGrepIndex, FTS_STEP, FTS_REBUILD_STEP,
 } from './lib.mjs';
 import { StoreError, measureStoreFacts, openReader, userVersion, measuredSize, probeFts5, readBounded } from './store.mjs';
 // The health block's own imports (task 28). Namespace imports, so this block
@@ -76,6 +76,8 @@ export const STATUS_SQL = Object.freeze({
   recover: "SELECT version, cursor FROM derivation_state WHERE step = 'recover' AND completed_ms IS NULL ORDER BY version DESC LIMIT 1",
   outbox: 'SELECT count(*) AS n FROM journal_outbox',
   ftsTable: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'blobs_fts'",
+  ftsBackfill: 'SELECT completed_ms FROM derivation_state WHERE step = ? AND version = 1',
+  ftsRebuild: 'SELECT 1 AS x FROM derivation_state WHERE step = ? AND completed_ms IS NULL LIMIT 1',
   breaker: 'SELECT count(*) AS n FROM breaker WHERE open_until_ms > ?',
   metaKey: 'SELECT v FROM meta WHERE k = ?',
 });
@@ -241,13 +243,19 @@ function snapshotBytes(P) {
   try { return statSync(join(P.backups, best.n)).size; } catch { return null; }
 }
 
-/** The FTS word (§9.1): the read-only probe, then whether derivation has made the table. A probe that throws
- *  is probe-failed, never folded into absent. */
+/** The FTS word (§9.1): the three facts grep's index gate reads (recall.mjs's indexGate), through the same lib decision,
+ *  so status and grep never disagree: the read-only probe, whether derivation has made the table, the backfill row
+ *  ('fts', 1) with its completed_ms, and an open doctor --repair rebuild row. `ready` is the gate's ok; anything else is
+ *  the word grep answers exit 7 or 5 by (fts5-absent, fts-pending, probe-failed). A probe that throws is probe-failed,
+ *  never folded into absent. Only v1 columns are named (D-4604 history-status-fts-word-is-the-grep-gate). */
 function ftsWord(db) {
   let probe;
-  try { probe = probeFts5(db); } catch { return 'probe-failed'; }
-  if (probe === 'absent') return 'fts5-absent';
-  return db.prepare(STATUS_SQL.ftsTable).get() === undefined ? 'fts-pending' : 'ready';
+  try { probe = probeFts5(db); } catch { probe = 'threw'; }
+  const table = probe === 'present' && db.prepare(STATUS_SQL.ftsTable).get() !== undefined;
+  const row = table ? db.prepare(STATUS_SQL.ftsBackfill).get(FTS_STEP) : undefined;
+  const rebuilding = table && db.prepare(STATUS_SQL.ftsRebuild).get(FTS_REBUILD_STEP) !== undefined;
+  const gate = decideGrepIndex({ probe, table, rebuilding, completed: row !== undefined && row.completed_ms !== null });
+  return gate.ok ? 'ready' : gate.reason;
 }
 
 /** A bound store, read through the read-only handle. user_version is read first, and only v1 columns are
@@ -317,7 +325,7 @@ function readStoreAnswered(env, P, nowMs) {
       sqliteError: e !== null && typeof e === 'object' && e.code === 'ERR_SQLITE_ERROR',
     });
     if (d === null) throw e;
-    process.stderr.write(`ccrc history: ${d.reason}: ${e.message}\n`);
+    errLine(`ccrc history: ${d.reason}: ${e.message}`);
     decided(env, d);
   }
 }
@@ -436,6 +444,13 @@ const USAGE = [
 /** No pairs: a refusal prints no recalled text, but every output still takes redactFinal's context and shape
  *  layers (§8.3). */
 const NO_PAIRS = makePairIndex([]);
+
+/** One stderr line carrying a thrown error's text, through redactFinal like every other output (§8.3, §12: the final
+ *  stdout, stderr and --json each take one more pass). A SQLite message can quote a value, and the three sites that
+ *  wrote `e.message` raw did not redact it (HA2 H-32). Every error text on stderr goes through here. */
+function errLine(text, idx = NO_PAIRS) {
+  process.stderr.write(redactFinal(`${text}\n`, idx));
+}
 const ABSENT = Object.freeze({ state: 'absent' });
 const UNREADABLE = Object.freeze({ state: 'unreadable' });
 /** A registry field or a recall-off file is a few dozen bytes; a read stops here. */
@@ -513,13 +528,13 @@ function pairIndexOf(db, home) {
  *  SQLite's own error (ERR_SQLITE_ERROR: a missing table or column, a corrupt page, an I/O error) as
  *  store-read-failed, the error's message on stderr. Null for any other throw, a defect the caller rethrows, so it
  *  stays exit 1 with no answer (review 316 F11's rule; B1's slug history-import-refusal-words names the word). */
-function readFailure(e, storeId, id, gen) {
+function readFailure(e, storeId, id, gen, idx = NO_PAIRS) {
   const f = decideStatusReadFailure({
     storeWord: e instanceof StoreError ? e.word : null,
     sqliteError: e !== null && typeof e === 'object' && e.code === 'ERR_SQLITE_ERROR',
   });
   if (f === null) return null;
-  process.stderr.write(`ccrc history: ${f.reason}: ${e.message}\n`);
+  errLine(`ccrc history: ${f.reason}: ${e.message}`, idx);
   return refusal(f.exit, f.reason, storeId, id, gen);
 }
 
@@ -741,6 +756,8 @@ function emitResult(rc, res, json) {
       exit: res.exit, ...(res.reason === undefined ? {} : { reason: res.reason }), storeId: rc.storeId, scope: scopeJson(rc),
       header: { indexedThroughMs: h.indexedThroughMs, lagS: h.lagS }, items: res.items, shown: res.shown, total: res.total,
       next: res.next === null ? null : nextLine(res.next),
+      // D-4595 (history-json-envelope-carries-hint): the human form prints res.hint below; --json carries it too.
+      ...(res.hint === undefined ? {} : { hint: res.hint }),
     }))}\n`;
   } else {
     // A runner's refusal (out-of-scope, regex-syntax, migration-pending, …) names its word under the header.
@@ -777,8 +794,12 @@ async function readVerb(home, verb, argv) {
       let failed = null;
       try {
         res = runner(ctx, parsed, argv);
+        // The header reads derivation_state and ingest_files, which only tree's runner touches. Priming it here, inside
+        // this try, puts a damaged store's SQLite error through readFailure (exit 5), not past it to the entry guard
+        // (exit 1). scopeHeader caches per context, so emitResult below reuses it (HA2 H-21).
+        scopeHeader(ctx);
       } catch (e) {
-        const f = readFailure(e, ctx.storeId, ctx.id, ctx.gen);
+        const f = readFailure(e, ctx.storeId, ctx.id, ctx.gen, ctx.pairIdx);
         if (f === null) throw e;
         failed = f;
       }
@@ -1370,7 +1391,18 @@ export async function operatorMain(home, argv) {
     if (json) process.stderr.write(text);
     else process.stdout.write(text);
   };
-  const r = await runOpVerb(home, verb, rest.slice(1), emit);
+  // A throw out of the door that is neither a StoreError nor a SQLite error (relayIndexOf's rethrow) is a defect: exit 1.
+  // Its line names the operator like every other non-zero line of an operator verb, and goes through errLine (R-X-OPERATOR;
+  // HA2 H-37). It is the only line, so the exit-words line below is skipped.
+  let thrown = false;
+  let r;
+  try {
+    r = await runOpVerb(home, verb, rest.slice(1), emit);
+  } catch (e) {
+    thrown = true;
+    r = { exit: EXIT.INTERNAL };
+    errLine(`ccrc history ${verb}: internal error: ${e && e.message ? e.message : String(e)}; ${OP_OPERATOR_NOTE_ANY}`);
+  }
   if (json) {
     const id = readTrimmed(P.storeId);
     const env = healthLib.readEnvelope({
@@ -1379,7 +1411,7 @@ export async function operatorMain(home, argv) {
       scope: null, header: null, items: [], shown: 0, total: 0, next: null,
     });
     process.stdout.write(`${JSON.stringify(env)}\n`);
-  } else if (r.exit !== EXIT.OK) {
+  } else if (r.exit !== EXIT.OK && !thrown) {
     const words = OP_EXIT_WORDS[r.exit] ?? `${r.exit === EXIT.REFUSED ? 'refused' : 'store error'}: ${r.reason ?? ''}`;
     process.stderr.write(`ccrc history ${verb}: ${words}; ${OP_OPERATOR_NOTE[r.exit] ?? OP_OPERATOR_NOTE_ANY}\n`);
   }
@@ -1397,7 +1429,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.ar
   main(process.argv.slice(2))
     .then((code) => { process.exitCode = code; process.stdout.write('', () => process.exit()); })
     .catch((e) => {
-      process.stderr.write(`ccrc history: internal error: ${e && e.message ? e.message : String(e)}\n`);
+      errLine(`ccrc history: internal error: ${e && e.message ? e.message : String(e)}`);
       process.exitCode = EXIT.INTERNAL;
       process.exit();
     });
