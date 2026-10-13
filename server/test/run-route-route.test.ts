@@ -259,7 +259,13 @@ describe('POST /api/runs/:id/route', () => {
     const home = mkTmp('ccrc-route-');
     const { run } = makeRunner(home);
     const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
-    const opened = (await postOpen(w.app, { ...OPEN_BODY, claimedBy: 'bad claimant' })).json() as { id: number };
+    // Seeded through the STORE: since path identity W1a, `POST /api/runs` refuses
+    // this claimedBy at the door (spec §2.3). Such a row now exists only as a
+    // stored row that predates that gate, which is the case this door still guards.
+    const seeded = w.coord.openRun({ program: 'build4', title: 'Routing door', project: PROJECT,
+      wave: 1, waveOf: 3, claimedBy: 'bad claimant', homeProject: PROJECT });
+    if (!('id' in seeded)) throw new Error(`fixture openRun refused: ${JSON.stringify(seeded)}`);
+    const opened = { id: seeded.id };
     const res = await postRoute(w.app, opened.id, { target: 'coordinator', why: 'x', kind: 'shallow' });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'bad-session' });

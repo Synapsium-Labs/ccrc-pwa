@@ -1310,6 +1310,25 @@ export function registerCoordRoutes(
     // `kind`'s own vocabulary was already proven above, before this guard.
     // Each further refusal below names its field so the caller can tell
     // "malformed JSON" from "you sent the wrong thing".
+    //
+    // Path identity (spec §2.3). Every id this route stores can later reach an
+    // id-taking argv: `wsHold` below, then dispatch, close and the routing door.
+    // So each is asked the ONE predicate here, AS GIVEN. `openRun` stores the
+    // untrimmed body field, so a padded id is refused rather than stored. These
+    // checks stand ahead of the review arm, so a review open with a bad
+    // `sessionId` answers `bad-session` before that arm refuses any `sessionId`.
+    // The project check is a work run's only: a review run's project is the
+    // reviewed run's, compared below. A new row can then never carry a project
+    // ccd could read as a flag to `ws-add`.
+    if (!isRegistryId(claimedBy)) {
+      return reply.code(400).send({ ok: false, error: 'bad-session', detail: 'claimedBy is not a registry id' });
+    }
+    if (sessionId !== undefined && !isRegistryId(sessionId)) {
+      return reply.code(400).send({ ok: false, error: 'bad-session', detail: 'sessionId is not a registry id' });
+    }
+    if (kind !== 'review' && /^[-.]/.test(body.project as string)) {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'project must not begin with - or .' });
+    }
     const runKind: 'work' | 'review' = kind === 'review' ? 'review' : 'work';
     if (runKind === 'work' && reviews !== undefined) {
       return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'reviews is only accepted with kind review' });
@@ -1752,11 +1771,11 @@ export function registerCoordRoutes(
         return reply.code(409).send({ ok: false, refused: 'claimant-alive', by: r.by, detail: r.detail });
       case 'heir-is-a-worker':
         return reply.code(409).send({ ok: false, refused: 'heir-is-a-worker', by: r.by });
-      // Path identity (spec §2.3): the heir is not a registry id. That is a
-      // request defect, answered 400 in `POST /api/runs`' own word, before any
-      // listing. `detail` rides along because L1 measured it.
+      // spec §2.3: `which` names the side that is not a registry id. The HEIR is
+      // this request's own value, so 400. The stored CLAIMANT is a row no retry
+      // heals, so 409, and its detail names the abandon door. Nothing was re-pointed.
       case 'bad-session':
-        return reply.code(400).send({ ok: false, error: 'bad-session', detail: r.detail });
+        return reply.code(r.which === 'claimant' ? 409 : 400).send({ ok: false, error: 'bad-session', detail: r.detail });
       default: {
         const _exhaustive: never = r;
         return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });

@@ -4,7 +4,7 @@ import { lifecycleInputFor } from '../fleet.js';
 import type { FleetIO } from '../io.js';
 import { fieldMeasured, readSessionRecord } from '../registry.js';
 import type { CoordStore } from './store.js';
-import { lifecycleIsDead, sessionLifecycle, type SessionLifecycle } from '../../../shared/api.js';
+import { isRegistryId, lifecycleIsDead, sessionLifecycle, type SessionLifecycle } from '../../../shared/api.js';
 import type { ClaimantDeadCause } from '../deadCoordinator.js';
 
 /**
@@ -265,10 +265,12 @@ export type ReclaimOutcome =
   | { ok: false; kind: 'claimant-alive'; detail: string; by: string }
   // the NEW claimant is a live worker of another run (spec §12)
   | { ok: false; kind: 'heir-is-a-worker'; by: string }
-  // path identity (spec §2.3): an id `isRegistryId` refuses, never measured and
-  // never composed. `bad-session` is borrowed too, from `RUN_ROUTE_REFUSE_CODES`.
-  // `which` names the refused id; `heir` is the incoming `claimedBy`.
-  | { ok: false; kind: 'bad-session'; which: 'heir'; detail: string };
+  /** spec §2.3. `which` names the side that is not a registry id. `heir` is this
+   *  request's `claimedBy`, refused by `readSessionRecord`'s `bad-id` before any
+   *  listing; the route answers 400. `claimant` is the run's STORED `claimedBy`,
+   *  a row no retry heals; the route answers 409, and `detail` names the abandon
+   *  door, the one way to end such a programme. */
+  | { ok: false; kind: 'bad-session'; which: 'heir' | 'claimant'; detail: string };
 
 /**
  * Hand a program's coordination to `to`, after PROVING the session holding it is
@@ -280,6 +282,12 @@ export type ReclaimOutcome =
  *      `claimedBy` to NULL because it cannot know who will resume, and `openRun`'s
  *      D-12 clause skips exactly those rows (store.ts:373-383); adopting one here
  *      would invent an owner for a row that never had one;
+ *    • the CLAIMANT'S SHAPE (spec §2.3), deliberately UNNUMBERED like the heir rung
+ *      below, so the cited numbers hold: a stored `claimedBy` that is not a registry
+ *      id — else `bad-session` with `which: 'claimant'`. It runs before any read,
+ *      because such an id is never measured and never composed. A row stored before
+ *      `POST /api/runs` asked the predicate is the only way to reach it, and nothing
+ *      is re-pointed;
  *   3. `to` is a session this box can SEE — else `unknown-session`, or
  *      `registry-unmeasurable` when the directory would not list, or
  *      `bad-session` (`which: 'heir'`) for an id `isRegistryId` refuses, which
@@ -335,6 +343,16 @@ export async function reclaimRun(
   if (run === null) return { ok: false, kind: 'unknown-run' };
   const from = run.claimedBy;
   if (from === null) return { ok: false, kind: 'no-claimant' };
+  // spec §2.3: the STORED claimant is asked the one predicate before any read.
+  // The heir's own check is `readSessionRecord`'s `bad-id` below, inside the
+  // incoming read, and the route head carries no copy that would mask it.
+  // Answering this through `measureClaimant` instead would be a 502
+  // `registry-unmeasurable` that no retry ever clears.
+  if (!isRegistryId(from)) {
+    return { ok: false, kind: 'bad-session', which: 'claimant',
+      detail: 'the run\'s stored claimedBy is not a registry id, so it is never measured or composed: '
+        + 'end the programme by abandoning each of its open runs through POST /api/runs/:id/abandon' };
+  }
   const incoming = await readSessionRecord(deps.io, deps.cfg, to);
   switch (incoming.kind) {
     case 'found': break;
