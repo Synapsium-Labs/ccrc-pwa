@@ -437,6 +437,10 @@ describe('the coordinator skill: its contract', () => {
     expect(fm).toContain('name: ccrc-coordinator');
     expect(fm).toMatch(/description:.+/);
     expect(fm.toLowerCase()).toContain('never use it to do a wave');
+    // #361: a subagent working in a worker's, reviewer's or coordinator's workspace meets this
+    // skill's own trigger word for word, so the description excludes it in so many words.
+    expect(fm.toLowerCase()).toContain(
+      'never use it inside a subagent — a session started by another session\'s agent tool or a workflow agent() call is a subagent and returns its report to its parent; it never opens, dispatches or closes a run.');
   });
 });
 

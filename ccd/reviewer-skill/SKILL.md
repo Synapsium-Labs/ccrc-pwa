@@ -1,6 +1,6 @@
 ---
 name: ccrc-reviewer
-description: Read one finished wave of a ccrc program as the dispatched reviewer — measure the worker branch's tip once, read it in your own worktree, run the review lenses and the whole-branch pass against the plan, and report findings to the coordinator as one mail artifact. Use when a brief arrives naming a review run and the work run it reviews. Never use it to rule on a wave — a reviewer that sends work back or allocates a deviation has become a coordinator with no ledger.
+description: Read one finished wave of a ccrc program as the dispatched reviewer — measure the worker branch's tip once, read it in your own worktree, run the review lenses and the whole-branch pass against the plan, and report findings to the coordinator as one mail artifact. Use when a brief arrives naming a review run and the work run it reviews. Never use it inside a subagent — a review lens agent, or any session started by another session's Agent tool or a workflow agent() call, is a subagent and returns its findings to its parent without sending mail. Never use it to rule on a wave — a reviewer that sends work back or allocates a deviation has become a coordinator with no ledger.
 ---
 
 # Reviewing one wave of a ccrc program

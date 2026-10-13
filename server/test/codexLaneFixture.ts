@@ -167,6 +167,9 @@ export interface FakeRuntime {
   python: string;
   /** the generation's `.ccrc-runtime.json` */
   stamp: string;
+  /** the generation's one `lib/python3.12/site-packages`, holding ccrc's LiteLLM
+   *  patch and its `.pth` as the builder's `patch` stage writes them */
+  site: string;
 }
 
 /** A generation planted with `stamp: false`: the same layout with no stamp,
@@ -388,14 +391,19 @@ function fakePython(version: string, home: string): string {
 }
 
 /** A built-looking generation at `~/.ccrc/runtime/codex/<name>/`:
- *  `bin/python` (the fake above, or `opts.python`), a stamp, and `current`
+ *  `bin/python` (the fake above, or `opts.python`), ccrc's LiteLLM patch and its
+ *  one-line `.pth` in the one `lib/python3.12/site-packages` (what `patch-source`
+ *  prints, byte for byte, which `check` compares the installed files with — spec
+ *  §22.2, D-4859), a stamp, and `current`
  *  swapped to it as a RELATIVE symlink, the shape the builder writes. It is the
  *  test tree's ONE writer of that layout: a suite that needs a runtime plants
  *  it here, and no suite hand-writes a generation.
  *
  *  The stamp's `requirement` and `probeSha256` are DERIVED from the shipped
  *  `ccd/ccgpt-runtime` (its `LITELLM_REQUIREMENT=` line, and the sha256 of what
- *  its `probe-source` prints), never typed here, and the stamp is written in
+ *  its `probe-source` prints followed by what its `patch-source` prints — the
+ *  probe's bytes, then the LiteLLM patch's, the order the builder stamps them in,
+ *  spec §22.2, D-4859), never typed here, and the stamp is written in
  *  the builder's own bytes (`pyJsonDump`, its key order, its `python` and
  *  `canary` shapes). So a builder change cannot leave this fixture planting a
  *  runtime the real `check` refuses while every lane case goes on passing. A
@@ -431,17 +439,24 @@ export function plantFakeRuntime(home: string, opts: FakeRuntimeOptions = {}): F
   fs.mkdirSync(path.dirname(python), { recursive: true });
   fs.writeFileSync(python, opts.python ?? fakePython(version, home), { mode: 0o755 });
   writeFakeLitellm(home);
+  const source = (verb: 'probe-source' | 'patch-source'): Buffer => {
+    const r = spawnSync('bash', [cli, verb], {
+      env: { PATH: process.env['PATH'] ?? '/usr/bin:/bin', HOME: home }, cwd: home,
+    });
+    if (r.status !== 0) throw new Error(`plantFakeRuntime: ccgpt-runtime ${verb} exited ${r.status}`);
+    return r.stdout;
+  };
+  const site = path.join(gen, 'lib', 'python3.12', 'site-packages');
+  fs.mkdirSync(site, { recursive: true });
+  fs.writeFileSync(path.join(site, 'ccrc_litellm_patch.py'), source('patch-source'));
+  fs.writeFileSync(path.join(site, 'ccrc_litellm_patch.pth'), 'import ccrc_litellm_patch\n');
   const stamp = path.join(gen, '.ccrc-runtime.json');
   if (opts.stamp === false) {
     fs.rmSync(stamp, { force: true });
   } else {
     const requirement = /^LITELLM_REQUIREMENT='([^']+)'$/m.exec(fs.readFileSync(cli, 'utf8'))?.[1];
     if (requirement === undefined) throw new Error('plantFakeRuntime: ccd/ccgpt-runtime declares no LITELLM_REQUIREMENT line');
-    const probe = spawnSync('bash', [cli, 'probe-source'], {
-      env: { PATH: process.env['PATH'] ?? '/usr/bin:/bin', HOME: home }, cwd: home,
-    });
-    if (probe.status !== 0) throw new Error(`plantFakeRuntime: ccgpt-runtime probe-source exited ${probe.status}`);
-    const probeSha256 = createHash('sha256').update(probe.stdout).digest('hex');
+    const probeSha256 = createHash('sha256').update(source('probe-source')).update(source('patch-source')).digest('hex');
     // The builder's key order, and its canary word for a raw shape that does
     // not leak a system role.
     fs.writeFileSync(stamp, pyJsonDump({
@@ -452,7 +467,7 @@ export function plantFakeRuntime(home: string, opts: FakeRuntimeOptions = {}): F
   const current = path.join(root, 'current');
   fs.rmSync(current, { force: true });
   fs.symlinkSync(name, current);
-  return opts.stamp === false ? { root, gen, python, stamp: null } : { root, gen, python, stamp };
+  return opts.stamp === false ? { root, gen, python, stamp: null, site } : { root, gen, python, stamp, site };
 }
 
 // ── the user manager ─────────────────────────────────────────────────────

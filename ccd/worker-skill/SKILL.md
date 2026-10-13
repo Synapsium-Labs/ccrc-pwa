@@ -1,6 +1,6 @@
 ---
 name: ccrc-worker
-description: Do one wave of a ccrc program as the dispatched worker — read the brief that arrived as mail, ack it, do the wave's work on this workspace's own branch, put questions to the operator as structured asks, and report a measured wave-done fingerprint back to the coordinator. Use when a brief arrives naming a program and a wave, or when this workspace's hold reads `program:<slug> wave:N/M` and you are not the session that opened the run. Never use it to coordinate a program — a worker that starts dispatching has become a coordinator without a ledger.
+description: Do one wave of a ccrc program as the dispatched worker — read the brief that arrived as mail, ack it, do the wave's work on this workspace's own branch, put questions to the operator as structured asks, and report a measured wave-done fingerprint back to the coordinator. Use when a brief arrives naming a program and a wave, or when this workspace's hold reads `program:<slug> wave:N/M` and you are not the session that opened the run. Never use it inside a subagent — a session started by another session's Agent tool or a workflow agent() call is a subagent, whatever its brief names, and returns its report to its parent without acking, claiming or sending mail. Never use it to coordinate a program — a worker that starts dispatching has become a coordinator without a ledger.
 ---
 
 # Working one wave of a ccrc program
