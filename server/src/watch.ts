@@ -1323,9 +1323,10 @@ export class FleetWatcher {
    *  Every pass that changes anything durable marks that state DIRTY alone, before any anchor changes
    *  (`markDeadCoordinatorBreakerDirty`), then writes the exact held snapshot, every anchor change and the state CLEAN in
    *  ONE transaction (`commitDeadCoordinatorBreakerState`), with the `run_events` record of a changed set inside it. Only
-   *  a commit that landed lets the pass act, or moves what this process knows was committed. A state that reads dirty,
-   *  absent or unreadable seeds the conservative hold (review 382, R2): every claimant the pass does not release,
-   *  FLAGGED (a wildcard in the breaker), beside every member, instant and flag of the snapshot it can still read.
+   *  a commit that landed lets the pass act, or moves what this process knows was committed. A state that reads anything
+   *  but `sealed` (D-4916: clean, dirty, absent or unreadable) seeds the conservative hold (review 382, R2): every claimant
+   *  the pass does not release, FLAGGED (a wildcard in the breaker, which HOLDS only when two or more stand unreleased; one
+   *  alone only has its hour restarted), beside every member, instant and flag of the snapshot it can still read.
    *  `Seeded` is that once; `CommittedKey` is the key of the snapshot the last landed commit wrote (`''` until one lands
    *  or a clean state is read: it matches no set's key); `DurableClean` says this process knows the state reads clean;
    *  `AnchorsPending` holds the anchor changes a commit has not landed yet (`null`: a staged delete), re-sent by the next
@@ -4959,9 +4960,10 @@ export class FleetWatcher {
       forget();
       return;
     }
-    // ...and, ONCE per process, the breaker's held set from its TYPED STATE (D-4857). A state that reads CLEAN is the exact
-    // snapshot of the last landed commit, seeded as it reads. Any other answer — DIRTY (a pass marked it and its commit did
-    // not land, or the process died between), ABSENT (no lane of this release has written it: the deploy that creates the
+    // ...and, ONCE per process, the breaker's held set from its TYPED STATE (D-4857). A state that reads SEALED is the exact
+    // snapshot of the last landed commit, vouched for by a clean shutdown (D-4916), and the only one seeded as it reads. Any
+    // other answer — CLEAN (the last server did not end through a clean shutdown, so a hold it formed and could not write is
+    // not ruled out), DIRTY (a pass marked it and its commit did not land, or the process died between), ABSENT (no lane of this release has written it: the deploy that creates the
     // table) or UNREADABLE — is a hold this pass cannot know, and an EMPTY seed would let a restart dissolve the very
     // cluster the breaker exists to hold; stopping the lane would freeze it for good, since only a commit can supersede the
     // row. So the pass goes on and step six seeds the conservative hold, where `released` is known: nothing clears dirty by
@@ -5154,9 +5156,10 @@ export class FleetWatcher {
    *     is known clean. Nothing is written; the pass may act;
    *   - `mark-failed`: the dirty mark did not land. NO anchor change and no act; the changes stay pending for the next
    *     commit, as on `commit-failed`, and the caller moves the in-memory hold. The state still reads as the last landed
-   *     write left it (clean, if it was), older than this process's hold: a restart before the next mark lands seeds that
-   *     older state (the residual §12 names);
-   *   - `commit-failed`: the mark landed and the transaction did not (a refusal, a statement or a COMMIT that threw).
+   *     write left it (clean, if it was, and never sealed: the first pass of every process unseals), older than this
+   *     process's hold; a restart finds a state no start trusts, and seeds conservatively (D-4916);
+   *   - `commit-failed`: the mark landed and the transaction did not (a refusal, a statement or a COMMIT that threw, or any
+   *     statement between the mark and its result: the carrier read included).
    *     Nothing of it moved, the state stays dirty, the changes stay pending for the next commit, and the pass acts on
    *     nothing; the caller keeps the new in-memory hold;
    *   - `committed`: the exact snapshot, every change and the state clean landed together. Only now does this process

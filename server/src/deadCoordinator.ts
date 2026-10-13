@@ -398,17 +398,24 @@ export interface DeadCoordinatorBreakerMember {
  *  act, whereas its lost backoff makes it act SOONER, and that is a path of its own: if U backs off a stuck claimant P
  *  while R, its backoff lost, ends P, U keeps P as an extra entry that can cluster with a new crash, so R can end a third
  *  claimant Q that U holds. THE HYPOTHESIS: every id U holds, R holds with at least U's instants, or flagged. At the seed
- *  it holds, because of how U writes (D-4857): U marks its typed state dirty, alone, before it changes any anchor, and
- *  turns it clean only in the one transaction that writes its exact held snapshot with every anchor change; a commit that
- *  fails leaves the state dirty, and a mark that fails leaves it as the last landed write left it while U's hold moves on (its
- *  anchor changes pending). So at every instant the state is clean with U's exact hold, or dirty, or — only after a
- *  mark that failed, until U's next dirty mark lands — clean and older than U's hold: a restart in that last window is the
- *  residual named below, and this hypothesis does not hold across it. Over a clean state R seeds U's own snapshot (and
- *  flags every claimant whose anchor began after it, D-4826: since every anchor change of this release commits with its
- *  snapshot, only an older build's); over a dirty, absent or unreadable one the conservative seed holds every claimant
- *  the pass does not release, flagged, beside every member, instant and flag it can still read, a superset of anything U
- *  holds (a held member is always unreleased and in the population), and takes no durable anchor as continuing, so every
- *  crashed claimant's hour restarts at that pass. Each step: both see the same anchors and release the same members on the
+ *  it holds, because of how U writes (D-4857, D-4916): U marks its typed state dirty, alone, before it changes any anchor,
+ *  and turns it clean only in the one transaction that writes its exact held snapshot with every anchor change; a commit
+ *  that fails leaves the state dirty, and a mark that fails leaves it clean while U's hold moves on (its anchor changes
+ *  pending). A start trusts a stored snapshot ONLY when the state reads `sealed`, which the server's shutdown handler
+ *  writes over a durably clean state with nothing pending, and the first pass of every process unseals it before it can
+ *  change anything: so a snapshot older than a lost hold is never trusted, whatever failed, and a restart finds either a
+ *  sealed state, which is U's exact hold, or one it seeds conservatively. Over a sealed state R seeds U's own snapshot
+ *  (and flags every claimant whose anchor began after it, D-4826: since every anchor change of this release commits with
+ *  its snapshot, only an older build's); over a clean (unsealed), dirty, absent or unreadable one the conservative seed
+ *  flags every claimant the pass does not release, beside every member, instant and flag it can still read, a superset
+ *  of anything U holds (a held member is always unreleased and in the population), and takes no durable anchor as
+ *  continuing, so every crashed claimant's hour restarts at that pass. The seed HOLDS only when two or more claimants
+ *  stand unreleased (the wildcard needs two entries: a single one holds nothing and only has its hour restarted, a delay),
+ *  and a flagged pair dissolves when evidence releases one of the two. Residual (7) of D-4857, a restart after a mark that
+ *  failed, is closed by the seal (D-4916). The one case no durable design can close is a process none of whose writes
+ *  lands, from its first pass to its death: it leaves no trace, so the next start trusts the older seal; that is the floor,
+ *  not an accepted risk of the class mail 4266 measured. The cost of the design is an unclean exit (a kill, an OOM kill, a
+ *  crash, a stop that outlives systemd's timeout), which starts conservatively as above. Each step: both see the same anchors and release the same members on the
  *  same evidence (alive, stopped, deliberate, left the population), so R's entries are a superset of U's as (id, instant)
  *  pairs and flags; by the property R trips whenever U does, with members ⊇ U's; and each member's next instants are its
  *  held instants plus this pass's anchor on both sides, so R's remain ⊇ U's (or R's is flagged, and every member of a
@@ -421,13 +428,9 @@ export interface DeadCoordinatorBreakerMember {
  *  not claim to cover them, nor claim that no other corner exists. The class mail 4266 measured — a held instant that
  *  lived in memory alone because held-set writes failed while anchor writes landed, its anchor then deleted by a doubt
  *  before the restart — is CLOSED by the typed state (D-4857), not by D-4826's recovery: no anchor change lands without
- *  the snapshot that holds it, a failed commit leaves the state dirty, and every id has a spelling. The cost is that a
- *  restart over a dirty state, and the first pass after the deploy that creates the table, hold every claimant the pass
- *  does not release, flagged, until evidence releases each, and restart every crashed claimant's hour at that pass; while
- *  the breaker's writes keep failing, nothing acts. A restart after a dirty mark that failed, before the next dirty mark lands,
- *  seeds a clean state older than U's hold: a trip formed, a doubt seen or a release on those passes is lost with U, and R can act
- *  sooner; it needs the one-statement dirty write itself to fail, a restart before a mark lands again, and R's first crashed
- *  pass within `DEAD_COORDINATOR_GAP_MS` of the claimant's last committed crashed instant (later, its anchor starts afresh). A server clock that steps backwards across a restart can make a
+ *  the snapshot that holds it, a failed commit leaves the state dirty, and every id has a spelling. The cost is paid only
+ *  on an unclean exit and on the first pass after the deploy that creates the table; while the breaker's writes keep
+ *  failing, nothing acts. A server clock that steps backwards across a restart can make a
  *  later anchor read earlier than the snapshot. The all-unmeasurable arm diverges as measured: R's extra claimant can be measured while all of
  *  U's are not, so R does not trip there, but every other claimant is as unmeasured in R as in U, so R can act there only
  *  on the claimant U already ended. The cost of the accumulation is more holding: a member held at an old instant that
