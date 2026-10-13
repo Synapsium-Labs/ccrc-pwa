@@ -5034,7 +5034,12 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
   const VOCABS = ['NODE_KINDS', 'PARSE_STATUS', 'PROVENANCE', 'SPOOL_EVENTS', 'EPOCH_CAUSES', 'REFUSALS', 'ERROR_CODES',
     'COVERAGE', 'SCOPE_SOURCES', 'VARIANT_CAUSES', 'BACKENDS', 'HARNESS_TABLE', 'HARNESSES', 'JOURNAL_KINDS',
     'JOURNAL_VERDICTS', 'BIND_KINDS', 'MIGRATION_VERDICTS', 'HEALTH_WORDS', 'REASONS', 'WRITING_FORMS', 'STORE_FILES',
-    'PASS_WORDS', 'CARD_PREFIX', 'SWITCHES', 'EXIT'] as const;
+    'PASS_WORDS', 'CARD_PREFIX', 'SWITCHES', 'EXIT',
+    // W1-B2: the recall vocabularies more than one module reads (scope, search, parser, fan-in, recovery, verbs).
+    'SCOPE_KINDS', 'GREP_SORTS', 'REF_KINDS', 'FAN_IN', 'RECOVER_PHASES', 'FTS_SHADOWS', 'READ_VERBS',
+    'INDEXED_PROVENANCE', 'VERB_TABLES', 'EXPAND_LABEL',
+    // W1-B2 Task 7A (spec rev 3.5): the belt's words more than one module reads or writes.
+    'BELT_COUNTERS', 'BELT_NODES_STEP', 'REDACT_SOURCES_META'] as const;
   /** The declaration scan's corpus: the history modules and every deploy/ and shared/ `.mjs`. NOT the rest of
    *  ccd/: `ccd/compact-card.mjs` declares an `EXIT` of its own (its exit codes, a different module's). */
   const DECL_CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];

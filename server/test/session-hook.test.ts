@@ -10971,3 +10971,26 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     expect(fs.readFileSync(path.resolve(__dirname, '../../ccd/install-session-hooks.sh'), 'utf8')).toMatch(/^HOOK_TIMEOUT_S=\d+$/m);
   });
 });
+
+// ── ccrc history (spec 2026-10-05 §8.1, §8.9 C17). END-APPENDED, with no import line, because this file is in
+// the citation corpus. A session recalls by running `"$HOME/.local/bin/ccrc" history grep …`, and the search gate
+// must not treat that as a code search. GRAPH_SEARCH_RE anchors on the command's first word, which here is a
+// quoted path, so this pins a property the regex already has: it reds only if a later edit loosens the anchor.
+describe('ccrc history: the recall CLI is not search-gated (spec 2026-10-05 §8.9 C17)', () => {
+  it('a PreToolUse Bash call to "$HOME/.local/bin/ccrc" history grep prints no deny, in a tree where a bare grep is denied', () => {
+    const tree = gatedTree();
+    // The positive control first, in the same armed tree. A plain grep IS denied here, so the silence below is
+    // the gate declining this command, not a gate that never armed.
+    const j = oneLine(run(pre('Bash', { command: 'grep -rn assembleFleet server/src' }, tree)));
+    expect(j.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(readState().graphGateDenials).toBe(1);
+    for (const command of [
+      '"$HOME/.local/bin/ccrc" history grep x',
+      '$HOME/.local/bin/ccrc history grep \'"connection refused"\'',
+      '"$HOME/.local/bin/ccrc" history grep --regex \'a|b\' --json',
+    ]) {
+      expect(run(pre('Bash', { command }, tree)), `the search gate denied a recall: ${command}`).toBe('');
+    }
+    expect(readState().graphGateDenials, 'a recall call was counted as a denial').toBe(1);
+  });
+});
