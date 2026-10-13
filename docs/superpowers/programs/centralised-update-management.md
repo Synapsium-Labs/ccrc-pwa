@@ -1424,6 +1424,16 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - Wave 15 (run 300) is still held by the open PR #351 and by claim 1240 on `ccd/ccrc`.
       - STATUS: fleet and server v0.0.167, newest v0.0.168, backups fleet 145M/server 678M, disk free fleet 217G/work
         volume 216G/server 32G, no anomalies at 13:42.
+    - **2026-10-13 14:43 UTC: v0.0.168 auto-converged unattended; v0.0.169 (#152, text and PDF attachments) published at
+      14:28:58.** No action was taken.
+      - v0.0.168: the fleet box ran 13:48:11 to 13:50:07, and the server followed at 13:50:40 to 13:51:05, 33 seconds
+        after the fleet.
+      - Both boxes read `box-token` PASS. Server doctor: 26 passed, 0 warned, 0 failed. Fleet doctor: 33 passed, 6
+        warned, 0 failed.
+      - v0.0.169 came out after the server's 14:20 poll (it last booted at 13:50:52), so it moves at about 14:50.
+      - Wave 15 (run 300) is still held by the open PR #351 and by claim 1240 on `ccd/ccrc`.
+      - STATUS: fleet and server v0.0.168, newest v0.0.169, backups fleet 146M/server 680M, disk free fleet 218G/work
+        volume 212G/server 32G, no anomalies at 14:42.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
