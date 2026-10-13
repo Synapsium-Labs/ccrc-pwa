@@ -10788,7 +10788,7 @@ Expected: `<n> rows; 0 not exactly once`, `<n>` being 171 plus the new ids Step 
 
 Close the record: fill every `outcome` and `rows`, add a last line `Findings: raised <n>, survived <m>, fixed <f>, carried <c>, not a defect <d>, asked <a>, ruled departures <r>. Commits: <list of shas>. Panel tip <TIP>; fix-wave tip $(git rev-parse HEAD).` (`survived` = the findings not ruled NOT A DEFECT), and copy `<SCRATCH>/review` and every Step 5 row measurement into `.superpowers/sdd/2026-10-09-native-docs-reader-w4-pwa-foundation/task-11-review/`. Task 12's results cite the record's last line, its Carried list takes every CARRIED line, and an unanswered ask is listed there too. No push and no pull request here: Task 12 is the close, and its results commit must be the tip.
 
-**Mutation rows this task contributes** (none until a Step 5 fix adds one: this task carries no code of its own. Each row a fix adds is measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at the fix's commit, then `git -C <copy> init -q`, `pwa/node_modules` and `server/node_modules` linked in; `pkg` is the package the `tests` run in; `old` is unique in `file` at that commit; `red` is the measured summary and the cases that went red. A fix that re-spells an earlier row's anchor repeats that row here with the same id and the new `old`, and says so above this block; Task 12's extractor keeps the last occurrence of an id). Rows that Step 5 adds are appended to this array by the fix that adds them. Rows from the review rounds before this task, recorded here so the extractor reads them (ids renumbered to this task's own `W4-T11-M<k>`, because the extractor refuses a foreign id that re-anchors nothing): W4-T11-M1 to W4-T11-M8 (the pre-scan hardening), M9 and M10 (the chat image predicate and the note guard), M11 (docs-sw's linear extraction), M12 to M42 (Task 11's fix wave, review findings 1-1 to 5-1 and A-3 to A-6), M43 (streaming chat's newest settled tree, review N1), M44 to M48 (operator rulings 2026-10-13: the chat table pre-count's upper bound, review 2-3; absolute http(s) images only, Q1), and the re-anchors W4-T3-M9, W4-T5-M33, W4-T6-M18, W4-T4-M7, W4-T4-M8 and W4-T4-M9, each kept under the earlier task's id with a new `old` on the shipped text (the earlier text no longer exists), and W4-T6-M7, W4-T6-M8, W4-T6-M9, W4-T11-M9 and W4-T11-M10 re-measured or re-anchored on the new image predicate, and W4-T10-M13 re-pointed at the doctor case main's #353 renamed.
+**Mutation rows this task contributes** (none until a Step 5 fix adds one: this task carries no code of its own. Each row a fix adds is measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at the fix's commit, then `git -C <copy> init -q`, `pwa/node_modules` and `server/node_modules` linked in; `pkg` is the package the `tests` run in; `old` is unique in `file` at that commit; `red` is the measured summary and the cases that went red. A fix that re-spells an earlier row's anchor repeats that row here with the same id and the new `old`, and says so above this block; Task 12's extractor keeps the last occurrence of an id). Rows that Step 5 adds are appended to this array by the fix that adds them. Rows from the review rounds before this task, recorded here so the extractor reads them (ids renumbered to this task's own `W4-T11-M<k>`, because the extractor refuses a foreign id that re-anchors nothing): W4-T11-M1 to W4-T11-M8 (the pre-scan hardening), M9 and M10 (the chat image predicate and the note guard), M11 (docs-sw's linear extraction), M12 to M42 (Task 11's fix wave, review findings 1-1 to 5-1 and A-3 to A-6), M43 (streaming chat's newest settled tree, review N1), M44 to M48 (operator rulings 2026-10-13: the chat table pre-count's upper bound, review 2-3; absolute http(s) images only, Q1), and the re-anchors W4-T3-M9, W4-T5-M33, W4-T6-M18, W4-T4-M7, W4-T4-M8 and W4-T4-M9, each kept under the earlier task's id with a new `old` on the shipped text (the earlier text no longer exists), and W4-T6-M7, W4-T6-M8, W4-T6-M9, W4-T11-M9 and W4-T11-M10 re-measured or re-anchored on the new image predicate, and W4-T10-M13 re-pointed at the doctor case main's #353 renamed; and fix round 1's rows (review 408, the coordinator's rulings: the ruling's `W4-FR1` rows, numbered W4-T11-M49 to W4-T11-M59 here because the extractor refuses any other id shape), with W4-T5-M36 re-anchored on the worker line fix round 1's F1 re-spelled.
 
 ```json
 [
@@ -11443,6 +11443,152 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
    "ends with doctor, and a fresh box ends green"
   ],
   "red": "server ccrc-install -t 'ends with doctor, and a fresh box ends green': 1 failed | 318 skipped (319) — 'ccrc install: the landing block, and doctor as the last word > ends with doctor, and a fresh box ends green: 0 warned, 0 failed, exit 0' (the closing doctor exits 1 with no service worker at the installed tree: expected 1 to be +0, ccrc-install.test.ts:5353); re-pointed from the title main's #353 renamed, which the old pattern no longer matched"
+ },
+ {
+  "id": "W4-T11-M49",
+  "pkg": "pwa",
+  "file": "pwa/vite.config.ts",
+  "old": "  worker: { format: 'es', plugins: () => [workerSafeEntries()] },",
+  "new": "  worker: { format: 'es', plugins: () => [] },",
+  "tests": [
+   "test/markdown-worker-built.test.ts"
+  ],
+  "red": "pwa markdown-worker-built: 1 failed (1) — 'loads with no document and answers a chat job over 4 KiB with named character references as a tree' (with no worker-only resolution the built chunk's load throws `ReferenceError`, `document` is not defined; fix round 1, review 408 F1)"
+ },
+ {
+  "id": "W4-T11-M50",
+  "pkg": "pwa",
+  "file": "pwa/vite.config.ts",
+  "old": "-'index.dom.js'.length) + 'index.js' };",
+  "new": "-'index.dom.js'.length) + 'index.dom.js' };",
+  "tests": [
+   "test/markdown-worker-built.test.ts"
+  ],
+  "red": "pwa markdown-worker-built: 1 failed (1) — 'loads with no document and answers a chat job over 4 KiB with named character references as a tree' (the plugin maps the package back to its `browser` entry; fix round 1, review 408 F1)"
+ },
+ {
+  "id": "W4-T5-M36",
+  "pkg": "pwa",
+  "file": "pwa/vite.config.ts",
+  "old": "  worker: { format: 'es', plugins: () => [workerSafeEntries()] },\n",
+  "new": "",
+  "tests": [
+   "test/markdown-runner.test.ts"
+  ],
+  "red": "pwa markdown-runner: 1 failed — 'vite.config.ts bundles the worker as an ES module: worker: { format: 'es', plugins: ... }' (re-anchored on the line fix round 1's F1 re-spelled; same mutation)"
+ },
+ {
+  "id": "W4-T11-M51",
+  "pkg": "server",
+  "file": "ccd/ccrc-doctor-checks",
+  "old": "  local head='^/\\^' tail=",
+  "new": "  local head='' tail=",
+  "tests": [
+   "test/ccrc-doctor.test.ts",
+   "-t",
+   "docs-sw"
+  ],
+  "red": "server ccrc-doctor -t docs-sw: 1 failed | 20 passed | 891 skipped (912) — 'PASSes /wiki/docs and /a/docs/b: an entry that ends in or holds /docs is not under /docs' (the ERE's start anchor; fix round 1, review 408 F5)"
+ },
+ {
+  "id": "W4-T11-M52",
+  "pkg": "server",
+  "file": "ccd/ccrc-doctor-checks",
+  "old": "  if [ ! -f \"$sw\" ] || [ ! -r \"$sw\" ]; then",
+  "new": "  if false; then",
+  "tests": [
+   "test/ccrc-doctor.test.ts",
+   "-t",
+   "docs-sw"
+  ],
+  "red": "server ccrc-doctor -t docs-sw: red — 'FAILs a worker it cannot read with ccrc update --force, never a WARN' (the unreadable arm; fix round 1, review 408 F8)"
+ },
+ {
+  "id": "W4-T11-M53",
+  "pkg": "server",
+  "file": "ccd/ccrc-doctor-checks",
+  "old": "  elif [[ \"$after\" != *\"$close\"* ]]; then",
+  "new": "  elif false; then",
+  "tests": [
+   "test/ccrc-doctor.test.ts",
+   "-t",
+   "docs-sw"
+  ],
+  "red": "server ccrc-doctor -t docs-sw: red — 'WARNs on no denylist at all, and on one that never closes: neither is the shape it knows' (the never-closes WARN arm; fix round 1, review 408 F8)"
+ },
+ {
+  "id": "W4-T11-M54",
+  "pkg": "server",
+  "file": "ccd/ccrc-doctor-checks",
+  "old": "tail='(/|\\$/|",
+  "new": "tail='(\\$/|",
+  "tests": [
+   "test/ccrc-doctor.test.ts",
+   "-t",
+   "docs-sw"
+  ],
+  "red": "server ccrc-doctor -t docs-sw: red — 'FAILs an entry under /docs, and a hand-built one with no end anchor; names every covering entry' (the tail's `/` alternative, an entry with no end anchor; fix round 1, review 408 F8)"
+ },
+ {
+  "id": "W4-T11-M55",
+  "pkg": "server",
+  "file": "ccd/ccrc-doctor-checks",
+  "old": "|\\(\\\\/\\|\\$\\)/|",
+  "new": "|",
+  "tests": [
+   "test/ccrc-doctor.test.ts",
+   "-t",
+   "docs-sw"
+  ],
+  "red": "server ccrc-doctor -t docs-sw: red — 'FAILs a /docs entry with the spec's sentence and remedy, naming the entry' (the tail's knob alternative; fix round 1, review 408 F8)"
+ },
+ {
+  "id": "W4-T11-M56",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/sw-denylist.ts",
+  "old": "p === DOCS_PAGE_PREFIX || p.startsWith(`${DOCS_PAGE_PREFIX}/`)",
+  "new": "p.endsWith(DOCS_PAGE_PREFIX) || p.includes(`${DOCS_PAGE_PREFIX}/`)",
+  "tests": [
+   "test/sw-denylist.test.ts"
+  ],
+  "red": "pwa sw-denylist: 1 failed | 16 passed (17) — 'refuses only the Docs prefix: an entry ending in or holding /docs builds' (the refusal widened to a suffix or substring; fix round 1, review 408 F9)"
+ },
+ {
+  "id": "W4-T11-M57",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdown.tsx",
+  "old": "  if (cells > DOCS_MAX_RENDER_ELEMENTS) {",
+  "new": "  if (cells >= DOCS_MAX_RENDER_ELEMENTS) {",
+  "tests": [
+   "test/chat-hardening.test.tsx",
+   "-t",
+   "exactly the cap"
+  ],
+  "red": "pwa chat-hardening -t 'exactly the cap': 1 failed — 'a message whose bound is exactly the cap renders formatted, and one whose bound is one over is plain text' (fix round 1, review 408 F10)"
+ },
+ {
+  "id": "W4-T11-M58",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdown.tsx",
+  "old": "      if (!href) return alt ? <>{alt}</> : null;\n",
+  "new": "",
+  "tests": [
+   "test/chat-hardening.test.tsx",
+   "-t",
+   "Q1"
+  ],
+  "red": "pwa chat-hardening -t Q1: 7 failed — 'an image whose source the transform empties (data:) renders its alt text as plain text, with no link' and the other six emptied-source cases (fix round 1, review 408 F6)"
+ },
+ {
+  "id": "W4-T11-M59",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownRunner.ts",
+  "old": "      if (job.signal?.aborted) {",
+  "new": "      if (false && job.signal?.aborted) {",
+  "tests": [
+   "test/markdown-runner.test.ts"
+  ],
+  "red": "pwa markdown-runner: 1 failed | 36 passed (37) — 'one signal shared by a running job and a queued one rejects both, with no respawn and no post' (fix round 1, review 408 F7)"
  }
 ]
 ```
@@ -13494,7 +13640,7 @@ No commit in this task but Step 5's: everything else it writes is scratch or git
 
 ## Deviations found
 
-- **D-4768 (2026-10-12)** — the six W4 rows the spec writes against W5 artefacts are proved by their W4 half, on W4 stand-ins, and their W5 half moves to W5's brief (spec §7.7's W4 row and §4.15's Test column for M4.R1, M4.B1, M4.P1, M4.P6, M4.P7 and M4.P12). W4 has no `DocsScreen`, `DocMarkdown`, `loaders.tree` or Format-anyway, and stubbing them would pre-empt W5: M4.R1 is proved by a probe on `useLocation` that re-renders for `navigate('/docs/p?ref=a')` then `?ref=b` (W5: the injected `loaders.tree` called with ref `b`); M4.B1 by a mocked throwing `RunsScreen` at `/runs` that keeps `.shell-nav` with the fallback until a navigation resets it (W5: the same at `/docs` with `DocsScreen`); M4.P1 by the refusal, its control and chat's note (W5: `DocMarkdown`'s note); M4.P6 by the runner honouring a 30 000 `budgetMs` (W5: Format anyway posts a 30 000 job); M4.P7 by a throwing `spawn` giving a sticky `worker-unavailable` and chat's 4 KiB sync and 5 KiB note (W5: `DocMarkdown`'s in-thread 4 KiB and 5 KiB note); M4.P12 by `parseMarkdown` giving `too-wide` for both fixtures and a tree for a real 500 KiB prose doc (W5: the `renderHast` spy has 0 calls and the doc still renders). Task 12's results record each W5 half verbatim for W5's brief. Refinement (a); Tasks 3, 5, 6, 7 and 8.
+- **D-4768 (2026-10-12)** — the six W4 rows the spec writes against W5 artefacts are proved by their W4 half, on W4 stand-ins, and their W5 half moves to W5's brief (spec §7.7's W4 row and §4.15's Test column for M4.R1, M4.B1, M4.P1, M4.P6, M4.P7 and M4.P12). W4 has no `DocsScreen`, `DocMarkdown`, `loaders.tree` or Format-anyway, and stubbing them would pre-empt W5: M4.R1 is proved by a probe on `useLocation` that re-renders for `navigate('/docs/p?ref=a')` then `?ref=b` (W5: the injected `loaders.tree` called with ref `b`); M4.B1 by a mocked throwing `RunsScreen` at `/runs` that keeps `.shell-nav` with the fallback until a navigation resets it (W5: the same at `/docs` with `DocsScreen`); M4.P1 by the refusal, its control and chat's note (W5: `DocMarkdown`'s note); M4.P6 by the runner honouring a 30 000 `budgetMs` (W5: Format anyway posts a 30 000 job); M4.P7 by a throwing `spawn` giving a sticky `worker-unavailable` and chat's 4 KiB sync and 5 KiB note (W5: `DocMarkdown`'s in-thread 4 KiB and 5 KiB note); M4.P12 by `parseMarkdown` giving `too-wide` for both fixtures and a tree for a real 500 KiB prose doc (W5: the `renderHast` spy has 0 calls and the doc still renders). Task 12's results record each W5 half verbatim for W5's brief. The swap extends to M4.P12's mutation column: the spec's mutation "count only after render" needs a render step W4 has not got, so W4 measures W4-T3-M16, "count only one element kind", in its place, and the spec's mutation moves to the M4.P12 row's W5 half (coordinator ruling on review 408's F4, fix round 1; the same departure, no new number). Refinement (a); Tasks 3, 5, 6, 7 and 8.
 - **D-4769 (2026-10-12)** — M4.M1's mutation "change plugin order" is replaced by "drop `remarkAlerts` from the list" and "drop `remarkGfm` from the list" (spec §4.15's M4.M1 mutation column). `remark-gfm` 4.0.1 registers micromark and mdast extensions only and returns no transformer (measured in the installed `remark-gfm/lib/index.js`), so `[remarkAlerts, remarkGfm]` renders byte-identically to `[remarkGfm, remarkAlerts]`: an equivalent mutant that can never go red. Task 1 measured the swap once, every golden case green (recorded in the SDD ledger), and its rows W4-T1-M1 and W4-T1-M2 drop a plugin instead, beside the spec's other two mutations (drop an alias; edit `CHAT_COMPONENTS.a`). Refinement (b); Tasks 1 and 2.
 - **D-4770 (2026-10-12)** — `docs-sw` counts `denylist:[` OCCURRENCES with bash builtins (`${body//"$open"/}` length arithmetic over `$(<"$sw")`) and matches each entry with bash's own ERE (`[[ $e =~ $re ]]`), not `grep -c 'denylist:\['` and an external ERE tool (spec §7.2 step 3). `grep -c` counts LINES, and workbox emits the whole worker as one minified line (measured: a real build's `sw.js` is one line), so M7.5's "two denylists: WARN" could never fire; and the doctor suite's PATH holds no `grep` (the file's executable code calls none of `grep`, `sed`, `awk`, `tr`, `head` or `cut`). Every verdict §7.2 and M7.5 state holds, pinned by the `ccrc doctor: docs-sw` describe and rows W4-T10-M1 to W4-T10-M4. Refinement (c); Task 10.
 - **D-4771 (2026-10-12)** — `docs-sw` SKIPs on either of `_check_update-exposure`'s two fleet evidences, a recorded `CCRC_ROLE=fleet` or a unit directory holding `ccrc-agent.service` and no `ccrc.service`, not on the role `_box_env_value "$BOX_ENV_FILE" CCRC_ROLE` reads alone (spec §7.2: "the role comes from `_box_env_value`"). A fleet host with no `ccrc.env`, the shape `ccrc-doctor.test.ts`'s env-less fleet-role case models, would otherwise run the check and FAIL on a bundle it never had. A `server` or `both` box, and a box with no evidence either way, is measured. The env-less case's summary pin moved from `5 + HEALTHY_SKIPS` to `6 + HEALTHY_SKIPS` skipped (measured); `HEALTHY_SKIPS` itself did not move. Pinned by rows W4-T10-M5 and W4-T10-M6. Refinement (d); Task 10.
@@ -13502,7 +13648,7 @@ No commit in this task but Step 5's: everything else it writes is scratch or git
 - **D-4773 (2026-10-12)** — `isRefusedChatImageSrc` also refuses an `http`/`https` scheme not followed by two slashes or backslashes (`/^https?:(?![\/\\]{2})/i`, after the same leading strip), beyond the predicate Task 6's text spells (a leading `/` or `\`) (coordinator agreement, mail 4397, on finding 4396). A browser resolves a same-scheme special-relative source such as `https:/api/example/x` against the page's own origin, so it is root-relative as the browser reads it, which is exactly what U3 clause 4, M4.C3 and refinement (k) refuse; react-markdown's `defaultUrlTransform` keeps it. Path-relative sources stay allowed (Q1, open). Task 6's review fix; rows W4-T11-M9 and W4-T11-M10, in Task 11's rows block.
 - **D-4774 (2026-10-13)** — `prescanMarkdown` also counts a GFM footnote-definition label (`[^label]:` at a container position, the label one to 999 characters with no whitespace and no `]`, then its blank run, column-aware) as one container level, beyond the markers spec §4.10 lists (`>` and the list markers). Task 11's review (finding 2-1) measured two messages of about 4 KiB, a footnote label followed by deep `>` or `- ` nesting, that passed §4.10's pre-scan and then threw a RangeError on chat's synchronous path (after 1.3 s and 6.7 s); a fuzz of 4 000 footnote-and-marker inputs now gives the parser's own depth exactly. It extends ruling 4354 in the same direction (coordinator agreement, mail 4436, on 4435): U3's purpose is kept, at the cost of a deeply nested footnote rendering as plain text with its note. Task 11's fix for review 2-1; rows W4-T11-M18, W4-T11-M20, W4-T11-M21 and W4-T11-M22, in Task 11's rows block.
 - **D-4775 (2026-10-13)** — chat's synchronous path no longer renders every message of at most `CHAT_SYNC_MAX_BYTES` "exactly as today" (spec §4.12, U3 clause 2): before that render, `ChatMarkdown` takes a cheap upper bound of the GFM table cells the message could draw, (the most `|` on any one line + 1) x (the number of lines, split on CRLF, CR and LF), and above `DOCS_MAX_RENDER_ELEMENTS` it renders `msg-plain` with the too-wide note instead (operator ruling 2026-10-13, option B, on Task 11 review 2-3 via coordinator mail 4466). Task 11's review measured a 4 096-byte, 300-column table that passed the pre-scan and drew 435 551 elements on the main thread in about 27 s (a 500-column one: 524 551 in 7.6 s), which the worker path refuses as too-wide. The bound replaces a first count that followed GFM's table grammar and that a re-review bypassed three ways (a lone CR line ending, a Unicode-blank body row, a narrow table running into a wide one): a table's width is its delimiter row's cells, at most that row's pipes + 1, and its rows at most the lines, so the bound never under-counts; the cost is a rare pipe-heavy message of 4 KiB or less rendering as plain text with the note. Task 11's fix wave; rows W4-T11-M44, W4-T11-M47 and W4-T11-M48, in Task 11's rows block.
-- **D-4776 (2026-10-13)** — chat draws an image only from an absolute `http(s)://` source: after the leading strip, `isRefusedChatImageSrc` refuses every source that does not match `/^https?:\/\//i`, for `img` and the auto-embed in `a` alike, where spec §4.12 (U3 clause 4) and refinement (k) refuse only root-relative and protocol-relative sources (operator ruling 2026-10-13 on Q1, the question refinement (k) left open, via coordinator mail 4466). Path-relative (`../api/x`, `./x.png`, `x.png`), `data:` and every other scheme are now refused and render as the chat's ordinary external link; this subsumes D-4773's special-relative clause, whose cases stay green. Every https image and link case `message-links.test.tsx` pins passes unmodified. Task 11's fix wave; rows W4-T11-M45 and W4-T11-M46, and W4-T6-M8 and W4-T11-M10 re-anchored on the new clause, in Task 11's rows block.
+- **D-4776 (2026-10-13)** — chat draws an image only from an absolute `http(s)://` source: after the leading strip, `isRefusedChatImageSrc` refuses every source that does not match `/^https?:\/\//i`, for `img` and the auto-embed in `a` alike, where spec §4.12 (U3 clause 4) and refinement (k) refuse only root-relative and protocol-relative sources (operator ruling 2026-10-13 on Q1, the question refinement (k) left open, via coordinator mail 4466). Every refused source is drawn as no image. A refused source that keeps a non-empty URL, path-relative (`../api/x`, `./x.png`, `x.png`) or a scheme react-markdown's `defaultUrlTransform` keeps (`mailto:`, `irc:`, ...), renders as the chat's ordinary external link, the URL as its text. A `data:`, `javascript:` or other unsafe-scheme source, which that transform empties before chat sees it, and an empty source (`![x]()`) render the image's alt text as plain text, or nothing when it has none: never an empty link, and never the source as written (coordinator ruling on review 408's F6, fix round 1; row W4-T11-M58). This subsumes D-4773's special-relative clause, whose cases stay green. Every https image and link case `message-links.test.tsx` pins passes unmodified. Task 11's fix wave; rows W4-T11-M45 and W4-T11-M46, and W4-T6-M8 and W4-T11-M10 re-anchored on the new clause, in Task 11's rows block.
 
 ## Wave 4 results
 
