@@ -4660,7 +4660,9 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   coordinator merges, workers never do; a speed bump on that one verb, not a wall — a `gh api` merge
   passes it), the role-skill deny on a `Skill` call from a subagent (a payload with a non-empty
   `agent_id`) that names `ccrc-worker`, `ccrc-reviewer` or `ccrc-coordinator`, exactly or behind one
-  `<namespace>:` prefix (D-4934: those three skills make whoever loads them act as the session, and a
+  `<namespace>:` prefix, with the name read as Claude Code reads it (trimmed of JavaScript's `trim` set,
+  then ONE leading `/` stripped, so ` ccrc-worker` and `/ccrc-worker` are the worker skill) (D-4934: those
+  three skills make whoever loads them act as the session, and a
   subagent cannot be the session; any other skill, and the main thread, pass; a speed bump, since the
   `SKILL.md` files stay readable), the Read nudge's `additionalContext` on a nudged call (R6,
   below), or the landing advisory's on a sync of main — a deny supersedes any advice built for the same

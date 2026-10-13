@@ -136,9 +136,53 @@ describe('the role-skill deny (D-4934)', () => {
     }
   });
 
-  it('the near misses pass — a name matches exactly, or after ONE namespace prefix, never as a substring', () => {
+  it('the near misses pass — a name matches exactly, or after ONE namespace prefix and ONE leading slash, never as a substring', () => {
     for (const name of ['ccrc-workers', 'my-ccrc-worker', 'ccrc-worker:x', 'ccrc-reviewers', 'ccrc-coordinator2',
-      'ccrc-work', 'CCRC-WORKER', 'ccrc-worker ', 'ccrc worker']) {
+      'ccrc-work', 'CCRC-WORKER', 'ccrc worker',
+      // One prefix: `a:b:ccrc-worker` is the skill `b:ccrc-worker` of the plugin `a`, not the worker skill.
+      'a:b:ccrc-worker', 'x:y:ccrc-reviewer', 'x:y:ccrc-coordinator',
+      // One slash: `//ccrc-worker` is `/ccrc-worker` after Claude Code's strip, a name no skill has.
+      '//ccrc-worker', '//ccrc-reviewer', '//ccrc-coordinator']) {
+      expect(subagentSkill(name).stdout, `a near miss was denied: ${JSON.stringify(name)}`).toBe('');
+    }
+  });
+
+  it('reads the name the way Claude Code reads it — trimmed, and ONE leading `/` stripped, before the match', () => {
+    // Claude Code's Skill tool does `skill.trim()` and then drops one leading
+    // `/` before it resolves the skill (the 2.1.296 tool's input validation), so
+    // each of these spellings LOADS the role skill and each must be refused.
+    for (const name of ROLE_SKILLS) {
+      for (const spelled of [`/${name}`, ` ${name}`, `${name} `, `\t${name}`, `\u00a0${name}`, `${name}\ufeff`,
+        `/x:${name}`, `  /${name}\n`, ` /x:${name} `, `\n\r${name}\t`]) {
+        const r = subagentSkill(spelled);
+        expect(r.deny, `a subagent loaded ${JSON.stringify(spelled)}`).not.toBeNull();
+        expect(r.deny, `the reason for ${JSON.stringify(spelled)} names the skill`).toContain(name);
+      }
+    }
+  }, 60_000);  // thirty real hook runs: more than the 20 s default can promise on a loaded box
+
+  it('trims exactly the characters JavaScript\'s String.prototype.trim does, at both ends', () => {
+    // U+0009-000D, U+0020, U+00A0, U+1680, U+2000-200A, U+2028, U+2029, U+202F,
+    // U+205F, U+3000 and U+FEFF: every one of them, leading and trailing, so a
+    // character dropped from the hook's set is red here and not a silent hole.
+    const set: number[] = [];
+    for (let c = 0x09; c <= 0x0d; c++) set.push(c);
+    set.push(0x20, 0xa0, 0x1680);
+    for (let c = 0x2000; c <= 0x200a; c++) set.push(c);
+    set.push(0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff);
+    for (const c of set) {
+      const ch = String.fromCodePoint(c);
+      const hex = `U+${c.toString(16).toUpperCase().padStart(4, '0')}`;
+      expect(ch.trim(), `${hex} is not in JavaScript's trim set`).toBe('');
+      expect(subagentSkill(`${ch}ccrc-worker`).deny, `a leading ${hex} was not trimmed`).not.toBeNull();
+      expect(subagentSkill(`ccrc-worker${ch}`).deny, `a trailing ${hex} was not trimmed`).not.toBeNull();
+    }
+  }, 60_000);  // fifty real hook runs
+
+  it('trims once, before the slash — a space after the slash is no longer an edge, and a slash after a prefix is no leading slash', () => {
+    // Claude Code trims, THEN strips one `/`: it does not trim again, so
+    // `/ ccrc-worker` is the name ` ccrc-worker` (no skill) and not the worker.
+    for (const name of ['/ ccrc-worker', '/\tccrc-worker', 'x:/ccrc-worker', 'x: ccrc-worker', ' / ccrc-worker']) {
       expect(subagentSkill(name).stdout, `a near miss was denied: ${JSON.stringify(name)}`).toBe('');
     }
   });
@@ -168,10 +212,13 @@ describe('the role-skill deny (D-4934)', () => {
 
   it('only a `Skill` call is asked — a subagent\'s Bash call, or any other tool carrying a `skill` field, is unaffected', () => {
     const sub = { agent_id: 'a1b2c3d4e5f6', agent_type: 'general-purpose' };
-    expect(fire('Bash', { command: 'echo ccrc-worker' }, sub).stdout).toBe('');
-    expect(fire('Bash', { command: 'ls' }, sub).stdout).toBe('');
-    expect(fire('Task', { skill: 'ccrc-worker', prompt: 'ccrc-worker' }, sub).stdout).toBe('');
-    expect(fire('Agent', { skill: 'ccrc-reviewer' }, sub).stdout).toBe('');
+    expect(fire('Bash', { command: 'echo ccrc-worker' }, sub).stdout,
+      'a subagent\'s Bash call that only names the skill was answered').toBe('');
+    expect(fire('Bash', { command: 'ls' }, sub).stdout, 'a subagent\'s plain Bash call was answered').toBe('');
+    expect(fire('Task', { skill: 'ccrc-worker', prompt: 'ccrc-worker' }, sub).stdout,
+      'a subagent\'s Task call carrying skill: \'ccrc-worker\' was answered — the gate does not require tool_name Skill').toBe('');
+    expect(fire('Agent', { skill: 'ccrc-reviewer' }, sub).stdout,
+      'a subagent\'s Agent call carrying skill: \'ccrc-reviewer\' was answered').toBe('');
   });
 
   it('costs one jq, for the skill\'s name, and only on a subagent\'s Skill call — no event of any other kind, and not the main thread, pays a fork for it', () => {

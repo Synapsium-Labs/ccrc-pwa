@@ -3770,6 +3770,17 @@ fi
 # `<namespace>:` prefix (`x:ccrc-worker`), never as a substring: `ccrc-workers`,
 # `my-ccrc-worker` and `ccrc-worker:x` (the skill `x` of a plugin named
 # `ccrc-worker`) are other skills.
+# THE NAME IS READ THE WAY CLAUDE CODE READS IT (fix round 1, D-4934): its Skill
+# tool trims the `skill` string, JavaScript's `String.prototype.trim` set
+# (U+0009-000D, U+0020, U+00A0, U+1680, U+2000-200A, U+2028, U+2029, U+202F,
+# U+205F, U+3000 and U+FEFF), and strips ONE leading `/` before it resolves the
+# skill (read in the shipped 2.1.296 tool's input validation), so ` ccrc-worker`,
+# `ccrc-worker<tab>` and `/ccrc-worker` all load the worker skill and each must
+# be denied. The one jq that reads the field does both, in this order, and
+# then the match below runs: `explode` and `implode` and no regex builtin,
+# since this file must work with a jq built without Oniguruma. `//ccrc-worker`
+# strips one slash and so stays a name no skill has, and `a:b:ccrc-worker` has
+# two prefixes and the match strips one.
 # THE THREE NAMES ARE WRITTEN HERE, ONCE. `session-hook-role-skill-deny.test.ts`
 # pins them against the `name:` frontmatter of the three SKILL.md files, so a
 # rename turns that suite red rather than silently disarming this deny.
@@ -3788,7 +3799,15 @@ fi
 ROLE_SKILLS="ccrc-worker ccrc-reviewer ccrc-coordinator"
 if [[ "$event" == PreToolUse && "${tool:-}" == Skill && -n "$paid" \
       && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
-  rsk=$(jq -r '.tool_input.skill? // "" | tostring' <<<"$payload" 2>/dev/null) || rsk=""
+  rsk=$(jq -r '
+    def ws: . == 32 or (. >= 9 and . <= 13) or . == 160 or . == 5760
+      or (. >= 8192 and . <= 8202) or . == 8232 or . == 8233 or . == 8239
+      or . == 8287 or . == 12288 or . == 65279;
+    .tool_input.skill? // "" | tostring | explode
+    | until(length == 0 or (.[0] | ws | not); .[1:])
+    | until(length == 0 or (.[-1] | ws | not); .[:-1])
+    | if .[0] == 47 then .[1:] else . end
+    | implode' <<<"$payload" 2>/dev/null) || rsk=""
   rbare=${rsk#*:}
   for rname in $ROLE_SKILLS; do
     if [[ "$rsk" == "$rname" || "$rbare" == "$rname" ]]; then
