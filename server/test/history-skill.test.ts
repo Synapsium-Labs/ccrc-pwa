@@ -243,4 +243,17 @@ describe("README states grep's reach, the inexact-window note and the refused sp
     expect(readme.split('a FIFO, a link, a directory or any other non-regular node').length - 1).toBe(1);
     expect(readme).toContain('Its `spool-planted` warning counts each node at `~/.ccrc/history/spool/<id>.jsonl`');
   });
+
+  it("states D-4594's shell-safe rules: the single-quoted prefix example, the pasted line in single quotes, the outside-next: rule (D-4594 (history-skill-recall-is-untrusted-everywhere))", () => {
+    expect(readme).toContain("`'abc1234*'`");
+    expect(readme, 'an unquoted glob after a quoted prefix').not.toMatch(/`"[0-9a-f]+"\*`/);
+    expect(readme).toContain('in single quotes');
+    expect(readme).toContain('outside every `<ccrc-recall>` block');
+  });
+
+  it('says --json output is still redacted, and names both recovering exemptions', () => {
+    expect(readme).toContain('still redacted');
+    expect(readme).not.toContain('`--json` gives exact copies');
+    expect(readme).toContain('bar the `--migrate` an older restored store needs first and the `--adopt` an unbound one needs');
+  });
 });

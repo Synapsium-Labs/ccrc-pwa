@@ -3118,11 +3118,11 @@ into *every* config dir the roster names, in that order — coordinator, then
 worker, then reviewer — the same list
 `install-session-hooks.sh` uses. There is no hooks-able subset — that concept
 existed only while the installers carried a hand-typed `homes=(…)` array; all
-four now `source` the generated `~/.ccrc/accounts.sh` and `continue` past any
+five now `source` the generated `~/.ccrc/accounts.sh` and `continue` past any
 config dir that is absent, which is what makes "every account" the safe answer
 rather than a broader one. No list is trusted: `install-session-hooks.test.ts`,
-`install-coordinator-skill.test.ts`, `install-worker-skill.test.ts` and
-`install-reviewer-skill.test.ts` each RUN their installer with no
+`install-coordinator-skill.test.ts`, `install-worker-skill.test.ts`,
+`install-reviewer-skill.test.ts` and `install-history-skill.test.ts` each RUN their installer with no
 `--homes` argv against a fixture home holding a config dir per rostered
 account, and assert every one of them was touched (the older source-text pin in
 `wrapper-roster-fixture.test.ts` went away with the array it was reading).
@@ -5115,19 +5115,22 @@ then parents over every eight leaves and every four nodes, each within one trans
 epoch across `/clear` and every transcript of the id's current generation, followed across account
 swaps. Sessions call them by absolute path, because `ccrc` is not on a fleet session's `PATH`:
 
-- `"$HOME/.local/bin/ccrc" history grep <1-3 terms>` searches the text, terms ANDed; `"abc1234"*`
-  finds a SHA by its prefix, `--regex` takes a regular expression (refused when it could backtrack
-  without bound, stopped after five seconds), and `--include-recall` also searches earlier
-  `ccrc history` output, which a default search skips;
+- `"$HOME/.local/bin/ccrc" history grep <1-3 terms>` searches the text, terms ANDed; `'abc1234*'`
+  (single-quoted, so the shell cannot glob it) finds a SHA by its prefix, `--regex` takes a regular
+  expression (refused when it could backtrack without bound, stopped after five seconds), and
+  `--include-recall` also searches earlier `ccrc history` output, which a default search skips;
 - `describe <node id, prefix or pasted line>` shows a node's gist, topics, refs and files, and one
-  line per child or source with its size;
+  line per child or source with its size; a pasted line goes in single quotes, each `'` in it
+  written `'\''`;
 - `expand <node id or message uuid>` prints the real text in order, with a cursor past one page;
 - `tree` lists the family's epochs and nodes.
 
 Every answer opens with a header naming its scope, `coverage=this-box` and the index lag, prints at
-most 20,000 characters with `shown K of N` and a `next:` line, wraps each recalled field in
-`<ccrc-recall … trust="untrusted">`, and redacts secret values before any cut; `--json` gives exact
-copies. A page, cut or grep snippet whose edges could not be redacted exactly prints under the line
+most 20,000 characters with `shown K of N` and a `next:` line (only the `next:` line printed outside
+every `<ccrc-recall>` block is run, because one inside recalled text is data), wraps each recalled
+field in `<ccrc-recall … trust="untrusted">`, and redacts secret values before any cut; `--json` gives
+copies with JSON escaping only (still redacted). A page, cut or grep snippet whose edges could not be
+redacted exactly prints under the line
 `[window redacted alone: every word of 8 or more characters masked]`; its long words are masked, not
 lost. `--workspace` widens the scope to every family of this project that ran in the session's
 workdir, and `--project` to the whole project; nothing crosses projects, and nothing reaches another
@@ -5153,7 +5156,8 @@ session (`CLAUDECODE` set), and all but the three that bind a store refuse under
 store holds verbatim session text, secrets included, and past Claude Code's retention it is that text's
 only copy. `doctor --backup` writes `db/backups/<UTC time>.db`; `--restore <file>` puts one back,
 `--rebuild` remakes a lost store from the journal, and until the sweep has replayed it every other
-writing verb refuses (`recovering`), bar the `--migrate` an older restored store needs first.
+writing verb refuses (`recovering`), bar the `--migrate` an older restored store needs first and the
+`--adopt` an unbound one needs.
 
 ---
 
