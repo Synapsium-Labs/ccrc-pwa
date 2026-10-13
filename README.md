@@ -3867,9 +3867,11 @@ write, or removes a file the failed write itself created, as a best effort, and 
 write leaves the lane as it stood, and a failed Off over a stored Live leaves the collector armed; **Pause all cleanup**
 still stops it. The undo cannot cover three cases:
 - a kill or a power loss in the middle of a write can leave a torn, empty or zero-filled tail, which reads malformed;
-- a failure after the record is durable, or at the database update or commit, leaves the journal one generation ahead:
+- a kill after the write but before the database commits, an undo that fails after a full write, a close that throws
+  after the record is durable, or a failure at the database update or commit leaves the journal one generation ahead:
   a mismatch that a fresh confirmed change repairs, and that arms nothing;
-- an undo that itself fails can leave a torn or empty file.
+- an undo that itself fails after a short write, or on a file the failed write created, can leave a torn or empty
+  file.
 
 If Settings reports the generation journal malformed after the server stopped mid-write:
 1. Raise the cleanup pause first (Pause all cleanup).
