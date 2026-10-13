@@ -1768,7 +1768,16 @@ in place. The top-level `system` field is kept as the system prompt — one plai
 telling the model it runs inside Claude Code, not the Codex CLI — so LiteLLM carries it in Codex's
 `instructions`, after the Codex CLI prompt LiteLLM always puts there. The shim also sets `reasoning.effort`
 per request (the client's own, else the lane's `set-effort` default for that model), and answers `400` or
-`415` for a body it cannot parse or an encoding it does not implement rather than forward it unexamined.
+`415` for a body it cannot parse or an encoding it does not implement rather than forward it unexamined. When its
+connection to the gateway is refused, as while a release restarts the gateway, it sends the same request again
+every half second for up to 60 seconds before answering `502`; the optional `CCGPT_UPSTREAM_WAIT_S` (a whole
+number of seconds from 0 to 600, `0` for no waiting) sets that bound, and any other connection failure (a reset, a
+timeout, a connection dropped mid-request) is an immediate `502`, and an upstream HTTP error status is relayed as
+it is; neither is retried, since the request may already have reached the gateway. A request is held only while its
+client is still connected: once the client has closed its connection, the shim stops waiting, sends nothing upstream
+and answers the old `502` (which a client that only half-closed still reads). A client with a further request already
+queued behind this one (HTTP pipelining) cannot be seen to leave, so its old request is still sent when the gateway
+returns; the shim's one real client does not pipeline.
 
 **Adding one is a roster edit** — `ccrc account add` does not create this kind. Add an entry to
 `~/.ccrc/accounts.json` (`homeAble: false` keeps it an overflow lane, as above; `true` lets placement pick it;
