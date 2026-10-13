@@ -1774,8 +1774,10 @@ every half second for up to 60 seconds before answering `502`; the optional `CCG
 number of seconds from 0 to 600, `0` for no waiting) sets that bound, and any other connection failure (a reset, a
 timeout, a connection dropped mid-request) is an immediate `502`, and an upstream HTTP error status is relayed as
 it is; neither is retried, since the request may already have reached the gateway. A request is held only while its
-client is still connected: once the client has closed its connection, the shim stops waiting and sends nothing
-upstream.
+client is still connected: once the client has closed its connection, the shim stops waiting, sends nothing upstream
+and answers the old `502` (which a client that only half-closed still reads). A client with a further request already
+queued behind this one (HTTP pipelining) cannot be seen to leave, so its old request is still sent when the gateway
+returns; the shim's one real client does not pipeline.
 
 **Adding one is a roster edit** — `ccrc account add` does not create this kind. Add an entry to
 `~/.ccrc/accounts.json` (`homeAble: false` keeps it an overflow lane, as above; `true` lets placement pick it;

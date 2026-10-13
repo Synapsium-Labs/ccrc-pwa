@@ -124,8 +124,13 @@ Code ended the turn on it. Now a refused connect — the one failure where
 nothing reached upstream — is retried every half second, with the same
 method, path, headers and body bytes, but only while its client is still
 connected: before each re-send the shim peeks at the client's socket
-(`Handler._client_gone`), and once the client has closed it stops waiting and
-sends nothing upstream, so a request is never sent for a client that has gone.
+(`Handler._client_gone`), and once the client has closed it stops waiting,
+sends nothing upstream and answers the same immediate 502 as before (a client
+that only half-closed and still reads gets it; one that has gone discards it),
+so a request is never sent for a client that has gone. One client cannot be
+seen to leave: one with a further request already queued behind this one (HTTP
+pipelining), whose old request is then still sent when the gateway returns. The
+shim's one real client does not pipeline.
 The wait ends at the bound (measured from the first refusal); then the same 502
 refusal as before answers, saying it was refused for the whole wait. Anything
 else (a reset, a timeout, a connection accepted and then closed, any other
@@ -1026,11 +1031,20 @@ class _UpstreamRefused(Exception):
 
 class _ClientGone(Exception):
     """Raised by `_urlopen_through_refusal` when its client closed while the
-    shim was waiting out a refused connection (D-4933). Caught by `_relay`
-    alone, which sends nothing upstream and answers nobody: there is no one to
-    answer, so it logs nothing new either. A dedicated exception, not a `None`
-    or a re-raise of the `URLError`, for `_UpstreamRefused`'s reason: "the wait
-    ran out" and "nobody is waiting any more" are handled differently."""
+    shim was waiting out a refused connection (D-4933). Carries the LAST error
+    as `.last`. Caught by `_relay` alone, which sends nothing upstream and
+    answers the same immediate 502 a refused connection got before D-4933, with
+    that last error in it. A peek cannot tell a client that closed both
+    directions from one that only half-closed (sent its request, shut its
+    writing side, and still reads), so the answer is written either way: the
+    half-closed one gets it, and the one that has gone discards it. A dedicated
+    exception, not a `None` or a re-raise of the `URLError`, for
+    `_UpstreamRefused`'s reason: "the wait ran out" and "the client closed" are
+    handled differently."""
+
+    def __init__(self, last: BaseException):
+        super().__init__(last)
+        self.last = last
 
 
 def _is_refused(e: BaseException) -> bool:
@@ -1071,12 +1085,16 @@ def _urlopen_through_refusal(req, client_gone):
 
     A refused connect is retried only while its client is still connected.
     `client_gone` (`Handler._client_gone`) is called after each sleep, before
-    the re-send; once it answers True this raises `_ClientGone` and nothing is
-    sent upstream, so a request is never sent for a client that has gone (one
-    that gave up and retried would otherwise reach a restarted gateway twice),
-    and a request that reached upstream is never re-sent. Sleeps in the
-    handler's own thread (`ThreadingHTTPServer`), which blocks no other
-    request.
+    the re-send; once it answers True this raises `_ClientGone` (carrying the
+    last refusal) and nothing is sent upstream, so a request is never sent for
+    a client that has gone (one that gave up and retried would otherwise reach
+    a restarted gateway twice), and a request that reached upstream is never
+    re-sent. One client cannot be seen to leave: one with a further request
+    already queued behind this one (HTTP pipelining), because the peek then
+    returns that request's bytes, not the client's close; its old request is
+    still sent when the gateway returns. The shim's one real client does not
+    pipeline. Sleeps in the handler's own thread (`ThreadingHTTPServer`), which
+    blocks no other request.
     """
     refused_at = None
     while True:
@@ -1093,7 +1111,7 @@ def _urlopen_through_refusal(req, client_gone):
                 raise _UpstreamRefused(e) from None
             time.sleep(min(_REFUSED_RETRY_S, left))
             if client_gone():
-                raise _ClientGone() from None
+                raise _ClientGone(e) from None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1118,7 +1136,13 @@ class Handler(BaseHTTPRequestHandler):
         bytes are a client that is still there (a pipelined request, left for
         the next read); any other `OSError` (a reset, a closed descriptor)
         counts as gone. Asked by `_urlopen_through_refusal` before each
-        re-send, so a request is never sent for a client that has gone."""
+        re-send, so a request is never sent for a client that has gone. Two
+        limits: a client that only half-closed (shut its writing side and still
+        reads) reads as gone too, which is why `_relay` still answers it; and a
+        client with a further request already queued behind this one (HTTP
+        pipelining) cannot be seen to leave, since the peek returns that
+        request's bytes, so its old request is still sent when the gateway
+        returns. The shim's one real client does not pipeline."""
         try:
             return self.connection.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b""
         except BlockingIOError:
@@ -1355,11 +1379,21 @@ class Handler(BaseHTTPRequestHandler):
             # describe block's own "relays a non-2xx upstream response,
             # status and body" case.
             resp = e
-        except _ClientGone:
+        except _ClientGone as e:
             # D-4933: the client closed while the shim waited out a refused
-            # connection, and nothing was sent upstream. Nobody is left to
-            # answer, so there is no 502 and no log line; the connection is
-            # marked closed so the handler loop does not read from it again.
+            # connection, and nothing was sent upstream. The same immediate 502
+            # a refused connection got before D-4933 answers, because a peek
+            # cannot tell a client that has gone from one that half-closed
+            # (sent its request, shut its writing side, and still reads): the
+            # half-closed one gets its answer, the gone one discards it. The
+            # write is guarded, so a client that has gone (BrokenPipeError,
+            # ConnectionResetError, any OSError) never prints a traceback; the
+            # connection is marked closed so the handler loop does not read
+            # from it again.
+            try:
+                self._refuse(502, f"ccgpt-proxy: upstream unreachable: {e.last}")
+            except OSError:
+                pass
             self.close_connection = True
             return
         except _UpstreamRefused as e:

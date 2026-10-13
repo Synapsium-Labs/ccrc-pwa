@@ -1838,7 +1838,61 @@ describe.skipIf(!PY)('ccgpt-proxy: a refused upstream connection is waited out, 
     await sleep(1_500);                                // three tries' worth, had the shim kept sending
 
     expect(seen).toHaveLength(0);                      // and not one request reached it
-    // The shim is still serving, and did not log a failure of its own.
+    // The shim is still serving, and did not log a failure of its own: it
+    // answered the 502 into a socket that is closed, and that write is guarded
+    // (BrokenPipeError, ConnectionResetError, any OSError), so no traceback.
+    const lane = await fetch(`http://127.0.0.1:${PROXY_PORT}/ccgpt/lane`);
+    expect(lane.status).toBe(200);
+    expect(stderr).not.toMatch(/Traceback/);
+  });
+
+  // A client that HALF-closed (sent its request, shut its writing side, and
+  // still reads) shows the shim the same FIN as one that has gone, which a peek
+  // cannot tell apart. So the shim answers the old immediate 502 either way: a
+  // fully gone client discards it, this one reads it. Nothing is ever sent
+  // upstream. The 502 arrives at ~0.5 s (the first sleep, then the check); the
+  // listener starts at ~2 s and the shim, were it still sending, would reach it
+  // within half a second; 1.5 s later upstream must have seen 0 requests.
+  it('answers a client that half-closed with the 502, and sends nothing upstream', async () => {
+    const home = mkTmp('ccgpt-proxy-half-closed-');
+    const seen: Seen[] = [];
+    const { child, listenUpstream } = await startRefusedPair(home, (req, body, res) => {
+      seen.push(seenOf(req, body));
+      res.writeHead(200); res.end('{}');
+    }, { CCGPT_UPSTREAM_WAIT_S: '10' });
+    let stderr = '';
+    child.stderr?.on('data', (c) => { stderr += c.toString(); });
+
+    const chunks: Buffer[] = [];
+    const sock = netConnect(PROXY_PORT, '127.0.0.1', () => {
+      // `end(data)` writes the request and then shuts the writing side only
+      // (shutdown(SHUT_WR)); the socket stays readable.
+      sock.end(
+        'POST /v1/models HTTP/1.1\r\n' +
+        `Host: 127.0.0.1:${PROXY_PORT}\r\n` +
+        'Content-Type: application/json\r\n' +
+        'Content-Length: 2\r\n' +
+        '\r\n' +
+        '{}',
+        'latin1',
+      );
+    });
+    sock.on('data', (c) => { chunks.push(Buffer.from(c)); });
+    sock.on('error', () => { /* a reset here would fail the assertions below */ });
+    const closed = new Promise<void>((r) => { sock.on('close', () => r()); });
+    await Promise.race([closed, sleep(8_000)]);        // the shim closes after answering
+    sock.destroy();
+
+    const reply = Buffer.concat(chunks).toString('utf8');
+    expect(reply).toMatch(/^HTTP\/1\.[01] 502 /);
+    expect(JSON.parse(reply.slice(reply.indexOf('\r\n\r\n') + 4))).toEqual({
+      error: `ccgpt-proxy: upstream unreachable: <urlopen error [Errno ${ECONNREFUSED}] Connection refused>`,
+    });                                                // today's message, the one a refusal got before D-4933
+
+    await sleep(1_500);
+    await listenUpstream();                            // upstream is back, at ~2 s
+    await sleep(1_500);                                // three tries' worth, had the shim kept sending
+    expect(seen).toHaveLength(0);
     const lane = await fetch(`http://127.0.0.1:${PROXY_PORT}/ccgpt/lane`);
     expect(lane.status).toBe(200);
     expect(stderr).not.toMatch(/Traceback/);
