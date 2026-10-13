@@ -1587,8 +1587,8 @@ const ENV_SECRET_NAME_RE = /(?:^|[^A-Za-z0-9])PRIVATE(?=$|[^A-Za-z0-9])/i;
  *  upstream's arms only, every one a plain regex and linear-time on any input
  *  (audited, D-4306). The JWT shape `eyJ….….…` (not upstream) is NOT in it:
  *  as a regex it backtracks quadratically on a long run of dotless `eyJ`
- *  starts, so the linear `redactJwtShapes` finds the same matches by a scan
- *  and `redactLayers` applies it after this list. D-4306 (history-redaction-shapes-linear) */
+ *  starts, so the linear `jwtSpans` finds the same matches by a scan
+ *  and `redactLayers` unions its spans with this list's. D-4306 (history-redaction-shapes-linear) */
 export const SECRET_SHAPE_RES = Object.freeze([
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
   /\bAKIA[0-9A-Z]{16}\b/gi,
@@ -1822,11 +1822,9 @@ export function phraseValues(mark, state, values, fresh) {
  *  in one segment share their tail conditions and only the first start that
  *  has a word boundary before it matters: it has the longest first segment.
  *  D-4306 (history-redaction-shapes-linear) */
-function redactJwtRun(run) {
+function jwtSpansOfRun(run, base, add) {
   let j = run.indexOf('eyJ');
-  if (j === -1) return run;
-  let out = '';
-  let copied = 0;
+  if (j === -1) return;
   let segStart = 0;
   for (;;) {
     const segEnd = run.indexOf('.', segStart);
@@ -1844,8 +1842,7 @@ function redactJwtRun(run) {
         const found = run.indexOf('.', s3Start);
         const s3End = found === -1 ? run.length : found;
         if (s3End - s3Start >= 5) {
-          out += run.slice(copied, j) + REDACTED_MARK;
-          copied = s3End;
+          add(base + j, base + s3End);
           segStart = s3End + 1;
           continue;
         }
@@ -1853,12 +1850,13 @@ function redactJwtRun(run) {
     }
     segStart = segEnd + 1;
   }
-  return copied === 0 ? run : out + run.slice(copied);
 }
 
-/** Every JWT-shaped match of `s` replaced by the mark (see `redactJwtRun`). */
-function redactJwtShapes(s) {
-  return s.replace(/[A-Za-z0-9_.-]+/g, redactJwtRun);
+/** Every JWT-shaped match of `s` as a span (see `jwtSpansOfRun`; D-4614, round 7: layer 3 contributes spans, it does
+ *  not rewrite the text). */
+function jwtSpans(s, add) {
+  const re = /[A-Za-z0-9_.-]+/g;
+  for (let m = re.exec(s); m !== null; m = re.exec(s)) jwtSpansOfRun(m[0], m.index, add);
 }
 
 /** REDACTED_MARK as regex source (D-4307: no sequence ever takes a mark's first character). */
@@ -1926,30 +1924,73 @@ function contextRules(final) {
   return Object.freeze({
     json: new RegExp(String.raw`"([A-Za-z_][A-Za-z0-9_.-]{0,255})"(\s*:\s*)"(${final ? String.raw`[^"\\\n\r<>&]+` : String.raw`(?:[^"\\]|\\.)+`})"`, 'g'),
     // D-4614 (history-context-rule-rescans-after-a-plain-name): the named rule is TWO patterns scanned by hand
-    // (maskNamed). `namedHead` finds `NAME=` or `NAME: ` and the optional quote; `namedValue` (sticky) takes the value
+    // (namedSpans). `namedHead` finds `NAME=` or `NAME: ` and the optional quote; `namedValue` (sticky) takes the value
     // from there. The value is read only for a secret NAME, so a plain name never consumes its value and the scan
     // resumes right after the separator: a context key inside it is seen, and a run of `a=a=a=` stays linear.
     namedHead: new RegExp(String.raw`\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:[ \t]+)`, 'g'),
+    // The NAME a value ends in (`namedSpans`' tail head): `NAME=` or `NAME:` at the end of a slice of at most 258 characters.
+    namedTail: new RegExp(String.raw`\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:)$`),
     namedValue: new RegExp(String.raw`(["']?)([^\s"'` + '`' + String.raw`,;&${final ? String.raw`\\<>` : ''}]+)`, 'y'),
     bearer: new RegExp(String.raw`(Authorization:[ \t]*Bearer[ \t]+)([^\s"'${stop}]+)`, 'gi'),
     mailToken: new RegExp(String.raw`(x-ccrc-mail-token:[ \t]*)([^\s"'${stop}]+)`, 'gi'),
+    bearerSticky: new RegExp(String.raw`(Authorization:[ \t]*Bearer[ \t]+)([^\s"'${stop}]+)`, 'iy'),
+    mailTokenSticky: new RegExp(String.raw`(x-ccrc-mail-token:[ \t]*)([^\s"'${stop}]+)`, 'iy'),
     query: new RegExp(String.raw`([?&]token=)([^&\s"'#${final ? String.raw`\\<>` : ''}]+)`, 'gi'),
   });
 }
 const CONTEXT_RULES = Object.freeze({ field: contextRules(false), final: contextRules(true) });
 
+/** What a secret value that ends where it could hide a further head of its own rule hands on (D-4614, whole-branch fix
+ *  round 7). A rule scanned left to right and not overlapping resumes AFTER a value, so a head that STARTS inside the
+ *  value and ends at its edge or past it is never read: a named value `V…API_KEY=` is followed by the quote and value
+ *  of the head it ends in (`ACCESS_KEY: VDDSRokpmmwjAPI_KEY="VUnr…"`), `key:` is followed, after a space, by the value of
+ *  the head `key: ` (`auth=key: VrtkzAsEaKdA}SECRET='V…'`), and a header value `VaYk…authorization:` is followed by
+ *  `bearer V4Fun…`. This reads that tail head, once per value and bounded by the head's own 256-character NAME, and
+ *  returns the span of the value the head owns, or null. `kind` is 'named', 'bearer' or 'mail'. */
+function tailHead(s, R, valueStart, end, kind) {
+  const next = end < s.length ? s[end] : '';
+  if (kind === 'named') {
+    const last = s.charCodeAt(end - 1);
+    if (!(last === 0x3d || (last === 0x3a && (next === ' ' || next === '\t')))) return null;
+    const c = R.namedTail.exec(s.slice(Math.max(valueStart, end - 258), end));
+    if (c === null || !IDENTIFIER_RE.test(c[1])) return null;
+    let at = end;
+    while (s[at] === ' ' || s[at] === '\t') at += 1;
+    R.namedValue.lastIndex = at;
+    const v = R.namedValue.exec(s);
+    if (v === null || v[2] === REDACTED_MARK) return null;
+    return [at + v[1].length, at + v[0].length];
+  }
+  if (next !== ' ' && next !== '\t') return null;
+  const word = kind === 'bearer' ? 'authorization:' : 'x-ccrc-mail-token:';
+  if (end - word.length < valueStart || s.slice(end - word.length, end).toLowerCase() !== word) return null;
+  const re = kind === 'bearer' ? R.bearerSticky : R.mailTokenSticky;
+  re.lastIndex = end - word.length;
+  const m = re.exec(s);
+  return m === null || m[2] === REDACTED_MARK ? null : [m.index + m[1].length, m.index + m[0].length];
+}
+
+/** `add` the value span [start, end) and each tail head's value after it (see `tailHead`); returns where the last ends. */
+function addChain(s, R, start, end, kind, add) {
+  add(start, end);
+  for (let h = tailHead(s, R, start, end, kind); h !== null; h = tailHead(s, R, start, end, kind)) {
+    [start, end] = h;
+    add(start, end);
+  }
+  return end;
+}
+
 /** Layer 2's named rule (`NAME=value`, `NAME: value`), D-4614 (history-context-rule-rescans-after-a-plain-name; whole-branch
- *  fix round 5): a scan by hand, so a NAME that is not a secret (or a value that is already the mark) does not use up its
- *  value. The scan resumes RIGHT AFTER THE SEPARATOR, and a context key inside the value (`level=[INFO]password=x`, a
- *  CLI prefix `internal error: TOKEN=x`) is seen. A secret NAME masks its value as before and the scan resumes after the
- *  value. Run AFTER the anchor and shape rules (redactLayers, round 6), so the rescan adds masking over the one-pass
- *  rule it replaces without a value swallowing an anchor or a shape: those are already marks when it reads. */
-function maskNamed(s, R) {
+ *  fix rounds 5 and 7): a scan by hand that contributes the VALUE spans of the secret names to `add`, so a NAME that is not
+ *  a secret (or a value that is already the mark) does not use up its value. The scan resumes RIGHT AFTER THE SEPARATOR,
+ *  and a context key inside the value (`level=[INFO]password=x`, a CLI prefix `internal error: TOKEN=x`) is seen. A
+ *  secret NAME's value is taken, then the tail head it may end in (`addChain`), and the scan resumes after it. The rule
+ *  reads the SAME text every other rule reads (round 7): it masks nothing itself, the caller masks the union of every
+ *  rule's spans. */
+function namedSpans(s, R, add) {
   const head = R.namedHead;
   const val = R.namedValue;
   head.lastIndex = 0;
-  let out = '';
-  let from = 0;
   for (let m = head.exec(s); m !== null; m = head.exec(s)) {
     const sepEnd = m.index + m[0].length;
     val.lastIndex = sepEnd;
@@ -1958,11 +1999,68 @@ function maskNamed(s, R) {
       head.lastIndex = sepEnd;
       continue;
     }
-    out += `${s.slice(from, sepEnd)}${v[1]}${REDACTED_MARK}`;
-    from = sepEnd + v[0].length;
-    head.lastIndex = from;
+    head.lastIndex = addChain(s, R, sepEnd + v[1].length, sepEnd + v[0].length, 'named', add);
   }
-  return from === 0 ? s : out + s.slice(from);
+}
+
+/** The anchor rules' value spans (D-4614, round 7): the Bearer header, the box-token header and `?token=`. The two header
+ *  rules scan by hand so a value that ends in the next header's own word (`authorization: bearer V…authorization: bearer S`)
+ *  hands on to it (`addChain`); `?token=` cannot hide a head of its own (its value class stops at `&`). */
+function anchorSpans(s, R, add) {
+  for (const [re, kind] of [[R.bearer, 'bearer'], [R.mailToken, 'mail']]) {
+    re.lastIndex = 0;
+    for (let m = re.exec(s); m !== null; m = re.exec(s)) {
+      if (m[2] !== REDACTED_MARK) re.lastIndex = addChain(s, R, m.index + m[1].length, m.index + m[0].length, kind, add);
+    }
+  }
+  for (const m of s.matchAll(R.query)) add(m.index + m[1].length, m.index + m[0].length);
+}
+
+/** The JSON-form rule's value spans (D-4614, round 7): a scan by hand like the named rule. After a secret pair it
+ *  resumes AT the closing quote (a value that ends in an escaped quote, `"a": "x\""token": "S"`, reads as one string whose
+ *  closing quote is the next pair's opening one), and after a pair that masks nothing (a plain name, or a value already
+ *  the mark) it resumes one character in, so a pair inside that pair's value is seen (`"name": "API_KEY="v": "token": "S"`). */
+function jsonSpans(s, R, add) {
+  const json = R.json;
+  json.lastIndex = 0;
+  for (let m = json.exec(s); m !== null; m = json.exec(s)) {
+    if (IDENTIFIER_RE.test(m[1]) && m[3] !== REDACTED_MARK) {
+      const start = m.index + 1 + m[1].length + 1 + m[2].length + 1;
+      add(start, start + m[3].length);
+      json.lastIndex = m.index + m[0].length - 1;
+    } else {
+      json.lastIndex = m.index + 1;
+    }
+  }
+}
+
+/** Layer 3's spans: every `SECRET_SHAPE_RES` match and the JWT reading, whole. */
+function shapeSpans(s, add) {
+  for (const re of SECRET_SHAPE_RES) {
+    for (const m of s.matchAll(re)) add(m.index, m.index + m[0].length);
+  }
+  jwtSpans(s, add);
+}
+
+/** The union of spans (D-4614, whole-branch fix round 7): `spans` holds `[start, end)` pairs of `s` in any order;
+ *  overlapping or touching pairs merge, and each maximal merged span is replaced by ONE mark. One sort and one pass. */
+function maskSpans(s, spans) {
+  if (spans.length === 0) return s;
+  spans.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  let out = '';
+  let copied = 0;
+  let a = spans[0][0];
+  let b = spans[0][1];
+  for (let i = 1; i <= spans.length; i += 1) {
+    if (i < spans.length && spans[i][0] <= b) {
+      if (spans[i][1] > b) b = spans[i][1];
+      continue;
+    }
+    out += s.slice(copied, a) + REDACTED_MARK;
+    copied = b;
+    if (i < spans.length) [a, b] = spans[i];
+  }
+  return out + s.slice(copied);
 }
 
 /** One run through all three layers, failing closed. V8 runs these patterns
@@ -1995,7 +2093,7 @@ function redactLayers(segment, idx, context) {
   // matched here: that is §8.3's chosen grammar, since a substring search
   // would hash every window of every stored length. The context and shape
   // layers are the belt there.
-  let s = segment.replace(/[A-Za-z0-9_-]+/g, (run) => {
+  const s = segment.replace(/[A-Za-z0-9_-]+/g, (run) => {
     const shas = idx.byLen.get(run.length);
     return shas !== undefined && shas.has(sha256Hex(run)) ? REDACTED_MARK : glueRedact(run, idx);
   });
@@ -2005,26 +2103,27 @@ function redactLayers(segment, idx, context) {
   // word boundary inside a long run of [A-Za-z0-9_.-] rescans to the run's
   // end, which is quadratic (a 2 MiB base64url blob measured 90.8 s, bounded
   // 139 ms), and one large tool_result would outlive the carrier's kill.
-  // ORDER (D-4614, whole-branch fix round 6): layer 1, then the ANCHOR rules (bearer header, box-token header,
-  // `?token=`), then layer 3's shapes and the JWT reading, and the greedy NAME-value rules (the JSON-form rule and
-  // maskNamed) LAST. A greedy value read first can swallow the text an anchor or a shape starts at (`TOKEN: abcAuthorization:
-  // Bearer X`, `TOKEN=abc-----BEGIN PRIVATE KEY-----`); run last, it can only swallow text those rules have
-  // already masked. Every rule's pattern and value classes are unchanged.
+  // UNION (D-4614, whole-branch fix round 7): every context rule (bearer, box-token header, `?token=`, the JSON-form
+  // rule, the named rule) and every layer-3 shape (SECRET_SHAPE_RES and the JWT reading) is matched against THIS text,
+  // layer 1's output, independently, and contributes the span of characters it would replace (a context rule its VALUE
+  // only: its name, separator, quote and header stay; the JSON-form rule the value inside the quotes; a shape its whole
+  // match). The union of the spans is masked in one pass, each maximal merged span by ONE mark. Any sequential order
+  // loses something, measured: the named rule first lets a greedy NAME value swallow a glued anchor or shape
+  // (`mode=auth: abcdefAuthorization: Bearer S`), anchors and shapes first lets a shape or anchor value swallow a glued
+  // NAME (`sk-…api_key: "V"`), so no rule may read what another has rewritten. Every pattern and value class is
+  // unchanged. A span whose text already is the mark is not a span (idempotence).
   const R = context ? (context === 'final' ? CONTEXT_RULES.final : CONTEXT_RULES.field) : null;
+  const spans = [];
+  const add = (a, b) => {
+    if (b > a && !(b - a === REDACTED_MARK.length && s.startsWith(REDACTED_MARK, a))) spans.push([a, b]);
+  };
   if (R !== null) {
-    s = s.replace(R.bearer, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
-    s = s.replace(R.mailToken, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
-    s = s.replace(R.query, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
+    anchorSpans(s, R, add);
+    jsonSpans(s, R, add);
+    namedSpans(s, R, add);
   }
-  // Layer 3: shapes.
-  for (const re of SECRET_SHAPE_RES) s = s.replace(re, REDACTED_MARK);
-  s = redactJwtShapes(s);
-  if (R !== null) {
-    s = s.replace(R.json,
-      (all, name, sep, value) => (IDENTIFIER_RE.test(name) && value !== REDACTED_MARK ? `"${name}"${sep}"${REDACTED_MARK}"` : all));
-    s = maskNamed(s, R);
-  }
-  return s;
+  shapeSpans(s, add);
+  return maskSpans(s, spans);
 }
 
 /** A byte of the `[A-Za-z0-9_.-]` span class, the JWT run class (the unit the lead reading extends and marks). */

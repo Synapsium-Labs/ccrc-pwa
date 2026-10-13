@@ -2411,6 +2411,225 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     // CONTROL: plain multi-line text is unchanged, line breaks kept
     expect(libRedact.redactFinalLines('exit 2 bad-args: nothing to see\nsecond line\n', idx)).toBe('exit 2 bad-args: nothing to see\nsecond line\n');
   });
+  // D-4614 (whole-branch fix round 7): layers 2 and 3 are ORDER-FREE. Every context rule and every shape matches the same text,
+  // the union of their spans is masked in one pass. Round 5's order (the named rule first) and round 6's (anchors and shapes
+  // first) each lost something a glued name or anchor carried; these pins hold both directions.
+  it('(k) a secret NAME glued to a shape or an anchor value, and an anchor glued to a NAME value, are masked whichever rule reads first: every door (D-4614 round 7)', () => {
+    const idx = idxOf([]);
+    const PEM = 'MIIBVgIBADANBgkqhkiG9w0BAQEFAASCAUAwggE8';
+    const pem = `-----BEGIN PRIVATE KEY-----\n${PEM}\n-----END PRIVATE KEY-----`;
+    // [text, the planted values none of which may survive]
+    const cases: Array<[string, string[]]> = [
+      // a NAME glued to the end of a shape or an anchor value (round 6's order lost these)
+      ['sk-mkVVz3RE2hBCYTXMNkBkpCEgapi_key: "VErcv2z9BXyK"', ['VErcv2z9BXyK']],
+      ['world:Authorization: Bearer VT8tgFZWNMoaworldapi_key: "VaD3aRZ9um8H":.', ['VT8tgFZWNMoa', 'VaD3aRZ9um8H']],
+      ['sk-crMTs2ZZPQz8PpbkKp4vStWx-ACCESS_KEY: V2qYpfFqiAsSZq', ['V2qYpfFqiAsSZq']],
+      ['sk_hUTtNPmTHuyMXPamKKEmBGaNprivate_key=V29bEGd3a3WM', ['V29bEGd3a3WM']],
+      ['sk-PqHYHpDSGsZxdZufTotognrtACCESS_KEY: VgavZXJuVV6QAKIA4MLCTFS277Z7LK2L', ['VgavZXJuVV6Q', 'AKIA4MLCTFS277Z7LK2L']],
+      // an anchor or a shape glued to the end of a NAME value (round 5's order lost these)
+      ['mode=auth: abcdefAuthorization: Bearer s3cr3tVALUE123', ['s3cr3tVALUE123']],
+      [`note=TOKEN=abc${pem}`, [PEM, 'MIIB']],
+      [`x-ccrc-mail-token: VEHT${pem}`, [PEM, 'MIIB']],
+      ['TOKEN=[redacted]api_key: "S3cr3tS"', ['S3cr3tS']],
+      // a value that ends where a head of its own rule begins: the tail head is read too
+      ['ACCESS_KEY: VDDSRokpmmwjAPI_KEY="VUnrPoQ44fhf"', ['VUnrPoQ44fhf']],
+      ['x-ccrc-mail-token: VPGrMLXQydgFAPI_KEY="V4KB5vMpgjx5"', ['V4KB5vMpgjx5']],
+      ["auth=key: VrtkzAsEaKdA}SECRET='VhenybKKxDXw'", ['VhenybKKxDXw']],
+      ['Authorization: Bearer VaYk8zK2RrgZauthorization: bearer V4FunFLYzYkM', ['V4FunFLYzYkM']],
+      ['x-ccrc-mail-token: V9PUW5MEMjqWx-ccrc-mail-token: V6zJuf99VGUV', ['V6zJuf99VGUV']],
+      // the JSON-form rule: an escaped quote that closes in the other parse, and a pair inside a plain pair's value
+      ['"name": "ghp_yDZkp22B5S3oNMoUSFe8o4xrtm5btdW7DiBUTOKEN: hello,authorization: bearer V9DBAMNMwXkV\\""token":\n"VED5UoetqKW7"', ['VED5UoetqKW7', 'V9DBAMNMwXkV']],
+      ['key: VMatjxwyqzBe} "name": "API_KEY="VbhfRHmcWH5r": "token":\n"ViLPcaGWgQ6y"', ['ViLPcaGWgQ6y', 'VMatjxwyqzBe', 'VbhfRHmcWH5r']],
+    ];
+    for (const [input, planted] of cases) {
+      const outs: Array<[string, string]> = [
+        ['redactField', libRedact.redactField(input, idx)],
+        ['redactFinal', libRedact.redactFinal(input, idx)],
+        ['redactFinalLines', libRedact.redactFinalLines(input, idx)],
+        ['redactFinalJson', JSON.stringify(libRedact.redactFinalJson({ a: [input], b: input }, idx))],
+      ];
+      // a page's lines are single lines (redactFinalText masks per line); a text that breaks lines takes the whole-text door above
+      if (!input.includes('\n')) outs.push(['redactFinalText', libRedact.redactFinalText(input, idx)]);
+      for (const [door, out] of outs) {
+        for (const v of planted) expect(out, `${door}: ${JSON.stringify(input)} leaks ${v}`).not.toContain(v);
+        expect(out, `CONTROL ${door}: the mark is there`).toContain(M);
+      }
+    }
+    // the same glued text a shape reads and a name reads: ONE mark for the merged span, the name's head kept
+    expect(libRedact.redactField('mode=auth: abcdefAuthorization: Bearer s3cr3tVALUE123', idx)).toBe(`mode=auth: ${M} Bearer ${M}`);
+    expect(libRedact.redactField('TOKEN=[redacted]api_key: "S"', idx)).toBe(`TOKEN=${M} "${M}"`);
+    expect(libRedact.redactField('sk-mkVVz3RE2hBCYTXMNkBkpCEgapi_key: "VErcv2z9BXyK"', idx)).toBe(`${M}: "${M}"`);
+    // CONTROLs: the simple shapes, byte for byte as at d770e23f9
+    const same: Array<[string, string]> = [
+      ['TOKEN=X1234567', `TOKEN=${M}`], ['{"token": "X1234567"}', `{"token": "${M}"}`], ['Authorization: Bearer X1234567', `Authorization: Bearer ${M}`],
+      ['x-ccrc-mail-token: X1234567', `x-ccrc-mail-token: ${M}`], ['see http://h/?token=X1234567&a=b', `see http://h/?token=${M}&a=b`],
+      ['key sk-abcdefghijkl1234 end', `key ${M} end`], [pem, M], [`before ${pem} after`, `before ${M} after`],
+      ['level=INFO path=/a/b', 'level=INFO path=/a/b'], ['AKIAABCDEFGHIJKLMNOP', M], ['eyJabcdef.ghijklm.nopqrst', M],
+      // two rules reading the same characters: one mark, not two
+      ['TOKEN=sk-abcdefghijkl1234', `TOKEN=${M}`], ['api_key: "sk-abcdefghijkl1234"', `api_key: "${M}"`], ['?token=sk-abcdefghijkl1234&a=1', `?token=${M}&a=1`],
+      ['Authorization: Bearer sk-abcdefghijkl1234', `Authorization: Bearer ${M}`], [`TOKEN=${pem}`, `TOKEN=${M}`],
+    ];
+    for (const [input, want] of same) {
+      expect(libRedact.redactField(input, idx), input).toBe(want);
+      expect(libRedact.redactFinal(input, idx), `final ${input}`).toBe(want);
+    }
+    // CONTROLs: the marks are a fixed point, in both forms, on the unions too
+    for (const x of [`TOKEN=${M}`, `Authorization: Bearer ${M}`, `x-ccrc-mail-token: ${M}`, `?token=${M}`, `{"token": "${M}"}`, `TOKEN=${M} "${M}"`, `mode=auth: ${M} Bearer ${M}`, `${M}: "${M}"`, `${M}${M}`]) {
+      expect(libRedact.redactField(x, idx), x).toBe(x);
+      expect(libRedact.redactFinal(x, idx), x).toBe(x);
+    }
+    for (const input of cases.map(([i]) => i)) {
+      const once = libRedact.redactField(input, idx);
+      expect(libRedact.redactField(once, idx), `idempotent: ${input}`).toBe(once);
+    }
+    // `context` false (the lead reading's candidates, the index paths that skip layer 2) keeps the shapes
+    expect(libRedact.redactForIndex('sk-abcdefghijkl1234', idx)).toBe(M);
+  });
+  it('(l) the union masks at least what either sequential order masked: a seeded fuzz against frozen copies of both orders, redactField and redactForDisplay (D-4614 round 7)', () => {
+    const idx = idxOf([]);
+    // Frozen copies of layers 2 and 3 as d770e23f9 (anchors and shapes, then the JSON-form rule and the rescanning named rule) and
+    // 105945d88 (the JSON-form rule, the one-pass named rule, the anchors, the shapes) applied them, field form.
+    const NAME = String.raw`([A-Za-z_][A-Za-z0-9_.-]{0,255})`;
+    const rx = {
+      json: new RegExp(String.raw`"${NAME}"(\s*:\s*)"((?:[^"\\]|\\.)+)"`, 'g'),
+      named: new RegExp(String.raw`\b${NAME}(=|:[ \t]+)(["']?)([^\s"'` + '`' + String.raw`,;&]+)`, 'g'),
+      head: new RegExp(String.raw`\b${NAME}(=|:[ \t]+)`, 'g'),
+      value: new RegExp(String.raw`(["']?)([^\s"'` + '`' + String.raw`,;&]+)`, 'y'),
+      bearer: /(Authorization:[ \t]*Bearer[ \t]+)([^\s"']+)/gi,
+      mail: /(x-ccrc-mail-token:[ \t]*)([^\s"']+)/gi,
+      query: /([?&]token=)([^&\s"'#]+)/gi,
+      jwt: /\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}/g,
+    };
+    const anchors = (s: string): string => [rx.bearer, rx.mail, rx.query].reduce((t, re) => t.replace(re, (all, h: string, v: string) => (v === M ? all : `${h}${M}`)), s);
+    const shapes = (s: string): string => libRedact.SECRET_SHAPE_RES.reduce((t, re) => t.replace(re, M), s).replace(rx.jwt, M);
+    const json = (s: string): string => s.replace(rx.json, (all, n: string, sep: string, v: string) => (libRedact.IDENTIFIER_RE.test(n) && v !== M ? `"${n}"${sep}"${M}"` : all));
+    const oneNamed = (s: string): string => s.replace(rx.named, (all, n: string, sep: string, q: string, v: string) => (libRedact.IDENTIFIER_RE.test(n) && v !== M ? `${n}${sep}${q}${M}` : all));
+    const rescan = (s: string): string => {
+      rx.head.lastIndex = 0;
+      let out = '';
+      let from = 0;
+      for (let m = rx.head.exec(s); m !== null; m = rx.head.exec(s)) {
+        const sepEnd = m.index + m[0].length;
+        rx.value.lastIndex = sepEnd;
+        const v = libRedact.IDENTIFIER_RE.test(m[1]!) ? rx.value.exec(s) : null;
+        if (v === null || v[2] === M) { rx.head.lastIndex = sepEnd; continue; }
+        out += `${s.slice(from, sepEnd)}${v[1]}${M}`;
+        from = sepEnd + v[0].length;
+        rx.head.lastIndex = from;
+      }
+      return from === 0 ? s : out + s.slice(from);
+    };
+    const orderD770 = (s: string): string => rescan(json(shapes(anchors(s))));
+    const orderOld = (s: string): string => shapes(anchors(oneNamed(json(s))));
+    let seed = 0x4614;
+    const rnd = (): number => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    const ri = (n: number): number => Math.floor(rnd() * n);
+    const pick = <T,>(xs: T[]): T => xs[ri(xs.length)]!;
+    const AL = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const UP = 'ABCDEFGHJKLMNPQRSTUVWXYZ234567';
+    const rs = (n: number, al = AL): string => Array.from({ length: n }, () => al[ri(al.length)]).join('');
+    const CTX: Array<(v: string) => string> = [
+      (v) => `TOKEN=${v}`, (v) => `password: ${v}`, (v) => `api_key: "${v}"`, (v) => `"password": "${v}"`, (v) => `"token":"${v}"`,
+      (v) => `Authorization: Bearer ${v}`, (v) => `x-ccrc-mail-token: ${v}`, (v) => `https://h.example/x?token=${v}`, (v) => `a=1&token=${v}`,
+      (v) => `SECRET='${v}'`, (v) => `"api_key" :\n "${v}"`, (v) => `level=[INFO]password=${v}`, (v) => `internal error: TOKEN=${v}`,
+      (v) => `<a>password=${v}</a>`, (v) => `PASS=${v}]`, (v) => `key: ${v}}`, (v) => `{"secret":"${v}"}`, (v) => `["TOKEN=${v}"]`,
+      (v) => `auth: ${v}`, (v) => `private_key=${v}`, (v) => `ACCESS_KEY: ${v}`, (v) => `credentials=${v}`, (v) => `mode=a token=${v}`,
+      (v) => `a=b=TOKEN=${v}`, (v) => `x: TOKEN: ${v}`, (v) => `"token":\n"${v}"`, (v) => `API_KEY="${v}"`, (v) => `DB_PASSWORD=${v}`,
+      (v) => `authorization: bearer ${v}`, (v) => `X-CCRC-MAIL-TOKEN:${v}`,
+    ];
+    const NAMED_FIRST = [0, 1, 2, 9, 14, 15, 18, 19, 20, 21, 26, 27];
+    const SHAPES: Array<() => string> = [
+      () => `sk-${rs(24)}`, () => `sk_${rs(24)}`, () => `ghp_${rs(36)}`, () => `AKIA${rs(16, UP)}`, () => `xoxb-${rs(20)}`, () => `github_pat_${rs(30)}`,
+      () => `eyJ${rs(10)}.${rs(12)}.${rs(12)}`, () => `-----BEGIN RSA PRIVATE KEY-----\n${rs(40)}\n${rs(40)}\n-----END RSA PRIVATE KEY-----`, () => `-----BEGIN PRIVATE KEY-----\n${rs(40)}`,
+    ];
+    // no backslash: redactForDisplay's second reading (an escape read as its character) is a sequential pass of its own
+    const NOISE = ['level=', 'mode: ', '"name": "', 'note=', '"', "'", '[', ']', '{', '}', '<', '>', '&', '[redacted]', 'TOKEN=[redacted]', ' ', ' ', ' ', '\r', '\n', ':', '=', ',', ';', '`', '#', '?', 'hello', 'world', 'abcdef', 'a: b', 'x=y', '\t', '/', '-', '_', '.', '=[', 'auth=', 'mode=auth: ', 'api_key: ', 'TOKEN: ', 'Authorization: Bearer '];
+    type Secret = { units: string[]; owed: boolean };
+    const gen = (): { text: string; secrets: Secret[] } => {
+      const pieces: string[] = [];
+      const secrets: Array<Secret & { at: number; shape: boolean }> = [];
+      const n = 1 + ri(8);
+      for (let i = 0; i < n; i += 1) {
+        const r = rnd();
+        if (r < 0.3 || (i === n - 1 && secrets.length === 0)) {
+          const v = `V${rs(11)}`;
+          const k = ri(CTX.length);
+          const piece = CTX[k]!(v);
+          let owed = true;
+          if (NAMED_FIRST.includes(k) && pieces.length > 0) {
+            // a NAME glued to a word character before it reads as the longer name: owed only while THAT is still a secret name
+            const run = (pieces[pieces.length - 1]!.match(/[A-Za-z0-9_.-]*$/) ?? [''])[0];
+            const own = (piece.match(/^[A-Za-z0-9_.-]*/) ?? [''])[0];
+            owed = libRedact.IDENTIFIER_RE.test((run + own).slice(-256)) && (run === '' || /^[A-Za-z_]/.test(run + own));
+          }
+          pieces.push(piece);
+          secrets.push({ units: [v], owed, at: pieces.length - 1, shape: false });
+        } else if (r < 0.5) {
+          const s = pick(SHAPES)();
+          pieces.push(s);
+          secrets.push({ units: s.startsWith('-----BEGIN') ? s.split('\n').filter((l) => !l.startsWith('-----')) : [s], owed: true, at: pieces.length - 1, shape: !s.startsWith('-----BEGIN') });
+        } else pieces.push(pick(NOISE));
+      }
+      const full = pieces.join('');
+      const offs: number[] = [];
+      let o = 0;
+      for (const p of pieces) { offs.push(o); o += p.length; }
+      // a shape-secret is owed only when a layer-3 pattern matches it in the whole text (glued to a word character, no rule owes it)
+      for (const s of secrets) {
+        if (!s.shape) continue;
+        const a = offs[s.at]!;
+        const b = a + pieces[s.at]!.length;
+        s.owed = [...libRedact.SECRET_SHAPE_RES, rx.jwt].some((re0) => {
+          const re = new RegExp(re0.source, re0.flags.includes('g') ? re0.flags : `${re0.flags}g`);
+          for (let m = re.exec(full); m !== null; m = re.exec(full)) { if (m.index <= a && m.index + m[0].length >= b) return true; if (m[0] === '') re.lastIndex += 1; }
+          return false;
+        });
+      }
+      return { text: full, secrets };
+    };
+    const near = (u: string, out: string): boolean => { const thr = u.length <= 12 ? Math.max(10, u.length - 2) : u.length - 2; for (let i = 0; i + thr <= u.length; i += 1) if (out.includes(u.slice(i, i + thr))) return true; return false; };
+    const visible = (out: string, s: Secret): boolean => s.units.some((u) => near(u, out));
+    const N = 3000;
+    const count = { owed: 0, maskedByD770: 0, maskedByOld: 0, maskedByEither: 0, maskedAtHead: 0, moreThanBoth: 0, violations: [] as string[] };
+    for (let i = 0; i < N; i += 1) {
+      const g = gen();
+      const ref1 = orderD770(g.text);
+      const ref2 = orderOld(g.text);
+      const heads: Array<[string, string]> = [['redactField', libRedact.redactField(g.text, idx)], ['redactForDisplay', libRedact.redactForDisplay(g.text, idx)]];
+      for (const s of g.secrets) {
+        if (!s.owed) continue;
+        const m1 = !visible(ref1, s);
+        const m2 = !visible(ref2, s);
+        if (heads[0]![0] === 'redactField') { count.owed += 1; if (m1) count.maskedByD770 += 1; if (m2) count.maskedByOld += 1; if (m1 || m2) count.maskedByEither += 1; if (!visible(heads[0]![1], s)) count.maskedAtHead += 1; if (!visible(heads[0]![1], s) && !m1 && !m2) count.moreThanBoth += 1; }
+        for (const [door, out] of heads) if ((m1 || m2) && visible(out, s)) count.violations.push(`${door}: ${JSON.stringify(g.text)} shows ${s.units[0]}`);
+      }
+    }
+    expect(count.violations.slice(0, 5), `${N} inputs: ${JSON.stringify({ ...count, violations: count.violations.length })}`).toEqual([]);
+    // not vacuous: the orders mask thousands of owed secrets, each order masks some the other does not, and the union masks more than both
+    expect(count.maskedByD770).toBeGreaterThan(3000);
+    expect(count.maskedByEither).toBeGreaterThan(count.maskedByD770);
+    expect(count.maskedByEither).toBeGreaterThan(count.maskedByOld);
+    expect(count.maskedAtHead).toBeGreaterThanOrEqual(count.maskedByEither);
+    expect(count.moreThanBoth, 'the union masks secrets that neither order masked').toBeGreaterThan(0);
+  }, 120_000);
+  it('(m) layers 2 and 3 stay linear in the union form: long runs of heads, tails and quotes, and a 2 MiB base64url run (D-4614 round 7)', () => {
+    const idx = idxOf([]);
+    const b64 = (n: number): string => { let o = ''; let x = 12345; const al = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'; for (let i = 0; i < n; i += 1) { x = (Math.imul(x, 1103515245) + 12345) & 0x7fffffff; o += al[x % 64]; } return o; };
+    const inputs: Array<[string, string]> = [
+      ['a=', 'a='.repeat(200_000)], ['2 MiB base64url', b64(2 * 1024 * 1024)], ['TOKEN=x=', 'TOKEN=x='.repeat(200_000)], ['TOKEN=a: ', 'TOKEN=a: '.repeat(100_000)],
+      ['mail header glued', 'x-ccrc-mail-token: '.repeat(100_000)], ['Authorization: Bearer Authorization: ', 'Authorization: Bearer Authorization: '.repeat(50_000)],
+      ['JSON pairs', '"a":"a":'.repeat(200_000)], ['?token=', '?token='.repeat(200_000)], ['dotted names', 'a.b.c.d.e.f='.repeat(100_000)],
+      ['250-character tails', `TOKEN=${'a.'.repeat(120)}: `.repeat(5000)],
+    ];
+    for (const [name, text] of inputs) {
+      for (const [door, fn] of [['redactField', libRedact.redactField], ['redactFinal', libRedact.redactFinal]] as const) {
+        const t0 = Date.now();
+        fn(text, idx);
+        // a quadratic reading of any of these is minutes; the bound is a ceiling, not the detector
+        expect(Date.now() - t0, `${door} ${name}`).toBeLessThan(30_000);
+      }
+    }
+  }, 300_000);
   it('(e) a seeded differential fuzz: 4,000 field texts through redactForDisplay into real envelope shapes always parse and always keep their frame', () => {
     const idx = idxOf([]);
     let seed = 0x4613;
