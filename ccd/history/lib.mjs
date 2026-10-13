@@ -4183,7 +4183,8 @@ const REASON_EXITS = new Set(Object.values(REASONS));
 
 // derived from lossless-claw src/assembler.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
 export function escapeXmlAttr(value) {
-  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // A line break is escaped too (D-4597 (history-read-names-and-echoes-display-redacted)): a stored id holding one cannot forge a line.
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '&#10;').replace(/\r/g, '&#13;');
 }
 
 export function escapeXmlText(value) {
@@ -4200,6 +4201,20 @@ export function recallEnvelope({ src, id, ts, role, text }) {
 export function snippetLine(text, max = SNIPPET_MAX) {
   const single = String(text).replace(/\n/g, ' ').trim();
   return single.length <= max ? single : `${single.slice(0, cutBefore(single, max - 3))}...`;
+}
+
+/** What a stored uuid, type, role or raw key looks like: every real one. */
+const DISPLAY_TOKEN_RE = /^[A-Za-z0-9._:/-]{1,128}$/;
+
+/** A stored identifier as one printable token (D-4597 (history-read-names-and-echoes-display-redacted); D-4596
+ *  (history-read-fixed-fields-fit-the-cap)). A uuid, type, role or key that has the shape of every real one prints as it
+ *  is. Anything else (a crafted transcript or an operator import can store any string) is redacted on its raw text,
+ *  folded to one line, cut at SNIPPET_MAX and printed as a quoted JSON string with XML text escaping, so it can neither
+ *  forge a line or a tag nor run past the output cap. The output is at most 5 * SNIPPET_MAX + 2 characters. */
+export function displayToken(value, idx) {
+  const s = String(value);
+  if (DISPLAY_TOKEN_RE.test(s)) return s;
+  return escapeXmlText(JSON.stringify(snippetLine(redactForDisplay(s, idx).replace(/\s+/g, ' '))));
 }
 
 export function capOutput(blocks, reserve, cap = OUTPUT_CAP) {
