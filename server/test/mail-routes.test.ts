@@ -877,7 +877,7 @@ describe('the rejection table is total, in both directions', () => {
         // PWA reads off the wire. Admitted through the exported guard, derived from `shared/api.ts`'s table, never
         // NOT_CODES, for the reason every union above gives.
         || isCollectLaneRefusal(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word or collector switch word, or collector-switch route refusal`).toBe(true);
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, collector switch word or collector-switch route refusal`).toBe(true);
     }
   });
 });
