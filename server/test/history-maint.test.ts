@@ -15,7 +15,9 @@ import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import * as pty from 'node-pty';
-import { beltWidth, historyPaths, floorThreshold, REPARSE_MAX_TARGETS, BELT_VERSION } from '../../ccd/history/lib.mjs';
+import {
+  beltWidth, historyPaths, floorThreshold, REPARSE_MAX_TARGETS, BELT_VERSION, WRITING_FORMS, formOf, HEALTH_REMEDIES,
+} from '../../ccd/history/lib.mjs';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { userRow, compactionSequence, toolResultRow } from './historyFixtures.js';
 import {
@@ -1476,5 +1478,222 @@ describe('doctor --repair: integrity, the foreign-key baseline, the resumable FT
     expect(r.out).toContain('history-sweep: integrity_check could not run: vtable constructor failed: blobs_fts');
     expect(r.out).toContain('ccrc history doctor --restore <file>');
     expect(rebuilds(box)).toEqual([]);
+  }, HEAVY);
+});
+
+// ── W1-B2 Task 30: C64, every writing form through both doors ───────────────────────────────────────────────
+// Spec 2026-10-05 §8.4 "Speed bumps": every form of WRITING_FORMS but W2's two recall-off forms runs through
+// `ccrc history …` (cli.mjs, the CLI door) and through `~/.local/bin/ccd-history-sweep --op …` (the direct door,
+// §5.1). Each runs on a piped stdin or under a REAL terminal (node-pty; the TTY gate has no seam, §10.1). A refusal
+// writes nothing, measured as a snapshot of ~/.ccrc. The table also holds the `recovering` refusal, decided by the
+// same gate while a recovery step is registered (D-4698 (history-ops-refused-while-recovering)). Every name this
+// block adds is prefixed gt/GT_, and it reuses Task 19's ID, U1, G1, SLUG, boundBox, snapshot and lastResult.
+/** The name every restore row names: B1 Task 28's remedy fixture spelling, a bare <ts>.db under db/backups/. */
+const GT_BACKUP = '20261001T000000Z.db';
+/** Every word decideOpGate refuses a valid form with: §8.4's four speed bumps, and `recovering` while a recovery step
+ *  is registered (D-4698 (history-ops-refused-while-recovering)). A form "passes every bump" when it answers none. */
+const GT_BUMPS: readonly string[] = ['apply-in-session', 'needs-tty', 'irreversible-in-pane', 'history-off', 'recovering'];
+
+interface GtForm { form: string; cli: (file: string) => string[]; op: (file: string) => string[] }
+const GT_FORMS: readonly GtForm[] = [
+  { form: 'import-apply', cli: () => ['import', '--apply'], op: () => ['--op', 'import', '--apply'] },
+  {
+    form: 'import-session-apply',
+    cli: (f) => ['import', '--session', ID, '--file', f, '--apply'],
+    op: (f) => ['--op', 'import', '--session', ID, '--file', f, '--apply'],
+  },
+  { form: 'prune-apply', cli: () => ['prune', '--older-than', '90d', '--apply'], op: () => ['--op', 'prune', '--older-than', '90d', '--apply'] },
+  { form: 'repair', cli: () => ['doctor', '--repair'], op: () => ['--op', 'repair'] },
+  { form: 'backup', cli: () => ['doctor', '--backup'], op: () => ['--op', 'backup'] },
+  { form: 'migrate', cli: () => ['doctor', '--migrate'], op: () => ['--op', 'migrate'] },
+  { form: 'adopt', cli: () => ['doctor', '--adopt'], op: () => ['--op', 'adopt'] },
+  { form: 'restore', cli: () => ['doctor', '--restore', GT_BACKUP], op: () => ['--op', 'restore', GT_BACKUP] },
+  { form: 'rebuild', cli: () => ['doctor', '--rebuild'], op: () => ['--op', 'rebuild'] },
+  { form: 'reparse-apply', cli: () => ['reparse', '--apply'], op: () => ['--op', 'reparse', '--apply'] },
+];
+type GtDoor = 'cli' | 'direct';
+const GT_DOORS: readonly GtDoor[] = ['cli', 'direct'];
+const gtIrreversible = (f: GtForm): boolean => WRITING_FORMS[f.form as keyof typeof WRITING_FORMS].irreversible;
+const gtBinding = (f: GtForm): boolean => WRITING_FORMS[f.form as keyof typeof WRITING_FORMS].binding;
+
+/** A bound box with one confirmed family and its one-row transcript ingested. `file` is that transcript, which the
+ *  import-session-apply rows name. */
+function gtBox(prefix: string): { box: HistoryBox; file: string } {
+  const box = boundBox(prefix);
+  const { transcript: file } = seedFamily(box, {
+    id: ID, project: 'demo', uuid: U1, generation: G1, accountId: 'claude-a', rows: [userRow({
+      uuid: 'c6c6c6c6-0000-4000-8000-0000000000a1', ts: new Date().toISOString(), parentUuid: null,
+      sessionId: U1, cwd: '/home/u/tree/gate', text: 'zqgate words',
+    })],
+  });
+  return { box, file };
+}
+
+/** The CLI door's --json envelope: the last line that parses as an object with a numeric `exit`. */
+function gtCliResult(text: string): { exit: number; reason?: string } {
+  const lines = text.replace(/\r/g, '').split('\n').map((l) => l.trim()).filter((l) => l.startsWith('{'));
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    let o: { exit?: unknown; reason?: unknown };
+    try { o = JSON.parse(lines[i]!) as { exit?: unknown; reason?: unknown }; } catch { continue; }
+    if (typeof o.exit === 'number') return typeof o.reason === 'string' ? { exit: o.exit, reason: o.reason } : { exit: o.exit };
+  }
+  throw new Error(`no --json envelope in:\n${text}`);
+}
+
+interface GtAnswer { code: number; reason: string | undefined; raw: string }
+/** One form through one door, on a pipe (`terminal` false) or a real terminal. The CLI door is read from its --json
+ *  envelope, and the direct door from its {rc, reason} line. */
+async function gtRun(box: HistoryBox, f: GtForm, door: GtDoor, terminal: boolean, env: Record<string, string>, file: string): Promise<GtAnswer> {
+  if (door === 'cli') {
+    const args = [...f.cli(file), '--json'];
+    let raw: string;
+    if (terminal) {
+      raw = (await maintPty(box, 'cli', args, { env })).out;
+    } else {
+      const r = runCli(box, args, { env });
+      raw = `${r.stdout}${r.stderr}`;
+    }
+    const a = gtCliResult(raw);
+    return { code: a.exit, reason: a.reason, raw };
+  }
+  const args = f.op(file);
+  const raw = terminal ? (await maintPty(box, 'shim', args, { env })).out : runShim(box, args, { env }).stdout;
+  const a = lastResult(raw) as { rc: number; reason?: string };
+  return { code: a.rc, reason: a.reason, raw };
+}
+
+describe('C64: every writing form, both doors (W1-B2 Task 30)', () => {
+  skipOnDarwin();
+
+  it('CONTROL: the table drives every WRITING_FORMS form but W2\'s recall-off pair, each named by formOf from its own --op argv', () => {
+    expect(GT_FORMS.map((f) => f.form).sort())
+      .toEqual(Object.keys(WRITING_FORMS).filter((k) => !k.startsWith('recall-off')).sort());
+    for (const f of GT_FORMS) {
+      const argv = f.op('/home/u/.claude-a/projects/x/c6c6c6c6-0000-4000-8000-000000000c64.jsonl');
+      expect(formOf(argv[1]!, argv.slice(2)), f.form).toBe(f.form);
+    }
+    expect(GT_FORMS.filter(gtIrreversible).map((f) => f.form).sort())
+      .toEqual(['adopt', 'import-session-apply', 'prune-apply', 'rebuild', 'repair', 'restore']);
+    expect(GT_FORMS.filter(gtBinding).map((f) => f.form).sort()).toEqual(['adopt', 'rebuild', 'restore']);
+  });
+
+  it('CLAUDECODE set: every form answers apply-in-session at both doors and writes nothing', async () => {
+    const { box, file } = gtBox('ccrc-hist-c64x-');
+    for (const f of GT_FORMS) {
+      for (const door of GT_DOORS) {
+        const before = snapshot(box);
+        const a = await gtRun(box, f, door, false, { CLAUDECODE: '1' }, file);
+        expect([a.code, a.reason], `${f.form} via ${door}\n${a.raw}`).toEqual([2, 'apply-in-session']);
+        expect(snapshot(box), `${f.form} via ${door}: nothing written`).toEqual(before);
+      }
+    }
+  }, 1.5 * HEAVY);
+
+  it('a piped stdin: the irreversible forms answer needs-tty at both doors and write nothing; the others pass every bump', async () => {
+    const { box, file } = gtBox('ccrc-hist-c64y-');
+    for (const f of GT_FORMS.filter(gtIrreversible)) {
+      for (const door of GT_DOORS) {
+        const before = snapshot(box);
+        const a = await gtRun(box, f, door, false, {}, file);
+        expect([a.code, a.reason], `${f.form} via ${door}\n${a.raw}`).toEqual([2, 'needs-tty']);
+        expect(snapshot(box), `${f.form} via ${door}: nothing written`).toEqual(before);
+      }
+    }
+    for (const f of GT_FORMS.filter((x) => !gtIrreversible(x))) {
+      for (const door of GT_DOORS) {
+        const a = await gtRun(box, f, door, false, {}, file);
+        expect(GT_BUMPS, `${f.form} via ${door} is not stopped by a bump\n${a.raw}`).not.toContain(a.reason);
+        expect(['bad-args', 'bad-id', 'older-than-floor', 'writer-absent'], `${f.form} via ${door} reached the gate`).not.toContain(a.reason);
+        expect(a.code, `${f.form} via ${door}: not an internal error`).not.toBe(1);
+      }
+    }
+  }, 1.5 * HEAVY);
+
+  it('a cc- pane on a real terminal: the irreversible forms answer irreversible-in-pane at both doors and write nothing; the others pass every bump', async () => {
+    const { box, file } = gtBox('ccrc-hist-c64z-');
+    // A functional tmux in the fixture bin, over the poison, answering a cc- session for `display-message -p -t`.
+    const pane = withPane(box, ID);
+    for (const f of GT_FORMS.filter(gtIrreversible)) {
+      for (const door of GT_DOORS) {
+        const before = snapshot(box);
+        const a = await gtRun(box, f, door, true, pane, file);
+        expect([a.code, a.reason], `${f.form} via ${door}\n${a.raw}`).toEqual([2, 'irreversible-in-pane']);
+        expect(snapshot(box), `${f.form} via ${door}: nothing written`).toEqual(before);
+      }
+    }
+    for (const f of GT_FORMS.filter((x) => !gtIrreversible(x))) {
+      for (const door of GT_DOORS) {
+        const a = await gtRun(box, f, door, true, pane, file);
+        expect(GT_BUMPS, `${f.form} via ${door} is not stopped by a bump\n${a.raw}`).not.toContain(a.reason);
+        expect(['bad-args', 'bad-id', 'older-than-floor', 'writer-absent'], `${f.form} via ${door} reached the gate`).not.toContain(a.reason);
+        expect(a.code, `${f.form} via ${door}: not an internal error`).not.toBe(1);
+      }
+    }
+  }, 2.5 * HEAVY);
+
+  it('history-off on a real terminal: every form but the three binding verbs answers history-off; adopt, restore and rebuild pass the bump and meet their own preconditions; nothing is written', async () => {
+    const { box, file } = gtBox('ccrc-hist-c64w-');
+    fs.writeFileSync(historyPaths(box.home).off, '');
+    // A bound store with a DB and no such backup: each binding verb's own refusal, decided under the lock.
+    const OWN: Record<string, string> = { adopt: 'adopt-refused', restore: 'restore-refused', rebuild: 'rebuild-refused' };
+    for (const f of GT_FORMS) {
+      for (const door of GT_DOORS) {
+        const before = snapshot(box);
+        const a = await gtRun(box, f, door, true, {}, file);
+        expect([a.code, a.reason], `${f.form} via ${door}\n${a.raw}`).toEqual([2, gtBinding(f) ? OWN[f.form] : 'history-off']);
+        expect(snapshot(box), `${f.form} via ${door}: nothing written`).toEqual(before);
+      }
+    }
+  }, 2.5 * HEAVY);
+
+  it('a registered recovery step, on a real terminal: every form but restore and rebuild answers recovering at both doors; restore and rebuild pass the gate and meet their own preconditions; nothing is written', async () => {
+    const { box, file } = gtBox('ccrc-hist-c64v-');
+    // What a restore or a rebuild leaves (§9.14): an open ('recover', <bind ms>) row, planted by Task 20's helper; no
+    // scheduled pass runs after it, so the step itself never starts and the store stays as gtBox left it.
+    maintRecovering(box);
+    // A bound store with a DB and no such backup: restore and rebuild, which the gate lets through, meet their own
+    // refusals under the lock. The store is bound (store.id present) and at the code's version, so adopt and migrate
+    // keep the refusal: RB14's and RB13's exemptions need store.id absent and a version other than the code's.
+    const OWN: Record<string, string> = { restore: 'restore-refused', rebuild: 'rebuild-refused' };
+    for (const f of GT_FORMS) {
+      for (const door of GT_DOORS) {
+        const before = snapshot(box);
+        const a = await gtRun(box, f, door, true, {}, file);
+        expect([a.code, a.reason], `${f.form} via ${door}\n${a.raw}`).toEqual([2, OWN[f.form] ?? 'recovering']);
+        expect(snapshot(box), `${f.form} via ${door}: nothing written`).toEqual(before);
+      }
+    }
+  }, 2.5 * HEAVY);
+
+  it('every ccrc history command a HEALTH_REMEDIES text spells parses at the CLI door: under CLAUDECODE each operator form reaches the gate, and status runs', () => {
+    const { box } = gtBox('ccrc-hist-c64r-');
+    const found = new Set<string>();
+    for (const text of Object.values(HEALTH_REMEDIES)) {
+      for (const m of text.matchAll(/ccrc history ([a-z][a-z-]*(?: --[a-z][a-z-]*(?: <file>)?)*)/g)) found.add(m[1]!);
+    }
+    // Measured on B1's merged texts, under this regex: prune, doctor --restore, doctor --adopt, doctor --migrate,
+    // status --json and doctor --repair. B1 names --rebuild only inside "doctor --restore and --rebuild …" (the regex
+    // stops at " and") and --backup nowhere, and spells no `<file>`: a file-bearing restore text is built by
+    // remedyFor, not held in HEALTH_REMEDIES.
+    expect([...found], 'CONTROL: the remedies name the operator verbs B1 spells').toEqual(expect.arrayContaining([
+      'prune', 'doctor --adopt', 'doctor --migrate', 'doctor --repair', 'doctor --restore',
+    ]));
+    for (const extra of ['doctor --backup', 'doctor --rebuild']) found.add(extra);   // B1's texts name them only inside prose, or not at all
+    for (const cmd of found) {
+      // `<file>` is the bare backups name B1 Task 28's remedy test pins; a bare `doctor --restore` gets it too, or the
+      // argument grammar would answer bad-args before the gate. A bare `prune` names the verb; the operator
+      // adds the age (the floor is 30 days) and --apply. Without --apply it is a dry run, which passes every bump, so
+      // the row could not reach apply-in-session; CLAUDECODE is decided before the TTY bump.
+      const args = cmd.split(' ').map((a) => (a === '<file>' ? GT_BACKUP : a));
+      if (cmd === 'doctor --restore') args.push(GT_BACKUP);
+      if (args[0] === 'prune' && args.length === 1) args.push('--older-than', '30d', '--apply');
+      if (args[0] === 'status') {
+        const s = runCli(box, [...args.filter((a) => a !== '--json'), '--json']);
+        expect(`${s.stdout}${s.stderr}`, cmd).not.toContain('bad-args');
+        continue;
+      }
+      const r = runCli(box, [...args, '--json'], { env: { CLAUDECODE: '1' } });
+      expect(gtCliResult(`${r.stdout}${r.stderr}`), `ccrc history ${cmd}`).toEqual({ exit: 2, reason: 'apply-in-session' });
+    }
   }, HEAVY);
 });
