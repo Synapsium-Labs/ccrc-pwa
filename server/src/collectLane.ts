@@ -14,6 +14,7 @@ import {
   CHILD_RUN_ID, COLLECT_BOX_LABELS, COLLECT_BOX_LINES, TMPROOT_ID_MAX_CHARS, isCollectLaneChoice,
   isPositiveDecimalSafeInteger, isTmpRootId, lcRefusalWord, type ChildReclaimCollectAttention, type CollectArmedBy,
   type CollectBoxLine, type CollectLaneChoice, type CollectToken, type LcRefusalToken,
+  type CollectLaneConfirmRequired, type CollectLaneRequest, type CollectLaneView,
 } from '../../shared/api.js';
 import {
   CHILD_RECLAIM_DEFER_CEILING_MS, childReclaimBackoffMs, childReclaimDetailText, childReclaimIdsNamed, childReclaimStuckEnd,
@@ -2170,4 +2171,394 @@ export function collectLaneCounts(i: {
     else if (t.word === COLLECT_HELD_WORD) held += 1;
   }
   return { wouldCollect, held, boxLines: collectBoxItems(i.box, []).length };
+}
+
+// ── the Settings route's decisions and its view (path-identity spec 2026-10-12 §5.6, §5.7) ─────────────────────────
+//
+// Everything `GET`/`POST /api/coord/collect-lane` decides, so the route (`coord/routes.ts`, L4) only reads, awaits its
+// one registry listing, maps a decision to a status and calls the store's one writer. Pure, like the rest of this file:
+// the boot nonce, both epochs, the current node, the capabilities and the counts arrive as arguments. Nothing here
+// spells a capability token or the generation journal's file name, and no sentence carries a path.
+
+/** The keys a POST body may name, each a `CollectLaneRequest` field, enumerated once. */
+const COLLECT_LANE_REQUEST_KEYS = ['choice', 'confirm'] as const satisfies readonly (keyof CollectLaneRequest)[];
+/** A confirm key as `collectConfirmKey` writes it. A `confirm` of any other shape is refused before anything is read. */
+const COLLECT_CONFIRM_KEY_RE = /^[0-9a-f]{8}$/;
+/** How many code points a sentence quotes of an unknown body key or a stored choice token, and of a node id. */
+const COLLECT_LANE_WORD_MAX = 32;
+const COLLECT_LANE_NODE_MAX = 64;
+
+/** `text` as one plain bounded line: `childReclaimDetailText` turns every control, format and separator character into
+ *  a space and trims the ends, then at most `max` code points are kept, an ellipsis marking a cut. */
+function collectBoundedWords(text: string, max: number): string {
+  const cps = [...childReclaimDetailText(text)];
+  return cps.length <= max ? cps.join('') : `${cps.slice(0, max).join('')}…`;
+}
+
+/** The POST body, decided: the request, or a refusal whose detail names what was wrong. Two shapes, never a nullable
+ *  request. */
+export type CollectLaneBody =
+  | { readonly ok: true; readonly request: CollectLaneRequest }
+  | { readonly ok: false; readonly detail: string };
+
+/** Path-identity spec §5.6's 400, decided from the body alone, before anything is read. Refuses, never clamps:
+ *  - a body that is not an object;
+ *  - an unknown key, named and bounded, so a newer page sending a field this server lacks hears it was not applied;
+ *  - a choice `isCollectLaneChoice` refuses (`LIVE`, `toString` and `shadowed` among them), or none;
+ *  - a `confirm` that is present and is not eight lowercase hex characters.
+ *  An absent `confirm` stays absent: no key is invented. */
+export function decideCollectLaneBody(body: unknown): CollectLaneBody {
+  if (!isObject(body)) return { ok: false, detail: 'body must be an object' };
+  for (const k of Object.keys(body)) {
+    if (!(COLLECT_LANE_REQUEST_KEYS as readonly string[]).includes(k)) {
+      return {
+        ok: false,
+        detail: `unknown key ${collectBoundedWords(k, COLLECT_LANE_WORD_MAX)}: a request names only ${COLLECT_LANE_REQUEST_KEYS.join(' and ')}`,
+      };
+    }
+  }
+  const choice = body.choice;
+  if (!isCollectLaneChoice(choice)) return { ok: false, detail: 'choice must be off or live' };
+  if (!hasOwn(body, 'confirm')) return { ok: true, request: { choice } };
+  const confirm = body.confirm;
+  if (typeof confirm !== 'string' || !COLLECT_CONFIRM_KEY_RE.test(confirm)) {
+    return { ok: false, detail: 'confirm must be the eight lowercase hex characters a 409 answered with' };
+  }
+  return { ok: true, request: { choice, confirm } };
+}
+
+/** Every fact a Live confirm stands on (path-identity spec §5.6): the server process (`boot`, a nonce minted once per
+ *  process in `index.ts`), the connection epoch after the listing, the directly measured node, the expected row, the
+ *  journal maximum (`missing` for the untouched bootstrap), the marker as listed, both capabilities and the pause.
+ *  The key's input only: the wire's `facts` carry neither the nonce nor the epoch. */
+export interface CollectLaneKeyFacts {
+  readonly boot: string; readonly epoch: number; readonly node: string;
+  readonly row: { readonly choice: string; readonly fleetNodeId: string | null; readonly markerRetiredAt: number | null; readonly generation: number };
+  readonly journal: number | 'missing'; readonly marker: 'stands' | 'absent';
+  readonly caps: CollectLaneCaps; readonly paused: boolean;
+}
+
+/** The canonical JSON the confirm key hashes: object keys sorted at every depth, arrays in order, every other value as
+ *  `JSON.stringify` writes it. Two fact objects holding the same values hash the same, whatever order built them. */
+function collectCanonicalJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map((x) => collectCanonicalJson(x)).join(',')}]`;
+  if (isObject(v)) {
+    return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${collectCanonicalJson(v[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(v);
+}
+
+/** The confirm key (path-identity spec §5.6): eight lowercase hex characters of a 32-bit FNV-1a over the facts'
+ *  canonical JSON, over UTF-16 code units in plain JavaScript, so no `node:crypto` (the stall door's hash, over
+ *  canonical JSON here). A staleness check, not a credential: the session gate guards the door, and because the boot
+ *  nonce is a fact, a key a previous server process answered never matches. */
+export function collectConfirmKey(facts: CollectLaneKeyFacts): string {
+  const s = collectCanonicalJson(facts);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
+/** What the POST decides over: the parsed request, and the reads the route took AFTER its one listing's await. */
+export interface CollectPostInput {
+  readonly request: CollectLaneRequest; readonly row: CollectLaneRowRead; readonly journal: CollectLaneJournalRead;
+  readonly switches: CollectLaneSwitches; readonly epoch: CollectEpochPair; readonly node: CollectCurrentNode;
+  readonly caps: CollectLaneCaps; readonly boot: string; readonly counts: CollectLaneCounts | null;
+}
+/** The POST's decision; the route maps each kind to one status: 503, 409 `marker-still-controls`, 409 with the confirm
+ *  body, or the store's write. */
+export type CollectPostDecision =
+  | { readonly kind: 'unmeasurable'; readonly detail: string }
+  | { readonly kind: 'marker' }
+  | { readonly kind: 'confirm'; readonly body: CollectLaneConfirmRequired }
+  | { readonly kind: 'write'; readonly request: CollectLaneWriteRequest };
+
+type CollectLaneMeasured = Extract<CollectLaneControl, { kind: 'coherent' | 'mismatch' }>;
+/** The journal fact: its maximum, or `missing` for the untouched bootstrap, read off the measured control. */
+const collectJournalFact = (c: CollectLaneMeasured): number | 'missing' =>
+  c.kind === 'mismatch' ? c.journalMax : c.bootstrap ? 'missing' : c.generation;
+/** The sheet's repair fact: which way a measurable mismatch leans, or null when row and journal agree. */
+const collectRepairFact = (c: CollectLaneMeasured): 'journal-ahead' | 'journal-behind' | null =>
+  c.kind === 'coherent' ? null : c.journalMax > c.rowGeneration ? 'journal-ahead' : 'journal-behind';
+
+/** The marker as one listing measured it. An unlistable registry carries no marker (its switches arm has none), so it
+ *  is `unmeasured`, never `absent`. */
+function collectListingOf(sw: CollectLaneSwitches): 'stands' | 'absent' | 'unmeasured' {
+  if (!sw.paused) return sw.marker ? 'stands' : 'absent';
+  if (sw.why === 'unlistable') return 'unmeasured';
+  return sw.marker ? 'stands' : 'absent';
+}
+
+/** Why the control state cannot be measured, as a 503's detail: bounded, no path, no errno. */
+const COLLECT_LANE_UNMEASURABLE_TEXT: Readonly<Record<CollectLaneUnmeasurable, string>> = {
+  'row-absent': "the collector's settings row is missing",
+  'row-unreadable': "the collector's settings row cannot be read",
+  'row-malformed': "the collector's settings row holds a value this build cannot read",
+  'journal-missing': "the collector's generation journal is missing beside a settings row that has been used",
+  'journal-malformed': "the collector's generation journal is malformed",
+  'journal-unreadable': "the collector's generation journal cannot be read",
+  'journal-not-regular': "the collector's generation journal is not a regular file",
+  'journal-not-configured': "this server runs without the collector's generation journal",
+};
+/** Why Live cannot be confirmed on what the POST measured. */
+type CollectLiveUnmeasurable = 'unlistable' | 'epoch-moved' | 'node-unmeasured' | 'node-collision' | 'node-earlier-connection';
+const COLLECT_LIVE_UNMEASURABLE_TEXT: Readonly<Record<CollectLiveUnmeasurable, string>> = {
+  unlistable: "the fleet box's registry could not be listed, so whether its legacy file stands is unknown",
+  'epoch-moved': 'the fleet connection changed while the registry was being listed',
+  'node-unmeasured': 'the fleet node on the current connection is not measured yet',
+  'node-collision': "the fleet node's id on the current connection keys another live inventory row",
+  'node-earlier-connection': 'the fleet node was measured on an earlier connection',
+};
+const collectLiveUnmeasurable = (why: CollectLiveUnmeasurable): CollectPostDecision =>
+  ({ kind: 'unmeasurable', detail: COLLECT_LIVE_UNMEASURABLE_TEXT[why] });
+
+/** The POST's decision from the 503 down (path-identity spec §5.6), over reads the route took AFTER its one listing's
+ *  await, so a write that landed during it is in the facts and an earlier key is stale:
+ *  1. a row and journal that cannot be measured: `unmeasurable`, for both choices, before any 409;
+ *  2. Off reads no listing, no epoch and no node. A null latch is `marker` (409 `marker-still-controls`), whatever the
+ *     listing says; a set latch is a write, even on an unlistable registry or a moved epoch, and it repairs a mismatch;
+ *  3. Live needs a listed registry, an unmoved epoch and a node measured on this connection, else `unmeasurable`;
+ *  4. Live's facts are keyed by `collectConfirmKey`: no `confirm` is `confirm-required`, a different one is
+ *     `confirm-stale`, each carrying the fresh facts and key; a match writes, carrying the row and journal reads
+ *     themselves as the store's expectation. A no-op Live still needs the key: the store, not this decision, finds it.
+ *  Live stays confirmable with a capability missing or the pause standing: both are on the sheet and in the key. */
+export function decideCollectLanePost(i: CollectPostInput): CollectPostDecision {
+  const control = collectLaneControl(measureCollectLaneRow(i.row), i.journal);
+  if (control.kind === 'unmeasurable') return { kind: 'unmeasurable', detail: COLLECT_LANE_UNMEASURABLE_TEXT[control.why] };
+  if (i.request.choice === 'off') {
+    if (control.row.markerRetiredAt === null) return { kind: 'marker' };
+    return { kind: 'write', request: { kind: 'off' } };
+  }
+  const listing = collectListingOf(i.switches);
+  if (listing === 'unmeasured') return collectLiveUnmeasurable('unlistable');
+  if (i.epoch.before !== i.epoch.after) return collectLiveUnmeasurable('epoch-moved');
+  const node = i.node;
+  if (node.kind === 'unmeasured') return collectLiveUnmeasurable('node-unmeasured');
+  if (node.kind === 'collision') return collectLiveUnmeasurable('node-collision');
+  if (node.connectionEpoch !== i.epoch.after) return collectLiveUnmeasurable('node-earlier-connection');
+  const caps: CollectLaneCaps = { collect: i.caps.collect, reclaimPause: i.caps.reclaimPause };
+  const paused = i.switches.paused;
+  const r = control.row;
+  const confirmKey = collectConfirmKey({
+    boot: i.boot, epoch: i.epoch.after, node: node.nodeId,
+    row: { choice: r.choice, fleetNodeId: r.fleetNodeId, markerRetiredAt: r.markerRetiredAt, generation: r.generation },
+    journal: collectJournalFact(control), marker: listing, caps, paused,
+  });
+  const facts: CollectLaneConfirmRequired['facts'] = {
+    node: { nodeId: node.nodeId, measuredAt: node.measuredAt },
+    caps,
+    paused,
+    marker: listing,
+    repair: collectRepairFact(control),
+    attention: i.counts === null ? null : { wouldCollect: i.counts.wouldCollect, held: i.counts.held, boxLines: i.counts.boxLines },
+  };
+  if (i.request.confirm === undefined) return { kind: 'confirm', body: { ok: false, error: 'confirm-required', confirmKey, facts } };
+  if (i.request.confirm !== confirmKey) return { kind: 'confirm', body: { ok: false, error: 'confirm-stale', confirmKey, facts } };
+  return { kind: 'write', request: { kind: 'live', fleetNodeId: node.nodeId, expected: i.row, expectedJournal: i.journal } };
+}
+
+/** The measured row, when the read is one (`seed` or `row`); null when it is not a readable row. One meaning. */
+const collectRowOf = (m: CollectLaneRowMeasure): CollectLaneRow | null => (m.kind === 'seed' || m.kind === 'row' ? m.row : null);
+
+/** A row as the change body names it: the choice (a future token quoted and bounded), and its node when it has one. */
+function collectRowWords(m: CollectLaneRowMeasure): string {
+  switch (m.kind) {
+    case 'seed':
+    case 'row': {
+      const choice = isCollectLaneChoice(m.row.choice) ? m.row.choice
+        : `the unknown token ${JSON.stringify(collectBoundedWords(m.row.choice, COLLECT_LANE_WORD_MAX))}`;
+      return m.row.fleetNodeId === null ? choice
+        : `${choice} for fleet node ${collectBoundedWords(m.row.fleetNodeId, COLLECT_LANE_NODE_MAX)}`;
+    }
+    case 'malformed': return 'a malformed row';
+    case 'unreadable': return 'an unreadable row';
+    case 'absent': return 'no row';
+    default: { const unnamed: never = m; return unnamed; }
+  }
+}
+
+/** The accepted POST's feed body (path-identity spec §5.5): `choice <before> → <after> (generation <g>)`, the node for
+ *  a Live, then `, repairing a journal that disagreed with the database` whenever the row before and `journalBefore`
+ *  were a mismatch, either way. The repair is read from the journal as read before the append, never from the step
+ *  between generations: a behind journal (row 5, journal 4) is written at 6, one step, and is a repair all the same.
+ *  A latch retirement, which the POST never writes, is named too, so the body is true for every write. No path; the
+ *  route appends the actor. */
+export function collectLaneSettingChange(before: CollectLaneRowRead, after: CollectLaneRowRead,
+  journalBefore: CollectLaneJournalRead): string {
+  const was = measureCollectLaneRow(before);
+  const now = measureCollectLaneRow(after);
+  const wasRow = collectRowOf(was);
+  const nowRow = collectRowOf(now);
+  const generation = nowRow === null ? '' : ` (generation ${nowRow.generation})`;
+  const retired = wasRow !== null && nowRow !== null && wasRow.markerRetiredAt === null && nowRow.markerRetiredAt !== null
+    ? ", retiring the fleet box's legacy file" : '';
+  const repaired = collectLaneControl(was, journalBefore).kind === 'mismatch'
+    ? ', repairing a journal that disagreed with the database' : '';
+  return `choice ${collectRowWords(was)} → ${collectRowWords(now)}${generation}${retired}${repaired}`;
+}
+
+/** Whether a coherent re-read shows what the request asked for: Live for its node, Off with no node, a set latch. */
+function collectWriteTargetShown(request: CollectLaneWriteRequest, r: CollectLaneRow): boolean {
+  switch (request.kind) {
+    case 'live': return r.choice === 'live' && r.fleetNodeId === request.fleetNodeId;
+    case 'off': return r.choice === 'off' && r.fleetNodeId === null;
+    case 'retire': return r.markerRetiredAt !== null;
+    default: { const unnamed: never = request; return unnamed; }
+  }
+}
+
+/** A 200's proof (path-identity spec §5.6): a synchronous re-read that is coherent and shows the requested target.
+ *  - `generation` a number (the store wrote): the re-read stands at exactly that generation.
+ *  - `generation` null (the store answered unchanged): for Live and retire, at the expected row's own generation; for
+ *    Off, which carries no expectation by design (Off wins over a concurrent Live), the coherent re-read showing off
+ *    with no node is the proof.
+ *  Never `true` on the store's word alone. */
+export function collectLaneWriteProved(request: CollectLaneWriteRequest, generation: number | null,
+  row: CollectLaneRowRead, journal: CollectLaneJournalRead): boolean {
+  const c = collectLaneControl(measureCollectLaneRow(row), journal);
+  if (c.kind !== 'coherent' || !collectWriteTargetShown(request, c.row)) return false;
+  if (generation !== null) return c.generation === generation;
+  if (request.kind === 'off') return true;
+  const was = collectRowOf(measureCollectLaneRow(request.expected));
+  return was !== null && was.generation === c.generation;
+}
+
+/** A 200 POST's notice: when the choice applies, and the stated residual it cannot reach. */
+export const COLLECT_LANE_APPLIES_TEXT: string =
+  "The choice applies from the collector's next check; a removal already handed to ccd is not stopped.";
+
+/** The view's input. The row admits no `absent` read (the route answers 503 for it), and the journal no
+ *  `not-configured` read (a server built without the journal answers 501 before any view). */
+export interface CollectLaneViewInput {
+  readonly row: Exclude<CollectLaneRowRead, { kind: 'absent' }>;
+  readonly journal: Exclude<CollectLaneJournalRead, { kind: 'not-configured' }>;
+  readonly switches: CollectLaneSwitches; readonly epoch: CollectEpochPair; readonly node: CollectCurrentNode;
+  readonly caps: CollectLaneCaps; readonly counts: CollectLaneCounts | null; readonly notice: string | null;
+}
+
+type CollectViewState = CollectLaneView['effective']['state'];
+/** A stopped resolver arm as the Settings section names it: the pause is its own state; every other stop is a fact
+ *  this server could not measure, so the fleet is unknown. */
+const COLLECT_STOP_STATE: Readonly<Record<CollectLaneStopWhy, CollectViewState>> = {
+  raised: 'paused', unlistable: 'unknown-fleet', 'epoch-changed': 'unknown-fleet', 'unknown-fleet': 'unknown-fleet',
+};
+function collectViewState(r: CollectLaneEffective): CollectViewState {
+  switch (r.kind) {
+    case 'stopped': return COLLECT_STOP_STATE[r.why];
+    case 'not-running':
+    case 'safety-stopped':
+    case 'live':
+    case 'shadowed': return r.kind;
+    default: { const unnamed: never = r; return unnamed; }
+  }
+}
+
+function collectStoredView(m: CollectLaneRowMeasure): CollectLaneView['stored'] {
+  switch (m.kind) {
+    case 'seed':
+    case 'row':
+      return { read: 'row', choice: m.row.choice, fleetNodeId: m.row.fleetNodeId, markerRetiredAt: m.row.markerRetiredAt,
+        generation: m.row.generation, updatedAt: m.row.updatedAt };
+    case 'malformed': return { read: 'malformed' };
+    case 'unreadable': return { read: 'unreadable' };
+    case 'absent': throw new Error('collectLaneView: an absent row never reaches the view; the route answers 503 for it');
+    default: { const unnamed: never = m; return unnamed; }
+  }
+}
+
+function collectJournalView(j: CollectLaneViewInput['journal']): CollectLaneView['journal'] {
+  switch (j.kind) {
+    case 'ok': return { read: 'ok', max: j.max };
+    case 'missing':
+    case 'malformed':
+    case 'unreadable':
+    case 'not-regular': return { read: j.kind };
+    default: { const unnamed: never = j; return unnamed; }
+  }
+}
+
+function collectControlView(c: CollectLaneControl): CollectLaneView['control'] {
+  switch (c.kind) {
+    case 'coherent': return { state: 'coherent', bootstrap: c.bootstrap };
+    case 'mismatch': return { state: 'mismatch', journal: c.journalMax > c.rowGeneration ? 'ahead' : 'behind' };
+    case 'unmeasurable': return { state: 'unmeasurable' };
+    default: { const unnamed: never = c; return unnamed; }
+  }
+}
+
+/** The current node as the view shows it, with how the stored node compares. A node is `known` only when measured on
+ *  the epoch after the listing; one measured on an earlier connection is not this connection's, so it reads
+ *  `unmeasured`. `unread` means the stored row is not a readable row. */
+function collectNodeView(node: CollectCurrentNode, epochNow: number, row: CollectLaneRow | null): CollectLaneView['node'] {
+  if (node.kind === 'known' && node.connectionEpoch === epochNow) {
+    const stored = row === null ? 'unread' : row.fleetNodeId === null ? 'none' : row.fleetNodeId === node.nodeId ? 'this' : 'other';
+    return { state: 'known', nodeId: node.nodeId, measuredAt: node.measuredAt, stored };
+  }
+  const stored = row === null ? 'unread' : row.fleetNodeId === null ? 'none' : 'set';
+  return { state: node.kind === 'collision' ? 'collision' : 'unmeasured', stored };
+}
+
+/** The remedy for a control state no Settings write can repair: what to do, by hand, outside the route. */
+const COLLECT_LANE_UNMEASURABLE_REMEDY: Readonly<Record<CollectLaneUnmeasurable, string>> = {
+  'row-absent': "The collector's settings row is missing, and the server never inserts one. Re-insert the seed row by hand, with markerRetiredAt set if the legacy file was ever retired; a confirmed Live then repairs the generation.",
+  'row-unreadable': "The collector's settings row cannot be read. The collector removes nothing until the database answers.",
+  'row-malformed': "The collector's settings row holds a value this build cannot read. Repair the row by hand; Settings cannot.",
+  'journal-missing': "The collector's generation journal on the server box is missing beside a settings row that has been used. Write one record above the row's generation by hand, then confirm a choice again.",
+  'journal-malformed': "The collector's generation journal on the server box is malformed. Repair it by hand; Settings cannot.",
+  'journal-unreadable': "The collector's generation journal on the server box cannot be read. Repair it by hand; Settings cannot.",
+  'journal-not-regular': "The collector's generation journal on the server box is not a regular file. Replace it by hand; Settings cannot.",
+  'journal-not-configured': "This server runs without the collector's generation journal, so the collector removes nothing.",
+};
+const COLLECT_LANE_MISMATCH_REMEDY = {
+  preLatch: "Confirm Live again to repair it: the write takes a generation above both. Off waits until the fleet box's legacy file is retired.",
+  latched: 'Confirm Live again, or choose Off, to repair it: either write takes a generation above both.',
+} as const;
+const COLLECT_LANE_RECREATED_REMEDY =
+  `The fleet box's legacy file ${COLLECT_LANE_LIVE_MARKER} was re-created, and this server ignores it: remove it by hand on the fleet box.`;
+const COLLECT_LANE_NOT_RUNNING_REMEDY =
+  "The fleet box's ccd has not reported a capability this collector needs, so it removes nothing; if this persists, update the fleet box.";
+
+/** The one remedy the view carries, most pressing first: an unmeasurable control state, a mismatch, a re-created
+ *  marker, a missing capability. Null otherwise: the pause is deliberate, a stored Live for another node and a standing
+ *  marker before the latch are lines the Settings section says itself, and an unknown fleet clears on measurement. */
+function collectLaneRemedy(control: CollectLaneControl, listing: 'stands' | 'absent' | 'unmeasured', r: CollectLaneEffective): string | null {
+  if (control.kind === 'unmeasurable') return COLLECT_LANE_UNMEASURABLE_REMEDY[control.why];
+  const latched = control.row.markerRetiredAt !== null;
+  if (control.kind === 'mismatch') return latched ? COLLECT_LANE_MISMATCH_REMEDY.latched : COLLECT_LANE_MISMATCH_REMEDY.preLatch;
+  if (latched && listing === 'stands') return COLLECT_LANE_RECREATED_REMEDY;
+  if (r.kind === 'not-running') return COLLECT_LANE_NOT_RUNNING_REMEDY;
+  return null;
+}
+
+/** THE view composer (path-identity spec §5.6, §5.7): the GET's answer and a 200 POST's re-read. The only caller of
+ *  the resolver outside the executor. Nothing folds:
+ *  - the stored row is `row` (the raw token), `malformed` or `unreadable`;
+ *  - the journal keeps each of its five reads;
+ *  - the control state is coherent (and whether by bootstrap), a mismatch leaning ahead or behind, or unmeasurable;
+ *  - the latch is `set`/`unset` only while the row and journal are measurable, else `unmeasured`: a latch no journal
+ *    vouches for is not one the route acts on.
+ *  No field is a path; the remedy may name the marker file, through this file's own constant. */
+export function collectLaneView(i: CollectLaneViewInput): CollectLaneView {
+  const measured = measureCollectLaneRow(i.row);
+  const control = collectLaneControl(measured, i.journal);
+  const effective = collectLaneEffective({ switches: i.switches, epoch: i.epoch, caps: i.caps, control, node: i.node });
+  const listing = collectListingOf(i.switches);
+  return {
+    stored: collectStoredView(measured),
+    journal: collectJournalView(i.journal),
+    control: collectControlView(control),
+    effective: { state: collectViewState(effective), armedBy: effective.kind === 'live' ? effective.armedBy : 'neither' },
+    marker: {
+      listing,
+      latch: control.kind === 'unmeasurable' ? 'unmeasured' : control.row.markerRetiredAt === null ? 'unset' : 'set',
+    },
+    node: collectNodeView(i.node, i.epoch.after, collectRowOf(measured)),
+    caps: { collect: i.caps.collect, reclaimPause: i.caps.reclaimPause },
+    attention: i.counts === null ? null : { wouldCollect: i.counts.wouldCollect, held: i.counts.held, boxLines: i.counts.boxLines },
+    remedy: collectLaneRemedy(control, listing, effective),
+    notice: i.notice,
+  };
 }

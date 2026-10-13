@@ -131,6 +131,7 @@ const FIGURE_5: readonly (readonly [string, readonly Case[]])[] = [
   ]],
   ['a node measured on another epoch is unknown-fleet', [
     [inputs({ switches: ABSENT, control: LIVE_A_LATCHED, node: KNOWN_A_EARLIER }), { kind: 'stopped', why: 'unknown-fleet' }],
+    [inputs({ switches: ABSENT, control: LIVE_A_LATCHED, node: KNOWN_A_LATER }), { kind: 'stopped', why: 'unknown-fleet' }],
   ]],
   ['off with the node unknown is shadowed, never unknown-fleet', [
     [inputs({ switches: ABSENT, control: OFF_LATCHED, node: UNMEASURED }), { kind: 'shadowed', why: 'off', notes: N }],
