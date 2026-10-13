@@ -13709,48 +13709,48 @@ No commit in this task but Step 5's: everything else it writes is scratch or git
 
 ## Wave 4 results
 
-Measured 2026-10-13 05:13 UTC on the tree at `32bb1e15a98c` (base `6e4524164631`, 52 W4 commits on the first-parent line). Every number below was printed by a Task 12 command; none is a forecast. The commit that adds this section changes only this file, and it is the wave-done `handoffCommit`.
+Measured 2026-10-13 09:46 UTC on the tree at `effdf577497d` (base `6e4524164631`, 66 W4 commits on the first-parent line). Every number below was printed by a Task 12 command; none is a forecast. The commit that adds this section changes only this file, and it is the wave-done `handoffCommit`.
 
 Deviation entries: 9, the first 9 numbers of the issued block 4768-4783, in order, defined in `## Deviations found` above.
 
 ### Suites
 
-The every-wave and W4 suites of spec section 7.9, the PWA `tsc`, and the four files one call cannot hold, run as `-t` pieces of their top-level describes, each proved below to run every test exactly once; all in the foreground. The full server suite runs in PR CI (`pwa/package.json` changed). First complete run of these suites in this wave: **red** (at `32bb1e15a98c`); this run's first pass was red in 06, S02, S19.
+The every-wave and W4 suites of spec section 7.9, the PWA `tsc`, and the four files one call cannot hold, run as `-t` pieces of their top-level describes, each proved below to run every test exactly once; all in the foreground. The full server suite runs in PR CI (`pwa/package.json` changed). First complete run of these suites in this wave: **red** (at `32bb1e15a98c`); this run's first pass was red in 06.
 
 | # | Command | Test Files | Tests | s | rc |
 |---|---|---|---|---|---|
-| 01 | `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts )` | 1 passed (1) | 55 passed (55) | 15 | 0 |
-| 02 | `( cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts )` | 1 passed (1) | 537 passed (537) | 24 | 0 |
-| 03 | `( cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/dtbd.test.ts )` | 2 passed (2) | 32 passed (32) | 17 | 0 |
-| 04 | `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )` | 1 passed (1) | 12 passed (12) | 113 | 0 |
-| 05 | `( cd pwa && CI=1 node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json )` | - | - | 37 | 0 |
-| 06 | `( cd pwa && CI=1 ./node_modules/.bin/vitest run )` | 22 passed (22) | 1558 passed (1558) | 318 | 1; re-run alone: 0 |
-| 07 | `( cd server && ./node_modules/.bin/vitest run test/docs-parity.test.ts test/deploy-coordinates.test.ts test/docs-budget.test.ts test/license.test.ts test/oss-metadata.test.ts test/node-floor.test.ts test/build-release.test.ts test/macos-platform.test.ts test/source-bytes.test.ts test/install-census.test.ts )` | 10 passed (10) | 303 passed \| 11 skipped (314) | 15 | 0 |
-| 08 | `( cd server && ./node_modules/.bin/vitest run test/ccrc-install-graphify.test.ts )` | 1 passed (1) | 58 passed (58) | 253 | 0 |
-| S01 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part1 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 77 passed \| 834 skipped (911) | 163 | 0 |
-| S02 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part2 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 125 passed \| 786 skipped (911) | 411 | 1; re-run alone: 0 |
-| S03 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part3 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 164 passed \| 747 skipped (911) | 226 | 0 |
-| S04 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part4 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 154 passed \| 757 skipped (911) | 137 | 0 |
-| S05 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part5 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 171 passed \| 740 skipped (911) | 202 | 0 |
-| S06 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part6 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 205 passed \| 706 skipped (911) | 97 | 0 |
-| S07 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: rest>' test/ccrc-doctor.test.ts )` | 1 skipped (1) | 911 skipped (911) | 3 | 0 |
-| S08 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part1 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 61 passed \| 258 skipped (319) | 198 | 0 |
-| S09 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part2 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 81 passed \| 238 skipped (319) | 262 | 0 |
-| S10 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part3 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 68 passed \| 251 skipped (319) | 251 | 0 |
-| S11 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part4 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 89 passed \| 230 skipped (319) | 300 | 0 |
-| S12 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: rest>' test/ccrc-install.test.ts )` | 1 skipped (1) | 319 skipped (319) | 31 | 0 |
-| S13 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part1 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 99 passed \| 415 skipped (514) | 89 | 0 |
-| S14 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part2 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 156 passed \| 358 skipped (514) | 101 | 0 |
-| S15 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part3 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 94 passed \| 420 skipped (514) | 222 | 0 |
-| S16 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part4 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 153 passed \| 361 skipped (514) | 214 | 0 |
-| S17 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: rest>' test/ccrc-update.test.ts )` | 1 skipped (1) | 514 skipped (514) | 3 | 0 |
-| S18 | `( cd server && ./node_modules/.bin/vitest run -t '<session-hook: part1 of its top-level describes>' test/session-hook.test.ts )` | 1 passed (1) | 219 passed \| 231 skipped (450) | 80 | 0 |
-| S19 | `( cd server && ./node_modules/.bin/vitest run -t '<session-hook: part2 of its top-level describes>' test/session-hook.test.ts )` | 1 passed (1) | 94 passed \| 356 skipped (450) | 56 | 1; re-run alone: 0 |
-| S20 | `( cd server && ./node_modules/.bin/vitest run -t '<session-hook: part3 of its top-level describes>' test/session-hook.test.ts )` | 1 passed (1) | 137 passed \| 313 skipped (450) | 17 | 0 |
-| S21 | `( cd server && ./node_modules/.bin/vitest run -t '<session-hook: rest>' test/session-hook.test.ts )` | 1 skipped (1) | 450 skipped (450) | 5 | 0 |
+| 01 | `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts )` | 1 passed (1) | 55 passed (55) | 19 | 0 |
+| 02 | `( cd server && ./node_modules/.bin/vitest run test/single-definition.test.ts )` | 1 passed (1) | 537 passed (537) | 19 | 0 |
+| 03 | `( cd server && ./node_modules/.bin/vitest run test/deviation-refs.test.ts test/dtbd.test.ts )` | 2 passed (2) | 32 passed (32) | 14 | 0 |
+| 04 | `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )` | 1 passed (1) | 12 passed (12) | 81 | 0 |
+| 05 | `( cd pwa && CI=1 node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json )` | - | - | 14 | 0 |
+| 06 | `( cd pwa && CI=1 ./node_modules/.bin/vitest run )` | 1 passed (1) | 257 passed (257) | 134 | 1; re-run alone: 0 |
+| 07 | `( cd server && ./node_modules/.bin/vitest run test/docs-parity.test.ts test/deploy-coordinates.test.ts test/docs-budget.test.ts test/license.test.ts test/oss-metadata.test.ts test/node-floor.test.ts test/build-release.test.ts test/macos-platform.test.ts test/source-bytes.test.ts test/install-census.test.ts )` | 10 passed (10) | 303 passed \| 11 skipped (314) | 9 | 0 |
+| 08 | `( cd server && ./node_modules/.bin/vitest run test/ccrc-install-graphify.test.ts )` | 1 passed (1) | 58 passed (58) | 167 | 0 |
+| S01 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part1 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 77 passed \| 835 skipped (912) | 71 | 0 |
+| S02 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part2 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 125 passed \| 787 skipped (912) | 164 | 0 |
+| S03 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part3 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 164 passed \| 748 skipped (912) | 212 | 0 |
+| S04 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part4 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 154 passed \| 758 skipped (912) | 129 | 0 |
+| S05 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part5 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 171 passed \| 741 skipped (912) | 214 | 0 |
+| S06 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: part6 of its top-level describes>' test/ccrc-doctor.test.ts )` | 1 passed (1) | 206 passed \| 706 skipped (912) | 104 | 0 |
+| S07 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-doctor: rest>' test/ccrc-doctor.test.ts )` | 1 skipped (1) | 912 skipped (912) | 2 | 0 |
+| S08 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part1 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 61 passed \| 258 skipped (319) | 184 | 0 |
+| S09 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part2 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 81 passed \| 238 skipped (319) | 269 | 0 |
+| S10 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part3 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 68 passed \| 251 skipped (319) | 239 | 0 |
+| S11 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: part4 of its top-level describes>' test/ccrc-install.test.ts )` | 1 passed (1) | 89 passed \| 230 skipped (319) | 261 | 0 |
+| S12 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-install: rest>' test/ccrc-install.test.ts )` | 1 skipped (1) | 319 skipped (319) | 22 | 0 |
+| S13 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part1 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 99 passed \| 415 skipped (514) | 102 | 0 |
+| S14 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part2 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 156 passed \| 358 skipped (514) | 113 | 0 |
+| S15 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part3 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 94 passed \| 420 skipped (514) | 219 | 0 |
+| S16 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: part4 of its top-level describes>' test/ccrc-update.test.ts )` | 1 passed (1) | 153 passed \| 361 skipped (514) | 255 | 0 |
+| S17 | `( cd server && ./node_modules/.bin/vitest run -t '<ccrc-update: rest>' test/ccrc-update.test.ts )` | 1 skipped (1) | 514 skipped (514) | 4 | 0 |
+| S18 | `( cd server && ./node_modules/.bin/vitest run -t '<session-hook: part1 of its top-level describes>' test/session-hook.test.ts )` | 1 passed (1) | 219 passed \| 231 skipped (450) | 72 | 0 |
+| S19 | `( cd server && ./node_modules/.bin/vitest run -t '<session-hook: part2 of its top-level describes>' test/session-hook.test.ts )` | 1 passed (1) | 94 passed \| 356 skipped (450) | 53 | 0 |
+| S20 | `( cd server && ./node_modules/.bin/vitest run -t '<session-hook: part3 of its top-level describes>' test/session-hook.test.ts )` | 1 passed (1) | 137 passed \| 313 skipped (450) | 12 | 0 |
+| S21 | `( cd server && ./node_modules/.bin/vitest run -t '<session-hook: rest>' test/session-hook.test.ts )` | 1 skipped (1) | 450 skipped (450) | 2 | 0 |
 
 ```text
-OK test/ccrc-doctor.test.ts: 896 tests ran once each across its pieces, 15 skipped in every piece, of 911
+OK test/ccrc-doctor.test.ts: 897 tests ran once each across its pieces, 15 skipped in every piece, of 912
 OK test/ccrc-install.test.ts: 299 tests ran once each across its pieces, 20 skipped in every piece, of 319
 OK test/ccrc-update.test.ts: 502 tests ran once each across its pieces, 12 skipped in every piece, of 514
 OK test/session-hook.test.ts: 450 tests ran once each across its pieces, 0 skipped in every piece, of 450
@@ -13761,8 +13761,8 @@ OK test/session-hook.test.ts: 450 tests ran once each across its pieces, 0 skipp
 From `w4-invariants.py` (scope from W4's own commits; net shapes against the base, or the last merge of main):
 
 ```text
-base 6e4524164631, ref 2d1835188afd, tip 32bb1e15a98c, 52 W4 commits, 1 merges of main
-PASS scope            107 files touched by W4 commits (55 of them golden files); outside the scope: none; scope files untouched: none
+base 6e4524164631, ref 2d1835188afd, tip effdf577497d, 66 W4 commits, 1 merges of main
+PASS scope            109 files touched by W4 commits (55 of them golden files); outside the scope: none; scope files untouched: none
 PASS untouched        shared/, server/src/, agent/, .github/, ccd/ccd, ccd/ccrc, README.md, CLAUDE.md, single-definition.test.ts, pwa/src/lib/api.ts changed vs ref: none
 PASS links            pwa/test/message-links.test.tsx byte-equal to ref: True
 PASS golden           Task 1 commit 0b9c7f63ae65; 55 golden files at the tip, all added by it; changed since: none; added after it: none
@@ -13770,7 +13770,7 @@ PASS lock             pwa/package-lock.json differs from ref at ['packages/""/de
 PASS manifest         pwa/package.json differs at ['dependencies/hast-util-to-jsx-runtime', 'dependencies/html-url-attributes', 'dependencies/remark-parse', 'dependencies/remark-rehype', 'dependencies/unified']; 5 lines added, 0 removed
 PASS parity-append    server/test/docs-parity.test.ts at ref (447 lines) is a prefix of the tip (659 lines)
 PASS doctor-shape     ccd/ccrc-doctor-checks vs ref (7979 lines, mode 100755): 1 table line gained docs-sw in place, 1 EOF append (128 lines), other hunks: none
-PASS doctor-test      server/test/ccrc-doctor.test.ts: healthy() opens at line 1055 at ref; hunks above it: none; EOF appends: 1; all hunks: ['-1247,0 +1248,5', '-1269,0 +1275,3', '-3370,1 +3378,1', '-13761,0 +13770,307']
+PASS doctor-test      server/test/ccrc-doctor.test.ts: healthy() opens at line 1055 at ref; hunks above it: none; EOF appends: 1; all hunks: ['-1247,0 +1248,5', '-1269,0 +1275,3', '-3370,1 +3378,1', '-13761,0 +13770,323']
 PASS insert-only      server/test/ccrc-install.test.ts: 4 insertion hunk(s), lines removed or changed at none; server/test/ccrc-update.test.ts: 2 insertion hunk(s), lines removed or changed at none
 PASS deploy           deploy/deploy.sh: 1274 lines at ref, 1274 at the tip; changed in place: ['-28,1 +28,1', '-41,1 +41,1']; export line byte-equal: True
 PASS comment-lines    sw-denylist.ts header, its docstring, vite.config.ts co-tenant comment: [18, 14, 7] at ref, [18, 14, 7] at the tip
@@ -13786,10 +13786,10 @@ PASS no-d-number      D-<n> tokens new in W4 files: none; in this plan outside #
 From `w4-gate.py` (spec section 7.7), on `git archive` copies of the base and the tip:
 
 ```text
-PASS measured-at    the tip copy is HEAD 32bb1e15a98c; HEAD is 32bb1e15a98c
+PASS measured-at    the tip copy is HEAD effdf577497d; HEAD is effdf577497d
 PASS builds         npm run build rc: base 0, tip 0
-PASS worker-chunk   markdownWorker chunks: tip ['assets/markdownWorker-Dn2-_J3-.js'], base none
-PASS precached      sw.js precaches assets/markdownWorker-Dn2-_J3-.js: True
+PASS worker-chunk   markdownWorker chunks: tip ['assets/markdownWorker-DdJLW5_N.js'], base none
+PASS precached      sw.js precaches assets/markdownWorker-DdJLW5_N.js: True
 PASS one-denylist   tip sw.js: 1 line(s), 1 denylist:[
 PASS default-list   tip denylist:[/^\/api\//,/^\/ws\//]; base denylist:[/^\/api\//,/^\/ws\//]; swFixtures.ts SW_DENYLIST_DEFAULT denylist:[/^\/api\//,/^\/ws\//]
 PASS precache       16 entries at the base, 17 at the tip; added ['assets/markdownWorker.js']; removed none
@@ -13799,7 +13799,7 @@ PASS refusal        CCRC_SW_DENYLIST='/wiki,/docs': rc=1, sentence on stderr: Tr
 
 ### Mutation table
 
-Every `W4-T<n>-M<k>` row of Tasks 1-11, extracted from this plan (a re-anchored id counts once, at its last occurrence) and run by `mutate.py` in a `git archive` copy of the tree at `32bb1e15a98c`, one row at a time, each file restored byte for byte after its row.
+Every `W4-T<n>-M<k>` row of Tasks 1-11, extracted from this plan (a re-anchored id counts once, at its last occurrence) and run by `mutate.py` in a `git archive` copy of the tree at `effdf577497d`, one row at a time, each file restored byte for byte after its row.
 
 | Row | Task | File | Result | First red case (measured) |
 |---|---|---|---|---|
@@ -13835,7 +13835,7 @@ Every `W4-T<n>-M<k>` row of Tasks 1-11, extracted from this plan (a re-anchored 
 | W4-T3-M15 | T3 | `pwa/src/lib/markdownParse.ts` | red | 90 000 thematic breaks under 512 KiB are too-wide with the count |
 | W4-T3-M16 | T3 | `pwa/src/lib/markdownParse.ts` | red | 22 000 autolinks under 512 KiB are too-wide with the count (22 000 links and their paragraph) |
 | W4-T3-M17 | T3 | `pwa/src/lib/markdownParse.ts` | red | img, script and an angle-bracket placeholder become text nodes, and no raw node is left |
-| W4-T3-M18 | T3 | `pwa/src/lib/markdownParse.ts` | red | text) |
+| W4-T3-M18 | T3 | `pwa/src/lib/markdownParse.ts` | red | a heading is a tree with no position, depth 2 (root > h1 > text) |
 | W4-T3-M19 | T3 | `pwa/src/lib/markdownParse.ts` | red | control: without the pre-scan the pipeline throws RangeError, reported by name only |
 | W4-T3-M20 | T3 | `pwa/src/lib/markdownParse.ts` | red | the 'chat' and 'docs' profiles give equal outcomes over the corpus; one argument means 'chat' |
 | W4-T3-M21 | T3 | `pwa/src/lib/markdownParse.ts` | red | a hand-built hast 100 000 elements deep settles as too-deep, its innermost raw node turned to text |
@@ -13884,10 +13884,10 @@ Every `W4-T<n>-M<k>` row of Tasks 1-11, extracted from this plan (a re-anchored 
 | W4-T5-M13 | T5 | `pwa/src/lib/markdownRunner.ts` | red | the timer starts when a job is posted, not when it is queued |
 | W4-T5-M14 | T5 | `pwa/src/lib/markdownRunner.ts` | red | posts one job at a time, in order, each with its own id, src and profile |
 | W4-T5-M15 | T5 | `pwa/src/lib/markdownRunner.ts` | red | a postMessage that throws answers worker-failed with the thrown name, and the next job respawns |
-| W4-T5-M16 | T5 | `pwa/src/lib/markdownRunner.ts` | red | an abort while queued removes the job: it is never posted, and rejects with the signal's reason |
+| W4-T5-M16 | T5 (re-anchored in T11) | `pwa/src/lib/markdownRunner.ts` | red | an abort while queued removes the job: it is never posted, and rejects with the signal's reason |
 | W4-T5-M17 | T5 | `pwa/src/lib/markdownRunner.ts` | red | v1 answering after v2 was posted resolves only v2's promise, with v2's outcome |
 | W4-T5-M18 | T5 | `pwa/src/lib/markdownRunner.ts` | red | a reply, an error and an abort each cancel the job timer |
-| W4-T5-M19 | T5 | `pwa/src/lib/markdownRunner.ts` | red | an already-aborted signal rejects at once, spawning and posting nothing |
+| W4-T5-M19 | T5 (re-anchored in T11) | `pwa/src/lib/markdownRunner.ts` | red | an already-aborted signal rejects at once while another job runs, and that job is never posted |
 | W4-T5-M20 | T5 | `pwa/src/lib/markdownRunner.ts` | red | prewarm spawns once and is idempotent; the next job uses that worker |
 | W4-T5-M21 | T5 | `pwa/src/lib/markdownRunner.ts` | red | dispose terminates, rejects every pending job with an AbortError, and a later job respawns |
 | W4-T5-M22 | T5 | `pwa/src/lib/markdownRunner.ts` | red | docsRunner and chatRunner are two runners, not one |
@@ -13904,12 +13904,12 @@ Every `W4-T<n>-M<k>` row of Tasks 1-11, extracted from this plan (a re-anchored 
 | W4-T5-M33 | T5 (re-anchored in T11) | `pwa/src/lib/markdownParse.ts` | red | a non-string src answers threw TypeError without reaching the pre-scan, so the wrap is not what says it |
 | W4-T5-M34 | T5 | `pwa/src/lib/markdownWorker.ts` | red | assigns self.onmessage, which answers each job through self.postMessage |
 | W4-T5-M35 | T5 | `pwa/src/lib/markdownWorker.ts` | red | imports nothing outside the closure but unified, the three remark plugins and the hast/mdast types |
-| W4-T5-M36 | T5 | `pwa/vite.config.ts` | red | vite.config.ts bundles the worker as an ES module: worker: { format: 'es' } |
+| W4-T5-M36 | T5 (re-anchored in T11) | `pwa/vite.config.ts` | red | vite.config.ts bundles the worker as an ES module: worker: { format: 'es', plugins: ... } |
 | W4-T6-M1 | T6 | `pwa/src/lib/markdown.tsx` | red | an assistant '>'.repeat(4000) renders .msg-plain with its container-depth note, and never reaches the runner |
 | W4-T6-M2 | T6 | `pwa/src/lib/markdown.tsx` | red | the runner is called for a 5 000-byte message, with the chat profile and budget, and not for a 4 000-byte one |
 | W4-T6-M3 | T6 | `pwa/src/lib/markdown.tsx` | red | a 4 096-run of * renders .msg-plain with its delimiter-run note |
 | W4-T6-M4 | T6 | `pwa/src/lib/markdown.tsx` | red | bytes decide, not characters: 4 096 UTF-8 bytes stay synchronous, 4 097 go to the runner |
-| W4-T6-M5 | T6 | `pwa/src/lib/markdown.tsx` | red | ![](/api/example/x) draws no image and renders the URL as a plain link |
+| W4-T6-M5 | T6 (re-anchored in T11) | `pwa/src/lib/markdown.tsx` | red | ![](/api/example/x) draws no image and renders the URL as a plain link |
 | W4-T6-M6 | T6 | `pwa/src/lib/markdown.tsx` | red | a link to an image file, root-relative, is not auto-embedded: [x](/files/a.png) |
 | W4-T6-M7 | T6 (re-anchored in T11) | `pwa/src/lib/markdown.tsx` | red | keeps "  https://h.example/x.png" |
 | W4-T6-M8 | T6 (re-anchored in T11) | `pwa/src/lib/markdown.tsx` | red | refuses "https:\\\\h.example/x.png" |
@@ -14022,8 +14022,21 @@ Every `W4-T<n>-M<k>` row of Tasks 1-11, extracted from this plan (a re-anchored 
 | W4-T11-M46 | T11 | `pwa/src/lib/markdown.tsx` | red | keeps "HTTPS://h.example/x.png" |
 | W4-T11-M47 | T11 | `pwa/src/lib/markdown.tsx` | red | lone CR line endings: a table just over the cap is plain text |
 | W4-T11-M48 | T11 | `pwa/src/lib/markdown.tsx` | red | a 1-column table ended by a heading, then a wide table with no blank line: plain text |
+| W4-T11-M49 | T11 | `pwa/vite.config.ts` | red | loads with no document and answers a chat job over 4 KiB with named character references as a tree |
+| W4-T11-M50 | T11 | `pwa/vite.config.ts` | red | loads with no document and answers a chat job over 4 KiB with named character references as a tree |
+| W4-T11-M51 | T11 | `ccd/ccrc-doctor-checks` | red | PASSes /wiki/docs and /a/docs/b: an entry that ends in or holds /docs is not under /docs |
+| W4-T11-M52 | T11 | `ccd/ccrc-doctor-checks` | red | FAILs a worker it cannot read with ccrc update --force, never a WARN |
+| W4-T11-M53 | T11 | `ccd/ccrc-doctor-checks` | red | WARNs on no denylist at all, and on one that never closes: neither is the shape it knows |
+| W4-T11-M54 | T11 | `ccd/ccrc-doctor-checks` | red | FAILs an entry under /docs, and a hand-built one with no end anchor; names every covering entry |
+| W4-T11-M55 | T11 | `ccd/ccrc-doctor-checks` | red | FAILs a /docs entry with the spec's sentence and remedy, naming the entry |
+| W4-T11-M56 | T11 | `pwa/src/lib/sw-denylist.ts` | red | refuses only the Docs prefix: an entry ending in or holding /docs builds |
+| W4-T11-M57 | T11 | `pwa/src/lib/markdown.tsx` | red | a message whose bound is exactly the cap renders formatted, and one whose bound is one over is plain text |
+| W4-T11-M58 | T11 | `pwa/src/lib/markdown.tsx` | red | an image whose source the transform empties (data:) renders its alt text as plain text, with no link |
+| W4-T11-M59 | T11 | `pwa/src/lib/markdownRunner.ts` | red | one signal shared by a running job and a queued one rejects both, with no respawn and no post |
+| W4-T11-M60 | T11 | `pwa/vite.config.ts` | red | reaches the plain decoder's entity table and no document.createElement in any pre-bundled dependency |
+| W4-T11-M61 | T11 | `pwa/src/lib/markdown.tsx` | red | on the worker path too, an image whose source the transform empties renders its alt text, with no link |
 
-219 rows; 219 measured as expected.
+232 rows; 232 measured as expected.
 
 Refinement (b)'s equivalent mutant, measured in the same copy: `remarkPlugins={[remarkGfm, remarkAlerts]}` to `remarkPlugins={[remarkAlerts, remarkGfm]}` in `pwa/src/lib/markdown.tsx` leaves `test/markdown-golden.test.tsx` **green**, which is why M4.M1's rows drop a plugin instead.
 
@@ -14044,18 +14057,24 @@ Refinement (b)'s equivalent mutant, measured in the same copy: `remarkPlugins={[
 | M4.P1 | the refusal, its control, and chat's note | `DocMarkdown`'s note |
 | M4.P6 | the runner honours a 30 000 `budgetMs` | Format anyway posts a 30 000 job |
 | M4.P7 | `spawn` throws gives a sticky `worker-unavailable`, and chat's 4 KiB sync and 5 KiB note | `DocMarkdown`'s in-thread 4 KiB and 5 KiB note |
-| M4.P12 | `parseMarkdown` gives `too-wide` for both fixtures and a tree for a real 500 KiB prose doc | the `renderHast` spy has 0 calls, and the doc still renders |
+| M4.P12 | `parseMarkdown` gives `too-wide` for both fixtures and a tree for a real 500 KiB prose doc | the `renderHast` spy has 0 calls, and the doc still renders; and the spec's mutation "count only after render", which W4 replaced with "count only one element kind" (W4-T3-M16) for want of a render step |
 
 ### Notes
 
 - Task 11: Findings: raised 32, survived 30, fixed 26, carried 4, not a defect 2, asked 1 (answered by the operator 2026-10-13), ruled departures 3 (D-<n>, D-<n>, D-<n>). Commits: 1eff03f3d, 6eac2392b, b8ea29116, 038cc98f2, e7cb7ac77, 7c7d8767e, 3a2a5aee0, c8129b182, 502695dfd, 1a479c5b0, 8ce5b477f, 6c72f86ac, ce790700b, 2b5079aa1, 82c70d3ea, fca6f336f, 2501c3202, e6829728c, 5be3084a3, e2916681f, e80f3cd08, 43a6ba0be, d230ab098, bba5f5243, 13ffe6b17, 67448b526, 8932c7ac4, 25e445800, aecd43e2f, 574b643d2, 9aec4e070, 3e0c63e9f, 802548a45, e515b43ef, 0021f118f, 2c7cfb4bc. Panel tip c18535bb0; fix-wave tip 2c7cfb4bc188f835c816e0c46ec6dbaae0303c01.
-- suite 06 pwa-full: red on the first run (22 files / 50 cases, all timeouts under a load average of 30-80: archive-all-guard, box-token-card, chat, contrast (spawned-gate cases), dialog-sheet, fleet-class-chooser, fleet-screen, lifecycle-ui, markdown-highlight, new-session-sheet, pr-sheet, project-card, reap-sheet, resume-sheet, runs-screen, session-actions-sheet, session-pickers, settings-screen, start-program, swap-sheet, terminal-scrollback, update-move-sheet; plus header.test.tsx never started: `[vitest-pool]: Failed to start forks worker`, Test Files 127 of 128), green re-run alone (22 files, 1558 passed, rc=0) and header.test.tsx green alone (58 passed); a load flake.
-- suite S02 ccrc-doctor-part2: red on the first run (ccrc doctor: pool-sync > PASSes when the timer is installed and the projection is fresh), green re-run alone; a load flake.
-- suite S19 session-hook-part2: red on the first run (the compaction card ... the SWEEP run forks one further `rm` per swept candidate), green re-run alone; a load flake.
-- Operator rulings 2026-10-13 (recorded here, not carried): Q1 (chat image sources) ANSWERED, landed as D-<n>: chat draws an image only from an absolute http(s) source. The synchronous-path table cap (review 2-3) ruled D-<n>. The separator case ACCEPTED by the operator (Task 11 record C-2).
-- Claims: W4's own claims were taken at dispatch (1190, 1191), lapsed in the fleet box's tmux crash of 2026-10-12 15:48 UTC, were re-taken (1195, 1196) and re-taken again after the eight-hour hard cap (1214, 1215). Under the co-edit terms the coordinator confirmed, W4 shared `ccd/ccrc-doctor-checks` and the doctor, install and update tests with run 377 (PR #353, which merged first, so W4 is the second lander) and run 398, and `deploy/deploy.sh` and `server/test/installTreeFixture.ts` with run 354; W4 edited only its own lines in each.
-- Merges of main: one, `0c6bdd4db` (origin's `main` at `2d1835188`), licensed by a measured `git merge-tree` conflict in `server/test/ccrc-install.test.ts`; both sides kept, main's first, every W4 pin re-derived on the merged tree (none moved). No rebase, no force-push.
+- First complete run of the suites (Task 12, 2026-10-13 05:13 UTC, at `32bb1e15a98c`): red in suites 06 (22 files of timeouts under a load average of 30-80, and header.test.tsx never started: `[vitest-pool]: Failed to start forks worker`), S02 (ccrc doctor: pool-sync > PASSes when the timer is installed and the projection is fresh) and S19 (the compaction card ... the SWEEP run forks one further `rm` per swept candidate), each green re-run alone: load flakes. That run's verdict is the wave's `suite:` word; the table above is fix round 1's re-run.
+- Operator rulings 2026-10-13 (recorded here, not carried): Q1 (chat image sources) ANSWERED: chat draws an image only from an absolute http(s) source. The synchronous-path table cap (review 2-3) ruled as option B. The separator case ACCEPTED by the operator (Task 11 record C-2): a chat message of 4 KiB or less with a `*` or `_` separator line of 65 or more characters renders entirely as plain text (finding 4396's measured example; `MD_MAX_DELIMITER_RUN` is the spec's bound).
+- Fix round 1 (review 408, the coordinator's rulings in mail 4520): F1 and F2, `85c6cc990` (the worker build resolves `decode-named-character-reference` to its plain entry through a worker-only plugin, since Vite 8 has no worker-scoped resolve conditions; `markdown-worker-built.test.ts` builds the app into a temporary directory and loads the emitted chunk in a node child with no `document`; the purity scan's header and the closure sentences claim first-party specifiers only); F7, `cb3da1637`; F6, `230749a8d`; F5, F9 and F10, `e7fec4caf`; r-own, `71b1186d9` (the M7.6 whole-run case is `itLinux`; the plan's Task 10 text prescribed `it()`); F12 (a) and (b), `d1e3caf02`; F4's and F6's deviation words, F8's rows and every fix-round row, `5ff759f78`; F3, F4's W5 half, F11 and F12 (c) and (d), this results commit. Fix round 1's own review (one opus reviewer over the fix commits) found that `vite dev` still served the worker the DOM decoder (worker plugins run only when the worker is bundled), and that the built test built with vitest's NODE_ENV=test; fixed in `b7b1598c4` (a serve-only alias, never under vitest; the build runs in a node child with NODE_ENV=production) and pinned in `bc867571e` (`markdown-worker-dev.test.ts`); its F6 follow-up, `179650292`, pins the emptied-image rule on the worker path and that a blank destination arrives percent-encoded; its rows, `f5b151308`; the re-run's three rows, `7928a8f47` and `effdf5774`.
+- Fix round 1's rows: the ruling's `W4-FR1` rows are W4-T11-M49 to W4-T11-M61 in Task 11's rows block, because the extractor refuses any id but `W4-T<n>-M<k>`; W4-T5-M36 is re-anchored on the worker line F1 re-spelled (same mutation).
+- F1's main-thread bundle, measured by building the tip before and after the fix into scratch: the same four assets (`index-*.js`, `index-*.css`, `workbox-window.prod.es5-*.js`, `markdownWorker-*.js`); `index-*.js` 1 363 577 bytes both times, byte-identical but for the worker chunk's file name; `index-*.css` 140 862 bytes both times. The worker chunk grew from 128 122 to 156 760 bytes (the plain decoder's entity table). At the tip before the fix, the built chunk loaded in node with no `document` threw `ReferenceError: document is not defined`; after it, a 6 240-byte chat job answers `tree` with `&copy;` decoded.
+- F12 (c): `mutate.py` read a failed case's title as the last ` > ` segment, so W4-T3-M18's title, which holds ` > `, was cut to `text)`; it now reads vitest's `×` line whole.
+- F12 (d): commit `2dd64d70c`'s message says "the 171-id mutation table"; the table it added had 219 rows (171 was the count before Task 11). A pushed message is not rewritten.
+- Claims: W4's own claims were taken at dispatch (1190, 1191), lapsed in the fleet box's tmux crash of 2026-10-12 15:48 UTC, were re-taken (1195, 1196) and re-taken again after the eight-hour hard cap (1214, 1215); fix round 1 claimed its new test file (1228). Under the co-edit terms the coordinator confirmed, W4 shared `ccd/ccrc-doctor-checks` and the doctor, install and update tests with run 377 (PR #353, merged first) and run 398 (PR #376, merged first), and `deploy/deploy.sh` and `server/test/installTreeFixture.ts` with run 354; W4 edited only its own lines in each, fix round 1's two doctor-test edits included.
+- Merges of main: one, `0c6bdd4db` (origin's `main` at `2d1835188`), licensed by a measured `git merge-tree` conflict in `server/test/ccrc-install.test.ts`; both sides kept, main's first, every W4 pin re-derived on the merged tree (none moved). No rebase, no force-push. Fix round 1's probe against `e4405056e` exited 0 (clean), so it absorbed nothing.
 - W7 prose residue (added by this wave): the doctor table's `auth box-token` line says `_check_box-token is at the END of this file`, which stopped being true when W4 appended `_check_docs-sw` after it.
+- suite 06 pwa-full (fix round 1's re-run): red on the first run (test/contrast.test.ts > the gate fails a mutated tree > a callout variant qualified on the variant's ancestor still cannot hide the well: Test timed out in 5000ms; 1 test), green re-run alone; a load flake.
+- Scope invariant: fix round 1 added two test files the F1 ruling asked for (`pwa/test/markdown-worker-built.test.ts`, `pwa/test/markdown-worker-dev.test.ts`); `w4-invariants.py`'s test list gained them, and the re-run's first Step 2 FAILed `scope` on them alone before that.
+- Fix round 1's Task 12 re-run first measured the table at `f5b151308`: 232 rows, 229 as expected. W4-T6-M5 was SKIPPED, its anchor re-spelled by F6. W4-T5-M16 and W4-T5-M19 were green, because F7's skip of an aborted queued job in `pump()` covered both guards' effect. Fixed in `7928a8f47` (a case for an already-aborted job behind a running one, and why the splice stays) and `effdf5774`: W4-T6-M5 is re-anchored with the same mutation; W4-T5-M19 is re-measured on the new case; W4-T5-M16 drops the queued abort's reject, because dropping the splice alone is now an equivalent mutant. The table above is measured at the results tip. The suites ran at `f5b151308`; the two later commits change only `markdownRunner.ts`'s comment, its test and this plan, and `markdown-runner.test.ts` was green alone at the tip (38 passed).
 
 ### Carried, not fixed
 
@@ -14064,16 +14083,20 @@ Refinement (b)'s equivalent mutant, measured in the same copy: `remarkPlugins={[
 - W6's M5.16 ("no `postMessage(` and no `'message'` listener in `pwa/src/docs` or `lib/markdown*`") is red against `markdownWorker.ts` and `markdownRunner.ts` the day it lands, which the spec itself requires (refinement (w)). CARRIED to W6 and to the Share/Export spec amendment, which already edits M5.16; W4 edits no spec text.
 - W7 prose residue: `pwa/src/lib/api.ts`'s comment naming `MessageBubble`'s `absolute()`; `server/test/sourceScan.ts`'s header counts measured on `MessageBubble.tsx`; README's doctor table and its server-role SKIP sentence, which name neither `docs` nor `docs-sw`; README's two `CCRC_SW_DENYLIST` paragraphs and CLAUDE.md's knob mention; the spec's stale citations of refinement (s) (section 7.2's "after `models`" and its two ruling-comment line citations; section 4.10's `react-markdown/lib/index.js:123`). CARRIED to W7.
 - Chat image sources: ANSWERED by operator ruling 2026-10-13 (Q1): chat draws an image only from an absolute http(s) source (D-<n>, Task 11 fix wave); not carried.
-- A streaming chat message crossing 4 096 UTF-8 bytes, and a message Virtuoso remounts, shows `.msg-plain` for one frame (refinement (i): two components, no cache across remounts). Accepted and recorded.
+- A streaming chat message crossing 4 096 UTF-8 bytes, and a message Virtuoso remounts, shows `.msg-plain` until the worker's first answer for it, not for one frame as planned (refinement (i): two components, no cache across remounts). Accepted and recorded; corrected in fix round 1, which made the built worker answer at all.
+- Task 11 review 2-2's residual (pwa/src/lib/markdown.tsx, `keystrokeParts`): the keystroke cap is per code span, and the parse counts each code span as one element, so the element cap does not bound what chat's components draw from many spans. Measured: 50 chords of 2 048 one-character parts, a message of about 205 KB, parse to a `tree` under every cap, and `renderHast` with chat's components then draws about 204 850 elements on the main thread, 102 400 of them `<kbd>`; spec section 4.10's "can never make the main thread build an unbounded DOM" is not true of it. CARRIED to W5, whose `DocMarkdown` shares `SHARED_COMPONENTS` and counts the chips in its render budget; cost: a crafted long message can draw about 200 000 chip elements in chat until then.
+- Task 11 review N1's deferred minors (pwa/src/lib/useParsedMarkdown.ts): `jobs.latest` is set in an effect, so between a commit and its effect a reply for the previous text can show under the new one (pre-existing; set it in a layout effect); after texts A, B, A, the next text C shows B's tree while it parses (newest first, per refinement (i)); and a docstring nit with stale plan-snapshot docstrings. CARRIED to W5's hardening (the docstrings to W7's prose); cost: a frame of the previous message's tree, never a wrong final render.
+- Review 408's r10 (measured by its panel), pre-existing at base: highlight.js is quadratic on one long identifier run, so a 32 KiB `ts` fence holds the main thread for about 12 s even under the 64 Ki-character highlight cap (spec section 4.10's "hljs is linear" is not true of crafted input). CARRIED to W5, whose page inherits it through `SHARED_COMPONENTS`.
+- Review 408's r11 (measured by its panel), pre-existing at base: `keystrokeParts` splits on `/\s*\+\s*/` before its part cap, and the split is quadratic over a long run of whitespace with no `+` (a code span `a`, 80 000 spaces, `b` holds the main thread for about 12 s in the render). CARRIED to W5, whose page inherits it through `SHARED_COMPONENTS`.
 - Task 11 review R3 (pwa/src/lib/markdownWorker.ts:16, pwa/src/lib/markdownRunner.ts:161): both files call `postMessage(` and assign `onmessage`, which W6's M5.16 reds the day it lands. CARRIED: refinement (w); to W6 and the Share/Export spec amendment, which edits M5.16
-- Task 11 review 1-4 (pwa/src/lib/markdownGuard.ts:21): the pre-scan recognises a fence only within 3 spaces of the line start and never inside a container or indented code, so a chat message of 4 KiB or less with a fence in a nested list, a blockquote or indented code and a 65+ character `*` run goes to `.msg-plain`. CARRIED (spec_behaviour_change: §4.10's own 3-space fence rule) with its measured example: a fence in a nested list, a blockquote or indented code holding a 70-character `*`/`_` run renders as msg-plain. The separator case it was first named beside was ACCEPTED by the operator (C-2).
+- Task 11 review 1-4 (pwa/src/lib/markdownGuard.ts:21): the pre-scan recognises a fence only within 3 spaces of the line start and never inside a container or indented code, so a chat message of 4 KiB or less with a fence in a nested list, a blockquote or indented code and a 65+ character `*` run goes to `.msg-plain`. CARRIED (spec_behaviour_change: §4.10's own 3-space fence rule) with its measured example: a fence in a nested list, a blockquote or indented code holding a 70-character `*`/`_` run renders as msg-plain. The separator case it was first named beside, a chat message of 4 KiB or less with a `*` or `_` separator line of 65 or more characters, which renders entirely as plain text (finding 4396's measured example), was ACCEPTED by the operator (C-2).
 - Task 11 review 5-2 (ccd/ccrc-doctor-checks:8102): an anchored `/^\/` RegExp entry that covers /docs without the full prefix plus one of the four tails (`/^\/doc/`, `/^\//`, `/^\/docs?/`, `/^\/doc[s]/`, `/^\/docs\b/`) PASSes with 'none of them /docs or under it'. CARRIED to W7 (docs-sw hardening): `sw-denylist.ts` escapes every knob entry into the `/^\/<p>(\/\|$)/` form, so only a hand-built bundle carries these entries; judging an arbitrary entry needs a JS-regex evaluation against /docs, outside the builtins-only doctor (D-<n>). Task 12's results list it with the five measured entries; cost if wrong: a hand-edited sw.js denying /docs via a prefix-short regex reads PASS
 - Task 11 review 6-2 (docs/superpowers/plans/2026-10-09-native-docs-reader-w4-pwa-foundation.md:1859): M4.P12's spec mutation 'count only after render' has no plan row; the plan replaces it with 'count only one element kind' (W4-T3-M16), which is neither a defined deviation nor carried to W5. CARRIED to W5 with M4.P12's W5 half (refinement (a), D-<n>): 'count only after render' needs a render step W4 has not got; Task 12's W5-halves list gains it verbatim; cost: none in W4
 - Task 11 review C-1 (pwa/src/lib/markdownGuard.ts): nesting continued by indentation across lines is not counted by the pre-scan; chat's synchronous path for messages of 4 KiB or less can spend about 0.5 s or more of main-thread parse on a crafted message (measured 3 989 bytes: too-deep 1217 in 0.67 s). CARRIED (coordinator ruling 4354): covered by threw, MD_MAX_TREE_DEPTH and the worker budget; to the operator with W5's planning
 
 ### After the merge, not this wave
 
-1. The merge becomes a prerelease (`release-main.yml`), the `dev` channel. Rollout is optional (spec section 7.7's W4 row): phones update with no visible change beyond crash resilience.
+1. The merge becomes a prerelease (`release-main.yml`), the `dev` channel. Rollout is optional (spec section 7.7's W4 row): phones update with no visible change beyond crash resilience and the ruled changes recorded here (the refused chat image sources, the shapes chat now shows as plain text, and a long message's `.msg-plain` until its first parse).
 2. When the coordinator next moves the boxes (`ccrc rollout`, fleet box first), the server box's closing doctor runs `docs-sw` for the first time; on a release-lane box it PASSes on the default bundle, and a fleet box SKIPs it.
 3. On a box built by `deploy.sh` with `/docs` in `CCRC_SW_DENYLIST`, the build now refuses (spec section 7.3). The operator's one act is removing `/docs` from their own `~/.ccrc/deploy.env`; ccrc never edits it.
 4. W5's brief inherits the W5 halves above; the M5.16 carry goes to W6 and the Share/Export amendment; the prose residue goes to W7.
