@@ -296,17 +296,6 @@ function blockContent(line: string): string {
   }
 }
 
-/** The fence a line opens (3 or more backticks or tildes; a backtick fence's info string holds no backtick), or
- *  `undefined`. */
-function chatFenceOpen(s: string): { ch: string; len: number } | undefined {
-  const ch = s[0];
-  if (ch !== '`' && ch !== '~') return undefined;
-  let j = 0;
-  while (s[j] === ch) j += 1;
-  if (j < 3 || (ch === '`' && s.indexOf('`', j) !== -1)) return undefined;
-  return { ch, len: j };
-}
-
 /** The columns of a GFM delimiter row (`|---|:-:|`), or 0 when `s` is not one: it holds a pipe, and every cell
  *  between the pipes is `-` repeated with an optional `:` at either end. A leading and a trailing pipe add no cell. */
 function delimiterColumns(s: string): number {
@@ -328,12 +317,13 @@ function delimiterColumns(s: string): number {
 }
 
 /** How many cells the GFM tables in `src` would draw: columns (read from the delimiter row) times rows (the header
- *  line, then every line up to a blank line or a fence). A cheap count from the source, one pass over the lines with
- *  no recursion: fenced code is skipped, container markers (`>`, list markers) are stripped, and a table's body
- *  lines count whole rows, as the parse pads a short row to the table's width. It over-counts rather than misses. */
+ *  line, then every line up to a blank line). A cheap count from the source, one pass over the lines with no
+ *  recursion: container markers (`>`, list markers) are stripped, and a table's body lines count whole rows, as the
+ *  parse pads a short row to the table's width. Fences are NOT tracked: a fence the parser closes with its
+ *  container, or opens inside one, would make a count that skips fenced lines miss a table the parse then draws, so
+ *  table-shaped text is counted wherever it stands. It over-counts rather than misses. */
 export function countChatTableCells(src: string): number {
   let total = 0;
-  let fence: { ch: string; len: number } | undefined;
   let cols = 0;
   let prev = '';
   let start = 0;
@@ -342,14 +332,7 @@ export function countChatTableCells(src: string): number {
     if (end < 0) end = src.length;
     const s = blockContent(src.slice(start, end));
     start = end + 1;
-    if (fence !== undefined) {
-      let j = 0;
-      while (s[j] === fence.ch) j += 1;
-      if (j >= fence.len && s.slice(j).trim() === '') fence = undefined;
-      continue;
-    }
-    fence = chatFenceOpen(s);
-    if (fence !== undefined || s.trim() === '') {
+    if (s.trim() === '') {
       cols = 0;
       prev = '';
       continue;
