@@ -110,6 +110,65 @@ function harnessEnvelope(s: string): string | null {
 }
 
 /**
+ * D-4950. The operator's message as Claude Code records it when it ABSORBS the
+ * message mid-turn, or null when the record is anything else.
+ *
+ * A message sent to a busy session is queued in the pane, and on current Claude
+ * Code the usual fate of a queued message is not a turn of its own: the harness
+ * hands it to the model at the next tool boundary and writes three records —
+ * `{"type":"queue-operation","operation":"enqueue"}`, the same with
+ * `"operation":"remove","reason":"absorbed_mid_turn"`, and
+ *
+ *     {"type":"attachment","uuid":…,"timestamp":…,"attachment":{"type":"queued_command",
+ *      "prompt":"<the text>","commandMode":"prompt","origin":{"kind":"human"},…}}
+ *
+ * — and NO `type:"user"` record, ever. Measured 2026-10-13 over the fleet's 25
+ * most recent transcripts: 1058 enqueues, 578 dequeues and 467 removes as
+ * `absorbed_mid_turn`; the shape is in transcripts from 2.1.201 builds on, and
+ * the 2.1.296 binary still writes it. So the absorbed path is the common case,
+ * not an edge, and reading only `user` records made that message invisible
+ * twice over: the chat never showed it, and the PWA's optimistic bubble never
+ * met its echo and sat under Claude's answer to it for the whole ten-minute
+ * queued horizon before vanishing anyway.
+ *
+ * Read as a `user` event — what it IS — so the chat shows it once, at the point
+ * in the turn where the model actually received it, and the PWA's existing
+ * echo match clears the bubble with no second matcher. ONCE is measured, not
+ * assumed: over 25 recent transcripts, 44 queued `prompt` records, the only one
+ * whose text also appeared as a user record was a one-letter answer typed
+ * twice. A dequeued message is written as an ordinary user record and gets no
+ * attachment, so the two paths never describe the same message.
+ *
+ * BOTH fields decide, positively, because the queue carries more than the
+ * operator. `origin.kind` names the speaker: `human` is the pane's input box,
+ * which is where the PWA's tmux path types (a mail nudge arrives the same way,
+ * and reads here exactly as it does when it lands as a user record); the same
+ * record also arrives as `peer` (another agent's message, with mode `prompt`),
+ * `task-notification` (or no origin at all, on older builds) and further kinds
+ * the 2.1.296 binary spells (`plugin`, `channel`, `auto-continuation`, …).
+ * `commandMode` names what kind of input it was: `prompt` is prose, while the
+ * binary's queue also holds `bash`, `task-notification` and `poll-event`
+ * items — a human's `!cmd` would be the first, and is not something they SAID.
+ * No human item in any mode but `prompt` was seen in the transcripts measured.
+ * An item that fails either test is dropped exactly as every attachment was
+ * before this read existed.
+ *
+ * The text is the prompt VERBATIM, as a string user record's content is — the
+ * PWA compares it byte for byte against `composePrompt`'s output. The
+ * `rendered` member is the system-reminder the MODEL was shown, not what the
+ * operator typed, and is never read.
+ */
+function absorbedPrompt(attachment: unknown): string | null {
+  if (attachment === null || typeof attachment !== 'object') return null;
+  const a = attachment as { type?: unknown; prompt?: unknown; commandMode?: unknown; origin?: unknown };
+  if (a.type !== 'queued_command' || a.commandMode !== 'prompt') return null;
+  const origin = a.origin;
+  if (origin === null || typeof origin !== 'object' || (origin as { kind?: unknown }).kind !== 'human') return null;
+  if (typeof a.prompt !== 'string' || a.prompt.trim() === '') return null;
+  return a.prompt;
+}
+
+/**
  * Parse one transcript JSONL line into zero or more ChatEvents.
  * Defensive by contract: a malformed line returns [], never throws.
  */
@@ -131,12 +190,19 @@ export function parseTranscriptLine(line: string): ChatEvent[] {
     isApiErrorMessage?: unknown;
     error?: unknown;
     quotaLimits?: unknown;
+    attachment?: unknown;
   };
   if (env.isSidechain === true) return [];
-  if (env.type !== 'user' && env.type !== 'assistant') return [];
 
   const uuid = typeof env.uuid === 'string' ? env.uuid : '';
   const ts = typeof env.timestamp === 'string' ? env.timestamp : '';
+
+  // D-4950: the one attachment that is the operator's own message.
+  if (env.type === 'attachment') {
+    const text = absorbedPrompt(env.attachment);
+    return text === null ? [] : [{ kind: 'user', uuid, ts, text }];
+  }
+  if (env.type !== 'user' && env.type !== 'assistant') return [];
   const content = env.message?.content;
   const out: ChatEvent[] = [];
 

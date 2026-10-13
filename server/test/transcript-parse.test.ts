@@ -533,6 +533,92 @@ describe('a harness-written user record is not the operator speaking', () => {
     expect(parseTranscriptLine(rec([{ type: 'text', text: '  ' }], { isMeta: true }))).toEqual([]);
   });
 });
+
+/**
+ * D-4950. A message the operator sends while the session is busy is, on current
+ * Claude Code, usually ABSORBED MID-TURN: the transcript gets a
+ * `queue-operation` enqueue, a `queue-operation` remove with
+ * `reason:"absorbed_mid_turn"`, and this `attachment` record — and never a
+ * `type:"user"` record at all. The record below is the measured shape (every
+ * key, in Claude Code's own order) with neutral text and ids.
+ */
+describe('an absorbed mid-turn message is the operator speaking (D-4950)', () => {
+  const PROMPT = 'also check the retention policy';
+  const TS_Q = '2026-10-01T02:47:23.054Z';
+  const queued = (attachment: Record<string, unknown>, extra: Record<string, unknown> = {}): string => JSON.stringify({
+    parentUuid: 'p-1', isSidechain: false,
+    attachment: {
+      type: 'queued_command', prompt: PROMPT, source_uuid: 's-1', commandMode: 'prompt',
+      origin: { kind: 'human' }, timestamp: TS_Q, humanTurn: true, ...attachment,
+    },
+    type: 'attachment', uuid: 'q-1', timestamp: TS_Q,
+    rendered: [{ content: `<system-reminder>\nThe user sent a new message while you were working:\n${PROMPT}\n\n</system-reminder>` }],
+    renderedRole: 'system', session_id: 'sess-a', userType: 'external', entrypoint: 'cli',
+    cwd: '/work/project-a', sessionId: 'sess-a', version: '2.1.285', gitBranch: 'ws/lane-a',
+    ...extra,
+  });
+
+  it('parses to ONE user event carrying the prompt verbatim, the record\'s own uuid and timestamp', () => {
+    expect(parseTranscriptLine(queued({}))).toEqual([{ kind: 'user', uuid: 'q-1', ts: TS_Q, text: PROMPT }]);
+  });
+
+  it('reads the record without `humanTurn` the same way — older builds never wrote it', () => {
+    expect(parseTranscriptLine(queued({ humanTurn: undefined }))).toEqual([
+      { kind: 'user', uuid: 'q-1', ts: TS_Q, text: PROMPT },
+    ]);
+  });
+
+  it('a queued task notification is not the operator — it stays dropped, in both measured shapes', () => {
+    const notif = '<task-notification>\n<task-id>t1</task-id>\n<status>completed</status>\n</task-notification>';
+    expect(parseTranscriptLine(queued({ prompt: notif, commandMode: 'task-notification', origin: undefined }))).toEqual([]);
+    expect(parseTranscriptLine(queued({
+      prompt: notif, commandMode: 'task-notification', origin: { kind: 'task-notification', producer: 'session-task' },
+    }))).toEqual([]);
+  });
+
+  it('a message from a PEER agent is not the operator, though its mode is `prompt`', () => {
+    expect(parseTranscriptLine(queued({ origin: { kind: 'peer', from: 'agent-a', body: PROMPT } }))).toEqual([]);
+  });
+
+  it('a human\'s queued item in another mode (`bash`) is not prose the operator sent', () => {
+    expect(parseTranscriptLine(queued({ prompt: 'ls -la', commandMode: 'bash' }))).toEqual([]);
+  });
+
+  it('an empty or non-string prompt produces nothing, and never throws', () => {
+    expect(parseTranscriptLine(queued({ prompt: '   ' }))).toEqual([]);
+    expect(parseTranscriptLine(queued({ prompt: 42 }))).toEqual([]);
+    expect(parseTranscriptLine(queued({ origin: null }))).toEqual([]);
+    expect(parseTranscriptLine(JSON.stringify({ type: 'attachment', uuid: 'q-2', timestamp: TS_Q, attachment: null }))).toEqual([]);
+  });
+
+  it('every other attachment, and the queue-operation records around it, stay dropped', () => {
+    // The TYPE decides first: the same speaker and mode fields under another
+    // attachment type are not this record, however much they look like it.
+    expect(parseTranscriptLine(queued({ type: 'queued_command_preview' }))).toEqual([]);
+    expect(parseTranscriptLine(JSON.stringify({
+      type: 'attachment', uuid: 'q-3', timestamp: TS_Q, attachment: { type: 'edited_text_file', filename: 'a.ts' },
+    }))).toEqual([]);
+    expect(parseTranscriptLine(JSON.stringify({
+      type: 'queue-operation', operation: 'remove', reason: 'absorbed_mid_turn', timestamp: TS_Q, sessionId: 'sess-a',
+    }))).toEqual([]);
+  });
+
+  it('a sidechain\'s absorbed message is a subagent\'s, not the operator\'s', () => {
+    expect(parseTranscriptLine(queued({}, { isSidechain: true }))).toEqual([]);
+  });
+
+  it('the text is byte for byte what a user record of the same message reads as — nothing trimmed', () => {
+    // The PWA matches this text against `composePrompt`'s output byte for
+    // byte, and a string user record's text is its content verbatim. The two
+    // paths describe the same kind of message and have to agree: a trim here
+    // would leave an indented or newline-ended message's bubble unmatched.
+    const raw = '  indented first line\n\n- a bullet\n';
+    expect(parseTranscriptLine(JSON.stringify({
+      type: 'user', uuid: 'u-1', timestamp: TS_Q, message: { role: 'user', content: raw },
+    }))).toEqual([{ kind: 'user', uuid: 'u-1', ts: TS_Q, text: raw }]);
+    expect(parseTranscriptLine(queued({ prompt: raw }))).toEqual([{ kind: 'user', uuid: 'q-1', ts: TS_Q, text: raw }]);
+  });
+});
 import { continuationOf, continuationInTail, tailRecordOf, CONTINUATION_TAIL_BYTES } from '../src/transcript/parse.js';
 
 const OLD = 'a'.repeat(36);

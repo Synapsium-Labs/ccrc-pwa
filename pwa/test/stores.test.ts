@@ -732,6 +732,207 @@ describe('a queued send', () => {
   });
 });
 
+// — session store: what counts as a pending's echo —
+
+describe('the echo that clears a pending', () => {
+  const userAt = (uuid: string, text: string, ts: string): ChatEvent => ({ kind: 'user', uuid, ts, text });
+  const systemAt = (uuid: string, text: string, ts: string): ChatEvent => ({ kind: 'system', uuid, ts, text });
+  const assistantAt = (uuid: string, text: string, ts: string): ChatEvent => ({ kind: 'assistant', uuid, ts, text });
+  // The BOX's clock: every transcript timestamp is written by Claude Code on
+  // the fleet box, never by the phone.
+  const T0 = '2026-07-20T10:00:00.000Z';
+  const T1 = '2026-07-20T10:00:03.000Z';
+  const backlog = (file: string, events: ChatEvent[], uuid = 'u1'): SessionStreamMsg =>
+    ({ type: 'backlog', uuid, events, offset: 40, file, missing: false });
+  const make = (id: string) => {
+    vi.useFakeTimers();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    return createSessionStore(id, { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 600_000 });
+  };
+
+  // — D-4950: the absorbed message, end to end —
+
+  it('a message absorbed mid-turn clears its bubble and shows once, where the model took it', async () => {
+    // The server now reads Claude Code's `queued_command` attachment as a user
+    // event (`transcript/parse.ts`'s `absorbedPrompt`); this is that event
+    // meeting the store, inside the busy turn it was absorbed into.
+    const store = make('e0');
+    store.getState().apply(backlog('/t/a.jsonl', [userAt('a0', 'run the suite', T0), toolUse('a1', 't1')]));
+    await store.getState().send('also check the retention policy');
+    vi.advanceTimersByTime(60);
+    expect(store.getState().pending[0]).toMatchObject({ state: 'sending', queued: true });
+
+    store.getState().apply({
+      type: 'events', uuid: 'u1', offset: 90,
+      events: [toolResult('t1', 'ok'), userAt('q1', 'also check the retention policy', T1), assistantAt('a2', 'Checked.', T1)],
+    });
+    expect(store.getState().pending).toEqual([]);
+    expect(store.getState().events.filter((e) => e.kind === 'user').map((e) => e.uuid)).toEqual(['a0', 'q1']);
+  });
+
+  // — D-4951: a slash command echoes as a SYSTEM row —
+
+  it('a slash command is cleared by its own system echo, not by the ten-minute fallback', async () => {
+    const store = make('e1');
+    await store.getState().send('/compact');
+    vi.advanceTimersByTime(60);
+    expect(store.getState().pending[0]).toMatchObject({ state: 'sending', queued: true });
+
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [systemAt('c1', '/compact', T1)] });
+    expect(store.getState().pending).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('the echo names the COMMAND, not the line — arguments never come back', async () => {
+    const store = make('e2');
+    await store.getState().send('/effort ultracode');
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [systemAt('c1', '/effort', T1)] });
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  it('/clear is cleared by the echo in the fresh transcript the rotation hands over', async () => {
+    const store = make('e3');
+    store.getState().apply(backlog('/t/a.jsonl', [userAt('a1', 'earlier', T0)]));
+    await store.getState().send('/clear');
+    vi.advanceTimersByTime(60);
+    store.getState().apply({ type: 'rotated', uuid: 'u2' });
+    store.getState().apply(backlog('/t/b.jsonl', [systemAt('c1', '/clear', T1)], 'u2'));
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  it('a different command does not clear it', async () => {
+    const store = make('e4');
+    await store.getState().send('/compact');
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [systemAt('c1', '/clear', T1)] });
+    expect(store.getState().pending).toHaveLength(1);
+  });
+
+  it('prose is never cleared by a system row, even one that says the same words', async () => {
+    // A command's stdout is a system row too, and can be one word.
+    const store = make('e5');
+    await store.getState().send('ok');
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [systemAt('c1', 'ok', T1)] });
+    expect(store.getState().pending).toHaveLength(1);
+  });
+
+  // The command is read off the text the pane was GIVEN — `composePrompt`'s
+  // output, which the server injects — not off what the composer held.
+  it('a send with an attachment is not that command, even when its text starts with a slash', async () => {
+    // The pane is given `<clip path>\n/compact`: `/compact` is not the first
+    // word of what it received, so a `/compact` row is somebody else's.
+    const store = make('e5a');
+    await store.getState().send('/compact', { attachments: [{ path: '/p/clip-1-a1b2.png' }] });
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [systemAt('c1', '/compact', T1)] });
+    expect(store.getState().pending).toHaveLength(1);
+  });
+
+  it('a command typed under a blank line is the command the pane ran', async () => {
+    // `composePrompt` drops leading blank lines before the text is injected,
+    // so the pane ran `/compact` and its echo is this row.
+    const store = make('e5b');
+    await store.getState().send('\n/compact');
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [systemAt('c1', '/compact', T1)] });
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  // — D-4952: a replay is not an echo —
+
+  it('a backlog that replays history the operator already saw does not clear the message they just sent', async () => {
+    const store = make('e6');
+    const history = [userAt('old-1', 'yes', T0), assistantAt('old-2', 'done', T0)];
+    store.getState().apply(backlog('/t/a.jsonl', history));
+    await store.getState().send('yes');
+    vi.advanceTimersByTime(60);
+    expect(store.getState().pending[0]).toMatchObject({ state: 'sending', queued: true });
+
+    // A reconnect re-sends the same file's window: same uuids, same times.
+    store.getState().apply(backlog('/t/a.jsonl', history));
+    expect(store.getState().pending).toHaveLength(1);
+    // The stream follows a fork to its successor, which carries the history
+    // forward. Even under NEW uuids the copy keeps its timestamps, so it is
+    // still not newer than what was on screen when the operator sent.
+    store.getState().apply(backlog('/t/b.jsonl', [userAt('new-1', 'yes', T0), assistantAt('new-2', 'done', T0)]));
+    expect(store.getState().pending).toHaveLength(1);
+
+    // The real echo lands in the successor, after the send.
+    store.getState().apply(backlog('/t/b.jsonl', [userAt('new-1', 'yes', T0), userAt('new-3', 'yes', T1)]));
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  it('a replayed slash command is not its echo either', async () => {
+    const store = make('e7');
+    store.getState().apply(backlog('/t/a.jsonl', [systemAt('c0', '/compact', T0)]));
+    await store.getState().send('/compact');
+    store.getState().apply(backlog('/t/b.jsonl', [systemAt('c0', '/compact', T0)]));
+    expect(store.getState().pending).toHaveLength(1);
+  });
+
+  it('the bar is the NEWEST event on screen, not the first one or the last one', async () => {
+    // Transcript order is not time order. Claude Code writes a record with the
+    // timestamp its message already carries (the 2.1.296 chain writer spreads
+    // the record's own `timestamp`), so a resumed or copied record is appended
+    // after records stamped later than it. Here the newest time on screen sits
+    // in the middle of the window, and a replayed "yes" stamped between the
+    // first event and the newest is still history.
+    const store = make('e7a');
+    const T3 = '2026-07-20T10:00:09.000Z';
+    const T9 = '2026-07-20T10:00:27.000Z';
+    const T10 = '2026-07-20T10:00:30.000Z';
+    const history = [
+      assistantAt('h0', 'ready', T0), userAt('h1', 'yes', T3),
+      assistantAt('h2', 'done', T9), assistantAt('h3', 'resumed', T1),
+    ];
+    store.getState().apply(backlog('/t/a.jsonl', history));
+    await store.getState().send('yes');
+    store.getState().apply(backlog('/t/a.jsonl', history));
+    expect(store.getState().pending).toHaveLength(1);
+
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 90, events: [userAt('n1', 'yes', T10)] });
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  // The comparison is box clock against box clock. The phone's clock never
+  // enters it, so a phone set far ahead of the box or far behind it changes
+  // nothing — a sent-at stamp taken from `Date.now()` would fail one of these
+  // two in each direction.
+  it('a phone clock far AHEAD of the box still lets a fresh echo clear', async () => {
+    const store = make('e8');
+    vi.setSystemTime(new Date('2027-03-01T00:00:00.000Z'));
+    store.getState().apply(backlog('/t/a.jsonl', [assistantAt('a1', 'ready', T0)]));
+    await store.getState().send('hello');
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [userAt('n1', 'hello', T1)] });
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  it('a phone clock far BEHIND the box still refuses a replay', async () => {
+    const store = make('e9');
+    vi.setSystemTime(new Date('2025-01-01T00:00:00.000Z'));
+    const history = [userAt('old-1', 'yes', T0)];
+    store.getState().apply(backlog('/t/a.jsonl', history));
+    await store.getState().send('yes');
+    store.getState().apply(backlog('/t/b.jsonl', history));
+    expect(store.getState().pending).toHaveLength(1);
+  });
+
+  it('a local divider is the PHONE\'s clock and never sets the bar', async () => {
+    const store = make('e10');
+    vi.setSystemTime(new Date('2027-03-01T00:00:00.000Z'));
+    store.getState().apply(backlog('/t/a.jsonl', [assistantAt('a1', 'ready', T0)]));
+    store.getState().apply({ type: 'notice', message: 'Reconnected' });
+    await store.getState().send('hello');
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [userAt('n1', 'hello', T1)] });
+    expect(store.getState().pending).toEqual([]);
+  });
+
+  it('an event whose time does not parse never sets the bar', async () => {
+    const store = make('e11');
+    store.getState().apply(backlog('/t/a.jsonl', [userAt('x1', 'first', ''), assistantAt('a1', 'ready', T0)]));
+    await store.getState().send('hello');
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [userAt('n1', 'hello', T1)] });
+    expect(store.getState().pending).toEqual([]);
+  });
+});
+
 // — session store: connection —
 
 describe('session store connect()', () => {
