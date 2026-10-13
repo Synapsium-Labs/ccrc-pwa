@@ -22,12 +22,31 @@ The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> 
 | 3 | routes: `server/src/docs/{routes,hooks,lane,cache}.ts`, registration, dark rollout, R1/R2 | #339 | **merged** 2026-10-09 (`f4d75a741`). Run 342: review 361, one fix round, scoped re-review 364 clean. After the merge, the operator runs the dark rollout, fleet first, then R2 and R1 (§7.8). Both gate W5's merge |
 | 4 | PWA foundation: markdown extraction, `RenderBoundary`, chat hardening (U3), `docs-sw` | #381 | **merged** 2026-10-13 (`baba5c1bc`). Run 367: review 408 (12 findings, one critical: the built worker chunk could not load in a browser worker), one fix round, scoped re-review 412 (8 minor, carried to W5). Nine deviations, 4768 to 4776; 4777 to 4783 unspent. Run 367 closed done after W5's run opened |
 | 5 | Docs screen, plus Share and Export (see Decisions, 2026-10-06); plain, plus `<br>` as a line break in the docs profile (2026-10-12) | — | **run 413 open** (planned) 2026-10-13, block 4917 to 4932; plan not yet written |
-| 5b | parity, server half: sections `vision` and `promise`, per-doc history (`docs-log`), page key `at=<sha>` (proposed, rich-docs spec 2026-10-12) | — | proposed; after W5 |
+| 5b | parity, server half: sections `vision` and `promise`, per-doc history (`docs-log`), page key `at=<sha>` (rich-docs spec 2026-10-12) | — | after W5 (operator, 2026-10-13) |
 | 6 | mockups | — | after W5 |
 | 7 | docs and release | — | after W6 |
 | 8 | the reader frame: the shared library `docserver` mounted in a sandboxed frame with a checked bridge, the plain pipeline as fallback (proposed, rich-docs spec 2026-10-12) | — | proposed; after W5b, W6, W7 and library v1 |
 
 ## Decisions & deviations
+- **2026-10-13: Share and Export, and W5b's place (operator).** The operator accepted the recommended option on all 12 decisions of the Share/Export design:
+  - Share always opens ccrc's sheet, and its access note always shows.
+  - Export never fetches; images not yet loaded wait up to 10 s, then become placeholders. The file is capped at 10 MiB.
+  - A mockup export is a wrapper around a sandboxed frame.
+  - Only leaf pages offer Export.
+  - On iOS, Export builds first, then saves on a separate tap.
+  - An unpushed commit gets no link.
+  - Mockup limits: an open-formatting cap first, then the tag limit is re-derived.
+  - The export pins the exporter's theme.
+  - Mermaid in HTML specs: W6 lists script-text imports as census-only rows, and `MOCKUP_CSP` is never widened.
+  - ccd's slug fix is a standalone PR now.
+  - W5b goes after W5 (the rich-docs spec's RD23).
+  The amendment is written in place in the 2026-10-01 spec (its §0 row `share-export`). It adds §4.16 Share, §4.17 Export and §5.6.9 mockup export, three figures, and 37 mutation rows. W5 gets Share, Markdown/text/image Export and the `GithubTarget` widening as its first L0 task. W6 gets mockup Export, the script-text census and the formatting limit. M5.16 now owns the carve-out for W4's worker files (Q2, answered) and the export allowances, each with a planted control.
+- **2026-10-13: rulings on the amendment's open questions (coordinator).**
+  - `bad-slug` (the slug) and `bad-target` (the commit or path) are two refusal words, both confirmed.
+  - W5 bounds W4's r10, r11 and 2-2 in the shared Markdown components, because Docs pages render arbitrary repository documents through them. Each bound gets a measured value, a case and a mutation row in W5's plan, and chat gains the same bounds.
+  - The rich-docs spec's edits that follow from this amendment are made in the same change: A2a, A2b and M8.10, M9.14, the W8 row (which owns the decision on what Export means on the reader path, and copies through `copyText`), G9, and RD23 answered. Its decision log also marks RD25 and RD27 as ruled (R-g).
+  - The design was reviewed by three lenses (fidelity, security, implementability). All 40 findings were applied.
+- **2026-10-13: the shared library's first wave.** Its L1 plan was approved by the operator and merged in the library's repository. Its first run is open and waits for a fleet slot.
 - **2026-10-13: W4 merged (#381, `baba5c1bc`).**
   - **Wave-done.** The first full suite run was red only under load. Each red file (PWA 5000 ms timeouts, one `ccrc-doctor` case, one `session-hook` case) was green alone, so routing is unchanged.
   - **Review 408** (held-out panel plus the plan's five lenses, 119 agents) found 12 issues. F1 was critical: the built `markdownWorker` chunk threw `document is not defined` on load, because the worker build resolved a dependency's browser entry. Every chat message over 4 KiB would have rendered as plain text. No in-process test could see it.
@@ -160,7 +179,7 @@ The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> 
 - **SEC-4:** fetch stamps accumulate, one per distinct branch name (W5 housekeeping).
 - **No stamp after a failed post-fetch for-each-ref** (W5).
 - **`branch: null`** covers both a detached HEAD and an unmeasured read (W2 adapter and W5 rendering).
-- **`GithubTarget` cannot express `resolveDocRef`'s `repo` kind** (W3/W4, with its consumer).
+- **`GithubTarget` cannot express `resolveDocRef`'s `repo` kind.** This is W5's first L0 task: the amended §3.11 widens it with `repo` and `root`.
 - **A commit missing from a partial clone** answers `git-failed {step:'cat-file'}` on git 2.43 and `unknown-commit` on 2.55. W2 carries it in its results and does not close it.
 - **Over-cap `too-many-entries`** reports `bytes` measured on a stripped body.
 - **W7 prose residue:**
@@ -197,7 +216,7 @@ The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> 
 ## Next-wave brief (W5)
 
 - **Plan:** not written yet. W5 needs W3 and W4 (both merged). Before its merge, the operator runs W3's dark rollout, fleet first, then R2 and R1 (spec §7.8).
-- **Scope:** the Docs screen, plus Share and Export (Decisions, 2026-10-06), plain, plus `<br>` as a line break in the docs profile (2026-10-12). The placement of W5b (recommended: after W5) is the operator's.
-- **Inputs:** W4's results (the W5 halves of D-4768, M4.P12's mutation included, and "Carried, not fixed"), the W4 residue and carried items above, and the twelve Share/Export decisions still with the operator.
+- **Scope:** the Docs screen, plus Share and Export (Decisions, 2026-10-06), plain, plus `<br>` as a line break in the docs profile (2026-10-12). W5b follows W5 (operator, 2026-10-13).
+- **Inputs:** the amended 2026-10-01 spec (Share and Export, §4.16, §4.17, §7.7's W5 row and gate), W4's results (the W5 halves of D-4768, M4.P12's mutation included, and "Carried, not fixed"), the W4 residue and carried items above, and the bounds on r10, r11 and 2-2 (Decisions, 2026-10-13).
 - **Base:** `main` at or after `baba5c1bc`.
 - **Run and block:** run 413, opened 2026-10-13 (planned). Deviation block 4917 to 4932, issued at run-open.
