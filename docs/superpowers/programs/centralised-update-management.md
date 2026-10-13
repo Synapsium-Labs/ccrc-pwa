@@ -1355,6 +1355,20 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - Wave 15 (run 300) is still held by the open PR #351 (`ccd/ccd`).
       - STATUS: fleet and server v0.0.159, newest v0.0.160, backups fleet 172M/server 663M, disk free fleet 217G/work
         volume 220G/server 33G, converged at 01:51.
+    - **2026-10-13 02:43 UTC: v0.0.162 auto-converged unattended, past v0.0.160 and v0.0.161.** No action was taken.
+      - The releases:
+        - v0.0.160, #321 (delegation broker's wave 2), at 01:49:47;
+        - v0.0.161, #380 (docs), at 02:11:26;
+        - v0.0.162, #379 (the role skills say they are never for a subagent), at 02:15:45.
+      - The 02:19 poll found all three, and the auto move went straight to the newest. The fleet box ran 02:19:46 to
+        02:21:50, and the server followed at 02:22:10 to 02:22:32, 20 seconds after the fleet.
+      - Both boxes read `box-token` PASS. Server doctor: 25 passed, 0 warned, 0 failed. Fleet doctor: 33 passed, 6
+        warned, 0 failed; graphify's sweep-age warning has cleared.
+      - v0.0.163 (the GPT lanes' system-prompt and parallel-tool-call fix) was published at 02:27:28, after the poll. It
+        moves at the next one, about 02:52.
+      - Wave 15 (run 300) is still held by the open PR #351 (`ccd/ccd`).
+      - STATUS: fleet and server v0.0.162, newest v0.0.163, backups fleet 145M/server 667M, disk free fleet 217G/work
+        volume 220G/server 33G, no anomalies at 02:42.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
