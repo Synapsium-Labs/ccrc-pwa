@@ -259,11 +259,11 @@ const GATES = {
     re: /if \(body\.crossPool === true\) \{\s*if \(!isRegistryId\(id\)\)/,
   },
   /** The legacy stop pair's two parts, the wrapper and the row's `.project`, are fields no id gate reads. This refuses a row
-   *  whose part is not a registry id; a workspace row stops by its id, which the callers' id gates have vetted. Both of
-   *  `stopArgvFor`'s callers ask it in their identity arm (pinned in the callers case below). */
+   *  whose part is not a registry id, or whose pair is not its id; a workspace row stops by its id, which the callers' id
+   *  gates have vetted. Both of `stopArgvFor`'s callers ask it in their identity arm (pinned in the callers case below). */
   'stop-pair-refused': {
     file: 'server.ts', scope: 'stopPairRefused',
-    re: /if \(rec\.workspace !== null\) return false;\s*return !isRegistryId\(stopPairWrapper\(id, rec, identity\)\) \|\| !isRegistryId\(rec\.project\);/,
+    re: /if \(rec\.workspace !== null\) return false;\s*const wrapper = stopPairWrapper\(id, rec, identity\);\s*return !isRegistryId\(wrapper\) \|\| !isRegistryId\(rec\.project\) \|\| `\$\{wrapper\}-\$\{rec\.project\}` !== id;/,
   },
   /** `readSessionRecord` answers `bad-id` before any listing, so a caller only ever holds a found row's valid id. */
   readSessionRecord: {

@@ -977,14 +977,23 @@ describe('POST /api/sessions/:id/stop', () => {
   it('stops normally (200) when the row is fully measured', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, ID, 'claude-a');
-    const run: Runner = async () => ({ code: 0, stdout: '', stderr: '' });
+    // A well-formed legacy row, seeded by hand: `seedSession` writes `project: id`, and an id that does not end in
+    // `-<project>` makes the stop pair name a different session, which `/stop` now refuses (path identity W1a).
+    const id = 'demo-a-demo';
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    const fields = { wrapper: 'demo-a', project: 'demo', workdir: '/w/demo', uuid: '1'.repeat(36), started: '1' };
+    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${k}`), v);
+    const calls: string[][] = [];
+    const run: Runner = async (_c, args) => { calls.push([...args]); return { code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });
     const app = await buildServer(
       { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue() }, new Bus(),
     );
-    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop` });
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${id}/stop` });
     expect(res.statusCode).toBe(200);
+    // No capability evidence, so the bare pair form: ccd recomputes `demo-a-demo`, the row that was tapped.
+    expect(calls).toEqual([['stop', 'demo-a', 'demo']]);
     await app.close();
   });
 });

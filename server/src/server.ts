@@ -2989,14 +2989,19 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * into a one-argument stop of the OTHER token, a session nobody named, in the leading, trailing and bare forms
    * alike. No argv order refuses that, and no ccd rule refuses it without also refusing the pre-W1a trailing order
    * while the fleet box runs ahead of this server. So each part must pass `isRegistryId`: the session-id charset,
-   * which has no `=`, and no leading `-` or `.`. Both callers of `stopArgvFor` ask this in their identity arm and
-   * answer what an unmeasured identity field answers, 503 `registry-unmeasurable`, with no argv composed; the
-   * archive door asks it before its turn read, its claim reads and the programme's end. A workspace row is never
-   * refused here: it stops by its id, which each caller's id gate has already vetted.
+   * which has no `=`, and no leading `-` or `.`. It is also true when the pair is not the id: ccd recomputes
+   * `<wrapper>-<project>`, so an id that does not end in `-<project>` makes the pair name a different session (a
+   * workspace row whose `.workspace` read failed reads as legacy, and its pair would stop the project's main
+   * checkout); refusing that changes no well-formed stop, because an id ending in `-<project>` always equals its pair.
+   * Both callers of `stopArgvFor` ask this in their identity arm and answer what an unmeasured identity field
+   * answers, 503 `registry-unmeasurable`, with no argv composed; the archive door asks it before its turn read, its
+   * claim reads and the programme's end. A workspace row is never refused here: it stops by its id, which each
+   * caller's id gate has already vetted.
    */
   function stopPairRefused(id: string, rec: SessionRecord, identity: { wrapper: string }): boolean {
     if (rec.workspace !== null) return false;
-    return !isRegistryId(stopPairWrapper(id, rec, identity)) || !isRegistryId(rec.project);
+    const wrapper = stopPairWrapper(id, rec, identity);
+    return !isRegistryId(wrapper) || !isRegistryId(rec.project) || `${wrapper}-${rec.project}` !== id;
   }
 
   /**

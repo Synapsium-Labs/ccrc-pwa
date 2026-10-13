@@ -197,7 +197,7 @@ describe('stop refuses a legacy pair part that is not a registry id', () => {
     const { runner, calls } = gonePane();
     const { app } = await appFor(home, runner, fleetState === undefined ? {} : { fleetState });
     opened.push(app);
-    return { home, app, stops: () => calls.filter((c) => c[0] === 'stop') };
+    return { home, app, stops: () => calls.filter((c) => c[0] === 'stop'), all: () => calls };
   };
 
   it('/stop refuses a pair part: a .project spelled --surface=pwa, 503 and no stopPair argv', async () => {
@@ -242,5 +242,50 @@ describe('stop refuses a legacy pair part that is not a registry id', () => {
     expect(r.stops(), 'a stopPair argv was composed and sent').toEqual([]);
     expect(res.statusCode).toBe(503);
     expect(res.json()).toEqual(REFUSED);
+  });
+
+  // THE PAIR IS THE ID. ccd's two-argument stop recomputes `<wrapper>-<project>`, so a legacy row whose id does not
+  // end in `-<project>` made the pair name a DIFFERENT session: the fallback wrapper arm never stopped the row that was
+  // tapped. The reachable shape is a workspace row whose `.workspace` read failed, which reads as legacy; a row with no
+  // `.workspace` file is that row to the server. `stopPairRefused` refuses it in both identity arms, and a well-formed
+  // legacy row, a swapped one included, stops as before.
+  describe('and a pair that is not the tapped id', () => {
+    it('/stop refuses a legacy row whose id does not end in -<project>: 503 and no ccd call', async () => {
+      // Composed, it was `stop --surface pwa demo-a demo`, a stop of `demo-a-demo`, a session nobody tapped.
+      const r = await rig(WITH_SURFACE);
+      seedLegacy(r.home, 'demo-a-other', 'demo-a', 'demo');
+      const before = r.all().length;
+      const res = await r.app.inject({ method: 'POST', url: '/api/sessions/demo-a-other/stop' });
+      expect(r.all().slice(before), 'a ccd call was sent: the pair names demo-a-demo').toEqual([]);
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual(REFUSED);
+    });
+
+    it('the archive door refuses a legacy row whose id does not end in -<project>, before its turn read: 503 and no call', async () => {
+      // `demo-a` has no config dir, so without the identity arm's refusal the fail-closed turn read answers first,
+      // 409 `status-unknown`; the refusal stands before that read, its claim reads and the programme's end.
+      const r = await rig(WITH_SURFACE);
+      seedLegacy(r.home, 'demo-a-other', 'demo-a', 'demo');
+      const before = r.all().length;
+      const res = await r.app.inject({ method: 'POST', url: '/api/sessions/demo-a-other/archive' });
+      expect(r.all().slice(before), 'a ccd or tmux call was sent').toEqual([]);
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual(REFUSED);
+    });
+
+    it('control: a well-formed legacy row, and a swapped one, still stop by the pair their id carries', async () => {
+      const r = await rig(WITH_SURFACE);
+      seedLegacy(r.home, 'demo-a-demo', 'demo-a', 'demo');
+      // Swapped: the row's `.wrapper` moved to `demo-c`, and the id keeps its original prefix, which the pair carries.
+      seedLegacy(r.home, 'demo-b-demo', 'demo-c', 'demo');
+      const plain = await r.app.inject({ method: 'POST', url: '/api/sessions/demo-a-demo/stop' });
+      expect(plain.statusCode).toBe(200);
+      const swapped = await r.app.inject({ method: 'POST', url: '/api/sessions/demo-b-demo/stop' });
+      expect(swapped.statusCode).toBe(200);
+      expect(r.stops()).toEqual([
+        ['stop', '--surface', 'pwa', 'demo-a', 'demo'],
+        ['stop', '--surface', 'pwa', 'demo-b', 'demo'],
+      ]);
+    });
   });
 });
