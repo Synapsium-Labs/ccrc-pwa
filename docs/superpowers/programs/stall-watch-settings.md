@@ -28,7 +28,7 @@ time.
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
 | 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merged `6e4524164` 2026-10-12; run 322 closed `done`, `final:true` (R37) |
-| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | review 404 accepted (R47); fix round 4 absorbs `main`, merge only (R48) |
+| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | fix round 4 (merge of `main`) verified at `50bdec086`; scoped review 422 dispatched (R49) |
 
 ## Decisions & deviations
 
@@ -1049,6 +1049,23 @@ time.
     so a census over it can count or miss a call that is not the POST's (mail 4635, review 415's class (c),
     record-only). The follow-up bounds the slice to the handler's body, as `single-definition.test.ts`'s own slice
     does since #384.
+- **R49 (2026-10-13 18:48)**, fix round 4 is verified at `50bdec086`, and scoped review run 422 is dispatched.
+  - Wave-done mail 4638 (`ccrc-pwa-bright-cove`). Re-measured here:
+    - `50bdec086` is PR #362's head, a merge of `5aa5dbadb` and `origin/main` `0d0ea5921`;
+    - merge-tree with `main` is clean;
+    - the `+`/`-` lines of `git diff da1373cf6 5aa5dbadb` and `git diff origin/main 50bdec086` are identical;
+    - `5aa5dbadb..50bdec086` adds 68 lines to the hook and nothing else of wave 3's;
+    - PR CI run 38447456900 passed every required leg (macOS pending, advisory).
+    Run 394 advanced to `awaiting-review`.
+  - The worker's fixture check of the two blocks together passes: a subagent's `ccrc-worker` Skill call over a
+    main-thread wait prints the deny, and the wait keeps its ask, `updatedAt` and `event`, with `aliveAt` written.
+  - Claims: the worker holds claim 1258 for 9 of the PR's 11 paths. Two are refused as overlapping:
+    `ccd/session-hook.sh` (claim 1250, run 354; the worker proceeded under 4468's terms, as R48 directed) and
+    `server/src/registry.ts` (claim 1242, run 399). The merge leaves `registry.ts` as both parents have it, and
+    the PR's change there is comment lines in `freshAskAt`'s docstring. FYI to run 399's coordinator: mail 4639.
+  - Review run 422 (`ccrc-pwa-brisk-river`) reads `5aa5dbadb..50bdec086` with the panel. It checks the
+    resolution, the line-equality proof, the two blocks' interaction (with a fixture reproduction), what else
+    the merge brought in that wave 3 reads, and the wave's ledger properties.
 
 ## Carried constraints (reviewers get these)
 
