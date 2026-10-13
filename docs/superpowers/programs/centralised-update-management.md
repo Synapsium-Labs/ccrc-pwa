@@ -1395,6 +1395,19 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         claim 1213 ended and whose claim 1227 now holds that file.
       - STATUS: fleet and server v0.0.164, newest v0.0.164, backups fleet 145M/server 672M, disk free fleet 215G/work
         volume 218G/server 32G, no anomalies at 07:42.
+    - **2026-10-13 11:44 UTC: v0.0.165 and v0.0.166 auto-converged unattended.** No action was taken.
+      - v0.0.165 (#381, native docs reader's wave 4) was published at 10:56:50. The server moved at 11:08:56 to
+        11:09:21, after the fleet.
+      - v0.0.166 (#383, docs) was published at 11:33:20. The server last booted at 11:09:08, so its next poll fell at
+        about 11:39. The fleet box ran 11:40:16 to 11:42:11, and the server followed at 11:42:47 to 11:43:11, 36
+        seconds after the fleet.
+      - **The 11:42 probe landed mid-move.** It read "boxes differ" and the fleet row `pending`, 20 seconds after the
+        fleet finished. That was transient: re-measured, the server reached v0.0.166 at 11:43:11.
+      - Both boxes read `box-token` PASS. Server doctor: 26 passed, 0 warned, 0 failed. Fleet doctor: 33 passed, 6
+        warned, 0 failed. Each box gained one check, from #381.
+      - **Wave 15 (run 300)** is still held by the open PR #351 (`ccd/ccd`) and by claim 1227 on `ccd/ccrc`.
+      - STATUS: fleet and server v0.0.166, newest v0.0.166, backups fleet 145M/server 675M, disk free fleet 217G/work
+        volume 218G/server 33G, converged at 11:43.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
