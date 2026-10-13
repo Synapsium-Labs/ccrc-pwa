@@ -4112,7 +4112,7 @@ _check_transcripts() {
   # Reassuring an operator about rows nobody measured is the same
   # failure mode this check was already rewritten once to avoid.
   local reg="$HOME/.cc-sessions" sh="$HOME/.ccrc/accounts.sh"
-  local u id uuid cfg wd raw rwd munged f stale="" parked="" n=0 skipped=0 unread=0 scope="" any=0 rc why remedy
+  local u id uuid cfg wd raw rwd munged f stale="" parked="" pending="" pendwhat="" nf n=0 skipped=0 unread=0 rowbad=0 scope="" any=0 rc why remedy detail
 
   # `$REG` UNLISTABLE IS A FAIL, in `_check_pools`' own words for the same
   # fact: nothing under it — no session's transcript included — can be
@@ -4185,7 +4185,7 @@ _check_transcripts() {
 
   local wrapper
   for u in "$reg"/*.uuid; do
-    [ -e "$u" ] || continue
+    { [ -e "$u" ] || [ -L "$u" ]; } || continue   # the unmatched glob's literal is no row; a dangling link is one
     # BASH BUILTINS, NOT `basename`/`cat` — this file avoids the fork for the
     # same reason `_munge_wd` does two lines of comment down from here: a
     # doctor run reads every registry row once, but a stranded reader is a
@@ -4197,20 +4197,34 @@ _check_transcripts() {
     # `basename "$u" .uuid` with no fork; `read -r var < file` is `cat file`
     # with no fork and no subshell.
     id="${u##*/}"; id="${id%.uuid}"
-    uuid=""; IFS= read -r uuid < "$u" 2>/dev/null
-    # EVERY `continue` FROM HERE ON IS A SKIP, counted as one. A row whose
-    # uuid, wrapper mapping, workdir or transcript could not be read is a row
-    # this check did not measure, and `$n` is incremented only where the
-    # measurement actually happens, at the bottom of the loop.
-    [ -n "$uuid" ] || { skipped=$((skipped + 1)); continue; }
     # This check runs OUTSIDE ccd — it is sourced under `set -u` by things
     # that are not `ccrc` — so it reads the row's own fields rather than
     # calling ccd's helpers, and it asks ccd for nothing it can read itself.
-    wrapper=""; IFS= read -r wrapper < "$reg/$id.wrapper" 2>/dev/null
-    cfg=$(_ccrc_cfg_dir "$wrapper" 2>/dev/null) || { skipped=$((skipped + 1)); continue; }
-    [ -n "$cfg" ] || { skipped=$((skipped + 1)); continue; }
-    wd=""; IFS= read -r wd < "$reg/$id.workdir" 2>/dev/null
-    [ -n "$wd" ] || { skipped=$((skipped + 1)); continue; }
+    #
+    # THE ROW'S OWN THREE FIELDS, READ THE FILE'S OWN WAY (#189 review round
+    # 2, DR1; the codex lane's D-2380 idiom, `_dr_cx_sessions`): `[ -f ]`
+    # before the open, so a FIFO or a device node — or a symlink to either —
+    # is never opened (a FIFO blocks open(2) for ever, and `ccrc install` and
+    # `ccrc update` run this doctor at their tail, the update with its lock
+    # held); and `2>/dev/null` BEFORE `<`, so a field that is unreadable or
+    # was unlinked mid-walk (`ccd forget`) prints nothing on stderr. These
+    # used `< f 2>/dev/null`, which reports the open error, with only an
+    # `[ -e ]` on the `.uuid`. A row whose own fields could not be read — or
+    # whose wrapper names no account the roster knows — is counted apart
+    # (`rowbad`), with its own reason: it is not the account-swap miss below.
+    uuid="" wrapper="" wd=""
+    if ! { [ -f "$u" ] && { IFS= read -r uuid || :; } 2>/dev/null < "$u"; } \
+       || ! { [ -f "$reg/$id.wrapper" ] && { IFS= read -r wrapper || :; } 2>/dev/null < "$reg/$id.wrapper"; } \
+       || ! { [ -f "$reg/$id.workdir" ] && { IFS= read -r wd || :; } 2>/dev/null < "$reg/$id.workdir"; } \
+       || [ -z "$uuid" ] || [ -z "$wrapper" ] || [ -z "$wd" ]; then
+      rowbad=$((rowbad + 1)); continue
+    fi
+    # EVERY `continue` FROM HERE ON IS A SKIP, counted as one. A row whose
+    # transcript could not be found is a row this check did not measure, and
+    # `$n` is incremented only where the measurement actually happens, at the
+    # bottom of the loop.
+    cfg=$(_ccrc_cfg_dir "$wrapper" 2>/dev/null) || cfg=""
+    [ -n "$cfg" ] || { rowbad=$((rowbad + 1)); continue; }
     # BOTH SPELLINGS, RESOLVED FIRST — a cross-task hazard Task 6's own review
     # caught: `ccd`'s readers (`_transcript_path`, `_ci_transcript_path`) try
     # the REALPATH-resolved munge before the raw one, because Claude Code
@@ -4248,12 +4262,28 @@ _check_transcripts() {
     _dr_continued_in "$f" "$uuid"; rc=$?
     case "$rc" in
       0) n=$((n + 1))
+         # SUPERSEDED ONLY WHERE CCD WOULD TAKE THE HOP (#189 review round 2,
+         # DR2). ccd follows a marker only to a successor whose transcript is
+         # a file with a line in it at one of the row workdir's two spellings
+         # — the first of them that is a file, resolved first (`_ci_addrs`,
+         # `_ci_extant`, then `-s`); otherwise it keeps the row on its own
+         # transcript and waits (D-4942), and a resume does the same
+         # (D-4944). A marker whose successor was never written here — the
+         # background job failed, was killed before its first line, or was
+         # queued and never ran (2.1.296 appends the marker on the queued
+         # path too) — is therefore not a ccd that is "not following", and
+         # neither "roll the fleet box forward" nor "the next resume" clears
+         # it. It is named apart, with a remedy that can.
+         nf="$cfg/projects/$munged/$_DR_CI_NEXT.jsonl"
+         [ -f "$nf" ] || nf="$cfg/projects/$raw/$_DR_CI_NEXT.jsonl"
+         if ! { [ -f "$nf" ] && [ -s "$nf" ]; }; then
+           pending="$pending $id"; pendwhat="${pendwhat:+$pendwhat, }$id -> $_DR_CI_NEXT"
          # A ROW NO SUPERVISOR TICKS (D-4941). Only a running `ccd supervise`
          # walks the pointer, and a stopped or archived session has none, so
          # "clears itself on the next supervise tick" can never come true for
          # it. Its own stamps say which it is — `.stopped` by `-e`, `.archived`
          # by `-f`, the tests ccd itself makes (`_ws_status`, `cmd_ws_archive`).
-         if [ -e "$reg/$id.stopped" ] || [ -f "$reg/$id.archived" ]; then parked="$parked $id"
+         elif [ -e "$reg/$id.stopped" ] || [ -f "$reg/$id.archived" ]; then parked="$parked $id"
          else stale="$stale $id"; fi ;;
       1) n=$((n + 1)) ;;
       *) unread=$((unread + 1)) ;;
@@ -4264,8 +4294,8 @@ _check_transcripts() {
   # when there are some: a fully-measured box reads exactly as it always did.
   # Not measured is BOTH kinds — at neither spelling, and found but unread.
   scope="$n session(s) measured"
-  if [ $((skipped + unread)) -gt 0 ]; then scope="$scope, $((skipped + unread)) not measured"; fi
-  if [ -n "$stale$parked" ]; then
+  if [ $((skipped + unread + rowbad)) -gt 0 ]; then scope="$scope, $((skipped + unread + rowbad)) not measured"; fi
+  if [ -n "$stale$parked$pending" ]; then
     # THE REMEDY NAMES WHAT WILL ACTUALLY HAPPEN TO EACH ROW (D-4941). A
     # supervised row is followed on its next supervise tick, and one that
     # stays is a ccd that is not following; a stopped or archived row is
@@ -4281,12 +4311,20 @@ _check_transcripts() {
       # shellcheck disable=SC2086 -- registry basenames, as above
       remedy="${remedy:+$remedy. }$(_dr_join $parked): stopped or archived, so no supervisor runs for them — ccd follows the pointer at the session's next resume, and nothing needs doing now unless this box's ccd predates that (ccrc version)"
     fi
+    if [ -n "$pending" ]; then
+      # shellcheck disable=SC2086 -- registry basenames, as above
+      remedy="${remedy:+$remedy. }$(_dr_join $pending): ccd keeps each on its own transcript and does not follow a pointer to a conversation that was never written. If that fork's background job is still starting (see claude agents, or jobs/<the successor's first 8 characters>/state.json in the session's config dir), wait: this clears when its first line lands. If the job failed or is gone, the session's own transcript is still the conversation — the first prompt it answers there cancels the stale pointer (a finished turn after the marker), and this clears"
+    fi
+    detail=""
     # shellcheck disable=SC2086 -- the ids are registry basenames, matched by
     # ccd's own `^[A-Za-z0-9._-]+$` shape, so the split is the interface.
-    _dr_warn transcripts "$(_dr_join $stale $parked) read a transcript Claude Code has superseded ($scope)" "$remedy"
+    [ -n "$stale$parked" ] && detail="$(_dr_join $stale $parked) read a transcript Claude Code has superseded"
+    # shellcheck disable=SC2086 -- registry basenames, as above
+    [ -n "$pending" ] && detail="${detail:+$detail; }$(_dr_join $pending) read a transcript whose continued-in marker names a successor never written here ($pendwhat)"
+    _dr_warn transcripts "$detail ($scope)" "$remedy"
     return 2
   fi
-  if [ $((skipped + unread)) -gt 0 ]; then
+  if [ $((skipped + unread + rowbad)) -gt 0 ]; then
     # A RUN WITH UNMEASURED ROWS MAY NOT CLAIM EVERY UUID IS HEALTHY. It
     # passes — nothing it looked at was superseded — but the sentence says
     # what it looked at, and says why the rest was not looked at rather than
@@ -4298,7 +4336,10 @@ _check_transcripts() {
     if [ "$unread" -gt 0 ]; then
       why="${why:+$why; }$unread whose transcript is there but could not be read and parsed (a permission or I/O error on the file, or no tail or jq on this PATH — the jq check owns a missing jq)"
     fi
-    _dr_pass transcripts "$scope: every uuid MEASURED names a transcript Claude Code has not superseded, and nothing is claimed about the other $((skipped + unread)) — $why"
+    if [ "$rowbad" -gt 0 ]; then
+      why="${why:+$why; }$rowbad whose own registry row could not be read here (a .uuid, .wrapper or .workdir that is missing, empty, or not a readable regular file, or a wrapper the roster does not know — look in \$HOME/.cc-sessions)"
+    fi
+    _dr_pass transcripts "$scope: every uuid MEASURED names a transcript Claude Code has not superseded, and nothing is claimed about the other $((skipped + unread + rowbad)) — $why"
     return 0
   fi
   _dr_pass transcripts "$n session(s): every registry uuid names a transcript Claude Code has not superseded"

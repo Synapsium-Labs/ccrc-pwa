@@ -3240,6 +3240,10 @@ describe('ccrc doctor: transcripts', () => {
     writeTranscript(home, '.claude', wdLive, uuidLive, turnLine('still going'));
     writeTranscript(home, '.claude', wdFrozen, uuidOld,
       `${turnLine('before the fork')}${continuedInLine(uuidOld, uuidNew)}`);
+    // The successor is WRITTEN: ccd would take this hop, so a registry still
+    // on the old id is one ccd has not followed (DR2 — an unwritten successor
+    // is named apart, below).
+    writeTranscript(home, '.claude', wdFrozen, uuidNew, turnLine('after the fork'));
     const out = runDoctor(home).stdout;
     const line = lineFor(out, 'transcripts');
     expect(line, out).toMatch(/^WARN transcripts: /);
@@ -3304,6 +3308,13 @@ describe('ccrc doctor: transcripts', () => {
     const home = healthy('ccrc-doctor-transcripts-raw-spelling-');
     seedAccountsSh(home, TRANSCRIPT_ROSTER);
     linkReal(home, 'tail');   // see the "passes on a registry…" test above
+    // A `realpath` that RESOLVES (`-m`), or the two spellings collapse into one
+    // and this test cannot tell them apart: macOS's own `realpath` has no `-m`,
+    // so the check falls back to the raw path there (#189 round 2: measured — a
+    // lookup at one spelling only stayed green on this fixture without it).
+    const gnu = ['grealpath', 'realpath'].map((n) => spawnSync('bash', ['-c', `command -v ${n}`], { encoding: 'utf8' }).stdout.trim())
+      .find((p) => p !== '' && spawnSync(p, ['-m', '/nonexistent/x'], { encoding: 'utf8' }).status === 0);
+    if (gnu !== undefined) { rmSync(join(stubBin(home), 'realpath'), { force: true }); symlinkSync(gnu, join(stubBin(home), 'realpath')); }
     const real = join(home, 'volume', 'demo');
     const link = join(home, 'projects-link');
     mkdirSync(real, { recursive: true });
@@ -3315,10 +3326,12 @@ describe('ccrc doctor: transcripts', () => {
     // resolved (`volume/demo`) spelling at all.
     writeTranscript(home, '.claude', wd, uuidOld,
       `${turnLine('before the fork')}${continuedInLine(uuidOld, uuidNew)}`);
+    writeTranscript(home, '.claude', wd, uuidNew, turnLine('after the fork'));   // also at the raw spelling only (DR2)
     const out = runDoctor(home).stdout;
     const line = lineFor(out, 'transcripts');
     expect(line, out).toMatch(/^WARN transcripts: /);
     expect(line).toContain('sess-raw');
+    expect(line).toContain('Claude Code has superseded');
   });
 
   it('says how many rows it could NOT look at, and never counts them clean (whole-branch review, F4)', () => {
@@ -3401,9 +3414,11 @@ describe('ccrc doctor: transcripts', () => {
     writeTranscript(home, '.claude', wd, uuidOld, `${turnLine('before the fork')}${continuedInLine(uuidOld, uuidNew)}`
       + `${JSON.stringify({ type: 'last-prompt', lastPrompt: 'go on', sessionId: uuidOld })}\n`
       + `${JSON.stringify({ type: 'ai-title', aiTitle: 'a title', sessionId: uuidOld })}\n`);
+    writeTranscript(home, '.claude', wd, uuidNew, turnLine('after the fork'));
     const line = lineFor(runDoctor(home).stdout, 'transcripts');
     expect(line).toMatch(/^WARN transcripts: /);
     expect(line).toContain('sess-restamped');
+    expect(line).toContain('Claude Code has superseded');
   });
 
   it('never calls a session superseded over a marker-shaped object nested in a tool call (D-4940, review F1)', () => {
@@ -3548,6 +3563,7 @@ describe('ccrc doctor: transcripts', () => {
       writeTranscriptSession(home, id, 'claude', wd, uuid);
       writeFileSync(join(home, '.cc-sessions', `${id}.${stamp}`), '');
       writeTranscript(home, '.claude', wd, uuid, `${turnLine('before the fork')}${continuedInLine(uuid, uuidNew)}`);
+      writeTranscript(home, '.claude', wd, uuidNew, turnLine('after the fork'));   // written: a hop ccd would take (DR2)
     }
     const out = runDoctor(home).stdout;
     const line = lineFor(out, 'transcripts');
@@ -3570,11 +3586,137 @@ describe('ccrc doctor: transcripts', () => {
       writeTranscriptSession(home, id, 'claude', wd, uuid);
       if (stamp !== '') writeFileSync(join(home, '.cc-sessions', `${id}.${stamp}`), '');
       writeTranscript(home, '.claude', wd, uuid, `${turnLine('before the fork')}${continuedInLine(uuid, uuidNew)}`);
+      writeTranscript(home, '.claude', wd, uuidNew, turnLine('after the fork'));   // written: a hop ccd would take (DR2)
     }
     const out = runDoctor(home).stdout;
     const remedy = /^WARN transcripts: .*\n\s+remedy: (.*)$/m.exec(out)?.[1] ?? '';
     expect(remedy, out).toMatch(/sess-live.*supervise tick/);
     expect(remedy, out).toMatch(/sess-stopped.*next resume/);
+  });
+
+  // ── #189 review round 2 ───────────────────────────────────────────────────
+  /** `_check_transcripts` alone, sourced the way `ccrc` sources it, under a
+   *  deadline: a check that blocks in open(2) is one failed case, not a hung
+   *  suite (and not a hung `ccrc install`/`ccrc update`, which run the doctor
+   *  at their tail). */
+  const runTranscripts = (home: string): { code: number; stdout: string; stderr: string; hung: boolean } => {
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(join(home, 'ccrc', 'ccd', 'ccrc-doctor-checks'))}; _check_transcripts`],
+      { env: doctorEnv(home), encoding: 'utf8', timeout: 10000 });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '', hung: r.error !== undefined || r.signal !== null };
+  };
+  /** One measurable, clean row beside the bad one, so a verdict is printed
+   *  whatever the bad row does. */
+  const goodRow = (home: string): void => {
+    const wd = join(home, 'projects', 'good');
+    mkdirSync(wd, { recursive: true });
+    writeTranscriptSession(home, 'sess-good', 'claude', wd, 'a'.repeat(36));
+    writeTranscript(home, '.claude', wd, 'a'.repeat(36), turnLine('hello'));
+  };
+  const badRow = (home: string): string => {
+    const wd = join(home, 'projects', 'bad');
+    mkdirSync(wd, { recursive: true });
+    writeTranscriptSession(home, 'sess-bad', 'claude', wd, 'b'.repeat(36));
+    writeTranscript(home, '.claude', wd, 'b'.repeat(36), turnLine('hello'));
+    return join(home, '.cc-sessions');
+  };
+
+  for (const field of ['uuid', 'wrapper', 'workdir'] as const) {
+    it(`a FIFO at a row's .${field} never blocks the check, and the row is counted apart (DR1)`, () => {
+      const home = healthy(`ccrc-doctor-transcripts-fifo-${field}-`);
+      seedAccountsSh(home, TRANSCRIPT_ROSTER);
+      linkReal(home, 'tail');
+      goodRow(home);
+      const reg = badRow(home);
+      rmSync(join(reg, `sess-bad.${field}`));
+      execFileSync('mkfifo', [join(reg, `sess-bad.${field}`)]);
+      const r = runTranscripts(home);
+      expect(r.hung, 'the check blocked opening a FIFO').toBe(false);
+      expect(r.stdout).toMatch(/^PASS transcripts: 1 session\(s\) measured, 1 not measured/m);
+      expect(r.stdout).toContain('own registry row could not be read');
+      expect(r.stdout, 'not the account-swap reason').not.toContain('at neither direct spelling');
+      expect(r.stderr).toBe('');
+    });
+  }
+
+  it('a .uuid that is a symlink to a device never blocks the check (DR1)', () => {
+    const home = healthy('ccrc-doctor-transcripts-devlink-');
+    seedAccountsSh(home, TRANSCRIPT_ROSTER);
+    linkReal(home, 'tail');
+    goodRow(home);
+    const reg = badRow(home);
+    rmSync(join(reg, 'sess-bad.uuid'));
+    symlinkSync('/dev/zero', join(reg, 'sess-bad.uuid'));
+    const r = runTranscripts(home);
+    expect(r.hung).toBe(false);
+    expect(r.stdout).toMatch(/^PASS transcripts: 1 session\(s\) measured, 1 not measured/m);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('an unreadable .uuid prints nothing on stderr, and is not explained as an account swap (DR1)', () => {
+    const home = healthy('ccrc-doctor-transcripts-mode000-');
+    seedAccountsSh(home, TRANSCRIPT_ROSTER);
+    linkReal(home, 'tail');
+    goodRow(home);
+    const reg = badRow(home);
+    chmodSync(join(reg, 'sess-bad.uuid'), 0o000);
+    try {
+      const r = runTranscripts(home);
+      expect(r.stderr).toBe('');
+      expect(r.stdout).toContain('own registry row could not be read');
+      expect(r.stdout).not.toContain('at neither direct spelling');
+    } finally {
+      chmodSync(join(reg, 'sess-bad.uuid'), 0o600);
+    }
+  });
+
+  it('a row with no .wrapper (a `ccd forget` mid-walk) prints nothing on stderr, and is counted apart (DR1)', () => {
+    const home = healthy('ccrc-doctor-transcripts-nowrapper-');
+    seedAccountsSh(home, TRANSCRIPT_ROSTER);
+    linkReal(home, 'tail');
+    goodRow(home);
+    const reg = badRow(home);
+    rmSync(join(reg, 'sess-bad.wrapper'));
+    const r = runTranscripts(home);
+    expect(r.stderr).toBe('');
+    expect(r.stdout).toContain('own registry row could not be read');
+  });
+
+  it('a marker whose successor was never written is NOT called superseded — it is named apart, with a remedy that can clear it (DR2)', () => {
+    // ccd declines such a hop (D-4942) and a resume stays on the row's own
+    // transcript (D-4944), so "roll the fleet box forward" and "the next
+    // supervise tick" could never clear this WARN. 2.1.296 writes the marker
+    // on its queued-for-later path too, and a worker killed before its first
+    // line leaves the same state for good.
+    const home = healthy('ccrc-doctor-transcripts-unwritten-');
+    seedAccountsSh(home, TRANSCRIPT_ROSTER);
+    linkReal(home, 'tail');
+    const wd = join(home, 'projects', 'forked');
+    mkdirSync(wd, { recursive: true });
+    const uuidOld = 'd'.repeat(36), uuidNew = 'e'.repeat(36);
+    writeTranscriptSession(home, 'sess-forked', 'claude', wd, uuidOld);
+    writeTranscript(home, '.claude', wd, uuidOld, `${turnLine('before the fork')}${continuedInLine(uuidOld, uuidNew)}`);
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'transcripts') ?? '';
+    expect(line, out).toMatch(/^WARN transcripts: /);
+    expect(line).toContain(`names a successor never written here (sess-forked -> ${uuidNew})`);
+    expect(line).not.toContain('Claude Code has superseded');
+    const remedy = /^WARN transcripts: .*\n\s+remedy: (.*)$/m.exec(out)?.[1] ?? '';
+    expect(remedy).toContain('first prompt it answers');
+    expect(remedy).not.toMatch(/roll the fleet box forward|supervise tick|next resume/);
+  });
+
+  it('a successor that exists but is EMPTY is not one ccd would hop to either (DR2)', () => {
+    const home = healthy('ccrc-doctor-transcripts-empty-successor-');
+    seedAccountsSh(home, TRANSCRIPT_ROSTER);
+    linkReal(home, 'tail');
+    const wd = join(home, 'projects', 'forked');
+    mkdirSync(wd, { recursive: true });
+    const uuidOld = 'd'.repeat(36), uuidNew = 'e'.repeat(36);
+    writeTranscriptSession(home, 'sess-forked', 'claude', wd, uuidOld);
+    writeTranscript(home, '.claude', wd, uuidOld, `${turnLine('before the fork')}${continuedInLine(uuidOld, uuidNew)}`);
+    writeTranscript(home, '.claude', wd, uuidNew, '');
+    const line = lineFor(runDoctor(home).stdout, 'transcripts') ?? '';
+    expect(line).toContain('names a successor never written here');
   });
 });
 
