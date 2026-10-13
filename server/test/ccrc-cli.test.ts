@@ -27,6 +27,7 @@ import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
+import { TOKEN_VERB_MISSING_PREFIXES } from '../../shared/agent-protocol.js';
 import { assertNoRealTool } from './containedTools.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -219,7 +220,7 @@ describe('ccrc: dispatch and usage', () => {
     // `server/test/history-cli.test.ts` owns what it does.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|codex\|install\|update\|rollback\|versions\|channel\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|restamp\|version\|watchdog\|history\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|codex\|install\|update\|rollback\|versions\|channel\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|token\|restamp\|version\|watchdog\|history\}/);
     expect(r.stdout).toMatch(/^ {2}codex {5}run a Codex lane's two tiers/m);
     expect(r.stdout).toMatch(/^ {2}account {3}connect, check and remove the accounts/m);
     expect(r.stdout).toMatch(/^ {2}memory {4}census every \(home, project\) memory pair/m);
@@ -232,6 +233,9 @@ describe('ccrc: dispatch and usage', () => {
     expect(r.stdout).toMatch(/^ {2}backup {4}/m);
     expect(r.stdout).toMatch(/^ {2}logs {6}/m);
     expect(r.stdout).toMatch(/^ {2}expose {4}give this box a public name/m);
+    // `token` joined it in the box-token lifecycle's wave 1 (spec 2026-10-07 §4.5) — the fleet side of a
+    // rotation, which ccrc-agent's token-sync op spawns. `server/test/ccrc-token-sync.test.ts` owns what it does.
+    expect(r.stdout).toMatch(/^ {2}token {5}the box token's fleet side/m);
     // `restamp` joined it in landing-order wave 1 (spec 2026-09-23 §5.1) — the
     // regenerator worker clause 16 names for a `ccrc:generated` stamp.
     // `server/test/ccrc-restamp.test.ts` owns what it does.
@@ -392,6 +396,25 @@ describe('ccrc: adopt', () => {
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/^ccrc: adopt's script is missing/m);
     expect(r.stderr).toContain('ccrc-adopt');
+  });
+
+  it("`token` with its script missing refuses in the verb-missing class, so the server holds `verb-missing` and does not fail the sync (residue 2)", () => {
+    // `cmd_token` execs `ccrc-token-sync` beside `ccrc`. A box whose copy of
+    // `ccrc` lacks that sibling cannot do the verb, and the server must read
+    // that as the named hold D-4395 gives an older ccrc, not as a failure.
+    // The agent only relays the spawned child's first stderr line; the SERVER
+    // folds it through `isTokenVerbMissing` (`TOKEN_VERB_MISSING_PREFIXES`,
+    // imported, never copied) into the `verb-missing` hold, so the refusal's
+    // first line must start with one of them.
+    // Red before the change: the line read `ccrc: token's script is missing`.
+    const lone = join(mkTmp('ccrc-cli-token-lonely-'), 'ccrc');
+    writeFileSync(lone, readFileSync(CCRC, 'utf8'), { mode: 0o755 });
+    const home = mkTmp('ccrc-cli-token-lonely-home-');
+    const r = spawnSync('bash', [lone, 'token', 'sync', '--from', 'agent'], { env: ccrcEnv(home), encoding: 'utf8', timeout: 60_000 });
+    expect(r.status).not.toBe(0);
+    const first = r.stderr.split('\n')[0];
+    expect(TOKEN_VERB_MISSING_PREFIXES.some((p) => first.startsWith(p)), `first stderr line: ${first}`).toBe(true);
+    expect(r.stderr).toContain('ccrc-token-sync');
   });
 
   it('resolves its own location via BASH_SOURCE, not $0+dirname — a lying dirname on PATH cannot derail a symlinked invocation', () => {

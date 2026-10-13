@@ -53,6 +53,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CCD, ghContainedEnv, harnessBin, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { CCD_ARGV, type ActorFlags } from '../src/ccdargv.js';
+import type { CollectToken } from '../../shared/api.js';
 import { decOf, eventsOf, measOf } from './lifecycleHelpers.js';
 
 const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src');
@@ -154,6 +155,13 @@ const PROBES: Record<string, Probe> = {
   // Workspace lifecycle, wave 3: ws-reclaim's sibling, the same parse and the same witness — the reap lock taken and
   // `no-such-session` answered as JSON for the absent id, the dec stripped before `--session` bound.
   'ws-expire': { argv: (d) => CCD_ARGV.wsExpire('a'.repeat(64), ABSENT, d), reached: refusedForTheAbsentSession },
+  // Child reclamation, wave 7: the temp-root collector, ws-expire's argv shape. An absent id is outside the collector's
+  // population (no witness, no quarantine record), so the real verb takes no lock and answers `not-witnessed` as JSON
+  // naming the id — the same witness, and proof the dec was stripped before `--session` bound.
+  'ws-collect': {
+    argv: (d) => CCD_ARGV.wsCollect('a'.repeat(64) as CollectToken, ABSENT, d),
+    reached: (c) => { refusedForTheAbsentSession(c); expect(c.out).toContain('"refused":"not-witnessed"'); },
+  },
   'ws-add': {
     argv: (d) => CCD_ARGV.wsAddWorker(PROJECT, d),
     setup: () => { h.makeRepo(PROJECT); },
@@ -224,7 +232,7 @@ const runCcd = (args: readonly string[]): { code: number; out: string } => {
 };
 
 describe('every dec-appending CCD_ARGV builder names a verb real ccd parses a dec on', () => {
-  it('derives the dec-appending verbs from the table, and finds eight — the five workspace verbs, ws-add, ws-reclaim and ws-expire', () => {
+  it('derives the dec-appending verbs from the table, and finds nine — the five workspace verbs, ws-add, ws-reclaim, ws-expire and ws-collect', () => {
     // BOTH DIRECTIONS, and the second one is the one this suite was written
     // for. A verb ADDED here without a ccd that parses it is caught by the
     // execution test below; a verb SILENTLY added is caught right here, because
@@ -238,7 +246,7 @@ describe('every dec-appending CCD_ARGV builder names a verb real ccd parses a de
     // not a property of source text: it is the AGENT-FIRST deploy order, stated
     // where the argv is composed.
     expect(decAppendingVerbs())
-      .toEqual(['ws-add', 'ws-archive', 'ws-expire', 'ws-hold', 'ws-reclaim', 'ws-release', 'ws-rename', 'ws-restore']);
+      .toEqual(['ws-add', 'ws-archive', 'ws-collect', 'ws-expire', 'ws-hold', 'ws-reclaim', 'ws-release', 'ws-rename', 'ws-restore']);
   });
 
   it('has a probe for every derived verb — a new one cannot join unmeasured', () => {

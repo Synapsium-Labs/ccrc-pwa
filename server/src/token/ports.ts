@@ -32,8 +32,10 @@ export type ValueRead =
  *  EISDIR...) are three outcomes with three remedies, never folded (D-4403 item 2): an unreadable file is never
  *  treated as "no history" and never written over. */
 export type StateRead = { kind: 'state'; state: BoxTokenState } | { kind: 'absent' }
-  /** `why: 'over-cap'` (D-4413, F4): otherwise a valid state whose `pending` list is longer than `PENDING_HARD_CAP`. It is
-   *  additive: every other malformed content carries no `why`, and boot refuses the one and takes D-4403's arm for the other. */
+  /** `why: 'over-cap'` (D-4413, F4): a state whose `pending` list is longer than `PENDING_HARD_CAP` and which is otherwise
+   *  valid up to the cap (entries past the cap are not validated; this fails safe: boot adopts neither). It is
+   *  additive: every other malformed content carries no `why`. Boot refuses an over-cap state; any other unusable state takes
+   *  D-4414's set-aside posture (a fresh current minted, a rotation owed; D-4403 had treated it as no history). */
   | { kind: 'unusable'; why?: 'over-cap' }
   | { kind: 'unreadable'; code: string };
 export type RetiredRead = { kind: 'retired'; digests: string[] } | { kind: 'absent' } | { kind: 'unusable' } | { kind: 'unreadable'; code: string };

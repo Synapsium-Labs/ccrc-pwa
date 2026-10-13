@@ -1945,3 +1945,42 @@ describe('every file `ccrc install` copies out of the tree rides the release tar
     }
   });
 });
+
+// ── the box token's files (box-token lifecycle wave 1, Task B3; spec 2026-10-07 §8) ──
+// The static half of `ccrc-uninstall.test.ts`'s behavioural case: the two
+// node records are `rm -f` operands of `_uninst_tree_bins`, spelled through
+// file-scope globals whose values are pinned to L0's `NODE_FILES.tokenGeneration`
+// and the report's name; and no `rm` in any uninstall function names a box-token
+// value or state file or anything under `~/.cc-secrets`. `--purge`'s `rm -rf`
+// of `~/.ccrc` names none of them, so it stays legal.
+describe('the box token\'s files: uninstall removes the two node records and names no value, state or fleet token file (Task B3)', () => {
+  /** A file-scope `NAME="…"` assignment in ccd/ccrc, which must appear exactly once. */
+  const fileScope = (name: string): string => {
+    const all = [...CCRC.matchAll(new RegExp(`^${name}="([^"]*)"$`, 'gm'))];
+    expect(all.length, `${name}= is assigned ${all.length} times at file scope in ccd/ccrc`).toBe(1);
+    return all[0]![1]!;
+  };
+
+  it('_uninst_tree_bins removes both node records, through globals that name NODE_FILES.tokenGeneration and token-sync.json', async () => {
+    const { NODE_FILES } = await import('../../shared/agent-protocol.js');
+    expect(fileScope('BOX_TOKEN_GENERATION_FILE')).toBe(`$HOME/.ccrc/${NODE_FILES.tokenGeneration}`);
+    expect(fileScope('BOX_TOKEN_SYNC_REPORT')).toBe('$HOME/.ccrc/token-sync.json');
+    expect(rmFOperands(fnBody('_uninst_tree_bins')))
+      .toEqual(expect.arrayContaining(['$BOX_TOKEN_GENERATION_FILE', '$BOX_TOKEN_SYNC_REPORT']));
+  });
+
+  it('no rm in cmd_uninstall or an _uninst_ function names a box-token value or state file, or ~/.cc-secrets', () => {
+    const fns = [...CCRC.matchAll(/^(cmd_uninstall|_uninst_[a-z_]+)\(\) \{/gm)].map((m) => m[1]!);
+    expect(fns.length, 'the uninstall function scan is over nothing').toBeGreaterThan(8);
+    const FORBIDDEN = /mail\.token|mail-previous|mail-pending|box-token\.json|box-token-retired|\.cc-secrets/;
+    const hits = fns.flatMap((fn) => calls(fnBody(fn), 'rm').flat()
+      .filter((w) => FORBIDDEN.test(w)).map((w) => `${fn}: rm … ${w}`));
+    expect(hits).toEqual([]);
+  });
+
+  it('CONTROL: the FORBIDDEN scan sees a planted removal of the fleet token file', () => {
+    const planted = '\n  rm -f -- "$HOME/.cc-secrets/ccrc-mail.token"\n';
+    const FORBIDDEN = /mail\.token|mail-previous|mail-pending|box-token\.json|box-token-retired|\.cc-secrets/;
+    expect(calls(planted, 'rm').flat().filter((w) => FORBIDDEN.test(w))).toEqual(['$HOME/.cc-secrets/ccrc-mail.token']);
+  });
+});

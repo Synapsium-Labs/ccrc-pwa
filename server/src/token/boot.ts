@@ -28,6 +28,11 @@ export interface BootInput { mailTokenPath: string; home: string; role: NodeRole
 /** `agentEnvMarksFleet` is an addition to the contract's shape: the driver's gate needs the answer boot used. */
 export interface BootResult {
   holder: BoxTokenHolder; state: BoxTokenState | null; mintFailed: boolean;
+  /** D-4414 (F6): the rotation a FAILED mint owed. A mint that boot refused to adopt around (a retired value written back,
+   *  a foreign value under the unusable-list posture, a missing file with history) owes a forward rotation under its own
+   *  word; when the mint fails there is no state to hold it, so it travels here and the driver's `retryMint` owes it. Null
+   *  when the mint did not fail or owed nothing (the first mint of a box with no history). */
+  mintOwed: OwedReason | null;
   bothWriterArmed: boolean; agentEnvMarksFleet: boolean; warnings: string[];
 }
 
@@ -59,13 +64,13 @@ function refuseUnreadable(p: string, code: string): never {
   throw new Error(`${p}: unreadable (${code}); boot refuses rather than rewrite it`);
 }
 
-interface Ctx { state: BoxTokenState | null; current: string | null; mintFailed: boolean; warnings: string[] }
+interface Ctx { state: BoxTokenState | null; current: string | null; mintFailed: boolean; mintOwed: OwedReason | null; warnings: string[] }
 
 export async function bootBoxToken(i: BootInput): Promise<BootResult> {
   const paths = tokenPaths(i.mailTokenPath, i.home);
   const now = i.now;
   const holder = new BoxTokenHolder();
-  const ctx: Ctx = { state: null, current: null, mintFailed: false, warnings: [] };
+  const ctx: Ctx = { state: null, current: null, mintFailed: false, mintOwed: null, warnings: [] };
   const warn = (line: string): void => { ctx.warnings.push(W(line)); };
 
   const retiredRead = await readRetired(paths.retired);
@@ -76,8 +81,8 @@ export async function bootBoxToken(i: BootInput): Promise<BootResult> {
   const retiredUnusable = retiredRead.kind === 'unusable';
   // D-4410 (review of batch 2): the digests that had landed in a set-aside file are not read back, so while ANY set-aside
   // retired file stands boot keeps the unusable posture on every boot. METADATA ONLY: names, never the file's content.
-  const asideNames = await setAsideRetiredNames(paths);   // a listing that fails (other than ENOENT) refuses boot
-  const foreignPosture = retiredUnusable || asideNames.length > 0;
+  // D-4414 (F1): the same holds for a set-aside box-token.json, which is where a digest awaiting its append lived.
+  const asideNames = await setAsideNames(paths);   // a listing that fails (other than ENOENT) refuses boot
 
   const agentEnvMarksFleet = await readAgentEnvMarksFleet(paths.agentEnv);   // D-4399
   const armed = bothRoleWriterArmed({ role: i.role, roleSource: i.roleSource, fleetMode: i.fleetMode, agentEnvMarksFleet });
@@ -88,7 +93,12 @@ export async function bootBoxToken(i: BootInput): Promise<BootResult> {
   // the word only, and writes nothing (adopting around it would rewrite the hand-out record).
   if (sr.kind === 'unusable' && sr.why === 'over-cap') throw new Error(`${paths.state}: unusable (over-cap); boot refuses rather than rewrite it`);
   ctx.state = sr.kind === 'state' ? sr.state : null;
-  if (sr.kind === 'unusable') warn(`${paths.state} is unusable; value files beside it are treated as unverifiable`);
+  // D-4414 (F1): an unusable box-token.json is no history to adopt around. The `retiring` record, the only durable home of
+  // a digest whose append has not landed, lived in it, so a value it named could be written back and adopted. It takes
+  // D-4410's foreign posture exactly as an unusable retired file does: set aside under a new name (never overwritten),
+  // a fresh current minted and a rotation owed, and no `mail.token` adopted that boot cannot match to its own write record.
+  const stateUnusable = sr.kind === 'unusable';
+  const foreignPosture = retiredUnusable || stateUnusable || asideNames.length > 0;
 
   // The retired digests in force: the file's, and the ones still waiting in box-token.json for their append (D-4410).
   const retired = [...(retiredRead.kind === 'retired' ? retiredRead.digests : []), ...(ctx.state ? retiringDigests(ctx.state) : [])];
@@ -112,6 +122,7 @@ export async function bootBoxToken(i: BootInput): Promise<BootResult> {
         warn(`could not confirm the directory sync after writing ${paths.current} (${errno(e)}); the new value is in place`);
       } else {
         ctx.mintFailed = true;
+        ctx.mintOwed = owed;   // D-4414 (F6): no state may exist to hold it; the driver's retry owes it
         if (ctx.state !== null) ctx.state = { ...ctx.state, mintFailedAt: now };
         warn(`could not mint at ${paths.current} (${errno(e)}); every box-token lane answers 401 until a mint succeeds — the driver retries each minute`);
         return;
@@ -195,7 +206,13 @@ export async function bootBoxToken(i: BootInput): Promise<BootResult> {
     if (st.previous !== null) {
       const r = await readValueFile(paths.previous);
       if (r.kind === 'value' && !isRetired(r.value)) slots.previous = { value: r.value, until: st.previous.hardUntil };
-      else {
+      else if (r.kind === 'unreadable') {
+        // D-4414 (F3): a file that cannot be READ (EACCES, EIO...) may hold a value whose digest was never recorded, and a
+        // record dropped here would let the driver delete it unrecorded. The record and the file stay, the slot is empty (the
+        // accept set does not hold what boot cannot read), a rotation is owed, and the driver retries the read at retirement.
+        warn(`${paths.previous} cannot be read (${r.code}); its slot is empty and a rotation is owed, and the file is kept until its digest can be recorded`);
+        st = owe(st, 'aux-unusable');
+      } else {
         warn(`${paths.previous} carries no usable value; its slot is empty and a rotation is owed`);
         st = owe({ ...st, previous: null }, 'aux-unusable');
       }
@@ -220,26 +237,39 @@ export async function bootBoxToken(i: BootInput): Promise<BootResult> {
       if (st.current.id !== null) await writeGenerationFile(paths.generation, st.current.id);
       st = { ...st, fleetConfirmed: st.current.id };
     } catch (e) {
-      warn(`could not write ${paths.fleetFile} (${errno(e)}); this box's notify.sh is refused until it is written`);
+      warn(`could not write ${paths.fleetFile} (${errno(e)}); this box's notify.sh sends nothing until it is written`);
     }
   } else if (i.role === 'both' && i.roleSource !== 'recorded' && i.fleetMode === 'local' && !agentEnvMarksFleet
     && !(await fileExists(paths.fleetFile))) {
-    warn(`this box's role is not recorded as both, so the server will not write ${paths.fleetFile}; with no file there, notify.sh is refused (record CCRC_ROLE=both in ~/.ccrc/ccrc.env)`);
+    warn(`this box's role is not recorded as both, so the server will not write ${paths.fleetFile}; with no file there, notify.sh sends nothing (record CCRC_ROLE=both in ~/.ccrc/ccrc.env)`);
   }
 
   // D-4410: the unusable retired list is set aside after boot's decisions (just before the state is recorded), under a new name, never overwritten; ONE warning covers it and, when
-  // it applies, the foreign value that was not adopted.
+  // it applies, the foreign value that was not adopted (the first of the set-aside warnings carries that tail).
+  let foreignTail = foreignMint
+    ? (ctx.mintFailed ? `; ${paths.current} holds a value this server did not write, so it was not adopted`
+      : `; ${paths.current} held a value this server did not write, so it was not adopted: a fresh value was minted and a rotation is owed`)
+    : '';
   if (retiredUnusable) {
     let aside: string;
     try { aside = `it was set aside as ${path.basename(await moveAsideUnusable(paths.retired, now))} and a fresh list starts`; } catch (e) {
       aside = `it could not be set aside (${errno(e)}), so appending to it is refused until it is repaired`;
     }
-    const foreign = foreignMint
-      ? (ctx.mintFailed ? `; ${paths.current} holds a value this server did not write, so it was not adopted`
-        : `; ${paths.current} held a value this server did not write, so it was not adopted: a fresh value was minted and a rotation is owed`)
-      : '';
-    warn(`${paths.retired} is unusable; ${aside}; the values it held can no longer be recognised when written back${foreign}`);
-  } else if (foreignMint && asideNames.length > 0) {
+    warn(`${paths.retired} is unusable; ${aside}; the values it held can no longer be recognised when written back${foreignTail}`);
+    foreignTail = '';
+  }
+  if (stateUnusable) {
+    // The state file is set aside after boot's decisions, like the retired list; unlike it, boot cannot go on beside a file it
+    // could not move (writing the new record would overwrite what it holds), so it refuses, writing nothing more.
+    let moved: string;
+    try { moved = path.basename(await moveAsideUnusable(paths.state, now)); } catch (e) {
+      throw new Error(`${paths.state}: unusable, and it could not be set aside (${errno(e)}); boot refuses rather than overwrite it`);
+    }
+    warn(`${paths.state} is unusable; it was set aside as ${moved} and a fresh record starts; the retired digests it held can no longer be `
+      + `recognised when written back, and the value files beside it are treated as unverifiable${foreignTail}`);
+    foreignTail = '';
+  }
+  if (!retiredUnusable && !stateUnusable && foreignMint && asideNames.length > 0) {
     warn(`${paths.current} held a value this server did not write while ${asideNames.join(', ')} stands set aside, so it was not adopted`
       + `${ctx.mintFailed ? '' : ': a fresh value was minted and a rotation is owed'}; removing the set-aside file after review is what allows a hand-made value to be adopted again`);
   }
@@ -249,16 +279,16 @@ export async function bootBoxToken(i: BootInput): Promise<BootResult> {
       warn(`could not record ${paths.state} (${errno(e)}); the driver records it on its next tick`);
     }
   }
-  return { holder, state: st, mintFailed: ctx.mintFailed, bothWriterArmed: armed, agentEnvMarksFleet, warnings: ctx.warnings };
+  return { holder, state: st, mintFailed: ctx.mintFailed, mintOwed: ctx.mintFailed ? ctx.mintOwed : null, bothWriterArmed: armed, agentEnvMarksFleet, warnings: ctx.warnings };
 }
 
-/** The names of the retired files an earlier boot set aside (`moveAsideUnusable`'s `box-token-retired.json.unusable-*`).
+/** The names of the retired and state files an earlier boot set aside (`moveAsideUnusable`'s `<file>.unusable-*`).
  *  A directory listing only: their content is never read. Only a proven ENOENT of the directory means none; any other
  *  failure (EACCES on a -wx directory, which opens its files but cannot list them; EMFILE; ENOMEM) refuses boot, naming the
  *  path and errno (D-4403 item 2): answering "none" there would drop the foreign posture and re-open the write-back hole. */
-async function setAsideRetiredNames(paths: TokenPaths): Promise<string[]> {
-  const prefix = `${path.basename(paths.retired)}${SET_ASIDE_MARK}`;
-  try { return (await fsp.readdir(paths.dir)).filter((n) => n.startsWith(prefix)).sort(); } catch (e) {
+async function setAsideNames(paths: TokenPaths): Promise<string[]> {
+  const prefixes = [paths.retired, paths.state].map((p) => `${path.basename(p)}${SET_ASIDE_MARK}`);
+  try { return (await fsp.readdir(paths.dir)).filter((n) => prefixes.some((x) => n.startsWith(x))).sort(); } catch (e) {
     if (errno(e) === 'ENOENT') return [];
     return refuseUnreadable(paths.dir, errno(e));
   }

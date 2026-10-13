@@ -297,6 +297,26 @@ describe('QuickConfirm', () => {
     expect(onConfirm).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  // Stall watch settings W2 (spec 2026-10-05 §13, P8; `confirm-on-stage-diff`
+  // (D-4034)): the sheet built from the server's write effect says one thing
+  // per line, so `consequence` takes a list and renders a paragraph per line,
+  // in order. A string is still one paragraph; an empty list renders none and
+  // leaves the actions.
+  it('renders one consequence paragraph per line of a list, and one for a string', () => {
+    const lines = () => [...document.querySelectorAll('p.qc-consequence')].map((p) => p.textContent);
+    const { rerender } = render(
+      <QuickConfirm {...props} consequence={['Checks turn on.', 'Busy delivery stops.']} open onConfirm={vi.fn()} onClose={vi.fn()} />,
+    );
+    expect(lines()).toEqual(['Checks turn on.', 'Busy delivery stops.']);
+
+    rerender(<QuickConfirm {...props} open onConfirm={vi.fn()} onClose={vi.fn()} />);
+    expect(lines()).toEqual([props.consequence]);
+
+    rerender(<QuickConfirm {...props} consequence={[]} open onConfirm={vi.fn()} onClose={vi.fn()} />);
+    expect(lines()).toEqual([]);
+    expect(screen.getByRole('button', { name: 'Stop session' })).toBeInTheDocument();
+  });
 });
 
 // — Toast —

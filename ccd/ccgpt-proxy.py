@@ -4,30 +4,42 @@ that fronts a ChatGPT/Codex subscription lane.
 
 Binds a port, answers its own identity, and forwards every request
 byte-for-byte — except a POST body on a path ending `/messages`, which is
-parsed as JSON and rewritten. Codex refuses a `system` entry by EITHER of the
-two doors Claude Code sends one through, and both are folded, in this order:
+parsed as JSON and rewritten. Claude Code sends a system instruction through
+two doors, and the shim handles each one differently:
 
   1. `_fold_midturn_system` — every mid-conversation `role: "system"` entry
-     inside `messages` becomes `role: "user"`, in place. Because the entry is
-     replayed with the conversation history, one unfolded injection fails
-     every later turn of that session.
-  2. `_fold_system` — the top-level Anthropic `system` field is removed and
-     folded into the conversation's own leading turn: MERGED into an
-     existing leading `user` message when there is one, otherwise inserted
-     as a new one (spec §6.1 item 2, "folds into the leading user turn";
-     production's own hybrid, adopted here — D-3152).
+     inside `messages` becomes `role: "user"`, in place. Codex refuses such
+     an entry, and because it is replayed with the conversation history, one
+     unfolded injection fails every later turn of that session.
+  2. `_system_as_instructions` — the top-level Anthropic `system` field is
+     KEPT top-level, as the system prompt: flattened to one plain string
+     behind `SYSTEM_LEAD`, so LiteLLM carries it in the Responses
+     `instructions` field after the Codex CLI base prompt. LiteLLM's chatgpt
+     provider always fills `instructions` with its own "You are Codex ...
+     running in the Codex CLI" prompt and appends whatever `instructions`
+     the request carries after it; its Anthropic adapter maps a top-level
+     `system` to `instructions` only when it is a PLAIN STRING — measured
+     offline on LiteLLM 1.101.0 and 1.104.0, and re-measured on every
+     runtime build by the behaviour probe (`top-system-in-instructions`).
+     A block-list `system` is not mapped: on a lane's path (the
+     chat-completions bridge, since provider chatgpt is not a
+     direct-Responses provider) it becomes a `role: "system"` input item,
+     which Codex refuses ("System messages are not allowed") — measured
+     offline on both versions. So the flattening is load-bearing, not
+     cosmetic. `messages` is not touched: nothing is merged into or
+     inserted before the first turn.
 
-Mid-turn conversion runs FIRST, deliberately, and this is not merely a
-documentation convention — it changes which branch `_fold_system` takes. A
-`role: "system"` entry sitting at `messages[0]` has already become `user` by
-the time the top-level fold runs, so the MERGE branch fires and the
-top-level instruction lands first inside that turn. Run in the reverse
-order, `messages[0]` is still `role: "system"` when `_fold_system` looks, its
-`role == "user"` check is false, and the INSERT branch fires instead —
-structurally different output, not a cosmetic reordering. D-3152 records
-that an unconditional insert (no merge branch) was tried first and measured
-to make the two folds commute regardless of call order on every input
-tested, which is why this function does not take that simpler shape.
+The top-level door used to be a fold as well (`_fold_system`): `system` was
+removed and merged into, or inserted as, the conversation's leading user
+turn. Claude Code's whole system prompt — a subagent's role, its tool rules,
+its report contract — then reached the model as user text, below the Codex
+prompt, and lost every conflict with it. Spec §22 retires that fold and
+supersedes the two arguments this file carried for it: D-3152's (the fold's
+merge branch made the two steps' call order load-bearing) and D-3156's
+acceptance of the merge prepending a text block ahead of a leading
+`tool_result`. The two steps now write disjoint fields — the first only the
+roles inside `messages`, the second only `system` — so their order is no
+longer load-bearing.
 
 A body on that path the shim cannot parse at all is REFUSED, never forwarded
 unexamined. D-3151 — three silent passthrough arms, one in
@@ -42,9 +54,9 @@ own CLOSED entry there (durable, unlike the gitignored `task-7a-rulings.md`
 this paragraph also cites) for what retired them.
 
 A `/messages` POST body carrying `Content-Encoding: gzip` or `deflate` is
-decompressed before the two folds above run and the folded result is
-re-compressed in the same encoding before forwarding — the identical fold
-pipeline, never a second one built for compressed input. An absent or
+decompressed before the two system steps above run and the rewritten result
+is re-compressed in the same encoding before forwarding — the identical
+rewrite pipeline, never a second one built for compressed input. An absent or
 `identity` `Content-Encoding` is left alone, exactly as an unencoded body
 already was: folded and forwarded like any other. Any OTHER encoding this
 shim does not implement — `br`, or the list/trailing-comma forms
@@ -55,7 +67,7 @@ as one is refused with an HTTP 400 naming what was wrong (see
 `_decode_body`) — neither a fourth D-3151 arm nor left to drop the
 connection the way a malformed chunked frame does (see `_read_chunked_body`).
 
-Once a `/messages` body is safely parsed and both system folds have run,
+Once a `/messages` body is safely parsed and both system doors are handled,
 `_apply_effort` resolves Codex's own `reasoning.effort`: an explicit client
 `output_config.effort` — any value except `"auto"`, ccrc's own first-class
 synonym for "the lane decides", which is treated as absent (task-8 fix round 1,
@@ -101,10 +113,36 @@ and `CCGPT_LITELLM_PORT` are all required; a missing one is a refusal to
 start, loudly, naming the variable — not a guessed port. A defaulted port is
 the exact mechanism by which one lane's shim would silently reach another
 lane's gateway and bill the wrong account.
+
+ONE OPTIONAL VARIABLE. `CCGPT_UPSTREAM_WAIT_S` (D-4933) bounds how long the
+shim waits out a REFUSED connection to the LiteLLM proxy: a whole number of
+seconds from 0 to 600, default 60, where 0 means no waiting. A release that
+rebuilds a lane's runtime restarts its gateway, which takes about a minute to
+listen again (measured: ~46 s), and in that window every connect is refused.
+The shim used to answer each request in it with an immediate 502, and Claude
+Code ended the turn on it. Now a refused connect — the one failure where
+nothing reached upstream — is retried every half second, with the same
+method, path, headers and body bytes, but only while its client is still
+connected: before each re-send the shim peeks at the client's socket
+(`Handler._client_gone`), and once the client has closed it stops waiting,
+sends nothing upstream and answers the same immediate 502 as before (a client
+that only half-closed and still reads gets it; one that has gone discards it),
+so a request is never sent for a client that has gone. One client cannot be
+seen to leave: one with a further request already queued behind this one (HTTP
+pipelining), whose old request is then still sent when the gateway returns. The
+shim's one real client does not pipeline.
+The wait ends at the bound (measured from the first refusal); then the same 502
+refusal as before answers, saying it was refused for the whole wait. Anything
+else (a reset, a timeout, a connection accepted and then closed, any other
+error) may have reached upstream, and a request that reached upstream is never
+re-sent: an immediate 502, exactly as before. See `_urlopen_through_refusal`.
+An invalid value refuses to start, like a required variable's.
 """
 import os
 import sys
+import time
 import json
+import socket
 import gzip
 import zlib
 import functools
@@ -117,9 +155,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 def _required_env(name: str) -> str:
     """Read one required environment variable, or refuse to start.
 
-    No default is offered for any of the three variables this shim reads —
-    see the module docstring's note on why a defaulted port is unsafe here,
-    not merely unhelpful.
+    No default is offered for any of the three REQUIRED variables this shim
+    reads — see the module docstring's note on why a defaulted port is unsafe
+    here, not merely unhelpful. The one other variable it reads,
+    `CCGPT_UPSTREAM_WAIT_S`, is optional and has a default
+    (`_optional_wait_s`, D-4933).
     """
     value = os.environ.get(name)
     if not value:
@@ -139,8 +179,42 @@ def _required_port(name: str) -> int:
         sys.exit(f"ccgpt-proxy: refusing to start — {name} is not a valid port number: {raw!r}")
 
 
+# D-4933: the bound on waiting out a refused upstream connection, in seconds.
+# 60 because the measured gateway restart took ~46 s and Claude Code's own
+# request timeout is far longer; 600 is the ceiling an operator may set.
+UPSTREAM_WAIT_DEFAULT_S = 60
+UPSTREAM_WAIT_MAX_S = 600
+
+
+def _optional_wait_s(name: str, default: int) -> int:
+    """Read the one OPTIONAL variable this shim has: a whole number of seconds
+    from 0 to `UPSTREAM_WAIT_MAX_S`, or `default` when it is absent (D-4933).
+
+    Parsed once, at start-up, and an invalid value is the same named refusal
+    `_required_port` gives — not a guessed bound: a unit that says
+    `CCGPT_UPSTREAM_WAIT_S=sixty` has said something this shim cannot act on,
+    and quietly using 60 would hide it. Only a string of ASCII digits is read,
+    leading zeros included (`0600` is 600), so `int()`'s own leniency (' 5',
+    '+5', '5_0', non-ASCII digits) never decides what a unit file means. The
+    length is checked after the zeros are stripped and BEFORE `int()` is
+    called, so a 5000-digit string, which `int()` refuses past its own
+    digit limit, never reaches it.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    if raw.isascii() and raw.isdigit():
+        digits = raw.lstrip("0") or "0"
+        if len(digits) <= len(str(UPSTREAM_WAIT_MAX_S)) and int(digits) <= UPSTREAM_WAIT_MAX_S:
+            return int(digits)
+    sys.exit(
+        f"ccgpt-proxy: refusing to start — {name} is not a whole number of seconds "
+        f"from 0 to {UPSTREAM_WAIT_MAX_S}: {raw!r}"
+    )
+
+
 class _UnusableBody(Exception):
-    """Raised when a `/messages` body cannot be safely folded at all: not
+    """Raised when a `/messages` body cannot be safely rewritten at all: not
     JSON, not a JSON object once parsed, or a `messages` field present but
     not a list. Raised by `_rewrite_messages_body` and the
     `_fold_midturn_system` it calls, caught by `_relay` alone, which answers
@@ -181,8 +255,9 @@ def _fold_midturn_system(data):
     and D-3151 arm 3's own census — the plan's and the deleted comment's —
     was always "present but not a list", never "absent". A body carrying
     only a top-level `system` and no `messages` at all is one this shim
-    folds perfectly well (`_fold_system`'s `data.get("messages") or []`
-    turns the missing key into `[]` and inserts one leading `user` turn),
+    forwards perfectly well (`_system_as_instructions` writes `system` alone
+    and never reads `messages`, so an absent key stays absent and an
+    explicit `null` stays `null` — no turn is manufactured for either),
     so refusing it is the over-refusal task-7a-rulings.md §6 (fix round 1,
     C-1) exists to prevent — it buys nothing, since a `messages` key that is not there
     cannot hide an unfolded mid-turn `system` entry either. `None` is
@@ -194,7 +269,7 @@ def _fold_midturn_system(data):
     msgs = data.get("messages")
     if msgs is None:
         # Absent key or explicit `null` — not D-3151 arm 3's condition, see
-        # above. `_fold_system`'s `or []` handles this exactly as before.
+        # above. Forwarded as sent; nothing downstream invents a list for it.
         return data
     if not isinstance(msgs, list):
         raise _UnusableBody("ccgpt-proxy: 'messages' is present but not a list")
@@ -210,119 +285,90 @@ def _system_to_text(system):
     Same two shapes `_fold_midturn_system` already tolerates on a message's
     own `content`: a plain string, or a list of Anthropic content blocks.
     Blocks are joined in the order the sender wrote them — one instruction in
-    sequence, not concatenated ad hoc — and a non-dict entry or a block with
-    no string `text` contributes nothing rather than raising, since this
-    function's caller must never let a malformed block crash a request that
-    a well-formed one would have folded cleanly.
+    sequence, not concatenated ad hoc — and a non-dict entry, a block with
+    no string `text`, or a block whose `text` is the empty string
+    contributes nothing (it is skipped, not joined as an empty part) rather
+    than raising, since this function's caller must never let a malformed
+    block crash a request that a well-formed one would have carried cleanly.
+    The text it keeps is returned as written, never stripped.
     """
     if isinstance(system, str):
         return system
     if isinstance(system, list):
         parts = [
-            b.get("text", "") for b in system
-            if isinstance(b, dict) and isinstance(b.get("text"), str)
+            b["text"] for b in system
+            if isinstance(b, dict) and isinstance(b.get("text"), str) and b["text"]
         ]
         return "\n\n".join(parts)
     return ""
 
 
-def _fold_system(data):
-    """Remove the top-level `system` field and fold its content into the
-    conversation's own leading turn (spec §6.1 item 2, "folds into the
-    leading user turn"; production's own hybrid, adopted here — D-3152):
-    MERGE into an existing leading `role: "user"` message when there is one,
-    otherwise INSERT a new one.
+# The one line put ahead of Claude Code's own system prompt. LiteLLM's chatgpt
+# provider writes its Codex CLI base prompt into the Responses `instructions`
+# FIRST and appends the request's own after it, so "above" in this line is
+# that base prompt, and this line is what tells the model which of the two
+# wins where they conflict (spec §22). ASCII only, one line: it is compared
+# byte for byte by `ccgpt-proxy.test.ts`, which spells it as its own literal.
+SYSTEM_LEAD = "You are running inside Claude Code, not the Codex CLI. What follows is Claude Code's system prompt for this session: wherever it differs from the Codex CLI instructions above, follow it."
 
-    Must run AFTER `_fold_midturn_system` has already processed the same
-    `data` — not just a documentation convention, but what decides which
-    branch fires. In the documented order, a `role: "system"` entry sitting
-    at `messages[0]` has already become `user` by the time this runs, so the
-    MERGE branch fires and the top-level text lands first, folded INTO that
-    turn. Called before `_fold_midturn_system` (the order this fold must
-    never run in), `messages[0].role` is still `"system"`, the merge
-    branch's own `role == "user"` check is false, and the INSERT branch
-    fires instead — a new leading `user` message ahead of the
-    still-`system` entry, which `_fold_midturn_system` then converts
-    afterwards. That is a structurally different forwarded body, not a
-    cosmetic reordering, which is what makes call order genuinely
-    load-bearing here (D-3152's measurement: an unconditional insert with no
-    merge branch was tried first, and made the two folds commute regardless
-    of order on every input tested — this hybrid is why that shape was
-    rejected).
 
-    Merging a string `content` prepends `sys_text` with a blank-line
-    separator; merging a content-block-list `content` prepends a new text
-    block instead of stringifying. Either way the top-level instruction
-    reads first, ahead of what was already in that turn.
+def _system_as_instructions(data):
+    """Keep the top-level `system` field as the system prompt, as ONE plain
+    string led by `SYSTEM_LEAD` (spec §22, D-4858).
 
-    task-9 fix round 1 M-1: that same unconditional prepend is what the
-    plan's `## Deviations found` accepts as D-3156 when the block-list
-    branch's `content` already starts with a `tool_result` block — a shape
-    the Anthropic API requires to lead a user message, so this fold pushes
-    it to index 1 instead of 0. Measured in Task 9; the entry (not this
-    docstring) carries the full argument for why that is accepted rather
-    than fixed, audited and rewritten once already — read D-3156 before
-    changing this branch, not this sentence alone.
+    LiteLLM's Anthropic adapter maps a top-level `system` to the Responses
+    `instructions` field only when it is a PLAIN STRING, and its chatgpt
+    provider writes its own Codex CLI prompt there first and appends the
+    request's after it — measured offline on LiteLLM 1.101.0 and 1.104.0;
+    the runtime's behaviour probe re-measures that mapping on every build
+    (`top-system-in-instructions`). A block-list `system` is not mapped: on
+    a lane's path (the chat-completions bridge, since provider chatgpt is
+    not a direct-Responses provider) it becomes a `role: "system"` input
+    item, which Codex refuses ("System messages are not allowed") —
+    measured offline on both versions. So the flattening is load-bearing,
+    not cosmetic: the value is flattened by `_system_to_text` (a string as
+    is, non-empty text blocks joined with a blank line, anything else to
+    nothing) and written back as a string, the one shape the mapping holds
+    for, whatever shape the client sent. The blocks' own extra keys
+    (`cache_control`, say) do not survive — the field they land in is a
+    single string.
 
-    Codex refuses the FIELD, not merely a non-empty value of it, so the key
-    is popped unconditionally whenever it is present. An absent, null, or
-    empty `system` — or a content-block list with no usable text — folds to
-    no text at all, and no leading turn is invented for an instruction that
-    said nothing.
+    `messages` is NOT touched. Nothing is merged into the first turn and
+    nothing is inserted ahead of it — the old `_fold_system` did both, and
+    that is what spec §22 retires: Claude Code's whole system prompt reached
+    the model as user text, below the Codex prompt, and lost every conflict
+    with it. Two consequences of that fold no longer exist: its merge branch
+    made call order against `_fold_midturn_system` load-bearing (D-3152's
+    argument), and its block-list merge prepended a text block ahead of a
+    leading `tool_result` (D-3156's acceptance). Both are superseded by spec
+    §22; `ccgpt-proxy.test.ts` pins the second as a regression case.
 
-    `messages` absent or `null` folds to `[]` before the branch above runs,
-    so a request with only a top-level `system` and no history still gets
-    one leading `user` turn, not none (task-7a fix round 1, C-1: this sentence was
-    briefly false between the parent commit and this fix — see
-    `_fold_midturn_system`'s own docstring for the defect and the remedy;
-    re-verified true again here, not merely re-asserted). A non-empty list
-    whose first entry is not a dict is genuinely malformed — nothing safe
-    to fold into — so `system` stays popped (removed either way) and
-    `messages` is forwarded untouched. This guard is written as `not
-    isinstance(msgs, list) or (msgs and not isinstance(msgs[0], dict))`,
-    but by the time this function runs its only caller
-    (`_rewrite_messages_body`) has already run `_fold_midturn_system`,
-    which returns `data` unmodified for an ABSENT or `null` `messages` and
-    raises `_UnusableBody` for a PRESENT non-list `messages` (fix round 1,
-    task-7a C-1) — so `data.get("messages")` here is always either `None` or an
-    actual list by the time `msgs = data.get("messages") or []` runs,
-    never a present-but-wrong-type value, and `not isinstance(msgs, list)`
-    can never be True: defensive dead code from this call site, same shape
-    as `_decode_body`/`_encode_body`'s own unreachable tails below, not a
-    D-3151 arm and never was — the Tasks 5+6 review's §6 census confirmed
-    exactly three arms, and this pre-existing pair (this branch, and the
-    identical-shaped empty-`sys_text` early return above it) is not among
-    them. The `first entry not a dict` half remains live and is left
-    exactly as it was.
+    A `system` whose flattened text is empty or whitespace only — absent,
+    `null`, an empty or whitespace-only string, or a block list carrying no
+    string `text`, only empty text or only whitespace — is popped and NOT
+    re-added: the lead line is never sent with nothing behind it, since it
+    would announce a system prompt that is not there. The text that is kept
+    is sent as flattened, not stripped.
     """
-    sys_text = _system_to_text(data.pop("system", None))
-    if not sys_text:
+    text = _system_to_text(data.pop("system", None))
+    if not text.strip():
         return data
-    msgs = data.get("messages") or []
-    if not isinstance(msgs, list) or (msgs and not isinstance(msgs[0], dict)):
-        return data
-    if msgs and msgs[0].get("role") == "user":
-        content = msgs[0].get("content")
-        if isinstance(content, str):
-            msgs[0]["content"] = f"{sys_text}\n\n{content}"
-        elif isinstance(content, list):
-            msgs[0]["content"] = [{"type": "text", "text": sys_text}] + content
-        else:
-            msgs[0]["content"] = sys_text
-    else:
-        msgs.insert(0, {"role": "user", "content": sys_text})
-    data["messages"] = msgs
+    data["system"] = f"{SYSTEM_LEAD}\n\n{text}"
     return data
 
 
 def _rewrite_messages_body(body: bytes) -> bytes:
-    """The `/messages`-path rewrite: fold mid-conversation `system` turns,
-    then the top-level `system` field, then resolve `_apply_effort`'s own
+    """The `/messages`-path rewrite: turn mid-conversation `system` entries
+    into `user` ones in place (`_fold_midturn_system`), then keep the
+    top-level `system` field as the system prompt — one plain string behind
+    `SYSTEM_LEAD`, which LiteLLM carries in Codex's `instructions`
+    (`_system_as_instructions`, spec §22; it used to be folded into the
+    leading user turn) — then resolve `_apply_effort`'s own
     `reasoning.effort` (task-8 fix round 1, I-1 — this line used to stop at
-    "then re-encode" three steps early, 33 lines above the `_apply_effort`
+    "then re-encode" three steps early, above the `_apply_effort`
     call this function actually makes), then re-encode. `ensure_ascii=False`
     (commit 8009b4f4 fix round 1, M-5): the default would re-escape every non-ASCII byte the
-    client sent even when nothing needed folding, and a proxy that rewrites
+    client sent even when nothing needed rewriting, and a proxy that rewrites
     more of the wire than it must is a proxy whose diffs are harder to reason
     about — keep the forwarded body as close to what arrived as re-encoding
     allows.
@@ -345,13 +391,13 @@ def _rewrite_messages_body(body: bytes) -> bytes:
         raise _UnusableBody(f"ccgpt-proxy: malformed JSON body: {e}") from None
     if not isinstance(data, dict):
         raise _UnusableBody("ccgpt-proxy: top-level JSON value is not an object")
-    # Order is the whole point (module docstring): mid-turn conversion runs
-    # FIRST, so a system entry already sitting at messages[0] has become
-    # `user` by the time the top-level fold decides where to insert — the
-    # top-level instruction then lands ABOVE it, not reordered beneath it.
+    # The two system steps touch disjoint fields — `_fold_midturn_system` the
+    # roles inside `messages`, `_system_as_instructions` the top-level
+    # `system` alone — so their order is no longer load-bearing (spec §22:
+    # the retired `_fold_system`'s merge branch is what made it so, D-3152).
     data = _fold_midturn_system(data)
     if "system" in data:
-        data = _fold_system(data)
+        data = _system_as_instructions(data)
     data = _apply_effort(data)
     return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
@@ -435,7 +481,7 @@ def _lane_effort_map() -> dict:
         default, for the identical reason. Deliberately NOT shaped like
         `_UnusableBody`/`_BadEncoding`: those answer a CLIENT body this shim
         cannot use; this is ccrc's own local file, and the client's request
-        is examined and folded exactly as always regardless of what this
+        is examined and rewritten exactly as always regardless of what this
         function returns.
     Either way this function returns `{}` WITHOUT writing the cache slot
     (task-8 fix round 1, M-2 — a caching bug in the original round: a FAILURE
@@ -478,8 +524,9 @@ def _lane_effort_map() -> dict:
 def _apply_effort(data: dict) -> dict:
     """Resolve `reasoning.effort` and strip both client-side effort fields,
     IN PLACE, on an already-parsed `/messages` body. Called from
-    `_rewrite_messages_body` alone, AFTER both system folds — task-8-
-    rulings.md (commit e5318e97) §4: this must run only where the folds already run, a POST
+    `_rewrite_messages_body` alone, AFTER both system doors are handled
+    (`_fold_midturn_system`, then `_system_as_instructions`) — task-8-
+    rulings.md (commit e5318e97) §4: this must run only where those two already run, a POST
     body on a path ending `/messages`, and nowhere else, and it introduces
     no new "cannot use this body" condition of its own — nothing here
     raises.
@@ -522,7 +569,7 @@ def _apply_effort(data: dict) -> dict:
 
     Malformed client shapes (a non-dict `output_config`, a `model` that is
     not a string) are tolerated, never refused — this is the SAME body the
-    two folds above already accepted; effort resolution adds no new refusal
+    two system steps above already accepted; effort resolution adds no new refusal
     surface (task-8-rulings.md (commit e5318e97) §4).
     """
     output_config = data.pop("output_config", None)
@@ -855,8 +902,9 @@ def _decode_body(body: bytes, encoding: str) -> bytes:
       forward a body that was read to completion and simply is not JSON
       once decoded; forwarding STILL-COMPRESSED, unrewritten bytes here
       instead would repeat, byte for byte, the exact production hazard this
-      task closes — the client's original `system` field would still be
-      sitting inside them, compressed but intact.
+      task closes — the client's mid-conversation `role: "system"` entries
+      would still be sitting inside them, compressed and unconverted (and
+      its top-level `system` would arrive without `SYSTEM_LEAD`).
     - It is not `_read_chunked_body`'s let-it-raise-and-drop-the-connection
       shape either. That shape is accepted there only because chunk framing
       is the sole description of where the body ends, so a malformed frame
@@ -914,6 +962,7 @@ def _encode_body(body: bytes, encoding: str) -> bytes:
 ACCOUNT_ID = _required_env("CCGPT_ACCOUNT_ID")
 PROXY_PORT = _required_port("CCGPT_PROXY_PORT")
 LITELLM_PORT = _required_port("CCGPT_LITELLM_PORT")
+UPSTREAM_WAIT_S = _optional_wait_s("CCGPT_UPSTREAM_WAIT_S", UPSTREAM_WAIT_DEFAULT_S)
 UPSTREAM = f"http://127.0.0.1:{LITELLM_PORT}"
 
 LANE_PATH = "/ccgpt/lane"
@@ -959,6 +1008,112 @@ HOP_BY_HOP = {
 }
 
 
+# D-4933: how long to sleep between tries while upstream refuses connections.
+# Short next to a ~46 s restart, long enough that waiting costs about 100 µs of
+# CPU per try, roughly 12 ms per request per minute of waiting, not a busy loop.
+_REFUSED_RETRY_S = 0.5
+
+
+class _UpstreamRefused(Exception):
+    """Raised by `_urlopen_through_refusal` when upstream refused every
+    connection for the whole `UPSTREAM_WAIT_S`. Carries the LAST error as
+    `.last`. Caught by `_relay` alone, which answers the 502 naming the wait.
+    A dedicated exception, not a re-raise of the `URLError`: `_relay` must tell
+    "refused for the whole wait" from "refused, and waiting was switched off
+    (`UPSTREAM_WAIT_S` 0)", whose message stays today's, and two conditions a
+    caller handles differently must not look the same (ring conventions,
+    project CLAUDE.md)."""
+
+    def __init__(self, last: BaseException):
+        super().__init__(last)
+        self.last = last
+
+
+class _ClientGone(Exception):
+    """Raised by `_urlopen_through_refusal` when its client closed while the
+    shim was waiting out a refused connection (D-4933). Carries the LAST error
+    as `.last`. Caught by `_relay` alone, which sends nothing upstream and
+    answers the same immediate 502 a refused connection got before D-4933, with
+    that last error in it. A peek cannot tell a client that closed both
+    directions from one that only half-closed (sent its request, shut its
+    writing side, and still reads), so the answer is written either way: the
+    half-closed one gets it, and the one that has gone discards it. A dedicated
+    exception, not a `None` or a re-raise of the `URLError`, for
+    `_UpstreamRefused`'s reason: "the wait ran out" and "the client closed" are
+    handled differently."""
+
+    def __init__(self, last: BaseException):
+        super().__init__(last)
+        self.last = last
+
+
+def _is_refused(e: BaseException) -> bool:
+    """True iff `e` is the TCP connect itself being refused (ECONNREFUSED).
+
+    Measured on this Python (3.12): `urllib.request.urlopen` against a closed
+    local port raises `URLError(ConnectionRefusedError(111, ...))`, so the
+    refusal is the `URLError`'s `.reason`; a bare `ConnectionRefusedError` is
+    accepted too, for a caller that surfaces one unwrapped. Nothing else
+    qualifies, and that narrowness is the point: a refused connect is the one
+    failure that proves no byte of the request reached upstream, so a request
+    that reached upstream is never re-sent. A reset, a timeout,
+    `RemoteDisconnected` (a connection accepted and then closed) and every
+    other `URLError`/`OSError` may have come AFTER upstream saw the request,
+    so none of them is retried. A refused connect is itself retried only
+    while its client is still connected (`_urlopen_through_refusal`). An
+    `HTTPError` is a `URLError` whose `.reason` is a string, so it never
+    matches either.
+    """
+    if isinstance(e, urllib.error.URLError):
+        e = e.reason
+    return isinstance(e, ConnectionRefusedError)
+
+
+def _urlopen_through_refusal(req, client_gone):
+    """`urlopen(req)`, but a REFUSED connection is waited out (D-4933).
+
+    On a refusal (`_is_refused`), sleeps `_REFUSED_RETRY_S` and sends the SAME
+    `req` again — method, path, forwarded headers and body bytes, since a
+    refused connect sent none of them and `urlopen` adds its own headers
+    idempotently — until `UPSTREAM_WAIT_S` seconds have passed since the FIRST
+    refusal (`time.monotonic`, not the wall clock), then raises
+    `_UpstreamRefused`. The last sleep is clipped to the time left, so the
+    final try lands on the bound itself and "refused for the whole wait" is
+    literally true. `UPSTREAM_WAIT_S` of 0 retries nothing. Every other error,
+    `HTTPError` included, propagates untouched on its first occurrence: see
+    `_is_refused` for why nothing but a refusal is safe to send again.
+
+    A refused connect is retried only while its client is still connected.
+    `client_gone` (`Handler._client_gone`) is called after each sleep, before
+    the re-send; once it answers True this raises `_ClientGone` (carrying the
+    last refusal) and nothing is sent upstream, so a request is never sent for
+    a client that has gone (one that gave up and retried would otherwise reach
+    a restarted gateway twice), and a request that reached upstream is never
+    re-sent. One client cannot be seen to leave: one with a further request
+    already queued behind this one (HTTP pipelining), because the peek then
+    returns that request's bytes, not the client's close; its old request is
+    still sent when the gateway returns. The shim's one real client does not
+    pipeline. Sleeps in the handler's own thread (`ThreadingHTTPServer`), which
+    blocks no other request.
+    """
+    refused_at = None
+    while True:
+        try:
+            return urllib.request.urlopen(req, timeout=900)
+        except (urllib.error.URLError, OSError) as e:
+            if not UPSTREAM_WAIT_S or not _is_refused(e):
+                raise
+            now = time.monotonic()
+            if refused_at is None:
+                refused_at = now
+            left = refused_at + UPSTREAM_WAIT_S - now
+            if left <= 0:
+                raise _UpstreamRefused(e) from None
+            time.sleep(min(_REFUSED_RETRY_S, left))
+            if client_gone():
+                raise _ClientGone(e) from None
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -973,6 +1128,27 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(payload)
+
+    def _client_gone(self) -> bool:
+        """True iff the client has closed its connection (D-4933). Peeks one
+        byte without consuming it or blocking: `b''` is the client's FIN, so it
+        closed; `BlockingIOError` is a client that is still there and silent;
+        bytes are a client that is still there (a pipelined request, left for
+        the next read); any other `OSError` (a reset, a closed descriptor)
+        counts as gone. Asked by `_urlopen_through_refusal` before each
+        re-send, so a request is never sent for a client that has gone. Two
+        limits: a client that only half-closed (shut its writing side and still
+        reads) reads as gone too, which is why `_relay` still answers it; and a
+        client with a further request already queued behind this one (HTTP
+        pipelining) cannot be seen to leave, since the peek returns that
+        request's bytes, so its old request is still sent when the gateway
+        returns. The shim's one real client does not pipeline."""
+        try:
+            return self.connection.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b""
+        except BlockingIOError:
+            return False
+        except OSError:
+            return True
 
     def _refuse(self, status: int, message: str) -> None:
         """Answer ONE refusal shape for the entire file (D-3153): a JSON
@@ -996,12 +1172,14 @@ class Handler(BaseHTTPRequestHandler):
         fires AFTER `urlopen`, i.e. after the request body WAS offered
         upstream — measured, an upstream that reads the body and then
         drops its socket makes `_refuse(502, …)` answer with the recording
-        sink already having seen the request. What every call to this
-        method upholds unconditionally is narrower and still real: the ONE
-        JSON refusal shape (D-3153), never `send_error`'s HTML/status-line
-        one. Every refusal in this file — Task 6's gzip/deflate decode
-        failure and the upstream-unreachable 502 included — now calls this
-        instead of `send_error`.
+        sink already having seen the request. (A 502 for a REFUSED connection,
+        D-4933, is the exception to that exception: the connect itself failed,
+        so nothing was offered upstream.) What every call to this method
+        upholds unconditionally is narrower and still real: the ONE JSON
+        refusal shape (D-3153), never `send_error`'s HTML/status-line one.
+        Every refusal in this file — Task 6's gzip/deflate decode failure and
+        the upstream-unreachable 502 included — now calls this instead of
+        `send_error`.
         task-7a Fix round 1, M-3: a HEAD request gets headers describing the body
         (including its real `Content-Length`) but not the body bytes
         themselves, matching `send_error`'s own `self.command != 'HEAD'`
@@ -1132,11 +1310,15 @@ class Handler(BaseHTTPRequestHandler):
         # three ways before forwarding, all inside `_rewrite_messages_body`
         # below — Codex refuses a mid-conversation `role: "system"` entry
         # inside its `messages` (`_fold_midturn_system` converts each one to
-        # `user`, in place); the top-level `system` field folds into the
-        # leading turn (`_fold_system`); and Codex's own `reasoning.effort`
-        # is resolved from the client's `output_config` or this lane's own
-        # default (`_apply_effort`, task-8 fix round 1, M-5 — this comment
-        # used to name the system fold alone and under-describe the branch).
+        # `user`, in place); the top-level `system` field is KEPT top-level,
+        # as one plain string behind `SYSTEM_LEAD`, so LiteLLM carries it in
+        # Codex's `instructions` after the Codex CLI base prompt
+        # (`_system_as_instructions`, spec §22 — it used to be folded into
+        # the leading user turn, below that prompt); and Codex's own
+        # `reasoning.effort` is resolved from the client's `output_config`
+        # or this lane's own default (`_apply_effort`, task-8 fix round 1,
+        # M-5 — this comment used to name the system fold alone and
+        # under-describe the branch).
         #
         # Suffix match, not the exact literal `/v1/messages` (fix round 1,
         # commit 8903d18a M-4): spec §6.4 speaks of
@@ -1184,7 +1366,7 @@ class Handler(BaseHTTPRequestHandler):
         if body:
             req.add_header("Content-Length", str(len(body)))
         try:
-            resp = urllib.request.urlopen(req, timeout=900)
+            resp = _urlopen_through_refusal(req, self._client_gone)
         except urllib.error.HTTPError as e:
             # task-9 fix round 1 I-4 (task-9-fix-rulings.md): a non-2xx
             # upstream status lands here, and `read1` below reaches it by a
@@ -1197,7 +1379,36 @@ class Handler(BaseHTTPRequestHandler):
             # describe block's own "relays a non-2xx upstream response,
             # status and body" case.
             resp = e
+        except _ClientGone as e:
+            # D-4933: the client closed while the shim waited out a refused
+            # connection, and nothing was sent upstream. The same immediate 502
+            # a refused connection got before D-4933 answers, because a peek
+            # cannot tell a client that has gone from one that half-closed
+            # (sent its request, shut its writing side, and still reads): the
+            # half-closed one gets its answer, the gone one discards it. The
+            # write is guarded, so a client that has gone (BrokenPipeError,
+            # ConnectionResetError, any OSError) never prints a traceback; the
+            # connection is marked closed so the handler loop does not read
+            # from it again.
+            try:
+                self._refuse(502, f"ccgpt-proxy: upstream unreachable: {e.last}")
+            except OSError:
+                pass
+            self.close_connection = True
+            return
+        except _UpstreamRefused as e:
+            # D-4933: every connect was refused for the whole wait, so nothing
+            # reached upstream. Same 502 shape as below; the message says the
+            # wait was spent, so a log reader can tell it from an instant one.
+            self._refuse(
+                502,
+                f"ccgpt-proxy: upstream unreachable: connection refused for {UPSTREAM_WAIT_S}s: {e.last}",
+            )
+            return
         except (urllib.error.URLError, OSError) as e:
+            # Everything `_is_refused` does not match, and a refusal with
+            # `UPSTREAM_WAIT_S` at 0: an immediate 502, never retried, as
+            # before D-4933.
             self._refuse(502, f"ccgpt-proxy: upstream unreachable: {e}")
             return
         self.send_response(resp.status)

@@ -1528,17 +1528,23 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(lastPrune, 'the second prune call must be in the SERVER branch').toBeGreaterThan(elseAt);
   });
 
-  it('both rsync lines exclude the mail token, so `ship_secret`\'s hardening is not undone by a plain copy', () => {
-    // Fix-round finding (deploy.sh rsyncs the secret to BOTH boxes at the
-    // local file's mode, three lines before `ship_secret` hardens the other
-    // copy). Both rsync lines push `deploy` as a source tree — `--exclude
-    // '*.env'` is there so `ship_env`'s secrets never ride along unhardened;
-    // `deploy/ccrc-mail.token` needs the identical treatment or it lands a
-    // second, unmanaged copy at whatever mode the local file happens to have,
-    // right next to the 0600-under-0700 copy `ship_secret` lands three lines
-    // later. Without this assertion the exclude can be dropped from either
-    // line — or from one but not the other — and every suite in this repo
-    // stays green; nothing else reads `deploy.sh`'s rsync invocations at all.
+  it('both rsync lines exclude the mail token, so a stray local `deploy/ccrc-mail.token` never reaches either box', () => {
+    // HISTORY. `deploy.sh` once shipped the box token itself: a `ship_secret`
+    // lane landed one local `deploy/ccrc-mail.token` on both boxes at 0600
+    // under 0700, and this test pinned that both rsync lines excluded the file
+    // so the plain copy of the `deploy` tree could not land a second,
+    // unhardened copy beside it. That lane is gone. The server now mints and
+    // rotates the token itself and hands the fleet box its copy over the agent
+    // link (`ccrc token sync`), so `deploy.sh` ships no token at all.
+    //
+    // What still stands, and what this row pins: a checkout may still hold a
+    // gitignored `deploy/ccrc-mail.token` (the hand-made value from before the
+    // lifecycle). Both rsync lines push `deploy` as a source tree, so the
+    // exclude is the only thing that keeps that stray file off both boxes, at
+    // whatever mode the local file happens to have. Without this assertion the
+    // exclude can be dropped from either line, or from one but not the other,
+    // and every suite in this repo stays green; nothing else reads
+    // `deploy.sh`'s rsync invocations at all.
     // Each invocation is a `\`-continued 3-line block (flags, this exclude,
     // then the source list and destination) — match the WHOLE block, not one
     // line, or the exclude living on its own continuation line would never

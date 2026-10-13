@@ -79,7 +79,7 @@ describe('the harness drops an inherited GIT_DIR (spec §5.6’s pin)', () => {
 
 describe('every reclaim and expire suite takes its environment through the strip', () => {
   /** The suites and fixtures spec §5.6 names: the reclaim and expire ccd suites, their fixtures, and the base harness. */
-  const SCOPE = /^(ccd-child-reclaim-.*\.test\.ts|ccd-child-tmproot-.*\.test\.ts|ccd-path-users\.test\.ts|ccd-leaf-remove\.test\.ts|ccd-ws-expire-.*\.test\.ts|childReclaim[A-Za-z]*\.ts|pathUsersFixture\.ts|wsExpireFixture\.ts|ccdWsHelpers\.ts)$/;
+  const SCOPE = /^(ccd-child-reclaim-.*\.test\.ts|ccd-child-tmproot-.*\.test\.ts|ccd-path-users\.test\.ts|ccd-leaf-remove\.test\.ts|ccd-ws-expire-.*\.test\.ts|ccd-collect-.*\.test\.ts|ccd-ws-collect-.*\.test\.ts|ccd-leaf-checkouts-alias\.test\.ts|ccd-leaf-checkouts-pins\.test\.ts|ccd-reclaim-.*\.test\.ts|ccd-expire-tail-refuted\.test\.ts|ccd-dir-physical-builtin\.test\.ts|ws-collect-act\.test\.ts|childReclaim[A-Za-z]*\.ts|pathUsersFixture\.ts|wsExpireFixture\.ts|collectFixture\.ts|wsCollectFixture\.ts|collectRaceFixture\.ts|containmentRefutedFamilies\.ts|ccdWsHelpers\.ts)$/;
   // ...and the ccd suites and the fixture that Tasks 4, 5 and 7 add under names
   // those patterns miss: `ccd-path-users`, `pathUsersFixture`, `ccd-leaf-remove`
   // and `ccd-child-tmproot-*`.
@@ -113,6 +113,14 @@ describe('every reclaim and expire suite takes its environment through the strip
       'ccd-child-reclaim-tail-contained.test.ts', 'ccd-path-users.test.ts', 'pathUsersFixture.ts', 'ccd-leaf-remove.test.ts',
       'ccd-child-reclaim-tmproot-wait.test.ts', 'ccd-child-tmproot-witness.test.ts', 'ccd-child-reclaim-gone-branch.test.ts',
       'ccd-child-reclaim-recovery.test.ts', 'ccd-child-reclaim-unmeasured-journal.test.ts', 'ccd-child-reclaim-prelock-journal.test.ts',
+      'ccd-collect-record.test.ts', 'ccd-collect-quarantine.test.ts', 'ccd-collect-idle-token.test.ts', 'ccd-collect-rows.test.ts',
+      'ccd-leaf-checkouts-alias.test.ts', 'ws-collect-act.test.ts', 'ccd-reclaim-owned-rc.test.ts', 'ccd-reclaim-tail-refuted.test.ts',
+      'ccd-expire-tail-refuted.test.ts', 'containmentRefutedFamilies.ts', 'ccd-collect-audit.test.ts', 'ccd-collect-audit-rungs.test.ts',
+      'ccd-collect-audit-resume.test.ts', 'collectFixture.ts', 'ccd-ws-collect-verb.test.ts', 'ccd-ws-collect-move.test.ts',
+      'ccd-ws-collect-reprove.test.ts', 'ccd-ws-collect-order.test.ts', 'ccd-ws-collect-resume.test.ts', 'ccd-ws-collect-reach.test.ts',
+      'wsCollectFixture.ts', 'ccd-collect-race-spawn.test.ts', 'ccd-collect-race-crash.test.ts', 'ccd-collect-race-forge.test.ts',
+      'ccd-collect-race-substrate.test.ts', 'ccd-collect-race-ids.test.ts', 'ccd-collect-race-admin.test.ts', 'ccd-collect-recycle-pins.test.ts',
+      'collectRaceFixture.ts', 'ccd-dir-physical-builtin.test.ts', 'ccd-leaf-checkouts-pins.test.ts',
     ];
     expect(later.filter((f) => !SCOPE.test(f)), 'a later task’s file the scan would never read').toEqual([]);
   });

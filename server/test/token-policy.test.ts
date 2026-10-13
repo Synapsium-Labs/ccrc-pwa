@@ -11,7 +11,7 @@ import {
   HOLD_REPROBE_MS, MAX_PENDING, PENDING_HARD_CAP, applySyncResult, backoffMs, bothRoleWriterArmed, claimVerdict, codeExpiresAt,
   confirmedGeneration, extendedGraceState, handedOutState, mintedState, nextAction, phaseOf, promotedState,
   pendingExitOpen, recoveryPlan, retireDue, rotationGate, stagedState,
-  adoptedState, foreignUnderUnusableRetired, oweForRetiredPresentation, retiringDigests, retiringLanded, retiringRecorded,
+  adoptedState, clampRetiredStamp, foreignUnderUnusableRetired, oweForRetiredPresentation, retiredUnanswered, retiringDigests, retiringLanded, retiringRecorded,
   type BoxTokenState, type ClaimDoorState, type FileMetaLike, type GateInput, type GateNode, type GateVerdict,
 } from '../src/token/policy.js';
 import { CLAIM_CODE_TTL_MS } from '../../shared/agent-protocol.js';
@@ -562,6 +562,60 @@ describe('F3(c): the own-write promote waits out the backoff', () => {
   });
 });
 
+// D-4414 (review 352 F2): on a recorded both box a staged own-write generation that keeps failing must never keep the
+// previous value from being retired (and its digest recorded) at its hard bound.
+describe('D-4414 F2: the hard bound retires the previous value before the own-write branch', () => {
+  const G = '1'.repeat(16);
+  const staged = (): BoxTokenState => ({ ...stagedState({ ...base(), rotationOwed: true, owedWhy: 'adopted' }, G, 2000, W(2)),
+    previous: { id: null, seq: 0, graceUntil: 5000, hardUntil: 9000, currentPresented: true, write: W(3) } });
+  const gate = rotationGate(bothLocal());
+  const ask = (now: number, backoffUntil: number | null, retireHeld?: boolean) =>
+    nextAction({ state: staged(), gate, generation: null, rotateRequested: false, backoffUntil, now, ...(retireHeld === undefined ? {} : { retireHeld }) });
+
+  it('past hardUntil with a staged own-write generation (in a backoff or not) the answer is retire, not promote or backoff', () => {
+    expect(ask(9000, null)).toEqual({ kind: 'retire', why: 'grace' });
+    expect(ask(9500, 99_000)).toEqual({ kind: 'retire', why: 'grace' });
+    const unpresented = { ...staged(), previous: { ...(staged().previous as NonNullable<BoxTokenState['previous']>), currentPresented: false } };
+    expect(nextAction({ state: unpresented, gate, generation: null, rotateRequested: false, backoffUntil: 99_000, now: 9500 }))
+      .toEqual({ kind: 'retire', why: 'hard-bound' });
+  });
+
+  it('before hardUntil the own-write branch still goes first (grace alone does not pre-empt it)', () => {
+    expect(ask(6000, null)).toEqual({ kind: 'promote', generation: G, via: 'own-write' });
+    expect(ask(6000, 99_000)).toEqual({ kind: 'backoff', until: 99_000 });
+  });
+
+  it('a retirement the driver could not do this tick (retireHeld) does not block the own-write branch', () => {
+    expect(ask(9500, null, true)).toEqual({ kind: 'promote', generation: G, via: 'own-write' });
+    expect(ask(9500, 99_000, true)).toEqual({ kind: 'backoff', until: 99_000 });
+  });
+});
+
+// D-4414 (F3): the grace-end retirement (before the hard bound, any gate) is also held aside by `retireHeld`, so a previous
+// value whose file will not read does not loop retire -> hold until the step cap and starve stage / send / hold.
+describe('D-4414 F3: a held grace-end retirement blocks nothing else, on a remote gate too', () => {
+  const G = '1'.repeat(16);
+  const withPrev = (s: BoxTokenState): BoxTokenState => ({ ...s,
+    previous: { id: null, seq: 0, graceUntil: 5000, hardUntil: 90_000, currentPresented: true, write: W(3) } });
+  const owed = (): BoxTokenState => withPrev({ ...base(), rotationOwed: true, owedWhy: 'aux-unusable' });
+  const stagedOne = (): BoxTokenState => withPrev(stagedState({ ...base(), rotationOwed: true, owedWhy: 'adopted' }, G, 2000, W(2)));
+  const ask = (state: BoxTokenState, gate: GateVerdict, retireHeld?: boolean) =>
+    nextAction({ state, gate, generation: null, rotateRequested: false, backoffUntil: null, now: 6000,
+      ...(retireHeld === undefined ? {} : { retireHeld }) });
+
+  it('past graceUntil and before the hard bound the retirement is asked for, until the driver says it is held', () => {
+    expect(ask(owed(), OPEN)).toEqual({ kind: 'retire', why: 'grace' });
+    expect(ask(owed(), OPEN, true)).toEqual({ kind: 'stage', why: 'aux-unusable' });
+  });
+
+  it('held, a staged value on an open remote gate is sent, and on a closed gate the hold is named', () => {
+    expect(ask(stagedOne(), OPEN)).toEqual({ kind: 'retire', why: 'grace' });
+    expect(ask(stagedOne(), OPEN, true)).toEqual({ kind: 'send', generation: G, nodeId: NODE });
+    const closed = rotationGate(remote({ linkUp: false }));
+    expect(ask(stagedOne(), closed, true)).toMatchObject({ kind: 'hold' });
+  });
+});
+
 describe('F7: the timings that bound a live re-probe are pinned by value', () => {
   it('HOLD_REPROBE_MS is one hour (a 55-minute re-probe is faster than the plan, and reds here)', () => {
     expect(HOLD_REPROBE_MS).toBe(60 * 60_000);
@@ -610,7 +664,7 @@ describe('D-4410: the retiring record (a digest in box-token.json until the appe
 describe('D-4412: a retired presentation owes one forward rotation, bounded', () => {
   const idle = (): BoxTokenState => ({ ...base(), origin: 'rotated' });
   const ask = (over: Partial<Parameters<typeof oweForRetiredPresentation>[0]> = {}) =>
-    oweForRetiredPresentation({ state: idle(), fresh: 1, busy: false, lastOwedAt: null, now: 10_000_000, ...over });
+    oweForRetiredPresentation({ state: idle(), fresh: 1, lastOwedAt: null, now: 10_000_000, ...over });
 
   it('a new retired presentation on an idle, nothing-owed state owes the word retired-presented', () => {
     expect(ask()).toMatchObject({ rotationOwed: true, owedWhy: 'retired-presented' });
@@ -632,13 +686,75 @@ describe('D-4412: a retired presentation owes one forward rotation, bounded', ()
     expect(ask({ state: mk(idle()) })).toBeNull();
   });
 
-  it('nothing new is owed while a send or a promotion is running (the driver feeds it)', () => {
-    expect(ask({ busy: true })).toBeNull();
-  });
-
   it('at most one per HOLD_REPROBE_MS: just inside the bound owes nothing, at it owes again', () => {
     const last = 8_000_000;
     expect(ask({ lastOwedAt: last, now: last + HOLD_REPROBE_MS - 1 })).toBeNull();
     expect(ask({ lastOwedAt: last, now: last + HOLD_REPROBE_MS })).toMatchObject({ owedWhy: 'retired-presented' });
+  });
+
+  // 4552: a retired presentation is stamped and stays owed until a completed rotation answers it.
+  describe('an unanswered stamp owes with no new presentation (4552)', () => {
+    const stamped = (at: number | null | undefined, lastRotationAt: number | null): BoxTokenState => {
+      const s = idle();
+      const counters: BoxTokenState['counters'] = { ...s.counters, retiredPresented: 1 };
+      if (at === undefined) delete counters.retiredPresentedAt; else counters.retiredPresentedAt = at;
+      return { ...s, lastRotationAt, counters };
+    };
+    const quiet = (state: BoxTokenState, over: Partial<Parameters<typeof oweForRetiredPresentation>[0]> = {}) =>
+      oweForRetiredPresentation({ state, fresh: 0, lastOwedAt: null, now: 10_000_000, ...over });
+
+    it('retiredUnanswered: true only for a numeric stamp newer than the last rotation (or with no rotation)', () => {
+      expect(retiredUnanswered(stamped(5000, null))).toBe(true);
+      expect(retiredUnanswered(stamped(5000, 4000))).toBe(true);
+      expect(retiredUnanswered(stamped(5000, 5000))).toBe(false);
+      expect(retiredUnanswered(stamped(5000, 6000))).toBe(false);
+      expect(retiredUnanswered(stamped(null, null))).toBe(false);
+      expect(retiredUnanswered(stamped(undefined, null))).toBe(false);
+    });
+
+    // 4552 (review 383 F2): the clamp is a policy decision. Every stamp later than now is written down; an unanswered one is
+    // never written to or below the last rotation, so it is never cleared; an answered one goes to now and stays answered.
+    it('clampRetiredStamp: answered ahead goes to now, unanswered ahead goes to max(now, last rotation + 1), the rest are untouched', () => {
+      // answered ahead: now < stored <= lastRotationAt
+      expect(clampRetiredStamp(9000, 9500, 5000)).toBe(5000);
+      expect(clampRetiredStamp(9000, 9000, 5000)).toBe(5000);
+      expect(retiredUnanswered(stamped(clampRetiredStamp(9000, 9500, 5000), 9500))).toBe(false);
+      // unanswered ahead, the clock past the last rotation: plain now
+      expect(clampRetiredStamp(9000, 4000, 5000)).toBe(5000);
+      expect(clampRetiredStamp(9000, null, 5000)).toBe(5000);
+      // unanswered ahead, the clock at or behind the last rotation: one past it, never to or below it
+      expect(clampRetiredStamp(9000, 5000, 5000)).toBe(5001);
+      expect(clampRetiredStamp(9000, 8000, 5000)).toBe(8001);
+      expect(retiredUnanswered(stamped(clampRetiredStamp(9000, 8000, 5000), 8000))).toBe(true);
+      // not ahead of the clock: as stored
+      expect(clampRetiredStamp(5000, 4000, 5000)).toBe(5000);
+      expect(clampRetiredStamp(3000, 9000, 5000)).toBe(3000);
+      // null and absent: no stamp is invented
+      expect(clampRetiredStamp(null, 4000, 5000)).toBeNull();
+      expect(clampRetiredStamp(undefined, 4000, 5000)).toBeNull();
+    });
+
+    it('an unanswered stamp with nothing owed in this process owes retired-presented, with fresh 0', () => {
+      expect(quiet(stamped(9_000_000, 8_000_000))).toMatchObject({ rotationOwed: true, owedWhy: 'retired-presented' });
+      expect(quiet(stamped(9_000_000, null))).toMatchObject({ rotationOwed: true, owedWhy: 'retired-presented' });
+    });
+
+    it('the bound applies to this arm: an owe 10 minutes before now gives null, HOLD_REPROBE_MS after it owes', () => {
+      const s = stamped(9_000_000, 8_000_000);
+      expect(quiet(s, { lastOwedAt: 10_000_000 - 10 * 60_000 })).toBeNull();
+      expect(quiet(s, { lastOwedAt: 10_000_000 - HOLD_REPROBE_MS })).toMatchObject({ owedWhy: 'retired-presented' });
+    });
+
+    it('an answered stamp, a null stamp and an absent key give null', () => {
+      expect(quiet(stamped(8_000_000, 9_000_000))).toBeNull();
+      expect(quiet(stamped(9_000_000, 9_000_000))).toBeNull();
+      expect(quiet(stamped(null, null))).toBeNull();
+      expect(quiet(stamped(undefined, null))).toBeNull();
+    });
+
+    it('an unanswered stamp still owes nothing while a rotation is owed or in flight', () => {
+      expect(quiet({ ...stamped(9_000_000, null), rotationOwed: true, owedWhy: 'adopted' })).toBeNull();
+      expect(quiet({ ...stamped(9_000_000, null), promoting: { id: '1'.repeat(16) } })).toBeNull();
+    });
   });
 });

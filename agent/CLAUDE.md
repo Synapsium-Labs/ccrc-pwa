@@ -23,7 +23,9 @@ get wrong when editing `src/whitelist.ts`.
 - **Gated verbs:** `ws-reap` requires `--expect` (confirmation token), `ws-rename` requires `--session` (its argv is
   built from model output with no human in the path), `ws-reclaim` requires `--expect` (the child-reclaim token; the
   server composes it for a child with no human in the path), `ws-expire` requires `--expect` (the expiry token, which
-  binds the archive; the server composes it for an archived workspace with no human in the path). **Ungrantable verbs:** `ws-rm`, `ws-gc`. An empty prefix
+  binds the archive; the server composes it for an archived workspace with no human in the path), `ws-collect` requires
+  `--expect` (the collection token, which binds the witnessed temp root; only the server composes it, for an orphaned
+  temp root with no human in the path). **Ungrantable verbs:** `ws-rm`, `ws-gc`. An empty prefix
   `[]` grants every subcommand and is fatal.
 - `EXEC_WHITELIST` and its prefix lists are `Object.freeze`d at load; `isExecAllowed` uses `Object.hasOwn` +
   `GRANTABLE_COMMANDS.includes` + `Array.isArray` so prototype-named keys (`constructor`, `__proto__`) fail

@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { leafKeptWord } from '../../shared/api.js';
 import { CCD } from './ccdWsHelpers.js';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { EXP_ID, expireVerb, makeArchived } from './wsExpireFixture.js';
@@ -14,7 +15,7 @@ import {
   EXPIRE_PERSISTENT_RETRY_MS,
   EXPIRE_SHADOW_REAUDIT_MS, EXPIRE_TOKEN_KIND, archivedExpiryDue, archivedExpiryEntry, archivedExpiryEntryFor,
   archivedExpiryLearned, archivedExpiryNextEntry, archivedExpirySighted, archivedExpiryVerdict, expireAuditExpiresAt,
-  EXPIRE_PRE_CRUMB_FAILED, expireTokenKind, expiryAttention, expiryInUseSentence, expiryReportSentence, keptLeafWord, parseExpireAudit, parseExpireResult, reviewKeeps,
+  EXPIRE_PRE_CRUMB_FAILED, expireTokenKind, expiryAttention, expiryInUseSentence, expiryReportSentence, parseExpireAudit, parseExpireResult, reviewKeeps,
   type ArchivedExpiryEntry, type ArchivedExpiryInput,
 } from '../src/archivedExpiry.js';
 
@@ -207,6 +208,11 @@ describe('the verb’s answer — box words told apart from composition errors (
     // RESUMED one after an earlier attempt's breadcrumb (`_ws_expire_resume_eval`'s unmeasured exits). That is main's
     // reading, a known gap routed to this programme's wave 6 (an arming blocker until then), and this census records it
     // rather than hides it.
+    //   THE COLLECTOR'S OWN FAMILY (child reclamation spec §5.10). Every site inside the COLLECT region is placed in
+    // its own list, held exactly as the one above is: `ws-collect` journals both words through the shared tail's
+    // `_ws_reclaim_fail`, refuses through its ONE `_ws_collect_refused "<id>" "<tx>" <word>`, and sets `REAP_VERDICT`
+    // for that refusal when the token it was given is not the one it recomputed (`verdict`). Those two collector
+    // shapes are placed INSIDE the region only; anywhere else they read `unplaced`, and so does any other spelling.
     const fnStarts = [...ccd.matchAll(/\n([A-Za-z_][A-Za-z0-9_]*)\(\) \{/g)].map((m) => ({ name: m[1]!, at: m.index! }));
     const holder = (at: number): string => fnStarts.filter((f) => f.at < at).at(-1)?.name ?? '';
     const lockedAt = ccd.indexOf('\n_ws_expire_locked() {');
@@ -215,12 +221,20 @@ describe('the verb’s answer — box words told apart from composition errors (
     expect(lockedAt, 'the expiry\'s locked body').toBeGreaterThan(-1);
     expect(freshAt, 'its fresh arm').toBeGreaterThan(lockedAt);
     expect(crumbAt, 'its breadcrumb write, on that arm').toBeGreaterThan(freshAt);
-    const shape = (w: string, pre: string): string =>
+    const collectBegin = ccd.indexOf('COLLECT-BEGIN');
+    const collectEnd = ccd.indexOf('COLLECT-END');
+    expect(collectBegin, 'the COLLECT region').toBeGreaterThan(crumbAt);
+    expect(collectEnd, 'its end marker').toBeGreaterThan(collectBegin);
+    const inCollect = (at: number): boolean => at > collectBegin && at < collectEnd;
+    const shape = (w: string, pre: string, collect: boolean): string =>
       new RegExp(`(?:_ws_reclaim_fail "[^"\\n]*" "[^"\\n]*" |_ws_reclaim_failed_json )${w}$`).test(pre) ? 'failed'
         : new RegExp(`(?:_reap_refuse |\\{"refused":")${w}$`).test(pre) ? 'refused'
-          : new RegExp(`_lc_fail reclaim "[^"\\n]*" "[^"\\n]*" ${w}$`).test(pre) ? 'journal' : 'unplaced';
+          : new RegExp(`_lc_fail reclaim "[^"\\n]*" "[^"\\n]*" ${w}$`).test(pre) ? 'journal'
+            : collect && new RegExp(`_ws_collect_refused "[^"\\n]*" "[^"\\n]*" ${w}$`).test(pre) ? 'refused'
+              : collect && new RegExp(`^\\s*REAP_VERDICT=${w}$`).test(pre) ? 'verdict' : 'unplaced';
     const word = new RegExp(`(?<![\\w-])(${EXPIRE_PRE_CRUMB_FAILED.join('|')})(?![\\w-])`, 'g');
     const placed: string[] = [];
+    const collected: string[] = [];
     let at = 0;
     for (const l of ccd.split('\n')) {
       if (!/^\s*#/.test(l)) {
@@ -228,12 +242,12 @@ describe('the verb’s answer — box words told apart from composition errors (
           const w = m[1]!;
           const where = at + m.index!;
           const fn = holder(where);
-          const kind = shape(w, l.slice(0, m.index! + w.length));
+          const kind = shape(w, l.slice(0, m.index! + w.length), inCollect(where));
           if (fn === '_ws_expire_locked' && kind === 'failed' && w === 'state-changed') {
             expect(where, 'state-changed in _ws_expire_locked is not on its fresh arm').toBeGreaterThan(freshAt);
             expect(where, 'state-changed in _ws_expire_locked prints after the breadcrumb').toBeLessThan(crumbAt);
           }
-          placed.push(`${fn} ${kind} ${w}`);
+          (inCollect(where) ? collected : placed).push(`${fn} ${kind} ${w}`);
         }
       }
       at += l.length + 1;
@@ -250,6 +264,37 @@ describe('the verb’s answer — box words told apart from composition errors (
       '_ws_expire_locked refused state-changed',
       '_ws_expire_locked failed probe-unmeasured',
       '_ws_expire_locked failed state-changed',
+    ]);
+    expect(collected).toEqual([
+      '_ws_collect_putback failed probe-unmeasured',
+      '_ws_collect_witness_only failed probe-unmeasured',
+      '_ws_collect_after_move failed probe-unmeasured',
+      '_ws_collect_after_move failed probe-unmeasured',
+      '_ws_collect_after_move failed probe-unmeasured',
+      '_ws_collect_fresh refused state-changed',
+      '_ws_collect_fresh failed probe-unmeasured',
+      '_ws_collect_fresh failed probe-unmeasured',
+      '_ws_collect_fresh failed probe-unmeasured',
+      '_ws_collect_fresh failed probe-unmeasured',
+      '_ws_collect_fresh failed probe-unmeasured',
+      '_ws_collect_fresh failed probe-unmeasured',
+      '_ws_collect_fresh failed probe-unmeasured',
+      '_ws_collect_fresh failed probe-unmeasured',
+      '_ws_collect_fresh failed probe-unmeasured',
+      '_ws_collect_resume refused state-changed',
+      '_ws_collect_resume failed probe-unmeasured',
+      '_ws_collect_resume failed probe-unmeasured',
+      '_ws_collect_resume failed probe-unmeasured',
+      '_ws_collect_resume failed probe-unmeasured',
+      '_ws_collect_resume refused state-changed',
+      '_ws_collect_resume failed probe-unmeasured',
+      'cmd_ws_collect failed probe-unmeasured',
+      'cmd_ws_collect failed probe-unmeasured',
+      'cmd_ws_collect failed probe-unmeasured',
+      '_ws_collect_locked verdict state-changed',
+      '_ws_collect_locked failed probe-unmeasured',
+      '_ws_collect_locked failed probe-unmeasured',
+      '_ws_collect_locked failed probe-unmeasured',
     ]);
   });
 });
@@ -456,9 +501,9 @@ describe('the lane’s memory of one row', () => {
   const e = (over: Partial<ArchivedExpiryEntry> = {}): ArchivedExpiryEntry =>
     ({ ...archivedExpiryEntry(1_789_000_000), expiresAt: 1_789_604_800, eligibleSince: NOW - PASS, ...over });
 
-  it('keptLeafWord is the ONE word reader of a kept leaf: ccd’s three words are themselves, any other value is a leaf that stood (wave 5)', () => {
-    for (const w of ['refused', 'unmeasured', 'in-use'] as const) expect(keptLeafWord(w)).toBe(w);
-    for (const v of ['gone-sideways', '', 'IN-USE', ' in-use', 7, true, null, {}, []]) expect(keptLeafWord(v), JSON.stringify(v)).toBe('unmeasured');
+  it('leafKeptWord is the ONE word reader of a kept leaf: ccd’s three words are themselves, any other value is a leaf that stood (wave 5)', () => {
+    for (const w of ['refused', 'unmeasured', 'in-use'] as const) expect(leafKeptWord(w)).toBe(w);
+    for (const v of ['gone-sideways', '', 'IN-USE', ' in-use', 7, true, null, {}, []]) expect(leafKeptWord(v), JSON.stringify(v)).toBe('unmeasured');
   });
 
   it('THE KEPT-LEAF READER: clipsKept and tmpRootKept are read by name — a word, null, or ABSENT (an older ccd: unreported, never null) (wave 5)', () => {

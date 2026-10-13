@@ -15,10 +15,10 @@ import {
   fileBothRoleWriter, fileTokenStore, readRetired, readState, tokenPaths, valueDigestHex, writeFleetTokenFile, writeGenerationFile,
 } from '../src/token/files.js';
 import {
-  CONFIRM_DEADLINE_MS, GRACE_MS, HOLD_REPROBE_MS, STALL_ALERT_MS, TOKEN_FILE_REREAD_MS, type GateNode, type SyncResult,
+  CONFIRM_DEADLINE_MS, GRACE_HARD_MS, GRACE_MS, HOLD_REPROBE_MS, STALL_ALERT_MS, TOKEN_FILE_REREAD_MS, type GateNode, type SyncResult,
 } from '../src/token/policy.js';
 import type { TokenStore, TokenSyncLink } from '../src/token/ports.js';
-import { extractToken } from '../src/coord/token.js';
+import { checkMailToken, extractToken } from '../src/coord/token.js';
 import { AgentOpError, LinkNotSentError } from '../src/remote/client.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -341,6 +341,52 @@ describe('Rotate now: its rate limit and its hold (review: driver guards)', () =
       await r.driver.tick();
       expect(r.agent.calls).toBe(0);
     } finally { await r.app.close(); }
+  });
+});
+
+describe('F1 (review 362): the view never claims a current value the holder does not hold', () => {
+  it.skipIf(isRoot)('a box with history whose boot mint fails: no current generation, no fleet confirmation of it', async () => {
+    const first = await rig({ handMade: 'e'.repeat(64) });
+    await first.driver.tick();                                                   // rotated: generation #2, the fleet confirmed it
+    expect(first.driver.view()).toMatchObject({ currentSeq: 2, fleetConfirmed: 'current' });
+    await first.app.close();
+    const dir = path.join(first.home, '.ccrc');
+    rmSync(path.join(dir, 'mail.token'));
+    rmSync(path.join(dir, 'mail-previous.token'), { force: true });
+    const r = await rig({ home: first.home, fleetHome: first.fleetHome, lockDirForBoot: true });   // ~/.ccrc unwritable at boot (EACCES)
+    try {
+      expect(r.boot.mintFailed).toBe(true);
+      expect(r.boot.holder.hasCurrent()).toBe(false);
+      const v = r.driver.view();
+      expect(v).toMatchObject({ phase: 'unconfigured', stalled: { why: 'mint-failed' }, currentSeq: null, currentSince: null });
+      expect(['current', 'own-write'], 'the fleet confirmed a generation the holder does not hold').not.toContain(v.fleetConfirmed);
+      expect(v.fleetConfirmed).toBe('unknown');
+    } finally { await r.app.close(); }
+  });
+
+  // R2 (review 365): the server-role rig above has `bothWriter: null`, so it can only see the `current` arm of the view's
+  // fleetConfirmed. The same sequence on a both-role rig reaches the `own-write` arm, which must be gated on the holder too.
+  // The first both rig starts on an empty home: boot mints a value, and its first tick promotes it by own-write (the
+  // precondition below measures that, so it is not assumed). An earlier draft planted a hand-made value first, on the
+  // belief that an empty both home never reaches own-write; measured 2026-10-11 (review 375 F7), it does, and the
+  // plant is gone because it did nothing for the row, which reds under M6 with or without it.
+  it.skipIf(isRoot)('a both box with history whose boot mint fails: no own-write confirmation of a value the holder does not hold (R2, review 365)', async () => {
+    const home = mkTmp('ccrc-token-e2e-r2-');
+    const ctl = { off: 0, writerFails: false };
+    const b = await bothAt(home, ctl);
+    await b.driver.tick();
+    // the precondition: the own-write arm is live before the fault, so the assertions below can see it
+    const before = b.driver.view();
+    expect(before).toMatchObject({ fleetConfirmed: 'own-write' });
+    expect(before.currentSeq).not.toBeNull();
+    rmSync(b.paths.current);
+    rmSync(b.paths.previous, { force: true });
+    const r = await bothAt(home, { ...ctl, lockDirForBoot: true });             // ~/.ccrc unwritable at boot (EACCES)
+    expect(r.boot.mintFailed).toBe(true);
+    expect(r.boot.holder.hasCurrent()).toBe(false);
+    const v = r.driver.view();
+    expect(v).toMatchObject({ phase: 'unconfigured', currentSeq: null, fleetConfirmed: 'unknown' });
+    expect(['current', 'own-write'], 'the fleet confirmed a generation the holder does not hold').not.toContain(v.fleetConfirmed);
   });
 });
 
@@ -1160,19 +1206,6 @@ describe('the pending cap has an exit (D-4413)', () => {
     } finally { await r.app.close(); }
   });
 
-  it('Rotate now answers joined to a second press while the first press\'s tick is still running', async () => {
-    const r = await rig({ handMade: 'e'.repeat(64) });
-    try {
-      const t = Date.now();
-      const first = await r.driver.rotateNow(t);
-      const second = await r.driver.rotateNow(t + 1);
-      expect(first).toMatchObject({ ok: true, outcome: 'started' });
-      expect(second).toMatchObject({ ok: true, outcome: 'joined' });
-      await r.driver.tick();
-      expect(r.agent.calls).toBe(1);
-    } finally { await r.app.close(); }
-  });
-
   it('Rotate now answers joined while a send is actually in flight, and starts nothing', async () => {
     let release: (v: SyncResult) => void = () => {};
     let entered: () => void = () => {};
@@ -1572,8 +1605,11 @@ describe('a later generation the fleet confirmed retires a previous value early 
       expect(await r.lane(L)).toBe(401);
       expect(await r.lane(L)).toBe(401);
       const after = r.printed.slice(lines).filter((l) => l.includes('the previous value was retired'));
-      expect(after, 'the same line the retire action logs').toHaveLength(1);
-      expect(after[0]).toContain('the previous value was retired and is refused');
+      // R0b (D-4411's wording, review 352): the early retirement says WHY it happened, a later confirmed generation, and not
+      // "grace ended", which was not what ended it. The rule is unchanged; only this line differs from the retire action's.
+      expect(after, 'one line for the early retirement').toHaveLength(1);
+      expect(after[0]).toBe('ccrc-server: box token: the fleet confirmed a later generation; the previous value was retired early and is refused');
+      expect(after[0]).not.toContain('grace ended');
       expect(await retiredDigests(r)).toEqual([valueDigestHex(L)]);
       expect(r.driver.view()).toMatchObject({ retiredRefused: true });
       expect(existsSync(tokPaths(r).previous)).toBe(true);               // G1 is the previous now
@@ -1683,6 +1719,545 @@ describe('a retired presentation on a box-token lane owes one forward rotation, 
       await r.driver.tick();
       expect(r.agent.calls).toBe(base);
       expect(r.driver.view()).toMatchObject({ hold: 'agent-predates-op', rotationOwed: true, owedWhy: 'retired-presented' });
+    } finally { await r.app.close(); }
+  });
+
+  // ── 4552 (the operator's Decision 1, Option A): a retired presentation is stamped and owes a rotation until one answers it
+  /** The persisted counters, read from the file the driver writes (never a value or a digest). */
+  const countersOf = async (r: Rig) => (await stateOf(r)).counters;
+  /** Rewrite the persisted counters of a stopped box, the way an older build left them. */
+  const plantCounters = async (r: Rig, counters: Record<string, unknown>): Promise<void> => {
+    const file = tokPaths(r).state;
+    const j = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    writeFileSync(file, JSON.stringify({ ...j, counters }), { mode: 0o600 });
+  };
+  /** Rewrite top-level fields of a stopped box's state (the last rotation's time, say). */
+  const plantState = async (r: Rig, fields: Record<string, unknown>): Promise<void> => {
+    const file = tokPaths(r).state;
+    const j = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    writeFileSync(file, JSON.stringify({ ...j, ...fields }), { mode: 0o600 });
+  };
+  const driverNow = (r: Rig): number => Date.now() + r.clock.offset;
+
+  it('a retired presentation is stamped, answered by the rotation it owes, and the stamp outlives a restart (4552)', async () => {
+    const { r, L } = await idleAfterRetirement();
+    let r2: Rig | null = null;
+    try {
+      r.rows.linkUp = false;                                             // hold the gate so the owed rotation stands
+      expect(await r.lane(L)).toBe(401);
+      await r.driver.tick();
+      const owed = await stateOf(r);
+      expect(owed.rotationOwed).toBe(true);
+      expect(typeof owed.counters.retiredPresentedAt).toBe('number');
+      expect(owed.counters.retiredPresentedAt as number).toBeGreaterThan(owed.lastRotationAt as number);
+      const stamp = owed.counters.retiredPresentedAt as number;
+      r.rows.linkUp = true;
+      await r.driver.tick();                                             // the owed rotation completes
+      const answered = await stateOf(r);
+      expect(answered.rotationOwed).toBe(false);
+      expect(answered.lastRotationAt as number).toBeGreaterThanOrEqual(stamp);
+      expect(answered.counters.retiredPresentedAt).toBe(stamp);          // the stamp stays; the rotation answers it
+      await r.app.close();
+      r2 = await rig({ home: r.home, fleetHome: r.fleetHome });
+      r2.clock.offset = r.clock.offset + 1000;                           // the same driver clock the stamp was taken on
+      await r2.driver.tick();
+      const after = await countersOf(r2);
+      expect(after.retiredPresented).toBe(0);                            // the count is since the server started
+      expect(after.retiredPresentedAt).toBe(stamp);                      // the stamp is lifetime
+      expect(r2.driver.view()).toMatchObject({ rotationOwed: false });
+      expect(r2.agent.calls).toBe(0);
+    } finally { if (r2 !== null) await r2.app.close(); else await r.app.close(); }
+  });
+
+  it('a presentation inside the re-probe hour is not lost: it owes once the hour has passed, with no further presentation (4552)', async () => {
+    const { r, L } = await idleAfterRetirement();
+    try {
+      expect(await r.lane(L)).toBe(401);
+      await r.driver.tick();                                             // one rotation is owed and completes
+      const c0 = r.agent.calls;
+      expect(r.driver.view()).toMatchObject({ rotationOwed: false });
+      r.clock.offset += 10 * 60_000;
+      expect(await r.lane(L)).toBe(401);
+      await r.driver.tick();
+      expect(r.agent.calls, 'inside the bound').toBe(c0);
+      await r.driver.tick();                                             // a quiet tick (fresh 0) inside the hour is bound too
+      expect(r.agent.calls, 'the bound holds for an unanswered stamp as it does for a new presentation').toBe(c0);
+      const inside = await stateOf(r);
+      expect(inside.counters.retiredPresentedAt as number).toBeGreaterThan(inside.lastRotationAt as number);
+      const stamp = inside.counters.retiredPresentedAt as number;
+      r.clock.offset += HOLD_REPROBE_MS;
+      await r.driver.tick();                                             // no presentation this time
+      expect(r.agent.calls, 'owed once the hour has passed').toBe(c0 + 1);
+      expect((await stateOf(r)).lastRotationAt as number).toBeGreaterThanOrEqual(stamp);
+      await r.driver.tick();
+      await r.driver.tick();
+      expect(r.agent.calls, 'answered: no more').toBe(c0 + 1);
+    } finally { await r.app.close(); }
+  });
+
+  it('a restart over an unanswered stamp owes one rotation on its first tick (4552)', async () => {
+    const { r, L } = await idleAfterRetirement();
+    let r2: Rig | null = null;
+    try {
+      expect(await r.lane(L)).toBe(401);
+      await r.driver.tick();
+      r.clock.offset += 10 * 60_000;
+      expect(await r.lane(L)).toBe(401);
+      await r.driver.tick();                                             // stamped inside the hour: unanswered, not owed
+      const inside = await stateOf(r);
+      expect(inside.counters.retiredPresentedAt as number).toBeGreaterThan(inside.lastRotationAt as number);
+      const calls = r.agent.calls;
+      await r.app.close();
+      r2 = await rig({ home: r.home, fleetHome: r.fleetHome });
+      r2.clock.offset = r.clock.offset + 1000;                           // the same driver clock the stamp was taken on
+      await r2.driver.tick();
+      expect(r2.agent.calls, 'one rotation, at once: a restart loses retiredOwedAt').toBe(1);
+      expect(r2.printed.some((l) => l.includes('a retired presentation is still unanswered')), 'owed for the retired presentation, not for another word').toBe(true);
+      await r2.driver.tick();
+      await r2.driver.tick();
+      expect(r2.agent.calls).toBe(1);
+      expect(calls).toBeGreaterThan(0);
+    } finally { if (r2 !== null) await r2.app.close(); else await r.app.close(); }
+  });
+
+  it('a state from before 4552 with a count is stamped as unanswered, never cleared (4552)', async () => {
+    const { r } = await idleAfterRetirement();
+    await r.app.close();
+    await plantCounters(r, { previousPresented: 0, retiredPresented: 1 });   // no retiredPresentedAt key at all
+    const r2 = await rig({ home: r.home, fleetHome: r.fleetHome });
+    try {
+      r2.clock.offset = r.clock.offset + 1000;
+      r2.rows.linkUp = false;                                            // hold the gate so the owed word stands
+      await r2.driver.tick();
+      const c = await countersOf(r2);
+      expect(c.retiredPresented).toBe(0);
+      expect(typeof c.retiredPresentedAt).toBe('number');
+      expect(r2.driver.view()).toMatchObject({ rotationOwed: true, owedWhy: 'retired-presented' });
+      expect(r2.printed.some((l) => l.includes('a retired presentation is still unanswered'))).toBe(true);
+    } finally { await r2.app.close(); }
+    // a legacy state with a count of 0 reads as clear: null, and nothing is owed
+    const { r: r3 } = await idleAfterRetirement();
+    await r3.app.close();
+    await plantCounters(r3, { previousPresented: 0, retiredPresented: 0 });
+    const r4 = await rig({ home: r3.home, fleetHome: r3.fleetHome });
+    try {
+      r4.clock.offset = r3.clock.offset + 1000;
+      r4.rows.linkUp = false;
+      await r4.driver.tick();
+      expect((await countersOf(r4)).retiredPresentedAt).toBeNull();
+      expect(r4.driver.view()).toMatchObject({ rotationOwed: false });
+    } finally { await r4.app.close(); }
+  });
+
+  it('a stamp planted ahead of the clock is clamped to now: at most one rotation, then answered (4552, review 383 F2)', async () => {
+    const { r } = await idleAfterRetirement();
+    await r.app.close();
+    const driverNow = Date.now() + r.clock.offset + 1000;
+    // a stamp 10 h in the driver's future (a clock stepped back across a restart), no further presentation
+    await plantCounters(r, { previousPresented: 0, retiredPresented: 0, retiredPresentedAt: driverNow + 10 * 3_600_000 });
+    const r2 = await rig({ home: r.home, fleetHome: r.fleetHome });
+    try {
+      r2.clock.offset = r.clock.offset + 1000;
+      for (let i = 0; i < 36; i++) { await r2.driver.tick(); r2.clock.offset += 10 * 60_000; }   // 6 h of ticks
+      expect(r2.agent.calls, 'one rotation answers the clamped stamp, never one an hour').toBeLessThanOrEqual(1);
+      const s = await stateOf(r2);
+      expect(s.counters.retiredPresentedAt as number, 'the stored stamp was written down to the driver clock').toBeLessThan(driverNow + 10 * 60_000);
+      expect(s.lastRotationAt as number, 'answered: a rotation completed after the stamp').toBeGreaterThanOrEqual(s.counters.retiredPresentedAt as number);
+      expect(r2.driver.view()).toMatchObject({ rotationOwed: false });
+    } finally { await r2.app.close(); }
+  });
+
+  it('never cleared: a restart with the clock behind the last rotation keeps an unanswered stamp unanswered and owed (4552, review 383 F2)', async () => {
+    const { r } = await idleAfterRetirement();
+    await r.app.close();
+    const last = (await stateOf(r)).lastRotationAt as number + 2 * 3_600_000;       // a rotation the restarted clock has not reached
+    await plantState(r, { lastRotationAt: last });
+    await plantCounters(r, { previousPresented: 0, retiredPresented: 0, retiredPresentedAt: last + 20 * 60_000 });
+    const r2 = await rig({ home: r.home, fleetHome: r.fleetHome });
+    try {
+      r2.clock.offset = last - 30 * 60_000 - Date.now();                 // the driver clock starts 30 minutes behind lastRotationAt
+      r2.rows.linkUp = false;                                            // hold the gate so the owed word stands
+      await r2.driver.tick();
+      const s = await stateOf(r2);
+      expect(s.counters.retiredPresentedAt as number, 'written down, but never to or below the last rotation').toBeGreaterThan(s.lastRotationAt as number);
+      expect(s.counters.retiredPresentedAt as number).toBeLessThanOrEqual(last + 20 * 60_000);
+      expect(r2.driver.view()).toMatchObject({ rotationOwed: true, owedWhy: 'retired-presented' });
+    } finally { await r2.app.close(); }
+  });
+
+  it('no re-open: an answered stamp ahead of the clock is written down to now, so a rotation before the clock catches up adds none (4552, review 383 F2)', async () => {
+    const { r } = await idleAfterRetirement();
+    await r.app.close();
+    const last = (await stateOf(r)).lastRotationAt as number + 2 * 3_600_000;
+    const stamp = last - 1000;                                           // answered (not after the last rotation) and ahead of the clock
+    await plantState(r, { lastRotationAt: last });
+    await plantCounters(r, { previousPresented: 0, retiredPresented: 0, retiredPresentedAt: stamp });
+    const r2 = await rig({ home: r.home, fleetHome: r.fleetHome });
+    try {
+      r2.clock.offset = stamp - 10 * 60_000 - Date.now();
+      await r2.driver.tick();
+      expect(r2.agent.calls, 'an answered stamp owes nothing').toBe(0);
+      expect((await countersOf(r2)).retiredPresentedAt as number, 'written down to the driver clock').toBeLessThan(stamp);
+      r2.clock.offset += 3 * 60_000;                                     // still well behind the planted stamp
+      expect(await r2.driver.rotateNow(driverNow(r2))).toMatchObject({ ok: true, outcome: 'started' });
+      for (let i = 0; i < 6; i++) { await r2.driver.tick(); await new Promise((res) => setTimeout(res, 25)); }
+      expect(r2.agent.calls, 'the one rotation the press asked for').toBe(1);
+      const s = await stateOf(r2);
+      expect(s.lastRotationAt as number, 'it completed on the clock that is still behind the planted stamp').toBeLessThan(stamp);
+      expect(s.counters.retiredPresentedAt as number, 'answered, not re-opened').toBeLessThanOrEqual(s.lastRotationAt as number);
+      expect(r2.driver.view()).toMatchObject({ rotationOwed: false });
+    } finally { await r2.app.close(); }
+  });
+});
+
+// ── D-4414 (review 352 F2, F3, F6): no path retires or drops a value without its durable digest, and no failure makes
+// boot adopt a value it did not write ───────────────────────────────────────────────────────────────────────────
+/** A recorded both box over a fixture home: boot, the fleet-file writer (which can be made to fail), a shared clock. */
+async function bothAt(home: string, ctl: { off: number; writerFails: boolean; lockDirForBoot?: boolean }): Promise<{
+  driver: BoxTokenDriver; boot: BootResult; paths: ReturnType<typeof tokenPaths>; printed: string[]; now: () => number }> {
+  mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+  const paths = tokenPaths(path.join(home, '.ccrc', 'mail.token'), home);
+  const now = (): number => Date.now() + ctl.off;
+  const printed: string[] = [];
+  if (ctl.lockDirForBoot) chmodSync(path.join(home, '.ccrc'), 0o500);
+  let boot: BootResult;
+  try {
+    boot = await bootBoxToken({ mailTokenPath: paths.current, home, role: 'both', roleSource: 'recorded', fleetMode: 'local', now: now() });
+  } finally { if (ctl.lockDirForBoot) chmodSync(path.join(home, '.ccrc'), 0o700); }
+  printed.push(...boot.warnings);
+  const own: GateNode = { nodeId: 'x', nodeIdMeasured: true, label: 'self', role: 'both', reachable: true, os: 'linux',
+    caps: ['token-sync'], agentOps: null, updateState: 'idle', reportedPhase: null };
+  const real = fileBothRoleWriter(paths);
+  const driver = new BoxTokenDriver({ store: fileTokenStore(paths), holder: boot.holder, link: null, generation: null,
+    rows: { nodes: () => [own], linkUp: () => false, lastReadyAt: () => null },
+    env: { fleetMode: 'local', role: 'both', roleSource: 'recorded', agentEnvMarksFleet: false },
+    bothWriter: { write: async (v, g) => { if (ctl.writerFails) throw enospc(); await real.write(v, g); } },
+    now, warn: (l) => printed.push(l) }, boot);
+  return { driver, boot, paths, printed, now };
+}
+const retiredIn = async (paths: ReturnType<typeof tokenPaths>): Promise<string[]> => {
+  const rd = await readRetired(paths.retired);
+  return rd.kind === 'retired' ? rd.digests : [];
+};
+
+describe('D-4414 F2: a failing own-write never blocks the previous value\'s retirement at its hard bound', () => {
+  it('own-write failing persistently past hardUntil, then L written back and a restart: L is refused', async () => {
+    const L = 'a'.repeat(64);
+    const home = mkTmp('ccrc-token-e2e-f2-');
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', 'mail.token'), `${L}\n`, { mode: 0o600 });
+    const ctl = { off: 0, writerFails: false };
+    const b = await bothAt(home, ctl);
+    await b.driver.tick();                                               // G1 promoted by the own write: L is previous, in grace
+    expect(existsSync(b.paths.previous)).toBe(true);
+    ctl.writerFails = true;                                              // the fleet file can no longer be written (ENOSPC / EACCES)
+    ctl.off = 2 * 60_000;
+    expect(await b.driver.rotateNow(b.now())).toMatchObject({ ok: true, outcome: 'started' });
+    await b.driver.tick();
+    expect(b.driver.view()).toMatchObject({ lastFailure: 'write-failed' });
+    ctl.off = GRACE_HARD_MS + 5 * 60_000;                                // past L's hard bound, the write still failing
+    await b.driver.tick();
+    expect(b.driver.view()).toMatchObject({ lastFailure: 'write-failed' });
+    expect(await retiredIn(b.paths), 'L\'s digest is durable').toEqual([valueDigestHex(L)]);
+    expect(existsSync(b.paths.previous)).toBe(false);
+    expect(checkMailToken(b.boot.holder, L)).toBe('bad');
+    expect(b.printed.filter((l) => l.includes('the previous value was retired at the hard bound') || l.includes('grace ended'))).toHaveLength(1);
+    // the write-back and the restart
+    rmSync(b.paths.current);
+    writeFileSync(b.paths.current, `# an older deploy.sh shipped this\n${L}\n`, { mode: 0o600 });
+    ctl.writerFails = false;
+    const b2 = await bothAt(home, ctl);
+    expect(checkMailToken(b2.boot.holder, L)).toBe('bad');
+    expect(b2.boot.holder.currentValue()).not.toBe(L);
+    expect(b2.boot.state).toMatchObject({ origin: 'minted', rotationOwed: true, owedWhy: 'retired-written-back' });
+    const text = [...b.printed, ...b2.printed].join('\n');
+    expect(text.includes(L) || text.includes(valueDigestHex(L))).toBe(false);
+  });
+});
+
+describe('D-4414 F3: a value file is never deleted before its digest is durable', () => {
+  /** L adopted and rotated away (a previous in grace), the server stopped, and the previous file made unreadable. */
+  async function restartedOverUnreadablePrevious(): Promise<{ r: Rig; L: string; fresh: string; prev: string }> {
+    const L = 'e'.repeat(64);
+    const first = await rig({ handMade: L });
+    await first.driver.tick();
+    const fresh = first.fleetValue() as string;
+    await first.app.close();
+    const prev = tokPaths(first).previous;
+    chmodSync(prev, 0o000);
+    const r = await rig({ home: first.home, fleetHome: first.fleetHome });
+    return { r, L, fresh, prev };
+  }
+
+  it.skipIf(isRoot)('boot keeps an unreadable previous file; at the hard bound the driver keeps it, warns once, and records the digest once a read works', async () => {
+    const { r, L, prev } = await restartedOverUnreadablePrevious();
+    try {
+      expect(r.boot.warnings.some((w) => w.includes('cannot be read (EACCES)'))).toBe(true);
+      expect(r.boot.state?.previous, 'the record of the previous value is kept').not.toBeNull();
+      expect(await r.lane(L), 'the accept set does not hold a value it cannot read').toBe(401);
+      r.clock.offset = GRACE_HARD_MS + 1000;                              // past the hard bound
+      await r.driver.tick();
+      await r.driver.tick();
+      expect(r.agent.calls, 'the owed rotation still runs while the file stays unreadable').toBeGreaterThan(0);
+      expect(existsSync(prev), 'no deletion').toBe(true);
+      expect(await retiredDigests(r)).toEqual([]);
+      expect((await stateOf(r)).previous).not.toBeNull();
+      expect(await r.lane(L), 'still dropped from the accept set, in memory').toBe(401);
+      expect(r.printed.filter((l) => l.includes('the read is retried each tick'))).toHaveLength(1);
+      chmodSync(prev, 0o600);
+      await r.driver.tick();                                              // a later tick: the read works
+      expect(await retiredDigests(r)).toEqual([valueDigestHex(L)]);
+      // The rotation that boot owed then ran, so the previous slot holds that rotation's value: never L's file.
+      expect(existsSync(prev) ? readFileSync(prev, 'utf8').includes(L) : false).toBe(false);
+      expect(r.boot.holder.currentValue()).not.toBe(L);
+      await r.app.close();
+      writeBack(r.home, L);                                                // a write-back is refused
+      const r3 = await rig({ home: r.home, fleetHome: r.fleetHome });
+      try {
+        expect(await r3.lane(L)).toBe(401);
+        expect(r3.boot.holder.currentValue()).not.toBe(L);
+      } finally { await r3.app.close(); }
+      const text = [...r.printed].join('\n');
+      expect(text.includes(L) || text.includes(valueDigestHex(L))).toBe(false);
+    } finally { if (existsSync(prev)) chmodSync(prev, 0o600); await r.app.close().catch(() => {}); }
+  });
+
+  it.skipIf(isRoot)('a promotion over an unreadable previous value does not overwrite its file: it waits, and retires it with its digest first', async () => {
+    const { r, L, fresh, prev } = await restartedOverUnreadablePrevious();
+    try {
+      const ino = statSync(prev).ino;
+      expect(await r.driver.rotateNow(Date.now() + r.clock.offset)).toMatchObject({ ok: true, outcome: 'started' });
+      await r.driver.tick();
+      expect(statSync(prev).ino, 'the file L\'s value is in is still the same file').toBe(ino);
+      expect(r.boot.holder.currentValue(), 'nothing was promoted over it').toBe(fresh);
+      expect(await retiredDigests(r)).toEqual([]);
+      chmodSync(prev, 0o600);
+      await r.driver.tick();                                              // the generation read confirms G2: L is retired, then G2 promoted
+      expect(await retiredDigests(r)).toEqual([valueDigestHex(L)]);
+      expect(r.boot.holder.currentValue()).not.toBe(fresh);
+      expect(r.boot.holder.currentValue()).toBe(r.fleetValue());
+      expect(await r.lane(L)).toBe(401);
+    } finally { if (existsSync(prev)) chmodSync(prev, 0o600); await r.app.close().catch(() => {}); }
+  });
+});
+
+describe('D-4414 F6: a failed foreign mint keeps its owed rotation', () => {
+  it.skipIf(isRoot)('foreign posture, a failed mint, then the retry: the rotation owed is retired-written-back and the fleet file is rewritten', async () => {
+    const H = 'b'.repeat(64);
+    const home = mkTmp('ccrc-token-e2e-f6-');
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    const paths = tokenPaths(path.join(home, '.ccrc', 'mail.token'), home);
+    writeFileSync(paths.current, `${H}\n`, { mode: 0o600 });             // the hand-made value, shipped to both files
+    await writeFleetTokenFile(paths.fleetFile, H);
+    writeFileSync(paths.retired, '{"v":2,"retired":[]}\n', { mode: 0o600 });   // an unusable retired file: the foreign posture
+    const ctl = { off: 0, writerFails: false, lockDirForBoot: true };
+    const b = await bothAt(home, ctl);                                   // the mint fails: the directory is read-only during boot
+    expect(b.boot.mintFailed).toBe(true);
+    expect(b.boot.mintOwed).toBe('retired-written-back');
+    expect(b.driver.view().stalled).toMatchObject({ why: 'mint-failed' });
+    await b.driver.tick();                                               // retry-mint, then the owed forward rotation, own-written
+    const fresh = b.boot.holder.currentValue() as string;
+    expect(fresh).not.toBe(H);
+    expect(extractToken(readFileSync(paths.fleetFile, 'utf8')), 'the fleet file no longer holds the foreign value').toBe(fresh);
+    expect(checkMailToken(b.boot.holder, H)).toBe('bad');
+    expect(b.printed.some((l) => l.includes('rotation started') && l.includes('retired-written-back'))).toBe(true);
+    expect(b.driver.view()).toMatchObject({ origin: 'rotated', rotationOwed: false, fleetConfirmed: 'own-write' });
+  });
+});
+
+// ── part B task R0b (review 352 F5, F7, F8, F9, F10, F11, F12): conformance to the rulings, the spec and the plan ──
+describe('R0b: Rotate now, the cap alert, the hand-out lines and the attribution pins (review 352)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  /** The claim route stamps a hand-out with `Date.now()`, so these tests drive the one clock the route and the driver share. */
+  function clock(): (ms: number) => void {
+    const base = Date.now();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(base);
+    return (ms) => { vi.setSystemTime(base + ms); };
+  }
+
+  // F5: "joined" only while a send or a promotion is actually in flight (D-4413 as ruled).
+  it('F5: a stale press flag never answers joined: a press during a confirm wait, then a press during an unrelated tick, on a closed gate, answers held', async () => {
+    const r = await rig({ handMade: 'e'.repeat(64) });
+    try {
+      r.agent.mode = 'claim-only';
+      await r.driver.tick();                                           // G1 handed out, its result lost: a confirm wait
+      const t = Date.now();
+      expect(await r.driver.rotateNow(t)).toMatchObject({ ok: true, outcome: 'started' });
+      await r.driver.tick();                                           // the wait: the tick returns `none`, the press flag stays set
+      expect(r.agent.calls).toBe(1);
+      r.rows.linkUp = false;                                           // the gate closes
+      const unrelated = r.driver.tick();                               // an unrelated 60 s tick is running when the next press lands
+      const a = await r.driver.rotateNow(t + 120_000);
+      await unrelated;
+      expect(a, 'nothing is in flight: not joined').not.toMatchObject({ ok: true, outcome: 'joined' });
+      expect(a).toMatchObject({ ok: false, error: 'held', hold: 'link-down' });
+    } finally { await r.app.close(); }
+  });
+
+  it('F5: a second press while the first press\'s own tick is still before its send answers the rate limit, not joined', async () => {
+    const r = await rig({ handMade: 'e'.repeat(64) });
+    try {
+      const t = Date.now();
+      expect(await r.driver.rotateNow(t)).toMatchObject({ ok: true, outcome: 'started' });
+      expect(await r.driver.rotateNow(t + 1)).toMatchObject({ ok: false, error: 'rate-limited' });
+      await r.driver.tick();
+      expect(r.agent.calls).toBe(1);
+    } finally { await r.app.close(); }
+  });
+
+  // F8: the recorded-promotion arm.
+  it('F8: a press against a recorded promotion that stalled between ticks answers joined and starts nothing', async () => {
+    let armed = true;
+    const r = await rig({ handMade: 'e'.repeat(64), wrap: (st) => ({ ...st, writeValue: async (p, v) => {
+      if (armed && p === st.paths.previous) { armed = false; throw Object.assign(new Error('injected'), { code: 'EACCES' }); }
+      return st.writeValue(p, v);
+    } }) });
+    try {
+      await r.driver.tick();                                           // the op result confirms G1; step (b) fails after `promoting` is recorded
+      expect(r.printed.some((l) => l.includes('a driver tick failed'))).toBe(true);
+      expect((await onDisk(r)).promoting).not.toBeNull();
+      expect(r.driver.view().phase).toBe('promoting');
+      const calls = r.agent.calls;
+      expect(await r.driver.rotateNow(Date.now() + 120_000)).toMatchObject({ ok: true, outcome: 'joined' });
+      await r.driver.tick();                                           // the retry finishes the promotion; the press staged nothing
+      expect(r.agent.calls).toBe(calls);
+      expect(r.boot.holder.currentValue()).toBe(r.fleetValue());
+    } finally { await r.app.close(); }
+  });
+
+  // F7: the third slot's presentation is attributed to the exit rotation's value.
+  it('F7: a presentation of the exit rotation\'s value in the THIRD pending slot counts for the new current (no extra grace, no extra rotation)', async () => {
+    const r = await rig({ handMade: 'e'.repeat(64) });
+    const at = clock();
+    try {
+      r.agent.mode = 'claim-only';
+      await r.driver.tick();                                           // G1 handed out, lost
+      at(CONFIRM_DEADLINE_MS + 1000);
+      await r.driver.tick();                                           // G2 handed out, lost
+      at(2 * CONFIRM_DEADLINE_MS + 2000);
+      r.agent.mode = 'lose-result';                                    // the exit rotation G3: the fleet writes and proves it, the result is lost
+      await r.driver.tick();
+      const pend = (await onDisk(r)).pending;
+      expect(pend).toHaveLength(3);
+      expect(r.agent.calls).toBe(3);
+      at(2 * CONFIRM_DEADLINE_MS + 4000);
+      await r.driver.tick();                                           // a generation read names G3: promoted
+      expect(r.boot.holder.currentValue()).toBe(r.fleetValue());
+      const s = await onDisk(r);
+      expect(s.current.id).toBe(pend[2]!.id);
+      expect(s.previous, 'the fleet\'s own proof call against slot 2 counted as the new current presented').toMatchObject({ currentPresented: true });
+    } finally { await r.app.close(); }
+  });
+
+  // F9 (option b): D-4412's busy arm is dead in the driver, so it is removed; what the driver really does is pinned.
+  it('F9: a retired presentation made while a send is in flight is weighed on the next tick, not lost, and owes one rotation', async () => {
+    const L = 'e'.repeat(64);
+    let rr: Rig | null = null;
+    let during: (() => Promise<void>) | null = null;
+    let sends = 0;
+    const link: TokenSyncLink = { send: async (code) => {
+      sends++;
+      if (during !== null) { const f = during; during = null; await f(); return { kind: 'unsent' }; }
+      return (rr as Rig).agent.send(code);
+    } };
+    const r = await rig({ handMade: L, link });
+    rr = r;
+    try {
+      await r.driver.tick();
+      await r.lane(r.fleetValue() as string);
+      r.clock.offset = GRACE_MS + 1000;
+      await r.driver.tick();
+      expect(r.driver.view()).toMatchObject({ phase: 'idle', rotationOwed: false, retiredRefused: true });
+      const base = sends;
+      during = async () => { expect(await r.lane(L)).toBe(401); };       // the retired value is presented mid-send
+      expect(await r.driver.rotateNow(Date.now() + r.clock.offset)).toMatchObject({ ok: true, outcome: 'started' });
+      await r.driver.tick();
+      expect(sends).toBe(base + 1);
+      expect(r.driver.view().retiredPresented).toBe(1);
+      expect(r.driver.view().rotationOwed, 'not yet weighed: the weighing is the next tick\'s preamble').toBe(false);
+      await r.driver.tick();
+      expect(sends, 'weighed on the next tick: one rotation owed and run').toBe(base + 2);
+      expect(r.printed.some((l) => l.includes('retired-presented'))).toBe(true);
+    } finally { await r.app.close(); }
+  });
+
+  // F10: the hand-out line names the node even when the link drops while the record is being written.
+  it('F10: the hand-out line names the node the code was bound to even when the op ends before the record lands', async () => {
+    let rr: Rig | null = null;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((res) => { release = res; });
+    let entered: () => void = () => {};
+    const enteredP = new Promise<void>((res) => { entered = res; });
+    let claimed: Promise<unknown> | null = null;
+    let armed = true;
+    let ended: () => void = () => {};
+    const endedP = new Promise<void>((res) => { ended = res; });
+    const link: TokenSyncLink = { async send(code) {
+      claimed = Promise.resolve((rr as Rig).app.inject({ method: 'POST', url: '/api/token/claim', payload: { code, nodeId: NODE } }));
+      await enteredP;                                                  // the claim is burned and its record is in flight
+      ended();
+      return { kind: 'lost', why: 'disconnected' };                    // the link drops during that write: `send` ends, the binding is gone
+    } };
+    const r = await rig({ handMade: 'e'.repeat(64), link, wrap: (st) => ({ ...st, writeState: async (s) => {
+      if (armed && s.pending.some((p) => p.handedOutAt !== null)) { armed = false; entered(); await gate; }
+      return st.writeState(s);
+    } }) });
+    rr = r;
+    try {
+      const tick = r.driver.tick();
+      await endedP;
+      await new Promise((res) => setTimeout(res, 25));                 // `send` has settled and its `finally` has run; the record is still unwritten
+      release();
+      await tick;
+      await claimed;
+      const lines = r.printed.filter((l) => l.includes('claim door handed-out'));
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(new RegExp(`handed out to node ${NODE}$`));
+    } finally { release(); await r.app.close(); }
+  });
+
+  // F11: the hand-out-not-recorded lines carry the outcome word and the node id.
+  it('F11: a hand-out that cannot be recorded logs the outcome word and the node id, in the driver\'s line and the route\'s, never a code or a value', async () => {
+    let failNext = true;
+    const r = await rig({ handMade: 'e'.repeat(64), wrap: (st) => ({ ...st, writeState: async (s) => {
+      if (failNext && s.pending.some((p) => p.handedOutAt !== null)) { failNext = false; throw enospc(); }
+      return st.writeState(s);
+    } }) });
+    try {
+      await r.driver.tick();
+      const lines = r.printed.filter((l) => l.includes('could not be recorded'));
+      expect(lines, 'the driver\'s line and the route\'s').toHaveLength(2);
+      for (const l of lines) {
+        expect(l).toContain('unavailable');
+        expect(l).toContain(`node ${NODE}`);
+      }
+      const secrets = [...r.agent.codes, 'e'.repeat(64)];
+      for (const l of r.printed) for (const x of secrets) expect(l.includes(x)).toBe(false);
+    } finally { await r.app.close(); }
+  });
+
+  // F12: the pending-cap alert says what is true where it prints. A tick can print it only with three values pending and all
+  // three past their deadline (with two handed out, an unexpired one is a rotation in flight and `nextAction` answers `none`
+  // before any hold), where no exit remains.
+  it('F12: the pending-cap alert, printed at the third slot, does not promise an exit that is spent', async () => {
+    const r = await rig({ handMade: 'e'.repeat(64) });
+    const at = clock();
+    try {
+      r.agent.mode = 'claim-only';
+      await r.driver.tick();
+      at(CONFIRM_DEADLINE_MS + 1000);
+      await r.driver.tick();                                           // G2 handed out
+      at(2 * CONFIRM_DEADLINE_MS + 2000);
+      await r.driver.tick();                                           // the exit: G3 handed out, three handed out
+      const alerts = (): string[] => r.printed.filter((l) => l.includes('handed-out values unaccounted for'));
+      expect(alerts(), 'nothing printed while the third value is inside its deadline').toHaveLength(0);
+      at(4 * CONFIRM_DEADLINE_MS);
+      await r.driver.tick();                                           // all three overdue and nothing can start
+      expect(r.driver.view()).toMatchObject({ hold: 'pending-cap' });
+      expect(alerts()).toHaveLength(1);
+      expect(alerts()[0], 'all three overdue: the line must not name a deadline as the way out').not.toContain('past their confirm deadline');
+      expect(alerts()[0]).toContain('until the fleet confirms one');
     } finally { await r.app.close(); }
   });
 });

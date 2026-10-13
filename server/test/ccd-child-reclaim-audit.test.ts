@@ -61,7 +61,7 @@ describe('ws-audit --reclaim', () => {
   it('prints mode, childOf and the SAME token the ladder mints', () => {
     makeChild(h);
     const a = audit('--reclaim');
-    expect(Object.keys(a)).toEqual([...PLAIN_KEYS.slice(0, -2), 'mode', 'childOf', 'verdict', 'detail', 'token']);
+    expect(Object.keys(a)).toEqual([...PLAIN_KEYS.slice(0, -2), 'mode', 'childOf', 'generation', 'verdict', 'detail', 'token']);
     expect(a['mode']).toBe('reclaim');
     expect(a['childOf']).toBe(CHILD_RUN);
     expect(a['verdict']).toBe('reclaimable');
@@ -214,7 +214,7 @@ describe('ws-audit --reclaim', () => {
       ['--defer-expired', '--reclaim']]) {
       const r = runCcd('ws-audit', '--session', CHILD_ID, ...argv);
       expect(r.code, argv.join(' ')).toBe(1);
-      expect(r.stderr, argv.join(' ')).toContain('usage: ccd ws-audit --session <id> [--reclaim [--defer-expired] | --expire]');
+      expect(r.stderr, argv.join(' ')).toContain('usage: ccd ws-audit --session <id> [--reclaim [--defer-expired] | --expire | --collect]');
     }
   });
 

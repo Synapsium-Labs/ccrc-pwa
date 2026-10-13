@@ -52,9 +52,10 @@ RETURN_ACTS = ('start', 'ensure', 'restore', 'swap', 'spawn', 'unarchive')
 ENDS_THE_ARCHIVE = ('destroy', 'purge', 'reap', 'forget', 'create', 'expire', 'reclaim')
 # ccd's `_LC_ACTS` members that neither return from an archive nor end it. With `archive` itself, the three lists
 # classify every act exactly once — measure-workspace-lifecycle.test.ts runs ccd's array and reds on an act that has
-# no place here, so a new act is decided, never silently ignored.
+# no place here, so a new act is decided, never silently ignored. `collect` is here: it acts only on an id no
+# registry row stands for, so it never meets an archived workspace, and it removes no workspace to end one.
 NEUTRAL_ACTS = ('attic-drop', 'claim', 'enable', 'gc', 'hold', 'release', 'rename', 'rehome', 'route', 'stop',
-                'supervise', 'unsupervise')
+                'supervise', 'unsupervise', 'collect')
 WEEK_S = 7 * 86400
 # The dead-coordinator lane's feed titles (`server/src/deadCoordinator.ts`'s `deadCoordinatorFeedRows` and
 # `deadCoordinatorBreakerFeedRow`) — a second spelling, bound to the first by measure-workspace-lifecycle.test.ts.

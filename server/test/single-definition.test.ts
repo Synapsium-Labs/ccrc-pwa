@@ -3076,7 +3076,7 @@ describe('Build 9 nouns — the lifecycle journal vocabulary', () => {
     // `pwa/src/lib/api.ts` at 8 of 24, so the margin is 15 tokens.
     const enumerates = (src: string): boolean =>
       LIFECYCLE_ACTS.every((a) => new RegExp(`(?:'${a}'|(?<![\\w'-])${a}\\s*:)`).test(src));
-    expect(LIFECYCLE_ACTS.length).toBe(27);
+    expect(LIFECYCLE_ACTS.length).toBe(28);
     expect(LIFECYCLE_ACTS).toContain(LC_ACT_UNKNOWN);
     expect(enumerates(readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8'))).toBe(true);
     expect(enumerates(readFileSync(path.join(ccrcRoot, 'pwa/src/lib/api.ts'), 'utf8'))).toBe(false);
@@ -4163,10 +4163,15 @@ describe('the archive door\'s refusal codes are spelled once, in L0 (workspace l
   // `ARCHIVE_REFUSALS` (spec §5.2) is the one declaration; the server sends `ARCHIVE_REFUSALS.<name>` and the PWA
   // compares against it. `run-open` was a bare literal written twice in `server.ts` and once in
   // `ArchiveConflictSheet.tsx` before this wave. Code lines only (`stallCode`): prose names the codes in backticks.
-  // Two OTHER vocabularies share spellings, and each is excused here by name rather than by widening the scan:
+  // Four OTHER vocabularies share spellings, and each is excused here by name rather than by widening the scan:
   //   - `server/src/wsaudit.ts` keys its sentences by ccd's AUDIT verdict words, two of which ccd also dies with
   //     in `cmd_ws_archive` (`session-busy`, `status-unknown`) — the audit's seam, not the door's;
+  //   - the temp-root collector's open-run hold word `run-open` (`server/src/collectLane.ts`,
+  //     `server/src/coord/collectTempRoot.ts`) — the collector's seam, not the door's;
+  //   - the docs reader's `worktree-gone` (`server/src/docs/policy.ts`, `shared/docs.ts`) — the reader's own word;
   //   - `className="run-open"` is the runs board's row button (D-287), a CSS identity — excluded by the pattern.
+  // The collector's and the docs reader's excusals are by FILE (the `want` line below), a known width: a door code
+  // spelled in one of those files is not seen.
   const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const literal = (code: string): RegExp => new RegExp(`(?<!className=)(['"\`])${esc(code)}\\1`);
   const AUDIT_WORDS = new Set(['session-busy', 'status-unknown']);
@@ -4189,7 +4194,7 @@ describe('the archive door\'s refusal codes are spelled once, in L0 (workspace l
   });
 
   it.each(CODES)("'%s' is a code-line literal in shared/api.ts alone", (code) => {
-    const want = AUDIT_WORDS.has(code) ? ['server/src/wsaudit.ts', 'shared/api.ts'] : code === 'worktree-gone' ? ['server/src/docs/policy.ts', 'shared/api.ts', 'shared/docs.ts'] : ['shared/api.ts'];
+    const want = AUDIT_WORDS.has(code) ? ['server/src/wsaudit.ts', 'shared/api.ts'] : code === 'run-open' ? ['server/src/collectLane.ts', 'server/src/coord/collectTempRoot.ts', 'shared/api.ts'] : code === 'worktree-gone' ? ['server/src/docs/policy.ts', 'shared/api.ts', 'shared/docs.ts'] : ['shared/api.ts'];
     expect(ALL.filter((f) => literal(code).test(stallCode(f))).map(rel).sort(), `a second '${code}'`).toEqual(want);
   });
 });
@@ -5619,6 +5624,94 @@ describe('docs W3 — GET never fetches, and the L4 files quote no failure word 
     const files = l4();
     expect(files.map(([n]) => n)).toEqual(L4_FILES);
     expect(files.flatMap(([n, t]) => quotedWords(t, words).map((w) => `${n}: '${w}'`))).toEqual([]);
+  });
+});
+
+// CHILD RECLAMATION WAVE 9 (spec 2026-09-22 §5.10): the temp-root id predicate and its cap are ONE L0 function and ONE
+// L0 constant. This block is APPENDED for the reason the blocks above state: `session-hook.test.ts`'s citation audit
+// cites this file by line. Before this wave the kept-leaf reader held a private copy (`leafIdOk`) and the store a
+// private cap (`CHILD_RECLAIM_MAX_SESSION_ID_CHARS`). A third copy is how the dash and length clauses would be lost
+// again, so it reds here.
+describe('child reclamation wave 9: the temp-root id predicate and its cap are defined once, in shared/api.ts', () => {
+  const DEF_FN = (n: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?function\\s+${n}\\b`, 'm');
+  const DEF_VAL = (n: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${n}\\b`, 'm');
+  const definers = (re: RegExp): string[] => ALL.filter((f) => re.test(readFileSync(f, 'utf8'))).map(rel).sort();
+  /** The session-id shape and a leading-dot or leading-dash test on one code line: a re-derived predicate under a new name. */
+  const REDERIVED = /\bisSessionIdShape\s*\(.*startsWith\(\s*['"][.-]['"]\s*\)|startsWith\(\s*['"][.-]['"]\s*\).*\bisSessionIdShape\s*\(/;
+
+  it('CONTROL: the patterns see a declaration, an un-exported copy and a re-derivation, and not an import or a call', () => {
+    expect(DEF_FN('isTmpRootId').test('export function isTmpRootId(id: unknown): id is string {')).toBe(true);
+    expect(DEF_VAL('leafIdOk').test('const leafIdOk = (id: string): boolean => isTmpRootId(id);')).toBe(true);
+    expect(DEF_VAL('TMPROOT_ID_MAX_CHARS').test("import { TMPROOT_ID_MAX_CHARS } from '../../../shared/api.js';")).toBe(false);
+    expect(DEF_FN('isTmpRootId').test('  if (!isTmpRootId(id)) return;')).toBe(false);
+    expect(REDERIVED.test("const ok = (id: string): boolean => isSessionIdShape(id) && !id.startsWith('.');")).toBe(true);
+    expect(REDERIVED.test("const ok = (id: string): boolean => isSessionIdShape(id) && !id.startsWith('-');")).toBe(true);
+    expect(REDERIVED.test('if (!isSessionIdShape(sid)) {')).toBe(false);
+  });
+
+  it('isTmpRootId and TMPROOT_ID_MAX_CHARS are declared in shared/api.ts and nowhere else', () => {
+    expect(definers(DEF_FN('isTmpRootId'))).toEqual(['shared/api.ts']);
+    expect(definers(DEF_VAL('isTmpRootId'))).toEqual([]);
+    expect(definers(DEF_VAL('TMPROOT_ID_MAX_CHARS'))).toEqual(['shared/api.ts']);
+  });
+
+  it('the two private copies are gone, and the two files that held them use the L0 names', () => {
+    expect(definers(DEF_VAL('leafIdOk')), 'leafIdOk').toEqual([]);
+    expect(definers(DEF_VAL('CHILD_RECLAIM_MAX_SESSION_ID_CHARS')), 'the store cap').toEqual([]);
+    expect(stallCode(path.join(ccrcRoot, 'server/src/childReclaimSweep.ts'))).toMatch(/\bisTmpRootId\s*\(/);
+    expect(stallCode(path.join(ccrcRoot, 'server/src/coord/store.ts'))).toMatch(/\bTMPROOT_ID_MAX_CHARS\b/);
+  });
+
+  it('no code line outside shared/api.ts re-derives it from the session-id shape and a leading-dot or leading-dash test', () => {
+    expect(ALL.filter((f) => rel(f) !== 'shared/api.ts' && stallCode(f).split('\n').some((l) => REDERIVED.test(l)))
+      .map(rel)).toEqual([]);
+  });
+});
+
+// CHILD RECLAMATION WAVE 9 (spec 2026-09-22 §5.10). APPENDED, for the reason the blocks above state: `session-hook.test.ts`'s
+// citation audit cites this file by line. The temp-root collector's lane SHIPS SHADOWED: until `$REG/collect-lane-live`
+// exists it audits and records "would collect" and never composes `ws-collect`. The file is the operator's to touch BY
+// HAND on the fleet box, as `expire-lane-live` is, so no line of shell names it. Its one TS spelling is its definer, an
+// L1 file that reaches no `node:` module and so cannot write it.
+describe('child reclamation wave 9: the collector lane’s live switch has no writer in the tree', () => {
+  const NAME = 'collect-lane-live';
+  const DEFINER = 'server/src/collectLane.ts';
+
+  it('no shell line names it, and its one TS holder is its definer', () => {
+    expect(holdersOf(NAME), 'a line of shell names it — a writer, or a reader this design never had').toEqual([]);
+    expect(ALL.filter((f) => stallCode(f).includes(NAME)).map(rel).sort(), `spelled on a code line outside ${DEFINER}`)
+      .toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER)), `${DEFINER} reaches a node: module or require — it could write the marker`)
+      .not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+
+  // THE WIDER WRITER, the expiry pin's argument: a file that imports the ONE spelling and holds an `io` could write it
+  // without spelling its name. The files whose code names the constant are the definer and the executor, which reads
+  // it from the registry listing alone, and neither reaches a write. The lane's feed and attention writes live in
+  // watch.ts, which never names the constant.
+  it('the files that name its constant are the definer and the executor, and neither reaches a write', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
+    const holders = ALL.filter((f) => stallCode(f).includes('COLLECT_LANE_LIVE_MARKER')).map(rel).sort();
+    expect(holders).toEqual([DEFINER, 'server/src/coord/collectTempRoot.ts']);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(WRITE);
+  });
+});
+
+// CHILD RECLAMATION WAVE 9 (spec 2026-09-22 §5.10, "The population"). Task 1's wave-9 describe ("the temp-root id
+// predicate and its cap are defined once, in shared/api.ts") holds the predicate's one L0 definer, its forerunners'
+// absence, and the kept-leaf reader's and the store's use. This block adds the collector's two files: the lane and the
+// executor each import the L0 predicate and CALL it, so the population and the job's step 1 cannot drift to a private
+// copy under a new name, which a scan of declarations would not see. KNOWN WIDTH: a call kept beside a private copy
+// still passes here.
+describe('child reclamation wave 9: the collector’s lane and executor call the temp-root id predicate from L0', () => {
+  it('its readers import it: the lane and the executor import isTmpRootId from shared/api.js and call it', () => {
+    const code = (r: string): string => stallCode(path.join(ccrcRoot, r));
+    for (const r of ['server/src/collectLane.ts', 'server/src/coord/collectTempRoot.ts']) {
+      expect(code(r), r).toMatch(/\bisTmpRootId\s*\(/);
+      expect(code(r), `${r} does not import it from L0`)
+        .toMatch(/import\s*(?:type\s*)?\{[^}]*\bisTmpRootId\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/api\.js'/);
+    }
   });
 });
 

@@ -8363,7 +8363,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       //   "the only survivor" among its `- Modify:` bullets — below its referent.
       //   Frozen, like the rest of that paragraph; the two spec anchors into the
       //   same file were re-pointed by content (`:639`→`:648`, `:561`→`:570`).
-      'deploy/deploy.sh': 4,
+      // 4 -> 3 at box-token-lifecycle wave 2 B7 (`ship_secret` and its two calls left deploy.sh, ~20 lines above
+      //   `:629`): `plan:3330 deploy/deploy.sh:629` now holds a comment that names `install_atomic`, a token its
+      //   clause quotes, so the audit anchors it by coincidence. Still stale in fact, still frozen.
+      'deploy/deploy.sh': 3,
       // `ccd/ccrc` 5 -> 4, RE-MEASURED on the centralised-update-management
       // branch (Tasks 9-13, part B): `ccd/ccrc` grew 12,559 -> 12,851 lines
       // (+292, `wc -l`) and NEITHER corpus document changed (spec and plan
@@ -8660,7 +8663,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // moved (argued beside the map, above the `'ccd/ccd'` entry).
     // 197 -> 197 on the merge of `origin/main` at `77c11245` into docs W1: stated 197, base 197, tree 197,
     // measured by `cite-remeasure.py` against `origin/main`; no key moved (argued beside the map).
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(197);
+    // 197 -> 196 at box-token-lifecycle wave 2 B7: `'deploy/deploy.sh'` 4 -> 3 and nothing else moved (argued beside the map).
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(196);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -8871,7 +8875,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/session-hook.sh:1098',
         'ccd/session-hook.sh:1175-1177',
         'deploy/deploy.sh:560',
-        'deploy/deploy.sh:629',
+        // LEFT at box-token-lifecycle wave 2 B7 (removed `ship_secret` from deploy.sh): `deploy/deploy.sh:629` now holds
+        // a comment naming `install_atomic`, which its clause quotes. Coincidence, not repair; see D2849_INVISIBLE_SINCE_PR136.
         // ENTERS at review 179's fix round 1 (S6-R11): `ccd/ccrc:5217` fails again, see the census entry.
         // ENTERS again at the composition onto `0ffa07f3` (the note above this assertion).
         'ccd/ccrc:5217',
@@ -8927,7 +8932,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // STILL EMPTY at the composition onto origin/main `a742eb6a` (#214), S6-R11. N emptied it on its own growth and
     // C on its own; composed, the two shifts stack (`_exp_env_write`'s comment, M's `:5217`, is at `:5433`), and the
     // dump of the composed tree lists all five of D2849 in the set above. No D-number.
-    const D2849_INVISIBLE_SINCE_PR136: string[] = [];
+    // NON-EMPTY AGAIN at box-token-lifecycle wave 2 B7, by the mechanism above: B7 removed `ship_secret` and its two
+    // calls from deploy.sh, sliding a comment that names `install_atomic` under `:629`, so the audit anchors it by
+    // coincidence. Still stale in fact and frozen; the assertion checks the other four.
+    const D2849_INVISIBLE_SINCE_PR136: string[] = ['deploy/deploy.sh:629'];
     expect(D2849.filter((k) => set.includes(k)),
       'the five references Task 10\'s own **Files:** paragraph falsifies (D-2849, and its 2026-09-17 append)')
       .toEqual(D2849.filter((k) => !D2849_INVISIBLE_SINCE_PR136.includes(k)));
@@ -9467,6 +9475,25 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // lines at `:8629-8633` slid every line below them down five, onto
         // comment bytes that now pass the row: a coincidence, not a repair.
         // Nothing was re-pointed. S6-R11 covers it, so no D-number.
+        // RE-MEASURED on the GitHub slug fix (#386), 54 -> 54, FROM THE SAME RUN
+        // as the site-level set below, which does not move (35 -> 35). ONE
+        // cause: the slug fix's insertion into `_gh_repo_slug` (`ccd/ccd:5397`,
+        // 20 lines out and 56 in, net +36, `ccd/ccd` 38117 -> 38172 with the
+        // docs helper's +19 far below every anchor here) slid every `ccd/ccd`
+        // line below `:5397` down 36. Measured by dumping this set with
+        // `origin/main`'s `ccd/ccd` and with this branch's, everything else the
+        // same tree, and diffing the two: ONE ENTERS (`ccd/ccd:5819-5823`) and
+        // ONE LEAVES (`ccd/ccd:13601-13666`). Both are coincidences, not rot and
+        // not a repair: `:5819-5823` used to hold a Python comment naming
+        // `os.lstat`/`stat.S_ISREG`, which the row's own quoted `stat` matched,
+        // and now holds a comment about `git diff --quiet` that offers no token
+        // of its row; `:13601-13666` now takes in a comment reading "the
+        // command substitution", which the row's quoted `command` matches. The
+        // whole-corpus census, its 196 total, the `**Files:**` sets and
+        // README's empty entry are unmoved, measured green at this tree, and
+        // neither corpus document nor README changed, so nothing was re-pointed
+        // and no rule changed. Values in the instrument's order, never retyped.
+        // S6-R11 covers it, so no D-number.
         'ccd/ccd:203',
         'server/test/single-definition.test.ts:1274',
         'server/test/single-definition.test.ts:1319-1320',
@@ -9509,7 +9536,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:8654',
         'ccd/ccd:8673',
         'ccd/ccd:13573-13575',
-        'ccd/ccd:13601-13666',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
         'ccd/ccd:2874',
@@ -9521,6 +9547,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:5725',
         'ccd/ccd:4642-4653',
         'ccd/ccd:5828-5830',
+        'ccd/ccd:5819-5823',
       ]);
     // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
     // reference, because the same `file:N` is cited from several paragraphs and
@@ -9689,6 +9716,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // because no other pass reaches those sites, which is what this list
       // measures. The cause there is the five `echo docs-*` caps lines at
       // `:8627`; nothing re-pointed. S6-R11 covers it, so no D-number.
+      // RE-MEASURED on the GitHub slug fix (#386), 35 -> 35, FROM THE SAME RUN as the row-pass set above:
+      // nothing entered or left. The two movers there have no mirror here, because no other pass reaches
+      // those sites. S6-R11, no D-number.
       // RE-MEASURED on the merge of `origin/main` at `77c11245` into docs W1, 35 -> 35, FROM THE SAME RUN as
       // the row-pass set above: stated 35, base 35, tree 35, nothing entered or left. S6-R11, no D-number.
         'spec:308 server/test/single-definition.test.ts:1274',

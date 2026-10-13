@@ -72,8 +72,9 @@ export function registerTokenRoutes(app: FastifyInstance, deps: Pick<Deps, 'toke
     try {
       await driver.commitHandOut(step.generation, now);
     } catch {
-      console.warn(`ccrc-server: box token: the hand-out of generation ${step.generation} could not be ` +
-        'recorded; answered 503 and the generation is discarded');
+      // Spec 7.1 (F11): the outcome's word and the node id (it passed NODE_ID_RE in the door), never a code or a value.
+      console.warn(`ccrc-server: box token: claim door unavailable: the hand-out of generation ${step.generation} to node ` +
+        `${step.nodeId} could not be recorded; answered 503 and the generation is discarded`);
       return refuse(reply, 503, 'unavailable');
     }
     return reply.code(200).send({ ok: true, value: step.value, generation: step.generation });
