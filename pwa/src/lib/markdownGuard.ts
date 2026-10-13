@@ -7,7 +7,9 @@
 // measured overflow. The pre-scan is a cheap first line, not a proof. Nesting built across lines by indentation
 // is not seen by it, and it does not claim to prevent every overflow. What bounds the rest is, in order: this
 // pre-scan for the shapes it covers; `parseMarkdown`'s try/catch, which turns any exception into 'threw';
-// `MD_MAX_TREE_DEPTH`, which turns a deep tree into 'too-deep'; and the worker's budget, the only time bound.
+// `MD_MAX_TREE_DEPTH`, which turns a deep tree into 'too-deep'; and the worker's budget, the only time bound. Chat's
+// synchronous path renders a message of 4 KiB or less on the main thread, without `parseMarkdown`: it has no budget
+// and none of those other bounds, so for such a message this pre-scan is the only guard before the render.
 //
 // Imports only `markdownLimits.ts`: the parse worker's closure reaches this file (`markdown-purity.test.ts`).
 import { MD_MAX_CONTAINER_DEPTH, MD_MAX_DELIMITER_RUN } from './markdownLimits';
@@ -176,9 +178,9 @@ export interface PrescanLimits {
 /** One pass over the lines (LF, CRLF and CR each end one): the first line whose container depth is over
  *  `limits.containerDepth`, or whose longest delimiter run is over `limits.delimiterRun`, refuses, with its 1-based
  *  number and its measured value. The depth is counted on every line, because this scan does not know where the
- *  parser's containers end, so it cannot know where a fence really does; only the delimiter-run check skips fenced
- *  blocks (a fence is tracked by its own delimiter run). An unclosed fence runs to the end. Production calls it only through `prescanMarkdown`; tests call it with lower
- *  limits to measure how deep a real document goes. */
+ *  parser's containers end, so it cannot know where a fence really does. Only the delimiter-run check skips fenced
+ *  blocks, tracking a fence by its own run of backticks or tildes; an unclosed fence runs to the end. Production calls
+ *  it only through `prescanMarkdown`; tests call it with lower limits to measure how deep a real document goes. */
 export function prescanWithin(src: string, limits: PrescanLimits): PrescanResult {
   const lines = src.split(/\r\n|\r|\n/);
   let fence: { ch: string; len: number } | undefined;

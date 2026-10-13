@@ -101,9 +101,12 @@ describe('fenced blocks are skipped for the delimiter-run check only', () => {
   });
 });
 
-// The review of Task 3 measured three ways to hide a deep line from the first pre-scan. Each input below reached the
-// parser and threw a RangeError there; each is refused now. (Indentation-continued nesting, the review's third
-// shape, is not covered by the pre-scan: parseMarkdown's try/catch, MD_MAX_TREE_DEPTH and the worker budget bound it.)
+// The review of Task 3 measured three ways to hide a deep line from the first pre-scan. Its input (a), '>' then a tab
+// 10 000 times, and its three (b) inputs, a 10 000-deep line after a fence the parser had already closed (the first
+// three rows of the fence table below), reached the parser and threw a RangeError there; each is refused now. The other
+// cases are edges and controls of the same rules, and the plain and tilde fence rows only pin that a fence hides
+// nothing from the depth count. (Indentation-continued nesting, the review's third shape, is not covered by the
+// pre-scan: parseMarkdown's try/catch, MD_MAX_TREE_DEPTH and the worker budget bound it.)
 describe('W4-X1: tabs are column-aware', () => {
   it("'>' then a tab, repeated, counts every marker (the review's input (a))", () => {
     expect(prescanMarkdown('>\t'.repeat(10000) + 'x')).toEqual({ ok: false, why: 'container-depth', line: 1, value: 10000 });
