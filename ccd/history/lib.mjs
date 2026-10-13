@@ -1597,13 +1597,27 @@ function envValue(raw) {
  *  file yields each `[export ]NAME=value` line's VALUE, never its name, so a
  *  23-char key name is never redacted; `env-identifier` yields only values
  *  whose NAME matches `IDENTIFIER_RE` or `ENV_SECRET_NAME_RE` (`ccrc.env`,
- *  `agent.env`); a token file its trimmed whole content; a JSON file its
+ *  `agent.env`); a token file its value line (blank and `#` lines dropped; D-4587
+ *  (history-token-file-comments-not-values)); a JSON file its
  *  string leaves. D-4206
  *  D-4204 */
 export function extractSecretValues(text, kind) {
   if (kind === 'token') {
-    const t = text.trim();
-    return t === '' ? [] : [t];
+    // D-4587 (history-token-file-comments-not-values): a token file's blank
+    // and `#` lines are not values (ccrc's own box-token file is a `#`
+    // preamble above one value line). The values are the first remaining
+    // line with all whitespace removed (`server/src/coord/token.ts`
+    // `extractToken`'s rule) and, when it differs, the remaining lines joined
+    // and trimmed. No remaining line yields none.
+    const kept = [];
+    for (const raw of text.split('\n')) {
+      const t = raw.trim();
+      if (t !== '' && !t.startsWith('#')) kept.push(raw);
+    }
+    if (kept.length === 0) return [];
+    const first = kept[0].trim().replace(/\s+/g, '');
+    const joined = kept.join('\n').trim();
+    return joined === first ? [first] : [first, joined];
   }
   if (kind === 'json') {
     let parsed;

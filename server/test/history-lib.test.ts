@@ -1615,7 +1615,7 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     const idx = idxOf(libRedact.extractSecretValues(env, 'env-identifier'));
     expect(libRedact.redactField(`CCRC_VAPID_PRIVATE=${vapid}`, idx)).toBe(`CCRC_VAPID_PRIVATE=${M}`);
   });
-  it('a token file yields its trimmed content; a json file its string leaves; garbage yields nothing', () => {
+  it('a token file yields its value line; a json file its string leaves; garbage yields nothing', () => {
     const tok = rndHex(32);
     expect(libRedact.extractSecretValues(`  ${tok}\n`, 'token')).toEqual([tok]);
     expect(libRedact.extractSecretValues('\n', 'token')).toEqual([]);
@@ -6343,5 +6343,74 @@ describe('O58: the per-copy due rule is the default (W1-B2 Task 35; spec 9.15, r
       { key: 1, files: onlyA.files }, { key: 2, files: [file(B, 1)] }, { key: 3, files: [file(A, 10, false)] }, { key: 4, files: [] },
     ] })).toEqual([2, 3, 4]);
     expect(libExport.planExport.length, 'one destructured argument, as B1 declared it').toBe(1);
+  });
+});
+
+// ===========================================================================
+// R-token-comments (coordinator ruling): a `*.token` file's `#` comments are
+// not secret values. The fixtures are strings; no token file is ever read.
+// ===========================================================================
+describe("R-token-comments: a token file's # lines are not secret values (D-4587 (history-token-file-comments-not-values))", () => {
+  const rndHexRtc = (bytes: number): string => historyCrypto.randomBytes(bytes).toString('hex');
+  const idxOfRtc = (values: string[]): libRedact.PairIndex => libRedact.makePairIndex(libRedact.secretPairs(values).pairs);
+  const MRtc = libRedact.REDACTED_MARK;
+  const WORDS = ['authenticates', 'unconfigured', 'boxTokenPlaceholderRefusedAt'];
+  const preamble = (): string => [
+    '# The box token: one shared secret per box.',
+    `# The server ${WORDS[0]} an agent by it; a box left ${WORDS[1]} refuses to boot.`,
+    `# The placeholder is refused at boot (\`${WORDS[2]}\`), so edit it first.`,
+    '',
+  ].join('\n');
+
+  it("the example's shape: the preamble words are not learned, the value is, and the value is masked wherever it prints", () => {
+    expect(WORDS[2]).toHaveLength(28);
+    const value = rndHexRtc(32);
+    const file = `${preamble()}${value}\n`;
+    const values = libRedact.extractSecretValues(file, 'token');
+    expect(values).toEqual([value]);
+    const { pairs } = libRedact.secretPairs(values);
+    const sha = (w: string): string => historyCrypto.createHash('sha256').update(w).digest('hex');
+    expect(pairs.some((p: { len: number; sha256: string }) => p.len === value.length && p.sha256 === sha(value)), 'the value has its pair').toBe(true);
+    for (const w of WORDS) {
+      expect(pairs.some((p: { len: number; sha256: string }) => p.len === w.length && p.sha256 === sha(w)), `no pair for the preamble word ${w}`).toBe(false);
+    }
+    const idx = idxOfRtc(values);
+    const text = 'the box authenticates as unconfigured until the token lands';
+    const indexed = libRows.entryIndexText(text, idx);
+    expect(indexed).toContain('authenticates');
+    expect(indexed).toContain('unconfigured');
+    const shown = libRedact.redactForDisplay(text, idx);
+    expect(shown).toContain('authenticates');
+    expect(shown).toContain('unconfigured');
+    const withValue = `the box sent ${value} here`;
+    expect(libRows.entryIndexText(withValue, idx)).not.toContain(value);
+    expect(libRows.entryIndexText(withValue, idx)).toContain(MRtc);
+    expect(libRedact.redactForDisplay(withValue, idx)).not.toContain(value);
+    expect(libRedact.redactForDisplay(withValue, idx)).toContain(MRtc);
+  });
+  it('a bare value line, with surrounding whitespace and a trailing newline, yields exactly that value', () => {
+    const value = rndHexRtc(32);
+    expect(libRedact.extractSecretValues(`  \t${value}  \n`, 'token')).toEqual([value]);
+    expect(libRedact.extractSecretValues(`${value}\n`, 'token')).toEqual([value]);
+  });
+  it('a file of only # lines and blank lines yields nothing, CRLF-terminated or not', () => {
+    const lf = '# one\n\n   # two, indented\n\n#three\n';
+    expect(libRedact.extractSecretValues(lf, 'token')).toEqual([]);
+    expect(libRedact.extractSecretValues(lf.replace(/\n/g, '\r\n'), 'token')).toEqual([]);
+    expect(libRedact.extractSecretValues('#\n', 'token')).toEqual([]);
+    expect(libRedact.extractSecretValues('', 'token')).toEqual([]);
+  });
+  it("the value is extractToken's line with its whitespace removed, then the remaining lines joined and trimmed when that differs", () => {
+    expect(libRedact.extractSecretValues('  abc def ghi jkl\n', 'token')).toEqual(['abcdefghijkl', 'abc def ghi jkl']);
+    const v1 = rndHexRtc(16);
+    const v2 = rndHexRtc(16);
+    expect(libRedact.extractSecretValues(`${v1}\n${v2}\n`, 'token')).toEqual([v1, `${v1}\n${v2}`]);
+    expect(libRedact.extractSecretValues(`# note\n\n${v1}\n# mid\n${v2}\n`, 'token')).toEqual([v1, `${v1}\n${v2}`]);
+    expect(libRedact.extractSecretValues(`${v1}\n`, 'token')).toEqual([v1]);
+  });
+  it('the env and json kinds are unchanged: the same text yields nothing', () => {
+    const file = `${preamble()}${rndHexRtc(32)}\n`;
+    expect(libRedact.extractSecretValues(file, 'env')).toEqual([]);
+    expect(libRedact.extractSecretValues(file, 'json')).toEqual([]);
   });
 });
