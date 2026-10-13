@@ -564,6 +564,55 @@ describe('_gh_repo_slug', () => {
     h.git(main, 'config', 'remote.origin.url', url);
     expect(() => h.sh(`_gh_repo_slug "${main}"`)).toThrow();
   });
+
+  // Two guards from decision 11 of the Share/Export design. The answer is spent
+  // as `gh --repo` on a WRITE-scoped token (pr-open, pr-state, ws-reap) and as
+  // the docs wire's github slug, so (1) one of the three GitHub prefixes must
+  // have MATCHED — an origin that is a bare relative path such as `owner/name`
+  // is a directory, not a GitHub repository — and (2) neither segment after the
+  // prefix may be `.`, `..` or start with `.`.
+  it.each([
+    ['example-org/example-repo'],                // a bare relative path: no prefix matched
+    ['../x'],                                    // dot segments, no prefix
+    ['./x'],
+    ['.x/y'],
+    ['x/.y'],
+    ['https://github.com/../x'],                 // dot segments AFTER a real prefix
+    ['https://github.com/./x'],
+    ['https://github.com/x/..'],
+    ['https://github.com/o/..git'],              // one .git strips, leaving o/.
+    ['git@github.com:.x/y.git'],
+    ['ssh://git@github.com/x/.y'],
+    ['http://github.com/o/r'],                   // not one of the three prefixes
+    ['git' + '@gitlab.com:o/r'],                 // not GitHub (built from parts: topology-clean's email class)
+    ['git@github.com:https://github.com/o/r'],   // exactly ONE prefix strips
+  ])('refuses %s (decision 11: a GitHub prefix matched, no dot segment)', (url) => {
+    const main = h.makeRepo('demo');
+    h.git(main, 'config', 'remote.origin.url', url);
+    expect(() => h.sh(`_gh_repo_slug "${main}"`)).toThrow();
+  });
+
+  it.each([
+    ['https://github.com/example-org/example.repo', 'example-org/example.repo'],   // a dot inside a segment
+    ['git@github.com:o.x/r..y.git', 'o.x/r..y'],
+    ['https://github.com/o/r.', 'o/r.'],                                          // a trailing dot is not a leading one
+    ['https://github.com/o/r.git.git', 'o/r.git'],                                // one trailing .git, not two
+    ['ssh://git@github.com/o-1/r_2', 'o-1/r_2'],
+  ])('still reads %s as %s (decision 11 changes nothing a real prefix already named)', (url, slug) => {
+    const main = h.makeRepo('demo');
+    h.git(main, 'config', 'remote.origin.url', url);
+    expect(h.sh(`_gh_repo_slug "${main}"`)).toBe(slug);
+  });
+
+  it('answers no-remote for a bare owner/name origin and never reaches gh', () => {
+    // End to end: the slug is the gate before `--repo`, so a refused origin
+    // spends no gh call at all.
+    const { main } = workspaceWithCommit('demo', 'quiet-basin');
+    h.git(main, 'config', 'remote.origin.url', 'example-org/example-repo');
+    expect(JSON.parse(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`)))
+      .toEqual({ phase: 'unknown', reason: 'no-remote' });
+    expect(h.ghCalls()).toEqual([]);
+  });
 });
 
 describe('binding', () => {

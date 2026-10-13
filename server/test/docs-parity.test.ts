@@ -411,9 +411,21 @@ slugVitest.describe('M3.12: slug_from_url gives _gh_repo_slug\'s verdict on ever
     ['an owner and no name', 'https://github.com/o', null],
     ['http, not https', 'http://github.com/o/r', null],
     ['userinfo before the host', 'https://u:tok' + '@github.com/o/r', null],
-    ['the three prefixes strip IN TURN, not one of three', 'git@github.com:https://github.com/o/r', 'o/r'],
+    ['exactly ONE prefix strips (decision 11)', 'git@github.com:https://github.com/o/r', null],
     ['only ONE trailing .git strips', 'https://github.com/o/r.git.git', 'o/r.git'],
-    ['a bare owner/name', 'example-org/example-repo', 'example-org/example-repo'],
+    ['a bare owner/name: no prefix matched (decision 11)', 'example-org/example-repo', null],
+    ['a bare ../x (decision 11)', '../x', null],
+    ['a bare ./x (decision 11)', './x', null],
+    ['a bare .x/y (decision 11)', '.x/y', null],
+    ['a bare x/.y (decision 11)', 'x/.y', null],
+    ['.. after a real prefix (decision 11)', 'https://github.com/../x', null],
+    ['. after a real prefix (decision 11)', 'git@github.com:./x', null],
+    ['a leading-dot owner after a real prefix (decision 11)', 'ssh://git@github.com/.x/y.git', null],
+    ['a leading-dot name after a real prefix (decision 11)', 'https://github.com/x/.y', null],
+    ['.. as the name after a real prefix (decision 11)', 'https://github.com/x/..', null],
+    ['a GitLab scp form', 'git' + '@gitlab.com:o/r', null],
+    ['dots INSIDE both segments stay accepted', 'git@github.com:o.x/r..y.git', 'o.x/r..y'],
+    ['a trailing dot is not a leading one', 'https://github.com/o/r.', 'o/r.'],
   ];
 
   slugVitest.it('every row: bash, the runner read and the literal string agree, and match the table', () => {
