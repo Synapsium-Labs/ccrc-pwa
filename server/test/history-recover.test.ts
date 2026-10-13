@@ -64,7 +64,7 @@ interface DeriveNodes {
     slice: Record<string, unknown>): number;
   beltNodesStep(db: DatabaseSync, ictx: Record<string, unknown>, slice: Record<string, unknown>): boolean;
   redactNodeFields(db: DatabaseSync, ictx: Record<string, unknown>, nodeIds: readonly string[]): number;
-  rerollParents(db: DatabaseSync, ictx: Record<string, unknown>, nodeIds: readonly string[]): number;
+  rerollParents(db: DatabaseSync, ictx: Record<string, unknown>, nodeIds: readonly string[], onlyIfChanged?: boolean): number;
   deriveParents(db: DatabaseSync, ictx: Record<string, unknown>, budget: Record<string, unknown>): number;
   refreshLeaf(db: DatabaseSync, ictx: Record<string, unknown>, nodeId: string): string;
 }
@@ -577,6 +577,39 @@ describe('the recovery step (W1-B2 Task 25; spec §9.14)', () => {
       closeWriter(db);
     }
   });
+
+  it('in-process: recoverPass registers the node merge step, so a value held only by a node leaves no index byte once the next tick merges (D-4609, H-158)', async () => {
+    const box = makeHistoryBox('ccrc-history-recover-nodemerge-');
+    const P = historyPaths(box.home);
+    const ids = createStore(box.home);
+    const V = `QPhg1nodemerge${randomBytes(12).toString('hex')}7`;
+    const sec = path.join(box.home, '.cc-secrets');
+    fs.mkdirSync(sec, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(sec, 'x.env'), `ZQ_NM=${V}\n`, { mode: 0o600 });
+    const db = openWriter(P.dbFile);
+    try {
+      db.exec('BEGIN');
+      createFtsTables(db);
+      db.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, ?, '', 'demo', 1)").run(ID);
+      db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (1, 1, ?, 'startup', 'hook', 1)").run(RR_U1);
+      db.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (1, ?)').run(RR_U1);
+      db.prepare("INSERT INTO blobs (blob_id, sha256, codec, z, raw_len) VALUES (2, ?, 'br5', NULL, 1)").run(Buffer.alloc(32, 8));
+      const gist = `Rotated the credential ${V} today.`;
+      db.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, summary_blob_id,
+        earliest_ms, latest_ms, src_chars, desc_count, desc_chars, parser_version, created_ms)
+        VALUES ('nm-leaf', 1, 1, 1, 'native_leaf', 0, 'not-requested', ?, '[]', 2, 1, 2, 0, 0, 0, 1, 1)`).run(gist);
+      const t = nodeIndexTexts({ gist, topics: [], refs: [] }, makePairIndex([]));
+      db.prepare("INSERT INTO nodes_fts (rowid, gist, topics, refs) SELECT rowid, ?, ?, ? FROM nodes WHERE node_id = 'nm-leaf'").run(t.gist, t.topics, t.refs);
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+      db.exec('COMMIT');
+      expect(await SW.recoverPass(db, { ...stepCtx(box, ids), pause: null }, 0)).toBe(0);
+      expect((db.prepare("SELECT gist FROM nodes WHERE node_id = 'nm-leaf'").get() as { gist: string }).gist.includes(V), 'CONTROL: the pass rewrote the leaf\'s gist').toBe(false);
+      expect((db.prepare("SELECT count(*) AS n FROM derivation_state WHERE step = 'fts-merge' AND version = 1 AND completed_ms IS NULL").get() as { n: number }).n,
+        'the rewrite registered the merge step pending, for the next tick to run').toBe(1);
+    } finally {
+      closeWriter(db);
+    }
+  }, HEAVY);
 
   it('in-process: journalRedactPairs reads every redact record the index phase would read, and names each journal file it skips, a foreign head or one it cannot open (spec §8.4 and §9.14)', (ctx) => {
     if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file regardless of its mode
@@ -2864,7 +2897,50 @@ describe('hardening HE: the Task 29 node redaction (H-112 to H-118)', () => {
     } finally { closeWriter(db); }
   }, HEAVY);
 
-  it('F2: rerollParents asks for ancestors in chunks of ictx.rerollChunk ids, never one IN list over every seed', () => {
+  it('H-154: the belt re-rolls the ancestors of a node it rewrote only when they change, so a stale index row alone rewrites no ancestor', () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-he154-', [
+      { id: 'he-c1', kind: 'native_leaf', pruned: true, gist: 'Clean one.' },
+      { id: 'he-c2', kind: 'native_leaf', pruned: true, gist: 'Clean two.' },
+      { id: 'he-q', kind: 'condensed', gist: null, kids: ['he-c1', 'he-c2'] },
+    ], true);
+    try {
+      const ftsGist = (id: string): string => (db.prepare('SELECT f.gist AS g FROM nodes_fts f JOIN nodes n ON n.rowid = f.rowid WHERE n.node_id = ?').get(id) as { g: string }).g;
+      const want = ftsGist('he-c1');
+      db.prepare("UPDATE nodes_fts SET gist = 'stale' WHERE rowid = (SELECT rowid FROM nodes WHERE node_id = 'he-c1')").run();
+      expect(ftsGist('he-c1'), 'CONTROL: the leaf\'s index row is stale and its fields are clean').toBe('stale');
+      const told = { n: 0 };
+      const ctx = { ...heCtx(home, v, true), onNodesFtsDeleted: () => { told.n += 1; } };
+      setStep(db, 'nodes-belt', 1, '0', null);
+      expect(DV.beltNodesStep(db, ctx, SW.newBudget()), 'the step completed').toBe(true);
+      expect(ftsGist('he-c1'), 'CONTROL: the stale row was rewritten').toBe(want);
+      expect(told.n, 'only the leaf\'s own rewrite touched an index row: its unchanged ancestor was left alone').toBe(1);
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('H-155: a node_children row whose child is gone is skipped, so the belt completes and the parent is rebuilt from the children that remain', () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-he155-', [
+      { id: 'he-c1', kind: 'native_leaf', pruned: true, gist: 'Clean one.' },
+      { id: 'he-c2', kind: 'native_leaf', pruned: true, gist: 'Clean two.' },
+      { id: 'he-q', kind: 'condensed', gist: null, kids: ['he-c1', 'he-c2'] },
+    ], true);
+    try {
+      const rid = (db.prepare("SELECT rowid AS r FROM nodes WHERE node_id = 'he-c2'").get() as { r: number }).r;
+      db.exec('PRAGMA foreign_keys = OFF');
+      db.prepare('DELETE FROM nodes_fts WHERE rowid = ?').run(rid);
+      db.prepare("DELETE FROM nodes WHERE node_id = 'he-c2'").run();
+      db.exec('PRAGMA foreign_keys = ON');
+      expect(db.prepare('PRAGMA foreign_key_check').all().length, 'CONTROL: the store carries one dangling child').toBe(1);
+      const ctx = heCtx(home, v, true);
+      setStep(db, 'nodes-belt', 1, '0', null);
+      expect(DV.beltNodesStep(db, ctx, SW.newBudget()), 'the step completes over a dangling child').toBe(true);
+      expect((db.prepare("SELECT gist FROM nodes WHERE node_id = 'he-q'").get() as { gist: string }).gist, 'the parent is rebuilt from the child that remains').toBe('Clean one.');
+      expect(() => DV.rerollParents(db, ctx, ['he-c1']), 'a re-roll over the same parent does not throw either').not.toThrow();
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('M2: rerollParents asks for ancestors in chunks of ictx.rerollChunk ids, never one IN list over every seed', () => {
     const v = heValue();
     const { db, home } = heStore('ccrc-hist-hefr1d-', heManyParents(v, 5), false);
     try {
@@ -2880,6 +2956,21 @@ describe('hardening HE: the Task 29 node redaction (H-112 to H-118)', () => {
       expect(DV.rerollParents(spy, { ...heCtx(home, v, false), rerollChunk: 2 }, seeds), 'all five parents were re-rolled, once each').toBe(5);
       expect(sqls.map((q) => (q.match(/\?/g) ?? []).length), 'three ancestor queries of 2, 2 and 1 placeholders').toEqual([2, 2, 1]);
       expect(heLeaks(db, v).filter((x) => x.startsWith('he-p')), 'every parent was rebuilt from redacted children').toEqual([]);
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('H-156: an ancestor shared by two chunks is re-rolled once, and after the parents below it, whatever chunk reached it first', () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-he156-', [
+      ...heManyParents(v, 4),
+      { id: 'he-g', kind: 'condensed', gist: null, kids: ['he-p0', 'he-p3'] },
+    ], false);
+    try {
+      db.prepare("UPDATE nodes SET depth = 2 WHERE node_id = 'he-g'").run();
+      expect(heLeaks(db, v), 'CONTROL: the grandparent holds a prefix of the value in its topics').toContain('he-g.topics');
+      const seeds = Array.from({ length: 4 }, (_, i) => `he-v${i}`);
+      expect(DV.rerollParents(db, { ...heCtx(home, v, false), rerollChunk: 2 }, seeds), 'four parents and the shared grandparent, each re-rolled once').toBe(5);
+      expect(heLeaks(db, v).filter((x) => x.startsWith('he-p') || x.startsWith('he-g')), 'the grandparent was rolled from re-rolled parents, so nothing leaks').toEqual([]);
     } finally { closeWriter(db); }
   }, HEAVY);
 

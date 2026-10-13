@@ -2733,6 +2733,11 @@ export async function recoverPass(db, ctx, failedAtStart) {
       }
     }
     const ictx = makeIngestCtx(ctx.home, ctx.homes, ctx.now(), ctx.ids, floorProbeFor(ctx.paths.dbDir, ctx.deps.statfs));
+    // A node rewrite on this pass (the late-pair fast path, the belt's node step) deletes nodes_fts rows, whose term bytes wait
+    // until FTS5 merges them: it registers the merge step inside its own transaction, as the tick's context does. The reindex
+    // phase's rebuild recreates nodes_fts only when the replay added a pair, so a pair from a secrets file needs this hook;
+    // this pass runs no merge step, and the next ordinary tick merges. D-4609 (history-nodes-fts-merged-after-rewrite), H-158.
+    registerNodesMerge(ictx, db);
     const secrets = secretsStep(db, ictx, ctx.parsed.secrets);
     ictx.pairIdx = secrets.pairIdx;
     ctx.belt = secrets.pairIdx.belt;   // §8.3 layer 4: recoveryStep hands it to its executors as run.ectx.belt (Task 29)
@@ -5188,7 +5193,7 @@ export async function rederiveFts(db, ctx, budget, slice = rederiveSlice(budget)
   }
 }
 
-/** Gives a tick's (and a reparse's) ingest context the hook derive.mjs calls inside each transaction that deletes a nodes_fts row: it
+/** Gives a tick's (and a reparse's, and the recover arm's pass's) ingest context the hook derive.mjs calls inside each transaction that deletes a nodes_fts row: it
  *  registers the merge step pending, as the blob paths register it, so mergeSteps merges nodes_fts too. A function of its
  *  own and `db` last, because the tick's docstring test reads every `name(db` in the body as a step to list.
  *  D-4609 (history-nodes-fts-merged-after-rewrite) */
@@ -5200,7 +5205,7 @@ function registerNodesMerge(ictx, db) {
  *  budget, until FTS5 reports nothing left to merge in either table: a total_changes() delta under 2 from blobs_fts's
  *  merge and from nodes_fts's. Only then does the guarantee on the index's bytes hold. The step is registered pending by
  *  every writer that deletes index rows: the blob paths, and the node paths through the context's onNodesFtsDeleted hook
- *  (the tick installs it, D-4609 (history-nodes-fts-merged-after-rewrite)). */
+ *  (the tick, `reparse --apply` and the recover arm's pass install it, D-4609 (history-nodes-fts-merged-after-rewrite)). */
 export function mergeSteps(db, ctx, budget) {
   if (ctx.fts !== true) return;
   const d = derivStmts(db);

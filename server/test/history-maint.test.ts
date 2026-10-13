@@ -1005,8 +1005,10 @@ describe('reparse: targets, the 500-leaf limit, pruned spans refused, ids kept, 
     expect(sourcesOf(box)).toEqual(sources);
   }, HEAVY);
 
-  it('RB5: a leaf whose derivation still throws is recorded parse-failed and counted once, the other is re-derived, and the next reparse retries it', () => {
+  it('RB5: a leaf whose derivation still throws is recorded parse-failed and counted once, the other is re-derived, and the next reparse retries it', (ctx) => {
     const box = twoLeaves('ccrc-hist-rb5b-');
+    // HB1 H-198: the nodes_fts pins below are unconditional, so a Node without FTS5 skips the case, never reports it green unchecked.
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();
     const before = leafRows(box);
     // The LATER leaf's summary blob: the earlier leaf's derivation never reads it (topics read the previous summary).
     const last = maintQ<{ node_id: string; s: number }>(box,
@@ -1014,10 +1016,9 @@ describe('reparse: targets, the 500-leaf limit, pruned spans refused, ids kept, 
     expect(last.s, 'CONTROL: a native leaf names its summary blob (Task 8)').toBeGreaterThan(0);
     const crash0 = crashes(box);
     // HB1 H-51: the crashed leaf's nodes_fts row is rewritten empty (markReparseCrash's indexNode), not left holding the old gist.
-    const fts = maintMeta(box, 'fts') === 'ready';
     const ftsGist = (): string | undefined =>
       maintQ<{ gist: string }>(box, 'SELECT gist FROM nodes_fts WHERE rowid = (SELECT rowid FROM nodes WHERE node_id = ?)', last.node_id)[0]?.gist;
-    if (fts) expect(ftsGist(), 'CONTROL: the leaf\'s old gist is indexed').toBe(before.find((x) => x.node_id === last.node_id)!.gist);
+    expect(ftsGist(), 'CONTROL: the leaf\'s old gist is indexed').toBe(before.find((x) => x.node_id === last.node_id)!.gist);
     const r = runShim(box, ['--op', 'reparse', '--apply'], { preloads: [PRELOADS.faults], env: { HISTORY_TEST_THROW_BLOB: String(last.s) } });
     expect(r.code, r.stderr).toBe(0);
     expect(lastResult(r.stdout)).toEqual({ rc: 0 });
@@ -1027,7 +1028,7 @@ describe('reparse: targets, the 500-leaf limit, pruned spans refused, ids kept, 
     expect(mid.filter((x) => x.node_id !== last.node_id), 'the other leaf is re-derived as it was')
       .toEqual(before.filter((x) => x.node_id !== last.node_id));
     expect(maintQ(box, 'SELECT kind FROM node_refs WHERE node_id = ?', last.node_id), 'a crashed leaf holds no refs').toEqual([]);
-    if (fts) expect(ftsGist(), 'and an empty nodes_fts row, so its old gist matches nothing').toBe('');
+    expect(ftsGist(), 'and an empty nodes_fts row, so its old gist matches nothing').toBe('');
     expect(crashes(box) - crash0, 'counted once').toBe(1);
     const again = runShim(box, ['--op', 'reparse', '--apply']);
     expect(again.code, again.stderr).toBe(0);
@@ -1075,7 +1076,9 @@ describe('reparse: targets, the 500-leaf limit, pruned spans refused, ids kept, 
     const r = runShim(box, ['--op', 'reparse', '--apply'], {
       preloads: [PRELOADS.faults], env: { HISTORY_TEST_THROW_SQL: 'CASE WHEN b.entry_id IS NULL THEN 0 ELSE 1 END AS is_boundary' },
     });
-    expect(r.code, 'the fault ends the pass').not.toBe(0);
+    // HB1 H-196 (D-4602): a store fault is the pass's internal error, exit 1 with the SQLite message, as a code defect is.
+    expect(r.code, `the fault ends the pass as exit 1 (${r.stderr})`).toBe(1);
+    expect(r.stderr, 'with the internal-error line').toContain('history-sweep: internal error:');
     expect(r.stdout, 'and the pass does not report the leaves reparsed').not.toMatch(/history-sweep: reparsed /);
     expect({ leaves: leafRows(box), refs: refsOf(box), fts: ftsRows(), crash: crashes(box) }, 'no leaf is wiped and no crash is counted').toEqual(before);
   }, HEAVY);

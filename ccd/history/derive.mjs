@@ -582,8 +582,8 @@ function parentsBudgetLeft(budget) {
 
 /** Tells the tick that nodes_fts rows were deleted (or replaced), so their term bytes wait in nodes_fts_data until FTS5
  *  merges them. Called INSIDE the transaction that deleted the rows, once ictx.fts holds, and a no-op for a context that
- *  carries no hook (an --op pass, a test): the tick's context registers the merge step ('fts-merge', 1), which now
- *  merges nodes_fts beside blobs_fts, so a redacted node value is no index byte once the steps complete (spec §6.2).
+ *  carries no hook (a test, or an --op pass other than reparse and the recover arm's pass): the tick's context, a reparse's and
+ *  the recover arm's register the merge step ('fts-merge', 1), which now merges nodes_fts beside blobs_fts, so a redacted node value is no index byte once the steps complete (spec §6.2).
  *  D-4609 (history-nodes-fts-merged-after-rewrite) */
 function nodesFtsDeleted(ictx) {
   if (ictx.fts === true && typeof ictx.onNodesFtsDeleted === 'function') ictx.onNodesFtsDeleted();
@@ -821,7 +821,10 @@ function sameParentFields(stored, rolled) {
  *  re-roll would leave as they are is not touched. */
 function parentReroller(db, ictx, onlyIfChanged = false) {
   const s = parentStmts(db);
-  const kidsOf = db.prepare('SELECT child_id FROM node_children WHERE node_id = ? ORDER BY ord');
+  // A child row that is gone (a damaged store: node_children.child_id is RESTRICT, and doctor --repair keeps an existing FK
+  // violation as its baseline) is skipped, so the parent is rebuilt fail-closed from the children that remain and storedNode
+  // is never asked for a row that is not there. D-4610 (history-reroll-from-redacted-children), H-155.
+  const kidsOf = db.prepare('SELECT nc.child_id AS child_id FROM node_children nc JOIN nodes n ON n.node_id = nc.child_id WHERE nc.node_id = ? ORDER BY nc.ord');
   const setParent = db.prepare('UPDATE nodes SET gist = ?, topics = ?, earliest_ms = ?, latest_ms = ?, src_chars = ?, '
     + 'desc_count = ?, desc_chars = ?, directive_flag = ?, capped = ?, parser_version = ? WHERE node_id = ?');
   const dropRefs = db.prepare('DELETE FROM node_refs WHERE node_id = ?');
@@ -855,9 +858,10 @@ const REROLL_CHUNK = 500;
  *  is read through redactedRollup, so no cut is made on unredacted text (D-4610 (history-reroll-from-redacted-children)).
  *  Every caller that rewrites nodes in place passes the ids it rewrote, so a parent cut through a value is rebuilt on
  *  every path that can leave one; the cost is bounded by the ancestors of the set, as the rewrite is by the set.
- *  Returns how many parents it rewrote. */
-export function rerollParents(db, ictx, nodeIds) {
-  const reroll = parentReroller(db, ictx);
+ *  Returns how many parents it rewrote; with `onlyIfChanged`, a parent whose re-roll is what it stores is left untouched
+ *  and not counted (the belt's call, D-4610, H-154). */
+export function rerollParents(db, ictx, nodeIds, onlyIfChanged = false) {
+  const reroll = parentReroller(db, ictx, onlyIfChanged);
   // A derived DAG may share a child between valid parents. Walk every reverse edge, not parentOf's deterministic
   // convenience answer; UNION makes this terminate even if a damaged table contains a cycle.
   // The seeds go to the query in chunks of REROLL_CHUNK ids (a test lowers it with ictx.rerollChunk): one IN list over
@@ -950,7 +954,9 @@ function markReparseCrash(db, ictx, s, nodeId) {
  *  are not folded again. A leaf whose boundary, holding copy or summary cannot be read answers 'skipped' and writes
  *  nothing (a parse-failed leaf is never skipped for its summary: leafFields reads that as a raw leaf; D-4602, H-55). A derivation that
  *  throws for any reason but a store fault (a parser bug, RB5) is recorded by markReparseCrash and answers 'failed'; a busy store
- *  and any other SQLite error propagate (D-4602, H-59), as in deriveLeaves. `pass` is deriveLeaves' cache
+ *  and any other SQLite error propagate (D-4602, H-59). deriveLeaves does not: it files a non-busy SQLite fault inside leafFields
+ *  as a parse-failed leaf (deriveOne) and any other non-busy throw as a recorded crash (parser_crash and a leaf-crashed marker),
+ *  where this function rethrows it. `pass` is deriveLeaves' cache
  *  ({ copy, epochs, files }); reparseLeaves shares one across its targets, so a copy is planned once per run. */
 export function refreshLeaf(db, ictx, nodeId, pass = { copy: null, epochs: new Map(), files: new Map() }) {
   const s = stmts(db);
@@ -1114,7 +1120,10 @@ export function redactNodeFields(db, ictx, nodeIds) {
  *  the leaf parse-failed, counts parser_crash once and answers 'failed', which counts as a change here). A throw that
  *  escapes refreshLeaf (its reads before leafFields; busy rethrows) is counted parser_crash, as deriveLeaves counts a
  *  derive throw, and skipped; the caller's redactNodeFields then
- *  rewrites its stored fields fail-closed. Nothing retries it on a later pass (the coordinator's ruling RB5): the
+ *  rewrites its stored fields fail-closed. That includes a non-busy SQLite fault raised anywhere in refreshLeaf's try
+ *  (leafFields included), which refreshLeaf rethrows (D-4602, H-59): here it is caught, counted as parser_crash and the
+ *  leaf rewritten fail-closed, so the store-fault-is-not-a-parser-bug distinction holds only for `reparse --apply`
+ *  (D-4602, H-194). Nothing retries it on a later pass (the coordinator's ruling RB5): the
  *  recovery reindex moves its cursor past it, and the late-pair fast path (rederiveGistsFor, from B1's
  *  reindexForValues, which never moves the mark) stops searching the value once B1's rederiveFts has opened a
  *  generation (lib's phraseValues then hands it only the values its tick recorded) or completed one (the mark is then
@@ -1140,7 +1149,11 @@ export function reparseFailClosed(db, ictx, nodeIds) {
 
 /** The most leaves one call of the late-pair fast path (rederiveGistsFor) re-derives, one refreshLeaf each and one
  *  re-roll over all of them: the size of a recovery batch. A test lowers it with ictx.rederiveLeafMax. The overflow gets a
- *  field rewrite and an ancestor re-roll, and only `reparse` re-derives it.
+ *  field rewrite and an ancestor re-roll, and only `reparse` or a recovery's reindex re-derives it. A residual (H-152): an
+ *  overflow leaf whose own gist was cut inside the value before the pair was known keeps that prefix in nodes.gist, nodes_fts
+ *  and its ancestors' re-rolled gists, because redactField matches whole runs (and, under layer 4, stretches of the belt width
+ *  K or more), so a prefix shorter than K is masked by neither the field rewrite nor the belt; it stays until that
+ *  re-derivation, as a pruned leaf's does.
  *  D-4611 (history-late-pair-fast-path-bounded) */
 const REDERIVE_LEAF_MAX = 64;
 
@@ -1184,8 +1197,10 @@ export function rederiveGistsFor(db, ictx, values, budget, slice) {
   }
   // D-4611 (history-late-pair-fast-path-bounded): at most REDERIVE_LEAF_MAX leaves are re-derived per call, in node-id order.
   // The overflow is rewritten in place, fail-closed, with no summary read, and its ancestors are re-rolled below like every
-  // other rewritten node's. Once rewritten it no longer phrase-matches, so no later call reaches it: only `reparse`
-  // re-derives it from its summary, and the belt's node step finishes whatever the search could not find.
+  // other rewritten node's. Once rewritten it no longer phrase-matches, so no later call reaches it: only `reparse` or a
+  // recovery's reindex re-derives it from its summary, and the belt's node step finishes whatever the search could not find.
+  // Residual (H-152): an overflow leaf whose own gist was cut inside the value before the pair was known keeps a prefix shorter
+  // than the belt width K in nodes.gist, nodes_fts and its ancestors' re-rolled gists, until that re-derivation.
   const all = [...reparse].sort();
   const max = Number.isSafeInteger(ictx.rederiveLeafMax) && ictx.rederiveLeafMax > 0 ? ictx.rederiveLeafMax : REDERIVE_LEAF_MAX;
   const leaves = all.slice(0, max);
@@ -1267,8 +1282,9 @@ export function beltNodesStep(db, ictx, slice) {
     }).map((n) => n.node_id);
     if (dirty.length > 0) {
       redactNodeFields(db, ictx, dirty);
-      // The ancestors of every node it rewrote are rebuilt from redacted children, as the fast path does.
-      rerollParents(db, ictx, dirty);
+      // The ancestors of every node it rewrote are rebuilt from redacted children, as the fast path does, and an ancestor whose
+      // re-roll is what it stores is left alone (a node dirty for its index row alone changes none; D-4610, H-154).
+      rerollParents(db, ictx, dirty, true);
     }
     after = Number(batch[batch.length - 1].rid);
     withTx(db, 'NORMAL', () => { setStep(db, BELT_NODES_STEP, 1, String(after), null); });
