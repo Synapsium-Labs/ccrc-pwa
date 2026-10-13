@@ -72,6 +72,20 @@ export interface PendingSend {
    *  to stay correct today, and showing "queued" instead of "sending" is one
    *  line in it whenever that file is next open. */
   queued?: boolean;
+  /** D-4952. The newest TRANSCRIPT timestamp this store held when the operator
+   *  pressed send, in epoch ms: the BOX's clock, read off the events already
+   *  on screen, never the phone's. Only an event strictly newer than this can
+   *  be this message's echo (`isFresh`).
+   *
+   *  Stamped once, at `send()`, and kept across `retry`/`resolve`: a re-send is
+   *  the same message, and an echo of ANY attempt is newer than the moment it
+   *  was first sent. What this excludes is history that predates the message
+   *  entirely — which is what a backlog replays.
+   *
+   *  ABSENT when nothing from the transcript was on screen yet (before the
+   *  first backlog, or right after a `rotated`): then there is no bar, and any
+   *  matching event clears the bubble, exactly as before the field existed. */
+  sentAfter?: number;
 }
 
 export interface SessionState {
@@ -311,12 +325,95 @@ const revoke = (p: PendingSend | undefined): void => {
   for (const a of p?.attachments ?? []) if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
 };
 
-/** Drop 'sending' pendings whose composed text just arrived back as a real
- *  user event. The server injects composePrompt(text, paths), so matching on
- *  p.text alone would never fire for an attachment send. Returns the KEYS it
- *  dropped alongside the next list — this function is pure and outside the
- *  store closure, so it cannot cancel a pending's own timer itself; the call
- *  site does that with `cleared`. */
+/** D-4952. The newest timestamp among the TRANSCRIPT events in `events`, epoch
+ *  ms — the bar a pending's echo has to clear (`PendingSend.sentAfter`).
+ *
+ *  WHY THE BOX'S CLOCK, and not a `Date.now()` stamped at send. A backlog is a
+ *  replay: it re-sends up to the last fifty events of history (a reconnect, a
+ *  swap repoint, a fork follow, the registry catch-up), and with a pending now
+ *  living ten minutes, an old "yes" in that window used to clear a new,
+ *  undelivered "yes". Telling the replay from the echo needs a statement of
+ *  "after the send", and the two candidates fail differently:
+ *  - a phone-clock stamp compares the phone's clock with timestamps Claude
+ *    Code wrote on the box. Any skew lands straight in the answer: a phone a
+ *    few seconds AHEAD refuses an idle session's echo, which arrives about a
+ *    second after the send, and a phone BEHIND re-admits the very history this
+ *    exists to refuse. Phone clocks are user-settable, and a skew allowance
+ *    wide enough to be safe is a window of replayed history let back in.
+ *  - a uuid seen-set is skew-free but answers a different question ("has this
+ *    store seen this record?"): a store holds only what its last backlog's
+ *    window showed it plus what it tailed since, so history it missed while
+ *    disconnected reads as new, and a copy under fresh uuids would pass it.
+ *  Both operands here come from ONE clock: the bar is the newest event on
+ *  screen when the operator pressed send, the echo's time is the record Claude
+ *  Code writes after it, and both were written by Claude Code on the same box
+ *  (a swap moves a session between accounts on its box; a fork stays on it).
+ *  A copy keeps its timestamps: the 2.1.296 binary writes the fork's history
+ *  as `{...record, sessionId: <new>, parentUuid, forkedFrom: {…}}`, the
+ *  original `uuid` and `timestamp` carried over. The one way this errs is the
+ *  box's clock stepping BACKWARDS between the bar and the echo, and that errs
+ *  toward the ten-minute fallback — never toward clearing an undelivered
+ *  message.
+ *
+ *  Local dividers are skipped: they are minted here with the PHONE's clock
+ *  (`localDivider`), and one on screen would raise the bar to phone time. An
+ *  event whose `ts` does not parse is skipped too — a NaN in the running max
+ *  would make every later comparison false and no echo could ever clear. */
+function newestTranscriptTs(events: ChatEvent[]): number | undefined {
+  let newest: number | undefined;
+  for (const e of events) {
+    if (isLocalDivider(e)) continue;
+    const t = Date.parse(e.ts);
+    if (Number.isNaN(t)) continue;
+    if (newest === undefined || t > newest) newest = t;
+  }
+  return newest;
+}
+
+/** D-4952. Whether `e` can be `p`'s echo at all: newer than the bar `p` was
+ *  sent over. Strictly newer — the bar IS an event the operator had already
+ *  seen. An event whose own time does not parse cannot be shown to be newer,
+ *  so against a bar it never clears; with no bar it is accepted as before. */
+const isFresh = (e: ChatEvent, p: PendingSend): boolean =>
+  p.sentAfter === undefined || Date.parse(e.ts) > p.sentAfter;
+
+/** D-4951. The command a pending would run, when it is one: the first word of
+ *  the composed text if that text starts with `/` (`/effort ultracode` ->
+ *  `/effort`), else null.
+ *
+ *  A slash command's echo is a `system` row whose text is the command NAME
+ *  alone (`transcript/parse.ts`'s `harnessEnvelope` reads `<command-name>`;
+ *  the arguments ride a separate `<command-args>` member and never come back
+ *  in the text). Measured over the fleet's 60 most recent transcripts, every
+ *  command an operator typed carries its slash in that member (`/effort`,
+ *  `/compact`, `/model`, `/clear`, …); the slashless ones are skills the model
+ *  loaded itself, which no pending sent.
+ *
+ *  Prose is null on purpose. A command's own stdout is a `system` row too and
+ *  can be a single word, so "a system row equal to the text" would let one
+ *  clear an operator's "ok". Read off the COMPOSED text, so a send with
+ *  attachments — whose composed text leads with a clip path, and which the
+ *  pane therefore never ran as a command — names a path no echo carries. */
+const slashCommandOf = (p: PendingSend): string | null => {
+  const composed = composePrompt(p.text, pathsOf(p) ?? []);
+  return composed.startsWith('/') ? composed.split(/\s/, 1)[0]! : null;
+};
+
+/** Drop 'sending' pendings whose echo just arrived. Two echo shapes:
+ *  - a `user` event whose text is the pending's composed text — the server
+ *    injects composePrompt(text, paths), so matching on p.text alone would
+ *    never fire for an attachment send. Since D-4950 this includes a message
+ *    the session absorbed mid-turn, which the parser now reads as a user event.
+ *  - a `system` event naming the pending's slash command (D-4951). Before it,
+ *    the long fallback timer was the only thing that ever cleared a command's
+ *    bubble — five seconds once, ten minutes since the queued stage, which left
+ *    a "sending /compact" under the compaction it had visibly run. The timer
+ *    stays as the fallback for a command that echoes nothing.
+ *  Either way the event must be newer than the send (D-4952, `isFresh`).
+ *
+ *  Returns the KEYS it dropped alongside the next list — this function is pure
+ *  and outside the store closure, so it cannot cancel a pending's own timer
+ *  itself; the call site does that with `cleared`. */
 function clearConfirmed(
   pending: PendingSend[], msg: SessionStreamMsg,
 ): { pending: PendingSend[]; cleared: string[] } {
@@ -324,10 +421,11 @@ function clearConfirmed(
   let next = pending;
   const cleared: string[] = [];
   for (const e of msg.events) {
-    if (e.kind !== 'user') continue;
-    const i = next.findIndex(
-      (p) => p.state === 'sending' && composePrompt(p.text, pathsOf(p) ?? []) === e.text,
-    );
+    let echoes: (p: PendingSend) => boolean;
+    if (e.kind === 'user') echoes = (p) => composePrompt(p.text, pathsOf(p) ?? []) === e.text;
+    else if (e.kind === 'system') echoes = (p) => slashCommandOf(p) === e.text;
+    else continue;
+    const i = next.findIndex((p) => p.state === 'sending' && isFresh(e, p) && echoes(p));
     if (i >= 0) {
       revoke(next[i]);
       cleared.push(next[i]!.key);
@@ -647,6 +745,8 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         set((s) => ({ pending: [...s.pending, {
           key, text, state: 'sending',
           replaceDraft: opts.replaceDraft, attachments: opts.attachments,
+          // D-4952: the bar this message's echo has to clear, on the box's clock.
+          sentAfter: newestTranscriptTs(s.events),
         }] }));
         await dispatch(key, text, { replaceDraft: opts.replaceDraft, attachments: pathsOf(opts) });
       },
