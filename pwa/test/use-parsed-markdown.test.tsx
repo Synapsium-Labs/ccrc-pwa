@@ -174,3 +174,24 @@ describe('useParsedMarkdown', () => {
     expect(calls.map((c) => c.src)).toEqual(['a', 'ab']);
   });
 });
+
+describe('T11 review 3-3: a non-current job that rejects clobbers nothing', () => {
+  it('under StrictMode, the aborted first job rejecting does not strand the second: its tree still applies', async () => {
+    // The real runner rejects an aborted job with the signal's reason; this parser does the same.
+    const calls: Call[] = [];
+    const parser: MarkdownParser = (src, opts) =>
+      new Promise<ParseOutcome>((resolve, reject) => {
+        calls.push({ src, opts, resolve, reject });
+        opts.signal?.addEventListener('abort', () => { reject(opts.signal?.reason); }, { once: true });
+      });
+    const { result } = mount(parser, { text: 'a' }, true);
+    expect(calls).toHaveLength(2);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const second = treeOf('second');
+    await settle(calls[1], tree(second));
+    expect(result.current.pending).toBe(false);
+    expect(result.current.outcome).toEqual(tree(second));
+  });
+});
