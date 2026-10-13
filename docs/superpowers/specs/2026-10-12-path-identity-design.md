@@ -760,6 +760,104 @@ Executor, route and census:
 - `SESSION_ONLY` adds the path so its source scan covers the POST and its auth assertion proves both GET and POST absent from `EXEMPT`; the no-box-token census and its CLAUDE.md prose add the POST coordination write. A separate route test proves the GET also consults no box token. The exempt-from-naming list and all three skill forbid-mention suites cover both methods and the marker.
 - PWA tests cover every state, the confirm sheet, pre-latch Off policy, other-node view, mismatch and 404.
 
+### §5 as built (CCR-15 wave 10, run 400)
+
+This note says how wave 10 of the child-reclamation programme (run 400) built this section, and where the build reads
+it more narrowly than the text above or Figure 5. It amends; it edits no earlier text. The programme contract's
+"§17 as built" states the same points. Inventory items 38, 40 and 41 shipped in this wave.
+
+**Reconciled before the build.** The wave 10 plan's rulings settle where the sections above and Figure 5 differ, and
+the code keeps each:
+- **Unknown node (§5.2, §5.5, §5.7).** A stored Live while the current node is unmeasured or in collision is stopped as
+  an unknown fleet, never shadowed: nothing is composed, every observation pair is cleared, no flip row is written,
+  and Settings shows "Unknown fleet". The legacy file still arms before its retirement, because Figure 5 asks about
+  the file before the node. A stored Live for a measured, different node is shadowed, and Settings asks for a fresh
+  confirm.
+- **Stopped and safety-stopped (§5.5).** A connection-epoch change is a stop, beside a raised pause and an unlistable
+  registry: nothing is composed, every pair is cleared, and no feed row is written. The executor names it
+  `epoch-changed`, and Settings shows it as "Unknown fleet". Only a control state that cannot be proved coherent is
+  safety-stopped, and only that writes a flip row, naming its reason.
+- **The job's epoch (§5.2, §5.5).** An act job carries the epoch its lane's pairs stand under, captured when the job is
+  queued. Step 6 compares it with the epoch read after the final listing, so a reconnect during the second audit, or
+  between the queueing and the start, composes nothing. The epoch is still read before the final listing, as §5.2
+  says. An epoch change between passes, or during a pass's gather, clears every pair, and that pass retires nothing.
+- **The latch is decided apart from the arm (§5.4).** One helper retires the legacy file, from the pass's own listing
+  and from the executor's final listing, through the store's one writer, only when the listing is coherent, unpaused,
+  on the same epoch and shows the file absent with the latch unset. So a stored Live on an unknown node still retires
+  a removed file. It never runs from the route and never heals a mismatch. Its one `kind:'coord'` row is titled
+  `temp root collector setting changed`, and its body ends `; by collect sweep`.
+- **Step 6's order (§5.5).** Resolution and the flip come first, right after the final listing, as the file's flip
+  did; the per-id checks follow, and no await stands between the final listing and the argv. Both `collect-v1` and
+  `reclaim-pause-v1` are read again at step 6. The executor's flip word is now `switch-flip`. Warn latches are kept per
+  safety-stop reason and for a re-created file, and a coherent resolution re-arms them. A latch the store refuses,
+  fails or throws on before its append (a busy database) never rejects the job or the pass: the pass's outcome is
+  warned once per kind until the latch retires, and Off stays refused meanwhile.
+- **Local mode (§5.2).** The epoch is a constant 0, and the node is the server box's own, measured directly. The
+  connection label is never identity.
+- **Storage (§5.2, §5.3).** The row's columns are camelCase (`choice`, `fleetNodeId`, `markerRetiredAt`, `generation`,
+  `updatedAt`), the coordination database's own style. An absent row answers `503 state-unmeasurable` to both verbs,
+  and the server never inserts one. The GET answers 200 with a safety-stopped view for a malformed or unreadable row
+  and for every journal fault; the POST answers 503 for every control state it cannot measure.
+- **The route (§5.6).** `501 not-configured` also answers when no journal is wired. The confirm key is FNV-1a 32-bit
+  over the canonical JSON of the facts, eight lowercase hex digits, and binds a per-process boot nonce, so a key
+  minted before a restart cannot pass; the 409's facts carry neither the nonce nor the epoch. A Live that changes
+  nothing still needs a fresh confirm, then answers 200 with no generation and no event. Off never reads the listing:
+  before the latch it answers `409 marker-still-controls`, and after it Off is accepted while the registry is
+  unlistable or the epoch moved. A 200 says the choice applies from the collector's next check.
+- **Settings (§5.7).** The view's would-collect and held counts are the server's, read from the lane's own memory; the
+  PWA counts nothing. "Confirm Live again" is offered for a stored Live on another node and for a mismatch. Off's note
+  follows the listing: §5.7's text while the file stands, a pending line while it is absent and not yet retired, and
+  an unmeasured line otherwise. "Pause all cleanup" names the four lanes it stops: child reclamation,
+  archived-workspace expiry, the dead-coordinator lane and this collector. It offers Pause only; Resume stays on
+  `/runs`. The update apply sheet and the rollout report announce nothing about a stored Live.
+- **L0 (§5.7).** `shared/api.ts` also declares `CollectLaneRequest` and the route's refusal words,
+  `COLLECT_LANE_REFUSALS` with `isCollectLaneRefusal`.
+
+**How the control state fails (§5.3).** Three points, in neutral words.
+- The journal reader accepts value-equal spellings of a number, such as `1.0` or `1e0`, and a duplicate key resolves
+  last-wins. It proves values, not spelling, and only a hand edit can produce one.
+- A failed latch retire at the update or commit step leaves the lane safety-stopped, with Off refused. A confirmed Live
+  is the repair.
+- A failed journal append can leave a torn tail that needs a hand repair. The row is unchanged by it, but the journal
+  may not be: a landed write whose fsync throws leaves the journal one generation ahead (a mismatch), and a failed or
+  short write can leave a torn or empty tail, which reads unmeasurable until it is repaired by hand. Both stop the lane
+  and arm nothing, and the route answers `503 write-failed`.
+
+**The stated residual.** An Off accepted after an act's argv was handed to ccd cannot stop that act. This extends
+wave 9's `marker-removal-after-the-last-listing-still-composes` from the file to the switch.
+
+**A second stated residual: `pre-latch-snapshot-repair-readopts-an-unset-latch`.** Suppose `coord.db` is restored on its
+own from a snapshot taken before the latch was recorded, and the later journal stays beside it. The lane is then
+safety-stopped (§5.3). Its only repair is a confirmed Live, because Off is refused while the latch is unset and the latch
+never heals a mismatch. That Live keeps the restored row's unset latch. Once it has repaired the mismatch, a standing or
+re-created legacy file arms the lane again, on any node, and Off is refused again. This lasts until the next coherent,
+unpaused, same-epoch listing shows the file absent and retires the latch. So §5.3's "the restored null latch cannot
+revive the marker" holds only until that repair. The window needs the file to stand, and the confirm sheet does not
+name it.
+
+**Carried, not fixed.** The coordinator skill's `references/resume.md` still names the newest `coord.db` snapshot as
+the restore path with no word on the journal: skill text is outside this wave, and a restore that follows it fails safe,
+because no backup holds the journal. The manual-downgrade hint's copy of `coord.db` over a live write-ahead log is left as it was;
+this wave adds only the line that leaves the journal in place.
+
+**Citations, re-measured.** On this tree the marker's docstring and constant, cited above as `collectLane.ts:30-35` in
+§1.1 and §5.1, stand at `server/src/collectLane.ts:32-37`. The registry listing cited as `collectTempRoot.ts:290-296`
+is `collectSwitches`, whose docstring starts at `server/src/coord/collectTempRoot.ts:349` and whose body runs to
+`:365`, and the unlistable-registry arm cited as `:293` is `:363`. The earlier text is left as written.
+
+**Departures found while building.**
+- `journal-reads-non-canonical-number-spellings`: The journal reader accepts value-equal spellings of a number, such as `1.0` or `1e0`, and a duplicate key resolves last-wins. It proves values, not spelling, and only a hand edit can produce one.
+- `plan-ruling-number-in-shipped-comment`: Shipped comments name a ruling's subject and never a plan ruling number, because those numbers collide with the programme contract's own; the comments that carried one were reworded.
+- `node-epoch-guard-two-sided`: The resolver's node-epoch guard is an exact comparison, and a case pins both sides: a node measured on a later connection than the one the check stands under is stopped as an unknown fleet, as an earlier one is.
+- `adapter-comment-trips-the-handle-reach-scan`: The journal adapter's header comment spells `coord.db` in backticks, because the plain spelling tripped the handle-reach scan of the single-definition suite; the scan stays armed and the meaning is unchanged.
+- `a-failed-journal-append-can-leave-a-torn-tail`: A failed or short journal append can leave a torn or empty tail, which reads unmeasurable and stops the lane until it is repaired by hand; the adapter does not undo a failed write, and arming nothing is the safe direction.
+- `latch-warn-key-outlives-an-executor-retire`: A warn key for the latch can outlive a retirement made by the executor, so after a database restore under a running server one repeat warning may be suppressed; this is log hygiene only.
+- `route-suite-header-list-annotated`: The route suite types its list of header sets as string records so that the suite type-checks; its assertions are unchanged.
+- `row-12-coord-token-counts-check-sites-only`: The coordination token census counts `checkMailToken` call sites only, so a gate added through the `requireMailToken` helper is held by the route suite's behaviour and source-scan rows and by the pause route's ungated set, not by that census.
+- `inventory-throw-publishes-refused-pinned`: A sweep case with a throwing store pins that a throw while recording a node publishes an `inventory-refused` cell, not nothing.
+- `stale-line-pinned-in-section`: The Settings section pins one case beyond the plan's list: a read that did not land keeps the last view, marked stale, so a kept Live is never shown as current.
+- `usage-shift-unpinned-by-citations`: A shift in the update and backup usage text is measured by the citation anchors' hash, not by the session-hook suite, which stays green.
+
 ## 6. The waves
 
 This section orders the work. One rule shapes it: every `ccd/ccd` edit waits for workspace-lifecycle W6 (#351, which holds `ccd/ccd`) to merge, and the ccd waves then go in series. Anything shared with ws-expire also needs the consent of workspace-lifecycle's coordinator for each wave (the cross-programme precedent).

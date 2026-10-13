@@ -8024,8 +8024,10 @@ export class CoordStore {
  *    reads the decision saw; `after` and `journalAfter` are the reads taken AFTER the commit, the caller's proof.
  *  - `unchanged`: a true no-op, with the row it found. No generation is consumed.
  *  - `refused`: the decision's refusal and its bounded detail. Nothing is written and no generation is consumed.
- *  - `failed`: a throw at or after the append. At `append` nothing changed. At `update` or `commit` the journal is AHEAD
- *    of the row, a measurable mismatch. `code` is the error's code word, never its message. */
+ *  - `failed`: a throw at or after the append, which the route answers 503 `write-failed`. At `append` the row is unchanged
+ *    but the journal may not be: a landed write whose fsync throws leaves it one generation AHEAD (a mismatch), and a failed
+ *    or short write can leave a torn or empty tail, unmeasurable until a hand repair. At `update` or `commit` the journal is
+ *    AHEAD of the row. Each stops the lane and arms nothing. `code` is the error's code word, never its message. */
 export type CollectLaneWrite =
   | { readonly kind: 'written'; readonly generation: number; readonly before: CollectLaneRowRead;
       readonly journalBefore: CollectLaneJournalRead;

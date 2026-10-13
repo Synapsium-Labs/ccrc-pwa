@@ -1114,8 +1114,8 @@ export interface CollectBoxProbeState {
   readonly changedAtMono: number;
 }
 
-/** The box-wide probes after one answer, by when it ARRIVED (spec §5.10): an answer that arrived before the probes' latest
- *  change says nothing of them, so it is skipped whole. An act job folds its second audit when the JOB settles, which
+/** The box-wide probes after one answer, by when it ARRIVED (spec §5.10): an answer that arrived before the probes were
+ *  last rebuilt says nothing of them, so it is skipped whole. An act job folds its second audit when the JOB settles, which
  *  can be after a later answer set or cleared a probe; only the arrival tells the older answer from the newer. A tie
  *  applies (`<`, never `<=`). Otherwise `collectBoxProbesAfter` decides, and the stamp moves to the arrival whenever it
  *  returns a new map, a box-wide answer re-asserting a standing probe included, since that is a newer word about the box;

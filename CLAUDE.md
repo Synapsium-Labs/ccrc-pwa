@@ -7,7 +7,7 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~6000 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` (~6100 lines) is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
@@ -286,9 +286,11 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   than open empty**. Its synchrony is a stated concurrency invariant — **do not wrap it async** (a repository/async
   interface over `CoordStore` is explicitly rejected). It is a server-side RE-MEASUREMENT of ccd's flat files
   (registry, hold, `.prhistory`), which stay ground truth; a lost coord.db re-measures those from them, but
-  what it adds on top — mail, claims, asks, central pool edges, update intents, the stall-watch settings choice —
-  is gone without the snapshot every `ccrc update` (and `ccrc backup`) takes into `~/ccrc-backups/<ts>/`
-  (`pool-edges.log` is never replayed).
+  what it adds on top — mail, claims, asks, central pool edges, update intents, the stall-watch settings choice,
+  the collector switch — is gone without the snapshot every `ccrc update` (and `ccrc backup`) takes into
+  `~/ccrc-backups/<ts>/` (`pool-edges.log` is never replayed). The switch's `collect-lane-generation.log` is never
+  copied into a snapshot or restored with one: leave it in place, so a database restored alone never re-arms the
+  collector (one from before the switch's last change is safety-stopped).
 - **Zero new ccd verbs for coordination mutation** — mutations ride already-granted `CcdArgv` (a brand built at
   the call site, never table-looked-up). Exec surface is closed: `EXEC_COMMANDS = ['tmux','ccd']`.
 - **Box token gates every coordination WRITE** (`/api/mail*`, `/api/runs*`) — header `x-ccrc-mail-token`, `401`

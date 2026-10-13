@@ -1835,9 +1835,9 @@ export class FleetWatcher {
   }
 
   /** The collector switch's counts (path-identity spec 2026-10-12 §5.7), for `GET /api/coord/collect-lane`'s view:
-   *  would collect, held (unvouched ids among them) and the box-wide lines, by L1's `collectLaneCounts` over the very
-   *  input the published attention items read (`collectAttentionInput`). `null` until a pass has measured a population,
-   *  which means "not measured yet", never zero. It adds no state; the PWA counts nothing itself. */
+   *  would collect, held (unvouched ids among them) and the box-wide lines, by L1's `collectLaneCounts` over the input
+   *  builder the published items use (`collectAttentionInput`), read at request time, not their snapshot. `null` until a
+   *  pass has measured a population, which means "not measured yet", never zero. It adds no state; the PWA counts nothing. */
   currentCollectCounts(): CollectLaneCounts | null {
     if (this.collectPop === null) return null;
     return collectLaneCounts(this.collectAttentionInput());
@@ -4467,7 +4467,7 @@ export class FleetWatcher {
   }
 
   /** Folds one AUDIT answer (spec §5.10). What it says of the BOX counts whatever became of the id: the box-wide probes,
-   *  by the answer's ARRIVAL (`collectBoxProbesAnswered`: an answer older than the probes' latest change is skipped, as
+   *  by the answer's ARRIVAL (`collectBoxProbesAnswered`: an answer from before the probes were last rebuilt is skipped, as
    *  an act job's observation 2 can be, folded when its job settles) and, for an answer a pass queued, that pass's tally
    *  (`collectPassClass`). Then the id's entry, through Task 4's `collectAfterAudit`: an OBSERVATION only when
    *  `composed` is given and both generations it captured still stand (`collectFresh`); then the feed cue. An id
