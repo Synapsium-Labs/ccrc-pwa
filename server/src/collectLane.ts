@@ -11,8 +11,9 @@
 // - its refusal words are not reclaim's;
 // - its audit is keyed `session`, not `id`.
 import {
-  CHILD_RUN_ID, COLLECT_BOX_LABELS, COLLECT_BOX_LINES, TMPROOT_ID_MAX_CHARS, isTmpRootId, lcRefusalWord,
-  type ChildReclaimCollectAttention, type CollectBoxLine, type CollectToken, type LcRefusalToken,
+  CHILD_RUN_ID, COLLECT_BOX_LABELS, COLLECT_BOX_LINES, TMPROOT_ID_MAX_CHARS, isPositiveDecimalSafeInteger, isTmpRootId,
+  lcRefusalWord, type ChildReclaimCollectAttention, type CollectBoxLine, type CollectLaneChoice, type CollectToken,
+  type LcRefusalToken,
 } from '../../shared/api.js';
 import {
   CHILD_RECLAIM_DEFER_CEILING_MS, childReclaimBackoffMs, childReclaimDetailText, childReclaimIdsNamed, childReclaimStuckEnd,
@@ -1617,4 +1618,366 @@ export function collectForgottenActRow(id: string, s: CollectJobSettled, obs2: C
   const ev = collectEvidenceOf(obs2) ?? { runId: null, leaf: null };
   return { runId: ev.runId, title: COLLECT_FEED_TITLE.collected,
     body: collectFeedCollectedBody(id, ev.runId, ev.leaf, s.result) };
+}
+
+// ── the Settings switch's durable state (path-identity spec §5.2) ───────────────────────────────────────────────
+//
+// The switch's control state is ONE database row and ONE generation journal, read together (path-identity spec
+// 2026-10-12 §5.2). This section decides what each read means, whether the two agree, and what one write would do. It
+// reads neither: the store (`coord/store.ts`) and the journal adapter (`coord/collectLaneJournal.ts`) measure, and hand
+// their reads in as arguments.
+// - The row is measured EXACTLY. The seed is `{off, null, null, 0, 0}` and nothing else, and a field outside its
+//   domain is named, never cast.
+// - The journal's grammar is STRICT. A blank, padded, torn or out-of-order record makes the whole file malformed, and
+//   nothing here rebuilds a journal from the row it exists to distrust.
+// - Coherence is EXACT EQUALITY of the journal's maximum and the row's generation. The untouched seed beside a missing
+//   journal is the one bootstrap. The maximum allocates the next generation; it never proves one.
+// - The write decision runs INSIDE the store's transaction, on the row and journal it re-read there.
+
+/** The `collect_lane_settings` row as the store reads it, every value `unknown`: `measureCollectLaneRow` decides what
+ *  each one means. The store reads with `setReadBigInts(true)`, so an INTEGER column arrives as a `bigint`. */
+export interface CollectLaneRowRaw {
+  readonly choice: unknown; readonly fleetNodeId: unknown; readonly markerRetiredAt: unknown;
+  readonly generation: unknown; readonly updatedAt: unknown;
+}
+/** The store's read of the row: a row, no row, or a read that failed (a missing table, a driver throw). Three words,
+ *  never one `null`. */
+export type CollectLaneRowRead =
+  | { readonly kind: 'row'; readonly row: CollectLaneRowRaw } | { readonly kind: 'absent' }
+  | { readonly kind: 'unreadable'; readonly detail: string };
+/** A measured row (path-identity spec 2026-10-12 §5.2):
+ *  - `choice` is the raw stored token. Only exact `live` arms through Settings; any other string reads, and arms nothing;
+ *  - `fleetNodeId` is null or a non-empty string, which arms only by exact equality with the directly measured node;
+ *  - `markerRetiredAt` is null until a listing proves the legacy marker absent, and is never cleared once set;
+ *  - `generation` is the database half of the generation proof; `updatedAt` is diagnostic, never an arming input. */
+export interface CollectLaneRow {
+  readonly choice: string; readonly fleetNodeId: string | null; readonly markerRetiredAt: number | null;
+  readonly generation: number; readonly updatedAt: number;
+}
+export type CollectLaneRowField = 'choice' | 'fleetNodeId' | 'markerRetiredAt' | 'generation' | 'updatedAt';
+/** The row, measured. `seed` is EXACTLY `{off, null, null, 0, 0}`; `malformed` names the first field, in column order,
+ *  outside its domain. `absent` and `unreadable` pass through: neither is the seed, and neither arms anything. */
+export type CollectLaneRowMeasure =
+  | { readonly kind: 'seed'; readonly row: CollectLaneRow }
+  | { readonly kind: 'row'; readonly row: CollectLaneRow }
+  | { readonly kind: 'malformed'; readonly field: CollectLaneRowField }
+  | { readonly kind: 'absent' } | { readonly kind: 'unreadable'; readonly detail: string };
+
+/** The two stored choices this section writes, typed by L0's vocabulary. */
+const COLLECT_CHOICE_OFF: CollectLaneChoice = 'off';
+const COLLECT_CHOICE_LIVE: CollectLaneChoice = 'live';
+const COLLECT_SAFE_MIN = BigInt(Number.MIN_SAFE_INTEGER);
+const COLLECT_SAFE_MAX = BigInt(Number.MAX_SAFE_INTEGER);
+/** A `bigint` inside the safe-integer range becomes a `number`; any other `bigint` stays one, which every domain below
+ *  refuses. Every other value passes through as read. A copy of `coord/stallsettings.ts`'s module-private `fromStore`:
+ *  this L1 file imports nothing from `coord/`. */
+function collectFromStore(v: unknown): unknown {
+  if (typeof v !== 'bigint') return v;
+  return v >= COLLECT_SAFE_MIN && v <= COLLECT_SAFE_MAX ? Number(v) : v;
+}
+/** `generation` and `updatedAt`: a safe integer, zero or more. `undefined` is outside the domain. */
+function collectCountOf(v: unknown): number | undefined {
+  const n = collectFromStore(v);
+  return typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : undefined;
+}
+/** `fleetNodeId`: null, or any non-empty string. `undefined` is outside the domain. */
+function collectNodeOf(v: unknown): string | null | undefined {
+  return v === null ? null : typeof v === 'string' && v !== '' ? v : undefined;
+}
+/** `markerRetiredAt`: null, or a positive safe integer. `undefined` is outside the domain. */
+function collectLatchOf(v: unknown): number | null | undefined {
+  const n = collectFromStore(v);
+  return n === null ? null : isPositiveDecimalSafeInteger(n) ? n : undefined;
+}
+
+/** THE ROW'S ONE MEASURE (path-identity spec 2026-10-12 §5.2). `choice` is any string; `fleetNodeId` null or a
+ *  non-empty string; `markerRetiredAt` null or a positive safe integer; `generation` and `updatedAt` safe integers, zero
+ *  or more. A bigint converts only inside the safe range. Never throws, never casts. */
+export function measureCollectLaneRow(read: CollectLaneRowRead): CollectLaneRowMeasure {
+  if (read.kind !== 'row') return read;
+  const { choice } = read.row;
+  if (typeof choice !== 'string') return { kind: 'malformed', field: 'choice' };
+  const fleetNodeId = collectNodeOf(read.row.fleetNodeId);
+  if (fleetNodeId === undefined) return { kind: 'malformed', field: 'fleetNodeId' };
+  const markerRetiredAt = collectLatchOf(read.row.markerRetiredAt);
+  if (markerRetiredAt === undefined) return { kind: 'malformed', field: 'markerRetiredAt' };
+  const generation = collectCountOf(read.row.generation);
+  if (generation === undefined) return { kind: 'malformed', field: 'generation' };
+  const updatedAt = collectCountOf(read.row.updatedAt);
+  if (updatedAt === undefined) return { kind: 'malformed', field: 'updatedAt' };
+  const row: CollectLaneRow = { choice, fleetNodeId, markerRetiredAt, generation, updatedAt };
+  const seed = choice === COLLECT_CHOICE_OFF && fleetNodeId === null && markerRetiredAt === null && generation === 0
+    && updatedAt === 0;
+  return seed ? { kind: 'seed', row } : { kind: 'row', row };
+}
+
+/** Why a journal is malformed (path-identity spec 2026-10-12 §5.2, §5.9):
+ *  - `empty`: an existing file with no bytes;
+ *  - `blank`: a record that is empty, is padded by whitespace at either end, or carries a carriage return;
+ *  - `json`: a record that does not parse, a torn tail included;
+ *  - `shape`: a record that parses to anything but an object;
+ *  - `generation`: an object whose own `generation` is not a positive safe integer;
+ *  - `order`: a generation not above the record before it. */
+export type CollectLaneJournalFault = 'empty' | 'blank' | 'json' | 'shape' | 'generation' | 'order';
+const COLLECT_LANE_JOURNAL_FAULT_TABLE: Readonly<Record<CollectLaneJournalFault, true>> = {
+  empty: true, blank: true, json: true, shape: true, generation: true, order: true,
+};
+export const COLLECT_LANE_JOURNAL_FAULTS: readonly CollectLaneJournalFault[] =
+  Object.keys(COLLECT_LANE_JOURNAL_FAULT_TABLE) as CollectLaneJournalFault[];
+
+/** The journal as its adapter measured it (path-identity spec 2026-10-12 §5.2). Never one `null`:
+ *  - `missing`: a PROVEN ENOENT only. It is generation 0 beside the exact seed, and unmeasurable beside anything else;
+ *  - `ok`: every record parsed, and `max` is the last, largest generation;
+ *  - `malformed`: the first fault, at its 1-based record;
+ *  - `unreadable`: an errno word only, never a message or a path (`EFBIG` past the adapter's read cap);
+ *  - `not-regular`: a symlink, a directory or anything else at the path, never followed and never read;
+ *  - `not-configured`: no journal was wired (the executor's control read only). It is never `missing`. */
+export type CollectLaneJournalRead =
+  | { readonly kind: 'missing' }
+  | { readonly kind: 'ok'; readonly max: number; readonly records: number }
+  | { readonly kind: 'malformed'; readonly fault: CollectLaneJournalFault; readonly record: number }
+  | { readonly kind: 'unreadable'; readonly code: string }
+  | { readonly kind: 'not-regular'; readonly fileKind: 'symlink' | 'directory' | 'other' }
+  | { readonly kind: 'not-configured' };
+const COLLECT_LANE_JOURNAL_KIND_TABLE: Readonly<Record<CollectLaneJournalRead['kind'], true>> = {
+  missing: true, ok: true, malformed: true, unreadable: true, 'not-regular': true, 'not-configured': true,
+};
+export const COLLECT_LANE_JOURNAL_KINDS: readonly CollectLaneJournalRead['kind'][] =
+  Object.keys(COLLECT_LANE_JOURNAL_KIND_TABLE) as CollectLaneJournalRead['kind'][];
+
+/** A record padded by whitespace at either end, or carrying a carriage return anywhere. */
+const COLLECT_JOURNAL_BLANK = /^\s|\s$|\r/;
+
+/** THE JOURNAL'S ONE PARSE (path-identity spec 2026-10-12 §5.2, §5.9). Total over every string; never throws. It splits
+ *  on newlines and drops exactly one trailing empty string, so a final newline is allowed and never required. Every
+ *  record is one JSON object whose own `generation` is a positive safe integer above the record before it; any other
+ *  property is ignored. The first fault answers, at its 1-based record. */
+export function parseCollectLaneJournal(text: string): Extract<CollectLaneJournalRead, { kind: 'ok' | 'malformed' }> {
+  if (text === '') return { kind: 'malformed', fault: 'empty', record: 1 };
+  const records = text.split('\n');
+  if (records[records.length - 1] === '') records.pop();
+  let max = 0;
+  for (let i = 0; i < records.length; i += 1) {
+    const rec = records[i];
+    const record = i + 1;
+    if (rec === '' || COLLECT_JOURNAL_BLANK.test(rec)) return { kind: 'malformed', fault: 'blank', record };
+    let doc: unknown;
+    try { doc = JSON.parse(rec); } catch { return { kind: 'malformed', fault: 'json', record }; }
+    if (!isObject(doc)) return { kind: 'malformed', fault: 'shape', record };
+    const generation = hasOwn(doc, 'generation') ? doc.generation : undefined;
+    if (!isPositiveDecimalSafeInteger(generation)) return { kind: 'malformed', fault: 'generation', record };
+    if (generation <= max) return { kind: 'malformed', fault: 'order', record };
+    max = generation;
+  }
+  return { kind: 'ok', max, records: records.length };
+}
+
+/** The generation journal: an L2 port declared by its consumers (the store's one writer, the executor's final re-read,
+ *  the route). `read` never throws. `appendGeneration` writes exactly `{"generation":g}` and a newline, with a leading
+ *  newline first when the file lacks a final one, fsynced before it returns. It throws, with an errno `code`, on any
+ *  failure. */
+export interface CollectLaneJournal { read(): CollectLaneJournalRead; appendGeneration(generation: number): void }
+
+/** Why the control state cannot be measured: the row's read, or the journal's, by its own word. */
+export type CollectLaneUnmeasurable =
+  | 'row-absent' | 'row-unreadable' | 'row-malformed' | 'journal-missing' | 'journal-malformed'
+  | 'journal-unreadable' | 'journal-not-regular' | 'journal-not-configured';
+const COLLECT_LANE_UNMEASURABLE_TABLE: Readonly<Record<CollectLaneUnmeasurable, true>> = {
+  'row-absent': true, 'row-unreadable': true, 'row-malformed': true, 'journal-missing': true,
+  'journal-malformed': true, 'journal-unreadable': true, 'journal-not-regular': true, 'journal-not-configured': true,
+};
+export const COLLECT_LANE_UNMEASURABLE_WHYS: readonly CollectLaneUnmeasurable[] =
+  Object.keys(COLLECT_LANE_UNMEASURABLE_TABLE) as CollectLaneUnmeasurable[];
+/** Each journal read that can never be proof, and its own why. `missing` is decided beside the row; `ok` is compared. */
+const COLLECT_JOURNAL_UNMEASURABLE:
+  Readonly<Record<Exclude<CollectLaneJournalRead['kind'], 'missing' | 'ok'>, CollectLaneUnmeasurable>> = {
+    malformed: 'journal-malformed', unreadable: 'journal-unreadable', 'not-regular': 'journal-not-regular',
+    'not-configured': 'journal-not-configured',
+  };
+
+/** The switch's control state (path-identity spec 2026-10-12 §5.2):
+ *  - `coherent`: the journal's maximum EQUALS the row's generation, or the exact seed stands beside a missing journal
+ *    (`bootstrap`, generation 0);
+ *  - `mismatch`: both are measurable and differ, in either direction. It arms nothing, and only a fresh operator write
+ *    repairs it;
+ *  - `unmeasurable`: the row or the journal cannot be measured. It arms nothing and refuses every write. */
+export type CollectLaneControl =
+  | { readonly kind: 'coherent'; readonly row: CollectLaneRow; readonly generation: number; readonly bootstrap: boolean }
+  | { readonly kind: 'mismatch'; readonly row: CollectLaneRow; readonly journalMax: number; readonly rowGeneration: number }
+  | { readonly kind: 'unmeasurable'; readonly why: CollectLaneUnmeasurable };
+
+/** THE COHERENCE RULE (path-identity spec 2026-10-12 §5.2): exact equality. Never `row == max(journal, row)`, which would
+ *  accept a database generation the journal never recorded. The row is measured first. */
+export function collectLaneControl(row: CollectLaneRowMeasure, journal: CollectLaneJournalRead): CollectLaneControl {
+  if (row.kind === 'absent') return { kind: 'unmeasurable', why: 'row-absent' };
+  if (row.kind === 'unreadable') return { kind: 'unmeasurable', why: 'row-unreadable' };
+  if (row.kind === 'malformed') return { kind: 'unmeasurable', why: 'row-malformed' };
+  if (journal.kind === 'missing') {
+    return row.kind === 'seed' ? { kind: 'coherent', row: row.row, generation: 0, bootstrap: true }
+      : { kind: 'unmeasurable', why: 'journal-missing' };
+  }
+  if (journal.kind !== 'ok') return { kind: 'unmeasurable', why: COLLECT_JOURNAL_UNMEASURABLE[journal.kind] };
+  return journal.max === row.row.generation
+    ? { kind: 'coherent', row: row.row, generation: journal.max, bootstrap: false }
+    : { kind: 'mismatch', row: row.row, journalMax: journal.max, rowGeneration: row.row.generation };
+}
+
+/** The next generation, for ALLOCATION only: `max(journalMax, rowGeneration) + 1`, so a repair lands above both. null
+ *  when that would pass `Number.MAX_SAFE_INTEGER`. */
+export function collectLaneNextGeneration(c: Extract<CollectLaneControl, { kind: 'coherent' | 'mismatch' }>): number | null {
+  const top = c.kind === 'coherent' ? Math.max(c.generation, c.row.generation) : Math.max(c.journalMax, c.rowGeneration);
+  return top >= Number.MAX_SAFE_INTEGER ? null : top + 1;
+}
+
+/** One request to the switch's one writer (path-identity spec 2026-10-12 §5.2, §5.4, §5.6):
+ *  - `live`: arm for `fleetNodeId`, only if the row and journal the transaction re-reads are still exactly the ones the
+ *    caller read (`expected`, `expectedJournal`);
+ *  - `off`: no expectation, so Off wins over a concurrent Live: it takes the latest row, clears the node and keeps the
+ *    latch;
+ *  - `retire`: the automatic latch, from the one latch helper, on the pair it read. It has no repair authority. */
+export type CollectLaneWriteRequest =
+  | { readonly kind: 'live'; readonly fleetNodeId: string; readonly expected: CollectLaneRowRead; readonly expectedJournal: CollectLaneJournalRead }
+  | { readonly kind: 'off' }
+  | { readonly kind: 'retire'; readonly expected: CollectLaneRowRead; readonly expectedJournal: CollectLaneJournalRead };
+/** Why the writer wrote nothing (path-identity spec 2026-10-12 §5.4, §5.6). None consumes a generation:
+ *  - `conflict`: a Live or a retire whose expected row or journal is not what the transaction re-read;
+ *  - `marker-still-controls`: Off while `markerRetiredAt` is null, whatever any listing says;
+ *  - `state-unmeasurable`: the row or journal is unmeasurable, the write instant is not a positive safe integer, the
+ *    node to arm is empty, or the next generation would pass the safe range;
+ *  - `not-coherent`: a retire over a mismatch. The latch never heals one. */
+export type CollectLaneWriteRefusal = 'conflict' | 'marker-still-controls' | 'state-unmeasurable' | 'not-coherent';
+const COLLECT_LANE_WRITE_REFUSAL_TABLE: Readonly<Record<CollectLaneWriteRefusal, true>> = {
+  conflict: true, 'marker-still-controls': true, 'state-unmeasurable': true, 'not-coherent': true,
+};
+export const COLLECT_LANE_WRITE_REFUSALS: readonly CollectLaneWriteRefusal[] =
+  Object.keys(COLLECT_LANE_WRITE_REFUSAL_TABLE) as CollectLaneWriteRefusal[];
+/** The writer's decision: refuse (with a bounded detail that names no path), leave the row as it stands, or write the
+ *  complete row's three intent fields at `generation`. The store writes `updatedAt` from the same instant. */
+export type CollectLaneWriteDecision =
+  | { readonly kind: 'refuse'; readonly code: CollectLaneWriteRefusal; readonly detail: string }
+  | { readonly kind: 'unchanged' }
+  | { readonly kind: 'write'; readonly generation: number;
+      readonly next: { readonly choice: string; readonly fleetNodeId: string | null; readonly markerRetiredAt: number | null } };
+
+const COLLECT_LANE_UNCHANGED: CollectLaneWriteDecision = { kind: 'unchanged' };
+const collectRefuse = (code: CollectLaneWriteRefusal, detail: string): CollectLaneWriteDecision =>
+  ({ kind: 'refuse', code, detail });
+/** A write of `next` at the next generation, or `state-unmeasurable` when none is left in the safe range. */
+function collectWriteNext(control: Extract<CollectLaneControl, { kind: 'coherent' | 'mismatch' }>,
+  next: { readonly choice: string; readonly fleetNodeId: string | null; readonly markerRetiredAt: number | null }): CollectLaneWriteDecision {
+  const generation = collectLaneNextGeneration(control);
+  return generation === null
+    ? collectRefuse('state-unmeasurable', 'the next generation would pass the safe-integer range')
+    : { kind: 'write', generation, next };
+}
+
+/** THE WRITE DECISION (path-identity spec 2026-10-12 §5.2, §5.4, §5.6). The store runs it INSIDE its transaction, on the
+ *  row and journal it re-read there. In order:
+ *  1. the write instant must be a positive safe integer, and a Live's node non-empty, else `state-unmeasurable`;
+ *  2. Live and retire compare the row, then the journal, AS READ with what the caller read; a change is `conflict`;
+ *  3. an unmeasurable control state is `state-unmeasurable`, for every request (an absent row is never inserted);
+ *  4. the request's own rule:
+ *     - Off: a null latch is `marker-still-controls`; a coherent `off` with no node is unchanged; otherwise
+ *       `{off, null, latch kept}`, which repairs a mismatch;
+ *     - Live: a coherent row already `live` for the node is unchanged; otherwise `{live, node, latch kept}`, which
+ *       repairs a mismatch;
+ *     - retire: a mismatch is `not-coherent`; a set latch is unchanged; otherwise the latch at `at`, with the choice and
+ *       node kept as stored, a future token included.
+ *  A refusal and a no-op allocate nothing, and every write is at `max(journal, row) + 1`. No arm writes `markerRetiredAt`
+ *  null over a set value: Off and Live copy it, and retire writes only over null. */
+export function decideCollectLaneWrite(req: CollectLaneWriteRequest, before: CollectLaneRowRead,
+  journal: CollectLaneJournalRead, at: number): CollectLaneWriteDecision {
+  if (!isPositiveDecimalSafeInteger(at)) {
+    return collectRefuse('state-unmeasurable', 'the write instant is not a positive safe integer');
+  }
+  if (req.kind === 'live' && req.fleetNodeId === '') return collectRefuse('state-unmeasurable', 'the node to arm is empty');
+  if (req.kind !== 'off') {
+    if (!sameCollectLaneRow(before, req.expected)) return collectRefuse('conflict', 'the row changed after it was read');
+    if (!sameCollectLaneJournal(journal, req.expectedJournal)) {
+      return collectRefuse('conflict', 'the generation journal changed after it was read');
+    }
+  }
+  const control = collectLaneControl(measureCollectLaneRow(before), journal);
+  if (control.kind === 'unmeasurable') {
+    return collectRefuse('state-unmeasurable', `the switch state is unmeasurable: ${control.why}`);
+  }
+  const { row } = control;
+  switch (req.kind) {
+    case 'off':
+      if (row.markerRetiredAt === null) {
+        return collectRefuse('marker-still-controls', 'the legacy marker file has not been retired');
+      }
+      if (control.kind === 'coherent' && row.choice === COLLECT_CHOICE_OFF && row.fleetNodeId === null) {
+        return COLLECT_LANE_UNCHANGED;
+      }
+      return collectWriteNext(control, { choice: COLLECT_CHOICE_OFF, fleetNodeId: null, markerRetiredAt: row.markerRetiredAt });
+    case 'live':
+      if (control.kind === 'coherent' && row.choice === COLLECT_CHOICE_LIVE && row.fleetNodeId === req.fleetNodeId) {
+        return COLLECT_LANE_UNCHANGED;
+      }
+      return collectWriteNext(control,
+        { choice: COLLECT_CHOICE_LIVE, fleetNodeId: req.fleetNodeId, markerRetiredAt: row.markerRetiredAt });
+    case 'retire':
+      if (control.kind !== 'coherent') {
+        return collectRefuse('not-coherent', 'the journal and the row disagree, and the latch never heals them');
+      }
+      if (row.markerRetiredAt !== null) return COLLECT_LANE_UNCHANGED;
+      return collectWriteNext(control, { choice: row.choice, fleetNodeId: row.fleetNodeId, markerRetiredAt: at });
+    default: { const unnamed: never = req; return unnamed; }
+  }
+}
+
+/** The one latch helper's answer (path-identity spec 2026-10-12 §5.4). It is declared here so that its kinds come from an
+ *  L1 table, and the executor's `collectRetireLatch` (`coord/collectTempRoot.ts`) returns it:
+ *  - `not-due`: the listing or the control state did not prove the marker retirable, and the store was not asked;
+ *  - `retired`: the store wrote the latch;
+ *  - `refused`: the store refused the retire request, with its word;
+ *  - `failed`: the store failed at a phase after its decision;
+ *  - `store-threw`: the store threw BEFORE its append (`BEGIN IMMEDIATE` busy past its timeout, an I/O fault at
+ *    `BEGIN`, a read or a decision that threw), which `setCollectLane` propagates by design. Nothing was appended or
+ *    written. The helper answers it rather than rethrowing, so its callers re-read and go on (R16's extension, the
+ *    coordinator, 2026-10-12). */
+export type CollectLatchOutcome =
+  | { readonly kind: 'not-due' } | { readonly kind: 'retired' }
+  | { readonly kind: 'refused'; readonly code: CollectLaneWriteRefusal }
+  | { readonly kind: 'failed'; readonly phase: 'append' | 'update' | 'commit' }
+  | { readonly kind: 'store-threw' };
+const COLLECT_LATCH_OUTCOME_KIND_TABLE: Readonly<Record<CollectLatchOutcome['kind'], true>> = {
+  'not-due': true, retired: true, refused: true, failed: true, 'store-threw': true,
+};
+export const COLLECT_LATCH_OUTCOME_KINDS: readonly CollectLatchOutcome['kind'][] =
+  Object.keys(COLLECT_LATCH_OUTCOME_KIND_TABLE) as CollectLatchOutcome['kind'][];
+
+/** Whether two row reads are the same state, compared AS READ, before any measure, so a `bigint` meets a `bigint`: the
+ *  same kind and, for a row, the same five raw values. Two reads that are not rows compare by kind (the
+ *  `sameStallSettingsRead` idiom). */
+export function sameCollectLaneRow(a: CollectLaneRowRead, b: CollectLaneRowRead): boolean {
+  if (a.kind === 'row' && b.kind === 'row') {
+    return a.row.choice === b.row.choice && a.row.fleetNodeId === b.row.fleetNodeId
+      && a.row.markerRetiredAt === b.row.markerRetiredAt && a.row.generation === b.row.generation
+      && a.row.updatedAt === b.row.updatedAt;
+  }
+  return a.kind === b.kind;
+}
+/** Whether two journal reads are the same state: the same kind and every field of that arm. */
+export function sameCollectLaneJournal(a: CollectLaneJournalRead, b: CollectLaneJournalRead): boolean {
+  switch (a.kind) {
+    case 'ok': return b.kind === 'ok' && a.max === b.max && a.records === b.records;
+    case 'malformed': return b.kind === 'malformed' && a.fault === b.fault && a.record === b.record;
+    case 'unreadable': return b.kind === 'unreadable' && a.code === b.code;
+    case 'not-regular': return b.kind === 'not-regular' && a.fileKind === b.fileKind;
+    case 'missing': case 'not-configured': return b.kind === a.kind;
+    default: { const unnamed: never = a; return unnamed; }
+  }
+}
+
+/** Every word this section's tables declare: the journal's read kinds and faults, the control state's whys, the
+ *  writer's refusals and the latch helper's outcomes. A scan of quoted kebab words admits the switch's words through
+ *  this guard, never through an allowlist. Derived from the tables, never a hand list. */
+const COLLECT_LANE_KEBAB_WORDS: readonly string[] = [
+  ...COLLECT_LANE_JOURNAL_KINDS, ...COLLECT_LANE_JOURNAL_FAULTS, ...COLLECT_LANE_UNMEASURABLE_WHYS,
+  ...COLLECT_LANE_WRITE_REFUSALS, ...COLLECT_LATCH_OUTCOME_KINDS,
+];
+export function isCollectLaneKebab(v: string): boolean {
+  return COLLECT_LANE_KEBAB_WORDS.includes(v);
 }
