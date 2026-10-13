@@ -1692,6 +1692,23 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     6 GB is available. If memory does not allow them within about two hours, the report goes out with each unmeasured
     row named UNVERIFIED, never passed.
   - **The ask itself:** it had left the ask route (`not-held`) before the answer landed, so the mail carries the ruling.
+- **2026-10-13 01:25 — co-edit consent under claim 1197 for two of calm-mesa's runs (calm-mesa's 4454; answer 4461).**
+  - **The runs:** 400 is CCR-15 wave 10, the collector switch. 399 is path identity W1a, the server's id gate. Both plans
+    merged in #377. Both get additive edits, each in its own region, under R56.
+  - **Measured:** #351's own hunks at `6f1942bbc` against `28e8dc1b2` are disjoint from every region the two runs name.
+  - **Fenced off by name:**
+    - watch.ts: the `./deadCoordinator.js` and `./archivedExpiry.js` import statements, `mergeBreakerMembers`, the
+      expiry and dead-coordinator field block, `archivedExpiryPass`, `deadCoordinatorPass` and `deadCoordinatorAct`.
+    - store.ts: its import block, `parseBreakerHeld`, and the dead_claimants and breaker-state methods.
+    - expireArchived.ts: not under 1197, but #351 edits its import, its `stuck` case, `FEED_TITLE`, `expireFeedBody`
+      and `recordExpireFeed`. Run 399's step-0 checks at the tops of `expireArchived` and `learnExpiry` are clear of
+      them.
+  - **The one expected conflict:** run 400 also appends a migration. Whichever PR lands second moves its entry up one
+    slot, together with its coord-db and asks-store version pins and its words, and merges main (never a rebase).
+  - **Landing order:** #351 is expected to land first. A #351 fix round stays inside its own regions, migration 19's
+    entry included.
+  - **Still to come:** W1b's ccd/ccd consent is asked for later.
+  - Plain-ridge was told (4462, with the id corrected in 4464).
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
