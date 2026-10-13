@@ -2177,6 +2177,9 @@ describe('planExport and retentionLowered: what is due, what is overdue (spec 9.
   const homes = { '/home/u/.claude-a': 180, '/home/u/.claude-b': 180 };
   const file = (home: string, ageDays: number, present = true): libExport.ExportFile => ({ home, mtimeMs: NOW - ageDays * DAY, present });
   const ref = (tsAgeDays: number | null, files: libExport.ExportFile[]): libExport.ExportCandidate => ({ tsMs: tsAgeDays === null ? null : NOW - tsAgeDays * DAY, files });
+  /** B1's node-shortest reducer, by name: since W1-B2 the default is the per-copy rule (Task 35, O58), so a case
+   *  that pins B1's rule names it. */
+  const SH = libExport.EXPORT_REDUCERS.shortestHome;
   it('a home of 180 gives a horizon of 150 days; the margin floors at 0', () => {
     expect(libExport.exportHorizonDays(180)).toBe(150);
     expect(libExport.exportHorizonDays(30)).toBe(0);
@@ -2186,17 +2189,17 @@ describe('planExport and retentionLowered: what is due, what is overdue (spec 9.
   it('a blob whose every referrer is past the horizon is due; one younger referrer keeps it from being due', () => {
     const old = { key: 'b-old', referrers: [ref(151, [file('/home/u/.claude-a', 10)])] };
     const mixed = { key: 'b-mixed', referrers: [ref(151, [file('/home/u/.claude-a', 10)]), ref(20, [file('/home/u/.claude-a', 10)])] };
-    expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: homes, blobs: [old, mixed] }).due).toEqual(['b-old']);
+    expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: homes, blobs: [old, mixed], reducer: SH }).due).toEqual(['b-old']);
   });
   it('a referrer with a NULL ts ages by its newest holding file, never as never-old', () => {
     const nullTs = { key: 'b-null', referrers: [ref(null, [file('/home/u/.claude-a', 200), file('/home/u/.claude-b', 160)])] };
     const nullYoung = { key: 'b-null-young', referrers: [ref(null, [file('/home/u/.claude-a', 200), file('/home/u/.claude-b', 5)])] };
-    expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: homes, blobs: [nullTs, nullYoung] }).due).toEqual(['b-null']);
+    expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: homes, blobs: [nullTs, nullYoung], reducer: SH }).due).toEqual(['b-null']);
   });
-  it('one home on the 30-day default makes every old-enough blob due at once (the ruled rule), and is named', () => {
+  it('one home on the 30-day default makes every old-enough blob due at once (B1\'s node-shortest reducer, history since W1-B2), and is named', () => {
     const lowered = { ...homes, '/home/u/.claude-c': 30 };
     const young = { key: 'b-young', referrers: [ref(1, [file('/home/u/.claude-a', 1)])] };
-    const r = libExport.planExport({ nowMs: NOW, homeRetentionDays: lowered, blobs: [young] });
+    const r = libExport.planExport({ nowMs: NOW, homeRetentionDays: lowered, blobs: [young], reducer: SH });
     expect(r.horizonDays).toBe(0);
     expect(r.due).toEqual(['b-young']);
     expect(libExport.retentionLowered(lowered)).toEqual({ home: '/home/u/.claude-c', days: 30, othersMin: 180 });
@@ -2210,30 +2213,41 @@ describe('planExport and retentionLowered: what is due, what is overdue (spec 9.
     const gone = { key: 'b-gone', referrers: [ref(170, [file('/home/u/.claude-a', 10, false)])] };
     const pastClock = { key: 'b-past', referrers: [ref(170, [file('/home/u/.claude-a', 181)])] };
     const fresh = { key: 'b-fresh', referrers: [ref(170, [file('/home/u/.claude-a', 10)])] };
-    const r = libExport.planExport({ nowMs: NOW, homeRetentionDays: homes, blobs: [gone, pastClock, fresh] });
+    const r = libExport.planExport({ nowMs: NOW, homeRetentionDays: homes, blobs: [gone, pastClock, fresh], reducer: SH });
     expect(r.due).toEqual(['b-gone', 'b-past', 'b-fresh']);
     expect(r.overdue).toEqual(['b-gone', 'b-past']);
   });
-  it('exportDates (Task 26F item 7): the row clock\'s first due date and the file clock\'s first deletion date, one definition with planExport', () => {
+  it('exportDates (Task 26F item 7): the first due date over the holders, by the reducer, and the file clock\'s first deletion date, one definition with planExport', () => {
     const lowered = { ...homes, '/home/u/.claude-c': 30 };
     const files = [file('/home/u/.claude-a', 10), file('/home/u/.claude-c', 5), file('/home/u/.claude-b', 400, false)];
     // the 400-day file is gone: it has no deletion date. The 5-day file in the 30-day home goes at +25 days, the 10-day one in a 180-day home at +170.
-    const d = libExport.exportDates({ homeRetentionDays: lowered, oldestRowMs: NOW - 160 * DAY, files });
+    const holders = [ref(160, [files[0]!]), ref(20, [files[1]!])];
+    const d = libExport.exportDates({ homeRetentionDays: lowered, holders, files });
     expect(d.firstDeletionMs).toBe(NOW + 25 * DAY);
-    expect(d.firstDueMs, 'the shortest retention (30) less the margin gives a horizon of 0').toBe(NOW - 160 * DAY);
-    const long = libExport.exportDates({ homeRetentionDays: homes, oldestRowMs: NOW - 160 * DAY, files: [files[0]!] });
-    expect(long).toEqual({ firstDueMs: NOW - 160 * DAY + 150 * DAY, firstDeletionMs: NOW + 170 * DAY });
+    expect(d.firstDueMs, 'per copy: the 30-day home\'s file is due from its last write, 5 days ago').toBe(NOW - 5 * DAY);
+    expect(libExport.exportDates({ homeRetentionDays: lowered, holders, files, reducer: SH }).firstDueMs,
+      'B1\'s row clock: the oldest holder\'s row plus the shortest retention\'s horizon, 0').toBe(NOW - 160 * DAY);
+    const long = libExport.exportDates({ homeRetentionDays: homes, holders: [holders[0]!], files: [files[0]!] });
+    expect(long).toEqual({ firstDueMs: NOW + 140 * DAY, firstDeletionMs: NOW + 170 * DAY });
     // the same rule planExport reads: a file whose date has passed is overdue there, and its date is before now here
-    const gone = libExport.exportDates({ homeRetentionDays: homes, oldestRowMs: null, files: [file('/home/u/.claude-a', 181)] });
+    const gone = libExport.exportDates({ homeRetentionDays: homes, holders: [], files: [file('/home/u/.claude-a', 181)] });
     expect(gone.firstDeletionMs).toBe(NOW - 1 * DAY);
     expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: homes, blobs: [{ key: 'b', referrers: [ref(170, [file('/home/u/.claude-a', 181)])] }] }).overdue).toEqual(['b']);
   });
-  it('exportDates: no present file or no unexported row is null, never zero; a fractional mtime rounds; a home never measured is 30 days', () => {
-    expect(libExport.exportDates({ homeRetentionDays: homes, oldestRowMs: null, files: [] })).toEqual({ firstDueMs: null, firstDeletionMs: null });
-    expect(libExport.exportDates({ homeRetentionDays: homes, oldestRowMs: 5, files: [file('/home/u/.claude-a', 3, false)] }).firstDeletionMs).toBeNull();
-    const frac = libExport.exportDates({ homeRetentionDays: homes, oldestRowMs: null, files: [{ home: '/home/u/.claude-a', mtimeMs: 1000.6, present: true }] });
+  it('exportDates: no holder or no present file is null, never zero; a holder nothing on disk holds back is dated by its recorded clock, never the epoch; a fractional mtime rounds; a home never measured is 30 days', () => {
+    expect(libExport.exportDates({ homeRetentionDays: homes, holders: [], files: [] })).toEqual({ firstDueMs: null, firstDeletionMs: null });
+    const goneOnly = libExport.exportDates({ homeRetentionDays: homes, holders: [ref(5, [file('/home/u/.claude-a', 3, false)])], files: [file('/home/u/.claude-a', 3, false)] });
+    expect(goneOnly.firstDeletionMs).toBeNull();
+    expect(goneOnly.firstDueMs, 'every holding file gone: the last write its files recorded, the early side, never 0').toBe(NOW - 3 * DAY);
+    expect(libExport.exportDates({ homeRetentionDays: homes, holders: [ref(5, [])], files: [] }).firstDueMs,
+      'no file on record: its oldest unexported row\'s time').toBe(NOW - 5 * DAY);
+    expect(libExport.exportDates({ homeRetentionDays: homes, holders: [ref(5, [file('/home/u/.claude-a', 3, false)]), ref(1, [file('/home/u/.claude-a', 1)])], files: [] }).firstDueMs,
+      'the earliest over the holders: the gone-only holder\'s recorded clock, before the other\'s due time').toBe(NOW - 3 * DAY);
+    const fracFile = { home: '/home/u/.claude-a', mtimeMs: 1000.6, present: true };
+    const frac = libExport.exportDates({ homeRetentionDays: homes, holders: [{ tsMs: null, files: [fracFile] }], files: [fracFile] });
     expect(frac.firstDeletionMs).toBe(1001 + 180 * DAY);
-    const unknown = libExport.exportDates({ homeRetentionDays: homes, oldestRowMs: null, files: [{ home: '/home/u/.claude-z', mtimeMs: 0, present: true }] });
+    expect(frac.firstDueMs).toBe(1001 + 150 * DAY);
+    const unknown = libExport.exportDates({ homeRetentionDays: homes, holders: [], files: [{ home: '/home/u/.claude-z', mtimeMs: 0, present: true }] });
     expect(unknown.firstDeletionMs, 'planExport\'s own fallback').toBe(30 * DAY);
   });
   it('a file clock reads its own home: a file in a 30-day home is past its date sooner', () => {
@@ -2247,13 +2261,13 @@ describe('planExport and retentionLowered: what is due, what is overdue (spec 9.
     expect(r.due).toEqual(['b-clockless']);
     expect(r.overdue).toEqual(['b-clockless']);
   });
-  it('a reducer is the only seam Q15 needs: the same inputs under another reducer change the answer, not the signature', () => {
+  it('a reducer was the only seam Q15 needed: one blob, two reducers, two answers, one signature; each answers a due time (W1-B2 Task 35)', () => {
     const blob = { key: 'b-1', referrers: [ref(100, [file('/home/u/.claude-a', 100)])] };
     const lowered = { ...homes, '/home/u/.claude-c': 30 };
-    expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: lowered, blobs: [blob] }).due).toEqual(['b-1']);
-    const ownCopies: libExport.ExportReducer = (c, h) => Math.min(...c.files.map((f) => h[f.home] ?? 30));
-    expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: lowered, blobs: [blob], reducer: ownCopies }).due).toEqual([]);
-    expect(libExport.EXPORT_REDUCERS.shortestHome(blob.referrers[0]!, lowered)).toBe(30);
+    expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: lowered, blobs: [blob] }).due, 'the per-copy default: its 180-day file holds it').toEqual([]);
+    expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: lowered, blobs: [blob], reducer: SH }).due, 'B1\'s node-shortest reducer: horizon 0').toEqual(['b-1']);
+    expect(SH(blob.referrers[0]!, lowered), 'the row clock plus a horizon of 0').toBe(NOW - 100 * DAY);
+    expect(libExport.EXPORT_REDUCERS.perCopy(blob.referrers[0]!, lowered), 'its file\'s mtime plus its own home\'s 150 days').toBe(NOW + 50 * DAY);
   });
 });
 
@@ -2958,6 +2972,16 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     ['drain-rejected', 'warn', { drainRejected: 3 }],
     ['spool-planted', 'warn', { spoolDisplaced: 2, spoolBlocked: 1 }],
   ];
+
+  it('retention-lowered is a reminder under the per-copy rule: it names the home and when its own rows fall due, and claims no node-wide horizon (W1-B2 Task 35, ruled Q15)', () => {
+    const r = healthLib.deriveHealth(base({ retentionLowered: { home: '/home/u/.claude-b', days: 30, othersMin: 180 } }));
+    expect(words(r, 'warn')).toEqual(['retention-lowered']);
+    expect(words(r, 'fail')).toEqual([]);
+    const item = r.warn.find((i) => i.word === 'retention-lowered')!;
+    expect(item.detail).toContain('/home/u/.claude-b keeps 30 days, under the others\' 180');
+    expect(item.detail).toContain('fall due 0 days after their file\'s last write');
+    expect(item.detail).not.toContain('horizon follows the shortest');
+  });
 
   it('the healthy baseline is PASS ok, with nothing to warn or fail', () => {
     expect(healthLib.deriveHealth(base())).toEqual({ pass: 'ok', warn: [], fail: [] });
@@ -6247,5 +6271,77 @@ describe('fork lines and fork epochs, pure halves (W1-B2 Task 34; spec 5.1, 6.1;
     expect(libFork.parseJournalRecord(confirmed).kind).toBe('record');
     const chained = JSON.stringify({ v: 1, k: 'verdict', t: 1, event_key: 'none', kind: 'epoch-chained', ccrc_id: 'x', generation: G1, cc_session_uuid: U2, cause: 'fork' });
     expect(libFork.parseJournalRecord(chained).kind, 'only a clear chains unconfirmed').toBe('malformed');
+  });
+});
+
+// ── W1-B2 Task 35: the per-copy due rule is the default (spec 2026-10-05 §9.15, O58; ruled Q15,
+// D-4735 (history-export-due-per-copy)) ───────────────────────────────────────────────────────────────────────
+describe('O58: the per-copy due rule is the default (W1-B2 Task 35; spec 9.15, ruled Q15)', () => {
+  const DAY = 86_400_000;
+  const NOW = Date.UTC(2026, 11, 1);
+  const A = '/home/u/.claude-a';   // keeps 180 days
+  const B = '/home/u/.claude-b';   // on Claude Code's 30-day default once it joins
+  const homes = { [A]: 180 };
+  const withB = { [A]: 180, [B]: 30 };
+  const file = (home: string, ageDays: number, present = true): libExport.ExportFile => ({ home, mtimeMs: NOW - ageDays * DAY, present });
+  const row = (tsAgeDays: number | null, files: libExport.ExportFile[]): libExport.ExportCandidate => ({ tsMs: tsAgeDays === null ? null : NOW - tsAgeDays * DAY, files });
+  const due = (homeDays: Record<string, number>, ...referrers: libExport.ExportCandidate[]): boolean =>
+    libExport.planExport({ nowMs: NOW, homeRetentionDays: homeDays, blobs: [{ key: 'b', referrers }] }).due.length === 1;
+
+  it('rows held only in A\'s files are due once the newest of them is past 150 days: 151 due, 149 not', () => {
+    expect(due(homes, row(400, [file(A, 300), file(A, 151)]))).toBe(true);
+    expect(due(homes, row(400, [file(A, 300), file(A, 149)]))).toBe(false);
+  });
+  it('a row whose files are all B\'s is due from its file\'s last write', () => {
+    expect(due(withB, row(2, [file(B, 1)]))).toBe(true);
+    expect(due(withB, row(null, [file(B, 0.001)]))).toBe(true);
+  });
+  it('a row held by an A file and a B file is due only once the A file\'s mtime plus 150 days has passed', () => {
+    expect(due(withB, row(400, [file(A, 149), file(B, 300)]))).toBe(false);
+    expect(due(withB, row(400, [file(A, 151), file(B, 300)]))).toBe(true);
+  });
+  it('a long-lived A file appended yesterday holds its 200-day-old first rows back', () => {
+    expect(due(homes, row(200, [file(A, 1)]))).toBe(false);
+  });
+  it('a holding file gone from disk counts as passed, and the files still on disk decide', () => {
+    expect(due(homes, row(5, [file(A, 5, false)]))).toBe(true);
+    expect(due(homes, row(5, [file(A, 5, false), file(A, 5)]))).toBe(false);
+  });
+  it('a row with no holding file on record has no clock and is due at once', () => {
+    expect(due(homes, row(null, []))).toBe(true);
+  });
+  it('adding home B makes no row held only in A\'s files due, and retentionLowered still names B', () => {
+    const onlyA = row(200, [file(A, 100)]);
+    expect(due(homes, onlyA)).toBe(false);
+    expect(due(withB, onlyA)).toBe(false);
+    expect(libExport.retentionLowered(withB)).toEqual({ home: B, days: 30, othersMin: 180 });
+  });
+  // A NAMED RESIDUAL, not a guard (D-4248, kept by the Q15 ruling): this case
+  // pins today's answer so that a per-row file set, if one is ever ruled, has a red test to flip.
+  it('the swap prefix: rows written after a swap, held only by a 30-day target copy that is gone, wait for the frozen 180-day source copy, which holds none of them', () => {
+    // The swap 45 days ago froze A's copy, last written 46 days ago; B's copy, last written 35 days ago, is gone;
+    // the rows are 38 days old, so only B's copy ever held them.
+    const postSwap = row(38, [file(A, 46), file(B, 35, false)]);
+    const blobs = [{ key: 'b', referrers: [postSwap] }];
+    expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: withB, blobs }), 'neither due nor overdue while A\'s copy is on disk')
+      .toMatchObject({ due: [], overdue: [] });
+    expect(libExport.EXPORT_REDUCERS.perCopy(postSwap, withB), 'due when A\'s frozen copy passes: 46 days back plus 150').toBe(NOW + 104 * DAY);
+    expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: withB, blobs, reducer: libExport.EXPORT_REDUCERS.shortestHome }).due,
+      'B1\'s node-shortest reducer counted them due').toEqual(['b']);
+  });
+  it('planExport with no reducer, exportDates and dueTranscriptKeys answer by EXPORT_REDUCERS.perCopy, a due time; planExport\'s signature is B1\'s', () => {
+    const onlyA = row(200, [file(A, 100)]);
+    const blobs = [{ key: 'b', referrers: [onlyA] }];
+    expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: withB, blobs }))
+      .toEqual(libExport.planExport({ nowMs: NOW, homeRetentionDays: withB, blobs, reducer: libExport.EXPORT_REDUCERS.perCopy }));
+    expect(libExport.planExport({ nowMs: NOW, homeRetentionDays: withB, blobs, reducer: libExport.EXPORT_REDUCERS.shortestHome }).due,
+      'CONTROL: B1\'s node-shortest reducer would export it now').toEqual(['b']);
+    expect(libExport.EXPORT_REDUCERS.perCopy(onlyA, withB), 'its file\'s mtime plus its own home\'s 150 days').toBe(NOW + 50 * DAY);
+    expect(libExport.EXPORT_REDUCERS.perCopy(row(null, []), withB)).toBe(Number.NEGATIVE_INFINITY);
+    expect(libExport.exportDates({ homeRetentionDays: withB, holders: [onlyA], files: onlyA.files }).firstDueMs).toBe(NOW + 50 * DAY);
+    expect(libExport.dueTranscriptKeys({ nowMs: NOW, homeRetentionDays: withB, transcripts: [
+      { key: 1, files: onlyA.files }, { key: 2, files: [file(B, 1)] }, { key: 3, files: [file(A, 10, false)] }, { key: 4, files: [] },
+    ] })).toEqual([2, 3, 4]);
+    expect(libExport.planExport.length, 'one destructured argument, as B1 declared it').toBe(1);
   });
 });

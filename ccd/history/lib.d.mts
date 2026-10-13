@@ -313,16 +313,23 @@ export const HARNESSES: readonly string[];
 export function shortestRetention(homeRetentionDays: Readonly<Record<string, number>>): number;
 export interface ExportFile { home: string; mtimeMs: number; present: boolean }
 export interface ExportCandidate { tsMs: number | null; files: readonly ExportFile[] }
+/** A candidate's due TIME, in ms since the epoch: due exactly when it is before now; `-Infinity` when nothing holds
+ *  it back (W1-B2, ruled Q15; B1's reducers answered a retention in days). */
 export type ExportReducer = (candidate: ExportCandidate, homeRetentionDays: Readonly<Record<string, number>>) => number;
-export const EXPORT_REDUCERS: Readonly<{ shortestHome: ExportReducer }>;
+export const EXPORT_REDUCERS: Readonly<{ shortestHome: ExportReducer; perCopy: ExportReducer }>;
 export function exportHorizonDays(retentionDays: number): number;
 export function planExport(i: {
   nowMs: number; homeRetentionDays: Readonly<Record<string, number>>;
   blobs: readonly { key: string; referrers: readonly ExportCandidate[] }[]; reducer?: ExportReducer;
 }): { horizonDays: number; due: string[]; overdue: string[] };
 export function exportDates(i: {
-  homeRetentionDays: Readonly<Record<string, number>>; oldestRowMs: number | null; files: readonly ExportFile[];
+  homeRetentionDays: Readonly<Record<string, number>>; holders: readonly ExportCandidate[]; files: readonly ExportFile[];
+  reducer?: ExportReducer;
 }): { firstDueMs: number | null; firstDeletionMs: number | null };
+export function dueTranscriptKeys<K>(i: {
+  nowMs: number; homeRetentionDays: Readonly<Record<string, number>>;
+  transcripts: readonly { key: K; files: readonly ExportFile[] }[]; reducer?: ExportReducer;
+}): K[];
 export function retentionLowered(homeRetentionDays: Readonly<Record<string, number>>): null | { home: string; days: number; othersMin: number };
 
 export interface SchemaVersionAdded { readonly heavy: boolean; readonly tables: Readonly<Record<string, readonly string[]>> }

@@ -55,7 +55,7 @@ import {
   decideBelt, beltAfterGeneration, BELT_VERSION, beltWitnessMoved,
   REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES,
   REASONS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker, parseOpVerbArgs, BIND_KINDS, paneReadWanted,
-  HARNESS_TABLE, exportDates, exportHorizonDays, planExport, retentionLowered, parseJournalRecord,
+  HARNESS_TABLE, exportDates, dueTranscriptKeys, planExport, retentionLowered, parseJournalRecord,
   decideRecallOff, recallOffPath, decideReparse, REPARSE_MAX_TARGETS, planCopy, STORE_DB_REL,
   diffForeignKeys, ftsTablesHealthy, FTS_REBUILD_STEP, decideCounterResets, decideIntegrity,
   RECOVER_PHASES, formatRecoverCursor, parseRecoverCursor, orderJournalFiles, indexRecord, replayStep, nextUnmovedTicks, HEALTH_META,
@@ -5753,8 +5753,8 @@ async function opPass(parsed, deps, out) {
 // due and overdue blobs, and audits the journal (§9.2 step 2). It ships in W1-B1, before the export itself
 // (W1-B4), so doctor can see the gap (§9.15 "The gap guard"): `export-due` WARNs from the first due blob,
 // `export-overdue` FAILs on measured source loss (slug history-export-due-escalates). Due-ness is the
-// ruled rule through lib.mjs's planExport and its default reducer, the shortest retention over the rostered
-// homes (Q15 is open; a yes swaps one reducer, never this input). Only the sweep parses the journal (§9.14).
+// rule through lib.mjs's planExport and its default reducer: the per-copy rule since W1-B2 (ruled Q15,
+// D-4735 (history-export-due-per-copy)), each row against its own holding files. Only the sweep parses the journal (§9.14).
 // Departures carried here: D-4207 (history-export-due-escalates: the overdue count on measured source loss),
 // D-4208 (history-export-row-age-early: a NULL-ts row ages by its newest holding file), D-4209
 // (history-harness-seam-named: retention through HARNESS_TABLE), D-4210 (history-retention-read-from-settings:
@@ -5860,15 +5860,19 @@ function transcriptFiles(db, homes) {
   return byTranscript;
 }
 
-/** The candidate blobs of one chunk: unexported, unpruned, past the cursor, with at least one referrer old
- *  enough to be due — or with NULL ts_ms, which here is NEVER "never old" (§9.15: the opposite of prune's
- *  rule, so its holding file's mtime decides). A blob is due only when EVERY referrer is, which planExport
- *  decides; this is only the prefilter. The partial index blobs_unexported serves the outer scan. */
+/** The candidate blobs of one chunk: unexported, unpruned, past the cursor, with at least one referrer whose
+ *  transcript the default rule makes due now (the JSON array of lib's dueTranscriptKeys, bound once per clause).
+ *  A blob is due only when EVERY referrer is, which planExport decides; this is only the prefilter, and it is exact
+ *  for the per-copy rule (D-4735 (history-export-due-per-copy)), under which every row of one transcript falls due at one
+ *  instant: its holding files are its transcript's (D-4248) and the rule
+ *  reads no row time. B1's row-clock cutoff would hide a young row whose every file is gone, which the rule counts
+ *  as passed. The partial index blobs_unexported serves the outer scan; each `IN (SELECT value FROM json_each(?))`
+ *  is uncorrelated, so SQLite evaluates it once per statement. */
 const EXPORT_CANDIDATES_SQL = 'SELECT b.blob_id FROM blobs b WHERE b.exported_ms IS NULL AND b.z IS NOT NULL AND b.blob_id > ? AND ('
-  + 'EXISTS (SELECT 1 FROM entries e WHERE e.blob_id = b.blob_id AND (e.ts_ms IS NULL OR e.ts_ms < ?)) '
-  + 'OR EXISTS (SELECT 1 FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id WHERE v.blob_id = b.blob_id AND (e.ts_ms IS NULL OR e.ts_ms < ?)) '
-  + 'OR EXISTS (SELECT 1 FROM sidecars s LEFT JOIN entries e ON e.entry_id = s.entry_id WHERE s.blob_id = b.blob_id AND (e.ts_ms IS NULL OR e.ts_ms < ?)) '
-  + 'OR EXISTS (SELECT 1 FROM boundaries d JOIN entries e ON e.entry_id = d.entry_id WHERE d.kept_blob_id = b.blob_id AND (e.ts_ms IS NULL OR e.ts_ms < ?))'
+  + 'EXISTS (SELECT 1 FROM entries e WHERE e.blob_id = b.blob_id AND e.transcript_pk IN (SELECT value FROM json_each(?))) '
+  + 'OR EXISTS (SELECT 1 FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id WHERE v.blob_id = b.blob_id AND e.transcript_pk IN (SELECT value FROM json_each(?))) '
+  + 'OR EXISTS (SELECT 1 FROM sidecars s WHERE s.blob_id = b.blob_id AND s.transcript_pk IN (SELECT value FROM json_each(?))) '
+  + 'OR EXISTS (SELECT 1 FROM boundaries d JOIN entries e ON e.entry_id = d.entry_id WHERE d.kept_blob_id = b.blob_id AND e.transcript_pk IN (SELECT value FROM json_each(?)))'
   + ') ORDER BY b.blob_id LIMIT ?';
 /** The referrers of every blob in one chunk's id range, each with its blob, its age and its transcript (§9.15
  *  "A blob is due"): entries, entry_variants and sidecars aging by their entry, and boundaries.kept_blob_id
@@ -5880,9 +5884,17 @@ const EXPORT_REFERRERS_SQL = 'SELECT e.blob_id AS blob_id, e.ts_ms AS ts_ms, e.t
   + 'UNION ALL SELECT v.blob_id, e.ts_ms, e.transcript_pk FROM entry_variants v JOIN entries e ON e.entry_id = v.entry_id WHERE v.blob_id BETWEEN ? AND ? '
   + 'UNION ALL SELECT s.blob_id, e.ts_ms, s.transcript_pk FROM sidecars s LEFT JOIN entries e ON e.entry_id = s.entry_id WHERE s.blob_id BETWEEN ? AND ? '
   + 'UNION ALL SELECT d.kept_blob_id, e.ts_ms, e.transcript_pk FROM boundaries d JOIN entries e ON e.entry_id = d.entry_id WHERE d.kept_blob_id BETWEEN ? AND ?';
+/** W1-k's holders (§9.15 "If B4 slips"): each transcript that holds an unexported row, with that row's oldest time.
+ *  Both subqueries search one transcript through `entries_ts` (transcript_pk, ts_ms); no statement scans `entries`
+ *  whole for the date. */
+const EXPORT_HOLDERS_SQL = 'SELECT t.transcript_pk AS pk, '
+  + '(SELECT min(e.ts_ms) FROM entries e WHERE e.transcript_pk = t.transcript_pk AND e.exported_ms IS NULL) AS m '
+  + 'FROM transcripts t WHERE EXISTS (SELECT 1 FROM entries e WHERE e.transcript_pk = t.transcript_pk AND e.exported_ms IS NULL)';
 
 /** The export census (§9.15, W1-k): from the ('export-census', 1) cursor, in chunks, within the run budget,
- *  count the due blobs and, among them, the overdue ones; on completion record them with the W1-k dates.
+ *  count the due blobs and, among them, the overdue ones; on completion record them with the W1-k dates. Due-ness is
+ *  planExport's default, the per-copy rule since W1-B2 (D-4735 (history-export-due-per-copy)), and the candidate scan
+ *  keeps exactly the blobs with a referrer in a transcript that rule makes due (lib's dueTranscriptKeys).
  *  Returns true when complete (or when no census is in progress). */
 export function exportCensus(db, nowMs, budget) {
   const state = stepCursorGet(db, 'export-census');
@@ -5890,9 +5902,13 @@ export function exportCensus(db, nowMs, budget) {
   const homes = Object.keys(state.homeDays);
   const minDays = Math.min(...Object.values(state.homeDays));
   const minHome = homes.find((h) => state.homeDays[h] === minDays);
-  const horizonDays = exportHorizonDays(minDays);
-  const cutoff = nowMs - horizonDays * DAY_MS;
   const files = transcriptFiles(db, homes);
+  /** A transcript's holding files as lib's ExportFile; a file under no rostered home reads against the shortest. */
+  const filesOf = (pk) => (files.get(pk) ?? []).map((f) => ({ home: f.home ?? minHome, mtimeMs: f.mtimeMs, present: f.present }));
+  // Every transcript, a file-less one included (no clock: due at once), through the default rule.
+  const transcripts = db.prepare('SELECT transcript_pk FROM transcripts').all()
+    .map((r) => ({ key: r.transcript_pk, files: filesOf(r.transcript_pk) }));
+  const dueKeys = JSON.stringify(dueTranscriptKeys({ nowMs, homeRetentionDays: state.homeDays, transcripts }));
   const candidates = db.prepare(EXPORT_CANDIDATES_SQL);
   const referrers = db.prepare(EXPORT_REFERRERS_SQL);
   for (;;) {
@@ -5900,7 +5916,7 @@ export function exportCensus(db, nowMs, budget) {
       stepCursorSet(db, 'export-census', state);
       return false;
     }
-    const ids = candidates.all(state.last, cutoff, cutoff, cutoff, cutoff, EXPORT_CENSUS_CHUNK);
+    const ids = candidates.all(state.last, dueKeys, dueKeys, dueKeys, dueKeys, EXPORT_CENSUS_CHUNK);
     if (ids.length === 0) break;
     const lo = ids[0].blob_id;
     const hi = ids[ids.length - 1].blob_id;
@@ -5909,10 +5925,7 @@ export function exportCensus(db, nowMs, budget) {
     for (const r of referrers.iterate(lo, hi, lo, hi, lo, hi, lo, hi)) {
       if (!wanted.has(r.blob_id)) continue;
       const list = byBlob.get(r.blob_id) ?? [];
-      list.push({
-        tsMs: r.ts_ms,
-        files: (files.get(r.transcript_pk) ?? []).map((f) => ({ home: f.home ?? minHome, mtimeMs: f.mtimeMs, present: f.present })),
-      });
+      list.push({ tsMs: r.ts_ms, files: filesOf(r.transcript_pk) });
       byBlob.set(r.blob_id, list);
     }
     const blobs = ids.map(({ blob_id: id }) => ({ key: String(id), referrers: byBlob.get(id) ?? [] }));
@@ -5922,12 +5935,11 @@ export function exportCensus(db, nowMs, budget) {
     state.last = ids[ids.length - 1].blob_id;
     stepCursorSet(db, 'export-census', state);
   }
-  // W1-k: the oldest unexported row, and the two dates lib's exportDates decides from it and the measured files.
+  // W1-k: the oldest unexported row, and the two dates lib's exportDates decides: the first due date over the
+  // holders, by the default rule, and the file clock's first deletion date over every measured file.
   const oldest = db.prepare('SELECT min(ts_ms) AS m FROM entries WHERE exported_ms IS NULL').get().m;
-  const dates = exportDates({
-    homeRetentionDays: state.homeDays, oldestRowMs: oldest,
-    files: [...files.values()].flat().map((f) => ({ home: f.home ?? minHome, mtimeMs: f.mtimeMs, present: f.present })),
-  });
+  const holders = db.prepare(EXPORT_HOLDERS_SQL).all().map((r) => ({ tsMs: r.m, files: filesOf(r.pk) }));
+  const dates = exportDates({ homeRetentionDays: state.homeDays, holders, files: [...files.keys()].flatMap(filesOf) });
   setMeta(db, 'export_due', String(state.due));
   setMeta(db, 'export_overdue', String(state.overdue));
   setMeta(db, 'export_census_ms', String(nowMs));

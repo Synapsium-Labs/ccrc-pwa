@@ -2432,13 +2432,19 @@ export function shortestRetention(homeRetentionDays) {
   return v.length === 0 ? CLAUDE_CODE_DEFAULT_RETENTION_DAYS : Math.min(...v);
 }
 
-/** The reducers `planExport` may take: per candidate referrer, the retention
- *  its age is measured against. The ruled rule (Q6 e) is `shortestHome`, the
- *  node's shortest retention whatever homes hold the referrer; Q15, if ruled
- *  yes, adds a reducer reading the referrer's own files and changes no
- *  signature (rev 3.2 review, FE13). */
+/** The reducers `planExport` may take (§9.15). A reducer answers, for one candidate row, the time in ms since the
+ *  epoch at which it falls due: the row is due exactly when that time is before now, and `-Infinity` means nothing
+ *  holds it back. B1's reducers answered a retention in days against one row clock, which the per-copy rule cannot
+ *  be: it reads each holding file's own clock. The TypeScript type and `planExport`'s signature are B1's, unchanged
+ *  (ruled Q15, rev 3.4: one reducer, no signature change).
+ *  - `perCopy`, the default from W1-B2 (D-4735 (history-export-due-per-copy)): the latest due date over the row's holding
+ *    files on disk, each file's mtime plus its OWN home's horizon. A file gone from disk has passed its date, and a
+ *    row with no holding file on record has no clock, so is due at once. It never reads the row's own time.
+ *  - `shortestHome`, B1's default and now history: the row clock plus the horizon of the shortest retention over
+ *    every rostered home, whatever homes hold the row. Kept as a CONTROL, here and in W1-B4. */
 export const EXPORT_REDUCERS = Object.freeze({
-  shortestHome: (_candidate, homeRetentionDays) => shortestRetention(homeRetentionDays),
+  shortestHome: (c, homeRetentionDays) => rowClockMs(c) + exportHorizonDays(shortestRetention(homeRetentionDays)) * EXPORT_DAY_MS,
+  perCopy: perCopyDueMs,
 });
 
 /** The horizon: retention minus `EXPORT_MARGIN_DAYS`, floored at 0. */
@@ -2446,31 +2452,46 @@ export function exportHorizonDays(retentionDays) {
   return Math.max(0, retentionDays - EXPORT_MARGIN_DAYS);
 }
 
-/** A referrer's age (§9.15): now minus its row's `ts_ms`, or, when that is
- *  NULL, minus the mtime of the newest file holding it — deliberately the
- *  opposite of prune, where NULL is "never old": here "never" would never
- *  copy it. A referrer with no time and no holding file has no clock at all
- *  and counts as old: the export errs early, never late (plan-chosen).
- *  D-4208 */
-function referrerAgeMs(r, nowMs) {
-  if (r.tsMs !== null) return nowMs - r.tsMs;
-  if (r.files.length === 0) return Number.POSITIVE_INFINITY;
-  return nowMs - Math.max(...r.files.map((f) => f.mtimeMs));
+/** The row clock (§9.15, history since W1-B2; D-4208): the row's `ts_ms`, or, when that
+ *  is NULL, the mtime of the newest file holding it — deliberately the opposite of prune, where NULL is "never old":
+ *  here "never" would never copy it. A row with no time and no holding file has no clock at all, `-Infinity`: the
+ *  export errs early, never late (plan-chosen). `shortestHome` alone reads it. */
+function rowClockMs(c) {
+  if (c.tsMs !== null) return c.tsMs;
+  if (c.files.length === 0) return Number.NEGATIVE_INFINITY;
+  return Math.max(...c.files.map((f) => f.mtimeMs));
 }
 
-/** The export's due and overdue sets (§9.15). A blob is DUE when every
- *  referrer is older than its horizon, the retention coming from the reducer
- *  (default: the ruled `shortestHome`). It is OVERDUE — measured source loss,
- *  doctor's FAIL — when it is due and every holding file of every referrer is
- *  gone from disk or past its own deletion date by the file clock (its mtime
- *  plus its home's retention). A blob with no referrer is neither.
+/** One holding file's due date (§9.15): its mtime plus its own home's horizon; a home not measured reads as Claude
+ *  Code's 30-day default, the overdue test's own fallback. */
+function fileDueMs(f, homeRetentionDays) {
+  return f.mtimeMs + exportHorizonDays(homeRetentionDays[f.home] ?? CLAUDE_CODE_DEFAULT_RETENTION_DAYS) * EXPORT_DAY_MS;
+}
+
+/** `EXPORT_REDUCERS.perCopy` (§9.15 "A row is due"; D-4735 (history-export-due-per-copy), ruled Q15): a row is due when
+ *  every one of its holding files has passed its due date. Its holding files are B1's per-row set, its
+ *  transcript's (D-4248), which the ruling keeps. */
+function perCopyDueMs(c, homeRetentionDays) {
+  let at = Number.NEGATIVE_INFINITY;   // no holding file on disk or on record: nothing holds the row back
+  for (const f of c.files) {
+    if (!f.present) continue;   // a file gone from disk has passed its date
+    at = Math.max(at, fileDueMs(f, homeRetentionDays));
+  }
+  return at;
+}
+
+/** The export's due and overdue sets (§9.15). A blob is DUE when every referrer is: the reducer's due time is
+ *  before now (default: the per-copy rule since W1-B2). It is OVERDUE — measured source loss, doctor's FAIL — when it
+ *  is due and every holding file of every referrer is gone from disk or past its own deletion date by the file clock
+ *  (its mtime plus its home's retention). A blob with no referrer is neither. `horizonDays` stays the shortest
+ *  home's horizon, which `status` prints and the default rule no longer reads.
  *  D-4207 */
-export function planExport({ nowMs, homeRetentionDays, blobs, reducer = EXPORT_REDUCERS.shortestHome }) {
+export function planExport({ nowMs, homeRetentionDays, blobs, reducer = EXPORT_REDUCERS.perCopy }) {
   const due = [];
   const overdue = [];
   for (const blob of blobs) {
     if (blob.referrers.length === 0) continue;
-    const isDue = blob.referrers.every((r) => referrerAgeMs(r, nowMs) > exportHorizonDays(reducer(r, homeRetentionDays)) * EXPORT_DAY_MS);
+    const isDue = blob.referrers.every((r) => reducer(r, homeRetentionDays) < nowMs);
     if (!isDue) continue;
     due.push(blob.key);
     const gone = blob.referrers.every((r) => r.files.every((f) => !f.present || fileDeletionMs(f, homeRetentionDays) < nowMs));
@@ -2486,23 +2507,55 @@ function fileDeletionMs(f, homeRetentionDays) {
   return f.mtimeMs + (homeRetentionDays[f.home] ?? CLAUDE_CODE_DEFAULT_RETENTION_DAYS) * EXPORT_DAY_MS;
 }
 
+/** One W1-k holder's date (§9.15 "If B4 slips"): its due time by the reducer, or, when the reducer answers
+ *  `-Infinity` (nothing on disk holds it back: every holding file gone, or none on record), a real clock on the early
+ *  side rather than a sentinel. That is the last write any of its RECORDED files saw (a gone file keeps its recorded
+ *  mtime), since it cannot have fallen due before then; with no file on record, its oldest unexported row's time.
+ *  For the date only: the holder stays due. Null for a holder with neither, which ingest cannot make (every row
+ *  arrives through a file). */
+function holderDueDateMs(h, homeRetentionDays, reducer) {
+  const at = reducer(h, homeRetentionDays);
+  if (at !== Number.NEGATIVE_INFINITY) return at;
+  if (h.files.length > 0) return Math.max(...h.files.map((f) => f.mtimeMs));
+  return h.tsMs;
+}
+
 /** The census's W1-k dates (§9.15), decided here so the sweep only delivers them (Task 26F item 7):
- *  - `firstDueMs`: the oldest unexported row's due date by the ROW clock, its ts plus the horizon (the shortest
- *    retention over the homes, less the margin); null when no row is unexported (`oldestRowMs` null).
+ *  - `firstDueMs`: the earliest holder date (holderDueDateMs), by the reducer (default: the per-copy rule since
+ *    W1-B2), over the HOLDERS: one candidate per transcript that holds an unexported row (its oldest such row's time,
+ *    and its holding files). Rounded to a whole millisecond; null when no holder has a clock (no unexported row).
+ *    Never 0 for "due since an unknown time": that value would sit beside real dates in one field.
  *  - `firstDeletionMs`: the earliest deletion date by the FILE clock over the files still present, rounded to a
  *    whole millisecond; null when none is present. A file that is gone has no deletion date: it is already lost.
  *  `files` is every holding file the census measured, each already assigned its home. */
-export function exportDates({ homeRetentionDays, oldestRowMs, files }) {
+export function exportDates({ homeRetentionDays, holders, files, reducer = EXPORT_REDUCERS.perCopy }) {
   let first = null;
   for (const f of files) {
     if (!f.present) continue;
     const at = fileDeletionMs(f, homeRetentionDays);
     if (first === null || at < first) first = at;
   }
+  let due = null;
+  for (const h of holders) {
+    const at = holderDueDateMs(h, homeRetentionDays, reducer);
+    if (at === null) continue;
+    if (due === null || at < due) due = at;
+  }
   return {
-    firstDueMs: oldestRowMs === null ? null : oldestRowMs + exportHorizonDays(shortestRetention(homeRetentionDays)) * EXPORT_DAY_MS,
+    firstDueMs: due === null ? null : Math.round(due),
     firstDeletionMs: first === null ? null : Math.round(first),
   };
+}
+
+/** The census's candidate prefilter (§9.15; D-4735 (history-export-due-per-copy)): the keys of the transcripts whose
+ *  rows can be due now. A row's holding files are its transcript's
+ *  (D-4248), and the per-copy rule never reads a row's own time, so every row
+ *  of one transcript falls due at one instant, its transcript's; a blob none of whose referrers sits in a due
+ *  transcript cannot be due. Exact for any reducer that reads no row time; planExport still decides each blob. */
+export function dueTranscriptKeys({ nowMs, homeRetentionDays, transcripts, reducer = EXPORT_REDUCERS.perCopy }) {
+  const out = [];
+  for (const t of transcripts) if (reducer({ tsMs: null, files: t.files }, homeRetentionDays) < nowMs) out.push(t.key);
+  return out;
 }
 
 /** Doctor's `retention-lowered` input (§9.15): when the homes disagree, the
@@ -3062,7 +3115,7 @@ export function deriveHealth(h) {
   if (h.exportPausedLowDisk) warn.push(item('export-paused-low-disk', 'the export is paused for room on the home filesystem'));
   if (h.retentionUnmeasured.length > 0) warn.push(item('retention-unmeasured', `the retention of ${h.retentionUnmeasured.join(', ')} could not be read; each keeps its last measured value`));
   if (h.retentionLowered !== null) {
-    warn.push(item('retention-lowered', `${h.retentionLowered.home} keeps ${h.retentionLowered.days} days, under the others' ${h.retentionLowered.othersMin}; the export horizon follows the shortest`));
+    warn.push(item('retention-lowered', `${h.retentionLowered.home} keeps ${h.retentionLowered.days} days, under the others' ${h.retentionLowered.othersMin}; rows held only in its files fall due ${exportHorizonDays(h.retentionLowered.days)} days after their file's last write (a reminder: each row is measured against its own files' homes)`));
   }
   if (h.exportSegmentMissing > 0) warn.push(item('export-segment-missing', `${h.exportSegmentMissing} export mark(s) named a segment not on this box and were cleared`));
   if (h.journalSkipped > 0) warn.push(item('journal-record-skipped', `${h.journalSkipped} journal record(s) were skipped as malformed or of an unknown kind`));

@@ -943,11 +943,13 @@ describe('DI13: a migration\'s done attempt marker is cleared at both call sites
 
 // ── Task 26: the periodic census (§9.2 step 2, §9.15, W1-j, W1-k) ─────────────────────────────────
 
-describe('O38: the export\'s due rule (B1 half)', () => {
+describe('O38: the export\'s due rule, re-run under the per-copy default (B1 half; W1-B2 Task 35, ruled Q15)', () => {
   const OLD = 'a0000000-0000-4000-8000-0000000006a1';
-  /** A box whose every rostered home keeps 180 days, holding six distinct blobs whose ages are chosen
-   *  around the horizons this pin walks: 150 (180), 60 (90), 30 (60) and 0 (30). The NULL-ts row lives in
-   *  a second transcript whose file is 170 days old. The managed-settings list is the fixture's own. */
+  /** A box whose every rostered home keeps 180 days. One transcript, written now, holds six rows dated 160, 100, 45
+   *  and 10 days back, two of them sharing one blob; a second transcript holds one row with no time, its file 170
+   *  days old. Under the per-copy rule a row ages by its holding files, never by its own time (§9.15), so the file
+   *  written now holds every one of its rows back. Every fixture keeps a file's mtime at or after its rows' times,
+   *  as Claude Code writes them. The managed-settings list is the fixture's own. */
   function censusBox(prefix: string): { box: HistoryBox; MS: string[]; settings: (h: string, body: string) => void; nullFile: string; mainFile: string } {
     const box = makeHistoryBox(prefix, { role: 'fleet', shim: true });
     const settings = (h: string, body: string): void => { fs.writeFileSync(path.join(h, 'settings.json'), body); };
@@ -965,7 +967,7 @@ describe('O38: the export\'s due rule (B1 half)', () => {
       userRow('a0000000-0000-4000-8000-0000000006a5', 'shared words', iso(160 * DAY)),
       userRow('a0000000-0000-4000-8000-0000000006a6', 'shared words', iso(10 * DAY)),
     ]);
-    // A row with no `timestamp` at all: its ts_ms is NULL, so its age is its newest holding file's mtime.
+    // A row with no `timestamp` at all: its ts_ms is NULL, and under either rule its file's mtime decides.
     const noClock = { type: 'user', uuid: 'a0000000-0000-4000-8000-0000000006a7', parentUuid: null, sessionId: U2, cwd: '/home/u/tree/demo', message: { role: 'user', content: 'no clock' } };
     const nullFile = plantTranscript(box, 'claude', SLUG, U2, [noClock]);
     const past = new Date(Date.now() - 170 * DAY);
@@ -981,25 +983,43 @@ describe('O38: the export\'s due rule (B1 half)', () => {
     expect(r.code, r.stderr).toBe(0);
   }
   const due = (box: HistoryBox): number => Number(metaOf(box, 'export_due'));
+  /** One more ccrc id with a one-row transcript under the `claude` account, its file dated `fileDays` back; a row
+   *  with `rowDays` null has no `timestamp`. The file is never dated before its row. The next census pass maps and
+   *  ingests it (its registry scan is due by then). */
+  function plantOne(box: HistoryBox, id: string, uuid: string, rowUuid: string, text: string, rowDays: number | null, fileDays: number): string {
+    plantSession(box, id, { uuid, generation: G1, project: 'demo' });
+    const row = rowDays === null
+      ? { type: 'user', uuid: rowUuid, parentUuid: null, sessionId: uuid, cwd: '/home/u/tree/demo', message: { role: 'user', content: text } }
+      : userRow(rowUuid, text, iso(rowDays * DAY), uuid);
+    const f = plantTranscript(box, 'claude', SLUG, uuid, [row]);
+    const at = new Date(Date.now() - fileDays * DAY);
+    fs.utimesSync(f, at, at);
+    return f;
+  }
 
-  it('180 everywhere: horizon 150, so the old blob and the NULL-ts blob aged by its 170-day file are due, and nothing younger', () => {
+  it('180 everywhere: each file\'s horizon is 150 days, so only the 170-day file\'s NULL-ts row is due; the file written now holds its 160-day rows back', () => {
     const { box } = censusBox('ccrc-hist-o38a-');
     expect(metaOf(box, 'retention_min')).toBe('180');
-    expect(due(box)).toBe(2);
+    expect(due(box)).toBe(1);
     expect(metaOf(box, 'export_overdue')).toBe('0');
   });
 
-  it('a home without the key: 30, horizon 0, everything due, and retention-lowered names that home', () => {
+  it('a home without the key: 30, and retention-lowered names it; it brings forward only the rows whose files it holds', () => {
     const { box, MS, settings } = censusBox('ccrc-hist-o38b-');
-    const lowered = box.homes.find((h) => h.endsWith('.claude-a'))!;
+    const lowered = box.accountHome['claude-a']!;
+    const holder = box.accountHome['claude']!;
     settings(lowered, '{}');
     census(box, MS, 1);
     expect(metaOf(box, 'retention_min')).toBe('30');
-    expect(due(box)).toBe(6);
+    expect(due(box), 'a 30-day home that holds no file makes nothing due').toBe(1);
     expect(JSON.parse(metaOf(box, 'retention_lowered')!)).toEqual({ home: lowered, days: 30, othersMin: 180 });
-    settings(lowered, JSON.stringify({ cleanupPeriodDays: 180 }));
+    settings(holder, '{}');
     census(box, MS, 2);
-    expect(due(box)).toBe(2);
+    expect(due(box), 'the home holding both files on the 30-day default: every row, from its file\'s last write').toBe(6);
+    expect(JSON.parse(metaOf(box, 'retention_lowered')!)).toEqual({ home: holder, days: 30, othersMin: 180 });
+    for (const h of [lowered, holder]) settings(h, JSON.stringify({ cleanupPeriodDays: 180 }));
+    census(box, MS, 3);
+    expect(due(box)).toBe(1);
     expect(metaOf(box, 'retention_lowered')).toBe('');
   });
 
@@ -1014,7 +1034,7 @@ describe('O38: the export\'s due rule (B1 half)', () => {
       k += 1;
       expect(metaOf(box, `retention:${h}`), body).toBe('180');
       expect(metaOf(box, `retention_state:${h}`), body).toBe('unmeasured');
-      expect(due(box), body).toBe(2);
+      expect(due(box), body).toBe(1);
     }
     expect(counter(box, 'retention_unmeasured') - before).toBe(3);
   });
@@ -1061,23 +1081,33 @@ describe('O38: the export\'s due rule (B1 half)', () => {
 
   it('a managed-settings file with 90 under homes of 180 gives 90, and a managed-settings.d/ drop-in with 60 gives 60', () => {
     const { box, MS } = censusBox('ccrc-hist-o38e-');
-    fs.writeFileSync(MS[0]!, JSON.stringify({ cleanupPeriodDays: 90 }));
+    plantOne(box, 'claude-mid', U3, 'a0000000-0000-4000-8000-0000000006a8', 'mid file only', 100, 75);
     census(box, MS, 1);
-    expect(metaOf(box, 'retention_min')).toBe('90');
-    expect(due(box), 'horizon 60: old, mid and the NULL-ts blob').toBe(3);
-    fs.writeFileSync(path.join(MS[1]!, '50-short.json'), JSON.stringify({ cleanupPeriodDays: 60 }));
+    expect(due(box), 'horizon 150: the 75-day file waits').toBe(1);
+    fs.writeFileSync(MS[0]!, JSON.stringify({ cleanupPeriodDays: 90 }));
     census(box, MS, 2);
+    expect(metaOf(box, 'retention_min')).toBe('90');
+    expect(due(box), 'horizon 60: the 75-day file and the 170-day file').toBe(2);
+    fs.writeFileSync(path.join(MS[1]!, '50-short.json'), JSON.stringify({ cleanupPeriodDays: 60 }));
+    census(box, MS, 3);
     expect(metaOf(box, 'retention_min')).toBe('60');
-    expect(due(box), 'horizon 30: and near too').toBe(4);
+    expect(due(box), 'horizon 30: the same two; the file written now still waits').toBe(2);
   });
 
-  it('a blob with an old and a younger referrer is not due; a NULL-ts row ages by its newest holding file', () => {
+  it('a NULL-ts row ages by its holding file; a blob with a due referrer and a younger one in another transcript is not due', () => {
     const { box, MS, nullFile } = censusBox('ccrc-hist-o38f-');
-    expect(due(box), 'the shared blob is not among the two').toBe(2);
+    expect(due(box)).toBe(1);
     const now = new Date();
     fs.utimesSync(nullFile, now, now);
     census(box, MS, 1);
-    expect(due(box), 'with a fresh file the NULL-ts row is young').toBe(1);
+    expect(due(box), 'with a fresh file the NULL-ts row is young').toBe(0);
+    const past = new Date(Date.now() - 170 * DAY);
+    fs.utimesSync(nullFile, past, past);
+    census(box, MS, 2);
+    expect(due(box)).toBe(1);
+    plantOne(box, 'claude-again', U3, 'a0000000-0000-4000-8000-0000000006a9', 'no clock', 1, 0);
+    census(box, MS, 3);
+    expect(due(box), 'the same text in a transcript written now holds the shared blob back').toBe(0);
   });
 
   it('a FIFO at a rostered home\'s settings.json never blocks the census: retention_unmeasured counts, the home keeps 180 (review 316 F10)', () => {
@@ -1094,23 +1124,29 @@ describe('O38: the export\'s due rule (B1 half)', () => {
 
   it('overdue by the file clock: a due blob whose holding file is gone, or past its mtime plus its home\'s retention, FAILs; fresh files never', () => {
     const { box, MS, nullFile, mainFile } = censusBox('ccrc-hist-o38g-');
-    expect(metaOf(box, 'export_overdue'), 'due by the row clock, its files fresh').toBe('0');
+    expect(metaOf(box, 'export_overdue'), 'the NULL-ts blob is due, its file on disk and inside 180 days').toBe('0');
     fs.rmSync(mainFile);
     census(box, MS, 1);
-    expect(metaOf(box, 'export_overdue'), 'the old blob\'s only file is gone').toBe('1');
+    expect(metaOf(box, 'export_overdue'), 'a gone file has passed its date: all five of its blobs, young rows included').toBe('5');
+    expect(due(box)).toBe(6);
     const past = new Date(Date.now() - 200 * DAY);
     fs.utimesSync(nullFile, past, past);
     census(box, MS, 2);
-    expect(metaOf(box, 'export_overdue'), 'and the NULL-ts blob\'s file is past 200 > 180 days').toBe('2');
+    expect(metaOf(box, 'export_overdue'), 'and the NULL-ts blob\'s file is past 200 > 180 days').toBe('6');
   });
 
-  it('W1-k: the census records the oldest row, its row-clock due date and the file clock\'s first deletion date', () => {
-    const { box } = censusBox('ccrc-hist-o38h-');
+  it('W1-k: the census records the oldest row, the first due date by the per-copy rule, and the file clock\'s first deletion date', () => {
+    const { box, MS, nullFile } = censusBox('ccrc-hist-o38h-');
+    const now = new Date();
+    fs.utimesSync(nullFile, now, now);
+    census(box, MS, 1);
     const oldest = Number(metaOf(box, 'oldest_row_ms'));
     expect(Math.abs(oldest - (Date.now() - 160 * DAY))).toBeLessThan(10 * MIN);
-    expect(Number(metaOf(box, 'first_due_ms')) - oldest).toBe(150 * DAY);
+    const firstDue = Number(metaOf(box, 'first_due_ms'));
+    expect(Math.abs(firstDue - (Date.now() + 150 * DAY)),
+      'both files written now, plus 150 days; B1\'s row clock would say the oldest row plus 150, 10 days ago').toBeLessThan(10 * MIN);
     const firstDeletion = Number(metaOf(box, 'first_deletion_ms'));
-    expect(Math.abs(firstDeletion - (Date.now() + 10 * DAY)), 'the 170-day file plus 180 days').toBeLessThan(10 * MIN);
+    expect(Math.abs(firstDeletion - (Date.now() + 180 * DAY)), 'a file written now, plus 180 days').toBeLessThan(10 * MIN);
   });
 });
 
@@ -1658,5 +1694,37 @@ describe('W1-B2 Task 26: the binding branch answers through B1\'s released (RF5a
     const arm = src.slice(src.indexOf('export async function adoptArm('), src.indexOf('export async function bindingPass('));
     expect(arm, 'CONTROL: adoptArm precedes bindingPass').not.toBe('');
     expect(arm).toMatch(/\} finally \{\n(?:\s*\/\/.*\n)*\s*removeEntry\(P\.op\);\n/);
+  });
+});
+
+// ── W1-B2 Task 35: O58 through the census (spec 2026-10-05 §9.15; ruled Q15, D-4735 (history-export-due-per-copy)) ──
+describe('O58: the per-copy due rule is the census\'s default (W1-B2 Task 35; spec §9.15, ruled Q15)', () => {
+  it('a 30-day home holding only a swap copy brings nothing forward; a row held only there is due from its file\'s last write; a long-lived file holds its old rows back', () => {
+    const box = makeHistoryBox('ccrc-hist-o58-', { role: 'fleet', shim: true });
+    const B = box.accountHome['claude-a']!;
+    for (const h of box.homes) fs.writeFileSync(path.join(h, 'settings.json'), JSON.stringify({ cleanupPeriodDays: 180 }));
+    const etc = path.join(box.home, 'etc-claude-code');
+    fs.mkdirSync(path.join(etc, 'managed-settings.d'), { recursive: true });
+    const MS = [path.join(etc, 'managed-settings.json'), path.join(etc, 'managed-settings.d')];
+    const at = (f: string, days: number): void => { const d = new Date(Date.now() - days * DAY); fs.utimesSync(f, d, d); };
+    plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+    plantSession(box, 'claude-a-onlyb', { uuid: U2, generation: G1, project: 'demo' });
+    plantSession(box, 'claude-a-onlya', { uuid: U3, generation: G1, project: 'demo' });
+    // U1: a transcript in a 180-day home and its swap copy in B, both last written 100 days ago.
+    const both = [userRow('a0000000-0000-4000-8000-0000000058a1', 'held in both homes', iso(200 * DAY))];
+    at(plantTranscript(box, 'claude', SLUG, U1, both), 100);
+    at(plantTranscript(box, 'claude-a', SLUG, U1, both), 100);
+    // U2: held only in B, last written 5 days ago.
+    at(plantTranscript(box, 'claude-a', SLUG, U2, [userRow('a0000000-0000-4000-8000-0000000058a2', 'only in b', iso(6 * DAY), U2)]), 5);
+    // U3: a long-lived file in a 180-day home, appended yesterday, whose first row is 200 days old.
+    at(plantTranscript(box, 'claude', SLUG, U3, [userRow('a0000000-0000-4000-8000-0000000058a3', 'only in a, an old row', iso(200 * DAY), U3)]), 1);
+    expect(runDriver(box, { managedSettings: MS }).code).toBe(0);
+    expect(Number(metaOf(box, 'export_due')), 'every home at 180: no file is past its 150 days').toBe(0);
+    fs.writeFileSync(path.join(B, 'settings.json'), '{}');                   // B on the 30-day default
+    expect(runDriver(box, { offsetMs: 31 * MIN, managedSettings: MS }).code).toBe(0);
+    expect(metaOf(box, 'retention_min')).toBe('30');
+    expect(JSON.parse(metaOf(box, 'retention_lowered')!)).toMatchObject({ home: B, days: 30, othersMin: 180 });
+    expect(Number(metaOf(box, 'export_due')), 'only the row held in B alone: U1 waits for its 180-day copy, U3 for its file').toBe(1);
+    expect(Number(metaOf(box, 'export_overdue'))).toBe(0);
   });
 });
