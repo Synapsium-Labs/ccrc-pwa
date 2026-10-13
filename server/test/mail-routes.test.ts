@@ -22,6 +22,7 @@ import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
 import { isStallSettingsKebab } from '../src/coord/stallsettings.js';
 import { isDeadCoordinatorKebab } from '../src/deadCoordinator.js';
 import { isCollectExecutorKebab } from '../src/coord/collectTempRoot.js';
+import { isCollectLaneKebab } from '../src/collectLane.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -861,8 +862,15 @@ describe('the rejection table is total, in both directions', () => {
         // literals. None is a mail rejection or a run refusal — no route answers with one; they ride the job's outcome
         // and the lane's memory. Admitted through the exported guard, derived from that file's tables and L1's
         // `COLLECT_HOLD_WHYS`, never NOT_CODES, for the reason every union above gives.
-        || isCollectExecutorKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word or temp-root collector word`).toBe(true);
+        || isCollectExecutorKebab(tok)
+        // CHILD RECLAMATION, WAVE 10: the next union, re-counted on the merged tree, checked together and never merged,
+        // on the standing rule `enter-ignored` above states. `coord/collectLaneJournal.ts` (the collector switch's
+        // generation journal adapter) spells its read kinds as literals, and the switch's other coord-side code
+        // answers in words L1 declares: the journal's read kinds and faults, the control whys, the write refusals and
+        // the latch outcomes. None is a mail rejection or a run refusal. Admitted through the exported guard, derived
+        // from `collectLane.ts`'s tables, never NOT_CODES, for the reason every union above gives.
+        || isCollectLaneKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word or collector switch word`).toBe(true);
     }
   });
 });

@@ -66,6 +66,7 @@ import { buildInfoOfRow } from './update/inventory.js';
 import type { PoolEdgeLog } from './coord/pooledgelog.js';
 import type { CataloguePoller } from './update/catalogue.js';
 import type { UpdateIntentLog } from './coord/updateintentlog.js';
+import type { CollectLaneJournal } from './collectLane.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
 import { LoginRateLimiter, PASSKEY_MAX_FAILURES } from './auth/ratelimit.js';
@@ -242,6 +243,12 @@ function anonymousAssertStart(full: PasskeyAssertStart): Partial<PasskeyAssertSt
   ) as Partial<PasskeyAssertStart>;
 }
 
+/** The collector switch's composition (path-identity spec 2026-10-12 §5.2, §5.6), built once in `index.ts`: the ONE
+ *  generation journal `CoordStore.setCollectLane` appends to inside its transaction, and this process's boot nonce,
+ *  which only the switch route's confirm key reads. One object, so "no journal" has one spelling: `Deps.collectLane`
+ *  absent. */
+export interface CollectLaneDeps { readonly journal: CollectLaneJournal; readonly bootNonce: string }
+
 export interface Deps {
   cfg: CcrcConfig;
   /** The deploy's build stamp (buildinfo.ts, read once at boot from
@@ -354,6 +361,11 @@ export interface Deps {
    *  `index.ts` beside `coord`. Optional the same way `coord` is: absent, the
    *  intent route answers `501 not-configured`. */
   updateIntentLog?: UpdateIntentLog;
+  /** The collector switch's journal and boot nonce (`CollectLaneDeps`), `updateIntentLog`'s twin for the journal's
+   *  reason: the route and the collector's latch share the process's one instance. Optional the way `coord` is.
+   *  Absent: `GET` and `POST /api/coord/collect-lane` answer `501 not-configured`, and the collector reads its control
+   *  state as `journal-not-configured`, never as a missing journal, which would be the bootstrap. */
+  collectLane?: CollectLaneDeps;
   /** Design 2026-09-20 §10 (wave 5): the SERVER-role node's own move, spawned on this box with the same absolute
    *  argv the agent uses. A two-template capability, never a raw `Runner` — a runner here would give every
    *  route a way around `runCcd` (D-3397). `localUpdateSpawnFor(realRunner, cfg.home)` in

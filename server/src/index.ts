@@ -1,4 +1,4 @@
-import { buildServer, type Deps } from './server.js';
+import { buildServer, type CollectLaneDeps, type Deps } from './server.js';
 import { derivedRoleNote, loadConfig } from './config.js';
 import { readBuildInfo, type BuildInfo } from './buildinfo.js';
 import { realRunner, Tmux } from './exec.js';
@@ -22,10 +22,12 @@ import { openCoordDb } from './coord/db.js';
 import { CoordStore } from './coord/store.js';
 import { PoolEdgeLog, defaultPoolEdgeLogPath } from './coord/pooledgelog.js';
 import { UpdateIntentLog, defaultUpdateIntentLogPath } from './coord/updateintentlog.js';
+import { collectLaneJournalAt, defaultCollectLaneJournalPath } from './coord/collectLaneJournal.js';
 import { readLocalCcdCaps } from './localcaps.js';
 import { localUpdateSpawnFor } from './update/converge.js';
 import { UPDATE_OP_TIMEOUT_MS } from '../../shared/agent-protocol.js';
 import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
 const cfg = loadConfig();
@@ -104,6 +106,16 @@ if (releaseApiUrlProblem !== null) {
 // 2026-09-20 §6).
 const updateIntentLog = new UpdateIntentLog(defaultUpdateIntentLogPath(cfg.ccrcDir));
 
+// The collector switch's ONE generation journal and this process's ONE boot nonce (path-identity spec 2026-10-12
+// §5.2, §5.6), beside `updateIntentLog` and for its reason: `CoordStore.setCollectLane` appends to the journal INSIDE
+// its transaction, so the route and the collector's latch share this instance. The journal resolves through
+// `cfg.ccrcDir`. The nonce is minted once per process and read only by the route's confirm key, so a key minted
+// before a restart never confirms after it; it never enters L1 state.
+const collectLane: CollectLaneDeps = {
+  journal: collectLaneJournalAt(defaultCollectLaneJournalPath(cfg.ccrcDir)),
+  bootNonce: randomUUID(),
+};
+
 // ONE queue, above the mode branch, so both modes and both consumers get the
 // same object. Serialising the naming sweep's rename against
 // POST /workspace/reap is the point; a per-consumer queue would serialise a
@@ -130,6 +142,7 @@ if (cfg.fleetMode === 'remote') {
     poolEdgeLog,
     catalogue,
     updateIntentLog,
+    collectLane,
     updateRunner: localUpdateSpawnFor(cfg.home),
     sendUpdateOp: (tag, kind) => fleet.client.request({ t: 'req', op: 'update', tag, kind }, UPDATE_OP_TIMEOUT_MS),
     fleetIdentity: fleet.identity,
@@ -192,6 +205,7 @@ if (cfg.fleetMode === 'remote') {
     poolEdgeLog,
     catalogue,
     updateIntentLog,
+    collectLane,
     updateRunner: localUpdateSpawnFor(cfg.home),
     fleetIdentity: localFleetIdentity,
     // `connected`/`downSince` are inert for local mode — every reader of

@@ -1290,6 +1290,48 @@ export const MIGRATIONS: readonly string[] = [
   `
   CREATE TABLE dead_claimants (claimantId TEXT NOT NULL PRIMARY KEY, firstDeadAt INTEGER NOT NULL, lastDeadAt INTEGER NOT NULL);
   `,
+  // ── 19: user_version 18 -> 19 ─────────────────────────────────────────────
+  // The temp-root collector's Settings switch (path-identity spec 2026-10-12 §5.2; child reclamation wave 10). ONE
+  // ROW, `CHECK (id = 1)`, the `stall_settings` idiom. Its one writer is `CoordStore.setCollectLane`, called only by
+  // `POST /api/coord/collect-lane` and the collector's one latch helper; its reader is `CoordStore.collectLaneRow`,
+  // whose raw values `measureCollectLaneRow` (`collectLane.ts`, L1) decides, never cast. camelCase columns, the house
+  // style: `choice` is the raw stored token (only exact `live` arms); `fleetNodeId` the directly measured fleet node
+  // the operator confirmed (null for `off`); `markerRetiredAt` the legacy marker's journaled latch (null until a
+  // listing proves the marker absent, and never cleared once set); `generation` the database half of the generation
+  // proof; `updatedAt` a diagnostic wall time, never an arming input.
+  //
+  // THE SEED IS TODAY'S BEHAVIOUR, and it is EXACT: `off`, no node, no latch, generation 0, updatedAt 0. Beside a
+  // missing journal it is the one bootstrap, under which the legacy marker alone still arms the lane, so this entry
+  // changes nothing on deploy. An absent row, or a row that differs from the seed in any field, is not the seed, and
+  // nothing inserts one. `choice` deliberately carries NO CHECK: a token a newer build writes must not stop an older
+  // build opening the file; this build reads it as readable but ineffective.
+  //
+  // The proof's other half is `~/.ccrc/collect-lane-generation.log`, the server-owned generation journal: appended
+  // BEFORE this row is updated, never replayed into it, never rebuilt from it, and never restored with a snapshot of
+  // this file. The row is coherent only when the journal's maximum equals `generation`.
+  //
+  // A NEW TABLE AND NOTHING ELSE, the `dead_claimants` entry's shape and for its reason: an older build opening a file
+  // at `user_version 19` takes rule 3 (it warns, reads as-is and migrates nothing), never names this table, and boots;
+  // the legacy marker alone then arms its lane.
+  //
+  // Every earlier entry is frozen: `db.ts` iterates from the live `user_version`, so an edit to an applied entry never
+  // runs. THIS ENTRY IS SLOT 19 AS WRITTEN, measured against origin/main at the wave's first step. The delegation-broker
+  // wave 3 plan names the same slot, and whichever branch holding it merges second moves up. RE-MEASURE immediately
+  // before the PR and before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE collect_lane_settings (
+    id              INTEGER PRIMARY KEY CHECK (id = 1),
+    choice          TEXT NOT NULL,
+    fleetNodeId     TEXT,
+    markerRetiredAt INTEGER,
+    generation      INTEGER NOT NULL,
+    updatedAt       INTEGER NOT NULL
+  );
+  INSERT INTO collect_lane_settings (id, choice, fleetNodeId, markerRetiredAt, generation, updatedAt)
+    VALUES (1, 'off', NULL, NULL, 0, 0);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
