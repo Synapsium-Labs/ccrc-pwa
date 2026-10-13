@@ -509,7 +509,7 @@ export const SHIM_LOCK_HELD: 75;
 export const RECALL_SRCS: readonly string[];
 export function escapeXmlAttr(value: string): string;
 export function escapeXmlText(value: string): string;
-export interface RecallField { src: string; id: string; ts: number | null; role: string | null; text: string }
+export interface RecallField { src: string; id: string; ts: number | null; role: string | null; text: string; family?: { id: string; generation: string; firstSeenMs: number } }
 export function recallEnvelope(f: RecallField): string;
 export function snippetLine(text: string, max?: number): string;
 export function capOutput(blocks: readonly string[], reserve: number, cap?: number): { kept: string[]; shown: number };
@@ -641,7 +641,7 @@ export function restoreNameOk(name: string): boolean;
 export interface BindBackup { regular: boolean; storeId: Presence<string>; userVersion: number | null; integrityOk: boolean | null }
 export interface BindFacts extends StoreFacts {
   codeVersion: number; storedVersion: Presence<number>; storeIdArg: string | null;
-  journalDirs: readonly { storeId: string; heads: 'agree' | 'disagree' | 'unreadable' | 'foreign' }[];
+  journalDirs: readonly { storeId: string; heads: 'agree' | 'empty' | 'disagree' | 'unreadable' | 'foreign' }[];
   backup: null | BindBackup;
 }
 export function decideBind(kind: 'adopt' | 'restore' | 'rebuild', f: BindFacts):

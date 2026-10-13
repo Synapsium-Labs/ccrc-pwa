@@ -701,6 +701,56 @@ describe('the read verbs: --session, --project, --workspace, lag, the counter li
     expect(lines.filter((l) => l.startsWith('family ')).map((l) => l.split(' ')[1]).sort()).toEqual([ID, ID_B]);
   }, HEAVY);
 
+  it('whole-branch fix 1, B: under --workspace and --project each grep hit names its own family, in both forms; the default scope prints none (spec §8.2)', () => {
+    const box = makeHistoryBox('ccrc-hist-rcl-wbfam-');
+    const w = path.join(box.home, 'work', 'w');
+    fs.mkdirSync(w, { recursive: true });
+    const rowsOf = (t: string, word: string): Row[] => [
+      userRow({ uuid: rid(t, 1), ts: iso(1), sessionId: t, cwd: w, text: `zqfamcommon ${word} the question` }),
+      assistantRow({ uuid: rid(t, 2), ts: iso(2), sessionId: t, cwd: w, text: `zqfamcommon ${word} the answer`, requestId: `req_${t.slice(0, 8)}`, msgId: `msg_${t.slice(0, 8)}` }),
+    ];
+    seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, workdir: w, rows: rowsOf(TA, 'zqfamone') });
+    seedFamily(box, { id: ID_B, project: PROJECT, uuid: TB, generation: G2, workdir: w, rows: rowsOf(TB, 'zqfamtwo') });
+    const first = (id: string): number => {
+      const db = openStoreRO(box);
+      try { return Number((db.prepare('SELECT first_seen_ms AS m FROM sessions WHERE ccrc_id = ?').get(id) as { m: number }).m); } finally { db.close(); }
+    };
+    const want = (id: string, g: string) => ({ ccrc_id: id, generation: g, first_seen_ms: first(id) });
+    for (const scope of ['--workspace', '--project']) {
+      const j = runCli(box, ['grep', scope, 'zqfamcommon', '--json'], { env: withPane(box, ID) });
+      expect(j.code, `${scope}: ${j.stderr}${j.stdout}`).toBe(0);
+      const items = (j.json?.['items'] ?? []) as Array<{ snippet: string; family?: { ccrc_id: string; generation: string; first_seen_ms: number } }>;
+      const one = items.filter((i) => i.snippet.includes('zqfamone'));
+      const two = items.filter((i) => i.snippet.includes('zqfamtwo'));
+      expect(one.length, `${scope}: CONTROL: a hit of family one`).toBeGreaterThan(0);
+      expect(two.length, `${scope}: CONTROL: a hit of family two`).toBeGreaterThan(0);
+      for (const i of one) expect(i.family, `${scope} one`).toEqual(want(ID, G1));
+      for (const i of two) expect(i.family, `${scope} two`).toEqual(want(ID_B, G2));
+      const human = runCli(box, ['grep', scope, 'zqfamcommon'], { env: withPane(box, ID) });
+      expect(human.code, human.stderr).toBe(0);
+      const envs = human.stdout.split('\n').filter((l) => l.includes('<ccrc-recall '));
+      const attr = (id: string, g: string) => `family="${id}" generation="${g}" first-seen="${new Date(first(id)).toISOString()}" trust="untrusted"`;
+      for (const l of envs.filter((x) => x.includes('zqfamone'))) expect(l, scope).toContain(attr(ID, G1));
+      for (const l of envs.filter((x) => x.includes('zqfamtwo'))) expect(l, scope).toContain(attr(ID_B, G2));
+      expect(envs.length).toBeGreaterThanOrEqual(2);
+      expect(human.stdout.length).toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+      const rx = runCli(box, ['grep', scope, '--regex', 'zqfam(one|two)', '--json'], { env: withPane(box, ID) });
+      expect(rx.code, rx.stderr).toBe(0);
+      const rxItems = (rx.json?.['items'] ?? []) as Array<{ snippet: string; family?: unknown }>;
+      expect(rxItems.length).toBeGreaterThanOrEqual(2);
+      for (const i of rxItems) expect(i.family, `${scope} regex`).toEqual(i.snippet.includes('zqfamone') ? want(ID, G1) : want(ID_B, G2));
+    }
+    // CONTROL: the default (family) scope is the family itself, and prints no family attribute.
+    const own = runCli(box, ['grep', 'zqfamone', '--json'], { env: withPane(box, ID) });
+    expect(own.code, own.stderr).toBe(0);
+    const ownItems = (own.json?.['items'] ?? []) as Array<Record<string, unknown>>;
+    expect(ownItems.length).toBeGreaterThan(0);
+    for (const i of ownItems) expect(Object.keys(i)).not.toContain('family');
+    const ownHuman = runCli(box, ['grep', 'zqfamone'], { env: withPane(box, ID) });
+    expect(ownHuman.stdout).toContain('<ccrc-recall ');
+    expect(ownHuman.stdout).not.toMatch(/ family="/);
+  }, HEAVY);
+
   it('C47b: --workspace matches cwd_real through a symlinked workdir, and the verbatim cwd of a path that no longer resolved', () => {
     const box = makeHistoryBox('ccrc-hist-rcl-c47b-');
     const real = path.join(box.home, 'work', 'real-w');
@@ -4915,4 +4965,55 @@ describe.skipIf(process.platform === 'darwin')('HA2: --json carries the hint, a 
       w.close();
     }
   }, 2 * HEAVY);
+});
+
+// ── Whole-branch fix round 1, item A (D-4613): the final belt keeps --json valid ────────────────────────
+// A recalled field holding `export API_KEY="abc123"` serialises, after the field pass, as `API_KEY=\"[redacted]\"`;
+// the final pass's layer 2 used to take the escape's backslash for the value and leave the quote bare.
+describe.skipIf(process.platform === 'darwin')('whole-branch fix 1: every read verb\'s --json parses with shell-shaped recalled text (D-4613)', () => {
+  const ID = 'claude-a-wbx1';
+  const G = '0189abcd-1234-4678-9abc-00000000a041';
+  const T = 'a4100001';
+  const U = t16uuid(T, 0);
+  const e = (i: number): string => t16uuid(T, i);
+  const HOSTILE = [
+    'export API_KEY="abc123"',
+    'password: "hunter2hunter2"',
+    'curl -H "Authorization: Bearer abc.def" x',
+    'GET /x?token=abc"&x',
+  ];
+  let box: rH.HistoryBox;
+  let leaf = '';
+  const cli = (args: string[]) => rH.runCli(box, args, { env: rH.withPane(box, ID) });
+
+  beforeAll(() => {
+    box = rH.makeHistoryBox('ccrc-hist-wbx1-');
+    const summary = ['<summary>', '1. Primary Request and Intent:', `   zqx41shape ${HOSTILE.join(' ; ')}`,
+      '8. Current Work:', `   zqx41shape ${HOSTILE.join(' ; ')}`, '9. Optional Next Step:', `   zqx41shape ${HOSTILE[0]}`, '</summary>'].join('\n');
+    t16seed(box, { id: ID, project: 'demo', generation: G, uuid: U, rows: [
+      rFx.userRow({ uuid: e(1), ts: t16ts(1), sessionId: U, text: `zqx41shape ${HOSTILE.join('\n')}` }),
+      rFx.assistantRow({ uuid: e(2), ts: t16ts(2), parentUuid: e(1), sessionId: U, text: `zqx41shape ${HOSTILE.join(' ; ')}` }),
+      rFx.boundaryRow({ uuid: e(3), ts: t16ts(3), parentUuid: e(2), sessionId: U, trigger: 'manual', headUuid: e(2), anchorUuid: e(4), tailUuid: e(2), allUuids: [] }),
+      rFx.summaryRow({ uuid: e(4), ts: t16ts(4), parentUuid: e(3), sessionId: U, text: summary }),
+    ] });
+    leaf = t16leafOf(box, ID);
+  }, 480_000);
+
+  it('grep, describe, expand and tree each answer a --json string that parses, and none prints the values', () => {
+    const runs: Array<[string, string[]]> = [
+      ['grep', ['grep', 'zqx41shape', '--json']],
+      ['describe', ['describe', leaf, '--json']],
+      ['expand', ['expand', leaf, '--json']],
+      ['expand-entry', ['expand', e(1), '--json']],
+      ['tree', ['tree', '--json']],
+    ];
+    for (const [name, args] of runs) {
+      const r = cli(args);
+      expect(r.code, `${name}: ${r.stderr}`).toBe(0);
+      expect(() => JSON.parse(r.stdout), `${name}: ${r.stdout.slice(0, 400)}`).not.toThrow();
+      expect(r.stdout, name).not.toMatch(/abc123|hunter2hunter2|abc\.def/);
+    }
+    const g = cli(['grep', 'zqx41shape', '--json']);
+    expect(String(g.stdout), 'CONTROL: the fixture was found').toContain('zqx41shape');
+  }, HEAVY);
 });

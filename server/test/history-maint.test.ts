@@ -2357,12 +2357,12 @@ describe('C64: every writing form, both doors (W1-B2 Task 30)', () => {
     for (const text of Object.values(HEALTH_REMEDIES)) {
       for (const m of text.matchAll(/ccrc history ([a-z][a-z-]*(?: --[a-z][a-z-]*(?: <file>)?)*)/g)) found.add(m[1]!);
     }
-    // Measured on B1's merged texts, under this regex: prune, doctor --restore, doctor --adopt, doctor --migrate,
-    // status --json and doctor --repair. B1 names --rebuild only inside "doctor --restore and --rebuild …" (the regex
-    // stops at " and") and --backup nowhere, and spells no `<file>`: a file-bearing restore text is built by
-    // remedyFor, not held in HEALTH_REMEDIES.
+    // Measured on the texts as whole-branch fix round 1 left them, under this regex: prune --older-than (the regex stops at the
+    // flag; the remedy spells `<age> --apply` after it), doctor --restore, doctor --rebuild, doctor --adopt, doctor --migrate,
+    // status --json and doctor --repair. --backup is named nowhere, and no text spells `<file>`: a restore text names `<backup>`,
+    // which the regex stops before, and the file-bearing one is built by remedyFor, not held in HEALTH_REMEDIES.
     expect([...found], 'CONTROL: the remedies name the operator verbs B1 spells').toEqual(expect.arrayContaining([
-      'prune', 'doctor --adopt', 'doctor --migrate', 'doctor --repair', 'doctor --restore',
+      'prune --older-than', 'doctor --adopt', 'doctor --migrate', 'doctor --repair', 'doctor --restore',
     ]));
     for (const extra of ['doctor --backup', 'doctor --rebuild']) found.add(extra);   // B1's texts name them only inside prose, or not at all
     for (const cmd of found) {
@@ -2372,7 +2372,7 @@ describe('C64: every writing form, both doors (W1-B2 Task 30)', () => {
       // the row could not reach apply-in-session; CLAUDECODE is decided before the TTY bump.
       const args = cmd.split(' ').map((a) => (a === '<file>' ? GT_BACKUP : a));
       if (cmd === 'doctor --restore') args.push(GT_BACKUP);
-      if (args[0] === 'prune' && args.length === 1) args.push('--older-than', '30d', '--apply');
+      if (args[0] === 'prune') args.splice(1, args.length, '--older-than', '30d', '--apply');   // the remedy spells `prune --older-than <age> --apply`; the regex stops at the flag
       if (args[0] === 'status') {
         const s = runCli(box, [...args.filter((a) => a !== '--json'), '--json']);
         expect(`${s.stdout}${s.stderr}`, cmd).not.toContain('bad-args');

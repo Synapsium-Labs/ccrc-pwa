@@ -2119,6 +2119,51 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     const text = `a ${tok} b DB_PASSWORD=xyz-fixture`;
     expect(libRedact.redactFinal(text, idx)).toBe(libRedact.redactField(text, idx));
   });
+  // D-4613 (history-final-belt-layer2-structure-safe; whole-branch review security-1, security-2): the final belt's layer 2
+  // runs in its structure-safe form, so it never breaks a --json string or the human page's frame (§8.3).
+  it('the final belt keeps --json valid: layer 2 never takes a JSON escape\'s backslash for a value (D-4613)', () => {
+    const idx = idxOf([]);
+    const shapes = [
+      'export API_KEY="abc123"',
+      'password: "hunter2hunter2"',
+      'curl -H "Authorization: Bearer abc.def" x',
+      'GET /x?token=abc"&x',
+      'curl -H "x-ccrc-mail-token: zzz" y',
+    ];
+    for (const s of shapes) {
+      const shown = libRedact.redactForDisplay(s, idx);
+      const wire = libRedact.redactFinal(JSON.stringify({ text: shown }), idx);
+      let o: { text: string } | null = null;
+      try { o = JSON.parse(wire); } catch { o = null; }
+      expect(o, `${s} -> ${wire}`).not.toBeNull();
+      expect(o!.text, s).toContain(M);
+      expect(o!.text, s).not.toMatch(/abc123|hunter2|abc\.def|=abc|zzz/);
+    }
+    // CONTROL: the control that always parsed still does.
+    const ctl = libRedact.redactFinal(JSON.stringify({ text: 'a TOKEN=x\\ b' }), idx);
+    expect(() => JSON.parse(ctl)).not.toThrow();
+  });
+  it('the final belt keeps the human page\'s frame: an unclosed JSON-form value never runs on past a line or a tag (D-4613)', () => {
+    const idx = idxOf([]);
+    const next = 'next: "$HOME/.local/bin/ccrc" history expand --from x';
+    const page = `header\n<ccrc-recall src="a">config {"token": "abcdefgh</ccrc-recall>\nshown 1 of 3\n${next}`;
+    const out = libRedact.redactFinal(page, idx);
+    expect(out).toContain('</ccrc-recall>\nshown 1 of 3\nnext: "$HOME/.local/bin/ccrc" history expand --from x');
+    expect(out.endsWith(next)).toBe(true);
+    const two = `<ccrc-recall src="a">config {"token": "abcdefgh</ccrc-recall>\n<ccrc-recall src="b">second</ccrc-recall>\n${next}`;
+    const o2 = libRedact.redactFinal(two, idx);
+    expect(o2).toContain('</ccrc-recall>\n<ccrc-recall src="b">second</ccrc-recall>\nnext: ');
+  });
+  it('the final belt is still a belt: a context-shaped secret the field pass never saw is masked (D-4613)', () => {
+    const idx = idxOf([]);
+    for (const hint of ['token=abcdefghijklmnop1234', 'Authorization: Bearer abcdefghijklmnop1234', 'DB_PASSWORD=hunter2hunter2', '"token": "abcdefghijklmnop1234"']) {
+      const out = libRedact.redactFinal(`<ccrc-recall src="a">see ${hint} now</ccrc-recall>\nnext: x`, idx);
+      expect(out, hint).not.toMatch(/abcdefghijklmnop1234|hunter2hunter2/);
+      expect(out, hint).toContain(M);
+    }
+    // The residual (D-4613): a value that holds a `<` is masked up to it by the final belt, the rest is the field pass's.
+    expect(libRedact.redactFinal('PASSWORD=ab<cd', idx)).toBe(`PASSWORD=${M}<cd`);
+  });
   it('the identifier pattern matches the upstream names and no others', () => {
     for (const n of ['CCRC_AGENT_TOKEN', 'LITELLM_MASTER_KEY', 'api_key', 'password', 'X_SECRET', 'GH_AUTH']) expect(libRedact.IDENTIFIER_RE.test(n), n).toBe(true);
     for (const n of ['CCRC_ROLE', 'Authorization', 'keyboard', 'monkey', 'CCRC_SERVER_URL']) expect(libRedact.IDENTIFIER_RE.test(n), n).toBe(false);
@@ -3084,8 +3129,10 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     for (const w of want) expect(healthLib.HEALTH_REMEDIES[w]!.length, w).toBeGreaterThan(0);
   });
 
-  // FR3-d (final review C11): B1's `ccrc history` answers `status` only, so a remedy doctor relays must name an action a B1 build has.
-  it('no remedy sends the operator to a ccrc history verb this build refuses, unless it says the verb arrives with W1-B2 (FR3-d)', () => {
+  // FR3-d (final review C11), narrowed back to its purpose by whole-branch fix round 1 (item C; H-229 widened): every verb a
+  // remedy names ships in this build, so a remedy never says one "arrives with" a wave. The shipped verbs are derived from
+  // lib's own writing-forms table, not listed by hand; a verb outside that table would still need its own sentence.
+  it('no remedy says a ccrc history verb that ships in this build arrives with a wave (FR3-d, whole-branch fix 1 item C)', () => {
     const texts: Array<[string, string]> = Object.entries(healthLib.HEALTH_REMEDIES).map(([w, t]) => [`static ${w}`, t]);
     const dynamic: Array<Partial<healthLib.HealthInputs>> = [
       ...WORD_CASES.map(([, , o]) => o),
@@ -3097,16 +3144,55 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
       const r = healthLib.deriveHealth(base(o));
       for (const i of [...r.warn, ...r.fail]) texts.push([`derived ${i.word}`, i.remedy]);
     }
+    const shipped = new Set(Object.values(WRITING_FORMS).map((f) => f.op));
+    expect([...shipped].sort(), 'CONTROL: the table holds the operator verbs').toEqual(expect.arrayContaining(['prune', 'repair', 'migrate', 'adopt', 'restore', 'rebuild']));
     let named = 0;
     for (const [what, text] of texts) {
-      const verbs = text.match(/ccrc history (?:doctor --[a-z]+|prune)/g) ?? [];
-      named += verbs.length;
-      // H-224: --restore and --rebuild ship in this PR; a remedy may name only those, if it states their real path (history.db moved aside together).
-      const shippedOnly = verbs.length > 0 && verbs.every((x) => /--(?:restore|rebuild)$/.test(x)) && text.includes('aside together');
-      if (verbs.length > 0 && !shippedOnly) expect(text, `${what} names ${verbs.join(', ')} without saying it arrives with W1-B2`).toMatch(/arrives? with W1-B2/);
+      const verbs = [...text.matchAll(/ccrc history (?:doctor (--[a-z]+)|([a-z]+))/g)].map((m) => (m[1] !== undefined ? m[1].slice(2) : m[2]!));
+      const ships = verbs.filter((v) => shipped.has(v));
+      named += ships.length;
+      if (ships.length > 0) expect(text, `${what} names ${ships.join(', ')}, which ship here, yet says a verb arrives with a wave`).not.toMatch(/arrives? with W1-B[0-9]/);
       expect(text, `${what} names the export writer's update as the action`).not.toMatch(/update (?:this box )?to a build with the export writer/);
     }
     expect(named, 'the scan found no verb to check: the pin would pass on anything').toBeGreaterThan(5);
+    // The scan is not vacuous in the other direction: it reds on the old text it replaced.
+    const old = 'raise the cap (an integer, in GB); ccrc history prune, which frees space, arrives with W1-B2';
+    expect(old.match(/ccrc history (?:doctor (--[a-z]+)|([a-z]+))/)![2], 'CONTROL: the old text names a shipped verb').toBe('prune');
+    expect(/arrives? with W1-B[0-9]/.test(old)).toBe(true);
+  });
+  // Whole-branch fix round 1, item C: each reworded remedy names the operator, "a terminal outside any session" and the real command.
+  it('each remedy names the real command and path in this build, as the operator\'s (whole-branch fix 1 item C)', () => {
+    const R = healthLib.HEALTH_REMEDIES;
+    const out = 'from a terminal outside any session';
+    for (const w of ['at-cap', 'cap-near']) {
+      expect(R[w], w).toContain('ccrc history prune --older-than <age> --apply');
+      expect(R[w], w).toContain(out);
+    }
+    expect(R['store-unbound']).toContain('the operator runs ccrc history doctor --adopt');
+    expect(R['store-unbound']).toContain(out);
+    for (const w of ['store-missing', 'store-recoverable', 'store-zero-byte', 'store-schema-missing']) {
+      expect(R[w], w).toContain('ccrc history doctor --restore <backup>');
+      expect(R[w], w).toContain('ccrc history doctor --rebuild');
+      expect(R[w], w).toContain(out);
+    }
+    for (const w of ['store-zero-byte', 'store-schema-missing']) expect(R[w], w).toContain('moves history.db, history.db-wal and history.db-shm aside together');
+    expect(R['migration-needs-op']).toContain('the operator runs ccrc history doctor --migrate');
+    expect(R['migration-needs-op']).toContain(out);
+    expect(R['blob-undecodable']).toContain('the operator runs ccrc history doctor --repair');
+    expect(R['blob-undecodable']).toContain(out);
+    // journal-record-skipped: doctor --repair re-measures the spool counters and blob_undecodable, never journal_skipped (the audit's),
+    // so the remedy names no verb that would not clear it.
+    expect(R['journal-record-skipped']).not.toMatch(/ccrc history (?:doctor|prune)/);
+    expect(R['journal-record-skipped']).toContain('journal audit recounts it');
+    // The dynamic texts carry the same commands.
+    const gone = healthLib.deriveHealth(base({ exit: 5, reason: 'store-missing', backupsDb: ['20261001T000000Z.db'] })).fail[0]!.remedy;
+    expect(gone).toContain('ccrc history doctor --restore 20261001T000000Z.db');
+    expect(gone).toContain('ccrc history doctor --rebuild');
+    expect(gone).toContain(out);
+    const nobk = healthLib.deriveHealth(base({ exit: 5, reason: 'store-missing' })).fail[0]!.remedy;
+    expect(nobk).toContain('the operator runs ccrc history doctor --rebuild');
+    const cap = healthLib.deriveHealth(base({ sizeBytes: 41 * 2 ** 30 })).warn[0]!.remedy;
+    expect(cap).toContain('ccrc history prune --older-than <age> --apply');
   });
   // FR3 fix round 1 (F1/F2): a plain cp into history.db is peeked by the 2-minute sweep half-copied (decideStoreOpen reads a non-empty DB with a
   // store.id as `open`), lands 0644, skips --restore's journal replay and then makes --restore/--rebuild refuse. B1 tells the operator to wait.
@@ -3294,7 +3380,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
   it('migration-needs-op names its estimate and ccrc history doctor --migrate; migration-refused names the filesystem and the room', () => {
     const op = healthLib.deriveHealth(base({ migration: 'snapshot-needs-op', sizeBytes: 50_000_000_000, copyBps: 10_000_000 }));
     expect(op.fail[0]!.detail).toContain('5000 s');
-    expect(op.fail[0]!.remedy).toContain('ccd-history-sweep --op migrate');
+    expect(op.fail[0]!.remedy).not.toContain('--op migrate');
     expect(op.fail[0]!.remedy).toContain('ccrc history doctor --migrate');
     const room = healthLib.deriveHealth(base({ migration: 'refuse-low-disk', sizeBytes: 1_000, thresholdBytes: 9_000, freeBytes: 500 }));
     expect(room.fail[0]!.detail).toContain('/home/u/.ccrc/history/db');
@@ -4728,7 +4814,7 @@ describe("decideBind: the binding verbs' preconditions, unreadable never read as
     const one: Partial<libOps.BindFacts> = { journalStoreDirs: [S], journalDirs: [{ storeId: S, heads: 'foreign' }] };
     for (const o of [one, { ...one, storeIdArg: S }]) {
       const r = refused('rebuild', o);
-      expect(r, JSON.stringify(o)).toMatchObject({ ok: false, rc: 2, reason: 'rebuild-refused', detail: `journal/${S}/ holds an entry at a month-file name that is no regular file (a link, socket, FIFO or directory)` });
+      expect(r, JSON.stringify(o)).toMatchObject({ ok: false, rc: 2, reason: 'rebuild-refused', detail: expect.stringContaining(`journal/${S}/ holds an entry at a month-file name that is no regular file (a link, socket, FIFO or directory); the operator puts the regular month file back, or removes the entry`) });
       expect(r.ok ? null : r.remedy, `${JSON.stringify(o)}: --store-id cures nothing here`).toBeUndefined();
     }
   });
@@ -4756,11 +4842,30 @@ describe("decideBind: the binding verbs' preconditions, unreadable never read as
     expect(ok.ok ? null : 'refused', 'CONTROL: an agreeing directory is not refused').toBeNull();
   });
 
+  it('H-227 (D-4605 refined): a journal directory with no month file (`empty`) is nothing to replay: the rebuild proceeds on the marker path and on a --store-id naming it; alone and unnamed it names no store; disagree keeps its refusals', () => {
+    const empty = (o: Partial<libOps.BindFacts> = {}) => facts({ journalStoreDirs: [S], journalDirs: [{ storeId: S, heads: 'empty' }], ...o });
+    expect(libOps.decideBind('rebuild', empty({ storeId: v(S) })), 'the marker path').toEqual({ ok: true, storeId: S });
+    expect(libOps.decideBind('rebuild', empty({ storeIdArg: S })), 'a --store-id naming it').toEqual({ ok: true, storeId: S });
+    expect(libOps.decideBind('rebuild', empty({ storeId: v(S), storeIdArg: S })), 'both').toEqual({ ok: true, storeId: S });
+    const lone = libOps.decideBind('rebuild', empty());
+    expect(lone, 'a lone, unnamed empty directory is a store nothing journaled into').toMatchObject({ ok: false, rc: 2, reason: 'rebuild-refused' });
+    expect(lone.ok ? '' : lone.detail).toContain('holds no month file');
+    // The disagree rows are unchanged.
+    for (const o of [{ storeId: v(S) }, { storeIdArg: S }, {}] as Array<Partial<libOps.BindFacts>>) {
+      const r = libOps.decideBind('rebuild', facts({ journalStoreDirs: [S], journalDirs: [{ storeId: S, heads: 'disagree' }], ...o }));
+      expect(r, JSON.stringify(o)).toMatchObject({ ok: false, rc: 2, reason: 'rebuild-refused', detail: `journal/${S}/ holds head records naming another store` });
+    }
+    // An empty directory among several is still a candidate only --store-id can pick.
+    const two = facts({ journalStoreDirs: [S, T], journalDirs: [{ storeId: S, heads: 'empty' }, { storeId: T, heads: 'agree' }] });
+    expect(libOps.decideBind('rebuild', two)).toMatchObject({ ok: false, rc: 2, remedy: 'store-id' });
+    expect(libOps.decideBind('rebuild', { ...two, storeIdArg: S })).toEqual({ ok: true, storeId: S });
+  });
+
   it('H-218 (D-4605): rebuild with store.id present and no --store-id reads the marker\'s own directory: foreign and disagree are exit 2 rebuild-refused, unreadable is exit 5, agree and no directory keep the ok', () => {
     const marked = (heads: 'agree' | 'disagree' | 'foreign' | 'unreadable') =>
       facts({ storeId: v(S), journalStoreDirs: [S], journalDirs: [{ storeId: S, heads }] });
     const foreign = libOps.decideBind('rebuild', marked('foreign'));
-    expect(foreign, 'foreign').toMatchObject({ ok: false, rc: 2, reason: 'rebuild-refused', detail: `journal/${S}/ holds an entry at a month-file name that is no regular file (a link, socket, FIFO or directory)` });
+    expect(foreign, 'foreign').toMatchObject({ ok: false, rc: 2, reason: 'rebuild-refused', detail: expect.stringContaining(`journal/${S}/ holds an entry at a month-file name that is no regular file (a link, socket, FIFO or directory); the operator puts the regular month file back, or removes the entry`) });
     expect(foreign.ok ? null : foreign.remedy, 'no --store-id cures a foreign entry').toBeUndefined();
     const disagree = libOps.decideBind('rebuild', marked('disagree'));
     expect(disagree, 'disagree').toMatchObject({ ok: false, rc: 2, reason: 'rebuild-refused', detail: `journal/${S}/ holds head records naming another store` });
@@ -4779,6 +4884,13 @@ describe("decideBind: the binding verbs' preconditions, unreadable never read as
     const a = libOps.decideBind('adopt', facts({ ...adoptable, storedVersion: ver(0) }));
     expect(a, 'adopt at 0').toMatchObject({ ok: false, rc: 2, reason: 'adopt-refused' });
     if (!a.ok) expect(a.detail).toContain('0');
+    // Whole-branch fix 1 item C: restore and rebuild both refuse while history.db stands, so the remedy moves it aside first (the operator's act).
+    if (!a.ok) {
+      expect(a.detail).toContain('the operator moves history.db, history.db-wal and history.db-shm aside together');
+      expect(a.detail).toContain('from a terminal outside any session');
+      expect(a.detail).toContain('ccrc history doctor --restore <backup>');
+      expect(a.detail).not.toContain('instead of adopting');
+    }
     expect(libOps.decideBind('restore', facts({ backup: backup({ userVersion: 1 }) })), 'CONTROL: restore at 1').toEqual({ ok: true, storeId: S });
     expect(libOps.decideBind('adopt', facts({ ...adoptable, storedVersion: ver(1) })), 'CONTROL: adopt at 1').toEqual({ ok: true, storeId: S });
     expect(libOps.decideBind('restore', facts({ backup: backup({ userVersion: null }) })), 'CONTROL: unmeasured').toEqual({ ok: true, storeId: S });

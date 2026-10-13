@@ -1911,6 +1911,24 @@ export const LEAD_READINGS_MAX = 16;
  *  right before a word is not plain: it reads as a bare `ESC` and a final byte, a single shift or a DCS header. */
 const PLAIN_SEQ_RE = /^(?:\x1b\[|\x9b)[0-?]*[@-~]$|^\x1b[!-/][ -/]*[0-~]$/;
 
+/** Layer 2's rules (the context layer), one definition each, built twice: `field` is the field pass, `final` the second
+ *  belt's structure-safe form, D-4613 (history-final-belt-layer2-structure-safe) (§8.3, whole-branch review: the final
+ *  pass runs over a serialised `--json` envelope and over the human page's frame). In the final form no value class
+ *  consumes a backslash (a JSON escape is never split, so an escaped quote ends a value instead of being left bare),
+ *  a line break (`\n`, `\r`: a value never crosses a line), `<` or `>` (nor a frame tag) or `&`; the JSON-form rule's value
+ *  has no escape alternative, so an escaped quote ends it. The field form is today's, byte for byte. */
+function contextRules(final) {
+  const stop = final ? String.raw`\\<>&` : '';
+  return Object.freeze({
+    json: new RegExp(String.raw`"([A-Za-z_][A-Za-z0-9_.-]{0,255})"(\s*:\s*)"(${final ? String.raw`[^"\\\n\r<>&]+` : String.raw`(?:[^"\\]|\\.)+`})"`, 'g'),
+    named: new RegExp(String.raw`\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:[ \t]+)(["']?)([^\s"'` + '`' + String.raw`,;&${final ? String.raw`\\<>` : ''}]+)`, 'g'),
+    bearer: new RegExp(String.raw`(Authorization:[ \t]*Bearer[ \t]+)([^\s"'${stop}]+)`, 'gi'),
+    mailToken: new RegExp(String.raw`(x-ccrc-mail-token:[ \t]*)([^\s"'${stop}]+)`, 'gi'),
+    query: new RegExp(String.raw`([?&]token=)([^&\s"'#${final ? String.raw`\\<>` : ''}]+)`, 'gi'),
+  });
+}
+const CONTEXT_RULES = Object.freeze({ field: contextRules(false), final: contextRules(true) });
+
 /** One run through all three layers, failing closed. V8 runs these patterns
  *  by backtracking on a bounded stack, so over a run of several MiB `replace`
  *  throws `RangeError: Maximum call stack size exceeded`: measured on Node
@@ -1924,7 +1942,8 @@ const PLAIN_SEQ_RE = /^(?:\x1b\[|\x9b)[0-?]*[@-~]$|^\x1b[!-/][ -/]*[0-~]$/;
  *  layer 2, for the lead reading's candidates (D-4307; security review of
  *  2a8c791bf): they hold only `[A-Za-z0-9_.-]` and `\n`, and every layer-2
  *  pattern needs a `"`, `=`, `:`, `?` or `&`, so it can match nothing there,
- *  while on a span of short dotted words it is the costliest layer. */
+ *  while on a span of short dotted words it is the costliest layer. `context`
+ *  `'final'` runs layer 2 in redactFinal's structure-safe form (D-4613). */
 function redactRun(segment, idx, context = true) {
   try {
     return redactLayers(segment, idx, context);
@@ -1951,13 +1970,14 @@ function redactLayers(segment, idx, context) {
   // end, which is quadratic (a 2 MiB base64url blob measured 90.8 s, bounded
   // 139 ms), and one large tool_result would outlive the carrier's kill.
   if (context) {
-    s = s.replace(/"([A-Za-z_][A-Za-z0-9_.-]{0,255})"(\s*:\s*)"((?:[^"\\]|\\.)+)"/g,
+    const R = context === 'final' ? CONTEXT_RULES.final : CONTEXT_RULES.field;
+    s = s.replace(R.json,
       (all, name, sep, value) => (IDENTIFIER_RE.test(name) && value !== REDACTED_MARK ? `"${name}"${sep}"${REDACTED_MARK}"` : all));
-    s = s.replace(/\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:[ \t]+)(["']?)([^\s"'`,;&]+)/g,
+    s = s.replace(R.named,
       (all, name, sep, quote, value) => (IDENTIFIER_RE.test(name) && value !== REDACTED_MARK ? `${name}${sep}${quote}${REDACTED_MARK}` : all));
-    s = s.replace(/(Authorization:[ \t]*Bearer[ \t]+)([^\s"']+)/gi, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
-    s = s.replace(/(x-ccrc-mail-token:[ \t]*)([^\s"']+)/gi, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
-    s = s.replace(/([?&]token=)([^&\s"'#]+)/gi, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
+    s = s.replace(R.bearer, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
+    s = s.replace(R.mailToken, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
+    s = s.replace(R.query, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
   }
   // Layer 3: shapes.
   for (const re of SECRET_SHAPE_RES) s = s.replace(re, REDACTED_MARK);
@@ -2227,7 +2247,12 @@ function markSpansAt(plain, offsets) {
 /** The complete field redaction. Layer 4 allocates per-field buffers too, so its RangeError shares layers 1-3's
  * fail-closed contract while non-RangeError defects remain visible. */
 export function redactField(text, idx) {
-  const layered = redactLayered(text, idx);
+  return redactFieldIn(text, idx, true);
+}
+
+/** redactField's body, with layer 2's mode (`true` the field form, `'final'` redactFinal's structure-safe form). */
+function redactFieldIn(text, idx, context) {
+  const layered = redactLayered(text, idx, context);
   try {
     return beltMask(layered, idx.belt, true, beltHit(idx));
   } catch (e) {
@@ -2237,9 +2262,9 @@ export function redactField(text, idx) {
 }
 
 /** redactField's three layers over its readings, before the belt: B1's redactField body, unchanged. */
-function redactLayered(text, idx) {
-  if (!ESCAPE_INTRODUCER_RE.test(text)) return redactRun(text, idx);
-  const raw = redactRun(text, idx);
+function redactLayered(text, idx, context = true) {
+  if (!ESCAPE_INTRODUCER_RE.test(text)) return redactRun(text, idx, context);
+  const raw = redactRun(text, idx, context);
   let out = '';
   let plain = '';
   let last = 0;
@@ -2248,7 +2273,7 @@ function redactLayered(text, idx) {
   const carried = [];
   ANSI_ESCAPE_RE.lastIndex = 0;
   for (let m = ANSI_ESCAPE_RE.exec(raw); m !== null; m = ANSI_ESCAPE_RE.exec(raw)) {
-    const frag = redactRun(raw.slice(last, m.index), idx);
+    const frag = redactRun(raw.slice(last, m.index), idx, context);
     out += frag + m[0];
     plain += frag;
     if (frag.endsWith(REDACTED_MARK)) carried.push(plain.length);
@@ -2256,14 +2281,14 @@ function redactLayered(text, idx) {
     last = m.index + m[0].length;
     sawCsi = true;
   }
-  const tail = redactRun(raw.slice(last), idx);
+  const tail = redactRun(raw.slice(last), idx, context);
   const perFragment = out + tail;
   if (!sawCsi) return perFragment;
   // `plain` is accumulated from the fragments, never rebuilt by re-matching an escape in `perFragment`: a redaction can
   // create an escape shape (a bare ESC before `[redacted]` reads as `ESC[r...`), and a re-strip would eat the mark.
   plain += tail;
   const flagged = carriedMarks(plain, carried, leadOffsets(plain, raw, leads, idx));
-  const joined = redactRun(flagged.length === 0 ? plain : markSpansAt(plain, flagged), idx);
+  const joined = redactRun(flagged.length === 0 ? plain : markSpansAt(plain, flagged), idx, context);
   return joined === plain ? perFragment : joined;
 }
 
@@ -2394,11 +2419,15 @@ export function entryIndexText(text, idx) {
 }
 
 /** The second belt (§8.3): the final rendered stdout, stderr or `--json`
- *  string gets the same three layers once more. It cannot replace the field
+ *  string gets the same layers once more. It cannot replace the field
  *  pass (an escape letter glued to a run defeats it); it catches what a
- *  field pass was never given. */
+ *  field pass was never given. Layer 2 runs in its structure-safe form, D-4613 (history-final-belt-layer2-structure-safe)
+ *  (CONTEXT_RULES): the text is a serialised `--json` envelope or a
+ *  human page with its frame, so no context value may consume a backslash, a line break, `<`, `>` or `&`, and an
+ *  escaped quote ends a value instead of being left bare (`--json` stays valid, the frame stays intact). The cost,
+ *  the residual: a context-shaped value whose characters include one of those is masked by the field pass only. */
 export function redactFinal(text, idx) {
-  return redactField(text, idx);
+  return redactFieldIn(text, idx, 'final');
 }
 
 // ===========================================================================
@@ -2957,7 +2986,7 @@ export const HEALTH_REMEDIES = Object.freeze({
   'lag-unmeasured': 'none needed: lag is measured once every file has reached its end once',
   'tick-stale': `read the sweep: ${SWEEP_LOG}, and systemctl --user status ccd-history-sweep.timer`,
   'lag-high': `read the sweep: ${SWEEP_LOG}; a backlog drains within each run's budget, a stuck file shows the same lag every tick`,
-  'at-cap': 'raise the cap (an integer, in GB); ccrc history prune, which frees space, arrives with W1-B2',
+  'at-cap': 'raise the cap (an integer, in GB), or the operator frees space with ccrc history prune --older-than <age> --apply, from a terminal outside any session',
   'capture-paused-low-disk': 'free space on the store\'s filesystem; capture resumes by itself above the floor',
   'mode-wrong': 'chmod each named path to the mode it wants',
   'schema-newer': 'update this box to the build that wrote the store (ccrc update); this build still reads what it knows',
@@ -2965,16 +2994,16 @@ export const HEALTH_REMEDIES = Object.freeze({
   'store-unmeasured': 'make store.id, store.id.pending, store.writer and the DB under ~/.ccrc/history readable by this user; nothing is created, adopted or restored meanwhile',
   'recovery-stalled': `read the sweep: ${SWEEP_LOG}`,
   'store-root-dangling': `mount the volume behind ~/${STORE_DB_REL}, or remove the dangling link so the next tick stores on the home filesystem`,
-  'store-missing': `ccrc history doctor --restore and --rebuild arrive with W1-B2; until then capture stays held and the journal keeps everything drained meanwhile: do not copy a backup over history.db by hand (that skips the journal replay --restore does and makes --restore refuse)`,
+  'store-missing': `the operator runs ccrc history doctor --restore <backup> or ccrc history doctor --rebuild, from a terminal outside any session (a leftover history.db-wal or history.db-shm is moved aside first); capture stays held and the journal keeps everything drained meanwhile: do not copy a backup over history.db by hand (that skips the journal replay --restore does and makes --restore refuse)`,
   'store-mismatch': 'this DB belongs to another store (its meta.store_id is not store.id): put the right DB back, or move this one aside',
-  'store-unbound': `if the store is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside; if it is this box's, leave it in place: ccrc history doctor --adopt, which binds it, arrives with W1-B2 and capture stays held until then`,
+  'store-unbound': `if the store is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside; if it is this box's, leave it in place and the operator runs ccrc history doctor --adopt, which binds it, from a terminal outside any session (capture stays held until then)`,
   'store-unreachable': `the store's filesystem did not answer: check the mount behind ~/${STORE_DB_REL}`,
-  'store-recoverable': 'ccrc history doctor --restore and --rebuild, which recover from what was found, arrive with W1-B2: keep that evidence until then, or move it aside to start a new store',
+  'store-recoverable': 'the operator runs ccrc history doctor --restore <backup> or ccrc history doctor --rebuild, which recover from what was found, from a terminal outside any session; or moves that evidence aside to start a new store',
   'store-wal-orphaned': 'move history.db-wal and history.db-shm (and any history.db) aside together; then let the next tick create a store, or restore one',
-  'store-zero-byte': `the DB was truncated: keep it where it is; ccrc history doctor --restore and --rebuild arrive with W1-B2, and until then capture stays held and the journal keeps everything drained meanwhile (do not copy a backup over history.db by hand: that skips the journal replay --restore does)`,
-  'store-schema-missing': `the DB has no meta.store_id, so it is not a history store this build can bind: capture stays held and the journal keeps everything drained meanwhile; ccrc history doctor --restore and --rebuild both refuse while history.db is present, so the operator moves history.db, history.db-wal and history.db-shm aside together, from a terminal outside any session, and then restores a good backup or rebuilds (do not copy a backup over history.db by hand: that skips the journal replay --restore does)`,
+  'store-zero-byte': `the DB was truncated: ccrc history doctor --restore and --rebuild both refuse while history.db stands, so the operator moves history.db, history.db-wal and history.db-shm aside together, from a terminal outside any session, and then runs ccrc history doctor --restore <backup> or ccrc history doctor --rebuild; capture stays held and the journal keeps everything drained meanwhile (do not copy a backup over history.db by hand: that skips the journal replay --restore does)`,
+  'store-schema-missing': `the DB has no meta.store_id, so it is not a history store this build can bind: capture stays held and the journal keeps everything drained meanwhile; ccrc history doctor --restore and --rebuild both refuse while history.db is present, so the operator moves history.db, history.db-wal and history.db-shm aside together, from a terminal outside any session, and then runs ccrc history doctor --restore <backup> or ccrc history doctor --rebuild (do not copy a backup over history.db by hand: that skips the journal replay --restore does)`,
   'migration-refused': 'free space on the store\'s filesystem: the pre-migration snapshot needs a store\'s size above the floor',
-  'migration-needs-op': 'run the migration by hand, under no carrier timeout: ~/.local/bin/ccd-history-sweep --op migrate (ccrc history doctor --migrate arrives with W1-B2)',
+  'migration-needs-op': 'the operator runs ccrc history doctor --migrate, from a terminal outside any session: it runs under no carrier timeout, which a scheduled pass does not',
   'journal-unwritable': 'free space on the home filesystem, or make ~/.ccrc/history/journal writable: drained spool files are held until the journal append succeeds',
   'export-segment-newer': 'update this box to the build that wrote the segment (ccrc update)',
   'export-overdue': 'the store may be the only copy of this text: keep ~/.ccrc/history (never --purge-history), and raise cleanupPeriodDays in each home\'s settings.json (or the managed settings) so Claude Code keeps transcripts until the export writer ships (W1-B4)',
@@ -2982,7 +3011,7 @@ export const HEALTH_REMEDIES = Object.freeze({
   'fts-unavailable': 'none needed for capture; run Node >= 22.16.0 for FTS5 search',
   'cap-malformed': `write a positive integer (GB) into the cap file, or remove it for the default of ${CAP_DEFAULT_GB}`,
   'redact-source-unreadable': 'make the named secret files readable by this user; a value never yet seen in them goes unredacted meanwhile',
-  'cap-near': 'raise the cap before capture pauses at it; ccrc history prune, which frees space, arrives with W1-B2',
+  'cap-near': 'raise the cap before capture pauses at it, or the operator frees space with ccrc history prune --older-than <age> --apply, from a terminal outside any session',
   'breaker-open': `none needed: the breaker closes by itself; read the sweep for why it opened: ${SWEEP_LOG}`,
   'roster-unreadable': 'make ~/.ccrc/accounts.sh readable (ccrc install regenerates it)',
   'root-is-symlink': 'make ~/.ccrc/history a real 0700 directory: only its db/ may be a link',
@@ -2991,9 +3020,9 @@ export const HEALTH_REMEDIES = Object.freeze({
   'retention-unmeasured': 'make cleanupPeriodDays readable in the named homes\' settings.json',
   'retention-lowered': 'set cleanupPeriodDays in the named home\'s settings.json to at least the others\' value',
   'export-segment-missing': 'carry the export directory from the box the store came from, or let the rows export again',
-  'journal-record-skipped': `none needed if the journal came from a newer build; otherwise ccrc history doctor --repair arrives with W1-B2, and until then read the sweep: ${SWEEP_LOG}`,
+  'journal-record-skipped': `none needed if the journal came from a newer build; otherwise read the sweep: ${SWEEP_LOG} (no operator verb clears this count: the journal audit recounts it from the journal each time it runs)`,
   'journal-growth': `read the sweep: ${SWEEP_LOG}; the journal grows faster than twice its estimate`,
-  'blob-undecodable': `the store's copy of that text is damaged (storage corruption) and nothing repairs it in place: keep ~/.ccrc/history as it is; ccrc history doctor --repair, which detects storage corruption, arrives with W1-B2`,
+  'blob-undecodable': `the store's copy of that text is damaged (storage corruption) and nothing repairs it in place: keep ~/.ccrc/history as it is; the operator runs ccrc history doctor --repair, which checks the store's integrity and re-reads every blob to re-measure this count, from a terminal outside any session`,
   'drain-rejected': `the files are kept in ~/.ccrc/history/spool/.draining/rejected/ and their lines in the journal, and nothing in this build drains them again; the refusal is in the sweep's log: ${SWEEP_LOG}`,
   // D-4347 (history-planted-entries-never-wedge). Re-measured by doctor --repair and a recovery's close, like drain-rejected and blob-undecodable (W1-B2, D-4723 (`history-counter-resets-after-cure`)).
   'spool-planted': `remove a link or file that stands at ~/.ccrc/history/spool itself (the next pass makes the directory again), any FIFO, link, directory or other non-regular node that stands at ~/.ccrc/history/spool/<id>.jsonl (that id spools again once it is gone), and the planted entries under ~/.ccrc/history/spool/.draining/ (each drain's set-asides are under planted/<tickMs>.<pid>/, and their files are kept there undrained); nothing in this build drains a displaced file again; a file the sweep cannot read stays in .draining/ with its .obs sidecar until both are readable by this user (chmod 600, or chown them) or removed, and its id's later files drain once it does; the sweep's log names each one: ${SWEEP_LOG}`,
@@ -3010,9 +3039,9 @@ function evidenceOf(h) {
 function remedyFor(word, h) {
   switch (word) {
     case 'at-cap':
-      return `raise the cap in ${h.capFile} (an integer, in GB); capture resumes below the cap (ccrc history prune, which frees space, arrives with W1-B2)`;
+      return `raise the cap in ${h.capFile} (an integer, in GB); capture resumes below the cap; or the operator frees space with ccrc history prune --older-than <age> --apply, from a terminal outside any session`;
     case 'cap-near':
-      return `raise the cap in ${h.capFile} (an integer, in GB) before capture pauses at it (ccrc history prune, which frees space, arrives with W1-B2)`;
+      return `raise the cap in ${h.capFile} (an integer, in GB) before capture pauses at it, or the operator frees space with ccrc history prune --older-than <age> --apply, from a terminal outside any session`;
     case 'cap-malformed':
       return `write a positive integer (GB) into ${h.capFile}, or remove the file for the default of ${CAP_DEFAULT_GB}`;
     case 'capture-paused-low-disk':
@@ -3023,16 +3052,16 @@ function remedyFor(word, h) {
       return `mount the volume behind ${h.dbPath}, or remove the dangling link ~/${STORE_DB_REL} so the next tick stores on the home filesystem`;
     case 'store-schema-missing':
       return h.userVersion !== null
-        ? `the DB holds a store_id but its user_version is below 1, so this build will not read or migrate it as a history store: capture stays held and the journal keeps everything drained meanwhile; ccrc history doctor --restore and --rebuild both refuse while history.db is present, so the operator moves history.db, history.db-wal and history.db-shm aside together, from a terminal outside any session, and then restores a good backup or rebuilds (do not copy a backup over history.db by hand: that skips the journal replay --restore does)`
+        ? `the DB holds a store_id but its user_version is below 1, so this build will not read or migrate it as a history store: capture stays held and the journal keeps everything drained meanwhile; ccrc history doctor --restore and --rebuild both refuse while history.db is present, so the operator moves history.db, history.db-wal and history.db-shm aside together, from a terminal outside any session, and then runs ccrc history doctor --restore <backup> or ccrc history doctor --rebuild (do not copy a backup over history.db by hand: that skips the journal replay --restore does)`
         : HEALTH_REMEDIES['store-schema-missing'];
     case 'store-missing':
       return h.backupsDb.length > 0
-        ? `ccrc history doctor --restore ${h.backupsDb[0]} and --rebuild arrive with W1-B2 (db/backups holds ${h.backupsDb.join(', ')}; keep them); until then capture stays held and the journal keeps everything drained meanwhile: do not copy a backup over history.db by hand (that skips the journal replay --restore does and makes --restore refuse)`
-        : 'ccrc history doctor --rebuild, which rebuilds from the journal, arrives with W1-B2; until then capture stays held and the journal keeps everything drained meanwhile (do not copy a backup over history.db by hand: that skips the journal replay --restore does)';
+        ? `the operator runs ccrc history doctor --restore ${h.backupsDb[0]} (db/backups holds ${h.backupsDb.join(', ')}; keep them) or ccrc history doctor --rebuild, from a terminal outside any session (a leftover history.db-wal or history.db-shm is moved aside first); capture stays held and the journal keeps everything drained meanwhile: do not copy a backup over history.db by hand (that skips the journal replay --restore does and makes --restore refuse)`
+        : 'the operator runs ccrc history doctor --rebuild, which rebuilds from the journal, from a terminal outside any session (a leftover history.db-wal or history.db-shm is moved aside first); capture stays held and the journal keeps everything drained meanwhile (do not copy a backup over history.db by hand: that skips the journal replay --restore does)';
     case 'store-unbound':
-      return `if store ${h.storeId ?? '(unknown)'} is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside; if it is this box's, leave it in place: ccrc history doctor --adopt, which binds it, arrives with W1-B2 and capture stays held until then`;
+      return `if store ${h.storeId ?? '(unknown)'} is another box's, remove the ~/${STORE_DB_REL} link or move the DB aside; if it is this box's, leave it in place and the operator runs ccrc history doctor --adopt, which binds it, from a terminal outside any session (capture stays held until then)`;
     case 'store-recoverable':
-      return `ccrc history doctor --restore and --rebuild, which recover from ${evidenceOf(h)}, arrive with W1-B2: keep that evidence until then, or move it aside to start a new store`;
+      return `the operator runs ccrc history doctor --restore <backup> or ccrc history doctor --rebuild, which recover from ${evidenceOf(h)}, from a terminal outside any session; or moves that evidence aside to start a new store`;
     case 'migration-refused':
       return h.thresholdBytes !== null && h.sizeBytes !== null
         ? `free space on the filesystem holding ${h.dbPath} until more than ${h.thresholdBytes + h.sizeBytes} bytes are free (the snapshot needs the store's size above the floor)`
@@ -4242,10 +4271,17 @@ export function escapeXmlText(value) {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-export function recallEnvelope({ src, id, ts, role, text }) {
+/** One recalled field in its untrusted-content envelope. `family` (optional) names the family a hit belongs to under
+ *  a widened scope: `{ id, generation, firstSeenMs }`, the two strings already display strings (W1-B2 whole-branch fix
+ *  round 1, item B; spec §8.2: under --workspace each hit prints its family). Absent, the envelope is byte for byte
+ *  what it was; present, `family`, `generation` and `first-seen` sit between `role` and `trust`. */
+export function recallEnvelope({ src, id, ts, role, text, family }) {
   const word = RECALL_SRCS.includes(src) ? src : 'unknown';
   const when = typeof ts === 'number' && Number.isFinite(ts) && Math.abs(ts) <= 8.64e15 ? new Date(ts).toISOString() : '';
-  return `<ccrc-recall src="${escapeXmlAttr(word)}" id="${escapeXmlAttr(String(id))}" ts="${escapeXmlAttr(when)}" role="${escapeXmlAttr(role ?? '')}" trust="untrusted">${escapeXmlText(String(text))}</ccrc-recall>`;
+  const fam = family === undefined ? ''
+    : ` family="${escapeXmlAttr(String(family.id))}" generation="${escapeXmlAttr(String(family.generation))}" first-seen="${escapeXmlAttr(
+      Number.isFinite(family.firstSeenMs) && Math.abs(family.firstSeenMs) <= 8.64e15 ? new Date(family.firstSeenMs).toISOString() : '')}"`;
+  return `<ccrc-recall src="${escapeXmlAttr(word)}" id="${escapeXmlAttr(String(id))}" ts="${escapeXmlAttr(when)}" role="${escapeXmlAttr(role ?? '')}"${fam} trust="untrusted">${escapeXmlText(String(text))}</ccrc-recall>`;
 }
 
 // derived from lossless-claw src/tools/lcm-grep-tool.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
@@ -5143,6 +5179,8 @@ const BIND_REFUSALS = Object.freeze({ adopt: 'adopt-refused', restore: 'restore-
  *  - rebuild: no history.db and no leftover -wal or -shm. Its store_id is store.id's; else the one journal
  *    directory whose heads agree; else --store-id, which must name one of several. store.id's own directory, when
  *    journal/ holds one, is read on that path too (H-218, D-4605): foreign or disagree refuse, unreadable is exit 5.
+ *    A directory with no month file (`empty`, H-227) is nothing to replay and reads as `agree` on those two paths
+ *    (the crash window between appendJournal's mkdir and its first month file leaves one); alone and unnamed, it names no store.
  *    A --store-id disagreeing with
  *    store.id, naming no directory, or naming one whose heads name another store is refused, with the
  *    candidates named. The two refusals a --store-id cures (several directories unnamed, a --store-id naming no
@@ -5155,7 +5193,7 @@ export function decideBind(kind, f) {
   if (!Object.hasOwn(BIND_REFUSALS, kind)) throw new TypeError(`decideBind: kind outside BIND_KINDS: ${String(kind)}`);
   const unmeasured = (detail) => ({ ok: false, rc: EXIT.DB, reason: 'store-unmeasured', detail });
   const refuse = (detail) => ({ ok: false, rc: EXIT.REFUSED, reason: BIND_REFUSALS[kind], detail });
-  const foreignEntry = (id) => `journal/${id}/ holds an entry at a month-file name that is no regular file (a link, socket, FIFO or directory)`;
+  const foreignEntry = (id) => `journal/${id}/ holds an entry at a month-file name that is no regular file (a link, socket, FIFO or directory); the operator puts the regular month file back, or removes the entry, from a terminal outside any session, and runs the rebuild again`;
   if (f.dbDir === 'dangling') return { ok: false, rc: EXIT.DB, reason: 'store-root-dangling', detail: 'db/ is a link to nothing: recreate its target or remove the link' };
   if (f.dbDir === 'unmeasured' || f.db === 'unmeasured') return unmeasured('db/ or history.db could not be measured');
   if (presenceUnreadable(f.storeId)) return unmeasured('store.id exists and cannot be read');
@@ -5172,7 +5210,7 @@ export function decideBind(kind, f) {
     const stored = presenceValue(f.storedVersion);
     if (stored === null) return unmeasured("history.db's user_version cannot be read");
     // H-223 (D-4599): a stored version below 1 is damage, refused here as the reader and the writer refuse it (storeVersionDamaged).
-    if (storeVersionDamaged(stored)) return refuse(`history.db's user_version ${stored} is below 1 or no integer: it is damaged; restore a good backup or rebuild from the journal instead of adopting it`);
+    if (storeVersionDamaged(stored)) return refuse(`history.db's user_version ${stored} is below 1 or no integer: it is damaged and is not adopted; ccrc history doctor --restore and --rebuild both refuse while history.db stands, so the operator moves history.db, history.db-wal and history.db-shm aside together, from a terminal outside any session, and then runs ccrc history doctor --restore <backup> or ccrc history doctor --rebuild`);
     if (stored > f.codeVersion) return refuse(`history.db is schema ${stored}; this build knows ${f.codeVersion}: adopt it with the build that wrote it`);
     return { ok: true, storeId: inDb };
   }
@@ -5204,7 +5242,8 @@ export function decideBind(kind, f) {
     // D-4605 (history-rebuild-unreadable-journal-is-unmeasured): a directory the sweep could not read is unmeasured (exit 5), never a refusal.
     if (d.heads === 'unreadable') return unmeasured(`journal/${arg}/ could not be read`);
     if (d.heads === 'foreign') return refuse(foreignEntry(arg));
-    if (d.heads !== 'agree') return refuse(`journal/${arg}/ holds head records naming another store`);
+    // H-227 (D-4605 refined): `empty` (no month file) is nothing to replay, as `agree` is; only a head that names another store refuses.
+    if (d.heads !== 'agree' && d.heads !== 'empty') return refuse(`journal/${arg}/ holds head records naming another store`);
     return { ok: true, storeId: arg };
   }
   if (marker !== null) {
@@ -5212,7 +5251,7 @@ export function decideBind(kind, f) {
     // FIFO or directory (foreign) or heads naming another store (disagree) refuse here as on the --store-id path, instead of
     // being listed, counted and never read by a recovery whose redact records then go unapplied. No directory is today's ok.
     const own = dirs.find((x) => x.storeId === marker);
-    if (own === undefined || own.heads === 'agree') return { ok: true, storeId: marker };
+    if (own === undefined || own.heads === 'agree' || own.heads === 'empty') return { ok: true, storeId: marker };
     if (own.heads === 'unreadable') return unmeasured(`journal/${marker}/ could not be read`);
     if (own.heads === 'foreign') return refuse(foreignEntry(marker));
     return refuse(`journal/${marker}/ holds head records naming another store`);
@@ -5221,6 +5260,8 @@ export function decideBind(kind, f) {
   if (dirs.length > 1) return { ...refuse(`several journal directories: name one with --store-id (journal directories: ${names})`), remedy: 'store-id' };
   if (dirs[0].heads === 'unreadable') return unmeasured(`journal/${dirs[0].storeId}/ could not be read`);
   if (dirs[0].heads === 'foreign') return refuse(foreignEntry(dirs[0].storeId));
+  // H-227: a lone directory with no month file names a store nothing ever journaled into, and no store.id or --store-id names it: nothing to rebuild from.
+  if (dirs[0].heads === 'empty') return refuse(`journal/${dirs[0].storeId}/ holds no month file: there is nothing to rebuild from`);
   if (dirs[0].heads !== 'agree') return refuse(`journal/${dirs[0].storeId}/ holds head records naming another store`);
   return { ok: true, storeId: dirs[0].storeId };
 }

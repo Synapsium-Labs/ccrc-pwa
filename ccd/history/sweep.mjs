@@ -6968,10 +6968,14 @@ export async function restoreArm(home, P, args, deps, out) {
  *  Month files and their heads are read exactly as recovery reads them (Task 25's JOURNAL_NAME_RE and journalEnds,
  *  O_NOFOLLOW), so rebuild and replay never disagree about which files a directory holds. A head that is missing or
  *  unreadable names no store (§9.14: link() of a fsynced temp means no month file exists without its head).
- *  Each answers `heads` in four words, never one boolean (D-4605 (history-rebuild-unreadable-journal-is-unmeasured);
- *  the "no overloaded null at a seam" rule):
+ *  Each answers `heads` in five words, never one boolean (D-4605 (history-rebuild-unreadable-journal-is-unmeasured);
+ *  the "no overloaded null at a seam"; D-4605 refined by whole-branch fix round 1, H-227):
  *  - `agree`: it has a month file and every month file's head names this directory;
- *  - `disagree`: it holds no month file, or a month file read whole whose head is missing or names another store;
+ *  - `empty`: it holds no month file at all. Measured: appendJournal is the only writer that makes a journal/<id>/ directory
+ *    (mkdirDurable, then createMonthFile), so a crash, an ENOSPC or an fsync failure between the two leaves exactly this, with at
+ *    most a dot-named temp that JOURNAL_NAME_RE does not read; a hand-made directory is the only other way. There is nothing to
+ *    replay in it, which is not a head that disagrees (decideBind reads it as nothing to replay);
+ *  - `disagree`: a month file read whole whose head is missing or names another store;
  *  - `foreign`: a month name holds a link, socket, FIFO or directory (journalEnds kind `foreign`) and no file read whole
  *    has disagreed. That is measured and permanent, so decideBind refuses it (exit 2) naming the entry, where
  *    `unreadable` is a retry (H-178). It outranks `unreadable`;
@@ -7000,7 +7004,7 @@ export function journalStoreDirs(home) {
     // Sorted, as journalListing sorts: the verdict does not depend on the order, but a test of its precedence needs one (H-179).
     try { names = readdirSync(sub).sort(); } catch { out.push({ storeId: name, heads: 'unreadable' }); continue; }
     const months = names.filter((m) => JOURNAL_NAME_RE.test(m));
-    let heads = months.length > 0 ? 'agree' : 'disagree';
+    let heads = months.length > 0 ? 'agree' : 'empty';
     for (const m of months) {
       const e = journalEnds(`${sub}/${m}`);
       if (e.kind !== 'ends') {

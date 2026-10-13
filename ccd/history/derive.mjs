@@ -825,7 +825,11 @@ function parentReroller(db, ictx, onlyIfChanged = false) {
   // violation as its baseline) is skipped, so the parent is rebuilt fail-closed from the children that remain and storedNode
   // is never asked for a row that is not there. D-4610 (history-reroll-from-redacted-children), H-155.
   // Residual (H-217): a parent whose EVERY node_children row is dangling has no kid left, is not rebuilt (this answers false)
-  // and keeps any cut prefix it stored; only a reparse of its subtree or a recovery heals it.
+  // and keeps any cut prefix it stored. Nothing in this build heals it in place (whole-branch fix round 1, H-230; measured by reading the
+  // paths): reparseTargets joins its children to `nodes`, so a dangling child is no target and rerollParents (seeded from the
+  // targets) walks up from LIVE children only; the recovery's condensed pass calls this reroller, which answers false here;
+  // doctor --repair keeps the dangling rows as its foreign-key baseline. A rebuild makes a NEW store whose nodes are derived afresh
+  // from the transcripts still on disk; that, or a restore of a backup that predates the cut, is the way back.
   const kidsOf = db.prepare('SELECT nc.child_id AS child_id FROM node_children nc JOIN nodes n ON n.node_id = nc.child_id WHERE nc.node_id = ? ORDER BY nc.ord');
   const setParent = db.prepare('UPDATE nodes SET gist = ?, topics = ?, earliest_ms = ?, latest_ms = ?, src_chars = ?, '
     + 'desc_count = ?, desc_chars = ?, directive_flag = ?, capped = ?, parser_version = ? WHERE node_id = ?');
@@ -1152,12 +1156,16 @@ export function reparseFailClosed(db, ictx, nodeIds) {
 /** The most leaves one call of the late-pair fast path (rederiveGistsFor) re-derives, one refreshLeaf each and one
  *  re-roll over all of them: the size of a recovery batch. A test lowers it with ictx.rederiveLeafMax. The overflow gets a
  *  field rewrite and an ancestor re-roll, and only `reparse` or a recovery's reindex re-derives it. A residual (H-152, bound
- *  stated in full by H-216): an overflow leaf whose own gist was cut at NATIVE_GIST_MAX, or one of whose topics was cut at
+ *  stated in full by H-216, made exact by H-231): an overflow leaf whose own gist was cut at NATIVE_GIST_MAX, or one of whose topics was cut at
  *  TOPIC_CHARS (capTopics), inside a value before the pair was known keeps that prefix in nodes.gist or nodes.topics, in
  *  nodes_fts and in its ancestors' re-rolled fields, because redactField matches whole runs. Under layer 4 the belt masks
- *  such a prefix only when it is at least the unit's belt width K AND the value seeds belt windows; a value made only of
- *  one-case letters (or a digit-free one-case window), or a unit past BELT_GRAMS_MAX, seeds none, so for it a prefix of ANY
- *  length up to len-1 survives. It stays until that re-derivation, as a pruned leaf's does.
+ *  such a prefix only if the PREFIX ITSELF holds a whole seeding window: a K-long gram (K = the unit's belt width) that
+ *  beltSeeds accepts (a digit or both cases, and at least a third of its folded characters distinct). That the value seeds
+ *  somewhere is not enough. Measured on the pure lib (redactField over every prefix, belt loaded): `zebrahorsebatterystapleforest7Q4x`
+ *  (33 characters, K = 14) has four seeding grams, all of them reaching its last four characters (offsets 16 to 19), so its
+ *  prefixes of 1 to 29 characters are NOT masked and those of 30 to 33 are; a value made only of one-case letters (or a
+ *  digit-free one-case window), or a unit past BELT_GRAMS_MAX, seeds none, so for it a prefix of ANY length up to len-1
+ *  survives. It stays until that re-derivation, as a pruned leaf's does.
  *  D-4611 (history-late-pair-fast-path-bounded) */
 const REDERIVE_LEAF_MAX = 64;
 
@@ -1205,9 +1213,11 @@ export function rederiveGistsFor(db, ictx, values, budget, slice) {
   // recovery's reindex re-derives it from its summary, and the belt's node step finishes whatever the search could not find.
   // Residual (H-152, H-216): an overflow leaf whose own gist was cut at NATIVE_GIST_MAX, or one of whose topics was cut at
   // TOPIC_CHARS, inside the value before the pair was known keeps that prefix in nodes, nodes_fts and its ancestors' re-rolled
-  // fields until that re-derivation. The belt masks it only when it is at least the belt width K AND the value seeds belt
-  // windows; a value of one-case letters only (or a digit-free one-case window), or a unit past BELT_GRAMS_MAX, seeds none, so
-  // a prefix of any length up to len-1 survives for it.
+  // fields until that re-derivation. The belt masks it only if the prefix ITSELF holds a whole seeding K-window (beltSeeds: a digit or
+  // both cases, a third of the characters distinct); the value seeding somewhere is not enough (measured, H-231: a 33-character value
+  // with K = 14 whose four seeding grams reach its last four characters leaves its prefixes of 1 to 29 characters unmasked). A value of
+  // one-case letters only (or a digit-free one-case window), or a unit past BELT_GRAMS_MAX, seeds none, so a prefix of any length up to
+  // len-1 survives for it.
   const all = [...reparse].sort();
   const max = Number.isSafeInteger(ictx.rederiveLeafMax) && ictx.rederiveLeafMax > 0 ? ictx.rederiveLeafMax : REDERIVE_LEAF_MAX;
   const leaves = all.slice(0, max);

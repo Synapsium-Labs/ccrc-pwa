@@ -388,7 +388,7 @@ function referrerSql(rc, matchSql) {
 function rankedSql(rc, matchSql, sort) {
   return `${referrerSql(rc, matchSql)}
   SELECT r.via AS via, r.entry_id AS entry_id, r.uuid AS uuid, r.ts_ms AS ts_ms, r.role AS role,
-      r.provenance AS provenance, r.blob_id AS blob_id, r.name AS name
+      r.provenance AS provenance, r.blob_id AS blob_id, r.name AS name, r.transcript_pk AS transcript_pk
     FROM refs r WHERE ${GREP_FILTER}
     ORDER BY ${ftsOrderBy(sort, 'r.ts_ms')}, r.blob_id, r.entry_id, r.ref_key LIMIT :pool`;
 }
@@ -555,19 +555,51 @@ function idShown(rc, v) {
   return v === null || v === undefined || v === '' ? v : displayToken(v, rc.pairIdx);
 }
 
+/** The family each hit belongs to, under a widened scope only (`--workspace`, `--project`; spec §8.2: "Each hit prints
+ *  its family (id, generation, first seen)", the attribution a session needs to tell its own family's hits from an
+ *  unrelated earlier task that reused the workdir; W1-B2 whole-branch fix round 1, item B). One bounded query maps the
+ *  page's transcripts to their confirmed epochs' sessions (the join `transcriptsOf` made when it built the scope), kept to
+ *  the scope's own families. A transcript two of the scope's families share (a fork) answers the family seen first
+ *  (`first_seen_ms`, then `session_pk`), as coveringLeaves groups under the lower node id. Under the family scope the
+ *  scope IS the family and the map is empty, so nothing new prints. A hit whose transcript maps to no family of the
+ *  scope cannot occur (the scope's transcripts come from this same join) and prints none, never a null family.
+ *  The ids are display strings (displayToken), as every stored id is. */
+function hitFamilies(rc, hits) {
+  const out = new Map();
+  if (rc.scope.kind === 'family' || hits.length === 0) return out;
+  const tpks = [...new Set(hits.map((h) => h.transcript_pk).filter((x) => x !== null && x !== undefined))];
+  if (tpks.length === 0) return out;
+  const mine = new Map(rc.scope.families.map((f) => [f.sessionPk, f]));
+  const rows = rc.db.prepare(`SELECT DISTINCT t.transcript_pk AS transcript_pk, e.session_pk AS session_pk FROM transcripts t
+      JOIN epochs e ON e.cc_session_uuid = t.cc_session_uuid
+      WHERE t.transcript_pk IN (SELECT value FROM json_each(?)) AND e.confirmed_ms IS NOT NULL
+        AND e.session_pk IN (SELECT value FROM json_each(?))`).all(JSON.stringify(tpks), JSON.stringify(rc.scope.sessionPks));
+  const first = new Map();
+  for (const r of rows) {
+    const f = mine.get(Number(r.session_pk));
+    if (f === undefined) continue;
+    const had = first.get(Number(r.transcript_pk));
+    if (had === undefined || f.firstSeenMs < had.firstSeenMs || (f.firstSeenMs === had.firstSeenMs && f.sessionPk < had.sessionPk)) first.set(Number(r.transcript_pk), f);
+  }
+  for (const [tpk, f] of first) out.set(tpk, { id: idShown(rc, f.ccrcId), generation: idShown(rc, f.generation), firstSeenMs: f.firstSeenMs });
+  return out;
+}
+
 /** A hit's human line: its snippet inside the untrusted-content envelope, which escapes it (§8.3, P30). The id and the
- *  role go in as display strings, so a 300,000-character uuid cannot pass the cap and the envelope escapes each once. */
-function hitLine(rc, hit, snippet) {
+ *  role go in as display strings, so a 300,000-character uuid cannot pass the cap and the envelope escapes each once.
+ *  `family` (hitFamilies; widened scopes only) is an attribute of the envelope. */
+function hitLine(rc, hit, snippet, family) {
   const id = hit.uuid === null || hit.uuid === undefined ? `sidecar:${nameShown(rc, hit.name)}` : idShown(rc, hit.uuid);
-  return `  ${recallEnvelope({ src: hit.provenance, id, ts: hit.ts_ms, role: idShown(rc, hit.role), text: snippet })}`;
+  return `  ${recallEnvelope({ src: hit.provenance, id, ts: hit.ts_ms, role: idShown(rc, hit.role), text: snippet, ...(family === undefined ? {} : { family }) })}`;
 }
 
 /** A hit's --json item: JSON escaping only (§8.3). A uuid, role or provenance of the shape of every real one is an exact
  *  copy; any other is the bounded, redacted display form, as describe and expand carry it (D-4597). */
-function hitItem(rc, hit, snippet, nodeId) {
+function hitItem(rc, hit, snippet, nodeId, family) {
   return {
     entry_uuid: idShown(rc, hit.uuid), node_id: nodeId, ts_ms: hit.ts_ms, role: idShown(rc, hit.role), provenance: idShown(rc, hit.provenance), snippet,
-    sidecar: nameShown(rc, hit.name), trust: 'untrusted',
+    sidecar: nameShown(rc, hit.name), ...(family === undefined ? {} : { family: { ccrc_id: family.id, generation: family.generation, first_seen_ms: family.firstSeenMs } }),
+    trust: 'untrusted',
   };
 }
 
@@ -686,8 +718,10 @@ function renderHits(rc, pool, termsOf, a, page, deps = {}) {
     headers.set(g, text);
     return text;
   };
-  const lines = hits.map((h, i) => hitLine(rc, h, snippets[i]));
-  const items = hits.map((h, i) => hitItem(rc, h, snippets[i], groupOf[i] === LIVE_TAIL ? null : groupOf[i]));
+  const families = hitFamilies(rc, hits);
+  const familyOfHit = (h) => families.get(Number(h.transcript_pk));
+  const lines = hits.map((h, i) => hitLine(rc, h, snippets[i], familyOfHit(h)));
+  const items = hits.map((h, i) => hitItem(rc, h, snippets[i], groupOf[i] === LIVE_TAIL ? null : groupOf[i], familyOfHit(h)));
   const grouped = (k) => {
     const order = [];
     const members = new Map();

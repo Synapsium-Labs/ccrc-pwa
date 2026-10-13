@@ -1522,36 +1522,47 @@ function rrOpenUndefensive(file: string): DatabaseSync {
   if (typeof maybe.enableDefensive === 'function') maybe.enableDefensive(false);
   return db;
 }
-/** A copy of a backup whose integrity_check fails while every table still reads. The entries_ts index's
- *  definition is rewritten so its stored keys no longer match its table (integrity_check then answers "row N
- *  missing from index entries_ts" rows rather than throwing, and meta still reads). The handle is rrOpenUndefensive's. */
-function rrCorruptIndex(file: string): void {
+/** The one error a defensive handle answers an edit of sqlite_master with (measured on Node 24.14.1: "table sqlite_master may not be modified"). */
+const RR_SCHEMA_EDIT_REFUSED = /may not be modified/;
+/** H-232: run `sql` over sqlite_master under writable_schema on an rrOpenUndefensive handle, and answer whether the edit TOOK. A
+ *  build whose handle stays defensive (Node 24 defaults to it; the node-floor leg runs exactly 22.16.0, unmeasured here) throws
+ *  RR_SCHEMA_EDIT_REFUSED: that, and only that, is "did not take" (false), so the caller omits the rows that need the damaged copy
+ *  and annotates why. Any other error propagates. A true answer is the edit having run to completion, not a regex over what a later
+ *  read said, so the caller's CONTROL is a real check on the copy. */
+function rrEditSchema(file: string, sql: string, ...params: string[]): boolean {
   const db = rrOpenUndefensive(file);
   try {
     db.exec('PRAGMA writable_schema = ON');
-    db.prepare("UPDATE sqlite_master SET sql = ? WHERE name = 'entries_ts'").run('CREATE INDEX entries_ts ON entries(ts_ms, transcript_pk)');
+    try {
+      db.prepare(sql).run(...params);
+    } catch (e) {
+      if (RR_SCHEMA_EDIT_REFUSED.test(String((e as Error).message))) return false;
+      throw e;
+    }
     db.exec('PRAGMA writable_schema = OFF');
+    return true;
   } finally { db.close(); }
+}
+/** A copy of a backup whose integrity_check fails while every table still reads. The entries_ts index's
+ *  definition is rewritten so its stored keys no longer match its table (integrity_check then answers "row N
+ *  missing from index entries_ts" rows rather than throwing, and meta still reads). The handle is rrOpenUndefensive's.
+ *  H-232: answers whether the edit took (rrEditSchema); a defensive build leaves the copy intact and the caller omits its row. */
+function rrCorruptIndex(file: string): boolean {
+  if (!rrEditSchema(file, "UPDATE sqlite_master SET sql = ? WHERE name = 'entries_ts'", 'CREATE INDEX entries_ts ON entries(ts_ms, transcript_pk)')) return false;
   const rows = rrFileDb(file, (d) => (d.prepare('PRAGMA integrity_check').all() as { integrity_check: string }[]).map((r) => r.integrity_check));
-  expect(rows, 'CONTROL: the fixture really fails integrity_check').not.toEqual(['ok']);
+  expect(rows, 'CONTROL: the edit took, so the fixture really fails integrity_check').not.toEqual(['ok']);
+  return true;
 }
 
 /** H-186: a backup whose meta reads but whose FTS5 index cannot be built: blobs_fts_config is gone from the schema, so
  *  PRAGMA integrity_check throws `vtable constructor failed: blobs_fts` (SQLITE_ERROR, no 'no such table' in the text).
- *  H-220: answers whether the edit took. A build that refuses the writable_schema edit (defensive mode) leaves the copy intact, and
- *  the caller skips its row; when the edit took, the CONTROL below stays a hard assertion. */
+ *  H-220, H-232: answers whether the edit took (rrEditSchema). A build that refuses the writable_schema edit (defensive mode) leaves the
+ *  copy intact, and the caller omits its row; when the edit took, the CONTROL below is a hard assertion over the copy, no longer a
+ *  regex over the value that said it took. */
 function rrBreakFts(file: string): boolean {
-  const db = rrOpenUndefensive(file);
-  try {
-    db.exec('PRAGMA writable_schema = ON');
-    db.prepare("DELETE FROM sqlite_master WHERE name = 'blobs_fts_config'").run();
-    db.exec('PRAGMA writable_schema = OFF');
-  } finally { db.close(); }
-  let thrown = '';
-  try { rrFileDb(file, (d) => d.prepare('PRAGMA integrity_check').all()); } catch (e) { thrown = String((e as Error).message); }
-  const took = /vtable constructor failed/.test(thrown);
-  if (took) expect(thrown, 'CONTROL: the fixture really makes integrity_check throw a SQLITE_ERROR').toMatch(/vtable constructor failed/);
-  return took;
+  if (!rrEditSchema(file, "DELETE FROM sqlite_master WHERE name = 'blobs_fts_config'")) return false;
+  expect(() => rrFileDb(file, (d) => d.prepare('PRAGMA integrity_check').all()), 'CONTROL: the edit took, so integrity_check throws a SQLITE_ERROR').toThrow(/vtable constructor failed/);
+  return true;
 }
 
 describe('C57: doctor --restore, the drill (W1-B2 Task 27)', () => {
@@ -1739,8 +1750,13 @@ describe('C57: doctor --restore, the drill (W1-B2 Task 27)', () => {
     expect(v0, 'a refusal decideBind makes over the staged copy').toContain(OPERATOR);
     expect(fs.existsSync(P.dbFile), 'H-223: nothing was linked').toBe(false);
     fs.copyFileSync(path.join(P.backups, name), path.join(P.backups, '20200101T000002Z.db'));
-    rrCorruptIndex(path.join(P.backups, '20200101T000002Z.db'));
-    expect(await refused(['20200101T000002Z.db'], 'a failed integrity_check'), 'a refusal decideBind makes over the staged copy').toContain(OPERATOR);
+    // H-232: both edits are made under writable_schema, which a defensive build refuses; a row cannot be skipped from the middle of a test, so
+    // such a build omits only the rows that need the damaged copy and annotates why, and every other assertion of the test still runs.
+    if (rrCorruptIndex(path.join(P.backups, '20200101T000002Z.db'))) {
+      expect(await refused(['20200101T000002Z.db'], 'a failed integrity_check'), 'a refusal decideBind makes over the staged copy').toContain(OPERATOR);
+    } else {
+      await ctx.annotate('failed-integrity_check row omitted: this node:sqlite build refuses writable_schema edits (defensive mode)');
+    }
     // H-186: a SQLITE_ERROR that is no missing table (the index cannot be built) is still a verdict on the copy: exit 2, never 'internal error'.
     fs.copyFileSync(path.join(P.backups, name), path.join(P.backups, '20200101T000003Z.db'));
     // H-220: a row cannot be skipped from the middle of a test (ctx.skip ends the test), so a build that refuses the writable_schema edit
@@ -2223,7 +2239,7 @@ describe('C58: doctor --rebuild, its store_id and its refusals (W1-B2 Task 28)',
     await refused(empty, [], 'an empty journal directory names no store');
   }, 2 * HEAVY);
 
-  it('H-18 (D-4605): a journal directory or month file rebuild cannot read answers exit 5 store-unmeasured and writes no store, where an empty directory and a foreign head are still rebuild-refused (exit 2)', async (ctx) => {
+  it('H-18 (D-4605): a journal directory or month file rebuild cannot read answers exit 5 store-unmeasured and writes no store, where a head naming another store and a foreign entry are still rebuild-refused (exit 2), and an empty directory is nothing to replay (H-227)', async (ctx) => {
     if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file and lists a 0000 directory
     const { box, storeId } = rrBuilt('ccrc-hist-c58h-');
     const P = rrRoot(box);
@@ -2260,13 +2276,40 @@ describe('C58: doctor --rebuild, its store_id and its refusals (W1-B2 Task 28)',
     const G = '0189abcd-1234-4678-9abc-0000000000de';
     fs.mkdirSync(path.join(P.journalDir, G), { mode: 0o700 });
     fs.symlinkSync(month, path.join(P.journalDir, G, `${new Date().toISOString().slice(0, 7)}.abcdef01.jsonl`));
+    // H-227 (D-4605 refined): a directory with no month file is its own word, `empty`, and is nothing to replay; it is no longer a disagreement.
     expect(SW.journalStoreDirs(box.home).map((d) => `${d.storeId}=${d.heads}`).sort())
-      .toEqual([`${storeId}=agree`, `${E}=disagree`, `${F}=disagree`, `${G}=foreign`].sort());
-    for (const id of [E, F, G]) {
+      .toEqual([`${storeId}=agree`, `${E}=empty`, `${F}=disagree`, `${G}=foreign`].sort());
+    for (const id of [F, G]) {
       const r = await shimOnPty(box, ['--op', 'rebuild', '--store-id', id]);
       expect(lastRc(r.out), r.out).toEqual({ rc: 2, reason: 'rebuild-refused' });
       noStore(id);
     }
+    // CONTROL: the empty directory, named, is the one that rebuilds.
+    const named = await shimOnPty(box, ['--op', 'rebuild', '--store-id', E]);
+    expect(lastRc(named.out), named.out).toEqual({ rc: 0 });
+    expect(fs.readFileSync(P.storeId, 'utf8').trim(), 'the store minted carries the empty directory\'s id').toBe(E);
+  }, 2 * HEAVY);
+
+  it('H-227 (D-4605 refined): store.id names S and journal/S/ holds no month file (the crash window before its first month file): --op rebuild answers 0 and mints the store with S\'s id, with and without --store-id; CONTROL: a month file whose head names another store still refuses', async () => {
+    for (const args of [[], ['--store-id', 'S']]) {
+      const { box, storeId } = rrBuilt(`ccrc-hist-c58emp${args.length}-`);
+      const P = rrRoot(box);
+      const oldWriter = fs.readFileSync(P.writer, 'utf8').trim();
+      rrLose(box, { binding: false, journal: true });
+      // The state appendJournal's mkdirDurable leaves when a crash lands before createMonthFile: the directory, and at most a dot-named temp.
+      fs.mkdirSync(path.join(P.journalDir, storeId), { recursive: true, mode: 0o700 });
+      expect(SW.journalStoreDirs(box.home).map((d) => `${d.storeId}=${d.heads}`), 'the directory is empty, not a disagreement').toEqual([`${storeId}=empty`]);
+      const r = await shimOnPty(box, ['--op', 'rebuild', ...args.map((a) => (a === 'S' ? storeId : a))]);
+      expect(lastRc(r.out), `${args.join(' ')}\n${r.out}`).toEqual({ rc: 0 });
+      rrExpectBound(box, storeId, 'rebuild', oldWriter);
+    }
+    const { box, storeId } = rrBuilt('ccrc-hist-c58empc-');
+    const P = rrRoot(box);
+    rrLose(box, { binding: false, journal: true });
+    plantJournalFile(box, storeId, new Date().toISOString().slice(0, 7), 'abcdef01', Date.now(), [], '0189abcd-1234-4678-9abc-0000000000ee');
+    expect(SW.journalStoreDirs(box.home).map((d) => `${d.storeId}=${d.heads}`), 'CONTROL: a head naming another store').toEqual([`${storeId}=disagree`]);
+    await refused(box, [], 'CONTROL: the marker\'s directory holds a month file naming another store');
+    expect(fs.existsSync(P.dbFile), 'CONTROL: no DB was minted').toBe(false);
   }, 2 * HEAVY);
 
   it('H-218 (D-4605): store.id present and no --store-id: a store\'s own month file replaced by a link is rebuild-refused, never skipped, and no store is minted; CONTROL: the intact directory rebuilds', async () => {
