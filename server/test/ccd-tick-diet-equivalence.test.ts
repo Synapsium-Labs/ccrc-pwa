@@ -96,9 +96,9 @@ const PLANNED_FORMS: Readonly<Record<string, string>> = {
 };
 /** What has NOT landed in `ccd/ccd` yet: the planned forms, plus `_now_s`, the one printing form whose name is new.
  *  The task that lands a name deletes it here in the same commit (the header's "RED FIRST"). D-4961 (Task 4) landed
- *  `_now_s_to` and `_now_s`; W2 and W3 remove theirs. */
+ *  `_now_s_to` and `_now_s`; Task 5 landed `_cfg_dir_to`; W2 and W3 remove theirs. */
 const PENDING: ReadonlySet<string> = new Set(
-  [...Object.keys(PLANNED_FORMS), '_now_s'].filter((n) => n !== '_now_s_to' && n !== '_now_s'),
+  [...Object.keys(PLANNED_FORMS), '_now_s'].filter((n) => n !== '_now_s_to' && n !== '_now_s' && n !== '_cfg_dir_to'),
 );
 
 const sha256 = (b: Buffer | string): string => createHash('sha256').update(b).digest('hex');

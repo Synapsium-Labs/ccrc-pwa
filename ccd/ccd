@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f2061135bc69623cd47a2e3eec86a8e0a2fee08f9562e2b6eb593e002544429e
+# ccrc:generated 1 sha256=be06c8a691d101ec963cbe0a8b519e2736ad830a3fe6e5e866b886ca15736cf9
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -17873,7 +17873,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   echo "$pane" | grep -q "❯" || return 0                    # not at a prompt yet
   local spid sf st sua
   spid=$(tmux list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
-  sf="$(_cfg_dir "$wrapper")/sessions/$spid.json"
+  _cfg_dir_to sf "$wrapper"; sf="$sf/sessions/$spid.json"   # tick-diet spec §6.2: memoised per wrapper — an exact memo, no D-number (Task 5)
   # `-f` BEFORE THE GREP, for `_authdead`'s reason (#69 review round 3, R2):
   # `grep FILE` opens by name and blocks for ever on a FIFO with no writer or on
   # an unbounded character device, inside the 5-second tick. MEASURED on the
@@ -18478,7 +18478,7 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
   # those means GO LOOK AT THE BOX; `status=busy` means WAIT. So each gets its own slug, and the
   # detail carries the path/status that says which flavour it is.
   [[ -n "$spid" ]] || { KS_WHY=no-pane-pid; KS_DETAIL="tmux list-panes named no pane pid${ctxnote:+, $ctxnote}"; return 1; }
-  sf="$(_cfg_dir "$wrapper")/sessions/$spid.json"
+  _cfg_dir_to sf "$wrapper"; sf="$sf/sessions/$spid.json"   # tick-diet spec §6.2: memoised per wrapper — an exact memo, no D-number (Task 5)
   # `-f` BEFORE THE GREP — same rung and same reason as `_auto_swap_check`'s
   # copy above, but NOT the same arm, and the difference is the whole point.
   # That lane has two answers here (idle / not) and folds every failure into a
@@ -22906,6 +22906,7 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
 }
 
 # ── THE TICK DIET (#387) — fork-free cores for the supervise tick ──────────────
+# spec: docs/superpowers/specs/2026-10-13-supervisor-tick-diet-design.md §6.1–§6.4.
 # tick-diet spec §6.1 rules 1-4 and the out-var rule:
 #  1. Same names, same contracts: every converted helper keeps its stdout and rc as a
 #     one-line wrapper; the `_<name>_to` out-var form carries the fork-free core.
@@ -22920,6 +22921,7 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
 #  that is a local of the form it calls.
 # D-4960: prime `_plat_timeout`'s `-k` cache once in the supervisor's own shell (Task 3).
 # D-4961: the clock seam — `_now_s_to` / `_now_s` (Task 4, this block).
+# `_cfg_dir_to` (Task 5): an exact per-wrapper memo of `_cfg_dir`; it needs no number (spec §6.2).
 # D-4962: limits JSON parsed with builtins on a stated domain (W2).
 # D-4963: registry reads with builtins; the route chain through out-vars (W3).
 
@@ -22936,6 +22938,13 @@ _now_s_to() {   # var -> var = epoch seconds (D-4961; see the paragraph above)
   fi
 }
 _now_s() { local __ns_v; _now_s_to __ns_v; printf '%s' "$__ns_v"; }   # the printing form
+
+declare -gA _CCD_CFG_DIR_MEMO=()   # -g: a global even when ccd is sourced inside a function
+_cfg_dir_to() {   # var wrapper -> var = `_cfg_dir wrapper`, memoised per wrapper for this process's life (the roster is sourced once)
+  [[ -n "${2-}" ]] || { printf -v "$1" '%s' "$(_cfg_dir '')"; return 0; }   # an empty key is no memo key
+  [[ -n "${_CCD_CFG_DIR_MEMO[$2]+x}" ]] || _CCD_CFG_DIR_MEMO[$2]=$(_cfg_dir "$2")
+  printf -v "$1" '%s' "${_CCD_CFG_DIR_MEMO[$2]}"
+}
 
 cmd_supervise() {   # systemd ExecStart: ensure then block until the session dies
   local id="${1:?usage: ccd supervise <id>}"

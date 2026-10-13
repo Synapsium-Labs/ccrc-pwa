@@ -43,15 +43,15 @@ import {
  *  a sum of the three. Lowered only by a change that measures the new figure and
  *  states it in its PR's departure. */
 const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
-  'idle-home': { forks: 171, execs: 80 },
-  busy: { forks: 167, execs: 78 },
-  narrow: { forks: 74, execs: 30 },
-  'away-over-ceiling': { forks: 199, execs: 100 },
-  'hard-blocked': { forks: 424, execs: 239 },
-  cooldown: { forks: 97, execs: 39 },
-  fable: { forks: 159, execs: 71 },
-  leaving: { forks: 411, execs: 246 },
-  'fable-leaving': { forks: 393, execs: 231 },
+  'idle-home': { forks: 163, execs: 72 },
+  busy: { forks: 160, execs: 71 },
+  narrow: { forks: 71, execs: 27 },
+  'away-over-ceiling': { forks: 189, execs: 90 },
+  'hard-blocked': { forks: 402, execs: 217 },
+  cooldown: { forks: 93, execs: 35 },
+  fable: { forks: 152, execs: 64 },
+  leaving: { forks: 387, execs: 223 },
+  'fable-leaving': { forks: 371, execs: 210 },
 };
 
 /** `_plat_timeout`'s `-k` probe, per tick inside the loop. On `main` at
