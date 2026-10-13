@@ -378,3 +378,20 @@ describe('T11 review 2-2: a keystroke chord is split into chips only up to a bou
     expect(keystrokeParts(chord(CHAT_SYNC_MAX_BYTES / 2 + 1))).toBeNull();
   });
 });
+
+describe('T11 review 3-4: the last good tree stays while a newer text parses after a non-tree outcome', () => {
+  it('tree, then a timeout, then a newer text pending: the tree shows, not bare plain text', async () => {
+    const calls = deferChatParses();
+    const first = longText('# First');
+    const { container, next } = assistant(first);
+    await answer(calls, 0);
+    next(`${first} two`);
+    await answer(calls, 1, { kind: 'timeout', budgetMs: CHAT_PARSE_BUDGET_MS });
+    expect(noteOf(container)).toBe('Shown as plain text: formatting took longer than 2 s.');
+    next(`${first} three`);
+    expect(calls).toHaveLength(3);
+    expect(screen.getByRole('heading', { name: 'First' })).toBeTruthy();
+    expect(plainOf(container)).toBeNull();
+    expect(noteOf(container)).toBeNull();
+  });
+});
