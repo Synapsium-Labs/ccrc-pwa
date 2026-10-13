@@ -1369,6 +1369,23 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - Wave 15 (run 300) is still held by the open PR #351 (`ccd/ccd`).
       - STATUS: fleet and server v0.0.162, newest v0.0.163, backups fleet 145M/server 667M, disk free fleet 217G/work
         volume 220G/server 33G, no anomalies at 02:42.
+    - **2026-10-13 03:44 UTC: v0.0.163 (#378, the GPT lanes' system-prompt and parallel-tool-call fix) auto-converged
+      unattended.** No action was taken.
+      - It was published at 02:27:28. The server last booted at 02:22:32, so its next poll fell at about 02:52:32.
+      - The fleet box ran 02:53:04 to 02:58:23, and the server followed by auto at 02:58:48 to 02:59:12, 25 seconds
+        after the fleet. Both reports read `phase: done` and `from: pwa` (defect A).
+      - The fleet's run took 5 min 19 s, against 2 to 2.5 min for the four before it. The box's load average was 30
+        to 32 on 16 cores at the probe. Nothing failed, so this is read as load, not a defect.
+      - Both boxes read `box-token` PASS. Server doctor: 25 passed, 0 warned, 0 failed. Fleet doctor: 33 passed, 6
+        warned, 0 failed.
+      - **Wave 15 (run 300) is held twice, not once.** The open PR #351 (`ccd/ccd`) still holds it. So does claim 1213
+        (run 354, ccrc-history's recall batch), live on `ccd/ccrc`, the file whose line 911 wave 15 edits. The claim
+        was made at 00:52 and renews; its hard cap is 08:52. The ruling on wave 15's Reading 7 dispatches it
+        only once every claim on its three files has ended.
+        - The 01:52 and 02:43 entries named #351 alone. They were incomplete, unless the claim's paths were widened
+          after they were written; that cannot be told from here.
+      - STATUS: fleet and server v0.0.163, newest v0.0.163, backups fleet 145M/server 670M, disk free fleet 215G/work
+        volume 222G/server 33G, no anomalies at 03:42.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
