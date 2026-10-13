@@ -3586,15 +3586,19 @@ entry in the cleanup row on `/runs` saying it would expire, with what would be d
 composed. Armed, at most one expiry runs per sweep pass, fleet-wide. `$REG/reclaim-paused` is the fleet’s one cleanup switch: raised (the cleanup row's toggle on
 `/runs`, or `ccd reclaim-pause --state on`), it stops child reclamation and this lane alike, shadow included. A
 workspace someone is viewing is left alone for as long as they are; one a process is working in (a forgotten dev
-server, a tmux or fsmonitor daemon) is refused `in-use` on every pass and, after a few, listed with the process's id,
-its command and its path. The lane never kills: find out what the process is first — the fleet's own tmux server is
+server, a tmux or fsmonitor daemon) is refused `in-use` each time it is asked and, after a few, listed with the
+process's id, command and path. The lane never kills: find out what the process is first — the fleet's own tmux server is
 also a `tmux: server`. A workspace held past its seven days is listed, never touched. A cleanup that completed but kept
 the workspace's clips or temp root (ccd's removal refused it, could not measure it, or a process still used it) is
 listed, saying what was kept and why, until the server restarts; a fleet box whose ccd predates that report says so in
 the feed row only. A cleanup the box keeps failing in a way it says it can resume is listed after an hour (a box answer at
 once) and retried, backing off; after a day it becomes a standing entry, with the first failure, the attempts and the last
-error, asked again every four hours, never stopping. The entry stays through a hold, a shadow audit or any other answer that
-ends no attempt, until an attempt completes, finds that none had begun or stops for good, or the workspace is archived again.
+error, asked again four hours after each failed attempt (sooner after an answer that ends no attempt), never stopping. The
+entry stays through a hold, a shadow audit or any other answer that ends no attempt, until an attempt completes, finds that
+none had begun or stops for good, or the workspace is archived again (a server restart drops it too). One that met
+`containment-refuted` is listed at once on that cadence, and ccd's stopping before an attempt began does not end it (an
+attempt completing, a verdict stopping it, or a fresh archive does, and a server restart drops it, as it drops every
+entry); one ccd stopped before it began is audited afresh, and listed after an hour if that recurs; a box with no `flock` gets no cleanup at all until the server restarts. The spec's §12 lists what to know before arming this lane or the next.
 
 **A coordinator that crashed is ended after an hour** (workspace lifecycle spec §5.4). A coordinator whose pane is
 gone with nothing bringing it back (`orphan`, `never-started`), or whose registry row is gone, with no deliberate act
@@ -3602,9 +3606,10 @@ journaled since its last successful spawn — a stop, an archive, a reap, a dest
 expiry, or an unsupervise somebody declared — and that has stayed so for an hour on two passes in a row, has its open
 runs closed `failed` by the server once the operator has armed the lane with `$REG/dead-coordinator-lane-live`; until
 then the lane only records what it would end. The hour counts from the first pass that measured the crash, kept in
-`coord.db` across restarts and raised, never lowered, by a later supervisor heartbeat. A lane gap of more than ten
-minutes (a restart, a pause, a stale mirror) starts the hour afresh, and trips the breaker when two or more coordinators
-were crashed, since each re-anchors on the same pass. A stopped coordinator is never
+`coord.db` across a clean restart (after an unclean exit every crashed claimant's hour starts afresh: D-4916) and
+raised, never lowered, by a later supervisor heartbeat. A lane gap of more than ten minutes (a restart, a pause, a stale
+mirror) starts the hour afresh, and trips the breaker when two or more coordinators were crashed, since each re-anchors
+on the same pass. A stopped coordinator is never
 ended, nor one a supervisor is bringing back, nor one the server cannot measure. A coordinator whose journal the
 server cannot trust to hold every deliberate act — the lifecycle mirror `unavailable` (the fleet's ccd does not journal), a gap it recorded since the
 coordinator's last start, a journal line ccd could not write — is listed and never acted on, and so are one with no
@@ -3626,7 +3631,8 @@ coordinator is ended per pass; in shadow every due one is recorded. `$REG/reclai
 included. It never pushes: the stall watch's pushes about a dead coordinator's stalled workers — one per worker, each
 naming the coordinator — are the notifications, and this lane's rows (each with the instant the coordinator was first
 seen dead, and one when the breaker trips) are records of the same incident. A mirror that goes stale between the pass
-and the act stops the act and keeps the hour, and every act that fails writes a feed row, whatever it had done.
+and the act stops the act and keeps the hour, and every act that fails writes a feed row, whatever it had done. A mirror
+gone stale, or a gap recorded, while the act measures the coordinator stops it too: the act reads both again after it.
 
 **What a crossing costs.** Caps stay global: one row, whole box, no per-project
 and no per-programme cap. Running-worker concurrency counts dispatched runs in
@@ -3859,8 +3865,8 @@ tail prints when it proves that what it would remove is not only the child's own
 inside or through it, a workdir that is the main checkout, a link or non-directory at the workdir); the session was
 stopped and nothing further was deleted, and a retry finds the same thing until the other tree or row is moved or
 removed. What could not be asked stays `worktree-remove-failed`. The failed document carries `crumb`, saying whether
-the failure was printed past the act's breadcrumb, and omits it where that is not known (`ws-expire`'s own
-pre-breadcrumb documents, its resumed arm's `probe-unmeasured`, every `ws-collect` document). Git's silence about a worktree record is no longer believed
+the failure was printed past the act's breadcrumb, and omits it where that is not known (a breadcrumb that stands but
+cannot be read, every `ws-collect` document; `ws-expire` says it too since workspace lifecycle wave 6). Git's silence about a worktree record is no longer believed
 without reading its admin entries, so `no-worktree-record` becomes a retried unmeasured answer when an entry could not
 be read, and a vanished tree whose record names the all-zero head is unmeasured at the audit. The reclaim token also
 binds the row's generation (`ws-audit --reclaim` prints it as `generation`), so a token minted over one row is never
