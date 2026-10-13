@@ -435,17 +435,25 @@ describe('T11 review N1: streaming shows each newer settled tree; A -> B -> A ne
 describe('T11 review 2-3 (operator ruling): a short message whose tables would draw more cells than the cap is plain text', () => {
   /** A table of `cols` columns, then `x` body lines until the text is as near 4 096 bytes as it can be; `cells` is
    *  the cell count the parse would draw: the header and every body line, `cols` cells each. */
-  function wideTable(cols: number, prefix = '', reserve = 0): { text: string; cells: number } {
-    let text = `${prefix}|${'a|'.repeat(cols)}\n${prefix}|${'-|'.repeat(cols)}\n`;
+  function wideTable(cols: number): { text: string; cells: number } {
+    let text = `|${'a|'.repeat(cols)}\n|${'-|'.repeat(cols)}\n`;
     let rows = 1;
-    while (utf8ByteLength(`${text}${prefix}x\n`) + reserve <= CHAT_SYNC_MAX_BYTES) {
-      text += `${prefix}x\n`;
+    while (utf8ByteLength(`${text}x\n`) <= CHAT_SYNC_MAX_BYTES) {
+      text += 'x\n';
       rows += 1;
     }
     return { text, cells: cols * rows };
   }
   const tooWide = (cells: number): string =>
     `Shown as plain text: this message would draw ${cells} elements (limit ${DOCS_MAX_RENDER_ELEMENTS}).`;
+
+  /** The smallest table over the cap: 201 columns and just enough `x` body lines, `prefix` on every line. */
+  function justOverCap(prefix = ''): { text: string; cells: number } {
+    const cols = 201;
+    const rows = Math.floor(DOCS_MAX_RENDER_ELEMENTS / cols) + 1;
+    const text = `${prefix}|${'a|'.repeat(cols)}\n${prefix}|${'-|'.repeat(cols)}\n${`${prefix}x\n`.repeat(rows - 1)}`;
+    return { text, cells: cols * rows };
+  }
 
   it.each([300, 500])('a 4 096-byte %i-column table shows .msg-plain with the too-wide note and draws no table', (cols) => {
     const { text, cells } = wideTable(cols);
@@ -461,8 +469,22 @@ describe('T11 review 2-3 (operator ruling): a short message whose tables would d
     expect(spy).not.toHaveBeenCalled();
   });
 
+  it('a table just over the cap, well under 4 096 bytes, is plain text without react-markdown drawing it', () => {
+    const { text, cells } = justOverCap();
+    expect(utf8ByteLength(text)).toBeLessThanOrEqual(CHAT_SYNC_MAX_BYTES);
+    expect(cells).toBeGreaterThan(DOCS_MAX_RENDER_ELEMENTS);
+    const spy = countChatParses();
+    const { container } = assistant(text);
+    expect(plainOf(container)?.textContent).toBe(text);
+    expect(noteOf(container)).toBe(tooWide(cells));
+    expect(container.querySelector('table')).toBeNull();
+    expect(container.querySelectorAll('*').length).toBeLessThan(10);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it('the same table inside a blockquote is counted too', () => {
-    const { text, cells } = wideTable(300, '> ');
+    const { text, cells } = justOverCap('> ');
+    expect(utf8ByteLength(text)).toBeLessThanOrEqual(CHAT_SYNC_MAX_BYTES);
     expect(cells).toBeGreaterThan(DOCS_MAX_RENDER_ELEMENTS);
     const { container } = assistant(text);
     expect(noteOf(container)).toBe(tooWide(cells));
@@ -487,9 +509,8 @@ describe('T11 review 2-3 (operator ruling): a short message whose tables would d
   });
 
   it('a wide table behind a fence opened inside a list item (which ends with the item) is counted: plain text', () => {
-    const open = '- a\n  ```\n';
-    const { text: table, cells } = wideTable(300, '', open.length);
-    const text = `${open}${table}`;
+    const { text: table, cells } = justOverCap();
+    const text = `- a\n  \`\`\`\n${table}`;
     expect(utf8ByteLength(text)).toBeLessThanOrEqual(CHAT_SYNC_MAX_BYTES);
     expect(cells).toBeGreaterThan(DOCS_MAX_RENDER_ELEMENTS);
     const { container } = assistant(text);
