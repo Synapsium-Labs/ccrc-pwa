@@ -1458,6 +1458,18 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         on `ccd/ccd`, and by claim 1240 (run 354) on `ccd/ccrc`.
       - STATUS: fleet and server v0.0.172, newest v0.0.172, backups fleet 146M/server 684M, disk free fleet 206G/work
         volume 219G/server 32G, no anomalies at 16:42.
+    - **2026-10-13 17:43 UTC: v0.0.174 auto-converged unattended, past v0.0.173.** No action was taken.
+      - The releases: v0.0.173, #391 (a refused gateway connection is waited out), at 16:58:59; and v0.0.174, #392 (a
+        subagent cannot load a ccrc role skill), at 17:00:11.
+      - The next poll found both, and the auto move went straight to the newest. The fleet box ran 17:28:10 to 17:30:18,
+        and the server followed at 17:30:44 to 17:31:10, 26 seconds after the fleet.
+      - Both boxes read `box-token` PASS. Server doctor: 26 passed, 0 warned, 0 failed. Fleet doctor: 33 passed, 6
+        warned, 0 failed.
+      - The fleet's backups grew from 146M to 159M, one more kept build.
+      - Wave 15 (run 300) is still held by the open PR #351, by claim 1247 on `ccd/ccd` and by claim 1254 (run 354;
+        1240 ended) on `ccd/ccrc`.
+      - STATUS: fleet and server v0.0.174, newest v0.0.174, backups fleet 159M/server 686M, disk free fleet 209G/work
+        volume 217G/server 32G, no anomalies at 17:42.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
