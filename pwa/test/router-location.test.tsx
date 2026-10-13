@@ -187,3 +187,15 @@ describe('T11 review 4-2: a replace rides the same view transition as a push', (
     expect(history.length).toBe(before + 1);
   });
 });
+
+describe('T11 review 4-3: usePath subscribes through useLocation', () => {
+  it('a component that reads only usePath() re-renders on a search-only change', () => {
+    navigate('/docs/p?ref=a');
+    const seen: string[] = [];
+    render(<PathProbe seen={seen} />);
+    const rendered = seen.length;
+    act(() => { navigate('/docs/p?ref=b'); });
+    expect(seen.length).toBeGreaterThan(rendered);
+    expect(last(seen)).toBe('/docs/p');
+  });
+});
