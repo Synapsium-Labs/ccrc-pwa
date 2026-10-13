@@ -3517,8 +3517,17 @@ describe('ccrc doctor: transcripts', () => {
       // EXECUTABLE and readable, so only the not-a-directory test can catch it.
       if (shape === 'file') writeFileSync(reg, 'not a directory\n', { mode: 0o755 });
       else symlinkSync(join(home, 'gone'), reg);
-      const line = lineFor(runDoctor(home).stdout, 'transcripts');
+      const out = runDoctor(home).stdout;
+      const line = lineFor(out, 'transcripts');
       expect(line, shape).toMatch(/^FAIL transcripts: /);
+      // The remedy must be one that CAN clear this FAIL (D-4941). `chmod`
+      // cannot turn a file into a directory or give a dangling link a target,
+      // so a mode remedy here sends the operator round in a loop.
+      expect(line, shape).toContain('is not a directory');
+      const remedy = out.split('\n')[out.split('\n').indexOf(line!) + 1];
+      expect(remedy, shape).toMatch(/^ {2}remedy: /);
+      expect(remedy, shape).not.toContain('chmod');
+      expect(remedy, shape).toContain(`ls -ld ${reg}`);
     }
   });
 

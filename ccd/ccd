@@ -15844,8 +15844,10 @@ CONTINUED_IN_TAIL_BYTES=8192
 # the two bash spellings byte-equal and runs all three readers over one table
 # of transcripts. In short: the window's lines are read NEWEST FIRST; a
 # top-level `continued-in` record decides (a successor, or none when it is not
-# this file's valid marker), a top-level user/assistant record decides "none",
-# and every other line — re-stamped metadata, a line that does not parse, the
+# this file's valid marker), a top-level user/assistant record that Claude
+# Code's own reader calls a finished turn decides "none", and every other
+# line — re-stamped metadata, an interruption notice, a tool result, a
+# streamed record with no `stop_reason` yet, a line that does not parse, the
 # window's cut first line — is stepped over.
 #
 # JQ, NOT A BASH PATTERN, AND WHY (review finding F1). The old reader matched
@@ -15859,29 +15861,105 @@ CONTINUED_IN_TAIL_BYTES=8192
 # read budget below), never per tick. A box with no jq follows nothing — no
 # output is "no successor" — and `ccrc doctor`'s jq check FAILs that box.
 #
+# A FINISHED TURN, AS CLAUDE CODE TELLS ONE (`complete`, `prompt`). Its own
+# reader (2.1.296) steps over every user/assistant record that is not one: an
+# assistant record whose `stop_reason` is not a string or that is an API
+# error, and a user record that is meta, a compact summary, a tool result, or
+# whose every text is empty, a slash command's echo, a leading tag
+# (`<local-command-stdout>`, `<system-reminder>`, …) or an interruption
+# notice. Stopping at those as well declined a follow Claude Code makes, and
+# those are the records most likely to land after a busy session is forked.
+# `jstrim`/`jsws` are JavaScript's `trim()` and `\s`, code point for code
+# point, and `tagled`/`cmdname` are its two patterns, so the test is the same
+# on the same string. Claude Code turns every newline into a space before
+# testing; here that step is folded into the tests instead (both treat a
+# newline exactly as a space: whitespace to `jstrim` and `tagled`, and NOT a
+# place `cmdname`'s `.` stops — it stops at `\r`, U+2028 and U+2029 only).
+# The one place this rule stops where Claude Code might step over is a text
+# holding a `<pasted_content id="` literal, which Claude Code unwraps first
+# and this program does not.
+#
+# NO `first`, `limit`, `any`, `all`, `isempty` OR `label` (review of D-4940,
+# measured): on jq 1.6 a `try` swallows the `break` those are built on when it
+# sits between the label and the break, so `first(… try fromjson …)` emitted
+# EVERY deciding line, and the older marker behind a user turn won. Two
+# guards now, either of which alone holds on jq 1.6 (both measured): every
+# decision is collected into an array and the newest taken from it, so there
+# is no break to swallow; and each parse's `try` sits inside its own array
+# constructor, so no break could cross it. The parity test pins the first by
+# spelling, and runs the table on every jq it finds.
+#
 # The uuid test is `explode`d character classes, not `test()`: jq's `$` also
 # matches before a trailing newline (a successor `"<uuid>\n"` would pass
 # `^…$`), and a jq built without Oniguruma has no `test()` at all.
 #
-# jq and `JSON.parse` agree on every line a JSON serializer writes, duplicate
-# keys included (both keep the LAST, measured on jq 1.7.1 and 1.8.2). They part
-# only on input no transcript writer emits: jq also accepts the bare literals
-# `nan`/`NaN`/`Infinity`, and jq 1.6 (not 1.7+) gives up past nesting depth 256.
-CONTINUED_IN_JQ='def tailrec($l):
+# jq and `JSON.parse` agree on every line a JSON serializer writes but two,
+# measured on jq 1.6, 1.7.1 and 1.8.2. A LONE SURROGATE ESCAPE (`"\ud83d"`,
+# what `JSON.stringify` writes for a string cut mid-emoji) is refused by every
+# jq; `unsurrogate` rewrites each surrogate escape into a plain one and parses
+# again, which changes no decision this program makes (none reads a character
+# that is not ASCII or whitespace). NESTING DEEPER THAN 256 is refused by jq
+# before 1.8, and is left as it is: such a line is skipped here while the
+# server reads it, so a finished turn nested that deep after a marker is one
+# this reader steps over and the server stops at — recorded, not pinned,
+# because which jq refuses it is the variable. The surrogate row is in the
+# parity table. jq also accepts inputs no serializer writes (`nan`, `NaN`, `Infinity`;
+# on 1.6 a leading `+`), where the server skips the line. Duplicate keys: jq,
+# `JSON.parse` and Claude Code all keep the LAST.
+CONTINUED_IN_JQ='def jsws: . == 9 or . == 10 or . == 11 or . == 12 or . == 13 or . == 32 or . == 160 or . == 5760
+  or (. >= 8192 and . <= 8202) or . == 8232 or . == 8233 or . == 8239 or . == 8287 or . == 12288 or . == 65279;
+def jstrim: explode as $c
+  | [range(0; $c | length) | select($c[.] | jsws | not)] as $k
+  | if $k == [] then "" else $c[$k[0]:$k[-1] + 1] | implode end;
+def tagled: explode as $c
+  | ($c | length) > 2 and $c[0] == 60 and $c[1] >= 97 and $c[1] <= 122
+  and ([range(2; $c | length) | select($c[.] as $x
+         | ($x >= 48 and $x <= 57) or ($x >= 65 and $x <= 90) or ($x >= 97 and $x <= 122) or $x == 95 or $x == 45 | not)] as $k
+       | $k != [] and ($c[$k[0]] as $x | $x == 62 or ($x | jsws)));
+def cmdname: split("<command-name>") as $s
+  | [range(1; $s | length) | $s[.:] | join("<command-name>")
+     | split("\r")[0] | split("\u2028")[0] | split("\u2029")[0] | select(contains("</command-name>"))] != [];
+def prompttext:
+  if contains("<pasted_content id=\"") then true
+  else jstrim as $n
+  | if $n == "" then false
+    elif ($n | cmdname) then false
+    elif ($n | split("<bash-input>") | length > 1 and (.[1:] | join("<bash-input>") | contains("</bash-input>"))) then true
+    elif ($n | startswith("[Request interrupted by user")) and ($n | ltrimstr("[Request interrupted by user") | contains("]")) then false
+    elif ($n | tagled) then false
+    else true end
+  end;
+def prompt: .isMeta != true and .isCompactSummary != true and (.message | type) == "object"
+  and (.message.content as $x
+       | if ($x | type) == "string" then ($x | prompttext)
+         elif ($x | type) == "array" then
+           [$x[] | select(type == "object" and .type == "tool_result")] == []
+           and [$x[] | select(type == "object" and .type == "text" and (.text | type) == "string") | select(.text | prompttext)] != []
+         else false end);
+def complete: ((has("isApiErrorMessage") | not) or .isApiErrorMessage == false)
+  and (.message | type) == "object" and (.message.stop_reason | type) == "string";
+def unsurrogate: reduce ("d", "D") as $d (.; reduce ("8", "9", "a", "b", "c", "d", "e", "f", "A", "B", "C", "D", "E", "F") as $h
+  (.; split("\\u" + $d + $h) | join("\\uff")));
+def tailrec($l):
   ($l | contains("\"type\":\"continued-in\"")) as $m
   | ($l | (contains("\"type\":\"user\"") or contains("\"type\":\"assistant\""))) as $t
-  | (if ($m or $t) then ($l | try fromjson catch null) else null end)
-  | if type != "object" then "skip"
-    elif $m and .type == "continued-in" and (.continuedInSessionId | type) == "string" then
-      .continuedInSessionId as $to
-      | if ((has("sessionId") | not) or .sessionId == $u)
-           and ($to | length) == 36
-           and ($to | explode | all(. == 45 or (. >= 48 and . <= 57) or (. >= 97 and . <= 102)))
-           and $to != $u
-        then "+" + $to else "stop" end
-    elif $t and (.type == "user" or .type == "assistant") then "stop"
-    else "skip" end;
-first((split("\n") | reverse[]) as $l | tailrec($l) | select(. != "skip")) // "stop"
+  | if ($m or $t) | not then "skip"
+    else [$l | try fromjson catch ($l | unsurrogate | try fromjson catch empty)]
+    | if . == [] or (.[0] | type) != "object" then "skip"
+      else .[0]
+      | if $m and .type == "continued-in" and (.continuedInSessionId | type) == "string" then
+          .continuedInSessionId as $to
+          | if ((has("sessionId") | not) or .sessionId == $u)
+               and ($to | length) == 36
+               and ([$to | explode[] | select((. == 45 or (. >= 48 and . <= 57) or (. >= 97 and . <= 102)) | not)] == [])
+               and $to != $u
+            then "+" + $to else "stop" end
+        elif $t and .type == "assistant" then (if complete then "stop" else "skip" end)
+        elif $t and .type == "user" then (if prompt then "stop" else "skip" end)
+        else "skip" end
+      end
+    end;
+[(split("\n") | reverse[]) as $l | tailrec($l) | select(. != "skip")] | (.[0] // "stop")
 | select(startswith("+")) | .[1:]
 '
 
@@ -16097,7 +16175,7 @@ _ci_transcript_path() {   # id cfg uuid -> the live transcript for uuid, tried b
 _continued_in_of() {   # file uuid -> the successor uuid the file's tail window names, or nothing
   # Claude Code's own statement about itself, read by the rule all three
   # readers share (`CONTINUED_IN_JQ` above, D-4940): newest line first, the
-  # first top-level `continued-in` or user/assistant record decides.
+  # first top-level `continued-in` record or finished turn decides.
   #
   # NOT THE LAST LINE (review finding, ccd-last-line-only-marker). Claude
   # Code's own reader scans backwards and steps over records that are not a
@@ -16117,9 +16195,11 @@ _continued_in_of() {   # file uuid -> the successor uuid the file's tail window 
 }
 
 _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated read budget
-  # WHY ONE HOP AND WHY GATED (D-3562). The marker can only be the
-  # final line of a file that will never be appended to again, so the tail
-  # read waits for the file to STOP changing: one stat per tick (once the path
+  # WHY ONE HOP AND WHY GATED (D-3562). A file that is still being written
+  # has not settled what its tail says — the conversation may still be going
+  # on in it, and even after a marker Claude Code re-stamps metadata at exit
+  # (D-4940) — so the tail read waits for the file to STOP changing: one stat
+  # per tick (once the path
   # is resolved — see `_CI_PATH` above), and one 8 KiB read per quiescence. A
   # busy session pays nothing; a frozen one pays once. A chain of forks
   # therefore converges over a few ticks rather than in one call: `_CI_DONE`
@@ -16186,14 +16266,23 @@ _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated 
 # F3 (whole-branch review): ONE entry per id, and it never grows. The pane
 # `sessionId` this function has MEASURED as naming a superseded transcript.
 #
-# THE VERDICT IS MONOTONE, which is why remembering it is sound where
-# remembering `_ci_transcript_path`'s miss is not: a `continued-in` marker is
-# the LAST line a transcript ever gets, so a file that carries one is a file
-# that will never be appended to again, and "superseded" can never become
-# false. Only the TRUE verdict is kept — a live transcript can gain a marker
-# at any moment, so a remembered FALSE would be a memo of something still
-# changing. Keyed by id and holding the uuid, so a pane that genuinely
-# rotates replaces the entry instead of adding one.
+# ONLY THE TRUE VERDICT IS KEPT — a live transcript can gain a marker at any
+# moment, so a remembered FALSE would be a memo of something still changing.
+# Keyed by id and holding the uuid, so a pane that genuinely rotates replaces
+# the entry instead of adding one.
+#
+# THE TRUE VERDICT IS NOT FOR EVER, and this comment used to say it was. Its
+# premise was that a marker is the LAST line a transcript ever gets. Under the
+# shared rule (D-4940) metadata Claude Code re-stamps at exit may follow it,
+# which leaves the file superseded; but a FINISHED TURN after the marker makes
+# it not superseded, and something can write one: Claude Code does not check
+# the marker on an explicit `--resume <id>`, so a session resumed by its
+# pre-fork id writes its conversation straight after the marker. This memo
+# then keeps refusing that pane id until the pane publishes another one or the
+# supervisor restarts — and in the same process the walk (`_CI_ORIGIN`,
+# `_ci_walk_has` in `_sync_uuid`) refuses it too, without reading anything.
+# Known and left as it is here: what a pane id that comes back to life should
+# do to the registry is the walk's question, not this memo's.
 declare -A _CI_PANE_DEAD=()   # id -> the pane sessionId last MEASURED as superseded
 
 _ci_pane_superseded() {   # id cfg sid -> 0 iff sid's OWN transcript ends in a continued-in marker

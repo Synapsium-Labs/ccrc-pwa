@@ -3965,8 +3965,9 @@ _check_pool-sync() {
 # ── transcripts: the THIRD reader of Claude Code's own `continued-in` marker ──
 # THE OPERATOR'S SIGNAL. Claude Code forks a live session into a background
 # PTY under a new sessionId and appends `{"type":"continued-in", …}` to the
-# transcript it abandons (followed, at most, by metadata it re-stamps at exit —
-# D-4940). `ccd`'s `_follow_continued_in`
+# transcript it abandons (followed by no finished turn — metadata re-stamped
+# at exit, an interruption notice and the like may come after it, D-4940).
+# `ccd`'s `_follow_continued_in`
 # walks that pointer into the registry, but the walk is gated on the file
 # going quiescent first (one hop per supervise tick — D-3562), so a
 # box whose `ccd` predates that fix, or whose supervisor has not ticked yet,
@@ -3992,30 +3993,73 @@ CONTINUED_IN_TAIL_BYTES=8192   # held equal to CONTINUATION_TAIL_BYTES
 # server/src/transcript/parse.ts) is where the rule is written out in full:
 # the window's lines are read NEWEST FIRST; a top-level `continued-in` record
 # decides (a successor, or none when it is not this file's valid marker), a
-# top-level user/assistant record decides "none", and every other line —
-# metadata Claude Code re-stamps after the marker, a line that does not parse,
-# the window's cut first line — is stepped over. The old reader here matched
-# substrings anywhere on the LAST line, so a tool call whose input held a
-# marker-shaped object read as superseded while the server refused it, and a
-# real marker with a `last-prompt` line after it read as live (review findings
-# F1 and ccd-last-line-only-marker). jq is already this file's JSON reader
-# (the `build` check reads the stamp with it), and `_check_jq` FAILs a box
-# without one — on which ccd's chain follow reads nothing either.
-CONTINUED_IN_JQ='def tailrec($l):
+# top-level user/assistant record that Claude Code's own reader calls a
+# finished turn decides "none", and every other line — metadata Claude Code
+# re-stamps after the marker, an interruption notice, a tool result, a line
+# that does not parse, the window's cut first line — is stepped over. The old
+# reader here matched substrings anywhere on the LAST line, so a tool call
+# whose input held a marker-shaped object read as superseded while the server
+# refused it, and a real marker with a `last-prompt` line after it read as live
+# (review findings F1 and ccd-last-line-only-marker). Why the program is
+# spelled the way it is — no `first`/`any`/`all` (jq 1.6), JavaScript's
+# whitespace in code points, the surrogate rewrite — is said once, above the
+# same text in ccd/ccd. jq is already this file's JSON reader (the `build`
+# check reads the stamp with it), and `_check_jq` FAILs a box without one — on
+# which ccd's chain follow reads nothing either.
+CONTINUED_IN_JQ='def jsws: . == 9 or . == 10 or . == 11 or . == 12 or . == 13 or . == 32 or . == 160 or . == 5760
+  or (. >= 8192 and . <= 8202) or . == 8232 or . == 8233 or . == 8239 or . == 8287 or . == 12288 or . == 65279;
+def jstrim: explode as $c
+  | [range(0; $c | length) | select($c[.] | jsws | not)] as $k
+  | if $k == [] then "" else $c[$k[0]:$k[-1] + 1] | implode end;
+def tagled: explode as $c
+  | ($c | length) > 2 and $c[0] == 60 and $c[1] >= 97 and $c[1] <= 122
+  and ([range(2; $c | length) | select($c[.] as $x
+         | ($x >= 48 and $x <= 57) or ($x >= 65 and $x <= 90) or ($x >= 97 and $x <= 122) or $x == 95 or $x == 45 | not)] as $k
+       | $k != [] and ($c[$k[0]] as $x | $x == 62 or ($x | jsws)));
+def cmdname: split("<command-name>") as $s
+  | [range(1; $s | length) | $s[.:] | join("<command-name>")
+     | split("\r")[0] | split("\u2028")[0] | split("\u2029")[0] | select(contains("</command-name>"))] != [];
+def prompttext:
+  if contains("<pasted_content id=\"") then true
+  else jstrim as $n
+  | if $n == "" then false
+    elif ($n | cmdname) then false
+    elif ($n | split("<bash-input>") | length > 1 and (.[1:] | join("<bash-input>") | contains("</bash-input>"))) then true
+    elif ($n | startswith("[Request interrupted by user")) and ($n | ltrimstr("[Request interrupted by user") | contains("]")) then false
+    elif ($n | tagled) then false
+    else true end
+  end;
+def prompt: .isMeta != true and .isCompactSummary != true and (.message | type) == "object"
+  and (.message.content as $x
+       | if ($x | type) == "string" then ($x | prompttext)
+         elif ($x | type) == "array" then
+           [$x[] | select(type == "object" and .type == "tool_result")] == []
+           and [$x[] | select(type == "object" and .type == "text" and (.text | type) == "string") | select(.text | prompttext)] != []
+         else false end);
+def complete: ((has("isApiErrorMessage") | not) or .isApiErrorMessage == false)
+  and (.message | type) == "object" and (.message.stop_reason | type) == "string";
+def unsurrogate: reduce ("d", "D") as $d (.; reduce ("8", "9", "a", "b", "c", "d", "e", "f", "A", "B", "C", "D", "E", "F") as $h
+  (.; split("\\u" + $d + $h) | join("\\uff")));
+def tailrec($l):
   ($l | contains("\"type\":\"continued-in\"")) as $m
   | ($l | (contains("\"type\":\"user\"") or contains("\"type\":\"assistant\""))) as $t
-  | (if ($m or $t) then ($l | try fromjson catch null) else null end)
-  | if type != "object" then "skip"
-    elif $m and .type == "continued-in" and (.continuedInSessionId | type) == "string" then
-      .continuedInSessionId as $to
-      | if ((has("sessionId") | not) or .sessionId == $u)
-           and ($to | length) == 36
-           and ($to | explode | all(. == 45 or (. >= 48 and . <= 57) or (. >= 97 and . <= 102)))
-           and $to != $u
-        then "+" + $to else "stop" end
-    elif $t and (.type == "user" or .type == "assistant") then "stop"
-    else "skip" end;
-first((split("\n") | reverse[]) as $l | tailrec($l) | select(. != "skip")) // "stop"
+  | if ($m or $t) | not then "skip"
+    else [$l | try fromjson catch ($l | unsurrogate | try fromjson catch empty)]
+    | if . == [] or (.[0] | type) != "object" then "skip"
+      else .[0]
+      | if $m and .type == "continued-in" and (.continuedInSessionId | type) == "string" then
+          .continuedInSessionId as $to
+          | if ((has("sessionId") | not) or .sessionId == $u)
+               and ($to | length) == 36
+               and ([$to | explode[] | select((. == 45 or (. >= 48 and . <= 57) or (. >= 97 and . <= 102)) | not)] == [])
+               and $to != $u
+            then "+" + $to else "stop" end
+        elif $t and .type == "assistant" then (if complete then "stop" else "skip" end)
+        elif $t and .type == "user" then (if prompt then "stop" else "skip" end)
+        else "skip" end
+      end
+    end;
+[(split("\n") | reverse[]) as $l | tailrec($l) | select(. != "skip")] | (.[0] // "stop")
 | select(startswith("+")) | .[1:]
 '
 
@@ -4083,9 +4127,23 @@ _check_transcripts() {
   # this exact question (the routing census's registry read, the codex lane
   # roots): present — a dangling symlink counts, it is not an absent registry —
   # and not a directory, not readable, or not searchable.
+  #
+  # TWO REMEDIES, BECAUSE ONLY ONE OF THEM IS A MODE (D-4941). A directory with
+  # the wrong bits is fixed by `chmod`; a plain file there, or a symlink to
+  # nothing, is not — no mode turns either into a directory, so a `chmod`
+  # remedy for them was one the operator could follow to the letter and still
+  # FAIL here. The second shape is usually a half-finished move of the
+  # registry, which is why the remedy says to look before replacing anything:
+  # `ccd` recreates an EMPTY registry at that path on its next start, and an
+  # empty registry over a moved one strands every session in it.
   if { [ -e "$reg" ] || [ -L "$reg" ]; } && { [ ! -d "$reg" ] || [ ! -r "$reg" ] || [ ! -x "$reg" ]; }; then
-    _dr_fail transcripts "$reg is not a readable, searchable directory, so no session's transcript can be reached" \
-      "fix its mode (chmod 700 $reg) — until then nothing on this box can measure which session reads what"
+    if [ -d "$reg" ]; then
+      _dr_fail transcripts "$reg is not a readable, searchable directory, so no session's transcript can be reached" \
+        "fix its mode (chmod 700 $reg) — until then nothing on this box can measure which session reads what"
+    else
+      _dr_fail transcripts "$reg is not a directory (a file, or a symlink that leads to none), so no session's transcript can be reached" \
+        "see what is at that path (ls -ld $reg): a symlink must lead to the registry directory, and anything else must be moved aside only once you know where the registry went — ccd recreates an EMPTY one there on its next start"
+    fi
     return 1
   fi
 

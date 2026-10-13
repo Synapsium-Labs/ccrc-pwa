@@ -588,17 +588,32 @@ describe('tailRecordOf / continuationInTail (D-4940)', () => {
   it('classifies a line three ways: a successor, a deciding stop, or a skip', () => {
     expect(tailRecordOf(marker, OLD)).toEqual({ kind: 'successor', to: NEW });
     expect(tailRecordOf(line({ type: 'user', message: { content: 'x' } }), OLD)).toEqual({ kind: 'stop' });
-    expect(tailRecordOf(line({ type: 'assistant', message: { content: [] } }), OLD)).toEqual({ kind: 'stop' });
+    expect(tailRecordOf(line({ type: 'assistant', message: { content: [], stop_reason: 'end_turn' } }), OLD)).toEqual({ kind: 'stop' });
     expect(tailRecordOf(line({ type: 'continued-in', sessionId: 'c'.repeat(36), continuedInSessionId: NEW }), OLD)).toEqual({ kind: 'stop' });
     expect(tailRecordOf(line({ type: 'last-prompt', lastPrompt: 'x' }), OLD)).toEqual({ kind: 'skip' });
     expect(tailRecordOf(marker.slice(0, 30), OLD)).toEqual({ kind: 'skip' });
   });
 
   it('a top-level record decides; a marker-shaped object nested inside one never does', () => {
-    const nested = line({ message: { content: [{ type: 'tool_use', input: { type: 'continued-in', continuedInSessionId: NEW } }] }, type: 'assistant', sessionId: OLD });
+    const nested = line({ message: { content: [{ type: 'tool_use', input: { type: 'continued-in', continuedInSessionId: NEW } }], stop_reason: 'tool_use' }, type: 'assistant', sessionId: OLD });
     expect(tailRecordOf(nested, OLD)).toEqual({ kind: 'stop' });
     const inMeta = line({ type: 'attachment', attachment: { type: 'continued-in', continuedInSessionId: NEW }, sessionId: OLD });
     expect(tailRecordOf(inMeta, OLD)).toEqual({ kind: 'skip' });
+  });
+
+  it('a user/assistant record decides only when Claude Code calls it a finished turn (D-4940)', () => {
+    // Claude Code 2.1.296's own reader steps over the rest, so stopping at
+    // them declined a follow it makes. Its assistant test, then its prompt test.
+    const skip = { kind: 'skip' }, stop = { kind: 'stop' };
+    expect(tailRecordOf(line({ type: 'assistant', message: { content: [], stop_reason: null } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'assistant', message: { content: [] } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'assistant', isApiErrorMessage: true, message: { stop_reason: 'end_turn' } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'assistant', isApiErrorMessage: false, message: { stop_reason: 'end_turn' } }), OLD)).toEqual(stop);
+    expect(tailRecordOf(line({ type: 'user', message: { content: [{ type: 'text', text: '[Request interrupted by user]' }] } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }, { type: 'text', text: 'and this' }] } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'user', isMeta: true, message: { content: 'x' } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'user', message: { content: '<local-command-stdout>done</local-command-stdout>' } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'user', message: { content: '[Request interrupted by user] <bash-input>ls</bash-input>' } }), OLD)).toEqual(stop);
   });
 
   it('presence of a sessionId must be this file\'s own: null refuses, absence permits', () => {

@@ -563,9 +563,11 @@ export class TranscriptResolver {
       // is the freeze this work is for moved one layer in.
       //
       // But "changed" is not the question either. A transcript that is being
-      // WRITTEN cannot carry a terminal marker — the marker is the last line a
-      // file ever gets — so re-laddering a growing file buys a tail read that
-      // can learn nothing. It is not free: `watch.ts`'s name sweep already pays
+      // WRITTEN has not settled what its tail says — the conversation may be
+      // going on in it, and even after a marker Claude Code re-stamps metadata
+      // at exit (D-4940) — so re-laddering a growing file buys a tail read
+      // whose answer the next write can still change. It is not free:
+      // `watch.ts`'s name sweep already pays
       // its own read for a grown transcript through `claimTitleRead`, so this
       // class re-reading the same file doubles that bill on every tick of every
       // busy session. Measured: it broke `name-sweep.test.ts`'s own stat-gate

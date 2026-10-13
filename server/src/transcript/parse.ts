@@ -301,6 +301,79 @@ export type TailRecord =
 const STOP: TailRecord = { kind: 'stop' };
 const SKIP: TailRecord = { kind: 'skip' };
 
+// ── WHAT COUNTS AS A TURN (D-4940) ──────────────────────────────────────────
+// Claude Code's reader (2.1.296) stops only at a COMPLETE turn, and steps over
+// every other user/assistant record. These are its tests, copied rather than
+// paraphrased, because a record it steps over and this rule stopped at is a
+// follow declined while the conversation went on in the successor — the
+// operator's live chat dark, the same outcome review finding F1 was about,
+// from the other side. The plausible records after a marker are exactly the
+// ones it steps over: an interruption notice, a streamed assistant record
+// whose `stop_reason` is still null, a tool result, a slash command's echo.
+//
+// Its prompt test (`d8e`) first unwraps `<pasted_content id="…">` blocks
+// (`gwe`), and that unwrapping is NOT copied — its block grammar is more than
+// the jq twin can spell exactly — so a text block carrying that literal is a
+// prompt here, full stop. That is the one place this rule can stop where
+// Claude Code would step over: a declined follow, the shape every other
+// recorded divergence below takes, and never a follow Claude Code would not
+// make. A text block WITHOUT that literal is one `gwe` returns unchanged, so
+// everything else is the same test on the same string. The jq twin
+// (`CONTINUED_IN_JQ`) spells JavaScript's `trim()`/`\s` whitespace set, `\w`
+// and the three patterns below in code points, and the parity table holds it
+// to this.
+
+/** `d8e`'s three patterns, verbatim (no flags, as Claude Code compiles them). */
+const COMMAND_NAME_RE = /<command-name>(.*?)<\/command-name>/;
+const BASH_INPUT_RE = /<bash-input>([\s\S]*?)<\/bash-input>/;
+const NOT_A_PROMPT_RE = /^(?:\s*<[a-z][\w-]*[\s>]|\[Request interrupted by user[^\]]*\])/;
+const PASTED_LITERAL = '<pasted_content id="';
+
+/** An object to `typeof`. An array passes too and needs no arm of its own: a
+ *  parsed array has no `type`, `content`, `stop_reason` or `text` property, so
+ *  it reads exactly as the empty object would — where jq, which errors on
+ *  `.type` of an array, has to exclude it by name. */
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null;
+
+/** One text block, as `d8e` reads it: does it make the record a prompt? */
+function promptText(text: string): boolean {
+  if (text.includes(PASTED_LITERAL)) return true;
+  const n = text.split('\n').join(' ').trim();
+  if (n === '') return false;
+  if (COMMAND_NAME_RE.test(n)) return false;
+  if (BASH_INPUT_RE.test(n)) return true;
+  return !NOT_A_PROMPT_RE.test(n);
+}
+
+/** A user record Claude Code reads as a PROMPT: not meta, not a compact
+ *  summary, no tool result in it, and a text that says something. */
+function isPrompt(r: Record<string, unknown>): boolean {
+  if (r['isMeta'] === true || r['isCompactSummary'] === true) return false;
+  const m = r['message'];
+  if (!isPlainObject(m)) return false;
+  const c = m['content'];
+  if (typeof c === 'string') return promptText(c);
+  if (!Array.isArray(c)) return false;
+  const texts: string[] = [];
+  for (const b of c) {
+    if (!isPlainObject(b)) continue;
+    if (b['type'] === 'tool_result') return false;
+    if (b['type'] === 'text' && typeof b['text'] === 'string') texts.push(b['text']);
+  }
+  return texts.some(promptText);
+}
+
+/** An assistant record Claude Code reads as a FINISHED turn: a string
+ *  `stop_reason`, and not an API error (its schema: `isApiErrorMessage` absent
+ *  or a boolean, `message` absent or an object). */
+function isCompleteAssistant(r: Record<string, unknown>): boolean {
+  const e = r['isApiErrorMessage'];
+  if (e !== undefined && e !== false) return false;
+  const m = r['message'];
+  return isPlainObject(m) && typeof m['stop_reason'] === 'string';
+}
+
 /**
  * What one line of a transcript's tail says about where the session continued.
  *
@@ -321,13 +394,17 @@ const SKIP: TailRecord = { kind: 'skip' };
  *     file's own uuid (absence permits; presence must be this file's — null,
  *     malformed or another session's all refuse), and the successor is a uuid
  *     that is not this file's own; otherwise it decides "no successor".
- *   - A CONVERSATIONAL RECORD: a line carrying `"type":"user"` or
+ *   - A FINISHED TURN: a line carrying `"type":"user"` or
  *     `"type":"assistant"` that parses as an object whose OWN top-level `type`
- *     is one of those. The file was written past any older marker, so it
- *     decides "no successor".
+ *     is one of those AND that Claude Code's own reader would stop at — an
+ *     assistant record with a string `stop_reason` that is not an API error,
+ *     or a user record that is a prompt (`isPrompt` above). The file was
+ *     written past any older marker, so it decides "no successor".
  *   - EVERYTHING ELSE IS SKIPPED: the metadata Claude Code re-stamps after the
  *     marker when its process exits (last-prompt, ai-title, custom-title, tag,
  *     permission-mode, …), summary/system/attachment/queue-operation records,
+ *     a user/assistant record that is not a finished turn (an interruption
+ *     notice, a tool result, a streamed record with no `stop_reason` yet),
  *     a line that does not parse (half-written, or the window's cut first
  *     line — a proper suffix of a one-line JSON object never parses as an
  *     object, so the cut needs no handling of its own), anything not an object.
@@ -338,12 +415,11 @@ const SKIP: TailRecord = { kind: 'skip' };
  * is an assistant record and stops the scan; it never names a successor.
  * Duplicate keys resolve as `JSON.parse` and jq both resolve them: the last.
  *
- * WHERE CLAUDE CODE'S OWN READER DIFFERS (2.1.296, its `cxn`), each a declined
- * follow rather than a wrong one: it stops only at a COMPLETE turn (an
- * assistant message with a string `stop_reason` that is not an API error, or a
- * user prompt with text) and steps over every other user/assistant record,
- * where this rule stops at any; it checks no `sessionId`; it accepts an
- * uppercase successor; and it looks 64 KiB back, not 8.
+ * WHERE CLAUDE CODE'S OWN READER DIFFERS (2.1.296, its `Txn`), each a declined
+ * follow rather than a wrong one: a text block holding a `<pasted_content>`
+ * literal is a prompt here without being unwrapped first; it checks no
+ * `sessionId`; it accepts an uppercase successor; and it looks 64 KiB back,
+ * not 8.
  *
  * Never throws: a parse failure is a skipped line, not a broken session.
  */
@@ -353,17 +429,15 @@ export function tailRecordOf(line: string, ofUuid: string): TailRecord {
   if (!markerish && !turnish) return SKIP;
   let raw: unknown;
   try { raw = JSON.parse(line); } catch { return SKIP; }
-  // An array is an object to `typeof`, and needs no arm of its own: it has no
-  // `type` and no `continuedInSessionId`, so it falls through to SKIP below —
-  // where jq, which errors on `.type` of an array, has to say so explicitly.
-  if (typeof raw !== 'object' || raw === null) return SKIP;
-  const r = raw as Record<string, unknown>;
+  if (!isPlainObject(raw)) return SKIP;
+  const r = raw;
   const to = r['continuedInSessionId'];
   if (markerish && r['type'] === 'continued-in' && typeof to === 'string') {
     const authored = !Object.prototype.hasOwnProperty.call(r, 'sessionId') || r['sessionId'] === ofUuid;
     return authored && UUID_RE.test(to) && to !== ofUuid ? { kind: 'successor', to } : STOP;
   }
-  if (turnish && (r['type'] === 'user' || r['type'] === 'assistant')) return STOP;
+  if (turnish && r['type'] === 'assistant') return isCompleteAssistant(r) ? STOP : SKIP;
+  if (turnish && r['type'] === 'user') return isPrompt(r) ? STOP : SKIP;
   return SKIP;
 }
 
