@@ -10788,7 +10788,7 @@ Expected: `<n> rows; 0 not exactly once`, `<n>` being 171 plus the new ids Step 
 
 Close the record: fill every `outcome` and `rows`, add a last line `Findings: raised <n>, survived <m>, fixed <f>, carried <c>, not a defect <d>, asked <a>, ruled departures <r>. Commits: <list of shas>. Panel tip <TIP>; fix-wave tip $(git rev-parse HEAD).` (`survived` = the findings not ruled NOT A DEFECT), and copy `<SCRATCH>/review` and every Step 5 row measurement into `.superpowers/sdd/2026-10-09-native-docs-reader-w4-pwa-foundation/task-11-review/`. Task 12's results cite the record's last line, its Carried list takes every CARRIED line, and an unanswered ask is listed there too. No push and no pull request here: Task 12 is the close, and its results commit must be the tip.
 
-**Mutation rows this task contributes** (none until a Step 5 fix adds one: this task carries no code of its own. Each row a fix adds is measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at the fix's commit, then `git -C <copy> init -q`, `pwa/node_modules` and `server/node_modules` linked in; `pkg` is the package the `tests` run in; `old` is unique in `file` at that commit; `red` is the measured summary and the cases that went red. A fix that re-spells an earlier row's anchor repeats that row here with the same id and the new `old`, and says so above this block; Task 12's extractor keeps the last occurrence of an id). Rows that Step 5 adds are appended to this array by the fix that adds them. Rows from the review rounds before this task, recorded here so the extractor reads them (ids renumbered to this task's own `W4-T11-M<k>`, because the extractor refuses a foreign id that re-anchors nothing): W4-T11-M1 to W4-T11-M8 (the pre-scan hardening), M9 and M10 (the chat image predicate and the note guard), M11 (docs-sw's linear extraction), M12 to M42 (Task 11's fix wave, review findings 1-1 to 5-1 and A-3 to A-6), M43 (streaming chat's newest settled tree, review N1), M44 to M48 (operator rulings 2026-10-13: the chat table pre-count's upper bound, review 2-3; absolute http(s) images only, Q1), and the re-anchors W4-T3-M9, W4-T5-M33, W4-T6-M18, W4-T4-M7, W4-T4-M8 and W4-T4-M9, each kept under the earlier task's id with a new `old` on the shipped text (the earlier text no longer exists), and W4-T6-M7, W4-T6-M8, W4-T6-M9, W4-T11-M9 and W4-T11-M10 re-measured or re-anchored on the new image predicate, and W4-T10-M13 re-pointed at the doctor case main's #353 renamed; and fix round 1's rows (review 408, the coordinator's rulings: the ruling's `W4-FR1` rows, numbered W4-T11-M49 to W4-T11-M59 here because the extractor refuses any other id shape), with W4-T5-M36 re-anchored on the worker line fix round 1's F1 re-spelled, and M60 and M61 from fix round 1's own review (the dev server's worker resolution; the emptied-image rule on the worker path).
+**Mutation rows this task contributes** (none until a Step 5 fix adds one: this task carries no code of its own. Each row a fix adds is measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at the fix's commit, then `git -C <copy> init -q`, `pwa/node_modules` and `server/node_modules` linked in; `pkg` is the package the `tests` run in; `old` is unique in `file` at that commit; `red` is the measured summary and the cases that went red. A fix that re-spells an earlier row's anchor repeats that row here with the same id and the new `old`, and says so above this block; Task 12's extractor keeps the last occurrence of an id). Rows that Step 5 adds are appended to this array by the fix that adds them. Rows from the review rounds before this task, recorded here so the extractor reads them (ids renumbered to this task's own `W4-T11-M<k>`, because the extractor refuses a foreign id that re-anchors nothing): W4-T11-M1 to W4-T11-M8 (the pre-scan hardening), M9 and M10 (the chat image predicate and the note guard), M11 (docs-sw's linear extraction), M12 to M42 (Task 11's fix wave, review findings 1-1 to 5-1 and A-3 to A-6), M43 (streaming chat's newest settled tree, review N1), M44 to M48 (operator rulings 2026-10-13: the chat table pre-count's upper bound, review 2-3; absolute http(s) images only, Q1), and the re-anchors W4-T3-M9, W4-T5-M33, W4-T6-M18, W4-T4-M7, W4-T4-M8 and W4-T4-M9, each kept under the earlier task's id with a new `old` on the shipped text (the earlier text no longer exists), and W4-T6-M7, W4-T6-M8, W4-T6-M9, W4-T11-M9 and W4-T11-M10 re-measured or re-anchored on the new image predicate, and W4-T10-M13 re-pointed at the doctor case main's #353 renamed; and fix round 1's rows (review 408, the coordinator's rulings: the ruling's `W4-FR1` rows, numbered W4-T11-M49 to W4-T11-M59 here because the extractor refuses any other id shape), with W4-T5-M36 re-anchored on the worker line fix round 1's F1 re-spelled, and M60 and M61 from fix round 1's own review (the dev server's worker resolution; the emptied-image rule on the worker path); and, from fix round 1's Task 12 re-run, W4-T6-M5 re-anchored on the img handler F6 re-spelled, W4-T5-M19 re-measured on a new case, and W4-T5-M16 re-pointed at the queued abort's reject, because F7's skip in `pump()` made dropping the splice alone an equivalent mutant.
 
 ```json
 [
@@ -11613,6 +11613,39 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
    "worker path too"
   ],
   "red": "pwa chat-hardening -t 'worker path too': 1 failed — 'on the worker path too, an image whose source the transform empties renders its alt text, with no link' (fix round 1's own review of F6)"
+ },
+ {
+  "id": "W4-T6-M5",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdown.tsx",
+  "old": "    if (isRefusedChatImageSrc(href)) {\n      // react-markdown's url transform empties a source with an unsafe scheme (`data:`, `javascript:`, ...) before\n      // chat sees it, and `![x]()` has none: such an image shows its alt text as plain text, or nothing, never an\n      // empty link and never the source as written (review 408, F6). A blank destination (`![x](< >)`) never\n      // arrives blank: the parse percent-encodes it (`%20`), a path-relative URL that renders as the ordinary link.\n      if (!href) return alt ? <>{alt}</> : null;\n      return (\n        <a href={href} target=\"_blank\" rel=\"noopener noreferrer\" onClick={(e) => openExternal(e, href)}>\n          {href}\n        </a>\n      );\n    }\n",
+  "new": "",
+  "tests": [
+   "test/chat-hardening.test.tsx"
+  ],
+  "red": "pwa chat-hardening: red — '![](/api/example/x) draws no image and renders the URL as a plain link' and the other refused-image cases (re-anchored on the img handler fix round 1's F6 re-spelled; same mutation, the refused branch dropped)"
+ },
+ {
+  "id": "W4-T5-M16",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownRunner.ts",
+  "old": "      queue.splice(at, 1);\n      job.reject(reason);\n",
+  "new": "      queue.splice(at, 1);\n",
+  "tests": [
+   "test/markdown-runner.test.ts"
+  ],
+  "red": "pwa markdown-runner: 1 failed | 37 passed (38) — 'an abort while queued removes the job: it is never posted, and rejects with the signal's reason' (fix round 1: since F7's skip in pump(), dropping the splice alone is an equivalent mutant, measured green at the re-run, so the row drops the queued branch's reject instead)"
+ },
+ {
+  "id": "W4-T5-M19",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownRunner.ts",
+  "old": "      if (signal?.aborted) {\n        reject(signal.reason);\n        return;\n      }\n",
+  "new": "",
+  "tests": [
+   "test/markdown-runner.test.ts"
+  ],
+  "red": "pwa markdown-runner: 1 failed | 37 passed (38) — 'an already-aborted signal rejects at once while another job runs, and that job is never posted' (fix round 1: since F7's skip in pump(), the earlier case alone stayed green; same mutation)"
  }
 ]
 ```
