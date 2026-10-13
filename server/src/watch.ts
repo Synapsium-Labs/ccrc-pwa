@@ -138,19 +138,20 @@ import { CATALOGUE_POLL_INTERVAL_MS } from './update/catalogue.js';
 // changes: `ccdargv.js` and `childReclaimSweep.js` are imported a second time here, by name.
 import { COLLECT_CAP } from './ccdargv.js';
 import type { ChildReclaimCollectInput } from './childReclaimSweep.js';
+import { NO_FLEET_IDENTITY } from './fleetidentity.js';
 import {
   COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, collectAfterAct, collectAfterAudit, collectAfterFoldFailed, collectAfterHold,
   collectAfterPresence, collectAfterWouldCollect, collectAttentionItems, collectAttentionViews, collectBoxAfterPopulation,
   collectBoxProbesAtArrival, collectCandidateOf, collectClearPair, collectFeedAnswerBody, collectFeedCollectedBody,
-  collectFeedCueOfAct, collectFeedCueOfAudit, collectFeedReadBody, collectFeedStep, collectFeedSwitchBody,
-  collectFeedWouldCollectBody,
+  collectFeedCueOfAct, collectFeedCueOfAudit, collectFeedReadBody, collectFeedStep, collectLaneLive, collectSwitchFeedBody,
+  collectFeedWouldCollectBody, COLLECT_SETTING_FEED_TITLE,
   collectFirstSighting, collectForgets, collectForgottenActRow, collectFresh, collectJobEffects, collectOffers,
   collectPassClass, collectPopulation, collectWouldCollectKey, type CollectAudit, type CollectEntry, type CollectFeedCue,
   type CollectPassClass, type CollectPopulation, type CollectResult, type CollectStep, type CollectUnsettledKind,
 } from './collectLane.js';
 import {
   collectSwitches, collectTempRoot, learnCollect, readCollectPopulation,
-  type CollectClock, type CollectGenerations, type CollectJobOutcome, type CollectLanePort,
+  type CollectClock, type CollectControlDeps, type CollectGenerations, type CollectJobOutcome, type CollectLanePort,
 } from './coord/collectTempRoot.js';
 
 const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see detectDialogs's own comment
@@ -4316,17 +4317,21 @@ export class FleetWatcher {
 
   /** The ONE act job (spec §5.10): `collectTempRoot`'s six steps on the id's queue key, the fleet-wide slot taken as it
    *  is queued, never awaited. The deps are composed INSIDE the queue callback, `execChildReclaim`'s idiom, so the job
-   *  reads `deps`'s current answer when it runs. It reaches this lane's memory through `collectPortFor` alone. Its
-   *  answer is folded for the LANE first (`collectJobEffects`: the slot, the latch), then for its id
-   *  (`collectFoldJob`). */
+   *  reads `deps`'s current answer when it runs. The connection epoch the job stands under is read OUTSIDE it, as the
+   *  job is queued (path-identity spec 2026-10-12 §5.5), so a reconnect between this pass and the job's start composes
+   *  nothing. The job reaches this lane's memory through `collectPortFor` alone, and the switch's control state through
+   *  `collectControlDeps`. Its answer is folded for the LANE first (`collectJobEffects`: the slot, the flock latch),
+   *  then for its id (`collectFoldJob`). */
   private collectAct(coord: CoordStore, id: string, pass: number, mono: number): void {
     this.collectEntryOf(id);
     this.collectInFlight.set(id, { kind: 'act', sinceMono: mono, phase: 'queued' });
     this.collectSlot = { kind: 'job', id, sinceMono: mono };
+    const epoch = (this.deps.fleetIdentity ?? NO_FLEET_IDENTITY).epochNow();
     void this.deps.queue.run(id, () => collectTempRoot({
       coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.collectRunCcd(id), fleetState: this.deps.fleetState,
       presence: this.deps.presence, lane: this.collectPortFor(coord, id), observeIntervalMs: COLLECT_OBSERVE_INTERVAL_MS,
-    }, { id }))
+      control: this.collectControlDeps(coord), link: this.deps.fleetIdentity ?? NO_FLEET_IDENTITY,
+    }, { id, epoch }))
       .then((outcome) => { this.collectSettleJob(coord, id, pass, outcome); }, (err: unknown) => {
         const detail = err instanceof Error ? err.message : String(err);
         console.warn(`ccrc-server: sweepTempRootCollect: the collector's job for ${id} threw (${detail}) — read as one that may have acted: the act slot and ${id} wait CHILD_RECLAIM_STALL_MS`);
@@ -4504,27 +4509,64 @@ export class FleetWatcher {
     }
   }
 
+  /** The collector's `coord` feed row (path-identity spec 2026-10-12 §5.4). It records the marker latch's retirement,
+   *  a change to the switch's control state with no run and no session: `kind:'coord'`, `sessionId:''` and
+   *  `runId:null`, as `POST /api/coord/caps` records its change. It is recorded and archived, never pushed. A failed
+   *  archive write is said and never stops the lane, and the log is flushed whatever happened (`collectRecordFeed`'s
+   *  idiom). */
+  private collectRecordCoordFeed(coord: CoordStore, title: string, body: string): void {
+    const log = this.deps.notifyLog;
+    if (!log) return;
+    try {
+      const ev = log.record({ kind: 'coord', sessionId: '', runId: null, title, body });
+      coord.recordFeedEvent(log.epoch, ev);
+    } catch (err) {
+      console.warn('ccrc-server: recordFeedEvent failed '
+        + `(${err instanceof Error ? err.message : String(err)}) — temp-root collector ${title}, feed archive degraded`);
+    } finally {
+      void log.flush();
+    }
+  }
+
   /** The executor's view of this lane's memory (spec §5.10; `CollectLanePort`, declared by the executor). Every member is
-   *  synchronous, so the executor's step 6 reads observation 1 with no await between that read and its argv, and its step
-   *  5 records the marker with none between the read and the flip. `id` is the job's, which the flip's row names. */
+   *  synchronous, so the executor's step 6 reads observation 1 with no await between that read and its argv, and
+   *  resolves the switch with none between its reads and the flip. `id` is the job's, which the flip's row names. */
   private collectPortFor(coord: CoordStore, id: string): CollectLanePort {
     return {
       clock: () => this.collectClock(),
       generations: (of) => ({ lane: this.collectLaneGen, id: this.collectState.get(of)?.idGen ?? -1 }),
       observation: (of) => this.collectState.get(of)?.obs ?? null,
+      // Every lane-wide clear a job reports (a pause, a missing capability, a moved epoch, an unknown node) clears every
+      // pair alike (path-identity spec 2026-10-12 §5.5).
       cleared: () => { this.collectClearPairs(); },
-      flipped: (live) => {
-        // THE LAST-SEEN-LIVE FLAG (spec §5.10). A change either way is a FLIP: every pair clears, ONE feed row says so —
-        // any same-uid session can touch the marker, so every change an act job SEES is said; one undone between two
-        // step-5 reads is never seen — and the job that saw it composes nothing. It starts SHADOWED, so an arming the
-        // lane never saw is a flip too.
+      flipped: (r) => {
+        // THE LAST-SEEN-LIVE FLAG (spec §5.10; path-identity spec 2026-10-12 §5.5). The lane flips on the EFFECTIVE
+        // BOOLEAN, never on its source: a marker-to-Settings handoff that stays live is no flip, writes no row and keeps
+        // every pair. A change of the boolean either way is a FLIP: every pair clears, ONE feed row says so and names
+        // the source or the bounded safety-stop reason, and the job that saw it composes nothing. Every change an act
+        // job SEES is said; one undone between two step-6 resolutions is never seen. It starts SHADOWED, so an arming
+        // the lane never saw is a flip too.
+        const live = collectLaneLive(r);
         if (live === this.collectLastSeenLive) return false;
         this.collectLastSeenLive = live;
         this.collectClearPairs();
         this.collectRecordFeed(coord, { sessionId: id, runId: null, title: COLLECT_FEED_TITLE.switch,
-          body: collectFeedSwitchBody(live) });
+          body: collectSwitchFeedBody(r) });
         return true;
       },
+    };
+  }
+
+  /** The executor's control deps (path-identity spec 2026-10-12 §5.2, §5.4; `CollectControlDeps`, declared by the
+   *  executor): the store, the process's ONE generation journal (`Deps.collectLane`, built in `index.ts`), the wall
+   *  clock, and the latch's row writer. A server built with no journal hands null, which the executor reads as an
+   *  unmeasurable control state, never as a missing journal. Wiring only: the deciding is the executor's and L1's. */
+  private collectControlDeps(coord: CoordStore): CollectControlDeps {
+    return {
+      coord,
+      journal: this.deps.collectLane?.journal ?? null,
+      wallNow: () => this.childReclaimLaneNow().wallMs,
+      latchRetired: (body) => { this.collectRecordCoordFeed(coord, COLLECT_SETTING_FEED_TITLE, body); },
     };
   }
 

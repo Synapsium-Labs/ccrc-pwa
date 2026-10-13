@@ -22,7 +22,7 @@ import {
 import { CHILD_RECLAIM_DEFER_CEILING_MS } from '../src/childReclaimSweep.js';
 import {
   COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, COLLECT_LANE_LIVE_MARKER, collectFeedAnswerBody, collectFeedReadBody,
-  collectFeedSwitchBody, parseCollectAudit, type CollectReadWhat,
+  parseCollectAudit, type CollectReadWhat,
 } from '../src/collectLane.js';
 import { COLLECT_CAP, RECLAIM_PAUSE_CAP } from '../src/ccdargv.js';
 import { COLLECT_BOX_LABELS } from '../../shared/api.js';
@@ -40,9 +40,10 @@ const methodOf = (src: string, sig: string): string => {
   expect(at, `${sig.trim()} is gone`).toBeGreaterThan(-1);
   return src.slice(at, src.indexOf('\n  }\n', at));
 };
-/** The feed rows of one flip, by Task 5's own title and words. */
-const flipRows = (f: CollectRig, live: boolean) =>
-  f.feed().filter((e) => e.title === COLLECT_FEED_TITLE.switch && e.body === collectFeedSwitchBody(live));
+/** The feed rows of one flip, by Task 5's own title and the body's kept prefixes (path-identity spec 2026-10-12 §5.5:
+ *  the body names its source now, so a row is matched by the way it went, never by its whole text). */
+const flipRows = (f: CollectRig, live: boolean) => f.feed().filter((e) => e.title === COLLECT_FEED_TITLE.switch
+  && e.body.startsWith(live ? 'the collector lane is now live' : 'the collector lane is now shadowed'));
 
 describe('the lane’s constants are derived, and the tick dispatches it (spec §5.10)', () => {
   it('the observation interval IS the sweep interval, spelled from it, never a second literal', () => {

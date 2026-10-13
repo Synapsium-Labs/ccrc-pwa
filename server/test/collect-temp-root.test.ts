@@ -11,15 +11,15 @@
 // FIXTURE HOME ONLY.
 import { describe, it, expect } from 'vitest';
 import { COLLECT_CAP, RECLAIM_PAUSE_CAP } from '../src/ccdargv.js';
-import { COLLECT_LANE_LIVE_MARKER, type CollectObservation } from '../src/collectLane.js';
+import { COLLECT_LANE_LIVE_MARKER, collectLatchFeedBody, type CollectObservation } from '../src/collectLane.js';
 import { CHILD_BIRTH_SKEW_MS } from '../src/coord/childSpent.js';
-import { collectTempRoot } from '../src/coord/collectTempRoot.js';
+import { collectTempRoot, type CollectJob } from '../src/coord/collectTempRoot.js';
 import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import type { OpenSiblingsResult } from '../src/coord/store.js';
 import type { CollectToken } from '../../shared/api.js';
 import { FULL_CAPS, ID, INTERVAL, RIPE, T0, TOK, TOK2, auditDoc, rig } from './collectTempRootFixture.js';
 
-const job = { id: ID };
+const job: CollectJob = { id: ID, epoch: 0 };   // the rig's cell starts at epoch 0 (`r.job()` builds the same); no case here moves it
 const AUDIT = ['ws-audit', '--session', ID, '--collect'];
 const actOf = (token: string): string[] =>
   ['ws-collect', '--expect', token, '--session', ID, '--surface', 'agent', '--actor', 'collect sweep'];
@@ -75,13 +75,13 @@ describe('step 1 — both capabilities, then the id predicate on the job’s own
   it.each(['--actor', '--surface', '--reason', '--expect', '--session', '--', '-h', '-x', '.hidden', 'x'.repeat(256)])(
     'the id %s is refused before any argv: no audit, no act', async (id) => {
       const r = rig();
-      expect(await collectTempRoot(r.deps, { id })).toMatchObject({ kind: 'not-asked', step: 1, why: 'id-refused' });
+      expect(await collectTempRoot(r.deps, { id, epoch: 0 })).toMatchObject({ kind: 'not-asked', step: 1, why: 'id-refused' });
       expect(r.attempts).toEqual([]);
     });
 
   it.each(['a--actor', 'a.--actor', 'x'.repeat(255)])('the id %s passes the predicate and is audited as itself', async (id) => {
     const r = rig();
-    await collectTempRoot(r.deps, { id });
+    await collectTempRoot(r.deps, { id, epoch: 0 });
     expect(r.attempts[0]).toEqual(['ws-audit', '--session', id, '--collect']);
   });
 });
@@ -249,22 +249,26 @@ describe('step 5 — the switches once more, with the live marker: the job’s l
   it('the marker removed during the audit: the lane flips to shadowed, and nothing is composed', async () => {
     const r = rig();
     r.hooks.audit = () => { r.lower(COLLECT_LANE_LIVE_MARKER); };
-    expect(await collectTempRoot(r.deps, job)).toMatchObject({ kind: 'answered', step: 5, why: 'marker-flip' });
+    expect(await collectTempRoot(r.deps, job)).toMatchObject({ kind: 'answered', step: 5, why: 'switch-flip' });
     expect(r.lane.flips).toEqual([false]);
     expect(r.attempts).toEqual([AUDIT]);
+    // path-identity spec 2026-10-12 §5.4: the last listing proved the marker gone beside the untouched seed, so its latch
+    // retired, once, through the journal, before the switch was resolved.
+    expect(r.latches).toEqual([collectLatchFeedBody('collect sweep')]);
+    expect(r.journal.read()).toMatchObject({ kind: 'ok', max: 1 });
   });
 
   it('the marker touched during the audit: the lane flips to live, and THIS job composes nothing', async () => {
     const r = rig({ live: false });
     r.hooks.audit = () => { r.raise(COLLECT_LANE_LIVE_MARKER); };
-    expect(await collectTempRoot(r.deps, job)).toMatchObject({ kind: 'answered', step: 5, why: 'marker-flip' });
+    expect(await collectTempRoot(r.deps, job)).toMatchObject({ kind: 'answered', step: 5, why: 'switch-flip' });
     expect(r.lane.flips).toEqual([true]);
     expect(r.attempts).toEqual([AUDIT]);
   });
 
   it('a lane constructed with the marker standing sees a flip on its first job and composes nothing; its first act rests on observations seeded after the flip', async () => {
     const r = rig({ live: true, lastSeenLive: false });
-    expect(await collectTempRoot(r.deps, job)).toMatchObject({ kind: 'answered', step: 5, why: 'marker-flip' });
+    expect(await collectTempRoot(r.deps, job)).toMatchObject({ kind: 'answered', step: 5, why: 'switch-flip' });
     expect(r.lane.flips).toEqual([true]);
     expect(r.attempts).toEqual([AUDIT]);
     expect(r.deps.lane.observation(ID), 'the flip cleared every pair').toBeNull();
@@ -327,6 +331,8 @@ describe('step 6 — synchronous from the last await to the argv', () => {
     expect(await collectTempRoot(r.deps, job)).toMatchObject({ kind: 'would-collect', audit: { value: { kind: 'collectable', token: TOK } } });
     expect(r.attempts).toEqual([AUDIT]);
     expect(r.lane.flips).toEqual([]);
+    expect(r.latches, 'path-identity spec 2026-10-12 §5.4: the listing proved the marker absent beside the seed, so its latch retired once')
+      .toEqual([collectLatchFeedBody('collect sweep')]);
   });
 
   it('SHADOW re-reads at step 6 too: presence that appears during the last await stops a would-collect', async () => {

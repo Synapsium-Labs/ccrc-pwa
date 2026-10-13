@@ -22,6 +22,7 @@ import { FleetWatcher, CHILD_RECLAIM_STALL_MS, CHILD_RECLAIM_SWEEP_MS } from '..
 import { loadConfig } from '../src/config.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
+import { collectLaneJournalAt, defaultCollectLaneJournalPath } from '../src/coord/collectLaneJournal.js';
 import { RECLAIM_PAUSE_MARKER } from '../src/coord/rundefs.js';
 import { COLLECT_FEED_TITLE, COLLECT_LANE_LIVE_MARKER } from '../src/collectLane.js';
 import { NotifyLog } from '../src/notifylog.js';
@@ -173,8 +174,12 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
   };
   const fleetState = { connected: true, downSince: null, rosterFp: null, build: null, ccdVerbs: [...FULL_CAPS] };
   let visible: (id: string) => boolean = () => false;
+  // THE SWITCH'S JOURNAL (path-identity spec 2026-10-12 §5.2), at `cfg.ccrcDir`, as `index.ts` builds the one journal.
+  // It is absent until a transition, so the store's seed row and it are the bootstrap, and the legacy marker arms the
+  // lane as it did. A restart (`opts.home`) builds it over the same file.
+  const journal = collectLaneJournalAt(defaultCollectLaneJournalPath(cfg.ccrcDir));
   const deps = { ...base, cfg, io, coord, notifyLog, fleetState, presence: { isVisible: (id: string) => visible(id) },
-    monotonicMs: () => mono };
+    monotonicMs: () => mono, collectLane: { journal, bootNonce: 'test' } };
   if (opts.armed === true) writeFileSync(path.join(reg, COLLECT_LANE_LIVE_MARKER), '');
   const watcher = new FleetWatcher(deps as never, new Bus(), 10_000);
   const startMono = mono;
@@ -274,7 +279,7 @@ export const collectRig = async (opts: CollectRigOpts = {}) => {
   const boxWide = (items: readonly ChildReclaimAttention[]): ChildReclaimCollectAttention[] =>
     items.filter((a): a is ChildReclaimCollectAttention => a.kind === 'collect' && LABELS.has(a.sessionId));
   return {
-    home, reg, cfg, coord, notifyLog, watcher, mintingRun, startMono, fleetState, calls, onCall, scripts, answers,
+    home, reg, cfg, coord, notifyLog, watcher, mintingRun, startMono, fleetState, calls, onCall, scripts, answers, journal,
     now: (): number => clock, mono: (): number => mono, names, witness, unwitness, touch, remove, pass, settled, next, advance,
     pastHoldOff, passesUntil, hold, holdGather, holdListing, occupy, goLive, audits, collects, feed, wouldCollects, attention,
     boxWide,

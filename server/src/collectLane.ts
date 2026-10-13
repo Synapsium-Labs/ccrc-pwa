@@ -1421,13 +1421,6 @@ export function collectFeedWouldCollectBody(id: string, runId: number | null, le
     + 'orphaned and idle by two audits at least a pass apart. The collector is shadowed, so nothing was removed.';
 }
 
-/** One row per flip an act job sees (spec §5.10). The marker is read at the act's last check alone, so a change undone
- *  between two such reads writes none. */
-export const collectFeedSwitchBody = (live: boolean): string => (live
-  ? 'the collector lane is now live: the temp-root collector removes an orphaned temp root it has proved idle twice, '
-    + 'with no person in the loop, while cleanup is not paused.'
-  : 'the collector lane is now shadowed: the temp-root collector audits and reports what it would collect, and removes nothing.');
-
 /** One row per (id, word) episode of any other answer (spec §5.10): ccd's word, detail and paths, each made one line.
  *  An answer this build's reader made (`no-document`, `unreadable`, a `failed` result with no word) is
  *  `collectFeedReadBody`'s, never this builder's, which words only what ccd said. */
