@@ -2073,12 +2073,25 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
       Array.from({ length: 1 << 15 }, (_, i) => `\x1b[3${(i % 7) + 1}m${'abcdefg'[i % 7]}\x1b(B\x1b[m`).join(''),
       '\x1bP12a' + 'x\x1b[1m'.repeat(1 << 15) + '\x1b7' + 'x\x1b[1m'.repeat(1 << 15),
     ]) {
-      const t0 = Date.now();
-      const out = libRedact.redactField(s, none);
-      expect(Date.now() - t0, JSON.stringify(s.slice(0, 8))).toBeLessThan(LINEAR_MS);
-      expect(out === s).toBe(true);
+      // Linear against the same text without its sequences, measured in this test (H-17): an absolute bound failed at a load
+      // of 126 (16 s against 5 s) and passed alone in 8 s. Each side keeps its minimum of three rounds, and the bound's
+      // constant slack covers a field whose plain reading is a few milliseconds. Measured here: 6x to 54x the plain reading
+      // (the 54x one has the most sequences per character), a quadratic reading far above 100x.
+      const plain = s.replaceAll('\x1b', '');
+      let tPlain = Infinity;
+      let tSpan = Infinity;
+      for (let round = 0; round < 3; round += 1) {
+        let t0 = performance.now();
+        libRedact.redactField(plain, none);
+        tPlain = Math.min(tPlain, performance.now() - t0);
+        t0 = performance.now();
+        const out = libRedact.redactField(s, none);
+        tSpan = Math.min(tSpan, performance.now() - t0);
+        expect(out === s).toBe(true);
+      }
+      expect(tSpan, `${JSON.stringify(s.slice(0, 8))}: ${tSpan.toFixed(0)} ms against ${tPlain.toFixed(0)} ms plain`).toBeLessThan(100 * tPlain + 1000);
     }
-  });
+  }, 120_000);
   it('FU1S: the lead reading\'s candidates skip the context layer, which can match nothing in them, so a span of short dotted words costs a few redactions of it', () => {
     const none = libRedact.makePairIndex([]);
     const body = 'a.'.repeat(1 << 15);
@@ -5763,7 +5776,7 @@ describe('lib: a window of a longer text, redacted for display (W1-B2 task 12; c
       expect(pieces(o2, api), shape.slice(0, 12)).toEqual([]);
       expect(o2.filter(inexact), `${shape.slice(0, 12)}: every window is cut exactly`).toEqual([]);
     }
-  });
+  }, 120_000);
 
   it('an escape-split value where a margin starts, another inside the window: the window is cut where it is, never from the margin (finding V18)', () => {
     const m = libGrep.ENTRY_REDACT_MARGIN;
@@ -6208,10 +6221,17 @@ describe('lib: version-aware reads (W1-B2 Task 17; spec §6.11 "The CLI keeps an
 
 describe('C43: no ccd/history module prepares SELECT * (W1-B2 Task 17; the server/src/coord/db.ts rule)', () => {
   /** Star selects in code, with comments removed: a block comment, and a line comment not preceded by `:` (a
-   *  URL) or a quote. */
+   *  URL) or a quote. Known limits (H-23): a SQL string built by concatenation, so a star in a later literal than its
+   *  SELECT, and a `//` inside an earlier string, which the comment strip reads as a comment. Neither is in the tree. */
   const starSelects = (src: string): string[] => {
     const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');
-    return [...code.matchAll(/\bSELECT\s+(?:DISTINCT\s+)?(?:[A-Za-z_][A-Za-z0-9_]*\.)?\*/gi)].map((m) => m[0]);
+    return [
+      // a star right after SELECT, SELECT ALL or SELECT DISTINCT, bare or qualified
+      /\bSELECT\s+(?:(?:ALL|DISTINCT)\s+)?(?:[A-Za-z_][A-Za-z0-9_]*\.)?\*/gi,
+      /\bRETURNING\s+(?:[A-Za-z_][A-Za-z0-9_]*\.)?\*/gi,
+      // a star after a comma inside a SELECT list, up to the next quote or `;` (COUNT(*) is `(*`, so it is not one)
+      /\bSELECT\b[^;`'"]*?,\s*(?:[A-Za-z_][A-Za-z0-9_]*\.)?\*/gi,
+    ].flatMap((re) => [...code.matchAll(re)].map((m) => m[0]));
   };
 
   it('CONTROL: the scan sees a star select on one line and across a line break, and none inside a comment', () => {
@@ -6219,6 +6239,17 @@ describe('C43: no ccd/history module prepares SELECT * (W1-B2 Task 17; the serve
     expect(starSelects('db.prepare(`SELECT\n  e.* FROM entries e`)')).toHaveLength(1);
     expect(starSelects('db.prepare("select distinct * from x")')).toHaveLength(1);
     expect(starSelects('// queries never SELECT * here\n/** nor SELECT * here */\nconst u = "https://x/y";')).toEqual([]);
+  });
+
+  it('CONTROL (H-23): the scan also sees SELECT ALL *, a star after another item, and RETURNING *, and none in a count or a product', () => {
+    expect(starSelects('db.prepare("SELECT ALL * FROM x")')).toHaveLength(1);
+    expect(starSelects('db.prepare("SELECT a, e.* FROM entries e")')).toHaveLength(1);
+    expect(starSelects('db.prepare("SELECT a,\n  b, * FROM x")')).toHaveLength(1);
+    expect(starSelects('db.prepare("INSERT INTO x (a) VALUES (1) RETURNING *")')).toHaveLength(1);
+    expect(starSelects('db.prepare("UPDATE x SET a = 1 RETURNING e.*")')).toHaveLength(1);
+    expect(starSelects('db.prepare("SELECT COUNT(*) AS n, max(a) FROM x")')).toEqual([]);
+    expect(starSelects('db.prepare("SELECT a, b * 2 AS c FROM x")')).toEqual([]);
+    expect(starSelects('db.prepare("INSERT INTO x (a) VALUES (1) RETURNING id")')).toEqual([]);
   });
 
   it('every ccd/history/*.mjs names its columns', () => {

@@ -486,7 +486,9 @@ describe('the read verbs: identity, §8.3\'s table, the read-only handle, the fa
 
   it('tree depth one truncates descendants and points to a deeper tree', () => {
     const box = makeHistoryBox('ccrc-hist-rcl-depth-');
-    seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: cycles(TA, 2_000) });
+    // Depth 1 shows the top nodes only, so it truncates as soon as one node condenses leaves (measured: 8 cycles do, 2 do not).
+    // 24 keeps a margin over that. The old 2,000-cycle fixture ran 77 s alone under load (H-17).
+    seedFamily(box, { id: ID, project: PROJECT, uuid: TA, generation: G1, rows: cycles(TA, 24) });
     expect(runSweep(box).code).toBe(0);
     const r = treeJson(box, ID, ['--depth', '1']);
     expect(r.code, r.stderr).toBe(0);
@@ -1794,6 +1796,7 @@ describe("grep groups only under the scope's own leaves and shows leaf gists as 
   let famA: number[] = [];
   let famB: number[] = [];
   let edgeCount = 0;
+  let tailEdges: string[] = [];
   let gistA0 = '';
   let gistA1 = '';
   beforeAll(async () => {
@@ -1817,6 +1820,10 @@ describe("grep groups only under the scope's own leaves and shows leaf gists as 
         FROM nodes WHERE node_id = ?`).run(OUT, 'zqoutsidegist marker', leavesB[0]!);
       const eid = (w.prepare('SELECT entry_id FROM entries WHERE uuid = ?').get(fx.spans[0]![0]!) as { entry_id: number }).entry_id;
       w.prepare('INSERT INTO node_sources (node_id, entry_id, ord) VALUES (?, ?, 0)').run(OUT, eid);
+      // H-1: a live-tail row of family A gains ONE edge, to the outside leaf and to nothing of family A's.
+      const tailEid = (w.prepare('SELECT entry_id FROM entries WHERE uuid = ?').get(fx.tail[0]!) as { entry_id: number }).entry_id;
+      w.prepare('INSERT INTO node_sources (node_id, entry_id, ord) VALUES (?, ?, 1)').run(OUT, tailEid);
+      tailEdges = (w.prepare('SELECT node_id FROM node_sources WHERE entry_id = ?').all(tailEid) as unknown as Array<{ node_id: string }>).map((r) => r.node_id);
       w.prepare('INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, ?)')
         .run(V.length, createHash('sha256').update(V).digest(), 1_700_000_000_000);
       edgeCount = Number((w.prepare('SELECT count(*) AS n FROM node_sources WHERE entry_id = ?').get(eid) as { n: number }).n);
@@ -1856,6 +1863,25 @@ describe("grep groups only under the scope's own leaves and shows leaf gists as 
     expect(h.stdout).not.toContain('zqoutsidegist');
   }, HEAVY);
 
+  it('an in-scope row whose only covering leaf is another family\'s falls to the live tail', () => {
+    expect(tailEdges, 'CONTROL: the live-tail row has exactly one edge, and its node is the outside leaf').toEqual([OUT]);
+    const p = grep(['zqtailrow', '--project', '--json']);
+    expect(p.code, `CONTROL: exit 0: ${p.stderr}`).toBe(0);
+    const pBy = new Map(GRX.items(p).map((x) => [x.entry_uuid, x.node_id]));
+    expect(pBy.get(fx.tail[0]!), 'CONTROL: over the project the outside leaf is in scope, so the row groups under it').toBe(OUT);
+    const j = grep(['zqtailrow', '--json']);
+    expect(j.code, `CONTROL: exit 0: ${j.stderr}`).toBe(0);
+    const by = new Map(GRX.items(j).map((x) => [x.entry_uuid, x.node_id]));
+    expect([...by.keys()].sort(), 'CONTROL: both tail rows are hits').toEqual([...fx.tail].sort());
+    for (const u of fx.tail) expect(by.get(u), `${u} has no covering leaf of family A: it is the live tail`).toBeNull();
+    expect(j.stdout, 'the JSON never names the outside leaf').not.toContain(OUT);
+    const h = grep(['zqtailrow']);
+    expect(h.code, `CONTROL: exit 0: ${h.stderr}`).toBe(0);
+    expect(h.stdout).toContain('── live tail');
+    expect(h.stdout).not.toContain(OUT);
+    expect(h.stdout).not.toContain('L000000');
+  }, HEAVY);
+
   it('grep over the project still groups under the lower leaf when both are in scope', () => {
     expect(OUT < leavesA[0]!, 'CONTROL: the outside leaf is the lower id').toBe(true);
     const j = grep(['zqspan1', '--project', '--json']);
@@ -1883,7 +1909,8 @@ describe("grep groups only under the scope's own leaves and shows leaf gists as 
     expect(h.stdout, 'the leaf gist does not print the glued value').not.toContain(V);
     const j = grep(['zqspan1', '--json']);
     expect(j.code, `CONTROL: exit 0: ${j.stderr}`).toBe(0);
-    expect(j.stdout, 'nor does --json').not.toContain(V);
+    expect(GRX.items(j).every((x) => !('gist' in x)), 'CONTROL: --json hit items carry no leaf gist').toBe(true);
+    expect(j.stdout, 'a leaf gist added to --json items must go through redactForDisplay').not.toContain(V);
     const h2 = grep(['zqspan2']);
     expect(h2.code, `CONTROL: exit 0: ${h2.stderr}`).toBe(0);
     expect(h2.stdout, 'CONTROL: the leaf-1 gist envelope prints').toMatch(/── leaf L[0-9a-f]+ [^\n]*\n  <ccrc-recall src="node"/);
@@ -2356,6 +2383,81 @@ describe('describe: one node, resolved inside the scope (W1-B2 task 15)', () => 
     expect(r.code, r.stderr).toBe(0);
     expect(GRX.items(r)[0]?.producer).toBe('anthropic');
   }, 120_000);
+
+  it('H-13: the producer is counted after the first compact summary when the anchor is the boundary itself, and never from an echo row', () => {
+    const T3 = 0x54;
+    const T4 = 0x55;
+    const gpt = (tag: number, i: number, parent: number): rFx.Row => rFx.assistantRow({
+      uuid: GRX.uuid(tag, i), ts: GRX.ts(i), parentUuid: GRX.uuid(tag, parent), sessionId: GRX.file(tag), text: 'an aside', model: 'gpt-fixture',
+      requestId: `req_g${tag}_${i}`, msgId: `msg_g${tag}_${i}`,
+    });
+    const leafOf = (box: rH.HistoryBox): string => {
+      const leaf = GRX_C.nodes(box, GRX.idA).leaves[0] ?? '';
+      expect(leaf, 'CONTROL: the boundary derived a leaf').toMatch(/^L[0-9a-f]{20}$/);
+      return leaf;
+    };
+    // (b) The anchor is the boundary's own uuid: the summary is the first compact summary AFTER it. Row 4, between them,
+    // is another backend's reply, so a count from the boundary would name `other`.
+    const own = rH.makeHistoryBox('ccrc-hist-describe-anchorself-');
+    GRX.seed(own, T3, GRX.idA, 'demo', [
+      GRX.user(T3, 1, 'zqanchorself question'),
+      GRX.assistant(T3, 2, 'zqanchorself answer'),
+      rFx.boundaryRow({
+        uuid: GRX.uuid(T3, 3), ts: GRX.ts(3), parentUuid: GRX.uuid(T3, 2), sessionId: GRX.file(T3),
+        trigger: 'manual', headUuid: GRX.uuid(T3, 1), anchorUuid: GRX.uuid(T3, 3), tailUuid: GRX.uuid(T3, 2), allUuids: [],
+      }),
+      gpt(T3, 4, 3),
+      rFx.summaryRow({ uuid: GRX.uuid(T3, 5), ts: GRX.ts(5), parentUuid: GRX.uuid(T3, 4), sessionId: GRX.file(T3),
+        text: GRX_C.summary({ current: 'Anchor-self current work.', next: 'Anchor-self next step.' }) }),
+      GRX.user(T3, 6, 'zqanchorself after the summary'),
+      GRX.assistant(T3, 7, 'zqanchorself reply'),
+    ]);
+    const r = GRX.cli(own, GRX.idA, ['describe', leafOf(own), '--json']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(GRX.items(r)[0]?.producer, 'the count starts after the first compact summary after the boundary').toBe('anthropic');
+    // (echo) The anchor names a harness echo row, which is never the summary pick: the producer is then counted after
+    // the boundary, as derivation counts it, so row 4 (another backend) is the witness.
+    const echoBox = rH.makeHistoryBox('ccrc-hist-describe-echoanchor-');
+    GRX.seed(echoBox, T4, GRX.idA, 'demo', [
+      GRX.user(T4, 1, 'zqechoanchor question'),
+      GRX.assistant(T4, 2, 'zqechoanchor answer'),
+      rFx.boundaryRow({
+        uuid: GRX.uuid(T4, 3), ts: GRX.ts(3), parentUuid: GRX.uuid(T4, 2), sessionId: GRX.file(T4),
+        trigger: 'manual', headUuid: GRX.uuid(T4, 1), anchorUuid: GRX.uuid(T4, 5), tailUuid: GRX.uuid(T4, 2), allUuids: [],
+      }),
+      gpt(T4, 4, 3),
+      rFx.localCommandEchoRow({ uuid: GRX.uuid(T4, 5), ts: GRX.ts(5), parentUuid: GRX.uuid(T4, 4), sessionId: GRX.file(T4), stdout: 'Compacted' }),
+      GRX.user(T4, 6, 'zqechoanchor after the echo'),
+      GRX.assistant(T4, 7, 'zqechoanchor reply'),
+    ]);
+    const e = GRX.cli(echoBox, GRX.idA, ['describe', leafOf(echoBox), '--json']);
+    expect(e.code, e.stderr).toBe(0);
+    expect(GRX.items(e)[0]?.producer, 'an echo row is never the summary pick: the count starts at the boundary').toBe('other');
+  }, 240_000);
+
+  it('H-13: a condensed node\'s producer is its NEWEST leaf\'s: the reply after the last summary is another backend', () => {
+    const T5 = 0x56;
+    const own = rH.makeHistoryBox('ccrc-hist-describe-newestleaf-');
+    const f = GRX_C.compactions(T5, 8, (i) => GRX_C.summary({ current: `Span ${i} current work.`, next: `Span ${i} next step.` }));
+    // The live tail's assistant row is the first reply after summary 8: leaf 8's witness. Every other leaf's is anthropic.
+    const last = f.rows.length - 1;
+    expect(f.rows[last]!.uuid, 'CONTROL: the last row is the tail reply').toBe(f.tail[1]);
+    f.rows[last] = rFx.assistantRow({
+      uuid: GRX.uuid(T5, 99), ts: GRX.ts(99), sessionId: GRX.file(T5), text: 'zqcommon zqtailrow answer', model: 'gpt-fixture',
+      requestId: 'req_g56_99', msgId: 'msg_g56_99',
+    });
+    GRX.seed(own, T5, GRX.idA, 'demo', f.rows);
+    const { leaves, parents } = GRX_C.nodes(own, GRX.idA);
+    expect([leaves.length, parents.length], 'CONTROL: eight leaves and one parent').toEqual([8, 1]);
+    const lf = (id: string): Record<string, unknown> => {
+      const r = GRX.cli(own, GRX.idA, ['describe', id, '--json']);
+      expect(r.code, r.stderr).toBe(0);
+      return GRX.items(r)[0]!;
+    };
+    expect(lf(leaves[0]!).producer, 'CONTROL: the first leaf is anthropic').toBe('anthropic');
+    expect(lf(leaves[7]!).producer, 'CONTROL: the newest leaf is the other backend').toBe('other');
+    expect(lf(parents[0]!).producer, 'the parent takes its newest leaf\'s producer').toBe('other');
+  }, 240_000);
 
   it('astral: an astral character at a cut is never split: the excerpt backs off its pair, and so does every --full page end', async () => {
     const r = describeCli(GRX.idA, [leaves[3]!, '--json']);
@@ -3092,7 +3194,8 @@ describe.skipIf(process.platform === 'darwin')('expand fix round 1 (Task 16): on
       rc.pairIdx = libRead.makePairIndex([]);
       const bare = mod.runExpand!(rc, args);
       expect(bare.exit).toBe(0);
-      expect(bare.blocks.join('\n'), 'CONTROL: with no pairs the value reaches the outline label').toContain(S);
+      const outlined = (bare.items as Array<{ outline_kind: string | null; outline: string | null }>).find((i) => i.outline_kind !== null);
+      expect(outlined?.outline, 'CONTROL: with no pairs the value reaches the tool_result item\'s outline label').toContain(S);
       rc.pairIdx = idx;
       const r = mod.runExpand!(rc, args);
       expect(r.exit).toBe(0);
@@ -3478,6 +3581,7 @@ function t18pages(run: (args: string[]) => T18Run, args: string[]): T18Run[] {
     out.push(r);
     cursor = t18cursor(r.json === null ? r.stdout : String(r.json['next'] ?? ''));
   } while (cursor !== null && out.length < 30);
+  expect(cursor, `${args.join(' ')}: the last page carries no cursor (30-page bound)`).toBeNull();
   return out;
 }
 
@@ -3582,6 +3686,43 @@ describe.skipIf(process.platform === 'darwin')('C32, C33 and DM31: values, the a
   }, HEAVY);
 });
 
+describe.skipIf(process.platform === 'darwin')('H-30: grep\'s next: argv is redacted argument by argument, before nextLine quotes it (Task 18)', () => {
+  const T = 0x71;
+  /** A tool name that is a pair and no belt unit: the index holds its (len, sha256) only, so the final belt cannot mask it. */
+  const Kp = t18hex(16);
+  let box: rH.HistoryBox;
+  beforeAll(() => {
+    box = rH.makeHistoryBox('ccrc-hist-x18h30-');
+    GRX.seed(box, T, GRX.idA, 'demo', [
+      rFx.toolUseRow({ uuid: GRX.uuid(T, 1), ts: GRX.ts(1), sessionId: GRX.file(T), toolUseId: 'toolu_01H30A', name: Kp, input: { command: 'zqh30word run one' },
+        requestId: 'req_h30_1', msgId: 'msg_h30_1' }),
+      rFx.toolUseRow({ uuid: GRX.uuid(T, 2), ts: GRX.ts(2), sessionId: GRX.file(T), toolUseId: 'toolu_01H30B', name: Kp, input: { command: 'zqh30word run two' },
+        requestId: 'req_h30_2', msgId: 'msg_h30_2' }),
+    ]);
+  }, 240_000);
+
+  it('a pair-only --tool value is masked in the next: argv itself, not only by the final belt', async () => {
+    const recall = await GRX.recall();
+    const rc = await GRX.rc(box, GRX.idA);
+    try {
+      const a = await GRX.grepArgs(['zqh30word', '--tool', Kp, '--limit', '1']);
+      rc.pairIdx = libRead.makePairIndex([]);
+      const bare = recall.runGrep(rc, a);
+      expect(bare.exit, 'CONTROL: the tool filter finds the rows').toBe(0);
+      expect(bare.total, 'CONTROL: two hits over a limit of one').toBe(2);
+      expect(bare.next, 'CONTROL: there is a next page').not.toBeNull();
+      expect(bare.next!.join(' '), 'CONTROL: with no pairs the argv echoes the value').toContain(Kp);
+      const pairOnly = libRead.makePairIndex(libRead.secretPairs([Kp]).pairs);
+      expect(pairOnly.belt ?? null, 'CONTROL: the value is a pair and no belt unit').toBeNull();
+      rc.pairIdx = pairOnly;
+      const r = recall.runGrep(rc, a);
+      expect(r.next, 'CONTROL: there is a next page').not.toBeNull();
+      expect(r.next!.join(' '), 'the next: argv holds no piece of the value').not.toContain(Kp);
+      expect(t18leaks(r.next!, Kp), 'nor 8 characters of it').toEqual([]);
+    } finally { rc.db.close(); }
+  }, HEAVY);
+});
+
 describe.skipIf(process.platform === 'darwin')('C59: redaction before every cut, escape and page (Task 18)', () => {
   const ID = 'claude-a-x18c59';
   const T = 'a1800002';
@@ -3648,12 +3789,16 @@ describe.skipIf(process.platform === 'darwin')('C59: redaction before every cut,
   }, HEAVY);
 
   it('each item expanded alone, human and --json, page by page: no cut, no page and no pair of pages prints 8 characters of a secret', () => {
-    // The leaf-wide expansion above stops at the first item whose raw cut ends inside an unterminated PEM block: a raw
-    // cut there makes the final pass mask the rest of the output, which hides every later item. Each item alone does not.
+    // The leaf-wide expansion above stops at the first item whose cut ends inside an unterminated PEM block: under mutant
+    // (c), where expand's cut and pages are slices of the raw text (shownOf), the final pass would mask the rest of the
+    // output there, which hides every later item. Each item alone does not, so this case is the one that reds on mutant (c)'s
+    // leak assertion (the leaf-wide case reds only on its page-count CONTROL).
     const runs: T18Run[] = [];
     const joined = new Map<string, string>();
+    const pagesByItem = new Map<number, T18Run[]>();
     for (let i = 1; i <= 9; i += 1) {
       const pages = t18pages((a) => cli(a), ['expand', e(i), '--json']);
+      pagesByItem.set(i, pages);
       for (const r of pages) expect(r.json, 'every --json page parses').not.toBeNull();
       runs.push(...pages, ...t18pages((a) => cli(a), ['expand', e(i)]));
       for (const r of pages) for (const it of (r.json?.['items'] ?? []) as { uuid: string; kind: string; text: string }[]) {
@@ -3661,7 +3806,7 @@ describe.skipIf(process.platform === 'darwin')('C59: redaction before every cut,
         joined.set(k, (joined.get(k) ?? '') + it.text);
       }
     }
-    expect(runs.length, 'CONTROL: the nine items took more than nine pages').toBeGreaterThan(9);
+    expect(pagesByItem.get(9)!.length, 'CONTROL: e(9) --json alone takes more than one page').toBeGreaterThan(1);
     const texts = [...runs.map((r) => r.stdout), ...joined.values()];
     const named: Array<[string, string]> = [...Object.entries(S).filter(([k]) => k !== 'excerpt' && k !== 'full'), ['sk', SK], ['gho', GHO], ...PEM_LINES.map((l, i): [string, string] => [`pem${i}`, l])];
     expect(texts.join('\n'), 'CONTROL: the rows themselves are printed').toContain('zqc59nl');
@@ -3764,7 +3909,7 @@ describe.skipIf(process.platform === 'darwin')('C60: what a value is (Task 18)',
     const outs = [cli(['grep', 'zqc60', '--json']).stdout];
     for (let i = 1; i <= 5; i += 1) outs.push(cli(['expand', e(i)]).stdout, cli(['expand', e(i), '--json']).stdout);
     expect(t18leaks(outs, Q)).toEqual([]);
-    for (const seg of SEGS) expect(outs.filter((o) => o.includes(seg)), `segment ${seg.length}`).toEqual([]);
+    for (const seg of SEGS) expect(t18leaks(outs, seg), `segment ${seg.length}`).toEqual([]);
     expect(cli(['expand', e(5)]).stdout).toContain('CLAUDE_CODE_OAUTH_TOKEN');
   }, HEAVY);
 
@@ -3790,6 +3935,8 @@ describe.skipIf(process.platform === 'darwin')('the index\'s escape readings at 
   const e = (i: number): string => t18uuid(T, i);
   const V = t18hex(32);   // in a row, glued to a literal escape twice
   const W = t18hex(32);   // in the summary, so in the leaf's gist
+  const X = t18hex(20);   // glued in a section 2 bullet of the summary, so in the leaf's topics (H-29); short, a topic is cut at 80 characters
+  const Y = t18hex(32);   // glued in a Read tool_use's file_path, a URL there, so in a mined ref (H-29)
   /** What a tool printing JSON leaves in text: a literal backslash and `n` glued onto the value (B1's review 316 F2). */
   const glued = (v: string): string => JSON.stringify({ text: `\n${v}` });
   let box: rH.HistoryBox;
@@ -3811,22 +3958,26 @@ describe.skipIf(process.platform === 'darwin')('the index\'s escape readings at 
     // (redact_hashes only grows) but is no belt unit (Task 7A's belt holds the values loaded now). So only the escape
     // readings find either value behind a literal `\n`: redactField's one reading sees the run `n<value>`, which no pair
     // matches, and layer 1's glue windows bound a window only at a run end, `_` or `-`.
-    const file = t18secret(box, '.cc-secrets/x18esc.env', `ZQ_ESC_ROW=${V}\nZQ_ESC_GIST=${W}\n`);
+    const file = t18secret(box, '.cc-secrets/x18esc.env', `ZQ_ESC_ROW=${V}\nZQ_ESC_GIST=${W}\nZQ_ESC_TOPIC=${X}\nZQ_ESC_REF=${Y}\n`);
     expect(rH.runSweep(box).code).toBe(0);
     fs.writeFileSync(file, `ZQ_ESC_OTHER=${t18hex(32)}\n`, { mode: 0o600 });
-    const summary = ['<summary>', '1. Primary Request and Intent:', '   zqesc intent', '8. Current Work:',
+    const summary = ['<summary>', '1. Primary Request and Intent:', '   zqesc intent',
+      '2. Key Technical Concepts:', `   - zqesctopic ${glued(X)}`, '8. Current Work:',
       `   zqescgist printed ${glued(W)} here`, '9. Optional Next Step:', '   zqesc next step', '</summary>'].join('\n');
     rH.seedFamily(box, { id: ID, project: 'demo', generation: '0189abcd-1234-4678-9abc-00000000f018', uuid: U, rows: t18leafRows(T, U, [
       // The value starts 20 characters after the hit word, inside grep's snippet window (24 before, 40 after).
       rFx.userRow({ uuid: e(1), ts: t18ts(1), sessionId: U, text: `zqescrow ${glued(V)} then \\u005cn${V} done` }),
       rFx.assistantRow({ uuid: e(2), ts: t18ts(2), parentUuid: e(1), sessionId: U, text: 'zqesc done' }),
+      // A URL is a ref kind that holds a backslash: the miner reads a Read's file_path whole, and classifyRef takes a URL.
+      rFx.toolUseRow({ uuid: e(3), ts: t18ts(3), parentUuid: e(2), sessionId: U, toolUseId: 'toolu_01ESCREF', name: 'Read',
+        input: { file_path: `https://h.example/zqescref\\n${Y}` } }),
     ], summary) });
     expect(rH.runSweep(box).code).toBe(0);
     leaf = t18leafOf(box, ID);
     const db = rH.openStoreRO(box);
     try {
       const pairs = db.prepare('SELECT count(*) AS n FROM redact_hashes WHERE len = ? AND sha256 = ?');
-      for (const v of [V, W]) {
+      for (const v of [V, W, X, Y]) {
         expect((pairs.get(v.length, t18createHash('sha256').update(v).digest()) as { n: number }).n,
           'CONTROL: the first tick recorded the value\'s pair').toBe(1);
       }
@@ -3842,6 +3993,30 @@ describe.skipIf(process.platform === 'darwin')('the index\'s escape readings at 
     expect(texts[4], 'CONTROL: the gist is printed').toContain('zqescgist');
     expect(t18leaks(texts, V)).toEqual([]);
     expect(t18leaks(texts, W)).toEqual([]);
+  }, HEAVY);
+
+  it('H-29: a pair-only value glued into a topic and into a mined ref is stored raw and shown by describe through the escape readings', () => {
+    const db = rH.openStoreRO(box);
+    let topics = '';
+    let refs: string[] = [];
+    try {
+      topics = String((db.prepare('SELECT topics FROM nodes WHERE node_id = ?').get(leaf) as { topics: string | null }).topics);
+      refs = (db.prepare('SELECT value FROM node_refs WHERE node_id = ?').all(leaf) as Array<{ value: string }>).map((r) => r.value);
+    } finally { db.close(); }
+    expect(topics, 'CONTROL: nodes.topics holds X raw (one reading cannot separate it)').toContain(X);
+    expect(refs.join('\n'), 'CONTROL: node_refs holds Y raw').toContain(Y);
+    const idx = libRead.makePairIndex(libRead.secretPairs([X, Y]).pairs);
+    expect(libRead.redactForDisplay(topics, idx), 'CONTROL: the display reading masks the topic').not.toContain(X);
+    expect(libRead.redactForDisplay(refs.join('\n'), idx), 'CONTROL: and the ref').not.toContain(Y);
+    const human = cli(['describe', leaf]);
+    const json = cli(['describe', leaf, '--json']);
+    for (const r of [human, json]) expect(r.code, r.stdout).toBe(0);
+    for (const r of [human, json]) {
+      expect(r.stdout, 'CONTROL: the topics are printed').toContain('zqesctopic');
+      expect(r.stdout, 'CONTROL: the refs are printed').toContain('zqescref');
+    }
+    expect(t18leaks([human.stdout, json.stdout], X), 'no 8 characters of the topic value').toEqual([]);
+    expect(t18leaks([human.stdout, json.stdout], Y), 'no 8 characters of the ref value').toEqual([]);
   }, HEAVY);
 
   it('nodes_fts holds neither value, as Task 8 derives the row and as Task 9\'s backfill re-inserts it (lib\'s nodeIndexTexts)', () => {
