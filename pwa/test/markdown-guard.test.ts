@@ -287,3 +287,16 @@ describe('T11 review A-3: list-marker padding is measured from the column it sta
     expect(prescanMarkdown('-  \t'.repeat(32) + 'x')).toEqual(ok);
   });
 });
+
+// The parser eats every blank after `[^a]:` as the definition's prefix, so five spaces or two tabs there make no
+// indented code and the markers after them still nest.
+describe('T11 review 2-1: every blank after a footnote label belongs to its prefix', () => {
+  it.each([
+    ['five spaces', '[^a]:     '],
+    ['two tabs', '[^a]:\t\t'],
+    ['a space, a tab and spaces', '[^a]: \t   '],
+  ])('%s', (_label, head) => {
+    expect(prescanMarkdown(head + '> '.repeat(32) + 'x')).toEqual({ ok: false, why: 'container-depth', line: 1, value: 33 });
+    expect(prescanMarkdown(head + '> '.repeat(31) + 'x')).toEqual(ok);
+  });
+});
