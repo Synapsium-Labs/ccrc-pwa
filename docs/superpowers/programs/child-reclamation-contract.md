@@ -3692,9 +3692,23 @@ consults no box token, and no skill names the route or the file.
 **How the control state fails.** The journal reader accepts value-equal spellings of a number, such as `1.0` or `1e0`,
 and a duplicate key resolves last-wins; it proves values, not spelling, and only a hand edit can produce one. A failed
 latch retire at the update or commit step leaves the lane safety-stopped, with Off refused, and a confirmed Live is the
-repair. A failed journal append leaves the row unchanged, but the journal may not be: a landed write whose fsync throws
-leaves it one generation ahead (a mismatch), and a failed or short write can leave a torn or empty tail that needs a
-hand repair. Each stops the lane and arms nothing, and the route answers `503 write-failed`.
+repair. A failed journal append undoes itself (as built from fix round 1): the adapter truncates the existing journal to
+the length it measured before the call, or removes a file the failed call itself created, before the close and as a
+best effort, and rethrows the original error. A failed write therefore leaves the lane exactly as it stood, row and
+journal alike, and the route answers `503 write-failed`; a failed Off over a stored Live leaves the collector armed, and
+Pause all cleanup still stops it. The undo restores bytes the call itself measured, so it does not rebuild the journal
+from the row. An update or commit failure stops the lane and arms nothing. Three residuals stay: (1) a process killed
+inside the write, or a power loss before the data reaches the disk (a failed fsync included), can leave a torn, empty or
+zero-filled tail that reads malformed; (2) the journal can stand one generation ahead, a mismatch that a fresh confirmed
+change repairs (Live, or Off once the latch is recorded) and that arms nothing, after a kill between the write and the
+commit, an undo that fails after a full write, a close that throws after a durable record, or a failure at the update or
+the commit; (3) an undo that itself fails after a short write, or on the created arm, leaves a torn or empty file with no
+crash. Settings cannot repair a malformed journal, and the server never rebuilds it from the row. The hand repair, if
+Settings reports the journal malformed after the server stopped mid-write: raise the cleanup pause first (Pause all
+cleanup); on the server box cut `~/.ccrc/collect-lane-generation.log` just after its last complete `{"generation":N}`
+record, removing only the bytes that follow it and never a complete record; if the file holds no complete record, delete
+it, which is valid only beside the untouched seed, as a crash in the very first write leaves it; make a fresh confirmed
+change in Settings; lower the pause.
 
 **The stated residual.** An Off accepted after an act's argv was handed to ccd cannot stop that act. It extends
 `marker-removal-after-the-last-listing-still-composes` (§16 as built) from the file to the switch, and a 200 says the
@@ -3737,7 +3751,8 @@ is left as it was; this wave adds only the line that leaves the journal in place
 - `older-build-boot-emulated-by-a-newer-file` (Task 6): The older-build boot case puts this build where an older one stands, opening a file one version past it, because a test cannot run an older build.
 - `append-not-regular-code-eftype` (Task 6): An append to a journal that opens but is not a regular file is refused with the code `EFTYPE`; a link is refused earlier, at the open.
 - `adapter-comment-trips-the-handle-reach-scan` (Task 6): The journal adapter's header comment spells `coord.db` in backticks, because the plain spelling tripped the handle-reach scan of the single-definition suite; the scan stays armed and the meaning is unchanged.
-- `a-failed-journal-append-can-leave-a-torn-tail` (Task 6): The adapter does not undo a failed write, because that needs a new ruling; what a failed append leaves is in "How the control state fails" above.
+- `a-failed-journal-append-can-leave-a-torn-tail` (Task 6): RETIRED, and named without a number, by `a-failed-append-undoes-its-own-bytes` below. The plan's adapter did not undo a failed write; as built from fix round 1 it does, and the residuals the undo cannot cover are in "How the control state fails" above.
+- `a-failed-append-undoes-its-own-bytes` (Task 6): The plan's adapter left a torn or empty tail, or a journal one generation ahead, against its own contract that nothing changed at the append. As built, a failed append truncates the existing journal to its measured length, or removes a file the failed call created, before the close and as a best effort, and rethrows the original error, so a failed write leaves the lane as it stood. The three residuals and the hand repair are in "How the control state fails" above; the path-identity spec's §5.2 and §5.3 still govern a malformed journal.
 - `epoch-with-pause-reports-the-pause` (Task 7): When the epoch moved and a pause is raised, the executor reports the pause as its stop reason.
 - `executor-guard-admits-resolver-kinds` (Task 7): The executor's guard admits the resolver's kinds rather than a list of its own.
 - `epoch-detail-reads-the-listing-capture` (Task 7): The `epoch-changed` detail says whether the connection moved after the job was queued or during the final listing, from an epoch captured before that listing.
@@ -3763,12 +3778,14 @@ is left as it was; this wave adds only the line that leaves the journal in place
 - `collect-words-carry-the-sections-copy` (Task 11): The Settings section keeps no words of its own: every line it renders comes from the words module.
 - `collect-words-totality-pin-in-a-test-d-file` (Task 11): The words table's totality is pinned in a type-level test file.
 - `collect-view-reader-checks-armed-by-agrees` (Task 11): The view reader checks the armed-by field against the agreement rule.
+- `an-unknown-post-failure-reads-unconfirmed` (Task 11): Only a known refusal code reads as a refusal in the Settings section. Any other failed answer (an unknown code, a body that is not an object, a gateway or server status, the gate's foreign-origin refusal) reads that the choice "may or may not have been saved", with its detail, and the section re-reads the choice.
 - `collect-confirm-lines-name-the-pause` (Task 11): The confirm sheet's lines name a raised pause.
 - `collect-off-note-unmeasured-latch-claims-no-control` (Task 11): A latch that was not read gets the unmeasured Off note whatever the listing shows, so the note claims no control.
 - `pause-all-cleanup-case-split` (Task 12): The Pause all cleanup cases are split into five inside one describe.
+- `inline-refusal-cleared-by-a-newer-view` (Task 12): The plan cleared an inline refusal only when the next write started. As built, a newer view clears it too: a poll's answer, or the re-read after a refusal.
 - `stale-line-pinned-in-section` (Task 12): The Settings section pins one case beyond the plan's list: a read that did not land keeps the last view, marked stale, so a kept Live is never shown as current.
 - `usage-rewrap-heredoc-neutral` (Task 13): The rewrapped usage text keeps its heredoc's line count.
 - `journal-pins-green-at-entry` (Task 13): The restore, watchdog and uninstall cases that leave the journal in place are green at entry, because none of those paths touches it, so their red half is a mutation row.
 - `usage-shift-unpinned-by-citations` (Task 13): A shift in the update and backup usage text is measured by the citation anchors' hash, not by the session-hook suite, which stays green.
 
-Smaller departures carry no slug: three further pins in the store and journal suites, an epoch-pair case and a never-throw sentence on the latch writer's docstring added in review, the writer census bounded to the POST handler in review, and Task 11 (PWA only) built before Task 9. The path-identity spec's stale line citations are re-measured in its "§5 as built" note and left as written.
+Smaller departures carry no slug: three further pins in the store and journal suites, an epoch-pair case and a never-throw sentence on the latch writer's docstring added in review, the writer census bounded to the POST handler in review, and Tasks 11 and 12 (PWA only) built before Task 9. The path-identity spec's stale line citations are re-measured in its "§5 as built" note and left as written.

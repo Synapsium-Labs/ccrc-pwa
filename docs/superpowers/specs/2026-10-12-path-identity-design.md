@@ -780,7 +780,7 @@ the code keeps each:
 - **The job's epoch (§5.2, §5.5).** An act job carries the epoch its lane's pairs stand under, captured when the job is
   queued. Step 6 compares it with the epoch read after the final listing, so a reconnect during the second audit, or
   between the queueing and the start, composes nothing. The epoch is still read before the final listing, as §5.2
-  says. An epoch change between passes, or during a pass's gather, clears every pair, and that pass retires nothing.
+  says. An epoch change between passes clears every pair. One during a pass's gather also ends that pass, and it retires nothing.
 - **The latch is decided apart from the arm (§5.4).** One helper retires the legacy file, from the pass's own listing
   and from the executor's final listing, through the store's one writer, only when the listing is coherent, unpaused,
   on the same epoch and shows the file absent with the latch unset. So a stored Live on an unknown node still retires
@@ -818,10 +818,26 @@ the code keeps each:
   last-wins. It proves values, not spelling, and only a hand edit can produce one.
 - A failed latch retire at the update or commit step leaves the lane safety-stopped, with Off refused. A confirmed Live
   is the repair.
-- A failed journal append leaves the row unchanged, but the journal may not be: a landed write whose fsync throws
-  leaves the journal one generation ahead (a mismatch), and a failed or short write can leave a torn or empty tail,
-  which reads unmeasurable until it is repaired by hand. Both stop the lane and arm nothing, and the route answers
-  `503 write-failed`.
+- A failed journal append undoes itself (as built from fix round 1). On a failed append the adapter truncates the
+  existing journal to the length it measured before the call, or removes a file the failed call itself created. It
+  does this before the close, as a best effort, and rethrows the original error. A failed write therefore leaves the
+  lane exactly as it stood, row and journal alike, and the route answers `503 write-failed`. A failed Off over a stored
+  Live leaves the collector armed; Pause all cleanup still stops it. The undo restores bytes the call itself measured,
+  so it does not rebuild the journal from the row, which §5.2 forbids.
+- What the undo cannot cover (three residuals). An update or commit failure stops the lane and arms nothing, as above.
+  1. A process killed inside the write, or a power loss before the data reaches the disk (a failed fsync included), can
+     leave a torn, empty or zero-filled tail. It reads malformed, and the hand repair below applies.
+  2. Each of these leaves the journal one generation ahead, a mismatch that a fresh confirmed change repairs (Live, or
+     Off once the latch is recorded) and that arms nothing: a kill after the write but before the commit, an undo that
+     fails after a full write, a close that throws after a durable record, and a failure at the update or the commit.
+  3. An undo that itself fails after a short write, or on the created arm, leaves a torn or empty file without any
+     crash, and the same hand repair applies.
+- The hand repair. Settings cannot repair a malformed journal, and the server never rebuilds it from the row. If
+  Settings reports the generation journal malformed after the server stopped mid-write: (1) raise the cleanup pause
+  first (Pause all cleanup); (2) on the server box, cut `~/.ccrc/collect-lane-generation.log` just after its last
+  complete `{"generation":N}` record, removing only the bytes that follow that record and never a complete record;
+  (3) if the file holds no complete record, delete it, which is valid only beside the untouched seed, as a crash in the
+  very first write leaves it; (4) make a fresh confirmed change in Settings; (5) lower the pause.
 
 **The stated residual.** An Off accepted after an act's argv was handed to ccd cannot stop that act. This extends
 wave 9's `marker-removal-after-the-last-listing-still-composes` from the file to the switch.
@@ -870,7 +886,10 @@ unlistable-registry arm cited as `:293` is `:363`. The earlier text is left as w
 - `older-build-boot-emulated-by-a-newer-file`: The older-build boot case puts this build where an older one stands, opening a file one version past it, because a test cannot run an older build.
 - `append-not-regular-code-eftype`: An append to a journal that opens but is not a regular file is refused with the code `EFTYPE`; a link is refused earlier, at the open.
 - `adapter-comment-trips-the-handle-reach-scan`: The journal adapter's header comment spells `coord.db` in backticks, because the plain spelling tripped the handle-reach scan of the single-definition suite; the scan stays armed and the meaning is unchanged.
-- `a-failed-journal-append-can-leave-a-torn-tail`: The adapter does not undo a failed write, because that needs a new ruling; what a failed append leaves is in "How the control state fails" above.
+- `a-failed-journal-append-can-leave-a-torn-tail`: RETIRED, and named without a number, by `a-failed-append-undoes-its-own-bytes` below. The plan's adapter did not undo a failed write; as built from fix round 1 it does, and the residuals the undo cannot cover are in "How the control state fails" above.
+- `a-failed-append-undoes-its-own-bytes`: The plan's adapter left a torn or empty tail, or a journal one generation ahead, against its own contract that nothing changed at the append. As built, a failed append truncates the existing journal to its measured length, or removes a file the failed call created, before the close and as a best effort, and rethrows the original error, so a failed write leaves the lane as it stood. The three residuals and the hand repair are in "How the control state fails" above; §5.2 and §5.3 still govern a malformed journal.
+- `an-unknown-post-failure-reads-unconfirmed`: Only a known refusal code reads as a refusal in the Settings section. Any other failed answer (an unknown code, a body that is not an object, a gateway or server status, the gate's foreign-origin refusal) reads that the choice "may or may not have been saved", with its detail, and the section re-reads the choice.
+- `inline-refusal-cleared-by-a-newer-view`: The plan cleared an inline refusal only when the next write started. As built, a newer view clears it too: a poll's answer, or the re-read after a refusal.
 - `epoch-with-pause-reports-the-pause`: When the epoch moved and a pause is raised, the executor reports the pause as its stop reason.
 - `executor-guard-admits-resolver-kinds`: The executor's guard admits the resolver's kinds rather than a list of its own.
 - `epoch-detail-reads-the-listing-capture`: The `epoch-changed` detail says whether the connection moved after the job was queued or during the final listing, from an epoch captured before that listing.
@@ -904,7 +923,7 @@ unlistable-registry arm cited as `:293` is `:363`. The earlier text is left as w
 - `journal-pins-green-at-entry`: The restore, watchdog and uninstall cases that leave the journal in place are green at entry, because none of those paths touches it, so their red half is a mutation row.
 - `usage-shift-unpinned-by-citations`: A shift in the update and backup usage text is measured by the citation anchors' hash, not by the session-hook suite, which stays green.
 
-Smaller departures carry no slug: three further pins in the store and journal suites, an epoch-pair case and a never-throw sentence on the latch writer's docstring added in review, the writer census bounded to the POST handler in review, and Task 11 (PWA only) built before Task 9. The stale line citations in §1.1 and §5.1 are re-measured above and left as written.
+Smaller departures carry no slug: three further pins in the store and journal suites, an epoch-pair case and a never-throw sentence on the latch writer's docstring added in review, the writer census bounded to the POST handler in review, and Tasks 11 and 12 (PWA only) built before Task 9. The stale line citations in §1.1 and §5.1 are re-measured above and left as written.
 
 ## 6. The waves
 
