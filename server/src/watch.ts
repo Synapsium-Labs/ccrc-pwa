@@ -37,7 +37,7 @@ import type {
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
 // form is invisible to it.
-import { FLEET_SCOPE, LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
+import { FLEET_SCOPE, LEDGER_STALE_MS, MAIL_MAX_ATTEMPTS, MAIL_REPLAY_MS, STALL_FOLLOW_LABEL, STALL_LEVEL_TEXT, TERMINAL_DELIVERY_STATES, UNCHECKED_PR, isRegistryId, lifecycleIsDead, sessionLifecycle } from '../../shared/api.js';
 import { JournalMirror } from './coord/mirror.js';
 // The pause marker's ONE definition in the tree. `MAIL_DISABLED_MARKER` is
 // NOT imported beside it: this file holds its own module-local literal
@@ -1946,7 +1946,7 @@ export class FleetWatcher {
       // `!registryRead.listed` return) and `registry.ts`'s own docstring
       // states for this exact read: "a failed second listing proves nothing
       // and changes nothing".
-      // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
+      // [registry-refused:omits] a refused id is in no `records`: no state, no field read, no act.
       const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
       // BEFORE the fail-shut return below, and on BOTH arms (D-283 (was D-B4-10)). An
       // unlistable registry is not "nothing is set": it is the exact state
@@ -2317,7 +2317,12 @@ export class FleetWatcher {
               const survivingIds = new Set(sessions.map((s) => s.id));
               const missingIds = prior.sessions.map((s) => s.id).filter((id) => !survivingIds.has(id));
               const names = await this.deps.io.readdir(this.deps.cfg.registryDir);
-              const allGenuinelyPurged = names !== null && missingIds.every((id) => !names.includes(`${id}.uuid`));
+              // Spec §2.3: a REFUSED id (not a registry id) is never assembled, so a
+              // snapshot an older build wrote may still carry it while its `.uuid`
+              // stays listed. Its absence from `sessions` is not a partial read and
+              // never heals, so it counts as purged — or one stray file would freeze
+              // every snapshot write for as long as it stands.
+              const allGenuinelyPurged = names !== null && missingIds.every((id) => !isRegistryId(id) || !names.includes(`${id}.uuid`));
               if (allGenuinelyPurged) {
                 await saveSnapshot(sessions, this.cachePath);
                 this.snapshotWriteSkippedWarned = false;
@@ -2768,7 +2773,7 @@ export class FleetWatcher {
       // UNTOUCHED on `{listed:false}` rather than rebuilt from an empty `[]`
       // — a failed listing must not wipe every retained entry the branch
       // below exists to protect.
-      // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
+      // [registry-refused:tests-only] `tick()` hands this lane its own `records`; the census pins that hand-off.
       const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
       if (!registryRead.listed) return;
       recs = registryRead.records;
@@ -2858,7 +2863,7 @@ export class FleetWatcher {
     // failed listing still consumes this sweep's slot rather than retrying
     // every 2 s tick, the same throttle discipline every other sweep here
     // keeps.
-    // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
+    // [registry-refused:omits] a refused id is in no `records`: no `taskProgress` entry and no read.
     const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
     if (!registryRead.listed) return;
     const records = registryRead.records;
@@ -6053,7 +6058,7 @@ export class FleetWatcher {
     // own unreadable listing already does three lines up, rather than
     // silently emptying `records` and letting every row downstream mistake
     // "we could not read the fleet this pass" for "this recipient is gone".
-    // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
+    // [registry-refused:holds] a refused recipient is held `registry-unmeasurable` below, never parked.
     const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
     if (!registryRead.listed) return;
     const records = registryRead.records;
@@ -6211,7 +6216,11 @@ export class FleetWatcher {
         // assertion being a claim nothing checks, which is the shape this tree
         // asks a guard not to be.
         if (rec === undefined || identity === null) {
-          const unmeasurable = rec !== undefined;
+          // Spec §2.3: a REFUSED recipient (listed, never read, because its id is
+          // not a registry id) is absent from `records` but is not proven gone. It
+          // is held exactly as a degraded row is: backed off, never ratcheted,
+          // never parked.
+          const unmeasurable = rec !== undefined || registryRead.refused.has(d.toId);
           // Fix — review finding 30: a row whose recipient's registry row is
           // genuinely ABSENT (reaped, purged) used to `continue` here with
           // `attempts` untouched forever — `MAIL_MAX_ATTEMPTS` can only ever be

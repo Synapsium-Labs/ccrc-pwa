@@ -101,17 +101,22 @@ const sources = (dir = srcRoot): string[] =>
   });
 
 const rel = (f: string): string => path.relative(srcRoot, f).split(path.sep).join('/');
-const allSites = (): Site[] => sources().flatMap((f) => scan(rel(f), readFileSync(f, 'utf8')));
+/** server/src, read once per run and scanned once: every case below shares that one read and that one scan. */
+let sourcesRead: readonly { file: string; src: string }[] | null = null;
+const sourceTexts = (): readonly { file: string; src: string }[] =>
+  (sourcesRead ??= sources().map((f) => ({ file: rel(f), src: readFileSync(f, 'utf8') })));
+let sitesScanned: readonly Site[] | null = null;
+const allSites = (): Site[] => [...(sitesScanned ??= sourceTexts().flatMap(({ file, src }) => scan(file, src)))];
 const key = (s: Site): string => `${s.file} | ${s.enclosing} | ${s.reader} | ${s.word}`;
 const where = (s: Site): string => `${s.file}:${s.line}`;
 
 /** The classified set, as the tree stands. Later tasks of this wave place each `unplaced`. */
 const EXPECTED_SITES: readonly string[] = [
   'commands.ts | sessionCommands | readRegistry | unplaced',
-  'coord/dispatch.ts | dispatchRun | readRegistry | unplaced',
-  'coord/dispatch.ts | dispatchRun | readRegistryMeasured | unplaced',
-  'coord/dispatch.ts | dispatchRun | readRegistryMeasured | unplaced',
-  'coord/fingerprint.ts | resolveDoneBranch | readRegistryMeasured | unplaced',
+  'coord/dispatch.ts | dispatchRun | readRegistryMeasured | refuses',
+  'coord/dispatch.ts | dispatchRun | readRegistryMeasured | refuses',
+  'coord/dispatch.ts | dispatchRun | readRegistryMeasured | gated',
+  'coord/fingerprint.ts | resolveDoneBranch | readRegistryMeasured | holds',
   'coord/routes.ts | GET /api/peers | readRegistry | unplaced',
   'coord/routes.ts | POST /api/mail | readRegistry | unplaced',
   'coord/routes.ts | POST /api/mail/:id/ack | readRegistry | unplaced',
@@ -121,12 +126,12 @@ const EXPECTED_SITES: readonly string[] = [
   'registry.ts | readRegistry | readRegistryMeasured | wrapper',
   'server.ts | prTasks | readRegistry | unplaced',
   'watch.ts | detectDialogs | readRegistry | unplaced',
-  'watch.ts | sweepHookStates | readRegistryMeasured | unplaced',
-  'watch.ts | sweepMail | readRegistryMeasured | unplaced',
+  'watch.ts | sweepHookStates | readRegistryMeasured | tests-only',
+  'watch.ts | sweepMail | readRegistryMeasured | holds',
   'watch.ts | sweepNames | readRegistry | unplaced',
   'watch.ts | sweepPr | readRegistry | unplaced',
-  'watch.ts | sweepTasks | readRegistryMeasured | unplaced',
-  'watch.ts | tick | readRegistryMeasured | unplaced',
+  'watch.ts | sweepTasks | readRegistryMeasured | omits',
+  'watch.ts | tick | readRegistryMeasured | omits',
 ];
 
 describe('every registry reader call is classified for refused rows (spec §2.3)', () => {
@@ -170,6 +175,15 @@ describe('every registry reader call is classified for refused rows (spec §2.3)
     expect(tags, 'a [registry-refused:*] tag that stands above no reader call').toBe(sites.length);
   });
 
+  it('no [registry-refused:*] tag line in server/src carries a digit', () => {
+    // The header's rule, pinned: a digit on a tag line could create or hide a `[registry-read-census:*]` claim.
+    const tagLines = sourceTexts().flatMap(({ file, src }) => src.split('\n')
+      .flatMap((l, i) => (l.includes('[registry-refused:') ? [{ at: `${file}:${i + 1}`, l }] : [])));
+    expect(tagLines.length, 'the scan found no tag line: this guard is measuring nothing').toBeGreaterThan(0);
+    expect(tagLines.filter(({ l }) => /\d/.test(l)).map(({ at, l }) => `${at} ${l.trim()}`), 'a tag line with a digit')
+      .toEqual([]);
+  });
+
   it('the classified set is exactly these 20 sites', () => {
     expect(EXPECTED_SITES).toHaveLength(20);
     expect(allSites().map(key).sort()).toEqual([...EXPECTED_SITES].sort());
@@ -178,5 +192,45 @@ describe('every registry reader call is classified for refused rows (spec §2.3)
   it('wrapper is used once, in registry.ts, inside readRegistry', () => {
     expect(allSites().filter((s) => s.word === 'wrapper').map(key))
       .toEqual(['registry.ts | readRegistry | readRegistryMeasured | wrapper']);
+  });
+});
+
+// Path identity W1a, Task 6 (spec §2.3, R19's precedent): `sweepHookStates`'s own registry read is `tests-only`
+// ONLY because `tick()` hands the lane the `records` of its own listing. Pinned here, so a tick that stopped passing
+// them would turn that read into a second, production read without the census above noticing. Task 8 adds
+// `detectDialogs(` to this describe.
+const TICK_WATCH_TS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src/watch.ts');
+const TICK_HEAD = 'async tick(): Promise<void> {';
+const TICK_STRINGS = /'(?:\\.|[^\\'\n])*'|"(?:\\.|[^\\"\n])*"|`(?:\\[\s\S]|[^\\`])*`/g;
+/** Code only, every string's contents blanked: a brace inside a comment or a string cannot end a body. */
+const tickCode = (src: string): string => codeOnly(src).replace(TICK_STRINGS, (m) => `${m[0]}${m[0]}`);
+/** The body of the member whose head is `head` (which ends with its own `{`), through its matching `}`. */
+const tickBodyOf = (code: string, head: string): string => {
+  const at = code.indexOf(head);
+  if (at < 0) throw new Error(`${head} is not in the scanned source`);
+  const open = at + head.length - 1;
+  let depth = 0;
+  for (let i = open; i < code.length; i += 1) {
+    if (code[i] === '{') depth += 1;
+    else if (code[i] === '}') {
+      depth -= 1;
+      if (depth === 0) return code.slice(open, i + 1);
+    }
+  }
+  throw new Error(`${head} has no matching closing brace`);
+};
+
+describe('tick hands its records to the lanes that would otherwise read the registry again (spec §2.3)', () => {
+  it('CONTROL: the body slicer ends at the matching brace, past a brace in a comment or a string', () => {
+    const src = `${TICK_HEAD}\n  // a } in a comment\n  if (a) { b('}'); }\n  await this.sweepHookStates(records);\n}\nafter();\n`;
+    const body = tickBodyOf(tickCode(src), TICK_HEAD);
+    expect(body).toMatch(/\bthis\.sweepHookStates\(\s*records\s*\)/);
+    expect(body).not.toContain('after');
+  });
+
+  it('tick() passes its records to sweepHookStates(', () => {
+    const body = tickBodyOf(tickCode(readFileSync(TICK_WATCH_TS, 'utf8')), TICK_HEAD);
+    expect(body, 'tick no longer hands sweepHookStates its records: that lane would read the registry itself')
+      .toMatch(/\bthis\.sweepHookStates\(\s*records\s*\)/);
   });
 });

@@ -5,7 +5,7 @@ import type { FleetState } from '../fleetstate.js';
 import type { Deps } from '../server.js';
 import { cutShort } from '../lifecycle.js';
 import type { KeyedQueue } from '../inject/queue.js';
-import { fieldMeasured, measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
+import { fieldMeasured, measuredIdentity, readRegistryMeasured } from '../registry.js';
 import { readHookStateMeasured } from '../hookstate.js';
 import {
   CCD_ARGV, CHILD_ARGV_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, capSupported, verbSupported, sweepDec, type ActorFlags,
@@ -169,7 +169,8 @@ export type DispatchOutcome =
    *  on this path quotes ccd; this one does too.
    *
    *  ABSENT is not "ccd said nothing": it is "ccd is not the failing party" (the
-   *  `ws-add` or `ensure` succeeded, and only the registry read failed). An empty
+   *  `ws-add` or `ensure` succeeded, and only the registry read failed; or, on the
+   *  fresh-spawn arm's pre-spawn read, no ccd call has been made at all). An empty
    *  string would collapse those two, which is the defect class this whole
    *  increment is about — so the distinction is PRESENCE, never `''`. */
   | { ok: false; kind: 'registry-unmeasurable'; stderr?: string }
@@ -549,16 +550,28 @@ export async function dispatchRun(
     // contract for, and this repo has already paid for one of those. Read
     // the registry before and after; exactly one new `workspace !== null`
     // row for this project is the run's session.
-    // BEFORE tolerates degradation, deliberately — the question it answers
-    // ("which ids already exist") is "does this still exist", and that
-    // question tolerates degradation the same way `readRegistry`'s plain,
-    // old signature always has (a degraded or dropped row just doesn't
-    // count as pre-existing, which is always the SAFE direction to be
-    // wrong in here: at worst a real id gets treated as new and trips
-    // `ambiguous-dispatch` below, never silently misbound).
-    // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
-    const before = await readRegistry(deps.io, deps.cfg);
-    const beforeIds = new Set(before.map((r) => r.id));
+    // BEFORE is MEASURED, and an unlistable registry REFUSES here (spec §2.3).
+    // It used to be tolerated: `readRegistry` collapsed a failed listing to
+    // `[]`, which empties `beforeIds` — one of the two measured triggers for a
+    // false-new ADOPTION the AFTER read below describes. Refusing costs a retry
+    // and nothing else: no `route-omitted` or `child-omitted` event, no
+    // `markDispatchStarted` and no `ws-add` has happened yet, and the run stays
+    // `planned`.
+    //
+    // A DEGRADED or DROPPED row is still tolerated, deliberately: the question
+    // BEFORE answers ("which ids already exist") is "does this still exist", and
+    // a row that just doesn't count as pre-existing is the SAFE direction to be
+    // wrong in here: at worst a real id is treated as new and trips
+    // `ambiguous-dispatch` below, never a silent misbind.
+    //
+    // `beforeIds` holds the REFUSED ids too: names `readRegistryMeasured` lists
+    // and never reads, because they are not registry ids. The AFTER read refuses
+    // a refused name BEFORE did not list, so one that was already here must count
+    // as pre-existing, or one stray file would refuse every dispatch.
+    // [registry-refused:refuses] an unlistable registry refuses before anything is spawned.
+    const beforeRead = await readRegistryMeasured(deps.io, deps.cfg);
+    if (!beforeRead.listed) return { ok: false, kind: 'registry-unmeasurable' };
+    const beforeIds = new Set<string>([...beforeRead.records.map((r) => r.id), ...beforeRead.refused]);
     // `wsAddWorker`, not `wsAdd`: this is the one call site that knows the
     // spawn is a dispatched program worker, so it declares `--no-rc` at
     // creation (the 2026-08-13 ruling, task #37). The PWA's ordinary
@@ -639,10 +652,19 @@ export async function dispatchRun(
     // `killed` + `held` are what REPLACE the lost precondition: the first says a
     // spawn really was interrupted here and now, the second is fail-shut and says
     // nothing else has claimed the row.
-    // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
+    //
+    // Since spec §2.3 the first of those triggers refuses at BEFORE, above. And a
+    // THIRD condition refuses here: a REFUSED name (listed, never read, because
+    // it is not a registry id) that BEFORE did not list. Subtraction cannot see
+    // it: it is in no `records`, so it is never a candidate, and the one valid
+    // new row beside it would be bound as this spawn's own while the name this
+    // spawn may really have made sits unread. Unmeasurable, never a guess. A
+    // refused name BEFORE already listed is in `beforeIds` and refuses nothing.
+    // [registry-refused:refuses] a refused name new since BEFORE refuses the bind.
     const afterRead = await readRegistryMeasured(deps.io, deps.cfg);
     if (!afterRead.listed ||
-        afterRead.records.some((r) => r.project === run.project && measuredIdentity(r) === null)) {
+        afterRead.records.some((r) => r.project === run.project && measuredIdentity(r) === null) ||
+        [...afterRead.refused].some((x) => !beforeIds.has(x))) {
       // ccd's own words ride along when ccd ALSO failed. Before §1.5 this arm was
       // unreachable on a failed `ws-add` — the early return fired first and the
       // 502 quoted ccd — so moving that return DOWN silently deleted the fleet's
@@ -797,7 +819,16 @@ export async function dispatchRun(
     // draws that line explicitly: `!listed` refuses OUTRIGHT, before
     // `record` is ever computed, so `record === undefined` past this point
     // means only the first, tolerated case — never the second.
-    // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
+    //
+    // NO REFUSED-ID ARM HERE, by design (spec §2.3). `sessionId` is the run's
+    // STORED id, and two guards stand ahead of this read: `dispatchRun`'s
+    // stored-row gate (the `bad-session` refusal right after
+    // `holdReasonVerdict`, before the pause listing) refuses it outright, and
+    // behind that gate `childBindGate` above holds it `spent-unmeasured`
+    // (`readSessionRecord` answers `bad-id`) before `ensure` is composed. An arm
+    // here could never be reached, so it could never be pinned: the two guards
+    // carry the pins.
+    // [registry-refused:gated] guarded by the stored-row gate and childBindGate, above.
     const registryRead = await readRegistryMeasured(deps.io, deps.cfg);
     if (!registryRead.listed) {
       return { ok: false, kind: 'registry-unmeasurable' };

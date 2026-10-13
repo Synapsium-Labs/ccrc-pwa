@@ -6,7 +6,7 @@ import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
 import type { FleetIO } from '../io.js';
 import type { Deps } from '../server.js';
-import { isPrPhase, type DoneRejectCode, type PrPhase } from '../../../shared/api.js';
+import { isPrPhase, isRegistryId, type DoneRejectCode, type PrPhase } from '../../../shared/api.js';
 
 const SHA = /^[0-9a-f]{40}$/;
 
@@ -94,6 +94,19 @@ function prVerdict(claimed: PrPhase, measured: PrPhase): 'ok' | 'regressed' | 'u
 export async function resolveDoneBranch(
   deps: VerifyDoneDeps, run: DoneRun,
 ): Promise<{ ok: true; branch: string; provenance: string } | { ok: false; code: DoneRejectCode; detail: string }> {
+  // FIRST, and pure, so it stands before the read (spec §2.3). A session id
+  // that is not a registry id is refused by `readRegistryMeasured`: listed,
+  // never read, absent from `records`. Without this check `record` below would
+  // be `undefined` and the frozen `run.branch` fallback would answer for it — a
+  // done-claim settled on a ref nobody measured, and `verifyDone`'s `pr-state`
+  // composed with an id ccd could read as a flag. Held, never a fact:
+  // `tip-unmeasurable`. `verifyReviewDone` reaches here with the WORK run's id,
+  // which the review run's own close gate never checks, so on that path this is
+  // the only check.
+  if (!isRegistryId(run.sessionId)) {
+    return { ok: false, code: 'tip-unmeasurable',
+      detail: 'the run\'s session id is not a registry id: it is refused, never read' };
+  }
   // The registry's branch, not `run.branch` — see `DoneRun`'s docstring for
   // why the DB column cannot be trusted here. `record` is undefined on ONE
   // state after Wave 3 §3.2: the registry genuinely no longer carries a row
@@ -109,7 +122,7 @@ export async function resolveDoneBranch(
   // and are refused `tip-unmeasurable` immediately below. A `worker_done`
   // this refuses is replayed and re-verified on the next sweep the same as
   // any other refusal (spec:174-177, D-10).
-  // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
+  // [registry-refused:holds] the check at the top of this function holds a refused id before this read.
   const registryRead = await readRegistryMeasured(deps.io, deps.cfg);
   if (!registryRead.listed) {
     return { ok: false, code: 'tip-unmeasurable',
