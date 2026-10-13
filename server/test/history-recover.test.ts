@@ -1527,6 +1527,20 @@ function rrCorruptIndex(file: string): void {
   expect(rows, 'CONTROL: the fixture really fails integrity_check').not.toEqual(['ok']);
 }
 
+/** H-186: a backup whose meta reads but whose FTS5 index cannot be built: blobs_fts_config is gone from the schema, so
+ *  PRAGMA integrity_check throws `vtable constructor failed: blobs_fts` (SQLITE_ERROR, no 'no such table' in the text). */
+function rrBreakFts(file: string): void {
+  const db = new DatabaseSync(file, { defensive: false });
+  try {
+    db.exec('PRAGMA writable_schema = ON');
+    db.prepare("DELETE FROM sqlite_master WHERE name = 'blobs_fts_config'").run();
+    db.exec('PRAGMA writable_schema = OFF');
+  } finally { db.close(); }
+  let thrown = '';
+  try { rrFileDb(file, (d) => d.prepare('PRAGMA integrity_check').all()); } catch (e) { thrown = String((e as Error).message); }
+  expect(thrown, 'CONTROL: the fixture really makes integrity_check throw a SQLITE_ERROR').toMatch(/vtable constructor failed/);
+}
+
 describe('C57: doctor --restore, the drill (W1-B2 Task 27)', () => {
 
   it('a fresh box holding only a backup: the tick refuses store-recoverable and creates nothing; --restore (the CLI, on a terminal) binds the backup, and the next passes recover, then resume the backup\'s cursors', async () => {
@@ -1706,6 +1720,10 @@ describe('C57: doctor --restore, the drill (W1-B2 Task 27)', () => {
     fs.copyFileSync(path.join(P.backups, name), path.join(P.backups, '20200101T000002Z.db'));
     rrCorruptIndex(path.join(P.backups, '20200101T000002Z.db'));
     expect(await refused(['20200101T000002Z.db'], 'a failed integrity_check'), 'a refusal decideBind makes over the staged copy').toContain(OPERATOR);
+    // H-186: a SQLITE_ERROR that is no missing table (the index cannot be built) is still a verdict on the copy: exit 2, never 'internal error'.
+    fs.copyFileSync(path.join(P.backups, name), path.join(P.backups, '20200101T000003Z.db'));
+    rrBreakFts(path.join(P.backups, '20200101T000003Z.db'));
+    expect(await refused(['20200101T000003Z.db'], 'an index that cannot be built'), 'a refusal decideBind makes over the staged copy').toContain(OPERATOR);
     // planCopy: free must exceed the threshold plus the backup's size (§6.11).
     const fsSize = 100 * 2 ** 30;
     const threshold = floorThreshold(fsSize);
@@ -1831,6 +1849,8 @@ describe('C57: doctor --restore, the drill (W1-B2 Task 27)', () => {
         { message: 'file is not a database', errcode: 26 },
         { message: 'database disk image is malformed (extended code)', errcode: 11 | (1 << 8) },
         { message: 'no such table: meta', errcode: 1 },                  // a database with no meta table
+        { message: 'vtable constructor failed: blobs_fts', errcode: 1 },  // H-186: SQLITE_ERROR is a verdict whatever it says
+        { message: 'SQL logic error', errcode: 1 | (1 << 8) },
         { message: 'database disk image is malformed' },                 // a build whose error carries no errcode is read by its message
       ]) {
         failIntegrityWith(verdict);
@@ -1843,7 +1863,8 @@ describe('C57: doctor --restore, the drill (W1-B2 Task 27)', () => {
         { message: 'disk I/O error', errcode: 10 },
         { message: 'disk I/O error', errcode: 10 | (1 << 8) },           // SQLITE_IOERR_READ
         { message: 'out of memory', errcode: 7 },
-        { message: 'SQL logic error', errcode: 1 },                      // SQLITE_ERROR is a verdict only for the missing table
+        { message: 'database is locked', errcode: 5 },
+        { message: 'unable to open database file', errcode: 14 },
         { message: 'disk I/O error' },
       ]) {
         failIntegrityWith(failure);

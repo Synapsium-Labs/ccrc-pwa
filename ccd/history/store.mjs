@@ -21,7 +21,7 @@ import {
   chmodSync, closeSync, constants as FS, existsSync, fchmodSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync,
   readdirSync, readSync, renameSync, rmdirSync, statSync, unlinkSync, writeSync,
 } from 'node:fs';
-import { basename, dirname } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as Z, createBrotliCompress, createBrotliDecompress } from 'node:zlib';
 import { BUSY_TIMEOUT_MS, CONTROL_FILE_MAX, MAX_INTERRUPTED_ATTEMPTS, RECOVER_PHASES, SCHEMA_VERSION, SIDECAR_WHOLE_MAX, UUID_RE, WRITER_RE, backupNameOf, blobOverDecodeCap, FTS_SHADOWS, formatRecoverCursor, ftsTextOf, historyPaths, journalRecord, jsonWithinStructureBound, newSha256, restoreNameOk, sidecarIndexText } from './lib.mjs';
@@ -1183,7 +1183,10 @@ export function storedVersionAt(dbFile) {
  *  candidate would scan it once per blob. D-4601 (history-prune-protects-boundary-anchors) adds a fourth: the
  *  blob of the row a boundary's anchor_uuid names, flagged or not, because lib's summaryRowFor picks that row as
  *  the leaf's summary whether or not is_compact_summary is set and the flag is no part of the pick; a boundary that
- *  names ITSELF protects nothing here (its pick is the first compact summary after it, which the flag arm covers). */
+ *  names ITSELF protects nothing here (its pick is the first compact summary after it, which the flag arm covers).
+ *  That arm protects EVERY entry an anchor_uuid names, an echo row (user/harness, which summaryRowFor refuses) and another
+ *  session's entry included (anchor_uuid is transcript content), so it is a superset of what summaryRowFor can pick (H-190).
+ *  The cost is retention only, never a lost summary: spec §1 says summaries are never pruned. */
 export function pruneProtected(db) {
   const ids = new Set();
   for (const r of db.prepare('SELECT summary_blob_id AS id FROM nodes WHERE summary_blob_id IS NOT NULL').all()) ids.add(Number(r.id));
@@ -1502,21 +1505,29 @@ export function adoptStore(home, { nowMs }) {
   }
 }
 
-/** Whether a SQLite error read off a staged restore copy is a verdict on the file's content: SQLITE_NOTADB (26) and
- *  SQLITE_CORRUPT (11), and SQLITE_ERROR (1) for a missing table (a database with no meta). node:sqlite's `errcode` is the
- *  extended code, its low byte the primary; a build whose error carries none is read by message. Anything else (an I/O
- *  error, SQLITE_NOMEM, a busy copy) is not (D-4608 (history-restore-io-failure-is-not-a-refusal)). */
+/** Whether a SQLite error read off a staged restore copy is a verdict on the file's content: SQLITE_NOTADB (26),
+ *  SQLITE_CORRUPT (11) and SQLITE_ERROR (1), whatever its message says: a missing meta table, an FTS5 table whose shadow
+ *  tables are gone (`vtable constructor failed: blobs_fts`), a malformed schema. The copy is a local temp this process
+ *  just wrote and fsynced, and the statements measuring it are fixed, so a logic error from them is about the copy and not
+ *  about the disk (H-186). node:sqlite's `errcode` is the extended code, its low byte the primary; a build whose error
+ *  carries none is read by message. Anything else (SQLITE_IOERR, NOMEM, BUSY, LOCKED, CANTOPEN, FULL, or a code this
+ *  does not know) is not (D-4608 (history-restore-io-failure-is-not-a-refusal)). */
 function isStagedContentError(e) {
   if (typeof e?.errcode === 'number') {
     const primary = e.errcode & 0xff;
-    return primary === 26 || primary === 11 || (primary === 1 && /no such table/.test(String(e.message)));
+    return primary === 26 || primary === 11 || primary === 1;
   }
-  return /not a database|malformed|no such table/.test(String(e?.message));
+  return /not a database|malformed|no such table|vtable constructor failed/.test(String(e?.message));
 }
 
 /** What a staged restore copy says about itself, measured on the COPY, never on the backup: its user_version, its
  *  meta.store_id (a value, absent, or unreadable for a file that is no store) and whether PRAGMA integrity_check
- *  answers exactly one row, `ok`. A file that will not open as a database reads as unreadable and not ok. */
+ *  answers exactly one row, `ok`. A SQLite verdict on the copy's CONTENT (isStagedContentError: not a database, corrupt, or a
+ *  logic error such as a missing meta table or an FTS5 table that cannot be built) leaves what was measured standing and the
+ *  rest unread: unreadable and not ok. Every other SQLite failure (I/O, memory, busy, cannot open) is thrown. So is a
+ *  StoreError from openReader's presence check: a 0-byte copy is `store-zero-byte` and an unmeasurable one `store-unmeasured`,
+ *  and restoreArm's StoreError arm answers both restore-refused (H-188: `store-unmeasured` is an I/O failure narrowed, a
+ *  residual reachable only by a race after restorePre's peek, named in D-4608). */
 function measureStaged(tempPath) {
   const out = { storeId: { state: 'unreadable' }, userVersion: null, integrityOk: false };
   let db;
@@ -1545,9 +1556,13 @@ const RESTORE_TEMP_RE = /^\.history\.db\.restore\.[0-9]+$/;
 /** H-88: commitRestore links the path it is handed, and abortRestore removes it with its -wal, -shm and -journal, so
  *  a `staged` that did not come from stageRestore (`{ tempPath: <history.db> }`) would bind a LIVE store or delete
  *  one. The only caller today passes stageRestore's own value, so this is defence in depth: a TypeError, a caller's
- *  bug, raised before anything is opened, linked or removed. */
-function assertRestoreTemp(tempPath) {
-  if (typeof tempPath !== 'string' || !RESTORE_TEMP_RE.test(basename(tempPath))) {
+ *  bug, raised before anything is opened, linked or removed. The shape alone is not enough (H-189): the file must
+ *  also sit directly in the db/ directory `dbDir` names (both sides resolved), or `<other-dir>/.history.db.restore.1`
+ *  would be bound into, or removed from, somewhere that is not a restore's. commitRestore passes THIS home's
+ *  `P.dbDir`; abortRestore has no home, so it passes the `dbDir` stageRestore recorded on the value it answered. */
+function assertRestoreTemp(tempPath, dbDir) {
+  if (typeof tempPath !== 'string' || typeof dbDir !== 'string' || !RESTORE_TEMP_RE.test(basename(tempPath))
+    || resolve(dirname(tempPath)) !== resolve(dbDir)) {
     throw new TypeError('a restore temp is .history.db.restore.<pid> under db/, the value stageRestore answered');
   }
 }
@@ -1557,6 +1572,8 @@ function assertRestoreTemp(tempPath) {
  *  - the backup is opened O_NOFOLLOW|O_NONBLOCK and must be a regular file;
  *  - the temp is created O_EXCL and fchmodded 0600, so it is 0600 from its first byte under any umask;
  *  - the copy is fsynced, then measured (measureStaged) for decideBind's second look.
+ *  It answers `{ tempPath, dbDir, storeId, userVersion, integrityOk, sizeBytes }`; `dbDir` is the directory the temp lives in
+ *  (H-189: abortRestore, which has no home, checks the temp against it).
  *  A name lib's restoreNameOk accepts only (`<ts>.db`, `pre-v<N>.db`): a path, a dot-temp or any other file is refused here as
  *  there. The caller removes the temp on any refusal (abortRestore), and the next lock-holding pass's removeStaleTemps
  *  catches a kill. */
@@ -1603,7 +1620,7 @@ export function stageRestore(home, name) {
   } finally {
     closeSync(from);
   }
-  return { tempPath, ...measureStaged(tempPath), sizeBytes };
+  return { tempPath, dbDir: P.dbDir, ...measureStaged(tempPath), sizeBytes };
 }
 
 /** `doctor --restore`, second half, once decideBind admitted the staged copy (D-4218,
@@ -1631,7 +1648,7 @@ export function stageRestore(home, name) {
  *  A kill anywhere leaves either no history.db, or one whose binding and recovery step are already inside it. */
 export function commitRestore(home, staged, { nowMs, pairs = [], belt = null }) {
   const P = historyPaths(home);
-  assertRestoreTemp(staged.tempPath);
+  assertRestoreTemp(staged.tempPath, P.dbDir);
   if (staged.storeId.state !== 'value') {
     throw new StoreError('restore-refused', `${staged.tempPath} carries no readable meta.store_id`);
   }
@@ -1694,6 +1711,6 @@ export function commitRestore(home, staged, { nowMs, pairs = [], belt = null }) 
 
 /** A refused restore's copy, removed with its sidecars: SQLite pairs a WAL with its file by name (DI13). */
 export function abortRestore(staged) {
-  assertRestoreTemp(staged.tempPath);
+  assertRestoreTemp(staged.tempPath, staged.dbDir);
   for (const s of ['', '-wal', '-shm', '-journal']) removeEntry(`${staged.tempPath}${s}`);
 }

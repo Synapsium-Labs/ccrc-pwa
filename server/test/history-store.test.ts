@@ -1120,7 +1120,7 @@ describe('store.mjs: prune tombstones by referrer age (W1-B2 Task 20)', () => {
       const wal = `${historyPaths(home).dbFile}-wal`;
       const walSizes: number[] = [];
       let registered = 0;
-      // batch 2: SQL pages [1,4] [5,6] [8,9] [14,15] — the protected 4, 5 and 14 dropped — so four batches tombstone.
+      // batch 2: SQL pages [1,4] [5,6] [8,9] [14,15] [] — the protected 4, 5 and 14 dropped, and the fifth read is empty because the fourth page was full — so four batches tombstone.
       const r = pruneApply(db, {
         cutoffMs: CUTOFF, nowMs: NOW, batch: 2, vacuumPages: 64,
         between: () => { walSizes.push(fs.statSync(wal).size); },
@@ -1261,15 +1261,19 @@ describe('store.mjs: writeBackup (W1-B2 Task 22)', () => {
     fs.writeFileSync(finalPath, 'an operator file');
     const db = openWriter(P.dbFile);
     const realLstat = fs.lstatSync;
+    let seamFired = 0;
     try {
       fs.lstatSync = ((p: fs.PathLike, ...rest: unknown[]) => {
-        if (String(p) === finalPath) throw Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' });
+        if (String(p) === finalPath) { seamFired += 1; throw Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' }); }
         return (realLstat as (...a: unknown[]) => unknown)(p, ...rest);
       }) as typeof fs.lstatSync;
       syncBuiltinESMExports();
-      let word: string;
-      try { word = wordOf(() => writeBackup(db, home, { nowMs })); } finally { fs.lstatSync = realLstat; syncBuiltinESMExports(); }
-      expect(word, 'the publish refused where rename() would have replaced').toBe('backup-exists');
+      let got: unknown = null;
+      try { writeBackup(db, home, { nowMs }); } catch (e) { got = e; } finally { fs.lstatSync = realLstat; syncBuiltinESMExports(); }
+      expect(seamFired, 'CONTROL: the pre-check consulted the seam once and was told the name was free, so only the publish can refuse').toBe(1);
+      expect(got, 'the publish refused where rename() would have replaced').toBeInstanceOf(StoreError);
+      expect((got as StoreError).word).toBe('backup-exists');
+      expect((got as StoreError).message, 'link() refused, not the pre-check ("already exists")').toMatch(/appeared while it was written$/);
       expect(fs.readFileSync(finalPath, 'utf8'), 'the operator file is as it was').toBe('an operator file');
       expect(fs.readdirSync(P.backups).filter((n) => n.endsWith('.tmp')), 'the refused copy left no temp').toEqual([]);
     } finally { fs.lstatSync = realLstat; syncBuiltinESMExports(); closeWriter(db); }
@@ -1855,7 +1859,7 @@ describe('store.mjs: the binding verbs\' sequences (W1-B2 Task 24)', () => {
     const h = home();
     const P = historyPaths(h);
     createStore(h);
-    const forged = { tempPath: P.dbFile, storeId: { state: 'value', value: mintStoreId() }, userVersion: SCHEMA_VERSION, integrityOk: true, sizeBytes: 0 };
+    const forged = { tempPath: P.dbFile, dbDir: P.dbDir, storeId: { state: 'value', value: mintStoreId() }, userVersion: SCHEMA_VERSION, integrityOk: true, sizeBytes: 0 };
     expect(() => abortRestore(forged as never)).toThrow(TypeError);
     expect(fs.existsSync(P.dbFile), 'history.db survives the forged abort').toBe(true);
     expect(() => commitRestore(h, forged as never, { nowMs: T })).toThrow(TypeError);
@@ -1864,11 +1868,24 @@ describe('store.mjs: the binding verbs\' sequences (W1-B2 Task 24)', () => {
     for (const bad of [`${P.dbDir}/.history.db.restore.`, `${P.dbDir}/.history.db.restore.12x`, `${P.dbDir}/history.db.new.1`, `${P.dbFile}-wal`]) {
       expect(() => abortRestore({ ...forged, tempPath: bad } as never), bad).toThrow(TypeError);
     }
+    // H-189: the right basename in another directory is no restore temp of this home: nothing there is bound, linked or removed.
+    const other = path.join(h, 'other-dir');
+    fs.mkdirSync(other, { recursive: true });
+    const foreignTemp = path.join(other, '.history.db.restore.1');
+    fs.writeFileSync(foreignTemp, 'not this home\'s temp');
+    fs.writeFileSync(`${foreignTemp}-wal`, 'its sidecar');
+    expect(() => abortRestore({ ...forged, tempPath: foreignTemp } as never), 'abort').toThrow(TypeError);
+    expect(() => abortRestore({ ...forged, tempPath: foreignTemp, dbDir: undefined } as never), 'abort of a value that records no db/').toThrow(TypeError);
+    expect(() => commitRestore(h, { ...forged, tempPath: foreignTemp } as never, { nowMs: T }), 'commit').toThrow(TypeError);
+    expect(fs.readFileSync(foreignTemp, 'utf8'), 'the file in the other directory survives').toBe('not this home\'s temp');
+    expect(fs.existsSync(`${foreignTemp}-wal`), 'and so does its sidecar').toBe(true);
+    expect(inside(P.dbFile).bound, 'nothing was bound into the live store').toEqual([]);
     // The real shape still passes (the temp need not exist: removal is idempotent).
     expect(() => abortRestore({ ...forged, tempPath: `${P.dbDir}/.history.db.restore.${process.pid}` } as never)).not.toThrow();
   });
 
-  it('H-86 (a): a FIFO at the backup name is refused restore-refused and never waited on (O_NONBLOCK), in a child with a 5 s deadline', () => {
+  // M23: only the FIFO rows are Linux-only (the macOS leg is advisory); this one skips on darwin like the file's others.
+  it.skipIf(process.platform === 'darwin')('H-86 (a): a FIFO at the backup name is refused restore-refused and never waited on (O_NONBLOCK), in a child with a 5 s deadline', () => {
     const h = home();
     const P = historyPaths(h);
     createStore(h);
