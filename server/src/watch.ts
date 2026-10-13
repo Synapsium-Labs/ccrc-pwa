@@ -148,10 +148,12 @@ import {
   collectFirstSighting, collectForgets, collectForgottenActRow, collectFresh, collectJobEffects, collectOffers,
   collectPassClass, collectPopulation, collectWouldCollectKey, type CollectAudit, type CollectEntry, type CollectFeedCue,
   type CollectPassClass, type CollectPopulation, type CollectResult, type CollectStep, type CollectUnsettledKind,
+  collectLaneCounts, type CollectLaneCounts, type CollectLaneSettled, type CollectLatchOutcome,
 } from './collectLane.js';
 import {
   collectSwitches, collectTempRoot, learnCollect, readCollectPopulation,
   type CollectClock, type CollectControlDeps, type CollectGenerations, type CollectJobOutcome, type CollectLanePort,
+  collectRetireLatch,
 } from './coord/collectTempRoot.js';
 
 const SGR = /\x1b\[[0-9;]*m/g; // same idiom as inject/send.ts:80 — see detectDialogs's own comment
@@ -991,8 +993,14 @@ export class FleetWatcher {
    *  - `collectUnsettledLogged`: the ids whose call this process has logged as unsettled, once.
    *  - `collectFlockLatched`: an act answered ccd's `flock-unavailable`: no act job is offered again in this process, and
    *    a box-wide line says so, so an armed lane is never silently off.
-   *  - `collectLastSeenLive`: the live marker as the last act job read it. It starts SHADOWED, so an arming made while the
-   *    server was down, or before a restart no job saw, is still a flip, and still writes its row.
+   *  - `collectLastSeenLive`: the effective live boolean as the last act job resolved it, never its source (path-identity
+   *    spec 2026-10-12 §5.5). It starts SHADOWED, so an arming no job saw before a restart is still a flip, with its row.
+   *  - `collectSeenEpoch`: the connection epoch the lane's observation pairs stand under (path-identity spec 2026-10-12
+   *    §5.5), re-read at each pass's head and after its gather. A move clears every pair; an act job is queued under it
+   *    (`collectAct`), so its executor composes nothing once the epoch it reads after its final listing differs.
+   *  - `collectControlWarned`: the switch's warn latches (§5.5, `collectControlNote`): each safety-stop reason, and
+   *    `marker-recreated`, warned once until a coherent resolution clears it. The latch's outcomes (`collectLatchNote`,
+   *    the coordinator's extension of the warn-latch ruling) warn once under `latch-<kind>`, until a retire clears them.
    *  - `collectPop`: the last measured pass's population, for the box-wide listing and refused-name lines; `null` before
    *    one. `collectPopNames`: the registry listing that pass's pre-filter read, for attention's projection.
    *  - `collectBoxProbes`: the box-wide probes standing (through `collectBoxProbesAtArrival`: every answer but one older
@@ -1013,6 +1021,8 @@ export class FleetWatcher {
   private collectUnsettledLogged = new Set<string>();
   private collectFlockLatched = false;
   private collectLastSeenLive = false;
+  private collectSeenEpoch = 0;
+  private collectControlWarned = new Set<string>();
   private collectPop: CollectPopulation | null = null;
   private collectPopNames: ReadonlySet<string> = new Set();
   private collectBoxProbes: ReadonlyMap<string, string> = new Map();
@@ -1822,6 +1832,15 @@ export class FleetWatcher {
   } {
     return { entries: this.collectState, inFlight: this.collectInFlight, slot: this.collectSlot,
       laneGen: this.collectLaneGen, lastSeenLive: this.collectLastSeenLive, flockLatched: this.collectFlockLatched };
+  }
+
+  /** The collector switch's counts (path-identity spec 2026-10-12 §5.7), for `GET /api/coord/collect-lane`'s view:
+   *  would collect, held (unvouched ids among them) and the box-wide lines, by L1's `collectLaneCounts` over the very
+   *  input the published attention items read (`collectAttentionInput`). `null` until a pass has measured a population,
+   *  which means "not measured yet", never zero. It adds no state; the PWA counts nothing itself. */
+  currentCollectCounts(): CollectLaneCounts | null {
+    if (this.collectPop === null) return null;
+    return collectLaneCounts(this.collectAttentionInput());
   }
 
   /** The sweep's in-memory state, read-only (child-reclamation wave 4) — what
@@ -4183,9 +4202,9 @@ export class FleetWatcher {
    * executor (`collectTempRoot`), its feed rows, and its attention items, which reach the frame only through the child
    * lane's one write (`childReclaimPublishAttention`).
    *
-   * IT SHIPS SHADOWED. Until the operator touches the live marker by hand, a token the lane would spend is RECORDED — a
-   * feed row once per (id, token) episode, and an attention item — and nothing is composed. The marker is read by the
-   * executor alone, nearest the argv; this pass never reads it.
+   * IT SHIPS SHADOWED. Until the operator arms it (the legacy marker before its latch, or Settings `live` for this node),
+   * a token the lane would spend is RECORDED — a feed row once per (id, token) episode, and an attention item — and
+   * nothing is composed. The executor arms nearest the argv; this pass hands its listing to the switch's latch alone.
    *
    * WHAT IT ASKS. Each pass, at most ONE ACT JOB and at most `COLLECT_AUDITS_PER_PASS` LEARNING audits, chosen by
    * `collectOffers` (L1): the act first, to the earliest ripe id by ripening instant; then learning audits to due ids by
@@ -4231,8 +4250,18 @@ export class FleetWatcher {
   }
 
   /** One pass of the collector's lane, run only while no other pass runs. Its ONE await is the gather. It queues its
-   *  calls and never awaits them (`sweepTempRootCollect`). */
+   *  calls and never awaits them (`sweepTempRootCollect`). Its connection epoch is read at its head and again after the
+   *  gather (path-identity spec 2026-10-12 §5.5), and its listing is handed to the switch's latch (§5.4) and nothing else. */
   private async collectPass(coord: CoordStore, names: readonly string[]): Promise<void> {
+    // ZERO — THE CONNECTION EPOCH (path-identity spec 2026-10-12 §5.5): the epoch the lane's observation pairs stand under.
+    // One that moved since the last pass clears every pair, so no pair straddles two connections. An act job is queued
+    // under it (`collectAct`), and its executor composes nothing when the epoch it reads after its final listing differs.
+    const link = this.deps.fleetIdentity ?? NO_FLEET_IDENTITY;
+    const head = link.epochNow();
+    if (head !== this.collectSeenEpoch) {
+      this.collectSeenEpoch = head;
+      this.collectClearPairs();
+    }
     // ONE — the capabilities (spec §5.10): both, or the lane never runs — never an automatic destructive lane on a box the
     // phone cannot pause. A missing one clears every pair, so each id needs two FRESH observations once it returns.
     if (!capSupported(this.deps.fleetState, COLLECT_CAP) || !capSupported(this.deps.fleetState, RECLAIM_PAUSE_CAP)) {
@@ -4252,12 +4281,28 @@ export class FleetWatcher {
     const mono = this.childReclaimLaneNow().monoMs;
     this.lastCollectSweep = mono;
     const [listings, switches] = gathered;
+    // THE GATHER'S BRACKET (path-identity spec 2026-10-12 §5.5): an epoch that moved while the gather was out clears every
+    // pair and ends the pass. Nothing it listed is read, and no latch is retired from a listing that straddled two
+    // connections. The pairs, now empty, stand under the epoch after it.
+    const after = link.epochNow();
+    if (after !== head) {
+      this.collectSeenEpoch = after;
+      this.collectClearPairs();
+      return;
+    }
     // THREE — the switch: a raised pause, or a registry that did not list, stops the pass before any audit and clears
-    // every pair. Only `paused` is read: the live marker in the same listing is the executor's, at its act.
+    // every pair. Only `paused` is read here: the marker in the same listing is the executor's to arm with, at its act.
     if (switches.paused) {
       this.collectClearPairs();
       return;
     }
+    // THE LATCH (path-identity spec 2026-10-12 §5.4): this listing, coherent, unpaused and on one epoch, proving the legacy
+    // marker absent while the latch is unset, retires it through the one latch helper and the store's one writer, with
+    // one feed row, so an idle lane follows a removed marker within one pass. The helper decides (`collectLatchDue`), it
+    // never heals a mismatch, and the listing is handed to it and to nothing else. Its outcome is said once per
+    // non-success kind (`collectLatchNote`, the coordinator's extension of the warn-latch ruling), so a latch that cannot
+    // retire is never silent.
+    this.collectLatchNote(collectRetireLatch(this.collectControlDeps(coord), switches, { before: head, after }));
     // FOUR — the population (L1): the ids to consider, from the MEASURED listings only, pre-filtered on the tick's exact
     // `<id>.child` and `<id>.uuid` names unless a measured record names the id. Kept for the box-wide lines. An id is
     // forgotten — its pacing and episodes with it, and no feed row — only when `collectForgets` says so (both listings
@@ -4326,7 +4371,10 @@ export class FleetWatcher {
     this.collectEntryOf(id);
     this.collectInFlight.set(id, { kind: 'act', sinceMono: mono, phase: 'queued' });
     this.collectSlot = { kind: 'job', id, sinceMono: mono };
-    const epoch = (this.deps.fleetIdentity ?? NO_FLEET_IDENTITY).epochNow();
+    // THE JOB'S EPOCH (path-identity spec 2026-10-12 §5.5): the epoch this pass found the lane's pairs standing under,
+    // read HERE, as the job is queued, never inside the callback. Its executor composes nothing when the epoch it reads
+    // after its final listing differs, so a reconnect between the queueing and the job's start composes nothing.
+    const epoch = this.collectSeenEpoch;
     void this.deps.queue.run(id, () => collectTempRoot({
       coord, io: this.deps.io, cfg: this.deps.cfg, runCcd: this.collectRunCcd(id), fleetState: this.deps.fleetState,
       presence: this.deps.presence, lane: this.collectPortFor(coord, id), observeIntervalMs: COLLECT_OBSERVE_INTERVAL_MS,
@@ -4540,6 +4588,7 @@ export class FleetWatcher {
       // pair alike (path-identity spec 2026-10-12 §5.5).
       cleared: () => { this.collectClearPairs(); },
       flipped: (r) => {
+        this.collectControlNote(r);
         // THE LAST-SEEN-LIVE FLAG (spec §5.10; path-identity spec 2026-10-12 §5.5). The lane flips on the EFFECTIVE
         // BOOLEAN, never on its source: a marker-to-Settings handoff that stays live is no flip, writes no row and keeps
         // every pair. A change of the boolean either way is a FLIP: every pair clears, ONE feed row says so and names
@@ -4568,6 +4617,48 @@ export class FleetWatcher {
       wallNow: () => this.childReclaimLaneNow().wallMs,
       latchRetired: (body) => { this.collectRecordCoordFeed(coord, COLLECT_SETTING_FEED_TITLE, body); },
     };
+  }
+
+  /** THE SWITCH'S WARN LATCHES (path-identity spec 2026-10-12 §5.5), called first from the port's `flipped`, which every
+   *  settled resolution passes through: a safety stop warns once per reason, and a legacy file re-created after its latch
+   *  warns once, so a stuck read state is said once rather than on every act job. A coherent resolution (live or
+   *  shadowed) clears every latch but the one it raises again and the latch helper's own (`latch-…`,
+   *  `collectLatchNote`), as the stall-settings latch re-arms when a read applies.
+   *  The stopped arms (pause, unlistable, epoch, unknown fleet) never reach it, and change none. It decides nothing about
+   *  the lane: the resolution is L1's. */
+  private collectControlNote(r: CollectLaneSettled): void {
+    const key = r.kind === 'safety-stopped' ? r.why : r.notes.markerRecreated ? 'marker-recreated' : null;
+    if (r.kind !== 'safety-stopped') {
+      for (const k of [...this.collectControlWarned]) if (k !== key && !k.startsWith('latch-')) this.collectControlWarned.delete(k);
+    }
+    if (key === null || this.collectControlWarned.has(key)) return;
+    this.collectControlWarned.add(key);
+    console.warn(r.kind === 'safety-stopped'
+      ? `ccrc-server: sweepTempRootCollect: the collector's control state is safety-stopped (${r.why}) — it removes `
+        + 'nothing until its database row and generation journal are proved coherent'
+      : "ccrc-server: sweepTempRootCollect: the fleet box's legacy file was re-created; this server no longer honours it");
+  }
+
+  /** THE LATCH'S WARN LATCHES (the coordinator's extension of the warn-latch ruling, 2026-10-12): the pass's latch
+   *  outcome, said once per non-success kind. A latch the store keeps refusing, failing or throwing on is reported once,
+   *  neither silent nor repeated on every pass. Off stays refused until the latch retires, so this line is the
+   *  operator's only reason for it. Its keys are `latch-<kind>`. They are cleared on `retired` and never by a coherent
+   *  resolution (`collectControlNote` skips them). `not-due` changes nothing. It decides nothing: the helper already
+   *  did, and the pass goes on either way. */
+  private collectLatchNote(o: CollectLatchOutcome): void {
+    if (o.kind === 'not-due') return;
+    if (o.kind === 'retired') {
+      for (const k of [...this.collectControlWarned]) if (k.startsWith('latch-')) this.collectControlWarned.delete(k);
+      return;
+    }
+    const key = `latch-${o.kind}`;
+    if (this.collectControlWarned.has(key)) return;
+    this.collectControlWarned.add(key);
+    const why = o.kind === 'refused' ? `the store refused it (${o.code})`
+      : o.kind === 'failed' ? `the store failed at ${o.phase}`
+      : 'the store threw before its append (a busy database or a read fault)';
+    console.warn(`ccrc-server: sweepTempRootCollect: the legacy file's latch could not be retired: ${why}; `
+      + 'Off stays refused until a later pass retires it');
   }
 
   /** The runner the lane hands its calls (spec §5.10): `deps.runCcd`, marking the id's flight with what is out — an
@@ -4670,13 +4761,20 @@ export class FleetWatcher {
    *  decides every item; the list's ONE write merges them (`childReclaimPublishAttention`). A stated residual: they
    *  reach the frame only at that publish, and stand unchanged while the child lane's pass fails shut. */
   private collectAttention(): ChildReclaimCollectInput {
+    return collectAttentionItems(this.collectAttentionInput());
+  }
+
+  /** What the collector's attention reads (spec §5.10), extracted so the published items and the switch's counts
+   *  (`currentCollectCounts`, path-identity spec 2026-10-12 §5.7) read ONE input: each remembered id L1 projects, the
+   *  box facts, and the clock the unsettled lines are measured at. It reads memory and decides nothing. */
+  private collectAttentionInput(): Parameters<typeof collectAttentionItems>[0] {
     const nowMono = this.collectClock().mono;
     const entries = collectAttentionViews(this.collectState, this.collectPop, this.collectPopNames);
-    return collectAttentionItems({ entries, nowMono, box: {
+    return { entries, nowMono, box: {
       unmeasured: this.collectPop?.unmeasured ?? [], refusedNames: this.collectPop?.refusedNames ?? 0,
       boxProbes: this.collectBoxProbes, passAudits: this.collectPassAudits, flockLatched: this.collectFlockLatched,
       unsettled: this.collectUnsettled(nowMono),
-    } });
+    } };
   }
 
   /**
