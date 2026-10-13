@@ -221,3 +221,56 @@ describe('M4.P3: the ten largest docs under docs/superpowers pre-scan ok', () =>
     expect(refusedAt(MD_MAX_CONTAINER_DEPTH, 2)).toBeGreaterThan(0);
   });
 });
+
+// A GFM footnote-definition label (`[^label]:`) at a container position is a container: the parser nests what follows
+// it, so a `>` or list-marker chain after it is as deep as the same chain at the start of the line. Both inputs below
+// are about 4 KiB, passed the pre-scan, and made the synchronous chat render throw a RangeError.
+describe('T11 review 2-1: a footnote-definition label counts as a container', () => {
+  const refused = (line: number, value: number): unknown => ({ ok: false, why: 'container-depth', line, value });
+
+  it("'>' repeated after a footnote label is refused with the label and every marker counted", () => {
+    expect(prescanMarkdown('x[^a]\n\n[^a]: ' + '>'.repeat(4070) + ' y')).toEqual(refused(3, 4071));
+    expect(prescanMarkdown('[^a]: ' + '>'.repeat(4080))).toEqual(refused(1, 4081));
+  });
+
+  it("a list-marker chain after a footnote label is refused", () => {
+    expect(prescanMarkdown('x[^a]\n\n[^a]: ' + '- '.repeat(2030) + 'y')).toEqual(refused(3, 2031));
+  });
+
+  it('a label counts as one level, at the edge, after a quote or a list marker, and when it follows a label', () => {
+    expect(prescanMarkdown('[^a]: ' + '> '.repeat(31) + 'x')).toEqual(ok);
+    expect(prescanMarkdown('[^a]: ' + '> '.repeat(32) + 'x')).toEqual(refused(1, 33));
+    expect(prescanMarkdown('> [^a]: ' + '> '.repeat(31) + 'x')).toEqual(refused(1, 33));
+    expect(prescanMarkdown('- [^a]: ' + '> '.repeat(31) + 'x')).toEqual(refused(1, 33));
+    expect(prescanMarkdown('[^a]: '.repeat(33) + 'x')).toEqual(refused(1, 33));
+    expect(prescanMarkdown('[^a]:'.repeat(33) + 'x')).toEqual(refused(1, 33));
+    expect(prescanMarkdown('[^a]:\t'.repeat(33) + 'x')).toEqual(refused(1, 33));
+    expect(prescanMarkdown('   [^a]: ' + '> '.repeat(32) + 'x')).toEqual(refused(1, 33));
+  });
+
+  it('an ordinary footnote definition, and one holding a short list, pass', () => {
+    expect(prescanMarkdown('text[^1] and more[^note].\n\n[^1]: The first note.\n[^note]: A note.\n')).toEqual(ok);
+    expect(prescanMarkdown('x[^a]\n\n[^a]: Intro\n\n    - one\n    - two\n      - nested\n\n    > a quote\n')).toEqual(ok);
+    expect(prescanMarkdown('[^a]: - one\n')).toEqual(ok);
+  });
+
+  it.each([
+    ['no caret', '[a]: '],
+    ['an empty label', '[^]: '],
+    ['a space in the label', '[^a b]: '],
+    ['a tab in the label', '[^a\tb]: '],
+    ['a bracket in the label', '[^a[b]: '],
+    ['no closing bracket', '[^ab: '],
+    ['no colon', '[^a] '],
+    ['four columns of indentation', '    [^a]: '],
+    ['a label of 1 000 characters', `[^${'a'.repeat(1000)}]: `],
+  ])('%s is not a footnote definition', (_label, head) => {
+    expect(prescanMarkdown(head + '> '.repeat(32) + 'x')).toEqual(ok);
+  });
+
+  it('a label of 999 characters is one, and so is one with escaped brackets', () => {
+    expect(prescanMarkdown(`[^${'a'.repeat(999)}]: ` + '> '.repeat(32) + 'x')).toEqual(refused(1, 33));
+    expect(prescanMarkdown('[^a\\]b]: ' + '> '.repeat(32) + 'x')).toEqual(refused(1, 33));
+    expect(prescanMarkdown('[^a\\[b]: ' + '> '.repeat(32) + 'x')).toEqual(refused(1, 33));
+  });
+});

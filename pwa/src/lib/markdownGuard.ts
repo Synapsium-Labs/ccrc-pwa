@@ -54,11 +54,36 @@ function blankWidth(line: string, i: number, col: number): number {
   return c === 0x20 ? 1 : c === 0x09 ? 4 - (col % 4) : 0;
 }
 
+/** The index just past the `:` of a GFM footnote-definition label (`[^label]:`) that starts at `line[i]`, or -1 when
+ *  none does. A label is 1 to 999 characters with no whitespace and no `[`; a `]` ends it unless a backslash escapes
+ *  it (`\[`, `\]` and `\\` are two characters each), and it needs at least one character. */
+function footnoteLabelEnd(line: string, i: number): number {
+  if (line.charCodeAt(i + 1) !== 0x5e /* ^ */) return -1;
+  let j = i + 2;
+  let size = 0;
+  for (;;) {
+    const c = line.charCodeAt(j);
+    if (size > 999 || Number.isNaN(c) || c === 0x5b /* [ */ || isBlank(c)) return -1;
+    if (c === 0x5d /* ] */) {
+      if (j === i + 2) return -1;
+      return line.charCodeAt(j + 1) === 0x3a /* : */ ? j + 2 : -1;
+    }
+    size += 1;
+    j += 1;
+    const d = line.charCodeAt(j);
+    if (c === 0x5c /* \ */ && (d === 0x5b || d === 0x5c || d === 0x5d)) {
+      size += 1;
+      j += 1;
+    }
+  }
+}
+
 /** The container depth of one line, with tabs counted by column as CommonMark does. Repeatedly: skip up to 3
- *  columns of indentation, then consume `>` (and one optional space or tab column) or a list marker (`-`, `+`, `*`,
- *  or 1-9 digits then `.` or `)`) together with the blanks it needs. A tab after `>` is only partly used by the
- *  optional space; the rest of its columns count as indentation for the next marker. After a list marker, 1 to 4
- *  columns of blanks are its padding and 5 or more make what follows indented code. The count runs to the end of
+ *  columns of indentation, then consume `>` (and one optional space or tab column), a list marker (`-`, `+`, `*`, or
+ *  1-9 digits then `.` or `)`) together with the blanks it needs, or a footnote-definition label (`[^a]:`) with all
+ *  the blanks after it (the parser eats them, so no indented code follows). A tab after `>` is only partly used by
+ *  the optional space; the rest of its columns count as indentation for the next marker. After a list marker, 1 to
+ *  4 columns of blanks are its padding and 5 or more make what follows indented code. The count runs to the end of
  *  the markers, so a refusal reports the line's whole depth. */
 function containerDepth(line: string): number {
   let depth = 0;
@@ -85,6 +110,18 @@ function containerDepth(line: string): number {
         i += 1;
         col += w;
         carried = w - 1;
+      }
+      continue;
+    }
+    if (c === 0x5b /* [ */) {
+      const after = footnoteLabelEnd(line, i);
+      if (after < 0) return depth;
+      depth += 1;
+      col += after - i;
+      i = after;
+      while (blankWidth(line, i, col) > 0) {
+        col += blankWidth(line, i, col);
+        i += 1;
       }
       continue;
     }
