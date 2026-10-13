@@ -636,3 +636,76 @@ describe('readHookStateRawMeasured — the one parse, identity reported and neve
     }
   });
 });
+
+// ── `aliveAt` (D-4041, `a-carried-wait-keeps-its-stamp`) ──
+// A subagent's tool event over a main-thread wait keeps the wait's `updatedAt` and writes an additive `aliveAt`. The age
+// cut is the one reader that needs liveness, so it ages on the later of the two. `aliveAt` is additive and optional: an
+// absent or malformed one is IGNORED (never `malformed`, never `no-state` by itself), and `HookState` does not carry it.
+describe('aliveAt — the age cut reads the later of updatedAt and aliveAt (D-4041)', () => {
+  const OLD = NOW - HOOKSTATE_FRESH_MS - 60_000;   // past the cut
+  const waiting = (o: Record<string, unknown>): Record<string, unknown> =>
+    base({ state: 'waiting', ask: { approval: { tool: 'Bash', summary: 'ls' } }, ...o });
+
+  it('a wait stamped past 30 minutes ago is fresh through a recent aliveAt', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, waiting({ updatedAt: OLD, aliveAt: NOW - 1000 }));
+    const r = await readHookStateMeasured(localIO, reg, ID, UUID, NOW);
+    expect(r).toMatchObject({ ok: true, state: { state: 'waiting', updatedAt: OLD } });
+    expect(await readHookState(localIO, reg, ID, UUID, NOW)).not.toBeNull();
+  });
+
+  it('an absent aliveAt reads updatedAt: the same file is stale without it', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, waiting({ updatedAt: OLD }));
+    expect(await readHookStateMeasured(localIO, reg, ID, UUID, NOW)).toEqual({ ok: false, reason: 'no-state' });
+  });
+
+  it('a malformed aliveAt is ignored: not malformed, not no-state by itself, and it revives nothing', async () => {
+    // `JSON.stringify(Infinity)` is `null`, so the non-finite number goes in as its JSON text: `1e999` parses to Infinity.
+    const INF = '__INFINITY__';
+    const put = (reg: string, o: Record<string, unknown>): void =>
+      seed(reg, ID, JSON.stringify(waiting(o)).replace(`"${INF}"`, '1e999'));
+    for (const bad of ['soon', null, {}, [1], true, INF]) {
+      const reg = mkTmp('ccrc-hookstate-');
+      // fresh by updatedAt: still fresh, still ok
+      put(reg, { updatedAt: NOW - 1000, aliveAt: bad });
+      const fresh = await readHookStateMeasured(localIO, reg, ID, UUID, NOW);
+      expect(fresh, `fresh, aliveAt: ${String(bad)}`).toMatchObject({ ok: true, state: { state: 'waiting' } });
+      const raw = await readHookStateRawMeasured(localIO, reg, ID, UUID);
+      expect(raw, `raw, aliveAt: ${String(bad)}`).toMatchObject({ ok: true });
+      if (raw.ok) expect(raw.aliveAt, `raw.aliveAt: ${String(bad)}`).toBeUndefined();
+      // stale by updatedAt: a malformed aliveAt does not revive it
+      put(reg, { updatedAt: OLD, aliveAt: bad });
+      expect(await readHookStateMeasured(localIO, reg, ID, UUID, NOW), `stale, aliveAt: ${String(bad)}`)
+        .toEqual({ ok: false, reason: 'no-state' });
+    }
+  });
+
+  it('stale when both are old', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, waiting({ updatedAt: OLD - 5000, aliveAt: OLD }));
+    expect(await readHookStateMeasured(localIO, reg, ID, UUID, NOW)).toEqual({ ok: false, reason: 'no-state' });
+  });
+
+  it('the later of the two wins: an aliveAt OLDER than a fresh updatedAt does not age the file', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, waiting({ updatedAt: NOW - 1000, aliveAt: OLD }));
+    expect(await readHookStateMeasured(localIO, reg, ID, UUID, NOW)).toMatchObject({ ok: true });
+  });
+
+  it('the boundary is the same one: exactly 30 minutes from the later stamp is still fresh', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, waiting({ updatedAt: OLD, aliveAt: NOW - HOOKSTATE_FRESH_MS }));
+    expect(await readHookStateMeasured(localIO, reg, ID, UUID, NOW)).toMatchObject({ ok: true });
+  });
+
+  it('the raw read reports a finite aliveAt beside the unchanged state, and HookState itself does not grow', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, waiting({ updatedAt: OLD, aliveAt: NOW - 5 }));
+    const raw = await readHookStateRawMeasured(localIO, reg, ID, UUID);
+    expect(raw).toMatchObject({ ok: true, aliveAt: NOW - 5, state: { updatedAt: OLD } });
+    if (raw.ok) expect(Object.keys(raw.state)).not.toContain('aliveAt');
+    const folded = await readHookStateMeasured(localIO, reg, ID, UUID, NOW);
+    if (folded.ok) expect(Object.keys(folded.state)).not.toContain('aliveAt');
+  });
+});

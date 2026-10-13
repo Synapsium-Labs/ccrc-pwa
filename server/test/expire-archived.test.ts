@@ -8,7 +8,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { expireArchived, recordExpireFeed, type ExpireArchivedDeps } from '../src/coord/expireArchived.js';
+import { expireArchived, expireFeedBody, recordExpireFeed, type ExpireArchivedDeps } from '../src/coord/expireArchived.js';
 import { EXPIRE_LANE_LIVE_MARKER } from '../src/archivedExpiry.js';
 import { NotifyLog } from '../src/notifylog.js';
 import type { FleetState } from '../src/fleetstate.js';
@@ -187,6 +187,23 @@ describe('the one executor', () => {
       .toMatchObject({ kind: 'audit-failed' });
   });
 
+  it('containment-refuted comes back STUCK, and its feed row says the act stopped part-way and when it is asked again (wave 6, ruling B)', async () => {
+    const s = await rig({ script: { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK }) },
+      verb: { code: 1, stdout: JSON.stringify({ failed: 'containment-refuted', detail: 'a row outside the tree', crumb: true }) } } });
+    const out = await expireArchived(s.deps, s.req);
+    expect(out).toMatchObject({ kind: 'stuck', detail: 'containment-refuted: a row outside the tree' });
+    recordExpireFeed(s.deps, out);
+    const ev = s.coord.feedEvents(10).filter((e) => e.sessionId === ID);
+    expect(ev.map((e) => e.title)).toEqual(['archived workspace cleanup stuck']);
+    expect(ev[0]!.body).toContain('ccd stopped part-way (containment-refuted: a row outside the tree) — the session was stopped and '
+      + 'nothing further was deleted. It is listed at once, and asked again 4 hours after each failed attempt');
+    expect(ev[0]!.body, 'never the cadence the standing words retired (wave 6)').not.toContain('every four hours');
+    // Whole-branch review, item 4: the row says the cadence in the standing sentences' own words, from one place.
+    expect(ev[0]!.body, 'sooner after an answer that ends no attempt, never while held (whole-branch review, item 4)')
+      .toContain('asked again 4 hours after each failed attempt — sooner after an answer that ends no attempt, never while the workspace is held, '
+        + 'until an attempt completes, a verdict stops it for good, or the workspace is archived again.');
+  });
+
   it('a refusal at audit carries its word — in-use with the processes; a GONE word is gone', async () => {
     const inUse = [{ pid: 7, comm: 'tmux: server', cwd: '/w' }];
     const s = await rig({ script: { audit: { code: 0, stdout: auditDoc('in-use', { detail: 'process 7 …', inUse }) } } });
@@ -206,6 +223,18 @@ describe('the one executor', () => {
       const s = await rig({ script: { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK }) }, verb: { code: 1, stdout: '', stderr } } });
       expect(await expireArchived(s.deps, s.req), stderr).toMatchObject(want);
     }
+  });
+
+  it('a flock-unavailable feed row says the lane composes no cleanup on that box until the server restarts (wave 6)', async () => {
+    const flock = 'ccd: flock (util-linux) is unavailable — refusing to run the destructive verb unserialised';
+    const s = await rig({ script: { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK }) }, verb: { code: 1, stdout: '', stderr: flock } } });
+    const out = await expireArchived(s.deps, s.req);
+    expect(out).toMatchObject({ kind: 'box', word: 'flock-unavailable' });
+    expect(expireFeedBody(out)).toContain('The lane composes no cleanup on that box, for any archived workspace, until the server restarts.');
+    const lock = '/h/.cc-sessions/.reap-demo-quiet-dune.lock';
+    const l = await rig({ script: { audit: { code: 0, stdout: auditDoc('expirable', { token: TOK }) },
+      verb: { code: 1, stdout: '', stderr: `ccd: cannot open the reap lock at ${lock}` } } });
+    expect(expireFeedBody(await expireArchived(l.deps, l.req)), 'the CONTROL: lock-unopenable halts nothing').not.toContain('until the server restarts');
   });
 
   // THE STORE, RE-READ AT THE ACT (child reclamation's executor's shape, `childReclaimOutcome` steps 2 and 2a): the lane
@@ -265,5 +294,16 @@ describe('the one executor', () => {
     expect(ev.map((e) => e.title)).toEqual(['archived workspace would be cleaned up']);
     expect(ev[0]!.body).toContain('nothing was deleted');
     expect(ev[0]!.runId).toBeNull();
+  });
+
+  it('a shadow row over a STANDING entry never says nothing was deleted: an earlier attempt may have stopped part-way (wave 6)', async () => {
+    const s = await rig({ live: false });
+    const out = await expireArchived(s.deps, s.req);
+    expect(out.kind).toBe('would-expire');
+    const body = expireFeedBody(out, true);
+    expect(body).not.toContain('nothing was deleted');
+    expect(body).toContain('the cleanup is not armed (shadow), so this pass deleted nothing — but an earlier attempt may have stopped part-way, '
+      + 'so what is left on disk is not known, and its attention entry stands');
+    expect(expireFeedBody(out, false), 'the CONTROL: over no standing entry the row says so').toContain('nothing was deleted');
   });
 });

@@ -9,9 +9,9 @@ import { measureClaimant, type ReclaimDeps } from './reclaim.js';
 import { RECLAIM_PAUSE_MARKER } from './rundefs.js';
 import { LC_DIR_NAME, LC_ERRORS_NAME, type LifecycleHealth } from '../../../shared/api.js';
 import {
-  DEAD_COORDINATOR_LANE_LIVE_MARKER, deadCoordinatorBreakerFeedRow, deadCoordinatorCrash, deadCoordinatorFeedRows,
+  DEAD_COORDINATOR_LANE_LIVE_MARKER, deadCoordinatorBreakerFeedRow, deadCoordinatorBreakerSeedFeedRow, deadCoordinatorCrash, deadCoordinatorFeedRows,
   deadCoordinatorJournal, deadCoordinatorThrewFeedRow,
-  type DeadCoordinatorActOutcome, type DeadCoordinatorBreaker, type DeadCoordinatorJournal,
+  type DeadCoordinatorActOutcome, type DeadCoordinatorBreaker, type DeadCoordinatorSeedCause, type DeadCoordinatorJournal,
   type DeadCoordinatorJournalTrust, type DeadCoordinatorProgramme, type DeadCoordinatorStop,
 } from '../deadCoordinator.js';
 
@@ -50,6 +50,11 @@ export interface EndDeadCoordinatorDeps {
   tmux: ReclaimDeps['tmux'];
   notifyLog?: NotifyLog;
   journalTrust: () => Promise<{ readonly hold: string | null; readonly trust: DeadCoordinatorJournalTrust }>;
+  /** The journal's trust READ AGAIN after the claimant's measure (wave 6; review 355, F7): the mirror's health state,
+   *  its gap list and its write-error count, all SYNCHRONOUS — so this port returns no promise, and no await can sit
+   *  between the claimant's measure and the commit. Handed the early read's trust, it never trusts more
+   *  (`rereadDeadCoordinatorJournalTrust`). */
+  journalReread: (early: DeadCoordinatorJournalTrust) => { readonly hold: string | null; readonly trust: DeadCoordinatorJournalTrust };
   abandon: (runId: number, crashedId: string, stillCrashed: SweepCloseGuard['stillCrashed']) => Promise<CloseOutcome>;
   /** The lane's clock, read at the moment each re-measure measures. A re-measure NEVER takes the pass's instant: a
    *  supervisor heartbeat stamped after that instant would read "from the future", not fresh, and a RESTARTING
@@ -71,8 +76,7 @@ export interface EndDeadCoordinatorDeps {
 export async function readDeadCoordinatorJournalTrust(
   deps: Pick<EndDeadCoordinatorDeps, 'coord' | 'io' | 'cfg'>, health: LifecycleHealth | null,
 ): Promise<{ readonly hold: string | null; readonly trust: DeadCoordinatorJournalTrust }> {
-  const untrusted = (why: string, hold: boolean) =>
-    ({ hold: hold ? why : null, trust: { untrusted: why, gapGens: [], lastWriteErrorAt: null } });
+  const untrusted = journalUntrusted;
   if (health === null) return untrusted('there is no coordination store to mirror the journal into', true);
   if (health.state === 'unknown' || health.state === 'stale') return untrusted(`the lifecycle mirror is ${health.state}`, true);
   if (health.state === 'unavailable') return untrusted('the fleet box’s ccd does not journal (no lifecycle-v1)', false);
@@ -92,6 +96,39 @@ export async function readDeadCoordinatorJournalTrust(
     else if (!(health.writeErrors === null && st.reason === 'absent')) lastWriteErrorAt = 'unknown';
   }
   return { hold: null, trust: { untrusted: null, gapGens, lastWriteErrorAt } };
+}
+
+const journalUntrusted = (why: string, hold: boolean): { readonly hold: string | null; readonly trust: DeadCoordinatorJournalTrust } =>
+  ({ hold: hold ? why : null, trust: { untrusted: why, gapGens: [], lastWriteErrorAt: null } });
+
+/** THE JOURNAL'S TRUST, READ AGAIN after the claimant's measure (wave 6; review 355, F7, and wave 5 Task 6's review F1).
+ *  `readDeadCoordinatorJournalTrust` reads three things BEFORE the measure: the mirror's health state, its gap list and
+ *  the last write-error instant. The first two are synchronous, so they are read again here, with no await between this
+ *  and the commit: a mirror that turned `unknown` or `stale` during the measure's round trip is a `hold` (review 339,
+ *  F4: the anchor and the run of passes are kept), and a gap recorded since JOINS the early read's gaps. The third needs
+ *  a stat — the one await, which stays before the measure — but the COUNT behind it is the mirror's, synchronous: where
+ *  the early read saw no failure and the mirror now counts one, its instant is `unknown` here, so the claimant reads
+ *  unmeasured. It never trusts more than the early read did: an untrusted early read stays untrusted, and a count the
+ *  early read had already placed keeps its instant (a further failure on top of it is not seen before the commit). */
+export function rereadDeadCoordinatorJournalTrust(
+  coord: CoordStore, health: LifecycleHealth | null, early: DeadCoordinatorJournalTrust,
+): { readonly hold: string | null; readonly trust: DeadCoordinatorJournalTrust } {
+  if (health === null) return journalUntrusted('there is no coordination store to mirror the journal into', true);
+  if (health.state === 'unknown' || health.state === 'stale') {
+    return journalUntrusted(`the lifecycle mirror turned ${health.state} during the claimant’s measure`, true);
+  }
+  if (health.state === 'unavailable') return journalUntrusted('the fleet box’s ccd does not journal (no lifecycle-v1)', false);
+  let late: string[];
+  try {
+    late = coord.lifecycleGapGens();
+  } catch (err) {
+    return journalUntrusted(`the mirror's recorded gaps could not be read again (${err instanceof Error ? err.message : String(err)})`, false);
+  }
+  const gapGens = [...new Set([...early.gapGens, ...late])];
+  // A write failure counted since an early read that saw none (wave 6; the act-safety lens on review 355's F7).
+  const counted = early.lastWriteErrorAt === null && typeof health.writeErrors === 'number' && health.writeErrors > 0;
+  // `...early` keeps an untrusted early read untrusted, and its write-error instant, save a count that appeared since.
+  return { hold: null, trust: { ...early, gapGens, ...(counted ? { lastWriteErrorAt: 'unknown' as const } : {}) } };
 }
 
 /** Is the lane ARMED in this registry listing? The one reader of the live switch outside its definer — so the watcher,
@@ -129,7 +166,12 @@ export async function stillCrashed(deps: EndDeadCoordinatorDeps, id: string): Pr
   const journal = await deps.journalTrust();
   if (journal.hold !== null) return { kind: 'hold', why: `${journal.hold} — the act waits, and its hour stands` };
   const m = await measureClaimant({ coord: deps.coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux }, id, deps.now());
-  const c = deadCoordinatorCrash(m, deadCoordinatorJournalOf(deps.coord, id, journal.trust));
+  // The measure is the LAST await (wave 6; review 355, F7): the mirror's health and its gaps are read again after it,
+  // synchronously, so a mirror gone stale or a gap recorded during its round trip is seen, and from here to the commit
+  // nothing awaits — the revive window stays that round trip.
+  const late = deps.journalReread(journal.trust);
+  if (late.hold !== null) return { kind: 'hold', why: `${late.hold} — the act waits, and its hour stands` };
+  const c = deadCoordinatorCrash(m, deadCoordinatorJournalOf(deps.coord, id, late.trust));
   switch (c.kind) {
     case 'crashed': return null;
     case 'alive': return { kind: 'remeasured', why: `re-measured alive: ${c.why}` };
@@ -266,4 +308,14 @@ export function recordDeadCoordinatorBreaker(
   deps: Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, b: Extract<DeadCoordinatorBreaker, { tripped: true }>,
 ): void {
   recordRows(deps, b.claimants[0] ?? 'fleet', [deadCoordinatorBreakerFeedRow(b)], 'breaker');
+}
+
+/** The feed row for a pass that seeded the breaker's hold conservatively (D-4857; review 382, R2): its typed state
+ *  absent, dirty, unsealed or unreadable. Written once, by the pass that seeds, under the first claimant held (else the first of
+ *  the population, else `fleet`). */
+export function recordDeadCoordinatorBreakerSeed(
+  deps: Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, cause: DeadCoordinatorSeedCause, held: readonly string[],
+  tripped: boolean, population: readonly string[], landed: boolean,
+): void {
+  recordRows(deps, held[0] ?? population[0] ?? 'fleet', [deadCoordinatorBreakerSeedFeedRow(cause, held, tripped, landed)], 'breaker seed');
 }

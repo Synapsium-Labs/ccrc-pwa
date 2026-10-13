@@ -80,8 +80,10 @@ describe.skipIf(!MODERN_GIT)('ws-expire: the consent binds the branch (wave 5)',
     const token = expireEvalOf(h).token;              // minted over branchState=present
     const r = expireVerb(h, token, { pre: IN_THE_WINDOW(`git -C "$1" update-ref -d "refs/heads/$2" >/dev/null 2>&1`) });
     expect(r.code, r.stdout + r.stderr).toBe(1);
-    const o = JSON.parse(r.stdout) as { failed: string; detail: string };
+    const o = JSON.parse(r.stdout) as { failed: string; detail: string; crumb?: unknown };
     expect(o.failed).toBe('state-changed');
+    // Printed before the breadcrumb, so it says crumb false (workspace lifecycle wave 6, question (k)).
+    expect(o.crumb, 'printed before the breadcrumb: crumb false').toBe(false);
     expect(fs.readFileSync(path.join(h.home, 'bs-reads'), 'utf8').trim(), 'the recompute read, then the pin, and nothing after').toBe('2');
     expect(o.detail).toMatch(new RegExp(`${EXP_BRANCH} read present when the token was checked inside the lock, but absent when the pin read it again`));
     expect(eventsOf(h.home, 'expire').map((e) => e['outcome']), 'one act: its intent, then its failure').toEqual(['intent', 'failed']);
@@ -108,6 +110,26 @@ describe.skipIf(!MODERN_GIT)('ws-expire: the consent binds the branch (wave 5)',
     nothingStarted(a);
     auditsAfresh(a, token);
     expect(h.git(a.main, 'branch', '--list', EXP_BRANCH), 'the fresh consent covered the branch made in the window').toBe('');
+  }, 180_000);
+
+  it('the CONTROL with HEAD symbolic to the branch, as in every real workspace: a branch deleted in the window ends at the PIN — pin-failed, before the breadcrumb — never at the consent check (wave 6, ruling D)', () => {
+    const a = makeArchived(h);                        // HEAD stays attached: symbolic to ws/quiet-dune
+    expect(h.git(a.wt, 'symbolic-ref', 'HEAD'), 'HEAD is attached').toBe(`refs/heads/${EXP_BRANCH}`);
+    const token = expireEvalOf(h).token;              // minted over branchState=present
+    const r = expireVerb(h, token, { pre: IN_THE_WINDOW(`git -C "$1" update-ref -d "refs/heads/$2" >/dev/null 2>&1`) });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const o = JSON.parse(r.stdout) as { failed: string; detail: string; crumb?: unknown };
+    expect(o.failed, 'refused by the pin, before the consent check').toBe('pin-failed');
+    expect(o.detail).toContain(`still has ${EXP_BRANCH} checked out, but ${EXP_BRANCH} is gone from`);
+    expect(o.crumb, 'printed before the breadcrumb (wave 6, question (k))').toBe(false);
+    expect(eventsOf(h.home, 'expire').map((e) => e['outcome']), 'one act: its intent, then its failure').toEqual(['intent', 'failed']);
+    expect(h.git(a.main, 'branch', '--list', EXP_BRANCH), 'the CONTROL: the other actor did delete the branch').toBe('');
+    nothingStarted(a);
+    // Never `state-changed`: the word the server reads by itself as a restart. With the crumb, a current server audits it
+    // afresh, as every pre-breadcrumb failure (wave 6, (A)); an older ccd's document, which has no crumb, is resumable.
+    expect(parseExpireResult(EXP_ID, r.stdout, r.stderr)).toEqual({ kind: 'restart', detail: `pin-failed: ${o.detail}` });
+    expect(parseExpireResult(EXP_ID, JSON.stringify({ failed: o.failed, detail: o.detail }), ''))
+      .toEqual({ kind: 'failed', resumable: true, detail: `pin-failed: ${o.detail}` });
   }, 180_000);
 
   it('the CONTROL: a branch ALREADY ABSENT when the token was minted still expires, its work kept in the attic', () => {

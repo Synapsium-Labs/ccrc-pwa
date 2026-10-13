@@ -724,13 +724,11 @@ instead, and the word is only the fallback for a document without it (§5.9, §7
 **`crumb`: whether a failure was printed past the breadcrumb.** The failed document carries an additive key
 `crumb`, `false` before the act's breadcrumb was written and `true` once it was, which tells apart the words that are
 printed both before it and after it. `ws-reclaim` sets it itself: `true` on a resumed arm, `false` on a fresh arm, and `true` from the moment its
-breadcrumb is written; the shared tail sets `true` for both verbs, because every failure it prints is past a
+breadcrumb is written, and `ws-expire` says it the same way since workspace lifecycle wave 6; the shared tail sets `true` for both verbs, because every failure it prints is past a
 breadcrumb. `true` says the breadcrumb was written, never that it stands now (a `purge-*` failure is printed after the
 purge took it). The key is absent where whether an act had started is not known: a reclaim whose breadcrumb stands
-but could not be read; `ws-expire`'s own pre-breadcrumb documents, which workspace lifecycle's locked region prints
-and which carry no key; `ws-expire`'s resumed arm's `probe-unmeasured`, printed while its `expire:` breadcrumb stands
-(reclaim says `crumb` true on the same arm), which carries no key either, because the code that prints it is
-`_ws_expire_locked`'s and this wave leaves it alone; and every `ws-collect` document, since a collection has no breadcrumb. A reader takes
+but could not be read, and likewise an expiry whose `expire:` breadcrumb stands but could not be read; and every
+`ws-collect` document, since a collection has no breadcrumb. A reader takes
 absence as unmeasured, never as either value, and a document from an older ccd omits the key in the same way. The
 key rides a global that the document's printer reads, not an argument threaded through every failure printer.
 `ws-audit --reclaim` already prints `resume`, and is unchanged.
@@ -1799,12 +1797,14 @@ approved on a narrow one.
      server when the document carries no `crumb` key, so the feed says the box resumes where it stopped of an act that
      is retried from the start. Wave 8's reader of `crumb` (§5.9) tells the two cases apart for a ccd that prints it, so
      this now holds only for an older ccd, or a breadcrumb that stood but could not be read. `ws-expire`'s pin phase
-     prints the same two words before its own breadcrumb, with no key, and its reader is workspace lifecycle's.
+     prints the same two words before its own breadcrumb, and since workspace lifecycle wave 6 it says `crumb: false`
+     there, so an expiry's pin-phase failure reads as not resumable; an older ccd omits the key there too.
    - A `probe-unmeasured` printed on the resumed arm, with an earlier attempt's breadcrumb standing, reads not resumable
      to the server when the document carries no `crumb` key. The locked recomputation prints it for any unmeasured
      verdict, and on a resume that verdict can come from the resume's own reads (an unreadable tombstone, for one). The
      feed then says the act is retried from the start, but the box's next attempt resumes from that breadcrumb and
-     completes. Where ccd prints `crumb`, it says true on the resumed arm and the server reads it resumable (§5.9).
+     completes. Where ccd prints `crumb`, it says true on the resumed arm and the server reads it resumable (§5.9);
+     `ws-expire`'s resumed arm says `crumb: true` since workspace lifecycle wave 6, and an older ccd still omits it.
      - The audit path reaches it too, and first. `ws-audit --reclaim` runs before the verb and goes through the same
        `_ws_reclaim_resume_eval`. Over a standing breadcrumb with an unreadable tombstone it exits 1 with
        `{"resume":…,"verdict":"unmeasured"}` and journals `probe-unmeasured`. Wave 8 reads that document (§5.9): a
