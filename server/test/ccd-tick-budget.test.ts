@@ -25,6 +25,7 @@ import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { mkTmp } from './tmpHelpers.js';
 import {
   FIXTURES, TICK_RUN_N, plantFixture, plantShims, countTicks, loopSleeps, commandWords, unshimmedExternals,
   supervisePrelude, fixtureScreenFile, type FixtureName, type ShimOpts, type TickCount,
@@ -43,6 +44,7 @@ const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
   cooldown: { forks: 100, execs: 40 },
   fable: { forks: 162, execs: 72 },
   leaving: { forks: 414, execs: 247 },
+  'fable-leaving': { forks: 396, execs: 232 },
 };
 
 /** `_plat_timeout`'s `-k` probe, per tick inside the loop. On `main` it is 1 on
@@ -162,6 +164,68 @@ describe(`the supervise tick's fork budget: the real loop, ${N} ticks per fixtur
     console.log(['forks/execs/tmux/kprobe/date per tick', ...rows].join('\n'));
     expect(rows).toHaveLength(FIXTURES.length);
   }, 600_000);
+});
+
+// THE PARSER'S OWN ROWS: written run files, no spawn. Each pins a case no
+// fixture reaches today, so the live suite alone could not see it break.
+describe('the parser reads what the trace says ran, and which sleep ended a tick', () => {
+  const plant = (xtrace: string[], log: string[]): string => {
+    const d = mkTmp('ccrc-tick-parser-');
+    fs.writeFileSync(path.join(d, '.xtrace'), `${xtrace.join('\n')}\n`);
+    fs.writeFileSync(path.join(d, '.tick-shims.log'), log.map((l) => `${l}\n`).join(''));
+    return d;
+  };
+
+  it('sees through `command` and `exec` to the program they run', () => {
+    const home = plant([
+      '+100:_x: command stat .',
+      '+100:_x: command -- stat -f %m .',
+      '+100:_x: command -v stat',
+      '+100:_x: command -V tmux',
+      '+100:_x: command grep -c x',
+      '+100:_x: command printf x',
+      '+100:_x: command -p grep -c x',
+      '+100:_x: command _x_fn',
+      '++101:_x: exec stat .',
+      '++101:_x: exec -a name sort -n',
+      '++101:_x: exec grep -c x',
+      '++101:_x: exec printf x',
+      '+100:_x: exec',
+    ], []);
+    const types: Record<string, string> = {
+      command: 'builtin', exec: 'builtin', printf: 'builtin', stat: 'file', grep: 'file', sort: 'file', tmux: 'file',
+      _x_fn: 'function',
+    };
+    expect(unshimmedExternals(home, (w) => types[w] ?? '').sort()).toEqual([
+      'command -p grep (a default PATH, past every shim)',
+      'command _x_fn (type -t: function, which `command` skips)',
+      'command stat',
+      'exec sort',
+      'exec printf (type -t: builtin; `exec` runs a program)',
+      'exec stat',
+    ].sort());
+  });
+
+  // A tick ends where the LOOP slept. The sleep shim cannot see which function
+  // forked it, so a helper's in-shell `sleep` advances the counter too; the
+  // trace can see it, and the run must stop there and say so.
+  const loop = [
+    '+100:: cmd_ensure',
+    '+100:cmd_supervise: local beat=0 unknown_run=0 tick=5 t0 spent',
+    '++300:cmd_supervise: date +%s',
+    '+300: @shim date',
+  ];
+  const loopSleep = ['+100:cmd_supervise: sleep 5', '+201: @shim sleep', '+201: @tick 1'];
+  it('cuts a tick at the loop\'s own sleep', () => {
+    const home = plant([...loop, ...loopSleep], ['0 300 100 date +%s', '0 201 100 sleep 5']);
+    expect(countTicks(home, 100).map(({ tick, forks, execs, date }) => ({ tick, forks, execs, date })))
+      .toEqual([{ tick: 0, forks: 0, execs: 0, date: 0 }, { tick: 1, forks: 2, execs: 2, date: 1 }]);
+  });
+  it('refuses a tick a helper\'s in-shell sleep ended, naming the helper', () => {
+    const home = plant([...loop, '+100:_auto_stale_check: sleep 0', '+200: @shim sleep', '+200: @tick 1'],
+      ['0 300 100 date +%s', '0 200 100 sleep 0']);
+    expect(() => countTicks(home, 100)).toThrow(/tick 1 .*`_auto_stale_check`/);
+  });
 });
 
 // THE REAL-TMUX VARIANT (plan Task 1 Step 6): the fake tmux is faithful for

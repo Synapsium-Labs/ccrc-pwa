@@ -42,7 +42,11 @@
 // printed and never held to the budget. Tick k ends where the loop's own `sleep`
 // advanced the counter. The sleep shim advances `.tick-n` only when its parent
 // is the supervisor itself, and says so with a `@tick` marker; a `sleep`
-// anywhere else is an exec and advances nothing.
+// anywhere else is an exec and advances nothing. The shim cannot see WHICH
+// function of the supervisor forked it, so a helper's in-shell `sleep` (the
+// route chain's keystroke pacing) would advance the counter too. `PS4` names
+// the function on every traced line, and the parser refuses a `@tick` whose
+// sleep was not traced in `cmd_supervise`, naming the function that ran it.
 //
 // THE HEARTBEAT IS CARVED OUT. The loop stamps `.supervised` when its beat, five
 // seconds a tick plus the REAL seconds each tick spent, reaches 30. Four ticks
@@ -57,9 +61,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 export type FixtureName =
-  'idle-home' | 'busy' | 'narrow' | 'away-over-ceiling' | 'hard-blocked' | 'cooldown' | 'fable' | 'leaving';
+  'idle-home' | 'busy' | 'narrow' | 'away-over-ceiling' | 'hard-blocked' | 'cooldown' | 'fable' | 'leaving'
+  | 'fable-leaving';
 export const FIXTURES: readonly FixtureName[] = [
   'idle-home', 'busy', 'narrow', 'away-over-ceiling', 'hard-blocked', 'cooldown', 'fable', 'leaving',
+  'fable-leaving',
 ];
 
 /** N: the tmux shim answers `has-session` live until the loop has slept N
@@ -102,11 +108,13 @@ const FX_DIR = '.tick-fx';
  *  It records the supervisor's pid for the sleep shim, opens the xtrace O_APPEND
  *  on a descriptor bash picks (`{xfd}`, at least 10: ccd itself uses 3, 4, 6, 7,
  *  8 and 9), and stubs only the pre-loop's `cmd_ensure` and `_svc_enable`, as
- *  `ccd-route-tick.test.ts`'s `runSupervise` does. `PS4` puts the pid on every
- *  traced line; its `+` repeats once per nesting level. */
+ *  `ccd-route-tick.test.ts`'s `runSupervise` does. `PS4` puts the pid and the
+ *  running function (empty at top level) on every traced line, as `+<pid>:<fn>:
+ *  `, and its `+` repeats once per subshell level; a function call adds none.
+ *  Both expand in the shell, with no fork. */
 export function supervisePrelude(): string {
   return `printf '%s' "$$" > "$HOME/${MAIN_PID}"; exec {xfd}>>"$HOME/${XTRACE}"; BASH_XTRACEFD=$xfd; `
-    + `PS4='+\${BASHPID}: '; set -x; cmd_ensure() { :; }; _svc_enable() { :; }; `;
+    + `PS4='+\${BASHPID}:\${FUNCNAME[0]-}: '; set -x; cmd_ensure() { :; }; _svc_enable() { :; }; `;
 }
 
 /** `name` as `dirs` resolve it: the first executable regular file. What
@@ -195,7 +203,8 @@ exec "$@"
 `;
 
 /** The loop's sleep advances the tick and costs no time; any other sleep is an
- *  exec and nothing more. "The loop's" means forked by the supervisor itself. */
+ *  exec and nothing more. "The loop's" means forked by the supervisor itself,
+ *  which a helper's in-shell sleep also is: `windows` catches that one (header). */
 const SLEEP = `
 __m=; read -r __m < "$HOME/${MAIN_PID}" 2>/dev/null
 if [ -n "$__m" ] && [ "$PPID" = "$__m" ]; then
@@ -288,6 +297,9 @@ interface Shape {
   five: Readonly<Partial<Record<string, number>>>;
   lastswapAgo?: number;
   sweep?: boolean;
+  /** The sweep's Fable share by lane, as a fraction; a lane not named is at
+   *  0.12, under FABLE_SHARE_CEILING_PCT. */
+  share?: Readonly<Partial<Record<string, number>>>;
   /** `statusUpdatedAt`, seconds after the plant: a turn that has not been quiet
    *  for SWAP_CEIL_QUIET, however long the run takes. Default: ten minutes
    *  before the plant. */
@@ -316,6 +328,14 @@ const SHAPES: Readonly<Record<FixtureName, Shape>> = {
   // the fixture would not be steady.
   leaving: { wrapper: 'claude-b', screen: 'idle', width: 200, status: 'idle', cls: 'opus',
     five: { [HOME_LANE]: CEILING, 'claude-b': CEILING }, statusAt: 3600 },
+  // `fable` and `leaving` together, the shape that makes `_share_pct` repeat
+  // inside ONE `_swap_target` call (tick-diet spec §7.2(b)). Away, every lane
+  // under the five-hour ceiling, and home and the current lane over the Fable
+  // share ceiling: home's stay gate reads home's share, the current lane's reads
+  // its own, and the candidate loop reads home's AGAIN on its way to a lane with
+  // room. Stood down by the same quiet turn as `leaving`.
+  'fable-leaving': { wrapper: 'claude-b', screen: 'idle', width: 200, status: 'idle', cls: 'fable', five: {},
+    sweep: true, share: { [HOME_LANE]: 0.5, 'claude-b': 0.5 }, statusAt: 3600 },
 };
 
 const PANE_PID = 4242;
@@ -373,7 +393,7 @@ export function plantFixture(home: string, id: string, name: FixtureName, opts: 
     const dir = path.join(reg, 'usage', 'sweep');
     fs.mkdirSync(dir, { recursive: true });
     const perAccount = Object.fromEntries([HOME_LANE, ...OTHER_LANES]
-      .map((lane) => [lane, { fableShare: { estimate: 0.12 } }]));
+      .map((lane) => [lane, { fableShare: { estimate: s.share?.[lane] ?? 0.12 } }]));
     fs.writeFileSync(path.join(dir, 'latest.json'), JSON.stringify({
       finishedAt: new Date(now * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z'), perAccount,
     }, null, 2));
@@ -393,7 +413,7 @@ export function fixtureScreenFile(home: string): string { return path.join(home,
 // ── the parser ──────────────────────────────────────────────────────────────
 
 type Ev =
-  | { kind: 'trace'; pid: number; text: string }
+  | { kind: 'trace'; pid: number; fn: string; text: string }
   | { kind: 'shim'; pid: number; name: string }
   | { kind: 'tick'; pid: number; n: number };
 interface ShimRec { tick: number; pid: number; ppid: number; name: string; args: string }
@@ -403,14 +423,14 @@ function readEvents(home: string): Ev[] {
   if (!fs.existsSync(p)) throw new Error('tick budget: the run wrote no xtrace');
   const out: Ev[] = [];
   for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
-    const m = /^\++(\d+): (.*)$/.exec(line);
+    // A shim's marker is `+<pid>: @…`; a traced line is `+<pid>:<fn>: …`.
+    const sm = /^\++(\d+): @shim (\S+)$/.exec(line);
+    if (sm) { out.push({ kind: 'shim', pid: Number(sm[1]), name: sm[2]! }); continue; }
+    const tm = /^\++(\d+): @tick (\d+)$/.exec(line);
+    if (tm) { out.push({ kind: 'tick', pid: Number(tm[1]), n: Number(tm[2]) }); continue; }
+    const m = /^\++(\d+):(\S*?): (.*)$/.exec(line);
     if (!m) continue;   // a continuation of a traced word that held a newline
-    const pid = Number(m[1]); const text = m[2]!;
-    const sm = /^@shim (\S+)$/.exec(text);
-    if (sm) { out.push({ kind: 'shim', pid, name: sm[1]! }); continue; }
-    const tm = /^@tick (\d+)$/.exec(text);
-    if (tm) { out.push({ kind: 'tick', pid, n: Number(tm[1]) }); continue; }
-    out.push({ kind: 'trace', pid, text });
+    out.push({ kind: 'trace', pid: Number(m[1]), fn: m[2]!, text: m[3]! });
   }
   return out;
 }
@@ -427,6 +447,8 @@ function readShimLog(home: string): ShimRec[] {
 
 interface Window { evs: Ev[]; recs: ShimRec[]; beatEvs: Ev[]; beatRecs: ShimRec[] }
 
+/** The function whose own `sleep` ends a tick: the loop. */
+const LOOP_FN = 'cmd_supervise';
 const LOOP_START = /^local beat=0 unknown_run=0 tick=/;
 const BEAT_TEST = /^\(\(\s*beat >= [0-9A-Z_]+\s*\)\)$/;
 
@@ -443,7 +465,21 @@ function windows(home: string, mainPid: number): Window[] {
       + 'the run never reached the loop, or the loop changed shape and this anchor must follow it');
   }
   const cuts = [0, start];
-  evs.forEach((e, i) => { if (e.kind === 'tick' && i > start) cuts.push(i + 1); });
+  evs.forEach((e, i) => {
+    if (e.kind !== 'tick' || i <= start) return;
+    // The supervisor waits on the sleep it forked, so its last traced line
+    // before the marker is that sleep.
+    let j = i - 1;
+    while (j >= 0 && !(evs[j]!.kind === 'trace' && evs[j]!.pid === mainPid)) j--;
+    const s = evs[j];
+    if (!s || s.kind !== 'trace' || s.fn !== LOOP_FN || !/^sleep( |$)/.test(s.text)) {
+      const at = s?.kind === 'trace' ? `\`${s.text.slice(0, 80)}\`, in \`${s.fn || '(top level)'}\`` : 'missing';
+      throw new Error(`tick budget: tick ${e.n} was ended by a sleep that is not the loop's own: the supervisor's `
+        + `last traced line before it is ${at}. The sleep shim advances on any sleep the supervisor forks; a `
+        + 'fixture reached a helper\'s in-shell sleep, so re-shape it or teach the shim that sleep');
+    }
+    cuts.push(i + 1);
+  });
   cuts.push(evs.length);
   const byPid = new Map<number, ShimRec[]>();
   for (const r of readShimLog(home)) {
@@ -513,55 +549,123 @@ export function loopSleeps(home: string): number {
   return readEvents(home).filter((e) => e.kind === 'tick').length;
 }
 
-/** The argv of every exec in window `w`, for a failure message. */
-export function execsIn(home: string, mainPid: number, w: number): string[] {
-  return windows(home, mainPid)[w]?.recs.map((r) => `${r.name} ${r.args}`.trim()) ?? [];
-}
-
 /** Words xtrace prints at the head of a line that are syntax, not commands:
  *  `(( … ))`, a `for`/`select` header and a `case` head. */
 const SYNTAX = new Set(['((', 'for', 'select', 'case']);
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/;
+
+/** The first `max` words of a traced line, quotes removed: xtrace single-quotes
+ *  a word that needs it and writes an embedded quote as `'\''`. */
+function traceWords(text: string, max: number): string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (out.length < max) {
+    while (text[i] === ' ' || text[i] === '\t') i++;
+    if (i >= text.length) break;
+    let w = '';
+    while (i < text.length && text[i] !== ' ' && text[i] !== '\t') {
+      const c = text[i]!;
+      if (c === "'") {
+        const e = text.indexOf("'", i + 1);
+        w += e < 0 ? text.slice(i + 1) : text.slice(i + 1, e);
+        i = e < 0 ? text.length : e + 1;
+      } else if (c === '\\' && i + 1 < text.length) {
+        w += text[i + 1]; i += 2;
+      } else {
+        w += c; i++;
+      }
+    }
+    out.push(w);
+  }
+  return out;
+}
+
+/** How a traced command word was reached. `command X` runs X skipping
+ *  functions; `command -p X` runs X from a default PATH, past every shim, and
+ *  bash hashes the path it found, so the name's later plain runs skip the shim
+ *  too (measured, bash 5.3); `exec X` replaces the shell with the program X,
+ *  whatever `type -t` says of the name. */
+type Via = '' | 'command' | 'command -p' | 'exec';
+interface Traced { word: string; via: Via }
 
 /** A traced simple command's command word, or null for an assignment line
- *  (bash traces each prefix assignment on a line of its own, then the command). */
-function commandWord(text: string): string | null {
-  let w: string;
-  if (text.startsWith("'")) {
-    const e = text.indexOf("'", 1);
-    w = e < 0 ? text.slice(1) : text.slice(1, e);
-  } else {
-    w = text.split(/[ \t]/, 1)[0] ?? '';
+ *  (bash traces each prefix assignment on a line of its own, then the command)
+ *  and for syntax. `command` and `exec` are builtins that run the NEXT word, so
+ *  the word is that one. `command -v`/`-V` and a bare `exec` (redirections only)
+ *  run nothing, and the word is the builtin's own. */
+function traced(text: string): Traced | null {
+  const ws = traceWords(text, 16);
+  const first = ws[0];
+  if (first === undefined || first === '' || ASSIGNMENT.test(first) || SYNTAX.has(first)) return null;
+  let k = 0;
+  let via = '' as Via;
+  while (ws[k] === 'command' || ws[k] === 'exec') {
+    const b = ws[k]!;
+    let j = k + 1; let lookup = false; let dflt = false;
+    for (; j < ws.length && /^-./.test(ws[j]!); j++) {
+      const o = ws[j]!;
+      if (o === '--') { j++; break; }
+      if (b === 'command') { lookup ||= /[vV]/.test(o); dflt ||= o.includes('p'); continue; }
+      if (o.includes('a')) j++;   // exec -a NAME
+    }
+    if (lookup || j >= ws.length) return { word: b, via };
+    via = b === 'exec' || via === 'exec' ? 'exec' : dflt || via === 'command -p' ? 'command -p' : 'command';
+    k = j;
   }
-  if (w === '' || /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/.test(w)) return null;
-  return w;
+  return { word: ws[k]!, via };
 }
 
-/** Every distinct command word the run traced, pre-loop and tail included, for
- *  the caller to classify in one shell. */
-export function commandWords(home: string): string[] {
-  const out = new Set<string>();
+/** Every distinct traced command, pre-loop and tail included. */
+function tracedCommands(home: string): Traced[] {
+  const out = new Map<string, Traced>();
   for (const e of readEvents(home)) {
     if (e.kind !== 'trace') continue;
-    const w = commandWord(e.text);
-    if (w !== null && !SYNTAX.has(w)) out.add(w);
+    const t = traced(e.text);
+    if (t !== null) out.set(`${t.via}\0${t.word}`, t);
   }
-  return [...out].sort();
+  return [...out.values()];
 }
 
-/** Every traced command word that ran an external program with no shim: the
- *  execs this count would miss. `typeOf` answers `type -t` from a shell that
- *  sourced ccd under the run's own PATH. A word holding a slash ran by path,
- *  past every shim; a word `type -t` cannot classify is reported too, with what
- *  it said. */
+/** Every distinct command word the run traced, for the caller to classify in
+ *  one shell. */
+export function commandWords(home: string): string[] {
+  return [...new Set(tracedCommands(home).map((t) => t.word))].sort();
+}
+
+/** Every traced command that ran an external program with no shim: the execs
+ *  this count would miss. `typeOf` answers `type -t` from a shell that sourced
+ *  ccd under the run's own PATH.
+ *  - A word holding a slash ran by path, past every shim.
+ *  - A word `command -p` ran came from a default PATH, past every shim too,
+ *    unless it is a builtin.
+ *  - A word `exec` ran is a program whatever its `type -t` says, so only a shim
+ *    passes it.
+ *  - A word `command` ran whose `type -t` is `function` is reported: `command`
+ *    skips the function, and what ran in its place is unread.
+ *  - A word `type -t` cannot classify is reported, with what it said. */
 export function unshimmedExternals(home: string, typeOf: (word: string) => string): string[] {
   const shimmed = new Set([...PASSTHROUGH_SHIMS, ...ANSWERING_SHIMS]);
   const out: string[] = [];
-  for (const w of commandWords(home)) {
-    if (w.includes('/')) { out.push(w); continue; }
+  for (const { word: w, via } of tracedCommands(home)) {
+    const label = via ? `${via} ${w}` : w;
+    if (w.includes('/')) { out.push(label); continue; }
     const t = typeOf(w);
+    if (via === 'command -p') {
+      if (t !== 'builtin') out.push(`${label} (a default PATH, past every shim)`);
+      continue;
+    }
+    if (via === 'exec') {
+      if (shimmed.has(w)) continue;
+      out.push(t === 'file' ? label : `${label} (type -t: ${t || 'nothing'}; \`exec\` runs a program)`);
+      continue;
+    }
+    if (via === 'command' && t === 'function') {
+      out.push(`${label} (type -t: function, which \`command\` skips)`);
+      continue;
+    }
     if (t === 'function' || t === 'builtin' || t === 'keyword') continue;
     if (t === 'file' && shimmed.has(w)) continue;
-    out.push(t === 'file' ? w : `${w} (type -t: ${t || 'nothing'})`);
+    out.push(t === 'file' ? label : `${label} (type -t: ${t || 'nothing'})`);
   }
   return out;
 }
