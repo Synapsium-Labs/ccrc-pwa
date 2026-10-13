@@ -345,7 +345,7 @@ async function globByUuid(
  * `checkPath`'s `.claude*` glob already permits, so the uuid search works
  * remotely with NO widening of the agent read whitelist.
  */
-async function ladder(io: FleetIO, o: ResolveOpts): Promise<TranscriptResolution> {
+async function ladder(io: FleetIO, o: ResolveOpts): Promise<Laddered> {
   const exact: { rung: TranscriptRung; path: string }[] = [];
   const add = (rung: TranscriptRung, p: string): void => {
     // Dedupe keeps the FIRST rung to claim a path, which is what makes a dead
@@ -370,15 +370,34 @@ async function ladder(io: FleetIO, o: ResolveOpts): Promise<TranscriptResolution
   pair('live-resolved', 'live-raw', o.dir, liveResolved);
   pair('registry-resolved', 'registry-raw', o.registryWorkdir, regResolved);
 
+  // The REGISTRY workdir's two spellings as directories, resolved first —
+  // `ccd`'s `_ci_addrs`, address for address — each wearing the rung the
+  // dedupe above gave its path (a dead session's registry pair IS its live
+  // pair). Where `walk` looks for the successor of a file that sits in one
+  // of them (D-4949). Remote mode has no resolver, so there it is the raw
+  // spelling alone, exactly as for the head.
+  const regPaths = [
+    ...(regResolved === null ? [] : [transcriptPath(o.configDir, regResolved, o.uuid)]),
+    transcriptPath(o.configDir, o.registryWorkdir, o.uuid),
+  ];
+  const homes: Home[] = [];
+  for (const p of regPaths) {
+    const c = exact.find((e) => e.path === p);
+    if (c !== undefined && !homes.some((h) => h.dir === path.dirname(p))) {
+      homes.push({ rung: c.rung, dir: path.dirname(p) });
+    }
+  }
+  const at = (answer: TranscriptResolution): Laddered => ({ answer, homes });
+
   for (const c of exact) {
     if ((await io.stat(c.path)) !== null) {
-      return { kind: 'found', path: c.path, rung: c.rung, account: null, uuid: o.uuid };
+      return at({ kind: 'found', path: c.path, rung: c.rung, account: null, uuid: o.uuid });
     }
   }
 
   const own = await globByUuid(io, o.configDir, o.uuid, null, 0, null);
   const bestOwn = pickNewest(own.hits);
-  if (bestOwn !== null) return { kind: 'found', path: bestOwn.path, rung: 'uuid-glob', account: null, uuid: o.uuid };
+  if (bestOwn !== null) return at({ kind: 'found', path: bestOwn.path, rung: 'uuid-glob', account: null, uuid: o.uuid });
 
   // RULING (review round 1, Important #2; cost claim corrected in round 2,
   // item 1): rung 6 requires rung 5 to have actually RUN, not merely to have
@@ -414,7 +433,7 @@ async function ladder(io: FleetIO, o: ResolveOpts): Promise<TranscriptResolution
   // consumer of `TranscriptResolution` to buy back a window that closes on
   // its own the moment the own account can be measured again.
   if (!own.complete) {
-    return { kind: 'fallback', path: transcriptPath(o.configDir, o.dir, o.uuid), complete: false };
+    return at({ kind: 'fallback', path: transcriptPath(o.configDir, o.dir, o.uuid), complete: false });
   }
 
   // Pooled across accounts, newest winning globally — M2's five copies of one
@@ -433,12 +452,22 @@ async function ladder(io: FleetIO, o: ResolveOpts): Promise<TranscriptResolution
   }
   const bestForeign = pickNewest(pooled);
   if (bestForeign !== null) {
-    return {
+    return at({
       kind: 'found', path: bestForeign.path, rung: 'foreign-glob', account: bestForeign.account, uuid: o.uuid,
-    };
+    });
   }
 
-  return { kind: 'fallback', path: transcriptPath(o.configDir, o.dir, o.uuid), complete };
+  return at({ kind: 'fallback', path: transcriptPath(o.configDir, o.dir, o.uuid), complete });
+}
+
+/** One directory a successor may live in, and the rung an answer there wears. */
+interface Home { readonly rung: TranscriptRung; readonly dir: string }
+
+/** The ladder's answer for the requested uuid, plus the session's OWN
+ *  registry-workdir directories, one per spelling (`walk`, D-4949). */
+interface Laddered {
+  readonly answer: TranscriptResolution;
+  readonly homes: readonly Home[];
 }
 
 /** How many `continued-in` hops one resolution may walk. A fork of a fork is
@@ -524,13 +553,27 @@ interface Walked {
  * `foreign-glob`, another account) — while `ccd`, which looks only at its own
  * workdir's addresses (`_ci_transcript_path`), never moved the registry, so
  * the two authorities disagreed for good and the doctor WARNed for ever. A
- * followed successor therefore carries its predecessor's `rung` and `account`:
- * it was reached through that address and no other, and a `foreign-glob` head
- * keeps its banner. HONEST LIMIT: `ccd` also accepts the successor under the
- * OTHER spelling of a symlinked workdir, which this does not. If a fork ever
- * wrote there, this walk declines (names it, keeps looking) and `ccd`'s
- * registry move is what heals the stream — as a continuation, not a reset
- * (`declinedTo`).
+ * successor found beside its predecessor therefore carries the predecessor's
+ * `rung` and `account`: it was reached through that address and no other, and
+ * a `foreign-glob` head keeps its banner.
+ *
+ * AND THE OTHER SPELLING OF THE SESSION'S OWN WORKDIR (fix-forward on
+ * D-4949). A symlinked workdir has two project dirs, one per munge, and
+ * `ccd`'s `_ci_addrs` looks for a successor in BOTH: "the raw spelling is
+ * sometimes the one Claude Code actually wrote under". The sibling-only rule
+ * did not, so a fork written under the other spelling was declined by the
+ * server alone — and with `ccd` not moving the registry (not deployed yet, or
+ * latched) the chat stayed on the pre-fork file for good, re-laddering every
+ * 30 s: a regression against the full-ladder follow it replaced. So a file
+ * that sits in one of the REGISTRY workdir's two project dirs looks for its
+ * successor in both, resolved spelling first — `ccd`'s `_ci_addrs`, address
+ * for address, under the session's own config dir, and nowhere else: not the
+ * live cwd's project dir (`ccd` never looks there), not the uuid glob, not
+ * another account. Any other file — a uuid-glob or foreign-glob head, or one
+ * under the live cwd's munge — keeps to its own directory, where `ccd`, which
+ * cannot see such a head at all, never follows it either. A successor wears
+ * the rung of the address it was found at. `continued-in-successor-parity.test.ts`
+ * plants both spellings, and a successor at both.
  *
  * A DECLINED FOLLOW SAYS SO, AND NAMES WHAT IT DECLINED (`declinedTo`, see the
  * type). Three of the four ways this walk stops short are conditions that HEAL
@@ -572,7 +615,7 @@ export async function resolveTranscript(io: FleetIO, o: ResolveOpts): Promise<Tr
 
 /** `resolveTranscript`, with the stamp `TranscriptResolver` needs (D-4948). */
 async function walk(io: FleetIO, o: ResolveOpts): Promise<Walked> {
-  const head = await ladder(io, o);
+  const { answer: head, homes } = await ladder(io, o);
   // A `fallback` has no file to read a marker from.
   if (head.kind !== 'found') return { answer: head, stat: null };
   let best: TranscriptResolution & { kind: 'found' } = head;
@@ -587,17 +630,80 @@ async function walk(io: FleetIO, o: ResolveOpts): Promise<Walked> {
     const next = tail.uuid;
     const declined: Walked = { answer: { ...best, declinedTo: next }, stat: tail.stat };
     if (visited.includes(next)) return declined;
-    const sibling = path.join(path.dirname(best.path), `${next}.jsonl`);
-    const sst = await io.statMeasured(sibling);
-    if (!sst.ok || sst.size === 0) return declined;
+    const own = path.dirname(best.path);
+    const places: readonly Home[] = homes.some((h) => h.dir === own) ? homes : [{ rung: best.rung, dir: own }];
+    const succ = await successorOf(io, places, next);
+    if (succ === null || succ.stat.size === 0) return declined;
     visited.push(next);
     best = {
-      kind: 'found', path: sibling, rung: best.rung, account: best.account, uuid: next,
+      kind: 'found', path: succ.path, rung: succ.place.rung, account: best.account, uuid: next,
       followedFrom: visited.slice(0, -1),
     };
-    stat = { size: sst.size, mtimeMs: sst.mtimeMs };
+    stat = succ.stat;
   }
   return { answer: best, stat };
+}
+
+/**
+ * Where `next` lives: the FIRST of `places` that holds `<next>.jsonl`, or
+ * null. `ccd`'s `_ci_extant` answers the same way — the first address that
+ * IS a file, and the caller then declines it if it is empty (D-4949).
+ *
+ * `walk` passes, for a predecessor in one of the registry workdir's two
+ * project dirs, both of them in `ccd`'s order, resolved first — so a
+ * successor written at BOTH is the copy `ccd` opens, and the one the ladder
+ * itself answers once the registry names it; for any other predecessor, its
+ * own directory alone. A stat that FAILS — not "absent",
+ * unreadable — stops the search with null, never a guess at the next
+ * address: nobody knows whether the fork is there, and a decline is the
+ * keep-looking answer (`declinedTo`), retried on the back-off, where
+ * answering another spelling's copy would pick between two files on a blip.
+ */
+async function successorOf<P extends { readonly dir: string }>(
+  io: FleetIO, places: readonly P[], next: string,
+): Promise<{ place: P; path: string; stat: FileStat } | null> {
+  for (const place of places) {
+    const p = path.join(place.dir, `${next}.jsonl`);
+    const st = await io.statMeasured(p);
+    if (st.ok) return { place, path: p, stat: { size: st.size, mtimeMs: st.mtimeMs } };
+    if (st.reason !== 'absent') return null;
+  }
+  return null;
+}
+
+/**
+ * Is `target` DOWNSTREAM of `from` — named by its `continued-in` marker, or
+ * by the marker of a file that marker leads to, within the hop bound? The
+ * stream's last witness when the registry's uuid moves and nothing it already
+ * holds explains the move (`sessionws.ts`'s `tick`, D-4947): the marker is
+ * Claude Code's own statement, and the registry may have read it before the
+ * stream did — on a delayed tick, or two `ccd` quiescences in one gap.
+ *
+ * Each next file is looked for beside the one that named it, then in `dirs`
+ * (the new answer's own directory: a chain that crossed to the other
+ * spelling ends there). Anything unmeasured answers false — "not shown",
+ * which costs the caller the divider it always sent, never a wrong file:
+ * this only ever decides a frame, not what is read.
+ */
+export async function continuesInto(
+  io: FleetIO, from: { readonly path: string; readonly uuid: string }, target: string, dirs: readonly string[],
+): Promise<boolean> {
+  let file = from.path;
+  let uuid = from.uuid;
+  const seen = [uuid];
+  for (let hop = 0; hop < MAX_CONTINUATION_HOPS; hop += 1) {
+    const tail = await continuationAt(io, file, uuid);
+    if (tail.kind !== 'next') return false;
+    if (tail.uuid === target) return true;
+    if (seen.includes(tail.uuid)) return false;
+    seen.push(tail.uuid);
+    const here = path.dirname(file);
+    const succ = await successorOf(io, [here, ...dirs.filter((d) => d !== here)].map((dir) => ({ dir })), tail.uuid);
+    if (succ === null) return false;
+    file = succ.path;
+    uuid = tail.uuid;
+  }
+  return false;
 }
 
 /** How long a "keep looking" answer — a fallback, a foreign-account hit, a

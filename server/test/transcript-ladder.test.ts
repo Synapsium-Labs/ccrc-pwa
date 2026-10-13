@@ -14,7 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { localIO, type FleetIO } from '../src/io.js';
 import {
-  collapseHits, MAX_CONTINUATION_HOPS, MEMO_MAX, pickNewest, resolveTranscript, RESOLVER_BACKOFF_MS,
+  collapseHits, continuesInto, MAX_CONTINUATION_HOPS, MEMO_MAX, pickNewest, resolveTranscript, RESOLVER_BACKOFF_MS,
   RUNG_ORDER, rungRank, transcriptPath, TranscriptResolver, type GlobHit, type ResolveOpts,
 } from '../src/transcript/resolve.js';
 import { CONTINUATION_TAIL_BYTES } from '../src/transcript/parse.js';
@@ -1243,5 +1243,135 @@ describe('the successor is the predecessor\'s sibling, never a search (D-4949)',
     expect(r).toEqual({
       kind: 'found', path: succ, rung: 'foreign-glob', account: 'lane-b', uuid: B, followedFrom: [A],
     });
+  });
+
+  // The OTHER SPELLING (fix-forward on D-4949). A symlinked workdir has two
+  // project dirs, one per munge, and `ccd`'s `_ci_addrs` looks for a
+  // successor at BOTH — "the raw spelling is sometimes the one Claude Code
+  // actually wrote under, measured on this very box". The sibling-only rule
+  // did not, so a fork written under the other spelling was declined by the
+  // server alone; with `ccd` not moving the registry (not deployed, or
+  // latched) the chat stayed on the pre-fork file for good — a regression
+  // against the full-ladder follow, which found it at once.
+  const spelledOpts = (b: Box, uuid: string): ResolveOpts =>
+    ({ configDir: b.cfg, dir: b.liveLink, registryWorkdir: b.liveLink, uuid });
+
+  it('a successor under the OTHER spelling of the session\'s own workdir is followed, at that address\'s rung', async () => {
+    const b = box();
+    plant(transcriptPath(b.cfg, b.liveLink, A), 1000, turn('one') + marker(A, B));      // the raw spelling
+    const succ = plant(transcriptPath(b.cfg, b.livePhys, B), 1000, turn('two'));         // the resolved one
+    expect(await resolveTranscript(localIO, spelledOpts(b, A))).toEqual({
+      kind: 'found', path: succ, rung: 'live-resolved', account: null, uuid: B, followedFrom: [A],
+    });
+  });
+
+  it('and the other way round: a resolved-spelling head continues under the raw spelling', async () => {
+    const b = box();
+    plant(transcriptPath(b.cfg, b.livePhys, A), 1000, turn('one') + marker(A, B));
+    const succ = plant(transcriptPath(b.cfg, b.liveLink, B), 1000, turn('two'));
+    expect(await resolveTranscript(localIO, spelledOpts(b, A))).toEqual({
+      kind: 'found', path: succ, rung: 'live-raw', account: null, uuid: B, followedFrom: [A],
+    });
+  });
+
+  it('the other spelling is the REGISTRY workdir\'s — never the live cwd\'s project dir', async () => {
+    // `ccd` looks at the registry workdir's two spellings and nowhere else, so
+    // a successor that exists only under the LIVE cwd's munge (a session whose
+    // process chdir'd, M4) is one `ccd` would never follow. The server
+    // following it alone is the F4 disagreement again, by another door.
+    const b = box();
+    const own = plant(transcriptPath(b.cfg, b.regLink, A), 1000, turn('one') + marker(A, B));   // rung 4
+    plant(transcriptPath(b.cfg, b.livePhys, B), 1000, turn('under the live cwd'));
+    plant(transcriptPath(b.cfg, b.liveLink, B), 1000, turn('under the live cwd, raw'));
+    expect(await resolveTranscript(localIO, opts(b, { uuid: A })))
+      .toMatchObject({ kind: 'found', path: own, uuid: A, declinedTo: B });
+  });
+
+  it('a head the uuid GLOB found keeps the sibling rule — the workdir\'s spellings are not its addresses', async () => {
+    // `ccd` cannot see a head outside its workdir's two spellings at all, so
+    // it never follows one; the other-spelling lookup is for a file that sits
+    // in one of the registry workdir's two project dirs.
+    const b = box();
+    const head = plant(stranded(b.cfg, A), 1000, turn('one') + marker(A, B));
+    plant(transcriptPath(b.cfg, b.livePhys, B), 1000, turn('at the workdir, resolved'));
+    plant(transcriptPath(b.cfg, b.liveLink, B), 1000, turn('at the workdir, raw'));
+    expect(await resolveTranscript(localIO, spelledOpts(b, A)))
+      .toMatchObject({ kind: 'found', path: head, rung: 'uuid-glob', uuid: A, declinedTo: B });
+  });
+
+  it('an unmeasured spelling before a present one is a decline, not a guess', async () => {
+    // The resolved spelling is asked first (`ccd`'s order) and its stat
+    // FAILED, so nobody knows whether the fork is there; answering the raw
+    // copy would pick between two files on a blip. Declining is the
+    // keep-looking answer: the back-off asks again.
+    const b = box();
+    const own = plant(transcriptPath(b.cfg, b.liveLink, A), 1000, turn('one') + marker(A, B));
+    plant(transcriptPath(b.cfg, b.liveLink, B), 1000, turn('two, raw'));
+    const first = plant(transcriptPath(b.cfg, b.livePhys, B), 1000, turn('two, resolved'));
+    const io: FleetIO = {
+      ...localIO,
+      statMeasured: async (p) => (p === first ? { ok: false, reason: 'unreadable' } : localIO.statMeasured(p)),
+    };
+    expect(await resolveTranscript(io, spelledOpts(b, A)))
+      .toMatchObject({ kind: 'found', path: own, uuid: A, declinedTo: B });
+  });
+});
+
+describe('continuesInto — the registry-move witness (D-4947)', () => {
+  // `SessionStream.tick` asks this when the registry's uuid moves and no
+  // fact the stream already holds explains it: is the new uuid downstream of
+  // the file on screen? Each clause gets a row of its own.
+  it('a marker naming the target directly is a continuation', async () => {
+    const b = box();
+    const a = plantChain(b, A, turn('one') + marker(A, B));
+    expect(await continuesInto(localIO, { path: a, uuid: A }, B, [])).toBe(true);
+  });
+
+  it('two hops through a sibling are a continuation — the target need not be the first link', async () => {
+    const b = box();
+    const a = plantChain(b, A, turn('one') + marker(A, B));
+    plantChain(b, B, turn('two') + marker(B, C));
+    expect(await continuesInto(localIO, { path: a, uuid: A }, C, [])).toBe(true);
+  });
+
+  it('a middle link under the other spelling is found through the dirs given, and only through them', async () => {
+    const b = box();
+    const a = plant(transcriptPath(b.cfg, b.liveLink, A), 1000, turn('one') + marker(A, B));
+    const mid = plant(transcriptPath(b.cfg, b.livePhys, B), 1000, turn('two') + marker(B, C));
+    expect(await continuesInto(localIO, { path: a, uuid: A }, C, [path.dirname(mid)])).toBe(true);
+    expect(await continuesInto(localIO, { path: a, uuid: A }, C, [])).toBe(false);
+  });
+
+  it('a file with no marker, a marker naming someone else, and a loop are not', async () => {
+    const b = box();
+    const plain = plantChain(b, A, turn('one'));
+    expect(await continuesInto(localIO, { path: plain, uuid: A }, B, [])).toBe(false);
+    const elsewhere = plantChain(b, B, turn('two') + marker(B, C));
+    expect(await continuesInto(localIO, { path: elsewhere, uuid: B }, A, [])).toBe(false);
+    plantChain(b, C, turn('three') + marker(C, B));   // B -> C -> B
+    let reads = 0;
+    const counting: FleetIO = {
+      ...localIO,
+      readFileFromMeasured: async (p, off) => { reads += 1; return localIO.readFileFromMeasured(p, off); },
+    };
+    expect(await continuesInto(counting, { path: elsewhere, uuid: B }, 'd'.repeat(36), [])).toBe(false);
+    expect(reads, 'a loop stops when it comes round, not at the hop bound').toBe(2);
+  });
+
+  it('an unreadable tail is not a continuation — "not shown", never a guess', async () => {
+    const b = box();
+    const a = plantChain(b, A, turn('one') + marker(A, B));
+    expect(await continuesInto(tailReadFails(a, () => true), { path: a, uuid: A }, B, [])).toBe(false);
+  });
+
+  it('stops at the hop bound', async () => {
+    const b = box();
+    const ids = Array.from({ length: MAX_CONTINUATION_HOPS + 2 }, (_, i) => String(i + 1).repeat(36));   // uuid-shaped
+    const files = ids.map((id, i) =>
+      plantChain(b, id, turn(`t${i}`) + (i + 1 < ids.length ? marker(id, ids[i + 1]!) : '')));
+    // The last link the bound reaches is named by the file MAX-1 hops down.
+    expect(await continuesInto(localIO, { path: files[0]!, uuid: ids[0]! }, ids[MAX_CONTINUATION_HOPS]!, [])).toBe(true);
+    expect(await continuesInto(localIO, { path: files[0]!, uuid: ids[0]! }, ids[MAX_CONTINUATION_HOPS + 1]!, []))
+      .toBe(false);
   });
 });

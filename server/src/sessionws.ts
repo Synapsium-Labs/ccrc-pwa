@@ -1,10 +1,11 @@
+import path from 'node:path';
 import type { Deps } from './server.js';
 import type { Bus, Notice } from './bus.js';
 import { configDirFor, type CcrcConfig } from './config.js';
 import { measuredIdentity, readSessionRecord } from './registry.js';
 import { liveSessionStatus, readLiveStateMeasured } from './livestate.js';
 import {
-  rungRank, TranscriptResolver, type TranscriptResolution,
+  continuesInto, rungRank, TranscriptResolver, type TranscriptResolution,
 } from './transcript/resolve.js';
 import { readBacklog, TranscriptTailer } from './transcript/tail.js';
 import { hasMenu, parseDialog } from './pane/dialog.js';
@@ -112,7 +113,8 @@ export class SessionStream {
    *  §5.3's re-point comparison. Null until the first tailer exists.
    *
    *  KEPT CURRENT for the file it names (D-4947): a later answer for the SAME
-   *  path at the same rung replaces it (`tick`'s no-move arm), because what a
+   *  path at the same rung replaces it (`tick`'s no-move arm) — keeping a
+   *  decline that a later FAILED read could not see again — because what a
    *  re-ladder learns about that file — the successor its marker names
    *  (`declinedTo`), a tail it could not read — is exactly what
    *  `registryCaughtUp` must see when `ccd` moves the registry. The tailer
@@ -654,6 +656,15 @@ export class SessionStream {
     await this.sendBacklogAndTail(r.data);
   }
 
+  /** Does the tailed file's own `continued-in` chain lead to `uuid`? The
+   *  witness `tick` asks when the registry moves and `registryCaughtUp` has
+   *  no held fact for it (D-4947). A tailed fallback has no file to ask. */
+  private async tailedContinuesInto(uuid: string, next: TranscriptResolution): Promise<boolean> {
+    const cur = this.tailed;
+    if (cur === null || cur.kind !== 'found') return false;
+    return continuesInto(this.deps.io, cur, uuid, next.kind === 'found' ? [path.dirname(next.path)] : []);
+  }
+
   /** 2 s poll: uuid change → rotated + fresh backlog; status change → status msg. */
   private async tick(): Promise<void> {
     if (this.stopped || this.ticking) return;
@@ -718,7 +729,19 @@ export class SessionStream {
         // hops AHEAD of the registry and the registry's own walk lands one
         // file further. `registryCaughtUp` asks the answer being tailed
         // whether the registry's new uuid is on its own chain.
-        const caughtUp = registryCaughtUp(this.tailed, data.uuid, data.resolution);
+        //
+        // AND WHEN NOTHING HELD EXPLAINS THE MOVE, THE TAILED FILE IS ASKED
+        // (#189 fix-forward, probes P2early/P2twohop). The registry can read a
+        // marker before this stream does — a delayed tick (a loaded box,
+        // remote mode) lets `ccd` move first, so `tailed` predates the marker
+        // and names no decline — or move twice in one gap, past the decline
+        // it does name. The marker on the tailed file, followed within the
+        // hop bound, is the witness both cases leave; `continuesInto` reads
+        // it. Paid only on a move no held fact explains, which is otherwise a
+        // real rotation: one stat and one tail read of a file with no marker.
+        const caughtUp = registryCaughtUp(this.tailed, data.uuid, data.resolution)
+          || (!appeared && await this.tailedContinuesInto(data.uuid, data.resolution));
+        if (this.stopped) return;
         this.uuid = data.uuid;
         if (!appeared && !caughtUp) this.send({ type: 'rotated', uuid: data.uuid });
         await this.sendBacklogAndTail(data);
@@ -746,7 +769,22 @@ export class SessionStream {
         // (D-4947, see `tailed`). Without this, `tailed` kept the answer from
         // BEFORE the fork, and a registry move onto the declined successor
         // was judged against a file that had never been seen to carry a marker.
-        this.tailed = data.resolution;
+        //
+        // A DECLINE OUTLIVES A READ THAT FAILED (#189 fix-forward, probe R1).
+        // An answer that could not read the file's tail knows LESS than one
+        // that read its marker, not something different: a marker is the last
+        // line a file ever gets, so the successor it named is still named.
+        // Replacing `tailed` outright threw that away — after the back-off the
+        // re-walk's read of A failed, A{tailUnmeasured} overwrote A{declinedTo
+        // B}, and ccd's move onto B then sent `rotated`. A MEASURED answer
+        // still replaces it whole: a file that was resumed past its marker
+        // really has stopped naming it.
+        const held = this.tailed;
+        const next = data.resolution;
+        this.tailed = next.kind === 'found' && next.tailUnmeasured === true && next.declinedTo === undefined
+          && held.kind === 'found' && held.declinedTo !== undefined
+          ? { ...next, declinedTo: held.declinedTo }
+          : next;
       }
       if (this.stopped) return;
       if (data.status !== this.status) {
@@ -854,6 +892,19 @@ export function shouldRepoint(
   // way to the best file left.
   if (cur.kind === 'found' && next.kind === 'found' && cur.uuid !== next.uuid
     && next.followedFrom?.includes(cur.uuid) === true) return true;
+  // NOR BACKWARDS BY ADDRESS (D-4946, #189 fix-forward). The clause above no
+  // longer runs backwards, but the RUNG clause below still could: a
+  // `<pid>.json` read that comes back unmeasured makes the stream resolve
+  // from the registry workdir instead of the live cwd — another memo KEY —
+  // and under that key the predecessor sits at a better rung (a symlinked
+  // workdir's resolved spelling), served stale from a blip before the fork or
+  // answered fresh when its tail read fails. Measured (probes E2/E2b): one
+  // `backlog` of the pre-fork file, then one of the fork on the next tick — a
+  // 2 s flap of the whole chat on every such blip. A predecessor this answer
+  // was followed FROM is never a better address for it while it is still
+  // there; once it is gone, the address rules below decide as before.
+  if (cur.kind === 'found' && next.kind === 'found' && cur.uuid !== next.uuid
+    && cur.followedFrom?.includes(next.uuid) === true && tailedExists) return false;
   if (cur.path === next.path && rungRank(cur) === rungRank(next)) return false;
   if (rungRank(next) < rungRank(cur)) return true;
   return !tailedExists;
@@ -880,14 +931,19 @@ export function shouldRepoint(
  *     (`followedFrom`) — a chain longer than `MAX_CONTINUATION_HOPS` leaves
  *     this stream hops ahead of the registry (#189 review, server lens).
  *
- * Anything else is a real rotation — a `/clear`, a compaction, a swap onto a
- * fresh uuid — and still says so. HONEST LIMIT: a registry that moves TWO
- * hops past a declined successor between two of this stream's ticks (the
- * tick itself stalled across two `ccd` quiescences) names a uuid nothing
- * here has seen, and is still announced as a rotation; and so is a move away
- * from a file whose tail could not be read (`tailUnmeasured`), since nobody
- * knows what it named. Both cost one false divider over a backlog that is
- * right, never a lost event.
+ * Anything else is decided by the tailed file itself: `tick` reads its
+ * marker chain (`continuesInto`) before calling the move a rotation — that
+ * covers a registry that moved before this stream read the marker at all,
+ * and one that moved TWO hops past a declined successor between two ticks.
+ * What is left is a real rotation — a `/clear`, a compaction, a swap onto a
+ * fresh uuid — and still says so. HONEST LIMIT: a tailed file whose tail
+ * cannot be read at that moment either, with no decline already learned,
+ * is still announced as a rotation, since nobody knows what it named; that
+ * costs one false divider over a backlog that is right, never a lost event.
+ *
+ * Every clause has a table row of its own in `sessionws.test.ts` that no
+ * other clause also satisfies — the path clause's row is a tailed answer
+ * with no `followedFrom` and a registry naming its predecessor.
  */
 export function registryCaughtUp(
   tailed: TranscriptResolution | null, registryUuid: string, next: TranscriptResolution,

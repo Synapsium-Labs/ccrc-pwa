@@ -17,15 +17,14 @@
 // server through `resolveTranscript` with the other account offered as rung
 // 6's input, which is the widest search the live stream ever asks for.
 //
-// HONEST LIMIT, stated rather than pinned: `ccd` also accepts the successor
-// under the OTHER spelling of a symlinked workdir, and the server's sibling
-// rule does not. No fixture here plants that shape, because the two would
-// disagree on it — by design, transiently: the server names the successor it
-// declined (`declinedTo`), keeps looking, and treats `ccd`'s registry move
-// onto it as a continuation (`registryCaughtUp`), so the stream converges on
-// the authority's answer without a false reset.
+// AND BOTH ACCEPT THE OTHER SPELLING. `ccd` (`_ci_addrs`) looks for a
+// successor under BOTH munges of a symlinked registry workdir, and so does
+// the server — for a head it found at the session's own exact address, and
+// for the REGISTRY workdir's two spellings only (fix-forward on D-4949: the
+// sibling-only rule declined a fork written under the other spelling, which
+// `ccd` follows). The last two cases plant exactly that shape.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { localIO } from '../src/io.js';
@@ -68,11 +67,13 @@ function plant(dir: string, uuid: string, body: string): string {
  *  process, as `ccd supervise` does — its quiescence memo lives in shell
  *  variables. Three ticks: the first records the stamp, the second reads and
  *  hops, the third would read the successor (and finds nothing more). */
-async function answers(otherCfg: string): Promise<{ ccd: string | null; server: string; declinedTo?: string }> {
-  h.sh(`_reg_set ${ID} wrapper ${W}; _reg_set ${ID} workdir ${WORKDIR}; _reg_set ${ID} uuid ${A}`);
+async function answers(
+  otherCfg: string, workdir: string = WORKDIR,
+): Promise<{ ccd: string | null; server: string; declinedTo?: string }> {
+  h.sh(`_reg_set ${ID} wrapper ${W}; _reg_set ${ID} workdir "${workdir}"; _reg_set ${ID} uuid ${A}`);
   h.sh(Array.from({ length: 3 }, () => `_sync_uuid ${ID}`).join('; '));
   const r = await resolveTranscript(localIO, {
-    configDir: ownCfg(), dir: WORKDIR, registryWorkdir: WORKDIR, uuid: A,
+    configDir: ownCfg(), dir: workdir, registryWorkdir: workdir, uuid: A,
     foreign: [{ account: 'lane-b', configDir: otherCfg }],
   });
   if (r.kind !== 'found') throw new Error(`the server found no transcript at all: ${JSON.stringify(r)}`);
@@ -103,5 +104,51 @@ describe('continued-in successor: ccd and the server agree on where it may live 
     plant(path.join(other, 'projects', '-another-project'), B, turnLine('another account, another project'));
     const got = await answers(other);
     expect(got).toEqual({ ccd: A, server: A, declinedTo: B });
+  });
+
+  /** A workdir reached through a symlink, so it has two project dirs: the
+   *  raw munge of the path as given, and the munge of its realpath — each
+   *  asked of ccd, the one spelling of that rule on its side. */
+  function spelled(): { workdir: string; raw: string; resolved: string } {
+    mkdirSync(path.join(h.home, 'phys', 'proj'), { recursive: true });
+    symlinkSync(path.join(h.home, 'phys'), path.join(h.home, 'link'));
+    const workdir = path.join(h.home, 'link', 'proj');
+    const cfg = ownCfg();
+    return {
+      workdir,
+      raw: path.join(cfg, 'projects', h.sh(`_munge_wd "${workdir}"`)),
+      resolved: path.join(cfg, 'projects', h.sh(`_munge_wd "$(_ws_realpath "${workdir}")"`)),
+    };
+  }
+
+  it('a successor under the OTHER spelling (raw head, resolved fork) is followed by both', async () => {
+    const s = spelled();
+    expect(s.raw).not.toBe(s.resolved);   // the fixture really has two spellings
+    plant(s.raw, A, turnLine('one') + marker(A, B));
+    plant(s.resolved, B, turnLine('two'));
+    expect(await answers(path.join(h.home, '.claude-lane-b'), s.workdir)).toEqual({ ccd: B, server: B });
+  });
+
+  it('and the other way round (resolved head, raw fork) — followed by both', async () => {
+    const s = spelled();
+    plant(s.resolved, A, turnLine('one') + marker(A, B));
+    plant(s.raw, B, turnLine('two'));
+    expect(await answers(path.join(h.home, '.claude-lane-b'), s.workdir)).toEqual({ ccd: B, server: B });
+  });
+
+  it('a successor at BOTH spellings: both open the resolved one, whichever spelling the head is under', async () => {
+    // `_ci_extant` takes the first address that is a file, resolved first.
+    // A server that looked beside the predecessor first would open the raw
+    // copy here while the registry, once moved, names the resolved one.
+    const s = spelled();
+    plant(s.raw, A, turnLine('one') + marker(A, B));
+    plant(s.raw, B, turnLine('two, raw'));
+    const want = plant(s.resolved, B, turnLine('two, resolved'));
+    expect(await answers(path.join(h.home, '.claude-lane-b'), s.workdir)).toEqual({ ccd: B, server: B });
+    const r = await resolveTranscript(localIO, {
+      configDir: ownCfg(), dir: s.workdir, registryWorkdir: s.workdir, uuid: A,
+    });
+    expect(r).toMatchObject({ kind: 'found', path: want });
+    expect(h.sh(`_ci_transcript_path ${ID} "$(_cfg_dir ${W})" ${B}`)).toBe(want);
   });
 });
