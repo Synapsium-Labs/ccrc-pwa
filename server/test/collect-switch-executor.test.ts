@@ -118,6 +118,26 @@ describe('step 6: the switch resolved after the last await (path-identity spec �
       .toMatchObject({ kind: 'acted' });
   });
 
+  // The latch's own epoch guard is the helper's (`collect-latch.test.ts`); these pin the PAIR the executor hands it. The
+  // marker is absent beside the untouched seed and its latch is null, so only the epoch keeps the latch from being due:
+  // a listing that straddled a reconnect, or followed one since the job was queued, proves nothing about the box now
+  // connected, and must not consume a generation or retire the marker on the old connection's evidence.
+  it.each(['last listing', 'observation 2', 'queued earlier'] as const)(
+    'an epoch move with the marker absent retires nothing: the latch is fed the job’s own pair (path-identity spec 2026-10-12 §5.5): %s',
+    async (move) => {
+      const r = rig({ live: false });                       // the marker absent beside the seed: due but for the epoch
+      const queued = r.job();
+      if (move === 'last listing') r.hooks.listing = (n) => { if (n === 2) r.bumpEpoch(); };
+      if (move === 'observation 2') r.hooks.audit = () => { r.bumpEpoch(); };
+      if (move === 'queued earlier') r.bumpEpoch();
+      expect(await collectTempRoot(r.deps, queued)).toMatchObject({ kind: 'answered', step: 5, why: 'epoch-changed' });
+      expect(r.writes, 'the writer was never asked').toEqual([]);
+      expect(r.latches, 'no latch row').toEqual([]);
+      expect(r.journal.read(), 'no generation consumed').toEqual({ kind: 'missing' });
+      expect(r.attempts).toEqual([AUDIT]);
+    },
+  );
+
   it('an epoch bump with a raised pause reports the pause: the resolver asks the pause first, and nothing is composed', async () => {
     const r = rig();
     r.hooks.listing = (n) => { if (n === 2) { r.raise(RECLAIM_PAUSE_MARKER); r.bumpEpoch(); } };

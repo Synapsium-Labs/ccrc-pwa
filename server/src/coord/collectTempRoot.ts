@@ -127,7 +127,9 @@ export interface CollectLinkPort { epochNow(): number; current(): CollectCurrent
  *  - `journal`: the process's one generation journal, or null when the server was built without one. Null reads as
  *    `not-configured`, an unmeasurable control state, never as a missing journal;
  *  - `wallNow`: the wall clock the latch and the row's `updatedAt` are stamped with;
- *  - `latchRetired`: the lane's writer of the latch's one feed row. `watch.ts` writes rows; this file never does. */
+ *  - `latchRetired`: the lane's writer of the latch's one feed row. `watch.ts` writes rows; this file never does. It
+ *    must never throw: `collectRetireLatch` calls it after the durable write and outside its catch, so the helper's
+ *    never-throws answer holds only while this writer is total. */
 export interface CollectControlDeps {
   readonly coord: Pick<CoordStore, 'collectLaneRow' | 'setCollectLane'>;
   readonly journal: CollectLaneJournal | null;
