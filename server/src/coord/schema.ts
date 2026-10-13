@@ -1295,9 +1295,14 @@ export const MIGRATIONS: readonly string[] = [
   // 4286, which chose a dedicated typed table over a sentinel claimant row or an untyped `run_events` marker). ONE ROW,
   // `CHECK (id = 1)`, the `coordinator_state` and `stall_settings` idiom: it is control state, never a claimant, so no
   // `claimedBy` can collide with it.
-  //   - `state` is `dirty` or `clean`. The lane writes `dirty` ALONE, in its own statement, before it changes any anchor
-  //     (`CoordStore.markDeadCoordinatorBreakerDirty`), and `clean` only in the ONE transaction that also writes the
+  //   - `state` is `dirty`, `clean` or `sealed`. The lane writes `dirty` ALONE, in its own statement, before it changes any
+  //     anchor (`CoordStore.markDeadCoordinatorBreakerDirty`), and `clean` only in the ONE transaction that also writes the
   //     breaker's exact held snapshot and every anchor change of the pass (`CoordStore.commitDeadCoordinatorBreakerState`).
+  //     `sealed` (fix round 5, D-4916, the operator's choice of 2026-10-13, "Seal on clean shutdown") is `clean` with a
+  //     witness: the server's shutdown handler writes it, in one generation-checked statement over the same snapshot, only
+  //     when nothing is pending and the state is durably clean (`CoordStore.sealDeadCoordinatorBreakerState`). A start
+  //     trusts a snapshot ONLY when it reads `sealed`, and the lane's first pass writes `clean` back at once
+  //     (`unsealDeadCoordinatorBreakerState`); `clean` and `dirty` both seed the conservative hold.
   //   - `generation` moves on at every write, so a commit lands only over the dirty mark it was handed.
   //   - `held` is that snapshot, in `deadCoordinatorBreakerHeldDetail`'s encoding (the `run_events` record's): NULL only
   //     on a row marked dirty before any snapshot landed.
@@ -1322,7 +1327,7 @@ export const MIGRATIONS: readonly string[] = [
   CREATE TABLE dead_coordinator_breaker_state (
     id         INTEGER PRIMARY KEY CHECK (id = 1),
     generation INTEGER NOT NULL,
-    state      TEXT NOT NULL CHECK (state IN ('clean', 'dirty')),
+    state      TEXT NOT NULL CHECK (state IN ('clean', 'dirty', 'sealed')),
     held       TEXT,
     writtenAt  INTEGER NOT NULL
   );

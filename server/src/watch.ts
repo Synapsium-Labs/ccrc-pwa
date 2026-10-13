@@ -4896,7 +4896,7 @@ export class FleetWatcher {
       // The `run_events` record: the run an empty set is written on, and, under a state that is not clean, members to keep.
       const rec = coord.deadCoordinatorBreakerHeldLatest();
       this.deadCoordinatorBreakerHeldRunId ??= rec.runId;
-      if (st.kind === 'clean') {
+      if (st.kind === 'clean' || st.kind === 'sealed') {
         // RECOVERY OF A LOST WRITE (fix round 4, D-4826), against the clean snapshot's write time. Every claimant of this
         // pass's population whose durable anchor STARTED (its `firstDeadAt`, never `lastDeadAt`, which every crashed pass
         // rewrites) after that snapshot was written is added to the seed, FLAGGED, at its anchor instant, beside every

@@ -914,6 +914,7 @@ export type DeadCoordinatorBreakerSnapshot =
 /** `deadCoordinatorBreakerState`'s answer (D-4857). */
 export type DeadCoordinatorBreakerStateRead =
   | { readonly kind: 'clean'; readonly generation: number; readonly held: readonly DeadCoordinatorBreakerMember[]; readonly writtenAt: number }
+  | { readonly kind: 'sealed'; readonly generation: number; readonly held: readonly DeadCoordinatorBreakerMember[]; readonly writtenAt: number }
   | { readonly kind: 'dirty'; readonly generation: number; readonly snapshot: DeadCoordinatorBreakerSnapshot }
   | { readonly kind: 'absent' }
   | { readonly kind: 'unreadable'; readonly detail: string };
@@ -3446,10 +3447,13 @@ export class CoordStore {
   }
 
   /** THE BREAKER'S TYPED STATE (`dead_coordinator_breaker_state`, migration 19; the operator's ruling 4286, D-4857):
-   *  the one row, as the lane reads it at its first pass. FOUR answers, never folded:
-   *   - `clean`: the last commit landed, and `held` is its EXACT snapshot, written at `writtenAt` (the write-time clock)
-   *     in the one transaction that also wrote every anchor change that pass made. Only this answer is seeded as it
-   *     reads;
+   *  the one row, as the lane reads it at its first pass. FIVE answers, never folded:
+   *   - `sealed` (D-4916): the server's shutdown handler wrote it over a `clean` state, and `held` is that state's EXACT
+   *     snapshot, written at `writtenAt` (the write-time clock) in the one transaction that also wrote every anchor change
+   *     that pass made. ONLY this answer is seeded as it reads;
+   *   - `clean`: the last commit (or the first pass's unseal) landed, and `held` is the exact snapshot. A start that finds
+   *     it did not end through a clean shutdown (a kill, a crash, a stop that outlived its timeout), so it seeds
+   *     conservatively, keeping what it reads;
    *   - `dirty`: a pass marked the state before changing anchors and its commit has not landed (or a process died
    *     between the two). `snapshot` is what the row still carries — the last landed one, `none` before any landed, or
    *     `unreadable` — and the lane keeps whatever of it it can read;
@@ -3473,13 +3477,43 @@ export class CoordStore {
       const snapshot: DeadCoordinatorBreakerSnapshot = parsed === null ? { kind: 'none' }
         : parsed.ok ? { kind: 'members', members: parsed.members } : { kind: 'unreadable', detail: parsed.detail };
       if (row.state === 'dirty') return { kind: 'dirty', generation: gen.value, snapshot };
-      if (row.state !== 'clean') return { kind: 'unreadable', detail: 'the breaker state word is not one this build knows' };
+      if (row.state !== 'clean' && row.state !== 'sealed') return { kind: 'unreadable', detail: 'the breaker state word is not one this build knows' };
       if (snapshot.kind !== 'members') {
         return { kind: 'unreadable', detail: snapshot.kind === 'none' ? 'a clean breaker state carries no snapshot' : snapshot.detail };
       }
-      return { kind: 'clean', generation: gen.value, held: snapshot.members, writtenAt: at.value };
+      return { kind: row.state, generation: gen.value, held: snapshot.members, writtenAt: at.value };
     } catch (err) {
       return { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** SEAL THE BREAKER'S STATE (D-4916, the operator's choice of 2026-10-13, "Seal on clean shutdown"): ONE statement, one
+   *  generation-checked write that turns a `clean` row into `sealed` over the SAME snapshot (`held` and `writtenAt` are
+   *  untouched) with the generation moved on. It writes nothing unless the row reads `clean` at exactly `generation`: a
+   *  dirty, sealed, absent or foreign-moved row refuses it. The caller (`FleetWatcher.sealDeadCoordinatorBreaker`)
+   *  decides WHETHER to seal; this only never seals what it did not see clean. */
+  sealDeadCoordinatorBreakerState(generation: number): { ok: true; generation: number } | { ok: false; detail: string } {
+    return this.moveBreakerState('clean', 'sealed', generation);
+  }
+
+  /** UNSEAL THE BREAKER'S STATE (D-4916): the mirror of the seal. The lane's first pass of a process that read `sealed`
+   *  writes `clean` back, generation-checked over the same snapshot, so a process that dies later leaves a state no start
+   *  trusts. Writes nothing unless the row reads `sealed` at exactly `generation`. */
+  unsealDeadCoordinatorBreakerState(generation: number): { ok: true; generation: number } | { ok: false; detail: string } {
+    return this.moveBreakerState('sealed', 'clean', generation);
+  }
+
+  private moveBreakerState(from: 'clean' | 'sealed', to: 'clean' | 'sealed', generation: number): { ok: true; generation: number } | { ok: false; detail: string } {
+    try {
+      const row = this.db.prepare(
+        `UPDATE dead_coordinator_breaker_state SET state = '${to}', generation = generation + 1 ` +
+        `WHERE id = 1 AND state = '${from}' AND generation = ? AND held IS NOT NULL RETURNING CAST(generation AS TEXT) AS genText`,
+      ).get(generation) as { genText: string } | undefined;
+      if (row === undefined) return { ok: false, detail: `the breaker state is not ${from} at generation ${generation}` };
+      const gen = persistedInt(row.genText, 'breaker state generation');
+      return gen.ok ? { ok: true, generation: gen.value } : { ok: false, detail: gen.detail };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
     }
   }
 

@@ -426,6 +426,71 @@ describe('the breaker\'s TYPED STATE — one row, dirty before any anchor change
     expect(s.deadCoordinatorBreakerState()).toMatchObject({ kind: 'dirty' });
   });
 
+  // THE SEAL (fix round 5, D-4916): `sealed` is `clean` with a witness. One generation-checked statement writes it over the
+  // same snapshot; the first pass of a process that read it writes `clean` back.
+  const clean = (s: CoordStore, at = 150) => {
+    const g = s.markDeadCoordinatorBreakerDirty(100);
+    if (!g.ok) throw new Error('mark failed');
+    const c = s.commitDeadCoordinatorBreakerState({ generation: g.generation, at, held, record: null, upserts: [], deletes: [] });
+    if (!c.ok) throw new Error('commit failed');
+    return c.generation;
+  };
+  it('SEAL: a clean row at exactly the generation becomes `sealed` over the SAME snapshot and write time, the generation moved on; UNSEAL writes it back', () => {
+    const { s } = store();
+    const g = clean(s);
+    expect(s.sealDeadCoordinatorBreakerState(g)).toEqual({ ok: true, generation: g + 1 });
+    expect(s.deadCoordinatorBreakerState()).toEqual({ kind: 'sealed', generation: g + 1, held, writtenAt: 150 });
+    expect(s.unsealDeadCoordinatorBreakerState(g + 1)).toEqual({ ok: true, generation: g + 2 });
+    expect(s.deadCoordinatorBreakerState(), 'the same snapshot and write time').toEqual({ kind: 'clean', generation: g + 2, held, writtenAt: 150 });
+  });
+  it('SEAL writes NOTHING over a row that is not clean at exactly that generation: dirty, absent, already sealed, a moved generation; and UNSEAL only over sealed', () => {
+    const { s } = store();
+    expect(s.sealDeadCoordinatorBreakerState(1), 'absent').toMatchObject({ ok: false });
+    expect(s.unsealDeadCoordinatorBreakerState(1), 'absent').toMatchObject({ ok: false });
+    const g = clean(s);
+    expect(s.sealDeadCoordinatorBreakerState(g - 1), 'a generation another writer moved').toMatchObject({ ok: false });
+    expect(s.sealDeadCoordinatorBreakerState(g + 1), 'a generation not yet written').toMatchObject({ ok: false });
+    expect(s.unsealDeadCoordinatorBreakerState(g), 'clean is not sealed').toMatchObject({ ok: false });
+    expect(s.deadCoordinatorBreakerState()).toEqual({ kind: 'clean', generation: g, held, writtenAt: 150 });
+    const m = s.markDeadCoordinatorBreakerDirty(200);
+    if (!m.ok) throw new Error('mark failed');
+    expect(s.sealDeadCoordinatorBreakerState(m.generation), 'dirty').toMatchObject({ ok: false });
+    expect(s.deadCoordinatorBreakerState()).toMatchObject({ kind: 'dirty', generation: m.generation });
+    const g2 = clean(s);
+    expect(s.sealDeadCoordinatorBreakerState(g2)).toMatchObject({ ok: true });
+    expect(s.sealDeadCoordinatorBreakerState(g2 + 1), 'already sealed').toMatchObject({ ok: false });
+  });
+  it('SEAL and UNSEAL are ONE statement each, and a failing statement says so and moves nothing', () => {
+    const { db, s } = store();
+    const g = clean(s);
+    const spy = failSql(db as unknown as DatabaseSyncLike, /^UPDATE dead_coordinator_breaker_state SET state = 'sealed'/);
+    expect(s.sealDeadCoordinatorBreakerState(g)).toMatchObject({ ok: false });
+    spy.mockRestore();
+    expect(s.deadCoordinatorBreakerState()).toMatchObject({ kind: 'clean', generation: g });
+    expect(s.sealDeadCoordinatorBreakerState(g)).toMatchObject({ ok: true });
+    const spy2 = failSql(db as unknown as DatabaseSyncLike, /^UPDATE dead_coordinator_breaker_state SET state = 'clean'/);
+    expect(s.unsealDeadCoordinatorBreakerState(g + 1)).toMatchObject({ ok: false });
+    spy2.mockRestore();
+    expect(s.deadCoordinatorBreakerState()).toMatchObject({ kind: 'sealed', generation: g + 1 });
+  });
+  it('a `sealed` row reads like a clean one, and an unreadable one fails shut the same way: an unknown word is still `unreadable`', () => {
+    const { db, s } = store();
+    const put = (gen: string, state: string, heldText: string | null, at: string) => {
+      db.exec('DELETE FROM dead_coordinator_breaker_state');
+      db.exec('PRAGMA ignore_check_constraints = ON');
+      db.prepare('INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (1, ?, ?, ?, ?)').run(gen, state, heldText, at);
+      db.exec('PRAGMA ignore_check_constraints = OFF');
+      return s.deadCoordinatorBreakerState();
+    };
+    const ok = 'dead-coordinator-breaker-held:demo-c-a@10';
+    expect(put('3', 'sealed', ok, '5')).toEqual({ kind: 'sealed', generation: 3, held: [{ id: 'demo-c-a', firstDeadAt: 10 }], writtenAt: 5 });
+    expect(put('3', 'sealed', null, '5')).toMatchObject({ kind: 'unreadable' });
+    expect(put('3', 'sealed', 'dead-coordinator-breaker-held:demo-c-a@soon', '5')).toMatchObject({ kind: 'unreadable' });
+    expect(put('soon', 'sealed', ok, '5')).toMatchObject({ kind: 'unreadable' });
+    expect(put('3', 'Sealed', ok, '5'), 'a word this build does not know').toMatchObject({ kind: 'unreadable' });
+    expect(put('3', 'sealed ', ok, '5')).toMatchObject({ kind: 'unreadable' });
+  });
+
   it('a dirty mark that cannot be written says so, and moves nothing', () => {
     const { db, s } = store();
     const spy = failSql(db as unknown as DatabaseSyncLike, /^INSERT INTO dead_coordinator_breaker_state/);

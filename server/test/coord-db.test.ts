@@ -781,7 +781,7 @@ describe('coord.db: dead_coordinator_breaker_state, the breaker\'s typed state (
   /** Found by its DDL, never hard-coded (the dead_claimants case's rule). */
   const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE dead_coordinator_breaker_state')) + 1;
   interface ColumnInfo { name: string; type: string; notnull: number; pk: number }
-  it('a NEW TABLE and nothing else: one typed row — generation, a clean/dirty state, the snapshot, the write time — and NO seed row', () => {
+  it('a NEW TABLE and nothing else: one typed row — generation, a clean/dirty/sealed state, the snapshot, the write time — and NO seed row', () => {
     expect(SLOT, 'no MIGRATIONS entry creates dead_coordinator_breaker_state').toBeGreaterThanOrEqual(19);
     const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
     const cols = (db.prepare("SELECT name, type, \"notnull\", pk FROM pragma_table_info('dead_coordinator_breaker_state')").all() as unknown as ColumnInfo[])
@@ -790,9 +790,13 @@ describe('coord.db: dead_coordinator_breaker_state, the breaker\'s typed state (
     expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim(), 'the migration CREATEs one table, seeds nothing and alters nothing')
       .toMatch(/^CREATE TABLE dead_coordinator_breaker_state \([^;]*\);$/);
     expect(db.prepare('SELECT count(*) AS n FROM dead_coordinator_breaker_state').get(), 'an absent row is the lane\'s dirty').toEqual({ n: 0 });
-    // typed: one row, two state words
+    // typed: one row, three state words
     expect(() => db.exec("INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (2, 1, 'dirty', NULL, 1)")).toThrow();
     expect(() => db.exec("INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (1, 1, 'paused', NULL, 1)")).toThrow();
+    // `sealed` joined the CHECK in fix round 5 (D-4916); a word near it does not
+    expect(() => db.exec("INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (1, 1, 'Sealed', NULL, 1)")).toThrow();
+    db.exec("INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (1, 1, 'sealed', 'dead-coordinator-breaker-held:', 1)");
+    db.exec('DELETE FROM dead_coordinator_breaker_state');
     db.exec("INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (1, 1, 'dirty', NULL, 1)");
     db.close();
   });
