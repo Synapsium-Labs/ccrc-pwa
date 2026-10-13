@@ -10788,12 +10788,12 @@ Expected: `<n> rows; 0 not exactly once`, `<n>` being 171 plus the new ids Step 
 
 Close the record: fill every `outcome` and `rows`, add a last line `Findings: raised <n>, survived <m>, fixed <f>, carried <c>, not a defect <d>, asked <a>, ruled departures <r>. Commits: <list of shas>. Panel tip <TIP>; fix-wave tip $(git rev-parse HEAD).` (`survived` = the findings not ruled NOT A DEFECT), and copy `<SCRATCH>/review` and every Step 5 row measurement into `.superpowers/sdd/2026-10-09-native-docs-reader-w4-pwa-foundation/task-11-review/`. Task 12's results cite the record's last line, its Carried list takes every CARRIED line, and an unanswered ask is listed there too. No push and no pull request here: Task 12 is the close, and its results commit must be the tip.
 
-**Mutation rows this task contributes** (none until a Step 5 fix adds one: this task carries no code of its own. Each row a fix adds is measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at the fix's commit, then `git -C <copy> init -q`, `pwa/node_modules` and `server/node_modules` linked in; `pkg` is the package the `tests` run in; `old` is unique in `file` at that commit; `red` is the measured summary and the cases that went red. A fix that re-spells an earlier row's anchor repeats that row here with the same id and the new `old`, and says so above this block; Task 12's extractor keeps the last occurrence of an id). Rows that Step 5 adds are appended to this array by the fix that adds them. Rows from the review rounds before this task, recorded here so the extractor reads them: W4-X1-M1 to W4-X1-M8 (the pre-scan hardening), W4-T6-M27 and W4-T6-M28 (the chat image predicate and the note guard), W4-X2-M1 (docs-sw's linear extraction), and W4-T3-M9 re-anchored on the hardened skip loop (its earlier text no longer exists).
+**Mutation rows this task contributes** (none until a Step 5 fix adds one: this task carries no code of its own. Each row a fix adds is measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at the fix's commit, then `git -C <copy> init -q`, `pwa/node_modules` and `server/node_modules` linked in; `pkg` is the package the `tests` run in; `old` is unique in `file` at that commit; `red` is the measured summary and the cases that went red. A fix that re-spells an earlier row's anchor repeats that row here with the same id and the new `old`, and says so above this block; Task 12's extractor keeps the last occurrence of an id). Rows that Step 5 adds are appended to this array by the fix that adds them. Rows from the review rounds before this task, recorded here so the extractor reads them (ids renumbered to this task's own `W4-T11-M<k>`, because the extractor refuses a foreign id that re-anchors nothing): W4-T11-M1 to W4-T11-M8 (the pre-scan hardening), M9 and M10 (the chat image predicate and the note guard), M11 (docs-sw's linear extraction), M12 to M42 (Task 11's fix wave, review findings 1-1 to 5-1 and A-3 to A-6), and the re-anchors W4-T3-M9, W4-T5-M33, W4-T6-M18, W4-T4-M7, W4-T4-M8 and W4-T4-M9, each kept under the earlier task's id with a new `old` on the shipped text (the earlier text no longer exists).
 
 ```json
 [
  {
-  "id": "W4-X1-M1",
+  "id": "W4-T11-M1",
   "pkg": "pwa",
   "file": "pwa/src/lib/markdownGuard.ts",
   "old": "      const w = blankWidth(line, i, col);\n      if (w === 0 || indent + w > 3) break;\n",
@@ -10804,7 +10804,7 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
   "red": "pwa markdown-guard: 1 failed | 56 passed (57) — 'a tab after a marker is part of its indentation' (the '> <tab>' chain: a tab in the leading indentation is not skipped)"
  },
  {
-  "id": "W4-X1-M2",
+  "id": "W4-T11-M2",
   "pkg": "pwa",
   "file": "pwa/src/lib/markdownGuard.ts",
   "old": "      const w = blankWidth(line, i, col);\n      if (w > 0) {\n",
@@ -10815,7 +10815,7 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
   "red": "pwa markdown-guard: 1 failed | 56 passed (57) — 'a tab after a marker is part of its indentation' (a tab right after '>' is not treated as the optional space; the leading skip still covers the bare '>' tab input, so this row reds on the carry-over cases only)"
  },
  {
-  "id": "W4-X1-M3",
+  "id": "W4-T11-M3",
   "pkg": "pwa",
   "file": "pwa/src/lib/markdownGuard.ts",
   "old": "        carried = w - 1;\n",
@@ -10826,7 +10826,7 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
   "red": "pwa markdown-guard: 1 failed | 56 passed (57) — 'a tab after a marker is part of its indentation' (the '>' tab then two spaces case: the tab's leftover columns are not carried)"
  },
  {
-  "id": "W4-X1-M4",
+  "id": "W4-T11-M4",
   "pkg": "pwa",
   "file": "pwa/src/lib/markdownGuard.ts",
   "old": "    if (cols > 4) return depth;\n",
@@ -10837,7 +10837,7 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
   "red": "pwa markdown-guard: 1 failed | 56 passed (57) — 'a tab after a list marker advances to the next multiple of 4, and 5 or more columns of padding is code' (the 5-space and the tab-tab control chains)"
  },
  {
-  "id": "W4-X1-M5",
+  "id": "W4-T11-M5",
   "pkg": "pwa",
   "file": "pwa/src/lib/markdownGuard.ts",
   "old": "c === 0x09 ? 4 - (col % 4) : 0;",
@@ -10845,10 +10845,10 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
   "tests": [
    "test/markdown-guard.test.ts"
   ],
-  "red": "pwa markdown-guard: 1 failed | 56 passed (57) — 'a tab after a marker is part of its indentation' (a tab always 4 columns)"
+  "red": "pwa markdown-guard: 2 failed | 73 passed (75) — 'a tab after a marker is part of its indentation' and \"'-  <tab>' repeated counts every marker\" (a tab always 4 columns; measured on 67448b526)"
  },
  {
-  "id": "W4-X1-M6",
+  "id": "W4-T11-M6",
   "pkg": "pwa",
   "file": "pwa/src/lib/markdownGuard.ts",
   "old": "c === 0x09 ? 4 - (col % 4) : 0;",
@@ -10859,7 +10859,7 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
   "red": "pwa markdown-guard: 2 failed | 55 passed (57) — 'a tab after a list marker advances ...' and 'a tab after a marker is part of its indentation' (a tab always 1 column)"
  },
  {
-  "id": "W4-X1-M7",
+  "id": "W4-T11-M7",
   "pkg": "pwa",
   "file": "pwa/src/lib/markdownGuard.ts",
   "old": "    const depth = containerDepth(line);\n",
@@ -10870,7 +10870,7 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
   "red": "pwa markdown-guard: 5 failed | 52 passed (57) — the five 'is refused on its deep line' cases of 'container depth is counted inside fenced blocks' (the review's three (b) inputs, a plain unclosed fence and a tilde fence)"
  },
  {
-  "id": "W4-X1-M8",
+  "id": "W4-T11-M8",
   "pkg": "pwa",
   "file": "pwa/src/lib/markdownGuard.ts",
   "old": "c === 0x09 ? 4 - (col % 4) : 0;",
@@ -10878,21 +10878,10 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
   "tests": [
    "test/markdown-guard.test.ts"
   ],
-  "red": "pwa markdown-guard: 4 failed | 53 passed (57) — \"the list marker - then a tab counts as a container\", \"'>' then a tab, repeated, counts every marker (the review's input (a))\", and the two other tab cases (a tab is no blank at all: the pre-fix behaviour)"
+  "red": "pwa markdown-guard: 8 failed | 67 passed (75) — the list marker - then a tab counts as a container, \"'>' then a tab, repeated, counts every marker (the review's input (a))\", the two tab cases of 'a tab after a marker ...' and 'a tab after a list marker ...', \"'-  <tab>' repeated counts every marker\", and the label case 'a label counts as one level ...' with the 'two tabs' and 'a space, a tab and spaces' cases (a tab is no blank at all: the pre-fix behaviour; measured on 67448b526)"
  },
  {
-  "id": "W4-T3-M9",
-  "pkg": "pwa",
-  "file": "pwa/src/lib/markdownGuard.ts",
-  "old": "      if (w === 0 || indent + w > 3) break;\n",
-  "new": "      if (w === 0) break;\n",
-  "tests": [
-   "test/markdown-guard.test.ts"
-  ],
-  "red": "pwa markdown-guard: 2 failed | 55 passed (57) — 'skips up to three spaces before a marker, never four' and 'a tab after a marker is part of its indentation' (re-anchored: the 3-column indentation cap now lives on the tab-aware skip loop's break line)"
- },
- {
-  "id": "W4-T6-M27",
+  "id": "W4-T11-M9",
   "pkg": "pwa",
   "file": "pwa/src/lib/markdown.tsx",
   "old": "  if (outcome !== null && !pending) return <MsgPlain text={text} note={chatPlainNote(outcome)} />;",
@@ -10903,7 +10892,7 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
   "red": "pwa chat-hardening: 1 failed | 59 passed (60) — 'a non-tree outcome for an older text never puts its note under a newer text that is still parsing' (the old text's timeout note shows under the new text while it parses). Distinct from W4-T6-M12, which drops the note and so is red elsewhere."
  },
  {
-  "id": "W4-T6-M28",
+  "id": "W4-T11-M10",
   "pkg": "pwa",
   "file": "pwa/src/lib/markdown.tsx",
   "old": "  if (/^https?:(?![/\\\\]{2})/i.test(src.slice(i))) return true;\n",
@@ -10914,7 +10903,7 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
   "red": "pwa chat-hardening: 7 failed | 53 passed (60) — the M4.C3 rendering case for a same-scheme special-relative 'https:/' source (img and auto-embed) and the six table rows 'https:/api/x', 'HTTPS:/api/x', 'https:\\\\api\\\\x', '  https:/api/x', 'http:/x.png', tab-led 'https:/api/x'"
  },
  {
-  "id": "W4-X2-M1",
+  "id": "W4-T11-M11",
   "pkg": "server",
   "file": "ccd/ccrc-doctor-checks",
   "old": "  [[ $body =~ $re_open ]] && after=\"${BASH_REMATCH[1]}\"\n",
@@ -10925,6 +10914,417 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
    "reads a large worker in linear time"
   ],
   "red": "server ccrc-doctor -t 'reads a large worker in linear time': 1 failed | 907 skipped (908) — 'reads a large worker in linear time: a ~300 KB precache manifest BEFORE the one denylist still PASSes within the bound' (the quadratic ${body#*\"$open\"} does not finish in the spawn's 20 s: killed, empty verdict; measured 25.9 s)"
+ },
+ {
+  "id": "W4-T11-M12",
+  "pkg": "pwa",
+  "file": "pwa/test/markdown-purity.test.ts",
+  "old": "    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {\n",
+  "new": "    if (ts.isImportDeclaration(node) || (ts.isExportDeclaration(node) && !(node.exportClause !== undefined && ts.isNamespaceExport(node.exportClause)))) {\n",
+  "tests": [
+   "test/markdown-purity.test.ts"
+  ],
+  "red": "Tests  4 failed | 29 passed (33) | × export * as R from 'react'; names react 19ms ; × export * as ns from './markdownLimits'; names ./markdownLimits 3ms ; × refuses a namespace re-export of highlight.js and walks into a re-exported session component 34ms ; × \"const BT = /`+/g;\\nexport * as H from 'highlight.js';\\nconst r = require('react');\" names [\"highlight.js\",\"react\"] 8ms"
+ },
+ {
+  "id": "W4-T11-M13",
+  "pkg": "pwa",
+  "file": "pwa/test/markdown-purity.test.ts",
+  "old": "  visit(sf);\n  return { specs, unprovable };\n",
+  "new": "  void visit;\n  return { specs: ts.preProcessFile(source, true, true).importedFiles.map((i) => i.fileName), unprovable };\n",
+  "tests": [
+   "test/markdown-purity.test.ts"
+  ],
+  "red": "Tests  14 failed | 19 passed (33) | × export * as R from 'react'; names react 69ms ; × export * as ns from './markdownLimits'; names ./markdownLimits 6ms ; × refuses a namespace re-export of highlight.js and walks into a re-exported session component 27ms ; × \"const BT = /`/;\\nimport React from 'react';\" names [\"react\"] 6ms ; × \"const BT = /`/;\\nexport const f = () => import('react');\" names [\"react\"] 6ms ; × \"const BT = /`+/g;\\nexport * as H from 'highlight.js';\\nconst r = require('react');\" names [\"highlight.js\",\"react\"] 5ms ; × refuses react imported after a backtick regex in a closure file 75ms ; × \"const n = 'react';\\nexport const d = () => import(n);\" is reported once, by position 7ms ; × \"export const d = (x: string) => import(`react-${x}`);\" is reported once, by position 3ms ; × \"export const d = () => import();\" is reported once, by position 3ms ; × \"const n = 'react';\\nconst r = require(n);\" is reported once, by position 3ms ; × \"export const g = import.meta.glob('../session/*.tsx', { eager: true });\" is reported once, by position 4ms ; × \"export const g = import.meta['globEager']('../session/*.tsx');\" is reported once, by position 5ms ; × refuses a glob and a variable import() appended to a closure file, each under file, line and column 28ms"
+ },
+ {
+  "id": "W4-T11-M14",
+  "pkg": "pwa",
+  "file": "pwa/test/markdown-purity.test.ts",
+  "old": "        else refuse(node, `${kind} with an argument that is not a string literal`);\n",
+  "new": "        else void refuse;\n",
+  "tests": [
+   "test/markdown-purity.test.ts"
+  ],
+  "red": "Tests  5 failed | 28 passed (33) | × \"const n = 'react';\\nexport const d = () => import(n);\" is reported once, by position 26ms ; × \"export const d = (x: string) => import(`react-${x}`);\" is reported once, by position 6ms ; × \"export const d = () => import();\" is reported once, by position 13ms ; × \"const n = 'react';\\nconst r = require(n);\" is reported once, by position 3ms ; × refuses a glob and a variable import() appended to a closure file, each under file, line and column 138ms"
+ },
+ {
+  "id": "W4-T11-M15",
+  "pkg": "pwa",
+  "file": "pwa/test/markdown-purity.test.ts",
+  "old": "        : ts.isIdentifier(callee) && callee.text === 'require' ? 'require()' : undefined;\n",
+  "new": "        : undefined;\n",
+  "tests": [
+   "test/markdown-purity.test.ts"
+  ],
+  "red": "Tests  3 failed | 30 passed (33) | × \"const BT = /`+/g;\\nexport * as H from 'highlight.js';\\nconst r = require('react');\" names [\"highlight.js\",\"react\"] 13ms ; × \"const n = 'react';\\nconst r = require(n);\" is reported once, by position 7ms ; × \"const r = require('react');\" names react and is not reported 3ms"
+ },
+ {
+  "id": "W4-T11-M16",
+  "pkg": "pwa",
+  "file": "pwa/test/markdown-purity.test.ts",
+  "old": "member !== undefined && GLOB_NAMES.has(member)) refuse(",
+  "new": "member !== undefined && false) refuse(",
+  "tests": [
+   "test/markdown-purity.test.ts"
+  ],
+  "red": "Tests  3 failed | 30 passed (33) | × \"export const g = import.meta.glob('../session/*.tsx', { eager: true });\" is reported once, by position 14ms ; × \"export const g = import.meta['globEager']('../session/*.tsx');\" is reported once, by position 3ms ; × refuses a glob and a variable import() appended to a closure file, each under file, line and column 15ms"
+ },
+ {
+  "id": "W4-T11-M17",
+  "pkg": "pwa",
+  "file": "pwa/test/markdown-purity.test.ts",
+  "old": "    for (const u of scan.unprovable) refused.push(`${rel}:${u}`);\n",
+  "new": "",
+  "tests": [
+   "test/markdown-purity.test.ts"
+  ],
+  "red": "Tests  1 failed | 32 passed (33) | × refuses a glob and a variable import() appended to a closure file, each under file, line and column 79ms"
+ },
+ {
+  "id": "W4-T11-M18",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownGuard.ts",
+  "old": "      const after = footnoteLabelEnd(line, i);\n",
+  "new": "      const after = -1;\n",
+  "tests": [
+   "test/markdown-guard.test.ts"
+  ],
+  "red": "pwa markdown-guard: 7 failed | 68 passed (75) — the four 'T11 review 2-1: a footnote-definition label counts as a container' cases (\"'>' repeated after a footnote label ...\", 'a list-marker chain after a footnote label is refused', 'a label counts as one level ...', 'a label of 999 characters is one ...') and the 'five spaces', 'two tabs' and 'a space, a tab and spaces' cases of 'every blank after a footnote label belongs to its prefix' (measured on 67448b526)"
+ },
+ {
+  "id": "W4-T11-M19",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownGuard.ts",
+  "old": "    for (let w = blankWidth(line, k, col + cols); w > 0; w = blankWidth(line, k, col + cols)) {\n",
+  "new": "    for (let w = blankWidth(line, k, col); w > 0; w = blankWidth(line, k, col)) {\n",
+  "tests": [
+   "test/markdown-guard.test.ts"
+  ],
+  "red": "pwa markdown-guard: 1 failed | 71 passed (72) — \"T11 review A-3: list-marker padding is measured from the column it starts at > '-  <tab>' repeated counts every marker\" (both blankWidth calls of the padding loop given the marker's column; measured on 8ce5b477f)"
+ },
+ {
+  "id": "W4-T11-M20",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownGuard.ts",
+  "old": "size > 999 ||",
+  "new": "size > 1000 ||",
+  "tests": [
+   "test/markdown-guard.test.ts"
+  ],
+  "red": "pwa markdown-guard: 1 failed | 71 passed (72) — 'T11 review 2-1: a footnote-definition label counts as a container > a label of 1 000 characters is not a footnote definition' (measured on 8ce5b477f)"
+ },
+ {
+  "id": "W4-T11-M21",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownGuard.ts",
+  "old": "      if (j === i + 2) return -1;\n",
+  "new": "",
+  "tests": [
+   "test/markdown-guard.test.ts"
+  ],
+  "red": "pwa markdown-guard: 1 failed | 71 passed (72) — 'T11 review 2-1: a footnote-definition label counts as a container > an empty label is not a footnote definition' (measured on 8ce5b477f)"
+ },
+ {
+  "id": "W4-T11-M22",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownGuard.ts",
+  "old": "      while (blankWidth(line, i, col) > 0) {\n        col += blankWidth(line, i, col);\n        i += 1;\n      }\n",
+  "new": "",
+  "tests": [
+   "test/markdown-guard.test.ts"
+  ],
+  "red": "pwa markdown-guard: 3 failed | 72 passed (75) — 'T11 review 2-1: every blank after a footnote label belongs to its prefix' > 'five spaces', 'two tabs', 'a space, a tab and spaces' (measured on bba5f5243)"
+ },
+ {
+  "id": "W4-T11-M23",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdown.tsx",
+  "old": "  if (parts.length > KEYSTROKE_MAX_PARTS) return null;\n",
+  "new": "",
+  "tests": [
+   "test/chat-hardening.test.tsx"
+  ],
+  "red": "pwa chat-hardening: 2 failed | 63 passed (65) — 'a 200 KB chord on the worker path draws a bounded number of elements, as plain inline code' and 'keystrokeParts answers null past CHAT_SYNC_MAX_BYTES / 2 parts and parts at that count'"
+ },
+ {
+  "id": "W4-T11-M24",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdown.tsx",
+  "old": "  if (pending && lastGood !== null) return renderHast(lastGood, CHAT_RENDER);\n",
+  "new": "",
+  "tests": [
+   "test/chat-hardening.test.tsx"
+  ],
+  "red": "pwa chat-hardening: 1 failed | 64 passed (65) — 'tree, then a timeout, then a newer text pending: the tree shows, not bare plain text'"
+ },
+ {
+  "id": "W4-T11-M25",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownRunner.ts",
+  "old": "    w.onmessageerror = null;\n",
+  "new": "",
+  "tests": [
+   "test/markdown-runner.test.ts"
+  ],
+  "red": "pwa markdown-runner: 1 failed | 35 passed (36) — 'a messageerror from a worker dropped by a timeout leaves the live worker and its job alone'"
+ },
+ {
+  "id": "W4-T11-M26",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownRunner.ts",
+  "old": "        job.resolve({ kind: 'worker-unavailable' });\n        continue;\n",
+  "new": "        job.resolve({ kind: 'worker-unavailable' });\n        return;\n",
+  "tests": [
+   "test/markdown-runner.test.ts"
+  ],
+  "red": "pwa markdown-runner: 1 failed | 35 passed (36) — 'a respawn that throws answers worker-unavailable to each job queued behind the expired one'"
+ },
+ {
+  "id": "W4-T11-M27",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/useParsedMarkdown.ts",
+  "old": "      if (!current()) return;\n      runNext();\n",
+  "new": "      runNext();\n",
+  "tests": [
+   "test/use-parsed-markdown.test.tsx"
+  ],
+  "red": "pwa use-parsed-markdown: 1 failed | 13 passed (14) — 'under StrictMode, the aborted first job rejecting does not strand the second: its tree still applies'"
+ },
+ {
+  "id": "W4-T11-M28",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/useParsedMarkdown.ts",
+  "old": "        outcome: isLatest ? outcome : prev.outcome,\n",
+  "new": "        outcome,\n",
+  "tests": [
+   "test/use-parsed-markdown.test.tsx"
+  ],
+  "red": "pwa use-parsed-markdown: 2 failed | 12 passed (14) — 'A settled, B running, A again: A stays the outcome, nothing is queued, B only becomes the last good tree'; 'a result for a text that is no longer current is kept as the last good tree only, never as the outcome'"
+ },
+ {
+  "id": "W4-T11-M29",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/useParsedMarkdown.ts",
+  "old": "      (j.answered !== undefined && sameRequest(j.answered, req)) ||\n",
+  "new": "",
+  "tests": [
+   "test/use-parsed-markdown.test.tsx"
+  ],
+  "red": "pwa use-parsed-markdown: 1 failed | 13 passed (14) — 'A settled, B running, A again: A stays the outcome, nothing is queued, B only becomes the last good tree'"
+ },
+ {
+  "id": "W4-T11-M30",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/useParsedMarkdown.ts",
+  "old": "||\n      (j.running !== undefined && sameRequest(j.running.req, req));",
+  "new": "||\n      false;",
+  "tests": [
+   "test/use-parsed-markdown.test.tsx"
+  ],
+  "red": "pwa use-parsed-markdown: 1 failed | 13 passed (14) — 'A running, B waiting, A again: the waiting B is dropped and A, when it settles, is the outcome'"
+ },
+ {
+  "id": "W4-T11-M31",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/useParsedMarkdown.ts",
+  "old": "      if (isLatest) jobs.answered = req;\n",
+  "new": "",
+  "tests": [
+   "test/use-parsed-markdown.test.tsx"
+  ],
+  "red": "pwa use-parsed-markdown: 1 failed | 13 passed (14) — 'A settled, B running, A again: A stays the outcome, nothing is queued, B only becomes the last good tree'"
+ },
+ {
+  "id": "W4-T11-M32",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownParse.ts",
+  "old": "  } catch (e) {\n    // `parseMarkdown` wraps its pipeline but not its pre-scan: a throw from there is answered like any other.\n    outcome = { kind: 'threw', error: errorName(e) };\n",
+  "new": "  } catch (e) {\n    throw e;\n",
+  "tests": [
+   "test/markdown-worker.test.ts"
+  ],
+  "red": "pwa markdown-worker: 1 failed | 19 passed (20) — 'a pre-scan that throws answers threw with the error name only, once, under the job id'"
+ },
+ {
+  "id": "W4-T11-M33",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownParse.ts",
+  "old": "    outcome = { kind: 'threw', error: errorName(e) };\n",
+  "new": "    outcome = { kind: 'threw', error: String(e) };\n",
+  "tests": [
+   "test/markdown-worker.test.ts"
+  ],
+  "red": "pwa markdown-worker: 1 failed | 19 passed (20) — 'a pre-scan that throws answers threw with the error name only, once, under the job id'"
+ },
+ {
+  "id": "W4-T11-M34",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/useParsedMarkdown.ts",
+  "old": "  } catch (e) {\n    answer = Promise.resolve({ kind: 'threw', error: thrownName(e) });\n",
+  "new": "  } catch (e) {\n    throw e;\n",
+  "tests": [
+   "test/use-parsed-markdown.test.tsx"
+  ],
+  "red": "pwa use-parsed-markdown: 1 failed | 13 passed (14) — 'the job answers threw with the error name, and the waiting job still runs'"
+ },
+ {
+  "id": "W4-T11-M35",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/useParsedMarkdown.ts",
+  "old": "error: thrownName(e) });",
+  "new": "error: String(e) });",
+  "tests": [
+   "test/use-parsed-markdown.test.tsx"
+  ],
+  "red": "pwa use-parsed-markdown: 1 failed | 13 passed (14) — 'the job answers threw with the error name, and the waiting job still runs'"
+ },
+ {
+  "id": "W4-T11-M36",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/renderHast.tsx",
+  "old": "    for (let i = from.length - 1; i >= 0; i--) stack.push({ node: from[i]!, to });",
+  "new": "    for (let i = 0; i < from.length; i++) stack.push({ node: from[i]!, to });",
+  "tests": [
+   "test/render-hast.test.tsx"
+  ],
+  "red": "pwa render-hast: 58 failed | 16 passed (74) — the loop pushes children first to last, so they pop last to first and the whole output tree comes out reversed: 55 M4.P10 parity cases, 'applies a url key only to the elements html-url-attributes lists it for', and the two T11 review 1-5 cases 'visits the url attributes in document order, unsorted, as <Markdown> does' and 'hands the transform an element whose children are the source element's, as <Markdown> does'"
+ },
+ {
+  "id": "W4-T11-M37",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/renderHast.tsx",
+  "old": "    const copy: Element = { ...node, properties: { ...node.properties } };",
+  "new": "    const copy: Element = { ...node, properties: { ...node.properties }, children: [] };",
+  "tests": [
+   "test/render-hast.test.tsx"
+  ],
+  "red": "pwa render-hast: 1 failed | 73 passed (74) — T11 review 1-5 'hands the transform an element whose children are the source element's, as <Markdown> does' (the copy's children are empty at call time)"
+ },
+ {
+  "id": "W4-T11-M38",
+  "pkg": "pwa",
+  "file": "pwa/src/session/ChatList.tsx",
+  "old": "            <div className=\"chat-item\">\n              <ChatItemView\n",
+  "new": "            <div className=\"chat-item\">\n              <ChatItemBody\n",
+  "tests": [
+   "test/chat-item-boundary.test.tsx"
+  ],
+  "red": "pwa chat-item-boundary: 2 failed | 4 passed (6) — 'a throwing item inside ChatList stays inside its own item: the outer boundary never shows' and 'a message that throws inside ChatList falls back to its raw text and the note, beside its neighbours'"
+ },
+ {
+  "id": "W4-T11-M39",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/router.ts",
+  "old": "  if (vt && !reduced) vt(go);",
+  "new": "  if (vt && !reduced && opts?.replace !== true) vt(go);",
+  "tests": [
+   "test/router-location.test.tsx"
+  ],
+  "red": "pwa router-location: 1 failed | 13 passed (14) — 'navigate(href, {replace: true}) calls document.startViewTransition once and still rewrites the entry'"
+ },
+ {
+  "id": "W4-T11-M40",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/router.ts",
+  "old": "export function usePath(): string { return useLocation().path; }",
+  "new": "export function usePath(): string {\n  const [p, setP] = useState(() => location.pathname);\n  useEffect(() => {\n    const on = (): void => setP(location.pathname);\n    addEventListener('popstate', on);\n    return () => removeEventListener('popstate', on);\n  }, []);\n  return p;\n}",
+  "tests": [
+   "test/router-location.test.tsx"
+  ],
+  "red": "pwa router-location: 1 failed | 13 passed (14) — 'a component that reads only usePath() re-renders on a search-only change'"
+ },
+ {
+  "id": "W4-T11-M41",
+  "pkg": "server",
+  "file": "ccd/ccrc-doctor-checks",
+  "old": "  local head='^/\\^' tail='(/|\\$/|\\(\\\\/\\|\\$\\)/|\\\\/.*)$'\n",
+  "new": "  local head='^/\\^' tail='(/|\\(\\\\/\\|\\$\\)/|\\\\/.*)$'\n",
+  "tests": [
+   "test/ccrc-doctor.test.ts",
+   "-t",
+   "docs-sw"
+  ],
+  "red": "Tests  1 failed | 19 passed | 891 skipped (911) — × FAILs an installed worker whose denylist holds /^\\/docs$/, naming it (T11 review 5-1: docs-sw pins the bare-$ covered form; PASSes instead of FAILing)"
+ },
+ {
+  "id": "W4-T11-M42",
+  "pkg": "server",
+  "file": "ccd/ccrc-doctor-checks",
+  "old": "  local LC_ALL=C\n  if [ -z \"${BOX_TREE_DIR:-}\" ] || ! declare -F _box_env_value >/dev/null 2>&1; then\n",
+  "new": "  if [ -z \"${BOX_TREE_DIR:-}\" ] || ! declare -F _box_env_value >/dev/null 2>&1; then\n",
+  "tests": [
+   "test/ccrc-doctor.test.ts",
+   "-t",
+   "docs-sw"
+  ],
+  "red": "Tests  2 failed | 18 passed | 891 skipped (911) — × still FAILs a /docs entry when an invalid UTF-8 byte follows the denylist ; × still PASSes the default list when an invalid UTF-8 byte follows the denylist (T11 review A-6: docs-sw reads the worker byte-wise under a UTF-8 locale; both WARN 'never closes')"
+ },
+ {
+  "id": "W4-T3-M9",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownGuard.ts",
+  "old": "      if (w === 0 || indent + w > 3) break;\n",
+  "new": "      if (w === 0) break;\n",
+  "tests": [
+   "test/markdown-guard.test.ts"
+  ],
+  "red": "pwa markdown-guard: 3 failed | 72 passed (75) — 'skips up to three spaces before a marker, never four' and 'a tab after a marker is part of its indentation' (re-anchored: the 3-column indentation cap now lives on the tab-aware skip loop's break line) [at 67448b526 the third red case is 'four columns of indentation is not a footnote definition']"
+ },
+ {
+  "id": "W4-T5-M33",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownParse.ts",
+  "old": "      typeof job.src === 'string' && (job.profile === 'chat' || job.profile === 'docs')\n        ? parseMarkdown(job.src, job.profile)",
+  "new": "      (job.profile === 'chat' || job.profile === 'docs')\n        ? parseMarkdown(job.src as string, job.profile)",
+  "tests": [
+   "test/markdown-worker.test.ts"
+  ],
+  "red": "pwa markdown-worker: 1 failed | 19 passed (20) — 'a non-string src answers threw TypeError without reaching the pre-scan, so the wrap is not what says it'"
+ },
+ {
+  "id": "W4-T6-M18",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/useParsedMarkdown.ts",
+  "old": "    if (j.running !== undefined) {\n      j.queued = covered ? undefined : next;\n      return;\n    }\n",
+  "new": "",
+  "tests": [
+   "test/use-parsed-markdown.test.tsx"
+  ],
+  "red": "pwa use-parsed-markdown: 5 failed | 9 passed (14) — 'three changes while one job runs leave one queued, the last: the parser sees 2 calls, not 4'; 'unmount aborts the running job and drops the queued one'; 'A settled, B running, A again: A stays the outcome, nothing is queued, B only becomes the last good tree'; 'a result for a text that is no longer current is kept as the last good tree only, never as the outcome'; 'A running, B waiting, A again: the waiting B is dropped and A, when it settles, is the outcome'"
+ },
+ {
+  "id": "W4-T4-M7",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/renderHast.tsx",
+  "old": "    for (const key in urlAttributes) {\n      if (Object.hasOwn(urlAttributes, key) && Object.hasOwn(copy.properties, key)) {\n        const test = urlAttributes[key];\n",
+  "new": "    for (const key in copy.properties) {\n      if (Object.hasOwn(copy.properties, key)) {\n        const test = null;\n",
+  "tests": [
+   "test/render-hast.test.tsx"
+  ],
+  "red": "pwa render-hast: 6 failed | 68 passed (74) — M4.P10 'colon-in-a-fence-info' (the code's className is blanked), 'with defaultUrlTransform, url attributes are blanked and other attributes are untouched' (the title is blanked), 'applies a url key only to the elements html-url-attributes lists it for', 'calls the transform once per url attribute, with the key and the element, as post() does', and both T11 review 1-5 cases"
+ },
+ {
+  "id": "W4-T4-M8",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/renderHast.tsx",
+  "old": "        if (test === null || test?.includes(copy.tagName)) {",
+  "new": "        if (test !== undefined) {",
+  "tests": [
+   "test/render-hast.test.tsx"
+  ],
+  "red": "pwa render-hast: 1 failed | 73 passed (74) — 'applies a url key only to the elements html-url-attributes lists it for' (the div's cite is blanked)"
+ },
+ {
+  "id": "W4-T4-M9",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/renderHast.tsx",
+  "old": "    const copy: Element = { ...node, properties: { ...node.properties } };",
+  "new": "    const copy: Element = { ...node, properties: node.properties };",
+  "tests": [
+   "test/render-hast.test.tsx"
+  ],
+  "red": "pwa render-hast: 1 failed | 73 passed (74) — 'a tree rendered with a transform deep-equals its clone from before, and renders the same twice' (the caller's javascript: href is blanked in place)"
  }
 ]
 ```
@@ -12980,5 +13380,5 @@ No commit in this task but Step 5's: everything else it writes is scratch or git
 - **D-4769 (2026-10-12)** — M4.M1's mutation "change plugin order" is replaced by "drop `remarkAlerts` from the list" and "drop `remarkGfm` from the list" (spec §4.15's M4.M1 mutation column). `remark-gfm` 4.0.1 registers micromark and mdast extensions only and returns no transformer (measured in the installed `remark-gfm/lib/index.js`), so `[remarkAlerts, remarkGfm]` renders byte-identically to `[remarkGfm, remarkAlerts]`: an equivalent mutant that can never go red. Task 1 measured the swap once, every golden case green (recorded in the SDD ledger), and its rows W4-T1-M1 and W4-T1-M2 drop a plugin instead, beside the spec's other two mutations (drop an alias; edit `CHAT_COMPONENTS.a`). Refinement (b); Tasks 1 and 2.
 - **D-4770 (2026-10-12)** — `docs-sw` counts `denylist:[` OCCURRENCES with bash builtins (`${body//"$open"/}` length arithmetic over `$(<"$sw")`) and matches each entry with bash's own ERE (`[[ $e =~ $re ]]`), not `grep -c 'denylist:\['` and an external ERE tool (spec §7.2 step 3). `grep -c` counts LINES, and workbox emits the whole worker as one minified line (measured: a real build's `sw.js` is one line), so M7.5's "two denylists: WARN" could never fire; and the doctor suite's PATH holds no `grep` (the file's executable code calls none of `grep`, `sed`, `awk`, `tr`, `head` or `cut`). Every verdict §7.2 and M7.5 state holds, pinned by the `ccrc doctor: docs-sw` describe and rows W4-T10-M1 to W4-T10-M4. Refinement (c); Task 10.
 - **D-4771 (2026-10-12)** — `docs-sw` SKIPs on either of `_check_update-exposure`'s two fleet evidences, a recorded `CCRC_ROLE=fleet` or a unit directory holding `ccrc-agent.service` and no `ccrc.service`, not on the role `_box_env_value "$BOX_ENV_FILE" CCRC_ROLE` reads alone (spec §7.2: "the role comes from `_box_env_value`"). A fleet host with no `ccrc.env`, the shape `ccrc-doctor.test.ts`'s env-less fleet-role case models, would otherwise run the check and FAIL on a bundle it never had. A `server` or `both` box, and a box with no evidence either way, is measured. The env-less case's summary pin moved from `5 + HEALTHY_SKIPS` to `6 + HEALTHY_SKIPS` skipped (measured); `HEALTHY_SKIPS` itself did not move. Pinned by rows W4-T10-M5 and W4-T10-M6. Refinement (d); Task 10.
-- **D-4772 (2026-10-12)** — `prescanMarkdown` departs from spec §4.10's pre-scan algorithm text in two ways (coordinator ruling, mail 4354, on question 4345). (1) Tabs are column-aware: a tab advances to the next multiple of 4 columns, as CommonMark does, both in the up-to-3-space skip and after a `>` or list marker, so `>` followed by a tab counts as a container marker; §4.10 says "skip up to 3 spaces" and "`>` (plus one optional space)". (2) Container depth is counted on every line, inside fenced blocks too; only the delimiter-run check skips fenced lines (§4.10 skips fenced blocks for both). Task 3's review measured three inputs that passed §4.10's pre-scan and then threw a RangeError in the parser (a tab between `>` markers; a fence opened inside a list item or an HTML block, which the parser closes while the pre-scan kept skipping); the hardening keeps U3's purpose, at the cost of rare false refusals, which chat renders as plain text with its note. Nesting continued by indentation across lines stays covered by the backstops (`threw`, `MD_MAX_TREE_DEPTH`, the worker budget) and is carried, with chat's main-thread cost on a crafted message of 4 KiB or less; `markdownGuard.ts`'s header names those bounds. Task 3's fix commit (the pre-scan hardening); rows W4-X1-M1 to W4-X1-M8 and the re-anchored W4-T3-M9, recorded beside Task 12's table.
-- **D-4773 (2026-10-12)** — `isRefusedChatImageSrc` also refuses an `http`/`https` scheme not followed by two slashes or backslashes (`/^https?:(?![\/\\]{2})/i`, after the same leading strip), beyond the predicate Task 6's text spells (a leading `/` or `\`) (coordinator agreement, mail 4397, on finding 4396). A browser resolves a same-scheme special-relative source such as `https:/api/example/x` against the page's own origin, so it is root-relative as the browser reads it, which is exactly what U3 clause 4, M4.C3 and refinement (k) refuse; react-markdown's `defaultUrlTransform` keeps it. Path-relative sources stay allowed (Q1, open). Task 6's review fix; rows W4-T6-M27 and W4-T6-M28, recorded beside Task 12's table.
+- **D-4772 (2026-10-12)** — `prescanMarkdown` departs from spec §4.10's pre-scan algorithm text in two ways (coordinator ruling, mail 4354, on question 4345). (1) Tabs are column-aware: a tab advances to the next multiple of 4 columns, as CommonMark does, both in the up-to-3-space skip and after a `>` or list marker, so `>` followed by a tab counts as a container marker; §4.10 says "skip up to 3 spaces" and "`>` (plus one optional space)". (2) Container depth is counted on every line, inside fenced blocks too; only the delimiter-run check skips fenced lines (§4.10 skips fenced blocks for both). Task 3's review measured three inputs that passed §4.10's pre-scan and then threw a RangeError in the parser (a tab between `>` markers; a fence opened inside a list item or an HTML block, which the parser closes while the pre-scan kept skipping); the hardening keeps U3's purpose, at the cost of rare false refusals, which chat renders as plain text with its note. Nesting continued by indentation across lines stays covered by the backstops (`threw`, `MD_MAX_TREE_DEPTH`, the worker budget) and is carried, with chat's main-thread cost on a crafted message of 4 KiB or less; `markdownGuard.ts`'s header names those bounds. Task 3's fix commit (the pre-scan hardening); rows W4-T11-M1 to W4-T11-M8 and the re-anchored W4-T3-M9, recorded beside Task 12's table.
+- **D-4773 (2026-10-12)** — `isRefusedChatImageSrc` also refuses an `http`/`https` scheme not followed by two slashes or backslashes (`/^https?:(?![\/\\]{2})/i`, after the same leading strip), beyond the predicate Task 6's text spells (a leading `/` or `\`) (coordinator agreement, mail 4397, on finding 4396). A browser resolves a same-scheme special-relative source such as `https:/api/example/x` against the page's own origin, so it is root-relative as the browser reads it, which is exactly what U3 clause 4, M4.C3 and refinement (k) refuse; react-markdown's `defaultUrlTransform` keeps it. Path-relative sources stay allowed (Q1, open). Task 6's review fix; rows W4-T11-M9 and W4-T11-M10, recorded beside Task 12's table.
