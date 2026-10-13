@@ -5654,8 +5654,8 @@ describe('child reclamation wave 9: the collector lane’s live switch has no wr
 
   // THE WIDER WRITER, the expiry pin's argument: a file that imports the ONE spelling and holds an `io` could write it
   // without spelling its name. The files whose code names the constant are the definer and the executor, which reads
-  // it from the registry listing alone, and neither reaches a write. The lane's feed and attention writes live in
-  // watch.ts, which never names the constant.
+  // it from the registry listing alone; neither reaches a FILE write, and since wave 10 the executor's one write is
+  // the latch, through the store's setCollectLane. The lane's feed and attention writes live in watch.ts, never naming it.
   it('the files that name its constant are the definer and the executor, and neither reaches a write', () => {
     const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
     expect(WRITE.test('await deps.io.writeFile(`${dir}/${m}`, "");'), 'CONTROL: the pattern sees a write').toBe(true);
@@ -5679,5 +5679,167 @@ describe('child reclamation wave 9: the collector’s lane and executor call the
       expect(code(r), `${r} does not import it from L0`)
         .toMatch(/import\s*(?:type\s*)?\{[^}]*\bisTmpRootId\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/api\.js'/);
     }
+  });
+});
+
+// CHILD RECLAMATION WAVE 10 (path-identity spec 2026-10-12 §5.9: "Exactly one database writer and one journal append
+// adapter exist; only POST and automatic latch call the writer"). APPENDED, for the reason the blocks above state:
+// `session-hook.test.ts`'s citation audit cites this file by line. Settings now arms the temp-root collector beside the
+// hand-touched legacy file, so what may move the switch is pinned as text:
+// - the store's one writer is called by the route's POST and the one latch helper, and by nothing else;
+// - the generation journal is appended by one adapter, from inside that writer only, and its basename is spelled once;
+// - the resolver that turns the switch into a licence is called by the executor and the GET's view composer alone;
+// - the latch helper is called by the executor and the lane's pass alone.
+// The call census reads server/src only: the PWA's client method of the same name posts to the route and is not the
+// store's writer, and the PWA cannot import server/src. Code lines only (`stallCode`): a sentence about a call is never a
+// call. KNOWN WIDTH: a call spelled inside a string on a code line counts, which errs toward red. A call through an
+// alias (`const w = store.setCollectLane; w(…)`) is not seen; the bar is the ordinary call.
+describe('child reclamation wave 10: the collector switch has one writer, one journal and one resolver', () => {
+  const STORE = 'server/src/coord/store.ts';
+  const ROUTES = 'server/src/coord/routes.ts';
+  const EXECUTOR = 'server/src/coord/collectTempRoot.ts';
+  const LANE = 'server/src/collectLane.ts';
+  const ADAPTER = 'server/src/coord/collectLaneJournal.ts';
+  const WATCH = 'server/src/watch.ts';
+  const SERVER = ALL.filter((f) => rel(f).startsWith('server/src/'));
+  const code = (r: string): string => stallCode(path.join(ccrcRoot, r));
+  /** A call or a method head: the name and its paren, never after `function ` (a declaration). */
+  const CALL = (n: string): RegExp => new RegExp(`(?<!function\\s+)\\b${n}\\s*\\(`, 'g');
+  const count = (text: string, re: RegExp): number => [...text.matchAll(re)].length;
+  /** `file:n` for every server/src file whose code lines match `re` (global) n times, sorted. */
+  const sitesOf = (re: RegExp): string[] => SERVER.flatMap((f) => {
+    const n = count(stallCode(f), re);
+    return n === 0 ? [] : [`${rel(f)}:${n}`];
+  }).sort();
+  const DEF_FN = (n: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?(?:async\\s+)?function\\s+${n}\\b`, 'm');
+  const DEF_VAL = (n: string): RegExp => new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${n}\\b`, 'm');
+  const definers = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  /** Quoted strings and template literals blanked to spaces, newlines kept: a brace inside a quote never moves a
+   *  body's end. */
+  const unquoted = (t: string): string =>
+    t.replace(/'(?:\\.|[^\\'\n])*'|"(?:\\.|[^\\"\n])*"|`(?:\\[\s\S]|[^\\`])*`/g, (m) => m.replace(/[^\n]/g, ' '));
+  /** The `{…}` body that opens at the first brace after the first match of `head`; '' when `head` matches nothing. */
+  const bodyAfter = (text: string, head: RegExp): string => {
+    const at = text.search(head);
+    if (at < 0) return '';
+    const flat = unquoted(text);
+    const open = flat.indexOf('{', at);
+    if (open < 0) return '';
+    let depth = 0;
+    for (let i = open; i < flat.length; i++) {
+      if (flat[i] === '{') depth += 1;
+      else if (flat[i] === '}') {
+        depth -= 1;
+        if (depth === 0) return text.slice(open, i + 1);
+      }
+    }
+    return text.slice(open);
+  };
+  /** The route's POST, from its registration to the next one: `stall-settings-route.test.ts`'s slice. */
+  const postSlice = (text: string): string => {
+    const decl = "app.post('/api/coord/collect-lane'";
+    const at = text.indexOf(decl);
+    if (at < 0) return '';
+    const next = /app\.(?:get|post)\('/.exec(text.slice(at + decl.length));
+    return text.slice(at, next === null ? text.length : at + decl.length + next.index);
+  };
+
+  it('CONTROL: the scanners see a call, a method head and a body, and not a declaration, a comment line or a quoted brace', () => {
+    expect(count('    const w = deps.coord.setCollectLane(req, at, deps.collectLane.journal);', CALL('setCollectLane'))).toBe(1);
+    expect(count('  setCollectLane(req: CollectLaneWriteRequest, at: number, journal: CollectLaneJournal): CollectLaneWrite {',
+      CALL('setCollectLane')), 'a method head is a site').toBe(1);
+    expect(count('export function collectLaneEffective(i: CollectLaneInputs): CollectLaneEffective {', CALL('collectLaneEffective')))
+      .toBe(0);
+    expect(count('export async function collectRetireLatch(c: CollectControlDeps): CollectLatchOutcome {', CALL('collectRetireLatch')))
+      .toBe(0);
+    expect(count(stallCodeText('  // c.coord.setCollectLane(req, at, journal)\n   * collectLaneEffective(i) is called here'),
+      CALL('setCollectLane')), 'a comment line is not a call').toBe(0);
+    expect(DEF_FN('collectRetireLatch').test(
+      'export function collectRetireLatch(c: CollectControlDeps, switches: CollectSwitches, epoch: CollectEpochPair): CollectLatchOutcome {'))
+      .toBe(true);
+    expect(DEF_FN('collectRetireLatch').test('    const out = collectRetireLatch(deps.control, sw, pair);')).toBe(false);
+    const planted = "export function f(): void {\n  const s = '}';\n  g(`${'{'}`);\n  if (x) { h(); }\n}\nexport function k(): void { h(); }\n";
+    expect(bodyAfter(planted, /^export function f\(/m), 'the body ends at its own brace, past a quoted one')
+      .toBe("{\n  const s = '}';\n  g(`${'{'}`);\n  if (x) { h(); }\n}");
+    expect(bodyAfter(planted, /^export function absent\(/m), 'an absent head reads as no body').toBe('');
+    const routes = "app.get('/api/coord/collect-lane', a);\napp.post('/api/coord/collect-lane', async () => { w(); });\napp.get('/api/runs', b);\n";
+    expect(postSlice(routes)).toBe("app.post('/api/coord/collect-lane', async () => { w(); });\n");
+    expect(SERVER.length, 'the walk reached server/src').toBeGreaterThan(30);
+    expect(SERVER.map(rel)).toContain(STORE);
+  });
+
+  it('setCollectLane is defined in store.ts and called only in the route’s POST and collectRetireLatch', () => {
+    expect(sitesOf(/\bsetCollectLane\s*\(/g), 'a second caller, or a second definition')
+      .toEqual([`${EXECUTOR}:1`, `${ROUTES}:1`, `${STORE}:1`]);
+    expect(code(STORE), 'the store’s one spelling is not the single-line method head')
+      .toMatch(/^[ \t]*setCollectLane\s*\([^)]*\)\s*:\s*CollectLaneWrite\s*\{[ \t]*$/m);
+    const post = postSlice(code(ROUTES));
+    expect(post, 'the POST registration is gone — this scan is over nothing').toContain("app.post('/api/coord/collect-lane'");
+    expect(count(post, /\bsetCollectLane\s*\(/g), 'the routes.ts call is not in the POST handler').toBe(1);
+    expect(count(bodyAfter(code(EXECUTOR), /^export function collectRetireLatch\(/m), /\bsetCollectLane\s*\(/g),
+      'the executor file’s call is not in the latch helper').toBe(1);
+  });
+
+  it('appendGeneration is defined once, in the adapter, and called once, in setCollectLane', () => {
+    expect(sitesOf(/\.appendGeneration\s*\(/g), 'a second caller of the append').toEqual([`${STORE}:1`]);
+    expect(count(bodyAfter(code(STORE), /^[ \t]*setCollectLane\s*\(/m), /\.appendGeneration\s*\(/g),
+      'the store’s append is not inside setCollectLane').toBe(1);
+    expect(SERVER.filter((f) => /\bappendGeneration\b/.test(stallCode(f))).map(rel).sort(),
+      'a second file defines or names the append').toEqual([LANE, ADAPTER, STORE]);
+    const lane = code(LANE);
+    const port = bodyAfter(lane, /^export interface CollectLaneJournal\b/m);
+    expect(count(port, /\bappendGeneration\b/g), 'the L1 port no longer declares the append').toBe(1);
+    expect(count(lane, /\bappendGeneration\b/g), 'collectLane.ts names the append outside the port it declares').toBe(1);
+    expect(count(code(STORE), /\bappendGeneration\b/g), 'the store names the append other than by its one call').toBe(1);
+    expect(count(code(ADAPTER), /\bappendGeneration\b/g), 'the adapter does not define the append').toBeGreaterThan(0);
+  });
+
+  it('COLLECT_LANE_JOURNAL_BASENAME has one definer, and the quoted basename stands on no other TS or TSX code line', () => {
+    const BASENAME = 'collect-lane-generation.log';
+    expect(stallCodeText(`  // ~/.ccrc/${BASENAME}\n   * ${BASENAME}`).includes(BASENAME), 'CONTROL: a comment line is not a spelling')
+      .toBe(false);
+    expect(stallCodeText(`const p = '${BASENAME}';`).includes(BASENAME), 'CONTROL: a code line is').toBe(true);
+    expect(definers(DEF_VAL('COLLECT_LANE_JOURNAL_BASENAME')), 'a second definer').toEqual([ADAPTER]);
+    expect(ALL.filter((f) => stallCode(f).includes(BASENAME)).map(rel).sort(), 'the basename spelled outside its definer')
+      .toEqual([ADAPTER]);
+    expect(code(ADAPTER).split(BASENAME).length - 1, 'the definer spells it more than once').toBe(1);
+    expect(code(ADAPTER)).toMatch(/^export const COLLECT_LANE_JOURNAL_BASENAME = 'collect-lane-generation\.log';$/m);
+  });
+
+  it('collectLaneEffective is defined in collectLane.ts and called only in collectTempRoot and collectLaneView', () => {
+    expect(definers(DEF_FN('collectLaneEffective')), 'a second definition').toEqual([LANE]);
+    expect(definers(DEF_VAL('collectLaneEffective')), 'a definition as a value').toEqual([]);
+    const calls = CALL('collectLaneEffective');
+    expect(sitesOf(calls).map((s) => s.slice(0, s.lastIndexOf(':'))), 'a caller outside the executor and the view')
+      .toEqual([LANE, EXECUTOR]);
+    const lane = code(LANE);
+    const view = bodyAfter(lane, /^export function collectLaneView\(/m);
+    expect(count(view, calls), 'collectLaneView does not resolve the switch').toBeGreaterThan(0);
+    expect(count(lane, calls), 'collectLane.ts calls the resolver outside collectLaneView').toBe(count(view, calls));
+    const exec = code(EXECUTOR);
+    const job = bodyAfter(exec, /^export async function collectTempRoot\(/m);
+    expect(count(job, calls), 'the executor does not resolve the switch').toBeGreaterThan(0);
+    expect(count(exec, calls), 'collectTempRoot.ts calls the resolver outside the executor').toBe(count(job, calls));
+  });
+
+  it('collectRetireLatch is called only by the executor and the pass', () => {
+    expect(definers(DEF_FN('collectRetireLatch')), 'a second definition').toEqual([EXECUTOR]);
+    const calls = CALL('collectRetireLatch');
+    expect(sitesOf(calls), 'a third caller, or a second call').toEqual([`${EXECUTOR}:1`, `${WATCH}:1`]);
+    expect(count(bodyAfter(code(EXECUTOR), /^export async function collectTempRoot\(/m), calls),
+      'the executor file’s call is not in collectTempRoot').toBe(1);
+    expect(count(bodyAfter(code(WATCH), /^[ \t]*private async collectPass\(/m), calls),
+      'watch.ts’s call is not in the pass').toBe(1);
+  });
+
+  it('the marker’s holders are still exactly the definer and the executor', () => {
+    const WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+    expect(ALL.filter((f) => stallCode(f).includes('collect-lane-live')).map(rel).sort(), 'the marker spelled outside its definer')
+      .toEqual([LANE]);
+    expect(ALL.filter((f) => stallCode(f).includes('COLLECT_LANE_LIVE_MARKER')).map(rel).sort(), 'a third holder of its constant')
+      .toEqual([LANE, EXECUTOR]);
+    expect(code(EXECUTOR), 'the executor reaches a file write').not.toMatch(WRITE);
+    expect(count(code(EXECUTOR), /\.setCollectLane\s*\(/g), 'the executor’s one write is the latch, through the store').toBe(1);
+    expect(code(EXECUTOR), 'the executor appends to the journal itself').not.toMatch(/\.appendGeneration\s*\(/);
   });
 });

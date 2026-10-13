@@ -24,6 +24,7 @@ import { renderEnvelope, type EnvelopeInput } from '../src/coord/envelope.js';
 import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
 import { STALL_REPLY_WAITING_PREFIX, STALL_REPORT_PREFIX, STALL_WAIT_PREFIX } from '../src/coord/stall.js';
 import { dequeuedSubject, mergedSubject } from '../src/coord/rundefs.js';
+import { COLLECT_LANE_LIVE_MARKER } from '../src/collectLane.js';
 import type { DoneClaim } from '../src/coord/fingerprint.js';
 import {
   ASK_REFUSE_CODES, MAIL_BODY_MAX_BYTES, MAIL_REJECT_CODES, RUN_REFUSE_CODES,
@@ -1617,6 +1618,23 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     // Stall-watch settings wave 1, the caps dial's accounting: EXEMPT above
     // only PERMITS the omission; this is what FORBIDS the mention.
     expect(allSkillText).not.toContain('/api/coord/stall-watch');
+  });
+
+  it('never names the collector switch or its legacy file — a door that would tell a coordinator how to arm deletion of its own children’s temp roots', () => {
+    // Child-reclamation wave 10 (path-identity spec 2026-10-12 §5.9), the caps
+    // dial's accounting: EXEMPT above only PERMITS the omission of both
+    // methods; this is what FORBIDS the mention. Settings, or the hand-touched
+    // legacy file, arms the collector that removes a finished child's temp
+    // root, so a coordinator told either name would be told how to arm, or
+    // stop, deletion under its own runs. The legacy file's name is read from
+    // its definer, never spelled here. The bare `collect-lane` token covers
+    // the route, that file and the generation journal at once.
+    const words = ['/api/coord/collect-lane', 'GET /api/coord/collect-lane', 'POST /api/coord/collect-lane',
+      'COLLECT_LANE_LIVE_MARKER', COLLECT_LANE_LIVE_MARKER, 'collect-lane'];
+    const named = (text: string): string[] => words.filter((w) => text.includes(w));
+    expect(named(`${allSkillText}\nPOST /api/coord/collect-lane\n`), 'CONTROL: a mention planted in a scratch copy is seen')
+      .toEqual(['/api/coord/collect-lane', 'POST /api/coord/collect-lane', 'collect-lane']);
+    expect(named(allSkillText)).toEqual([]);
   });
 
   it('never names the break door — a door the claimant is not the one to walk through', () => {

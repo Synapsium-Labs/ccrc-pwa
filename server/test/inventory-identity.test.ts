@@ -183,6 +183,26 @@ describe('identity is published only from the direct read, under the captured ep
     for (const [name, r, outcome, want] of rows) expect(fleetNodeMeasuredOf(r, outcome, NOW), name).toEqual(want);
   });
 
+  it('a sweep whose apply throws publishes inventory-refused under its captured epoch, replacing a same-epoch known', async () => {
+    // The table above maps an `error` outcome; this is the sweep that produces one. Its reads came back, then the
+    // store write threw (a locked or corrupt coord.db), so the read was never recorded and is not trusted as identity:
+    // the publish sits after the catch, and a same-epoch `known` never outlives such a sweep (spec §5.2, §5.9).
+    const b = box('ccrc-ident-throw-');
+    plant(b.ccrcDir, withId(U1));
+    const cell = readyCell();
+    await sweepInventory(remoteDeps(b, cell), NOW - 60_000);
+    expect(cell.current(), 'CONTROL: the first sweep publishes known').toEqual({ kind: 'known', connectionEpoch: 1, nodeId: U1, measuredAt: NOW - 60_000 });
+    const upsert = vi.spyOn(b.store, 'upsertNodeMeasurement').mockImplementation(() => { throw new Error('database is locked'); });
+    try {
+      const out = await sweepInventory(remoteDeps(b, cell), NOW);
+      expect(out[1], 'CONTROL: the fleet row’s apply threw').toMatchObject({ label: FLEET_LABEL, result: 'error' });
+      expect(upsert).toHaveBeenCalled();
+      expect(cell.current()).toEqual({ kind: 'unmeasured', connectionEpoch: 1, why: 'inventory-refused' });
+    } finally {
+      upsert.mockRestore();
+    }
+  });
+
   it('local mode publishes the own node under epoch 0 through ownIdentity', async () => {
     // In local mode this box IS the fleet node: nothing invalidates the cell, and the server row's own sweep publishes.
     const b = box('ccrc-ident-local-');
