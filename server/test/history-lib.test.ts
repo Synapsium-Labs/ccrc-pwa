@@ -3123,6 +3123,19 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
       expect(t, `${what} must say not to copy a backup over history.db`).toContain('do not copy a backup over history.db by hand');
     }
   });
+  // HI2 H-162 (D-4599): a bound store whose user_version is below 1 holds its meta.store_id, so the binding refusal's words are false for it.
+  it('H-162: a store at user_version 0 has its own detail and remedy, and the binding refusal keeps its words (D-4599)', () => {
+    const v0 = healthLib.deriveHealth(base({ exit: 5, reason: 'store-schema-missing', userVersion: 0 })).fail[0]!;
+    expect(v0.word).toBe('store-schema-missing');
+    expect(v0.detail, 'the store holds a store_id').not.toContain('holds no meta.store_id');
+    expect(v0.detail).toContain('user_version');
+    expect(v0.remedy, 'the v0 remedy is its own').not.toContain('has no meta.store_id');
+    expect(v0.remedy).toContain('user_version');
+    for (const phrase of ['capture stays held', 'journal keeps everything drained', 'do not copy a backup over history.db by hand']) expect(v0.remedy, phrase).toContain(phrase);
+    const bound = healthLib.deriveHealth(base({ exit: 5, reason: 'store-schema-missing', userVersion: null })).fail[0]!;
+    expect(bound.detail, 'CONTROL: the binding refusal keeps its words').toContain('holds no meta.store_id');
+    expect(bound.remedy).toBe(healthLib.HEALTH_REMEDIES['store-schema-missing']);
+  });
   it('export-overdue tells the operator what a B1 build can do: keep the store and raise cleanupPeriodDays (FR3-d)', () => {
     const r = healthLib.HEALTH_REMEDIES['export-overdue']!;
     expect(r).toContain('cleanupPeriodDays');
@@ -6643,6 +6656,20 @@ describe('lib: HA2, the read verbs\' envelope, schema word, shared readers and s
     expect(libPlan.REASONS['store-schema-missing']).toBe(libPlan.EXIT.DB);
   });
 
+  it('H-162: the v0 arm keeps the recorded migration word, and planMigration refuses a stored version below 1 (D-4599)', () => {
+    for (const v of [0, -1, Number.NaN, 1.5]) {
+      const r = libPlan.decideStatusRead({ userVersion: v, journalMode: 'wal', recordedMigration: 'snapshot-needs-op' });
+      expect([r.exit, r.reason, r.migration], String(v)).toEqual([5, 'store-schema-missing', 'snapshot-needs-op']);
+      expect(libPlan.storeVersionDamaged(v), `storeVersionDamaged(${v})`).toBe(true);
+    }
+    expect(libPlan.storeVersionDamaged(1), 'CONTROL: version 1 is a store').toBe(false);
+    const mig = (stored: number): libPlan.MigrationInputs => ({
+      stored, code: 2, freeBytes: 2 ** 40, thresholdBytes: 1, sizeBytes: 1, boundS: null, copyBps: null, attempts: 0, heavy: false,
+    });
+    expect(libPlan.planMigration(mig(1)), 'CONTROL: a v1 store migrates').toBe('snapshot-then-migrate');
+    for (const v of [0, -1, Number.NaN, 1.5]) expect(() => libPlan.planMigration(mig(v)), String(v)).toThrow(TypeError);
+  });
+
   it('H-14: topicsOfColumn reads a JSON array of strings, else one topic per line, and lives in lib alone', () => {
     const { topicsOfColumn } = libOut;
     expect(topicsOfColumn('["a","b",3,null]')).toEqual(['a', 'b']);
@@ -6673,6 +6700,31 @@ describe('lib: HA2, the read verbs\' envelope, schema word, shared readers and s
     try { expect(replayStore.recoverOpenOn(reader2), 'CONTROL: an open recover step').toBe(true); } finally { reader2.close(); }
   });
 
+  it('H-163: the grep-gate measurement is spelled once, in store.mjs, and ftsGateFactsOn reads the four facts', () => {
+    const literal = 'WHERE step = ? AND completed_ms IS NULL LIMIT 1';
+    const holders = sources().filter(([, src]) => src.includes(literal)).map(([f]) => f);
+    expect(holders, 'one reader of the rebuild row, shared by status and grep').toEqual(['store.mjs']);
+    const file = join(mkTmp('ccrc-hist-h163-'), 'history.db');
+    const w = new ReplaySqlite(file);
+    w.exec('CREATE TABLE derivation_state (step TEXT NOT NULL, version INTEGER NOT NULL, cursor TEXT, completed_ms INTEGER)');
+    w.close();
+    const facts = (): unknown => {
+      const reader = replayStore.openReader(file);
+      try { return replayStore.ftsGateFactsOn(reader); } finally { reader.close(); }
+    };
+    expect(facts(), 'no blobs_fts yet').toEqual({ probe: 'present', table: false, rebuilding: false, completed: false });
+    const w2 = new ReplaySqlite(file);
+    w2.exec("CREATE VIRTUAL TABLE blobs_fts USING fts5(body)");
+    w2.exec("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('fts', 1, NULL, NULL)");
+    w2.close();
+    expect(facts(), 'the table, a backfill row that has not completed').toEqual({ probe: 'present', table: true, rebuilding: false, completed: false });
+    const w3 = new ReplaySqlite(file);
+    w3.exec("UPDATE derivation_state SET completed_ms = 5 WHERE step = 'fts'");
+    w3.exec("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('fts-rebuild', 1, NULL, NULL)");
+    w3.close();
+    expect(facts(), 'a finished backfill and an open rebuild row').toEqual({ probe: 'present', table: true, rebuilding: true, completed: true });
+  });
+
   it('H-25: schemaAdditive names a measured column set that is no array, and reads a null measurement as none', () => {
     const v1 = t17lib.SCHEMA_ADDED[1]!.tables as Record<string, string[]>;
     expect(t17lib.schemaAdditive(t17lib.SCHEMA_ADDED, { 1: v1 }), 'CONTROL: the real v1 is additive').toEqual({ ok: true });
@@ -6682,5 +6734,19 @@ describe('lib: HA2, the read verbs\' envelope, schema word, shared readers and s
       expect(r.ok ? [] : r.lost, JSON.stringify(bad)).toContain('nodes at v1 lists no array of columns');
     }
     expect(t17lib.schemaAdditive(t17lib.SCHEMA_ADDED, null as unknown as undefined), 'a null measurement is no measurement').toEqual({ ok: true });
+  });
+
+  it('H-164: schemaAdditive names a measured version entry that is no table map, and a declared one that is no object, and never throws', () => {
+    const lostOf = (r: { ok: boolean; lost?: string[] }): string[] => (r.ok ? [] : r.lost!);
+    for (const bad of [null, [], 'tables', 7]) {
+      const measured = { 1: bad } as unknown as Record<string, Record<string, string[]>>;
+      expect(() => t17lib.schemaAdditive(t17lib.SCHEMA_ADDED, measured), JSON.stringify(bad)).not.toThrow();
+      expect(lostOf(t17lib.schemaAdditive(t17lib.SCHEMA_ADDED, measured)), JSON.stringify(bad)).toContain('v1 measured no table map');
+    }
+    for (const bad of [null, [], 'entry']) {
+      const declared = { 1: bad } as unknown as typeof t17lib.SCHEMA_ADDED;
+      expect(() => t17lib.schemaAdditive(declared), JSON.stringify(bad)).not.toThrow();
+      expect(lostOf(t17lib.schemaAdditive(declared)), JSON.stringify(bad)).toContain('v1 is no object');
+    }
   });
 });

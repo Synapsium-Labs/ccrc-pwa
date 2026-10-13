@@ -44,7 +44,7 @@ import {
   CARRIER_KILL_S, EXIT, SPOOL_FILE_MAX, OBS_FILE_MAX, CONTROL_FILE_MAX, observationOk, SCHEMA_ADDED, SCHEMA_VERSION, SCAN_INTERVAL_MS, STATFS_DEADLINE_MS, capOf, decideCandidate,
   decideEpochLine, decideRekey, decideStoreOpen, floorThreshold, locationMatches,
   UUID_RE, WRITER_RE, drainingNameOk, drainingNameParts, drainingOrder, eventKey, historyPaths, idOk, spoolFileIdOf, joinGeneration, journalRecord, parseSpoolLine,
-  passOutcome, planFileRead, planMigration, planRun, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText, spoolLinesOverCap,
+  passOutcome, planFileRead, planMigration, planRun, storeVersionDamaged, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText, spoolLinesOverCap,
   SQLITE_CODES, decideDrainFailure, blobOverDecodeCap, CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, jsonWithinStructureBound, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
   toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, ftsTextOf,
@@ -3242,6 +3242,9 @@ export function openStore(home, P, role, deps) {
     throw e;
   }
   if (stored > code) return { word: 'schema-newer' };
+  // D-4599 (HI2 H-162): the reader answers a version below 1 as store-schema-missing, so the writer refuses it with the same
+  // word before the pending finish or the WAL open, and never plans a migration from MIGRATIONS[0] over tables that exist.
+  if (storeVersionDamaged(stored)) return { word: 'store-schema-missing' };
   if (verdict.act === 'finish-pending') finishPending(home);
   let db;
   try {
@@ -3453,17 +3456,22 @@ export async function scheduledPass(parsed, deps, out) {
 }
 
 /** D-4600 (history-operator-door-survives-a-closed-pipe): the default `out` writes the sweep's lines to stdout, and a reader
- *  that has gone (`ccd-history-sweep --op … | head -1`) makes the next write an EPIPE 'error' event that, unhandled, kills the
- *  pass mid-op (the store survives a crash; the operator loses the result). This swallows EPIPE alone (a write to a destroyed
- *  stream is then dropped by Node), so the op runs to its end and its exit code stands, and rethrows any other stdout error. */
-let stdoutGuarded = false;
+ *  that has gone (`ccd-history-sweep --op … | head -1`, or `2>&1 | head -1` for the stderr lines the pass prints itself)
+ *  makes the next write an EPIPE 'error' event that, unhandled, kills the pass mid-op (the store survives a crash; the
+ *  operator loses the result). This swallows EPIPE alone on both streams, so the op runs to its end and its exit code
+ *  stands, and rethrows any other stream error. The listener is `.on`, never `.once` (HI2 H-199): after an EPIPE Node's
+ *  stdio stream is NOT destroyed (stdio's dummyDestroy un-destroys it), so every later write retries the syscall and emits a
+ *  fresh EPIPE (measured on Node 24.14.1: 49 events over 50 writes), and a `.once` listener would crash on the second. */
+let stdioGuarded = false;
 function stdoutOut() {
-  if (!stdoutGuarded) {
-    stdoutGuarded = true;
-    process.stdout.on('error', (e) => {
-      if (e && e.code === 'EPIPE') return;
-      throw e;
-    });
+  if (!stdioGuarded) {
+    stdioGuarded = true;
+    for (const stream of [process.stdout, process.stderr]) {
+      stream.on('error', (e) => {
+        if (e && e.code === 'EPIPE') return;
+        throw e;
+      });
+    }
   }
   return (line) => { process.stdout.write(`${line}\n`); };
 }
@@ -6701,10 +6709,17 @@ export async function repairOp(db, ctx) {
     ctx.out(`history-sweep: integrity_check could not run: ${e && e.message ? e.message : String(e)}`);
     // H-80: the cause is worded by what was measured. A throw out of integrity_check names an FTS cause only when the FTS tables
     // are measured unhealthy; a store whose FTS tables stand (a CORRUPT or I/O error, say) has its integrity unmeasured, no more.
+    // H-201: and only when an FTS index was ever set up: a store on a Node without FTS5 never made the tables, so its empty set is
+    // not a missing index. FTS was set up when the meta says ready or some FTS table or shadow stands (a partial set).
     let fts = null;
-    try { fts = ftsTablesHealthy(ftsMeasure(db)); } catch { fts = null; }
+    let ftsSetUp = false;
+    try {
+      const measured = ftsMeasure(db);
+      fts = ftsTablesHealthy(measured);
+      ftsSetUp = measured.tables.size > 0 || getMeta(db, 'fts') === 'ready';
+    } catch { fts = null; }
     const remedy = 'the operator restores a backup (ccrc history doctor --restore <file>) or rebuilds from the journal (ccrc history doctor --rebuild), from a terminal outside any session';
-    ctx.out(fts !== null && (!fts.blobs || !fts.nodes)
+    ctx.out(fts !== null && ftsSetUp && (!fts.blobs || !fts.nodes)
       ? `history-sweep: repair-refused: an FTS index whose own tables are missing cannot be opened, dropped or rebuilt by a repair; ${remedy}`
       : `history-sweep: repair-refused: PRAGMA integrity_check could not run, so the store's integrity is unmeasured and no rebuild starts; ${remedy}`);
     return { rc: EXIT.REFUSED, reason: 'repair-refused' };

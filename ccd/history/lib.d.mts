@@ -194,6 +194,7 @@ export function decideCliStore(f: CliStoreFacts): CliStoreVerdict;
 export interface StatusReadFacts { userVersion: number; journalMode: string; recordedMigration: string | undefined }
 export interface StatusReadVerdict { exit: number; reason?: string; migration: MigrationVerdict }
 export function decideStatusRead(f: StatusReadFacts): StatusReadVerdict;
+export function storeVersionDamaged(v: number): boolean;
 export function decideStatusReadFailure(f: { storeWord: string | null; sqliteError: boolean }): { exit: 5; reason: string } | null;
 export function planCopy(i: { freeBytes: number; thresholdBytes: number; sizeBytes: number }): { admit: boolean; needBytes: number | null };
 export function floorThreshold(fsSizeBytes: number, runBudgetBytes?: number): number;

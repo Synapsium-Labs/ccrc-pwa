@@ -154,40 +154,82 @@ describe.skipIf(process.platform === 'darwin')('O54 (relay half): the CLI and th
     expect(j.stderr).toContain('line one\nline two\n');
   }, HEAVY);
 
-  /** A door run with its stdout pipe destroyed on this side at once, as `| head -1` closes it: every write the child makes
-   *  to stdout after that is EPIPE. Resolves with the child's exit and its stderr. */
-  function closedStdout(box: HistoryBox, file: string, argv: string[], opts: { lateExit?: boolean } = {}): Promise<{ code: number | null; stderr: string }> {
-    // `lateExit` defers process.exit by 300 ms, so a loop turn follows the last write: the turn in which a failed write's
-    // 'error' is emitted, as it is when the op's output is spread over several turns.
+  /** A door run with one of its pipes (stdout by default, stderr with `which`) destroyed on this side at once, as `| head -1`
+   *  or `2>&1 | head -1` closes it: every write the child makes to that stream after that is EPIPE. Resolves with the child's
+   *  exit and the text of both streams as far as this side kept reading (the destroyed one reads empty). */
+  function closedPipe(box: HistoryBox, file: string, argv: string[], opts: { which?: 'stdout' | 'stderr'; lateExit?: boolean } = {}): Promise<{ code: number | null; stdout: string; stderr: string }> {
+    const which = opts.which ?? 'stdout';
+    // `lateExit` writes TWO lines to the closed stream 50 ms after the door asks to end, and defers the end to 300 ms, so a
+    // loop turn follows the last write: the turn in which a failed write's 'error' is emitted (H-199). After the op's own first
+    // EPIPE every later write fails again, and each of those errors must reach the listener, so a door that listens with `.once`
+    // crashes on the second. The writes come from a timer, not from the flushing write's own callback: written there, they raise
+    // no second 'error' at all (measured), and the pin would pass on a `.once` listener. The tail starts on process.exit or, when
+    // the door ends without calling it, on beforeExit.
     const late = path.join(box.home, 'late-exit.mjs');
-    fs.writeFileSync(late, 'const exit = process.exit.bind(process);\nprocess.exit = (c) => { setTimeout(() => exit(c), 300); };\n');
+    fs.writeFileSync(late, [
+      'const exit = process.exit.bind(process);',
+      'let wrote = false;',
+      `const tail = () => { if (wrote) return; wrote = true; process.${which}.write('late 1\\n'); process.${which}.write('late 2\\n'); };`,
+      'process.exit = (...a) => { setTimeout(tail, 50); setTimeout(() => exit(...a), 300); };',
+      "process.on('beforeExit', () => { setTimeout(tail, 50); setTimeout(() => {}, 300); });",
+      '',
+    ].join('\n'));
     const env = { ...box.env, HISTORY_TEST_STATFS: 'plenty', NODE_OPTIONS: preloadOptions([PRELOADS.statfs, ...(opts.lateExit === true ? [late] : [])]) };
     return new Promise((resolve) => {
       const child = spawn(file, argv, { env, cwd: box.home, stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
       let stderr = '';
+      child.stdout.setEncoding('utf8');
       child.stderr.setEncoding('utf8');
+      child.stdout.on('data', (d: string) => { stdout += d; });
       child.stderr.on('data', (d: string) => { stderr += d; });
-      child.stdout.destroy();
+      child[which].destroy();
       const guard = setTimeout(() => { child.kill('SIGTERM'); }, HEAVY - 20_000);
-      child.on('close', (code) => { clearTimeout(guard); resolve({ code, stderr }); });
+      child.on('close', (code) => { clearTimeout(guard); resolve({ code, stdout, stderr }); });
     });
   }
 
   it('D-4600 (H-34): a closed stdout pipe does not crash the CLI, and the sweep\'s result is still relayed as its exit', async () => {
     const box = boundBox('ccrc-hist-d4600a-');
     stubShim(box, { stdout: `${'relayed line\n'.repeat(2000)}{"rc":2,"reason":"adopt-refused"}\n`, exit: 2 });
-    const r = await closedStdout(box, process.execPath, ['--no-warnings', CLI, 'doctor', '--backup']);
+    const r = await closedPipe(box, process.execPath, ['--no-warnings', CLI, 'doctor', '--backup'], { lateExit: true });
     expect(r.stderr, 'no unhandled EPIPE and no stack').not.toMatch(/EPIPE|node:events/);
     expect(r.code, r.stderr).toBe(2);
     expect(r.stderr).toMatch(/^ccrc history doctor: refused: adopt-refused; /m);
-    expect(stubArgv(box), 'the shim ran to its end: its result was drained').toEqual(['--op backup']);
+    // H-203: the stand-in records its argv before it prints, so this shows only that the shim was spawned; the drain is carried
+    // by the relayed refusal line above and the exit 2, both of which exist only once the 2,000 lines were read to the result.
+    expect(stubArgv(box), 'the shim was spawned with --op backup').toEqual(['--op backup']);
   }, HEAVY);
 
   it('D-4600 (H-34): the direct door survives a closed stdout pipe and exits with its own rc', async () => {
     const box = boundBox('ccrc-hist-d4600b-');
-    const r = await closedStdout(box, 'bash', [path.join(box.home, '.local', 'bin', 'ccd-history-sweep'), '--op', 'backup'], { lateExit: true });
+    const r = await closedPipe(box, 'bash', [path.join(box.home, '.local', 'bin', 'ccd-history-sweep'), '--op', 'backup'], { lateExit: true });
     expect(r.stderr, 'no unhandled EPIPE and no stack').not.toMatch(/EPIPE|node:events/);
     expect(r.code, r.stderr).toBe(0);
+    expect(maintNames(historyPaths(box.home).backups), 'the backup was made').toHaveLength(1);
+  }, HEAVY);
+
+  // HI2 H-200 (D-4600): the same closed pipe on stderr. `ccrc history import --apply --json 2>&1 >/dev/null | head -1` closes the
+  // stream the relay writes the sweep's lines to under --json, and the stream the shim inherits for its own lines.
+  it('D-4600 (H-200): under --json a closed stderr pipe does not crash the CLI: the relayed lines are dropped, the result still its exit', async () => {
+    const box = boundBox('ccrc-hist-d4600c-');
+    stubShim(box, { stdout: `${'relayed line\n'.repeat(2000)}{"rc":2,"reason":"adopt-refused"}\n`, exit: 2 });
+    const r = await closedPipe(box, process.execPath, ['--no-warnings', CLI, 'doctor', '--backup', '--json'], { which: 'stderr', lateExit: true });
+    expect(r.stdout, 'no unhandled EPIPE and no stack').not.toMatch(/EPIPE|node:events/);
+    expect(r.code, `an unhandled EPIPE on stderr is exit 1; stdout: ${r.stdout}`).toBe(2);
+    expect(JSON.parse(r.stdout.trim()), 'the envelope is the relayed result').toMatchObject({ exit: 2, reason: 'adopt-refused' });
+    expect(stubArgv(box), 'the shim was spawned with --op backup').toEqual(['--op backup']);
+  }, HEAVY);
+
+  it('D-4600 (H-200): the direct door survives a closed stderr pipe and exits with its own rc', async () => {
+    const box = boundBox('ccrc-hist-d4600d-');
+    // The journal half names a spool/ that is no real directory on stderr, once per pass: the shim's own stderr line.
+    const spool = path.join(box.root, 'spool');
+    fs.rmSync(spool, { recursive: true, force: true });
+    fs.writeFileSync(spool, 'a file where the spool directory stands');
+    const r = await closedPipe(box, 'bash', [path.join(box.home, '.local', 'bin', 'ccd-history-sweep'), '--op', 'backup'], { which: 'stderr', lateExit: true });
+    expect(r.stdout, 'CONTROL: the pass ran to its result line').toMatch(/^\{"rc":0\}$/m);
+    expect(r.code, r.stdout).toBe(0);
     expect(maintNames(historyPaths(box.home).backups), 'the backup was made').toHaveLength(1);
   }, HEAVY);
 
@@ -2026,6 +2068,38 @@ describe('doctor --repair: integrity, the foreign-key baseline, the resumable FT
     expect(r.out).not.toContain("the store's integrity is unmeasured");
   }, HEAVY);
 
+  // HI2 H-201: a store on a Node with no FTS5 never had FTS tables, so an empty table set is no missing FTS table: the same throw
+  // blames nothing in the index and says the integrity is unmeasured.
+  it('H-201: an integrity_check that cannot run on an fts5-absent store (no FTS table ever made) does not blame a missing FTS index', async () => {
+    const box = makeHistoryBox('ccrc-hist-h201-', { role: 'fleet', shim: true });
+    // The store's first pass runs with the probe answering absent, as on a Node without FTS5: derivation never makes the tables.
+    expect(runSweep(box, [], { preloads: [PRELOADS.faults], env: { HISTORY_TEST_FTS_PROBE: 'absent' } }).code).toBe(0);
+    expect(maintQ(box, "SELECT name FROM sqlite_master WHERE name LIKE 'blobs_fts%' OR name LIKE 'nodes_fts%'"), 'CONTROL: no FTS table was ever made').toEqual([]);
+    const r = await maintPty(box, 'shim', ['--op', 'repair'], {
+      preloads: [PRELOADS.statfs, PRELOADS.faults],
+      env: { HISTORY_TEST_FTS_PROBE: 'absent', HISTORY_TEST_INTEGRITY: 'throw:disk I/O error' },
+    });
+    expect(r.code, r.out).toBe(2);
+    expect(lastResult(r.out)).toEqual({ rc: 2, reason: 'repair-refused' });
+    expect(r.out).toContain('history-sweep: integrity_check could not run: disk I/O error');
+    expect(r.out, 'no FTS table ever stood, so none is blamed').not.toContain('an FTS index whose own tables are missing');
+    expect(r.out).toContain("PRAGMA integrity_check could not run, so the store's integrity is unmeasured and no rebuild starts");
+  }, HEAVY);
+
+  it('H-201, CONTROL: a store whose meta says the index is ready keeps the FTS cause when both FTS tables are gone', async (ctx) => {
+    const box = healable('ccrc-hist-h201b-');
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();
+    writable(box, (db) => { db.exec('DROP TABLE blobs_fts'); db.exec('DROP TABLE nodes_fts'); });
+    expect(maintQ(box, "SELECT name FROM sqlite_master WHERE name LIKE 'blobs_fts%' OR name LIKE 'nodes_fts%'"), 'CONTROL: no FTS table stands').toEqual([]);
+    const r = await maintPty(box, 'shim', ['--op', 'repair'], {
+      preloads: [PRELOADS.statfs, PRELOADS.faults],
+      env: { HISTORY_TEST_INTEGRITY: 'throw:SQL logic error' },
+    });
+    expect(r.code, r.out).toBe(2);
+    expect(lastResult(r.out)).toEqual({ rc: 2, reason: 'repair-refused' });
+    expect(r.out).toContain('an FTS index whose own tables are missing cannot be opened, dropped or rebuilt by a repair');
+  }, HEAVY);
+
   // HB2 H-82: isBusy's rethrow in repairOp's catch. The seam's plain Error carries no errcode, so no case reached it; `throw-busy:` throws
   // one with errcode 5 (SQLITE_BUSY), which must propagate to the operator pass's own handler (exit 1 internal error here), never read as a refusal.
   it('H-82: an integrity_check that throws SQLITE_BUSY propagates to the pass (exit 1), never repair-refused, and rebuilds nothing', async (ctx) => {
@@ -2066,8 +2140,9 @@ describe('doctor --repair: integrity, the foreign-key baseline, the resumable FT
 // writes nothing, measured as a snapshot of ~/.ccrc. The table also holds the `recovering` refusal, decided by the
 // same gate while a recovery step is registered (D-4698 (history-ops-refused-while-recovering)). Every name this
 // block adds is prefixed gt/Gt/GT_ (gtBox, gtRun, GtForm, GtDoor, GtAnswer, GT_FORMS ...), and it reuses Task 19's ID, U1, G1,
-// boundBox, snapshot and lastResult, plus the helpers above it: maintPty, maintRecovering, withPane and seedFamily (through
-// gtBox). SLUG is not used here: seedFamily plants SEED_SLUG.
+// boundBox, snapshot, lastResult and stubArgv, plus maintPty and maintRecovering, defined above it in this file, and three
+// helpers imported from historyHelpers.ts: withPane and seedFamily (through gtBox) and stubShim (the H-120 case, with
+// stubArgv). SLUG is not used here: seedFamily plants SEED_SLUG.
 /** The name every restore row names: B1 Task 28's remedy fixture spelling, a bare <ts>.db under db/backups/. */
 const GT_BACKUP = '20261001T000000Z.db';
 /** Every word decideOpGate refuses a valid form with: §8.4's four speed bumps, and `recovering` while a recovery step

@@ -36,9 +36,9 @@ import { pathToFileURL } from 'node:url';
 import {
   EXIT, COVERAGE, SCHEMA_VERSION, UUID_RE, HARNESSES, CLI_STAT_DEADLINE_MS,
   historyPaths, readBoxEnvValue, decideCliStore, CONTROL_FILE_MAX, decideStatusRead, capOf, floorThreshold, exportHorizonDays, parseOpMarker,
-  decideStatusReadFailure, RETENTION_STATE_META, decideGrepIndex, FTS_STEP, FTS_REBUILD_STEP,
+  decideStatusReadFailure, RETENTION_STATE_META, decideGrepIndex,
 } from './lib.mjs';
-import { StoreError, measureStoreFacts, openReader, userVersion, measuredSize, probeFts5, readBounded } from './store.mjs';
+import { StoreError, measureStoreFacts, openReader, userVersion, measuredSize, readBounded, FTS_GATE_SQL, ftsGateFactsOn } from './store.mjs';
 // The health block's own imports (task 28). Namespace imports, so this block
 // binds no name the status code above already imported.
 import * as healthLib from './lib.mjs';
@@ -75,9 +75,10 @@ export const STATUS_SQL = Object.freeze({
   ticks: 'SELECT tick_id, ts_ms, lag_ms, bytes, files_behind, bytes_behind FROM ticks ORDER BY tick_id DESC LIMIT 3',
   recover: "SELECT version, cursor FROM derivation_state WHERE step = 'recover' AND completed_ms IS NULL ORDER BY version DESC LIMIT 1",
   outbox: 'SELECT count(*) AS n FROM journal_outbox',
-  ftsTable: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'blobs_fts'",
-  ftsBackfill: 'SELECT completed_ms FROM derivation_state WHERE step = ? AND version = 1',
-  ftsRebuild: 'SELECT 1 AS x FROM derivation_state WHERE step = ? AND completed_ms IS NULL LIMIT 1',
+  // The grep gate's three statements are store.mjs's (H-163): one spelling, shared with recall.mjs's indexGate.
+  ftsTable: FTS_GATE_SQL.table,
+  ftsBackfill: FTS_GATE_SQL.backfill,
+  ftsRebuild: FTS_GATE_SQL.rebuild,
   breaker: 'SELECT count(*) AS n FROM breaker WHERE open_until_ms > ?',
   metaKey: 'SELECT v FROM meta WHERE k = ?',
 });
@@ -249,12 +250,7 @@ function snapshotBytes(P) {
  *  the word grep answers exit 7 or 5 by (fts5-absent, fts-pending, probe-failed). A probe that throws is probe-failed,
  *  never folded into absent. Only v1 columns are named (D-4604 history-status-fts-word-is-the-grep-gate). */
 function ftsWord(db) {
-  let probe;
-  try { probe = probeFts5(db); } catch { probe = 'threw'; }
-  const table = probe === 'present' && db.prepare(STATUS_SQL.ftsTable).get() !== undefined;
-  const row = table ? db.prepare(STATUS_SQL.ftsBackfill).get(FTS_STEP) : undefined;
-  const rebuilding = table && db.prepare(STATUS_SQL.ftsRebuild).get(FTS_REBUILD_STEP) !== undefined;
-  const gate = decideGrepIndex({ probe, table, rebuilding, completed: row !== undefined && row.completed_ms !== null });
+  const gate = decideGrepIndex(ftsGateFactsOn(db));
   return gate.ok ? 'ready' : gate.reason;
 }
 
@@ -794,9 +790,10 @@ async function readVerb(home, verb, argv) {
       let failed = null;
       try {
         res = runner(ctx, parsed, argv);
-        // The header reads derivation_state and ingest_files, which only tree's runner touches. Priming it here, inside
-        // this try, puts a damaged store's SQLite error through readFailure (exit 5), not past it to the entry guard
-        // (exit 1). scopeHeader caches per context, so emitResult below reuses it (HA2 H-21).
+        // The header reads derivation_state and ingest_files. A runner may answer without reaching either (a refusal, a
+        // not-found, describe of a depth>0 node), and then the first read of a damaged table would happen in emitResult,
+        // outside this try. Priming it here puts that SQLite error through readFailure (exit 5), not the entry guard
+        // (exit 1). scopeHeader caches per context, so emitResult reuses it (HA2 H-21; HI2 H-170).
         scopeHeader(ctx);
       } catch (e) {
         const f = readFailure(e, ctx.storeId, ctx.id, ctx.gen, ctx.pairIdx);
@@ -1374,25 +1371,31 @@ export async function runOpVerb(home, verb, rest, emit) {
 }
 
 /** D-4600 (history-operator-door-survives-a-closed-pipe): `ccrc history import --apply | head -1` closes stdout under the
- *  CLI, and a write to it is an EPIPE 'error' event that, unhandled, kills the process with a stack. The relay then stops
- *  draining the shim, whose own next write crashes it mid-op, and the operator loses the result. The operator arm swallows
- *  EPIPE alone (a write to a destroyed stream is then dropped by Node), so the relay keeps draining, the op finishes and its
- *  exit is relayed. Any other stdout error still throws. Installed once per process. */
-let stdoutGuarded = false;
-function guardClosedStdout() {
-  if (stdoutGuarded) return;
-  stdoutGuarded = true;
-  process.stdout.on('error', (e) => {
-    if (e && e.code === 'EPIPE') return;
-    throw e;
-  });
+ *  CLI, and `… --json 2>&1 >/dev/null | head -1` closes stderr, the stream the relay writes the sweep's lines to under --json
+ *  and the one the shim inherits. A write to either is an EPIPE 'error' event that, unhandled, kills the process with a
+ *  stack; the relay then stops draining the shim, whose own next write crashes it mid-op, and the operator loses the result.
+ *  The operator arm swallows EPIPE alone on BOTH streams, so the relay keeps draining, the op finishes and its exit is
+ *  relayed. Any other stream error still throws. Installed once per process.
+ *  The listener is `.on`, never `.once`, and that is load-bearing (HI2 H-199): after an EPIPE Node's stdio stream is NOT
+ *  destroyed (stdio's dummyDestroy un-destroys it), so every later write retries the syscall and emits a fresh EPIPE
+ *  (measured on Node 24.14.1: 49 events over 50 writes). A `.once` listener would swallow the first and crash on the second. */
+let stdioGuarded = false;
+function guardClosedStdio() {
+  if (stdioGuarded) return;
+  stdioGuarded = true;
+  for (const stream of [process.stdout, process.stderr]) {
+    stream.on('error', (e) => {
+      if (e && e.code === 'EPIPE') return;
+      throw e;
+    });
+  }
 }
 
 /** main's arm for `import`, `prune`, `reparse` and `doctor`: argv is main's own, the verb first, `--json` anywhere.
  *  Under --json, stdout is the envelope alone and the sweep's lines go to stderr; every relayed line arrives here
  *  already through redactFinal (runOpVerb's relayIndexOf). */
 export async function operatorMain(home, argv) {
-  guardClosedStdout();
+  guardClosedStdio();
   const json = argv.includes('--json');
   const rest = argv.filter((a) => a !== '--json');
   const verb = rest[0] ?? '';

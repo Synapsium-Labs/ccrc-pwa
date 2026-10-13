@@ -4846,4 +4846,24 @@ describe.skipIf(process.platform === 'darwin')('HA2: --json carries the hint, a 
     expect(plain.stderr, 'CONTROL: the guard line is written').toContain('ccrc history: internal error: ');
     expect(t18leaks([sq.stderr, sq.stdout, plain.stderr, plain.stdout], V)).toEqual([]);
   }, 2 * HEAVY);
+
+  it('H-160: a runner-side SQLite error holding a pair-only value is masked on stderr', () => {
+    // A 40-char [a-z0-9] value with no token shape, so only the recorded pair can mask it (the shape layer cannot).
+    const ALPHA = 'abcdefghjkmnpqrstuvwxyz23456789';
+    const PV = `zqpo${Array.from({ length: 36 }, (_, i) => ALPHA[(i * 7 + 3) % ALPHA.length]).join('')}`;
+    expect(PV, 'CONTROL: the value is 40 characters').toHaveLength(40);
+    const digest = t18createHash('sha256').update(PV).digest();
+    const w = writer();
+    w.prepare('INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, 1)').run(40, digest);
+    try {
+      // ingest_files is read by scopeHeader inside the read verb's try (the runner-side path), never by readContext.
+      const r = cli(['tree', '--json'], { preloads: [PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: `SqliteError:${PV}@FROM ingest_files` } });
+      expect([r.code, r.json?.['reason']], r.stderr).toEqual([5, 'store-read-failed']);
+      expect(r.stderr, 'CONTROL: the line is written').toContain('ccrc history: store-read-failed: ');
+      expect(t18leaks([r.stderr, r.stdout], PV)).toEqual([]);
+    } finally {
+      w.prepare('DELETE FROM redact_hashes WHERE len = 40 AND sha256 = ?').run(digest);
+      w.close();
+    }
+  }, 2 * HEAVY);
 });

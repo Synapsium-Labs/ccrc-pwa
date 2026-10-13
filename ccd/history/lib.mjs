@@ -896,6 +896,14 @@ export function decideCliStore(f) {
   return inDb === marker ? { exit: EXIT.OK, read: true } : refuseCli('store-mismatch');
 }
 
+/** D-4599 (HI2 H-162): the ONE rule for a stored user_version no build writes: the writer creates every store at 1 or more,
+ *  so anything below 1, or no safe integer, is damage or tampering. The reader (decideStatusRead) answers it as
+ *  store-schema-missing, the writer's open (sweep's openStore) refuses it with the same word, and planMigration throws on it,
+ *  so a v0 store is never migrated from MIGRATIONS[0] (the V1 DDL, which no migration runs) over tables that exist. */
+export function storeVersionDamaged(v) {
+  return !Number.isSafeInteger(v) || v < 1;
+}
+
 /** The verdict on a store the CLI measured through its read-only handle: §8.3's
  *  `store-not-wal` refusal (exit 5, a store the writer could not put in WAL) and
  *  the migration word the envelope carries. `cli.mjs` reads `PRAGMA journal_mode`,
@@ -906,13 +914,13 @@ export function decideCliStore(f) {
  *  member, and anything else is `none`. A version below 1 is `store-schema-missing`
  *  (D-4599). The two answers are independent. */
 export function decideStatusRead({ userVersion, journalMode, recordedMigration }) {
-  const migration = userVersion > SCHEMA_VERSION
-    ? 'refuse-newer'
-    : (MIGRATION_VERDICTS.includes(recordedMigration) ? recordedMigration : 'none');
+  const recorded = MIGRATION_VERDICTS.includes(recordedMigration) ? recordedMigration : 'none';
+  const migration = userVersion > SCHEMA_VERSION ? 'refuse-newer' : recorded;
   // D-4599 (history-read-refuses-a-missing-schema): the writer creates every store at user_version 1 or more, so a bound
   // store at 0 or below (or one SQLite did not answer with an integer) is damage or tampering. It is the store-damage word,
-  // not a pending migration that would name tables the reader has just read.
-  if (!Number.isSafeInteger(userVersion) || userVersion < 1) return { exit: REASONS['store-schema-missing'], reason: 'store-schema-missing', migration: 'none' };
+  // not a pending migration that would name tables the reader has just read. The recorded verdict stays as the sweep
+  // wrote it: the arm answers the damage, it does not rewrite what a pass recorded (HI2 H-162).
+  if (storeVersionDamaged(userVersion)) return { exit: REASONS['store-schema-missing'], reason: 'store-schema-missing', migration: recorded };
   if (journalMode !== 'wal') return { exit: REASONS['store-not-wal'], reason: 'store-not-wal', migration };
   return { exit: EXIT.OK, migration };
 }
@@ -970,6 +978,8 @@ export function capBytes(gb) {
  *  carrier would kill. `copyBps` is `meta.copy_bps`, null before the first
  *  measured copy. D-4182 D-4180 */
 export function planMigration(i) {
+  // An executor guard, not a verdict (HI2 H-162, D-4599): openStore refuses a damaged version before any plan is made.
+  if (storeVersionDamaged(i.stored)) throw new TypeError(`planMigration: stored version ${i.stored} is below 1 or no integer`);
   if (i.stored === i.code) return 'none';
   if (i.stored > i.code) return 'refuse-newer';
   if (!planCopy({ freeBytes: i.freeBytes, thresholdBytes: i.thresholdBytes, sizeBytes: i.sizeBytes }).admit) return 'refuse-low-disk';
@@ -3008,6 +3018,10 @@ function remedyFor(word, h) {
       return h.modesWrong.map((m) => `chmod ${m.want} ${m.path}`).join('; ');
     case 'store-root-dangling':
       return `mount the volume behind ${h.dbPath}, or remove the dangling link ~/${STORE_DB_REL} so the next tick stores on the home filesystem`;
+    case 'store-schema-missing':
+      return h.userVersion !== null
+        ? `the DB holds a store_id but its user_version is below 1, so this build will not read or migrate it as a history store: keep all three DB files where they are; ccrc history doctor --restore and --rebuild arrive with W1-B2, and until then capture stays held and the journal keeps everything drained meanwhile (do not copy a backup over history.db by hand: that skips the journal replay --restore does)`
+        : HEALTH_REMEDIES['store-schema-missing'];
     case 'store-missing':
       return h.backupsDb.length > 0
         ? `ccrc history doctor --restore ${h.backupsDb[0]} and --rebuild arrive with W1-B2 (db/backups holds ${h.backupsDb.join(', ')}; keep them); until then capture stays held and the journal keeps everything drained meanwhile: do not copy a backup over history.db by hand (that skips the journal replay --restore does and makes --restore refuse)`
@@ -3044,7 +3058,11 @@ function bindingDetail(word, h) {
     case 'store-recoverable': return `store.id and history.db are absent, but ${evidenceOf(h)} says a store existed`;
     case 'store-wal-orphaned': return 'history.db-wal or history.db-shm is present without history.db';
     case 'store-zero-byte': return 'history.db is 0 bytes';
-    case 'store-schema-missing': return 'history.db is present and holds no meta.store_id';
+    case 'store-schema-missing':
+      // D-4599: the status read's v0 arm measured a user_version, so the DB holds its store_id; the binding refusal has none.
+      return h.userVersion !== null
+        ? `history.db holds meta.store_id but its user_version is ${h.userVersion}, below 1 (damage or tampering)`
+        : 'history.db is present and holds no meta.store_id';
     case 'store-unmeasured': return 'a binding file, or the DB\'s presence, could not be read';
     case 'store-not-wal': return 'the store is not in WAL mode, and the writer could not set it';
     default: return `status refused: ${word}`;
@@ -7074,6 +7092,8 @@ export function schemaAdditive(schema, measured) {
   const cumAt = new Map();
   for (const v of versions) {
     const entry = schema[v];
+    // H-164: a declared version entry that is no object is named, never thrown on (Object.keys(null) is a TypeError).
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) { lost.push(`v${v} is no object`); continue; }
     const keys = Object.keys(entry).sort();
     if (keys.join(',') !== 'heavy,tables' || typeof entry.heavy !== 'boolean') lost.push(`v${v} has keys ${keys.join(',')}`);
     for (const [t, cols] of Object.entries(entry.tables ?? {})) {
@@ -7091,6 +7111,8 @@ export function schemaAdditive(schema, measured) {
     const v = Number(vs);
     const want = cumAt.get(v);
     if (want === undefined) { lost.push(`v${v} measured but not declared`); continue; }
+    // H-164: a measured version entry that is no table map is named, never thrown on (Object.entries(null) is a TypeError).
+    if (tables === null || typeof tables !== 'object' || Array.isArray(tables)) { lost.push(`v${v} measured no table map`); continue; }
     // H-25: a measured column set that is no array is named FIRST; the lost loop then reads it as empty, so it never
     // throws on an object or matches a string by substring.
     for (const [t, cols] of Object.entries(tables)) if (!Array.isArray(cols)) lost.push(`${t} at v${v} lists no array of columns`);

@@ -702,3 +702,20 @@ describe('FR2-b (D-4339): a stale pre-migration temp is removed before the room 
     expect(r.stderr).not.toMatch(/internal error/);
   });
 });
+
+describe('HI2 H-162 (D-4599): a bound store at user_version 0 is refused by the writer as the reader refuses it', () => {
+  it('one pass prints store-schema-missing and exits 5: no pre-v1 snapshot, no attempt marker, the version untouched', () => {
+    const box = boundBox('ccrc-hist-hi2-h162-');
+    const p = paths(box);
+    const w = new DatabaseSync(p.db);
+    try { w.exec('PRAGMA user_version = 0'); } finally { w.close(); }
+    spoolLine(box, ID, startup(U1, { reg: U1 }));
+    const r = runSweep(box);
+    expect(r.stdout, r.stderr).toMatch(/^history-sweep: store-schema-missing$/m);
+    expect(r.code, r.stderr).toBe(5);
+    expect(names(p.backups).filter((n) => /pre-v1/.test(n)), 'no snapshot of a store no migration may touch').toEqual([]);
+    expect(versionOf(p.db), 'the pass wrote nothing to the store').toBe(0);
+    expect(r.stderr).not.toMatch(/internal error/);
+    expect(spoolRecs(box).length, 'the journal half still ran: the spool line is held in the journal').toBe(1);
+  });
+});

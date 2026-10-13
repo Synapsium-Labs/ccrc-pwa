@@ -23,14 +23,14 @@
 // It reads no environment variable and has no entry guard: cli.mjs imports it.
 import {
   EXIT, OUTPUT_CAP, TREE_DEPTH_MAX, SCOPE_FAMILIES_JSON_MAX, selectColumns, displayPrefixes, headerLine, scopeLag, recallEnvelope, capOutput, redactForDisplay, redactFinal, readEnvelope, nextLine,
-  REASONS, INDEXED_PROVENANCE, SEARCHABLE_PROVENANCE, FTS_STEP, FTS_REBUILD_STEP, RANK_POOL, decideGrepIndex, sanitizeFtsQuery, snippetTerms, regexSyntaxIn, regexSyntaxHint, ftsOrderBy, displaySnippet, snippetLine, escapeXmlText, redactField, extractNodeId, resolveScopedId, SEARCH_REACH, parseGrepArgs,
+  REASONS, INDEXED_PROVENANCE, SEARCHABLE_PROVENANCE, RANK_POOL, decideGrepIndex, sanitizeFtsQuery, snippetTerms, regexSyntaxIn, regexSyntaxHint, ftsOrderBy, displaySnippet, snippetLine, escapeXmlText, redactField, extractNodeId, resolveScopedId, SEARCH_REACH, parseGrepArgs,
   GREP_LIMIT_DEFAULT, encodeCursor, decodeCursor, canonicalJson, sha256Hex,
   guardRegex, regexPrefilter, REGEX_BUDGET_MS, REGEX_MAX_LEN, historyPaths,
   DESCRIBE_EXCERPT, GIST_MAX, costRow, producerOf, pickHoldingCopy, redactDisplayWindow, parseDescribeArgs, displayToken, foldOneLine, topicsOfColumn,
 } from './lib.mjs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { childrenOf, parentOf, probeFts5, blobPlainText, blobPlainTextMeasured, lineageEntries, recoverOpenOn } from './store.mjs';
+import { childrenOf, parentOf, ftsGateFactsOn, blobPlainText, blobPlainTextMeasured, lineageEntries, recoverOpenOn } from './store.mjs';
 import * as xlib from './lib.mjs';
 import * as xstore from './store.mjs';
 import { basename as xbasename } from 'node:path';
@@ -505,20 +505,10 @@ function rankedAndCounted(rc, matchSql, sort, all) {
   }
 }
 
-/** grep's index gate on the reader (§9.1): the read-only probe, blobs_fts, and the backfill's row. */
+/** grep's index gate on the reader (§9.1): store.mjs's four measurements (the read-only probe, blobs_fts, the backfill's row
+ *  and an open doctor --repair rebuild row), the one reader status's fts word shares (HI2 H-163), decided by lib's decideGrepIndex. */
 function indexGate(rc) {
-  let probe;
-  try { probe = probeFts5(rc.db); } catch { probe = 'threw'; }
-  const table = probe === 'present'
-    && rc.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'blobs_fts'").get() !== undefined;
-  // derivation ('fts', 1), the one version the sweep creates (B1 Task 23).
-  const row = table
-    ? rc.db.prepare(`SELECT ${selectColumns(rc.version, 'derivation_state', ['completed_ms'], rc.schema)} FROM derivation_state
-        WHERE step = ? AND version = 1`).get(FTS_STEP)
-    : undefined;
-  // An open doctor --repair rebuild (W1-B2 Task 23): its recreated tables hold only what it has re-indexed so far.
-  const rebuilding = table && rc.db.prepare('SELECT 1 AS x FROM derivation_state WHERE step = ? AND completed_ms IS NULL LIMIT 1').get(FTS_REBUILD_STEP) !== undefined;
-  return decideGrepIndex({ probe, table, rebuilding, completed: row !== undefined && row.completed_ms !== null });
+  return decideGrepIndex(ftsGateFactsOn(rc.db));
 }
 
 /** A blob's z, its recorded size (blobPlainText's decode bound, and its sidecar and body caps) and pruned time. */

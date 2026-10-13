@@ -24,7 +24,7 @@ import {
 import { basename, dirname, resolve } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as Z, createBrotliCompress, createBrotliDecompress } from 'node:zlib';
-import { BUSY_TIMEOUT_MS, CONTROL_FILE_MAX, MAX_INTERRUPTED_ATTEMPTS, RECOVER_PHASES, SCHEMA_VERSION, SIDECAR_WHOLE_MAX, UUID_RE, WRITER_RE, backupNameOf, blobOverDecodeCap, FTS_SHADOWS, formatRecoverCursor, ftsTextOf, historyPaths, journalRecord, jsonWithinStructureBound, newSha256, restoreNameOk, sidecarIndexText } from './lib.mjs';
+import { BUSY_TIMEOUT_MS, CONTROL_FILE_MAX, MAX_INTERRUPTED_ATTEMPTS, RECOVER_PHASES, SCHEMA_VERSION, SIDECAR_WHOLE_MAX, UUID_RE, WRITER_RE, backupNameOf, blobOverDecodeCap, FTS_REBUILD_STEP, FTS_SHADOWS, FTS_STEP, formatRecoverCursor, ftsTextOf, historyPaths, journalRecord, jsonWithinStructureBound, newSha256, restoreNameOk, sidecarIndexText } from './lib.mjs';
 
 /** The codec word every blob row records: Brotli at quality 5 (RV6). */
 export const CODEC = 'br5';
@@ -281,6 +281,28 @@ export function userVersion(db) {
 export function probeFts5(db) {
   const row = db.prepare("SELECT 1 AS present FROM pragma_module_list WHERE name = 'fts5'").get();
   return row === undefined ? 'absent' : 'present';
+}
+
+/** The three statements of grep's index gate (§9.1), spelled ONCE (HI2 H-163): status's fts word (cli.mjs) and grep's gate
+ *  (recall.mjs) both measure through them, so the two cannot disagree on a measurement, only on a decision, and the decision
+ *  is lib's decideGrepIndex. Only v1 columns are named (migrations are additive), so they hold at every later version.
+ *  cli.mjs's STATUS_SQL carries them by reference, so the EXPLAIN cost pin still sees each one. */
+export const FTS_GATE_SQL = Object.freeze({
+  table: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'blobs_fts'",
+  backfill: 'SELECT completed_ms FROM derivation_state WHERE step = ? AND version = 1',
+  rebuild: 'SELECT 1 AS x FROM derivation_state WHERE step = ? AND completed_ms IS NULL LIMIT 1',
+});
+
+/** The four facts decideGrepIndex reads, measured on a reader: the read-only FTS5 probe (a probe that THROWS reads as
+ *  'threw', never folded into 'absent'), whether derivation has made blobs_fts, whether a doctor --repair rebuild row is open
+ *  (its recreated tables hold only what it has re-indexed so far), and whether the backfill row ('fts', 1) has completed. */
+export function ftsGateFactsOn(db) {
+  let probe;
+  try { probe = probeFts5(db); } catch { probe = 'threw'; }
+  const table = probe === 'present' && db.prepare(FTS_GATE_SQL.table).get() !== undefined;
+  const row = table ? db.prepare(FTS_GATE_SQL.backfill).get(FTS_STEP) : undefined;
+  const rebuilding = table && db.prepare(FTS_GATE_SQL.rebuild).get(FTS_REBUILD_STEP) !== undefined;
+  return { probe, table, rebuilding, completed: row !== undefined && row.completed_ms !== null };
 }
 
 /** Every write in a transaction: `BEGIN IMMEDIATE`, so a busy store fails at

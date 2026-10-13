@@ -298,9 +298,14 @@ describe('ccrc history status (Linux)', () => {
 
   it('H-32: no stderr write in cli.mjs prints an error message except through errLine, which redacts', () => {
     const src = fs.readFileSync(path.join(REPO, 'ccd', 'history', 'cli.mjs'), 'utf8');
-    const writes = [...src.matchAll(/process\.stderr\.write\(([^;]*?)\);/g)].map((m) => m[1]!);
-    expect(writes.length, 'the scan sees the writes').toBeGreaterThan(4);
-    expect(writes.filter((w) => /\.message|String\(e\)/.test(w)), 'a raw error text on stderr').toEqual([]);
+    // H-168: scan by line, not by regex up to ';' (an argument can hold one). Every write stands on one line, so the count below
+    // proves the scan sees them all; a new write is a deliberate edit of this number and of the allowlist beside it.
+    const writes = src.split('\n').filter((l) => /process\.stderr\.write\(/.test(l));
+    expect(writes.length, 'the scan sees every stderr write').toBe(7);
+    expect(writes.filter((w) => /\.message|String\(e\)|\$\{e\b/.test(w)), 'a raw error text on stderr').toEqual([]);
+    // Each write's argument is a fixed line (it starts `ccrc history` or `${USAGE}`), errLine's redactFinal, or the op relay's `text`.
+    const allowed = /process\.stderr\.write\((?:[`']ccrc history|`\$\{USAGE\}|redactFinal\(|text\))/;
+    expect(writes.filter((w) => !allowed.test(w)), 'a write whose argument is neither a fixed line, errLine\'s redactFinal nor the relay text').toEqual([]);
     const fn = /function errLine\([^)]*\) \{([\s\S]*?)\n\}/.exec(src);
     expect(fn, 'errLine is defined').not.toBeNull();
     expect(fn![1]).toContain('redactFinal(');
