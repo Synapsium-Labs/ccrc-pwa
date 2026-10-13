@@ -62,6 +62,7 @@ interface DeriveNodes {
   beltNodesStep(db: DatabaseSync, ictx: Record<string, unknown>, slice: Record<string, unknown>): boolean;
   redactNodeFields(db: DatabaseSync, ictx: Record<string, unknown>, nodeIds: readonly string[]): number;
   rerollParents(db: DatabaseSync, ictx: Record<string, unknown>, nodeIds: readonly string[]): number;
+  deriveParents(db: DatabaseSync, ictx: Record<string, unknown>, budget: Record<string, unknown>): number;
   refreshLeaf(db: DatabaseSync, ictx: Record<string, unknown>, nodeId: string): string;
 }
 let SW: SweepRecover;
@@ -2074,8 +2075,10 @@ const heHolds = (text: string, v: string): boolean =>
 /** `n` characters of words that end in a space, so a value placed right after is a run of its own. */
 const hePad = (n: number): string => `${'ab '.repeat(Math.ceil(n / 3)).slice(0, n - 1)} `;
 interface HeNode {
-  id: string; kind: 'native_leaf' | 'raw_leaf' | 'condensed'; gist: string | null; topics?: string[]; refs?: string[];
+  id: string; kind: 'native_leaf' | 'condensed'; gist: string | null; topics?: string[]; refs?: string[];
   kids?: string[]; readable?: boolean;
+  /** A native leaf whose summary blob is tombstoned (z NULL): the real shape of a leaf that carries text and cannot be re-read. */
+  pruned?: boolean;
 }
 /** A store of hand-planted nodes, as one built before any pair was learned holds them: a condensed node's fields are
  *  parentRollup of its children as planted (unredacted), its nodes_fts row is nodeIndexTexts of its fields with no pair.
@@ -2090,6 +2093,7 @@ function heStore(prefix: string, specs: readonly HeNode[], fts: boolean): { db: 
   db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (1, 1, ?, 'startup', 'hook', 1)").run(RR_U1);
   db.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (1, ?)').run(RR_U1);
   db.prepare("INSERT INTO blobs (blob_id, sha256, codec, z, raw_len) VALUES (1, ?, 'br5', ?, 1)").run(Buffer.alloc(32, 9), Buffer.from([0]));
+  db.prepare("INSERT INTO blobs (blob_id, sha256, codec, z, raw_len) VALUES (2, ?, 'br5', NULL, 1)").run(Buffer.alloc(32, 8));
   const rolled = new Map<string, { gist: string | null; topics: string[]; refs: { kind: string; value: string; origin: string }[] }>();
   for (const n of specs) {
     const own = { gist: n.gist, topics: n.topics ?? [], refs: (n.refs ?? []).map((value) => ({ kind: 'sha', value, origin: 'tool_use' })) };
@@ -2101,7 +2105,7 @@ function heStore(prefix: string, specs: readonly HeNode[], fts: boolean): { db: 
     db.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, summary_blob_id,
       earliest_ms, latest_ms, src_chars, desc_count, desc_chars, parser_version, created_ms)
       VALUES (?, 1, 1, 1, ?, ?, 'not-requested', ?, ?, ?, 1, 2, 0, 0, 0, 1, 1)`)
-      .run(n.id, n.kind, n.kind === 'condensed' ? 1 : 0, r.gist, JSON.stringify(r.topics), n.readable === true ? 1 : null);
+      .run(n.id, n.kind, n.kind === 'condensed' ? 1 : 0, r.gist, JSON.stringify(r.topics), n.readable === true ? 1 : n.pruned === true ? 2 : null);
     (n.kids ?? []).forEach((k, ord) => db.prepare('INSERT INTO node_children (node_id, child_id, ord) VALUES (?, ?, ?)').run(n.id, k, ord));
     for (const ref of r.refs) db.prepare('INSERT OR IGNORE INTO node_refs (node_id, kind, value, origin) VALUES (?, ?, ?, ?)').run(n.id, ref.kind, ref.value, ref.origin);
     if (fts) {
@@ -2134,12 +2138,12 @@ function heLeaks(db: DatabaseSync, v: string): string[] {
 /** The ingest context a tick builds, in-process: nodes_fts on or off, and the pair index of `v` alone. */
 const heCtx = (home: string, v: string, fts: boolean): Record<string, unknown> =>
   ({ ...SW.makeIngestCtx(home, [], 1_000, null), fts, pairIdx: makePairIndex(secretPairs([v]).pairs) });
-/** Two raw leaves under one condensed node, the second holding `v` in its gist (placed so the condensed node's GIST_MAX cut
+/** Two native leaves (summary blobs pruned, as production keeps text only on a native leaf) under one condensed node, the second holding `v` in its gist (placed so the condensed node's GIST_MAX cut
  *  lands 13 characters inside it), in a topic (placed so TOPIC_CHARS cuts inside it) and in a `sha` ref: the store as it stood before `v` was a known secret. */
 const heUnderParent = (v: string, extra: readonly HeNode[] = []): HeNode[] => [
   ...extra,
-  { id: 'he-b1', kind: 'raw_leaf', gist: 'Raw one.' },
-  { id: 'he-b2', kind: 'raw_leaf', gist: `${hePad(1186 - 'Raw one.'.length)}${v} and then more.`, topics: [`${hePad(60)}${v}`], refs: [v] },
+  { id: 'he-b1', kind: 'native_leaf', pruned: true, gist: 'Raw one.' },
+  { id: 'he-b2', kind: 'native_leaf', pruned: true, gist: `${hePad(1186 - 'Raw one.'.length)}${v} and then more.`, topics: [`${hePad(60)}${v}`], refs: [v] },
   { id: 'he-p', kind: 'condensed', gist: null, kids: ['he-b1', 'he-b2'] },
 ];
 
@@ -2148,7 +2152,7 @@ describe('hardening HE: the Task 29 node redaction (H-112 to H-118)', () => {
     const v = heValue();
     const { db, home } = heStore('ccrc-hist-he113-', [
       { id: 'he-a', kind: 'native_leaf', gist: 'Alpha did the work.', topics: [`cred ${v}`], readable: true },
-      { id: 'he-b', kind: 'raw_leaf', gist: `${hePad(1186 - 'Alpha did the work.'.length)}${v} and then more.`, topics: [`${hePad(60)}${v}`], refs: [v] },
+      { id: 'he-b', kind: 'native_leaf', pruned: true, gist: `${hePad(1186 - 'Alpha did the work.'.length)}${v} and then more.`, topics: [`${hePad(60)}${v}`], refs: [v] },
       { id: 'he-p', kind: 'condensed', gist: null, kids: ['he-a', 'he-b'] },
     ], true);
     try {
@@ -2183,8 +2187,8 @@ describe('hardening HE: the Task 29 node redaction (H-112 to H-118)', () => {
   it('H-114: the belt\'s node step rewrites a node whose only exposure is a topic or a ref', () => {
     const v = heValue();
     const { db, home } = heStore('ccrc-hist-he114-', [
-      { id: 'he-t', kind: 'raw_leaf', gist: 'Plain.', topics: [`cred ${v}`] },
-      { id: 'he-r', kind: 'raw_leaf', gist: 'Plain two.', refs: [v] },
+      { id: 'he-t', kind: 'native_leaf', pruned: true, gist: 'Plain.', topics: [`cred ${v}`] },
+      { id: 'he-r', kind: 'native_leaf', pruned: true, gist: 'Plain two.', refs: [v] },
     ], false);
     try {
       setStep(db, 'nodes-belt', 1, '0', null);
@@ -2272,7 +2276,7 @@ describe('hardening HE: the Task 29 node redaction (H-112 to H-118)', () => {
       expect(rrGists(box).filter((g) => g.includes(v)), 'CONTROL: both native leaf gists hold the value').toHaveLength(2);
       const ctx = { ...heCtx(box.home, v, true), rederiveLeafMax: 1 };
       expect(DV.rederiveGistsFor(db, ctx, [v], SW.newBudget(), SW.newBudget()), 'both leaves were touched').toBe(2);
-      const derived = (db.prepare('SELECT count(*) AS n FROM nodes WHERE parser_version = ?').get(NODE_PARSER_VERSION) as { n: number }).n;
+      const derived = (db.prepare("SELECT count(*) AS n FROM nodes WHERE parser_version = ? AND kind <> 'condensed'").get(NODE_PARSER_VERSION) as { n: number }).n;
       expect(derived, 'one leaf re-derived (the cap), the other only rewritten').toBe(1);
       expect(heLeaks(db, v), 'both leaves are redacted').toEqual([]);
     } finally { closeWriter(db); }
@@ -2282,8 +2286,8 @@ describe('hardening HE: the Task 29 node redaction (H-112 to H-118)', () => {
     for (const cursor of ['garbage', 'Infinity', '1.5', '0x1', '9'.repeat(30)]) {
       const v = heValue();
       const { db, home } = heStore('ccrc-hist-he116-', [
-        { id: 'he-n1', kind: 'raw_leaf', gist: `Printed ${v} once.` },
-        { id: 'he-n2', kind: 'raw_leaf', gist: 'Plain.' },
+        { id: 'he-n1', kind: 'native_leaf', pruned: true, gist: `Printed ${v} once.` },
+        { id: 'he-n2', kind: 'native_leaf', pruned: true, gist: 'Plain.' },
       ], false);
       try {
         setStep(db, 'nodes-belt', 1, cursor, null);
@@ -2307,6 +2311,159 @@ describe('hardening HE: the Task 29 node redaction (H-112 to H-118)', () => {
         } finally { db.exec('ROLLBACK'); }
       } finally { closeWriter(db); }
     }
+  }, HEAVY);
+
+  // ── HE fix round 1: a parent cut through a value is rebuilt on the tick path, the belt and new parents ──────────────
+  /** `n` parents, each over a clean readable native leaf and a readable native leaf whose gist and topic put `v` where the
+   *  parent's GIST_MAX and TOPIC_CHARS cuts land inside it. Leaf ids sort in parent order. */
+  const heManyParents = (v: string, n: number): HeNode[] => Array.from({ length: n }, (_, i): HeNode[] => [
+    { id: `he-c${i}`, kind: 'native_leaf', readable: true, gist: 'Raw one.' },
+    { id: `he-v${i}`, kind: 'native_leaf', readable: true, gist: `${hePad(1186 - 'Raw one.'.length)}${v} and then more.`, topics: [`${hePad(60)}${v}`] },
+    { id: `he-p${i}`, kind: 'condensed', gist: null, kids: [`he-c${i}`, `he-v${i}`] },
+  ]).flat();
+
+  it('F1: the leaves past the re-derivation cap are rewritten AND their parents re-rolled, so no parent keeps a prefix of the value', () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-hefr1a-', heManyParents(v, 4), true);
+    try {
+      for (let i = 0; i < 4; i += 1) {
+        const p = db.prepare('SELECT gist FROM nodes WHERE node_id = ?').get(`he-p${i}`) as { gist: string };
+        expect(p.gist.includes(v), `CONTROL: parent ${i} was cut inside the value`).toBe(false);
+        expect(p.gist.includes(v.slice(0, 13)), `CONTROL: and holds its first 13 characters`).toBe(true);
+      }
+      const ctx = { ...heCtx(home, v, true), rederiveLeafMax: 1 };
+      DV.rederiveGistsFor(db, ctx, [v], SW.newBudget(), SW.newBudget());
+      expect(heLeaks(db, v), 'no 8-character window of the value in any node field or nodes_fts column, over the cap too').toEqual([]);
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('F2: a matched leaf whose summary is pruned has its parent re-rolled, though no readable sibling holds the value', () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-hefr1b-', [
+      { id: 'he-a', kind: 'native_leaf', readable: true, gist: 'Raw one.' },
+      { id: 'he-u', kind: 'native_leaf', pruned: true, gist: `${hePad(1186 - 'Raw one.'.length)}${v} and then more.`, topics: [`${hePad(60)}${v}`], refs: [v] },
+      { id: 'he-p', kind: 'condensed', gist: null, kids: ['he-a', 'he-u'] },
+    ], true);
+    try {
+      const p = db.prepare("SELECT gist FROM nodes WHERE node_id = 'he-p'").get() as { gist: string };
+      expect(p.gist.includes(v), 'CONTROL: the parent was cut inside the value').toBe(false);
+      expect(p.gist.includes(v.slice(0, 13)), 'CONTROL: and holds its first 13 characters').toBe(true);
+      expect(heLeaks(db, v), 'CONTROL: the store leaks').toEqual(expect.arrayContaining(['he-p.gist', 'he-u.gist']));
+      DV.rederiveGistsFor(db, heCtx(home, v, true), [v], SW.newBudget(), SW.newBudget());
+      expect(heLeaks(db, v), 'no 8-character window of the value in any node field or nodes_fts column').toEqual([]);
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('F2: the belt rebuilds a condensed node that holds a prefix of the value over clean children, and rewrites no parent whose re-roll is unchanged', () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-hefr1c-', [
+      ...heUnderParent(v),
+      { id: 'he-c1', kind: 'native_leaf', pruned: true, gist: 'Clean one.' },
+      { id: 'he-c2', kind: 'native_leaf', pruned: true, gist: 'Clean two.', topics: ['plain topic'] },
+      { id: 'he-q', kind: 'condensed', gist: null, kids: ['he-c1', 'he-c2'] },
+    ], true);
+    try {
+      // The children are clean already (a past build rewrote them), the parent still holds the prefix the old cut left.
+      expect(DV.redactNodeFields(db, heCtx(home, v, true), ['he-b1', 'he-b2']), 'the two children were rewritten').toBe(2);
+      expect(heLeaks(db, v), 'CONTROL: only the parent keeps the prefix (and its whole ref)').toEqual(expect.arrayContaining(['he-p.gist']));
+      expect(heLeaks(db, v).filter((x) => !x.startsWith('he-p.')), 'CONTROL: no child leaks').toEqual([]);
+      const ftsOf = (id: string): unknown => db.prepare('SELECT f.gist, f.topics, f.refs FROM nodes_fts f JOIN nodes n ON n.rowid = f.rowid WHERE n.node_id = ?').get(id);
+      const qBefore = JSON.stringify(ftsOf('he-q'));
+      const told = { n: 0 };
+      const ctx = { ...heCtx(home, v, true), onNodesFtsDeleted: () => { told.n += 1; } };
+      setStep(db, 'nodes-belt', 1, '0', null);
+      expect(DV.beltNodesStep(db, ctx, SW.newBudget()), 'the step completed').toBe(true);
+      expect(heLeaks(db, v), 'no 8-character window of the value in any node field or nodes_fts column').toEqual([]);
+      expect(told.n, 'exactly one node row was rewritten: the parent that differed (the clean one was left alone)').toBe(1);
+      expect(JSON.stringify(ftsOf('he-q')), 'the clean parent\'s index row is as it was').toBe(qBefore);
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('F2: rerollParents asks for ancestors in chunks of ictx.rerollChunk ids, never one IN list over every seed', () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-hefr1d-', heManyParents(v, 5), false);
+    try {
+      const sqls: string[] = [];
+      const spy = new Proxy(db, {
+        get(target, prop) {
+          const val = Reflect.get(target, prop, target) as unknown;
+          if (prop === 'prepare') return (sql: string) => { if (sql.includes('ancestors')) sqls.push(sql); return target.prepare(sql); };
+          return typeof val === 'function' ? (val as (...a: unknown[]) => unknown).bind(target) : val;
+        },
+      }) as DatabaseSync;
+      const seeds = Array.from({ length: 5 }, (_, i) => `he-v${i}`);
+      expect(DV.rerollParents(spy, { ...heCtx(home, v, false), rerollChunk: 2 }, seeds), 'all five parents were re-rolled, once each').toBe(5);
+      expect(sqls.map((q) => (q.match(/\?/g) ?? []).length), 'three ancestor queries of 2, 2 and 1 placeholders').toEqual([2, 2, 1]);
+      expect(heLeaks(db, v).filter((x) => x.startsWith('he-p')), 'every parent was rebuilt from redacted children').toEqual([]);
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('F-a: a parent minted by deriveParents over a child that holds the value is built from redacted children', () => {
+    const v = heValue();
+    const home = mkTmp('ccrc-hist-hefr1e-');
+    createStore(home);
+    const db = openWriter(historyPaths(home).dbFile);
+    try {
+      const lead = Array.from({ length: 7 }, (_, i) => `Leaf ${i + 1}.`).join(' ');
+      const gists = [...Array.from({ length: 7 }, (_, i) => `Leaf ${i + 1}.`), `${hePad(1187 - lead.length - 1)}${v} and then more.`];
+      db.exec('BEGIN');
+      db.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, ?, '', 'demo', 1)").run(ID);
+      db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (1, 1, ?, 'startup', 'hook', 1)").run(RR_U1);
+      db.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (1, ?)').run(RR_U1);
+      db.prepare("INSERT INTO ingest_files (file_id, dev, ino, transcript_pk, status, parser_version) VALUES (1, 1, 9001, 1, 'live', 1)").run();
+      db.prepare("INSERT INTO blobs (blob_id, sha256, codec, z, raw_len) VALUES (1, ?, 'br5', ?, 1)").run(Buffer.alloc(32, 9), Buffer.from([0]));
+      gists.forEach((gist, i) => {
+        const k = i + 1;
+        db.prepare("INSERT INTO entries (entry_id, uuid, transcript_pk, type, subtype, provenance, prov_version, struct_rank_ns, struct_file_id, blob_id, ts_ms) VALUES (?, ?, 1, 'system', 'compact_boundary', 'harness', 1, 0, 0, 1, ?)")
+          .run(k, `d9e00000-0000-4000-8000-${k.toString(16).padStart(12, '0')}`, 1000 * k);
+        db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord) VALUES (?, 1, ?)').run(k, k);
+        db.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (1, ?, ?)').run(k, k);
+        db.prepare("INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, boundary_entry_id, earliest_ms, latest_ms, src_chars, desc_count, desc_chars, parser_version, created_ms) VALUES (?, 1, 1, 1, 'native_leaf', 0, 'not-requested', ?, '[]', ?, ?, ?, 100, 0, 0, 1, 1)")
+          .run(`he-l${k}`, gist, k, 1000 * k, 1000 * k + 500);
+      });
+      db.exec('COMMIT');
+      const raw = parentRollup(gists.map((g) => ({ gist: g, topics: [], refs: [], earliestMs: 1, latestMs: 2, srcChars: 0, descCount: 0, descChars: 0 })));
+      expect(raw.gist?.includes(v), 'CONTROL: the unredacted rollup is cut inside the value').toBe(false);
+      expect(raw.gist?.includes(v.slice(0, 13)), 'CONTROL: and holds its first 13 characters').toBe(true);
+      expect(DV.deriveParents(db, heCtx(home, v, false), SW.newBudget()), 'one parent was minted').toBe(1);
+      expect(db.prepare("SELECT count(*) AS n FROM nodes WHERE kind = 'condensed'").get(), 'the parent exists').toEqual({ n: 1 });
+      const p = db.prepare("SELECT gist FROM nodes WHERE kind = 'condensed'").get() as { gist: string };
+      expect(heHolds(p.gist, v), 'the minted parent holds no 8-character window of the value').toBe(false);
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('F-b: reparse --apply registers the merge step, so a rewritten nodes_fts row is merged by the next tick', () => {
+    const box = makeHistoryBox('ccrc-hist-hefr1f-', { role: 'fleet' });
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, rrCompacted(RR_U1, 1, 'Rotating the fixture credential before the release.'));
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    const pending = (): number => rrQ<{ n: number }>(box, "SELECT count(*) AS n FROM derivation_state WHERE step = 'fts-merge' AND version = 1 AND completed_ms IS NULL")[0]!.n;
+    rrTickUntil(box, () => rrLeafIds(box).length === 1 && pending() === 0, 12);
+    const r = runShim(box, ['--op', 'reparse', '--apply']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(pending(), 'the reparse rewrote the leaf\'s nodes_fts row and registered the merge step pending').toBe(1);
+    rrTickUntil(box, () => rrStepDone(box, 'fts-merge', 1), 6);
+  }, 2 * HEAVY);
+
+  it('F-c: a recovery rebuilds a parent without a ref that is already stored as the mark, whatever the order of the passes', async () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-hefr1g-', [
+      { id: 'he-k1', kind: 'native_leaf', pruned: true, gist: 'Plain one.', refs: ['[redacted]'] },
+      { id: 'he-k2', kind: 'native_leaf', pruned: true, gist: 'Plain two.' },
+      { id: 'he-p', kind: 'condensed', gist: null, kids: ['he-k1', 'he-k2'] },
+    ], false);
+    try {
+      const pair = secretPairs([v]).pairs[0]!;
+      db.prepare('INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, 1)').run(pair.len, Buffer.from(pair.sha256, 'hex'));
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', 5, NULL, NULL)").run();
+      const markRefs = (): unknown[] => db.prepare("SELECT node_id FROM node_refs WHERE value = '[redacted]' ORDER BY node_id").all();
+      expect(markRefs(), 'CONTROL: the child and the parent both store the mark as a ref').toEqual([{ node_id: 'he-k1' }, { node_id: 'he-p' }]);
+      const ctx = { home, homes: [], ids: null, now: () => Date.now(), budget: SW.newBudget(), belt: null };
+      let done = false;
+      for (let i = 0; i < 20 && !done; i += 1) done = (await SW.recoverReindex(db, ctx, { pairsAdded: true }, SW.newBudget())).done;
+      expect(done, 'the reindex phase completed').toBe(true);
+      expect(markRefs().map((x) => (x as { node_id: string }).node_id), 'the parent stores no ref with the mark as its value').not.toContain('he-p');
+    } finally { closeWriter(db); }
   }, HEAVY);
 });
 

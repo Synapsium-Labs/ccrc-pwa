@@ -664,7 +664,10 @@ function createParent(db, ictx, childIds, depth) {
   if (s.exists.get(id) !== undefined) return null;
   const kids = childIds.map((c) => storedNode(db, c));
   const first = kids[0].row;
-  const r = parentRollup(kids.map((k) => k.rollup));
+  // Each child is read through redactedRollup, as a re-roll reads it: a child still stored unredacted (a pruned leaf, a
+  // sibling a later batch rewrites) must not have the parent's GIST_MAX or TOPIC_CHARS cut land inside a value (spec §6.3
+  // caps rule 6, SE1; D-4610 (history-reroll-from-redacted-children)).
+  const r = parentRollup(kids.map((k) => redactedRollup(ictx, k.rollup)));
   withTx(db, 'NORMAL', () => {
     s.insNode.run(id, first.session_pk, first.epoch_seq, first.transcript_pk, 'condensed', depth, 'ok', r.gist, JSON.stringify(r.topics),
       r.earliestMs, r.latestMs, r.srcChars, r.descCount, r.descChars, directiveFlag(r.gist ?? '') ? 1 : 0, r.capped ? 1 : 0,
@@ -799,13 +802,14 @@ export function indexNodesFts(db, ictx, budget) {
  *  topic and ref is taken from redacted text and capped after it). A child still stored unredacted (a raw or pruned
  *  leaf, a sibling a later batch rewrites) would otherwise be cut by the parent's GIST_MAX at a point that can land
  *  inside a value, and redactField, which matches a whole run, can never mask the prefix that cut leaves. A ref whose
- *  redacted form no longer classifies (it holds the mark) is not stored, as a leaf's mined refs are not.
+ *  redacted form no longer classifies (it holds the mark) is not stored, as a leaf's mined refs are not: changed by this
+ *  call or already stored as the mark by an earlier rewrite, so the drop never depends on the order of the passes.
  *  D-4610 (history-reroll-from-redacted-children) */
 function redactedRollup(ictx, c) {
   const refs = [];
   for (const ref of c.refs) {
     const value = redactField(ref.value, ictx.pairIdx);
-    if (value !== ref.value && classifyRef(value) === null) continue;
+    if (classifyRef(value) === null) continue;
     refs.push({ kind: ref.kind, value, origin: ref.origin });
   }
   return {
@@ -816,10 +820,19 @@ function redactedRollup(ictx, c) {
   };
 }
 
+/** Whether a stored node's gist, topics and refs (as a set) are the ones a re-roll would write: the belt's test for a
+ *  parent it leaves alone. */
+function sameParentFields(stored, rolled) {
+  const refSet = (refs) => refs.map((x) => `${x.kind}\u0000${x.value}\u0000${x.origin}`).sort().join('\n');
+  return stored.gist === rolled.gist && JSON.stringify(stored.topics) === JSON.stringify(rolled.topics)
+    && refSet(stored.refs) === refSet(rolled.refs);
+}
+
 /** The writer of one condensed node's re-roll: the node from its children as they are stored now, each child's fields
  *  redacted whole first (redactedRollup), in one transaction with its node_refs and its nodes_fts row. Answers whether
- *  the node has any child to roll up. */
-function parentReroller(db, ictx) {
+ *  the node has any child to roll up, and, with `onlyIfChanged`, whether it wrote: a node whose gist, topics and refs the
+ *  re-roll would leave as they are is not touched. */
+function parentReroller(db, ictx, onlyIfChanged = false) {
   const s = parentStmts(db);
   const kidsOf = db.prepare('SELECT child_id FROM node_children WHERE node_id = ? ORDER BY ord');
   const setParent = db.prepare('UPDATE nodes SET gist = ?, topics = ?, earliest_ms = ?, latest_ms = ?, src_chars = ?, '
@@ -829,6 +842,7 @@ function parentReroller(db, ictx) {
     const kids = kidsOf.all(id).map((r) => redactedRollup(ictx, storedNode(db, r.child_id).rollup));
     if (kids.length === 0) return false;
     const r = parentRollup(kids);
+    if (onlyIfChanged && sameParentFields(storedNode(db, id).rollup, r)) return false;
     withTx(db, 'NORMAL', () => {
       setParent.run(r.gist, JSON.stringify(r.topics), r.earliestMs, r.latestMs, r.srcChars, r.descCount, r.descChars,
         directiveFlag(r.gist ?? '') ? 1 : 0, r.capped ? 1 : 0, NODE_PARSER_VERSION, id);
@@ -845,22 +859,35 @@ function parentReroller(db, ictx) {
   };
 }
 
+/** The most seeds one ancestor query of rerollParents takes: far under SQLite's 32,766 variables. */
+const REROLL_CHUNK = 500;
+
 /** Every condensed node above `nodeIds`, re-rolled from its children as they are stored now (§6.3), for a reparse
  *  (W1-B2 Task 21) or a pair learned late (Task 29). Ids and node_children never change; a parent's rollup fields,
  *  node_refs and nodes_fts row do. Lower levels go first, so each level reads children already re-rolled. Each child
  *  is read through redactedRollup, so no cut is made on unredacted text (D-4610 (history-reroll-from-redacted-children)).
+ *  Every caller that rewrites nodes in place passes the ids it rewrote, so a parent cut through a value is rebuilt on
+ *  every path that can leave one; the cost is bounded by the ancestors of the set, as the rewrite is by the set.
  *  Returns how many parents it rewrote. */
 export function rerollParents(db, ictx, nodeIds) {
   const reroll = parentReroller(db, ictx);
   // A derived DAG may share a child between valid parents. Walk every reverse edge, not parentOf's deterministic
   // convenience answer; UNION makes this terminate even if a damaged table contains a cycle.
-  const aboveRows = db.prepare(`WITH RECURSIVE ancestors(node_id) AS (
-    SELECT node_id FROM node_children WHERE child_id IN (${nodeIds.map(() => '?').join(', ')})
-    UNION
-    SELECT nc.node_id FROM node_children nc JOIN ancestors a ON a.node_id = nc.child_id
-  )
-  SELECT a.node_id, n.depth FROM ancestors a JOIN nodes n ON n.node_id = a.node_id WHERE n.depth > 0`).all(...nodeIds);
-  const above = new Map(aboveRows.map((r) => [r.node_id, Number(r.depth)]));
+  // The seeds go to the query in chunks of REROLL_CHUNK ids (a test lowers it with ictx.rerollChunk): one IN list over
+  // every seed throws "too many SQL variables" above 32,766 of them. The ancestors of a union are the union of the
+  // ancestors, so the chunks are collected and each parent is re-rolled once, lower levels first.
+  const size = Number.isSafeInteger(ictx.rerollChunk) && ictx.rerollChunk > 0 ? ictx.rerollChunk : REROLL_CHUNK;
+  const above = new Map();
+  for (let at = 0; at < nodeIds.length; at += size) {
+    const chunk = nodeIds.slice(at, at + size);
+    const aboveRows = db.prepare(`WITH RECURSIVE ancestors(node_id) AS (
+      SELECT node_id FROM node_children WHERE child_id IN (${chunk.map(() => '?').join(', ')})
+      UNION
+      SELECT nc.node_id FROM node_children nc JOIN ancestors a ON a.node_id = nc.child_id
+    )
+    SELECT a.node_id, n.depth FROM ancestors a JOIN nodes n ON n.node_id = a.node_id WHERE n.depth > 0`).all(...chunk);
+    for (const r of aboveRows) above.set(r.node_id, Number(r.depth));
+  }
   const order = [...above.entries()].sort((x, y) => x[1] - y[1] || (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0)).map(([id]) => id);
   let n = 0;
   for (const id of order) if (reroll(id)) n += 1;
@@ -1111,7 +1138,8 @@ export function reparseFailClosed(db, ictx, nodeIds) {
 }
 
 /** The most leaves one call of the late-pair fast path (rederiveGistsFor) re-derives, one refreshLeaf each and one
- *  re-roll over all of them: the size of a recovery batch. A test lowers it with ictx.rederiveLeafMax.
+ *  re-roll over all of them: the size of a recovery batch. A test lowers it with ictx.rederiveLeafMax. The overflow gets a
+ *  field rewrite and an ancestor re-roll, and only `reparse` re-derives it.
  *  D-4611 (history-late-pair-fast-path-bounded) */
 const REDERIVE_LEAF_MAX = 64;
 
@@ -1123,7 +1151,9 @@ const REDERIVE_LEAF_MAX = 64;
  *    only one segment of a multi-run value is found too.
  *  - A leaf whose summary is still stored is re-derived (reparseFailClosed: same id, parents re-rolled, a throw
  *    counted and skipped), up to REDERIVE_LEAF_MAX leaves per call. Every node found, re-derived or not, is then
- *    rewritten through redactNodeFields.
+ *    rewritten through redactNodeFields, and the ancestors of every node that was only rewritten (a pruned or
+ *    over-the-cap leaf, a condensed node) are re-rolled from redacted children (D-4610); the cost is bounded by the
+ *    matched set, as the rewrite is.
  *  - It is the same-tick fast path over nodes, as B1's phrase search is over blobs (B1's
  *    D-4344): it moves no mark, and it runs only while `slice` and `budget` last
  *    (B1's review 344 F2 rule: a fast path never runs unbudgeted ahead of the step that ends the generation). It
@@ -1152,8 +1182,9 @@ export function rederiveGistsFor(db, ictx, values, budget, slice) {
     }
   }
   // D-4611 (history-late-pair-fast-path-bounded): at most REDERIVE_LEAF_MAX leaves are re-derived per call, in node-id order.
-  // The overflow is rewritten in place, fail-closed, with no IN list and no summary read; the belt's node step finishes it
-  // (and a later call re-derives what is still matched), as the doc above promises for a spent budget.
+  // The overflow is rewritten in place, fail-closed, with no summary read, and its ancestors are re-rolled below like every
+  // other rewritten node's. Once rewritten it no longer phrase-matches, so no later call reaches it: only `reparse`
+  // re-derives it from its summary, and the belt's node step finishes whatever the search could not find.
   const all = [...reparse].sort();
   const max = Number.isSafeInteger(ictx.rederiveLeafMax) && ictx.rederiveLeafMax > 0 ? ictx.rederiveLeafMax : REDERIVE_LEAF_MAX;
   const leaves = all.slice(0, max);
@@ -1165,6 +1196,11 @@ export function rederiveGistsFor(db, ictx, values, budget, slice) {
   // changes nothing.
   const rest = [...rewrite].sort();
   redactNodeFields(db, ictx, [...leaves, ...rest]);
+  // Every node rewritten in place has its ancestors re-rolled from redacted children (D-4610): a parent cut through the
+  // value keeps an unmatched prefix after a field rewrite, and a matched leaf that cannot be read (its summary pruned) or
+  // that is over the cap reaches no re-derivation, which re-rolls the ancestors of the leaves it handles. The cost is
+  // bounded by the matched set, as the rewrite is.
+  if (rest.length > 0) rerollParents(db, ictx, rest);
   return leaves.length + rest.length;
 }
 
@@ -1181,12 +1217,17 @@ const BELT_NODE_BATCH = 64;
  *  index's escape readings and not by redactField, so its stored field stays and only its row is stale. A node with
  *  no row yet is Task 9's backfill's, and refs are compared as sets (node_refs has no stored order). This is the one
  *  mechanism that re-derives nodes_fts. rederiveGistsFor's phrase search cannot find a letter-glued or escape-glued
- *  value; this step needs no search. The cursor is the last nodes.rowid read, committed after each batch
+ *  value; this step needs no search. Before that check each condensed node of the batch is rebuilt from its redacted
+ *  children when the rebuild differs from its stored gist, topics or refs (a prefix an old cut left in a parent, which no
+ *  field rewrite can mask), and the ancestors of every node the step rewrote are re-rolled (D-4610
+ *  (history-reroll-from-redacted-children)). The cursor is the last nodes.rowid read, committed after each batch
  *  (D-4730 (history-reindex-subcursor-idempotent)). Answers whether the step is complete (or was never opened). */
 export function beltNodesStep(db, ictx, slice) {
   const step = getStep(db, BELT_NODES_STEP, 1);
   if (step === null || step.completedMs !== null) return true;
-  const sel = db.prepare('SELECT rowid AS rid, node_id, gist, topics FROM nodes WHERE rowid > ? ORDER BY rowid LIMIT ?');
+  const sel = db.prepare('SELECT rowid AS rid, node_id, kind, gist, topics FROM nodes WHERE rowid > ? ORDER BY rowid LIMIT ?');
+  const fieldsOf = db.prepare('SELECT gist, topics FROM nodes WHERE node_id = ?');
+  const rerollIfChanged = parentReroller(db, ictx, true);
   const refsOf = db.prepare('SELECT value FROM node_refs WHERE node_id = ?');
   const ftsRow = ictx.fts === true ? db.prepare('SELECT gist, topics, refs FROM nodes_fts WHERE rowid = ?') : null;
   const changes = (s) => s !== null && s !== undefined && redactField(s, ictx.pairIdx) !== s;
@@ -1209,11 +1250,25 @@ export function beltNodesStep(db, ictx, slice) {
       withTx(db, 'NORMAL', () => { setStep(db, BELT_NODES_STEP, 1, String(after), ictx.nowMs); });
       return true;
     }
+    // Each condensed node of the batch is rebuilt from its redacted children when that differs from what it stores, in rowid
+    // order (a child before its parent; nodes are never deleted and every rewrite is an UPDATE), before the dirty check below
+    // so that check reads the re-rolled fields. A generation that opens therefore heals a prefix a past cut left in a
+    // parent, which a field rewrite can never mask, and rewrites no parent whose re-roll is what it stores (D-4610).
+    for (const n of batch) {
+      if (n.kind !== 'condensed' || !rerollIfChanged(n.node_id)) continue;
+      const now = fieldsOf.get(n.node_id);
+      n.gist = now.gist;
+      n.topics = now.topics;
+    }
     const dirty = batch.filter((n) => {
       const refs = refsOf.all(n.node_id).map((r) => r.value);
       return changes(n.gist) || topicsOfColumn(n.topics).some(changes) || refs.some(changes) || stale(n, refs);
     }).map((n) => n.node_id);
-    if (dirty.length > 0) redactNodeFields(db, ictx, dirty);
+    if (dirty.length > 0) {
+      redactNodeFields(db, ictx, dirty);
+      // The ancestors of every node it rewrote are rebuilt from redacted children, as the fast path does.
+      rerollParents(db, ictx, dirty);
+    }
     after = Number(batch[batch.length - 1].rid);
     withTx(db, 'NORMAL', () => { setStep(db, BELT_NODES_STEP, 1, String(after), null); });
   }

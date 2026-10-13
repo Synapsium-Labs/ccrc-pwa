@@ -5140,7 +5140,7 @@ export async function rederiveFts(db, ctx, budget, slice = rederiveSlice(budget)
   }
 }
 
-/** Gives a tick's ingest context the hook derive.mjs calls inside each transaction that deletes a nodes_fts row: it
+/** Gives a tick's (and a reparse's) ingest context the hook derive.mjs calls inside each transaction that deletes a nodes_fts row: it
  *  registers the merge step pending, as the blob paths register it, so mergeSteps merges nodes_fts too. A function of its
  *  own and `db` last, because the tick's docstring test reads every `name(db` in the body as a step to list.
  *  D-4609 (history-nodes-fts-merged-after-rewrite) */
@@ -6274,6 +6274,7 @@ export function reparseApplyOp(db, ctx, args) {
   const ictx = makeIngestCtx(ctx.home, ctx.homes, ctx.now(), ctx.ids);
   ictx.pairIdx = secretsStep(db, ictx, ctx.parsed.secrets).pairIdx;
   ictx.fts = ftsPrepare(db, ictx.nowMs).tables;
+  registerNodesMerge(ictx, db);   // a leaf's nodes_fts delete registers the merge step, as the tick's does (D-4609)
   withTx(db, 'NORMAL', () => { recordBeltDueIfUncovered(db, ictx.pairIdx); });   // the op pass's belt rule (reparse)
   const r = reparseLeaves(db, ictx, plan.targets);
   const cleared = args.node === null ? clearLeafCrashes(db, { session: args.session }) : 0;
