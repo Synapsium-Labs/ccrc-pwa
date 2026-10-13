@@ -28,7 +28,7 @@ time.
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
 | 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merged `6e4524164` 2026-10-12; run 322 closed `done`, `final:true` (R37) |
-| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | fix round 4 (merge of `main`) verified at `50bdec086`; scoped review 422 dispatched (R49) |
+| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | review 422 accepted; ready to merge at `50bdec086` (R50) |
 
 ## Decisions & deviations
 
@@ -1078,6 +1078,30 @@ time.
       gets its own red-first test and review.
     - Cost if wrong: until the follow-up, a failed save can say "Nothing was changed" when it was in fact saved.
       Re-reading the section shows the true level.
+- **R50 (2026-10-13 19:04)**, review 422 is accepted; wave 3 is ready to merge at `50bdec086`, the operator's call.
+  - Review run 422 (`ccrc-pwa-brisk-river`, mail 4650) read `50bdec086`, the live tip, with the panel (15 agents,
+    all three lenses verified). Closed `done`; report and its fixture matrix copied to `w3-review-422-*`.
+    - Confirmed: the resolution is byte-exact in R48's order; the PR's own change is unchanged; the deny and the
+      carry do not affect each other across an 11-row fixture matrix and a preset deny; `main` changed nothing
+      else wave 3 reads; D-4039, D-4040 and D-4041 are each defined once; the citation output equals `main`'s.
+      Every named suite is green at the tip.
+  - Finding F1: the jq-program floor in `session-hook-merge-deny.test.ts:843` is still 51 ("51 after D-4041"), and
+    the merged hook has 52 programs, so one deleted jq call passes. The plan's D-4041 note (:518-520) has the same
+    count. The slack came from `main`, not the merge: #392 added a program and left `main` at 53 against a floor of
+    52, and the test file merged cleanly to wave 3's version.
+  - Ruling: F1 goes to the post-merge residue list, with review 404's F1-F4. No fifth round.
+    - Why: merging #362 leaves `main` exactly as loose as it already is (one program over its floor), and the fix
+      is a guard change that would need its own round and review.
+    - The follow-up raises the floor to 52, adds the role-skill deny's program to the composition comment (naming
+      #392), measures the mutation red before and after, and updates the plan note.
+    - Cost if wrong: until the follow-up, one deleted jq call in the hook passes this scan, as on `main` since
+      #392.
+  - Refuted and kept for the record only: wave 3's "~650 lines up" comment is now about 704 lines; no committed
+    test combines the role-skill deny with a seeded main-thread wait.
+  - Re-measured at 19:04: the head is unchanged; merge-tree with `main` `0d0ea5921` is clean; every required leg
+    of PR CI run 38447456900 passes (macOS pending, advisory).
+  - Next: the operator merges #362 (`--admin --squash --match-head-commit 50bdec086`). Then run 394 closes `done`
+    as the final wave, and the residue list goes to the programme's close.
 
 ## Carried constraints (reviewers get these)
 
