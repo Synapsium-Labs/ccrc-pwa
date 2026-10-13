@@ -570,25 +570,26 @@ describe('_gh_repo_slug', () => {
   // the docs wire's github slug, so (1) one of the three GitHub prefixes must
   // have MATCHED — an origin that is a bare relative path such as `owner/name`
   // is a directory, not a GitHub repository — and (2) neither segment after the
-  // prefix may be `.`, `..` or start with `.`.
+  // prefix may be exactly `.` or `..`, and the OWNER may not start with `.`,
+  // which no GitHub owner name does. A repository NAME may start with `.`:
+  // `org/.github` and `user/.dotfiles` are real repositories, so they are slugs.
   it.each([
     ['example-org/example-repo'],                // a bare relative path: no prefix matched
     ['../x'],                                    // dot segments, no prefix
     ['./x'],
     ['.x/y'],
-    ['x/.y'],
+    ['x/.y'],                                    // no prefix: refused though `.y` is a valid name
+    ['x/..'],
+    ['x/.'],
     ['https://github.com/../x'],                 // dot segments AFTER a real prefix
     ['https://github.com/./x'],
     ['https://github.com/x/..'],
     ['https://github.com/o/..git'],              // one .git strips, leaving o/.
     ['git@github.com:.x/y.git'],
-    ['ssh://git@github.com/x/.y'],
     ['http://github.com/o/r'],                   // not one of the three prefixes
     ['git' + '@gitlab.com:o/r'],                 // not GitHub (built from parts: topology-clean's email class)
     ['git@github.com:https://github.com/o/r'],   // exactly ONE prefix strips
-    ['https://github.com/example-org/.github'],  // a leading-dot NAME: refused by (2) as the ruling words it, though
-                                                 // GitHub hosts such repositories; pinned so a change is a decision
-  ])('refuses %s (decision 11: a GitHub prefix matched, no dot segment)', (url) => {
+  ])('refuses %s (decision 11: a GitHub prefix matched, no . or .. segment, no dot owner)', (url) => {
     const main = h.makeRepo('demo');
     h.git(main, 'config', 'remote.origin.url', url);
     expect(() => h.sh(`_gh_repo_slug "${main}"`)).toThrow();
@@ -600,6 +601,9 @@ describe('_gh_repo_slug', () => {
     ['https://github.com/o/r.', 'o/r.'],                                          // a trailing dot is not a leading one
     ['https://github.com/o/r.git.git', 'o/r.git'],                                // one trailing .git, not two
     ['ssh://git@github.com/o-1/r_2', 'o-1/r_2'],
+    ['https://github.com/org/.github', 'org/.github'],                            // a leading-dot NAME is a slug
+    ['git@github.com:user/.dotfiles.git', 'user/.dotfiles'],
+    ['ssh://git@github.com/x/.y', 'x/.y'],
   ])('still reads %s as %s (decision 11 changes nothing a real prefix already named)', (url, slug) => {
     const main = h.makeRepo('demo');
     h.git(main, 'config', 'remote.origin.url', url);
