@@ -1981,3 +1981,46 @@ describe('the chosen quiet time: wave 1\'s r1 and the dialog cap read input.quie
     expect(stallVerdict(stallInput({ worker: idle, quietMs: 12 * H }), S + STALL_QUIET_MS)).toEqual(NONE);
   });
 });
+
+describe('dialog-cap-clock-ignores-inbound-mail (D-4040)', () => {
+  const A = NOW - 3 * H;                                   // the dialog's live stamp
+  const parked = workerAt({ live: liveWord('waiting', A) });
+  const nudge = (id: number, at: number) => mailRow(id, at, COORD, WORKER, 'status', 'fix-round');
+
+  it('a coordinator nudge sent while the dialog shows does not restart the 2 h', () => {
+    expect(stallVerdict(stallInput({ worker: parked, mail: [nudge(5101, A + 30 * MIN)] }), A + STALL_QUIET_MS))
+      .toEqual(capOf('dialog-cap', A));
+  });
+
+  it('nor do two (finding 4063: each restarted it)', () => {
+    const mail = [nudge(5101, A + 30 * MIN), nudge(5102, A + 90 * MIN)];
+    expect(stallVerdict(stallInput({ worker: parked, mail }), A + STALL_QUIET_MS)).toEqual(capOf('dialog-cap', A));
+  });
+
+  it('nor does mail to the worker role on the run', () => {
+    const mail = [mailRow(5103, A + 30 * MIN, COORD, 'worker', 'status', 'fix-round')];
+    expect(stallVerdict(stallInput({ worker: parked, mail }), A + STALL_QUIET_MS)).toEqual(capOf('dialog-cap', A));
+  });
+
+  it('a pending harness menu under an idle word is timed the same way', () => {
+    const menu = workerAt({ dialogPending: true, live: liveWord('idle', A) });
+    expect(stallVerdict(stallInput({ worker: menu, mail: [nudge(5104, A + 30 * MIN)] }), A + STALL_QUIET_MS))
+      .toEqual(capOf('dialog-cap', A));
+  });
+
+  it("the worker's own mail still restarts it: the worker acted", () => {
+    const mail = [mailRow(5105, A + 30 * MIN, WORKER, 'coordinator')];
+    expect(stallVerdict(stallInput({ worker: parked, mail }), A + STALL_QUIET_MS)).toEqual(hold('dialog'));
+    expect(stallVerdict(stallInput({ worker: parked, mail }), A + 30 * MIN + STALL_QUIET_MS))
+      .toEqual(capOf('dialog-cap', A + 30 * MIN));
+  });
+
+  it('control: the limit cap keeps the inbound term', () => {
+    // the limited worker of the `limit-cap: once at LIMIT_HOLD_CAP_MS of quiet` case (≈:689), stamped at A
+    const limitedAtA = workerAt({ live: liveWord('idle', A), limits: { five: 100, seven: 55 } });
+    const mail = [nudge(5106, A + 30 * MIN)];
+    expect(stallVerdict(stallInput({ worker: limitedAtA, mail }), A + LIMIT_HOLD_CAP_MS)).toEqual(hold('limit'));
+    expect(stallVerdict(stallInput({ worker: limitedAtA, mail }), A + 30 * MIN + LIMIT_HOLD_CAP_MS))
+      .toEqual(capOf('limit-cap', RUN67_DISPATCHED));
+  });
+});
