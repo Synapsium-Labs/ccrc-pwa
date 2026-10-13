@@ -4,7 +4,7 @@ import type { CcrcConfig } from './config.js';
 import { UNMEASURED, type Runner, type Unmeasured } from './exec.js';
 import type { FleetIO } from './io.js';
 import type { ProjectRow } from '../../shared/api.js';
-import { readRegistry } from './registry.js';
+import { readRegistryMeasured } from './registry.js';
 
 /** `killed` and `signal` are REQUIRED here, unlike their `ExecResult`
  *  counterparts: no test anywhere builds a `CcdResult` literal, and only a
@@ -143,11 +143,18 @@ const isLinkedWorktree = async (
  * plain file or anything unreadable. A linked worktree cannot masquerade as a
  * project through either door: `isLinkedWorktree` skips it whether it turned
  * up under the projects root or only in the registry.
+ *
+ * `registry` (spec §2.3; additive on `GET /api/projects`, which spreads this
+ * result) says whether the registry half of the union was MEASURED.
+ * `'unlistable'` means the registry directory could not be listed, so
+ * `projects` holds the root walk alone: a registry-only project is then
+ * missing because nothing was read, not because it is gone. A refused row
+ * (`RegistryRead.refused`) is never read, so its workdir never joins the union.
  */
 export async function listProjects(
   io: FleetIO,
   cfg: CcrcConfig,
-): Promise<{ roots: string[]; projects: ProjectRow[] }> {
+): Promise<{ roots: string[]; projects: ProjectRow[]; registry: 'listed' | 'unlistable' }> {
   const byWorkdir = new Map<string, ProjectRow>();
   const names = await io.readdir(cfg.projectsRoot);
   if (names !== null) {
@@ -160,8 +167,9 @@ export async function listProjects(
       byWorkdir.set(workdir, { name, workdir });
     }
   }
-  // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
-  for (const rec of await readRegistry(io, cfg)) {
+  // [registry-refused:reports] one read; `registry` below reports whether it listed.
+  const reg = await readRegistryMeasured(io, cfg);
+  for (const rec of reg.listed ? reg.records : []) {
     if (!byWorkdir.has(rec.workdir) && !(await isLinkedWorktree(io, rec.workdir))) {
       byWorkdir.set(rec.workdir, { name: rec.project, workdir: rec.workdir });
     }
@@ -169,5 +177,5 @@ export async function listProjects(
   const projects = [...byWorkdir.values()].sort((a, b) =>
     a.name < b.name ? -1 : a.name > b.name ? 1 : a.workdir < b.workdir ? -1 : 1,
   );
-  return { roots: [cfg.projectsRoot], projects };
+  return { roots: [cfg.projectsRoot], projects, registry: reg.listed ? 'listed' : 'unlistable' };
 }

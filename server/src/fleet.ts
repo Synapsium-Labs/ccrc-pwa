@@ -1,7 +1,7 @@
 import { configDirFor, type CcrcConfig } from './config.js';
 import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
-import { readRegistry, readSessionRecord } from './registry.js';
+import { readRegistryMeasured, readSessionRecord } from './registry.js';
 import type { SessionRecord } from './registry.js';
 import { readLimits } from './limits.js';
 import { liveSessionStatus, liveStatusCoversDelegation, readLiveState, readLiveStateMeasured } from './livestate.js';
@@ -515,8 +515,11 @@ export async function assembleFleet(
    *  watch wave 2, M6: slug `tick-hands-the-lane-pids-and-records` (D-3649)). */
   panePids?: Map<string, number | null>,
 ): Promise<FleetSession[]> {
-  // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
-  const [recs, limits] = await Promise.all([records ?? readRegistry(io, cfg), readLimits(io, cfg, now)]);
+  // Reached by TESTS alone (spec §2.3): every production caller passes the rows it read itself, and
+  // registry-refused-census.test.ts pins all six `assembleFleet(` calls, so this fallback decides nothing a user
+  // sees. An unlistable registry reads as no rows here, the old fallback's answer; refused rows were never rows.
+  // [registry-refused:tests-only]
+  const [recs, limits] = await Promise.all([records ?? readRegistryMeasured(io, cfg).then((r) => (r.listed ? r.records : [])), readLimits(io, cfg, now)]);
   // Task 19 fix round 1, item 3: ONE batched read for the whole assembly,
   // outside the per-session map below — never one `currentAskFor` per row.
   // `now` here is SECONDS (this function's own parameter contract); `asks`

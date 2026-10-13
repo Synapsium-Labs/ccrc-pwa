@@ -219,18 +219,21 @@ describe('GET /api/fleet — degraded mode', () => {
     const dir = mkTmp('ccrc-cache-');
     const cachePath = path.join(dir, 'never-written.json');
     const deps = remoteDeps({}, { connected: false, downSince: Date.now(), ccdVerbs: null, rosterFp: null, build: null }, cachePath);
+    // The registry root must LIST for this case to reach the live arm: an unlistable registry now serves the stale
+    // arm instead (spec §2.3, path identity W1a), which registry-migrated-callers.test.ts pins.
+    mkdirSync(deps.cfg.registryDir, { recursive: true });
     const app = await buildServer(deps);
     const res = await app.inject({ method: 'GET', url: '/api/fleet' });
     // WIDENED, NOT LOOSENED (account pools, wave 3): the LIVE-assemble arm now
     // carries `pools` for first paint, and this stays an exact-shape assertion
     // so the DEGRADED arm's own case — which asserts the key is ABSENT — keeps
-    // its meaning. `listed: false` is the truthful answer for a fixture whose
-    // registry root does not list: nobody decides, and that is not `untagged`.
+    // its meaning. `listed: true, byProject: {}`: the registry root lists (an
+    // empty `.cc-sessions`, seeded above) and holds no `pools/`, so nothing is tagged.
     // `observedEpoch: null` (item 1, wave-1 fix round A): no `$REG/pool-epoch`
     // was planted in this fixture's home, a real ENOENT `readObservedEpochFromRegistry`
     // measures and reports honestly, independent of the root listing above.
     expect(res.json()).toEqual({
-      sessions: [], pools: { listed: false, enforcement: 'unknown', observedEpoch: null, accountPools: 'unknown' },
+      sessions: [], pools: { listed: true, byProject: {}, enforcement: 'unknown', observedEpoch: null, accountPools: 'unknown' },
     });
     await app.close();
   });
@@ -276,17 +279,20 @@ describe('GET /api/fleet — degraded mode', () => {
     await saveSnapshot([session('claude-Stale')], cachePath);
 
     const deps = remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }, cachePath);
+    // The registry root must LIST, or this case would meet the stale arm, which serves this very cache marked
+    // `stale: true` (spec §2.3, path identity W1a). Listing, the cache is ignored, as the title says.
+    mkdirSync(deps.cfg.registryDir, { recursive: true });
     const app = await buildServer(deps);
     const res = await app.inject({ method: 'GET', url: '/api/fleet' });
     // WIDENED, NOT LOOSENED (account pools, wave 3): the LIVE-assemble arm now
     // carries `pools` for first paint, and this stays an exact-shape assertion
     // so the DEGRADED arm's own case — which asserts the key is ABSENT — keeps
-    // its meaning. `listed: false` is the truthful answer for a fixture whose
-    // registry root does not list: nobody decides, and that is not `untagged`.
+    // its meaning. `listed: true, byProject: {}`: the registry root lists (seeded
+    // above) and holds no `pools/`, so nothing is tagged.
     // `observedEpoch: null` (item 1, wave-1 fix round A) — see the sibling
     // case above.
     expect(res.json()).toEqual({
-      sessions: [], pools: { listed: false, enforcement: 'unknown', observedEpoch: null, accountPools: 'unknown' },
+      sessions: [], pools: { listed: true, byProject: {}, enforcement: 'unknown', observedEpoch: null, accountPools: 'unknown' },
     });
     await app.close();
   });

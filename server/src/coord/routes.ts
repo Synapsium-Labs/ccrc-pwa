@@ -45,7 +45,7 @@ import {
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
-  FAILURE_KINDS, ROUTE_CONTROL_CHAR_RE, isSessionIdShape, parseRouteEventDetail, parseRouteFields, routeEventDetail, RUN_STATES, TERMINAL_RUN_STATES,
+  FAILURE_KINDS, ROUTE_CONTROL_CHAR_RE, isRegistryId, isSessionIdShape, parseRouteEventDetail, parseRouteFields, routeEventDetail, RUN_STATES, TERMINAL_RUN_STATES,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode,
   type MirroredLifecycleEvent, type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
   type FailureKind, type RouteField, type RunRouteBody, type RouteMode,
@@ -3156,22 +3156,27 @@ export function registerCoordRoutes(
         detail: 'exactly one of ?project= or ?of= — a peer list is scoped or it is nothing' });
     }
 
-    // ONE listing, reused below for the presence ladder — the same
-    // fail-shut-on-unlistable idiom the mail ingress uses for this directory.
-    const names = await deps.io.readdir(deps.cfg.registryDir);
-    if (names === null) {
+    // A `?of=` that is not a registry id is refused BEFORE any read (spec §2.3): it can never name a row this server
+    // reads, so the presence ladder below would answer 502 for it forever. Checked on the trimmed value `selfId`
+    // takes below.
+    if (hasOf && !isRegistryId((q.of as string).trim())) {
+      return reply.code(400).send({ ok: false, error: 'bad-session' });
+    }
+
+    // ONE read (spec §2.3). Its listing is the presence ladder's. Its rows are `assembleFleet`'s (its own `records`
+    // parameter's contract: every lane of one pass describes one observation) and this route's own for `uuid`,
+    // which `FleetSession` does not carry. Its refused count rides the 200 as `refusedRows`. Unlistable keeps the
+    // fail-shut 502 that the mail ingress uses for this directory.
+    // [registry-refused:reports]
+    const reg = await readRegistryMeasured(deps.io, deps.cfg);
+    if (!reg.listed) {
       return reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
         detail: 'the registry directory could not be listed — transient, not a fact about any peer' });
     }
-    // The records are read ONCE and handed to `assembleFleet` (its own
-    // `records` parameter's contract: every lane of one pass describes one
-    // observation) — this route needs them itself for `uuid`, which
-    // `FleetSession` does not carry.
-    // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
-    const recs = await readRegistry(deps.io, deps.cfg);
-    const recById = new Map(recs.map((r) => [r.id, r]));
+    const names = reg.names;
+    const recById = new Map(reg.records.map((r) => [r.id, r]));
     const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
-      undefined, undefined, undefined, undefined, undefined, undefined, recs, deps.coord, undefined);
+      undefined, undefined, undefined, undefined, undefined, undefined, reg.records, deps.coord, undefined);
 
     let project: string;
     let selfId: string | null = null;
@@ -3251,7 +3256,10 @@ export function registerCoordRoutes(
       });
 
     const projects = [...new Set(sessions.map((s) => s.project))].sort();
-    return reply.code(200).send({ ok: true, peers, projects, etiquette: PEER_ETIQUETTE });
+    // `refusedRows` (spec §2.3): additive and absence-permitting, present only when a listed `.uuid` was refused, so a
+    // peer list that is silently short of a row says that it is. One writer of the field: this line.
+    return reply.code(200).send({ ok: true, peers, projects, etiquette: PEER_ETIQUETTE,
+      ...(reg.refused.size > 0 ? { refusedRows: reg.refused.size } : {}) });
   });
 
   /**
@@ -3359,9 +3367,14 @@ export function registerCoordRoutes(
         // conflict row is REPLACED by what was measured — with the mailHint
         // re-derived through the L1's own `claimMailHint`, so the degradation
         // rule (no:<reason> -> null, never a silent send) has one spelling.
-        const names = await deps.io.readdir(deps.cfg.registryDir);
+        // ONE registry read (spec §2.3): its rows are `assembleFleet`'s and its listing is the presence ladder's, so
+        // the two describe one observation. Unlistable gives no rows and a `null` listing: every holder reads
+        // unmeasurable, never absent and never `yes` off a second read the ladder did not see.
+        // [registry-refused:reports]
+        const reg = await readRegistryMeasured(deps.io, deps.cfg);
+        const names = reg.listed ? reg.names : null;
         const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
-          undefined, undefined, undefined, undefined, undefined, undefined, undefined, deps.coord, undefined);
+          undefined, undefined, undefined, undefined, undefined, undefined, reg.listed ? reg.records : [], deps.coord, undefined);
         const deliverableOf = (id: string): PeerDeliverable => {
           const row = sessions.find((s) => s.id === id);
           if (row) {

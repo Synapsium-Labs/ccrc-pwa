@@ -72,6 +72,11 @@ const tagAbove = (raw: readonly string[], codeLines: readonly string[], at: numb
   return null;
 };
 
+/** Whether the name at offset `at` of `text` is a `function name(` declaration, not a call: its own line holds
+ *  `function` and whitespace right before it. */
+const isDefinition = (text: string, at: number): boolean =>
+  /\bfunction\s+$/.test(text.slice(text.lastIndexOf('\n', at) + 1, at));
+
 /** Every reader call in `src`. The definitions (`function readRegistry(`) are not calls. */
 const scan = (file: string, src: string): Site[] => {
   const raw = src.split('\n');
@@ -81,7 +86,7 @@ const scan = (file: string, src: string): Site[] => {
   const sites: Site[] = [];
   callLines.forEach((l, i) => {
     for (const m of l.matchAll(READER_CALL)) {
-      if (/\bfunction\s+$/.test(l.slice(0, m.index ?? 0))) continue;
+      if (isDefinition(l, m.index ?? 0)) continue;
       sites.push({ file, line: i + 1, enclosing: enclosingOf(codeLines, i), reader: m[1], word: tagAbove(raw, codeLines, i) });
     }
   });
@@ -117,12 +122,15 @@ const EXPECTED_SITES: readonly string[] = [
   'coord/dispatch.ts | dispatchRun | readRegistryMeasured | refuses',
   'coord/dispatch.ts | dispatchRun | readRegistryMeasured | gated',
   'coord/fingerprint.ts | resolveDoneBranch | readRegistryMeasured | holds',
-  'coord/routes.ts | GET /api/peers | readRegistry | unplaced',
+  'coord/routes.ts | GET /api/peers | readRegistryMeasured | reports',
+  'coord/routes.ts | POST /api/claims | readRegistryMeasured | reports',
+  'server.ts | GET /api/fleet | readRegistryMeasured | stale',
+  'server.ts | GET /ws/fleet | readRegistryMeasured | stale',
   'coord/routes.ts | POST /api/mail | readRegistry | unplaced',
   'coord/routes.ts | POST /api/mail/:id/ack | readRegistry | unplaced',
   'coord/routes.ts | requireAttribution | readRegistry | unplaced',
-  'fleet.ts | assembleFleet | readRegistry | unplaced',
-  'lifecycle.ts | listProjects | readRegistry | unplaced',
+  'fleet.ts | assembleFleet | readRegistryMeasured | tests-only',
+  'lifecycle.ts | listProjects | readRegistryMeasured | reports',
   'registry.ts | readRegistry | readRegistryMeasured | wrapper',
   'server.ts | prTasks | readRegistry | unplaced',
   'watch.ts | detectDialogs | readRegistry | unplaced',
@@ -184,8 +192,8 @@ describe('every registry reader call is classified for refused rows (spec §2.3)
       .toEqual([]);
   });
 
-  it('the classified set is exactly these 20 sites', () => {
-    expect(EXPECTED_SITES).toHaveLength(20);
+  it('the classified set is exactly these 23 sites', () => {
+    expect(EXPECTED_SITES).toHaveLength(23);
     expect(allSites().map(key).sort()).toEqual([...EXPECTED_SITES].sort());
   });
 
@@ -232,5 +240,96 @@ describe('tick hands its records to the lanes that would otherwise read the regi
     const body = tickBodyOf(tickCode(readFileSync(TICK_WATCH_TS, 'utf8')), TICK_HEAD);
     expect(body, 'tick no longer hands sweepHookStates its records: that lane would read the registry itself')
       .toMatch(/\bthis\.sweepHookStates\(\s*records\s*\)/);
+  });
+});
+
+// PATH IDENTITY W1a, TASK 7 (spec §2.3). The three migrated readers and the three new reads carry their placed words,
+// and every production `assembleFleet(` call passes the rows it read, so `assembleFleet`'s own fallback read, tagged
+// `tests-only`, is reached by tests alone. A production call left at `undefined` would quietly bring back the fallback's
+// `[]` for an unlistable registry, the empty fleet without a stale mark that this wave removes. It reads through this
+// file's one scan (`sourceTexts`, `allSites`, `codeOnly`, `blankQuoted`, `isDefinition`) and adds one helper, the
+// argument splitter below.
+
+/** The top-level arguments of the call whose `(` sits at `open`, whitespace-normalised. String literals survive
+ *  `codeOnly`, so quotes are tracked and a comma inside one never splits. */
+function callArgs(text: string, open: number): string[] {
+  const args: string[] = [];
+  let depth = 0;
+  let quote: string | null = null;
+  let start = open + 1;
+  for (let i = open; i < text.length; i += 1) {
+    const c = text[i]!;
+    if (quote !== null) {
+      if (c === '\\') { i += 1; continue; }
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '\'' || c === '"' || c === '`') { quote = c; continue; }
+    if (c === '(' || c === '[' || c === '{') { depth += 1; continue; }
+    if (c === ')' || c === ']' || c === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        args.push(text.slice(start, i));
+        return args.map((a) => a.replace(/\s+/g, ' ').trim());
+      }
+      continue;
+    }
+    if (c === ',' && depth === 1) { args.push(text.slice(start, i)); start = i + 1; }
+  }
+  throw new Error(`no closing parenthesis for the call at offset ${open}`);
+}
+
+describe('Task 7: the migrated readers and the six production assembleFleet calls (spec §2.3)', () => {
+  it('CONTROL: the argument splitter sees nesting, strings and a commented call', () => {
+    const sample = codeOnly([
+      '// assembleFleet(a, b, c, d, e, f, g, h, i, NOT_THIS, k)',
+      "const s = assembleFleet(io, cfg, f(x, y), [1, 2], 'a,b', { k: 1, j: 2 }, u, u, u, reg.listed ? reg.records : [], coord);",
+    ].join('\n'));
+    const hits = [...sample.matchAll(/\bassembleFleet\s*\(/g)];
+    expect(hits, 'the commented call is not code').toHaveLength(1);
+    const args = callArgs(sample, (hits[0]!.index ?? 0) + hits[0]![0].length - 1);
+    expect(args).toHaveLength(11);
+    expect(args[9]).toBe('reg.listed ? reg.records : []');
+    expect(isDefinition('export async function assembleFleet(', 'export async function '.length)).toBe(true);
+    expect(isDefinition('  const x = assembleFleet(', '  const x = '.length)).toBe(false);
+  });
+
+  it('the six production assembleFleet calls each pass the rows they read, never undefined', () => {
+    // Calls are found where this file finds reader calls (`blankQuoted`, so a quoted name is no call); its blanking
+    // keeps every offset, so the arguments are split on the `codeOnly` text, where string literals survive.
+    const calls = sourceTexts().flatMap(({ file, src }) => {
+      const text = codeOnly(src);
+      return [...blankQuoted(text).matchAll(/\bassembleFleet\s*\(/g)]
+        .filter((m) => !isDefinition(text, m.index ?? 0))
+        .map((m) => ({ file, records: callArgs(text, (m.index ?? 0) + m[0].length - 1)[9] ?? '<absent>' }));
+    });
+    expect(calls.map((c) => `${c.file} ${c.records}`).sort()).toEqual([
+      'coord/routes.ts reg.listed ? reg.records : []',   // the claims conflict
+      'coord/routes.ts reg.records',                     // GET /api/peers
+      'server.ts [rec]',                                 // liveRowFor, the archive door's busy read
+      'server.ts reg.records',                           // GET /api/fleet
+      'server.ts reg.records',                           // the ws cold start
+      'watch.ts records',                                // tick
+    ]);
+    expect(calls.filter((c) => c.records === 'undefined' || c.records === '<absent>'),
+      'a production call leaves its rows to the tests-only fallback').toEqual([]);
+  });
+
+  it('the migrated readers carry their placed words, and readRegistry keeps 8 sites', () => {
+    const sitesOf = (file: string, reader: 'readRegistry' | 'readRegistryMeasured') =>
+      allSites().filter((s) => s.file === file && s.reader === reader);
+    const words = (file: string): (string | null)[] => sitesOf(file, 'readRegistryMeasured').map((s) => s.word);
+    expect(words('fleet.ts'), 'assembleFleet’s fallback is reached by tests alone').toEqual(['tests-only']);
+    expect(words('lifecycle.ts'), 'listProjects reports registry').toEqual(['reports']);
+    expect(words('server.ts'), 'GET /api/fleet, then the ws cold start').toEqual(['stale', 'stale']);
+    expect(words('coord/routes.ts'), 'GET /api/peers, then the claims conflict').toEqual(['reports', 'reports']);
+    expect(sitesOf('fleet.ts', 'readRegistry').map(where)).toEqual([]);
+    expect(sitesOf('lifecycle.ts', 'readRegistry').map(where)).toEqual([]);
+    expect(sitesOf('server.ts', 'readRegistry'), 'prTasks alone (Task 8 places it)').toHaveLength(1);
+    expect(sitesOf('coord/routes.ts', 'readRegistry'), 'attribution, mail and ack (Task 8 places them)').toHaveLength(3);
+    const count = (reader: 'readRegistry' | 'readRegistryMeasured'): number =>
+      allSites().filter((s) => s.reader === reader).length;
+    expect(count('readRegistry'), 'readRegistry( call sites in server/src').toBe(8);
+    expect(count('readRegistryMeasured'), 'readRegistryMeasured( call sites in server/src, the wrapper included').toBe(15);
   });
 });

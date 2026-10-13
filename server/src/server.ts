@@ -40,7 +40,7 @@ import { SessionStream, parseSince } from './sessionws.js';
 import { KeyedQueue } from './inject/queue.js';
 import { sendPrompt, answerDialog, interrupt, submitEnter, type SendDeps } from './inject/send.js';
 import { answerAsk, type AskDeps } from './inject/ask.js';
-import { freshAskAt, measuredIdentity, readRegistry, readSessionRecord } from './registry.js';
+import { freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord } from './registry.js';
 import type { SessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
 import { listProjects, type CcdResult } from './lifecycle.js';
@@ -1177,6 +1177,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // "unknown" on the PWA, which is the truth here.
       if (snap) return { sessions: snap.sessions, stale: true, downSince: deps.fleetState.downSince };
     }
+    // ONE registry read for this request (spec §2.3), handed to `assembleFleet` as its `records`; that function's own
+    // fallback read is reached by tests alone. An UNLISTABLE registry is not an empty fleet: `{sessions: []}` would
+    // tell the phone every session had gone. So this serves what the process last knew (the watcher's last
+    // broadcast, else the last-known-good snapshot, else nothing), marked `stale: true`, the disconnected arm's word.
+    // No `pools` key, for that arm's reason (nothing measured to serve), and no `downSince`: the link may be up; it
+    // is the listing that failed.
+    // [registry-refused:stale]
+    const reg = await readRegistryMeasured(deps.io, deps.cfg);
+    if (!reg.listed) {
+      return { sessions: watcher?.currentFleet() ?? (await loadSnapshot(stateCachePath))?.sessions ?? [], stale: true };
+    }
     // FIRST PAINT (spec §5.4.4). The `pools` frame is emitted ON CHANGE from
     // the watcher tick, so a client connecting into a quiet fleet would
     // otherwise see no tags until one moved; this is where it gets the
@@ -1199,7 +1210,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       readObservedEpochFromRegistry(deps.io, deps.cfg, PROJECT_POOLS_REQUEST_BUDGET_MS),
     ]);
     return {
-      sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord, watcher?.currentUsage(), watcher?.currentHeadBranches()),
+      sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), reg.records, deps.coord, watcher?.currentUsage(), watcher?.currentHeadBranches()),
       pools: poolsWire(
         poolsRead,
         poolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
@@ -1483,13 +1494,24 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // while a `coord.runs()` read is synchronous, so firing both
     // independently would race — and often WIN, sending `runs` before
     // `fleet` ever resolves. Chaining pins the wire order every client (and
-    // `fleetws.test.ts`) can rely on: hello, fleet, runs.
+    // `fleetws.test.ts`) can rely on: hello, fleet, runs — or hello, runs when
+    // the cold read could not list the registry, which sends no `fleet` frame.
     const broadcast = watcher?.currentFleet() ?? null;
-    const cold = broadcast !== null
-      ? Promise.resolve(broadcast)
-      : assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord, watcher?.currentUsage(), watcher?.currentHeadBranches());
+    // `null` means the registry could not be listed (spec §2.3). This socket then gets NO cold `fleet` frame: an
+    // assembled `[]` would tell it every session had gone, and the `fleet` frame has no stale marker to say
+    // otherwise (this wave adds no wire field). The next broadcast reaches it as it reaches any connected client,
+    // and the `runs` frame below is still sent.
+    let cold: Promise<FleetSession[] | null>;
+    if (broadcast !== null) {
+      cold = Promise.resolve(broadcast);
+    } else {
+      // [registry-refused:stale]
+      cold = readRegistryMeasured(deps.io, deps.cfg).then((reg) => (reg.listed
+        ? assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), reg.records, deps.coord, watcher?.currentUsage(), watcher?.currentHeadBranches())
+        : null));
+    }
     void cold.then((sessions) => {
-      if (!broadcastSeen) sendFleet(sessions);
+      if (sessions !== null && !broadcastSeen) sendFleet(sessions);
       // Cold start for THIS socket, same reasoning as the `fleet` push just
       // above: the `runs` frame is only emitted ON CHANGE (`FleetWatcher.
       // emitRuns`'s own byte-equality guard), so a client connecting into a
