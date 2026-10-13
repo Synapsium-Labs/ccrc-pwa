@@ -13977,7 +13977,9 @@ describe('ccrc doctor: docs-sw', () => {
     }
   });
 
-  it('a whole healthy doctor run PASSes docs-sw, and the healthy skip count does not move (M7.6)', () => {
+  // Linux only, like the whole-run `0 warned` case before it: a healthy macOS doctor run WARNs `linger` (review 408's
+  // r-own; the plan's Task 10 wrote this case as it()).
+  itLinux('a whole healthy doctor run PASSes docs-sw, and the healthy skip count does not move (M7.6)', () => {
     const home = healthy('ccrc-doctor-docs-sw-whole-');
     const r = runDoctor(home);
     expect(lineFor(r.stdout, 'docs-sw'), r.stdout).toMatch(/^PASS docs-sw: /);
