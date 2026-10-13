@@ -15,9 +15,9 @@ import { closeSync, readSync } from 'node:fs';
 import { HEADING_RE, fencedRanges, mineTokens } from '../compact-card.mjs';
 import {
   LINE_MAX, NODE_PARSER_VERSION, blobOverDecodeCap, blockFields, blockStatus, capRefs, classifyRef, decideLeafId, directionOfSummaryRow,
-  directiveFlag, eofAfterBoundary, FAN_IN, forkCounts, ftsTextOf, gistSha, leafId, leafReady, nativeGist, nativeTopics, nodeIndexTexts,
+  directiveFlag, eofAfterBoundary, FAN_IN, forkCounts, ftsPhrase, ftsTextOf, gistSha, leafId, leafReady, nativeGist, nativeTopics, nodeIndexTexts,
   parentId, parentRollup, parseBlocks, pickHoldingCopy, pickReceipt, planFanIn, planSpans, producerOfCopy, redactField, selectBlock,
-  summaryParts, summaryRowFor, withinBudget, REPARSE_MAX_TARGETS,
+  secretUnits, summaryParts, summaryRowFor, withinBudget, BELT_NODES_STEP, REPARSE_MAX_TARGETS,
 } from './lib.mjs';
 import { bump, getStep, parentOf, setStep, unbrotli, withTx } from './store.mjs';
 
@@ -975,4 +975,174 @@ export function clearLeafCrashes(db, sel) {
     if (low - 1 < cursor) setStep(db, LEAF_STEP, NODE_PARSER_VERSION, String(low - 1));
   });
   return rows.length;
+}
+
+// ── W1-B2 Task 29: node fields after a pair is learned late or replayed (§6.2 "A pair learned after its text was
+// indexed", §9.14 "Redaction first"; slugs history-redaction-reindex-merge, history-redaction-journaled) ─────
+
+/** Rewrite each node's stored gist, topics and refs through redactField with ictx.pairIdx, and its nodes_fts row when
+ *  ictx.fts. This is the fail-closed path for a node whose summary cannot be read again: a pruned span, a raw leaf,
+ *  a condensed node, or a leaf whose re-derivation threw. Redaction needs only the pair, never the source text.
+ *  Topics are redacted ONE BY ONE and only then serialised (R2: redactField on each raw field before any
+ *  serialisation; in the column's JSON text a control character inside a value would be escaped and no longer match
+ *  its pair). The column is read through topicsOfColumn (Task 9), so JSON and one-per-line columns both read; the
+ *  nodes_fts row is lib's nodeIndexTexts of the rewritten fields (Task 7A: each column through entryIndexText, so the
+ *  index's escape readings; topics and refs one per line), as every other writer of it does (Tasks 8 and 9).
+ *  redactField is layer 4 over layers 1-3 whenever ictx.pairIdx carries a belt (Task 7A, spec rev 3.5 §8.3), so a
+ *  value glued to letters is masked here too; this is also the writer the belt's node step (beltNodesStep) uses.
+ *  D-4729 (history-redaction-fail-closed-node-rewrite) */
+export function redactNodeFields(db, ictx, nodeIds) {
+  if (nodeIds.length === 0) return 0;
+  const read = db.prepare('SELECT rowid AS rid, gist, topics FROM nodes WHERE node_id = ?');
+  const refsOf = db.prepare('SELECT kind, value, origin FROM node_refs WHERE node_id = ?');
+  const setNode = db.prepare('UPDATE nodes SET gist = ?, topics = ? WHERE node_id = ?');
+  const dropRefs = db.prepare('DELETE FROM node_refs WHERE node_id = ?');
+  const putRef = db.prepare('INSERT OR IGNORE INTO node_refs (node_id, kind, value, origin) VALUES (?, ?, ?, ?)');
+  const fts = ictx.fts === true;
+  const ftsDel = fts ? db.prepare('DELETE FROM nodes_fts WHERE rowid = ?') : null;
+  const ftsIns = fts ? db.prepare('INSERT INTO nodes_fts (rowid, gist, topics, refs) VALUES (?, ?, ?, ?)') : null;
+  let n = 0;
+  withTx(db, 'NORMAL', () => {
+    for (const id of nodeIds) {
+      const row = read.get(id);
+      if (row === undefined) continue;
+      const gist = row.gist === null ? null : redactField(row.gist, ictx.pairIdx);
+      const list = row.topics === null ? null : topicsOfColumn(row.topics).map((t) => redactField(t, ictx.pairIdx));
+      const topics = list === null ? null : JSON.stringify(list);
+      const refs = refsOf.all(id).map((r) => ({ kind: r.kind, value: redactField(r.value, ictx.pairIdx), origin: r.origin }));
+      setNode.run(gist, topics, id);
+      dropRefs.run(id);
+      for (const r of refs) putRef.run(id, r.kind, r.value, r.origin);
+      if (fts) {
+        ftsDel.run(row.rid);
+        const t = nodeIndexTexts({ gist, topics: list ?? [], refs: refs.map((r) => r.value) }, ictx.pairIdx);
+        ftsIns.run(row.rid, t.gist, t.topics, t.refs);
+      }
+      n += 1;
+    }
+  });
+  return n;
+}
+
+/** Task 21's refreshLeaf over each of `nodeIds`, then Task 9's rerollParents once when any leaf changed: what
+ *  reparseLeaves does, with each leaf apart. A parser throw inside leafFields is refreshLeaf's own record (it writes
+ *  the leaf parse-failed, counts parser_crash once and answers 'failed', which counts as a change here). A throw that
+ *  escapes refreshLeaf (its reads before leafFields; busy rethrows) is counted parser_crash, as deriveLeaves counts a
+ *  derive throw, and skipped; the caller's redactNodeFields then
+ *  rewrites its stored fields fail-closed. Nothing retries it on a later pass (the coordinator's ruling RB5): the
+ *  recovery reindex moves its cursor past it, and the late-pair fast path (rederiveGistsFor, from B1's
+ *  reindexForValues, which never moves the mark) stops searching the value once B1's rederiveFts has opened a
+ *  generation (lib's phraseValues then hands it only the values its tick recorded) or completed one (the mark is then
+ *  at the pair). So one bad summary holds neither, and only `reparse` re-derives it again. Re-deriving twice is
+ *  idempotent. Answers how many leaves changed. */
+export function reparseFailClosed(db, ictx, nodeIds) {
+  let changed = 0;
+  for (const id of nodeIds) {
+    let r;
+    try {
+      r = refreshLeaf(db, ictx, id);
+    } catch (crash) {
+      if (ictx.isBusy(crash)) throw crash;
+      withTx(db, 'NORMAL', () => { bump(db, 'parser_crash'); });
+      continue;
+    }
+    // 'failed': refreshLeaf caught a parser throw itself and wrote the leaf parse-failed (Task 21, RB5), counted once.
+    if (r === 'updated' || r === 'failed') changed += 1;
+  }
+  if (changed > 0) rerollParents(db, ictx, nodeIds);
+  return changed;
+}
+
+/** The nodes whose gist, topics or refs hold one of `values`, re-derived with ictx.pairIdx (§6.2).
+ *  - They are found by a QUOTED-PHRASE match on nodes_fts (ftsPhrase), which FTS5 tokenises as the index did. A bare
+ *    MATCH of a value holding '-' is a syntax error ("no such column", measured on 22.16.0).
+ *  - Each value is searched by UNIT (lib's secretUnits: the value when it is one run, else each of its 12+-char
+ *    runs), as B1's reindexForValues searches blobs_fts (B1's D-4311): redaction matches by unit, so a node holding
+ *    only one segment of a multi-run value is found too.
+ *  - A leaf whose summary is still stored is re-derived (reparseFailClosed: same id, parents re-rolled, a throw
+ *    counted and skipped). Every node found, re-derived or not, is then rewritten through redactNodeFields.
+ *  - It is the same-tick fast path over nodes, as B1's phrase search is over blobs (B1's
+ *    D-4344): it moves no mark, and it runs only while `slice` and `budget` last
+ *    (B1's review 344 F2 rule: a fast path never runs unbudgeted ahead of the step that ends the generation). It
+ *    runs on every tick where a value is owed, until B1's rederiveFts opens a generation (then only the values its
+ *    tick recorded are searched) or completes one (the mark then covers the pair). What it misses or leaves (a value
+ *    glued to letters inside one term, a hash-only pair, a spent budget) the belt's node step finishes, fail-closed:
+ *    every generation that opens restarts it (beltNodesStep, Task 7B). Re-deriving twice is idempotent.
+ *  Returns how many nodes it touched. */
+export function rederiveGistsFor(db, ictx, values, budget, slice) {
+  if (ictx.fts !== true || values.length === 0) return 0;
+  // B1's review 344 F2 rule for a fast path: never unbudgeted. What a spent budget leaves, the belt's node step finishes.
+  if (!parentsBudgetLeft(slice) || !parentsBudgetLeft(budget)) return 0;
+  const match = db.prepare('SELECT rowid AS rid FROM nodes_fts WHERE nodes_fts MATCH ?');
+  const nodeAt = db.prepare(`SELECT n.node_id, n.kind, (n.summary_blob_id IS NOT NULL AND b.z IS NOT NULL) AS readable
+    FROM nodes n LEFT JOIN blobs b ON b.blob_id = n.summary_blob_id WHERE n.rowid = ?`);
+  const reparse = new Set();
+  const rewrite = new Set();
+  for (const v of values) {
+    for (const unit of secretUnits(v)) {
+      for (const r of match.all(ftsPhrase(unit))) {
+        const n = nodeAt.get(r.rid);
+        if (n === undefined) continue;
+        if (n.kind !== 'condensed' && n.readable === 1) reparse.add(n.node_id);
+        else rewrite.add(n.node_id);
+      }
+    }
+  }
+  const leaves = [...reparse].sort();
+  if (leaves.length > 0) reparseFailClosed(db, ictx, leaves);
+  // A parent the re-derivation re-rolled takes its children's gists as they are now. A node the match found that no
+  // re-derivation reaches is rewritten in place, and so is every leaf it tried: a leaf refreshLeaf had to skip (its
+  // holding copy unreadable) or that threw is still rewritten fail-closed, and rewriting a redacted field again
+  // changes nothing.
+  const rest = [...rewrite].sort();
+  redactNodeFields(db, ictx, [...leaves, ...rest]);
+  return leaves.length + rest.length;
+}
+
+// ── W1-B2 Task 29: the belt's node step (§6.2 "The belt", §8.3 layer 4) ──────────────────────────────────────────
+
+/** How many nodes one batch of the belt's node step reads. */
+const BELT_NODE_BATCH = 64;
+
+/** §6.2 "The belt": while ('nodes-belt', 1) is open (Task 7B's rederiveFts restarts it whenever a re-derivation
+ *  generation opens: a pair learned, a unit back, a belt version changed), every node is read in rowid order and each
+ *  whose stored gist, topics or refs the current redaction (the belt included) would change is rewritten through
+ *  redactNodeFields, its nodes_fts row with it. So is each node whose nodes_fts row differs from lib's nodeIndexTexts
+ *  of its stored fields (Task 7A; spec §6.2 `nodes_fts`): a pair-only value glued to a literal escape is masked by the
+ *  index's escape readings and not by redactField, so its stored field stays and only its row is stale. A node with
+ *  no row yet is Task 9's backfill's, and refs are compared as sets (node_refs has no stored order). This is the one
+ *  mechanism that re-derives nodes_fts. rederiveGistsFor's phrase search cannot find a letter-glued or escape-glued
+ *  value; this step needs no search. The cursor is the last nodes.rowid read, committed after each batch
+ *  (D-4730 (history-reindex-subcursor-idempotent)). Answers whether the step is complete (or was never opened). */
+export function beltNodesStep(db, ictx, slice) {
+  const step = getStep(db, BELT_NODES_STEP, 1);
+  if (step === null || step.completedMs !== null) return true;
+  const sel = db.prepare('SELECT rowid AS rid, node_id, gist, topics FROM nodes WHERE rowid > ? ORDER BY rowid LIMIT ?');
+  const refsOf = db.prepare('SELECT value FROM node_refs WHERE node_id = ?');
+  const ftsRow = ictx.fts === true ? db.prepare('SELECT gist, topics, refs FROM nodes_fts WHERE rowid = ?') : null;
+  const changes = (s) => s !== null && s !== undefined && redactField(s, ictx.pairIdx) !== s;
+  const asSet = (s) => String(s ?? '').split('\n').sort().join('\n');
+  const stale = (n, refs) => {
+    if (ftsRow === null) return false;
+    const row = ftsRow.get(n.rid);
+    if (row === undefined) return false;
+    const t = nodeIndexTexts({ gist: n.gist, topics: topicsOfColumn(n.topics), refs }, ictx.pairIdx);
+    return row.gist !== t.gist || row.topics !== t.topics || asSet(row.refs) !== asSet(t.refs);
+  };
+  let after = Number(step.cursor ?? 0);
+  while (ictx.budgetLeft(slice)) {
+    const batch = sel.all(after, BELT_NODE_BATCH);
+    if (batch.length === 0) {
+      withTx(db, 'NORMAL', () => { setStep(db, BELT_NODES_STEP, 1, String(after), ictx.nowMs); });
+      return true;
+    }
+    const dirty = batch.filter((n) => {
+      const refs = refsOf.all(n.node_id).map((r) => r.value);
+      return changes(n.gist) || topicsOfColumn(n.topics).some(changes) || refs.some(changes) || stale(n, refs);
+    }).map((n) => n.node_id);
+    if (dirty.length > 0) redactNodeFields(db, ictx, dirty);
+    after = Number(batch[batch.length - 1].rid);
+    withTx(db, 'NORMAL', () => { setStep(db, BELT_NODES_STEP, 1, String(after), null); });
+  }
+  return false;
 }

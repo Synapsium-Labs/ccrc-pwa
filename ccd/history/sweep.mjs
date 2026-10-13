@@ -67,11 +67,14 @@ import {
   syncWriterMirror, userVersion, withTx, writeFileAtomic, removeEntry, readBounded, removeStaleAtomicTemps, mkdirDurable,
   CODEC, brotli, unbrotli, unbrotliPrefix, compressFdRange, probeFts5, createFtsTables, recoverStepAt, storedVersionAt,
   pruneApply, pruneDryRun, writeBackup, removeStaleBackupTemps,
-  integrityCheck, foreignKeyRows, ftsMeasure, dropFtsTables, setStep, setCounter, adoptStore,
+  integrityCheck, foreignKeyRows, ftsMeasure, dropFtsTables, getStep, setStep, setCounter, adoptStore,
   peekStoreId, stageRestore, commitRestore, abortRestore,
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
-import { deriveNodes, reparseTargets, reparseLeaves, clearLeafCrashes, indexNodesFts, NODES_FTS_STEP } from './derive.mjs';
+import {
+  deriveNodes, reparseTargets, reparseLeaves, clearLeafCrashes, indexNodesFts, NODES_FTS_STEP, rederiveGistsFor, redactNodeFields, reparseFailClosed,
+  beltNodesStep,
+} from './derive.mjs';
 
 const USAGE = 'usage: sweep.mjs [--op <verb> <op-args...>] [--roster-unreadable] --secrets <file...> -- <home...>';
 
@@ -2535,9 +2538,14 @@ function recoverApplyChunk(db, run, cursor) {
   return journalChunk(db, run, cursor, (r) => applyJournalRecord(db, run, r));
 }
 
-/** reindex: W1-B2 Task 29 replaces this body with the FTS re-derivation the index pass's new pairs owe. */
-function recoverReindexChunk(_db, _run, cursor) {
-  return { cursor, moved: false, phaseDone: true };
+/** reindex: Task 25's executor contract over W1-B2 Task 29's recoverReindex. Its progress lives in its own
+ *  derivation rows, so the recovery cursor comes back unchanged; `done` ends the phase. recoverReindex answers
+ *  `{ moved: false, done: false }` only when the run budget was spent before it did any work; recoveryStep ends the
+ *  step for this pass on that answer (Task 25's contract, and its budget check before every chunk), so it is never
+ *  called again in a spin. It answers a Promise, which recoveryStep awaits (Task 25's executor contract). */
+async function recoverReindexChunk(db, run, cursor) {
+  const r = await recoverReindex(db, run.ectx, cursor, run.budget);
+  return { cursor: r.cur, moved: r.moved, phaseDone: r.done };
 }
 
 /** One executor per RECOVER_PHASES phase, keyed by its name. The contract each keeps:
@@ -2903,24 +2911,26 @@ export async function bindingPass(home, P, op, args, deps, out) {
  *     open, over those whose pairs this tick recorded; it never moves the mark;
  *  6. `rederiveFts`: the hash re-derivation of every indexed blob, which alone moves the durable reindex mark
  *     (D-4344); it runs under any pause, and it and step 5 share one per-tick slice of the run budget (review 344 F2);
- *  7. `drainSpool`: the journal-first drain of the spool (§9.14), whose hints feed the ingest; the per-tick first-row
- *     cache (`newFirstRowCache`) is made just before it and shared by the drain's location rule and step 8's;
- *  8. `confirmCandidates`: startup and resume lines awaiting `.uuid`, and clear epochs awaiting `.uuid` or their
+ *  7. `beltNodesStep`: §6.2 "The belt": while ('nodes-belt', 1) is open, every node's stored fields re-redacted
+ *     in the slice steps 5 and 6 share; it writes only the nodes the redaction changes (W1-B2 Task 29);
+ *  8. `drainSpool`: the journal-first drain of the spool (§9.14), whose hints feed the ingest; the per-tick first-row
+ *     cache (`newFirstRowCache`) is made just before it and shared by the drain's location rule and step 9's;
+ *  9. `confirmCandidates`: startup and resume lines awaiting `.uuid`, and clear epochs awaiting `.uuid` or their
  *     location, each decided in its own FULL transaction;
- *  9. `registryBackfill`: only when `scanDue` says the periodic scan is due, every `$REG/<id>.uuid` that names no
+ * 10. `registryBackfill`: only when `scanDue` says the periodic scan is due, every `$REG/<id>.uuid` that names no
  *     epoch becomes a registry mapping, committed before any ingest chunk can need it (D-4297);
- * 10. `ingestTick`: discovery, admission and the chunked read under the run's ONE budget, unless a cap or floor pause
+ * 11. `ingestTick`: discovery, admission and the chunked read under the run's ONE budget, unless a cap or floor pause
  *     (`ctx.ingest` false) or an unreadable roster holds it; a busy database ends the tick here;
- * 11. `backfillEpochFacts`: launch facts an epoch chained after its transcript's first chunk missed, after an ingest;
- * 12. `resetFtsPending`: blobs this tick wrote but could not index re-open the completed FTS backfill;
- * 13. `deriveFts`: §9.1 derivation ('fts', 1)'s backfill within what is left of the budget, held with the ingest
+ * 12. `backfillEpochFacts`: launch facts an epoch chained after its transcript's first chunk missed, after an ingest;
+ * 13. `resetFtsPending`: blobs this tick wrote but could not index re-open the completed FTS backfill;
+ * 14. `deriveFts`: §9.1 derivation ('fts', 1)'s backfill within what is left of the budget, held with the ingest
  *     (D-4242) and when Task 19's per-chunk floor stopped it;
- * 14. `deriveNodes`: the leaves from the boundaries stored so far (§9.2 step 6; W1-B2 Task 8), held with the ingest
+ * 15. `deriveNodes`: the leaves from the boundaries stored so far (§9.2 step 6; W1-B2 Task 8), held with the ingest
  *     and the FTS backfill (a node grows db/, §9.3) and run after the backfill, so a new node's nodes_fts row is
  *     written in a tick whose tables exist;
- * 15. `mergeSteps`: §6.2's merge steps, which run under any pause: they free space rather than take it;
- * 16. `recordTick`: the tick's row and journal record (a paused ingest records an unmeasured lag);
- * 17. `markScan`: a due scan is marked done, unless the roster was unreadable.
+ * 16. `mergeSteps`: §6.2's merge steps, which run under any pause: they free space rather than take it;
+ * 17. `recordTick`: the tick's row and journal record (a paused ingest records an unmeasured lag);
+ * 18. `markScan`: a due scan is marked done, unless the roster was unreadable.
  *  Then spool/ is made unless something that is not a directory stands there (FU8) (the hook's gate is that directory, and
  *  the hook never makes it, §5.1, so a box with no bound store spools nothing) and an unreadable roster is counted, once per pass (FE4, O54); the scheduled pass runs
  *  `periodicCensus` after the tick. `bump` and `countOutside` are counters, not steps. */
@@ -2953,6 +2963,9 @@ export async function tick(db, ctx) {
   const slice = rederiveSlice(ctx.budget);
   await reindexForValues(db, ictx, secrets.values, secrets.newValues, ctx.budget, slice);
   await rederiveFts(db, ictx, ctx.budget, slice);
+  // §6.2 "The belt": while ('nodes-belt', 1) is open, every node's stored fields re-redacted, in the slice the two
+  // re-index steps share; it writes only the nodes the redaction changes (W1-B2 Task 29).
+  beltNodesStep(db, ictx, slice);
   // Step 1, the drain: journal first, then the FULL drain transaction, then its verdicts, then the unlink (§9.14).
   // runPass never ticks without both binding names: a missing store.writer is a hold there (§9.10 "Writer token").
   // F16: one transcript index and one first-row memory per tick, shared by the drain's location rule and the candidates' (confirmClear) below
@@ -4926,6 +4939,10 @@ export async function reindexForValues(db, ctx, values, fresh, budget, slice = r
   const f = ftsStmts(db);
   const ids = new Set();
   for (const v of owed) for (const unit of secretUnits(v)) for (const r of f.match.all(ftsPhrase(unit))) ids.add(Number(r.rowid));
+  // §6.2 (SE4): the same-tick fast path over nodes, as the phrase search above is over blobs (W1-B2 Task 29). It moves
+  // no mark (only B1's rederiveFts does), and it runs only while the same slice and budget last. Whatever it misses
+  // or leaves, the belt's node step (beltNodesStep, restarted by every generation that opens) finishes fail-closed.
+  rederiveGistsFor(db, ctx, owed, budget, slice);
   if (ids.size === 0) return 0;
   // Texts are computed outside the transaction and written in groups. Each group's transaction registers the
   // merge steps, so a pass that dies between groups still purges what it deleted.
@@ -6786,6 +6803,153 @@ export async function rebuildArm(home, P, args, deps, out) {
   } finally {
     removeEntry(P.op);   // B1's type-aware removal (history-planted-entries-never-wedge), as adoptArm's
   }
+}
+
+// ── W1-B2 Task 29: the recovery step's reindex phase (§9.14 "Redaction first": a restore whose journal adds a
+// pair the backup lacked re-runs the FTS derivation over the restored blobs; slugs history-redaction-journaled,
+// history-redaction-reindex-merge) ───────────────────────────────────────────────────────────────────────────
+
+/** How many nodes one batch of the reindex phase re-derives before the budget is checked again. */
+const RECOVER_NODE_BATCH = 64;
+/** The node sub-step's cursor: which pass (every leaf, then every condensed node) and the last nodes.rowid done. */
+const RECOVER_NODES_CURSOR_RE = /^(leaves|condensed):([0-9]+)$/;
+/** The step, at the recovery's version, completed once this recovery's FTS rebuild (its merge steps included)
+ *  completed, so a pass after it never starts another rebuild. */
+const RECOVER_REBUILT_STEP = 'recover-merge';
+
+/** The full pair index: every redact_hashes row. That is every pair loaded from a file and every pair the replay
+ *  applied, so a rotated value is still known. With it, the pass's substring belt (§8.3 layer 4; Task 25's
+ *  run.ectx.belt), so a node field rewritten here is masked as the tick masks it. The FTS rebuild below marks the belt
+ *  due (Task 23), so the next tick's belt generation re-derives blobs_fts with the units loaded then.
+ *  The belt-state rule for this phase (spec §6.2 "The belt"; the coordinator's ruling R-oppass-belt): a unit
+ *  missing from a recovery pass's belt must never stay recorded covered in meta fts_belt. Two things keep it, neither
+ *  of them a call here:
+ *  - recoverPass runs rederiveFts before recoveryStep, in the same pass and with the same live units (Task 25), so
+ *    lib's decideBelt drops every unit this pass's belt lacks from fts_belt's rids and gen before any node is
+ *    rewritten here;
+ *  - ftsRebuildJob applies Task 21's recordBeltDueIfUncovered on every call (Task 23), with this phase's pair index.
+ *    That index carries no beltLive, so the rule reads the live set as empty and records the belt due unless the
+ *    recorded state names no unit: a recovery that re-derived nodes costs at most one belt generation, fail-closed.
+ *  The node rewrite adds no call of its own. With an FTS table it always precedes this phase's rebuild, and with none
+ *  rederiveFts never reads fts_belt, so such a call could never be the one that holds and no case could red it. The
+ *  recovery-belt case pins the rule; Step 7A's M12, which removes both mechanisms, is its red. secretsStep's witness
+ *  check (Task 7B) can record the belt due too, but not in that case: the restore stamped its own pair insert (Task
+ *  27's RESTORE_BELT; ruling R-witness-restore), and the case asserts that before any recovery pass runs. */
+function recoverPairIdx(db, belt) {
+  return makePairIndex(db.prepare('SELECT len, sha256 FROM redact_hashes').all()
+    .map((r) => ({ len: Number(r.len), sha256: Buffer.from(r.sha256).toString('hex') })), belt);
+}
+
+/** The open recovery step's version (its bind ms), or null when none is registered: recoveryStep's own row (Task 25's
+ *  RECOVER_ROW_SQL, its one spelling). */
+function openRecoverVersion(db) {
+  const row = db.prepare(RECOVER_ROW_SQL).get();
+  return row === undefined ? null : Number(row.version);
+}
+
+/** One batch of the node sub-step:
+ *  - leaves first: one whose summary is still stored is re-derived (reparseFailClosed: same id, parents re-rolled,
+ *    a throw counted parser_crash and passed over, never retried by the next pass); every leaf of the batch is then
+ *    rewritten through redactNodeFields;
+ *  - then every condensed node is rewritten, so a parent built from a child the rewrite cleaned is clean too.
+ *  Its cursor is ('recover-nodes', version), committed after the batch's own transactions
+ *  (D-4730 (history-reindex-subcursor-idempotent)): re-deriving is idempotent, so a batch re-run after a kill costs
+ *  time, never correctness. Answers whether the sub-step is complete. */
+function recoverNodesBatch(db, rctx, version) {
+  const step = getStep(db, 'recover-nodes', version);
+  if (step !== null && step.completedMs !== null) return true;
+  const at = RECOVER_NODES_CURSOR_RE.exec(step?.cursor ?? '');
+  const pass = at === null ? 'leaves' : at[1];
+  const after = at === null ? 0 : Number(at[2]);
+  const batch = pass === 'leaves'
+    ? db.prepare(`SELECT n.rowid AS rid, n.node_id, (n.summary_blob_id IS NOT NULL AND b.z IS NOT NULL) AS readable
+        FROM nodes n LEFT JOIN blobs b ON b.blob_id = n.summary_blob_id
+        WHERE n.kind <> 'condensed' AND n.rowid > ? ORDER BY n.rowid LIMIT ?`).all(after, RECOVER_NODE_BATCH)
+    : db.prepare(`SELECT rowid AS rid, node_id, 0 AS readable FROM nodes
+        WHERE kind = 'condensed' AND rowid > ? ORDER BY rowid LIMIT ?`).all(after, RECOVER_NODE_BATCH);
+  if (batch.length === 0) {
+    if (pass === 'leaves') {
+      setStep(db, 'recover-nodes', version, 'condensed:0', null);
+      return false;
+    }
+    setStep(db, 'recover-nodes', version, `condensed:${after}`, rctx.nowMs);
+    return true;
+  }
+  const leaves = batch.filter((r) => r.readable === 1).map((r) => r.node_id);
+  if (leaves.length > 0) reparseFailClosed(db, rctx, leaves);
+  // Every node of the batch, re-derived or not: a leaf refreshLeaf had to skip, or that threw, is still rewritten
+  // fail-closed (R2).
+  redactNodeFields(db, rctx, batch.map((r) => r.node_id));
+  setStep(db, 'recover-nodes', version, `${pass}:${Number(batch[batch.length - 1].rid)}`, null);
+  return false;
+}
+
+/** The recovery step's `reindex` phase, run through Task 25's RECOVER_EXECUTORS.reindex (recoverReindexChunk).
+ *  It runs only when the replay's first pass added a pair the store lacked (cur.pairsAdded). Otherwise it is done
+ *  at once: a rebuild starts empty, and every row it re-ingests is indexed redacted already. In order, within the
+ *  run budget:
+ *  1. every node's gist, topics and refs, re-derived or rewritten with the full pair index (recoverNodesBatch), a
+ *     batch per call;
+ *  2. the FTS index rebuilt over every blob and nodes_fts from those fields, by Task 23's ftsRebuildJob at this
+ *     step's version. That job completes only after its own merge steps complete ('fts-merge', 1), so a rotated
+ *     value is then no term and no index byte (§6.2). RECOVER_REBUILT_STEP records its completion, so a later
+ *     pass never starts another; a kill between the two runs the rebuild once more, which is idempotent.
+ *  Before the rebuild, any OTHER open rebuild is deleted. ftsRebuildJob resumes the newest open rebuild of any
+ *  version, and one the restored file carried (a repair killed before the backup was taken) indexed its earlier
+ *  blobs without the pairs the replay added: resumed, it would leave them terms. This rebuild re-indexes every
+ *  blob, which subsumes it, and it carries no foreign-key baseline, so it cannot answer `refused`; a refusal would
+ *  mean a job this code failed to supersede, and it throws, so recoveryStep counts recover_chunk_failed and ends
+ *  the pass rather than call it again.
+ *  One bounded sub-step per call (R-T29-2): one node batch, or one ftsRebuildJob call, or the completed merge marker.
+ *  Task 25's recoveryStep then re-checks the budget, history-off and the free-space floor before the next call, as it
+ *  does before every executor chunk. One ftsRebuildJob call runs its own chunk loop on one floor probe, as doctor
+ *  --repair's does: that job owns its chunking. ftsRebuildJob answers not-done only when the budget ran out after it did
+ *  work, so that counts as moved. This answers `moved: false` with `done: false` only when the budget was spent
+ *  before any work.
+ *  Each sub-step keeps its own derivation row and opens its own transactions, so this must run outside any
+ *  transaction (the first sub-step's withTx throws inside one), and those cursors commit after each batch (D-4730
+ *  (history-reindex-subcursor-idempotent)). Its progress
+ *  lives in those rows, so it returns the recovery cursor unchanged. B4 inserts its export phases before this one
+ *  in Task 25's phase table. It is async because Task 23's ftsRebuildJob is (B1's ftsTextOfBlob is async), and it
+ *  awaits that job between, never inside, its sub-steps' transactions.
+ *  It moves neither meta fts_reindex_rid nor fts_rederive (B1's REINDEX_META and REDERIVE_META). B1's rederiveFts,
+ *  which every tick and every recovery pass runs, therefore re-derives the rebuilt table once more afterwards (or
+ *  continues a generation the restored file carried), and the belt generation the rebuild marked due (Task 23) runs
+ *  too. Both are idempotent and cost only time. Moving the mark here would vouch for a pair learned between this
+ *  rebuild's calls, which its earlier blobs never saw, since each call builds its pair index afresh. */
+export async function recoverReindex(db, ctx, cur, budget) {
+  if (cur.pairsAdded !== true) return { cur, done: true, moved: true };
+  const version = openRecoverVersion(db);
+  if (version === null) return { cur, done: true, moved: true };
+  const b = budget ?? ctx.budget;
+  const nowMs = ctx.now();
+  const fts = db.prepare("SELECT 1 AS t FROM sqlite_master WHERE type = 'table' AND name = 'blobs_fts'").get() !== undefined;
+  const rctx = { ...ctx, ...makeIngestCtx(ctx.home, ctx.homes, nowMs, ctx.ids), pairIdx: recoverPairIdx(db, ctx.belt ?? null), fts };
+  while (budgetLeft(b)) {
+    if (!recoverNodesBatch(db, rctx, version)) return { cur, done: false, moved: true };
+    if (fts && getStep(db, RECOVER_REBUILT_STEP, version) === null) {
+      const others = db.prepare('SELECT count(*) AS n FROM derivation_state WHERE step = ? AND completed_ms IS NULL AND version <> ?')
+        .get(FTS_REBUILD_STEP, version);
+      if (Number(others.n) > 0) {
+        withTx(db, 'NORMAL', () => {
+          db.prepare('DELETE FROM derivation_state WHERE step = ? AND completed_ms IS NULL AND version <> ?').run(FTS_REBUILD_STEP, version);
+        });
+      }
+      const rebuilt = await ftsRebuildJob(db, rctx, { stepVersion: version, budget: b });
+      if (rebuilt.refused !== null) {
+        const why = rebuilt.refused.at === 'completion'
+          ? `${rebuilt.refused.rows.length} new foreign-key violation(s) at completion`
+          : 'a chunk failed its foreign-key check and was rolled back';
+        throw new Error(`the recovery's index rebuild was refused: ${why}`);
+      }
+      // Its budget ran out after real work: the next call resumes it at its cursor.
+      if (!rebuilt.done) return { cur, done: false, moved: true };
+      setStep(db, RECOVER_REBUILT_STEP, version, 'merged', nowMs);
+      return { cur, done: true, moved: true };
+    }
+    return { cur, done: true, moved: true };
+  }
+  return { cur, done: false, moved: false };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {

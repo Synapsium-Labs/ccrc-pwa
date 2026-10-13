@@ -12,6 +12,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import fs from 'node:fs';
 import { randomBytes, createHash } from 'node:crypto';
 import path from 'node:path';
+import { brotliDecompressSync as rrUnbrotli } from 'node:zlib';
 import { DatabaseSync } from 'node:sqlite';
 import * as pty from 'node-pty';
 import {
@@ -23,7 +24,7 @@ import { userRow, assistantRow, boundaryRow, summaryRow } from './historyFixture
 import { removeTmpFixturesEachTest, mkTmp } from './tmpHelpers.js';
 import {
   HEALTH_META, RECOVER_PHASES, RECOVERY_STALL_TICKS, SCHEMA_VERSION, WRITING_FORMS, floorThreshold, historyPaths, journalRecord, mergeJournalByTime,
-  REDACTED_MARK, BELT_VERSION, parseBeltState,
+  REDACTED_MARK, BELT_VERSION, parseBeltState, beltWidth, type BeltState,
 } from '../../ccd/history/lib.mjs';
 import { closeWriter, createStore, getMeta, openWriter, setMeta } from '../../ccd/history/store.mjs';
 
@@ -1723,4 +1724,318 @@ describe('C67: unreadable is not absent (W1-B2 Task 28)', () => {
       expect(r.stdout + r.stderr, verb[0]).toContain('harness-unreadable');
     }
   }, 1.5 * HEAVY);
+});
+
+// ── Task 29's helpers ───────────────────────────────────────────────────────────────────────────────────────
+/** The index's own bytes: every blobs_fts data block, as latin1 (B1 Task 23's measure). */
+const rrFtsBytes = (box: HistoryBox): string =>
+  rrQ<{ block: Uint8Array }>(box, 'SELECT block FROM blobs_fts_data').map((r) => Buffer.from(r.block).toString('latin1')).join('');
+/** Whether any stored blob still holds `needle`: the store stays lossless while the index and the output redact. */
+const rrBlobsHold = (box: HistoryBox, needle: string): boolean =>
+  rrQ<{ z: Uint8Array }>(box, 'SELECT z FROM blobs WHERE z IS NOT NULL').some((b) => rrUnbrotli(b.z).toString('utf8').includes(needle));
+const rrMatches = (box: HistoryBox, table: 'blobs_fts' | 'nodes_fts', q: string): number =>
+  rrQ<{ n: number }>(box, `SELECT count(*) AS n FROM ${table} WHERE ${table} MATCH ?`, q)[0]!.n;
+const rrGists = (box: HistoryBox): string[] =>
+  rrQ<{ gist: string | null }>(box, "SELECT gist FROM nodes WHERE kind <> 'condensed' ORDER BY node_id").map((r) => r.gist ?? '');
+
+describe('O47: redaction survives recovery, and a pair learned late (W1-B2 Task 29)', () => {
+  it('a token rotated out of its file, then the store rebuilt: the old value is redacted in grep, expand and --json, and is no term and no index byte', async () => {
+    const box = makeHistoryBox('ccrc-hist-o47a-', { role: 'fleet' });
+    const token = randomBytes(32).toString('hex');
+    const tokenFile = path.join(box.home, '.ccrc', 'fixture.token');
+    fs.writeFileSync(tokenFile, `${token}\n`, { mode: 0o600 });
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, [
+      userRow({ uuid: rrU(1), ts: rrIso(3), parentUuid: null, sessionId: RR_U1, cwd: WORK, text: `zqrotated the old key is ${token} here` }),
+      assistantRow({ uuid: rrU(2), ts: rrIso(2), parentUuid: rrU(1), sessionId: RR_U1, cwd: WORK, text: 'zqrotated noted' }),
+    ]);
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    rrTickUntil(box, () => countOf(box, 'entries') === 2);
+    fs.rmSync(tokenFile);                                   // rotated out: from here on only the journal knows the pair
+    expect(runShim(box).code).toBe(0);
+    rrLose(box, { binding: false, journal: false });
+    expect((await cliOnPty(box, ['doctor', '--rebuild'])).code).toBe(0);
+    rrTickUntil(box, () => rrRecovered(box) && countOf(box, 'entries') === 2, 12);
+    const pane = withPane(box, ID);
+    for (const args of [['grep', 'zqrotated'], ['grep', 'zqrotated', '--json'], ['expand', rrU(1)], ['expand', rrU(1), '--json']]) {
+      const o = runCli(box, args, { env: pane });
+      expect(o.code, `${args.join(' ')}: ${o.stdout}${o.stderr}`).toBe(0);
+      expect(o.stdout + o.stderr, args.join(' ')).not.toContain(token);
+      expect(o.stdout, args.join(' ')).toContain(REDACTED_MARK);
+    }
+    expect(runCli(box, ['grep', `"${token.slice(0, 6)}"*`], { env: pane }).code, 'the old value is no term').toBe(3);
+    expect(rrFtsBytes(box).includes(token.slice(16, 32)), 'nor an index byte').toBe(false);
+    expect(rrBlobsHold(box, token), 'the store keeps the text: lossless').toBe(true);
+  }, 2 * HEAVY);
+
+  it('a backup taken before a pair was learned, restored after the pair was rotated out: the step re-indexes every blob and runs the merge steps, so the value is no term and no index byte', async () => {
+    const box = makeHistoryBox('ccrc-hist-o47b-', { role: 'fleet' });
+    const value = randomBytes(32).toString('hex');
+    const tokenFile = path.join(box.home, '.ccrc', 'fixture.token');
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, [
+      userRow({ uuid: rrU(1), ts: rrIso(3), parentUuid: null, sessionId: RR_U1, cwd: WORK, text: `zqlate the key ${value} here` }),
+      assistantRow({ uuid: rrU(2), ts: rrIso(2), parentUuid: rrU(1), sessionId: RR_U1, cwd: WORK, text: 'zqlate noted' }),
+    ]);
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    rrTickUntil(box, () => countOf(box, 'entries') === 2);
+    const name = rrBackup(box);                                // its index holds the value as a term
+    fs.writeFileSync(tokenFile, `${value}\n`, { mode: 0o600 });
+    expect(runShim(box).code).toBe(0);                     // learned now, and journaled as a redact record
+    fs.rmSync(tokenFile);                                    // then rotated out of every file
+    rrLose(box, { binding: false, journal: false });
+    expect((await cliOnPty(box, ['doctor', '--restore', name])).code).toBe(0);
+    expect(rrMatches(box, 'blobs_fts', `"${value.slice(0, 6)}"*`), 'CONTROL: the restored index holds the value').toBe(1);
+    rrTickUntil(box, () => rrRecovered(box));
+    expect(rrMatches(box, 'blobs_fts', `"${value.slice(0, 6)}"*`), 'no term after the step').toBe(0);
+    expect(rrMatches(box, 'blobs_fts', 'zqlate'), 'the rows are still indexed, redacted').toBe(2);
+    expect(rrStepDone(box, 'fts-merge', 1), 'the merge steps ran to completion').toBe(true);
+    expect(rrFtsBytes(box).includes(value.slice(16, 32)), 'no index byte').toBe(false);
+    expect(rrBlobsHold(box, value)).toBe(true);
+    const out = runCli(box, ['grep', 'zqlate'], { env: withPane(box, ID) });
+    expect(out.stdout + out.stderr).not.toContain(value);
+    expect(out.stdout).toContain(REDACTED_MARK);
+  }, 2 * HEAVY);
+
+  it('a value holding - and _ indexed in clear, then added to a secret file: the next pass re-indexes it by quoted phrase and re-derives the leaf gist that held it; after the merge steps it is no index byte', () => {
+    const box = makeHistoryBox('ccrc-hist-o47c-', { role: 'fleet' });
+    const value = `zqv-${randomBytes(10).toString('hex')}_${randomBytes(10).toString('hex')}`;
+    const tail = value.slice(value.indexOf('_') + 1);
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, rrCompacted(RR_U1, 1, `Rotating the fixture credential ${value} before the release.`));
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    rrTickUntil(box, () => rrLeafIds(box).length === 1);
+    expect(rrGists(box)[0], 'CONTROL: the native leaf gist holds the value').toContain(value);
+    expect(rrMatches(box, 'blobs_fts', `"${tail.slice(0, 6)}"*`), 'CONTROL: a term in the row index').toBeGreaterThan(0);
+    expect(rrMatches(box, 'nodes_fts', `"${tail.slice(0, 6)}"*`), 'CONTROL: a term in the node index').toBeGreaterThan(0);
+    fs.mkdirSync(path.join(box.home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(box.home, '.cc-secrets', 'late.env'), `ZQ_LATE_VALUE=${value}\n`, { mode: 0o600 });
+    rrTickUntil(box, () => rrStepDone(box, 'fts-merge', 1), 6);
+    expect(rrMatches(box, 'blobs_fts', `"${tail.slice(0, 6)}"*`)).toBe(0);
+    expect(rrMatches(box, 'nodes_fts', `"${tail.slice(0, 6)}"*`)).toBe(0);
+    expect(rrGists(box)[0], 'the leaf gist was re-derived').not.toContain(value);
+    expect(rrGists(box)[0]).toContain(REDACTED_MARK);
+    // The rewrite indexes the topics one per line, as Tasks 8 and 9 do, never the column's JSON text.
+    const t = rrQ<{ topics: string; fts: string }>(box, `SELECT n.topics AS topics, f.topics AS fts
+      FROM nodes n JOIN nodes_fts f ON f.rowid = n.rowid WHERE n.kind <> 'condensed'`)[0]!;
+    expect(t.fts, 'nodes_fts topics, one per line').toBe((JSON.parse(t.topics) as string[]).join('\n'));
+    expect(rrFtsBytes(box).includes(tail.slice(4, 16)), 'no index byte after the merge steps').toBe(false);
+    expect(runCli(box, ['grep', `"${tail.slice(0, 6)}"*`], { env: withPane(box, ID) }).code).toBe(3);
+  }, 1.5 * HEAVY);
+
+  it('a backup that carries an open index rebuild (a repair killed before it was taken): the step supersedes that job and re-indexes every blob, so a resumed cursor cannot skip the blobs it had passed', async () => {
+    const box = makeHistoryBox('ccrc-hist-o47d-', { role: 'fleet' });
+    const P = rrRoot(box);
+    const value = randomBytes(32).toString('hex');
+    const tokenFile = path.join(box.home, '.ccrc', 'fixture.token');
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, [
+      userRow({ uuid: rrU(1), ts: rrIso(3), parentUuid: null, sessionId: RR_U1, cwd: WORK, text: `zqcarried the key ${value} here` }),
+      assistantRow({ uuid: rrU(2), ts: rrIso(2), parentUuid: rrU(1), sessionId: RR_U1, cwd: WORK, text: 'zqcarried noted' }),
+    ]);
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    rrTickUntil(box, () => countOf(box, 'entries') === 2);
+    const name = rrBackup(box);                                // its index holds the value as a term
+    // The backup also carries a repair's open job, its cursor past every blob and with a foreign-key baseline, as a
+    // repair always has: resumed as it stands, the job would index no blob and only merge.
+    const bdb = new DatabaseSync(path.join(P.backups, name));
+    try {
+      bdb.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('fts-rebuild', 1, ?, NULL)")
+        .run(JSON.stringify({ phase: 'blobs', blobId: 2 ** 31, baseline: [], undecodable: 0 }));
+    } finally { bdb.close(); }
+    fs.writeFileSync(tokenFile, `${value}\n`, { mode: 0o600 });
+    expect(runShim(box).code).toBe(0);                     // learned now, and journaled as a redact record
+    fs.rmSync(tokenFile);                                    // then rotated out of every file
+    rrLose(box, { binding: false, journal: false });
+    expect((await cliOnPty(box, ['doctor', '--restore', name])).code).toBe(0);
+    expect(rrMatches(box, 'blobs_fts', `"${value.slice(0, 6)}"*`), 'CONTROL: the restored index holds the value').toBe(1);
+    expect(rrQ(box, "SELECT version FROM derivation_state WHERE step = 'fts-rebuild' AND completed_ms IS NULL"),
+      'CONTROL: the restored file carries the open job').toEqual([{ version: 1 }]);
+    rrTickUntil(box, () => rrRecovered(box));
+    expect(rrMatches(box, 'blobs_fts', `"${value.slice(0, 6)}"*`), 'no term after the step').toBe(0);
+    expect(rrMatches(box, 'blobs_fts', 'zqcarried'), 'every row re-indexed, redacted').toBe(2);
+    expect(rrQ(box, "SELECT version FROM derivation_state WHERE step = 'fts-rebuild' AND (version = 1 OR completed_ms IS NULL)"),
+      'the carried job is gone, and no rebuild is left open').toEqual([]);
+    expect(rrFtsBytes(box).includes(value.slice(16, 32)), 'no index byte').toBe(false);
+    expect(counters(box)['recover_chunk_failed'] ?? 0).toBe(0);
+  }, 2 * HEAVY);
+
+  it('a late pair whose leaf re-derivation throws: the leaf is rewritten fail-closed, parser_crash counts it once, and the next pass does not retry it', () => {
+    const box = makeHistoryBox('ccrc-hist-o47e-', { role: 'fleet' });
+    const value = `zqc-${randomBytes(10).toString('hex')}_${randomBytes(10).toString('hex')}`;
+    const tail = value.slice(value.indexOf('_') + 1);
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, rrCompacted(RR_U1, 1, `Rotating the fixture credential ${value} before the release.`));
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    rrTickUntil(box, () => rrLeafIds(box).length === 1);
+    expect(rrGists(box)[0], 'CONTROL: the native leaf gist holds the value').toContain(value);
+    const crashes = (): number => counters(box)['parser_crash'] ?? 0;
+    const before = crashes();
+    fs.mkdirSync(path.join(box.home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(box.home, '.cc-secrets', 'late.env'), `ZQ_LATE_VALUE=${value}\n`, { mode: 0o600 });
+    // Task 25's knob: refreshLeaf's own read throws, as a parser crash would. Only that statement holds the substring.
+    const crash: SpawnOpts = { preloads: [PRELOADS.faults], env: { HISTORY_TEST_THROW_SQL: 'directive_flag, capped, boundary_entry_id' } };
+    rrTickUntil(box, () => rrStepDone(box, 'fts-merge', 1), 6, crash);
+    expect(crashes() - before, 'the throw is counted once').toBe(1);
+    expect(rrGists(box)[0], 'rewritten fail-closed').not.toContain(value);
+    expect(rrGists(box)[0]).toContain(REDACTED_MARK);
+    expect(rrMatches(box, 'nodes_fts', `"${tail.slice(0, 6)}"*`)).toBe(0);
+    const again = runShim(box, [], crash);
+    expect(again.code, `${again.stdout}\n${again.stderr}`).toBe(0);
+    expect(crashes() - before, 'the next pass does not retry it').toBe(1);
+  }, 1.5 * HEAVY);
+});
+
+describe('§6.2 "The belt": a generation that opens re-redacts every node\'s stored fields (W1-B2 Task 29)', () => {
+  it('a native leaf whose gist and nodes_fts row hold a letter-glued value from before the belt is rewritten by the node step', () => {
+    const box = makeHistoryBox('ccrc-hist-beltnodes-', { role: 'fleet' });
+    const AN = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const v = `${Array.from(randomBytes(29), (b) => AN[b % AN.length]!).join('')}7`;
+    const work = `Rotating the fixture credential zq${v}x before the release.`;
+    fs.mkdirSync(path.join(box.home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(box.home, '.cc-secrets', 'belt.env'), `ZQ_BELT=${v}\n`, { mode: 0o600 });
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, rrCompacted(RR_U1, 1, work));
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    rrTickUntil(box, () => rrLeafIds(box).length === 1);
+    expect(rrGists(box)[0], 'CONTROL: the belt masked the glued value when the leaf was derived').not.toContain(v.slice(0, 14));
+    // The leaf as a store with no belt state left it: the glued value in its gist and in its nodes_fts row.
+    const db = new DatabaseSync(rrRoot(box).dbFile);
+    try {
+      const n = db.prepare("SELECT rowid AS rid, node_id FROM nodes WHERE kind <> 'condensed'").get() as { rid: number; node_id: string };
+      db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(work, n.node_id);
+      db.prepare('DELETE FROM nodes_fts WHERE rowid = ?').run(n.rid);
+      db.prepare('INSERT INTO nodes_fts (rowid, gist, topics, refs) VALUES (?, ?, ?, ?)').run(n.rid, work, '', '');
+      db.prepare("DELETE FROM meta WHERE k = 'fts_belt'").run();
+    } finally { db.close(); }
+    expect(rrMatches(box, 'nodes_fts', `"zq${v}x"`), 'CONTROL: the planted row is a term').toBe(1);
+    rrTickUntil(box, () => rrStepDone(box, 'nodes-belt', 1) && !rrGists(box)[0]!.includes(v.slice(0, 14)));
+    expect(rrGists(box)[0]).toContain(REDACTED_MARK);
+    expect(rrMatches(box, 'nodes_fts', `"zq${v}x"`), 'and its nodes_fts row').toBe(0);
+  }, 1.5 * HEAVY);
+
+  it('a nodes_fts row holding a pair-only value glued to a literal escape is re-derived through nodeIndexTexts by the node step (spec §6.2 nodes_fts)', () => {
+    const box = makeHistoryBox('ccrc-hist-beltesc-', { role: 'fleet' });
+    const v = randomBytes(16).toString('hex');
+    const file = path.join(box.home, '.cc-secrets', 'esc.env');
+    fs.mkdirSync(path.join(box.home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(file, `ZQ_ESC=${v}\n`, { mode: 0o600 });
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, rrCompacted(RR_U1, 1, 'Rotating the fixture credential before the release.'));
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    rrTickUntil(box, () => rrLeafIds(box).length === 1);
+    expect(rrQ<{ n: number }>(box, 'SELECT count(*) AS n FROM redact_hashes WHERE len = ?', v.length)[0]!.n,
+      'CONTROL: a tick recorded the value\'s pair').toBeGreaterThan(0);
+    // The value leaves its file: its pair stays (redact_hashes only grows), but no belt holds it any longer, so only the
+    // index's escape readings separate it from the literal `\n` glued onto it. redactField's one reading sees the run
+    // `n<value>`, which no pair matches, so the stored gist below is one redactField leaves as it is.
+    fs.writeFileSync(file, `ZQ_ESC_OTHER=${randomBytes(16).toString('hex')}\n`, { mode: 0o600 });
+    const gist = `Printed {"t":"a\\n${v}"} before the release.`;
+    const db = new DatabaseSync(rrRoot(box).dbFile);
+    try {
+      const n = db.prepare("SELECT rowid AS rid, node_id FROM nodes WHERE kind <> 'condensed'").get() as { rid: number; node_id: string };
+      db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(gist, n.node_id);
+      db.prepare('DELETE FROM nodes_fts WHERE rowid = ?').run(n.rid);
+      db.prepare('INSERT INTO nodes_fts (rowid, gist, topics, refs) VALUES (?, ?, ?, ?)').run(n.rid, gist, '', '');
+      db.prepare("DELETE FROM meta WHERE k = 'fts_belt'").run();
+    } finally { db.close(); }
+    expect(rrMatches(box, 'nodes_fts', `"n${v}"`), 'CONTROL: the planted row holds the glued term').toBe(1);
+    rrTickUntil(box, () => rrStepDone(box, 'nodes-belt', 1) && rrMatches(box, 'nodes_fts', `"n${v}"`) === 0);
+    expect(rrMatches(box, 'nodes_fts', '"printed"'), 'the row was re-derived, not dropped').toBe(1);
+  }, 1.5 * HEAVY);
+
+  it('a recovery re-derives node fields through the pass\'s belt, and a unit missing from the recovery passes\' belt leaves the belt due (ruling R-oppass-belt; review R47)', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file regardless of its mode
+    const box = makeHistoryBox('ccrc-hist-beltrec-', { role: 'fleet' });
+    const AN = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const unit = (): string => `${Array.from(randomBytes(29), (b) => AN[b % AN.length]!).join('')}7`;
+    const u = unit();                                          // loaded before the backup; unreadable on every recovery pass
+    const v = unit();                                          // learned after the backup; loaded on every recovery pass
+    const dir = path.join(box.home, '.cc-secrets');
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const uFile = path.join(dir, 'u.env');
+    fs.writeFileSync(uFile, `ZQ_U=${u}\n`, { mode: 0o600 });
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, rrCompacted(RR_U1, 1, `Rotating zq${u}x and zq${v}x before the release.`));
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    const ridOf = (s: string): number => rrQ<{ rid: number }>(box, 'SELECT rowid AS rid FROM redact_hashes WHERE len = ? AND hex(sha256) = ?',
+      s.length, createHash('sha256').update(s).digest('hex').toUpperCase())[0]?.rid ?? 0;
+    const belt = (): BeltState | null => parseBeltState(metaOf(box, 'fts_belt'));
+    rrTickUntil(box, () => rrLeafIds(box).length === 1 && ridOf(u) > 0 && (belt()?.rids.includes(ridOf(u)) ?? false), 12);
+    const uRid = ridOf(u);                                     // a restore copies redact_hashes, rowids included
+    expect(belt()?.v, 'CONTROL: a completed belt generation recorded u covered').toBe(BELT_VERSION);
+    expect(rrGists(box)[0]!.includes(u.slice(0, 14)), 'CONTROL: the belt masked u when the leaf was derived').toBe(false);
+    expect(rrGists(box)[0]!.includes(`zq${v}x`), 'CONTROL: v is in no file yet, so the gist holds it glued').toBe(true);
+    const atBackup = belt()!;                                  // the backup pass writes no belt state (Task 22)
+    const name = rrBackup(box);
+    fs.writeFileSync(path.join(dir, 'v.env'), `ZQ_V=${v}\n`, { mode: 0o600 });
+    expect(runShim(box).code).toBe(0);                     // v learned and journaled: the backup lacks its pair
+    rrLose(box, { binding: false, journal: false });
+    expect(lastRc((await shimOnPty(box, ['--op', 'restore', name])).out)).toEqual({ rc: 0 });
+    // Ruling R-witness-restore: the restore put v's journal pair into the copy between its witness check and its stamp,
+    // so the first recovery pass's secretsStep finds the witness unmoved and records nothing due. What leaves the belt
+    // due below is then the recovery's own belt-state rule, which M12 removes (Step 7).
+    const restored = belt();
+    const vrg = (s: BeltState): string => JSON.stringify([s.v, s.rids, s.gen]);
+    expect(restored !== null && vrg(restored) === vrg(atBackup) && restored.rids.includes(uRid)
+      && restored.w !== undefined && restored.w !== atBackup.w,
+    'CONTROL: the restore left the backup\'s covered state and stamped its pair insert').toBe(true);
+    fs.chmodSync(uFile, 0o000);                              // u's file unreadable on every recovery pass
+    const unreadable = (): number => counters(box)['redact_source_unreadable'] ?? 0;
+    const before = unreadable();
+    try {
+      rrTickUntil(box, () => rrRecovered(box), 12);
+      expect(unreadable() > before, 'CONTROL: the recovery passes could not read u\'s file (a root runner reads it anyway)').toBe(true);
+      // Review R47: the step re-derived the nodes with the pass's belt (run.ectx.belt), so v, loaded on these passes
+      // and glued by letters, leaves no stretch in a gist, nodes_fts or blobs_fts at the step's completion, before any
+      // tick runs the node step.
+      expect(rrGists(box)[0]!.includes(v.slice(0, 14)), 'no stretch of v in the gist at the step\'s completion').toBe(false);
+      expect(rrMatches(box, 'nodes_fts', `"zq${v}x"`), 'nor a nodes_fts term').toBe(0);
+      expect(rrFtsBytes(box).includes(v.slice(8, 22)), 'nor a blobs_fts byte').toBe(false);
+      // Ruling R-oppass-belt: u was missing from every recovery pass's belt, and the leaf the step re-derived holds it
+      // glued, so the step must leave the belt due for u.
+      expect(rrGists(box)[0]!.includes(`zq${u}x`), 'CONTROL: the re-derived gist holds u, whose file no recovery pass read').toBe(true);
+      const st = belt();
+      expect(st === null || st.v !== BELT_VERSION || !st.rids.includes(uRid), 'u is not recorded covered: the belt is due').toBe(true);
+    } finally { fs.chmodSync(uFile, 0o600); }
+    rrTickUntil(box, () => rrStepDone(box, 'nodes-belt', 1) && !rrGists(box)[0]!.includes(u.slice(0, 14)));
+    expect(rrMatches(box, 'nodes_fts', `"zq${u}x"`), 'and its nodes_fts term is gone').toBe(0);
+  }, 2 * HEAVY);
+
+  it('a reparse whose belt lacked a unit: once its file is readable again, the belt generation and its node step re-redact the reparsed leaf (ruling R-oppass-belt; review R46)', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file regardless of its mode
+    const box = makeHistoryBox('ccrc-hist-beltrp-', { role: 'fleet' });
+    const AN = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const v = `${Array.from(randomBytes(29), (b) => AN[b % AN.length]!).join('')}7`;
+    const dir = path.join(box.home, '.cc-secrets');
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const vFile = path.join(dir, 'rp.env');
+    fs.writeFileSync(vFile, `ZQ_RP=${v}\n`, { mode: 0o600 });
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, rrCompacted(RR_U1, 1, `Rotating the fixture credential ab${v}cd before the release.`));
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    const belt = (): BeltState | null => parseBeltState(metaOf(box, 'fts_belt'));
+    rrTickUntil(box, () => rrLeafIds(box).length === 1 && belt()?.v === BELT_VERSION && (belt()?.rids.length ?? 0) > 0
+      && rrStepDone(box, 'nodes-belt', 1), 12);
+    const K = beltWidth(v);
+    /** Whether `s` holds any K-wide stretch of v (K its belt width): what the belt guarantees no field or term keeps. */
+    const stretch = (s: string): boolean => Array.from({ length: v.length - K + 1 }, (_, i) => v.slice(i, i + K)).some((w) => s.includes(w));
+    const nodeText = (): string => [
+      ...rrQ<{ gist: string | null; topics: string | null }>(box, 'SELECT gist, topics FROM nodes').flatMap((r) => [r.gist ?? '', r.topics ?? '']),
+      ...rrQ<{ value: string }>(box, 'SELECT value FROM node_refs').map((r) => r.value),
+      ...rrQ<{ gist: string; topics: string; refs: string }>(box, 'SELECT gist, topics, refs FROM nodes_fts').flatMap((r) => [r.gist, r.topics, r.refs]),
+    ].join('\n');
+    expect(stretch(nodeText()), 'CONTROL: the belt masked v when the leaf was derived').toBe(false);
+    fs.chmodSync(vFile, 0o000);                              // v's file unreadable during the reparse only
+    try {
+      const r = runShim(box, ['--op', 'reparse', '--apply']);
+      expect(r.code, r.stderr).toBe(0);
+    } finally { fs.chmodSync(vFile, 0o600); }
+    expect(rrGists(box)[0]!.includes(`ab${v}cd`), 'CONTROL: the reparse ran without v\'s belt, so the gist holds it glued').toBe(true);
+    // The reparse recorded the belt due (Task 21); with v readable again, the next generation reopens ('nodes-belt', 1),
+    // whose node step re-redacts every stored node field and nodes_fts row.
+    rrTickUntil(box, () => belt()?.v === BELT_VERSION && rrStepDone(box, 'nodes-belt', 1), 12);
+    expect(stretch(nodeText()), 'no belt-width stretch of v in nodes.gist, topics, node_refs or nodes_fts').toBe(false);
+    expect(rrMatches(box, 'nodes_fts', `"ab${v}cd"`), 'nor a nodes_fts term').toBe(0);
+  }, 2 * HEAVY);
 });
