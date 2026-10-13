@@ -1961,11 +1961,22 @@ function tailHead(s, R, valueStart, end, kind) {
     if (v === null || v[2] === REDACTED_MARK) return null;
     return [at + v[1].length, at + v[0].length];
   }
-  if (next !== ' ' && next !== '\t') return null;
-  const word = kind === 'bearer' ? 'authorization:' : 'x-ccrc-mail-token:';
-  if (end - word.length < valueStart || s.slice(end - word.length, end).toLowerCase() !== word) return null;
+  // The value's tail against a FULL nested head (D-4614, whole-branch fix round 8). A value holds no whitespace, so a
+  // head with no space after its colon ends INSIDE it: `Vabcauthorization:Bearer` (then ` SECRET`) and
+  // `Vabcx-ccrc-mail-token:` (then the next value, whatever follows). A Bearer head also ends the value at its bare word
+  // `authorization:` when a space or tab follows (the head's own space is the next character). The sticky rule re-runs
+  // from where the head starts and decides whether it is one.
+  const tail = s.slice(Math.max(valueStart, end - 20), end).toLowerCase();
+  let headLen = 0;
+  if (kind === 'bearer') {
+    if (tail.endsWith('authorization:bearer')) headLen = 20;
+    else if (tail.endsWith('authorization:') && (next === ' ' || next === '\t')) headLen = 14;
+  } else if (tail.endsWith('x-ccrc-mail-token:')) {
+    headLen = 18;
+  }
+  if (headLen === 0) return null;
   const re = kind === 'bearer' ? R.bearerSticky : R.mailTokenSticky;
-  re.lastIndex = end - word.length;
+  re.lastIndex = end - headLen;
   const m = re.exec(s);
   return m === null || m[2] === REDACTED_MARK ? null : [m.index + m[1].length, m.index + m[0].length];
 }
@@ -2040,6 +2051,53 @@ function shapeSpans(s, add) {
     for (const m of s.matchAll(re)) add(m.index, m.index + m[0].length);
   }
   jwtSpans(s, add);
+}
+
+/** The JSON-form rule's SECOND reading, for the final form only (D-4614, whole-branch fix round 8). The final form's JSON
+ *  value class stops at a line break, `<`, `>`, `&` and a backslash, so `"password": "hunter2<PEM block>"` is not one
+ *  value to the first reading: the shape masks the block and `hunter2` stays printed. This reads the text with every
+ *  shape span collapsed to the mark (no line break, `<` or `&` is left inside it), runs the JSON-form scan on that, and
+ *  maps each value span it finds back to the original text, where it covers the shape spans inside it: the whole
+ *  value up to its closing quote is the mark. The field form needs no second reading (its value class crosses all of
+ *  those). `shapes` are `[start, end)` pairs of `s`, in any order. Chosen over extending a value's span in place
+ *  because it reuses `jsonSpans` unchanged (one definition of what a JSON-form value is) and cannot disagree with it.
+ *  Linear: one sort and merge of the shape spans, one copy, one scan, one binary search per span found. */
+function jsonSpansCollapsed(s, R, shapes, add) {
+  if (shapes.length === 0) return;
+  shapes.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  const plain = []; // the plain stretches of s: [start in s, end in s, start in the collapsed reading]
+  let c = '';
+  let copied = 0;
+  let a = shapes[0][0];
+  let b = shapes[0][1];
+  for (let i = 1; i <= shapes.length; i += 1) {
+    if (i < shapes.length && shapes[i][0] <= b) {
+      if (shapes[i][1] > b) b = shapes[i][1];
+      continue;
+    }
+    plain.push([copied, a, c.length]);
+    c += s.slice(copied, a) + REDACTED_MARK;
+    copied = b;
+    if (i < shapes.length) [a, b] = shapes[i];
+  }
+  plain.push([copied, s.length, c.length]);
+  c += s.slice(copied);
+  // the original position of a position of c: the last plain stretch starting at or before it (a position at the start
+  // of a mark is the end of the stretch before it, which is where the shape starts; one just after a mark is the start
+  // of the stretch after it, which is where the shape ends)
+  const back = (p) => {
+    let lo = 0;
+    let hi = plain.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (plain[mid][2] <= p) lo = mid;
+      else hi = mid - 1;
+    }
+    return plain[lo][0] + (p - plain[lo][2]);
+  };
+  jsonSpans(c, R, (x, y) => {
+    if (c.slice(x, y) !== REDACTED_MARK) add(back(x), back(y));
+  });
 }
 
 /** The union of spans (D-4614, whole-branch fix round 7): `spans` holds `[start, end)` pairs of `s` in any order;
@@ -2122,7 +2180,16 @@ function redactLayers(segment, idx, context) {
     jsonSpans(s, R, add);
     namedSpans(s, R, add);
   }
-  shapeSpans(s, add);
+  if (R === CONTEXT_RULES.final) {
+    const shapes = [];
+    shapeSpans(s, (x, y) => {
+      add(x, y);
+      shapes.push([x, y]);
+    });
+    jsonSpansCollapsed(s, R, shapes, add);
+  } else {
+    shapeSpans(s, add);
+  }
   return maskSpans(s, spans);
 }
 

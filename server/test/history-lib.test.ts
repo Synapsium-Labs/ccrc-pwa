@@ -2358,7 +2358,6 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     const SECRET = 's3cr3tVALUE123';
     const PEM = 'MIIBVgIBADANBgkqhkiG9w0BAQEFAASCAUAwggE8';
     const envOf = (o: Record<string, unknown>): string => JSON.stringify(libRedact.redactFinalJson(libOut.readEnvelope({ exit: libOut.EXIT.OK, storeId: 's', scope: null, header: null, items: [], shown: 0, total: 0, next: null, ...o }), idx));
-    const internal = Object.keys(libOut.REASONS).find((k) => libOut.REASONS[k as keyof typeof libOut.REASONS] === libOut.EXIT.INTERNAL)!;
     const pem = `-----BEGIN PRIVATE KEY-----\n${PEM}\n-----END PRIVATE KEY-----`;
     const gone = (name: string, out: string): void => {
       expect(out, `${name}: secret`).not.toContain(SECRET);
@@ -2375,8 +2374,10 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
       gone(`index ${raw}`, libRedact.redactForIndex(raw, idx));
     }
     // R3: a leaf the field pass never saw (the regex child's failure detail in `hint`)
+    // an internal-error envelope (exit 1) carries a hint and no reason word (readEnvelope: only the REASON_EXITS carry one)
+    expect(JSON.parse(envOf({ exit: libOut.EXIT.INTERNAL, hint: 'h' })), 'internal envelope').toMatchObject({ exit: libOut.EXIT.INTERNAL, hint: 'h' });
     for (const hint of ['the --regex child failed: TOKEN="x-ccrc-mail-token: s3cr3tVALUE123', 'the --regex child failed: TOKEN=a<b>Authorization: Bearer s3cr3tVALUE123', 'child: TOKEN=?token=s3cr3tVALUE123']) {
-      gone(`hint ${hint}`, envOf({ exit: libOut.EXIT.INTERNAL, reason: internal, hint }));
+      gone(`hint ${hint}`, envOf({ exit: libOut.EXIT.INTERNAL, hint }));
     }
     // the residuals the order also closes
     for (const raw of ['auth="Authorization: Bearer s3cr3tVALUE123"', 'TOKEN=[redacted]x-ccrc-mail-token: s3cr3tVALUE123']) {
@@ -2630,6 +2631,70 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
       }
     }
   }, 300_000);
+  // D-4614 (whole-branch fix round 8): a shape inside a final-form JSON value, and a nested header with no space.
+  it('(n) a shape inside a JSON-form value masks the whole value in the final form, and a Bearer or box-token value ending in a nested header with no space hands on to it (D-4614 round 8)', () => {
+    const idx = idxOf([]);
+    const PEM = 'MIIBVgIBADANBgkqhkiG9w0BAQEFAASCAUAwggE8';
+    const pem = `-----BEGIN PRIVATE KEY-----\n${PEM}\n-----END PRIVATE KEY-----`;
+    const doors = (input: string): Array<[string, string]> => [
+      ['redactField', libRedact.redactField(input, idx)],
+      ['redactFinal', libRedact.redactFinal(input, idx)],
+      ['redactFinalLines', libRedact.redactFinalLines(input, idx)],
+      ['redactFinalJson', JSON.stringify(libRedact.redactFinalJson({ a: input }, idx))],
+    ];
+    // item 2: [text, the planted values none of which may survive]
+    const inShape: Array<[string, string[]]> = [
+      [`"password": "hunter2${pem}"`, ['hunter2', 'MIIB']],
+      [`{"token": "abc${pem}"}`, ['abc', 'MIIB']],
+      [`{"token": "abc${pem}tail"}`, ['abc', 'MIIB', 'tail']],
+      [`{"api_key": "x1${pem}y2${pem}z3", "n": 1}`, ['x1', 'y2', 'z3', 'MIIB']],
+      ['{"token": "abc sk-abcdefghijkl1234 def"}', ['abc', 'def', 'sk-abcdefghijkl1234']],
+    ];
+    for (const [input, planted] of inShape) {
+      for (const [door, out] of doors(input)) {
+        for (const v of planted) expect(out, `${door}: ${JSON.stringify(input)} leaks ${v}`).not.toContain(v);
+        expect(out, `CONTROL ${door}: the mark is there`).toContain(M);
+      }
+    }
+    // the JSON frame outside the value is kept
+    expect(libRedact.redactFinal(`{"token": "abc${pem}"}`, idx)).toBe(`{"token": "${M}"}`);
+    expect(libRedact.redactFinal(`"password": "hunter2${pem}"`, idx)).toBe(`"password": "${M}"`);
+    // CONTROLs: a plain name's value around a shape keeps the plain text; a shape alone; the field form is as it was
+    expect(libRedact.redactFinal(`{"note": "abc ${pem}"}`, idx)).toBe(`{"note": "abc ${M}"}`);
+    expect(libRedact.redactFinal(pem, idx)).toBe(M);
+    expect(libRedact.redactField(`{"token": "abc${pem}"}`, idx)).toBe(`{"token": "${M}"}`);
+    expect(libRedact.redactFinal('{"token": "X1234567"}', idx)).toBe(`{"token": "${M}"}`);
+    expect(libRedact.redactFinal(`{"token": "${M}"}`, idx)).toBe(`{"token": "${M}"}`);
+    // item 3: a header value that ends in the next header's own word, with NO space after its colon
+    const noSpace: Array<[string, string[]]> = [
+      ['Authorization: Bearer Vabcauthorization:Bearer SECRET', ['SECRET']],
+      ['Authorization: Bearer VabcAUTHORIZATION:BEARER SECRET', ['SECRET']],
+      ['Authorization: Bearer Vabcauthorization:Bearer\tSECRET', ['SECRET']],
+      ['Authorization: Bearer Vabcauthorization: Bearer SECRET', ['SECRET']],
+      ['Authorization: Bearer Vabcauthorization:Bearer Vdefauthorization:Bearer SECRET', ['SECRET']],
+      ['x-ccrc-mail-token: Vabcx-ccrc-mail-token:SECRET', ['SECRET']],
+      ['x-ccrc-mail-token: VabcX-CCRC-MAIL-TOKEN:SECRET', ['SECRET']],
+      ['x-ccrc-mail-token: Vabcx-ccrc-mail-token: SECRET', ['SECRET']],
+      ['x-ccrc-mail-token: Vabcx-ccrc-mail-token:  SECRET', ['SECRET']],
+    ];
+    for (const [input, planted] of noSpace) {
+      const outs = doors(input);
+      outs.push(['redactFinalText', libRedact.redactFinalText(input, idx)]);
+      for (const [door, out] of outs) {
+        for (const v of planted) expect(out, `${door}: ${JSON.stringify(input)} leaks ${v}`).not.toContain(v);
+        expect(out, `CONTROL ${door}: the mark is there`).toContain(M);
+      }
+    }
+    // CONTROLs: round 7's cases and the lone headers, unchanged
+    for (const [input, want] of [
+      ['Authorization: Bearer X1234567', `Authorization: Bearer ${M}`], ['x-ccrc-mail-token: X1234567', `x-ccrc-mail-token: ${M}`],
+      ['Authorization: Bearer VaYk8zK2RrgZauthorization: bearer V4FunFLYzYkM', `Authorization: Bearer ${M} bearer ${M}`],
+      ['Authorization: Bearer authorization:', 'Authorization: Bearer ' + M],
+    ] as const) {
+      expect(libRedact.redactField(input, idx), input).toBe(want);
+      expect(libRedact.redactFinal(input, idx), `final ${input}`).toBe(want);
+    }
+  });
   it('(e) a seeded differential fuzz: 4,000 field texts through redactForDisplay into real envelope shapes always parse and always keep their frame', () => {
     const idx = idxOf([]);
     let seed = 0x4613;
