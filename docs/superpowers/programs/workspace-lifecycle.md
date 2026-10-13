@@ -1862,6 +1862,8 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     - No new numbers. Rulings: `fix-round-6-rulings.md`.
   - **Next:** the wave-done, a narrow scoped review, then the operator-authorized admin merge when green. Both lanes stay
     SHADOWED.
+  - **16:01 — quiet-ridge CONSENTS (4610)** to F8's one README sentence (main `:3584`, the dead-coordinator paragraph at
+    `:3580-3585`). Run 354's README hunks are about 270 lines away, so nothing is fenced. Forwarded in 4613.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
