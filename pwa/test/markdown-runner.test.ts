@@ -490,3 +490,24 @@ describe("T11 review 3-1: a dropped worker's messageerror is not heard", () => {
     expect(workers[1]?.terminated).toBe(0);
   });
 });
+
+describe('T11 review 3-2: a spawn that fails mid-queue answers every queued job', () => {
+  it('a respawn that throws answers worker-unavailable to each job queued behind the expired one', async () => {
+    const clock = new FakeClock();
+    let calls = 0;
+    const spawn = vi.fn((): WorkerLike => {
+      calls += 1;
+      if (calls >= 2) throw new Error('no worker here');
+      return new FakeWorker();
+    });
+    const runner = createMarkdownRunner({ spawn, setTimer: clock.setTimer, clearTimer: clock.clearTimer });
+    const a = track(runner.parse('a', CHAT));
+    const b = track(runner.parse('b', CHAT));
+    const c = track(runner.parse('c', CHAT));
+    clock.advance(CHAT_PARSE_BUDGET_MS);
+    await flush();
+    expect(a.value).toEqual({ kind: 'timeout', budgetMs: CHAT_PARSE_BUDGET_MS });
+    expect(b).toEqual({ state: 'resolved', value: { kind: 'worker-unavailable' } });
+    expect(c).toEqual({ state: 'resolved', value: { kind: 'worker-unavailable' } });
+  });
+});
