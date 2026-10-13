@@ -9561,6 +9561,25 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // lines at `:8629-8633` slid every line below them down five, onto
         // comment bytes that now pass the row: a coincidence, not a repair.
         // Nothing was re-pointed. S6-R11 covers it, so no D-number.
+        // RE-MEASURED on the GitHub slug fix (#386), 54 -> 54, FROM THE SAME RUN
+        // as the site-level set below, which does not move (35 -> 35). ONE
+        // cause: the slug fix's insertion into `_gh_repo_slug` (`ccd/ccd:5397`,
+        // 20 lines out and 56 in, net +36, `ccd/ccd` 38117 -> 38172 with the
+        // docs helper's +19 far below every anchor here) slid every `ccd/ccd`
+        // line below `:5397` down 36. Measured by dumping this set with
+        // `origin/main`'s `ccd/ccd` and with this branch's, everything else the
+        // same tree, and diffing the two: ONE ENTERS (`ccd/ccd:5819-5823`) and
+        // ONE LEAVES (`ccd/ccd:13601-13666`). Both are coincidences, not rot and
+        // not a repair: `:5819-5823` used to hold a Python comment naming
+        // `os.lstat`/`stat.S_ISREG`, which the row's own quoted `stat` matched,
+        // and now holds a comment about `git diff --quiet` that offers no token
+        // of its row; `:13601-13666` now takes in a comment reading "the
+        // command substitution", which the row's quoted `command` matches. The
+        // whole-corpus census, its 196 total, the `**Files:**` sets and
+        // README's empty entry are unmoved, measured green at this tree, and
+        // neither corpus document nor README changed, so nothing was re-pointed
+        // and no rule changed. Values in the instrument's order, never retyped.
+        // S6-R11 covers it, so no D-number.
         'ccd/ccd:203',
         'server/test/single-definition.test.ts:1274',
         'server/test/single-definition.test.ts:1319-1320',
@@ -9603,8 +9622,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:8654',
         'ccd/ccd:8673',
         'ccd/ccd:13573-13575',
-        'ccd/ccd:11665-11670',
-        'ccd/ccd:13601-13666',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
         'ccd/ccd:2874',
@@ -9787,6 +9804,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // because no other pass reaches those sites, which is what this list
       // measures. The cause there is the five `echo docs-*` caps lines at
       // `:8627`; nothing re-pointed. S6-R11 covers it, so no D-number.
+      // RE-MEASURED on the GitHub slug fix (#386), 35 -> 35, FROM THE SAME RUN as the row-pass set above:
+      // nothing entered or left. The two movers there have no mirror here, because no other pass reaches
+      // those sites. S6-R11, no D-number.
       // RE-MEASURED on the merge of `origin/main` at `77c11245` into docs W1, 35 -> 35, FROM THE SAME RUN as
       // the row-pass set above: stated 35, base 35, tree 35, nothing entered or left. S6-R11, no D-number.
         'spec:308 server/test/single-definition.test.ts:1274',

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ec3dfb5e4e518ba1b8998d95a8df52c4e5d643842acd4dd0ed12eb84481c3925
+# ccrc:generated 1 sha256=f0532af09663cd93abc3ccaf32fad0e891876cc426f7c9ccb6d2ed5c90e25d0f
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -5413,20 +5413,56 @@ PR_JSON_FIELDS=number,state,headRefName,headRefOid,baseRefName,isCrossRepository
 PR_CHECK_FIELD=statusCheckRollup
 
 _gh_repo_slug() {   # main-checkout path -> OWNER/NAME, or non-zero
-  # Three guards, and the mutation sweep says the last one subsumes the first
-  # two: with no origin `git config --get` exits 1 AND prints nothing, so both
-  # `|| return 1` and `[[ -n "$url" ]]` can be deleted with the suite still
-  # green — the regex rejects "" on its own. They stay because the fall-through
-  # only holds while the regex is anchored at both ends, and this function's
-  # answer is spent as `--repo` on a WRITE-scoped token: each guard states the
-  # case it is about rather than relying on a later line to catch it.
-  local url
+  # The first two guards are subsumed by what follows them, and the mutation
+  # sweep says so: with no origin `git config --get` exits 1 AND prints nothing,
+  # so both `|| return 1` and `[[ -n "$url" ]]` can be deleted with the suite
+  # still green. An empty url then falls to the prefix `case`'s `*) return 1`
+  # arm, and before that arm existed the anchored regex rejected "" on its own.
+  # They stay because this function's answer is spent as `--repo` on a
+  # WRITE-scoped token: each guard states the case it is about rather than
+  # relying on a later line to catch it.
+  #
+  # `local LC_ALL=C` makes the regex's ranges ASCII. Under a UTF-8 locale such
+  # as en_US.UTF-8, bash matches `[A-Za-z]` by collation, so `o/r` with an
+  # accented or fullwidth letter matched and went out as a slug. The docs
+  # helper's `re.fullmatch` matches by code point, so the two copies disagreed.
+  # This is the house idiom `_pool_name_valid` uses for its ASCII grammar.
+  #
+  # Two more guards, from decision 11 of the Share/Export design, and neither is
+  # subsumed by the regex — its alphabet admits `.`, so `owner/name`, `../x` and
+  # `.x/y` all match it. The answer is spent as `gh --repo` on that WRITE-scoped
+  # token (pr-open, pr-state, ws-reap) and as the docs wire's `github` slug, from
+  # which the PWA builds a github.com URL, so a near-miss is not harmless:
+  #   - EXACTLY ONE of the three GitHub prefixes must have matched. The strips
+  #     used to run unconditionally, so an origin that is a bare relative path
+  #     such as `owner/name` — a directory beside the checkout, not a GitHub
+  #     repository — fell through all three and was named a slug. It is one
+  #     prefix, not each in turn: `git@github.com:https://github.com/o/r` is not
+  #     an address GitHub answers, and stripping in turn read it as `o/r`.
+  #   - Neither segment after the prefix may be exactly `.` or `..`. A dot
+  #     segment is a path step, not an owner or a name, and `../x` spliced into
+  #     a URL or a `--repo` names something other than what the origin said.
+  #   - The OWNER may not start with `.`; no GitHub user or organisation name
+  #     does. The repository NAME may: an organisation's `.github` and a user's
+  #     `.dotfiles` are real repositories, so `org/.github` is a slug.
+  # `slug_from_url` in the docs helper below is this rule, statement for
+  # statement, and M3.12 binds the two by verdict over one corpus.
+  local LC_ALL=C url rest seg
   url=$(git -C "$1" config --get remote.origin.url 2>/dev/null) || return 1
   [[ -n "$url" ]] || return 1
-  url="${url%.git}"; url="${url#git@github.com:}"
-  url="${url#ssh://git@github.com/}"; url="${url#https://github.com/}"
-  [[ "$url" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || return 1
-  printf '%s\n' "$url"
+  url="${url%.git}"
+  case "$url" in
+    git@github.com:*) rest="${url#git@github.com:}" ;;
+    ssh://git@github.com/*) rest="${url#ssh://git@github.com/}" ;;
+    https://github.com/*) rest="${url#https://github.com/}" ;;
+    *) return 1 ;;
+  esac
+  [[ "$rest" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || return 1
+  for seg in "${rest%%/*}" "${rest#*/}"; do
+    [[ "$seg" != . && "$seg" != .. ]] || return 1
+  done
+  [[ "${rest%%/*}" != .* ]] || return 1
+  printf '%s\n' "$rest"
 }
 
 _gh_pr_list() {   # repo [head-branch] -> rows JSON on stdout; on failure prints
@@ -36498,16 +36534,35 @@ def discover(ctx, project, dl):
 def slug_from_url(url):
     """_gh_repo_slug's rule, statement for statement; the bash function stays
     the one definition and M3.12 binds this copy to it by verdict. An empty
-    url is None; one trailing .git is stripped; then each of the three GitHub
-    prefixes in turn, in that order, as bash's three expansions strip them;
-    then owner/name is required."""
+    url is None; one trailing .git is stripped; then EXACTLY ONE of the three
+    GitHub prefixes must match, the first in that order, as bash's case arms
+    try them, else None (decision 11: a bare relative path such as owner/name
+    is not a GitHub repository); then owner/name is required; then neither
+    segment may be exactly '.' or '..' (decision 11: a dot segment is a path
+    step, and this slug is spent as gh --repo on a write-scoped token and as
+    the docs wire's github slug); then the owner may not start with '.', which
+    no GitHub owner name does. The name may, so org/.github is a slug.
+    re.fullmatch matches GH_SLUG_RE's ranges by code point, which bash's
+    `local LC_ALL=C` gives its regex."""
     if not url:
         return None
     u = url[:-len('.git')] if url.endswith('.git') else url
+    rest = None
     for pre in GH_PREFIXES:
         if u.startswith(pre):
-            u = u[len(pre):]
-    return u if re.fullmatch(GH_SLUG_RE, u) else None
+            rest = u[len(pre):]
+            break
+    if rest is None:
+        return None
+    if not re.fullmatch(GH_SLUG_RE, rest):
+        return None
+    owner, name = rest.split('/')
+    for seg in (owner, name):
+        if seg in ('.', '..'):
+            return None
+    if owner.startswith('.'):
+        return None
+    return rest
 
 
 def origin_url(repo, dl):
