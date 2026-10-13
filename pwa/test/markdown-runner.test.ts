@@ -476,3 +476,17 @@ describe('source pins', () => {
     }
   });
 });
+
+describe("T11 review 3-1: a dropped worker's messageerror is not heard", () => {
+  it('a messageerror from a worker dropped by a timeout leaves the live worker and its job alone', async () => {
+    const { runner, clock, workers } = harness();
+    void runner.parse('a', CHAT).catch(() => undefined);
+    clock.advance(CHAT_PARSE_BUDGET_MS);
+    const next = track(runner.parse('b', CHAT));
+    expect(workers).toHaveLength(2);
+    workers[0]?.fail('messageerror');
+    await flush();
+    expect(next.state).toBe('pending');
+    expect(workers[1]?.terminated).toBe(0);
+  });
+});
