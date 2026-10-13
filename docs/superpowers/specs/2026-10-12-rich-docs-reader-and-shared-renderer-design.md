@@ -16,7 +16,7 @@ What changes in ccrc:
 - **A new wave, W8,** mounts the library. The library's `render()` runs in W4's parse worker, which has a time bound. Its layout runs in a sandboxed frame. The frame has no network and talks to ccrc over one port that checks every message. If the frame fails, the W4/W5 plain pipeline draws the doc instead.
 
 Please check:
-- the items under "Waiting on you";
+- the items under "Waiting on you" (none since 2026-10-13);
 - the amendment table in §7, including A21, which lets the library's name into the PWA;
 - the security walls in §5, especially the rows marked UNMEASURED. Every lab result so far comes from desktop Chromium only.
 
@@ -227,7 +227,7 @@ The library uses CommonMark plus GFM on markdown-it, with raw HTML off. One allo
 
 | Item | Choice | Why | Status |
 |---|---|---|---|
-| Name | The library and its repo are `docserver`. The package is `@synapsium-labs/docserver`. | R-f. The unscoped npm name is taken. | Ruled; the scope is waiting |
+| Name | The library and its repo are `docserver`. The package is `@synapsium-labs/docserver`. | R-f. The unscoped npm name is taken. The scope is `@synapsium-labs` (R-g; amended 2026-10-13). | Ruled |
 | Registry | npm with provenance, through trusted publishing (OIDC, no stored token). Each release also carries a GitHub build attestation of its tarball. | The lock keeps a sha512 `integrity`, like all 636 entries in today's PWA lock. A git dependency loses `integrity` (measured with npm 11.11.0) and would build in every CI shard, because the shard action runs `npm ci` in `pwa/`. | Agreed |
 | Pin | Exact version in `pwa/package.json`, with no `^`. Bumped only by its own PR, which runs the full suite because it changes `package.json`. | There is no dependency policy in a test today. This spec is the explicit ruling a new dependency needs. | Agreed |
 | CI check | In the `build-pwa` leg (`.github/workflows/ci.yml:646`): `npm audit signatures`, then a check that the pinned tarball's provenance names the library's own repo and release workflow (for example `gh attestation verify` with `--repo` and `--signer-workflow`) | Nothing verifies registry signatures today. The release build runs `npm ci --no-audit` (`deploy/build-release.sh:85`). A valid signature alone would also pass a package published from someone else's repo. | Agreed |
@@ -478,7 +478,7 @@ These close the gaps found against the standalone docs server (research B). Each
 | G6 version view | Page URLs gain `at=<sha>` (40 or 64 hex), a change to "page URLs never carry a commit". The page opens a committed pin at that commit, and the truth line names it and links back to the latest. "Only this day" keeps its base, and "Back to the latest" its ref, in `history.state` for the visit, not in the URL. Inside the frame, the `version` op asks for a version (§4.4). | W5b (the key and the page), W8 (the menu) | §0 `http` row, §3.1, §4.3, M3.2 | Ruled |
 | G7 reader state | Theme, width, marks and last visit live in ccrc's own localStorage, per device, under the reader prefix `ccrc:reader:v1:`, which no console key uses. They are written through the allow-listed `store.set` and seeded back on mount. Reader prefs are kept apart from console prefs. No server storage in v1. | W8 | §4 gains `docs/reader/store.ts` | Agreed |
 | G3 roots outside ccd's projects root | Moved under it as git repos (R-e). This is your step in the retirement gate (§9 Step 1), done only when no live session works in them. Two small non-git directories (28 files) are affected. One stale entry has nothing to move. Once moved, ccd serves them like any other project. | none: your step | None: restates base §0 | Ruled |
-| G9 HTML specs and mockups | They use W6's mockup frame unchanged. An HTML spec that loads a CDN script needs two taps: Run scripts, then Load external. The sandbox is deliberately stricter than the standalone server's. | W6 | None | Agreed |
+| G9 HTML specs and mockups | They use W6's mockup frame unchanged. An HTML spec that loads a CDN script needs two taps: Run scripts, then Load external. Those two taps hold only once W6's script-text census lands (base §5.6.3): until then, a spec whose inline script imports from a CDN never offers Load external (amended 2026-10-13, Share/Export). The sandbox is deliberately stricter than the standalone server's. | W6 | None | Agreed |
 
 **Parity, capability by capability.** "Yes" means the base spec already covers it. "Agreed" means a gap that this spec closes. "Dropped" is an accepted loss.
 
@@ -518,8 +518,8 @@ One table holds every rule this spec changes. New mutation rows are numbered M8.
 | # | Base rule | Change | Why | Rows | Status |
 |---|---|---|---|---|---|
 | A1 | §5.6.1 "No message channel in either direction" | It stays for `MockupFrame`. A new `ReaderFrame` and `docs/reader/bridge.ts` are the only holders of a port. | Parity needs write-back | M8.6 | Agreed |
-| A2a | M5.16 source scans (W6) | `postMessage(` and `.onmessage` are allowed in `lib/markdownWorker.ts` and `lib/markdownRunner.ts` only (W4 plan, refinement (w)). This spec owns this carve-out. The pending Share/Export amendment, which edits other parts of M5.16, does not repeat it, so M5.16 changes once. | W4's worker files would make M5.16 red the day W6 lands | M9.14 | Agreed |
-| A2b | M5.16 source scans (W8) | `<iframe` and `srcDoc` only in `MockupFrame.tsx` and `ReaderFrame.tsx`. In `pwa/src/docs`, `postMessage(`, `MessageChannel` and `.onmessage` only in `reader/bridge.ts`. Across all of `pwa/src`: no `addEventListener('message'`, no `window.onmessage`, and no `self.onmessage` outside `lib/markdownWorker.ts`. Library import specifiers are limited to §4.7's list. | The reader's port, and no second channel anywhere in the console | M8.10 | Agreed |
+| A2a | M5.16 source scans (W6) | `postMessage(` and `.onmessage` are allowed in `lib/markdownWorker.ts` and `lib/markdownRunner.ts` only (W4 plan, refinement (w)). The base spec's M5.16 owns this carve-out: the Share/Export amendment, which rewrites M5.16, wrote it there, so M5.16 changes once. This row and M9.14 cross-refer to it (amended 2026-10-13, Share/Export). | W4's worker files would make M5.16 red the day W6 lands | M9.14 | Agreed |
+| A2b | M5.16 source scans (W8) | `<iframe` and `srcDoc` only in `MockupFrame.tsx`, `ReaderFrame.tsx` and `docs/export/buildExport.tsx`, the mockup export's wrapper. `default-src 'none'` only in `mockup/policy.ts`, `reader/policy.ts` (A5) and `docs/export/policy.ts`. Both keep the base M5.16's export allowances (amended 2026-10-13, Share/Export). In `pwa/src/docs`, `postMessage(`, `MessageChannel` and `.onmessage` only in `reader/bridge.ts`. Across all of `pwa/src`: no `addEventListener('message'`, no `window.onmessage`, and no `self.onmessage` outside `lib/markdownWorker.ts`. Library import specifiers are limited to §4.7's list. | The reader's port, and no second channel anywhere in the console | M8.10 | Agreed |
 | A3 | §5.6.1 shell meta, M5.19 | The meta is unchanged: exactly `frame-src 'none'`. New rule: never add `script-src`, `default-src`, `style-src` or `font-src` to it without re-measuring. | The frame inherits and intersects the shell's policy | M8.13, M8.B6 | Agreed |
 | A4 | §5.6.5 scripts off, M5.13, M5.14 | These do not apply to the reader. The reader's tokens are exactly `['allow-scripts']`. | The library is first-party code | M8.1 | Agreed |
 | A5 | §5.6.4 `MOCKUP_CSP` | A separate `READER_CSP` with hashes only. `default-src 'none'` may appear in `reader/policy.ts` too. | A mockup widening must never reach the reader | M8.2 | Agreed |
@@ -540,7 +540,7 @@ One table holds every rule this spec changes. New mutation rows are numbered M8.
 | A20 | §0 `features` | The rich layout, history, changes since and the version view join what carries over from the old preview | R-b | none | Agreed |
 | A21 | §7.10 M7.9 (W4's row; W4 plan, refinement (v)) | The PWA name rule gains one exception. The exact specifier `@synapsium-labs/docserver` and its subpaths may appear as an import specifier in `pwa/src`, in `pwa/package.json` and `pwa/package-lock.json`, and in the `globIgnores` entry of `pwa/vite.config.ts`. Every other occurrence, in any case, stays red. The directory needle is unchanged. It lands in W8, which edits M7.9's block in `docs-parity.test.ts` in place: the one exception to that file's append-only header, recorded in W8's plan. | R-f: the word now names the library | M8.18 | Agreed |
 | A22 | §4.10 steps 2-5; §4.11's `detachUrls`, `DocLink` and `DocImage` contract and "no heading ids are generated"; §7.5 README "rendering" bullet | These apply to the plain fallback only. On the reader path, §3.4's rules (the inline and block HTML allowlists, heading ids, `data-line`) apply inside the opaque frame, whose walls are §5.1. The parent re-resolves every link through `navigate`. A `repo` answer maps to `githubBlobUrl`, as in §4.11. W8 amends the README's "rendering" bullet. | The reader renders allowlisted markup inside the frame | M8.7, M8.B1 | Agreed |
-| A23 | §7.1 "No wave needs `--server-first`" | W5b is rolled `--server-first`. Every other wave stays fleet first. | With W5b after W5 (recommended), G1's new slugs would reach W5's PWA before it knows them. If you rule W5b before W5, the order stays, and the reason narrows to W3's server, whose `DOC_SECTIONS` would otherwise meet two unknown slugs (§8). | M9.3 | Agreed |
+| A23 | §7.1 "No wave needs `--server-first`" | W5b is rolled `--server-first`. Every other wave stays fleet first. | With W5b after W5 (ruled 2026-10-13, RD23), G1's new slugs would reach W5's PWA before it knows them. If you rule W5b before W5, the order stays, and the reason narrows to W3's server, whose `DOC_SECTIONS` would otherwise meet two unknown slugs (§8). | M9.3 | Agreed |
 
 ### 7.1 Mutation rows: the reader frame and packaging (W8)
 
@@ -555,7 +555,7 @@ One table holds every rule this spec changes. New mutation rows are numbered M8.
 | M8.7 | `navigate` | `javascript:`, `data:`, `//h/x`, `/api/x`, backslash forms and `../` above the root are refused. A doc routes in-app, with its query dropped. An external link, or a `repo` answer through `githubBlobUrl`, opens only the external-link sheet. `window.open` runs only from the sheet's Open tap. The sheet names the host and highlights a foreign registrable name. | Pass `href` straight to the router or `window.open`; open an external link without the sheet; keep the query |
 | M8.8 | Seed serialiser and placement | A value with `</script><script>` and U+2028 round-trips inert. The bootstrap reads the seed as the element immediately before its own script. A heading or anchor whose id matches the seed's or a library global changes nothing. | Raw `JSON.stringify`; read the seed by id |
 | M8.9 | `changes` | Any 40 or 64 hex commit is accepted, including a stored served-commit base and a commit's parent. A non-hex sha is refused. The funnel request carries the marker. The frame never receives a URL. The reply is `changes.result`. | Restrict the base to the history list; forward a path; drop the marker |
-| M8.10 | Source scans (A2b) | As A2b, with planted controls: a `postMessage(` planted in `MockupFrame.tsx`, an `addEventListener('message'` planted in `lib/`, and an import of `@synapsium-labs/docserver/host` planted in `pwa/src` are each red | Add any of them |
+| M8.10 | Source scans (A2b) | As A2b, with planted controls: a `postMessage(` planted in `MockupFrame.tsx`, an `addEventListener('message'` planted in `lib/`, and an import of `@synapsium-labs/docserver/host` planted in `pwa/src` are each red. The base allowances stay green: `<iframe` and `srcDoc` in `docs/export/buildExport.tsx`, and `default-src 'none'` in `docs/export/policy.ts` (amended 2026-10-13, Share/Export) | Add any of them; drop an export allowance |
 | M8.11 | Watchdog | A frame that never sends `ready`, or sends a wrong nonce, is unmounted, and the plain pipeline renders once. The fallback note is the fixed text, and `why` appears nowhere in the DOM. | Remove the timer; remount in a loop; show `why` |
 | M8.12 | Library pin | An exact version with no `^`. The CSP hashes equal the embedded script bytes. `assets.json` sha256 matches. | Change one library byte without its hash |
 | M8.13 | Shell meta (M5.19 extended) | Exactly one CSP meta, exactly `frame-src 'none'` | Add `script-src`, `default-src` or `'self'` |
@@ -599,11 +599,11 @@ One table holds every rule this spec changes. New mutation rows are numbered M8.
 | M9.11 | `at=` key | Round-trips with 40 or 64 hex only. The other pin keys still give `commit-in-page`. A page at `at=` reads a committed pin at that commit. | Accept `commit=`; accept short hex |
 | M9.12 | Log budget | Runner budget > helper deadline + 2 s + 5 s (`docs-budget.test.ts`) | Shrink the runner row |
 | M9.13 | Deep history | A doc whose last change is older than the newest 100 commits in its section still lists its history | Put `-n 100` back in git's argv |
-| M9.14 | Worker carve-out (A2a, W6) | `postMessage(` and `.onmessage` pass in `lib/markdownWorker.ts` and `lib/markdownRunner.ts`. A `postMessage(` planted in any other `lib/markdown*` file, or in `pwa/src/docs`, is red. | Allow every `lib/markdown*` file |
+| M9.14 | Worker carve-out (A2a, W6) | = base M5.16's worker carve-out, which owns the clause and its planted controls (amended 2026-10-13, Share/Export): `postMessage(` and `.onmessage` pass in `lib/markdownWorker.ts` and `lib/markdownRunner.ts`, and a `postMessage(` planted in any other `lib/markdown*` file, or in `pwa/src/docs`, is red. | = base M5.16 |
 
 ## 8. Waves and sequencing
 
-Two programmes run side by side. The library comes first because W8 needs it. ccrc's waves before W8 do not wait for it. W5b's place before or after W5 is waiting on your ruling (RD23).
+Two programmes run side by side. The library comes first because W8 needs it. ccrc's waves before W8 do not wait for it. W5b follows W5, as you ruled on 2026-10-13 (RD23) (amended 2026-10-13, Share/Export).
 
 ```mermaid
 flowchart LR
@@ -613,7 +613,7 @@ flowchart LR
     W3 --> W5["W5 Docs screen<br/>plain plus br"]
     W4 --> W5
     W3 --> W5b["W5b parity<br/>ccd, server, PWA"]
-    W5 -.->|"placement waiting, RD23;<br/>after recommended"| W5b
+    W5 -->|"after W5, ruled<br/>(RD23)"| W5b
     W5 --> W6["W6 mockups<br/>plus worker carve-out"] --> W7["W7 docs and release"]
     W5b --> W8["W8 reader frame"]
     W6 --> W8
@@ -625,21 +625,21 @@ flowchart LR
   V1 --> W8
   W8 --> RET["You retire the<br/>standalone docs server"]
 ```
-*Figure 3. Read left to right. W8 needs W5b (history and the version key), W6 (the asset planner), W7 (W8 amends the README prose that W7 writes) and library v1. The dashed edge from W5 to W5b is waiting on your ruling; after W5 is recommended. Retirement follows W8.*
+*Figure 3. Read left to right. W8 needs W5b (history and the version key), W6 (the asset planner), W7 (W8 amends the README prose that W7 writes) and library v1. The edge from W5 to W5b is ruled: W5b follows W5 (RD23) (amended 2026-10-13, Share/Export). Retirement follows W8.*
 
 | Wave | Ships | Depends on | Rows | Status |
 |---|---|---|---|---|
 | W4 | As planned: extraction, `RenderBoundary`, chat hardening, `docs-sw` | W1 | Its own. Later waves amend three of them: A16 (W5), A6 and A21 (W8). | Kept |
 | W5 | The Docs screen, plain, plus the docs-profile `<br>` (A16), plus Share and Export as already decided. It amends W4's profile-equality case. | W3, W4 | Base rows plus M9.1 | Amended |
-| W5b | G1, G4 and G6, on ccd, the server and the PWA. PWA files (with W5b after W5): `shared/docs.ts` (`DOC_SECTIONS`, the `at` page key, `parseDocsPage`, `docsPageUrl`, `docsApi.history`), `docs/docsTree.ts` (`SECTION_ORDER`), the index and project section counts, `DocsScreen` and `useDocsVisit` opening the `at=` commit, and `api.docs.history`. `ccd/ccd` is restamped. The rollout is `--server-first` (A23), and the agent restarts for the grant. | W3; and W5, waiting on your ruling (RD23; after recommended) | M9.2-M9.9, M9.11-M9.13 | Agreed; placement Waiting |
+| W5b | G1, G4 and G6, on ccd, the server and the PWA. PWA files (with W5b after W5): `shared/docs.ts` (`DOC_SECTIONS`, the `at` page key, `parseDocsPage`, `docsPageUrl`, `docsApi.history`), `docs/docsTree.ts` (`SECTION_ORDER`), the index and project section counts, `DocsScreen` and `useDocsVisit` opening the `at=` commit, and `api.docs.history`. `ccd/ccd` is restamped. The rollout is `--server-first` (A23), and the agent restarts for the grant. | W3 and W5 (RD23, ruled (amended 2026-10-13, Share/Export)) | M9.2-M9.9, M9.11-M9.13 | Agreed; placement Ruled |
 | W6 | Mockups, plus the M5.16 worker carve-out (A2a) | W5 | Base rows plus M9.14 | Amended |
 | W7 | Docs and release, unchanged | W6 | Base rows | Kept |
-| W8 | Reader frame, bridge, `READER_CSP`, library pin, the `docsRunner` render job and its purity-scan specifier (A6), asset inlining, the Mermaid gate, fallback, G5, G7, the version menu, labs E14-E18, A21's change to M7.9, and README prose for the reader (A22) | W5b, W6, W7, library v1 | M8.1-M8.22, M8.B1-B8, M9.10 | Agreed |
+| W8 | Reader frame, bridge, `READER_CSP`, library pin, the `docsRunner` render job and its purity-scan specifier (A6), asset inlining, the Mermaid gate, fallback, G5, G7, the version menu, labs E14-E18, A21's change to M7.9, and README prose for the reader (A22). It owns the decision on what Export means on the reader path: keep Export on the plain render, with the provenance saying so, or the no-JS static variant under Later (base §4.13). Its reader copy op goes through `copyText` in `docs/share.ts`, the one clipboard writer under `pwa/src/docs` (base M4.SH7), so M8.19's check wraps that writer (amended 2026-10-13, Share/Export) | W5b, W6, W7, library v1 | M8.1-M8.22, M8.B1-B8, M9.10 | Agreed |
 | L1 | Scaffold, the corpus generated from today's Python renderer (golden, hostile, hostile Mermaid and clobbering cases), the markdown-it rules | none | Library CI | Agreed |
 | L2 | The layout made embeddable: options, namespaced keys, scrubbed defaults, footnote styles; a self-hosted single-file Mermaid with elkjs checked, `secure` extended and `maxTextSize`/`maxEdges` pinned; fonts with the OFL | L1 | Library CI | Agreed |
 | L3 | `frameDocument`, the frame bootstrap and click guard as hashed assets, and `host` for other viewers; v1 published with provenance and a build attestation | L2 | Library CI | Agreed |
 
-**If you rule W5b before W5.** W5b then depends on W3 only, and no Docs screen exists yet.
+**If W5b had come before W5 (not taken: RD23 placed W5b after W5 on 2026-10-13; kept as the record of the option).** W5b would then have depended on W3 only, with no Docs screen yet.
 - **Files.** W5b ships its ccd, server and `shared/docs.ts` parts only. `docs/docsTree.ts`, the section counts, `DocsScreen`, `useDocsVisit` and `api.docs.history` are W5's new files (base §4.1), so W5 builds them with six sections and the `at=` key from the start.
 - **Rows.** M9.3's PWA half (four section rows over a four-section fleet) and M9.11's page half (a page at `at=` reads that commit) move into W5's rows.
 - **A23.** The rollout stays `--server-first`. Its reason narrows to W3's server, whose `DOC_SECTIONS` would otherwise meet two slugs it does not hold.
@@ -700,7 +700,7 @@ flowchart TB
 
 ## 10. Decisions
 
-Rows marked Ruled restate R-a to R-f. Rows marked Agreed are the coordinator's and need your approval. Rows marked Waiting need your ruling.
+Rows marked Ruled restate the operator's rulings: R-a to R-g, and the ruling of 2026-10-13 for RD23 (amended 2026-10-13). Rows marked Agreed are the coordinator's and need your approval. Rows marked Waiting need your ruling.
 
 | # | Decision | Options considered | Chosen, and why | Status |
 |---|---|---|---|---|
@@ -726,15 +726,16 @@ Rows marked Ruled restate R-a to R-f. Rows marked Agreed are the coordinator's a
 | RD20 | G7 reader state | Server storage; per-device | ccrc localStorage through `store.set`, per device, under its own prefix and budget | Agreed |
 | RD21 | G3 outside roots | Serve non-git trees; move; drop | Moved under ccd's projects root by you, as a retirement-gate step (R-e) | Ruled |
 | RD22 | G9 HTML specs | A looser sandbox; W6's frame | W6's frame, unchanged | Agreed |
-| RD23 | W5b placement | Before W5; after W5 | After W5 recommended. §8 says what changes if you rule before. | Waiting |
+| RD23 | W5b placement | Before W5; after W5 | After W5, as you ruled on 2026-10-13 (amended 2026-10-13, Share/Export). | Ruled |
 | RD24 | When the frame lands | In W5; a new W8 | W8, gated on library v1 | Agreed |
-| RD25 | Library programme start | After W5; now | Now, in parallel with W4 and W5, recommended | Waiting |
+| RD25 | Library programme start | After W5; now | Now, in parallel with W4 and W5 (R-g; amended 2026-10-13) | Ruled |
 | RD26 | Retirement | ccrc acts; you act | A parity gate, then your steps only, mapping removed first | Agreed |
-| RD27 | npm scope | Any scope you hold | Your choice | Waiting |
+| RD27 | npm scope | Any scope you hold | `@synapsium-labs` (R-g; amended 2026-10-13) | Ruled |
 | RD28 | Where `render()` runs | In the frame; in W4's parse worker | The parse worker, which can be terminated. Only `enhance()` and Mermaid run in the frame. | Agreed |
 | RD29 | W5b rollout order | Fleet first, with W5 dropping unknown slugs; server first | Server first, so W5 needs no change | Agreed |
 | RD30 | Port binding | First load only; first load plus a nonce echoed in `ready` | The nonce, because the first-load rule rests on desktop Chromium labs only | Agreed |
 | RD31 | External links from the frame | Open on the frame's tap; a parent sheet | A parent sheet that names the host and supplies the tap | Agreed |
+| RD32 | The base spec's Share/Export amendment (2026-10-13) | Edit this spec in a later revision; edit it in the same change | In the same change, each edit marked (amended 2026-10-13, Share/Export): A2a, A2b, M8.10, M9.14, G9, the W8 row, and RD23 with its §8 wording | Agreed |
 
 ## Where things stand
 
@@ -752,7 +753,7 @@ Rows marked Ruled restate R-a to R-f. Rows marked Agreed are the coordinator's a
 
 ### Waiting on you
 
-1. W5b's placement, before or after W5 (after recommended; §8 says what changes if you rule before).
+Nothing listed here now. W5b's placement was ruled on 2026-10-13: after W5 (RD23) (amended 2026-10-13, Share/Export).
 
 ### Later
 
