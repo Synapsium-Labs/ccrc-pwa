@@ -318,6 +318,19 @@ describe('ccrc history status (Linux)', () => {
     expect(sq.stderr, 'an unframed forged tag with a quoted value').not.toContain('abcdef0123456789');
   });
 
+  // D-4613 (round 6): errLine's text is one unframed whole-text pass, so a value on the next line and a PEM block are masked.
+  it('H-32: a JSON-form pair whose value is on the next line, and a PEM block, in a thrown message are masked on stderr (D-4613 round 6)', () => {
+    const box = boundBox('ccrc-hist-cli-ha2-h32-ml-');
+    const json = status(box, { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: 'Error:{"token":\n"s3cr3tVALUE123"}@FROM counters' } });
+    expect(json.code, json.stderr).toBe(1);
+    expect(json.stderr, 'CONTROL: the line is written').toContain('ccrc history: internal error: ');
+    expect(json.stderr).not.toContain('s3cr3tVALUE123');
+    const pem = status(box, { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: 'Error:-----BEGIN PRIVATE KEY-----\nMIIBVgIBADANBgkqhkiG9w0BAQEFAASCAUAwggE8\n-----END PRIVATE KEY-----@FROM counters' } });
+    expect(pem.code, pem.stderr).toBe(1);
+    expect(pem.stderr, 'CONTROL: the line is written').toContain('ccrc history: internal error: ');
+    expect(pem.stderr).not.toContain('MIIB');
+  });
+
   it('H-32: no stderr write in cli.mjs prints an error message except through errLine, which redacts', () => {
     const src = fs.readFileSync(path.join(REPO, 'ccd', 'history', 'cli.mjs'), 'utf8');
     // H-168: scan by line, not by regex up to ';' (an argument can hold one). Every write stands on one line, so the count below

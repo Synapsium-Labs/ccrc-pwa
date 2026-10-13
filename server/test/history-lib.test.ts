@@ -2338,7 +2338,7 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     libRedact.redactField('a='.repeat(200_000), idx);
     expect(Date.now() - t0, 'a run of plain names stays linear').toBeLessThan(20_000);
   });
-  it('(h) lines the CLI never frames take a per-line final pass with no tag split (D-4613 round 5)', () => {
+  it('(h) lines the CLI never frames take the final pass with no tag split (D-4613 rounds 5 and 6)', () => {
     const idx = idxOf([]);
     for (const [input, secret] of [
       ['<ccrc-recall TOKEN="abcdef0123456789">', 'abcdef0123456789'],
@@ -2351,6 +2351,65 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
       expect(out.startsWith('boom <ccrc-recall ')).toBe(true);
     }
     expect(libRedact.redactFinalLines('exit 2 bad-args: nothing to see\nsecond line', idx), 'CONTROL: a plain line is unchanged').toBe('exit 2 bad-args: nothing to see\nsecond line');
+  });
+  // D-4614 / D-4613 (whole-branch fix round 6): anchors and shapes run BEFORE the greedy name-value rules, and unframed text takes ONE whole-text pass.
+  it('(i) a greedy context value never swallows an anchor or a shape: the stored field, the --json leaf, the page and the unframed line all mask it (D-4614 round 6)', () => {
+    const idx = idxOf([]);
+    const SECRET = 's3cr3tVALUE123';
+    const PEM = 'MIIBVgIBADANBgkqhkiG9w0BAQEFAASCAUAwggE8';
+    const envOf = (o: Record<string, unknown>): string => JSON.stringify(libRedact.redactFinalJson(libOut.readEnvelope({ exit: libOut.EXIT.OK, storeId: 's', scope: null, header: null, items: [], shown: 0, total: 0, next: null, ...o }), idx));
+    const internal = Object.keys(libOut.REASONS).find((k) => libOut.REASONS[k as keyof typeof libOut.REASONS] === libOut.EXIT.INTERNAL)!;
+    const pem = `-----BEGIN PRIVATE KEY-----\n${PEM}\n-----END PRIVATE KEY-----`;
+    const gone = (name: string, out: string): void => {
+      expect(out, `${name}: secret`).not.toContain(SECRET);
+      expect(out, `${name}: PEM body`).not.toContain(PEM);
+      expect(out, `${name}: PEM body start`).not.toContain('MIIB');
+    };
+    // R2: stored text through redactForDisplay, then the real --json and page compositions
+    for (const raw of ['mode=auth: abcdefAuthorization: Bearer s3cr3tVALUE123', 'x: TOKEN: abcAuthorization: Bearer s3cr3tVALUE123', `note=TOKEN=abc${pem}`]) {
+      const stored = libRedact.redactForDisplay(raw, idx);
+      gone(`stored ${raw}`, stored);
+      gone(`--json ${raw}`, envOf({ items: [{ gist: stored }], shown: 1, total: 1 }));
+      gone(`page ${raw}`, libRedact.redactFinalText(`${libOut.recallEnvelope({ src: 'message', id: 'u', ts: 1, role: 'user', text: stored })}\nshown 1 of 1\n`, idx));
+      gone(`line ${raw}`, libRedact.redactFinalLines(raw, idx));
+      gone(`index ${raw}`, libRedact.redactForIndex(raw, idx));
+    }
+    // R3: a leaf the field pass never saw (the regex child's failure detail in `hint`)
+    for (const hint of ['the --regex child failed: TOKEN="x-ccrc-mail-token: s3cr3tVALUE123', 'the --regex child failed: TOKEN=a<b>Authorization: Bearer s3cr3tVALUE123', 'child: TOKEN=?token=s3cr3tVALUE123']) {
+      gone(`hint ${hint}`, envOf({ exit: libOut.EXIT.INTERNAL, reason: internal, hint }));
+    }
+    // the residuals the order also closes
+    for (const raw of ['auth="Authorization: Bearer s3cr3tVALUE123"', 'TOKEN=[redacted]x-ccrc-mail-token: s3cr3tVALUE123']) {
+      gone(`residual ${raw}`, libRedact.redactField(raw, idx));
+      gone(`residual final ${raw}`, libRedact.redactFinal(raw, idx));
+    }
+    // the shapes still read as they did: the anchor's own head is kept, only the value is the mark
+    expect(libRedact.redactField('mode=auth: abcdefAuthorization: Bearer s3cr3tVALUE123', idx)).toContain(`Bearer ${M}`);
+    // CONTROLs, byte for byte against 961508233: a lone anchor or name keeps its head and masks only its value
+    expect(libRedact.redactField('Authorization: Bearer X1234567', idx)).toBe(`Authorization: Bearer ${M}`);
+    expect(libRedact.redactField('x-ccrc-mail-token: X1234567', idx)).toBe(`x-ccrc-mail-token: ${M}`);
+    expect(libRedact.redactField('see http://h/?token=X1234567&a=b', idx)).toBe(`see http://h/?token=${M}&a=b`);
+    expect(libRedact.redactField('TOKEN=X1234567', idx)).toBe(`TOKEN=${M}`);
+    expect(libRedact.redactField('{"token": "X1234567"}', idx)).toBe(`{"token": "${M}"}`);
+    expect(libRedact.redactField('level=INFO path=/a/b', idx)).toBe('level=INFO path=/a/b');
+    // CONTROLs: idempotence on the marks, in both forms
+    for (const x of [`Authorization: Bearer ${M}`, `x-ccrc-mail-token: ${M}`, `?token=${M}`, `TOKEN=${M}`, `password: ${M}`, `{"token": "${M}"}`, `auth=${M} Authorization: Bearer ${M}`]) {
+      expect(libRedact.redactField(x, idx), x).toBe(x);
+      expect(libRedact.redactFinal(x, idx), x).toBe(x);
+    }
+  });
+  it('(j) unframed text takes ONE whole-text final pass: a JSON-form pair and a PEM block that span lines are masked (D-4613 round 6)', () => {
+    const idx = idxOf([]);
+    const PEM = 'MIIBVgIBADANBgkqhkiG9w0BAQEFAASCAUAwggE8';
+    const a = libRedact.redactFinalLines('ccrc history: internal error: {"token":\n"s3cr3tVALUE123"}\n', idx);
+    expect(a).not.toContain('s3cr3tVALUE123');
+    expect(a, 'CONTROL: the prefix is kept and the text ends with its line break').toMatch(/^ccrc history: internal error: [\s\S]*\n$/);
+    const b = libRedact.redactFinalLines(`ccrc history: internal error: -----BEGIN PRIVATE KEY-----\n${PEM}\n-----END PRIVATE KEY-----\n`, idx);
+    expect(b).not.toContain(PEM);
+    expect(b).not.toContain('MIIB');
+    expect(b).toContain(M);
+    // CONTROL: plain multi-line text is unchanged, line breaks kept
+    expect(libRedact.redactFinalLines('exit 2 bad-args: nothing to see\nsecond line\n', idx)).toBe('exit 2 bad-args: nothing to see\nsecond line\n');
   });
   it('(e) a seeded differential fuzz: 4,000 field texts through redactForDisplay into real envelope shapes always parse and always keep their frame', () => {
     const idx = idxOf([]);

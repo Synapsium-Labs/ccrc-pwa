@@ -1942,7 +1942,8 @@ const CONTEXT_RULES = Object.freeze({ field: contextRules(false), final: context
  *  fix round 5): a scan by hand, so a NAME that is not a secret (or a value that is already the mark) does not use up its
  *  value. The scan resumes RIGHT AFTER THE SEPARATOR, and a context key inside the value (`level=[INFO]password=x`, a
  *  CLI prefix `internal error: TOKEN=x`) is seen. A secret NAME masks its value as before and the scan resumes after the
- *  value. It only ever ADDS masking over the one-pass rule it replaces. */
+ *  value. Run AFTER the anchor and shape rules (redactLayers, round 6), so the rescan adds masking over the one-pass
+ *  rule it replaces without a value swallowing an anchor or a shape: those are already marks when it reads. */
 function maskNamed(s, R) {
   const head = R.namedHead;
   const val = R.namedValue;
@@ -2004,18 +2005,26 @@ function redactLayers(segment, idx, context) {
   // word boundary inside a long run of [A-Za-z0-9_.-] rescans to the run's
   // end, which is quadratic (a 2 MiB base64url blob measured 90.8 s, bounded
   // 139 ms), and one large tool_result would outlive the carrier's kill.
-  if (context) {
-    const R = context === 'final' ? CONTEXT_RULES.final : CONTEXT_RULES.field;
-    s = s.replace(R.json,
-      (all, name, sep, value) => (IDENTIFIER_RE.test(name) && value !== REDACTED_MARK ? `"${name}"${sep}"${REDACTED_MARK}"` : all));
-    s = maskNamed(s, R);
+  // ORDER (D-4614, whole-branch fix round 6): layer 1, then the ANCHOR rules (bearer header, box-token header,
+  // `?token=`), then layer 3's shapes and the JWT reading, and the greedy NAME-value rules (the JSON-form rule and
+  // maskNamed) LAST. A greedy value read first can swallow the text an anchor or a shape starts at (`TOKEN: abcAuthorization:
+  // Bearer X`, `TOKEN=abc-----BEGIN PRIVATE KEY-----`); run last, it can only swallow text those rules have
+  // already masked. Every rule's pattern and value classes are unchanged.
+  const R = context ? (context === 'final' ? CONTEXT_RULES.final : CONTEXT_RULES.field) : null;
+  if (R !== null) {
     s = s.replace(R.bearer, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
     s = s.replace(R.mailToken, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
     s = s.replace(R.query, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
   }
   // Layer 3: shapes.
   for (const re of SECRET_SHAPE_RES) s = s.replace(re, REDACTED_MARK);
-  return redactJwtShapes(s);
+  s = redactJwtShapes(s);
+  if (R !== null) {
+    s = s.replace(R.json,
+      (all, name, sep, value) => (IDENTIFIER_RE.test(name) && value !== REDACTED_MARK ? `"${name}"${sep}"${REDACTED_MARK}"` : all));
+    s = maskNamed(s, R);
+  }
+  return s;
 }
 
 /** A byte of the `[A-Za-z0-9_.-]` span class, the JWT run class (the unit the lead reading extends and marks). */
@@ -2483,12 +2492,14 @@ export function redactFinalJson(value, idx) {
 }
 
 /** The final belt over lines the CLI never framed (an error line, a relayed operator line, a refusal line), D-4613
- *  (whole-branch fix round 5): the text is split at each `\n` and every line goes through `redactFinal` WHOLE, with no
- *  frame-tag split. These lines carry no real frame tag, so text that merely looks like one
- *  (`<ccrc-recall TOKEN="x">`) is plain text here and a context key in it is seen with its quoted value. `redactFinalText`
- *  (tag-aware) stays for the human page, which recallEnvelope frames. */
+ *  (whole-branch fix round 6): ONE whole-text `redactFinal` pass, with no line split and no frame-tag split. Unframed
+ *  text has no structure to protect, so nothing here needs a cut: a JSON-form pair whose value is on the next line and
+ *  a PEM block that spans lines are matched whole (round 5's per-line split lost both), and text that merely looks like
+ *  a frame tag (`<ccrc-recall TOKEN="x">`) is plain text whose context key is seen with its quoted value. The final
+ *  form's value classes never cross a line, so no rule runs a value over a break. `redactFinalText` (tag-aware) stays
+ *  for the human page, which recallEnvelope frames. */
 export function redactFinalLines(text, idx) {
-  return text.split('\n').map((line) => redactFinal(line, idx)).join('\n');
+  return redactFinal(text, idx);
 }
 
 /** A frame tag of the recalled-text envelope (recallEnvelope's opening and closing tag). escapeXmlAttr has escaped every
