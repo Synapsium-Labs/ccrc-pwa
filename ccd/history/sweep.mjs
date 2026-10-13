@@ -2202,14 +2202,19 @@ function* fileLines(path, start) {
  *  which inserts them into the staged copy's redact_hashes inside its FULL bind transaction, so no read verb ever
  *  serves a restored store without a pair this journal knows: the index phase's "redaction first" (D-4241) then holds
  *  from the moment the store is visible, not from the moment the phase reaches the record. The files are the index
- *  phase's own (journalListing, in name order): the pairs are exactly what that phase could learn. `skipped` names
- *  every file it did not read, a foreign head or a name that is no regular file, a name it cannot open or read
- *  (journalListing's `unreadable`), and any listed file whose read failed part-way; never skipped silently. A pair is a few dozen bytes and redact records are
+ *  phase's own (journalListing, in name order): the pairs are exactly what that phase could learn. Two lists name every
+ *  file it did not read, never skipped silently, and they are two words because they have two remedies
+ *  (D-4593 (history-restore-refuses-unread-journal-pairs), refined by H-103):
+ *  - `foreign`: a head naming another store, or a name that is no regular file (journalListing's `foreign`). It is not
+ *    this store's file, so no pair of this store's is in it, and recovery skips it too (journal_head_mismatch);
+ *  - `unreadable`: a name it cannot open or read (journalListing's `unreadable`), and any listed file whose read failed
+ *    part-way. Its data is not known, so a pair only it holds may be missing.
+ *  A pair is a few dozen bytes and redact records are
  *  rare, so the answer is small; the read is one pass over the journal, under the restore's lock. */
 export function journalRedactPairs(P, storeId) {
   const listing = journalListing(P, storeId);
   const pairs = [];
-  const skipped = [...listing.foreign, ...listing.unreadable];
+  const unreadable = [...listing.unreadable];
   for (const f of listing.files) {
     const found = [];
     try {
@@ -2219,11 +2224,11 @@ export function journalRedactPairs(P, storeId) {
         if (x.redact !== undefined) found.push(x.redact);
       }
     } catch {
-      skipped.push(f.name);
+      unreadable.push(f.name);
     }
     pairs.push(...found);   // a file read part-way still yields the pairs it gave: a pair can only mask more
   }
-  return { pairs, skipped };
+  return { pairs, foreign: listing.foreign, unreadable };
 }
 
 /** One replay group's lines from position `at`.
@@ -2873,6 +2878,7 @@ export async function adoptArm(home, P, args, deps, out) {
     out(`history-sweep: ${d.reason}: ${d.detail}${OPERATOR_ACTS}`);
     return { rc: d.rc, reason: d.reason };
   }
+  removeStaleOpMarker(P);   // H-101: a planted entry at op would fail the marker's rename (EISDIR) before any open clears it
   writeOpMarker(P, 'adopt', now());
   try {
     const bound = adoptStore(home, { nowMs: now() });
@@ -6702,7 +6708,8 @@ const RESTORE_BELT = {
  *  binding section names this as each verb's first step.
  *  Refusals come next, and none of them writes anything:
  *  - the name (restoreNameOk: a <ts>.db or a pre-v<N>.db, never a path or a temp);
- *  - the file, by lstat, so a symlink is never followed;
+ *  - the file, by lstat, so a symlink is never followed (only an absent name is a refusal; any other failure is exit 1,
+ *    D-4608 (history-restore-io-failure-is-not-a-refusal));
  *  - the binding table on the facts as they stand (decideBind, Task 6): a DB present, an orphaned WAL, a store.id
  *    naming another store, an unreadable binding input (exit 5);
  *  - room for the copy (planCopy, the one copy preflight, §6.11; a statfs that throws reads low-disk, R3).
@@ -6712,7 +6719,9 @@ const RESTORE_BELT = {
  *  pending marker and link()), and with every redact pair the store's journal holds (Task 25's journalRedactPairs;
  *  R-restore-pairs), so §9.14's "redaction first" holds from the moment the store is visible. A journal file the pair
  *  read could not open refuses the restore (D-4593 (history-restore-refuses-unread-journal-pairs)): the copy is
- *  removed, nothing is linked and no binding file is written. A StoreError from the commit (a copy with no store_id, or
+ *  removed, nothing is linked and no binding file is written; a file that is not this store's (a head naming another
+ *  store, a link, a name that is no regular file) is skipped with a notice naming it, as recovery skips it
+ *  (H-103). A StoreError from the commit (a copy with no store_id, or
  *  one that will not take WAL: store-not-wal, exit 5) answers its own word and exit, as adoptArm answers one; the
  *  finally removes the temp. It runs before openStore, because a missing store is the state it exists to repair. It
  *  runs under history-off too, since it is a binding verb (§8.4); its recovery step waits for the switch. */
@@ -6730,10 +6739,18 @@ export async function restoreArm(home, P, args, deps, out) {
   }
   const file = `${P.backups}/${args.name}`;
   let st;
-  try { st = lstatSync(file); } catch { return refuse(`db/backups/${args.name} cannot be read`); }
+  try {
+    st = lstatSync(file);
+  } catch (e) {
+    // Only an absent name is a refusal of the argument; EACCES, EIO, ENOTDIR and the rest say nothing about it, so they are exit 1
+    // (D-4608 (history-restore-io-failure-is-not-a-refusal); R-T27-3).
+    if (e && e.code === 'ENOENT') return refuse(`db/backups/${args.name} cannot be read`);
+    throw e;
+  }
   // Defence in depth: Task 24's stageRestore opens O_NOFOLLOW and refuses a non-regular file with nothing written, so this line cannot go red alone.
   if (!st.isFile()) return refuse(`db/backups/${args.name} is not a regular file; a symlink is never followed`);
   const facts = bindFactsOf(home, role, deps, {});
+  // Residual (D-4608): peekStoreId folds every failure to 'unreadable' (B1 shares it, D-4219), so an I/O error on the backup refuses here as restore-refused.
   const restorePre = decideBind('restore', {
     ...facts, backup: { regular: true, storeId: peekStoreId(file), userVersion: null, integrityOk: null },
   });
@@ -6752,6 +6769,7 @@ export async function restoreArm(home, P, args, deps, out) {
       ? 'free space on the store\'s filesystem could not be measured, so no copy is admitted'
       : `a copy of ${st.size} bytes needs more than ${restoreRoom.needBytes} bytes free, and ${free.bytes} are`);
   }
+  removeStaleOpMarker(P);   // H-101: a planted entry at op would fail the marker's rename (EISDIR) before any open clears it
   writeOpMarker(P, 'restore', now());
   let staged = null;
   try {
@@ -6776,11 +6794,12 @@ export async function restoreArm(home, P, args, deps, out) {
     // restored store without a pair the journal knows. The witness is checked before those pairs go in and stamped
     // after them, in the same transaction (RESTORE_BELT; R-witness-restore).
     const journalPairs = journalRedactPairs(P, restorePost.storeId);
-    if (journalPairs.skipped.length > 0) {
-      // D-4593 (history-restore-refuses-unread-journal-pairs): read verbs answer while the recovery step is registered,
+    if (journalPairs.unreadable.length > 0) {
+      // D-4593 (history-restore-refuses-unread-journal-pairs), refined by H-103: read verbs answer while the recovery step is registered,
       // and under D-4592 the step's index phase fails its chunk rather than read an unreadable file, so a pair only
       // that file holds would be served unmasked from the restored blobs. Refuse; the finally removes the copy.
-      out(`history-sweep: restore-refused: ${journalPairs.skipped.length} journal file(s) could not be read for redact pairs: ${journalPairs.skipped.join(', ')}; the operator makes them readable, from a terminal outside any session, and runs the restore again`);
+      // A FOREIGN file is not refused: it is no file of this store's, no readability cures it, and recovery skips it.
+      out(`history-sweep: restore-refused: ${journalPairs.unreadable.length} journal file(s) could not be read for redact pairs: ${journalPairs.unreadable.join(', ')}; the operator makes them readable, from a terminal outside any session, and runs the restore again`);
       abortRestore(staged);
       staged = null;
       return { rc: EXIT.REFUSED, reason: 'restore-refused' };
@@ -6793,6 +6812,9 @@ export async function restoreArm(home, P, args, deps, out) {
       return REASONS[e.word] === undefined ? { rc: EXIT.INTERNAL } : { rc: REASONS[e.word], reason: e.word };
     }
     staged = null;
+    if (journalPairs.foreign.length > 0) {
+      out(`history-sweep: restore: ${journalPairs.foreign.length} journal file(s) not read for redact pairs: ${journalPairs.foreign.join(', ')}; they are not this store's (a head naming another store, or a name that is no regular file), and recovery skips them too (journal_head_mismatch)`);
+    }
     return finishBind(home, P, role, deps, out, now);
   } finally {
     if (staged !== null) abortRestore(staged);
@@ -6814,7 +6836,8 @@ export async function restoreArm(home, P, args, deps, out) {
  *  - `agree`: it has a month file and every month file's head names this directory;
  *  - `disagree`: it holds no month file, or a month file read whole whose head is missing or names another store;
  *  - `unreadable`: the directory cannot be listed, or a month file is not a readable regular file (journalEnds kind
- *    `unreadable`, `foreign` or `gone`) and no file read whole has already disagreed. decideBind answers it exit 5
+ *    `unreadable`, `foreign` or `gone`) and no file read whole has already disagreed, or the directory cannot be
+ *    searched (its lstat fails with anything but ENOENT; H-108). decideBind answers it exit 5
  *    store-unmeasured, as it answers an unlistable journal/, and a rebuild never mints a store under that id. */
 export function journalStoreDirs(home) {
   const dir = historyPaths(home).journalDir;
@@ -6822,7 +6845,16 @@ export function journalStoreDirs(home) {
   for (const name of listNames(dir).sort()) {
     if (!UUID_RE.test(name)) continue;
     const sub = `${dir}/${name}`;
-    try { if (!lstatSync(sub).isDirectory()) continue; } catch { continue; }
+    try {
+      if (!lstatSync(sub).isDirectory()) continue;
+    } catch (e) {
+      // Gone between the listing and here (ENOENT): nothing to name. Any other failure (a journal/ listed but not searchable,
+      // EACCES) leaves a name that exists and cannot be measured, so it is named unreadable and never dropped, which would read it as
+      // absent ("nothing names a store_id"); the listing in store.mjs's facts names it too (H-108).
+      if (e && e.code === 'ENOENT') continue;
+      out.push({ storeId: name, heads: 'unreadable' });
+      continue;
+    }
     let names;
     try { names = readdirSync(sub); } catch { out.push({ storeId: name, heads: 'unreadable' }); continue; }
     const months = names.filter((m) => JOURNAL_NAME_RE.test(m));
@@ -6858,11 +6890,15 @@ export async function rebuildArm(home, P, args, deps, out) {
   }));
   if (!rebuildVerdict.ok) {
     out(`history-sweep: ${rebuildVerdict.reason}: ${rebuildVerdict.detail}${OPERATOR_ACTS}`);
-    if (dirs.length > 0) {
-      out(`history-sweep: journal store directories: ${dirs.map((x) => x.storeId).join(', ')}; the operator names one with --store-id <uuid>, from a terminal outside any session`);
+    // D-4606 (history-rebuild-store-id-hint-where-it-cures): the candidates are named on every refusal (spec §8.4), and the
+    // --store-id clause only where lib says the flag cures it (`remedy`). A DB present, a leftover -wal, a store.id
+    // disagreement and the exit-5 arms are cured by nothing the flag does.
+    if (dirs.length > 0 && rebuildVerdict.rc === EXIT.REFUSED) {
+      out(`history-sweep: journal store directories: ${dirs.map((x) => x.storeId).join(', ')}${rebuildVerdict.remedy === 'store-id' ? '; the operator names one with --store-id <uuid>, from a terminal outside any session' : ''}`);
     }
     return { rc: rebuildVerdict.rc, reason: rebuildVerdict.reason };
   }
+  removeStaleOpMarker(P);   // H-101: a planted entry at op would fail the marker's rename (EISDIR) before any open clears it
   writeOpMarker(P, 'rebuild', now());
   try {
     createStore(home, { storeId: rebuildVerdict.storeId, bind: { kind: 'rebuild', nowMs: now() } });

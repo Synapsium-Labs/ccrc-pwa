@@ -28,7 +28,7 @@ import {
   REDACTED_MARK, BELT_VERSION, parseBeltState, beltWidth, type BeltState, planReplay,
   NODE_PARSER_VERSION, makePairIndex, secretPairs, parentRollup, nodeIndexTexts,
 } from '../../ccd/history/lib.mjs';
-import { closeWriter, createFtsTables, createStore, getMeta, getStep, openWriter, setMeta, setStep } from '../../ccd/history/store.mjs';
+import { StoreError, abortRestore, closeWriter, createFtsTables, createStore, getMeta, getStep, openWriter, setMeta, setStep, stageRestore } from '../../ccd/history/store.mjs';
 
 skipOnDarwin();
 removeTmpFixturesEachTest();
@@ -51,7 +51,7 @@ interface SweepRecover {
   newBudget(now?: () => number, limits?: { maxMs?: number; maxBytes?: number; chunkBytes?: number }): Record<string, unknown>;
   recoverPass(db: DatabaseSync, ctx: Record<string, unknown>, failedAtStart: number): Promise<number>;
   journalRedactPairs(P: ReturnType<typeof historyPaths>, storeId: string):
-    { pairs: Array<{ len: number; sha256: string; t: number }>; skipped: string[] };
+    { pairs: Array<{ len: number; sha256: string; t: number }>; foreign: string[]; unreadable: string[] };
   makeIngestCtx(home: string, homes: readonly string[], nowMs: number, ids: unknown): Record<string, unknown>;
   journalStoreDirs(home: string): Array<{ storeId: string; heads: string }>;
   runOpPass(parsed: { op: string; opArgs: string[] }, deps: Record<string, unknown>, out: (line: string) => void): Promise<number>;
@@ -600,8 +600,8 @@ describe('the recovery step (W1-B2 Task 25; spec §9.14)', () => {
       const got = SW.journalRedactPairs(P, storeId);
       expect(got.pairs, 'both of this store\'s pairs, in journal order; the foreign head\'s pair is never read')
         .toEqual([{ len: 32, sha256: sha(1), t: t0 + 1 }, { len: 40, sha256: sha(2), t: t0 + 3 }]);
-      expect([...got.skipped].sort(), 'each skipped file is named, never skipped silently (a foreign head, and a file journalListing lists as unreadable)')
-        .toEqual([`${M}.feedbee2.jsonl`, `${M}.feedbee3.jsonl`]);
+      expect(got.foreign, 'a foreign head is named, never skipped silently, and apart from what could not be read (H-103)').toEqual([`${M}.feedbee2.jsonl`]);
+      expect(got.unreadable, 'a file journalListing lists as unreadable is named in its own list').toEqual([`${M}.feedbee3.jsonl`]);
     } finally { fs.chmodSync(locked, 0o600); }
     expect(SW.journalRedactPairs(P, storeId).pairs.length, 'readable again: its pair is read too').toBe(3);
   });
@@ -1131,6 +1131,7 @@ describe('C55: doctor --adopt (W1-B2 Task 26; spec §8.4)', () => {
     const before = ccrcSnapshot(box);
     const cli = await cliOnPty(box, ['doctor', '--adopt']);
     expect(cli.code, cli.out).toBe(2);
+    expect(cli.out.replace(/\r/g, ''), 'H-102: the CLI door says the reason, not just an exit 2').toContain('adopt-refused');
     const shim = await shimOnPty(box, ['--op', 'adopt']);
     expect(shim.code, shim.out).toBe(2);
     expect(lastRc(shim.out)).toEqual({ rc: 2, reason: 'adopt-refused' });
@@ -1142,6 +1143,7 @@ describe('C55: doctor --adopt (W1-B2 Task 26; spec §8.4)', () => {
     const before = ccrcSnapshot(box);
     const cli = await cliOnPty(box, ['doctor', '--adopt'], { CLAUDECODE: '1' });
     expect(cli.code, cli.out).toBe(2);
+    expect(cli.out.replace(/\r/g, ''), 'H-102: the CLI door says the reason, not just an exit 2').toContain('apply-in-session');
     const shim = await shimOnPty(box, ['--op', 'adopt'], { CLAUDECODE: '1' });
     expect(lastRc(shim.out)).toEqual({ rc: 2, reason: 'apply-in-session' });
     expect(ccrcSnapshot(box)).toEqual(before);
@@ -1159,12 +1161,26 @@ describe('C55: doctor --adopt (W1-B2 Task 26; spec §8.4)', () => {
     const before = ccrcSnapshot(box);
     const cli = await cliOnPty(box, ['doctor', '--adopt']);
     expect(cli.code, cli.out).toBe(2);
+    expect(cli.out.replace(/\r/g, ''), 'H-102: the CLI door says the reason, not just an exit 2').toContain('adopt-refused');
     const shim = await shimOnPty(box, ['--op', 'adopt']);
     expect(lastRc(shim.out)).toEqual({ rc: 2, reason: 'adopt-refused' });
     // H-99: under --json, or at the direct door, no CLI note names the operator, so the sweep's own line does (the detail itself is lib's).
     expect(shim.out.replace(/\r/g, '')).toContain('adopt it with the build that wrote it; the operator acts on it, from a terminal outside any session');
     expect(ccrcSnapshot(box)).toEqual(before);
     expect(fs.existsSync(P.storeId)).toBe(false);
+  }, HEAVY);
+
+  it('H-101: a directory planted at op on an unbound store does not wedge adopt: the marker is cleared before it is written', async () => {
+    const { box, storeId } = unboundBox('ccrc-history-adopt-op-dir-');
+    const P = historyPaths(box.home);
+    fs.mkdirSync(P.op);
+    const unbound = runSweep(box);
+    expect(unbound.code, unbound.stderr).toBe(5);
+    expect(unbound.stdout).toContain('history-sweep: store-unbound');
+    const r = await cliOnPty(box, ['doctor', '--adopt']);
+    expect(r.code, r.out).toBe(0);
+    expect(fs.readFileSync(P.storeId, 'utf8').trim()).toBe(storeId);
+    expect(fs.existsSync(P.op), 'the op marker goes with the pass').toBe(false);
   }, HEAVY);
 
   it('RB14: a registered recovery step refuses adopt on a bound store at both doors, and lets it bind an unbound one, whose step then runs', async () => {
@@ -1548,12 +1564,14 @@ describe('C57: doctor --restore, the drill (W1-B2 Task 27)', () => {
     await refused([`.${name}.tmp`], 'a .tmp');
     fs.symlinkSync(path.join(P.backups, name), path.join(P.backups, '20200101T000000Z.db'));
     await refused(['20200101T000000Z.db'], 'a symlink');
+    // H-106: the three rows below are decided by restorePre, before any copy; a pass that opens its staged copy is killed.
+    const noCopy = rrKill('openSync:.history.db.restore.:1');
     // An old store's WAL with no DB would be replayed into the restored file (RC1).
     fs.writeFileSync(P.wal, '');
-    await refused([name], 'a leftover history.db-wal');
+    await refused([name], 'a leftover history.db-wal', noCopy);
     fs.rmSync(P.wal);
     fs.writeFileSync(P.storeId, '0189abcd-1234-4678-9abc-0000000000ff\n', { mode: 0o600 });
-    expect(await refused([name], 'store.id names another store'), 'a refusal decideBind makes before the copy is staged').toContain(OPERATOR);
+    expect(await refused([name], 'store.id names another store', noCopy), 'a refusal decideBind makes before the copy is staged').toContain(OPERATOR);
     fs.rmSync(P.storeId);
     fs.copyFileSync(path.join(P.backups, name), path.join(P.backups, '20200101T000001Z.db'));
     rrSetUserVersion(path.join(P.backups, '20200101T000001Z.db'), 2);
@@ -1590,8 +1608,143 @@ describe('C57: doctor --restore, the drill (W1-B2 Task 27)', () => {
     expect(lastRc(ok.out), ok.out).toEqual({ rc: 0 });
     expect(metaOf(box, 'store_id')).toBe(storeId);
     // A live store is never overwritten.
-    await refused([name], 'a DB present');
+    await refused([name], 'a DB present', noCopy);
   }, 2.5 * HEAVY);
+
+  it('H-101: a directory planted at op does not wedge restore: the marker is cleared before it is written', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c57op-');
+    const P = rrRoot(box);
+    const name = rrBackup(box);
+    rrLose(box, { binding: true, journal: true });
+    fs.mkdirSync(P.op);
+    const r = await shimOnPty(box, ['--op', 'restore', name]);
+    expect(lastRc(r.out), r.out).toEqual({ rc: 0 });
+    expect(metaOf(box, 'store_id')).toBe(storeId);
+    expect(fs.existsSync(P.op), 'the op marker goes with the pass').toBe(false);
+  }, 1.5 * HEAVY);
+
+  it('H-105: an I/O failure is exit 1 and never narrowed into restore-refused: an unsearchable db/backups, an integrity_check that throws; only an absent name is a refusal', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root searches and reads whatever the mode says
+    const { box, storeId } = rrBuilt('ccrc-hist-c57io-');
+    const P = rrRoot(box);
+    const name = rrBackup(box);
+    rrLose(box, { binding: true, journal: true });
+    const notRefused = (r: { out: string }, why: string): void => {
+      expect(lastRc(r.out), `${why}\n${r.out}`).toEqual({ rc: 1 });
+      expect(r.out, `${why}: no refusal word`).not.toContain('restore-refused');
+      expect(fs.existsSync(P.dbFile), `${why}: nothing was linked`).toBe(false);
+      expect(rrNames(P.dbDir).filter((n) => n.startsWith('.history.db.restore.')), `${why}: no staged copy is left`).toEqual([]);
+      expect(fs.existsSync(P.op), `${why}: the op marker goes with the pass`).toBe(false);
+    };
+    // The name is absent: the argument itself is refused.
+    const gone = await shimOnPty(box, ['--op', 'restore', '20200101T000009Z.db']);
+    expect(lastRc(gone.out), gone.out).toEqual({ rc: 2, reason: 'restore-refused' });
+    // db/backups listable but not searchable: lstat answers EACCES, which names nothing about the argument.
+    fs.chmodSync(P.backups, 0o600);
+    try { notRefused(await shimOnPty(box, ['--op', 'restore', name]), 'EACCES on lstat'); } finally { fs.chmodSync(P.backups, 0o700); }
+    // SQLite failing inside integrity_check (an I/O or memory error, not a verdict on the file): the good backup is not reported corrupt.
+    notRefused(await shimOnPty(box, ['--op', 'restore', name], {
+      NODE_OPTIONS: preloadOptions([PRELOADS.statfs, PRELOADS.faults]), HISTORY_TEST_THROW_SQL: 'PRAGMA integrity_check',
+    }), 'a throwing integrity_check');
+    // CONTROL: none of it was the backup's fault.
+    const ok = await shimOnPty(box, ['--op', 'restore', name]);
+    expect(lastRc(ok.out), ok.out).toEqual({ rc: 0 });
+    expect(metaOf(box, 'store_id')).toBe(storeId);
+  }, 2.5 * HEAVY);
+
+  it('H-105: stageRestore refuses an absent name and a link as restore-refused, and lets EACCES on the open through as the I/O failure it is', (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root opens whatever the mode says
+    const box = makeHistoryBox('ccrc-hist-c57sr-');
+    const P = rrRoot(box);
+    fs.mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+    const refusal = (name: string): unknown => {
+      try { stageRestore(box.home, name); } catch (e) { return e; }
+      return null;
+    };
+    const absent = refusal('20200101T000000Z.db');
+    expect(absent, 'an absent name').toBeInstanceOf(StoreError);
+    expect((absent as StoreError).word).toBe('restore-refused');
+    fs.writeFileSync(path.join(P.backups, '20200101T000001Z.db'), 'x');
+    fs.symlinkSync(path.join(P.backups, '20200101T000001Z.db'), path.join(P.backups, '20200101T000002Z.db'));
+    const link = refusal('20200101T000002Z.db');
+    expect(link, 'a link').toBeInstanceOf(StoreError);
+    expect((link as StoreError).word).toBe('restore-refused');
+    const shut = path.join(P.backups, '20200101T000003Z.db');
+    fs.writeFileSync(shut, 'x', { mode: 0o000 });
+    const shutErr = refusal('20200101T000003Z.db');
+    expect(shutErr, 'EACCES is thrown').not.toBeNull();
+    expect(shutErr, 'and is no refusal of the argument').not.toBeInstanceOf(StoreError);
+    expect((shutErr as NodeJS.ErrnoException).code).toBe('EACCES');
+  });
+
+  it('H-105: stageRestore reads a SQLite verdict on the copy (corrupt, not a database) as a failed check, and any other SQLite failure inside integrity_check (I/O, memory) as the throw it is', () => {
+    const box = makeHistoryBox('ccrc-hist-c57mi-');
+    const P = rrRoot(box);
+    createStore(box.home);
+    fs.mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+    const name = '20200101T000000Z.db';
+    const src = new DatabaseSync(P.dbFile);
+    try { src.exec(`VACUUM INTO '${path.join(P.backups, name)}'`); } finally { src.close(); }
+    const proto = DatabaseSync.prototype;
+    const realPrepare = proto.prepare;
+    /** Every integrity_check on any handle throws an error of this shape (what node:sqlite throws carries code and, since it does, errcode). */
+    const failIntegrityWith = (e: { message: string; errcode?: number }): void => {
+      proto.prepare = function prepareFailing(this: DatabaseSync, sql: string) {
+        if (String(sql).includes('PRAGMA integrity_check')) throw Object.assign(new Error(e.message), { code: 'ERR_SQLITE_ERROR', ...(e.errcode === undefined ? {} : { errcode: e.errcode }) });
+        return realPrepare.call(this, sql);
+      } as typeof proto.prepare;
+    };
+    const stage = (): ReturnType<typeof stageRestore> | Error => {
+      try { return stageRestore(box.home, name); } catch (e) { return e as Error; } finally { proto.prepare = realPrepare; }
+    };
+    const clean = (): void => { for (const n of rrNames(P.dbDir).filter((f) => f.startsWith('.history.db.restore.'))) fs.rmSync(path.join(P.dbDir, n), { force: true }); };
+    try {
+      for (const verdict of [
+        { message: 'database disk image is malformed', errcode: 11 },
+        { message: 'file is not a database', errcode: 26 },
+        { message: 'database disk image is malformed (extended code)', errcode: 11 | (1 << 8) },
+        { message: 'no such table: meta', errcode: 1 },                  // a database with no meta table
+        { message: 'database disk image is malformed' },                 // a build whose error carries no errcode is read by its message
+      ]) {
+        failIntegrityWith(verdict);
+        const got = stage();
+        expect(got, `a verdict on the content: ${JSON.stringify(verdict)}`).not.toBeInstanceOf(Error);
+        expect((got as ReturnType<typeof stageRestore>).integrityOk, JSON.stringify(verdict)).toBe(false);
+        abortRestore(got as ReturnType<typeof stageRestore>);
+      }
+      for (const failure of [
+        { message: 'disk I/O error', errcode: 10 },
+        { message: 'disk I/O error', errcode: 10 | (1 << 8) },           // SQLITE_IOERR_READ
+        { message: 'out of memory', errcode: 7 },
+        { message: 'SQL logic error', errcode: 1 },                      // SQLITE_ERROR is a verdict only for the missing table
+        { message: 'disk I/O error' },
+      ]) {
+        failIntegrityWith(failure);
+        const got = stage();
+        expect(got, `not a verdict on the file: ${JSON.stringify(failure)}`).toBeInstanceOf(Error);
+        expect((got as Error).message).toBe(failure.message);
+        expect(got, 'and no refusal of the argument').not.toBeInstanceOf(StoreError);
+        clean();
+      }
+    } finally { proto.prepare = realPrepare; clean(); }
+  });
+
+  it('H-103: a readable journal file whose head names another store does not refuse the restore: it is skipped with a notice naming it, and the store is linked', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c57fo-');
+    const P = rrRoot(box);
+    const name = rrBackup(box);
+    rrLose(box, { binding: true, journal: false });
+    const month = new Date().toISOString().slice(0, 7);
+    plantJournalFile(box, storeId, month, 'feedbee2', Date.now(), [], u(0xd2));
+    const foreign = `${month}.feedbee2.jsonl`;
+    const r = await shimOnPty(box, ['--op', 'restore', name]);
+    expect(lastRc(r.out), r.out).toEqual({ rc: 0 });
+    const out = r.out.replace(/\r/g, '');
+    expect(out, 'the notice names the foreign file').toContain(foreign);
+    expect(out, 'and says recovery skips it').toContain('journal_head_mismatch');
+    expect(metaOf(box, 'store_id')).toBe(storeId);
+    expect(fs.existsSync(P.dbFile), 'the store is linked').toBe(true);
+  }, 1.5 * HEAVY);
 });
 
 describe('Redaction first at the link: a restore applies the journal\'s redact records before history.db exists (W1-B2 Task 27)', () => {
@@ -1749,8 +1902,18 @@ describe('C58: doctor --rebuild, its store_id and its refusals (W1-B2 Task 28)',
   /** A rebuild through the direct door on a terminal, which must refuse rebuild-refused and write nothing. */
   const refused = async (box: HistoryBox, args: string[], why: string): Promise<string> => {
     const before = bindingSnapshot(box);
+    // H-110: the snapshot leaves journal/ out, so the records are compared by kind: a refusal appends no bind verdict, nor any verdict or redact
+    // record. The lock-take half does append `file` and `spool` records (measured: it journals the spool lines it moves), so those two are not compared.
+    const recordsOf = (): Pick<ReturnType<typeof rrJournalKinds>, 'redact' | 'verdict'> => {
+      const { redact, verdict } = rrJournalKinds(box);
+      return { redact, verdict };
+    };
+    const kindsBefore = recordsOf();
+    const bindsBefore = rrBinds(box);
     const r = await shimOnPty(box, ['--op', 'rebuild', ...args]);
     expect(lastRc(r.out), `${why}\n${r.out}`).toEqual({ rc: 2, reason: 'rebuild-refused' });
+    expect(rrBinds(box), `${why}: no bind verdict was journaled`).toEqual(bindsBefore);
+    expect(recordsOf(), `${why}: no verdict or redact record was journaled`).toEqual(kindsBefore);
     expect(r.out, `${why}: H-99, the relayed refusal names the operator at the direct door`).toContain('the operator acts on it, from a terminal outside any session');
     expect(bindingSnapshot(box), `${why}: nothing written`).toEqual(before);
     return r.out;
@@ -1793,6 +1956,7 @@ describe('C58: doctor --rebuild, its store_id and its refusals (W1-B2 Task 28)',
     const out = await refused(box, [], 'two journal directories and no --store-id');
     expect(out).toContain(storeId);
     expect(out).toContain(T);
+    expect(out, 'H-107: --store-id cures this refusal, so the remedy line says so').toMatch(/the operator names one with --store-id <uuid>, from a terminal outside any session/);
     const r = await shimOnPty(box, ['--op', 'rebuild', '--store-id', T]);
     expect(lastRc(r.out), r.out).toEqual({ rc: 0 });
     rrExpectBound(box, T, 'rebuild', null);
@@ -1801,10 +1965,13 @@ describe('C58: doctor --rebuild, its store_id and its refusals (W1-B2 Task 28)',
   it('each refusal answers rebuild-refused and writes nothing: a DB present, a leftover history.db-wal, store.id and --store-id disagreeing, a --store-id naming no directory, a directory whose heads name another store, and neither source', async () => {
     const { box, storeId } = rrBuilt('ccrc-hist-c58d-');
     const P = rrRoot(box);
-    await refused(box, [], 'a DB present');
+    // H-107: --store-id cures neither a DB present nor a leftover -wal, so the refusal still names the directories (the journal is kept) and points at no flag.
+    const dbPresent = await refused(box, [], 'a DB present');
+    expect(dbPresent, 'the candidate directories are still named').toContain(`journal store directories: ${storeId}`);
+    expect(dbPresent, 'but --store-id is not offered for a DB present').not.toMatch(/--store-id <uuid>/);
     rrLose(box, { binding: false, journal: false });
     fs.writeFileSync(P.wal, '');
-    await refused(box, [], 'a leftover history.db-wal');
+    expect(await refused(box, [], 'a leftover history.db-wal'), 'nor for a leftover -wal').not.toMatch(/--store-id <uuid>/);
     fs.rmSync(P.wal);
     const T = '0189abcd-1234-4678-9abc-0000000000d8';
     plantDir(box, T);
@@ -1812,7 +1979,8 @@ describe('C58: doctor --rebuild, its store_id and its refusals (W1-B2 Task 28)',
     fs.rmSync(path.join(P.journalDir, T), { recursive: true });
     fs.rmSync(P.storeId);
     fs.rmSync(P.writer);
-    await refused(box, ['--store-id', '0189abcd-1234-4678-9abc-0000000000d9'], 'a --store-id naming no directory');
+    expect(await refused(box, ['--store-id', '0189abcd-1234-4678-9abc-0000000000d9'], 'a --store-id naming no directory'),
+      'H-107: a --store-id naming no directory is cured by naming one that exists').toMatch(/the operator names one with --store-id <uuid>, from a terminal outside any session/);
     // journal/X/ whose month files' heads name S: no directory names itself, so none names a store.
     fs.renameSync(path.join(P.journalDir, storeId), path.join(P.journalDir, '0189abcd-1234-4678-9abc-0000000000da'));
     await refused(box, [], 'a directory whose heads name another store');
@@ -1855,6 +2023,7 @@ describe('C58: doctor --rebuild, its store_id and its refusals (W1-B2 Task 28)',
         for (const args of [[], ['--store-id', storeId]]) {
           const r = await shimOnPty(box, ['--op', 'rebuild', ...args]);
           expect(lastRc(r.out), `${args.join(' ')}\n${r.out}`).toEqual({ rc: 5, reason: 'store-unmeasured' });
+          expect(r.out, `${args.join(' ')}: H-107, an unmeasured directory is named by the verdict's own detail, and no remedy line is printed`).not.toContain('journal store directories');
           noStore(args.join(' '));
         }
       } finally {
@@ -1875,6 +2044,34 @@ describe('C58: doctor --rebuild, its store_id and its refusals (W1-B2 Task 28)',
       noStore(id);
     }
   }, 2 * HEAVY);
+
+  it('H-101: a directory planted at op does not wedge rebuild: the marker is cleared before it is written', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c58op-');
+    const P = rrRoot(box);
+    rrLose(box, { binding: true, journal: false });
+    fs.mkdirSync(P.op);
+    const r = await shimOnPty(box, ['--op', 'rebuild']);
+    expect(lastRc(r.out), r.out).toEqual({ rc: 0 });
+    rrExpectBound(box, storeId, 'rebuild', null);
+    expect(fs.existsSync(P.op), 'the op marker goes with the pass').toBe(false);
+  }, HEAVY);
+
+  it('H-108: a journal/ that lists but cannot be searched reads its directories unreadable (exit 5), never absent', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root searches whatever the mode says
+    const { box, storeId } = rrBuilt('ccrc-hist-c58ls-');
+    const P = rrRoot(box);
+    rrLose(box, { binding: true, journal: false });
+    expect(SW.journalStoreDirs(box.home).map((d) => `${d.storeId}=${d.heads}`).join(','), 'CONTROL: readable').toBe(`${storeId}=agree`);
+    fs.chmodSync(P.journalDir, 0o600);                               // readdir lists journal/<S>, lstat of it answers EACCES
+    try {
+      expect(SW.journalStoreDirs(box.home).map((d) => `${d.storeId}=${d.heads}`).join(','), 'listed but unsearchable reads unreadable').toBe(`${storeId}=unreadable`);
+      const r = await shimOnPty(box, ['--op', 'rebuild']);
+      expect(lastRc(r.out), r.out).toEqual({ rc: 5, reason: 'store-unmeasured' });
+      expect(r.out, 'not "nothing names a store_id"').not.toContain('nothing names a store_id');
+      expect(r.out).toContain(`journal/${storeId}/ could not be read`);
+      expect(fs.existsSync(P.dbFile), 'no DB was minted').toBe(false);
+    } finally { fs.chmodSync(P.journalDir, 0o700); }
+  }, HEAVY);
 
   it('a kill right after the pending marker becomes store.id: the next pass runs the recovery step (DI3)', async () => {
     const { box, storeId } = rrBuilt('ccrc-hist-c58f-');
@@ -1958,6 +2155,8 @@ describe('O35 and O36: the rebuild drill (W1-B2 Task 28)', () => {
     for (const k of Object.keys(a) as (keyof RrState)[]) expect(b[k], `B's ${k} equals A's`).toEqual(a[k]);
     // O36, the replay half: recovery and the passes after it appended no file, spool, redact or verdict record;
     // the one new verdict is the rebuild's own bind, under the new writer token.
+    // H-109, measured: this line goes red (verdict 26, expected 24) when sweep.mjs applyReplayAction's `case 'verdict':` re-journals what it
+    // replays, i.e. after `replayVerdict(db, a.rec, false);` it adds `db.prepare('INSERT INTO journal_outbox (rec) VALUES (?)').run(JSON.stringify(a.rec));`.
     expect(rrJournalKinds(box)).toEqual({ ...kindsA, verdict: kindsA.verdict + 1 });
     expect(rrBinds(box)).toEqual([{ bind: 'rebuild', writer: fs.readFileSync(P.writer, 'utf8').trim() }]);
   }, 2.5 * HEAVY);

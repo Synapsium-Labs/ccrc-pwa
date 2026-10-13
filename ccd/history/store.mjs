@@ -1458,6 +1458,18 @@ export function adoptStore(home, { nowMs }) {
   }
 }
 
+/** Whether a SQLite error read off a staged restore copy is a verdict on the file's content: SQLITE_NOTADB (26) and
+ *  SQLITE_CORRUPT (11), and SQLITE_ERROR (1) for a missing table (a database with no meta). node:sqlite's `errcode` is the
+ *  extended code, its low byte the primary; a build whose error carries none is read by message. Anything else (an I/O
+ *  error, SQLITE_NOMEM, a busy copy) is not (D-4608 (history-restore-io-failure-is-not-a-refusal)). */
+function isStagedContentError(e) {
+  if (typeof e?.errcode === 'number') {
+    const primary = e.errcode & 0xff;
+    return primary === 26 || primary === 11 || (primary === 1 && /no such table/.test(String(e.message)));
+  }
+  return /not a database|malformed|no such table/.test(String(e?.message));
+}
+
 /** What a staged restore copy says about itself, measured on the COPY, never on the backup: its user_version, its
  *  meta.store_id (a value, absent, or unreadable for a file that is no store) and whether PRAGMA integrity_check
  *  answers exactly one row, `ok`. A file that will not open as a database reads as unreadable and not ok. */
@@ -1472,8 +1484,11 @@ function measureStaged(tempPath) {
     else if (UUID_RE.test(String(row.v))) out.storeId = { state: 'value', value: String(row.v) };
     const rows = db.prepare('PRAGMA integrity_check').all();
     out.integrityOk = rows.length === 1 && String(Object.values(rows[0])[0]) === 'ok';
-  } catch {
-    // A file that is no database, or whose meta cannot be read: what was measured stands, the rest stays unread.
+  } catch (e) {
+    // A file that is no database, or whose meta cannot be read: what was measured stands, the rest stays unread. Only a verdict
+    // on the file's CONTENT reads that way; an I/O or memory failure inside SQLite is not one, so a good backup is never reported
+    // corrupt for it (D-4608 (history-restore-io-failure-is-not-a-refusal)).
+    if (!isStagedContentError(e)) throw e;
   } finally {
     try { db?.close(); } catch { /* read-only: nothing to lose */ }
   }
@@ -1501,7 +1516,12 @@ export function stageRestore(home, name) {
   try {
     from = openSync(src, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK);
   } catch (e) {
-    throw new StoreError('restore-refused', `${src} cannot be opened as a regular file without following a link (${e && e.code ? e.code : 'error'})`);
+    // Only an absent name (ENOENT) or a link (ELOOP) refuses the argument; EACCES, EMFILE, EIO and the rest are I/O failures, exit 1
+    // (D-4608 (history-restore-io-failure-is-not-a-refusal)).
+    if (e && (e.code === 'ENOENT' || e.code === 'ELOOP')) {
+      throw new StoreError('restore-refused', `${src} cannot be opened as a regular file without following a link (${e.code})`);
+    }
+    throw e;
   }
   let sizeBytes = 0;
   try {

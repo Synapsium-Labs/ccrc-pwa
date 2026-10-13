@@ -5092,7 +5092,9 @@ const BIND_REFUSALS = Object.freeze({ adopt: 'adopt-refused', restore: 'restore-
  *  - rebuild: no history.db and no leftover -wal or -shm. Its store_id is store.id's; else the one journal
  *    directory whose heads agree; else --store-id, which must name one of several. A --store-id disagreeing with
  *    store.id, naming no directory, or naming one whose heads name another store is refused, with the
- *    candidates named.
+ *    candidates named. The two refusals a --store-id cures (several directories unnamed, a --store-id naming no
+ *    directory) also carry `remedy: 'store-id'`, so the arm offers the flag only where it helps
+ *    (D-4606 (history-rebuild-store-id-hint-where-it-cures)).
  *  D-4188 D-4185 D-4186 */
 export function decideBind(kind, f) {
   if (!Object.hasOwn(BIND_REFUSALS, kind)) throw new TypeError(`decideBind: kind outside BIND_KINDS: ${String(kind)}`);
@@ -5137,7 +5139,7 @@ export function decideBind(kind, f) {
   if (arg !== null) {
     if (marker !== null && marker !== arg) return refuse(`store.id names ${marker}; --store-id names ${arg}`);
     const d = dirs.find((x) => x.storeId === arg);
-    if (d === undefined) return refuse(`--store-id ${arg} names no journal directory (journal directories: ${names})`);
+    if (d === undefined) return { ...refuse(`--store-id ${arg} names no journal directory (journal directories: ${names})`), remedy: 'store-id' };
     // D-4605 (history-rebuild-unreadable-journal-is-unmeasured): a directory the sweep could not read is unmeasured (exit 5), never a refusal.
     if (d.heads === 'unreadable') return unmeasured(`journal/${arg}/ could not be read`);
     if (d.heads !== 'agree') return refuse(`journal/${arg}/ holds head records naming another store`);
@@ -5145,7 +5147,7 @@ export function decideBind(kind, f) {
   }
   if (marker !== null) return { ok: true, storeId: marker };
   if (dirs.length === 0) return refuse('nothing names a store_id: no store.id and no journal directory');
-  if (dirs.length > 1) return refuse(`several journal directories: name one with --store-id (journal directories: ${names})`);
+  if (dirs.length > 1) return { ...refuse(`several journal directories: name one with --store-id (journal directories: ${names})`), remedy: 'store-id' };
   if (dirs[0].heads === 'unreadable') return unmeasured(`journal/${dirs[0].storeId}/ could not be read`);
   if (dirs[0].heads !== 'agree') return refuse(`journal/${dirs[0].storeId}/ holds head records naming another store`);
   return { ok: true, storeId: dirs[0].storeId };
