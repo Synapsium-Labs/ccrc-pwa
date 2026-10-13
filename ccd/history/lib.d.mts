@@ -307,6 +307,7 @@ export function redactField(text: string, idx: PairIndex): string;
 export function redactFinal(text: string, idx: PairIndex): string;
 export function redactFinalJson<T>(value: T, idx: PairIndex): T;
 export function redactFinalText(text: string, idx: PairIndex): string;
+export function redactFinalLines(text: string, idx: PairIndex): string;
 // --- Task 10: harness table and the export's horizon (spec §6.10 item 3, §9.15)
 export type Readable = { state: 'absent' } | { state: 'unreadable' } | { state: 'text'; text: string };
 export const CLAUDE_CODE_DEFAULT_RETENTION_DAYS: 30;

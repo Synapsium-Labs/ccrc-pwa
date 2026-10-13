@@ -5098,3 +5098,37 @@ describe.skipIf(process.platform === 'darwin')('whole-branch fix 1: every read v
     expect(r.stdout, 'no value survives').not.toMatch(/abc123/);
   }, HEAVY);
 });
+
+// ── Whole-branch fix round 5, item 1 (D-4613): every --json string leaf takes the field form AND the final form ──────
+// The field form's named rule runs a value through `<` and `>` and past the context key after it; the final form stops at
+// them. A leaf that took the field form alone printed `password=hunter2hunter2` for stored `see: <a>password=hunter2hunter2</a>`.
+describe.skipIf(process.platform === 'darwin')('whole-branch fix 5: grep --json masks a context key behind angle brackets (D-4613 round 5)', () => {
+  const ID = 'claude-a-wbx5';
+  const G = '0189abcd-1234-4678-9abc-00000000a045';
+  const T = 'a4500001';
+  const U = t16uuid(T, 0);
+  const e = (i: number): string => t16uuid(T, i);
+  let box: rH.HistoryBox;
+  const cli = (args: string[]) => rH.runCli(box, args, { env: rH.withPane(box, ID) });
+
+  beforeAll(() => {
+    box = rH.makeHistoryBox('ccrc-hist-wbx5-');
+    t16seed(box, { id: ID, project: 'demo', generation: G, uuid: U, rows: [
+      rFx.userRow({ uuid: e(1), ts: t16ts(1), sessionId: U, text: 'zqx45shape see: <a>password=hunter2hunter2</a> and label: <b>TOKEN=abcdef0123456789</b> and "token":"hunter2hunter2API_KEY: \\"' }),
+    ] });
+  }, 480_000);
+
+  it('grep --json prints neither value, and the human page masks them too (CONTROL)', () => {
+    const j = cli(['grep', 'zqx45shape', '--json']);
+    expect(j.code, j.stderr).toBe(0);
+    expect(j.stdout, 'CONTROL: the fixture was found').toContain('zqx45shape');
+    expect(() => JSON.parse(j.stdout)).not.toThrow();
+    expect(j.stdout).not.toContain('hunter2hunter2');
+    expect(j.stdout).not.toContain('abcdef0123456789');
+    const h = cli(['grep', 'zqx45shape']);
+    expect(h.code, h.stderr).toBe(0);
+    expect(h.stdout, 'CONTROL: the human page found it').toContain('zqx45shape');
+    expect(h.stdout).not.toContain('hunter2hunter2');
+    expect(h.stdout).not.toContain('abcdef0123456789');
+  }, HEAVY);
+});

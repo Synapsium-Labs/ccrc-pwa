@@ -306,6 +306,18 @@ describe('ccrc history status (Linux)', () => {
     expect(sq.stderr).not.toContain('hunter2hunter2');
   });
 
+  // D-4614 (round 5): the CLI's own prefix must not swallow the message it carries.
+  it('H-32: a message that starts with a context key behind the CLI prefix is masked on stderr (D-4614)', () => {
+    const box = boundBox('ccrc-hist-cli-ha2-h32-pfx-');
+    const plain = status(box, { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: 'Error:TOKEN=abcdef0123456789@FROM counters' } });
+    expect(plain.code, plain.stderr).toBe(1);
+    expect(plain.stderr, 'CONTROL: the line is written with the key in its place').toMatch(/ccrc history: internal error: TOKEN=/);
+    expect(plain.stderr).not.toContain('abcdef0123456789');
+    const sq = status(box, { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: 'SqliteError:<ccrc-recall TOKEN="abcdef0123456789">@FROM counters' } });
+    expect(sq.stderr, 'CONTROL: the line is written').toContain('ccrc history: store-read-failed: ');
+    expect(sq.stderr, 'an unframed forged tag with a quoted value').not.toContain('abcdef0123456789');
+  });
+
   it('H-32: no stderr write in cli.mjs prints an error message except through errLine, which redacts', () => {
     const src = fs.readFileSync(path.join(REPO, 'ccd', 'history', 'cli.mjs'), 'utf8');
     // H-168: scan by line, not by regex up to ';' (an argument can hold one). Every write stands on one line, so the count below
@@ -313,12 +325,15 @@ describe('ccrc history status (Linux)', () => {
     const writes = src.split('\n').filter((l) => /process\.stderr\.write\(/.test(l));
     expect(writes.length, 'the scan sees every stderr write').toBe(7);
     expect(writes.filter((w) => /\.message|String\(e\)|\$\{e\b/.test(w)), 'a raw error text on stderr').toEqual([]);
-    // Each write's argument is a fixed line (it starts `ccrc history` or `${USAGE}`), errLine's redactFinalText, or the op relay's `text`.
-    const allowed = /process\.stderr\.write\((?:[`']ccrc history|`\$\{USAGE\}|redactFinalText\(|text\))/;
+    // Each write's argument is a fixed line (it starts `ccrc history` or `${USAGE}`), errLine's redactFinalLines, or the op relay's `text`.
+    const allowed = /process\.stderr\.write\((?:[`']ccrc history|`\$\{USAGE\}|redactFinalLines\(|text\))/;
     expect(writes.filter((w) => !allowed.test(w)), 'a write whose argument is neither a fixed line, errLine\'s redactFinal nor the relay text').toEqual([]);
     const fn = /function errLine\([^)]*\) \{([\s\S]*?)\n\}/.exec(src);
     expect(fn, 'errLine is defined').not.toBeNull();
-    expect(fn![1]).toContain('redactFinalText(');
+    expect(fn![1]).toContain('redactFinalLines(');
+    // D-4613 round 5: the other lines the CLI never frames take the per-line belt too (emitRefusal's human line, the operator relay's emit)
+    expect(src).toContain('redactFinalLines(refusalLine(r.exit, r.reason), pairIdx)');
+    expect(src).toContain('emit(redactFinalLines(line, idx))');
     expect((src.match(/\berrLine\(/g) ?? []).length, 'the definition and the three message sites').toBeGreaterThanOrEqual(5);
   });
 

@@ -1925,13 +1925,44 @@ function contextRules(final) {
   const stop = final ? String.raw`\\<>&` : '';
   return Object.freeze({
     json: new RegExp(String.raw`"([A-Za-z_][A-Za-z0-9_.-]{0,255})"(\s*:\s*)"(${final ? String.raw`[^"\\\n\r<>&]+` : String.raw`(?:[^"\\]|\\.)+`})"`, 'g'),
-    named: new RegExp(String.raw`\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:[ \t]+)(["']?)([^\s"'` + '`' + String.raw`,;&${final ? String.raw`\\<>` : ''}]+)`, 'g'),
+    // D-4614 (history-context-rule-rescans-after-a-plain-name): the named rule is TWO patterns scanned by hand
+    // (maskNamed). `namedHead` finds `NAME=` or `NAME: ` and the optional quote; `namedValue` (sticky) takes the value
+    // from there. The value is read only for a secret NAME, so a plain name never consumes its value and the scan
+    // resumes right after the separator: a context key inside it is seen, and a run of `a=a=a=` stays linear.
+    namedHead: new RegExp(String.raw`\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:[ \t]+)`, 'g'),
+    namedValue: new RegExp(String.raw`(["']?)([^\s"'` + '`' + String.raw`,;&${final ? String.raw`\\<>` : ''}]+)`, 'y'),
     bearer: new RegExp(String.raw`(Authorization:[ \t]*Bearer[ \t]+)([^\s"'${stop}]+)`, 'gi'),
     mailToken: new RegExp(String.raw`(x-ccrc-mail-token:[ \t]*)([^\s"'${stop}]+)`, 'gi'),
     query: new RegExp(String.raw`([?&]token=)([^&\s"'#${final ? String.raw`\\<>` : ''}]+)`, 'gi'),
   });
 }
 const CONTEXT_RULES = Object.freeze({ field: contextRules(false), final: contextRules(true) });
+
+/** Layer 2's named rule (`NAME=value`, `NAME: value`), D-4614 (history-context-rule-rescans-after-a-plain-name; whole-branch
+ *  fix round 5): a scan by hand, so a NAME that is not a secret (or a value that is already the mark) does not use up its
+ *  value. The scan resumes RIGHT AFTER THE SEPARATOR, and a context key inside the value (`level=[INFO]password=x`, a
+ *  CLI prefix `internal error: TOKEN=x`) is seen. A secret NAME masks its value as before and the scan resumes after the
+ *  value. It only ever ADDS masking over the one-pass rule it replaces. */
+function maskNamed(s, R) {
+  const head = R.namedHead;
+  const val = R.namedValue;
+  head.lastIndex = 0;
+  let out = '';
+  let from = 0;
+  for (let m = head.exec(s); m !== null; m = head.exec(s)) {
+    const sepEnd = m.index + m[0].length;
+    val.lastIndex = sepEnd;
+    const v = IDENTIFIER_RE.test(m[1]) ? val.exec(s) : null;
+    if (v === null || v[2] === REDACTED_MARK) {
+      head.lastIndex = sepEnd;
+      continue;
+    }
+    out += `${s.slice(from, sepEnd)}${v[1]}${REDACTED_MARK}`;
+    from = sepEnd + v[0].length;
+    head.lastIndex = from;
+  }
+  return from === 0 ? s : out + s.slice(from);
+}
 
 /** One run through all three layers, failing closed. V8 runs these patterns
  *  by backtracking on a bounded stack, so over a run of several MiB `replace`
@@ -1977,8 +2008,7 @@ function redactLayers(segment, idx, context) {
     const R = context === 'final' ? CONTEXT_RULES.final : CONTEXT_RULES.field;
     s = s.replace(R.json,
       (all, name, sep, value) => (IDENTIFIER_RE.test(name) && value !== REDACTED_MARK ? `"${name}"${sep}"${REDACTED_MARK}"` : all));
-    s = s.replace(R.named,
-      (all, name, sep, quote, value) => (IDENTIFIER_RE.test(name) && value !== REDACTED_MARK ? `${name}${sep}${quote}${REDACTED_MARK}` : all));
+    s = maskNamed(s, R);
     s = s.replace(R.bearer, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
     s = s.replace(R.mailToken, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
     s = s.replace(R.query, (all, head, value) => (value === REDACTED_MARK ? all : `${head}${REDACTED_MARK}`));
@@ -2435,19 +2465,30 @@ export function redactFinal(text, idx) {
 }
 
 /** The final belt over a `--json` envelope, D-4613 (whole-branch fix round 3): the VALUE is deep-mapped BEFORE it is
- *  serialised, so no pass ever reads serialised structure. Every string leaf goes through `redactField` (a raw string
- *  has no structure to protect, so the full-strength field form is right); numbers, booleans and null pass through;
+ *  serialised, so no pass ever reads serialised structure. Every string leaf goes through BOTH passes, `redactFinal(
+ *  redactField(leaf))` (fix round 5: a raw string has no structure to protect, so the final form is safe on it, and the
+ *  field form's value class can run through `<` or `>` and past a context key that the final form's stops still see:
+ *  `see: <a>password=x</a>`); numbers, booleans and null pass through;
  *  object KEYS are never touched (they are field and counter names fixed in code). The caller serialises the result
  *  with `JSON.stringify`, so the envelope's escaping is the serialiser's own and `--json` is valid whatever a leaf
  *  holds. Residuals: a secret an object KEY would carry is not masked (no key is data); a leaf the field form cannot
  *  mask is no worse than the field pass was. */
 export function redactFinalJson(value, idx) {
-  if (typeof value === 'string') return redactField(value, idx);
+  if (typeof value === 'string') return redactFinal(redactField(value, idx), idx);
   if (Array.isArray(value)) return value.map((v) => redactFinalJson(v, idx));
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactFinalJson(v, idx)]));
   }
   return value;
+}
+
+/** The final belt over lines the CLI never framed (an error line, a relayed operator line, a refusal line), D-4613
+ *  (whole-branch fix round 5): the text is split at each `\n` and every line goes through `redactFinal` WHOLE, with no
+ *  frame-tag split. These lines carry no real frame tag, so text that merely looks like one
+ *  (`<ccrc-recall TOKEN="x">`) is plain text here and a context key in it is seen with its quoted value. `redactFinalText`
+ *  (tag-aware) stays for the human page, which recallEnvelope frames. */
+export function redactFinalLines(text, idx) {
+  return text.split('\n').map((line) => redactFinal(line, idx)).join('\n');
 }
 
 /** A frame tag of the recalled-text envelope (recallEnvelope's opening and closing tag). escapeXmlAttr has escaped every

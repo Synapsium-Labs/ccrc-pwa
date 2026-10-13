@@ -2290,6 +2290,68 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     expect(page).toContain('family="F1"');
     expect(libRedact.redactFinalText(page, idx)).toBe(page);
   });
+  it('(f) every --json string leaf takes the field form AND the final form: a key behind angle brackets is masked (D-4613 round 5)', () => {
+    const idx = idxOf([]);
+    for (const [input, secret] of [['see: <a>password=hunter2hunter2</a>', 'hunter2hunter2'], ['label: <b>TOKEN=abcdef0123456789</b>', 'abcdef0123456789']] as const) {
+      const wire = JSON.stringify(libRedact.redactFinalJson({ a: [input], b: input }, idx));
+      expect(wire, input).not.toContain(secret);
+      expect(wire, `CONTROL: the mark is there (${input})`).toContain(M);
+    }
+    // a leaf the field form's own mask turns into a JSON-form match: only the final pass after it sees the value
+    const shaped = '"token":"hunter2hunter2API_KEY: \\"';
+    expect(libRedact.redactField(shaped, idx), 'CONTROL: the field form alone leaves the value').toContain('hunter2hunter2');
+    expect(JSON.stringify(libRedact.redactFinalJson(shaped, idx)), 'both passes mask it').not.toContain('hunter2hunter2');
+    expect(JSON.stringify(libRedact.redactFinalJson(`TOKEN=${M}`, idx)), 'idempotent on the mark').toBe(`"TOKEN=${M}"`);
+  });
+  it('(g) the named rule rescans after a name that is not a secret: a key inside its value is masked in both forms and every door (D-4614)', () => {
+    const idx = idxOf([]);
+    const cases: Array<[string, string]> = [
+      ['level=[INFO]password=hunter2hunter2', 'hunter2hunter2'],
+      ['opts={x}TOKEN=abcdef0123456789', 'abcdef0123456789'],
+      ['ccrc history: internal error: TOKEN=abcdef0123456789', 'abcdef0123456789'],
+      ['hint: TOKEN=abcdef0123456789', 'abcdef0123456789'],
+      ['history-sweep: restore stopped: TOKEN=abcdef0123456789', 'abcdef0123456789'],
+      ['level: TOKEN=abcdef0123456789', 'abcdef0123456789'],
+      ['url: http://h/?password=hunter2hunter2', 'hunter2hunter2'],
+    ];
+    for (const [input, secret] of cases) {
+      for (const [name, out] of [
+        ['redactField', libRedact.redactField(input, idx)], ['redactFinal', libRedact.redactFinal(input, idx)],
+        ['redactFinalText', libRedact.redactFinalText(input, idx)], ['redactFinalLines', libRedact.redactFinalLines(input, idx)],
+        ['redactFinalJson', libRedact.redactFinalJson(input, idx)],
+      ] as const) {
+        expect(out, `${name}: ${input}`).not.toContain(secret);
+        expect(out, `CONTROL ${name}: the line is kept, the mark is there`).toContain(M);
+      }
+    }
+    // the key's own prefix survives
+    expect(libRedact.redactFinal('ccrc history: internal error: TOKEN=abcdef0123456789', idx)).toBe(`ccrc history: internal error: TOKEN=${M}`);
+    // CONTROLs: no secret name, nothing changes; marks are a fixed point
+    for (const x of ['level=INFO path=/a/b mode=x', 'a=b=c=d', `TOKEN=${M}`, `password: ${M}`, `level=[INFO]password=${M}`]) {
+      expect(libRedact.redactField(x, idx), x).toBe(x);
+      expect(libRedact.redactFinal(x, idx), x).toBe(x);
+    }
+    // a secret name still masks its whole value as before
+    expect(libRedact.redactField('TOKEN=ab<cd>ef', idx)).toBe(`TOKEN=${M}`);
+    // linear on a long run of plain names (a rescan that consumed each value first would be quadratic)
+    const t0 = Date.now();
+    libRedact.redactField('a='.repeat(200_000), idx);
+    expect(Date.now() - t0, 'a run of plain names stays linear').toBeLessThan(20_000);
+  });
+  it('(h) lines the CLI never frames take a per-line final pass with no tag split (D-4613 round 5)', () => {
+    const idx = idxOf([]);
+    for (const [input, secret] of [
+      ['<ccrc-recall TOKEN="abcdef0123456789">', 'abcdef0123456789'],
+      ['<ccrc-recall password: "hunter2hunter2">', 'hunter2hunter2'],
+      ['<ccrc-recall "api_key": "xsecretx">', 'xsecretx'],
+    ] as const) {
+      const out = libRedact.redactFinalLines(`boom ${input} tail\nnext ${input}`, idx);
+      expect(out, input).not.toContain(secret);
+      expect(out.split('\n').length).toBe(2);
+      expect(out.startsWith('boom <ccrc-recall ')).toBe(true);
+    }
+    expect(libRedact.redactFinalLines('exit 2 bad-args: nothing to see\nsecond line', idx), 'CONTROL: a plain line is unchanged').toBe('exit 2 bad-args: nothing to see\nsecond line');
+  });
   it('(e) a seeded differential fuzz: 4,000 field texts through redactForDisplay into real envelope shapes always parse and always keep their frame', () => {
     const idx = idxOf([]);
     let seed = 0x4613;

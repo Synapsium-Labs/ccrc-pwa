@@ -54,7 +54,7 @@ import * as healthPath from 'node:path';
 import { closeSync, constants as FS, fstatSync, openSync, readSync, writeSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import {
-  REASONS, TMUX_DEADLINE_MS, SCOPE_SOURCES, SCHEMA_ADDED, READ_VERBS, idOk, makePairIndex, redactFinalJson, redactFinalText, makeBelt, beltUnits,
+  REASONS, TMUX_DEADLINE_MS, SCOPE_SOURCES, SCHEMA_ADDED, READ_VERBS, idOk, makePairIndex, redactFinalJson, redactFinalText, redactFinalLines, makeBelt, beltUnits,
   REDACT_SOURCES_META, parseRedactSources,
   decideIdentity, decideHarness, resolveGeneration, decideScope, parseReadArgs, decideRecallOffPreflight, paneOk,
   decideRecallOff, recallOffPath, parseSpoolLine, SCOPE_FAMILIES_JSON_MAX,
@@ -442,11 +442,11 @@ const USAGE = [
  *  layers (§8.3). */
 const NO_PAIRS = makePairIndex([]);
 
-/** One stderr line carrying a thrown error's text, through redactFinalText like every other output (§8.3, §12: the final
+/** One stderr line carrying a thrown error's text, through redactFinalLines (D-4613 round 5: never framed, so no tag split) like every other output (§8.3, §12: the final
  *  stdout, stderr and --json each take one more pass). A SQLite message can quote a value, and the three sites that
  *  wrote `e.message` raw did not redact it (HA2 H-32). Every error text on stderr goes through here. */
 function errLine(text, idx = NO_PAIRS) {
-  process.stderr.write(redactFinalText(`${text}\n`, idx));
+  process.stderr.write(redactFinalLines(`${text}\n`, idx));
 }
 const ABSENT = Object.freeze({ state: 'absent' });
 const UNREADABLE = Object.freeze({ state: 'unreadable' });
@@ -727,7 +727,7 @@ function emitRefusal(r, json, pairIdx) {
       exit: r.exit, ...(r.reason === undefined ? {} : { reason: r.reason }), storeId: r.storeId ?? null,
       scope: null, header: null, items: [], shown: 0, total: 0, next: null,
     }), pairIdx))
-    : redactFinalText(refusalLine(r.exit, r.reason), pairIdx);
+    : redactFinalLines(refusalLine(r.exit, r.reason), pairIdx);
   process.stdout.write(`${text}\n`);
   return r.exit;
 }
@@ -1345,7 +1345,7 @@ function relayIndexOf(home, P, reach) {
 }
 
 /** One operator verb through the door. `emit` gets each line the sweep printed before its result, already through
- *  redactFinalText with relayIndexOf's index, which is built only once the gate has passed, before the shim starts. */
+ *  redactFinalLines with relayIndexOf's index, which is built only once the gate has passed, before the shim starts. */
 export async function runOpVerb(home, verb, rest, emit) {
   const P = healthLib.historyPaths(home);
   const map = opFormOf(verb, rest);
@@ -1369,7 +1369,7 @@ export async function runOpVerb(home, verb, rest, emit) {
     isattyOp(0), opPaneName(form));
   if (!gate.ok) return { exit: gate.rc, reason: gate.reason };
   const idx = relayIndexOf(home, P, reach);
-  return opRelay(P, map.op, map.opArgs, (line) => emit(redactFinalText(line, idx)));
+  return opRelay(P, map.op, map.opArgs, (line) => emit(redactFinalLines(line, idx)));
 }
 
 /** D-4600 (history-operator-door-survives-a-closed-pipe): `ccrc history import --apply | head -1` closes stdout under the
@@ -1395,7 +1395,7 @@ function guardClosedStdio() {
 
 /** main's arm for `import`, `prune`, `reparse` and `doctor`: argv is main's own, the verb first, `--json` anywhere.
  *  Under --json, stdout is the envelope alone and the sweep's lines go to stderr; every relayed line arrives here
- *  already through redactFinalText (runOpVerb's relayIndexOf). */
+ *  already through redactFinalLines (runOpVerb's relayIndexOf). */
 export async function operatorMain(home, argv) {
   guardClosedStdio();
   const json = argv.includes('--json');
