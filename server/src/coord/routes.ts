@@ -621,7 +621,7 @@ export function registerCoordRoutes(
         detail: 'the registry directory could not be listed — transient, not a fact about the sender' });
       return false;
     }
-    // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
+    // [registry-refused:raw-name] a refused row is in `names`, never in `registry`: the ladder reads it as unmeasurable.
     const registry = await readRegistry(deps.io, deps.cfg);
     const row = registry.find((r) => r.id === whoId);
     if (!row) {
@@ -827,7 +827,7 @@ export function registerCoordRoutes(
       return refuse(reply, 502, 'registry-unmeasurable', { fromId, toId, kind, subject, runId },
         'the registry directory could not be listed — transient, not a fact about the sender');
     }
-    // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
+    // [registry-refused:raw-name] a refused row is in `names`, never in `registry`: the ladder reads it as unmeasurable.
     const registry = await readRegistry(deps.io, deps.cfg);
 
     // 5: sender — a registry row must exist for fromId.
@@ -1058,7 +1058,7 @@ export function registerCoordRoutes(
       return refuse(reply, 502, 'registry-unmeasurable', { fromId },
         'the registry directory could not be listed — transient, not a fact about the sender');
     }
-    // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
+    // [registry-refused:raw-name] a refused row is in `names`, never in `registry`: the ladder reads it as unmeasurable.
     const registry = await readRegistry(deps.io, deps.cfg);
     const sender = registry.find((r) => r.id === fromId);
     if (!sender) {

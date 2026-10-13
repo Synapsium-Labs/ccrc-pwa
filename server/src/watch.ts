@@ -3018,7 +3018,7 @@ export class FleetWatcher {
     // is the pane's branch, else the worktree HEAD's, else this (fleet.ts), so it
     // lags a rename by however long Claude Code takes to re-render its pane.
     // Same reason sweepTasks and sweepPr read the registry themselves.
-    // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
+    // [registry-refused:omits] a refused row is never in `records`, so it is never renamed.
     const records = await readRegistry(this.deps.io, this.deps.cfg);
     for (const r of records) {
       // SKIP a degraded row before anything else: an unmeasured `uuid`
@@ -6740,7 +6740,7 @@ export class FleetWatcher {
     const mySweep = now;
     this.prSweepStartedAt = mySweep;
     try {
-      // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
+      // [registry-refused:omits] a refused row is never in `records`: no pr-state, no prStates key.
       const records = await readRegistry(this.deps.io, this.deps.cfg);
       const projects = [...new Set(records.filter((r) => r.workspace !== null).map((r) => r.project))];
       for (const project of projects) {
@@ -7182,7 +7182,7 @@ export class FleetWatcher {
    */
   private async detectDialogs(notify: boolean, records?: SessionRecord[]): Promise<Set<string>> {
     const pending = new Set<string>();
-    // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
+    // [registry-refused:tests-only] tick() passes its records; only tests reach this read, which omits refused rows.
     const recs = records ?? await readRegistry(this.deps.io, this.deps.cfg);
     for (const r of recs) {
       const pane = await this.deps.tmux.capture(r.id);

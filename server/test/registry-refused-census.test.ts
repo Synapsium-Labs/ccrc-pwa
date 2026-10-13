@@ -117,7 +117,7 @@ const where = (s: Site): string => `${s.file}:${s.line}`;
 
 /** The classified set, as the tree stands. Later tasks of this wave place each `unplaced`. */
 const EXPECTED_SITES: readonly string[] = [
-  'commands.ts | sessionCommands | readRegistry | unplaced',
+  'commands.ts | sessionCommands | readRegistry | knownId',
   'coord/dispatch.ts | dispatchRun | readRegistryMeasured | refuses',
   'coord/dispatch.ts | dispatchRun | readRegistryMeasured | refuses',
   'coord/dispatch.ts | dispatchRun | readRegistryMeasured | gated',
@@ -126,18 +126,18 @@ const EXPECTED_SITES: readonly string[] = [
   'coord/routes.ts | POST /api/claims | readRegistryMeasured | reports',
   'server.ts | GET /api/fleet | readRegistryMeasured | stale',
   'server.ts | GET /ws/fleet | readRegistryMeasured | stale',
-  'coord/routes.ts | POST /api/mail | readRegistry | unplaced',
-  'coord/routes.ts | POST /api/mail/:id/ack | readRegistry | unplaced',
-  'coord/routes.ts | requireAttribution | readRegistry | unplaced',
+  'coord/routes.ts | POST /api/mail | readRegistry | raw-name',
+  'coord/routes.ts | POST /api/mail/:id/ack | readRegistry | raw-name',
+  'coord/routes.ts | requireAttribution | readRegistry | raw-name',
   'fleet.ts | assembleFleet | readRegistryMeasured | tests-only',
   'lifecycle.ts | listProjects | readRegistryMeasured | reports',
   'registry.ts | readRegistry | readRegistryMeasured | wrapper',
-  'server.ts | prTasks | readRegistry | unplaced',
-  'watch.ts | detectDialogs | readRegistry | unplaced',
+  'server.ts | prTasks | readRegistry | knownId',
+  'watch.ts | detectDialogs | readRegistry | tests-only',
   'watch.ts | sweepHookStates | readRegistryMeasured | tests-only',
   'watch.ts | sweepMail | readRegistryMeasured | holds',
-  'watch.ts | sweepNames | readRegistry | unplaced',
-  'watch.ts | sweepPr | readRegistry | unplaced',
+  'watch.ts | sweepNames | readRegistry | omits',
+  'watch.ts | sweepPr | readRegistry | omits',
   'watch.ts | sweepTasks | readRegistryMeasured | omits',
   'watch.ts | tick | readRegistryMeasured | omits',
 ];
@@ -201,6 +201,10 @@ describe('every registry reader call is classified for refused rows (spec §2.3)
     expect(allSites().filter((s) => s.word === 'wrapper').map(key))
       .toEqual(['registry.ts | readRegistry | readRegistryMeasured | wrapper']);
   });
+
+  it('no site is unplaced', () => {
+    expect(allSites().filter((s) => s.word === 'unplaced').map(key)).toEqual([]);
+  });
 });
 
 // Path identity W1a, Task 6 (spec §2.3, R19's precedent): `sweepHookStates`'s own registry read is `tests-only`
@@ -240,6 +244,12 @@ describe('tick hands its records to the lanes that would otherwise read the regi
     const body = tickBodyOf(tickCode(readFileSync(TICK_WATCH_TS, 'utf8')), TICK_HEAD);
     expect(body, 'tick no longer hands sweepHookStates its records: that lane would read the registry itself')
       .toMatch(/\bthis\.sweepHookStates\(\s*records\s*\)/);
+  });
+
+  it('tick() passes its records to detectDialogs(', () => {
+    const body = tickBodyOf(tickCode(readFileSync(TICK_WATCH_TS, 'utf8')), TICK_HEAD);
+    expect(body, 'tick no longer hands detectDialogs its records: that lane would read the registry itself')
+      .toMatch(/\bthis\.detectDialogs\([^)]*\brecords\s*\)/);
   });
 });
 
