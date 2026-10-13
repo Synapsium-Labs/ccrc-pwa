@@ -26,7 +26,7 @@ import {
   REASONS, INDEXED_PROVENANCE, SEARCHABLE_PROVENANCE, FTS_STEP, FTS_REBUILD_STEP, RANK_POOL, decideGrepIndex, sanitizeFtsQuery, snippetTerms, regexSyntaxIn, regexSyntaxHint, ftsOrderBy, displaySnippet, snippetLine, escapeXmlText, redactField, extractNodeId, resolveScopedId, SEARCH_REACH, parseGrepArgs,
   GREP_LIMIT_DEFAULT, encodeCursor, decodeCursor, canonicalJson, sha256Hex,
   guardRegex, regexPrefilter, REGEX_BUDGET_MS, REGEX_MAX_LEN, historyPaths,
-  DESCRIBE_EXCERPT, GIST_MAX, costRow, producerOf, pickHoldingCopy, redactDisplayWindow, parseDescribeArgs, displayToken, topicsOfColumn,
+  DESCRIBE_EXCERPT, GIST_MAX, costRow, producerOf, pickHoldingCopy, redactDisplayWindow, parseDescribeArgs, displayToken, foldOneLine, topicsOfColumn,
 } from './lib.mjs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -466,7 +466,7 @@ const ECHO_MAX = 400;
  *  ECHO_MAX (§8.3's order), so a target holding a line break forges no line and a 100 KB argv cannot fill the cap. The
  *  raw sits at the end of the error, so the cut drops only the echo's tail. */
 function echoLine(rc, text) {
-  return snippetLine(redactField(text, rc.pairIdx).replace(/\s+/g, ' '), ECHO_MAX);
+  return snippetLine(foldOneLine(redactField(text, rc.pairIdx)), ECHO_MAX);
 }
 
 /** `--node`'s entries: the node resolved in scope, then its lineage (Task 9's range CTE, toward sources). */
@@ -547,12 +547,13 @@ function hitSnippet(rc, hit, terms) {
 const NAME_MAX = 256;
 
 /** A stored sidecar name as every read verb shows it: redacted on its raw text (redactForDisplay, so the escape-glued
- *  reading a --json newline makes is covered), then cut at NAME_MAX (D-4597
+ *  reading a --json newline makes is covered), then folded to one line (foldOneLine: a VT, an FF, an FS, a GS, an RS and a NEL
+ *  split a line for some readers, and --json leaves U+0085 raw) and cut at NAME_MAX (D-4597
  *  (history-read-names-and-echoes-display-redacted); D-4596 (history-read-fixed-fields-fit-the-cap)). A name that is
  *  absent stays null: a sidecar-less hit carries none. */
 function nameShown(rc, name) {
   if (name === null || name === undefined) return name;
-  const shown = redactForDisplay(String(name), rc.pairIdx);
+  const shown = foldOneLine(redactForDisplay(String(name), rc.pairIdx));
   return shown.length <= NAME_MAX ? shown : xlib.cutText(shown, NAME_MAX, 6 * NAME_MAX);
 }
 
@@ -732,7 +733,7 @@ export function runGrep(rc, a, deps = {}) {
   const raw = a.words.join(' ');
   const syntax = regexSyntaxIn(raw);
   if (syntax !== null) {
-    return refusal('regex-syntax', hintLine(regexSyntaxHint(escapeXmlText(redactField(raw, rc.pairIdx)), syntax)));
+    return refusal('regex-syntax', hintLine(regexSyntaxHint(escapeXmlText(echoLine(rc, raw)), syntax)));
   }
   const key = grepKey(rc, a);
   const pos = cursorPos(a.cursor, key);
@@ -789,7 +790,7 @@ function pairsOf(idx) {
 
 /** exit 1: the child failed for a reason other than its budget. */
 function childFailed(detail) {
-  return { exit: EXIT.INTERNAL, header: null, blocks: [], items: [], shown: 0, total: 0, next: null, hint: `the --regex child failed: ${detail}` };
+  return { exit: EXIT.INTERNAL, header: null, blocks: [], items: [], shown: 0, total: 0, next: null, hint: `the --regex child failed: ${foldOneLine(detail)}` };
 }
 
 /** `grep --regex <pattern>`. `deps.budgetMs` and `deps.spawn` are in-process test seams (history-test-seams-not-env). */

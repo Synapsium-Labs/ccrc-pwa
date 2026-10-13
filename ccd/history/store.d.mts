@@ -65,6 +65,7 @@ export function childrenOf(db: DatabaseSync, nodeId: string): { childId: string;
 export function parentOf(db: DatabaseSync, nodeId: string): string | null;
 
 // ── W1-B2 Task 19: a registered recovery step (RB6) and the stored version (RB13, RB17) ──
+export function recoverOpenOn(db: DatabaseSync): boolean;
 export function recoverStepAt(dbFile: string): 'open' | 'none' | 'absent' | 'unmeasured';
 export function storedVersionAt(dbFile: string): Presence<number>;
 // ── W1-B2 Task 20: prune by referrer age (§6.6) ──

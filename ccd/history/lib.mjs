@@ -4247,7 +4247,14 @@ const DISPLAY_TOKEN_RE = /^[A-Za-z0-9._:/-]{1,128}$/;
 export function displayToken(value, idx) {
   const s = String(value);
   if (DISPLAY_TOKEN_RE.test(s)) return s;
-  return JSON.stringify(snippetLine(redactForDisplay(s, idx).replace(DISPLAY_FOLD_RE, ' ')));
+  return JSON.stringify(snippetLine(foldOneLine(redactForDisplay(s, idx))));
+}
+
+/** One line: every run of whitespace, control and line-separator characters (the set DISPLAY_FOLD_RE names) becomes one
+ *  space. It runs AFTER redaction (§8.3: redact the raw text, fold, cut), so folding exposes nothing, and every read verb's
+ *  one-line echo (a hint, a sidecar name, a child's stderr) folds through it (D-4597). */
+export function foldOneLine(text) {
+  return String(text).replace(DISPLAY_FOLD_RE, ' ');
 }
 
 /** What displayToken folds to one space: whitespace (JS `\s`, which has U+2028 and U+2029), every C0 and C1 control

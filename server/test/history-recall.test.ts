@@ -1079,6 +1079,7 @@ type GrepMod = {
   runGrep(rc: GrepRc, a: RGrepArgs, deps?: GrepDeps): GrepVerbResult;
   runDescribe?(rc: GrepRc, a: libRead.DescribeArgs, deps?: { cap?: number }): GrepVerbResult;
   runExpand?: (rc: unknown, a: Record<string, unknown>) => { exit: number; blocks: string[]; items: Array<Record<string, unknown>>; next: string[] | null; hint?: string };
+  describePageEnd(text: string, off: number, room: number, json: boolean, show: (from: number, to: number) => string): { end: number; page: string };
 };
 
 const GRX = {
@@ -1909,6 +1910,7 @@ describe("grep groups only under the scope's own leaves and shows leaf gists as 
     expect(h.stdout, 'the leaf gist does not print the glued value').not.toContain(V);
     const j = grep(['zqspan1', '--json']);
     expect(j.code, `CONTROL: exit 0: ${j.stderr}`).toBe(0);
+    expect(GRX.items(j).length, 'CONTROL: the page has hits').toBeGreaterThan(0);
     expect(GRX.items(j).every((x) => !('gist' in x)), 'CONTROL: --json hit items carry no leaf gist').toBe(true);
     expect(j.stdout, 'a leaf gist added to --json items must go through redactForDisplay').not.toContain(V);
     const h2 = grep(['zqspan2']);
@@ -2396,7 +2398,7 @@ describe('describe: one node, resolved inside the scope (W1-B2 task 15)', () => 
       expect(leaf, 'CONTROL: the boundary derived a leaf').toMatch(/^L[0-9a-f]{20}$/);
       return leaf;
     };
-    // (b) The anchor is the boundary's own uuid: the summary is the first compact summary AFTER it. Row 4, between them,
+    // (b) The anchor is the boundary's own uuid: the summary is the first compact summary AFTER it. Row 5, between them,
     // is another backend's reply, so a count from the boundary would name `other`.
     const own = rH.makeHistoryBox('ccrc-hist-describe-anchorself-');
     GRX.seed(own, T3, GRX.idA, 'demo', [
@@ -2406,11 +2408,14 @@ describe('describe: one node, resolved inside the scope (W1-B2 task 15)', () => 
         uuid: GRX.uuid(T3, 3), ts: GRX.ts(3), parentUuid: GRX.uuid(T3, 2), sessionId: GRX.file(T3),
         trigger: 'manual', headUuid: GRX.uuid(T3, 1), anchorUuid: GRX.uuid(T3, 3), tailUuid: GRX.uuid(T3, 2), allUuids: [],
       }),
-      gpt(T3, 4, 3),
-      rFx.summaryRow({ uuid: GRX.uuid(T3, 5), ts: GRX.ts(5), parentUuid: GRX.uuid(T3, 4), sessionId: GRX.file(T3),
+      // H-204: a non-echo user row sits right after the boundary, so a pick of "the first non-echo row after the boundary"
+      // (the summary predicate dropped) counts from it, sees the gpt row after it, and names `other`.
+      GRX.user(T3, 4, 'zqanchorself between', { parentUuid: GRX.uuid(T3, 3) }),
+      gpt(T3, 5, 4),
+      rFx.summaryRow({ uuid: GRX.uuid(T3, 6), ts: GRX.ts(6), parentUuid: GRX.uuid(T3, 5), sessionId: GRX.file(T3),
         text: GRX_C.summary({ current: 'Anchor-self current work.', next: 'Anchor-self next step.' }) }),
-      GRX.user(T3, 6, 'zqanchorself after the summary'),
-      GRX.assistant(T3, 7, 'zqanchorself reply'),
+      GRX.user(T3, 7, 'zqanchorself after the summary'),
+      GRX.assistant(T3, 8, 'zqanchorself reply'),
     ]);
     const r = GRX.cli(own, GRX.idA, ['describe', leafOf(own), '--json']);
     expect(r.code, r.stderr).toBe(0);
@@ -2433,6 +2438,50 @@ describe('describe: one node, resolved inside the scope (W1-B2 task 15)', () => 
     const e = GRX.cli(echoBox, GRX.idA, ['describe', leafOf(echoBox), '--json']);
     expect(e.code, e.stderr).toBe(0);
     expect(GRX.items(e)[0]?.producer, 'an echo row is never the summary pick: the count starts at the boundary').toBe('other');
+  }, 240_000);
+
+  it('H-205: a live copy decides the producer ahead of a retired copy of the same transcript whose rows would give another one', () => {
+    const T6 = 0x57;
+    const box6 = rH.makeHistoryBox('ccrc-hist-describe-livecopy-');
+    GRX.seed(box6, T6, GRX.idA, 'demo', [
+      GRX.user(T6, 1, 'zqlivecopy question'),
+      GRX.assistant(T6, 2, 'zqlivecopy answer'),
+      rFx.boundaryRow({
+        uuid: GRX.uuid(T6, 3), ts: GRX.ts(3), parentUuid: GRX.uuid(T6, 2), sessionId: GRX.file(T6),
+        trigger: 'manual', headUuid: GRX.uuid(T6, 1), anchorUuid: GRX.uuid(T6, 3), tailUuid: GRX.uuid(T6, 2), allUuids: [],
+      }),
+      rFx.assistantRow({
+        uuid: GRX.uuid(T6, 4), ts: GRX.ts(4), parentUuid: GRX.uuid(T6, 3), sessionId: GRX.file(T6), text: 'an aside', model: 'gpt-fixture',
+        requestId: `req_g${T6}_4`, msgId: `msg_g${T6}_4`,
+      }),
+      rFx.summaryRow({ uuid: GRX.uuid(T6, 5), ts: GRX.ts(5), parentUuid: GRX.uuid(T6, 4), sessionId: GRX.file(T6),
+        text: GRX_C.summary({ current: 'Live copy current work.', next: 'Live copy next step.' }) }),
+      GRX.user(T6, 6, 'zqlivecopy after the summary'),
+      GRX.assistant(T6, 7, 'zqlivecopy reply'),
+    ]);
+    const leaf6 = GRX_C.nodes(box6, GRX.idA).leaves[0] ?? '';
+    expect(leaf6, 'CONTROL: the boundary derived a leaf').toMatch(/^L[0-9a-f]{20}$/);
+    const before = GRX.cli(box6, GRX.idA, ['describe', leaf6, '--json']);
+    expect(before.code, before.stderr).toBe(0);
+    expect(GRX.items(before)[0]?.producer, 'CONTROL: the live copy, counted after its summary').toBe('anthropic');
+    // A retired copy (source_key retired:<sha>, as the sweep's identity retire leaves one) of the same transcript. It holds
+    // the boundary and only the other backend's reply, and its file_id sorts BEFORE the live copy's, so a pick that ignored
+    // `live` (lowest id first) or inverted it would name `other`.
+    const w = new RDatabaseSync(libRead.historyPaths(box6.home).dbFile);
+    try {
+      const live = w.prepare("SELECT dev, ino, transcript_pk, parser_version FROM ingest_files WHERE source_key = ''").get() as { dev: number; ino: number; transcript_pk: number; parser_version: number };
+      const liveId = (w.prepare("SELECT file_id AS f FROM ingest_files WHERE source_key = ''").get() as { f: number }).f;
+      expect(liveId, 'CONTROL: the live copy has a file_id above 0').toBeGreaterThan(0);
+      w.prepare("INSERT INTO ingest_files (file_id, dev, ino, source_key, transcript_pk, status, parser_version) VALUES (0, ?, ?, ?, ?, 'live', ?)")
+        .run(live.dev, live.ino, `retired:${'ab'.repeat(32)}`, live.transcript_pk, live.parser_version);
+      const entry = w.prepare('SELECT entry_id FROM entries WHERE uuid = ?');
+      const member = w.prepare('INSERT INTO memberships (file_id, entry_id, line) VALUES (0, ?, ?)');
+      member.run((entry.get(GRX.uuid(T6, 3)) as { entry_id: number }).entry_id, 1);
+      member.run((entry.get(GRX.uuid(T6, 4)) as { entry_id: number }).entry_id, 2);
+    } finally { w.close(); }
+    const after = GRX.cli(box6, GRX.idA, ['describe', leaf6, '--json']);
+    expect(after.code, after.stderr).toBe(0);
+    expect(GRX.items(after)[0]?.producer, 'the live copy decides, not the retired one').toBe('anthropic');
   }, 240_000);
 
   it('H-13: a condensed node\'s producer is its NEWEST leaf\'s: the reply after the last summary is another backend', () => {
@@ -2507,7 +2556,7 @@ describe('describe: one node, resolved inside the scope (W1-B2 task 15)', () => 
 
   it('describePageEnd redacts at most two windows for the dense summary, human and --json: the first, and at most one halving (HA2 H-16, finding V19)', async () => {
     const lib = await import('../../ccd/history/lib.mjs');
-    const recall = (await GRX.recall()) as unknown as { describePageEnd(text: string, off: number, room: number, json: boolean, show: (from: number, to: number) => string): { end: number; page: string } };
+    const recall = await GRX.recall();
     const idx = lib.makePairIndex([]);
     for (const json of [false, true]) {
       let calls = 0;
@@ -3713,7 +3762,7 @@ describe.skipIf(process.platform === 'darwin')('H-30: grep\'s next: argv is reda
       expect(bare.next, 'CONTROL: there is a next page').not.toBeNull();
       expect(bare.next!.join(' '), 'CONTROL: with no pairs the argv echoes the value').toContain(Kp);
       const pairOnly = libRead.makePairIndex(libRead.secretPairs([Kp]).pairs);
-      expect(pairOnly.belt ?? null, 'CONTROL: the value is a pair and no belt unit').toBeNull();
+      // makePairIndex is called without a belt argument, so the index holds the value as a pair and no belt unit.
       rc.pairIdx = pairOnly;
       const r = recall.runGrep(rc, a);
       expect(r.next, 'CONTROL: there is a next page').not.toBeNull();
@@ -4410,25 +4459,83 @@ describe.skipIf(process.platform === 'darwin')('HA1: the read verbs fit the cap,
     }
   }, 2 * HEAVY);
 
+  it('H-171: a stored sidecar name holding VT, FF, FS, GS, RS and NEL forges no line, in grep and expand, human and --json', async () => {
+    const name = 'zq\u000bA\u000cB\u001cC\u001dD\u001eE\u0085F G.txt';
+    const recall = await GRX.recall();
+    const w = writer(box);
+    try {
+      w.prepare('UPDATE sidecars SET name = ? WHERE name = ?').run(name, 'zqha1side.txt');
+      const rc = await GRX.rc(box, HID);
+      try {
+        for (const json of [false, true]) {
+          const x = recall.runExpand!(rc, { target: h(3), around: null, before: 5, after: 5, cursor: null, json });
+          expect(x.exit).toBe(0);
+          expect(JSON.stringify(x.items), 'CONTROL: it is a sidecar item').toContain('"kind":"sidecar"');
+          expect(JSON.stringify(x.items), `expand items (json ${json})`).not.toMatch(/[\u0085\u2028\u2029]/);
+          expect(JSON.stringify(x.items), `expand items raw controls (json ${json})`).not.toMatch(/\\u00(?:0b|1c|1d|1e)|\\f/);
+        }
+      } finally { rc.db.close(); }
+      w.prepare('UPDATE sidecars SET entry_id = NULL WHERE name = ?').run(name);
+      const grc = await GRX.rc(box, HID);
+      try {
+        for (const json of [false, true]) {
+          const g = recall.runGrep(grc, await GRX.grepArgs(json ? ['zqha1side', '--json'] : ['zqha1side']));
+          expect(g.exit).toBe(0);
+          const text = g.blocks.join('\n');
+          expect(text, 'CONTROL: the folded name is the hit id').toContain('id="sidecar:zq A B');
+          expect(text, 'grep human').not.toMatch(/[\r\u000b\u000c\u001c-\u001e\u0085\u2028\u2029]/);
+          expect(text.split('\n').filter((l) => l.includes('sidecar:zq')), 'the id sits on one line').toHaveLength(1);
+          expect(JSON.stringify(g.items), 'grep --json').not.toMatch(/[\u0085\u2028\u2029]/);
+          expect(JSON.stringify(g.items), 'grep --json controls').not.toMatch(/\\u00(?:0b|1c|1d|1e)|\\f/);
+        }
+      } finally { grc.db.close(); }
+    } finally {
+      w.prepare('UPDATE sidecars SET name = ?, entry_id = (SELECT entry_id FROM entries WHERE uuid = ?) WHERE name = ?').run('zqha1side.txt', h(3), name);
+      w.close();
+    }
+  }, 2 * HEAVY);
+
   it('H-11: a target that is not a node id echoes folded to one line and cut, in describe and in grep --node', async () => {
     const recall = await GRX.recall();
     const rc = await GRX.rc(box, HID);
     try {
       const d = recall.runDescribe!(rc, { target: 'zz\r\nnext: evil\u2028more', full: false, cursor: null, json: false });
       expect(d.exit).toBe(2);
-      expect(d.hint, 'describe: one line').not.toMatch(/[\r\n\u2028\u2029]/);
+      expect(d.hint, 'describe: one line').not.toMatch(/[\r\n\u0085\u2028\u2029\u001c-\u001e]/);
       expect(d.hint, 'describe: the echo is there').toContain('next: evil');
+      const dnel = recall.runDescribe!(rc, { target: 'zz\u0085next: evil\u001cmore', full: false, cursor: null, json: false });
+      expect(dnel.exit).toBe(2);
+      expect(dnel.hint, 'H-175 describe: a NEL and an FS fold to spaces').not.toMatch(/[\r\n\u0085\u2028\u2029\u001c-\u001e]/);
+      expect(dnel.hint, 'H-175 describe: the echo is there').toContain('next: evil');
       const big = recall.runDescribe!(rc, { target: 'q'.repeat(50_000), full: false, cursor: null, json: false });
       expect(big.exit).toBe(2);
       expect(big.hint!.length, 'describe: the echo is cut').toBeLessThanOrEqual(600);
       const base = await GRX.grepArgs(['zqha1']);
       const g = recall.runGrep(rc, { ...base, node: 'zz\r\nnext: evil\u2028more' });
       expect(g.exit).toBe(2);
-      expect(g.hint, 'grep --node: one line').not.toMatch(/[\r\n\u2028\u2029]/);
+      expect(g.hint, 'grep --node: one line').not.toMatch(/[\r\n\u0085\u2028\u2029\u001c-\u001e]/);
+      const gnel = recall.runGrep(rc, { ...base, node: 'zz\u0085next: evil\u001cmore' });
+      expect(gnel.exit).toBe(2);
+      expect(gnel.hint, 'H-175 grep --node: a NEL and an FS fold to spaces').not.toMatch(/[\r\n\u0085\u2028\u2029\u001c-\u001e]/);
+      expect(gnel.hint, 'H-175 grep --node: the echo is there').toContain('next: evil');
       const gbig = recall.runGrep(rc, { ...base, node: 'q'.repeat(50_000) });
       expect(gbig.exit).toBe(2);
       expect(gbig.hint!.length, 'grep --node: the echo is cut').toBeLessThanOrEqual(600);
     } finally { rc.db.close(); }
+  }, HEAVY);
+
+  it('H-159: the regex-syntax hint echoes the query folded and cut', () => {
+    const lines = (r: CliRun): string[] => r.stdout.split('\n');
+    const human = cli(['grep', 'a|b\nzqforged line']);
+    expect(human.code, human.stderr).toBe(2);
+    expect(lines(human).filter((l) => l.startsWith('hint: ')), 'one hint line').toHaveLength(1);
+    expect(lines(human).filter((l) => l.startsWith('zqforged')), 'no forged line').toEqual([]);
+    expect(human.stdout, 'CONTROL: the echo is there').toContain('a|b');
+    const big = cli(['grep', `a|b${'z'.repeat(50_000)}`, '--json']);
+    expect(big.code, big.stderr).toBe(2);
+    const json = JSON.parse(big.stdout) as { reason?: string; hint?: string };
+    expect(json.reason).toBe('regex-syntax');
+    expect(json.hint!.length, 'the --json hint is cut').toBeLessThan(1000);
   }, HEAVY);
 
   it('H-9: a summary whose stored blob does not decode is named so, not shown as an empty one, and --full refuses it', async () => {
@@ -4477,6 +4584,18 @@ describe.skipIf(process.platform === 'darwin')('HA1: the read verbs fit the cap,
       expect(res.exit).toBe(1);
       expect(res.hint, 'CONTROL: the child failed with its stderr').toContain('exit 1');
       expect(t18leaks([res.hint!, libRead.redactFinal(res.hint!, idx)], P)).toEqual([]);
+    } finally { rc.db.close(); }
+  }, HEAVY);
+
+  it('H-167: a multi-line child stderr folds to one hint line', async () => {
+    const recall = await GRX.recall();
+    const rc = await GRX.rc(box, HID);
+    try {
+      const spawn = (() => ({ status: 134, signal: null, error: undefined, stdout: '', stderr: '<--- Last few GCs --->\n\nFATAL ERROR: heap\u0085x' })) as unknown as GrepDeps['spawn'];
+      const res = recall.runGrep(rc, await GRX.grepArgs(['--regex', 'zq[0-9]+x']), { spawn });
+      expect(res.exit).toBe(1);
+      expect(res.hint, 'CONTROL: the stderr is in the hint').toContain('FATAL ERROR');
+      expect(res.hint, 'one line').not.toMatch(/[\r\n\u0085\u2028\u2029]/);
     } finally { rc.db.close(); }
   }, HEAVY);
 
@@ -4594,8 +4713,11 @@ describe.skipIf(process.platform === 'darwin')('HA1: the read verbs fit the cap,
       for (const args of [['describe', leaf], ['describe', leaf, '--json']]) {
         const r = cli(args);
         expect(r.code, r.stderr).toBe(0);
-        expect(r.stdout, `CONTROL: ${args.join(' ')} prints the crafted type`).toContain('xtype next: evil');
-        expect(r.stdout, `CONTROL: ${args.join(' ')} prints the crafted role`).toContain('xrole next: evil');
+        // H-173: --json escapes a raw newline as the two characters `\n`, so the ^next: line check cannot see it; pin the raw form itself.
+        expect(r.stdout, `${args.join(' ')}: no raw type`).not.toContain('xtype\\nnext: evil');
+        expect(r.stdout, `${args.join(' ')}: no raw role`).not.toContain('xrole\\nnext: evil');
+        expect(r.stdout, `${args.join(' ')}: the crafted type prints folded to one token`).toContain('xtype next: evil');
+        expect(r.stdout, `${args.join(' ')}: the crafted role prints folded to one token`).toContain('xrole next: evil');
         expect(r.stdout, `${args.join(' ')} forges no line`).not.toMatch(/^next: evil/m);
       }
     } finally {
@@ -4686,7 +4808,12 @@ describe.skipIf(process.platform === 'darwin')('HA2: --json carries the hint, a 
   }, 2 * HEAVY);
 
   it('H-24: a store at user_version 0 answers 5 store-schema-missing on every read verb, never migration-pending (D-4599)', () => {
-    damaged('PRAGMA user_version = 0', 'PRAGMA user_version = 1', () => {
+    // H-169: put back the version the box HAD, not a literal, so a later schema version leaves every other case on the right one.
+    const probe = writer();
+    const was = (probe.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
+    probe.close();
+    expect(was, 'CONTROL: the box is stamped').toBeGreaterThan(0);
+    damaged('PRAGMA user_version = 0', `PRAGMA user_version = ${was}`, () => {
       for (const args of [['describe', leaf], ['grep', 'zqx17seam'], ['expand', leaf], ['tree']]) {
         const r = cli([...args, '--json']);
         expect([args[0], r.code, r.json?.['reason']], r.stderr).toEqual([args[0], 5, 'store-schema-missing']);

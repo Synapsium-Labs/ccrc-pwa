@@ -2073,7 +2073,7 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
       Array.from({ length: 1 << 15 }, (_, i) => `\x1b[3${(i % 7) + 1}m${'abcdefg'[i % 7]}\x1b(B\x1b[m`).join(''),
       '\x1bP12a' + 'x\x1b[1m'.repeat(1 << 15) + '\x1b7' + 'x\x1b[1m'.repeat(1 << 15),
     ]) {
-      // Linear against the same text without its sequences, measured in this test (H-17): an absolute bound failed at a load
+      // Linear against the same text with its ESC bytes removed (the sequence bodies stay), measured in this test (H-17): an absolute bound failed at a load
       // of 126 (16 s against 5 s) and passed alone in 8 s. Each side keeps its minimum of three rounds, and the bound's
       // constant slack covers a field whose plain reading is a few milliseconds. Measured here: 6x to 54x the plain reading
       // (the 54x one has the most sequences per character), a quadratic reading far above 100x.
@@ -2091,7 +2091,7 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
       }
       expect(tSpan, `${JSON.stringify(s.slice(0, 8))}: ${tSpan.toFixed(0)} ms against ${tPlain.toFixed(0)} ms plain`).toBeLessThan(100 * tPlain + 1000);
     }
-  }, 120_000);
+  }, 300_000);   // H-207: a ceiling, not the detector (the ratio bound decides): 14.55 s at load 36 scales to 60-80 s at the recorded 142-196
   it('FU1S: the lead reading\'s candidates skip the context layer, which can match nothing in them, so a span of short dotted words costs a few redactions of it', () => {
     const none = libRedact.makePairIndex([]);
     const body = 'a.'.repeat(1 << 15);
@@ -6267,15 +6267,36 @@ describe('lib: version-aware reads (W1-B2 Task 17; spec §6.11 "The CLI keeps an
 describe('C43: no ccd/history module prepares SELECT * (W1-B2 Task 17; the server/src/coord/db.ts rule)', () => {
   /** Star selects in code, with comments removed: a block comment, and a line comment not preceded by `:` (a
    *  URL) or a quote. Known limits (H-23): a SQL string built by concatenation, so a star in a later literal than its
-   *  SELECT, and a `//` inside an earlier string, which the comment strip reads as a comment. Neither is in the tree. */
+   *  SELECT, and a `//` inside an earlier string, which the comment strip reads as a comment. Neither is in the tree.
+   *  H-206: a balanced `${...}` interpolation (braces counted, so a nested one is whole) is replaced by `0` and a
+   *  single-quoted SQL literal inside a SELECT list is skipped, so `SELECT ${selectColumns(rc.version, 'nodes', [...])}, n.*`
+   *  (the codebase's shape) and `SELECT a, 'x' AS k, e.*` are seen. Still not seen: a `"` or a backtick inside the list,
+   *  a brace inside a quoted string in an interpolation, and a SELECT written in a single-quoted JS string. */
+  const dropInterpolations = (src: string): string => {
+    let out = '';
+    for (let i = 0; i < src.length; i += 1) {
+      if (src[i] === '$' && src[i + 1] === '{') {
+        let depth = 0;
+        let j = i + 1;
+        for (; j < src.length; j += 1) {
+          if (src[j] === '{') depth += 1;
+          else if (src[j] === '}' && (depth -= 1) === 0) break;
+        }
+        out += '0';
+        i = j;
+      } else out += src[i];
+    }
+    return out;
+  };
   const starSelects = (src: string): string[] => {
-    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');
+    const code = dropInterpolations(src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1'));
     return [
       // a star right after SELECT, SELECT ALL or SELECT DISTINCT, bare or qualified
       /\bSELECT\s+(?:(?:ALL|DISTINCT)\s+)?(?:[A-Za-z_][A-Za-z0-9_]*\.)?\*/gi,
       /\bRETURNING\s+(?:[A-Za-z_][A-Za-z0-9_]*\.)?\*/gi,
-      // a star after a comma inside a SELECT list, up to the next quote or `;` (COUNT(*) is `(*`, so it is not one)
-      /\bSELECT\b[^;`'"]*?,\s*(?:[A-Za-z_][A-Za-z0-9_]*\.)?\*/gi,
+      // a star after a comma inside a SELECT list, up to the next double quote, backtick or `;`, stepping over a
+      // single-quoted literal (COUNT(*) is `(*`, so it is not one)
+      /\bSELECT\b(?:[^;`'"]|'[^']*')*?,\s*(?:[A-Za-z_][A-Za-z0-9_]*\.)?\*/gi,
     ].flatMap((re) => [...code.matchAll(re)].map((m) => m[0]));
   };
 
@@ -6295,6 +6316,15 @@ describe('C43: no ccd/history module prepares SELECT * (W1-B2 Task 17; the serve
     expect(starSelects('db.prepare("SELECT COUNT(*) AS n, max(a) FROM x")')).toEqual([]);
     expect(starSelects('db.prepare("SELECT a, b * 2 AS c FROM x")')).toEqual([]);
     expect(starSelects('db.prepare("INSERT INTO x (a) VALUES (1) RETURNING id")')).toEqual([]);
+  });
+
+  it("CONTROL (H-206): the scan sees a star after a ${...} interpolation with quoted arguments, and after a quoted literal", () => {
+    expect(starSelects("db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', ['node_id'], rc.schema)}, n.* FROM nodes n`)"), 'after an interpolation').toHaveLength(1);
+    expect(starSelects("db.prepare(`SELECT ${cols({ a: { b: 1 } })}, n.* FROM nodes n`)"), 'a nested brace').toHaveLength(1);
+    expect(starSelects("db.prepare(`SELECT ${v ? `a, b` : \"c\"}, n.* FROM nodes n`)"), 'a backtick and a double quote inside the interpolation').toHaveLength(1);
+    expect(starSelects('db.prepare("SELECT a, \'x\' AS k, e.* FROM e")'), 'after a quoted literal').toHaveLength(1);
+    expect(starSelects("db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', ['node_id'], rc.schema)} FROM nodes n`)"), 'no star').toEqual([]);
+    expect(starSelects('db.prepare("SELECT a, \'x\' AS k, b * 2 AS c FROM e")'), 'a product after a literal').toEqual([]);
   });
 
   it('every ccd/history/*.mjs names its columns', () => {
@@ -6627,6 +6657,20 @@ describe('lib: HA2, the read verbs\' envelope, schema word, shared readers and s
     const literal = "step = 'recover' AND completed_ms IS NULL LIMIT 1";
     const holders = sources().filter(([, src]) => src.includes(literal)).map(([f]) => f);
     expect(holders).toEqual(['store.mjs']);
+  });
+
+  it('H-7 / H-166: recoverOpenOn is declared in store.d.mts and answers false on a store with no open step, true with one', () => {
+    const file = join(mkTmp('ccrc-hist-h166-'), 'history.db');
+    const w = new ReplaySqlite(file);
+    w.exec('CREATE TABLE derivation_state (step TEXT NOT NULL, version INTEGER NOT NULL, cursor TEXT, completed_ms INTEGER)');
+    w.close();
+    const reader = replayStore.openReader(file);
+    try { expect(replayStore.recoverOpenOn(reader), 'a fresh store has no open step').toBe(false); } finally { reader.close(); }
+    const w2 = new ReplaySqlite(file);
+    w2.exec("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', 1, NULL, NULL)");
+    w2.close();
+    const reader2 = replayStore.openReader(file);
+    try { expect(replayStore.recoverOpenOn(reader2), 'CONTROL: an open recover step').toBe(true); } finally { reader2.close(); }
   });
 
   it('H-25: schemaAdditive names a measured column set that is no array, and reads a null measurement as none', () => {
