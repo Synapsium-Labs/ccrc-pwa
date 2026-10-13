@@ -28,7 +28,7 @@ time.
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
 | 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merged `6e4524164` 2026-10-12; run 322 closed `done`, `final:true` (R37) |
-| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | review 403 accepted; fix round 3, wording only (R45) |
+| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | fix round 3 verified at `5aa5dbadb`; scoped review 404 dispatched (R46) |
 
 ## Decisions & deviations
 
@@ -980,6 +980,21 @@ time.
     title. The words are in shipped comments and a test header, so they are fixed before merge, not parked. This is
     the last round: any further wording finding goes to the post-merge residue list.
     - Parked: the long lines (style), and README :5413-5417 (claim 1204, run 398; follow-up list).
+- **R46 (2026-10-13 00:24)**, fix round 3 is verified at `5aa5dbadb`, and scoped review run 404 is dispatched.
+  - Wave-done mail 4439 (`ccrc-pwa-bright-cove`): three commits, `4e0b91515`, `392e14ba2` and `5aa5dbadb`, all
+    words. Re-measured: the tip equals PR #362's head; merge-tree with `origin/main` `2d1835188` is clean; PR CI run
+    38324108522 passed every required leg (macOS pending, advisory). Run 394 advanced to `awaiting-review`.
+  - Measured here: `git diff 3a28932a7..5aa5dbadb -- ccd server` changes only comments and the one renamed title.
+  - Substitution, named by the worker: R45's "1e17 and above" is false. On this box's jq-1.7, 1e16, 2e16 and
+    9999999999999999 print in exponent form, while 1.01e17 prints in full, so no size cut describes the rule. The
+    hook now says which values print that way follows jq's number formatting, and the test title says "printed by
+    jq in exponent form". Accepted, pending review 404's own measurement; R45's "below 1e17" in F7's ruling reads
+    as "printed in full by jq". Behaviour is unchanged either way.
+  - The worker ran three re-runs below the 8 GiB floor and named it. CI ran those files at the tip, and CI is the
+    arbiter.
+  - Review run 404 (`ccrc-pwa-calm-hollow`) reads `3a28932a7..5aa5dbadb` with the panel. It checks that the
+    diff is words only, items 1-7, the jq table behind item 1, the renamed title's plan rows and counts, and the
+    wave's ledger properties.
 
 ## Carried constraints (reviewers get these)
 
