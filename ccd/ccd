@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=c6aa9f0268d98aae3b6c58be29af58fe8cb69d2a10702a440113aa82ceac61f2
+# ccrc:generated 1 sha256=03c02eff293f850e347f9a769120d5903ef02327b592cd01d382f9f511aa167a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -5395,13 +5395,20 @@ PR_JSON_FIELDS=number,state,headRefName,headRefOid,baseRefName,isCrossRepository
 PR_CHECK_FIELD=statusCheckRollup
 
 _gh_repo_slug() {   # main-checkout path -> OWNER/NAME, or non-zero
-  # Three guards, and the mutation sweep says the last one subsumes the first
-  # two: with no origin `git config --get` exits 1 AND prints nothing, so both
-  # `|| return 1` and `[[ -n "$url" ]]` can be deleted with the suite still
-  # green — the regex rejects "" on its own. They stay because the fall-through
-  # only holds while the regex is anchored at both ends, and this function's
-  # answer is spent as `--repo` on a WRITE-scoped token: each guard states the
-  # case it is about rather than relying on a later line to catch it.
+  # The first two guards are subsumed by what follows them, and the mutation
+  # sweep says so: with no origin `git config --get` exits 1 AND prints nothing,
+  # so both `|| return 1` and `[[ -n "$url" ]]` can be deleted with the suite
+  # still green. An empty url then falls to the prefix `case`'s `*) return 1`
+  # arm, and before that arm existed the anchored regex rejected "" on its own.
+  # They stay because this function's answer is spent as `--repo` on a
+  # WRITE-scoped token: each guard states the case it is about rather than
+  # relying on a later line to catch it.
+  #
+  # `local LC_ALL=C` makes the regex's ranges ASCII. Under a UTF-8 locale such
+  # as en_US.UTF-8, bash matches `[A-Za-z]` by collation, so `o/r` with an
+  # accented or fullwidth letter matched and went out as a slug. The docs
+  # helper's `re.fullmatch` matches by code point, so the two copies disagreed.
+  # This is the house idiom `_pool_name_valid` uses for its ASCII grammar.
   #
   # Two more guards, from decision 11 of the Share/Export design, and neither is
   # subsumed by the regex — its alphabet admits `.`, so `owner/name`, `../x` and
@@ -5417,9 +5424,12 @@ _gh_repo_slug() {   # main-checkout path -> OWNER/NAME, or non-zero
   #   - Neither segment after the prefix may be `.`, `..` or start with `.`. A
   #     dot segment is a path step, not an owner or a name, and `../x` spliced
   #     into a URL or a `--repo` names something other than what the origin said.
+  #     Worded this way, the rule also refuses a real repository whose name
+  #     starts with a dot, such as an organisation's `.github`. M3.12 pins that
+  #     verdict, so narrowing it to `.` and `..` is a decision, not a drift.
   # `slug_from_url` in the docs helper below is this rule, statement for
   # statement, and M3.12 binds the two by verdict over one corpus.
-  local url rest seg
+  local LC_ALL=C url rest seg
   url=$(git -C "$1" config --get remote.origin.url 2>/dev/null) || return 1
   [[ -n "$url" ]] || return 1
   url="${url%.git}"
@@ -35450,7 +35460,9 @@ def slug_from_url(url):
     is not a GitHub repository); then owner/name is required; then neither
     segment may be '.', '..' or start with '.' (decision 11: a dot segment is a
     path step, and this slug is spent as gh --repo on a write-scoped token and
-    as the docs wire's github slug)."""
+    as the docs wire's github slug; so a real leading-dot name such as .github
+    is refused too, a verdict M3.12 pins). re.fullmatch matches GH_SLUG_RE's
+    ranges by code point, which bash's `local LC_ALL=C` gives its regex."""
     if not url:
         return None
     u = url[:-len('.git')] if url.endswith('.git') else url

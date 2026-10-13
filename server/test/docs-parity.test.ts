@@ -386,7 +386,8 @@ import * as slugPath from 'node:path';
 import * as slugWs from './ccdWsHelpers.js';
 import * as slugPy from './docsHelperPy.js';
 
-/** A python string literal (the corpus is ASCII). */
+/** A python string literal. JSON's escapes are valid python escapes, and a non-ASCII character goes into the
+ *  UTF-8 source as itself, which python reads as UTF-8 by default. */
 const slugQ = (v: string): string => JSON.stringify(v);
 
 slugVitest.describe('M3.12: slug_from_url gives _gh_repo_slug\'s verdict on every origin URL', () => {
@@ -426,6 +427,15 @@ slugVitest.describe('M3.12: slug_from_url gives _gh_repo_slug\'s verdict on ever
     ['a GitLab scp form', 'git' + '@gitlab.com:o/r', null],
     ['dots INSIDE both segments stay accepted', 'git@github.com:o.x/r..y.git', 'o.x/r..y'],
     ['a trailing dot is not a leading one', 'https://github.com/o/r.', 'o/r.'],
+    ['one .git strips, leaving . as the name (decision 11)', 'https://github.com/o/..git', null],
+    ['. as the owner after the https prefix (decision 11)', 'https://github.com/./x', null],
+    ['a leading-dot name such as .github is refused, as decision 11 words it', 'https://github.com/example-org/.github', null],
+    // Non-ASCII letters: bash's ranges collate under a UTF-8 locale unless the function pins LC_ALL=C, and python's
+    // match by code point. The test inherits the caller's locale, so on a host whose LANG collates these rows are
+    // the ones that catch a missing pin.
+    ['a non-ASCII letter in the name', `https://github.com/o/r${String.fromCharCode(0xe9)}`, null],
+    ['a non-ASCII letter in the owner', `https://github.com/${String.fromCharCode(0xf3)}/r`, null],
+    ['a fullwidth letter', `git@github.com:${String.fromCharCode(0xff4f)}/r.git`, null],
   ];
 
   slugVitest.it('every row: bash, the runner read and the literal string agree, and match the table', () => {
