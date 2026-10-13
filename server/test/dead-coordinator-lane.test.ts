@@ -367,6 +367,35 @@ describe('the act’s own re-measure', () => {
       .toMatchObject({ firstDeadAt: T0 + HOUR - 60_000 + 2 * (CHILD_RECLAIM_SWEEP_MS + 1) });
   });
 
+  it('the act\'s re-measured delete is STAGED (D-4857; review 401, F6; D-4916): a commit that fails on it leaves the anchor standing and the delete pending, and a crash then starts a fresh anchor', async () => {
+    let revive = false;
+    let restore: (() => void) | null = null;
+    const f: Fixture = await fixture({ beforeAct: () => {
+      if (!revive) return;
+      f.live.add(A);                                    // the revive the act sees inside the serialiser...
+      restore = failSql(f, /^UPDATE dead_coordinator_breaker_state SET generation/);   // ...and the commit that carries its delete fails
+    } });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    f.plant(A);
+    const r = f.working(A);
+    await f.pass(); await walk(f, HOUR - 60_000);
+    revive = true;
+    f.next(); await f.pass();
+    (restore as (() => void) | null)?.();
+    revive = false;
+    expect(f.stateOf(r), 'the act re-measured it alive and stopped').toBe('working');
+    expect(f.anchorOf(A), 'the delete did not land: the anchor STANDS').not.toBeNull();
+    const pending = (f.watcher() as unknown as { deadCoordinatorAnchorsPending: Map<string, unknown> }).deadCoordinatorAnchorsPending;
+    expect(pending.has(A) && pending.get(A), 'and the delete is still PENDING').toBeNull();
+    expect(pending.has(A)).toBe(true);
+    expect(f.coord.deadCoordinatorBreakerState(), 'the commit failed: dirty').toMatchObject({ kind: 'dirty' });
+    f.live.delete(A);                                   // it crashed again: the pending delete is laid over the standing anchor
+    f.next(); await f.pass();
+    expect(f.anchorOf(A), 'a FRESH anchor, not the pre-revive one').toMatchObject({ firstDeadAt: T0 + HOUR - 60_000 + 2 * (CHILD_RECLAIM_SWEEP_MS + 1) });
+    expect(f.coord.deadCoordinatorBreakerState()).toMatchObject({ kind: 'clean' });
+  });
+
   it('a mirror that goes STALE between the pass and the act stops it as a hold: the anchor and the run of passes stand (review 339, F4)', async () => {
     let slow = false;
     const f: Fixture = await fixture({ beforeAct: () => { if (slow) f.advance(20_000); } });   // three sweep intervals and more
