@@ -932,14 +932,26 @@ export function deadCoordinatorBreakerFeedRow(b: Extract<DeadCoordinatorBreaker,
   return { title: 'dead coordinator: breaker tripped', body: `${deadCoordinatorBreakerSentence(b)} (holding since ${iso(b.since)})` };
 }
 
-/** WHY the lane's first pass seeds its hold conservatively (D-4857; review 382, R2): its typed breaker state is
+/** WHY the lane's first pass seeds its hold conservatively (D-4857; review 382, R2; D-4916): its typed breaker state is
  *  `absent` (no lane of this release has written it — the deploy that creates the table), `dirty` (a pass marked it
- *  before changing anchors and its commit did not land) or `unreadable` (`reason`: a bounded string, never the row's
- *  content). Three causes, three sets of words, one rule: hold every claimant the pass does not release, flagged. */
+ *  before changing anchors and its commit did not land), `unsealed` (it reads `clean`, but no clean shutdown sealed it: the
+ *  last server ended by a kill, a crash or a stop that outlived its timeout, and a start trusts ONLY `sealed`) or
+ *  `unreadable` (`reason`: a bounded string, never the row's content). Four causes, four sets of words, one rule: hold
+ *  every claimant the pass does not release, flagged. */
 export type DeadCoordinatorSeedCause =
   | { readonly kind: 'absent' }
   | { readonly kind: 'dirty'; readonly generation: number }
+  | { readonly kind: 'unsealed'; readonly generation: number }
   | { readonly kind: 'unreadable'; readonly reason: string };
+
+/** The answer of `FleetWatcher.sealDeadCoordinatorBreaker` (D-4916): sealed, or WHY it wrote nothing. `no-store`: no
+ *  coordination store. `pass-in-flight`: a pass still ran after the bound. `no-landed-write`: this process has written
+ *  nothing to the state, so it has nothing to vouch for. `already-sealed`. `changes-pending`: an anchor change no commit has
+ *  landed. `not-durably-clean`: the state is not known clean. `key-mismatch`: the held set is not the one the last commit
+ *  wrote. `write-failed`: the seal's statement was refused or threw. */
+export type DeadCoordinatorSealResult =
+  | { readonly sealed: true; readonly generation: number }
+  | { readonly sealed: false; readonly reason: 'no-store' | 'pass-in-flight' | 'no-landed-write' | 'already-sealed' | 'changes-pending' | 'not-durably-clean' | 'key-mismatch' | 'write-failed' };
 
 /** The feed row for a pass that seeded its hold conservatively: written once, by the pass that seeds, through
  *  `recordRows` — a record, never a push, and no new attention kind. `held` is who the breaker held that pass as members;
@@ -955,8 +967,11 @@ export function deadCoordinatorBreakerSeedFeedRow(
     : cause.kind === 'dirty'
       ? ['dead coordinator: breaker state left dirty',
         `The lane found its breaker state left dirty (generation ${cause.generation}: a pass marked it before changing anchors, and its commit did not land), `]
-      : ['dead coordinator: breaker record unreadable',
-        `The lane could not read its record of the breaker's hold (the breaker state row: ${cause.reason}), `];
+      : cause.kind === 'unsealed'
+        ? ['dead coordinator: breaker state not sealed',
+          `The lane found its breaker state clean but not sealed (generation ${cause.generation}: the last server did not end through a clean shutdown, and a start trusts only a sealed state), `]
+        : ['dead coordinator: breaker record unreadable',
+          `The lane could not read its record of the breaker's hold (the breaker state row: ${cause.reason}), `];
   const record = cause.kind === 'absent' ? 'the first record' : 'a fresh record';
   const tail = 'Every crashed coordinator\'s hour restarts at this pass. '
     + (landed ? `It wrote ${record}.` : `It could not write ${record} yet, and ends nothing until one is written.`);

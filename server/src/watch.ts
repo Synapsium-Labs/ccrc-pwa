@@ -119,7 +119,7 @@ import {
   deadCoordinatorNextEntry, deadCoordinatorOutcomeKey, deadCoordinatorSighted, deadCoordinatorSince, deadCoordinatorThrew,
   type ClaimantDeadCause, type DeadAnchor, type DeadCoordinatorActOutcome, type DeadCoordinatorBreaker,
   type DeadCoordinatorBreakerMember, type DeadCoordinatorEntry, type DeadCoordinatorJournal, type DeadCoordinatorJournalTrust,
-  type DeadCoordinatorSeedCause,
+  type DeadCoordinatorSealResult, type DeadCoordinatorSeedCause,
 } from './deadCoordinator.js';
 import {
   DeadCoordinatorActThrew, deadCoordinatorLaneArmed, endDeadCoordinator, readDeadCoordinatorJournalTrust, recordDeadCoordinatorBreaker, recordDeadCoordinatorBreakerSeed,
@@ -1336,6 +1336,19 @@ export class FleetWatcher {
   private deadCoordinatorBreakerDurableClean = false;
   private deadCoordinatorAnchorsPending = new Map<string, DeadAnchor | null>();
   private deadCoordinatorBreakerHeldRunId: number | null = null;
+  /** THE SEAL (fix round 5, D-4916; the operator's choice of 2026-10-13, "Seal on clean shutdown"). A start trusts the
+   *  stored snapshot ONLY when it reads `sealed`; `Generation` is the generation of the row this process last read or wrote;
+   *  `UnsealPending` is a sealed start's first-pass duty, writing `clean` back (retried each pass until it lands); `Landed`
+   *  says a write of THIS process has landed (the unseal, or a dirty mark): until it has, the `unchanged` fast path is
+   *  refused and nothing seals; `Sealed` says this process's seal landed; `Stopped` is set by the first seal attempt, after
+   *  which no pass runs; `PassRun` is the pass in flight, which a seal attempt awaits with a bound. */
+  private deadCoordinatorBreakerGeneration: number | null = null;
+  private deadCoordinatorBreakerUnsealPending = false;
+  private deadCoordinatorBreakerUnsealWarned = false;
+  private deadCoordinatorBreakerLanded = false;
+  private deadCoordinatorBreakerSealed = false;
+  private deadCoordinatorStopped = false;
+  private deadCoordinatorPassRun: Promise<void> | null = null;
   private deadCoordinatorAttentionList: readonly DeadCoordinatorAttention[] = [];
   /** The coordination serialiser's sweep handle (`CoordRoutesHandle.withSweepAbandon`), handed over by `buildServer`
    *  once `registerCoordRoutes` has built it. Until then the lane measures and records, and ends nothing. */
@@ -4834,15 +4847,79 @@ export class FleetWatcher {
    */
   async sweepDeadCoordinators(records: readonly SessionRecord[], names: readonly string[]): Promise<void> {
     const coord = this.deps.coord;
-    if (!coord || this.deadCoordinatorSweeping) return;
+    if (!coord || this.deadCoordinatorSweeping || this.deadCoordinatorStopped) return;
     const now = Date.now();
     if (this.lastDeadCoordinatorSweep !== 0 && now - this.lastDeadCoordinatorSweep < CHILD_RECLAIM_SWEEP_MS) return;
     this.lastDeadCoordinatorSweep = now;
     this.deadCoordinatorSweeping = true;
+    const run = this.deadCoordinatorPass(coord, records, names, now);
+    this.deadCoordinatorPassRun = run;
     try {
-      await this.deadCoordinatorPass(coord, records, names, now);
+      await run;
     } finally {
       this.deadCoordinatorSweeping = false;
+      this.deadCoordinatorPassRun = null;
+    }
+  }
+
+  /** SEAL THE BREAKER'S STATE (D-4916), synchronously, over a pass that is not running: the shutdown handler's one act on the
+   *  lane (`sealDeadCoordinatorBreaker` awaits a pass first). The first attempt STOPS the lane — no pass runs after it, so
+   *  nothing can change the state behind the seal. It writes `sealed` (one generation-checked statement over the same
+   *  snapshot) ONLY when all of these hold, tested in this order, and otherwise writes nothing and says why: a store; no
+   *  pass in flight; a write of this process has landed; not already sealed; no anchor change pending; the state durably
+   *  clean; the held set's key the one the last commit wrote. Never throws. */
+  sealDeadCoordinatorBreakerNow(): DeadCoordinatorSealResult {
+    this.deadCoordinatorStopped = true;
+    const coord = this.deps.coord;
+    if (!coord) return { sealed: false, reason: 'no-store' };
+    if (this.deadCoordinatorSweeping) return { sealed: false, reason: 'pass-in-flight' };
+    if (!this.deadCoordinatorBreakerLanded || this.deadCoordinatorBreakerGeneration === null) return { sealed: false, reason: 'no-landed-write' };
+    if (this.deadCoordinatorBreakerSealed) return { sealed: false, reason: 'already-sealed' };
+    if (this.deadCoordinatorAnchorsPending.size > 0) return { sealed: false, reason: 'changes-pending' };
+    if (!this.deadCoordinatorBreakerDurableClean) return { sealed: false, reason: 'not-durably-clean' };
+    if (deadCoordinatorBreakerHeldKey(this.deadCoordinatorBreakerHeld) !== this.deadCoordinatorBreakerCommittedKey) return { sealed: false, reason: 'key-mismatch' };
+    try {
+      const w = coord.sealDeadCoordinatorBreakerState(this.deadCoordinatorBreakerGeneration);
+      if (!w.ok) return { sealed: false, reason: 'write-failed' };
+      this.deadCoordinatorBreakerSealed = true;
+      this.deadCoordinatorBreakerGeneration = w.generation;
+      return { sealed: true, generation: w.generation };
+    } catch {
+      return { sealed: false, reason: 'write-failed' };
+    }
+  }
+
+  /** `sealDeadCoordinatorBreakerNow` after the pass in flight, awaited for at most `boundMs`: past the bound it writes
+   *  nothing (`pass-in-flight`) and the lane stays stopped. */
+  async sealDeadCoordinatorBreaker(boundMs: number): Promise<DeadCoordinatorSealResult> {
+    this.deadCoordinatorStopped = true;
+    const run = this.deadCoordinatorPassRun;
+    if (run !== null) {
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([
+        run.then(() => undefined, () => undefined),
+        new Promise<void>((resolve) => { timer = setTimeout(resolve, boundMs); }),
+      ]);
+      if (timer !== undefined) clearTimeout(timer);
+    }
+    return this.sealDeadCoordinatorBreakerNow();
+  }
+
+  /** The sealed start's first act (D-4916, R1.5): write `clean` back over the same snapshot, generation-checked, BEFORE any
+   *  step of the pass can change state or act. Retried each pass until it lands; a failure is said once. A write of this
+   *  process has landed when it does. */
+  private unsealDeadCoordinatorBreaker(coord: CoordStore): void {
+    const gen = this.deadCoordinatorBreakerGeneration;
+    const w = gen === null ? null : coord.unsealDeadCoordinatorBreakerState(gen);
+    if (w?.ok === true) {
+      this.deadCoordinatorBreakerUnsealPending = false;
+      this.deadCoordinatorBreakerLanded = true;
+      this.deadCoordinatorBreakerGeneration = w.generation;
+      return;
+    }
+    if (!this.deadCoordinatorBreakerUnsealWarned) {
+      this.deadCoordinatorBreakerUnsealWarned = true;
+      console.warn(`ccrc-server: sweepDeadCoordinators could not unseal the breaker's state (${w === null ? 'no generation' : w.detail}) — no act until a write of this process lands; retried each pass`);
     }
   }
 
@@ -4896,7 +4973,9 @@ export class FleetWatcher {
       // The `run_events` record: the run an empty set is written on, and, under a state that is not clean, members to keep.
       const rec = coord.deadCoordinatorBreakerHeldLatest();
       this.deadCoordinatorBreakerHeldRunId ??= rec.runId;
-      if (st.kind === 'clean' || st.kind === 'sealed') {
+      if (st.kind === 'sealed') {
+        // A SEALED state (D-4916) is the only one a start trusts as it reads: the server's shutdown handler wrote it over a
+        // clean state with nothing pending, so it is the exact snapshot of the last landed commit.
         // RECOVERY OF A LOST WRITE (fix round 4, D-4826), against the clean snapshot's write time. Every claimant of this
         // pass's population whose durable anchor STARTED (its `firstDeadAt`, never `lastDeadAt`, which every crashed pass
         // rewrites) after that snapshot was written is added to the seed, FLAGGED, at its anchor instant, beside every
@@ -4917,13 +4996,21 @@ export class FleetWatcher {
         this.deadCoordinatorBreakerCommittedKey = deadCoordinatorBreakerHeldKey(st.held);
         this.deadCoordinatorBreakerDurableClean = true;
         this.deadCoordinatorBreakerSeeded = true;
+        this.deadCoordinatorBreakerGeneration = st.generation;
+        this.deadCoordinatorBreakerUnsealPending = true;
       } else {
         seedCause = st.kind === 'absent' ? { kind: 'absent' } : st.kind === 'dirty' ? { kind: 'dirty', generation: st.generation }
-          : { kind: 'unreadable', reason: st.detail.slice(0, 64) };
-        // Every member, instant and flag it can still read: the snapshot the dirty row carries, and the latest record.
-        readable = mergeBreakerMembers(st.kind === 'dirty' && st.snapshot.kind === 'members' ? st.snapshot.members : [], rec.ok ? rec.held : []);
+          : st.kind === 'clean' ? { kind: 'unsealed', generation: st.generation }
+            : { kind: 'unreadable', reason: st.detail.slice(0, 64) };
+        // Every member, instant and flag it can still read: the snapshot the row carries (a dirty row's last landed one, an
+        // unsealed clean row's exact one), and the latest record.
+        readable = mergeBreakerMembers(
+          st.kind === 'dirty' ? (st.snapshot.kind === 'members' ? st.snapshot.members : []) : st.kind === 'clean' ? st.held : [],
+          rec.ok ? rec.held : []);
       }
     }
+    // THE EAGER UNSEAL (D-4916): before any step can change state or act, a process that read `sealed` writes `clean` back.
+    if (this.deadCoordinatorBreakerUnsealPending) this.unsealDeadCoordinatorBreaker(coord);
     // FOUR — each claimant, measured by the reclaim door's own ladder, one at a time, through a tmux port that notes
     // a tmux that did not answer (a FLEET-wide doubt the breaker reads); then the journal clause for the dead ones in
     // ONE store read. A read that throws is `unreadable` for each of them — never "no history".
@@ -5085,7 +5172,8 @@ export class FleetWatcher {
     const changes = new Map(this.deadCoordinatorAnchorsPending);
     for (const [id, a] of upserts) changes.set(id, a);
     for (const id of deletes) changes.set(id, null);
-    if (changes.size === 0 && key === this.deadCoordinatorBreakerCommittedKey && this.deadCoordinatorBreakerDurableClean) return 'unchanged';
+    if (changes.size === 0 && key === this.deadCoordinatorBreakerCommittedKey && this.deadCoordinatorBreakerDurableClean
+      && this.deadCoordinatorBreakerLanded) return 'unchanged';
     // NO EXCEPTION MAY DROP A COMPUTED HOLD (fix round 5, R2; review 401, F2): the changes go PENDING before the first
     // statement that can throw, and a throw anywhere between here and the commit's result is folded into exactly the
     // commit-failed path (state dirty, changes pending, no act). The caller moves the in-memory hold before it calls.
@@ -5097,6 +5185,9 @@ export class FleetWatcher {
         console.warn(`ccrc-server: sweepDeadCoordinators could not mark the breaker's state dirty (${mark.detail}) — no anchor changed and no act this pass; the changes stay pending`);
         return 'mark-failed';
       }
+      // The mark landed: a write of this process, and the state no longer reads `sealed`.
+      this.deadCoordinatorBreakerLanded = true;
+      this.deadCoordinatorBreakerUnsealPending = false;
       const record: number[] = [];
       if (key !== this.deadCoordinatorBreakerCommittedKey) {
         if (next.length === 0 && this.deadCoordinatorBreakerHeldRunId !== null) record.push(this.deadCoordinatorBreakerHeldRunId);
@@ -5118,6 +5209,7 @@ export class FleetWatcher {
       this.deadCoordinatorAnchorsPending.clear();
       this.deadCoordinatorBreakerCommittedKey = key;
       this.deadCoordinatorBreakerDurableClean = true;
+      this.deadCoordinatorBreakerGeneration = c.generation;
       if (c.recordedOn !== null) this.deadCoordinatorBreakerHeldRunId = c.recordedOn;
       return 'committed';
     } catch (err) {
@@ -5135,13 +5227,19 @@ export class FleetWatcher {
     landed: boolean,
   ): void {
     const record = cause.kind === 'absent' ? 'the first state' : 'a fresh record';
-    const rest = `— it holds every coordinator this pass did not see released, flagged, and restarts every crashed coordinator's hour; ${landed
+    // Conditioned like the feed row beside it (review 401, F5): a hold forms only when two or more coordinators stand unreleased.
+    const what = held.length > 0 ? 'it holds every coordinator this pass did not see released, flagged'
+      : tripped ? 'fewer than two coordinators stood unreleased, so no cluster formed, but the breaker tripped on a fleet-wide doubt and holds the lane'
+        : 'fewer than two coordinators stood unreleased, so no cluster formed and it holds none';
+    const rest = `— ${what}, and restarts every crashed coordinator's hour; ${landed
       ? `it wrote ${record}` : `${record} did not land, so it ends nothing until one does`}`;
     console.warn(cause.kind === 'absent'
       ? `ccrc-server: sweepDeadCoordinators: no breaker state yet ${rest}`
       : cause.kind === 'dirty'
         ? `ccrc-server: sweepDeadCoordinators found the breaker's state left dirty (generation ${cause.generation}) ${rest}`
-        : `ccrc-server: sweepDeadCoordinators could not read the breaker's record of its hold (the breaker state row: ${cause.reason}) ${rest}`);
+        : cause.kind === 'unsealed'
+          ? `ccrc-server: sweepDeadCoordinators found the breaker's state not sealed (generation ${cause.generation}: the last server did not end through a clean shutdown) ${rest}`
+          : `ccrc-server: sweepDeadCoordinators could not read the breaker's record of its hold (the breaker state row: ${cause.reason}) ${rest}`);
     recordDeadCoordinatorBreakerSeed({ coord, notifyLog: this.deps.notifyLog }, cause, held, tripped, ids, landed);
   }
 

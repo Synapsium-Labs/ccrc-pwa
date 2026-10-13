@@ -50,9 +50,11 @@ const fixture = async (opts: {
   onCcd?: (args: string[]) => void;
   /** Called as tmux is asked about a pane, before it answers — time passing, or a write landing, mid-pass. */
   onHasSession?: (id: string) => void;
-  /** The breaker's typed state the database starts with (D-4857): `clean` (default) — a deployment whose lane has run
-   *  before, nothing held — or `absent`, a database no lane of this release has written (the deploy that creates it). */
-  breakerState?: 'clean' | 'absent';
+  /** The breaker's typed state the database starts with (D-4857, D-4916): `sealed` (default) — a deployment whose last
+   *  server stopped cleanly after the lane had run, nothing held, the only state a start trusts —, `clean` — the same
+   *  after an UNCLEAN exit (a kill, a crash), which a start seeds conservatively —, or `absent`, a database no lane of
+   *  this release has written (the deploy that creates it). */
+  breakerState?: 'sealed' | 'clean' | 'absent';
 } = {}) => {
   let clock = T0;
   vi.spyOn(Date, 'now').mockImplementation(() => clock);
@@ -84,11 +86,12 @@ const fixture = async (opts: {
   };
   const dbPath = path.join(home, '.ccrc', 'coord.db');
   const coord = new CoordStore(openCoordDb(dbPath));
-  // A deployment whose lane has run before: its breaker state reads clean, nothing held (D-4857). A fresh database has no
-  // row and its first pass is the conservative one (the `absent` cases). Seeded only where this build has the table, so
-  // the file measures red-first against a parent that predates it; `coord-db.test.ts` pins that this build has it.
+  // A deployment whose lane has run before and whose server last stopped cleanly: its breaker state reads SEALED, nothing
+  // held (D-4857, D-4916). A fresh database has no row and its first pass is the conservative one (the `absent` cases), as
+  // is a start over a `clean` one (an unclean exit). Seeded only where this build has the table, so the file measures
+  // red-first against a parent that predates it; `coord-db.test.ts` pins that this build has it.
   if (opts.breakerState !== 'absent' && coord.db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'dead_coordinator_breaker_state'").get() !== undefined) {
-    coord.db.exec(`INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (1, 1, 'clean', 'dead-coordinator-breaker-held:', ${T0})`);
+    coord.db.exec(`INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (1, 1, '${opts.breakerState ?? 'sealed'}', 'dead-coordinator-breaker-held:', ${T0})`);
   }
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
   await notifyLog.load();
@@ -141,7 +144,10 @@ const fixture = async (opts: {
   const stateOf = (id: number) => okRun(coord.run(id))!.state;
   const feed = () => coord.feedEvents(50).map((e) => [e.sessionId, e.title] as const);
   const anchorOf = (id: string) => { const a = coord.deadAnchors(); return a.ok ? a.anchors.get(id) ?? null : 'unreadable'; };
-  const restart = (): void => { watcher = newWatcher(); };
+  /** A restart through a CLEAN SHUTDOWN (D-4916): the old process seals what it may, then a new process starts. */
+  const restart = (): void => { watcher.sealDeadCoordinatorBreakerNow(); watcher = newWatcher(); };
+  /** An UNCLEAN exit — a kill, an OOM kill, a crash, a stop that outlived the timeout: nothing is sealed. */
+  const crash = (): void => { watcher = newWatcher(); };
   const journal = (id: string, act: string, over: Record<string, unknown> = {}): void => {
     coord.ingestJournal({ gen: '1790000000000000000', cursor: 1, size: 1, at: 1, rows: [parseJournalLine(JSON.stringify(
       { v: 1, uid: `w4lane.${id}.${act}.${clock}`, at: clock, act, outcome: 'done', id, dec: { surface: 'none' }, ...over }))] });
@@ -150,7 +156,7 @@ const fixture = async (opts: {
   const attention = () => (watcher as unknown as { deadCoordinatorAttentionList: readonly { kind: string; claimants: string[]; sentence: string }[] })
     .deadCoordinatorAttentionList.map((a) => [a.kind, a.claimants] as const);
   return { home, reg, coord, deps, cfg, live, calls, tmuxAsked, plant, working, pass, next, touch, stateOf, feed, anchorOf,
-    restart, journal, attention, acts: () => acts, advance: (ms: number) => { clock += ms; },
+    restart, crash, journal, attention, acts: () => acts, advance: (ms: number) => { clock += ms; },
     setTmuxDown: (v: boolean) => { tmuxDown = v; }, watcher: () => watcher,
     /** Hold every later `has-session` until the returned release is called. */
     holdTmux: (): (() => void) => { let release = (): void => {}; gate = new Promise<void>((r) => { release = r; }); return () => { gate = null; release(); }; } };
@@ -1300,7 +1306,7 @@ describe('the breaker\'s typed state: dirty before any anchor change, clean only
   const stateOf = (f: Fixture) => f.coord.deadCoordinatorBreakerState();
   const doubt = (f: Fixture, id: string) => rmSync(path.join(f.reg, `${id}.uuid`));
   const undoubt = (f: Fixture, id: string) => writeFileSync(path.join(f.reg, `${id}.uuid`), `u-${id}`);
-  const putState = (f: Fixture, state: 'clean' | 'dirty', held: string | null, generation = 7, at = 1): void => {
+  const putState = (f: Fixture, state: 'clean' | 'dirty' | 'sealed', held: string | null, generation = 7, at = 1): void => {
     f.coord.db.exec('DELETE FROM dead_coordinator_breaker_state');
     f.coord.db.prepare('INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (1, ?, ?, ?, ?)').run(generation, state, held, at);
   };
@@ -1560,7 +1566,7 @@ describe('the breaker\'s typed state: dirty before any anchor change, clean only
     expect([ra, rb].map(f.stateOf), 'released through the door that exists: A alone ends').toEqual(['failed', 'working']);
   }, HEAVY);
 
-  it('under a CLEAN state, an anchor newer than its snapshot — one an older build started, after a rollback — is held FLAGGED beside every member the snapshot carries (D-4826, the rule that stays)', async () => {
+  it('under a SEALED state, an anchor newer than its snapshot — one an older build started, after a rollback — is held FLAGGED beside every member the snapshot carries (D-4826, the rule that stays)', async () => {
     const f = await fixture();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const C = 'demo-coord-c';
@@ -1568,7 +1574,7 @@ describe('the breaker\'s typed state: dirty before any anchor change, clean only
     const ra = f.working(A); f.working(B);
     // The snapshot: A and C held (C has since left the population), written at minute 1. A's anchor is that hold's; B's
     // anchor began at minute 30, after the snapshot, written by a build that does not keep the typed state.
-    putState(f, 'clean', `dead-coordinator-breaker-held:${A}@${T0},${C}@${T0}`, 4, T0 + 60_000);
+    putState(f, 'sealed', `dead-coordinator-breaker-held:${A}@${T0},${C}@${T0}`, 4, T0 + 60_000);
     f.coord.setDeadAnchor(A, { firstDeadAt: T0, lastDeadAt: T0 + 30 * 60_000 });
     f.coord.setDeadAnchor(B, { firstDeadAt: T0 + 30 * 60_000, lastDeadAt: T0 + 30 * 60_000 });
     f.advance(31 * 60_000);
@@ -1576,7 +1582,7 @@ describe('the breaker\'s typed state: dirty before any anchor change, clean only
     expect(f.attention().filter(([k]) => k === 'breaker'), 'A, held, and B, flagged, trip though 30 minutes apart').toEqual([['breaker', [A, B]]]);
     const st = stateOf(f);
     expect(st.kind === 'clean' && st.held.find((m) => m.id === B), 'B flagged in the next snapshot').toMatchObject({ id: B, fallback: true });
-    expect(feedTitles(f), 'a clean state: no seed words').toEqual([]);
+    expect(feedTitles(f), 'a sealed state: no seed words').toEqual([]);
     expect(f.stateOf(ra)).toBe('working');
   });
 
@@ -1764,4 +1770,314 @@ describe('the pass guards', () => {
       release();
     }
   });
+});
+
+// ══ FIX ROUND 5 — THE SEAL (D-4916; the operator's choice of 2026-10-13, "Seal on clean shutdown"; review 401, residual (7)) ══
+// A start trusts the breaker's stored snapshot ONLY when it reads `sealed`, which the server's shutdown handler writes over a
+// clean state when nothing is pending. Anything else — clean (an unclean exit), dirty, absent, unreadable — seeds the
+// conservative hold. The first pass of a process that read `sealed` writes `clean` back at once; until a write of THIS process
+// has landed, the `unchanged` fast path is refused and nothing seals.
+describe('the seal: a clean shutdown is trusted, an unclean one is not (D-4916)', () => {
+  const [M, N, Q] = ['demo-coord-m', 'demo-coord-n', 'demo-coord-q'];
+  const HEAVY = 240_000;
+  const doubt = (f: Fixture, id: string) => rmSync(path.join(f.reg, `${id}.uuid`));
+  const undoubt = (f: Fixture, id: string) => writeFileSync(path.join(f.reg, `${id}.uuid`), `u-${id}`);
+  const stateOf = (f: Fixture) => f.coord.deadCoordinatorBreakerState();
+  const SEALED_ROW = "SELECT 1 FROM dead_coordinator_breaker_state WHERE state = 'sealed'";
+  const isSealed = (f: Fixture): boolean => f.coord.db.prepare(SEALED_ROW).get() !== undefined;
+  const poke = (f: Fixture, field: string, value: unknown): void => { (f.watcher() as unknown as Record<string, unknown>)[field] = value; };
+  const scripted = async (o: {
+    ids: string[]; dead: string[]; events: Record<number, (f: Fixture) => void>; passes: number[];
+    fail?: (f: Fixture, minute: number) => (() => void) | null; restartAfter?: number; restartMode?: 'seal' | 'crash';
+    atRestart?: (f: Fixture) => void;
+    after?: (f: Fixture, minute: number, st: (id: string) => string) => void;
+  }) => {
+    const f = await fixture();
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (const id of o.ids) { f.plant(id); if (!o.dead.includes(id)) f.live.add(id); }
+    const r = Object.fromEntries(o.ids.map((id) => [id, f.working(id)])) as Record<string, number>;
+    const times = [...new Set([...Object.keys(o.events).map(Number), ...o.passes])].sort((a, b) => a - b);
+    let m = 0;
+    for (const t of times) {
+      f.advance((t - m) * 60_000); m = t;
+      o.events[t]?.(f);
+      if (o.passes.includes(t)) {
+        const restore = o.fail?.(f, t) ?? null;
+        await f.pass();
+        restore?.();
+        o.after?.(f, t, (id) => f.stateOf(r[id]!));
+      }
+      if (o.restartAfter === t) { o.atRestart?.(f); if (o.restartMode === 'seal') f.restart(); else f.crash(); }
+    }
+    return { f, states: Object.fromEntries(o.ids.map((id) => [id, f.stateOf(r[id]!)])), r };
+  };
+  const markFails = (minute: number) => (f: Fixture, m: number) => (m === minute ? failSql(f, /^INSERT INTO dead_coordinator_breaker_state/) : null);
+  /** The minute `id`'s programme is first ended (`failed`), or null. */
+  const firstEnd = async (o: Parameters<typeof scripted>[0], id: string) => {
+    let ended: number | null = null;
+    const r = await scripted({ ...o, after: (_f, minute, st) => { if (ended === null && st(id) === 'failed') ended = minute; } });
+    vi.restoreAllMocks();
+    return { ended, r };
+  };
+  /** R never acts earlier than U (null = never). */
+  const noEarlier = (r: number | null, u: number | null): boolean => u === null ? r === null : (r === null || r >= u);
+
+  // ── (7), closed: a restart after a failed write is an UNCLEAN one for the state, because nothing was sealed ──────────
+  // DOUBT FORM: A crashed from 0; doubted on the pass at 50 ONLY, whose dirty mark fails; crashed again from 51.
+  const P_A = [0, 9, 18, 27, 36, 45, 50, 51, 60, 69, 78, 87, 96, 105, 111, 120];
+  const evA: Record<number, (f: Fixture) => void> = { 50: (f) => { doubt(f, A); }, 51: (f) => { undoubt(f, A); } };
+  it('R7.doubt: a restart right after the failed mark at 50 (an unclean exit; first pass 51, 6 min after the last commit) never ends A before the unrestarted lane does', async () => {
+    const u = await firstEnd({ ids: [A], dead: [A], events: evA, passes: P_A, fail: markFails(50) }, A);
+    let at: string | null = null;
+    const r = await firstEnd({ ids: [A], dead: [A], events: evA, passes: P_A, fail: markFails(50), restartAfter: 50, atRestart: (f) => { at = stateOf(f).kind; } }, A);
+    expect(u.ended).toBe(111);
+    expect(at, 'the state the restart finds: clean, but NOT sealed').toBe('clean');
+    expect(noEarlier(r.ended, u.ended), `R ended A at ${r.ended}, U at ${u.ended}`).toBe(true);
+  }, HEAVY);
+  it('R7.doubt-gap: the same, the restarted lane\'s first pass at 56 (11 min after the last commit)', async () => {
+    const passes = [0, 9, 18, 27, 36, 45, 50, 56, 60, 69, 78, 87, 96, 105, 111, 116, 120];
+    const u = await firstEnd({ ids: [A], dead: [A], events: evA, passes, fail: markFails(50) }, A);
+    const r = await firstEnd({ ids: [A], dead: [A], events: evA, passes, fail: markFails(50), restartAfter: 50 }, A);
+    expect(noEarlier(r.ended, u.ended), `R ended A at ${r.ended}, U at ${u.ended}`).toBe(true);
+  }, HEAVY);
+
+  // TRIP FORM: Q crashed from 0; M and N crash at 53; the pass at 54 trips {M, N} and its dirty mark fails; M and N are
+  // doubted from 55. U holds {M, N}, so Q, due at 60, is held.
+  const evT: Record<number, (f: Fixture) => void> = { 53: (f) => { f.live.delete(M); f.live.delete(N); }, 55: (f) => { doubt(f, M); doubt(f, N); } };
+  it('R7.trip: the restart after the tripping pass\'s failed mark (first pass at 55, 10 min after the last commit) never ends Q before U does', async () => {
+    const P_T = [0, 9, 18, 27, 36, 45, 54, 55, 60, 69, 78];
+    const u = await firstEnd({ ids: [Q, M, N], dead: [Q], events: evT, passes: P_T, fail: markFails(54) }, Q);
+    const r = await firstEnd({ ids: [Q, M, N], dead: [Q], events: evT, passes: P_T, fail: markFails(54), restartAfter: 54 }, Q);
+    expect(u.ended, 'U holds Q').toBeNull();
+    expect(noEarlier(r.ended, u.ended), `R ended Q at ${r.ended}`).toBe(true);
+  }, HEAVY);
+  it('R7.trip-gap: the same, the restarted lane\'s first pass at 63 (18 min after the last commit, past the episode gap)', async () => {
+    const passes = [0, 9, 18, 27, 36, 45, 54, 63, 72, 81, 90, 99, 108, 117, 126, 135, 144];
+    const u = await firstEnd({ ids: [Q, M, N], dead: [Q], events: evT, passes, fail: markFails(54) }, Q);
+    const r = await firstEnd({ ids: [Q, M, N], dead: [Q], events: evT, passes, fail: markFails(54), restartAfter: 54 }, Q);
+    expect(u.ended, 'U holds Q').toBeNull();
+    expect(noEarlier(r.ended, u.ended), `R ended Q at ${r.ended}`).toBe(true);
+  }, HEAVY);
+
+  // THE COST, and what a clean shutdown saves.
+  const passesCost = Array.from({ length: 14 }, (_, i) => i * 9).concat([30, 60, 90, 99]).sort((a, b) => a - b);
+  it('COST.one: A crashed alone from 0 is ended at 60. A restart at 30 through a CLEAN shutdown (sealed) ends it at 60 too; an UNCLEAN one restarts its hour', async () => {
+    const u = await firstEnd({ ids: [A], dead: [A], events: {}, passes: passesCost }, A);
+    const sealed = await firstEnd({ ids: [A], dead: [A], events: {}, passes: passesCost, restartAfter: 30, restartMode: 'seal' }, A);
+    const unclean = await firstEnd({ ids: [A], dead: [A], events: {}, passes: passesCost, restartAfter: 30, restartMode: 'crash' }, A);
+    expect(u.ended).toBe(60);
+    expect(sealed.ended, 'the sealed restart continues the anchor').toBe(60);
+    expect(unclean.ended, 'the unclean one restarts each crashed claimant\'s hour (the COST)').toBeGreaterThan(60);
+  }, HEAVY);
+  it('COST.two: A crashed from 0 and B from 30 are ended by U at 63 and 90; an UNCLEAN restart at 40 holds both, flagged, and a sealed one holds neither', async () => {
+    const passes = Array.from({ length: 30 }, (_, i) => i * 9).concat([30, 40]).sort((a, b) => a - b);
+    const ev = { 30: (f: Fixture) => { f.live.delete(B); } };
+    const o = { ids: [A, B], dead: [A], events: ev, passes };
+    const ua = await firstEnd(o, A);
+    const sealA = await firstEnd({ ...o, restartAfter: 40, restartMode: 'seal' }, A);
+    const crashA = await firstEnd({ ...o, restartAfter: 40, restartMode: 'crash' }, A);
+    const crashB = await firstEnd({ ...o, restartAfter: 40, restartMode: 'crash' }, B);
+    expect(ua.ended).toBe(63);
+    expect(sealA.ended, 'sealed: continues, as U').toBe(63);
+    expect(crashA.ended, 'unclean: two unreleased claimants hold the lane, flagged').toBeNull();
+    expect(crashB.ended).toBeNull();
+  }, HEAVY);
+
+  // ── the start: trust ONLY `sealed` ──────────────────────────────────────────────────────────────────────────────────
+  it('a start trusts ONLY a sealed state: the same world over a state that reads `clean` seeds the conservative hold (its own words), and over `sealed` it does not', async () => {
+    const run = async (st: 'sealed' | 'clean') => {
+      const f = await fixture({ breakerState: st });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      f.plant(A); f.plant(B);
+      f.working(A); f.working(B);
+      await f.pass();
+      return { f, warned: warn.mock.calls.map((c) => String(c[0])) };
+    };
+    const sealed = await run('sealed');
+    expect(sealed.warned.filter((m) => m.includes('not sealed'))).toEqual([]);
+    expect(sealed.f.feed().filter(([, t]) => t.startsWith('dead coordinator: breaker state')), 'no seed words').toEqual([]);
+    vi.restoreAllMocks();
+    const clean = await run('clean');
+    expect(clean.warned.filter((m) => m.includes('not sealed')), 'one warn line').toHaveLength(1);
+    expect(clean.f.feed().filter(([, t]) => t === 'dead coordinator: breaker state not sealed'), 'one feed row').toHaveLength(1);
+    expect(clean.f.attention().filter(([k]) => k === 'breaker'), 'A and B, both unreleased, are held, flagged').toEqual([['breaker', [A, B]]]);
+  });
+
+  // ── the eager unseal ───────────────────────────────────────────────────────────────────────────────────────────────
+  it('EAGER UNSEAL: the first pass of a sealed start writes `clean` back, same snapshot, before anything else — in a quiet world too', async () => {
+    const f = await fixture();
+    expect(stateOf(f)).toMatchObject({ kind: 'sealed', generation: 1 });
+    await f.pass();
+    expect(stateOf(f), 'unsealed: the same (empty) snapshot, the generation moved on').toEqual({ kind: 'clean', generation: 2, held: [], writtenAt: T0 });
+  });
+  it('...and NOT deferred to the first change: a first pass whose dirty mark FAILS has still unsealed, so a crash then is not trusted', async () => {
+    const f = await fixture();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    f.plant(A);
+    f.working(A);
+    const restore = failSql(f, /^INSERT INTO dead_coordinator_breaker_state/);
+    await f.pass();
+    restore();
+    expect(stateOf(f), 'unsealed although its first change did not land').toMatchObject({ kind: 'clean' });
+    f.crash();
+    expect(isSealed(f)).toBe(false);
+  });
+  it('a FAILED unseal means no act, however long the claimant has been dead, and the state still reads sealed; once writes land the lane unseals, commits and acts', async () => {
+    const f = await fixture();
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    f.plant(A);
+    const ra = f.working(A);
+    const restore = failSql(f, /^(UPDATE|INSERT INTO) dead_coordinator_breaker_state/);
+    await f.pass(); await walk(f, 2 * HOUR);
+    expect(f.stateOf(ra), 'every write fails from the first pass: nothing acts').toBe('working');
+    expect(isSealed(f), 'and nothing was written').toBe(true);
+    restore();
+    await walk(f, 2 * 9 * 60_000);
+    expect(stateOf(f)).toMatchObject({ kind: 'clean' });
+    await walk(f, 2 * HOUR);
+    expect(f.stateOf(ra)).toBe('failed');
+  }, HEAVY);
+  it('the `unchanged` fast path is refused before a write of THIS process has landed: a failed unseal in a quiet world goes through the mark and the commit', async () => {
+    const f = await fixture();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const restore = failSql(f, /^UPDATE dead_coordinator_breaker_state SET state = 'clean'/);
+    await f.pass();
+    restore();
+    expect(stateOf(f), 'the mark and the commit wrote it: no longer sealed').toMatchObject({ kind: 'clean', generation: 3 });
+  });
+
+  // ── the seal, and its refusals ─────────────────────────────────────────────────────────────────────────────────────
+  const quiet = async () => {
+    const f = await fixture();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await f.pass();
+    return f;
+  };
+  it('SEAL: after a landed write, with nothing pending and the state durably clean, it writes `sealed` over the same snapshot, once; a second attempt says so', async () => {
+    const f = await quiet();
+    expect(stateOf(f)).toMatchObject({ kind: 'clean', generation: 2 });
+    expect(f.watcher().sealDeadCoordinatorBreakerNow()).toEqual({ sealed: true, generation: 3 });
+    expect(stateOf(f)).toEqual({ kind: 'sealed', generation: 3, held: [], writtenAt: T0 });
+    expect(f.watcher().sealDeadCoordinatorBreakerNow()).toEqual({ sealed: false, reason: 'already-sealed' });
+  });
+  const parkedPass = async (alive: boolean) => {
+    const f = await fixture();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    f.plant(A); if (alive) f.live.add(A);
+    f.working(A);
+    await f.pass();
+    f.next();
+    await f.watcher().sweepLifecycle();
+    const records = await readRegistry(f.deps.io, f.cfg);
+    const release = f.holdTmux();
+    const inFlight = f.watcher().sweepDeadCoordinators(records, readdirSync(f.reg));
+    for (let k = 0; k < 200 && f.tmuxAsked.length < 2; k += 1) await new Promise((r) => setTimeout(r, 5));
+    return { f, release, inFlight };
+  };
+  it('SEAL REFUSED, a pass in flight: one parked on tmux is awaited within the bound, and past it nothing is written', async () => {
+    const { f, release, inFlight } = await parkedPass(false);
+    try {
+      expect(await f.watcher().sealDeadCoordinatorBreaker(40)).toEqual({ sealed: false, reason: 'pass-in-flight' });
+      expect(isSealed(f)).toBe(false);
+    } finally { release(); }
+    await inFlight;
+    expect(isSealed(f), 'the awaited pass did not seal behind the refusal').toBe(false);
+  });
+  it('SEAL waits for a pass in flight, with a bound, and seals once it is done', async () => {
+    const { f, release, inFlight } = await parkedPass(true);
+    try {
+      const sealing = f.watcher().sealDeadCoordinatorBreaker(5_000);
+      setTimeout(release, 30);
+      await inFlight;
+      expect(await sealing).toMatchObject({ sealed: true });
+    } finally { release(); }
+    expect(isSealed(f)).toBe(true);
+  });
+  it('SEAL REFUSED, changes pending: a failed dirty mark leaves the anchor changes pending, and the state is not sealed', async () => {
+    const f = await quiet();
+    f.plant(A);
+    f.working(A);
+    f.next();
+    const restore = failSql(f, /^INSERT INTO dead_coordinator_breaker_state/);
+    await f.pass();
+    restore();
+    expect(f.watcher().sealDeadCoordinatorBreakerNow()).toEqual({ sealed: false, reason: 'changes-pending' });
+    expect(isSealed(f)).toBe(false);
+  });
+  it('SEAL REFUSED, not durably clean: a state this process marked dirty and did not commit', async () => {
+    const f = await quiet();
+    poke(f, 'deadCoordinatorBreakerDurableClean', false);
+    expect(f.watcher().sealDeadCoordinatorBreakerNow()).toEqual({ sealed: false, reason: 'not-durably-clean' });
+    expect(isSealed(f)).toBe(false);
+  });
+  it('SEAL REFUSED, key mismatch: a held set that is not the one the last commit wrote', async () => {
+    const f = await quiet();
+    poke(f, 'deadCoordinatorBreakerHeld', [{ id: A, firstDeadAt: T0 }]);
+    expect(f.watcher().sealDeadCoordinatorBreakerNow()).toEqual({ sealed: false, reason: 'key-mismatch' });
+    expect(isSealed(f)).toBe(false);
+  });
+  it('SEAL REFUSED, no landed write: a process that has written nothing seals nothing — the state it found stands', async () => {
+    const fresh = await fixture();
+    expect(fresh.watcher().sealDeadCoordinatorBreakerNow(), 'no pass yet').toEqual({ sealed: false, reason: 'no-landed-write' });
+    expect(isSealed(fresh)).toBe(true);
+    const other = await fixture();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const restore = failSql(other, /^(UPDATE|INSERT INTO) dead_coordinator_breaker_state/);
+    await other.pass();
+    restore();
+    expect(other.watcher().sealDeadCoordinatorBreakerNow(), 'every write failed').toEqual({ sealed: false, reason: 'no-landed-write' });
+    expect(isSealed(other)).toBe(true);
+  });
+  it('a seal attempt STOPS the lane: no pass runs after it, whatever the answer', async () => {
+    const f = await fixture();
+    f.plant(A);
+    f.working(A);
+    expect(f.watcher().sealDeadCoordinatorBreakerNow()).toMatchObject({ sealed: false });
+    const asked = f.tmuxAsked.length;
+    await f.pass();
+    expect(f.tmuxAsked.length, 'nothing measured').toBe(asked);
+    expect(isSealed(f)).toBe(true);
+  });
+  it('a seal whose statement FAILS says so and writes nothing', async () => {
+    const f = await quiet();
+    const restore = failSql(f, /^UPDATE dead_coordinator_breaker_state SET state = 'sealed'/);
+    expect(f.watcher().sealDeadCoordinatorBreakerNow()).toMatchObject({ sealed: false, reason: 'write-failed' });
+    restore();
+    expect(stateOf(f)).toMatchObject({ kind: 'clean' });
+  });
+
+  // ── the one case no durable design can close, pinned so the words stay true ────────────────────────────────────────
+  it('THE INHERENT CASE: sealed; a sealed start whose every write fails; a crash; the next start trusts the older seal — and the trip the dead process held in memory is gone', async () => {
+    const f = await fixture();
+    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (const id of [Q, M, N]) { f.plant(id); if (id !== Q) f.live.add(id); }
+    const rq = f.working(Q); f.working(M); f.working(N);
+    let atCrash: string | null = null;
+    let m = 0;
+    let restore: (() => void) | null = null;
+    // Process 1 passes to 45 and stops cleanly (SEALED). Process 2 can write nothing from its start: M and N crash at 47, its
+    // pass at 48 trips them in memory, they are doubted from 49, and it dies after 50. Process 3's first pass is at 54, 9 min
+    // after Q's last COMMITTED crashed instant (45), so it continues Q's anchor from the older seal.
+    for (const t of [0, 9, 18, 27, 36, 45, 48, 50, 54, 60]) {
+      f.advance((t - m) * 60_000); m = t;
+      if (t === 48) { f.live.delete(M); f.live.delete(N); }
+      if (t === 50) { doubt(f, M); doubt(f, N); }
+      if (t === 48) {
+        f.restart();                                         // process 1 stops cleanly after 45: SEALED
+        restore = failSql(f, /^(UPDATE|INSERT INTO) dead_coordinator_breaker_state/);   // ...and process 2 can write nothing at all
+      }
+      if (t === 54) {
+        restore?.(); restore = null;
+        atCrash = stateOf(f).kind;
+        f.crash();
+      }
+      await f.pass();
+      if (t === 50) expect(f.stateOf(rq), 'the process that cannot write acts on nothing').toBe('working');
+    }
+    expect(atCrash, 'the older seal is all the next start finds').toBe('sealed');
+    expect(f.stateOf(rq), 'the trip {M, N} died with the process that held it; the next start trusts the older seal and ends Q on its anchor (the floor of any durable design)').toBe('failed');
+  }, HEAVY);
 });
