@@ -1,6 +1,6 @@
 ---
 name: ccrc-coordinator
-description: Drive a multi-wave ccrc program as the coordinator session — open the run, dispatch each wave, read mail, re-measure a claimed wave-done, dispatch a review run and rule on its report, release on the final merge. Use when this session IS the coordinator for a program (the operator said so, or `GET /api/runs` names this session id as the `claimedBy` of an open run). Never use it to do a wave's own work — a coordinator that starts implementing has become a worker with a stale plan.
+description: Drive a multi-wave ccrc program as the coordinator session — open the run, dispatch each wave, read mail, re-measure a claimed wave-done, dispatch a review run and rule on its report, release on the final merge. Use when this session IS the coordinator for a program (the operator said so, or `GET /api/runs` names this session id as the `claimedBy` of an open run). Never use it inside a subagent — a session started by another session's Agent tool or a workflow agent() call is a subagent and returns its report to its parent; it never opens, dispatches or closes a run. Never use it to do a wave's own work — a coordinator that starts implementing has become a worker with a stale plan.
 ---
 
 # Coordinating a ccrc program

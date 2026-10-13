@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=a9a55573ce80cbe58c1ee16e84aef4fc79aa10cba2f601009dd6c9ad2b4885f4
+# ccrc:generated 1 sha256=02fefb6e45f6a833f37f44166049c1ae9b2ca13c3531423192c2214c7f2e0ce8
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -5395,20 +5395,56 @@ PR_JSON_FIELDS=number,state,headRefName,headRefOid,baseRefName,isCrossRepository
 PR_CHECK_FIELD=statusCheckRollup
 
 _gh_repo_slug() {   # main-checkout path -> OWNER/NAME, or non-zero
-  # Three guards, and the mutation sweep says the last one subsumes the first
-  # two: with no origin `git config --get` exits 1 AND prints nothing, so both
-  # `|| return 1` and `[[ -n "$url" ]]` can be deleted with the suite still
-  # green — the regex rejects "" on its own. They stay because the fall-through
-  # only holds while the regex is anchored at both ends, and this function's
-  # answer is spent as `--repo` on a WRITE-scoped token: each guard states the
-  # case it is about rather than relying on a later line to catch it.
-  local url
+  # The first two guards are subsumed by what follows them, and the mutation
+  # sweep says so: with no origin `git config --get` exits 1 AND prints nothing,
+  # so both `|| return 1` and `[[ -n "$url" ]]` can be deleted with the suite
+  # still green. An empty url then falls to the prefix `case`'s `*) return 1`
+  # arm, and before that arm existed the anchored regex rejected "" on its own.
+  # They stay because this function's answer is spent as `--repo` on a
+  # WRITE-scoped token: each guard states the case it is about rather than
+  # relying on a later line to catch it.
+  #
+  # `local LC_ALL=C` makes the regex's ranges ASCII. Under a UTF-8 locale such
+  # as en_US.UTF-8, bash matches `[A-Za-z]` by collation, so `o/r` with an
+  # accented or fullwidth letter matched and went out as a slug. The docs
+  # helper's `re.fullmatch` matches by code point, so the two copies disagreed.
+  # This is the house idiom `_pool_name_valid` uses for its ASCII grammar.
+  #
+  # Two more guards, from decision 11 of the Share/Export design, and neither is
+  # subsumed by the regex — its alphabet admits `.`, so `owner/name`, `../x` and
+  # `.x/y` all match it. The answer is spent as `gh --repo` on that WRITE-scoped
+  # token (pr-open, pr-state, ws-reap) and as the docs wire's `github` slug, from
+  # which the PWA builds a github.com URL, so a near-miss is not harmless:
+  #   - EXACTLY ONE of the three GitHub prefixes must have matched. The strips
+  #     used to run unconditionally, so an origin that is a bare relative path
+  #     such as `owner/name` — a directory beside the checkout, not a GitHub
+  #     repository — fell through all three and was named a slug. It is one
+  #     prefix, not each in turn: `git@github.com:https://github.com/o/r` is not
+  #     an address GitHub answers, and stripping in turn read it as `o/r`.
+  #   - Neither segment after the prefix may be exactly `.` or `..`. A dot
+  #     segment is a path step, not an owner or a name, and `../x` spliced into
+  #     a URL or a `--repo` names something other than what the origin said.
+  #   - The OWNER may not start with `.`; no GitHub user or organisation name
+  #     does. The repository NAME may: an organisation's `.github` and a user's
+  #     `.dotfiles` are real repositories, so `org/.github` is a slug.
+  # `slug_from_url` in the docs helper below is this rule, statement for
+  # statement, and M3.12 binds the two by verdict over one corpus.
+  local LC_ALL=C url rest seg
   url=$(git -C "$1" config --get remote.origin.url 2>/dev/null) || return 1
   [[ -n "$url" ]] || return 1
-  url="${url%.git}"; url="${url#git@github.com:}"
-  url="${url#ssh://git@github.com/}"; url="${url#https://github.com/}"
-  [[ "$url" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || return 1
-  printf '%s\n' "$url"
+  url="${url%.git}"
+  case "$url" in
+    git@github.com:*) rest="${url#git@github.com:}" ;;
+    ssh://git@github.com/*) rest="${url#ssh://git@github.com/}" ;;
+    https://github.com/*) rest="${url#https://github.com/}" ;;
+    *) return 1 ;;
+  esac
+  [[ "$rest" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || return 1
+  for seg in "${rest%%/*}" "${rest#*/}"; do
+    [[ "$seg" != . && "$seg" != .. ]] || return 1
+  done
+  [[ "${rest%%/*}" != .* ]] || return 1
+  printf '%s\n' "$rest"
 }
 
 _gh_pr_list() {   # repo [head-branch] -> rows JSON on stdout; on failure prints
@@ -29339,10 +29375,10 @@ _ws_reclaim_residue() {   # workdir -> bytes under the harness's path-keyed temp
 # the row and its `.reaping` file. '' prints NO key: a reader takes
 # that absence as unmeasured, never as either value. Set by `_ws_reclaim_locked`
 # and by the shared tail; `cmd_ws_collect` shadows it to '' with `local` (a
-# collection has no breadcrumb). So `ws-expire`'s own pre-breadcrumb documents,
-# its resumed arm's `probe-unmeasured` (printed while its `expire:` breadcrumb
-# stands), and every `ws-collect` document, carry no key. Assigned here, when
-# ccd is read, so an exported value can never reach a document.
+# collection has no breadcrumb). `_ws_expire_locked` sets it too (wave 6):
+# `true` on its resumed arm, '' over a breadcrumb that stands but cannot be
+# read, `false` on its fresh arm. Assigned here, when ccd is read, so an
+# exported value can never reach a document.
 _WS_RCL_CRUMB=''
 _ws_reclaim_failed_json() {   # token detail -> the post-start failure document on stdout, with
   #                                `"crumb":true|false` only when _WS_RCL_CRUMB says one
@@ -31906,6 +31942,15 @@ _ws_expire_locked() {   # token id surface actor reason — everything the share
   [[ "$surface" == none ]] || declared="$surface"
   _ws_expire_fork "$id"
   phase="$RECLAIM_RESUME_PHASE"; resumed="$phase"
+  # `crumb` (CCR-15 spec §5.6), said as ws-reclaim says it (workspace lifecycle
+  # wave 6, question (k)): a resumed arm's breadcrumb already stands (`true`),
+  # so its `probe-unmeasured` below is printed past it and the server reads it
+  # resumable; a fresh arm's is not written yet (`false`: nothing started, so a
+  # retry audits afresh) until the tail, which says `true` once it is; a
+  # breadcrumb that stands but could not be read leaves it unsaid.
+  if [[ -n "$phase" ]]; then _WS_RCL_CRUMB=true
+  elif [[ -e "$REG/$id.reaping" || -L "$REG/$id.reaping" ]]; then _WS_RCL_CRUMB=''
+  else _WS_RCL_CRUMB=false; fi
   # The consent IS the fingerprint, recomputed HERE, inside the lock.
   if [[ "$REAP_VERDICT" == expirable && "$token" != "$REAP_TOKEN" ]]; then
     _reap_refuse state-changed "expected $REAP_TOKEN, was given $token — $id changed since the audit that minted the token" || :
@@ -31955,6 +32000,11 @@ _ws_expire_locked() {   # token id surface actor reason — everything the share
     # the breadcrumb, and the server reads the word so: it starts over from a
     # fresh audit (`archivedExpiry.ts`). A branch already absent when the token
     # was minted reads absent twice and goes on, its work kept in the attic.
+    # THE ATTACHED HEAD (review 355, F2; wave 6): with HEAD symbolic to the
+    # branch, as in every real workspace, a branch DELETED in the window never
+    # reaches this check — the pin above refuses it first (`pin-failed`: HEAD
+    # names no commit), also before the breadcrumb. Only a HEAD detached, on
+    # another branch, or gone with its worktree meets the deleted direction here.
     if [[ "$RECLAIM_BRANCHSTATE" != "$lbstate" ]]; then
       _ws_reclaim_fail "$id" "$lctx" state-changed \
         "$REAP_BRANCH read $lbstate when the token was checked inside the lock, but $RECLAIM_BRANCHSTATE when the pin read it again — it changed in between, so nothing was destroyed"
@@ -32163,8 +32213,9 @@ _ws_expire_return_gap() { :; }
 # the spawn gate — one ccd inode, one token. (`ws-reclaim` meets an `expire:`
 # breadcrumb only on a row that carries a child marker, which this verb
 # refuses to touch; its fork answers it `reap-in-progress`, unchanged.) The server composes the destructive verb ONLY behind
-# `capSupported(state, 'expire-v1')`, which refuses on no evidence; wave 3b
-# composes it, this wave ships it inert.
+# `capSupported(state, 'expire-v1')`, which refuses on no evidence; its expiry
+# lane (workspace lifecycle wave 3b) composes it already, SHADOWED until the
+# `expire-lane-live` marker exists.
 # ── end archived-workspace expiry ───────────────────────────────────────────── EXPIRE-END ──
 
 # ── temp-root collection: ws-collect (spec 2026-09-22 §5.2, §5.10) ────────────── COLLECT-BEGIN ──
@@ -35419,16 +35470,35 @@ def discover(ctx, project, dl):
 def slug_from_url(url):
     """_gh_repo_slug's rule, statement for statement; the bash function stays
     the one definition and M3.12 binds this copy to it by verdict. An empty
-    url is None; one trailing .git is stripped; then each of the three GitHub
-    prefixes in turn, in that order, as bash's three expansions strip them;
-    then owner/name is required."""
+    url is None; one trailing .git is stripped; then EXACTLY ONE of the three
+    GitHub prefixes must match, the first in that order, as bash's case arms
+    try them, else None (decision 11: a bare relative path such as owner/name
+    is not a GitHub repository); then owner/name is required; then neither
+    segment may be exactly '.' or '..' (decision 11: a dot segment is a path
+    step, and this slug is spent as gh --repo on a write-scoped token and as
+    the docs wire's github slug); then the owner may not start with '.', which
+    no GitHub owner name does. The name may, so org/.github is a slug.
+    re.fullmatch matches GH_SLUG_RE's ranges by code point, which bash's
+    `local LC_ALL=C` gives its regex."""
     if not url:
         return None
     u = url[:-len('.git')] if url.endswith('.git') else url
+    rest = None
     for pre in GH_PREFIXES:
         if u.startswith(pre):
-            u = u[len(pre):]
-    return u if re.fullmatch(GH_SLUG_RE, u) else None
+            rest = u[len(pre):]
+            break
+    if rest is None:
+        return None
+    if not re.fullmatch(GH_SLUG_RE, rest):
+        return None
+    owner, name = rest.split('/')
+    for seg in (owner, name):
+        if seg in ('.', '..'):
+            return None
+    if owner.startswith('.'):
+        return None
+    return rest
 
 
 def origin_url(repo, dl):

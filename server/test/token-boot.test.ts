@@ -682,7 +682,7 @@ describe('the both-role boot write: recorded role only (spec 4.10)', () => {
       mkdirSync(bin);
       writeFileSync(path.join(bin, 'curl'), loopbackCurlFront(tool('curl')), { mode: 0o755 });
       writeFileSync(path.join(home, 'curl-allow-ports'), `${port}\n`);
-      for (const t of ['jq', 'grep', 'tail', 'cut', 'tr', 'head', 'cat']) symlinkSync(tool(t), path.join(bin, t));
+      for (const t of ['jq', 'grep', 'tail', 'cut', 'tr', 'sed', 'head', 'cat']) symlinkSync(tool(t), path.join(bin, t));
       const env: NodeJS.ProcessEnv = { HOME: home, PATH: bin, CCRC_ADDR: `http://127.0.0.1:${port}` };
       const code = await new Promise<number>((resolve) => {
         const child = spawn(tool('bash'), [path.join(repoRoot, 'deploy', 'notify.sh'), 'cc swap: x moved a -> b'], { env, stdio: 'ignore' });

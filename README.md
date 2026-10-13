@@ -541,6 +541,8 @@ single box whose role is only derived as `both` (placed by `deploy.sh`, or a dev
 nothing and `ccrc-api` answers `no-token`; the server warns at boot, and the remedy is to record
 `CCRC_ROLE=both` in `~/.ccrc/ccrc.env` and then restart `ccrc.service` (the role is read only at boot).
 A `deploy.sh` box re-ships a local `deploy/ccrc.env` over that file, so record the role there too.
+A two-box fleet placed by `deploy.sh` alone has no `~/.ccrc/node-id` on the fleet box, so the rotation gate holds
+`node-id-unmeasured` and no rotation runs; `ccrc install` (or `ccrc update`) on that fleet box mints it.
 
 The block below is the single-box form of the two steps:
 
@@ -581,12 +583,12 @@ ends with. A `server`-role box SKIPs the checks that measure per-account or per-
 | `config`, `auth`, `rc` | `ccrc.env` coherent for its fleet mode; the session gate and its passphrase file; this box's `--remote-control` setting |
 | `exposure`, `update-exposure`, `caddy`, `caddyfile`, `cert`, `name` | the exposure pieces ("Exposure", below) |
 | `wrappers`, `skills`, `accounts`, `credentials` | the roster against `~/.local/bin` (Claude Code's binary included); the ccrc skills in every home; declared credential files and provider env blocks (a Codex lane's may omit `ANTHROPIC_BASE_URL`, which its launcher exports, but may not name an endpoint other than its loopback shim); a token file for every account the health probe measures |
-| `codex` | for each `exec.kind: "codex"` lane: the four GPT-lane executables in `~/.local/bin` against the shipped tree; the isolated runtime (`ccgpt-runtime check`, which trusts the build's stamp); the roster row and its ports; `exec.authDir` and its `auth.json`, for existence and mode only; `lane.json` against the roster row and the class registry; a `codex` class registry and its haiku-class probe model; the rendered LiteLLM config against the catalogue; the two tiers (half up, foreign, unmeasurable, down under a live session, or running and not proven to run the installed bytes); and its usage timer and `~/.cc-limits` row. Lane state left under `~/.ccrc/codex/` for an id no longer `codex` is a WARN |
+| `codex` | for each `exec.kind: "codex"` lane: the four GPT-lane executables in `~/.local/bin` against the shipped tree; the isolated runtime (`ccgpt-runtime check`, which trusts the build's stamp and compares the installed LiteLLM patch with `patch-source`); the roster row and its ports; `exec.authDir` and its `auth.json`, for existence and mode only; `lane.json` against the roster row and the class registry; a `codex` class registry and its haiku-class probe model; the rendered LiteLLM config against the catalogue; the two tiers (half up, foreign, unmeasurable, down under a live session, or running and not proven to run the installed bytes); and its usage timer and `~/.cc-limits` row. Lane state left under `~/.ccrc/codex/` for an id no longer `codex` is a WARN |
 | `pools`, `memory`, `routing`, `models` | project pool tags; one memory store per project; lane routing; model-catalogue freshness |
 | `pool-sync`, `update-sync` | a fleet box's two pulled projections, present and in lease |
 | `graphify`, `graphify-path` | the pinned graph engine, its skill and the sweep's last census; `graphify` on `PATH` resolving to that engine |
 | `build`, `provenance`, `fleet` | the running server's build against the stamp; whether this install was verified (never a FAIL); in remote mode, whether the two boxes agree |
-| `box-token` | the box token's lifecycle on each box (the server's token and state files; the fleet's copy and its last sync). PASS or SKIP only in wave 1: a finding that will be a FAIL or WARN prints as a SKIP with its word, and a SKIP is never counted in doctor's exit code |
+| `box-token` | the box token's lifecycle on each box (the server's token and state files; the fleet's copy and its last sync). The FAIL and WARN arms are on: a FAIL counts in doctor's exit code and a WARN does not. A fresh box that was never handed a value (no fleet generation file and no sync report that records a value written or carries the generation the box held, or no server state file and none of the server's traces of a value: its retired list, its previous value, a set-aside copy, or, on a box whose server writes the fleet file itself, that file or its generation file) has that finding read PASS with its sentence, never WARN or FAIL: the server mints at its first boot, and its next rotation hands the fleet one. A box that once held a value and lost it is a FAIL |
 
 `ccrc doctor --fix` cures the failing checks that know how — `skills`, `wrappers` and `codex`, each by
 the shipped tree's own installer — and measures them again; the second verdict is the one that counts (D-3113). Without the flag
@@ -1761,10 +1763,21 @@ than guess which was meant. `ccrc models` needs `node` and `jq`, and has no PWA 
 **ccrc can run a ChatGPT/Codex subscription as a lane, end to end.** Claude Code talks to a loopback **shim**
 (`ccgpt-proxy.py`) on the lane's `proxyPort`, which forwards to the lane's own **LiteLLM gateway** on
 `litellmPort`, which speaks to the Codex backend with the lane's OAuth. The shim exists because Codex refuses
-`system` messages through either door Claude Code sends them by: it folds the top-level `system` field and
-every mid-conversation `role: "system"` entry into user turns, sets `reasoning.effort` per request (the
-client's own, else the lane's `set-effort` default for that model), and answers `400` or `415` for a body it
-cannot parse or an encoding it does not implement rather than forward it unexamined.
+a mid-conversation `role: "system"` entry, which Claude Code sends: it turns each such entry into a user turn,
+in place. The top-level `system` field is kept as the system prompt — one plain string behind a lead line
+telling the model it runs inside Claude Code, not the Codex CLI — so LiteLLM carries it in Codex's
+`instructions`, after the Codex CLI prompt LiteLLM always puts there. The shim also sets `reasoning.effort`
+per request (the client's own, else the lane's `set-effort` default for that model), and answers `400` or
+`415` for a body it cannot parse or an encoding it does not implement rather than forward it unexamined. When its
+connection to the gateway is refused, as while a release restarts the gateway, it sends the same request again
+every half second for up to 60 seconds before answering `502`; the optional `CCGPT_UPSTREAM_WAIT_S` (a whole
+number of seconds from 0 to 600, `0` for no waiting) sets that bound, and any other connection failure (a reset, a
+timeout, a connection dropped mid-request) is an immediate `502`, and an upstream HTTP error status is relayed as
+it is; neither is retried, since the request may already have reached the gateway. A request is held only while its
+client is still connected: once the client has closed its connection, the shim stops waiting, sends nothing upstream
+and answers the old `502` (which a client that only half-closed still reads). A client with a further request already
+queued behind this one (HTTP pipelining) cannot be seen to leave, so its old request is still sent when the gateway
+returns; the shim's one real client does not pipeline.
 
 **Adding one is a roster edit** — `ccrc account add` does not create this kind. Add an entry to
 `~/.ccrc/accounts.json` (`homeAble: false` keeps it an overflow lane, as above; `true` lets placement pick it;
@@ -1796,7 +1809,11 @@ waits until both tiers answer; `stop` stops only what it proves is this lane's a
 leaves running. The runtime is an isolated LiteLLM venv under `~/.ccrc/runtime/codex/`, built by
 `ccrc install` when the roster has a `codex` lane (`ccgpt-runtime build`, which needs `python3` with `venv`;
 pip installs the `litellm[proxy]` range `ccgpt-runtime` pins, which can take minutes) and made current only
-after a behaviour probe passes; a failed build keeps the previous generation. Per-lane state lives in
+after a behaviour probe passes; a failed build keeps the previous generation. Each generation also carries
+ccrc's one patch to LiteLLM (`ccgpt-runtime patch-source` prints it): when Codex streams no delta events for a
+tool call or a reply, it hands the finished arguments or text on, so parallel tool calls keep their input. The
+probe is its acceptance test, and `ccgpt-runtime check` reads `mutated` for a generation that has lost it.
+Per-lane state lives in
 `~/.ccrc/codex/<id>/` — `lane.json`, `litellm.yaml` (re-rendered by `ccrc models litellm <id>`; it carries no
 `reasoning` keys because the shim owns effort) and `runtime.env`, which holds the gateway key — and logs in
 `~/.ccrc/logs/codex/<id>/`. The verbs need `jq` (and every one but `login` needs `node`) and are refused on a
@@ -3161,6 +3178,17 @@ replaces; doctor's `skills` check measures every home against the shipped tree,
 and `ccrc doctor --fix` re-runs the same installers. That lane is what makes
 "place the coordinator — or a worker — like any other session" safe.
 
+**None of the three is a subagent's to load, and the hook now enforces it (D-4934).** Each skill's
+description says "Never use it inside a subagent": a session started by another session's Agent tool or a
+workflow `agent()` call returns its report to its parent, and loading one of these makes it act as the
+session instead (ack mail, take claims, send wave-done or review-done, open or dispatch runs, all under
+the session's identity). Wording alone did not hold, since a subagent on a Codex lane loaded the reviewer
+skill as its first action after that wording shipped. So `ccd/session-hook.sh`'s `PreToolUse` arm denies the
+`Skill` call itself when its payload carries a non-empty `agent_id` and names one of the three, on every
+lane; the deny is listed under "What replaced it" (R1's stdout paragraph) and pinned by
+`server/test/session-hook-role-skill-deny.test.ts`, which also pins the three names against the skills'
+`name:` frontmatter. Every other skill stays open to a subagent, and the main thread is never asked.
+
 **The skills' one client is `~/.local/bin/ccrc-api`** (`ccd/ccrc-api`), a closed
 client for the coordination API — and the reason a repository that denies
 `Bash(curl:*)` does not cut its worker off from its mail. No argument is a URL,
@@ -3558,15 +3586,19 @@ entry in the cleanup row on `/runs` saying it would expire, with what would be d
 composed. Armed, at most one expiry runs per sweep pass, fleet-wide. `$REG/reclaim-paused` is the fleet’s one cleanup switch: raised (the cleanup row's toggle on
 `/runs`, or `ccd reclaim-pause --state on`), it stops child reclamation and this lane alike, shadow included. A
 workspace someone is viewing is left alone for as long as they are; one a process is working in (a forgotten dev
-server, a tmux or fsmonitor daemon) is refused `in-use` on every pass and, after a few, listed with the process's id,
-its command and its path. The lane never kills: find out what the process is first — the fleet's own tmux server is
+server, a tmux or fsmonitor daemon) is refused `in-use` each time it is asked and, after a few, listed with the
+process's id, command and path. The lane never kills: find out what the process is first — the fleet's own tmux server is
 also a `tmux: server`. A workspace held past its seven days is listed, never touched. A cleanup that completed but kept
 the workspace's clips or temp root (ccd's removal refused it, could not measure it, or a process still used it) is
 listed, saying what was kept and why, until the server restarts; a fleet box whose ccd predates that report says so in
 the feed row only. A cleanup the box keeps failing in a way it says it can resume is listed after an hour (a box answer at
 once) and retried, backing off; after a day it becomes a standing entry, with the first failure, the attempts and the last
-error, asked again every four hours, never stopping. The entry stays through a hold, a shadow audit or any other answer that
-ends no attempt, until an attempt completes, finds that none had begun or stops for good, or the workspace is archived again.
+error, asked again four hours after each failed attempt (sooner after an answer that ends no attempt), never stopping. The
+entry stays through a hold, a shadow audit or any other answer that ends no attempt, until an attempt completes, finds that
+none had begun or stops for good, or the workspace is archived again (a server restart drops it too). One that met
+`containment-refuted` is listed at once on that cadence, and ccd's stopping before an attempt began does not end it (an
+attempt completing, a verdict stopping it, or a fresh archive does, and a server restart drops it, as it drops every
+entry); one ccd stopped before it began is audited afresh, and listed after an hour if that recurs; a box with no `flock` gets no cleanup at all until the server restarts. The spec's §12 lists what to know before arming this lane or the next.
 
 **A coordinator that crashed is ended after an hour** (workspace lifecycle spec §5.4). A coordinator whose pane is
 gone with nothing bringing it back (`orphan`, `never-started`), or whose registry row is gone, with no deliberate act
@@ -3574,9 +3606,10 @@ journaled since its last successful spawn — a stop, an archive, a reap, a dest
 expiry, or an unsupervise somebody declared — and that has stayed so for an hour on two passes in a row, has its open
 runs closed `failed` by the server once the operator has armed the lane with `$REG/dead-coordinator-lane-live`; until
 then the lane only records what it would end. The hour counts from the first pass that measured the crash, kept in
-`coord.db` across restarts and raised, never lowered, by a later supervisor heartbeat. A lane gap of more than ten
-minutes (a restart, a pause, a stale mirror) starts the hour afresh, and trips the breaker when two or more coordinators
-were crashed, since each re-anchors on the same pass. A stopped coordinator is never
+`coord.db` across a clean restart (after an unclean exit every crashed claimant's hour starts afresh: D-4916) and
+raised, never lowered, by a later supervisor heartbeat. A lane gap of more than ten minutes (a restart, a pause, a stale
+mirror) starts the hour afresh, and trips the breaker when two or more coordinators were crashed, since each re-anchors
+on the same pass. A stopped coordinator is never
 ended, nor one a supervisor is bringing back, nor one the server cannot measure. A coordinator whose journal the
 server cannot trust to hold every deliberate act — the lifecycle mirror `unavailable` (the fleet's ccd does not journal), a gap it recorded since the
 coordinator's last start, a journal line ccd could not write — is listed and never acted on, and so are one with no
@@ -3598,7 +3631,8 @@ coordinator is ended per pass; in shadow every due one is recorded. `$REG/reclai
 included. It never pushes: the stall watch's pushes about a dead coordinator's stalled workers — one per worker, each
 naming the coordinator — are the notifications, and this lane's rows (each with the instant the coordinator was first
 seen dead, and one when the breaker trips) are records of the same incident. A mirror that goes stale between the pass
-and the act stops the act and keeps the hour, and every act that fails writes a feed row, whatever it had done.
+and the act stops the act and keeps the hour, and every act that fails writes a feed row, whatever it had done. A mirror
+gone stale, or a gap recorded, while the act measures the coordinator stops it too: the act reads both again after it.
 
 **What a crossing costs.** Caps stay global: one row, whole box, no per-project
 and no per-programme cap. Running-worker concurrency counts dispatched runs in
@@ -3831,8 +3865,8 @@ tail prints when it proves that what it would remove is not only the child's own
 inside or through it, a workdir that is the main checkout, a link or non-directory at the workdir); the session was
 stopped and nothing further was deleted, and a retry finds the same thing until the other tree or row is moved or
 removed. What could not be asked stays `worktree-remove-failed`. The failed document carries `crumb`, saying whether
-the failure was printed past the act's breadcrumb, and omits it where that is not known (`ws-expire`'s own
-pre-breadcrumb documents, its resumed arm's `probe-unmeasured`, every `ws-collect` document). Git's silence about a worktree record is no longer believed
+the failure was printed past the act's breadcrumb, and omits it where that is not known (a breadcrumb that stands but
+cannot be read, every `ws-collect` document; `ws-expire` says it too since workspace lifecycle wave 6). Git's silence about a worktree record is no longer believed
 without reading its admin entries, so `no-worktree-record` becomes a retried unmeasured answer when an entry could not
 be read, and a vanished tree whose record names the all-zero head is unmeasured at the audit. The reclaim token also
 binds the row's generation (`ws-audit --reclaim` prints it as `generation`), so a token minted over one row is never
@@ -4639,14 +4673,21 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   gate's deny on a gated call (R5, below), the worker merge deny on a `gh pr merge` from a session whose
   hold names a programme wave or whose workspace carries the child marker (the landing-order rule, "The native merge queue" above: the
   coordinator merges, workers never do; a speed bump on that one verb, not a wall — a `gh api` merge
-  passes it), the Read nudge's `additionalContext` on a nudged call (R6,
+  passes it), the role-skill deny on a `Skill` call from a subagent (a payload with a non-empty
+  `agent_id`) that names `ccrc-worker`, `ccrc-reviewer` or `ccrc-coordinator`, exactly or behind one
+  `<namespace>:` prefix, with the name read as Claude Code reads it (trimmed of JavaScript's `trim` set,
+  then ONE leading `/` stripped, so ` ccrc-worker` and `/ccrc-worker` are the worker skill) (D-4934: those
+  three skills make whoever loads them act as the session, and a
+  subagent cannot be the session; any other skill, and the main thread, pass; a speed bump, since the
+  `SKILL.md` files stay readable), the Read nudge's `additionalContext` on a nudged call (R6,
   below), or the landing advisory's on a sync of main — a deny supersedes any advice built for the same
-  call, and the merge deny never replaces the search gate's — and empty on every other event**, because
+  call, and neither the merge deny nor the role-skill deny replaces another deny — and empty on every other event**, because
   a stdout JSON on `PreToolUse` is read as this hook having something to say about the call, and it
   says nothing there unless it does. The card, the search deny and the nudge are pinned in both
   directions by `server/test/session-hook.test.ts`, the advisory by
   `server/test/session-hook-sync-advisory.test.ts`, the merge deny by
-  `server/test/session-hook-merge-deny.test.ts`.
+  `server/test/session-hook-merge-deny.test.ts`, the role-skill deny by
+  `server/test/session-hook-role-skill-deny.test.ts`.
 - **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries seventeen clauses (thirteen at R2; routing slice 2 added 14 and 15, landing-order wave 1 added 16, the stall watch added 17), pinned verbatim: a
   workspace with a `graphify-out/graph.json` takes a codebase question to `graphify query` before
   `grep`, **weighted by the card's freshness word** — only `fresh` licenses taking an answer as read,
@@ -4951,8 +4992,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7878-7880`), each with an operator sentence of its own at `:7930`,
-`:7938` and `:7951`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7929-7931`), each with an operator sentence of its own at `:7981`,
+`:7989` and `:8002`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 

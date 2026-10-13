@@ -3,11 +3,12 @@
 Spec: `docs/superpowers/specs/2026-10-05-stall-watch-settings-design.md` (rev 3.2, approved 2026-10-05 17:46 UTC)
 Plans: `docs/superpowers/plans/2026-10-05-stall-watch-settings-w1-server.md` (wave 1),
 `docs/superpowers/plans/2026-10-05-stall-watch-settings-w2-pwa.md` (wave 2),
-`docs/superpowers/plans/2026-10-12-stall-watch-settings-w3-hidden-ask.md` (wave 3; it lands with the wave's PR, R38)
+`docs/superpowers/plans/2026-10-12-stall-watch-settings-w3-hidden-ask.md` (wave 3; it landed with the wave's PR, R38)
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-calm-harbor`   Workspace: **a fresh child per wave**
 Predecessor: `stall-watch`, complete (its ledger's R38).
-**Status: wave 3 open** (R38, 2026-10-12). Wave 1 merged as `7f7bf4afc` (#320), wave 2 as `6e4524164` (#322), and
-the ledger to R37 as `da1373cf6` (#356). Wave 3 carries finding 4063's two fixes, by the operator's ruling.
+**Status: complete** (R51, 2026-10-13). Wave 1 merged as `7f7bf4afc` (#320), wave 2 as `6e4524164` (#322), the
+ledger to R37 as `da1373cf6` (#356), and wave 3, finding 4063's two fixes, as `f515cdfd4` (#362). The follow-up
+list is in R51.
 
 **What this program is.** The Settings page gains a **Stall watch** section with one arming ladder and one quiet
 time.
@@ -28,7 +29,7 @@ time.
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
 | 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merged `6e4524164` 2026-10-12; run 322 closed `done`, `final:true` (R37) |
-| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | review 422 accepted; ready to merge at `50bdec086` (R50) |
+| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | merged `f515cdfd4` 2026-10-13 (v0.0.177); run 394 closed `done`, `final:true` (R51) |
 
 ## Decisions & deviations
 
@@ -1102,6 +1103,52 @@ time.
     of PR CI run 38447456900 passes (macOS pending, advisory).
   - Next: the operator merges #362 (`--admin --squash --match-head-commit 50bdec086`). Then run 394 closes `done`
     as the final wave, and the residue list goes to the programme's close.
+- **R51 (2026-10-13 23:25)**, wave 3 is merged, and the programme is complete.
+  - The operator, 2026-10-13 23:22: "merge it you have my go ahead". PR #362 merged at 23:23:43Z as `f515cdfd4`,
+    by `--admin --squash --match-head-commit 50bdec086`. Before it:
+    - the head equalled review 422's tip, `50bdec086`;
+    - `main` had moved two commits since R50, to `bedcb26fb`: #393 (docs) and #351 (workspace lifecycle wave 6).
+      Neither changes a file #362 changes. #351's `watch.ts` hunks are in the archived-expiry and dead-coordinator
+      lanes, not the stall, ask or hold paths wave 3 reads. `merge-tree` was clean, so the branch landed as it was;
+    - every required check was green, and only the advisory macOS legs failed;
+    - the PR was `MERGEABLE`, and `BLOCKED` was covered by `--admin`.
+  - Run 394 closed `done` with `final:true`, released, with `childReclaim` queued. The worker's workspace evidence
+    was copied first to `w3-final-child-evidence-close/`. The programme has no open run, and neither this session
+    nor run 394 holds a claim.
+  - Wave 3's numbers are now defined on `main`, in the W3 plan's Deviations:
+    - D-4039, `subagent-tool-event-keeps-the-waiting-ask`;
+    - D-4040, `dialog-cap-clock-ignores-inbound-mail`;
+    - D-4041, `a-carried-wait-keeps-its-stamp`.
+  - Release: the release workflow for `f515cdfd4` succeeded, and v0.0.177 was published at 23:24:59Z as a
+    prerelease. The updater moves the boxes, fleet box first; this session never rolls out by hand. Arming stays the
+    operator's: the deploy changes no level.
+  - The follow-up list. None of it blocks, and only (d) changes behaviour:
+    - (a) Review 404's F1-F4 (R47). Add the fractional-stamp case: a non-negative fractional `updatedAt` is kept as
+      its floor, and -0.5 is refused. That makes the plan's "Pinned by" bullet and the renamed test title true. Say
+      "a non-negative fractional value" in the hook comment and at plan :473. Add one sentence naming the title
+      rename at plan :368-369 and :521-522.
+    - (b) Review 422's F1 (R50). Raise the jq-program floor in `session-hook-merge-deny.test.ts` to 52, and name
+      #392's program in its composition comment. Measure the mutation red before and after, and update the plan's
+      D-4041 note.
+    - (c) Bound the POST handler slice in `stall-settings-route.test.ts:588-595` to the handler's body (R48, mail
+      4635).
+    - (d) The stall-watch save's refusal fold (R49, mail 4642). Read a failure as `refused` only on a known refusal
+      code; any other `ApiError` reads `unconfirmed`. Amend the spec's :1321 to match. This changes what the
+      screen says, so it gets a red-first test and a review.
+    - (e) Two comments still describe the old re-stamp as current (R43's F3, D-4041's Not done): `restampAsk`'s
+      docstring in `store.ts`, and the `SAME DIALOG, STILL PAINTED (D-2403)` comment in `watch.ts` (≈:7741 on
+      `f515cdfd4`).
+    - (f) README :5413-5417's "a write older than 30 minutes" is imprecise for a carried wait (R41, R45).
+    - (g) Wording only:
+      - the long plan lines;
+      - the plan lines fix round 1 left stale (:53, :46-47, the Task 1 snippet);
+      - the D-2404 words in the `ask-instance-guard.test.ts` header (R47's note);
+      - the "~650 lines up" comment, now about 704 (R50).
+    - (h) R37's follow-up list, unchanged.
+    - Finding 4063's owner 3, arming, stays the operator's.
+  - Next: this ledger lands on `main` by a docs PR from this branch, after `main` is merged in (the W3 plan taken as
+    `main` has it). The follow-up list goes to the operator as a proposed residue wave; whether and when it runs is
+    the operator's call.
 
 ## Carried constraints (reviewers get these)
 
@@ -1146,3 +1193,4 @@ time.
   - Do not edit `server/test/session-hook.test.ts` (claim 1188), `README.md`, `watch.ts` or `store.ts` (claim 1172).
   - At wave-done: re-measure, advance, then a review run with the held-out panel over plan and code. The merge is the
     operator's call. Wave 3 is the last wave, so its close carries `final:true`.
+  - Done: run 394, merged as `f515cdfd4` (#362), and closed `done` with `final:true` (R51).

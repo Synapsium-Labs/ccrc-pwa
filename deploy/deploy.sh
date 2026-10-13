@@ -25,7 +25,7 @@ cd "$REPO_ROOT"
 #                                        # — NEVER defaulted from CCRC_BOX; a
 #                                        # single-box install sets it to the
 #                                        # same user@host as CCRC_BOX
-#     CCRC_SW_DENYLIST=/docs,/fleet      # optional: paths on the box's origin
+#     CCRC_SW_DENYLIST=/wiki,/fleet      # optional: paths on the box's origin
 #                                        # that are NOT ccrc (see below)
 #
 CCRC_DEPLOY_ENV="${CCRC_DEPLOY_ENV:-$HOME/.ccrc/deploy.env}"
@@ -38,7 +38,7 @@ CCRC_DEPLOY_ENV="${CCRC_DEPLOY_ENV:-$HOME/.ccrc/deploy.env}"
 # navigations the service worker must leave alone. Sourcing deploy.env makes it
 # a shell variable; only exporting it reaches the build. Without the export an
 # operator sets the knob, sees no error, ships a worker that has never heard of
-# it, and their co-tenant at /docs starts answering with the ccrc shell on
+# it, and their co-tenant at /wiki starts answering with the ccrc shell on
 # client-side navigations only — which reads as an intermittent fault in the
 # OTHER application. `deploy-coordinates.test.ts` pins the export for that
 # reason.

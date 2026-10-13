@@ -17,6 +17,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { ACTOR_FLAGS_CAP, EXPIRE_CAP } from '../src/ccdargv.js';
 import {
   EXPIRE_AUDITS_PER_PASS, EXPIRE_FAILURE_CEILING_MS, EXPIRE_IN_USE_ATTENTION_PASSES, EXPIRE_LANE_LIVE_MARKER, EXPIRE_NO_EVIDENCE_RETRY_MS,
+  EXPIRE_PERSISTENT_RETRY_MS,
 } from '../src/archivedExpiry.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { seedRoster, testDeps } from './helpers.js';
@@ -156,17 +157,107 @@ describe('a failed state-changed is audited afresh (wave 5)', () => {
     expect(f.entry('demo-a'), 'back to learning').toMatchObject({ expiresAt: null, eligibleSince: null, report: null });
     await f.watcher.tick();
     expect(f.watcher.currentCoord()?.expiryAttention ?? [], 'nothing was deleted: nothing is listed').toEqual([]);
-    expect(f.coord.feedEvents(5).find((e) => e.title === 'archived workspace changed under its cleanup')?.body)
-      .toContain('its branch was deleted or made inside the lock (state-changed: ws/demo-a read present');
+    expect(f.coord.feedEvents(5).find((e) => e.title === 'archived workspace cleanup stopped before it began')?.body)
+      .toContain('ccd stopped before this attempt started anything (state-changed: ws/demo-a read present');
     const audits = f.verbsFor('ws-audit').length;
     f.next(); await f.pass();
-    expect(f.verbsFor('ws-audit'), 'the next pass learns the instant afresh').toHaveLength(audits + 1);
+    expect(f.verbsFor('ws-audit'), 'counted (wave 6, ruling C): backed off one wait').toHaveLength(audits);
+    f.next(); await f.pass();
+    expect(f.verbsFor('ws-audit'), 'the pass after its backoff learns the instant afresh').toHaveLength(audits + 1);
     f.next(); await f.pass();
     expect(f.verbsFor('ws-expire'), 'seen eligible once: not yet').toEqual(['demo-a']);
     f.next(); await f.pass();
     expect(f.verbsFor('ws-expire'), 'seen twice: composed again, with its own fresh audit’s token').toEqual(['demo-a', 'demo-a']);
     expect(f.verbsFor('ws-audit'), 'the act audited first').toHaveLength(audits + 2);
     expect(f.entry('demo-a'), 'and finished').toBeUndefined();
+  });
+});
+
+describe('a RECURRING restart is counted (wave 6, ruling C)', () => {
+  it('it backs off as any failure does and is listed after the hour — where today it composed every third pass, unlisted, for ever', async () => {
+    const f = await fixture({ expire: () => ({ code: 1, stdout: JSON.stringify({ failed: 'state-changed', detail: 'moved' }), stderr: '' }) });
+    f.touch(EXPIRE_LANE_LIVE_MARKER);
+    f.plant('demo-a');
+    const acts: number[] = [];
+    let listedAt = -1;
+    for (let k = 1; k <= 180; k += 1) {
+      const before = f.verbsFor('ws-expire').length;
+      await f.pass();
+      if (f.verbsFor('ws-expire').length > before) acts.push(k);
+      if (listedAt < 0 && f.entry('demo-a')?.report != null) listedAt = k;
+      f.next();
+    }
+    expect(acts[0], 'the first act on the third pass, as ever').toBe(3);
+    expect(acts[1], 'the second waits out its backoff: never the third pass after').toBeGreaterThan(6);
+    expect(acts.length, 'three hours of passes: far fewer acts than one every third pass').toBeLessThan(15);
+    const gaps = acts.slice(1).map((a, i) => a - acts[i]!);
+    expect(gaps, 'each wait as long as the last or longer').toEqual([...gaps].sort((a, b) => a - b));
+    expect(listedAt, 'listed once its run has lasted the hour').toBeGreaterThan(60);
+    expect(listedAt).toBeLessThanOrEqual(150);
+    await f.watcher.tick();
+    const list = f.watcher.currentCoord()?.expiryAttention ?? [];
+    expect(list.map((a) => [a.sessionId, a.kind])).toEqual([['demo-a', 'failing']]);
+    expect(list[0]!.sentence).toBe('cleanup keeps failing: state-changed: moved. It is retried, backing off in between.');
+  });
+});
+
+describe('`crumb` decides a failed document (wave 6, question (k))', () => {
+  it('a RESUMED expiry’s probe-unmeasured (crumb true) is retried on the backoff and listed past the hour — never stopped for good', async () => {
+    const f = await fixture({ expire: () => ({ code: 1, stdout: JSON.stringify({ failed: 'probe-unmeasured',
+      detail: 'whether cc-demo-a is up could not be asked — tmux answered: nothing', crumb: true }), stderr: '' }) });
+    f.touch(EXPIRE_LANE_LIVE_MARKER);
+    f.plant('demo-a');
+    await threePasses(f);
+    expect(f.verbsFor('ws-expire')).toEqual(['demo-a']);
+    expect(f.entry('demo-a')?.report, 'retried, so not listed at once').toBeNull();
+    for (let k = 0; k < 70; k += 1) { f.next(); await f.pass(); }   // well past the one-hour ceiling
+    expect(f.verbsFor('ws-expire').length, 'asked again, backing off').toBeGreaterThan(1);
+    expect(f.entry('demo-a')?.report).toMatchObject({ kind: 'failing' });
+    expect(f.entry('demo-a')?.report, 'still asked: never a final report').not.toHaveProperty('final');
+  });
+
+  it('a FRESH expiry’s pin-failed (crumb false) is audited afresh — nothing was deleted, nothing is listed', async () => {
+    let n = 0;
+    const f = await fixture({ expire: (id) => (n += 1) === 1
+      ? { code: 1, stdout: JSON.stringify({ failed: 'pin-failed', detail: 'the disk is full', crumb: false }), stderr: '' }
+      : { code: 0, stdout: JSON.stringify({ expired: id, archivedAt: OLD, wip: null, attic: 2, residueBytes: 0, secretsDropped: 0, clipsKept: null, tmpRootKept: null }), stderr: '' } });
+    f.touch(EXPIRE_LANE_LIVE_MARKER);
+    f.plant('demo-a');
+    await threePasses(f);
+    expect(f.verbsFor('ws-expire')).toEqual(['demo-a']);
+    expect(f.entry('demo-a'), 'back to learning').toMatchObject({ expiresAt: null, eligibleSince: null, report: null });
+    expect(f.coord.feedEvents(5).find((e) => e.title === 'archived workspace cleanup stopped before it began')?.body)
+      .toContain('ccd stopped before this attempt started anything (pin-failed: the disk is full)');
+  });
+});
+
+describe('containment-refuted is STUCK (wave 6, ruling B)', () => {
+  it('listed AT ONCE, asked again every four hours, never stopping, one feed row — and an attempt that completes ends it', async () => {
+    let stuck = true;
+    const f = await fixture({ expire: (id) => stuck
+      ? { code: 1, stdout: JSON.stringify({ failed: 'containment-refuted', detail: 'demo-other’s registry row lies inside /w/demo-a', crumb: true }), stderr: '' }
+      : { code: 0, stdout: JSON.stringify({ expired: id, archivedAt: OLD, wip: null, attic: 2, residueBytes: 0, secretsDropped: 0, clipsKept: null, tmpRootKept: null }), stderr: '' } });
+    f.touch(EXPIRE_LANE_LIVE_MARKER);
+    f.plant('demo-a');
+    await threePasses(f);
+    expect(f.verbsFor('ws-expire')).toEqual(['demo-a']);
+    await f.watcher.tick();
+    const list = f.watcher.currentCoord()?.expiryAttention ?? [];
+    expect(list.map((a) => [a.sessionId, a.kind]), 'at once — never after the hour or the day').toEqual([['demo-a', 'failing']]);
+    expect(list[0]!.sentence).toContain('cleanup stopped part-way: containment-refuted: demo-other’s registry row lies inside /w/demo-a.');
+    f.advance(EXPIRE_PERSISTENT_RETRY_MS - 2 * CHILD_RECLAIM_SWEEP_MS); f.next(); await f.pass();
+    expect(f.verbsFor('ws-expire'), 'not before four hours').toEqual(['demo-a']);
+    f.advance(2 * CHILD_RECLAIM_SWEEP_MS); f.next(); await f.pass();
+    expect(f.verbsFor('ws-expire'), 'then asked again').toEqual(['demo-a', 'demo-a']);
+    f.advance(EXPIRE_PERSISTENT_RETRY_MS); f.next(); await f.pass();
+    expect(f.verbsFor('ws-expire'), 'and again, never stopping').toHaveLength(3);
+    expect(f.feed().filter(([, t]) => t === 'archived workspace cleanup stuck'), 'one feed row, not one per ask').toHaveLength(1);
+    stuck = false;
+    f.advance(EXPIRE_PERSISTENT_RETRY_MS); f.next(); await f.pass();
+    expect(f.verbsFor('ws-expire')).toHaveLength(4);
+    expect(f.entry('demo-a'), 'the attempt completed: finished with').toBeUndefined();
+    await f.watcher.tick();
+    expect(f.watcher.currentCoord()?.expiryAttention ?? []).toEqual([]);
   });
 });
 
@@ -206,7 +297,7 @@ describe('a failure that keeps resuming (wave 5)', () => {
     const list = f.watcher.currentCoord()?.expiryAttention ?? [];
     expect(list.map((a) => [a.sessionId, a.kind])).toEqual([['demo-a', 'failing']]);
     expect(list[0]!.sentence).toContain(`${asked} attempts, the last: worktree-remove-failed: the tree is busy`);
-    expect(list[0]!.sentence).toContain('The lane asks again every 4 hours');
+    expect(list[0]!.sentence).toContain('The lane asks again 4 hours after each failed attempt');
     // The operator takes the arming away to look into it: the next act stops at the shadow, and the entry STANDS — never
     // replaced by a "nothing was deleted" said of a workspace that may be part-cleaned.
     rmSync(path.join(f.reg, EXPIRE_LANE_LIVE_MARKER));
@@ -215,6 +306,10 @@ describe('a failure that keeps resuming (wave 5)', () => {
     expect(f.verbsFor('ws-audit'), 'the act audited').toHaveLength(audits + 1);
     expect(f.verbsFor('ws-expire'), 'and composed nothing: shadow').toHaveLength(asked);
     expect(f.entry('demo-a')?.report, 'a shadow audit ends nothing').toMatchObject({ kind: 'failing', attempts: asked });
+    const shadow = f.coord.feedEvents(5).find((e) => e.title === 'archived workspace would be cleaned up');
+    expect(shadow?.body, 'and its feed row never says nothing was deleted of a workspace that may be part-cleaned (wave 6)')
+      .toContain('an earlier attempt may have stopped part-way');
+    expect(shadow?.body).not.toContain('nothing was deleted');
   });
 
   it('a day in SHADOW of the act’s own audit unreadable never reaches the tier: once the audit recovers, would-expire is listed again (final review I1)', async () => {
@@ -592,6 +687,33 @@ describe('the box words', () => {
     for (let k = 0; k < 6; k += 1) { f.next(); await f.pass(); }
     expect(f.verbsFor('ws-expire'), 'never asked again on a box without flock').toHaveLength(1);
     expect(f.entry(f.verbsFor('ws-expire')[0]!)?.report?.kind).toBe('failing');
+  });
+});
+
+describe('the halt is on EVERY standing row (review 381, F3)', () => {
+  it('a stuck entry, and a flock-unavailable answer for another row: the stuck row’s attention sentence says the lane composes nothing until a restart', async () => {
+    const f = await fixture({ expire: (id) => id === 'demo-a'
+      ? { code: 1, stdout: JSON.stringify({ failed: 'containment-refuted', detail: 'demo-other’s registry row lies inside /w/demo-a', crumb: true }), stderr: '' }
+      : { code: 1, stdout: '', stderr: 'ccd: flock (util-linux) is unavailable — refusing to run the destructive verb unserialised' } });
+    f.touch(EXPIRE_LANE_LIVE_MARKER);
+    f.plant('demo-a');
+    await threePasses(f);
+    expect(f.verbsFor('ws-expire'), 'only the stuck row has been asked, so far').toEqual(['demo-a']);
+    await f.watcher.tick();
+    const before = f.watcher.currentCoord()?.expiryAttention ?? [];
+    expect(before.map((a) => a.sessionId)).toEqual(['demo-a']);
+    expect(before[0]!.sentence, 'no halt yet, no words about it').not.toContain('flock-unavailable');
+    f.plant('demo-b');
+    for (let k = 0; k < 6 && f.verbsFor('ws-expire').length < 2; k += 1) { f.next(); await f.pass(); }
+    expect(f.verbsFor('ws-expire'), 'the other row met the halt').toEqual(['demo-a', 'demo-b']);
+    f.next(); await f.pass();
+    await f.watcher.tick();
+    const list = f.watcher.currentCoord()?.expiryAttention ?? [];
+    const stuck = list.find((a) => a.sessionId === 'demo-a')!;
+    expect(stuck.kind, 'on the wire: still the failing entry, no new word').toBe('failing');
+    expect(stuck.sentence).toContain('cleanup stopped part-way: containment-refuted');
+    expect(stuck.sentence).toContain('The lane composes no cleanup on that box, for any archived workspace, until the server restarts.');
+    expect(f.entry('demo-a')?.report?.kind, 'the entry keeps its place (ruling (n))').toBe('stuck');
   });
 });
 
