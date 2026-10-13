@@ -29,7 +29,7 @@
 // STATUS_SQL, which history-cli.test.ts runs through EXPLAIN QUERY PLAN against a seeded store.
 //
 // status prints no recalled text: ids, paths, counts and words only. The read verbs print recalled text: each
-// field goes through redactField before any cut, and every output through redactFinal (§8.3).
+// field goes through redactField before any cut, and every output through the structure-aware final belt (§8.3, D-4613).
 import { existsSync, lstatSync, readdirSync, realpathSync, statSync, promises as fsp } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -54,7 +54,7 @@ import * as healthPath from 'node:path';
 import { closeSync, constants as FS, fstatSync, openSync, readSync, writeSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import {
-  REASONS, TMUX_DEADLINE_MS, SCOPE_SOURCES, SCHEMA_ADDED, READ_VERBS, idOk, makePairIndex, redactFinal, makeBelt, beltUnits,
+  REASONS, TMUX_DEADLINE_MS, SCOPE_SOURCES, SCHEMA_ADDED, READ_VERBS, idOk, makePairIndex, redactFinalJson, redactFinalText, makeBelt, beltUnits,
   REDACT_SOURCES_META, parseRedactSources,
   decideIdentity, decideHarness, resolveGeneration, decideScope, parseReadArgs, decideRecallOffPreflight, paneOk,
   decideRecallOff, recallOffPath, parseSpoolLine, SCOPE_FAMILIES_JSON_MAX,
@@ -424,8 +424,9 @@ export function render(env) {
 //        tick recorded, read now) for output redaction (§8.3 layers 1 and 4).
 //   A failed read of the admitted store, in any step from 7 on or in the verb's own read, is ONE exit-5 answer
 //   (decideStatusReadFailure, as status gives); any other throw is a defect, exit 1.
-//   The verbs' executors are recall.mjs's. This block decides nothing: it renders, and runs redactFinal over the
-//   whole output as the second belt (§8.3).
+//   The verbs' executors are recall.mjs's. This block decides nothing: it renders, and runs the second belt (§8.3,
+//   D-4613) STRUCTURE-AWARE: redactFinalJson over a --json envelope's value before JSON.stringify serialises it,
+//   redactFinalText over human text line by line and tag by tag. No pass reads serialised structure.
 
 /** Every bad-args answer prints this on stderr. */
 const USAGE = [
@@ -437,15 +438,15 @@ const USAGE = [
   '  every exit code and reason: the ccrc-history skill',
 ].join('\n');
 
-/** No pairs: a refusal prints no recalled text, but every output still takes redactFinal's context and shape
+/** No pairs: a refusal prints no recalled text, but every output still takes the final belt's context and shape
  *  layers (§8.3). */
 const NO_PAIRS = makePairIndex([]);
 
-/** One stderr line carrying a thrown error's text, through redactFinal like every other output (§8.3, §12: the final
+/** One stderr line carrying a thrown error's text, through redactFinalText like every other output (§8.3, §12: the final
  *  stdout, stderr and --json each take one more pass). A SQLite message can quote a value, and the three sites that
  *  wrote `e.message` raw did not redact it (HA2 H-32). Every error text on stderr goes through here. */
 function errLine(text, idx = NO_PAIRS) {
-  process.stderr.write(redactFinal(`${text}\n`, idx));
+  process.stderr.write(redactFinalText(`${text}\n`, idx));
 }
 const ABSENT = Object.freeze({ state: 'absent' });
 const UNREADABLE = Object.freeze({ state: 'unreadable' });
@@ -722,12 +723,12 @@ function refusalLine(exit, reason) {
 /** A refusal, written once: one --json envelope (store_id and coverage always), or one human line. */
 function emitRefusal(r, json, pairIdx) {
   const text = json
-    ? JSON.stringify(readEnvelope({
+    ? JSON.stringify(redactFinalJson(readEnvelope({
       exit: r.exit, ...(r.reason === undefined ? {} : { reason: r.reason }), storeId: r.storeId ?? null,
       scope: null, header: null, items: [], shown: 0, total: 0, next: null,
-    }))
-    : refusalLine(r.exit, r.reason);
-  process.stdout.write(redactFinal(`${text}\n`, pairIdx));
+    }), pairIdx))
+    : redactFinalText(refusalLine(r.exit, r.reason), pairIdx);
+  process.stdout.write(`${text}\n`);
   return r.exit;
 }
 
@@ -743,27 +744,28 @@ function scopeJson(rc) {
 }
 
 /** A verb's result. Human form: the header, the body, `shown K of N`, the next: line, the hint. --json: one
- *  envelope. Both go through redactFinal over the rendered string (§8.3's second belt). */
+ *  envelope. The second belt (§8.3, D-4613) is structure-aware: --json maps the envelope value through redactFinalJson before
+ *  it is serialised, the human page goes through redactFinalText line by line and tag by tag. */
 function emitResult(rc, res, json) {
   const h = scopeHeader(rc);
   let text;
   if (json) {
-    text = `${JSON.stringify(readEnvelope({
+    text = `${JSON.stringify(redactFinalJson(readEnvelope({
       exit: res.exit, ...(res.reason === undefined ? {} : { reason: res.reason }), storeId: rc.storeId, scope: scopeJson(rc),
       header: { indexedThroughMs: h.indexedThroughMs, lagS: h.lagS }, items: res.items, shown: res.shown, total: res.total,
       next: res.next === null ? null : nextLine(res.next),
       // D-4595 (history-json-envelope-carries-hint): the human form prints res.hint below; --json carries it too.
       ...(res.hint === undefined ? {} : { hint: res.hint }),
-    }))}\n`;
+    }), rc.pairIdx))}\n`;
   } else {
     // A runner's refusal (out-of-scope, regex-syntax, migration-pending, …) names its word under the header.
     const lines = [res.header ?? h.line, ...(res.reason === undefined ? [] : [refusalLine(res.exit, res.reason)]),
       ...res.blocks, shownLine(res.shown, res.total)];
     if (res.next !== null) lines.push(nextLine(res.next));
     if (res.hint !== undefined) lines.push(`hint: ${res.hint}`);
-    text = `${lines.join('\n')}\n`;
+    text = redactFinalText(`${lines.join('\n')}\n`, rc.pairIdx);
   }
-  process.stdout.write(redactFinal(text, rc.pairIdx));
+  process.stdout.write(text);
   return res.exit;
 }
 
@@ -1343,7 +1345,7 @@ function relayIndexOf(home, P, reach) {
 }
 
 /** One operator verb through the door. `emit` gets each line the sweep printed before its result, already through
- *  redactFinal with relayIndexOf's index, which is built only once the gate has passed, before the shim starts. */
+ *  redactFinalText with relayIndexOf's index, which is built only once the gate has passed, before the shim starts. */
 export async function runOpVerb(home, verb, rest, emit) {
   const P = healthLib.historyPaths(home);
   const map = opFormOf(verb, rest);
@@ -1367,7 +1369,7 @@ export async function runOpVerb(home, verb, rest, emit) {
     isattyOp(0), opPaneName(form));
   if (!gate.ok) return { exit: gate.rc, reason: gate.reason };
   const idx = relayIndexOf(home, P, reach);
-  return opRelay(P, map.op, map.opArgs, (line) => emit(redactFinal(line, idx)));
+  return opRelay(P, map.op, map.opArgs, (line) => emit(redactFinalText(line, idx)));
 }
 
 /** D-4600 (history-operator-door-survives-a-closed-pipe): `ccrc history import --apply | head -1` closes stdout under the
@@ -1393,7 +1395,7 @@ function guardClosedStdio() {
 
 /** main's arm for `import`, `prune`, `reparse` and `doctor`: argv is main's own, the verb first, `--json` anywhere.
  *  Under --json, stdout is the envelope alone and the sweep's lines go to stderr; every relayed line arrives here
- *  already through redactFinal (runOpVerb's relayIndexOf). */
+ *  already through redactFinalText (runOpVerb's relayIndexOf). */
 export async function operatorMain(home, argv) {
   guardClosedStdio();
   const json = argv.includes('--json');

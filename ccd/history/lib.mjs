@@ -1916,16 +1916,16 @@ const PLAIN_SEQ_RE = /^(?:\x1b\[|\x9b)[0-?]*[@-~]$|^\x1b[!-/][ -/]*[0-~]$/;
  *  pass runs over a serialised `--json` envelope and over the human page's frame). In the final form no value class
  *  consumes a backslash (a JSON escape is never split, so an escaped quote ends a value instead of being left bare),
  *  a line break (`\n`, `\r`: a value never crosses a line), `<` or `>` (nor a frame tag) or `&`; the JSON-form rule's value
- *  has no escape alternative, so an escaped quote ends it. The NAME= value also excludes `]` and `}`: a JSON string
- *  that ends right after a key and its separator (`API_KEY=`, `password: `) is followed by its closing quote, which
- *  the rule's optional quote would take, and then by the `}` or `]` that closes the object or array, which the
- *  value would take and the mask would drop. The other final rules' values already stop at `"`. The field form is
- *  today's, byte for byte. */
+ *  has no escape alternative, so an escaped quote ends it. The final form is the PER-SEGMENT primitive of the
+ *  structure-aware belt (redactFinalText, redactFinalJson): it is never run over serialised structure, so it needs no
+ *  rule about a closing quote or a closer (round 2's `]` and `}` exclusion was that, and it made the form
+ *  non-idempotent on the field pass's own marks: `TOKEN=[redacted]` read as `[redacted` and was masked again). The
+ *  field form is today's, byte for byte. */
 function contextRules(final) {
   const stop = final ? String.raw`\\<>&` : '';
   return Object.freeze({
     json: new RegExp(String.raw`"([A-Za-z_][A-Za-z0-9_.-]{0,255})"(\s*:\s*)"(${final ? String.raw`[^"\\\n\r<>&]+` : String.raw`(?:[^"\\]|\\.)+`})"`, 'g'),
-    named: new RegExp(String.raw`\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:[ \t]+)(["']?)([^\s"'` + '`' + String.raw`,;&${final ? String.raw`\\<>\]}` : ''}]+)`, 'g'),
+    named: new RegExp(String.raw`\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:[ \t]+)(["']?)([^\s"'` + '`' + String.raw`,;&${final ? String.raw`\\<>` : ''}]+)`, 'g'),
     bearer: new RegExp(String.raw`(Authorization:[ \t]*Bearer[ \t]+)([^\s"'${stop}]+)`, 'gi'),
     mailToken: new RegExp(String.raw`(x-ccrc-mail-token:[ \t]*)([^\s"'${stop}]+)`, 'gi'),
     query: new RegExp(String.raw`([?&]token=)([^&\s"'#${final ? String.raw`\\<>` : ''}]+)`, 'gi'),
@@ -2422,20 +2422,57 @@ export function entryIndexText(text, idx) {
   return cutIndexText(redactForIndex(w.text, idx), w.windowCut, ENTRY_FTS_BYTES, ENTRY_REDACT_MARGIN);
 }
 
-/** The second belt (§8.3): the final rendered stdout, stderr or `--json`
- *  string gets the same layers once more. It cannot replace the field
- *  pass (an escape letter glued to a run defeats it); it catches what a
- *  field pass was never given. Layer 2 runs in its structure-safe form, D-4613 (history-final-belt-layer2-structure-safe)
- *  (CONTEXT_RULES): the text is a serialised `--json` envelope or a
- *  human page with its frame, so no context value may consume a backslash, a line break, `<`, `>` or `&`, and an
- *  escaped quote ends a value instead of being left bare, and a string that ends right after a context key never
- *  takes its closing quote and the `}` or `]` after it (`--json` stays valid, the frame stays intact). Two
- *  residuals: a context-shaped value whose characters include one of those is masked by the field pass only (and the
- *  JSON-form rule masks none of it, its value must be followed at once by a quote), and an OBJECT KEY that ends in a
- *  context key and separator is still followed by `:`, which the NAME= value takes with what follows (it fails
- *  closed; the envelopes' keys are field and counter names fixed in code). */
+/** The second belt (§8.3), per-segment primitive: the field pass's layers once more over ONE piece of text that has no
+ *  structure of its own to protect, with layer 2 in its structure-safe final form, D-4613
+ *  (history-final-belt-layer2-structure-safe) (CONTEXT_RULES: no value class consumes a backslash, a line break, `<`,
+ *  `>` or `&`). It is idempotent on the field pass's marks (`TOKEN=[redacted]` is returned as it came). It must
+ *  NEVER be run over serialised `--json` or over a whole human page: a pass over serialised structure cannot be made
+ *  safe by value classes (the escape-stripped reading can run an ANSI-shaped span across a quote, a frame tag or a
+ *  line, rounds 1 and 2). The callers are `redactFinalJson` (every string leaf of the envelope value, in the FIELD
+ *  form) and `redactFinalText` (each line segment and each frame-tag attribute value, in this form). */
 export function redactFinal(text, idx) {
   return redactFieldIn(text, idx, 'final');
+}
+
+/** The final belt over a `--json` envelope, D-4613 (whole-branch fix round 3): the VALUE is deep-mapped BEFORE it is
+ *  serialised, so no pass ever reads serialised structure. Every string leaf goes through `redactField` (a raw string
+ *  has no structure to protect, so the full-strength field form is right); numbers, booleans and null pass through;
+ *  object KEYS are never touched (they are field and counter names fixed in code). The caller serialises the result
+ *  with `JSON.stringify`, so the envelope's escaping is the serialiser's own and `--json` is valid whatever a leaf
+ *  holds. Residuals: a secret an object KEY would carry is not masked (no key is data); a leaf the field form cannot
+ *  mask is no worse than the field pass was. */
+export function redactFinalJson(value, idx) {
+  if (typeof value === 'string') return redactField(value, idx);
+  if (Array.isArray(value)) return value.map((v) => redactFinalJson(v, idx));
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactFinalJson(v, idx)]));
+  }
+  return value;
+}
+
+/** A frame tag of the recalled-text envelope (recallEnvelope's opening and closing tag). escapeXmlAttr has escaped every
+ *  attribute value, so a real tag holds no raw `>` or `"` inside a value. */
+const FRAME_TAG_RE = /<\/?ccrc-recall\b[^>]*>/g;
+
+/** The final belt over human text (a page, one stderr line, one relayed line), D-4613 (whole-branch fix round 3): the
+ *  text is split at each `\n` (the break itself is never given to a pass) and, within a line, around frame tags; every non-tag segment
+ *  goes through `redactFinal` on its own, and a tag is kept except that each of its quoted attribute values goes
+ *  through `redactFinal` on its own. No segment spans a line or a tag, so neither an ANSI-shaped span nor a context
+ *  value can cross one: the frame lines, the tags, `shown K of N` and the `next:` line survive whatever a field holds.
+ *  A fixed point on a page built from the field pass's output. Residual: text inside a tag outside its quoted
+ *  values (a forged tag's bare attribute) is kept as it came, and a secret split by a line break or a tag is masked
+ *  only by the field pass, which saw it whole. */
+export function redactFinalText(text, idx) {
+  return text.split('\n').map((line) => {
+    let out = '';
+    let last = 0;
+    for (const m of line.matchAll(FRAME_TAG_RE)) {
+      out += redactFinal(line.slice(last, m.index), idx);
+      out += m[0].replace(/"([^"]*)"/g, (_all, v) => `"${redactFinal(v, idx)}"`);
+      last = m.index + m[0].length;
+    }
+    return out + redactFinal(line.slice(last), idx);
+  }).join('\n');
 }
 
 // ===========================================================================

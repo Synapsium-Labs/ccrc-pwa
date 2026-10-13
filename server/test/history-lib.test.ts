@@ -2119,92 +2119,187 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     const text = `a ${tok} b DB_PASSWORD=xyz-fixture`;
     expect(libRedact.redactFinal(text, idx)).toBe(libRedact.redactField(text, idx));
   });
-  // D-4613 (history-final-belt-layer2-structure-safe; whole-branch review security-1, security-2): the final belt's layer 2
-  // runs in its structure-safe form, so it never breaks a --json string or the human page's frame (§8.3).
-  it('the final belt keeps --json valid: layer 2 never takes a JSON escape\'s backslash for a value (D-4613)', () => {
+  // D-4613 (history-final-belt-layer2-structure-safe; whole-branch review security-1, security-2, round 3): the final belt is
+  // STRUCTURE-AWARE. A --json envelope's string leaves go through redactFinalJson BEFORE serialisation; the human page goes through
+  // redactFinalText line by line and tag by tag; redactFinal is the per-segment primitive. No pass runs over serialised structure.
+  const wireOf = (v: unknown, idx: libRedact.PairIndex): string => JSON.stringify(libRedact.redactFinalJson(v, idx));
+  const parses = (wire: string): { ok: boolean; value: any } => {
+    try { return { ok: true, value: JSON.parse(wire) }; } catch { return { ok: false, value: null }; }
+  };
+  const CLOSERS = ['\u008e', '\u008f', '\u0090', '\u009b', '\u001b'];
+  it('(a) the --json composition stays valid: a leaf that ends in an ANSI introducer after a masked field keeps its structure (D-4613 round 3)', () => {
     const idx = idxOf([]);
-    const shapes = [
-      'export API_KEY="abc123"',
-      'password: "hunter2hunter2"',
-      'curl -H "Authorization: Bearer abc.def" x',
-      'GET /x?token=abc"&x',
-      'curl -H "x-ccrc-mail-token: zzz" y',
-    ];
-    for (const s of shapes) {
-      const shown = libRedact.redactForDisplay(s, idx);
-      const wire = libRedact.redactFinal(JSON.stringify({ text: shown }), idx);
-      let o: { text: string } | null = null;
-      try { o = JSON.parse(wire); } catch { o = null; }
-      expect(o, `${s} -> ${wire}`).not.toBeNull();
-      expect(o!.text, s).toContain(M);
-      expect(o!.text, s).not.toMatch(/abc123|hunter2|abc\.def|=abc|zzz/);
+    const masked = libRedact.redactForDisplay('export TOKEN=abc123', idx);
+    let cases = 0;
+    // the refuter's shape, and a string that ends in each introducer after a masked field
+    for (const end of CLOSERS) {
+      const env = { items: [{ text: masked }, { text: `tail${end}`, from: 0, n: 1.5, b: true, z: null }], shown: 2 };
+      const wire = wireOf(env, idx);
+      const r = parses(wire);
+      expect(r.ok, `${JSON.stringify(end)}: ${wire}`).toBe(true);
+      expect(r.value.items[1], `${JSON.stringify(end)}`).toEqual({ text: `tail${end}`, from: 0, n: 1.5, b: true, z: null });
+      expect(r.value.items[0].text).toContain(M);
+      expect(r.value.items[0].text).not.toContain('abc123');
+      cases += 1;
     }
-    // CONTROL: the control that always parsed still does.
-    const ctl = libRedact.redactFinal(JSON.stringify({ text: 'a TOKEN=x\\ b' }), idx);
-    expect(() => JSON.parse(ctl)).not.toThrow();
+    // a field-pass mark followed by a CSI / DCS introducer at a string's end (pre-existing at both earlier commits)
+    for (const raw of ['key sk-0123456789abcdef\u009b', 'ghp_0123456789abcdefXYZ\u0090', 'password: hunter2hunter2\u009b', 'API_KEY=abc123\u001b', 'x TOKEN=abc123\u008e']) {
+      const shown = libRedact.redactForDisplay(raw, idx);
+      const env = { items: [{ text: shown, from: 3 }, { text: 'after', from: 0 }], shown: 2, total: 2, next: null };
+      const wire = wireOf(env, idx);
+      const r = parses(wire);
+      expect(r.ok, `${JSON.stringify(raw)} -> ${wire}`).toBe(true);
+      expect(r.value.items[1], raw).toEqual({ text: 'after', from: 0 });
+      expect([r.value.shown, r.value.total, r.value.next], raw).toEqual([2, 2, null]);
+      expect(r.value.items[0].from, raw).toBe(3);
+      expect(r.value.items[0].text, raw).not.toMatch(/abc123|hunter2|0123456789abcdef/);
+      cases += 1;
+    }
+    expect(cases, 'CONTROL: the table ran').toBe(CLOSERS.length + 5);
   });
-  it('the final belt keeps the human page\'s frame: an unclosed JSON-form value never runs on past a line or a tag (D-4613)', () => {
+  it('(a) object keys are never touched, numbers booleans and null pass through, and a __proto__ key stays an own key', () => {
+    const idx = idxOf([]);
+    const input = JSON.parse('{"__proto__":{"TOKEN=abc123":"TOKEN=abc123"},"n":1,"b":false,"z":null,"a":[1,"x",null,{"k":"TOKEN=abc123"}]}');
+    const out = libRedact.redactFinalJson(input, idx);
+    expect(Object.keys(out)).toEqual(['__proto__', 'n', 'b', 'z', 'a']);
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype);
+    expect(JSON.stringify(out)).toBe(`{"__proto__":{"TOKEN=abc123":"TOKEN=${M}"},"n":1,"b":false,"z":null,"a":[1,"x",null,{"k":"TOKEN=${M}"}]}`);
+  });
+  it('(b) the human page keeps its frame: a text window that ends in an ANSI introducer never erases a tag, `shown` or `next:` (D-4613 round 3)', () => {
     const idx = idxOf([]);
     const next = 'next: "$HOME/.local/bin/ccrc" history expand --from x';
-    const page = `header\n<ccrc-recall src="a">config {"token": "abcdefgh</ccrc-recall>\nshown 1 of 3\n${next}`;
-    const out = libRedact.redactFinal(page, idx);
-    expect(out).toContain('</ccrc-recall>\nshown 1 of 3\nnext: "$HOME/.local/bin/ccrc" history expand --from x');
-    expect(out.endsWith(next)).toBe(true);
-    const two = `<ccrc-recall src="a">config {"token": "abcdefgh</ccrc-recall>\n<ccrc-recall src="b">second</ccrc-recall>\n${next}`;
-    const o2 = libRedact.redactFinal(two, idx);
-    expect(o2).toContain('</ccrc-recall>\n<ccrc-recall src="b">second</ccrc-recall>\nnext: ');
-  });
-  it('the final belt is still a belt: a context-shaped secret the field pass never saw is masked (D-4613)', () => {
-    const idx = idxOf([]);
-    for (const hint of ['token=abcdefghijklmnop1234', 'Authorization: Bearer abcdefghijklmnop1234', 'DB_PASSWORD=hunter2hunter2', '"token": "abcdefghijklmnop1234"']) {
-      const out = libRedact.redactFinal(`<ccrc-recall src="a">see ${hint} now</ccrc-recall>\nnext: x`, idx);
-      expect(out, hint).not.toMatch(/abcdefghijklmnop1234|hunter2hunter2/);
-      expect(out, hint).toContain(M);
+    const page = (inner: string): string => `header\n<ccrc-recall src="a" id="b">${inner}</ccrc-recall>\nshown 1 of 1\n${next}`;
+    const inners = [
+      'ok TOKEN=[redacted]\n\u001b',                                          // the refuter's page (a literal mark, a window ending in ESC)
+      ...['ok TOKEN=abc123\n\u001b', 'ok TOKEN=abc123\n\u009b', 'key sk-0123456789abcdef\u009b', 'ghp_0123456789abcdefXYZ\u0090', 'x\u008e', 'x\u008f'].map((r) => libRedact.redactForDisplay(r, idx)),
+    ];
+    for (const inner of inners) {
+      const out = libRedact.redactFinalText(page(inner), idx);
+      const lines = out.split('\n');
+      expect(lines[0], JSON.stringify(inner)).toBe('header');
+      expect(lines[1], JSON.stringify(inner)).toMatch(/^<ccrc-recall src="a" id="b">/);
+      expect(lines[lines.length - 3], JSON.stringify(inner)).toMatch(/<\/ccrc-recall>$/);
+      expect(lines.slice(-2), JSON.stringify(inner)).toEqual(['shown 1 of 1', next]);
+      expect(out.split('\n').length, 'the line count never changes').toBe(page(inner).split('\n').length);
+      expect(out, JSON.stringify(inner)).not.toMatch(/abc123|0123456789abcdef/);
     }
-    // The residual (D-4613): a value that holds a `<` is masked up to it by the final belt, the rest is the field pass's.
-    expect(libRedact.redactFinal('PASSWORD=ab<cd', idx)).toBe(`PASSWORD=${M}<cd`);
   });
-  // Whole-branch fix round 2, item 1 (D-4613, second mechanism): a JSON string that ENDS right after a context key and its
-  // separator is followed by its closing quote and then `}`, `]`, `,` or the end; the NAME= value must not take the quote and the
-  // closer after it, or the mask drops them and `--json` stops parsing.
-  it('the final belt keeps --json valid when a string ends in a context key and separator, in every position (D-4613)', () => {
+  it('(c) the final form is idempotent on the field pass\'s own marks, and redactFinalText is a fixed point on a field-passed page', () => {
     const idx = idxOf([]);
+    for (const x of ['TOKEN=[redacted]', 'password: [redacted]', "TOKEN='[redacted]'", 'export API_KEY="[redacted]"', 'Authorization: Bearer [redacted]']) {
+      expect(libRedact.redactFinal(x, idx), x).toBe(x);
+    }
+    const raws = ['export TOKEN=abc123', 'password: "hunter2hunter2"', 'curl -H "Authorization: Bearer abc.def" x', 'GET /x?token=abc"&x', 'x\u001b TOKEN=abc123\n\u009b'];
+    const page = ['header', ...raws.map((r) => libOut.recallEnvelope({ src: 'user', id: 'a', ts: 1, role: 'user', text: libRedact.redactForDisplay(r, idx) })),
+      'shown 5 of 5', 'next: x', `hint: ${libOut.foldOneLine(libRedact.redactForDisplay('see TOKEN=abc123 now', idx))}`].join('\n');
+    expect(libRedact.redactFinalText(page, idx)).toBe(page);
+    expect(libRedact.redactFinalText(`${page}\n`, idx)).toBe(`${page}\n`);
+  });
+  it('(d) the belt still works: a context-shaped value placed RAW into a --json leaf is masked, and the shapes of rounds 1 and 2 parse and stay masked', () => {
+    const idx = idxOf([]);
+    const raw = {
+      a: 'see TOKEN=abc123 now', b: ['password: hunter2hunter2'], c: { d: 'Authorization: Bearer abcdefghijklmnop1234' },
+      e: 'GET /x?token=abcdefghijklmnop1234 y', f: 'curl -H "x-ccrc-mail-token: zzzzzzzz" y', g: 'config {"token": "abcdefghijklmnop1234"}',
+    };
+    const wire = wireOf(raw, idx);
+    expect(parses(wire).ok, wire).toBe(true);
+    expect(wire).not.toMatch(/abc123|hunter2hunter2|abcdefghijklmnop1234|zzzzzzzz/);
+    expect(wire).toContain(M);
+    for (const s of ['export API_KEY="abc123"', 'password: "hunter2hunter2"', 'curl -H "Authorization: Bearer abc.def" x', 'GET /x?token=abc"&x', 'curl -H "x-ccrc-mail-token: zzz" y']) {
+      const w = wireOf({ text: s }, idx);
+      const o = parses(w);
+      expect(o.ok, `${s} -> ${w}`).toBe(true);
+      expect(o.value.text, s).toContain(M);
+      expect(o.value.text, s).not.toMatch(/abc123|hunter2|abc\.def|=abc|zzz/);
+    }
+    // the controls of the re-reviews
+    const a = wireOf({ t: 'TOKEN=abc123' }, idx);
+    expect(a).not.toContain('abc123');
+    expect(JSON.parse(a).t).toBe(`TOKEN=${M}`);
+    const b = libRedact.redactFinalText('see TOKEN="abcdefgh" now', idx);
+    expect(b).not.toContain('abcdefgh');
+    expect(b).toContain(M);
+    expect(b.endsWith(' now')).toBe(true);
+    // a string that ends in a context key and separator, in every position
     const ends = ['API_KEY=', 'password: ', 'Authorization: Bearer ', 'x-ccrc-mail-token: ', '?token=', 'see TOKEN=', 'x&token='];
     let cases = 0;
     for (const e of ends) {
       for (const pre of ['', 'xx ']) {
         const v = `${pre}${e}`;
         const shapes: Record<string, unknown> = {
-          'last member': { a: 1, t: v },
-          'middle member': { t: v, z: 2 },
-          'last element': { a: [1, v] },
-          'middle element': { a: [v, 2] },
-          'only member': { t: v },
-          'top-level string': v,
+          'last member': { a: 1, t: v }, 'middle member': { t: v, z: 2 }, 'last element': { a: [1, v] },
+          'middle element': { a: [v, 2] }, 'only member': { t: v }, 'top-level string': v,
         };
         for (const [where, obj] of Object.entries(shapes)) {
-          const wire = libRedact.redactFinal(JSON.stringify(obj), idx);
-          let ok = true;
-          try { JSON.parse(wire); } catch { ok = false; }
-          expect(ok, `${where}: ${JSON.stringify(v)} -> ${wire}`).toBe(true);
+          const w = wireOf(obj, idx);
+          expect(parses(w).ok, `${where}: ${JSON.stringify(v)} -> ${w}`).toBe(true);
+          expect(JSON.stringify(JSON.parse(w)), `${where}: ${JSON.stringify(v)}`).toBe(JSON.stringify(obj));
           cases += 1;
         }
       }
     }
     expect(cases, 'CONTROL: the table ran').toBe(ends.length * 2 * 6);
   });
-  it('the final belt still masks a JSON string that holds a value after the key, closing quote or not (D-4613)', () => {
+  it('(d) the belt still works on the human page: a raw context-shaped value in a hint line and in a frame attribute value is masked, and the frame stays', () => {
     const idx = idxOf([]);
-    // The two controls of the re-review: the value must not survive.
-    const a = libRedact.redactFinal('{"t":"TOKEN=abc123"}', idx);
-    expect(a).not.toContain('abc123');
-    expect(a).toContain(M);
-    expect(() => JSON.parse(a)).not.toThrow();
-    const b = libRedact.redactFinal('see TOKEN="abc" now', idx);
-    expect(b).not.toContain('abc');
-    expect(b).toContain(M);
-    expect(b.endsWith(' now')).toBe(true);
+    const next = 'next: "$HOME/.local/bin/ccrc" history expand --from x';
+    for (const hint of ['token=abcdefghijklmnop1234', 'Authorization: Bearer abcdefghijklmnop1234', 'DB_PASSWORD=hunter2hunter2', '"token": "abcdefghijklmnop1234"']) {
+      const out = libRedact.redactFinalText(`<ccrc-recall src="a">see now</ccrc-recall>\nshown 1 of 1\n${next}\nhint: see ${hint} now`, idx);
+      expect(out, hint).not.toMatch(/abcdefghijklmnop1234|hunter2hunter2/);
+      expect(out, hint).toContain(M);
+      expect(out, hint).toContain(`</ccrc-recall>\nshown 1 of 1\n${next}\nhint: see `);
+      // the same value as a frame attribute value (escapeXmlAttr has run: no raw quote inside a value). The JSON-form value
+      // is the residual: its quotes are entities by then, so the field pass (which saw it raw) masks it and the belt does not.
+      if (hint.startsWith('"')) continue;
+      const attr = libRedact.redactFinalText(`<ccrc-recall src="a" id="${hint.replace(/"/g, '&quot;')}" role="" trust="untrusted">x</ccrc-recall>\nshown 1 of 1`, idx);
+      expect(attr, hint).not.toMatch(/abcdefghijklmnop1234|hunter2hunter2/);
+      expect(attr, hint).toMatch(/^<ccrc-recall src="a" id="[^"]*" role="" trust="untrusted">x<\/ccrc-recall>\nshown 1 of 1$/);
+    }
+    // the unclosed JSON-form value never runs on past a line or a tag
+    const page = `header\n<ccrc-recall src="a">config {"token": "abcdefgh</ccrc-recall>\nshown 1 of 3\n${next}`;
+    const out = libRedact.redactFinalText(page, idx);
+    expect(out).toContain('</ccrc-recall>\nshown 1 of 3\nnext: "$HOME/.local/bin/ccrc" history expand --from x');
+    // The residual (D-4613): a value that holds a `<` is masked up to it by the final belt, the rest is the field pass's.
+    expect(libRedact.redactFinal('PASSWORD=ab<cd', idx)).toBe(`PASSWORD=${M}<cd`);
   });
+  it('(e) a seeded differential fuzz: 4,000 field texts through redactForDisplay into real envelope shapes always parse and always keep their frame', () => {
+    const idx = idxOf([]);
+    let seed = 0x4613;
+    const rnd = (): number => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    const pick = <T,>(xs: T[]): T => xs[Math.floor(rnd() * xs.length)]!;
+    const keys = ['TOKEN', 'API_KEY', 'password', 'Authorization: Bearer', 'x-ccrc-mail-token:', '?token=', '"token":', 'secret', 'DB_PASSWORD'];
+    const seps = ['=', ': ', ' ', '="', "='", '"', ':'];
+    const misc = ['"', '\\', ']', '}', '<', '>', '&', '\u001b', '\u008e', '\u008f', '\u0090', '\u009b', '[redacted]', '\n', 'abc123', '\u001b[', '</ccrc-recall>', 'sk-0123456789abcdef', ' ', ',', '[', '{', "'", '\\"', '\u001b]', 'tail'];
+    const text = (): string => { let o = ''; for (let i = 1 + Math.floor(rnd() * 8); i > 0; i -= 1) o += rnd() < 0.5 ? pick(keys) + pick(seps) : pick(misc); return o; };
+    const N = 4000;
+    let jsonOk = 0;
+    let humanOk = 0;
+    for (let i = 0; i < N; i += 1) {
+      const [t1, t2, t3, t4, t5] = [text(), text(), text(), text(), text()].map((t) => libRedact.redactForDisplay(t, idx));
+      const env = libOut.readEnvelope({
+        exit: 0, storeId: 's', scope: null, header: null, shown: 2, total: 3, next: `next: ccrc history grep -- ${t3}`, hint: t4,
+        items: [{ src: 'user', id: 'a', text: t1, from: 0 }, { topics: [t2, t5], refs: [t3], files: [t4], text: t5, from: 7 }],
+      });
+      const wire = JSON.stringify(libRedact.redactFinalJson(env, idx));
+      const o = parses(wire);
+      expect(o.ok, `#${i} ${JSON.stringify([t1, t2, t3, t4, t5])} -> ${wire}`).toBe(true);
+      expect([o.value.shown, o.value.total, o.value.items[0].from, o.value.items[1].from, o.value.items.length], `#${i}`).toEqual([2, 3, 0, 7, 2]);
+      jsonOk += 1;
+      const open = (n: number): string => `<ccrc-recall src="user" id="a${n}" ts="" role="" trust="untrusted">`;
+      const page = ['header', `${open(1)}${libOut.escapeXmlText(t1)}</ccrc-recall>`, `${open(2)}${libOut.escapeXmlText(t2)}</ccrc-recall>`, 'shown 2 of 3', 'next: "$HOME/.local/bin/ccrc" history grep x', `hint: ${libOut.foldOneLine(t4)}`].join('\n');
+      const out = libRedact.redactFinalText(page, idx);
+      const ol = out.split('\n');
+      const il = page.split('\n');
+      expect(ol.length, `#${i} ${JSON.stringify(page)} -> ${JSON.stringify(out)}`).toBe(il.length);
+      expect([ol[0], ol[ol.length - 3], ol[ol.length - 2]], `#${i}`).toEqual(['header', 'shown 2 of 3', 'next: "$HOME/.local/bin/ccrc" history grep x']);
+      expect(ol[ol.length - 1]!.startsWith('hint: '), `#${i}`).toBe(true);
+      expect(out.split(open(1)).length - 1, `#${i} opening tag one`).toBe(page.split(open(1)).length - 1);
+      expect(out.split(open(2)).length - 1, `#${i} opening tag two`).toBe(page.split(open(2)).length - 1);
+      expect(out.split('</ccrc-recall>').length, `#${i} closing tags`).toBe(page.split('</ccrc-recall>').length);
+      humanOk += 1;
+    }
+    expect([jsonOk, humanOk], 'CONTROL: 4,000 envelopes parsed and 4,000 pages kept their frame').toEqual([N, N]);
+  }, 120_000);
   it('the identifier pattern matches the upstream names and no others', () => {
     for (const n of ['CCRC_AGENT_TOKEN', 'LITELLM_MASTER_KEY', 'api_key', 'password', 'X_SECRET', 'GH_AUTH']) expect(libRedact.IDENTIFIER_RE.test(n), n).toBe(true);
     for (const n of ['CCRC_ROLE', 'Authorization', 'keyboard', 'monkey', 'CCRC_SERVER_URL']) expect(libRedact.IDENTIFIER_RE.test(n), n).toBe(false);
@@ -5727,20 +5822,30 @@ describe('the substring belt (W1-B2 Task 7A; spec §8.3 layer 4, §6.2; O59 lib 
     const v = mint();
     const idx = beltIdx([v]);
     const w = libRedact.beltWidth(v);
+    // redactFinal is the per-segment primitive now (D-4613 round 3), but its R66 pin over serialised text still holds, and the
+    // real --json path (redactFinalJson over the raw leaves, then JSON.stringify) is pinned beside it.
     for (const pre of ['a\n', 'a\u0001', 'grep x\t', 'q"']) {
-      const s = libRedact.redactFinal(JSON.stringify({ t: `${pre}${v}y`, u: `x${v}\n` }), idx);
-      let o: { t: string; u: string } | null = null;
-      try { o = JSON.parse(s); } catch { o = null; }
-      expect(o, `${JSON.stringify(pre)}: ${s}`).not.toBeNull();
-      expect(Math.max(shared(o!.t, v), shared(o!.u, v)), s).toBeLessThan(w);
-      expect(s).toContain(libRedact.REDACTED_MARK);
+      for (const compose of [
+        (o: unknown): string => libRedact.redactFinal(JSON.stringify(o), idx),
+        (o: unknown): string => JSON.stringify(libRedact.redactFinalJson(o, idx)),
+      ]) {
+        const s = compose({ t: `${pre}${v}y`, u: `x${v}\n` });
+        let o: { t: string; u: string } | null = null;
+        try { o = JSON.parse(s); } catch { o = null; }
+        expect(o, `${JSON.stringify(pre)}: ${s}`).not.toBeNull();
+        expect(Math.max(shared(o!.t, v), shared(o!.u, v)), s).toBeLessThan(w);
+        expect(s).toContain(libRedact.REDACTED_MARK);
+      }
     }
     expect(libRedact.redactFinal(JSON.stringify({ t: `a\n${v}` }), idx), 'the escape stays, the value goes').toBe(`{"t":"a\\n${libRedact.REDACTED_MARK}"}`);
+    expect(JSON.stringify(libRedact.redactFinalJson({ t: `a\n${v}` }, idx)), 'the same through the --json path').toBe(`{"t":"a\\n${libRedact.REDACTED_MARK}"}`);
     // A unit that begins with `n`, printed after a backslash-n: the literal reading's cover starts on the escape's
-    // letter, and the span takes the whole escape.
+    // letter, and the span takes the whole escape (serialised text only: a raw leaf holds a real line break, and the
+    // value goes while the break stays).
     const nv = `n${v}`;
     const s2 = libRedact.redactFinal(JSON.stringify({ t: `a\n${v}zz` }), beltIdx([nv]));
     expect(s2, 'the span took the escape whole').toBe(`{"t":"a${libRedact.REDACTED_MARK}"}`);
+    expect(JSON.stringify(libRedact.redactFinalJson({ t: `a\n${v}zz` }, beltIdx([nv]))), 'a raw leaf: the break stays, the value goes').toBe(`{"t":"a\\n${libRedact.REDACTED_MARK}"}`);
   });
 });
 

@@ -303,12 +303,12 @@ describe('ccrc history status (Linux)', () => {
     const writes = src.split('\n').filter((l) => /process\.stderr\.write\(/.test(l));
     expect(writes.length, 'the scan sees every stderr write').toBe(7);
     expect(writes.filter((w) => /\.message|String\(e\)|\$\{e\b/.test(w)), 'a raw error text on stderr').toEqual([]);
-    // Each write's argument is a fixed line (it starts `ccrc history` or `${USAGE}`), errLine's redactFinal, or the op relay's `text`.
-    const allowed = /process\.stderr\.write\((?:[`']ccrc history|`\$\{USAGE\}|redactFinal\(|text\))/;
+    // Each write's argument is a fixed line (it starts `ccrc history` or `${USAGE}`), errLine's redactFinalText, or the op relay's `text`.
+    const allowed = /process\.stderr\.write\((?:[`']ccrc history|`\$\{USAGE\}|redactFinalText\(|text\))/;
     expect(writes.filter((w) => !allowed.test(w)), 'a write whose argument is neither a fixed line, errLine\'s redactFinal nor the relay text').toEqual([]);
     const fn = /function errLine\([^)]*\) \{([\s\S]*?)\n\}/.exec(src);
     expect(fn, 'errLine is defined').not.toBeNull();
-    expect(fn![1]).toContain('redactFinal(');
+    expect(fn![1]).toContain('redactFinalText(');
     expect((src.match(/\berrLine\(/g) ?? []).length, 'the definition and the three message sites').toBeGreaterThanOrEqual(5);
   });
 

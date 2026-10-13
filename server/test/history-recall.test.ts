@@ -4241,6 +4241,69 @@ describe.skipIf(process.platform === 'darwin')('C69: the substring belt on every
   }, HEAVY);
 });
 
+// ── Whole-branch fix round 3 (D-4613): the final belt is structure-aware ─────────────────────────────────────────
+// An expand text window that holds a context-shaped value and later ends in an ANSI introducer (ESC, U+009B) used to make the final
+// pass run an escape-shaped span over the closing quote of a --json string or the closing tag of the human frame.
+describe.skipIf(process.platform === 'darwin')('whole-branch fix 3: an expand window that ends in an ANSI introducer keeps --json valid and the frame intact (D-4613)', () => {
+  const ID = 'claude-a-wbx3';
+  const G = '0189abcd-1234-4678-9abc-00000000a043';
+  const T = 'a4300001';
+  const U = t16uuid(T, 0);
+  const e = (i: number): string => t16uuid(T, i);
+  let box: rH.HistoryBox;
+  let leaf = '';
+  const cli = (args: string[]) => rH.runCli(box, args, { env: rH.withPane(box, ID) });
+
+  beforeAll(() => {
+    box = rH.makeHistoryBox('ccrc-hist-wbx3-');
+    const summary = ['<summary>', '1. Primary Request and Intent:', '   zqx43shape export TOKEN=abc123 then\u001b', '8. Current Work:', '   zqx43shape export TOKEN=abc123\u009b',
+      '9. Optional Next Step:', '   zqx43shape export TOKEN=abc123 end', '</summary>'].join('\n');
+    t16seed(box, { id: ID, project: 'demo', generation: G, uuid: U, rows: [
+      rFx.userRow({ uuid: e(1), ts: t16ts(1), sessionId: U, text: 'zqx43shape export TOKEN=abc123\nmore on a later line\nend\u001b\nkey sk-0123456789abcdef\u009b' }),
+      rFx.assistantRow({ uuid: e(2), ts: t16ts(2), parentUuid: e(1), sessionId: U, text: 'zqx43shape export TOKEN=abc123\nlater\n\u009b\nghp_0123456789abcdefXYZ\u0090' }),
+      rFx.boundaryRow({ uuid: e(3), ts: t16ts(3), parentUuid: e(2), sessionId: U, trigger: 'manual', headUuid: e(2), anchorUuid: e(4), tailUuid: e(2), allUuids: [] }),
+      rFx.summaryRow({ uuid: e(4), ts: t16ts(4), parentUuid: e(3), sessionId: U, text: summary }),
+    ] });
+    leaf = t16leafOf(box, ID);
+  }, 480_000);
+
+  it('expand and describe --full: --json parses, the human form keeps </ccrc-recall> and shown, and no value survives', () => {
+    const runs: Array<[string, string[]]> = [
+      ['expand-entry-esc', ['expand', e(1)]], ['expand-entry-csi', ['expand', e(2)]], ['expand-leaf', ['expand', leaf]], ['describe-full', ['describe', leaf, '--full']],
+    ];
+    for (const [name, args] of runs) {
+      const j = cli([...args, '--json']);
+      expect(j.code, `${name}: ${j.stderr}`).toBe(0);
+      let o: { items?: Array<{ text?: string }>; shown?: number; total?: number } | null = null;
+      try { o = JSON.parse(j.stdout); } catch { o = null; }
+      expect(o, `${name} --json: ${j.stdout.slice(0, 600)}`).not.toBeNull();
+      expect(JSON.stringify(o!.items), `CONTROL ${name}: the fixture text is there`).toContain('zqx43shape');
+      expect([typeof o!.shown, typeof o!.total], name).toEqual(['number', 'number']);
+      expect(j.stdout, name).not.toMatch(/abc123|0123456789abcdef/);
+    }
+    for (const [name, args] of runs) {
+      const h = cli(args);
+      expect(h.code, `${name}: ${h.stderr}`).toBe(0);
+      expect(h.stdout, `CONTROL ${name}`).toContain('zqx43shape');
+      expect(h.stdout, `${name}: the frame closes`).toContain('</ccrc-recall>');
+      expect(h.stdout, `${name}: the count line`).toMatch(/^shown \d+ of \d+$/m);
+      expect(h.stdout, name).not.toMatch(/abc123|0123456789abcdef/);
+      const opens = (h.stdout.match(/<ccrc-recall /g) ?? []).length;
+      expect((h.stdout.match(/<\/ccrc-recall>/g) ?? []).length, `${name}: every opening tag has its closing tag`).toBe(opens);
+    }
+  }, 4 * HEAVY);
+
+  // Round 2's API_KEY= paging case stays pinned in the fix-1 block above; this one pages over this fixture too.
+  it('grep --json over a paging fixture still parses (the API_KEY= case of round 2 stays in the fix-1 block above)', () => {
+    const r = cli(['grep', 'zqx43shape', '--limit', '1', '--json']);
+    expect(r.code, `${r.stderr}${r.stdout.slice(0, 400)}`).toBe(0);
+    let o: { shown?: number; total?: number; next?: string | null } | null = null;
+    try { o = JSON.parse(r.stdout); } catch { o = null; }
+    expect(o, r.stdout.slice(0, 600)).not.toBeNull();
+    expect(o!.total ?? 0, 'CONTROL: the fixture pages').toBeGreaterThan(o!.shown ?? 0);
+  }, HEAVY);
+});
+
 // ── W1-B2 hardening HZ: H-221, the transcript-derived text the read verbs print folds at every line separator ──
 // A crafted transcript row is attacker-steerable: its text reaches a hit snippet, a tree line and a grep leaf header, and JS `\s` keeps
 // U+0085 (NEL) and U+001C-U+001E (FS, GS, RS), which a non-JS reader (Python splitlines, UAX #14) breaks a line at.

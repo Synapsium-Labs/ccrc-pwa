@@ -18,11 +18,11 @@
 // selectColumns(rc.version, …), so a store older than this code answers with that field null (§6.11).
 // Merged families and unconfirmed epochs are never read (§6.1, DM46).
 // Every recalled field is redacted on its raw text BEFORE any cut or escape, then wrapped in a <ccrc-recall>
-// envelope (§8.3). cli.mjs runs redactFinal over the whole output as the second belt.
+// envelope (§8.3). cli.mjs runs the structure-aware final belt (redactFinalJson over the envelope value, redactFinalText over human text) as the second belt.
 //
 // It reads no environment variable and has no entry guard: cli.mjs imports it.
 import {
-  EXIT, OUTPUT_CAP, TREE_DEPTH_MAX, SCOPE_FAMILIES_JSON_MAX, selectColumns, displayPrefixes, headerLine, scopeLag, recallEnvelope, capOutput, redactForDisplay, redactFinal, readEnvelope, nextLine,
+  EXIT, OUTPUT_CAP, TREE_DEPTH_MAX, SCOPE_FAMILIES_JSON_MAX, selectColumns, displayPrefixes, headerLine, scopeLag, recallEnvelope, capOutput, redactForDisplay, redactFinalJson, readEnvelope, nextLine,
   REASONS, INDEXED_PROVENANCE, SEARCHABLE_PROVENANCE, RANK_POOL, decideGrepIndex, sanitizeFtsQuery, snippetTerms, regexSyntaxIn, regexSyntaxHint, ftsOrderBy, displaySnippet, snippetLine, escapeXmlText, redactField, extractNodeId, resolveScopedId, SEARCH_REACH, parseGrepArgs,
   GREP_LIMIT_DEFAULT, encodeCursor, decodeCursor, canonicalJson, sha256Hex,
   guardRegex, regexPrefilter, REGEX_BUDGET_MS, REGEX_MAX_LEN, historyPaths,
@@ -208,15 +208,15 @@ function jsonScope(rc) {
 
 /** Render the actual final JSON representation whose length the cap promises. */
 function renderJson(rc, head, items, shown, total, next) {
-  return redactFinal(`${JSON.stringify(readEnvelope({
+  return `${JSON.stringify(redactFinalJson(readEnvelope({
     exit: EXIT.OK, storeId: rc.storeId, scope: jsonScope(rc),
     header: { indexedThroughMs: head.indexedThroughMs, lagS: head.lagS }, items, shown, total,
     next: next === null ? null : nextLine(next),
-  }))}\n`, rc.pairIdx);
+  }), rc.pairIdx))}\n`;
 }
 
 /** The greatest complete item prefix that fits the final JSON envelope. Each check measures the exact string
- * cli.mjs writes after redactFinal; monotonic binary search avoids rendering every candidate prefix of a large scope. */
+ * cli.mjs writes (the same redactFinalJson then JSON.stringify); monotonic binary search avoids rendering every candidate prefix of a large scope. */
 function jsonPrefixCount(rc, head, items, total, nextFor) {
   const fits = (n) => renderJson(rc, head, items.slice(0, n), n, total, nextFor(n)).length <= OUTPUT_CAP;
   let lo = 0;
@@ -1282,7 +1282,7 @@ export function describeVerb(rc, argv) {
 // raw text leaves the blob (lib's renderEntryText for a row, the decoded bytes for a sidecar); the window to show is
 // picked on that raw text (the cut's first EXPLORE_CUT characters, or a page); lib's redactDisplayWindow redacts that
 // window with ENTRY_REDACT_MARGIN each side and cuts it back (the outline's input likewise, through exploreOutline);
-// then recallEnvelope's escape, then cli.mjs's serialisation and redactFinal. Nothing redacts a whole item: one page
+// then recallEnvelope's escape, then cli.mjs's final belt (redactFinalJson before the serialisation, redactFinalText on the human page). Nothing redacts a whole item: one page
 // costs its window (coordinator ruling R-display-window). One blob is decompressed at a time, and only one lib's
 // expandBlobFits admits (at most SIDECAR_WHOLE_MAX bytes); nothing holds a whole node in memory.
 // A PAGE is measured in lib's textCost on what it prints, so it fits the cap in the human form and in --json alike.
