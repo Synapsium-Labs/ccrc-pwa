@@ -1370,6 +1370,32 @@ spec's after wave 1.
     - 3e: the arming part (the verb's link mode, the cap word, doctor's link arm, the console and the redactor
       sources).
   - **Not reopened:** R3 stays code-only, as the 07:46 entry ruled.
+- **2026-10-13 08:49 UTC: row 3a's plan is written and its questions answered; run 410's dispatch follows.**
+  - **The plan workflow** (4 agents on Opus: a drafter, two attack lenses and a reviser) wrote it from `main` at
+    `e4405056e`. The attacks found 21 breaks: 1 critical, 7 important and 13 minor. All were applied, and none was
+    rejected.
+    - The critical break: the e2e plant used the wrong rig's clock.
+    - The most dangerous important break: an apostrophe inside doctor's single-quoted `_BT_PY_STATE` program. That
+      would have read `state-unreadable` FAIL on the live server. The plan now forbids any `'` in either program, with
+      a grep check.
+  - **The coordinator answered the plan's four questions** (about 08:40):
+    - **Q1, taken as 4558:** the scheduled trigger gets its own backoff, held in memory only, which a fresh agent ready
+      does not clear. Owed rotations and "Rotate now" keep spec §5.1's rule. A weekly schedule is never urgent.
+      Without this, a link that reconnects inside every tick would stage and write a pending file every tick, and on
+      lost answers would climb to doctor's `failed:*` FAIL unattended. A persistent real fault still reaches that
+      FAIL across the backoff's steps (G4).
+    - **Q2, confirmed:** the interval's value pin allows exactly three separate seven-day quantities. They are the new
+      interval, `LEDGER_STALE_MS`, and child reclamation's `CHILD_RECLAIM_LEAF_KEPT_HORIZON_MS`, which 3a does not
+      touch.
+    - **Q3, accepted for 3a:** a stamp ahead of the clock shows in the view only as a `nextRotationAt` more than one
+      interval ahead, because the view carries no server clock. 3e's card may add one.
+    - **Q4, accepted as true:** a box whose gate never opens persists its existing hold word and reads WARN
+      `held:<word>` one interval after its anchor. No exit code moves, and neither live box is such a box.
+  - **The plan** is `.superpowers/btl-w3-evidence/2026-10-13-box-token-lifecycle-row-3a.md` (860 lines). Task 1
+    commits it byte for byte. It defines 4556 (the derived schedule and its anchor), 4557 (the overdue WARN and the
+    view field) and 4558 (the scheduled-miss backoff), and it amends 4552 and 4554 in prose. 4559 and 4560 are spare.
+  - **Its files are clear of live claims.** Run 400's claim 1218 holds `server/src/update/inventory.ts`, which 3a only
+    reads. Open #381 (native docs reader) also edits the doctor checks file, under mail 4324's co-edit terms.
 - **Model auto-advance is not this programme's.** The operator assigned it to `ccrc-pwa-clear-mesa` at 11:25 UTC. The
   shared operator-window marker that coordinator proposed is off by the 13:28 ruling.
 
