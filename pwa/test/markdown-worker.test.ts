@@ -5,6 +5,7 @@
 // stubbed `self`, to prove it assigns `onmessage` to `answerMarkdownJob` and answers through the worker's own post.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { answerMarkdownJob, parseMarkdown, type MarkdownReply } from '../src/lib/markdownParse';
+import * as guard from '../src/lib/markdownGuard';
 
 /** A `post` that records every reply it is given. */
 function recorder(): { replies: MarkdownReply[]; post: (reply: MarkdownReply) => void } {
@@ -100,5 +101,21 @@ describe('the worker entry', () => {
       { id: 1, outcome: parseMarkdown('# hi', 'docs') },
       { id: 2, outcome: { kind: 'threw', error: 'TypeError' } },
     ]);
+  });
+});
+
+describe('T11 review A-4: a throw from the pre-scan answers threw, not a worker error', () => {
+  it('a pre-scan that throws answers threw with the error name only, once, under the job id', () => {
+    const spy = vi.spyOn(guard, 'prescanMarkdown').mockImplementation(() => {
+      throw new RangeError('secret detail from the scan');
+    });
+    try {
+      const { replies, post } = recorder();
+      expect(() => answerMarkdownJob({ id: 5, src: 'x', profile: 'chat' }, post)).not.toThrow();
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(replies).toEqual([{ id: 5, outcome: { kind: 'threw', error: 'RangeError' } }]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
