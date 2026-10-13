@@ -373,6 +373,26 @@ describe('the queue: FIFO, abort, prewarm, dispose', () => {
     expect(workers[1]?.posts.map((j) => j.src)).toEqual(['b']);
   });
 
+  it('one signal shared by a running job and a queued one rejects both, with no respawn and no post', async () => {
+    const { runner, workers, spawn, clock } = harness();
+    const ac = new AbortController();
+    const a = track(runner.parse('a', { ...CHAT, signal: ac.signal }));
+    const b = track(runner.parse('b', { ...CHAT, signal: ac.signal }));
+    expect(spawn).toHaveBeenCalledTimes(1);
+    const reason = new DOMException('superseded', 'AbortError');
+    ac.abort(reason);
+    await flush();
+    expect(a).toEqual({ state: 'rejected', reason });
+    expect(b).toEqual({ state: 'rejected', reason });
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(workers[0]!.posts.map((j) => j.src)).toEqual(['a']);
+    expect(workers[0]!.terminated).toBe(1);
+    expect(clock.pending).toBe(0);
+    void runner.parse('c', CHAT);
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(workers[1]!.posts.map((j) => j.src)).toEqual(['c']);
+  });
+
   it('an already-aborted signal rejects at once, spawning and posting nothing', async () => {
     const { runner, spawn, clock } = harness();
     const ac = new AbortController();

@@ -147,11 +147,19 @@ export function createMarkdownRunner(deps: Partial<MarkdownRunnerDeps> = {}): Ma
     finish({ kind: 'timeout', budgetMs: job.budgetMs });
   }
 
-  /** Posts the next queued job when none is running; with no worker to be had, answers each queued job at once. */
+  /** Posts the next queued job when none is running; with no worker to be had, answers each queued job at once. A
+   *  queued job whose signal is already aborted is skipped and rejects as an abort does, with no spawn and no post:
+   *  one signal shared by the running job and a queued one aborts both, and the running job's abort pumps before the
+   *  queued job's own listener runs (review 408, F7). */
   function pump(): void {
     while (running === undefined) {
       const job = queue.shift();
       if (job === undefined) return;
+      if (job.signal?.aborted) {
+        job.signal.removeEventListener('abort', job.onAbort);
+        job.reject(job.signal.reason);
+        continue;
+      }
       const w = live();
       if (w === undefined) {
         job.signal?.removeEventListener('abort', job.onAbort);
