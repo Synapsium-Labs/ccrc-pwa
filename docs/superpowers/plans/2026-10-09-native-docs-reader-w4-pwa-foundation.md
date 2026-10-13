@@ -10788,7 +10788,7 @@ Expected: `<n> rows; 0 not exactly once`, `<n>` being 171 plus the new ids Step 
 
 Close the record: fill every `outcome` and `rows`, add a last line `Findings: raised <n>, survived <m>, fixed <f>, carried <c>, not a defect <d>, asked <a>, ruled departures <r>. Commits: <list of shas>. Panel tip <TIP>; fix-wave tip $(git rev-parse HEAD).` (`survived` = the findings not ruled NOT A DEFECT), and copy `<SCRATCH>/review` and every Step 5 row measurement into `.superpowers/sdd/2026-10-09-native-docs-reader-w4-pwa-foundation/task-11-review/`. Task 12's results cite the record's last line, its Carried list takes every CARRIED line, and an unanswered ask is listed there too. No push and no pull request here: Task 12 is the close, and its results commit must be the tip.
 
-**Mutation rows this task contributes** (none until a Step 5 fix adds one: this task carries no code of its own. Each row a fix adds is measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at the fix's commit, then `git -C <copy> init -q`, `pwa/node_modules` and `server/node_modules` linked in; `pkg` is the package the `tests` run in; `old` is unique in `file` at that commit; `red` is the measured summary and the cases that went red. A fix that re-spells an earlier row's anchor repeats that row here with the same id and the new `old`, and says so above this block; Task 12's extractor keeps the last occurrence of an id). Rows that Step 5 adds are appended to this array by the fix that adds them. Rows from the review rounds before this task, recorded here so the extractor reads them (ids renumbered to this task's own `W4-T11-M<k>`, because the extractor refuses a foreign id that re-anchors nothing): W4-T11-M1 to W4-T11-M8 (the pre-scan hardening), M9 and M10 (the chat image predicate and the note guard), M11 (docs-sw's linear extraction), M12 to M42 (Task 11's fix wave, review findings 1-1 to 5-1 and A-3 to A-6), M43 (streaming chat's newest settled tree, review N1), and the re-anchors W4-T3-M9, W4-T5-M33, W4-T6-M18, W4-T4-M7, W4-T4-M8 and W4-T4-M9, each kept under the earlier task's id with a new `old` on the shipped text (the earlier text no longer exists).
+**Mutation rows this task contributes** (none until a Step 5 fix adds one: this task carries no code of its own. Each row a fix adds is measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at the fix's commit, then `git -C <copy> init -q`, `pwa/node_modules` and `server/node_modules` linked in; `pkg` is the package the `tests` run in; `old` is unique in `file` at that commit; `red` is the measured summary and the cases that went red. A fix that re-spells an earlier row's anchor repeats that row here with the same id and the new `old`, and says so above this block; Task 12's extractor keeps the last occurrence of an id). Rows that Step 5 adds are appended to this array by the fix that adds them. Rows from the review rounds before this task, recorded here so the extractor reads them (ids renumbered to this task's own `W4-T11-M<k>`, because the extractor refuses a foreign id that re-anchors nothing): W4-T11-M1 to W4-T11-M8 (the pre-scan hardening), M9 and M10 (the chat image predicate and the note guard), M11 (docs-sw's linear extraction), M12 to M42 (Task 11's fix wave, review findings 1-1 to 5-1 and A-3 to A-6), M43 (streaming chat's newest settled tree, review N1), M44 to M48 (operator rulings 2026-10-13: the chat table pre-count's upper bound, review 2-3; absolute http(s) images only, Q1), and the re-anchors W4-T3-M9, W4-T5-M33, W4-T6-M18, W4-T4-M7, W4-T4-M8 and W4-T4-M9, each kept under the earlier task's id with a new `old` on the shipped text (the earlier text no longer exists), and W4-T6-M7, W4-T6-M8, W4-T6-M9, W4-T11-M9 and W4-T11-M10 re-measured or re-anchored on the new image predicate.
 
 ```json
 [
@@ -10889,18 +10889,18 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
   "tests": [
    "test/chat-hardening.test.tsx"
   ],
-  "red": "pwa chat-hardening: 1 failed | 59 passed (60) — 'a non-tree outcome for an older text never puts its note under a newer text that is still parsing' (the old text's timeout note shows under the new text while it parses). Distinct from W4-T6-M12, which drops the note and so is red elsewhere."
+  "red": "pwa chat-hardening: 1 failed | 103 passed (104) — 'a non-tree outcome for an older text never puts its note under a newer text that is still parsing'"
  },
  {
   "id": "W4-T11-M10",
   "pkg": "pwa",
   "file": "pwa/src/lib/markdown.tsx",
-  "old": "  if (/^https?:(?![/\\\\]{2})/i.test(src.slice(i))) return true;\n",
-  "new": "",
+  "old": "  return !/^https?:\\/\\//i.test(src.slice(i));\n",
+  "new": "  return !/^https?:\\/\\/?/i.test(src.slice(i));\n",
   "tests": [
    "test/chat-hardening.test.tsx"
   ],
-  "red": "pwa chat-hardening: 7 failed | 53 passed (60) — the M4.C3 rendering case for a same-scheme special-relative 'https:/' source (img and auto-embed) and the six table rows 'https:/api/x', 'HTTPS:/api/x', 'https:\\\\api\\\\x', '  https:/api/x', 'http:/x.png', tab-led 'https:/api/x'"
+  "red": "pwa chat-hardening: 6 failed | 98 passed (104) — 'a same-scheme special-relative https:/ source draws no image, as an img or as an auto-embed'; 'refuses \"  https:/api/x\"'; 'refuses \"HTTPS:/api/x\"'; 'refuses \"\\thttps:/api/x\"'; 'refuses \"http:/x.png\"'; 'refuses \"https:/api/x\"'"
  },
  {
   "id": "W4-T11-M11",
@@ -11336,6 +11336,100 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
    "test/chat-hardening.test.tsx"
   ],
   "red": "pwa chat-hardening: 1 failed | 66 passed (67) — 'a tree that settles behind newer streaming text replaces the shown tree: One, Two, Three'"
+ },
+ {
+  "id": "W4-T11-M44",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdown.tsx",
+  "old": "  if (cells > DOCS_MAX_RENDER_ELEMENTS) {\n",
+  "new": "  if (false) {\n",
+  "tests": [
+   "test/chat-hardening.test.tsx",
+   "-t",
+   "a table just over the cap, well under 4 096 bytes"
+  ],
+  "red": "pwa chat-hardening: 1 failed | 103 skipped (104) — 'a table just over the cap, well under 4 096 bytes, is plain text without react-markdown drawing it'"
+ },
+ {
+  "id": "W4-T11-M45",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdown.tsx",
+  "old": "  return !/^https?:\\/\\//i.test(src.slice(i));\n",
+  "new": "  return false;\n",
+  "tests": [
+   "test/chat-hardening.test.tsx"
+  ],
+  "red": "pwa chat-hardening: 43 failed | 61 passed (104) — 43 cases: the refusal table, the M4.C3 rendering cases and the Q1 cases, e.g. '![](/api/example/x) draws no image and renders the URL as a plain link'; 'a link to an image file, protocol-relative, is not auto-embedded: [x](//h.example/a.png)'; 'a link to an image file, root-relative, is not auto-embedded: [x](/files/a.png)'"
+ },
+ {
+  "id": "W4-T11-M46",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdown.tsx",
+  "old": "  return !/^https?:\\/\\//i.test(src.slice(i));\n",
+  "new": "  return !/^https?:\\/\\//.test(src.slice(i));\n",
+  "tests": [
+   "test/chat-hardening.test.tsx"
+  ],
+  "red": "pwa chat-hardening: 3 failed | 101 passed (104) — 'an image from an absolute http(s) URL (HTTP in capitals) still draws an <img>'; 'keeps \"HTTP://h.example/x.png\"'; 'keeps \"HTTPS://h.example/x.png\"'"
+ },
+ {
+  "id": "W4-T11-M47",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdown.tsx",
+  "old": "    } else if (c === 0x0a || c === 0x0d) {\n",
+  "new": "    } else if (c === 0x0a) {\n",
+  "tests": [
+   "test/chat-hardening.test.tsx",
+   "-t",
+   "lone CR line endings"
+  ],
+  "red": "pwa chat-hardening: 1 failed | 103 skipped (104) — 'lone CR line endings: a table just over the cap is plain text'"
+ },
+ {
+  "id": "W4-T11-M48",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdown.tsx",
+  "old": "      lines += 1;\n      if (pipes > maxPipes) maxPipes = pipes;\n",
+  "new": "      lines += 1;\n      if (maxPipes === 0) maxPipes = pipes;\n",
+  "tests": [
+   "test/chat-hardening.test.tsx",
+   "-t",
+   "a 1-column table ended by a heading"
+  ],
+  "red": "pwa chat-hardening: 1 failed | 103 skipped (104) — 'a 1-column table ended by a heading, then a wide table with no blank line: plain text'"
+ },
+ {
+  "id": "W4-T6-M7",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdown.tsx",
+  "old": "  while (i < src.length && src.charCodeAt(i) <= 0x20) i += 1;\n",
+  "new": "",
+  "tests": [
+   "test/chat-hardening.test.tsx"
+  ],
+  "red": "pwa chat-hardening: 3 failed | 101 passed (104) — 'a leading-whitespace source is kept by the predicate, and an https link to an image file still embeds'; 'keeps \"  https://h.example/x.png\"'; 'keeps \"\\thttp://h.example/x.png\"'"
+ },
+ {
+  "id": "W4-T6-M8",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdown.tsx",
+  "old": "  return !/^https?:\\/\\//i.test(src.slice(i));\n",
+  "new": "  return !/^https?:[/\\\\]{2}/i.test(src.slice(i));\n",
+  "tests": [
+   "test/chat-hardening.test.tsx"
+  ],
+  "red": "pwa chat-hardening: 1 failed | 103 passed (104) — 'refuses \"https:\\\\\\\\h.example/x.png\"'"
+ },
+ {
+  "id": "W4-T6-M9",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdown.tsx",
+  "old": "  if (src === undefined) return false;\n",
+  "new": "  if (src === undefined) return true;\n",
+  "tests": [
+   "test/chat-hardening.test.tsx"
+  ],
+  "red": "pwa chat-hardening: 1 failed | 103 passed (104) — 'keeps an absent source'"
  }
 ]
 ```
@@ -13394,3 +13488,5 @@ No commit in this task but Step 5's: everything else it writes is scratch or git
 - **D-4772 (2026-10-12)** — `prescanMarkdown` departs from spec §4.10's pre-scan algorithm text in two ways (coordinator ruling, mail 4354, on question 4345). (1) Tabs are column-aware: a tab advances to the next multiple of 4 columns, as CommonMark does, both in the up-to-3-space skip and after a `>` or list marker, so `>` followed by a tab counts as a container marker; §4.10 says "skip up to 3 spaces" and "`>` (plus one optional space)". (2) Container depth is counted on every line, inside fenced blocks too; only the delimiter-run check skips fenced lines (§4.10 skips fenced blocks for both). Task 3's review measured three inputs that passed §4.10's pre-scan and then threw a RangeError in the parser (a tab between `>` markers; a fence opened inside a list item or an HTML block, which the parser closes while the pre-scan kept skipping); the hardening keeps U3's purpose, at the cost of rare false refusals, which chat renders as plain text with its note. Nesting continued by indentation across lines stays covered by the backstops (`threw`, `MD_MAX_TREE_DEPTH`, the worker budget) and is carried, with chat's main-thread cost on a crafted message of 4 KiB or less; `markdownGuard.ts`'s header names those bounds. Task 3's fix commit (the pre-scan hardening); rows W4-T11-M1 to W4-T11-M8 and the re-anchored W4-T3-M9, in Task 11's rows block.
 - **D-4773 (2026-10-12)** — `isRefusedChatImageSrc` also refuses an `http`/`https` scheme not followed by two slashes or backslashes (`/^https?:(?![\/\\]{2})/i`, after the same leading strip), beyond the predicate Task 6's text spells (a leading `/` or `\`) (coordinator agreement, mail 4397, on finding 4396). A browser resolves a same-scheme special-relative source such as `https:/api/example/x` against the page's own origin, so it is root-relative as the browser reads it, which is exactly what U3 clause 4, M4.C3 and refinement (k) refuse; react-markdown's `defaultUrlTransform` keeps it. Path-relative sources stay allowed (Q1, open). Task 6's review fix; rows W4-T11-M9 and W4-T11-M10, in Task 11's rows block.
 - **D-4774 (2026-10-13)** — `prescanMarkdown` also counts a GFM footnote-definition label (`[^label]:` at a container position, the label one to 999 characters with no whitespace and no `]`, then its blank run, column-aware) as one container level, beyond the markers spec §4.10 lists (`>` and the list markers). Task 11's review (finding 2-1) measured two messages of about 4 KiB, a footnote label followed by deep `>` or `- ` nesting, that passed §4.10's pre-scan and then threw a RangeError on chat's synchronous path (after 1.3 s and 6.7 s); a fuzz of 4 000 footnote-and-marker inputs now gives the parser's own depth exactly. It extends ruling 4354 in the same direction (coordinator agreement, mail 4436, on 4435): U3's purpose is kept, at the cost of a deeply nested footnote rendering as plain text with its note. Task 11's fix for review 2-1; rows W4-T11-M18, W4-T11-M20, W4-T11-M21 and W4-T11-M22, in Task 11's rows block.
+- **D-4775 (2026-10-13)** — chat's synchronous path no longer renders every message of at most `CHAT_SYNC_MAX_BYTES` "exactly as today" (spec §4.12, U3 clause 2): before that render, `ChatMarkdown` takes a cheap upper bound of the GFM table cells the message could draw, (the most `|` on any one line + 1) x (the number of lines, split on CRLF, CR and LF), and above `DOCS_MAX_RENDER_ELEMENTS` it renders `msg-plain` with the too-wide note instead (operator ruling 2026-10-13, option B, on Task 11 review 2-3 via coordinator mail 4466). Task 11's review measured a 4 096-byte, 300-column table that passed the pre-scan and drew 435 551 elements on the main thread in about 27 s (a 500-column one: 524 551 in 7.6 s), which the worker path refuses as too-wide. The bound replaces a first count that followed GFM's table grammar and that a re-review bypassed three ways (a lone CR line ending, a Unicode-blank body row, a narrow table running into a wide one): a table's width is its delimiter row's cells, at most that row's pipes + 1, and its rows at most the lines, so the bound never under-counts; the cost is a rare pipe-heavy message of 4 KiB or less rendering as plain text with the note. Task 11's fix wave; rows W4-T11-M44, W4-T11-M47 and W4-T11-M48, in Task 11's rows block.
+- **D-4776 (2026-10-13)** — chat draws an image only from an absolute `http(s)://` source: after the leading strip, `isRefusedChatImageSrc` refuses every source that does not match `/^https?:\/\//i`, for `img` and the auto-embed in `a` alike, where spec §4.12 (U3 clause 4) and refinement (k) refuse only root-relative and protocol-relative sources (operator ruling 2026-10-13 on Q1, the question refinement (k) left open, via coordinator mail 4466). Path-relative (`../api/x`, `./x.png`, `x.png`), `data:` and every other scheme are now refused and render as the chat's ordinary external link; this subsumes D-4773's special-relative clause, whose cases stay green. Every https image and link case `message-links.test.tsx` pins passes unmodified. Task 11's fix wave; rows W4-T11-M45 and W4-T11-M46, and W4-T6-M8 and W4-T11-M10 re-anchored on the new clause, in Task 11's rows block.
