@@ -1482,6 +1482,19 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         `ccd/ccrc`.
       - STATUS: fleet and server v0.0.175, newest v0.0.175, backups fleet 175M/server 688M, disk free fleet 206G/work
         volume 212G/server 32G, no anomalies at 20:42.
+    - **2026-10-13 23:43 UTC: v0.0.177 auto-converged unattended, past v0.0.176; #351 has merged.** No action was taken.
+      - The releases: v0.0.176, #351 (workspace lifecycle wave 6), at 23:23:02; and v0.0.177, #362 (stall watch
+        settings wave 3), at 23:24:59.
+      - The next poll found both, and the auto move went straight to the newest. The fleet box ran 23:35:50 to
+        23:38:04, and the server followed at 23:38:29 to 23:38:55, 25 seconds after the fleet.
+      - Both boxes read `box-token` PASS (the server: "rotated 3 d ago"). Server doctor: 26 passed, 0 warned, 0 failed.
+        Fleet doctor: 33 passed, 6 warned, 0 failed.
+      - **Wave 15 (run 300)** is now held by one thing: claim 1268 (run 354) on `ccd/ccrc`. #351 merged at 23:22:04,
+        and claim 1247 on `ccd/ccd` ended with run 358. The plan was written against an older `main`, and #351 changed
+        `ccd/ccd`, so the plan's citations are re-measured before any dispatch. A dispatch also needs a slot under the
+        daily cap.
+      - STATUS: fleet and server v0.0.177, newest v0.0.177, backups fleet 175M/server 690M, disk free fleet 209G/work
+        volume 216G/server 32G, no anomalies at 23:42.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
