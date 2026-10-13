@@ -1834,6 +1834,34 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - Plain-ridge stays idle (4535).
   - **Next:** the operator authorized the merge (02:05). It happens if review 411 reports no blocker and no
     ruling-needed finding, and the required checks are green.
+- **2026-10-13 15:59 — review 411 is clean, but #351 conflicts with main. Run 358 is back at `working` for fix round 6
+  (mail 4609).**
+  - **The review:** soft-canyon's 4607; report `review-411-c5a96f2e.md` with its evidence directory.
+    - **NO blocker and NO finding that needs a ruling.** The held-out panel ran 60 agents: 17 findings survived, 2 were
+      refuted, none unexamined. Review run 411 closed `done`.
+    - Residual (7) is closed: review 401's own probes now show R no earlier than U.
+    - The worker's tradeoff (its internal F4) is judged acceptable.
+    - Mutations at the tip: 90 rows, 82 red, 8 green. Five green rows are equivalents; three are F1/F2. None is
+      UNVERIFIED.
+    - CI: the PR's required checks are green. Full run `38374485823` is green on Linux. Its macOS reds are only ccd
+      suites outside this round.
+  - **Why it cannot merge yet:** main moved to `6b939bd46`, and merge-tree now exits 1. The one conflict is `ccd/ccd`
+    line 2, the generated stamp: #386 edited `ccd/ccd`, and so did #351's 4288 restamp. That is a measured conflict,
+    clause 16 trigger 1.
+  - **Fix round 6:**
+    - **M:** merge `origin/main` (never a rebase) and regenerate line 2 with `markGenerated` over the merged body.
+      Prove the merged tree equals merge-tree's automatic result elsewhere, then run the ccd, ownership and named
+      suites.
+    - **Review 411's residue, in the same round:**
+      - F1, an important test gap: pin R2's pending changes, so A15 goes red.
+      - F2: pin A1, A16 and c15.
+      - F3–F7: words. These cover the shutdown warn tail conditioned on the reason, the mixed-signal case, what keeps
+        running during the bound, the stale docstrings and the plan entries for 4916.
+      - F8: README `:3565`, after quiet-ridge's consent under claim 1233 (asked in 4608). It is not a merge gate.
+      - F9, SAFETY hygiene: the wiring test's child env is built from an allowlist, and its TMPDIR is pinned short.
+    - No new numbers. Rulings: `fix-round-6-rulings.md`.
+  - **Next:** the wave-done, a narrow scoped review, then the operator-authorized admin merge when green. Both lanes stay
+    SHADOWED.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
