@@ -126,6 +126,63 @@ describe('_continued_in_of', () => {
   });
 });
 
+// D-4940: the marker is read by the rule all three readers share — newest
+// line first, top-level records only — and `continued-in-parity.test.ts` runs
+// `_continued_in_of` over the whole table. These are the two effects on the
+// REGISTRY that the old last-line, substring reader got wrong.
+describe('_sync_uuid and the marker rule (D-4940)', () => {
+  const lastPrompt = `${JSON.stringify({ type: 'last-prompt', lastPrompt: 'go on', sessionId: A })}\n`;
+  const aiTitle = `${JSON.stringify({ type: 'ai-title', aiTitle: 'a title', sessionId: A })}\n`;
+
+  it('follows a marker that metadata was re-stamped after (review finding ccd-last-line-only-marker)', () => {
+    // Claude Code re-stamps last-prompt / ai-title when its process exits;
+    // its own reader steps over them. Measured before this fix: six ticks
+    // and the registry still A.
+    row('/w', A);
+    plant('/w', A, `${turnLine('one')}${marker(A, B)}${lastPrompt}${aiTitle}`);
+    plant('/w', B, turnLine('two'));
+    ticks(2);
+    expect(h.reg(ID, 'uuid')).toBe(B);
+  });
+
+  it('a supervisor restart with a re-stamped marker does not write the stale pane id back (review finding ccd-last-line-only-marker, the restart case)', () => {
+    // The same restart shape as the F3 test below — registry already C, pane
+    // still publishing A, every memo empty — with metadata after A's marker.
+    // Measured before this fix: tick 1 wrote A back and it stayed A, because
+    // `_ci_pane_superseded` read only A's last line.
+    const C = 'c'.repeat(36);
+    row('/w', C);
+    plant('/w', A, `${turnLine('one')}${marker(A, C)}${lastPrompt}`);
+    plant('/w', C, turnLine('two'));
+    const cfg = h.sh(`_cfg_dir ${W}`);
+    const sdir = path.join(cfg, 'sessions');
+    mkdirSync(sdir, { recursive: true });
+    writeFileSync(path.join(sdir, '4242.json'), JSON.stringify({ sessionId: A, status: 'idle' }));
+    const tmuxStub = `tmux() { case "$1" in list-panes) echo 4242 ;; esac; return 0; };`;
+    const out = h.sh(`${tmuxStub} _sync_uuid ${ID}; echo "T1:$(_reg_get ${ID} uuid)"; _sync_uuid ${ID}; echo "T2:$(_reg_get ${ID} uuid)"`);
+    expect(/T1:(\S+)/.exec(out)?.[1]).toBe(C);
+    expect(/T2:(\S+)/.exec(out)?.[1]).toBe(C);
+  });
+
+  it('never moves the registry onto a uuid named inside a tool call\'s input (review finding F1)', () => {
+    // The tool-call line stays LAST for the whole of a long tool run or a
+    // permission wait, and its own top-level sessionId (late on the line, as
+    // Claude Code orders the keys) satisfied the old authorship check.
+    // Measured before this fix: three ticks and the registry was B, the
+    // operator's live conversation in A gone dark.
+    row('/w', A);
+    plant('/w', A, `${turnLine('call a tool')}${JSON.stringify({
+      parentUuid: 'u-1',
+      message: { id: 'msg_1', type: 'message', role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'mcp__x__y',
+        input: { type: 'continued-in', continuedInSessionId: B } }], stop_reason: 'tool_use' },
+      type: 'assistant', uuid: 'a-1', sessionId: A,
+    })}\n`);
+    plant('/w', B, turnLine('an unrelated, earlier conversation'));
+    ticks(3);
+    expect(h.reg(ID, 'uuid')).toBe(A);
+  });
+});
+
 describe('_sync_uuid follows a fork', () => {
   it('leaves the registry alone on the first sight of a transcript', () => {
     row('/w', A);

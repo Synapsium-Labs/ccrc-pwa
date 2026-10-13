@@ -15835,6 +15835,56 @@ _cfg_dir() { _ccrc_cfg_dir "$1"; }   # wrapper -> the CLAUDE_CONFIG_DIR that wra
 # three disagree about what the last line even is.
 CONTINUED_IN_TAIL_BYTES=8192
 
+# WHAT COUNTS AS A MARKER — ONE RULE, THREE READERS (D-4940). This jq program
+# is the rule both bash readers run (`_continued_in_of` below, and
+# `_dr_continued_in` in ccd/ccrc-doctor-checks, which carries this exact text
+# because it cannot source this file); `tailRecordOf`/`continuationInTail`
+# (`server/src/transcript/parse.ts`) is the same rule in TypeScript, where the
+# rule is written out in full. `server/test/continued-in-parity.test.ts` holds
+# the two bash spellings byte-equal and runs all three readers over one table
+# of transcripts. In short: the window's lines are read NEWEST FIRST; a
+# top-level `continued-in` record decides (a successor, or none when it is not
+# this file's valid marker), a top-level user/assistant record decides "none",
+# and every other line — re-stamped metadata, a line that does not parse, the
+# window's cut first line — is stepped over.
+#
+# JQ, NOT A BASH PATTERN, AND WHY (review finding F1). The old reader matched
+# substrings anywhere on the last line, so a tool call whose INPUT held a
+# marker-shaped object, with the record's own top-level `sessionId` late on the
+# line, read as a marker: ccd wrote the registry to a session the operator was
+# not in while the server, which parses, refused it. Deciding the MARKER exactly
+# in bash is possible (it is a flat object); deciding that a nested line's own
+# top-level `type` is user or assistant is not, short of a JSON parser. Cost:
+# one `jq` beside the one `tail`, and both run only once per quiescence (the
+# read budget below), never per tick. A box with no jq follows nothing — no
+# output is "no successor" — and `ccrc doctor`'s jq check FAILs that box.
+#
+# The uuid test is `explode`d character classes, not `test()`: jq's `$` also
+# matches before a trailing newline (a successor `"<uuid>\n"` would pass
+# `^…$`), and a jq built without Oniguruma has no `test()` at all.
+#
+# jq and `JSON.parse` agree on every line a JSON serializer writes, duplicate
+# keys included (both keep the LAST, measured on jq 1.7.1 and 1.8.2). They part
+# only on input no transcript writer emits: jq also accepts the bare literals
+# `nan`/`NaN`/`Infinity`, and jq 1.6 (not 1.7+) gives up past nesting depth 256.
+CONTINUED_IN_JQ='def tailrec($l):
+  ($l | contains("\"type\":\"continued-in\"")) as $m
+  | ($l | (contains("\"type\":\"user\"") or contains("\"type\":\"assistant\""))) as $t
+  | (if ($m or $t) then ($l | try fromjson catch null) else null end)
+  | if type != "object" then "skip"
+    elif $m and .type == "continued-in" and (.continuedInSessionId | type) == "string" then
+      .continuedInSessionId as $to
+      | if ((has("sessionId") | not) or .sessionId == $u)
+           and ($to | length) == 36
+           and ($to | explode | all(. == 45 or (. >= 48 and . <= 57) or (. >= 97 and . <= 102)))
+           and $to != $u
+        then "+" + $to else "stop" end
+    elif $t and (.type == "user" or .type == "assistant") then "stop"
+    else "skip" end;
+first((split("\n") | reverse[]) as $l | tailrec($l) | select(. != "skip")) // "stop"
+| select(startswith("+")) | .[1:]
+'
+
 # Memos, per session id, for the read budget below. `ccd supervise` is one
 # long-lived process per session, so these are already per-session state and
 # need no registry file; a supervisor restart forgets them and costs one extra
@@ -16044,44 +16094,26 @@ _ci_transcript_path() {   # id cfg uuid -> the live transcript for uuid, tried b
   printf '%s' "$_CI_F"
 }
 
-_continued_in_of() {   # file uuid -> the successor uuid on the file's LAST line, or nothing
-  # Claude Code's own statement about itself, checked field by field because it
-  # is data off a disk other processes write. `sessionId` is checked when
-  # present and ignored when absent (absence-permits); a successor that is not
-  # a uuid, or is this file's own uuid, is refused.
-  # D-3563: the last-line pick below is done in bash rather than
-  # through a second `| tail -1` in the pipeline — that second call is what a
-  # stub-based count of "one tail per quiescence" would otherwise see, even
-  # though it never touches the disk a second time. One external `tail`, one
-  # 8 KiB read.
+_continued_in_of() {   # file uuid -> the successor uuid the file's tail window names, or nothing
+  # Claude Code's own statement about itself, read by the rule all three
+  # readers share (`CONTINUED_IN_JQ` above, D-4940): newest line first, the
+  # first top-level `continued-in` or user/assistant record decides.
   #
-  # COMPACT JSON ONLY, DELIBERATELY (review round). `*'"type":"continued-in"'*`
-  # would miss `{"type": "continued-in"}` (a space after the colon) — this is
-  # fail-CLOSED for ccd, not a defect: it just declines to follow, the same
-  # answer as no marker at all. The server's own reader (`continuationOf`,
-  # `shared`/TypeScript) does real `JSON.parse` and is the tolerant one of the
-  # three readers `continued-in-parity.test.ts` holds equal on the WINDOW, not
-  # on parse leniency. Claude Code writes compact JSON today; building a JSON
-  # parser in bash to hedge against a format it does not write is not this
-  # function's job.
-  local f="$1" uuid="$2" window lines last claims next
-  window=$(tail -c "$CONTINUED_IN_TAIL_BYTES" -- "$f" 2>/dev/null) || return 0
-  lines=$(printf '%s' "$window" | grep -v '^[[:space:]]*$')
-  last="${lines##*$'\n'}"
-  [[ "$last" == *'"type":"continued-in"'* ]] || return 0
-  # ABSENCE permits; PRESENCE must be VALID. A `sessionId` field that is there
-  # but whose value is not 36 hex-or-dash characters used to extract as the
-  # same empty string a genuinely ABSENT field produces, and absence-permits
-  # then waved the marker through — the TypeScript reader refuses any author
-  # that is not this file's own uuid, so a malformed field must refuse here
-  # too, not fall back to "nobody claimed it" (review round finding).
-  if [[ "$last" == *'"sessionId":"'* ]]; then
-    claims=$(printf '%s' "$last" | grep -oE '"sessionId":"[0-9a-f-]{36}"' | head -1 | cut -d'"' -f4)
-    [[ -n "$claims" && "$claims" == "$uuid" ]] || return 0
-  fi
-  next=$(printf '%s' "$last" | grep -oE '"continuedInSessionId":"[0-9a-f-]{36}"' | head -1 | cut -d'"' -f4)
-  [[ -n "$next" && "$next" != "$uuid" ]] || return 0
-  printf '%s' "$next"
+  # NOT THE LAST LINE (review finding, ccd-last-line-only-marker). Claude
+  # Code's own reader scans backwards and steps over records that are not a
+  # conversation, and Claude Code re-stamps session metadata (last-prompt,
+  # ai-title, …) when its process exits. The old last-line reader called a
+  # marker with such a line after it absent — no follow, and in
+  # `_ci_pane_superseded` a stale pane id let back into the registry.
+  #
+  # D-3563 still holds: ONE external `tail`, one 8 KiB read, per examination
+  # (`ccd-sync-uuid.test.ts`'s read budget counts it); the window goes straight
+  # into jq, never through a second pass. Both a missing file and a missing jq
+  # print nothing, which every caller reads as "no successor".
+  local f="$1" uuid="$2"
+  tail -c "$CONTINUED_IN_TAIL_BYTES" -- "$f" 2>/dev/null \
+    | jq -rRs --arg u "$uuid" "$CONTINUED_IN_JQ" 2>/dev/null
+  return 0
 }
 
 _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated read budget

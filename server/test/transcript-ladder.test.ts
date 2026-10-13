@@ -961,6 +961,24 @@ describe('continuation follow', () => {
     plantChain(b, B, turn('two'));
     expect(await resolveTranscript(localIO, chainOpts(b, A))).toMatchObject({ path: own, uuid: A });
   });
+
+  // D-4940: the marker is read by the rule all three readers share.
+  it('follows a marker that Claude Code re-stamped metadata after (D-4940)', async () => {
+    const b = box();
+    plantChain(b, A, turn('one') + marker(A, B)
+      + `${JSON.stringify({ type: 'last-prompt', lastPrompt: 'go on', sessionId: A })}\n`
+      + `${JSON.stringify({ type: 'ai-title', aiTitle: 'a title', sessionId: A })}\n`);
+    const succ = plantChain(b, B, turn('two'));
+    expect(await resolveTranscript(localIO, chainOpts(b, A))).toMatchObject({ path: succ, uuid: B });
+  });
+
+  it('refuses a marker whose sessionId is present but null — presence must be this file\'s own (D-4940)', async () => {
+    const b = box();
+    const own = plantChain(b, A, turn('one')
+      + `${JSON.stringify({ type: 'continued-in', sessionId: null, continuedInSessionId: B })}\n`);
+    plantChain(b, B, turn('two'));
+    expect(await resolveTranscript(localIO, chainOpts(b, A))).toMatchObject({ path: own, uuid: A });
+  });
 });
 
 describe('TranscriptResolver and the fork', () => {

@@ -267,46 +267,132 @@ export function parseTranscriptLine(line: string): ChatEvent[] {
   return out;
 }
 
-/** How many bytes of a transcript's tail a reader needs to see its last line.
+/** How many bytes of a transcript's tail every reader of the marker examines.
  *  Every reader of the marker uses this one window — the server here, `ccd`'s
  *  `_sync_uuid` and `ccrc doctor`'s `transcripts` check, whose bash copies are
- *  held equal to this number by `server/test/continued-in-parity.test.ts`. */
+ *  held equal to this number by `server/test/continued-in-parity.test.ts`.
+ *  Claude Code's own reader looks further back (64 KiB in 2.1.296), so a
+ *  marker followed by more than this many bytes of metadata is one it still
+ *  sees and these readers do not — a declined follow, never a wrong one. */
 export const CONTINUATION_TAIL_BYTES = 8192;
 
+/** A string Claude Code mints with `randomUUID`: lowercase hex and dashes,
+ *  36 of them. JavaScript's `$` (no `m` flag) is the end of the input, so a
+ *  trailing newline is refused here; the bash readers' jq says the same with a
+ *  length and a per-character test, because jq's `$` also matches before a
+ *  trailing newline. */
 const UUID_RE = /^[0-9a-f-]{36}$/;
 
+/** The three literals Claude Code's own reader tests a line for BEFORE it
+ *  parses it (2.1.296). Compact JSON only: a line spelled any other way is
+ *  skipped by Claude Code, so it is skipped here too. */
+const MARKER_LITERAL = '"type":"continued-in"';
+const USER_LITERAL = '"type":"user"';
+const ASSISTANT_LITERAL = '"type":"assistant"';
+
+/** What ONE transcript line says to the backward scan (D-4940). Three answers,
+ *  never folded: a line that DECIDES with a successor, a line that DECIDES with
+ *  none, and a line the scan steps over. */
+export type TailRecord =
+  | { readonly kind: 'successor'; readonly to: string }
+  | { readonly kind: 'stop' }
+  | { readonly kind: 'skip' };
+
+const STOP: TailRecord = { kind: 'stop' };
+const SKIP: TailRecord = { kind: 'skip' };
+
 /**
- * The session this transcript CONTINUES IN, or null.
+ * What one line of a transcript's tail says about where the session continued.
  *
- * Claude Code 2.1.278 forks a live session into a daemon-hosted background PTY
- * under a new sessionId and writes, as the last line of the file it abandons:
+ * Claude Code forks a live session into a daemon-hosted background PTY under a
+ * new sessionId and appends to the file it abandons:
  *
- *     {"type":"continued-in","sessionId":"<old>","continuedInSessionId":"<new>"}
+ *     {"type":"continued-in","timestamp":"…","sessionId":"<old>","continuedInSessionId":"<new>"}
  *
- * This is the harness's own statement about itself, so it is read rather than
- * inferred — but it is also data off a disk other processes write, so every
- * field is checked before it is believed.
+ * THE RULE, IDENTICAL IN ALL THREE READERS (D-4940) — this function, the jq
+ * program `ccd`'s `_continued_in_of` and the doctor's `_dr_continued_in` both
+ * run (`CONTINUED_IN_JQ`), held to one answer per input by the fixture table in
+ * `server/test/continued-in-parity.test.ts`:
  *
- * `ofUuid` is the uuid of the file the line came from. A marker naming a
- * DIFFERENT `sessionId` is not this file's marker and is refused; a marker
- * naming no `sessionId` at all is accepted (absence-permits — an older or
- * newer harness may not write the field, and the line's position at the end of
- * this file is already evidence enough). A successor that is not a uuid, or is
- * this file's own uuid, is refused: the first is unusable and the second is a
- * one-element cycle.
+ *   - THE MARKER: a line carrying the compact literal `"type":"continued-in"`
+ *     that parses as a JSON object whose OWN top-level `type` is
+ *     "continued-in" and whose `continuedInSessionId` is a string. It decides.
+ *     It names a successor only when its `sessionId` is ABSENT or is this
+ *     file's own uuid (absence permits; presence must be this file's — null,
+ *     malformed or another session's all refuse), and the successor is a uuid
+ *     that is not this file's own; otherwise it decides "no successor".
+ *   - A CONVERSATIONAL RECORD: a line carrying `"type":"user"` or
+ *     `"type":"assistant"` that parses as an object whose OWN top-level `type`
+ *     is one of those. The file was written past any older marker, so it
+ *     decides "no successor".
+ *   - EVERYTHING ELSE IS SKIPPED: the metadata Claude Code re-stamps after the
+ *     marker when its process exits (last-prompt, ai-title, custom-title, tag,
+ *     permission-mode, …), summary/system/attachment/queue-operation records,
+ *     a line that does not parse (half-written, or the window's cut first
+ *     line — a proper suffix of a one-line JSON object never parses as an
+ *     object, so the cut needs no handling of its own), anything not an object.
  *
- * Never throws. A caller reading a file's tail can land on a half-written line,
- * and a parse failure there means "not a marker", not "the session is broken".
+ * NEVER A SUBSTRING (review finding F1). The literal is a prefilter, as it is
+ * in Claude Code; the decision is the record's own top-level `type`. A tool
+ * call whose input holds `{"type":"continued-in","continuedInSessionId":…}`
+ * is an assistant record and stops the scan; it never names a successor.
+ * Duplicate keys resolve as `JSON.parse` and jq both resolve them: the last.
+ *
+ * WHERE CLAUDE CODE'S OWN READER DIFFERS (2.1.296, its `cxn`), each a declined
+ * follow rather than a wrong one: it stops only at a COMPLETE turn (an
+ * assistant message with a string `stop_reason` that is not an API error, or a
+ * user prompt with text) and steps over every other user/assistant record,
+ * where this rule stops at any; it checks no `sessionId`; it accepts an
+ * uppercase successor; and it looks 64 KiB back, not 8.
+ *
+ * Never throws: a parse failure is a skipped line, not a broken session.
  */
-export function continuationOf(line: string, ofUuid: string): string | null {
+export function tailRecordOf(line: string, ofUuid: string): TailRecord {
+  const markerish = line.includes(MARKER_LITERAL);
+  const turnish = line.includes(USER_LITERAL) || line.includes(ASSISTANT_LITERAL);
+  if (!markerish && !turnish) return SKIP;
   let raw: unknown;
-  try { raw = JSON.parse(line); } catch { return null; }
-  if (typeof raw !== 'object' || raw === null) return null;
+  try { raw = JSON.parse(line); } catch { return SKIP; }
+  // An array is an object to `typeof`, and needs no arm of its own: it has no
+  // `type` and no `continuedInSessionId`, so it falls through to SKIP below —
+  // where jq, which errors on `.type` of an array, has to say so explicitly.
+  if (typeof raw !== 'object' || raw === null) return SKIP;
   const r = raw as Record<string, unknown>;
-  if (r['type'] !== 'continued-in') return null;
-  const from = r['sessionId'];
-  if (typeof from === 'string' && from !== ofUuid) return null;
   const to = r['continuedInSessionId'];
-  if (typeof to !== 'string' || !UUID_RE.test(to) || to === ofUuid) return null;
-  return to;
+  if (markerish && r['type'] === 'continued-in' && typeof to === 'string') {
+    const authored = !Object.prototype.hasOwnProperty.call(r, 'sessionId') || r['sessionId'] === ofUuid;
+    return authored && UUID_RE.test(to) && to !== ofUuid ? { kind: 'successor', to } : STOP;
+  }
+  if (turnish && (r['type'] === 'user' || r['type'] === 'assistant')) return STOP;
+  return SKIP;
+}
+
+/** The successor ONE line names when it is this file's own marker, or null. */
+export function continuationOf(line: string, ofUuid: string): string | null {
+  const v = tailRecordOf(line, ofUuid);
+  return v.kind === 'successor' ? v.to : null;
+}
+
+/**
+ * The session a transcript CONTINUES IN, read from its tail window, or null.
+ *
+ * Lines are read NEWEST FIRST and the first that decides answers
+ * (`tailRecordOf`); a window that holds no deciding line answers null. This is
+ * the whole of the server's reading of the marker — `continuationAt`
+ * (`resolve.ts`) hands it the file's last `CONTINUATION_TAIL_BYTES`.
+ *
+ * WHY NOT THE LAST LINE (review finding, ccd-last-line-only-marker). Claude
+ * Code's own reader scans backwards and steps over records that are not a
+ * conversation, and Claude Code re-stamps session metadata when its process
+ * exits — so a valid marker can be followed by lines that are not markers.
+ * Reading only the last line called that marker absent.
+ */
+export function continuationInTail(tail: string, ofUuid: string): string | null {
+  const lines = tail.split('\n');
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const v = tailRecordOf(lines[i]!, ofUuid);
+    if (v.kind === 'skip') continue;
+    return v.kind === 'successor' ? v.to : null;
+  }
+  return null;
 }
