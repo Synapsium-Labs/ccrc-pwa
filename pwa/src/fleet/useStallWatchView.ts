@@ -15,6 +15,7 @@ import {
   type StallWatchStages, type StallWatchView, type StallWriteEffect,
 } from '../../../shared/api';
 import { ApiError, api, apiErrorText } from '../lib/api';
+import { settingsReadFailure, type SettingsReadFailure } from '../lib/notAvailable';
 
 /** The read's cadence: the stall sweep's own (60 s), so a faster read would fetch the same answer again. */
 export const STALL_WATCH_POLL_MS = 60_000;
@@ -22,7 +23,7 @@ export const STALL_WATCH_POLL_MS = 60_000;
 /** Why the latest poll produced no view. `not-configured` is a server with no stall-watch settings to offer (a box with
  *  no coordination database, or an older build without the route), which the section renders INSTEAD of any view that
  *  landed; `failed` is a read that did not land, rendered beside the last good view. */
-export type StallWatchFailure = 'not-configured' | 'failed';
+export type StallWatchFailure = SettingsReadFailure;
 
 export interface StallWatchPoll {
   /** The LAST GOOD answer: a later failure never clears it. */
@@ -199,17 +200,11 @@ export function stallWriteRefusal(err: unknown): StallWriteRefusal {
   };
 }
 
+// Moved to ../lib/notAvailable.ts (settingsReadFailure); the comment below stays for its history.
 /** The two answers that mean "not available on this server", each status with its own code: 501 `not-configured` (no
  *  coordination database) and 404 `not-found` (the server's `/api/*` not-found answer, an older build that lacks the
  *  route; departure `older-server-404-reads-not-configured` (D-4035)). A 404 or 501 carrying any other body is a read
  *  that failed: folding it in would overload one value with two conditions the section renders differently. */
-const NOT_CONFIGURED_ANSWERS: ReadonlyArray<readonly [number, string]> = [[501, 'not-configured'], [404, 'not-found']];
-
-const failureOf = (err: unknown): StallWatchFailure =>
-  err instanceof ApiError && isObject(err.body)
-    && NOT_CONFIGURED_ANSWERS.some(([status, code]) => err.status === status && (err.body as { error?: unknown }).error === code)
-    ? 'not-configured'
-    : 'failed';
 
 /**
  * `GET /api/coord/stall-watch` every `pollMs` and whenever the page becomes visible. The newest ISSUED request is
@@ -236,7 +231,7 @@ export function useStallWatchView(pollMs: number = STALL_WATCH_POLL_MS): StallWa
         },
         (err: unknown) => {
           if (!live || mine !== issued.current) return;
-          const failure = failureOf(err);
+          const failure = settingsReadFailure(err);
           setState((prev) => ({ view: prev.view, failure }));
         },
       );
