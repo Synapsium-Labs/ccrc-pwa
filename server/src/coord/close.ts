@@ -290,7 +290,12 @@ export async function closeRun(
      * it.
      *
      * Cost, named: ~14 lines of transition/fleet-act/commit shape appear twice
-     * inside one function. That is the price of the property.
+     * inside one function, and the commit a third time, in the refused-id block
+     * below (spec §2.3). That block stands apart by the same doctrine: its
+     * fleet act is absent, not skipped by a flag on the shared path. And no
+     * await sits between its sweep gate and its commit, so it has no fleet-act
+     * window for its compare-and-set to guard. That is the price of the
+     * property.
      */
     // D-2807: a review run has no `closing` (REVIEW_RUN_TRANSITIONS); the
     // operator's ungated valve must still reach it, so it fails directly — its

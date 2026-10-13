@@ -300,6 +300,51 @@ describe('the abandon arm closes a bad stored id failed with no fleet act (spec 
     expect(eventsOf(d.coord, good).filter(([, , , detail]) => detail === OMITTED_EVENT)).toEqual([]);
   });
 
+  // The two rows that close straight to `failed`, never through `closing`: a `planned` run has no `closing` edge and a
+  // review run has none at all, so the store would refuse that hop, and the door would refuse the very run that the
+  // dispatch refusal sends to it. Each id is UNLISTED (no registry row is planted): the arm reads no registry, so the
+  // row's absence cannot be what decides.
+  it('the operator abandon of a planned run that dispatch refused, its --actor unlisted, fails it directly', async () => {
+    const home = mkTmp('ccrc-stored-id-');
+    const { run, calls } = recorder();
+    const w = await appFor(home, run); app = w.app;
+    const id = storedRun(w.coord, { state: 'planned', sessionId: BAD, claimedBy: CLAIMED_BY });
+    const refused = await w.app.inject({ method: 'POST', url: `/api/runs/${id}/dispatch`, headers: HEADERS,
+      payload: { brief: 'go' } });
+    expect(refused.json(), 'the premise: dispatch refused it and left it planned').toEqual({ ok: false, error: 'bad-session' });
+    expect(okRun(w.coord.run(id))!.state).toBe('planned');
+    const res = await w.app.inject({ method: 'POST', url: `/api/runs/${id}/abandon` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ...OMITTED, id });
+    expect(calls, 'no fleet act: nothing names the id').toEqual([]);
+    expect(okRun(w.coord.run(id))!.state).toBe('failed');
+    expect(eventsOf(w.coord, id).filter(([by]) => by === 'operator')).toEqual([
+      ['operator', 'planned', 'failed', null],
+      ['operator', 'failed', 'failed', OMITTED_EVENT],
+    ]);
+    expect(eventsOf(w.coord, id).filter(([, , , detail]) => detail === OMITTED_EVENT)).toHaveLength(1);
+  });
+
+  it('the operator abandon of a review run, its --actor unlisted, fails it directly', async () => {
+    const home = mkTmp('ccrc-stored-id-');
+    const { run, calls } = recorder();
+    const w = await appFor(home, run); app = w.app;
+    const work = storedRun(w.coord, { state: 'working', sessionId: 'demo-worker', claimedBy: CLAIMED_BY });
+    const id = storedRun(w.coord,
+      { state: 'working', sessionId: BAD, claimedBy: CLAIMED_BY, kind: 'review', reviews: work });
+    const res = await w.app.inject({ method: 'POST', url: `/api/runs/${id}/abandon` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ...OMITTED, id });
+    expect(calls, 'no fleet act: nothing names the id').toEqual([]);
+    expect(okRun(w.coord.run(id))!.state).toBe('failed');
+    expect(okRun(w.coord.run(work))!.state, 'the work run it reviews is untouched').toBe('working');
+    expect(eventsOf(w.coord, id).filter(([by]) => by === 'operator')).toEqual([
+      ['operator', 'working', 'failed', null],
+      ['operator', 'failed', 'failed', OMITTED_EVENT],
+    ]);
+    expect(eventsOf(w.coord, id).filter(([, , , detail]) => detail === OMITTED_EVENT)).toHaveLength(1);
+  });
+
   it('control: a valid id\'s abandon still releases', async () => {
     const home = mkTmp('ccrc-stored-id-');
     const { run, calls } = recorder();
