@@ -941,6 +941,100 @@ describe('doctor box-token: a box never handed a value reads PASS with its sente
     bothTrace('box-token.json.unusable-1760000000000', (b) => writeFileSync(dot(b, 'box-token.json.unusable-1760000000000'), '{}', { mode: 0o600 }),
       'box-token\\.json\\.unusable-1760000000000 does: ');
   });
+  // Review 405 F1 (4554, amended): on an own-write box (role both, local, no agent.env marking the fleet) the SERVER wrote the fleet
+  // token file and `box-token-generation`, so either one beside an absent token and an absent state shows this server held a
+  // value once. They are traces of the server part, by existence only (`[ -e ] || [ -L ]`: the fleet file holds a value, and is
+  // never opened for this). Everywhere else they are the fleet's own records, and the server part reads as it did.
+  const loseServerOnly = (b: Box): void => { for (const f of ['mail.token', 'box-token.json']) rmSync(dot(b, f)); rmSync(dot(b, 'token-sync.json')); };
+  const OWN_LOST = (word: string): RegExp => new RegExp(`^FAIL box-token: server: token-absent — .* but .*${word} does: this server held a value once and lost it`);
+  const markFleet = (b: Box): void => writeFileSync(dot(b, 'agent.env'), `CCRC_SERVER_URL=ws://127.0.0.1:7788\nCCRC_AGENT_TOKEN=${randomBytes(16).toString('hex')}\n`, { mode: 0o600 });
+  it('review 405 F1: both role, local, own-write: the server lost its token and state but the fleet file and the generation file stay: FAIL naming the fleet file, never the never-minted PASS (4554)', () => {
+    const b = box({ role: 'both' });
+    loseServerOnly(b);
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(OWN_LOST('ccrc-mail\\.token'));
+    expect(r.stdout.split('\n')[0]).toContain(`but ${fleetFile(b)} does: `);
+    expect(r.stdout).not.toContain(SERVER_NEVER);
+    expect(r.stdout).toMatch(/\n {2}remedy: \S/);
+    expect(r.code).toBe(1);
+  });
+  it('review 405 F1: both role, local, own-write: only the generation file stays (the fleet file gone too): the server part names the generation file, never the never-minted sentence (4554)', () => {
+    const b = box({ role: 'both' });
+    loseServerOnly(b);
+    rmSync(fleetFile(b));
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(OWN_LOST('box-token-generation'));
+    expect(r.stdout.split('\n')[0]).toContain(`but ${dot(b, NODE_FILES.tokenGeneration)} does: `);
+    expect(r.stdout).not.toContain(SERVER_NEVER);
+    expect(r.code).toBe(1);
+  });
+  it('review 405 F1: both role, local, own-write: only the fleet file stays (the generation file gone): the server part names the fleet file (4554)', () => {
+    const b = box({ role: 'both' });
+    loseServerOnly(b);
+    rmSync(dot(b, NODE_FILES.tokenGeneration));
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(OWN_LOST('ccrc-mail\\.token'));
+    expect(r.stdout).not.toContain(SERVER_NEVER);
+    expect(r.stdout).toMatch(/\n {2}remedy: \S/);
+    expect(r.code).toBe(1);
+  });
+  it('review 405 F1: the same input with the FAIL and WARN arms switched off prints SKIP rc 3, still the trace sentence, never the never-minted one (4554)', () => {
+    const b = box({ role: 'both' });
+    loseServerOnly(b);
+    const d = runCheck(b, disarmed());
+    expect(d.stdout).toMatch(/^SKIP box-token: server: token-absent — .* but .*ccrc-mail\.token does: this server held a value once and lost it/);
+    expect(d.stdout).not.toContain(SERVER_NEVER);
+    expect(d.code).toBe(3);
+  });
+  // Where it never applies: a both box whose agent.env marks the fleet (or whose fleet mode is remote) is not an own-write
+  // box, the fleet files there are the fleet agent's, and the server part keeps reading never-minted (the live boxes are such).
+  /** The reading measured at 6faca9bdf for these inputs (the server lost its token and state, the fleet side kept its files but no
+   *  report): the server part is the never-minted PASS part, and the fleet part is the missing sync report's WARN. Pinned whole. */
+  const TODAYS_READING = (b: Box): string =>
+    `WARN box-token: server: token-absent — ${dot(b, 'mail.token')} does not exist, and neither does the server's state file: ${SERVER_NEVER}; `
+    + `fleet: never-synced — ${dot(b, 'token-sync.json')} does not exist, so ccrc token sync has never run here\n`
+    + `  remedy: Rotate now on the console's Box token card\n`;
+  it('review 405 F1: a both box whose agent.env marks the fleet keeps today\'s reading, byte for byte: the fleet files are not a server trace (4554)', () => {
+    const b = box({ role: 'both' });
+    markFleet(b);
+    loseServerOnly(b);
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toBe(TODAYS_READING(b));
+    expect(r.code).toBe(2);
+  });
+  it('review 405 F1: a both box with CCRC_FLEET=remote keeps today\'s reading, byte for byte (4554)', () => {
+    const b = box({ role: 'both', fleet: 'remote', agentEnv: true });
+    loseServerOnly(b);
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toBe(TODAYS_READING(b));
+    expect(r.code).toBe(2);
+  });
+  it('review 405 F1: a server-role box with a stray fleet file and generation file keeps the fresh PASS (4554: never applies off an own-write box)', () => {
+    const b = box({ role: 'server' });
+    dropServer(b);
+    mkdirSync(join(b.home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    writeFileSync(fleetFile(b), `# stray\n${b.fleetValue}\n`, { mode: 0o600 });
+    writeFileSync(dot(b, NODE_FILES.tokenGeneration), `${ID_CUR}\n`, { mode: 0o600 });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(new RegExp(`^PASS box-token: ${never('server')}\\n$`));
+    expect(r.code).toBe(0);
+  });
+  // A dangling symlink is a trace too (`-e` follows the link to a target that is not there): the only own-write trace, per
+  // name, so deleting either `|| [ -L … ]` half reds one of these rows.
+  for (const [what, plant] of [
+    ['the fleet token file', (b: Box): void => { rmSync(dot(b, NODE_FILES.tokenGeneration)); rmSync(fleetFile(b)); symlinkSync(join(b.home, 'no-such-target'), fleetFile(b)); }],
+    ['the generation file', (b: Box): void => { rmSync(fleetFile(b)); rmSync(dot(b, NODE_FILES.tokenGeneration)); symlinkSync(join(b.home, 'no-such-target'), dot(b, NODE_FILES.tokenGeneration)); }],
+  ] as const) {
+    it(`review 405 F1: both role, local, own-write: a dangling symlink as ${what} is the only trace: FAIL on the server part (4554)`, () => {
+      const b = box({ role: 'both' });
+      loseServerOnly(b);
+      plant(b);
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout).toMatch(/^FAIL box-token: server: token-absent — .* but .* does: this server held a value once and lost it/);
+      expect(r.stdout).not.toContain(SERVER_NEVER);
+      expect(r.code).toBe(1);
+    });
+  }
   it('both role, local: the same box with a generation file left behind lost its value, a FAIL on the fleet arm', () => {
     const b = box({ role: 'both' });
     for (const f of [fleetFile(b), dot(b, 'token-sync.json'), dot(b, 'mail.token'), dot(b, 'box-token.json')]) rmSync(f);
