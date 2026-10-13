@@ -28,7 +28,7 @@ time.
 |---|---|---|---|---|
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
 | 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merged `6e4524164` 2026-10-12; run 322 closed `done`, `final:true` (R37) |
-| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | review 404 accepted; ready to merge at `5aa5dbadb` (R47) |
+| 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | review 404 accepted (R47); fix round 4 absorbs `main`, merge only (R48) |
 
 ## Decisions & deviations
 
@@ -1025,6 +1025,30 @@ time.
     bump itself. The test header's words are the ruling's; the follow-up may tighten them.
   - Next: the operator merges #362 (`--admin --squash --match-head-commit 5aa5dbadb`). Then run 394 closes `done`
     as the final wave, and the residue list goes to the programme's close.
+- **R48 (2026-10-13 18:26)**, #362 conflicts with `main`; fix round 4 absorbs it, and changes nothing else.
+  - Re-measured before the merge: `main` moved 72 commits, from `2d1835188` to `0d0ea5921`. Merge-tree with
+    `ws/bright-cove` at `5aa5dbadb` now conflicts in `ccd/session-hook.sh`. #392 (the role-skill deny)
+    added a block at the same insertion point as wave 3's carry block, after the merge deny. The two blocks are
+    independent: the deny sets the deny envelope on a subagent's `Skill` call, and the carry decides the
+    hookstate write.
+  - Ruling: fix round 4, merge only (mail 4636; run 394 back at `working`). The worker merges `main` with no
+    rebase, keeps both blocks whole with `main`'s first, and stops on any other conflict.
+    - It proves the PR's own change is unchanged: the `+`/`-` lines of `git diff da1373cf6 5aa5dbadb` equal those
+      of `git diff origin/main HEAD`.
+    - It measures the two blocks together once, in a fixture HOME, and commits no test: a subagent's
+      `ccrc-worker` Skill call over a main-thread wait is denied, and the wait keeps its ask and stamp.
+    - It re-runs both blocks' suites, the citation instrument against the new `main`, and the ledger guards.
+  - Claims: wave 3's claims lapsed at their hard cap while #362 waited for its merge. Run 354's claim 1250 now
+    holds `ccd/session-hook.sh`, scoped to its history-spool block. The two workers agreed terms in mail 4468:
+    each edits only its own lines, and whoever lands second merges `main` and keeps the other's lines. This merge
+    is within those terms. FYI to run 354's coordinator: mail 4637.
+  - Review: a scoped review of the merge commit follows the wave-done, then the merge goes back to the operator.
+    Review 404's F1-F4 stay on the residue list (R47); this round does not touch them.
+  - Residue added: `server/test/stall-settings-route.test.ts:588-595` slices the stall-settings POST handler from
+    its registration to the next registration. Since #384 that slice runs on into the collector switch's helpers,
+    so a census over it can count or miss a call that is not the POST's (mail 4635, review 415's class (c),
+    record-only). The follow-up bounds the slice to the handler's body, as `single-definition.test.ts`'s own slice
+    does since #384.
 
 ## Carried constraints (reviewers get these)
 
