@@ -50,7 +50,8 @@ export const isImageUrl = (href: string | undefined): href is string => href !==
  *  backslashes), a `data:` URI, `mailto:` and every other scheme. A relative source would be fetched from ccrc's own
  *  origin, or from a host the message names, carrying the operator's cookie. Absent (`undefined`) is not refused: the
  *  `img` component then has no source to draw. Takes the value after react-markdown's `defaultUrlTransform`. The ONE
- *  predicate: `img` and the auto-embed in `a` both call it; a refused source renders as the ordinary external link. */
+ *  predicate: `img` and the auto-embed in `a` both call it; a refused source renders as the ordinary external link,
+ *  except one the url transform left empty, whose image renders its alt text as plain text, or nothing. */
 export function isRefusedChatImageSrc(src: string | undefined): boolean {
   if (src === undefined) return false;
   let i = 0;
@@ -221,7 +222,8 @@ export const CHAT_COMPONENTS: Components = {
     if (isRefusedChatImageSrc(href)) {
       // react-markdown's url transform empties a source with an unsafe scheme (`data:`, `javascript:`, ...) before
       // chat sees it, and `![x]()` has none: such an image shows its alt text as plain text, or nothing, never an
-      // empty link and never the source as written (review 408, F6).
+      // empty link and never the source as written (review 408, F6). A blank destination (`![x](< >)`) never
+      // arrives blank: the parse percent-encodes it (`%20`), a path-relative URL that renders as the ordinary link.
       if (!href) return alt ? <>{alt}</> : null;
       return (
         <a href={href} target="_blank" rel="noopener noreferrer" onClick={(e) => openExternal(e, href)}>

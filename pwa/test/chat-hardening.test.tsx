@@ -625,6 +625,28 @@ describe('T11 review Q1 (operator ruling): chat shows an image only when its sou
     expect(container.innerHTML).not.toContain('data:');
   });
 
+  it('a blank destination arrives percent-encoded, so it renders as the ordinary external link, never an invisible one', () => {
+    for (const [text, href] of [['![a b](< >)', '%20'], ['![a b](&#32;)', '%20'], ['![a b](<\u00a0>)', '%C2%A0']]) {
+      const { container } = assistant(text!);
+      const link = container.querySelector('p > a')!;
+      expect(link.getAttribute('href'), text).toBe(href);
+      expect(link.textContent, text).toBe(href);
+      cleanup();
+    }
+  });
+
+  it('on the worker path too, an image whose source the transform empties renders its alt text, with no link', async () => {
+    const text = `${'A filler paragraph.\n\n'.repeat(220)}before ![a b](javascript:alert(1)) and ![c](data:image/png;base64,AA==) after`;
+    expect(utf8ByteLength(text)).toBeGreaterThan(CHAT_SYNC_MAX_BYTES);
+    const calls = deferChatParses();
+    const { container } = assistant(text);
+    await answer(calls, 0);
+    expect(plainOf(container)).toBeNull();
+    expect(container.querySelectorAll('img, a')).toHaveLength(0);
+    expect([...container.querySelectorAll('p')].at(-1)!.innerHTML).toBe('before a b and c after');
+    expect(container.innerHTML).not.toContain('javascript:');
+  });
+
   it.each(['../api/example/x.png', './x.png', 'x.png'])('a link to the image file %s is not auto-embedded', (href) => {
     const { container } = assistant(`[x](${href})`);
     expect(container.querySelectorAll('img')).toHaveLength(0);
