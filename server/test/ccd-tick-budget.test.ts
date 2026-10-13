@@ -43,8 +43,8 @@ const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
   'hard-blocked': { forks: 427, execs: 240 },
   cooldown: { forks: 100, execs: 40 },
   fable: { forks: 162, execs: 72 },
-  leaving: { forks: 414, execs: 247 },
-  'fable-leaving': { forks: 396, execs: 232 },
+  leaving: { forks: 413, execs: 247 },
+  'fable-leaving': { forks: 395, execs: 232 },
 };
 
 /** `_plat_timeout`'s `-k` probe, per tick inside the loop. On `main` it is 1 on

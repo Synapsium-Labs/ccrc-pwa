@@ -96,7 +96,7 @@ const PLANNED_FORMS: Readonly<Record<string, string>> = {
 };
 /** What has NOT landed in `ccd/ccd` yet: the planned forms, plus `_now_s`, the one printing form whose name is new.
  *  The task that lands a name deletes it here in the same commit (the header's "RED FIRST"). */
-const PENDING: ReadonlySet<string> = new Set([...Object.keys(PLANNED_FORMS), '_now_s']);
+const PENDING: ReadonlySet<string> = new Set([...Object.keys(PLANNED_FORMS).filter((n) => n !== '_cfg_dir_to'), '_now_s']);
 
 const sha256 = (b: Buffer | string): string => createHash('sha256').update(b).digest('hex');
 /** Single-quotes one bash word. */
