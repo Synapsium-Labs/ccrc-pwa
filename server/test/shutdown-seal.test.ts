@@ -6,7 +6,7 @@
 // the state again: `sealed`, with the child dead OF THE SIGNAL. It goes red when `index.ts` stops installing the handler.
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -118,6 +118,7 @@ describe('installShutdownSeal: the handler\'s order, its bound, and that it neve
 // ── the wiring: the real composition root, SIGTERM, and the state it leaves ───────────────────────────────────────────
 let child: ChildProcess | undefined;
 let currentHome: string | undefined;
+let shortTmp: string | undefined;
 afterEach(async () => {
   if (child?.pid !== undefined && child.exitCode === null && child.signalCode === null) {
     try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ }
@@ -126,6 +127,23 @@ afterEach(async () => {
   child = undefined;
   await new Promise((r) => setTimeout(r, 50));
   currentHome = undefined;
+  if (shortTmp !== undefined) { try { rmSync(shortTmp, { recursive: true, force: true }); } catch { /* gone */ } }
+  shortTmp = undefined;
+});
+
+/** The child's whole environment, built from an ALLOWLIST (review 411, F9): nothing the runner exported — no `CCRC_COORD_DB`,
+ *  `CCRC_FLEET`, `CCRC_AGENT_URL`, `CCRC_PROJECTS_ROOT`, `CCRC_MAIL_TOKEN_PATH`, `CCRC_ACCOUNTS`, no `HOME` — can point the
+ *  spawned server off the fixture, because none of it is passed on. `HOME` is the fixture too, so a path defaulted from
+ *  `homedir()` lands in it. `TMPDIR` is a SHORT directory of its own: tsx opens an IPC socket under it, and a long path
+ *  (a runner whose TMPDIR is on a deep mount) fails the spawn with `listen EINVAL`. */
+const childEnv = (home: string, port: number, tmp: string): NodeJS.ProcessEnv => ({
+  PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
+  ...(process.env.LANG === undefined ? {} : { LANG: process.env.LANG }),
+  HOME: home,
+  TMPDIR: tmp,
+  CCRC_HOME: home,
+  CCRC_HOST: '127.0.0.1',
+  CCRC_PORT: String(port),
 });
 
 const writeRoster = (home: string): void => {
@@ -164,9 +182,10 @@ describe('the real composition root installs the handler (D-4916)', () => {
     seed.exec(`INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (1, 1, 'sealed', 'dead-coordinator-breaker-held:', 1)`);
     seed.close();
     const port = 26000 + (process.pid % 3000);
+    shortTmp = mkdtempSync(path.join('/tmp', 'ccrc-ss-'));
     child = spawn(tsx, [indexTs], {
       cwd: serverRoot,
-      env: { ...process.env, CCRC_HOME: home, CCRC_HOST: '127.0.0.1', CCRC_PORT: String(port) },
+      env: childEnv(home, port, shortTmp),
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true,
     });
