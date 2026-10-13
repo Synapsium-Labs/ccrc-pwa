@@ -1386,6 +1386,15 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
           after they were written; that cannot be told from here.
       - STATUS: fleet and server v0.0.163, newest v0.0.163, backups fleet 145M/server 670M, disk free fleet 215G/work
         volume 222G/server 33G, no anomalies at 03:42.
+    - **2026-10-13 07:43 UTC: v0.0.164 (#376, box-token row 2c) auto-converged unattended.** No action was taken.
+      - It was published at 07:02:42. The fleet box ran 07:32:32 to 07:34:33, and the server followed by auto at
+        07:35:02 to 07:35:29, 29 seconds after the fleet. Both reports read `phase: done` and `from: pwa` (defect A).
+      - The release changes doctor's armed `box-token` verdicts on boxes that lost token files. Both boxes still read
+        `box-token` PASS. Server doctor: 25 passed, 0 warned, 0 failed. Fleet doctor: 33 passed, 6 warned, 0 failed.
+      - **Wave 15 (run 300)** is still held twice: by the open PR #351 (`ccd/ccd`), and on `ccd/ccrc` by run 354, whose
+        claim 1213 ended and whose claim 1227 now holds that file.
+      - STATUS: fleet and server v0.0.164, newest v0.0.164, backups fleet 145M/server 672M, disk free fleet 215G/work
+        volume 218G/server 32G, no anomalies at 07:42.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
