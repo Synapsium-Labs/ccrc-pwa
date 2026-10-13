@@ -136,7 +136,8 @@ export function asCollectLaneView(raw: unknown): CollectLaneView | null {
 
 /** The 409 body's guard (spec §5.6). It accepts `confirm-required` or `confirm-stale`, with an 8-lowercase-hex key and
  *  the sheet's facts readable WHOLE. A sheet built from part of the facts would ask the operator to confirm less than
- *  the server measured. Anything else is an ordinary refusal (`collectLanePostRefusal`). */
+ *  the server measured. Anything else is not a confirm: `collectLanePostRefusal` reads it as a refusal when it carries
+ *  a known code, and as unconfirmed when it does not. */
 export function asCollectLaneConfirm(raw: unknown): CollectLaneConfirmRequired | null {
   if (!isObject(raw) || raw.ok !== false || !isOneOf(CONFIRM_ERRORS, raw.error)) return null;
   if (typeof raw.confirmKey !== 'string' || !CONFIRM_KEY.test(raw.confirmKey)) return null;
@@ -152,13 +153,14 @@ export function asCollectLaneConfirm(raw: unknown): CollectLaneConfirmRequired |
 
 /** A write's rejection, read. It is one of three:
  *  - the confirm the sheet shows;
- *  - a refusal, with L0's code when the server sent one (the section's words table keys on it) and a detail that is
+ *  - a refusal: the server's own answer, carrying L0's code (the section's words table keys on it) and a detail that is
  *    never blank;
- *  - an answer that never arrived. That one may have stored the write, so it is never called a refusal. */
+ *  - an answer that never arrived, or one that carries no code this build knows. Either may have stored the write, so
+ *    it is never called a refusal. Its detail is the answer's when there was one, and null when none arrived. */
 export type CollectLanePostRefusal =
   | { kind: 'confirm'; confirm: CollectLaneConfirmRequired }
-  | { kind: 'refused'; code: CollectLaneRefusal | null; detail: string }
-  | { kind: 'unconfirmed' };
+  | { kind: 'refused'; code: CollectLaneRefusal; detail: string }
+  | { kind: 'unconfirmed'; detail: string | null };
 
 /** A string with something in it, trimmed; anything else is null. */
 const nonBlank = (v: unknown): string | null => (typeof v === 'string' && v.trim().length > 0 ? v.trim() : null);
@@ -174,16 +176,20 @@ const detailOf = (err: ApiError): string => {
   return nonBlank(body.detail) ?? nonBlank(body.message) ?? nonBlank(apiErrorText(err)) ?? `HTTP ${err.status}`;
 };
 
-/** A confirm needs BOTH the 409 status and a body `asCollectLaneConfirm` reads whole. Every other `ApiError` is a
- *  refusal: the server answered, so nothing was written. A rejection that is not an `ApiError` is a network failure,
- *  and the POST may have left before it, so it is `unconfirmed`. */
+/** A confirm needs BOTH the 409 status and a body `asCollectLaneConfirm` reads whole. An `ApiError` whose body's
+ *  `error` is a known refusal code is the server's own answer, so it is `refused`: every known code but `write-failed`
+ *  proves nothing was written, and `write-failed` keeps its own line, which says the server could not prove the choice
+ *  was stored. Every other `ApiError` is `unconfirmed`, with its detail: a gateway's 502 or 504 can follow a POST that
+ *  reached the server, and an unexpected 500 can follow a store that committed, so its answer proves nothing about the
+ *  write. A rejection that is not an `ApiError` is a network failure, and the POST may have left before it, so it is
+ *  `unconfirmed` with no detail. */
 export function collectLanePostRefusal(err: unknown): CollectLanePostRefusal {
-  if (!(err instanceof ApiError)) return { kind: 'unconfirmed' };
+  if (!(err instanceof ApiError)) return { kind: 'unconfirmed', detail: null };
   const confirm = err.status === 409 ? asCollectLaneConfirm(err.body) : null;
   if (confirm !== null) return { kind: 'confirm', confirm };
   const body: Record<string, unknown> = isObject(err.body) ? err.body : {};
-  const code = isCollectLaneRefusal(body.error) ? body.error : null;
-  return { kind: 'refused', code, detail: detailOf(err) };
+  if (isCollectLaneRefusal(body.error)) return { kind: 'refused', code: body.error, detail: detailOf(err) };
+  return { kind: 'unconfirmed', detail: detailOf(err) };
 }
 
 /** A read's rejection. The shared helper decides 404/501 first. This route's 503 `state-unmeasurable` is then its own

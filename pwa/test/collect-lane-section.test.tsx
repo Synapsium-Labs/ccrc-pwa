@@ -436,6 +436,47 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
     expect(write).toHaveBeenCalledTimes(2);
   });
 
+  it('a failed write whose answer carries no known refusal code may have been saved: the unconfirmed line with its detail, never "Nothing was changed"', async () => {
+    const unknown: Array<[string, ApiError, string]> = [
+      ['a 502 with an HTML body', new ApiError(502, '<html><body><h1>502 Bad Gateway</h1></body></html>'), 'request failed (502)'],
+      ["Fastify's default 500", new ApiError(500, { statusCode: 500, error: 'Internal Server Error', message: 'store committed, then threw' }), 'store committed, then threw'],
+      ['a 503 with an unknown error', new ApiError(503, { ok: false, error: 'upstream-asleep', detail: 'try later' }), 'try later'],
+      ['a 409 that is not a confirm, with an unknown error', new ApiError(409, { ok: false, error: 'lease-held', detail: 'another write holds it' }), 'another write holds it'],
+      ["the gate's 403 foreign-origin", new ApiError(403, { ok: false, error: 'foreign-origin' }), 'foreign-origin'],
+    ];
+    for (const [name, err, detail] of unknown) {
+      const { read } = await mount(OFF_LATCHED);
+      vi.spyOn(api, 'setCollectLane').mockRejectedValueOnce(err);
+      fireEvent.click(radio('live'));
+      expect(await screen.findByText(`${COLLECT_SECTION_TEXT.unanswered} (${detail})`), name).toBeInTheDocument();
+      await waitFor(() => expect(read, name).toHaveBeenCalledTimes(2));
+      expect(screen.queryByText(/Nothing was changed/), name).toBeNull();
+      expect(radio('off'), name).toBeChecked();
+      cleanup();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('a rejection that never reached an answer shows the unconfirmed line alone; a 503 write-failed and a known 409 code keep their own lines', async () => {
+    const { read } = await mount(OFF_LATCHED);
+    vi.spyOn(api, 'setCollectLane')
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockRejectedValueOnce(new ApiError(503, { ok: false, error: 'write-failed', detail: 'the journal append failed' }))
+      .mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'conflict', detail: 'the stored row changed' }));
+    fireEvent.click(radio('live'));
+    expect(await screen.findByText(COLLECT_SECTION_TEXT.unanswered)).toBeInTheDocument();
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(radio('live')).toBeEnabled());
+    fireEvent.click(radio('live'));
+    expect(await screen.findByText(`${COLLECT_REFUSAL_TEXT['write-failed']} (the journal append failed)`)).toBeInTheDocument();
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(radio('live')).toBeEnabled());
+    fireEvent.click(radio('live'));
+    expect(await screen.findByText(`${COLLECT_REFUSAL_TEXT.conflict} (the stored row changed)`)).toBeInTheDocument();
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(4));
+    expect(radio('off')).toBeChecked();
+  });
+
   it('a second tap while a write is in flight sends nothing', async () => {
     await mount(OFF_LATCHED);
     const flight = Promise.withResolvers<CollectLaneView | 'unreadable'>();

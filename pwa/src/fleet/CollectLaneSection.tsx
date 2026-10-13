@@ -11,7 +11,7 @@
 //   * THE SERVER'S ANSWER IS WHAT IS SHOWN. The checked radio is the stored choice the server read, never the tap,
 //     and only while control is coherent: a stored token this build does not know, or a row the journal disagrees
 //     with, checks neither, so Off stays a tap that can repair a mismatch once the latch is set (spec §5.6). A write
-//     settles its reply; a refused or unreadable write re-reads.
+//     settles its reply; a refused, unconfirmed or unreadable write re-reads.
 //   * THE SERVER DECIDES THE CONFIRM. Live goes out as {choice:'live'} with no key. A 409 confirm-required or
 //     confirm-stale opens the sheet from the facts the server measured, and Set sends the server's key. Off before
 //     the legacy file's retirement is disabled, with `collectOffNote`'s note, because the server refuses it.
@@ -49,9 +49,6 @@ import './fleet.css';
 // This file has no words of its own. Every line it renders, the legend, the radio labels, the read and write lines
 // and the pause control's passing labels included, is `collectLaneWords.ts`'s (`COLLECT_SECTION_TEXT`,
 // `COLLECT_PAUSE_TEXT` and the line builders), read by its exported name and never retyped.
-
-/** A server detail into a `{detail}` slot, inserted literally (a replacer function, so a `$` is never a pattern). */
-const fillDetail = (text: string, detail: string): string => text.replace('{detail}', () => detail);
 
 const NOW_CLASS: Readonly<Record<'head' | 'note' | 'warn', string>> = {
   head: 'settings-catalogue',
@@ -122,9 +119,10 @@ function CollectLaneBody({ view, stale, poll, store, childReclaimPause }: {
   // - A 2xx the guard cannot read was answered and may have landed: UNCONFIRMED_TEXT, then a re-read.
   // - A 409 the reader takes as a confirm opens the sheet.
   // - Off refused before the latch is shown inline under the choice, until a newer view lands.
-  // - Any other refusal is toasted, its words with the server's detail beside them, then re-read.
-  // - A rejection that never reached an answer may not even have left, so it gets its own line, then the same
-  //   re-read.
+  // - Any other refusal, one carrying a code this build knows, is toasted, its words with the server's detail beside
+  //   them, then re-read.
+  // - A rejection that never reached an answer, or an answer with no code this build knows, may have stored the
+  //   choice, so it gets its own line, with the answer's detail when there was one, then the same re-read.
   const write = (request: CollectLaneRequest): void => {
     setBusy(true);
     setInline(null);
@@ -145,12 +143,14 @@ function CollectLaneBody({ view, stale, poll, store, childReclaimPause }: {
             setPending(refusal.confirm);
             return;
           }
-          if (refusal.kind === 'unconfirmed') toast(COLLECT_SECTION_TEXT.unanswered);
-          else if (refusal.code === 'marker-still-controls') setInline(COLLECT_REFUSAL_TEXT['marker-still-controls']);
-          else {
-            toast(refusal.code !== null
-              ? `${COLLECT_REFUSAL_TEXT[refusal.code]} (${refusal.detail})`
-              : fillDetail(COLLECT_SECTION_TEXT.refused, refusal.detail), 'error');
+          if (refusal.kind === 'unconfirmed') {
+            toast(refusal.detail === null
+              ? COLLECT_SECTION_TEXT.unanswered
+              : `${COLLECT_SECTION_TEXT.unanswered} (${refusal.detail})`);
+          } else if (refusal.code === 'marker-still-controls') {
+            setInline(COLLECT_REFUSAL_TEXT['marker-still-controls']);
+          } else {
+            toast(`${COLLECT_REFUSAL_TEXT[refusal.code]} (${refusal.detail})`, 'error');
           }
           reload();
         },

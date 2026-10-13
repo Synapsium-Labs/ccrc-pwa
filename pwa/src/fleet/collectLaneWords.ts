@@ -18,8 +18,8 @@ type StoredFault = Exclude<CollectLaneView['stored'], { read: 'row' }>['read'];
 type Line = { text: string; tone: 'head' | 'note' | 'warn' };
 
 /** The section's frame, controls and write lines. `notAvailable` is the spec's exact sentence for an older server.
- *  `unanswered` is a write that never reached an answer; `refused` is a refusal whose code this build does not know,
- *  with one `{detail}` slot for the server's detail. */
+ *  `unanswered` is a write whose answer never arrived, or carried no refusal code this build knows: either may have
+ *  stored the choice. The section appends the answer's detail when there was one. */
 export const COLLECT_SECTION_TEXT = {
   title: 'Temp root collector',
   notAvailable: 'Not available on this server.',
@@ -31,8 +31,7 @@ export const COLLECT_SECTION_TEXT = {
   reconfirm: 'Confirm Live again',
   confirmTitle: 'Set the temp root collector to Live?',
   confirmLabel: 'Set Live',
-  unanswered: 'The server did not answer, so the choice may or may not have been saved; the section re-read it.',
-  refused: 'Nothing was changed: {detail}',
+  unanswered: "The server's answer did not arrive, or was not one this section knows, so the choice may or may not have been saved; the section re-read it.",
 } as const;
 
 /** The six Now lines, the spec's exact labels and lines (§5.7). */

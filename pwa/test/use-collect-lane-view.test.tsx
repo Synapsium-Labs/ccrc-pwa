@@ -220,7 +220,6 @@ describe('the readers refuse rather than fold (path-identity spec §5.6)', () =>
       expect(collectLanePostRefusal(new ApiError(409, body))).toEqual({ kind: 'confirm', confirm: body });
     }
     const refused: Array<[string, unknown]> = [
-      ['not an object', 'confirm-required'],
       ['another code', confirmBody({ error: 'conflict' })],
       ['ok true', confirmBody({ ok: true })],
       ['no key', confirmBody({ confirmKey: undefined })],
@@ -242,11 +241,15 @@ describe('the readers refuse rather than fold (path-identity spec §5.6)', () =>
       expect(asCollectLaneConfirm(raw), name).toBeNull();
       expect(collectLanePostRefusal(new ApiError(409, raw)).kind, name).toBe('refused');
     }
+    // A body that is not an object carries no code this section knows, so it is not the server's refusal.
+    expect(asCollectLaneConfirm('confirm-required')).toBeNull();
+    expect(collectLanePostRefusal(new ApiError(409, 'confirm-required')))
+      .toEqual({ kind: 'unconfirmed', detail: 'request failed (409)' });
   });
 
   it('a TypeError is unconfirmed', () => {
-    expect(collectLanePostRefusal(new TypeError('Failed to fetch'))).toEqual({ kind: 'unconfirmed' });
-    expect(collectLanePostRefusal(new Error('aborted'))).toEqual({ kind: 'unconfirmed' });
+    expect(collectLanePostRefusal(new TypeError('Failed to fetch'))).toEqual({ kind: 'unconfirmed', detail: null });
+    expect(collectLanePostRefusal(new Error('aborted'))).toEqual({ kind: 'unconfirmed', detail: null });
   });
 
   it("a refusal carries L0's code when the server sent one, and a detail that is never blank", () => {
@@ -256,12 +259,31 @@ describe('the readers refuse rather than fold (path-identity spec §5.6)', () =>
     }
     expect(collectLanePostRefusal(new ApiError(409, { ok: false, error: 'marker-still-controls' })))
       .toEqual({ kind: 'refused', code: 'marker-still-controls', detail: 'marker-still-controls' });
+    expect(collectLanePostRefusal(new ApiError(503, { ok: false, error: 'write-failed', detail: 'the journal append failed' })))
+      .toEqual({ kind: 'refused', code: 'write-failed', detail: 'the journal append failed' });
+  });
+
+  it('an ApiError whose body carries no known refusal code is unconfirmed, with a detail that is never blank', () => {
     expect(collectLanePostRefusal(new ApiError(400, { ok: false, error: 'toString', detail: 'x' })))
-      .toEqual({ kind: 'refused', code: null, detail: 'x' });
+      .toEqual({ kind: 'unconfirmed', detail: 'x' });
     expect(collectLanePostRefusal(new ApiError(503, { error: '' })))
-      .toEqual({ kind: 'refused', code: null, detail: 'HTTP 503' });
+      .toEqual({ kind: 'unconfirmed', detail: 'HTTP 503' });
     expect(collectLanePostRefusal(new ApiError(502, 'Bad Gateway')))
-      .toEqual({ kind: 'refused', code: null, detail: 'request failed (502)' });
+      .toEqual({ kind: 'unconfirmed', detail: 'request failed (502)' });
+    expect(collectLanePostRefusal(new ApiError(502, '<html><body><h1>502 Bad Gateway</h1></body></html>')))
+      .toEqual({ kind: 'unconfirmed', detail: 'request failed (502)' });
+    expect(collectLanePostRefusal(new ApiError(500,
+      { statusCode: 500, error: 'Internal Server Error', message: 'Cannot read properties of undefined' })))
+      .toEqual({ kind: 'unconfirmed', detail: 'Cannot read properties of undefined' });
+    expect(collectLanePostRefusal(new ApiError(503, { ok: false, error: 'upstream-asleep', detail: 'try later' })))
+      .toEqual({ kind: 'unconfirmed', detail: 'try later' });
+    expect(collectLanePostRefusal(new ApiError(409, { ok: false, error: 'lease-held', detail: 'another write holds it' })))
+      .toEqual({ kind: 'unconfirmed', detail: 'another write holds it' });
+    expect(collectLanePostRefusal(new ApiError(403, { ok: false, error: 'foreign-origin' })))
+      .toEqual({ kind: 'unconfirmed', detail: 'foreign-origin' });
+    expect(collectLanePostRefusal(new ApiError(400,
+      { statusCode: 400, code: 'FST_ERR_CTP_INVALID_JSON_BODY', error: 'Bad Request', message: 'Body is not valid JSON' })))
+      .toEqual({ kind: 'unconfirmed', detail: 'Body is not valid JSON' });
   });
 });
 

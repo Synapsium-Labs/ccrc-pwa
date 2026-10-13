@@ -12,6 +12,7 @@ import {
   collectConfirmLines, collectCountLine, collectNowLines, collectOffNote, collectOffersReconfirm, collectStateHead,
   collectUnmeasurableLines,
 } from '../src/fleet/collectLaneWords';
+import { UNCONFIRMED_TEXT } from '../src/screens/settingsText';
 
 const view = (over: Partial<CollectLaneView> = {}): CollectLaneView => ({
   stored: { read: 'row', choice: 'live', fleetNodeId: 'node-a', markerRetiredAt: null, generation: 1, updatedAt: 1_000 },
@@ -176,11 +177,13 @@ describe('the words (path-identity spec §5.7)', () => {
     expect(COLLECT_REFUSAL_TEXT['not-configured']).toBe('Not available on this server.');
   });
 
-  it('the write lines: an unanswered write, and a refusal whose code this build does not know', () => {
+  it('the write line for an answer that did not arrive, or was not one this section knows', () => {
     expect(COLLECT_SECTION_TEXT.unanswered)
-      .toBe('The server did not answer, so the choice may or may not have been saved; the section re-read it.');
-    expect(COLLECT_SECTION_TEXT.refused).toBe('Nothing was changed: {detail}');
-    expect(COLLECT_SECTION_TEXT.refused.split('{detail}'), 'exactly one detail slot').toHaveLength(2);
+      .toBe("The server's answer did not arrive, or was not one this section knows, so the choice may or may not have been saved; the section re-read it.");
+    expect(COLLECT_SECTION_TEXT.unanswered, 'its own line, never the 2xx one').not.toBe(UNCONFIRMED_TEXT);
+    expect(COLLECT_SECTION_TEXT.unanswered).not.toMatch(/Nothing was changed/);
+    expect(Object.keys(COLLECT_SECTION_TEXT), 'no line for a refusal whose code this build does not know')
+      .not.toContain('refused');
   });
 
   it('every refusal word has its own sentence, and the pre-latch refusal is the spec text', () => {
