@@ -638,7 +638,7 @@ export function restoreNameOk(name: string): boolean;
 export interface BindBackup { regular: boolean; storeId: Presence<string>; userVersion: number | null; integrityOk: boolean | null }
 export interface BindFacts extends StoreFacts {
   codeVersion: number; storedVersion: Presence<number>; storeIdArg: string | null;
-  journalDirs: readonly { storeId: string; headsAgree: boolean }[];
+  journalDirs: readonly { storeId: string; heads: 'agree' | 'disagree' | 'unreadable' }[];
   backup: null | BindBackup;
 }
 export function decideBind(kind: 'adopt' | 'restore' | 'rebuild', f: BindFacts):
@@ -647,7 +647,10 @@ export function decideReparse(i: { targets: number; prunedSpans: number }): { ok
 
 // --- W1-B2 Task 7: recovery and repair decisions (spec §9.14, §9.6, §8.4 doctor --repair)
 export const RECOVER_PHASES: readonly string[];
-export interface RecoverCursor { phase: string; file: string | null; offset: number; blobId: number | null; pairsAdded: boolean }
+export const RECOVER_JOURNAL_PHASES: readonly string[];
+/** `groupSize` is the file count of the replay group `file` leads, which `offset` is a position in (a byte offset for a group of one, an ordinal for a
+ *  merge group); null or absent means it was not recorded (D-4607). */
+export interface RecoverCursor { phase: string; file: string | null; offset: number; blobId: number | null; groupSize?: number | null; pairsAdded: boolean }
 export function formatRecoverCursor(c: RecoverCursor): string;
 export function parseRecoverCursor(s: string | null): RecoverCursor | null;
 export interface JournalFileFacts { name: string; month: string; writer: string; headT: number | null; lastT: number | null }

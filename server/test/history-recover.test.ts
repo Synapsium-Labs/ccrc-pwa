@@ -10,6 +10,7 @@
 // Each test's fixture HOMEs are removed when it ends (removeTmpFixturesEachTest), not at the file's end.
 import { describe, it, expect, beforeAll } from 'vitest';
 import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { randomBytes, createHash } from 'node:crypto';
 import path from 'node:path';
 import { brotliDecompressSync as rrUnbrotli } from 'node:zlib';
@@ -24,7 +25,7 @@ import { userRow, assistantRow, boundaryRow, summaryRow } from './historyFixture
 import { removeTmpFixturesEachTest, mkTmp } from './tmpHelpers.js';
 import {
   HEALTH_META, RECOVER_PHASES, RECOVERY_STALL_TICKS, SCHEMA_VERSION, WRITING_FORMS, floorThreshold, historyPaths, journalRecord, mergeJournalByTime,
-  REDACTED_MARK, BELT_VERSION, parseBeltState, beltWidth, type BeltState,
+  REDACTED_MARK, BELT_VERSION, parseBeltState, beltWidth, type BeltState, planReplay,
   NODE_PARSER_VERSION, makePairIndex, secretPairs, parentRollup, nodeIndexTexts,
 } from '../../ccd/history/lib.mjs';
 import { closeWriter, createFtsTables, createStore, getMeta, getStep, openWriter, setMeta, setStep } from '../../ccd/history/store.mjs';
@@ -52,6 +53,8 @@ interface SweepRecover {
   journalRedactPairs(P: ReturnType<typeof historyPaths>, storeId: string):
     { pairs: Array<{ len: number; sha256: string; t: number }>; skipped: string[] };
   makeIngestCtx(home: string, homes: readonly string[], nowMs: number, ids: unknown): Record<string, unknown>;
+  journalStoreDirs(home: string): Array<{ storeId: string; heads: string }>;
+  runOpPass(parsed: { op: string; opArgs: string[] }, deps: Record<string, unknown>, out: (line: string) => void): Promise<number>;
   recoverReindex(db: DatabaseSync, ctx: Record<string, unknown>, cur: { pairsAdded: boolean }, budget: Record<string, unknown>):
     Promise<{ done: boolean; moved: boolean }>;
 }
@@ -448,7 +451,7 @@ describe('the recovery step (W1-B2 Task 25; spec §9.14)', () => {
         cursors.push(String(cursorOn(db)));
       }
       expect(r.done, cursors.join(' | ')).toBe(true);
-      const mid = new RegExp(`^apply:${M}\\.aaaaaaaa\\.jsonl:[1-5]$`);
+      const mid = new RegExp(`^apply:${M}\\.aaaaaaaa\\.jsonl:[1-5]/2$`);
       expect(cursors.some((c) => mid.test(c)), `an apply call stopped inside the group, at an ordinal: ${cursors.join(' | ')}`).toBe(true);
       expect(db.prepare('SELECT ccrc_id, generation, project, first_seen_ms FROM sessions ORDER BY ccrc_id').all().map((x) => ({ ...x })))
         .toEqual([
@@ -663,6 +666,167 @@ describe('the recovery step (W1-B2 Task 25; spec §9.14)', () => {
     }
   });
 
+  it('in-process: H-93 (D-4607), a group that grows from one file to two under the same leader between two calls restarts at its start: the cursor\'s byte offset is never read as an ordinal', async () => {
+    const box = makeHistoryBox('ccrc-history-recover-regroup-');
+    const P = historyPaths(box.home);
+    const ids = createStore(box.home);
+    const t0 = Date.now() - 10 * MIN;
+    const M = new Date(t0).toISOString().slice(0, 7);
+    const letters = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    const family = (id: string, g: string, t: number): string =>
+      journalRecord('verdict', t, { event_key: 'none', kind: 'family', ccrc_id: id, generation: g, project: 'demo', first_seen_ms: t });
+    // A alone is a group of one, read by byte offset: eight family records (one session row each), the last at t0 + 50.
+    const A = letters.map((l, i) => family(`claude-${l}-demo`, u(0x93a0 + i), t0 + (i === letters.length - 1 ? 50 : i + 1)));
+    plantJournalFile(box, ids.storeId, M, 'aaaaaaaa', t0, A);
+    const db = openWriter(P.dbFile);
+    try {
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+      // Each record is longer than chunkBytes, so a chunk is one record and a call takes two or three: the cursor stops
+      // inside A with a byte offset far past A's ten lines.
+      let offset = 0;
+      for (let i = 0; i < 20 && offset <= 40; i += 1) {
+        await SW.recoveryStep(db, stepCtx(box, ids, { maxBytes: 300, chunkBytes: 100 }));
+        const m = /^apply:[^:]+:([0-9]+)/.exec(String(cursorOn(db)));
+        offset = m === null ? 0 : Number(m[1]);
+      }
+      expect(offset, `the apply cursor stopped inside A at a byte offset past its line count: ${String(cursorOn(db))}`).toBeGreaterThan(40);
+      expect(db.prepare('SELECT count(*) AS n FROM sessions').get()!['n'], 'A is only part-applied').toBeLessThan(letters.length);
+      // A second writer's file of the same month overlaps A's range (a store run on two boxes at once, spec 6.9): the
+      // listing now leads ONE group of two with A, and the cursor's number would be read as an ordinal into it.
+      plantJournalFile(box, ids.storeId, M, 'bbbbbbbb', t0 + 2, [family('claude-z-demo', u(0x93b0), t0 + 3)]);
+      let r = { moved: false, done: false, held: false };
+      for (let i = 0; i < 40 && !r.done; i += 1) r = await SW.recoveryStep(db, stepCtx(box, ids, { maxBytes: 300, chunkBytes: 100 }));
+      expect(r.done).toBe(true);
+      expect(db.prepare('SELECT ccrc_id FROM sessions ORDER BY ccrc_id').all().map((x) => x['ccrc_id']),
+        'every record of A was applied, and B\'s').toEqual([...letters.map((l) => `claude-${l}-demo`), 'claude-z-demo']);
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('in-process: H-96, a file whose first line is blank and whose first non-empty line is a foreign head is dropped and counted once, as planReplay drops it: no record after the head is replayed', async () => {
+    const box = makeHistoryBox('ccrc-history-recover-blank-head-');
+    const P = historyPaths(box.home);
+    const ids = createStore(box.home);
+    const t0 = Date.now() - 10 * MIN;
+    const M = new Date(t0).toISOString().slice(0, 7);
+    const name = `${ID}.${t0 + 5}.4242.jsonl`;
+    const lines = [
+      journalRecord('head', t0, { store_id: u(0xd2), month: M, writer: 'feedbea7' }),
+      journalRecord('file', t0 + 5, { name }),
+      journalRecord('spool', t0 + 5, { ord: 1, rec: { v: 1, ev: 'Stop', id: ID, sid: u(0xd3), ts: t0 + 5 } }),
+      journalRecord('verdict', t0 + 6, { event_key: 'none', kind: 'drained', file: name }),
+    ];
+    const dir = path.join(box.root, 'journal', ids.storeId);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    // A blank fence first (what a torn tail's next append leaves), then the head: planReplay skips empty lines and reads this head.
+    fs.writeFileSync(path.join(dir, `${M}.feedbea7.jsonl`), `\n${lines.join('\n')}\n`, { mode: 0o600 });
+    const planned = planReplay({ storeId: ids.storeId, files: [{ name: `${M}.feedbea7.jsonl`, month: M, writer: 'feedbea7', lines: ['', ...lines] }], ticksAfter: 0 });
+    expect(planned.map((a) => a.do), 'planReplay drops the file whole').toEqual(['skip']);
+    const db = openWriter(P.dbFile);
+    try {
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+      let r = { moved: false, done: false, held: false };
+      for (let i = 0; i < 5 && !r.done; i += 1) r = await SW.recoveryStep(db, stepCtx(box, ids));
+      expect(r.done).toBe(true);
+      expect(countersOn(db, 'journal_head_mismatch', 'journal_spool_undrained_gone'), 'the executor counts the file once, as planReplay does').toEqual({ journal_head_mismatch: 1, journal_spool_undrained_gone: 0 });
+      expect({ ...db.prepare('SELECT count(*) AS n FROM spool_receipts').get() }, 'and inserts no receipt').toEqual({ n: 0 });
+    } finally {
+      closeWriter(db);
+    }
+  });
+
+  it('in-process: H-92, a month name that is a socket, a link to a this-store file or a directory is foreign (counted journal_head_mismatch once, never replayed, never a failed chunk), like any name that is no regular file', async () => {
+    // The listed name's kind decides, not the open's errno: a socket fails open with ENXIO, a link with ELOOP (O_NOFOLLOW),
+    // and a directory opens and meets the regular-file check. None is journal data an unreadable file might hold, so none
+    // wedges the step.
+    for (const kind of ['socket', 'link', 'directory'] as const) {
+      const box = makeHistoryBox(`ccrc-history-recover-nonregular-${kind}-`);
+      const P = historyPaths(box.home);
+      const ids = createStore(box.home);
+      const t0 = Date.now() - 10 * MIN;
+      const M = new Date(t0).toISOString().slice(0, 7);
+      const [GA, GB] = [u(0xd7), u(0xd8)];
+      const family = (id: string, g: string, t: number): string =>
+        journalRecord('verdict', t, { event_key: 'none', kind: 'family', ccrc_id: id, generation: g, project: 'demo', first_seen_ms: t });
+      plantJournalFile(box, ids.storeId, M, 'feedbea5', t0, [family(ID, GA, t0 + 1)]);
+      const dir = path.join(box.root, 'journal', ids.storeId);
+      const name = `${M}.abcdef01.jsonl`;
+      if (kind === 'socket') {
+        // A relative name from the directory itself: an absolute fixture path can pass sun_path's 108 bytes.
+        const made = spawnSync('python3', ['-I', '-c', 'import socket, sys\ns = socket.socket(socket.AF_UNIX)\ns.bind(sys.argv[1])', name], { cwd: dir, encoding: 'utf8' });
+        expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
+        expect(fs.lstatSync(path.join(dir, name)).isSocket()).toBe(true);
+      } else if (kind === 'link') {
+        // The target is a this-store file the listing does not name (no month-file grammar), holding a family only replay would write.
+        const target = path.join(dir, 'target-not-a-month-file.jsonl');
+        const head = journalRecord('head', t0 + 2, { store_id: ids.storeId, month: M, writer: 'abcdef01' });
+        fs.writeFileSync(target, `${[head, family(ID2, GB, t0 + 3)].join('\n')}\n`, { mode: 0o600 });
+        fs.symlinkSync(target, path.join(dir, name));
+      } else {
+        fs.mkdirSync(path.join(dir, name), { mode: 0o700 });
+      }
+      const db = openWriter(P.dbFile);
+      try {
+        db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+        let r = { moved: false, done: false, held: false };
+        for (let i = 0; i < 5 && !r.done; i += 1) r = await SW.recoveryStep(db, stepCtx(box, ids));
+        expect(r.done, `${kind}: the step completed`).toBe(true);
+        expect(countersOn(db, 'journal_head_mismatch', 'recover_chunk_failed'), `${kind}: counted foreign once, no chunk failed`)
+          .toEqual({ journal_head_mismatch: 1, recover_chunk_failed: 0 });
+        expect(db.prepare('SELECT ccrc_id FROM sessions ORDER BY ccrc_id').all().map((x) => x['ccrc_id']), `${kind}: only the real file is replayed`).toEqual([ID]);
+      } finally {
+        closeWriter(db);
+      }
+    }
+  });
+
+  it('in-process: H-95, a month file that becomes unreadable once the cursor is in the apply phase fails the apply chunk (recover_chunk_failed 1, cursor unmoved, step open), and a journal directory that cannot be listed fails the chunk instead of reading as an empty journal', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file and lists a 0000 directory
+    const box = makeHistoryBox('ccrc-history-recover-apply-unreadable-');
+    const P = historyPaths(box.home);
+    const ids = createStore(box.home);
+    const t0 = Date.now() - 10 * MIN;
+    const M = new Date(t0).toISOString().slice(0, 7);
+    const family = (id: string, g: string, t: number): string =>
+      journalRecord('verdict', t, { event_key: 'none', kind: 'family', ccrc_id: id, generation: g, project: 'demo', first_seen_ms: t });
+    plantJournalFile(box, ids.storeId, M, 'feedbea6', t0, [family(ID, u(0xd9), t0 + 1)]);
+    const dir = path.join(box.root, 'journal', ids.storeId);
+    const file = path.join(dir, `${M}.feedbea6.jsonl`);
+    const db = openWriter(P.dbFile);
+    const open = (): unknown => ({ ...db.prepare("SELECT completed_ms IS NULL AS open FROM derivation_state WHERE step = 'recover'").get() });
+    try {
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, 'apply', NULL)").run(Date.now());
+      // (1) the apply phase: the file was readable at index (the cursor got here), and is not now.
+      fs.chmodSync(file, 0o000);
+      try {
+        expect(await SW.recoveryStep(db, stepCtx(box, ids)), 'apply, a file unreadable').toEqual({ moved: false, done: false, held: false });
+        expect(countersOn(db, 'recover_chunk_failed', 'journal_head_mismatch'), 'apply, a file unreadable').toEqual({ recover_chunk_failed: 1, journal_head_mismatch: 0 });
+        expect(cursorOn(db)).toBe('apply');
+        expect(open()).toEqual({ open: 1 });
+      } finally {
+        fs.chmodSync(file, 0o600);
+      }
+      // (2) the index phase over a directory that cannot be listed: an empty listing would complete the phase unread.
+      db.prepare("UPDATE derivation_state SET cursor = NULL WHERE step = 'recover'").run();
+      fs.chmodSync(dir, 0o000);
+      try {
+        expect(await SW.recoveryStep(db, stepCtx(box, ids)), 'index, a directory unlistable').toEqual({ moved: false, done: false, held: false });
+        expect(countersOn(db, 'recover_chunk_failed'), 'index, a directory unlistable').toEqual({ recover_chunk_failed: 2 });
+        expect(cursorOn(db)).toBeNull();
+        expect(open()).toEqual({ open: 1 });
+      } finally {
+        fs.chmodSync(dir, 0o700);
+      }
+      let r = { moved: false, done: false, held: false };
+      for (let i = 0; i < 5 && !r.done; i += 1) r = await SW.recoveryStep(db, stepCtx(box, ids));
+      expect(r.done, 'readable again, the step completes').toBe(true);
+    } finally {
+      closeWriter(db);
+      try { fs.chmodSync(dir, 0o700); fs.chmodSync(file, 0o600); } catch { /* removed with the fixture */ }
+    }
+  });
+
   it('in-process: D-4592 (b), a spool answer the step cannot measure (an lstat of .draining/ or of rejected/, or the listing of planted/) fails the apply chunk (recover_chunk_failed, cursor unmoved) and is never counted journal_spool_undrained_gone; measured again, the file is gone and counted once', async (ctx) => {
     if (process.getuid?.() === 0) ctx.skip();                       // root measures through a 0000 directory
     // In-process, because a real pass runs fixModes and the journal half around the step; this one holds the mode.
@@ -707,6 +871,48 @@ describe('the recovery step (W1-B2 Task 25; spec §9.14)', () => {
       } finally {
         closeWriter(db);
         try { fs.chmodSync(lock, 0o700); } catch { /* removed with the fixture */ }
+      }
+    }
+  });
+
+  it('H-91, D-4592 refined: a stray regular file at .draining/, .draining/rejected, .draining/planted or .draining/planted/<area> is a measured absence (nothing can stand under a non-directory), so the apply chunk does not fail and the gone file is counted once', async () => {
+    // ENOTDIR is not EACCES: D-4592 (b) fails the chunk on a spool it cannot measure, but no entry can exist under a file,
+    // so the answer "not there" is measured. Failing on it would wedge the step for good, since the drain and tidyDraining
+    // that cure a planted non-directory never run while the step is open.
+    for (const stray of ['draining', 'rejected', 'planted', 'area'] as const) {
+      const box = makeHistoryBox(`ccrc-history-recover-stray-${stray}-`);
+      const P = historyPaths(box.home);
+      const ids = createStore(box.home);
+      const t0 = Date.now() - 10 * MIN;
+      const M = new Date(t0).toISOString().slice(0, 7);
+      const GONE = `${ID}.${t0 + 5}.4242.jsonl`;
+      plantJournalFile(box, ids.storeId, M, 'feedbea4', t0, [
+        journalRecord('file', t0 + 5, { name: GONE }),
+        journalRecord('spool', t0 + 5, { ord: 1, rec: { v: 1, ev: 'Stop', id: ID, sid: u(0xe7), ts: t0 + 5 } }),
+      ]);
+      if (stray === 'draining') {
+        fs.mkdirSync(path.dirname(P.draining), { recursive: true, mode: 0o700 });
+        fs.writeFileSync(P.draining, 'a stray file', { mode: 0o600 });
+      } else {
+        fs.mkdirSync(P.draining, { recursive: true, mode: 0o700 });
+        const at = stray === 'rejected' ? path.join(P.draining, 'rejected') : path.join(P.draining, 'planted');
+        if (stray === 'area') {
+          fs.mkdirSync(at, { mode: 0o700 });
+          fs.writeFileSync(path.join(at, `${t0 + 1}.4241`), 'a stray file', { mode: 0o600 });
+        } else {
+          fs.writeFileSync(at, 'a stray file', { mode: 0o600 });
+        }
+      }
+      const db = openWriter(P.dbFile);
+      try {
+        db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+        let r = { moved: false, done: false, held: false };
+        for (let i = 0; i < 5 && !r.done; i += 1) r = await SW.recoveryStep(db, stepCtx(box, ids));
+        expect(r.done, `${stray}: the step completed`).toBe(true);
+        expect(countersOn(db, 'recover_chunk_failed', 'journal_spool_undrained_gone'), `${stray}: no chunk failed, the file is gone once`)
+          .toEqual({ recover_chunk_failed: 0, journal_spool_undrained_gone: 1 });
+      } finally {
+        closeWriter(db);
       }
     }
   });
@@ -791,6 +997,36 @@ describe('RB6: while a recovery step is registered, every writing --op form but 
   }, 2.5 * HEAVY);
 });
 
+describe('H-36: the RB6 sweep half answers through the release journal half', () => {
+  it('a spool line that lands after the lock-take half and before the recovering refusal is journaled before the refusal answers, so a half that skipped the release would leave it pending', async () => {
+    const box = makeHistoryBox('ccrc-history-recover-rb6-release-');
+    pass(box);                                    // binds the store: store.id and store.writer, so the journal half has ids
+    registerRecovery(box, Date.now());
+    const t = Date.now() - MIN;
+    const spool = path.join(box.root, 'spool', `${ID}.jsonl`);
+    // The stub runs after the lock-take half and before RB6's measure (opPass probes the volume between them).
+    let planted = 0;
+    const statfs = async (): Promise<{ bsize: number; bavail: number; blocks: number }> => {
+      if (planted === 0) spoolLine(box, ID, { v: 1, ev: 'Stop', id: ID, sid: u(0x36), ts: t });
+      planted += 1;
+      return { bsize: 1, bavail: 4 * 2 ** 40, blocks: 8 * 2 ** 40 };
+    };
+    const out: string[] = [];
+    const claudecode = process.env['CLAUDECODE'];
+    delete process.env['CLAUDECODE'];             // the gate's in-session refusal would answer before RB6 is reached
+    try {
+      expect(await SW.runOpPass({ op: 'import', opArgs: ['--apply'] }, { home: box.home, statfs }, (l) => { out.push(l); })).toBe(2);
+    } finally {
+      if (claudecode !== undefined) process.env['CLAUDECODE'] = claudecode;
+    }
+    expect(out.at(-1), out.join('\n')).toBe('{"rc":2,"reason":"recovering"}');
+    expect(planted, 'the stub ran, so the line was planted between the two halves').toBeGreaterThanOrEqual(1);
+    expect(fs.existsSync(spool), 'the planted line left spool/ (the release half moved it)').toBe(false);
+    expect(journalRecords(box).filter((r) => r['k'] === 'spool' && (r['rec'] as Record<string, unknown>)['sid'] === u(0x36)),
+      'and the journal holds its record').toHaveLength(1);
+  }, HEAVY);
+});
+
 describe('the recovery step\'s close re-measures the spool counters (W1-B2 Tasks 23, 25; D-4723 (history-counter-resets-after-cure))', () => {
   it('a store-refused file kept in .draining/rejected/ is counted on the recovered store, which never held its count', () => {
     const box = makeHistoryBox('ccrc-history-recover-counters-');
@@ -840,6 +1076,9 @@ describe('C55: doctor --adopt (W1-B2 Task 26; spec §8.4)', () => {
     // RB11: adopt prints the carry remedy itself, naming where each directory goes on this box.
     expect(r.out.replace(/\r/g, '')).toContain(
       `copy each to the same path here (~/.ccrc/history/journal/${storeId}/, ~/.ccrc/history/export/${storeId}/)`);
+    // H-100 (R-T26-7): the line is the operator's act, said from the start of the sentence, never an instruction to a session.
+    expect(r.out.replace(/\r/g, '')).toContain(
+      `the operator, from a terminal outside any session: if the box this store left still has ~/.ccrc/history/journal/${storeId}/`);
     expect(fs.readFileSync(P.storeId, 'utf8').trim()).toBe(storeId);
     const writer = fs.readFileSync(P.writer, 'utf8').trim();
     expect(writer).toMatch(/^[0-9a-f]{8}$/);
@@ -922,7 +1161,8 @@ describe('C55: doctor --adopt (W1-B2 Task 26; spec §8.4)', () => {
     expect(cli.code, cli.out).toBe(2);
     const shim = await shimOnPty(box, ['--op', 'adopt']);
     expect(lastRc(shim.out)).toEqual({ rc: 2, reason: 'adopt-refused' });
-    expect(shim.out.replace(/\r/g, '')).toContain('adopt it with the build that wrote it');
+    // H-99: under --json, or at the direct door, no CLI note names the operator, so the sweep's own line does (the detail itself is lib's).
+    expect(shim.out.replace(/\r/g, '')).toContain('adopt it with the build that wrote it; the operator acts on it, from a terminal outside any session');
     expect(ccrcSnapshot(box)).toEqual(before);
     expect(fs.existsSync(P.storeId)).toBe(false);
   }, HEAVY);
@@ -1293,12 +1533,15 @@ describe('C57: doctor --restore, the drill (W1-B2 Task 27)', () => {
     const size = fs.statSync(path.join(P.backups, name)).size;
     rrLose(box, { binding: true, journal: true });
     expect(runShim(box).stdout).toMatch(/^history-sweep: store-recoverable$/m);
-    const refused = async (args: string[], why: string, env: Record<string, string> = {}): Promise<void> => {
+    const refused = async (args: string[], why: string, env: Record<string, string> = {}): Promise<string> => {
       const before = ccrcSnapshot(box);
       const r = await shimOnPty(box, ['--op', 'restore', ...args], env);
       expect(lastRc(r.out), `${why}\n${r.out}`).toEqual({ rc: 2, reason: 'restore-refused' });
       expect(ccrcSnapshot(box), `${why}: nothing written`).toEqual(before);
+      return r.out.replace(/\r/g, '');
     };
+    // H-99: a refusal relayed from decideBind (before or after the staged copy is read) names the operator at the direct door too.
+    const OPERATOR = 'the operator acts on it, from a terminal outside any session';
     // The name: never a path, never a temp, never a link.
     await refused([`sub/${name}`], 'a name with /');
     fs.copyFileSync(path.join(P.backups, name), path.join(P.backups, `.${name}.tmp`));
@@ -1310,14 +1553,14 @@ describe('C57: doctor --restore, the drill (W1-B2 Task 27)', () => {
     await refused([name], 'a leftover history.db-wal');
     fs.rmSync(P.wal);
     fs.writeFileSync(P.storeId, '0189abcd-1234-4678-9abc-0000000000ff\n', { mode: 0o600 });
-    await refused([name], 'store.id names another store');
+    expect(await refused([name], 'store.id names another store'), 'a refusal decideBind makes before the copy is staged').toContain(OPERATOR);
     fs.rmSync(P.storeId);
     fs.copyFileSync(path.join(P.backups, name), path.join(P.backups, '20200101T000001Z.db'));
     rrSetUserVersion(path.join(P.backups, '20200101T000001Z.db'), 2);
-    await refused(['20200101T000001Z.db'], 'a newer user_version');
+    expect(await refused(['20200101T000001Z.db'], 'a newer user_version'), 'a refusal decideBind makes over the staged copy').toContain(OPERATOR);
     fs.copyFileSync(path.join(P.backups, name), path.join(P.backups, '20200101T000002Z.db'));
     rrCorruptIndex(path.join(P.backups, '20200101T000002Z.db'));
-    await refused(['20200101T000002Z.db'], 'a failed integrity_check');
+    expect(await refused(['20200101T000002Z.db'], 'a failed integrity_check'), 'a refusal decideBind makes over the staged copy').toContain(OPERATOR);
     // planCopy: free must exceed the threshold plus the backup's size (§6.11).
     const fsSize = 100 * 2 ** 30;
     const threshold = floorThreshold(fsSize);
@@ -1410,6 +1653,7 @@ describe('Redaction first at the link: a restore applies the journal\'s redact r
       expect(lastRc(r.out), r.out).toEqual({ rc: 2, reason: 'restore-refused' });
       const line = r.out.replace(/\r/g, '').split('\n').find((l) => l.includes('journal file(s) could not be read for redact pairs:'));
       expect(line !== undefined && line.includes(files[0]!), 'the unread file is named, never skipped silently').toBe(true);
+      expect(line, 'H-100: and whose act it is to make it readable').toContain('the operator makes them readable, from a terminal outside any session');
       expect(fs.existsSync(P.dbFile), 'nothing was linked').toBe(false);
       expect(rrNames(P.dbDir).filter((n) => n.startsWith('.history.db.restore.')), 'the staged copy was removed').toEqual([]);
       expect(fs.readFileSync(P.storeId, 'utf8'), 'store.id is unchanged').toBe(idBefore);
@@ -1507,6 +1751,7 @@ describe('C58: doctor --rebuild, its store_id and its refusals (W1-B2 Task 28)',
     const before = bindingSnapshot(box);
     const r = await shimOnPty(box, ['--op', 'rebuild', ...args]);
     expect(lastRc(r.out), `${why}\n${r.out}`).toEqual({ rc: 2, reason: 'rebuild-refused' });
+    expect(r.out, `${why}: H-99, the relayed refusal names the operator at the direct door`).toContain('the operator acts on it, from a terminal outside any session');
     expect(bindingSnapshot(box), `${why}: nothing written`).toEqual(before);
     return r.out;
   };
@@ -1588,6 +1833,47 @@ describe('C58: doctor --rebuild, its store_id and its refusals (W1-B2 Task 28)',
     fs.mkdirSync(path.join(rrRoot(empty).journalDir, '0189abcd-1234-4678-9abc-0000000000db'), { recursive: true, mode: 0o700 });
     expect(runShim(empty).stdout).toMatch(/^history-sweep: store-recoverable$/m);
     await refused(empty, [], 'an empty journal directory names no store');
+  }, 2 * HEAVY);
+
+  it('H-18 (D-4605): a journal directory or month file rebuild cannot read answers exit 5 store-unmeasured and writes no store, where an empty directory and a foreign head are still rebuild-refused (exit 2)', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file and lists a 0000 directory
+    const { box, storeId } = rrBuilt('ccrc-hist-c58h-');
+    const P = rrRoot(box);
+    rrLose(box, { binding: true, journal: false });
+    const dir = path.join(P.journalDir, storeId);
+    const month = path.join(dir, fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')).sort()[0]!);
+    const wordsOf = (): string => SW.journalStoreDirs(box.home).map((d) => `${d.storeId}=${d.heads}`).join(',');
+    expect(wordsOf(), 'readable, its head naming the directory').toBe(`${storeId}=agree`);
+    const noStore = (why: string): void => {
+      expect(fs.existsSync(P.dbFile), `${why}: no DB was minted`).toBe(false);
+      expect(fs.existsSync(P.storeId), `${why}: no store.id was written`).toBe(false);
+    };
+    for (const lock of [month, dir]) {
+      fs.chmodSync(lock, 0o000);
+      try {
+        expect(wordsOf(), `${lock === dir ? 'an unlistable directory' : 'an unreadable month file'} reads unreadable`).toBe(`${storeId}=unreadable`);
+        for (const args of [[], ['--store-id', storeId]]) {
+          const r = await shimOnPty(box, ['--op', 'rebuild', ...args]);
+          expect(lastRc(r.out), `${args.join(' ')}\n${r.out}`).toEqual({ rc: 5, reason: 'store-unmeasured' });
+          noStore(args.join(' '));
+        }
+      } finally {
+        fs.chmodSync(lock, lock === dir ? 0o700 : 0o600);
+      }
+    }
+    expect(wordsOf(), 'readable again').toBe(`${storeId}=agree`);
+    // Measured and refused stays a refusal: a directory with no month file, and a month file whose head names another store.
+    const E = '0189abcd-1234-4678-9abc-0000000000dc';
+    const F = '0189abcd-1234-4678-9abc-0000000000dd';
+    fs.mkdirSync(path.join(P.journalDir, E), { mode: 0o700 });
+    plantJournalFile(box, F, new Date().toISOString().slice(0, 7), 'abcdef01', Date.now(), [], storeId);
+    expect(SW.journalStoreDirs(box.home).map((d) => `${d.storeId}=${d.heads}`).sort())
+      .toEqual([`${storeId}=agree`, `${E}=disagree`, `${F}=disagree`].sort());
+    for (const id of [E, F]) {
+      const r = await shimOnPty(box, ['--op', 'rebuild', '--store-id', id]);
+      expect(lastRc(r.out), r.out).toEqual({ rc: 2, reason: 'rebuild-refused' });
+      noStore(id);
+    }
   }, 2 * HEAVY);
 
   it('a kill right after the pending marker becomes store.id: the next pass runs the recovery step (DI3)', async () => {

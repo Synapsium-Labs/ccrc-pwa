@@ -58,7 +58,7 @@ import {
   HARNESS_TABLE, exportDates, dueTranscriptKeys, planExport, retentionLowered, parseJournalRecord,
   decideRecallOff, recallOffPath, decideReparse, REPARSE_MAX_TARGETS, planCopy, STORE_DB_REL,
   diffForeignKeys, ftsTablesHealthy, FTS_REBUILD_STEP, decideCounterResets, decideIntegrity,
-  RECOVER_PHASES, formatRecoverCursor, parseRecoverCursor, orderJournalFiles, indexRecord, replayStep, nextUnmovedTicks, HEALTH_META,
+  RECOVER_PHASES, RECOVER_JOURNAL_PHASES, formatRecoverCursor, parseRecoverCursor, orderJournalFiles, indexRecord, replayStep, nextUnmovedTicks, HEALTH_META,
   mergeJournalByTime, decideBind, restoreNameOk,
 } from './lib.mjs';
 import {
@@ -2050,8 +2050,6 @@ const RECOVER_READ = 1 << 20;
  *  file. */
 const JOURNAL_NAME_RE = /^([0-9]{4}-(?:0[1-9]|1[0-2]))\.([0-9a-f]{8})\.jsonl$/;
 const JOURNAL_HEAD_PROBE = 4096;
-/** The phases that read the journal: while a listed file is unreadable they fail (D-4592). */
-const JOURNAL_PHASES = Object.freeze(['index', 'apply']);
 const JOURNAL_TAIL_PROBE = 64 * 1024;
 /** The observation replay decides a verdict-less epoch line with: nothing read from $REG, ever (§9.14). Under it,
  *  decideEpochLine confirms only a line whose own `reg` names its sid. */
@@ -2082,8 +2080,10 @@ export function isRecovering(db) {
  *  - `{ kind: 'gone' }`: the name vanished between the listing and the open (ENOENT). It is listed nowhere.
  *  - `{ kind: 'foreign' }`: the name is a link (O_NOFOLLOW meets it: ELOOP) or no regular file, which no writer in the
  *    tree makes. It is never replayed, and counted journal_head_mismatch with the files whose head names another store.
- *  - `{ kind: 'unreadable' }`: any other open or read error (EACCES, EIO, ...). The file may hold journal data, so the
- *    step fails its chunk and a later tick retries it. */
+ *    A socket or a device node fails the open (ENXIO, ENODEV, EISDIR) before any fstat could say what it is, so an open
+ *    error that is none of the above asks lstat what stands at the name (H-92): no regular file is foreign.
+ *  - `{ kind: 'unreadable' }`: any other open or read error (EACCES, EIO, ...) on a name that is, or cannot be shown not
+ *    to be, a regular file. The file may hold journal data, so the step fails its chunk and a later tick retries it. */
 function journalEnds(path) {
   let fd;
   try {
@@ -2091,7 +2091,14 @@ function journalEnds(path) {
   } catch (e) {
     if (e && e.code === 'ENOENT') return { kind: 'gone' };
     if (e && e.code === 'ELOOP') return { kind: 'foreign' };
-    return { kind: 'unreadable' };
+    // Any other open error: what stands at the name decides, not the errno. A socket fails ENXIO and a device ENODEV, and
+    // neither is journal data an unreadable file might hold; only a name that is (or cannot be shown not to be) a
+    // regular file is unreadable.
+    try {
+      return lstatSync(path).isFile() ? { kind: 'unreadable' } : { kind: 'foreign' };
+    } catch (le) {
+      return le && le.code === 'ENOENT' ? { kind: 'gone' } : { kind: 'unreadable' };
+    }
   }
   try {
     const st = fstatSync(fd);
@@ -2099,8 +2106,10 @@ function journalEnds(path) {
     if (st.size === 0) return { kind: 'ends', headT: null, headStore: null, lastT: null };
     const headBuf = Buffer.alloc(Math.min(JOURNAL_HEAD_PROBE, st.size));
     readSync(fd, headBuf, 0, headBuf.length, 0);
-    const nl = headBuf.indexOf(0x0a);
-    const first = parseJournalRecord(headBuf.toString('utf8', 0, nl === -1 ? headBuf.length : nl));
+    // The first NON-EMPTY line, as lib planReplay reads the head (H-96): a leading blank fence is skipped by both, so a
+    // file the plan drops for a foreign head is never kept and replayed by the executor.
+    const firstLine = headBuf.toString('utf8').split('\n').find((l) => l !== '') ?? '';
+    const first = parseJournalRecord(firstLine);
     const head = first.kind === 'record' && first.rec.k === 'head' ? first.rec : null;
     const tailLen = Math.min(JOURNAL_TAIL_PROBE, st.size);
     const tailBuf = Buffer.alloc(tailLen);
@@ -2252,11 +2261,18 @@ function* groupLines(run, group, at) {
 
 /** Where the cursor points in this pass's listing. A cursor naming a file this listing does not lead a group with
  *  restarts the phase. Journal files are never removed, so only a group that changed shape since the last pass can
- *  do that, and every record applies idempotently. */
+ *  do that, and every record applies idempotently.
+ *  D-4607 (history-recover-cursor-records-group-shape): the cursor's position is a byte offset into a group of one file
+ *  and an ordinal into a merge group, and a second writer's file arriving (or one leaving the group) under the same
+ *  leader changes which it is. The cursor therefore records the group's file count, and a group whose count differs, or
+ *  is unknown (a cursor written before the count was kept), restarts at its start rather than reading a number as
+ *  the wrong kind of position. Replay applies idempotently, but a restart counts again the skips the group's earlier
+ *  chunks counted (a named residual). */
 function locateGroup(groups, cursor) {
   if (cursor.file === null) return { gi: 0, at: 0 };
   const gi = groups.findIndex((g) => g[0] === cursor.file);
-  return gi === -1 ? { gi: 0, at: 0 } : { gi, at: cursor.offset };
+  if (gi === -1) return { gi: 0, at: 0 };
+  return { gi, at: cursor.offset === 0 || cursor.groupSize === groups[gi].length ? cursor.offset : 0 };
 }
 
 /** One chunk of a journal phase. From the cursor's position, the records of ONE replay group are handed to
@@ -2284,8 +2300,8 @@ function journalChunk(db, run, cursor, onRecord) {
       pos = line.next;
     }
     const c = ended && gi + 1 < run.groups.length
-      ? { ...cursor, file: run.groups[gi + 1][0], offset: 0, pairsAdded: run.pairsAdded }
-      : { ...cursor, file: group[0], offset: pos, pairsAdded: run.pairsAdded };
+      ? { ...cursor, file: run.groups[gi + 1][0], offset: 0, groupSize: run.groups[gi + 1].length, pairsAdded: run.pairsAdded }
+      : { ...cursor, file: group[0], offset: pos, groupSize: group.length, pairsAdded: run.pairsAdded };
     db.prepare(RECOVER_CURSOR_SQL).run(formatRecoverCursor(c), run.version);
     return c;
   });
@@ -2453,15 +2469,17 @@ function replayReceipt(db, run, a) {
   }
 }
 
-/** Whether `path` is there, by lstat. ENOENT is "not there"; any other error is "could not be measured" and is thrown,
- *  never read as absence (D-4592 (history-recover-unreadable-journal-fails-the-chunk)): the apply chunk that meets it
- *  fails, and a later tick measures again. */
+/** Whether `path` is there, by lstat. ENOENT and ENOTDIR are "not there": no entry can exist under a non-directory, so a
+ *  stray file standing where a spool directory belongs is a measured absence, and failing on it would wedge the step for
+ *  good (the drain and tidyDraining that cure it never run while the step is open). Any other error is "could not be
+ *  measured" and is thrown, never read as absence (D-4592 (history-recover-unreadable-journal-fails-the-chunk)): the
+ *  apply chunk that meets it fails, and a later tick measures again. */
 function spoolEntryThere(path) {
   try {
     lstatSync(path);
     return true;
   } catch (e) {
-    if (e && e.code === 'ENOENT') return false;
+    if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return false;
     throw new Error(`the spool cannot be measured at ${path}: ${e && e.code ? e.code : String(e)}`);
   }
 }
@@ -2473,7 +2491,7 @@ function spoolEntryThere(path) {
  *  a directory at its sidecar or sidecar-temp name displaced it (D-4347). Replay skips all three, as
  *  the lost store held none of a set-aside file's lines; only a file kept in none of them is gone
  *  (D-4728 (history-replay-keeps-set-aside-files)). It answers true or false only for a spool it could measure: an
- *  lstat or a listing that fails for any reason but ENOENT throws, so the chunk fails and the file is never counted
+ *  lstat or a listing that fails for any reason but ENOENT or ENOTDIR throws, so the chunk fails and the file is never counted
  *  gone on a guess (D-4592 (history-recover-unreadable-journal-fails-the-chunk)). */
 function undrainedFileKept(draining, name) {
   if (spoolEntryThere(`${draining}/${name}`)) return true;
@@ -2482,7 +2500,7 @@ function undrainedFileKept(draining, name) {
   try {
     areas = readdirSync(`${draining}/${PLANTED_DIR}`);
   } catch (e) {
-    if (e && e.code === 'ENOENT') return false;
+    if (e && (e.code === 'ENOENT' || e.code === 'ENOTDIR')) return false;
     throw new Error(`the spool cannot be listed at ${draining}/${PLANTED_DIR}: ${e && e.code ? e.code : String(e)}`);
   }
   return areas.some((area) => spoolEntryThere(`${draining}/${PLANTED_DIR}/${area}/${name}`));
@@ -2648,7 +2666,7 @@ export async function recoveryStep(db, ctx, executors = RECOVER_EXECUTORS) {
       // D-4592 (history-recover-unreadable-journal-fails-the-chunk): a journal file the step could not read is data it
       // never read. Its journal phases fail while one stands (the cursor unmoved, the step open), so a later tick retries
       // it once it reads; they never run past it, and it is never counted journal_head_mismatch.
-      if (JOURNAL_PHASES.includes(cursor.phase)) {
+      if (RECOVER_JOURNAL_PHASES.includes(cursor.phase)) {
         if (listingError !== null) throw new Error(`the journal directory cannot be listed: ${listingError.code ?? String(listingError)}`);
         if (listing.unreadable.length > 0) throw new Error(`a journal file cannot be read: ${listing.unreadable.join(', ')}`);
       }
@@ -2667,7 +2685,7 @@ export async function recoveryStep(db, ctx, executors = RECOVER_EXECUTORS) {
         finishRecovery(db, run, cursor);
         return { moved: true, done: true, held: false };
       }
-      const next = { phase: RECOVER_PHASES[at + 1], file: null, offset: 0, blobId: null, pairsAdded: run.pairsAdded };
+      const next = { phase: RECOVER_PHASES[at + 1], file: null, offset: 0, blobId: null, groupSize: null, pairsAdded: run.pairsAdded };
       withTx(db, 'NORMAL', () => {
         if (at === 0 && run.foreign.length > 0) bump(db, 'journal_head_mismatch', run.foreign.length);
         db.prepare(RECOVER_CURSOR_SQL).run(formatRecoverCursor(next), version);
@@ -2791,6 +2809,11 @@ function bindFactsOf(home, role, deps, extra = {}) {
   };
 }
 
+/** The clause a binding verb's refusal or stop line ends with (H-99): under `--json`, or at the direct `--op` door, the CLI's
+ *  operator note is not on the page, and a detail that tells the reader to act (lib's "adopt it with the build that wrote
+ *  it", "name one with --store-id") must still say whose act it is. R-X-OPERATOR. */
+const OPERATOR_ACTS = '; the operator acts on it, from a terminal outside any session';
+
 /** A binding verb's close, once history.db is visible and bound:
  *  - the ordinary open, which also finishes a pending marker, removes stale temps and syncs meta.writer;
  *  - the `bind` record, flushed into journal/<store_id>/ under the new writer token;
@@ -2805,7 +2828,7 @@ function bindFactsOf(home, role, deps, extra = {}) {
 function finishBind(home, P, role, deps, out, now) {
   const opened = openStore(home, P, role, deps);
   if ('word' in opened) {
-    out(`history-sweep: the store is bound but does not open yet: ${opened.word}`);
+    out(`history-sweep: the store is bound but does not open yet: ${opened.word}${OPERATOR_ACTS}`);
     return REASONS[opened.word] === EXIT.DB ? { rc: EXIT.DB, reason: opened.word } : { rc: EXIT.INTERNAL };
   }
   const { db, ids } = opened;
@@ -2847,7 +2870,7 @@ export async function adoptArm(home, P, args, deps, out) {
   removeStaleTemps(home);
   const d = decideBind('adopt', bindFactsOf(home, role, deps));
   if (!d.ok) {
-    out(`history-sweep: ${d.reason}: ${d.detail}`);
+    out(`history-sweep: ${d.reason}: ${d.detail}${OPERATOR_ACTS}`);
     return { rc: d.rc, reason: d.reason };
   }
   writeOpMarker(P, 'adopt', now());
@@ -2859,7 +2882,7 @@ export async function adoptArm(home, P, args, deps, out) {
     return finishBind(home, P, role, deps, out, now);
   } catch (e) {
     if (!(e instanceof StoreError)) throw e;
-    out(`history-sweep: adopt stopped: ${e.message}`);
+    out(`history-sweep: adopt stopped: ${e.message}${OPERATOR_ACTS}`);
     return REASONS[e.word] === undefined ? { rc: EXIT.INTERNAL } : { rc: REASONS[e.word], reason: e.word };
   } finally {
     // B1's type-aware removal, as opPass's own finally and removeStaleOpMarker use (B1's
@@ -6715,7 +6738,7 @@ export async function restoreArm(home, P, args, deps, out) {
     ...facts, backup: { regular: true, storeId: peekStoreId(file), userVersion: null, integrityOk: null },
   });
   if (!restorePre.ok) {
-    out(`history-sweep: ${restorePre.reason}: ${restorePre.detail}`);
+    out(`history-sweep: ${restorePre.reason}: ${restorePre.detail}${OPERATOR_ACTS}`);
     return { rc: restorePre.rc, reason: restorePre.reason };
   }
   const free = await statfsWithDeadline(probePath(P, home), STATFS_DEADLINE_MS, deps.statfs);
@@ -6745,7 +6768,7 @@ export async function restoreArm(home, P, args, deps, out) {
       backup: { regular: true, storeId: staged.storeId, userVersion: staged.userVersion, integrityOk: staged.integrityOk },
     });
     if (!restorePost.ok) {
-      out(`history-sweep: ${restorePost.reason}: ${restorePost.detail}`);
+      out(`history-sweep: ${restorePost.reason}: ${restorePost.detail}${OPERATOR_ACTS}`);
       return { rc: restorePost.rc, reason: restorePost.reason };
     }
     // Redaction first, at the link (R-restore-pairs; spec §8.4 and §9.14): every redact record of this store's journal
@@ -6766,7 +6789,7 @@ export async function restoreArm(home, P, args, deps, out) {
       commitRestore(home, staged, { nowMs: now(), pairs: journalPairs.pairs, belt: RESTORE_BELT });
     } catch (e) {
       if (!(e instanceof StoreError)) throw e;
-      out(`history-sweep: restore stopped: ${e.message}`);
+      out(`history-sweep: restore stopped: ${e.message}${OPERATOR_ACTS}`);
       return REASONS[e.word] === undefined ? { rc: EXIT.INTERNAL } : { rc: REASONS[e.word], reason: e.word };
     }
     staged = null;
@@ -6786,9 +6809,13 @@ export async function restoreArm(home, P, args, deps, out) {
  *  Month files and their heads are read exactly as recovery reads them (Task 25's JOURNAL_NAME_RE and journalEnds,
  *  O_NOFOLLOW), so rebuild and replay never disagree about which files a directory holds. A head that is missing or
  *  unreadable names no store (§9.14: link() of a fsynced temp means no month file exists without its head).
- *  An unlistable directory, or a month file that is not a readable regular file (journalEnds kind `unreadable`,
- *  `foreign` or `gone`), reads as not agreeing, so a rebuild refuses (exit 2) and never mints a store under that id.
- *  (Widening BindFacts so such an input answers exit 5 is parked: hardening item H-18.) */
+ *  Each answers `heads` in three words, never one boolean (D-4605 (history-rebuild-unreadable-journal-is-unmeasured);
+ *  the "no overloaded null at a seam" rule):
+ *  - `agree`: it has a month file and every month file's head names this directory;
+ *  - `disagree`: it holds no month file, or a month file read whole whose head is missing or names another store;
+ *  - `unreadable`: the directory cannot be listed, or a month file is not a readable regular file (journalEnds kind
+ *    `unreadable`, `foreign` or `gone`) and no file read whole has already disagreed. decideBind answers it exit 5
+ *    store-unmeasured, as it answers an unlistable journal/, and a rebuild never mints a store under that id. */
 export function journalStoreDirs(home) {
   const dir = historyPaths(home).journalDir;
   const out = [];
@@ -6796,9 +6823,16 @@ export function journalStoreDirs(home) {
     if (!UUID_RE.test(name)) continue;
     const sub = `${dir}/${name}`;
     try { if (!lstatSync(sub).isDirectory()) continue; } catch { continue; }
-    const months = listNames(sub).filter((m) => JOURNAL_NAME_RE.test(m));
-    const heads = months.map((m) => { const e = journalEnds(`${sub}/${m}`); return e.kind === 'ends' ? e.headStore : null; });
-    out.push({ storeId: name, headsAgree: months.length > 0 && heads.every((h) => h === name) });
+    let names;
+    try { names = readdirSync(sub); } catch { out.push({ storeId: name, heads: 'unreadable' }); continue; }
+    const months = names.filter((m) => JOURNAL_NAME_RE.test(m));
+    let heads = months.length > 0 ? 'agree' : 'disagree';
+    for (const m of months) {
+      const e = journalEnds(`${sub}/${m}`);
+      if (e.kind !== 'ends') { if (heads === 'agree') heads = 'unreadable'; continue; }
+      if (e.headStore !== name) heads = 'disagree';
+    }
+    out.push({ storeId: name, heads });
   }
   return out;
 }
@@ -6823,7 +6857,7 @@ export async function rebuildArm(home, P, args, deps, out) {
     storeIdArg: typeof args.storeId === 'string' ? args.storeId : null, journalDirs: dirs,
   }));
   if (!rebuildVerdict.ok) {
-    out(`history-sweep: ${rebuildVerdict.reason}: ${rebuildVerdict.detail}`);
+    out(`history-sweep: ${rebuildVerdict.reason}: ${rebuildVerdict.detail}${OPERATOR_ACTS}`);
     if (dirs.length > 0) {
       out(`history-sweep: journal store directories: ${dirs.map((x) => x.storeId).join(', ')}; the operator names one with --store-id <uuid>, from a terminal outside any session`);
     }

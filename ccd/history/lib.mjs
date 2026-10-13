@@ -5138,13 +5138,16 @@ export function decideBind(kind, f) {
     if (marker !== null && marker !== arg) return refuse(`store.id names ${marker}; --store-id names ${arg}`);
     const d = dirs.find((x) => x.storeId === arg);
     if (d === undefined) return refuse(`--store-id ${arg} names no journal directory (journal directories: ${names})`);
-    if (!d.headsAgree) return refuse(`journal/${arg}/ holds head records naming another store`);
+    // D-4605 (history-rebuild-unreadable-journal-is-unmeasured): a directory the sweep could not read is unmeasured (exit 5), never a refusal.
+    if (d.heads === 'unreadable') return unmeasured(`journal/${arg}/ could not be read`);
+    if (d.heads !== 'agree') return refuse(`journal/${arg}/ holds head records naming another store`);
     return { ok: true, storeId: arg };
   }
   if (marker !== null) return { ok: true, storeId: marker };
   if (dirs.length === 0) return refuse('nothing names a store_id: no store.id and no journal directory');
   if (dirs.length > 1) return refuse(`several journal directories: name one with --store-id (journal directories: ${names})`);
-  if (!dirs[0].headsAgree) return refuse(`journal/${dirs[0].storeId}/ holds head records naming another store`);
+  if (dirs[0].heads === 'unreadable') return unmeasured(`journal/${dirs[0].storeId}/ could not be read`);
+  if (dirs[0].heads !== 'agree') return refuse(`journal/${dirs[0].storeId}/ holds head records naming another store`);
   return { ok: true, storeId: dirs[0].storeId };
 }
 
@@ -5177,13 +5180,23 @@ export function decideReparse({ targets, prunedSpans }) {
  *  "Export replay"): this list is that seam. D-4700 (history-b4-after-b2) */
 export const RECOVER_PHASES = Object.freeze(['index', 'apply', 'reindex']);
 
-const RECOVER_JOURNAL_CURSOR_RE = /^(index|apply)(?::([0-9]{4}-(?:0[1-9]|1[0-2])\.[0-9a-f]{8}\.jsonl):(0|[1-9][0-9]{0,15}))?(\+pairs)?$/;
+/** The phases that read the journal, and so carry a journal file and position in their cursor: the first two of
+ *  RECOVER_PHASES. The sweep's executor fails these while a journal file cannot be read (D-4592), and the cursor grammar
+ *  below is built from this list, so the word is spelled once. */
+export const RECOVER_JOURNAL_PHASES = Object.freeze(['index', 'apply']);
+
+const RECOVER_JOURNAL_CURSOR_RE = new RegExp(
+  `^(${RECOVER_JOURNAL_PHASES.join('|')})(?::([0-9]{4}-(?:0[1-9]|1[0-2])\\.[0-9a-f]{8}\\.jsonl):(0|[1-9][0-9]{0,15})(?:\\/([1-9][0-9]{0,15}))?)?(\\+pairs)?$`);
 const RECOVER_REINDEX_CURSOR_RE = /^reindex(?::(0|[1-9][0-9]{0,15}))?(\+pairs)?$/;
 
 /** The recovery step's cursor as derivation_state ('recover', <bind ms>) keeps it and status prints it (§9.14):
- *  `<phase>` at a phase's start, `index:<YYYY-MM>.<writer>.jsonl:<byte offset>` or `apply:…` inside the journal,
+ *  `<phase>` at a phase's start, `index:<YYYY-MM>.<writer>.jsonl:<position>/<n>` or `apply:…` inside the journal,
  *  `reindex:<blob_id>` inside the FTS re-derivation, then `+pairs` once the index pass learned a pair the store
- *  lacked. It is advanced in the same transaction as the records it applies. */
+ *  lacked. It is advanced in the same transaction as the records it applies.
+ *  D-4607 (history-recover-cursor-records-group-shape): the position is a byte offset into a group of one file and an
+ *  ordinal into a merge group's merged list, so the cursor records the group's file count `n` beside it. The executor
+ *  resumes only a group whose size still equals `n`; a cursor with no `/<n>` (written before the size was kept, or
+ *  `groupSize` null or absent) restarts its group from its start. */
 export function formatRecoverCursor(c) {
   if (!RECOVER_PHASES.includes(c.phase)) throw new TypeError(`formatRecoverCursor: phase outside RECOVER_PHASES: ${String(c.phase)}`);
   let s = c.phase;
@@ -5191,6 +5204,7 @@ export function formatRecoverCursor(c) {
     if (c.blobId !== null) s += `:${c.blobId}`;
   } else if (c.file !== null) {
     s += `:${c.file}:${c.offset}`;
+    if (c.groupSize !== undefined && c.groupSize !== null) s += `/${c.groupSize}`;
   }
   return c.pairsAdded ? `${s}+pairs` : s;
 }
@@ -5198,19 +5212,21 @@ export function formatRecoverCursor(c) {
 /** The cursor back, or null when it is not one: never a guess at where to resume. A NULL column (a step just
  *  registered by a binding verb) is the step's start. */
 export function parseRecoverCursor(s) {
-  if (s === null) return { phase: RECOVER_PHASES[0], file: null, offset: 0, blobId: null, pairsAdded: false };
+  if (s === null) return { phase: RECOVER_PHASES[0], file: null, offset: 0, blobId: null, groupSize: null, pairsAdded: false };
   if (typeof s !== 'string') return null;
   const j = RECOVER_JOURNAL_CURSOR_RE.exec(s);
   if (j !== null) {
     const offset = j[3] === undefined ? 0 : Number(j[3]);
     if (!Number.isSafeInteger(offset)) return null;
-    return { phase: j[1], file: j[2] ?? null, offset, blobId: null, pairsAdded: j[4] !== undefined };
+    const groupSize = j[4] === undefined ? null : Number(j[4]);
+    if (groupSize !== null && !Number.isSafeInteger(groupSize)) return null;
+    return { phase: j[1], file: j[2] ?? null, offset, blobId: null, groupSize, pairsAdded: j[5] !== undefined };
   }
   const r = RECOVER_REINDEX_CURSOR_RE.exec(s);
   if (r !== null) {
     const blobId = r[1] === undefined ? null : Number(r[1]);
     if (blobId !== null && !Number.isSafeInteger(blobId)) return null;
-    return { phase: 'reindex', file: null, offset: 0, blobId, pairsAdded: r[2] !== undefined };
+    return { phase: 'reindex', file: null, offset: 0, blobId, groupSize: null, pairsAdded: r[2] !== undefined };
   }
   return null;
 }

@@ -4643,14 +4643,14 @@ describe("decideBind: the binding verbs' preconditions, unreadable never read as
 
   it("rebuild's store_id: store.id's; else the one journal directory whose heads agree; else --store-id among several", () => {
     expect(libOps.decideBind('rebuild', facts({ storeId: v(S) }))).toEqual({ ok: true, storeId: S });
-    expect(libOps.decideBind('rebuild', facts({ journalStoreDirs: [S], journalDirs: [{ storeId: S, headsAgree: true }] }))).toEqual({ ok: true, storeId: S });
-    const two = { journalStoreDirs: [S, T], journalDirs: [{ storeId: S, headsAgree: true }, { storeId: T, headsAgree: true }] };
+    expect(libOps.decideBind('rebuild', facts({ journalStoreDirs: [S], journalDirs: [{ storeId: S, heads: 'agree' }] }))).toEqual({ ok: true, storeId: S });
+    const two: Partial<libOps.BindFacts> = { journalStoreDirs: [S, T], journalDirs: [{ storeId: S, heads: 'agree' }, { storeId: T, heads: 'agree' }] };
     expect(libOps.decideBind('rebuild', facts({ ...two, storeIdArg: T }))).toEqual({ ok: true, storeId: T });
     expect(libOps.decideBind('rebuild', facts({ ...two, storeId: v(T), storeIdArg: T }))).toEqual({ ok: true, storeId: T });
   });
 
   it('rebuild refuses: a DB, a leftover WAL, nothing naming a store, store.id against --store-id, several directories unnamed, a --store-id naming no directory, heads naming another store', () => {
-    const two = { journalStoreDirs: [S, T], journalDirs: [{ storeId: S, headsAgree: true }, { storeId: T, headsAgree: true }] };
+    const two: Partial<libOps.BindFacts> = { journalStoreDirs: [S, T], journalDirs: [{ storeId: S, heads: 'agree' }, { storeId: T, heads: 'agree' }] };
     for (const o of [
       { db: 'present' as const, dbStoreId: v(S), storeId: v(S) },
       { wal: true, storeId: v(S) },
@@ -4658,15 +4658,15 @@ describe("decideBind: the binding verbs' preconditions, unreadable never read as
       { ...two, storeId: v(S), storeIdArg: T },
       { ...two },
       { ...two, storeIdArg: '0189abcd-1234-4678-9abc-0000000000e3' },
-      { journalStoreDirs: [S], journalDirs: [{ storeId: S, headsAgree: false }] },
-      { journalStoreDirs: [S], journalDirs: [{ storeId: S, headsAgree: false }], storeIdArg: S },
-    ]) {
+      { journalStoreDirs: [S], journalDirs: [{ storeId: S, heads: 'disagree' }] },
+      { journalStoreDirs: [S], journalDirs: [{ storeId: S, heads: 'disagree' }], storeIdArg: S },
+    ] satisfies Array<Partial<libOps.BindFacts>>) {
       expect(refused('rebuild', o), JSON.stringify(o)).toMatchObject({ ok: false, rc: 2, reason: 'rebuild-refused' });
     }
   });
 
   it("rebuild's refusal names the candidate directories", () => {
-    const r = libOps.decideBind('rebuild', facts({ journalStoreDirs: [S, T], journalDirs: [{ storeId: S, headsAgree: true }, { storeId: T, headsAgree: true }] }));
+    const r = libOps.decideBind('rebuild', facts({ journalStoreDirs: [S, T], journalDirs: [{ storeId: S, heads: 'agree' }, { storeId: T, heads: 'agree' }] }));
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.detail).toContain(S);
@@ -4676,6 +4676,17 @@ describe("decideBind: the binding verbs' preconditions, unreadable never read as
 
   it('rebuild with an unlistable journal/ is exit 5 store-unmeasured', () => {
     expect(refused('rebuild', { journalStoreDirs: ['(unlistable)'] })).toMatchObject({ ok: false, rc: 5, reason: 'store-unmeasured' });
+  });
+
+  it('H-18 (D-4605): rebuild with a journal directory whose heads could not be read is exit 5 store-unmeasured on both paths, never exit 2 rebuild-refused; an empty or foreign directory is still the refusal', () => {
+    const one: Partial<libOps.BindFacts> = { journalStoreDirs: [S], journalDirs: [{ storeId: S, heads: 'unreadable' }] };
+    for (const o of [one, { ...one, storeIdArg: S }]) {
+      expect(refused('rebuild', o), JSON.stringify(o)).toMatchObject({ ok: false, rc: 5, reason: 'store-unmeasured', detail: `journal/${S}/ could not be read` });
+    }
+    // The arg path names one directory; an unreadable OTHER directory does not stop it.
+    expect(libOps.decideBind('rebuild', facts({ journalStoreDirs: [S, T], storeIdArg: S, journalDirs: [{ storeId: S, heads: 'agree' }, { storeId: T, heads: 'unreadable' }] })))
+      .toEqual({ ok: true, storeId: S });
+    expect(refused('rebuild', { journalStoreDirs: [S], journalDirs: [{ storeId: S, heads: 'disagree' }] })).toMatchObject({ ok: false, rc: 2, reason: 'rebuild-refused' });
   });
 
   it('a kind outside BIND_KINDS is a programming error', () => {
@@ -4755,6 +4766,15 @@ describe('RecoverCursor: the recovery step cursor grammar (spec 9.14; B4 adds ex
     expect([...libReplay.RECOVER_PHASES]).toEqual(['index', 'apply', 'reindex']);
     expect(Object.isFrozen(libReplay.RECOVER_PHASES)).toBe(true);
   });
+  it('H-95: the phases that read the journal are lib\'s one list, in RECOVER_PHASES\' order, and the cursor grammar parses exactly those', () => {
+    expect([...libReplay.RECOVER_JOURNAL_PHASES]).toEqual(['index', 'apply']);
+    expect(Object.isFrozen(libReplay.RECOVER_JOURNAL_PHASES)).toBe(true);
+    expect(libReplay.RECOVER_PHASES.slice(0, libReplay.RECOVER_JOURNAL_PHASES.length)).toEqual([...libReplay.RECOVER_JOURNAL_PHASES]);
+    for (const phase of libReplay.RECOVER_PHASES) {
+      const inJournal = libReplay.RECOVER_JOURNAL_PHASES.includes(phase);
+      expect(libReplay.parseRecoverCursor(`${phase}:2026-10.0a1b2c3d.jsonl:5/1`) !== null, phase).toBe(inJournal);
+    }
+  });
   it("round-trips each phase's form, with and without +pairs", () => {
     for (const s of ['index', 'index:2026-10.0a1b2c3d.jsonl:4096', 'apply:2026-09.0a1b2c3d.jsonl:0+pairs', 'apply+pairs', 'reindex', 'reindex:812', 'reindex:812+pairs']) {
       const c = libReplay.parseRecoverCursor(s);
@@ -4762,13 +4782,33 @@ describe('RecoverCursor: the recovery step cursor grammar (spec 9.14; B4 adds ex
       expect(libReplay.formatRecoverCursor(c!), s).toBe(s);
     }
     expect(libReplay.parseRecoverCursor('apply:2026-10.0a1b2c3d.jsonl:96+pairs'))
-      .toEqual({ phase: 'apply', file: '2026-10.0a1b2c3d.jsonl', offset: 96, blobId: null, pairsAdded: true });
+      .toEqual({ phase: 'apply', file: '2026-10.0a1b2c3d.jsonl', offset: 96, blobId: null, groupSize: null, pairsAdded: true });
+  });
+  it('H-93 (D-4607): the position carries the group size after a slash; a cursor without one reads as an unknown size, and neither spelling changes the other', () => {
+    for (const s of ['index:2026-10.0a1b2c3d.jsonl:4096/1', 'apply:2026-10.0a1b2c3d.jsonl:3/2+pairs', 'apply:2026-09.0a1b2c3d.jsonl:0/3']) {
+      const c = libReplay.parseRecoverCursor(s);
+      expect(c, s).not.toBeNull();
+      expect(libReplay.formatRecoverCursor(c!), s).toBe(s);
+    }
+    expect(libReplay.parseRecoverCursor('apply:2026-10.0a1b2c3d.jsonl:3/2+pairs'))
+      .toEqual({ phase: 'apply', file: '2026-10.0a1b2c3d.jsonl', offset: 3, blobId: null, groupSize: 2, pairsAdded: true });
+    // The legacy spelling (no suffix) is an unknown size, and an unknown or absent size is written without one.
+    expect(libReplay.parseRecoverCursor('index:2026-10.0a1b2c3d.jsonl:4096')?.groupSize).toBeNull();
+    const at = { phase: 'apply', file: '2026-10.0a1b2c3d.jsonl', offset: 7, blobId: null, pairsAdded: false };
+    expect(libReplay.formatRecoverCursor({ ...at, groupSize: null })).toBe('apply:2026-10.0a1b2c3d.jsonl:7');
+    expect(libReplay.formatRecoverCursor(at)).toBe('apply:2026-10.0a1b2c3d.jsonl:7');
+    expect(libReplay.formatRecoverCursor({ ...at, groupSize: 4 })).toBe('apply:2026-10.0a1b2c3d.jsonl:7/4');
+    // A phase's start and the reindex phase hold no group, so no size is written beside them.
+    expect(libReplay.formatRecoverCursor({ phase: 'apply', file: null, offset: 0, blobId: null, groupSize: 4, pairsAdded: false })).toBe('apply');
+    expect(libReplay.parseRecoverCursor('reindex:812')?.groupSize).toBeNull();
   });
   it("a NULL cursor is the step's start", () => {
-    expect(libReplay.parseRecoverCursor(null)).toEqual({ phase: 'index', file: null, offset: 0, blobId: null, pairsAdded: false });
+    expect(libReplay.parseRecoverCursor(null)).toEqual({ phase: 'index', file: null, offset: 0, blobId: null, groupSize: null, pairsAdded: false });
   });
   it('anything else is null, never a guess', () => {
-    for (const s of ['journal:120', 'index:2026-13.0a1b2c3d.jsonl:1', 'index:notes.jsonl:1', 'apply:2026-10.0a1b2c3d.jsonl:01', 'reindex:-1', 'export-blobs', '', 'index:2026-10.0a1b2c3d.jsonl:99999999999999999']) {
+    for (const s of ['journal:120', 'index:2026-13.0a1b2c3d.jsonl:1', 'index:notes.jsonl:1', 'apply:2026-10.0a1b2c3d.jsonl:01', 'reindex:-1', 'export-blobs', '', 'index:2026-10.0a1b2c3d.jsonl:99999999999999999',
+      'apply:2026-10.0a1b2c3d.jsonl:5/0', 'apply:2026-10.0a1b2c3d.jsonl:5/02', 'apply:2026-10.0a1b2c3d.jsonl:5/', 'apply:2026-10.0a1b2c3d.jsonl:5/x',
+      'apply:2026-10.0a1b2c3d.jsonl:5/99999999999999999', 'apply:2026-10.0a1b2c3d.jsonl/2', 'apply/2', 'reindex:8/2']) {
       expect(libReplay.parseRecoverCursor(s), s).toBeNull();
     }
     expect(() => libReplay.formatRecoverCursor({ phase: 'export-blobs', file: null, offset: 0, blobId: null, pairsAdded: false })).toThrow(TypeError);
