@@ -38,6 +38,7 @@ import {
   makeCcdHarness, ghContainedEnv, CCD, BOUNDED, FIXTURE_MOUNTINFO, type CcdHarness,
 } from './ccdWsHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
+import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import {
   FILE_ROW_SETS, LIMITS_ROWS, RANDOM_ALPHABET, ROUTE_ROWS, inLimitsDomain, randomRows, type FileRow,
@@ -49,8 +50,9 @@ const FIXTURE = path.join(HERE, 'fixtures', 'tick-diet-legacy.bash');
 
 /** The base every tick-diet wave is measured against (plan §Base). */
 const LEGACY_SHA = '0d0ea592166496be5eccb948313e381bcb2b87c8';
-/** E0a. Never re-measure this to make it green: the fixture is never edited (its header says why). */
-const FIXTURE_SHA256 = 'a375acaf3e4510b527e693d0580dd160b84d38187ff5191fd935aad94c3dd3e0';
+/** E0a. Re-pinned only by the commit that vendors one more helper, the one edit the fixture takes (its header says
+ *  how); never to turn a red green. */
+const FIXTURE_SHA256 = '4ba31403d0dc6362c3e109893d23d09aabdf8e27f434a00fb87f468a68b9125b';
 /** The fourteen vendored bodies, in the fixture's order (plan Task 2 Step 1). */
 const VENDORED = [
   '_reg_get', '_reg_read', '_authdead', '_cfg_dir', '_limit_json_num', '_limit_field', '_share_pct',
@@ -66,8 +68,9 @@ const PLAN_DIRECT_HELPERS = [
 /** Live helpers in E0c's closure that call a VENDORED name's LIVE form, which the diet converts by design. Both reach
  *  `_reg_get` from the journaling side of `_route_get` (the non-quiet arm of `_route_effort_for`, and the note floors
  *  under it), which no tick-diet wave converts and no planned row drives: the quiet arm reads `_legacy_route_peek`,
- *  which stays inside the fixture. A row that drives the journaling arm freezes `_route_get` and
- *  `_route_note_floored` here first, so its legacy side reads `_legacy_reg_get`. Any NEW edge reds E0c. */
+ *  which stays inside the fixture. A row that drives the journaling arm first vendors `_route_get` and
+ *  `_route_note_floored` into the fixture (its header says how), so its legacy side reads `_legacy_reg_get`. Any NEW
+ *  edge reds E0c. */
 const ACCEPTED_EDGES = ['_route_get -> _reg_get', '_route_note_floored -> _reg_get'];
 
 /** Every out-var form the plan's §Interfaces names, with the task that lands it. E1 asserts that the forms `ccd/ccd`
@@ -105,39 +108,58 @@ const show = (b: Buffer | string | null): string => {
 
 // ── function text ───────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** One top-level function's text, from its `name() {` line through the column-0 `}` that closes it, or its one line.
- *  A definition line whose code (before a ` #` comment) already ends in `}` is a one-liner: `_reg_get` and `_cfg_dir`
- *  are. `null` when the file defines no such function. */
-function fnBlock(text: string, name: string): string | null {
-  const lines = text.split('\n');
-  const i = lines.findIndex((l) => l.startsWith(`${name}() {`));
-  if (i < 0) return null;
-  const def = lines[i]!;
-  if (/\}\s*$/.test(def.replace(/\s+#.*$/, ''))) return `${def}\n`;
-  const j = lines.findIndex((l, k) => k > i && l === '}');
-  return j < 0 ? null : `${lines.slice(i, j + 1).join('\n')}\n`;
-}
+/** A top-level definition line: `name() {` at column 0, any blanks before the `{` (`_lc_done()   {`). */
+const DEF_LINE = /^([A-Za-z_][A-Za-z0-9_]*)\(\)[ \t]*\{/;
 
-/** Every top-level function definition, `fnBlock`'s way, with the offset range its block covers in `text`. One pass
- *  over the lines: `ccd/ccd` has thousands of functions. */
-function functionsOf(text: string): { name: string; block: string; start: number; end: number }[] {
-  const out: { name: string; block: string; start: number; end: number }[] = [];
-  const lines = text.split('\n');
-  let off = 0;
-  let open: { name: string; start: number; from: number } | null = null;
+interface FnText { name: string; block: string; start: number; end: number }
+
+/** Every top-level function definition, one pass over the lines (`ccd/ccd` has hundreds), with the raw `text` its
+ *  block covers and that block's offset range. The STRUCTURE is read from `structure`, the same text with comments and
+ *  heredoc bodies blanked (`stripShellComments`, line count kept), so neither can open or close a function.
+ *  - A definition line whose code already ends in `}` is a one-liner: `_reg_get` and `_cfg_dir` are.
+ *  - A multi-line function ends at the next column-0 `}`, or, when the next definition line comes first, at the last
+ *    line above that one whose code ends in `}`: `_lc_intent` closes at the end of its second code line. A function
+ *    never swallows the next (E1f). */
+function functionsOf(text: string, structure: string = text): FnText[] {
+  const out: FnText[] = [];
+  const raw = text.split('\n');
+  const lines = structure.split('\n');
+  const offs: number[] = [];
+  raw.reduce((off, l) => { offs.push(off); return off + l.length + 1; }, 0);
+  const endsCode = (l: string): boolean => /\}\s*$/.test(l);
+  const close = (name: string, from: number, to: number): void => {
+    const block = `${raw.slice(from, to + 1).join('\n')}\n`;
+    out.push({ name, block, start: offs[from]!, end: offs[from]! + block.length });
+  };
+  const closeAbove = (o: { name: string; from: number }, i: number): void => {
+    let j = i - 1;
+    while (j > o.from && !endsCode(lines[j]!)) j--;
+    close(o.name, o.from, j > o.from ? j : i - 1);
+  };
+  let open: { name: string; from: number } | null = null;
   lines.forEach((l, i) => {
-    const m = open === null ? /^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/.exec(l) : null;
+    const m = DEF_LINE.exec(l);
     if (m) {
-      if (/\}\s*$/.test(l.replace(/\s+#.*$/, ''))) out.push({ name: m[1]!, block: `${l}\n`, start: off, end: off + l.length + 1 });
-      else open = { name: m[1]!, start: off, from: i };
-    } else if (open !== null && l === '}') {
-      const block = `${lines.slice(open.from, i + 1).join('\n')}\n`;
-      out.push({ name: open.name, block, start: open.start, end: open.start + block.length });
+      if (open !== null) closeAbove(open, i);
+      open = null;
+      if (endsCode(l)) close(m[1]!, i, i);
+      else open = { name: m[1]!, from: i };
+    } else if (open !== null && l.trimEnd() === '}') {
+      close(open.name, open.from, i);
       open = null;
     }
-    off += l.length + 1;
   });
+  if (open !== null) closeAbove(open, lines.length);
   return out;
+}
+
+const parsed = new Map<string, FnText[]>();
+/** One top-level function's raw text, `functionsOf`'s way (comments included, as `git show` has them). `null` when
+ *  the file defines no such function. */
+function fnBlock(text: string, name: string): string | null {
+  let fns = parsed.get(text);
+  if (!fns) { fns = functionsOf(text, stripShellComments(text)); parsed.set(text, fns); }
+  return fns.find((f) => f.name === name)?.block ?? null;
 }
 
 // ── a small shell reader, for the census ───────────────────────────────────────────────────────────────────────────
@@ -269,12 +291,17 @@ function outVarCensus(source: string): { forms: string[]; findings: CensusFindin
   const byName = new Map(fns.map((f) => [f.name, f]));
   const outRef = (body: string): string => /local\s+([A-Za-z_][A-Za-z0-9_]*)="\$1";\s*shift\b/.exec(body)?.[1] ?? '1';
   const isOutWord = (w: string, ref: string): boolean => w === `"$${ref}"` || w === `$${ref}` || w === `"\${${ref}}"`;
-  // A call is the form's name at COMMAND position — a line start, after `;` `&` `|` `(` `{` `!`, or after a keyword
-  // that takes a command — so `declare -F <form>` or `command -v <form>` is never read as a call.
+  // A call is the form's name at COMMAND position: a line start; after `;` `&` `|` `(` `{` `!`, or a case pattern's
+  // `)`; after a keyword that takes a command (`time` and `time -p` included); and behind any assignment or
+  // redirection prefixes (`LC_ALL=C <form> v`). So `declare -F <form>` or `command -v <form>` is never read as a call,
+  // and neither is `command <form>`, which bash runs with function lookup suppressed (E1b's negative row). A prefix
+  // word's pieces start with disjoint characters (`"`, `'`, anything else), so the match stays linear on a long line.
+  const word1 = `(?:"(?:[^"\\\\]|\\\\.)*"|'[^']*'|[^\\s;&|()<>"'])`;
+  const prefixWord = `(?:[A-Za-z_][A-Za-z0-9_]*(?:\\[[^\\]\\s]*\\])?\\+?=(?:${word1})*|[0-9]*(?:[<>]{1,2}&?|&>>?)[ \\t]*(?:${word1})+)[ \\t]+`;
   const callsIn = (body: string, names: Iterable<string>): { form: string; word: string; at: number }[] => {
     const out: { form: string; word: string; at: number }[] = [];
     for (const n of names) {
-      const re = new RegExp(`(^[ \\t]*|[;&|({!][ \\t]*|\\b(?:then|do|else|elif|if|while|until)[ \\t]+)${n}(?=[ \\t])`, 'gm');
+      const re = new RegExp(`((?:^[ \\t]*|[;&|(){!][ \\t]*|\\b(?:then|do|else|elif|if|while|until|time(?:[ \\t]+-p)?)[ \\t]+)(?:${prefixWord})*)${n}(?=[ \\t])`, 'gm');
       for (let m = re.exec(body); m; m = re.exec(body)) {
         const [word] = readWord(body, m.index + m[0].length);
         out.push({ form: n, word, at: m.index + m[1]!.length });
@@ -352,11 +379,50 @@ const normErr = (s: string): string => s.replace(/^[^\n]*?: line \d+: /gm, '');
  *  `local` (dynamic scoping) changes the caller's copy, and the aux file shows it. */
 const SHADOWS = ['v', 'f', 'val', 'ts', 'now', 'w', 'rc', 'out', 't', 'h', 'e', 'cls', 'deg', 'eff', 'want', 'id', 'x', 'sf'];
 
+/** Variables bash moves on its own between two reads, so a call that does nothing would "change" them (E2a's no-op
+ *  side pins the list), plus `BASH_REMATCH`: spec §6.1 accepts its clobber, and each wave audits its readers. */
+const FRAME_VOLATILE: ReadonlySet<string> = new Set([
+  '_', 'BASH_COMMAND', 'BASH_LINENO', 'BASH_SOURCE', 'BASH_ARGC', 'BASH_ARGV', 'BASH_ARGV0', 'FUNCNAME', 'LINENO',
+  'RANDOM', 'SRANDOM', 'SECONDS', 'EPOCHSECONDS', 'EPOCHREALTIME', 'BASH_MONOSECONDS', 'BASHPID', 'PIPESTATUS',
+  'BASH_SUBSHELL', 'HISTCMD', 'COLUMNS', 'LINES', 'BASH_REMATCH',
+]);
+/** The globals a converted helper writes BY DESIGN, each with the §Interfaces entry that declares it: a row's live
+ *  side may change these and still equal its legacy side. A name joins only with the interface that declares it. */
+const FRAME_MEMOS: ReadonlySet<string> = new Set([
+  '_CCD_CFG_DIR_MEMO',   // `_cfg_dir_to`'s per-wrapper memo, for the process's life (plan Task 5)
+]);
+
+/** `declare -p`'s listing as name -> its entry. An entry is one line where bash quotes a control byte as `$'…'`
+ *  (5.x), and runs on over the lines of a multi-line value where an older bash quotes it with `"…"`. */
+function declared(b: Buffer | null): Map<string, string> {
+  const m = new Map<string, string>();
+  let cur: string | null = null;
+  const lines = (b ?? Buffer.alloc(0)).toString('latin1').split('\n');
+  if (lines[lines.length - 1] === '') lines.pop();   // the listing's own final newline, which ends no value
+  for (const l of lines) {
+    const d = /^declare -\S+ ([A-Za-z_][A-Za-z0-9_]*)/.exec(l);
+    if (d) { cur = d[1]!; m.set(cur, l); } else if (cur !== null) m.set(cur, `${m.get(cur)!}\n${l}`);
+  }
+  return m;
+}
+/** Every variable that existed before the call and changed (value or attributes) or went, as `changed NAME` lines:
+ *  the caller frame's own locals (`__dc_*`, `SHADOWS`, the out-var) and the volatile and memo sets aside. */
+function frameChanges(before: Buffer | null, after: Buffer | null, outVar: string): string {
+  if (before === null || after === null) return '';
+  const a = declared(before);
+  const b = declared(after);
+  const skip = (n: string): boolean => FRAME_VOLATILE.has(n) || FRAME_MEMOS.has(n) || n.startsWith('__dc_')
+    || SHADOWS.includes(n) || n === outVar;
+  return [...a.keys()].filter((n) => !skip(n) && a.get(n) !== b.get(n)).sort().map((n) => `changed ${n}\n`).join('');
+}
+
 /** The batch prelude. `__diet_side` wipes and re-plants the trees, runs the setup and then the body in separate
  *  subshells (so neither leaks into the next side), and moves the trees aside for the node-side comparison.
  *  `__diet_caller var cmd` evaluates `cmd` in a caller frame whose locals are `SHADOWS` (sentinel `__S`), then writes
  *  the out-var's bytes to `val`, and to `aux` every shadow that is not the out-var and every global the call CREATED
- *  (`BASH_REMATCH` excluded: spec §6.1 accepts its clobber, and each wave audits its readers). */
+ *  (`BASH_REMATCH` excluded: spec §6.1 accepts its clobber, and each wave audits its readers). It lists every variable
+ *  with `declare -p` before and after the call, and `runBatch` adds to `aux` each one that existed before and changed
+ *  (`frameChanges`): a form that writes a global outside `SHADOWS` is seen too. */
 const PRELUDE = `
 source "$DIET_CCD" || exit 90
 source "$DIET_LEGACY" || exit 91
@@ -374,7 +440,9 @@ __diet_caller() {
   local -- "$__dc_var=__S"
   local -A __dc_seen=()
   while IFS= read -r __dc_n; do __dc_seen[$__dc_n]=1; done < <(compgen -v)
+  printf '%s' "$__dc_var" >"$DIET_SIDE/var"; declare -p >"$DIET_SIDE/vars.before"
   eval "$__dc_cmd"; __dc_rc=$?
+  declare -p >"$DIET_SIDE/vars.after"
   {
     while IFS= read -r __dc_n; do
       [[ -n "\${__dc_seen[$__dc_n]+x}" || "$__dc_n" == BASH_REMATCH ]] || printf 'leaked %s\\n' "$__dc_n"
@@ -490,7 +558,9 @@ function runBatch(h: CcdHarness, rows: readonly Row[], locale: string, boundS = 
       const setupRc = read('setup.rc');
       return {
         ran: rc !== null, out: read('out') ?? Buffer.alloc(0), err: normErr((read('err') ?? Buffer.alloc(0)).toString('latin1')),
-        rc: rc === null ? null : Number(rc.toString()), val: read('val'), aux: (read('aux') ?? Buffer.alloc(0)).toString('latin1'),
+        rc: rc === null ? null : Number(rc.toString()), val: read('val'),
+        aux: (read('aux') ?? Buffer.alloc(0)).toString('latin1')
+          + frameChanges(read('vars.before'), read('vars.after'), (read('var') ?? Buffer.alloc(0)).toString('latin1')),
         tree: [...snapshot(path.join(d, 'reg')), ...snapshot(path.join(d, 'lim'))],
         setupRc: setupRc === null ? null : Number(setupRc.toString()), setupLog: (read('setup.log') ?? Buffer.alloc(0)).toString('latin1'),
         dateLog: (read('date.log') ?? Buffer.alloc(0)).toString('latin1').split('\n').filter(Boolean),
@@ -671,8 +741,8 @@ done
     const before = dump(old);
     const now = dump(CCD);
     for (const n of live) {
-      expect(now.get(n), `${n} changed since ${LEGACY_SHA.slice(0, 8)}, and a _legacy body reaches it — freeze the base's `
-        + 'copy into fixtures/tick-diet-legacy.bash (below the functions) before changing it').toBe(before.get(n));
+      expect(now.get(n), `${n} changed since ${LEGACY_SHA.slice(0, 8)}, and a _legacy body reaches it — vendor the base's `
+        + `copy into fixtures/tick-diet-legacy.bash as _legacy${n} first (the fixture header says how)`).toBe(before.get(n));
     }
   }, 120_000);
 });
@@ -743,7 +813,7 @@ describe('E1 the out-var census: no call passes a name its form would catch in a
   it('E1b it names each planted defect: the plan\'s `_limit_field_to val …`, a collision through a forward, a dynamic name, a `_to` that is no form', () => {
     const plant = (from: string, to: string): string => {
       expect(CENSUS_SRC, `the census source no longer holds ${from}`).toContain(from);
-      return CENSUS_SRC.replace(from, to);
+      return CENSUS_SRC.replace(from, () => to);   // a function: a `$'` in the text is no replacement pattern
     };
     expect(outVarCensus(plant('_limit_field_to five "$w" five 0', '_limit_field_to val "$w" five 0')).findings)
       .toEqual([{ kind: 'collision', caller: '_avail', form: '_limit_field_to', word: 'val', via: ['_limit_field_to'] }]);
@@ -756,6 +826,65 @@ describe('E1 the out-var census: no call passes a name its form would catch in a
     // And the negative: a form named as a WORD, not run, is no call.
     expect(outVarCensus(`${CENSUS_SRC}_has_it() { declare -F _limit_field_to >/dev/null || command -v _limit_pick_to >/dev/null; }\n`).findings)
       .toEqual([]);
+  });
+
+  /** Every command position a call can sit in besides a line start and the separators E1b's rows already use. The
+   *  case arm is ccd's house style for a one-line dispatch. */
+  const CALL_POSITIONS: readonly { position: string; call: string }[] = [
+    { position: 'a one-line case arm', call: 'case "$w" in a) _limit_field_to val "$w" five 0 ;; esac' },
+    { position: 'an arm of a multi-line case', call: 'case "$w" in\n    a|b) _limit_field_to val "$w" five 0 ;;\n    *) : ;;\n  esac' },
+    { position: 'a parenthesised case pattern', call: 'case "$w" in (a) _limit_field_to val "$w" five 0 ;; esac' },
+    { position: 'an assignment prefix', call: 'LC_ALL=C _limit_field_to val "$w" five 0' },
+    { position: 'two assignment prefixes, one quoted', call: 'X="a b" Y=$\'c\\td\' _limit_field_to val "$w" five 0' },
+    { position: 'a redirection prefix', call: '2>/dev/null _limit_field_to val "$w" five 0' },
+    { position: '`time`', call: 'time _limit_field_to val "$w" five 0' },
+    { position: '`time -p` after `&&`', call: '[[ -n "$w" ]] && time -p _limit_field_to val "$w" five 0' },
+  ];
+  it.each(CALL_POSITIONS)('E1b a call in $position is read as a call, and its collision named', ({ call }) => {
+    const from = '_limit_field_to five "$w" five 0';
+    expect(CENSUS_SRC).toContain(from);
+    expect(outVarCensus(CENSUS_SRC.replace(from, () => call)).findings)
+      .toEqual([{ kind: 'collision', caller: '_avail', form: '_limit_field_to', word: 'val', via: ['_limit_field_to'] }]);
+  });
+
+  it('E1b `command <form>` is no call: bash\'s `command` skips functions, so the form never runs', () => {
+    const from = '_limit_field_to five "$w" five 0';
+    expect(outVarCensus(CENSUS_SRC.replace(from, () => 'command _limit_field_to val "$w" five 0 || :')).findings).toEqual([]);
+  });
+
+  /** Definition shapes `ccd/ccd` really uses (`_lc_done()   {`, and `_lc_intent`'s close at the end of a code line),
+   *  each hiding a form the census must still see. */
+  const DEF_SHAPES: readonly { shape: string; src: string; want: CensusFinding }[] = [
+    {
+      shape: 'a one-line `_to` with blanks before its `{` that is no form',
+      src: '_frob_to()   { echo "$1"; }\n',
+      want: { kind: 'not-a-form', caller: '_frob_to', form: '_frob_to', word: '', via: [] },
+    },
+    {
+      shape: 'a multi-line form with blanks before its `{`',
+      src: '_frob_to()   {\n  local __fr_v=x\n  printf -v "$1" \'%s\' "$__fr_v"\n}\n_user() { _frob_to __fr_v; }\n',
+      want: { kind: 'collision', caller: '_user', form: '_frob_to', word: '__fr_v', via: ['_frob_to'] },
+    },
+    {
+      shape: 'a form after a function whose `}` closes a code line',
+      src: '_lc_like() { local a="${1-}"\n             : "$a"; }\n_frob_to() { local __fr_v; printf -v "$1" \'%s\' x; }\n_user() { _frob_to __fr_v; }\n',
+      want: { kind: 'collision', caller: '_user', form: '_frob_to', word: '__fr_v', via: ['_frob_to'] },
+    },
+  ];
+  it.each(DEF_SHAPES)('E1e the census reads $shape', ({ src, want }) => {
+    expect(outVarCensus(src).findings).toEqual([want]);
+  });
+
+  it('E1f the census parses every function ccd/ccd defines, each once, and none swallows the next', () => {
+    const code = stripShellComments(fs.readFileSync(CCD, 'utf8'));
+    const lines = code.split('\n');
+    const defs = lines.flatMap((l) => { const m = DEF_LINE.exec(l); return m ? [m[1]!] : []; });
+    expect(defs.length, 'no definition line found — the pattern no longer matches ccd/ccd').toBeGreaterThan(500);
+    const fns = functionsOf(code);
+    expect(fns.map((f) => f.name), 'a definition the census does not see as its own function').toEqual(defs);
+    for (const f of fns) {
+      expect(f.block.split('\n').slice(1).filter((l) => DEF_LINE.test(l)), `${f.name}'s block holds another definition`).toEqual([]);
+    }
   });
 
   it('E1c ccd/ccd: its forms are exactly the planned ones that have landed, and no call collides', () => {
@@ -787,13 +916,19 @@ describe('E2 the runner can red, isolates every side, and bounds a hang (plan Ta
   beforeAll(() => { h = makeCcdHarness('ccrc-diet-e2-'); });
   afterAll(() => h.cleanup());
 
-  it('E2a a difference in stdout, the registry, the out-var or the caller frame is reported, and a leaked global is seen', () => {
+  it('E2a a difference in stdout, the registry, the out-var or the caller frame is reported, and a leaked or overwritten global is seen', () => {
     const rows: Row[] = [
       { id: 'stdout', sides: [{ label: 'a', body: 'printf a' }, { label: 'b', body: 'printf b' }] },
       { id: 'registry', sides: [{ label: 'a', body: ':' }, { label: 'b', body: 'printf x > "$REG/x.f"' }] },
       { id: 'out-var', sides: [{ label: 'a', body: "__diet_caller v 'v=1'" }, { label: 'b', body: "__diet_caller v 'v=2'" }] },
       { id: 'frame', sides: [{ label: 'a', body: "__diet_caller v ':'" }, { label: 'b', body: "__diet_caller v 'f=clobbered'" }] },
       { id: 'leak', sides: [{ label: 'a', body: "__diet_caller v ':'" }, { label: 'b', body: "__diet_caller v 'diet_leaked=1'" }] },
+      // A global that exists before the call and is not one of the SHADOWS: overwritten, and unset.
+      { id: 'global', sides: [{ label: 'a', body: "diet_g=0; __diet_caller v ':'" }, { label: 'b', body: "diet_g=0; __diet_caller v 'diet_g=1'" }] },
+      { id: 'global-unset', sides: [{ label: 'a', body: "diet_g=0; __diet_caller v ':'" }, { label: 'b', body: "diet_g=0; __diet_caller v 'unset diet_g'" }] },
+      { id: 'ccd-global', sides: [{ label: 'a', body: "__diet_caller v ':'" }, { label: 'b', body: "__diet_caller v 'LIMITS_DIR=/elsewhere'" }] },
+      // A write a converted helper makes by design (`FRAME_MEMOS`: Task 5's per-wrapper memo) is not a change.
+      { id: 'memo', sides: [{ label: 'a', body: "declare -gA _CCD_CFG_DIR_MEMO=(); __diet_caller v ':'" }, { label: 'b', body: "declare -gA _CCD_CFG_DIR_MEMO=(); __diet_caller v '_CCD_CFG_DIR_MEMO[x]=1'" }] },
     ];
     const b = runBatch(h, rows, 'C');
     expect(b.hung).toBeNull();
@@ -804,6 +939,12 @@ describe('E2 the runner can red, isolates every side, and bounds a hang (plan Ta
     expect(d('frame')).toEqual([expect.stringMatching(/^caller frame: .*f=__S.*f=clobbered/)]);
     expect(b.results.get('leak')![1]!.aux).toMatch(/^leaked diet_leaked$/m);
     expect(b.results.get('leak')![0]!.aux).not.toMatch(/^leaked /m);
+    expect(d('global')).toEqual([expect.stringMatching(/^caller frame: .*changed diet_g/)]);
+    expect(d('global-unset')).toEqual([expect.stringMatching(/^caller frame: .*changed diet_g/)]);
+    expect(d('ccd-global')).toEqual([expect.stringMatching(/^caller frame: .*changed LIMITS_DIR/)]);
+    expect(d('memo')).toEqual([]);
+    // A call that does nothing changes nothing: every variable bash moves on its own is outside the comparison.
+    expect(b.results.get('global')![0]!.aux, 'a no-op call recorded a change').not.toMatch(/^changed /m);
   }, 60_000);
 
   it('E2b each side starts from a wiped registry and a fresh shell: nothing a side writes or defines reaches the next', () => {
@@ -837,6 +978,13 @@ describe('E2 the runner can red, isolates every side, and bounds a hang (plan Ta
       .toBe('x: bad array subscript\ny: command not found\n');
     expect(normErr('grep: /h/.cc-limits/w.json: Is a directory\n')).toBe('grep: /h/.cc-limits/w.json: Is a directory\n');
   });
+
+  it('E2e the `declare -p` reader sees a change on any line of a multi-line value, as bash 5.1 prints one, and skips the frame\'s own names', () => {
+    const before = Buffer.from('declare -- g="1"\ndeclare -- s="a\nb"\ndeclare -- v="__S"\ndeclare -- _="x"\ndeclare -- __dc_rc="0"\n');
+    const after = Buffer.from('declare -- g="1"\ndeclare -- s="a\nc"\ndeclare -- v="1"\ndeclare -- _="y"\ndeclare -- __dc_rc="1"\n');
+    expect(frameChanges(before, after, 'v')).toBe('changed s\n');
+    expect(frameChanges(before, Buffer.from('declare -- s="a\nb"\n'), 'v'), 'a global the call unset').toBe('changed g\n');
+  });
 });
 
 // ── E3: the W1 rows ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -865,18 +1013,21 @@ const TMUX_SHAPES: readonly { shape: string; setup: string; branch: string }[] =
   { shape: 'absent', setup: 'unset -f tmux; PATH="$PWD/no-such-dir"; hash -r', branch: 'deadline' },
 ];
 
-/** The ids `_cfg_dir_to` is compared over (plan Task 2 Step 5): every roster id of the harness's test roster, an
- *  unknown id, an id that only PREFIXES a roster id, the empty word, a glob, a trailing blank, and a payload that
- *  would run if anything evaluated the word as code — it must create no file. */
+/** The ids `_cfg_dir_to` is compared over (plan Task 2 Step 5): every id of `DEFAULT_TEST_ROSTER`, the roster
+ *  `makeCcdHarness` seeds (derived, so these rows grow with it), an unknown id, an id that a roster id only PREFIXES,
+ *  the empty word, a glob, a trailing blank, and a payload that would run if anything evaluated the word as code — it
+ *  must create no file. */
 const PAYLOAD = 'REG[$(touch "$HOME/PWNED")]';
-const CFG_IDS: readonly string[] = ['claude', 'claude-a', 'claude-b', 'gpt', 'claude-d', 'nosuch', 'claude-a-proj', '', '*', 'claude ', PAYLOAD];
+const CFG_IDS: readonly string[] = [
+  ...DEFAULT_TEST_ROSTER.accounts.map((a) => a.id), 'nosuch', 'claude-a-proj', '', '*', 'claude ', PAYLOAD,
+];
 const label = (s: string): string => (s === '' ? '<empty>' : s === PAYLOAD ? '<payload>' : JSON.stringify(s));
 
 interface ProbeRow extends Row { readonly check: (s: SideResult) => void }
 
 /** The clock rows (D-4961). `_now_s` has no legacy body — its legacy is `$(date +%s)` itself — so each is a probe:
  *  one side, its answer bounded by two real `date` reads taken around it, and the `date` shim's log saying whether the
- *  helper itself ran `date`. */
+ *  helper itself ran the `date` that PATH finds (only that one: see the first row). */
 function clockRows(): ProbeRow[] {
   const bounded = (call: string, pre = ''): string => [
     pre,
@@ -896,17 +1047,20 @@ function clockRows(): ProbeRow[] {
   };
   const frameClean = (s: SideResult): void => {
     expect(s.aux, 'the call left a global behind').not.toMatch(/^leaked /m);
-    expect(s.aux.split('\n').filter(Boolean).every((l) => l.endsWith('=__S')), `a caller local changed: ${s.aux}`).toBe(true);
+    expect(s.aux.split('\n').filter(Boolean).every((l) => l.endsWith('=__S')), `the caller frame changed: ${s.aux}`).toBe(true);
   };
   return [
     {
-      id: 'now: $EPOCHSECONDS, no date function — the real time, into a caller variable named `now`, with no date exec',
+      id: 'now: $EPOCHSECONDS, no date function — the real time, into a caller variable named `now`, with no exec of the `date` on PATH',
       needs: ['_now_s_to'], sides: [{ label: '_now_s_to', body: bounded("__diet_caller now '_now_s_to now'") }],
       check: (s) => {
         expect(s.rc).toBe(0);
         within(s, s.val!.toString());
         frameClean(s);
-        if (s.note.endsWith('epochseconds')) expect(s.dateLog, 'the fast path ran `date`').toEqual([]);
+        // The shim sees only the `date` that PATH finds: a fast path that ran `/bin/date` or `command -p date` would
+        // pass here. The fork-budget harness (`ccd-tick-budget.test.ts`) counts every fork a tick makes, and that is
+        // where such a fork reds.
+        if (s.note.endsWith('epochseconds')) expect(s.dateLog, 'the fast path ran the `date` on PATH').toEqual([]);
       },
     },
     {
@@ -1028,7 +1182,7 @@ describe.each(LOCALES)('E3 the W1 rows under $name (tick-diet spec §6.2, plan T
     expect(b.results.get('_cfg_dir_to "nosuch"')![0]!.val!.toString()).toBe('');
   });
 
-  it('E3c `_now_s_to` and `_now_s`: the real time without a `date` exec, a `date` function honoured, and the `date` path without EPOCHSECONDS (D-4961)', (ctx) => {
+  it('E3c `_now_s_to` and `_now_s`: the real time without running the `date` on PATH, a `date` function honoured, and the `date` path without EPOCHSECONDS (D-4961)', (ctx) => {
     const b = got(ctx);
     for (const row of rows.clock) {
       const res = b.results.get(row.id)!;

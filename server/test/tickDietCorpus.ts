@@ -1,7 +1,8 @@
 // tickDietCorpus.ts — the inputs the supervisor tick diet's differential suite drives (#387, tick-diet spec §9, plan
-// Task 2 Step 6). W1 plants every row W2 and W3 will need, so those waves add ASSERTIONS to
-// `ccd-tick-diet-equivalence.test.ts`, never data. Test-only: it imports nothing from `server/src` and spawns nothing;
-// the equivalence suite plants each row and runs it.
+// Task 2 Step 6). W1 plants every row spec §9 and plan Task 2 Step 6 name, so W2 and W3 mostly add ASSERTIONS to
+// `ccd-tick-diet-equivalence.test.ts`. A later task adds rows here only for the inputs its own guard is about (the
+// plan's File Structure: Tasks 8, 9, 13, 14, 15 and 16), and never an expected answer (below). Test-only: it imports
+// nothing from `server/src` and spawns nothing; the equivalence suite plants each row and runs it.
 //
 // A row is DATA about one path: its shape (a regular file, a FIFO, a dangling symlink, …) and, where the shape holds
 // bytes, the exact bytes. NOTHING HERE STATES WHAT A HELPER ANSWERS for a row. The vendored legacy body does, at run

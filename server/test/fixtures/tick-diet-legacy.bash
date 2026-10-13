@@ -13,7 +13,11 @@
 #
 # Never edit what follows. The suite pins this file's sha256 (E0a), each body with the map reversed against
 # `git show 0d0ea592:ccd/ccd` (E0b), and every live helper these bodies reach, transitively, at its 0d0ea592 definition
-# (E0c). If a later wave must change one of those helpers, it freezes 0d0ea592's copy here, below the functions, first.
+# (E0c). If a later wave must change one of those helpers, it first VENDORS it here, the same way and from the same
+# sha, in one commit: 0d0ea592's body appended as `_legacy_X`, every call to `_X` in the bodies above renamed to match,
+# `_X` added to the map above and to the suite's `VENDORED` (so E0b reverses that rename too), and E0a's sha re-pinned.
+# That is the one edit this file takes. A copy under the live name would not do: sourced after `ccd/ccd`, it would
+# replace the live helper on BOTH sides, and no row would ever run the changed one.
 
 _legacy_reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$1.$2" 2>/dev/null; }   # id field
 
