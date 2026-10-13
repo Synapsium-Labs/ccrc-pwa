@@ -23,7 +23,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 | 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | #235 | merged 2026-10-03 (`db44b136`); run 237 closed; deploy via ccrc's updater |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin; FIRST, wave 2's residue | **AGENT-FIRST** (ccd) | — | #250 | merged 2026-10-05 (`77f8d63a`); run 248 closed; deploy AGENT-FIRST via ccrc's updater |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | wave 3 | #299 | merged 2026-10-06 (`1bb88d5e`); run 274 closed; deploy AGENT-FIRST via ccrc's updater (baseline B starts at deploy); run 274 (`ccrc-pwa-still-river`); plan #288 (`0dad0fdf`); block 4012–4021 + 4088–4093 |
-| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | — | run 308 open (planned; the run's wave 5), block 4316–4325; to plan; FIRST commit: wave 4's residue (review 305 F1(a), the PASS line, I1, …) |
+| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | — | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; run 308 open (planned; the run's wave 5), block 4316–4325; unblocked for planning; FIRST commit: wave 4's residue (review 305 F1(a), the PASS line, I1, …); scope sweep remains SHADOWED |
 | 5 | 2 | the spike: native exit handoff under ccd; a paused workflow under a blocked parent; `OOMPolicy=continue` on a scratch pane scope | measurement — needs a scratch account from the operator | wave 1 | — | to plan |
 | 6 | 3 | graceful stop; the launch record; the manifest; the composed redrive prompt | **AGENT-FIRST** | waves 1, 5 | — | after wave 5 |
 | 7 | 4, the refusal | non-rescue swaps refuse while delegated work is in flight; `--cut-delegated`; its own 409 | **AGENT-FIRST**, then server | wave 6 | — | after wave 6 |
@@ -525,6 +525,16 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   from the console. The fleet box finished at 23:16:17 and the server box at 23:16:50 (each box's `update.json`, phase
   `done`; `ccrc version` reads `1bb88d5e` on both). Baseline B's week ends 2026-10-13 23:16 UTC. Wave 4b (run 308) is
   planned after that reading, and the stop stays shadowed until the operator arms `scope-sweep-live`.
+- **2026-10-13 23:17 — baseline B COMPLETE: wave 4b is unblocked for planning; the scope sweep stays SHADOWED.**
+  - The read-only stage-6 instrument measured the promised full week from `2026-10-06 23:16:00 UTC` inclusive to
+    `2026-10-13 23:17:00 UTC` exclusive, with the pressure reap still enabled.
+  - **Pressure-reap baseline:** 34 pane-scope OOM stops; `reap_class: 0`; 22 were busy within the idle window and 3
+    were idle without a live background shell. Five stops were unmapped (3 had no spawn, 2 had two sessions spawned
+    together), and 4 were unmeasured. The per-session reap-class map is empty.
+  - **Scope-sweep shadow reading:** 9 dead scopes; 2 inert scopes; both inert scopes had been dead for at least one
+    day. The instrument's verdict-record mode is `shadow`.
+  - This is baseline B, not evidence to arm a kill path: nothing creates `$REG/scope-sweep-live`. Run 308 may now be
+    planned for the pressure-reap spawn variable, 3925's `/clear` fix and the carried wave-4 residue.
 - **2026-10-08 11:15 — the operator's session takes ccrc-pwa #317, the carry's EXDEV copies (mail 4000).** Its first
   PR links through a common mount of the same filesystem when there is one, and makes the copy fallback loud, with its
   byte count. It does not drop the source after a carry and adds no dedupe verb. It touches `_swap_carry_*` and the
@@ -586,11 +596,13 @@ alias table) is run 248, dispatched 2026-10-04 22:22 to `ccrc-pwa-still-harbor`,
 - **Its plan's FIRST commit is wave 2's residue**, the list above from review 246: F1, F2, F3, F5, the minors 3–5
   and F6's restated §9 target.
 
-Wave 3 is merged (#250 `77f8d63a`). Wave 4 is run 274 (planned; deviation numbers 4012 to 4021, written bare), and
-it is to plan.
-- **Its FIRST commit is wave 3's residue,** review 272's F1–F11, ruled as above.
-- **Then the reap-class OOM count and the scope sweep.** Wave 4b, the pressure-reap disable, follows.
-- **It also owes** 3925's `/clear` code fix (review 268's F4 design note: read the outgoing transcript at the uuid
-  rotation).
-Both are AGENT-FIRST.
-2026-10-02's reaped runs argue for planning 4b early.
+Wave 3 is merged (#250 `77f8d63a`). Wave 4 is merged (#299 `1bb88d5e`) and deployed. Its full baseline-B week
+is measured above: 0 reap-class among 34 pane-scope OOM stops, with 5 unmapped and 4 unmeasured; the scope-sweep
+record remains `shadow` and `$REG/scope-sweep-live` remains operator-only.
+
+Wave 4b is run 308 (planned; deviation numbers 4316 to 4325, written bare) and is **unblocked for planning**.
+- **Its FIRST commit is wave 4's residue:** review 305 F1(a), the qualified doctor PASS line, I1, `s6_inert`'s
+  staleness, the zombie child, the paused log line, baseline B's non-zero check and the per-task minors.
+- **Then it ships** `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment and 3925's `/clear`
+  code fix (review 268's F4 design note: read the outgoing transcript at the uuid rotation).
+- **It remains AGENT-FIRST.** It does not arm the scope sweep or create its live marker.
