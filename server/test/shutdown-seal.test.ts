@@ -1,0 +1,179 @@
+// THE SHUTDOWN SEAL (fix round 5, D-4916). Two halves. The first runs `installShutdownSeal` (src/shutdownseal.ts) against a
+// recorder in place of `process`, pinning its ORDER (stop the watcher, seal within the bound, say a refusal in one warn
+// line, re-raise the same signal), that it NEVER THROWS, and that it never waits past its bound. The second is the wiring:
+// it spawns THIS EXACT composition root (`src/index.ts`, via `tsx`, as `boot.test.ts` does) in a fixture HOME over a fixture
+// database whose breaker state reads `sealed`, waits until the lane's first pass has unsealed it, sends SIGTERM, and reads
+// the state again: `sealed`, with the child dead OF THE SIGNAL. It goes red when `index.ts` stops installing the handler.
+import { describe, it, expect, afterEach } from 'vitest';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { installShutdownSeal, SHUTDOWN_SEAL_BOUND_MS, type SealingWatcher, type SignalHost } from '../src/shutdownseal.js';
+import type { DeadCoordinatorSealResult } from '../src/deadCoordinator.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { mkTmp } from './tmpHelpers.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const serverRoot = path.resolve(here, '..');
+const tsx = path.join(serverRoot, 'node_modules', '.bin', 'tsx');
+const indexTs = path.join(serverRoot, 'src', 'index.ts');
+
+/** A `process` stand-in: records `once`, `removeListener` and `kill`, and fires a signal on demand. */
+const recorder = () => {
+  const once = new Map<string, () => void>();
+  const events: string[] = [];
+  const host: SignalHost = {
+    pid: 4242,
+    once: (sig, fn) => { once.set(sig, fn); events.push(`once ${sig}`); return host; },
+    removeListener: (sig, fn) => { if (once.get(sig) === fn) once.delete(sig); events.push(`remove ${sig}`); return host; },
+    kill: (pid, sig) => { events.push(`kill ${pid} ${sig}`); return true; },
+  };
+  return { host, events, fire: (sig: string) => once.get(sig)?.(), installed: () => [...once.keys()].sort() };
+};
+const logs = () => {
+  const lines: string[] = [];
+  return { log: { log: (m: string) => { lines.push(`log ${m}`); }, warn: (m: string) => { lines.push(`warn ${m}`); } }, lines };
+};
+const settle = async (until: () => boolean, ms = 2000): Promise<void> => {
+  for (let t = 0; t < ms && !until(); t += 5) await new Promise((r) => setTimeout(r, 5));
+};
+
+describe('installShutdownSeal: the handler\'s order, its bound, and that it never throws (D-4916)', () => {
+  it('installs SIGTERM and SIGINT, and nothing else', () => {
+    const r = recorder();
+    installShutdownSeal({ stop: () => {}, sealDeadCoordinatorBreaker: async () => ({ sealed: true, generation: 3 }) }, r.host, 50, logs().log);
+    expect(r.installed()).toEqual(['SIGINT', 'SIGTERM']);
+  });
+  for (const sig of ['SIGTERM', 'SIGINT'] as const) {
+    it(`${sig}: stops the watcher, THEN seals within the bound, THEN removes the handlers and re-raises the same signal`, async () => {
+      const r = recorder();
+      const order: string[] = [];
+      const w: SealingWatcher = {
+        stop: () => { order.push('stop'); },
+        sealDeadCoordinatorBreaker: async (bound) => { order.push(`seal ${bound}`); return { sealed: true, generation: 3 }; },
+      };
+      const l = logs();
+      installShutdownSeal(w, r.host, 1234, l.log);
+      r.fire(sig);
+      await settle(() => r.events.some((e) => e.startsWith('kill')));
+      expect(order).toEqual(['stop', 'seal 1234']);
+      expect(r.events.filter((e) => e.startsWith('kill'))).toEqual([`kill 4242 ${sig}`]);
+      expect(r.events.indexOf(`kill 4242 ${sig}`), 'the handlers are gone before the signal is re-raised').toBeGreaterThan(r.events.lastIndexOf('remove SIGTERM'));
+      expect(r.installed(), 'both handlers removed: the default action runs').toEqual([]);
+      expect(l.lines.filter((x) => x.startsWith('warn')), 'a seal that landed is not a warning').toEqual([]);
+    });
+  }
+  it('a REFUSAL is one warn line naming the reason, and the signal is still re-raised', async () => {
+    const r = recorder();
+    const l = logs();
+    const refusal: DeadCoordinatorSealResult = { sealed: false, reason: 'changes-pending' };
+    installShutdownSeal({ stop: () => {}, sealDeadCoordinatorBreaker: async () => refusal }, r.host, 50, l.log);
+    r.fire('SIGTERM');
+    await settle(() => r.events.some((e) => e.startsWith('kill')));
+    const warns = l.lines.filter((x) => x.startsWith('warn'));
+    expect(warns).toHaveLength(1);
+    expect(warns[0]).toMatch(/^warn ccrc-server: shutdown: .*changes-pending/);
+    expect(r.events).toContain('kill 4242 SIGTERM');
+  });
+  it('NEVER THROWS: a seal that rejects, a watcher that cannot stop — each one warn line, and the signal is re-raised', async () => {
+    const r = recorder();
+    const l = logs();
+    installShutdownSeal({ stop: () => { throw new Error('stop broke'); }, sealDeadCoordinatorBreaker: async () => { throw new Error('seal broke'); } }, r.host, 50, l.log);
+    r.fire('SIGINT');
+    await settle(() => r.events.some((e) => e.startsWith('kill')));
+    expect(l.lines.filter((x) => x.startsWith('warn') && x.includes('stop broke'))).toHaveLength(1);
+    expect(l.lines.filter((x) => x.startsWith('warn') && x.includes('seal broke'))).toHaveLength(1);
+    expect(r.events).toContain('kill 4242 SIGINT');
+  });
+  it('NEVER WAITS PAST ITS BOUND: a seal that never answers is abandoned, one warn line, the signal re-raised', async () => {
+    const r = recorder();
+    const l = logs();
+    installShutdownSeal({ stop: () => {}, sealDeadCoordinatorBreaker: () => new Promise<never>(() => {}) }, r.host, 40, l.log);
+    const t0 = Date.now();
+    r.fire('SIGTERM');
+    await settle(() => r.events.some((e) => e.startsWith('kill')), 3000);
+    expect(r.events).toContain('kill 4242 SIGTERM');
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(l.lines.filter((x) => x.startsWith('warn') && x.includes('no answer within 40 ms'))).toHaveLength(1);
+  });
+  it('the bound is well inside systemd\'s default 90 s stop timeout', () => {
+    expect(SHUTDOWN_SEAL_BOUND_MS).toBeGreaterThan(0);
+    expect(SHUTDOWN_SEAL_BOUND_MS).toBeLessThanOrEqual(10_000);
+  });
+});
+
+// ── the wiring: the real composition root, SIGTERM, and the state it leaves ───────────────────────────────────────────
+let child: ChildProcess | undefined;
+let currentHome: string | undefined;
+afterEach(async () => {
+  if (child?.pid !== undefined && child.exitCode === null && child.signalCode === null) {
+    try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ }
+    try { process.kill(child.pid, 'SIGKILL'); } catch { /* gone */ }
+  }
+  child = undefined;
+  await new Promise((r) => setTimeout(r, 50));
+  currentHome = undefined;
+});
+
+const writeRoster = (home: string): void => {
+  mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+  writeFileSync(path.join(home, '.ccrc', 'accounts.json'), JSON.stringify({
+    version: 1,
+    accounts: [{ id: 'claude', label: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' }],
+  }));
+};
+const writeStubCcd = (home: string): void => {
+  const dir = path.join(home, '.local', 'bin');
+  mkdirSync(dir, { recursive: true });
+  const p = path.join(dir, 'ccd');
+  writeFileSync(p, '#!/bin/sh\nexit 0\n');
+  chmodSync(p, 0o755);
+};
+/** The breaker's state word, read through a second connection (WAL). */
+const stateWord = (db: string): string | null => {
+  if (!existsSync(db)) return null;
+  const raw = new DatabaseSync(db, { readOnly: true });
+  try {
+    const row = raw.prepare('SELECT state FROM dead_coordinator_breaker_state WHERE id = 1').get() as { state: string } | undefined;
+    return row?.state ?? null;
+  } catch { return null; } finally { raw.close(); }
+};
+
+describe('the real composition root installs the handler (D-4916)', () => {
+  it('SIGTERM to the server whose lane has run seals the breaker\'s state, and the process dies OF THE SIGNAL', async () => {
+    const home = mkTmp('ccrc-shutdown-seal-');
+    currentHome = home;
+    writeRoster(home);
+    writeStubCcd(home);
+    mkdirSync(path.join(home, '.cc-sessions', '.lifecycle'), { recursive: true });   // the registry the lane reads
+    const db = path.join(home, '.ccrc', 'coord.db');
+    const seed = openCoordDb(db);
+    seed.exec(`INSERT INTO dead_coordinator_breaker_state (id, generation, state, held, writtenAt) VALUES (1, 1, 'sealed', 'dead-coordinator-breaker-held:', 1)`);
+    seed.close();
+    const port = 26000 + (process.pid % 3000);
+    child = spawn(tsx, [indexTs], {
+      cwd: serverRoot,
+      env: { ...process.env, CCRC_HOME: home, CCRC_HOST: '127.0.0.1', CCRC_PORT: String(port) },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
+    });
+    let stderr = '';
+    child.stdout?.on('data', () => undefined);
+    child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+    // The lane's first pass unseals (`clean`): the process has landed a write, and a seal would now be permitted.
+    for (let t = 0; t < 40_000 && stateWord(db) === 'sealed'; t += 100) await new Promise((r) => setTimeout(r, 100));
+    expect(stateWord(db), `the lane\'s first pass unsealed the state (stderr: ${stderr.slice(-400)})`).toBe('clean');
+    const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+      child!.on('exit', (code, signal) => resolve({ code, signal }));
+    });
+    process.kill(child.pid!, 'SIGTERM');
+    const out = await Promise.race([exited, new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), 20_000))]);
+    expect(out, 'the process ended').not.toBe('timeout');
+    // `tsx` relays the child's end: 143 is 128 + SIGTERM, the status a process killed by the signal leaves; a handler that
+    // exited by itself (`process.exit(0)`) would leave 0, one that swallowed the signal would not end at all.
+    expect(out === 'timeout' ? null : out.signal === 'SIGTERM' || out.code === 143, `exit ${JSON.stringify(out)}: the signal was re-raised`).toBe(true);
+    expect(stateWord(db), 'a clean shutdown sealed it').toBe('sealed');
+  }, 90_000);
+});

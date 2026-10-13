@@ -1,0 +1,69 @@
+// THE SHUTDOWN SEAL (fix round 5, D-4916; the operator's choice of 2026-10-13, "Seal on clean shutdown"). The server has
+// no other signal handler: Node's default SIGTERM/SIGINT action ends the process without running anything, so the
+// dead-coordinator breaker's typed state could never learn that a stop was a clean one. This installs the one handler, in
+// the composition root's single additive block (`index.ts`, L5), and keeps the order and the bound in one place, testable
+// without a process:
+//   1. stop the watcher's timer, so no tick starts a pass behind the seal;
+//   2. ask the lane to seal within ONE total bound (`SHUTDOWN_SEAL_BOUND_MS`): the lane awaits the pass in flight, then
+//      writes `sealed` only when every condition holds (`FleetWatcher.sealDeadCoordinatorBreaker`), else writes nothing;
+//   3. say a refusal or a failure in ONE `console.warn('ccrc-server: …')` line, and never throw;
+//   4. exit with today's semantics: remove the handlers and RE-RAISE the same signal, so the process dies of the signal
+//      exactly as it did before this handler existed (systemd, `ccrc update`'s health gate and the watchdog see no change).
+// A handler that waited past its bound would turn a stop into a SIGKILL after systemd's timeout (90 s by default; the unit
+// sets none); the bound is 5 s: a pass in flight asks tmux about a handful of coordinators, one agent round trip each, and
+// the seal itself is one local statement. A pass that outlives it is not awaited and nothing is sealed: the next start seeds
+// conservatively, which is the cost of an unclean exit and never an early act.
+import type { DeadCoordinatorSealResult } from './deadCoordinator.js';
+
+/** The one total bound, in milliseconds, a shutdown waits on the seal. */
+export const SHUTDOWN_SEAL_BOUND_MS = 5_000;
+
+/** What the handler needs of the watcher. */
+export interface SealingWatcher {
+  stop(): void;
+  sealDeadCoordinatorBreaker(boundMs: number): Promise<DeadCoordinatorSealResult>;
+}
+
+/** What the handler needs of `process`, so a test can hand it a recorder. */
+export interface SignalHost {
+  readonly pid: number;
+  once(signal: NodeJS.Signals, listener: () => void): unknown;
+  removeListener(signal: NodeJS.Signals, listener: () => void): unknown;
+  kill(pid: number, signal: NodeJS.Signals): unknown;
+}
+
+const SIGNALS: readonly NodeJS.Signals[] = ['SIGTERM', 'SIGINT'];
+
+/** Install the SIGTERM and SIGINT handlers. Returns the function that removes them (tests). */
+export function installShutdownSeal(
+  watcher: SealingWatcher, host: SignalHost = process, boundMs: number = SHUTDOWN_SEAL_BOUND_MS,
+  log: Pick<Console, 'log' | 'warn'> = console,
+): () => void {
+  const listeners = new Map<NodeJS.Signals, () => void>();
+  const removeAll = (): void => { for (const [sig, fn] of listeners) host.removeListener(sig, fn); };
+  const handle = (sig: NodeJS.Signals): void => {
+    void (async () => {
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        try { watcher.stop(); } catch (err) { log.warn(`ccrc-server: shutdown: the watcher did not stop (${err instanceof Error ? err.message : String(err)})`); }
+        const bound = new Promise<'over'>((resolve) => { timer = setTimeout(() => resolve('over'), boundMs + 500); });
+        const out = await Promise.race([watcher.sealDeadCoordinatorBreaker(boundMs), bound]);
+        if (out === 'over') log.warn(`ccrc-server: shutdown: the dead-coordinator breaker's state was not sealed (no answer within ${boundMs} ms) — the next start seeds it conservatively`);
+        else if (!out.sealed) log.warn(`ccrc-server: shutdown: the dead-coordinator breaker's state was not sealed (${out.reason}) — the next start seeds it conservatively`);
+        else log.log('ccrc-server: shutdown: the dead-coordinator breaker\'s state is sealed');
+      } catch (err) {
+        log.warn(`ccrc-server: shutdown: the dead-coordinator breaker's state was not sealed (${err instanceof Error ? err.message : String(err)}) — the next start seeds it conservatively`);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+        removeAll();
+        host.kill(host.pid, sig);
+      }
+    })();
+  };
+  for (const sig of SIGNALS) {
+    const fn = (): void => handle(sig);
+    listeners.set(sig, fn);
+    host.once(sig, fn);
+  }
+  return removeAll;
+}

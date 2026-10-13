@@ -7,6 +7,7 @@ import { localIO } from './io.js';
 import { attachPty } from './pty.js';
 import { Bus } from './bus.js';
 import { FleetWatcher } from './watch.js';
+import { installShutdownSeal } from './shutdownseal.js';
 import { connectFleet, type FleetClient } from './remote/client.js';
 import { makeRefreshCaps } from './refreshcaps.js';
 import { PushService } from './push.js';
@@ -241,3 +242,7 @@ console.log(`ccrc-server on ${cfg.host}:${cfg.port} (fleet=${cfg.fleetMode})`);
 // inventory's server row carries the role, never where it came from.
 const roleNote = derivedRoleNote(cfg);
 if (roleNote !== null) console.warn(roleNote);
+
+// A clean shutdown seals the dead-coordinator breaker's typed state (D-4916): the one signal handler this process has. It
+// stops the watcher, seals within one bound, says a refusal in one warn line and re-raises the signal (`shutdownseal.ts`).
+installShutdownSeal(watcher);
