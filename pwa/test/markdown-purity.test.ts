@@ -1,7 +1,11 @@
-// The parse worker's import closure stays pure (native Docs reader, W4 Task 3; design 2026-10-01 section 4.10 and
-// the W4 plan's ring rule): starting from the worker-side roots, every file the closure reaches imports only other
-// closure files, `unified`, `remark-parse`, `remark-gfm`, `remark-rehype` and the types-only `hast` and `mdast`.
-// So no React, no react-dom, no highlight.js, no `../session/*`, no `./api` and no stylesheet can reach the worker.
+// The parse worker's first-party import closure stays pure (native Docs reader, W4 Task 3; design 2026-10-01 section
+// 4.10 and the W4 plan's ring rule): starting from the worker-side roots, every first-party file the closure reaches
+// imports only other closure files, `unified`, `remark-parse`, `remark-gfm`, `remark-rehype` and the types-only `hast`
+// and `mdast`. So no first-party import brings React, react-dom, highlight.js, `../session/*`, `./api` or a stylesheet
+// to the worker. The walk stops at those package names: what the allowed packages import in turn, and which entry
+// of theirs the bundler picks by export condition, are not read here. That is how the DOM reached the built worker
+// once (`decode-named-character-reference`'s `browser` entry, review 408's F1) while this scan stayed green; the
+// guarantee for the built artefact is `markdown-worker-built.test.ts`, which loads the emitted chunk with no DOM.
 // Specifiers are read from TypeScript's full parser (`ts.createSourceFile` and a walk of its tree), not by a regex and
 // not by `ts.preProcessFile`, whose scanner misses `export * as ns from` and loses every import after a regex literal
 // that holds a backtick. The walk takes every `import` and `export ... from` (`import type` included), `import x =
@@ -10,10 +14,10 @@
 // file, line and column. `hast` and `mdast` have no runtime module (their only package is `@types/*`), so naming
 // them can only ever be a type import. ROOTS end at `markdownWorker.ts`, the entry.
 //
-// The scan is not exhaustive. It reads module specifiers only: a DOM global used without an import (`window`,
-// `document`), `eval`, `new Function`, `importScripts`, a `require` reached through an alias, a worker or asset URL
-// built with `new URL(..., import.meta.url)` and a file the closure does not resolve are not seen here, and the
-// worker, which has no DOM, is where such a use would fail.
+// The scan is not exhaustive. It reads first-party module specifiers only: a DOM global used without an import
+// (`window`, `document`), `eval`, `new Function`, `importScripts`, a `require` reached through an alias, a worker or
+// asset URL built with `new URL(..., import.meta.url)` and a file the closure does not resolve are not seen here, and
+// the worker, which has no DOM, is where such a use would fail.
 //
 // The five direct dependencies the closure rests on are pinned exactly, in `package.json` and in the lock's root.
 import { existsSync, readFileSync } from 'node:fs';

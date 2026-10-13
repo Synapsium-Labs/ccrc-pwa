@@ -3,6 +3,30 @@ import { swDenylist } from './src/lib/sw-denylist.js';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
+import type { Plugin } from 'vite';
+
+// The worker bundle resolves `decode-named-character-reference` (reached through
+// remark-gfm and micromark) to its plain `index.js`, never its `browser` entry,
+// `index.dom.js`, which decodes through `document.createElement` at module load.
+// A worker has no `document`, so that entry throws before the worker can answer,
+// and every parse sent to it ends `worker-failed` (review 408, F1). Vite 8 has no
+// worker-scoped `resolve.conditions` (its worker config takes `format`, `plugins`
+// and `rolldownOptions`, and a worker plugin's `config` hook is overridden by the
+// main resolved config), so this plugin, given only to `worker.plugins`, maps the
+// one package; the main-thread bundle keeps its `browser` entry. The built chunk
+// is loaded with no `document` by test/markdown-worker-built.test.ts.
+function workerSafeEntries(): Plugin {
+  return {
+    name: 'ccrc-worker-safe-entries',
+    enforce: 'pre',
+    async resolveId(source, importer, options) {
+      if (source !== 'decode-named-character-reference') return null;
+      const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
+      if (!resolved?.id.endsWith('/index.dom.js')) return null;
+      return { ...resolved, id: resolved.id.slice(0, -'index.dom.js'.length) + 'index.js' };
+    },
+  };
+}
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -69,8 +93,9 @@ export default defineConfig({
     }),
   ],
   // The Markdown parse worker (src/lib/markdownWorker.ts, spawned by
-  // src/lib/markdownRunner.ts) is bundled as an ES module worker.
-  worker: { format: 'es' },
+  // src/lib/markdownRunner.ts) is bundled as an ES module worker, with its own
+  // resolution of one package (workerSafeEntries, below).
+  worker: { format: 'es', plugins: () => [workerSafeEntries()] },
   // The built shell lands inside the server package: ccrc-server statically
   // serves dist-pwa/ at / with SPA fallback (server.ts findPwaRoot).
   build: {

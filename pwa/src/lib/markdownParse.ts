@@ -9,7 +9,9 @@
 //   5. any exception is `threw`, carrying the error's name only.
 // Steps 3 and 4 are explicit-stack walks: a tree that reached them is not yet known to be shallow.
 //
-// The worker's import closure: no React, no DOM, no highlight.js, no stylesheet (`markdown-purity.test.ts`).
+// The worker's first-party imports name no React, no highlight.js and no stylesheet, up to the allowed package names
+// (`markdown-purity.test.ts`); that the BUILT worker loads with no DOM is `markdown-worker-built.test.ts`'s pin, since
+// a package's bundler-chosen entry is beyond the source scan.
 import type { Root as HastRoot } from 'hast';
 import { unified, type PluggableList } from 'unified';
 import remarkParse from 'remark-parse';

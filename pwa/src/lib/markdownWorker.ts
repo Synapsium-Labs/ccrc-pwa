@@ -4,8 +4,9 @@
 // `answerMarkdownJob` (`markdownParse.ts`), whose answer is posted back to the runner. Messages are received by
 // assigning `onmessage`, never by adding a listener (the W4 plan's refinement (w)).
 //
-// Its import closure is the parse's own: no React, no DOM, no highlight.js (`markdown-purity.test.ts`). The PWA's
-// tsconfig has no WebWorker lib (it conflicts with DOM), so the worker global is typed here by what is used of it.
+// Its first-party import closure is the parse's own (`markdown-purity.test.ts`), and the built chunk loads with no
+// DOM (`markdown-worker-built.test.ts`, with `vite.config.ts`'s worker-only resolution). The PWA's tsconfig has no
+// WebWorker lib (it conflicts with DOM), so the worker global is typed here by what is used of it.
 import { answerMarkdownJob, type MarkdownReply } from './markdownParse';
 
 const worker = self as unknown as {

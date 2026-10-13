@@ -450,9 +450,9 @@ describe('source pins', () => {
     expect(read('markdownRunner.ts').split(literal)).toHaveLength(2);
   });
 
-  it("vite.config.ts bundles the worker as an ES module: worker: { format: 'es' }", () => {
+  it("vite.config.ts bundles the worker as an ES module: worker: { format: 'es', plugins: ... }", () => {
     const config = readFileSync(path.join(import.meta.dirname, '..', 'vite.config.ts'), 'utf8');
-    expect(config).toMatch(/^ {2}worker: \{ format: 'es' \},$/m);
+    expect(config).toMatch(/^ {2}worker: \{ format: 'es', plugins: \(\) => \[workerSafeEntries\(\)\] \},$/m);
   });
 
   it('the two worker files receive by assigning onmessage and send with postMessage(', () => {
