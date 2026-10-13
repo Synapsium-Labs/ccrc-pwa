@@ -1453,6 +1453,16 @@ describe('the breaker\'s typed state: dirty before any anchor change, clean only
   it('P1: a DIRTY MARK that fails on the pass that doubts A keeps its anchor delete PENDING — the hour still restarts, and A is not ended at 60', async () => {
     await hourOfA((f, minute) => (minute === 50 ? failSql(f, /^INSERT INTO dead_coordinator_breaker_state/) : null));
   }, HEAVY);
+  it('P1.throws (review 411, F1; row A15): a commit that THROWS on the pass that doubts A keeps its anchor delete PENDING too — the hour still restarts, and A is not ended at 60', async () => {
+    // The thrown-statement path (R2) folds into the commit-failed path: the dirty mark LANDED, the commit method itself throws,
+    // and the delete the pass staged must stay pending. Dropped there, the next pass continues A's durable anchor from 0
+    // and ends it an hour early.
+    await hourOfA((f, minute) => {
+      if (minute !== 50) return null;
+      const spy = vi.spyOn(f.coord, 'commitDeadCoordinatorBreakerState').mockImplementation(() => { throw new Error('injected: commit threw'); });
+      return () => spy.mockRestore();
+    });
+  }, HEAVY);
   it('P3: a COMMIT that fails on that pass, then a restart: the conservative seed continues NO durable anchor, so the hour restarts at its pass', async () => {
     await hourOfA((f, minute) => (minute === 50 ? failSql(f, /^UPDATE dead_coordinator_breaker_state/) : null), 50);
   }, HEAVY);
@@ -1933,12 +1943,62 @@ describe('the seal: a clean shutdown is trusted, an unclean one is not (D-4916)'
     expect(clean.f.attention().filter(([k]) => k === 'breaker'), 'A and B, both unreleased, are held, flagged').toEqual([['breaker', [A, B]]]);
   });
 
+  it('an UNSEALED clean row\'s snapshot is kept by the conservative seed (review 411, F2; row A16): every member, instant and flag it carries survives, beside the unreleased claimants it adds flagged', async () => {
+    const f = await fixture({ breakerState: 'clean' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const C = 'demo-coord-c'; const Y = 'demo-coord-y';
+    f.plant(A); f.plant(B); f.plant(C); f.live.add(C);
+    f.working(A); f.working(B); f.working(C);
+    const t1 = T0 - 120 * 60_000; const t2 = T0 - 100 * 60_000;
+    f.coord.db.prepare('UPDATE dead_coordinator_breaker_state SET generation = 7, held = ?, writtenAt = 1 WHERE id = 1')
+      .run(`dead-coordinator-breaker-held:${A}@${t1}+${t2},${C}@${t2},${Y}@${t2}*`);   // no run_events record: the row is the only carrier
+    await f.pass();
+    expect(stateOf(f), 'clean, with the exact replacement: the row\'s instants kept, its anchor added, flagged').toEqual({ kind: 'clean', generation: 9, writtenAt: T0, held: [
+      { id: A, firstDeadAt: t1, instants: [t1, t2, T0], fallback: true },
+      { id: B, firstDeadAt: T0, fallback: true },
+    ] });                                                                            // C alive: released; Y left the population
+    expect(warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('not sealed (generation 7')), 'one warn line').toHaveLength(1);
+  });
+  it('the seed\'s warn line says what it held (review 411, F2; row c15): two unreleased claimants hold every one of them, one alone holds none', async () => {
+    const run = async (two: boolean) => {
+      const f = await fixture({ breakerState: 'clean' });
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      f.plant(A); f.working(A);
+      if (two) { f.plant(B); f.working(B); }
+      await f.pass();
+      const line = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('not sealed'));
+      vi.restoreAllMocks();
+      return line;
+    };
+    const both = await run(true);
+    expect(both).toHaveLength(1);
+    expect(both[0]).toContain('it holds every coordinator this pass did not see released, flagged');
+    expect(both[0]).not.toContain('fewer than two');
+    const alone = await run(false);
+    expect(alone).toHaveLength(1);
+    expect(alone[0]).toContain('fewer than two coordinators stood unreleased, so no cluster formed and it holds none');
+    expect(alone[0]).not.toContain('it holds every coordinator');
+  });
+
   // ── the eager unseal ───────────────────────────────────────────────────────────────────────────────────────────────
   it('EAGER UNSEAL: the first pass of a sealed start writes `clean` back, same snapshot, before anything else — in a quiet world too', async () => {
     const f = await fixture();
     expect(stateOf(f)).toMatchObject({ kind: 'sealed', generation: 1 });
     await f.pass();
     expect(stateOf(f), 'unsealed: the same (empty) snapshot, the generation moved on').toEqual({ kind: 'clean', generation: 2, held: [], writtenAt: T0 });
+  });
+  it('a FAILED unseal re-reads the sealed row\'s generation (review 411, F2; row A1): another writer moved it and left it sealed, so the retry finds the new generation and the unseal lands', async () => {
+    const f = await fixture();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const restore = failSql(f, /^UPDATE dead_coordinator_breaker_state SET state = 'clean'/);
+    await f.pass();                                                  // the unseal fails at generation 1
+    restore();
+    expect(stateOf(f)).toMatchObject({ kind: 'sealed', generation: 1 });
+    f.coord.db.exec('UPDATE dead_coordinator_breaker_state SET generation = 5 WHERE id = 1');   // another writer, row still sealed
+    f.next(); await f.pass();                                        // the unseal at generation 1 finds 5: refused, and re-read
+    expect(stateOf(f), 'still sealed: the stale generation was refused').toMatchObject({ kind: 'sealed', generation: 5 });
+    f.next(); await f.pass();
+    expect(stateOf(f), 'the retry uses the generation it re-read and lands').toMatchObject({ kind: 'clean', generation: 6 });
   });
   it('...and NOT deferred to the first change: a first pass whose dirty mark FAILS has still unsealed, so a crash then is not trusted', async () => {
     const f = await fixture();
