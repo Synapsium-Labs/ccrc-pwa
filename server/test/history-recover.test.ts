@@ -2039,3 +2039,35 @@ describe('§6.2 "The belt": a generation that opens re-redacts every node\'s sto
     expect(rrMatches(box, 'nodes_fts', `"ab${v}cd"`), 'nor a nodes_fts term').toBe(0);
   }, 2 * HEAVY);
 });
+
+// ── W1-B2 Task 34: DM48's rebuild clause, with Tasks 27 and 28's rr helpers (spec §6.1, §9.14; ruled Q16) ──────
+describe('DM48: a fork epoch comes back from the journal (W1-B2 Task 34)', () => {
+  it('a startup, an in-pane /branch fork confirmed by the observation, and a same-id fork are rebuilt equal by O35\'s columns, with the registry purged', async () => {
+    const box = makeHistoryBox('ccrc-hist-dm48r-', { role: 'fleet' });
+    expect(runShim(box).code).toBe(0);                  // binds the store; its scan finds an empty registry, so none runs below
+    const FID = 'claude-a-fork';
+    const P = 'a8a8a8a8-0000-4000-8000-000000000481';       // the parent
+    const F = 'a8a8a8a8-0000-4000-8000-000000000482';       // the fork
+    const G = '0189abcd-1234-4678-9abc-000000000480';
+    plantSession(box, FID, { uuid: P, generation: G, project: 'demo' });
+    spoolLine(box, FID, { v: 1, ev: 'SessionStart', id: FID, sid: P, src: 'startup', reg: P, gen: G });
+    rrTickUntil(box, () => rrEpochs(box, FID).length === 1);
+    spoolLine(box, FID, { v: 1, ev: 'SessionStart', id: FID, sid: F, src: 'fork', reg: P, gen: G });
+    plantSession(box, FID, { uuid: F });                // _sync_uuid moves .uuid before the rename
+    rrTickUntil(box, () => rrEpochs(box, FID).length === 2);
+    spoolLine(box, FID, { v: 1, ev: 'SessionStart', id: FID, sid: F, src: 'fork', reg: F, gen: G });
+    rrTickUntil(box, () => countOf(box, 'spool_receipts') === 3);
+    expect(rrEpochs(box, FID).map((e) => [e.seq, e.cc_session_uuid, e.cause])).toEqual([[1, P, 'startup'], [2, F, 'fork']]);
+    const a = rrState(box);
+    fs.rmSync(box.reg, { recursive: true, force: true });
+    fs.mkdirSync(box.reg);
+    rrLose(box, { binding: false, journal: false });
+    const r = await cliOnPty(box, ['doctor', '--rebuild']);
+    expect(r.code, r.out).toBe(0);
+    rrTickUntil(box, () => rrRecovered(box), 10);
+    const b = rrState(box);
+    expect(b.sessions).toEqual(a.sessions);
+    expect(b.epochs, 'the fork epoch, back by O35\'s columns').toEqual(a.epochs);
+    expect(b.receipts).toEqual(a.receipts);
+  }, 2 * HEAVY);
+});

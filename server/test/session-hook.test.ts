@@ -10196,8 +10196,41 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
   };
   const PARTIAL = '{"v":1,"ev":"Sto';
   /** FR3c/FR3d (review 351 F1): a subscript that is not an integer literal, `@` or `*`, on a `name[…]` or as a
-   *  compound-assignment key. Both S1 pins read it: the string case on the block's text, forkForms on its whole source. */
+   *  compound-assignment key. Both S1 pins read it: the string pin's subscript arm on the block's text, forkForms on its
+   *  whole source. Its key arm reads a key only to the key's first `]`, so a key that holds brackets of its own
+   *  (`x=([y[0]]=1)`) is not read: it is on the stopping line in forkForms' header (review 353 F1). */
   const SUBSCRIPT_FORK = /(?<![\w$])[A-Za-z_][A-Za-z0-9_]*\[(?!-?\d+\]|[@*]\])|[(\s]\[(?!-?\d+\]|[@*]\])[^\]\n]*\]\+?=/;
+  /** The commands the S1 string pin refuses by name: each runs a program, so it forks on the hot path. */
+  const S1_EXTERNAL = /(?<![\w-])(jq|cat|date|mkdir|mv|cp|ln|rm|touch|tee|awk|sed|grep|head|tail|tr|cut|stat|readlink|realpath|dirname|basename|env|timeout|flock|node|python3?|tmux|command|eval|exec|source)(?![\w-])/;
+  /** The spool block's code as both S1 pins read it: every `#`-led line dropped. */
+  const s1Code = (block: string): string => block.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  /** FR4 (review 353 F2): the S1 string pin, one labelled arm per form it refuses. Each arm answers the first text it
+   *  refuses, or null. The string case runs every arm on the block; STRING_ROWS (below INERT) plants a ROWS form for each
+   *  arm and expects that arm to name it, so an arm deleted here reds its planted rows.
+   *  FR3a (review 351 F1): arithmetic evaluates a variable's text, so `a[$(…)]` in a name forks there. An operand of
+   *  `(( ))` is an integer literal or `${#name}`; a substring offset or length is an integer literal; a subscript is an
+   *  integer literal, `@` or `*`, and so is a compound-assignment key that holds no bracket of its own; no `-eq` family,
+   *  no `$[`, no `let` and no integer attribute. The S1 stopping line (the forms neither pin chases) and its known
+   *  fail-closed costs are in forkForms' header. */
+  const S1_STRING_ARMS: ReadonlyArray<readonly [string, (code: string) => string | null]> = [
+    ['a command substitution in the spool block', (code) => (code.includes('$(') ? '$(' : null)],
+    ['a backtick in the spool block', (code) => (code.includes('`') ? '`' : null)],
+    ['a sha program in the spool block', (code) => (code.includes('sha') ? 'sha' : null)],
+    // FR2a (review 344 F1): no `@` inside a `${…}`. `${X@P}` runs prompt expansion, and so command substitution: a fork.
+    ['a ${…@…} transformation in the spool block (@P forks)', (code) => code.match(/\$\{[^}]*@/)?.[0] ?? null],
+    ['a (( )) operand that is not an integer literal or ${#name} (review 351 F1)', (code) => [...code.matchAll(/\(\(([\s\S]*?)\)\)/g)]
+      .map((x) => x[1]!)
+      .find((x) => /[^\s0-9+\-*/%<>=!&|^~?:,()]/.test(x.replace(/\$\{#[A-Za-z_][A-Za-z0-9_]*\}/g, '0'))) ?? null],
+    ['an arithmetic test operator (review 351 F1)', (code) => code.match(/(?<![\w-])-(?:eq|ne|lt|le|gt|ge)(?![\w-])/)?.[0] ?? null],
+    ['a ${name:offset:length} whose offset or length is not a literal (review 351 F1)',
+      (code) => code.match(/\$\{[!#]?(?:[A-Za-z_]\w*|\d+|[@*#?$!-])(?:\[[^\]\n]*\])?:(?![-=?+])(?!\s*-?\d+(?::\s*-?\d+)?\})/)?.[0] ?? null],
+    ['a subscript that is not a literal, @ or *: on a name[…] in a ${…}, an assignment, or a name read, printf -v or [[ -v ]] takes (the whole word quoted or not), or as a compound-assignment key (review 351 F1)',
+      (code) => code.match(SUBSCRIPT_FORK)?.[0] ?? null],
+    ['a $[ ] arithmetic expansion in the spool block (review 351 F1)', (code) => (code.includes('$[') ? '$[' : null)],
+    ['let and an integer attribute evaluate arithmetic (review 351 F1)',
+      (code) => code.match(/(?<![\w-])(?:let|declare|typeset|local|readonly)(?![\w-])/)?.[0] ?? null],
+    ['an external command in the spool block forks on the hot path', (code) => code.match(S1_EXTERNAL)?.[0] ?? null],
+  ];
 
   it('S1: the block is builtins only — no $(, backtick, jq, sha, cat or other external — and sits below the turn marker, above the StopFailure exit', () => {
     const src = fs.readFileSync(HOOK, 'utf8');
@@ -10209,34 +10242,10 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     expect(end).toBeGreaterThan(start);
     expect(start, 'the block must sit below the turn marker').toBeGreaterThan(src.indexOf('_hook_turn_mark "$tmkind" || true; fi'));
     expect(end, 'the block must sit above the StopFailure exit').toBeLessThan(src.indexOf('[[ -n "$stopfail$sessend" ]] && exit 0'));
-    const code = src.slice(start, end).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    const code = s1Code(src.slice(start, end));
     expect(code, 'the slice holds no write: the markers moved off the block').toContain(`printf '\\n%s\\n' "$_hs"`);
-    expect(code).not.toContain('$(');
-    expect(code).not.toContain('`');
-    expect(code).not.toContain('sha');
-    // FR2a (review 344 F1): no `@` inside a `${…}`. `${X@P}` runs prompt expansion, and so command substitution: a fork.
-    expect(code.match(/\$\{[^}]*@/)?.[0] ?? null, 'a ${…@…} transformation in the spool block (@P forks)').toBeNull();
-    // FR3a (review 351 F1): arithmetic evaluates a variable's text, so `a[$(…)]` in a name forks there. An operand of `(( ))` is an
-    // integer literal or `${#name}`; a substring offset or length, a subscript, or a compound-assignment key is an integer literal (a
-    // subscript may also be `@` or `*`); any `$[` is named. The S1 stopping line (the forms neither pin chases) is in forkForms'
-    // header.
-    const arith = [...code.matchAll(/\(\(([\s\S]*?)\)\)/g)]
-      .map((x) => x[1]!)
-      .filter((x) => /[^\s0-9+\-*/%<>=!&|^~?:,()]/.test(x.replace(/\$\{#[A-Za-z_][A-Za-z0-9_]*\}/g, '0')));
-    expect(arith, 'a (( )) operand that is not an integer literal or ${#name} (review 351 F1)').toEqual([]);
-    expect(code.match(/(?<![\w-])-(?:eq|ne|lt|le|gt|ge)(?![\w-])/)?.[0] ?? null, 'an arithmetic test operator (review 351 F1)').toBeNull();
-    expect(
-      code.match(/\$\{[!#]?(?:[A-Za-z_]\w*|\d+|[@*#?$!-])(?:\[[^\]\n]*\])?:(?![-=?+])(?!\s*-?\d+(?::\s*-?\d+)?\})/)?.[0] ?? null,
-      'a ${name:offset:length} whose offset or length is not a literal (review 351 F1)',
-    ).toBeNull();
-    expect(
-      code.match(SUBSCRIPT_FORK)?.[0] ?? null,
-      'a subscript that is not a literal, @ or *: on a name[…] in a ${…}, an assignment, or a name read, printf -v or [[ -v ]] takes (the whole word quoted or not), or as a compound-assignment key (review 351 F1)',
-    ).toBeNull();
-    expect(code, 'a $[ ] arithmetic expansion in the spool block (review 351 F1)').not.toContain('$[');
-    expect(code.match(/(?<![\w-])(?:let|declare|typeset|local|readonly)(?![\w-])/)?.[0] ?? null, 'let and an integer attribute evaluate arithmetic (review 351 F1)').toBeNull();
-    const external = /(?<![\w-])(jq|cat|date|mkdir|mv|cp|ln|rm|touch|tee|awk|sed|grep|head|tail|tr|cut|stat|readlink|realpath|dirname|basename|env|timeout|flock|node|python3?|tmux|command|eval|exec|source)(?![\w-])/;
-    expect(code.match(external)?.[0] ?? null, 'an external command in the spool block forks on the hot path').toBeNull();
+    // FR4 (review 353 F2): every arm of the string pin, each under its own label. STRING_ROWS plants a form for each arm.
+    for (const [arm, check] of S1_STRING_ARMS) expect(check(code), arm).toBeNull();
   });
 
   it('S2: a subagent payload (agent_id) writes no line', () => {
@@ -10325,12 +10334,20 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     expect(l!.rec).not.toHaveProperty('trig');
   });
 
-  it('S11: a SessionStart whose source is x"y, fork, or absent writes no line at all', () => {
+  it('S11: a SessionStart whose source is x"y or absent writes no line at all; fork (ruled Q16, W1-B2) writes one carrying src, and reg when .uuid holds a uuid', async () => {
     plantSpool();
     run({ hook_event_name: 'SessionStart', source: 'x"y', session_id: SID }, SCRUB);
-    run({ hook_event_name: 'SessionStart', source: 'fork', session_id: SID }, SCRUB);
     run({ hook_event_name: 'SessionStart', session_id: SID }, SCRUB);
     expect(fs.existsSync(spoolFile())).toBe(false);
+    const uuidFile = path.join(home, '.cc-sessions', `${ID}.uuid`);
+    fs.writeFileSync(uuidFile, `${SID}\n`);
+    run({ hook_event_name: 'SessionStart', source: 'fork', session_id: SID }, SCRUB);
+    fs.rmSync(uuidFile);
+    run({ hook_event_name: 'SessionStart', source: 'fork', session_id: SID }, SCRUB);
+    const [a, b] = await parsed();
+    expect(a!.rec).toMatchObject({ ev: 'SessionStart', src: 'fork', sid: SID, reg: SID });
+    expect(b!.rec).toMatchObject({ ev: 'SessionStart', src: 'fork', sid: SID });
+    expect(b!.rec).not.toHaveProperty('reg');
   });
 
   it('S11: a session_id that is not a lowercase UUID drops sid from a Stop line, never the line; a SessionStart, whose grammar requires sid, writes no line at all', async () => {
@@ -10363,13 +10380,12 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     expect(readState().state).toBe('done');
   });
 
-  it('S14: SessionStart(compact) and (fork) write no line; startup, resume and clear write one each, each carrying src', async () => {
+  it('S14: SessionStart(compact) writes no line; startup, resume, clear and fork (ruled Q16, W1-B2) write one each, each carrying src', async () => {
     plantSpool();
     run({ hook_event_name: 'SessionStart', source: 'compact', session_id: SID }, SCRUB);
-    run({ hook_event_name: 'SessionStart', source: 'fork', session_id: SID }, SCRUB);
     expect(fs.existsSync(spoolFile())).toBe(false);
-    for (const source of ['startup', 'resume', 'clear']) run({ hook_event_name: 'SessionStart', source, session_id: SID }, SCRUB);
-    expect((await parsed()).map((l) => [l.ordinal, l.rec?.['src']])).toEqual([[1, 'startup'], [2, 'resume'], [3, 'clear']]);
+    for (const source of ['startup', 'resume', 'clear', 'fork']) run({ hook_event_name: 'SessionStart', source, session_id: SID }, SCRUB);
+    expect((await parsed()).map((l) => [l.ordinal, l.rec?.['src']])).toEqual([[1, 'startup'], [2, 'resume'], [3, 'clear'], [4, 'fork']]);
   });
 
   it('S17: the line is fenced — after a torn partial the next line stands alone, at the ordinal an unfenced file gives it', async () => {
@@ -10522,16 +10538,23 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
    *  `$(( ))` that is not an integer literal or `${#name}`; any `$[ ]`; a `${name:offset:length}` whose offset or length
    *  is not an integer literal; a subscript that is not an integer literal, `@` or `*`, on a `name[…]` anywhere (a
    *  `${…}`, an assignment, or a name `read`, `printf -v` or `[[ -v ]]` takes, the whole word quoted or not) or as a key
-   *  in a compound assignment (`x=([v]=1)`); and the `-eq -ne -lt -le -gt -ge` operators of `[[ ]]`. An indexed array's
-   *  subscript is arithmetic, so a variable holding `a[$(…)]` forks there; an associative one is not, but the scan
-   *  cannot tell them apart and names both.
+   *  that holds no bracket of its own in a compound assignment (`x=([v]=1)`); and the `-eq -ne -lt -le -gt -ge`
+   *  operators of `[[ ]]`. An indexed array's subscript is arithmetic, so a variable holding `a[$(…)]` forks there; an
+   *  associative one is not, but the scan cannot tell them apart and names both.
    *  Not chased (the S1 stopping line, review 351 F1), each a deliberate spelling the spool block does not use: ${!x}
    *  indirection; [[ -v $v ]], and printf -v "$v" or read -r "$v", with a dynamic name, which forks when the name holds
    *  a[$(…)]; a dynamic name with a variable subscript there ($x[v], ${x}[v]), which forks through its subscript
    *  whatever the name holds; a name split from its `[` by a quote, a backslash or a line continuation (x"[v]", x'[v]',
    *  x\[v\], x\<newline>[v]), which bash joins before the subscript is read; an assignment, printf -v or read into
-   *  bash's own integer variables (RANDOM, SRANDOM, OPTIND, HISTCMD); and text on a `#`-led line inside a quoted string
-   *  that spans lines, which the comment filter drops before either pin reads it.
+   *  bash's own integer variables (RANDOM, SRANDOM, OPTIND, HISTCMD); text on a `#`-led line inside a quoted string
+   *  that spans lines, which the comment filter drops before either pin reads it; and (review 353 F1) a
+   *  compound-assignment key that holds brackets of its own (x=([y[0]]=1), x=([${y[0]}]=1), x=(["${y[0]}"]=1)), which
+   *  the key arm reads only to its first `]` and which forks when y[0] holds a[$(…)]. forkForms names those three only
+   *  by accident, as a subshell (step 4 reads the `(` of any `name=(`), and the string pin not at all.
+   *  Known fail-closed costs of the line (review 353 F5): both pins name some spellings that fork nothing, under a label
+   *  that misleads. A bracket class after a letter, in `[[ … =~ … ]]` or in a case pattern (^cc[a-z]+$, a[bc])), is named
+   *  "subscript"; an empty substring offset (${x::3}) is named "substring offset"; and, by ruling (4043), the -eq family
+   *  is named "arithmetic test operator" even on ${#name} ([[ ${#x} -le 224 ]]: write (( ${#x} <= 224 )) instead).
    *  [] = builtins only. Conservative by construction, outside the stopping line above: what it cannot classify is
    *  reported, never passed. */
   const forkForms = (code: string, allowed: ReadonlySet<string>): string[] => {
@@ -10574,10 +10597,11 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     const src = code.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n').replace(/\\\n/g, ' ');
     // FR3c (review 351 F1): a subscript that is not an integer literal, `@` or `*` — on a `name[…]` anywhere (a `${…}`, an
     // assignment, or a name `read`, `printf -v` or `[[ -v ]]` takes, the whole word quoted or not) or as a compound-assignment key
-    // (`x=([v]=1)`, FR3d) — is named on the whole source, before step 1 masks quoted text: an indexed array evaluates it as
-    // arithmetic (an associative one does not, and is named too). The `$` in the lookbehind skips an unbraced `$x[v]`, which in an
-    // expansion or an assignment is `$x` and literal text; as a name `[[ -v ]]`, `read` or `printf -v` takes, it is a dynamic name
-    // with a subscript, which is on the stopping line, as is a name split from its `[` (forkForms' header).
+    // that holds no bracket of its own (`x=([v]=1)`, FR3d; one that does is on the stopping line, review 353 F1) — is named on
+    // the whole source, before step 1 masks quoted text: an indexed array evaluates it as arithmetic (an associative one does not,
+    // and is named too). The `$` in the lookbehind skips an unbraced `$x[v]`, which in an expansion or an assignment is `$x` and
+    // literal text; as a name `[[ -v ]]`, `read` or `printf -v` takes, it is a dynamic name with a subscript, which is on the
+    // stopping line, as is a name split from its `[` (forkForms' header).
     if (SUBSCRIPT_FORK.test(src)) found.push('subscript');
     // 1. Mask quoted text and ${...}, recording any substitution inside them ("$(…)" still forks).
     let out = '';
@@ -10733,6 +10757,9 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     // Fix-round-3 whole-round review (#1/#5): a compound assignment's key is a subscript, and bash evaluates it as arithmetic.
     ['a compound array assignment with a variable key', T, "_hs+='}'; _hs_x=([_hs_g]=1)", 'subscript'],
     ['an appended compound assignment with a spaced variable key', T, "_hs+='}'; _hs_x+=( [_hs_g]=1 )", 'subscript'],
+    // FR4 (review 353 F2): a form for the string pin's sha arm and one for its integer-attribute arm, which STRING_ROWS plants.
+    ['a sha program', T, "_hs+='}'; sha256sum x", 'command sha256sum'],
+    ['an integer attribute', T, "_hs+='}'; local -i _hs_x=_hs_g", 'command local'],
   ];
   /** Text bash never expands, which the scanner must not name: a substitution inside plain single quotes. */
   const INERT: Array<[string, string, string]> = [
@@ -10786,6 +10813,78 @@ describe('history spool: the hook enqueues one fenced, text-free line (spec §5.
     const allowed = new Set<string>([...SPOOL_BUILTINS, ...SPOOL_FUNCS]);
     expect(block).toContain(anchor);
     expect(forkForms(block.replace(anchor, replacement), allowed)).toEqual([]);
+  });
+
+  // ── review 353 F2: the S1 string pin over ROWS — each of its arms has a planted form it must name ──
+  /** FR4: a ROWS label and the string-pin arm that must name that form planted in the block. A ROWS form missing here is
+   *  one no string arm reads (a subshell, a pipeline, a background job, a coproc, a here-string, a process substitution,
+   *  a command word its external list does not hold), or one it reads only by accident: forkForms alone names those. */
+  const ARITH = 'a (( )) operand that is not an integer literal or ${#name} (review 351 F1)';
+  const SUBSTRING = 'a ${name:offset:length} whose offset or length is not a literal (review 351 F1)';
+  const SUBSCRIPT = 'a subscript that is not a literal, @ or *: on a name[…] in a ${…}, an assignment, or a name read, printf -v or [[ -v ]] takes (the whole word quoted or not), or as a compound-assignment key (review 351 F1)';
+  const STRING_ROWS: Array<[string, string]> = [
+    ['a command substitution', 'a command substitution in the spool block'],
+    ['a substitution inside ${}', 'a command substitution in the spool block'],
+    ['a substitution in single quotes inside ${} inside double quotes', 'a command substitution in the spool block'],
+    ['a subshell inside $( (', 'a command substitution in the spool block'],
+    ['a substitution spelled $((', 'a command substitution in the spool block'],
+    ['a substitution spelled $(( inside double quotes', 'a command substitution in the spool block'],
+    ['a backtick', 'a backtick in the spool block'],
+    ['a backtick in single quotes inside ${} inside double quotes', 'a backtick in the spool block'],
+    ['a sha program', 'a sha program in the spool block'],
+    ['an @P transformation inside double quotes', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['an @P transformation outside double quotes', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['an @P transformation nested in a ${} default word', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['an @P transformation in single quotes inside ${} inside double quotes', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['an @P transformation of a subscripted name', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['an @Q transformation', 'a ${…@…} transformation in the spool block (@P forks)'],
+    ['bare-name arithmetic', ARITH],
+    ['a bare name beside ${#name} in the bound', ARITH],
+    ['a ++ on a name (the old INERT row: it forks when the name holds a subscript)', ARITH],
+    ['a $name operand in $(( ))', ARITH],
+    ['a bare name in $(( )) inside double quotes', ARITH],
+    ['a bare name in $(( )) inside [[ ]]', ARITH],
+    ['an -eq test', 'an arithmetic test operator (review 351 F1)'],
+    ['a -gt test on a quoted operand', 'an arithmetic test operator (review 351 F1)'],
+    ['a variable substring offset', SUBSTRING],
+    ['a variable substring offset inside double quotes', SUBSTRING],
+    ['a variable substring length', SUBSTRING],
+    ['a $ special parameter with a variable substring offset', SUBSTRING],
+    ['a ? special parameter with a variable substring offset', SUBSTRING],
+    ['a - special parameter with a variable substring offset', SUBSTRING],
+    ['a variable subscript', SUBSCRIPT],
+    ['a $name subscript', SUBSCRIPT],
+    ['an indexed assignment with a variable subscript', SUBSCRIPT],
+    ['read into a variable subscript', SUBSCRIPT],
+    ['printf -v into a variable subscript', SUBSCRIPT],
+    ['printf -v into a single-quoted variable subscript', SUBSCRIPT],
+    ['a [[ -v ]] test of a variable subscript', SUBSCRIPT],
+    ['a [[ -v ]] test of a double-quoted variable subscript', SUBSCRIPT],
+    ['a compound array assignment with a variable key', SUBSCRIPT],
+    ['an appended compound assignment with a spaced variable key', SUBSCRIPT],
+    ['a $[ ] arithmetic expansion', 'a $[ ] arithmetic expansion in the spool block (review 351 F1)'],
+    ['a $[ ] arithmetic expansion inside double quotes', 'a $[ ] arithmetic expansion in the spool block (review 351 F1)'],
+    ['a let', 'let and an integer attribute evaluate arithmetic (review 351 F1)'],
+    ['an integer attribute', 'let and an integer attribute evaluate arithmetic (review 351 F1)'],
+    ['an external program', 'an external command in the spool block forks on the hot path'],
+    ['a program as an if condition', 'an external command in the spool block forks on the hot path'],
+    ['a program in a case arm on the case line', 'an external command in the spool block forks on the hot path'],
+  ];
+
+  it.each(STRING_ROWS)('S1 (string, review 353 F2): %s planted in the spool block is caught by the string pin: %s', (label, arm) => {
+    const row = ROWS.find((r) => r[0] === label);
+    expect(row, `no ROWS row is labelled ${label}`).toBeDefined();
+    const [, anchor, replacement] = row!;
+    const block = spoolBlock(fs.readFileSync(HOOK, 'utf8'));
+    expect(block).toContain(anchor);
+    const code = s1Code(block.replace(anchor, replacement));
+    expect(S1_STRING_ARMS.filter(([, check]) => check(code) !== null).map(([name]) => name)).toContain(arm);
+  });
+
+  it('S1 (string, review 353 F2): every arm has a planted row, so each arm is caught by the string pin rows', () => {
+    const arms = S1_STRING_ARMS.map(([name]) => name);
+    expect(new Set(arms).size, 'two string-pin arms share a label').toBe(arms.length);
+    expect([...new Set(STRING_ROWS.map(([, arm]) => arm))].sort(), 'an arm with no planted row, or a row naming no arm').toEqual([...arms].sort());
   });
 
   it('F37: EPOCHREALTIME is read once: a clock that moves between the test and the slice writes no ts or the tested reading, never a mix', async () => {

@@ -1429,3 +1429,35 @@ v9.describe('the nodes_fts backfill and a re-key that moves nodes (W1-B2 Task 9)
     }
   });
 });
+
+// ── W1-B2 Task 34: DM48's span clause, a fresh-sid fork's leaf (spec 2026-10-05 §6.1; ruled Q16, D-4734 (history-fork-spooled)) ──
+describe('DM48: a fresh-sid fork\'s leaf starts at the parent\'s boundary its copy holds and hashes the fork\'s sid (W1-B2 Task 34; spec 6.1)', () => {
+  it('the parent compacts, an in-pane /branch copies its rows, the fork compacts again: one fork leaf, its span from the copied boundary\'s head, its id the fork\'s; the parent\'s leaf unchanged', () => {
+    const box = makeHistoryBox('ccrc-hist-dm48-span-');
+    const ID = 'claude-forkspan';
+    const UP = '0189abcd-1234-4678-9abc-0000000048a1';   // the parent
+    const UF = '0189abcd-1234-4678-9abc-0000000048a2';   // the fork
+    const pre = compactionSequence({ n: 1, trigger: 'manual', seed: 0x48a, sessionId: UP, startMs: T0 });
+    const own = compactionSequence({ n: 1, trigger: 'manual', tailRows: 0, seed: 0x48b, sessionId: UF, startMs: T0 + 600_000 });
+    plant(box, ID, UP, pre.rows);
+    settle(box);
+    expect(leavesOf(box, UP).map((l) => l.node_id), 'CONTROL: the parent\'s one leaf').toEqual([leafId(ID, UP, firstUuid(pre))]);
+    // An in-pane /branch (spec 6.1): a fresh sid whose transcript copies the parent's rows verbatim, then compacts on
+    // its own. The hook's line carries the parent's uuid as reg (it fires before _sync_uuid moves .uuid), and .uuid
+    // names the fork before the sweep observes the line, so the fork epoch confirms by the observation.
+    plantSession(box, ID, { uuid: UF });
+    plantTranscript(box, 'claude', SLUG, UF, [...pre.rows, ...own.rows]);
+    spoolLine(box, ID, { v: 1, ev: 'SessionStart', id: ID, sid: UF, src: 'fork', reg: UP, gen: GEN });
+    settle(box);
+    expect(q<{ cause: string }>(box, 'SELECT cause FROM epochs WHERE cc_session_uuid = ? AND confirmed_ms IS NOT NULL', UF).map((r) => r.cause),
+      'CONTROL: the fork line chained a confirmed fork epoch').toEqual(['fork']);
+    const leaves = leavesOf(box, UF);
+    expect(leaves.map((l) => l.boundary_uuid), 'the copied parent boundary mints no second leaf under the fork').toEqual([own.boundaryUuids[0]]);
+    expect(leaves[0]!.node_id, 'its span starts at the head of the parent\'s boundary its copy holds, and its id hashes the fork\'s sid')
+      .toBe(leafId(ID, UF, pre.headUuids[0]!));
+    expect(sourcesOf(box, leaves[0]!.node_id)).toEqual([
+      ...pre.keptUuids[0]!, ...pre.afterUuids[0]!, ...pre.liveUuids, ...own.workUuids[0]!, ...own.unkeptUuids[0]!,
+    ]);
+    expect(leavesOf(box, UP).map((l) => l.node_id), 'the parent\'s leaf is unchanged').toEqual([leafId(ID, UP, firstUuid(pre))]);
+  }, 240_000);
+});

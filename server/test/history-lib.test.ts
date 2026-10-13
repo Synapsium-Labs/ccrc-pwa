@@ -56,6 +56,7 @@ import * as t17fs from 'node:fs';
 import * as t17path from 'node:path';
 import * as t19lib from '../../ccd/history/lib.mjs';
 import * as libRebuild from '../../ccd/history/lib.mjs';
+import * as libFork from '../../ccd/history/lib.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const LIB = join(REPO, 'ccd', 'history', 'lib.mjs');
@@ -255,7 +256,7 @@ describe('the vocabularies are frozen, and each holds what the spec names', () =
   it('SEARCHABLE_PROVENANCE is a subset of PROVENANCE; SPOOL_SOURCES of EPOCH_CAUSES', () => {
     for (const p of SEARCHABLE_PROVENANCE) expect(PROVENANCE).toContain(p);
     for (const s of SPOOL_SOURCES) expect(EPOCH_CAUSES).toContain(s);
-    expect(SPOOL_SOURCES, 'fork is outside the ruled set (Q16)').not.toContain('fork');
+    expect([...SPOOL_SOURCES], 'fork joins the spooled set from W1-B2 (ruled Q16)').toEqual(['startup', 'resume', 'clear', 'fork']);
   });
 
   it('HEALTH_WORDS classes are pass, warn or fail, and the spec\'s state words are WARNs', () => {
@@ -582,6 +583,8 @@ describe('parseSpoolLine: the S5 key set and value grammar', () => {
     ['SessionStart(startup) with reg', { v: 1, ev: 'SessionStart', id: 'x', sid: U1, src: 'startup', reg: U1, gen: G1 }],
     ['SessionStart(resume) without reg', { v: 1, ev: 'SessionStart', id: 'x', sid: U1, src: 'resume' }],
     ['SessionStart(clear)', { v: 1, ev: 'SessionStart', id: 'x', sid: U2, src: 'clear', ts: 1 }],
+    ['SessionStart(fork) with reg (S11, ruled Q16)', { v: 1, ev: 'SessionStart', id: 'x', sid: U2, src: 'fork', reg: U1, gen: G1 }],
+    ['SessionStart(fork) without reg (S11, ruled Q16)', { v: 1, ev: 'SessionStart', id: 'x', sid: U2, src: 'fork' }],
     ['recall', { v: 1, ev: 'recall', id: 'x', cmd: 'grep', rc: 3, ms: 41, gen: G1, arm: 'control' }],
     ['steer with no leaf yet', { v: 1, ev: 'steer', id: 'x', sid: U1, leaf: '' }],
     ['steer with a leaf', { v: 1, ev: 'steer', id: 'x', sid: U1, leaf: `L${'a'.repeat(20)}` }],
@@ -596,7 +599,7 @@ describe('parseSpoolLine: the S5 key set and value grammar', () => {
     ['no ev', line({ v: 1, id: 'x' }), 'keys'],
     ['an unknown ev', line({ v: 1, ev: 'Fork', id: 'x' }), 'value'],
     ['SessionStart without src (S14)', line({ v: 1, ev: 'SessionStart', id: 'x', sid: U1 }), 'keys'],
-    ['SessionStart(fork) (S14, Q16)', line({ v: 1, ev: 'SessionStart', id: 'x', sid: U1, src: 'fork' }), 'value'],
+    ['SessionStart(branch), a source no build spools (S14)', line({ v: 1, ev: 'SessionStart', id: 'x', sid: U1, src: 'branch' }), 'value'],
     ['SessionStart(compact) (S14)', line({ v: 1, ev: 'SessionStart', id: 'x', sid: U1, src: 'compact' }), 'value'],
     ['reg on a clear line', line({ v: 1, ev: 'SessionStart', id: 'x', sid: U1, src: 'clear', reg: U1 }), 'keys'],
     ['an undeclared key', line({ v: 1, ev: 'Stop', id: 'x', summary: 'hi' }), 'keys'],
@@ -740,7 +743,7 @@ describe('parseJournalRecord: record, malformed, unknown, newer (O56)', () => {
     ['month 13', JSON.stringify({ v: 1, k: 'head', t: 1, store_id: U1, month: '2026-13', writer: '0a1b2c3d' })],
     ['a negative time', JSON.stringify({ v: 1, k: 'tick', t: -1, lag_ms: 1 })],
     ['v 0', JSON.stringify({ v: 0, k: 'tick', t: 1, lag_ms: 1 })],
-    ['a spool rec that fails the grammar', JSON.stringify({ v: 1, k: 'spool', t: 1, ord: 1, rec: { v: 1, ev: 'SessionStart', id: 'x', sid: U1, src: 'fork' } })],
+    ['a spool rec that fails the grammar', JSON.stringify({ v: 1, k: 'spool', t: 1, ord: 1, rec: { v: 1, ev: 'SessionStart', id: 'x', sid: U1, src: 'branch' } })],
     ['a spool rec with a bad id', JSON.stringify({ v: 1, k: 'spool', t: 1, ord: 1, rec: { v: 1, ev: 'Stop', id: '..' } })],
     ['a chained epoch whose cause is not clear', JSON.stringify({ v: 1, k: 'verdict', t: 1, event_key: KEY, kind: 'epoch-chained', ccrc_id: 'x', generation: '', cc_session_uuid: U1, cause: 'resume' })],
     ['a rekey to the empty generation', JSON.stringify({ v: 1, k: 'verdict', t: 1, event_key: 'none', kind: 'rekeyed', ccrc_id: 'x', generation: '' })],
@@ -1201,7 +1204,7 @@ describe('decideEpochLine: the drain and replay take one verdict per line (O56, 
     expect(libEpoch.decideEpochLine({ src: 'clear', sid: U2 }, obs({ uuid: uuidIs(U1) }))).toEqual({ kind: 'chain', confirmedBy: null });
   });
   it('a source outside the spool set throws rather than chains', () => {
-    expect(() => libEpoch.decideEpochLine({ src: 'fork' as 'startup', sid: U1 }, obs())).toThrow(TypeError);
+    expect(() => libEpoch.decideEpochLine({ src: 'compact' as 'fork', sid: U1 }, obs())).toThrow(TypeError);
   });
 });
 
@@ -6195,5 +6198,54 @@ describe('lib: decideIntegrity, doctor --repair\'s integrity gate (W1-B2 Task 23
     expect(d([idx, page]).verdict, 'a mix is the store\'s').toBe('store');
     expect(d(['malformed inverted index for FTS5 table main.other_fts']).verdict, 'not our table').toBe('store');
     expect(d([]).verdict).toBe('store');
+  });
+});
+
+// ── W1-B2 Task 34: fork lines and fork epochs, the pure halves (spec 2026-10-05 §5.1, §6.1, S11, S14, DM48;
+// ruled Q16, D-4734 (history-fork-spooled)) ────────────────────────────────────────────────────────────────────
+describe('fork lines and fork epochs, pure halves (W1-B2 Task 34; spec 5.1, 6.1; ruled Q16)', () => {
+  const U1 = '11111111-1111-4111-8111-111111111111';   // the parent's uuid
+  const U2 = '22222222-2222-4222-8222-222222222222';   // the fork's
+  const G1 = '0189abcd-1234-4678-9abc-0123456789ab';
+  const absent: libFork.Presence<string> = { state: 'absent' };
+  const obs = (o: Partial<libFork.Observation> = {}): libFork.Observation => ({
+    v: 1, observedMs: 1_000, uuid: absent, generation: absent, project: absent, workdir: absent,
+    late: null, journalT: null, journaled: null, heldMatches: {}, ...o,
+  });
+  const uuidIs = (value: string): libFork.Presence<string> => ({ state: 'value', value });
+
+  it('SPOOL_SOURCES and EPOCH_CAUSES both hold fork, and every spooled source is a cause', () => {
+    expect([...libFork.SPOOL_SOURCES]).toContain('fork');
+    expect([...libFork.EPOCH_CAUSES]).toContain('fork');
+    for (const s of libFork.SPOOL_SOURCES) expect(libFork.EPOCH_CAUSES, s).toContain(s);
+  });
+
+  it('parseSpoolLine accepts a fork line with reg and without; reg stays refused on a clear line', () => {
+    const fork = { v: 1, ev: 'SessionStart', id: 'x', sid: U2, src: 'fork', reg: U1 };
+    const bare = { v: 1, ev: 'SessionStart', id: 'x', sid: U2, src: 'fork' };
+    expect(libFork.parseSpoolLine(JSON.stringify(fork))).toEqual({ ok: true, rec: fork });
+    expect(libFork.parseSpoolLine(JSON.stringify(bare))).toEqual({ ok: true, rec: bare });
+    expect(libFork.parseSpoolLine(JSON.stringify({ ...fork, src: 'clear' }))).toEqual({ ok: false, why: 'keys' });
+  });
+
+  it('decideEpochLine takes a fork line through the resume path: its reg, the observation, a held match, else a candidate', () => {
+    expect(libFork.decideEpochLine({ src: 'fork', sid: U2, reg: U2 }, obs({ uuid: uuidIs(U1) }))).toEqual({ kind: 'confirm', by: 'reg' });
+    // An in-pane /branch: the hook fired before _sync_uuid moved .uuid, so reg is the parent's; the rename saw the fork.
+    expect(libFork.decideEpochLine({ src: 'fork', sid: U2, reg: U1 }, obs({ uuid: uuidIs(U2) }))).toEqual({ kind: 'confirm', by: 'observed' });
+    expect(libFork.decideEpochLine({ src: 'fork', sid: U2, reg: U1 }, obs({ uuid: uuidIs(U1), heldMatches: { [U2]: 5_000 } })))
+      .toEqual({ kind: 'confirm', by: 'held-match' });
+    expect(libFork.decideEpochLine({ src: 'fork', sid: U2, reg: U1 }, obs({ uuid: uuidIs(U1) }))).toEqual({ kind: 'candidate' });
+    expect(libFork.decideEpochLine({ src: 'fork', sid: U2 }, obs({ uuid: { state: 'unreadable' } }))).toEqual({ kind: 'candidate' });
+  });
+
+  it('the journal takes a fork spool record and a fork epoch-confirmed verdict as records; epoch-chained stays clear-only', () => {
+    const spoolRec = JSON.stringify({ v: 1, k: 'spool', t: 1, ord: 1, rec: { v: 1, ev: 'SessionStart', id: 'x', sid: U2, src: 'fork', reg: U1 } });
+    expect(libFork.parseJournalRecord(spoolRec).kind).toBe('record');
+    const confirmed = libFork.journalRecord('verdict', 5, {
+      event_key: 'none', kind: 'epoch-confirmed', ccrc_id: 'x', generation: G1, cc_session_uuid: U2, cause: 'fork', declared_by: 'hook', by: 'observed',
+    });
+    expect(libFork.parseJournalRecord(confirmed).kind).toBe('record');
+    const chained = JSON.stringify({ v: 1, k: 'verdict', t: 1, event_key: 'none', kind: 'epoch-chained', ccrc_id: 'x', generation: G1, cc_session_uuid: U2, cause: 'fork' });
+    expect(libFork.parseJournalRecord(chained).kind, 'only a clear chains unconfirmed').toBe('malformed');
   });
 });

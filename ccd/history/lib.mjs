@@ -248,8 +248,13 @@ export const SEARCHABLE_PROVENANCE = Object.freeze(['operator', 'model', 'tool']
 /** Spool line kinds: the hook writes the first three, the CLI `recall` (B2),
  *  the hook `steer` (W3). */
 export const SPOOL_EVENTS = Object.freeze(['Stop', 'PostCompact', 'SessionStart', 'recall', 'steer']);
-/** The SessionStart sources that spool (ruled Q2; fork is outside, Q16). */
-export const SPOOL_SOURCES = Object.freeze(['startup', 'resume', 'clear']);
+/** The SessionStart sources that spool (ruled Q2), and `fork` from W1-B2 (ruled Q16, D-4734 (history-fork-spooled),
+ *  reversing D-4173). A fork epoch needs no migration: `epochs.cause` is TEXT with no CHECK
+ *  in schema v1, and EPOCH_CAUSES (below) has held `fork` since W1-B1 (D-4342).
+ *  THE ROLLBACK EDGE (§6.1): a W1-B1 build's drain rejects a spooled fork line (spool_line_rejected), and that fork
+ *  falls back to its registry backfill. Because W1-B1 merged with `fork` in EPOCH_CAUSES, a rolled-back build reads a
+ *  fork epoch's journal record and a waiting fork candidate's verdict as valid; only this spool-line part remains. */
+export const SPOOL_SOURCES = Object.freeze(['startup', 'resume', 'clear', 'fork']);
 /** D-4342 (history-epoch-causes-widened-for-rollback): 'fork' is vocabulary only. B1 still spools no fork (D-4173);
  *  W1-B2 does (Q16), and a box rolled back from B2 can hold a fork candidate whose verdict this build must read back. */
 export const EPOCH_CAUSES = Object.freeze(['startup', 'resume', 'clear', 'import', 'fork']);
@@ -554,9 +559,9 @@ export function blobShaOfBytes(bytes) {
 // D-4176: every writer appends `\n<json>\n`, so a short
 // write leaves a partial line the next append cannot fuse with; an EMPTY line
 // takes no ordinal, so a fenced file and an unfenced one give one set of keys.
-// D-4175: `reg` rides startup and resume
-// lines only. D-4173: `src` is one of SPOOL_SOURCES, so a
-// `fork` source is a value rejection. D-4177: no key carries summary text or a
+// D-4175: `reg` rides startup, resume
+// and fork lines only (fork from W1-B2, D-4734 (history-fork-spooled), which reverses D-4173's
+// value rejection); `src` is one of SPOOL_SOURCES. D-4177: no key carries summary text or a
 // hash of it. The `recall` (B2's CLI) and `steer` (W3's
 // hook) key sets are plan-chosen; B1 drains them for the counters (O52).
 // `sid` is optional on Stop and PostCompact only. A SessionStart line exists to
@@ -636,7 +641,7 @@ export function spoolLinesOverCap(bytes) {
  *  value in its grammar. Any same-user process can write to `spool/`, so only
  *  a line that passes is ever journaled or drained. Checked in this order, and
  *  each failure answers its own word: too-long, json, not-object, keys (a
- *  missing or undeclared key, `reg` off a startup/resume line, no `ev`), then
+ *  missing or undeclared key, `reg` off a startup, resume or fork line, no `ev`), then
  *  bad-id, then value. */
 export function parseSpoolLine(raw) {
   if (typeof raw !== 'string' || Buffer.byteLength(raw, 'utf8') > SPOOL_LINE_MAX) return { ok: false, why: 'too-long' };
@@ -653,7 +658,7 @@ export function parseSpoolLine(raw) {
   const keys = Object.keys(o);
   if (!set.required.every((k) => Object.hasOwn(o, k))) return { ok: false, why: 'keys' };
   if (!keys.every((k) => set.required.includes(k) || set.optional.includes(k))) return { ok: false, why: 'keys' };
-  if (Object.hasOwn(o, 'reg') && o.src !== 'startup' && o.src !== 'resume') return { ok: false, why: 'keys' };
+  if (Object.hasOwn(o, 'reg') && o.src !== 'startup' && o.src !== 'resume' && o.src !== 'fork') return { ok: false, why: 'keys' };
   if (!idOk(o.id)) return { ok: false, why: 'bad-id' };
   for (const k of keys) {
     if (k !== 'id' && !SPOOL_VALUE[k](o[k])) return { ok: false, why: 'value' };
@@ -1159,7 +1164,7 @@ export function observationOk(o) {
 }
 
 /** What the drain does with one epoch line (§6.1, §9.2 step 1).
- *  - startup/resume: confirmed on its own evidence first — its `reg` equals
+ *  - startup/resume, and fork from W1-B2 (D-4734 (history-fork-spooled)): confirmed on its own evidence first — its `reg` equals
  *    its `sid` (CT6: ccd writes `.uuid` before it spawns, so every ccd start
  *    carries it) — else the `.uuid` observed at the rename, else the first
  *    match recorded while held; otherwise it waits as a candidate. A nested
@@ -1176,7 +1181,7 @@ export function decideEpochLine(line, obs) {
   if (line.src === 'clear') {
     return { kind: 'chain', confirmedBy: observed ? 'observed' : held ? 'held-match' : null };
   }
-  if (line.src !== 'startup' && line.src !== 'resume') {
+  if (line.src !== 'startup' && line.src !== 'resume' && line.src !== 'fork') {
     throw new TypeError(`decideEpochLine: src outside SPOOL_SOURCES: ${String(line.src)}`);
   }
   if (typeof line.reg === 'string' && line.reg === line.sid) return { kind: 'confirm', by: 'reg' };

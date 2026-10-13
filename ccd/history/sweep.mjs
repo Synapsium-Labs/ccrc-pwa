@@ -880,7 +880,7 @@ export function drainFile(db, c, name, obs, text) {
   return { hints };
 }
 
-/** While a file is held, re-read `.uuid` for its startup and resume lines whose sid the observation did not name.
+/** While a file is held, re-read `.uuid` for its startup, resume and fork lines whose sid the observation did not name.
  *  Record the first time each is named (§9.14 Holds), so a session that /clears during a hold keeps its earlier
  *  startup epoch. */
 export function recordHeldMatches(home, name, nowMs) {
@@ -892,7 +892,7 @@ export function recordHeldMatches(home, name, nowMs) {
   const id = idOfDrainingName(name);
   const named = obs.uuid.state === 'value' ? obs.uuid.value : null;
   const waiting = spoolRecordsOf(readDrainingText(`${P.draining}/${name}`).text, id).valid
-    .filter((v) => v.rec.ev === 'SessionStart' && (v.rec.src === 'startup' || v.rec.src === 'resume')
+    .filter((v) => v.rec.ev === 'SessionStart' && (v.rec.src === 'startup' || v.rec.src === 'resume' || v.rec.src === 'fork')
       && v.rec.sid !== named && !Object.hasOwn(obs.heldMatches, v.rec.sid));
   if (waiting.length === 0) return;
   const now = readRegPresence(`${P.reg}/${id}.uuid`);
@@ -1436,7 +1436,7 @@ function locationConfirms(c, uuid, workdir) {
 }
 
 /** One SessionStart line, inside its file's drain transaction. Returns its verdict lines.
- *  - startup/resume: confirmed by its own reg, by the observed `.uuid`, or by a first match while held. Otherwise it
+ *  - startup/resume, and fork from W1-B2 (D-4734 (`history-fork-spooled`)): confirmed by its own reg, by the observed `.uuid`, or by a first match while held. Otherwise it
  *    is a candidate, never chained (D-4190, slug history-epoch-confirmation).
  *  - clear: chained now, in line order. It is confirmed by `.uuid`, a held match or its location, else left
  *    unconfirmed with a candidate row to time its 7 days (D-4189, slug history-clear-epoch-confirmed).
@@ -1530,7 +1530,7 @@ function confirmClear(db, c, k, currentUuid, nowMs) {
 }
 
 /** Every tick, after the drain: each candidate is confirmed, kept waiting, or dropped after 7 days of its journaling.
- *  - A startup or resume candidate confirms when `.uuid` names its sid. A gen-less one joins the generation the
+ *  - A startup, resume or fork candidate confirms when `.uuid` names its sid. A gen-less one joins the generation the
  *    registry reads then.
  *  - A drop is superseded when `.uuid`, as the registry holds it at the drop, names any clear epoch of the same id
  *    (§14 risk 24). §9.2 words it as the candidate's OBSERVED `.uuid` naming a LATER clear line; the v1
@@ -1577,7 +1577,7 @@ export function confirmCandidates(db, c) {
 
 /** The periodic scan's backfill (§6.1 "Backfill"). Each $REG/<id>.uuid that names no epoch of its id and no confirmed
  *  epoch anywhere becomes a `mapping` verdict: cause 'import', declared_by 'registry', committed FULL in its own
- *  transaction before any ingest chunk can need it, and flushed. A forked session enters this way (Q16). A uuid this id's `''` family
+ *  transaction before any ingest chunk can need it, and flushed. On a W1-B1 build a forked session entered only this way; from W1-B2 its fork line chains it, and a fork line whose uuid a scan chained first confirms that epoch (ruled Q16). A uuid this id's `''` family
  *  already holds is re-keyed instead, once the row reads a generation (§6.10, "A respawn that mints a missing
  *  generation"). */
 export function registryBackfill(db, c) {

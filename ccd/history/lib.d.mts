@@ -84,7 +84,7 @@ export const PROVENANCE: readonly Provenance[];
 export const SEARCHABLE_PROVENANCE: readonly Provenance[];
 export type SpoolEvent = 'Stop' | 'PostCompact' | 'SessionStart' | 'recall' | 'steer';
 export const SPOOL_EVENTS: readonly SpoolEvent[];
-export type SpoolSource = 'startup' | 'resume' | 'clear';
+export type SpoolSource = 'startup' | 'resume' | 'clear' | 'fork';
 export const SPOOL_SOURCES: readonly SpoolSource[];
 export type EpochCause = 'startup' | 'resume' | 'clear' | 'import' | 'fork';
 export const EPOCH_CAUSES: readonly EpochCause[];
@@ -242,7 +242,7 @@ export type EpochLineVerdict =
   | { kind: 'confirm'; by: 'reg' | 'observed' | 'held-match' }
   | { kind: 'candidate' }
   | { kind: 'chain'; confirmedBy: 'observed' | 'held-match' | null };
-export function decideEpochLine(line: { src: 'startup' | 'resume' | 'clear'; sid: string; reg?: string }, obs: Observation): EpochLineVerdict;
+export function decideEpochLine(line: { src: SpoolSource; sid: string; reg?: string }, obs: Observation): EpochLineVerdict;
 export function decideCandidate(i: {
   sid: string; journaledMs: number; nowMs: number; currentUuid: Presence<string>; supersededByLaterClearOfSameId: boolean;
 }): { kind: 'confirm'; by: 'later-tick' } | { kind: 'wait' } | { kind: 'drop'; superseded: boolean };

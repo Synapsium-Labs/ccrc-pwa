@@ -1661,8 +1661,8 @@ describe('the two-phase drain, as the box runs it (spec §9.2 step 1, §9.14 "Th
 
     // FR2c (review 344 F3; D-4418 (history-spool-append-regular-file-only)): a node the hook refuses at spool/<id>.jsonl (a FIFO,
     // a link, dangling or not, a directory) silences that id's spool lines until the operator removes it. renameSpoolFiles never
-    // reads or moves one; a drain counts it non_regular once per drain that meets it, as D-4347's planted entries are, and each
-    // half names it on stderr, so the sweep's log and status say what to remove.
+    // reads or moves one; a drain counts it non_regular once, as D-4347's planted entries are, unless its loop throws (that drain's
+    // count is left out, D-4418), and each half names it on stderr, so the sweep's log and status say what to remove.
     const NODE_REFUSED = `history-sweep: spool-refused: spool/${ID}.jsonl is not a regular file\n`;
     const plantNode = (kind: string): string => {
       const p = path.join(SPOOL(box.home), `${ID}.jsonl`);
@@ -2460,4 +2460,168 @@ describe('a sidecar that cannot be written is the journal failure, held per file
     expect(again.journalFailed).toBe(false);
     expect(fileBlocks(journalOf(box.home, ids.storeId)).map((b) => b.name).sort()).toEqual([...names].sort());
   });
+});
+
+// ── W1-B2 Task 34: fork epochs (spec 2026-10-05 §6.1, DM48; ruled Q16, D-4734 (history-fork-spooled)) ─────────────────
+// B1's `start` helper types its source as the three B1 spools, so this helper spells the fourth.
+const fork = (id: string, sid: string, extra: Record<string, unknown> = {}): Record<string, unknown> =>
+  ({ v: 1, ev: 'SessionStart', id, sid, src: 'fork', ...extra });
+
+describe('DM48: fork epochs, decided at drain (W1-B2 Task 34; spec §6.1, ruled Q16)', () => {
+  let box: HistoryBox;
+  let ids: Ids;
+  let db: DatabaseSync;
+  let clock: { ms: number };
+  let c: TickCtx;
+  let HM: { recordHeldMatches(home: string, name: string, nowMs: number): void };
+  beforeAll(async () => { HM = (await import('../../ccd/history/sweep.mjs')) as unknown as typeof HM; });
+  beforeEach(() => {
+    box = makeHistoryBox('ccrc-hist-dm48-', { role: 'fleet' });
+    ids = createStore(box.home);
+    db = openWriter(historyPaths(box.home).dbFile);
+    clock = { ms: T };
+    c = { home: box.home, ids, now: () => clock.ms, homes: box.homes, rosterUnreadable: false, out: () => undefined };
+  });
+  afterEach(() => { closeWriter(db); });
+  /** Two drains: the first renames and observes the spool, the second journals and drains it (§9.2: read at N+1). */
+  const pass = (): void => { SW.drainSpool(db, c); clock.ms += 1000; SW.drainSpool(db, c); clock.ms += 1000; };
+
+  it('a fork line whose reg equals its sid is an epoch with cause fork at drain, and drains with no spool_line_rejected (S14)', () => {
+    setReg(box, ID, 'uuid', U9); setReg(box, ID, 'generation', G1);
+    spool(box.home, ID, fork(ID, U2, { reg: U2 }));
+    pass();
+    expect(epochsOf(db, ID, G1)).toEqual([{ seq: 1, cc_session_uuid: U2, cause: 'fork', declared_by: 'hook', confirmed_ms: expect.any(Number) }]);
+    expect(counterOf(db, 'spool_line_rejected')).toBe(0);
+    expect(verdictsOf(box.home, ids.storeId).find((v) => v['kind'] === 'epoch-confirmed'))
+      .toMatchObject({ cc_session_uuid: U2, cause: 'fork', declared_by: 'hook', by: 'reg' });
+  });
+
+  it('an in-pane /branch (a fresh sid, reg the parent\'s uuid, .uuid moved to the sid before the rename) is a new fork epoch in the parent\'s family, confirmed by the observation', () => {
+    setReg(box, ID, 'uuid', U1); setReg(box, ID, 'generation', G1);
+    spool(box.home, ID, start(ID, U1, 'startup', { reg: U1 }));
+    pass();
+    spool(box.home, ID, fork(ID, U2, { reg: U1 }));
+    setReg(box, ID, 'uuid', U2);
+    pass();
+    expect(familiesOf(db)).toHaveLength(1);
+    expect(epochsOf(db, ID, G1).map((e) => [e.seq, e.cc_session_uuid, e.cause, e.declared_by])).toEqual([[1, U1, 'startup', 'hook'], [2, U2, 'fork', 'hook']]);
+    expect(verdictsOf(box.home, ids.storeId).filter((v) => v['kind'] === 'epoch-confirmed').at(-1))
+      .toMatchObject({ cc_session_uuid: U2, cause: 'fork', by: 'observed' });
+    expect(candidatesOf(db)).toEqual([]);
+  });
+
+  it('a fork line whose sid is already an epoch confirms it: no second epoch, nothing unconfirmed, its first cause kept (as DM18c)', () => {
+    setReg(box, ID, 'uuid', U1); setReg(box, ID, 'generation', G1);
+    spool(box.home, ID, start(ID, U1, 'startup', { reg: U1 }));
+    spool(box.home, ID, fork(ID, U1, { reg: U1 }));
+    pass();
+    // The same end state follows if the fork line is dropped, so these three tell "accepted and confirmed in place"
+    // from "refused" (B1's grammar) and from "rolled back" (a second epoch's UNIQUE violation: the drain rejects the
+    // file, drain_rejected).
+    expect(counterOf(db, 'spool_line_rejected'), 'the fork line passed the grammar').toBe(0);
+    expect(counterOf(db, 'drain_rejected'), 'its file committed, not set aside in .draining/rejected/').toBe(0);
+    expect(receipts(box).length, 'both lines drained with a receipt').toBe(2);
+    expect(epochsOf(db, ID, G1).map((e) => [e.seq, e.cc_session_uuid, e.cause])).toEqual([[1, U1, 'startup']]);
+    expect(candidatesOf(db)).toEqual([]);
+    expect(counterOf(db, 'epoch_unconfirmed')).toBe(0);
+  });
+
+  it('a fork whose uuid a registry scan chained first (cause import) is confirmed by its line, never chained twice (§6.1 Backfill)', () => {
+    setReg(box, ID, 'uuid', U2); setReg(box, ID, 'generation', G1);
+    EP.registryBackfill(db, c);
+    spool(box.home, ID, fork(ID, U2, { reg: U1 }));
+    pass();
+    expect(counterOf(db, 'spool_line_rejected'), 'the fork line passed the grammar').toBe(0);
+    expect(counterOf(db, 'drain_rejected'), 'its file committed, not set aside in .draining/rejected/').toBe(0);
+    expect(receipts(box).length, 'the fork line drained with a receipt').toBe(1);
+    expect(epochsOf(db, ID, G1).map((e) => [e.seq, e.cc_session_uuid, e.cause, e.declared_by])).toEqual([[1, U2, 'import', 'registry']]);
+    expect(candidatesOf(db)).toEqual([]);
+  });
+
+  it('a fork line whose sid neither its reg nor any observation names waits as a fork candidate, and is dropped and counted after 7 days', () => {
+    setReg(box, ID, 'uuid', U9); setReg(box, ID, 'generation', G1);
+    spool(box.home, ID, fork(ID, U2, { reg: U9 }));
+    pass();
+    expect(epochsOf(db, ID, G1)).toEqual([]);
+    expect(candidatesOf(db)).toEqual([{ cc_session_uuid: U2, ccrc_id: ID, cause: 'fork' }]);
+    clock.ms = T + WEEK + 10_000;
+    EP.confirmCandidates(db, c);
+    expect(candidatesOf(db)).toEqual([]);
+    expect(epochsOf(db, ID, G1)).toEqual([]);
+    expect(counterOf(db, 'epoch_unconfirmed')).toBe(1);
+  });
+
+  it('a fork candidate the registry names at a later tick within 7 days is confirmed then, cause fork', () => {
+    setReg(box, ID, 'uuid', U9); setReg(box, ID, 'generation', G1);
+    spool(box.home, ID, fork(ID, U2, { reg: U9 }));
+    pass();
+    setReg(box, ID, 'uuid', U2);
+    clock.ms += 60_000;
+    EP.confirmCandidates(db, c);
+    expect(epochsOf(db, ID, G1).map((e) => [e.cc_session_uuid, e.cause, e.declared_by])).toEqual([[U2, 'fork', 'hook']]);
+    expect(verdictsOf(box.home, ids.storeId).filter((v) => v['kind'] === 'epoch-confirmed').at(-1))
+      .toMatchObject({ cc_session_uuid: U2, cause: 'fork', by: 'later-tick' });
+  });
+
+  it('a fork /cleared before the next registry scan: the fork epoch and the clear epoch both chain, in line order, with no scan run', () => {
+    setReg(box, ID, 'uuid', U1); setReg(box, ID, 'generation', G1);
+    spool(box.home, ID, start(ID, U1, 'startup', { reg: U1 }));
+    pass();
+    spool(box.home, ID, fork(ID, U2, { reg: U1 }));
+    setReg(box, ID, 'uuid', U2);
+    pass();
+    spool(box.home, ID, start(ID, U3, 'clear'));
+    setReg(box, ID, 'uuid', U3);
+    pass();
+    expect(epochsOf(db, ID, G1).map((e) => [e.seq, e.cc_session_uuid, e.cause, e.confirmed_ms !== null]))
+      .toEqual([[1, U1, 'startup', true], [2, U2, 'fork', true], [3, U3, 'clear', true]]);
+  });
+
+  it('a held fork line is matched as a resume line is: .uuid naming its sid while held confirms it by held-match at the drain (§9.14 Holds)', () => {
+    setReg(box, ID, 'uuid', U9); setReg(box, ID, 'generation', G1);
+    spool(box.home, ID, fork(ID, U2, { reg: U9 }));
+    SW.drainSpool(db, c);                                   // the rename, observed with .uuid = U9
+    const [name] = drainingNames(box.home);
+    setReg(box, ID, 'uuid', U2);                            // named while the file is held
+    HM.recordHeldMatches(box.home, name!, clock.ms);
+    expect(obsOf(box.home, name!)['heldMatches']).toEqual({ [U2]: clock.ms });
+    clock.ms += 1000;
+    SW.drainSpool(db, c);
+    expect(epochsOf(db, ID, G1).map((e) => [e.cc_session_uuid, e.cause])).toEqual([[U2, 'fork']]);
+    expect(verdictsOf(box.home, ids.storeId).find((v) => v['kind'] === 'epoch-confirmed')).toMatchObject({ cause: 'fork', by: 'held-match' });
+  });
+});
+
+describe('DM48: a fork as the box runs it, its copied rows one entry each with a membership in each file (W1-B2 Task 34)', () => {
+  it('a /branch transcript that copies the parent\'s two rows and adds one: three entries, the copied two in both files, the fork a fork epoch', () => {
+    const box = makeHistoryBox('ccrc-hist-dm48-copy-', { role: 'fleet' });
+    expect(runSweep(box).code).toBe(0);                     // binds the store; its scan finds an empty registry, so none runs below
+    const work = path.join(box.home, 'work');
+    const [R1, R2, R3] = [u(0x31), u(0x32), u(0x33)];
+    const row = (sid: string, uuid: string, parent: string | null, k: number): string => JSON.stringify({
+      type: 'user', uuid, parentUuid: parent, sessionId: sid, cwd: work, timestamp: new Date(T + k * 1000).toISOString(),
+      message: { role: 'user', content: `dm48 row ${k}` },
+    });
+    transcriptIn(box.homes[0]!, 'demo', U1, `${row(U1, R1, null, 1)}\n${row(U1, R2, R1, 2)}\n`);
+    // Claude Code's /branch writes the parent's rows into the fork's own transcript, then continues there.
+    transcriptIn(box.homes[0]!, 'demo', U2, `${row(U2, R1, null, 1)}\n${row(U2, R2, R1, 2)}\n${row(U2, R3, R2, 3)}\n`);
+    setReg(box, ID, 'generation', G1); setReg(box, ID, 'project', 'demo');
+    const memberships = (): number => rowsOf<{ n: number }>(box, 'SELECT count(*) AS n FROM memberships')[0]!.n;
+    // The parent runs first, as on a box: its startup line drains and its transcript is ingested while .uuid names it. (A
+    // tick hints the files of the epochs and the reg a draining file names as it stood BEFORE that tick's drain, so a
+    // parent whose line drains in the fork's own tick would never be read until a scan.)
+    setReg(box, ID, 'uuid', U1);
+    spool(box.home, ID, start(ID, U1, 'startup', { reg: U1, gen: G1 }));
+    for (let i = 0; i < 6 && memberships() < 2; i += 1) expect(runSweep(box).code).toBe(0);
+    expect(memberships(), 'CONTROL: the parent\'s two rows are ingested before the fork line is written').toBe(2);
+    spool(box.home, ID, fork(ID, U2, { reg: U1, gen: G1 }));
+    setReg(box, ID, 'uuid', U2);                            // _sync_uuid moved .uuid to the fork before the rename
+    const epochCount = (): number => rowsOf<{ n: number }>(box, 'SELECT count(*) AS n FROM epochs')[0]!.n;
+    for (let i = 0; i < 6 && (memberships() < 5 || epochCount() < 2); i += 1) expect(runSweep(box).code).toBe(0);
+    expect(rowsOf(box, 'SELECT seq, cc_session_uuid, cause FROM epochs ORDER BY seq')).toEqual([
+      { seq: 1, cc_session_uuid: U1, cause: 'startup' }, { seq: 2, cc_session_uuid: U2, cause: 'fork' },
+    ]);
+    expect(rowsOf(box, 'SELECT e.uuid AS uuid, count(m.file_id) AS files FROM entries e JOIN memberships m ON m.entry_id = e.entry_id GROUP BY e.uuid ORDER BY e.uuid'))
+      .toEqual([{ uuid: R1, files: 2 }, { uuid: R2, files: 2 }, { uuid: R3, files: 1 }]);
+  }, 120_000);
 });

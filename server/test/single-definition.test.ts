@@ -5601,3 +5601,22 @@ describe('docs W3 — GET never fetches, and the L4 files quote no failure word 
     expect(files.flatMap(([n, t]) => quotedWords(t, words).map((w) => `${n}: '${w}'`))).toEqual([]);
   });
 });
+
+// ── ccrc history W1-B2 Task 34: the hook spools exactly SPOOL_SOURCES on SessionStart (spec 2026-10-05 §5.1, S14;
+// ruled Q16). APPENDED, with no import line, for the reason the blocks above state.
+describe('ccrc history: the hook spools exactly SPOOL_SOURCES on SessionStart (spec 2026-10-05 §5.1, S14; W1-B2, ruled Q16)', () => {
+  it('SPOOL_SOURCES is declared once, in lib.mjs, frozen and holding fork, and the spool block\'s one SessionStart arm spells exactly its members', async () => {
+    const lib = (await import('../../ccd/history/lib.mjs')) as unknown as Record<string, unknown>;
+    const members = [...(lib['SPOOL_SOURCES'] as readonly string[])];
+    expect(Object.isFrozen(lib['SPOOL_SOURCES'])).toBe(true);
+    expect(members).toContain('fork');
+    const declares = /(?:^|[\s;])(?:export\s+)?(?:const|let|var)\s+SPOOL_SOURCES\b/;
+    expect(HISTORY_MJS.filter((f) => stallCode(f).split('\n').some((l) => declares.test(l))).map(rel)).toEqual(['ccd/history/lib.mjs']);
+    const arms = codeLines(path.join(ccrcRoot, 'ccd', 'session-hook.sh'))
+      .filter((l) => /^\s*SessionStart\)/.test(l) && l.includes('case "$src" in'));
+    expect(arms, 'the spool block\'s SessionStart arm, and only it, cases on $src').toHaveLength(1);
+    const m = /case "\$src" in ([a-z|]+)\)/.exec(arms[0]!);
+    expect(m, 'the arm spells its sources as one alternation').not.toBeNull();
+    expect(m![1]!.split('|').sort()).toEqual([...members].sort());
+  });
+});
