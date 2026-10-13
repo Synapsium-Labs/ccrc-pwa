@@ -8,7 +8,7 @@ type DocWithVT = Document & {
   startViewTransition?: (update: () => void) => { finished: Promise<void> };
 };
 
-/** Programmatic navigation for screens/cards: pushState + notify the router.
+/** Programmatic navigation for screens/cards: pushState (or replaceState) + notify the router.
  *  Route changes ride a view transition when the platform supports it — the
  *  card→chat shared-element morph (the tapped card title carries
  *  `view-transition-name: session-title` into the chat header; timing lives

@@ -154,3 +154,36 @@ describe('navigate(href, {replace})', () => {
     await waitFor(() => expect(location.pathname + location.search).toBe('/mail'));
   });
 });
+
+describe('T11 review 4-2: a replace rides the same view transition as a push', () => {
+  const doc = document as { startViewTransition?: unknown };
+  afterEach(() => { delete doc.startViewTransition; });
+
+  const stub = (): ReturnType<typeof vi.fn> => {
+    const vt = vi.fn((cb: () => void) => {
+      cb();
+      return { finished: Promise.resolve() };
+    });
+    doc.startViewTransition = vt;
+    return vt;
+  };
+
+  it('navigate(href, {replace: true}) calls document.startViewTransition once and still rewrites the entry', () => {
+    navigate('/runs?x=1');
+    const vt = stub();
+    const before = history.length;
+    navigate('/runs?x=2', { replace: true });
+    expect(vt).toHaveBeenCalledTimes(1);
+    expect(history.length).toBe(before);
+    expect(location.pathname + location.search).toBe('/runs?x=2');
+  });
+
+  it('a push takes the same path: one startViewTransition call, one new entry', () => {
+    navigate('/runs?x=1');
+    const vt = stub();
+    const before = history.length;
+    navigate('/runs?x=2');
+    expect(vt).toHaveBeenCalledTimes(1);
+    expect(history.length).toBe(before + 1);
+  });
+});
