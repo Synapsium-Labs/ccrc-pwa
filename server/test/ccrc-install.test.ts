@@ -7960,11 +7960,12 @@ describe('ccrc install: the codex runtime step on a real spine (Plan 2b-2 Task 1
     const builder = read(join(home, '.local', 'bin', 'ccgpt-runtime'));
     const requirement = /^LITELLM_REQUIREMENT='([^']+)'/m.exec(builder)?.[1];
     expect(requirement, 'ccgpt-runtime declares no LITELLM_REQUIREMENT').toBeDefined();
-    const probe = spawnSync(join(home, '.local', 'bin', 'ccgpt-runtime'), ['probe-source'],
-      { env: { ...process.env, HOME: home } });
+    // One env for both spawns: ccrc-containment's census allows this suite exactly
+    // three bare parent envs, each a ccgpt-runtime spawn.
+    const rtEnv = { ...process.env, HOME: home };
+    const probe = spawnSync(join(home, '.local', 'bin', 'ccgpt-runtime'), ['probe-source'], { env: rtEnv });
     expect(probe.status).toBe(0);
-    const patch = spawnSync(join(home, '.local', 'bin', 'ccgpt-runtime'), ['patch-source'],
-      { env: { ...process.env, HOME: home } });
+    const patch = spawnSync(join(home, '.local', 'bin', 'ccgpt-runtime'), ['patch-source'], { env: rtEnv });
     expect(patch.status).toBe(0);
     const stamp = JSON.parse(read(join(gen, '.ccrc-runtime.json'))) as Record<string, unknown>;
     expect(stamp['requirement']).toBe(requirement);
