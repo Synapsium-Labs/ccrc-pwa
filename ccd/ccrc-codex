@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+# ccrc-codex — the per-session launcher of a ccrc-owned Codex lane.
+#
+# WHO RUNS IT. A `codex`-kind account's generated wrapper,
+# `$HOME/.local/bin/<id>` (`shared/wrapper.mjs`'s `generateWrapperBody`),
+# exports CLAUDE_CONFIG_DIR and execs this file with the session's argv; ccd
+# execs that wrapper as a tmux pane's command. Nothing else should — an
+# operator types `<id>`, never `ccrc-codex`. The name is not `ccgpt` because
+# that path on a live box belongs to another repository's launcher, which the
+# live lanes still exec (D-3478).
+#
+# WHAT IT DOES, in order, and nothing else:
+#   1. requires CLAUDE_CONFIG_DIR: a lane's identity IS its config directory
+#      (spec §4.4);
+#   2. reverse-maps that directory through `~/.ccrc/accounts.sh`'s generated
+#      `_ccrc_dir_id` — the same map ccd and the statusline ask — so this file
+#      holds no second opinion about which lane it is;
+#   3. runs `ccrc codex start <id>`, the idempotent ensure that adopts or
+#      starts the lane's two tiers. The lifecycle lives in ccrc, not here
+#      (D-3479): its service helper must sit in the platform
+#      region ccd/ccd and ccd/ccrc share byte for byte, and nothing under
+#      ccd/ sources either file;
+#   4. refuses a lane with no model class — the launcher this replaces made
+#      the same refusal, because without env.ANTHROPIC_MODEL in the lane's
+#      settings.json Claude Code asks the gateway for an Anthropic model id;
+#   5. reads the shim's port from the lane's lane.json and the gateway key
+#      from its runtime.env — generated state, never re-derived here;
+#   6. exports the endpoint, the key and four fixed behaviour variables;
+#   7. execs the roster's upstream Claude Code binary IN PLACE, argv untouched.
+#
+# ARGV IS NEVER READ. Every argument is Claude Code's: ccd passes
+# `--resume <uuid>` or `--session-id <uuid>`, `--model <class>` and
+# `--dangerously-skip-permissions`, and an operator may pass a prompt. The
+# launcher this replaces took `login` and `stop` as a first word, so a
+# one-word prompt of either was a lifecycle verb; those are
+# `ccrc codex login|stop <id>` now, and "$@" reaches Claude Code as it came.
+#
+# STDOUT AND STDIN ARE CLAUDE CODE'S. `claude -p` writes its answer to this
+# process's stdout and may read its prompt from this process's stdin. So
+# step 3 runs with stdin from /dev/null (a child must not eat a piped
+# prompt) and its stdout folded onto stderr (its progress line must not land
+# in front of the answer), and nothing in this file writes to stdout.
+#
+# THE KEY IS NEVER PRINTED AND NEVER IN ARGV. runtime.env is PARSED, not
+# sourced — sourcing would also hand the session LITELLM_MASTER_KEY — and the
+# key reaches Claude Code only as ANTHROPIC_AUTH_TOKEN, set by a builtin. No
+# refusal below quotes it. Nothing is exported before step 3, so neither the
+# key nor the endpoint reaches ccrc or any tier it starts.
+#
+# NO MODEL KEY IS EXPORTED. All eight model keys (`MODEL_ENV_KEYS`,
+# `shared/modelenv.mjs`) live in the lane's settings.json `env` block, which
+# `deploy/models-op.mjs`'s materialiser writes, and Claude Code applies that
+# block over the shell environment — the launcher this replaces records
+# measuring that on 2026-09-08. An export here would be dead at best and a
+# drifting second copy at worst.
+#
+# NOTHING IS UNSET. The launcher this replaces has no `unset` either
+# (measured); whatever the wrapper and ccd put in the environment reaches
+# Claude Code beside what step 6 adds.
+#
+# CLAUDE_CONFIG_DIR IS READ, NEVER EXPORTED — not even normalised. Doctor
+# counts any script in ~/.local/bin with a line that starts by exporting
+# that variable as an account wrapper (`ccd/ccrc-wrapper-shape`'s
+# `_wrap_declares_config_dir`), so one such line would make this placed file
+# a wrapper no roster row claims, on every installed box.
+#
+# PORTABILITY. bash builtins and jq, nothing else — no coreutils at all — so
+# the GNU-spelling sweep in `server/test/macos-platform.test.ts` finds
+# nothing and the file needs no platform block. No bash-4 feature is used.
+# Character classes are spelled out rather than written as ranges, so no
+# locale decides what a key looks like.
+#
+# NODE IS CHECKED HERE, BEFORE STEP 3, because step 3 needs it and this is
+# the one place that can say which PATH lacks it. `ccrc codex start` refuses
+# `missing-dependency` without node (`_codex_deps`: node runs models-op.mjs,
+# lane.json's one writer), and the PATH it looks on is THIS pane's: the tmux
+# server's, which a supervised session inherits from the service manager that
+# started it — `claude-session@.service` sets no PATH, and neither ccd nor the
+# wrapper changes it — never an operator's login shell. MEASURED on the fleet
+# box (2026-09-28, read-only): the live tmux server's PATH is exactly the user
+# manager's `show-environment` PATH, which holds no ~/.local/bin. The same
+# PATH is the one ccrc's own `ExecStart=/usr/bin/env node …` units resolve
+# node on, so a box whose ccrc services run has node there; `no-node` names
+# the one box that does not. `server/test/ccrc-codex-launcher.test.ts` pins
+# that `_codex_deps` still requires node for `start`, so this check cannot
+# outlive the requirement it stands in front of.
+#
+# REFUSALS. One line on stderr, `ccrc-codex: <code>: <sentence naming the
+# remedy>`, exit 1: no-home, no-config-dir, no-jq, no-roster,
+# roster-unreadable, roster-stale, unmapped, no-upstream, no-node,
+# no-lane-model, lane-unreadable, no-key. A failed `ccrc codex start` exits 1
+# with ccrc's own refusal as the only line.
+
+set -u
+
+_cx_refuse() {   # <code> <sentence naming the remedy> -> exit 1; never returns
+  printf 'ccrc-codex: %s: %s\n' "$1" "$2" >&2
+  exit 1
+}
+
+# Every file this launcher reads is under $HOME, and `set -u` would otherwise
+# end it on bash's own unbound-variable line, outside this vocabulary.
+{ [ -n "${HOME:-}" ] && [ -d "$HOME" ]; } || _cx_refuse no-home "HOME is not set to a directory, and every file this launcher reads — the roster projection, the lane's state, Claude Code itself — is under it. Launch the lane from an environment that sets HOME (a ccd session pane does), then relaunch. Nothing was started."
+
+# ── 1. the lane's identity is its config directory ─────────────────────────
+cx_cfg="${CLAUDE_CONFIG_DIR:-}"
+[ -n "$cx_cfg" ] || _cx_refuse no-config-dir "CLAUDE_CONFIG_DIR is not set, so there is no lane to launch. Start the lane through its own wrapper, \$HOME/.local/bin/<id> — 'ccrc wrappers' writes it — never ccrc-codex directly. Nothing was started."
+# A trailing slash misses every literal `_ccrc_dir_id` pattern: the same strip
+# the statusline applies before it asks the same map.
+while [ "$cx_cfg" != / ] && [ "${cx_cfg%/}" != "$cx_cfg" ]; do cx_cfg="${cx_cfg%/}"; done
+
+command -v jq >/dev/null 2>&1 || _cx_refuse no-jq "jq is required by ccrc-codex — it reads the lane's settings.json and lane.json — but is not on PATH. Install jq, then relaunch. Nothing was started."
+
+# ── 2. which lane: the roster's own reverse map ────────────────────────────
+cx_roster="$HOME/.ccrc/accounts.sh"
+[ -e "$cx_roster" ] || _cx_refuse no-roster "there is no account roster projection at $cx_roster. Run 'ccrc install', which generates it from ~/.ccrc/accounts.json, then relaunch. Nothing was started."
+# `-f` before the source: a FIFO is readable, and `.` opens it by name and
+# blocks forever with no writer — the rung ccd's own accounts.sh ladder has.
+{ [ -f "$cx_roster" ] && [ -r "$cx_roster" ]; } || _cx_refuse roster-unreadable "$cx_roster exists but is not a readable regular file. Fix its type or permissions by hand — regenerating it would not change what is wrong — then relaunch. Nothing was started."
+# A projection that fails to parse part-way can still have DEFINED the map
+# above the error, so a failed source refuses rather than trusting it.
+# shellcheck source=/dev/null
+. "$cx_roster" || _cx_refuse roster-stale "$cx_roster did not load. Run 'ccrc install' to regenerate it, then relaunch. Nothing was started."
+declare -F _ccrc_dir_id >/dev/null 2>&1 || _cx_refuse roster-stale "$cx_roster predates the config-directory reverse map (_ccrc_dir_id). Run 'ccrc install' to regenerate it, then relaunch. Nothing was started."
+cx_id="$(_ccrc_dir_id "$cx_cfg")"
+# The remedy is `ccrc install`, not `ccrc wrappers`: the map is the
+# PROJECTION's, and `ccrc wrappers` never regenerates it — only install
+# (`_inst_accounts_sh`) and the account verbs do. MEASURED in a fixture HOME:
+# after a hand edit adds a lane to accounts.json, `ccrc wrappers` writes that
+# lane's wrapper and leaves accounts.sh byte-identical, so this refusal
+# repeats; regenerating the projection clears it. Install also rewrites the
+# wrappers, which clears the other cause (a wrapper exporting a directory the
+# roster no longer names).
+[ -n "$cx_id" ] || _cx_refuse unmapped "no rostered account has the config directory $cx_cfg in $cx_roster. If this lane is in ~/.ccrc/accounts.json, run 'ccrc install': it regenerates that projection from the roster and rewrites every lane's wrapper. Then relaunch. Nothing was started."
+
+# Checked BEFORE step 3, so a launch that could never exec starts nothing.
+cx_upstream="${CCRC_UPSTREAM:-}"
+cx_upbin="$HOME/.local/bin/$cx_upstream"
+{ [ -n "$cx_upstream" ] && [ -f "$cx_upbin" ] && [ -x "$cx_upbin" ]; } || _cx_refuse no-upstream "the roster's upstream Claude Code binary is not an executable file at $cx_upbin. Install Claude Code there, or correct the upstream account in ~/.ccrc/accounts.json and run 'ccrc install', then relaunch. Nothing was started."
+# The header's NODE IS CHECKED HERE says why, and why this PATH.
+command -v node >/dev/null 2>&1 || _cx_refuse no-node "node is not on this session's PATH ($PATH), and 'ccrc codex start' needs it: it runs models-op.mjs, lane.json's one writer. A session pane's PATH is its tmux server's, inherited from whatever started that server — for a supervised session the service manager, never a login shell. Put node's directory on that PATH, or install node into a directory it already lists, then relaunch. Nothing was started."
+
+# ── 3. the lane's tiers: adopted or started by ccrc, never by this file ────
+# ccrc's own refusal already names its remedy, so a failure adds no line
+# here, and the exit is 1 whatever ccrc answered.
+"$HOME/.local/bin/ccrc" codex start "$cx_id" </dev/null >&2 || exit 1
+
+# ── 4. a lane with no model class never reaches Claude Code ────────────────
+# AFTER step 3, deliberately: start may re-materialise the lane, and the
+# materialiser writes this same settings.json's env block.
+cx_settings="$cx_cfg/settings.json"
+{ [ -f "$cx_settings" ] && jq -e '(.env.ANTHROPIC_MODEL // "") | strings | length > 0' "$cx_settings" >/dev/null 2>&1; } || _cx_refuse no-lane-model "lane $cx_id has no model class: $cx_settings carries no env.ANTHROPIC_MODEL, so Claude Code would ask the gateway for an Anthropic model id. Run 'ccrc models $cx_id init codex' (or 'ccrc models $cx_id set-class opus <modelId>'), then relaunch. The lane's tiers were left running."
+
+# ── 5. the endpoint and the key, from the lane's generated state ───────────
+cx_lane="$HOME/.ccrc/codex/$cx_id/lane.json"
+cx_port=''
+[ -f "$cx_lane" ] && cx_port="$(jq -er '.proxyPort | select(type == "number" and . == floor and . >= 1 and . <= 65535) | floor' "$cx_lane" 2>/dev/null)"
+case "$cx_port" in
+  ''|*[!0123456789]*) _cx_refuse lane-unreadable "$cx_lane is missing or carries no usable proxyPort, though 'ccrc codex start $cx_id' just succeeded. Run 'ccrc codex status $cx_id' and report what it says — nothing here re-derives the port. The lane's tiers were left running." ;;
+esac
+
+cx_envfile="$HOME/.ccrc/codex/$cx_id/runtime.env"
+cx_key=''
+cx_key_re='^LITELLM_MASTER_KEY=(sk-[0123456789abcdef]{48})$'
+# `-f` first for the same reason as the roster: `$(<…)` blocks on a FIFO.
+if [ -f "$cx_envfile" ] && [ -r "$cx_envfile" ]; then
+  cx_kv="$(<"$cx_envfile")"
+  [[ $cx_kv =~ $cx_key_re ]] && cx_key="${BASH_REMATCH[1]}"
+fi
+[ -n "$cx_key" ] || _cx_refuse no-key "$cx_envfile is missing or does not hold one well-formed LITELLM_MASTER_KEY=sk-<48 lowercase hex> line (trailing newlines ignored); its bytes are not printed. 'ccrc codex start $cx_id' writes it when it is absent — check its shape and mode by hand, never by printing it, then relaunch. The lane's tiers were left running."
+
+# ── 6. what Claude Code needs to reach the lane ────────────────────────────
+# Two FORCED (a Codex lane has no Anthropic endpoint to send either to), two
+# DEFAULTED so a caller's value wins — the defaults are the values the
+# launcher this replaces measured, its request ceiling dated to a 2026-09-08
+# incident.
+export ANTHROPIC_BASE_URL="http://127.0.0.1:$cx_port"
+export ANTHROPIC_AUTH_TOKEN="$cx_key"
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+export DISABLE_TELEMETRY=1
+export API_TIMEOUT_MS="${API_TIMEOUT_MS:-870000}"
+export CLAUDE_CODE_MAX_RETRIES="${CLAUDE_CODE_MAX_RETRIES:-2}"
+
+# ── 7. Claude Code, in place, with the argv it was given ───────────────────
+exec "$cx_upbin" ${1+"$@"}

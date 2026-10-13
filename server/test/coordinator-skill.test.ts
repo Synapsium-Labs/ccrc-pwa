@@ -1,6 +1,6 @@
 // The coordinator skill is prose a model follows unsupervised against a fleet
 // it can destroy. These are the properties a review cannot hold in place:
-// fourteen contract clauses, the routes it names, the refusal codes it promises,
+// sixteen contract clauses, the routes it names, the refusal codes it promises,
 // the envelope it quotes and the template it ships. `wsaudit.test.ts` already
 // established the idiom — harvest tokens out of a source and require the
 // copy to match it in both directions.
@@ -22,10 +22,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { renderEnvelope, type EnvelopeInput } from '../src/coord/envelope.js';
 import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
+import { STALL_REPLY_WAITING_PREFIX, STALL_REPORT_PREFIX, STALL_WAIT_PREFIX } from '../src/coord/stall.js';
+import { dequeuedSubject, mergedSubject } from '../src/coord/rundefs.js';
 import type { DoneClaim } from '../src/coord/fingerprint.js';
 import {
   ASK_REFUSE_CODES, MAIL_BODY_MAX_BYTES, MAIL_REJECT_CODES, RUN_REFUSE_CODES,
-  isPrPhase, isRunRefuseCode, SUITE_WORDS, FAILURE_KINDS, SPAWN_VERDICTS,
+  isPrPhase, isRunRefuseCode, SUITE_WORDS, FAILURE_KINDS, SPAWN_VERDICTS, ACTIVE_RUN_STATES, REVIEW_DONE_SUBJECT, WAVE_DONE_SUBJECT,
 } from '../../shared/api.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -91,7 +93,7 @@ const serverSources = (): string => {
   return out.join('\n');
 };
 
-// The fourteen clauses, verbatim. Kept as a literal array rather than a regex per
+// The sixteen clauses, verbatim. Kept as a literal array rather than a regex per
 // clause: the point is that the SENTENCE is the contract, so a paraphrase must
 // fail exactly as a deletion does.
 //
@@ -106,7 +108,7 @@ const serverSources = (): string => {
 const CONTRACT = [
   'Every act that changes fleet state goes through the ccrc server HTTP API. This session never runs `ccd` to change fleet state.',
   'The box token is read from `~/.cc-secrets/ccrc-mail.token` and sent as the `x-ccrc-mail-token` header. It is never printed, never pasted into a prompt, never committed.',
-  'This session never reaps. `ccd ws-reap`, `ccd ws-rm` and `ccd ws-gc --prune` are not its verbs, at any wave, for any reason.',
+  'This session never reaps. `ccd ws-reap`, `ccd ws-rm` and `ccd ws-gc --prune` are not its verbs, at any wave, for any reason. A child this session dispatched is reclaimed by the server once this session is finished with it — at its run’s close when nothing still needs it, otherwise later by the server’s sweep (a child held for its program’s next wave once that program has no open run, a review child once the run it reviewed has closed, a child whose reclaim was deferred or never started); this session’s own workspace is cleaned up by a human, or — when it carries no child marker — by the server seven days after it is archived once the operator has armed the server’s expiry lane (until then the lane only records what it would expire).',
   'This session never unpauses itself. `$REG/coordinator-paused` is the operator’s file; a dispatch refused `paused` is a stop, and the next act is a report, not a retry.',
   'A wave brief is written prose, reviewed like code. The template is the shape; the content is this session’s judgement, and a brief that is missing something the next wave needs is a defect in the ledger.',
   'A `wave-done` is a claim, not a fact. Re-measure it, then submit the fingerprint to `POST /api/runs/:id/advance` and believe the server’s answer over your own.',
@@ -118,10 +120,16 @@ const CONTRACT = [
   'A verified `wave-done` is READ by a review run, never by this session. Once `POST /api/runs/:id/advance` has moved the work run to `awaiting-review`, this session opens a run of `kind:\'review\'` naming it, dispatches the reviewer with `references/review-brief.md`, and ends its turn; when `review-done` arrives it closes the review run with the reviewer’s own `{reviewedTip, report}` and rules on the report the server accepted. This session does not read the diff itself, and a `stale-review` refusal means a fresh review run against the live tip, never a ruling on the old report.',
   'Every brief names the shape of the wave and the routing the matrix derives from it — class, effort, subagent class and workflow mode, and the subagent effort the worker is expected to name on its calls — read from `references/routing-matrix.md`; this session revises routing only on the evidence a wave returns, and records each change and why in the ledger before the next dispatch.',
   "The review brief names the held-out panel in `references/review-panel.md` as the review's shape, and the reviewer runs it as written: three Opus lenses and a Sonnet refute pass per finding, model and effort literal in the script, exempt from every routing field and from escalation and demotion. A lens that dies or returns nothing counts as unverified, never as approval, and no wave is accepted on a reading this session made alone.",
+  // Landing-order wave 1 (spec 2026-09-23 §5.1). Written with no apostrophe at
+  // all, so neither the straight nor the curly spelling can drift.
+  'This session never calls `update-branch` by any route, and never writes the rulesets, branch protection, auto-merge setting or `allow_update_branch` of any repository. It sends a rebase-check or any other conflict-sync request only on a conflict it has measured; beyond that, the only absorb it asks for is a land-sync to the PR it named next to land in a strict-protection repository, or an ejection naming the base sha the landing line recorded, and it never merges main into any workspace but its own. It commits programme-ledger documents on its own ledger PR, never inside a feature PR. On a native-queue project it lands a PR with `gh pr merge <n> --match-head-commit <handoffCommit>`, never with `--squash` or `--admin`, which enqueues it, and it closes that run only once the PR reads MERGED at `handoffCommit`: until then the run waits at `merging`.',
+  // Worker stall watch, wave 3 (spec 2026-09-29 §6.1), amended by wave 7 (D-3805). Typographic apostrophes
+  // and quotes, as clauses 3–12 are typed; no straight apostrophe at all.
+  'A mail from `operator` whose subject begins `stall:` is the server’s stall watch reporting your worker, not the worker itself; it wakes you, and answering it is not polling. Ack it, re-measure the run and the worker’s last mail, then act once: mail the worker a resume that names its last mail and what it owes; or, if the silence is yours because you told it to wait, mail it a subject beginning `wait:` that names what it waits for; or, if the worker is dead or cannot be woken, re-dispatch a dead one as ‘When something is wrong’ says and say which in this turn’s text for the operator. A stall mail never licenses re-dispatching a live worker. Send that `wait:` mail unasked as well, whenever you tell a `working` worker to wait, behind another run or programme or until a time. The watch reads a `wait:` as the run waiting on you only until the next mail to or from the worker, its own notices aside: that mail hands the run back to the worker unless it is another `wait:` from you or, from the worker, a question, an exact `wave-done` or `review-done` claim, or a reply beginning `re stall-check: waiting`.',
 ];
 
 describe('the coordinator skill: its contract', () => {
-  it('carries all fourteen clauses verbatim', () => {
+  it('carries all sixteen clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -143,7 +151,7 @@ describe('the coordinator skill: its contract', () => {
   // "pinned verbatim" exists to prevent. `worker-skill.test.ts` already
   // carries this guard; this ports it, with two adaptations the worker's
   // version does not need. First, the coordinator states its count in prose as
-  // "These fourteen sentences" (SKILL.md:67), not "clauses"/"lines" as the
+  // "These sixteen sentences" (SKILL.md:67), not "clauses"/"lines" as the
   // worker skill says, so the in-file harvest is widened to accept all three.
   // Second, README.md's own mention line-wraps the count word onto the line
   // after "clauses" (measured — CLAUDE.md's does not), so the cross-file
@@ -178,7 +186,7 @@ describe('the coordinator skill: its contract', () => {
   it('spells that same count, as one derived word, everywhere prose states it', () => {
     expect(COUNT_WORD, `${CONTRACT.length} clauses is past the end of WORDS — extend the array`)
       .toBeTruthy();
-    // SKILL.md states it once in its own words ("These fourteen sentences").
+    // SKILL.md states it once in its own words ("These sixteen sentences").
     // HARVESTED, never matched literally, so a revert to "ten" fails with the
     // wrong word named rather than with a missing string. The filter against
     // WORDS is what keeps a stray "protocol sentences" (SKILL.md's own clause
@@ -209,6 +217,73 @@ describe('the coordinator skill: its contract', () => {
     }
   });
 
+  // Child reclamation, wave 3. Clause 3 gained the fact that a child is the
+  // SERVER's to reclaim — and the verb that does it is never named to this
+  // session anywhere in its corpus, for the reason the case below gives about
+  // `ws-reap`: a skill that names a verb has given a model a reason to reach
+  // for it, and this one is composed by the server alone.
+  it('never names the child-reclaim verb, anywhere in the corpus', () => {
+    expect(allSkillText).not.toContain('ws-reclaim');
+  });
+
+  it('wave-lifecycle §6 says what a child is, when it is reclaimed, and what is not', () => {
+    const lifecycle = refs('wave-lifecycle.md');
+    const s6 = flat(lifecycle.slice(lifecycle.indexOf('## 6 — Final merge'),
+      lifecycle.indexOf('## What happened to a workspace that is gone')));
+    expect(s6).toContain('**A child is reclaimed; your own workspace is not.**');
+    expect(s6).toContain('`"childReclaim":"queued"`');
+    // Fix round 1, I1: a substring `toContain` over the whole flattened section
+    // binds no subject — `review-report-live` is also said in the review-child
+    // carve-out sentence below, so DELETING it from the `childReclaimWhy` list
+    // alone left this green (measured, task-10-report.md's row 3). Anchor the
+    // assertion to the list itself, and make it SET EQUALITY against the
+    // shipped union — never a hand-kept array — so a seventh word ADDED to
+    // `ChildReclaimNotWhy` is caught too.
+    const LEAD = '`childReclaimWhy` says why:';
+    const lead = s6.indexOf(LEAD);
+    const end = s6.indexOf(' — the last is', lead);
+    expect(lead, 'the childReclaimWhy list lost its lead').toBeGreaterThanOrEqual(0);
+    expect(end, 'the childReclaimWhy list lost its end').toBeGreaterThan(lead);
+    const listed = [...s6.slice(lead + LEAD.length, end).matchAll(/`([a-z-]+)`/g)].map((m) => m[1]).sort();
+    const childReclaimSrc = readFileSync(path.join(root, 'server/src/coord/childReclaim.ts'), 'utf8');
+    const notWhyUnion = /export type ChildReclaimNotWhy =([^;]+);/.exec(childReclaimSrc)![1]!;
+    const shippedNotWhy = [...notWhyUnion.matchAll(/'([a-z-]+)'/g)].map((m) => m[1]).sort();
+    expect(shippedNotWhy, 'the derivation read nothing from childReclaim.ts').toHaveLength(10);
+    expect(listed, '§6 childReclaimWhy list ≠ ChildReclaimNotWhy').toEqual(shippedNotWhy);
+    // Spec §5.7: the report outlives the review close; the coordinator
+    // cites the reviewer's own path, and step 6 is not changed to say otherwise.
+    // This is the carve-out's OWN claim — kept as a separate toContain, distinct
+    // from the list above, because it is a different sentence about the same word.
+    expect(s6).toContain('answers `review-report-live`');
+    expect(s6).toContain('kept while the run it reviewed is open');
+    expect(s6, 'a copy-before-close instruction is back').not.toContain('copy its report');
+    expect(s6).toContain('it stays until a human cleans it up');
+    // Workspace lifecycle wave 3b: an ARCHIVED workspace with no child marker is the server's to clean up seven days
+    // after its archive — and a child that has coordinated keeps its marker, so it is still a human's (CCR-15).
+    expect(s6).toContain('or — when it carries no child marker — until the server cleans it up seven days after it is archived');
+    // …and says WHEN (the coordinator's ruling): only once the operator has armed the lane; until then it only records. The
+    // skill files never name the lane's marker file, so the condition is told in words.
+    expect(s6).toContain('once the operator has armed the server’s expiry lane (until then the lane only records what it would expire)');
+    expect(s6).toContain('coordinated a run, so its workspace is cleaned up by a human. No');
+    // The two OLD statements are true only of a workspace that is not a child.
+    // Appending the paragraph above without limiting them would leave the
+    // coordinator reading two contradictory accounts of one final-merge close.
+    expect(s6, 'the unlimited "stays until a human archives it" is back')
+      .not.toContain('nothing archives it: it stays live and supervised until a human archives it');
+    expect(s6, 'the unlimited "nothing else does either" is back').not.toContain('and nothing else does either');
+    expect(s6).toContain('A workspace that is not a child — your own, or any workspace dispatch did not mint — is an ordinary unheld, unclaimed row again');
+    expect(s6).toContain('Neither notice archives anything, and nothing else touches a workspace that is not a child.');
+  });
+
+  // Fix round 1, M3: step 7's own child-reclaim facts were lens-4 claims with
+  // no pin of their own — deleting either sentence stayed green, because only
+  // §6 and the reviewer's own sentence were pinned. Anchor step 7 directly.
+  it('step 7 says a child is queued for server reclaim and names the still-claimed exception', () => {
+    const step7 = flat(skill.slice(skill.indexOf("7. **Final merge:**"), skill.indexOf('## When a wave crosses')));
+    expect(step7).toContain('`"childReclaim":"queued"`');
+    expect(step7).toContain('nothing is reclaimed while it is');
+  });
+
   it('names the three destructive verbs ONLY inside the clause that forbids them', () => {
     // A skill that mentions `ws-reap` anywhere else has given a model a reason
     // to consider it. The forbidding clause is the one licensed mention.
@@ -217,6 +292,115 @@ describe('the coordinator skill: its contract', () => {
       const licensed = CONTRACT[2]!.split(verb).length - 1;
       expect(hits, `${verb} appears ${hits}×; only the forbidding clause may name it`).toBe(licensed);
     }
+  });
+
+  it('names `update-branch` ONLY inside clause 15, across SKILL.md and every reference — counted, not absent (spec §5.1)', () => {
+    // The whole corpus a coordinator reads (`allSkillText`, derived from the
+    // references directory), so a mention slipped into wave-lifecycle.md is
+    // caught as surely as one in SKILL.md. `allow_update_branch` is spelled
+    // with underscores and is not a hit. EQUALITY, not a ceiling.
+    const hits = allSkillText.split('update-branch').length - 1;
+    const licensed = CONTRACT[14]!.split('update-branch').length - 1;
+    expect(licensed, 'clause 15 no longer names update-branch to forbid it').toBe(1);
+    expect(hits, `update-branch appears ${hits}× in the coordinator corpus; only clause 15 may name it`)
+      .toBe(licensed);
+  });
+
+  it('binds the exact SHA in every `gh pr merge` it spells — and the native-queue spelling carries no --squash and no --admin (landing-order wave 2)', () => {
+    // DERIVED: every backtick code span in the whole corpus that runs
+    // `gh pr merge`. #178 put `--match-head-commit <handoffCommit>` into the
+    // coordinator's merge "for exactly this reason" — the exact-SHA merge proof
+    // — and a spelling that drops it merges whatever head the PR has by then.
+    // `--disable-auto` DISARMS an armed auto-merge: it merges nothing, so it
+    // binds no SHA. Only that exact spelling is exempt — a disarm span that
+    // carries any other flag is held to the binding like every merge.
+    const DISARM = /^gh pr merge <(?:n|pr)> --disable-auto$/;
+    const spans = [...allSkillText.matchAll(/`([^`\n]*\bgh pr merge\b[^`\n]*)`/g)].map((m) => m[1]!)
+      .filter((s) => !DISARM.test(s));
+    expect(spans.length, 'fewer gh pr merge spellings than the three this corpus carries (clause 15, the queue landing, #178\'s squash merge) — a landing spelling was dropped, or this pin went blind').toBeGreaterThanOrEqual(3);
+    for (const s of spans) {
+      expect(s, `\`${s}\` merges without binding the exact SHA`).toContain('--match-head-commit <handoffCommit>');
+    }
+    expect(spans).toContain('gh pr merge <n> --match-head-commit <handoffCommit>');
+    expect(spans).toContain('gh pr merge <pr> --match-head-commit <handoffCommit>');
+    // The title's other half. `--admin` is never a landing spelling; `--squash`
+    // belongs to #178's non-queue spelling ONLY, so the native-queue spellings
+    // (every other span) carry neither.
+    expect(spans.filter((s) => s.includes('--admin')), 'a gh pr merge spelling carries --admin').toEqual([]);
+    expect(spans.filter((s) => s.includes('--squash')), 'a native-queue gh pr merge spelling carries --squash')
+      .toEqual(['gh pr merge <pr> --squash --match-head-commit <handoffCommit>']);
+  });
+
+  it('lands before it closes on a native-queue project — the last wave too — enqueues only a green PR and proves the entry, and names the landing notices by the server\'s own subjects (landing-order wave 2)', () => {
+    const wl = refs('wave-lifecycle.md');
+    const at = wl.indexOf('**Landing on a native-queue project**');
+    expect(at, 'wave-lifecycle.md lost its native-queue landing paragraph').toBeGreaterThanOrEqual(0);
+    const para = flat(wl.slice(at, wl.indexOf('**Same project:**', at)));
+    expect(para).toContain('the producer LANDS BEFORE IT CLOSES');
+    expect(para).toContain('advance the producer\'s run to `merging`');
+    expect(para).toContain('`merging → working`');
+    // The subjects the server sends (Task 3), derived from the ONE builder of
+    // each — the skill may not name a mail the server never sends.
+    const merged = mergedSubject(7).replace('#7', '#<pr>');
+    const dequeued = dequeuedSubject(7, '<time>').replace('#7', '#<pr>');
+    expect(para, `the paragraph no longer names ${merged}`).toContain('`' + merged + '`');
+    expect(para, `the paragraph no longer names ${dequeued}`).toContain('`' + dequeued + '`');
+    // Whether the project requires the queue is MEASURED at each landing: it
+    // changes when the operator turns the queue on or rolls it back.
+    expect(para).toContain('.type == "merge_queue"');
+    // gh 2.45 ARMS auto-merge, rather than queueing, a PR whose required
+    // checks have not passed, and prints the same line either way — so the
+    // enqueue waits on them, the entry is read back, and an armed request is
+    // disarmed, before any fix round too.
+    expect(para).toContain('`gh pr checks <pr> --required` exits 0');
+    expect(para).toContain('never by ending your turn: no mail comes when checks finish');
+    expect(para).toContain('answers a non-null `mergeQueueEntry`');
+    expect(para).toContain('`gh pr merge <pr> --disable-auto`');
+    // A dequeue's why is the QUEUE's own run; the PR's checks can read green.
+    expect(para).toContain('`gh run list --event merge_group');
+    // A coordinator the hook refuses — a self-claimed run, a reclaim heir —
+    // has the operator enqueue, and never closes to shed its hold.
+    expect(para).toContain('ask the operator to enqueue, or disarm');
+    // SKILL.md step 6 points at it BEFORE its succession arms, where a
+    // coordinator deciding when to close reads.
+    const start = skill.indexOf('6. **Rule on the report**');
+    expect(flat(skill.slice(start, skill.indexOf('**Same project:**', start))))
+      .toContain('the producer LANDS before it closes');
+    // …and so does the LAST wave, whose close is step 7's and §6's: no wave
+    // N+1 is open there, so a close-first retires the programme outright.
+    const seven = skill.indexOf('7. **Final merge:**');
+    expect(flat(skill.slice(seven, skill.indexOf('\n## ', seven))))
+      .toContain("the last wave's producer LANDS before this close");
+    const six = wl.indexOf('## 6 — Final merge');
+    expect(flat(wl.slice(six, wl.indexOf('\n## ', six + 1))))
+      .toContain("the last wave's producer lands BEFORE this close");
+  });
+
+  it('reads the landing back as FOUR answers — queued, merged, armed or neither — so a merged PR never reads as "nothing is queued, disarm it" (landing-order wave 2, review 241 F10(a))', () => {
+    const wl = refs('wave-lifecycle.md');
+    const at = wl.indexOf('**Landing on a native-queue project**');
+    expect(at, 'wave-lifecycle.md lost its native-queue landing paragraph').toBeGreaterThanOrEqual(0);
+    const para = flat(wl.slice(at, wl.indexOf('**Same project:**', at)));
+    // The read-back asks the PR's own `state` and its `autoMergeRequest` beside
+    // the queue entry: a PR the queue already merged answers a null entry too,
+    // so the entry alone cannot tell "merged" from "nothing queued".
+    expect(para, 'the read-back query no longer asks the PR\'s state, autoMergeRequest and mergeQueueEntry together')
+      .toContain('pullRequest(number: $p) { state autoMergeRequest { enabledAt } mergeQueueEntry { state } }');
+    // The four answers (queued, merged, armed, neither), each with its own act,
+    // and the count that introduces them (review 249 F3).
+    expect(para, 'the read-back no longer says how many answers it gives').toContain('gives one of four answers.');
+    expect(para, 'the queued answer (a non-null entry) is gone').toContain('answers a non-null `mergeQueueEntry`');
+    expect(para, 'the MERGED answer is gone: a merged PR would read as nothing queued')
+      .toContain('A `state` of `MERGED` means it already landed: wait for or prove `merged:#<pr>`, and never disarm');
+    expect(para, 'the ARMED answer is gone')
+      .toContain('no entry but a non-null `autoMergeRequest` means it is only armed');
+    expect(para, 'the NEITHER answer is gone')
+      .toContain('no entry, no `autoMergeRequest` and not merged means nothing is queued: read why');
+    // The disarm is the armed answer's act ALONE: it sits after the MERGED rule.
+    const merged = para.indexOf('and never disarm');
+    const disarm = para.indexOf('`gh pr merge <pr> --disable-auto`');
+    expect(merged, 'the MERGED rule is gone').toBeGreaterThanOrEqual(0);
+    expect(disarm, 'the disarm spelling is gone').toBeGreaterThan(merged);
   });
 
   it('tells the session how to learn its own id the ONE way that is actually its own', () => {
@@ -253,6 +437,10 @@ describe('the coordinator skill: its contract', () => {
     expect(fm).toContain('name: ccrc-coordinator');
     expect(fm).toMatch(/description:.+/);
     expect(fm.toLowerCase()).toContain('never use it to do a wave');
+    // #361: a subagent working in a worker's, reviewer's or coordinator's workspace meets this
+    // skill's own trigger word for word, so the description excludes it in so many words.
+    expect(fm.toLowerCase()).toContain(
+      'never use it inside a subagent — a session started by another session\'s agent tool or a workflow agent() call is a subagent and returns its report to its parent; it never opens, dispatches or closes a run.');
   });
 });
 
@@ -349,6 +537,20 @@ describe('the coordinator skill: linkage', () => {
       // first half of an invitation.
       'GET /api/coord/caps',
       'POST /api/coord/caps',
+      // CHILD-RECLAMATION wave 4 — the operator-dial shape once more, and the
+      // `POST /api/coord/pause` argument applied to the lane that deletes. A
+      // coordinator told about this route would be told how to stop, or
+      // restart, the reclamation of its OWN children — the act rule 4 takes out
+      // of every session's hands. The forbid-mention case below is what turns
+      // this permission-to-omit into a prohibition.
+      'POST /api/coord/reclaim-pause',
+      // STALL-WATCH SETTINGS wave 1 — the operator-dial shape a third time. A
+      // coordinator told about this door would be told how to lower the watch
+      // on its own workers, or stretch their quiet time, which is the watch's
+      // own defeat. Neither half is named, for the caps reason: the read is the
+      // first half of the invitation. The forbid-mention case below forbids it.
+      'GET /api/coord/stall-watch',
+      'POST /api/coord/stall-watch',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {
@@ -1391,6 +1593,25 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     expect(allSkillText).not.toContain('/api/coord/caps');
   });
 
+  it('never names the reclaim switch — a door that would tell a coordinator how to stop its own children being reclaimed', () => {
+    // Child-reclamation wave 4, the caps dial's accounting: EXEMPT only
+    // PERMITS the omission; this is what FORBIDS the mention. Rule 4 takes
+    // the reclamation of a coordinator's children out of every session's
+    // hands and gives it to the server; the one switch over that is the
+    // operator's, from the phone. The BARE verb too, not only the route: ccd
+    // has no caller auth, so `ccd reclaim-pause --state on` from a session's
+    // own shell is the shorter door (and `reclaim-paused`, the marker it
+    // writes, contains the same token).
+    expect(allSkillText).not.toContain('/api/coord/reclaim-pause');
+    expect(allSkillText).not.toContain('reclaim-pause');
+  });
+
+  it('never names the stall-watch settings door — a door that would tell a coordinator how to lower the watch on its own workers or stretch their quiet time', () => {
+    // Stall-watch settings wave 1, the caps dial's accounting: EXEMPT above
+    // only PERMITS the omission; this is what FORBIDS the mention.
+    expect(allSkillText).not.toContain('/api/coord/stall-watch');
+  });
+
   it('never names the break door — a door the claimant is not the one to walk through', () => {
     // D16's accounting: `POST /api/claims/:id/break` is EXEMPT (the
     // `/api/runs/:id/abandon` shape) and stays unnamed in EVERY corpus file.
@@ -2368,5 +2589,98 @@ describe('the routing door in the references (routing slice 5, Task 4)', () => {
     // excluded from its arm's mean. Named beside the `armUnparsed` field
     // itself so this cannot be satisfied by the field name alone.
     expect(signalsSection).toMatch(/armUnparsed === 0[\s\S]{0,200}armUnparsed > 0/);
+  });
+});
+
+// ── Worker stall watch, wave 3 (spec 2026-09-29 §6.1) ────────────────────────
+// APPENDED at the foot: the CONTRACT entry is this wave's only insertion into
+// the body of the file. The stall clause quotes three things the server owns:
+// the report prefix the watch SENDS (`stall:`), the prefix it READS as the run
+// waiting on the coordinator (`wait:`), and the sender it mails from
+// (`operator`). It also names one section of this skill. The verbatim pin above
+// holds the clause's bytes and none of those four relations: a prefix renamed in
+// `stall.ts`, or this section renamed, would leave the clause byte-exact and
+// wrong. The clause is read from SKILL.md, the shipped text, and found by its
+// opening words, never by its number, which §10 assigns at merge.
+describe('the stall clause quotes what the stall watch sends and reads (stall watch spec §6.1)', () => {
+  const stallClause = (): string | undefined => {
+    const at = skill.indexOf('## The contract');
+    const section = skill.slice(at, skill.indexOf('\n## ', at + 1));
+    return section.split('\n').find((l) => /^\d+\. A mail from `[^`]+` whose subject begins `/.test(l));
+  };
+
+  it('quotes STALL_REPORT_PREFIX and STALL_WAIT_PREFIX byte for byte', () => {
+    const line = stallClause();
+    expect(line, 'no contract clause opens "A mail from `…` whose subject begins `…`"').toBeDefined();
+    expect(/whose subject begins `([^`]+)`/.exec(line!)?.[1],
+      'the clause quotes a report prefix the stall watch does not send').toBe(STALL_REPORT_PREFIX);
+    expect(/a subject beginning `([^`]+)`/.exec(line!)?.[1],
+      'the clause quotes a wait prefix the stall watch does not read').toBe(STALL_WAIT_PREFIX);
+  });
+
+  it('names the sender the watch mails from, and a section this skill still has', () => {
+    const line = stallClause();
+    expect(line, 'no contract clause opens "A mail from `…` whose subject begins `…`"').toBeDefined();
+    // `STALL_SENDER` is module-private, so its ONE definition line is read from
+    // source rather than imported; a reshaped definition reds here and says so.
+    const src = readFileSync(path.join(root, 'server/src/coord/stall.ts'), 'utf8');
+    const sender = /^(?:export )?const STALL_SENDER = '([^']+)';$/m.exec(src)?.[1];
+    expect(sender, 'stall.ts no longer defines STALL_SENDER as one quoted literal — re-derive this pin').toBeDefined();
+    expect(/^\d+\. A mail from `([^`]+)`/.exec(line!)?.[1],
+      'the clause names a sender the stall watch does not mail from').toBe(sender);
+    const named = /as ‘([^’]+)’ says/.exec(line!)?.[1];
+    expect(named, 'the clause no longer names the section it defers to').toBeDefined();
+    expect(skill, `the clause defers to ‘${named}’, and SKILL.md has no such section`)
+      .toContain(`\n## ${named}\n`);
+  });
+
+  // Stall watch wave 7, the operator's 2026-10-04 amendment
+  // (`coordinator-wait-widened-ball-truthful` (D-3805)). The clause now sends
+  // `wait:` past a stall mail, and states the ball as `stallFacts` reads it: a
+  // `wait:` holds the run only until the next mail to or from the worker,
+  // unless that mail passes the ball again. The verbatim pin holds the bytes;
+  // these three rows hold what a co-edit of SKILL.md and CONTRACT could lose.
+  //
+  // `unknown` is an active state, but the watch never judges it — `stallVerdictInner` holds it
+  // `run-unnamed` — so the clause may not tell the coordinator to send `wait:` to such a worker
+  // (review 262 F2).
+  const JUDGED_STATES: readonly string[] = ACTIVE_RUN_STATES.filter((s) => s !== 'unknown');
+  it('sends wait: past a stall mail too, for a worker in a state the watch reads', () => {
+    const line = stallClause();
+    expect(line, 'no contract clause opens "A mail from `…` whose subject begins `…`"').toBeDefined();
+    const tail = line!.slice(line!.indexOf('A stall mail never licenses re-dispatching a live worker.'));
+    expect(tail, 'the clause lost its last-but-two sentence').toMatch(/^A stall mail never licenses/);
+    expect(/ `([^`]+)` mail unasked/.exec(tail)?.[1],
+      'the clause sends wait: only in answer to a stall mail (ledger R2, approved 2026-10-04)').toBe(STALL_WAIT_PREFIX);
+    const state = /tell an? `([^`]+)` worker to wait/.exec(tail)?.[1];
+    expect(JUDGED_STATES.includes(state ?? ''),
+      `the clause names a worker in run state ${state}, which the watch never judges (only an active state other than unknown)`).toBe(true);
+  });
+
+  it('states the ball as stall.ts reads it: only until the next mail, past the hand-backs it exempts', () => {
+    const line = stallClause();
+    expect(line, 'no contract clause opens "A mail from `…` whose subject begins `…`"').toBeDefined();
+    expect(line, 'the clause says a wait: holds the run until your next mail; the worker’s next ordinary mail hands it back too')
+      .not.toMatch(/until your next mail/);
+    expect(line).toContain('only until the next mail to or from the worker');
+    expect(/a reply beginning `([^`]+)`/.exec(line!)?.[1],
+      'the clause names a waiting reply the stall watch does not read').toBe(STALL_REPLY_WAITING_PREFIX);
+    expect(/an exact `([^`]+)` or `([^`]+)` claim/.exec(line!)?.slice(1),
+      'the clause names done claims the stall watch does not read').toEqual([WAVE_DONE_SUBJECT, REVIEW_DONE_SUBJECT]);
+  });
+
+  it('quotes only the constants the clause relies on', () => {
+    const line = stallClause();
+    expect(line, 'no contract clause opens "A mail from `…` whose subject begins `…`"').toBeDefined();
+    const src = readFileSync(path.join(root, 'server/src/coord/stall.ts'), 'utf8');
+    const sender = /^(?:export )?const STALL_SENDER = '([^']+)';$/m.exec(src)?.[1];
+    const reliedOn = new Set<string>([sender ?? '', STALL_REPORT_PREFIX, STALL_WAIT_PREFIX, STALL_REPLY_WAITING_PREFIX,
+      WAVE_DONE_SUBJECT, REVIEW_DONE_SUBJECT, ...JUDGED_STATES]);
+    const quoted = [...new Set([...line!.matchAll(/`([^`]+)`/g)].map((m) => m[1]!))];
+    expect(quoted.length, 'the scan read no quoted token').toBeGreaterThan(0);
+    for (const q of quoted) {
+      expect(reliedOn.has(q),
+        `the clause quotes \`${q}\`, which is outside the constants it relies on: add the constant here, or unquote it`).toBe(true);
+    }
   });
 });

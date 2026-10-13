@@ -32,19 +32,19 @@ describe('generateWrapperBody', () => {
     expect(text).not.toContain('[ -r');
   });
 
-  it('writes a codex launcher in the generated grammar with the common ccgpt target', () => {
+  it('writes a codex launcher in the generated grammar with the ccrc-codex target (D-3478)', () => {
     expect(generateWrapperBody(CODEX, 'claude')).toBe(
       '#!/usr/bin/env bash\n'
       + '# Generated from ~/.ccrc/accounts.json. Do not edit — `ccrc wrappers` rewrites it.\n'
       + 'export CLAUDE_CONFIG_DIR="$HOME/.claude-codex-a"\n'
       + '[ -r "$HOME/.cc-secrets/codex-a.env" ] && . "$HOME/.cc-secrets/codex-a.env"\n'
-      + 'exec "$HOME/.local/bin/ccgpt" "$@"\n',
+      + 'exec "$HOME/.local/bin/ccrc-codex" "$@"\n',
     );
   });
 
   it('ignores an irrelevant invalid upstream id for a codex account', () => {
     expect(generateWrapperBody(CODEX, INVALID_UPSTREAM_ID))
-      .toContain('exec "$HOME/.local/bin/ccgpt" "$@"');
+      .toContain('exec "$HOME/.local/bin/ccrc-codex" "$@"');
   });
 
   it('continues to refuse an invalid upstream id for a generated account', () => {

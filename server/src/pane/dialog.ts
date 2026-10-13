@@ -2,7 +2,30 @@ import { createHash } from 'node:crypto';
 import type { Dialog } from '../../../shared/api.js';
 import { promptBoxShowing } from './statusline.js';
 
-const BUSY_RE = /esc to interrupt/;
+/**
+ * Claude Code's spinner row, matched as a ROW (worker stall watch wave 2, M3,
+ * `busy-re-anchored` (D-3626)). The phrase must end the row, or be followed by `)` or
+ * by a ` ·` hint segment, on a row that is not the prompt (`❯`), a tool
+ * continuation (`⎿`) or a quote (`>`). The unanchored phrase refused a `shell`
+ * or `busy` mail delivery with `turn-running` whenever a transcript line, a
+ * draft or a quoted capture in the last 8 rows carried it.
+ *
+ * TOLERANT, BECAUSE THE TAIL IS UNMEASURED. The operator's pane-layout
+ * measurement (the `claude-code-2-1-280-pane-layout` recipe, 2026-09-23)
+ * measures the box, the 👤 row, menus and banners, but not the spinner row.
+ * The two in-tree carriers both close on `)`: `fixtures/panes/busy.txt`, and
+ * the widest carrier named in `READER_MIN_COLS`'s derivation (shared/api.ts).
+ * A hint after the phrase, and a row wrapped just after it, stay accepted
+ * until the wave-2 capture checkpoint (C7) records the tail per lane. Narrow
+ * this only on C7's evidence. A missed spinner shape degrades to §9.2 (a nudge
+ * folded in at the next tool boundary); a false match holds mail for a minute.
+ *
+ * PLAIN TEXT ONLY. An SGR code between the phrase and `)` defeats the anchor.
+ * The one production caller strips escapes first: `inject/send.ts` captures
+ * with `captureAnsi` (`-e`) and tests `pane.replace(SGR, '')`. `paneState`
+ * shares this regex and has no production caller (D-102).
+ */
+const BUSY_RE = /^(?![ \t]*[❯⎿>]).*esc to interrupt(?:\)|[ \t]*·|[ \t]*$)/m;
 /** Claude Code's own limit recovery is ARMED: the status line reads "Usage limit
  *  reached · continuing automatically at HH:MM · esc or type to cancel" (or
  *  "continuing shortly"). ANY keystroke cancels it — bundle 2.1.267,
@@ -12,6 +35,17 @@ const BUSY_RE = /esc to interrupt/;
  *  (D-2367). */
 export const AUTO_CONTINUE_RE = /continuing automatically|continuing shortly/i;
 export function autoContinueArmed(pane: string): boolean { return AUTO_CONTINUE_RE.test(pane); }
+/** A turn is RUNNING: some row is Claude Code's spinner row, as `BUSY_RE`
+ *  (above) shapes it. The shape is tolerant until C7 measures the tail, and is
+ *  narrowed only on that evidence. This is BUSY_RE itself, exported rather than
+ *  copied. `inject/send.ts`'s `refuseIfTurnRunning` asks it of the pane's last
+ *  8 rows, SGR-stripped: the window it already hands `autoContinueArmed`. The
+ *  mail lane sets that option on every delivery whose live word was not `idle`
+ *  (`shell`, and wave 2's `busy`). It is BEST-EFFORT: a `--remote-control`
+ *  pane never renders the phrase, and a narrow pane can wrap it, so `false`
+ *  proves nothing. It is a drift tripwire behind the live status file and the
+ *  turn marker, never a proof of idleness (worker stall watch §4.1, §5.1). */
+export function turnRunning(pane: string): boolean { return BUSY_RE.test(pane); }
 const MENU_RE = /Enter to (confirm|select)/;
 const SGR = /\x1b\[[0-9;]*m/g; // any ANSI colour/attr code — same idiom as inject/send.ts:80
 const MULTISELECT_RE = /Space to select/;

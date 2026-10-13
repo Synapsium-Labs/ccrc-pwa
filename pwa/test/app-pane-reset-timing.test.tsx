@@ -111,3 +111,52 @@ describe('the reset lands before the new screen runs anything (D-161)', () => {
     expect(probe.seen).toEqual([0]);
   });
 });
+
+// ── M4.R3 (native Docs reader, W4 Task 7): a change of the search alone resets the pane ──
+//
+// A changed `?ref=` (or any search) on one path is a different page (design 2026-10-01 section 4.2), so app.tsx's
+// reset depends on `[path, search]`. RunsScreen does not remount on a search change, so the probe above records only
+// its first mount; these cases read the offset the shell WROTE through `track`'s accessor, and the probe's single
+// entry says the reset came from the dependency, not from a remount.
+describe('a change of the search alone resets the pane too (M4.R3)', () => {
+  const offset = (): number => (pane() as HTMLElement).scrollTop;
+
+  it('by navigate', () => {
+    navigate('/runs?x=1');
+    render(<App />);
+    track(pane(), 2517);
+    act(() => { navigate('/runs?x=2'); });
+    expect(offset()).toBe(0);
+    expect(probe.seen, 'the screen stayed mounted: one mount, before the scroll').toEqual([0]);
+  });
+
+  it('by back/forward (popstate)', () => {
+    navigate('/runs?x=1');
+    render(<App />);
+    track(pane(), 1200);
+    act(() => {
+      history.pushState(null, '', '/runs?x=2');
+      dispatchEvent(new PopStateEvent('popstate'));
+    });
+    expect(offset()).toBe(0);
+    expect(probe.seen).toEqual([0]);
+  });
+
+  it('by a replace, and the reset has landed when navigate returns (outside act, as in a browser)', () => {
+    navigate('/runs?x=1');
+    render(<App />);
+    track(pane(), 900);
+    // A browser has no act(): only navigate's flushSync commits the new location, and the layout effect with it,
+    // before navigate returns. With the act environment on, React would batch the update until act's end instead.
+    const env = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const was = env.IS_REACT_ACT_ENVIRONMENT;
+    env.IS_REACT_ACT_ENVIRONMENT = false;
+    try {
+      navigate('/runs?x=2', { replace: true });
+      expect(offset()).toBe(0);
+    } finally {
+      env.IS_REACT_ACT_ENVIRONMENT = was;
+    }
+    expect(probe.seen).toEqual([0]);
+  });
+});

@@ -16,6 +16,12 @@ import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { unreadableField as withUnreadableField } from './ioDoubles.js';
 import { okRun } from './coordReadHelpers.js';
+import { isChildReclaimKebab } from '../src/coord/childReclaim.js';
+import { isStallKebab } from '../src/coord/stall.js';
+import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
+import { isStallSettingsKebab } from '../src/coord/stallsettings.js';
+import { isDeadCoordinatorKebab } from '../src/deadCoordinator.js';
+import { isCollectExecutorKebab } from '../src/coord/collectTempRoot.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -622,6 +628,7 @@ describe('the rejection table is total, in both directions', () => {
                                // asymmetry `refused-project`/`unlistable` above
                                // records.
       'coordinator-paused',   // $REG marker filename, not a code
+      'reclaim-paused',       // $REG marker filename, not a code (child-reclamation wave 4)
       'bad-request',          // the generic body-shape refusal server.ts
                                // already uses throughout; not a mail code
       'not-found',            // GET /api/mail/:id's generic 404 for an
@@ -640,6 +647,13 @@ describe('the rejection table is total, in both directions', () => {
                               // maps it to a status and no client switches on it. Listed
                               // rather than merged, for the reason stated above — three
                               // vocabularies sharing one scanner stay three.
+      'auto-continue-armed',  // a `SendResult` error (`inject/send.ts`) again, the
+                              // `enter-ignored` shape: store.ts's
+                              // `AUTO_CONTINUE_ARMED_LAST_ERROR`, the `lastError` the
+                              // mail sweep's `backOff` stores and the stall watch's
+                              // `autoContinueHeldUntil` reads back (stall watch wave 1).
+                              // A send refusal passing through, not a mail refusal and
+                              // not a run refusal: nothing here maps it to a status.
       'session-gone',         // claims.ts `claimExpiry`'s `endedBy` values (Build 9 D12) —
       'hard-cap',             // stored forensics on a lapsed claim, never a refusal a
                               // caller switches on. `ClaimSummary.endedBy` is deliberately
@@ -794,8 +808,61 @@ describe('the rejection table is total, in both directions', () => {
         // route) — nothing is recorded, nothing replays — so their words are
         // neither mail rejections nor run refusals. Admitted through their own
         // exported guard, for the reason every union above gives.
-        || isUpdateStoreRefuseCode(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode or UpdateStoreRefuseCode`).toBe(true);
+        || isUpdateStoreRefuseCode(tok)
+        // CHILD RECLAMATION, WAVE 3 — the ELEVENTH union, checked together and
+        // never merged, on the standing rule `enter-ignored` above states.
+        // `coord/childReclaim.ts` spells ccd's fourteen `ws-reclaim` words, the
+        // executor's defer reasons and the close decision's reasons as
+        // literals, and `coord/close.ts` spells `not-queued`. None is a mail
+        // rejection or a run refusal: the box's words are ccd's own
+        // vocabulary, and the reasons ride `CloseOutcome` and the feed, never
+        // a `refused`/`reject.code`. Admitted through the exported guard,
+        // never NOT_CODES, for the reason every union above gives.
+        || isChildReclaimKebab(tok)
+        // WORKER STALL WATCH, WAVE 1: the TWELFTH union, checked together and
+        // never merged, on the standing rule `enter-ignored` above states.
+        // `coord/stall.ts` spells these words as literals:
+        //   - the watch's arms, holds and arming markers, as Record keys;
+        //   - its shadow detail head;
+        //   - the three read failures and the observation miss that its store
+        //     reads answer with (`store.ts`).
+        // None is a mail rejection or a run refusal. They are observation
+        // details, a verdict's words and registry marker names, and no
+        // `refused` or `reject.code` ever carries one. They are admitted
+        // through the exported guard, which is derived from those Records and
+        // tuples, and never through NOT_CODES, for the reason every union
+        // above gives.
+        || isStallKebab(tok)
+        // WORKSPACE LIFECYCLE WAVE 3b: the THIRTEENTH union, checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `coord/expireArchived.ts` (the expiry lane's one executor) spells ccd's
+        // nineteen `ws-expire` words, its two box words, its outcome kinds and its defer reasons as literals. None is
+        // a mail rejection or a run refusal — they ride the lane's memory and the feed, never a `refused` or
+        // `reject.code`. Admitted through the exported guard, derived from `archivedExpiry.ts`'s Records, never
+        // NOT_CODES, for the reason every union above gives.
+        || isArchivedExpiryKebab(tok)
+        // STALL WATCH SETTINGS, W1: the FOURTEENTH union, checked together and
+        // never merged, on the standing rule `enter-ignored` above states.
+        // `coord/stallsettings.ts` spells a mail-gate mode in its ladder, and
+        // the settings routes spell the POST's refusal code and the feed actor
+        // of an unarmed gate. None is a mail rejection or a run refusal: they
+        // are admitted through the exported guard, never NOT_CODES, for the
+        // reason every union above gives.
+        || isStallSettingsKebab(tok)
+        // WORKSPACE LIFECYCLE WAVE 4: the FIFTEENTH union, checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `coord/endDeadCoordinator.ts` (the dead-coordinator lane's one executor) spells
+        // its outcome and report kinds, and `coord/close.ts` and `coord/store.ts` spell the compare-and-set refusal
+        // `claimant-changed`. None is a mail rejection or a run refusal — no route answers with one; they ride the lane's
+        // memory and the feed. Admitted through the exported guard, derived from `deadCoordinator.ts`'s Records, never
+        // NOT_CODES, for the reason every union above gives.
+        || isDeadCoordinatorKebab(tok)
+        // CHILD RECLAMATION, WAVE 9: the SIXTEENTH union, checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `coord/collectTempRoot.ts` (the temp-root collector's one executor) spells its
+        // outcome kinds, its not-asked and answered whys, the open-run hold's whys and the audit's `no-document` as
+        // literals. None is a mail rejection or a run refusal — no route answers with one; they ride the job's outcome
+        // and the lane's memory. Admitted through the exported guard, derived from that file's tables and L1's
+        // `COLLECT_HOLD_WHYS`, never NOT_CODES, for the reason every union above gives.
+        || isCollectExecutorKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word or temp-root collector word`).toBe(true);
     }
   });
 });

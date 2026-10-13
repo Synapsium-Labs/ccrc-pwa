@@ -35,6 +35,7 @@ import { MailStrip } from '../src/session/MailStrip';
 import { PrKeycap } from '../src/session/PrKeycap';
 import { PrSheet } from '../src/session/PrSheet';
 import { ReapSheet } from '../src/session/ReapSheet';
+import { RootFallback, ScreenFallback } from '../src/components/RenderBoundary';
 
 const read = (...seg: string[]): string =>
   readFileSync(path.join(import.meta.dirname, '..', 'src', ...seg), 'utf8');
@@ -62,7 +63,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   branch: 'ws/quiet-basin', ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, child: { kind: 'none' }, releasedFrom: null, ...over,
 });
 
 const prState = (over: Partial<PrState> = {}): PrState => ({
@@ -103,10 +104,11 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   // predates the warn row and must keep rendering exactly as it did.
   health: { mailOutstanding: 0, mailParked: 0, mailReplayMax: 0, doneRejects: 0,
             lastRejectCode: null, briefQueued: true, clearError: null,
-            coordKickoffPendingSince: null }, ...over,
+            coordKickoffPendingSince: null }, childReclaim: null, ...over,
 });
 
-const coordStatus = (over: Partial<CoordStatus> = {}): CoordStatus => ({ pause: 'clear', mail: 'clear', ...over });
+const coordStatus = (over: Partial<CoordStatus> = {}): CoordStatus =>
+  ({ pause: 'clear', mail: 'clear', reclaim: 'clear', childReclaimAttention: [], ...over });
 
 const mailItem = (over: Partial<MailSummary> = {}): MailSummary => ({
   id: 1, deliveryId: 1, at: Date.now() - 30_000, fromId: 'coordinator', toId: 'ccrc-pwa-clear-cove',
@@ -239,6 +241,19 @@ describe('the two rules that were already scraped still reach a real element', (
     expect(screen.getByRole('button', { name: /archived \(1\)/i })).toHaveClass('proj-archived-toggle');
   });
 
+  it('.proj-released-toggle and .proj-released-archive are on the rendered Released (n) sub-fold', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    const releasedFrom = { runId: 1, program: 'lifecycle', programTitle: null, claimedBy: 'coord', closedAt: 1, child: false };
+    act(() => {
+      store.setState({ conn: 'open', sessions: [sess({ id: 'r', project: 'alpha', workspace: 'done-one', releasedFrom })] });
+    });
+    const toggle = screen.getByRole('button', { name: /released \(1\)/i });
+    expect(toggle).toHaveClass('proj-released-toggle');
+    fireEvent.click(toggle);
+    expect(screen.getByRole('button', { name: 'Archive all 1 released workspace in alpha' })).toHaveClass('proj-released-archive');
+  });
+
   it('keeps every floored rule on the token, never a bare 44px literal', () => {
     // The title no longer states a COUNT. It said "eighteen" while the list
     // below held twenty-one — a hand-kept number beside a list that grows,
@@ -264,10 +279,12 @@ describe('the two rules that were already scraped still reach a real element', (
       ruleIn(fleetCss, '.run-row'), ruleIn(fleetCss, '.run-row .run-open'),
       ruleIn(chatCss, '.mail-strip .mail-strip-head'),
       ruleIn(fleetCss, '.coord-banner'), ruleIn(fleetCss, '.coord-toggle'),
+      ruleIn(fleetCss, '.child-reclaim-banner'), ruleIn(fleetCss, '.child-reclaim-toggle'),
       ruleIn(fleetCss, '.run-row .run-abandon'),
       ruleIn(fleetCss, '.program-start-door'), ruleIn(fleetCss, '.program-start-go'),
       ruleIn(fleetCss, '.caps-control'), ruleIn(fleetCss, '.caps-save'),
       ruleIn(fleetCss, '.caps-input'), ruleIn(fleetCss, '.mail-chip'),
+      ruleIn(fleetCss, '.proj-released-toggle'), ruleIn(fleetCss, '.proj-released-archive'),
     ]) {
       // Comments off: a rule may legitimately MENTION 44px in prose
       // explaining the token, and that is not a hardcoded literal.
@@ -472,5 +489,35 @@ describe('.program-start-go — the sheet’s own confirm control', () => {
       loadProjects={async () => ({ roots: [], projects: [{ name: 'ccrc-pwa', workdir: '/w' }] })} />);
     fireEvent.click(await screen.findByRole('button', { name: /ccrc-pwa/i }));
     expect(await screen.findByRole('button', { name: /^start/i })).toHaveClass('program-start-go');
+  });
+});
+
+// — native Docs reader, W4 Task 8: the two RenderBoundary fallbacks' buttons (Reload, Back to the fleet) —
+//
+// Both are `.btn-primary`, whose own rule (components/primitives.css) carries the floor; `.render-fallback
+// .btn-primary` (styles/shell.css) gives the width back and must not lower the height.
+
+describe('.render-fallback .btn-primary — the boundary fallbacks’ Reload and Back to the fleet', () => {
+  const primitivesCss = read('components', 'primitives.css');
+  const shellCss = read('styles', 'shell.css');
+
+  it('is at least one tap tall, off the shared token, and the fallback rule does not lower it', () => {
+    expect(declValue(ruleIn(primitivesCss, '.btn-primary'), 'min-height')).toBe('var(--tap-min)');
+    const local = ruleIn(shellCss, '.render-fallback .btn-primary');
+    expect(declValue(local, 'min-height')).toBeNull();
+    expect(declValue(local, 'height')).toBeNull();
+    expect(declValue(local, 'max-height')).toBeNull();
+  });
+
+  it('is the class both rendered fallback buttons actually carry, inside .render-fallback', () => {
+    render(<RootFallback reload={() => {}} />);
+    const reload = screen.getByRole('button', { name: 'Reload' });
+    expect(reload).toHaveClass('btn-primary');
+    expect(reload.closest('.render-fallback')).not.toBeNull();
+    cleanup();
+    render(<ScreenFallback />);
+    const back = screen.getByRole('button', { name: 'Back to the fleet' });
+    expect(back).toHaveClass('btn-primary');
+    expect(back.closest('.render-fallback')).not.toBeNull();
   });
 });

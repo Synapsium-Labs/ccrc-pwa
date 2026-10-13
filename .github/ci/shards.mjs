@@ -18,7 +18,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 /**
- * @typedef {{ index: number, total: number, files: string[], vitestShard: string|null }} Shard
+ * @typedef {{ index: number, total: number, files: string[], vitestShard: string|null, workers: number }} Shard
  * @typedef {Shard[]} ShardPlan
  * @typedef {{ targetMs: number, min: number, max: number, workers: number, defaultMs: number, scale?: number }} ShardProfile
  */
@@ -48,8 +48,8 @@ export function durationsFromVitestJson(report, repoRoot) {
 /** @type {Record<string, ShardProfile>} */
 export const PROFILES = {
   linux: { targetMs: 240_000, min: 1, max: 5, workers: 2, defaultMs: 5000 },
-  macosSelected: { targetMs: 900_000, min: 1, max: 2, workers: 1, defaultMs: 5000, scale: 1.5 },
-  macosFull: { targetMs: 900_000, min: 1, max: 4, workers: 1, defaultMs: 5000, scale: 1.5 },
+  macosSelected: { targetMs: 900_000, min: 1, max: 2, workers: 2, defaultMs: 5000, scale: 1.5 },
+  macosFull: { targetMs: 900_000, min: 1, max: 4, workers: 2, defaultMs: 5000, scale: 1.5 },
   trace: { targetMs: 900_000, min: 1, max: 8, workers: 2, defaultMs: 5000, scale: 6 },
 };
 
@@ -93,6 +93,7 @@ export function planShards(files, durations, { targetMs, min, max, workers, defa
       total: count,
       files: [...files],
       vitestShard: `${i + 1}/${count}`,
+      workers,
     }));
   }
 
@@ -118,6 +119,7 @@ export function planShards(files, durations, { targetMs, min, max, workers, defa
     total: count,
     files: bucketFiles,
     vitestShard: null,
+    workers,
   }));
 }
 
@@ -132,7 +134,7 @@ function toServerRelative(repoRelPath) {
  * boundaries).
  *
  * @param {ShardPlan} plan
- * @returns {{ include: Array<{ shard: number, total: number, files: string, vitest_shard: string }> }}
+ * @returns {{ include: Array<{ shard: number, total: number, files: string, vitest_shard: string, workers: number }> }}
  */
 export function toMatrix(plan) {
   return {
@@ -141,6 +143,7 @@ export function toMatrix(plan) {
       total: s.total,
       files: s.files.map(toServerRelative).join(' '),
       vitest_shard: s.vitestShard ?? '',
+      workers: s.workers,
     })),
   };
 }

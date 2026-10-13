@@ -222,7 +222,8 @@ describe('the swept state reaches the wire, not just currentPrStates()', () => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/fleet`);
       // The dormant handshake's `hello` is now the first frame on every
       // connect (server.ts, Rider E) — skip it to reach the fleet snapshot
-      // this test actually pins.
+      // this test actually pins. The watcher has ticked, so that snapshot is
+      // its last broadcast (`currentFleet`), not a fresh assembly.
       type FleetFrame = { type: string; sessions: { id: string; pr: { phase: string } | null }[] };
       const frames: FleetFrame[] = [];
       const msg = await new Promise<FleetFrame>((resolve, reject) => {

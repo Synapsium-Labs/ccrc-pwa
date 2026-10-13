@@ -86,6 +86,16 @@ describe('_ws_slug_git_state: three answers', () => {
       .toMatch(/^unmeasurable git worktree list failed[^\n]*\nrc=2$/);
   });
 
+  // The `for-each-ref` arm had no test of its own and
+  // stayed green when removed. A shell-function `git`, failing only that one
+  // read — nothing in ccd is told it is under test.
+  it('unmeasurable: for-each-ref failing for a reason other than absence, never free', () => {
+    h.makeRepo('demo');
+    const stub = 'git() { [[ " $* " == *" for-each-ref "* ]] && return 128; command git "$@"; };';
+    expect(h.sh(`${stub} _ws_slug_git_state demo quiet-delta; echo "rc=$?"`))
+      .toMatch(/^unmeasurable git for-each-ref failed in \S+\nrc=2$/);
+  });
+
   // ── THE LOOSE SIDE (fix round 2, D-3476). Measured on git 2.43: `show-ref
   // --verify` exits 1 — the ABSENT answer — for an unreadable or corrupt loose
   // ref, for anything under an unsearchable `refs/heads/ws` or `refs/heads`,
@@ -127,6 +137,29 @@ describe('_ws_slug_git_state: three answers', () => {
     try {
       expect(state()).toMatch(/^unmeasurable cannot search \S*\/refs\/heads\nrc=2$/);
     } finally { fs.chmodSync(refsDir(main), 0o755); }
+  });
+
+  // `refs/heads` not being a directory is TWO
+  // DIFFERENT SHAPES, told apart — "absent" was FALSE for the one real case
+  // this exists to name. TRUE ABSENCE is simulated here by removing the
+  // directory outright; still fail-closed. PRESENT but not a directory is
+  // what a reftable repository actually does — git's `refs_create_refdir_stubs`
+  // writes `refs/heads` as a regular FILE for every non-files backend — so
+  // that shape is simulated separately below, by planting a file, and reads
+  // "not a directory" rather than the false "absent".
+  it('unmeasurable: refs/heads is absent, narrowed and still fail-closed, never free', () => {
+    const main = h.makeRepo('demo');
+    h.git(main, 'pack-refs', '--all');
+    fs.rmSync(refsDir(main), { recursive: true, force: true });
+    expect(state()).toMatch(/^unmeasurable refs\/heads is absent[^\n]*\nrc=2$/);
+  });
+
+  it('unmeasurable: refs/heads is a FILE — a reftable repository\'s stub — never "absent"', () => {
+    const main = h.makeRepo('demo');
+    h.git(main, 'pack-refs', '--all');
+    fs.rmSync(refsDir(main), { recursive: true, force: true });
+    fs.writeFileSync(refsDir(main), 'this repository uses the reftable format\n');
+    expect(state()).toMatch(/^unmeasurable refs\/heads is not a directory[^\n]*\nrc=2$/);
   });
 
   it('taken: a PACKED child ref ws/<slug>/<x> — only for-each-ref can see it', () => {
@@ -188,6 +221,18 @@ describe('_ws_slug_git_state: three answers', () => {
     try {
       expect(state()).toMatch(/^unmeasurable cannot search \S*\/worktrees\/demo\nrc=2$/);
     } finally { fs.chmodSync(parent, 0o755); }
+  });
+
+  // The loop's OTHER element, $WORKTREES_ROOT itself,
+  // had no test of its own and stayed green when removed from the loop.
+  it('unmeasurable: $WORKTREES_ROOT itself cannot be searched, never free', () => {
+    h.makeRepo('demo');
+    const root = path.join(home, 'worktrees');
+    fs.mkdirSync(root, { recursive: true });
+    fs.chmodSync(root, 0o600);
+    try {
+      expect(state()).toMatch(/^unmeasurable cannot search \S*\/worktrees\nrc=2$/);
+    } finally { fs.chmodSync(root, 0o755); }
   });
 
   it('a named slug on an unreadable loose ref is refused as unmeasurable, not at worktree add', () => {

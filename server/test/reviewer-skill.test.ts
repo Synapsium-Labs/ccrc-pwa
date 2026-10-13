@@ -67,6 +67,23 @@ describe('the reviewer skill: its contract', () => {
     }
   });
 
+  // Child reclamation, wave 3 (spec 2026-09-22 §6): not a clause — the count
+  // stays ten — but the reporting section's own fact: this workspace, and the
+  // report directory in it, end when the coordinator is finished with it —
+  // usually when its run closes.
+  it('says, in its reporting section, that this workspace ends when the coordinator is finished with it', () => {
+    const at = skill.indexOf('**This workspace ends when the coordinator is finished with it — usually when\nits run closes.**');
+    expect(at, 'the sentence is gone').toBeGreaterThanOrEqual(0);
+    expect(at, 'it moved out of the reporting section').toBeGreaterThan(skill.indexOf('## Reporting review-done'));
+    expect(at).toBeLessThan(skill.indexOf('## When something is wrong'));
+    expect(skill.slice(at).replace(/\s+/g, ' ')).toContain('committed for you as a WIP commit and attic-pinned');
+    // Fix round 1, M3: this claim (the report outlives the review's own close)
+    // was a lens-4 fact with no pin — deleting it stayed green.
+    expect(skill.slice(at).replace(/\s+/g, ' '))
+      .toContain('Your report stays where you wrote it for as long as the run you reviewed is open');
+    expect(skill).not.toContain('ws-reclaim');
+  });
+
   it('names the five destructive verbs ONLY inside the clause that forbids them', () => {
     for (const verb of ['ws-rm', 'ws-reap', 'ws-gc', 'ws-archive', 'ws-restore']) {
       const hits = skill.split(verb).length - 1;
@@ -109,6 +126,10 @@ describe('the reviewer skill: its contract', () => {
       .map((l) => l.slice(0, l.indexOf(':')))).toEqual(['name', 'description']);
     expect(frontmatter.toLowerCase()).toContain(
       'never use it to rule on a wave — a reviewer that sends work back or allocates a deviation has become a coordinator with no ledger');
+    // #361: a subagent working in a worker's, reviewer's or coordinator's workspace meets this
+    // skill's own trigger word for word, so the description excludes it in so many words.
+    expect(frontmatter.toLowerCase()).toContain(
+      'never use it inside a subagent — a review lens agent, or any session started by another session\'s agent tool or a workflow agent() call, is a subagent and returns its findings to its parent without sending mail.');
   });
 
   it('states the review-done mail shape the close route re-measures', () => {
@@ -183,5 +204,22 @@ describe('the reviewer skill: the report lands where the close route can read it
     expect(readArm.slice(0, readArm.indexOf(';')),
       "the agent's read allowlist must still grant .cc-clips, or the reviewer skill's report path stops being readable")
       .toContain(".cc-clips");
+  });
+
+  // The reclaim switch is the operator's alone (child-reclamation spec §5.8).
+  // ccd has no caller auth, so `ccd reclaim-pause --state on` from a session's
+  // own shell is a door the route's session gate cannot close — and the
+  // session most motivated to walk through it is the one whose workspace is
+  // about to be reclaimed. The skill names neither the verb nor the marker it
+  // writes (`reclaim-paused` contains the same token).
+  it('never names the reclaim switch — neither the route nor the bare ccd verb', () => {
+    expect(skill).not.toContain('reclaim-pause');
+  });
+
+  // The stall watch's level and quiet time are the operator's alone (stall-watch
+  // settings design 2026-10-05 §10). The skill never names the door that sets
+  // them.
+  it('never names the stall-watch settings door — the worker a check is about is the session most motivated to lower the watch', () => {
+    expect(skill).not.toContain('/api/coord/stall-watch');
   });
 });

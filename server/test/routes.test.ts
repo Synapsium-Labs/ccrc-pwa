@@ -38,7 +38,7 @@ const seedSession = (home: string, id: string, wrapper: string) => {
  *  mkdtemp dir created inside this call, so it can't be known before calling. */
 async function makeApp(
   panes: (string | null)[] | ((home: string) => (string | null)[]),
-  opts: { status?: 'busy' | 'idle'; io?: FleetIO } = {},
+  opts: { status?: 'busy' | 'idle'; io?: FleetIO; mailToken?: string } = {},
 ): Promise<{ app: FastifyInstance; calls: string[][]; bus: Bus; home: string }> {
   const home = mkTmp('ccrc-');
   seedRoster(home);
@@ -68,7 +68,8 @@ async function makeApp(
   const bus = new Bus();
   const cfg = loadConfig({ CCRC_HOME: home });
   const app = await buildServer(
-    { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: opts.io ?? localIO, queue: new KeyedQueue() },
+    { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: opts.io ?? localIO, queue: new KeyedQueue(),
+      ...(opts.mailToken !== undefined ? { mailToken: opts.mailToken } : {}) },
     bus,
   );
   return { app, calls, bus, home };
@@ -307,8 +308,8 @@ describe('write routes', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, '-l', 'hello'],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', 'hello'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
     ]);
     await app.close();
   });
@@ -391,8 +392,8 @@ describe('write routes', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Down'],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Down'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
     ]);
     await app.close();
   });
@@ -415,7 +416,7 @@ describe('write routes', () => {
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/interrupt`, payload: {} });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Escape']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Escape']]);
     await app.close();
   });
 
@@ -454,7 +455,7 @@ describe('POST /api/sessions/:id/submit', () => {
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: 'half-typed' } });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter']]);
     await app.close();
   });
 
@@ -488,7 +489,7 @@ describe('POST /api/sessions/:id/submit', () => {
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: 'half-typed' } });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter']]);
     await app.close();
   });
 
@@ -502,7 +503,7 @@ describe('POST /api/sessions/:id/submit', () => {
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/submit`, payload: { expect: 'stuck words' } });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({ ok: false, error: 'enter-ignored' });
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter']]);
     await app.close();
   }, 10_000);
 
@@ -583,7 +584,7 @@ describe('POST /api/sessions/:id/ask', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     // Single-select: the digit alone, no Enter — see ask.ts's own comment.
-    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `cc-${ID}`, '2']]);
+    expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', `=cc-${ID}:`, '2']]);
     await app.close();
   });
 
@@ -668,10 +669,10 @@ describe('prompt route attachment handling', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, '-l', clip],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'M-Enter'],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, '-l', 'what is this'],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', clip],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'M-Enter'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', 'what is this'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
     ]);
     await app.close();
   });
@@ -690,8 +691,8 @@ describe('prompt route attachment handling', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, '-l', clip],
-      ['tmux', 'send-keys', '-t', `cc-${ID}`, 'Enter'],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, '-l', clip],
+      ['tmux', 'send-keys', '-t', `=cc-${ID}:`, 'Enter'],
     ]);
     await app.close();
   });
@@ -832,15 +833,20 @@ describe('clip route', () => {
   });
 });
 
+// `/api/notify` fails shut since the box-token lifecycle (spec 4.3), so ingestion is
+// exercised with the token a fleet box's notify.sh presents.
+const NOTIFY_TOKEN = 'f'.repeat(64);
+
 describe('notify ingestion', () => {
   it('POST /api/notify with a swap message emits notice and the session event', async () => {
-    const { app, bus } = await makeApp(['❯ \n']);
+    const { app, bus } = await makeApp(['❯ \n'], { mailToken: NOTIFY_TOKEN });
     const notices: string[] = [];
     const sessionMsgs: SessionStreamMsg[] = [];
     bus.on('notice', (n) => notices.push(n.message));
     bus.on(`session:${ID}`, (m) => sessionMsgs.push(m));
     const message = `cc swap: ${ID} moved claude-a -> claude (limits) — reopen it on claude.ai under the claude account`;
-    const res = await app.inject({ method: 'POST', url: '/api/notify', payload: { message } });
+    const res = await app.inject({ method: 'POST', url: '/api/notify', payload: { message },
+      headers: { 'x-ccrc-mail-token': NOTIFY_TOKEN } });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(notices).toEqual([message]);
@@ -849,13 +855,14 @@ describe('notify ingestion', () => {
   });
 
   it('POST /api/notify with a non-swap message emits only notice', async () => {
-    const { app, bus } = await makeApp(['❯ \n']);
+    const { app, bus } = await makeApp(['❯ \n'], { mailToken: NOTIFY_TOKEN });
     const notices: string[] = [];
     const sessionMsgs: SessionStreamMsg[] = [];
     bus.on('notice', (n) => notices.push(n.message));
     bus.on(`session:${ID}`, (m) => sessionMsgs.push(m));
     const message = 'deploy finished on the server box';
-    const res = await app.inject({ method: 'POST', url: '/api/notify', payload: { message } });
+    const res = await app.inject({ method: 'POST', url: '/api/notify', payload: { message },
+      headers: { 'x-ccrc-mail-token': NOTIFY_TOKEN } });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     expect(notices).toEqual([message]);
@@ -898,6 +905,24 @@ describe('POST /api/sessions/:id/stop', () => {
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop` });
     expect(res.statusCode).toBe(503);
     expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+    await app.close();
+  });
+
+  it('the archive door refuses 503 registry-unmeasurable too, and runs no ccd verb (workspace lifecycle §5.2)', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, ID, 'claude-a');
+    const calls: string[][] = [];
+    const run: Runner = async (_c, args) => { calls.push(args); return { code: 0, stdout: '', stderr: '' }; };
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const app = await buildServer(
+      { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: unreadableField(ID, 'wrapper'), queue: new KeyedQueue() },
+      new Bus(),
+    );
+    const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/archive` });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ ok: false, error: 'registry-unmeasurable' });
+    expect(calls.filter((c) => c[0] === 'ws-archive' || c[0] === 'stop')).toEqual([]);
     await app.close();
   });
 
@@ -1199,7 +1224,7 @@ describe('layer 1 — the guard runner', () => {
   it('testDeps wires the guard onto deps.tmux as well, not just onto deps.runCcd', async () => {
     const deps = testDeps(undefined, async () => ({ code: 0, stdout: '', stderr: '' }));
     const tmuxRunner = (deps.tmux as unknown as { run: Runner }).run;
-    await expect(tmuxRunner('tmux', ['kill-session', '-t', 'cc-x']))
+    await expect(tmuxRunner('tmux', ['kill-session', '-t', '=cc-x:']))
       .rejects.toThrow(/argv not in the agent EXEC_WHITELIST/);
   });
 });
@@ -1235,6 +1260,12 @@ describe('POST /api/sessions/:id/archive — and an open run', () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     seedSession(home, id, 'claude-a');
+    // Workspace lifecycle wave 2: the one Archive archives a WORKSPACE whose worktree it measured present; a row with
+    // no `workspace` is a main checkout, which it stops instead (`archive-door.test.ts`).
+    const worktree = path.join(home, 'worktrees', id);
+    mkdirSync(worktree, { recursive: true });
+    writeFileSync(path.join(home, '.cc-sessions', `${id}.workspace`), id);
+    writeFileSync(path.join(home, '.cc-sessions', `${id}.workdir`), worktree);
     return home;
   };
   const recording = (calls: string[][]): Runner => async (_cmd, args) => {
@@ -1278,8 +1309,9 @@ describe('POST /api/sessions/:id/archive — and an open run', () => {
     const res = await app.inject({ method: 'POST', url: '/api/sessions/demo-claimed/archive' });
     expect(res.statusCode).toBe(409);
     // The SHAPE does not change with the condition — `runs` is present and
-    // empty, because no row was read. Fail-shut at a destructive act.
-    expect(res.json()).toEqual({ ok: false, error: 'run-open', runs: [] });
+    // empty, because no row was read. Fail-shut at a destructive act. And the
+    // store's own words ride it (workspace lifecycle wave 3b).
+    expect(res.json()).toEqual({ ok: false, error: 'run-open', runs: [], detail: expect.stringMatching(/\S/) });
     expect(calls.filter((c) => c[0] === 'ws-archive')).toEqual([]);
     await app.close();
   });

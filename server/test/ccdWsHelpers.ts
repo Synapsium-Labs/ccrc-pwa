@@ -3,6 +3,7 @@
 // environment override, which is what stops a unit test pointing
 // `git worktree remove` or `git branch -d` at a real repository.
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 import { mkTmp } from './tmpHelpers.js';
@@ -10,6 +11,7 @@ import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { asManagerCalls } from './platformFixtures.js';
+import { inheritedEnv } from './gitEnvStrip.js';
 
 /** The home-able ids of the test roster — the set ccd reads as `CCRC_HOME_ABLE`
  *  out of the roster `seedAccountsSh` writes below. Derived, not hand-typed,
@@ -27,6 +29,85 @@ export const CCD = path.resolve(__dirname, '../../ccd/ccd');
  *  `path.resolve(…, 'ccd', 'ccrc-api')` anywhere is a second definition even
  *  inside a comment explaining why it is one. */
 export const CCRC_API = path.resolve(__dirname, '../../ccd/ccrc-api');
+
+/** The installed direct entry's tracked TEMPLATE (reclaim-entry-safety,
+ *  D-3696): a standard-library Python launcher rendered to `~/.local/bin/ccd`
+ *  with an absolute isolated-Python shebang and the SHA-256 of the active Bash
+ *  body at `~/.local/libexec/ccrc/ccd`. `CCD` above stays the SOURCEABLE body —
+ *  every `source "$CCD"` harness in this suite is source mode, which never
+ *  crosses the launcher and is outside the direct-entry guarantee. */
+export const CCD_ENTRY = path.resolve(__dirname, '../../ccd/ccd-entry.py');
+
+/** The two placeholders the template carries exactly once each. */
+export const CCD_ENTRY_PLACEHOLDERS = { python: '@CCRC_PYTHON3@', digest: '@CCRC_CCD_SHA256@' } as const;
+
+/** The canonical path of the `python3` this test process's PATH selects,
+ *  asked of that interpreter itself under `-IS` — the spelling a rendered
+ *  shebang carries, never a bare `python3`. */
+export function canonicalPython3(): string {
+  return execFileSync('python3', ['-IS', '-c', 'import os,sys;sys.stdout.write(os.path.realpath(sys.executable))'],
+    { encoding: 'utf8' });
+}
+
+/** The template rendered for one interpreter and one body digest, with the
+ *  placeholder census the installer enforces: exactly one of each before, none
+ *  of any `@CCRC_…@` shape after. Throws rather than rendering a launcher that
+ *  could not run. */
+export function renderCcdEntry(template: string, python: string, sha256: string): string {
+  for (const p of Object.values(CCD_ENTRY_PLACEHOLDERS)) {
+    const n = template.split(p).length - 1;
+    if (n !== 1) throw new Error(`the launcher template carries ${n} copies of ${p}, not exactly one`);
+  }
+  const out = template.replace(CCD_ENTRY_PLACEHOLDERS.python, python).replace(CCD_ENTRY_PLACEHOLDERS.digest, sha256);
+  if (/@CCRC_[A-Z0-9_]+@/.test(out)) throw new Error('the rendered launcher still carries a placeholder');
+  return out;
+}
+
+export interface DirectEntry {
+  /** `<home>/.local/bin/ccd` — what a direct caller executes. */
+  entry: string;
+  /** `<home>/.local/libexec/ccrc/ccd` — the active Bash body. */
+  body: string;
+  /** The interpreter rendered into the shebang; `null` on a tree with no
+   *  launcher template, where the entry is the legacy self-contained Bash copy. */
+  python: string | null;
+}
+
+/**
+ * A FIXTURE install of the direct-entry pair under `<home>/.local` — never the
+ * live install paths. The body goes to `libexec/ccrc/ccd` (0644, only ever run
+ * through Bash); the launcher is the tracked template rendered with this
+ * process's canonical `python3` and the body's digest (0755). `body` replaces
+ * the shipped body's bytes for launcher-only cases (an argv echo, a fixture
+ * marker) — the launcher is generic over what it hashes.
+ *
+ * On a tree with no template the entry is the legacy one: the Bash body itself
+ * copied to `bin/ccd`, exactly what every install placed before D-3696. That is
+ * what lets the unfixed tree's controls run green and its attacks run red.
+ */
+export function installDirectEntry(home: string, opts: { body?: string | Buffer } = {}): DirectEntry {
+  const bin = path.join(home, '.local', 'bin');
+  const libexec = path.join(home, '.local', 'libexec', 'ccrc');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.mkdirSync(libexec, { recursive: true });
+  const bodyBytes = opts.body === undefined ? fs.readFileSync(CCD) : Buffer.from(opts.body);
+  const body = path.join(libexec, 'ccd');
+  const entry = path.join(bin, 'ccd');
+  fs.rmSync(body, { force: true });
+  fs.writeFileSync(body, bodyBytes, { mode: 0o644 });
+  fs.chmodSync(body, 0o644);
+  fs.rmSync(entry, { force: true });
+  if (!fs.existsSync(CCD_ENTRY)) {
+    fs.writeFileSync(entry, bodyBytes, { mode: 0o755 });
+    fs.chmodSync(entry, 0o755);
+    return { entry, body, python: null };
+  }
+  const python = canonicalPython3();
+  const digest = createHash('sha256').update(bodyBytes).digest('hex');
+  fs.writeFileSync(entry, renderCcdEntry(fs.readFileSync(CCD_ENTRY, 'utf8'), python, digest), { mode: 0o755 });
+  fs.chmodSync(entry, 0o755);
+  return { entry, body, python };
+}
 
 /** How many lines BACK of source `ccd-workspaces.test.ts`'s bash-spawn scan
  *  reads to find a call site's `ghContainedEnv(...)` and its opts — single-
@@ -411,6 +492,19 @@ export const WIDE_PANE_IF_UP =
  *  rather than through a file. */
 export const DEAD_PANE = 'case "$*" in *pane_active*) return 1 ;; esac;';
 
+/** THE MOUNT TABLE EVERY `sh()` HANDS ccd, relative to the fixture HOME
+ *  (D-4500). The sidecar carry's link route reads `CCD_MOUNTINFO`, else
+ *  `/proc/self/mountinfo`, the moment a link fails, and decides link-or-copy
+ *  from it. Left to the default, a verdict would depend on the HOST — a Linux
+ *  runner answers from its own table, macOS from none — so the same case would
+ *  log one cause on CI and another on a laptop, and a test that names a cause
+ *  would be measuring the machine. The harness therefore points every snippet at
+ *  this path inside HOME, which is ABSENT until a test writes a table there
+ *  (`fixtures/fakeMountKernel.ts`): the route answers `mounts-absent` on every
+ *  host alike. A snippet's own `CCD_MOUNTINFO` wins over it; `''` restores the
+ *  real table, which only the probe-gated real-kernel case asks for. */
+export const FIXTURE_MOUNTINFO = '.fixture-mountinfo';
+
 export interface CcdHarness {
   home: string;
   sh(snippet: string, env?: NodeJS.ProcessEnv): string;
@@ -464,7 +558,7 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   ghContainedEnv(home, {}, { systemd: true, tmux: true });
 
   const gitEnv = (): NodeJS.ProcessEnv => ({
-    ...process.env, HOME: home,
+    ...inheritedEnv(), HOME: home,
     GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@x',
     GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@x',
   });
@@ -477,8 +571,8 @@ export function makeCcdHarness(prefix: string): CcdHarness {
   const makeRepoAt = (name: string): string => {
     const origin = path.join(home, 'origins', `${name}.git`);
     const main = path.join(home, 'projects', name);
-    execFileSync('git', ['init', '--bare', '-b', 'main', origin]);
-    execFileSync('git', ['init', '-b', 'main', main]);
+    execFileSync('git', ['init', '--bare', '-b', 'main', origin], { env: inheritedEnv() });
+    execFileSync('git', ['init', '-b', 'main', main], { env: inheritedEnv() });
     fs.writeFileSync(path.join(main, 'README.md'), 'hi\n');
     git(main, 'add', 'README.md');
     git(main, 'commit', '-m', 'init');
@@ -503,7 +597,10 @@ export function makeCcdHarness(prefix: string): CcdHarness {
     sh: (snippet, env = {}) =>
       execFileSync('bash', ['-c', `source "${CCD}"; ${snippet}`],
         { encoding: 'utf8', cwd: home,
-          env: ghContainedEnv(home, { ...process.env, HOME: home, ...env }, { systemd: true, tmux: true }) }).trim(),
+          // `CCD_MOUNTINFO` sits BEFORE `...env` so a snippet can override it:
+          // see `FIXTURE_MOUNTINFO` for why the host's table never decides a verdict.
+          env: ghContainedEnv(home, { ...inheritedEnv(), HOME: home,
+            CCD_MOUNTINFO: path.join(home, FIXTURE_MOUNTINFO), ...env }, { systemd: true, tmux: true }) }).trim(),
     reg: (id, field) => {
       const p = path.join(home, '.cc-sessions', `${id}.${field}`);
       return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').trim() : null;
@@ -553,3 +650,14 @@ export function makeCcdHarness(prefix: string): CcdHarness {
     cleanup: () => { fs.rmSync(home, { recursive: true, force: true }); },
   };
 }
+
+/** A shell prefix that runs `<secs> <argv…>` under a cross-platform alarm and, on
+ *  the alarm, kills the child's WHOLE process group, reaps it and exits 142 (the
+ *  old form's code); otherwise it exits as the child did. Perl is on both
+ *  supported userlands. The old `perl -e 'alarm shift; exec @ARGV'` BECAME the
+ *  child, so the alarm signalled bash alone and a `tail` bash had forked —
+ *  blocked opening a FIFO whenever a mutation removed a detector's guard —
+ *  outlived every timed-out run; the fleet box's dead pane scopes held such
+ *  processes for weeks (session-continuity spec §1.3, §5.6 item 3). perl now
+ *  forks the child into a process group of its own and kills that group. */
+export const BOUNDED = `perl -e '$t = shift; $p = fork; die "fork: $!" unless defined $p; if (!$p) { setpgrp(0, 0); exec @ARGV; exit 127 } $SIG{ALRM} = sub { kill "KILL", -$p; waitpid($p, 0); exit 142 }; alarm $t; waitpid($p, 0); exit($? & 127 ? 128 + ($? & 127) : $? >> 8)'`;

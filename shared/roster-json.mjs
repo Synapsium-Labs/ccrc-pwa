@@ -213,9 +213,9 @@ export const MODEL_ALIASES = ['opus', 'sonnet', 'haiku', 'subagent'];
 const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
 const EXEC_KINDS = new Set(['upstream', 'generated', 'external', 'codex']);
-// Mirrors `shared/roster.ts`: these dotless names are GPT-lane commands, not
-// account ids, and must be refused before a wrapper can collide with one.
-const GPT_TOOLCHAIN_ACCOUNT_IDS = new Set(['ccgpt', 'ccgpt-runtime']);
+// Mirrors `shared/roster.ts`: dotless GPT-lane names, not account ids — ccrc's `ccrc-codex` and
+// `ccgpt-runtime`, and `ccgpt`, another repository's live launcher (D-3478). Refused before any wrapper.
+const GPT_TOOLCHAIN_ACCOUNT_IDS = new Set(['ccrc-codex', 'ccgpt-runtime', 'ccgpt']);
 export const HUES = new Set(['cyan', 'violet', 'blue', 'magenta', 'amber', 'green']);
 
 export class RosterInvalid extends Error {}

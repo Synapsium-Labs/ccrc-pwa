@@ -10,7 +10,7 @@
 // That reasoning is sound about SUBSTITUTION and silent about everything else
 // that moves the same number. `ccd/session-hook.sh` stamps `updatedAt`
 // unconditionally on every write (its tail `--argjson updatedAt
-// "$(_hook_epoch_ms)"`), and its `SubagentStart`/`SubagentStop` arm
+// "${hts:-$(_hook_epoch_ms)}"`), and its `SubagentStart`/`SubagentStop` arm
 // deliberately restores `prev_state` and re-reads `.ask` back off the file —
 // so a subagent event landing on a session that is BLOCKED on a dialog rewrites
 // the identical ask envelope under a fresh number.

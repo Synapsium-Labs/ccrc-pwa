@@ -200,10 +200,41 @@ describe('gen-wrappers.mjs', () => {
     expect(Number(fields[5])).toBe(1);
   });
 
-  it('TOOLCHAIN_EXECUTABLES names the GPT-lane binaries, so they are never orphan wrappers', () => {
-    for (const name of ['ccgpt', 'ccgpt-runtime']) {
+  it('TOOLCHAIN_EXECUTABLES names the GPT-lane launcher and runtime builder, and never ccgpt (D-3478)', () => {
+    for (const name of ['ccrc-codex', 'ccgpt-runtime']) {
       expect(TOOLCHAIN_EXECUTABLES).toContain(name);
     }
+    // The Set is ccrc's OWN executables. `ccgpt` is another repository's live
+    // launcher on the fleet box; the marker clause settles it (next case).
+    expect(TOOLCHAIN_EXECUTABLES).not.toContain('ccgpt');
+  });
+
+  it('the fleet box\'s shape — an unmarked ccgpt, an alias to it, a Codex lane: ccgpt is no orphan, the lane execs ccrc-codex (D-3478)', () => {
+    // Measured on the fleet box: `~/.local/bin/ccgpt` is another repository's
+    // regular, UNMARKED, `#!`-headed launcher, and one of its lanes' launchers is a
+    // symlink to it (modelled here as `ext-a`). With `ccgpt` out of TOOLCHAIN_EXECUTABLES, the marker
+    // clause alone keeps it off the orphan list — this pins that it still does.
+    const { rosterFile, binDir, stagingDir } = fixture(codexFixtureJson);
+    const foreign = '#!/usr/bin/env bash\n# FOREIGN-FIXTURE-2b2: another repository owns this launcher\nexit 0\n';
+    writeFileSync(path.join(binDir, 'ccgpt'), foreign, { mode: 0o755 });
+    symlinkSync('ccgpt', path.join(binDir, 'ext-a'));
+    const r = run([rosterFile, binDir, stagingDir]);
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    expect(r.stdout).not.toMatch(/^orphan\tccgpt$/m);
+    expect(r.stdout).not.toMatch(/^wrapper\tccgpt\t/m);
+    expect(r.stdout).toMatch(/^wrapper\tcodex-a\t/m);
+    // …and the ALIAS is classified too (final-review residue): a symlink to
+    // the foreign launcher is no orphan, no wrapper and nothing protected —
+    // the scan skips a non-regular entry, and the file it names is unmarked
+    // anyway. EVERY record kind, so an ext-a line of any sort is a red.
+    expect(r.stdout).not.toMatch(/^orphan\text-a$/m);
+    expect(r.stdout.split('\n').filter((l) => l.split('\t')[1] === 'ext-a'), 'ext-a got a manifest record').toEqual([]);
+    expect(r.stdout.split('\n').filter((l) => l.startsWith('orphan\t')), 'the fleet box shape has no orphan at all').toEqual([]);
+    expect(readFileSync(path.join(binDir, 'ccgpt'), 'utf8'), 'the scan touched a file it does not own').toBe(foreign);
+    // …and the Codex lane's staged launcher hands off to ccrc's own name.
+    const staged = readFileSync(path.join(stagingDir, 'codex-a'), 'utf8');
+    expect(staged).toContain('\nexec "$HOME/.local/bin/ccrc-codex" "$@"\n');
+    expect(staged).not.toContain('/.local/bin/ccgpt"');
   });
 
   it('a roster change: a marked wrapper generated for a DIFFERENT suffix reads back ccrc-unmodified/no', () => {

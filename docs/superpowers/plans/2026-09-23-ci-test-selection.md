@@ -4364,8 +4364,8 @@ describe('PROFILES', () => {
   it('matches the contract exactly', () => {
     expect(PROFILES).toEqual({
       linux: { targetMs: 240_000, min: 1, max: 5, workers: 2, defaultMs: 5000 },
-      macosSelected: { targetMs: 900_000, min: 1, max: 2, workers: 1, defaultMs: 5000, scale: 1.5 },
-      macosFull: { targetMs: 900_000, min: 1, max: 4, workers: 1, defaultMs: 5000, scale: 1.5 },
+      macosSelected: { targetMs: 900_000, min: 1, max: 2, workers: 2, defaultMs: 5000, scale: 1.5 },
+      macosFull: { targetMs: 900_000, min: 1, max: 4, workers: 2, defaultMs: 5000, scale: 1.5 },
       trace: { targetMs: 900_000, min: 1, max: 8, workers: 2, defaultMs: 5000, scale: 6 },
     });
   });
@@ -4389,6 +4389,7 @@ describe('planShards — durations known (LPT)', () => {
     };
     const plan = planShards(files, durations, PROFILES.linux);
     expect(plan).toHaveLength(3);
+    expect(plan.every((s) => s.workers === PROFILES.linux.workers)).toBe(true);
     const withHuge = plan.find((s) => s.files.includes('server/test/huge.test.ts'));
     expect(withHuge!.files).toEqual(['server/test/huge.test.ts']);
     expect(withHuge!.vitestShard).toBeNull();
@@ -4488,6 +4489,7 @@ describe('planShards — durations === null (vitest hash-shard fallback)', () =>
       expect(shard.total).toBe(3);
       expect(shard.files).toEqual(files);
       expect(shard.vitestShard).toBe(`${i + 1}/3`);
+      expect(shard.workers).toBe(profile.workers);
     }
   });
 
@@ -4495,7 +4497,7 @@ describe('planShards — durations === null (vitest hash-shard fallback)', () =>
     const files = ['server/test/a.test.ts'];
     const plan = planShards(files, null, PROFILES.linux);
     expect(plan).toEqual([
-      { index: 1, total: 1, files: ['server/test/a.test.ts'], vitestShard: '1/1' },
+      { index: 1, total: 1, files: ['server/test/a.test.ts'], vitestShard: '1/1', workers: 2 },
     ]);
   });
 });
@@ -4503,13 +4505,13 @@ describe('planShards — durations === null (vitest hash-shard fallback)', () =>
 describe('toMatrix', () => {
   it('converts repo-relative paths to server-relative, space-joined', () => {
     const plan = [
-      { index: 1, total: 2, files: ['server/test/a.test.ts', 'server/test/b.test.ts'], vitestShard: null },
-      { index: 2, total: 2, files: ['server/test/c.test.ts'], vitestShard: '2/2' },
+      { index: 1, total: 2, files: ['server/test/a.test.ts', 'server/test/b.test.ts'], vitestShard: null, workers: 2 },
+      { index: 2, total: 2, files: ['server/test/c.test.ts'], vitestShard: '2/2', workers: 7 },
     ];
     expect(toMatrix(plan)).toEqual({
       include: [
-        { shard: 1, total: 2, files: 'test/a.test.ts test/b.test.ts', vitest_shard: '' },
-        { shard: 2, total: 2, files: 'test/c.test.ts', vitest_shard: '2/2' },
+        { shard: 1, total: 2, files: 'test/a.test.ts test/b.test.ts', vitest_shard: '', workers: 2 },
+        { shard: 2, total: 2, files: 'test/c.test.ts', vitest_shard: '2/2', workers: 7 },
       ],
     });
   });
@@ -4651,7 +4653,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 /**
- * @typedef {{ index: number, total: number, files: string[], vitestShard: string|null }} Shard
+ * @typedef {{ index: number, total: number, files: string[], vitestShard: string|null, workers: number }} Shard
  * @typedef {Shard[]} ShardPlan
  * @typedef {{ targetMs: number, min: number, max: number, workers: number, defaultMs: number, scale?: number }} ShardProfile
  */
@@ -4681,8 +4683,8 @@ export function durationsFromVitestJson(report, repoRoot) {
 /** @type {Record<string, ShardProfile>} */
 export const PROFILES = {
   linux: { targetMs: 240_000, min: 1, max: 5, workers: 2, defaultMs: 5000 },
-  macosSelected: { targetMs: 900_000, min: 1, max: 2, workers: 1, defaultMs: 5000, scale: 1.5 },
-  macosFull: { targetMs: 900_000, min: 1, max: 4, workers: 1, defaultMs: 5000, scale: 1.5 },
+  macosSelected: { targetMs: 900_000, min: 1, max: 2, workers: 2, defaultMs: 5000, scale: 1.5 },
+  macosFull: { targetMs: 900_000, min: 1, max: 4, workers: 2, defaultMs: 5000, scale: 1.5 },
   trace: { targetMs: 900_000, min: 1, max: 8, workers: 2, defaultMs: 5000, scale: 6 },
 };
 
@@ -4726,6 +4728,7 @@ export function planShards(files, durations, { targetMs, min, max, workers, defa
       total: count,
       files: [...files],
       vitestShard: `${i + 1}/${count}`,
+      workers,
     }));
   }
 
@@ -4751,6 +4754,7 @@ export function planShards(files, durations, { targetMs, min, max, workers, defa
     total: count,
     files: bucketFiles,
     vitestShard: null,
+    workers,
   }));
 }
 
@@ -4765,7 +4769,7 @@ function toServerRelative(repoRelPath) {
  * boundaries).
  *
  * @param {ShardPlan} plan
- * @returns {{ include: Array<{ shard: number, total: number, files: string, vitest_shard: string }> }}
+ * @returns {{ include: Array<{ shard: number, total: number, files: string, vitest_shard: string, workers: number }> }}
  */
 export function toMatrix(plan) {
   return {
@@ -4774,6 +4778,7 @@ export function toMatrix(plan) {
       total: s.total,
       files: s.files.map(toServerRelative).join(' '),
       vitest_shard: s.vitestShard ?? '',
+      workers: s.workers,
     })),
   };
 }
@@ -4825,8 +4830,11 @@ cd server && ./node_modules/.bin/vitest run test/ci-shards.test.ts --maxWorkers=
 
   Measured: `Test Files  1 passed (1)` / `Tests  21 passed (21)`.
 
-- [ ] **Step 5: Measure the mutation table** (mutate → run Step 4's command → restore; every row re-measured red in
-  the integration clone, then reverted and reconfirmed green at 21/21):
+- [ ] **Step 5: Measure the mutation table** (mutate → run the named focused command → restore). Rows 1-9 were
+  re-measured red in the integration clone, then reverted and reconfirmed green at 21/21. Rows 10-14 were added for
+  D-3527 and re-measured on 2026-09-28 with Tasks 9 and 11's consumers in the command too:
+  `cd server && ./node_modules/.bin/vitest run test/ci-shards.test.ts test/ci-select-cli.test.ts test/ci-pipeline.test.ts`;
+  every mutation below went red independently, and the final restored control was 98/98:
 
   | # | Mutation | Test(s) that go RED |
   |---|---|---|
@@ -4839,6 +4847,11 @@ cd server && ./node_modules/.bin/vitest run test/ci-shards.test.ts --maxWorkers=
   | 7 | `times` CLI: drop the repository-root check | `run from anywhere else (server/): refuses, and writes nothing` (1) |
   | 8 | A file missing from a non-empty table packed at `defaultMs`, not the median | `a file missing from a NON-empty table is given the MEDIAN of the known durations (spec §7.1)` (1) |
   | 9 | An even count's median taken as the lower middle, not the mean of the two | the same (1) |
+  | 10 | Return `macosSelected` to one worker | `matches the contract exactly`; pull-request `enforce: selects exactly…` rejects matrix worker 1 (2) |
+  | 11 | Return `macosFull` to one worker | `matches the contract exactly`; scheduled `full-green false -> full + rebuild…` rejects matrix worker 1 (2) |
+  | 12 | Remove or replace the LPT return's `workers` | `a single file far longer…`; scheduled `full-green false -> full + rebuild…` rejects missing or worker 3 (2) |
+  | 13 | Remove or replace the hash-shard return's `workers` | `every shard gets ALL files…`, `with a single computed shard…`; pull-request `enforce: selects exactly…` and scheduled `full-green false -> full + rebuild…` reject missing or wrong workers (4) |
+  | 14 | Omit `workers` from `toMatrix` | `converts repo-relative paths to server-relative, space-joined`; pull-request `enforce: selects exactly…` and scheduled `full-green false -> full + rebuild…` reject the emitted rows (3) |
 
   One mutation was tried and found NOT load-bearing, measured rather than assumed: removing the
   `if (files.length === 0) return [];` early-return left every test green, because `Math.min(clamp(raw, min, max),
@@ -6327,10 +6340,15 @@ function uniqueFilesInMatrix(matrixJson: string): Set<string> {
   return set;
 }
 
-function expectValidMatrix(matrixJson: string): void {
+function expectValidMatrix(matrixJson: string, expectedWorkers: number): void {
   expect(matrixJson.includes('\n')).toBe(false);
-  const parsed = JSON.parse(matrixJson);
+  const parsed = JSON.parse(matrixJson) as { include: Array<{ workers: unknown }> };
   expect(Array.isArray(parsed.include)).toBe(true);
+  for (const row of parsed.include) {
+    expect(Number.isInteger(row.workers)).toBe(true);
+    expect(row.workers).toBeGreaterThan(0);
+    expect(row.workers).toBe(expectedWorkers);
+  }
 }
 
 describe('decideMode', () => {
@@ -6414,8 +6432,8 @@ describe('select.mjs CLI — pull_request', () => {
     expect(outputs.fallback).toBe('');
     expect(outputs.map_sha).toBe(baseSha);
 
-    expectValidMatrix(outputs.server_matrix);
-    expectValidMatrix(outputs.macos_matrix);
+    expectValidMatrix(outputs.server_matrix, 2);
+    expectValidMatrix(outputs.macos_matrix, 2);
     const files = uniqueFilesInMatrix(outputs.server_matrix);
     expect(files).toEqual(new Set(['test/a.test.ts', 'test/b.test.ts', 'test/c.test.ts']));
     expect(outputs.count).toBe('3');
@@ -6697,6 +6715,9 @@ describe('select.mjs CLI — schedule', () => {
     const all = new Set(['test/a.test.ts', 'test/b.test.ts', 'test/c.test.ts', 'test/d.test.ts']);
     expect(uniqueFilesInMatrix(outputs.server_matrix)).toEqual(all);
     expect(uniqueFilesInMatrix(outputs.trace_matrix)).toEqual(all);
+    expectValidMatrix(outputs.server_matrix, 2);
+    expectValidMatrix(outputs.macos_matrix, 2);
+    expectValidMatrix(outputs.trace_matrix, 2);
     expect(outputs.count).toBe('4');
   });
 });
@@ -7940,9 +7961,10 @@ real in Task 14.
   `tests trace shadow count macos_count server_matrix macos_matrix trace_matrix trace_count map_sha fallback`
   (Task 9); `node .github/ci/verdict.mjs server` with env `SELECT_RESULT TYPECHECK_RESULT SHARDS_RESULT TESTS COUNT
   EVENT` and `node .github/ci/verdict.mjs full` with env `RESULTS` (Task 8); `toMatrix` rows
-  `{ shard, total, files /*space-joined SERVER-relative*/, vitest_shard }` (Task 6);
+  `{ shard, total, files /*space-joined SERVER-relative*/, vitest_shard, workers }` (Task 6);
   `node .github/ci/shards.mjs times --out FILE <report.json>...` (Task 6, run from the repo root);
-  `node .github/ci/trace-run.mjs --repo ROOT --files LISTFILE --out FILE --jobs 2 --timeout 1560` (Task 7);
+  `node .github/ci/trace-run.mjs --repo ROOT --files LISTFILE --out FILE --jobs "$WORKERS" --timeout 1560`,
+  where `WORKERS` is the row's `workers` value (Task 7);
   `node .github/ci/testmap.mjs build --sha S [--old FILE] --records DIR --out FILE` and `… refresh --sha S --old
   FILE --records DIR --live FILE --traced FILE --out FILE` (Task 4: the map written first, then exit 0, 3 for a
   traced test that newly fails under trace, 4 for a floor violator); `server/vitest.select.config.ts` +
@@ -8607,10 +8629,11 @@ describe('ci.yml: the map\'s inputs and outputs (design 2026-09-23 §5.3-§5.5)'
     expect(step(job('trace-shard'), 'Keep the records')).toMatch(/^ {8}if: always\(\)$/m);
   });
 
-  it('a trace shard hands trace-run exactly its matrix row\'s files — no --shard split of its own', () => {
-    const t = runScript(step(job('trace-shard'), 'Trace'));
-    expect(t).toBe('echo "$FILES" | tr \' \' \'\\n\' > "$RUNNER_TEMP/trace.txt"\n'
-      + 'node .github/ci/trace-run.mjs --repo "$GITHUB_WORKSPACE" --files "$RUNNER_TEMP/trace.txt" --out "$RUNNER_TEMP/records.json" --jobs 2 --timeout 1560\n');
+  it('a trace shard hands trace-run exactly its matrix row\'s files and worker count — no split of its own', () => {
+    const st = step(job('trace-shard'), 'Trace');
+    expect(st).toMatch(/^ {10}WORKERS: \$\{\{ matrix\.workers \}\}$/m);
+    expect(runScript(st)).toBe('echo "$FILES" | tr \' \' \'\\n\' > "$RUNNER_TEMP/trace.txt"\n'
+      + 'node .github/ci/trace-run.mjs --repo "$GITHUB_WORKSPACE" --files "$RUNNER_TEMP/trace.txt" --out "$RUNNER_TEMP/records.json" --jobs "$WORKERS" --timeout 1560\n');
   });
 
   it('map-build keeps the map it built as an artifact, so a replay can fetch it (gh run download -n testmap)', () => {
@@ -8876,11 +8899,15 @@ describe('ci.yml: the full-suite verdict and the legs it runs (design 2026-09-23
     expect(b.match(/verdict=green/g), 'verdict=green is written in one place').toHaveLength(1);
   });
 
-  it('a shard runs exactly its list, through vitest.select.config.ts', () => {
-    const run = 'CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts ${VITEST_SHARD:+--shard=$VITEST_SHARD}';
+  it('a shard runs exactly its list, through vitest.select.config.ts — the whole script, nothing appended or commented out', () => {
+    const list = 'echo "$FILES" | tr \' \' \'\\n\' > "$RUNNER_TEMP/tests.txt"\n';
+    const run = 'CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts ${VITEST_SHARD:+--shard=$VITEST_SHARD} --maxWorkers="$WORKERS"';
+    expect(runScript(step(job('server-shard'), 'Test'))).toBe(
+      `${list}${run} --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/times.json"\n`);
+    expect(runScript(step(job('test-macos'), 'Test'))).toBe(`${list}${run}\n`);
     for (const id of ['server-shard', 'test-macos']) {
-      expect(job(id), `${id}: the list file`).toContain(`echo "$FILES" | tr ' ' '\\n' > "$RUNNER_TEMP/tests.txt"`);
-      expect(job(id), `${id}: the exact-list run`).toContain(run);
+      const st = step(job(id), 'Test');
+      expect(st, `${id}: matrix workers reach the Test command`).toMatch(/^ {10}WORKERS: \$\{\{ matrix\.workers \}\}$/m);
     }
   });
 
@@ -9319,9 +9346,10 @@ jobs:
         env:
           FILES: ${{ matrix.files }}
           VITEST_SHARD: ${{ matrix.vitest_shard }}
+          WORKERS: ${{ matrix.workers }}
         run: |
           echo "$FILES" | tr ' ' '\n' > "$RUNNER_TEMP/tests.txt"
-          CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts ${VITEST_SHARD:+--shard=$VITEST_SHARD} --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/times.json"
+          CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts ${VITEST_SHARD:+--shard=$VITEST_SHARD} --maxWorkers="$WORKERS" --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/times.json"
 
       - name: Keep the durations
         if: always() && needs.select.outputs.tests == 'full'
@@ -9459,12 +9487,14 @@ jobs:
   # Server package only: it owns the ccd/ccrc/doctor/expose/update suites and
   # every Darwin test in the tree. No tsc step — types have no platform.
   #
-  # Sharded across machines, never across workers: the unsharded leg had
+  # Sharded across machines and two workers per shard: the unsharded leg had
   # outgrown its deadline (the last 13 completed legs to 2026-09-23 were all
-  # cut at 55 minutes), and it runs ONE vitest worker, because `maxWorkers:
-  # '40%'` rounds to 1 on the 3-CPU runner — a setting vitest.config.ts argues
-  # for on flake grounds. At most 2 shards on a pull request and 4 in full, so
-  # the organisation's 5-job macOS cap still leaves room for `probe-macos`.
+  # cut at 55 minutes). The original one-worker policy was superseded by
+  # D-3527 after hosted `macos-26-arm64` runs measured a 20.64 -> 12.99 minute
+  # critical-path improvement, then 12.44 and 12.25 minute repetitions, with
+  # identical file, case, skip and failure identities. At most 2 shards on a
+  # pull request and 4 in full, so the organisation's 5-job macOS cap still
+  # leaves room for `probe-macos`.
   test-macos:
     name: test-macos ${{ matrix.shard }}/${{ matrix.total }}
     needs: select
@@ -9512,9 +9542,10 @@ jobs:
         env:
           FILES: ${{ matrix.files }}
           VITEST_SHARD: ${{ matrix.vitest_shard }}
+          WORKERS: ${{ matrix.workers }}
         run: |
           echo "$FILES" | tr ' ' '\n' > "$RUNNER_TEMP/tests.txt"
-          CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts ${VITEST_SHARD:+--shard=$VITEST_SHARD}
+          CCRC_TEST_LIST="$RUNNER_TEMP/tests.txt" ./node_modules/.bin/vitest run --config vitest.select.config.ts ${VITEST_SHARD:+--shard=$VITEST_SHARD} --maxWorkers="$WORKERS"
 
   # THE PROBE LEG — a platform CONTRACT check that is not hostage to the suite.
   #
@@ -9691,9 +9722,10 @@ jobs:
       - name: Trace
         env:
           FILES: ${{ matrix.files }}
+          WORKERS: ${{ matrix.workers }}
         run: |
           echo "$FILES" | tr ' ' '\n' > "$RUNNER_TEMP/trace.txt"
-          node .github/ci/trace-run.mjs --repo "$GITHUB_WORKSPACE" --files "$RUNNER_TEMP/trace.txt" --out "$RUNNER_TEMP/records.json" --jobs 2 --timeout 1560
+          node .github/ci/trace-run.mjs --repo "$GITHUB_WORKSPACE" --files "$RUNNER_TEMP/trace.txt" --out "$RUNNER_TEMP/records.json" --jobs "$WORKERS" --timeout 1560
       - name: Keep the records
         if: always()
         uses: actions/upload-artifact@v4
@@ -9925,12 +9957,14 @@ jobs:
 cd server && ./node_modules/.bin/vitest run test/ci-pipeline.test.ts --maxWorkers=2
 ```
 
-  Measured: `Tests  34 passed (34)`.
+  Measured after D-3527: `Tests  38 passed (38)`.
 
 - [ ] **Step 10: Measure the mutation table.** Stage the three files first
   (`git add .github/actions/server-deps/action.yml .github/workflows/ci.yml server/test/ci-pipeline.test.ts`);
   then for each row: apply the one edit, run Step 9's command, see the named test red, and restore with
-  `git checkout -- <file>` (which restores the staged version). Re-measured in the integration clone:
+  `git checkout -- <file>` (which restores the staged version). The original rows were re-measured in the integration
+  clone at 34 cases. D-3527 added six worker-carry rows; each was independently re-measured on 2026-09-28 against the
+  38-case file and the restored control passed 38/38:
 
   | Mutation (in `ci.yml` unless noted) | Test that goes red |
   |---|---|
@@ -9945,6 +9979,12 @@ cd server && ./node_modules/.bin/vitest run test/ci-pipeline.test.ts --maxWorker
   | `cancel-in-progress: true` | cancels superseded runs for pull requests only |
   | group without the `ci-` prefix | cancels superseded runs for pull requests only |
   | a second `CCRC_SELECTION: enforce` in select's step env | CCRC_SELECTION is defined exactly once |
+  | omit `WORKERS: ${{ matrix.workers }}` from `server-shard`'s Test step | `a shard runs exactly its list…` rejects the missing Linux bridge (1) |
+  | hard-code `server-shard`'s `--maxWorkers=2` | `a shard runs exactly its list…` rejects the Linux command (1) |
+  | omit `WORKERS: ${{ matrix.workers }}` from `test-macos`'s Test step | `a shard runs exactly its list…` rejects the missing macOS bridge (1) |
+  | hard-code `test-macos`'s `--maxWorkers=2` | `a shard runs exactly its list…` rejects the macOS command (1) |
+  | omit `WORKERS: ${{ matrix.workers }}` from `trace-shard`'s Trace step | `a trace shard hands trace-run exactly its matrix row's files and worker count…` rejects the missing trace bridge (1) |
+  | hard-code `trace-shard`'s `--jobs 2` | `a trace shard hands trace-run exactly its matrix row's files and worker count…` rejects the trace command (1) |
   | drop `checks: read` from select / make its `actions: read` a `write` | select asks for contents: read, checks: read and actions: read (both measured) |
   | `timeout-minutes: 90` on `trace-shard` | every job declares a deadline between 1 and 60 minutes |
   | drop `test-macos` from `full-suite`'s needs | full-suite needs every leg |
@@ -9989,8 +10029,9 @@ cd server && ./node_modules/.bin/vitest run test/ci-pipeline.test.ts --maxWorker
   | the last red step removed / never firing | the map is uploaded whatever the build said, and a last step turns the job red when it said 3 or 4 (1 each) |
   | the upload skipped when the build said 3 or 4 | the same, and map-build publishes testmap unless that check said no… (2) |
 
-  Every row measured red — one failing test each (`Tests  1 failed | 33 passed (34)`) except where noted — and
-  green again after restore.
+  Every original row measured red — one failing test each (`Tests  1 failed | 33 passed (34)`) except where noted —
+  and green again after restore. Each of the six D-3527 rows independently produced exactly one red and 37 passes,
+  then the restored file passed 38/38.
 
 - [ ] **Step 11: Validate YAML and expressions with actionlint** (Task 1 Step 3's binary, or download it the same way)
 
@@ -11714,3 +11755,15 @@ Found while executing (2026-09-24, subagent-driven; each a controller ruling on 
   gains item 16. The prose that called the gate's evidence a green `full-suite` check now names a green `full-suite`
   job in a trusted run: `CLAUDE.md`, spec §11.2, `release-stable.yml`'s `promote` comment and `build-release.test.ts`.
   Commits `c131b7c4`, `1a82a9ac` and `6529cce4`, plus the commit that defines this list (FR-7, FR-8, FR-10).
+- **D-3527 — macOS uses two Vitest workers after repeated hosted-runner evidence.** The approved design and Task 6
+  deliberately held each macOS machine shard to one worker because the flake concern had not been measured. Hosted
+  `macos-26-arm64` run `36413685222` measured the same four-shard suite at one and two workers: the critical path fell
+  from 20.64 to 12.99 minutes (37.1%, about 1.59x), with identical file, case, skip and failure identities. Independent
+  two-worker repetitions `36418766581` and `36418790643` completed at 12.44 and 12.25 minutes and matched those complete
+  identities again; the only 37 failures in all three runs were the diagnostic branch's expected workflow-shape
+  failures. The policy therefore reverses deliberately. Each profile's `workers` value now travels on every planned
+  shard and matrix row to the runner: Vitest consumes `--maxWorkers="$WORKERS"`, trace-run consumes `--jobs
+  "$WORKERS"`, and tests independently pin the profile, planner, matrix and command bridges. On 2026-09-28 each
+  macOS profile was independently returned to one worker; each planner arm independently omitted and then replaced
+  its field; `toMatrix` omitted it; and Linux, macOS and trace each independently lost its matrix bridge and hard-coded
+  its command. Every mutation produced the named red, with a 98/98 restored control.

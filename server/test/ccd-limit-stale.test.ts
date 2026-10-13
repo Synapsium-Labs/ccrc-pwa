@@ -21,7 +21,7 @@ const ARMED = 'Usage limit reached · continuing automatically at 11:50am · esc
 const BUSY = 'Your usage limit has reset · press enter to continue\nWorking… (esc to interrupt)\n❯ ';
 const READY = '? for shortcuts\n❯ ';
 const seed = (): void => { h.sh(`_reg_set ${ID} wrapper claude`); };
-const enters = (): string[] => h.calls().filter((l) => l === `tmux send-keys -t cc-${ID} Enter`);
+const enters = (): string[] => h.calls().filter((l) => l === `tmux send-keys -t =cc-${ID}: Enter`);
 const swapLog = (): string => {
   const f = path.join(h.home, '.cc-sessions', 'swap.log');
   return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '';

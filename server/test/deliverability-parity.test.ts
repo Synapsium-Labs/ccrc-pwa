@@ -91,7 +91,7 @@ const seedRow = (home: string, row: DeliverabilityRow): void => {
     mkdirSync(live, { recursive: true });
     writeFileSync(path.join(live, `${PARITY_PID}.json`), JSON.stringify({
       pid: PARITY_PID, sessionId: UUID, cwd: '/w/demo', name: null, nameSource: null,
-      status: 'idle', version: '2.1.220',
+      status: row.liveStatus ?? 'idle', version: '2.1.220',
       // quiet: idle for longer than MAIL_QUIET_MS; busy: fresh activity.
       statusUpdatedAt: row.quiet ? PARITY_NOW - MAIL_QUIET_MS - 1_000 : PARITY_NOW - 1_000,
     }));
@@ -130,6 +130,8 @@ describe('deliverability parity: sweepMail and peerDeliverable read one world', 
     expect(verdicts).toContain('unknown');
     expect(verdicts.some((v) => v.startsWith('no:'))).toBe(true);
     expect(DELIVERABILITY_FIXTURE.some((r) => !r.quiet)).toBe(true);
+    // Worker stall watch §4.1: `shell` is pinned from both ladders.
+    expect(DELIVERABILITY_FIXTURE.some((r) => r.liveStatus === 'shell' && r.quiet && r.expect === 'yes')).toBe(true);
   });
 
   for (const row of DELIVERABILITY_FIXTURE) {

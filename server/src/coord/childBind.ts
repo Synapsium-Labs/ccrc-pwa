@@ -1,12 +1,20 @@
 import { readSessionRecord } from '../registry.js';
-import { childSpent, type ChildSpentDeps } from './childSpent.js';
+import { childBirthOf, childSpent, type ChildBirthRunRead, type ChildSpentDeps } from './childSpent.js';
+
+/** The port the gate reads a child's BIRTH through — declared HERE, by its
+ *  consumer (L2): one run row by id, answered as `CoordStore.run` answers
+ *  (row, no row, or unreadable). `CoordStore` satisfies it structurally, so
+ *  both doors hand over the store they already hold and `store.ts` owes this
+ *  gate nothing. */
+export interface ChildBindRuns { run(id: number): ChildBirthRunRead }
 
 /**
  * Rule 3's verdict for one bind (child-reclamation spec §5.4). `ok: true` is
  * a workspace that is not a child — no marker, or no registry row, which is
- * today's behaviour — or a child that has had no PR. The two refusals are the
- * two `RunRefuseCode`s of the same names; `shared/api.ts` argues why they are
- * two.
+ * today's behaviour — or a child that has had no PR of its OWN incarnation
+ * (every PR on its branch provably predates its birth). The two refusals are
+ * the two `RunRefuseCode`s of the same names; `shared/api.ts` argues why they
+ * are two.
  */
 export type ChildBindVerdict =
   | { readonly ok: true }   // not a child (no marker, or no registry row — today's behaviour), or an unspent child
@@ -38,9 +46,17 @@ export type ChildBindVerdict =
  *     whose branch has had a PR;
  *   - `child.kind === 'unreadable'` → `spent-unmeasured`: a bind REFUSES what
  *     it cannot read (wave 3's reclaim will DEFER on the same answer).
- * A child is then asked `childSpent`, whose three answers map one to one.
+ * A child is then asked `childSpent`, whose three answers map one to one —
+ * with its BIRTH, read from the minting run its marker names (`runs.run(
+ * mark.runId)`, through `childBirthOf`). A spent answer refuses in EITHER
+ * incarnation: `this` and `unplaced` alike (spec §5.3). A bind does not date
+ * the fast path, and an undated row — an older ccd's, or one against a birth
+ * that cannot be placed — refuses exactly as every spent row did before
+ * placement existed. Only a row proven to predate the birth stops counting.
  */
-export async function childBindGate(deps: ChildSpentDeps, sessionId: string): Promise<ChildBindVerdict> {
+export async function childBindGate(
+  deps: ChildSpentDeps, runs: ChildBindRuns, sessionId: string,
+): Promise<ChildBindVerdict> {
   const read = await readSessionRecord(deps.io, deps.cfg, sessionId);
   if (!read.found) {
     if (read.reason === 'unlistable') {
@@ -59,7 +75,8 @@ export async function childBindGate(deps: ChildSpentDeps, sessionId: string): Pr
   if (mark.kind === 'unreadable') {
     return { ok: false, code: 'spent-unmeasured', detail: 'the child marker could not be read' };
   }
-  const spent = await childSpent(deps, read.record);
+  const birth = childBirthOf(runs.run(mark.runId), sessionId);
+  const spent = await childSpent(deps, read.record, birth);
   if (spent.kind === 'spent') return { ok: false, code: 'workspace-spent', pr: spent.pr };
   if (spent.kind === 'unmeasured') return { ok: false, code: 'spent-unmeasured', detail: spent.detail };
   return { ok: true };

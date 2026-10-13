@@ -18,8 +18,11 @@
 //
 // TWO BACKENDS (the spike, plan Task 1, chose the default):
 //   sigstore — @sigstore/verify against the VENDORED trusted root beside this
-//              file; CCRC_SIGSTORE_TRUSTED_ROOT overrides it (a by-hand
-//              refresh for a root that has gone stale). No network.
+//              file; CCRC_SIGSTORE_TRUSTED_ROOT overrides it — read from the
+//              process environment unconditionally, so whoever controls that
+//              environment (a shell, or the user manager an unattended unit
+//              inherits it from) can substitute the root, not only an
+//              operator refreshing one that has gone stale. No network.
 //   gh       — `gh attestation verify` (gh >= 2.49) with the same constraints
 //              spelled on its argv, plus `--format json` (D-3133). gh hashes
 //              the file itself, so this arm takes --blob only; it checks the

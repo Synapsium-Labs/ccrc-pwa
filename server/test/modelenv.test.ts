@@ -474,12 +474,14 @@ describe('MODEL_ENV_KEYS', () => {
 
   // C26 (moved here from the monorepo review, whose own pin read a sibling
   // worktree by a session-scoped absolute path and skipped everywhere else):
-  // `API_TIMEOUT_MS` and `CLAUDE_CODE_MAX_RETRIES` ride in the ccgpt wrapper
-  // (infra/handoff/ccgpt), never in a lane's settings.json — a re-materialise
-  // that ever wrote them here would silently override the operator's own
-  // timeout/retry knobs the next time `mergeSettingsEnv` ran. Pinned in-tree,
-  // on the shared/modelenv.mjs side, where this export actually lives.
-  it('never carries API_TIMEOUT_MS or CLAUDE_CODE_MAX_RETRIES — those ride in the ccgpt wrapper (C26)', () => {
+  // `API_TIMEOUT_MS` and `CLAUDE_CODE_MAX_RETRIES` ride in the lane's
+  // launcher — `ccd/ccrc-codex` for a ccrc-owned codex lane, as the other
+  // repository's `ccgpt` (infra/handoff/ccgpt) still does for an external
+  // one — never in a lane's settings.json. A re-materialise that ever wrote
+  // them here would silently override the operator's own timeout/retry knobs
+  // the next time `mergeSettingsEnv` ran. Pinned in-tree, on the
+  // shared/modelenv.mjs side, where this export actually lives.
+  it('never carries API_TIMEOUT_MS or CLAUDE_CODE_MAX_RETRIES — those ride in the ccrc-codex launcher (C26)', () => {
     expect(MODEL_ENV_KEYS).not.toContain('API_TIMEOUT_MS');
     expect(MODEL_ENV_KEYS).not.toContain('CLAUDE_CODE_MAX_RETRIES');
   });

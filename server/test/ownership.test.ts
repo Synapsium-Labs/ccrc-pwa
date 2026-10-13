@@ -139,7 +139,13 @@ describe('provenance marker', () => {
 describe('the committed ccd carries a marker that matches its own bytes', () => {
   const ccd = readFileSync(CCD, 'utf8');
 
-  it('keeps the shebang on line 1 and the marker on line 2 — ccd is executed directly', () => {
+  // WHY THE SHEBANG STAYS (D-3696): `ccd/ccd` is no longer what a box executes
+  // directly — `~/.local/bin/ccd` is the rendered Python launcher
+  // (`ccd/ccd-entry.py`), which starts this file as `bash [-p] -- <body>` from
+  // `~/.local/libexec/ccrc/ccd`. It keeps line 1 because it is still a Bash
+  // file in its own right: SOURCEABLE (every `source ccd/ccd` harness), the
+  // active Bash body, and the copy the shipped tree carries at `~/ccrc/ccd/ccd`.
+  it('keeps the shebang on line 1 and the marker on line 2 — ccd stays a sourceable Bash file and the active body', () => {
     const lines = ccd.split('\n');
     expect(lines[0]).toBe('#!/usr/bin/env bash');
     expect(lines[1]).toMatch(/^# ccrc:generated 1 sha256=[0-9a-f]{64}$/);

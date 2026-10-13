@@ -49,6 +49,12 @@ describe('runOpenRuns — the ONE reader of the run-open body', () => {
     expect(runOpenRuns(err)).toEqual(RUNS);
   });
 
+  it('drops a member whose `program` is not a string — the shared validator measures all four fields', () => {
+    const err = new ApiError(409, { ok: false, error: 'run-open',
+      runs: [{ id: 17, program: 'build4', wave: 2, waveOf: 3 }, { id: 7, program: 5, wave: 1, waveOf: null }] });
+    expect(runOpenRuns(err)).toEqual(RUNS);
+  });
+
   // `waveOf` was the ONE field of four this parser ASSERTED and did not
   // MEASURE, inside a function whose entire job is validating an untrusted
   // body: `ArchiveConflictRun` declares `waveOf: number | null`, so a member
@@ -97,7 +103,7 @@ describe('ArchiveConflictSheet', () => {
   });
 
   it('Archive anyway posts {force:true}', async () => {
-    const archive = vi.fn(async () => {});
+    const archive = vi.fn(async () => null);
     const onDone = vi.fn();
     const onClose = vi.fn();
     render(<ArchiveConflictSheet sessionId="demo-x" runs={RUNS} onClose={onClose} onDone={onDone}
@@ -115,6 +121,14 @@ describe('ArchiveConflictSheet', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Archive anyway' }));
     await waitFor(() => expect(screen.getByText('ws-archive: busy')).toBeTruthy());
     expect(onClose).not.toHaveBeenCalled();     // still open, refusal rendered INSIDE
+  });
+
+  it('renders the archive door\'s typed refusals in words — a forced archive of a busy workspace (workspace lifecycle §5.2)', async () => {
+    const archive = vi.fn().mockRejectedValue(new ApiError(409, { ok: false, error: 'session-busy' }));
+    render(<ArchiveConflictSheet sessionId="demo-x" runs={RUNS} onClose={() => {}} archive={archive} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Archive anyway' }));
+    await waitFor(() =>
+      expect(screen.getByText('It is working — archiving now would lose the turn in progress.')).toBeTruthy());
   });
 
   it('renders a 501 as the host-skew sentence, not a slug', async () => {

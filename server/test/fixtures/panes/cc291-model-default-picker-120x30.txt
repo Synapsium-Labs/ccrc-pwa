@@ -1,0 +1,29 @@
+  line 64 of a long reply that fills the screen
+  line 65 of a long reply that fills the screen
+  line 66 of a long reply that fills the screen
+  line 67 of a long reply that fills the screen
+  line 68 of a long reply that fills the screen
+  line 69 of a long reply that fills the screen
+
+✻ Worked for 5s · done 1:07 PM
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Select model
+  Switch between Claude models. Your pick becomes the default for new sessions. For other/previous model names,
+  specify with --model.
+
+    1. Default (recommended)  Use the default model (currently Opus 5.5) · $4/$20 per Mtok
+    2. Opus                   Opus 5.5 · Best for everyday, complex tasks · $4/$20 per Mtok
+  ❯ 3. Fable ✔                Fable 5.1 · Most capable for your hardest and longest-running tasks · $10/$50 per Mtok
+    4. Sonnet                 Sonnet 5.5 · Efficient for routine tasks · $2/$10 per Mtok
+    5. Haiku                  Haiku 4.5 · Fastest for quick answers · $1/$5 per Mtok
+
+  ● High effort (default) ←/→ to adjust
+
+  Enter to set as default · s to use this session only · Esc to cancel
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  👤 cfg │ 🤖 Fable 5.1 · high │ 🎯 repo │ ▓ ctx ░░░░░░░░ 0% │ 💲 $0.0533                             ● high · /effort
+  ⏸ manual mode on · ← for agents

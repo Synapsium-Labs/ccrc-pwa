@@ -28,7 +28,7 @@ const r = (over: Partial<RunSummary> = {}): RunSummary => ({
   openedAt: FROZEN - 1_000_000, dispatchStartedAt: null,
   dispatchedAt: FROZEN - 900_000, closedAt: null,
   handoffCommit: null, items: { done: 3, total: 7 }, unreadMail: 0,
-  health: HEALTHY, ...over,
+  health: HEALTHY, childReclaim: null, ...over,
 });
 
 const makeStore = (): FleetStore => createFleetStore({

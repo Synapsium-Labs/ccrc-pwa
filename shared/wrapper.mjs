@@ -96,7 +96,7 @@ export function generateWrapperBody(account, upstreamId) {
       + `"${id}"'s wrapper has nothing to exec.`,
       'Fix the id of the account whose exec.kind is "upstream" in ~/.ccrc/accounts.json.');
   }
-  const target = account.execKind === 'codex' ? 'ccgpt' : upstreamId;
+  const target = account.execKind === 'codex' ? 'ccrc-codex' : upstreamId;
   const suffix = account.configDirSuffix;
   // `SUFFIX_SAFE_RE`'s character class allows ".", so it accepts ".." exactly
   // as happily as it accepts ".claude" — a safe CHARACTER SET and a safe

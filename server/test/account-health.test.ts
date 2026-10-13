@@ -20,8 +20,9 @@ import { mkTmp } from './tmpHelpers.js';
 // it on a Darwin box, and flock(1) is not BSD userland.
 beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
 
-const PROBE = path.resolve(__dirname, '../../ccd/ccd-account-health');
-const SHAPE = path.resolve(__dirname, '../../ccd/ccrc-wrapper-shape');
+const CCRC_ROOT = path.resolve(__dirname, '../..');
+const PROBE = path.join(CCRC_ROOT, 'ccd', 'ccd-account-health');
+const SHAPE = path.join(CCRC_ROOT, 'ccd', 'ccrc-wrapper-shape');
 let home: string;
 const j = (...p: string[]) => path.join(home, ...p);
 
@@ -31,7 +32,8 @@ const ROSTER = {
     { id: 'claude', label: 'claude', configDirSuffix: '.claude',
       exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
     { id: 'claude-a', label: 'claude-a', configDirSuffix: '.claude-a',
-      exec: { kind: 'generated' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+      exec: { kind: 'generated', secretsFile: '.cc-secrets/claude-a-oauth.env' },
+      homeAble: true, hue: 'violet', telemetry: 'anthropic' },
     { id: 'gpt', label: 'gpt', configDirSuffix: '.claude-gpt',
       exec: { kind: 'external' }, homeAble: false, hue: 'magenta', telemetry: 'none' },
   ],
@@ -73,10 +75,51 @@ exit 0
 `, { mode: 0o755 });
 }
 
+/** Atomically replace the user-owned roster immediately before or after the
+ *  real Node validator. This deterministically exercises both sides of the
+ *  validation/use gap without asking a scheduler to hit a timing window. */
+function replaceRosterWhenNodeRuns(next: unknown, when: 'before' | 'after'): void {
+  const bin = j('.local', 'bin');
+  const replacement = j('accounts-around-node.json');
+  const move = `${JSON.stringify(realBin('mv'))} ${JSON.stringify(replacement)} "$HOME/.ccrc/accounts.json"`;
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(replacement, JSON.stringify(next, null, 2));
+  fs.writeFileSync(path.join(bin, 'node'), `#!/bin/bash
+${when === 'before' ? `${move}\n` : ''}${JSON.stringify(realBin('node'))} "$@"
+rc=$?
+${when === 'after' ? `[ "$rc" -ne 0 ] || ${move}\n` : ''}exit "$rc"
+`, { mode: 0o755 });
+}
+
+/** Replace the roster after the first successful roster read. The fake delegates
+ *  every read to the real cat, so only the path opened by the probe is a seam. */
+function replaceRosterAfterFirstRead(next: unknown): void {
+  const bin = j('.local', 'bin');
+  const replacement = j('accounts-after-first-read.json');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(replacement, JSON.stringify(next, null, 2));
+  fs.writeFileSync(path.join(bin, 'cat'), `#!/bin/bash
+${JSON.stringify(realBin('cat'))} "$@"
+rc=$?
+if [ "$rc" -eq 0 ] && [ "$#" -eq 2 ] && [ "$1" = -- ] \
+  && [ "$2" = "$HOME/.ccrc/accounts.json" ] && [ -f ${JSON.stringify(replacement)} ]; then
+  ${JSON.stringify(realBin('mv'))} ${JSON.stringify(replacement)} "$HOME/.ccrc/accounts.json"
+fi
+exit "$rc"
+`, { mode: 0o755 });
+}
+
 const token = (id: string, value = 'sk-ant-oat01-FIXTURE'): void => {
   fs.mkdirSync(j('.cc-secrets'), { recursive: true });
   fs.writeFileSync(j('.cc-secrets', `${id}-oauth.env`),
     `export CLAUDE_CODE_OAUTH_TOKEN=${value}\n`, { mode: 0o600 });
+};
+
+// An API-key file must not be evaluated by the OAuth-only health probe.
+const providerKey = (id: string, provider: string): void => {
+  fs.mkdirSync(j('.cc-secrets'), { recursive: true });
+  fs.writeFileSync(j('.cc-secrets', `${id}-${provider}.env`),
+    `touch "$HOME/${id}-provider-file-was-sourced"\nexport ANTHROPIC_AUTH_TOKEN=fixture\n`, { mode: 0o600 });
 };
 
 /** An env file whose exact bytes are the subject — non-empty on disk, but not
@@ -120,6 +163,7 @@ beforeEach(() => {
   home = mkTmp('ccrc-account-health-');
   fs.mkdirSync(j('.cc-sessions'), { recursive: true });
   fs.mkdirSync(j('.ccrc'), { recursive: true });
+  fs.symlinkSync(CCRC_ROOT, j('ccrc'));
   fs.writeFileSync(j('.ccrc', 'accounts.json'), JSON.stringify(ROSTER, null, 2));
 });
 afterEach(() => { fs.rmSync(home, { recursive: true, force: true }); });
@@ -233,12 +277,243 @@ describe('eligibility is roster-derived', () => {
     expect(fs.existsSync(marker('other-one'))).toBe(true);
   });
 
+  it('uses an upstream OAuth credential declared outside the legacy filename', () => {
+    fs.writeFileSync(j('.ccrc', 'accounts.json'), JSON.stringify({ version: 1, accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream', secretsFile: '.private/claude-setup.env' },
+        homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    ] }));
+    fs.mkdirSync(j('.private'), { recursive: true });
+    fs.writeFileSync(j('.private', 'claude-setup.env'), 'export CLAUDE_CODE_OAUTH_TOKEN=DECLARED\n', { mode: 0o600 });
+    token('claude', 'LEGACY');
+    plantCurl('401', '{"error":{"type":"authentication_error"}}');
+
+    expect(run().status).toBe(0);
+    expect(fs.readFileSync(j('curl-stdin'), 'utf8')).toContain('DECLARED');
+    expect(fs.readFileSync(j('curl-stdin'), 'utf8')).not.toContain('LEGACY');
+    expect(fs.existsSync(marker('claude'))).toBe(true);
+  });
+
+  it('refuses an invalid declared path before falling back to a stale legacy OAuth file', () => {
+    fs.writeFileSync(j('.ccrc', 'accounts.json'), JSON.stringify({ version: 1, accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream', secretsFile: '.cc-secrets/../outside.env' },
+        homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    ] }));
+    fs.writeFileSync(j('outside.env'), 'touch "$HOME/invalid-path-was-sourced"\nexport CLAUDE_CODE_OAUTH_TOKEN=fixture\n');
+    token('claude', 'LEGACY');
+    plantCurl('401', '{"error":{"type":"authentication_error"}}');
+
+    const r = run();
+
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/roster .*invalid exec\.secretsFile/);
+    expect(fs.existsSync(marker('claude'))).toBe(false);
+    expect(fs.existsSync(j('invalid-path-was-sourced'))).toBe(false);
+    expect(fs.existsSync(j('curl-argv'))).toBe(false);
+  });
+
+  it('refuses an API-key lane even when a stale guessed OAuth file answers live', () => {
+    // D-3524: ccd can name the provider key, but the OAuth usage endpoint has
+    // no authority over it. A retained `<id>-oauth.env` must not turn a 403
+    // scope reply into a false marker clear.
+    fs.writeFileSync(j('.ccrc', 'accounts.json'), JSON.stringify({ version: 1, accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'none' },
+      { id: 'orl', label: 'orl', configDirSuffix: '.claude-orl',
+        exec: { kind: 'generated', provider: 'openrouter', secretsFile: '.cc-secrets/orl-openrouter.env' },
+        homeAble: true, hue: 'amber', telemetry: 'anthropic' },
+    ] }));
+    providerKey('orl', 'openrouter');
+    rawToken('orl', 'touch "$HOME/orl-stale-oauth-was-sourced"\nexport CLAUDE_CODE_OAUTH_TOKEN=fixture\n');
+    fs.writeFileSync(marker('orl'), '1757203200 rescue-401');
+    plantCurl('403', '{"error":{"type":"oauth_scope_insufficient"}}');
+
+    const r = run();
+
+    expect(r.status).toBe(0);
+    expect(r.stderr).toMatch(/orl: refused — OAuth usage probe does not measure an API-key lane/);
+    expect(fs.existsSync(marker('orl'))).toBe(true);
+    expect(fs.existsSync(j('orl-provider-file-was-sourced'))).toBe(false);
+    expect(fs.existsSync(j('orl-stale-oauth-was-sourced'))).toBe(false);
+    expect(fs.existsSync(j('curl-argv'))).toBe(false);
+  });
+
+  it('refuses a login lane even when a stale guessed OAuth file answers dead', () => {
+    // A login lane deliberately has no `exec.secretsFile`; `.credentials.json`
+    // is its credential and never becomes a D-3524 source. A leftover OAuth
+    // file must not let this probe write a replacement verdict either.
+    fs.writeFileSync(j('.ccrc', 'accounts.json'), JSON.stringify({ version: 1, accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'none' },
+      { id: 'login', label: 'login', configDirSuffix: '.claude-login',
+        exec: { kind: 'generated', provider: 'anthropic' },
+        homeAble: true, hue: 'green', telemetry: 'anthropic' },
+    ] }));
+    rawToken('login', 'touch "$HOME/login-stale-oauth-was-sourced"\nexport CLAUDE_CODE_OAUTH_TOKEN=fixture\n');
+    plantCurl('401', '{"error":{"type":"authentication_error"}}');
+
+    const r = run();
+
+    expect(r.status).toBe(0);
+    expect(r.stderr).toMatch(/login: refused — OAuth usage probe has no declared setup-token credential/);
+    expect(fs.existsSync(marker('login'))).toBe(false);
+    expect(fs.existsSync(j('login-stale-oauth-was-sourced'))).toBe(false);
+    expect(fs.existsSync(j('curl-argv'))).toBe(false);
+  });
+
   it('refuses the whole pass when the roster cannot be read', () => {
     fs.rmSync(j('.ccrc', 'accounts.json'));
     plantCurl('403');
     const r = run();
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/no roster at \$HOME\/\.ccrc\/accounts\.json/);
+  });
+
+  it('a duplicate account id makes the whole pass side-effect free', () => {
+    fs.writeFileSync(j('.ccrc', 'accounts.json'), JSON.stringify({ version: 1, accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'none' },
+      { id: 'duplicate', label: 'first', configDirSuffix: '.first',
+        exec: { kind: 'generated', secretsFile: '.cc-secrets/first.env' },
+        homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+      { id: 'duplicate', label: 'second', configDirSuffix: '.second',
+        exec: { kind: 'generated', secretsFile: '.cc-secrets/second.env' },
+        homeAble: true, hue: 'green', telemetry: 'anthropic' },
+    ] }));
+    fs.mkdirSync(j('.cc-secrets'), { recursive: true });
+    fs.writeFileSync(j('.cc-secrets', 'first.env'),
+      'touch "$HOME/first-credential-was-sourced"\nexport CLAUDE_CODE_OAUTH_TOKEN=FIRST\n');
+    fs.writeFileSync(j('.cc-secrets', 'second.env'),
+      'touch "$HOME/second-credential-was-sourced"\nexport CLAUDE_CODE_OAUTH_TOKEN=SECOND\n');
+    fs.writeFileSync(marker('duplicate'), '1757203200 rescue-401');
+    fs.writeFileSync(j('.cc-sessions', 'duplicate-authdead.tmp.sentinel'), 'partial');
+    plantCurlSequence([
+      { status: '403', body: '{"error":{"type":"oauth_scope_insufficient"}}' },
+      { status: '401', body: '{"error":{"type":"authentication_error"}}' },
+    ]);
+
+    const r = run();
+
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/roster .*duplicate account id "duplicate"/);
+    expect(markerBody('duplicate')).toBe('1757203200 rescue-401');
+    expect(fs.readFileSync(j('.cc-sessions', 'duplicate-authdead.tmp.sentinel'), 'utf8')).toBe('partial');
+    expect(fs.existsSync(j('first-credential-was-sourced'))).toBe(false);
+    expect(fs.existsSync(j('second-credential-was-sourced'))).toBe(false);
+    expect(fs.existsSync(j('curl-argv'))).toBe(false);
+  });
+
+  it('multiple upstream accounts refuse before either credential is read', () => {
+    fs.writeFileSync(j('.ccrc', 'accounts.json'), JSON.stringify({ version: 1, accounts: [
+      { id: 'first', label: 'first', configDirSuffix: '.first',
+        exec: { kind: 'upstream', secretsFile: '.cc-secrets/first.env' },
+        homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+      { id: 'second', label: 'second', configDirSuffix: '.second',
+        exec: { kind: 'upstream', secretsFile: '.cc-secrets/second.env' },
+        homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+    ] }));
+    fs.mkdirSync(j('.cc-secrets'), { recursive: true });
+    fs.writeFileSync(j('.cc-secrets', 'first.env'),
+      'touch "$HOME/first-credential-was-sourced"\nexport CLAUDE_CODE_OAUTH_TOKEN=FIRST\n');
+    fs.writeFileSync(j('.cc-secrets', 'second.env'),
+      'touch "$HOME/second-credential-was-sourced"\nexport CLAUDE_CODE_OAUTH_TOKEN=SECOND\n');
+    fs.writeFileSync(marker('first'), '1757203200 rescue-401');
+    plantCurlSequence([
+      { status: '403', body: '{"error":{"type":"oauth_scope_insufficient"}}' },
+      { status: '401', body: '{"error":{"type":"authentication_error"}}' },
+    ]);
+
+    const r = run();
+
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/roster .*2 upstream accounts/);
+    expect(markerBody('first')).toBe('1757203200 rescue-401');
+    expect(fs.existsSync(j('first-credential-was-sourced'))).toBe(false);
+    expect(fs.existsSync(j('second-credential-was-sourced'))).toBe(false);
+    expect(fs.existsSync(j('curl-argv'))).toBe(false);
+  });
+
+  it('uses the exact roster snapshot that passed whole-roster validation', () => {
+    fs.writeFileSync(j('.ccrc', 'accounts.json'), JSON.stringify({ version: 1, accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'none' },
+    ] }));
+    const replacement = { version: 1, accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'none' },
+      { id: 'duplicate', label: 'first', configDirSuffix: '.first',
+        exec: { kind: 'generated', secretsFile: '.cc-secrets/first.env' },
+        homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+      { id: 'duplicate', label: 'second', configDirSuffix: '.second',
+        exec: { kind: 'generated', secretsFile: '.cc-secrets/second.env' },
+        homeAble: true, hue: 'green', telemetry: 'anthropic' },
+    ] };
+    fs.mkdirSync(j('.cc-secrets'), { recursive: true });
+    fs.writeFileSync(j('.cc-secrets', 'first.env'),
+      'touch "$HOME/first-credential-was-sourced"\nexport CLAUDE_CODE_OAUTH_TOKEN=FIRST\n');
+    fs.writeFileSync(j('.cc-secrets', 'second.env'),
+      'touch "$HOME/second-credential-was-sourced"\nexport CLAUDE_CODE_OAUTH_TOKEN=SECOND\n');
+    fs.writeFileSync(marker('duplicate'), '1757203200 rescue-401');
+    plantCurlSequence([
+      { status: '403', body: '{"error":{"type":"oauth_scope_insufficient"}}' },
+      { status: '401', body: '{"error":{"type":"authentication_error"}}' },
+    ]);
+    replaceRosterWhenNodeRuns(replacement, 'after');
+
+    const r = run();
+
+    expect(r.status, r.stderr).toBe(0);
+    expect(markerBody('duplicate')).toBe('1757203200 rescue-401');
+    expect(fs.existsSync(j('first-credential-was-sourced'))).toBe(false);
+    expect(fs.existsSync(j('second-credential-was-sourced'))).toBe(false);
+    expect(fs.existsSync(j('curl-argv'))).toBe(false);
+  });
+
+  it('one roster read supplies both validation and subject derivation', () => {
+    const replacement = { version: 1, accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'none' },
+      { id: 'late', label: 'late', configDirSuffix: '.late',
+        exec: { kind: 'generated', secretsFile: '.cc-secrets/late.env' },
+        homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+    ] };
+    fs.mkdirSync(j('.cc-secrets'), { recursive: true });
+    fs.writeFileSync(j('.cc-secrets', 'late.env'),
+      'touch "$HOME/late-credential-was-sourced"\nexport CLAUDE_CODE_OAUTH_TOKEN=LATE\n');
+    plantCurl('401', '{"error":{"type":"authentication_error"}}');
+    replaceRosterAfterFirstRead(replacement);
+
+    const r = run();
+
+    expect(r.status, r.stderr).toBe(0);
+    expect(fs.existsSync(j('late-credential-was-sourced'))).toBe(false);
+    expect(fs.existsSync(marker('late'))).toBe(false);
+    expect(fs.existsSync(j('curl-argv'))).toBe(false);
+  });
+
+  it('validates the snapshot rather than a replacement roster path', () => {
+    const invalid = { version: 1, accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'none' },
+      { id: 'duplicate', label: 'first', configDirSuffix: '.first',
+        exec: { kind: 'generated', secretsFile: '.cc-secrets/first.env' },
+        homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+      { id: 'duplicate', label: 'second', configDirSuffix: '.second',
+        exec: { kind: 'generated', secretsFile: '.cc-secrets/second.env' },
+        homeAble: true, hue: 'green', telemetry: 'anthropic' },
+    ] };
+    replaceRosterWhenNodeRuns(invalid, 'before');
+    fs.writeFileSync(marker('duplicate'), '1757203200 rescue-401');
+    fs.writeFileSync(j('.cc-sessions', 'duplicate-authdead.tmp.sentinel'), 'partial');
+    plantCurl('401', '{"error":{"type":"authentication_error"}}');
+
+    const r = run();
+
+    expect(r.status).toBe(0);
+    expect(markerBody('duplicate')).toBe('1757203200 rescue-401');
+    expect(fs.existsSync(j('curl-argv'))).toBe(false);
+    expect(fs.existsSync(j('.cc-sessions', 'duplicate-authdead.tmp.sentinel'))).toBe(false);
   });
 
   it('an id carrying whitespace is ONE illegal id, never two legal ones', () => {
@@ -252,7 +527,8 @@ describe('eligibility is roster-derived', () => {
     token('good-one'); token('evil');
     plantCurl('401', '{"error":{"type":"authentication_error"}}');
     const r = run();
-    expect(r.stderr).toMatch(/not a legal account id/);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/roster .*invalid id/);
     expect(fs.readdirSync(j('.cc-sessions'))).toEqual([]);
     expect(fs.existsSync(j('curl-argv'))).toBe(false);
   });
@@ -263,7 +539,8 @@ describe('eligibility is roster-derived', () => {
     ] }));
     plantCurl('401');
     const r = run();
-    expect(r.stderr).toMatch(/not a legal account id/);
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/roster .*invalid id/);
     expect(fs.readdirSync(j('.cc-sessions'))).toEqual([]);
   });
 });
@@ -365,8 +642,8 @@ describe('pass discipline', () => {
     // in the body reads stdin today, which is exactly why this cannot be asserted
     // behaviourally — and exactly why it would regress unnoticed.
     const src = fs.readFileSync(PROBE, 'utf8');
-    const read = /while IFS= read -r id <&(\d)/.exec(src);
-    const feed = /done (\d)<<< "\$IDS"/.exec(src);
+    const read = /while IFS=\$'\\t' read -r id subject rel <&(\d)/.exec(src);
+    const feed = /done (\d)<<< "\$SUBJECTS"/.exec(src);
     expect(read, 'the loop must read from an explicit fd, not stdin').not.toBeNull();
     expect(feed, 'the here-string must be attached to that same explicit fd').not.toBeNull();
     expect(read![1]).toBe(feed![1]);
@@ -381,11 +658,32 @@ describe('pass discipline', () => {
     // ONLY thing missing is flock; curl is the planted fake in `.local/bin`.
     token('claude'); token('claude-a');
     plantCurl('403', '{"error":{"type":"oauth_scope_insufficient"}}');
-    const r = run({ PATH: `${j('.local', 'bin')}:${thinBin(['bash', 'jq'])}` });
+    const r = run({ PATH: `${j('.local', 'bin')}:${thinBin(['bash', 'jq', 'node'])}` });
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/flock is not on PATH — nothing was measured/);
     expect(fs.existsSync(j('curl-argv'))).toBe(false);
     expect(fs.existsSync(marker('claude'))).toBe(false);
+  });
+
+  it('a box with no node refuses before any credential or request', () => {
+    token('claude'); token('claude-a');
+    plantCurl('403', '{"error":{"type":"oauth_scope_insufficient"}}');
+    const r = run({ PATH: `${j('.local', 'bin')}:${thinBin(['bash', 'jq', 'flock'])}` });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/node is not on PATH — the account roster cannot be validated/);
+    expect(fs.existsSync(j('curl-argv'))).toBe(false);
+    expect(fs.readdirSync(j('.cc-sessions'))).toEqual([]);
+  });
+
+  it('a partial install with no shipped validator refuses instead of falling back to jq', () => {
+    token('claude'); token('claude-a');
+    plantCurl('403', '{"error":{"type":"oauth_scope_insufficient"}}');
+    fs.rmSync(j('ccrc'));
+    const r = run();
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/shipped roster validator .* is missing/);
+    expect(fs.existsSync(j('curl-argv'))).toBe(false);
+    expect(fs.readdirSync(j('.cc-sessions'))).toEqual([]);
   });
 
   it('an http:// URL is refused by curl itself — the bearer never goes out in cleartext', () => {

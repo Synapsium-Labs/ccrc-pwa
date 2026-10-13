@@ -243,6 +243,32 @@ describe('the deadline shim, asked directly (D-2661)', () => {
       done
       echo "EOF=$GOT"
       echo "AFTER=$((SECONDS-t0))"
+      # WHEN IT SAYS never, SAY WHO. This probe went red on unchanged trees on
+      # PR #116, on main's own probe-macos and on PR #117, and each time it
+      # reported only "eof=never" — which names the symptom and nothing that
+      # could be acted on, so three reds bought no diagnosis at all. The
+      # question "which writer is still holding the write end" is answerable at
+      # exactly this moment and never afterwards, so it is answered here.
+      # Costs nothing on the passing path: the whole block is inside the branch.
+      if [ "$GOT" = never ]; then
+        echo "BASHV=$BASH_VERSION"
+        echo "TMO=$(command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null || echo none)"
+        # SCOPED TO THE WRITER'S OWN PROCESS GROUP, never a fleet-wide grep for
+        # the sleep command: this box runs ~20 unrelated sessions, a bare match
+        # caught an unrelated sleep 600 and another project's logger, and a CI
+        # failure message is
+        # the wrong place for another session's paths in a repo bound for
+        # public release. The pgid IS the subject anyway — whether the
+        # descendant left the group is the question.
+        PG=$(ps -o pgid= -p $W 2>/dev/null | tr -d ' ')
+        echo "PGID=$PG"
+        echo "SURV=$(ps -o pid=,ppid=,pgid=,stat=,command= 2>/dev/null | awk -v pg="$PG" '$3 == pg' | cut -c1-72 | tr -s ' ' | tr '\n' '|')"
+        # FD, NOT JUST THE PID. An 8r row is this probe's own read end and proves
+        # nothing; a 1w or 1u row is a WRITER, and a writer still open at the
+        # deadline is the entire hazard. Reported separately so the next red
+        # answers "who held it" rather than restating "it was held".
+        echo "HOLD=$(lsof -- "$D/out" 2>/dev/null | tail -n +2 | awk '{print $1":"$2":"$4}' | sort -u | tr '\n' '|')"
+      fi
       kill $W 2>/dev/null; pkill -P $$ 2>/dev/null; exec 8<&-; rm -rf "$D"
     `, 40_000);
     expect(
@@ -250,8 +276,88 @@ describe('the deadline shim, asked directly (D-2661)', () => {
       'THE OUTPUT FIFO NEVER REACHED EOF after the deadline fired on macOS. That is D-2661 candidate (b)\n'
       + 'and it is the mechanism: a surviving descendant holds the write end, `_auth_pump` loops for ever,\n'
       + 'and only D-2736\'s backstop ends the run. The fix is to end the DESCENDANTS, not to wait longer.\n'
-      + `  eof=${field(r.stdout, 'EOF')} after=${field(r.stdout, 'AFTER')}s  cut=${r.cut}`,
+      + `  eof=${field(r.stdout, 'EOF')} after=${field(r.stdout, 'AFTER')}s  cut=${r.cut}\n`
+      + `  bash=${field(r.stdout, 'BASHV')}  timeout-binary=${field(r.stdout, 'TMO')}\n`
+      + `  writer pgid=${field(r.stdout, 'PGID')}, still alive in it: ${field(r.stdout, 'SURV')}\n`
+      + `  holding the write end: ${field(r.stdout, 'HOLD')}`,
     ).toBe('eof');
   });
 
+});
+
+// ── R14(i): THE UTF-8 LOCALE BASH TAKES, AND WHETHER THE LOCALE PINS CAN RED ──
+// D-3833 and D-3979 pin `LC_ALL=C` around the auth readers (`_box_env_has_nul`, `_box_unit_env`,
+// `_box_unit_env_shell`) because under a UTF-8 locale bash 5.x (1) misses a NUL that follows a lead byte in an
+// unpinned `read -d ''`, and (2) merges a line ending in a lead byte with the next one in an unpinned `read -r`
+// loop. Both are measured on Linux; neither was ever measured on macOS, and the macOS tests that rely on them
+// (U4n, U4u in `ccrc-doctor.test.ts`) could be hollow there if the runner's bash did not misread. So this asks,
+// and RECORDS: a Darwin case here asserts only that the probes ran, because a red would be a `full-suite` red,
+// which blocks `stable`. The coordinator reads the answer from the PR's `probe-macos` and `test-macos` logs.
+describe('R14(i): the UTF-8 locale bash takes here, and whether D-3833/D-3979\'s locale pins are load-bearing on this platform', () => {
+  /** The first UTF-8 locale under which bash counts the two-byte `é` as ONE character. A copy of
+   *  `ccrc-doctor.test.ts`'s `utf8Locale()` candidate list and one-character test: a test file cannot be imported
+   *  from another. It yields `'none'` rather than throwing, so collection never fails here (H1 does). */
+  const LOC = ((): string => {
+    try {
+      for (const loc of ['C.UTF-8', 'en_US.UTF-8']) {
+        const r = spawnSync('bash', ['-c', `x=$'\\xc3\\xa9'; printf '%s' "\${#x}"`], {
+          encoding: 'utf8', timeout: 15_000, env: { PATH: process.env.PATH ?? '', LC_ALL: loc },
+        });
+        if (r.status === 0 && r.stdout === '1') return loc;
+      }
+    } catch { /* fall through: H1 reports it */ }
+    return 'none';
+  })();
+
+  /** The two unpinned reads, under `locale` and no pin anywhere. `NUL_RC` is `read -d ''`'s rc over a lead byte
+   *  then a NUL (0 = found it, 1 = missed it); `LINES` is how many lines an unpinned `read -r` loop counts over
+   *  `# caf<lead byte>\nX=1\n` (2 = kept them apart, 1 = merged them). */
+  const probe = (locale: string): { status: number | null; nulRc: string; lines: string; bashv: string; out: string } => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccrc-r14i-'));
+    try {
+      fs.writeFileSync(path.join(dir, 'nul'), '# caf\xc3\0\nCCRC_AUTH=on\n', 'latin1');
+      fs.writeFileSync(path.join(dir, 'lines'), '# caf\xc3\nX=1\n', 'latin1');
+      const script = [
+        `IFS= read -r -d '' x < ${JSON.stringify(path.join(dir, 'nul'))}; echo "NUL_RC=$?"`,
+        `n=0; while IFS= read -r l; do n=$((n+1)); done < ${JSON.stringify(path.join(dir, 'lines'))}; echo "LINES=$n"`,
+        'echo "BASHV=$BASH_VERSION"',
+      ].join('\n');
+      const r = spawnSync('bash', ['-c', script], {
+        encoding: 'utf8', timeout: 15_000, env: { PATH: process.env.PATH ?? '', LC_ALL: locale },
+      });
+      const out = (r.stdout ?? '') + (r.stderr ?? '');
+      return { status: r.status, nulRc: field(out, 'NUL_RC'), lines: field(out, 'LINES'), bashv: field(out, 'BASHV'), out };
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it(`R14(i): bash takes ${LOC} here`, () => {
+    // Fails, never skips: a host with no UTF-8 locale makes every UTF-8 row elsewhere hollow.
+    expect(LOC, 'no UTF-8 locale takes effect in bash on this runner (C.UTF-8, en_US.UTF-8)').not.toBe('none');
+    console.info(`R14(i): bash takes ${LOC} here (${process.platform}; bash ${probe(LOC).bashv})`);
+  });
+
+  // The control. Both answers are the hazard itself, which is why dropping a pin reds T4-M32, T4-M31 and T1-1 on
+  // Linux. If either flipped here, those mutation rows would be hollow on this platform.
+  itLinux('R14(i): on Linux, under the UTF-8 locale and no pin, read -d \'\' misses a NUL after a lead byte and a read -r loop merges the lines', () => {
+    const p = probe(LOC);
+    expect.soft(p.nulRc, `under ${LOC}: an unpinned read -d '' over a lead byte then a NUL (${p.out.slice(0, 200)})`).toBe('1');
+    expect.soft(p.lines, `under ${LOC}: an unpinned read -r loop over a line ending in a lead byte (${p.out.slice(0, 200)})`).toBe('1');
+  });
+
+  // RECORDED, not wished for: either answer is a fact, so this asserts only that each probe ran and produced its
+  // field, and prints which answer the runner gave.
+  itDarwin('R14(i): on macOS, RECORDED — do the unpinned reads misread under the UTF-8 locale?', () => {
+    const p = probe(LOC);
+    const misses = p.nulRc === '1';
+    const merges = p.lines === '1';
+    const answer = `${LOC === 'none' ? 'NO UTF-8 LOCALE TOOK EFFECT — ' : ''}R14(i): under ${LOC} with bash ${p.bashv}, an unpinned read -d '' ${misses ? 'misses' : 'sees'} the NUL after a lead byte `
+      + `(so U4n ${misses ? 'can' : 'cannot'} red here); an unpinned read ${merges ? 'merges' : 'keeps'} the line `
+      + `(so U4u F2 and G1 ${merges ? 'can' : 'cannot'} red here; LINES=${p.lines})`;
+    console.info(answer);
+    expect(['0', '1'], `${answer}. The NUL probe gave NUL_RC=${p.nulRc}.`).toContain(p.nulRc);
+    // Whatever number it is: the instrument records the macOS answer and never asserts it.
+    expect(p.lines, `${answer}. The line probe gave LINES=${p.lines}.`).toMatch(/^\d+$/);
+  });
 });

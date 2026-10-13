@@ -216,8 +216,9 @@ export function ackAll(sessions: readonly FleetSession[], at: number): Acks {
  * back null (registry dir momentarily missing or unreadable — a home swap, a
  * permissions blip). `watch.ts`'s tick no longer broadcasts that shape (the
  * ladder made it return before emitting), but `server.ts`'s `GET /api/fleet`
- * fallback and the connect-time `/ws/fleet` push still assemble fresh off
- * `readRegistry` and ship the `[]` — as can any pre-ladder server. Pruning
+ * fallback and a connect-time `/ws/fleet` push made before the watcher's
+ * first broadcast still assemble fresh off `readRegistry` and ship the `[]` —
+ * as can any pre-ladder server. Pruning
  * against it would delete every entry AND persist the deletion,
  * so one bad second would re-badge the entire fleet as unseen with the real
  * watermark already overwritten in localStorage — unrecoverable, and the

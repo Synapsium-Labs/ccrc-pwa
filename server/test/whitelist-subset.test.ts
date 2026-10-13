@@ -2,7 +2,7 @@
 // refuses. That failure is invisible to every other test in this repo — the
 // route returns 502 only on the live fleet — and it has already shipped once
 // (ws-add/ws-rm).
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import {
   EXEC_WHITELIST, FORBIDDEN_COMMANDS, UNGRANTABLE_VERBS, isExecAllowed,
 } from '../../agent/src/whitelist.js';
@@ -59,6 +59,19 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   wsRestore: ['demo-quiet-basin', null],
   wsAudit: ['demo-quiet-basin'],
   wsReap: ['a'.repeat(64), 'demo-quiet-basin'],
+  // CHILD RECLAMATION wave 3. The audit half rides wsAudit's grant; the verb
+  // carries a dec, so layer 2 proves the FLAGGED shape crosses the new grant.
+  wsReclaimAudit: ['demo-quiet-basin', true],
+  wsReclaim: ['a'.repeat(64), 7, 'demo-quiet-basin', false,
+              { surface: 'agent', actor: 'run:7 reclaim close', reason: null }],
+  // WORKSPACE LIFECYCLE wave 3: the expiry's audit rides wsAudit's grant; the verb carries a dec, so layer 2 proves
+  // the FLAGGED shape crosses its own grant.
+  wsExpireAudit: ['demo-quiet-dune'],
+  wsExpire: ['a'.repeat(64), 'demo-quiet-dune', { surface: 'agent', actor: 'expiry sweep', reason: null }],
+  // CHILD RECLAMATION wave 7: the collector's audit rides wsAudit's grant; the verb carries a dec, so layer 2 proves
+  // the FLAGGED shape crosses its own grant.
+  wsCollectAudit: ['demo-quiet-dune'],
+  wsCollect: ['a'.repeat(64), 'demo-quiet-dune', { surface: 'agent', actor: 'collect sweep', reason: null }],
   wsAttic: ['demo-quiet-basin'],
   // The one sample that carries a dec, so layer 2's `isExecAllowed` check
   // actually proves the FLAGGED shape is reachable under the granted
@@ -68,6 +81,8 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   wsRelease: ['demo-quiet-basin', null],
   wsRename: ['demo-quiet-basin', 'ws/brainstorm-helix-and-slide-notes', null],
   coordPause: ['on'],
+  // CHILD RECLAMATION wave 4 — `coordPause`'s shape exactly.
+  reclaimPause: ['on'],
   // Two ENTRIES, not one parameterised by `pool: string | null` — the
   // `start`/`enable` rule stated in `CCD_ARGV`'s `enable` docstring: the route
   // picks between two words, the argv shapes differ in their tail, and layer
@@ -92,6 +107,15 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   // TERMINAL DRAWER wave 2. The mode is part of the argv, not a parameter the
   // route may omit: `cmd_win_size` asserts exactly four tokens.
   winSize: ['demo-quiet-basin', 'smallest'],
+  // NATIVE DOCS READER wave 2. Read-only verbs, one grant each; the two
+  // `docs-show` builders share `['docs-show','--project']`. The `null` tails
+  // are the samples, so layer 2c pins the shortest argv of `docsTree` and
+  // `docsFetch`; their non-null tails are pinned by the case after it.
+  docsIndex: [],
+  docsTree: ['demo', null],
+  docsShowCommitted: ['demo', 'a'.repeat(40), 'refs/remotes/origin/main', 'specs', 'a.md', 2097152],
+  docsShowDraft: ['demo', 'main', 'b'.repeat(40), 'plans', 'b.md', 'c'.repeat(64), 2097152],
+  docsFetch: ['demo', null],
 };
 
 /**
@@ -221,6 +245,58 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     expect(isExecAllowed('ccd', [...CCD_ARGV.wsReap(tok, 'demo-quiet-basin')])).toBe(true);
   });
 
+  // CHILD RECLAMATION wave 3 — the second destructive verb, and the first the
+  // SERVER sends with no human in the path. Same mechanism, same reasons, read
+  // from the object across the package boundary.
+  it('ws-expire is grantable ONLY with its confirmation token, and its audit needs no grant of its own', () => {
+    const tok = 'a'.repeat(64);
+    const ex = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-expire');
+    expect(ex, 'exactly one ws-expire grant, on its token').toEqual([['ws-expire', '--expect']]);
+    expect(isExecAllowed('ccd', ['ws-expire'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws-expire', '--session', 'demo-quiet-dune'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.wsExpire(tok, 'demo-quiet-dune', null)])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.wsExpireAudit('demo-quiet-dune')])).toBe(true);
+    expect(UNGRANTABLE_VERBS, 'ws-expire has a lawful grantable form; it is not ungrantable').not.toContain('ws-expire');
+  });
+
+  it('ws-reclaim is grantable ONLY with its confirmation token, and its audit needs no grant of its own', () => {
+    const rc = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-reclaim');
+    expect(rc.length, 'exactly one ws-reclaim grant').toBe(1);
+    expect(rc[0]).toEqual(['ws-reclaim', '--expect']);
+    const tok = 'a'.repeat(64);
+    expect(isExecAllowed('ccd', ['ws-reclaim', '--child-of', '7', '--session', 'demo-quiet-basin'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws-reclaim'])).toBe(false);
+    expect(isExecAllowed('ccd', ['ws-reclaim', tok, '--child-of', '7', '--session', 'demo-quiet-basin'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.wsReclaim(tok, 7, 'demo-quiet-basin', false, null)])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.wsReclaim(tok, 7, 'demo-quiet-basin', true,
+      { surface: 'agent', actor: 'run:7 reclaim sweep', reason: null })])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.wsReclaimAudit('demo-quiet-basin', true)])).toBe(true);
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'ws-audit'), 'no second audit grant').toEqual([['ws-audit', '--session']]);
+    expect(UNGRANTABLE_VERBS, 'ws-reclaim has a lawful grantable form; it is not ungrantable').not.toContain('ws-reclaim');
+  });
+
+  // Fix round 1: the `deferExpired` polarity was unpinned in one arm of each
+  // builder. Layer 2c's exact-argv table (below) pins `wsReclaimAudit(…, true)`
+  // and `wsReclaim(…, false, …)` only — one arm each, from `SAMPLES`' own
+  // fixed shape — so dropping `...deferFlags(deferExpired)` from `wsReclaim`,
+  // or hardcoding `'--defer-expired'` into `wsReclaimAudit` regardless of its
+  // argument, survived every other test in this file. This pins BOTH arms of
+  // BOTH builders, independent of the dec.
+  it('wsReclaimAudit and wsReclaim both flip on deferExpired, independent of the dec', () => {
+    const tok = 'a'.repeat(64);
+    const dec = { surface: 'agent' as const, actor: 'run:7 reclaim sweep', reason: null };
+    expect(CCD_ARGV.wsReclaimAudit('demo-quiet-basin', false))
+      .toEqual(['ws-audit', '--session', 'demo-quiet-basin', '--reclaim']);
+    expect(CCD_ARGV.wsReclaimAudit('demo-quiet-basin', true))
+      .toEqual(['ws-audit', '--session', 'demo-quiet-basin', '--reclaim', '--defer-expired']);
+    expect(CCD_ARGV.wsReclaim(tok, 7, 'demo-quiet-basin', false, dec))
+      .toEqual(['ws-reclaim', '--expect', tok, '--child-of', '7', '--session', 'demo-quiet-basin',
+                '--surface', 'agent', '--actor', 'run:7 reclaim sweep']);
+    expect(CCD_ARGV.wsReclaim(tok, 7, 'demo-quiet-basin', true, dec))
+      .toEqual(['ws-reclaim', '--expect', tok, '--child-of', '7', '--session', 'demo-quiet-basin',
+                '--defer-expired', '--surface', 'agent', '--actor', 'run:7 reclaim sweep']);
+  });
+
   // The SECOND entry in REQUIRED_VERB_FLAG, and the first one that is not there
   // because the verb is destructive. `ws-rename` destroys nothing; it is here
   // because it is the OTHER write the server calls unattended — `ws-archive`
@@ -266,6 +342,56 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     expect(isExecAllowed('ccd', ['win-size'])).toBe(false);
     expect(isExecAllowed('ccd', [...CCD_ARGV.winSize('demo-quiet-basin', 'smallest')])).toBe(true);
     expect(isExecAllowed('ccd', [...CCD_ARGV.winSize('demo-quiet-basin', 'canonical')])).toBe(true);
+  });
+
+  // Enrolled for its ARGUMENT SURFACE, `coord-pause`'s reason, and reached
+  // from a door as open: `POST /api/coord/reclaim-pause` carries no box token.
+  // What this verb guards is whether automation may DELETE child workspaces,
+  // so a bare `['reclaim-pause']` — green in layer 2 and in layer 3's
+  // reachability check, because it is a genuine prefix of the argv
+  // `CCD_ARGV.reclaimPause` builds — is refused here, cross-PACKAGE and
+  // object-reading, for the reasons the ws-reap assertion above states.
+  it('reclaim-pause is grantable ONLY with --state', () => {
+    const rp = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'reclaim-pause');
+    expect(rp.length, 'exactly one reclaim-pause grant').toBe(1);
+    expect(rp[0]).toEqual(['reclaim-pause', '--state']);
+    expect(isExecAllowed('ccd', ['reclaim-pause', 'on'])).toBe(false);
+    expect(isExecAllowed('ccd', ['reclaim-pause'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.reclaimPause('on')])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.reclaimPause('off')])).toBe(true);
+  });
+
+  // NATIVE DOCS READER wave 2 (spec 2026-10-01 section 2 (a), row 44). Four
+  // read-only verbs, each enrolled for its ARGUMENT SURFACE (`coord-pause`'s
+  // reason) and reached from session-gated routes that carry no box token. A
+  // bare grant is green in layer 2 and in layer 3's reachability check,
+  // because the bare verb is a genuine prefix of every argv the builders make,
+  // so it is refused here, cross-PACKAGE and object-reading, for the reasons
+  // the ws-reap assertion above states. ONE `docs-show` grant serves both of
+  // its builders; a second grant would be dead weight layer 3 cannot see.
+  it('docs verbs are grantable ONLY with their flag, one grant each, and both docs-show builders cross it', () => {
+    const GRANTS: readonly (readonly [verb: string, flag: string])[] = [
+      ['docs-index', '--all'], ['docs-tree', '--project'], ['docs-show', '--project'], ['docs-fetch', '--project'],
+    ];
+    for (const [verb, flag] of GRANTS) {
+      expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === verb), `exactly one ${verb} grant, on ${flag}`)
+        .toEqual([[verb, flag]]);
+      expect(isExecAllowed('ccd', [verb]), `bare ${verb}`).toBe(false);
+      expect(isExecAllowed('ccd', [verb, 'demo']), `${verb} with a positional`).toBe(false);
+    }
+    expect(isExecAllowed('ccd', ['docs-index', '--project', 'demo'])).toBe(false);
+    expect(isExecAllowed('ccd', ['docs-tree', '--all'])).toBe(false);
+    expect(isExecAllowed('ccd', ['docs-show', '--all'])).toBe(false);
+    expect(isExecAllowed('ccd', ['docs-fetch', '--all'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsIndex()])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsTree('demo', null)])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsTree('demo', 'ws/a')])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsShowCommitted('demo', 'a'.repeat(40), 'refs/remotes/origin/main',
+      'specs', 'a.md', 2097152)])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsShowDraft('demo', 'main', 'b'.repeat(40), 'plans', 'b.md',
+      'c'.repeat(64), 2097152)])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsFetch('demo', null)])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsFetch('demo', 'ws/a')])).toBe(true);
   });
 
   // The other half of the same decision, and the half a `not.toContain(
@@ -443,12 +569,20 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     wsRestore: ['ws-restore', '--session', 'demo-quiet-basin'],
     wsAudit: ['ws-audit', '--session', 'demo-quiet-basin'],
     wsReap: ['ws-reap', '--expect', 'a'.repeat(64), '--session', 'demo-quiet-basin'],
+    wsReclaimAudit: ['ws-audit', '--session', 'demo-quiet-basin', '--reclaim', '--defer-expired'],
+    wsReclaim: ['ws-reclaim', '--expect', 'a'.repeat(64), '--child-of', '7', '--session', 'demo-quiet-basin',
+                '--surface', 'agent', '--actor', 'run:7 reclaim close'],
+    wsExpireAudit: ['ws-audit', '--session', 'demo-quiet-dune', '--expire'],
+    wsExpire: ['ws-expire', '--expect', 'a'.repeat(64), '--session', 'demo-quiet-dune', '--surface', 'agent', '--actor', 'expiry sweep'],
+    wsCollectAudit: ['ws-audit', '--session', 'demo-quiet-dune', '--collect'],
+    wsCollect: ['ws-collect', '--expect', 'a'.repeat(64), '--session', 'demo-quiet-dune', '--surface', 'agent', '--actor', 'collect sweep'],
     wsAttic: ['ws-attic', '--session', 'demo-quiet-basin'],
     wsHold: ['ws-hold', '--session', 'demo-quiet-basin', '--reason', 'program:agent-evals wave:1/4',
              '--surface', 'pwa', '--actor', 'device:iPhone'],
     wsRelease: ['ws-release', '--session', 'demo-quiet-basin'],
     wsRename: ['ws-rename', '--session', 'demo-quiet-basin', '--branch', 'ws/brainstorm-helix-and-slide-notes'],
     coordPause: ['coord-pause', '--state', 'on'],
+    reclaimPause: ['reclaim-pause', '--state', 'on'],
     projectPoolSet: ['project-pool', '--project', 'demo', '--pool', 'pool-a'],
     projectPoolClear: ['project-pool', '--project', 'demo', '--clear'],
     route: ['route', '--session', 'demo-quiet-basin', '--set', 'effort=high'],
@@ -458,11 +592,35 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     routeSet: ['route', '--session', 'demo-quiet-basin', '--set', 'class=opus', '--set', 'effort=high'],
     routeApply: ['route', '--session', 'demo-quiet-basin', '--set', 'effort=high', '--apply'],
     winSize: ['win-size', '--session', 'demo-quiet-basin', '--mode', 'smallest'],
+    // NATIVE DOCS READER wave 2: spec 2026-10-01 section 2 (a)'s verb table, token for token. The verb, then
+    // `--project` (or `--all`), then every flag pair in ccd's argv order; `--max-bytes` is the class cap,
+    // stringified. Committed show is 12 tokens after the verb, draft show 14.
+    docsIndex: ['docs-index', '--all'],
+    docsTree: ['docs-tree', '--project', 'demo'],
+    docsShowCommitted: ['docs-show', '--project', 'demo', '--commit', 'a'.repeat(40), '--ref', 'refs/remotes/origin/main',
+                        '--section', 'specs', '--path', 'a.md', '--max-bytes', '2097152'],
+    docsShowDraft: ['docs-show', '--project', 'demo', '--draft-branch', 'main', '--head', 'b'.repeat(40),
+                    '--section', 'plans', '--path', 'b.md', '--fingerprint', 'c'.repeat(64), '--max-bytes', '2097152'],
+    docsFetch: ['docs-fetch', '--project', 'demo'],
   };
 
   it.each(Object.keys(CCD_ARGV) as (keyof typeof CCD_ARGV)[])('%s builds the exact argv, token for token', (key) => {
     const build = CCD_ARGV[key] as (...a: unknown[]) => readonly string[];
     expect(build(...(SAMPLES[key] as unknown[]))).toEqual(EXPECTED[key]);
+  });
+
+  // NATIVE DOCS READER wave 2. The samples above carry `null` tails, so the
+  // row above sees only the shortest argv of `docsTree` and `docsFetch`. This
+  // pins both arms of both builders: a non-null value adds exactly its one
+  // flag pair AFTER the project, and `null` adds nothing at all (never an
+  // empty `--ref ''`, which ccd would refuse as `bad-ref`).
+  it('docsTree and docsFetch add their optional flag pair only for a non-null value, after the project', () => {
+    expect(CCD_ARGV.docsTree('demo', null)).toEqual(['docs-tree', '--project', 'demo']);
+    expect(CCD_ARGV.docsTree('demo', 'ws/a')).toEqual(['docs-tree', '--project', 'demo', '--ref', 'ws/a']);
+    expect(CCD_ARGV.docsTree('demo', 'refs/remotes/origin/main'))
+      .toEqual(['docs-tree', '--project', 'demo', '--ref', 'refs/remotes/origin/main']);
+    expect(CCD_ARGV.docsFetch('demo', null)).toEqual(['docs-fetch', '--project', 'demo']);
+    expect(CCD_ARGV.docsFetch('demo', 'ws/a')).toEqual(['docs-fetch', '--project', 'demo', '--branch', 'ws/a']);
   });
 
   // CHILD-RECLAMATION WAVE 1. The exact-argv row above carries a child but no
@@ -520,5 +678,165 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
       .toEqual(['start', '--cross-pool', 'claude', 'demo', '/w']);
     expect(CCD_ARGV.enableCross('claude', 'demo', '/w'))
       .toEqual(['enable', '--cross-pool', 'claude', 'demo', '/w']);
+  });
+});
+
+// Spec §10 and its §15 W4 row: "the whitelist pin tests gain a case that the `update` op reaches no exec path". The `update` op is
+// one of TWO wire-triggered spawns outside the exec whitelist (the box token's `token-sync` op is the other, layer 4b below), so the whole safety of each is that nothing else can reach its spawn port and that it
+// reaches nothing of the whitelist's. It is a SOURCE scan, because no behavioural case can see an extra call whose answer comes out
+// the same. It lives in THIS whitelist pin test, and not in one of the agent's three, because this is the one that reads the agent's
+// exec surface from OUTSIDE it (layer 3: "the list never drifts wider than the code") and this describe is that layer's other half: the
+// code that spawns without the list. The agent's three whitelist suites spawn a `tsc` over their own type-bypass fixtures and are
+// about the list's shape; a text scan of `server.ts` is not their subject. `agent/test/update-op.test.ts` keeps its own slices of the
+// update case; this one adds the census of every call site. (Added, not weakened: no case above is touched.)
+describe('layer 4 — the update op is not an exec path, and its spawn port has one caller (spec §10)', () => {
+  // Dynamic imports, so this append moves no line above it (this file's `describe`s are cited by line).
+  let readFileSync: typeof import('node:fs').readFileSync;
+  let readdirSync: typeof import('node:fs').readdirSync;
+  let path: typeof import('node:path');
+  let SRC_DIR = '';
+  let serverSrc = '';
+  let handleReq = '';
+  /** Every way into the exec surface or the wire read gate. */
+  const EXEC_PATH = /\b(?:isExecAllowed|runExec|resolveSpawnCmd|checkPath)\s*\(|\bEXEC_WHITELIST\b/;
+  /** Whole-line and trailing `// ` comments dropped: a sentence naming `spawnUpdate(` is not a call, and a scan that reds on prose is a false red. */
+  const code = (src: string): string => src.split('\n').filter((l) => !/^\s*(?:\/\/|\/\*|\*)/.test(l)).map((l) => l.replace(/\s\/\/.*$/, '')).join('\n');
+  const CASE_END = /\n    (?:case '|default:)/;
+  /** The text of one `case '<word>': {` body of a switch, up to the next case at the same indent. */
+  function caseBody(src: string, word: string): string {
+    const open = `case '${word}': {`;
+    const at = src.indexOf(open);
+    expect(at, `${open} not found`).toBeGreaterThanOrEqual(0);
+    const rest = src.slice(at + open.length);
+    const end = CASE_END.exec(rest);
+    expect(end, `no end after ${open}`).not.toBeNull();
+    return rest.slice(0, end!.index);
+  }
+  beforeAll(async () => {
+    ({ readFileSync, readdirSync } = await import('node:fs'));
+    path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    SRC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'agent', 'src');
+    serverSrc = readFileSync(path.join(SRC_DIR, 'server.ts'), 'utf8');
+    const at = serverSrc.indexOf('async function handleReq(');
+    expect(at, 'handleReq not found').toBeGreaterThanOrEqual(0);
+    const rest = serverSrc.slice(at);
+    const end = /\n\}\n/.exec(rest);
+    expect(end, 'no end after handleReq').not.toBeNull();
+    handleReq = rest.slice(0, end!.index);
+  });
+
+  it("(a) neither `case 'update'` nor the update spawner names an exec-surface symbol; the same cut of `case 'exec'` does (the control)", () => {
+    const updateCase = caseBody(handleReq, 'update');
+    expect(code(updateCase)).not.toMatch(EXEC_PATH);
+    expect(code(updateCase), 'the cut is the update op, not an empty slice').toMatch(/\bspawnUpdate\s*\(/);
+    const at = serverSrc.indexOf('export function makeUpdateSpawn');
+    expect(at, 'makeUpdateSpawn not found').toBeGreaterThanOrEqual(0);
+    const rest = serverSrc.slice(at);
+    const end = /\ninterface PtyEntry/.exec(rest);
+    expect(end, 'no end after makeUpdateSpawn').not.toBeNull();
+    expect(code(rest.slice(0, end!.index))).not.toMatch(EXEC_PATH);
+    expect(caseBody(handleReq, 'exec')).toMatch(/isExecAllowed\(/);
+  });
+
+  it("(b) `spawnUpdate(` is called exactly once in agent/src, inside `case 'update'` of handleReq, and nowhere outside it", () => {
+    const updateCase = caseBody(handleReq, 'update');
+    const call = /\bspawnUpdate\s*\(/g;
+    expect(code(updateCase).match(call)?.length ?? 0, "one call inside case 'update'").toBe(1);
+    // Every file of the package's source, the whole of server.ts included: the count outside the case is zero.
+    const outsideUpdateCase = serverSrc.replace(updateCase, '');
+    expect(outsideUpdateCase.length, 'the case was cut out of the scan').toBeLessThan(serverSrc.length);
+    expect(code(outsideUpdateCase).match(call)?.length ?? 0, "call sites outside case 'update' in server.ts").toBe(0);
+    for (const f of readdirSync(SRC_DIR).filter((n) => n.endsWith('.ts') && n !== 'server.ts')) {
+      expect(code(readFileSync(path.join(SRC_DIR, f), 'utf8')).match(call)?.length ?? 0, `${f} calls spawnUpdate(`).toBe(0);
+    }
+  });
+
+  // Review of the item 6 census, M2: the `\bspawnUpdate\s*\(` count above cannot see an alias
+  // (`const su = ctx.spawnUpdate; await su(...)` in `case 'exec'` calls the port with no such token), so every line that
+  // NAMES the port is pinned, as the `makeUpdateSpawn`/`realUpdateSpawn` case pins its own.
+  it('(b) `spawnUpdate` is named only where the port is declared, carried and called: an alias of it is a new line here', () => {
+    const lines = code(serverSrc).split('\n').filter((l) => /\bspawnUpdate\b/.test(l)).map((l) => l.trim());
+    expect(lines).toEqual([
+      'spawnUpdate?: UpdateSpawn;',
+      'spawnUpdate: UpdateSpawn;',
+      'spawned = await ctx.spawnUpdate(file, argv, UPDATE_SPAWN_TIMEOUT_MS);',
+      'spawnUpdate: opts.spawnUpdate,',
+      'spawnUpdate: rawOpts.spawnUpdate ?? realUpdateSpawn,',
+    ]);
+    for (const f of readdirSync(SRC_DIR).filter((n) => n.endsWith('.ts') && n !== 'server.ts')) {
+      expect(code(readFileSync(path.join(SRC_DIR, f), 'utf8')), `${f} names the update spawn port`).not.toMatch(/\bspawnUpdate\b/);
+    }
+  });
+
+  it('(b) makeUpdateSpawn and realUpdateSpawn are referenced only where the port is wired: the definition, the default, and the option that carries it', () => {
+    const lines = (word: RegExp): string[] => code(serverSrc).split('\n').filter((l) => word.test(l)).map((l) => l.trim());
+    expect(lines(/\bmakeUpdateSpawn\b/)).toEqual([
+      'export function makeUpdateSpawn(env: NodeJS.ProcessEnv): UpdateSpawn {',
+      'export const realUpdateSpawn: UpdateSpawn = makeUpdateSpawn(process.env);',
+    ]);
+    expect(lines(/\brealUpdateSpawn\b/)).toEqual([
+      'export const realUpdateSpawn: UpdateSpawn = makeUpdateSpawn(process.env);',
+      'spawnUpdate: rawOpts.spawnUpdate ?? realUpdateSpawn,',
+    ]);
+    for (const f of readdirSync(SRC_DIR).filter((n) => n.endsWith('.ts') && n !== 'server.ts')) {
+      expect(code(readFileSync(path.join(SRC_DIR, f), 'utf8')), `${f} references the update spawn port`).not.toMatch(/\b(?:makeUpdateSpawn|realUpdateSpawn)\b/);
+    }
+  });
+});
+
+// Layer 4b (box-token lifecycle, Task A2): the `token-sync` op is the SECOND wire-triggered spawn outside the exec
+// whitelist. The same two properties as layer 4, for its own port: its case names no exec-surface symbol, and
+// `spawnTokenSync(` has exactly one call site, inside `case 'token-sync'` of handleReq.
+describe("layer 4b — the token-sync op is not an exec path, and its spawn port has one caller", () => {
+  let readFileSync: typeof import('node:fs').readFileSync;
+  let readdirSync: typeof import('node:fs').readdirSync;
+  let path: typeof import('node:path');
+  let SRC_DIR = '';
+  let serverSrc = '';
+  let handleReq = '';
+  const EXEC_PATH = /\b(?:isExecAllowed|runExec|resolveSpawnCmd|checkPath)\s*\(|\bEXEC_WHITELIST\b/;
+  const code = (src: string): string => src.split('\n').filter((l) => !/^\s*(?:\/\/|\/\*|\*)/.test(l)).map((l) => l.replace(/\s\/\/.*$/, '')).join('\n');
+  const CASE_END = /\n    (?:case '|default:)/;
+  function caseBody(src: string, word: string): string {
+    const open = `case '${word}': {`;
+    const at = src.indexOf(open);
+    expect(at, `${open} not found`).toBeGreaterThanOrEqual(0);
+    const rest = src.slice(at + open.length);
+    const end = CASE_END.exec(rest);
+    expect(end, `no end after ${open}`).not.toBeNull();
+    return rest.slice(0, end!.index);
+  }
+  beforeAll(async () => {
+    ({ readFileSync, readdirSync } = await import('node:fs'));
+    path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    SRC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'agent', 'src');
+    serverSrc = readFileSync(path.join(SRC_DIR, 'server.ts'), 'utf8');
+    const at = serverSrc.indexOf('async function handleReq(');
+    expect(at, 'handleReq not found').toBeGreaterThanOrEqual(0);
+    const rest = serverSrc.slice(at);
+    const end = /\n\}\n/.exec(rest);
+    expect(end, 'no end after handleReq').not.toBeNull();
+    handleReq = rest.slice(0, end!.index);
+  });
+
+  it("(a) `case 'token-sync'` and agent/src/tokensync.ts name no exec-surface symbol", () => {
+    const body = caseBody(handleReq, 'token-sync');
+    expect(code(body)).not.toMatch(EXEC_PATH);
+    expect(code(body), 'the cut is the token-sync op, not an empty slice').toMatch(/\bspawnTokenSync\s*\(/);
+    expect(code(readFileSync(path.join(SRC_DIR, 'tokensync.ts'), 'utf8'))).not.toMatch(EXEC_PATH);
+  });
+
+  it("(b) `spawnTokenSync(` is called exactly once in agent/src, inside `case 'token-sync'`, and nowhere outside it", () => {
+    const body = caseBody(handleReq, 'token-sync');
+    const call = /\bspawnTokenSync\s*\(/g;
+    expect(code(body).match(call)?.length ?? 0, "one call inside case 'token-sync'").toBe(1);
+    const outside = serverSrc.replace(body, '');
+    expect(outside.length, 'the case was cut out of the scan').toBeLessThan(serverSrc.length);
+    expect(code(outside).match(call)?.length ?? 0, "call sites outside case 'token-sync' in server.ts").toBe(0);
+    for (const f of readdirSync(SRC_DIR).filter((n) => n.endsWith('.ts') && n !== 'server.ts')) {
+      expect(code(readFileSync(path.join(SRC_DIR, f), 'utf8')).match(call)?.length ?? 0, `${f} calls spawnTokenSync(`).toBe(0);
+    }
   });
 });
