@@ -482,10 +482,14 @@ export interface SessionStoreDeps {
   /** How long a QUEUED pending survives before it is retired. The five-second
    *  `confirmTimeoutMs` used to delete it, which is the defect: a busy session
    *  cannot echo inside five seconds, so the operator watched their own message
-   *  vanish. The deletion is not removed — a slash command's echo parses as a
-   *  `system` event and `clearConfirmed` matches only `user`, so this timer is
-   *  the ONLY terminal condition those bubbles have — it is moved to a horizon
-   *  where a bubble quietly retiring is no longer a surprise. */
+   *  vanish. The deletion is not removed — it is the terminal condition for
+   *  every pending whose echo never comes (a command that writes no
+   *  `<command-name>` row, a message whose echo fell outside a reconnect's
+   *  backlog window, a box clock that stepped back — `isFresh`) — it is moved
+   *  to a horizon where a bubble quietly retiring is no longer a surprise.
+   *  When this landed, a slash command's `system` echo was not matched at all
+   *  and this timer was the only way its bubble ever cleared; D-4951 made it
+   *  the fallback. */
   queuedTimeoutMs?: number;
 }
 
