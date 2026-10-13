@@ -9,7 +9,7 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MessageBubble } from '../src/session/MessageBubble';
-import { CHAT_COMPONENTS, chatPlainNote, isRefusedChatImageSrc } from '../src/lib/markdown';
+import { CHAT_COMPONENTS, chatPlainNote, isRefusedChatImageSrc, keystrokeParts } from '../src/lib/markdown';
 import { remarkAlerts } from '../src/lib/remarkAlerts';
 import { chatRunner } from '../src/lib/markdownRunner';
 import { parseMarkdown, type ParseOutcome } from '../src/lib/markdownParse';
@@ -334,5 +334,47 @@ describe('isRefusedChatImageSrc: the URL parser\'s own reading of "root-relative
 
   it('keeps an absent source', () => {
     expect(isRefusedChatImageSrc(undefined)).toBe(false);
+  });
+});
+
+describe('T11 review 2-2: a keystroke chord is split into chips only up to a bound a 4 KiB message can reach', () => {
+  // The longest chord of single-character parts inside backticks and 4 096 bytes: 2 + 4 093 bytes, 2 047 parts.
+  const MAX_SYNC_PARTS = Math.floor((CHAT_SYNC_MAX_BYTES - 2 + 1) / 2);
+  const chord = (n: number): string => `${'a+'.repeat(n - 1)}a`;
+
+  it('a 200 KB chord on the worker path draws a bounded number of elements, as plain inline code', async () => {
+    const calls = deferChatParses();
+    const text = `\`${chord(100001)}\``;
+    expect(utf8ByteLength(text)).toBeGreaterThan(200000);
+    const { container } = assistant(text);
+    await answer(calls, 0);
+    expect(plainOf(container)).toBeNull();
+    expect(container.querySelectorAll('*').length).toBeLessThanOrEqual(DOCS_MAX_RENDER_ELEMENTS);
+    expect(container.querySelectorAll('kbd')).toHaveLength(0);
+    expect(container.querySelector('code.md-code')?.textContent).toBe(chord(100001));
+  });
+
+  it('a normal chord still draws chips on both paths', async () => {
+    const sync = assistant('Press `Ctrl+Shift+P` now.');
+    expect([...sync.container.querySelectorAll('kbd')].map((k) => k.textContent)).toEqual(['Ctrl', 'Shift', 'P']);
+    cleanup();
+    const calls = deferChatParses();
+    const { container } = assistant(longText('Press `Ctrl+Shift+P` now.'));
+    await answer(calls, 0);
+    expect([...container.querySelectorAll('kbd')].map((k) => k.textContent)).toEqual(['Ctrl', 'Shift', 'P']);
+  });
+
+  it('the longest chord a 4 KiB message can hold is still chips, so chat at 4 KiB renders as before', () => {
+    const text = `\`${chord(MAX_SYNC_PARTS)}\``;
+    expect(utf8ByteLength(text)).toBeLessThanOrEqual(CHAT_SYNC_MAX_BYTES);
+    const { container } = assistant(text);
+    expect(container.querySelectorAll('kbd')).toHaveLength(MAX_SYNC_PARTS);
+    expect(container.querySelector('code.md-code')).toBeNull();
+  });
+
+  it('keystrokeParts answers null past CHAT_SYNC_MAX_BYTES / 2 parts and parts at that count', () => {
+    expect(keystrokeParts(chord(MAX_SYNC_PARTS))).toHaveLength(MAX_SYNC_PARTS);
+    expect(keystrokeParts(chord(CHAT_SYNC_MAX_BYTES / 2))).toHaveLength(CHAT_SYNC_MAX_BYTES / 2);
+    expect(keystrokeParts(chord(CHAT_SYNC_MAX_BYTES / 2 + 1))).toBeNull();
   });
 });

@@ -109,8 +109,14 @@ export function nodeText(n: ReactNode): string {
 const NAMED_KEY =
   /^(?:Ctrl|Control|Cmd|Command|⌘|Alt|Option|⌥|Opt|Shift|⇧|Win|Super|Meta|Fn|Esc|Escape|Enter|Return|↵|⏎|Tab|⇥|Space|Spacebar|Backspace|⌫|Delete|Del|Insert|Ins|Home|End|PageUp|PgUp|PageDown|PgDn|Up|Down|Left|Right|↑|↓|←|→|F(?:[1-9]|1[0-2]))$/;
 const SINGLE = /^[\p{L}\p{N}`~!@#$%^&*()\-_=+[\]{};:'",.<>/?\\|]$/u;
+/** The most parts one inline code span splits into chips. A chord of single characters costs two bytes a part, so a
+ *  part count above half of `CHAT_SYNC_MAX_BYTES` cannot come from a message chat renders on the main thread;
+ *  past it the span stays plain code, as any code that is not a keystroke does. The parse's element cap counts hast
+ *  elements, and one span of N parts draws 2N-1 more. */
+const KEYSTROKE_MAX_PARTS = CHAT_SYNC_MAX_BYTES / 2;
 export function keystrokeParts(raw: string): string[] | null {
   const parts = raw.trim().split(/\s*\+\s*/);
+  if (parts.length > KEYSTROKE_MAX_PARTS) return null;
   const ok = (p: string): boolean => NAMED_KEY.test(p) || SINGLE.test(p);
   if (parts.length > 1) return parts.every(ok) ? parts : null;
   return NAMED_KEY.test(parts[0]!) ? parts : null; // bare single chars stay chips
