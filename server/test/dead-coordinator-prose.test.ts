@@ -157,6 +157,8 @@ describe('the spec says what a restart does to the dead-coordinator lane (review
       'The exit status is identical to what it was before the handler existed (death by the signal)',
       'the stop takes up to the bound longer. During that bound only the lane\'s timer is stopped: a tick already in flight can still run the other lanes\' sweeps and the routes keep serving, so an act begun then is cut off by the re-raise, as any act could be by a SIGKILL',
       'A second identical signal during the bound kills at once, with no seal: the listeners are `once`, so the second reaches the default action, and the cost is an unclean exit',
+      'A different signal during the bound (a SIGINT inside a SIGTERM\'s, or the reverse) is handled, because its `once` listener stands until the first handler ends: both handlers wait on the pass in flight, the first to resume seals and re-raises its own signal, and the process dies of that one; the seal is one generation-checked statement, so no second write can land',
+      'for `no-landed-write` and `already-sealed`, which write nothing and leave the state as it stands, it says that a sealed state is trusted, and never that the state is seeded conservatively',
       'A start trusts the stored snapshot ONLY when the state reads `sealed`; `clean`, `dirty`, absent, unreadable and malformed all seed conservatively',
       'on SIGTERM or SIGINT it stops the watcher, asks the lane to seal within one bound of five seconds (well inside systemd\'s default stop timeout of ninety, which the unit leaves alone',
       'logs one `ccrc-server: shutdown:` warn line when the seal is refused or fails, never throws, and re-raises the same signal',

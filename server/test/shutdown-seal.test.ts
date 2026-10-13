@@ -78,6 +78,67 @@ describe('installShutdownSeal: the handler\'s order, its bound, and that it neve
     expect(warns[0]).toMatch(/^warn ccrc-server: shutdown: .*changes-pending/);
     expect(r.events).toContain('kill 4242 SIGTERM');
   });
+  // THE WARN LINE'S TAIL SAYS WHAT THE NEXT START DOES (review 411, F3). `no-landed-write` and `already-sealed` leave a state the
+  // next start may TRUST (a seal that already stands), so they must never say it "seeds it conservatively"; every other
+  // refusal, the bound and a throw leave a state it does not trust, and say so.
+  const refusalLine = async (reason: Extract<DeadCoordinatorSealResult, { sealed: false }>['reason']): Promise<string> => {
+    const r = recorder();
+    const l = logs();
+    installShutdownSeal({ stop: () => {}, sealDeadCoordinatorBreaker: async () => ({ sealed: false, reason }) }, r.host, 50, l.log);
+    r.fire('SIGTERM');
+    await settle(() => r.events.some((e) => e.startsWith('kill')));
+    const warns = l.lines.filter((x) => x.startsWith('warn'));
+    expect(warns, reason).toHaveLength(1);
+    return warns[0]!;
+  };
+  for (const reason of ['no-landed-write', 'already-sealed'] as const) {
+    it(`${reason}: the line names the reason and does NOT say the next start seeds conservatively (a seal that stands is trusted)`, async () => {
+      const line = await refusalLine(reason);
+      expect(line).toContain(`(${reason})`);
+      expect(line).not.toContain('conservatively');
+      expect(line).toContain('trusts');
+    });
+  }
+  for (const reason of ['no-store', 'pass-in-flight', 'changes-pending', 'not-durably-clean', 'key-mismatch', 'write-failed'] as const) {
+    it(`${reason}: the line names the reason and says the next start seeds it conservatively`, async () => {
+      const line = await refusalLine(reason);
+      expect(line).toContain(`(${reason})`);
+      expect(line).toContain('the next start seeds it conservatively');
+    });
+  }
+  it('a seal that does not answer within the bound says the next start seeds it conservatively', async () => {
+    const r = recorder();
+    const l = logs();
+    installShutdownSeal({ stop: () => {}, sealDeadCoordinatorBreaker: () => new Promise<never>(() => {}) }, r.host, 40, l.log);
+    r.fire('SIGTERM');
+    await settle(() => r.events.some((e) => e.startsWith('kill')), 3000);
+    expect(l.lines.filter((x) => x.startsWith('warn') && x.includes('no answer within 40 ms') && x.includes('the next start seeds it conservatively'))).toHaveLength(1);
+  });
+  it('A DIFFERENT signal during the bound (a SIGINT inside a SIGTERM\'s) is handled by the other listener, still installed: the first signal\'s handler re-raises first, and the process dies of it (review 411, F3)', async () => {
+    const r = recorder();
+    const l = logs();
+    let calls = 0;
+    // Both seal calls wait on the SAME pass in flight, as the lane's do, and resolve in call order; the second finds it sealed.
+    let release = (): void => {};
+    const pass = new Promise<void>((resolve) => { release = resolve; });
+    const w: SealingWatcher = {
+      stop: () => {},
+      sealDeadCoordinatorBreaker: async () => {
+        calls += 1;
+        const first = calls === 1;
+        await pass;
+        return first ? { sealed: true as const, generation: 3 } : { sealed: false as const, reason: 'already-sealed' as const };
+      },
+    };
+    installShutdownSeal(w, r.host, 5000, l.log);
+    r.fire('SIGTERM');                                   // the first signal: its seal waits on the pass
+    expect(r.installed(), 'the other signal\'s listener is still installed').toEqual(['SIGINT']);
+    r.fire('SIGINT');                                    // the other signal, inside the bound: handled, not lost
+    await settle(() => calls === 2);
+    release();
+    await settle(() => r.events.filter((e) => e.startsWith('kill')).length >= 1);
+    expect(r.events.filter((e) => e.startsWith('kill'))[0], 'the first handler re-raises its own signal first: that kill ends the process').toBe('kill 4242 SIGTERM');
+  });
   it('NEVER THROWS: a seal that rejects, a watcher that cannot stop — each one warn line, and the signal is re-raised', async () => {
     const r = recorder();
     const l = logs();
