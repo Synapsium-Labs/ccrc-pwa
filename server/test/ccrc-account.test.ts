@@ -389,7 +389,7 @@ describe('deploy/account-op.mjs: the one writer of this verb\'s stdout', () => {
 });
 
 /** A roster on the fixture box, plus the accounts.sh projection ccd and the
- *  five installers read. Written through the real generator so the fixture can
+ *  six installers read. Written through the real generator so the fixture can
  *  never disagree with what a deployed box would have. */
 function seedBoxRoster(home: string, roster: unknown): void {
   mkdirSync(join(home, '.ccrc'), { recursive: true });
@@ -2220,9 +2220,9 @@ function plantUpstream(home: string): void {
   writeFileSync(join(bin, 'claude'), 'PKnot-a-script\n', { mode: 0o755 });
 }
 
-/** The five standalone installers, as ARGV RECORDERS at the installed path
+/** The six standalone installers, as ARGV RECORDERS at the installed path
  *  `_acct_provision` must reach them by. Recorders rather than the real
- *  scripts because four of the five need a box this fixture is not
+ *  scripts because five of the six need a box this fixture is not
  *  (`install-graphify-skill.sh` assembles from a pinned venv, :12-20) — and
  *  because the property under test is that each is invoked once, in order,
  *  scoped to the one new home. The settings.json merge gets the REAL script in
@@ -2239,7 +2239,8 @@ function plantInstallers(home: string): void {
   const d = join(home, '.cc-sessions');
   mkdirSync(d, { recursive: true });
   for (const n of ['install-session-hooks.sh', 'install-coordinator-skill.sh',
-    'install-worker-skill.sh', 'install-reviewer-skill.sh', 'install-graphify-skill.sh']) {
+    'install-worker-skill.sh', 'install-reviewer-skill.sh', 'install-graphify-skill.sh',
+    'install-history-skill.sh']) {
     writeFileSync(join(d, n),
       `#!/bin/sh\nprintf '%s %s\\n' "${n}" "$*" >> "$HOME/installer-calls"\nexit 0\n`,
       { mode: 0o755 });
@@ -2844,7 +2845,7 @@ const settingsAt = (home: string, suffix: string): Record<string, unknown> =>
 const STANDS = 'STANDS-MARKER-4a91c2 the caller says this much.';
 
 describe('ccrc account add: the new home, provisioned', () => {
-  it('creates the config dir, writes the managed env block, and runs the five installers', () => {
+  it('creates the config dir, writes the managed env block, and runs the six installers', () => {
     const home = box('ccrc-account-prov-');
     seedBoxRoster(home, FIXTURE_ROSTER);
     plantUpstream(home);
@@ -2872,7 +2873,7 @@ describe('ccrc account add: the new home, provisioned', () => {
     expect(readFileSync(join(home, '.claude-lab-dev0', 'settings.json'), 'utf8'))
       .not.toContain(CANARY);
 
-    // FIVE CALLS, EACH SCOPED TO THE ONE NEW HOME, coordinator before worker
+    // SIX CALLS, EACH SCOPED TO THE ONE NEW HOME, coordinator before worker
     // before reviewer. This is also the step list Task 26 turns into an
     // answer key: at THIS commit `ACCT_PROVISIONED` is written and not yet
     // read, and the recorder is what measures it.
@@ -2882,6 +2883,7 @@ describe('ccrc account add: the new home, provisioned', () => {
       `install-worker-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
       `install-reviewer-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
       `install-graphify-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
+      `install-history-skill.sh --homes ${join(home, '.claude-lab-dev0')}`,
     ]);
   });
 
@@ -2902,7 +2904,7 @@ describe('ccrc account add: the new home, provisioned', () => {
     expect(existsSync(join(home, '.claude-lab-dev0', 'settings.json'))).toBe(false);
     // The step still RAN — it decided to write nothing, which is a different
     // thing from being skipped, and the installers still got their home.
-    expect(installerCalls(home).length).toBe(5);
+    expect(installerCalls(home).length).toBe(6);
   });
 
   it('an operator\'s own settings.json survives byte-identically outside the managed keys', () => {
@@ -3011,7 +3013,7 @@ describe('ccrc account add: the new home, provisioned', () => {
     symlinkSync(join(REPO, 'ccd', 'install-session-hooks.sh'),
       join(home, '.cc-sessions', 'install-session-hooks.sh'));
     for (const n of ['install-coordinator-skill.sh', 'install-worker-skill.sh',
-      'install-reviewer-skill.sh', 'install-graphify-skill.sh']) {
+      'install-reviewer-skill.sh', 'install-graphify-skill.sh', 'install-history-skill.sh']) {
       writeFileSync(join(home, '.cc-sessions', n), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     }
     const r = run(home, addArgs(), `${CANARY}\n`);
@@ -3302,12 +3304,12 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
       ['disabled', 'id', 'ok', 'operator-steps', 'provisioned', 'roster'].sort());
     expect(j['id']).toBe('lab-dev0');
     expect((j['roster'] as { accounts: unknown[] }).accounts.length).toBe(4);
-    // Task 25's step list, now an answer key — the five installers plus the
+    // Task 25's step list, now an answer key — the six installers plus the
     // env merge, in the order `_acct_provision` ran them. `settings-env` is
     // the WROTE token: this lane has an endpoint, so the merge produced a file.
     expect(j['provisioned']).toEqual([
       'settings-env', 'session-hooks', 'coordinator-skill', 'worker-skill',
-      'reviewer-skill', 'graphify-skill',
+      'reviewer-skill', 'graphify-skill', 'history-skill',
     ]);
   });
 
@@ -3342,7 +3344,7 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
     expect(existsSync(join(home, '.claude-lab-dev0', 'settings.json'))).toBe(false);
     expect(oneObject(r)['provisioned']).toEqual([
       'settings-env-none', 'session-hooks', 'coordinator-skill', 'worker-skill',
-      'reviewer-skill', 'graphify-skill',
+      'reviewer-skill', 'graphify-skill', 'history-skill',
     ]);
   });
 
@@ -3361,7 +3363,7 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
       + '_acct_operator_steps lab-dev0\n_acct_operator_steps lab-dev0\n'
       + 'printf \'%s %s\\n\' "${#ACCT_PROVISIONED[@]}" "${#ACCT_OPERATOR_STEPS[@]}"');
     expect(r.code, r.stderr).toBe(0);
-    expect(r.stdout.trim()).toBe('6 2');
+    expect(r.stdout.trim()).toBe('7 2');
   });
 
   it('all four of the provisioning refusals end in the one clause the caller built (D-2128)', () => {
@@ -3719,7 +3721,7 @@ describe('ccrc account add: the lane is off, and the verb says what it did not d
       expect(r.code, r.stderr).toBe(0);
       expect(oneObject(r)['provisioned']).toEqual([
         'settings-env-none', 'session-hooks', 'coordinator-skill', 'worker-skill',
-        'reviewer-skill', 'graphify-skill',
+        'reviewer-skill', 'graphify-skill', 'history-skill',
       ]);
       // The bytes are untouched — the converge arm returns before the backup, so
       // this is also the idempotence claim `_acct_settings_env` makes for itself.
@@ -5406,7 +5408,7 @@ describe('ccrc account remove', () => {
     writeFileSync(offMarker(home, 'alt-max'), '');
     writeFileSync(join(home, '.cc-sessions', 'alt-max.hookstate.json'), '{}'); writeFileSync(join(home, '.cc-sessions', 'alt-max.turn.json'), '{}');
     const cfg = join(home, '.claude-alt-max');
-    for (const skill of ['ccrc-coordinator', 'ccrc-worker', 'ccrc-reviewer', 'graphify']) {
+    for (const skill of ['ccrc-coordinator', 'ccrc-worker', 'ccrc-reviewer', 'graphify', 'ccrc-history']) {
       mkdirSync(join(cfg, 'skills', skill), { recursive: true });
     }
     mkdirSync(join(cfg, 'projects'), { recursive: true });
@@ -5441,7 +5443,7 @@ describe('ccrc account remove', () => {
     const cfg = join(home, '.claude-alt-max');
     expect(readFileSync(join(cfg, 'projects', 'CANARY.jsonl'), 'utf8'))
       .toBe('the operator history\n');
-    for (const skill of ['ccrc-coordinator', 'ccrc-worker', 'ccrc-reviewer', 'graphify']) {
+    for (const skill of ['ccrc-coordinator', 'ccrc-worker', 'ccrc-reviewer', 'graphify', 'ccrc-history']) {
       expect(existsSync(join(cfg, 'skills', skill)), skill).toBe(false);
     }
     const settings = JSON.parse(readFileSync(join(cfg, 'settings.json'), 'utf8'));

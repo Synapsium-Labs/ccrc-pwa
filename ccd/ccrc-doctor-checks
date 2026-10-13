@@ -3042,7 +3042,7 @@ _fix_wrappers() {
 
 # ── skills — every rostered home carries the SHIPPED skills ────────────────
 # Release/rollout design §6. Compares each home's installed
-# ccrc-coordinator/worker/reviewer against the TREE (`$BOX_TREE_DIR/ccd/
+# ccrc-coordinator/worker/reviewer/history against the TREE (`$BOX_TREE_DIR/ccd/
 # <name>-skill`), the thing the build stamp names — not against the
 # `.cc-sessions` placed copy: on 2026-09-17 both were stale while the tree
 # on the box was current, and eighteen reviewers read an old clause. Homes
@@ -3064,7 +3064,7 @@ _check_skills() {
   local tree="$BOX_TREE_DIR/ccd" name notree=""
   # EVERY missing one, in one line (R19, D-3112): the first-only probe sent an
   # operator back once per missing directory.
-  for name in coordinator-skill worker-skill reviewer-skill; do
+  for name in coordinator-skill worker-skill reviewer-skill history-skill; do
     [ -d "$tree/$name" ] || notree="$notree${notree:+, }$tree/$name"
   done
   if [ -n "$notree" ]; then
@@ -3106,7 +3106,7 @@ _check_skills() {
     dir="$HOME/$suffix"
     [ -d "$dir" ] || continue
     homes=$((homes + 1))
-    for name in coordinator-skill worker-skill reviewer-skill; do
+    for name in coordinator-skill worker-skill reviewer-skill history-skill; do
       installed="ccrc-${name%-skill}"
       if [ ! -d "$dir/skills/$installed" ]; then
         stale+=("$id: $installed missing"); continue
@@ -3119,7 +3119,7 @@ _check_skills() {
     return 3
   fi
   if [ "${#stale[@]}" -eq 0 ]; then
-    _dr_pass skills "$homes/$homes homes carry the shipped ccrc-coordinator, ccrc-worker and ccrc-reviewer"
+    _dr_pass skills "$homes/$homes homes carry the shipped ccrc-coordinator, ccrc-worker, ccrc-reviewer and ccrc-history"
     return 0
   fi
   # THE HEADLINE (R19, validated 2026-09-19, D-3112): an entry is "<id>: <skill>
@@ -3140,7 +3140,7 @@ _check_skills() {
   # `pool-name-parity.test.ts` pins. `ccrc doctor --fix` runs exactly this
   # remedy (`_fix_skills`, D-3113).
   _dr_fail skills "${#stale[@]} skill(s) in the rostered homes differ from the shipped tree or are missing from their home: $(_dr_join "${stale[@]}")" \
-    "run 'ccrc doctor --fix' (the shipped tree's installers into every rostered home), or 'ccrc update' (re-places the tree and re-runs them) — or by hand: CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/coordinator-skill\" bash \"\$HOME/ccrc/ccd/install-coordinator-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/worker-skill\" bash \"\$HOME/ccrc/ccd/install-worker-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/reviewer-skill\" bash \"\$HOME/ccrc/ccd/install-reviewer-skill.sh\""
+    "run 'ccrc doctor --fix' (the shipped tree's installers into every rostered home), or 'ccrc update' (re-places the tree and re-runs them) — or by hand: CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/coordinator-skill\" bash \"\$HOME/ccrc/ccd/install-coordinator-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/worker-skill\" bash \"\$HOME/ccrc/ccd/install-worker-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/reviewer-skill\" bash \"\$HOME/ccrc/ccd/install-reviewer-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/history-skill\" bash \"\$HOME/ccrc/ccd/install-history-skill.sh\""
   return 1
 }
 
@@ -3174,7 +3174,7 @@ _fix_skills() {
     [ -n "$id" ] || continue
     dir="$HOME/$suffix"
     [ -d "$dir" ] || continue
-    for name in coordinator worker reviewer; do
+    for name in coordinator worker reviewer history; do
       # The interpreter running THIS file, not whatever `bash` PATH resolves to —
       # doctor runs under a contained PATH in tests and under an operator's PATH
       # on a box, and the installer is bash either way.

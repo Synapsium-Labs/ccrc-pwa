@@ -93,19 +93,19 @@ function installCcrc(home: string): void {
   symlinkSync(CCRC_SRC, join(ccd, 'ccrc'));
   symlinkSync(CHECKS_SRC, join(ccd, 'ccrc-doctor-checks'));
   symlinkSync(LIB_SRC, join(ccd, 'ccrc-wrapper-shape'));
-  // The three shipped skill trees (release/rollout design §6): `_check_skills`
+  // The four shipped skill trees (release/rollout design §6): `_check_skills`
   // compares every home's installed copy against THESE, the tree the stamp
   // names — not against the `.cc-sessions` placed copy, which was stale too
   // on 2026-09-17.
-  for (const n of ['coordinator-skill', 'worker-skill', 'reviewer-skill']) {
+  for (const n of ['coordinator-skill', 'worker-skill', 'reviewer-skill', 'history-skill']) {
     symlinkSync(join(REPO, 'ccd', n), join(ccd, n));
   }
-  // …and the three INSTALLERS that ship beside them (R12). `_check_skills`'
+  // …and the four INSTALLERS that ship beside them (R12). `_check_skills`'
   // FAIL remedy now names `$HOME/ccrc/ccd/install-<role>-skill.sh` — the
   // script out of the same measured tree as the source — so a fixture that
   // planted only the skill trees could not run the remedy it prints. A real
   // box has them: `_inst_tree` rsyncs `ccd/` whole.
-  for (const n of ['install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-reviewer-skill.sh']) {
+  for (const n of ['install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-reviewer-skill.sh', 'install-history-skill.sh']) {
     symlinkSync(join(REPO, 'ccd', n), join(ccd, n));
   }
   // The history CLI (spec 2026-10-05 §9.6): `_check_history` runs `node "$CCRC_HERE/history/cli.mjs" status --json`.
@@ -1031,9 +1031,9 @@ function runDoctor(home: string, args: string[] = ['doctor'], extraEnv: NodeJS.P
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
-/** The three shipped skill trees and the name each installs under in a home —
+/** The four shipped skill trees and the name each installs under in a home —
  *  `_check_skills`' subject. One list for `healthy()` and `healthyCodexBox()`. */
-const SHIPPED_SKILLS = [['coordinator-skill', 'ccrc-coordinator'], ['worker-skill', 'ccrc-worker'], ['reviewer-skill', 'ccrc-reviewer']] as const;
+const SHIPPED_SKILLS = [['coordinator-skill', 'ccrc-coordinator'], ['worker-skill', 'ccrc-worker'], ['reviewer-skill', 'ccrc-reviewer'], ['history-skill', 'ccrc-history']] as const;
 
 /** A box where every check passes. Each per-check test starts here and breaks
  *  exactly ONE thing, so a red line is attributable to that one removal. */
@@ -5047,7 +5047,7 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
   it('passes on the healthy box, counting homes', () => {
     const home = healthy('ccrc-doctor-skills-pass-');
     const r = runDoctor(home);
-    expect(r.stdout).toMatch(/^PASS skills: 1\/1 homes carry the shipped ccrc-coordinator, ccrc-worker and ccrc-reviewer$/m);
+    expect(r.stdout).toMatch(/^PASS skills: 1\/1 homes carry the shipped ccrc-coordinator, ccrc-worker, ccrc-reviewer and ccrc-history$/m);
   });
 
   it('fails on ONE edited byte in ONE home, naming the account and the skill, and the installer runs it green again', () => {
@@ -5089,6 +5089,42 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     expect(r.stdout).toMatch(/^PASS skills:/m);
   });
 
+  it('reports ccrc-history stale when it differs, and its printed remedy runs it green again (history spec §8.9 C23)', () => {
+    const home = healthy('ccrc-doctor-skills-history-stale-');
+    const f = join(installed(home, '.claude', 'ccrc-history'), 'SKILL.md');
+    const shipped = readFileSync(f, 'utf8');
+    // An older wording a home could still carry: the literal path every command is pinned to, put back to the
+    // bare word.
+    writeFileSync(f, shipped.replace('"$HOME/.local/bin/ccrc" history', 'ccrc history'));
+    expect(readFileSync(f, 'utf8'), 'the fixture edit changed nothing').not.toBe(shipped);
+    let r = runDoctor(home);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/^FAIL skills: 1 skill\(s\) in the rostered homes differ from the shipped tree or are missing from their home: claude: ccrc-history differs$/m);
+    expect(r.stdout).toMatch(/CCRC_SKILL_SRC="\$HOME\/ccrc\/ccd\/history-skill" bash "\$HOME\/ccrc\/ccd\/install-history-skill\.sh"/);
+    // The printed command, resolved on this fixture's box: installCcrc's planted tree is `$HOME/ccrc/ccd`.
+    const rem = spawnSync(BASH,
+      [join(home, 'ccrc', 'ccd', 'install-history-skill.sh'), '--homes', join(home, '.claude')],
+      {
+        env: ghContainedEnv(home, {
+          ...process.env, HOME: home,
+          CCRC_SKILL_SRC: join(home, 'ccrc', 'ccd', 'history-skill'),
+        }),
+        encoding: 'utf8',
+      });
+    expect(rem.status, `${rem.stdout}${rem.stderr}`).toBe(0);
+    expect(readFileSync(f, 'utf8')).toBe(shipped);
+    r = runDoctor(home);
+    expect(r.stdout).toMatch(/^PASS skills: 1\/1 homes carry the shipped ccrc-coordinator, ccrc-worker, ccrc-reviewer and ccrc-history$/m);
+  }, 90_000);   // two doctor runs: a bounded but load-slow box is not a red
+
+  it('a home whose ccrc-history lacks only its MIT sidecar is stale too: diff -r -q compares the whole tree', () => {
+    const home = healthy('ccrc-doctor-skills-history-sidecar-');
+    rmSync(join(installed(home, '.claude', 'ccrc-history'), 'LICENSE.lossless-claw'));
+    const r = runDoctor(home);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/^FAIL skills: 1 skill\(s\) in the rostered homes .*: claude: ccrc-history differs$/m);
+  });
+
   it('the remedy names the override seam, not the bare installer (R10)', () => {
     // Mutation pin: a remedy that reverted to bare installer invocations
     // (no CCRC_SKILL_SRC) would converge from $HOME/.cc-sessions instead of
@@ -5101,9 +5137,10 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     expect(r.stdout).toMatch(/CCRC_SKILL_SRC="\$HOME\/ccrc\/ccd\/coordinator-skill"/);
     expect(r.stdout).toMatch(/CCRC_SKILL_SRC="\$HOME\/ccrc\/ccd\/worker-skill"/);
     expect(r.stdout).toMatch(/CCRC_SKILL_SRC="\$HOME\/ccrc\/ccd\/reviewer-skill"/);
+    expect(r.stdout).toMatch(/CCRC_SKILL_SRC="\$HOME\/ccrc\/ccd\/history-skill"/);
     // R12, the other half: the SCRIPT comes from the measured tree too, and
     // the remedy no longer sends the operator to `$HOME/.cc-sessions` for it.
-    for (const role of ['coordinator', 'worker', 'reviewer']) {
+    for (const role of ['coordinator', 'worker', 'reviewer', 'history']) {
       expect(r.stdout).toMatch(new RegExp(`bash "\\$HOME/ccrc/ccd/install-${role}-skill\\.sh"`));
     }
     expect(r.stdout).not.toMatch(/\.cc-sessions\/install-/);
@@ -5127,8 +5164,8 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     writeWrapper(home, 'acct-a', { cfgDir: '.acct-a' });
     mkdirSync(join(home, '.acct-a', 'skills'), { recursive: true });
     let r = runDoctor(home);
-    expect(r.stdout).toMatch(/^FAIL skills: 3 skill\(s\) in the rostered homes differ .*acct-a: ccrc-coordinator missing.*acct-a: ccrc-worker missing.*acct-a: ccrc-reviewer missing/m);
-    for (const [tree, name] of [['coordinator-skill', 'ccrc-coordinator'], ['worker-skill', 'ccrc-worker'], ['reviewer-skill', 'ccrc-reviewer']] as const) {
+    expect(r.stdout).toMatch(/^FAIL skills: 4 skill\(s\) in the rostered homes differ .*acct-a: ccrc-coordinator missing.*acct-a: ccrc-worker missing.*acct-a: ccrc-reviewer missing.*acct-a: ccrc-history missing/m);
+    for (const [tree, name] of [['coordinator-skill', 'ccrc-coordinator'], ['worker-skill', 'ccrc-worker'], ['reviewer-skill', 'ccrc-reviewer'], ['history-skill', 'ccrc-history']] as const) {
       cpSync(join(REPO, 'ccd', tree), installed(home, '.acct-a', name), { recursive: true });
     }
     r = runDoctor(home);

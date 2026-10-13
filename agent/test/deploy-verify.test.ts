@@ -1852,6 +1852,9 @@ describe('the verification is actually wired into the deploy, and can observe a 
       ['graphify skill', '"${SSH[@]}" "$BOX" \'[ -f ~/.ccrc/graphify.pin ] '
         + '&& bash ~/.cc-sessions/install-graphify-skill.sh '
         + '|| echo "graphify: no pin on box — run ccrc install once; skill deferred"\''],
+      // The history skill's installer is the SIXTH roster reader (ccrc history W1-B2). It `source`s the same
+      // generated file for the same reason: the roster is where it learns which config dirs exist at all.
+      ['history skill', "\"${SSH[@]}\" \"$BOX\" 'bash ~/.cc-sessions/install-history-skill.sh'"],
     ] as const) {
       const runIdx = agentBranch.indexOf(invocation);
       expect(runIdx, `the agent branch no longer runs the ${what} installer (looked for: ${invocation})`)

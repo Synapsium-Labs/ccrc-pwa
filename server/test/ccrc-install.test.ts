@@ -55,7 +55,7 @@
 //     does not get', a `describeDarwin` block whose body STILL RUNS on Linux
 //   - `converged` — 'ccrc install: linger, the account dirs, the hooks and
 //     the wrappers'
-//   - `skillBox` — 'ccrc install: all three skills reach every rostered
+//   - `skillBox` — 'ccrc install: all four skills reach every rostered
 //     account'
 // So a mutation of any containment line these runs depend on reaches a real
 // `ccrc install` the moment the file is imported, whatever `-t` says. That
@@ -2278,7 +2278,7 @@ describe('ccrc install: the executables and files it installs', () => {
       [join(home, '.cc-sessions', 'install-session-hooks.sh'),
         placed(home, 'ccd', 'install-session-hooks.sh'), 0o755],
       [join(home, '.cc-sessions', 'notify.sh'), placed(home, 'deploy', 'notify.sh'), 0o755],
-      // The three skill installers (worker-skill Task 4, reviewer-skill
+      // The four skill installers (worker-skill Task 4, reviewer-skill
       // Task 10) are the same kind of artifact as the hooks installer beside
       // them — a script the box EXECUTES — and land through the same
       // `_inst_atomic`. 0755 is not decoration here: `_inst_skills` runs each
@@ -2291,6 +2291,9 @@ describe('ccrc install: the executables and files it installs', () => {
         placed(home, 'ccd', 'install-worker-skill.sh'), 0o755],
       [join(home, '.cc-sessions', 'install-reviewer-skill.sh'),
         placed(home, 'ccd', 'install-reviewer-skill.sh'), 0o755],
+      // ccrc history W1-B2: the fourth roster-reading skill installer, through the same `_inst_atomic`.
+      [join(home, '.cc-sessions', 'install-history-skill.sh'),
+        placed(home, 'ccd', 'install-history-skill.sh'), 0o755],
       // graphify Task 3: `_inst_graphify_skill` stages this beside the other
       // two, through the same `_inst_atomic`, right after `_inst_skills`.
       [join(home, '.cc-sessions', 'install-graphify-skill.sh'),
@@ -2334,11 +2337,12 @@ describe('ccrc install: the executables and files it installs', () => {
       join(home, '.cc-sessions', 'session-hook.sh'),
       join(home, '.cc-sessions', 'install-session-hooks.sh'),
       join(home, '.cc-sessions', 'notify.sh'),
-      // The three skill installers `_inst_skills` stages beside them, through
+      // The four skill installers `_inst_skills` stages beside them, through
       // the same `_inst_atomic` (worker-skill Task 4, reviewer-skill Task 10).
       join(home, '.cc-sessions', 'install-coordinator-skill.sh'),
       join(home, '.cc-sessions', 'install-worker-skill.sh'),
       join(home, '.cc-sessions', 'install-reviewer-skill.sh'),
+      join(home, '.cc-sessions', 'install-history-skill.sh'),
       // graphify Task 3: staged beside them, through the same `_inst_atomic`.
       join(home, '.cc-sessions', 'install-graphify-skill.sh'),
       join(home, '.tmux.conf'),
@@ -5150,7 +5154,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
   });
 });
 
-describe('ccrc install: all three skills reach every rostered account', () => {
+describe('ccrc install: all four skills reach every rostered account', () => {
   // ── THE ASYMMETRY THIS STEP CLOSES ──────────────────────────────────────
   // `deploy/deploy.sh agent <host>` has shipped the coordinator skill to the
   // fleet host since Build 7 and now ships the worker and reviewer skills
@@ -5181,18 +5185,23 @@ describe('ccrc install: all three skills reach every rostered account', () => {
     expect(skillBox.r.stdout).toMatch(/^install: skills: /m);
   });
 
-  it('lands ALL THREE skills in every account config dir the roster names', () => {
+  it('lands ALL FOUR skills in every account config dir the roster names', () => {
     const { home } = skillBox;
     for (const d of ROSTER_DIRS) {
       for (const [name, src] of [
         ['ccrc-coordinator', 'coordinator-skill'], ['ccrc-worker', 'worker-skill'],
-        ['ccrc-reviewer', 'reviewer-skill'],
+        ['ccrc-reviewer', 'reviewer-skill'], ['ccrc-history', 'history-skill'],
       ] as const) {
         const md = join(home, d, 'skills', name, 'SKILL.md');
         expect(existsSync(md), `${d}: ${name} never reached this home`).toBe(true);
         expect(readFileSync(md), `${d}: ${name} is not the shipped skill`)
           .toEqual(readFileSync(placed(home, 'ccd', src, 'SKILL.md')));
       }
+      // …and ccrc-history's MIT notice travelled with it (ccrc history spec §12): its installer refuses a source
+      // without the sidecar, and `cp -a` is what carries it into each home.
+      expect(readFileSync(join(home, d, 'skills', 'ccrc-history', 'LICENSE.lossless-claw')),
+        `${d}: ccrc-history arrived without its LICENSE.lossless-claw`)
+        .toEqual(readFileSync(placed(home, 'ccd', 'history-skill', 'LICENSE.lossless-claw')));
       // …and the coordinator's tree arrived WHOLE, not as its first file. Its
       // own installer refuses a partial source by name, so this is the
       // assertion that says the refusal never had to fire — and the worker
@@ -5207,12 +5216,12 @@ describe('ccrc install: all three skills reach every rostered account', () => {
   it('stages each skill tree under ~/.cc-sessions, where the fleet deploy puts it', () => {
     // ONE PATH FOR BOTH LANES. `deploy.sh` rsyncs each tree to
     // `~/.cc-sessions/<name>` and runs the installer against that copy; this
-    // verb places the same three directories at the same three paths from the
+    // verb places the same four directories at the same four paths from the
     // tree it just put at `~/ccrc`. A box therefore looks the same afterwards
     // whichever lane converged it — which is what makes the installers' own
     // `CCRC_SKILL_SRC` default correct on a self-installed box.
     const { home } = skillBox;
-    for (const name of ['coordinator-skill', 'worker-skill', 'reviewer-skill']) {
+    for (const name of ['coordinator-skill', 'worker-skill', 'reviewer-skill', 'history-skill']) {
       const staged = join(home, '.cc-sessions', name);
       expect(existsSync(staged), `${name} was never staged in ~/.cc-sessions`).toBe(true);
       expect(readFileSync(join(staged, 'SKILL.md')))
@@ -5270,9 +5279,12 @@ describe('ccrc install: all three skills reach every rostered account', () => {
       join(home, '.claude', 'skills', 'ccrc-coordinator', 'references', 'wave-lifecycle.md'),
       join(home, '.claude', 'skills', 'ccrc-worker', 'SKILL.md'),
       join(home, '.claude', 'skills', 'ccrc-reviewer', 'SKILL.md'),
+      join(home, '.claude', 'skills', 'ccrc-history', 'SKILL.md'),
+      join(home, '.claude', 'skills', 'ccrc-history', 'LICENSE.lossless-claw'),
       join(home, '.cc-sessions', 'coordinator-skill', 'SKILL.md'),
       join(home, '.cc-sessions', 'worker-skill', 'SKILL.md'),
       join(home, '.cc-sessions', 'reviewer-skill', 'SKILL.md'),
+      join(home, '.cc-sessions', 'history-skill', 'SKILL.md'),
     ];
     const before = watched.map((p) => [statSync(p).ino, mtime(p)]);
     const r = runInstall(home);
@@ -5841,15 +5853,17 @@ describe('ccrc install: running the WHOLE verb twice', () => {
       join(home, '.cc-sessions', 'install-coordinator-skill.sh'),
       join(home, '.cc-sessions', 'install-worker-skill.sh'),
       join(home, '.cc-sessions', 'install-reviewer-skill.sh'),
+      join(home, '.cc-sessions', 'install-history-skill.sh'),
       // graphify Task 3: staged beside them, through the same `_inst_atomic`.
       join(home, '.cc-sessions', 'install-graphify-skill.sh'),
-      // …and the three staged skill TREES, which are not `_inst_atomic`
+      // …and the four staged skill TREES, which are not `_inst_atomic`
       // destinations at all: `_inst_tree_copy` converges a directory, and the
       // file inside it is what a re-run must not rewrite (worker-skill Task 4,
       // reviewer-skill Task 10).
       join(home, '.cc-sessions', 'coordinator-skill', 'SKILL.md'),
       join(home, '.cc-sessions', 'worker-skill', 'SKILL.md'),
       join(home, '.cc-sessions', 'reviewer-skill', 'SKILL.md'),
+      join(home, '.cc-sessions', 'history-skill', 'SKILL.md'),
       join(home, '.tmux.conf'),
       join(home, '.claude', 'statusline-command.sh'),
       // THE JOB FILES THIS PLATFORM ACTUALLY HAS. `UNIT_FILES` is systemd's

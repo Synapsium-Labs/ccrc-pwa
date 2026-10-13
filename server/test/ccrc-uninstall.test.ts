@@ -337,6 +337,7 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   mkdirSync(join(reg, 'coordinator-skill'), { recursive: true });
   mkdirSync(join(reg, 'worker-skill'), { recursive: true });
   mkdirSync(join(reg, 'reviewer-skill'), { recursive: true });
+  mkdirSync(join(reg, 'history-skill'), { recursive: true });
   // The compaction card's helper (compaction-card spec §2): `_inst_files`
   // places it, so `_uninst_cc_sessions` is the sweep that must remove it.
   writeFileSync(join(reg, 'compact-card.mjs'), '// fixture helper\n', { mode: 0o644 });
@@ -346,12 +347,15 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   writeFileSync(join(reg, 'install-coordinator-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
   writeFileSync(join(reg, 'install-worker-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
   writeFileSync(join(reg, 'install-reviewer-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
-  // graphify Task 3: `_inst_graphify_skill` stages this beside the other three
+  writeFileSync(join(reg, 'install-history-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
+  // graphify Task 3: `_inst_graphify_skill` stages this beside the other four
   // installers, the same lane `_uninst_cc_sessions` must remove it from.
   writeFileSync(join(reg, 'install-graphify-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
   writeFileSync(join(reg, 'coordinator-skill', 'SKILL.md'), '# the coordinator skill\n');
   writeFileSync(join(reg, 'worker-skill', 'SKILL.md'), '# the worker skill\n');
   writeFileSync(join(reg, 'reviewer-skill', 'SKILL.md'), '# the reviewer skill\n');
+  writeFileSync(join(reg, 'history-skill', 'SKILL.md'), '# the history skill\n');
+  writeFileSync(join(reg, 'history-skill', 'LICENSE.lossless-claw'), 'fixture licence\n');
   // Two account homes. claude2: one managed entry per event shape the
   // installer writes, one unmanaged entry, a CUSTOM statusLine. claude3:
   // no managed entry at all, hand-formatted.
@@ -703,8 +707,8 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(r.code, r.stderr).toBe(0);
     for (const f of ['session-hook.sh', 'install-session-hooks.sh', 'notify.sh', 'compact-card.mjs',
       'install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-reviewer-skill.sh',
-      'install-graphify-skill.sh',
-      'coordinator-skill', 'worker-skill', 'reviewer-skill']) {
+      'install-graphify-skill.sh', 'install-history-skill.sh',
+      'coordinator-skill', 'worker-skill', 'reviewer-skill', 'history-skill']) {
       expect(existsSync(join(home, '.cc-sessions', f)), `${f} survived`).toBe(false);
     }
     for (const f of ['alpha.uuid', 'coordinator-paused', 'mail-disabled',
