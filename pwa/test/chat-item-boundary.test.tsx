@@ -145,7 +145,7 @@ describe('T11 review 4-1: the per-item boundary holds on the virtualised ChatLis
     const { ChatList } = await import('../src/session/ChatList');
     const { RenderBoundary } = await import('../src/components/RenderBoundary');
     render(
-      <RenderBoundary where="outer" fallback={() => <p>OUTER FALLBACK</p>}>
+      <RenderBoundary where="outer" resetKey="outer" fallback={() => <p>OUTER FALLBACK</p>}>
         <ChatList
           id="demo"
           events={[assistant('a1', 'first answer'), toolUse('a2', 't1'), assistant('a3', 'third answer')]}
