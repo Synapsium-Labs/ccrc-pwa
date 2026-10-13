@@ -11,7 +11,6 @@ import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { build } from 'vite';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const PWA = path.join(import.meta.dirname, '..');
@@ -19,12 +18,13 @@ let out = '';
 
 // Runs in the child. argv[1] is the chunk, argv[2] the job's source; prints one JSON line.
 const LOADER = `
+import { pathToFileURL } from 'node:url';
 const [chunk, src] = process.argv.slice(1);
 const replies = [];
 globalThis.self = { postMessage: (r) => replies.push(r) };
 const report = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
 try {
-  await import(new URL('file://' + chunk).href);
+  await import(pathToFileURL(chunk).href);
 } catch (e) {
   report({ load: 'threw', name: e?.name, message: String(e?.message).slice(0, 200), document: typeof document });
   process.exit(0);
@@ -35,20 +35,20 @@ await new Promise((r) => setTimeout(r, 0));
 report({ load: 'ok', document: typeof document, replies });
 `;
 
-beforeAll(async () => {
+// Runs in a node child, cwd the PWA package: the app's own config, a production build (vitest's NODE_ENV=test would
+// build the `development` export conditions, a different chunk), into argv[1]. Not in this file's jsdom realm, whose
+// URL the PWA plugin's file writes reject.
+const BUILDER = `
+import { build } from 'vite';
+await build({ configFile: 'vite.config.ts', logLevel: 'error', build: { outDir: process.argv[1], emptyOutDir: true } });
+`;
+
+beforeAll(() => {
   out = mkdtempSync(path.join(tmpdir(), 'ccrc-worker-built-'));
-  const denylist = process.env['CCRC_SW_DENYLIST'];
-  delete process.env['CCRC_SW_DENYLIST'];
-  try {
-    await build({
-      root: PWA,
-      configFile: path.join(PWA, 'vite.config.ts'),
-      logLevel: 'silent',
-      build: { outDir: out, emptyOutDir: true },
-    });
-  } finally {
-    if (denylist !== undefined) process.env['CCRC_SW_DENYLIST'] = denylist;
-  }
+  const env: Record<string, string> = { PATH: process.env['PATH'] ?? '', NODE_ENV: 'production' };
+  if (process.env['HOME'] !== undefined) env['HOME'] = process.env['HOME'];
+  execFileSync(process.execPath, ['--input-type=module', '-e', BUILDER, out],
+    { cwd: PWA, env, encoding: 'utf8', timeout: 170_000, stdio: ['ignore', 'pipe', 'pipe'] });
 }, 180_000);
 
 afterAll(() => {
@@ -79,7 +79,7 @@ describe('the built markdownWorker chunk', () => {
     expect(reply!.id).toBe(7);
     expect(reply!.outcome.kind).toBe('tree');
     const text = JSON.stringify(reply!.outcome.tree);
-    expect(text).toContain('Fees © 2026 & more, with ');
+    expect(text).toContain('Fees \u00a9 2026 & more,\u00a0with ');
     expect(text).not.toContain('&copy;');
   }, 90_000);
 });

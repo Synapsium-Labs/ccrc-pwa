@@ -4,6 +4,7 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 import type { Plugin } from 'vite';
+import { createRequire } from 'node:module';
 
 // The worker bundle resolves `decode-named-character-reference` (reached through
 // remark-gfm and micromark) to its plain `index.js`, never its `browser` entry,
@@ -28,11 +29,33 @@ function workerSafeEntries(): Plugin {
   };
 }
 
+// The dev server does not bundle the worker: it serves the worker's modules from
+// the main graph, whose pre-bundled dependencies take the `browser` entry, so
+// `vite dev` would answer every chat message over 4 KiB as plain text. Under
+// `serve` only, and never under vitest (whose jsdom main thread keeps the entry a
+// browser ships), the package is aliased to its plain entry for both threads.
+// Node's resolution of the bare name takes its `default` export, `index.js`.
+function devWorkerSafeEntries(): Plugin {
+  return {
+    name: 'ccrc-dev-worker-safe-entries',
+    apply: (_config, env) => env.command === 'serve' && process.env['VITEST'] === undefined,
+    config: () => ({
+      resolve: {
+        alias: [{
+          find: /^decode-named-character-reference$/,
+          replacement: createRequire(import.meta.url).resolve('decode-named-character-reference'),
+        }],
+      },
+    }),
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    devWorkerSafeEntries(),
     // Installable PWA. Updates apply themselves — main.tsx also drives periodic
     // update CHECKS, because a never-navigating SPA otherwise never asks.
     VitePWA({
