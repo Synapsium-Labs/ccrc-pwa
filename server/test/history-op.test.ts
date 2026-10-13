@@ -19,6 +19,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import * as pty from 'node-pty';
 import { WRITING_FORMS, CARRIER_KILL_S, journalRecord, floorThreshold, historyPaths } from '../../ccd/history/lib.mjs';
 import { createStore, openWriter, closeWriter, getMeta } from '../../ccd/history/store.mjs';
+import { exportCensus, homeOfPath, newBudget } from '../../ccd/history/sweep.mjs';
 import {
   makeHistoryBox, runSweep, runShim, runDriver, preloadOptions, plantSession, plantTranscript, spoolLine, openStoreRO,
   counters, journalRecords, PRELOADS, PASS_DRIVER, CLI, readTxlog, writes, type TxEv, type HistoryBox, type DriverDeps,
@@ -1248,9 +1249,55 @@ describe('O38: the export\'s due rule, re-run under the per-copy default (B1 hal
       expect(r.code, r.stderr).toBe(0);
       expect(countOf(box, 'entries'), 'CONTROL: the row is ingested').toBe(1);
       expect(metaOf(box, 'retention_min')).toBe('30');
+      // D-4612 also moves the W1-k first_deletion_ms date (H-213): the shared file's deletion date is its mtime plus the SHORT home's 30 days.
+      expect(Math.abs(Number(metaOf(box, 'first_deletion_ms')) - (at.getTime() + 30 * DAY)),
+        'first_deletion_ms is the file\'s mtime plus 30 days, never plus 180').toBeLessThan(MIN);
       expect(due(box), 'the short home deletes the file at +30 days, so it is due now whichever home the roster lists first').toBe(1);
     }, 90_000);
   }
+
+  // ── H-214 (hardening HJ): the home roots are resolved once per pass, not once per recorded file ──
+  it('H-214: the census resolves each rostered home\'s projects/ once per pass, not once per recorded file', () => {
+    const { box, MS } = censusBox('ccrc-hist-o38r-');
+    plantOne(box, 'claude-r1', U3, 'a0000000-0000-4000-8000-0000000006b1', 'file three', 10, 10);
+    plantOne(box, 'claude-r2', '44444444-4444-4444-8444-444444444444', 'a0000000-0000-4000-8000-0000000006b2', 'file four', 10, 10);
+    plantOne(box, 'claude-r3', '55555555-5555-4555-8555-555555555555', 'a0000000-0000-4000-8000-0000000006b3', 'file five', 10, 10);
+    census(box, MS, 1);
+    const files = countOf(box, 'file_paths');
+    expect(files, 'CONTROL: five recorded files').toBeGreaterThanOrEqual(5);
+    expect(box.homes.length, 'CONTROL: more than one rostered home').toBeGreaterThan(1);
+    const roots = new Set(box.homes.map((h) => path.join(h, 'projects')));
+    const db = openWriter(paths(box).db);
+    const realReal = fs.realpathSync;
+    let resolved = 0;
+    let censusResolved = -1;
+    let firstMatch = -1;
+    try {
+      db.prepare('INSERT OR REPLACE INTO derivation_state (step, version, cursor, completed_ms) VALUES (?, 1, ?, NULL)')
+        .run('export-census', JSON.stringify({ last: 0, due: 0, overdue: 0, startMs: Date.now(), homeDays: Object.fromEntries(box.homes.map((h) => [h, 180])) }));
+      const counting = Object.assign(function realpathSync(p: unknown, ...rest: unknown[]): unknown {
+        if (typeof p === 'string' && roots.has(p)) resolved += 1;
+        return (realReal as (...a: unknown[]) => unknown)(p, ...rest);
+      }, realReal);
+      (fs as { realpathSync: unknown }).realpathSync = counting;
+      syncBuiltinESMExports();
+      expect(exportCensus(db, Date.now(), newBudget()), 'the census completes').toBe(true);
+      censusResolved = resolved;
+      // homeOfPath wants the first match: with the holding home listed first, no later home's projects/ is resolved.
+      const holder = box.accountHome['claude']!;
+      const file = q<{ path: string }>(box, 'SELECT path FROM file_paths LIMIT 1')[0]!.path;
+      resolved = 0;
+      expect(homeOfPath(file, [holder, ...box.homes.filter((h) => h !== holder)]), 'CONTROL: the holder is the first match').toBe(holder);
+      firstMatch = resolved;
+    } finally {
+      (fs as { realpathSync: unknown }).realpathSync = realReal;
+      syncBuiltinESMExports();
+      db.close();
+    }
+    expect(firstMatch, 'homeOfPath stops at the first matching home: it resolves that home\'s projects/ and no later one').toBe(1);
+    expect(censusResolved, 'each rostered home\'s projects/ is resolved a bounded number of times, never once per file').toBeLessThanOrEqual(box.homes.length);
+    expect(censusResolved, 'CONTROL: the wrapper saw the resolutions').toBeGreaterThan(0);
+  }, 90_000);
 });
 
 describe('W1-j and O34: the journal audit', () => {

@@ -5391,25 +5391,44 @@ export function writeOpMarker(P, verb, nowMs) {
   writeFileAtomic(P.op, `${verb} ${process.pid} ${nowMs}\n`, 0o600);
 }
 
+/** One rostered home's projects/ tree, spelled and resolved: an unmade projects/ resolves to its spelling and holds nothing. */
+function projectsRootOf(h) {
+  const spelled = join(h, 'projects');
+  let root = spelled;
+  try { root = realpathSync(spelled); } catch { /* an unmade projects/ holds nothing */ }
+  return { spelled, root };
+}
+
+/** Whether a home's projects/ tree holds a path: by the resolved path, and by the spelled one for a file already gone. */
+function treeHolds(p, real, tree) {
+  return real.startsWith(`${tree.root}/`) || p.startsWith(`${tree.spelled}/`);
+}
+
+/** The resolved projects/ trees of `homes`, in order, each measured ONCE: a caller that asks about many paths resolves
+ *  them here and hands the list to `homesOfPath`, so the resolutions cost one per home, not one per home per path (H-214). */
+export function projectsTrees(homes) {
+  return homes.map(projectsRootOf);
+}
+
 /** Every rostered home whose projects/ tree holds a path, in roster order — by the resolved path, and by the spelled
- *  one for a file already gone. Two homes whose projects/ resolve to one real tree both hold it. */
-export function homesOfPath(p, homes) {
+ *  one for a file already gone. Two homes whose projects/ resolve to one real tree both hold it. `trees` is
+ *  `projectsTrees(homes)`, resolved by the caller once for a run of paths (H-214); absent, it is resolved here. */
+export function homesOfPath(p, homes, trees = projectsTrees(homes)) {
   let real = p;
   try { real = realpathSync(p); } catch { /* gone: the spelled path decides */ }
   const out = [];
-  for (const h of homes) {
-    const spelled = join(h, 'projects');
-    let root = spelled;
-    try { root = realpathSync(spelled); } catch { /* an unmade projects/ holds nothing */ }
-    if (real.startsWith(`${root}/`) || p.startsWith(`${spelled}/`)) out.push(h);
-  }
+  homes.forEach((h, i) => { if (treeHolds(p, real, trees[i])) out.push(h); });
   return out;
 }
 
 /** The first rostered home whose projects/ tree holds a path, or null when none does (§5.2: only rostered roots are
- *  read). Ingest admission asks this; the export census asks `homesOfPath` and takes the shortest (D-4612). */
+ *  read). Ingest admission asks this; the export census asks `homesOfPath` and takes the shortest (D-4612). It stops
+ *  at the first match: a later home's projects/ is not resolved for a path an earlier home holds (H-214). */
 export function homeOfPath(p, homes) {
-  return homesOfPath(p, homes)[0] ?? null;
+  let real = p;
+  try { real = realpathSync(p); } catch { /* gone: the spelled path decides */ }
+  for (const h of homes) if (treeHolds(p, real, projectsRootOf(h))) return h;
+  return null;
 }
 
 /** A verdict line queued in the outbox, inside the caller's transaction (§9.14). */
@@ -5965,6 +5984,7 @@ function stepCursorDone(db, step, state, nowMs) {
  *  reaches JavaScript. */
 function transcriptFiles(db, homes, homeDays) {
   const byTranscript = new Map();
+  const trees = projectsTrees(homes);   // each home's projects/ resolved once for the pass, not once per recorded file (H-214)
   const st = db.prepare('SELECT f.transcript_pk, f.source_key, f.mtime_ns / 1000000 AS mtime_ms, p.path '
     + 'FROM ingest_files f LEFT JOIN file_paths p ON p.file_id = f.file_id');
   for (const r of st.iterate()) {
@@ -5980,7 +6000,7 @@ function transcriptFiles(db, homes, homeDays) {
     const files = byTranscript.get(r.transcript_pk) ?? [];
     // D-4612 (history-export-file-home-shortest-of-containing): a file under several rostered homes reads against the
     // shortest, not the first listed; null (no home holds it) reads against the shortest of all in filesOf.
-    files.push({ home: r.path === null ? null : shortestRetentionHome(homesOfPath(r.path, homes), homeDays), mtimeMs, present });
+    files.push({ home: r.path === null ? null : shortestRetentionHome(homesOfPath(r.path, homes, trees), homeDays), mtimeMs, present });
     byTranscript.set(r.transcript_pk, files);
   }
   return byTranscript;

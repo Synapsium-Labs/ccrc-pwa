@@ -5122,12 +5122,12 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     expect(spelled.filter((w) => !words.includes(w))).toEqual([]);
   });
 
-  it('the string vocabularies EXPAND_LABEL, BELT_NODES_STEP and REDACT_SOURCES_META are quoted once, at their declaration (H-149)', async () => {
+  it('the string vocabularies EXPAND_LABEL, BELT_META, BELT_NODES_STEP and REDACT_SOURCES_META are quoted once, at their declaration (H-149)', async () => {
     // The declaration and export check above is vacuous for a primitive: a reader that spells the value (`.get('redact_sources')`)
     // instead of naming the constant would stay green. The scan reads code lines only, comments excluded.
     const l = await lib();
     const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    for (const name of ['EXPAND_LABEL', 'BELT_NODES_STEP', 'REDACT_SOURCES_META'] as const) {
+    for (const name of ['EXPAND_LABEL', 'BELT_META', 'BELT_NODES_STEP', 'REDACT_SOURCES_META'] as const) {
       const value = l[name];
       expect(typeof value, `${name} is a string`).toBe('string');
       const quoted = new RegExp(`['"\`]${esc(String(value))}['"\`]`);

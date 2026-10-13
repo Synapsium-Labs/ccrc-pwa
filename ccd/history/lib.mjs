@@ -1555,7 +1555,10 @@ export const SECRET_SOURCES = Object.freeze([
   Object.freeze({ path: '.ccrc/sessions.json', sessionHashes: true }),
 ]);
 
-/** A secret file's kind by its name: `*.token` its value line (D-4587), `*.json`
+/** A secret file's kind by its name: `*.token` its value lines (D-4587: after
+ *  dropping blank and `#` lines, (a) the first remaining line with all whitespace
+ *  removed and (b) the remaining lines joined and trimmed, when that differs from
+ *  (a), so a value spanning two lines learns two values), `*.json`
  *  its string leaves, anything else (`*.env`, a declared `secretsFile`, which
  *  its wrapper sources as bash) an env file. */
 export function kindOfPath(p) {
