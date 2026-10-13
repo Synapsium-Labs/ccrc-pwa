@@ -2755,10 +2755,23 @@ payload=$(cat 2>/dev/null) || exit 0
 # not named `cc-*` — matched that row and wrote its state, which the server
 # reads as current while the row's real pane is mid-turn. With both halves,
 # attribution stays POSITIVE and measured — this hook writes for a session only
-# when the registry itself names that uuid as its own AND the process is a
-# forked job — so a stranger's Claude session on this box exits 0 exactly as it
-# did before the fallback existed. What it must never become is the registry's
-# WRITER. `ccd` decides the uuid (`_sync_uuid`); this only reports against it.
+# when the registry itself names that uuid as its own AND the process carries
+# the marker — so a stranger's Claude session on this box that does not carry
+# CLAUDE_JOB_DIR exits 0 exactly as it did before the fallback existed.
+#
+# ONE STRANGER CARRIES IT ANYWAY, because CLAUDE_JOB_DIR is INHERITED, not
+# handed to each process. Claude Code's child-environment builder keeps it (the
+# prompt it gives a forked session even says to use `$CLAUDE_JOB_DIR/tmp`), so
+# everything a forked session starts has it, and a `claude --resume <registry
+# uuid>` run from a forked session's own shell matches that row and writes its
+# state. No variable tells the two apart: every Claude process sets its own
+# hooks' CLAUDECODE, CLAUDE_CODE_SESSION_ID, CLAUDE_CODE_CHILD_SESSION and
+# CLAUDE_PID afresh, and the background-identity list reaches neither.
+# That residual needs a forked session to start it, so it is far narrower than
+# the hole the marker closes; it is named here, not pretended away (D-4953).
+#
+# What the fallback must never become is the registry's WRITER. `ccd` decides
+# the uuid (`_sync_uuid`); this only reports against it.
 id=""
 if [[ -n "${TMUX_PANE:-}" ]]; then
   # BOUNDED, and for a sharper reason than the statusline's (`ccd/statusline-command.sh`,
@@ -2792,7 +2805,8 @@ if [[ -n "${TMUX_PANE:-}" ]]; then
 # hook run by a 2.1.296 process given all four sees CLAUDE_JOB_DIR and none of
 # the other three, so a gate on CLAUDE_CODE_SESSION_KIND=bg would never open and
 # this fallback would be dead for the very sessions it exists for. The value is
-# tested for presence only, never used as a path.
+# tested for presence only, never used as a path. Presence means "a forked job,
+# or a process one started": the header above names the stranger that admits.
 #
 # THE SESSION ID MUST BE NON-EMPTY, and that conjunct is a guard, not a
 # formality: an empty id equals an empty row (one whose uuid source failed),

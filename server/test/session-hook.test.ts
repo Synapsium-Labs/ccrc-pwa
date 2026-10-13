@@ -11115,4 +11115,25 @@ describe('the pane-less fallback: forked sessions only (D-4953), every row read 
     expect(r.stderr).toBe('');
     expect(attributed()).toEqual(['demo-quiet-basin.hookstate.json']);
   }, 30_000);
+
+  // THE ONE STRANGER THE MARKER LETS THROUGH, written where the gate is.
+  // CLAUDE_JOB_DIR is INHERITED: Claude Code's child-environment builder keeps
+  // it, so a `claude --resume <registry uuid>` started from a forked session's
+  // own shell reaches the fallback with the inputs a fork's own hook has. The
+  // first case of 'a session with no pane' IS that run as far as the hook can
+  // see, so no case can tell them apart, and what is left to drift is the
+  // prose: the header once said a stranger "exits 0 exactly as it did before
+  // the fallback existed" with no exception. Both halves are pinned: the claim
+  // carries its condition, and the block names the inheritance.
+  it('the identity block names the stranger the job marker lets through: a process a forked session starts (D-4953)', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const start = src.indexOf('# TWO SOURCES FOR ONE QUESTION');
+    const end = src.indexOf('elif [[ -n "${CLAUDE_JOB_DIR:-}"');
+    expect(start, 'the block\'s first line').toBeGreaterThan(-1);
+    expect(end, 'the fallback\'s gate, after the block').toBeGreaterThan(start);
+    const prose = src.slice(start, end).replace(/\n#[ \t]*/g, ' ').replace(/\s+/g, ' ');
+    expect(prose).toMatch(/does not carry CLAUDE_JOB_DIR exits 0 exactly as it did before the fallback existed/);
+    expect(prose).toMatch(/CLAUDE_JOB_DIR is INHERITED/);
+    expect(prose).toMatch(/claude --resume <registry uuid>` run from a forked session's own shell/);
+  });
 });
