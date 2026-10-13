@@ -9,7 +9,7 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MessageBubble } from '../src/session/MessageBubble';
-import { CHAT_COMPONENTS, chatPlainNote, isRefusedChatImageSrc, keystrokeParts } from '../src/lib/markdown';
+import { CHAT_COMPONENTS, chatPlainNote, countChatTableCells, isRefusedChatImageSrc, keystrokeParts } from '../src/lib/markdown';
 import { remarkAlerts } from '../src/lib/remarkAlerts';
 import { chatRunner } from '../src/lib/markdownRunner';
 import { parseMarkdown, type ParseOutcome } from '../src/lib/markdownParse';
@@ -444,6 +444,10 @@ describe('T11 review 2-3 (operator ruling): a short message whose tables would d
     }
     return { text, cells: cols * rows };
   }
+  /** The pre-count's upper bound, spelled independently: (the most pipes on one line + 1) x the lines, where a line
+   *  ends at CRLF, CR or LF. */
+  const bound = (text: string): number =>
+    (Math.max(...text.split(/\r\n|\r|\n/).map((l) => l.split('|').length - 1)) + 1) * text.split(/\r\n|\r|\n/).length;
   const tooWide = (cells: number): string =>
     `Shown as plain text: this message would draw ${cells} elements (limit ${DOCS_MAX_RENDER_ELEMENTS}).`;
 
@@ -460,10 +464,11 @@ describe('T11 review 2-3 (operator ruling): a short message whose tables would d
     expect(utf8ByteLength(text)).toBeLessThanOrEqual(CHAT_SYNC_MAX_BYTES);
     expect(utf8ByteLength(text)).toBeGreaterThan(CHAT_SYNC_MAX_BYTES - 4);
     expect(cells).toBeGreaterThan(DOCS_MAX_RENDER_ELEMENTS);
+    expect(bound(text)).toBeGreaterThanOrEqual(cells);
     const spy = countChatParses();
     const { container } = assistant(text);
     expect(plainOf(container)?.textContent).toBe(text);
-    expect(noteOf(container)).toBe(tooWide(cells));
+    expect(noteOf(container)).toBe(tooWide(bound(text)));
     expect(container.querySelector('table')).toBeNull();
     expect(container.querySelectorAll('*').length).toBeLessThan(10);
     expect(spy).not.toHaveBeenCalled();
@@ -473,10 +478,11 @@ describe('T11 review 2-3 (operator ruling): a short message whose tables would d
     const { text, cells } = justOverCap();
     expect(utf8ByteLength(text)).toBeLessThanOrEqual(CHAT_SYNC_MAX_BYTES);
     expect(cells).toBeGreaterThan(DOCS_MAX_RENDER_ELEMENTS);
+    expect(bound(text)).toBeGreaterThanOrEqual(cells);
     const spy = countChatParses();
     const { container } = assistant(text);
     expect(plainOf(container)?.textContent).toBe(text);
-    expect(noteOf(container)).toBe(tooWide(cells));
+    expect(noteOf(container)).toBe(tooWide(bound(text)));
     expect(container.querySelector('table')).toBeNull();
     expect(container.querySelectorAll('*').length).toBeLessThan(10);
     expect(spy).not.toHaveBeenCalled();
@@ -487,7 +493,7 @@ describe('T11 review 2-3 (operator ruling): a short message whose tables would d
     expect(utf8ByteLength(text)).toBeLessThanOrEqual(CHAT_SYNC_MAX_BYTES);
     expect(cells).toBeGreaterThan(DOCS_MAX_RENDER_ELEMENTS);
     const { container } = assistant(text);
-    expect(noteOf(container)).toBe(tooWide(cells));
+    expect(noteOf(container)).toBe(tooWide(bound(text)));
     expect(container.querySelector('table')).toBeNull();
   });
 
@@ -515,8 +521,50 @@ describe('T11 review 2-3 (operator ruling): a short message whose tables would d
     expect(cells).toBeGreaterThan(DOCS_MAX_RENDER_ELEMENTS);
     const { container } = assistant(text);
     expect(plainOf(container)?.textContent).toBe(text);
-    expect(noteOf(container)).toMatch(/^Shown as plain text: this message would draw \d+ elements/);
+    expect(noteOf(container)).toBe(tooWide(bound(text)));
     expect(container.querySelector('table')).toBeNull();
+  });
+
+  /** Plain text, the too-wide note naming the bound, no table and no parser call. */
+  function expectRefused(text: string): void {
+    expect(utf8ByteLength(text)).toBeLessThanOrEqual(CHAT_SYNC_MAX_BYTES);
+    expect(bound(text)).toBeGreaterThan(DOCS_MAX_RENDER_ELEMENTS);
+    const { container } = assistant(text);
+    expect(plainOf(container)?.textContent).toBe(text);
+    expect(noteOf(container)).toBe(tooWide(bound(text)));
+    expect(container.querySelector('table')).toBeNull();
+  }
+
+  it('lone CR line endings: a table just over the cap is plain text', () => {
+    const { text } = justOverCap();
+    expectRefused(text.replace(/\n/g, '\r'));
+  });
+
+  it('CRLF line endings count each line once', () => {
+    const { text } = justOverCap();
+    expect(utf8ByteLength(text.replace(/\n/g, '\r\n'))).toBeLessThanOrEqual(CHAT_SYNC_MAX_BYTES);
+    expect(countChatTableCells(text.replace(/\n/g, '\r\n'))).toBe(countChatTableCells(text));
+  });
+
+  it.each([['U+00A0', '\u00a0'], ['form feed', '\f'], ['vertical tab', '\v'], ['U+3000', '\u3000'], ['U+FEFF', '\ufeff'],
+    ['U+2028', '\u2028']])('body rows holding only %s are counted as lines: plain text', (_name, blank) => {
+    const { text } = justOverCap();
+    const [header, delimiter] = text.split('\n');
+    expectRefused(`${header}\n${delimiter}\n${`${blank}\n`.repeat(99)}`);
+  });
+
+  it.each([['a heading', '# h\n'], ['a closed fence', '```\n```\n'], ['a thematic break', '***\n'], ['a quote line', '> q\n'],
+    ['a list item', '- i\n']])('a 1-column table ended by %s, then a wide table with no blank line: plain text', (_name, sep) => {
+    expectRefused(`|a|\n|-|\n${sep}${justOverCap().text}`);
+  });
+
+  it('the bound is the widest line + 1 times the lines, and a short message with a few pipes in prose renders as before', () => {
+    expect(countChatTableCells('')).toBe(1);
+    expect(countChatTableCells('a|b\nc||d\n')).toBe(3 * 3);
+    expect(countChatTableCells('a\r\nb|c\rd')).toBe(2 * 3);
+    const { container } = assistant('Use a | b | c or d || e in prose.\n\nSecond paragraph | here.');
+    expect(plainOf(container)).toBeNull();
+    expect(container.querySelectorAll('p')).toHaveLength(2);
   });
 });
 
