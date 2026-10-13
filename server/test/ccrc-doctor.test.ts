@@ -14035,3 +14035,42 @@ describe('T11 review 5-1: docs-sw pins the bare-$ covered form', () => {
     expect(r.code).toBe(1);
   });
 });
+
+describe('T11 review A-6: docs-sw reads the worker byte-wise under a UTF-8 locale', () => {
+  const swPath = (home: string): string => join(home, 'ccrc', 'server', 'dist-pwa', 'sw.js');
+  /** A UTF-8 locale this box has, or null: `locale -a` spells them `C.utf8` / `en_US.utf8`. */
+  const utf8 = ((): string | null => {
+    const r = spawnSync('locale', ['-a'], { encoding: 'utf8' });
+    const have = (r.stdout ?? '').split('\n').map((l) => l.trim());
+    return ['C.UTF-8', 'C.utf8', 'en_US.UTF-8', 'en_US.utf8'].find((l) => have.includes(l)) ?? null;
+  })();
+  const runUnder = (home: string, locale: string): Result => {
+    const ccd = join(home, 'ccrc', 'ccd');
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(join(ccd, 'ccrc'))}; . ${shq(join(ccd, 'ccrc-doctor-checks'))}; _check_docs-sw`],
+    { env: { ...doctorEnv(home), LC_ALL: locale }, encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+  // The byte is planted as a Buffer (0xFF, never valid UTF-8) AFTER `denylist:[`, inside the span `(.*)$` must cross:
+  // under a UTF-8 locale bash's `[[ =~ ]]` fails to match across it, and the check said "never closes" (a WARN)
+  // instead of reading the list. The check pins `LC_ALL=C` for its own body.
+  const plantWithBadByte = (home: string, list: string): void => {
+    writeFileSync(swPath(home), Buffer.concat([Buffer.from(swJs(list).trimEnd()), Buffer.from([0xff]), Buffer.from('\n')]));
+  };
+
+  it.skipIf(utf8 === null)('still FAILs a /docs entry when an invalid UTF-8 byte follows the denylist', () => {
+    const home = healthy('ccrc-doctor-docs-sw-badbyte-fail-');
+    plantWithBadByte(home, `${SW_DENYLIST_DEFAULT.slice(0, -1)},/^\\/docs(\\/|$)/]`);
+    const r = runUnder(home, utf8 as string);
+    expect(r.stdout.split('\n')[0], r.stdout).toMatch(/^FAIL docs-sw: the installed service worker refuses the app shell to \/docs;/);
+    expect(r.code).toBe(1);
+  });
+
+  it.skipIf(utf8 === null)('still PASSes the default list when an invalid UTF-8 byte follows the denylist', () => {
+    const home = healthy('ccrc-doctor-docs-sw-badbyte-pass-');
+    plantWithBadByte(home, SW_DENYLIST_DEFAULT);
+    const r = runUnder(home, utf8 as string);
+    expect(r.stdout.split('\n')[0], r.stdout).toMatch(/^PASS docs-sw: .* holds 2 entries \(\/\^\\\/api\\\/\/,\/\^\\\/ws\\\/\/\), none of them \/docs or under it$/);
+    expect(r.code).toBe(0);
+  });
+});

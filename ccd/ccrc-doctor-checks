@@ -8023,6 +8023,10 @@ _check_box-token() {
 CCRC_DOCS_PAGE_PREFIX='/docs'
 
 _check_docs-sw() {
+  # BYTE-WISE, whatever the caller's locale: under a UTF-8 one an invalid byte anywhere in the worker (a hand-edited
+  # bundle's, a foreign tool's) makes `[[ $body =~ $re_open ]]` fail to match across it, and the check would say the
+  # denylist "never closes" instead of reading it. `_check_pools`' own `local LC_ALL=C`, for the same family of reason.
+  local LC_ALL=C
   if [ -z "${BOX_TREE_DIR:-}" ] || ! declare -F _box_env_value >/dev/null 2>&1; then
     _dr_fail docs-sw "ccrc's own tree path and config reader are not loaded, so the installed service worker was not measured" \
       "this is a bug in ccrc, not a fact about your box — _check_docs-sw reads BOX_TREE_DIR and this box's recorded CCRC_ROLE through _box_env_value, both declared in ccrc itself, and this check table was sourced by something that is not ccrc"
