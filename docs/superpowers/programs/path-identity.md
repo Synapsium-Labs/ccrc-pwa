@@ -1,7 +1,7 @@
 # Program: path-identity
 
 Spec: `docs/superpowers/specs/2026-10-12-path-identity-design.md` (W0; merged as #360 = `837a099c0`, 2026-10-12 18:48)
-Plans: `docs/superpowers/plans/2026-10-12-path-identity-w1a-server-id-gate.md`, `docs/superpowers/plans/2026-10-12-path-identity-w1b-ccd-id-hardening.md` (to be written); W2 and W3 plans later
+Plans: `docs/superpowers/plans/2026-10-12-path-identity-w1a-server-id-gate.md` (W1a), `docs/superpowers/plans/2026-10-12-path-identity-w1b-ccd-id-hardening.md` (W1b); W2 and W3 plans later
 Contract: `docs/superpowers/programs/child-reclamation-contract.md` (this programme continues CCR-15's contract; its rulings land in a new section)
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-calm-mesa`   Workspace: **a fresh child per wave**
 Parent programme: `child-reclamation` (CCR-15). Its contract R71 names this follow-up.
@@ -20,12 +20,28 @@ Run-level wave numbers map onto the spec's wave names as below. W0 (the spec) ne
 | # | spec name | scope | deploy class | PRs | state |
 |---|---|---|---|---|---|
 | — | W0 | the spec, this ledger, and the contract's rulings section | docs | #360 | **merged** `837a099c0` (2026-10-12 18:48); the contract section rides the first plan's docs PR |
-| 1 | W1a | the server's id gate (spec 2.3): `isRegistryId`, `readSessionRecord.kind`, `RegistryRead.refused`, the split of the 12 `readRegistry` callers, `knownId`, `POST /api/runs`, every stored-row argv seam and the two executor seams, and the stop builders' order | server | — | **planned** — run **399**; block of 24 issued (listed in the entry below); plan to be written |
-| 2 | W1b | ccd's id fix (spec 2.4 to 2.6): the decision-flag loops, the predicates, the composed-id cap, the reap-lock order, the dot-leading entry rule, and the real-binary parity pins | **ccd/ccd** | — | not opened; waits for #351 (workspace-lifecycle W6) to merge |
+| 1 | W1a | the server's id gate (spec 2.3): `isRegistryId`, `readSessionRecord.kind`, `RegistryRead.refused`, the split of the 12 `readRegistry` callers, `knownId`, `POST /api/runs`, every stored-row argv seam and the two executor seams, and the stop builders' order | server | — | **planned** — run **399**; block of 24 issued (listed in the 18:53 entry); plan written 2026-10-12 23:40, lands in the docs PR |
+| 2 | W1b | ccd's id fix (spec 2.4 to 2.6): the decision-flag loops, the predicates, the composed-id cap, the reap-lock order, the dot-leading entry rule, and the real-binary parity pins | **ccd/ccd** | — | not opened; plan written 2026-10-12 23:40; waits for #351 (workspace-lifecycle W6) to merge |
 | 3 | W2 | absences and mounts (spec section 3) | ccd/ccd + server | — | not opened; after W1b; needs workspace-lifecycle's consent |
 | 4 | W3 | worktree path identity (spec section 4) | ccd/ccd | — | not opened; after W2; needs workspace-lifecycle's consent |
 
 ## Decisions & deviations
+
+- **2026-10-12 23:40 — W1A'S AND W1B'S PLANS ARE WRITTEN** (beside CCR-15 wave 10's, by the same process: grounding, an architect/critic/reviser frame, one Opus drafter per task, a sliced two-lens review with Sonnet refuters, and a convergence review).
+  - **W1a** (`2026-10-12-path-identity-w1a-server-id-gate.md`, 18 tasks, server only). Rulings beyond the spec, all in the plan:
+    - `isRegistryId` sits at the foot of `shared/api.ts`, and `TMPROOT_ID_MAX_CHARS` becomes its derived alias until after #351;
+    - a refused id is omitted, never retained, and is logged once;
+    - abandon closes a run whose stored id fails the predicate as `failed` with no fleet act;
+    - the reclaim door answers `bad-session` for a bad heir or a bad stored claimant;
+    - `/ensure` and the cross-pool swap gain a route-head check;
+    - `POST /api/runs` also refuses a dash- or dot-leading work-run `project`;
+    - `childGateAtClose` is exported for its own pin;
+    - stop's pair form refuses a flag-shaped registry field before composing (`stop-pair-fields-refused-at-composition`).
+  - **W1b** (`2026-10-12-path-identity-w1b-ccd-id-hardening.md`, 14 tasks, `ccd/ccd`). Rulings beyond the spec:
+    - **The composed-id cap is 128** (R27, option a), not the spec's 222. The session hook already skips an id longer than 128, so a longer id would be a session that silently loses its hook card. Nothing on the fleet comes near it: the longest id is 31. This was reported to the operator and is reversible before W1b dispatches.
+    - `enable`'s two-argument form checks its wrapper (cmd_start's own check and words) before any journal line or lock.
+    - The collector's pre-lock pass proves its registry listing by measurement.
+  - **Carried, owner this ledger:** `abandon-sheet-misreads-an-omitted-fleet-act`, `reclaim-sheet-drops-the-bad-session-detail` (both PWA, placed with the next wave that edits `pwa/`) and `work-run-project-reaches-ws-add-unchecked` (closed by W1b's ws-add loop).
 
 - **2026-10-12 18:53 — WAVE 1 (W1a) IS RUN 399, `planned`.** It was opened at 18:52 beside CCR-15's run 400, before run 380 closed. Its block is 24 numbers, issued by the allocator: 4860, 4861, 4862, 4863, 4864, 4865, 4866, 4867, 4868, 4869, 4870, 4871, 4872, 4873, 4874, 4875, 4876, 4877, 4878, 4879, 4880, 4881, 4882, 4883.
 
@@ -49,7 +65,18 @@ Run-level wave numbers map onto the spec's wave names as below. W0 (the spec) ne
 
 ## Next-wave brief
 
-**Wave 1 is W1a, the server's id gate.** It is server-only and edits no `ccd/ccd`. Its plan is
-`docs/superpowers/plans/2026-10-12-path-identity-w1a-server-id-gate.md`, to be written from spec section 2.3 and
-section 2.8's server rows, under SEC2 B and SEC8 A. It reaches `main` in one docs PR before dispatch, and the
-brief names that PR's squash commit as `planSha`.
+**Wave 1 is W1a, run 399, `planned`: the server's id gate.** Its plan is
+`docs/superpowers/plans/2026-10-12-path-identity-w1a-server-id-gate.md`, binding with contract §17 and spec section 2.
+It reaches `main` in the same docs PR as CCR-15 wave 10's plan, and the brief names that PR's squash commit as `planSha`.
+
+Before dispatch, re-read `GET /api/claims?project=ccrc-pwa` and record each overlap's agreement in the brief (R56: the
+second lander merges `main` and re-points by content): CCR-15 wave 10 (run 400) shares the `shared/api.ts` foot,
+`watch.ts`, `coord/routes.ts`, the `single-definition.test.ts` foot and the `mail-routes.test.ts` kebab census;
+workspace-lifecycle wave 6 (#351, run 358) edits `coord/expireArchived.ts` and `watch.ts`.
+
+Then dispatch one fresh child. **Route:** `{class:'opus', effort:'xhigh', subagent:'sonnet', workflow:'on',
+compact:'40'}`. **Execution skill:** `superpowers:subagent-driven-development`, with
+`superpowers:test-driven-development`. **Lenses:** the plan's mandatory SECURITY lens beside the held-out panel.
+
+**Wave 2 is W1b.** Open its run only after #351 merges; allocate its block then. Before dispatch: workspace-lifecycle's
+coordinator's consent to its three `ws-expire` edits; the server box's ls-only counts, `max-id-len` included (Task 0).

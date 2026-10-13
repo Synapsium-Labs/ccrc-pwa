@@ -16,7 +16,7 @@
   - close: non-abandon closes refuse, and an abandon closes the run `failed` with no fleet act;
   - advance, the routing door, and the reclaim door's stored claimant;
   - expiry's executor boundary refuses before either builder, and the collector's existing gates are pinned.
-- **`stop` sends `--surface` before the id.** An id spelled `--surface` can then no longer turn into a stop of `pwa`.
+- **`stop` sends `--surface` before the id.** An id spelled `--surface` can then no longer turn into a stop of `pwa`. A legacy row whose wrapper or project part is not a registry id is refused before its stop is composed.
 - **One stray file cannot wedge the fleet.** A refused `.uuid` leaves dispatch, the snapshot, mail, peers, projects and the fleet route each giving an honest answer.
 - **A structural census pins all 41 id-taking calls** by file, builder, origin and gate. A new call must be classified, or the suite goes red.
 
@@ -302,7 +302,7 @@ Every file this wave touches, taken from each task's **Files** block. That block
 | File | Task(s) |
 |---|---|
 | `shared/api.ts` | 1 (the foot block only) |
-| `server/src/server.ts` | 2 (`knownId`, `/ensure`, the cross arm), 4 (`readAsk`, `/kickoff`, `/stop`, `/swap`, `/archive` switches), 5 (one tag), 7 (`/api/fleet`, ws cold start), 8 (tag word), 14 (`stopArgvFor`'s docstring) |
+| `server/src/server.ts` | 2 (`knownId`, `/ensure`, the cross arm), 4 (`readAsk`, `/kickoff`, `/stop`, `/swap`, `/archive` switches), 5 (one tag), 7 (`/api/fleet`, ws cold start), 8 (tag word), 14 (`stopArgvFor`'s docstring and wrapper line, `stopPairWrapper`, `stopPairRefused`, and the `/stop` and `/archive` identity arms) |
 | `server/src/registry.ts` | 4 (`SingleRead`, `readSessionRecord`, `freshAskAt`), 5 (`RegistryRead.refused`, the refused-name log, the wrapper's tag) |
 | `server/src/fleet.ts` | 4 (`liveStatus`), 5 (tag), 7 (the fallback) |
 | `server/src/sessionws.ts` | 4 |
@@ -340,7 +340,7 @@ Every file this wave touches, taken from each task's **Files** block. That block
 | `server/test/advance-registry-id.test.ts` (new) | 11 |
 | `server/test/expire-id-boundary.test.ts` (new) | 12 |
 | `server/test/collect-id-pins.test.ts` (new) | 13 |
-| `server/test/ccd-stop-argv-order.test.ts` (new) | 14 |
+| `server/test/ccd-stop-argv-order.test.ts` (new) | 14 (the real-binary order cases, and the four pair-part route cases) |
 | `server/test/whitelist-subset.test.ts` | 14 (`EXPECTED`'s two stop rows, two `isExecAllowed` literals) |
 | `server/test/lifecycle.test.ts` | 14 (the six stop rows and two comments) |
 | `server/test/fleetws.test.ts` | 7 (the case `reports unmeasurable for BOTH markers when the registry cannot be listed` loses its `fleet` expectation) |
@@ -369,7 +369,7 @@ The tasks run in order, Task 0 to Task 17. Each task is one commit on the worksp
 | 11 The advance gate | 1, 6 | `sonnet`, high | Before `verifyDone`, so no rejection mail is sent to a bad id |
 | 12 The expiry boundary | 1 | `sonnet`, high | Two guards in a file #351 shares |
 | 13 Collector pins | 1 | `sonnet`, medium | No source change (R10) |
-| 14 stop's builder order | 1 | `opus`, high | The one positional redirect, pinned on the real binary |
+| 14 stop's builder order | 1, 2 | `opus`, high | The one positional redirect, pinned on the real binary, and the legacy pair's parts refused before composition (it uses Task 2's `isRegistryId` import in `server.ts` and Task 2's `appFor` rig) |
 | 15 The id-argv census | 2–14 | `sonnet`, high | Measures the finished set of 41 calls |
 | 16 Docs: as built | 1–15 | `sonnet`, high | The spec corrections, the carried lines and the README condition |
 | 17 Whole-branch verification and the PR | 0–16 | `sonnet`, high | The wave-done's `suite:` line |
@@ -454,6 +454,13 @@ stopPair: (w: string, p: string, surface: StopSurface | null) => CcdArgv   // ['
 
 **L4, `server/src/server.ts`:** `knownId(id: string, names?: readonly string[] | null): Promise<boolean>` keeps its signature. Its first statement is `if (!isRegistryId(id)) return false;`, before the listing.
 
+**L4, `server/src/server.ts`** (Task 14): two closures inside `buildServer`, declared directly above `stopArgvFor`, whose signature does not change:
+```ts
+function stopPairWrapper(id: string, rec: SessionRecord, identity: { wrapper: string }): string;    // the id's own prefix when the id ends in `-<project>`, else identity.wrapper (stopArgvFor's rule, moved)
+function stopPairRefused(id: string, rec: SessionRecord, identity: { wrapper: string }): boolean;   // false for a workspace row; else !isRegistryId(stopPairWrapper(…)) || !isRegistryId(rec.project)
+```
+`/stop` and the archive door each ask `stopPairRefused` in their identity arm, as `identity === null || stopPairRefused(id, read.record, identity)`, and answer 503 `registry-unmeasurable` with no argv composed.
+
 **The answers this wave adds (R13; every word already exists):**
 
 | Where | Condition | Answer |
@@ -463,6 +470,7 @@ stopPair: (w: string, p: string, surface: StopSurface | null) => CcdArgv   // ['
 | `POST /api/sessions/:id/swap`, `crossPool: true` | id fails | 400 `bad-session-id`, ahead of the skew gate (R22) |
 | `/stop`, `/swap` (ordinary arm), `/kickoff` | `readSessionRecord` answers `bad-id` | 400 `bad-session-id` |
 | `/archive` | masked by `knownId` (R17) | the arm answers 400 `bad-session-id` |
+| `/stop`, `/archive`, a legacy row | its wrapper part or `.project` fails `isRegistryId` (`stopPairRefused`, Task 14) | 503 `{ ok: false, error: 'registry-unmeasurable' }` from the identity arm, with no argv composed; at `/archive`, before the turn read and the programme's end |
 | `POST /api/asks/:id/answer` | stored `ask.childId` fails | 409 `{ ok: false, error: 'child-unmeasurable', detail }` (the existing answer, through `freshAskAt`'s `bad-id`, R17); no keys sent, the ask stays `held` |
 | `POST /api/runs` | `claimedBy` or `sessionId` fails | 400 `{ ok: false, error: 'bad-session', detail: 'claimedBy is not a registry id' }`, or the same with `'sessionId …'` |
 | `POST /api/runs` | a work `project` (as given) beginning `-` or `.` | 400 `{ ok: false, error: 'bad-request', detail: 'project must not begin with - or .' }` |
@@ -9331,9 +9339,9 @@ MSG
 
 ### Task 14: stop's builder order
 
-**Model routing:** `opus`, effort `high`. This is the one positional redirect in the server's argv set, and it is pinned on the real binary. The server's id gates already refuse an id spelled `--surface` before either builder runs: `/stop` through `readSessionRecord`'s `bad-id` (Task 4), and the archive door through `knownId` (Task 2). This task reorders the builders so that the argv itself refuses such an id. It is the second lock for an id spelled `--surface`, and the only lock for a legacy row's `.project` spelled `--surface`, a field no id gate reads. It also covers any future caller of `stopId`. It does not close a legacy registry field spelled `--surface=<word>` in the pair form: that gap is carried to W1b's stop loop (`stop-pair-registry-field-redirect`, Task 16).
+**Model routing:** `opus`, effort `high`. This is the one positional redirect in the server's argv set, and it is pinned on the real binary. The server's id gates already refuse an id spelled `--surface` before either builder runs: `/stop` through `readSessionRecord`'s `bad-id` (Task 4), and the archive door through `knownId` (Task 2). This task reorders the builders so that the argv itself refuses such an id. It is the second lock for an id spelled `--surface`, and it also covers any future caller of `stopId`. The task also closes the pair form's own gap (`stop-pair-fields-refused-at-composition`). `stopPair`'s project is a legacy row's `.project`, and its wrapper is the row's `.wrapper` when the id does not end in `-<project>`: fields no id gate reads. A field spelled `--surface=<word>` survives every argv order, because `cmd_stop`'s `--surface=*` arm strips that token from any position and stops the other one, in the leading, trailing and bare forms alike. So `/stop` and the archive door refuse a legacy row whose wrapper part or project part fails `isRegistryId`, in their identity arm, before any argv is composed. For a `.project` spelled `--surface`, that refusal is the first lock and the leading order the second.
 
-**Why:** spec §2.3 says the stop builders move to `['stop', '--surface', surface, id]` and `['stop', '--surface', surface, w, p]`. Spec §2.4 gives the reason: with the id first, `cmd_stop`'s loop cannot tell an id spelled `--surface` from the key. R14 binds the two shapes, and every pin of today's order is updated in this same commit. README's two stop prose lines are Task 16's, under R14's condition, and this task does not touch them.
+**Why:** spec §2.3 says the stop builders move to `['stop', '--surface', surface, id]` and `['stop', '--surface', surface, w, p]`. Spec §2.4 gives the reason: with the id first, `cmd_stop`'s loop cannot tell an id spelled `--surface` from the key. R14 binds the two shapes, and every pin of today's order is updated in this same commit. README's two stop prose lines are Task 16's, under R14's condition, and this task does not touch them. The pair-part refusal is a coordinator ruling at plan review. No ccd-side rule closes the `--surface=<word>` gap without also refusing the pre-W1a trailing order while the fleet box runs ahead of the server during a rollout, so the server closes it here. It answers with the identity arm's existing word, 503 `registry-unmeasurable`, and adds none. Measured by the coordinator: the fleet box has 18 distinct registry projects and none begins with `-` or `.`, so no row is stranded.
 
 **Measured at planning:** nothing has been run. Every red text below is DERIVED from the code at `837a099c0`. The worker measures each one, and the measured text replaces the draft's. A different count is not a departure; a different meaning is.
 
@@ -9342,25 +9350,31 @@ MSG
   - the docstring above `stopId` (anchor: its last line, `   *  never happens. */`). The old-ccd hazard paragraph stays word for word, and a new paragraph gives the reason for the leading position;
   - the two builders (anchors: `  stopId:    (id: string, surface: StopSurface | null) =>` and `  stopPair:  (w: string, p: string, surface: StopSurface | null) =>`).
   - Nothing else in the file changes. `stopSurfaceSupported`'s docstring (`old ccd parses \`stop <id> --surface pwa\``) describes the pre-flag ccd and is still true.
-- Modify `server/src/server.ts`: `stopArgvFor`'s docstring only (anchor: `   * always understood, where \`['stop', id, '--surface', 'pwa']\` against an`). The function body does not change.
+- Modify `server/src/server.ts`, inside `buildServer` (Step 4(b) and (c)):
+  - `stopArgvFor`'s docstring (anchor: `   * always understood, where \`['stop', id, '--surface', 'pwa']\` against an`);
+  - two new closures, `stopPairWrapper` and `stopPairRefused`, inserted directly above that docstring (anchor: its first line, `   * The stop argv — ONE spelling, two callers, both the PWA's own controls: …`);
+  - in `stopArgvFor`'s body, only the `originalWrapper` ternary, which becomes a call of `stopPairWrapper`. Its line `return CCD_ARGV.stopPair(originalWrapper, rec.project, surface);` does not change;
+  - the identity arm of `POST /api/sessions/:id/stop` (anchor: `    // registry-unmeasurable shape, instead.`) and of `POST /api/sessions/:id/archive` (anchor: `    if (identity === null) return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });`). Each also asks `stopPairRefused`.
 - Modify `server/test/whitelist-subset.test.ts`:
   - in `EXPECTED` (layer 2c), the `stopId` and `stopPair` rows, plus a comment above them;
   - in `it('stop is a bare one-token grant, …')`, the two `isExecAllowed` string literals, plus the last two lines of the comment above that `it`.
 - Modify `server/test/lifecycle.test.ts`:
   - the six `[cfg.ccdBin, 'stop', …, '--surface', 'pwa']]` rows, rewritten by a pattern with a count guard (Step 2(c)). The rows name fixture projects that this plan does not repeat;
   - one sentence appended to each of the two comments that spell the trailing form (anchors: `  // SAME decision the route makes in that real deployment window.` and `// argv below would have risked; the assertion is that it is never there.`).
-- Create `server/test/ccd-stop-argv-order.test.ts`. It runs the real `cmd_stop`, sourced in a fixture HOME from `makeCcdHarness`. tmux, systemctl and launchctl are stubbed the way `ccd-session-state.test.ts`'s `describe('cmd_stop')` stubs them. It is a new file because `ccd-session-state` is a known load flake.
+- Create `server/test/ccd-stop-argv-order.test.ts`. It runs the real `cmd_stop`, sourced in a fixture HOME from `makeCcdHarness`. tmux, systemctl and launchctl are stubbed the way `ccd-session-state.test.ts`'s `describe('cmd_stop')` stubs them. It is a new file because `ccd-session-state` is a known load flake. A second describe drives `/stop` and the archive door through Task 2's `appFor` over planted legacy rows, with a runner that records argv and never execs: one `.project` case and one fallback `.wrapper` case for each caller.
 - No edit to `ccd/`, `agent/` (the grant stays the bare `['stop']`), `README.md`, `archive-door.test.ts` (it sends no surface), or any other file.
 
 **Interfaces:**
 - Consumes:
   - `CCD_ARGV.stopId(id: string, surface: StopSurface | null): CcdArgv` and `CCD_ARGV.stopPair(w: string, p: string, surface: StopSurface | null): CcdArgv` (`server/src/ccdargv.ts`), and `type CcdArgv` from the same file;
-  - from the test side: `CCD`, `ghContainedEnv`, `makeCcdHarness` and `type CcdHarness` (`server/test/ccdWsHelpers.ts`), `inheritedEnv` (`server/test/gitEnvStrip.ts`), `readJournal`, `eventsOf` and `decOf` (`server/test/lifecycleHelpers.ts`), and `asManagerCalls` (`server/test/platformFixtures.ts`).
+  - `isRegistryId(id: unknown): id is string` (`shared/api.ts`, Task 1), which Task 2 imported into `server.ts`, and `measuredIdentity` and `type SessionRecord` (`server/src/registry.ts`), which `server.ts` already imports;
+  - from the test side: `CCD`, `ghContainedEnv`, `makeCcdHarness` and `type CcdHarness` (`server/test/ccdWsHelpers.ts`), `inheritedEnv` (`server/test/gitEnvStrip.ts`), `readJournal`, `eventsOf` and `decOf` (`server/test/lifecycleHelpers.ts`), `asManagerCalls` (`server/test/platformFixtures.ts`), `appFor` (`server/test/idGateFixture.ts`, Task 2), `mkTmp` (`server/test/tmpHelpers.ts`), `type Runner` (`server/src/exec.ts`) and `type FleetState` (`server/src/fleetstate.ts`).
 - Produces the leading-form argv. The signatures are unchanged:
   ```ts
   stopId:   (id: string, surface: StopSurface | null) => CcdArgv   // ['stop', id] | ['stop', '--surface', surface, id]
   stopPair: (w: string, p: string, surface: StopSurface | null) => CcdArgv   // ['stop', w, p] | ['stop', '--surface', surface, w, p]
   ```
+- Produces, in `server/src/server.ts`, the two closures of the canonical Interfaces (L4, Task 14), and one answer from the identity arm of `/stop` and of the archive door: a legacy row whose wrapper part or project part fails `isRegistryId` answers 503 `{ ok: false, error: 'registry-unmeasurable' }`, with no argv composed and no `runCcd` call.
 
 - [ ] **Step 1: Re-measure the entry conditions (nothing is written)**
 
@@ -9371,13 +9385,19 @@ grep -c "argv(surface === null ? \['stop', id\] : \['stop', id, '--surface', sur
 grep -c "argv(surface === null ? \['stop', w, p\] : \['stop', w, p, '--surface', surface\])" server/src/ccdargv.ts     # 1: the pair builder
 grep -c "if (rec.workspace !== null) return CCD_ARGV.stopId(id, surface);" server/src/server.ts                        # 1: stopArgvFor, the one composer
 grep -c "return CCD_ARGV.stopPair(originalWrapper, rec.project, surface);" server/src/server.ts                       # 1
+grep -c "if (identity === null) return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });" server/src/server.ts   # 1: the archive door's identity arm
+grep -A3 -F "    // registry-unmeasurable shape, instead." server/src/server.ts | grep -c "    if (identity === null) {"           # 1: /stop's identity arm
+grep -cF "The stop argv — ONE spelling, two callers" server/src/server.ts                                               # 1: stopArgvFor's docstring, above which the closures go
+grep -c "isRegistryId" server/src/server.ts                                                                             # >= 2: Task 2's import and knownId's gate
+grep -cE '^export (async )?function appFor\(' server/test/idGateFixture.ts                                              # 1: Task 2's rig
+grep -c "stopPairRefused\|stopPairWrapper" server/src/server.ts                                                         # 0: both are new
 grep -c "'--surface', 'pwa'\]\]" server/test/lifecycle.test.ts                                                          # 6: the trailing-form rows
 grep -c "stopId: \['stop', 'demo-quiet-basin', '--surface', 'pwa'\]," server/test/whitelist-subset.test.ts             # 1
 git log --format=%h -S'echo stop-surface' -- ccd/ccd | tail -1                                                          # (e1) record the hash
 git show <e1>:ccd/ccd | awk '/^cmd_stop\(\)/,/^}/' | grep -c -- '--surface)'                                            # (e2) >= 1
 ```
 
-The SDD ledger already holds Task 0's (e1) and (e2). Compare the re-measured values with it. If (e2) is 0, STOP with `stop-surface-loop-postdates-token`: an older ccd that advertises the token would then meet a leading flag with no loop to strip it. If (c16) or the pair line is 0, STOP with `gate-site-moved`. If any other count differs, re-point by content and record the new value.
+The SDD ledger already holds Task 0's (e1) and (e2). Compare the re-measured values with it. If (e2) is 0, STOP with `stop-surface-loop-postdates-token`: an older ccd that advertises the token would then meet a leading flag with no loop to strip it. If (c16), the pair line, either identity-arm line or the docstring line is 0, STOP with `gate-site-moved`. If `isRegistryId` or `appFor` is missing, Task 2 has not landed: STOP with `tree-not-ready`. If any other count differs, re-point by content and record the new value.
 
 - [ ] **Step 2: Write the failing tests**
 
@@ -9404,15 +9424,25 @@ The SDD ledger already holds Task 0's (e1) and (e2). Compare the re-measured val
 // containment scan. Its one bash spawn goes through `ghContainedEnv` and asks
 // for systemd and tmux containment, and HOME is always `makeCcdHarness`'s
 // fixture, never the live one.
+//
+// THE PAIR PARTS (path identity W1a, a coordinator ruling at plan review). The
+// second describe runs the SERVER, not ccd: `/stop` and the archive door over
+// planted legacy rows, through Task 2's `appFor` in its own `mkTmp` fixture
+// HOME, with a runner that records argv and never execs.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import type { FastifyInstance } from 'fastify';
 import { CCD_ARGV, type CcdArgv } from '../src/ccdargv.js';
+import type { Runner } from '../src/exec.js';
+import type { FleetState } from '../src/fleetstate.js';
 import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
+import { appFor } from './idGateFixture.js';
 import { decOf, eventsOf, readJournal } from './lifecycleHelpers.js';
 import { asManagerCalls } from './platformFixtures.js';
+import { mkTmp } from './tmpHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-stop-order-'); });
@@ -9526,6 +9556,98 @@ describe('stop sends --surface before the id (spec §2.3, §2.4)', () => {
     const stops = eventsOf(h.home, 'stop');
     expect(stops).toHaveLength(2);
     expect(stops.map((e) => decOf(e)['surface'])).toEqual(['none', 'none']);
+  });
+});
+
+// THE PAIR PARTS. `stopPair`'s project is a legacy row's `.project`, and its
+// wrapper the row's `.wrapper` when the id does not end in `-<project>`: fields
+// no id gate reads. `cmd_stop`'s `--surface=*` arm strips a token of that
+// spelling from ANY position, so a field reading `--surface=<word>` made the
+// pair a one-argument stop of the OTHER token, in the leading, trailing and
+// bare forms alike. Both callers of `stopArgvFor` now ask `stopPairRefused` in
+// their identity arm and answer 503 `registry-unmeasurable`, with no argv
+// composed.
+
+/** Records every argv and never execs. tmux answers that the pane is GONE, so the archive door's fail-closed turn
+ *  read is `idle` for a rostered wrapper, and only the identity arm stands between a request and its stop. */
+const gonePane = (): { runner: Runner; calls: string[][] } => {
+  const calls: string[][] = [];
+  const runner: Runner = async (_cmd, args) => {
+    calls.push([...args]);
+    if (args[0] === 'has-session') return { code: 1, stdout: '', stderr: `can't find session: ${args[2] ?? ''}` };
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  return { runner, calls };
+};
+
+/** A legacy row (no `.workspace` file), with the fields `/stop` and the archive door read. */
+const seedLegacy = (home: string, id: string, wrapper: string, project: string): void => {
+  const reg = path.join(home, '.cc-sessions');
+  fs.mkdirSync(reg, { recursive: true });
+  const fields = { wrapper, project, workdir: path.join(home, 'projects', 'demo'), uuid: `u-${id}`, started: '1' };
+  for (const [k, v] of Object.entries(fields)) fs.writeFileSync(path.join(reg, `${id}.${k}`), v);
+};
+
+const WITH_SURFACE: FleetState = {
+  connected: true, downSince: null, ccdVerbs: ['stop', 'stop-surface'], rosterFp: null, build: null,
+};
+const REFUSED = { ok: false, error: 'registry-unmeasurable' };
+
+describe('stop refuses a legacy pair part that is not a registry id', () => {
+  let opened: FastifyInstance[] = [];
+  afterEach(async () => { for (const a of opened) await a.close(); opened = []; });
+
+  /** The server over its own fixture HOME. No `fleetState` is the no-evidence default, so the bare form. */
+  const rig = async (fleetState?: FleetState) => {
+    const home = mkTmp('ccrc-stop-pair-');
+    const { runner, calls } = gonePane();
+    const { app } = await appFor(home, runner, fleetState === undefined ? {} : { fleetState });
+    opened.push(app);
+    return { home, app, stops: () => calls.filter((c) => c[0] === 'stop') };
+  };
+
+  it('/stop refuses a pair part: a .project spelled --surface=pwa, 503 and no stopPair argv', async () => {
+    // The id does not end in `---surface=pwa`, so the pair is the row's `.wrapper` and `.project`. Composed in the
+    // leading form, it was `stop --surface pwa claude-a --surface=pwa`, a stop of `claude-a`.
+    const r = await rig(WITH_SURFACE);
+    seedLegacy(r.home, 'claude-a-demo', 'claude-a', '--surface=pwa');
+    const res = await r.app.inject({ method: 'POST', url: '/api/sessions/claude-a-demo/stop' });
+    expect(r.stops(), 'a stopPair argv was composed and sent').toEqual([]);
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual(REFUSED);
+  });
+
+  it('/stop refuses a pair part: a dash-leading fallback .wrapper, 503 and no stopPair argv', async () => {
+    // The id does not end in `-demo`, so the wrapper is the row's `.wrapper`. Composed with no capability evidence,
+    // it was the bare `stop --surface=pwa demo`, a stop of `demo`.
+    const r = await rig();
+    seedLegacy(r.home, 'claude-a-legacy', '--surface=pwa', 'demo');
+    const res = await r.app.inject({ method: 'POST', url: '/api/sessions/claude-a-legacy/stop' });
+    expect(r.stops(), 'a stopPair argv was composed and sent').toEqual([]);
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual(REFUSED);
+  });
+
+  it('the archive door refuses a pair part before its turn read: a .project spelled --surface=pwa, 503 and no stop', async () => {
+    // `claude-a` has a config dir and its pane is gone, so the turn reads idle and nothing else refuses. Composed, it
+    // was the bare `stop claude-a --surface=pwa`, a stop of `claude-a`.
+    const r = await rig();
+    seedLegacy(r.home, 'claude-a-demo', 'claude-a', '--surface=pwa');
+    const res = await r.app.inject({ method: 'POST', url: '/api/sessions/claude-a-demo/archive' });
+    expect(r.stops(), 'a stopPair argv was composed and sent').toEqual([]);
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual(REFUSED);
+  });
+
+  it('the archive door refuses a pair part before its turn read: a dash-leading fallback .wrapper, 503 and no stop', async () => {
+    // A roster id never begins with `-`, so this wrapper has no config dir. Without the identity arm's refusal, the
+    // fail-closed turn read answers first, 409 `status-unknown`; the refusal stands before that read.
+    const r = await rig();
+    seedLegacy(r.home, 'claude-a-legacy', '--surface=pwa', 'demo');
+    const res = await r.app.inject({ method: 'POST', url: '/api/sessions/claude-a-legacy/archive' });
+    expect(r.stops(), 'a stopPair argv was composed and sent').toEqual([]);
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual(REFUSED);
   });
 });
 ```
@@ -9646,13 +9768,17 @@ with:
 cd server && ./node_modules/.bin/vitest run test/ccd-stop-argv-order.test.ts test/whitelist-subset.test.ts test/lifecycle.test.ts
 ```
 
-Run it in the foreground, with a timeout of at least 600000 ms. Expected: 12 failures (derived; record the measured texts):
-- `ccd-stop-argv-order.test.ts`, 4 of 5:
+Run it in the foreground, with a timeout of at least 600000 ms. Expected: 16 failures (derived; record the measured texts):
+- `ccd-stop-argv-order.test.ts`, 8 of 9:
   - "cmd_stop run on stopId's argv …": `expected [ 'stop', 'demo-quiet-mesa', '--surface', 'pwa' ] to deeply equal [ 'stop', '--surface', 'pwa', 'demo-quiet-mesa' ]`.
   - "cmd_stop run on stopPair's argv …": `expected [ 'stop', 'claude-a', 'demo', '--surface', 'pwa' ] to deeply equal [ 'stop', '--surface', 'pwa', 'claude-a', 'demo' ]`.
   - "an id spelled --surface …": `pwa was stopped: the id was read as the flag: expected '<10 digits> unknown' to be null`. This is the live redirect on today's builder.
   - "a project spelled --surface …": `claude-a-pwa was stopped: the project was read as the flag: expected '<10 digits> unknown' to be null`.
   - "with no surface, the bare form still stops" PASSES. It is the control.
+  - "/stop refuses a pair part: a .project …": `a stopPair argv was composed and sent: expected [ [ 'stop', 'claude-a', '--surface=pwa', '--surface', 'pwa' ] ] to deeply equal []`. This is today's trailing order, which `cmd_stop` reads as a stop of `claude-a`.
+  - "/stop refuses a pair part: a dash-leading fallback .wrapper …": the same message with `[ [ 'stop', '--surface=pwa', 'demo' ] ]`, the bare form, a stop of `demo`.
+  - "the archive door refuses a pair part …: a .project …": the same message with `[ [ 'stop', 'claude-a', '--surface=pwa' ] ]`.
+  - "the archive door refuses a pair part …: a dash-leading fallback .wrapper …": `expected 409 to be 503`. No argv is composed today either: the door's fail-closed turn read answers `status-unknown` first, because the wrapper has no config dir. The case pins that the identity arm refuses before that read.
 - `whitelist-subset.test.ts`, 2: `stopId builds the exact argv, token for token` and `stopPair builds the exact argv, token for token`, each `expected [ 'stop', …, '--surface', 'pwa' ] to deeply equal [ 'stop', '--surface', 'pwa', … ]`. The bare-grant `it` PASSES.
 - `lifecycle.test.ts`, 6: the six cases listed in Step 2(c). Each fails with `expected [ [ '<ccdBin>', 'stop', …, '--surface', 'pwa' ] ] to deeply equal [ [ '<ccdBin>', 'stop', '--surface', 'pwa', … ] ]`.
 
@@ -9692,9 +9818,10 @@ with:
    *  legacy row's `.project`, and its wrapper the row's `.wrapper` when the
    *  id does not end in `-<project>`, fields no id gate reads. `cmd_stop`'s
    *  `--surface=*` arm strips a token of that spelling from any position, so
-   *  a field reading `--surface=<word>` still leaves a one-argument stop of
-   *  the other token, in either order: a stated residual, carried to W1b's
-   *  stop loop (`stop-pair-registry-field-redirect`).
+   *  a field reading `--surface=<word>` leaves a one-argument stop of the
+   *  other token in either order, and no order can refuse it. The server
+   *  refuses it before this builder runs: `stopArgvFor`'s two callers ask
+   *  `stopPairRefused` (`server.ts`), which needs `isRegistryId` of each part.
    *  The order is safe on every ccd that advertises `stop-surface`,
    *  whose loop strips the flag from any position (the loop shipped in the
    *  same ccd as the token, and `ccd-session-state.test.ts`'s "takes the
@@ -9744,9 +9871,123 @@ with:
    * `bad-id`, the archive door through `knownId`); the order is the lock
    * behind them, argued once on `CCD_ARGV.stopId`.
    *
+   * A legacy row's PAIR PARTS are vetted before this runs as well: both
+   * callers ask `stopPairRefused` (above) in their identity arm and answer
+   * 503 `registry-unmeasurable` for a wrapper part or project part that is
+   * not a registry id, so `stopPair` below never carries one.
+   *
 ```
 
-The body of `stopArgvFor` does not change.
+(c) In `server/src/server.ts`, make four more edits, each located by content. `isRegistryId` is already imported there (Task 2).
+
+First, insert the two closures directly above `stopArgvFor`'s docstring. Replace:
+
+```ts
+  /**
+   * The stop argv — ONE spelling, two callers, both the PWA's own controls: `POST /api/sessions/:id/stop` ("Stop only",
+```
+
+with:
+
+```ts
+  /**
+   * The wrapper a legacy stop names: the ORIGINAL one baked into the id when the id ends in `-<project>`, else the
+   * row's `.wrapper`. One rule, read by `stopArgvFor`, which composes the pair, and by `stopPairRefused`, which vets
+   * it first, so the part the check reads is the part the argv carries.
+   */
+  function stopPairWrapper(id: string, rec: SessionRecord, identity: { wrapper: string }): string {
+    return id.endsWith(`-${rec.project}`) ? id.slice(0, id.length - rec.project.length - 1) : identity.wrapper;
+  }
+
+  /**
+   * True when a stop of this row would hand `CCD_ARGV.stopPair` a part that is not a registry id (path identity W1a,
+   * a coordinator ruling at plan review). The pair's project is the legacy row's `.project`, and its wrapper is the
+   * row's `.wrapper` when the id does not end in `-<project>`: fields no id gate reads. `cmd_stop`'s `--surface=*`
+   * arm strips a token of that spelling from ANY position, so a field reading `--surface=<word>` turned the pair
+   * into a one-argument stop of the OTHER token, a session nobody named, in the leading, trailing and bare forms
+   * alike. No argv order refuses that, and no ccd rule refuses it without also refusing the pre-W1a trailing order
+   * while the fleet box runs ahead of this server. So each part must pass `isRegistryId`: the session-id charset,
+   * which has no `=`, and no leading `-` or `.`. Both callers of `stopArgvFor` ask this in their identity arm and
+   * answer what an unmeasured identity field answers, 503 `registry-unmeasurable`, with no argv composed; the
+   * archive door asks it before its turn read, its claim reads and the programme's end. A workspace row is never
+   * refused here: it stops by its id, which each caller's id gate has already vetted.
+   */
+  function stopPairRefused(id: string, rec: SessionRecord, identity: { wrapper: string }): boolean {
+    if (rec.workspace !== null) return false;
+    return !isRegistryId(stopPairWrapper(id, rec, identity)) || !isRegistryId(rec.project);
+  }
+
+  /**
+   * The stop argv — ONE spelling, two callers, both the PWA's own controls: `POST /api/sessions/:id/stop` ("Stop only",
+```
+
+Second, in `stopArgvFor`'s body, replace:
+
+```ts
+    // Legacy ids DO encode a wrapper, and ccd stop's two-argument form
+    // recomputes them — so it needs the ORIGINAL wrapper baked into the id, not
+    // identity.wrapper, which a prior swap flips to the new account while the
+    // id/tmux name keep the old prefix.
+    const originalWrapper = id.endsWith(`-${rec.project}`)
+      ? id.slice(0, id.length - rec.project.length - 1)
+      : identity.wrapper;
+```
+
+with:
+
+```ts
+    // Legacy ids DO encode a wrapper, and ccd stop's two-argument form
+    // recomputes them — so it needs the ORIGINAL wrapper baked into the id, not
+    // identity.wrapper, which a prior swap flips to the new account while the
+    // id/tmux name keep the old prefix. `stopPairWrapper` holds that rule, and
+    // both callers have already asked `stopPairRefused` of the same two parts.
+    const originalWrapper = stopPairWrapper(id, rec, identity);
+```
+
+The next line, `return CCD_ARGV.stopPair(originalWrapper, rec.project, surface);`, does not change: Task 15's census reads it.
+
+Third, in `POST /api/sessions/:id/stop`, replace:
+
+```ts
+    // registry-unmeasurable shape, instead.
+    const identity = measuredIdentity(read.record);
+    if (identity === null) {
+      return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+    }
+```
+
+with:
+
+```ts
+    // registry-unmeasurable shape, instead. A legacy row whose pair part is
+    // not a registry id (`stopPairRefused`) is refused the same way: a
+    // measured field that would aim the stop at a session nobody named is no
+    // more an identity than an unmeasured one.
+    const identity = measuredIdentity(read.record);
+    if (identity === null || stopPairRefused(id, read.record, identity)) {
+      return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+    }
+```
+
+Fourth, in `POST /api/sessions/:id/archive`, replace:
+
+```ts
+    const identity = measuredIdentity(read.record);
+    if (identity === null) return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+```
+
+with:
+
+```ts
+    const identity = measuredIdentity(read.record);
+    // `/stop`'s pair-part refusal (`stopPairRefused`), asked HERE, before the turn read, the claim reads and the
+    // programme's end, so a refused part ends nothing, stops nothing and composes no argv.
+    if (identity === null || stopPairRefused(id, read.record, identity)) {
+      return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+    }
+```
+
+Nothing else in `stopArgvFor` changes, and both routes' calls of `stopArgvFor(id, rec, identity)` stay as they are: Task 15 pins three call lines.
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
@@ -9759,27 +10000,32 @@ Expected: every file PASSES. Run it in the foreground, with a timeout of at leas
 
 - [ ] **Step 6: Mutation check**
 
-Make each edit, run it, see the red, and revert before the next. Revert each row by its inverse edit, never with `git checkout -- src/ccdargv.ts`: until Step 8 commits, that file holds Step 4(a)'s uncommitted change, and a checkout would discard it. Commands run from `server/`. Let S be `./node_modules/.bin/vitest run test/ccd-stop-argv-order.test.ts test/whitelist-subset.test.ts test/lifecycle.test.ts`. Record the before (green) and the after (red) in the SDD ledger. The red texts are derived; the measured text replaces them.
+Make each edit, run it, see the red, and revert before the next. Revert each row by its inverse edit, never with `git checkout -- src/ccdargv.ts` or `git checkout -- src/server.ts`: until Step 8 commits, those files hold Step 4's uncommitted changes, and a checkout would discard them. Commands run from `server/`. Let S be `./node_modules/.bin/vitest run test/ccd-stop-argv-order.test.ts test/whitelist-subset.test.ts test/lifecycle.test.ts`, and T be `./node_modules/.bin/vitest run test/ccd-stop-argv-order.test.ts -t 'refuses a pair part'`. Record the before (green) and the after (red) in the SDD ledger. The red texts are derived; the measured text replaces them.
 
-| # | Mutation (exact edit in `server/src/ccdargv.ts`) | Command | Expected red |
+| # | Mutation (exact edit, in `server/src/ccdargv.ts` unless the row names `server.ts`) | Command | Expected red |
 |---|---|---|---|
 | 1 | In `stopId`, `['stop', '--surface', surface, id]` becomes `['stop', id, '--surface', surface]` (the trailing order) | S | `ccd-stop-argv-order`: "cmd_stop run on stopId's argv …" (the argv-shape assertion), and "an id spelled --surface …" with `pwa was stopped: the id was read as the flag: expected '<10 digits> unknown' to be null`. `whitelist-subset`: `stopId builds the exact argv, token for token`. `lifecycle`: `POST /api/sessions/:id/stop passes a WORKSPACE id whole, never a reversed one` |
 | 2 | In `stopPair`, `['stop', '--surface', surface, w, p]` becomes `['stop', w, p, '--surface', surface]` | S | `ccd-stop-argv-order`: "cmd_stop run on stopPair's argv …" (argv shape), and "a project spelled --surface …" with `claude-a-pwa was stopped: the project was read as the flag: expected '<10 digits> unknown' to be null`. `whitelist-subset`: `stopPair builds the exact argv, token for token`. `lifecycle`: the other five cases listed in Step 2(c) |
 | 3 | In `stopId`, the `null` arm `['stop', id]` becomes `['stop', '--surface', 'cli', id]` (a flag sent with no evidence) | S, then `./node_modules/.bin/vitest run test/archive-door.test.ts` | `ccd-stop-argv-order`: "with no surface, the bare form still stops": `expected [ 'stop', '--surface', 'cli', 'demo-quiet-mesa' ] to deeply equal [ 'stop', 'demo-quiet-mesa' ]`. `lifecycle` and `whitelist-subset` stay GREEN: every bare `lifecycle` row is the legacy pair form (`stopPair`), and `whitelist-subset` builds `stopId` with `'pwa'` only. `archive-door` (derived): its workspace-id stop rows, `['stop', 'demo-amber']`, receive the flagged argv and red. This row pins that the reorder never touched the skew arm |
+| 4 | In `server/src/server.ts`, `POST /api/sessions/:id/stop`'s identity arm: `if (identity === null \|\| stopPairRefused(id, read.record, identity)) {` becomes `if (identity === null) {` | T | "/stop refuses a pair part: a .project …": `a stopPair argv was composed and sent: expected [ [ 'stop', '--surface', 'pwa', 'claude-a', '--surface=pwa' ] ] to deeply equal []`. "/stop refuses a pair part: a dash-leading fallback .wrapper …": the same message with `[ [ 'stop', '--surface=pwa', 'demo' ] ]`. Both archive cases stay GREEN: their arm is a separate line |
+| 5 | In `server/src/server.ts`, the same edit in `POST /api/sessions/:id/archive`'s identity arm | T | "the archive door refuses a pair part …: a .project …": `a stopPair argv was composed and sent: expected [ [ 'stop', 'claude-a', '--surface=pwa' ] ] to deeply equal []`. "… a dash-leading fallback .wrapper …": `expected 409 to be 503`. Its argv is still not composed, because the fail-closed turn read refuses `status-unknown` first (a roster id never begins with `-`, so the wrapper has no config dir). Both `/stop` cases stay GREEN |
+| 6 | In `server/src/server.ts`'s `stopPairRefused`, delete ` \|\| !isRegistryId(rec.project)` | T | The two `.project` cases, each with its row 4 or row 5 text. The two `.wrapper` cases stay GREEN |
+| 7 | In `server/src/server.ts`'s `stopPairRefused`, delete `!isRegistryId(stopPairWrapper(id, rec, identity)) \|\| ` | T | The two `.wrapper` cases, each with its row 4 or row 5 text. The two `.project` cases stay GREEN |
 
-After the last revert, `git diff --stat -- server/src/ccdargv.ts` must show only Step 4(a)'s hunk.
+After the last revert, `git diff --stat -- server/src/ccdargv.ts` must show only Step 4(a)'s hunk, and `git diff -- server/src/server.ts` only Step 4(b)'s and (c)'s.
 
 - [ ] **Step 7: The other named suites, the guards and the typecheck**
 
 ```bash
-cd server && ./node_modules/.bin/vitest run test/archive-door.test.ts test/verb-gate.test.ts test/ccdargv-dec-parity.test.ts test/readme-holds.test.ts
+cd server && ./node_modules/.bin/vitest run test/archive-door.test.ts test/verb-gate.test.ts test/ccdargv-dec-parity.test.ts test/readme-holds.test.ts test/routes.test.ts
 cd server && ./node_modules/.bin/vitest run test/ccd-workspaces.test.ts -t 'routes EVERY bash call site'
 cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts
 cd server && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json
 ```
 
 Expected: every file PASSES, and both `tsc` runs print nothing. Run each line in the foreground, with a timeout of at least 600000 ms.
-- `archive-door` sends no surface, so its stop rows are unchanged.
+- `archive-door` sends no surface, so its stop rows are unchanged. Its legacy row, `claude-a-demo`, takes its wrapper from the id's own prefix and its project is `demo`, so `stopPairRefused` passes it.
+- `routes`' two 503 cases for `/stop` and the archive door (an unreadable `.wrapper`) still answer from the identity arm's `identity === null` half. Its fully measured `/stop` case still stops: that row's `.project` equals its id, so the wrapper is the row's `.wrapper`, `claude-a`, and both parts pass.
 - `verb-gate` reads `stopArgvFor` as a `function` declaration, and stop stays `UNGATED_BY_DECISION`.
 - `ccdargv-dec-parity` scans only `argv([…])` literals, and stop's builders are ternaries.
 - `readme-holds` pins `stopSurfaceSupported`'s delegation, which is untouched.
@@ -9811,11 +10057,21 @@ real cmd_stop in a fixture HOME. whitelist-subset's EXPECTED rows and its
 two isExecAllowed literals, and lifecycle's six stop rows, take the
 leading form; stopArgvFor's docstring and two lifecycle comments say so.
 Spec §2.3, §2.4.
+
+A legacy row's pair parts are refused before the pair is composed. /stop
+and the archive door ask stopPairRefused in their identity arm, and a
+wrapper part or project part that fails isRegistryId answers 503
+registry-unmeasurable with no argv; the archive door asks before its turn
+read and the programme's end. cmd_stop strips a --surface=<word> token
+from any position, so such a field stopped the other token in every argv
+order, and no ccd rule refuses it without also refusing the old trailing
+order mid-rollout. Four cases in ccd-stop-argv-order.test.ts drive both
+routes over planted legacy rows.
 MSG
 )"
 ```
 
-Name this task's plan-text corrections and extra pins in the wave-done, by slug: `stop-pair-project-redirect-pinned` and `lifecycle-rows-edited-by-pattern`.
+Name this task's plan-text corrections and extra pins in the wave-done, by slug: `stop-pair-project-redirect-pinned` and `lifecycle-rows-edited-by-pattern`. Name its departure too: `stop-pair-fields-refused-at-composition` (a coordinator ruling at plan review).
 
 ---
 
@@ -10306,8 +10562,8 @@ const CENSUS: readonly CensusRow[] = [
   // stopArgvFor's two callers gate the id: /stop by readSessionRecord, /archive by knownId (pinned in their own case below).
   { file: 'server.ts', scope: 'stopArgvFor', builder: 'stopId', id: 'id', origin: ['request'], gate: ['readSessionRecord', 'knownId'] },
   // The wrapper is the request id's own prefix, or the row's `.wrapper` when the id does not end in `-<project>`; the
-  // project is the row's `.project`. These gates vet the request id only: neither field is gated, a stated residual
-  // carried to W1b's stop loop (`stop-pair-registry-field-redirect`).
+  // project is the row's `.project`. These gates vet the request id; both fields are vetted in each caller's identity
+  // arm by `stopPairRefused` (Task 14), whose own cases and mutation rows pin it.
   { file: 'server.ts', scope: 'stopArgvFor', builder: 'stopPair', id: 'originalWrapper', origin: ['request', 'registry'], gate: ['readSessionRecord', 'knownId'] },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/swap', builder: 'swapCross', id: 'id', origin: ['request'], gate: ['cross-arm-head'] },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/swap', builder: 'swap', id: 'id', origin: ['request'], gate: ['readSessionRecord'], entry: /\breadSessionRecord\(deps\.io, deps\.cfg, id\)/ },
@@ -10562,9 +10818,9 @@ turns the suite red."
 
 **Why:**
 - **R7 and R3.** The spec is not edited. Its §2.3 corrections are recorded here instead: `knownId` is not the one choke point, and the watches omit a refused id rather than keep its earlier state.
-- **R1, R17 (as amended), R18, R19, R20 and Task 3.** Each departure these name is listed by slug, and none gets a number. The departures are `registry-id-at-foot`, `masked-arms-pinned-by-their-masks`, `fleet-fallback-is-tests-only`, `cold-start-skips-an-unmeasured-fleet`, `bad-id-is-not-a-code` and `resume-dispatch-refuses-not-holds`.
+- **R1, R17 (as amended), R18, R19, R20 and Task 3.** Each departure these name is listed by slug, and none gets a number. The departures are `registry-id-at-foot`, `masked-arms-pinned-by-their-masks`, `fleet-fallback-is-tests-only`, `cold-start-skips-an-unmeasured-fleet`, `bad-id-is-not-a-code` and `resume-dispatch-refuses-not-holds`. A coordinator ruling at plan review adds Task 14's `stop-pair-fields-refused-at-composition`.
 - **R13.** The answers table is restated as built.
-- **R14 and R24, plus Task 16's own carried lines.** These are README's stop prose (when it is not edited here), the coordinator skill's rows, the abandon sheet, the reclaim sheet, a stored work-run `project`, the parity rows on the real binary, the rename, a flag-shaped registry field in stop's pair form, the expiry lane's words for the executor's own refusal, the prose that still calls `POST /api/runs` unguarded, and SEC2 C and D.
+- **R14 and R24, plus Task 16's own carried lines.** These are README's stop prose (when it is not edited here), the coordinator skill's rows, the abandon sheet, the reclaim sheet, a stored work-run `project`, the parity rows on the real binary, the rename, the expiry lane's words for the executor's own refusal, the prose that still calls `POST /api/runs` unguarded, and SEC2 C and D.
 
 **Files:**
 - Modify: `docs/superpowers/plans/2026-10-12-path-identity-w1a-server-id-gate.md`. APPEND the section `## As built (W1a, run 399)` after the last line of the file. That line closes `## Deviations found`, whose last subsection is `### Plan-text corrections and extra pins, one number per task`. Nothing above it is edited, including `## Deviations found` (the coordinator owns it until the fix round).
@@ -10582,7 +10838,7 @@ turns the suite red."
 
 **Interfaces:**
 - Consumes:
-  - the code at this branch's tip after Tasks 1 to 15: `isRegistryId`, `REGISTRY_ID_MAX_CHARS`, `TMPROOT_ID_MAX_CHARS`, `isTmpRootId`, `SingleRead`, `RegistryRead.refused`, `knownId`, `childGateAtClose`, `measureClaimant`, `childBindGate`, `reclaimChild`, `freshAskAt`, `UNMEASURED_ASK_AT`, `assembleFleet`, `listProjects`, `abandonRefusal`, `EXPIRE_ID_REFUSED`, `CCD_ARGV.stopId` and `CCD_ARGV.stopPair`;
+  - the code at this branch's tip after Tasks 1 to 15: `isRegistryId`, `REGISTRY_ID_MAX_CHARS`, `TMPROOT_ID_MAX_CHARS`, `isTmpRootId`, `SingleRead`, `RegistryRead.refused`, `knownId`, `childGateAtClose`, `measureClaimant`, `childBindGate`, `reclaimChild`, `freshAskAt`, `UNMEASURED_ASK_AT`, `assembleFleet`, `listProjects`, `abandonRefusal`, `EXPIRE_ID_REFUSED`, `CCD_ARGV.stopId`, `CCD_ARGV.stopPair` and `stopPairRefused`;
   - the census vocabulary `[registry-refused:<word>]` (`server/test/registry-refused-census.test.ts`);
   - Task 15's claim in `server/test/id-argv-census.test.ts`;
   - the SDD ledger's Task 0 entry (the recorded (d1)) and every departure slug recorded there for Tasks 0 to 15.
@@ -10646,7 +10902,7 @@ if (/\/home\/|\/Users\/|\.ts\.net|\b100\.\d+\.\d+\.\d+/.test(s)) bad.push("a hos
 const slugs = ["registry-id-at-foot", "masked-arms-pinned-by-their-masks", "resume-dispatch-refuses-not-holds",
   "fleet-fallback-is-tests-only", "cold-start-skips-an-unmeasured-fleet", "bad-id-is-not-a-code",
   "wave-lifecycle-rows-carried", "abandon-sheet-misreads-an-omitted-fleet-act",
-  "reclaim-sheet-drops-the-bad-session-detail", "work-run-project-reaches-ws-add-unchecked", "stop-pair-registry-field-redirect"];
+  "reclaim-sheet-drops-the-bad-session-detail", "work-run-project-reaches-ws-add-unchecked", "stop-pair-fields-refused-at-composition"];
 for (const slug of slugs) if (!s.includes("`" + slug + "`")) bad.push("slug " + slug + " missing");
 const names = ["### Corrections to spec §2.3", "### The readers as built", "### The masked arms and their masks",
   "### The answers this wave adds", "### Carried lines, and README", "`childGateAtClose`", "`freshAskAt`",
@@ -10666,7 +10922,7 @@ echo "check rc=$?"
 
 Expected: `as-built RED: the as-built heading appears 0 times below Deviations found, not once; slug registry-id-at-foot missing; …`, then `check rc=1`.
 
-What `answerRows` counts: the section's table body rows, which are 12 reader rows, 8 masked-arm rows and 21 answer rows, 41 in all. The floor of 26 only proves that the answers table is not missing. The exact pins are `siteRows`, the slugs and the names.
+What `answerRows` counts: the section's table body rows, which are 12 reader rows, 8 masked-arm rows and 22 answer rows, 42 in all. The floor of 26 only proves that the answers table is not missing. The exact pins are `siteRows`, the slugs and the names.
 
 - [ ] **Step 2: Measure what the section states, at the tip**
 
@@ -10694,6 +10950,7 @@ grep -n "id-taking calls across" server/test/id-argv-census.test.ts             
 grep -n "'bad-id'" server/test/mail-routes.test.ts                                                    # (m14) one line, inside NOT_CODES
 grep -c "if (!isSessionIdShape(sid)) {" server/src/coord/routes.ts                                   # (m15) 0: the routing door asks isRegistryId
 grep -c "if (!isRegistryId(sid)) {" server/src/coord/routes.ts                                       # (m16) 1
+grep -c "if (identity === null || stopPairRefused(id, read.record, identity)) {" server/src/server.ts   # (m17) 2: /stop and the archive door (Task 14)
 ```
 
 How to read each answer:
@@ -10858,6 +11115,7 @@ L0 wire type or refusal word.
 | `POST /api/sessions/:id/swap`, `crossPool: true` | id fails | 400 `bad-session-id`, ahead of the skew gate (R22) |
 | `/stop`, `/swap` (ordinary arm), `/kickoff` | `readSessionRecord` answers `bad-id` | 400 `bad-session-id` |
 | `/archive` | masked by `knownId` (R17) | the arm answers 400 `bad-session-id` |
+| `/stop`, `/archive`, a legacy row | its wrapper part or `.project` fails `isRegistryId` (`stopPairRefused`) | 503 `{ ok: false, error: 'registry-unmeasurable' }` from the identity arm, with no argv composed; at `/archive`, before the turn read and the programme's end |
 | `POST /api/asks/:id/answer` | stored `ask.childId` fails | 409 `{ ok: false, error: 'child-unmeasurable', detail }` (the existing answer, through `freshAskAt`'s `bad-id`, R17); no keys sent, the ask stays `held` |
 | `POST /api/runs` | `claimedBy` or `sessionId` fails | 400 `{ ok: false, error: 'bad-session', detail: 'claimedBy is not a registry id' }`, or the same naming `sessionId` |
 | `POST /api/runs` | a work `project` (as given) beginning `-` or `.` | 400 `{ ok: false, error: 'bad-request', detail: 'project must not begin with - or .' }` |
@@ -10894,6 +11152,16 @@ Notes on the table:
 - **Stop's order (spec §2.4).** `stopId` and `stopPair` send `['stop', '--surface', surface, id]` and
   `['stop', '--surface', surface, w, p]`. On the real binary, an id spelled `--surface` is now refused by usage, and a
   planted row named `pwa` is not stopped. With no surface, the bare form is unchanged.
+- **Stop's pair parts (`stop-pair-fields-refused-at-composition`, a coordinator ruling at plan review).** `stopPair`
+  takes its project from a legacy row's `.project`, and its wrapper from the row's `.wrapper` when the id does not end
+  in `-<project>`: fields no id gate reads. `cmd_stop`'s `--surface=*` arm strips a token of that spelling from any
+  position, so a field reading `--surface=<word>` made the pair a one-argument stop of the other token, in the
+  leading, trailing and bare forms alike. No ccd rule closes that without also refusing the pre-W1a trailing order
+  while the fleet box runs ahead of the server, so the server closes it. `/stop` and the archive door ask
+  `stopPairRefused` in their identity arm: a row whose wrapper part or project part fails `isRegistryId` answers 503
+  `registry-unmeasurable` with no argv composed, and the archive door asks before its turn read and the programme's
+  end. At planning, none of the fleet box's 18 distinct registry projects began with `-` or `.`, so no row is
+  stranded.
 - **The id-argv census.** `id-argv-census.test.ts` classifies all 41 id-taking calls across 10 files by file, builder,
   origin and gate (SEC2 B, as R98 widens it). A new call, or a new `CCD_ARGV` key, must classify itself, or the suite
   goes red.
@@ -10936,12 +11204,6 @@ Notes on the table:
   - the comments in `run-signals-routing.test.ts` (above its `isSessionIdShape` describe), `run-route-route.test.ts` (above the `'bad claimant'` case) and `child-reclaim-paused-at-server.test.ts` (above its `from` round-trip cases).
 
   Legacy rows can still hold such ids, so each comment's conclusion stands; only its description of the route is stale. Carried to the first wave that edits each file.
-- **A flag-shaped registry field in stop's pair form (`stop-pair-registry-field-redirect`).** `stopPair` takes its
-  project from the legacy row's `.project`, and its wrapper from the row's `.wrapper` when the id does not end in
-  `-<project>`. No id gate reads either field, and `cmd_stop`'s `--surface=*` arm strips a token of that spelling from
-  any position, so a field reading `--surface=<word>` leaves a one-argument stop of the other token, in either order.
-  The pair form already recomputes its target from those two fields by design. Carried to W1b, whose stop loop
-  refuses a second `--surface` in either spelling.
 - **The full rename of `TMPROOT_ID_MAX_CHARS`.** It touches `coord/store.ts`, so it waits until after #351. Until
   then, the alias stands.
 - **SEC2 C and D.** A `RegistryId` brand on every builder, or an assertion inside each id-taking builder, stays in the
@@ -11071,10 +11333,9 @@ It lists the 23 classified registry reader sites, the masked arms and
 their masks, and the answers this wave adds. It also lists the carried
 lines: the coordinator skill's bad-session rows, the abandon sheet's
 reading of an omitted fleet act, the reclaim sheet's dropped bad-session
-detail, a stored work-run project reaching ws-add, a flag-shaped registry
-field in stop's pair form, the expiry lane's words for a server refusal,
-prose that predates the id gate, the real-binary parity rows, the alias's
-rename, and SEC2 C and D.
+detail, a stored work-run project reaching ws-add, the expiry lane's
+words for a server refusal, prose that predates the id gate, the
+real-binary parity rows, the alias's rename, and SEC2 C and D.
 Departures are named by slug and carry no number.
 
 README's two stop prose lines spell the leading order when #351 had
@@ -11321,6 +11582,7 @@ Not edited: `ccd/`, `agent/`, `pwa/`, `deploy/`, `CLAUDE.md`, the spec, `coord/s
 | `POST /api/sessions/:id/swap`, `crossPool: true` | id fails | 400 `bad-session-id`, ahead of the skew gate |
 | `/stop`, `/swap` (ordinary arm), `/kickoff` | `readSessionRecord` answers `bad-id` | 400 `bad-session-id` |
 | `/archive` | masked by `knownId` | the arm answers 400 `bad-session-id` |
+| `/stop`, `/archive`, a legacy row | its wrapper part or `.project` fails `isRegistryId` | 503 `registry-unmeasurable` from the identity arm, with no argv composed; at `/archive`, before the turn read and the programme's end |
 | `POST /api/asks/:id/answer` | stored `ask.childId` fails | 409 `child-unmeasurable` (through `freshAskAt`'s `bad-id`); no keys sent, the ask stays `held` |
 | `POST /api/runs` | `claimedBy` or `sessionId` fails | 400 `bad-session`, the detail naming the field |
 | `POST /api/runs` | a work `project` (as given) beginning `-` or `.` | 400 `bad-request`, detail `project must not begin with - or .` |
@@ -11338,7 +11600,7 @@ Not edited: `ccd/`, `agent/`, `pwa/`, `deploy/`, `CLAUDE.md`, the spec, `coord/s
 | ws cold start (no watcher broadcast) | registry unlistable | no `fleet` frame; the `runs` frame is still sent |
 | the mail sweep | recipient refused | held with gate `registry-unmeasurable`, never rejected |
 
-`stop` now sends `--surface <word>` before the id or the pair. On the real binary (pinned in a fixture HOME), an id spelled `--surface` can no longer become a stop of `pwa`. A ccd that does not advertise `stop-surface` gets no flag at all, as before.
+`stop` now sends `--surface <word>` before the id or the pair. On the real binary (pinned in a fixture HOME), an id spelled `--surface` can no longer become a stop of `pwa`. A ccd that does not advertise `stop-surface` gets no flag at all, as before. A legacy row whose wrapper or project part is not a registry id is refused 503 `registry-unmeasurable` at `/stop` and at the archive door before its pair is composed: ccd strips a `--surface=<word>` token from any position, so such a field would otherwise stop a session nobody named, in any argv order.
 
 ## Masked arms (pinned by their masks)
 
@@ -11359,7 +11621,6 @@ cat >> "$BODY" <<'EOF'
 - `pwa/src/fleet/ResumeSheet.tsx` shows the reclaim door's 409 `bad-session` as an unrecognised refusal and drops its `detail`, which names the abandon door. `pwa/` is outside this wave.
 - A stored work-run `project` reaches the dispatch `ws-add` with no server re-check. 0 such rows were measured, and the POST check covers new rows. W1b's ws-add loop closes it.
 - Spec §2.8's real-binary parity rows (ids `--actor`, `--surface`, `--reason`, `--expect`, `--defer-expired`) go green only with W1b's loops, so they ride W1b.
-- `stop`'s legacy pair form takes its wrapper and project from registry fields no id gate reads, and ccd strips a `--surface=<word>` token from any position, so such a field still redirects that form, in either order. It rides W1b's stop loop, which refuses a second `--surface` in either spelling.
 - `TMPROOT_ID_MAX_CHARS`'s full rename waits until after #351.
 - SEC2 C and D are left for later (spec "Later").
 EOF
@@ -11367,7 +11628,7 @@ printf '%s\n\n' "$README_CARRY" >> "$BODY"
 cat >> "$BODY" <<'EOF'
 ## Departures, by slug
 
-`registry-id-at-foot`, `masked-arms-pinned-by-their-masks`, `fleet-fallback-is-tests-only`, `cold-start-skips-an-unmeasured-fleet`, `bad-id-is-not-a-code`, `wave-lifecycle-rows-carried`, `resume-dispatch-refuses-not-holds`, `abandon-sheet-misreads-an-omitted-fleet-act`, `reclaim-sheet-drops-the-bad-session-detail`, `work-run-project-reaches-ws-add-unchecked`, `stop-pair-registry-field-redirect`
+`registry-id-at-foot`, `masked-arms-pinned-by-their-masks`, `fleet-fallback-is-tests-only`, `cold-start-skips-an-unmeasured-fleet`, `bad-id-is-not-a-code`, `wave-lifecycle-rows-carried`, `resume-dispatch-refuses-not-holds`, `abandon-sheet-misreads-an-omitted-fleet-act`, `reclaim-sheet-drops-the-bad-session-detail`, `work-run-project-reaches-ws-add-unchecked`, `stop-pair-fields-refused-at-composition`
 EOF
 [ -n "$EXTRA_SLUGS" ] && printf '\nRecorded during the wave: %s\n' "$EXTRA_SLUGS" >> "$BODY"
 printf '\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n' >> "$BODY"
@@ -11415,8 +11676,8 @@ S351=$(gh pr view 351 --json state -q .state)
 PROSE=$(printf '%s\n' \
   "Path identity W1a, run 399: PR #$PR, $(git rev-list --count origin/main..HEAD) commits on $BR. Deploy class: server." \
   "First full run: see the ledger's Step 1 record (shards, Test Files total, agent and pwa)." \
-  "Departures by slug: registry-id-at-foot, masked-arms-pinned-by-their-masks, fleet-fallback-is-tests-only, cold-start-skips-an-unmeasured-fleet, bad-id-is-not-a-code, wave-lifecycle-rows-carried, resume-dispatch-refuses-not-holds, plus any the ledger recorded." \
-  "Carried: wave-lifecycle bad-session rows (W1b), abandon-sheet-misreads-an-omitted-fleet-act, reclaim-sheet-drops-the-bad-session-detail, work-run-project-reaches-ws-add-unchecked, stop-pair-registry-field-redirect (W1b), the real-binary parity rows (W1b), the TMPROOT_ID_MAX_CHARS rename, SEC2 C and D; README stop prose: $(git diff --quiet origin/main...HEAD -- README.md && echo carried || echo landed here)." \
+  "Departures by slug: registry-id-at-foot, masked-arms-pinned-by-their-masks, fleet-fallback-is-tests-only, cold-start-skips-an-unmeasured-fleet, bad-id-is-not-a-code, wave-lifecycle-rows-carried, resume-dispatch-refuses-not-holds, stop-pair-fields-refused-at-composition, plus any the ledger recorded." \
+  "Carried: wave-lifecycle bad-session rows (W1b), abandon-sheet-misreads-an-omitted-fleet-act, reclaim-sheet-drops-the-bad-session-detail, work-run-project-reaches-ws-add-unchecked, the real-binary parity rows (W1b), the TMPROOT_ID_MAX_CHARS rename, SEC2 C and D; README stop prose: $(git diff --quiet origin/main...HEAD -- README.md && echo carried || echo landed here)." \
   "Overlaps at Step 4: #351 $S351; run 400's PR as recorded in the ledger. Step 4 merge-tree was clean, so main was not absorbed; read the census suites on the merge ref.")
 ID="$id" UUID="$uuid" SUITE="$SUITE" FAILURE="$FAILURE" TIP="$TIP" PR="$PR" PHASE="$PHASE" PROSE="$PROSE" node -e '
 const e = process.env;
@@ -11452,7 +11713,7 @@ Read at the tip, against `origin/main`:
 - `POST /api/runs`, `reclaimRun`, the routing door and advance;
 - `dispatchRun`, and `closeRun` with both of its arms and `closeReviewRun`;
 - `expireArchived` and `learnExpiry`, and `collectTempRoot`'s step 1 with the population gate;
-- `stopId`/`stopPair`, and `id-argv-census.test.ts`.
+- `stopId`/`stopPair`, `stopPairRefused` with its two callers' identity arms, and `id-argv-census.test.ts`.
 
 **Re-derive:**
 - **Every route to an argv.** For each of the 41 calls, find its origin and the gate that stands before it. Construct each of these ids:
@@ -11463,7 +11724,7 @@ Read at the tip, against `origin/main`:
 
   Use each as a request id, a stored `claimedBy`, a stored `sessionId`, a stored `ask.childId`, a registry basename and a `project`. Show that each is refused before `runCcd`, or that its call composes no id-taking argv.
 - **The release valves.** Abandon, the programme end, the dead-coordinator sweep and the reclaim door each have a door for a bad stored id, and none of them composes a verb that names it.
-- **stop.** The leading form is safe on every ccd that advertises stop-surface (Task 0's (e2)), and the bare form is safe on one that does not.
+- **stop.** The leading form is safe on every ccd that advertises stop-surface (Task 0's (e2)), and the bare form is safe on one that does not. A legacy row whose wrapper or project part fails `isRegistryId` (a `.project`, or a fallback `.wrapper`, reading `--surface=<word>`) is refused at `/stop` and at the archive door before any argv is composed, in every argv order.
 - **The boundary of the claim.** A session can still run `ccd` directly, so the server gate is not an OS wall; W1b closes ccd's half. Say so wherever the PR body might read stronger.
 
 ### 1. Readers: refused, absent and unmeasured stay three answers (opus, high)
@@ -11512,7 +11773,8 @@ This wave's numbers come from the block the allocator issued for run 399 on 2026
   - `over-long-request-ids-stop-at-the-router` (Task 2);
   - `resume-dispatch-refuses-not-holds` and `overlong-id-plants-no-row` (Task 3);
   - `generation-pin-follows-kind` (Task 4);
-  - `abandon-sheet-misreads-an-omitted-fleet-act`, `reclaim-sheet-drops-the-bad-session-detail`, `work-run-project-reaches-ws-add-unchecked` and `stop-pair-registry-field-redirect` (Task 16's carried lines);
+  - `abandon-sheet-misreads-an-omitted-fleet-act`, `reclaim-sheet-drops-the-bad-session-detail` and `work-run-project-reaches-ws-add-unchecked` (Task 16's carried lines);
+  - `stop-pair-fields-refused-at-composition` (Task 14, a coordinator ruling at plan review);
 - from Task 0's STOP rules: `tree-not-ready`, `contract-17-not-on-main`, `registry-id-owned-elsewhere`, `registry-unmeasured`, `registry-rows-fail-the-predicate`, `stored-rows-unmeasured`, `stored-rows-fail-the-predicate`, `gate-site-moved`, `claim-overlap` and `stop-surface-loop-postdates-token`.
 
 ### Substantive departures, one number each
