@@ -118,3 +118,56 @@ describe('the per-item chat boundary (M4.B3)', () => {
     expect(warn).toHaveBeenCalledWith('ccrc: render error in chat item', expect.objectContaining({ message: 'tool card broke' }));
   });
 });
+
+// The virtualised path. Virtuoso cannot measure in jsdom, so it is stood in for by a plain list that calls
+// `itemContent` for every index (as chat.test.tsx does); the stand-in is hoisted over the whole file and only
+// `ChatList` (never `ChatListInner`) renders through it.
+vi.mock('react-virtuoso', async () => {
+  const React = await import('react');
+  return {
+    Virtuoso: (props: {
+      totalCount: number;
+      itemContent: (i: number) => ReactNode;
+      computeItemKey?: (i: number) => string | number;
+    }) =>
+      React.createElement(
+        'div',
+        { 'data-testid': 'virtuoso' },
+        Array.from({ length: props.totalCount }, (_, i) =>
+          React.createElement('div', { key: props.computeItemKey?.(i) ?? i }, props.itemContent(i)),
+        ),
+      ),
+  };
+});
+
+describe('T11 review 4-1: the per-item boundary holds on the virtualised ChatList', () => {
+  it('a throwing item inside ChatList stays inside its own item: the outer boundary never shows', async () => {
+    const { ChatList } = await import('../src/session/ChatList');
+    const { RenderBoundary } = await import('../src/components/RenderBoundary');
+    render(
+      <RenderBoundary where="outer" fallback={() => <p>OUTER FALLBACK</p>}>
+        <ChatList
+          id="demo"
+          events={[assistant('a1', 'first answer'), toolUse('a2', 't1'), assistant('a3', 'third answer')]}
+          pending={[]}
+        />
+      </RenderBoundary>,
+    );
+    expect(screen.queryByText('OUTER FALLBACK')).toBeNull();
+    expect(screen.getByTestId('virtuoso')).toBeInTheDocument();
+    expect(screen.getByText('This item could not be shown.')).toBeInTheDocument();
+    expect(screen.getByText('first answer')).toBeInTheDocument();
+    expect(screen.getByText('third answer')).toBeInTheDocument();
+  });
+
+  it('a message that throws inside ChatList falls back to its raw text and the note, beside its neighbours', async () => {
+    const { ChatList } = await import('../src/session/ChatList');
+    render(<ChatList id="demo" events={three(MIDDLE)} pending={[]} />);
+    const plain = document.querySelector('pre.msg-plain') as HTMLElement;
+    expect(plain).not.toBeNull();
+    expect(plain.textContent).toBe(MIDDLE);
+    expect(screen.getByText(NOTE)).toBeInTheDocument();
+    expect(screen.getByText('first answer')).toBeInTheDocument();
+    expect(screen.getByText('third answer')).toBeInTheDocument();
+  });
+});
