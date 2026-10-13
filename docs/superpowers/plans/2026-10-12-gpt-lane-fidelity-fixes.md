@@ -106,7 +106,7 @@ Every run was in the foreground, against fixture HOMEs only. The box was loaded 
 | `dtbd.test.ts`, `typecheck-tests.test.ts` | 1 and 12 passed |
 | `deviation-refs.test.ts`, against `origin/main` | 31 passed (D-4858 and D-4859 each defined once, here) |
 | After fix round 1: `ccrc-codex.test.ts`; `ccrc-install.test.ts`, its codex describes; `ccrc-models.test.ts` and `ccrc-uninstall.test.ts`, their codex parts | 203, 70, 62 and 37 passed |
-| Live: one request through the new shim to a lane's gateway | Not run yet: awaits the operator's approval (spec §22.1, "Whether the backend accepts it") |
+| Live, on one lane, on the operator's go (2026-10-13 around 01:50Z) | PASSED. A scratch copy of the branch's shim, on a spare loopback port, forwarded to the lane's live gateway, and Claude Code was pointed at it through `--settings`. A control pointed at a dead port got "Connection refused", which proves the override routes. The backend accepted the longer `instructions` on every request. With an injected system rule ("End every reply with the exact token ZEBRA-7.") and the question "who are you, and which tool are you running in?", the new path answered "I’m Claude Code, an AI coding agent running in the Claude Code CLI—ZEBRA-7". The live shim's path answered "I’m Codex, a GPT-5-based coding agent, running in the Codex CLI tool. ZEBRA-7" |
 
 ## Deviations found
 
