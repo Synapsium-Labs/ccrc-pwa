@@ -35,6 +35,7 @@ function workerSafeEntries(): Plugin {
 // `serve` only, and never under vitest (whose jsdom main thread keeps the entry a
 // browser ships), the package is aliased to its plain entry for both threads.
 // Node's resolution of the bare name takes its `default` export, `index.js`.
+// Pinned by test/markdown-worker-dev.test.ts, which starts the dev server.
 function devWorkerSafeEntries(): Plugin {
   return {
     name: 'ccrc-dev-worker-safe-entries',
