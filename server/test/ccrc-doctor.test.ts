@@ -14012,3 +14012,26 @@ describe('ccrc doctor: docs-sw', () => {
     expect(r.stdout.trim()).toBe('_check_docs-sw');
   });
 });
+
+// ── Docs W4 Task 11 review 5-1 and A-6: the two docs-sw pins the whole-branch review found missing ─────────────
+describe('T11 review 5-1: docs-sw pins the bare-$ covered form', () => {
+  const swPath = (home: string): string => join(home, 'ccrc', 'server', 'dist-pwa', 'sw.js');
+  const runDocsSw = (home: string): Result => {
+    const ccd = join(home, 'ccrc', 'ccd');
+    const r = spawnSync(BASH, ['-c',
+      `set -uo pipefail; . ${shq(join(ccd, 'ccrc'))}; . ${shq(join(ccd, 'ccrc-doctor-checks'))}; _check_docs-sw`],
+    { env: doctorEnv(home), encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  };
+
+  it('FAILs an installed worker whose denylist holds /^\\/docs$/, naming it', () => {
+    // The header lists "a bare `$` anchor" as a covered form; `tail`'s `\$/` alternative is the only thing that reads it.
+    // The fixtures above plant the knob form, `/^\/docs\//` and `/^\/docs/`, so deleting that alternative left them green.
+    const home = healthy('ccrc-doctor-docs-sw-dollar-');
+    writeFileSync(swPath(home), swJs(`${SW_DENYLIST_DEFAULT.slice(0, -1)},/^\\/docs$/]`));
+    const r = runDocsSw(home);
+    expect(r.stdout.split('\n')[0], r.stdout).toBe(
+      `FAIL docs-sw: the installed service worker refuses the app shell to /docs; Docs pages break on a hard load and offline (${swPath(home)} denies /^\\/docs$/)`);
+    expect(r.code).toBe(1);
+  });
+});
