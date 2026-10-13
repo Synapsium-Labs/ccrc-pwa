@@ -5,7 +5,8 @@
 //
 // Imports nothing: the parse worker's closure reaches this file (`markdown-purity.test.ts`).
 
-/** Container markers (`>` and list markers) on one line; real docs and chat reach 2. */
+/** Container markers (`>`, list markers and a footnote definition's `[^label]:`, Task 11's review 2-1) on one
+ *  line; real docs and chat reach 2. */
 export const MD_MAX_CONTAINER_DEPTH = 32;
 /** The longest run of `*` or of `_`; real docs reach 3. */
 export const MD_MAX_DELIMITER_RUN = 64;
