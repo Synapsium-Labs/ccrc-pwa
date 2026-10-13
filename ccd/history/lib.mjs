@@ -1916,12 +1916,16 @@ const PLAIN_SEQ_RE = /^(?:\x1b\[|\x9b)[0-?]*[@-~]$|^\x1b[!-/][ -/]*[0-~]$/;
  *  pass runs over a serialised `--json` envelope and over the human page's frame). In the final form no value class
  *  consumes a backslash (a JSON escape is never split, so an escaped quote ends a value instead of being left bare),
  *  a line break (`\n`, `\r`: a value never crosses a line), `<` or `>` (nor a frame tag) or `&`; the JSON-form rule's value
- *  has no escape alternative, so an escaped quote ends it. The field form is today's, byte for byte. */
+ *  has no escape alternative, so an escaped quote ends it. The NAME= value also excludes `]` and `}`: a JSON string
+ *  that ends right after a key and its separator (`API_KEY=`, `password: `) is followed by its closing quote, which
+ *  the rule's optional quote would take, and then by the `}` or `]` that closes the object or array, which the
+ *  value would take and the mask would drop. The other final rules' values already stop at `"`. The field form is
+ *  today's, byte for byte. */
 function contextRules(final) {
   const stop = final ? String.raw`\\<>&` : '';
   return Object.freeze({
     json: new RegExp(String.raw`"([A-Za-z_][A-Za-z0-9_.-]{0,255})"(\s*:\s*)"(${final ? String.raw`[^"\\\n\r<>&]+` : String.raw`(?:[^"\\]|\\.)+`})"`, 'g'),
-    named: new RegExp(String.raw`\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:[ \t]+)(["']?)([^\s"'` + '`' + String.raw`,;&${final ? String.raw`\\<>` : ''}]+)`, 'g'),
+    named: new RegExp(String.raw`\b([A-Za-z_][A-Za-z0-9_.-]{0,255})(=|:[ \t]+)(["']?)([^\s"'` + '`' + String.raw`,;&${final ? String.raw`\\<>\]}` : ''}]+)`, 'g'),
     bearer: new RegExp(String.raw`(Authorization:[ \t]*Bearer[ \t]+)([^\s"'${stop}]+)`, 'gi'),
     mailToken: new RegExp(String.raw`(x-ccrc-mail-token:[ \t]*)([^\s"'${stop}]+)`, 'gi'),
     query: new RegExp(String.raw`([?&]token=)([^&\s"'#${final ? String.raw`\\<>` : ''}]+)`, 'gi'),
@@ -2424,8 +2428,12 @@ export function entryIndexText(text, idx) {
  *  field pass was never given. Layer 2 runs in its structure-safe form, D-4613 (history-final-belt-layer2-structure-safe)
  *  (CONTEXT_RULES): the text is a serialised `--json` envelope or a
  *  human page with its frame, so no context value may consume a backslash, a line break, `<`, `>` or `&`, and an
- *  escaped quote ends a value instead of being left bare (`--json` stays valid, the frame stays intact). The cost,
- *  the residual: a context-shaped value whose characters include one of those is masked by the field pass only. */
+ *  escaped quote ends a value instead of being left bare, and a string that ends right after a context key never
+ *  takes its closing quote and the `}` or `]` after it (`--json` stays valid, the frame stays intact). Two
+ *  residuals: a context-shaped value whose characters include one of those is masked by the field pass only (and the
+ *  JSON-form rule masks none of it, its value must be followed at once by a quote), and an OBJECT KEY that ends in a
+ *  context key and separator is still followed by `:`, which the NAME= value takes with what follows (it fails
+ *  closed; the envelopes' keys are field and counter names fixed in code). */
 export function redactFinal(text, idx) {
   return redactFieldIn(text, idx, 'final');
 }

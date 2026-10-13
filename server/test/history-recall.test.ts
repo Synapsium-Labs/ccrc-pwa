@@ -730,8 +730,12 @@ describe('the read verbs: --session, --project, --workspace, lag, the counter li
       expect(human.code, human.stderr).toBe(0);
       const envs = human.stdout.split('\n').filter((l) => l.includes('<ccrc-recall '));
       const attr = (id: string, g: string) => `family="${id}" generation="${g}" first-seen="${new Date(first(id)).toISOString()}" trust="untrusted"`;
-      for (const l of envs.filter((x) => x.includes('zqfamone'))) expect(l, scope).toContain(attr(ID, G1));
-      for (const l of envs.filter((x) => x.includes('zqfamtwo'))) expect(l, scope).toContain(attr(ID_B, G2));
+      const humanOne = envs.filter((x) => x.includes('zqfamone'));
+      const humanTwo = envs.filter((x) => x.includes('zqfamtwo'));
+      expect(humanOne.length, `${scope}: CONTROL: a human line of family one`).toBeGreaterThan(0);
+      expect(humanTwo.length, `${scope}: CONTROL: a human line of family two`).toBeGreaterThan(0);
+      for (const l of humanOne) expect(l, scope).toContain(attr(ID, G1));
+      for (const l of humanTwo) expect(l, scope).toContain(attr(ID_B, G2));
       expect(envs.length).toBeGreaterThanOrEqual(2);
       expect(human.stdout.length).toBeLessThanOrEqual(libRead.OUTPUT_CAP);
       const rx = runCli(box, ['grep', scope, '--regex', 'zqfam(one|two)', '--json'], { env: withPane(box, ID) });
@@ -5015,5 +5019,19 @@ describe.skipIf(process.platform === 'darwin')('whole-branch fix 1: every read v
     }
     const g = cli(['grep', 'zqx41shape', '--json']);
     expect(String(g.stdout), 'CONTROL: the fixture was found').toContain('zqx41shape');
+  }, HEAVY);
+
+  // Whole-branch fix round 2, item 1: the paging line's `next` ends in the query word, so a query that is a context key and its
+  // separator ends the JSON string right after it; the final belt must not take the closing quote and the `}` after it.
+  it('grep --json API_KEY= over a fixture that pages answers a string that parses, and its next field still carries the query word', () => {
+    const r = cli(['grep', 'API_KEY=', '--limit', '1', '--json']);
+    expect(r.code, `${r.stderr}${r.stdout.slice(0, 400)}`).toBe(0);
+    let o: { shown?: number; total?: number; next?: string | null } | null = null;
+    try { o = JSON.parse(r.stdout); } catch { o = null; }
+    expect(o, r.stdout.slice(0, 600)).not.toBeNull();
+    expect(o!.total ?? 0, 'CONTROL: the fixture pages (more hits than one page)').toBeGreaterThan(o!.shown ?? 0);
+    expect(typeof o!.next, 'CONTROL: there is a next line').toBe('string');
+    expect(o!.next).toMatch(/API_KEY=$/);
+    expect(r.stdout, 'no value survives').not.toMatch(/abc123/);
   }, HEAVY);
 });

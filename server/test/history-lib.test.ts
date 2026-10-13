@@ -2164,6 +2164,47 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     // The residual (D-4613): a value that holds a `<` is masked up to it by the final belt, the rest is the field pass's.
     expect(libRedact.redactFinal('PASSWORD=ab<cd', idx)).toBe(`PASSWORD=${M}<cd`);
   });
+  // Whole-branch fix round 2, item 1 (D-4613, second mechanism): a JSON string that ENDS right after a context key and its
+  // separator is followed by its closing quote and then `}`, `]`, `,` or the end; the NAME= value must not take the quote and the
+  // closer after it, or the mask drops them and `--json` stops parsing.
+  it('the final belt keeps --json valid when a string ends in a context key and separator, in every position (D-4613)', () => {
+    const idx = idxOf([]);
+    const ends = ['API_KEY=', 'password: ', 'Authorization: Bearer ', 'x-ccrc-mail-token: ', '?token=', 'see TOKEN=', 'x&token='];
+    let cases = 0;
+    for (const e of ends) {
+      for (const pre of ['', 'xx ']) {
+        const v = `${pre}${e}`;
+        const shapes: Record<string, unknown> = {
+          'last member': { a: 1, t: v },
+          'middle member': { t: v, z: 2 },
+          'last element': { a: [1, v] },
+          'middle element': { a: [v, 2] },
+          'only member': { t: v },
+          'top-level string': v,
+        };
+        for (const [where, obj] of Object.entries(shapes)) {
+          const wire = libRedact.redactFinal(JSON.stringify(obj), idx);
+          let ok = true;
+          try { JSON.parse(wire); } catch { ok = false; }
+          expect(ok, `${where}: ${JSON.stringify(v)} -> ${wire}`).toBe(true);
+          cases += 1;
+        }
+      }
+    }
+    expect(cases, 'CONTROL: the table ran').toBe(ends.length * 2 * 6);
+  });
+  it('the final belt still masks a JSON string that holds a value after the key, closing quote or not (D-4613)', () => {
+    const idx = idxOf([]);
+    // The two controls of the re-review: the value must not survive.
+    const a = libRedact.redactFinal('{"t":"TOKEN=abc123"}', idx);
+    expect(a).not.toContain('abc123');
+    expect(a).toContain(M);
+    expect(() => JSON.parse(a)).not.toThrow();
+    const b = libRedact.redactFinal('see TOKEN="abc" now', idx);
+    expect(b).not.toContain('abc');
+    expect(b).toContain(M);
+    expect(b.endsWith(' now')).toBe(true);
+  });
   it('the identifier pattern matches the upstream names and no others', () => {
     for (const n of ['CCRC_AGENT_TOKEN', 'LITELLM_MASTER_KEY', 'api_key', 'password', 'X_SECRET', 'GH_AUTH']) expect(libRedact.IDENTIFIER_RE.test(n), n).toBe(true);
     for (const n of ['CCRC_ROLE', 'Authorization', 'keyboard', 'monkey', 'CCRC_SERVER_URL']) expect(libRedact.IDENTIFIER_RE.test(n), n).toBe(false);
@@ -3148,7 +3189,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     expect([...shipped].sort(), 'CONTROL: the table holds the operator verbs').toEqual(expect.arrayContaining(['prune', 'repair', 'migrate', 'adopt', 'restore', 'rebuild']));
     let named = 0;
     for (const [what, text] of texts) {
-      const verbs = [...text.matchAll(/ccrc history (?:doctor (--[a-z]+)|([a-z]+))/g)].map((m) => (m[1] !== undefined ? m[1].slice(2) : m[2]!));
+      const verbs = [...text.matchAll(/ccrc history (?:doctor (--[a-z]+)|([a-z][a-z-]*))/g)].map((m) => (m[1] !== undefined ? m[1].slice(2) : m[2]!));
       const ships = verbs.filter((v) => shipped.has(v));
       named += ships.length;
       if (ships.length > 0) expect(text, `${what} names ${ships.join(', ')}, which ship here, yet says a verb arrives with a wave`).not.toMatch(/arrives? with W1-B[0-9]/);
@@ -3157,7 +3198,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     expect(named, 'the scan found no verb to check: the pin would pass on anything').toBeGreaterThan(5);
     // The scan is not vacuous in the other direction: it reds on the old text it replaced.
     const old = 'raise the cap (an integer, in GB); ccrc history prune, which frees space, arrives with W1-B2';
-    expect(old.match(/ccrc history (?:doctor (--[a-z]+)|([a-z]+))/)![2], 'CONTROL: the old text names a shipped verb').toBe('prune');
+    expect(old.match(/ccrc history (?:doctor (--[a-z]+)|([a-z][a-z-]*))/)![2], 'CONTROL: the old text names a shipped verb').toBe('prune');
     expect(/arrives? with W1-B[0-9]/.test(old)).toBe(true);
   });
   // Whole-branch fix round 1, item C: each reworded remedy names the operator, "a terminal outside any session" and the real command.
@@ -3193,6 +3234,27 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     expect(nobk).toContain('the operator runs ccrc history doctor --rebuild');
     const cap = healthLib.deriveHealth(base({ sizeBytes: 41 * 2 ** 30 })).warn[0]!.remedy;
     expect(cap).toContain('ccrc history prune --older-than <age> --apply');
+    // Whole-branch fix round 2, item 4: the other reworded dynamic forms, by their command (the scan above covers them by verb only).
+    const atCap = healthLib.deriveHealth(base({ capturePause: 'at-cap', sizeBytes: 50 * 2 ** 30 })).fail.find((i) => i.word === 'at-cap')!.remedy;
+    expect(atCap).toContain('raise the cap in /home/u/.ccrc/cap-fixture (an integer, in GB)');
+    expect(atCap).toContain('ccrc history prune --older-than <age> --apply');
+    expect(atCap).toContain(out);
+    const unbound = healthLib.deriveHealth(base({ exit: 5, reason: 'store-unbound', storeId: '0189abcd-1234-4678-9abc-0123456789ab' })).fail[0]!.remedy;
+    expect(unbound).toContain('if store 0189abcd-1234-4678-9abc-0123456789ab is another box');
+    expect(unbound).toContain('the operator runs ccrc history doctor --adopt');
+    expect(unbound).toContain(out);
+    const recov = healthLib.deriveHealth(base({ exit: 5, reason: 'store-recoverable', storeId: null, journalStoreDirs: ['0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e'], backupsDb: ['20261001T000000Z.db'] })).fail[0]!.remedy;
+    expect(recov).toContain('ccrc history doctor --restore <backup>');
+    expect(recov).toContain('ccrc history doctor --rebuild');
+    expect(recov).toContain('recover from journal/0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e, db/backups/20261001T000000Z.db');
+    expect(recov).toContain(out);
+    const v0 = healthLib.deriveHealth(base({ exit: 5, reason: 'store-schema-missing', userVersion: 0 })).fail[0]!.remedy;
+    expect(v0).toContain('ccrc history doctor --restore <backup>');
+    expect(v0).toContain('ccrc history doctor --rebuild');
+    expect(v0).toContain('moves history.db, history.db-wal and history.db-shm aside together');
+    expect(v0).toContain(out);
+    // CONTROL: the verb scan reads a hyphenated verb whole.
+    expect('ccrc history recall-off now'.match(/ccrc history (?:doctor (--[a-z]+)|([a-z][a-z-]*))/)![2]).toBe('recall-off');
   });
   // FR3 fix round 1 (F1/F2): a plain cp into history.db is peeked by the 2-minute sweep half-copied (decideStoreOpen reads a non-empty DB with a
   // store.id as `open`), lands 0644, skips --restore's journal replay and then makes --restore/--rebuild refuse. B1 tells the operator to wait.
