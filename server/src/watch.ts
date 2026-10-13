@@ -5172,6 +5172,9 @@ export class FleetWatcher {
     const changes = new Map(this.deadCoordinatorAnchorsPending);
     for (const [id, a] of upserts) changes.set(id, a);
     for (const id of deletes) changes.set(id, null);
+    // `unchanged` needs BOTH: a write of this process has landed (a sealed start's unseal, or a mark: D-4916) AND the state
+    // is known clean. The second is not redundant once the first exists: a failed unseal, a mark that lands and a commit that
+    // fails over a quiet world leave the state dirty with no change pending and the key equal (review 401, F7).
     if (changes.size === 0 && key === this.deadCoordinatorBreakerCommittedKey && this.deadCoordinatorBreakerDurableClean
       && this.deadCoordinatorBreakerLanded) return 'unchanged';
     // NO EXCEPTION MAY DROP A COMPUTED HOLD (fix round 5, R2; review 401, F2): the changes go PENDING before the first

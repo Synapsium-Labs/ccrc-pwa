@@ -1977,6 +1977,17 @@ describe('the seal: a clean shutdown is trusted, an unclean one is not (D-4916)'
     expect(stateOf(f), 'the mark and the commit wrote it: no longer sealed').toMatchObject({ kind: 'clean', generation: 3 });
   });
 
+  it('`unchanged` also needs the state KNOWN clean (review 401, F7; D-4916): a failed unseal, a landed mark and a failed commit over a quiet world leave it dirty, and the next pass commits rather than skipping', async () => {
+    const f = await fixture();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const restore = failSql(f, /^UPDATE dead_coordinator_breaker_state/);      // the unseal and the commit both fail; the mark lands
+    await f.pass();
+    restore();
+    expect(stateOf(f), 'dirty: the mark landed and nothing after it').toMatchObject({ kind: 'dirty' });
+    f.next(); await f.pass();
+    expect(stateOf(f), 'the next pass wrote it clean again, no changes pending').toMatchObject({ kind: 'clean' });
+  });
+
   // ── the seal, and its refusals ─────────────────────────────────────────────────────────────────────────────────────
   const quiet = async () => {
     const f = await fixture();
