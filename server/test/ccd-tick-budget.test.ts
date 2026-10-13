@@ -33,10 +33,14 @@ import {
 
 /** Forks and execs per steady tick (ticks 2..N), per fixture. DECLARED ONCE.
  *  First calibrated on `main` at `300aedf8` (macOS, bash 5.3; Linux, bash 5.2:
- *  the same figures), every fixture 3 forks and 1 exec above these. W1 Task 3
- *  (D-4960, the `-k` prime and `declare -F tmux`) lowered each by exactly that,
- *  MEASURED ON macOS, bash 5.3 ONLY: the Linux figures for this tree are not
- *  yet measured. Lowered only by a change that measures the new figure and
+ *  the same figures). W1 lowered it in three measured steps, each on its own
+ *  branch and then RE-MEASURED TOGETHER at the merge (macOS, bash 5.3 only; the
+ *  Linux figures for this tree are not yet measured):
+ *    Task 3, D-4960 (the `-k` prime, `declare -F tmux`): -3 forks / -1 exec on every fixture.
+ *    Task 4, D-4961 (the clock seam, 7 helper + 3 loop sites): -3..-23 forks, the same execs.
+ *    Task 5 (`_cfg_dir_to`, an exact memo): -1 fork on the two leaving fixtures.
+ *  The merged figures below are the dump of this suite on the merged tree, never
+ *  a sum of the three. Lowered only by a change that measures the new figure and
  *  states it in its PR's departure. */
 const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
   'idle-home': { forks: 171, execs: 80 },
