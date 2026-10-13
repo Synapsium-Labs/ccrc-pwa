@@ -217,6 +217,28 @@ describe('box-token.json and box-token-retired.json', () => {
     }
   });
 
+  // 4552: counters.retiredPresentedAt is optional when read: absent (a state written before 4552), null (no retired
+  // presentation recorded) or a non-negative number (the driver's clock at the tick that first saw the latest one).
+  it('counters.retiredPresentedAt reads as a state when absent, null or a number, and unusable when anything else (4552)', async () => {
+    const { dir } = fixture();
+    const p = path.join(dir, 'box-token.json');
+    const s = mintedState(1000, { dev: 1, ino: 2, writtenAtMs: 1000 }, null, null, '0123456789abcdef');
+    const withStamp = (v: unknown): Record<string, unknown> => ({ ...s, counters: { previousPresented: 0, retiredPresented: 1, retiredPresentedAt: v } });
+    const legacy = { ...s, counters: { previousPresented: 0, retiredPresented: 1 } };
+    writeFileSync(p, JSON.stringify(legacy));
+    expect((await readState(p)).kind, 'absent').toBe('state');
+    for (const [name, v] of [['null', null], ['a number', 1234], ['zero', 0]] as const) {
+      writeFileSync(p, JSON.stringify(withStamp(v)));
+      expect((await readState(p)).kind, name).toBe('state');
+    }
+    await writeState(p, { ...s, counters: { previousPresented: 0, retiredPresented: 2, retiredPresentedAt: 99 } });
+    expect(await readState(p)).toEqual({ kind: 'state', state: { ...s, counters: { previousPresented: 0, retiredPresented: 2, retiredPresentedAt: 99 } } });
+    for (const [name, v] of [["the string '1'", '1'], ['an object', {}], ['a negative number', -1]] as const) {
+      writeFileSync(p, JSON.stringify(withStamp(v)));
+      expect(await readState(p), name).toEqual({ kind: 'unusable' });
+    }
+  });
+
   // F4 (review 349) with D-4413: `pending` is bounded by the cap, so an over-cap list is never handed to a consumer
   // that throws on it (BoxTokenHolder.setSlots) - it reads unusable, like every other malformed shape.
   it('pending is bounded to the cap: three read as a state, a fourth reads unusable (F4, D-4413)', async () => {

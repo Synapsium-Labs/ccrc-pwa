@@ -8,9 +8,10 @@
 // helpers would register that whole suite a second time. That reasoning
 // still holds — it just argues for a THIRD file with no `describe` in it,
 // not for two copies. This file is that third file: it imports nothing from
-// vitest and registers no tests, so both suites can import it directly. Its one
-// non-`node:` import is `containedTools.ts` (itself `node:*` only), for
-// `keepDigestEnv`; it never imports `ccrcContainment.ts`, which reaches vitest.
+// vitest and registers no tests, so both suites can import it directly. Its
+// non-`node:` imports are `containedTools.ts` (itself `node:*` only), for
+// `keepDigestEnv`, and `swFixtures.ts` (no imports at all), for the bundle's
+// `sw.js`; it never imports `ccrcContainment.ts`, which reaches vitest.
 //
 // The cost of the two-copy shape was real: an edit to one `TREE_FILES` that
 // missed the other broke 34 tests in the file nobody touched. This module
@@ -21,9 +22,12 @@ import {
 import { spawnSync } from 'node:child_process';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-// The ONE non-`node:` import, and it imports only `node:*` itself — which is what keeps this file vitest-free
+// The first non-`node:` import, and it imports only `node:*` itself — which is what keeps this file vitest-free
 // (wave 9 R9-F8). It may never import `ccrcContainment.ts`, which reaches vitest through `ccdWsHelpers.ts`.
 import { CONTAINED_TOOLS, plantPoison } from './containedTools.js';
+// The second, and it imports nothing at all (Docs W4): the PWA bundle's one fixture worker, so the closing doctor's
+// `docs-sw` check reads the same text `ccrc-doctor.test.ts`'s `healthy()` plants.
+import { swJs } from './swFixtures.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -251,6 +255,9 @@ export const TREE_FILES = [
 export const TREE_STUBS: Record<string, string> = {
   'server/dist/server/src/index.js': '// fixture: stands in for the built server\n',
   'server/dist-pwa/index.html': '<!doctype html><title>fixture PWA</title>\n',
+  // Docs W4: the service worker the bundle ships. The closing doctor's `docs-sw` FAILs a tree without one, so every
+  // fixture that ends in `ccrc doctor` places it; `swJs()` is the default-denylist text a build emits.
+  'server/dist-pwa/sw.js': swJs(),
   // D-1159: the agent entry point `ccrc-agent.service` runs. Present for the
   // same reason the two above are — a fleet box cannot run an agent it never
   // built — and deleted by the one test that wants that refusal.

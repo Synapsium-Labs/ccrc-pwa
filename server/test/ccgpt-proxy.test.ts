@@ -12,6 +12,21 @@ import { mkTmp } from './tmpHelpers.js';
 const PROXY_PORT = 45010;
 const UPSTREAM_PORT = 45011;
 
+// The shim's `SYSTEM_LEAD`, spelled here as its own LITERAL rather than read
+// out of `ccd/ccgpt-proxy.py`: a test that derived its expectation from the
+// file under test would follow any drift in that constant and stay green.
+// Spelled twice on purpose — this copy is the pin. The shim keeps Claude
+// Code's top-level `system` as the system prompt, behind this one line, so
+// LiteLLM carries it in the Responses `instructions` after the Codex CLI's
+// own base prompt (spec §22).
+const SYSTEM_LEAD = "You are running inside Claude Code, not the Codex CLI. What follows is Claude Code's system prompt for this session: wherever it differs from the Codex CLI instructions above, follow it.";
+
+/** The `system` value the shim forwards for a top-level system prompt whose
+ *  flattened text is `text`: the lead line, a blank line, then the text. */
+function led(text: string): string {
+  return `${SYSTEM_LEAD}\n\n${text}`;
+}
+
 // commit fe7da071 Fix round 2, finding 1: C-2's identity check ("the answer's lane must equal
 // what THIS call expects") is necessary but not sufficient when "what this
 // call expects" is a hardcoded shared string — the re-review demonstrated
@@ -831,19 +846,26 @@ describe.skipIf(!PY)('ccgpt-proxy: the mid-conversation system door', () => {
 });
 
 describe.skipIf(!PY)('ccgpt-proxy: the top-level system door', () => {
-  // Fix round 1 (D-3152): the plan's original test asserted an INSERT-only
-  // fold — two separate messages. Measurement (task-4-commutativity.md)
-  // showed insert-only makes the two folds commute on every tested input,
-  // so no order mutation could ever bind against it. Production's real
-  // `_fold_system` MERGES into an existing leading `user` message instead of
-  // always inserting, and that merge branch is what makes order genuinely
-  // load-bearing: mid-turn conversion must run FIRST so a leading
-  // `role: "system"` entry has already become `user` by the time this fold
-  // looks — landing the top-level text first, folded INTO that turn. Run
-  // reversed, `messages[0].role` is still `"system"`, the merge branch's own
-  // check is false, and the INSERT branch fires instead — a structurally
-  // different body, not a cosmetic reordering.
-  it('merges the top-level system into a converted first turn, top-level text first', async () => {
+  // Spec §22: the top-level `system` is KEPT as the system prompt.
+  // `_system_as_instructions` flattens it to one plain string (text blocks
+  // joined with a blank line) and puts `SYSTEM_LEAD` ahead of it; LiteLLM's
+  // Anthropic adapter maps a top-level `system` of that shape to the
+  // Responses `instructions` field, AFTER the Codex CLI base prompt its
+  // chatgpt provider always writes there (measured offline on LiteLLM
+  // 1.101.0 and 1.104.0). It used to be removed and folded into the first
+  // USER turn, where Claude Code's whole system prompt — a subagent's role,
+  // its tool rules, its report contract — reached the model as user text
+  // below the Codex prompt and lost every conflict with it.
+  //
+  // `messages` is no longer touched by this door at all: nothing is merged
+  // into the first turn and nothing is inserted ahead of it. The only
+  // rewrite `messages` ever sees is the mid-conversation door's
+  // `role: "system"` -> `"user"` flip, in place. The two doors now write
+  // disjoint fields, so the call-order binding this block used to pin
+  // (D-3152: the merge branch made the two folds order-dependent) no longer
+  // exists — spec §22 supersedes it — and every case below asserts that
+  // `messages` is exactly what was sent, mid-turn roles aside.
+  it('keeps the top-level system as the system prompt and flips mid-turn entries in place, merging nothing', async () => {
     if (!pythonOrSkip()) return;
     const home = mkTmp('ccgpt-proxy-top-');
     let seen: any = null;
@@ -856,24 +878,31 @@ describe.skipIf(!PY)('ccgpt-proxy: the top-level system door', () => {
       body: JSON.stringify({
         model: 'gpt-x',
         system: 'TOP LEVEL',
-        messages: [{ role: 'system', content: 'WAS MID TURN' }],
+        messages: [
+          { role: 'system', content: 'WAS MID TURN' },
+          { role: 'user', content: 'hi' },
+          { role: 'assistant', content: 'ok' },
+          { role: 'system', content: [{ type: 'text', text: 'LATER' }] },
+        ],
       }),
     });
-    expect('system' in seen).toBe(false);                       // the key is gone, not emptied
-    // ONE message, not two: the top-level text folds INTO the converted
-    // first turn rather than becoming a sibling entry.
-    expect(seen.messages.map((m: any) => m.role)).toEqual(['user']);
-    expect(seen.messages[0].content).toBe('TOP LEVEL\n\nWAS MID TURN');
+    expect(seen.system).toBe(led('TOP LEVEL'));
+    // Four messages in, four out, in the same order: the leading entry is
+    // flipped to `user` but NOT merged with the top-level text (it used to
+    // become 'TOP LEVEL\n\nWAS MID TURN').
+    expect(seen.messages).toEqual([
+      { role: 'user', content: 'WAS MID TURN' },
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: [{ type: 'text', text: 'LATER' }] },
+    ]);
   });
 
-  // The other half of the hybrid: when the conversation's own first message
-  // is NOT already `user` (no mid-turn system entry converted it, or there
-  // simply isn't one), `_fold_system` inserts a new leading turn instead of
-  // merging into something it must not silently absorb (an `assistant`
-  // turn's own words are not the sender's system instruction).
-  it('inserts a new leading turn when the first message is not user', async () => {
+  // When the first message is not `user`, the old fold INSERTED a leading
+  // user turn carrying the system text. Nothing is inserted now.
+  it('inserts no leading turn when the first message is not user', async () => {
     if (!pythonOrSkip()) return;
-    const home = mkTmp('ccgpt-proxy-top-insert-');
+    const home = mkTmp('ccgpt-proxy-top-noinsert-');
     let seen: any = null;
     await startPair(home, (_req, body, res) => {
       seen = JSON.parse(body.toString('utf8'));
@@ -887,17 +916,14 @@ describe.skipIf(!PY)('ccgpt-proxy: the top-level system door', () => {
         messages: [{ role: 'assistant', content: 'hi' }],
       }),
     });
-    expect('system' in seen).toBe(false);
-    expect(seen.messages).toEqual([
-      { role: 'user', content: 'TOP LEVEL' },
-      { role: 'assistant', content: 'hi' },
-    ]);
+    expect(seen.system).toBe(led('TOP LEVEL'));
+    expect(seen.messages).toEqual([{ role: 'assistant', content: 'hi' }]);
   });
 
-  // Insert branch's other trigger: no first message to merge into at all.
-  it('inserts a new leading turn when messages is empty', async () => {
+  // The old insert branch's other trigger: no first message at all.
+  it('inserts no leading turn when messages is empty', async () => {
     if (!pythonOrSkip()) return;
-    const home = mkTmp('ccgpt-proxy-top-insert-empty-');
+    const home = mkTmp('ccgpt-proxy-top-noinsert-empty-');
     let seen: any = null;
     await startPair(home, (_req, body, res) => {
       seen = JSON.parse(body.toString('utf8'));
@@ -907,21 +933,19 @@ describe.skipIf(!PY)('ccgpt-proxy: the top-level system door', () => {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model: 'gpt-x', system: 'TOP LEVEL', messages: [] }),
     });
-    expect('system' in seen).toBe(false);
-    expect(seen.messages).toEqual([{ role: 'user', content: 'TOP LEVEL' }]);
+    expect(seen.system).toBe(led('TOP LEVEL'));
+    expect(seen.messages).toEqual([]);
   });
 
-  // task-7a Fix round 1, C-1 (Critical): `messages` ABSENT entirely — not the same
-  // condition as `messages: []` above (a present, empty list) — used to be
-  // swallowed by `_fold_midturn_system`'s `not isinstance(msgs, list)`
-  // check (`data.get("messages")` returns `None` for an absent key) and
-  // refused 400 with a message that said "'messages' is present but not a
-  // list" about a key that was not there at all. This is the exact
-  // over-refusal task-7a-rulings.md §6 exists to prevent: the shim knows
-  // exactly how to fold this body (spec §6.1 item 2), and a `messages` key
-  // that does not exist cannot hide an unfolded mid-turn `system` entry
-  // either, so refusing it bought nothing.
-  it('folds a body with only a top-level system and no messages key at all', async () => {
+  // task-7a Fix round 1, C-1 (Critical), the over-refusal guard: `messages`
+  // ABSENT entirely — not the same condition as `messages: []` above — used
+  // to be swallowed by `_fold_midturn_system`'s `not isinstance(msgs, list)`
+  // check and refused 400 with a message about a key that was not there.
+  // task-7a-rulings.md §6 exists to prevent exactly that: a `messages` key
+  // that does not exist cannot hide an unfolded mid-turn `system` entry, so
+  // refusing it buys nothing. It must still answer 200, with the system
+  // prompt carried, and no `messages` key manufactured for it.
+  it('forwards a body with only a top-level system and no messages key at all', async () => {
     if (!pythonOrSkip()) return;
     const home = mkTmp('ccgpt-proxy-top-nomessages-');
     let seen: any = null;
@@ -934,14 +958,14 @@ describe.skipIf(!PY)('ccgpt-proxy: the top-level system door', () => {
       body: JSON.stringify({ model: 'gpt-x', system: 'TOP LEVEL' }),
     });
     expect(r.status).toBe(200);
-    expect('system' in seen).toBe(false);
-    expect(seen.messages).toEqual([{ role: 'user', content: 'TOP LEVEL' }]);
+    expect(seen.system).toBe(led('TOP LEVEL'));
+    expect('messages' in seen).toBe(false);                      // nothing manufactured
   });
 
   // The other half of task-7a C-1: an EXPLICIT `messages: null` is the same
-  // `data.get("messages") is None` condition as absent, and must fold
-  // identically, not refuse.
-  it('folds a body with a top-level system and an explicit null messages', async () => {
+  // `data.get("messages") is None` condition as absent, and must forward,
+  // not refuse — with the `null` left exactly as sent.
+  it('forwards a body with a top-level system and an explicit null messages', async () => {
     if (!pythonOrSkip()) return;
     const home = mkTmp('ccgpt-proxy-top-nullmessages-');
     let seen: any = null;
@@ -954,43 +978,51 @@ describe.skipIf(!PY)('ccgpt-proxy: the top-level system door', () => {
       body: JSON.stringify({ model: 'gpt-x', system: 'TOP LEVEL', messages: null }),
     });
     expect(r.status).toBe(200);
-    expect('system' in seen).toBe(false);
-    expect(seen.messages).toEqual([{ role: 'user', content: 'TOP LEVEL' }]);
+    expect(seen.system).toBe(led('TOP LEVEL'));
+    expect(seen.messages).toBeNull();                            // forwarded as sent, no turn invented
   });
 
-  // Binds the design decision the brief asks to be made deliberately:
-  // `system` may be absent, null, an empty string, or a content-block list
-  // with no usable text. Codex refuses the FIELD itself, not merely a
-  // non-empty value of it, so the key must still be dropped — but an empty
-  // instruction carries nothing to place ahead of the conversation, and
-  // inventing a leading empty user turn would be a message the sender never
-  // wrote.
-  it('drops an empty or null system without inventing a leading turn', async () => {
+  // A `system` whose flattened text is empty or whitespace only — null, an
+  // empty or whitespace-only string, or a block list carrying no string
+  // `text`, only empty text, or only whitespace — is DROPPED: the lead line
+  // is never sent with nothing behind it, since it would introduce a system
+  // prompt that is not there. Each row's own `messages` reaches upstream
+  // untouched, with no turn invented for an instruction that said nothing.
+  const NO_TEXT: [string, unknown][] = [
+    ['null', null],
+    ['an empty string', ''],
+    ['a whitespace-only string', ' \n\t '],
+    ['a block list with only an image block', [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }]],
+    ['a block list whose text block carries no string text', [{ type: 'text' }]],
+    ['a block list holding only empty text blocks', [{ type: 'text', text: '' }, { type: 'text', text: '' }]],
+    ['a block list holding only whitespace text', [{ type: 'text', text: '  \n ' }]],
+  ];
+  it.each(NO_TEXT)('drops a system that is %s, never sending the lead line alone', async (_label, system) => {
     if (!pythonOrSkip()) return;
-    const home = mkTmp('ccgpt-proxy-top-empty-');
+    const home = mkTmp('ccgpt-proxy-top-notext-');
     let seen: any = null;
     await startPair(home, (_req, body, res) => {
       seen = JSON.parse(body.toString('utf8'));
       res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
     });
-    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         model: 'gpt-x',
-        system: null,
+        system,
         messages: [{ role: 'user', content: 'only turn' }],
       }),
     });
+    expect(r.status).toBe(200);
     expect('system' in seen).toBe(false);
     expect(seen.messages).toEqual([{ role: 'user', content: 'only turn' }]);
   });
 
-  // Both `system` content shapes fold (plain string or content-block list,
-  // the same contract as a mid-turn entry's content), and the MERGE branch
-  // itself has two content shapes on the receiving end: a string first turn
-  // (covered above) and a content-block-list first turn, covered here — the
-  // folded text becomes a new leading block rather than a string concat.
-  it('merges a block-shaped top-level system into an existing block-content leading user turn', async () => {
+  // A block-shaped `system` is flattened to the same plain string a
+  // string-shaped one would be (the shape LiteLLM carries into
+  // `instructions`), and a block-content leading user turn is left alone —
+  // the old fold PREPENDED the system text to it as a new first block.
+  it('flattens a block-shaped system and leaves a block-content leading user turn untouched', async () => {
     if (!pythonOrSkip()) return;
     const home = mkTmp('ccgpt-proxy-top-blocks-');
     let seen: any = null;
@@ -1006,16 +1038,67 @@ describe.skipIf(!PY)('ccgpt-proxy: the top-level system door', () => {
         messages: [{ role: 'user', content: [{ type: 'text', text: 'existing block' }] }],
       }),
     });
-    expect('system' in seen).toBe(false);
+    expect(seen.system).toBe(led('BLOCK INSTRUCTION'));
     expect(seen.messages).toEqual([
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: 'BLOCK INSTRUCTION' },
-          { type: 'text', text: 'existing block' },
-        ],
-      },
+      { role: 'user', content: [{ type: 'text', text: 'existing block' }] },
     ]);
+  });
+
+  // Several text blocks join in the order the sender wrote them, with a
+  // blank line between each; a block that carries no string `text`, or an
+  // empty one, contributes nothing (it is skipped, not joined as an empty
+  // part), and the blocks' own extra keys (`cache_control`) do not survive
+  // the flattening — `instructions` is one string.
+  it('joins a multi-block system with blank lines, in order, skipping blocks with no text', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-top-multiblock-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-x',
+        system: [
+          { type: 'text', text: 'FIRST' },
+          { type: 'text' },
+          { type: 'text', text: '' },
+          { type: 'text', text: 'SECOND', cache_control: { type: 'ephemeral' } },
+        ],
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    expect(seen.system).toBe(led('FIRST\n\nSECOND'));
+    expect(seen.messages).toEqual([{ role: 'user', content: 'hi' }]);
+  });
+
+  // The call-site pin. `_rewrite_messages_body` calls
+  // `_system_as_instructions` behind `if "system" in data:`; with that call
+  // gone, a block-list `system` would reach LiteLLM as the block list the
+  // client sent — no lead line, and not the plain string this design
+  // relies on the adapter mapping to `instructions`. Measured RED with that
+  // call line deleted when this case was written.
+  it('the call site runs: a block-list system reaches upstream as one string that starts with the lead line', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-top-callsite-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-x',
+        system: [{ type: 'text', text: 'You are a code reviewer.' }],
+        messages: [{ role: 'user', content: 'review this' }],
+      }),
+    });
+    expect(r.status).toBe(200);
+    expect(typeof seen.system).toBe('string');
+    expect(seen.system.startsWith(SYSTEM_LEAD)).toBe(true);
   });
 });
 
@@ -1048,7 +1131,7 @@ describe.skipIf(!PY)('ccgpt-proxy: chunked request bodies', () => {
     expect(r.status).toBe(200);
     expect(seen!.length).toBeGreaterThan(0);                    // the hole: this was 0
     const got = JSON.parse(seen!.toString('utf8'));
-    expect('system' in got).toBe(false);                        // it was rewritten, not just relayed
+    expect(got.system).toBe(led('TOP'));                        // it was rewritten, not just relayed
     expect(got.messages.every((m: any) => m.role !== 'system')).toBe(true);
     // M1 (task-7b-rulings.md (commit 8bd10c1c) §4): `expect(seenCL).toBe(String(seen!.length))`
     // cannot fail — Node's HTTP server reads EXACTLY `Content-Length` body
@@ -1060,16 +1143,24 @@ describe.skipIf(!PY)('ccgpt-proxy: chunked request bodies', () => {
     // length computed INDEPENDENTLY here — not derived from `seen` — so a
     // wrong `Content-Length` (one that doesn't match what `_rewrite_
     // messages_body` actually produces for this exact input) has something
-    // to red against. Verified directly against this box's own
-    // `_rewrite_messages_body` while writing this case, not hand-derived:
-    // `{"model": "gpt-x", "messages": [{"role": "user", "content":
-    // "TOP\n\nMID"}]}`, 75 bytes — `json.dumps`'s default `', '`/`': '`
-    // separators (not JSON.stringify's compact ones), the top-level
-    // `system`->leading-`user`-turn merge, and `\n\n` appearing as the
-    // two-character escape `\n` twice, not a literal newline byte.
-    const expectedRewritten = '{"model": "gpt-x", "messages": [{"role": "user", "content": "TOP\\n\\nMID"}]}';
-    expect(Buffer.byteLength(expectedRewritten, 'utf8')).toBe(75);
+    // to red against.
+    //
+    // Recomputed for spec §22, from a hand-built dict through `json.dumps`
+    // with its defaults (not through the shim) and checked against a
+    // by-hand count of the same string: the mid-turn entry becomes
+    // `{"role": "user", "content": "MID"}` IN PLACE, with nothing merged
+    // into it; `system` is popped and re-added, so it is now the LAST key;
+    // its value is `SYSTEM_LEAD`, a blank line, then `TOP`. 275 bytes —
+    // `json.dumps`'s default `', '`/`': '` separators (not JSON.stringify's
+    // compact ones), `ensure_ascii=False` (the lead's apostrophe is not
+    // escaped either way), and the blank line appearing as the
+    // two-character escape `\n` twice, not a literal newline byte. Written
+    // out in full rather than built from `SYSTEM_LEAD`, so it stays an
+    // independent spelling of the forwarded body.
+    const expectedRewritten = '{"model": "gpt-x", "messages": [{"role": "user", "content": "MID"}], "system": "You are running inside Claude Code, not the Codex CLI. What follows is Claude Code\'s system prompt for this session: wherever it differs from the Codex CLI instructions above, follow it.\\n\\nTOP"}';
+    expect(Buffer.byteLength(expectedRewritten, 'utf8')).toBe(275);
     expect(seenCL).toBe(String(Buffer.byteLength(expectedRewritten, 'utf8')));
+    expect(seen!.toString('utf8')).toBe(expectedRewritten);     // the whole body, key order included
     expect(seenTE).toBe('');                                    // re-framed, not re-chunked
   });
 });
@@ -1206,7 +1297,10 @@ describe.skipIf(!PY)('ccgpt-proxy: gzip/deflate request bodies', () => {
   // sticky-replay hazard reaching the Codex backend, still correctly
   // labelled `Content-Encoding: gzip` so upstream's own decode finds
   // `system` right there. `deflate` shares the identical shape through the
-  // same except arm.
+  // same except arm. (Since spec §22 a top-level `system` is forwarded on
+  // purpose, as a plain string behind `SYSTEM_LEAD`; what an unrewritten
+  // body still carries is an unconverted mid-turn entry and a system prompt
+  // with no lead line, which is what these cases' assertions tell apart.)
   const ENCODINGS: [string, (b: Buffer) => Buffer, (b: Buffer) => Buffer][] = [
     ['gzip', gzipSync, gunzipSync],
     ['deflate', deflateSync, inflateSync],
@@ -1237,7 +1331,7 @@ describe.skipIf(!PY)('ccgpt-proxy: gzip/deflate request bodies', () => {
     expect(r.status).toBe(200);
     expect(seenEnc).toBe(enc);                                  // re-encoded, not silently decompressed
     const got = JSON.parse(unpack(seen!).toString('utf8'));
-    expect('system' in got).toBe(false);                        // the hole: this used to survive
+    expect(got.system).toBe(led('TOP'));                        // rewritten: the lead line proves the shim saw it
     expect(got.messages.every((m: any) => m.role !== 'system')).toBe(true);
   });
 
@@ -1278,7 +1372,7 @@ describe.skipIf(!PY)('ccgpt-proxy: gzip/deflate request bodies', () => {
     expect(seenEnc).toBe('gzip');
     expect(seenTE).toBe('');                                    // re-framed, not re-chunked
     const got = JSON.parse(gunzipSync(seen!).toString('utf8'));
-    expect('system' in got).toBe(false);
+    expect(got.system).toBe(led('TOP'));
     expect(got.messages.every((m: any) => m.role !== 'system')).toBe(true);
   });
 
@@ -1286,9 +1380,10 @@ describe.skipIf(!PY)('ccgpt-proxy: gzip/deflate request bodies', () => {
   // all (bad header) must not repeat either of this shim's two other
   // "could not use the body" shapes: forwarding it silently still-labelled
   // gzip (a fourth D-3151-style arm, and the exact hazard this task
-  // closes — the client's real `system` would still be sitting inside
-  // those bytes), or dropping the connection the way a malformed chunked
-  // frame does (Task 5's known, carried gap). It gets an explicit refusal
+  // closes — the client's mid-conversation `role: "system"` entries would
+  // still be sitting inside those bytes, unconverted), or dropping the
+  // connection the way a malformed chunked frame does (Task 5's known,
+  // carried gap). It gets an explicit refusal
   // instead, and the upstream must never see the request at all.
   //
   // D-3153 (task-7a-rulings.md §7): this case used to assert only
@@ -1607,7 +1702,7 @@ describe.skipIf(!PY)('ccgpt-proxy: header-read and chunk-framing guards pinned b
     // isn't itself an error.
     expect(seen).not.toBeNull();
     const got = JSON.parse(seen!.toString('utf8'));
-    expect('system' in got).toBe(false);
+    expect(got.system).toBe(led('TOP'));
     expect(got.messages.every((m: any) => m.role !== 'system')).toBe(true);
   });
 
@@ -1661,7 +1756,7 @@ describe.skipIf(!PY)('ccgpt-proxy: header-read and chunk-framing guards pinned b
     });
     expect(r.status).toBe(200);
     const got = JSON.parse(gunzipSync(seen!).toString('utf8'));
-    expect('system' in got).toBe(false);
+    expect(got.system).toBe(led('TOP'));
   });
 
   // M6 (task-7b-rulings.md (commit 458ae3a7) §3): `_is_chunked` already reads the LAST
@@ -1704,7 +1799,7 @@ describe.skipIf(!PY)('ccgpt-proxy: header-read and chunk-framing guards pinned b
     expect(status).toBe(200);
     expect(seen).not.toBeNull();
     const got = JSON.parse(gunzipSync(seen!).toString('utf8'));
-    expect('system' in got).toBe(false);
+    expect(got.system).toBe(led('TOP'));
     expect(got.messages.every((m: any) => m.role !== 'system')).toBe(true);
   });
 
@@ -2353,20 +2448,17 @@ describe.skipIf(!PY)('ccgpt-proxy: tools and tool_result content blocks forward 
     expect(seen.messages[1].content[0]).toEqual({ type: 'tool_result', tool_use_id: 'toolu_1', content: 'sunny, 21C' });
   });
 
-  // task-9 I-1 — MEASUREMENT, not a value judgment (task-9-rulings.md (commit 26d24305) §2:
-  // "do not assume it is a defect and do not 'fix' it on your own
-  // judgement"). `_fold_system` merges a non-empty top-level `system` into
-  // `messages[0]` when that message is already `role: "user"`; for a
-  // content-block-list it unconditionally PREPENDS a new `{"type": "text",
-  // ...}` block ahead of whatever content was already there
-  // (`[{"type": "text", "text": sys_text}] + content`), with no check on
-  // what the existing first block's own `type` is. So when `messages[0]`'s
-  // content begins with a `tool_result` block, the system text block lands
-  // AHEAD of it — and the Anthropic API requires `tool_result` blocks to
-  // come first in a user message. Measured and reported exactly as the
-  // shim already behaves; left alone, per the ruling, pending the
-  // controller's own reading of this measurement.
-  it('task-9 I-1 (measurement, ruling §2): the system fold prepends ahead of a leading tool_result block', async () => {
+  // Regression pin for task-9 I-1. That task MEASURED (task-9-rulings.md
+  // (commit 26d24305) §2) that the old `_fold_system` merged a non-empty
+  // top-level `system` into a block-list `messages[0]` by unconditionally
+  // PREPENDING a text block, so a leading `tool_result` — which the
+  // Anthropic API requires to come first in a user message — was pushed to
+  // `content[1]`; the plan accepted that as D-3156. Spec §22 supersedes
+  // that acceptance: the top-level `system` is now kept as the system
+  // prompt, and this door never writes `messages` at all, so the tool_result
+  // stays where the client put it. Should a fold into the first turn ever
+  // come back, this case reds.
+  it('task-9 I-1 regression pin: the system prompt never touches a leading tool_result', async () => {
     const home = mkTmp('ccgpt-proxy-tools-system-order-');
     let seen: any = null;
     await startPair(home, (_req, body, res) => {
@@ -2384,11 +2476,11 @@ describe.skipIf(!PY)('ccgpt-proxy: tools and tool_result content blocks forward 
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
     });
     expect(r.status).toBe(200);
-    expect(seen.system).toBeUndefined();
-    // Measured: the folded system text is content[0] and the tool_result —
-    // the block the client itself put first — is pushed to content[1].
-    expect(seen.messages[0].content[0]).toEqual({ type: 'text', text: 'be concise' });
-    expect(seen.messages[0].content[1]).toEqual({ type: 'tool_result', tool_use_id: 'toolu_1', content: 'sunny, 21C' });
+    expect(seen.system).toBe(led('be concise'));
+    // Nothing prepended: the tool_result is still content[0], and still the
+    // only block.
+    expect(seen.messages[0].content[0]).toEqual({ type: 'tool_result', tool_use_id: 'toolu_1', content: 'sunny, 21C' });
+    expect(seen.messages).toEqual(payload.messages);
   });
 });
 

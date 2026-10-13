@@ -261,6 +261,18 @@ describe('ChatListInner', () => {
     expect(screen.getByText('what is this')).toBeInTheDocument();
   });
 
+  // The optimistic bubble and the confirmed one must agree, or a send visibly
+  // changes shape the moment it lands. A document has no object URL by
+  // construction (the tray mints none), so both draw its name.
+  it('shows a pending document as the same name chip the confirmed bubble gives it', () => {
+    render(<ChatListInner id="claude2-Proj" events={[]} pending={[{
+      key: 'p2', text: 'read this', state: 'sending',
+      attachments: [{ path: '/home/u/.cc-clips/claude2-Proj/clip-1-a1b2-notes.md' }],
+    }]} />);
+    expect(screen.queryByRole('img')).not.toBeInTheDocument();
+    expect(screen.getByText('clip-1-a1b2-notes.md')).toHaveClass('msg-attach-doc');
+  });
+
   it('shows an asked question as a question, not as JSON', () => {
     render(<ChatListInner id="s" pending={[]} events={[ASK_USE]} />);
     expect(askQs()).toEqual(['Which colour?']);
