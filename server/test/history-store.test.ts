@@ -17,7 +17,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { brotliCompressSync, constants as Z } from 'node:zlib';
 import { mkTmp } from './tmpHelpers.js';
 import { recordDirFsyncs, recordOpenFlags } from './historyHelpers.js';
-import { BLOB_DECODE_MAX, SIDECAR_WHOLE_MAX, makePairIndex, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_ADDED, SCHEMA_VERSION, UUID_RE, WRITER_RE, decideStoreOpen, historyPaths, FTS_SHADOWS, ftsTablesHealthy } from '../../ccd/history/lib.mjs';
+import { BLOB_DECODE_MAX, SIDECAR_WHOLE_MAX, makePairIndex, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_ADDED, SCHEMA_VERSION, UUID_RE, WRITER_RE, decideStoreOpen, historyPaths, backupNameOf, FTS_SHADOWS, ftsTablesHealthy } from '../../ccd/history/lib.mjs';
 import {
   CODEC, MIGRATIONS, StoreError, openWriter, openReader, userVersion, probeFts5, withTx, brotli, unbrotli,
   measuredSize, getMeta, setMeta, bump, closeWriter, schemaOf,
@@ -976,7 +976,7 @@ describe('store.mjs: prune tombstones by referrer age (W1-B2 Task 20)', () => {
   /** A bound store holding one referrer arrangement per DM15 clause, planted by SQL on the writer handle.
    *  Blob ids are assigned in this order: old-only 1, shared 2, young 3, summary 4, kept 5, boundary 6,
    *  null-ts 7, variant-host-old 8, variant-of-old 9, variant-host-new 10, variant-of-new 11,
-   *  sidecar-unlinked 12, orphan 13, summary-no-leaf 14. */
+   *  sidecar-unlinked 12, orphan 13, summary-no-leaf 14, sidecar-old 15 (minted last so the ids above keep their order). */
   function planted(): { home: string; db: DatabaseSync; blob: Record<string, number>; close: () => void } {
     const home = mkTmp('ccrc-history-prune-');
     createStore(home);
@@ -997,7 +997,7 @@ describe('store.mjs: prune tombstones by referrer age (W1-B2 Task 20)', () => {
           struct_file_id, blob_id, ts_ms) VALUES (?, ?, 'user', 'operator', 1, ?, 1, ?, ?)`)
         .run(`e${String(n).padStart(4, '0')}`, tp, n, blobId, tsMs).lastInsertRowid);
     };
-    entry(mkBlob('old-only'), OLD);
+    const oldOnlyEntry = entry(mkBlob('old-only'), OLD);
     const shared = mkBlob('shared');
     entry(shared, OLD);
     const young = entry(mkBlob('young'), NEW);
@@ -1029,9 +1029,12 @@ describe('store.mjs: prune tombstones by referrer age (W1-B2 Task 20)', () => {
         struct_file_id, blob_id, ts_ms, is_compact_summary) VALUES (?, ?, 'user', 'operator', 1, ?, 1, ?, ?, 1)`);
     n += 1;
     lagging.run(`e${String(n).padStart(4, '0')}`, tp, n, mkBlob('summary-no-leaf'), OLD);
+    // H-41: a sidecar linked to an OLD entry — "a sidecar ages by its entry", the positive half: its blob is pruned with it
+    db.prepare('INSERT INTO sidecars (transcript_pk, name, blob_id, entry_id, first_seen_ms) VALUES (?, ?, ?, ?, ?)')
+      .run(tp, 'toolu_01old.txt', mkBlob('sidecar-old'), oldOnlyEntry, OLD);
     return { home, db, blob, close: () => closeWriter(db) };
   }
-  const PRUNED = ['boundary', 'old-only', 'variant-host-old', 'variant-of-old'];
+  const PRUNED = ['boundary', 'old-only', 'sidecar-old', 'variant-host-old', 'variant-of-old'];
   const KEPT = ['shared', 'young', 'summary', 'kept', 'null-ts', 'variant-host-new', 'variant-of-new', 'sidecar-unlinked', 'orphan', 'summary-no-leaf'];
 
   it('DM15: a blob is a candidate only when every referrer is older than the cutoff; shared, NULL-time, unlinked-sidecar, unreferenced and structure blobs stay', () => {
@@ -1046,8 +1049,55 @@ describe('store.mjs: prune tombstones by referrer age (W1-B2 Task 20)', () => {
       expect(c.blobIds.map(name).sort()).toEqual(PRUNED);
       expect(c.more).toBe(false);
       expect(c.exported, 'nothing is exported before W1-B4').toBe(0);
-      expect(pruneDryRun(db, CUTOFF)).toEqual({ blobs: 4, bytes: c.bytes, exported: 0 });
+      expect(pruneDryRun(db, CUTOFF)).toEqual({ blobs: 5, bytes: c.bytes, exported: 0 });
     } finally { close(); }
+  });
+
+  it('D-4601 (history-prune-protects-boundary-anchors): the row a boundary\'s anchor_uuid names is structure whether or not it is flagged, so an old unflagged anchor no node names yet keeps its text; a boundary naming itself protects nothing (H-49)', () => {
+    const home = mkTmp('ccrc-history-prune-anchor-');
+    createStore(home);
+    const db = openWriter(historyPaths(home).dbFile);
+    try {
+      const blob: Record<string, number> = {};
+      const mkBlob = (tag: string): number => {
+        const r = db.prepare("INSERT INTO blobs (sha256, codec, z, raw_len) VALUES (?, 'br5', ?, ?)")
+          .run(createHash('sha256').update(tag).digest(), brotli(Buffer.from(tag)), tag.length);
+        blob[tag] = Number(r.lastInsertRowid);
+        return blob[tag]!;
+      };
+      const tp = Number(db.prepare('INSERT INTO transcripts (cc_session_uuid) VALUES (?)')
+        .run('33333333-3333-4333-8333-333333333333').lastInsertRowid);
+      let n = 0;
+      // Every entry is OLD and NOT a compact summary: only the anchor arm can protect one.
+      const entry = (uuid: string, tag: string): number => {
+        n += 1;
+        return Number(db.prepare(`INSERT INTO entries (uuid, transcript_pk, type, provenance, prov_version, struct_rank_ns,
+            struct_file_id, blob_id, ts_ms) VALUES (?, ?, 'user', 'operator', 1, ?, 1, ?, ?)`)
+          .run(uuid, tp, n, mkBlob(tag), OLD).lastInsertRowid);
+      };
+      const boundary = (entryId: number, ord: number, anchorUuid: string | null): void => {
+        db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord, anchor_uuid) VALUES (?, ?, ?, ?)').run(entryId, tp, ord, anchorUuid);
+      };
+      const b1 = entry('boundary-1', 'boundary-one');
+      entry('anchor-1', 'anchor-text');
+      boundary(b1, 1, 'anchor-1');                       // names another, unflagged row: that row is the summary
+      const b2 = entry('boundary-2', 'boundary-two');
+      boundary(b2, 2, 'boundary-2');                     // names itself: the pick is the first compact summary AFTER it
+      const b3 = entry('boundary-3', 'boundary-three');
+      boundary(b3, 3, null);                             // names nothing
+      entry('plain', 'plain-text');
+      const protectedIds = pruneProtected(db);
+      expect([...protectedIds], 'only the anchor\'s own blob is structure').toEqual([blob['anchor-text']!]);
+      const name = (id: number): string => Object.keys(blob).find((k) => blob[k] === id)!;
+      const c = pruneCandidates(db, { cutoffMs: CUTOFF, afterBlobId: 0, limit: 100, protectedIds });
+      expect(c.blobIds.map(name).sort()).toEqual(['boundary-one', 'boundary-three', 'boundary-two', 'plain-text']);
+      expect(pruneDryRun(db, CUTOFF).blobs).toBe(4);
+      expect(pruneApply(db, { cutoffMs: CUTOFF, nowMs: NOW, batch: 2, vacuumPages: 64, between: () => {} }).blobs).toBe(4);
+      const z = (tag: string): Uint8Array | null =>
+        (db.prepare('SELECT z FROM blobs WHERE blob_id = ?').get(blob[tag]!) as { z: Uint8Array | null }).z;
+      expect(z('anchor-text'), 'the anchored summary text is never pruned').not.toBeNull();
+      for (const tag of ['boundary-one', 'boundary-two', 'boundary-three', 'plain-text']) expect(z(tag), tag).toBeNull();
+    } finally { closeWriter(db); }
   });
 
   it('DM14 (store half): pruneApply tombstones in bounded batches — z NULL, pruned_ms stamped, the FTS row gone, the merge step registered inside the batch — keeps every row, truncates the WAL after each batch, and calls back between batches', (ctx) => {
@@ -1070,7 +1120,7 @@ describe('store.mjs: prune tombstones by referrer age (W1-B2 Task 20)', () => {
       const wal = `${historyPaths(home).dbFile}-wal`;
       const walSizes: number[] = [];
       let registered = 0;
-      // batch 2: SQL pages [1,4] [5,6] [8,9] [] — the protected 4 and 5 dropped — so three batches tombstone.
+      // batch 2: SQL pages [1,4] [5,6] [8,9] [14,15] — the protected 4, 5 and 14 dropped — so four batches tombstone.
       const r = pruneApply(db, {
         cutoffMs: CUTOFF, nowMs: NOW, batch: 2, vacuumPages: 64,
         between: () => { walSizes.push(fs.statSync(wal).size); },
@@ -1082,9 +1132,9 @@ describe('store.mjs: prune tombstones by referrer age (W1-B2 Task 20)', () => {
           registered += 1;
         },
       });
-      expect(r).toEqual({ blobs: 4, bytes: expect.any(Number), fts: true });
-      expect(walSizes, 'one call after each batch that tombstoned something, the WAL truncated before each').toEqual([0, 0, 0]);
-      expect(registered, 'every batch that deleted index rows registers the merge step with them').toBe(3);
+      expect(r).toEqual({ blobs: 5, bytes: expect.any(Number), fts: true });
+      expect(walSizes, 'one call after each batch that tombstoned something, the WAL truncated before each').toEqual([0, 0, 0, 0]);
+      expect(registered, 'every batch that deleted index rows registers the merge step with them').toBe(4);
       expect(mergePending(), 'a registration written inside onDeleted committed with the batch').toBe(1);
       const state = (tag: string): { z: Uint8Array | null; pruned_ms: number | null; fts_indexed: number } =>
         db.prepare('SELECT z, pruned_ms, fts_indexed FROM blobs WHERE blob_id = ?').get(blob[tag]!) as never;
@@ -1200,8 +1250,8 @@ describe('store.mjs: writeBackup (W1-B2 Task 22)', () => {
   });
 
   it('a file that appears at the final name after the existence check is refused backup-exists by the publish, left as it was, and no temp remains (D-4721: link, not rename)', () => {
-    // The race the existsSync pre-check cannot close: an operator file lands at the final name between the check and
-    // the publish. The seam makes the check answer false for that one path, so only the publish itself can refuse.
+    // The race the lstat pre-check cannot close: an operator file lands at the final name between the check and
+    // the publish. The seam makes the check answer ENOENT for that one path, so only the publish itself can refuse.
     const home = mkTmp('ccrc-history-backup-link-');
     createStore(home);
     const P = historyPaths(home);
@@ -1210,16 +1260,44 @@ describe('store.mjs: writeBackup (W1-B2 Task 22)', () => {
     const finalPath = path.join(P.backups, '20261006T120000Z.db');
     fs.writeFileSync(finalPath, 'an operator file');
     const db = openWriter(P.dbFile);
-    const realExists = fs.existsSync;
+    const realLstat = fs.lstatSync;
     try {
-      fs.existsSync = ((p: fs.PathLike) => (String(p) === finalPath ? false : realExists(p))) as typeof fs.existsSync;
+      fs.lstatSync = ((p: fs.PathLike, ...rest: unknown[]) => {
+        if (String(p) === finalPath) throw Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' });
+        return (realLstat as (...a: unknown[]) => unknown)(p, ...rest);
+      }) as typeof fs.lstatSync;
       syncBuiltinESMExports();
       let word: string;
-      try { word = wordOf(() => writeBackup(db, home, { nowMs })); } finally { fs.existsSync = realExists; syncBuiltinESMExports(); }
+      try { word = wordOf(() => writeBackup(db, home, { nowMs })); } finally { fs.lstatSync = realLstat; syncBuiltinESMExports(); }
       expect(word, 'the publish refused where rename() would have replaced').toBe('backup-exists');
       expect(fs.readFileSync(finalPath, 'utf8'), 'the operator file is as it was').toBe('an operator file');
       expect(fs.readdirSync(P.backups).filter((n) => n.endsWith('.tmp')), 'the refused copy left no temp').toEqual([]);
-    } finally { fs.existsSync = realExists; syncBuiltinESMExports(); closeWriter(db); }
+    } finally { fs.lstatSync = realLstat; syncBuiltinESMExports(); closeWriter(db); }
+  });
+
+  it('a dangling link at the final name is refused backup-exists BEFORE the copy runs, worded "already exists" (lstat, not a link-following existsSync; H-69)', () => {
+    const home = mkTmp('ccrc-history-backup-dangling-');
+    createStore(home);
+    const P = historyPaths(home);
+    fs.mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+    const nowMs = Date.UTC(2026, 9, 6, 12, 0, 0);
+    const name = backupNameOf(nowMs);
+    const finalPath = path.join(P.backups, name);
+    const target = path.join(P.backups, 'nowhere');
+    fs.symlinkSync(target, finalPath);
+    const db = openWriter(P.dbFile);
+    try {
+      const before = getMeta(db, 'copy_bps');
+      let err: unknown;
+      try { writeBackup(db, home, { nowMs }); } catch (e) { err = e; }
+      expect(err, 'a dangling link is a name that is taken').toBeInstanceOf(StoreError);
+      expect((err as StoreError).word).toBe('backup-exists');
+      expect((err as StoreError).message, 'refused by the pre-check, not after a whole copy').toMatch(/already exists$/);
+      expect(fs.readlinkSync(finalPath), 'the link is as it was').toBe(target);
+      expect(fs.existsSync(target)).toBe(false);
+      expect(fs.readdirSync(P.backups).filter((n) => n.endsWith('.tmp')), 'no copy was made, so no temp').toEqual([]);
+      expect(getMeta(db, 'copy_bps'), 'no copy was timed').toBe(before);
+    } finally { closeWriter(db); }
   });
 });
 
@@ -1320,8 +1398,10 @@ describe('store.mjs: the binding verbs\' sequences (W1-B2 Task 24)', () => {
     return { storeId, oldWriter: writer };
   };
 
-  /** A backup whose middle page is overwritten. integrity_check reports such damage as rows at the offsets chosen
-   *  below (it throws at others, so the loop checks), and meta.store_id still reads. So only the integrity check can refuse it. */
+  /** A backup with one page overwritten (the middle page, else the quarter page): the first candidate that
+   *  integrity_check answers as rows is used. It reports such damage as rows at the offsets chosen below (it throws at
+   *  others, so the loop checks), and meta.store_id still reads. So only the integrity check can refuse it. The candidates are
+   *  measured on Node 24.x; the node-floor leg (22.16.0, which runs this file) is the arbiter for the floor. */
   const corruptBackup = (h: string, name: string): void => {
     const P = historyPaths(h);
     const db = openWriter(P.dbFile);
@@ -1618,29 +1698,238 @@ describe('store.mjs: the binding verbs\' sequences (W1-B2 Task 24)', () => {
     const h3 = home();
     backedUp(h3, name, false);
     const s3 = stageRestore(h3, name);
-    expect(() => commitRestore(h3, s3, { nowMs: T, belt: { check: () => {} } as never })).toThrow(TypeError);
+    expect(() => commitRestore(h3, s3, { nowMs: T, belt: { check: () => {} } as never }), 'the guard\'s own words, not a native TypeError from inside the transaction').toThrow(/a belt is null or/);
     expect(inside(s3.tempPath).bound, 'nothing written').toEqual([]);
+    expect(inside(s3.tempPath).journalMode, 'refused before the copy was made WAL').not.toBe('wal');
     abortRestore(s3);
+  });
+
+  it('H-84: a malformed redact pair is refused naming only its index and field, never dumping its digest or length (spec §15 SE12), and a digest that is not a string is refused too', () => {
+    const shaB = 'b2'.repeat(32);
+    const name = '20261006T000000Z.db';
+    const h = home();
+    backedUp(h, name, false);
+    const staged = stageRestore(h, name);
+    const messageOf = (pairs: unknown[]): string => {
+      try { commitRestore(h, staged, { nowMs: T, pairs: pairs as never }); } catch (e) { return e instanceof TypeError ? e.message : `not a TypeError: ${String(e)}`; }
+      return 'no throw';
+    };
+    const good = { len: 32, sha256: 'a1'.repeat(32), t: T };
+    // An array of one hex string passes String() and 64-hex, and Buffer.from(array, 'hex') makes a 1-byte digest that masks nothing.
+    expect(messageOf([{ len: 40, sha256: [shaB], t: T }]), 'a digest that is not a string').toMatch(/^commitRestore: redact pair 0: sha256 is not valid$/);
+    const m = messageOf([good, { len: 40, sha256: `zz${shaB.slice(2)}`, t: T }]);
+    expect(m, 'the index and the field, nothing else').toMatch(/^commitRestore: redact pair 1: sha256 is not valid$/);
+    expect(m, 'no digest in the message').not.toContain(shaB.slice(2));
+    expect(m, 'no length in the message').not.toContain('40');
+    abortRestore(staged);
+  });
+
+  /** H-83's seams, each a SECOND connection to the copy that holds a read snapshot, so SQLite's close-time
+   *  checkpoint can neither complete nor delete the -wal (it ignores that failure). `commit` opens it right after the
+   *  COMMIT that lands on `tempPath`'s connection: an explicit PRAGMA wal_checkpoint(TRUNCATE) then answers busy
+   *  (that connection's busy_timeout is cut to 100 ms, so the refusal is measured, not waited for). `close` opens it
+   *  as that connection closes, after one more write puts frames in the -wal: only a look AFTER the close sees them. */
+  const blockCheckpoint = (tempPath: string, at: 'commit' | 'close'): { fired: () => number; stop: () => void } => {
+    const realExec = DatabaseSync.prototype.exec;
+    const realClose = DatabaseSync.prototype.close;
+    const blockers: DatabaseSync[] = [];
+    let target: DatabaseSync | null = null;
+    const hold = (): void => {
+      const reader = new DatabaseSync(tempPath);
+      reader.exec('BEGIN');
+      reader.prepare('SELECT count(*) AS n FROM meta').get();
+      blockers.push(reader);
+    };
+    DatabaseSync.prototype.exec = function (this: DatabaseSync, sql: string): void {
+      realExec.call(this, sql);
+      if (sql === 'COMMIT' && target === null && fs.existsSync(tempPath)) {
+        target = this;
+        if (at === 'commit') {
+          realExec.call(this, 'PRAGMA busy_timeout = 100');
+          hold();
+        }
+      }
+    } as typeof DatabaseSync.prototype.exec;
+    if (at === 'close') {
+      DatabaseSync.prototype.close = function (this: DatabaseSync): void {
+        if (this === target && blockers.length === 0) {
+          realExec.call(this, "INSERT INTO meta (k, v) VALUES ('h83-after-seal', 'x')");
+          hold();
+        }
+        realClose.call(this);
+      } as typeof DatabaseSync.prototype.close;
+    }
+    return {
+      fired: () => blockers.length,
+      stop: () => {
+        DatabaseSync.prototype.exec = realExec;
+        DatabaseSync.prototype.close = realClose;
+        for (const b of blockers.splice(0)) b.close();
+      },
+    };
+  };
+  const SEAMS = [['commit', /checkpoint did not complete/], ['close', /still holds frames after the close/]] as const;
+
+  it('H-83: a restore whose bind facts could not be checkpointed into the copy (before the close, or by the close) is refused, never linked: commitRestore throws and history.db does not exist', () => {
+    const name = '20261006T000000Z.db';
+    for (const [at, words] of SEAMS) {
+      const h = home();
+      const P = historyPaths(h);
+      backedUp(h, name, false);
+      const staged = stageRestore(h, name);
+      const block = blockCheckpoint(staged.tempPath, at);
+      let thrown: unknown;
+      try {
+        try { commitRestore(h, staged, { nowMs: T }); } catch (e) { thrown = e; }
+        expect(block.fired(), `${at}: CONTROL: the second connection was open`).toBe(1);
+      } finally { block.stop(); }
+      expect(thrown, `${at}: the incomplete checkpoint is refused`).toBeInstanceOf(Error);
+      expect(String((thrown as Error).message), at).toMatch(words);
+      expect(fs.existsSync(P.dbFile), `${at}: nothing linked: the facts would live in a -wal no link carries`).toBe(false);
+      abortRestore(staged);
+      expect(fs.readdirSync(P.dbDir).filter((n) => n.startsWith('.history.db.restore.')), `${at}: abort takes the -wal too`).toEqual([]);
+    }
+  });
+
+  it('H-83: a rebuild\'s creation whose bind facts could not be checkpointed into the copy (before the close, or by the close) is refused, never linked: createStore throws and history.db does not exist', () => {
+    for (const [at, words] of SEAMS) {
+      const h = home();
+      const P = historyPaths(h);
+      fs.mkdirSync(P.dbDir, { recursive: true, mode: 0o700 });
+      const block = blockCheckpoint(path.join(P.dbDir, `history.db.new.${process.pid}`), at);
+      let thrown: unknown;
+      try {
+        try { createStore(h, { storeId: mintStoreId(), bind: { kind: 'rebuild', nowMs: T } }); } catch (e) { thrown = e; }
+        expect(block.fired(), `${at}: CONTROL: the second connection was open`).toBe(1);
+      } finally { block.stop(); }
+      expect(thrown, `${at}: the incomplete checkpoint is refused`).toBeInstanceOf(Error);
+      expect(String((thrown as Error).message), at).toMatch(words);
+      expect(fs.existsSync(P.dbFile), `${at}: nothing linked`).toBe(false);
+    }
+  });
+
+  it('H-85: stageRestore applies the §8.4 name rule itself (lib\'s restoreNameOk): an in-flight dot-temp, a stray .db and an unnamed file are refused restore-refused before any copy is made', () => {
+    const h = home();
+    const P = historyPaths(h);
+    createStore(h);
+    fs.mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+    const refused = ['.pre-v1.db.tmp', '.20261001T000000Z.db.tmp', 'notes.db', '20261001T000000Z.db.tmp', 'pre-v0.db'];
+    for (const name of refused) fs.writeFileSync(path.join(P.backups, name), 'this is not a store');
+    for (const name of refused) {
+      expect(wordOf(() => stageRestore(h, name)), name).toBe('restore-refused');
+    }
+    expect(fs.readdirSync(P.dbDir).filter((n) => n.startsWith('.history.db.restore.')), 'refused before the copy').toEqual([]);
+  });
+
+  it('H-87: a pair with a length that is not positive or a time that is not an integer is refused by the pair guard before the copy is touched; the copy is still 0600 under a umask that strips the owner bits (fchmod)', () => {
+    const shaB = 'b2'.repeat(32);
+    const name = '20261006T000000Z.db';
+    const h = home();
+    backedUp(h, name, false);
+    const staged = stageRestore(h, name);
+    const messageOf = (pair: unknown): string => {
+      try { commitRestore(h, staged, { nowMs: T, pairs: [pair] as never }); } catch (e) { return e instanceof TypeError ? e.message : `not a TypeError: ${String(e)}`; }
+      return 'no throw';
+    };
+    expect(messageOf({ len: 0, sha256: shaB, t: T }), 'a zero length').toBe('commitRestore: redact pair 0: len is not valid');
+    expect(messageOf({ len: -3, sha256: shaB, t: T }), 'a negative length').toBe('commitRestore: redact pair 0: len is not valid');
+    expect(messageOf({ len: 40, sha256: shaB, t: Number.NaN }), 'a time that is NaN').toBe('commitRestore: redact pair 0: t is not valid');
+    expect(inside(staged.tempPath).journalMode, 'refused before the copy was made WAL').not.toBe('wal');
+    abortRestore(staged);
+
+    // umask 0o277 strips the owner's write bit from open()'s 0600, so only the fchmod makes the copy 0600.
+    const h2 = home();
+    backedUp(h2, name, false);
+    const prev = process.umask(0o277);
+    let tempMode = 0;
+    let s2: ReturnType<typeof stageRestore> | null = null;
+    try {
+      s2 = stageRestore(h2, name);
+      tempMode = mode(s2.tempPath);
+    } finally { process.umask(prev); }
+    expect(tempMode, 'the copy is 0600 whatever the umask').toBe(0o600);
+    abortRestore(s2!);
+  });
+
+  it('H-88: abortRestore and commitRestore take only a path shaped like the restore temp (.history.db.restore.<pid>): a forged staged value is a TypeError that removes, opens and links nothing, history.db included', () => {
+    const h = home();
+    const P = historyPaths(h);
+    createStore(h);
+    const forged = { tempPath: P.dbFile, storeId: { state: 'value', value: mintStoreId() }, userVersion: SCHEMA_VERSION, integrityOk: true, sizeBytes: 0 };
+    expect(() => abortRestore(forged as never)).toThrow(TypeError);
+    expect(fs.existsSync(P.dbFile), 'history.db survives the forged abort').toBe(true);
+    expect(() => commitRestore(h, forged as never, { nowMs: T })).toThrow(TypeError);
+    expect(inside(P.dbFile).bound, 'nothing was bound into the live store').toEqual([]);
+    expect(fs.existsSync(P.pending), 'no marker was written').toBe(false);
+    for (const bad of [`${P.dbDir}/.history.db.restore.`, `${P.dbDir}/.history.db.restore.12x`, `${P.dbDir}/history.db.new.1`, `${P.dbFile}-wal`]) {
+      expect(() => abortRestore({ ...forged, tempPath: bad } as never), bad).toThrow(TypeError);
+    }
+    // The real shape still passes (the temp need not exist: removal is idempotent).
+    expect(() => abortRestore({ ...forged, tempPath: `${P.dbDir}/.history.db.restore.${process.pid}` } as never)).not.toThrow();
+  });
+
+  it('H-86 (a): a FIFO at the backup name is refused restore-refused and never waited on (O_NONBLOCK), in a child with a 5 s deadline', () => {
+    const h = home();
+    const P = historyPaths(h);
+    createStore(h);
+    fs.mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+    const name = '20261001T000000Z.db';
+    const mk = spawnSync('mkfifo', [path.join(P.backups, name)], { encoding: 'utf8' });
+    expect(mk.status, String(mk.stderr)).toBe(0);
+    // A child, because a stage that blocks on the FIFO would hang this process, under the operator's lock, forever.
+    const r = spawnSync(process.execPath, ['--no-warnings', '--input-type=module', '-e',
+      `import * as S from ${JSON.stringify(pathToFileURL(STORE_MJS).href)}; `
+      + 'try { S.stageRestore(process.argv[1], process.argv[2]); console.log("no throw"); } catch (e) { console.log(e instanceof S.StoreError ? e.word : "not a StoreError: " + String(e)); }',
+    h, name], { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '', HOME: h }, timeout: 5_000, killSignal: 'SIGKILL' });
+    expect(r.signal, `the stage hung on the FIFO: ${String(r.stderr)}`).toBeNull();
+    expect(String(r.stdout).trim()).toBe('restore-refused');
+    expect(fs.readdirSync(P.dbDir).filter((n) => n.startsWith('.history.db.restore.')), 'no copy was started').toEqual([]);
+  });
+
+  it('H-86 (b): a directory at the backup name is refused restore-refused by the regular-file check, before any copy is started', () => {
+    const h = home();
+    const P = historyPaths(h);
+    createStore(h);
+    fs.mkdirSync(path.join(P.backups, '20261001T000000Z.db'), { recursive: true, mode: 0o700 });
+    expect(wordOf(() => stageRestore(h, '20261001T000000Z.db'))).toBe('restore-refused');
+    expect(fs.readdirSync(P.dbDir).filter((n) => n.startsWith('.history.db.restore.')), 'no copy was started').toEqual([]);
+  });
+
+  it('H-86 (c): a temp, or any sidecar of one, already at the restore temp name is never reopened: stageRestore throws and leaves the planted file as it was', () => {
+    const name = '20261006T000000Z.db';
+    for (const suffix of ['', '-wal', '-shm', '-journal']) {
+      const h = home();
+      const P = historyPaths(h);
+      backedUp(h, name, false);
+      const planted = `${P.dbDir}/.history.db.restore.${process.pid}${suffix}`;
+      fs.writeFileSync(planted, 'a leftover');
+      let err: unknown;
+      try { stageRestore(h, name); } catch (e) { err = e; }
+      expect(err, `${suffix || 'the temp itself'}: refused`).toBeInstanceOf(Error);
+      expect(String((err as Error).message), suffix).toMatch(/a temp is never reopened/);
+      expect(fs.readFileSync(planted, 'utf8'), `${suffix || 'the temp itself'}: untouched`).toBe('a leftover');
+      expect(fs.readdirSync(P.dbDir).filter((n) => n.startsWith('.history.db.restore.')), suffix).toEqual([path.basename(planted)]);
+    }
   });
 
   it('stageRestore measures the copy and never trusts it: damage reads integrityOk false, a file that is no store reads its store_id unreadable, a link or a path is refused, and abortRestore takes the temp', () => {
     const h = home();
     const P = historyPaths(h);
     const { storeId } = createStore(h);
-    corruptBackup(h, 'corrupt.db');
-    const s = stageRestore(h, 'corrupt.db');
+    corruptBackup(h, '20261002T000000Z.db');
+    const s = stageRestore(h, '20261002T000000Z.db');
     expect(s.storeId, 'meta still reads: only the integrity check can refuse this copy').toEqual({ state: 'value', value: storeId });
     expect(s.integrityOk).toBe(false);
     abortRestore(s);
     expect(fs.existsSync(s.tempPath)).toBe(false);
 
-    fs.writeFileSync(path.join(P.backups, 'text.db'), 'this is not a database file at all, it is text\n'.repeat(400));
-    const t = stageRestore(h, 'text.db');
+    fs.writeFileSync(path.join(P.backups, 'pre-v1.db'), 'this is not a database file at all, it is text\n'.repeat(400));
+    const t = stageRestore(h, 'pre-v1.db');
     expect(t).toMatchObject({ storeId: { state: 'unreadable' }, userVersion: null, integrityOk: false });
     abortRestore(t);
 
-    fs.symlinkSync(path.join(P.backups, 'corrupt.db'), path.join(P.backups, 'link.db'));
-    expect(wordOf(() => stageRestore(h, 'link.db')), 'a symlink is never followed (O_NOFOLLOW)').toBe('restore-refused');
+    fs.symlinkSync(path.join(P.backups, '20261002T000000Z.db'), path.join(P.backups, '20261003T000000Z.db'));
+    expect(wordOf(() => stageRestore(h, '20261003T000000Z.db')), 'a symlink is never followed (O_NOFOLLOW)').toBe('restore-refused');
     expect(wordOf(() => stageRestore(h, '../store.id'))).toBe('restore-refused');
     expect(fs.readdirSync(P.dbDir).filter((n) => n.startsWith('.history.db.restore.'))).toEqual([]);
   });

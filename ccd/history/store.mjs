@@ -21,10 +21,10 @@ import {
   chmodSync, closeSync, constants as FS, existsSync, fchmodSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync,
   readdirSync, readSync, renameSync, rmdirSync, statSync, unlinkSync, writeSync,
 } from 'node:fs';
-import { dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as Z, createBrotliCompress, createBrotliDecompress } from 'node:zlib';
-import { BUSY_TIMEOUT_MS, CONTROL_FILE_MAX, MAX_INTERRUPTED_ATTEMPTS, RECOVER_PHASES, SCHEMA_VERSION, SIDECAR_WHOLE_MAX, UUID_RE, WRITER_RE, backupNameOf, blobOverDecodeCap, FTS_SHADOWS, formatRecoverCursor, ftsTextOf, historyPaths, journalRecord, jsonWithinStructureBound, newSha256, sidecarIndexText } from './lib.mjs';
+import { BUSY_TIMEOUT_MS, CONTROL_FILE_MAX, MAX_INTERRUPTED_ATTEMPTS, RECOVER_PHASES, SCHEMA_VERSION, SIDECAR_WHOLE_MAX, UUID_RE, WRITER_RE, backupNameOf, blobOverDecodeCap, FTS_SHADOWS, formatRecoverCursor, ftsTextOf, historyPaths, journalRecord, jsonWithinStructureBound, newSha256, restoreNameOk, sidecarIndexText } from './lib.mjs';
 
 /** The codec word every blob row records: Brotli at quality 5 (RV6). */
 export const CODEC = 'br5';
@@ -727,6 +727,31 @@ export function removeStaleMigrationTemps(home) {
   return { removed, bytes };
 }
 
+
+/** H-83: a temp copy that was written in WAL mode (createStore's, commitRestore's) is LINKED to history.db by its main
+ *  file's name, and SQLite pairs a -wal with its main file by name, so a binding fact still sitting in
+ *  `<temp>-wal` would be left behind by the link and deleted with the temp (removeStaleTemps). `db.close()` is not
+ *  a proof the -wal was folded in: SQLite ignores a failed close-time checkpoint. So the writer folds it in itself,
+ *  before it closes: PRAGMA wal_checkpoint(TRUNCATE), which answers { busy, log, checkpointed } and must answer busy 0
+ *  with every logged frame checkpointed. A plain Error (exit 1), never a StoreError: nothing was refused, a disk or a
+ *  second connection failed the copy, and the caller's finally takes the temp (abortRestore, removeStaleTemps). */
+function sealWal(db, tempPath) {
+  const c = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+  if (Number(c.busy) !== 0 || Number(c.log) !== Number(c.checkpointed)) {
+    throw new Error(`${tempPath}: the WAL checkpoint did not complete (busy ${String(c.busy)}, ${String(c.checkpointed)} of ${String(c.log)} frames); `
+      + 'the binding facts would stay in a -wal no link carries');
+  }
+}
+
+/** H-83's second look, AFTER the close: no `<temp>-wal` still holds frames. The truncate checkpoint empties it
+ *  and a clean close deletes it, so a non-empty one means the close found another connection or a failure. */
+function assertWalGone(tempPath) {
+  const wal = `${tempPath}-wal`;
+  if (existsSync(wal) && statSync(wal).size > 0) {
+    throw new Error(`${wal} still holds frames after the close; the binding facts would stay in a -wal no link carries`);
+  }
+}
+
 /** First creation (§6.2), run only on `decideStoreOpen`'s `create` (or after
  *  `dropPending` on `drop-pending-create`), under the shim's lock. Since
  *  W1-B2 it is also run by `doctor --rebuild` (§8.4), which passes the
@@ -743,7 +768,8 @@ export function removeStaleMigrationTemps(home) {
  *   4. auto_vacuum, WAL, the v1 DDL, meta store_id and writer, user_version 1,
  *      and with `opts.bind` every DB-side fact of the binding (`bound:<ms>`,
  *      the ('recover', <ms>) step, the `bind` outbox row), all in ONE
- *      transaction; then close (the WAL is checkpointed away);
+ *      transaction; then `sealWal` (a TRUNCATE checkpoint that must answer busy 0, H-83), close, and
+ *      `assertWalGone` (no -wal holding frames survives the close);
  *   5. fsync the temp, `link()` it to history.db (fails if one appeared), unlink
  *      the temp, fsync db/;
  *   6. when step 2 wrote the marker, rename `store.id.pending` to `store.id`
@@ -794,9 +820,11 @@ export function createStore(home, opts = {}) {
       try { db.exec('ROLLBACK'); } catch { /* the transaction is already gone */ }
       throw err;
     }
+    sealWal(db, tmp);
   } finally {
     db.close();
   }
+  assertWalGone(tmp);
   const fd = openSync(tmp, FS.O_RDONLY);
   try { fsyncSync(fd); } finally { closeSync(fd); }
   linkSync(tmp, P.dbFile);
@@ -1152,12 +1180,16 @@ export function storedVersionAt(dbFile) {
  *  (history-prune-protects-compact-summaries), every compact-summary entry's own blob: that blob is structure from
  *  its capture, before any leaf names it, because node derivation can lag behind (a cap or floor pause, an
  *  unconfirmed epoch, a pending receipt). Read once per pass: nodes has no index on summary_blob_id, so a probe per
- *  candidate would scan it once per blob. */
+ *  candidate would scan it once per blob. D-4601 (history-prune-protects-boundary-anchors) adds a fourth: the
+ *  blob of the row a boundary's anchor_uuid names, flagged or not, because lib's summaryRowFor picks that row as
+ *  the leaf's summary whether or not is_compact_summary is set and the flag is no part of the pick; a boundary that
+ *  names ITSELF protects nothing here (its pick is the first compact summary after it, which the flag arm covers). */
 export function pruneProtected(db) {
   const ids = new Set();
   for (const r of db.prepare('SELECT summary_blob_id AS id FROM nodes WHERE summary_blob_id IS NOT NULL').all()) ids.add(Number(r.id));
   for (const r of db.prepare('SELECT kept_blob_id AS id FROM boundaries WHERE kept_blob_id IS NOT NULL').all()) ids.add(Number(r.id));
   for (const r of db.prepare('SELECT blob_id AS id FROM entries WHERE is_compact_summary = 1 AND blob_id IS NOT NULL').all()) ids.add(Number(r.id));
+  for (const r of db.prepare('SELECT e.blob_id AS id FROM boundaries b JOIN entries e ON e.uuid = b.anchor_uuid WHERE e.entry_id <> b.entry_id AND e.blob_id IS NOT NULL').all()) ids.add(Number(r.id));
   return ids;
 }
 
@@ -1301,6 +1333,16 @@ export function removeStaleBackupTemps(home) {
   for (const n of readdirSync(P.backups)) if (BACKUP_TMP_RE.test(n)) removeEntry(`${P.backups}/${n}`);
 }
 
+/** Whether `p` names anything at all, a dangling link included: lstat, so a link is never followed. Only ENOENT is
+ *  absence; any other failure (EACCES, ENOTDIR, EIO) is thrown, never read as "nothing there". */
+function lexists(p) {
+  try { lstatSync(p); } catch (e) {
+    if (e && e.code === 'ENOENT') return false;
+    throw e;
+  }
+  return true;
+}
+
 /** `doctor --backup`'s copy (§8.4; ruled Q6). VACUUM INTO `backups/.<ts>.db.tmp` — the target is a bound
  *  parameter and never a caller's path — then fsync, link() it to `backups/<ts>.db`, unlink the temp and fsync
  *  the directory. A kill leaves only the temp, which the next backup removes first (C51), so a partial copy
@@ -1318,7 +1360,9 @@ export function writeBackup(db, home, i) {
   for (const n of readdirSync(P.backups)) if (BACKUP_TMP_RE.test(n)) removeEntry(`${P.backups}/${n}`);
   const name = backupNameOf(i.nowMs);
   const finalPath = `${P.backups}/${name}`;
-  if (existsSync(finalPath)) throw new StoreError('backup-exists', `${name} already exists`);
+  // lstat, never a link-following existsSync: a dangling link at the final name is a taken name, and is refused here
+  // rather than after a whole VACUUM INTO copy, by link()'s EEXIST, under the wrong words (H-69).
+  if (lexists(finalPath)) throw new StoreError('backup-exists', `${name} already exists`);
   const tmpPath = `${P.backups}/.${name}.tmp`;
   const t0 = process.hrtime.bigint();
   db.prepare('VACUUM INTO ?').run(tmpPath);
@@ -1495,17 +1539,33 @@ function measureStaged(tempPath) {
   return out;
 }
 
+/** The shape of stageRestore's temp: `.history.db.restore.<pid>` (removeStaleTemps' TEMP_RE names the same file). */
+const RESTORE_TEMP_RE = /^\.history\.db\.restore\.[0-9]+$/;
+
+/** H-88: commitRestore links the path it is handed, and abortRestore removes it with its -wal, -shm and -journal, so
+ *  a `staged` that did not come from stageRestore (`{ tempPath: <history.db> }`) would bind a LIVE store or delete
+ *  one. The only caller today passes stageRestore's own value, so this is defence in depth: a TypeError, a caller's
+ *  bug, raised before anything is opened, linked or removed. */
+function assertRestoreTemp(tempPath) {
+  if (typeof tempPath !== 'string' || !RESTORE_TEMP_RE.test(basename(tempPath))) {
+    throw new TypeError('a restore temp is .history.db.restore.<pid> under db/, the value stageRestore answered');
+  }
+}
+
 /** `doctor --restore <name>`, first half (§8.4; D-4693 (history-restore-verb)). Copy db/backups/<name> to
  *  db/.history.db.restore.<pid>:
  *  - the backup is opened O_NOFOLLOW|O_NONBLOCK and must be a regular file;
  *  - the temp is created O_EXCL and fchmodded 0600, so it is 0600 from its first byte under any umask;
  *  - the copy is fsynced, then measured (measureStaged) for decideBind's second look.
- *  A bare name only: anything with a `/` is refused here as in lib's restoreNameOk. The caller removes the temp on
- *  any refusal (abortRestore), and the next lock-holding pass's removeStaleTemps catches a kill. */
+ *  A name lib's restoreNameOk accepts only (`<ts>.db`, `pre-v<N>.db`): a path, a dot-temp or any other file is refused here as
+ *  there. The caller removes the temp on any refusal (abortRestore), and the next lock-holding pass's removeStaleTemps
+ *  catches a kill. */
 export function stageRestore(home, name) {
   const P = historyPaths(home);
-  if (typeof name !== 'string' || name === '' || name === '.' || name === '..' || name.includes('/')) {
-    throw new StoreError('restore-refused', `${JSON.stringify(name)} is not a bare file name under db/backups`);
+  // lib's restoreNameOk is the ONE statement of §8.4's rule (a `<ts>.db` or `pre-v<N>.db` bare name); the caller checks it
+  // too, and this is the executor's own look, so an in-flight `.<ts>.db.tmp` can never be staged (H-85).
+  if (!restoreNameOk(name)) {
+    throw new StoreError('restore-refused', `${JSON.stringify(name)} is not a backup name (<ts>.db or pre-v<N>.db) under db/backups`);
   }
   const src = `${P.backups}/${name}`;
   const tempPath = `${P.dbDir}/.history.db.restore.${process.pid}`;
@@ -1561,7 +1621,9 @@ export function stageRestore(home, name) {
  *     `belt.check(db)` and closes with `belt.stamp(db)` (spec §6.2 "The belt"; coordinator ruling R-witness-restore:
  *     a belt-aware writer that changes witnessed values checks the witness first, then writes, then stamps). Task 27
  *     passes sweep.mjs's check and Task 7B's stampBeltWitness; store.mjs owns the order only;
- *  3. close it, which checkpoints its own -wal away, and fsync it;
+ *  3. `sealWal` (a TRUNCATE checkpoint that must answer busy 0, because a close-time checkpoint that fails is
+ *     ignored by SQLite and would strand the facts in a -wal the link leaves behind, H-83), close it,
+ *     `assertWalGone`, and fsync it;
  *  4. store.writer, then store.id.pending when store.id is absent (decideBind refused a store.id naming another
  *     store);
  *  5. `link()` the copy to history.db, which fails if one appeared; unlink the temp;
@@ -1569,14 +1631,20 @@ export function stageRestore(home, name) {
  *  A kill anywhere leaves either no history.db, or one whose binding and recovery step are already inside it. */
 export function commitRestore(home, staged, { nowMs, pairs = [], belt = null }) {
   const P = historyPaths(home);
+  assertRestoreTemp(staged.tempPath);
   if (staged.storeId.state !== 'value') {
     throw new StoreError('restore-refused', `${staged.tempPath} carries no readable meta.store_id`);
   }
-  for (const pr of pairs) {
-    if (!Number.isSafeInteger(pr.len) || pr.len <= 0 || !PAIR_SHA_RE.test(String(pr.sha256)) || !Number.isSafeInteger(pr.t)) {
-      throw new TypeError(`commitRestore: a redact pair is { len, sha256 (64 hex), t }: ${JSON.stringify(pr)}`);
-    }
-  }
+  // A pair is { len, sha256 (64 hex string), t }. The message names the pair's index and the failing field and nothing
+  // of its value: a length and a digest are the oracle spec §15 SE12 keeps out of printed output, and this message
+  // reaches stderr through main's 'internal error:' line (H-84). A digest must BE a string: String() would pass an
+  // array of one hex string, and Buffer.from(array, 'hex') makes a 1-byte digest that masks nothing.
+  pairs.forEach((pr, k) => {
+    const field = !Number.isSafeInteger(pr?.len) || pr.len <= 0 ? 'len'
+      : typeof pr.sha256 !== 'string' || !PAIR_SHA_RE.test(pr.sha256) ? 'sha256'
+        : !Number.isSafeInteger(pr.t) ? 't' : null;
+    if (field !== null) throw new TypeError(`commitRestore: redact pair ${k}: ${field} is not valid`);
+  });
   if (belt !== null && (typeof belt?.check !== 'function' || typeof belt?.stamp !== 'function')) {
     throw new TypeError('commitRestore: a belt is null or { check(db), stamp(db) }');
   }
@@ -1604,9 +1672,11 @@ export function commitRestore(home, staged, { nowMs, pairs = [], belt = null }) 
       // ... and stamped after its last write, so the first recovery pass never reads the pairs as another build's.
       if (belt !== null) belt.stamp(db);
     });
+    sealWal(db, staged.tempPath);
   } finally {
     db.close();
   }
+  assertWalGone(staged.tempPath);
   const fd = openSync(staged.tempPath, FS.O_RDONLY);
   try { fsyncSync(fd); } finally { closeSync(fd); }
   writeFileAtomic(P.writer, `${writer}\n`);
@@ -1624,5 +1694,6 @@ export function commitRestore(home, staged, { nowMs, pairs = [], belt = null }) 
 
 /** A refused restore's copy, removed with its sidecars: SQLite pairs a WAL with its file by name (DI13). */
 export function abortRestore(staged) {
+  assertRestoreTemp(staged.tempPath);
   for (const s of ['', '-wal', '-shm', '-journal']) removeEntry(`${staged.tempPath}${s}`);
 }
