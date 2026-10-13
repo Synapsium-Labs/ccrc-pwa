@@ -8,7 +8,7 @@
 - **Two arms, then one (R96).** The lane is live when either of these holds:
   - the legacy marker stands and its journaled latch is unset;
   - Settings stores exactly `live` for the fleet node measured on the current connection.
-  
+
   A raised pause, an unlistable registry, a changed connection epoch or a missing capability overrides both arms.
 - **The state proves itself.** The singleton `collect_lane_settings` row and the server-owned `~/.ccrc/collect-lane-generation.log` must agree exactly (`journalMaximum == rowGeneration`). The untouched seed with no journal is the only bootstrap. Any other state is safety-stopped and composes nothing.
 - **The hand transition completes itself.** A listing that is coherent, unpaused, on the same epoch and shows the marker absent retires the marker through the journal, one generation, with one feed row. This works from the pass and from the executor. A re-created marker is reported and ignored.
@@ -18,7 +18,7 @@
   - Live is refused while sign-in is dark.
   - The server decides the confirm, keyed over every safety fact.
   - Off is refused before the latch.
-  
+
   A "Temp root collector" section renders the result, and the PWA counts nothing itself.
 - **It is safe across rollback.** An older build ignores the table. No backup copies the journal. Restore and downgrade wording says to leave the journal in place.
 
@@ -151,7 +151,7 @@ R1 to R19 are the coordinator's wave-10 rulings (SW-R1 to SW-R19), renumbered.
   - "Stored `live` while the current node is unmeasured or in collision: **stopped, `unknown-fleet`** — compose nothing, clear the pairs, write no flip row, show "Unknown fleet". The marker still arms before the latch (Figure 5's F precedes G)."
   - "Stored `live` for a node that is measured and different: **shadowed, `other-node`** (Figure 5, 5.7: confirm again)."
   - "The connection epoch moves during a job: **safety-stopped, `epoch-changed`**, a lane-wide clear, no feed row. The epoch moving between passes also clears every observation pair, so no pair straddles two connections."
-  
+
   The frame's proposed reading of "safety-stopped" in the third bullet is R21. Its proposed job epoch is R37.
 - **R3. Where the latch retires.**
   - **When:** on EVERY registry listing that is coherent, unpaused and on the same epoch, and that proves the marker absent while `markerRetiredAt` is null.
@@ -274,12 +274,12 @@ R20 to R38 were **proposed by the frame** to settle conflicts between the ground
 
 - **R20. Canonical names.** Part C's identity names win:
   - `FleetIdentityCell`, `epochNow()`, `current()` and `CurrentFleetIdentity`.
-  
+
   Part B's persistence names win:
   - `CoordStore.collectLaneRow()` (part D's `collectLaneSettings()` is renamed);
   - `setCollectLane(req, at, journal)`;
   - `CollectLaneJournal.read`/`appendGeneration`, and its read arms.
-  
+
   Part A's resolver shape stands, but it takes B's `CollectLaneControl`. Part A's `CollectControlPort.retire` and `CollectLinkPort.epoch/node` are replaced by the Interfaces section's `CollectControlDeps` and `CollectLinkPort`.
 - **R21. Stop arms versus safety-stopped.**
   - `epoch-changed` and `unknown-fleet` are arms of the resolver's `stopped` kind, with `raised` and `unlistable`. A stopped arm means: no flip, no feed row, and a lane-wide clear.
@@ -813,7 +813,7 @@ export const NO_FLEET_IDENTITY: Pick<FleetIdentityCell, 'epochNow' | 'current'>;
   5. `UPDATE` the complete row;
   6. commit;
   7. a post-commit re-read.
-  
+
   It never inserts, and it never calls itself from inside another `tx`.
 - **`server/src/server.ts`:**
   ```ts
@@ -18426,7 +18426,7 @@ gh pr view --json number,state --jq '"\(.number) \(.state)"'
 3. Send one `status` mail, with the subject exactly `wave-done`, to `coordinator` for run 400. The body opens with the two signal lines (clause 15):
    - the `suite:` word from `w10-suite.md`;
    - a `failure:` line only when a check failed.
-   
+
    Then comes the fingerprint JSON, with `branchTip` and `handoffCommit` both set to the `rev-parse` sha and `prPhase` set to `open`. Then the prose:
    - the summary line;
    - each flake and each `main-red`;
@@ -18464,7 +18464,7 @@ These lenses run IN ADDITION to the held-out panel (`ccd/coordinator-skill/refer
   - a missing capability, either one;
   - the pause; local mode;
   - a server restart with Live stored.
-  
+
   None may compose `ws-collect`, except the stated residual (an Off after the argv). A pre-latch snapshot composes nothing until a confirmed Live repairs it. After that repair, the standing file arms the lane again, which is the second stated residual, `pre-latch-snapshot-repair-readopts-an-unset-latch`, and not a finding.
 - **The latch.** It retires only from a coherent, unpaused, listed, same-epoch absence. It never heals either direction. It never runs from the POST. It follows a removed marker on an idle lane within one pass.
 - **The flip.** A handoff writes no row and keeps the pairs. A stop arm writes no row. A boolean flip clears every pair.

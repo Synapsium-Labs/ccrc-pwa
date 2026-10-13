@@ -73,7 +73,7 @@
   - `ccd-actor-flags.test.ts`, one comment (Task 4);
   - `ccd-workspaces.test.ts`, one comment line edited in place (Task 5);
   - `ccd-project-pool.test.ts`, the one `enable` case that Task 5's wrapper check inverts (Task 5).
-  
+
   An existing test file outside these four that goes red is NOT edited. The worker names it by slug and STOPs for a coordinator ruling (Task 9 says when this is measured).
 - The spec (a new §2.9 and the §7 status cells) and the contract's new "§17 as built (path-identity W1b)" subsection (Task 12).
 - This plan's own file under `docs/superpowers/plans/`. It rides in this wave's PR and is committed as the brief directs. The worker does not edit its body.
@@ -479,7 +479,7 @@ export function wideLetterLocale(h: { sh(snippet: string): string }): string;
     - `forget`, `swap`, `swapCross`;
     - `start` and `enable` as `<wrapper> <project>` (a dash wrapper, and a dash project);
     - `ws-audit` in all four modes: `wsAudit`, `wsReclaimAudit`, `wsExpireAudit` and `wsCollectAudit`.
-    
+
     Plain `wsAudit` is `'literal'`: it audits the literal id and acts on no decoy. Every other probe is `'refused'`.
 - The runner's path: `const CCD_UNDER_TEST = process.env.DASH_PARITY_CCD ?? CCD` (R20).
 
@@ -4021,7 +4021,7 @@ EOF
   - the `--surface=*)` line (hint `:6952`);
   - the `--actor)` head line (hint `:6953`);
   - the `--actor=*)` line (hint `:6955`).
-  
+
   Then restamp with `bash ccd/ccrc restamp ccd/ccd`.
 - Create `server/test/ccd-ws-add-dash-id.test.ts`.
 - No other file. In particular, `ccd-workspaces.test.ts`, `ccd-lifecycle-sites.test.ts`, `ccd-ws-add-child.test.ts`, `ccd-spawn-split.test.ts`, `ccd-route-argv.test.ts` and `ccdargv-dec-parity.test.ts` are not edited (HARD BOUNDARY, R19).
@@ -4454,7 +4454,7 @@ Name these departures and extra pins by slug in the wave-done:
   2. **`cmd_ws_add`.** Append to the line `                        || die "could not find a free slug for $project"; }`. The append is line-neutral. It runs on both the positional-slug path and the `CCD_WS_SLUG`/random path, and before `git -C "$main" fetch origin`.
   3. **`cmd_start`.** Add one line directly after `    id=$(_id "$wrapper" "$project")`, the occurrence inside `cmd_start() {`. A second, identical line in `cmd_stop` is NOT this anchor.
   4. **`cmd_enable`.** Add one line directly above `  _ws_expire_refuse_return "$id" enable`. That puts it below Task 5's `_ws_project_valid "$2"` check, and before `_lc_done enable`.
-  
+
   Then restamp.
 - Create the test `server/test/ccd-id-cap.test.ts`.
 - Not edited: `ccd/session-hook.sh` (its `CCRC_ID_MAX` is only read), `session-hook.test.ts` (its ID_MAX peer case stays as it is), and every other existing test.
