@@ -824,6 +824,8 @@ function parentReroller(db, ictx, onlyIfChanged = false) {
   // A child row that is gone (a damaged store: node_children.child_id is RESTRICT, and doctor --repair keeps an existing FK
   // violation as its baseline) is skipped, so the parent is rebuilt fail-closed from the children that remain and storedNode
   // is never asked for a row that is not there. D-4610 (history-reroll-from-redacted-children), H-155.
+  // Residual (H-217): a parent whose EVERY node_children row is dangling has no kid left, is not rebuilt (this answers false)
+  // and keeps any cut prefix it stored; only a reparse of its subtree or a recovery heals it.
   const kidsOf = db.prepare('SELECT nc.child_id AS child_id FROM node_children nc JOIN nodes n ON n.node_id = nc.child_id WHERE nc.node_id = ? ORDER BY nc.ord');
   const setParent = db.prepare('UPDATE nodes SET gist = ?, topics = ?, earliest_ms = ?, latest_ms = ?, src_chars = ?, '
     + 'desc_count = ?, desc_chars = ?, directive_flag = ?, capped = ?, parser_version = ? WHERE node_id = ?');
@@ -1149,11 +1151,13 @@ export function reparseFailClosed(db, ictx, nodeIds) {
 
 /** The most leaves one call of the late-pair fast path (rederiveGistsFor) re-derives, one refreshLeaf each and one
  *  re-roll over all of them: the size of a recovery batch. A test lowers it with ictx.rederiveLeafMax. The overflow gets a
- *  field rewrite and an ancestor re-roll, and only `reparse` or a recovery's reindex re-derives it. A residual (H-152): an
- *  overflow leaf whose own gist was cut inside the value before the pair was known keeps that prefix in nodes.gist, nodes_fts
- *  and its ancestors' re-rolled gists, because redactField matches whole runs (and, under layer 4, stretches of the belt width
- *  K or more), so a prefix shorter than K is masked by neither the field rewrite nor the belt; it stays until that
- *  re-derivation, as a pruned leaf's does.
+ *  field rewrite and an ancestor re-roll, and only `reparse` or a recovery's reindex re-derives it. A residual (H-152, bound
+ *  stated in full by H-216): an overflow leaf whose own gist was cut at NATIVE_GIST_MAX, or one of whose topics was cut at
+ *  TOPIC_CHARS (capTopics), inside a value before the pair was known keeps that prefix in nodes.gist or nodes.topics, in
+ *  nodes_fts and in its ancestors' re-rolled fields, because redactField matches whole runs. Under layer 4 the belt masks
+ *  such a prefix only when it is at least the unit's belt width K AND the value seeds belt windows; a value made only of
+ *  one-case letters (or a digit-free one-case window), or a unit past BELT_GRAMS_MAX, seeds none, so for it a prefix of ANY
+ *  length up to len-1 survives. It stays until that re-derivation, as a pruned leaf's does.
  *  D-4611 (history-late-pair-fast-path-bounded) */
 const REDERIVE_LEAF_MAX = 64;
 
@@ -1199,8 +1203,11 @@ export function rederiveGistsFor(db, ictx, values, budget, slice) {
   // The overflow is rewritten in place, fail-closed, with no summary read, and its ancestors are re-rolled below like every
   // other rewritten node's. Once rewritten it no longer phrase-matches, so no later call reaches it: only `reparse` or a
   // recovery's reindex re-derives it from its summary, and the belt's node step finishes whatever the search could not find.
-  // Residual (H-152): an overflow leaf whose own gist was cut inside the value before the pair was known keeps a prefix shorter
-  // than the belt width K in nodes.gist, nodes_fts and its ancestors' re-rolled gists, until that re-derivation.
+  // Residual (H-152, H-216): an overflow leaf whose own gist was cut at NATIVE_GIST_MAX, or one of whose topics was cut at
+  // TOPIC_CHARS, inside the value before the pair was known keeps that prefix in nodes, nodes_fts and its ancestors' re-rolled
+  // fields until that re-derivation. The belt masks it only when it is at least the belt width K AND the value seeds belt
+  // windows; a value of one-case letters only (or a digit-free one-case window), or a unit past BELT_GRAMS_MAX, seeds none, so
+  // a prefix of any length up to len-1 survives for it.
   const all = [...reparse].sort();
   const max = Number.isSafeInteger(ictx.rederiveLeafMax) && ictx.rederiveLeafMax > 0 ? ictx.rederiveLeafMax : REDERIVE_LEAF_MAX;
   const leaves = all.slice(0, max);
@@ -1270,6 +1277,9 @@ export function beltNodesStep(db, ictx, slice) {
     // order (a child before its parent; nodes are never deleted and every rewrite is an UPDATE), before the dirty check below
     // so that check reads the re-rolled fields. A generation that opens therefore heals a prefix a past cut left in a
     // parent, which a field rewrite can never mask, and rewrites no parent whose re-roll is what it stores (D-4610).
+    // Residual (H-217): the test compares gist, topics and refs only, so a parent whose rollup text is unchanged keeps
+    // desc_chars counted from the child's raw gist (recall's cost estimate is off by |V| minus the mark until a reparse) and
+    // keeps its parser_version stamp.
     for (const n of batch) {
       if (n.kind !== 'condensed' || !rerollIfChanged(n.node_id)) continue;
       const now = fieldsOf.get(n.node_id);

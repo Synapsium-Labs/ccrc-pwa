@@ -51,7 +51,7 @@ interface SweepRecover {
   newBudget(now?: () => number, limits?: { maxMs?: number; maxBytes?: number; chunkBytes?: number }): Record<string, unknown>;
   recoverPass(db: DatabaseSync, ctx: Record<string, unknown>, failedAtStart: number): Promise<number>;
   journalRedactPairs(P: ReturnType<typeof historyPaths>, storeId: string):
-    { pairs: Array<{ len: number; sha256: string; t: number }>; foreign: string[]; unreadable: string[] };
+    { pairs: Array<{ len: number; sha256: string; t: number }>; foreign: string[]; unreadable: string[]; nonRegular: string[] };
   makeIngestCtx(home: string, homes: readonly string[], nowMs: number, ids: unknown): Record<string, unknown>;
   journalStoreDirs(home: string): Array<{ storeId: string; heads: string }>;
   runOpPass(parsed: { op: string; opArgs: string[] }, deps: Record<string, unknown>, out: (line: string) => void): Promise<number>;
@@ -655,6 +655,7 @@ describe('the recovery step (W1-B2 Task 25; spec §9.14)', () => {
     const got = SW.journalRedactPairs(P, storeId);
     expect(got.foreign, 'only the regular file with a foreign head is foreign').toEqual([`${M}.feedbee2.jsonl`]);
     expect([...got.unreadable].sort(), 'a link, a directory and a FIFO are data the read could not see').toEqual([`${M}.feedbee3.jsonl`, `${M}.feedbee4.jsonl`, `${M}.feedbee5.jsonl`]);
+    expect([...got.nonRegular].sort(), 'H-219: and are named apart, so the refusal can give them their own remedy').toEqual([`${M}.feedbee3.jsonl`, `${M}.feedbee4.jsonl`, `${M}.feedbee5.jsonl`]);
   });
 
   it('mergeJournalByTime: two writers\' items merge by t, each file\'s own order kept, a tie to the earlier file; one file, and none, pass through (R-T25-1; planReplay and the executor share it)', () => {
@@ -1510,14 +1511,22 @@ function rrSetUserVersion(file: string, v: number): void {
   const db = new DatabaseSync(file);
   try { db.exec(`PRAGMA user_version = ${v}`); } finally { db.close(); }
 }
+/** H-220: a handle on `file` that may edit sqlite_master. node:sqlite's defensive flag defaults to true on Node 24, where even
+ *  writable_schema ON refuses the sqlite_master UPDATE ("table sqlite_master may not be modified", measured on 24.14.1, the workers'
+ *  Node). The `defensive` constructor option and the enableDefensive method are both v25.1+ API (backported to 24.x), newer than the
+ *  22.16.0 floor (R-X-INTX), so the constructor takes no such option and the method is called only when it exists: a 22.16 build has
+ *  no API and relies on SQLite's own default, which is not defensive. */
+function rrOpenUndefensive(file: string): DatabaseSync {
+  const db = new DatabaseSync(file);
+  const maybe = db as unknown as { enableDefensive?: (active: boolean) => void };
+  if (typeof maybe.enableDefensive === 'function') maybe.enableDefensive(false);
+  return db;
+}
 /** A copy of a backup whose integrity_check fails while every table still reads. The entries_ts index's
  *  definition is rewritten so its stored keys no longer match its table (integrity_check then answers "row N
- *  missing from index entries_ts" rows rather than throwing, and meta still reads). The handle is opened with
- *  `defensive: false`: node:sqlite's defensive flag defaults to true on Node 24, where even writable_schema ON
- *  refuses the sqlite_master UPDATE ("table sqlite_master may not be modified", measured on 24.14.1, the workers'
- *  Node); 22.16.0 has no such option and is not defensive, so the flag changes nothing there. */
+ *  missing from index entries_ts" rows rather than throwing, and meta still reads). The handle is rrOpenUndefensive's. */
 function rrCorruptIndex(file: string): void {
-  const db = new DatabaseSync(file, { defensive: false });
+  const db = rrOpenUndefensive(file);
   try {
     db.exec('PRAGMA writable_schema = ON');
     db.prepare("UPDATE sqlite_master SET sql = ? WHERE name = 'entries_ts'").run('CREATE INDEX entries_ts ON entries(ts_ms, transcript_pk)');
@@ -1528,9 +1537,11 @@ function rrCorruptIndex(file: string): void {
 }
 
 /** H-186: a backup whose meta reads but whose FTS5 index cannot be built: blobs_fts_config is gone from the schema, so
- *  PRAGMA integrity_check throws `vtable constructor failed: blobs_fts` (SQLITE_ERROR, no 'no such table' in the text). */
-function rrBreakFts(file: string): void {
-  const db = new DatabaseSync(file, { defensive: false });
+ *  PRAGMA integrity_check throws `vtable constructor failed: blobs_fts` (SQLITE_ERROR, no 'no such table' in the text).
+ *  H-220: answers whether the edit took. A build that refuses the writable_schema edit (defensive mode) leaves the copy intact, and
+ *  the caller skips its row; when the edit took, the CONTROL below stays a hard assertion. */
+function rrBreakFts(file: string): boolean {
+  const db = rrOpenUndefensive(file);
   try {
     db.exec('PRAGMA writable_schema = ON');
     db.prepare("DELETE FROM sqlite_master WHERE name = 'blobs_fts_config'").run();
@@ -1538,7 +1549,9 @@ function rrBreakFts(file: string): void {
   } finally { db.close(); }
   let thrown = '';
   try { rrFileDb(file, (d) => d.prepare('PRAGMA integrity_check').all()); } catch (e) { thrown = String((e as Error).message); }
-  expect(thrown, 'CONTROL: the fixture really makes integrity_check throw a SQLITE_ERROR').toMatch(/vtable constructor failed/);
+  const took = /vtable constructor failed/.test(thrown);
+  if (took) expect(thrown, 'CONTROL: the fixture really makes integrity_check throw a SQLITE_ERROR').toMatch(/vtable constructor failed/);
+  return took;
 }
 
 describe('C57: doctor --restore, the drill (W1-B2 Task 27)', () => {
@@ -1683,7 +1696,7 @@ describe('C57: doctor --restore, the drill (W1-B2 Task 27)', () => {
     expect((health?.fail ?? []).map((f) => f.word), st.stdout).toContain('recovery-stalled');
   }, 1.5 * HEAVY);
 
-  it('each refusal answers restore-refused and writes nothing; CLAUDECODE and a piped stdin refuse at both doors; free space one byte short refuses and one byte over proceeds', async () => {
+  it('each refusal answers restore-refused and writes nothing; CLAUDECODE and a piped stdin refuse at both doors; free space one byte short refuses and one byte over proceeds', async (ctx) => {
     const { box, storeId } = rrBuilt('ccrc-hist-c57h-');
     const P = rrRoot(box);
     const name = rrBackup(box);
@@ -1717,13 +1730,26 @@ describe('C57: doctor --restore, the drill (W1-B2 Task 27)', () => {
     fs.copyFileSync(path.join(P.backups, name), path.join(P.backups, '20200101T000001Z.db'));
     rrSetUserVersion(path.join(P.backups, '20200101T000001Z.db'), 2);
     expect(await refused(['20200101T000001Z.db'], 'a newer user_version'), 'a refusal decideBind makes over the staged copy').toContain(OPERATOR);
+    // H-223 (D-4599): a backup at user_version 0 holds its store_id and passes integrity, but openStore would refuse it (exit 5) after the link, and
+    // restore and rebuild both refuse a present history.db: refused here, nothing linked (`refused` compares the whole snapshot).
+    fs.copyFileSync(path.join(P.backups, name), path.join(P.backups, '20200101T000004Z.db'));
+    rrSetUserVersion(path.join(P.backups, '20200101T000004Z.db'), 0);
+    const v0 = await refused(['20200101T000004Z.db'], 'a user_version below 1');
+    expect(v0, 'H-223: the refusal names the version').toContain('user_version 0');
+    expect(v0, 'a refusal decideBind makes over the staged copy').toContain(OPERATOR);
+    expect(fs.existsSync(P.dbFile), 'H-223: nothing was linked').toBe(false);
     fs.copyFileSync(path.join(P.backups, name), path.join(P.backups, '20200101T000002Z.db'));
     rrCorruptIndex(path.join(P.backups, '20200101T000002Z.db'));
     expect(await refused(['20200101T000002Z.db'], 'a failed integrity_check'), 'a refusal decideBind makes over the staged copy').toContain(OPERATOR);
     // H-186: a SQLITE_ERROR that is no missing table (the index cannot be built) is still a verdict on the copy: exit 2, never 'internal error'.
     fs.copyFileSync(path.join(P.backups, name), path.join(P.backups, '20200101T000003Z.db'));
-    rrBreakFts(path.join(P.backups, '20200101T000003Z.db'));
-    expect(await refused(['20200101T000003Z.db'], 'an index that cannot be built'), 'a refusal decideBind makes over the staged copy').toContain(OPERATOR);
+    // H-220: a row cannot be skipped from the middle of a test (ctx.skip ends the test), so a build that refuses the writable_schema edit
+    // omits only this row and annotates why; the in-process classifier row (errcode 1 below) still pins the verdict there.
+    if (rrBreakFts(path.join(P.backups, '20200101T000003Z.db'))) {
+      expect(await refused(['20200101T000003Z.db'], 'an index that cannot be built'), 'a refusal decideBind makes over the staged copy').toContain(OPERATOR);
+    } else {
+      await ctx.annotate('H-186 row omitted: this node:sqlite build refuses writable_schema edits (defensive mode); the in-process classifier row still pins errcode 1');
+    }
     // planCopy: free must exceed the threshold plus the backup's size (§6.11).
     const fsSize = 100 * 2 ** 30;
     const threshold = floorThreshold(fsSize);
@@ -1915,8 +1941,12 @@ describe('C57: doctor --restore, the drill (W1-B2 Task 27)', () => {
       const idBefore = fs.readFileSync(P.storeId, 'utf8');
       const r = await shimOnPty(box, ['--op', 'restore', name]);
       expect(lastRc(r.out), `${kind}\n${r.out}`).toEqual({ rc: 2, reason: 'restore-refused' });
-      const line = r.out.replace(/\r/g, '').split('\n').find((l) => l.includes('journal file(s) could not be read for redact pairs:'));
-      expect(line !== undefined && line.includes(entry), `${kind}: the entry is named as a file that could not be read`).toBe(true);
+      const line = r.out.replace(/\r/g, '').split('\n').find((l) => l.includes(entry));
+      expect(line !== undefined, `${kind}: a line names the entry`).toBe(true);
+      // H-219: no chmod cures a link or a directory (journalEnds opens O_NOFOLLOW), so the line says what the entry is and what really cures it.
+      expect(line, `${kind}: the entry is named as no regular file`).toContain('not regular files');
+      expect(line, `${kind}: the real remedy, by the operator`).toContain('the operator puts the regular month file back, or removes the entry');
+      expect(line, `${kind}: the chmod remedy is not offered for it`).not.toContain('makes them readable');
       expect(fs.existsSync(P.dbFile), `${kind}: nothing was linked`).toBe(false);
       expect(rrNames(P.dbDir).filter((n) => n.startsWith('.history.db.restore.')), `${kind}: the staged copy was removed`).toEqual([]);
       expect(fs.readFileSync(P.storeId, 'utf8'), `${kind}: store.id is unchanged`).toBe(idBefore);
@@ -2238,6 +2268,29 @@ describe('C58: doctor --rebuild, its store_id and its refusals (W1-B2 Task 28)',
       noStore(id);
     }
   }, 2 * HEAVY);
+
+  it('H-218 (D-4605): store.id present and no --store-id: a store\'s own month file replaced by a link is rebuild-refused, never skipped, and no store is minted; CONTROL: the intact directory rebuilds', async () => {
+    {
+      const kind = 'link';                                          // a directory would break the suite's own journalRecords reader, which the refusal helper calls
+      const { box, storeId } = rrBuilt(`ccrc-hist-c58mk-${kind}-`);
+      const P = rrRoot(box);
+      rrLose(box, { binding: false, journal: false });
+      expect(fs.readFileSync(P.storeId, 'utf8').trim(), 'store.id survives the loss').toBe(storeId);
+      const dir = path.join(P.journalDir, storeId);
+      // Another writer's month file (the box's own writer's must stay appendable: a lock-take that cannot journal answers journal-unwritable).
+      const month = `${new Date().toISOString().slice(0, 7)}.feedbee9.jsonl`;
+      fs.symlinkSync(path.join(dir, fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')).sort()[0]!), path.join(dir, month));
+      expect(SW.journalStoreDirs(box.home).map((d) => `${d.storeId}=${d.heads}`), `${kind}: recovery lists the directory foreign`).toEqual([`${storeId}=foreign`]);
+      const out = await refused(box, [], `${kind}: the marker's own directory holds an entry that is no regular file`);
+      expect(out, `${kind}: the refusal names the entry`).toContain('no regular file');
+      expect(fs.existsSync(P.dbFile), `${kind}: no DB was minted`).toBe(false);
+    }
+    const { box, storeId } = rrBuilt('ccrc-hist-c58mk-ok-');
+    rrLose(box, { binding: false, journal: false });
+    const r = await shimOnPty(box, ['--op', 'rebuild']);
+    expect(lastRc(r.out), `CONTROL\n${r.out}`).toEqual({ rc: 0 });
+    rrExpectBound(box, storeId, 'rebuild', null);
+  }, 3 * HEAVY);
 
   it('H-179 (D-4605): in one directory a month file whose head names another store outranks a file that cannot be read, in either order; a link outranks an unreadable file and is outranked by the disagreement', async (ctx) => {
     if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file

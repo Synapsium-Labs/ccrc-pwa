@@ -178,7 +178,7 @@ const NODE_COLS = ['node_id', 'session_pk', 'epoch_seq', 'kind', 'depth', 'statu
 
 function nodeLine(rc, n, level, show) {
   const id = show(n.node_id);
-  const gist = typeof n.gist === 'string' && n.gist !== '' ? redactForDisplay(n.gist, rc.pairIdx).replace(/\s+/g, ' ').trim() : '';
+  const gist = typeof n.gist === 'string' && n.gist !== '' ? foldOneLine(redactForDisplay(n.gist, rc.pairIdx)).trim() : '';
   const body = gist === '' ? '(no gist)' : recallEnvelope({ src: 'node', id, ts: n.earliest_ms ?? null, role: n.kind, text: gist });
   return `${'  '.repeat(level + 1)}${id} ${n.kind} depth=${n.depth} ${isoOf(n.earliest_ms)}..${isoOf(n.latest_ms)} ${body}`;
 }
@@ -530,7 +530,7 @@ function hitSnippet(rc, hit, terms) {
   if (b === undefined) return '';
   if (b.z === null) return `content pruned on ${b.pruned_ms === null ? '?' : new Date(b.pruned_ms).toISOString().slice(0, 10)}`;
   const plain = blobPlainText(b.z, hit.via === 'sidecar', rc.pairIdx, Number(b.raw_len));
-  return snippetLine(displaySnippet(plain, terms, rc.pairIdx).replace(/\s+/g, ' '));
+  return snippetLine(foldOneLine(displaySnippet(plain, terms, rc.pairIdx)));
 }
 
 /** The longest sidecar name any read verb prints. */
@@ -678,7 +678,7 @@ function renderHits(rc, pool, termsOf, a, page, deps = {}) {
       const shown = pre.get(g) ?? g;
       text = `── leaf ${shown} ${iso(n?.earliest_ms ?? null)} → ${iso(n?.latest_ms ?? null)}`;
       if (n !== undefined && n.gist !== null) {
-        const gist = redactForDisplay(n.gist, rc.pairIdx).replace(/\s+/g, ' ').trim();
+        const gist = foldOneLine(redactForDisplay(n.gist, rc.pairIdx)).trim();
         const cut = snippetLine(gist);
         text += `\n  ${recallEnvelope({ src: 'node', id: shown, ts: n.latest_ms, role: null, text: cut })}`;
       }

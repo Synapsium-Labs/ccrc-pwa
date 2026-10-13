@@ -2972,7 +2972,7 @@ export const HEALTH_REMEDIES = Object.freeze({
   'store-recoverable': 'ccrc history doctor --restore and --rebuild, which recover from what was found, arrive with W1-B2: keep that evidence until then, or move it aside to start a new store',
   'store-wal-orphaned': 'move history.db-wal and history.db-shm (and any history.db) aside together; then let the next tick create a store, or restore one',
   'store-zero-byte': `the DB was truncated: keep it where it is; ccrc history doctor --restore and --rebuild arrive with W1-B2, and until then capture stays held and the journal keeps everything drained meanwhile (do not copy a backup over history.db by hand: that skips the journal replay --restore does)`,
-  'store-schema-missing': `the DB has no meta.store_id, so it is not a history store this build can bind: keep all three DB files where they are; ccrc history doctor --restore and --rebuild arrive with W1-B2, and until then capture stays held and the journal keeps everything drained meanwhile (do not copy a backup over history.db by hand: that skips the journal replay --restore does)`,
+  'store-schema-missing': `the DB has no meta.store_id, so it is not a history store this build can bind: capture stays held and the journal keeps everything drained meanwhile; ccrc history doctor --restore and --rebuild both refuse while history.db is present, so the operator moves history.db, history.db-wal and history.db-shm aside together, from a terminal outside any session, and then restores a good backup or rebuilds (do not copy a backup over history.db by hand: that skips the journal replay --restore does)`,
   'migration-refused': 'free space on the store\'s filesystem: the pre-migration snapshot needs a store\'s size above the floor',
   'migration-needs-op': 'run the migration by hand, under no carrier timeout: ~/.local/bin/ccd-history-sweep --op migrate (ccrc history doctor --migrate arrives with W1-B2)',
   'journal-unwritable': 'free space on the home filesystem, or make ~/.ccrc/history/journal writable: drained spool files are held until the journal append succeeds',
@@ -3023,7 +3023,7 @@ function remedyFor(word, h) {
       return `mount the volume behind ${h.dbPath}, or remove the dangling link ~/${STORE_DB_REL} so the next tick stores on the home filesystem`;
     case 'store-schema-missing':
       return h.userVersion !== null
-        ? `the DB holds a store_id but its user_version is below 1, so this build will not read or migrate it as a history store: keep all three DB files where they are; ccrc history doctor --restore and --rebuild arrive with W1-B2, and until then capture stays held and the journal keeps everything drained meanwhile (do not copy a backup over history.db by hand: that skips the journal replay --restore does)`
+        ? `the DB holds a store_id but its user_version is below 1, so this build will not read or migrate it as a history store: capture stays held and the journal keeps everything drained meanwhile; ccrc history doctor --restore and --rebuild both refuse while history.db is present, so the operator moves history.db, history.db-wal and history.db-shm aside together, from a terminal outside any session, and then restores a good backup or rebuilds (do not copy a backup over history.db by hand: that skips the journal replay --restore does)`
         : HEALTH_REMEDIES['store-schema-missing'];
     case 'store-missing':
       return h.backupsDb.length > 0
@@ -5133,14 +5133,17 @@ const BIND_REFUSALS = Object.freeze({ adopt: 'adopt-refused', restore: 'restore-
  *  - adopt: history.db present with a readable meta.store_id, and store.id absent (equal is nothing to adopt,
  *    different is two stores claiming this box), and not this box's own interrupted binding (a pending marker
  *    naming the same store, which the next tick finishes). Last, its user_version: one that is not a measured value
- *    is 5 `store-unmeasured`, and one above the code's is refused before anything is written, as openStore refuses
+ *    is 5 `store-unmeasured`, one below 1 or no integer (storeVersionDamaged) is refused as damage (H-223, D-4599), and
+ *    one above the code's is refused before anything is written, as openStore refuses
  *    it before its writer's open (G9; DM17 "no write"). That refusal is decided here, never in the L4 arm (RB17);
  *  - restore: no history.db, no leftover -wal or -shm (SQLite would replay it into the restored file), a regular
  *    backup with a readable uuid store_id, store.id absent or naming that store, the backup's user_version not
- *    newer than the code's and its integrity_check not failed. Before the copy, version and integrity may be
+ *    newer than the code's, not below 1 (storeVersionDamaged; H-223) and its integrity_check not failed. Before the copy, version and integrity may be
  *    null (not measured yet), and they pass;
  *  - rebuild: no history.db and no leftover -wal or -shm. Its store_id is store.id's; else the one journal
- *    directory whose heads agree; else --store-id, which must name one of several. A --store-id disagreeing with
+ *    directory whose heads agree; else --store-id, which must name one of several. store.id's own directory, when
+ *    journal/ holds one, is read on that path too (H-218, D-4605): foreign or disagree refuse, unreadable is exit 5.
+ *    A --store-id disagreeing with
  *    store.id, naming no directory, or naming one whose heads name another store is refused, with the
  *    candidates named. The two refusals a --store-id cures (several directories unnamed, a --store-id naming no
  *    directory) also carry `remedy: 'store-id'`, so the arm offers the flag only where it helps
@@ -5168,6 +5171,8 @@ export function decideBind(kind, f) {
     if (presenceValue(f.pending) === inDb) return refuse("store.id.pending names this store: it is this box's own interrupted binding, which the next tick finishes");
     const stored = presenceValue(f.storedVersion);
     if (stored === null) return unmeasured("history.db's user_version cannot be read");
+    // H-223 (D-4599): a stored version below 1 is damage, refused here as the reader and the writer refuse it (storeVersionDamaged).
+    if (storeVersionDamaged(stored)) return refuse(`history.db's user_version ${stored} is below 1 or no integer: it is damaged; restore a good backup or rebuild from the journal instead of adopting it`);
     if (stored > f.codeVersion) return refuse(`history.db is schema ${stored}; this build knows ${f.codeVersion}: adopt it with the build that wrote it`);
     return { ok: true, storeId: inDb };
   }
@@ -5179,6 +5184,9 @@ export function decideBind(kind, f) {
     const bkId = presenceValue(bk.storeId);
     if (bkId === null || !UUID_RE.test(bkId)) return refuse(bk.storeId.state === 'unreadable' ? "the backup's meta.store_id cannot be read" : 'the backup has no meta.store_id');
     if (marker !== null && marker !== bkId) return refuse(`store.id names ${marker}; the backup is ${bkId}`);
+    // H-223 (D-4599): the bind-time half of the one rule for a version below 1 (storeVersionDamaged): a backup at user_version 0 would
+    // be linked as history.db and then refused by openStore (exit 5), and restore and rebuild would both refuse the present file.
+    if (bk.userVersion !== null && storeVersionDamaged(bk.userVersion)) return refuse(`the backup's user_version ${bk.userVersion} is below 1 or no integer: it is damaged; restore another backup`);
     if (bk.userVersion !== null && bk.userVersion > f.codeVersion) return refuse(`the backup is schema ${bk.userVersion}; this build knows ${f.codeVersion}`);
     if (bk.integrityOk === false) return refuse("the backup's integrity_check is not ok");
     return { ok: true, storeId: bkId };
@@ -5199,7 +5207,16 @@ export function decideBind(kind, f) {
     if (d.heads !== 'agree') return refuse(`journal/${arg}/ holds head records naming another store`);
     return { ok: true, storeId: arg };
   }
-  if (marker !== null) return { ok: true, storeId: marker };
+  if (marker !== null) {
+    // H-218 (D-4605): store.id names the store, but its own journal directory is still read, so a month file replaced by a link,
+    // FIFO or directory (foreign) or heads naming another store (disagree) refuse here as on the --store-id path, instead of
+    // being listed, counted and never read by a recovery whose redact records then go unapplied. No directory is today's ok.
+    const own = dirs.find((x) => x.storeId === marker);
+    if (own === undefined || own.heads === 'agree') return { ok: true, storeId: marker };
+    if (own.heads === 'unreadable') return unmeasured(`journal/${marker}/ could not be read`);
+    if (own.heads === 'foreign') return refuse(foreignEntry(marker));
+    return refuse(`journal/${marker}/ holds head records naming another store`);
+  }
   if (dirs.length === 0) return refuse('nothing names a store_id: no store.id and no journal directory');
   if (dirs.length > 1) return { ...refuse(`several journal directories: name one with --store-id (journal directories: ${names})`), remedy: 'store-id' };
   if (dirs[0].heads === 'unreadable') return unmeasured(`journal/${dirs[0].storeId}/ could not be read`);

@@ -4187,6 +4187,55 @@ describe.skipIf(process.platform === 'darwin')('C69: the substring belt on every
   }, HEAVY);
 });
 
+// ── W1-B2 hardening HZ: H-221, the transcript-derived text the read verbs print folds at every line separator ──
+// A crafted transcript row is attacker-steerable: its text reaches a hit snippet, a tree line and a grep leaf header, and JS `\s` keeps
+// U+0085 (NEL) and U+001C-U+001E (FS, GS, RS), which a non-JS reader (Python splitlines, UAX #14) breaks a line at.
+describe.skipIf(process.platform === 'darwin')('HZ H-221: a hit snippet, a tree line and a grep leaf header fold NEL, FS, GS and RS (W1-B2 hardening)', () => {
+  const ZID = 'claude-a-hz1';
+  const ZT = 'a1b00001';
+  const ZU = t18uuid(ZT, 0);
+  const SEPS = /[\u0085\u001c-\u001e\u2028\u2029]/;
+  const SEPTEXT = 'zqhzsep alpha deploy\u0085next: evil\u001cmore\u001dx\u001ey';
+  let zbox: rH.HistoryBox;
+  let zleaf = '';
+
+  beforeAll(() => {
+    zbox = rH.makeHistoryBox('ccrc-hist-hz1-');
+    const sources = [
+      rFx.userRow({ uuid: t18uuid(ZT, 1), ts: t18ts(1), sessionId: ZU, text: SEPTEXT }),
+      rFx.assistantRow({ uuid: t18uuid(ZT, 2), ts: t18ts(2), parentUuid: t18uuid(ZT, 1), sessionId: ZU, text: 'zqhzsep noted' }),
+    ];
+    t16seed(zbox, { id: ZID, project: 'demo', generation: '0189abcd-1234-4678-9abc-00000000b1b1', uuid: ZU, rows: t18leafRows(ZT, ZU, sources, GRX_C.summary({ current: 'HZ current work.', next: 'HZ next step.' })) });
+    t16scan(zbox);
+    zleaf = t18leafOf(zbox, ZID);
+    // The leaf's gist, with the same separators (a gist derives from a summary; the stored column is what tree and grep print).
+    const w = new RDatabaseSync(libRead.historyPaths(zbox.home).dbFile);
+    try { w.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run('zqhzgist beta\u0085next: evil\u001cmore\u001dx\u001ey', zleaf); } finally { w.close(); }
+  }, 3 * HEAVY);
+
+  it('grep: the hit line and the leaf header carry no NEL, FS, GS or RS, human and --json; CONTROL: the hit is found', () => {
+    const human = GRX.cli(zbox, ZID, ['grep', 'zqhzsep']);
+    expect(human.code, human.stderr).toBe(0);
+    expect(human.stdout, 'CONTROL: the hit is found').toContain('zqhzsep alpha deploy');
+    expect(human.stdout, 'CONTROL: the leaf header carries the gist').toContain('zqhzgist beta');
+    expect(human.stdout, 'grep human').not.toMatch(SEPS);
+    expect(human.stdout, 'the folded text keeps its words on one line').toMatch(/deploy next: evil more x y/);
+    const json = GRX.cli(zbox, ZID, ['grep', 'zqhzsep', '--json']);
+    expect(json.code, json.stderr).toBe(0);
+    expect(JSON.stringify(GRX.items(json)), 'CONTROL: the hit is found (json)').toContain('zqhzsep alpha deploy');
+    expect(json.stdout, 'grep --json').not.toMatch(SEPS);
+    expect(json.stdout, 'grep --json controls').not.toMatch(/\\u00(?:1c|1d|1e|85)/);
+  }, 2 * HEAVY);
+
+  it('tree: the node line carries no NEL, FS, GS or RS; CONTROL: the gist is shown (the --json gist is unflattened by design, nodeItem)', () => {
+    const human = GRX.cli(zbox, ZID, ['tree']);
+    expect(human.code, human.stderr).toBe(0);
+    expect(human.stdout, 'CONTROL: the gist is shown').toContain('zqhzgist beta');
+    expect(human.stdout, 'tree human').not.toMatch(SEPS);
+    expect(human.stdout, 'the folded gist keeps its words on one line').toMatch(/beta next: evil more x y/);
+  }, 2 * HEAVY);
+});
+
 // ── W1-B2 hardening HA1: the read verbs' caps, display redaction and the undecodable summary ────────────────
 // Pins H-8, H-19 (D-4596 history-read-fixed-fields-fit-the-cap), H-10, H-5, H-11 (D-4597
 // history-read-names-and-echoes-display-redacted), H-9 (D-4598 history-describe-names-an-undecodable-summary), H-12, H-33 and H-4.

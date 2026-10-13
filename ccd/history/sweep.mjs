@@ -2241,7 +2241,8 @@ function* fileLines(path, start) {
  *  - `unreadable`: a name it cannot open or read (journalListing's `unreadable`), a link, socket, FIFO or directory at a month
  *    name (its `nonRegular`: a store's own month file moved away and replaced by a link is data this read cannot see, and
  *    recovery skips it unhealed), and any listed file whose read failed part-way. Its data is not known, so a pair only
- *    it holds may be missing.
+ *    it holds may be missing. `nonRegular` names the link, socket, FIFO and directory entries among them, a subset of
+ *    `unreadable` (H-219): no chmod cures them, so the restore's refusal gives them their own remedy.
  *  A pair is a few dozen bytes and redact records are
  *  rare, so the answer is small; the read is one pass over the journal, under the restore's lock. */
 export function journalRedactPairs(P, storeId) {
@@ -2261,7 +2262,7 @@ export function journalRedactPairs(P, storeId) {
     }
     pairs.push(...found);   // a file read part-way still yields the pairs it gave: a pair can only mask more
   }
-  return { pairs, foreign: listing.foreign.filter((n) => !listing.nonRegular.includes(n)), unreadable };
+  return { pairs, foreign: listing.foreign.filter((n) => !listing.nonRegular.includes(n)), unreadable, nonRegular: [...listing.nonRegular] };
 }
 
 /** One replay group's lines from position `at`.
@@ -6926,7 +6927,16 @@ export async function restoreArm(home, P, args, deps, out) {
       // and under D-4592 the step's index phase fails its chunk rather than read an unreadable file, so a pair only
       // that file holds would be served unmasked from the restored blobs. Refuse; the finally removes the copy.
       // A FOREIGN file is not refused: it is no file of this store's, no readability cures it, and recovery skips it.
-      out(`history-sweep: restore-refused: ${journalPairs.unreadable.length} journal file(s) could not be read for redact pairs: ${journalPairs.unreadable.join(', ')}; the operator makes them readable, from a terminal outside any session, and runs the restore again`);
+      // H-219: a link, socket, FIFO or directory at a month name is refused too, and the chmod remedy cannot cure it (journalEnds
+      // opens O_NOFOLLOW: ELOOP whatever the mode), so it has its own clause and its own remedy; the chmod clause keeps the rest.
+      const notRegular = journalPairs.nonRegular;
+      const unreadableOnly = journalPairs.unreadable.filter((n) => !notRegular.includes(n));
+      if (unreadableOnly.length > 0) {
+        out(`history-sweep: restore-refused: ${unreadableOnly.length} journal file(s) could not be read for redact pairs: ${unreadableOnly.join(', ')}; the operator makes them readable, from a terminal outside any session, and runs the restore again`);
+      }
+      if (notRegular.length > 0) {
+        out(`history-sweep: restore-refused: ${notRegular.length} journal entr${notRegular.length === 1 ? 'y' : 'ies'} at a month-file name are not regular files: ${notRegular.join(', ')}; the operator puts the regular month file back, or removes the entry, from a terminal outside any session, and runs the restore again`);
+      }
       abortRestore(staged);
       staged = null;
       return { rc: EXIT.REFUSED, reason: 'restore-refused' };

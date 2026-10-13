@@ -3101,7 +3101,9 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     for (const [what, text] of texts) {
       const verbs = text.match(/ccrc history (?:doctor --[a-z]+|prune)/g) ?? [];
       named += verbs.length;
-      if (verbs.length > 0) expect(text, `${what} names ${verbs.join(', ')} without saying it arrives with W1-B2`).toMatch(/arrives? with W1-B2/);
+      // H-224: --restore and --rebuild ship in this PR; a remedy may name only those, if it states their real path (history.db moved aside together).
+      const shippedOnly = verbs.length > 0 && verbs.every((x) => /--(?:restore|rebuild)$/.test(x)) && text.includes('aside together');
+      if (verbs.length > 0 && !shippedOnly) expect(text, `${what} names ${verbs.join(', ')} without saying it arrives with W1-B2`).toMatch(/arrives? with W1-B2/);
       expect(text, `${what} names the export writer's update as the action`).not.toMatch(/update (?:this box )?to a build with the export writer/);
     }
     expect(named, 'the scan found no verb to check: the pin would pass on anything').toBeGreaterThan(5);
@@ -3135,6 +3137,12 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     const bound = healthLib.deriveHealth(base({ exit: 5, reason: 'store-schema-missing', userVersion: null })).fail[0]!;
     expect(bound.detail, 'CONTROL: the binding refusal keeps its words').toContain('holds no meta.store_id');
     expect(bound.remedy).toBe(healthLib.HEALTH_REMEDIES['store-schema-missing']);
+    // H-224: both verbs ship, and both refuse while history.db is present, so the remedy states the real path, by the operator.
+    for (const [what, t] of [['the v0 remedy', v0.remedy], ['the binding remedy', bound.remedy]] as const) {
+      expect(t, `${what} names the real path`).toContain('aside together');
+      expect(t, `${what} names the operator`).toContain('the operator');
+      expect(t, `${what} no longer says the verbs are still to come`).not.toContain('arrive with');
+    }
   });
   it('export-overdue tells the operator what a B1 build can do: keep the store and raise cleanupPeriodDays (FR3-d)', () => {
     const r = healthLib.HEALTH_REMEDIES['export-overdue']!;
@@ -4748,6 +4756,38 @@ describe("decideBind: the binding verbs' preconditions, unreadable never read as
     expect(ok.ok ? null : 'refused', 'CONTROL: an agreeing directory is not refused').toBeNull();
   });
 
+  it('H-218 (D-4605): rebuild with store.id present and no --store-id reads the marker\'s own directory: foreign and disagree are exit 2 rebuild-refused, unreadable is exit 5, agree and no directory keep the ok', () => {
+    const marked = (heads: 'agree' | 'disagree' | 'foreign' | 'unreadable') =>
+      facts({ storeId: v(S), journalStoreDirs: [S], journalDirs: [{ storeId: S, heads }] });
+    const foreign = libOps.decideBind('rebuild', marked('foreign'));
+    expect(foreign, 'foreign').toMatchObject({ ok: false, rc: 2, reason: 'rebuild-refused', detail: `journal/${S}/ holds an entry at a month-file name that is no regular file (a link, socket, FIFO or directory)` });
+    expect(foreign.ok ? null : foreign.remedy, 'no --store-id cures a foreign entry').toBeUndefined();
+    const disagree = libOps.decideBind('rebuild', marked('disagree'));
+    expect(disagree, 'disagree').toMatchObject({ ok: false, rc: 2, reason: 'rebuild-refused', detail: `journal/${S}/ holds head records naming another store` });
+    expect(libOps.decideBind('rebuild', marked('unreadable')), 'unreadable').toMatchObject({ ok: false, rc: 5, reason: 'store-unmeasured', detail: `journal/${S}/ could not be read` });
+    expect(libOps.decideBind('rebuild', marked('agree')), 'CONTROL: agree').toEqual({ ok: true, storeId: S });
+    expect(libOps.decideBind('rebuild', facts({ storeId: v(S) })), 'CONTROL: the marker names no directory').toEqual({ ok: true, storeId: S });
+    expect(libOps.decideBind('rebuild', facts({ storeId: v(S), journalStoreDirs: [T], journalDirs: [{ storeId: T, heads: 'foreign' }] })), "CONTROL: another store's directory is not the marker's").toEqual({ ok: true, storeId: S });
+  });
+
+  it('H-223 (D-4599): restore refuses a measured backup version below 1 or no integer, and adopt refuses a stored one; an unmeasured version and a version of 1 keep their handling', () => {
+    for (const bv of [0, -1, 1.5]) {
+      const r = libOps.decideBind('restore', facts({ backup: backup({ userVersion: bv }) }));
+      expect(r, `restore at ${bv}`).toMatchObject({ ok: false, rc: 2, reason: 'restore-refused' });
+      if (!r.ok) expect(r.detail, `names the version ${bv}`).toContain(String(bv));
+    }
+    const a = libOps.decideBind('adopt', facts({ ...adoptable, storedVersion: ver(0) }));
+    expect(a, 'adopt at 0').toMatchObject({ ok: false, rc: 2, reason: 'adopt-refused' });
+    if (!a.ok) expect(a.detail).toContain('0');
+    expect(libOps.decideBind('restore', facts({ backup: backup({ userVersion: 1 }) })), 'CONTROL: restore at 1').toEqual({ ok: true, storeId: S });
+    expect(libOps.decideBind('adopt', facts({ ...adoptable, storedVersion: ver(1) })), 'CONTROL: adopt at 1').toEqual({ ok: true, storeId: S });
+    expect(libOps.decideBind('restore', facts({ backup: backup({ userVersion: null }) })), 'CONTROL: unmeasured').toEqual({ ok: true, storeId: S });
+    expect(libOps.decideBind('restore', facts({ backup: backup({ userVersion: 2 }) })), 'CONTROL: newer keeps its own refusal')
+      .toMatchObject({ ok: false, rc: 2, reason: 'restore-refused', detail: 'the backup is schema 2; this build knows 1' });
+    expect(libOps.decideBind('adopt', facts({ ...adoptable, storedVersion: ver(2) })), 'CONTROL: adopt newer keeps its own refusal')
+      .toMatchObject({ ok: false, rc: 2, reason: 'adopt-refused' });
+  });
+
   it('a kind outside BIND_KINDS is a programming error', () => {
     expect(() => libOps.decideBind('import' as 'adopt', facts())).toThrow(TypeError);
   });
@@ -6284,7 +6324,10 @@ describe('C43: no ccd/history module prepares SELECT * (W1-B2 Task 17; the serve
    *  H-206: a balanced `${...}` interpolation (braces counted, so a nested one is whole) is replaced by `0` and a
    *  single-quoted SQL literal inside a SELECT list is skipped, so `SELECT ${selectColumns(rc.version, 'nodes', [...])}, n.*`
    *  (the codebase's shape) and `SELECT a, 'x' AS k, e.*` are seen. Still not seen: a `"` or a backtick inside the list,
-   *  a brace inside a quoted string in an interpolation, and a SELECT written in a single-quoted JS string. */
+   *  a brace inside a quoted string in an interpolation, and a SELECT written in a single-quoted JS string.
+   *  H-222: dropping an interpolation also HIDES a star select inside one (`${c ? 'WHERE x IN (SELECT * FROM y)' : ''}`) and a stray
+   *  `'${'` swallows the code to the enclosing brace, so every pattern also runs over the comment-stripped code as it is, and a pattern
+   *  answers the longer of its two lists (the two forms spell one hit differently, so a union by text would count it twice). */
   const dropInterpolations = (src: string): string => {
     let out = '';
     for (let i = 0; i < src.length; i += 1) {
@@ -6302,15 +6345,21 @@ describe('C43: no ccd/history module prepares SELECT * (W1-B2 Task 17; the serve
     return out;
   };
   const starSelects = (src: string): string[] => {
-    const code = dropInterpolations(src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1'));
-    return [
+    const stripped = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');
+    const patterns = [
       // a star right after SELECT, SELECT ALL or SELECT DISTINCT, bare or qualified
       /\bSELECT\s+(?:(?:ALL|DISTINCT)\s+)?(?:[A-Za-z_][A-Za-z0-9_]*\.)?\*/gi,
       /\bRETURNING\s+(?:[A-Za-z_][A-Za-z0-9_]*\.)?\*/gi,
       // a star after a comma inside a SELECT list, up to the next double quote, backtick or `;`, stepping over a
       // single-quoted literal (COUNT(*) is `(*`, so it is not one)
       /\bSELECT\b(?:[^;`'"]|'[^']*')*?,\s*(?:[A-Za-z_][A-Za-z0-9_]*\.)?\*/gi,
-    ].flatMap((re) => [...code.matchAll(re)].map((m) => m[0]));
+    ];
+    const dropped = dropInterpolations(stripped);
+    return patterns.flatMap((re) => {
+      const raw = [...stripped.matchAll(re)].map((m) => m[0]);
+      const without = [...dropped.matchAll(re)].map((m) => m[0]);
+      return raw.length > without.length ? raw : without;
+    });
   };
 
   it('CONTROL: the scan sees a star select on one line and across a line break, and none inside a comment', () => {
@@ -6338,6 +6387,14 @@ describe('C43: no ccd/history module prepares SELECT * (W1-B2 Task 17; the serve
     expect(starSelects('db.prepare("SELECT a, \'x\' AS k, e.* FROM e")'), 'after a quoted literal').toHaveLength(1);
     expect(starSelects("db.prepare(`SELECT ${selectColumns(rc.version, 'nodes', ['node_id'], rc.schema)} FROM nodes n`)"), 'no star').toEqual([]);
     expect(starSelects('db.prepare("SELECT a, \'x\' AS k, b * 2 AS c FROM e")'), 'a product after a literal').toEqual([]);
+  });
+
+  it("CONTROL (H-222): the scan sees a star select INSIDE an interpolation, and one after a stray '${' that swallows the rest of the code", () => {
+    expect(starSelects("db.prepare(`SELECT a FROM x ${c ? 'WHERE x IN (SELECT * FROM y)' : ''}`)"), 'a star inside an interpolation').toHaveLength(1);
+    expect(starSelects('db.prepare(`SELECT a FROM x ${c ? `JOIN (SELECT * FROM y) q` : \'\'}`)'), 'the nested-backtick JOIN form').toHaveLength(1);
+    expect(starSelects("const x = '${'; db.prepare('SELECT * FROM y')"), "a stray '${' hides what follows it").toHaveLength(1);
+    expect(starSelects("db.prepare(`SELECT a FROM x ${c ? 'WHERE x IN (SELECT a FROM y)' : ''}`)"), 'no star inside the interpolation').toEqual([]);
+    expect(starSelects("const x = '${'; db.prepare('SELECT a FROM y')"), "no star after a stray '${'").toEqual([]);
   });
 
   it('every ccd/history/*.mjs names its columns', () => {
