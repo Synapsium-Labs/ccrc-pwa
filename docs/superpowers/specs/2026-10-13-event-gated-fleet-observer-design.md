@@ -1,6 +1,6 @@
 # Event-gated fleet observer: one tmux control client decides when each supervisor ticks (design)
 
-**Status:** DRAFT rev 0 — for operator review on #387; build gated on the diet (plan D)
+**Status:** APPROVED by the operator on 2026-10-13 (#393). Every open decision listed below takes its recommendation unless the operator rules otherwise; stage 3b's attach to a fleet's tmux server and each flip still need their own operator approval under the SAFETY rules. Build is gated on the diet (plan D).
 - **Citations** are to `origin/main` `0d0ea592`. Every code citation names its function, constant or file. Line
   numbers are hints and are written `≈:N`.
 - **Measurements** come from the read-only #387 investigation:

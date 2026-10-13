@@ -1,6 +1,6 @@
 # Supervisor tick diet: one observation per tick, no subshell on the hot path (design)
 
-**Status:** DRAFT rev 1 — for operator review on #387. No review lens has read it yet. The issue promises that the design is posted there before any code lands.
+**Status:** APPROVED by the operator on 2026-10-13 (#393). Every open decision listed below takes its recommendation unless the operator rules otherwise; stage 3b's attach to a fleet's tmux server and each flip still need their own operator approval under the SAFETY rules. (Was: DRAFT rev 1 — for operator review on #387.)
 - **Rev 1 (2026-10-13)** does four things to the rev 0 draft written for #387, which is not in the tree:
   - it replaces every placeholder with a number the ledger issued, and defines each one (D-4960 to D-4966, §13);
   - it records the operator's three rulings of 2026-10-13, among them the tick memo, which is ruled behaviour-unchanged with `TICK_MEMO_MAX_MS=1000` (§2);
