@@ -1480,7 +1480,7 @@ Code citations are to `77c11245`. They are hints, so locate code by content.
   - **The leftovers in `~/.cc-tmp`:**
     - `ccrc-pwa-swift-hollow`'s empty, unwitnessed leaf;
     - the foreign entries in `~/.cc-tmp`, measured 2026-10-06 at 18 directories and 105 loose files, about 6.66 GiB.
-  - **`expoAI-assistant-calm-mesa`** (branch proven absent; HEAD and every reflog commit on `origin/main`; clean
+  - **`project-a-calm-mesa`** (branch proven absent; HEAD and every reflog commit on `origin/main`; clean
     tree) reclaims on its own once wave 6's gone-branch pin is live. Until then the operator may recreate the branch
     at HEAD to reclaim it sooner.
 
@@ -3575,3 +3575,83 @@ retired: `collect-many-word-type-unpinned-by-a-red` (see `collect-many-word-type
 `ccdargv-dec-parity.test.ts:161`, the base lines before Task 1 added its type import. Measured at the tip, the plain-token
 `wsCollect` calls in `ws-collect-wiring.test.ts` stand at `:26`, `:27` and `:40`, the token's one cast at its declaration,
 `:16`; and `ccdargv-dec-parity.test.ts`'s cast stands inline at `:162`. Neither file's lines were edited to make them hold.
+
+## 17. Rulings, 2026-10-12 (the path-identity W0 spec) — binding; they AMEND sections 1–16
+
+R71 and R90 send a list of items to a "path-identity follow-up". That follow-up is designed in
+`docs/superpowers/specs/2026-10-12-path-identity-design.md`, merged as #360 (`837a099c0`) on 2026-10-12. The operator
+merged it naming no exception, so the recommended option of each row in its decision tables is a working ruling; both
+programme ledgers' 2026-10-12 18:51 entries list them. The operator can change any of them before the wave that builds it
+dispatches. This section carries the spec's W0 duties into this contract: the programme's shape, the amendments to R31,
+R49 and R82, the reach of a blank admin entry, and the corrections review 388 asked for. Where this section and the spec
+differ, the spec's design governs and this section is corrected.
+
+- **R93 — the programme's shape.**
+  - The follow-up is a programme of its own, `path-identity`, with its own ledger
+    (`docs/superpowers/programs/path-identity.md`). It continues THIS contract: its rulings land here as new sections.
+  - Its waves, in order: W1a, the server's id gate (run 399); W1b, ccd's id fix, after workspace-lifecycle wave 6 (#351)
+    merges; W2, absences and mounts; W3, worktree path identity. W4 is not scheduled (PG1 B), so the spec's section 3.7
+    residuals stand.
+  - **The collector's Settings switch is CCR-15's wave 10** (run 400; SW6 A), because it changes what arms this
+    programme's destructive lane. R96 is its rule.
+  - Every `ccd/ccd` edit waits for #351 and then goes in series. Anything the waves share with `ws-expire` needs
+    workspace-lifecycle's coordinator's consent, per wave (PG2 A).
+  - R90's carries "to the path-identity follow-up" are placed, item by item, in the spec's section 7 inventory.
+
+- **R94 — R31 amended: process state may refuse.**
+  - R31's last bullet now reads: "Process state never grants deletion consent; it may only refuse." The rest of R31
+    stands.
+  - W3 adds one refusal-only cwd probe (PI4 D). It runs inside the existing post-kill bounded wait and again at step 4,
+    and `ws-expire`'s probe moves onto the same helper. A process is in use when today's string compare OR the dev:ino
+    ancestry of its `/proc/<pid>/cwd` meets the child. A process is skipped only on ENOENT or ESRCH of its own cwd link
+    or stat file, or on the ruled EACCES exception; any other failure in the walk answers unmeasured, never "not
+    inside". Darwin keeps `ws-expire`'s `lsof` arm.
+  - R31's "left to a follow-up programme" (an alias re-pointed after entry, a spelling through a bind mount) is W3's
+    entry identity, `$REG/<id>.workdirid` (PI1 B, PI2 L1, PI3 B). It is add-only: it may hold a row, and it never
+    releases one.
+  - The two remedies that say "re-point the link" contradict R31, and W3 rewords them (PI7).
+
+- **R95 — R49 amended: a same-uid mount crossing is live, not latent.**
+  - R49's "A bind mount of the same file system is a stated residual; only root can make one" is half false on the
+    measured box. A same-uid process can make a FUSE mount in ccd's namespace, though not a bind (with unprivileged user
+    namespaces blocked), and the design must hold either way.
+  - `rm -rf --one-file-system` skips a directory on another device, so it skips a FUSE mount inside a leaf. `git worktree
+    remove --force` has no device test, so it crosses a FUSE or sshfs mount inside a child or an archived worktree.
+  - W2 asks the mount question (`_ws_collect_mounts_clear`) inside `_ws_leaf_remove`, before the leaf is normalised and
+    again directly before `rm`, and before every standing nested-checkout and child forced removal (TR5 C). An answer of
+    1 or 2 fails as `worktree-remove-failed` and keeps the tree. Darwin skips both classes, behind mutation pins.
+  - After W2 the mount question catches a mount of either kind at or under the path, a same-device bind included. What
+    stays a stated residual is the collector's witness device test, which cannot see a same-device bind of `~/.cc-tmp`
+    itself (spec section 3.7).
+
+- **R96 — R82 amended: the collector has two arms, then one (wave 10).**
+  - **Two arms.** The lane is live when the legacy marker stands and its journaled latch is unset, OR when Settings
+    stores exactly `live` for the fleet node measured on the current connection (SW1 A). Pause, an unlistable registry, a
+    changed connection epoch and a missing capability beat both arms.
+  - **Then one.** Once the operator removes the marker by hand and a successful same-epoch listing proves it absent,
+    the server records the marker's retirement through the generation journal, and from then on Settings alone arms
+    the lane. A re-created marker is reported and ignored.
+  - **The proof of state.** The singleton row and the server-owned generation journal must agree exactly
+    (`journalMaximum == rowGeneration`); the untouched seed with no journal is the only bootstrap. Any disagreement, and
+    any unreadable or malformed journal, is safety-stopped. A whole-state restore that rolls the database and the journal
+    back together is outside the proof: after one, the operator raises the cleanup pause and makes a fresh confirmed
+    Settings transition before allowing Live.
+  - **Off before the latch** answers `409 marker-still-controls` (SW2, option 3). **Live while sign-in is dark** answers
+    `403 sign-in-unarmed` (SW4, option 2). A stored Live re-arms after a version change only once the same node is
+    measured on the new connection (SW7 A). The lane flips on the effective boolean, never on its source (SW3).
+  - **Unchanged from R82:** nothing in the tree writes the marker. The switch writes only its `coord.db` row and its
+    journal. The route is session-gated and consults no box token. No skill names the route or the marker. Arming
+    stays the operator's.
+
+- **R97 — the reach of a blank admin entry, stated (PI9 K1).** A blank admin entry in a repository holds every child on
+  the box at rung 9 while a gone row of that repository exists (review 378; `ccd/ccd`'s rung 9, located by content). It
+  fails closed: it costs time, never a removal. Entry identity does not shrink it, because the entry field never releases a
+  gone row (spec section 4.5, step 2). Narrowing it by name is rejected, because git renames entries.
+
+- **R98 — corrections.**
+  - **§16 as built, Task 5.** In "and three one-clause docstrings beyond the three ruled, indented at fix round 2", two of
+    those docstrings, the watcher's, were indented at fix round 2, not three (review 388, F2).
+  - **R90's SECURITY carry** ("gates `readRegistryMeasured`'s ids … refusing a leading `-`") is widened by SEC2 B to the
+    registry readers, `knownId`, `POST /api/runs`, every stored-row argv seam and the two executor seams (spec section
+    2.3). The predicate refuses a leading `.` as well as a leading `-`.
+  - **Citations.** The spec cites lines at `28e8dc1b2`. Every plan that builds it locates code by content.
