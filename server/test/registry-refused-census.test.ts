@@ -3,16 +3,20 @@
 // with a REFUSED row: a listed `.uuid` whose id is not a registry id.
 // `readRegistryMeasured` names such a row in `refused` and leaves it out of
 // `records`. The classification is a comment tag, `[registry-refused:<word>]`,
-// within the three lines above the call. The suite goes red on any of these:
+// within the three lines above the call. Four tags (`stale` at the fleet route
+// and the ws cold start, `reports` at `listProjects`, `refuses` at dispatch's
+// pre-spawn read) name what the site does when the registry cannot be listed;
+// with a refused row those sites omit it (the pre-spawn read counts it as
+// already present). The suite goes red on any of these:
 // - a new call with no tag;
 // - a tag with no call;
 // - a word outside the vocabulary;
 // - a site that moves to another function or route.
 //
 // `unplaced` describes no behaviour. It marks a caller whose handling of a
-// refused row is not built yet. Later tasks of this wave replace each one
-// with its placed word and pin the behaviour, and the last of them leaves
-// none. `wrapper` is reserved for `readRegistry`'s own read.
+// refused row is not built yet, and no site carries it: every caller has its
+// placed word, and the census pins that none is left. `wrapper` is reserved
+// for `readRegistry`'s own read.
 //
 // Tag comments in server/src carry no digit. registry.test.ts's census-claim
 // parser joins every comment line of a file and reads a number followed,
@@ -115,7 +119,7 @@ const allSites = (): Site[] => [...(sitesScanned ??= sourceTexts().flatMap(({ fi
 const key = (s: Site): string => `${s.file} | ${s.enclosing} | ${s.reader} | ${s.word}`;
 const where = (s: Site): string => `${s.file}:${s.line}`;
 
-/** The classified set, as the tree stands. Later tasks of this wave place each `unplaced`. */
+/** The classified set, as the tree stands. No site is `unplaced`. */
 const EXPECTED_SITES: readonly string[] = [
   'commands.ts | sessionCommands | readRegistry | knownId',
   'coord/dispatch.ts | dispatchRun | readRegistryMeasured | refuses',
@@ -209,8 +213,8 @@ describe('every registry reader call is classified for refused rows (spec §2.3)
 
 // Path identity W1a, Task 6 (spec §2.3, R19's precedent): `sweepHookStates`'s own registry read is `tests-only`
 // ONLY because `tick()` hands the lane the `records` of its own listing. Pinned here, so a tick that stopped passing
-// them would turn that read into a second, production read without the census above noticing. Task 8 adds
-// `detectDialogs(` to this describe.
+// them would turn that read into a second, production read without the census above noticing. `detectDialogs(`,
+// the other `tests-only` lane, is pinned the same way.
 const TICK_WATCH_TS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../src/watch.ts');
 const TICK_HEAD = 'async tick(): Promise<void> {';
 const TICK_STRINGS = /'(?:\\.|[^\\'\n])*'|"(?:\\.|[^\\"\n])*"|`(?:\\[\s\S]|[^\\`])*`/g;
@@ -335,8 +339,8 @@ describe('Task 7: the migrated readers and the six production assembleFleet call
     expect(words('coord/routes.ts'), 'GET /api/peers, then the claims conflict').toEqual(['reports', 'reports']);
     expect(sitesOf('fleet.ts', 'readRegistry').map(where)).toEqual([]);
     expect(sitesOf('lifecycle.ts', 'readRegistry').map(where)).toEqual([]);
-    expect(sitesOf('server.ts', 'readRegistry'), 'prTasks alone (Task 8 places it)').toHaveLength(1);
-    expect(sitesOf('coord/routes.ts', 'readRegistry'), 'attribution, mail and ack (Task 8 places them)').toHaveLength(3);
+    expect(sitesOf('server.ts', 'readRegistry'), 'prTasks alone, placed knownId').toHaveLength(1);
+    expect(sitesOf('coord/routes.ts', 'readRegistry'), 'attribution, mail and ack, placed raw-name').toHaveLength(3);
     const count = (reader: 'readRegistry' | 'readRegistryMeasured'): number =>
       allSites().filter((s) => s.reader === reader).length;
     expect(count('readRegistry'), 'readRegistry( call sites in server/src').toBe(8);

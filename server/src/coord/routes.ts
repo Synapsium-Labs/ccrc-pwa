@@ -1318,8 +1318,10 @@ export function registerCoordRoutes(
     // checks stand ahead of the review arm, so a review open with a bad
     // `sessionId` answers `bad-session` before that arm refuses any `sessionId`.
     // The project check is a work run's only: a review run's project is the
-    // reviewed run's, compared below. A new row can then never carry a project
-    // ccd could read as a flag to `ws-add`.
+    // reviewed run's, compared below. A new WORK row can then never carry a
+    // project ccd could read as a flag to `ws-add`. A new review row copies the
+    // reviewed run's STORED project, which this check does not read (carried as
+    // `work-run-project-reaches-ws-add-unchecked`).
     if (!isRegistryId(claimedBy)) {
       return reply.code(400).send({ ok: false, error: 'bad-session', detail: 'claimedBy is not a registry id' });
     }

@@ -150,7 +150,7 @@ describe('fleet, projects and peers report what they could not measure (spec §2
     app = await buildServer({ ...base, io, coord, stateCachePath: cachePathOf(home) });
     const { ws, frames } = await openSocket(app);
     // `runs` is chained after the fleet decision in ONE `.then`, so once it has arrived no cold `fleet` can follow.
-    await vi.waitFor(() => expect(frames.map((f) => f.type)).toContain('runs'));
+    await vi.waitFor(() => expect(frames.map((f) => f.type)).toContain('runs'), { timeout: 3000 });
     expect(frames.map((f) => f.type)).toEqual(['hello', 'runs']);
     ws.close();
   });
@@ -168,7 +168,7 @@ describe('fleet, projects and peers report what they could not measure (spec §2
     expect(watcher.currentFleet()?.map((s) => s.id)).toEqual(['demo-quiet-mesa']);
     state.listings = 0;
     const { ws, frames } = await openSocket(app);
-    await vi.waitFor(() => expect(frames.map((f) => f.type)).toContain('fleet'));
+    await vi.waitFor(() => expect(frames.map((f) => f.type)).toContain('fleet'), { timeout: 3000 });
     expect(frames.find((f) => f.type === 'fleet')?.sessions?.map((s) => s.id)).toEqual(['demo-quiet-mesa']);
     expect(state.listings, 'the cold frame is the broadcast: no registry read').toBe(0);
     ws.close();

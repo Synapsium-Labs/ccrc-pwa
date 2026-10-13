@@ -76,8 +76,9 @@ export async function childBindGate(
       return { ok: true };
     }
     // Path identity (spec §2.3): unmeasured, never absent (see the docstring).
-    // Dispatch's stored-id gate masks it on the resume arm. It holds whichever
-    // door reaches it.
+    // Two gates mask it: dispatch's stored-id gate on the resume arm, and
+    // `POST /api/runs`'s open gate, which checks `claimedBy` and `sessionId` as
+    // given before this read. It holds whichever door reaches it.
     case 'bad-id':
       return { ok: false, code: 'spent-unmeasured', detail: 'the session id is not a registry id' };
     default: {

@@ -645,8 +645,8 @@ describe('readSessionRecord', () => {
     const single = await readSessionRecord(localIO, cfg, 'claude-a-MekWarLive');
 
     expect(single).toEqual({ kind: 'found', record: whole.find((r) => r.id === 'claude-a-MekWarLive') });
-    expect(single.kind === 'found' &&single.record.pool).toEqual(['claude', 'claude-a']);
-    expect(single.kind === 'found' &&single.record.lastswap).toBe(1784500000);
+    expect(single.kind === 'found' && single.record.pool).toEqual(['claude', 'claude-a']);
+    expect(single.kind === 'found' && single.record.lastswap).toBe(1784500000);
   });
 
   it('answers {kind:\'absent\'} for an id with no .uuid in the registry, without reading any of its fields', async () => {

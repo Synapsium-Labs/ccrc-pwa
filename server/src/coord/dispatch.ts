@@ -736,9 +736,11 @@ export async function dispatchRun(
     //
     // The adopted arm (child-reclamation spec §5.1): a NULL birth on
     // adoption, deliberately — the workspace `winner` names may be an EARLIER
-    // attempt's, and `dispatch.ts`'s own BEFORE read above tolerates an
-    // unlistable registry as empty, which is what makes such a false-new
-    // "WOULD BE ADOPTED" (§1.5). A null birth is unplaceable, so `childBirthOf`
+    // attempt's. `dispatch.ts`'s own BEFORE read above no longer reads an
+    // unlistable registry as empty (since spec §2.3 it refuses one), but such a
+    // false-new can still be "WOULD BE ADOPTED" (§1.5) through the triggers
+    // that remain: a row the BEFORE read dropped, and an operator `ws-add`
+    // racing a refused dispatch. A null birth is unplaceable, so `childBirthOf`
     // refuses to date any PR row against it, `childBindGate` refuses on any PR
     // evidence, and the close holds rather than guessing which attempt this
     // workspace's history belongs to.

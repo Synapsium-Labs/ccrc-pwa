@@ -27,6 +27,8 @@ const TOKEN = 'f'.repeat(64);
 /** The claimant a reclaim replaces; never planted, so it measures dead. */
 const DEAD = 'demo-coordinator-old';
 const HEIR = 'demo-coordinator-new';
+/** A run's worker: a valid id, planted. */
+const WORKER = 'demo-quiet-mesa';
 
 const OPEN_BODY = { program: 'build4', title: 'Path identity', project: PROJECT,
   wave: 1, waveOf: 3, claimedBy: CLAIMED_BY, homeProject: PROJECT };
@@ -165,6 +167,22 @@ describe('the reclaim door refuses a bad id on either side (spec §2.3)', () => 
     expect(w.coord.runEvents(id).some((e) => e.detail?.startsWith('reclaim:'))).toBe(false);
     expect(w.listings()).toBe(0);
     expect(calls).toEqual([]);
+  });
+
+  it('the abandon door that 409 names closes a run whose stored claimedBy is --actor: 200 failed', async () => {
+    // The promise the reclaim door's detail makes: abandon never reads `claimedBy`, so a programme whose claimant
+    // fails the predicate still has a door. Its worker is a valid id, released by name; the claimant reaches no argv.
+    const home = mkTmp('ccrc-reclaim-id-');
+    seedRow(home, '--actor');
+    seedRow(home, WORKER);
+    const { run, calls } = recorder();
+    const w = await openApp(home, run); app = w.app;
+    const id = storedRun(w.coord, { state: 'working', sessionId: WORKER, claimedBy: '--actor' });
+    const res = await w.app.inject({ method: 'POST', url: `/api/runs/${id}/abandon` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, id, state: 'failed', released: true });
+    expect(okRun(w.coord.run(id))!.state).toBe('failed');
+    expect(calls, 'only the valid worker is named').toEqual([['ws-release', '--session', WORKER]]);
   });
 
   it('the heir --actor answers 400 bad-session, and the stored claimant is unchanged', async () => {
