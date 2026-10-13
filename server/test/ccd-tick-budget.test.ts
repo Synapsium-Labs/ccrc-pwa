@@ -17,9 +17,9 @@
 // does one that removes a fork, until `TICK_BUDGET` holds the measured figure
 // and the PR's departure restates it. `≤` would let an improvement go
 // unrecorded. The budget moves wave by wave, so each wave's PR is green on its
-// own tree and red against the tree before it: `main` at `300aedf8` is the
-// calibration below, W1 lowers it (D-4960, D-4961), W2 (D-4962) and W3 (D-4963)
-// lower it again.
+// own tree and red against the tree before it: `main` at `300aedf8` was the
+// first calibration, W1 lowers it (D-4960, measured below; D-4961), W2
+// (D-4962) and W3 (D-4963) lower it again.
 import { describe, it, expect, afterAll } from 'vitest';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import fs from 'node:fs';
@@ -32,8 +32,11 @@ import {
 } from './tickBudgetHarness.js';
 
 /** Forks and execs per steady tick (ticks 2..N), per fixture. DECLARED ONCE.
- *  Calibrated on `main` at `300aedf8` (macOS, bash 5.3; Linux, bash 5.2: the
- *  same figures). Lowered only by a change that measures the new figure and
+ *  First calibrated on `main` at `300aedf8` (macOS, bash 5.3; Linux, bash 5.2:
+ *  the same figures), every fixture 3 forks and 1 exec above these. W1 Task 3
+ *  (D-4960, the `-k` prime and `declare -F tmux`) lowered each by exactly that,
+ *  MEASURED ON macOS, bash 5.3 ONLY: the Linux figures for this tree are not
+ *  yet measured. Lowered only by a change that measures the new figure and
  *  states it in its PR's departure. */
 const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
   'idle-home': { forks: 171, execs: 80 },

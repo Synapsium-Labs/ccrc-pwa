@@ -19,9 +19,23 @@
 // helpers see it (row c), `cmd_ensure` does not (row b), and nothing the tick
 // forks and execs does (row d). Nothing reads it until W4.
 //
+// EACH HALF OF THE PRIME'S GUARD HAS ITS OWN ROW. `_plat_timeout` tries
+// `timeout`, then `gtimeout` (Homebrew's coreutils installs it g-prefixed), so
+// the guard is `command -v timeout || command -v gtimeout`. A row run on a
+// host's PATH cannot pin either half: a macOS runner with coreutils has both
+// names, and losing one half there still primes through the other. So each
+// stubbed run gets a PATH of links to the externals it needs plus the logging
+// shim under ONE name (or none), and asserts which names that PATH resolves
+// before it asserts anything else.
+//
 // THE MUTATION ROWS (plan Task 3), each measured on the working tree:
 //   delete the pre-loop prime's `if`           -> rows (a), and the budget's kprobe row
-//   drop its `command -v` condition            -> row (a), the no-timeout half
+//   drop its `command -v` condition            -> row (a), no timeout on PATH
+//   drop `|| command -v gtimeout`               -> row (a), gtimeout only
+//   keep only `command -v gtimeout`             -> row (a), timeout only
+//     (the budget-run row (a) and the budget's kprobe row run on the host's
+//     PATH: measured GREEN under this mutation on macOS with Homebrew's
+//     coreutils, which has `gtimeout`; the timeout-only row is the pin there)
 //   `declare -F tmux` -> `false`                -> row (e)
 //   `local CCD_TICK_CTX=1` -> `export …`        -> row (d)
 //   the `local` moved above the pre-flight     -> row (b)
@@ -62,22 +76,37 @@ const run = (home: string, snippet: string, front?: string): SpawnSyncReturns<st
 const lines = (file: string): string[] =>
   (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '').split('\n').filter(Boolean);
 
-/** A `timeout` that logs its argv to `$HOME/seam-timeout`, drops `-k N` and the
- *  duration, and execs the rest: `_plat_timeout`'s `-k` probe then prints its
- *  bytes, and the cache reads `yes` on every platform. */
+/** The names `_plat_timeout` looks a deadline binary up by, in its order. */
+type TimeoutName = 'timeout' | 'gtimeout';
+
+/** A `timeout` (or `gtimeout`) that logs its name and argv to
+ *  `$HOME/seam-timeout`, drops `-k N` and the duration, and execs the rest:
+ *  `_plat_timeout`'s `-k` probe then prints its bytes, and the cache reads `yes`
+ *  on every platform. */
+const writeTimeoutShim = (dir: string, name: TimeoutName): void => {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, name), '#!/bin/sh\nprintf \'%s %s\\n\' "${0##*/}" "$*" >> "$HOME/seam-timeout"\n'
+    + '[ "$1" = -k ] && shift 2\nshift\nexec "$@"\n', { mode: 0o755 });
+};
 const plantTimeout = (home: string): string => {
   const dir = path.join(home, 'seam-bin');
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'timeout'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/seam-timeout"\n'
-    + '[ "$1" = -k ] && shift 2\nshift\nexec "$@"\n', { mode: 0o755 });
+  writeTimeoutShim(dir, 'timeout');
   return dir;
 };
 
-/** A PATH holding neither `timeout` nor `gtimeout`: links to the externals this
- *  file's stubbed supervisor runs, and nothing else. */
-const NO_TIMEOUT_PATH = `__nt="$HOME/no-timeout-bin"; mkdir -p "$__nt"
-  for __c in bash date head mv rm tail tr wc; do __p=$(command -v "$__c") && ln -s "$__p" "$__nt/$__c"; done
-  PATH=$__nt`;
+/** A stubbed run's PATH: the logging shim under one of `_plat_timeout`'s names,
+ *  or under none. */
+type PathShape = TimeoutName | 'none';
+const SHAPES: readonly PathShape[] = ['timeout', 'gtimeout', 'none'];
+/** The PATH a stubbed run gets: `$HOME/seam-path`, holding links to the
+ *  externals the stubbed supervisor runs (`printf` and `true` are what the
+ *  shim execs for the probe and the prime; `type -P`, because `command -v`
+ *  answers a builtin's bare name) and, from the node side, the shape's shim.
+ *  Neither of the host's own deadline binaries is on it. */
+const SEAM_PATH = `__nt="$HOME/seam-path"; mkdir -p "$__nt"
+  for __c in bash date head mv printf rm tail tr true wc; do __p=$(type -P "$__c") && ln -s "$__p" "$__nt/$__c"; done
+  PATH=$__nt
+  for __b in timeout gtimeout; do command -v "$__b" >/dev/null 2>&1 && printf 'on-path %s\\n' "$__b" >> "$HOME/seam-log"; done`;
 
 /** The real loop with every pre-loop and tick helper stubbed to write what it
  *  sees to `$HOME/seam-log`, in order. `_plat_timeout` is WRAPPED, not
@@ -85,7 +114,7 @@ const NO_TIMEOUT_PATH = `__nt="$HOME/no-timeout-bin"; mkdir -p "$__nt"
  *  reads is the one the real call left. The pre-flight probe answers live, so
  *  `cmd_ensure` runs; tick 1 answers live; the next probe is the loop's own
  *  `gone` exit. */
-const stubbedSupervise = (noTimeout: boolean): string => `
+const stubbedSupervise = (): string => `
   __src=$(declare -f _plat_timeout); eval "__real_plat_timeout\${__src#_plat_timeout}"
   _plat_timeout() { printf 'plat_timeout %s\\n' "$*" >> "$HOME/seam-log"; __real_plat_timeout "$@"; }
   _svc_enable() { :; }; _reg_set() { :; }; sleep() { :; }
@@ -96,24 +125,29 @@ const stubbedSupervise = (noTimeout: boolean): string => `
   _auto_stale_check() { printf 'cache %s\\n' "\${_CCD_TIMEOUT_K:-unset}" >> "$HOME/seam-log"
     bash -c 'printf "child %s\\n" "\${CCD_TICK_CTX:-unset}"' >> "$HOME/seam-log"; }
   _auto_swap_check() { :; }; _auto_compact_check() { :; }; _route_apply_check() { :; }
-  ${noTimeout ? NO_TIMEOUT_PATH : ''}
+  ${SEAM_PATH}
   cmd_supervise ${ID}`;
 
 interface Stubbed { log: string[]; timeoutArgv: string[]; status: number | null; stderr: string }
-const stubbedRuns = new Map<boolean, Stubbed>();
+const stubbedRuns = new Map<PathShape, Stubbed>();
 /** One stubbed run per PATH shape, shared by every row that reads it. */
-const stubbed = (noTimeout: boolean): Stubbed => {
-  let s = stubbedRuns.get(noTimeout);
+const stubbed = (shape: PathShape): Stubbed => {
+  let s = stubbedRuns.get(shape);
   if (!s) {
     const h = harness();
-    const r = run(h.home, stubbedSupervise(noTimeout), noTimeout ? undefined : plantTimeout(h.home));
+    if (shape !== 'none') writeTimeoutShim(path.join(h.home, 'seam-path'), shape);
+    const r = run(h.home, stubbedSupervise());
     s = {
       log: lines(path.join(h.home, 'seam-log')), timeoutArgv: lines(path.join(h.home, 'seam-timeout')),
       status: r.status, stderr: r.stderr ?? '',
     };
-    stubbedRuns.set(noTimeout, s);
+    stubbedRuns.set(shape, s);
   }
-  // NON-VACUITY: the loop's own exit, after a tick that ran its helpers.
+  // NON-VACUITY: the PATH holds exactly the shape's deadline binary, so the
+  // guard's other half cannot answer for it; and the loop's own exit, after a
+  // tick that ran its helpers.
+  expect(s.log.filter((l) => l.startsWith('on-path ')), 'the deadline binaries this run\'s PATH resolves')
+    .toEqual(shape === 'none' ? [] : [`on-path ${shape}`]);
   expect(s.stderr, `the run did not end through the loop: ${s.stderr.slice(-400)}`).toContain(LOOP_EXIT);
   expect(s.status).toBe(1);
   expect(s.log.filter((l) => l.startsWith('sync ')), 'tick 1 never reached its helpers').toHaveLength(1);
@@ -146,19 +180,24 @@ describe('the `-k` cache is primed once, in the supervisor\'s own shell (D-4960,
     expect(counts[0]!.kprobe, 'the pre-loop: the pre-flight\'s probe, then the prime').toBe(2);
   }, 120_000);
 
-  it('(a) with a `timeout` on PATH the pre-loop calls `_plat_timeout 5 true` once, after `cmd_ensure`, and the tick finds the cache decided', () => {
-    const s = stubbed(false);
-    expect(s.log.filter((l) => l.startsWith('plat_timeout ')), 'the prime').toEqual(['plat_timeout 5 true']);
-    expect(s.log.indexOf('plat_timeout 5 true'), 'the prime runs after the pre-flight\'s `cmd_ensure`')
-      .toBeGreaterThan(s.log.indexOf('ensure unset'));
-    expect(s.log.indexOf('plat_timeout 5 true'), 'the prime runs before the loop')
-      .toBeLessThan(s.log.findIndex((l) => l.startsWith('sync ')));
-    expect(s.log, 'a tick helper reads the cache the prime set in this shell').toContain('cache yes');
-    expect(s.timeoutArgv.filter((a) => a === '-k 1 1 printf ccd-k-ok'), 'the `-k` probe ran once').toHaveLength(1);
-  }, 120_000);
+  // One row per half of the guard: on a PATH with only that name, deleting the
+  // half leaves the guard false, and the row reds on every host.
+  for (const bin of ['timeout', 'gtimeout'] as const) {
+    it(`(a) with only \`${bin}\` on PATH the pre-loop calls \`_plat_timeout 5 true\` once, after \`cmd_ensure\`, and the tick finds the cache decided`, () => {
+      const s = stubbed(bin);
+      expect(s.log.filter((l) => l.startsWith('plat_timeout ')), 'the prime').toEqual(['plat_timeout 5 true']);
+      expect(s.log.indexOf('plat_timeout 5 true'), 'the prime runs after the pre-flight\'s `cmd_ensure`')
+        .toBeGreaterThan(s.log.indexOf('ensure unset'));
+      expect(s.log.indexOf('plat_timeout 5 true'), 'the prime runs before the loop')
+        .toBeLessThan(s.log.findIndex((l) => l.startsWith('sync ')));
+      expect(s.log, 'a tick helper reads the cache the prime set in this shell').toContain('cache yes');
+      expect(s.timeoutArgv.filter((a) => a === `${bin} -k 1 1 printf ccd-k-ok`), `the \`-k\` probe ran once, through \`${bin}\``)
+        .toHaveLength(1);
+    }, 120_000);
+  }
 
   it('(a) with neither `timeout` nor `gtimeout` on PATH there is no prime, and the tick finds the cache undecided', () => {
-    const s = stubbed(true);
+    const s = stubbed('none');
     expect(s.log.filter((l) => l.startsWith('plat_timeout ')), 'a prime with no timeout to probe').toEqual([]);
     expect(s.log).toContain('cache unset');
   }, 120_000);
@@ -178,15 +217,16 @@ describe('the `-k` cache is primed once, in the supervisor\'s own shell (D-4960,
 
 describe('the tick context: dynamically scoped, after the pre-flight, never exported (tick-diet spec §6.2)', () => {
   it('(b) `cmd_ensure` never sees `CCD_TICK_CTX`', () => {
-    expect(stubbed(false).log.filter((l) => l.startsWith('ensure '))).toEqual(['ensure unset']);
+    expect(stubbed('timeout').log.filter((l) => l.startsWith('ensure '))).toEqual(['ensure unset']);
   }, 120_000);
 
   it('(c) a tick helper (`_sync_uuid`) sees `CCD_TICK_CTX=1`', () => {
-    expect(stubbed(false).log.filter((l) => l.startsWith('sync '))).toEqual(['sync 1']);
-    expect(stubbed(true).log.filter((l) => l.startsWith('sync ')), 'with no timeout on PATH too').toEqual(['sync 1']);
+    for (const shape of SHAPES) {
+      expect(stubbed(shape).log.filter((l) => l.startsWith('sync ')), `PATH shape ${shape}`).toEqual(['sync 1']);
+    }
   }, 120_000);
 
   it('(d) a child `bash -c` run from a tick helper does not: the variable is never exported', () => {
-    expect(stubbed(false).log.filter((l) => l.startsWith('child '))).toEqual(['child unset']);
+    expect(stubbed('timeout').log.filter((l) => l.startsWith('child '))).toEqual(['child unset']);
   }, 120_000);
 });
