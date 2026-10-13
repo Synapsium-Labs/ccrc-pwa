@@ -197,7 +197,8 @@ export const SHARED_COMPONENTS: Components = {
 
 /** Open in the external browser (a bare `<a>` in a standalone PWA would try to
  *  navigate the app itself), and render image URLs inline as tap-to-open images,
- *  except a source `isRefusedChatImageSrc` refuses, which stays a plain link. */
+ *  except a source `isRefusedChatImageSrc` refuses, which stays a plain link, or,
+ *  when the url transform left it empty, the image's alt text. */
 export const CHAT_COMPONENTS: Components = {
   ...SHARED_COMPONENTS,
   a({ href, children }) {
@@ -218,6 +219,10 @@ export const CHAT_COMPONENTS: Components = {
   img({ src, alt }) {
     const href = typeof src === 'string' ? src : undefined;
     if (isRefusedChatImageSrc(href)) {
+      // react-markdown's url transform empties a source with an unsafe scheme (`data:`, `javascript:`, ...) before
+      // chat sees it, and `![x]()` has none: such an image shows its alt text as plain text, or nothing, never an
+      // empty link and never the source as written (review 408, F6).
+      if (!href) return alt ? <>{alt}</> : null;
       return (
         <a href={href} target="_blank" rel="noopener noreferrer" onClick={(e) => openExternal(e, href)}>
           {href}

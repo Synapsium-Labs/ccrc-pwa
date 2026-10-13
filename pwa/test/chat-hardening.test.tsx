@@ -569,9 +569,7 @@ describe('T11 review 2-3 (operator ruling): a short message whose tables would d
 });
 
 describe('T11 review Q1 (operator ruling): chat shows an image only when its source is an absolute http(s) URL', () => {
-  // react-markdown's own url transform blanks a data: source before chat sees it, so the refused link has no href.
-  const REFUSED = [['../api/example/x', '../api/example/x'], ['./x.png', './x.png'], ['x.png', 'x.png'],
-    ['data:image/png;base64,AA==', '']] as const;
+  const REFUSED = [['../api/example/x', '../api/example/x'], ['./x.png', './x.png'], ['x.png', 'x.png']] as const;
 
   it.each(REFUSED)('an image with the source %s draws no <img> and renders the ordinary external link', (src, href) => {
     const { container } = assistant(`![a](${src})`);
@@ -582,6 +580,32 @@ describe('T11 review Q1 (operator ruling): chat shows an image only when its sou
     expect(link.getAttribute('target')).toBe('_blank');
     expect(link.getAttribute('rel')).toBe('noopener noreferrer');
     expect(link.className).toBe('');
+  });
+
+  // react-markdown's own url transform empties a source with an unsafe scheme before chat sees it, and `![a]()` has
+  // none; review 408's F6 ruling: such an image renders its alt text as plain text, or nothing with no alt.
+  it.each([
+    ['data:', '![a b](data:image/png;base64,AA==)'],
+    ['javascript:', '![a b](javascript:alert(1))'],
+    ['vbscript:', '![a b](vbscript:x)'],
+    ['an empty source', '![a b]()'],
+  ])('an image whose source the transform empties (%s) renders its alt text as plain text, with no link', (_name, text) => {
+    const { container } = assistant(`before ${text} after`);
+    expect(container.querySelectorAll('img')).toHaveLength(0);
+    expect(container.querySelectorAll('a')).toHaveLength(0);
+    expect(container.querySelector('p')!.innerHTML).toBe('before a b after');
+  });
+
+  it.each([
+    ['data:', '![](data:image/png;base64,AA==)'],
+    ['javascript:', '![](javascript:alert(1))'],
+    ['an empty source', '![]()'],
+  ])('with no alt text, such an image (%s) renders nothing', (_name, text) => {
+    const { container } = assistant(`before ${text} after`);
+    expect(container.querySelectorAll('img, a')).toHaveLength(0);
+    expect(container.querySelector('p')!.innerHTML).toBe('before  after');
+    expect(container.innerHTML).not.toContain('javascript:');
+    expect(container.innerHTML).not.toContain('data:');
   });
 
   it.each(['../api/example/x.png', './x.png', 'x.png'])('a link to the image file %s is not auto-embedded', (href) => {
