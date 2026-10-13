@@ -400,8 +400,8 @@ export interface DeadCoordinatorBreakerMember {
  *  claimant Q that U holds. THE HYPOTHESIS: every id U holds, R holds with at least U's instants, or flagged. At the seed
  *  it holds, because of how U writes (D-4857, D-4916): U marks its typed state dirty, alone, before it changes any anchor,
  *  and turns it clean only in the one transaction that writes its exact held snapshot with every anchor change; a commit
- *  that fails leaves the state dirty, and a mark that fails leaves it clean while U's hold moves on (its anchor changes
- *  pending). A start trusts a stored snapshot ONLY when the state reads `sealed`, which the server's shutdown handler
+ *  that fails leaves the state dirty, and a mark that fails leaves it as the last landed write left it (clean or dirty,
+ *  never sealed) while U's hold moves on (its anchor changes pending). A start trusts a stored snapshot ONLY when the state reads `sealed`, which the server's shutdown handler
  *  writes over a durably clean state with nothing pending, and the first pass of every process unseals it before it can
  *  change anything: so a snapshot older than a lost hold is never trusted, whatever failed, and a restart finds either a
  *  sealed state, which is U's exact hold, or one it seeds conservatively. Over a sealed state R seeds U's own snapshot
@@ -706,9 +706,11 @@ export type DeadCoordinatorReport =
  *  crashed passes, which DELAYS an act, and the backoff (`nextAskAt`, `attempts`), which can bring an abandon back
  *  SOONER after a stuck or thrown act (review 381, F10). The breaker's hold is not in this entry: it survives a restart in
  *  the typed state (review 381, F1; D-4857), which a pass marks dirty before it changes any anchor and turns clean only
- *  with the exact snapshot, so a restart finds the last complete hold or a dirty state (save after a dirty mark that
- *  failed, until the next dirty mark lands: §12's residual (7)), and a dirty, absent or unreadable state seeds the
- *  conservative hold and restarts every crashed claimant's hour (review 382, R2; review of D-4857). The lane composes no act on a pass whose commit did not land, so the
+ *  with the exact snapshot, and a start trusts it only when a clean shutdown sealed it (D-4916), so a restart finds either a
+ *  sealed state, the exact last hold, or a state it seeds conservatively (clean but not sealed, dirty, absent or
+ *  unreadable); §12's residual (7), a restart after a dirty mark that failed, is CLOSED by the seal. The conservative seed
+ *  flags every claimant the pass does not release, holds them only when two or more stand unreleased, and restarts every
+ *  crashed claimant's hour (review 382, R2; review of D-4857). The lane composes no act on a pass whose commit did not land, so the
  *  durable state never lags an act; the act is still behind the claimant's re-measure before and after the fleet act. */
 export interface DeadCoordinatorEntry {
   /** Consecutive passes that measured it crashed. */
@@ -939,8 +941,8 @@ export function deadCoordinatorBreakerFeedRow(b: Extract<DeadCoordinatorBreaker,
  *  `absent` (no lane of this release has written it — the deploy that creates the table), `dirty` (a pass marked it
  *  before changing anchors and its commit did not land), `unsealed` (it reads `clean`, but no clean shutdown sealed it: the
  *  last server ended by a kill, a crash or a stop that outlived its timeout, and a start trusts ONLY `sealed`) or
- *  `unreadable` (`reason`: a bounded string, never the row's content). Four causes, four sets of words, one rule: hold
- *  every claimant the pass does not release, flagged. */
+ *  `unreadable` (`reason`: a bounded string, never the row's content). Four causes, four sets of words, one rule: flag
+ *  every claimant the pass does not release; the breaker holds them only when two or more stand unreleased. */
 export type DeadCoordinatorSeedCause =
   | { readonly kind: 'absent' }
   | { readonly kind: 'dirty'; readonly generation: number }

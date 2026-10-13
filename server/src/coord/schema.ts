@@ -1308,10 +1308,10 @@ export const MIGRATIONS: readonly string[] = [
   //     on a row marked dirty before any snapshot landed.
   //   - `writtenAt` is the write-time clock of the last write (epoch ms, the server's clock).
   // NO SEED ROW. An absent row reads as dirty (`CoordStore.deadCoordinatorBreakerState`'s `absent`), so the first pass
-  // after the deploy that creates this table holds every claimant it does not release, flagged, and writes the first
-  // exact snapshot: a database whose lane ran on an older build carries no record of that lane's hold, and an empty
-  // seed would read as "nothing held". Dirty, absent and unreadable all fail shut; nothing clears dirty by comparing
-  // timestamps.
+  // after the deploy that creates this table flags every claimant it does not release (it holds them only when two or more
+  // stand unreleased) and writes the first exact snapshot: a database whose lane ran on an older build carries no record
+  // of that lane's hold, and an empty seed would read as "nothing held". Clean (unsealed), dirty, absent and unreadable
+  // all fail shut; nothing clears dirty by comparing timestamps.
   //
   // A NEW TABLE AND NOTHING ELSE, entry 18's argument: an older build opening a file at `user_version 19` takes rule 3
   // (it warns, reads as-is, migrates nothing) and never names this table, so its runs, mail, claims and ledger work

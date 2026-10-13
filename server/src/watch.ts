@@ -4875,10 +4875,12 @@ export class FleetWatcher {
     const coord = this.deps.coord;
     if (!coord) return { sealed: false, reason: 'no-store' };
     if (this.deadCoordinatorSweeping) return { sealed: false, reason: 'pass-in-flight' };
-    if (!this.deadCoordinatorBreakerLanded || this.deadCoordinatorBreakerGeneration === null) return { sealed: false, reason: 'no-landed-write' };
+    if (!this.deadCoordinatorBreakerLanded) return { sealed: false, reason: 'no-landed-write' };
     if (this.deadCoordinatorBreakerSealed) return { sealed: false, reason: 'already-sealed' };
     if (this.deadCoordinatorAnchorsPending.size > 0) return { sealed: false, reason: 'changes-pending' };
-    if (!this.deadCoordinatorBreakerDurableClean) return { sealed: false, reason: 'not-durably-clean' };
+    // A write DID land (a mark) but no commit has, so no generation is known: the state is not durably clean, and that is the
+    // true reason (review of fix round 5, F3), not `no-landed-write`.
+    if (!this.deadCoordinatorBreakerDurableClean || this.deadCoordinatorBreakerGeneration === null) return { sealed: false, reason: 'not-durably-clean' };
     if (deadCoordinatorBreakerHeldKey(this.deadCoordinatorBreakerHeld) !== this.deadCoordinatorBreakerCommittedKey) return { sealed: false, reason: 'key-mismatch' };
     try {
       const w = coord.sealDeadCoordinatorBreakerState(this.deadCoordinatorBreakerGeneration);
@@ -5073,7 +5075,7 @@ export class FleetWatcher {
       if (c.kind === 'crashed') {
         const supervisedAt = records.find((r) => r.id === id)?.supervisedAt ?? null;
         // A supervisor heartbeat LATER than the anchor is supervision since it began: a new episode, anchored afresh (D-4825).
-        // On the CONSERVATIVE SEED's pass (a state that was dirty, absent or unreadable) no durable anchor is taken as
+        // On the CONSERVATIVE SEED's pass (a state that was clean but not sealed, dirty, absent or unreadable) no durable anchor is taken as
         // continuing: a delete this process's predecessor decided may never have landed, so every crashed claimant's hour
         // restarts at this pass (review of D-4857, item 3). That only delays an act.
         const prev = seedCause !== null ? null : anchors.get(id) ?? null;
@@ -5096,8 +5098,9 @@ export class FleetWatcher {
     if (seedCause === null) {
       held = this.deadCoordinatorBreakerHeld.filter((m) => ids.includes(m.id) && !released.has(m.id));
     } else {
-      // THE CONSERVATIVE SEED (D-4857; review 382, R2): the state was dirty, absent or unreadable, so hold EVERY claimant of
-      // this pass's population that this pass does not release (alive, stopped, deliberate), each FLAGGED `fallback`, with
+      // THE CONSERVATIVE SEED (D-4857; review 382, R2; D-4916): the state was clean but not sealed, dirty, absent or unreadable,
+      // so FLAG every claimant of this pass's population that this pass does not release (alive, stopped, deliberate), each
+      // `fallback` (the breaker HOLDS them only when two or more stand unreleased; one alone has its hour restarted), with
       // every instant and flag a readable snapshot or record still carries for it (a claimant it names nothing for is held
       // at `now`, which is compared with nothing). A flagged member clusters with every other entry whatever the instants
       // (`deadCoordinatorBreaker`, which carries the proof that this never loosens: a wildcard only adds clustered pairs,

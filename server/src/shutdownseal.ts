@@ -7,8 +7,11 @@
 //   2. ask the lane to seal within ONE total bound (`SHUTDOWN_SEAL_BOUND_MS`): the lane awaits the pass in flight, then
 //      writes `sealed` only when every condition holds (`FleetWatcher.sealDeadCoordinatorBreaker`), else writes nothing;
 //   3. say a refusal or a failure in ONE `console.warn('ccrc-server: …')` line, and never throw;
-//   4. exit with today's semantics: remove the handlers and RE-RAISE the same signal, so the process dies of the signal
-//      exactly as it did before this handler existed (systemd, `ccrc update`'s health gate and the watchdog see no change).
+//   4. exit with today's status: remove the handlers and RE-RAISE the same signal, so the process dies of the signal as it did
+//      before this handler existed (systemd, `ccrc update`'s health gate and the watchdog read the same exit). The stop takes
+//      up to the bound longer, and during it only the lane's timer is stopped: a tick in flight can still run the other
+//      lanes' sweeps and the routes keep serving, so an act begun then is cut off by the re-raise, as a SIGKILL would cut it. A
+//      second identical signal during the bound is not handled (the listeners are `once`): it kills at once, with no seal.
 // A handler that waited past its bound would turn a stop into a SIGKILL after systemd's timeout (90 s by default; the unit
 // sets none); the bound is 5 s: a pass in flight asks tmux about a handful of coordinators, one agent round trip each, and
 // the seal itself is one local statement. A pass that outlives it is not awaited and nothing is sealed: the next start seeds

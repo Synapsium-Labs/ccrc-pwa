@@ -30,7 +30,8 @@ const recorder = () => {
     removeListener: (sig, fn) => { if (once.get(sig) === fn) once.delete(sig); events.push(`remove ${sig}`); return host; },
     kill: (pid, sig) => { events.push(`kill ${pid} ${sig}`); return true; },
   };
-  return { host, events, fire: (sig: string) => once.get(sig)?.(), installed: () => [...once.keys()].sort() };
+  return { host, events, // `process.once` removes the listener before it runs, as Node does
+    fire: (sig: string) => { const fn = once.get(sig); once.delete(sig); return fn?.(); }, installed: () => [...once.keys()].sort() };
 };
 const logs = () => {
   const lines: string[] = [];
@@ -97,6 +98,16 @@ describe('installShutdownSeal: the handler\'s order, its bound, and that it neve
     expect(r.events).toContain('kill 4242 SIGTERM');
     expect(Date.now() - t0).toBeLessThan(2000);
     expect(l.lines.filter((x) => x.startsWith('warn') && x.includes('no answer within 40 ms'))).toHaveLength(1);
+  });
+  it('A SECOND SIGNAL during the bound is NOT handled: the listeners are `once`, so after the first fires nothing is installed for it and it reaches the default action (kills at once, no seal) (review of fix round 5, F4)', async () => {
+    const r = recorder();
+    let sealed = 0;
+    installShutdownSeal({ stop: () => {}, sealDeadCoordinatorBreaker: () => { sealed += 1; return new Promise<never>(() => {}); } }, r.host, 40, logs().log);
+    r.fire('SIGTERM');                                   // the first signal: the seal begins and never answers
+    expect(r.installed(), 'SIGTERM\'s listener was consumed by the first signal').toEqual(['SIGINT']);
+    expect(r.fire('SIGTERM'), 'a second identical signal finds no handler').toBeUndefined();
+    expect(sealed, 'one seal attempt, not two').toBe(1);
+    expect(r.events.filter((e) => e.startsWith('kill')), 'and the handler itself has not re-raised yet').toEqual([]);
   });
   it('the bound is well inside systemd\'s default 90 s stop timeout', () => {
     expect(SHUTDOWN_SEAL_BOUND_MS).toBeGreaterThan(0);

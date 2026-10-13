@@ -3460,8 +3460,8 @@ export class CoordStore {
    *   - `absent`: no row: a database no lane of this release has written yet (the deploy that creates the table);
    *   - `unreadable`: a row this build cannot read — an integer it cannot prove, a state word it does not know, a clean
    *     row with no readable snapshot — or a read that threw.
-   *  The last three FAIL SHUT the same way (the lane holds every claimant the pass does not release, flagged), and keep
-   *  their own words. Nothing is cleared by comparing timestamps. Synchronous, like every read on this store. */
+   *  The last four (clean, dirty, absent, unreadable) FAIL SHUT the same way (the lane flags every claimant the pass does
+   *  not release and holds them only when two or more stand unreleased), and keep their own words. Nothing is cleared by comparing timestamps. Synchronous, like every read on this store. */
   deadCoordinatorBreakerState(): DeadCoordinatorBreakerStateRead {
     try {
       const row = this.db.prepare(

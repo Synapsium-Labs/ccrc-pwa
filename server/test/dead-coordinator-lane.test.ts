@@ -2068,6 +2068,16 @@ describe('the seal: a clean shutdown is trusted, an unclean one is not (D-4916)'
     expect(f.watcher().sealDeadCoordinatorBreakerNow()).toEqual({ sealed: false, reason: 'key-mismatch' });
     expect(isSealed(f)).toBe(false);
   });
+  it('SEAL REFUSED with its TRUE reason (review F3): a conservative start whose dirty mark LANDED and whose commit failed has landed a write — the state is dirty, so the reason is `not-durably-clean`, never `no-landed-write`', async () => {
+    const f = await fixture({ breakerState: 'clean' });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const restore = failSql(f, /^UPDATE dead_coordinator_breaker_state SET generation = \?/);
+    await f.pass();
+    restore();
+    expect(stateOf(f)).toMatchObject({ kind: 'dirty' });
+    expect(f.watcher().sealDeadCoordinatorBreakerNow()).toEqual({ sealed: false, reason: 'not-durably-clean' });
+    expect(stateOf(f), 'and nothing was written').toMatchObject({ kind: 'dirty' });
+  });
   it('SEAL REFUSED, no landed write: a process that has written nothing seals nothing — the state it found stands', async () => {
     const fresh = await fixture();
     expect(fresh.watcher().sealDeadCoordinatorBreakerNow(), 'no pass yet').toEqual({ sealed: false, reason: 'no-landed-write' });
