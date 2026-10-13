@@ -1342,6 +1342,19 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - Wave 15 (run 300) is still held by the open PR #351 (`ccd/ccd`).
       - STATUS: fleet and server v0.0.158, newest v0.0.158, backups fleet 172M/server 660M, disk free fleet 217G/work
         volume 244G/server 33G, no anomalies at 20:45.
+    - **2026-10-13 01:52 UTC: v0.0.159 (#377, docs) auto-converged unattended.** No action was taken.
+      - It was published at 01:22:54. The poller noticed it on schedule (the server last booted at 20:44, so it polls
+        near :14 and :44).
+      - The fleet box ran 01:45:18 to 01:47:52, and the server followed by auto at 01:48:56 to 01:49:19, 64 seconds
+        after the fleet. The 01:42 probe read no anomaly: the release was still within the poll window.
+      - Both boxes read `box-token` PASS. Server doctor: 25 passed, 0 warned, 0 failed. Fleet doctor: 33 passed, 7
+        warned, 0 failed. The one new warning is graphify's ("the last graph-sweep pass finished 81 minutes ago"), from
+        the graph sweep, not the update machinery.
+      - v0.0.160 (#321, delegation broker's wave 2) was published at 01:49:47, during this move. It moves at the next poll,
+        about 02:19.
+      - Wave 15 (run 300) is still held by the open PR #351 (`ccd/ccd`).
+      - STATUS: fleet and server v0.0.159, newest v0.0.160, backups fleet 172M/server 663M, disk free fleet 217G/work
+        volume 220G/server 33G, converged at 01:51.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
