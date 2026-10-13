@@ -200,3 +200,58 @@ describe('a tree at the depth cap renders', () => {
     expect(out.match(/<em>/g)).toHaveLength(62);
   });
 });
+
+describe('T11 review 1-5: renderHast calls urlTransform in post() order, on an element with its source children', () => {
+  const MD = [
+    '![a](https://example.com/1.png)',
+    '',
+    '![b](https://example.com/2.png)',
+    '',
+    '- [c](https://example.com/3)',
+    '- [d](https://example.com/4)',
+    '',
+    '> [![e](https://example.com/5.png)](https://example.com/6)',
+    '',
+    '[g](https://example.com/7)',
+  ].join('\n');
+
+  type Call = { url: string; key: string; tag: string; kids: string };
+  /** A recording transform: the call sequence (url, key, tagName) and what `node.children` holds at call time. */
+  const recorder = (calls: Call[]): UrlTransform => (url, key, node) => {
+    const kids = node.children
+      .map((c) => (c.type === 'element' ? `element:${c.tagName}` : `${c.type}:${'value' in c ? c.value : ''}`))
+      .join('|');
+    calls.push({ url, key, tag: node.tagName, kids });
+    return url;
+  };
+
+  const recordBoth = (): { sync: Call[]; worker: Call[] } => {
+    const sync: Call[] = [];
+    const worker: Call[] = [];
+    renderToStaticMarkup(
+      <Markdown remarkPlugins={[remarkGfm, remarkAlerts]} components={CHAT_COMPONENTS} urlTransform={recorder(sync)}>
+        {MD}
+      </Markdown>,
+    );
+    renderToStaticMarkup(
+      renderHast(treeOf(parseMarkdown(MD)), { components: CHAT_COMPONENTS, urlTransform: recorder(worker) }),
+    );
+    return { sync, worker };
+  };
+
+  it('visits the url attributes in document order, unsorted, as <Markdown> does', () => {
+    const { sync, worker } = recordBoth();
+    expect(sync.map((c) => c.url)).toEqual([
+      'https://example.com/1.png', 'https://example.com/2.png', 'https://example.com/3', 'https://example.com/4',
+      'https://example.com/6', 'https://example.com/5.png', 'https://example.com/7',
+    ]);
+    expect(worker.map(({ url, key, tag }) => [url, key, tag])).toEqual(sync.map(({ url, key, tag }) => [url, key, tag]));
+  });
+
+  it('hands the transform an element whose children are the source element\'s, as <Markdown> does', () => {
+    const { sync, worker } = recordBoth();
+    expect(sync.some((c) => c.kids !== '')).toBe(true);
+    expect(sync.find((c) => c.tag === 'a' && c.url.endsWith('/6'))?.kids).toBe('element:img');
+    expect(worker.map((c) => c.kids)).toEqual(sync.map((c) => c.kids));
+  });
+});

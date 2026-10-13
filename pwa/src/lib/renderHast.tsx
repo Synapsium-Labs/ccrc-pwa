@@ -1,7 +1,8 @@
 // A parsed hast tree to React (native Docs reader, W4 Task 4; design 2026-10-01 section 4.10). `renderHast` is
 // react-markdown 10.1.0's `post()` (`react-markdown/lib/index.js`, `function post`) minus its raw step, which
 // `parseMarkdown` has already taken (every `raw` node is a `text` node by the time a tree reaches here), and minus
-// the element filters chat never passes (`allowedElements`, `disallowedElements`, `allowElement`, `skipHtml`).
+// the element filters chat never passes (`allowedElements`, `disallowedElements`, `allowElement`; `skipHtml` belongs
+// to the raw step, which is already taken).
 // What is left, in post()'s order: when `urlTransform` is given, it runs over each `html-url-attributes` key an
 // element carries, exactly as post() calls it; then `toJsxRuntime` with post()'s options. Chat passes
 // react-markdown's own `defaultUrlTransform`, so a tree from the worker renders byte-identical to `<Markdown>`
@@ -28,29 +29,36 @@ export interface RenderHastOptions {
 
 /** A copy of `tree` whose url attributes went through `urlTransform`: post()'s url clause, on copies. For each
  *  element, each key of `urlAttributes` present in its own `properties` whose tag list is `null` (every element)
- *  or names the element's tag becomes `urlTransform(String(value || ''), key, element)`. */
+ *  or names the element's tag becomes `urlTransform(String(value || ''), key, element)`. Elements are visited in
+ *  document pre-order, as post()'s `visit` does (an element before its children, siblings first to last), and the
+ *  element the transform receives carries the source element's children, as post()'s live element does. */
 function transformUrls(tree: HastRoot, urlTransform: UrlTransform): HastRoot {
   const root: HastRoot = { ...tree, children: [] };
-  const stack: { from: readonly RootContent[]; to: RootContent[] }[] = [{ from: tree.children, to: root.children }];
+  // Children are pushed last to first, so they pop first to last; each entry names the array its copy joins.
+  const stack: { node: RootContent; to: RootContent[] }[] = [];
+  const schedule = (from: readonly RootContent[], to: RootContent[]): void => {
+    for (let i = from.length - 1; i >= 0; i--) stack.push({ node: from[i]!, to });
+  };
+  schedule(tree.children, root.children);
   while (stack.length > 0) {
-    const { from, to } = stack.pop()!;
-    for (const child of from) {
-      if (child.type !== 'element') {
-        to.push(child);
-        continue;
-      }
-      const copy: Element = { ...child, properties: { ...child.properties }, children: [] };
-      for (const key in urlAttributes) {
-        if (Object.hasOwn(urlAttributes, key) && Object.hasOwn(copy.properties, key)) {
-          const test = urlAttributes[key];
-          if (test === null || test?.includes(copy.tagName)) {
-            copy.properties[key] = urlTransform(String(copy.properties[key] || ''), key, copy);
-          }
+    const { node, to } = stack.pop()!;
+    if (node.type !== 'element') {
+      to.push(node);
+      continue;
+    }
+    // `copy` keeps the source's children (shared, read-only) while the transform runs, then gets its own.
+    const copy: Element = { ...node, properties: { ...node.properties } };
+    for (const key in urlAttributes) {
+      if (Object.hasOwn(urlAttributes, key) && Object.hasOwn(copy.properties, key)) {
+        const test = urlAttributes[key];
+        if (test === null || test?.includes(copy.tagName)) {
+          copy.properties[key] = urlTransform(String(copy.properties[key] || ''), key, copy);
         }
       }
-      to.push(copy);
-      stack.push({ from: child.children, to: copy.children });
     }
+    copy.children = [];
+    to.push(copy);
+    schedule(node.children, copy.children);
   }
   return root;
 }
