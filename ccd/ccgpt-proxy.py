@@ -113,9 +113,26 @@ and `CCGPT_LITELLM_PORT` are all required; a missing one is a refusal to
 start, loudly, naming the variable — not a guessed port. A defaulted port is
 the exact mechanism by which one lane's shim would silently reach another
 lane's gateway and bill the wrong account.
+
+ONE OPTIONAL VARIABLE. `CCGPT_UPSTREAM_WAIT_S` (D-4933) bounds how long the
+shim waits out a REFUSED connection to the LiteLLM proxy: a whole number of
+seconds from 0 to 600, default 60, where 0 means no waiting. A release that
+rebuilds a lane's runtime restarts its gateway, which takes about a minute to
+listen again (measured: ~46 s), and in that window every connect is refused.
+The shim used to answer each request in it with an immediate 502, and Claude
+Code ended the turn on it. Now a refused connect — the one failure where
+nothing reached upstream, so sending the request again cannot send it twice —
+is retried every half second, with the same method, path, headers and body
+bytes, until the bound (measured from the first refusal) runs out; then the
+same 502 refusal as before answers, saying it was refused for the whole wait.
+Anything else (a reset, a timeout, a connection accepted and then closed, any
+other error) may have reached upstream, so it is never retried: an immediate
+502, exactly as before. See `_urlopen_through_refusal`. An invalid value
+refuses to start, like a required variable's.
 """
 import os
 import sys
+import time
 import json
 import gzip
 import zlib
@@ -129,9 +146,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 def _required_env(name: str) -> str:
     """Read one required environment variable, or refuse to start.
 
-    No default is offered for any of the three variables this shim reads —
-    see the module docstring's note on why a defaulted port is unsafe here,
-    not merely unhelpful.
+    No default is offered for any of the three REQUIRED variables this shim
+    reads — see the module docstring's note on why a defaulted port is unsafe
+    here, not merely unhelpful. The one other variable it reads,
+    `CCGPT_UPSTREAM_WAIT_S`, is optional and has a default
+    (`_optional_wait_s`, D-4933).
     """
     value = os.environ.get(name)
     if not value:
@@ -149,6 +168,35 @@ def _required_port(name: str) -> int:
         return int(raw)
     except ValueError:
         sys.exit(f"ccgpt-proxy: refusing to start — {name} is not a valid port number: {raw!r}")
+
+
+# D-4933: the bound on waiting out a refused upstream connection, in seconds.
+# 60 because the measured gateway restart took ~46 s and Claude Code's own
+# request timeout is far longer; 600 is the ceiling an operator may set.
+UPSTREAM_WAIT_DEFAULT_S = 60
+UPSTREAM_WAIT_MAX_S = 600
+
+
+def _optional_wait_s(name: str, default: int) -> int:
+    """Read the one OPTIONAL variable this shim has: a whole number of seconds
+    from 0 to `UPSTREAM_WAIT_MAX_S`, or `default` when it is absent (D-4933).
+
+    Parsed once, at start-up, and an invalid value is the same named refusal
+    `_required_port` gives — not a guessed bound: a unit that says
+    `CCGPT_UPSTREAM_WAIT_S=sixty` has said something this shim cannot act on,
+    and quietly using 60 would hide it. Only one to three ASCII digits are
+    read, so `int()`'s own leniency (' 5', '+5', '5_0', non-ASCII digits, a
+    5000-digit string that raises) never decides what a unit file means.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    if raw.isascii() and raw.isdigit() and len(raw) <= 3 and int(raw) <= UPSTREAM_WAIT_MAX_S:
+        return int(raw)
+    sys.exit(
+        f"ccgpt-proxy: refusing to start — {name} is not a whole number of seconds "
+        f"from 0 to {UPSTREAM_WAIT_MAX_S}: {raw!r}"
+    )
 
 
 class _UnusableBody(Exception):
@@ -900,6 +948,7 @@ def _encode_body(body: bytes, encoding: str) -> bytes:
 ACCOUNT_ID = _required_env("CCGPT_ACCOUNT_ID")
 PROXY_PORT = _required_port("CCGPT_PROXY_PORT")
 LITELLM_PORT = _required_port("CCGPT_LITELLM_PORT")
+UPSTREAM_WAIT_S = _optional_wait_s("CCGPT_UPSTREAM_WAIT_S", UPSTREAM_WAIT_DEFAULT_S)
 UPSTREAM = f"http://127.0.0.1:{LITELLM_PORT}"
 
 LANE_PATH = "/ccgpt/lane"
@@ -945,6 +994,78 @@ HOP_BY_HOP = {
 }
 
 
+# D-4933: how long to sleep between tries while upstream refuses connections.
+# Short next to a ~46 s restart, long enough that a minute of waiting is a few
+# hundred microseconds of CPU per request, not a busy loop.
+_REFUSED_RETRY_S = 0.5
+
+
+class _UpstreamRefused(Exception):
+    """Raised by `_urlopen_through_refusal` when upstream refused every
+    connection for the whole `UPSTREAM_WAIT_S`. Carries the LAST error as
+    `.last`. Caught by `_relay` alone, which answers the 502 naming the wait.
+    A dedicated exception, not a re-raise of the `URLError`: `_relay` must tell
+    "refused for the whole wait" from "refused, and waiting was switched off
+    (`UPSTREAM_WAIT_S` 0)", whose message stays today's, and two conditions a
+    caller handles differently must not look the same (ring conventions,
+    project CLAUDE.md)."""
+
+    def __init__(self, last: BaseException):
+        super().__init__(last)
+        self.last = last
+
+
+def _is_refused(e: BaseException) -> bool:
+    """True iff `e` is the TCP connect itself being refused (ECONNREFUSED).
+
+    Measured on this Python (3.12): `urllib.request.urlopen` against a closed
+    local port raises `URLError(ConnectionRefusedError(111, ...))`, so the
+    refusal is the `URLError`'s `.reason`; a bare `ConnectionRefusedError` is
+    accepted too, for a caller that surfaces one unwrapped. Nothing else
+    qualifies, and that narrowness is the point: a refused connect is the one
+    failure that proves no byte of the request reached upstream. A reset, a
+    timeout, `RemoteDisconnected` (a connection accepted and then closed) and
+    every other `URLError`/`OSError` may have come AFTER upstream saw the
+    request, so retrying one could send a request twice. An `HTTPError` is a
+    `URLError` whose `.reason` is a string, so it never matches either.
+    """
+    if isinstance(e, urllib.error.URLError):
+        e = e.reason
+    return isinstance(e, ConnectionRefusedError)
+
+
+def _urlopen_through_refusal(req):
+    """`urlopen(req)`, but a REFUSED connection is waited out (D-4933).
+
+    On a refusal (`_is_refused`), sleeps `_REFUSED_RETRY_S` and sends the SAME
+    `req` again — method, path, forwarded headers and body bytes, since a
+    refused connect sent none of them and `urlopen` adds its own headers
+    idempotently — until `UPSTREAM_WAIT_S` seconds have passed since the FIRST
+    refusal (`time.monotonic`, not the wall clock), then raises
+    `_UpstreamRefused`. The last sleep is clipped to the time left, so the
+    final try lands on the bound itself and "refused for the whole wait" is
+    literally true. `UPSTREAM_WAIT_S` of 0 retries nothing. Every other error,
+    `HTTPError` included, propagates untouched on its first occurrence: see
+    `_is_refused` for why nothing but a refusal is safe to send again. Sleeps
+    in the handler's own thread (`ThreadingHTTPServer`), which blocks no other
+    request.
+    """
+    refused_at = None
+    while True:
+        try:
+            return urllib.request.urlopen(req, timeout=900)
+        except (urllib.error.URLError, OSError) as e:
+            if not UPSTREAM_WAIT_S or not _is_refused(e):
+                raise
+            now = time.monotonic()
+            if refused_at is None:
+                refused_at = now
+            left = refused_at + UPSTREAM_WAIT_S - now
+            if left <= 0:
+                raise _UpstreamRefused(e) from None
+            time.sleep(min(_REFUSED_RETRY_S, left))
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -985,7 +1106,8 @@ class Handler(BaseHTTPRequestHandler):
         sink already having seen the request. What every call to this
         method upholds unconditionally is narrower and still real: the ONE
         JSON refusal shape (D-3153), never `send_error`'s HTML/status-line
-        one. Every refusal in this file — Task 6's gzip/deflate decode
+        one. (A 502 for a REFUSED connection, D-4933, is the exception to the
+        exception: the connect itself failed, so nothing was offered upstream.) Every refusal in this file — Task 6's gzip/deflate decode
         failure and the upstream-unreachable 502 included — now calls this
         instead of `send_error`.
         task-7a Fix round 1, M-3: a HEAD request gets headers describing the body
@@ -1174,7 +1296,7 @@ class Handler(BaseHTTPRequestHandler):
         if body:
             req.add_header("Content-Length", str(len(body)))
         try:
-            resp = urllib.request.urlopen(req, timeout=900)
+            resp = _urlopen_through_refusal(req)
         except urllib.error.HTTPError as e:
             # task-9 fix round 1 I-4 (task-9-fix-rulings.md): a non-2xx
             # upstream status lands here, and `read1` below reaches it by a
@@ -1187,7 +1309,19 @@ class Handler(BaseHTTPRequestHandler):
             # describe block's own "relays a non-2xx upstream response,
             # status and body" case.
             resp = e
+        except _UpstreamRefused as e:
+            # D-4933: every connect was refused for the whole wait, so nothing
+            # reached upstream. Same 502 shape as below; the message says the
+            # wait was spent, so a log reader can tell it from an instant one.
+            self._refuse(
+                502,
+                f"ccgpt-proxy: upstream unreachable: connection refused for {UPSTREAM_WAIT_S}s: {e.last}",
+            )
+            return
         except (urllib.error.URLError, OSError) as e:
+            # Everything `_is_refused` does not match, and a refusal with
+            # `UPSTREAM_WAIT_S` at 0: an immediate 502, never retried, as
+            # before D-4933.
             self._refuse(502, f"ccgpt-proxy: upstream unreachable: {e}")
             return
         self.send_response(resp.status)

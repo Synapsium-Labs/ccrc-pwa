@@ -243,18 +243,26 @@ function chunkEncode(data: Buffer, ext?: string): Buffer {
  *  from any argument, and returned to the caller — see `mintLane` above for
  *  why a convention was not enough. Returns once the shim has answered
  *  /ccgpt/lane as THIS lane, or throws with the child's own captured stderr
- *  if it dies first. */
+ *  if it dies first. `opts.listenUpstream: false` (D-4933) leaves the upstream
+ *  port with nothing listening, for a case about a refused connection; the
+ *  returned `listenUpstream()` starts the listener when that case wants it.
+ *  The shim's own readiness poll never touches upstream, so it comes up either
+ *  way. */
 async function startPair(
   home: string,
   handler: (req: any, body: Buffer, res: any) => void,
   env: Record<string, string> = {},
-): Promise<{ child: ChildProcess; lane: string }> {
-  upstream = createServer((req, res) => {
+  opts: { listenUpstream?: boolean } = {},
+): Promise<{ child: ChildProcess; lane: string; listenUpstream: () => Promise<void> }> {
+  const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (c) => chunks.push(c));
     req.on('end', () => handler(req, Buffer.concat(chunks), res));
   });
-  await new Promise<void>((r) => upstream!.listen(UPSTREAM_PORT, '127.0.0.1', () => r()));
+  upstream = server;
+  const listenUpstream = () =>
+    new Promise<void>((r) => server.listen(UPSTREAM_PORT, '127.0.0.1', () => r()));
+  if (opts.listenUpstream !== false) await listenUpstream();
 
   const lane = mintLane();
   const { child } = spawnPy(ccgptFile('ccgpt-proxy.py'), {
@@ -307,7 +315,7 @@ async function startPair(
       if (r.ok) {
         const body: unknown = await r.json();
         if (body && typeof body === 'object' && (body as { lane?: unknown }).lane === lane) {
-          return { child, lane };
+          return { child, lane, listenUpstream };
         }
         // Answered, but not as THIS lane — a foreign or stale listener owns
         // the port right now. Keep polling rather than accepting an answer
@@ -1669,6 +1677,122 @@ describe.skipIf(!PY)('ccgpt-proxy: upstream unreachable answers the same refusal
     expect(r.headers.get('content-type')).toBe('application/json');
     expect((await r.json()).error).toMatch(/upstream unreachable/i);
     expect(reached).toBe(true);                       // the documented exception: upstream WAS reached
+  });
+});
+
+// D-4933. A release restarts a lane's gateway, which takes about 46 s to stop
+// and listen again; in that window the shim used to answer every request with
+// an immediate 502 on its refused connection, and Claude Code ended the turn on
+// it. The shim now waits out a REFUSED connection (nothing reached upstream, so
+// sending the request again cannot send it twice) for a bounded time, and keeps
+// today's immediate 502 for everything else.
+describe.skipIf(!PY)('ccgpt-proxy: a refused upstream connection is waited out, for a bounded time (D-4933)', () => {
+  /** One POST through the shim, timed, and capped at `capMs` by an abort. A
+   *  mutation that makes the shim wait far longer than a case expects then
+   *  reds on `status` (null) with the elapsed time beside it, never on vitest's
+   *  own 20 s timeout, which a loaded box also produces on the unmutated case. */
+  async function timedPost(capMs: number) {
+    const t0 = Date.now();
+    try {
+      const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/models`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+        signal: AbortSignal.timeout(capMs),
+      });
+      const json: any = await r.json().catch(() => null);
+      return { status: r.status as number | null, contentType: r.headers.get('content-type'), json, ms: Date.now() - t0 };
+    } catch {
+      return { status: null as number | null, contentType: null as string | null, json: null as any, ms: Date.now() - t0 };
+    }
+  }
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  it('sends the same request again until upstream listens: 200, the body relayed, upstream saw ONE request', async () => {
+    const home = mkTmp('ccgpt-proxy-refused-late-');
+    let hits = 0;
+    const { listenUpstream } = await startPair(home, (_req, _body, res) => {
+      hits += 1;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"relayed":true}');
+    }, { CCGPT_UPSTREAM_WAIT_S: '10' }, { listenUpstream: false });
+    // The listener comes up 1.5 s after the request leaves; the shim has been
+    // refused at 0 s, 0.5 s and 1 s by then, and its next try lands on it.
+    const [r] = await Promise.all([timedPost(15_000), sleep(1_500).then(listenUpstream)]);
+    expect(r.status).toBe(200);
+    expect(r.json).toEqual({ relayed: true });
+    expect(hits).toBe(1);                              // a refused try reached nothing, so the request was sent once
+  });
+
+  it('answers the 502 refusal after the whole wait when nothing ever listens, naming the wait', async () => {
+    const home = mkTmp('ccgpt-proxy-refused-forever-');
+    await startPair(home, (_req, _body, res) => { res.writeHead(200); res.end('{}'); },
+      { CCGPT_UPSTREAM_WAIT_S: '2' }, { listenUpstream: false });
+    const r = await timedPost(15_000);
+    expect(r.status).toBe(502);
+    expect(r.contentType).toBe('application/json');
+    expect(r.json.error).toMatch(/upstream unreachable/i);
+    expect(r.json.error).toMatch(/connection refused for 2s/);
+    expect(r.ms).toBeGreaterThanOrEqual(2_000);        // refused for the whole wait, measured from the first refusal
+    expect(r.ms).toBeLessThan(8_000);
+  });
+
+  it('CCGPT_UPSTREAM_WAIT_S=0 does not retry: the same immediate 502 as before', async () => {
+    const home = mkTmp('ccgpt-proxy-refused-nowait-');
+    await startPair(home, (_req, _body, res) => { res.writeHead(200); res.end('{}'); },
+      { CCGPT_UPSTREAM_WAIT_S: '0' }, { listenUpstream: false });
+    const r = await timedPost(10_000);
+    expect(r.status).toBe(502);
+    expect(r.json.error).toMatch(/upstream unreachable/i);
+    expect(r.ms).toBeLessThan(1_500);
+  });
+
+  // The other half of "only a refusal": a connection that was ACCEPTED and then
+  // closed may have reached upstream, so a retry could send one request twice.
+  // Under the DEFAULT bound (60 s) this must still be the immediate 502, and
+  // upstream is reached exactly once.
+  it('does not retry a connection upstream accepted and then dropped: an immediate 502, upstream reached once', async () => {
+    const home = mkTmp('ccgpt-proxy-vanish-once-');
+    let hits = 0;
+    await startPair(home, (req, _body, _res) => {
+      hits += 1;
+      req.socket.destroy();                            // upstream saw the request, then vanished
+    });
+    const r = await timedPost(10_000);
+    expect(r.status).toBe(502);
+    expect(r.json.error).toMatch(/upstream unreachable/i);
+    expect(r.ms).toBeLessThan(1_500);
+    expect(hits).toBe(1);
+  });
+
+  // The bound is read once, at start-up, and a bad value refuses to start in the
+  // same named shape every other variable's refusal has.
+  const waitEnv = (value: string): Record<string, string> => ({
+    PYTHONPATH: PYSTUB_DIR,
+    CCGPT_ACCOUNT_ID: 'codex-a-waitenv',
+    CCGPT_PROXY_PORT: String(PROXY_PORT),
+    CCGPT_LITELLM_PORT: String(UPSTREAM_PORT),
+    CCGPT_UPSTREAM_WAIT_S: value,
+  });
+  it.each(['abc', '-1', '601'])('refuses to start with a named message when CCGPT_UPSTREAM_WAIT_S is %j', async (raw) => {
+    const home = mkTmp('ccgpt-proxy-badwait-');
+    const { child } = spawnPy(ccgptFile('ccgpt-proxy.py'), { home, env: waitEnv(raw) });
+    proc = child;
+    let stderr = '';
+    child.stderr?.on('data', (c) => { stderr += c.toString(); });
+
+    const outcome = await raceExitOrDeadline(child);
+    if (outcome.kind === 'exited') proc = null; // else: still alive — afterEach kills+awaits it.
+    expect(outcome.kind).toBe('exited');
+    expect(outcome.kind === 'exited' ? outcome.code : null).not.toBe(0);
+    expect(stderr).toContain('ccgpt-proxy: refusing to start — CCGPT_UPSTREAM_WAIT_S is not a whole number of seconds from 0 to 600');
+    expect(stderr).toContain(`: '${raw}'`);
+    expect(stderr).not.toMatch(/Traceback/);
+  });
+
+  it('starts with CCGPT_UPSTREAM_WAIT_S at its upper bound, 600', async () => {
+    const home = mkTmp('ccgpt-proxy-maxwait-');
+    await startPair(home, (_req, _body, res) => { res.writeHead(200); res.end('{}'); },
+      { CCGPT_UPSTREAM_WAIT_S: '600' });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/ccgpt/lane`);
+    expect(r.status).toBe(200);                        // startPair already required it to answer as its own lane
   });
 });
 
