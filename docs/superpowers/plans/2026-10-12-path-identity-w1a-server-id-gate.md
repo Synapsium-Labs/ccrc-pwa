@@ -11784,3 +11784,280 @@ None defined yet.
 ### Plan-text corrections and extra pins, one number per task
 
 None defined yet.
+
+---
+
+## As built (W1a, run 399)
+
+This note records where wave 1 of the path-identity programme (the spec's W1a) differs, as built, from the spec
+`docs/superpowers/specs/2026-10-12-path-identity-design.md`, and what it carries to later waves. The spec is not edited:
+its corrections live here (R7, R3). The note amends; it edits no earlier text of this plan. It names each departure by
+slug and carries no number. The coordinator assigns this wave's numbers at the fix round and defines them under
+**Deviations found** above. The comments and test titles this wave added cite spec §2.3, and §2.4 for stop's order.
+
+### What the gate does not claim
+
+The server gate keeps a non-registry id out of every argv the server composes. It is not an OS wall: a session can
+still run `ccd` directly with any id, and ccd's own loops and predicates are W1b's (spec §2.4). Until W1b merges,
+ccd's half of spec §2 stays open.
+
+### Corrections to spec §2.3
+
+- **`knownId` is not the one choke point (R7).** §2.3 calls `knownId` "one choke point for every request-id route".
+  Two request-id routes never call it:
+  - `POST /api/sessions/:id/ensure` asks `isRegistryId(id)` first, before any call is composed;
+  - `POST /api/sessions/:id/swap`'s `crossPool: true` arm asks it as the arm's first statement, ahead of the skew gate
+    (R22).
+
+  Each answers 400 `bad-session-id`. `knownId` refuses a failing id before its listing, and its census stays at 18
+  routes (14 POST, 4 GET).
+- **The watches omit a refused id, and nothing is retained (R3).**
+  - §2.3 says the main, hook-state and task-state watches "retain prior state for refused ids". It also says the
+    watch sweeps keep the wrapper because omission suppresses observation "while retaining prior state".
+  - Refusal is a pure function of the id string, so a refused id never had state to retain, and code that retained
+    it would be unobservable.
+  - As built, omission is the behaviour: a refused id gets no state, no reads and no acts, and the reader census tags
+    those sites `omits`.
+  - The snapshot shrink guard counts a refused id as purged, so a refused row cannot freeze snapshot writes.
+- **The predicate sits at the foot of `shared/api.ts` (R1, `registry-id-at-foot`).**
+  - §2.3 places `isRegistryId` "right after `isSessionIdShape` (about `:6231`)". README and the compaction-card
+    corpus cite `shared/api.ts` by line, and an insertion there would move every cited anchor below it.
+  - `REGISTRY_ID_MAX_CHARS` (255) and `isRegistryId` stand in the foot block, immediately above
+    `TMPROOT_ID_MAX_CHARS`.
+  - §2.3's "`TMPROOT_ID_MAX_CHARS` becomes a `REGISTRY_ID_MAX_CHARS`" is built as a derived alias,
+    `TMPROOT_ID_MAX_CHARS = REGISTRY_ID_MAX_CHARS`, and `isTmpRootId` returns `isRegistryId(id)`.
+  - The accepted set is unchanged. The full rename is carried (below).
+- **Masked arms are pinned by their masks (R17, `masked-arms-pinned-by-their-masks`).**
+  - §2.3 asks for "a pin each" for every absence-acting caller. The request-route gates and the stored-row gates
+    landed before the reader widening, so some reader arms were masked from the moment they existed.
+  - Each masked arm answers the safe word and its comment names its mask. Its pins are the outer gate's cases and
+    `readSessionRecord`'s zero-listing case (the table below).
+  - One exception, by the coordinator's amendment of R17: `close.ts`'s `childGateAtClose` is exported for its pin and
+    pinned directly with an unlisted bad id. So all four absence-acting callers that §2.3 names, `measureClaimant`,
+    `childGateAtClose`, `reclaimChild` and `childBindGate`, carry a pin each.
+- **Resume dispatch refuses; it does not hold (`resume-dispatch-refuses-not-holds`).**
+  - §2.3 says resume dispatch "holds when the requested id is refused".
+  - As built, `dispatchRun` re-checks a stored `sessionId` right after its hold verdict, before the pause listing and
+    every other read. A run with no stored id is not asked, so the arm that meets it is the resume: the run stays
+    `planned`, and the route answers 409 `bad-session`. The abandon door is the way out.
+- **The readers that pass `records: undefined` measure the registry themselves (R19).**
+  - §2.3 migrates four `readRegistry` callers to `RegistryRead`: project enumeration, the fleet fallback, peer
+    enumeration and dispatch's pre-spawn read. All four migrated.
+  - Beyond them, the three production callers that passed `records: undefined` to `assembleFleet` each call
+    `readRegistryMeasured` and pass its records: `GET /api/fleet`, the ws cold start and the claims-conflict path.
+  - `readRegistry` keeps eight call sites, each classified below. One of them, `detectDialogs`'s fallback, is reached
+    by tests alone.
+
+### The readers as built
+
+- `readSessionRecord` answers `{ kind: 'bad-id' }` for an id that fails `isRegistryId`, before any listing.
+  - `SingleRead` has four kinds, and each of its 14 callers is an exhaustive switch ending in a `never` check.
+  - A fold of `bad-id` into `absent` was measured against an UNLISTED bad id at each site where the two arms diverge
+    (R15).
+- `bad-id` is a read result, not a code (R20, `bad-id-is-not-a-code`). It joins `mail-routes.test.ts`'s `NOT_CODES`,
+  and no refusal or wire field carries it.
+- `readRegistryMeasured` names its refused rows (R2):
+  - `refused` holds ids (the basename less `.uuid`), and `names` keeps every raw name.
+  - A refused row is never read, never built into `records` and never composed.
+  - `pruneWarnState` receives the valid ids only.
+  - Each refused id is logged once while it stays listed, quoted by `JSON.stringify`, through a module-private set
+    pruned on each listing. That set is never `warnState`'s keys.
+- Dispatch's pre-spawn read migrated in the same commit as the post-spawn clause (R18), because the clause needs the
+  pre-spawn `refused` set. On an unlistable registry, the pre-spawn read refuses `registry-unmeasurable` before
+  anything is spawned. The post-spawn clause refuses a refused name that was absent before the spawn.
+- The fallbacks that only tests reach:
+  - `assembleFleet`'s own fallback reads `readRegistryMeasured` and uses `[]` on an unlistable registry. A census
+    pins each of the six production `assembleFleet(` calls as passing its records, never `undefined` (R19,
+    `fleet-fallback-is-tests-only`).
+  - `sweepHookStates`'s own read and `detectDialogs`'s fallback: `tick` passes its `records` to both, and a census
+    describe pins that hand-off.
+- On an unlistable registry, the ws cold start with no watcher broadcast sends no `fleet` frame and still sends its
+  `runs` frame, so the socket gets `hello` and then `runs` (R19, `cold-start-skips-an-unmeasured-fleet`). The `fleet`
+  frame has no stale marker, and this wave adds no L0 wire field. With a watcher broadcast, the cold start reads no
+  registry.
+- The census (`registry-refused-census.test.ts`) classifies 23 sites, with no site `unplaced`. They are eight
+  `readRegistry` calls and fifteen `readRegistryMeasured` calls, `readRegistry`'s own wrapper call among them:
+
+| Reader | Word | Sites |
+|---|---|---|
+| `readRegistry` | `knownId` | `sessionCommands` (`commands.ts`), `prTasks` (`server.ts`) |
+| `readRegistry` | `omits` | `sweepNames`, `sweepPr` (`watch.ts`) |
+| `readRegistry` | `tests-only` | `detectDialogs`'s fallback (`watch.ts`; `tick` passes `records`) |
+| `readRegistry` | `raw-name` | `requireAttribution`, `POST /api/mail`, `POST /api/mail/:id/ack` (`coord/routes.ts`) |
+| `readRegistryMeasured` | `wrapper` | `readRegistry` (`registry.ts`) |
+| `readRegistryMeasured` | `holds` | `resolveDoneBranch` (`coord/fingerprint.ts`), `sweepMail` (`watch.ts`) |
+| `readRegistryMeasured` | `refuses` | dispatch's pre-spawn and post-spawn reads (`coord/dispatch.ts`) |
+| `readRegistryMeasured` | `gated` | dispatch's resume arm (`coord/dispatch.ts`) |
+| `readRegistryMeasured` | `omits` | `tick`, `sweepTasks` (`watch.ts`) |
+| `readRegistryMeasured` | `tests-only` | `sweepHookStates`'s own read (`watch.ts`; `tick` passes `records`), `assembleFleet`'s fallback (`fleet.ts`) |
+| `readRegistryMeasured` | `stale` | `GET /api/fleet`, the ws cold start (`server.ts`) |
+| `readRegistryMeasured` | `reports` | `listProjects` (`lifecycle.ts`), `GET /api/peers`, the claims-conflict path (`coord/routes.ts`) |
+
+- Fingerprint keeps its own check (R26). `resolveDoneBranch` refuses a run whose `sessionId` fails the predicate with
+  `tip-unmeasurable`, before its read. `verifyReviewDone` reads the WORK run's `sessionId`, which a review run's close
+  gate does not check, so the check is reachable through a review close and is pinned there as well as directly.
+
+### The masked arms and their masks
+
+These arms answer the safe word, and their comments name the mask. Unless the last column names a pin of the arm's
+own (R17 as amended, and the exported functions' unit pins), their pins are the mask's cases and
+`readSessionRecord`'s zero-listing case (R17).
+
+| Arm | Its answer for `bad-id` | Its mask | Pinned by |
+|---|---|---|---|
+| `/archive`'s `readSessionRecord` switch (`server.ts`) | 400 `bad-session-id` | `knownId` | `knownId`'s cases; the zero-listing case |
+| `liveStatus` (`fleet.ts`), behind `/interrupt` | `'dead'` | `knownId` | `knownId`'s cases; the zero-listing case |
+| `readAsk` on `/ask` (`server.ts`) | `null` | `knownId` | `knownId`'s cases; the zero-listing case |
+| `readAsk` under `POST /api/asks/:id/answer` | never reached | `freshAskAt`'s `bad-id`, giving `UNMEASURED_ASK_AT` and then 409 `child-unmeasurable` before `answerAsk` reaches `readAsk` | the ask case, end to end: no keys sent, the ask stays `held` |
+| dispatch's resume `childBindGate` | `spent-unmeasured` | the dispatch gate | the dispatch gate's cases; `childBindGate`'s own unit pin |
+| `POST /api/runs`'s `childBindGate` | `spent-unmeasured` | the open gate | the open gate's cases; `childBindGate`'s own unit pin |
+| `childGateAtClose` (`coord/close.ts`) | mark `unreadable` | both close gates | its own direct pin (R17 as amended), with an unlisted bad id |
+| `measureClaimant` (`coord/reclaim.ts`) | `unmeasurable`, never `dead` | none on the dead-coordinator lane | its unit pin, and the lane case (no abandon, no ccd verb) |
+
+Three arms that no outer gate masks answer exactly what absence answers, by design: `sessionws`'s `resolve`,
+`freshAskAt`, and `releaseRetiredChildHold` (`changed`, R13). A fold changes nothing observable there, so their pin is
+the zero-listing case. `freshAskAt`'s path is also pinned end to end by the ask case. `reclaimChild`'s own arm is not
+masked either: it defers `marker-unreadable`, never `gone`, and its pin is `reclaimChild`'s unit case.
+
+### The answers this wave adds
+
+Every word already existed (R13). This wave adds no route, table, migration, ccd verb, capability token, agent grant,
+L0 wire type or refusal word.
+
+| Where | Condition | Answer |
+|---|---|---|
+| `knownId`'s 18 routes | id fails `isRegistryId` | 404 `{ ok: false, error: 'unknown-session' }`, before any listing |
+| `POST /api/sessions/:id/ensure` | id fails | 400 `{ ok: false, error: 'bad-session-id' }` |
+| `POST /api/sessions/:id/swap`, `crossPool: true` | id fails | 400 `bad-session-id`, ahead of the skew gate (R22) |
+| `/stop`, `/swap` (ordinary arm), `/kickoff` | `readSessionRecord` answers `bad-id` | 400 `bad-session-id` |
+| `/archive` | masked by `knownId` (R17) | the arm answers 400 `bad-session-id` |
+| `/stop`, `/archive`, a legacy row | its wrapper part or `.project` fails `isRegistryId` (`stopPairRefused`) | 503 `{ ok: false, error: 'registry-unmeasurable' }` from the identity arm, with no argv composed; at `/archive`, before the turn read and the programme's end |
+| `POST /api/asks/:id/answer` | stored `ask.childId` fails | 409 `{ ok: false, error: 'child-unmeasurable', detail }` (the existing answer, through `freshAskAt`'s `bad-id`, R17); no keys sent, the ask stays `held` |
+| `POST /api/runs` | `claimedBy` or `sessionId` fails | 400 `{ ok: false, error: 'bad-session', detail: 'claimedBy is not a registry id' }`, or the same naming `sessionId` |
+| `POST /api/runs` | a work `project` (as given) beginning `-` or `.` | 400 `{ ok: false, error: 'bad-request', detail: 'project must not begin with - or .' }` |
+| `POST /api/runs/:id/reclaim` | the heir fails | 400 `{ ok: false, error: 'bad-session', detail }` (`which: 'heir'`) |
+| `POST /api/runs/:id/reclaim` | the stored claimant fails | 409 `{ ok: false, error: 'bad-session', detail }` (`which: 'claimant'`), the detail naming `POST /api/runs/:id/abandon` |
+| `POST /api/runs/:id/dispatch` (resume too) | stored `sessionId` fails | 409 `{ ok: false, error: 'bad-session' }` |
+| `POST /api/runs/:id/close` (review runs too) | stored `sessionId` fails | 409 `{ ok: false, error: 'bad-session' }` |
+| abandon, programme end, dead-coordinator sweep | stored `sessionId` fails | closed `failed`, `released: false`, `childReclaim: 'not-queued'`, `childReclaimWhy: 'marker-unreadable'`, no fleet act, one event (R6, R27) |
+| `POST /api/runs/:id/advance` to `awaiting-review` or `merging` | stored `sessionId` fails | 409 `{ ok: false, reject: { code: 'bad-session' } }` |
+| `POST /api/runs/:id/route` | stored `sid` fails | 409 `{ ok: false, error: 'bad-session' }` (the existing word, now from `isRegistryId`) |
+| `GET /api/peers?of=` | trimmed `of` fails | 400 `{ ok: false, error: 'bad-session' }`, before any read (R23) |
+| `GET /api/peers` (200) | refused rows exist | additive `refusedRows: number`, only when greater than 0 |
+| `GET /api/projects` | always | additive `registry: 'listed' \| 'unlistable'` |
+| `GET /api/fleet` | registry unlistable | `{ sessions, stale: true }`, where `sessions` is the watcher's last broadcast, else the last-known-good snapshot's sessions, else `[]`; no `pools` key and no `downSince` |
+| the ws cold start (no watcher broadcast) | registry unlistable | no `fleet` frame; the `runs` frame is still sent (R19) |
+| the mail sweep | recipient refused | held with gate `registry-unmeasurable`, never `rejectDelivery` |
+
+Notes on the table:
+- **What `POST /api/runs` checks (R29, R8).** It checks `claimedBy`, `sessionId` and a work run's `project` as given,
+  untrimmed, which is how it stores them. A padded id that it once accepted now answers 400. The project check is a
+  coordinator extension that closes the server's half of spec §2.2's ws-add row.
+- **The reclaim door (R21).** It keeps its trim, because it stores the trimmed heir. Its stored-claimant check sits
+  right after `no-claimant`, before any read.
+- **The abandon arm (R6, R27).** It takes no fleet act for such a run: no sibling read, no child gate, no hold and no
+  release. When the dead-coordinator sweep closes the run, the sweep's own gate still runs first (the operator's
+  abandon carries none). The arm then closes the run through the store, and writes its one
+  `fleet-act-omitted:bad-session` event only after that close succeeds. `abandonRefusal` refuses nothing new for such
+  a run, so the archive door's programme end ends such a programme whole.
+- **Advance (R11).** The gate stands before `verifyDone` only, so a legacy row can still retreat to `working`.
+- **Expiry (R9, R28).** `expireArchived` refuses a non-registry id as its step 0, before the capability read, with
+  the existing `composition` outcome. `learnExpiry` refuses it before its own capability read, with `unreadable`.
+  Both use one detail sentence saying the server refused the id, so neither `wsExpireAudit` nor `wsExpire` is ever
+  built for it.
+- **The collector (R10).** It has no source change. Mutation pins prove two things: the population gate keeps a bad
+  id from the learning audit, and the executor's step-1 `isTmpRootId` keeps it from both builders.
+- **Stop's order (spec §2.4).** `stopId` and `stopPair` send `['stop', '--surface', surface, id]` and
+  `['stop', '--surface', surface, w, p]`. On the real binary, an id spelled `--surface` is now refused by usage, and a
+  planted row named `pwa` is not stopped; a project spelled `--surface` is refused the same way. With no surface, the
+  bare form is unchanged.
+- **Stop's pair parts (`stop-pair-fields-refused-at-composition`, a coordinator ruling at plan review).** `stopPair`
+  takes its project from a legacy row's `.project`, and its wrapper from the row's `.wrapper` when the id does not end
+  in `-<project>`: fields no id gate reads. `cmd_stop`'s `--surface=*` arm strips a token of that spelling from any
+  position, so a field reading `--surface=<word>` made the pair a one-argument stop of the other token, in the
+  leading, trailing and bare forms alike. No ccd rule closes that without also refusing the pre-W1a trailing order
+  while the fleet box runs ahead of the server, so the server closes it. `/stop` and the archive door ask
+  `stopPairRefused` in their identity arm: a row whose wrapper part or project part fails `isRegistryId` answers 503
+  `registry-unmeasurable` with no argv composed, and the archive door asks before its turn read and the programme's
+  end. At planning, none of the fleet box's 18 distinct registry projects began with `-` or `.`. That measured the
+  first character only: see `legacy-pair-fields-charset-unmeasured` below.
+- **The id-argv census.** `id-argv-census.test.ts` classifies all 41 id-taking calls across 10 files by file, builder,
+  origin and gate (SEC2 B, as R98 widens it). A new call, or a new `CCD_ARGV` key, must classify itself, or the suite
+  goes red. The `stopPair` row's gate is `stopPairRefused`, required above each of `stopArgvFor`'s three call sites
+  (one at `/stop`, two at `/archive`); `childSpent` and `childSpentLive` are pinned through their callers, and the two
+  `sweepNames` rows through an entry listing. The 41 and the 10 hold while #351 and run 400's PR stay unmerged: the
+  second lander re-measures.
+
+### Carried lines, and README
+
+- **README stop prose: carried.** #351 had not merged when Task 0 ran (R14), so README's two `stop` prose lines still
+  spell the trailing order: the exec-whitelist bullet's `ccd stop <id> --surface <word>`, and the old-ccd hazard line.
+  The edit is one line-neutral change to each line, carried to the first wave that lands after #351.
+- **The coordinator skill's `bad-session` rows (R24, `wave-lifecycle-rows-carried`).**
+  - `references/wave-lifecycle.md`'s rows for `bad-session` live under `ccd/`, outside this wave's boundary: open,
+    dispatch, close, advance and reclaim, with "stop and report a stored defect; no fleet act ran". They are carried
+    to W1b, which edits `ccd/`.
+  - One more row for the same file: a review close whose WORK run's stored `sessionId` is not a registry id answers
+    409 `tip-unmeasurable` on every retry, because `verifyReviewDone` reads that id and the review's own close gate
+    does not check it. The coordinator closes that review `failed`, which skips the re-measurement.
+- **The abandon sheet (`abandon-sheet-misreads-an-omitted-fleet-act`).**
+  - `pwa/src/fleet/AbandonSheet.tsx` speaks for `released: false` whenever the run had a session id.
+  - After R6, it tells the operator `<workspace> is still claimed by another open run` for an abandon that performed
+    no fleet act.
+  - `pwa/` is outside this boundary, so this is carried.
+- **The reclaim sheet drops the abandon pointer (`reclaim-sheet-drops-the-bad-session-detail`).**
+  - `pwa/src/fleet/ResumeSheet.tsx`'s `reclaimErrorText` reads a 409's code only through `isReclaimRefuseCode`, and
+    `bad-session` is not a `ReclaimRefuseCode`.
+  - So the reclaim door's 409 for a stored claimant that is not a registry id (R5) reaches the operator as "the
+    hand-over was refused, for a reason this build does not recognise". Its `detail`, which names
+    `POST /api/runs/:id/abandon`, is not shown.
+  - `pwa/` is outside this boundary, so this is carried. Measured: 0 such stored rows at Task 0.
+- **A stored work-run `project` reaches `ws-add` unchecked (`work-run-project-reaches-ws-add-unchecked`).**
+  - At dispatch, a stored `project` reaches `CCD_ARGV.wsAddWorker(run.project, …)` with no server re-check.
+  - Measured: 0 such rows at Task 0, and the `POST /api/runs` check covers every new row.
+  - W1b's ws-add loop and `_ws_project_valid` close it.
+- **A legacy stop row's pair fields, measured by first character only (`legacy-pair-fields-charset-unmeasured`).**
+  A row whose id does not end in `-<project>` takes its pair parts from its `.wrapper` and `.project` fields. The
+  predicate refuses any character outside `[A-Za-z0-9._-]`, but only the first character of the fleet box's projects
+  was measured, so such a row could answer 503 at `/stop` and `/archive`. The coordinator measures the whole charset of
+  those fields on the fleet box.
+- **The mail ingress ladders' detail for a refused row (`raw-name-refused-detail-says-transient`).** The three
+  raw-name ladders (`requireAttribution`, `POST /api/mail`, `POST /api/mail/:id/ack`) answer a refused row 502
+  `registry-unmeasurable`, the right word, but with a detail saying "listed but unreadable — transient", which is never
+  true of a refused id. This wave edited their tag lines only. `sweepMail`'s back-off detail for a refused recipient,
+  `registry row listed but unreadable (registry-unmeasurable)`, stays: it is literally true, because the row is listed
+  and never read, and it says nothing transient.
+- **The expiry lane's words for the executor's own refusal (`expiry-composition-words-misread-a-server-refusal`).** R9 answers a non-registry id with `composition`, whose detail says no call was composed, but `expireFeedBody`'s `composition` arm still says "ccd rejected the call this server composed" and `archivedExpiry.ts`'s lane report says "the server composed a call ccd rejected". The lane's population omits refused rows (Task 5), so production does not reach it. `archivedExpiry.ts` is outside this boundary and Task 12 keeps its hunk to the guards while #351 shares the file, so this is carried.
+- **The executor's docstring lists no step 0 (`expiry-docstring-lists-no-step-0`).** The numbered docstring at the top of `expireArchived.ts` lists steps 1 to 7 and not the new step 0. Task 12 kept its edit to the guards, because #351 shares the file, so the sentence is carried.
+- **The advance reject docstring omits `bad-session` (`advance-reject-docstring-omits-bad-session`).** `shared/api.ts`'s docstring above `RunRefuseCode` says every typed refusal code of `POST /api/runs/:id/advance` is a `MailRejectCode` or a `RunRefuseCode`. The advance gate's `reject.code` of `bad-session` is in neither, and the kebab scan admits it through the routing door's union. The docstring sits above the foot block, so this wave could not edit it.
+- **The real-binary parity rows.** Spec §2.8's `ccdargv-dec-parity` rows on the real binary, with the ids `--actor`,
+  `--surface`, `--reason`, `--expect` and `--defer-expired`, go green only with W1b's loops, so they ride W1b.
+- **Prose that still calls `POST /api/runs` unguarded (`session-shape-prose-predates-the-id-gate`).** After Tasks 9 and 10, these comments still say that `POST /api/runs` checks `claimedBy`/`sessionId` only for a non-empty string, or that the routing door asks `isSessionIdShape`:
+  - `shared/api.ts`'s docstring above `SESSION_ID_SEGMENT`, which sits above the foot block;
+  - `coord/store.ts`'s docstring above the `reclaim:` run-event reader, a file this wave never edits;
+  - the comments in `run-signals-routing.test.ts` (above its `isSessionIdShape` describe), `run-route-route.test.ts` (above the `'bad claimant'` case) and `child-reclaim-paused-at-server.test.ts` (above its `from` round-trip cases).
+
+  Legacy rows can still hold such ids, so each comment's conclusion stands; only its description of the route is stale. Carried to the first wave that edits each file.
+- **The full rename of `TMPROOT_ID_MAX_CHARS`.** It touches `coord/store.ts`, so it waits until after #351. Until
+  then, the alias stands.
+- **SEC2 C and D.** A `RegistryId` brand on every builder, or an assertion inside each id-taking builder, stays in the
+  spec's "Later".
+
+### Departures recorded while building
+
+These are the departures the SDD ledger recorded for Tasks 0 to 15 that the sections above do not already name, one
+measured sentence each.
+
+- `over-long-request-ids-stop-at-the-router`: the router's default parameter-length cap answers 414 `FST_ERR_MAX_PARAM_LENGTH` for a request `:id` over 100 characters before any handler, so a 255- or 256-character request id never reaches `knownId`; the cases pin the router's answer, and their longest control is 100 characters.
+- `overlong-id-plants-no-row`: a 256-character id cannot name a file, so the stored-row suite plants no registry row for it, and the gate still refuses it because no registry read stands before the gate.
+- `generation-pin-follows-kind`: `child-reclaim-generation.test.ts`'s one text pin of the close now spells `read.kind === 'found' ? childReclaimRowUuid(read.record) : null`, because `SingleRead` has no `found` boolean.
+- `refused-test-warn-spy-typed`: the refused-row test's log helper types its two callback parameters, because the spy's `mock.calls` is untyped under the tests' tsconfig.
+- `pre-spawn-listing-is-the-second`: dispatch's pause-marker listing is the first registry listing of a fresh dispatch and the pre-spawn read is the second, so the test that fails the pre-spawn read fails the second listing.
+- `registry-unmeasurable-docstring-names-the-pre-spawn-refusal`: `DispatchOutcome`'s `registry-unmeasurable` docstring now says its `stderr` is also absent on the pre-spawn read, where no ccd call has been made.
+- `fleet-health-fixtures-list-their-registry`: two live-arm cases in `fleet-health.test.ts` create an empty registry directory, because an unlistable registry now serves the stale arm instead of the live one.
+- `claims-conflict-pinned-on-its-own-listing`: the claims-conflict case calibrates the listings an uncontested claim spends, then fails exactly the conflict arm's own registry read, the next one, because `assembleFleet`'s limits read also lists the registry directory inside that arm.
+- `census-helpers-shared-not-copied`: the census cases for the migrated readers reuse the census file's own scan (`sourceTexts`, `allSites` and `codeOnly`) and add two helpers once at module scope, `callArgs` and `isDefinition`, instead of a second copy of the scanner.
+- `tag-lines-carry-no-digit`: no `[registry-refused:<word>]` tag line carries a digit, so the spec citation and the status number that tag lines once held are dropped from them, and a census case pins the rule.
+- `stop-pair-project-redirect-pinned`: the real-binary file also proves that a project spelled `--surface` redirected the legacy pair form to `<wrapper>-pwa` under the old order, and is refused by usage under the new one.
+- `lifecycle-rows-edited-by-pattern`: `lifecycle.test.ts`'s six stop rows were rewritten by a count-guarded pattern edit rather than retyped from the plan, so each row keeps its fixture ids and changes only the position of the surface pair.
+- `census-names-the-stop-pair-gate`: after the census's fix round, `id-argv-census.test.ts` lists `stopPairRefused` among its gates and in the `stopPair` row, requires it above each of `stopArgvFor`'s three call sites, and pins `childSpent`, `childSpentLive` and the two `sweepNames` rows through their callers or an entry.
