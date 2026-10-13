@@ -1050,6 +1050,28 @@ describe('TranscriptResolver and the fork', () => {
     expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: to, uuid: B });
   });
 
+  it('a FOLLOWED answer is re-walked on the back-off — a predecessor resumed past its marker is answered again ' +
+     '(#189 re-review)', async () => {
+    // A followed answer stands on its predecessor's marker, and the memo
+    // revalidates it on the SUCCESSOR's stamp alone. A predecessor resumed
+    // past its marker (a finished turn after it: Claude Code's own reader
+    // then says "not continued") is a change to a file the memo never stats,
+    // so a frozen successor was served for the life of the socket.
+    const b = box();
+    const own = plantChain(b, A, turn('one') + marker(A, B));
+    const to = plantChain(b, B, turn('two'));
+    let clock = 1_000_000;
+    const r = new TranscriptResolver(localIO, { backoffMs: 30_000, now: () => clock });
+    expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: to, uuid: B, followedFrom: [A] });
+    appendFileSync(own, turn('resumed in the pre-fork session'), 'utf8');   // B is frozen
+    clock += 29_999;
+    expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: to, uuid: B });   // inside the back-off
+    clock += 1;
+    const again = await r.resolve(chainOpts(b, A));
+    expect(again).toMatchObject({ path: own, uuid: A });
+    expect(again).not.toHaveProperty('followedFrom');
+  });
+
   it('still serves the memo when nothing changed', async () => {
     const b = box();
     plantChain(b, A, turn('one'));

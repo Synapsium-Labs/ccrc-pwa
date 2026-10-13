@@ -89,6 +89,11 @@ export type TranscriptResolution =
        * registry one hop per quiescence, and a chain longer than
        * `MAX_CONTINUATION_HOPS` leaves the stream several hops AHEAD of it, so
        * the registry lands on a uuid this list already holds).
+       *
+       * And a followed answer is a "keep looking" one on the back-off
+       * (`TranscriptResolver.staleByBackoff`): it stands on its
+       * predecessor's marker, and a predecessor resumed past that marker is
+       * the conversation again (#189 re-review).
        */
       readonly followedFrom?: readonly string[];
       /**
@@ -518,6 +523,18 @@ async function continuationAt(io: FleetIO, file: string, uuid: string): Promise<
   return next === null ? { kind: 'none', stat } : { kind: 'next', uuid: next, stat };
 }
 
+/**
+ * What `file`'s own tail says NOW, by the shared rule (D-4940): `none`
+ * (measured: no successor named — a finished turn after a marker cancels it,
+ * exactly as Claude Code's own reader answers), `next`, or `unmeasured`.
+ * The stream's check before it un-follows a fork (D-4946): a predecessor
+ * answer can be a stale memo entry, so only a read taken at the moment of
+ * the decision may say the predecessor was resumed past its marker.
+ */
+export async function tailVerdict(io: FleetIO, file: string, uuid: string): Promise<TailVerdict['kind']> {
+  return (await continuationAt(io, file, uuid)).kind;
+}
+
 /** One walk's answer, plus the stat of the answered file that the walk took
  *  BEFORE it read anything of that file (D-4948) — the memo's stamp. Null for
  *  a `fallback`, and for a `found` whose stat failed. */
@@ -591,13 +608,15 @@ interface Walked {
  *
  * THE HOP BOUND IS DELIBERATELY NOT A DECLINE. It is not a condition that
  * heals: re-running this walk from the same uuid over the same disk lands on
- * the same file every time, so flagging it would buy a full ladder run every
- * back-off and change no answer. It also never READ a marker on the file it
+ * the same file every time. It also never READ a marker on the file it
  * stops at — the bound expires before that question is asked — so
  * `declinedTo` would be claiming a measurement nobody made. A chain that long
  * converges the other way instead: `ccd` advances the registry one hop per
  * quiescence, a moved registry uuid changes the memo's KEY, and the stream
- * recognises the move as its own chain through `followedFrom` (D-4947).
+ * recognises the move as its own chain through `followedFrom` (D-4947). (Any
+ * FOLLOWED answer, this one included, is still re-walked on the back-off —
+ * not for the bound, but because a predecessor can be resumed past its
+ * marker; see `TranscriptResolver.staleByBackoff`.)
  *
  * WHAT TRAVELS AND WHAT DOES NOT (the asymmetry `SessionStream` leans on):
  * the answer's `uuid` and `path` are the SUCCESSOR's once a hop is taken,
@@ -707,8 +726,8 @@ export async function continuesInto(
 }
 
 /** How long a "keep looking" answer — a fallback, a foreign-account hit, a
- *  declined follow, an unmeasured tail (`staleByBackoff`) — is trusted before
- *  the full ladder runs again (§5.4). */
+ *  declined follow, an unmeasured tail, a followed fork (`staleByBackoff`) —
+ *  is trusted before the full ladder runs again (§5.4). */
 export const RESOLVER_BACKOFF_MS = 30_000;
 
 /** Memo entries are keyed per `(configDir, uuid, dirGiven)`; a uuid rotates on
@@ -740,8 +759,8 @@ const stampOf = (st: { size: number; mtimeMs: number } | null): string | null =>
  * finally wrote where the tailer is already pointed), the key changed, or a
  * back-off expired. The back-off applies only to the answers that mean "keep
  * looking": a `fallback`, a `foreign-glob` hit, a follow the walk declined
- * (`declinedTo`) and a tail it could not read (`tailUnmeasured`, D-4946) —
- * `staleByBackoff` is the list.
+ * (`declinedTo`), a tail it could not read (`tailUnmeasured`, D-4946) and a
+ * follow it TOOK (`followedFrom`, D-4946) — `staleByBackoff` is the list.
  *
  * HONEST LIMIT, stated rather than discovered: a memoized rung-5 answer whose
  * file still exists is NOT re-laddered when a better rung starts hitting, and
@@ -837,7 +856,7 @@ export class TranscriptResolver {
   }
 
   private staleByBackoff(e: { answer: TranscriptResolution; at: number; readonly stamp: string | null; seen: string | null }): boolean {
-    // FOUR "keep looking" answers, not two. The third is the one the stamp
+    // FIVE "keep looking" answers, not two. The third is the one the stamp
     // gate above cannot rescue: a `found` at an exact rung whose file carries
     // a `continued-in` marker the walk DECLINED to follow. That file is
     // terminal — it will never change again — so its stamp matches for ever
@@ -853,10 +872,23 @@ export class TranscriptResolver {
     // file, so it gets the same retry — on the back-off, like an incomplete
     // `fallback`, the other "could not read the fleet host" answer, so a
     // loaded box is not asked again every two seconds.
+    //
+    // The fifth is a follow the walk TOOK (#189 re-review, D-4946). A
+    // followed answer stands on its predecessor's marker, but it is stamped
+    // and revalidated by the SUCCESSOR's stat alone — and the predecessor is
+    // the one file that can change it back: resumed past its marker (an
+    // explicit `claude --resume <pre-fork id>` never checks the marker), it
+    // gains a finished turn after it, and by the shared rule — Claude Code's
+    // own — it is no longer continued. Measured: with a frozen successor the
+    // memo served it for the life of the socket while the operator's prompts
+    // landed in the predecessor. The window is the one in which the registry
+    // still names the predecessor; once `ccd` moves it, the key is the
+    // successor's own and nothing here was followed.
     const keepsLooking = e.answer.kind === 'fallback'
       || e.answer.rung === 'foreign-glob'
       || e.answer.declinedTo !== undefined
-      || e.answer.tailUnmeasured === true;
+      || e.answer.tailUnmeasured === true
+      || e.answer.followedFrom !== undefined;
     return keepsLooking && this.now() - e.at >= this.backoffMs;
   }
 

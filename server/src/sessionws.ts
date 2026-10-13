@@ -5,7 +5,7 @@ import { configDirFor, type CcrcConfig } from './config.js';
 import { measuredIdentity, readSessionRecord } from './registry.js';
 import { liveSessionStatus, readLiveStateMeasured } from './livestate.js';
 import {
-  continuesInto, rungRank, TranscriptResolver, type TranscriptResolution,
+  continuesInto, rungRank, tailVerdict, TranscriptResolver, type TranscriptResolution,
 } from './transcript/resolve.js';
 import { readBacklog, TranscriptTailer } from './transcript/tail.js';
 import { hasMenu, parseDialog } from './pane/dialog.js';
@@ -118,7 +118,14 @@ export class SessionStream {
    *  re-ladder learns about that file — the successor its marker names
    *  (`declinedTo`), a tail it could not read — is exactly what
    *  `registryCaughtUp` must see when `ccd` moves the registry. The tailer
-   *  itself is untouched: same file, same offset. */
+   *  itself is untouched: same file, same offset.
+   *
+   *  And one fact only the STREAM can add (#189 re-review, SV-2): when the
+   *  registry moves onto a successor this file leads to but nothing has
+   *  been written to yet, `keepsTailer` keeps this file on screen and names
+   *  that successor in `declinedTo` — the stream declined it, exactly as a
+   *  walk declines an empty successor — so `shouldRepoint` can move forward
+   *  to it once it has content. */
   private tailed: TranscriptResolution | null = null;
 
   private readonly onNotice = (n: Notice): void => this.send({ type: 'notice', message: n.message });
@@ -387,13 +394,38 @@ export class SessionStream {
    *  (one agent RPC timing out, in remote mode) re-pointed it onto the best
    *  file the re-ladder had left: the frozen pre-fork transcript, backwards.
    *  An unmeasured file is still there as far as anyone knows; the next tick
-   *  asks again. */
+   *  asks again.
+   *
+   *  The fork clauses' two facts (`RepointFacts`) are measured here too, each
+   *  ONLY when its clause is the one deciding — a predecessor answer that is
+   *  clean (one read of its tail), or the successor the tailed file declined
+   *  (one stat) — so neither costs a healthy tick anything. */
   private async repointNeeded(next: TranscriptResolution): Promise<boolean> {
     const cur = this.tailed;
     if (cur === null) return false;
     if (cur.path === next.path && rungRank(cur) === rungRank(next)) return false;  // no stat
     const st = await this.deps.io.statMeasured(cur.path);
-    return shouldRepoint(cur, next, st.ok || st.reason !== 'absent');
+    return shouldRepoint(cur, next, st.ok || st.reason !== 'absent', await this.repointFacts(cur, next));
+  }
+
+  /** `shouldRepoint`'s io-bound facts, for exactly the shapes its fork
+   *  clauses decide (see `RepointFacts`). */
+  private async repointFacts(cur: TranscriptResolution, next: TranscriptResolution): Promise<RepointFacts> {
+    if (cur.kind !== 'found' || next.kind !== 'found' || cur.uuid === next.uuid) return {};
+    if (cur.followedFrom?.includes(next.uuid) === true) {
+      // An answer that could not read the predecessor, or that read its
+      // marker and declined, is not one that says it was resumed.
+      if (next.tailUnmeasured === true || next.declinedTo !== undefined) return {};
+      return { predecessorResumed: (await tailVerdict(this.deps.io, next.path, next.uuid)) === 'none' };
+    }
+    if (cur.declinedTo === next.uuid) return { successorHasContent: await this.hasContent(next.path) };
+    return {};
+  }
+
+  /** A MEASURED non-empty file. Unreadable is not "has content". */
+  private async hasContent(file: string): Promise<boolean> {
+    const st = await this.deps.io.statMeasured(file);
+    return st.ok && st.size > 0;
   }
 
   /** Read the session's task list and send it when it differs from what this
@@ -665,6 +697,47 @@ export class SessionStream {
     return continuesInto(this.deps.io, cur, uuid, next.kind === 'found' ? [path.dirname(next.path)] : []);
   }
 
+  /**
+   * A registry move `tick` already called a continuation: keep the open tailer
+   * rather than open `next`? Yes, while the tailed file still exists (only a
+   * proven ENOENT is gone, D-4946), when `next` is:
+   *
+   *   - a link BEHIND the tailed file — a uuid it was followed FROM (SV-1).
+   *     `ccd` advances one hop per quiescence, so a stream that followed
+   *     A->B->C sees the registry land on B, and a walk from B that cannot
+   *     read B's tail answers B. That is `shouldRepoint`'s backward refusal,
+   *     which this branch skipped. A B that was really resumed past its
+   *     marker is re-pointed to on the next tick, by that same rule.
+   *   - a `fallback`, or a file with NO CONTENT — empty, or not measured
+   *     (SV-2). `ccd`'s resume path could name a successor a live background
+   *     job holds but has not written (D-4944); the walk itself never trades
+   *     a file with content for that, and a backlog of it replaced the whole
+   *     conversation with an empty chat.
+   *
+   * When the registry's uuid is DOWNSTREAM of the tailed file (the move was
+   * explained by its decline or its marker chain, not by a link it was
+   * followed through), the kept answer records it as `declinedTo`: that
+   * successor's later answer comes off its own ladder with no `followedFrom`,
+   * and the decline is what lets `shouldRepoint` move forward to it once it
+   * has content. The stream's frames keep the uuid the tailer was opened
+   * under until the next backlog; a reconnect in that window is answered
+   * with a backlog, never a stitched offset.
+   *
+   * Paid only on a registry move this stream already calls a continuation:
+   * at most one stat of `next` and one of the tailed file.
+   */
+  private async keepsTailer(registryUuid: string, next: TranscriptResolution): Promise<boolean> {
+    const cur = this.tailed;
+    if (cur === null || cur.kind !== 'found' || cur.path === next.path) return false;
+    const behind = next.kind === 'found' && next.uuid !== cur.uuid && cur.followedFrom?.includes(next.uuid) === true;
+    if (!behind && next.kind === 'found' && await this.hasContent(next.path)) return false;
+    const st = await this.deps.io.statMeasured(cur.path);
+    if (!st.ok && st.reason === 'absent') return false;
+    const downstream = registryUuid !== cur.uuid && cur.followedFrom?.includes(registryUuid) !== true;
+    if (downstream) this.tailed = { ...cur, declinedTo: registryUuid };
+    return true;
+  }
+
   /** 2 s poll: uuid change → rotated + fresh backlog; status change → status msg. */
   private async tick(): Promise<void> {
     if (this.stopped || this.ticking) return;
@@ -739,12 +812,22 @@ export class SessionStream {
         // hop bound, is the witness both cases leave; `continuesInto` reads
         // it. Paid only on a move no held fact explains, which is otherwise a
         // real rotation: one stat and one tail read of a file with no marker.
+        //
+        // AND A CONTINUATION NEVER TRADES THE FILE ON SCREEN FOR LESS (#189
+        // re-review, SV-1/SV-2). Catching up is not the same as having
+        // something better to show, and this branch used to open whatever the
+        // registry's new uuid resolved to the moment the move was called a
+        // continuation — a link BEHIND the followed file whose tail read
+        // failed this once, or a successor with nothing written yet.
+        // `keepsTailer` decides, by the re-point rule's own terms.
         const caughtUp = registryCaughtUp(this.tailed, data.uuid, data.resolution)
           || (!appeared && await this.tailedContinuesInto(data.uuid, data.resolution));
         if (this.stopped) return;
+        const keep = !appeared && caughtUp && await this.keepsTailer(data.uuid, data.resolution);
+        if (this.stopped) return;
         this.uuid = data.uuid;
         if (!appeared && !caughtUp) this.send({ type: 'rotated', uuid: data.uuid });
-        await this.sendBacklogAndTail(data);
+        if (!keep) await this.sendBacklogAndTail(data);
       } else if (await this.repointNeeded(data.resolution)) {
         // §5.3: the uuid did not move but the ANSWER did — a swap landed, or
         // the file this stream was tailing is gone. Fix round 1, MY RULING
@@ -772,12 +855,13 @@ export class SessionStream {
         //
         // A DECLINE OUTLIVES A READ THAT FAILED (#189 fix-forward, probe R1).
         // An answer that could not read the file's tail knows LESS than one
-        // that read its marker, not something different: a marker is the last
-        // line a file ever gets, so the successor it named is still named.
-        // Replacing `tailed` outright threw that away — after the back-off the
-        // re-walk's read of A failed, A{tailUnmeasured} overwrote A{declinedTo
-        // B}, and ccd's move onto B then sent `rotated`. A MEASURED answer
-        // still replaces it whole: a file that was resumed past its marker
+        // that read its marker, not something different: a decline learned
+        // from a MEASURED read stays true until a later measured read says
+        // otherwise. Replacing `tailed` outright threw that away — after the
+        // back-off the re-walk's read of A failed, A{tailUnmeasured}
+        // overwrote A{declinedTo B}, and ccd's move onto B then sent
+        // `rotated`. A MEASURED answer still replaces it whole: a file that
+        // was resumed past its marker (a finished turn after it, D-4940)
         // really has stopped naming it.
         const held = this.tailed;
         const next = data.resolution;
@@ -875,9 +959,22 @@ export function nextDialogFrame(
  * different thing, and rung order was never asked to rank it. A fallback
  * carries no uuid and needs none: it always ranks last, so a fallback on
  * either side is already decided by rank.
+ *
+ * `facts` are the two the fork clauses need that only io can give, MEASURED
+ * by the caller only when that clause is the one deciding (`repointNeeded`).
+ * Absent, each answers "not shown": neither ever re-points on a guess.
  */
+export interface RepointFacts {
+  /** `next` is a uuid `cur` was followed FROM, and its own tail, read at the
+   *  moment of this decision, names no successor (`tailVerdict` -> `none`):
+   *  it was resumed past its marker. */
+  readonly predecessorResumed?: boolean;
+  /** `next` is the successor `cur` declined, and its file measured non-empty. */
+  readonly successorHasContent?: boolean;
+}
+
 export function shouldRepoint(
-  cur: TranscriptResolution, next: TranscriptResolution, tailedExists: boolean,
+  cur: TranscriptResolution, next: TranscriptResolution, tailedExists: boolean, facts: RepointFacts = {},
 ): boolean {
   // SUPERSESSION RUNS ONE WAY (D-4946). A different uuid re-points only when
   // the new answer's walk passed THROUGH the uuid being tailed — it is that
@@ -903,8 +1000,34 @@ export function shouldRepoint(
   // 2 s flap of the whole chat on every such blip. A predecessor this answer
   // was followed FROM is never a better address for it while it is still
   // there; once it is gone, the address rules below decide as before.
+  //
+  // UNLESS IT IS THE CONVERSATION AGAIN (#189 re-review, server lens). An
+  // explicit `claude --resume <pre-fork id>` never checks the marker, so a
+  // supervisor that resumes the predecessor (one not yet moved to this
+  // build, or a head `ccd` cannot see) puts the operator's prompts in it
+  // while this stream shows the fork. Its tail then ends in a finished turn,
+  // and Claude Code's own reader answers "not continued" for exactly that
+  // (D-4940). The answer alone cannot say so — a clean predecessor is also
+  // what a stale memo entry serves (E2b) — so the caller reads the
+  // predecessor's tail at this moment (`predecessorResumed`), and only a
+  // MEASURED "no successor" re-points back.
   if (cur.kind === 'found' && next.kind === 'found' && cur.uuid !== next.uuid
-    && cur.followedFrom?.includes(next.uuid) === true && tailedExists) return false;
+    && cur.followedFrom?.includes(next.uuid) === true) {
+    if (facts.predecessorResumed === true) return true;
+    if (tailedExists) return false;
+  }
+  // AND A SUCCESSOR THE TAILED FILE DECLINED IS DOWNSTREAM TOO (#189
+  // re-review, SV-2). When the registry moves onto a successor with nothing
+  // written yet, `tick` keeps the file on screen and records the successor
+  // as declined; its later answer comes off its own ladder, with no
+  // `followedFrom`, so the decline is the only thing that says it continues
+  // this file. It re-points once its file has content — the walk's own rule:
+  // following may only improve the answer — and never onto it empty while
+  // the tailed file is still there.
+  if (cur.kind === 'found' && next.kind === 'found' && cur.uuid !== next.uuid && cur.declinedTo === next.uuid) {
+    if (facts.successorHasContent === true) return true;
+    if (tailedExists) return false;
+  }
   if (cur.path === next.path && rungRank(cur) === rungRank(next)) return false;
   if (rungRank(next) < rungRank(cur)) return true;
   return !tailedExists;
