@@ -1734,6 +1734,17 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     named as such. A deviation number is allocated with the fix round.
   - **Next:** when review 401's report arrives, close review 401, rule its findings (F2 included), and send fix round 5
     with this ruling. Both lanes stay SHADOWED.
+- **2026-10-13 02:05 — OPERATOR: "Admin merge when green."** This is a standing authorization for #351's final step, so
+  no further question is asked before the merge.
+  - **"Green" means all of these:**
+    - fix round 5's exact-fingerprint wave-done is re-measured;
+    - its scoped review comes back with no blocker and no finding that needs a ruling;
+    - every required check is green on the final head (macOS is advisory).
+  - **Then:** `gh pr merge 351 --squash --admin --match-head-commit <tip>`. It ignores the one-approving-review rule
+    that #60 added, and the squash message carries the reviewers' measured counts. Run 358 then closes with `prPhase`
+    merged.
+  - **It does NOT license merging the current head `6f1942bbc`:** the operator's 01:50 ruling puts the seal and F2's
+    fix into this fix round, before the merge.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
