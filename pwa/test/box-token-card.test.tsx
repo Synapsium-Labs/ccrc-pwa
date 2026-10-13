@@ -49,15 +49,17 @@ const view = (boxToken: unknown, over: Partial<UpdatesView> = {}): UpdatesView =
   ...(boxToken === undefined ? {} : { boxToken: boxToken as BoxTokenView }),
   ...over,
 });
-/** The screen also mounts the Stall watch section, whose hook reads `api.stallWatch()`: settle it as a server without
- *  the route (501 not-configured), so no mount here issues a live fetch. */
-const spyStallWatch = (): void => {
+/** The screen also mounts the Stall watch and Temp root collector sections, whose hooks read `api.stallWatch()` and
+ *  `api.collectLane()`: settle both as a server without the routes (501 not-configured), so no mount here issues a
+ *  live fetch. */
+const spySectionReads = (): void => {
   vi.spyOn(api, 'stallWatch').mockRejectedValue(new ApiError(501, { error: 'not-configured' }));
+  vi.spyOn(api, 'collectLane').mockRejectedValue(new ApiError(501, { error: 'not-configured' }));
 };
 /** Mount the screen over one answer; resolves with the card's region once it has rendered. */
 const mount = async (v: UpdatesView): Promise<HTMLElement> => {
   vi.spyOn(api, 'updates').mockResolvedValue(v);
-  spyStallWatch();
+  spySectionReads();
   render(<><ToastHost /><SettingsScreen /></>);
   return screen.findByRole('region', { name: 'Box token' });
 };
@@ -255,7 +257,7 @@ describe('Rotate now', () => {
     const updates = vi.spyOn(api, 'updates').mockResolvedValue(view(BT()));
     const rotate = vi.spyOn(api, 'rotateBoxToken')
       .mockResolvedValue({ ok: true, outcome: 'started', view: BT({ phase: 'staged' }) } satisfies RotateAnswer);
-    spyStallWatch();
+    spySectionReads();
     render(<><ToastHost /><SettingsScreen /></>);
     const card = await screen.findByRole('region', { name: 'Box token' });
     fireEvent.click(within(card).getByRole('button', { name: 'Rotate now' }));

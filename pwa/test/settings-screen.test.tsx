@@ -2279,20 +2279,22 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
   };
   const radio = (name: string): HTMLElement => within(section()).getByRole('radio', { name, hidden: true });
 
-  it('LOADING state (api.updates never resolves, so no Box token card): Stall watch comes after Notifications, titled Stall watch', async () => {
+  it('LOADING state (api.updates never resolves, so no Box token card): Stall watch comes after Notifications, then Temp root collector', async () => {
+    vi.spyOn(api, 'collectLane').mockReturnValue(new Promise(() => {}));
     await mount(swView());
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
-    expect(headings).toEqual(['Updates', 'Notifications', STALL_SECTION_TEXT.title]);
+    expect(headings).toEqual(['Updates', 'Notifications', STALL_SECTION_TEXT.title, 'Temp root collector']);
   });
 
-  it('LANDED state (api.updates answered, so the Box token card renders): the order is Updates, Box token, Notifications, Stall watch', async () => {
+  it('LANDED state (api.updates answered, so the Box token card renders): the order is Updates, Box token, Notifications, Stall watch, Temp root collector', async () => {
     vi.spyOn(api, 'updates').mockResolvedValue(t7View());
     vi.spyOn(api, 'stallWatch').mockResolvedValue(swView());
+    vi.spyOn(api, 'collectLane').mockReturnValue(new Promise(() => {}));
     render(<SettingsScreen />);
     await screen.findByRole('heading', { name: 'Box token', level: 2 });
     await levelGroup();
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
-    expect(headings).toEqual(['Updates', 'Box token', 'Notifications', STALL_SECTION_TEXT.title]);
+    expect(headings).toEqual(['Updates', 'Box token', 'Notifications', STALL_SECTION_TEXT.title, 'Temp root collector']);
   });
 
   it('P1: pending is a skeleton, a failed first read says so, and a view renders — three states, never folded', async () => {
@@ -2636,8 +2638,13 @@ describe('SettingsScreen — stall watch: source scans (P6, P9)', () => {
     typeof v === 'string' ? [v] : typeof v === 'object' && v !== null ? Object.values(v).flatMap(l0Strings) : [];
 
   it('P6: the section and its hook have no device branch and no device word', () => {
-    // settingsText.ts holds the text the Settings screen and its sections share, so it is scanned with them.
-    for (const [name, src] of [['StallWatchSection.tsx', sectionSrc], ['useStallWatchView.ts', hookSrc], ['settingsText.ts', textSrc]]) {
+    // settingsText.ts holds the text the Settings screen and its sections share, so it is scanned with them. The
+    // Temp root collector's section, hook, words and the shared not-available helper are Settings files too
+    // (path-identity spec 2026-10-12 §5.7: no string names a device).
+    const srcOf = (...p: string[]): string => readFileSync(path.join(import.meta.dirname, '..', 'src', ...p), 'utf8');
+    for (const [name, src] of [['StallWatchSection.tsx', sectionSrc], ['useStallWatchView.ts', hookSrc], ['settingsText.ts', textSrc],
+      ['CollectLaneSection.tsx', srcOf('fleet', 'CollectLaneSection.tsx')], ['useCollectLaneView.ts', srcOf('fleet', 'useCollectLaneView.ts')],
+      ['collectLaneWords.ts', srcOf('fleet', 'collectLaneWords.ts')], ['notAvailable.ts', srcOf('lib', 'notAvailable.ts')]]) {
       expect(src, name).not.toMatch(DEVICE_BRANCH);
       expect(src, name).not.toMatch(DEVICE_WORD);
     }
