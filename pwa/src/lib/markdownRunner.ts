@@ -1,8 +1,10 @@
 // The main-thread side of the parse worker (native Docs reader, W4 Task 5; design 2026-10-01 section 4.10's "Worker
 // and runner"). A runner owns at most one worker and posts it one job at a time; the others wait in a FIFO.
-//   - The worker is spawned lazily, by the first job or by `prewarm()`. A spawn that throws (no `Worker` global, a
-//     refused script) makes the runner `worker-unavailable` for good: every job, queued or later, answers that at
-//     once, and `spawn` is never called again.
+//   - The worker is spawned lazily, by the first job or by `prewarm()`. A spawn that throws SYNCHRONOUSLY (no
+//     `Worker` global, a `SecurityError` from `new Worker`) makes the runner `worker-unavailable` for good: every
+//     job, queued or later, answers that at once, and `spawn` is never called again. A worker script that fails to
+//     LOAD is not that: `new Worker` returns and the failure arrives later as an async `error` event, so the job
+//     answers `worker-failed`, the worker is dropped, and the next job spawns again (a respawn per job).
 //   - A job's budget timer starts when the job is POSTED, never when it is queued, so no job pays for the one ahead
 //     of it. When it fires: `terminate()`, the job answers `timeout`, and the next job spawns a fresh worker.
 //   - An `error` or `messageerror` event answers the running job `worker-failed` with the event's name, and drops the
