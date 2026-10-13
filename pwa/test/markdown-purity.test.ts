@@ -186,3 +186,23 @@ describe('T11 review 1-1: the scan reads every re-export form, `export * as ns f
     expect(refused).toContain('src/session/MessageBubble.tsx: react');
   });
 });
+
+describe('T11 review 1-2: a regex literal holding a backtick hides no import that follows it', () => {
+  it.each([
+    ["const BT = /`/;\nimport React from 'react';", ['react']],
+    ["const BT = /`/;\nexport const f = () => import('react');", ['react']],
+    ["const BT = /`+/g;\nexport * as H from 'highlight.js';\nconst r = require('react');", ['highlight.js', 'react']],
+  ])('%j names %j', (src, specs) => {
+    expect(scanModule(src, 'fixture.ts').specs).toEqual(specs);
+  });
+
+  it('refuses react imported after a backtick regex in a closure file', () => {
+    const { refused } = closure(appendTo('remarkAlerts.ts', [
+      'const BACKTICK = /`/;',
+      'export const backtickSource = BACKTICK.source;',
+      "import { createElement } from 'react';",
+      'export const ce = createElement;',
+    ].join('\n')));
+    expect(refused).toContain('src/lib/remarkAlerts.ts: react');
+  });
+});
