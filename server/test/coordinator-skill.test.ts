@@ -551,6 +551,13 @@ describe('the coordinator skill: linkage', () => {
       // first half of the invitation. The forbid-mention case below forbids it.
       'GET /api/coord/stall-watch',
       'POST /api/coord/stall-watch',
+      // CHILD-RECLAMATION wave 10 — the operator-dial shape a fourth time, on the
+      // lane that deletes temp roots. A coordinator told about this door would be
+      // told how to arm the deletion of its own children's temp roots, an act no
+      // session holds. Neither half is named, for the caps reason: the read is the
+      // first half of the invitation.
+      'GET /api/coord/collect-lane',
+      'POST /api/coord/collect-lane',
     ]);
     const named = skillRoutes();
     for (const r of registeredCoordRoutes()) {
