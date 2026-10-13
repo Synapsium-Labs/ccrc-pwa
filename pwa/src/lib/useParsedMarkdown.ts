@@ -143,7 +143,6 @@ export function useParsedMarkdown(
       j.queued = covered ? undefined : next;
       return;
     }
-    if (covered) return;
     start(j, next, setSettled);
   }, [text, profile, budgetMs, attempt]);
 
