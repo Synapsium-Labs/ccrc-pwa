@@ -5,7 +5,14 @@
 // executes a read over the ReadContext cli.mjs hands it. It runs on the read-only handle and returns a
 // VerbResult for cli.mjs to render. The cap value (OUTPUT_CAP), the envelopes, the display prefixes and the lag are lib
 // functions; the frame reserves (FRAME_RESERVE, TREE_RESERVE, PAGE_FRAME) and describe's page and head sizing
-// (describeCharCost, describePageEnd, DESCRIBE_LIST_RESERVE) are this module's.
+// (describeCharCost, describePageEnd, DESCRIBE_LIST_RESERVE) are this module's, and so are the caps the hardening
+// batches added (HA1, HA1 fix round 1): ECHO_MAX (a hint's echo of the caller's input), NAME_MAX (a sidecar name),
+// EXPAND_LIST_MAX and EXPAND_LIST_ROOM with listPrefix (how many variant causes and sidecar names an expanded entry
+// lists), and cutMarked (describe's gist cut). The fitting stays here, in L4, on purpose: each is a choice about how
+// one verb lays out its own page, measured against what THAT verb renders (its human lines and its --json item), and
+// no other module reads them. What is a pure rule of the display, with no verb's layout in it, is lib's already: the
+// display string for a stored id (displayToken), the envelope and its escapes (recallEnvelope, escapeXmlAttr), the cut
+// (cutText, textCost, pageEnd) and the cut item's budget (CUT_TEXT_BUDGET, PAGE_TEXT_BUDGET).
 //
 // Every select names its columns, never a wildcard projection (C43). A column a later schema version added is named through
 // selectColumns(rc.version, …), so a store older than this code answers with that field null (§6.11).
@@ -23,7 +30,7 @@ import {
 } from './lib.mjs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { childrenOf, parentOf, probeFts5, blobPlainText, lineageEntries, recoverOpenOn } from './store.mjs';
+import { childrenOf, parentOf, probeFts5, blobPlainText, blobPlainTextMeasured, lineageEntries, recoverOpenOn } from './store.mjs';
 import * as xlib from './lib.mjs';
 import * as xstore from './store.mjs';
 import { basename as xbasename } from 'node:path';
@@ -549,15 +556,26 @@ function nameShown(rc, name) {
   return shown.length <= NAME_MAX ? shown : xlib.cutText(shown, NAME_MAX, 6 * NAME_MAX);
 }
 
-/** A hit's human line: its snippet inside the untrusted-content envelope, which escapes it (§8.3, P30). */
-function hitLine(rc, hit, snippet) {
-  return `  ${recallEnvelope({ src: hit.provenance, id: hit.uuid ?? `sidecar:${nameShown(rc, hit.name)}`, ts: hit.ts_ms, role: hit.role, text: snippet })}`;
+/** A stored uuid, role or provenance as the ONE bounded, redacted display string every read verb prints (lib's
+ *  displayToken; D-4597 (history-read-names-and-echoes-display-redacted)): a real token as it is, any other quoted. It is
+ *  not XML-escaped; each sink escapes it once (an envelope attribute, a text line, JSON). An absent or empty value stays
+ *  as it is, so the seam keeps its two conditions apart. */
+function idShown(rc, v) {
+  return v === null || v === undefined || v === '' ? v : displayToken(v, rc.pairIdx);
 }
 
-/** A hit's --json item: JSON escaping only, so exact copies come from here (§8.3). */
+/** A hit's human line: its snippet inside the untrusted-content envelope, which escapes it (§8.3, P30). The id and the
+ *  role go in as display strings, so a 300,000-character uuid cannot pass the cap and the envelope escapes each once. */
+function hitLine(rc, hit, snippet) {
+  const id = hit.uuid === null || hit.uuid === undefined ? `sidecar:${nameShown(rc, hit.name)}` : idShown(rc, hit.uuid);
+  return `  ${recallEnvelope({ src: hit.provenance, id, ts: hit.ts_ms, role: idShown(rc, hit.role), text: snippet })}`;
+}
+
+/** A hit's --json item: JSON escaping only (§8.3). A uuid, role or provenance of the shape of every real one is an exact
+ *  copy; any other is the bounded, redacted display form, as describe and expand carry it (D-4597). */
 function hitItem(rc, hit, snippet, nodeId) {
   return {
-    entry_uuid: hit.uuid, node_id: nodeId, ts_ms: hit.ts_ms, role: hit.role, provenance: hit.provenance, snippet,
+    entry_uuid: idShown(rc, hit.uuid), node_id: nodeId, ts_ms: hit.ts_ms, role: idShown(rc, hit.role), provenance: idShown(rc, hit.provenance), snippet,
     sidecar: nameShown(rc, hit.name), trust: 'untrusted',
   };
 }
@@ -950,39 +968,33 @@ function producerOfNode(rc, n) {
   return cur === undefined || cur.depth > 0 ? 'unknown' : producerOfLeaf(rc, cur);
 }
 
-/** Whether a stored summary blob decodes, by blobPlainText's own steps (store.mjs): the decode bound, brotli within the
- *  recorded size, the JSON structure bound, the parse and the text. Asked only of a blob whose plain text came back
- *  empty, which is where the two answers (an empty summary, a damaged blob) meet. */
-function summaryDecodes(z, rawLen) {
-  try {
-    if (xlib.blobOverDecodeCap(rawLen)) return false;
-    const bytes = xstore.unbrotli(z, rawLen);
-    if (!xlib.jsonWithinStructureBound(bytes)) return false;
-    xlib.ftsTextOf(JSON.parse(bytes.toString('utf8')), 'entry');
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** A node's native summary, in four states that are never one value (D-4598
- *  (history-describe-names-an-undecodable-summary); no overloaded value at a seam):
+/** A node's native summary, in five states that are never one value (D-4598
+ *  (history-describe-names-an-undecodable-summary); no overloaded value at a seam). The decode itself is store.mjs's
+ *  blobPlainTextMeasured, the one definition of those steps:
  *  - `none`: the node has no summary blob (a raw leaf, a condensed node);
  *  - `absent`: the blob row is gone or tombstoned. That is store corruption (the spec says summaries are never pruned),
  *    which the doctor reports; describe shows it as no summary;
- *  - `undecodable`: the blob is there and does not decode (past the decode bound, past the structure bound, damaged
- *    bytes). `rawLen` is the size recorded for it;
- *  - `text`: the summary as RAW plain text, never shown as it is: the excerpt and each --full page are
- *    redactDisplayWindow's windows of it, so describe's cost is a window's, whatever the summary's length (spec §8.3 and §8.4). */
+ *  - `oversize`: the blob is recorded past the decode bound; nothing was decompressed. `rawLen` is the recorded size;
+ *  - `undecodable`: the blob is there and does not decode (past the structure bound, damaged bytes). `rawLen` is the
+ *    size recorded for it;
+ *  - `text`: the summary as RAW plain text (possibly empty: describe says so in a fixed line), never shown as it is: the
+ *    excerpt and each --full page are redactDisplayWindow's windows of it, so describe's cost is a window's, whatever the
+ *    summary's length (spec §8.3 and §8.4). */
 function summaryOf(rc, n) {
   if (n.summary_blob_id === null) return { state: 'none' };
   const b = rc.db.prepare(`SELECT ${selectColumns(rc.version, 'blobs', ['z', 'raw_len'], rc.schema)} FROM blobs WHERE blob_id = ?`).get(n.summary_blob_id);
   if (b === undefined || b.z === null) return { state: 'absent' };
   const rawLen = Number(b.raw_len);
-  const text = blobPlainText(b.z, false, rc.pairIdx, rawLen);
-  if (text === '' && !summaryDecodes(b.z, rawLen)) return { state: 'undecodable', rawLen };
-  return { state: 'text', text };
+  const m = blobPlainTextMeasured(b.z, false, rc.pairIdx, rawLen);
+  if (m.state === 'text') return { state: 'text', text: m.text };
+  return m.state === 'absent' ? { state: 'absent' } : { state: m.state, rawLen };
 }
+
+/** What describe says of a summary that decoded to nothing (HA1 fix round 1 (h)). */
+const SUMMARY_EMPTY_LINE = 'the summary is empty';
+
+/** The words for a summary recorded past the decode bound: the bound, then the recorded size. */
+const DECODE_CAP_WORDS = (rawLen) => `${xlib.BLOB_DECODE_MAX} bytes; recorded ${rawLen}`;
 
 /** `end`, moved off the middle of a surrogate pair: when the character at `end` is a pair's low half, back one, or,
  *  when that would leave nothing after `start`, forward one. So a page or an excerpt never ends with half an astral
@@ -1064,6 +1076,7 @@ export function runDescribe(rc, a, deps = {}) {
   const sm = summaryOf(rc, n);
   const summary = sm.state === 'text' ? sm.text : null;
   const damaged = sm.state === 'undecodable';
+  const oversize = sm.state === 'oversize';
   /** A window of the raw summary as shown: redacted with its margins, never the whole summary first. */
   const shownSummary = (from, to) => redactDisplayWindow(summary, from, to, rc.pairIdx);
   const env = (src, text) => recallEnvelope({ src, id: disp(id), ts: n.latest_ms, role: null, text });
@@ -1079,6 +1092,9 @@ export function runDescribe(rc, a, deps = {}) {
     if (damaged) {
       return refusal('bad-args', `${disp(id)} has a summary that does not decode: the stored blob is damaged (recorded ${sm.rawLen} bytes); describe it without --full`);
     }
+    if (oversize) {
+      return refusal('bad-args', `${disp(id)} has a summary larger than the decode cap (${DECODE_CAP_WORDS(sm.rawLen)}); describe it without --full`);
+    }
     if (summary === null) return refusal('bad-args', `${disp(id)} has no summary to page; describe it without --full`);
     let off = 0;
     if (a.cursor !== null) {
@@ -1087,6 +1103,14 @@ export function runDescribe(rc, a, deps = {}) {
         return refusal('bad-args', DESCRIBE_STALE_CURSOR);
       }
       off = c.off;
+    }
+    if (summary === '') {
+      // A summary that decoded to nothing: one fixed line, not an empty page labelled `characters 1 to 1 of 0` (HA1 fix round 1 (h)).
+      return {
+        exit: EXIT.OK, header: null, blocks: [nodeLine, SUMMARY_EMPTY_LINE],
+        items: [{ ...base, summary_chars: 0, summary_page: { offset: 0, text: '' }, trust: 'untrusted' }],
+        shown: 1, total: 1, next: null,
+      };
     }
     const { end, page } = describePageEnd(summary, off, budget - nodeLine.length - PAGE_FRAME, a.json, shownSummary);
     return {
@@ -1106,7 +1130,11 @@ export function runDescribe(rc, a, deps = {}) {
   const filesAll = refsAll.filter((r) => r.kind === 'path').map((r) => r.value);
   const excerptMax = summary === null ? 0 : Math.min(summary.length, pairSafeEnd(summary, 0, DESCRIBE_EXCERPT));
   const label = n.depth > 0 ? 'children' : 'sources';
+  // A stored uuid, type and role are ONE display string (lib's displayToken; D-4597), carried as it is in --json and escaped
+  // once by its sink: as text in a line, by JSON.stringify in --json. A crafted one forges no line or tag, and the two
+  // forms agree with expand's.
   const tok = (v) => (v === '' || v === null ? v : displayToken(v, rc.pairIdx));
+  const tx = (v) => escapeXmlText(tok(v));
   const listed = n.depth > 0
     ? childRowsOf(rc, id).map((k) => {
       const c = costRow(Number((k.depth === 0 ? k.src_chars : k.desc_chars) ?? 0));
@@ -1114,8 +1142,10 @@ export function runDescribe(rc, a, deps = {}) {
     })
     : sourcesOf(rc, id).map((s) => {
       const c = costRow(Number(s.raw_len ?? 0));
-      // A stored uuid, type and role print as tokens (lib's displayToken): a crafted one forges no line or tag (D-4597).
-      return { line: `  ${tok(s.uuid)} ${tok(s.type)} ${s.role === null ? '-' : tok(s.role)} chars=${c.chars} fits=${c.fits}`, item: { uuid: s.uuid, type: s.type, role: s.role, chars: c.chars, fits: c.fits } };
+      return {
+        line: `  ${tx(s.uuid)} ${tx(s.type)} ${s.role === null ? '-' : tx(s.role)} chars=${c.chars} fits=${c.fits}`,
+        item: { uuid: tok(s.uuid), type: tok(s.type), role: tok(s.role), chars: c.chars, fits: c.fits },
+      };
     });
   const each = listed.map((x) => (a.json ? JSON.stringify(x.item).length + 1 : x.line.length + 1));
 
@@ -1134,6 +1164,8 @@ export function runDescribe(rc, a, deps = {}) {
   ];
   const tailOf = (f) => {
     if (damaged) return [`summary does not decode: the stored blob is damaged (recorded ${sm.rawLen} bytes)`];
+    if (oversize) return [`summary is larger than the decode cap (${DECODE_CAP_WORDS(sm.rawLen)})`];
+    if (summary === '') return [SUMMARY_EMPTY_LINE];
     return summary === null ? [] : [`summary, the first ${f.excerptEnd} of ${summary.length} characters:`, env('summary', f.excerpt)];
   };
   const itemOf = (f, k) => ({
@@ -1143,6 +1175,7 @@ export function runDescribe(rc, a, deps = {}) {
     [label]: listed.slice(0, k).map((x) => x.item), [`${label}_total`]: listed.length,
     ...(summary === null ? {} : { summary_excerpt: f.excerpt, summary_chars: summary.length }),
     ...(damaged ? { summary_undecodable: true } : {}),
+    ...(oversize ? { summary_oversize: true } : {}),
     trust: 'untrusted',
   });
   const blocksOf = (f, k) => [...headOf(f), `${label} (${k} of ${listed.length} listed):`, ...listed.slice(0, k).map((x) => x.line), ...tailOf(f)];
@@ -1505,10 +1538,14 @@ function listPrefix(n, costOf) {
 function expandRenderItem(rc, s, it, pos, total, o) {
   const isEntry = it.kind === 'entry';
   const e = it.e;
-  // Every stored identifier prints as a token (lib's displayToken; D-4597 (history-read-names-and-echoes-display-redacted)),
-  // so a crafted uuid, type, role or name forges no line or tag and a megabyte of it cannot pass the cap (D-4596). A
-  // sidecar name is first redacted as a display field (nameShown) in every place it is shown.
+  // Every stored identifier is ONE display string (lib's displayToken; D-4597 (history-read-names-and-echoes-display-redacted)),
+  // so a crafted uuid, type, role or name forges no line or tag and a megabyte of it cannot pass the cap (D-4596). It is
+  // not XML-escaped: `tok` is the plain string, which --json carries and an envelope attribute escapes (recallEnvelope),
+  // and `tx` is the same string escaped as text, for a line outside an envelope. A sidecar name is first redacted as a
+  // display field (nameShown) in every place it is shown.
   const tok = (v) => (v === '' || v === null ? v : xlib.displayToken(v, rc.pairIdx));
+  const asText = (v) => (typeof v === 'string' ? xlib.escapeXmlText(v) : v);
+  const tx = (v) => asText(tok(v));
   const src = isEntry ? (e.provenance ?? 'harness') : 'sidecar';
   const uuidShown = tok(e.uuid);
   const nameShownHere = isEntry ? null : nameShown(rc, it.name);
@@ -1517,12 +1554,12 @@ function expandRenderItem(rc, s, it, pos, total, o) {
   const t = isEntry ? expandEntryText(rc, s, e) : expandSidecarText(rc, s, it.blobId);
   const ts = e.ts_ms === null ? '-' : new Date(Number(e.ts_ms)).toISOString();
   const lead = isEntry
-    ? `── ${pos}/${total} ${e.type === '' ? 'raw' : tok(e.type)}${e.role ? `/${tok(e.role)}` : ''} ${tok(src)} ${uuidShown} ${ts}`
-    : `── ${pos}/${total} sidecar ${nameTok} of ${uuidShown}`;
+    ? `── ${pos}/${total} ${e.type === '' ? 'raw' : tx(e.type)}${e.role ? `/${tx(e.role)}` : ''} ${tx(src)} ${asText(uuidShown)} ${ts}`
+    : `── ${pos}/${total} sidecar ${asText(nameTok)} of ${asText(uuidShown)}`;
   const causes = t.state === 'text' ? t.causes : [];
-  const shownCauses = causes.slice(0, listPrefix(causes.length, (i) => Math.max(`variant cause=${tok(causes[i])}`.length, JSON.stringify({ cause: tok(causes[i]) }).length) + 1)).map(tok);
+  const shownCauses = causes.slice(0, listPrefix(causes.length, (i) => Math.max(`variant cause=${tx(causes[i])}`.length, JSON.stringify({ cause: tok(causes[i]) }).length) + 1)).map(tok);
   const tail = [
-    ...shownCauses.map((c) => `variant cause=${c}`),
+    ...shownCauses.map((c) => `variant cause=${asText(c)}`),
     ...(causes.length > shownCauses.length ? [`variant causes: +${causes.length - shownCauses.length} more`] : []),
   ];
   const base = {
@@ -1578,13 +1615,20 @@ function expandRenderItem(rc, s, it, pos, total, o) {
   if (xlib.expandCuts({ whole: o.whole, kind: it.kind, provenance: e.provenance }) && R.length > xlib.EXPLORE_CUT) {
     const path = expandPairedPath(rc, s, e, isEntry ? t.primary : expandPrimaryBody(s, e));
     const kind = xlib.exploreKindOf(path) ?? (isEntry ? null : xlib.exploreKindOf(it.name)) ?? 'code';
-    const cutEnd = xlib.cutText(R, xlib.EXPLORE_CUT, xlib.CUT_TEXT_BUDGET).length;
-    const shown = xlib.cutText(shownOf(0, cutEnd), xlib.EXPLORE_CUT, xlib.CUT_TEXT_BUDGET);
-    const outline = xlib.cutText(xlib.exploreOutline(R, kind, path === null ? undefined : xbasename(path), rc.pairIdx),
-      xlib.EXPLORE_CUT, xlib.CUT_TEXT_BUDGET);
-    // A uuid that is no token is not one `expand` can address either (expandTargetOf), so it gets no next: line.
-    const block = [`${lead} [cut ${cutEnd} of ${R.length} chars; outline: ${kind}]`, env(shown), env(outline, '#outline'),
-      ...(uuidShown === e.uuid ? [xlib.nextLine(['expand', e.uuid, ...o.scope])] : []), ...tail].join('\n');
+    // The item is cut to what an EMPTY page has left after its own frame (the lead and both envelopes, whose ids and role are
+    // display strings of up to 6 * SNIPPET_MAX + 2 characters, escaped again by each attribute): each half to at most
+    // CUT_TEXT_BUDGET and to half of that room. The room is the empty page's, never the page's remaining budget, so
+    // the same item cuts the same way wherever it falls on a page (HA1 fix round 1, T1).
+    // A uuid that is no address `expand` takes (expandTargetOf) is not one the next: line may name, whatever its shape.
+    const nextLines = xlib.expandTargetOf(e.uuid) === 'entry' ? [xlib.nextLine(['expand', e.uuid, ...o.scope])] : [];
+    const cutLead = (n) => `${lead} [cut ${n} of ${R.length} chars; outline: ${kind}]`;
+    const frameCost = measure([cutLead(R.length), env(''), env('', '#outline'), ...nextLines, ...tail].join('\n'),
+      { ...base, text: '', from: 0, to: R.length, of: R.length, cut: true, outline: '', outline_kind: kind, pruned_ms: null, ...extra });
+    const half = Math.min(xlib.CUT_TEXT_BUDGET, Math.max(0, xlib.PAGE_TEXT_BUDGET - frameCost) >> 1);
+    const cutEnd = xlib.cutText(R, xlib.EXPLORE_CUT, half).length;
+    const shown = xlib.cutText(shownOf(0, cutEnd), xlib.EXPLORE_CUT, half);
+    const outline = xlib.cutText(xlib.exploreOutline(R, kind, path === null ? undefined : xbasename(path), rc.pairIdx), xlib.EXPLORE_CUT, half);
+    const block = [cutLead(cutEnd), env(shown), env(outline, '#outline'), ...nextLines, ...tail].join('\n');
     const json = { ...base, text: shown, from: 0, to: cutEnd, of: R.length, cut: true, outline, outline_kind: kind, pruned_ms: null, ...extra };
     const cost = measure(block, json);
     return cost <= o.budget || o.first ? { block, json, cost, partial: false, to: 0 } : null;

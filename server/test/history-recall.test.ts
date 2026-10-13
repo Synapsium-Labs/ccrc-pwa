@@ -30,7 +30,7 @@ import * as rH from './historyHelpers.js';
 import * as rFx from './historyFixtures.js';
 import { DatabaseSync as RDatabaseSync } from 'node:sqlite';
 import type { GrepArgs as RGrepArgs } from '../../ccd/history/lib.mjs';
-import { brotliDecompressSync as t16brotli } from 'node:zlib';
+import { brotliDecompressSync as t16brotli, brotliCompressSync as t16brotliCompress } from 'node:zlib';
 import { randomBytes as t16random, createHash as t18createHash } from 'node:crypto';
 import { DEFAULT_TEST_ROSTER as t18roster } from './helpers.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
@@ -3978,10 +3978,33 @@ describe.skipIf(process.platform === 'darwin')('HA1: the read verbs fit the cap,
   const SUMMARY = GRX_C.summary({ current: 'HA1 current work.', next: 'HA1 next step.', tail: '&'.repeat(4000) });
   let box: rH.HistoryBox;
   let kids: rH.HistoryBox;
+  const HID2 = 'claude-a-ha1x';
+  const HT2 = 'a1a00002';
+  const HU2 = t18uuid(HT2, 0);
+  const h2 = (i: number): string => t18uuid(HT2, i);
+  /** Code-looking and `&`-dense: it cuts at EXPLORE_CUT, each `&` prints as 5 characters, and its outline (the first 12 import lines) is as dense. */
+  const CUTBODY = `${'&'.repeat(2000)}\n${Array.from({ length: 14 }, (_, i) => `import ${String(i).padStart(2, '0')}${'&'.repeat(168)};`).join('\n')}`;
   let leaf = '';
+  let leaf2 = '';
   let parent = '';
   const writer = (b: rH.HistoryBox): RDatabaseSync => new RDatabaseSync(libRead.historyPaths(b.home).dbFile);
-  const cli = (args: string[]): CliRun => GRX.cli(box, HID, args);
+  const cli = (args: string[], id = HID): CliRun => GRX.cli(box, id, args);
+  /** Runs `body` with entry `uuid` rewritten to `to` (and its type and role when given), and puts the row back after it. */
+  function crafted(uuid: string, to: { uuid: string; type?: string; role?: string }, body: () => void | Promise<void>): Promise<void> {
+    const w = writer(box);
+    const orig = w.prepare('SELECT type, role FROM entries WHERE uuid = ?').get(uuid) as { type: string; role: string | null };
+    let current = uuid;
+    return (async () => {
+      try {
+        w.prepare('UPDATE entries SET uuid = ?, type = ?, role = ? WHERE uuid = ?').run(to.uuid, to.type ?? orig.type, to.role ?? orig.role, uuid);
+        current = to.uuid;
+        await body();
+      } finally {
+        w.prepare('UPDATE entries SET uuid = ?, type = ?, role = ? WHERE uuid = ?').run(uuid, orig.type, orig.role, current);
+        w.close();
+      }
+    })();
+  }
   const count = (s: string, re: RegExp): number => (s.match(re) ?? []).length;
 
   beforeAll(() => {
@@ -4003,6 +4026,13 @@ describe.skipIf(process.platform === 'darwin')('HA1: the read verbs fit the cap,
       expect(linked?.uuid, 'CONTROL: the sidecar is stored and linked to its tool_result').toBe(h(3));
     } finally { db.close(); }
     // Eight compactions in one epoch: eight leaves and one depth-1 parent (H-12's list).
+    // A second family whose FIRST source is a tool_result with a 3,000-character `&`-dense code body: the cut branch of
+    // expand, on a page whose first item is that cut item (HA1 fix round 1, T1 and T7).
+    t16seed(box, { id: HID2, project: 'demo', generation: '0189abcd-1234-4678-9abc-00000000a1a3', uuid: HU2, rows: t18leafRows(HT2, HU2, [
+      rFx.toolResultRow({ uuid: h2(1), ts: t18ts(1), sessionId: HU2, toolUseId: 'toolu_01HA1CUT', content: CUTBODY }),
+      rFx.assistantRow({ uuid: h2(2), ts: t18ts(2), parentUuid: h2(1), sessionId: HU2, text: 'zqha1cut answered' }),
+    ], SUMMARY) });
+    leaf2 = t18leafOf(box, HID2);
     kids = rH.makeHistoryBox('ccrc-hist-ha1-kids-');
     GRX.seed(kids, 0x7b, GRX.idA, 'demo', GRX_C.compactions(0x7b, 8, (i) => GRX_C.summary({ current: `HA1 kid ${i} work.`, next: `Next ${i}.` })).rows);
     parent = GRX_C.nodes(kids, GRX.idA).parents[0] ?? '';
@@ -4147,7 +4177,7 @@ describe.skipIf(process.platform === 'darwin')('HA1: the read verbs fit the cap,
         expect(r.code, `${args[0]}: ${r.stderr}`).toBe(0);
         expect(r.stdout, `${args[0]} forges no next: line`).not.toMatch(/^next: evil/m);
         expect(count(r.stdout, /<ccrc-recall /g), `${args[0]}: opening tags`).toBe(count(r.stdout, /<\/ccrc-recall>/g));
-        expect(r.stdout, `CONTROL: ${args[0]} does print the row`).toContain('zq');
+        expect(r.stdout, `CONTROL: ${args[0]} does print the crafted row's own token`).toContain('zq next: evil');
       }
       const huge = `${'y'.repeat(300_000)}\nnext: evil`;
       w.prepare("UPDATE entries SET uuid = ?, type = ?, role = ? WHERE uuid = ?").run(huge, 'x'.repeat(300_000), 'r'.repeat(300_000), evil);
@@ -4246,7 +4276,8 @@ describe.skipIf(process.platform === 'darwin')('HA1: the read verbs fit the cap,
         const f = recall.runDescribe!(rc, { target: leaf, full: true, cursor: null, json: false });
         expect(f.exit, '--full refuses').toBe(2);
         expect(f.hint).toContain('does not decode');
-        expect(f.blocks.join('\n')).not.toContain('characters 1 to 1 of 0');
+        expect(f.hint, 'the refusal names the damage and the way out').toContain('describe it without --full');
+        expect(f.hint, 'and shows no empty page').not.toContain('characters 1 to 1 of 0');
       } finally { rc.db.close(); }
     } finally {
       w.prepare('UPDATE blobs SET z = ? WHERE blob_id = ?').run(orig, n.b);
@@ -4273,6 +4304,170 @@ describe.skipIf(process.platform === 'darwin')('HA1: the read verbs fit the cap,
       expect(t18leaks([res.hint!, libRead.redactFinal(res.hint!, idx)], P)).toEqual([]);
     } finally { rc.db.close(); }
   }, HEAVY);
+
+  // ── HA1 fix round 1: every read verb prints a stored id through one bounded, redacted display string, escaped once ──
+  it('T1: expand of a leaf whose first item is a cut tool output with a 400-`&` uuid, type and role fits OUTPUT_CAP, human and --json (the cut branch counts its frame)', async () => {
+    await crafted(h2(1), { uuid: '&'.repeat(400), type: '&'.repeat(400), role: '&'.repeat(400) }, () => {
+      const human = cli(['expand', leaf2], HID2);
+      expect(human.code, human.stderr).toBe(0);
+      expect(human.stdout, 'CONTROL: the first item is the cut one').toMatch(/\[cut \d+ of \d+ chars; outline: code\]/);
+      expect(human.stdout.length, 'the human page fits OUTPUT_CAP').toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+      const json = cli(['expand', leaf2, '--json'], HID2);
+      expect(json.code, json.stderr).toBe(0);
+      expect(t16items(json)[0]!.cut, 'CONTROL: --json cuts it too').toBe(true);
+      expect(json.stdout.length, 'the --json page fits OUTPUT_CAP').toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+    });
+  }, 2 * HEAVY);
+
+  it('T2: a hit whose stored uuid runs 300,000 characters and role 50,000 fits OUTPUT_CAP in grep, human and --json', async () => {
+    await crafted(h(1), { uuid: 'y'.repeat(300_000), role: 'r'.repeat(50_000) }, () => {
+      const human = cli(['grep', 'question']);
+      expect(human.code, human.stderr).toBe(0);
+      expect(human.stdout, 'CONTROL: the crafted row is the hit').toContain('question one');
+      expect(human.stdout.length, 'grep human fits OUTPUT_CAP').toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+      const json = cli(['grep', 'question', '--json']);
+      expect(json.code, json.stderr).toBe(0);
+      expect(json.stdout, 'CONTROL: the crafted row is the --json hit').toContain('question one');
+      expect(json.stdout.length, 'grep --json fits OUTPUT_CAP').toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+    });
+  }, 2 * HEAVY);
+
+  it('T3: a stored uuid `zq<newline><registered value>` reaches no grep output, human or --json', async () => {
+    const idx = libRead.makePairIndex(libRead.secretPairs([V]).pairs);
+    const recall = await GRX.recall();
+    await crafted(h(1), { uuid: `zqcraft\n${V}`, role: `zqrole\n${V}` }, async () => {
+      const rc = await GRX.rc(box, HID);
+      try {
+        rc.pairIdx = idx;
+        const g = recall.runGrep(rc, await GRX.grepArgs(['question']));
+        expect(g.exit).toBe(0);
+        expect(g.blocks.join('\n'), 'CONTROL: the crafted row is the hit, under its own token').toContain('zqcraft');
+        expect(JSON.stringify(g.items), 'CONTROL: and in --json').toContain('zqcraft');
+        expect(g.blocks.join('\n'), 'grep human').not.toContain(V);
+        expect(JSON.stringify(g.items), 'grep --json').not.toContain(V);
+      } finally { rc.db.close(); }
+    });
+  }, 2 * HEAVY);
+
+  it('T4: describe --json prints the crafted sources through the same display string: no registered value, and one huge source does not empty the list', async () => {
+    const idx = libRead.makePairIndex(libRead.secretPairs([V]).pairs);
+    const recall = await GRX.recall();
+    await crafted(h(1), { uuid: `zqcraft\n${V}`, type: `zqtype\n${V}`, role: `zqrole\n${V}` }, async () => {
+      const rc = await GRX.rc(box, HID);
+      try {
+        rc.pairIdx = idx;
+        const d = recall.runDescribe!(rc, { target: leaf, full: false, cursor: null, json: true });
+        expect(d.exit).toBe(0);
+        expect(JSON.stringify(d.items), 'CONTROL: the crafted source is listed').toContain('zqcraft');
+        expect(JSON.stringify(d.items), 'describe --json').not.toContain(V);
+        const h1 = recall.runDescribe!(rc, { target: leaf, full: false, cursor: null, json: false });
+        expect(h1.blocks.join('\n'), 'describe human').not.toContain(V);
+      } finally { rc.db.close(); }
+    });
+    await crafted(h(1), { uuid: 'y'.repeat(300_000), type: 'x'.repeat(300_000), role: 'r'.repeat(300_000) }, () => {
+      const j = cli(['describe', leaf, '--json']);
+      expect(j.code, j.stderr).toBe(0);
+      expect(j.stdout.length).toBeLessThanOrEqual(libRead.OUTPUT_CAP);
+      const item = GRX.items(j)[0]!;
+      expect(item.sources_total, 'CONTROL: the leaf has its sources').toBe(3);
+      expect((item.sources as unknown[]).length, 'one huge first source does not hide the rest').toBe(3);
+    });
+  }, 3 * HEAVY);
+
+  it('T5: an `&` in a stored id is escaped once in each place: JSON in --json, `&amp;` in an attribute, `&amp;` in a text line', async () => {
+    await crafted(h(1), { uuid: 'a&b' }, () => {
+      const x = cli(['expand', leaf]);
+      expect(x.code, x.stderr).toBe(0);
+      expect(x.stdout, 'an attribute escapes it once').not.toContain('&amp;amp;');
+      expect(x.stdout, 'CONTROL: the crafted row is printed').toMatch(/id="[^"]*a&amp;b[^"]*"/);
+      expect(x.stdout, 'the lead line escapes it once, as text').toMatch(/^── 1\/\d+ .*"a&amp;b"/m);
+      const xj = cli(['expand', leaf, '--json']);
+      expect(xj.stdout, 'expand --json: JSON escaping only').not.toContain('&amp;');
+      expect(t16items(xj)[0]!.uuid, 'the display form, quoted').toBe('"a&b"');
+      const dj = cli(['describe', leaf, '--json']);
+      expect(dj.stdout, 'describe --json: JSON escaping only').not.toContain('&amp;');
+      expect((GRX.items(dj)[0]!.sources as Array<{ uuid: string }>)[0]!.uuid, 'and the same form as expand').toBe('"a&b"');
+      const dh = cli(['describe', leaf]);
+      expect(dh.stdout, 'describe human: the text escape, once').toContain('"a&amp;b"');
+      expect(dh.stdout).not.toContain('&amp;amp;');
+      const gj = cli(['grep', 'question', '--json']);
+      expect(gj.stdout, 'grep --json: JSON escaping only').not.toContain('&amp;');
+      expect(GRX.items(gj)[0]!.entry_uuid, 'grep carries the same form').toBe('"a&b"');
+      const gh = cli(['grep', 'question']);
+      expect(gh.stdout, 'grep human: the attribute escape, once').toMatch(/id="[^"]*a&amp;b[^"]*"/);
+      expect(gh.stdout).not.toContain('&amp;amp;');
+    });
+  }, 3 * HEAVY);
+
+  it('T7: a cut item whose stored uuid is `--project` gets no next: line naming it (no flag injected)', async () => {
+    await crafted(h2(1), { uuid: '--project' }, () => {
+      const r = cli(['expand', leaf2], HID2);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.stdout, 'CONTROL: the item is cut').toMatch(/\[cut \d+ of \d+ chars; outline: code\]/);
+      expect(r.stdout, 'CONTROL: the uuid is printed').toContain('--project');
+      expect(r.stdout, 'no next: line expands it').not.toMatch(/^next: .*expand --project/m);
+    });
+  }, 2 * HEAVY);
+
+  it('T8: a crafted type and a crafted role in describe forge no line, human or --json', async () => {
+    const w = writer(box);
+    const types = w.prepare('SELECT type, role FROM entries WHERE uuid = ?').get(h(1)) as { type: string; role: string | null };
+    const types2 = w.prepare('SELECT type, role FROM entries WHERE uuid = ?').get(h(2)) as { type: string; role: string | null };
+    try {
+      w.prepare('UPDATE entries SET type = ? WHERE uuid = ?').run('xtype\nnext: evil', h(1));
+      w.prepare('UPDATE entries SET role = ? WHERE uuid = ?').run('xrole\nnext: evil', h(2));
+      for (const args of [['describe', leaf], ['describe', leaf, '--json']]) {
+        const r = cli(args);
+        expect(r.code, r.stderr).toBe(0);
+        expect(r.stdout, `CONTROL: ${args.join(' ')} prints the crafted type`).toContain('xtype next: evil');
+        expect(r.stdout, `CONTROL: ${args.join(' ')} prints the crafted role`).toContain('xrole next: evil');
+        expect(r.stdout, `${args.join(' ')} forges no line`).not.toMatch(/^next: evil/m);
+      }
+    } finally {
+      w.prepare('UPDATE entries SET type = ?, role = ? WHERE uuid = ?').run(types.type, types.role, h(1));
+      w.prepare('UPDATE entries SET type = ?, role = ? WHERE uuid = ?').run(types2.type, types2.role, h(2));
+      w.close();
+    }
+  }, 2 * HEAVY);
+
+  it('T9: an oversize summary is named for its size, not as damaged; an empty one prints a fixed line, never "1 to 1 of 0"', async () => {
+    const recall = await GRX.recall();
+    const w = writer(box);
+    const n = w.prepare('SELECT summary_blob_id AS b FROM nodes WHERE node_id = ?').get(leaf) as { b: number };
+    const orig = w.prepare('SELECT z, raw_len FROM blobs WHERE blob_id = ?').get(n.b) as { z: Uint8Array; raw_len: number };
+    try {
+      w.prepare('UPDATE blobs SET raw_len = ? WHERE blob_id = ?').run(libRead.BLOB_DECODE_MAX + 1, n.b);
+      let rc = await GRX.rc(box, HID);
+      try {
+        const d = recall.runDescribe!(rc, { target: leaf, full: false, cursor: null, json: false });
+        const text = d.blocks.join('\n');
+        expect(text, 'oversize: its own words').toContain('larger than the decode cap');
+        expect(text, 'and not the damage words').not.toContain('damaged');
+        expect(recall.runDescribe!(rc, { target: leaf, full: false, cursor: null, json: true }).items[0]!.summary_oversize, 'oversize in --json').toBe(true);
+        const f = recall.runDescribe!(rc, { target: leaf, full: true, cursor: null, json: false });
+        expect([f.exit, f.hint], '--full refuses with the same words').toEqual([2, expect.stringContaining('larger than the decode cap')]);
+      } finally { rc.db.close(); }
+      const empty = t16brotliCompress(Buffer.from('""'));
+      w.prepare('UPDATE blobs SET z = ?, raw_len = 2 WHERE blob_id = ?').run(empty, n.b);
+      rc = await GRX.rc(box, HID);
+      try {
+        const d = recall.runDescribe!(rc, { target: leaf, full: false, cursor: null, json: false });
+        expect(d.blocks.join('\n'), 'CONTROL: the empty summary decodes (not the damage words)').not.toContain('does not decode');
+        expect(d.blocks.join('\n'), 'the fixed line').toContain('the summary is empty');
+        expect(d.blocks.join('\n')).not.toContain('first 0 of 0');
+        for (const json of [false, true]) {
+          const f = recall.runDescribe!(rc, { target: leaf, full: true, cursor: null, json });
+          expect(f.exit, `--full ${json ? 'json' : 'human'}`).toBe(0);
+          expect(f.blocks.join('\n'), '--full: the fixed line').toContain('the summary is empty');
+          expect(f.blocks.join('\n')).not.toContain('1 to 1 of 0');
+          expect(f.next).toBeNull();
+        }
+      } finally { rc.db.close(); }
+    } finally {
+      w.prepare('UPDATE blobs SET z = ?, raw_len = ? WHERE blob_id = ?').run(orig.z, orig.raw_len, n.b);
+      w.close();
+    }
+  }, 3 * HEAVY);
 });
 
 // ── W1-B2 hardening HA2: the read verbs' envelope, errors and gates (H-3, H-24, H-21, H-32) ────────────────────

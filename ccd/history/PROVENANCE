@@ -94,7 +94,7 @@ ours: ccd/history/lib.mjs
 upstream: src/assembler.ts
 commit: e05d8d3
 upstream-sha256: b52def52635efbd61a28f16e9cc2d79977754e370443d2a5cc2c8e4cf98ca671
-changed: JavaScript; escapeXmlAttribute and escapeXmlText (upstream lines 1120-1133) are kept verbatim as escapeXmlAttr and escapeXmlText; the ccrc-recall envelope and its attributes are ccrc's, and the escape runs on every recalled field after redaction and any cut
+changed: JavaScript; escapeXmlAttribute and escapeXmlText (upstream lines 1120-1133) are kept as escapeXmlAttr and escapeXmlText, except that escapeXmlAttr also escapes line breaks and the line separators U+0085, U+2028 and U+2029 (so a stored id cannot forge a line); the ccrc-recall envelope and its attributes are ccrc's, and the escape runs on every recalled field after redaction and any cut
 
 item: opaque versioned cursor (P11)
 ours: ccd/history/lib.mjs

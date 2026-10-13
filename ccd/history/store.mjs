@@ -1063,18 +1063,37 @@ export function parentOf(db, nodeId) {
   return r === undefined ? null : r.node_id;
 }
 
-/** A stored blob's plain text for synchronous read verbs. Sidecars use the same redacted index text as FTS; bodies
- * remain plain for the caller's bounded display window. Malformed, oversized, or undecodable data stays absent. */
-export function blobPlainText(z, isSidecar, idx, rawLen) {
+/** A stored blob's plain text for synchronous read verbs, with the condition that kept it from being one (HA1 fix round
+ *  1 (g); D-4598 (history-describe-names-an-undecodable-summary)). Sidecars use the same redacted index text as FTS;
+ *  bodies remain plain for the caller's bounded display window. Four answers, never one value:
+ *  - `text`: it decoded (the text may be empty: an empty body is a text);
+ *  - `absent`: `z` is null, a pruned or tombstoned blob that has no bytes;
+ *  - `oversize`: the recorded size is past the decode bound (BLOB_DECODE_MAX for a body, SIDECAR_WHOLE_MAX for a
+ *    sidecar), so nothing was decompressed;
+ *  - `undecodable`: past the structure bound, or damaged bytes (not Brotli, not within the recorded size, not JSON).
+ *  `text` is '' for every state but `text`. blobPlainText derives from this, as io.ts's readFileMeasured does for readFile. */
+export function blobPlainTextMeasured(z, isSidecar, idx, rawLen) {
+  if (z === null || z === undefined) return { state: 'absent', text: '' };
   try {
-    if (isSidecar) return rawLen <= SIDECAR_WHOLE_MAX ? sidecarIndexText(unbrotli(z, rawLen), idx) : '';
-    if (blobOverDecodeCap(rawLen)) return '';
+    if (isSidecar) {
+      return rawLen <= SIDECAR_WHOLE_MAX
+        ? { state: 'text', text: sidecarIndexText(unbrotli(z, rawLen), idx) }
+        : { state: 'oversize', text: '' };
+    }
+    if (blobOverDecodeCap(rawLen)) return { state: 'oversize', text: '' };
     const bytes = unbrotli(z, rawLen);
-    if (!jsonWithinStructureBound(bytes)) return '';
-    return ftsTextOf(JSON.parse(bytes.toString('utf8')), 'entry');
+    if (!jsonWithinStructureBound(bytes)) return { state: 'undecodable', text: '' };
+    return { state: 'text', text: ftsTextOf(JSON.parse(bytes.toString('utf8')), 'entry') };
   } catch {
-    return '';
+    return { state: 'undecodable', text: '' };
   }
+}
+
+/** A stored blob's plain text for synchronous read verbs. Sidecars use the same redacted index text as FTS; bodies
+ * remain plain for the caller's bounded display window. Malformed, oversized, or undecodable data stays absent: every
+ * state but `text` is '' here (the old meaning, kept; a caller that must tell them apart asks blobPlainTextMeasured). */
+export function blobPlainText(z, isSidecar, idx, rawLen) {
+  return blobPlainTextMeasured(z, isSidecar, idx, rawLen).text;
 }
 
 // ── W1-B2 Task 19: a registered recovery step and the stored version, measured read-only (RB6, RB13) ──────────

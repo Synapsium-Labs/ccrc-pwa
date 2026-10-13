@@ -4188,8 +4188,11 @@ const REASON_EXITS = new Set(Object.values(REASONS));
 
 // derived from lossless-claw src/assembler.ts @ e05d8d3, MIT, see LICENSE.lossless-claw
 export function escapeXmlAttr(value) {
-  // A line break is escaped too (D-4597 (history-read-names-and-echoes-display-redacted)): a stored id holding one cannot forge a line.
-  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '&#10;').replace(/\r/g, '&#13;');
+  // Every line separator is escaped too (D-4597 (history-read-names-and-echoes-display-redacted)): a stored id holding one
+  // cannot forge a line. Beside \n and \r that is U+0085 (NEL), U+2028 and U+2029, which a reader that splits lines on
+  // Unicode separators (and JS's `^` under /m, for the last two) takes as a line start.
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\n/g, '&#10;').replace(/\r/g, '&#13;').replace(/\u0085/g, '&#133;').replace(/\u2028/g, '&#8232;').replace(/\u2029/g, '&#8233;');
 }
 
 export function escapeXmlText(value) {
@@ -4211,16 +4214,23 @@ export function snippetLine(text, max = SNIPPET_MAX) {
 /** What a stored uuid, type, role or raw key looks like: every real one. */
 const DISPLAY_TOKEN_RE = /^[A-Za-z0-9._:/-]{1,128}$/;
 
-/** A stored identifier as one printable token (D-4597 (history-read-names-and-echoes-display-redacted); D-4596
- *  (history-read-fixed-fields-fit-the-cap)). A uuid, type, role or key that has the shape of every real one prints as it
- *  is. Anything else (a crafted transcript or an operator import can store any string) is redacted on its raw text,
- *  folded to one line, cut at SNIPPET_MAX and printed as a quoted JSON string with XML text escaping, so it can neither
- *  forge a line or a tag nor run past the output cap. The output is at most 5 * SNIPPET_MAX + 2 characters. */
+/** A stored identifier as ONE display string (D-4597 (history-read-names-and-echoes-display-redacted); D-4596
+ *  (history-read-fixed-fields-fit-the-cap)). A uuid, type, role or key that has the shape of every real one is returned as
+ *  it is. Anything else (a crafted transcript or an operator import can store any string) is redacted on its raw text,
+ *  folded to one line (every whitespace, control and line-separator character, U+0085 included, becomes a space), cut at
+ *  SNIPPET_MAX and quoted as a JSON string. It is NOT XML-escaped: the sink escapes it, once, for its own context
+ *  (escapeXmlText in a text line, escapeXmlAttr in an attribute, JSON.stringify in --json), so no context escapes it
+ *  twice. The output is at most 6 * SNIPPET_MAX + 2 characters: folding leaves no control character to JSON-quote at six
+ *  characters, and what is left that costs six is a surrogate half with no pair; `"` and `\` cost two. */
 export function displayToken(value, idx) {
   const s = String(value);
   if (DISPLAY_TOKEN_RE.test(s)) return s;
-  return escapeXmlText(JSON.stringify(snippetLine(redactForDisplay(s, idx).replace(/\s+/g, ' '))));
+  return JSON.stringify(snippetLine(redactForDisplay(s, idx).replace(DISPLAY_FOLD_RE, ' ')));
 }
+
+/** What displayToken folds to one space: whitespace (JS `\s`, which has U+2028 and U+2029), every C0 and C1 control
+ *  character (U+0085, NEL, is C1 and is not in `\s`) and DEL. */
+const DISPLAY_FOLD_RE = /[\s\u0000-\u001f\u007f-\u009f]+/g;
 
 export function capOutput(blocks, reserve, cap = OUTPUT_CAP) {
   const budget = cap - reserve;

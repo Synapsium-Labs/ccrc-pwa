@@ -17,7 +17,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { brotliCompressSync, constants as Z } from 'node:zlib';
 import { mkTmp } from './tmpHelpers.js';
 import { recordDirFsyncs, recordOpenFlags } from './historyHelpers.js';
-import { MAX_INTERRUPTED_ATTEMPTS, SCHEMA_ADDED, SCHEMA_VERSION, UUID_RE, WRITER_RE, decideStoreOpen, historyPaths, FTS_SHADOWS, ftsTablesHealthy } from '../../ccd/history/lib.mjs';
+import { BLOB_DECODE_MAX, SIDECAR_WHOLE_MAX, makePairIndex, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_ADDED, SCHEMA_VERSION, UUID_RE, WRITER_RE, decideStoreOpen, historyPaths, FTS_SHADOWS, ftsTablesHealthy } from '../../ccd/history/lib.mjs';
 import {
   CODEC, MIGRATIONS, StoreError, openWriter, openReader, userVersion, probeFts5, withTx, brotli, unbrotli,
   measuredSize, getMeta, setMeta, bump, closeWriter, schemaOf,
@@ -25,7 +25,7 @@ import {
   finishPending, dropPending, syncWriterMirror, createFtsTables, integrityCheck, foreignKeyRows, ftsMeasure, dropFtsTables, setCounter,
   pruneProtected, pruneCandidates, pruneBatch, pruneDryRun, incrementalVacuum, pruneApply,
   readAttempts, clearDoneMarkers, assertAdditive, runMigration, removeEntry, readBounded, removeStaleAtomicTemps, mkdirDurable,
-  writeBackup,
+  writeBackup, blobPlainText, blobPlainTextMeasured,
 } from '../../ccd/history/store.mjs';
 import { adoptStore, stageRestore, commitRestore, abortRestore } from '../../ccd/history/store.mjs';
 import { parseJournalRecord } from '../../ccd/history/lib.mjs';
@@ -1691,4 +1691,32 @@ describe('store.mjs: the binding verbs\' sequences (W1-B2 Task 24)', () => {
     expect(f.recover).toEqual([{ version: T, cursor: null, completed_ms: null }]);
     expect(f.bound).toEqual([{ k: `bound:${T}`, v: 'rebuild' }]);
   }, 120_000);
+});
+
+describe('blobPlainTextMeasured: a stored body as text, with the condition that kept it from being one (HA1 fix round 1 (g))', () => {
+  const idx = makePairIndex([]);
+  const body = (v: unknown): { z: Uint8Array; len: number } => {
+    const raw = Buffer.from(JSON.stringify(v));
+    return { z: brotli(raw), len: raw.length };
+  };
+  it('answers text, absent, oversize and undecodable apart, and an empty text is a text', () => {
+    const ok = body('the summary');
+    expect(blobPlainTextMeasured(ok.z, false, idx, ok.len)).toEqual({ state: 'text', text: 'the summary' });
+    const empty = body('');
+    expect(blobPlainTextMeasured(empty.z, false, idx, empty.len), 'an empty summary decodes: it is a text, not a damage').toEqual({ state: 'text', text: '' });
+    expect(blobPlainTextMeasured(null, false, idx, 5), 'a tombstoned blob has no bytes').toEqual({ state: 'absent', text: '' });
+    expect(blobPlainTextMeasured(ok.z, false, idx, BLOB_DECODE_MAX + 1), 'a body past the decode bound').toEqual({ state: 'oversize', text: '' });
+    expect(blobPlainTextMeasured(ok.z, true, idx, SIDECAR_WHOLE_MAX + 1), 'a sidecar past its whole-read bound').toEqual({ state: 'oversize', text: '' });
+    expect(blobPlainTextMeasured(Uint8Array.from([0, 255]), false, idx, 10), 'bytes that are no Brotli').toEqual({ state: 'undecodable', text: '' });
+    const deep = Buffer.from('['.repeat(100_000));
+    expect(blobPlainTextMeasured(brotli(deep), false, idx, deep.length), 'a body past the structure bound').toEqual({ state: 'undecodable', text: '' });
+  });
+  it('blobPlainText keeps its old meaning: the text of a text, and \'\' for every other state', () => {
+    const ok = body('the summary');
+    expect(blobPlainText(ok.z, false, idx, ok.len)).toBe('the summary');
+    expect(blobPlainText(ok.z, false, idx, BLOB_DECODE_MAX + 1)).toBe('');
+    expect(blobPlainText(null, false, idx, 5)).toBe('');
+    expect(blobPlainText(Uint8Array.from([0, 255]), false, idx, 10)).toBe('');
+    expect(blobPlainText(ok.z, true, idx, SIDECAR_WHOLE_MAX + 1)).toBe('');
+  });
 });

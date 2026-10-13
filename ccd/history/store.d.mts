@@ -18,7 +18,9 @@ export function withTx<T>(db: DatabaseSync, sync: 'NORMAL' | 'FULL', fn: () => T
 export function brotli(buf: Uint8Array): Buffer;
 export function unbrotli(z: Uint8Array, maxLen: number): Buffer;
 export function unbrotliPrefix(z: Uint8Array, max: number): Promise<{ bytes: Buffer; decoded: number; whole: boolean }>;
-export function blobPlainText(z: Uint8Array, isSidecar: boolean, idx: PairIndex | null, rawLen: number): string;
+export function blobPlainText(z: Uint8Array | null, isSidecar: boolean, idx: PairIndex | null, rawLen: number): string;
+export type BlobPlainState = 'text' | 'absent' | 'oversize' | 'undecodable';
+export function blobPlainTextMeasured(z: Uint8Array | null, isSidecar: boolean, idx: PairIndex | null, rawLen: number): { state: BlobPlainState; text: string };
 export function measuredSize(db: DatabaseSync, dbPath: string): number;
 export function getMeta(db: DatabaseSync, k: string): string | null;
 export function setMeta(db: DatabaseSync, k: string, v: string | number): void;
