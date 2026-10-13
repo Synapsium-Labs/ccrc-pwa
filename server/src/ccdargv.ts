@@ -305,11 +305,38 @@ export const CCD_ARGV = {
    *  class this whole branch exists to remove — and this fix introduced it.
    *  `null` is how the caller now says "this box might not understand the
    *  flag yet" instead of finding out from a fleet-wide stop that silently
-   *  never happens. */
+   *  never happens.
+   *
+   *  THE PAIR LEADS THE ID (path identity W1a, spec §2.3, §2.4), and the
+   *  position is the safety property, not a style choice. With the id
+   *  first, `cmd_stop`'s loop cannot tell an id spelled `--surface` from the
+   *  key itself: `stop --surface --surface pwa` reads the first two tokens
+   *  as the pair, and the residue `pwa` is stopped, a session nobody named
+   *  (a project spelled `--surface` sends the pair form to `<wrapper>-pwa`
+   *  the same way). With the pair first, the loop consumes one
+   *  closed-grammar pair and the residue is the id: `stop --surface pwa
+   *  --surface` dies on ccd's usage line and stops nothing. The server's id
+   *  gates (`knownId`, `readSessionRecord`'s `bad-id`) refuse such an id
+   *  before either builder runs; this order is the lock behind them, for any
+   *  future caller of `stopId`. `stopPair` is narrower: its project is the
+   *  legacy row's `.project`, and its wrapper the row's `.wrapper` when the
+   *  id does not end in `-<project>`, fields no id gate reads. `cmd_stop`'s
+   *  `--surface=*` arm strips a token of that spelling from any position, so
+   *  a field reading `--surface=<word>` leaves a one-argument stop of the
+   *  other token in either order, and no order can refuse it. The server
+   *  refuses it before this builder runs: `stopArgvFor`'s two callers ask
+   *  `stopPairRefused` (`server.ts`), which needs `isRegistryId` of each part.
+   *  The order is safe on every ccd that advertises `stop-surface`,
+   *  whose loop strips the flag from any position (the loop shipped in the
+   *  same ccd as the token, and `ccd-session-state.test.ts`'s "takes the
+   *  flag before the id as well" pins the current one). A ccd without the
+   *  token is still sent no flag at all, by the `null` arm above.
+   *  `ccd-stop-argv-order.test.ts` runs both builders' argv through the
+   *  real `cmd_stop`. */
   stopId:    (id: string, surface: StopSurface | null) =>
-               argv(surface === null ? ['stop', id] : ['stop', id, '--surface', surface]),
+               argv(surface === null ? ['stop', id] : ['stop', '--surface', surface, id]),
   stopPair:  (w: string, p: string, surface: StopSurface | null) =>
-               argv(surface === null ? ['stop', w, p] : ['stop', w, p, '--surface', surface]),
+               argv(surface === null ? ['stop', w, p] : ['stop', '--surface', surface, w, p]),
   /** Registry-only removal of a DEAD non-workspace session — the end-of-life
    *  plain sessions never had. ccd re-proves every gate on the box (not a
    *  workspace, not held, not alive); this argv carries nothing but the id. */

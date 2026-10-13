@@ -129,7 +129,7 @@ describe('lifecycle routes', () => {
     const { app, calls, cfg } = await makeApp({ ccdVerbs: ['start', 'enable', 'ensure', 'stop', 'swap', 'stop-surface'] });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive', '--surface', 'pwa']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', '--surface', 'pwa', 'claude2', 'MekWarLive']]);
     await app.close();
   });
 
@@ -156,6 +156,10 @@ describe('lifecycle routes', () => {
   // exactly the shape the agent reports for that old ccd (it lists `stop`
   // but never prints the new capability token), so this test drives the
   // SAME decision the route makes in that real deployment window.
+  // Since path identity W1a a flagged stop puts the pair FIRST
+  // (`stop --surface pwa <id>`, spec §2.4); the trailing spelling above is
+  // the measured history. The rule this test pins is unchanged: a ccd that
+  // never advertised stop-surface is sent no flag, in either position.
   it('a fleet ccd that does not advertise stop-surface gets the bare argv old ccd understands (the skew case)', async () => {
     const { app, calls, cfg } = await makeApp({ ccdVerbs: ['start', 'enable', 'ensure', 'stop', 'swap'] });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
@@ -175,7 +179,7 @@ describe('lifecycle routes', () => {
     });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive', '--surface', 'pwa']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', '--surface', 'pwa', 'claude2', 'MekWarLive']]);
     await app.close();
   });
 
@@ -228,7 +232,7 @@ describe('lifecycle routes', () => {
     const res = await app.inject({ method: 'POST', url: '/api/sessions/claude2-cctest/stop', payload: {} });
     expect(res.statusCode).toBe(200);
     // …but stop must still target claude2-cctest, not claude-cctest.
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'cctest', '--surface', 'pwa']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', '--surface', 'pwa', 'claude2', 'cctest']]);
     await app.close();
   });
 
@@ -260,7 +264,7 @@ describe('lifecycle routes', () => {
     });
     const res = await app.inject({ method: 'POST', url: '/api/sessions/rp-llm-quiet-mesa/stop', payload: {} });
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'rp-llm-quiet-mesa', '--surface', 'pwa']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', '--surface', 'pwa', 'rp-llm-quiet-mesa']]);
     await app.close();
   });
 
@@ -393,6 +397,8 @@ describe('lifecycle routes', () => {
 // a session literally named `<id>---surface`, exit 0, the real session
 // left running with its unit enabled. That is what a `--surface` in the
 // argv below would have risked; the assertion is that it is never there.
+// Since path identity W1a the flag, when sent, LEADS the id (spec §2.4); the
+// rule pinned here is unchanged: no evidence, no flag, in either position.
 describe('local mode: the stop route with REAL local-caps evidence (fix round 3, task 14)', () => {
   const writeStubCcd = (dir: string, name: string, body: string): string => {
     mkdirSync(dir, { recursive: true });
@@ -457,7 +463,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     });
     const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
     expect(res.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive', '--surface', 'pwa']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', '--surface', 'pwa', 'claude2', 'MekWarLive']]);
     await app.close();
   });
 
@@ -527,7 +533,7 @@ describe('local mode: the stop route with REAL local-caps evidence (fix round 3,
     calls.length = 0;
     const late = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/stop`, payload: {} });
     expect(late.statusCode).toBe(200);
-    expect(calls).toEqual([[cfg.ccdBin, 'stop', 'claude2', 'MekWarLive', '--surface', 'pwa']]);
+    expect(calls).toEqual([[cfg.ccdBin, 'stop', '--surface', 'pwa', 'claude2', 'MekWarLive']]);
 
     await app.close();
   });

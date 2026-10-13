@@ -2973,6 +2973,33 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   });
 
   /**
+   * The wrapper a legacy stop names: the ORIGINAL one baked into the id when the id ends in `-<project>`, else the
+   * row's `.wrapper`. One rule, read by `stopArgvFor`, which composes the pair, and by `stopPairRefused`, which vets
+   * it first, so the part the check reads is the part the argv carries.
+   */
+  function stopPairWrapper(id: string, rec: SessionRecord, identity: { wrapper: string }): string {
+    return id.endsWith(`-${rec.project}`) ? id.slice(0, id.length - rec.project.length - 1) : identity.wrapper;
+  }
+
+  /**
+   * True when a stop of this row would hand `CCD_ARGV.stopPair` a part that is not a registry id (path identity W1a,
+   * a coordinator ruling at plan review). The pair's project is the legacy row's `.project`, and its wrapper is the
+   * row's `.wrapper` when the id does not end in `-<project>`: fields no id gate reads. `cmd_stop`'s `--surface=*`
+   * arm strips a token of that spelling from ANY position, so a field reading `--surface=<word>` turned the pair
+   * into a one-argument stop of the OTHER token, a session nobody named, in the leading, trailing and bare forms
+   * alike. No argv order refuses that, and no ccd rule refuses it without also refusing the pre-W1a trailing order
+   * while the fleet box runs ahead of this server. So each part must pass `isRegistryId`: the session-id charset,
+   * which has no `=`, and no leading `-` or `.`. Both callers of `stopArgvFor` ask this in their identity arm and
+   * answer what an unmeasured identity field answers, 503 `registry-unmeasurable`, with no argv composed; the
+   * archive door asks it before its turn read, its claim reads and the programme's end. A workspace row is never
+   * refused here: it stops by its id, which each caller's id gate has already vetted.
+   */
+  function stopPairRefused(id: string, rec: SessionRecord, identity: { wrapper: string }): boolean {
+    if (rec.workspace !== null) return false;
+    return !isRegistryId(stopPairWrapper(id, rec, identity)) || !isRegistryId(rec.project);
+  }
+
+  /**
    * The stop argv — ONE spelling, two callers, both the PWA's own controls: `POST /api/sessions/:id/stop` ("Stop only",
    * offered after an archive refusal the phone cannot fix) and the archive door (workspace lifecycle §5.2), which stops
    * a main checkout, or a busy session the operator chose to interrupt.
@@ -2983,13 +3010,28 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * declaration could honestly carry. `null` — omit the flag — when the
    * deployed ccd is not KNOWN to understand it (fix round 2, task 14,
    * Important #1): a bare `['stop', id]` is what every ccd generation has
-   * always understood, where `['stop', id, '--surface', 'pwa']` against an
-   * old one parses as a stop of a session named `<id>---surface` — exit 0,
-   * nothing real touched, and the caller reads that as success. This is the
+   * always understood, where a flagged argv against an old one misparses —
+   * measured on the old trailing spelling `['stop', id, '--surface', 'pwa']`,
+   * it stopped a session named `<id>---surface`: exit 0, nothing real
+   * touched, and the caller reads that as success. This is the
    * deploy-ordering hazard `deploy/deploy.sh` itself does not close (the
    * agent target installs `ccd`; the default server target never does, and
    * neither cross-checks the other's version), so the check has to live here
    * instead of being a rollout note.
+   *
+   * With the capability, the pair LEADS the id (path identity W1a, spec §2.3,
+   * §2.4): `['stop', '--surface', 'pwa', id]` for a workspace id and
+   * `['stop', '--surface', 'pwa', w, p]` for a legacy one. With the id first,
+   * an id spelled `--surface` became a stop of `pwa`; with the pair first,
+   * ccd consumes the pair and refuses that id by usage. Both callers refuse
+   * such an id before this runs (`/stop` through `readSessionRecord`'s
+   * `bad-id`, the archive door through `knownId`); the order is the lock
+   * behind them, argued once on `CCD_ARGV.stopId`.
+   *
+   * A legacy row's PAIR PARTS are vetted before this runs as well: both
+   * callers ask `stopPairRefused` (above) in their identity arm and answer
+   * 503 `registry-unmeasurable` for a wrapper part or project part that is
+   * not a registry id, so `stopPair` below never carries one.
    *
    * A `function` declaration on purpose: `verb-gate.test.ts` reads a call site's skew gate off its enclosing
    * function, and `stop` is ungated by decision (every ccd generation has the verb), as it was inside `/stop`.
@@ -3006,10 +3048,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // Legacy ids DO encode a wrapper, and ccd stop's two-argument form
     // recomputes them — so it needs the ORIGINAL wrapper baked into the id, not
     // identity.wrapper, which a prior swap flips to the new account while the
-    // id/tmux name keep the old prefix.
-    const originalWrapper = id.endsWith(`-${rec.project}`)
-      ? id.slice(0, id.length - rec.project.length - 1)
-      : identity.wrapper;
+    // id/tmux name keep the old prefix. `stopPairWrapper` holds that rule, and
+    // both callers have already asked `stopPairRefused` of the same two parts.
+    const originalWrapper = stopPairWrapper(id, rec, identity);
     return CCD_ARGV.stopPair(originalWrapper, rec.project, surface);
   }
 
@@ -3082,9 +3123,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // name. Two unmeasured fields could otherwise conspire to name the WRONG
     // session — 404 unknown-session would be a LIE (the row is right there,
     // just unmeasured), so this answers 503, the fleet's own
-    // registry-unmeasurable shape, instead.
+    // registry-unmeasurable shape, instead. A legacy row whose pair part is
+    // not a registry id (`stopPairRefused`) is refused the same way: a
+    // measured field that would aim the stop at a session nobody named is no
+    // more an identity than an unmeasured one.
     const identity = measuredIdentity(read.record);
-    if (identity === null) {
+    if (identity === null || stopPairRefused(id, read.record, identity)) {
       return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
     }
     const rec = read.record;
@@ -3394,7 +3438,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       }
     }
     const identity = measuredIdentity(read.record);
-    if (identity === null) return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+    // `/stop`'s pair-part refusal (`stopPairRefused`), asked HERE, before the turn read, the claim reads and the
+    // programme's end, so a refused part ends nothing, stops nothing and composes no argv.
+    if (identity === null || stopPairRefused(id, read.record, identity)) {
+      return reply.code(503).send({ ok: false, error: 'registry-unmeasurable' });
+    }
     const rec = read.record;
     const archiveArgv = rec.workspace === null ? null : CCD_ARGV.wsArchive(id, pwaDec(req));
     const measure: ArchiveMeasure = {
