@@ -11797,20 +11797,25 @@ slug and carries no number. The coordinator assigns this wave's numbers at the f
 
 ### What the gate does not claim
 
-The server gate keeps a non-registry id out of every argv the server composes. It is not an OS wall: a session can
-still run `ccd` directly with any id, and ccd's own loops and predicates are W1b's (spec §2.4). Until W1b merges,
-ccd's half of spec §2 stays open.
+The server gate keeps a non-registry id out of every id-taking `CCD_ARGV` call the server composes, which is the id-argv
+census's scope. It is not an OS wall: a session can still run `ccd` directly with any id, and ccd's own loops and
+predicates are W1b's (spec §2.4). Until W1b merges, ccd's half of spec §2 stays open.
 
 ### Corrections to spec §2.3
 
 - **`knownId` is not the one choke point (R7).** §2.3 calls `knownId` "one choke point for every request-id route".
-  Two request-id routes never call it:
+  Of the 25 routes in `server.ts` that take a session `:id`, 18 call it and seven never do, measured route by route at
+  the tip. Two of the seven compose an id-taking ccd argv and ask the predicate themselves:
   - `POST /api/sessions/:id/ensure` asks `isRegistryId(id)` first, before any call is composed;
   - `POST /api/sessions/:id/swap`'s `crossPool: true` arm asks it as the arm's first statement, ahead of the skew gate
     (R22).
 
-  Each answers 400 `bad-session-id`. `knownId` refuses a failing id before its listing, and its census stays at 18
-  routes (14 POST, 4 GET).
+  Each answers 400 `bad-session-id`. Of the other five, `/stop` and `/swap`'s ordinary arm compose an id-taking argv
+  behind `readSessionRecord`'s `bad-id` (400 `bad-session-id`), and `/kickoff` gates through the same read and composes
+  no ccd argv. `GET /api/sessions/:id/pane/history`, `/ws/session/:id` and `/ws/pty/:id` compose no ccd argv: the
+  session stream's `readSessionRecord` answers `bad-id` as absent, and the history and pty routes reach only tmux,
+  through `tmuxTarget`'s exact-match target. `knownId` refuses a failing id before its listing, and its census stays
+  at 18 routes (14 POST, 4 GET).
 - **The watches omit a refused id, and nothing is retained (R3).**
   - §2.3 says the main, hook-state and task-state watches "retain prior state for refused ids". It also says the
     watch sweeps keep the wrapper because omission suppresses observation "while retaining prior state".
@@ -11838,8 +11843,8 @@ ccd's half of spec §2 stays open.
 - **Resume dispatch refuses; it does not hold (`resume-dispatch-refuses-not-holds`).**
   - §2.3 says resume dispatch "holds when the requested id is refused".
   - As built, `dispatchRun` re-checks a stored `sessionId` right after its hold verdict, before the pause listing and
-    every other read. A run with no stored id is not asked, so the arm that meets it is the resume: the run stays
-    `planned`, and the route answers 409 `bad-session`. The abandon door is the way out.
+    every other read. A run with no stored id is not asked, so the only arm that meets a stored id is the resume
+    dispatch: the run stays `planned`, and the route answers 409 `bad-session`. The abandon door is the way out.
 - **The readers that pass `records: undefined` measure the registry themselves (R19).**
   - §2.3 migrates four `readRegistry` callers to `RegistryRead`: project enumeration, the fleet fallback, peer
     enumeration and dispatch's pre-spawn read. All four migrated.
@@ -11926,12 +11931,12 @@ L0 wire type or refusal word.
 
 | Where | Condition | Answer |
 |---|---|---|
-| `knownId`'s 18 routes | id fails `isRegistryId` | 404 `{ ok: false, error: 'unknown-session' }`, before any listing |
+| `knownId`'s 18 routes | id fails `isRegistryId` | 404 `{ ok: false, error: 'unknown-session' }`, before `knownId`'s own listing. `/archive` lists the registry before it asks `knownId`, so on an unlistable registry it answers 503 `registry-unmeasurable` first; and the 11 routes that ask `isSafeSessionId` first answer 400 for an id it refuses (`.`, `..`, or one holding `/`, `\` or NUL): `bad-session-id`, or `bad-request` at the clip route |
 | `POST /api/sessions/:id/ensure` | id fails | 400 `{ ok: false, error: 'bad-session-id' }` |
 | `POST /api/sessions/:id/swap`, `crossPool: true` | id fails | 400 `bad-session-id`, ahead of the skew gate (R22) |
 | `/stop`, `/swap` (ordinary arm), `/kickoff` | `readSessionRecord` answers `bad-id` | 400 `bad-session-id` |
 | `/archive` | masked by `knownId` (R17) | the arm answers 400 `bad-session-id` |
-| `/stop`, `/archive`, a legacy row | its wrapper part or `.project` fails `isRegistryId` (`stopPairRefused`) | 503 `{ ok: false, error: 'registry-unmeasurable' }` from the identity arm, with no argv composed; at `/archive`, before the turn read and the programme's end |
+| `/stop`, `/archive`, a legacy row | its wrapper part or `.project` fails `isRegistryId`, or its id does not end in `-<project>` (`stopPairRefused`) | 503 `{ ok: false, error: 'registry-unmeasurable' }` from the identity arm, with no argv composed; at `/archive`, before the turn read and the programme's end |
 | `POST /api/asks/:id/answer` | stored `ask.childId` fails | 409 `{ ok: false, error: 'child-unmeasurable', detail }` (the existing answer, through `freshAskAt`'s `bad-id`, R17); no keys sent, the ask stays `held` |
 | `POST /api/runs` | `claimedBy` or `sessionId` fails | 400 `{ ok: false, error: 'bad-session', detail: 'claimedBy is not a registry id' }`, or the same naming `sessionId` |
 | `POST /api/runs` | a work `project` (as given) beginning `-` or `.` | 400 `{ ok: false, error: 'bad-request', detail: 'project must not begin with - or .' }` |
@@ -11979,8 +11984,9 @@ Notes on the table:
   while the fleet box runs ahead of the server, so the server closes it. `/stop` and the archive door ask
   `stopPairRefused` in their identity arm: a row whose wrapper part or project part fails `isRegistryId` answers 503
   `registry-unmeasurable` with no argv composed, and the archive door asks before its turn read and the programme's
-  end. At planning, none of the fleet box's 18 distinct registry projects began with `-` or `.`. That measured the
-  first character only: see `legacy-pair-fields-charset-unmeasured` below.
+  end. A row whose id does not end in `-<project>` answers the same, because ccd would recompute its pair into a
+  different session (`stop-pair-refused-when-the-pair-is-not-the-id`). At planning, none of the fleet box's 18
+  distinct registry projects began with `-` or `.`; the whole-charset measurement once carried below is withdrawn.
 - **The id-argv census.** `id-argv-census.test.ts` classifies all 41 id-taking calls across 10 files by file, builder,
   origin and gate (SEC2 B, as R98 widens it). A new call, or a new `CCD_ARGV` key, must classify itself, or the suite
   goes red. The `stopPair` row's gate is `stopPairRefused`, required above each of `stopArgvFor`'s three call sites
@@ -12014,20 +12020,27 @@ Notes on the table:
   - `pwa/` is outside this boundary, so this is carried. Measured: 0 such stored rows at Task 0.
 - **A stored work-run `project` reaches `ws-add` unchecked (`work-run-project-reaches-ws-add-unchecked`).**
   - At dispatch, a stored `project` reaches `CCD_ARGV.wsAddWorker(run.project, …)` with no server re-check.
-  - Measured: 0 such rows at Task 0, and the `POST /api/runs` check covers every new row.
+  - The `POST /api/runs` check covers every new WORK row (`kind !== 'review'`), as the note on the table says. A new
+    review row copies the reviewed run's stored `project`, which the check does not read, and a review run always
+    spawns fresh, so that copied value reaches `ws-add` through dispatch exactly as a legacy work row's does.
+  - Measured: 0 such stored rows at Task 0.
   - W1b's ws-add loop and `_ws_project_valid` close it.
-- **A legacy stop row's pair fields, measured by first character only (`legacy-pair-fields-charset-unmeasured`).**
-  A row whose id does not end in `-<project>` takes its pair parts from its `.wrapper` and `.project` fields. The
-  predicate refuses any character outside `[A-Za-z0-9._-]`, but only the first character of the fleet box's projects
-  was measured, so such a row could answer 503 at `/stop` and `/archive`. The coordinator measures the whole charset of
-  those fields on the fleet box.
+- **A legacy stop row's pair fields (`legacy-pair-fields-charset-unmeasured`): withdrawn.** A row whose id ends in
+  `-<project>` has a wrapper part that is a prefix of its vetted id and a project part that is a suffix of it, so its
+  parts pass whenever its id passes, unless the project is empty or begins with `-` or `.` (none of the 18 projects
+  measured at planning did); any other row is now refused by `stopPairRefused`'s pair-is-the-id clause, so no fleet
+  read is needed.
 - **The mail ingress ladders' detail for a refused row (`raw-name-refused-detail-says-transient`).** The three
   raw-name ladders (`requireAttribution`, `POST /api/mail`, `POST /api/mail/:id/ack`) answer a refused row 502
   `registry-unmeasurable`, the right word, but with a detail saying "listed but unreadable — transient", which is never
   true of a refused id. This wave edited their tag lines only. `sweepMail`'s back-off detail for a refused recipient,
   `registry row listed but unreadable (registry-unmeasurable)`, stays: it is literally true, because the row is listed
   and never read, and it says nothing transient.
-- **The expiry lane's words for the executor's own refusal (`expiry-composition-words-misread-a-server-refusal`).** R9 answers a non-registry id with `composition`, whose detail says no call was composed, but `expireFeedBody`'s `composition` arm still says "ccd rejected the call this server composed" and `archivedExpiry.ts`'s lane report says "the server composed a call ccd rejected". The lane's population omits refused rows (Task 5), so production does not reach it. `archivedExpiry.ts` is outside this boundary and Task 12 keeps its hunk to the guards while #351 shares the file, so this is carried.
+- **The expiry lane's words for the executor's own refusal (`expiry-composition-words-misread-a-server-refusal`).** R9 answers a non-registry id with `composition`, whose detail says no call was composed, but `expireFeedBody`'s `composition` arm still says "ccd rejected the call this server composed" and `archivedExpiry.ts`'s lane report says "the server composed a call ccd rejected". The lane's population omits refused rows (Task 5), so production does not reach it. `archivedExpiry.ts` is outside this boundary, and Task 12 keeps its hunk in `coord/expireArchived.ts`, where `expireFeedBody`'s `composition` arm lives, to the guards while #351 shares that file, so this is carried.
+- **The collector's learning audit relies on the population gate alone (`collector-learning-audit-relies-on-the-population-gate`).**
+  The collector's learning audit (`learnCollect`) relies only on the lane's population gate, while expiry also
+  re-checks at its executor (`learnExpiry`). R10 and the never-edit boundary keep the collector files unchanged in this
+  wave, so the two executor seams are made to agree in the next wave that edits them.
 - **The executor's docstring lists no step 0 (`expiry-docstring-lists-no-step-0`).** The numbered docstring at the top of `expireArchived.ts` lists steps 1 to 7 and not the new step 0. Task 12 kept its edit to the guards, because #351 shares the file, so the sentence is carried.
 - **The advance reject docstring omits `bad-session` (`advance-reject-docstring-omits-bad-session`).** `shared/api.ts`'s docstring above `RunRefuseCode` says every typed refusal code of `POST /api/runs/:id/advance` is a `MailRejectCode` or a `RunRefuseCode`. The advance gate's `reject.code` of `bad-session` is in neither, and the kebab scan admits it through the routing door's union. The docstring sits above the foot block, so this wave could not edit it.
 - **The real-binary parity rows.** Spec §2.8's `ccdargv-dec-parity` rows on the real binary, with the ids `--actor`,
@@ -12045,8 +12058,8 @@ Notes on the table:
 
 ### Departures recorded while building
 
-These are the departures the SDD ledger recorded for Tasks 0 to 15 that the sections above do not already name, one
-measured sentence each.
+These are the departures the SDD ledger recorded for Tasks 0 to 15 and the final fix round that the sections above do
+not already name, one measured sentence each.
 
 - `over-long-request-ids-stop-at-the-router`: the router's default parameter-length cap answers 414 `FST_ERR_MAX_PARAM_LENGTH` for a request `:id` over 100 characters before any handler, so a 255- or 256-character request id never reaches `knownId`; the cases pin the router's answer, and their longest control is 100 characters.
 - `overlong-id-plants-no-row`: a 256-character id cannot name a file, so the stored-row suite plants no registry row for it, and the gate still refuses it because no registry read stands before the gate.
@@ -12061,3 +12074,5 @@ measured sentence each.
 - `stop-pair-project-redirect-pinned`: the real-binary file also proves that a project spelled `--surface` redirected the legacy pair form to `<wrapper>-pwa` under the old order, and is refused by usage under the new one.
 - `lifecycle-rows-edited-by-pattern`: `lifecycle.test.ts`'s six stop rows were rewritten by a count-guarded pattern edit rather than retyped from the plan, so each row keeps its fixture ids and changes only the position of the surface pair.
 - `census-names-the-stop-pair-gate`: after the census's fix round, `id-argv-census.test.ts` lists `stopPairRefused` among its gates and in the `stopPair` row, requires it above each of `stopArgvFor`'s three call sites, and pins `childSpent`, `childSpentLive` and the two `sweepNames` rows through their callers or an entry.
+- `stop-pair-refused-when-the-pair-is-not-the-id`: after the final review, `stopPairRefused` also refuses a legacy row whose `<wrapper>-<project>` pair is not its id, because the fallback wrapper's stop of such a row (a workspace row whose `.workspace` read failed, or a malformed legacy row) named a different session; the id-argv census's `stop-pair-refused` pattern follows the new body.
+- `stop-normal-case-seeds-a-well-formed-row`: `routes.test.ts`'s "stops normally (200)" case now seeds a well-formed legacy row by hand and asserts its composed argv, because its old fixture's `project: id` row composed a stop that named a different session, which the new clause refuses.
