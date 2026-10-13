@@ -1864,6 +1864,26 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     SHADOWED.
   - **16:01 — quiet-ridge CONSENTS (4610)** to F8's one README sentence (main `:3584`, the dead-coordinator paragraph at
     `:3580-3585`). Run 354's README hunks are about 270 lines away, so nothing is fenced. Forwarded in 4613.
+- **2026-10-13 22:15 — fix round 6 done at `27c729e0c`; run 358 is at `awaiting-review`; final review run 429 is
+  open but not yet dispatched.**
+  - **Re-measured:** the branch, remote ref, PR #351 head and handoff commit are all
+    `27c729e0c40e8502dd8113b3c629d3c4dda4d3fb`, the worker tree is clean, and the PR is OPEN and MERGEABLE. Current
+    main is `300aedf88`; its merge-tree is clean. Main still has 18 migrations, so this branch's migration 19 retains
+    its slot. `verifyMarker` reports `ccrc-unmodified`, and `ccd/ccd` remains a regular executable mode 775 file.
+  - **The round:** merge commit `72af8f493` absorbed the conflicting main tip and regenerated the marker; the later
+    commits pin A15, A1, A16 and c15; correct the F3-F8 words; allowlist the wiring child's environment and shorten its
+    temporary paths; and isolate `TMUX_TMPDIR`. The final internal-review residue carries the trusted-seal warning
+    exception and F5 through both design documents. No new deviation; both lanes remain SHADOWED.
+  - **Worker evidence:** 91 mutation rows, 86 red and five stated equivalents (X9, M.unchanged-before-landed,
+    X9+Landed, A5 and A11), none retired, repointed or unverified. The named guards and required CI checks are green;
+    macOS remains advisory.
+  - **The run transition:** the exact fingerprint was accepted, moving run 358 to `awaiting-review`. Review run 429
+    was opened against it. Its first dispatch was refused `cap-daily` at 24/24, so it remains `planned`; no worker was
+    spawned. The next rolling slot opens at 2026-10-13 23:09:57Z, and one bounded retry is scheduled after it. Never
+    open a replacement review run and never merge while 429 remains incomplete.
+  - **Next:** dispatch the same final scoped review to run 429 when the cap releases. A clean held-out panel and fresh
+    head, merge-tree, migration, marker and required-CI measurements then permit the operator-authorized admin squash
+    merge. Any surviving blocker or ruling-needed finding returns run 358 to `working` for another fix round.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
