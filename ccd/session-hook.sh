@@ -2747,12 +2747,31 @@ payload=$(cat 2>/dev/null) || exit 0
 # and compaction card matter most — a real session wrote its last hookstate
 # two minutes before its fork and then nothing for three hours of active work.
 #
-# The fallback is the session's OWN id, matched against the registry. That
-# keeps the guard's whole purpose intact: attribution stays POSITIVE and
-# measured — this hook writes for a session only when the registry itself names
-# that uuid as its own — so a stranger's Claude session on this box exits 0
-# exactly as it does today. What it must never become is the registry's WRITER.
-# `ccd` decides the uuid (`_sync_uuid`); this only reports against it.
+# The fallback is the session's OWN id, matched against the registry, and only
+# a process with NO pane that carries the job marker Claude Code gives the
+# background jobs it hosts may take it (D-4953). The id alone is not enough: a
+# plain `claude --resume <uuid>` keeps the resumed id and its hooks carry it, so
+# a hand-run resume of a live row's uuid — outside tmux, or in a tmux session
+# not named `cc-*` — matched that row and wrote its state, which the server
+# reads as current while the row's real pane is mid-turn. With both halves,
+# attribution stays POSITIVE and measured — this hook writes for a session only
+# when the registry itself names that uuid as its own AND the process carries
+# the marker — so a stranger's Claude session on this box that does not carry
+# CLAUDE_JOB_DIR exits 0 exactly as it did before the fallback existed.
+#
+# ONE STRANGER CARRIES IT ANYWAY, because CLAUDE_JOB_DIR is INHERITED, not
+# handed to each process. Claude Code's child-environment builder keeps it (the
+# prompt it gives a forked session even says to use `$CLAUDE_JOB_DIR/tmp`), so
+# everything a forked session starts has it, and a `claude --resume <registry
+# uuid>` run from a forked session's own shell matches that row and writes its
+# state. No variable tells the two apart: every Claude process sets its own
+# hooks' CLAUDECODE, CLAUDE_CODE_SESSION_ID, CLAUDE_CODE_CHILD_SESSION and
+# CLAUDE_PID afresh, and the background-identity list reaches neither.
+# That residual needs a forked session to start it, so it is far narrower than
+# the hole the marker closes; it is named here, not pretended away (D-4953).
+#
+# What the fallback must never become is the registry's WRITER. `ccd` decides
+# the uuid (`_sync_uuid`); this only reports against it.
 id=""
 if [[ -n "${TMUX_PANE:-}" ]]; then
   # BOUNDED, and for a sharper reason than the statusline's (`ccd/statusline-command.sh`,
@@ -2775,11 +2794,28 @@ if [[ -n "${TMUX_PANE:-}" ]]; then
   tname=""
   [[ -n "$hooktmo" ]] && tname=$("$hooktmo" 2 tmux display-message -p '#S' 2>/dev/null)
   [[ "$tname" == cc-?* ]] && id="${tname#cc-}"
-fi
-# THE FALLBACK PATH ONLY: no pane named a session, so ask the registry instead
-# of the tmux server. `ccd`'s `_sync_uuid` is the ONLY writer of `$REG/*.uuid`;
-# this loop only reads it — ~20 small files, and only on the path with no pane,
-# so the hot (paned) path above pays nothing new.
+# THE FALLBACK, AND ONLY FOR A FORK (D-4953). The `elif` is the no-pane half of
+# the gate: a process with a pane is answered by the pane or by nobody, and the
+# paned path never evaluates this line at all — no fork, no exec, not even the
+# test. `CLAUDE_JOB_DIR` is the other half, and the variable is MEASURED, not
+# read off the launcher. Claude Code 2.1.296 starts a background job with
+# CLAUDE_CODE_SESSION_KIND=bg, CLAUDE_BG_BACKEND=daemon, CLAUDE_BG_SOURCE and
+# CLAUDE_JOB_DIR, but builds every hook's environment from a copy that DELETES
+# its list of background-identity variables, those first three among them. A
+# hook run by a 2.1.296 process given all four sees CLAUDE_JOB_DIR and none of
+# the other three, so a gate on CLAUDE_CODE_SESSION_KIND=bg would never open and
+# this fallback would be dead for the very sessions it exists for. The value is
+# tested for presence only, never used as a path. Presence means "a forked job,
+# or a process one started": the header above names the stranger that admits.
+#
+# THE SESSION ID MUST BE NON-EMPTY, and that conjunct is a guard, not a
+# formality: an empty id equals an empty row (one whose uuid source failed),
+# and an UNSET id expanded in the comparison below kills the hook under `set -u`
+# with "unbound variable" and exit 1.
+#
+# ASK THE REGISTRY instead of the tmux server. `ccd` writes `$REG/*.uuid`
+# (`_sync_uuid`, and row creation); this loop only reads it — one small file per
+# row, and only on the forked path, so the hot (paned) path above pays nothing new.
 #
 # BUILTINS, NOT `cat`/`basename` (whole-branch review, F8). The first draft
 # forked `cat` once per registry row plus a `basename` on the match — about 21
@@ -2792,16 +2828,40 @@ fi
 # here, because a doctor run happens when an operator asks and this happens on
 # every tool call in every forked session on the box.
 #
-# `read` returns non-zero on a file with no trailing newline while still
-# assigning what it read, which is why its status is deliberately not tested:
-# `$ruuid` is COMPARED, and an unreadable or empty file compares unequal and
-# is skipped exactly as before. This file runs under `set -uo pipefail` and
-# NOT `set -e`, so that non-zero status ends nothing.
-if [[ -z "$id" && -n "${CLAUDE_CODE_SESSION_ID:-}" && -d "$REG" ]]; then
+# A REGULAR ROW, READ IN SILENCE, OR NOT AT ALL (D-4954). This walk opens every row in
+# the registry, not just this session's own, so one bad node anywhere reaches
+# every event of every forked session. The first spelling tested only `-e`
+# before an unbounded `read`: a FIFO at any `*.uuid` blocked the hook in
+# open(2), and a symlink to /dev/zero read forever, each until Claude Code
+# killed the hook at HOOK_TIMEOUT_S (`install-session-hooks.sh`), on every tool
+# call. Its redirection order, `< "$u" 2>/dev/null`, also opened the row before
+# silencing stderr, so a mode-000 row, or one unlinked between the test and the
+# open, printed bash's error on the hook's stderr. Three parts, each pinned:
+#   - `-f`, `_ct_read`'s own test: it follows a symlink, so one to a device or
+#     a FIFO is refused along with the node itself.
+#   - the BRACES put the open's own failure under 2>/dev/null (D-1691), so an
+#     unreadable row, or one unlinked after `-f`, costs its comparison and
+#     nothing else. That is also why there is no `-r` beside `-f`: such a row
+#     already fails its open in silence and compares unequal, so a `-r` would
+#     be a test no mutation can red, and it could not see the unlink anyway.
+#   - `-n CCRC_ID_MAX` bounds what one row can cost, as `_ct_read`'s `-N` does.
+#     It counts characters, and `read` drops NUL bytes uncounted, so only `-f`
+#     stands between this line and /dev/zero.
+# NOT `_ct_read` itself, and that is measured: its `-N` read plus the trim cost
+# 2.9-3.4 ms per walk against 1.8-2.5 ms for this line, on a 200-row registry
+# under Linux, on the path every tool call of a forked session takes. What
+# `read` returns is compared exactly — the newline stripped, nothing trimmed —
+# so a row ccd did not write cleanly compares unequal and the hook writes
+# nothing: it fails closed. `read`'s status is deliberately not tested (it is
+# non-zero on a row with no trailing newline while still assigning), and this
+# file runs under `set -uo pipefail` and NOT `set -e`, so it ends nothing. What
+# stays is the race D-4418 names for the spool: a node swapped in AFTER `-f` is
+# still opened, because bash has no O_NONBLOCK redirection.
+elif [[ -n "${CLAUDE_JOB_DIR:-}" && -n "${CLAUDE_CODE_SESSION_ID:-}" && -d "$REG" ]]; then
   ruuid=""
   for u in "$REG"/*.uuid; do
-    [[ -e "$u" ]] || continue
-    ruuid=""; IFS= read -r ruuid < "$u" 2>/dev/null
+    [[ -f "$u" ]] || continue
+    ruuid=""; { IFS= read -r -n "$CCRC_ID_MAX" ruuid < "$u"; } 2>/dev/null
     [[ "$ruuid" == "$CLAUDE_CODE_SESSION_ID" ]] || continue
     id="${u##*/}"; id="${id%.uuid}"
     break
