@@ -10,6 +10,7 @@
 //     answers, queues nothing: so text A -> B -> A shows A's outcome throughout, never B's under A.
 //   - `lastGood` is the last tree that settled, kept through any later outcome, so a caller can show it while a
 //     newer text parses.
+//   - A parser that throws before returning its promise settles its job as `threw` with the error's name.
 //   - A rejection ends the job with nothing applied, and the waiting job, if any, runs next. The runner rejects
 //     only on an abort (this hook's own, on unmount) or a `dispose()`.
 // `parser` is read when a request is made: a new function alone starts nothing.
@@ -62,6 +63,12 @@ interface Jobs {
   answered: Request | undefined;
 }
 
+/** The name of whatever was thrown: `name` for an error, else its `typeof`. Never the message. */
+function thrownName(e: unknown): string {
+  if (typeof e === 'object' && e !== null && 'name' in e && typeof e.name === 'string') return e.name;
+  return typeof e;
+}
+
 function start(jobs: Jobs, next: Waiting, setSettled: Dispatch<SetStateAction<Settled>>): void {
   jobs.started += 1;
   const n = jobs.started;
@@ -75,7 +82,15 @@ function start(jobs: Jobs, next: Waiting, setSettled: Dispatch<SetStateAction<Se
     jobs.queued = undefined;
     if (q !== undefined) start(jobs, q, setSettled);
   };
-  parser(req.text, { profile: req.profile, budgetMs: req.budgetMs, signal: ctrl.signal }).then(
+  // The call is total: a parser that throws before returning its promise settles the job as `threw`, so the job
+  // still ends and the waiting one still runs.
+  let answer: Promise<ParseOutcome>;
+  try {
+    answer = parser(req.text, { profile: req.profile, budgetMs: req.budgetMs, signal: ctrl.signal });
+  } catch (e) {
+    answer = Promise.resolve({ kind: 'threw', error: thrownName(e) });
+  }
+  answer.then(
     (outcome) => {
       const isLatest = jobs.latest !== undefined && sameRequest(jobs.latest, req);
       if (!current()) return;

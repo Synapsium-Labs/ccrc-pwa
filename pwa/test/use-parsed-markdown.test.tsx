@@ -242,3 +242,22 @@ describe('T11 review 3-5: text A -> B -> A never shows B under A', () => {
     expect(result.current.pending).toBe(false);
   });
 });
+
+describe('T11 review A-5: a parser that throws synchronously settles its job as threw', () => {
+  it('the job answers threw with the error name, and the waiting job still runs', async () => {
+    const calls: string[] = [];
+    const parser: MarkdownParser = (src) => {
+      calls.push(src);
+      if (src === 'a') throw new TypeError('no parser here');
+      return new Promise<ParseOutcome>(() => undefined);
+    };
+    const { result, rerender } = mount(parser, { text: 'a' });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(result.current.outcome).toEqual({ kind: 'threw', error: 'TypeError' });
+    expect(result.current.pending).toBe(false);
+    rerender({ text: 'b' });
+    expect(calls).toEqual(['a', 'b']);
+  });
+});
