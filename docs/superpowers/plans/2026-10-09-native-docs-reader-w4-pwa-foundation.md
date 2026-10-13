@@ -10788,7 +10788,7 @@ Expected: `<n> rows; 0 not exactly once`, `<n>` being 171 plus the new ids Step 
 
 Close the record: fill every `outcome` and `rows`, add a last line `Findings: raised <n>, survived <m>, fixed <f>, carried <c>, not a defect <d>, asked <a>, ruled departures <r>. Commits: <list of shas>. Panel tip <TIP>; fix-wave tip $(git rev-parse HEAD).` (`survived` = the findings not ruled NOT A DEFECT), and copy `<SCRATCH>/review` and every Step 5 row measurement into `.superpowers/sdd/2026-10-09-native-docs-reader-w4-pwa-foundation/task-11-review/`. Task 12's results cite the record's last line, its Carried list takes every CARRIED line, and an unanswered ask is listed there too. No push and no pull request here: Task 12 is the close, and its results commit must be the tip.
 
-**Mutation rows this task contributes** (none until a Step 5 fix adds one: this task carries no code of its own. Each row a fix adds is measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at the fix's commit, then `git -C <copy> init -q`, `pwa/node_modules` and `server/node_modules` linked in; `pkg` is the package the `tests` run in; `old` is unique in `file` at that commit; `red` is the measured summary and the cases that went red. A fix that re-spells an earlier row's anchor repeats that row here with the same id and the new `old`, and says so above this block; Task 12's extractor keeps the last occurrence of an id). Rows that Step 5 adds are appended to this array by the fix that adds them. Rows from the review rounds before this task, recorded here so the extractor reads them (ids renumbered to this task's own `W4-T11-M<k>`, because the extractor refuses a foreign id that re-anchors nothing): W4-T11-M1 to W4-T11-M8 (the pre-scan hardening), M9 and M10 (the chat image predicate and the note guard), M11 (docs-sw's linear extraction), M12 to M42 (Task 11's fix wave, review findings 1-1 to 5-1 and A-3 to A-6), M43 (streaming chat's newest settled tree, review N1), M44 to M48 (operator rulings 2026-10-13: the chat table pre-count's upper bound, review 2-3; absolute http(s) images only, Q1), and the re-anchors W4-T3-M9, W4-T5-M33, W4-T6-M18, W4-T4-M7, W4-T4-M8 and W4-T4-M9, each kept under the earlier task's id with a new `old` on the shipped text (the earlier text no longer exists), and W4-T6-M7, W4-T6-M8, W4-T6-M9, W4-T11-M9 and W4-T11-M10 re-measured or re-anchored on the new image predicate.
+**Mutation rows this task contributes** (none until a Step 5 fix adds one: this task carries no code of its own. Each row a fix adds is measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at the fix's commit, then `git -C <copy> init -q`, `pwa/node_modules` and `server/node_modules` linked in; `pkg` is the package the `tests` run in; `old` is unique in `file` at that commit; `red` is the measured summary and the cases that went red. A fix that re-spells an earlier row's anchor repeats that row here with the same id and the new `old`, and says so above this block; Task 12's extractor keeps the last occurrence of an id). Rows that Step 5 adds are appended to this array by the fix that adds them. Rows from the review rounds before this task, recorded here so the extractor reads them (ids renumbered to this task's own `W4-T11-M<k>`, because the extractor refuses a foreign id that re-anchors nothing): W4-T11-M1 to W4-T11-M8 (the pre-scan hardening), M9 and M10 (the chat image predicate and the note guard), M11 (docs-sw's linear extraction), M12 to M42 (Task 11's fix wave, review findings 1-1 to 5-1 and A-3 to A-6), M43 (streaming chat's newest settled tree, review N1), M44 to M48 (operator rulings 2026-10-13: the chat table pre-count's upper bound, review 2-3; absolute http(s) images only, Q1), and the re-anchors W4-T3-M9, W4-T5-M33, W4-T6-M18, W4-T4-M7, W4-T4-M8 and W4-T4-M9, each kept under the earlier task's id with a new `old` on the shipped text (the earlier text no longer exists), and W4-T6-M7, W4-T6-M8, W4-T6-M9, W4-T11-M9 and W4-T11-M10 re-measured or re-anchored on the new image predicate, and W4-T10-M13 re-pointed at the doctor case main's #353 renamed.
 
 ```json
 [
@@ -11430,6 +11430,19 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
    "test/chat-hardening.test.tsx"
   ],
   "red": "pwa chat-hardening: 1 failed | 103 passed (104) — 'keeps an absent source'"
+ },
+ {
+  "id": "W4-T10-M13",
+  "pkg": "server",
+  "file": "server/test/installTreeFixture.ts",
+  "old": "  'server/dist-pwa/sw.js': swJs(),\n",
+  "new": "",
+  "tests": [
+   "test/ccrc-install.test.ts",
+   "-t",
+   "ends with doctor, and a fresh box ends green"
+  ],
+  "red": "server ccrc-install -t 'ends with doctor, and a fresh box ends green': 1 failed | 318 skipped (319) — 'ccrc install: the landing block, and doctor as the last word > ends with doctor, and a fresh box ends green: 0 warned, 0 failed, exit 0' (the closing doctor exits 1 with no service worker at the installed tree: expected 1 to be +0, ccrc-install.test.ts:5353); re-pointed from the title main's #353 renamed, which the old pattern no longer matched"
  }
 ]
 ```
