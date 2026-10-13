@@ -16032,6 +16032,9 @@ declare -A _CI_DONE=()    # id -> the LAST "$uuid:$st" actually examined
 declare -A _CI_WALK=()    # id -> uuids visited on the current walk, space-joined, newest last
 declare -A _CI_ORIGIN=()  # id -> the uuid the CURRENT walk began from
 declare -A _CI_EXPECT=()  # id -> the uuid this function itself last placed there
+declare -A _CI_PEND=()       # id -> the "$uuid:$st" whose hop DECLINED (successor absent or empty) — D-4942
+declare -A _CI_PENDNEXT=()   # id -> the successor that declined hop names
+declare -A _CI_PENDADDRS=()  # id -> where that successor's transcript can appear, one address per line
 _CI_WALK_CAP=16
 
 _ci_walk_has() {   # id uuid -> 0 iff uuid is already on id's current walk
@@ -16206,7 +16209,7 @@ _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated 
   # stops a re-read of unchanged content, and `_CI_ORIGIN`/`_CI_WALK` stop a
   # cycle — unconditionally through the origin, or through the capped walk
   # for a shorter local repeat (see the comment above `_CI_LAST`).
-  local id="$1" cfg="$2" uuid pk addrs f st key prev done_key next sf msz mmt
+  local id="$1" cfg="$2" uuid pk addrs f st key prev done_key next sf msz mmt pend
   uuid=$(_reg_get "$id" uuid); [[ -n "$uuid" ]] || return 0
   # WALK-START DETECTION (M1, third review round). A registry uuid that does
   # not match what this function itself last placed there — a hop's
@@ -16247,19 +16250,64 @@ _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated 
   _CI_LAST["$id"]="$key"
   [[ "$key" == "$prev" ]] || return 0                  # still growing, or just hopped — look again next tick
   done_key="${_CI_DONE[$id]:-}"
-  [[ "$key" == "$done_key" ]] && return 0              # unchanged since the last read — nothing new to examine
-  _CI_DONE["$id"]="$key"
-  _ci_walk_add "$id" "$uuid"
-  next=$(_continued_in_of "$f" "$uuid")
-  [[ -n "$next" ]] || return 0
-  [[ "$next" == "${_CI_ORIGIN[$id]:-}" ]] && return 0   # back to the walk's origin — a cycle of ANY length, stop
-  _ci_walk_has "$id" "$next" && return 0                # already on this walk — a shorter local cycle, stop
-  sf=$(_ci_transcript_path "$id" "$cfg" "$next") || return 0   # tried both spellings, same as the current file
-  [[ -s "$sf" ]] || return 0                                    # announced but not yet written
+  if [[ "$key" == "$done_key" ]]; then
+    # Unchanged since the last read, so there is nothing new to READ — but a
+    # hop that read declined may still have something new to TAKE (D-4942).
+    [[ "${_CI_PEND[$id]:-}" == "$key" ]] || return 0
+    next="${_CI_PENDNEXT[$id]:-}"
+    _ci_extant "${_CI_PENDADDRS[$id]:-}" || return 0   # builtins only: still not written
+    sf="$_CI_F"
+    [[ -s "$sf" ]] || return 0                          # still announced, still empty
+  else
+    _CI_DONE["$id"]="$key"
+    unset "_CI_PEND[$id]" "_CI_PENDNEXT[$id]" "_CI_PENDADDRS[$id]"
+    _ci_walk_add "$id" "$uuid"
+    next=$(_continued_in_of "$f" "$uuid")
+    [[ -n "$next" ]] || return 0
+    [[ "$next" == "${_CI_ORIGIN[$id]:-}" ]] && return 0   # back to the walk's origin — a cycle of ANY length, stop
+    _ci_walk_has "$id" "$next" && return 0                # already on this walk — a shorter local cycle, stop
+    # Both spellings, same as the current file. The ADDRESSES are what the
+    # decline below remembers, so they are resolved here rather than inside
+    # `_ci_transcript_path`, which would throw them away.
+    pend=$(_ci_addrs "$id" "$cfg" "$next") || return 0
+    if ! _ci_extant "$pend" || [[ ! -s "$_CI_F" ]]; then
+      # ANNOUNCED BUT NOT YET WRITTEN — A DECLINE, NOT A VERDICT (D-4942).
+      # `_CI_DONE` was committed above and stays committed, so this file is
+      # never tail-read again while its stamp stands; what is kept instead is
+      # the successor it names and where that successor's transcript can
+      # appear. Every later tick on this same stamp re-asks only that, with
+      # `[[ -f ]]`/`[[ -s ]]` builtins (the branch above) — no fork, no read.
+      #
+      # It used to be a verdict: `_CI_DONE` was committed before these checks
+      # and A, marked, never changes again, so every later tick returned at
+      # "already examined" and the hop was never retried for the rest of the
+      # supervisor's life — measured, 20 more ticks still on A after B was
+      # written. Claude Code produces exactly this state: the background
+      # handoff appends the marker as soon as the daemon acknowledges the
+      # spawn, and the successor's transcript appears only once the worker has
+      # booted and loaded the conversation it forks.
+      #
+      # NOT A BACKOFF, deliberately. Un-committing `_CI_DONE` (the review's
+      # suggestion) would re-read A's tail on every tick while the successor
+      # stays unwritten — for ever, for a successor that never comes — and a
+      # backoff only spaces those reads out. Remembering the answer makes the
+      # retry cheaper than the stat every tick already pays for A itself, so
+      # there is nothing left to back off from. One entry per id, replaced on
+      # every examination and dropped on every hop and every new walk.
+      _CI_PEND["$id"]="$key"; _CI_PENDNEXT["$id"]="$next"; _CI_PENDADDRS["$id"]="$pend"
+      return 0
+    fi
+    sf="$_CI_F"
+  fi
+  unset "_CI_PEND[$id]" "_CI_PENDNEXT[$id]" "_CI_PENDADDRS[$id]"
   unset "_CI_PATH[$pk]"   # M3: drop the entry for the uuid we're hopping OFF
   _CI_PATH["$cfg:$id:$next"]="$sf"   # the next tick's resolution, paid here instead of there
   _CI_EXPECT["$id"]="$next"   # our own hop's destination — recognised as a continuation, not a new walk
   _reg_set "$id" uuid "$next"
+  # THE FORK'S OWN PROCESS, FOUND ONCE, HERE (D-4945): the hop is the moment
+  # this row is known to be following a forked session, so it is the one
+  # moment worth a scan of the sessions directory. See `_ci_bg_follow`.
+  _ci_bg_track "$id" "$cfg" "$next" "${next:0:8}"
   return 0
 }
 
@@ -16291,6 +16339,411 @@ _ci_pane_superseded() {   # id cfg sid -> 0 iff sid's OWN transcript ends in a c
   f=$(_ci_transcript_path "$id" "$cfg" "$sid") || return 1
   [[ -n "$(_continued_in_of "$f" "$sid")" ]] || return 1
   _CI_PANE_DEAD["$id"]="$sid"
+  return 0
+}
+
+# ── THE FORK'S OWN PROCESS (D-4943, D-4944, D-4945) ─────────────────────────
+# The walk above reads what a fork left BEHIND (the marker in the old
+# transcript). Claude Code also publishes what is running NOW, and three holes
+# the walk cannot close are closed by reading it. What is relied on, read out of
+# the 2.1.296 binary (not run live — the fleet had no background worker to
+# observe when this was written):
+#   - Every live Claude Code process writes ONE compact-JSON line at
+#     `<cfg>/sessions/<pid>.json` — `pid`, `sessionId`, `cwd`, …, `kind`
+#     (`interactive`, `bg`, `daemon` or `daemon-worker`) and, on a `bg`
+#     worker, `jobId`: the job's 8-hex short, which is the first 8 characters
+#     of the forked session's own id. It deletes the line when it exits.
+#   - It REWRITES that line in place when its session id rotates (`/clear`),
+#     so its `sessionId` is the process's CURRENT id. `_sync_uuid`'s pane read
+#     has always relied on exactly this; a background worker does the same.
+#   - A left-arrow fork stamps the PANE's own record `parkedJobId: <job>` —
+#     "this window's session moved to the background" — and leaves its
+#     `sessionId` on the pre-fork id. Claude Code's own live-session listing
+#     skips a parked interactive record as a holder of that id, for that reason.
+# All three are read with builtins only (`read`, `[[ =~ ]]`, `kill -0`): the
+# supervise loop runs every five seconds for every session, and nothing here
+# runs at all for a row with no fork (`_ci_bg_follow`'s first line).
+_CI_REC=""   # `_ci_rec_read`'s out-parameter — the `_CI_F` idiom: a `$( )` would be a fork
+_CI_VAL=""   # `_ci_rec_field`'s out-parameter
+
+_ci_rec_read() {   # file -> rc 0 and _CI_REC set to that sessions record, read with builtins
+  # NEVER BLOCKS: `-f` refuses a FIFO or a device before the open (the hazard
+  # `_reg_read`'s header argues), `! -L` a link out of the directory, and `-N`
+  # bounds the read. A record is a few hundred bytes.
+  _CI_REC=""
+  [[ -f "$1" && ! -L "$1" && -r "$1" ]] || return 1
+  IFS= read -r -N 16384 _CI_REC < "$1" 2>/dev/null
+  [[ -n "$_CI_REC" ]]
+}
+
+_ci_rec_field() {   # name -> rc 0 and _CI_VAL set to that key's string value in _CI_REC
+  # The first `"name":"…"` in the line. A key spelled inside some other string
+  # value cannot match: JSON escapes the quotes around it, and the pattern needs
+  # a bare quote right after the name.
+  local re='"'"$1"'":"([^"\\]*)"'
+  _CI_VAL=""
+  [[ "$_CI_REC" =~ $re ]] || return 1
+  _CI_VAL="${BASH_REMATCH[1]}"
+}
+
+_CI_BGP="" _CI_BGJ="" _CI_BGS=""   # `_ci_bg_scan`'s out-parameters: the worker's pid, job and current id
+
+_ci_rec_live() {   # pid -> 0 iff the process _CI_REC describes still runs at pid (NP4: Claude Code's own test)
+  # `kill -0` says only that SOME process has that pid. A worker killed by
+  # SIGKILL or the OOM killer never deletes its record, and its pid can be
+  # handed to anything afterwards; read as live, such a record would refuse
+  # every swap of its row (auto-swap included, then held off for
+  # SWAPBLOCK_COOLDOWN) and take away the `--session-id` rescue from a resume.
+  # Claude Code's own live-session listing answers this with the record's
+  # `procStart` — `ps -o lstart= -p <pid>` under `LC_ALL=C TZ=UTC`, trimmed,
+  # recorded at registration — compared with the same command now (read in the
+  # 2.1.296 binary: `Dw`/`Ul`; measured on a real background worker's record:
+  # equal). The same rule here, including its two lenient arms: a record with
+  # no `procStart` is judged on `kill -0` alone, and so is a pid `ps` prints
+  # nothing for — "cannot tell" is not "dead", in Claude Code or here.
+  #
+  # COST: one `ps`, and only for a record that already matched the id or job
+  # asked about and answered `kill -0` — the scan's callers are a hop, a parked
+  # pane's first sight, a worker's respawn, a resume and a swap; never a tick of
+  # a row with no fork.
+  local pid="$1" want got
+  kill -0 "$pid" 2>/dev/null || return 1
+  _ci_rec_field procStart || return 0
+  want="$_CI_VAL"
+  got=$(LC_ALL=C TZ=UTC ps -o lstart= -p "$pid" 2>/dev/null) || return 0
+  got="${got%"${got##*[![:space:]]}"}"; got="${got#"${got%%[![:space:]]*}"}"
+  [[ -z "$got" || "$got" == "$want" ]]
+}
+
+_ci_bg_scan() {   # cfg sid job -> rc 0, _CI_BG{P,J,S} set: the LIVE kind "bg" record holding sid, or running job
+  # ONE PASS OVER THE SESSIONS DIRECTORY, builtins only. Called on a hop, on a
+  # parked pane's job, on a worker whose record moved (a respawn changes the
+  # pid, never the job), and once per resume — never on a tick of a row with no
+  # fork. Live is `_ci_rec_live`: a SIGKILLed worker leaves its record behind,
+  # and a record for a pid nobody holds — or that someone else holds now — is
+  # not a holder.
+  local cfg="$1" sid="$2" job="$3" f p s j
+  _CI_BGP="" _CI_BGJ="" _CI_BGS=""
+  [[ -n "$cfg" ]] || return 1
+  for f in "$cfg"/sessions/*.json; do
+    _ci_rec_read "$f" || continue
+    [[ "$_CI_REC" == *'"kind":"bg"'* ]] || continue
+    _ci_rec_field sessionId; s="$_CI_VAL"
+    _ci_rec_field jobId; j="$_CI_VAL"
+    [[ ( -n "$sid" && "$s" == "$sid" ) || ( -n "$job" && "$j" == "$job" ) ]] || continue
+    p="${f##*/}"; p="${p%.json}"
+    [[ "$p" =~ ^[1-9][0-9]*$ ]] && _ci_rec_live "$p" || continue
+    _CI_BGP="$p" _CI_BGJ="$j" _CI_BGS="$s"
+    return 0
+  done
+  return 1
+}
+
+declare -A _CI_BG=()       # id -> "pid job": the background worker this row follows (pid 0 = not found yet)
+declare -A _CI_BGMISS=()   # id -> consecutive ticks that worker had no live record
+declare -A _CI_BGGONE=()   # id -> the job last let go, so a parked pane naming it is not rescanned every tick
+declare -A _CI_BGSID=()    # id -> the worker id whose transcript addresses _CI_BGADDRS holds
+declare -A _CI_BGADDRS=()  # id -> those addresses, best first, one per line
+_CI_BG_MISS_CAP=12         # a minute of ticks: long enough for a worker's respawn, short enough to let a finished job go
+
+_ci_bg_track() {   # id cfg sid job -> start following the worker that holds sid or runs job
+  # Even when no worker answers yet the job is remembered (pid 0), and
+  # `_ci_bg_follow` keeps looking for it for `_CI_BG_MISS_CAP` ticks — the
+  # record of a worker that is mid-respawn is briefly absent.
+  local id="$1" cfg="$2" sid="$3" job="$4"
+  [[ "$job" =~ ^[a-f0-9]{8}$ ]] || job=""
+  if _ci_bg_scan "$cfg" "$sid" "$job" && [[ "$_CI_BGJ" =~ ^[a-f0-9]{8}$ ]]; then
+    _CI_BG["$id"]="$_CI_BGP $_CI_BGJ"
+  elif [[ -n "$job" ]]; then
+    _CI_BG["$id"]="0 $job"
+  else
+    return 1
+  fi
+  _CI_BGMISS["$id"]=0
+  unset "_CI_BGGONE[$id]"
+  return 0
+}
+
+_ci_pane_parked() {   # id cfg file -> 0 iff the pane's own record says its session moved to the background
+  # D-4943 — A RESTART'S GUARD THAT NEEDS NO MEMORY. After a supervisor restart
+  # every memo here is empty, so the walk cannot refuse the pre-fork id a pane
+  # still publishes, and the marker test can only refuse it while that id's own
+  # transcript is still readable — measured (second review round): a chain
+  # head that has gone, plus one restart, and tick 1 wrote the pre-fork id
+  # back for good. The pane that forked says so ITSELF, on disk: `parkedJobId`. A parked
+  # record is not the holder of its `sessionId` — Claude Code's own listing of
+  # live sessions skips it for that reason — so its id is not new information,
+  # whatever this process remembers and whatever the disk still holds.
+  #
+  # WHY NOT "a pane id with no transcript is not new information", the review's
+  # first suggestion: a `/clear` mints exactly such an id — its transcript does
+  # not exist until Claude Code's first write (the F7 window, above) — so that
+  # rule would hold the registry on the cleared conversation through that
+  # window on every `/clear` on the fleet. And not a persisted walk origin: a
+  # registry field written on every hop, and still blind when the stale id is
+  # not the origin (a respawned pane that forks a second time publishes the
+  # FIRST successor, which is no walk's origin).
+  #
+  # THE PANE THAT IS NOT PARKED, though its session moved: this header used to
+  # say 2.1.296 has no path to it, and the second verifier round found one —
+  # the left-arrow fork's error-path fallback clears the stamp when its
+  # `claude agents` child returns. `_ci_pane_stale` (below) refuses that pane
+  # once its id's transcript is gone; its header states the shape still
+  # written.
+  #
+  # And the parked job is the link to the worker (D-4945): one scan per job,
+  # never one per tick.
+  local id="$1" cfg="$2" job
+  _ci_rec_read "$3" && _ci_rec_field parkedJobId && [[ -n "$_CI_VAL" ]] || return 1
+  job="$_CI_VAL"
+  if [[ -z "${_CI_BG[$id]:-}" && "${_CI_BGGONE[$id]:-}" != "$job" ]]; then
+    _ci_bg_track "$id" "$cfg" "" "$job"
+  fi
+  return 0
+}
+
+declare -A _CI_PSTALE=()       # id -> the pane sessionId whose transcript addresses _CI_PSTALEADDRS holds
+declare -A _CI_PSTALEADDRS=()  # id -> those addresses, best first, one per line
+_CI_PANE_STALE_SECS=600        # a pane record untouched this long cannot be naming a /clear it just made
+
+_ci_pane_stale() {   # id cfg file sid -> 0 iff sid has no transcript AND the pane's record has not been written lately
+  # D-4943, THE RESIDUAL THE PARKED STAMP LEAVES (second verifier round, P2).
+  # The left-arrow fork's fallback — the in-process agents view throws, a
+  # `claude agents` child runs instead — CLEARS `parkedJobId` when that child
+  # returns (read in the 2.1.296 binary), so the pane sits UNPARKED on the
+  # pre-fork id. While that id's transcript is readable its marker refuses it
+  # (`_ci_pane_superseded`); once the transcript is gone — Claude Code's own
+  # age-based cleanup deletes transcripts by mtime, and a pane left on a
+  # superseded id is a pane nobody writes it from — a restarted supervisor read
+  # the id as new and wrote it, and the next resume asked for a transcript that
+  # no longer exists.
+  #
+  # "A pane id with no transcript is not new information" (the brief's rule)
+  # is false for exactly one id: the one a `/clear` has just minted, which has
+  # no transcript until its first write. And 2.1.296 stamps `updatedAt:
+  # Date.now()` on EVERY write of this record — the rotation itself, a park, an
+  # unpark, every status change — so the id a `/clear` minted is named by a
+  # record written at that moment. An id with nothing on disk, under a record
+  # nobody has written for `_CI_PANE_STALE_SECS`, is not a `/clear` the
+  # supervisor has just seen; it is an id the pane was left on.
+  #
+  # FAILS OPEN: a record with no `updatedAt` (an older build) is not judged,
+  # and the pane wins exactly as it always did. So the review's literal P2
+  # fixture (`{sessionId, status}`, no `updatedAt`) is still written — it is
+  # indistinguishable from an older build's fresh `/clear`. What it costs, at
+  # worst: a `/clear` the supervisor first sees more than ten minutes late,
+  # with no line written since, reaches the registry at its first line rather
+  # than at once.
+  #
+  # COST: builtins on every tick it is asked — a record read, a regex, the
+  # clock through `printf '%(%s)T'` — and the transcript's possible addresses
+  # are resolved once per (row, pane id) and kept, because the stuck state this
+  # refuses is permanent and is asked about on every tick of it. It is asked
+  # only when the pane already disagrees with the registry, and a fresh record
+  # answers before anything else is looked at.
+  local id="$1" cfg="$2" sid="$4" now up addrs
+  _ci_rec_read "$3" || return 1
+  [[ "$_CI_REC" =~ \"updatedAt\":([0-9]{1,16})[,}] ]] || return 1
+  up=$(( 10#${BASH_REMATCH[1]} / 1000 ))
+  printf -v now '%(%s)T' -1
+  (( now - up > _CI_PANE_STALE_SECS )) || return 1
+  if [[ "${_CI_PSTALE[$id]:-}" != "$sid" ]]; then
+    addrs=$(_ci_addrs "$id" "$cfg" "$sid") || return 1
+    _CI_PSTALE["$id"]="$sid"; _CI_PSTALEADDRS["$id"]="$addrs"
+  fi
+  _ci_extant "${_CI_PSTALEADDRS[$id]}" && [[ -s "$_CI_F" ]] && return 1
+  return 0
+}
+
+_ci_bg_follow() {   # id cfg — D-4945: move the registry to the id the followed worker holds now
+  # THE HOLE ONE ROTATION PAST THE FORK (review: hook lens H1, registry lens's
+  # second missed item). A `/clear` inside the background session rotates its
+  # id and writes no `continued-in` record — 2.1.296 writes one only on the
+  # background handoff — and the pane keeps publishing the pre-fork id, so
+  # neither source above ever told the registry: the chat went dark again,
+  # `--resume` would time-travel to before the `/clear`, and the hook's
+  # pane-less fallback (it matches `$CLAUDE_CODE_SESSION_ID` against the
+  # registry) stopped matching. The worker's own record carries the new id.
+  #
+  # The new id is written only when its transcript exists, non-empty, under
+  # THIS row's workdir (both spellings — `_ci_addrs`): a background session can
+  # be isolated into a worktree of its own, and a transcript under a project
+  # directory this row does not own is not this row's to point at. A placement
+  # like a hop's: the id left behind joins the walk, so the pane's stale id
+  # and this one are both refused as they would be after a hop.
+  #
+  # COST. A row with nothing in the background returns on the first line. A
+  # followed row reads one record (builtins) per tick and forks only when that
+  # record names an id this row has not placed — i.e. once per rotation.
+  # Measured with PATH shims over 20 ticks of `_sync_uuid`: 9 execs and about
+  # 11 subshells per tick, on an idle row and on a forked row in its steady
+  # state alike, and the same before this change as after it.
+  local id="$1" cfg="$2" t="${_CI_BG[$id]:-}" pid job sid uuid addrs
+  [[ -n "$t" ]] || return 0
+  pid="${t%% *}" job="${t#* }"
+  if _ci_rec_read "$cfg/sessions/$pid.json" && kill -0 "$pid" 2>/dev/null \
+     && [[ "$_CI_REC" == *'"kind":"bg"'* ]] && _ci_rec_field jobId && [[ "$_CI_VAL" == "$job" ]]; then
+    _ci_rec_field sessionId; sid="$_CI_VAL"
+  elif _ci_bg_scan "$cfg" "" "$job"; then
+    _CI_BG["$id"]="$_CI_BGP $job"; sid="$_CI_BGS"   # the same job under a new pid: a respawned worker
+  else
+    _CI_BGMISS["$id"]=$(( ${_CI_BGMISS[$id]:-0} + 1 ))
+    if (( ${_CI_BGMISS[$id]} > _CI_BG_MISS_CAP )); then
+      # The job is over. Whatever id it last held is already this row's, if it
+      # had a transcript to show for it, so letting go loses nothing.
+      unset "_CI_BG[$id]" "_CI_BGMISS[$id]" "_CI_BGSID[$id]" "_CI_BGADDRS[$id]"
+      _CI_BGGONE["$id"]="$job"
+    fi
+    return 0
+  fi
+  _CI_BGMISS["$id"]=0
+  [[ "$sid" =~ ^[0-9a-f-]{36}$ ]] || return 0
+  [[ "$sid" == "${_CI_EXPECT[$id]:-}" ]] && return 0   # the id this row already follows: nothing to fork for
+  [[ "$sid" == "${_CI_ORIGIN[$id]:-}" ]] && return 0   # never back to where the walk began
+  _ci_walk_has "$id" "$sid" && return 0                # nor to any id it has left
+  uuid=$(_reg_get "$id" uuid); [[ -n "$uuid" && "$sid" != "$uuid" ]] || return 0
+  if [[ "${_CI_BGSID[$id]:-}" != "$sid" ]]; then
+    addrs=$(_ci_addrs "$id" "$cfg" "$sid") || return 0   # once per new id; the ticks after are `[[ -f ]]`
+    _CI_BGSID["$id"]="$sid"; _CI_BGADDRS["$id"]="$addrs"
+  fi
+  _ci_extant "${_CI_BGADDRS[$id]}" || return 0
+  [[ -s "$_CI_F" ]] || return 0
+  _ci_walk_add "$id" "$uuid"
+  unset "_CI_PATH[$cfg:$id:$uuid]"
+  _CI_PATH["$cfg:$id:$sid"]="$_CI_F"
+  _CI_EXPECT["$id"]="$sid"
+  _reg_set "$id" uuid "$sid"
+  return 0
+}
+
+_CI_JOB_FRESH_SECS=120   # a job's state file written this recently, and not over, is a job still starting
+
+_ci_job_starting() {   # cfg job -> 0 iff <cfg>/jobs/<job>/state.json names a job that is not over and moved lately
+  # THE WINDOW BEFORE THE WORKER HAS A RECORD (D-4944, second verifier round).
+  # Measured on a real background handoff (2.1.296): the job's state file at
+  # `<cfg>/jobs/<short>/state.json` — the same config home `sessions/` lives
+  # in — is written about half a second BEFORE the pane appends its marker;
+  # the worker's own sessions record appears about a second AFTER it on an
+  # idle machine, and the successor's first line later still. On a loaded box
+  # the worker can take longer to register than a dead pane takes to be
+  # respawned, so the state file is the one witness that exists for the whole
+  # window.
+  #
+  # NOT OVER: Claude Code's own terminal set is `done`, `failed`, `stopped`
+  # (read in the binary). A fork that failed before its first line leaves the
+  # pre-fork id as the conversation there is to resume.
+  # MOVED LATELY: a state file nobody has written for `_CI_JOB_FRESH_SECS` is
+  # not a job starting — a daemon that died (a reboot) leaves its jobs' files
+  # behind, still saying `working`, and taking such a job's unwritten id would
+  # leave the row nothing it can resume. A job that is genuinely running past
+  # that window has a worker, and its record answers instead.
+  #
+  # The state file is pretty JSON (`"state": "working"`), and `state` is its
+  # first key, inside the first 16 KiB `_ci_rec_read` takes.
+  local st="$1/jobs/$2/state.json" mt now
+  [[ "$2" =~ ^[a-f0-9]{8}$ ]] || return 1
+  _ci_rec_read "$st" || return 1
+  [[ "$_CI_REC" =~ \"state\"[[:space:]]*:[[:space:]]*\"([a-z-]+)\" ]] || return 1
+  case "${BASH_REMATCH[1]}" in done|failed|stopped) return 1 ;; esac
+  mt=$(_plat_mtime -- "$st" 2>/dev/null) && [[ "$mt" =~ ^[0-9]+$ ]] || return 1
+  printf -v now '%(%s)T' -1
+  (( now - mt <= _CI_JOB_FRESH_SECS ))
+}
+
+_CI_END=""        # `_ci_chain_end`'s out-parameter
+_CI_END_HELD=""   # …and, when the end is a successor not written yet, the job that holds it
+
+_ci_chain_end() {   # id cfg -> rc 0 and _CI_END set to the end of the registry uuid's chain (the uuid itself if none)
+  # THE WALK IN ONE CALL, for the two places that cannot wait for ticks: a
+  # spawn, and a swap's carry. No quiescence gate, and none is needed — the
+  # pane is dead at both, and a marker is the last line a transcript ever gets.
+  # Otherwise the supervise walk's rules: at most `_CI_WALK_CAP` hops, never a
+  # uuid twice, and a successor is taken when its transcript exists,
+  # non-empty, at either spelling under this row's own workdir.
+  #
+  # OR WHEN ITS JOB HOLDS IT (D-4944, second verifier round: P3/P3b). A pane
+  # that exits right at the handoff — the exit dialog's "background" — is
+  # respawned three to eight seconds later, and the successor's first line is
+  # written only once the worker has booted and loaded the conversation it
+  # forks. A successor not written yet used to end the walk, so the respawn
+  # resumed the pre-fork id — which nothing holds any more — and Claude Code
+  # appended to it after its own marker: the chain broken for good. An
+  # unwritten successor is taken when a live worker holds it (its record names
+  # it, or names its job: the first 8 characters of the forked id), or its job
+  # is still starting (`_ci_job_starting`); the walk ends there, since there is
+  # no transcript yet to read a marker from, and `_CI_END_HELD` names the job,
+  # so the caller treats the id as held — Claude Code refuses to resume a held
+  # id, and the `--session-id` retry, which would START an unwritten one, is
+  # skipped.
+  local id="$1" cfg="$2" uuid f next sf seen n=0
+  _CI_END="" _CI_END_HELD=""
+  uuid=$(_reg_get "$id" uuid); [[ -n "$uuid" && -n "$cfg" ]] || return 1
+  seen=" $uuid "
+  while (( n < _CI_WALK_CAP )); do
+    f=$(_ci_transcript_path "$id" "$cfg" "$uuid") || break
+    next=$(_continued_in_of "$f" "$uuid")
+    [[ -n "$next" && "$seen" != *" $next "* ]] || break
+    sf=$(_ci_transcript_path "$id" "$cfg" "$next")
+    if [[ -z "$sf" || ! -s "$sf" ]]; then
+      if _ci_bg_scan "$cfg" "$next" "${next:0:8}"; then
+        _CI_END_HELD="${_CI_BGJ:-pid $_CI_BGP}"
+      elif _ci_job_starting "$cfg" "${next:0:8}"; then
+        _CI_END_HELD="${next:0:8}"
+      else
+        break
+      fi
+      uuid="$next"
+      break
+    fi
+    seen+="$next "; uuid="$next"; n=$(( n + 1 ))
+  done
+  _CI_END="$uuid"
+}
+
+_CI_RESUME_HELD=""   # `_ci_resume_follow`'s out-parameter: who holds the id about to be resumed, or empty
+
+_ci_resume_follow() {   # id cfg -> write the end of the chain into the registry; _CI_END, _CI_RESUME_HELD set
+  # D-4944 — EVERY RESUME FOLLOWS THE CHAIN FIRST. The supervise walk needs two
+  # live ticks of quiescence per hop, and it runs only while the pane lives. A
+  # pane that dies inside that window — the exit dialog's "background" choice
+  # writes the marker and exits within milliseconds — used to respawn with
+  # `--resume <pre-fork id>` straight from the registry, and Claude Code's
+  # explicit-id resume does no continued-in check of its own: the pane came
+  # back on the conversation as it stood before the fork, beside the fork still
+  # running in the daemon.
+  #
+  # A SUCCESSOR A LIVE WORKER HOLDS, MEASURED IN THE 2.1.296 BINARY: an
+  # interactive `--resume <id>` first lists live sessions, and when a
+  # non-interactive one holds the id it exits with "… is running in the
+  # background (<job>). Run `claude attach <job>` …". It would attach in place
+  # only for a launch that carries no session-shaping flags, and every ccd spawn
+  # carries `--dangerously-skip-permissions`. So the resume is refused, not
+  # doubled — no second writer — and the pane cannot come up until that job
+  # ends; this says so, naming the job. The caller then skips its
+  # `--session-id` retry, which is the dangerous half: Claude Code refuses an
+  # id whose transcript exists ("already in use"), but an id whose worker has
+  # not written yet it would START — a second writer under the same id.
+  local id="$1" cfg="$2" from
+  _CI_RESUME_HELD=""
+  from=$(_reg_get "$id" uuid)
+  _ci_chain_end "$id" "$cfg" || return 0
+  if [[ "$_CI_END" != "$from" ]]; then
+    _reg_set "$id" uuid "$_CI_END" \
+      || echo "ccd: warn: $id: could not write uuid $_CI_END into $REG/$id.uuid — resuming it anyway" >&2
+    echo "ccd: $id: $from continued in $_CI_END (Claude Code's own continued-in record) — resuming $_CI_END" >&2
+  fi
+  # HELD BY ITS JOB'S SHORT TOO (second verifier round, NP2): the worker's
+  # record is rewritten in place on every rotation, so a job that has just
+  # taken a `/clear` names its NEW id there while the registry still names the
+  # one before it — matched by id alone, that job read as absent. The short is
+  # the fork's own id's first 8 characters and never changes.
+  if [[ -n "$_CI_END_HELD" ]]; then
+    _CI_RESUME_HELD="$_CI_END_HELD"
+    echo "ccd: warn: $id: $_CI_END has no transcript yet and background job $_CI_END_HELD holds it — resuming it, not the conversation it forked from; the pane cannot come up on it until that job ends, \`claude attach $_CI_END_HELD\` opens it" >&2
+  elif _ci_bg_scan "$cfg" "$_CI_END" "${_CI_END:0:8}"; then
+    _CI_RESUME_HELD="${_CI_BGJ:-pid $_CI_BGP}"
+    echo "ccd: warn: $id: $_CI_END is held by a live background session (job ${_CI_BGJ:-?}, pid $_CI_BGP) — Claude Code refuses to resume it until that job ends; \`claude attach ${_CI_BGJ:-<job>}\` opens it" >&2
+  fi
   return 0
 }
 
@@ -16337,6 +16790,15 @@ _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the r
   # — and in that window a `--resume` time-travels, which is the very defect
   # this whole lane exists to remove, fired on every rollout.
   #
+  # WHAT HOLDS ACROSS A RESTART IS WHAT IS ON DISK, and there are three such
+  # refusals (the second review found the first alone overclaimed this
+  # heading): A's own transcript ending in a marker (below), the pane's own
+  # record carrying `parkedJobId` (`_ci_pane_parked`, D-4943), which still
+  # refuses A after A's transcript has gone, and — for a pane whose stamp was
+  # cleared — an id with no transcript under a record nobody has written for
+  # minutes (`_ci_pane_stale`, D-4943's second round). Its header names the one
+  # shape none of them reaches.
+  #
   # THE THIRD CONDITION IS A MEASUREMENT, NOT A MEMORY: a `sessionId` whose
   # own transcript ends in a `continued-in` marker has been superseded by
   # Claude Code's own statement about itself, and a superseded id is NEVER new
@@ -16357,6 +16819,11 @@ _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the r
   # questions, and the marker test needs the old transcript to still be
   # READABLE — a chain head that has since been archived or reaped away has no
   # marker to read, and then the origin is the only thing left refusing it.
+  #
+  # THREE SOURCES NOW, pane first, then the forked session's own worker
+  # (`_ci_bg_follow`, D-4945: the id a `/clear` inside the background session
+  # rotates to), then the chain. A pane that wins a genuine rotation ends the
+  # following of any worker: the window holds the conversation again.
   local id="$1" cfg pid sid
   cfg=$(_cfg_dir "$(_reg_get "$id" wrapper)"); [[ -n "$cfg" ]] || return 0
   pid=$(tmux list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
@@ -16365,10 +16832,14 @@ _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the r
     if [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]] \
        && [[ "$sid" != "${_CI_ORIGIN[$id]:-}" ]] \
        && ! _ci_walk_has "$id" "$sid" \
+       && ! _ci_pane_parked "$id" "$cfg" "$cfg/sessions/$pid.json" \
+       && ! _ci_pane_stale "$id" "$cfg" "$cfg/sessions/$pid.json" "$sid" \
        && ! _ci_pane_superseded "$id" "$cfg" "$sid"; then
       _reg_set "$id" uuid "$sid"
+      unset "_CI_BG[$id]" "_CI_BGMISS[$id]" "_CI_BGSID[$id]" "_CI_BGADDRS[$id]"
     fi
   fi
+  _ci_bg_follow "$id" "$cfg"
   _follow_continued_in "$id" "$cfg"
   return 0
 }
@@ -21761,6 +22232,15 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   local fromswap=0 lastswap
   lastswap=$(_reg_get "$id" lastswap)
   [[ "$lastswap" =~ ^[0-9]+$ && $(( $(date +%s) - lastswap )) -lt 300 ]] && fromswap=1
+  # THE RESUME FOLLOWS THE CHAIN FIRST (D-4944) — this is the one place a
+  # `--resume` is built, so every revival, swap landing and restore gets it.
+  # `held` names the live background job that holds the id, when one does: the
+  # retry below is then skipped (see `_ci_resume_follow`).
+  local held=""
+  if [[ "$mode" == "resume" ]]; then
+    _ci_resume_follow "$id" "$(_cfg_dir "$wrapper")"
+    uuid="${_CI_END:-$uuid}"; held="$_CI_RESUME_HELD"
+  fi
   if [[ "$mode" == "resume" ]]; then sidflag="--resume '$uuid'"; else sidflag="--session-id '$uuid'"; fi
   # WHETHER THIS BOX DRIVES ITS SESSIONS OVER THE RC SOCKET — read ONCE, here,
   # and used by BOTH spawn lines below (the primary and the --session-id retry).
@@ -22124,7 +22604,14 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # shrink, so it is precisely the number a later measurement will want to find.
   if [[ "$mode" == "resume" ]]; then
     sleep "$SPAWN_RESUME_SETTLE_S"
-    if ! tmux has-session -t "$(_tmux_at "$tname")" 2>/dev/null; then
+    if [[ -n "$held" ]]; then
+      # NEVER the `--session-id` retry for an id a live background job holds
+      # (D-4944): refused when its transcript exists, a SECOND WRITER when it
+      # does not yet. The refused resume is the honest outcome; it ends with
+      # the job.
+      tmux has-session -t "$(_tmux_at "$tname")" 2>/dev/null \
+        || echo "ccd: $id: --resume '$uuid' was refused while background job $held holds it; not retrying with --session-id — it resumes once that job ends" >&2
+    elif ! tmux has-session -t "$(_tmux_at "$tname")" 2>/dev/null; then
       echo "ccd: $id: --resume '$uuid' left no session; retrying once with --session-id" >&2
       # `$launchflags`, the SAME value the primary line above used — computed
       # once, before either spawn (it carries `$rcflag` plus the routing
@@ -24640,7 +25127,13 @@ _swap_refuse() {   # id cur target reason restart(0|1) — a swap that cannot ca
   # vocabulary that must have a matching sentence in wsaudit.ts, in both directions. A
   # swap refusal answers a human. Pinned by server/test/ccd-swap-refuse.test.ts so the
   # choice survives whoever edits this next.
-  local id="$1" cur="$2" target="$3" reason="$4" restart="${5:-0}"
+  #
+  # `$6`, optional, REPLACES the closing `--force` remedy (NP1, the #189
+  # second verifier round): a refusal that `--force` does not bypass — a
+  # conversation a live background job is writing — must not end by offering
+  # it, or the operator is handed a command that answers with this same
+  # refusal.
+  local id="$1" cur="$2" target="$3" reason="$4" restart="${5:-0}" hint="${6-}"
   _reg_set "$id" swapblocked "$(date +%s) $reason"
   echo "$(date '+%F %T') swap-refused $id: $cur -> $target ($reason)" >> "$REG/swap.log"
   [[ -x "$REG/notify.sh" ]] && "$REG/notify.sh" "cc swap BLOCKED: $id stays on $cur — $reason" >/dev/null 2>&1
@@ -24688,7 +25181,11 @@ _swap_refuse() {   # id cur target reason restart(0|1) — a swap that cannot ca
     _svc_reset_failed "claude-session@$id" 2>/dev/null
     _svc_start "claude-session@$id" 2>/dev/null || cmd_ensure "$id"
   fi
-  echo "ccd: refusing to swap $id: $reason — it stays on $cur. If there is genuinely nothing to carry: ccd swap --force $id $target" >&2
+  if [[ -n "$hint" ]]; then
+    echo "ccd: refusing to swap $id: $reason — it stays on $cur. $hint" >&2
+  else
+    echo "ccd: refusing to swap $id: $reason — it stays on $cur. If there is genuinely nothing to carry: ccd swap --force $id $target" >&2
+  fi
   return 1
 }
 
@@ -26133,6 +26630,34 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
     _swap_refuse "$id" "$cur" "$target" "no transcript found for $uuid under $cur" 0
     return 1
   fi
+  # A CONVERSATION A LIVE BACKGROUND JOB IS WRITING DOES NOT MOVE (D-4944), and
+  # `--force` does not move it either: that flag accepts transcript LOSS, and
+  # this is the opposite hazard. Claude Code's own guard against resuming an id
+  # a background job holds reads the sessions directory of its OWN config dir,
+  # so on the target account `--resume` would find no holder and start, while
+  # the job kept writing this account's copy — two writers, one id, the copy on
+  # the target silently diverging. Asked here, before the teardown, so a
+  # refusal costs nothing and leaves the session as it was.
+  #
+  # Second verifier round: the end may be a successor not written yet that its
+  # job holds (`_ci_chain_end`'s `_CI_END_HELD` — a fork mid-handoff), and a
+  # live job is matched by its SHORT as well as by the id its record names
+  # (NP2: a job that has just taken a `/clear` names an id with no line yet,
+  # while the registry still names the one before it). And the refusal says
+  # what does move it — `--force` does not (NP1).
+  local bgheld=""
+  if _ci_chain_end "$id" "$srccfg"; then
+    if [[ -n "$_CI_END_HELD" ]]; then
+      bgheld="$_CI_END_HELD"
+    elif _ci_bg_scan "$srccfg" "$_CI_END" "${_CI_END:0:8}"; then
+      bgheld="${_CI_BGJ:-pid $_CI_BGP}"
+    fi
+  fi
+  if [[ -n "$bgheld" ]]; then
+    _swap_refuse "$id" "$cur" "$target" "conversation $_CI_END is live in background job $bgheld on $cur — a swap would resume a copy on $target while that job keeps writing here; let it finish or stop it (claude stop $bgheld) first" 0 \
+      "--force does not move it: --force accepts a transcript that cannot be found, and this is the opposite hazard — two writers. Swap again once the job has ended."
+    return 1
+  fi
   [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # a stop the spawn below follows: the operator's own /model and /effort reach the record first; a session already stopped and read (a marker) is not read again (§5.7)
   _svc_stop "claude-session@$id" 2>/dev/null   # first, or Restart=always resurrects under the old wrapper
   tmux kill-session -t "$(_tmux_t "$id")" 2>/dev/null || _operator_choice_unmark "$id"   # a kill that failed on a live session leaves no marker (§5.7)
@@ -26175,6 +26700,12 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
   # flag rather than applied here: main applied it to one guessed path, and there
   # is no longer one path — there is every match the uuid has under the source
   # account, which is the defect this task exists to close.
+  #
+  # And the carry takes the END of the continued-in chain (D-4944), followed
+  # here in the SOURCE account: the carry is keyed on this id, and the spawn's
+  # own follow on the target would look for the successor in a config dir it
+  # was never copied to.
+  _ci_resume_follow "$id" "$srccfg"
   uuid=$(_reg_get "$id" uuid)
   local sanitize=0
   # `if` rather than the old `[[ … ]] && sanitize=1` one-liner: `!` binds to the

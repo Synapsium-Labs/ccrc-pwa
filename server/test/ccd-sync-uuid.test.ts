@@ -4,7 +4,7 @@
 // cannot see it. The registry is the authority — `--resume` reads it — so it
 // follows the transcript's own `continued-in` pointer as well.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE_IF_UP } from './ccdWsHelpers.js';
 import { mkdirSync, writeFileSync, utimesSync, existsSync, readFileSync, symlinkSync } from 'node:fs';
 import path from 'node:path';
 import { mungePath } from '../src/munge.js';
@@ -667,5 +667,760 @@ describe('_sync_uuid follows a fork', () => {
     expect(/AFTER_HOP:(\S+)/.exec(out)?.[1]).toBe(B);
     expect(/AFTER_ROTATE:(\S+)/.exec(out)?.[1]).toBe(Z);   // Z was never walked, so it still wins
     expect(/SIZE:(\d+)/.exec(out)?.[1]).toBe('1');
+  });
+});
+
+// ── The second review round of #189: four holes the walk above leaves open ──
+//
+// Everything below models what Claude Code 2.1.296 itself writes, read out of
+// its own code rather than assumed:
+//   - every live process publishes ONE compact-JSON line at
+//     `<cfg>/sessions/<pid>.json` — `pid`, `sessionId`, `cwd`, …, `kind`
+//     (`interactive` | `bg` | `daemon` | `daemon-worker`), and on a `bg`
+//     worker `jobId`, the job's 8-hex short, which is the first 8 characters
+//     of the forked session's own id;
+//   - it rewrites that line IN PLACE when its session id rotates (`/clear`),
+//     so `sessionId` there is always the process's CURRENT id;
+//   - a left-arrow fork marks the PANE's own record `parkedJobId: <job>` —
+//     "this window's session moved to the background" — and leaves its
+//     `sessionId` on the pre-fork id.
+const C = 'c'.repeat(36), D = 'd'.repeat(36);
+const JOB = C.slice(0, 8);
+
+/** The pane's own record, the way 2.1.296 writes it. `parked` is the
+ *  `parkedJobId` a left-arrow fork stamps on it. `updatedAt` is NOW unless a
+ *  test says otherwise: 2.1.296 stamps `updatedAt: Date.now()` on every write
+ *  of this record — a rotation, a park, an unpark, every status change — so a
+ *  record whose id just rotated is a record written just now (D-4943's age
+ *  rule reads exactly that). */
+const paneRecord = (sid: string, parked?: string, updatedAt: number = Date.now()): string => JSON.stringify({
+  pid: 4242, sessionId: sid, cwd: '/w', startedAt: 1, procStart: 'x', version: '2.1.296',
+  peerProtocol: 1, kind: 'interactive', entrypoint: 'cli',
+  ...(parked === undefined ? {} : { parkedJobId: parked }), updatedAt,
+});
+function plantPane(record: string): void {
+  const sdir = path.join(h.sh(`_cfg_dir ${W}`), 'sessions');
+  mkdirSync(sdir, { recursive: true });
+  writeFileSync(path.join(sdir, '4242.json'), record);
+}
+const TMUX_PANE = 'tmux() { case "$1" in list-panes) echo 4242 ;; esac; return 0; };';
+
+/** bash that publishes a LIVE background worker's record. The pid is the
+ *  snippet's own `$$` unless a test names another (a bash expression such as
+ *  `$w1`), so a liveness probe answers alive for exactly as long as that
+ *  process runs — a fixture pid nobody holds would read as a dead worker.
+ *
+ *  `procStart` is what 2.1.296 itself records: `ps -o lstart= -p <pid>` under
+ *  `LC_ALL=C TZ=UTC`, trimmed (measured on a real background worker's record:
+ *  the two strings are equal). A test may pass a string to record instead —
+ *  one that does NOT match is a recycled pid — or `null` to leave the field
+ *  out, as a record from a build that never wrote it would. */
+const bgRecord = (sid: string, job: string, pid = '$$', procStart?: string | null): string => {
+  const ps = procStart === undefined
+    ? `"$(LC_ALL=C TZ=UTC ps -o lstart= -p ${pid} | sed 's/ *$//')"`
+    : `'${procStart ?? ''}'`;
+  const field = procStart === null ? '' : '"procStart":"%s",';
+  const arg = procStart === null ? '' : `"$__ps"`;
+  return `mkdir -p "$(_cfg_dir ${W})/sessions"; __ps=${ps}; `
+    + `printf '{"pid":%s,"sessionId":"%s","cwd":"/w","startedAt":1,${field}"version":"2.1.296",`
+    + `"peerProtocol":1,"kind":"bg","entrypoint":"cli","jobId":"%s"}' "${pid}" '${sid}' ${arg} '${job}' `
+    + `> "$(_cfg_dir ${W})/sessions/${pid}.json"; `;
+};
+
+const pick = (out: string, tag: string): string | undefined => new RegExp(`${tag}:(\\S+)`).exec(out)?.[1];
+
+describe('D-4942: a declined hop is retried — without re-reading the marked file', () => {
+  it('marker present, successor absent, two ticks, successor written, one tick: it follows', () => {
+    // THE REVIEW'S REPRODUCTION, verbatim. `_CI_DONE` used to be committed
+    // BEFORE the successor checks, and A never changes again after its marker,
+    // so every later tick returned at "already examined" and the hop the
+    // decline deferred was never taken — measured 20 more ticks still on A.
+    row('/w', A);
+    plant('/w', A, `${turnLine('one')}${marker(A, B)}`);
+    const dir = projectDir('/w');
+    const tB = turnLine('two').trimEnd();
+    const out = h.sh(
+      `_sync_uuid ${ID}; _sync_uuid ${ID}; echo "DECLINED:$(_reg_get ${ID} uuid)"; `
+      + `printf '%s\\n' '${tB}' > "${dir}/${B}.jsonl"; `
+      + `_sync_uuid ${ID}; echo "RETRIED:$(_reg_get ${ID} uuid)"; echo "PEND:\${#_CI_PEND[@]}"`,
+    );
+    expect(pick(out, 'DECLINED')).toBe(A);
+    expect(pick(out, 'RETRIED')).toBe(B);
+    // The decline's memo is dropped by the hop that resolved it — one entry
+    // per id while it waits, none after.
+    expect(pick(out, 'PEND')).toBe('0');
+  });
+
+  it('a successor that was EMPTY at the first read and has since been written is followed too', () => {
+    // The other decline. Claude Code's own supersession test treats a
+    // successor as real only once it holds a `"parentUuid":` line, so "named
+    // but empty" is a state it produces and plans for.
+    row('/w', A);
+    plant('/w', A, `${turnLine('one')}${marker(A, B)}`);
+    plant('/w', B, '');
+    const dir = projectDir('/w');
+    const tB = turnLine('two').trimEnd();
+    const out = h.sh(
+      `_sync_uuid ${ID}; _sync_uuid ${ID}; _sync_uuid ${ID}; echo "DECLINED:$(_reg_get ${ID} uuid)"; `
+      + `printf '%s\\n' '${tB}' >> "${dir}/${B}.jsonl"; `
+      + `_sync_uuid ${ID}; echo "RETRIED:$(_reg_get ${ID} uuid)"`,
+    );
+    expect(pick(out, 'DECLINED')).toBe(A);
+    expect(pick(out, 'RETRIED')).toBe(B);
+  });
+
+  it('the declined state reads the marked transcript ONCE, however many ticks it waits', () => {
+    // WHY THE RETRY DOES NOT SIMPLY UN-COMMIT `_CI_DONE`. The review's own
+    // suggested fix did that, and A — quiescent, unchanged, marked — would then
+    // be tail-read on every tick for as long as its successor stays unwritten,
+    // which on a successor that never comes (a fork the daemon gave up on) is
+    // for ever. The retry re-asks only the successor's address, with builtins.
+    row('/w', A);
+    plant('/w', A, `${turnLine('one')}${marker(A, B)}`);
+    plantCountingTail();
+    ticks(8);
+    expect(h.reg(ID, 'uuid')).toBe(A);
+    expect(tailCalls()).toHaveLength(1);
+  });
+});
+
+describe('D-4943: a restarted supervisor refuses a PARKED pane id, whatever the disk still holds', () => {
+  it('registry C, pane parked on pre-fork A whose transcript is GONE, a fresh process: never writes A', () => {
+    // THE REVIEW'S P2, in the shape 2.1.296 actually leaves: the pane that
+    // forked is still alive, still names A, and carries `parkedJobId`. Every
+    // memo is empty after the restart and A's transcript is gone, so neither
+    // the walk nor the marker test can refuse A — measured before this fix:
+    // T1 reads A, and the next `--resume` takes the session back to before the
+    // fork. The parked flag is Claude Code's own statement that this window's
+    // id moved away, and it is on disk, so it survives every restart.
+    row('/w', C);
+    plant('/w', C, turnLine('two'));
+    plantPane(paneRecord(A, JOB));
+    const out = h.sh(
+      `${TMUX_PANE} _sync_uuid ${ID}; echo "T1:$(_reg_get ${ID} uuid)"; `
+      + `_sync_uuid ${ID}; echo "T2:$(_reg_get ${ID} uuid)"; `
+      + `_sync_uuid ${ID}; echo "T3:$(_reg_get ${ID} uuid)"`,
+    );
+    expect(pick(out, 'T1')).toBe(C);
+    expect(pick(out, 'T2')).toBe(C);
+    expect(pick(out, 'T3')).toBe(C);
+  });
+
+  it('an UNPARKED pane id with no transcript yet still wins at once — a /clear is untouched', () => {
+    // THE GUARD STATED THE OTHER WAY, and the reason the review's first
+    // suggestion ("a pane id whose transcript cannot be found is not new
+    // information") was not taken: a `/clear` mints an id whose transcript
+    // does not exist until Claude Code's first write (the F7 window above),
+    // so that rule would hold the registry on the cleared conversation for
+    // exactly that window, on every `/clear` on the fleet.
+    row('/w', C);
+    plant('/w', C, turnLine('two'));
+    plantPane(paneRecord(D));
+    const out = h.sh(`${TMUX_PANE} _sync_uuid ${ID}; echo "T1:$(_reg_get ${ID} uuid)"`);
+    expect(pick(out, 'T1')).toBe(D);
+  });
+
+  it('registry C, an UNPARKED pane on pre-fork A whose transcript is GONE and whose record is an hour old: never writes A', () => {
+    // THE VERIFIER'S P2, in the shape 2.1.296 can leave: the left-arrow fork's
+    // fallback (the in-process agents view throws, a `claude agents` child runs)
+    // clears `parkedJobId` when it returns, so the pane sits UNPARKED on the
+    // pre-fork A. Its transcript ends in a marker, so the marker test refuses
+    // A — until the transcript is gone (Claude Code's own age-based cleanup
+    // deletes it by mtime, and a pane left on A is a pane nobody writes A
+    // from). Then a restarted supervisor read A as new and wrote it: the next
+    // resume asks for a transcript that no longer exists. A /clear's id is
+    // stamped NOW (every rotation writes `updatedAt: Date.now()`), so an id
+    // with nothing on disk under a record nobody has touched for minutes is
+    // not one.
+    row('/w', C);
+    plant('/w', C, turnLine('two'));
+    plantPane(paneRecord(A, undefined, Date.now() - 3600_000));
+    const out = h.sh(
+      `${TMUX_PANE} _sync_uuid ${ID}; echo "T1:$(_reg_get ${ID} uuid)"; `
+      + `_sync_uuid ${ID}; echo "T2:$(_reg_get ${ID} uuid)"; `
+      + `_sync_uuid ${ID}; echo "T3:$(_reg_get ${ID} uuid)"`,
+    );
+    expect(pick(out, 'T1')).toBe(C);
+    expect(pick(out, 'T2')).toBe(C);
+    expect(pick(out, 'T3')).toBe(C);
+  });
+
+  it('an OLD record whose id HAS a transcript still wins — age alone refuses nothing', () => {
+    // A pane that resumed Z an hour ago and has sat idle since is the holder
+    // of Z, and Z is written: that is the pane's authority, as it always was.
+    const Z = '9'.repeat(36);
+    row('/w', C);
+    plant('/w', C, turnLine('two'));
+    plant('/w', Z, turnLine('mine'));
+    plantPane(paneRecord(Z, undefined, Date.now() - 3600_000));
+    const out = h.sh(`${TMUX_PANE} _sync_uuid ${ID}; echo "T1:$(_reg_get ${ID} uuid)"`);
+    expect(pick(out, 'T1')).toBe(Z);
+  });
+
+  it('the refused stale pane costs one address resolution, not one per tick', () => {
+    // The stuck state is permanent — the pane keeps publishing A — so the
+    // refusal is paid on every tick of it. It is answered from a memo of
+    // where A's transcript could be, with `[[ -f ]]` builtins.
+    row('/w', C);
+    plant('/w', C, turnLine('two'));
+    plantPane(paneRecord(A, undefined, Date.now() - 3600_000));
+    const log = path.join(h.home, 'addrs-calls');
+    const wrap = `eval "_ci_addrs_orig() $(declare -f _ci_addrs | tail -n +2)"; `
+      + `_ci_addrs() { echo "$3" >> "${log}"; _ci_addrs_orig "$@"; }; `;
+    h.sh(`${wrap} ${TMUX_PANE} ${Array.from({ length: 8 }, () => `_sync_uuid ${ID}`).join('; ')}`);
+    expect(h.reg(ID, 'uuid')).toBe(C);
+    const calls = readFileSync(log, 'utf8').split('\n').filter((l) => l !== '');
+    expect(calls.filter((u) => u === A)).toHaveLength(1);
+  });
+});
+
+describe('D-4945: the forked session’s own id is followed through its background holder', () => {
+  it('after a hop, a /clear inside the bg session (its record rotates C -> D) moves the registry to D', () => {
+    // THE HOLE ONE ROTATION PAST THE FORK. A `/clear` in the bg session writes
+    // no `continued-in` record (2.1.296 writes one only on the background
+    // handoff), and the pane keeps publishing the pre-fork id, so before this
+    // nothing ever told the registry — the chat went dark again and the hook's
+    // pane-less fallback stopped matching. The bg worker's own record is where
+    // Claude Code publishes the new id.
+    row('/w', A);
+    plant('/w', A, `${turnLine('one')}${marker(A, C)}`);
+    plant('/w', C, turnLine('two'));
+    const dir = projectDir('/w');
+    const tD = turnLine('three').trimEnd();
+    const out = h.sh(
+      `${bgRecord(C, JOB)} _sync_uuid ${ID}; _sync_uuid ${ID}; echo "HOP:$(_reg_get ${ID} uuid)"; `
+      + `printf '%s\\n' '${tD}' > "${dir}/${D}.jsonl"; ${bgRecord(D, JOB)}`
+      + `_sync_uuid ${ID}; echo "ROT:$(_reg_get ${ID} uuid)"`,
+    );
+    expect(pick(out, 'HOP')).toBe(C);
+    expect(pick(out, 'ROT')).toBe(D);
+  });
+
+  it('a rotated id with no transcript in THIS project dir is not followed until one appears', () => {
+    // The one positive check before a write: the new id must have a non-empty
+    // transcript under this row's own workdir. A bg session can be isolated
+    // into a worktree of its own, and its transcript then lives under another
+    // project directory this row does not own.
+    row('/w', A);
+    plant('/w', A, `${turnLine('one')}${marker(A, C)}`);
+    plant('/w', C, turnLine('two'));
+    const dir = projectDir('/w');
+    const tD = turnLine('three').trimEnd();
+    const out = h.sh(
+      `${bgRecord(C, JOB)} _sync_uuid ${ID}; _sync_uuid ${ID}; ${bgRecord(D, JOB)}`
+      + `_sync_uuid ${ID}; _sync_uuid ${ID}; echo "WAIT:$(_reg_get ${ID} uuid)"; `
+      + `printf '%s\\n' '${tD}' > "${dir}/${D}.jsonl"; `
+      + `_sync_uuid ${ID}; echo "HEALED:$(_reg_get ${ID} uuid)"`,
+    );
+    expect(pick(out, 'WAIT')).toBe(C);
+    expect(pick(out, 'HEALED')).toBe(D);
+  });
+
+  it('after a RESTART, the parked pane names the job and the job’s worker names the id', () => {
+    // Nothing in memory, no hop this process: the parked pane's `parkedJobId`
+    // is the link to the worker, and the worker's record is the current id.
+    row('/w', C);
+    plant('/w', C, turnLine('two'));
+    plant('/w', D, turnLine('three'));
+    plantPane(paneRecord(A, JOB));
+    const out = h.sh(`${TMUX_PANE} ${bgRecord(D, JOB)} _sync_uuid ${ID}; echo "T1:$(_reg_get ${ID} uuid)"`);
+    expect(pick(out, 'T1')).toBe(D);
+  });
+
+  it('a pane that takes the conversation back (a genuine rotation) ends the following — no flap', () => {
+    // The operator leaves the agents view and starts over in the pane: its
+    // record un-parks and names a NEW id. That is the pane's authority, as it
+    // always was. Without letting the worker go at that moment, the next tick
+    // follows the worker's id back over it — and having written the worker's
+    // id, the pane's own is then a walked id and is refused for good.
+    const Z = '9'.repeat(36);
+    row('/w', A);
+    plant('/w', A, `${turnLine('one')}${marker(A, C)}`);
+    plant('/w', C, turnLine('two'));
+    plant('/w', Z, turnLine('new start'));
+    plantPane(paneRecord(A, JOB));
+    const pf = path.join(h.sh(`_cfg_dir ${W}`), 'sessions', '4242.json');
+    const zRec = paneRecord(Z).replace(/'/g, '');
+    const out = h.sh(
+      `${TMUX_PANE} ${bgRecord(C, JOB)} _sync_uuid ${ID}; _sync_uuid ${ID}; echo "HOP:$(_reg_get ${ID} uuid)"; `
+      + `printf '%s' '${zRec}' > "${pf}"; `
+      + `${Array.from({ length: 4 }, () => `_sync_uuid ${ID}`).join('; ')}; echo "AFTER:$(_reg_get ${ID} uuid)"`,
+    );
+    expect(pick(out, 'HOP')).toBe(C);
+    expect(pick(out, 'AFTER')).toBe(Z);
+  });
+
+  it('a remembered pid that now runs a DIFFERENT job is not followed', () => {
+    // Pids are reused. The job is the worker's identity; the pid is only where
+    // to look first.
+    const OTHER = 'e'.repeat(36);
+    row('/w', A);
+    plant('/w', A, `${turnLine('one')}${marker(A, C)}`);
+    plant('/w', C, turnLine('two'));
+    plant('/w', OTHER, turnLine('someone else'));
+    const out = h.sh(
+      `${bgRecord(C, JOB)} _sync_uuid ${ID}; _sync_uuid ${ID}; echo "HOP:$(_reg_get ${ID} uuid)"; `
+      + `${bgRecord(OTHER, OTHER.slice(0, 8))} _sync_uuid ${ID}; _sync_uuid ${ID}; echo "AFTER:$(_reg_get ${ID} uuid)"`,
+    );
+    expect(pick(out, 'HOP')).toBe(C);
+    expect(pick(out, 'AFTER')).toBe(C);
+  });
+
+  it('an ordinary session never looks for a background holder — the common path pays nothing', () => {
+    // The supervise loop runs this every five seconds for every session on a
+    // CPU-saturated box. A session whose pane agrees with the registry has
+    // nothing in the background to follow, and must not scan for it.
+    row('/w', A);
+    plant('/w', A, turnLine('one'));
+    plantPane(paneRecord(A));
+    const log = path.join(h.home, 'scan-calls');
+    const wrap = `eval "_ci_bg_scan_orig() $(declare -f _ci_bg_scan | tail -n +2)"; `
+      + `_ci_bg_scan() { echo x >> "${log}"; _ci_bg_scan_orig "$@"; }; `;
+    h.sh(`${wrap} ${TMUX_PANE} ${Array.from({ length: 6 }, () => `_sync_uuid ${ID}`).join('; ')}`);
+    expect(existsSync(log)).toBe(false);
+    expect(h.reg(ID, 'uuid')).toBe(A);
+  });
+});
+
+describe('D-4944: every resume follows the chain before it resumes', () => {
+  /** The tmux substrate as `ccd-spawn-split.test.ts` models it: ONE file,
+   *  `$HOME/pane-up`, says whether the pane exists. */
+  const TMUX = `sleep() { :; };
+    tmux() {
+      echo "tmux $*" >> "$HOME/ccd-calls"
+      ${WIDE_PANE_IF_UP}
+      case "$1" in
+        new-session)  : > "$HOME/pane-up" ;;
+        kill-session) rm -f "$HOME/pane-up" ;;
+        has-session)  [[ -e "$HOME/pane-up" ]] ;;
+        capture-pane) printf '%s' '? for shortcuts' ;;
+      esac
+    };`;
+  /** A `--resume` that Claude Code refuses (the pane never comes up) while a
+   *  `--session-id` one would. */
+  const RESUME_REFUSED = `sleep() { :; };
+    tmux() {
+      echo "tmux $*" >> "$HOME/ccd-calls"
+      ${WIDE_PANE_IF_UP}
+      case "$1" in
+        new-session)  case "$*" in *--session-id*) : > "$HOME/pane-up" ;; esac ;;
+        has-session)  [[ -e "$HOME/pane-up" ]] ;;
+        list-sessions) return 0 ;;
+      esac
+    };`;
+  const newSessions = (): string[] => h.calls().filter((c) => c.startsWith('tmux new-session'));
+
+  it('a pane that died inside the quiescence window resumes the successor, not the pre-fork id', () => {
+    // THE REVIEW'S MISSED ITEM. The exit dialog's "background" choice writes
+    // the marker and exits the pane within milliseconds, so no supervise tick
+    // ever sees A quiescent, and the respawn built `--resume A` from the raw
+    // registry — Claude Code's explicit-id resume does no continued-in check,
+    // so the pane came back on the pre-fork conversation.
+    row(h.home, A);
+    plant(h.home, A, `${turnLine('one')}${marker(A, C)}`);
+    plant(h.home, C, turnLine('two'));
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start ${ID} resume 2>/dev/null`);
+    expect(newSessions()).toHaveLength(1);
+    expect(newSessions()[0]).toContain(`--resume '${C}'`);
+    expect(h.reg(ID, 'uuid')).toBe(C);
+  });
+
+  it('follows a chain of two forks to its end', () => {
+    row(h.home, A);
+    plant(h.home, A, `${turnLine('one')}${marker(A, B)}`);
+    plant(h.home, B, `${turnLine('two')}${marker(B, C)}`);
+    plant(h.home, C, turnLine('three'));
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start ${ID} resume 2>/dev/null`);
+    expect(newSessions()[0]).toContain(`--resume '${C}'`);
+    expect(h.reg(ID, 'uuid')).toBe(C);
+  });
+
+  it('a successor that has not been written is not followed — the resume names the registry id', () => {
+    // EMPTY, not absent: an absent one never resolves at all, so only an empty
+    // one reaches the `-s` check — the case Claude Code produces between the
+    // handoff and the worker's first write.
+    row(h.home, A);
+    plant(h.home, A, `${turnLine('one')}${marker(A, C)}`);
+    plant(h.home, C, '');
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start ${ID} resume 2>/dev/null`);
+    expect(newSessions()[0]).toContain(`--resume '${A}'`);
+    expect(h.reg(ID, 'uuid')).toBe(A);
+  });
+
+  it('a successor a LIVE background job holds: says so, and never retries it as --session-id', () => {
+    // MEASURED IN THE 2.1.296 BINARY, not assumed: `--resume <id>` first asks
+    // whether a live non-interactive record holds that id, and if one does it
+    // exits with "… is running in the background (<job>). Run `claude attach
+    // <job>` …" — it would attach only for a launch that carries no session
+    // flags, and every ccd spawn carries --dangerously-skip-permissions. So no
+    // second writer comes of the resume. The `--session-id` retry is the
+    // dangerous half: it refuses an id whose transcript exists ("already in
+    // use"), but an id whose worker has not written yet it would START — a
+    // second writer under the same id.
+    row(h.home, A);
+    plant(h.home, A, `${turnLine('one')}${marker(A, C)}`);
+    plant(h.home, C, turnLine('two'));
+    const out = h.sh(`${bgRecord(C, JOB)} ${RESUME_REFUSED} rm -f "$HOME/pane-up"; { _spawn_start ${ID} resume; } 2>&1`);
+    expect(out).toContain(JOB);
+    expect(newSessions()).toHaveLength(1);
+    expect(newSessions()[0]).toContain(`--resume '${C}'`);
+  });
+
+  it('a chain that loops stops at its first repeat', () => {
+    row(h.home, A);
+    plant(h.home, A, `${turnLine('one')}${marker(A, B)}`);
+    plant(h.home, B, marker(B, A));
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start ${ID} resume 2>/dev/null`);
+    expect(newSessions()[0]).toContain(`--resume '${B}'`);
+  });
+
+  it('follows at most _CI_WALK_CAP hops, however long the chain', () => {
+    // The supervise walk's own bound. Twenty distinct ids, so the visited set
+    // alone would walk all of them; the cap stops it at hop sixteen.
+    const N = 20;
+    const ids = Array.from({ length: N }, (_, i) => `${i.toString(16).padStart(2, '0')}${'0'.repeat(34)}`);
+    row(h.home, ids[0]!);
+    for (let i = 0; i < N - 1; i++) plant(h.home, ids[i]!, marker(ids[i]!, ids[i + 1]!));
+    plant(h.home, ids[N - 1]!, turnLine('end'));
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start ${ID} resume 2>/dev/null`);
+    expect(newSessions()[0]).toContain(`--resume '${ids[16]}'`);
+  });
+
+  it('a record whose process is gone is not a holder — the ordinary retry still runs', () => {
+    // A SIGKILLed worker leaves its record behind. Treating that as a live
+    // holder would take away the `--session-id` rescue from a row whose
+    // resume failed for an unrelated reason.
+    row(h.home, A);
+    plant(h.home, C, turnLine('two'));
+    h.sh(`_reg_set ${ID} uuid ${C}`);
+    const sdir = path.join(h.sh(`_cfg_dir ${W}`), 'sessions');
+    mkdirSync(sdir, { recursive: true });
+    // A pid no process holds: above every default pid_max.
+    writeFileSync(path.join(sdir, '4194304999.json'),
+      JSON.stringify({ pid: 4194304999, sessionId: C, kind: 'bg', jobId: JOB }));
+    h.sh(`${RESUME_REFUSED} rm -f "$HOME/pane-up"; _spawn_start ${ID} resume 2>/dev/null`);
+    expect(newSessions()).toHaveLength(2);
+    expect(newSessions()[1]).toContain('--session-id');
+  });
+
+  /** cmd_swap's own teardown and carry, stubbed to calls a test can read — the
+   *  pattern `ccd-account-ok.test.ts` drives the verb with. */
+  const SWAP_STUBS = 'sleep() { :; }; tmux() { :; };\n'
+    + '_svc_stop() { echo "svc_stop $*" >> "$HOME/ccd-calls"; }; _svc_start() { :; };\n'
+    + '_swap_beat() { :; }; _swap_beat_stop() { :; }; _swap_carry_sidecars() { :; };\n'
+    + '_swap_carry_jsonl() { echo "carry $3" >> "$HOME/ccd-calls"; return 0; };\n';
+  const swapId = 'claude-demo';
+
+  it('a swap carries the successor, not the superseded transcript', () => {
+    // The carry is keyed on the registry id, and it runs BEFORE the spawn, in
+    // the SOURCE account: following only inside the spawn would look for the
+    // successor in a config dir it was never copied to.
+    h.sh(`_reg_set ${swapId} wrapper ${W}; _reg_set ${swapId} workdir "$HOME"; _reg_set ${swapId} uuid ${A}`);
+    const dir = path.join(h.sh(`_cfg_dir ${W}`), 'projects', h.sh('_munge_wd "$(_ws_realpath "$HOME")"'));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, `${A}.jsonl`), `${turnLine('one')}${marker(A, C)}`);
+    writeFileSync(path.join(dir, `${C}.jsonl`), turnLine('two'));
+    try { h.sh(`${SWAP_STUBS} cmd_swap ${swapId} claude-a`); } catch { /* the landing is not under test */ }
+    expect(h.calls().filter((c) => c.startsWith('carry '))).toEqual([`carry ${C}`]);
+    expect(h.reg(swapId, 'uuid')).toBe(C);
+  });
+
+  it('a swap refuses, before any teardown, a conversation a live background job is still writing', () => {
+    // ACROSS ACCOUNTS CLAUDE CODE CANNOT SEE THE HOLDER. Its live-session check
+    // reads the sessions directory of ITS OWN config dir, so on the target
+    // account `--resume <id>` finds nobody holding the id and starts — while
+    // the job keeps writing the source account's copy. Two writers, one id.
+    h.sh(`_reg_set ${swapId} wrapper ${W}; _reg_set ${swapId} workdir "$HOME"; _reg_set ${swapId} uuid ${A}`);
+    const dir = path.join(h.sh(`_cfg_dir ${W}`), 'projects', h.sh('_munge_wd "$(_ws_realpath "$HOME")"'));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, `${A}.jsonl`), `${turnLine('one')}${marker(A, C)}`);
+    writeFileSync(path.join(dir, `${C}.jsonl`), turnLine('two'));
+    let status = 0;
+    try { h.sh(`${SWAP_STUBS} ${bgRecord(C, JOB)} cmd_swap ${swapId} claude-a`); } catch (e) { status = (e as { status?: number }).status ?? 1; }
+    expect(status).not.toBe(0);
+    expect(h.calls().join('\n')).not.toContain('svc_stop');
+    expect(h.calls().filter((c) => c.startsWith('carry '))).toEqual([]);
+    expect(h.reg(swapId, 'wrapper')).toBe(W);
+    expect(h.reg(swapId, 'swapblocked') ?? '').toContain(JOB);
+  });
+
+  // ── Fix-forward (second verifier round) ─────────────────────────────────────
+
+  /** The job's own state file, the way 2.1.296's daemon writes it: pretty
+   *  JSON at `<cfg>/jobs/<short>/state.json`, beside `<cfg>/sessions/`.
+   *  Measured on a real background job: the state file exists about half a
+   *  second BEFORE the handoff appends its marker, the worker's sessions
+   *  record about a second AFTER it, and the successor's first line later
+   *  still. `ageSec` backdates the file. */
+  function jobState(job: string, state: string, ageSec = 0): void {
+    const d = path.join(h.sh(`_cfg_dir ${W}`), 'jobs', job);
+    mkdirSync(d, { recursive: true });
+    const f = path.join(d, 'state.json');
+    writeFileSync(f, `${JSON.stringify({ state, detail: 'x', tempo: 'active', template: 'bg', sessionId: C, daemonShort: job, backend: 'daemon' }, null, 2)}\n`);
+    const t = Date.now() / 1000 - ageSec;
+    utimesSync(f, t, t);
+  }
+
+  it('an ABSENT successor a live job holds is resumed — the pane that died right at the handoff (P3)', () => {
+    // THE VERIFIER'S P3. The exit dialog's "background" writes the marker and
+    // exits the pane at once; the worker writes the successor's first line
+    // only once it has booted and loaded A, while the respawn lands three to
+    // eight seconds after the exit. An unwritten successor was never taken, so
+    // the respawn resumed A — which nothing holds any more — and Claude Code
+    // appended to A after its own marker: the chain broken for good.
+    row(h.home, A);
+    plant(h.home, A, `${turnLine('one')}${marker(A, C)}`);
+    const out = h.sh(`${bgRecord(C, JOB)} ${RESUME_REFUSED} rm -f "$HOME/pane-up"; { _spawn_start ${ID} resume; } 2>&1`);
+    expect(newSessions()).toHaveLength(1);
+    expect(newSessions()[0]).toContain(`--resume '${C}'`);
+    expect(h.reg(ID, 'uuid')).toBe(C);
+    expect(out).toContain(JOB);
+  });
+
+  it('an EMPTY successor a live job holds, the same (P3b)', () => {
+    row(h.home, A);
+    plant(h.home, A, `${turnLine('one')}${marker(A, C)}`);
+    plant(h.home, C, '');
+    h.sh(`${bgRecord(C, JOB)} ${RESUME_REFUSED} rm -f "$HOME/pane-up"; _spawn_start ${ID} resume 2>/dev/null`);
+    expect(newSessions()).toHaveLength(1);
+    expect(newSessions()[0]).toContain(`--resume '${C}'`);
+  });
+
+  it('the live job is found by its SHORT as well — whatever id its record names at that instant', () => {
+    // The record is rewritten in place on every rotation, so the id in it is
+    // whatever the worker holds right now; the job short is the fork's own
+    // name for itself, and it never changes.
+    row(h.home, A);
+    plant(h.home, A, `${turnLine('one')}${marker(A, C)}`);
+    h.sh(`${bgRecord(D, JOB)} ${RESUME_REFUSED} rm -f "$HOME/pane-up"; _spawn_start ${ID} resume 2>/dev/null`);
+    expect(newSessions()).toHaveLength(1);
+    expect(newSessions()[0]).toContain(`--resume '${C}'`);
+  });
+
+  it('a job still STARTING — its state file written, no worker record yet — holds its unwritten successor too', () => {
+    // The window P3 leaves: on a loaded box the worker can take longer to
+    // register than the respawn takes to land. The job's state file is there
+    // before the marker is.
+    row(h.home, A);
+    plant(h.home, A, `${turnLine('one')}${marker(A, C)}`);
+    jobState(JOB, 'working');
+    const out = h.sh(`${RESUME_REFUSED} rm -f "$HOME/pane-up"; { _spawn_start ${ID} resume; } 2>&1`);
+    expect(newSessions()).toHaveLength(1);
+    expect(newSessions()[0]).toContain(`--resume '${C}'`);
+    expect(h.reg(ID, 'uuid')).toBe(C);
+    expect(out).toContain(JOB);
+  });
+
+  it('a job that is OVER does not hold an unwritten successor — A is still the conversation', () => {
+    // A fork that failed before its first line leaves A as what there is to
+    // resume; taking the unwritten id would leave the row nothing to resume.
+    row(h.home, A);
+    plant(h.home, A, `${turnLine('one')}${marker(A, C)}`);
+    jobState(JOB, 'failed');
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start ${ID} resume 2>/dev/null`);
+    expect(newSessions()[0]).toContain(`--resume '${A}'`);
+    expect(h.reg(ID, 'uuid')).toBe(A);
+  });
+
+  it('a job whose state has not moved for minutes is not "starting" — a dead daemon leaves such files behind', () => {
+    row(h.home, A);
+    plant(h.home, A, `${turnLine('one')}${marker(A, C)}`);
+    jobState(JOB, 'working', 600);
+    h.sh(`${TMUX} rm -f "$HOME/pane-up"; _spawn_start ${ID} resume 2>/dev/null`);
+    expect(newSessions()[0]).toContain(`--resume '${A}'`);
+    expect(h.reg(ID, 'uuid')).toBe(A);
+  });
+
+  it('a swap refuses, before any teardown, a fork whose successor is not written yet', () => {
+    h.sh(`_reg_set ${swapId} wrapper ${W}; _reg_set ${swapId} workdir "$HOME"; _reg_set ${swapId} uuid ${A}`);
+    const dir = path.join(h.sh(`_cfg_dir ${W}`), 'projects', h.sh('_munge_wd "$(_ws_realpath "$HOME")"'));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, `${A}.jsonl`), `${turnLine('one')}${marker(A, C)}`);
+    let status = 0;
+    try { h.sh(`${SWAP_STUBS} ${bgRecord(C, JOB)} cmd_swap ${swapId} claude-a`); } catch (e) { status = (e as { status?: number }).status ?? 1; }
+    expect(status).not.toBe(0);
+    expect(h.calls().join('\n')).not.toContain('svc_stop');
+    expect(h.reg(swapId, 'swapblocked') ?? '').toContain(JOB);
+  });
+
+  it('a swap refuses a fork whose job is still STARTING — no worker record to scan for yet', () => {
+    h.sh(`_reg_set ${swapId} wrapper ${W}; _reg_set ${swapId} workdir "$HOME"; _reg_set ${swapId} uuid ${A}`);
+    const dir = path.join(h.sh(`_cfg_dir ${W}`), 'projects', h.sh('_munge_wd "$(_ws_realpath "$HOME")"'));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, `${A}.jsonl`), `${turnLine('one')}${marker(A, C)}`);
+    jobState(JOB, 'working');
+    let status = 0;
+    try { h.sh(`${SWAP_STUBS} cmd_swap ${swapId} claude-a`); } catch (e) { status = (e as { status?: number }).status ?? 1; }
+    expect(status).not.toBe(0);
+    expect(h.calls().join('\n')).not.toContain('svc_stop');
+    expect(h.reg(swapId, 'swapblocked') ?? '').toContain(JOB);
+  });
+
+  it('a swap refuses a conversation whose job has rotated past it — the job is known by its short (NP2)', () => {
+    // The registry is on C, written; the worker has just taken a /clear to D,
+    // which has no line yet, so its record names D while its job is still C's
+    // short. A swap would resume the pre-/clear C on the target while the job
+    // keeps writing D here.
+    h.sh(`_reg_set ${swapId} wrapper ${W}; _reg_set ${swapId} workdir "$HOME"; _reg_set ${swapId} uuid ${C}`);
+    const dir = path.join(h.sh(`_cfg_dir ${W}`), 'projects', h.sh('_munge_wd "$(_ws_realpath "$HOME")"'));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, `${C}.jsonl`), turnLine('two'));
+    let status = 0;
+    try { h.sh(`${SWAP_STUBS} ${bgRecord(D, JOB)} cmd_swap ${swapId} claude-a`); } catch (e) { status = (e as { status?: number }).status ?? 1; }
+    expect(status).not.toBe(0);
+    expect(h.calls().join('\n')).not.toContain('svc_stop');
+    expect(h.reg(swapId, 'swapblocked') ?? '').toContain(JOB);
+  });
+
+  it('the background-job refusal never offers `--force` — it does not bypass this one (NP1)', () => {
+    h.sh(`_reg_set ${swapId} wrapper ${W}; _reg_set ${swapId} workdir "$HOME"; _reg_set ${swapId} uuid ${C}`);
+    const dir = path.join(h.sh(`_cfg_dir ${W}`), 'projects', h.sh('_munge_wd "$(_ws_realpath "$HOME")"'));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, `${C}.jsonl`), turnLine('two'));
+    const out = h.sh(`${SWAP_STUBS} ${bgRecord(C, JOB)} out=$( { cmd_swap ${swapId} claude-a; } 2>&1 ); echo "RC:$?"; printf '%s\\n' "$out"`);
+    expect(out).toContain('RC:1');
+    expect(out).toContain('refusing to swap');
+    expect(out).not.toContain(`swap --force ${swapId}`);
+    const forced = h.sh(`${SWAP_STUBS} ${bgRecord(C, JOB)} out=$( { cmd_swap --force ${swapId} claude-a; } 2>&1 ); echo "RC:$?"`);
+    expect(forced).toContain('RC:1');
+  });
+
+  it('the spawn knows the job by its short too: no --session-id retry, and it names the job (NP2)', () => {
+    row(h.home, C);
+    plant(h.home, C, turnLine('two'));
+    const out = h.sh(`${bgRecord(D, JOB)} ${RESUME_REFUSED} rm -f "$HOME/pane-up"; { _spawn_start ${ID} resume; } 2>&1`);
+    expect(newSessions()).toHaveLength(1);
+    expect(out).toContain(JOB);
+  });
+
+  it('a record whose pid now belongs to ANOTHER process is not a holder — procStart, as Claude Code checks it', () => {
+    // A SIGKILLed or OOM-killed worker leaves its record, and its pid can be
+    // handed to anything. Claude Code's own listing compares the record's
+    // `procStart` with `ps -o lstart=` for that pid; kill -0 alone would keep
+    // a dead job "live" — refusing every swap of the row, auto-swap included,
+    // and taking away the `--session-id` rescue.
+    row(h.home, A);
+    plant(h.home, A, `${turnLine('one')}${marker(A, C)}`);
+    plant(h.home, C, turnLine('two'));
+    h.sh(`${bgRecord(C, JOB, '$$', 'Thu Jan  1 00:00:00 1970')} ${RESUME_REFUSED} rm -f "$HOME/pane-up"; _spawn_start ${ID} resume 2>/dev/null`);
+    expect(newSessions()).toHaveLength(2);
+    expect(newSessions()[1]).toContain('--session-id');
+  });
+
+  it('a record with NO procStart is judged on kill -0 alone, as Claude Code judges it', () => {
+    row(h.home, A);
+    plant(h.home, A, `${turnLine('one')}${marker(A, C)}`);
+    plant(h.home, C, turnLine('two'));
+    h.sh(`${bgRecord(C, JOB, '$$', null)} ${RESUME_REFUSED} rm -f "$HOME/pane-up"; _spawn_start ${ID} resume 2>/dev/null`);
+    expect(newSessions()).toHaveLength(1);
+  });
+
+  it('a sessions record that is a SYMLINK is never read — a holder is a file Claude Code wrote there', () => {
+    row(h.home, A);
+    plant(h.home, A, `${turnLine('one')}${marker(A, C)}`);
+    plant(h.home, C, turnLine('two'));
+    h.sh(`${bgRecord(C, JOB)} s="$(_cfg_dir ${W})/sessions/$$.json"; mv "$s" "$HOME/elsewhere.json"; ln -s "$HOME/elsewhere.json" "$s"; `
+      + `${RESUME_REFUSED} rm -f "$HOME/pane-up"; _spawn_start ${ID} resume 2>/dev/null`);
+    expect(newSessions()).toHaveLength(2);
+  });
+
+  it('a FIFO in the sessions directory never blocks a scan', () => {
+    // `read < fifo` blocks in open() until a writer appears — on the supervise
+    // loop, for ever.
+    const sdir = path.join(h.sh(`_cfg_dir ${W}`), 'sessions');
+    mkdirSync(sdir, { recursive: true });
+    h.sh(`mkfifo "${sdir}/777.json"`);
+    const out = h.sh(
+      `( _ci_bg_scan "$(_cfg_dir ${W})" ${C} ""; : > "$HOME/scan-done" ) & p=$!; `
+      + 'for i in $(seq 1 50); do [[ -e "$HOME/scan-done" ]] && break; command sleep 0.1; done; '
+      + 'if [[ -e "$HOME/scan-done" ]]; then echo DONE; else echo HUNG; kill -9 $p 2>/dev/null; fi; wait $p 2>/dev/null; true',
+    );
+    expect(out).toBe('DONE');
+  });
+});
+
+describe('fix-forward pins: the background follow’s own guards', () => {
+  const tD = turnLine('three').trimEnd();
+
+  it('a rotated id whose transcript exists but is EMPTY is not followed until it holds a line', () => {
+    row('/w', A);
+    plant('/w', A, `${turnLine('one')}${marker(A, C)}`);
+    plant('/w', C, turnLine('two'));
+    const dir = projectDir('/w');
+    const out = h.sh(
+      `${bgRecord(C, JOB)} _sync_uuid ${ID}; _sync_uuid ${ID}; ${bgRecord(D, JOB)} : > "${dir}/${D}.jsonl"; `
+      + `_sync_uuid ${ID}; _sync_uuid ${ID}; echo "EMPTY:$(_reg_get ${ID} uuid)"; `
+      + `printf '%s\\n' '${tD}' >> "${dir}/${D}.jsonl"; _sync_uuid ${ID}; echo "WRITTEN:$(_reg_get ${ID} uuid)"`,
+    );
+    expect(pick(out, 'EMPTY')).toBe(C);
+    expect(pick(out, 'WRITTEN')).toBe(D);
+  });
+
+  it('a job that is gone is let go after _CI_BG_MISS_CAP ticks, and a parked pane naming it is not rescanned', () => {
+    // The parked pane names a job no worker answers for (it finished). The
+    // follow looks for a respawn for a minute of ticks, then lets go, and
+    // remembers the job as gone — or the parked pane would start the search
+    // over on the very next tick, for ever.
+    row('/w', C);
+    plant('/w', C, turnLine('two'));
+    plantPane(paneRecord(A, JOB));
+    const log = path.join(h.home, 'scan-calls');
+    const wrap = `eval "_ci_bg_scan_orig() $(declare -f _ci_bg_scan | tail -n +2)"; `
+      + `_ci_bg_scan() { echo scan >> "${log}"; _ci_bg_scan_orig "$@"; }; `;
+    h.sh(`${wrap} ${TMUX_PANE} for i in $(seq 1 30); do echo "tick $i" >> "${log}"; _sync_uuid ${ID}; done`);
+    const lines = readFileSync(log, 'utf8').split('\n').filter((l) => l !== '');
+    const at = lines.indexOf('tick 21');
+    expect(lines.slice(0, at).filter((l) => l === 'scan').length).toBeGreaterThan(0);
+    expect(lines.slice(at).filter((l) => l === 'scan')).toEqual([]);
+    expect(h.reg(ID, 'uuid')).toBe(C);
+  });
+
+  it('a worker naming an id the walk has LEFT is not followed back — the fork it was made from', () => {
+    // Two forks: A -> B, then B -> C. B is no origin, but it is on the walk,
+    // and its transcript ends in a marker. Following a worker back to it would
+    // park the registry on a superseded id the walk then refuses to leave
+    // (C is on the walk too).
+    row('/w', A);
+    plant('/w', A, `${turnLine('one')}${marker(A, B)}`);
+    plant('/w', B, `${turnLine('two')}${marker(B, C)}`);
+    plant('/w', C, turnLine('three'));
+    const out = h.sh(
+      `${bgRecord(C, JOB)} ${Array.from({ length: 5 }, () => `_sync_uuid ${ID}`).join('; ')}; echo "END:$(_reg_get ${ID} uuid)"; `
+      + `${bgRecord(B, JOB)} _sync_uuid ${ID}; _sync_uuid ${ID}; echo "BACK:$(_reg_get ${ID} uuid)"`,
+    );
+    expect(pick(out, 'END')).toBe(C);
+    expect(pick(out, 'BACK')).toBe(C);
+  });
+
+  it('a follow is a placement like a hop: the walk goes on from the same origin, it does not restart', () => {
+    row('/w', A);
+    plant('/w', A, `${turnLine('one')}${marker(A, C)}`);
+    plant('/w', C, turnLine('two'));
+    const dir = projectDir('/w');
+    const out = h.sh(
+      `${bgRecord(C, JOB)} _sync_uuid ${ID}; _sync_uuid ${ID}; `
+      + `printf '%s\\n' '${tD}' > "${dir}/${D}.jsonl"; ${bgRecord(D, JOB)} _sync_uuid ${ID}; _sync_uuid ${ID}; `
+      + `echo "NOW:$(_reg_get ${ID} uuid)"; echo "ORIGIN:\${_CI_ORIGIN[${ID}]}"; `
+      + `_ci_walk_has ${ID} ${C} && echo "LEFT:C"`,
+    );
+    expect(pick(out, 'NOW')).toBe(D);
+    expect(pick(out, 'ORIGIN')).toBe(A);
+    expect(pick(out, 'LEFT')).toBe('C');
+  });
+
+  it('a worker that died WITHOUT removing its record is not read as current — its respawn is found by job', () => {
+    // SIGKILL and the OOM killer leave the record behind. Read as live, it
+    // names the id the worker held when it died, for ever, and the respawned
+    // worker under a new pid — the same job — is never looked for.
+    row('/w', A);
+    plant('/w', A, `${turnLine('one')}${marker(A, C)}`);
+    plant('/w', C, turnLine('two'));
+    plant('/w', D, turnLine('three'));
+    const out = h.sh(
+      `command sleep 60 & w1=$!; ${bgRecord(C, JOB, '$w1')} _sync_uuid ${ID}; _sync_uuid ${ID}; echo "HOP:$(_reg_get ${ID} uuid)"; `
+      + `kill -9 $w1; wait $w1 2>/dev/null; ${bgRecord(D, JOB)} _sync_uuid ${ID}; echo "AFTER:$(_reg_get ${ID} uuid)"`,
+    );
+    expect(pick(out, 'HOP')).toBe(C);
+    expect(pick(out, 'AFTER')).toBe(D);
   });
 });
