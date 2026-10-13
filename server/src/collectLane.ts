@@ -11,9 +11,9 @@
 // - its refusal words are not reclaim's;
 // - its audit is keyed `session`, not `id`.
 import {
-  CHILD_RUN_ID, COLLECT_BOX_LABELS, COLLECT_BOX_LINES, TMPROOT_ID_MAX_CHARS, isPositiveDecimalSafeInteger, isTmpRootId,
-  lcRefusalWord, type ChildReclaimCollectAttention, type CollectBoxLine, type CollectLaneChoice, type CollectToken,
-  type LcRefusalToken,
+  CHILD_RUN_ID, COLLECT_BOX_LABELS, COLLECT_BOX_LINES, TMPROOT_ID_MAX_CHARS, isCollectLaneChoice,
+  isPositiveDecimalSafeInteger, isTmpRootId, lcRefusalWord, type ChildReclaimCollectAttention, type CollectArmedBy,
+  type CollectBoxLine, type CollectLaneChoice, type CollectToken, type LcRefusalToken,
 } from '../../shared/api.js';
 import {
   CHILD_RECLAIM_DEFER_CEILING_MS, childReclaimBackoffMs, childReclaimDetailText, childReclaimIdsNamed, childReclaimStuckEnd,
@@ -26,13 +26,13 @@ const hasOwn = (o: object, k: string): boolean => Object.prototype.hasOwnPropert
 const isObject = (v: unknown): v is Readonly<Record<string, unknown>> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 
-// ── the live switch (spec §5.10) ────────────────────────────────────────────────────────────────────────────────
+// ── the switch and its resolver (spec §5.10; path-identity spec 2026-10-12 §5.2) ────────────────────────────────
 
-/** The lane's live switch: the marker FILE `$REG/collect-lane-live`. The lane composes `ws-collect` only while it
- *  exists. Without it the lane audits under every rule, and records "would collect" where it would spend (shadow).
- *  - Nothing in the tree writes it. It is hand-touched, on the `expire-lane-live` precedent.
- *  - It is spelled ONCE, here, in an L1 file with no `node:` import. Its code holders are this file and the executor
- *    (`coord/collectTempRoot.ts`), which reads it nearest the argv; tests import it from here. */
+/** The LEGACY arm of the lane's switch: the marker FILE `$REG/collect-lane-live` (path-identity spec 2026-10-12 §5.2).
+ *  It arms `ws-collect` only while it stands AND its journaled latch is unset; Settings is the other arm, and the
+ *  resolver at this file's foot decides (`collectLaneEffective`). Nothing in the tree writes it: it is hand-touched, on
+ *  the `expire-lane-live` precedent, and once a coherent listing proves it absent the latch retires it for good (§5.4).
+ *  Spelled ONCE, here (L1, no `node:` import); its code holders are this file and the executor, nearest the argv. */
 export const COLLECT_LANE_LIVE_MARKER = 'collect-lane-live';
 
 // ── the probe and refusal tables (spec §5.10) ───────────────────────────────────────────────────────────────────
@@ -1935,8 +1935,8 @@ export function decideCollectLaneWrite(req: CollectLaneWriteRequest, before: Col
  *  - `failed`: the store failed at a phase after its decision;
  *  - `store-threw`: the store threw BEFORE its append (`BEGIN IMMEDIATE` busy past its timeout, an I/O fault at
  *    `BEGIN`, a read or a decision that threw), which `setCollectLane` propagates by design. Nothing was appended or
- *    written. The helper answers it rather than rethrowing, so its callers re-read and go on (R16's extension, the
- *    coordinator, 2026-10-12). */
+ *    written. The helper answers it rather than rethrowing, so its callers re-read and go on (the coordinator's
+ *    extension of the warn-latch ruling, 2026-10-12). */
 export type CollectLatchOutcome =
   | { readonly kind: 'not-due' } | { readonly kind: 'retired' }
   | { readonly kind: 'refused'; readonly code: CollectLaneWriteRefusal }
@@ -1980,4 +1980,194 @@ const COLLECT_LANE_KEBAB_WORDS: readonly string[] = [
 ];
 export function isCollectLaneKebab(v: string): boolean {
   return COLLECT_LANE_KEBAB_WORDS.includes(v);
+}
+
+// ── the Settings switch: resolver, latch, bodies, counts (path-identity spec 2026-10-12 §5.2, §5.4, §5.5, §5.7) ────
+//
+// What arms the collector's deletion, decided PURELY from measured inputs: the registry listing, the connection epoch
+// around it, both capabilities, the control state (`collectLaneControl`, above) and the current connection's node.
+// Nothing here reads a file, a row, a clock or the link. `collectLaneEffective` is called by the executor
+// (`coord/collectTempRoot.ts`), nearest the argv, and by the view (`collectLaneView`), and by nothing else.
+
+/** The registry listing as the executor reads it (path-identity spec 2026-10-12 §5.2). `marker` is the MEASURED
+ *  presence of `COLLECT_LANE_LIVE_MARKER`. An unlistable registry carries NO marker field: a listing that failed proves
+ *  no absence, and a proved absence is what retires the latch. */
+export type CollectLaneSwitches =
+  | { readonly paused: false; readonly marker: boolean }
+  | { readonly paused: true; readonly why: 'raised'; readonly marker: boolean }
+  | { readonly paused: true; readonly why: 'unlistable' };
+/** The connection epoch around a listing (path-identity spec 2026-10-12 §5.2, §5.5). In the executor, `before` is the
+ *  epoch the job was queued under and `after` the epoch read after the final listing; in the pass, the pass-head epoch
+ *  and the epoch after the gather. Epochs only rise, so `before === after` is "no connection came or went". */
+export interface CollectEpochPair { readonly before: number; readonly after: number }
+/** Both capabilities, as the executor or the route measured them: the collector's own and the cleanup pause's. This
+ *  file spells neither token. */
+export interface CollectLaneCaps { readonly collect: boolean; readonly reclaimPause: boolean }
+/** The current connection's fleet node, declared by this consumer (path-identity spec 2026-10-12 §5.2). The identity
+ *  cell's `CurrentFleetIdentity` satisfies it structurally. Only `known` carries a node id, and only a `known` measured
+ *  on the epoch the listing ended under can arm Settings. */
+export type CollectCurrentNode =
+  | { readonly kind: 'known'; readonly connectionEpoch: number; readonly nodeId: string; readonly measuredAt: number }
+  | { readonly kind: 'unmeasured'; readonly connectionEpoch: number }
+  | { readonly kind: 'collision'; readonly connectionEpoch: number };
+/** Everything the resolver reads, each MEASURED by its caller after the listing's await. */
+export interface CollectLaneInputs {
+  readonly switches: CollectLaneSwitches; readonly epoch: CollectEpochPair; readonly caps: CollectLaneCaps;
+  readonly control: CollectLaneControl; readonly node: CollectCurrentNode;
+}
+/** Why the lane STOPPED: a measurement failed or a pause stands. No flip, no feed row, and a lane-wide clear. */
+export type CollectLaneStopWhy = 'raised' | 'unlistable' | 'epoch-changed' | 'unknown-fleet';
+/** Why the control state cannot be proved coherent. A flip candidate whose boolean is false. */
+export type CollectLaneSafetyWhy = CollectLaneUnmeasurable | 'generation-mismatch';
+/** Beside a settled arm: `latchDue` is `collectLatchDue`'s answer for the same listing; `markerRecreated` says the
+ *  marker stands after its latch was set, which is reported and ignored (path-identity spec 2026-10-12 §5.4). */
+export interface CollectLaneNotes { readonly latchDue: boolean; readonly markerRecreated: boolean }
+/** Figure 5's answer (path-identity spec 2026-10-12 §5.2). `live` is the ONLY arm under which `ws-collect` may be
+ *  composed. */
+export type CollectLaneEffective =
+  | { readonly kind: 'stopped'; readonly why: CollectLaneStopWhy }
+  | { readonly kind: 'not-running' }
+  | { readonly kind: 'safety-stopped'; readonly why: CollectLaneSafetyWhy }
+  | { readonly kind: 'live'; readonly armedBy: Exclude<CollectArmedBy, 'neither'>; readonly notes: CollectLaneNotes }
+  | { readonly kind: 'shadowed'; readonly why: 'off' | 'future-choice' | 'other-node'; readonly notes: CollectLaneNotes };
+/** The arms a transition can name: a flip candidate is never `stopped` or `not-running`. */
+export type CollectLaneSettled = Extract<CollectLaneEffective, { kind: 'live' | 'shadowed' | 'safety-stopped' }>;
+type CollectLaneShadowWhy = Extract<CollectLaneEffective, { kind: 'shadowed' }>['why'];
+
+/** The lane flips on this boolean alone, never on the source (path-identity spec 2026-10-12 §5.5): a handoff from the
+ *  marker to Settings that stays live is no flip. */
+export const collectLaneLive = (r: CollectLaneSettled): boolean => r.kind === 'live';
+
+/** THE latch predicate, its one definer (path-identity spec 2026-10-12 §5.4): a listing that is unpaused, listed, on one
+ *  epoch and proves the marker ABSENT, over a COHERENT control state whose latch is still null. It reads none of the
+ *  arming inputs, so a stored Live on an unknown node still retires a removed marker. It never heals: a mismatch or an
+ *  unmeasurable state is never due. */
+export function collectLatchDue(switches: CollectLaneSwitches, epoch: CollectEpochPair, control: CollectLaneControl): boolean {
+  return !switches.paused && !switches.marker && epoch.before === epoch.after
+    && control.kind === 'coherent' && control.row.markerRetiredAt === null;
+}
+
+/** Figure 5 (path-identity spec 2026-10-12 §5.2, §5.5), in this precedence:
+ *  1. a raised pause, then an unlistable registry: stopped;
+ *  2. an epoch that moved around the listing: stopped;
+ *  3. either capability missing: not running;
+ *  4. control state unmeasurable or incoherent: safety-stopped. This suppresses the marker too;
+ *  5. the marker arm (it stands, latch unset), the Settings arm (exact `live`, for the node measured on this epoch), or
+ *     both;
+ *  6. a stored `live` with no node measured on this epoch: stopped, `unknown-fleet`, never shadowed, so a reconnect
+ *     writes no flip row;
+ *  7. otherwise shadowed: `off`, a choice this build does not know (`future-choice`), or Live for another node.
+ *  A choice outside `off`/`live` is readable and ineffective (`isCollectLaneChoice`, never `in`). Total and pure. */
+export function collectLaneEffective(i: CollectLaneInputs): CollectLaneEffective {
+  const s = i.switches;
+  if (s.paused) return { kind: 'stopped', why: s.why };
+  if (i.epoch.before !== i.epoch.after) return { kind: 'stopped', why: 'epoch-changed' };
+  if (!i.caps.collect || !i.caps.reclaimPause) return { kind: 'not-running' };
+  const c = i.control;
+  if (c.kind === 'unmeasurable') return { kind: 'safety-stopped', why: c.why };
+  if (c.kind === 'mismatch') return { kind: 'safety-stopped', why: 'generation-mismatch' };
+  const notes: CollectLaneNotes = {
+    latchDue: collectLatchDue(s, i.epoch, c),
+    markerRecreated: s.marker && c.row.markerRetiredAt !== null,
+  };
+  const markerArms = s.marker && c.row.markerRetiredAt === null;
+  const choice = isCollectLaneChoice(c.row.choice) ? c.row.choice : null;
+  const n = i.node;
+  const nodeNow = n.kind === 'known' && n.connectionEpoch === i.epoch.after ? n.nodeId : null;
+  const settingsArms = choice === 'live' && nodeNow !== null && c.row.fleetNodeId === nodeNow;
+  if (markerArms && settingsArms) return { kind: 'live', armedBy: 'both', notes };
+  if (markerArms) return { kind: 'live', armedBy: 'legacy-marker', notes };
+  if (settingsArms) return { kind: 'live', armedBy: 'settings', notes };
+  if (choice === 'live' && nodeNow === null) return { kind: 'stopped', why: 'unknown-fleet' };
+  const why: CollectLaneShadowWhy = choice === null ? 'future-choice' : choice === 'off' ? 'off' : 'other-node';
+  return { kind: 'shadowed', why, notes };
+}
+
+/** What armed the lane, in the transition row's words (path-identity spec 2026-10-12 §5.5, §5.7). Total. */
+const COLLECT_ARMED_BY_SAID: Readonly<Record<Exclude<CollectArmedBy, 'neither'>, string>> = {
+  'legacy-marker': "the fleet box's legacy file",
+  settings: 'Settings',
+  both: "both Settings and the fleet box's legacy file",
+};
+/** Why neither arms it. Total; a future token is never quoted here. */
+const COLLECT_SHADOWED_SAID: Readonly<Record<CollectLaneShadowWhy, string>> = {
+  off: 'Settings is off',
+  'future-choice': 'Settings holds a choice this build does not know',
+  'other-node': 'Settings is live for another fleet node',
+};
+/** Why the control state cannot be proved coherent, bounded. Total; no detail, path or file name. */
+const COLLECT_SAFETY_SAID: Readonly<Record<CollectLaneSafetyWhy, string>> = {
+  'row-absent': 'its database row is missing',
+  'row-unreadable': 'its database row could not be read',
+  'row-malformed': 'its database row holds a value this build cannot read',
+  'journal-missing': 'its monotonic journal is missing, though its database row is no longer the untouched seed',
+  'journal-malformed': 'its monotonic journal is malformed',
+  'journal-unreadable': 'its monotonic journal could not be read',
+  'journal-not-regular': 'its monotonic journal is not a regular file',
+  'journal-not-configured': 'this server was started with no monotonic journal',
+  'generation-mismatch': 'its database and its monotonic journal disagree',
+};
+
+/** One row per flip of the effective boolean (path-identity spec 2026-10-12 §5.5). It names the measured source, or
+ *  that neither arms the lane and why, or the bounded safety-stop reason, each from a total table. It never carries a
+ *  detail, a path, a stored token or the journal's file name. It keeps wave 9's prefixes, `the collector lane is now
+ *  live` and `the collector lane is now shadowed`. */
+export function collectSwitchFeedBody(r: CollectLaneSettled): string {
+  switch (r.kind) {
+    case 'live':
+      return `the collector lane is now live, armed by ${COLLECT_ARMED_BY_SAID[r.armedBy]}: the temp-root collector `
+        + 'removes an orphaned temp root it has proved idle twice, with no person in the loop, while cleanup is not paused.';
+    case 'shadowed':
+      return "the collector lane is now shadowed: neither Settings nor the fleet box's legacy file arms it "
+        + `(${COLLECT_SHADOWED_SAID[r.why]}), so the temp-root collector audits and reports what it would collect, and `
+        + 'removes nothing.';
+    case 'safety-stopped':
+      return `the collector lane is now safety-stopped: ${COLLECT_SAFETY_SAID[r.why]}, so the temp-root collector `
+        + 'removes nothing until its control state is proved coherent.';
+    default: { const unnamed: never = r; return unnamed; }
+  }
+}
+
+/** The latch row's sentence (path-identity spec 2026-10-12 §5.4), as ruled. */
+const COLLECT_LATCH_SAID = "the fleet box's legacy file was retired: Settings alone controls the collector now";
+/** The latch row's body: the ruled sentence, then `; by <actor>`, as every coordination row names who acted. The
+ *  executor passes its own sweep actor. */
+export function collectLatchFeedBody(actor: string): string {
+  return `${COLLECT_LATCH_SAID}; by ${actor}`;
+}
+/** The title of a row that records a CHANGE to the switch's stored state: an accepted POST, and the latch
+ *  (path-identity spec 2026-10-12 §5.5). Never the flip row's `COLLECT_FEED_TITLE.switch`. */
+export const COLLECT_SETTING_FEED_TITLE = 'temp root collector setting changed';
+
+/** The view's counts (path-identity spec 2026-10-12 §5.7). */
+export interface CollectLaneCounts { readonly wouldCollect: number; readonly held: number; readonly boxLines: number }
+const COLLECT_WOULD_COLLECT_WORD = 'would-collect' satisfies CollectItemWord;
+const COLLECT_HELD_WORD = 'held' satisfies CollectItemWord;
+/** Is this item the terminal branch's? Its `word` is ccd's own, so a ccd word spelled like one of this build's is never
+ *  that word. The branch is told apart by its collapsed clause, which only it returns. */
+const collectItemTerminal = (t: CollectItemText): boolean => t.many === COLLECT_TERMINAL_MANY;
+
+/** The would-collect and held counts the Settings view shows (path-identity spec 2026-10-12 §5.7). The PWA counts
+ *  nothing, so the server counts, by the items' OWN precedence (`collectItemOf`), never by a second ladder:
+ *  - `wouldCollect`: ids whose item is shadow's would-collect;
+ *  - `held`: ids whose item is a per-id hold, plus the unvouched holds that join one box line instead of an item;
+ *  - `boxLines`: the box-wide lines standing, the unvouched line excluded (its ids are in `held`).
+ *  An id the temp-root id predicate refuses is never counted, as it is never listed, and neither is a terminal item.
+ *  Pure. */
+export function collectLaneCounts(i: {
+  readonly entries: ReadonlyMap<string, CollectAttentionView>;
+  readonly box: CollectBoxFacts;
+}): CollectLaneCounts {
+  const recordsSubsumed = collectRecordsInDoubt(i.box.unmeasured);
+  let wouldCollect = 0;
+  let held = 0;
+  for (const [id, v] of i.entries) {
+    if (!isTmpRootId(id)) continue;
+    const t = collectItemOf(id, v, recordsSubsumed);
+    if (t === 'unvouched') { held += 1; continue; }
+    if (t === null || collectItemTerminal(t)) continue;
+    if (t.word === COLLECT_WOULD_COLLECT_WORD) wouldCollect += 1;
+    else if (t.word === COLLECT_HELD_WORD) held += 1;
+  }
+  return { wouldCollect, held, boxLines: collectBoxItems(i.box, []).length };
 }
