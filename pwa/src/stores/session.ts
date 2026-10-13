@@ -348,12 +348,23 @@ const revoke = (p: PendingSend | undefined): void => {
  *  screen when the operator pressed send, the echo's time is the record Claude
  *  Code writes after it, and both were written by Claude Code on the same box
  *  (a swap moves a session between accounts on its box; a fork stays on it).
- *  A copy keeps its timestamps: the 2.1.296 binary writes the fork's history
- *  as `{...record, sessionId: <new>, parentUuid, forkedFrom: {…}}`, the
- *  original `uuid` and `timestamp` carried over. The one way this errs is the
- *  box's clock stepping BACKWARDS between the bar and the echo, and that errs
- *  toward the ten-minute fallback — never toward clearing an undelivered
- *  message.
+ *  A copy keeps its timestamps. Read in the 2.1.296 binary, not measured: no
+ *  fork pair survives in the fleet's transcripts. A `[bg]` fork copies the old
+ *  transcript byte for byte into a snapshot, and the successor resumes from it
+ *  with `--fork-session`. The successor then records that history through
+ *  Claude Code's ordinary transcript writer, which spreads each record
+ *  (`{...record, sessionId: <new>, cwd, version, …}`). Neither that writer nor
+ *  its metadata helper sets `timestamp`, so the original `uuid` and `timestamp`
+ *  carry over. (`/branch` is a different copy path, the one that adds
+ *  `forkedFrom`; the `[bg]` successor writes no `forkedFrom`.)
+ *
+ *  The one way this errs is the box's clock stepping BACKWARDS between the bar
+ *  and the echo, and that errs toward the ten-minute fallback — never toward
+ *  clearing an undelivered message.
+ *
+ *  The bar is the MAX over the events on screen, never the first or the last:
+ *  transcript order is not time order, because that same writer appends a
+ *  resumed or copied record under the time it was first stamped.
  *
  *  Local dividers are skipped: they are minted here with the PHONE's clock
  *  (`localDivider`), and one on screen would raise the bar to phone time. An

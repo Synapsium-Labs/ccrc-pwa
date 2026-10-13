@@ -815,6 +815,26 @@ describe('the echo that clears a pending', () => {
     expect(store.getState().pending).toHaveLength(1);
   });
 
+  // The command is read off the text the pane was GIVEN — `composePrompt`'s
+  // output, which the server injects — not off what the composer held.
+  it('a send with an attachment is not that command, even when its text starts with a slash', async () => {
+    // The pane is given `<clip path>\n/compact`: `/compact` is not the first
+    // word of what it received, so a `/compact` row is somebody else's.
+    const store = make('e5a');
+    await store.getState().send('/compact', { attachments: [{ path: '/p/clip-1-a1b2.png' }] });
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [systemAt('c1', '/compact', T1)] });
+    expect(store.getState().pending).toHaveLength(1);
+  });
+
+  it('a command typed under a blank line is the command the pane ran', async () => {
+    // `composePrompt` drops leading blank lines before the text is injected,
+    // so the pane ran `/compact` and its echo is this row.
+    const store = make('e5b');
+    await store.getState().send('\n/compact');
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [systemAt('c1', '/compact', T1)] });
+    expect(store.getState().pending).toEqual([]);
+  });
+
   // — D-4952: a replay is not an echo —
 
   it('a backlog that replays history the operator already saw does not clear the message they just sent', async () => {
@@ -845,6 +865,30 @@ describe('the echo that clears a pending', () => {
     await store.getState().send('/compact');
     store.getState().apply(backlog('/t/b.jsonl', [systemAt('c0', '/compact', T0)]));
     expect(store.getState().pending).toHaveLength(1);
+  });
+
+  it('the bar is the NEWEST event on screen, not the first one or the last one', async () => {
+    // Transcript order is not time order. Claude Code writes a record with the
+    // timestamp its message already carries (the 2.1.296 chain writer spreads
+    // the record's own `timestamp`), so a resumed or copied record is appended
+    // after records stamped later than it. Here the newest time on screen sits
+    // in the middle of the window, and a replayed "yes" stamped between the
+    // first event and the newest is still history.
+    const store = make('e7a');
+    const T3 = '2026-07-20T10:00:09.000Z';
+    const T9 = '2026-07-20T10:00:27.000Z';
+    const T10 = '2026-07-20T10:00:30.000Z';
+    const history = [
+      assistantAt('h0', 'ready', T0), userAt('h1', 'yes', T3),
+      assistantAt('h2', 'done', T9), assistantAt('h3', 'resumed', T1),
+    ];
+    store.getState().apply(backlog('/t/a.jsonl', history));
+    await store.getState().send('yes');
+    store.getState().apply(backlog('/t/a.jsonl', history));
+    expect(store.getState().pending).toHaveLength(1);
+
+    store.getState().apply({ type: 'events', uuid: 'u1', offset: 90, events: [userAt('n1', 'yes', T10)] });
+    expect(store.getState().pending).toEqual([]);
   });
 
   // The comparison is box clock against box clock. The phone's clock never

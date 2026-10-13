@@ -606,6 +606,18 @@ describe('an absorbed mid-turn message is the operator speaking (D-4950)', () =>
   it('a sidechain\'s absorbed message is a subagent\'s, not the operator\'s', () => {
     expect(parseTranscriptLine(queued({}, { isSidechain: true }))).toEqual([]);
   });
+
+  it('the text is byte for byte what a user record of the same message reads as — nothing trimmed', () => {
+    // The PWA matches this text against `composePrompt`'s output byte for
+    // byte, and a string user record's text is its content verbatim. The two
+    // paths describe the same kind of message and have to agree: a trim here
+    // would leave an indented or newline-ended message's bubble unmatched.
+    const raw = '  indented first line\n\n- a bullet\n';
+    expect(parseTranscriptLine(JSON.stringify({
+      type: 'user', uuid: 'u-1', timestamp: TS_Q, message: { role: 'user', content: raw },
+    }))).toEqual([{ kind: 'user', uuid: 'u-1', ts: TS_Q, text: raw }]);
+    expect(parseTranscriptLine(queued({ prompt: raw }))).toEqual([{ kind: 'user', uuid: 'q-1', ts: TS_Q, text: raw }]);
+  });
 });
 import { continuationOf, CONTINUATION_TAIL_BYTES } from '../src/transcript/parse.js';
 
