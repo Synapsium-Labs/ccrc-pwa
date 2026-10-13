@@ -1796,6 +1796,9 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     in 4495).** Run 354 edits only `:75`, in the case "the skill corpora", and #351 keeps off `:72-80`. Until consent
     arrives, those edits stay local.
   - Forwarded to plain-ridge in 4493 and 4496.
+  - **02:50 — quiet-ridge CONSENTS (4497)** for `dead-coordinator-prose.test.ts` under R56. Off-limits: the case "no
+    skill file names the lane's live switch" and its `const skills` line. Forwarded in 4499. Every co-edit for fix round
+    5 is now settled.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
