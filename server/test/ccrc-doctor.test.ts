@@ -13852,6 +13852,20 @@ describe('ccrc doctor: docs-sw', () => {
     }
   });
 
+  // Review 408's F5: the ERE's start anchor. An entry that ends in /docs, or holds it, is another co-tenant's (a
+  // wiki's own docs section), which the build allows; only an entry that starts /docs covers ccrc's Docs pages.
+  it('PASSes /wiki/docs and /a/docs/b: an entry that ends in or holds /docs is not under /docs', () => {
+    const home = healthy('ccrc-doctor-docs-sw-elsewhere-');
+    for (const elsewhere of ['/wiki/docs', '/a/docs/b']) {
+      plant(home, swJs(list(knob(elsewhere))));
+      const r = runDocsSw(home);
+      expect(lines(r.stdout), elsewhere).toEqual([
+        `PASS docs-sw: ${swPath(home)} keeps /docs on the app shell: its one denylist holds 3 entries (/^\\/api\\//,/^\\/ws\\//,${knob(elsewhere)}), none of them /docs or under it`,
+      ]);
+      expect(r.code, elsewhere).toBe(0);
+    }
+  });
+
   it('WARNs on two denylists on ONE line: occurrences are counted, not lines (refinement (c))', () => {
     const home = healthy('ccrc-doctor-docs-sw-two-');
     plant(home, swJs(`${list()}},{${list(knob('/docs'))}`));

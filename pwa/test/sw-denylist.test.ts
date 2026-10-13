@@ -179,6 +179,17 @@ describe('M7.2: the build refuses an entry covering /docs; the default never den
     expect(denies(list, '/docs/p/specs/a.md'), 'a sibling entry claimed a Docs page').toBe(false);
   });
 
+  // Review 408's F9: a path that ENDS in /docs, or holds it, is another co-tenant's (a wiki's own docs section), and
+  // builds; only an entry that starts with the Docs prefix covers ccrc's Docs pages.
+  it('refuses only the Docs prefix: an entry ending in or holding /docs builds', () => {
+    for (const elsewhere of ['/wiki/docs', 'wiki/docs/', '/wiki/docs/a', '/a/docs/b']) {
+      expect(attempt(elsewhere).threw, `${elsewhere} is not under /docs`).toBe(false);
+    }
+    const list = swDenylist('/wiki/docs');
+    expect(denies(list, '/wiki/docs/a')).toBe(true);
+    expect(denies(list, '/docs/p/specs/a.md'), 'a /wiki/docs entry claimed a Docs page').toBe(false);
+  });
+
   it('the default does not deny a Docs page, and does deny the Docs API', () => {
     const list = swDenylist(undefined);
     for (const page of ['/docs', '/docs/', '/docs/p', '/docs/p/specs/a.md']) {

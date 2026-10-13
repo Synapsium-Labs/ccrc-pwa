@@ -488,6 +488,23 @@ describe('T11 review 2-3 (operator ruling): a short message whose tables would d
     expect(spy).not.toHaveBeenCalled();
   });
 
+  // Review 408's F10: the boundary itself. Bound exactly DOCS_MAX_RENDER_ELEMENTS (200 columns x 100 lines) renders;
+  // one over (177 x 113 = 20 001) is plain text. The pipes sit in prose, so neither message draws a table.
+  it('a message whose bound is exactly the cap renders formatted, and one whose bound is one over is plain text', () => {
+    const atCap = `${'|'.repeat(199)}\n${Array(99).fill('x').join('\n')}`;
+    expect(countChatTableCells(atCap)).toBe(DOCS_MAX_RENDER_ELEMENTS);
+    const at = assistant(atCap).container;
+    expect(plainOf(at)).toBeNull();
+    expect(at.querySelectorAll('.msg-assist p')).toHaveLength(1);
+    cleanup();
+
+    const overCap = `${'|'.repeat(176)}\n${Array(112).fill('x').join('\n')}`;
+    expect(countChatTableCells(overCap)).toBe(DOCS_MAX_RENDER_ELEMENTS + 1);
+    const over = assistant(overCap).container;
+    expect(plainOf(over)?.textContent).toBe(overCap);
+    expect(noteOf(over)).toBe(tooWide(DOCS_MAX_RENDER_ELEMENTS + 1));
+  });
+
   it('the same table inside a blockquote is counted too', () => {
     const { text, cells } = justOverCap('> ');
     expect(utf8ByteLength(text)).toBeLessThanOrEqual(CHAT_SYNC_MAX_BYTES);
