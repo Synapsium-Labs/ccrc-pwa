@@ -5229,6 +5229,8 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     const shipped = readFileSync(join(home, 'ccrc', 'ccd', 'reviewer-skill', 'SKILL.md'), 'utf8');
     writeFileSync(f, shipped.replace('$HOME/.cc-clips/', '$WT/.ccrc-review/'));
     rmSync(installed(home, '.claude', 'ccrc-worker'), { recursive: true });
+    // H-133: the fourth installer is cured too, so a `history` arm dropped from `_fix_skills` is a red here.
+    rmSync(installed(home, '.claude', 'ccrc-history'), { recursive: true });
     // Without --fix: the verdict stands and nothing is written.
     let r = runDoctor(home);
     expect(r.code).toBe(1);
@@ -5241,13 +5243,14 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     // and a box's PATH carries all of them.
     for (const t of ['rm', 'mkdir', 'mv', 'cp', 'date', 'basename']) linkReal(home, t);
     r = runDoctor(home, ['doctor', '--fix']);
-    expect(r.stdout).toMatch(/^FAIL skills: 2 skill\(s\) in the rostered homes/m);
+    expect(r.stdout).toMatch(/^FAIL skills: 3 skill\(s\) in the rostered homes/m);
     const skillsLines = r.stdout.split('\n').filter((l) => /^(FAIL|FIX|PASS|SKIP) skills|^  remedy/.test(l)).join('\n');
     expect(skillsLines).toMatch(/^FIX skills: re-ran the shipped tree's installers into 1 home\(s\)/m);
     expect(r.stdout).toMatch(/^PASS skills: 1\/1 homes carry the shipped/m);
     expect(r.code, r.stdout).toBe(0);
     expect(readFileSync(f, 'utf8')).toBe(shipped);
     expect(existsSync(join(installed(home, '.claude', 'ccrc-worker'), 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(installed(home, '.claude', 'ccrc-history'), 'SKILL.md'))).toBe(true);
     // The summary counts the RE-measured verdict: no failed line survives.
     expect(r.stdout).toMatch(/ 0 failed$/m);
   });
@@ -5266,6 +5269,14 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     rmSync(join(home, 'ccrc', 'ccd', 'reviewer-skill'));
     const r = runDoctor(home);
     expect(r.stdout).toMatch(/^FAIL skills: the shipped tree has no .*reviewer-skill/m);
+  });
+
+  it('fails when the shipped tree lacks the history skill: the notree loop names it, not the per-home diff (H-133)', () => {
+    const home = healthy('ccrc-doctor-skills-notree-history-');
+    rmSync(join(home, 'ccrc', 'ccd', 'history-skill'), { recursive: true });
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^FAIL skills: the shipped tree has no .*history-skill/m);
+    expect((r.stdout.match(/^FAIL skills:/mg) ?? []).length).toBe(1);
   });
 });
 

@@ -1148,6 +1148,109 @@ describe('O38: the export\'s due rule, re-run under the per-copy default (B1 hal
     const firstDeletion = Number(metaOf(box, 'first_deletion_ms'));
     expect(Math.abs(firstDeletion - (Date.now() + 180 * DAY)), 'a file written now, plus 180 days').toBeLessThan(10 * MIN);
   });
+
+  // ── H-144 and H-145 (hardening HF): the census clauses no fixture reached ──
+  /** The store opened for writing between two passes; no pass is running while it is open. */
+  const edit = (box: HistoryBox, fn: (db: DatabaseSync) => void): void => {
+    const db = new DatabaseSync(paths(box).db);
+    try { fn(db); } finally { db.close(); }
+  };
+  /** The NULL-ts row of the 170-day file (T2), and the young row of the file written now (T1). */
+  const NULL_ROW = 'a0000000-0000-4000-8000-0000000006a7';
+  const YOUNG_ROW = 'a0000000-0000-4000-8000-0000000006a4';
+  type EntryRef = { entry_id: number; transcript_pk: number; blob_id: number };
+  const entryOf = (db: DatabaseSync, uuid: string): EntryRef =>
+    db.prepare('SELECT entry_id, transcript_pk, blob_id FROM entries WHERE uuid = ?').get(uuid) as EntryRef;
+  /** One referrer of `blob` of each kind the census reads besides `entries`, held by `holder`'s entry or transcript. */
+  const refer = (db: DatabaseSync, kind: 'entry_variants' | 'sidecars' | 'boundaries', blob: number, holder: EntryRef): void => {
+    const now = Date.now();
+    if (kind === 'entry_variants') {
+      const file = (db.prepare('SELECT file_id FROM ingest_files LIMIT 1').get() as { file_id: number }).file_id;
+      db.prepare('INSERT INTO entry_variants (entry_id, blob_id, first_file_id, first_seen_ms) VALUES (?, ?, ?, ?)').run(holder.entry_id, blob, file, now);
+    } else if (kind === 'sidecars') {
+      db.prepare('INSERT INTO sidecars (transcript_pk, name, blob_id, entry_id, first_seen_ms) VALUES (?, ?, ?, NULL, ?)').run(holder.transcript_pk, 'h144', blob, now);
+    } else {
+      db.prepare('INSERT INTO boundaries (entry_id, transcript_pk, ord, kept_blob_id) VALUES (?, ?, 0, ?)').run(holder.entry_id, holder.transcript_pk, blob);
+    }
+  };
+
+  for (const [kind, tag] of [['entry_variants', 'v'], ['sidecars', 's'], ['boundaries', 'b']] as const) {
+    it(`H-144: a blob held only by ${kind} in a due transcript is a candidate; a young holder of the same kind holds it back`, () => {
+      const { box, MS } = censusBox(`ccrc-hist-o38${tag}-`);
+      expect(due(box), 'CONTROL: the NULL-ts row of the 170-day file is the one due blob').toBe(1);
+      let blobB = 0;
+      edit(box, (db) => {
+        const old = entryOf(db, NULL_ROW);
+        blobB = old.blob_id;
+        // The row moves to a copy of its blob, so the original is held by the kind under test alone.
+        const copy = db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, fts_indexed) SELECT randomblob(32), codec, z, raw_len, fts_indexed FROM blobs WHERE blob_id = ?').run(blobB);
+        db.prepare('UPDATE entries SET blob_id = ? WHERE entry_id = ?').run(Number(copy.lastInsertRowid), old.entry_id);
+        refer(db, kind, blobB, old);
+      });
+      census(box, MS, 1);
+      expect(due(box), 'the copy through entries, and the original through the kind under test').toBe(2);
+      edit(box, (db) => { refer(db, kind, blobB, entryOf(db, YOUNG_ROW)); });
+      census(box, MS, 2);
+      expect(due(box), 'the original is also held by a row of the file written now, so only the copy stays due').toBe(1);
+    }, 90_000);
+  }
+
+  it('H-145: an exported transcript is no W1-k holder: first_due_ms moves to the next holder once the 170-day file\'s rows are exported', () => {
+    const { box, MS } = censusBox('ccrc-hist-o38x-');
+    expect(Number(metaOf(box, 'first_due_ms')), 'CONTROL: the 170-day file fell due 20 days ago').toBeLessThan(Date.now() - 10 * DAY);
+    edit(box, (db) => {
+      db.prepare('UPDATE entries SET exported_ms = ? WHERE transcript_pk = ?').run(Date.now(), entryOf(db, NULL_ROW).transcript_pk);
+    });
+    census(box, MS, 1);
+    expect(Math.abs(Number(metaOf(box, 'first_due_ms')) - (Date.now() + 150 * DAY)),
+      'the file written now, plus 150 days: the exported transcript holds nothing').toBeLessThan(10 * MIN);
+  }, 90_000);
+
+  it('H-145: a holder with no recorded file is dated by its oldest UNEXPORTED row, never by an exported one', () => {
+    const { box, MS, nullFile } = censusBox('ccrc-hist-o38y-');
+    fs.rmSync(nullFile);
+    edit(box, (db) => {
+      const held = entryOf(db, NULL_ROW);
+      const t2 = held.transcript_pk;
+      const ofT2 = 'SELECT file_id FROM ingest_files WHERE transcript_pk = ?';
+      db.prepare(`DELETE FROM memberships WHERE file_id IN (${ofT2})`).run(t2);
+      db.prepare(`DELETE FROM file_paths WHERE file_id IN (${ofT2})`).run(t2);
+      db.prepare('DELETE FROM ingest_files WHERE transcript_pk = ?').run(t2);
+      // T2 holds an unexported row from 100 days back and an exported one from 500 days back.
+      db.prepare('UPDATE entries SET ts_ms = ? WHERE entry_id = ?').run(Date.now() - 100 * DAY, held.entry_id);
+      db.prepare('UPDATE entries SET transcript_pk = ?, ts_ms = ?, exported_ms = ? WHERE uuid = ?').run(t2, Date.now() - 500 * DAY, Date.now(), YOUNG_ROW);
+    });
+    census(box, MS, 1);
+    expect(Math.abs(Number(metaOf(box, 'first_due_ms')) - (Date.now() - 100 * DAY)),
+      'the file-less holder, dated by its unexported row').toBeLessThan(10 * MIN);
+  }, 90_000);
+
+  // ── H-146 (hardening HF; D-4612 (history-export-file-home-shortest-of-containing)) ──
+  for (const shortFirst of [false, true]) {
+    it(`H-146: two homes sharing one projects tree age a shared file by the SHORTEST of them, with the ${shortFirst ? '30' : '180'}-day home listed first`, () => {
+      const base = makeHistoryBox(`ccrc-hist-o38${shortFirst ? 'q' : 'p'}-`, { role: 'fleet', shim: true });
+      const long = base.accountHome['claude']!;
+      const short = base.accountHome['claude-a']!;
+      for (const h of base.homes) fs.writeFileSync(path.join(h, 'settings.json'), JSON.stringify({ cleanupPeriodDays: h === short ? 30 : 180 }));
+      // The short home's projects/ is a link to the long home's: one tree, two rostered homes that contain it.
+      fs.rmSync(path.join(short, 'projects'), { recursive: true });
+      fs.symlinkSync(path.join(long, 'projects'), path.join(short, 'projects'));
+      const rest = base.homes.filter((h) => h !== long && h !== short);
+      const box: HistoryBox = { ...base, homes: shortFirst ? [short, long, ...rest] : [long, short, ...rest] };
+      const etc = path.join(box.home, 'etc-claude-code');
+      fs.mkdirSync(path.join(etc, 'managed-settings.d'), { recursive: true });
+      const MS = [path.join(etc, 'managed-settings.json'), path.join(etc, 'managed-settings.d')];
+      plantSession(box, ID, { uuid: U1, generation: G1, project: 'demo' });
+      const f = plantTranscript(box, 'claude', SLUG, U1, [userRow('a0000000-0000-4000-8000-0000000046c1', 'shared tree', iso(40 * DAY))]);
+      const at = new Date(Date.now() - 40 * DAY);
+      fs.utimesSync(f, at, at);
+      const r = runDriver(box, { managedSettings: MS });
+      expect(r.code, r.stderr).toBe(0);
+      expect(countOf(box, 'entries'), 'CONTROL: the row is ingested').toBe(1);
+      expect(metaOf(box, 'retention_min')).toBe('30');
+      expect(due(box), 'the short home deletes the file at +30 days, so it is due now whichever home the roster lists first').toBe(1);
+    }, 90_000);
+  }
 });
 
 describe('W1-j and O34: the journal audit', () => {

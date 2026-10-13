@@ -3039,7 +3039,7 @@ fi
 # SPOOL_ID_MAX = 224, so `.draining/<id>.<ms>.<pid>.jsonl` fits a 255-byte name.
 # The off-switch silences Stop and PostCompact and never the SessionStart epoch
 # lines D-4252. Only startup, resume, clear and fork are spooled D-4253 D-4734 (history-fork-spooled): compact
-# exited in its arm, and any other source writes nothing (fork did in W1-B1, D-4173). A SessionStart
+# exited in its arm, and any other source writes nothing (as fork did in W1-B1, D-4173). A SessionStart
 # line declares its epoch's sid, which lib.mjs SPOOL_KEYS requires, so without a
 # lowercase-UUID sid none is written at all. A startup, resume or fork line carries
 # `reg`, this hook's own read of `.uuid` D-4175. No summary hash rides it D-4177.

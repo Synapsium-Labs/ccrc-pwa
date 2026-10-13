@@ -5039,7 +5039,7 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     'SCOPE_KINDS', 'GREP_SORTS', 'REF_KINDS', 'FAN_IN', 'RECOVER_PHASES', 'FTS_SHADOWS', 'READ_VERBS',
     'INDEXED_PROVENANCE', 'VERB_TABLES', 'EXPAND_LABEL',
     // W1-B2 Task 7A (spec rev 3.5): the belt's words more than one module reads or writes.
-    'BELT_COUNTERS', 'BELT_NODES_STEP', 'REDACT_SOURCES_META'] as const;
+    'BELT_COUNTERS', 'BELT_META', 'BELT_NODES_STEP', 'REDACT_SOURCES_META'] as const;
   /** The declaration scan's corpus: the history modules and every deploy/ and shared/ `.mjs`. NOT the rest of
    *  ccd/: `ccd/compact-card.mjs` declares an `EXIT` of its own (its exit codes, a different module's). */
   const DECL_CORPUS = [...new Set([...HISTORY_MJS, ...mjsUnder(path.join(ccrcRoot, 'deploy')), ...mjsUnder(path.join(ccrcRoot, 'shared'))])];
@@ -5120,6 +5120,21 @@ describe('ccrc history: every vocabulary is declared once, in lib.mjs, and bound
     const spelled = [...body.matchAll(/_dr_(?:pass|warn|fail)\s+history\s+"([a-z][a-z0-9-]*):/g)].map((m) => m[1]!);
     expect(spelled.length, 'the scan matched no word in _check_history').toBeGreaterThan(0);
     expect(spelled.filter((w) => !words.includes(w))).toEqual([]);
+  });
+
+  it('the string vocabularies EXPAND_LABEL, BELT_NODES_STEP and REDACT_SOURCES_META are quoted once, at their declaration (H-149)', async () => {
+    // The declaration and export check above is vacuous for a primitive: a reader that spells the value (`.get('redact_sources')`)
+    // instead of naming the constant would stay green. The scan reads code lines only, comments excluded.
+    const l = await lib();
+    const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    for (const name of ['EXPAND_LABEL', 'BELT_NODES_STEP', 'REDACT_SOURCES_META'] as const) {
+      const value = l[name];
+      expect(typeof value, `${name} is a string`).toBe('string');
+      const quoted = new RegExp(`['"\`]${esc(String(value))}['"\`]`);
+      const uses = HISTORY_MJS.flatMap((f) => stallCode(f).split('\n').filter((x) => quoted.test(x)).map((x) => `${rel(f)}: ${x.trim()}`));
+      expect(uses, `${name}: the value is quoted outside its declaration`).toHaveLength(1);
+      expect(uses[0], `${name}: the one quoted copy is not its declaration`).toMatch(new RegExp(`^ccd/history/lib\\.mjs: (?:export\\s+)?const\\s+${name}\\s*=`));
+    }
   });
 
   it('the literal .ccrc/history/db is spelled in ccd/history/*.mjs once, as STORE_DB_REL', async () => {

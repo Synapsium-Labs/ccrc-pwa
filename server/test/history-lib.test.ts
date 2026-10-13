@@ -15,7 +15,7 @@ import { mkTmp } from './tmpHelpers.js';
 import {
   EXIT, REASONS, REFUSALS, WRITING_FORMS, STORE_DB_REL, HISTORY_ROOT_REL, STORE_DB_FILE, STORE_FILES, SWITCHES,
   SPOOL_ID_MAX, CARRIER_KILL_S, NODE_KINDS, PARSE_STATUS, ENTRY_PARSE_STATES, PROVENANCE, SEARCHABLE_PROVENANCE,
-  SPOOL_EVENTS, SPOOL_SOURCES, EPOCH_CAUSES, DECLARED_BY, ERROR_CODES, COVERAGE, SCOPE_SOURCES, VARIANT_CAUSES,
+  SPOOL_EVENTS, SPOOL_SOURCES, SPOOL_NODE_KINDS, EPOCH_CAUSES, DECLARED_BY, ERROR_CODES, COVERAGE, SCOPE_SOURCES, VARIANT_CAUSES,
   BACKENDS, JOURNAL_KINDS, JOURNAL_VERDICTS, BIND_KINDS, MIGRATION_VERDICTS, PASS_WORDS, HEALTH_WORDS,
   UUID_RE, WRITER_RE, idOk, readBoxEnvValue, historyPaths,
 } from '../../ccd/history/lib.mjs';
@@ -3028,7 +3028,8 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
 
   it('spool-planted names the nodes at spool/<id>.jsonl that are not regular files on its own, with its own remedy (FR2c, F3; D-4418)', () => {
     const i = healthLib.deriveHealth(base({ spoolNodesRefused: 2 })).warn.find((x) => x.word === 'spool-planted');
-    expect(i?.detail).toContain('2 node(s) at spool/<id>.jsonl are not regular files (a FIFO, a link, a directory or any other non-regular node), so the hook spools no line for that id while one stands');
+    expect(i?.detail).toContain(`2 node(s) at spool/<id>.jsonl are not regular files (${SPOOL_NODE_KINDS}), so the hook spools no line for that id while one stands`);
+    expect(SPOOL_NODE_KINDS, 'the wording README carries (H-137)').toBe('a FIFO, a link, a directory or any other non-regular node');
     expect(i?.detail, 'the counted clauses are left out when their counts are 0').not.toContain('skipped drain(s)');
     expect(i?.remedy).toContain('any FIFO, link, directory or other non-regular node that stands at ~/.ccrc/history/spool/<id>.jsonl (that id spools again once it is gone)');
   });
@@ -6462,6 +6463,17 @@ describe('O58: the per-copy due rule is the default (W1-B2 Task 35; spec 9.15, r
     ] })).toEqual([2, 3, 4]);
     expect(libExport.planExport.length, 'one destructured argument, as B1 declared it').toBe(1);
   });
+  it('shortestRetentionHome: the shortest of the containing homes, the first listed on a tie, null when none contains the file (D-4612)', () => {
+    const C = '/home/u/.claude-c';
+    const three = { [A]: 180, [B]: 30, [C]: 30 };
+    expect(libExport.shortestRetentionHome([A, B], withB), 'the longer home listed first').toBe(B);
+    expect(libExport.shortestRetentionHome([B, A], withB), 'the shorter home listed first').toBe(B);
+    expect(libExport.shortestRetentionHome([A, C, B], three), 'a tie goes to the first listed').toBe(C);
+    expect(libExport.shortestRetentionHome([B, C, A], three)).toBe(B);
+    expect(libExport.shortestRetentionHome([A], withB)).toBe(A);
+    expect(libExport.shortestRetentionHome([], withB), 'no containing home: nothing to age the file against').toBeNull();
+    expect(libExport.shortestRetentionHome([A, C], { [A]: 180 }), 'a home never measured reads as the 30-day default').toBe(C);
+  });
 });
 
 // ===========================================================================
@@ -6525,6 +6537,11 @@ describe("R-token-comments: a token file's # lines are not secret values (D-4587
     expect(libRedact.extractSecretValues(`${v1}\n${v2}\n`, 'token')).toEqual([v1, `${v1}\n${v2}`]);
     expect(libRedact.extractSecretValues(`# note\n\n${v1}\n# mid\n${v2}\n`, 'token')).toEqual([v1, `${v1}\n${v2}`]);
     expect(libRedact.extractSecretValues(`${v1}\n`, 'token')).toEqual([v1]);
+    // H-151: every kind of whitespace goes from the first value, an inner tab or no-break space as a space; the
+    // no-break space is written through fromCharCode so no literal escape is decoded.
+    const nbsp = String.fromCharCode(0xa0);
+    expect(libRedact.extractSecretValues(`  ${v1}\t${v2}\n`, 'token')).toEqual([`${v1}${v2}`, `${v1}\t${v2}`]);
+    expect(libRedact.extractSecretValues(`${v1}${nbsp}${v2}\n`, 'token')).toEqual([`${v1}${v2}`, `${v1}${nbsp}${v2}`]);
   });
   it('the env and json kinds are unchanged: the same text yields nothing', () => {
     const file = `${preamble()}${rndHexRtc(32)}\n`;

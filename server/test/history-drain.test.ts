@@ -2607,9 +2607,10 @@ describe('DM48: a fork as the box runs it, its copied rows one entry each with a
     transcriptIn(box.homes[0]!, 'demo', U2, `${row(U2, R1, null, 1)}\n${row(U2, R2, R1, 2)}\n${row(U2, R3, R2, 3)}\n`);
     setReg(box, ID, 'generation', G1); setReg(box, ID, 'project', 'demo');
     const memberships = (): number => rowsOf<{ n: number }>(box, 'SELECT count(*) AS n FROM memberships')[0]!.n;
-    // The parent runs first, as on a box: its startup line drains and its transcript is ingested while .uuid names it. (A
-    // tick hints the files of the epochs and the reg a draining file names as it stood BEFORE that tick's drain, so a
-    // parent whose line drains in the fork's own tick would never be read until a scan.)
+    // The parent runs first, as on a box: its startup line drains and its transcript is ingested while .uuid names it.
+    // (hintedUuids runs inside ingestTick after drainSpool and lists only files still held in .draining, so a line drained
+    // and unlinked this tick hints nothing until its next hint or the periodic scan: H-94, B1's accepted drain-then-hint
+    // lag. A parent whose line drains in the fork's own tick would be read only at a scan.)
     setReg(box, ID, 'uuid', U1);
     spool(box.home, ID, start(ID, U1, 'startup', { reg: U1, gen: G1 }));
     for (let i = 0; i < 6 && memberships() < 2; i += 1) expect(runSweep(box).code).toBe(0);

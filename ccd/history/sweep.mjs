@@ -55,7 +55,7 @@ import {
   decideBelt, beltAfterGeneration, BELT_VERSION, beltWitnessMoved,
   REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES,
   REASONS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker, parseOpVerbArgs, BIND_KINDS, paneReadWanted,
-  HARNESS_TABLE, exportDates, dueTranscriptKeys, planExport, retentionLowered, parseJournalRecord,
+  HARNESS_TABLE, exportDates, dueTranscriptKeys, shortestRetentionHome, planExport, retentionLowered, parseJournalRecord,
   decideRecallOff, recallOffPath, decideReparse, REPARSE_MAX_TARGETS, planCopy, STORE_DB_REL,
   diffForeignKeys, ftsTablesHealthy, FTS_REBUILD_STEP, decideCounterResets, decideIntegrity,
   RECOVER_PHASES, RECOVER_JOURNAL_PHASES, formatRecoverCursor, parseRecoverCursor, orderJournalFiles, indexRecord, replayStep, nextUnmovedTicks, HEALTH_META,
@@ -5342,18 +5342,25 @@ export function writeOpMarker(P, verb, nowMs) {
   writeFileAtomic(P.op, `${verb} ${process.pid} ${nowMs}\n`, 0o600);
 }
 
-/** The rostered home whose projects/ tree holds a path — by the resolved path, and by the spelled one for a
- *  file already gone — or null when none does (§5.2: only rostered roots are read). */
-export function homeOfPath(p, homes) {
+/** Every rostered home whose projects/ tree holds a path, in roster order — by the resolved path, and by the spelled
+ *  one for a file already gone. Two homes whose projects/ resolve to one real tree both hold it. */
+export function homesOfPath(p, homes) {
   let real = p;
   try { real = realpathSync(p); } catch { /* gone: the spelled path decides */ }
+  const out = [];
   for (const h of homes) {
     const spelled = join(h, 'projects');
     let root = spelled;
     try { root = realpathSync(spelled); } catch { /* an unmade projects/ holds nothing */ }
-    if (real.startsWith(`${root}/`) || p.startsWith(`${spelled}/`)) return h;
+    if (real.startsWith(`${root}/`) || p.startsWith(`${spelled}/`)) out.push(h);
   }
-  return null;
+  return out;
+}
+
+/** The first rostered home whose projects/ tree holds a path, or null when none does (§5.2: only rostered roots are
+ *  read). Ingest admission asks this; the export census asks `homesOfPath` and takes the shortest (D-4612). */
+export function homeOfPath(p, homes) {
+  return homesOfPath(p, homes)[0] ?? null;
 }
 
 /** A verdict line queued in the outbox, inside the caller's transaction (§9.14). */
@@ -5907,7 +5914,7 @@ function stepCursorDone(db, step, state, nowMs) {
  *  history-export-holding-files-by-transcript: it can err early or late; the per-row set is W1-B4's). A retired or exported row is a file known gone (§9.2, §9.15); a recorded
  *  mtime stands in for a file that no longer stats. ns columns are divided in SQL, so no value past 2^53
  *  reaches JavaScript. */
-function transcriptFiles(db, homes) {
+function transcriptFiles(db, homes, homeDays) {
   const byTranscript = new Map();
   const st = db.prepare('SELECT f.transcript_pk, f.source_key, f.mtime_ns / 1000000 AS mtime_ms, p.path '
     + 'FROM ingest_files f LEFT JOIN file_paths p ON p.file_id = f.file_id');
@@ -5922,7 +5929,9 @@ function transcriptFiles(db, homes) {
       } catch { present = false; }
     }
     const files = byTranscript.get(r.transcript_pk) ?? [];
-    files.push({ home: r.path === null ? null : homeOfPath(r.path, homes), mtimeMs, present });
+    // D-4612 (history-export-file-home-shortest-of-containing): a file under several rostered homes reads against the
+    // shortest, not the first listed; null (no home holds it) reads against the shortest of all in filesOf.
+    files.push({ home: r.path === null ? null : shortestRetentionHome(homesOfPath(r.path, homes), homeDays), mtimeMs, present });
     byTranscript.set(r.transcript_pk, files);
   }
   return byTranscript;
@@ -5970,7 +5979,7 @@ export function exportCensus(db, nowMs, budget) {
   const homes = Object.keys(state.homeDays);
   const minDays = Math.min(...Object.values(state.homeDays));
   const minHome = homes.find((h) => state.homeDays[h] === minDays);
-  const files = transcriptFiles(db, homes);
+  const files = transcriptFiles(db, homes, state.homeDays);
   /** A transcript's holding files as lib's ExportFile; a file under no rostered home reads against the shortest. */
   const filesOf = (pk) => (files.get(pk) ?? []).map((f) => ({ home: f.home ?? minHome, mtimeMs: f.mtimeMs, present: f.present }));
   // Every transcript, a file-less one included (no clock: due at once), through the default rule.

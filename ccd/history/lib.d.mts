@@ -86,6 +86,7 @@ export type SpoolEvent = 'Stop' | 'PostCompact' | 'SessionStart' | 'recall' | 's
 export const SPOOL_EVENTS: readonly SpoolEvent[];
 export type SpoolSource = 'startup' | 'resume' | 'clear' | 'fork';
 export const SPOOL_SOURCES: readonly SpoolSource[];
+export const SPOOL_NODE_KINDS: string;
 export type EpochCause = 'startup' | 'resume' | 'clear' | 'import' | 'fork';
 export const EPOCH_CAUSES: readonly EpochCause[];
 export type DeclaredBy = 'hook' | 'registry' | 'journal' | 'operator';
@@ -311,6 +312,7 @@ export function claudeCodeRetention(i: { home: Readable; managed: readonly Reada
 export const HARNESS_TABLE: Readonly<{ 'claude-code': Readonly<{ retention: typeof claudeCodeRetention }> }>;
 export const HARNESSES: readonly string[];
 export function shortestRetention(homeRetentionDays: Readonly<Record<string, number>>): number;
+export function shortestRetentionHome(containing: readonly string[], homeRetentionDays: Readonly<Record<string, number>>): string | null;
 export interface ExportFile { home: string; mtimeMs: number; present: boolean }
 export interface ExportCandidate { tsMs: number | null; files: readonly ExportFile[] }
 /** A candidate's due TIME, in ms since the epoch: due exactly when it is before now; `-Infinity` when nothing holds

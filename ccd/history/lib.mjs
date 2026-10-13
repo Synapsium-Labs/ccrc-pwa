@@ -251,10 +251,15 @@ export const SPOOL_EVENTS = Object.freeze(['Stop', 'PostCompact', 'SessionStart'
 /** The SessionStart sources that spool (ruled Q2), and `fork` from W1-B2 (ruled Q16, D-4734 (history-fork-spooled),
  *  reversing D-4173). A fork epoch needs no migration: `epochs.cause` is TEXT with no CHECK
  *  in schema v1, and EPOCH_CAUSES (below) has held `fork` since W1-B1 (D-4342).
- *  THE ROLLBACK EDGE (§6.1): a W1-B1 build's drain rejects a spooled fork line (spool_line_rejected), and that fork
- *  falls back to its registry backfill. Because W1-B1 merged with `fork` in EPOCH_CAUSES, a rolled-back build reads a
- *  fork epoch's journal record and a waiting fork candidate's verdict as valid; only this spool-line part remains. */
+ *  THE ROLLBACK EDGE (§6.1): a W1-B1 build's drain rejects a spooled fork line (spool_line_rejected), its journal
+ *  reader skips that line's `spool` record as malformed (journal_line_malformed; doctor WARN journal-record-skipped,
+ *  §9.14), and that fork falls back to its registry backfill. Because W1-B1 merged with `fork` in EPOCH_CAUSES, a
+ *  rolled-back build reads a fork epoch's journal `verdict` record and a waiting fork candidate's verdict as valid;
+ *  only this spool-line part remains. */
 export const SPOOL_SOURCES = Object.freeze(['startup', 'resume', 'clear', 'fork']);
+/** The non-regular nodes a planted `spool/<id>.jsonl` can be, in the one wording status's `spool-planted` detail and
+ *  README's spool paragraph both carry (H-137: history-skill.test.ts pins README against this). */
+export const SPOOL_NODE_KINDS = 'a FIFO, a link, a directory or any other non-regular node';
 /** D-4342 (history-epoch-causes-widened-for-rollback): 'fork' is vocabulary only. B1 still spools no fork (D-4173);
  *  W1-B2 does (Q16), and a box rolled back from B2 can hold a fork candidate whose verdict this build must read back. */
 export const EPOCH_CAUSES = Object.freeze(['startup', 'resume', 'clear', 'import', 'fork']);
@@ -1540,7 +1545,7 @@ export const SECRET_SOURCES = Object.freeze([
   Object.freeze({ path: '.ccrc/sessions.json', sessionHashes: true }),
 ]);
 
-/** A secret file's kind by its name: `*.token` its trimmed content, `*.json`
+/** A secret file's kind by its name: `*.token` its value line (D-4587), `*.json`
  *  its string leaves, anything else (`*.env`, a declared `secretsFile`, which
  *  its wrapper sources as bash) an env file. */
 export function kindOfPath(p) {
@@ -1602,7 +1607,8 @@ function envValue(raw) {
  *  file yields each `[export ]NAME=value` line's VALUE, never its name, so a
  *  23-char key name is never redacted; `env-identifier` yields only values
  *  whose NAME matches `IDENTIFIER_RE` or `ENV_SECRET_NAME_RE` (`ccrc.env`,
- *  `agent.env`); a token file its value line (blank and `#` lines dropped; D-4587
+ *  `agent.env`); a token file the value line with its whitespace removed (a) and, when it differs, the
+ *  remaining lines joined (b) (whole blank and `#` lines dropped; D-4587
  *  (history-token-file-comments-not-values)); a JSON file its
  *  string leaves. D-4206
  *  D-4204 */
@@ -2451,6 +2457,22 @@ export function shortestRetention(homeRetentionDays) {
   return v.length === 0 ? CLAUDE_CODE_DEFAULT_RETENTION_DAYS : Math.min(...v);
 }
 
+/** The home a file's due date is read against when several rostered homes' `projects/` trees contain it (two homes
+ *  whose `projects/` resolve to one real tree): the one with the SHORTEST retention, the first listed on a tie, and
+ *  null when none contains it. The home that deletes the file soonest is the one the export must beat, so a roster that
+ *  lists a longer home first can no longer push the due date past the shorter home's deletion. A home with no measured
+ *  retention reads as Claude Code's 30-day default, as `fileDueMs` does.
+ *  D-4612 (history-export-file-home-shortest-of-containing) */
+export function shortestRetentionHome(containing, homeRetentionDays) {
+  let best = null;
+  let bestDays = Infinity;
+  for (const h of containing) {
+    const days = homeRetentionDays[h] ?? CLAUDE_CODE_DEFAULT_RETENTION_DAYS;
+    if (days < bestDays) { best = h; bestDays = days; }
+  }
+  return best;
+}
+
 /** The reducers `planExport` may take (§9.15). A reducer answers, for one candidate row, the time in ms since the
  *  epoch at which it falls due: the row is due exactly when that time is before now, and `-Infinity` means nothing
  *  holds it back. B1's reducers answered a retention in days against one row clock, which the per-copy rule cannot
@@ -3154,7 +3176,7 @@ export function deriveHealth(h) {
   if (h.spoolNotDirectory || h.spoolNodesRefused > 0 || h.spoolDisplaced + h.spoolBlocked + h.spoolUnreadable > 0) {
     const parts = [];
     if (h.spoolNotDirectory) parts.push('spool/ is not a real directory (a link or a file stands there), so no hook spools a line and no pass drains one while it stands');
-    if (h.spoolNodesRefused > 0) parts.push(`${h.spoolNodesRefused} node(s) at spool/<id>.jsonl are not regular files (a FIFO, a link, a directory or any other non-regular node), so the hook spools no line for that id while one stands`);
+    if (h.spoolNodesRefused > 0) parts.push(`${h.spoolNodesRefused} node(s) at spool/<id>.jsonl are not regular files (${SPOOL_NODE_KINDS}), so the hook spools no line for that id while one stands`);
     if (h.spoolDisplaced + h.spoolBlocked > 0) parts.push(`${h.spoolDisplaced} spool file(s) set aside under .draining/planted/ and ${h.spoolBlocked} skipped drain(s) of a file whose sidecar name is blocked, because of entries planted in .draining/`);
     if (h.spoolUnreadable > 0) parts.push(`${h.spoolUnreadable} skipped drain(s) of a draining file or its sidecar the sweep could not read, whose id's later files wait behind it`);
     warn.push(item('spool-planted', parts.join('; ')));

@@ -248,15 +248,8 @@ describe('third-party code: the lossless-claw MIT notice travels with the copied
     // Liveness: a walk that marked nothing would pass both directions.
     expect(marked.size, 'no file under ccd/ carries a "derived from lossless-claw" comment').toBeGreaterThan(0);
     for (const d of marked) expect(existsSync(join(REPO, d, SIDECAR)), `${d}/ holds copied material and no ${SIDECAR}`).toBe(true);
-    const sidecars: string[] = [];
-    const find = (dir: string): void => {
-      for (const e of readdirSync(join(REPO, dir), { withFileTypes: true })) {
-        if (e.name === 'node_modules' || e.name === '.git') continue;
-        if (e.isDirectory()) find(`${dir}/${e.name}`);
-        else if (e.name === SIDECAR) sidecars.push(dir);
-      }
-    };
-    find('ccd');
+    // The same walk as the cases above (H-128): a skip rule added to it reaches this direction too.
+    const sidecars = sidecarFiles().map((f) => path.dirname(f));
     for (const d of sidecars) expect(marked.has(d), `${d}/${SIDECAR} covers nothing marked as copied`).toBe(true);
   });
 
