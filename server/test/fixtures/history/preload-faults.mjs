@@ -392,7 +392,8 @@ import { DatabaseSync as DatabaseSyncR21 } from 'node:sqlite';
 //   keys off, then turn them back on: a violation that appears after the job's baseline and before its
 //   completion, which only the completion's baseline diff can see.
 // HISTORY_TEST_INTEGRITY=<text>: `PRAGMA integrity_check` answers one row holding <text> instead of 'ok'; a <text> beginning
-//   `throw:` makes the pragma's `.all` throw an Error whose message is the rest (a vtab whose own tables are gone, D-4591).
+//   `throw:` makes the pragma's `.all` throw an Error whose message is the rest (a vtab whose own tables are gone, D-4591); one
+//   beginning `throw-busy:` throws that Error with errcode 5 (SQLITE_BUSY), the shape sweep.mjs's isBusy reads (HB2 H-82).
 // All three patch DatabaseSync.prototype.prepare on top of whatever an earlier block installed.
 import { DatabaseSync as DatabaseSyncR23 } from 'node:sqlite';
 {
@@ -409,9 +410,13 @@ import { DatabaseSync as DatabaseSyncR23 } from 'node:sqlite';
       const text = String(sql);
       const conn = this;
       if (integrityR23 !== '' && /PRAGMA\s+integrity_check/i.test(text)) {
-        st.all = integrityR23.startsWith('throw:')
-          ? () => { throw new Error(integrityR23.slice('throw:'.length)); }
-          : () => [{ integrity_check: integrityR23 }];
+        if (integrityR23.startsWith('throw-busy:')) {
+          st.all = () => { throw Object.assign(new Error(integrityR23.slice('throw-busy:'.length)), { errcode: 5 }); };
+        } else {
+          st.all = integrityR23.startsWith('throw:')
+            ? () => { throw new Error(integrityR23.slice('throw:'.length)); }
+            : () => [{ integrity_check: integrityR23 }];
+        }
         return st;
       }
       if (fkInjectR23 !== '' && text.includes(fkInjectR23)) {

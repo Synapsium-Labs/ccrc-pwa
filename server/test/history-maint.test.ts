@@ -10,7 +10,7 @@
 // reads that record as absent. No case here has a TTY; the TTY rows are Task 30's.
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
@@ -152,6 +152,43 @@ describe.skipIf(process.platform === 'darwin')('O54 (relay half): the CLI and th
     expect(j.stdout.trim().split('\n'), 'stdout is the envelope alone').toHaveLength(1);
     expect(j.json).toMatchObject({ exit: 0, coverage: 'this-box' });
     expect(j.stderr).toContain('line one\nline two\n');
+  }, HEAVY);
+
+  /** A door run with its stdout pipe destroyed on this side at once, as `| head -1` closes it: every write the child makes
+   *  to stdout after that is EPIPE. Resolves with the child's exit and its stderr. */
+  function closedStdout(box: HistoryBox, file: string, argv: string[], opts: { lateExit?: boolean } = {}): Promise<{ code: number | null; stderr: string }> {
+    // `lateExit` defers process.exit by 300 ms, so a loop turn follows the last write: the turn in which a failed write's
+    // 'error' is emitted, as it is when the op's output is spread over several turns.
+    const late = path.join(box.home, 'late-exit.mjs');
+    fs.writeFileSync(late, 'const exit = process.exit.bind(process);\nprocess.exit = (c) => { setTimeout(() => exit(c), 300); };\n');
+    const env = { ...box.env, HISTORY_TEST_STATFS: 'plenty', NODE_OPTIONS: preloadOptions([PRELOADS.statfs, ...(opts.lateExit === true ? [late] : [])]) };
+    return new Promise((resolve) => {
+      const child = spawn(file, argv, { env, cwd: box.home, stdio: ['ignore', 'pipe', 'pipe'] });
+      let stderr = '';
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', (d: string) => { stderr += d; });
+      child.stdout.destroy();
+      const guard = setTimeout(() => { child.kill('SIGTERM'); }, HEAVY - 20_000);
+      child.on('close', (code) => { clearTimeout(guard); resolve({ code, stderr }); });
+    });
+  }
+
+  it('D-4600 (H-34): a closed stdout pipe does not crash the CLI, and the sweep\'s result is still relayed as its exit', async () => {
+    const box = boundBox('ccrc-hist-d4600a-');
+    stubShim(box, { stdout: `${'relayed line\n'.repeat(2000)}{"rc":2,"reason":"adopt-refused"}\n`, exit: 2 });
+    const r = await closedStdout(box, process.execPath, ['--no-warnings', CLI, 'doctor', '--backup']);
+    expect(r.stderr, 'no unhandled EPIPE and no stack').not.toMatch(/EPIPE|node:events/);
+    expect(r.code, r.stderr).toBe(2);
+    expect(r.stderr).toMatch(/^ccrc history doctor: refused: adopt-refused; /m);
+    expect(stubArgv(box), 'the shim ran to its end: its result was drained').toEqual(['--op backup']);
+  }, HEAVY);
+
+  it('D-4600 (H-34): the direct door survives a closed stdout pipe and exits with its own rc', async () => {
+    const box = boundBox('ccrc-hist-d4600b-');
+    const r = await closedStdout(box, 'bash', [path.join(box.home, '.local', 'bin', 'ccd-history-sweep'), '--op', 'backup'], { lateExit: true });
+    expect(r.stderr, 'no unhandled EPIPE and no stack').not.toMatch(/EPIPE|node:events/);
+    expect(r.code, r.stderr).toBe(0);
+    expect(maintNames(historyPaths(box.home).backups), 'the backup was made').toHaveLength(1);
   }, HEAVY);
 
   it('every non-zero line an operator verb prints names the operator, whatever stopped it (R-X-OPERATOR)', () => {
@@ -1790,6 +1827,33 @@ describe('doctor --repair: integrity, the foreign-key baseline, the resumable FT
     expect(maintMeta(box, 'fts')).toBe('ready');
   }, HEAVY);
 
+  // HB2 H-76: the cursor's baseline is read element by element too. `[null]` passed the Array check, and ftsRebuildJob's completion
+  // then threw a TypeError inside its transaction, so every repair exited 1 and grep stayed at fts-pending. A rebuild version no Date
+  // can hold made the resume line throw a RangeError instead.
+  it('H-76: a baseline holding a non-row restarts the rebuild at its start phase, and a version no Date holds is printed as an unrecorded time', async (ctx) => {
+    const box = healable('ccrc-hist-h76-');
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();
+    plantStale(box);
+    const START = { version: 1, state: { phase: 'start', blobId: 0, baseline: null, undecodable: 0 } };
+    const db = new DatabaseSync(dbFile(box));
+    try {
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('fts-rebuild', 1, ?, NULL)")
+        .run('{"phase":"merge","blobId":1,"baseline":[null],"undecodable":0}');
+      expect(openFtsRebuild(db), 'a baseline of [null] reads as the start').toEqual(START);
+      db.prepare("UPDATE derivation_state SET cursor = ? WHERE step = 'fts-rebuild'").run('{"phase":"merge","blobId":1,"baseline":[[]],"undecodable":0}');
+      expect(openFtsRebuild(db), 'a baseline of [[]] reads as the start').toEqual(START);
+      db.prepare("UPDATE derivation_state SET cursor = ? WHERE step = 'fts-rebuild'").run('{"phase":"merge","blobId":1,"baseline":[],"undecodable":0}');
+      expect(openFtsRebuild(db)?.state.phase, 'CONTROL: an empty baseline is a baseline').toBe('merge');
+      db.prepare("UPDATE derivation_state SET cursor = ?, version = ? WHERE step = 'fts-rebuild'").run('{"phase":"merge","blobId":1,"baseline":[null],"undecodable":0}', 8_700_000_000_000_000);   // above a Date's range, still a safe integer
+    } finally { db.close(); }
+    const r = await maintPty(box, 'shim', ['--op', 'repair']);
+    expect(r.code, r.out).toBe(0);
+    expect(lastResult(r.out)).toEqual({ rc: 0 });
+    expect(r.out).toMatch(/history-sweep: repair: resuming the index rebuild started at an unrecorded time at its start phase/);
+    expect(maintMatch(box, 'staleword'), 'the rebuild dropped what the store does not hold').toBe(0);
+    expect(maintMeta(box, 'fts')).toBe('ready');
+  }, HEAVY);
+
   // HB1 H-71: the displaced and blocked counts of the repair's re-measure. The spawned repair test plants an empty planted area and
   // no blocked file, so both measure 0 there, and a measure fixed at 0 would reset a standing counter (D-4723 forbids).
   it('H-71: the spool re-measure counts a displaced file in an area and a draining file whose .obs name holds a directory', () => {
@@ -1869,6 +1933,9 @@ describe('doctor --repair: integrity, the foreign-key baseline, the resumable FT
     expect(r.code, r.out).toBe(0);
     expect(lastResult(r.out)).toEqual({ rc: 0 });
     expect(r.out).toContain(`history-sweep: integrity_check: ${row} (index damage: the rebuild replaces it)`);
+    // HB2 H-81: the lead of the summary line follows the verdict, so rows listed as damage are never followed by "integrity_check ok".
+    expect(r.out, 'the verdict was index damage, not ok').not.toContain('integrity_check ok');
+    expect(r.out).toMatch(/history-sweep: repair: integrity_check: index damage only \(listed above\); 0 foreign-key violation\(s\) already present, kept as the baseline/);
     expect(rebuilds(box).map((x) => x.completed_ms !== null), 'the rebuild ran to its end').toEqual([true]);
     expect(maintMatch(box, 'staleword'), 'a whole rebuild leaves no term the store does not hold').toBe(0);
     expect(maintMatch(box, 'zebrafish'), 'and re-indexes what it does hold').toBe(1);
@@ -1915,6 +1982,78 @@ describe('doctor --repair: integrity, the foreign-key baseline, the resumable FT
     expect(r.out).toContain('ccrc history doctor --restore <file>');
     expect(rebuilds(box)).toEqual([]);
   }, HEAVY);
+
+  // HB2 H-80: the refusal's cause is what was measured. A throw out of integrity_check on a store whose FTS tables all stand (a disk
+  // I/O error, say) has no FTS cause, so the line must not claim one; a store whose FTS table is missing keeps it.
+  it('H-80: an integrity_check that cannot run on a store whose FTS tables stand says its integrity is unmeasured, not that an FTS table is missing', async (ctx) => {
+    const box = healable('ccrc-hist-h80a-');
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();
+    const r = await maintPty(box, 'shim', ['--op', 'repair'], {
+      preloads: [PRELOADS.statfs, PRELOADS.faults],
+      env: { HISTORY_TEST_INTEGRITY: 'throw:disk I/O error' },
+    });
+    expect(r.code, r.out).toBe(2);
+    expect(lastResult(r.out)).toEqual({ rc: 2, reason: 'repair-refused' });
+    expect(r.out).toContain('history-sweep: integrity_check could not run: disk I/O error');
+    expect(r.out, 'no FTS table is missing, so none is blamed').not.toContain('an FTS index whose own tables are missing');
+    expect(r.out).toContain("PRAGMA integrity_check could not run, so the store's integrity is unmeasured and no rebuild starts");
+    expect(r.out).toContain('ccrc history doctor --restore <file>');
+    expect(rebuilds(box)).toEqual([]);
+  }, HEAVY);
+
+  it('H-80, CONTROL: the same throw with an FTS shadow table really missing keeps the FTS cause', async (ctx) => {
+    const box = healable('ccrc-hist-h80b-');
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();
+    let raw: DatabaseSync | null = null;
+    try {
+      raw = new DatabaseSync(historyPaths(box.home).dbFile, { defensive: false });
+      raw.exec('DROP TABLE nodes_fts_content');
+    } catch {
+      try { raw?.close(); } catch { /* nothing to close */ }
+      ctx.skip();                                  // a node:sqlite with no defensive option (the 22.16 floor) cannot plant it
+    }
+    raw!.close();
+    const r = await maintPty(box, 'shim', ['--op', 'repair'], {
+      preloads: [PRELOADS.statfs, PRELOADS.faults],
+      env: { HISTORY_TEST_INTEGRITY: 'throw:SQL logic error' },
+    });
+    expect(r.code, r.out).toBe(2);
+    expect(lastResult(r.out)).toEqual({ rc: 2, reason: 'repair-refused' });
+    expect(r.out).toContain('an FTS index whose own tables are missing cannot be opened, dropped or rebuilt by a repair');
+    expect(r.out).not.toContain("the store's integrity is unmeasured");
+  }, HEAVY);
+
+  // HB2 H-82: isBusy's rethrow in repairOp's catch. The seam's plain Error carries no errcode, so no case reached it; `throw-busy:` throws
+  // one with errcode 5 (SQLITE_BUSY), which must propagate to the operator pass's own handler (exit 1 internal error here), never read as a refusal.
+  it('H-82: an integrity_check that throws SQLITE_BUSY propagates to the pass (exit 1), never repair-refused, and rebuilds nothing', async (ctx) => {
+    const box = healable('ccrc-hist-h82-');
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();
+    const r = await maintPty(box, 'shim', ['--op', 'repair'], {
+      preloads: [PRELOADS.statfs, PRELOADS.faults],
+      env: { HISTORY_TEST_INTEGRITY: 'throw-busy:database is locked' },
+    });
+    expect(r.code, r.out).toBe(1);
+    expect(lastResult(r.out)).toEqual({ rc: 1 });
+    expect(r.out, 'the busy throw reached the pass\'s own handler').toContain('internal error: database is locked');
+    expect(r.out, 'a busy store is not a refusal').not.toContain('repair-refused');
+    expect(r.out).not.toContain('an FTS index whose own tables are missing');
+    expect(rebuilds(box), 'no rebuild was registered').toEqual([]);
+  }, HEAVY);
+
+  // HB2 H-81, the !prep.tables arm: an index verdict on a Node without FTS5 lists the rows as damage, so its summary does not lead with "ok".
+  it('H-81: on a Node without FTS5, index damage rows are followed by "index damage only", not "integrity_check ok"', async (ctx) => {
+    const box = healable('ccrc-hist-h81-');
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();
+    const row = 'malformed inverted index for FTS5 table main.blobs_fts';
+    const r = await maintPty(box, 'shim', ['--op', 'repair'], {
+      preloads: [PRELOADS.statfs, PRELOADS.faults],
+      env: { HISTORY_TEST_INTEGRITY: row, HISTORY_TEST_FTS_PROBE: 'absent' },
+    });
+    expect(lastResult(r.out), r.out).toEqual({ rc: 0 });
+    expect(r.out).toContain(`history-sweep: integrity_check: ${row} (index damage: the rebuild replaces it)`);
+    expect(r.out).not.toContain('integrity_check ok');
+    expect(r.out).toMatch(/history-sweep: repair: integrity_check: index damage only \(listed above\); 0 foreign-key violation\(s\) present; FTS5 is fts5-absent on this Node/);
+  }, HEAVY);
 });
 
 // ── W1-B2 Task 30: C64, every writing form through both doors ───────────────────────────────────────────────
@@ -1923,7 +2062,9 @@ describe('doctor --repair: integrity, the foreign-key baseline, the resumable FT
 // §5.1). Each runs on a piped stdin or under a REAL terminal (node-pty; the TTY gate has no seam, §10.1). A refusal
 // writes nothing, measured as a snapshot of ~/.ccrc. The table also holds the `recovering` refusal, decided by the
 // same gate while a recovery step is registered (D-4698 (history-ops-refused-while-recovering)). Every name this
-// block adds is prefixed gt/GT_, and it reuses Task 19's ID, U1, G1, SLUG, boundBox, snapshot and lastResult.
+// block adds is prefixed gt/Gt/GT_ (gtBox, gtRun, GtForm, GtDoor, GtAnswer, GT_FORMS ...), and it reuses Task 19's ID, U1, G1,
+// boundBox, snapshot and lastResult, plus the helpers above it: maintPty, maintRecovering, withPane and seedFamily (through
+// gtBox). SLUG is not used here: seedFamily plants SEED_SLUG.
 /** The name every restore row names: B1 Task 28's remedy fixture spelling, a bare <ts>.db under db/backups/. */
 const GT_BACKUP = '20261001T000000Z.db';
 /** Every word decideOpGate refuses a valid form with: §8.4's four speed bumps, and `recovering` while a recovery step
@@ -1978,24 +2119,38 @@ function gtCliResult(text: string): { exit: number; reason?: string } {
 
 interface GtAnswer { code: number; reason: string | undefined; raw: string }
 /** One form through one door, on a pipe (`terminal` false) or a real terminal. The CLI door is read from its --json
- *  envelope, and the direct door from its {rc, reason} line. */
+ *  envelope: on a pipe, stdout's last line (`runCli(...).json`, so an envelope that regressed onto stderr is red); under a
+ *  terminal, which merges the streams, the last envelope-shaped line. The direct door is read from its {rc, reason} line.
+ *  Both doors also assert the process's own exit status against what the answer says (H-121, H-122): it is the rc. */
 async function gtRun(box: HistoryBox, f: GtForm, door: GtDoor, terminal: boolean, env: Record<string, string>, file: string): Promise<GtAnswer> {
   if (door === 'cli') {
     const args = [...f.cli(file), '--json'];
-    let raw: string;
     if (terminal) {
-      raw = (await maintPty(box, 'cli', args, { env })).out;
-    } else {
-      const r = runCli(box, args, { env });
-      raw = `${r.stdout}${r.stderr}`;
+      const p = await maintPty(box, 'cli', args, { env });
+      const a = gtCliResult(p.out);
+      expect(p.code, `the process exits with the envelope's exit\n${p.out}`).toBe(a.exit);
+      return { code: a.exit, reason: a.reason, raw: p.out };
     }
-    const a = gtCliResult(raw);
+    const r = runCli(box, args, { env });
+    const raw = `${r.stdout}${r.stderr}`;
+    const a = gtPipedEnvelope(r, raw);
     return { code: a.exit, reason: a.reason, raw };
   }
   const args = f.op(file);
-  const raw = terminal ? (await maintPty(box, 'shim', args, { env })).out : runShim(box, args, { env }).stdout;
+  const run = terminal ? await maintPty(box, 'shim', args, { env }) : runShim(box, args, { env });
+  const raw = terminal ? (run as { out: string }).out : (run as { stdout: string }).stdout;
   const a = lastResult(raw) as { rc: number; reason?: string };
+  expect(run.code, `the process exits with the rc it printed\n${raw}`).toBe(a.rc);
   return { code: a.rc, reason: a.reason, raw };
+}
+/** The piped CLI's envelope: stdout's last line (H-122), whose `exit` is the process's own exit status. */
+function gtPipedEnvelope(r: { code: number | null; json: Record<string, unknown> | null }, raw: string): { exit: number; reason?: string } {
+  expect(r.json, `the --json envelope is stdout's last line\n${raw}`).not.toBeNull();
+  const exit = r.json!['exit'];
+  expect(typeof exit, `the envelope carries a numeric exit\n${raw}`).toBe('number');
+  expect(r.code, `the process exits with the envelope's exit\n${raw}`).toBe(exit);
+  const reason = r.json!['reason'];
+  return typeof reason === 'string' ? { exit: exit as number, reason } : { exit: exit as number };
 }
 
 describe('C64: every writing form, both doors (W1-B2 Task 30)', () => {
@@ -2085,7 +2240,8 @@ describe('C64: every writing form, both doors (W1-B2 Task 30)', () => {
   it('a registered recovery step, on a real terminal: every form but restore and rebuild answers recovering at both doors; restore and rebuild pass the gate and meet their own preconditions; nothing is written', async () => {
     const { box, file } = gtBox('ccrc-hist-c64v-');
     // What a restore or a rebuild leaves (§9.14): an open ('recover', <bind ms>) row, planted by Task 20's helper; no
-    // scheduled pass runs after it, so the step itself never starts and the store stays as gtBox left it.
+    // scheduled pass runs after it, so the step itself never starts and the store stays as gtBox left it. The snapshot
+    // holds because gtBox's passes already drained the spool, so the refusals have nothing to journal (H-36's class).
     maintRecovering(box);
     // A bound store with a DB and no such backup: restore and rebuild, which the gate lets through, meet their own
     // refusals under the lock. The store is bound (store.id present) and at the code's version, so adopt and migrate
@@ -2100,6 +2256,22 @@ describe('C64: every writing form, both doors (W1-B2 Task 30)', () => {
       }
     }
   }, 2.5 * HEAVY);
+
+  // H-120: the CLI's own irreversible-in-pane pre-check. C64's pane row above runs the REAL shim, whose sweep refuses the same
+  // way, so a CLI door that never read the pane stayed green. A stand-in shim that answers rc 0 makes the CLI's refusal the only one
+  // there is: it must refuse in the pane without spawning the shim, and the same run outside a pane must reach the stand-in.
+  it('H-120: the CLI door refuses an irreversible form in a cc- pane itself, and spawns nothing; outside a pane it reaches the shim', async () => {
+    const box = boundBox('ccrc-hist-c64p-');
+    stubShim(box, { stdout: '{"rc":0}\n', exit: 0 });
+    const pane = withPane(box, ID);
+    const refused = await maintPty(box, 'cli', ['doctor', '--adopt', '--json'], { env: pane });
+    expect(gtCliResult(refused.out), refused.out).toEqual({ exit: 2, reason: 'irreversible-in-pane' });
+    expect(refused.code, refused.out).toBe(2);
+    expect(stubArgv(box), 'the CLI refused before it spawned the shim').toBeNull();
+    const open = await maintPty(box, 'cli', ['doctor', '--adopt', '--json']);
+    expect(gtCliResult(open.out), `CONTROL: outside a pane the same run passes every bump\n${open.out}`).toEqual({ exit: 0 });
+    expect(stubArgv(box), 'CONTROL: and reaches the stand-in').toEqual(['--op adopt']);
+  }, HEAVY);
 
   it('every ccrc history command a HEALTH_REMEDIES text spells parses at the CLI door: under CLAUDECODE each operator form reaches the gate, and status runs', () => {
     const { box } = gtBox('ccrc-hist-c64r-');
@@ -2126,10 +2298,15 @@ describe('C64: every writing form, both doors (W1-B2 Task 30)', () => {
       if (args[0] === 'status') {
         const s = runCli(box, [...args.filter((a) => a !== '--json'), '--json']);
         expect(`${s.stdout}${s.stderr}`, cmd).not.toContain('bad-args');
+        // H-124: status runs: a --json envelope on stdout whose exit is the process's own, and not an internal error.
+        expect(s.json, `${cmd}: a --json envelope`).not.toBeNull();
+        expect(typeof s.json!['exit'], `${cmd}: a numeric exit`).toBe('number');
+        expect(s.code, cmd).toBe(s.json!['exit']);
+        expect(s.code, `${cmd}: not an internal error`).not.toBe(1);
         continue;
       }
       const r = runCli(box, [...args, '--json'], { env: { CLAUDECODE: '1' } });
-      expect(gtCliResult(`${r.stdout}${r.stderr}`), `ccrc history ${cmd}`).toEqual({ exit: 2, reason: 'apply-in-session' });
+      expect(gtPipedEnvelope(r, `${r.stdout}${r.stderr}`), `ccrc history ${cmd}`).toEqual({ exit: 2, reason: 'apply-in-session' });
     }
   }, HEAVY);
 });

@@ -3411,6 +3411,22 @@ export async function scheduledPass(parsed, deps, out) {
   }
 }
 
+/** D-4600 (history-operator-door-survives-a-closed-pipe): the default `out` writes the sweep's lines to stdout, and a reader
+ *  that has gone (`ccd-history-sweep --op … | head -1`) makes the next write an EPIPE 'error' event that, unhandled, kills the
+ *  pass mid-op (the store survives a crash; the operator loses the result). This swallows EPIPE alone (a write to a destroyed
+ *  stream is then dropped by Node), so the op runs to its end and its exit code stands, and rethrows any other stdout error. */
+let stdoutGuarded = false;
+function stdoutOut() {
+  if (!stdoutGuarded) {
+    stdoutGuarded = true;
+    process.stdout.on('error', (e) => {
+      if (e && e.code === 'EPIPE') return;
+      throw e;
+    });
+  }
+  return (line) => { process.stdout.write(`${line}\n`); };
+}
+
 /** The sweep's entry: argv as the shim passes it. Task 25 replaces the --op line with the --op pass. The
  *  home is `deps.home` when a caller injects one (in-process tests), else $HOME, and it must be absolute:
  *  Task 14's rule, kept, so no caller reaches a relative or empty home (integration contract 4). The umask is
@@ -3422,7 +3438,7 @@ export async function runPass(argv, deps = {}) {
     return EXIT.INTERNAL;
   }
   deps = { ...deps, home };
-  const out = deps.out ?? ((line) => { process.stdout.write(`${line}\n`); });
+  const out = deps.out ?? stdoutOut();
   const prevUmask = process.umask(0o077);
   try {
     const parsed = parseSweepArgv(argv);
@@ -3752,7 +3768,7 @@ function compressMissing(db, rows) {
   return blobs;
 }
 
-/** One chunk, ONE transaction (§9.2 step 5). It writes: blobs, insert-or-ignore by sha; entries,
+/** One chunk, ONE transaction (§9.2 step 5). It writes: blobs, insert-or-revive by sha (a tombstone gets its body back, a stored body is never rewritten; D-4589); entries,
  *  by the newest-rank upsert (history-structure-newest-rank, D-4238, DM4); memberships; variants with
  *  their cause (history-variant-cause, D-4200, DM2/DM2b); boundaries; the epoch's first-row facts; the
  *  counters; and THE CURSOR with its tail sha, so a throw anywhere leaves no row of the chunk and
@@ -4415,6 +4431,7 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
     const size = Number(st.size);
     if (size > SIDECAR_MAX_BYTES) { countSidecarTooLarge(db); return null; }   // grew between the lstat and the open (D-4310)
     let sha;
+    let make;   // the body to store, made only when no live blob holds this sha (D-4589's one probe, below)
     let z = null;
     // The index text comes from the bytes hashed and stored, never from a second read of the file: a rewrite between two
     // reads would index text the blob does not hold, and D-4344's re-derivation recomputes the stored blob's own text
@@ -4429,16 +4446,18 @@ export async function ingestSidecar(db, ctx, s, budget, cache) {
       const buf = readAt(a.fd, 0, size);
       if (buf.length < size) return null;                 // it shrank under the read: next tick
       sha = blobShaOfBytes(buf);
-      if (stmts(db).blobLive.get(sha) === undefined) z = brotli(buf);
+      make = () => brotli(buf);
       if (unindexed(sha)) text = sidecarIndexText(buf, ctx.pairIdx);
     } else {
       const c = await compressFdRange(a.fd, 0, size);
       if (c === null) return null;
       sha = c.sha;
-      if (stmts(db).blobLive.get(sha) === undefined) z = c.z;
+      make = () => c.z;
       // D-4312 (history-sidecar-redact-before-cut): the redaction window, decoded from the compressed bytes by the backfill's own bounded reader
       if (unindexed(sha)) text = (await ftsTextOfBlob(c.z, true, ctx.pairIdx, size)).text;
     }
+    // D-4589: one probe for both arms, so the streamed arm (over SIDECAR_WHOLE_MAX) is pinned by the same case as the whole one.
+    if (stmts(db).blobLive.get(sha) === undefined) z = make();
     // Task 18's ensureTranscript expects its caller's transaction (bindFile's); here it gets its own.
     const transcriptPk = withTx(db, 'NORMAL', () => ensureTranscript(db, s.uuid));
     const entryId = linkSidecar(s.name, candidatesFor(db, cache, transcriptPk, s));
@@ -6475,7 +6494,9 @@ function reportCounterResets(ctx, r) {
 /** The open rebuild — its version and its state `{ phase, blobId, baseline, undecodable }` (the cursor's JSON;
  *  `undecodable`: the blobs that did not decode so far in this job) — or null.
  *  A state that does not parse reads as phase `start`: the next chunk drops and recreates the tables again
- *  rather than insert into an index it cannot place a cursor in. */
+ *  rather than insert into an index it cannot place a cursor in.
+ *  A baseline whose element is not a row object reads the same way (H-76): the completion's diff would throw a TypeError on it inside
+ *  its transaction, so every repair would exit 1 and grep would stay at fts-pending, and the restart re-measures the baseline. */
 export function openFtsRebuild(db) {
   const r = db.prepare('SELECT version, cursor FROM derivation_state WHERE step = ? AND completed_ms IS NULL ORDER BY version DESC LIMIT 1')
     .get(FTS_REBUILD_STEP);
@@ -6483,7 +6504,8 @@ export function openFtsRebuild(db) {
   let s = null;
   try { s = JSON.parse(r.cursor ?? 'null'); } catch { s = null; }
   const ok = s !== null && typeof s === 'object' && REBUILD_PHASES.includes(s.phase) && Number.isSafeInteger(s.blobId)
-    && (s.baseline === null || Array.isArray(s.baseline)) && Number.isSafeInteger(s.undecodable) && s.undecodable >= 0;
+    && (s.baseline === null || (Array.isArray(s.baseline) && s.baseline.every((r) => r !== null && typeof r === 'object' && !Array.isArray(r))))
+    && Number.isSafeInteger(s.undecodable) && s.undecodable >= 0;
   return { version: Number(r.version), state: ok ? s : { phase: 'start', blobId: 0, baseline: null, undecodable: 0 } };
 }
 
@@ -6627,7 +6649,14 @@ export async function repairOp(db, ctx) {
   } catch (e) {
     if (isBusy(e) || !(e instanceof Error)) throw e;
     ctx.out(`history-sweep: integrity_check could not run: ${e && e.message ? e.message : String(e)}`);
-    ctx.out('history-sweep: repair-refused: an FTS index whose own tables are missing cannot be opened, dropped or rebuilt by a repair; the operator restores a backup (ccrc history doctor --restore <file>) or rebuilds from the journal (ccrc history doctor --rebuild), from a terminal outside any session');
+    // H-80: the cause is worded by what was measured. A throw out of integrity_check names an FTS cause only when the FTS tables
+    // are measured unhealthy; a store whose FTS tables stand (a CORRUPT or I/O error, say) has its integrity unmeasured, no more.
+    let fts = null;
+    try { fts = ftsTablesHealthy(ftsMeasure(db)); } catch { fts = null; }
+    const remedy = 'the operator restores a backup (ccrc history doctor --restore <file>) or rebuilds from the journal (ccrc history doctor --rebuild), from a terminal outside any session';
+    ctx.out(fts !== null && (!fts.blobs || !fts.nodes)
+      ? `history-sweep: repair-refused: an FTS index whose own tables are missing cannot be opened, dropped or rebuilt by a repair; ${remedy}`
+      : `history-sweep: repair-refused: PRAGMA integrity_check could not run, so the store's integrity is unmeasured and no rebuild starts; ${remedy}`);
     return { rc: EXIT.REFUSED, reason: 'repair-refused' };
   }
   const gate = decideIntegrity(problems);
@@ -6639,6 +6668,8 @@ export async function repairOp(db, ctx) {
   if (gate.verdict === 'index') {
     for (const p of gate.rows.slice(0, 5)) ctx.out(`history-sweep: integrity_check: ${p} (index damage: the rebuild replaces it)`);
   }
+  // H-81: the summary lines lead with the verdict; rows listed as index damage are never followed by "integrity_check ok".
+  const integrityLead = gate.verdict === 'ok' ? 'integrity_check ok' : 'integrity_check: index damage only (listed above)';
   const ictx = makeIngestCtx(ctx.home, ctx.homes, ctx.now(), ctx.ids);
   const prep = ftsPrepare(db, ictx.nowMs);
   // D-4603 (history-repair-refuses-a-failed-probe): a probe that THREW is not an FTS5 that is absent (spec §9.1: "never folded
@@ -6650,7 +6681,7 @@ export async function repairOp(db, ctx) {
   }
   if (!prep.tables) {
     const present = foreignKeyRows(db).length;
-    ctx.out(`history-sweep: repair: integrity_check ok; ${present} foreign-key violation(s) present; FTS5 is ${prep.state} on this Node, so there is no index to heal`);
+    ctx.out(`history-sweep: repair: ${integrityLead}; ${present} foreign-key violation(s) present; FTS5 is ${prep.state} on this Node, so there is no index to heal`);
     reportCounterResets(ctx, spoolCounterResets(db, ctx.home));   // blob_undecodable stays as it is: no rebuild read the blobs
     return { rc: EXIT.OK };
   }
@@ -6660,10 +6691,12 @@ export async function repairOp(db, ctx) {
   const baseline = open === null || open.state.phase === 'start' ? foreignKeyRows(db) : null;
   if (open === null) {
     const health = ftsTablesHealthy(ftsMeasure(db));
-    ctx.out(`history-sweep: repair: integrity_check ok; ${baseline.length} foreign-key violation(s) already present, kept as the baseline`);
+    ctx.out(`history-sweep: repair: ${integrityLead}; ${baseline.length} foreign-key violation(s) already present, kept as the baseline`);
     ctx.out(`history-sweep: repair: blobs_fts ${health.blobs ? 'healthy' : 'damaged or missing'}, nodes_fts ${health.nodes ? 'healthy' : 'damaged or missing'}; rebuilding both from the store`);
   } else {
-    ctx.out(`history-sweep: repair: resuming the index rebuild started ${new Date(open.version).toISOString()} at its ${open.state.phase} phase`);
+    // H-76: a version no Date can hold (a damaged row) would throw a RangeError here, so it is said as an unrecorded time.
+    const started = Number.isSafeInteger(open.version) && Math.abs(open.version) <= 8.64e15 ? new Date(open.version).toISOString() : 'at an unrecorded time';
+    ctx.out(`history-sweep: repair: resuming the index rebuild started ${started} at its ${open.state.phase} phase`);
   }
   let rebuilt = null;
   for (;;) {

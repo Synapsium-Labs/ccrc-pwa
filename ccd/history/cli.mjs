@@ -1373,10 +1373,26 @@ export async function runOpVerb(home, verb, rest, emit) {
   return opRelay(P, map.op, map.opArgs, (line) => emit(redactFinal(line, idx)));
 }
 
+/** D-4600 (history-operator-door-survives-a-closed-pipe): `ccrc history import --apply | head -1` closes stdout under the
+ *  CLI, and a write to it is an EPIPE 'error' event that, unhandled, kills the process with a stack. The relay then stops
+ *  draining the shim, whose own next write crashes it mid-op, and the operator loses the result. The operator arm swallows
+ *  EPIPE alone (a write to a destroyed stream is then dropped by Node), so the relay keeps draining, the op finishes and its
+ *  exit is relayed. Any other stdout error still throws. Installed once per process. */
+let stdoutGuarded = false;
+function guardClosedStdout() {
+  if (stdoutGuarded) return;
+  stdoutGuarded = true;
+  process.stdout.on('error', (e) => {
+    if (e && e.code === 'EPIPE') return;
+    throw e;
+  });
+}
+
 /** main's arm for `import`, `prune`, `reparse` and `doctor`: argv is main's own, the verb first, `--json` anywhere.
  *  Under --json, stdout is the envelope alone and the sweep's lines go to stderr; every relayed line arrives here
  *  already through redactFinal (runOpVerb's relayIndexOf). */
 export async function operatorMain(home, argv) {
+  guardClosedStdout();
   const json = argv.includes('--json');
   const rest = argv.filter((a) => a !== '--json');
   const verb = rest[0] ?? '';
