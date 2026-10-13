@@ -2,11 +2,18 @@
 // the W4 plan's ring rule): starting from the worker-side roots, every file the closure reaches imports only other
 // closure files, `unified`, `remark-parse`, `remark-gfm`, `remark-rehype` and the types-only `hast` and `mdast`.
 // So no React, no react-dom, no highlight.js, no `../session/*`, no `./api` and no stylesheet can reach the worker.
-// Specifiers are read by TypeScript's own `ts.preProcessFile` (static imports, re-exports, `import()` and
-// `require`), not by a regex. `hast` and `mdast` have no runtime module (their only package is `@types/*`), so
-// naming them can only ever be a type import. ROOTS end at `markdownWorker.ts`, the entry. It reads imports only: a DOM
-// global used without an import (`window`, `document`) is not seen here, and the worker, which has no DOM, is
-// where such a use would fail.
+// Specifiers are read from TypeScript's full parser (`ts.createSourceFile` and a walk of its tree), not by a regex and
+// not by `ts.preProcessFile`, whose scanner misses `export * as ns from` and loses every import after a regex literal
+// that holds a backtick. The walk takes every `import` and `export ... from` (`import type` included), `import x =
+// require()`, `import('x')` type, `import()` call and `require()` call. An `import()` or `require()` whose argument is
+// not a string literal, and any `import.meta.glob`, cannot be proved pure, so each is itself a violation, reported by
+// file, line and column. `hast` and `mdast` have no runtime module (their only package is `@types/*`), so naming
+// them can only ever be a type import. ROOTS end at `markdownWorker.ts`, the entry.
+//
+// The scan is not exhaustive. It reads module specifiers only: a DOM global used without an import (`window`,
+// `document`), `eval`, `new Function`, `importScripts`, a `require` reached through an alias, a worker or asset URL
+// built with `new URL(..., import.meta.url)` and a file the closure does not resolve are not seen here, and the
+// worker, which has no DOM, is where such a use would fail.
 //
 // The five direct dependencies the closure rests on are pinned exactly, in `package.json` and in the lock's root.
 import { existsSync, readFileSync } from 'node:fs';
@@ -30,8 +37,69 @@ function resolveRelative(from: string, spec: string): string | undefined {
     .find((p) => /\.tsx?$/.test(p) && existsSync(p));
 }
 
-/** Walks the closure from ROOTS: the files reached, and every specifier that is neither a closure file nor allowed. */
-function closure(): { files: string[]; refused: string[] } {
+/** What one module's source names: every specifier it loads, and every use it cannot prove pure. */
+interface ModuleScan {
+  specs: string[];
+  unprovable: string[];
+}
+
+const GLOB_NAMES: ReadonlySet<string> = new Set(['glob', 'globEager']);
+
+/**
+ * Reads one module with TypeScript's full parser and walks every node: each `import` and `export ... from`
+ * specifier (`export * as ns from` and `import type` included), `import x = require()`, `import('x')` types, and every
+ * `import()` and `require()` call. A call whose argument is not a string literal, and any `import.meta.glob`, cannot be
+ * proved pure, so each is reported under its line and column in `unprovable`.
+ */
+function scanModule(source: string, fileName: string): ModuleScan {
+  const sf = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, false,
+    fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const specs: string[] = [];
+  const unprovable: string[] = [];
+  const literal = (n: ts.Node | undefined): string | undefined =>
+    n !== undefined && (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) ? n.text : undefined;
+  const refuse = (n: ts.Node, what: string): void => {
+    const { line, character } = sf.getLineAndCharacterOfPosition(n.getStart(sf));
+    unprovable.push(`${line + 1}:${character + 1}: ${what}`);
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      const spec = literal(node.moduleSpecifier);
+      if (spec !== undefined) specs.push(spec);
+    } else if (ts.isImportEqualsDeclaration(node)) {
+      if (ts.isExternalModuleReference(node.moduleReference)) {
+        const spec = literal(node.moduleReference.expression);
+        if (spec !== undefined) specs.push(spec);
+      }
+    } else if (ts.isImportTypeNode(node)) {
+      const spec = ts.isLiteralTypeNode(node.argument) ? literal(node.argument.literal) : undefined;
+      if (spec !== undefined) specs.push(spec);
+    } else if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const kind = callee.kind === ts.SyntaxKind.ImportKeyword ? 'import()'
+        : ts.isIdentifier(callee) && callee.text === 'require' ? 'require()' : undefined;
+      if (kind !== undefined) {
+        const spec = literal(node.arguments[0]);
+        if (spec !== undefined) specs.push(spec);
+        else refuse(node, `${kind} with an argument that is not a string literal`);
+      }
+    } else if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      const base = node.expression;
+      const member = ts.isPropertyAccessExpression(node) ? node.name.text : literal(node.argumentExpression);
+      if (ts.isMetaProperty(base) && base.keywordToken === ts.SyntaxKind.ImportKeyword
+        && member !== undefined && GLOB_NAMES.has(member)) refuse(node, `import.meta.${member}`);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return { specs, unprovable };
+}
+
+/**
+ * Walks the closure from ROOTS: the files reached, and every specifier that is neither a closure file nor allowed.
+ * `read` answers a file's source (the real file by default; a case passes a reader that appends to one).
+ */
+function closure(read: (file: string) => string = (f) => readFileSync(f, 'utf8')): { files: string[]; refused: string[] } {
   const seen = new Set<string>();
   const refused: string[] = [];
   const todo = ROOTS.map((r) => path.join(LIB, r));
@@ -40,8 +108,9 @@ function closure(): { files: string[]; refused: string[] } {
     if (seen.has(file)) continue;
     seen.add(file);
     const rel = path.relative(PWA, file).split(path.sep).join('/');
-    const info = ts.preProcessFile(readFileSync(file, 'utf8'), true, true);
-    for (const { fileName: spec } of info.importedFiles) {
+    const scan = scanModule(read(file), file);
+    for (const u of scan.unprovable) refused.push(`${rel}:${u}`);
+    for (const spec of scan.specs) {
       if (spec.startsWith('.')) {
         const target = resolveRelative(file, spec);
         if (target === undefined) refused.push(`${rel}: ${spec}`);
@@ -84,5 +153,36 @@ describe('the five direct dependencies are pinned exactly', () => {
     expect(pkg.dependencies[name]).toBe(version);
     expect(lock.packages['']?.dependencies?.[name]).toBe(version);
     expect(lock.packages[`node_modules/${name}`]?.version).toBe(version);
+  });
+});
+
+/** A reader that returns each file as it is, with `text` added to the end of the one lib file named `name`. */
+const appendTo = (name: string, text: string) => (file: string): string => {
+  const real = readFileSync(file, 'utf8');
+  return file === path.join(LIB, name) ? `${real}\n${text}\n` : real;
+};
+
+describe('T11 review 1-1: the scan reads every re-export form, `export * as ns from` included', () => {
+  it.each([
+    ["export * as R from 'react';", 'react'],
+    ["export * from 'react';", 'react'],
+    ["export { a } from 'react';", 'react'],
+    ["export type { A } from 'react';", 'react'],
+    ["export * as ns from './markdownLimits';", './markdownLimits'],
+    ["import type { A } from 'hast';", 'hast'],
+    ["import * as R from 'react';", 'react'],
+    ["import 'highlight.js/lib/core';", 'highlight.js/lib/core'],
+  ])('%s names %s', (src, spec) => {
+    expect(scanModule(src, 'fixture.ts').specs).toEqual([spec]);
+  });
+
+  it('refuses a namespace re-export of highlight.js and walks into a re-exported session component', () => {
+    const { files, refused } = closure(appendTo('markdownLimits.ts', [
+      "export * as HighlightInWorker from 'highlight.js/lib/core';",
+      "export * as BubbleInWorker from '../session/MessageBubble';",
+    ].join('\n')));
+    expect(refused).toContain('src/lib/markdownLimits.ts: highlight.js/lib/core');
+    expect(files).toContain('src/session/MessageBubble.tsx');
+    expect(refused).toContain('src/session/MessageBubble.tsx: react');
   });
 });
