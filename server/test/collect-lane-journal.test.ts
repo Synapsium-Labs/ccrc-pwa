@@ -201,10 +201,20 @@ describe('the journal adapter (path-identity spec 2026-10-12 §5.2, §5.3)', () 
   });
 
   it('the durability acts stand in the code: the file fsync, the directory fsync on create, a reopen without O_CREAT', () => {
-    // No test can intercept a direct `node:fs` sync call, so these are pinned by text (codeOnly: comments stripped,
-    // strings kept). Deleting one, or adding `O_CREAT` to the reopen, reds this case.
+    // A fsync's durability is no runtime observation, so these acts are pinned by text (codeOnly: comments stripped,
+    // strings kept): TWO `fsyncSync(fd)`, the append's and the self-undo's, the second right after its
+    // `ftruncateSync(fd, `; the directory fsync on create; the reopen without `O_CREAT`. Deleting one, or adding
+    // `O_CREAT` to the reopen, reds this case. The undo's own behaviour is runtime-pinned through a mocked `node:fs` in
+    // collect-lane-journal-undo.test.ts: the truncate back to the measured length, followed by the fsync, both before
+    // the close; the unlink of a file the call created; the directory fsync inside the undo's reach; and the original
+    // error kept over the undo's and the close's (path-identity spec 2026-10-12 §5.2).
     const code = codeOnly(readFileSync(ADAPTER, 'utf8'));
-    expect(code.match(/\bfsyncSync\(fd\)/g) ?? [], 'the file fsync').toHaveLength(1);
+    const fsyncs = [...code.matchAll(/\bfsyncSync\(fd\)/g)];
+    expect(fsyncs.map((m) => m[0]), 'the append’s file fsync and the undo’s').toHaveLength(2);
+    const cut = code.search(/\bftruncateSync\(fd, /);
+    expect(cut, 'the undo’s truncate').toBeGreaterThan(-1);
+    expect(fsyncs[0]!.index!, 'the append’s fsync stands before the undo').toBeLessThan(cut);
+    expect(code, 'the undo’s fsync follows its truncate').toMatch(/\bftruncateSync\(fd, [^;\n]*\);\s*fsyncSync\(fd\);/);
     expect(code, 'the directory fsync on create').toMatch(/if \(created\) \{\s*const dfd = openSync\(dir, FS\.O_RDONLY\);\s*try \{ fsyncSync\(dfd\); \}/);
     expect(code, 'the reopen after EEXIST').toMatch(/^\s*fd = openSync\(logPath, FS\.O_RDWR \| FS\.O_APPEND \| FS\.O_NOFOLLOW\);$/m);
   });

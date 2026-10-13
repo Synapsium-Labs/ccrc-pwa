@@ -1769,7 +1769,8 @@ export function parseCollectLaneJournal(text: string): Extract<CollectLaneJourna
 /** The generation journal: an L2 port declared by its consumers (the store's one writer, the executor's final re-read,
  *  the route). `read` never throws. `appendGeneration` writes exactly `{"generation":g}` and a newline, with a leading
  *  newline first when the file lacks a final one, fsynced before it returns. It throws, with an errno `code`, on any
- *  failure. */
+ *  failure, and a throw first returns the file to its bytes before the call (or removes a file the call created), best
+ *  effort: the error thrown is always the original, never the undo's (path-identity spec 2026-10-12 §5.2). */
 export interface CollectLaneJournal { read(): CollectLaneJournalRead; appendGeneration(generation: number): void }
 
 /** Why the control state cannot be measured: the row's read, or the journal's, by its own word. */

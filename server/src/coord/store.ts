@@ -8024,10 +8024,17 @@ export class CoordStore {
  *    reads the decision saw; `after` and `journalAfter` are the reads taken AFTER the commit, the caller's proof.
  *  - `unchanged`: a true no-op, with the row it found. No generation is consumed.
  *  - `refused`: the decision's refusal and its bounded detail. Nothing is written and no generation is consumed.
- *  - `failed`: a throw at or after the append, which the route answers 503 `write-failed`. At `append` the row is unchanged
- *    but the journal may not be: a landed write whose fsync throws leaves it one generation AHEAD (a mismatch), and a failed
- *    or short write can leave a torn or empty tail, unmeasurable until a hand repair. At `update` or `commit` the journal is
- *    AHEAD of the row. Each stops the lane and arms nothing. `code` is the error's code word, never its message. */
+ *  - `failed`: a throw at or after the append, which the route answers 503 `write-failed`. `code` is the error's code
+ *    word, never its message. At `append` the adapter undoes itself (path-identity spec 2026-10-12 §5.2): it cuts the
+ *    journal back to its bytes before the call, or removes the file the call created, so the row and the journal are
+ *    left as they stood and the lane is exactly as it stood before (a failed Off over a stored Live leaves it armed).
+ *    At `update` or `commit` the journal is AHEAD of the row. Each stops the lane and arms nothing. What the undo cannot
+ *    cover: (1) a process killed inside the write, or a power loss before the data is on disk, can leave a torn, empty
+ *    or zero-filled tail, unmeasurable until a hand repair; (2) a kill after the write but before COMMIT, an undo that
+ *    fails after a full write, or a close that throws after a durable record leaves the journal one generation AHEAD,
+ *    a mismatch a fresh confirmed change repairs (Live, or Off once the latch is recorded); (3) an undo that itself
+ *    fails after a short write, or on a file the call created, leaves a torn or empty file, and the same hand repair
+ *    applies. */
 export type CollectLaneWrite =
   | { readonly kind: 'written'; readonly generation: number; readonly before: CollectLaneRowRead;
       readonly journalBefore: CollectLaneJournalRead;
