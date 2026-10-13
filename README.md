@@ -3178,6 +3178,17 @@ replaces; doctor's `skills` check measures every home against the shipped tree,
 and `ccrc doctor --fix` re-runs the same installers. That lane is what makes
 "place the coordinator — or a worker — like any other session" safe.
 
+**None of the three is a subagent's to load, and the hook now enforces it (D-4934).** Each skill's
+description says "Never use it inside a subagent": a session started by another session's Agent tool or a
+workflow `agent()` call returns its report to its parent, and loading one of these makes it act as the
+session instead (ack mail, take claims, send wave-done or review-done, open or dispatch runs, all under
+the session's identity). Wording alone did not hold, since a subagent on a Codex lane loaded the reviewer
+skill as its first action after that wording shipped. So `ccd/session-hook.sh`'s `PreToolUse` arm denies the
+`Skill` call itself when its payload carries a non-empty `agent_id` and names one of the three, on every
+lane; the deny is listed under "What replaced it" (R1's stdout paragraph) and pinned by
+`server/test/session-hook-role-skill-deny.test.ts`, which also pins the three names against the skills'
+`name:` frontmatter. Every other skill stays open to a subagent, and the main thread is never asked.
+
 **The skills' one client is `~/.local/bin/ccrc-api`** (`ccd/ccrc-api`), a closed
 client for the coordination API — and the reason a repository that denies
 `Bash(curl:*)` does not cut its worker off from its mail. No argument is a URL,
@@ -4656,14 +4667,21 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   gate's deny on a gated call (R5, below), the worker merge deny on a `gh pr merge` from a session whose
   hold names a programme wave or whose workspace carries the child marker (the landing-order rule, "The native merge queue" above: the
   coordinator merges, workers never do; a speed bump on that one verb, not a wall — a `gh api` merge
-  passes it), the Read nudge's `additionalContext` on a nudged call (R6,
+  passes it), the role-skill deny on a `Skill` call from a subagent (a payload with a non-empty
+  `agent_id`) that names `ccrc-worker`, `ccrc-reviewer` or `ccrc-coordinator`, exactly or behind one
+  `<namespace>:` prefix, with the name read as Claude Code reads it (trimmed of JavaScript's `trim` set,
+  then ONE leading `/` stripped, so ` ccrc-worker` and `/ccrc-worker` are the worker skill) (D-4934: those
+  three skills make whoever loads them act as the session, and a
+  subagent cannot be the session; any other skill, and the main thread, pass; a speed bump, since the
+  `SKILL.md` files stay readable), the Read nudge's `additionalContext` on a nudged call (R6,
   below), or the landing advisory's on a sync of main — a deny supersedes any advice built for the same
-  call, and the merge deny never replaces the search gate's — and empty on every other event**, because
+  call, and neither the merge deny nor the role-skill deny replaces another deny — and empty on every other event**, because
   a stdout JSON on `PreToolUse` is read as this hook having something to say about the call, and it
   says nothing there unless it does. The card, the search deny and the nudge are pinned in both
   directions by `server/test/session-hook.test.ts`, the advisory by
   `server/test/session-hook-sync-advisory.test.ts`, the merge deny by
-  `server/test/session-hook-merge-deny.test.ts`.
+  `server/test/session-hook-merge-deny.test.ts`, the role-skill deny by
+  `server/test/session-hook-role-skill-deny.test.ts`.
 - **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries seventeen clauses (thirteen at R2; routing slice 2 added 14 and 15, landing-order wave 1 added 16, the stall watch added 17), pinned verbatim: a
   workspace with a `graphify-out/graph.json` takes a codebase question to `graphify query` before
   `grep`, **weighted by the card's freshness word** — only `fresh` licenses taking an answer as read,
