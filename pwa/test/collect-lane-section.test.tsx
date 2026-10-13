@@ -257,6 +257,25 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
     expect(radio('off')).not.toBeChecked();
   });
 
+  it('a 409 marker-still-controls is dropped once a newer view lands, so a view with the latch set shows no stale refusal beside an enabled Off', async () => {
+    const { read } = await mount(LIVE_HERE);
+    // The re-read after the refusal is held until the refusal is on screen, then lands a fresh object, its latch set.
+    let land!: (v: CollectLaneView) => void;
+    read.mockReturnValueOnce(new Promise<CollectLaneView>((res) => { land = res; }));
+    vi.spyOn(api, 'setCollectLane').mockRejectedValue(
+      new ApiError(409, { ok: false, error: 'marker-still-controls', detail: 'the legacy file still controls the lane' }));
+    fireEvent.click(radio('off'));
+    expect(await within(section()).findByRole('alert')).toHaveTextContent(COLLECT_REFUSAL_TEXT['marker-still-controls']);
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    expect(within(section()).getByRole('alert'), 'the refusal stands while no newer view has landed')
+      .toHaveTextContent(COLLECT_REFUSAL_TEXT['marker-still-controls']);
+    await act(async () => { land({ ...LIVE_HERE, marker: { listing: 'absent', latch: 'set' } }); });
+    expect(within(section()).queryByText(COLLECT_REFUSAL_TEXT['marker-still-controls'])).toBeNull();
+    expect(within(section()).queryByRole('alert')).toBeNull();
+    expect(radio('off')).toBeEnabled();
+    expect(radio('off').getAttribute('aria-describedby')).toBeNull();
+  });
+
   it('a stored Live for another node shows its line and "Confirm Live again", which posts {choice:\'live\'} with no key', async () => {
     await mount(LIVE_HERE);
     expect(collectOffersReconfirm(LIVE_HERE)).toBe(false);

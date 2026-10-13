@@ -109,11 +109,19 @@ function CollectLaneBody({ view, stale, poll, store, childReclaimPause }: {
   const now = useNow(30_000, pending !== null);   // the sheet's freshness, live only while it is open
   const locked = busy || pending !== null;
 
+  // A NEWER view retires an inline refusal about the older one: a poll's answer or the re-read after the refusal is
+  // what the server now says, and its Off note speaks for the latch. A refusal is set in a render whose view has not
+  // changed, so this never clears it in the render that first shows it; a read that did not land keeps the view, and
+  // with it the refusal.
+  useEffect(() => {
+    setInline(null);
+  }, [view]);
+
   // `confirm` only as the key the server sent. Every answer is the server's:
   // - A reply that reads is settled.
   // - A 2xx the guard cannot read was answered and may have landed: UNCONFIRMED_TEXT, then a re-read.
   // - A 409 the reader takes as a confirm opens the sheet.
-  // - Off refused before the latch is shown inline under the choice.
+  // - Off refused before the latch is shown inline under the choice, until a newer view lands.
   // - Any other refusal is toasted, its words with the server's detail beside them, then re-read.
   // - A rejection that never reached an answer may not even have left, so it gets its own line, then the same
   //   re-read.
