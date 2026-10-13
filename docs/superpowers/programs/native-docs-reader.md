@@ -20,7 +20,7 @@ The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> 
 | 1 | ccd reads docs: `shared/docs.ts`, `docs-index`/`docs-tree`/`docs-show`/`docs-fetch` and the embedded helper, the doctor's `docs` check | #301 | **merged** 2026-10-06 (`f03d83304`). Executed in the coordinator's session (subagent-driven, 19 tasks, per-task reviews, a six-lens final review, one fix round), not as a run |
 | 2 | grants and adapter: agent grants, `DOCS_CAP` and builders, runner budgets, `server/src/docs/{policy,ports,ccdsource}.ts`, the docs ring guard | #319 | **merged** 2026-10-09 (`5a6e5d3d7`). Run 315: review 317, then three fix rounds (two defects, then the one-reader scan), a merge of `main` after ccrc-history B1 landed, and closure review 343. Run 315 closed done |
 | 3 | routes: `server/src/docs/{routes,hooks,lane,cache}.ts`, registration, dark rollout, R1/R2 | #339 | **merged** 2026-10-09 (`f4d75a741`). Run 342: review 361, one fix round, scoped re-review 364 clean. After the merge, the operator runs the dark rollout, fleet first, then R2 and R1 (§7.8). Both gate W5's merge |
-| 4 | PWA foundation: markdown extraction, `RenderBoundary`, chat hardening (U3), `docs-sw` | — | **dispatched** 2026-10-12 14:33 UTC to a fresh child, after a fleet slot freed (plan merged with #345, `995a05750`; block 4768 to 4783) |
+| 4 | PWA foundation: markdown extraction, `RenderBoundary`, chat hardening (U3), `docs-sw` | #381 | **merged** 2026-10-13 (`baba5c1bc`). Run 367: review 408 (12 findings, one critical: the built worker chunk could not load in a browser worker), one fix round, scoped re-review 412 (8 minor, carried to W5). Nine deviations, 4768 to 4776; 4777 to 4783 unspent. Run 367 closes once W5's run is open |
 | 5 | Docs screen, plus Share and Export (see Decisions, 2026-10-06); plain, plus `<br>` as a line break in the docs profile (2026-10-12) | — | after W3 and W4 |
 | 5b | parity, server half: sections `vision` and `promise`, per-doc history (`docs-log`), page key `at=<sha>` (proposed, rich-docs spec 2026-10-12) | — | proposed; after W5 |
 | 6 | mockups | — | after W5 |
@@ -28,6 +28,23 @@ The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> 
 | 8 | the reader frame: the shared library `docserver` mounted in a sandboxed frame with a checked bridge, the plain pipeline as fallback (proposed, rich-docs spec 2026-10-12) | — | proposed; after W5b, W6, W7 and library v1 |
 
 ## Decisions & deviations
+- **2026-10-13: W4 merged (#381, `baba5c1bc`).**
+  - **Wave-done.** The first full suite run was red only under load. Each red file (PWA 5000 ms timeouts, one `ccrc-doctor` case, one `session-hook` case) was green alone, so routing is unchanged.
+  - **Review 408** (held-out panel plus the plan's five lenses, 119 agents) found 12 issues. F1 was critical: the built `markdownWorker` chunk threw `document is not defined` on load, because the worker build resolved a dependency's browser entry. Every chat message over 4 KiB would have rendered as plain text. No in-process test could see it.
+  - **Fix round 1, rulings:**
+    - F1: fix before merge. A worker-only resolution of that dependency's non-DOM entry, plus a test that builds for production and loads the built chunk with no `document`. The main-thread bundle is byte-identical.
+    - F6: a refused chat image whose transformed source is empty (`data:`, `javascript:`, an empty source) renders its alt text as text, never an empty link. This extends D-4776, with no new number.
+    - F4: M4.P12's spec mutation moves to W5's half. This extends D-4768.
+    - The rest: missing cases and rows, carried items recorded truly, words, and the macOS-only `0 warned` case made `itLinux`.
+  - **Scoped re-review 412** reproduced F1 fixed and confirmed every ruling landed. Its 8 minor findings are carried to W5 below. Ruled: N1's docstring nits go to W7's prose pass, as the worker routed them; suite row 06 keeps the plan's re-run format.
+  - **CI** was green on every Linux leg, on the merge ref that includes #376. The macOS legs were red only in files W4 does not touch.
+  - **Claims:** W4 landed second, after #353 and #376, under the scoped co-edit terms. `git merge-tree` was clean at both landings.
+- **2026-10-12/13: W4 rulings during the wave.**
+  - Coordinator, mail 4397: an `https:/` source counts as root-relative (D-4773).
+  - Coordinator, mail 4436: a footnote label counts as a container level (D-4774).
+  - Operator, 2026-10-13: before the synchronous render, chat pre-counts table cells against `DOCS_MAX_RENDER_ELEMENTS` (D-4775, review 2-3 option B). Chat shows an image only from an absolute `http(s)://` source (D-4776). This answers Q1. A chat message of 4 KiB or less with a `*`/`_` separator line of 65 or more characters renders as plain text, and that is accepted as is.
+  - Q2, M5.16 against the worker's `postMessage`, stays with W6 and the Share/Export amendment.
+- **2026-10-13: the shared library's L1 plan.** It is written: 12 tasks, a 77-case conformance corpus and 357 measured mutation rows. It is in the operator's review in the library's own repository. Its coordinator rulings are recorded there as `C<n>`. Ruling C2 refines a comment in this programme's spec §3.2: `render()` returns `{html, outcome, bytes, meta}`, with no overloaded empty value.
 
 - **2026-10-01: spec approved**, with rulings U1-U5:
   - U1: a 2 MiB image cap.
@@ -156,14 +173,30 @@ The spec (§7.7) orders them W1 -> W2 -> W3 -> W5 -> W6 -> W7, with W1 -> W4 -> 
   - README's doctor table has no row for W1's `docs` check, and its server-role SKIP sentence (the D-3111 list ending "`timeout` and `model-default`") does not name `docs`, although `_check_docs` SKIPs on a `CCRC_ROLE=server` box (reported by another session in mail 3818, 2026-10-07; README is under another programme's claim, so W7 places it).
 - **W2's one-reader scan residue** (review 343): two unpinned widening arms, three docstring wording slips, the W2-T5-M1 note, and four evasion spellings to add to its "Known evasions" list. This is for the next wave that edits `docs-source.test.ts`, or for W7.
 - **W3 residue:** two Task 12 tool texts and one Notes count (review 364); the plan's Task 4 Decision 1 text against the moved L1 verdicts; W2's closed plan rows anchored on `laneAdmit`'s old inline clause. For W7's prose pass: the `coord/store.ts` and `coord/close.ts` comments that say no `app.setErrorHandler` exists, §5.3's "every docs response", which should name the router-level and upgrade escapes, and W4's two stale comments (`pwa/src/lib/api.ts`, `server/test/sourceScan.ts`).
+- **W4 residue for W5** (review 412, minor):
+  - R1: pin both halves of the dev alias's scope (`serve` only, never under vitest), with a row each.
+  - R2: correct the words of the docs-sw `/wiki/docs` case, which pin the RegExp's `/^` and not the ERE's `^`.
+  - R3 and R4: re-record the measured `red` lines of W4-T11-M52 to M55, M58 and M59, and of W4-T6-M5.
+  - R5: give the hook's commit-to-effect window its own Carried entry with a measured example. It is W4's own code, not pre-existing.
+  - R6: two stale comments, `vite.config.ts` ("below") and `markdownWorker.ts`'s quoted `worker:` literal.
+  - R7: reword `markdownGuard.ts`'s `table-cell`. Tailwind scans it and ships an unused `.table-cell` rule.
+- **W4's carried items** (its results' "Carried, not fixed", inherited by W5's brief):
+  - nesting continued by indentation (shape (c));
+  - the sync path's cost on a crafted message of 4 KiB or less;
+  - review 1-4;
+  - the 2-2 residual (per-span keystroke cap, about 204 850 elements from a 205 KB message);
+  - N1's minors;
+  - M4.P12's "count only after render";
+  - r10 and r11. highlight.js is quadratic on one long identifier run, and `keystrokeParts`' split is quadratic on a long whitespace run. Both are pre-existing at base, and W5's page inherits them through the shared components.
+  - Review 5-2 goes to W7. W6's M5.16 carry stands.
+- **W7 prose residue from W4:**
+  - `ccd/ccrc-doctor-checks`' table line for `auth box-token` says `_check_box-token` is at the END of the file, which is no longer true.
+  - N1's docstring nits.
 - **U5:** the private vulnerability report is not filed yet. The spec's one-line mention is public since #301.
 
-## Next-wave brief (W4), for run 367 (as dispatched 2026-10-12; the brief adds the claim terms, the drift and the open-PR rule above)
+## Next-wave brief (W5)
 
-- **Plan:** `docs/superpowers/plans/2026-10-09-native-docs-reader-w4-pwa-foundation.md`, Tasks 1-12. Task 11 is the held-out whole-branch review; Task 12 pushes and opens the one PR.
-- **Base:** `main` at dispatch, at or after the plan's `6fc7ef115`.
-- **Routing:** matrix row "worker executing a spec'd plan". Opus·high main loop, Sonnet·high implementers, Opus·high task reviewers and Task 11's panel, workflows off, `compact 40`.
-- **Branch discipline:** commit on the workspace's own branch, never a separate feature branch.
-- **Deviation block:** 4768 to 4783. Task 10 Step 8 defines the first four, plus any operator ruling the brief names (Q1).
-- **Claims:** the plan's shared-file list, checked at dispatch and before each task that edits one.
-- **Carried constraints:** the list above.
+- **Plan:** not written yet. W5 needs W3 and W4 (both merged). Before its merge, the operator runs W3's dark rollout, fleet first, then R2 and R1 (spec §7.8).
+- **Scope:** the Docs screen, plus Share and Export (Decisions, 2026-10-06), plain, plus `<br>` as a line break in the docs profile (2026-10-12). The placement of W5b (recommended: after W5) is the operator's.
+- **Inputs:** W4's results (the W5 halves of D-4768, M4.P12's mutation included, and "Carried, not fixed"), the W4 residue and carried items above, and the twelve Share/Export decisions still with the operator.
+- **Base:** `main` at or after `baba5c1bc`.
