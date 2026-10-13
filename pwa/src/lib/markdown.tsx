@@ -45,10 +45,12 @@ export const isImageUrl = (href: string | undefined): href is string => href !==
 /** Whether chat refuses `src` as an image source: true when it is root-relative or protocol-relative as the browser
  *  resolves it, including a same-scheme special-relative http(s): source. Leading ASCII whitespace and C0 controls
  *  are skipped, as a browser strips them from an attribute URL, and a leading backslash counts as a slash, as the
- *  parser reads it (`\\h/x` is `//h/x`). A special http(s) scheme NOT followed by two slashes or backslashes
- *  (`https:/api/x`) resolves against the page's own origin, so it is refused too. A refused source would be fetched
- *  from ccrc's own origin, or from a host the message names, carrying the operator's cookie. A path-relative source
- *  (`x.png`, `../x`) is not refused; absent (`undefined`) is not refused either.
+ *  parser reads it (`\\h/x` is `//h/x`). An http(s) scheme NOT followed by two slashes or backslashes
+ *  (`https:/api/x`) is refused too: when it is the page's own scheme it resolves against the page's origin; when it
+ *  is the other scheme the parser reads it as an absolute URL whose host is the next segment. The predicate does not
+ *  know the page's scheme, so refusing the other scheme as well is a deliberate over-refusal. A refused source would
+ *  be fetched from ccrc's own origin, or from a host the message names, carrying the operator's cookie. A
+ *  path-relative source (`x.png`, `../x`) is not refused; absent (`undefined`) is not refused either.
  *  Takes the value after react-markdown's `defaultUrlTransform`. The ONE predicate: `img` and the auto-embed in `a`
  *  both call it. */
 export function isRefusedChatImageSrc(src: string | undefined): boolean {
