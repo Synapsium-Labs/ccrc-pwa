@@ -109,7 +109,14 @@ export class SessionStream {
    *  search on a back-off rather than every two seconds. */
   private readonly transcripts: TranscriptResolver;
   /** The outcome the open tailer was built from — the left-hand side of
-   *  §5.3's re-point comparison. Null until the first tailer exists. */
+   *  §5.3's re-point comparison. Null until the first tailer exists.
+   *
+   *  KEPT CURRENT for the file it names (D-4947): a later answer for the SAME
+   *  path at the same rung replaces it (`tick`'s no-move arm), because what a
+   *  re-ladder learns about that file — the successor its marker names
+   *  (`declinedTo`), a tail it could not read — is exactly what
+   *  `registryCaughtUp` must see when `ccd` moves the registry. The tailer
+   *  itself is untouched: same file, same offset. */
   private tailed: TranscriptResolution | null = null;
 
   private readonly onNotice = (n: Notice): void => this.send({ type: 'notice', message: n.message });
@@ -369,12 +376,22 @@ export class SessionStream {
    *  different path once the tailed file is gone" is that pin; it must fail
    *  if this line is ever weakened again. It cannot simply be deleted in
    *  favour of always calling `shouldRepoint`: skipping the stat on the
-   *  same-rung/same-path case is what keeps a healthy tick free. */
+   *  same-rung/same-path case is what keeps a healthy tick free.
+   *
+   *  "GONE" MEANS A PROVEN ENOENT, NOTHING LESS (D-4946). The folded `stat`
+   *  answered one `null` for "absent" and for "this stat failed", and
+   *  `shouldRepoint`'s last clause re-points away from a file that is gone —
+   *  so one unreadable stat of a successor the stream was already reading
+   *  (one agent RPC timing out, in remote mode) re-pointed it onto the best
+   *  file the re-ladder had left: the frozen pre-fork transcript, backwards.
+   *  An unmeasured file is still there as far as anyone knows; the next tick
+   *  asks again. */
   private async repointNeeded(next: TranscriptResolution): Promise<boolean> {
     const cur = this.tailed;
     if (cur === null) return false;
     if (cur.path === next.path && rungRank(cur) === rungRank(next)) return false;  // no stat
-    return shouldRepoint(cur, next, (await this.deps.io.stat(cur.path)) !== null);
+    const st = await this.deps.io.statMeasured(cur.path);
+    return shouldRepoint(cur, next, st.ok || st.reason !== 'absent');
   }
 
   /** Read the session's task list and send it when it differs from what this
@@ -690,7 +707,18 @@ export class SessionStream {
         // and is self-describing. A registry uuid that moves to a DIFFERENT
         // file is still a real rotation (a `/clear`, a compaction, a swap
         // onto a fresh uuid) and still says so.
-        const caughtUp = this.tailed !== null && this.tailed.path === data.resolution.path;
+        //
+        // AND THE TRANSCRIPT IS NOT THE ONLY WITNESS (D-4947). The path test
+        // only sees the order where this stream followed FIRST. Measured
+        // (#189 review, S2): when the successor is written a few seconds after
+        // the marker, this stream's re-ladder declines it and waits out its
+        // 30 s back-off, `ccd` reads the file meanwhile and moves the
+        // registry FIRST — and the path test called that a rotation. So did a
+        // chain longer than `MAX_CONTINUATION_HOPS`, where this stream stops
+        // hops AHEAD of the registry and the registry's own walk lands one
+        // file further. `registryCaughtUp` asks the answer being tailed
+        // whether the registry's new uuid is on its own chain.
+        const caughtUp = registryCaughtUp(this.tailed, data.uuid, data.resolution);
         this.uuid = data.uuid;
         if (!appeared && !caughtUp) this.send({ type: 'rotated', uuid: data.uuid });
         await this.sendBacklogAndTail(data);
@@ -710,6 +738,15 @@ export class SessionStream {
         // beside it; an older client with no `sinceFile` support still just
         // sees a fresh backlog, exactly as it does on first connect.
         await this.sendBacklogAndTail(data);
+      } else if (this.tailed !== null && this.tailed.path === data.resolution.path
+        && rungRank(this.tailed) === rungRank(data.resolution)) {
+        // Nothing moved — same file, same rung, same tailer — but the answer
+        // may know more about that file than the one it replaces: the
+        // successor its marker names, or that its tail could not be read
+        // (D-4947, see `tailed`). Without this, `tailed` kept the answer from
+        // BEFORE the fork, and a registry move onto the declined successor
+        // was judged against a file that had never been seen to carry a marker.
+        this.tailed = data.resolution;
       }
       if (this.stopped) return;
       if (data.status !== this.status) {
@@ -804,10 +841,63 @@ export function nextDialogFrame(
 export function shouldRepoint(
   cur: TranscriptResolution, next: TranscriptResolution, tailedExists: boolean,
 ): boolean {
-  if (cur.kind === 'found' && next.kind === 'found' && cur.uuid !== next.uuid) return true;
+  // SUPERSESSION RUNS ONE WAY (D-4946). A different uuid re-points only when
+  // the new answer's walk passed THROUGH the uuid being tailed — it is that
+  // file's successor, or a successor of it. This clause used to fire on ANY
+  // difference, and the backward case is real: the registry keeps naming the
+  // predecessor until `ccd` moves it, so every re-ladder starts from there,
+  // and one that cannot read the predecessor's tail (or stat the successor)
+  // answers the predecessor. Measured (#189 review, S1): that re-pointed a
+  // stream already reading the fork back onto the frozen pre-fork file, whose
+  // backlog replaced the chat. Any other uuid difference falls through to the
+  // address clauses below, so a successor that is genuinely GONE still gives
+  // way to the best file left.
+  if (cur.kind === 'found' && next.kind === 'found' && cur.uuid !== next.uuid
+    && next.followedFrom?.includes(cur.uuid) === true) return true;
   if (cur.path === next.path && rungRank(cur) === rungRank(next)) return false;
   if (rungRank(next) < rungRank(cur)) return true;
   return !tailedExists;
+}
+
+/**
+ * The registry's uuid moved: is that THIS stream's conversation continuing,
+ * or a reset? Pure, for the same reason `shouldRepoint` is (D-4947).
+ *
+ * The registry is not where a fork is first seen, and it is not seen there in
+ * step with this stream: `ccd` walks the same `continued-in` pointer ONE HOP
+ * PER QUIESCENCE, sometimes before this stream has followed it and sometimes
+ * after. A move is a continuation when the answer being tailed already says
+ * so, in any of four ways:
+ *
+ *   - the newly resolved path IS the tailed path (whole-branch review, F2: the
+ *     stream followed first and the registry agreed);
+ *   - the registry now names the uuid being tailed, at another address;
+ *   - the registry now names the successor the tailed file's marker names but
+ *     the walk declined (`declinedTo`) — `ccd` read the file after the
+ *     successor was written, while this stream waited out its back-off
+ *     (#189 review, S2);
+ *   - the registry now names a uuid the tailed answer was followed THROUGH
+ *     (`followedFrom`) — a chain longer than `MAX_CONTINUATION_HOPS` leaves
+ *     this stream hops ahead of the registry (#189 review, server lens).
+ *
+ * Anything else is a real rotation — a `/clear`, a compaction, a swap onto a
+ * fresh uuid — and still says so. HONEST LIMIT: a registry that moves TWO
+ * hops past a declined successor between two of this stream's ticks (the
+ * tick itself stalled across two `ccd` quiescences) names a uuid nothing
+ * here has seen, and is still announced as a rotation; and so is a move away
+ * from a file whose tail could not be read (`tailUnmeasured`), since nobody
+ * knows what it named. Both cost one false divider over a backlog that is
+ * right, never a lost event.
+ */
+export function registryCaughtUp(
+  tailed: TranscriptResolution | null, registryUuid: string, next: TranscriptResolution,
+): boolean {
+  if (tailed === null) return false;
+  if (tailed.path === next.path) return true;
+  if (tailed.kind !== 'found') return false;
+  return tailed.uuid === registryUuid
+    || tailed.declinedTo === registryUuid
+    || tailed.followedFrom?.includes(registryUuid) === true;
 }
 
 /**
