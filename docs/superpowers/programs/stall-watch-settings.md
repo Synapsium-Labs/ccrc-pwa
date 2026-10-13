@@ -1066,6 +1066,18 @@ time.
   - Review run 422 (`ccrc-pwa-brisk-river`) reads `5aa5dbadb..50bdec086` with the panel. It checks the
     resolution, the line-equality proof, the two blocks' interaction (with a fixture reproduction), what else
     the merge brought in that wave 3 reads, and the wave's ledger properties.
+  - Residue added (mail 4642, from review 415's ruling pass, record-only): `stallWriteRefusal`
+    (`pwa/src/fleet/useStallWatchView.ts` ≈:192) reads every `ApiError` that is not a confirm as `refused`, and
+    `StallWatchSection.tsx` (≈:318-324) then says "Nothing was changed". That is false for a gateway 502/504 after
+    the POST reached the server, and for a 500 thrown after the store committed: the write may have landed. Wave
+    2 built it as the spec (2026-10-05 :1321) and its plan prescribe.
+    - Ruling for the follow-up: do what run 400 does for the collector switch. `refused` only when the body's
+      `error` is a known refusal code; any other `ApiError` reads `unconfirmed` ("may or may not have been saved"),
+      with the server's detail when there is one. Amend the spec's line in the same follow-up.
+    - Why now, not before #362: wave 3 does not touch the PWA, and the fix changes a prescribed behaviour, so it
+      gets its own red-first test and review.
+    - Cost if wrong: until the follow-up, a failed save can say "Nothing was changed" when it was in fact saved.
+      Re-reading the section shows the true level.
 
 ## Carried constraints (reviewers get these)
 
