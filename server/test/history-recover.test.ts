@@ -1443,3 +1443,284 @@ describe('Redaction first at the link: a restore applies the journal\'s redact r
     expect(kept?.w !== undefined && kept.w !== atBackup.w, 'the restore stamped its own pair insert: w moved with the top redact_hashes rowid').toBe(true);
   }, 2 * HEAVY);
 });
+
+// ── Task 28's helpers ───────────────────────────────────────────────────────────────────────────────────────
+const rrLeafIds = (box: HistoryBox): string[] =>
+  rrQ<{ node_id: string }>(box, "SELECT node_id FROM nodes WHERE kind <> 'condensed' ORDER BY node_id").map((r) => r.node_id);
+
+/** What O35 compares, each by its natural key and journaled times (§8.4 "What comes back equal"). Surrogate keys,
+ *  cwd_real, leaf_id_forked and uuid_two_sessions are not compared. */
+interface RrState {
+  storeId: string | null; sessions: unknown[]; epochs: unknown[]; receipts: unknown[]; redact: unknown[];
+  recall: unknown[]; leaves: string[];
+}
+function rrState(box: HistoryBox): RrState {
+  return {
+    storeId: metaOf(box, 'store_id'),
+    sessions: rrQ(box, 'SELECT ccrc_id, generation, project, first_seen_ms FROM sessions ORDER BY ccrc_id, generation'),
+    epochs: rrQ(box, `SELECT s.ccrc_id, s.generation, e.seq, e.cc_session_uuid, e.cause, e.declared_by
+      FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk ORDER BY s.ccrc_id, s.generation, e.seq`),
+    receipts: rrQ(box, 'SELECT event_key, hex(payload_sha) AS sha, received_ms FROM spool_receipts ORDER BY event_key'),
+    redact: rrQ(box, 'SELECT len, hex(sha256) AS sha FROM redact_hashes ORDER BY len, sha'),
+    recall: rrQ(box, 'SELECT event_key, ccrc_id, generation, ts_ms, verb, rc, ms, arm FROM recall_calls ORDER BY event_key'),
+    leaves: rrLeafIds(box),
+  };
+}
+/** The journal's records by kind, every store directory. `head` and `tick` are left out: a pass and a new writer
+ *  file write those whatever a recovery does. */
+function rrJournalKinds(box: HistoryBox): Record<'file' | 'spool' | 'redact' | 'verdict', number> {
+  const out = { file: 0, spool: 0, redact: 0, verdict: 0 };
+  for (const r of journalRecords(box)) {
+    const k = r['k'];
+    if (k === 'file' || k === 'spool' || k === 'redact' || k === 'verdict') out[k] += 1;
+  }
+  return out;
+}
+
+describe('C58: doctor --rebuild, its store_id and its refusals (W1-B2 Task 28)', () => {
+  /** What a refusing rebuild must leave alone: every file of the store and its binding. The lock-take journal half
+   *  runs before the verb (it appends observation and verdict records to journal/ and moves spool/ lines, as C67's
+   *  note says), so those two trees are left out of the comparison. */
+  const bindingSnapshot = (box: HistoryBox): string[] =>
+    ccrcSnapshot(box).filter((l) => !l.startsWith('history/journal/') && !l.startsWith('history/spool/'));
+  /** A rebuild through the direct door on a terminal, which must refuse rebuild-refused and write nothing. */
+  const refused = async (box: HistoryBox, args: string[], why: string): Promise<string> => {
+    const before = bindingSnapshot(box);
+    const r = await shimOnPty(box, ['--op', 'rebuild', ...args]);
+    expect(lastRc(r.out), `${why}\n${r.out}`).toEqual({ rc: 2, reason: 'rebuild-refused' });
+    expect(bindingSnapshot(box), `${why}: nothing written`).toEqual(before);
+    return r.out;
+  };
+  /** A journal directory journal/<dir>/ whose one month file holds only a head record naming `dir`. */
+  const plantDir = (box: HistoryBox, dir: string): void =>
+    plantJournalFile(box, dir, new Date().toISOString().slice(0, 7), randomBytes(4).toString('hex'), Date.now(), []);
+
+  it('store.id present and the DB lost: the pass holds store-missing; --rebuild (the CLI, on a terminal) makes a DB with that store_id, bound rebuild, its recovery step registered', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c58a-');
+    const P = rrRoot(box);
+    const oldWriter = fs.readFileSync(P.writer, 'utf8').trim();
+    rrLose(box, { binding: false, journal: false });
+    expect(runShim(box).stdout).toMatch(/^history-sweep: store-missing$/m);
+    const r = await cliOnPty(box, ['doctor', '--rebuild']);
+    expect(r.code, r.out).toBe(0);
+    rrExpectBound(box, storeId, 'rebuild', oldWriter);
+    expect(recoverRow(box)).toMatchObject({ completed_ms: null });
+    rrTickUntil(box, () => rrRecovered(box));
+  }, HEAVY);
+
+  it('no store.id and one journal directory whose heads name S: the pass refuses store-recoverable; --rebuild writes store_id S and store.id', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c58b-');
+    const P = rrRoot(box);
+    rrLose(box, { binding: true, journal: false });
+    expect(runShim(box).stdout).toMatch(/^history-sweep: store-recoverable$/m);
+    expect(fs.existsSync(P.dbFile), 'the pass created nothing').toBe(false);
+    const r = await shimOnPty(box, ['--op', 'rebuild']);
+    expect(lastRc(r.out), r.out).toEqual({ rc: 0 });
+    rrExpectBound(box, storeId, 'rebuild', null);
+    rrTickUntil(box, () => rrRecovered(box));
+  }, HEAVY);
+
+  it('two journal directories S and T: rebuild-refused naming both, writing nothing; --store-id T rebuilds T', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c58c-');
+    const T = '0189abcd-1234-4678-9abc-0000000000d7';
+    rrLose(box, { binding: true, journal: false });
+    plantDir(box, T);
+    expect(runShim(box).stdout).toMatch(/^history-sweep: store-recoverable$/m);
+    const out = await refused(box, [], 'two journal directories and no --store-id');
+    expect(out).toContain(storeId);
+    expect(out).toContain(T);
+    const r = await shimOnPty(box, ['--op', 'rebuild', '--store-id', T]);
+    expect(lastRc(r.out), r.out).toEqual({ rc: 0 });
+    rrExpectBound(box, T, 'rebuild', null);
+  }, HEAVY);
+
+  it('each refusal answers rebuild-refused and writes nothing: a DB present, a leftover history.db-wal, store.id and --store-id disagreeing, a --store-id naming no directory, a directory whose heads name another store, and neither source', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c58d-');
+    const P = rrRoot(box);
+    await refused(box, [], 'a DB present');
+    rrLose(box, { binding: false, journal: false });
+    fs.writeFileSync(P.wal, '');
+    await refused(box, [], 'a leftover history.db-wal');
+    fs.rmSync(P.wal);
+    const T = '0189abcd-1234-4678-9abc-0000000000d8';
+    plantDir(box, T);
+    await refused(box, ['--store-id', T], 'store.id and --store-id disagree');
+    fs.rmSync(path.join(P.journalDir, T), { recursive: true });
+    fs.rmSync(P.storeId);
+    fs.rmSync(P.writer);
+    await refused(box, ['--store-id', '0189abcd-1234-4678-9abc-0000000000d9'], 'a --store-id naming no directory');
+    // journal/X/ whose month files' heads name S: no directory names itself, so none names a store.
+    fs.renameSync(path.join(P.journalDir, storeId), path.join(P.journalDir, '0189abcd-1234-4678-9abc-0000000000da'));
+    await refused(box, [], 'a directory whose heads name another store');
+    // A killed pass's temp is removed first, even by a rebuild that then refuses: under the lock every temp is stale
+    // (§9.4). The one write a refusal makes, and only of a dead temp.
+    const dead = path.join(P.dbDir, 'history.db.new.888888');
+    fs.writeFileSync(dead, 'a killed creation\'s temp', { mode: 0o600 });
+    expect(lastRc((await shimOnPty(box, ['--op', 'rebuild'])).out)).toEqual({ rc: 2, reason: 'rebuild-refused' });
+    expect(fs.existsSync(dead), 'the stale temp went before the refusal').toBe(false);
+    // Neither source: a box that never had a journal. Its first pass is held by a planted backup, not minted over it.
+    const fresh = makeHistoryBox('ccrc-hist-c58e-', { role: 'fleet' });
+    const FP = rrRoot(fresh);
+    fs.mkdirSync(FP.backups, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(FP.backups, '20200101T000000Z.db'), 'not a store');
+    expect(runShim(fresh).stdout).toMatch(/^history-sweep: store-recoverable$/m);
+    await refused(fresh, [], 'neither store.id nor a journal directory');
+    const empty = makeHistoryBox('ccrc-hist-c58g-', { role: 'fleet' });
+    fs.mkdirSync(path.join(rrRoot(empty).journalDir, '0189abcd-1234-4678-9abc-0000000000db'), { recursive: true, mode: 0o700 });
+    expect(runShim(empty).stdout).toMatch(/^history-sweep: store-recoverable$/m);
+    await refused(empty, [], 'an empty journal directory names no store');
+  }, 2 * HEAVY);
+
+  it('a kill right after the pending marker becomes store.id: the next pass runs the recovery step (DI3)', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c58f-');
+    const P = rrRoot(box);
+    rrLose(box, { binding: true, journal: false });
+    expect(runShim(box).stdout).toMatch(/^history-sweep: store-recoverable$/m);
+    // The first rename naming store.id.pending writes the marker (temp then rename); the second makes it store.id.
+    const k = await shimOnPty(box, ['--op', 'rebuild'], rrKill('renameSync:store.id.pending:2:after'));
+    // A rebuild that was NOT killed leaves the same three facts, so the kill is measured on what only a kill leaves:
+    // no result line, the op marker (removed in rebuildArm's finally), and no bind in the journal (it is still in the
+    // new file's outbox; finishBind never ran).
+    expect(k.out, 'the pass was killed before its result').not.toMatch(/\{"rc"/);
+    expect([fs.existsSync(P.dbFile), fs.existsSync(P.pending), fs.readFileSync(P.storeId, 'utf8').trim()],
+      'the kill landed right after the pending rename').toEqual([true, false, storeId]);
+    expect(fs.existsSync(P.op), 'the killed pass left its op marker').toBe(true);
+    expect(rrBinds(box), 'the bind row is still inside the file').toEqual([]);
+    expect(recoverRow(box)).toMatchObject({ completed_ms: null });
+    rrTickUntil(box, () => rrRecovered(box));
+    expect(rrBinds(box).map((b) => b.bind)).toEqual(['rebuild']);
+  }, HEAVY);
+});
+
+describe('O35 and O36: the rebuild drill (W1-B2 Task 28)', () => {
+  const A_ID = 'claude-a-demo';
+  const B_ID = 'claude-a-genless';
+  const C_ID = 'claude-a-rekey';
+  const D_ID = 'claude-a-ops';
+  const U = (n: number): string => `b${n}b${n}b${n}b${n}-0000-4000-8000-00000000003${n}`;
+  const G = (n: number): string => `0189abcd-1234-4678-9abc-00000000035${n}`;
+
+  it('O35: rebuilt from its journal alone, with the registry purged and a token rotated out, the store equals the lost one by name; O36: the step writes no record and the rebuild writes its own bind', async () => {
+    const box = makeHistoryBox('ccrc-hist-o35-', { role: 'fleet' });
+    const P = rrRoot(box);
+    const token = randomBytes(32).toString('hex');
+    const tokenFile = path.join(box.home, '.ccrc', 'fixture.token');
+    fs.writeFileSync(tokenFile, `${token}\n`, { mode: 0o600 });            // a learned redaction pair
+    // The store exists before any registry row does: a first pass over planted rows would import each registry uuid as
+    // an 'import' epoch and hint no transcript, which is not the work this drill journals.
+    pass(box);
+    expect(fs.existsSync(P.dbFile), 'CONTROL: the first pass made the store').toBe(true);
+    // Phase 1, in the first passes:
+    //  - A: a confirmed startup and a /clear in ONE draining file, and a recall line;
+    //  - B: a gen-less resume and a gen-less recall, both joining the registry's G(2);
+    //  - C: a gen-less startup with no .generation, so a '' family.
+    plantSession(box, A_ID, { uuid: U(2), generation: G(1), project: 'demo' });
+    spoolLine(box, A_ID, rrStart(A_ID, U(1), 'startup', { reg: U(1), gen: G(1) }));
+    spoolLine(box, A_ID, rrStart(A_ID, U(2), 'clear', { gen: G(1) }));
+    spoolLine(box, A_ID, { v: 1, ev: 'recall', id: A_ID, cmd: 'grep', rc: 0, ms: 12, gen: G(1) });
+    plantSession(box, B_ID, { uuid: U(3), generation: G(2), project: 'demo' });
+    spoolLine(box, B_ID, rrStart(B_ID, U(3), 'resume', { reg: U(3) }));
+    spoolLine(box, B_ID, { v: 1, ev: 'recall', id: B_ID, cmd: 'describe', rc: 3, ms: 7 });
+    plantSession(box, C_ID, { uuid: U(5), project: 'demo' });
+    spoolLine(box, C_ID, rrStart(C_ID, U(5), 'startup', { reg: U(5) }));
+    rrTickUntil(box, () => countOf(box, 'epochs') === 4, 10);
+    // Phase 2: B's gen-less SessionStart(clear), and C re-keyed once its row gains a generation.
+    plantSession(box, B_ID, { uuid: U(4) });
+    spoolLine(box, B_ID, rrStart(B_ID, U(4), 'clear'));
+    plantSession(box, C_ID, { generation: G(3) });
+    spoolLine(box, C_ID, rrStart(C_ID, U(5), 'resume', { reg: U(5), gen: G(3) }));
+    rrTickUntil(box, () => countOf(box, 'epochs') === 5 && rrFamilies(box, C_ID).some((f) => f.generation === '' && f.merged_into !== null));
+    // Phase 3: an operator mapping, `import --session --file --apply`, on a terminal (an irreversible form), of a
+    // compacted transcript (a leaf). Discovery would find a transcript planted in phase 1 only at the 30-minute scan.
+    plantSession(box, D_ID, { generation: G(4), project: 'demo' });
+    const file = plantTranscript(box, 'claude-a', SLUG, U(6), rrCompacted(U(6), 200, 'Polishing the fixture docs.'));
+    expect(lastRc((await shimOnPty(box, ['--op', 'import', '--session', D_ID, '--file', file, '--apply'])).out)).toEqual({ rc: 0 });
+    rrTickUntil(box, () => countOf(box, 'epochs') === 6 && rrLeafIds(box).length === 1, 10);
+    const a = rrState(box);
+    expect(a.leaves, 'CONTROL: A derived the leaf B must re-derive').toHaveLength(1);
+    expect(a.redact.length, 'CONTROL: A learned the token\'s pair').toBeGreaterThan(0);
+    expect(a.recall, 'CONTROL: both recall lines folded').toHaveLength(2);
+    const kindsA = rrJournalKinds(box);
+    // The loss: the token rotated out (only the journal remembers its pair), every registry row purged, the DB gone.
+    fs.rmSync(tokenFile);
+    fs.rmSync(box.reg, { recursive: true, force: true });
+    fs.mkdirSync(box.reg);
+    rrLose(box, { binding: false, journal: false });
+    const r = await cliOnPty(box, ['doctor', '--rebuild']);
+    expect(r.code, r.out).toBe(0);
+    rrTickUntil(box, () => rrRecovered(box) && rrLeafIds(box).length === 1, 12);
+    const b = rrState(box);
+    for (const k of Object.keys(a) as (keyof RrState)[]) expect(b[k], `B's ${k} equals A's`).toEqual(a[k]);
+    // O36, the replay half: recovery and the passes after it appended no file, spool, redact or verdict record;
+    // the one new verdict is the rebuild's own bind, under the new writer token.
+    expect(rrJournalKinds(box)).toEqual({ ...kindsA, verdict: kindsA.verdict + 1 });
+    expect(rrBinds(box)).toEqual([{ bind: 'rebuild', writer: fs.readFileSync(P.writer, 'utf8').trim() }]);
+  }, 2.5 * HEAVY);
+
+  it('O35, the held file: a startup and a gen-less clear journaled and held under store-missing are decided after the step from their sidecar, and the recall counter of the drained file folds exactly once', async () => {
+    const box = makeHistoryBox('ccrc-hist-o35h-', { role: 'fleet' });
+    const P = rrRoot(box);
+    const H_ID = 'claude-a-drained';
+    const K_ID = 'claude-a-held';
+    plantSession(box, H_ID, { uuid: U(7), generation: G(5), project: 'demo' });
+    spoolLine(box, H_ID, { v: 1, ev: 'recall', id: H_ID, cmd: 'tree', rc: 0, ms: 3, gen: G(5) });
+    spoolLine(box, H_ID, rrStart(H_ID, U(7), 'startup', { reg: U(7), gen: G(5) }));
+    rrTickUntil(box, () => countOf(box, 'recall_calls') === 1 && countOf(box, 'epochs') === 1);
+    const recallBefore = rrState(box).recall;
+    rrLose(box, { binding: false, journal: false });
+    plantSession(box, K_ID, { uuid: U(9), generation: G(6), project: 'demo' });
+    spoolLine(box, K_ID, rrStart(K_ID, U(8), 'startup', { reg: U(8) }));    // gen-less: the sidecar names G(6)
+    spoolLine(box, K_ID, rrStart(K_ID, U(9), 'clear'));                     // gen-less; the sidecar's .uuid names U(9)
+    expect(runShim(box).stdout).toMatch(/^history-sweep: store-missing$/m);
+    expect(rrNames(P.draining).filter((n) => n.endsWith('.jsonl')), 'journaled and held').toHaveLength(1);
+    fs.rmSync(box.reg, { recursive: true, force: true });                      // decided from the sidecar alone
+    fs.mkdirSync(box.reg);
+    expect((await cliOnPty(box, ['doctor', '--rebuild'])).code).toBe(0);
+    rrTickUntil(box, () => rrRecovered(box) && rrNames(P.draining).filter((n) => n.endsWith('.jsonl')).length === 0, 10);
+    expect(rrFamilies(box, K_ID)).toEqual([{ generation: G(6), merged_into: null }]);
+    expect(rrEpochs(box, K_ID).map((e) => [e.seq, e.cc_session_uuid, e.cause])).toEqual([[1, U(8), 'startup'], [2, U(9), 'clear']]);
+    expect(rrState(box).recall, 'the drained file\'s recall line, once').toEqual(recallBefore);
+    expect(counters(box)['journal_spool_undrained_gone'] ?? 0, 'the held file was still there').toBe(0);
+  }, 2 * HEAVY);
+});
+
+describe('C67: unreadable is not absent (W1-B2 Task 28)', () => {
+  it('.generation for recall-off, store.id for status and the three binding verbs, .harness for every read verb', async () => {
+    const { box } = rrBuilt('ccrc-hist-c67-');
+    const P = rrRoot(box);
+    const name = rrBackup(box);
+    // .generation present but unreadable (a directory at the path, which no read opens, as root or not).
+    fs.rmSync(path.join(box.reg, `${ID}.generation`));
+    plantSession(box, ID, { generation: 'unreadable' });
+    let before = ccrcSnapshot(box);
+    const off = runCli(box, ['recall-off', ID, '--json']);
+    expect(off.code, off.stdout + off.stderr).toBe(2);
+    expect(off.stdout + off.stderr).toContain('generation-unreadable');
+    expect(ccrcSnapshot(box), 'recall-off wrote nothing').toEqual(before);
+    // store.id present but unreadable: exit 5 store-unmeasured, and no binding verb proceeds. This block runs BEFORE
+    // the read verbs below: a read verb that resolved an identity appends its ev:"recall" counter line to spool/
+    // (Task 11), and a binding verb's lock-take journal half would move that line into .draining/, a write the
+    // snapshot would see that is no binding verb's.
+    fs.rmSync(P.storeId);
+    fs.mkdirSync(P.storeId);
+    const st = runCli(box, ['status', '--json']);
+    expect(st.code, st.stdout).toBe(5);
+    expect(st.json?.['reason']).toBe('store-unmeasured');
+    before = ccrcSnapshot(box);
+    for (const args of [['--op', 'adopt'], ['--op', 'restore', name], ['--op', 'rebuild']]) {
+      const r = await shimOnPty(box, args);
+      expect(lastRc(r.out), `${args[1]}: ${r.out}`).toEqual({ rc: 5, reason: 'store-unmeasured' });
+    }
+    expect(ccrcSnapshot(box), 'the binding verbs wrote nothing').toEqual(before);
+    // .harness present but unreadable: every read verb refuses before any open. store.id is still a directory, which
+    // changes nothing here: readContext refuses harness-unreadable right after the identity, before it measures the
+    // store (Task 11).
+    fs.mkdirSync(path.join(box.reg, `${ID}.harness`));
+    const pane = withPane(box, ID);
+    for (const verb of [['grep', 'zqrecover'], ['describe', 'L0123456789abcdef0123'], ['expand', 'L0123456789abcdef0123'], ['tree']]) {
+      const r = runCli(box, [...verb, '--json'], { env: pane });
+      expect(r.code, `${verb[0]}: ${r.stdout}${r.stderr}`).toBe(2);
+      expect(r.stdout + r.stderr, verb[0]).toContain('harness-unreadable');
+    }
+  }, 1.5 * HEAVY);
+});

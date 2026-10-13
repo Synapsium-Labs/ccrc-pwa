@@ -2865,6 +2865,7 @@ export async function adoptArm(home, P, args, deps, out) {
  *  takes none. W1-B2 Tasks 27 and 28 put their `restore` and `rebuild` dispatch lines first in this body. */
 export async function bindingPass(home, P, op, args, deps, out) {
   if (op === 'restore') return restoreArm(home, P, args, deps, out);
+  if (op === 'rebuild') return rebuildArm(home, P, args, deps, out);
   if (op === 'adopt') return adoptArm(home, P, args, deps, out);
   out(`history-sweep: ${op} is not a binding verb this build runs`);
   return { rc: EXIT.REFUSED, reason: 'bad-args' };
@@ -5173,7 +5174,7 @@ export function mergeSteps(db, ctx, budget) {
 
 /** The --op verbs this build runs (§8.4). Each B2 verb joins in the task that ships its path (Tasks 20–28): a verb
  *  named here has an entry in OP_HANDLERS, or an arm in bindingPass, and one in OP_DRY_RUNS when it has a dry run. */
-const OP_VERBS = new Set(['import', 'migrate', 'prune', 'reparse', 'backup', 'repair', 'adopt', 'restore']);
+const OP_VERBS = new Set(['import', 'migrate', 'prune', 'reparse', 'backup', 'repair', 'adopt', 'restore', 'rebuild']);
 
 /** adopt, restore and rebuild (§8.4): they run BEFORE openStore, which refuses exactly the states they exist to
  *  repair (store-unbound, store-missing, store-recoverable, store-zero-byte, store-schema-missing, …). */
@@ -6722,6 +6723,67 @@ export async function restoreArm(home, P, args, deps, out) {
     return finishBind(home, P, role, deps, out, now);
   } finally {
     if (staged !== null) abortRestore(staged);
+    removeEntry(P.op);   // B1's type-aware removal (history-planted-entries-never-wedge), as adoptArm's
+  }
+}
+
+// ── W1-B2 Task 28: doctor --rebuild (§8.4 "doctor --rebuild [--store-id <uuid>]"; slugs history-rebuild-verb,
+// history-store-recoverable, history-binding-facts-before-link). It reuses Task 26's bindFactsOf and finishBind. ───
+
+/** The journal directories that could name a store to rebuild (§8.4 "Its store_id"): every uuid-named directory
+ *  under journal/. Each comes with whether its heads agree: it has at least one month file, and every month file's
+ *  head names this directory. A directory carried in by hand under another name therefore names nothing.
+ *  Month files and their heads are read exactly as recovery reads them (Task 25's JOURNAL_NAME_RE and journalEnds,
+ *  O_NOFOLLOW), so rebuild and replay never disagree about which files a directory holds. A head that is missing or
+ *  unreadable names no store (§9.14: link() of a fsynced temp means no month file exists without its head).
+ *  An unlistable directory, or a month file that is not a readable regular file (journalEnds kind `unreadable`,
+ *  `foreign` or `gone`), reads as not agreeing, so a rebuild refuses (exit 2) and never mints a store under that id.
+ *  (Widening BindFacts so such an input answers exit 5 is parked: hardening item H-18.) */
+export function journalStoreDirs(home) {
+  const dir = historyPaths(home).journalDir;
+  const out = [];
+  for (const name of listNames(dir).sort()) {
+    if (!UUID_RE.test(name)) continue;
+    const sub = `${dir}/${name}`;
+    try { if (!lstatSync(sub).isDirectory()) continue; } catch { continue; }
+    const months = listNames(sub).filter((m) => JOURNAL_NAME_RE.test(m));
+    const heads = months.map((m) => { const e = journalEnds(`${sub}/${m}`); return e.kind === 'ends' ? e.headStore : null; });
+    out.push({ storeId: name, headsAgree: months.length > 0 && heads.every((h) => h === name) });
+  }
+  return out;
+}
+
+/** `doctor --rebuild [--store-id <uuid>]` (§8.4): rebuild a lost DB from what else holds its data.
+ *  - First, the writer temps a killed pass left in db/ are removed: the lock is held, so every temp is stale (§9.4),
+ *    as Task 26's binding section orders it.
+ *  - Precondition and store_id: Task 6's decideBind('rebuild') over the store's facts, `--store-id` and the journal
+ *    directories. A refusal writes nothing else and names the candidate directories.
+ *  - Creation: Task 24's createStore with that store_id. Its creation transaction holds bound:<ms> = rebuild, a new
+ *    writer, the ('recover', <ms>) step and the bind outbox row before link(). store.id, when absent, is written
+ *    through the pending marker, which the next pass finishes after a kill.
+ *  - Then finishBind (Task 26): open, flush the bind, the release journal half.
+ *  The following passes run the recovery step (Task 25) and then re-ingest every transcript on disk from empty
+ *  cursors (the backfill path). It runs under history-off too, since it is a binding verb. */
+export async function rebuildArm(home, P, args, deps, out) {
+  const now = deps.now ?? Date.now;
+  const role = readRole(P);
+  removeStaleTemps(home);
+  const dirs = journalStoreDirs(home);
+  const rebuildVerdict = decideBind('rebuild', bindFactsOf(home, role, deps, {
+    storeIdArg: typeof args.storeId === 'string' ? args.storeId : null, journalDirs: dirs,
+  }));
+  if (!rebuildVerdict.ok) {
+    out(`history-sweep: ${rebuildVerdict.reason}: ${rebuildVerdict.detail}`);
+    if (dirs.length > 0) {
+      out(`history-sweep: journal store directories: ${dirs.map((x) => x.storeId).join(', ')}; the operator names one with --store-id <uuid>, from a terminal outside any session`);
+    }
+    return { rc: rebuildVerdict.rc, reason: rebuildVerdict.reason };
+  }
+  writeOpMarker(P, 'rebuild', now());
+  try {
+    createStore(home, { storeId: rebuildVerdict.storeId, bind: { kind: 'rebuild', nowMs: now() } });
+    return finishBind(home, P, role, deps, out, now);
+  } finally {
     removeEntry(P.op);   // B1's type-aware removal (history-planted-entries-never-wedge), as adoptArm's
   }
 }
