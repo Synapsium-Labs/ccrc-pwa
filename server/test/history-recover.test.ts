@@ -25,8 +25,9 @@ import { removeTmpFixturesEachTest, mkTmp } from './tmpHelpers.js';
 import {
   HEALTH_META, RECOVER_PHASES, RECOVERY_STALL_TICKS, SCHEMA_VERSION, WRITING_FORMS, floorThreshold, historyPaths, journalRecord, mergeJournalByTime,
   REDACTED_MARK, BELT_VERSION, parseBeltState, beltWidth, type BeltState,
+  NODE_PARSER_VERSION, makePairIndex, secretPairs, parentRollup, nodeIndexTexts,
 } from '../../ccd/history/lib.mjs';
-import { closeWriter, createStore, getMeta, openWriter, setMeta } from '../../ccd/history/store.mjs';
+import { closeWriter, createFtsTables, createStore, getMeta, getStep, openWriter, setMeta, setStep } from '../../ccd/history/store.mjs';
 
 skipOnDarwin();
 removeTmpFixturesEachTest();
@@ -50,9 +51,25 @@ interface SweepRecover {
   recoverPass(db: DatabaseSync, ctx: Record<string, unknown>, failedAtStart: number): Promise<number>;
   journalRedactPairs(P: ReturnType<typeof historyPaths>, storeId: string):
     { pairs: Array<{ len: number; sha256: string; t: number }>; skipped: string[] };
+  makeIngestCtx(home: string, homes: readonly string[], nowMs: number, ids: unknown): Record<string, unknown>;
+  recoverReindex(db: DatabaseSync, ctx: Record<string, unknown>, cur: { pairsAdded: boolean }, budget: Record<string, unknown>):
+    Promise<{ done: boolean; moved: boolean }>;
+}
+/** What batch HE calls of derive.mjs in-process. */
+interface DeriveNodes {
+  rederiveGistsFor(db: DatabaseSync, ictx: Record<string, unknown>, values: readonly string[], budget: Record<string, unknown>,
+    slice: Record<string, unknown>): number;
+  beltNodesStep(db: DatabaseSync, ictx: Record<string, unknown>, slice: Record<string, unknown>): boolean;
+  redactNodeFields(db: DatabaseSync, ictx: Record<string, unknown>, nodeIds: readonly string[]): number;
+  rerollParents(db: DatabaseSync, ictx: Record<string, unknown>, nodeIds: readonly string[]): number;
+  refreshLeaf(db: DatabaseSync, ictx: Record<string, unknown>, nodeId: string): string;
 }
 let SW: SweepRecover;
-beforeAll(async () => { SW = (await import('../../ccd/history/sweep.mjs')) as unknown as SweepRecover; });
+let DV: DeriveNodes;
+beforeAll(async () => {
+  SW = (await import('../../ccd/history/sweep.mjs')) as unknown as SweepRecover;
+  DV = (await import('../../ccd/history/derive.mjs')) as unknown as DeriveNodes;
+});
 
 /** What recoveryStep reads of a TickCtx, in-process: a statfs stub with room to spare (so no case reads the free
  *  space of the box running it) and a run budget, lib's unless `limits` makes it smaller. */
@@ -1730,6 +1747,9 @@ describe('C67: unreadable is not absent (W1-B2 Task 28)', () => {
 /** The index's own bytes: every blobs_fts data block, as latin1 (B1 Task 23's measure). */
 const rrFtsBytes = (box: HistoryBox): string =>
   rrQ<{ block: Uint8Array }>(box, 'SELECT block FROM blobs_fts_data').map((r) => Buffer.from(r.block).toString('latin1')).join('');
+/** The node index's own bytes: every nodes_fts data block, as latin1 (H-112: the node index is merged like the blob one). */
+const rrNodeIndexBytes = (box: HistoryBox): string =>
+  rrQ<{ block: Uint8Array }>(box, 'SELECT block FROM nodes_fts_data').map((r) => Buffer.from(r.block).toString('latin1')).join('');
 /** Whether any stored blob still holds `needle`: the store stays lossless while the index and the output redact. */
 const rrBlobsHold = (box: HistoryBox, needle: string): boolean =>
   rrQ<{ z: Uint8Array }>(box, 'SELECT z FROM blobs WHERE z IS NOT NULL').some((b) => rrUnbrotli(b.z).toString('utf8').includes(needle));
@@ -1808,6 +1828,7 @@ describe('O47: redaction survives recovery, and a pair learned late (W1-B2 Task 
     expect(rrGists(box)[0], 'CONTROL: the native leaf gist holds the value').toContain(value);
     expect(rrMatches(box, 'blobs_fts', `"${tail.slice(0, 6)}"*`), 'CONTROL: a term in the row index').toBeGreaterThan(0);
     expect(rrMatches(box, 'nodes_fts', `"${tail.slice(0, 6)}"*`), 'CONTROL: a term in the node index').toBeGreaterThan(0);
+    expect(rrNodeIndexBytes(box).includes(tail.slice(4, 16)), 'CONTROL: a byte in the node index').toBe(true);
     fs.mkdirSync(path.join(box.home, '.cc-secrets'), { recursive: true, mode: 0o700 });
     fs.writeFileSync(path.join(box.home, '.cc-secrets', 'late.env'), `ZQ_LATE_VALUE=${value}\n`, { mode: 0o600 });
     rrTickUntil(box, () => rrStepDone(box, 'fts-merge', 1), 6);
@@ -1820,6 +1841,7 @@ describe('O47: redaction survives recovery, and a pair learned late (W1-B2 Task 
       FROM nodes n JOIN nodes_fts f ON f.rowid = n.rowid WHERE n.kind <> 'condensed'`)[0]!;
     expect(t.fts, 'nodes_fts topics, one per line').toBe((JSON.parse(t.topics) as string[]).join('\n'));
     expect(rrFtsBytes(box).includes(tail.slice(4, 16)), 'no index byte after the merge steps').toBe(false);
+    expect(rrNodeIndexBytes(box).includes(tail.slice(4, 16)), 'no node index byte after the merge steps').toBe(false);
     expect(runCli(box, ['grep', `"${tail.slice(0, 6)}"*`], { env: withPane(box, ID) }).code).toBe(3);
   }, 1.5 * HEAVY);
 
@@ -1909,9 +1931,12 @@ describe('§6.2 "The belt": a generation that opens re-redacts every node\'s sto
       db.prepare("DELETE FROM meta WHERE k = 'fts_belt'").run();
     } finally { db.close(); }
     expect(rrMatches(box, 'nodes_fts', `"zq${v}x"`), 'CONTROL: the planted row is a term').toBe(1);
+    expect(rrNodeIndexBytes(box).includes(v.slice(4, 20)), 'CONTROL: and a byte in the node index').toBe(true);
     rrTickUntil(box, () => rrStepDone(box, 'nodes-belt', 1) && !rrGists(box)[0]!.includes(v.slice(0, 14)));
     expect(rrGists(box)[0]).toContain(REDACTED_MARK);
     expect(rrMatches(box, 'nodes_fts', `"zq${v}x"`), 'and its nodes_fts row').toBe(0);
+    // H-112: the node step's rewrite registered the merge step, and the tick that ran it merged nodes_fts too.
+    expect(rrNodeIndexBytes(box).includes(v.slice(4, 20)), 'no node index byte once the node step ran').toBe(false);
   }, 1.5 * HEAVY);
 
   it('a nodes_fts row holding a pair-only value glued to a literal escape is re-derived through nodeIndexTexts by the node step (spec §6.2 nodes_fts)', () => {
@@ -2038,6 +2063,251 @@ describe('§6.2 "The belt": a generation that opens re-redacts every node\'s sto
     expect(stretch(nodeText()), 'no belt-width stretch of v in nodes.gist, topics, node_refs or nodes_fts').toBe(false);
     expect(rrMatches(box, 'nodes_fts', `"ab${v}cd"`), 'nor a nodes_fts term').toBe(0);
   }, 2 * HEAVY);
+});
+
+// ── Hardening batch HE: the Task 29 node redaction (H-112 to H-118) ────────────────────────────────────────────
+/** A 40-hex value that classifies as a `sha` ref (it holds a letter a-f). */
+const heValue = (): string => `c${randomBytes(19).toString('hex')}f`;
+/** Whether `text` holds any 8-character window of `v`: an unmatched prefix counts, as in the spec's SE1. */
+const heHolds = (text: string, v: string): boolean =>
+  Array.from({ length: v.length - 7 }, (_, i) => v.slice(i, i + 8)).some((w) => text.includes(w));
+/** `n` characters of words that end in a space, so a value placed right after is a run of its own. */
+const hePad = (n: number): string => `${'ab '.repeat(Math.ceil(n / 3)).slice(0, n - 1)} `;
+interface HeNode {
+  id: string; kind: 'native_leaf' | 'raw_leaf' | 'condensed'; gist: string | null; topics?: string[]; refs?: string[];
+  kids?: string[]; readable?: boolean;
+}
+/** A store of hand-planted nodes, as one built before any pair was learned holds them: a condensed node's fields are
+ *  parentRollup of its children as planted (unredacted), its nodes_fts row is nodeIndexTexts of its fields with no pair.
+ *  Rows go in the given order, so a child's rowid is below its parent's. */
+function heStore(prefix: string, specs: readonly HeNode[], fts: boolean): { db: DatabaseSync; home: string } {
+  const home = mkTmp(prefix);
+  createStore(home);
+  const db = openWriter(historyPaths(home).dbFile);
+  db.exec('BEGIN');
+  if (fts) createFtsTables(db);
+  db.prepare("INSERT INTO sessions (session_pk, ccrc_id, generation, project, first_seen_ms) VALUES (1, ?, '', 'demo', 1)").run(ID);
+  db.prepare("INSERT INTO epochs (session_pk, seq, cc_session_uuid, cause, declared_by, confirmed_ms) VALUES (1, 1, ?, 'startup', 'hook', 1)").run(RR_U1);
+  db.prepare('INSERT INTO transcripts (transcript_pk, cc_session_uuid) VALUES (1, ?)').run(RR_U1);
+  db.prepare("INSERT INTO blobs (blob_id, sha256, codec, z, raw_len) VALUES (1, ?, 'br5', ?, 1)").run(Buffer.alloc(32, 9), Buffer.from([0]));
+  const rolled = new Map<string, { gist: string | null; topics: string[]; refs: { kind: string; value: string; origin: string }[] }>();
+  for (const n of specs) {
+    const own = { gist: n.gist, topics: n.topics ?? [], refs: (n.refs ?? []).map((value) => ({ kind: 'sha', value, origin: 'tool_use' })) };
+    const kids = (n.kids ?? []).map((k) => rolled.get(k)!);
+    const r = n.kind === 'condensed'
+      ? parentRollup(kids.map((k) => ({ ...k, earliestMs: 1, latestMs: 2, srcChars: 0, descCount: 0, descChars: 0 })))
+      : { ...own };
+    rolled.set(n.id, { gist: r.gist, topics: r.topics, refs: r.refs });
+    db.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, summary_blob_id,
+      earliest_ms, latest_ms, src_chars, desc_count, desc_chars, parser_version, created_ms)
+      VALUES (?, 1, 1, 1, ?, ?, 'not-requested', ?, ?, ?, 1, 2, 0, 0, 0, 1, 1)`)
+      .run(n.id, n.kind, n.kind === 'condensed' ? 1 : 0, r.gist, JSON.stringify(r.topics), n.readable === true ? 1 : null);
+    (n.kids ?? []).forEach((k, ord) => db.prepare('INSERT INTO node_children (node_id, child_id, ord) VALUES (?, ?, ?)').run(n.id, k, ord));
+    for (const ref of r.refs) db.prepare('INSERT OR IGNORE INTO node_refs (node_id, kind, value, origin) VALUES (?, ?, ?, ?)').run(n.id, ref.kind, ref.value, ref.origin);
+    if (fts) {
+      const t = nodeIndexTexts({ gist: r.gist, topics: r.topics, refs: r.refs.map((x) => x.value) }, makePairIndex([]));
+      db.prepare('INSERT INTO nodes_fts (rowid, gist, topics, refs) SELECT rowid, ?, ?, ? FROM nodes WHERE node_id = ?').run(t.gist, t.topics, t.refs, n.id);
+    }
+  }
+  db.exec('COMMIT');
+  return { db, home };
+}
+/** Where `v`, or a prefix of 8 or more of its characters, is still stored: nodes.gist, nodes.topics, node_refs.value
+ *  and every nodes_fts column, by node id. Empty means nothing leaks. */
+function heLeaks(db: DatabaseSync, v: string): string[] {
+  const out: string[] = [];
+  for (const r of db.prepare('SELECT node_id, gist, topics FROM nodes ORDER BY rowid').all() as Array<{ node_id: string; gist: string | null; topics: string | null }>) {
+    if (heHolds(r.gist ?? '', v)) out.push(`${r.node_id}.gist`);
+    if (heHolds(r.topics ?? '', v)) out.push(`${r.node_id}.topics`);
+  }
+  for (const r of db.prepare('SELECT node_id, value FROM node_refs ORDER BY node_id').all() as Array<{ node_id: string; value: string }>) {
+    if (heHolds(r.value, v)) out.push(`${r.node_id}.ref`);
+  }
+  if (db.prepare("SELECT 1 AS t FROM sqlite_master WHERE name = 'nodes_fts'").get() !== undefined) {
+    for (const r of db.prepare('SELECT n.node_id AS node_id, f.gist AS gist, f.topics AS topics, f.refs AS refs FROM nodes_fts f JOIN nodes n ON n.rowid = f.rowid')
+      .all() as Array<{ node_id: string; gist: string; topics: string; refs: string }>) {
+      for (const col of ['gist', 'topics', 'refs'] as const) if (heHolds(r[col], v)) out.push(`${r.node_id}.fts.${col}`);
+    }
+  }
+  return out;
+}
+/** The ingest context a tick builds, in-process: nodes_fts on or off, and the pair index of `v` alone. */
+const heCtx = (home: string, v: string, fts: boolean): Record<string, unknown> =>
+  ({ ...SW.makeIngestCtx(home, [], 1_000, null), fts, pairIdx: makePairIndex(secretPairs([v]).pairs) });
+/** Two raw leaves under one condensed node, the second holding `v` in its gist (placed so the condensed node's GIST_MAX cut
+ *  lands 13 characters inside it), in a topic (placed so TOPIC_CHARS cuts inside it) and in a `sha` ref: the store as it stood before `v` was a known secret. */
+const heUnderParent = (v: string, extra: readonly HeNode[] = []): HeNode[] => [
+  ...extra,
+  { id: 'he-b1', kind: 'raw_leaf', gist: 'Raw one.' },
+  { id: 'he-b2', kind: 'raw_leaf', gist: `${hePad(1186 - 'Raw one.'.length)}${v} and then more.`, topics: [`${hePad(60)}${v}`], refs: [v] },
+  { id: 'he-p', kind: 'condensed', gist: null, kids: ['he-b1', 'he-b2'] },
+];
+
+describe('hardening HE: the Task 29 node redaction (H-112 to H-118)', () => {
+  it('H-113 and H-114: a late pair on the fast path rewrites every node fail-closed, and a re-rolled parent is cut from redacted children (value in a topic, a ref and under a condensed parent)', () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-he113-', [
+      { id: 'he-a', kind: 'native_leaf', gist: 'Alpha did the work.', topics: [`cred ${v}`], readable: true },
+      { id: 'he-b', kind: 'raw_leaf', gist: `${hePad(1186 - 'Alpha did the work.'.length)}${v} and then more.`, topics: [`${hePad(60)}${v}`], refs: [v] },
+      { id: 'he-p', kind: 'condensed', gist: null, kids: ['he-a', 'he-b'] },
+    ], true);
+    try {
+      const p = db.prepare("SELECT gist FROM nodes WHERE node_id = 'he-p'").get() as { gist: string };
+      expect(p.gist.includes(v), 'CONTROL: the planted parent was cut inside the value, not after it').toBe(false);
+      expect(p.gist.includes(v.slice(0, 13)), 'CONTROL: and holds its first 13 characters').toBe(true);
+      expect(heLeaks(db, v), 'CONTROL: the store leaks the value').not.toEqual([]);
+      const budget = SW.newBudget();
+      expect(DV.rederiveGistsFor(db, heCtx(home, v, true), [v], budget, SW.newBudget()), 'the three nodes were touched').toBe(3);
+      expect(heLeaks(db, v), 'no 8-character window of the value in any node field or nodes_fts column').toEqual([]);
+      expect(db.prepare("SELECT value FROM node_refs WHERE node_id = 'he-p'").all(), 'a ref that no longer classifies is not stored on the parent').toEqual([]);
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('H-113 and H-114: a recovery rewrites every node, then re-rolls each condensed node from its clean children, so a prefix the old cut left is healed', async () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-he113r-', heUnderParent(v), false);
+    try {
+      const pair = secretPairs([v]).pairs[0]!;
+      db.prepare('INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, 1)').run(pair.len, Buffer.from(pair.sha256, 'hex'));
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', 5, NULL, NULL)").run();
+      expect(heLeaks(db, v), 'CONTROL: the restored store leaks the value').toEqual(expect.arrayContaining(['he-b2.gist', 'he-p.gist']));
+      const ctx = { home, homes: [], ids: null, now: () => Date.now(), budget: SW.newBudget(), belt: null };
+      let done = false;
+      for (let i = 0; i < 20 && !done; i += 1) done = (await SW.recoverReindex(db, ctx, { pairsAdded: true }, SW.newBudget())).done;
+      expect(done, 'the reindex phase completed').toBe(true);
+      expect(getStep(db, 'recover-nodes', 5)?.completedMs ?? null, 'the node sub-step completed').not.toBeNull();
+      expect(heLeaks(db, v), 'no 8-character window of the value in any node field').toEqual([]);
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('H-114: the belt\'s node step rewrites a node whose only exposure is a topic or a ref', () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-he114-', [
+      { id: 'he-t', kind: 'raw_leaf', gist: 'Plain.', topics: [`cred ${v}`] },
+      { id: 'he-r', kind: 'raw_leaf', gist: 'Plain two.', refs: [v] },
+    ], false);
+    try {
+      setStep(db, 'nodes-belt', 1, '0', null);
+      expect(DV.beltNodesStep(db, heCtx(home, v, false), SW.newBudget()), 'the step completed').toBe(true);
+      expect(heLeaks(db, v)).toEqual([]);
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('H-112: each writer that deletes a nodes_fts row tells the tick\'s context, inside its transaction', () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-he112-', heUnderParent(v), true);
+    try {
+      // A BEGIN that throws proves the call came from inside the rewrite's own transaction.
+      const told = { n: 0, outside: 0 };
+      const ctx = {
+        ...heCtx(home, v, true),
+        onNodesFtsDeleted: () => { told.n += 1; try { db.exec('BEGIN'); db.exec('ROLLBACK'); told.outside += 1; } catch { /* inside, as required */ } },
+      };
+      expect(DV.redactNodeFields(db, ctx, ['he-b2']), 'redactNodeFields rewrote the node').toBe(1);
+      expect(told.n, 'redactNodeFields told the context').toBe(1);
+      expect(DV.rerollParents(db, ctx, ['he-b2']), 'rerollParents rewrote the parent').toBe(1);
+      expect(told.n, 'rerollParents told the context').toBe(2);
+      expect(DV.redactNodeFields(db, { ...ctx, fts: false }, ['he-b2']), 'with no nodes_fts, nothing to tell').toBe(1);
+      expect(told.n, 'and the context was not told').toBe(2);
+      expect(told.outside, 'every call came from inside a transaction').toBe(0);
+    } finally { closeWriter(db); }
+  }, HEAVY);
+
+  it('H-112: a node rewrite alone, with no blob to re-index, registers the merge step, and the tick merges nodes_fts', () => {
+    const box = makeHistoryBox('ccrc-hist-he112t-', { role: 'fleet' });
+    const value = `zqn-${randomBytes(10).toString('hex')}_${randomBytes(10).toString('hex')}`;
+    const tail = value.slice(value.indexOf('_') + 1);
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, rrCompacted(RR_U1, 1, 'Rotating the fixture credential before the release.'));
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    rrTickUntil(box, () => rrLeafIds(box).length === 1, 8);
+    // The value reaches the node alone: no blob holds it, so the blob paths register nothing and only the node rewrite can.
+    const gist = `Rotating the fixture credential ${value} before the release.`;
+    const db = new DatabaseSync(rrRoot(box).dbFile);
+    try {
+      const n = db.prepare("SELECT rowid AS rid, node_id FROM nodes WHERE kind <> 'condensed'").get() as { rid: number; node_id: string };
+      db.prepare('UPDATE nodes SET gist = ? WHERE node_id = ?').run(gist, n.node_id);
+      db.prepare('DELETE FROM nodes_fts WHERE rowid = ?').run(n.rid);
+      db.prepare('INSERT INTO nodes_fts (rowid, gist, topics, refs) VALUES (?, ?, ?, ?)').run(n.rid, gist, '', '');
+    } finally { db.close(); }
+    expect(rrMatches(box, 'nodes_fts', `"${tail.slice(0, 6)}"*`), 'CONTROL: a term in the node index').toBeGreaterThan(0);
+    expect(rrMatches(box, 'blobs_fts', `"${tail.slice(0, 6)}"*`), 'CONTROL: and in no blob').toBe(0);
+    expect(rrNodeIndexBytes(box).includes(tail.slice(4, 16)), 'CONTROL: a byte in the node index').toBe(true);
+    fs.mkdirSync(path.join(box.home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(box.home, '.cc-secrets', 'node.env'), `ZQ_NODE_VALUE=${value}\n`, { mode: 0o600 });
+    rrTickUntil(box, () => !rrGists(box)[0]!.includes(value), 6);
+    expect(rrMatches(box, 'nodes_fts', `"${tail.slice(0, 6)}"*`), 'no term').toBe(0);
+    expect(rrStepDone(box, 'fts-merge', 1), 'the merge steps completed in the tick that rewrote the node').toBe(true);
+    expect(rrNodeIndexBytes(box).includes(tail.slice(4, 16)), 'no node index byte once the tick merged').toBe(false);
+  }, 1.5 * HEAVY);
+
+  it('H-112: refreshLeaf tells the tick\'s context when it rewrites a leaf\'s nodes_fts row', () => {
+    const box = makeHistoryBox('ccrc-hist-he112l-', { role: 'fleet' });
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, rrCompacted(RR_U1, 1, 'Polishing the fixture docs.'));
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    rrTickUntil(box, () => rrLeafIds(box).length === 1, 8);
+    const db = openWriter(rrRoot(box).dbFile);
+    try {
+      let told = 0;
+      const ctx = { ...heCtx(box.home, heValue(), true), onNodesFtsDeleted: () => { told += 1; } };
+      expect(DV.refreshLeaf(db, ctx, rrLeafIds(box)[0]!), 'the leaf was re-derived in place').toBe('unchanged');
+      expect(told, 'refreshLeaf told the context').toBe(1);
+    } finally { closeWriter(db); }
+  }, 1.5 * HEAVY);
+
+  it('H-115: the late-pair fast path re-derives at most the leaf cap per call and rewrites the rest fail-closed', () => {
+    const box = makeHistoryBox('ccrc-hist-he115-', { role: 'fleet' });
+    const v = heValue();
+    const ids = [['claude-a', ID, RR_U1, RR_G1, 1], ['claude-b', ID2, 'b2b2b2b2-0000-4000-8000-000000000002', '0189abcd-1234-4678-9abc-0000000000a2', 11]] as const;
+    for (const [wrapper, id, uuid, gen, base] of ids) {
+      plantSession(box, id, { uuid, generation: gen, project: 'demo' });
+      plantTranscript(box, wrapper, SLUG, uuid, rrCompacted(uuid, base, `Rotating the fixture credential ${v} before the release.`));
+      spoolLine(box, id, rrStart(id, uuid, 'startup', { reg: uuid, gen }));
+    }
+    rrTickUntil(box, () => rrLeafIds(box).length === 2, 8);
+    const db = openWriter(rrRoot(box).dbFile);
+    try {
+      db.prepare("UPDATE nodes SET parser_version = 0 WHERE kind <> 'condensed'").run();
+      expect(rrGists(box).filter((g) => g.includes(v)), 'CONTROL: both native leaf gists hold the value').toHaveLength(2);
+      const ctx = { ...heCtx(box.home, v, true), rederiveLeafMax: 1 };
+      expect(DV.rederiveGistsFor(db, ctx, [v], SW.newBudget(), SW.newBudget()), 'both leaves were touched').toBe(2);
+      const derived = (db.prepare('SELECT count(*) AS n FROM nodes WHERE parser_version = ?').get(NODE_PARSER_VERSION) as { n: number }).n;
+      expect(derived, 'one leaf re-derived (the cap), the other only rewritten').toBe(1);
+      expect(heLeaks(db, v), 'both leaves are redacted').toEqual([]);
+    } finally { closeWriter(db); }
+  }, 1.5 * HEAVY);
+
+  it('H-116: a belt cursor that is not a plain number starts the step at the first node, never ends it unread', () => {
+    for (const cursor of ['garbage', 'Infinity', '1.5', '0x1', '9'.repeat(30)]) {
+      const v = heValue();
+      const { db, home } = heStore('ccrc-hist-he116-', [
+        { id: 'he-n1', kind: 'raw_leaf', gist: `Printed ${v} once.` },
+        { id: 'he-n2', kind: 'raw_leaf', gist: 'Plain.' },
+      ], false);
+      try {
+        setStep(db, 'nodes-belt', 1, cursor, null);
+        expect(DV.beltNodesStep(db, heCtx(home, v, false), SW.newBudget()), `cursor ${cursor}: the step completed`).toBe(true);
+        expect(heLeaks(db, v), `cursor ${cursor}: the first node was read`).toEqual([]);
+        expect(getStep(db, 'nodes-belt', 1)?.cursor, `cursor ${cursor}: the stamp is a node rowid`).toBe('2');
+      } finally { closeWriter(db); }
+    }
+  }, HEAVY);
+
+  it('H-117: the recovery sub-steps write their cursors in a transaction of their own, so a reindex run inside one throws', async () => {
+    for (const cursor of [null, 'condensed:0']) {
+      const { db, home } = heStore('ccrc-hist-he117-', [], false);
+      try {
+        db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', 5, NULL, NULL)").run();
+        if (cursor !== null) setStep(db, 'recover-nodes', 5, cursor, null);
+        const ctx = { home, homes: [], ids: null, now: () => Date.now(), budget: SW.newBudget(), belt: null };
+        db.exec('BEGIN');
+        try {
+          await expect(SW.recoverReindex(db, ctx, { pairsAdded: true }, SW.newBudget()), `cursor ${String(cursor)}`).rejects.toThrow();
+        } finally { db.exec('ROLLBACK'); }
+      } finally { closeWriter(db); }
+    }
+  }, HEAVY);
 });
 
 // ── W1-B2 Task 34: DM48's rebuild clause, with Tasks 27 and 28's rr helpers (spec §6.1, §9.14; ruled Q16) ──────

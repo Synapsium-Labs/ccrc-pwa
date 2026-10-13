@@ -72,7 +72,7 @@ import {
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
 import {
-  deriveNodes, reparseTargets, reparseLeaves, clearLeafCrashes, indexNodesFts, NODES_FTS_STEP, rederiveGistsFor, redactNodeFields, reparseFailClosed,
+  deriveNodes, reparseTargets, reparseLeaves, clearLeafCrashes, indexNodesFts, NODES_FTS_STEP, rederiveGistsFor, redactNodeFields, reparseFailClosed, rerollNodes,
   beltNodesStep,
 } from './derive.mjs';
 
@@ -2949,6 +2949,9 @@ export async function tick(db, ctx) {
   // The tick's one ingest context (Task 19), made once and shared by the secrets, the ingest, the launch facts and
   // the ticks row. It is built here, right after the outbox flush, so the secrets step can set its pairIdx (plan task 22).
   const ictx = makeIngestCtx(ctx.home, ctx.homes, ctx.now(), ctx.ids, floorProbeFor(ctx.paths.dbDir));
+  // A node rewrite deletes nodes_fts rows, whose term bytes stay until FTS5 merges them: the rewrite registers the merge
+  // step inside its own transaction, as the blob re-index does (D-4609 (history-nodes-fts-merged-after-rewrite)).
+  registerNodesMerge(ictx, db);
   // §9.2 "Then the secrets": every pair committed and journaled before any drain or FTS insert.
   const secrets = secretsStep(db, ictx, ctx.parsed.secrets);
   ictx.pairIdx = secrets.pairIdx;
@@ -5137,19 +5140,36 @@ export async function rederiveFts(db, ctx, budget, slice = rederiveSlice(budget)
   }
 }
 
+/** Gives a tick's ingest context the hook derive.mjs calls inside each transaction that deletes a nodes_fts row: it
+ *  registers the merge step pending, as the blob paths register it, so mergeSteps merges nodes_fts too. A function of its
+ *  own and `db` last, because the tick's docstring test reads every `name(db` in the body as a step to list.
+ *  D-4609 (history-nodes-fts-merged-after-rewrite) */
+function registerNodesMerge(ictx, db) {
+  ictx.onNodesFtsDeleted = () => { derivStmts(db).pending.run(MERGE_STEP, 1); };
+}
+
 /** Bounded FTS5 merge steps (§6.2), from derivation_state ('fts-merge', 1), within the run's
- *  budget, until FTS5 reports nothing left to merge: a total_changes() delta under 2. Only then
- *  does the guarantee on the index's bytes hold. */
+ *  budget, until FTS5 reports nothing left to merge in either table: a total_changes() delta under 2 from blobs_fts's
+ *  merge and from nodes_fts's. Only then does the guarantee on the index's bytes hold. The step is registered pending by
+ *  every writer that deletes index rows: the blob paths, and the node paths through the context's onNodesFtsDeleted hook
+ *  (the tick installs it, D-4609 (history-nodes-fts-merged-after-rewrite)). */
 export function mergeSteps(db, ctx, budget) {
   if (ctx.fts !== true) return;
   const d = derivStmts(db);
   const row = d.sel.get(MERGE_STEP, 1);
   if (row === undefined || row.completed_ms !== null) return;
   const f = ftsStmts(db);
+  // nodes_fts is a regular FTS5 table whose rewrites are a DELETE and an INSERT, so its deleted terms wait in nodes_fts_data
+  // as blobs_fts's do. Prepared here, not in ftsStmts, and only where the table is: a store without it has nothing to merge,
+  // and the blob paths that share ftsStmts must not start to need it (D-4609 (history-nodes-fts-merged-after-rewrite)).
+  const mergeNodes = db.prepare("SELECT 1 AS t FROM sqlite_master WHERE type = 'table' AND name = 'nodes_fts'").get() === undefined
+    ? null : db.prepare("INSERT INTO nodes_fts (nodes_fts, rank) VALUES ('merge', ?)");
   while (budgetLeft(budget)) {
     const before = f.total.get().n;
     withTx(db, 'NORMAL', () => { f.merge.run(-MERGE_PAGES); });
-    if (f.total.get().n - before < 2) {
+    const between = f.total.get().n;
+    if (mergeNodes !== null) withTx(db, 'NORMAL', () => { mergeNodes.run(-MERGE_PAGES); });
+    if (between - before < 2 && f.total.get().n - between < 2) {
       withTx(db, 'NORMAL', () => { d.done.run(ctx.nowMs, null, MERGE_STEP, 1); });
       return;
     }
@@ -6825,6 +6845,8 @@ export async function rebuildArm(home, P, args, deps, out) {
 const RECOVER_NODE_BATCH = 64;
 /** The node sub-step's cursor: which pass (every leaf, then every condensed node) and the last nodes.rowid done. */
 const RECOVER_NODES_CURSOR_RE = /^(leaves|condensed):([0-9]+)$/;
+/** The node sub-step's derivation step, at the recovery's version; RECOVER_REBUILT_STEP's sibling. */
+const RECOVER_NODES_STEP = 'recover-nodes';
 /** The step, at the recovery's version, completed once this recovery's FTS rebuild (its merge steps included)
  *  completed, so a pass after it never starts another rebuild. */
 const RECOVER_REBUILT_STEP = 'recover-merge';
@@ -6863,12 +6885,15 @@ function openRecoverVersion(db) {
  *  - leaves first: one whose summary is still stored is re-derived (reparseFailClosed: same id, parents re-rolled,
  *    a throw counted parser_crash and passed over, never retried by the next pass); every leaf of the batch is then
  *    rewritten through redactNodeFields;
- *  - then every condensed node is rewritten, so a parent built from a child the rewrite cleaned is clean too.
- *  Its cursor is ('recover-nodes', version), committed after the batch's own transactions
+ *  - then every condensed node is re-rolled from its children, each read through redactField first, and then rewritten
+ *    through redactNodeFields: rowid order puts a child before its parent, so a parent built from a child the rewrite
+ *    cleaned is clean too, and a prefix of a value that an old cut left in a parent's gist, which a field rewrite can
+ *    never mask, is rebuilt away (D-4610 (history-reroll-from-redacted-children)).
+ *  Its cursor is (RECOVER_NODES_STEP, version), committed after the batch's own transactions
  *  (D-4730 (history-reindex-subcursor-idempotent)): re-deriving is idempotent, so a batch re-run after a kill costs
  *  time, never correctness. Answers whether the sub-step is complete. */
 function recoverNodesBatch(db, rctx, version) {
-  const step = getStep(db, 'recover-nodes', version);
+  const step = getStep(db, RECOVER_NODES_STEP, version);
   if (step !== null && step.completedMs !== null) return true;
   const at = RECOVER_NODES_CURSOR_RE.exec(step?.cursor ?? '');
   const pass = at === null ? 'leaves' : at[1];
@@ -6881,18 +6906,19 @@ function recoverNodesBatch(db, rctx, version) {
         WHERE kind = 'condensed' AND rowid > ? ORDER BY rowid LIMIT ?`).all(after, RECOVER_NODE_BATCH);
   if (batch.length === 0) {
     if (pass === 'leaves') {
-      setStep(db, 'recover-nodes', version, 'condensed:0', null);
+      withTx(db, 'NORMAL', () => { setStep(db, RECOVER_NODES_STEP, version, 'condensed:0', null); });
       return false;
     }
-    setStep(db, 'recover-nodes', version, `condensed:${after}`, rctx.nowMs);
+    withTx(db, 'NORMAL', () => { setStep(db, RECOVER_NODES_STEP, version, `condensed:${after}`, rctx.nowMs); });
     return true;
   }
   const leaves = batch.filter((r) => r.readable === 1).map((r) => r.node_id);
   if (leaves.length > 0) reparseFailClosed(db, rctx, leaves);
+  if (pass === 'condensed') rerollNodes(db, rctx, batch.map((r) => r.node_id));
   // Every node of the batch, re-derived or not: a leaf refreshLeaf had to skip, or that threw, is still rewritten
   // fail-closed (R2).
   redactNodeFields(db, rctx, batch.map((r) => r.node_id));
-  setStep(db, 'recover-nodes', version, `${pass}:${Number(batch[batch.length - 1].rid)}`, null);
+  withTx(db, 'NORMAL', () => { setStep(db, RECOVER_NODES_STEP, version, `${pass}:${Number(batch[batch.length - 1].rid)}`, null); });
   return false;
 }
 
@@ -6956,7 +6982,7 @@ export async function recoverReindex(db, ctx, cur, budget) {
       }
       // Its budget ran out after real work: the next call resumes it at its cursor.
       if (!rebuilt.done) return { cur, done: false, moved: true };
-      setStep(db, RECOVER_REBUILT_STEP, version, 'merged', nowMs);
+      withTx(db, 'NORMAL', () => { setStep(db, RECOVER_REBUILT_STEP, version, 'merged', nowMs); });
       return { cur, done: true, moved: true };
     }
     return { cur, done: true, moved: true };
