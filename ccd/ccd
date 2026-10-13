@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=54a0b55e27e8eda7f36941eb44e4de0d6d2241c9a4a6e50465b8680b06790d7f
+# ccrc:generated 1 sha256=bd219f18edf908317531c5e3fc8bb1af9fbe9c85b2a3b5e62c524e572cf72005
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -22928,8 +22928,7 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
 # function; `printf '%(%s)T'` would bypass them), else `date +%s`. The `! declare -F
 # date` guard is the seam: it makes `_now_s_to` call the stub the eleven suites plant,
 # and take the fork-free `$EPOCHSECONDS` path only in production (bash 5.x, no stub).
-_now_s_to() {   # var -> var = epoch seconds. $EPOCHSECONDS when the shell has it and no `date` FUNCTION is defined
-  # (11 test files stub `date` as a function; `printf '%(%s)T'` would bypass them), else `date +%s` (D-4961).
+_now_s_to() {   # var -> var = epoch seconds (D-4961; see the paragraph above)
   if [[ -n "${EPOCHSECONDS:-}" ]] && ! declare -F date >/dev/null; then
     printf -v "$1" '%s' "$EPOCHSECONDS"
   else
