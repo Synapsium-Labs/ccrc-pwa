@@ -1967,7 +1967,7 @@ describe('a box that has scrolled out of the capture window is UNMEASURED, not e
     expect(res.ok === false && res.error).toBe('box-unreadable');
     // Typed once, then stopped: no Enter into an unreadable box, and no clear.
     expect(sendKeysCalls(calls)).toEqual([
-      ['tmux', 'send-keys', '-t', 'cc-x', '-l', 'hello world'],
+      ['tmux', 'send-keys', '-t', '=cc-x:', '-l', 'hello world'],
     ]);
   });
 
