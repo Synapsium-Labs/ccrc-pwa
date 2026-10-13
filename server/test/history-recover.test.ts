@@ -10,18 +10,20 @@
 // Each test's fixture HOMEs are removed when it ends (removeTmpFixturesEachTest), not at the file's end.
 import { describe, it, expect, beforeAll } from 'vitest';
 import fs from 'node:fs';
+import { randomBytes, createHash } from 'node:crypto';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import * as pty from 'node-pty';
 import {
   makeHistoryBox, runSweep, runShim, runDriver, skipOnDarwin, openStoreRO, counters, journalRecords, plantSession,
   plantTranscript, spoolLine, preloadOptions, PRELOADS, CLI, recoverRow, boundEmptyStore,
-  runCli, withPane, seedFamily, journalDirOf, type HistoryBox,
+  runCli, withPane, seedFamily, journalDirOf, type HistoryBox, type SpawnOpts,
 } from './historyHelpers.js';
-import { userRow } from './historyFixtures.js';
+import { userRow, assistantRow, boundaryRow, summaryRow } from './historyFixtures.js';
 import { removeTmpFixturesEachTest, mkTmp } from './tmpHelpers.js';
 import {
   HEALTH_META, RECOVER_PHASES, RECOVERY_STALL_TICKS, SCHEMA_VERSION, WRITING_FORMS, floorThreshold, historyPaths, journalRecord, mergeJournalByTime,
+  REDACTED_MARK, BELT_VERSION, parseBeltState,
 } from '../../ccd/history/lib.mjs';
 import { closeWriter, createStore, getMeta, openWriter, setMeta } from '../../ccd/history/store.mjs';
 
@@ -934,4 +936,510 @@ describe('C55: doctor --adopt (W1-B2 Task 26; spec §8.4)', () => {
     pass(box);   // bound now: the store opens, and the scheduled pass takes its recover arm instead of store-unbound
     const after = recoverRow(box)!; expect(after.cursor !== null || after.completed_ms !== null, 'the step ran once bound').toBe(true);
   }, 1.5 * HEAVY);
+});
+
+// ── W1-B2 Tasks 27–29: doctor --restore, doctor --rebuild, and redaction through recovery ──────────────────────
+// Spec 2026-10-05 §8.4 ("doctor --restore <file>", "doctor --rebuild [--store-id <uuid>]"), §9.14 (recovery,
+// journal replay, redaction first), §6.2 (a pair learned late). Pins: C57 (Task 27); C58, O35, O36's replay
+// half, C67 (Task 28); O47 (Task 29). The helpers new to Task 27 are prefixed rr/Rr (the file's own ID, SLUG, WORK,
+// countOf, metaOf, recoverRow, ccrcSnapshot, lastRc, shimOnPty and cliOnPty serve them too). The binding verbs are
+// irreversible, so their runs go through a REAL terminal (node-pty). The TTY gate has no seam (§10.1). Every spawn
+// carries the statfs preload (historyHelpers), and every HOME is a fixture.
+type RrRow = Record<string, unknown>;
+
+const RR_G1 = '0189abcd-1234-4678-9abc-0000000000a1';
+const RR_U1 = 'a1a1a1a1-0000-4000-8000-000000000001';
+/** The migration seam history-op.test.ts uses (B1 Task 25): an additive v2 through the run-pass driver. */
+const RR_V2 = 'CREATE TABLE seam_v2 (x INTEGER)';
+
+const rrU = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const rrIso = (minutesAgo: number): string => new Date(Date.now() - minutesAgo * 60_000).toISOString();
+const rrRoot = (box: HistoryBox): ReturnType<typeof historyPaths> => historyPaths(box.home);
+const rrNames = (dir: string): string[] => { try { return fs.readdirSync(dir).sort(); } catch { return []; } };
+
+/** A read of the box's store through a read-only handle, closed after. */
+function rrQ<T>(box: HistoryBox, sql: string, ...args: (string | number)[]): T[] {
+  const db = openStoreRO(box);
+  try { return db.prepare(sql).all(...args) as T[]; } finally { db.close(); }
+}
+/** Any SQLite file (a backup, the store), read-only. */
+function rrFileDb<T>(file: string, f: (db: DatabaseSync) => T): T {
+  const db = new DatabaseSync(file, { readOnly: true });
+  try { return f(db); } finally { db.close(); }
+}
+const rrDbMeta = (file: string, k: string): string | null =>
+  rrFileDb(file, (db) => (db.prepare('SELECT v FROM meta WHERE k = ?').get(k) as { v: string } | undefined)?.v ?? null);
+const rrJournalMode = (file: string): string =>
+  rrFileDb(file, (db) => String((db.prepare('PRAGMA journal_mode').get() as { journal_mode: string }).journal_mode));
+const rrUserVersion = (file: string): number =>
+  rrFileDb(file, (db) => Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version));
+
+const rrRecovered = (box: HistoryBox): boolean => {
+  const r = recoverRow(box);
+  return r !== undefined && r.completed_ms !== null;
+};
+const rrStepDone = (box: HistoryBox, step: string, version: number): boolean =>
+  rrQ<{ c: number | null }>(box, 'SELECT completed_ms AS c FROM derivation_state WHERE step = ? AND version = ?', step, version)[0]?.c != null;
+
+/** The env of a run that B1's faults preload SIGKILLs at one fs call (HISTORY_TEST_KILL). */
+const rrKill = (spec: string): Record<string, string> => ({
+  NODE_OPTIONS: preloadOptions([PRELOADS.statfs, PRELOADS.faults]), HISTORY_TEST_KILL: spec,
+});
+
+/** Scheduled passes through the shim until `done()` holds, at most `max`. Every one must exit 0. No pass may answer
+ *  store-unbound, which is what a restored or rebuilt store must never become (DI3). */
+function rrTickUntil(box: HistoryBox, done: () => boolean, max = 8, opts: SpawnOpts = {}): void {
+  for (let i = 0; i < max; i += 1) {
+    const r = runShim(box, [], opts);
+    expect(r.code, `pass ${i + 1}:\n${r.stdout}\n${r.stderr}`).toBe(0);
+    expect(r.stdout, 'a restored or rebuilt store is never refused unbound').not.toMatch(/store-unbound/);
+    if (done()) return;
+  }
+  throw new Error(`rrTickUntil: not done after ${max} passes`);
+}
+
+const rrStart = (id: string, sid: string, src: 'startup' | 'resume' | 'clear', extra: RrRow = {}): RrRow =>
+  ({ v: 1, ev: 'SessionStart', id, sid, src, ...extra });
+
+/** `n` alternating user and assistant rows of transcript `sid`, uuids rrU(base)… */
+function rrTalk(sid: string, base: number, n: number): object[] {
+  const rows: object[] = [];
+  for (let i = 0; i < n; i += 1) {
+    const at = { uuid: rrU(base + i), ts: rrIso(n - i), parentUuid: i === 0 ? null : rrU(base + i - 1), sessionId: sid, cwd: WORK };
+    rows.push(i % 2 === 0 ? userRow({ ...at, text: `zqrecover ask ${i}` }) : assistantRow({ ...at, text: `zqrecover answer ${i}` }));
+  }
+  return rows;
+}
+
+/** A transcript with one manual compaction (§7.4). It has a user and an assistant row, then the boundary, then the
+ *  summary right after it (the manual +1 position, which the boundary's anchor names), then one more row. The
+ *  first row and the summary's Current Work section both carry `work`. Row uuids are rrU(base)…rrU(base + 4).
+ *  One native leaf derives from it. */
+function rrCompacted(sid: string, base: number, work: string): object[] {
+  const at = (k: number) => ({
+    uuid: rrU(base + k), ts: rrIso(10 - k), parentUuid: k === 0 ? null : rrU(base + k - 1), sessionId: sid, cwd: WORK,
+  });
+  const anchor = rrU(base + 3);
+  const summary = [
+    '<summary>',
+    '1. Primary Request and Intent:',
+    '   Keep the fixture repository healthy.',
+    '8. Current Work:',
+    `   ${work}`,
+    '9. Optional Next Step:',
+    '   Run the suite again.',
+    '</summary>',
+  ].join('\n');
+  return [
+    userRow({ ...at(0), text: `zqrecover ask about ${work}` }),
+    assistantRow({ ...at(1), text: 'zqrecover answer' }),
+    boundaryRow({ ...at(2), trigger: 'manual', headUuid: anchor, anchorUuid: anchor, tailUuid: anchor, allUuids: [] }),
+    summaryRow({ ...at(3), text: summary }),
+    userRow({ ...at(4), text: 'zqrecover after the compaction' }),
+  ];
+}
+
+interface RrBuilt { box: HistoryBox; storeId: string; transcript: string }
+/** A bound box whose store holds one confirmed family (ID, RR_G1) and its three-row transcript, ingested. Its
+ *  journal holds the file, spool, verdict (`drained` included) and tick records of that work. */
+function rrBuilt(prefix: string): RrBuilt {
+  const box = makeHistoryBox(prefix, { role: 'fleet' });
+  plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+  const transcript = plantTranscript(box, 'claude-a', SLUG, RR_U1, rrTalk(RR_U1, 1, 3));
+  spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+  rrTickUntil(box, () => countOf(box, 'entries') === 3);
+  return { box, storeId: fs.readFileSync(rrRoot(box).storeId, 'utf8').trim(), transcript };
+}
+
+/** `doctor --backup` through the direct door (Task 22; not irreversible, so no terminal). Returns the new name. */
+function rrBackup(box: HistoryBox): string {
+  const dir = rrRoot(box).backups;
+  const before = new Set(rrNames(dir));
+  const r = runShim(box, ['--op', 'backup']);
+  expect(r.code, `${r.stdout}\n${r.stderr}`).toBe(0);
+  const made = rrNames(dir).filter((n) => /^[0-9]{8}T[0-9]{6}Z\.db$/.test(n) && !before.has(n));
+  expect(made, 'one new <ts>.db').toHaveLength(1);
+  return made[0]!;
+}
+
+/** The loss. The DB always goes, with its -wal and -shm (§8.4's remedy moves the three together). With
+ *  `binding`, store.id, store.writer and any pending marker go too. With `journal`, so does journal/. A box that
+ *  loses all three holds only what a fresh box with a planted backup holds (C57). */
+function rrLose(box: HistoryBox, o: { binding: boolean; journal: boolean }): void {
+  const P = rrRoot(box);
+  for (const f of [P.dbFile, P.wal, P.shm]) fs.rmSync(f, { force: true });
+  if (o.binding) for (const f of [P.storeId, P.writer, P.pending]) fs.rmSync(f, { force: true });
+  if (o.journal) fs.rmSync(P.journalDir, { recursive: true, force: true });
+}
+
+/** Every `bind` verdict in every journal directory. */
+const rrBinds = (box: HistoryBox): { bind: unknown; writer: unknown }[] =>
+  journalRecords(box).filter((r) => r['k'] === 'verdict' && r['kind'] === 'bind').map((r) => ({ bind: r['bind'], writer: r['writer'] }));
+
+/** What a restore or a rebuild must leave (§8.4):
+ *  - store.id and meta.store_id name `storeId`;
+ *  - a new writer token is in store.writer and mirrored in meta.writer;
+ *  - one `bound:<ms>` row names the verb;
+ *  - the store is in WAL mode;
+ *  - its `bind` record sits in journal/<storeId>/ under the new token. */
+function rrExpectBound(box: HistoryBox, storeId: string, kind: 'restore' | 'rebuild', oldWriter: string | null): void {
+  const P = rrRoot(box);
+  expect(fs.readFileSync(P.storeId, 'utf8').trim(), 'store.id').toBe(storeId);
+  expect(metaOf(box, 'store_id'), 'meta.store_id').toBe(storeId);
+  const writer = fs.readFileSync(P.writer, 'utf8').trim();
+  expect(writer).toMatch(/^[0-9a-f]{8}$/);
+  expect(metaOf(box, 'writer'), 'meta.writer mirrors store.writer').toBe(writer);
+  if (oldWriter !== null) expect(writer, 'a binding mints a new writer token').not.toBe(oldWriter);
+  expect(rrQ<{ v: string }>(box, "SELECT v FROM meta WHERE k LIKE 'bound:%'").map((x) => x.v)).toEqual([kind]);
+  expect(rrJournalMode(P.dbFile), 'journal_mode').toBe('wal');
+  expect(rrBinds(box).filter((b) => b.writer === writer)).toEqual([{ bind: kind, writer }]);
+  expect(rrNames(path.join(P.journalDir, storeId)).some((n) => n.endsWith(`.${writer}.jsonl`)),
+    'the bind record went to journal/<store_id>/ under the new writer').toBe(true);
+}
+
+const rrFamilies = (box: HistoryBox, id: string): { generation: string; merged_into: number | null }[] =>
+  rrQ(box, 'SELECT generation, merged_into FROM sessions WHERE ccrc_id = ? ORDER BY generation', id);
+const rrEpochs = (box: HistoryBox, id: string): { generation: string; seq: number; cc_session_uuid: string; cause: string }[] =>
+  rrQ(box, `SELECT s.generation, e.seq, e.cc_session_uuid, e.cause FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk
+    WHERE s.ccrc_id = ? ORDER BY s.generation, e.seq`, id);
+
+/** A copy of a backup that claims a newer schema than this build knows. */
+function rrSetUserVersion(file: string, v: number): void {
+  const db = new DatabaseSync(file);
+  try { db.exec(`PRAGMA user_version = ${v}`); } finally { db.close(); }
+}
+/** A copy of a backup whose integrity_check fails while every table still reads. The entries_ts index's
+ *  definition is rewritten so its stored keys no longer match its table (integrity_check then answers "row N
+ *  missing from index entries_ts" rows rather than throwing, and meta still reads). The handle is opened with
+ *  `defensive: false`: node:sqlite's defensive flag defaults to true on Node 24, where even writable_schema ON
+ *  refuses the sqlite_master UPDATE ("table sqlite_master may not be modified", measured on 24.14.1, the workers'
+ *  Node); 22.16.0 has no such option and is not defensive, so the flag changes nothing there. */
+function rrCorruptIndex(file: string): void {
+  const db = new DatabaseSync(file, { defensive: false });
+  try {
+    db.exec('PRAGMA writable_schema = ON');
+    db.prepare("UPDATE sqlite_master SET sql = ? WHERE name = 'entries_ts'").run('CREATE INDEX entries_ts ON entries(ts_ms, transcript_pk)');
+    db.exec('PRAGMA writable_schema = OFF');
+  } finally { db.close(); }
+  const rows = rrFileDb(file, (d) => (d.prepare('PRAGMA integrity_check').all() as { integrity_check: string }[]).map((r) => r.integrity_check));
+  expect(rows, 'CONTROL: the fixture really fails integrity_check').not.toEqual(['ok']);
+}
+
+describe('C57: doctor --restore, the drill (W1-B2 Task 27)', () => {
+
+  it('a fresh box holding only a backup: the tick refuses store-recoverable and creates nothing; --restore (the CLI, on a terminal) binds the backup, and the next passes recover, then resume the backup\'s cursors', async () => {
+    const { box, storeId, transcript } = rrBuilt('ccrc-hist-c57a-');
+    const P = rrRoot(box);
+    const name = rrBackup(box);
+    const backupWriter = rrDbMeta(path.join(P.backups, name), 'writer');
+    const live = rrQ<{ file_id: number }>(box, "SELECT file_id FROM ingest_files WHERE status = 'live'");
+    expect(live).toHaveLength(1);
+    // A row written after the backup: the restored cursor must take it from where the backup left off.
+    fs.appendFileSync(transcript, `${JSON.stringify(userRow({
+      uuid: rrU(4), ts: rrIso(0), parentUuid: rrU(3), sessionId: RR_U1, cwd: WORK, text: 'zqrecover written after the backup',
+    }))}\n`);
+    rrLose(box, { binding: true, journal: true });
+    const hold = runShim(box);
+    expect(hold.stdout).toMatch(/^history-sweep: store-recoverable$/m);
+    expect([fs.existsSync(P.dbFile), fs.existsSync(P.storeId), fs.existsSync(P.pending)], 'the tick created nothing')
+      .toEqual([false, false, false]);
+    const r = await cliOnPty(box, ['doctor', '--restore', name]);
+    expect(r.code, r.out).toBe(0);
+    rrExpectBound(box, storeId, 'restore', backupWriter);
+    expect(recoverRow(box), 'the recovery step is registered inside the restored file').toMatchObject({ completed_ms: null });
+    rrTickUntil(box, () => rrRecovered(box));
+    // The drain and ingest resume after the step; a Stop line is the discovery hint for the appended row.
+    spoolLine(box, ID, { v: 1, ev: 'Stop', id: ID });
+    rrTickUntil(box, () => countOf(box, 'entries') === 4);
+    expect(rrQ<{ file_id: number }>(box, "SELECT file_id FROM ingest_files WHERE status = 'live'"),
+      'the backup\'s cursor row resumed; nothing was retired and re-read').toEqual(live);
+  }, 1.5 * HEAVY);
+
+  it('a pre-v<N>.db restores into WAL like a <ts>.db, and under history-off the restore binds while the recovery step waits for the switch', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c57b-');
+    const P = rrRoot(box);
+    const ts = rrBackup(box);
+    // A VACUUM INTO output under the snapshot's name: like every pre-v<N>.db, a rollback-journal database.
+    fs.copyFileSync(path.join(P.backups, ts), path.join(P.backups, 'pre-v2.db'));
+    expect(rrJournalMode(path.join(P.backups, 'pre-v2.db')), 'CONTROL: the backup is not WAL').toBe('delete');
+    rrLose(box, { binding: true, journal: true });
+    expect(runShim(box).stdout).toMatch(/^history-sweep: store-recoverable$/m);
+    fs.writeFileSync(P.off, '');
+    const r = await cliOnPty(box, ['doctor', '--restore', 'pre-v2.db']);
+    expect(r.code, r.out).toBe(0);
+    rrExpectBound(box, storeId, 'restore', null);
+    expect(runShim(box).code, 'a scheduled pass under history-off').toBe(0);
+    expect(rrRecovered(box), 'the step waits while history-off is set').toBe(false);
+    fs.rmSync(P.off);
+    rrTickUntil(box, () => rrRecovered(box));
+  }, 1.5 * HEAVY);
+
+  it('a kill right after the link, with store.id absent: the next pass finishes the pending marker and runs the recovery step', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c57c-');
+    const P = rrRoot(box);
+    const name = rrBackup(box);
+    rrLose(box, { binding: true, journal: true });
+    expect(runShim(box).stdout).toMatch(/^history-sweep: store-recoverable$/m);
+    await shimOnPty(box, ['--op', 'restore', name], rrKill('linkSync:.history.db.restore.:1:after'));
+    expect([fs.existsSync(P.dbFile), fs.existsSync(P.storeId), fs.existsSync(P.pending)],
+      'the kill landed between the link and the pending rename').toEqual([true, false, true]);
+    rrTickUntil(box, () => rrRecovered(box));
+    expect(fs.readFileSync(P.storeId, 'utf8').trim()).toBe(storeId);
+    expect(rrBinds(box).map((b) => b.bind), 'the bind row was inside the file; the next pass flushed it').toEqual(['restore']);
+  }, 1.5 * HEAVY);
+
+  it('a kill right after the link, with store.id present: the next pass opens the store and runs the recovery step over the kept journal', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c57d-');
+    const P = rrRoot(box);
+    const name = rrBackup(box);
+    rrLose(box, { binding: false, journal: false });
+    expect(runShim(box).stdout).toMatch(/^history-sweep: store-missing$/m);
+    const k = await shimOnPty(box, ['--op', 'restore', name], rrKill('linkSync:.history.db.restore.:1:after'));
+    // With store.id present, a restore that was NOT killed leaves the same three facts, so the kill is measured
+    // on what only a kill leaves: no result line, the linked temp (unlinked right after the link), the op marker
+    // (removed in restoreArm's finally), and no restore bind in the journal yet (it is in the file's outbox).
+    expect(k.out, 'the pass was killed before its result').not.toMatch(/\{"rc"/);
+    expect([fs.existsSync(P.dbFile), fs.readFileSync(P.storeId, 'utf8').trim(), fs.existsSync(P.pending)])
+      .toEqual([true, storeId, false]);
+    expect(rrNames(P.dbDir).some((n) => n.startsWith('.history.db.restore.')), 'the kill left the linked temp').toBe(true);
+    expect(fs.existsSync(P.op), 'the killed pass left its op marker').toBe(true);
+    expect(rrBinds(box).filter((b) => b.bind === 'restore'), 'the bind row is still inside the file').toEqual([]);
+    rrTickUntil(box, () => rrRecovered(box));
+    expect(rrBinds(box).filter((b) => b.bind === 'restore')).toHaveLength(1);
+    expect(counters(box)['recover_chunk_failed'] ?? 0).toBe(0);
+  }, 1.5 * HEAVY);
+
+  it('a v1 backup under a v2 migration seam: the next pass snapshots and migrates, and only the passes after it replay', async () => {
+    const { box } = rrBuilt('ccrc-hist-c57e-');
+    const P = rrRoot(box);
+    const name = rrBackup(box);
+    rrLose(box, { binding: false, journal: false });
+    expect(lastRc((await shimOnPty(box, ['--op', 'restore', name])).out)).toEqual({ rc: 0 });
+    const mig = runDriver(box, { extraMigrations: [RR_V2] });
+    expect(mig.code, `${mig.stdout}\n${mig.stderr}`).toBe(0);
+    expect(mig.stdout).toMatch(/^history-sweep: migrated$/m);
+    expect(rrUserVersion(P.dbFile)).toBe(2);
+    expect(fs.existsSync(path.join(P.backups, 'pre-v2.db')), 'the migration snapshot').toBe(true);
+    expect(rrRecovered(box), 'the replay waits for the code\'s version (§9.2, DI6)').toBe(false);
+    for (let i = 0; i < 6 && !rrRecovered(box); i += 1) {
+      const t = runDriver(box, { extraMigrations: [RR_V2] });
+      expect(t.code, `${t.stdout}\n${t.stderr}`).toBe(0);
+    }
+    expect(rrRecovered(box)).toBe(true);
+  }, 1.5 * HEAVY);
+
+  it('a backup taken after a re-key: the recovery completes with one (id, G) family (DI4)', async () => {
+    const box = makeHistoryBox('ccrc-hist-c57f-', { role: 'fleet' });
+    const ID = 'claude-a-rekey';
+    const U5 = 'a5a5a5a5-0000-4000-8000-000000000005';
+    const G3 = '0189abcd-1234-4678-9abc-0000000000c3';
+    plantSession(box, ID, { uuid: U5, project: 'demo' });                 // no .generation yet: a '' family
+    spoolLine(box, ID, rrStart(ID, U5, 'startup', { reg: U5 }));
+    rrTickUntil(box, () => rrFamilies(box, ID).length === 1);
+    plantSession(box, ID, { generation: G3 });
+    spoolLine(box, ID, rrStart(ID, U5, 'resume', { reg: U5, gen: G3 }));
+    rrTickUntil(box, () => rrFamilies(box, ID).some((f) => f.generation === '' && f.merged_into !== null));
+    const name = rrBackup(box);
+    rrLose(box, { binding: false, journal: false });
+    expect(lastRc((await shimOnPty(box, ['--op', 'restore', name])).out)).toEqual({ rc: 0 });
+    rrTickUntil(box, () => rrRecovered(box));
+    expect(rrFamilies(box, ID).filter((f) => f.merged_into === null).map((f) => f.generation)).toEqual([G3]);
+    expect(rrEpochs(box, ID).map((e) => [e.generation, e.seq, e.cc_session_uuid])).toEqual([[G3, 1, U5]]);
+    expect(counters(box)['recover_chunk_failed'] ?? 0).toBe(0);
+  }, 1.5 * HEAVY);
+
+  it('a recovery cursor held still for 15 passes by a throwing seam: status (and so doctor) FAILs recovery-stalled', async () => {
+    const { box } = rrBuilt('ccrc-hist-c57g-');
+    const name = rrBackup(box);
+    rrLose(box, { binding: false, journal: false });
+    expect(lastRc((await shimOnPty(box, ['--op', 'restore', name])).out)).toEqual({ rc: 0 });
+    // Task 25's knob and its substring (the stall case above): every statement that moves the step's cursor throws, so
+    // each pass's first chunk rolls back with its cursor.
+    const stall: SpawnOpts = { preloads: [PRELOADS.faults], env: { HISTORY_TEST_THROW_SQL: "SET cursor = ? WHERE step = 'recover'" } };
+    for (let i = 0; i < 15; i += 1) {
+      const t = runShim(box, [], stall);
+      expect(t.code, `pass ${i + 1}:\n${t.stdout}\n${t.stderr}`).toBe(0);
+    }
+    expect(rrRecovered(box)).toBe(false);
+    expect(Number(metaOf(box, HEALTH_META.recoverUnmovedTicks))).toBeGreaterThanOrEqual(15);
+    const st = runCli(box, ['status', '--json']);
+    const health = st.json?.['health'] as { fail?: { word: string }[] } | undefined;
+    expect((health?.fail ?? []).map((f) => f.word), st.stdout).toContain('recovery-stalled');
+  }, 1.5 * HEAVY);
+
+  it('each refusal answers restore-refused and writes nothing; CLAUDECODE and a piped stdin refuse at both doors; free space one byte short refuses and one byte over proceeds', async () => {
+    const { box, storeId } = rrBuilt('ccrc-hist-c57h-');
+    const P = rrRoot(box);
+    const name = rrBackup(box);
+    const size = fs.statSync(path.join(P.backups, name)).size;
+    rrLose(box, { binding: true, journal: true });
+    expect(runShim(box).stdout).toMatch(/^history-sweep: store-recoverable$/m);
+    const refused = async (args: string[], why: string, env: Record<string, string> = {}): Promise<void> => {
+      const before = ccrcSnapshot(box);
+      const r = await shimOnPty(box, ['--op', 'restore', ...args], env);
+      expect(lastRc(r.out), `${why}\n${r.out}`).toEqual({ rc: 2, reason: 'restore-refused' });
+      expect(ccrcSnapshot(box), `${why}: nothing written`).toEqual(before);
+    };
+    // The name: never a path, never a temp, never a link.
+    await refused([`sub/${name}`], 'a name with /');
+    fs.copyFileSync(path.join(P.backups, name), path.join(P.backups, `.${name}.tmp`));
+    await refused([`.${name}.tmp`], 'a .tmp');
+    fs.symlinkSync(path.join(P.backups, name), path.join(P.backups, '20200101T000000Z.db'));
+    await refused(['20200101T000000Z.db'], 'a symlink');
+    // An old store's WAL with no DB would be replayed into the restored file (RC1).
+    fs.writeFileSync(P.wal, '');
+    await refused([name], 'a leftover history.db-wal');
+    fs.rmSync(P.wal);
+    fs.writeFileSync(P.storeId, '0189abcd-1234-4678-9abc-0000000000ff\n', { mode: 0o600 });
+    await refused([name], 'store.id names another store');
+    fs.rmSync(P.storeId);
+    fs.copyFileSync(path.join(P.backups, name), path.join(P.backups, '20200101T000001Z.db'));
+    rrSetUserVersion(path.join(P.backups, '20200101T000001Z.db'), 2);
+    await refused(['20200101T000001Z.db'], 'a newer user_version');
+    fs.copyFileSync(path.join(P.backups, name), path.join(P.backups, '20200101T000002Z.db'));
+    rrCorruptIndex(path.join(P.backups, '20200101T000002Z.db'));
+    await refused(['20200101T000002Z.db'], 'a failed integrity_check');
+    // planCopy: free must exceed the threshold plus the backup's size (§6.11).
+    const fsSize = 100 * 2 ** 30;
+    const threshold = floorThreshold(fsSize);
+    await refused([name], 'free = threshold + size - 1', { HISTORY_TEST_STATFS: `${threshold + size - 1}:${fsSize}` });
+    await refused([name], 'a statfs that throws reads as low-disk (R3)', { HISTORY_TEST_STATFS: 'throw' });
+    // The bumps, at both doors (§8.4): CLAUDECODE, then a stdin that is no TTY.
+    const before = ccrcSnapshot(box);
+    const cc = runCli(box, ['doctor', '--restore', name, '--json'], { env: { CLAUDECODE: '1' } });
+    expect(cc.code, cc.stdout + cc.stderr).toBe(2);
+    expect(cc.stdout + cc.stderr).toContain('apply-in-session');
+    expect(lastRc(runShim(box, ['--op', 'restore', name], { env: { CLAUDECODE: '1' } }).stdout))
+      .toEqual({ rc: 2, reason: 'apply-in-session' });
+    const piped = runCli(box, ['doctor', '--restore', name, '--json']);
+    expect(piped.code, piped.stdout + piped.stderr).toBe(2);
+    expect(piped.stdout + piped.stderr).toContain('needs-tty');
+    expect(lastRc(runShim(box, ['--op', 'restore', name]).stdout)).toEqual({ rc: 2, reason: 'needs-tty' });
+    expect(ccrcSnapshot(box), 'the bumps wrote nothing').toEqual(before);
+    // A killed restore's copy is removed first, even by a pass that then refuses: under the lock every temp is
+    // stale (§9.4), and free space is measured without it. The one write a refusal makes, and only of a dead temp.
+    const dead = path.join(P.dbDir, '.history.db.restore.999999');
+    fs.writeFileSync(dead, 'a killed restore\'s copy', { mode: 0o600 });
+    const low = await shimOnPty(box, ['--op', 'restore', name], { HISTORY_TEST_STATFS: `${threshold + size - 1}:${fsSize}` });
+    expect(lastRc(low.out), low.out).toEqual({ rc: 2, reason: 'restore-refused' });
+    expect(fs.existsSync(dead), 'the stale temp went before the refusal').toBe(false);
+    // One byte more than the boundary, and it proceeds.
+    const ok = await shimOnPty(box, ['--op', 'restore', name], { HISTORY_TEST_STATFS: `${threshold + size + 1}:${fsSize}` });
+    expect(lastRc(ok.out), ok.out).toEqual({ rc: 0 });
+    expect(metaOf(box, 'store_id')).toBe(storeId);
+    // A live store is never overwritten.
+    await refused([name], 'a DB present');
+  }, 2.5 * HEAVY);
+});
+
+describe('Redaction first at the link: a restore applies the journal\'s redact records before history.db exists (W1-B2 Task 27)', () => {
+
+  it('a backup that lacks a pair only the journal holds: read verbs run right after the commit, before any pass, print no stretch of the value', async () => {
+    const box = makeHistoryBox('ccrc-hist-c57r-', { role: 'fleet' });
+    const P = rrRoot(box);
+    const value = randomBytes(32).toString('hex');
+    const sha = createHash('sha256').update(value).digest('hex').toUpperCase();
+    const tokenFile = path.join(box.home, '.ccrc', 'fixture.token');
+    plantSession(box, ID, { uuid: RR_U1, generation: RR_G1, project: 'demo' });
+    plantTranscript(box, 'claude-a', SLUG, RR_U1, [
+      userRow({ uuid: rrU(1), ts: rrIso(3), parentUuid: null, sessionId: RR_U1, cwd: WORK, text: `zqatlink the key ${value} here` }),
+      assistantRow({ uuid: rrU(2), ts: rrIso(2), parentUuid: rrU(1), sessionId: RR_U1, cwd: WORK, text: 'zqatlink noted' }),
+    ]);
+    spoolLine(box, ID, rrStart(ID, RR_U1, 'startup', { reg: RR_U1, gen: RR_G1 }));
+    rrTickUntil(box, () => countOf(box, 'entries') === 2);
+    const name = rrBackup(box);                                // taken before the pair is known
+    fs.writeFileSync(tokenFile, `${value}\n`, { mode: 0o600 });
+    expect(runShim(box).code).toBe(0);                     // learned now, and journaled as a redact record
+    fs.rmSync(tokenFile);                                    // then rotated out of every file: only the journal knows it
+    const pairSql = 'SELECT count(*) AS n FROM redact_hashes WHERE len = ? AND hex(sha256) = ?';
+    expect(rrFileDb(path.join(P.backups, name), (db) => Number((db.prepare(pairSql).get(value.length, sha) as { n: number }).n)),
+      'CONTROL: the backup lacks the pair').toBe(0);
+    expect(journalRecords(box).some((r) => r['k'] === 'redact' && String(r['sha256']).toUpperCase() === sha),
+      'CONTROL: the journal holds it').toBe(true);
+    rrLose(box, { binding: false, journal: false });
+    expect(lastRc((await shimOnPty(box, ['--op', 'restore', name])).out)).toEqual({ rc: 0 });
+    expect(recoverRow(box), 'CONTROL: no pass has run the recovery step yet').toMatchObject({ completed_ms: null });
+    expect(rrQ<{ n: number }>(box, pairSql, value.length, sha)[0]!.n, 'the linked store already holds the journal\'s pair').toBe(1);
+    const pane = withPane(box, ID);
+    for (const args of [['grep', 'zqatlink'], ['grep', 'zqatlink', '--json'], ['expand', rrU(1)], ['expand', rrU(1), '--json']]) {
+      const o = runCli(box, args, { env: pane });
+      expect(o.code, `${args.join(' ')}: rc`).toBe(0);
+      const said = o.stdout + o.stderr;
+      for (let i = 0; i + 14 <= value.length; i += 10) {
+        expect(said.includes(value.slice(i, i + 14)), `${args.join(' ')}: a stretch of the value at ${i}`).toBe(false);
+      }
+      expect(o.stdout.includes(REDACTED_MARK), `${args.join(' ')}: masked`).toBe(true);
+    }
+    expect(recoverRow(box), 'the read verbs ran before any pass: the step is still open').toMatchObject({ completed_ms: null });
+  }, 1.5 * HEAVY);
+
+  it('a journal file the pair read cannot open refuses the restore: named, nothing linked, the staged copy removed; readable again, the restore runs', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file regardless of its mode
+    const { box, storeId } = rrBuilt('ccrc-hist-c57s-');
+    const P = rrRoot(box);
+    const name = rrBackup(box);
+    rrLose(box, { binding: false, journal: false });
+    const files = rrNames(path.join(P.journalDir, storeId)).filter((n) => n.endsWith('.jsonl'));
+    expect(files.length > 0, 'CONTROL: the journal holds a file').toBe(true);
+    const shut = path.join(P.journalDir, storeId, files[0]!);
+    const idBefore = fs.readFileSync(P.storeId, 'utf8');
+    fs.chmodSync(shut, 0o000);
+    try {
+      // D-4593 (history-restore-refuses-unread-journal-pairs): a pair only the shut file holds would be missing from
+      // the copy at link time, and read verbs answer while the recovery step is registered.
+      const r = await shimOnPty(box, ['--op', 'restore', name]);
+      expect(lastRc(r.out), r.out).toEqual({ rc: 2, reason: 'restore-refused' });
+      const line = r.out.replace(/\r/g, '').split('\n').find((l) => l.includes('journal file(s) could not be read for redact pairs:'));
+      expect(line !== undefined && line.includes(files[0]!), 'the unread file is named, never skipped silently').toBe(true);
+      expect(fs.existsSync(P.dbFile), 'nothing was linked').toBe(false);
+      expect(rrNames(P.dbDir).filter((n) => n.startsWith('.history.db.restore.')), 'the staged copy was removed').toEqual([]);
+      expect(fs.readFileSync(P.storeId, 'utf8'), 'store.id is unchanged').toBe(idBefore);
+    } finally { fs.chmodSync(shut, 0o600); }
+    expect(lastRc((await shimOnPty(box, ['--op', 'restore', name])).out), 'readable again, the same restore runs').toEqual({ rc: 0 });
+  }, 1.5 * HEAVY);
+
+  it('the restore checks the belt witness before its pair insert and stamps it after: a backup stale against its own content records the belt due, a stamped one keeps its state (ruling R-witness-restore)', async () => {
+    const belt = (box: HistoryBox): ReturnType<typeof parseBeltState> => parseBeltState(metaOf(box, 'fts_belt'));
+    /** A completed belt generation, stamped by the tick that wrote it (Task 7B's recordTick). */
+    const stamped = (box: HistoryBox): boolean => {
+      const s = belt(box);
+      return s !== null && s.v === BELT_VERSION && s.gen === null && s.w !== undefined;
+    };
+    const vrg = (s: ReturnType<typeof parseBeltState>): unknown => (s === null ? null : { v: s.v, rids: s.rids, gen: s.gen });
+
+    // A: after the last stamped tick, a B1-shaped write (a pair recorded straight into redact_hashes: the top rowid, a
+    // witnessed value, rises and fts_belt is not touched, as a build without the belt records one), then the backup.
+    // Its fts_belt witness is stale against its own content, so the restore must record the belt due, never stamp the
+    // stale state clean.
+    const a = rrBuilt('ccrc-hist-c57w-');
+    rrTickUntil(a.box, () => stamped(a.box), 12);
+    const before = metaOf(a.box, 'fts_belt');
+    const db = new DatabaseSync(rrRoot(a.box).dbFile);
+    try {
+      db.prepare('INSERT INTO redact_hashes (len, sha256, first_seen_ms) VALUES (?, ?, ?)').run(40, randomBytes(32), Date.now());
+    } finally { db.close(); }
+    const nameA = rrBackup(a.box);
+    expect(metaOf(a.box, 'fts_belt'), 'CONTROL: neither the B1-shaped write nor the backup pass wrote the belt state').toBe(before);
+    rrLose(a.box, { binding: false, journal: false });
+    expect(lastRc((await shimOnPty(a.box, ['--op', 'restore', nameA])).out)).toEqual({ rc: 0 });
+    expect(recoverRow(a.box), 'CONTROL: no pass has run since the restore').toMatchObject({ cursor: null, completed_ms: null });
+    expect(vrg(belt(a.box)), 'the restore recorded the belt due: the copy\'s witness had moved').toEqual({ v: 0, rids: [], gen: null });
+
+    // B: a backup right after a stamped tick, then a pair only the journal holds. The check finds the witness unmoved
+    // and keeps the backup's state; the stamp records the pair insert, so `w` moves with the top rowid and the first
+    // recovery pass does not read the restore's own write as another build's.
+    const b = rrBuilt('ccrc-hist-c57x-');
+    rrTickUntil(b.box, () => stamped(b.box), 12);
+    const atBackup = belt(b.box)!;
+    const nameB = rrBackup(b.box);
+    const value = randomBytes(32).toString('hex');
+    fs.writeFileSync(path.join(b.box.home, '.ccrc', 'fixture.token'), `${value}\n`, { mode: 0o600 });
+    expect(runShim(b.box).code).toBe(0);                       // learned and journaled after the backup
+    rrLose(b.box, { binding: false, journal: false });
+    expect(lastRc((await shimOnPty(b.box, ['--op', 'restore', nameB])).out)).toEqual({ rc: 0 });
+    expect(recoverRow(b.box), 'CONTROL: the journal-only pair went in, so the step starts +pairs').toMatchObject({ cursor: 'index+pairs', completed_ms: null });
+    const kept = belt(b.box);
+    expect(vrg(kept), 'the restore kept the backup\'s belt state: its witness had not moved').toEqual(vrg(atBackup));
+    expect(kept?.w !== undefined && kept.w !== atBackup.w, 'the restore stamped its own pair insert: w moved with the top redact_hashes rowid').toBe(true);
+  }, 2 * HEAVY);
 });

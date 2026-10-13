@@ -59,7 +59,7 @@ import {
   decideRecallOff, recallOffPath, decideReparse, REPARSE_MAX_TARGETS, planCopy, STORE_DB_REL,
   diffForeignKeys, ftsTablesHealthy, FTS_REBUILD_STEP, decideCounterResets, decideIntegrity,
   RECOVER_PHASES, formatRecoverCursor, parseRecoverCursor, orderJournalFiles, indexRecord, replayStep, nextUnmovedTicks, HEALTH_META,
-  mergeJournalByTime, decideBind,
+  mergeJournalByTime, decideBind, restoreNameOk,
 } from './lib.mjs';
 import {
   MIGRATIONS, StoreError, bump, clearDoneMarkers, closeWriter, createStore, dropPending, finishPending, getMeta,
@@ -68,6 +68,7 @@ import {
   CODEC, brotli, unbrotli, unbrotliPrefix, compressFdRange, probeFts5, createFtsTables, recoverStepAt, storedVersionAt,
   pruneApply, pruneDryRun, writeBackup, removeStaleBackupTemps,
   integrityCheck, foreignKeyRows, ftsMeasure, dropFtsTables, setStep, setCounter, adoptStore,
+  peekStoreId, stageRestore, commitRestore, abortRestore,
 } from './store.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
 import { deriveNodes, reparseTargets, reparseLeaves, clearLeafCrashes, indexNodesFts, NODES_FTS_STEP } from './derive.mjs';
@@ -2863,6 +2864,7 @@ export async function adoptArm(home, P, args, deps, out) {
  *  lock-take journal half, before openStore. `args` is the op's parsed OpArgs (lib parseOpVerbArgs, Task 6); adopt
  *  takes none. W1-B2 Tasks 27 and 28 put their `restore` and `rebuild` dispatch lines first in this body. */
 export async function bindingPass(home, P, op, args, deps, out) {
+  if (op === 'restore') return restoreArm(home, P, args, deps, out);
   if (op === 'adopt') return adoptArm(home, P, args, deps, out);
   out(`history-sweep: ${op} is not a binding verb this build runs`);
   return { rc: EXIT.REFUSED, reason: 'bad-args' };
@@ -5171,7 +5173,7 @@ export function mergeSteps(db, ctx, budget) {
 
 /** The --op verbs this build runs (§8.4). Each B2 verb joins in the task that ships its path (Tasks 20–28): a verb
  *  named here has an entry in OP_HANDLERS, or an arm in bindingPass, and one in OP_DRY_RUNS when it has a dry run. */
-const OP_VERBS = new Set(['import', 'migrate', 'prune', 'reparse', 'backup', 'repair', 'adopt']);
+const OP_VERBS = new Set(['import', 'migrate', 'prune', 'reparse', 'backup', 'repair', 'adopt', 'restore']);
 
 /** adopt, restore and rebuild (§8.4): they run BEFORE openStore, which refuses exactly the states they exist to
  *  repair (store-unbound, store-missing, store-recoverable, store-zero-byte, store-schema-missing, …). */
@@ -6600,6 +6602,128 @@ export async function repairOp(db, ctx) {
   reportCounterResets(ctx, rebuilt.counters);
   reportCounterResets(ctx, spoolCounterResets(db, ctx.home));
   return { rc: EXIT.OK };
+}
+
+// ── W1-B2 Task 27: doctor --restore (§8.4 "doctor --restore <file>"; slugs history-restore-verb,
+// history-restore-wal-mode, history-binding-facts-before-link). It reuses Task 26's bindFactsOf and finishBind. ─────
+
+/** The restore's belt-witness hooks (spec §6.2 "The belt"; coordinator ruling R-witness-restore), which store.mjs's
+ *  commitRestore runs on the staged copy inside its FULL bind transaction: `check` before any write, `stamp` after the
+ *  journal's pairs. The pair insert raises the top redact_hashes rowid, a value beltWitness reads, and a belt-aware
+ *  writer that changes witnessed values checks first, then writes, then stamps:
+ *  - check: Task 7B's recordBeltDueIfWitnessMoved, the one function secretsStep calls at a pass's start (ruling
+ *    R-rollback), which opens no withTx of its own. A copy whose witness moved since its fts_belt was stamped (a backup
+ *    taken after a build without the belt wrote) has its belt recorded due, which also clears an open generation's
+ *    record so that it restarts;
+ *  - stamp: Task 7B's stampBeltWitness, so the first recovery pass does not read the restore's own pairs as another
+ *    build's writes. The check ran first in the same transaction, so the stamp hides nothing. */
+const RESTORE_BELT = {
+  check(db) { recordBeltDueIfWitnessMoved(db); },   // the restore's witness check (R-witness-restore)
+  stamp(db) { stampBeltWitness(db); },
+};
+
+/** `doctor --restore <name>` (§8.4): put a backup under db/backups/ back as this box's store.
+ *  It first removes the writer temps a killed pass left in db/ (a killed restore's full-size copy among them): the
+ *  lock is held, so every temp is stale (§9.4), and free space is then measured without the dead copy. Task 26's
+ *  binding section names this as each verb's first step.
+ *  Refusals come next, and none of them writes anything:
+ *  - the name (restoreNameOk: a <ts>.db or a pre-v<N>.db, never a path or a temp);
+ *  - the file, by lstat, so a symlink is never followed;
+ *  - the binding table on the facts as they stand (decideBind, Task 6): a DB present, an orphaned WAL, a store.id
+ *    naming another store, an unreadable binding input (exit 5);
+ *  - room for the copy (planCopy, the one copy preflight, §6.11; a statfs that throws reads low-disk, R3).
+ *  Then the copy is staged and judged again on what only the copy can tell: its store_id, its user_version and its
+ *  integrity_check. It is committed with every binding fact inside it before it becomes history.db (Task 24's
+ *  commitRestore: WAL set, bound:<ms>, a new writer, the ('recover', <ms>) step, the bind outbox row, then the
+ *  pending marker and link()), and with every redact pair the store's journal holds (Task 25's journalRedactPairs;
+ *  R-restore-pairs), so §9.14's "redaction first" holds from the moment the store is visible. A journal file the pair
+ *  read could not open refuses the restore (D-4593 (history-restore-refuses-unread-journal-pairs)): the copy is
+ *  removed, nothing is linked and no binding file is written. A StoreError from the commit (a copy with no store_id, or
+ *  one that will not take WAL: store-not-wal, exit 5) answers its own word and exit, as adoptArm answers one; the
+ *  finally removes the temp. It runs before openStore, because a missing store is the state it exists to repair. It
+ *  runs under history-off too, since it is a binding verb (§8.4); its recovery step waits for the switch. */
+export async function restoreArm(home, P, args, deps, out) {
+  const now = deps.now ?? Date.now;
+  const role = readRole(P);
+  removeStaleTemps(home);
+  const refuse = (detail) => {
+    out(`history-sweep: restore-refused: ${detail}`);
+    return { rc: EXIT.REFUSED, reason: 'restore-refused' };
+  };
+  // Defence in depth: Task 6's parseOpVerbArgs restore case refuses a bad name restore-refused before the gate, so this line cannot go red alone.
+  if (typeof args.name !== 'string' || !restoreNameOk(args.name)) {
+    return refuse(`${JSON.stringify(args.name)} is not a <ts>.db or pre-v<N>.db name under db/backups/`);
+  }
+  const file = `${P.backups}/${args.name}`;
+  let st;
+  try { st = lstatSync(file); } catch { return refuse(`db/backups/${args.name} cannot be read`); }
+  // Defence in depth: Task 24's stageRestore opens O_NOFOLLOW and refuses a non-regular file with nothing written, so this line cannot go red alone.
+  if (!st.isFile()) return refuse(`db/backups/${args.name} is not a regular file; a symlink is never followed`);
+  const facts = bindFactsOf(home, role, deps, {});
+  const restorePre = decideBind('restore', {
+    ...facts, backup: { regular: true, storeId: peekStoreId(file), userVersion: null, integrityOk: null },
+  });
+  if (!restorePre.ok) {
+    out(`history-sweep: ${restorePre.reason}: ${restorePre.detail}`);
+    return { rc: restorePre.rc, reason: restorePre.reason };
+  }
+  const free = await statfsWithDeadline(probePath(P, home), STATFS_DEADLINE_MS, deps.statfs);
+  // Defence in depth: opPass refuses an unsettled probe earlier (B1), so this line cannot go red alone.
+  if (free.state === 'unsettled') return { rc: EXIT.DB, reason: 'store-unreachable' };
+  const restoreRoom = free.state === 'ok'
+    ? planCopy({ freeBytes: free.bytes, thresholdBytes: floorThreshold(free.fsSize), sizeBytes: st.size })
+    : { admit: false, needBytes: null };
+  if (!restoreRoom.admit) {
+    return refuse(restoreRoom.needBytes === null
+      ? 'free space on the store\'s filesystem could not be measured, so no copy is admitted'
+      : `a copy of ${st.size} bytes needs more than ${restoreRoom.needBytes} bytes free, and ${free.bytes} are`);
+  }
+  writeOpMarker(P, 'restore', now());
+  let staged = null;
+  try {
+    try {
+      staged = stageRestore(home, args.name);
+    } catch (e) {
+      // Only a StoreError is a refusal; an I/O failure (a full disk, a read error) is exit 1, never narrowed into restore-refused (R-T27-3).
+      removeStaleTemps(home);
+      if (!(e instanceof StoreError)) throw e;
+      return refuse(`db/backups/${args.name} could not be copied and opened (${e.message})`);
+    }
+    const restorePost = decideBind('restore', {
+      ...facts,
+      backup: { regular: true, storeId: staged.storeId, userVersion: staged.userVersion, integrityOk: staged.integrityOk },
+    });
+    if (!restorePost.ok) {
+      out(`history-sweep: ${restorePost.reason}: ${restorePost.detail}`);
+      return { rc: restorePost.rc, reason: restorePost.reason };
+    }
+    // Redaction first, at the link (R-restore-pairs; spec §8.4 and §9.14): every redact record of this store's journal
+    // goes into the copy inside commitRestore's bind transaction, before link(), so no read verb ever serves the
+    // restored store without a pair the journal knows. The witness is checked before those pairs go in and stamped
+    // after them, in the same transaction (RESTORE_BELT; R-witness-restore).
+    const journalPairs = journalRedactPairs(P, restorePost.storeId);
+    if (journalPairs.skipped.length > 0) {
+      // D-4593 (history-restore-refuses-unread-journal-pairs): read verbs answer while the recovery step is registered,
+      // and under D-4592 the step's index phase fails its chunk rather than read an unreadable file, so a pair only
+      // that file holds would be served unmasked from the restored blobs. Refuse; the finally removes the copy.
+      out(`history-sweep: restore-refused: ${journalPairs.skipped.length} journal file(s) could not be read for redact pairs: ${journalPairs.skipped.join(', ')}; the operator makes them readable, from a terminal outside any session, and runs the restore again`);
+      abortRestore(staged);
+      staged = null;
+      return { rc: EXIT.REFUSED, reason: 'restore-refused' };
+    }
+    try {
+      commitRestore(home, staged, { nowMs: now(), pairs: journalPairs.pairs, belt: RESTORE_BELT });
+    } catch (e) {
+      if (!(e instanceof StoreError)) throw e;
+      out(`history-sweep: restore stopped: ${e.message}`);
+      return REASONS[e.word] === undefined ? { rc: EXIT.INTERNAL } : { rc: REASONS[e.word], reason: e.word };
+    }
+    staged = null;
+    return finishBind(home, P, role, deps, out, now);
+  } finally {
+    if (staged !== null) abortRestore(staged);
+    removeEntry(P.op);   // B1's type-aware removal (history-planted-entries-never-wedge), as adoptArm's
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
