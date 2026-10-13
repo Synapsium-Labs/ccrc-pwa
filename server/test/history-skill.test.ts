@@ -227,3 +227,20 @@ describe('C16, spawned: a --json refusal names a REASONS word of its own exit, a
     check(runCli(box, ['grep', 'nowheresentinelzz', '--json'], { env: withPane(box, ID) }), EXIT.NOT_FOUND, null);
   }, 1.5 * HEAVY);
 });
+
+describe("README states grep's reach, the inexact-window note and the refused spool node, each once (W1-B2 task 33)", () => {
+  const readme = readFileSync(path.join(root, 'README.md'), 'utf8').replace(/\s+/g, ' ');
+
+  it("states grep's reach exactly once, in lib's SEARCH_REACH words, so a changed window reds until README follows", () => {
+    expect(readme.split(SEARCH_REACH).length - 1).toBe(1);
+  });
+
+  it("quotes the inexact-window note exactly once, in lib's DISPLAY_INEXACT_NOTE words, so a changed note reds until README follows (spec §8.3, rev 3.5)", () => {
+    expect(readme.split(DISPLAY_INEXACT_NOTE).length - 1).toBe(1);
+  });
+
+  it("names the node status's spool-planted warning counts, in one wording, once (B1's history-spool-append-regular-file-only)", () => {
+    expect(readme.split('a FIFO, a link, a directory or any other non-regular node').length - 1).toBe(1);
+    expect(readme).toContain('Its `spool-planted` warning counts each node at `~/.ccrc/history/spool/<id>.jsonl`');
+  });
+});
