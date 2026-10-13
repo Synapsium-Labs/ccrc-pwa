@@ -16223,7 +16223,7 @@ _continued_in_of() {   # file uuid -> the successor uuid the file's tail window 
   # marker with such a line after it absent — no follow, and in
   # `_ci_pane_superseded` a stale pane id let back into the registry.
   #
-  # D-3563 still holds: ONE external `tail`, one 8 KiB read, per examination
+  # D-4936 still holds: ONE external `tail`, one 8 KiB read, per examination
   # (`ccd-sync-uuid.test.ts`'s read budget counts it); the window goes straight
   # into jq, never through a second pass. Both a missing file and a missing jq
   # print nothing, which every caller reads as "no successor".
@@ -16234,7 +16234,7 @@ _continued_in_of() {   # file uuid -> the successor uuid the file's tail window 
 }
 
 _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated read budget
-  # WHY ONE HOP AND WHY GATED (D-3562). A file that is still being written
+  # WHY ONE HOP AND WHY GATED (D-4935). A file that is still being written
   # has not settled what its tail says — the conversation may still be going
   # on in it, and even after a marker Claude Code re-stamps metadata at exit
   # (D-4940) — so the tail read waits for the file to STOP changing: one stat

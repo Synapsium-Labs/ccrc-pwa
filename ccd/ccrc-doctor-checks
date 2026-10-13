@@ -3969,7 +3969,7 @@ _check_pool-sync() {
 # at exit, an interruption notice and the like may come after it, D-4940).
 # `ccd`'s `_follow_continued_in`
 # walks that pointer into the registry, but the walk is gated on the file
-# going quiescent first (one hop per supervise tick — D-3562), so a
+# going quiescent first (one hop per supervise tick — D-4935), so a
 # box whose `ccd` predates that fix, or whose supervisor has not ticked yet,
 # can sit with a registry uuid naming a transcript nobody will ever write to
 # again — the chat freezes, silently, because there is nothing to say: the
