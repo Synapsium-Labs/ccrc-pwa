@@ -568,4 +568,12 @@ describe('the Temp root collector section (path-identity spec §5.7, §5.9)', ()
       expect(src).not.toMatch(/UpdateMoveSheet/);
     });
   });
+
+  it('the PWA counts nothing: the section switches on no attention word and never names the legacy file', () => {
+    const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'CollectLaneSection.tsx'), 'utf8');
+    expect(src).not.toMatch(/['"`](?:would-collect|held|unvouched|kept-many)['"`]/);
+    expect(src).not.toMatch(/childReclaimAttention|\.word\b/);
+    const marker = ['collect', 'lane', 'live'].join('-');   // assembled, so this file does not spell it either
+    expect(src).not.toContain(marker);
+  });
 });
