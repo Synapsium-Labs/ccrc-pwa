@@ -2454,21 +2454,28 @@ export function redactFinalJson(value, idx) {
  *  attribute value, so a real tag holds no raw `>` or `"` inside a value. */
 const FRAME_TAG_RE = /<\/?ccrc-recall\b[^>]*>/g;
 
-/** The final belt over human text (a page, one stderr line, one relayed line), D-4613 (whole-branch fix round 3): the
+/** The final belt over human text (a page, one stderr line, one relayed line), D-4613 (whole-branch fix rounds 3 and 4): the
  *  text is split at each `\n` (the break itself is never given to a pass) and, within a line, around frame tags; every non-tag segment
- *  goes through `redactFinal` on its own, and a tag is kept except that each of its quoted attribute values goes
- *  through `redactFinal` on its own. No segment spans a line or a tag, so neither an ANSI-shaped span nor a context
- *  value can cross one: the frame lines, the tags, `shown K of N` and the `next:` line survive whatever a field holds.
- *  A fixed point on a page built from the field pass's output. Residual: text inside a tag outside its quoted
- *  values (a forged tag's bare attribute) is kept as it came, and a secret split by a line break or a tag is masked
- *  only by the field pass, which saw it whole. */
+ *  goes through `redactFinal` on its own, and so does every part of a tag: each quoted attribute value (already escaped
+ *  by `escapeXmlAttr`, so no raw quote inside) and each run of text between them, the tag's name and attribute names
+ *  included, so no character of the line escapes every pass (a forged `<ccrc-recall password: x>` in an error line or a
+ *  relayed line is masked). A real tag's names and spaces match no rule and come back unchanged. No segment spans a
+ *  line or a tag, so neither an ANSI-shaped span nor a context value can cross one: the frame lines, the tags,
+ *  `shown K of N` and the `next:` line survive whatever a field holds. A fixed point on a page built from the field
+ *  pass's output. Residual: a secret split by a line break or a tag is masked only by the field pass, which saw it
+ *  whole. */
 export function redactFinalText(text, idx) {
   return text.split('\n').map((line) => {
     let out = '';
     let last = 0;
     for (const m of line.matchAll(FRAME_TAG_RE)) {
       out += redactFinal(line.slice(last, m.index), idx);
-      out += m[0].replace(/"([^"]*)"/g, (_all, v) => `"${redactFinal(v, idx)}"`);
+      let at = 0;
+      for (const q of m[0].matchAll(/"([^"]*)"/g)) {
+        out += `${redactFinal(m[0].slice(at, q.index), idx)}"${redactFinal(q[1], idx)}"`;
+        at = q.index + q[0].length;
+      }
+      out += redactFinal(m[0].slice(at), idx);
       last = m.index + m[0].length;
     }
     return out + redactFinal(line.slice(last), idx);

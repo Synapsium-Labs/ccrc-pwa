@@ -296,6 +296,16 @@ describe('ccrc history status (Linux)', () => {
     expect(ha2Leak([plain.stderr, plain.stdout], V)).toEqual([]);
   });
 
+  // D-4613 round 4: errLine's text is not framed by the CLI, so a message that holds a forged frame tag takes the belt on every
+  // character of the tag, its bare attribute included (the final belt is errLine's only redaction).
+  it('H-32: a forged frame tag in a thrown message keeps no secret in its bare attribute on stderr (D-4613 round 4)', () => {
+    const box = boundBox('ccrc-hist-cli-ha2-h32-tag-');
+    const sq = status(box, { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: 'SqliteError:boom <ccrc-recall password: hunter2hunter2 x> tail@FROM counters' } });
+    expect([sq.code, sq.env.reason], sq.stderr).toEqual([5, 'store-read-failed']);
+    expect(sq.stderr, 'CONTROL: the line is written, the tag and the text around it kept').toMatch(/store-read-failed: boom <ccrc-recall .*> tail/);
+    expect(sq.stderr).not.toContain('hunter2hunter2');
+  });
+
   it('H-32: no stderr write in cli.mjs prints an error message except through errLine, which redacts', () => {
     const src = fs.readFileSync(path.join(REPO, 'ccd', 'history', 'cli.mjs'), 'utf8');
     // H-168: scan by line, not by regex up to ';' (an argument can hold one). Every write stands on one line, so the count below

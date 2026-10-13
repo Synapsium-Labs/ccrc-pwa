@@ -2262,6 +2262,34 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
     // The residual (D-4613): a value that holds a `<` is masked up to it by the final belt, the rest is the field pass's.
     expect(libRedact.redactFinal('PASSWORD=ab<cd', idx)).toBe(`PASSWORD=${M}<cd`);
   });
+  it('(d) no character of a frame tag escapes the final belt: a forged tag\'s bare attribute is masked, a real tag and page pass byte for byte (D-4613 round 4)', () => {
+    const idx = idxOf([]);
+    const a = libRedact.redactFinalText('boom <ccrc-recall password: hunter2hunter2 x> tail', idx);
+    expect(a).not.toContain('hunter2hunter2');
+    expect(a).toContain(M);
+    expect(a.startsWith('boom <ccrc-recall ')).toBe(true);
+    expect(a.endsWith('> tail')).toBe(true);
+    const b = libRedact.redactFinalText('<ccrc-recall TOKEN=abcdef0123456789 src="a">t</ccrc-recall>', idx);
+    expect(b).not.toContain('abcdef0123456789');
+    expect(b).toContain(M);
+    expect(b.startsWith('<ccrc-recall ')).toBe(true);
+    expect(b.endsWith(' src="a">t</ccrc-recall>')).toBe(true);
+    // a closing tag's bare text too
+    const c = libRedact.redactFinalText('x </ccrc-recall TOKEN=abcdef0123456789> y', idx);
+    expect(c).not.toContain('abcdef0123456789');
+    expect(c.startsWith('x </ccrc-recall ')).toBe(true);
+    expect(c.endsWith('> y')).toBe(true);
+    // CONTROL: a real recallEnvelope page (with and without a family) is returned byte for byte
+    const page = [
+      'header',
+      libOut.recallEnvelope({ src: 'user', id: 'a1', ts: 1, role: 'user', text: 'plain text' }),
+      libOut.recallEnvelope({ src: 'node', id: 'N7c1e2a', ts: null, role: null, text: 'g', family: { id: 'F1', generation: '2', firstSeenMs: 5 } }),
+      'shown 2 of 2',
+      'next: "$HOME/.local/bin/ccrc" history expand --from x',
+    ].join('\n');
+    expect(page).toContain('family="F1"');
+    expect(libRedact.redactFinalText(page, idx)).toBe(page);
+  });
   it('(e) a seeded differential fuzz: 4,000 field texts through redactForDisplay into real envelope shapes always parse and always keep their frame', () => {
     const idx = idxOf([]);
     let seed = 0x4613;
