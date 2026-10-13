@@ -36,21 +36,23 @@ import {
  *  same figures). Lowered only by a change that measures the new figure and
  *  states it in its PR's departure. */
 const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
-  'idle-home': { forks: 174, execs: 81 },
-  busy: { forks: 170, execs: 79 },
-  narrow: { forks: 77, execs: 31 },
-  'away-over-ceiling': { forks: 202, execs: 101 },
-  'hard-blocked': { forks: 427, execs: 240 },
-  cooldown: { forks: 100, execs: 40 },
-  fable: { forks: 162, execs: 72 },
-  leaving: { forks: 414, execs: 247 },
-  'fable-leaving': { forks: 396, execs: 232 },
+  'idle-home': { forks: 171, execs: 80 },
+  busy: { forks: 167, execs: 78 },
+  narrow: { forks: 74, execs: 30 },
+  'away-over-ceiling': { forks: 199, execs: 100 },
+  'hard-blocked': { forks: 424, execs: 239 },
+  cooldown: { forks: 97, execs: 39 },
+  fable: { forks: 159, execs: 71 },
+  leaving: { forks: 411, execs: 246 },
+  'fable-leaving': { forks: 393, execs: 231 },
 };
 
-/** `_plat_timeout`'s `-k` probe, per tick inside the loop. On `main` it is 1 on
- *  every tick: the cache it sets dies with the `$( )` the probe runs in
- *  (D-4960, visible). The pre-loop is outside this count. */
-const TICK_KPROBE = 1;
+/** `_plat_timeout`'s `-k` probe, per tick inside the loop. On `main` at
+ *  `300aedf8` it was 1 on every tick: the cache it sets died with the `$( )`
+ *  the probe runs in. D-4960 primes the cache once in the supervisor's own
+ *  shell, before the loop, so it is 0. The pre-loop is outside this count;
+ *  `ccd-tick-diet-seams.test.ts` row (a) holds it. */
+const TICK_KPROBE = 0;
 
 const ID = 'claude-a-tick';
 const N = TICK_RUN_N;
