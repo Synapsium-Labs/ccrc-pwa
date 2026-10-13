@@ -118,4 +118,16 @@ describe('T11 review A-4: a throw from the pre-scan answers threw, not a worker 
       spy.mockRestore();
     }
   });
+
+  it('a non-string src answers threw TypeError without reaching the pre-scan, so the wrap is not what says it', () => {
+    const spy = vi.spyOn(guard, 'prescanMarkdown');
+    try {
+      const { replies, post } = recorder();
+      answerMarkdownJob({ id: 6, src: 42, profile: 'chat' }, post);
+      expect(spy).not.toHaveBeenCalled();
+      expect(replies).toEqual([{ id: 6, outcome: { kind: 'threw', error: 'TypeError' } }]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
