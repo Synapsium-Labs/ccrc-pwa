@@ -45,7 +45,7 @@ import {
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
-  FAILURE_KINDS, ROUTE_CONTROL_CHAR_RE, isRegistryId, isSessionIdShape, parseRouteEventDetail, parseRouteFields, routeEventDetail, RUN_STATES, TERMINAL_RUN_STATES,
+  FAILURE_KINDS, ROUTE_CONTROL_CHAR_RE, isRegistryId, parseRouteEventDetail, parseRouteFields, routeEventDetail, RUN_STATES, TERMINAL_RUN_STATES,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode,
   type MirroredLifecycleEvent, type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
   type FailureKind, type RouteField, type RunRouteBody, type RouteMode,
@@ -2038,18 +2038,26 @@ export function registerCoordRoutes(
       if (sid === null || sid === '') {
         return reply.code(409).send({ ok: false, error: 'no-session' });
       }
-      // Fix round 1, finding #2: `sid` comes off `run.sessionId`/
-      // `run.claimedBy` (`POST /api/runs` shape-checks `claimedBy`/
-      // `sessionId` only for "non-empty string", no charset guard), but
-      // `routeEventDetail` below embeds `sid` unescaped as the sixth segment
-      // of a `:`-delimited grammar that `ROUTE_EVENT_DETAIL_RE`'s own group
-      // accepts only `[A-Za-z0-9._-]+` for. Refuse the bad shape HERE, before
-      // ever building an argv or writing an event this door's own reader
-      // would later refuse to parse back — `no-session` (nothing to route
-      // to) and `bad-session` (something to route to, but not a name this
-      // door can safely write) are two different conditions and must not
-      // collapse to one refusal.
-      if (!isSessionIdShape(sid)) {
+      // The stored id is re-checked HERE, before any field read, argv or
+      // event (spec §2.3). `sid` comes off `run.sessionId`/`run.claimedBy`,
+      // a STORED row: `POST /api/runs` now refuses a `claimedBy` or
+      // `sessionId` that is not a registry id, but a row written before that
+      // check can still hold one, so this door asks again rather than
+      // trusting the open. The rule is THE registry-id predicate,
+      // `isRegistryId` (`shared/api.ts`): the session-id shape, no leading
+      // `-` or `.`, and at most 255 characters. Fix round 1, finding #2
+      // checked the SHAPE alone, because `routeEventDetail` below embeds
+      // `sid` unescaped as the sixth segment of a `:`-delimited grammar whose
+      // `ROUTE_EVENT_DETAIL_RE` group accepts only `[A-Za-z0-9._-]+`. The
+      // predicate keeps that guarantee and closes what the shape let through:
+      // a stored `--actor` would reach `CCD_ARGV.route`/`routeSet` as
+      // `route --session --actor`, an id the one predicate refuses (spec §2.3).
+      // A manual-field write reads no registry field, so nothing but this
+      // check stands between a bad stored id and that argv. `no-session`
+      // (nothing to route to) and `bad-session` (something to route to, but
+      // not a name this door can safely write or compose) are two different
+      // conditions and must not collapse to one refusal.
+      if (!isRegistryId(sid)) {
         return reply.code(409).send({ ok: false, error: 'bad-session' });
       }
 
