@@ -1,12 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
-import { SessionStream, foreignConfigDirs, nextDialogFrame, shouldRepoint, type DialogSeen } from '../src/sessionws.js';
-import type { TranscriptResolution, TranscriptRung } from '../src/transcript/resolve.js';
+import {
+  SessionStream, foreignConfigDirs, nextDialogFrame, registryCaughtUp, shouldRepoint, type DialogSeen,
+} from '../src/sessionws.js';
+import { RESOLVER_BACKOFF_MS, type TranscriptResolution, type TranscriptRung } from '../src/transcript/resolve.js';
 import { HOOKSTATE_FRESH_MS } from '../src/hookstate.js';
 import { askKey } from '../src/askkey.js';
 import { Bus } from '../src/bus.js';
@@ -198,8 +200,10 @@ describe('shouldRepoint (spec §5.3)', () => {
   // keeps comparing two SAME-uuid answers — the shape the original three
   // clauses were written against. Supersession tests pass distinct uuids
   // explicitly rather than this file growing a second `found`-shaped helper.
-  const found = (rung: TranscriptRung, p: string, uuid: string = 'u'.repeat(36)): TranscriptResolution =>
-    ({ kind: 'found', path: p, rung, account: null, uuid });
+  const found = (
+    rung: TranscriptRung, p: string, uuid: string = 'u'.repeat(36),
+    facts: { followedFrom?: readonly string[] } = {},
+  ): TranscriptResolution => ({ kind: 'found', path: p, rung, account: null, uuid, ...facts });
 
   it('re-points to a strictly better rung even while the tailed file still exists', () => {
     // THE case the uuid-only gate could never see: a swap lands, the exact
@@ -253,8 +257,51 @@ describe('shouldRepoint (spec §5.3)', () => {
     // clauses decline this — same path? no. worse rung? no, same rung. file
     // gone? no, it's still there — so without the uuid clause this is the one
     // shape that leaves a stream tailing a dead file forever.
-    expect(shouldRepoint(found('registry-raw', '/a.jsonl', UUID_A), found('registry-raw', '/b.jsonl', UUID_B), true))
+    expect(shouldRepoint(
+      found('registry-raw', '/a.jsonl', UUID_A),
+      found('registry-raw', '/b.jsonl', UUID_B, { followedFrom: [UUID_A] }),
+      true,
+    )).toBe(true);
+  });
+
+  it('never re-points from a successor BACK to its predecessor while the successor is still there (D-4946)', () => {
+    // #189 review, S1. The uuid clause used to fire on ANY uuid difference,
+    // in either direction, so one re-ladder that could not read the
+    // predecessor's tail (or could not stat the successor) answered the
+    // predecessor — and a stream already reading the fork went BACK to the
+    // frozen pre-fork file. Supersession runs one way: only an answer whose
+    // walk passed THROUGH the uuid being tailed is downstream of it.
+    const tailedB = found('registry-raw', '/b.jsonl', UUID_B, { followedFrom: [UUID_A] });
+    expect(shouldRepoint(tailedB, found('registry-raw', '/a.jsonl', UUID_A), true)).toBe(false);
+    // And the address rules still govern it: a successor that is GONE is not
+    // something to keep tailing, so the predecessor is the best file left.
+    expect(shouldRepoint(tailedB, found('registry-raw', '/a.jsonl', UUID_A), false)).toBe(true);
+  });
+
+  it('never re-points BACK to a predecessor that merely resolves at a BETTER RUNG while the successor is there ' +
+     '(D-4946)', () => {
+    // #189 fix-forward, probes E2/E2b. The uuid clause no longer runs
+    // backwards, but the RUNG clause below it still could: a `<pid>.json`
+    // read that comes back unmeasured makes the stream resolve from the
+    // registry workdir instead of the live cwd, which changes the memo KEY,
+    // and under that key the predecessor sits at a better rung (a symlinked
+    // workdir's resolved spelling) — or is served stale from a blip before the
+    // fork. "Strictly better rung" then re-pointed a stream reading B back
+    // onto A: a 2 s flap of the whole chat on every such blip after a fork.
+    const tailedB = found('live-raw', '/b.jsonl', UUID_B, { followedFrom: [UUID_A] });
+    expect(shouldRepoint(tailedB, found('live-resolved', '/a.jsonl', UUID_A), true)).toBe(false);
+    // The address rules still govern a successor that is GONE.
+    expect(shouldRepoint(tailedB, found('live-resolved', '/a.jsonl', UUID_A), false)).toBe(true);
+    // And a better rung for the SAME uuid is still a better address for it.
+    expect(shouldRepoint(tailedB, found('live-resolved', '/x/b.jsonl', UUID_B, { followedFrom: [UUID_A] }), true))
       .toBe(true);
+  });
+
+  it('a different uuid that is not downstream of the tailed one is not a supersession', () => {
+    // Pins the direction test against a mutant that inverts it: an unrelated
+    // uuid at the same rung, tailed file present, is a sideways move.
+    const unrelated = found('registry-raw', '/c.jsonl', 'c'.repeat(36), { followedFrom: ['d'.repeat(36)] });
+    expect(shouldRepoint(found('registry-raw', '/a.jsonl', UUID_A), unrelated, true)).toBe(false);
   });
 
   it('still declines a same-rung, same-uuid, same-path answer', () => {
@@ -272,6 +319,53 @@ describe('shouldRepoint (spec §5.3)', () => {
     // the pre-existing rule still governs, exactly as it did before this task.
     expect(shouldRepoint(found('live-raw', '/a.jsonl', UUID_A), found('foreign-glob', '/c.jsonl', UUID_A), true))
       .toBe(false);
+  });
+});
+
+// D-4947: the tick's "is this registry move a reset?" decision, pure, for the
+// same reason `shouldRepoint` is — the stream-level cases below pin it end to
+// end, this table pins each clause on its own.
+describe('registryCaughtUp (D-4947)', () => {
+  const C = 'c'.repeat(36);
+  const at = (p: string, uuid: string, facts: Partial<Record<'followedFrom' | 'declinedTo', unknown>> = {}):
+    TranscriptResolution => ({ kind: 'found', path: p, rung: 'registry-raw', account: null, uuid, ...facts } as TranscriptResolution);
+
+  it('the registry landing on the file already being tailed is caught up', () => {
+    // ISOLATED (fix-forward): the registry names A, the tailed answer is B
+    // with no `followedFrom` (the stream opened while the registry said B),
+    // and A's walk lands on B — only the PATH clause says "caught up". The
+    // row used to pass the registry B, which the uuid clause answers too, so
+    // deleting the path clause left every test green.
+    expect(registryCaughtUp(at('/b.jsonl', UUID_B), UUID_A, at('/b.jsonl', UUID_B, { followedFrom: [UUID_A] })))
+      .toBe(true);
+    // A tailed FALLBACK has no uuid at all; only its path can say it.
+    const fb: TranscriptResolution = { kind: 'fallback', path: '/b.jsonl', complete: true };
+    expect(registryCaughtUp(fb, UUID_B, at('/b.jsonl', UUID_B))).toBe(true);
+  });
+
+  it('the registry landing on the uuid being tailed, at another address, is caught up', () => {
+    expect(registryCaughtUp(at('/x/b.jsonl', UUID_B), UUID_B, at('/y/b.jsonl', UUID_B))).toBe(true);
+  });
+
+  it('the registry landing on the successor the tailed file names but the walk declined is caught up', () => {
+    // ccd moved first: the server saw the marker while the successor was
+    // still unwritten, declined, and was waiting out its back-off.
+    expect(registryCaughtUp(at('/a.jsonl', UUID_A, { declinedTo: UUID_B }), UUID_B, at('/b.jsonl', UUID_B))).toBe(true);
+  });
+
+  it('the registry landing on a uuid the tailed answer was followed THROUGH is caught up', () => {
+    // The hop bound: the stream stopped four hops down; ccd advances one.
+    const tailed = at('/c.jsonl', C, { followedFrom: [UUID_A, UUID_B] });
+    expect(registryCaughtUp(tailed, UUID_B, at('/d.jsonl', 'd'.repeat(36)))).toBe(true);
+  });
+
+  it('a registry uuid with no link to the tailed answer is a rotation', () => {
+    expect(registryCaughtUp(at('/a.jsonl', UUID_A), UUID_B, at('/b.jsonl', UUID_B))).toBe(false);
+    expect(registryCaughtUp(at('/a.jsonl', UUID_A, { declinedTo: C }), UUID_B, at('/b.jsonl', UUID_B))).toBe(false);
+    expect(registryCaughtUp(at('/c.jsonl', C, { followedFrom: [UUID_A] }), UUID_B, at('/b.jsonl', UUID_B))).toBe(false);
+    expect(registryCaughtUp(null, UUID_B, at('/b.jsonl', UUID_B))).toBe(false);
+    const fb: TranscriptResolution = { kind: 'fallback', path: '/a.jsonl', complete: true };
+    expect(registryCaughtUp(fb, UUID_B, at('/b.jsonl', UUID_B))).toBe(false);
   });
 });
 
@@ -329,13 +423,22 @@ const streamWith = async (opts: {
     return { code: 0, stdout: '', stderr: '' };
   };
   // The tailer reads through io.tailFile, and `since` skips the backlog, so a
-  // readFileFrom on the transcript is an ask read and nothing else.
+  // readFileFrom on the transcript is an ask read and nothing else — save the
+  // resolver's own continuation check, which reads through
+  // `readFileFromMeasured` since D-4946 (it must tell a failed read from a file
+  // with no marker) and is counted alongside, so the "+1 (Task 2)" figures
+  // below still pin that it is paid once per stream. `readFileFrom` calls
+  // straight into `localIO`'s own, so nothing is counted twice.
   let askReads = 0;
   const io: FleetIO = {
     ...localIO,
     readFileFrom: (p, off) => {
       if (p === file) askReads += 1;
       return localIO.readFileFrom(p, off);
+    },
+    readFileFromMeasured: (p, off) => {
+      if (p === file) askReads += 1;
+      return localIO.readFileFromMeasured(p, off);
     },
   };
   const cfg = loadConfig({ CCRC_HOME: home });
@@ -908,6 +1011,8 @@ const mkLadderDeps = (home: string, io: FleetIO): Deps => {
 const pollTimer = (s: SessionStream): unknown => (s as unknown as { poll: unknown }).poll;
 const streamUuid = (s: SessionStream): string | null => (s as unknown as { uuid: string | null }).uuid;
 const streamTailer = (s: SessionStream): unknown => (s as unknown as { tailer: unknown }).tailer;
+const streamTailed = (s: SessionStream): TranscriptResolution | null =>
+  (s as unknown as { tailed: TranscriptResolution | null }).tailed;
 const streamStatus = (s: SessionStream): string | null => (s as unknown as { status: string | null }).status;
 
 describe('foreignConfigDirs (spec §5.2)', () => {
@@ -1149,6 +1254,486 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       stream.stop();
       rmSync(home, { recursive: true, force: true });
     }
+  });
+
+  it('a tail read that fails ONCE after the stream followed a fork never sends it BACK to the pre-fork file ' +
+     '(D-4946)', async () => {
+    // #189 review, S1, end to end. The registry still names A (ccd has not
+    // moved it, or is not deployed), the stream already follows A->B, and B
+    // finishes a turn — so the memo re-ladders from A. That re-ladder's read
+    // of A's tail fails once (one agent RPC timing out). It used to answer a
+    // CLEAN A, the uuid clause re-pointed BACKWARDS onto the frozen pre-fork
+    // transcript, its backlog replaced the chat, and A — terminal, and no
+    // longer a "keep looking" answer — was served for the life of the socket.
+    const home = mkTmp('ccrc-repoint-blip-');
+    seedRoster(home);
+    seed(home);
+    const tailed = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    const successor = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
+    let failA = 0;   // how many of A's next tail reads fail
+    const io: FleetIO = {
+      ...localIO,
+      readFileFromMeasured: async (p, off) => {
+        if (p === tailed && failA > 0) { failA -= 1; return { ok: false, reason: 'unreadable' }; }
+        return localIO.readFileFromMeasured(p, off);
+      },
+    };
+    const frames: any[] = [];
+    const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m));
+    try {
+      await stream.start();
+      appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');
+      writeFileSync(successor, turn('after the fork'), 'utf8');
+      await pollOnce(stream);
+      await pollOnce(stream);
+      expect(frames.find((f) => f.type === 'backlog' && f.file === successor)).toBeDefined();
+      frames.length = 0;
+
+      appendFileSync(successor, turn('a turn in the fork'), 'utf8');
+      failA = 1;
+      await pollOnce(stream);   // sees B grow, records it
+      await pollOnce(stream);   // B stood still: re-ladders from A, and A's read fails
+      expect(failA, 'the blip really landed on the re-ladder').toBe(0);
+      for (let i = 0; i < 5; i += 1) await pollOnce(stream);
+      expect(frames.filter((f) => f.type === 'backlog' || f.type === 'rotated')).toEqual([]);
+      expect(streamTailed(stream)?.path).toBe(successor);
+
+      // And when ccd moves the registry, the stream is already there.
+      writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_B);
+      await pollOnce(stream);
+      expect(frames.map((f) => f.type)).not.toContain('rotated');
+      expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: successor, uuid: UUID_B });
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('a reconnect that lands on a blip shows the pre-fork file only until the back-off — never for the life of ' +
+     'the socket (D-4946)', async () => {
+    // The reconnect half of #189 review, S1. The client was reading B and
+    // echoes it; the fresh stream's first walk cannot read A's tail. Nothing
+    // here can vouch for B without that read (the echo is client input, never
+    // a path to open), so the honest answer is A — but flagged
+    // `tailUnmeasured`, a "keep looking" answer, so the back-off re-ladders
+    // and the stream moves FORWARD to B. It used to be a clean, terminal A,
+    // served for as long as the socket stayed open.
+    const home = mkTmp('ccrc-repoint-reconnect-blip-');
+    seedRoster(home);
+    seed(home);
+    const tailed = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    const successor = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
+    appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');
+    writeFileSync(successor, turn('after the fork'), 'utf8');
+    let failA = 1;
+    const io: FleetIO = {
+      ...localIO,
+      readFileFromMeasured: async (p, off) => {
+        if (p === tailed && failA > 0) { failA -= 1; return { ok: false, reason: 'unreadable' }; }
+        return localIO.readFileFromMeasured(p, off);
+      },
+    };
+    // Before the stream exists: its resolver takes `Date.now` at construction.
+    let clock = 1_000_000;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const frames: any[] = [];
+    const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m),
+      { uuid: UUID_A, offset: statSync(successor).size, file: successor });
+    try {
+      await stream.start();
+      expect(failA, 'the blip really landed on the first walk').toBe(0);
+      expect(frames.find((f) => f.type === 'backlog')?.file).toBe(tailed);
+      frames.length = 0;
+      clock += RESOLVER_BACKOFF_MS;
+      await pollOnce(stream);
+      expect(frames.map((f) => f.type)).not.toContain('rotated');
+      expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: successor });
+    } finally {
+      now.mockRestore();
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('a successor whose stat is UNREADABLE is not a successor that is gone — no backward re-point (D-4946)', async () => {
+    // The same flap through the other door. The re-ladder cannot stat B, so
+    // it declines and answers A; `repointNeeded` then asks whether the tailed
+    // file (B) still exists — and a stat that merely FAILED used to read as
+    // "gone", which re-points onto the best file left: the pre-fork one. Only
+    // a proven ENOENT says a file is gone; an unmeasured one is still there.
+    const home = mkTmp('ccrc-repoint-statblip-');
+    seedRoster(home);
+    seed(home);
+    const tailed = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    const successor = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
+    let statBFails = false;
+    const io: FleetIO = {
+      ...localIO,
+      statMeasured: async (p) =>
+        (p === successor && statBFails ? { ok: false, reason: 'unreadable' } : localIO.statMeasured(p)),
+    };
+    const frames: any[] = [];
+    const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m));
+    try {
+      await stream.start();
+      appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');
+      writeFileSync(successor, turn('after the fork'), 'utf8');
+      await pollOnce(stream);
+      await pollOnce(stream);
+      expect(streamTailed(stream)?.path).toBe(successor);
+      frames.length = 0;
+
+      statBFails = true;
+      for (let i = 0; i < 3; i += 1) await pollOnce(stream);
+      expect(frames.filter((f) => f.type === 'backlog' || f.type === 'rotated')).toEqual([]);
+      expect(streamTailed(stream)?.path).toBe(successor);
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('the registry moving to the successor BEFORE the stream followed it is a continuation, not a reset ' +
+     '(D-4947)', async () => {
+    // #189 review, S2: F2's guard above only covered the server-first
+    // order. Here the successor is written AFTER the server's re-ladder
+    // declined it (the fork announced itself first, the common shape), the
+    // server waits out its 30 s back-off, and ccd — reading the file a few
+    // seconds later — moves the registry first. That move used to send
+    // `rotated`, and the PWA keeps that divider on top of the backlog after it.
+    const home = mkTmp('ccrc-repoint-ccdfirst-');
+    seedRoster(home);
+    seed(home);
+    const tailed = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    const successor = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
+    const frames: any[] = [];
+    const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m));
+    try {
+      await stream.start();
+      frames.length = 0;
+      appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');   // B not written yet
+      await pollOnce(stream);   // sees the growth
+      await pollOnce(stream);   // re-ladders: declines B, which is not there
+      expect(frames.filter((f) => f.type === 'backlog' || f.type === 'rotated')).toEqual([]);
+
+      writeFileSync(successor, turn('after the fork'), 'utf8');
+      writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_B);   // ccd got there first
+      await pollOnce(stream);
+      expect(frames.map((f) => f.type)).not.toContain('rotated');
+      expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: successor, uuid: UUID_B });
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('a chain longer than the hop bound: the registry\'s first hop is a continuation, not a reset (D-4947)', async () => {
+    // #189 review, the server lens's missed item. The walk stops MAX_CONTINUATION_HOPS
+    // down (A->B->C->D->E, E's own marker unread); ccd moves the registry one
+    // hop, to B, whose own walk lands one file further, on F. The stream is
+    // tailing E, not F, so the old path test called that a rotation.
+    const [C, D, E, F] = ['c', 'd', 'e', 'f'].map((x) => x.repeat(36));
+    const home = mkTmp('ccrc-repoint-hopbound-');
+    seedRoster(home);
+    seed(home);
+    const dir = path.join(home, '.claude-a', 'projects', MUNGED);
+    const chain = [UUID_A, UUID_B, C!, D!, E!, F!];
+    for (let i = 0; i < chain.length - 1; i += 1) {
+      writeFileSync(path.join(dir, `${chain[i]}.jsonl`), turn(`turn ${i}`) + marker(chain[i]!, chain[i + 1]!));
+    }
+    const end = path.join(dir, `${F}.jsonl`);
+    writeFileSync(end, turn('the end of the chain'));
+    const frames: any[] = [];
+    const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m));
+    try {
+      await stream.start();
+      expect(frames.find((f) => f.type === 'backlog').file).toBe(path.join(dir, `${E}.jsonl`));   // the bound
+      frames.length = 0;
+      writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_B);   // ccd's first hop
+      await pollOnce(stream);
+      expect(frames.map((f) => f.type)).not.toContain('rotated');
+      expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: end, uuid: UUID_B });
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('a decline the stream already learned survives a later UNMEASURED read of the same file (D-4947)', async () => {
+    // #189 fix-forward, probe R1. The marker is appended, B is not there yet,
+    // so the re-ladder answers A{declinedTo B} and `tailed` learns it. After
+    // the back-off the re-walk's read of A's tail FAILS and answers
+    // A{tailUnmeasured} — same file, same rung — and the refresh used to
+    // replace `tailed` outright, throwing the decline away. ccd then moved
+    // the registry to B and the stream sent `rotated`. A's read keeps failing
+    // through the move here, so nothing but the kept decline can say so.
+    const home = mkTmp('ccrc-repoint-keepdecline-');
+    seedRoster(home);
+    seed(home);
+    const tailed = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    const successor = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
+    let failA = false;
+    const io: FleetIO = {
+      ...localIO,
+      readFileFromMeasured: async (p, off) =>
+        (p === tailed && failA ? { ok: false, reason: 'unreadable' } : localIO.readFileFromMeasured(p, off)),
+    };
+    let clock = 1_000_000;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const frames: any[] = [];
+    const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m));
+    try {
+      await stream.start();
+      frames.length = 0;
+      appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');   // B not written yet
+      await pollOnce(stream);
+      await pollOnce(stream);
+      expect(streamTailed(stream)).toMatchObject({ path: tailed, declinedTo: UUID_B });
+      clock += RESOLVER_BACKOFF_MS;
+      failA = true;
+      await pollOnce(stream);   // the back-off re-walk: A's read fails
+      expect(streamTailed(stream)).toMatchObject({ path: tailed, tailUnmeasured: true, declinedTo: UUID_B });
+
+      writeFileSync(successor, turn('after the fork'), 'utf8');
+      writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_B);   // ccd's move
+      await pollOnce(stream);
+      expect(frames.map((f) => f.type)).not.toContain('rotated');
+      expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: successor, uuid: UUID_B });
+    } finally {
+      now.mockRestore();
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('a file RESUMED past its marker no longer names the successor — a registry move onto it is a rotation ' +
+     '(D-4947)', async () => {
+    // The other side of the kept decline: only a read that FAILED keeps it.
+    // A measured answer whose last line is no longer the marker (the
+    // pre-fork session was resumed and kept writing) replaces it whole, and
+    // the fork is then a different conversation from the one on screen — it
+    // lacks every turn written after the fork — so a registry move onto it
+    // is announced, exactly as before this branch.
+    const home = mkTmp('ccrc-repoint-resumed-');
+    seedRoster(home);
+    seed(home);
+    const tailed = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    const successor = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
+    let clock = 1_000_000;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const frames: any[] = [];
+    const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m));
+    try {
+      await stream.start();
+      appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');   // B not written yet
+      await pollOnce(stream);
+      await pollOnce(stream);
+      expect(streamTailed(stream)).toMatchObject({ path: tailed, declinedTo: UUID_B });
+      appendFileSync(tailed, turn('resumed in the pre-fork session'), 'utf8');
+      clock += RESOLVER_BACKOFF_MS;
+      await pollOnce(stream);   // sees the growth
+      await pollOnce(stream);   // re-ladders: a MEASURED last line, no marker
+      expect(streamTailed(stream)).not.toHaveProperty('declinedTo');
+      frames.length = 0;
+
+      writeFileSync(successor, turn('after the fork'), 'utf8');
+      writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_B);
+      await pollOnce(stream);
+      expect(frames.filter((f) => f.type === 'rotated')).toEqual([{ type: 'rotated', uuid: UUID_B }]);
+    } finally {
+      now.mockRestore();
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('the registry moving to the successor before the stream even READ the marker is a continuation (D-4947)',
+    async () => {
+      // #189 fix-forward, probe P2early. `tailed` predates the marker, so it
+      // carries no `declinedTo`; the registry moves on a delayed tick (a
+      // loaded box, remote mode) before this stream's own re-ladder ran. No
+      // clause of `registryCaughtUp` can see it — the marker on the tailed
+      // file is the only witness, so the stream reads it.
+      const home = mkTmp('ccrc-repoint-early-');
+      seedRoster(home);
+      seed(home);
+      const tailed = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
+      const successor = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m));
+      try {
+        await stream.start();
+        frames.length = 0;
+        appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');
+        await pollOnce(stream);   // sees the growth only — no re-ladder yet
+        expect(streamTailed(stream)).not.toHaveProperty('declinedTo');
+        writeFileSync(successor, turn('after the fork'), 'utf8');
+        writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_B);
+        await pollOnce(stream);
+        expect(frames.map((f) => f.type)).not.toContain('rotated');
+        expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: successor, uuid: UUID_B });
+      } finally {
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+  it('a registry that jumps TWO hops past a declined successor between two ticks is a continuation (D-4947)',
+    async () => {
+      // #189 fix-forward, probe P2twohop — the lane's own stated limit. The
+      // stream declined B; before its next tick ccd moved the registry twice
+      // (A->B->C, a tick stalled across two quiescences). C is downstream of
+      // the tailed file through B's marker, and the witness walks that chain.
+      const C = 'c'.repeat(36);
+      const home = mkTmp('ccrc-repoint-twohop-');
+      seedRoster(home);
+      seed(home);
+      const dir = path.join(home, '.claude-a', 'projects', MUNGED);
+      const tailed = path.join(dir, `${UUID_A}.jsonl`);
+      const end = path.join(dir, `${C}.jsonl`);
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m));
+      try {
+        await stream.start();
+        frames.length = 0;
+        appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');
+        await pollOnce(stream);
+        await pollOnce(stream);
+        expect(streamTailed(stream)).toMatchObject({ path: tailed, declinedTo: UUID_B });
+        writeFileSync(path.join(dir, `${UUID_B}.jsonl`), turn('b') + marker(UUID_B, C), 'utf8');
+        writeFileSync(end, turn('c'), 'utf8');
+        writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), C);
+        await pollOnce(stream);
+        expect(frames.map((f) => f.type)).not.toContain('rotated');
+        expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: end, uuid: C });
+      } finally {
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+  it('the registry stepping BACK to a predecessor whose walk lands on the tailed file is not a reset (D-4947)',
+    async () => {
+      // #189 fix-forward: the path clause of `registryCaughtUp`, end to end.
+      // The stream opened while the registry already said B (no
+      // `followedFrom`); the registry then names A again (the pane's own
+      // pre-fork id written back), and A's walk follows its marker to B — the
+      // file already on screen. Nothing moved; the backlog alone says so.
+      const home = mkTmp('ccrc-repoint-stepback-');
+      seedRoster(home);
+      seed(home);
+      const dir = path.join(home, '.claude-a', 'projects', MUNGED);
+      const pre = path.join(dir, `${UUID_A}.jsonl`);
+      const successor = path.join(dir, `${UUID_B}.jsonl`);
+      appendFileSync(pre, marker(UUID_A, UUID_B), 'utf8');
+      writeFileSync(successor, turn('after the fork'), 'utf8');
+      writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_B);
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m));
+      try {
+        await stream.start();
+        expect(streamTailed(stream)).toMatchObject({ path: successor, uuid: UUID_B });
+        expect(streamTailed(stream)).not.toHaveProperty('followedFrom');
+        frames.length = 0;
+        writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_A);
+        await pollOnce(stream);
+        expect(frames.map((f) => f.type)).not.toContain('rotated');
+        expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: successor, uuid: UUID_A });
+      } finally {
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+  describe('a symlinked workdir and a `<pid>.json` blip after a fork (D-4946, probes E2/E2b)', () => {
+    // The registry workdir is the SYMLINK spelling, the pane's live cwd its
+    // realpath, and the transcripts sit under the realpath's munge. A
+    // `<pid>.json` read that comes back unmeasured makes the stream resolve
+    // from the registry workdir instead: a different memo KEY, under which A
+    // is the RESOLVED spelling of `dir` (rung 1) where the live key had it at
+    // rung 2. "Strictly better rung" re-pointed B back onto A for one tick.
+    const setup = (home: string): { pre: string; successor: string; pidJson: string } => {
+      seedRoster(home);
+      seed(home);
+      const phys = path.join(home, 'phys', 'proj');
+      mkdirSync(phys, { recursive: true });
+      symlinkSync(path.join(home, 'phys'), path.join(home, 'link'));
+      const workdir = path.join(home, 'link', 'proj');
+      writeFileSync(path.join(home, '.cc-sessions', `${ID}.workdir`), workdir);
+      const pidJson = path.join(home, '.claude-a', 'sessions', `${PID}.json`);
+      const live = JSON.parse(readFileSync(pidJson, 'utf8'));
+      writeFileSync(pidJson, JSON.stringify({ ...live, cwd: phys }));
+      const dir = path.join(home, '.claude-a', 'projects', phys.replace(/[^a-zA-Z0-9]/g, '-'));
+      mkdirSync(dir, { recursive: true });
+      const pre = path.join(dir, `${UUID_A}.jsonl`);
+      writeFileSync(pre, userLine('u1', 'one') + userLine('u2', 'two'));
+      return { pre, successor: path.join(dir, `${UUID_B}.jsonl`), pidJson };
+    };
+    const blippy = (pidJson: string, flags: { pid: boolean; tailOf: string | null }): FleetIO => ({
+      ...localIO,
+      readFileMeasured: async (p) =>
+        (flags.pid && p === pidJson ? { ok: false, reason: 'unreadable' } : localIO.readFileMeasured(p)),
+      readFile: async (p) => (flags.pid && p === pidJson ? null : localIO.readFile(p)),
+      readFileFromMeasured: async (p, off) =>
+        (p === flags.tailOf ? { ok: false, reason: 'unreadable' } : localIO.readFileFromMeasured(p, off)),
+    });
+
+    it('a stale memo entry from a blip BEFORE the fork never re-points the stream back to the pre-fork file', async () => {
+      const home = mkTmp('ccrc-repoint-e2b-');
+      const { pre, successor, pidJson } = setup(home);
+      const flags = { pid: false, tailOf: null as string | null };
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, blippy(pidJson, flags)), new Bus(), ID, (m) => frames.push(m));
+      try {
+        await stream.start();
+        expect(streamTailed(stream)).toMatchObject({ path: pre });
+        flags.pid = true; await pollOnce(stream); flags.pid = false;   // a blip before the fork: memoizes A
+        await pollOnce(stream);
+        appendFileSync(pre, marker(UUID_A, UUID_B), 'utf8');
+        writeFileSync(successor, turn('after the fork'), 'utf8');
+        await pollOnce(stream);
+        await pollOnce(stream);
+        expect(streamTailed(stream)).toMatchObject({ path: successor });
+        frames.length = 0;
+
+        flags.pid = true; await pollOnce(stream); flags.pid = false;   // the blip after it
+        await pollOnce(stream);
+        expect(frames.filter((f) => f.type === 'backlog' && f.file === pre)).toEqual([]);
+        expect(frames.map((f) => f.type)).not.toContain('rotated');
+        expect(streamTailed(stream)).toMatchObject({ path: successor });
+      } finally {
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('a blip that also fails the pre-fork file\'s tail read never re-points the stream back to it', async () => {
+      const home = mkTmp('ccrc-repoint-e2-');
+      const { pre, successor, pidJson } = setup(home);
+      const flags = { pid: false, tailOf: null as string | null };
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, blippy(pidJson, flags)), new Bus(), ID, (m) => frames.push(m));
+      try {
+        await stream.start();
+        appendFileSync(pre, marker(UUID_A, UUID_B), 'utf8');
+        writeFileSync(successor, turn('after the fork'), 'utf8');
+        await pollOnce(stream);
+        await pollOnce(stream);
+        expect(streamTailed(stream)).toMatchObject({ path: successor });
+        frames.length = 0;
+
+        flags.pid = true; flags.tailOf = pre;
+        await pollOnce(stream);
+        flags.pid = false; flags.tailOf = null;
+        await pollOnce(stream);
+        expect(frames.filter((f) => f.type === 'backlog' && f.file === pre)).toEqual([]);
+        expect(frames.map((f) => f.type)).not.toContain('rotated');
+        expect(streamTailed(stream)).toMatchObject({ path: successor });
+      } finally {
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
   });
 
   it('an unchanged answer re-points NOTHING — same tailer instance, no frames', async () => {

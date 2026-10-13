@@ -346,6 +346,9 @@ describe('the naming sweep', () => {
       ...localIO,
       stat: (p) => { if (p === f) stats += 1; return localIO.stat(p); },
       readFileFrom: (p, off) => { if (p === f) reads += 1; return localIO.readFileFrom(p, off); },
+      // The resolver's own tail read goes through the measured variant since
+      // D-4946; counted too, so the "+1 (Task 2)" below still pins it.
+      readFileFromMeasured: (p, off) => { if (p === f) reads += 1; return localIO.readFileFromMeasured(p, off); },
     };
     const w = new FleetWatcher({ ...testDeps(h.home, h.run), io }, new Bus(), 2000);
 
@@ -694,6 +697,9 @@ describe('the naming sweep', () => {
     const io: FleetIO = {
       ...localIO,
       readFileFrom: (p, off) => { if (p === f) reads += 1; return localIO.readFileFrom(p, off); },
+      // The resolver's own tail read goes through the measured variant since
+      // D-4946; counted too, so the "+1 (Task 2)" below still pins it.
+      readFileFromMeasured: (p, off) => { if (p === f) reads += 1; return localIO.readFileFromMeasured(p, off); },
     };
     const w = new FleetWatcher({ ...testDeps(h.home, h.run), io }, new Bus(), 2000);
 
@@ -726,6 +732,9 @@ describe('the naming sweep', () => {
       ...localIO,
       stat: (p) => (p === f ? Promise.resolve(st) : localIO.stat(p)),
       readFileFrom: (p, off) => { if (p === f) reads += 1; return localIO.readFileFrom(p, off); },
+      // The resolver's own tail read goes through the measured variant since
+      // D-4946; counted too, so the "+1 (Task 2)" below still pins it.
+      readFileFromMeasured: (p, off) => { if (p === f) reads += 1; return localIO.readFileFromMeasured(p, off); },
     };
     const w = new FleetWatcher({ ...testDeps(h.home, h.run), io }, new Bus(), 2000);
 
@@ -752,6 +761,9 @@ describe('the naming sweep', () => {
       ...localIO,
       stat: (p) => (p === f ? Promise.resolve(st) : localIO.stat(p)),
       readFileFrom: (p, off) => { if (p === f) reads += 1; return localIO.readFileFrom(p, off); },
+      // The resolver's own tail read goes through the measured variant since
+      // D-4946; counted too, so the "+1 (Task 2)" below still pins it.
+      readFileFromMeasured: (p, off) => { if (p === f) reads += 1; return localIO.readFileFromMeasured(p, off); },
     };
     const w = new FleetWatcher({ ...testDeps(h.home, h.run), io }, new Bus(), 2000);
 

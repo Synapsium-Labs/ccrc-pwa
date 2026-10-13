@@ -14,7 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { localIO, type FleetIO } from '../src/io.js';
 import {
-  collapseHits, MAX_CONTINUATION_HOPS, MEMO_MAX, pickNewest, resolveTranscript, RESOLVER_BACKOFF_MS,
+  collapseHits, continuesInto, MAX_CONTINUATION_HOPS, MEMO_MAX, pickNewest, resolveTranscript, RESOLVER_BACKOFF_MS,
   RUNG_ORDER, rungRank, transcriptPath, TranscriptResolver, type GlobHit, type ResolveOpts,
 } from '../src/transcript/resolve.js';
 import { CONTINUATION_TAIL_BYTES } from '../src/transcript/parse.js';
@@ -909,38 +909,65 @@ describe('continuation follow', () => {
   // Whole-branch review, F1. The three arms that SEE a marker and decline it
   // must SAY so, because the memo above cannot tell them from an answer with
   // no marker at all — and the file they answer with is terminal, so its
-  // stamp never moves again.
-  it('says `followDeclined` on every arm that sees a marker and does not follow it', async () => {
+  // stamp never moves again. D-4947: and they say WHICH successor they
+  // declined, because the stream needs the uuid, not just the fact — when
+  // `ccd` moves the registry onto that uuid first, that move is the stream's
+  // own conversation continuing, not a reset.
+  it('names the declined successor (`declinedTo`) on every arm that sees a marker and does not follow it', async () => {
     const b = box();
     const own = plantChain(b, A, turn('one') + marker(A, B));
     // (1) the successor does not exist at all.
     expect(await resolveTranscript(localIO, chainOpts(b, A)))
-      .toMatchObject({ path: own, uuid: A, followDeclined: true });
+      .toMatchObject({ path: own, uuid: A, declinedTo: B });
     // (2) the successor exists but is zero bytes — announced, not yet written.
     plantChain(b, B, '');
     expect(await resolveTranscript(localIO, chainOpts(b, A)))
-      .toMatchObject({ path: own, uuid: A, followDeclined: true });
+      .toMatchObject({ path: own, uuid: A, declinedTo: B });
     // (3) the successor is already on this walk — a cycle.
     const c = box();
     plantChain(c, A, turn('one') + marker(A, B));
     const back = plantChain(c, B, turn('two') + marker(B, A));
     expect(await resolveTranscript(localIO, chainOpts(c, A)))
-      .toMatchObject({ path: back, uuid: B, followDeclined: true });
+      .toMatchObject({ path: back, uuid: B, declinedTo: A });
   });
 
-  it('a followed chain and an unmarked file both OMIT followDeclined — absence permits', async () => {
-    // The other side of the mutation: a blanket `followDeclined: true` would
-    // make every answer a "keep looking" one and put the full ladder back on
-    // every 30 s tick of every healthy session.
+  it('a followed chain and an unmarked file both OMIT declinedTo and tailUnmeasured — absence permits', async () => {
+    // The other side of the mutation: a blanket `declinedTo` (or
+    // `tailUnmeasured`) would make every answer a "keep looking" one and put
+    // the full ladder back on every 30 s tick of every healthy session.
+    // `toEqual` is exact, so this also pins that a followed answer carries
+    // `followedFrom` (D-4947) and an unfollowed one does not.
     const b = box();
     plantChain(b, A, marker(A, B));
     plantChain(b, B, turn('two'));
-    expect(await resolveTranscript(localIO, chainOpts(b, A)))
-      .toEqual({ kind: 'found', path: transcriptPath(b.cfg, b.livePhys, B), rung: 'live-raw', account: null, uuid: B });
+    expect(await resolveTranscript(localIO, chainOpts(b, A))).toEqual({
+      kind: 'found', path: transcriptPath(b.cfg, b.livePhys, B), rung: 'live-raw', account: null, uuid: B,
+      followedFrom: [A],
+    });
     const c = box();
     const only = plantChain(c, A, turn('one'));
     expect(await resolveTranscript(localIO, chainOpts(c, A)))
       .toEqual({ kind: 'found', path: only, rung: 'live-raw', account: null, uuid: A });
+  });
+
+  // D-4947: the stream decides "is this registry move my own conversation
+  // continuing?" from the answer it is tailing, so a followed answer says
+  // where it came from — every uuid the walk passed through, oldest first.
+  it('a followed answer carries every uuid it was followed FROM, in walk order (D-4947)', async () => {
+    const b = box();
+    plantChain(b, A, marker(A, B));
+    plantChain(b, B, marker(B, C));
+    plantChain(b, C, turn('three'));
+    expect(await resolveTranscript(localIO, chainOpts(b, A))).toMatchObject({ uuid: C, followedFrom: [A, B] });
+    // And at the hop bound, where the walk stops on a file whose own marker it
+    // never read: the uuids it DID pass through are still the whole story.
+    const c = box();
+    const ids = Array.from({ length: 10 }, (_, i) => String(i).padStart(2, '0').repeat(18));
+    for (let i = 0; i < ids.length - 1; i += 1) plantChain(c, ids[i]!, marker(ids[i]!, ids[i + 1]!));
+    plantChain(c, ids[ids.length - 1]!, turn('end'));
+    const r = await resolveTranscript(localIO, chainOpts(c, ids[0]!));
+    expect(r).toMatchObject({ uuid: ids[4], followedFrom: ids.slice(0, 4) });
+    expect(r).not.toHaveProperty('declinedTo');   // the bound is not a decline (see resolveTranscript's doc)
   });
 
   it('leaves a fallback alone — there is no file to read a marker from', async () => {
@@ -1006,7 +1033,7 @@ describe('TranscriptResolver and the fork', () => {
     // poll for the life of the socket (and, for `watch.ts`'s name sweep,
     // the life of the server process: its resolver is never rebuilt).
     //
-    // MEASURED with `followDeclined` dropped from `staleByBackoff`'s
+    // MEASURED with `declinedTo` dropped from `staleByBackoff`'s
     // "keeps looking" set: the third assertion below answers `own`/A — the
     // chat stays frozen on the pre-fork transcript for ever, exactly as it
     // did before lane 1 existed.
@@ -1014,7 +1041,7 @@ describe('TranscriptResolver and the fork', () => {
     const own = plantChain(b, A, turn('one') + marker(A, B));   // B is not there yet
     let clock = 1_000_000;
     const r = new TranscriptResolver(localIO, { backoffMs: 30_000, now: () => clock });
-    expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: own, uuid: A, followDeclined: true });
+    expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: own, uuid: A, declinedTo: B });
 
     const to = plantChain(b, B, turn('two'));   // the fork writes its first line
     clock += 29_999;
@@ -1040,13 +1067,19 @@ describe('TranscriptResolver and the fork', () => {
     const own = plantChain(b, A, turn('one'));
     plantChain(b, B, turn('two'));
     let reads = 0;
+    // BOTH range reads are counted. The walk's tail read goes through
+    // `readFileFromMeasured` since D-4946 (it must tell a failed read from a
+    // file with no marker); `readFileFrom` calls straight into `localIO`'s
+    // own, so nothing here is counted twice.
     const counting: FleetIO = {
       ...localIO,
       readFileFrom: async (p, o) => { reads += 1; return localIO.readFileFrom(p, o); },
+      readFileFromMeasured: async (p, o) => { reads += 1; return localIO.readFileFromMeasured(p, o); },
     };
     const r = new TranscriptResolver(counting);
     await r.resolve(chainOpts(b, A));
     const afterFirst = reads;
+    expect(afterFirst, 'the first resolution pays its one tail read').toBe(1);
     for (let i = 0; i < 5; i += 1) {
       appendFileSync(own, turn(`more ${i}`), 'utf8');
       await r.resolve(chainOpts(b, A));
@@ -1055,5 +1088,308 @@ describe('TranscriptResolver and the fork', () => {
     // stood still, so the ladder never re-ran. This is the invariant
     // `name-sweep.test.ts`'s stat gate measures from the other side.
     expect(reads).toBe(afterFirst);
+  });
+});
+
+/** A `FleetIO` whose TAIL READ of `file` fails while `failing()` holds — the
+ *  agent RPC that timed out on a loaded fleet box — and whose every stat still
+ *  answers, so the ladder keeps finding the file. Overrides
+ *  `readFileFromMeasured` ONLY: `localIO.readFileFrom` derives from it through
+ *  `this`, so a caller of either method sees the same failure. */
+const tailReadFails = (file: string, failing: () => boolean): FleetIO => ({
+  ...localIO,
+  readFileFromMeasured: async (p, off) =>
+    (p === file && failing() ? { ok: false, reason: 'unreadable' } : localIO.readFileFromMeasured(p, off)),
+});
+
+describe('an unmeasured tail is not "no marker" (D-4946)', () => {
+  it('a tail read that FAILS answers the file as tailUnmeasured — never a clean found', async () => {
+    // #189 review, S1, at its root. The walk used to answer a failed read
+    // with the same `null` as "the last line is not a marker", so one dropped
+    // RPC turned a superseded transcript into a clean, terminal answer — and
+    // a clean answer on a terminal file is served by the memo for ever.
+    const b = box();
+    const own = plantChain(b, A, turn('one') + marker(A, B));
+    plantChain(b, B, turn('two'));
+    const r = await resolveTranscript(tailReadFails(own, () => true), chainOpts(b, A));
+    expect(r).toMatchObject({ kind: 'found', path: own, uuid: A, tailUnmeasured: true });
+    expect(r).not.toHaveProperty('declinedTo');   // no marker was READ, so none is named
+  });
+
+  it('a STAT that fails inside the walk is unmeasured too', async () => {
+    // `stat` is pinned to `localIO`'s own, so the LADDER still finds the file;
+    // only the walk's measured stat of it fails.
+    const b = box();
+    const own = plantChain(b, A, turn('one') + marker(A, B));
+    plantChain(b, B, turn('two'));
+    const io: FleetIO = {
+      ...localIO,
+      stat: (p) => localIO.stat(p),
+      statMeasured: async (p) => (p === own ? { ok: false, reason: 'unreadable' } : localIO.statMeasured(p)),
+    };
+    expect(await resolveTranscript(io, chainOpts(b, A)))
+      .toMatchObject({ kind: 'found', path: own, uuid: A, tailUnmeasured: true });
+  });
+
+  it('the memo keeps looking: an unmeasured answer re-ladders on the back-off and finds the successor', async () => {
+    // MEASURED with `tailUnmeasured` dropped from `staleByBackoff`: the third
+    // resolve answers `own` — A's stamp never moves again (it is terminal),
+    // so the blip is pinned for the life of the stream.
+    const b = box();
+    const own = plantChain(b, A, turn('one') + marker(A, B));
+    const to = plantChain(b, B, turn('two'));
+    let failing = true;
+    let clock = 1_000_000;
+    const r = new TranscriptResolver(tailReadFails(own, () => failing), { backoffMs: 30_000, now: () => clock });
+    expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: own, tailUnmeasured: true });
+    failing = false;                              // the agent answers again
+    clock += 29_999;
+    expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: own, uuid: A });   // inside the back-off
+    clock += 1;
+    expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: to, uuid: B });
+  });
+
+  it('a successor whose stat fails is declined by name — not followed, not dropped', async () => {
+    const b = box();
+    const own = plantChain(b, A, turn('one') + marker(A, B));
+    const succ = plantChain(b, B, turn('two'));
+    const io: FleetIO = {
+      ...localIO,
+      statMeasured: async (p) => (p === succ ? { ok: false, reason: 'unreadable' } : localIO.statMeasured(p)),
+    };
+    expect(await resolveTranscript(io, chainOpts(b, A))).toMatchObject({ path: own, uuid: A, declinedTo: B });
+  });
+});
+
+describe('the memo stamp is the one the walk read at (D-4948)', () => {
+  it('a marker that lands between the walk\'s tail read and the stamp is still followed', async () => {
+    // #189 review, S3. The stamp used to come from a SEPARATE stat taken
+    // after the walk: a marker appended in between was counted in the stamp
+    // while the answer was computed without it, and since the file never
+    // changes again, it was never looked at again. The hook below appends the
+    // marker (and writes the successor) the instant the walk's read of A
+    // returns — the remote-mode race, made deterministic.
+    const b = box();
+    const own = plantChain(b, A, turn('one'));
+    let to = '';
+    let race: (() => void) | null = null;
+    const io: FleetIO = {
+      ...localIO,
+      readFileFromMeasured: async (p, off) => {
+        const res = await localIO.readFileFromMeasured(p, off);
+        if (p === own && race !== null) { const go = race; race = null; go(); }
+        return res;
+      },
+    };
+    const r = new TranscriptResolver(io);
+    expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: own, uuid: A });
+    appendFileSync(own, turn('more'), 'utf8');
+    expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: own, uuid: A });   // sees the growth
+    race = () => { appendFileSync(own, marker(A, B), 'utf8'); to = plantChain(b, B, turn('two')); };
+    // The file stood still, so this poll re-ladders — and its read sees no marker.
+    expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: own, uuid: A });
+    expect(race, 'the race really ran inside the walk').toBeNull();
+    // The marker moved the file after the stamp was taken, so the next poll
+    // records the change and the one after re-ladders and follows.
+    await r.resolve(chainOpts(b, A));
+    expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: to, uuid: B });
+  });
+
+  it('an answer stopped at the hop bound is stamped too — the memo serves it without re-reading', async () => {
+    // The bound's exit never reads the file it stops on, so its stamp is the
+    // existence stat the walk took of it on the way in. Without one the memo
+    // would re-ladder that answer every second poll — a full walk, four tail
+    // reads, for a chain that has not moved.
+    const b = box();
+    const ids = Array.from({ length: 10 }, (_, i) => String(i).padStart(2, '0').repeat(18));
+    for (let i = 0; i < ids.length - 1; i += 1) plantChain(b, ids[i]!, marker(ids[i]!, ids[i + 1]!));
+    plantChain(b, ids[ids.length - 1]!, turn('end'));
+    let reads = 0;
+    const counting: FleetIO = {
+      ...localIO,
+      readFileFromMeasured: async (p, o) => { reads += 1; return localIO.readFileFromMeasured(p, o); },
+    };
+    const r = new TranscriptResolver(counting);
+    expect(await r.resolve(chainOpts(b, ids[0]!))).toMatchObject({ uuid: ids[4] });
+    const afterFirst = reads;
+    for (let i = 0; i < 3; i += 1) await r.resolve(chainOpts(b, ids[0]!));
+    expect(reads).toBe(afterFirst);
+  });
+});
+
+describe('the successor is the predecessor\'s sibling, never a search (D-4949)', () => {
+  it('a successor that exists only in ANOTHER project dir is declined, not found by the uuid glob', async () => {
+    // #189 review, F4. A fork writes its successor beside the transcript it
+    // forked from; a successor uuid found anywhere else is not this session's
+    // continuation, and `ccd` (`_ci_transcript_path`) would never follow it —
+    // so the two authorities disagreed for good and the doctor WARNed for ever.
+    const b = box();
+    const own = plantChain(b, A, turn('one') + marker(A, B));
+    plant(stranded(b.cfg, B), 1000, turn('another project'));
+    expect(await resolveTranscript(localIO, chainOpts(b, A)))
+      .toMatchObject({ kind: 'found', path: own, uuid: A, declinedTo: B });
+  });
+
+  it('a successor held only by ANOTHER ACCOUNT is declined, never followed across accounts', async () => {
+    const b = box();
+    const own = plantChain(b, A, turn('one') + marker(A, B));
+    const other = path.join(b.root, '.claude-lane-b');
+    plant(stranded(other, B), 1000, turn('another account'));
+    // The same project dir, spelled under the other account — still not a sibling.
+    plant(transcriptPath(other, b.livePhys, B), 1000, turn('another account, same project'));
+    const r = await resolveTranscript(localIO, {
+      ...chainOpts(b, A), foreign: [{ account: 'lane-b', configDir: other }],
+    });
+    expect(r).toMatchObject({ kind: 'found', path: own, uuid: A, declinedTo: B, account: null });
+  });
+
+  it('a followed successor sits at its predecessor\'s address: same directory, same rung, same account', async () => {
+    // The positive half. A head the ladder could only find in another
+    // account's config dir (rung 6) continues IN that dir — the account that
+    // forked it is the account that wrote the successor — and the answer
+    // keeps the banner's account rather than re-deriving it.
+    const b = box();
+    // The own account must be MEASURED empty for rung 6 to run at all (the
+    // ladder's own ruling, `ladder`'s comment above the foreign pool).
+    mkdirSync(path.join(b.cfg, 'projects'), { recursive: true });
+    const other = path.join(b.root, '.claude-lane-b');
+    const head = plant(stranded(other, A), 1000, turn('one') + marker(A, B));
+    const succ = plant(path.join(path.dirname(head), `${B}.jsonl`), 1000, turn('two'));
+    const r = await resolveTranscript(localIO, {
+      ...chainOpts(b, A), foreign: [{ account: 'lane-b', configDir: other }],
+    });
+    expect(r).toEqual({
+      kind: 'found', path: succ, rung: 'foreign-glob', account: 'lane-b', uuid: B, followedFrom: [A],
+    });
+  });
+
+  // The OTHER SPELLING (fix-forward on D-4949). A symlinked workdir has two
+  // project dirs, one per munge, and `ccd`'s `_ci_addrs` looks for a
+  // successor at BOTH — "the raw spelling is sometimes the one Claude Code
+  // actually wrote under, measured on this very box". The sibling-only rule
+  // did not, so a fork written under the other spelling was declined by the
+  // server alone; with `ccd` not moving the registry (not deployed, or
+  // latched) the chat stayed on the pre-fork file for good — a regression
+  // against the full-ladder follow, which found it at once.
+  const spelledOpts = (b: Box, uuid: string): ResolveOpts =>
+    ({ configDir: b.cfg, dir: b.liveLink, registryWorkdir: b.liveLink, uuid });
+
+  it('a successor under the OTHER spelling of the session\'s own workdir is followed, at that address\'s rung', async () => {
+    const b = box();
+    plant(transcriptPath(b.cfg, b.liveLink, A), 1000, turn('one') + marker(A, B));      // the raw spelling
+    const succ = plant(transcriptPath(b.cfg, b.livePhys, B), 1000, turn('two'));         // the resolved one
+    expect(await resolveTranscript(localIO, spelledOpts(b, A))).toEqual({
+      kind: 'found', path: succ, rung: 'live-resolved', account: null, uuid: B, followedFrom: [A],
+    });
+  });
+
+  it('and the other way round: a resolved-spelling head continues under the raw spelling', async () => {
+    const b = box();
+    plant(transcriptPath(b.cfg, b.livePhys, A), 1000, turn('one') + marker(A, B));
+    const succ = plant(transcriptPath(b.cfg, b.liveLink, B), 1000, turn('two'));
+    expect(await resolveTranscript(localIO, spelledOpts(b, A))).toEqual({
+      kind: 'found', path: succ, rung: 'live-raw', account: null, uuid: B, followedFrom: [A],
+    });
+  });
+
+  it('the other spelling is the REGISTRY workdir\'s — never the live cwd\'s project dir', async () => {
+    // `ccd` looks at the registry workdir's two spellings and nowhere else, so
+    // a successor that exists only under the LIVE cwd's munge (a session whose
+    // process chdir'd, M4) is one `ccd` would never follow. The server
+    // following it alone is the F4 disagreement again, by another door.
+    const b = box();
+    const own = plant(transcriptPath(b.cfg, b.regLink, A), 1000, turn('one') + marker(A, B));   // rung 4
+    plant(transcriptPath(b.cfg, b.livePhys, B), 1000, turn('under the live cwd'));
+    plant(transcriptPath(b.cfg, b.liveLink, B), 1000, turn('under the live cwd, raw'));
+    expect(await resolveTranscript(localIO, opts(b, { uuid: A })))
+      .toMatchObject({ kind: 'found', path: own, uuid: A, declinedTo: B });
+  });
+
+  it('a head the uuid GLOB found keeps the sibling rule — the workdir\'s spellings are not its addresses', async () => {
+    // `ccd` cannot see a head outside its workdir's two spellings at all, so
+    // it never follows one; the other-spelling lookup is for a file that sits
+    // in one of the registry workdir's two project dirs.
+    const b = box();
+    const head = plant(stranded(b.cfg, A), 1000, turn('one') + marker(A, B));
+    plant(transcriptPath(b.cfg, b.livePhys, B), 1000, turn('at the workdir, resolved'));
+    plant(transcriptPath(b.cfg, b.liveLink, B), 1000, turn('at the workdir, raw'));
+    expect(await resolveTranscript(localIO, spelledOpts(b, A)))
+      .toMatchObject({ kind: 'found', path: head, rung: 'uuid-glob', uuid: A, declinedTo: B });
+  });
+
+  it('an unmeasured spelling before a present one is a decline, not a guess', async () => {
+    // The resolved spelling is asked first (`ccd`'s order) and its stat
+    // FAILED, so nobody knows whether the fork is there; answering the raw
+    // copy would pick between two files on a blip. Declining is the
+    // keep-looking answer: the back-off asks again.
+    const b = box();
+    const own = plant(transcriptPath(b.cfg, b.liveLink, A), 1000, turn('one') + marker(A, B));
+    plant(transcriptPath(b.cfg, b.liveLink, B), 1000, turn('two, raw'));
+    const first = plant(transcriptPath(b.cfg, b.livePhys, B), 1000, turn('two, resolved'));
+    const io: FleetIO = {
+      ...localIO,
+      statMeasured: async (p) => (p === first ? { ok: false, reason: 'unreadable' } : localIO.statMeasured(p)),
+    };
+    expect(await resolveTranscript(io, spelledOpts(b, A)))
+      .toMatchObject({ kind: 'found', path: own, uuid: A, declinedTo: B });
+  });
+});
+
+describe('continuesInto — the registry-move witness (D-4947)', () => {
+  // `SessionStream.tick` asks this when the registry's uuid moves and no
+  // fact the stream already holds explains it: is the new uuid downstream of
+  // the file on screen? Each clause gets a row of its own.
+  it('a marker naming the target directly is a continuation', async () => {
+    const b = box();
+    const a = plantChain(b, A, turn('one') + marker(A, B));
+    expect(await continuesInto(localIO, { path: a, uuid: A }, B, [])).toBe(true);
+  });
+
+  it('two hops through a sibling are a continuation — the target need not be the first link', async () => {
+    const b = box();
+    const a = plantChain(b, A, turn('one') + marker(A, B));
+    plantChain(b, B, turn('two') + marker(B, C));
+    expect(await continuesInto(localIO, { path: a, uuid: A }, C, [])).toBe(true);
+  });
+
+  it('a middle link under the other spelling is found through the dirs given, and only through them', async () => {
+    const b = box();
+    const a = plant(transcriptPath(b.cfg, b.liveLink, A), 1000, turn('one') + marker(A, B));
+    const mid = plant(transcriptPath(b.cfg, b.livePhys, B), 1000, turn('two') + marker(B, C));
+    expect(await continuesInto(localIO, { path: a, uuid: A }, C, [path.dirname(mid)])).toBe(true);
+    expect(await continuesInto(localIO, { path: a, uuid: A }, C, [])).toBe(false);
+  });
+
+  it('a file with no marker, a marker naming someone else, and a loop are not', async () => {
+    const b = box();
+    const plain = plantChain(b, A, turn('one'));
+    expect(await continuesInto(localIO, { path: plain, uuid: A }, B, [])).toBe(false);
+    const elsewhere = plantChain(b, B, turn('two') + marker(B, C));
+    expect(await continuesInto(localIO, { path: elsewhere, uuid: B }, A, [])).toBe(false);
+    plantChain(b, C, turn('three') + marker(C, B));   // B -> C -> B
+    let reads = 0;
+    const counting: FleetIO = {
+      ...localIO,
+      readFileFromMeasured: async (p, off) => { reads += 1; return localIO.readFileFromMeasured(p, off); },
+    };
+    expect(await continuesInto(counting, { path: elsewhere, uuid: B }, 'd'.repeat(36), [])).toBe(false);
+    expect(reads, 'a loop stops when it comes round, not at the hop bound').toBe(2);
+  });
+
+  it('an unreadable tail is not a continuation — "not shown", never a guess', async () => {
+    const b = box();
+    const a = plantChain(b, A, turn('one') + marker(A, B));
+    expect(await continuesInto(tailReadFails(a, () => true), { path: a, uuid: A }, B, [])).toBe(false);
+  });
+
+  it('stops at the hop bound', async () => {
+    const b = box();
+    const ids = Array.from({ length: MAX_CONTINUATION_HOPS + 2 }, (_, i) => String(i + 1).repeat(36));   // uuid-shaped
+    const files = ids.map((id, i) =>
+      plantChain(b, id, turn(`t${i}`) + (i + 1 < ids.length ? marker(id, ids[i + 1]!) : '')));
+    // The last link the bound reaches is named by the file MAX-1 hops down.
+    expect(await continuesInto(localIO, { path: files[0]!, uuid: ids[0]! }, ids[MAX_CONTINUATION_HOPS]!, [])).toBe(true);
+    expect(await continuesInto(localIO, { path: files[0]!, uuid: ids[0]! }, ids[MAX_CONTINUATION_HOPS + 1]!, []))
+      .toBe(false);
   });
 });
