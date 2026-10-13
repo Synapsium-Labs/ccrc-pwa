@@ -1,7 +1,7 @@
 import path from 'node:path';
 import type { FleetIO } from '../io.js';
 import { mungePath } from '../munge.js';
-import { continuationOf, CONTINUATION_TAIL_BYTES } from './parse.js';
+import { continuationInTail, CONTINUATION_TAIL_BYTES } from './parse.js';
 
 /**
  * Transcript file for a session: `<configDir>/projects/<munge(dir)>/<uuid>.jsonl`.
@@ -396,21 +396,20 @@ async function ladder(io: FleetIO, o: ResolveOpts): Promise<TranscriptResolution
  *  rather than believing it. */
 export const MAX_CONTINUATION_HOPS = 4;
 
-/** The successor named by the last line of `file`, or null. */
+/** The successor `file`'s tail window names, or null. */
 async function continuationAt(io: FleetIO, file: string, uuid: string): Promise<string | null> {
   const st = await io.statMeasured(file);
   if (!st.ok || st.size === 0) return null;
   const start = Math.max(0, st.size - CONTINUATION_TAIL_BYTES);
   const res = await io.readFileFrom(file, start);
   if (res === null) return null;
-  const lines = res.data.split('\n').filter((l) => l.trim() !== '');
-  // A window that starts mid-file starts mid-line, and its FIRST line is the
-  // only one that can be partial; the marker is the LAST line, so a truncated
-  // head costs nothing. A last line longer than the window parses as garbage
-  // and answers null, which is the honest "no marker" rather than a uuid
+  // The window is scanned newest line first, by the rule all three readers
+  // share (D-4940, `continuationInTail`). A window that starts mid-file starts
+  // mid-line; that cut first line never parses as an object, so it is skipped
+  // like any other non-record — and a last line longer than the window is
+  // that cut line, which is the honest "no marker" rather than a uuid
   // assembled from half a record.
-  const last = lines[lines.length - 1];
-  return last === undefined ? null : continuationOf(last, uuid);
+  return continuationInTail(res.data, uuid);
 }
 
 /**
@@ -564,9 +563,11 @@ export class TranscriptResolver {
       // is the freeze this work is for moved one layer in.
       //
       // But "changed" is not the question either. A transcript that is being
-      // WRITTEN cannot carry a terminal marker — the marker is the last line a
-      // file ever gets — so re-laddering a growing file buys a tail read that
-      // can learn nothing. It is not free: `watch.ts`'s name sweep already pays
+      // WRITTEN has not settled what its tail says — the conversation may be
+      // going on in it, and even after a marker Claude Code re-stamps metadata
+      // at exit (D-4940) — so re-laddering a growing file buys a tail read
+      // whose answer the next write can still change. It is not free:
+      // `watch.ts`'s name sweep already pays
       // its own read for a grown transcript through `claimTitleRead`, so this
       // class re-reading the same file doubles that bill on every tick of every
       // busy session. Measured: it broke `name-sweep.test.ts`'s own stat-gate

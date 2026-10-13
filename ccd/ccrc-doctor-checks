@@ -493,7 +493,7 @@ _check_gh() {
     "install it: see https://cli.github.com (Debian/Ubuntu: sudo apt install gh)"
 }
 _check_jq() {
-  _dr_need_bin jq "ccrc and ccrc-adopt read this box's small JSON files with it (ccrc version, accounts.json)" \
+  _dr_need_bin jq "ccrc and ccrc-adopt read this box's small JSON files with it (ccrc version, accounts.json), and ccd reads Claude Code's continued-in marker with it (D-4940)" \
     "install it: sudo apt install jq"
 }
 
@@ -3964,8 +3964,10 @@ _check_pool-sync() {
 
 # ── transcripts: the THIRD reader of Claude Code's own `continued-in` marker ──
 # THE OPERATOR'S SIGNAL. Claude Code forks a live session into a background
-# PTY under a new sessionId and writes `{"type":"continued-in", …}` as the
-# last line of the transcript it abandons. `ccd`'s `_follow_continued_in`
+# PTY under a new sessionId and appends `{"type":"continued-in", …}` to the
+# transcript it abandons (followed by no finished turn — metadata re-stamped
+# at exit, an interruption notice and the like may come after it, D-4940).
+# `ccd`'s `_follow_continued_in`
 # walks that pointer into the registry, but the walk is gated on the file
 # going quiescent first (one hop per supervise tick — D-3562), so a
 # box whose `ccd` predates that fix, or whose supervisor has not ticked yet,
@@ -3984,60 +3986,111 @@ CONTINUED_IN_TAIL_BYTES=8192   # held equal to CONTINUATION_TAIL_BYTES
 # (server/src/transcript/parse.ts) and ccd/ccd's own CONTINUED_IN_TAIL_BYTES
 # by server/test/continued-in-parity.test.ts — three readers, one window.
 
-_dr_continued_in() {   # file uuid -> 0 when the file's last line supersedes it
-  # THE THIRD READER OF THE MARKER. It asks a narrower question than ccd's
-  # own `_continued_in_of` (is the last line THIS file's own continued-in
-  # marker, at all — not what it names) and answers by exit code rather than
-  # by printing the successor, but it REFUSES exactly what that reader
-  # refuses: `_continued_in_of` is not callable here (this file is sourced by
-  # `ccrc`, which does not source `ccd` — task-8-brief's own constraint), so
-  # the semantics are mirrored rather than shared, and
-  # `server/test/continued-in-parity.test.ts` holds the window and the record
-  # shape equal across both.
+# THE RULE, NOT A COPY OF ITS LITERALS (D-4940). This is the jq program
+# ccd/ccd's `_continued_in_of` runs, byte for byte — `continued-in-parity.test.ts`
+# holds the two spellings equal and runs this reader, ccd's and the server's
+# over one table of transcripts — and the TypeScript twin (`tailRecordOf`,
+# server/src/transcript/parse.ts) is where the rule is written out in full:
+# the window's lines are read NEWEST FIRST; a top-level `continued-in` record
+# decides (a successor, or none when it is not this file's valid marker), a
+# top-level user/assistant record that Claude Code's own reader calls a
+# finished turn decides "none", and every other line — metadata Claude Code
+# re-stamps after the marker, an interruption notice, a tool result, a line
+# that does not parse, the window's cut first line — is stepped over. The old
+# reader here matched substrings anywhere on the LAST line, so a tool call
+# whose input held a marker-shaped object read as superseded while the server
+# refused it, and a real marker with a `last-prompt` line after it read as live
+# (review findings F1 and ccd-last-line-only-marker). Why the program is
+# spelled the way it is — no `first`/`any`/`all` (jq 1.6), JavaScript's
+# whitespace in code points, the surrogate rewrite — is said once, above the
+# same text in ccd/ccd. jq is already this file's JSON reader (the `build`
+# check reads the stamp with it), and `_check_jq` FAILs a box without one — on
+# which ccd's chain follow reads nothing either.
+CONTINUED_IN_JQ='def jsws: . == 9 or . == 10 or . == 11 or . == 12 or . == 13 or . == 32 or . == 160 or . == 5760
+  or (. >= 8192 and . <= 8202) or . == 8232 or . == 8233 or . == 8239 or . == 8287 or . == 12288 or . == 65279;
+def jstrim: explode as $c
+  | [range(0; $c | length) | select($c[.] | jsws | not)] as $k
+  | if $k == [] then "" else $c[$k[0]:$k[-1] + 1] | implode end;
+def tagled: explode as $c
+  | ($c | length) > 2 and $c[0] == 60 and $c[1] >= 97 and $c[1] <= 122
+  and ([range(2; $c | length) | select($c[.] as $x
+         | ($x >= 48 and $x <= 57) or ($x >= 65 and $x <= 90) or ($x >= 97 and $x <= 122) or $x == 95 or $x == 45 | not)] as $k
+       | $k != [] and ($c[$k[0]] as $x | $x == 62 or ($x | jsws)));
+def cmdname: split("<command-name>") as $s
+  | [range(1; $s | length) | $s[.:] | join("<command-name>")
+     | split("\r")[0] | split("\u2028")[0] | split("\u2029")[0] | select(contains("</command-name>"))] != [];
+def prompttext:
+  if contains("<pasted_content id=\"") then true
+  else jstrim as $n
+  | if $n == "" then false
+    elif ($n | cmdname) then false
+    elif ($n | split("<bash-input>") | length > 1 and (.[1:] | join("<bash-input>") | contains("</bash-input>"))) then true
+    elif ($n | startswith("[Request interrupted by user")) and ($n | ltrimstr("[Request interrupted by user") | contains("]")) then false
+    elif ($n | tagled) then false
+    else true end
+  end;
+def prompt: .isMeta != true and .isCompactSummary != true and (.message | type) == "object"
+  and (.message.content as $x
+       | if ($x | type) == "string" then ($x | prompttext)
+         elif ($x | type) == "array" then
+           [$x[] | select(type == "object" and .type == "tool_result")] == []
+           and [$x[] | select(type == "object" and .type == "text" and (.text | type) == "string") | select(.text | prompttext)] != []
+         else false end);
+def complete: ((has("isApiErrorMessage") | not) or .isApiErrorMessage == false)
+  and (.message | type) == "object" and (.message.stop_reason | type) == "string";
+def unsurrogate: reduce ("d", "D") as $d (.; reduce ("8", "9", "a", "b", "c", "d", "e", "f", "A", "B", "C", "D", "E", "F") as $h
+  (.; split("\\u" + $d + $h) | join("\\uff")));
+def tailrec($l):
+  ($l | contains("\"type\":\"continued-in\"")) as $m
+  | ($l | (contains("\"type\":\"user\"") or contains("\"type\":\"assistant\""))) as $t
+  | if ($m or $t) | not then "skip"
+    else [$l | try fromjson catch ($l | unsurrogate | try fromjson catch empty)]
+    | if . == [] or (.[0] | type) != "object" then "skip"
+      else .[0]
+      | if $m and .type == "continued-in" and (.continuedInSessionId | type) == "string" then
+          .continuedInSessionId as $to
+          | if ((has("sessionId") | not) or .sessionId == $u)
+               and ($to | length) == 36
+               and ([$to | explode[] | select((. == 45 or (. >= 48 and . <= 57) or (. >= 97 and . <= 102)) | not)] == [])
+               and $to != $u
+            then "+" + $to else "stop" end
+        elif $t and .type == "assistant" then (if complete then "stop" else "skip" end)
+        elif $t and .type == "user" then (if prompt then "stop" else "skip" end)
+        else "skip" end
+      end
+    end;
+[(split("\n") | reverse[]) as $l | tailrec($l) | select(. != "skip")] | (.[0] // "stop")
+| select(startswith("+")) | .[1:]
+'
+
+_DR_CI_NEXT=""   # `_dr_continued_in`'s out-parameter: the successor, on rc 0
+
+_dr_continued_in() {   # file uuid -> 0 superseded (successor in _DR_CI_NEXT), 1 not superseded, 2 NOT MEASURED
+  # THE THIRD READER OF THE MARKER. `_continued_in_of` is not callable here
+  # (this file is sourced by `ccrc`, which does not source `ccd` —
+  # task-8-brief's own constraint), so the RULE is shared as program text
+  # (`CONTINUED_IN_JQ` above) rather than as a function.
   #
-  # ABSENCE PERMITS; PRESENCE MUST BE VALID (the same review-round finding
-  # `_continued_in_of` was fixed for, in ccd/ccd). A `sessionId` field that is
-  # THERE but does not extract as a 36-character value must REFUSE, not fall
-  # back to "nobody claimed it" — extracting straight through `grep -oE` with
-  # no presence check first cannot tell "absent" from "present but
-  # malformed": both leave the extraction empty. So presence is its own
-  # `case` arm, checked before the value is trusted, exactly as
-  # `_continued_in_of` checks `[[ "$last" == *'"sessionId":"'* ]]` before it
-  # trusts what it extracts.
+  # THREE ANSWERS, NEVER TWO (D-4941, review finding F2). A tail read that
+  # FAILED — the file unreadable to this user, an I/O error, no `tail` or no
+  # `jq` on this PATH — used to come back as the same 1 as "read, and not
+  # superseded", so `_check_transcripts` counted a transcript nobody had read
+  # as measured and healthy. It is 2 now, and the caller counts it as not
+  # measured. `pipefail` is set inside the substitution so a failed `tail` is
+  # not hidden behind a jq that happily parsed nothing; this file is sourced
+  # under it by `ccrc`, but not by everything that sources it.
   #
-  # ONE DELIBERATE DIFFERENCE FROM `_continued_in_of`: that reader still
-  # shells external `grep` (once, for the blank-line filter — the second
-  # `tail` is what D-3563 removed, not the first) because it is
-  # written for `ccd/ccd`'s own test harness, which inherits the real PATH.
-  # This file is exercised by `ccrc-doctor.test.ts`'s HERMETIC harness
-  # instead — PATH holds nothing but explicitly-fixtured binaries, by design
-  # (this file's own test header) — so every step below that `_continued_in_of`
-  # does with `grep`/`cut`/`head` is done here with bash's OWN regex engine
-  # (`[[ … =~ … ]]`/`BASH_REMATCH`) and a plain `while read` loop instead,
-  # consistent with this file's `_munge_wd` idiom just below ("a `tr` pipeline
-  # forks and execs twice per call; this substitution forks nothing"). The
-  # bounded `tail -c` read itself stays — there is no bash-only way to read a
-  # file's last N bytes without loading the whole thing, which is the exact
-  # cost `CONTINUED_IN_TAIL_BYTES` exists to bound — so `tail` is the one
-  # external process this function still shells.
-  local f="$1" uuid="$2" window last line claims next
-  window=$(tail -c "$CONTINUED_IN_TAIL_BYTES" -- "$f" 2>/dev/null) || return 1
-  last=""
-  while IFS= read -r line || [ -n "$line" ]; do
-    [ -n "${line//[[:space:]]/}" ] && last="$line"
-  done <<< "$window"
-  [ -n "$last" ] || return 1
-  case "$last" in *'"type":"continued-in"'*) ;; *) return 1 ;; esac
-  case "$last" in
-    *'"sessionId":"'*)
-      claims=""
-      [[ "$last" =~ \"sessionId\":\"([0-9a-f-]{36})\" ]] && claims="${BASH_REMATCH[1]}"
-      [ -n "$claims" ] && [ "$claims" = "$uuid" ] || return 1
-      ;;
-  esac
-  next=""
-  [[ "$last" =~ \"continuedInSessionId\":\"([0-9a-f-]{36})\" ]] && next="${BASH_REMATCH[1]}"
-  [ -n "$next" ] && [ "$next" != "$uuid" ]
+  # The successor travels in `_DR_CI_NEXT` rather than on stdout, so the caller
+  # keeps its exit status without a second substitution (the check reads only
+  # the status; the parity test reads both).
+  local f="$1" uuid="$2" out
+  _DR_CI_NEXT=""
+  out=$(set -o pipefail
+        tail -c "$CONTINUED_IN_TAIL_BYTES" -- "$f" 2>/dev/null \
+          | jq -rRs --arg u "$uuid" "$CONTINUED_IN_JQ" 2>/dev/null) || return 2
+  [ -n "$out" ] || return 1
+  _DR_CI_NEXT="$out"
+  return 0
 }
 
 _check_transcripts() {
@@ -4059,15 +4112,38 @@ _check_transcripts() {
   # Reassuring an operator about rows nobody measured is the same
   # failure mode this check was already rewritten once to avoid.
   local reg="$HOME/.cc-sessions" sh="$HOME/.ccrc/accounts.sh"
-  local u id uuid cfg wd raw rwd munged f stale="" n=0 skipped=0 scope="" any=0
+  local u id uuid cfg wd raw rwd munged f stale="" parked="" n=0 skipped=0 unread=0 scope="" any=0 rc why remedy
 
-  # `$REG` UNSEARCHABLE IS A FAIL, in `_check_pools`' own words for the same
+  # `$REG` UNLISTABLE IS A FAIL, in `_check_pools`' own words for the same
   # fact: nothing under it — no session's transcript included — can be
-  # reached. Checked before anything else, so a mode-000 registry never
+  # reached. Checked before anything else, so an unlistable registry never
   # slides through as a vacuous pass.
-  if [ -e "$reg" ] && [ ! -x "$reg" ]; then
-    _dr_fail transcripts "$reg is not a searchable directory, so no session's transcript can be reached" \
-      "fix its mode (chmod 700 $reg) — until then nothing on this box can measure which session reads what"
+  #
+  # BOTH BITS, AND A DIRECTORY (D-4941, review finding F3). This guard used to
+  # test only `-x`, while the pre-scan's glob below needs `r` to list the
+  # directory at all: a registry at 0300 globbed to nothing, `any` stayed 0,
+  # and the check printed the vacuous PASS over real rows — the outcome the
+  # sentence above promises cannot happen. It is now the file's own idiom for
+  # this exact question (the routing census's registry read, the codex lane
+  # roots): present — a dangling symlink counts, it is not an absent registry —
+  # and not a directory, not readable, or not searchable.
+  #
+  # TWO REMEDIES, BECAUSE ONLY ONE OF THEM IS A MODE (D-4941). A directory with
+  # the wrong bits is fixed by `chmod`; a plain file there, or a symlink to
+  # nothing, is not — no mode turns either into a directory, so a `chmod`
+  # remedy for them was one the operator could follow to the letter and still
+  # FAIL here. The second shape is usually a half-finished move of the
+  # registry, which is why the remedy says to look before replacing anything:
+  # `ccd` recreates an EMPTY registry at that path on its next start, and an
+  # empty registry over a moved one strands every session in it.
+  if { [ -e "$reg" ] || [ -L "$reg" ]; } && { [ ! -d "$reg" ] || [ ! -r "$reg" ] || [ ! -x "$reg" ]; }; then
+    if [ -d "$reg" ]; then
+      _dr_fail transcripts "$reg is not a readable, searchable directory, so no session's transcript can be reached" \
+        "fix its mode (chmod 700 $reg) — until then nothing on this box can measure which session reads what"
+    else
+      _dr_fail transcripts "$reg is not a directory (a file, or a symlink that leads to none), so no session's transcript can be reached" \
+        "see what is at that path (ls -ld $reg): a symlink must lead to the registry directory, and anything else must be moved aside only once you know where the registry went — ccd recreates an EMPTY one there on its next start"
+    fi
     return 1
   fi
 
@@ -4162,27 +4238,67 @@ _check_transcripts() {
     # file, and this check does not walk the server's glob rungs, so it has
     # measured nothing about this session.
     [ -f "$f" ] || { skipped=$((skipped + 1)); continue; }
-    n=$((n + 1))
-    if _dr_continued_in "$f" "$uuid"; then stale="$stale $id"; fi
+    # A ROW IS MEASURED ONLY ONCE ITS TAIL WAS READ (D-4941, review finding
+    # F2). `$n` used to be counted here, before the read, and a failed read
+    # answered like a clean one — so an unreadable transcript (another uid's
+    # file, an I/O error, no `tail` or `jq` on this PATH) was reported inside
+    # the clean count, superseded or not. `_dr_continued_in`'s 2 is "not
+    # measured", and is counted apart from the rows found at neither spelling
+    # because the two have different explanations.
+    _dr_continued_in "$f" "$uuid"; rc=$?
+    case "$rc" in
+      0) n=$((n + 1))
+         # A ROW NO SUPERVISOR TICKS (D-4941). Only a running `ccd supervise`
+         # walks the pointer, and a stopped or archived session has none, so
+         # "clears itself on the next supervise tick" can never come true for
+         # it. Its own stamps say which it is — `.stopped` by `-e`, `.archived`
+         # by `-f`, the tests ccd itself makes (`_ws_status`, `cmd_ws_archive`).
+         if [ -e "$reg/$id.stopped" ] || [ -f "$reg/$id.archived" ]; then parked="$parked $id"
+         else stale="$stale $id"; fi ;;
+      1) n=$((n + 1)) ;;
+      *) unread=$((unread + 1)) ;;
+    esac
   done
   # ONE SCOPE PHRASE, SHARED BY BOTH VERDICTS, so the two can never drift into
-  # describing the same run differently. It names the skipped rows only when
-  # there are some: a fully-measured box reads exactly as it always did.
+  # describing the same run differently. It names the rows not measured only
+  # when there are some: a fully-measured box reads exactly as it always did.
+  # Not measured is BOTH kinds — at neither spelling, and found but unread.
   scope="$n session(s) measured"
-  if [ "$skipped" -gt 0 ]; then scope="$scope, $skipped not measured"; fi
-  if [ -n "$stale" ]; then
+  if [ $((skipped + unread)) -gt 0 ]; then scope="$scope, $((skipped + unread)) not measured"; fi
+  if [ -n "$stale$parked" ]; then
+    # THE REMEDY NAMES WHAT WILL ACTUALLY HAPPEN TO EACH ROW (D-4941). A
+    # supervised row is followed on its next supervise tick, and one that
+    # stays is a ccd that is not following; a stopped or archived row is
+    # ticked by nothing, so the earlier "roll the fleet box forward" could
+    # never clear it — ccd follows its chain when it is next resumed (D-4944),
+    # and that is all there is to say. One clause per kind present.
+    remedy=""
+    if [ -n "$stale" ]; then
+      # shellcheck disable=SC2086 -- registry basenames, ccd's `^[A-Za-z0-9._-]+$`
+      remedy="$(_dr_join $stale): a session that forked in the last few seconds is a real transient and clears itself on the next supervise tick; if it persists, this box's ccd is not following the pointer — check ccrc version and roll the fleet box forward"
+    fi
+    if [ -n "$parked" ]; then
+      # shellcheck disable=SC2086 -- registry basenames, as above
+      remedy="${remedy:+$remedy. }$(_dr_join $parked): stopped or archived, so no supervisor runs for them — ccd follows the pointer at the session's next resume, and nothing needs doing now unless this box's ccd predates that (ccrc version)"
+    fi
     # shellcheck disable=SC2086 -- the ids are registry basenames, matched by
     # ccd's own `^[A-Za-z0-9._-]+$` shape, so the split is the interface.
-    _dr_warn transcripts "$(_dr_join $stale) read a transcript Claude Code has superseded ($scope)" \
-      "a session that forked in the last few seconds is a real transient and clears itself on the next supervise tick; if it persists, this box's ccd is not following the pointer — check ccrc version and roll the fleet box forward"
+    _dr_warn transcripts "$(_dr_join $stale $parked) read a transcript Claude Code has superseded ($scope)" "$remedy"
     return 2
   fi
-  if [ "$skipped" -gt 0 ]; then
-    # A RUN WITH SKIPPED ROWS MAY NOT CLAIM EVERY UUID IS HEALTHY. It passes —
-    # nothing it looked at was superseded — but the sentence says what it
-    # looked at, and says the rest was not looked at rather than leaving the
-    # operator to read a clean count as a clean box.
-    _dr_pass transcripts "$scope: every uuid MEASURED names a transcript Claude Code has not superseded, and nothing is claimed about the other $skipped — their transcript is at neither direct spelling here (routine after an account swap; the chat itself still finds it, through rungs this check does not walk)"
+  if [ $((skipped + unread)) -gt 0 ]; then
+    # A RUN WITH UNMEASURED ROWS MAY NOT CLAIM EVERY UUID IS HEALTHY. It
+    # passes — nothing it looked at was superseded — but the sentence says
+    # what it looked at, and says why the rest was not looked at rather than
+    # leaving the operator to read a clean count as a clean box.
+    why=""
+    if [ "$skipped" -gt 0 ]; then
+      why="$skipped at neither direct spelling here (routine after an account swap; the chat itself still finds it, through rungs this check does not walk)"
+    fi
+    if [ "$unread" -gt 0 ]; then
+      why="${why:+$why; }$unread whose transcript is there but could not be read and parsed (a permission or I/O error on the file, or no tail or jq on this PATH — the jq check owns a missing jq)"
+    fi
+    _dr_pass transcripts "$scope: every uuid MEASURED names a transcript Claude Code has not superseded, and nothing is claimed about the other $((skipped + unread)) — $why"
     return 0
   fi
   _dr_pass transcripts "$n session(s): every registry uuid names a transcript Claude Code has not superseded"

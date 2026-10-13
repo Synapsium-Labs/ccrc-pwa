@@ -533,7 +533,7 @@ describe('a harness-written user record is not the operator speaking', () => {
     expect(parseTranscriptLine(rec([{ type: 'text', text: '  ' }], { isMeta: true }))).toEqual([]);
   });
 });
-import { continuationOf, CONTINUATION_TAIL_BYTES } from '../src/transcript/parse.js';
+import { continuationOf, continuationInTail, tailRecordOf, CONTINUATION_TAIL_BYTES } from '../src/transcript/parse.js';
 
 const OLD = 'a'.repeat(36);
 const NEW = 'b'.repeat(36);
@@ -575,5 +575,57 @@ describe('continuationOf', () => {
   // Review Focus 4: the window is the contract, so the constant is the contract.
   it('declares a tail window big enough for a marker line', () => {
     expect(CONTINUATION_TAIL_BYTES).toBeGreaterThanOrEqual(marker(OLD, NEW).length * 4);
+  });
+});
+
+// D-4940. The whole fixture table lives in `continued-in-parity.test.ts`, run
+// by all three readers; these pin the three answers of the per-line classifier
+// the TypeScript reader is built from.
+describe('tailRecordOf / continuationInTail (D-4940)', () => {
+  const line = (o: unknown): string => JSON.stringify(o);
+  const marker = line({ type: 'continued-in', sessionId: OLD, continuedInSessionId: NEW });
+
+  it('classifies a line three ways: a successor, a deciding stop, or a skip', () => {
+    expect(tailRecordOf(marker, OLD)).toEqual({ kind: 'successor', to: NEW });
+    expect(tailRecordOf(line({ type: 'user', message: { content: 'x' } }), OLD)).toEqual({ kind: 'stop' });
+    expect(tailRecordOf(line({ type: 'assistant', message: { content: [], stop_reason: 'end_turn' } }), OLD)).toEqual({ kind: 'stop' });
+    expect(tailRecordOf(line({ type: 'continued-in', sessionId: 'c'.repeat(36), continuedInSessionId: NEW }), OLD)).toEqual({ kind: 'stop' });
+    expect(tailRecordOf(line({ type: 'last-prompt', lastPrompt: 'x' }), OLD)).toEqual({ kind: 'skip' });
+    expect(tailRecordOf(marker.slice(0, 30), OLD)).toEqual({ kind: 'skip' });
+  });
+
+  it('a top-level record decides; a marker-shaped object nested inside one never does', () => {
+    const nested = line({ message: { content: [{ type: 'tool_use', input: { type: 'continued-in', continuedInSessionId: NEW } }], stop_reason: 'tool_use' }, type: 'assistant', sessionId: OLD });
+    expect(tailRecordOf(nested, OLD)).toEqual({ kind: 'stop' });
+    const inMeta = line({ type: 'attachment', attachment: { type: 'continued-in', continuedInSessionId: NEW }, sessionId: OLD });
+    expect(tailRecordOf(inMeta, OLD)).toEqual({ kind: 'skip' });
+  });
+
+  it('a user/assistant record decides only when Claude Code calls it a finished turn (D-4940)', () => {
+    // Claude Code 2.1.296's own reader steps over the rest, so stopping at
+    // them declined a follow it makes. Its assistant test, then its prompt test.
+    const skip = { kind: 'skip' }, stop = { kind: 'stop' };
+    expect(tailRecordOf(line({ type: 'assistant', message: { content: [], stop_reason: null } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'assistant', message: { content: [] } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'assistant', isApiErrorMessage: true, message: { stop_reason: 'end_turn' } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'assistant', isApiErrorMessage: false, message: { stop_reason: 'end_turn' } }), OLD)).toEqual(stop);
+    expect(tailRecordOf(line({ type: 'user', message: { content: [{ type: 'text', text: '[Request interrupted by user]' }] } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }, { type: 'text', text: 'and this' }] } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'user', isMeta: true, message: { content: 'x' } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'user', message: { content: '<local-command-stdout>done</local-command-stdout>' } }), OLD)).toEqual(skip);
+    expect(tailRecordOf(line({ type: 'user', message: { content: '[Request interrupted by user] <bash-input>ls</bash-input>' } }), OLD)).toEqual(stop);
+  });
+
+  it('presence of a sessionId must be this file\'s own: null refuses, absence permits', () => {
+    expect(continuationOf(line({ type: 'continued-in', sessionId: null, continuedInSessionId: NEW }), OLD)).toBeNull();
+    expect(continuationOf(line({ type: 'continued-in', continuedInSessionId: NEW }), OLD)).toBe(NEW);
+  });
+
+  it('scans newest first, stepping over metadata and stopping at a conversational record', () => {
+    const meta = line({ type: 'ai-title', aiTitle: 't' });
+    const turn = line({ type: 'user', message: { content: 'x' } });
+    expect(continuationInTail(`${turn}\n${marker}\n${meta}\n`, OLD)).toBe(NEW);
+    expect(continuationInTail(`${marker}\n${turn}\n${meta}\n`, OLD)).toBeNull();
+    expect(continuationInTail('', OLD)).toBeNull();
   });
 });
