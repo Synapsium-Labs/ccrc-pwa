@@ -14,6 +14,7 @@ import type { Runner } from '../src/exec.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { testDeps } from './helpers.js';
+import type { RunState } from '../../shared/api.js';
 
 /** The box token `appFor` builds every server with: send it as `x-ccrc-mail-token` on a box-token-gated route. */
 export const ID_GATE_TOKEN = 'f'.repeat(64);
@@ -55,4 +56,56 @@ export async function appFor(
   const base = testDeps(home, run);
   const app = await buildServer({ ...base, mailToken: ID_GATE_TOKEN, coord, ...over });
   return { app, coord, cfg: base.cfg };
+}
+
+// ── Task 3 (spec §2.3): a stored run row, written through the store ─────────────────────────────────────────────
+
+/** Where `storedRun` parks a run, by kind. `advance` is the only writer of `runs.state`, so a row is parked by walking
+ *  its own machine's forward edges from `dispatched`. A review run has no `awaiting-review` and no `merging`. */
+const STORED_RUN_WALK: Readonly<Record<'work' | 'review', readonly RunState[]>> = {
+  work: ['dispatched', 'working', 'awaiting-review', 'merging'],
+  review: ['dispatched', 'working'],
+};
+let storedRunPrograms = 0;
+
+/**
+ * A run row opened THROUGH THE STORE, never through `POST /api/runs`, as `coord-abandon.test.ts`'s `wedged` does. A
+ * row written before any ingress check, or rebuilt from the registry, is exactly what the stored-row gates exist for,
+ * so the fixture must be able to write one the route would refuse.
+ *
+ * Each call opens its own programme (`id-gate-<n>`), wave 1 of 2, project `demo`. One programme for all calls would
+ * break two ways: `openRun` is idempotent per programme, wave and claimant while a run is `planned`, so two calls would
+ * fold into one row; and it refuses a second claimant on one programme. A test that needs a second run in the SAME
+ * programme opens it with `coord.openRun` itself.
+ *
+ * Binding: a `planned` run with a session is bound by `setSession`, a wave-N reclaim's shape. Any other state is bound
+ * by `markDispatched` (workspace = the id, branch `ws/<id>`) and then walked forward. This plants no registry row:
+ * `seedRow` does that.
+ */
+export function storedRun(coord: CoordStore, r: {
+  state: RunState; sessionId: string | null; claimedBy: string; kind?: 'work' | 'review'; reviews?: number;
+}): number {
+  storedRunPrograms += 1;
+  const opened = coord.openRun({
+    program: `id-gate-${storedRunPrograms}`, title: 'id gate', project: 'demo', wave: 1, waveOf: 2,
+    claimedBy: r.claimedBy,
+    ...(r.kind === undefined ? {} : { kind: r.kind }),
+    ...(r.reviews === undefined ? {} : { reviews: r.reviews }),
+  });
+  if (!('id' in opened)) throw new Error(`storedRun: openRun refused: ${JSON.stringify(opened)}`);
+  const { id } = opened;
+  if (r.sessionId !== null) {
+    if (r.state === 'planned') coord.setSession(id, r.sessionId);
+    else coord.markDispatched(id, r.sessionId, r.sessionId, `ws/${r.sessionId}`, false);
+  }
+  if (r.state === 'planned') return id;
+  const kind = r.kind ?? 'work';
+  const walk = STORED_RUN_WALK[kind];
+  const stop = walk.indexOf(r.state);
+  if (stop < 0) throw new Error(`storedRun: a ${kind} run cannot be parked in ${r.state}`);
+  for (const to of walk.slice(0, stop + 1)) {
+    const adv = coord.advance(id, to, 'coordinator');
+    if (!adv.ok) throw new Error(`storedRun: could not reach ${r.state}: ${JSON.stringify(adv)}`);
+  }
+  return id;
 }

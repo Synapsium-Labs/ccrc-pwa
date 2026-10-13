@@ -28,7 +28,7 @@ import {
   type ChildReclaimReviewed,
 } from './childReclaim.js';
 import {
-  transitionsFor, type ChildMark, type DoneRejectCode, type RunRefuseCode, type RunState,
+  isRegistryId, transitionsFor, type ChildMark, type DoneRejectCode, type RunRefuseCode, type RunState,
 } from '../../../shared/api.js';
 
 /**
@@ -60,7 +60,7 @@ export type CloseOutcome =
        *  after a `ws-release` that actually succeeded.
        *
        *  `false` IS NOT ONE FACT — it is the negation of one, and a reader
-       *  that renders a single sentence from it alone will be wrong. All four
+       *  that renders a single sentence from it alone will be wrong. All five
        *  ways to get it, so nobody has to rediscover them (review finding,
        *  W2b):
        *    1. a SIBLING open run still names this session, so the claim was
@@ -74,9 +74,14 @@ export type CloseOutcome =
        *       the hold outlives it — literally not released, nothing like (1);
        *    4. an ABANDON of a `planned` run with `sessionId === null`: NO
        *       fleet act at all, and no workspace to claim. Nothing happened.
+       *    5. an ABANDON of a run whose stored `sessionId` is not a registry
+       *       id: NO fleet act, the same as (4), but the run HAD a session id
+       *       (spec §2.3). One `fleet-act-omitted:bad-session` run event
+       *       records it.
        *  A client that wants a sentence must branch on `state`/`archive` and
        *  on whether the run had a session — `pwa/src/fleet/AbandonSheet.tsx`
-       *  does exactly that, and only speaks for case (1). */
+       *  does exactly that, and only speaks for case (1). It cannot yet tell
+       *  (5) from (1), and would read (5) as a hand-over. */
       released: boolean;
       /** Child reclamation (spec 2026-09-22 §5.7), ADDITIVE. `queued`: the
        *  workspace is a child this close found FINISHED — released, never
@@ -91,6 +96,10 @@ export type CloseOutcome =
        *  a reason the decision did not give. */
       childReclaimWhy?: ChildReclaimNotWhy }
   | { ok: false; kind: 'unknown-run' }
+  /** Spec §2.3: the run's STORED `sessionId` is not a registry id. Every close but the abandon refuses it, review
+   *  closes included, before any read or argv names it. The abandon arm closes such a run `failed` with no fleet act
+   *  instead (`released`, case 5). */
+  | { ok: false; kind: 'bad-session' }
   | { ok: false; kind: 'bad-transition'; from: RunState; to: RunState }
   | { ok: false; kind: 'bad-request' }
   | { ok: false; kind: 'refused'; code: Extract<RunRefuseCode, 'not-dispatched' | 'prhistory-unreadable'> }
@@ -168,6 +177,8 @@ export function abandonMove(run: Pick<RunRow, 'state' | 'kind'>):
  * hold that then runs the abandons (`CoordRoutesHandle.withAbandon`), so nothing moves between this read and the act.
  * What only the act measures — the sibling read, a hand-over hold, the verb, ccd's own answer — can still refuse after
  * an earlier run was ended, and the door says which runs it ended (`programme-partly-ended`).
+ * A run whose stored `sessionId` is not a registry id is not refused here, and the arm does not refuse it either: the
+ * arm closes it `failed` with no fleet act (spec §2.3), so the door ends such a programme whole.
  */
 export function abandonRefusal(coord: CoordStore, id: number): Extract<CloseOutcome, { ok: false }> | null {
   const read = coord.run(id);
@@ -302,6 +313,39 @@ export async function closeRun(
       if (fresh.run === null) return { ok: false, kind: 'unknown-run' };
       return fresh.run.claimedBy === g.claimedBy ? null : { ok: false, kind: 'claimant-changed', claimedBy: fresh.run.claimedBy };
     };
+    // SPEC §2.3: A STORED ID NO VERB MAY NAME. A `sessionId` that is not a registry id can be named by no id-taking
+    // argv, so this arm takes no fleet act for it: no sibling read, no child gate, no hold and no release.
+    //
+    // It still CLOSES the run. This arm is the release valve of three doors: the operator's abandon, the archive
+    // door's programme end and the dead-coordinator sweep. A coordinator's own `POST /api/runs/:id/close` whose body
+    // is `{ intent: 'abandon' }` reaches this arm too, and closes such a run the same way. A valve that refused would
+    // leave such a run holding its slot for good.
+    //
+    // The order: the sweep's gate runs first, as it does before any act; then the store's close, with the sweep's
+    // compare-and-set; and only once that commits, ONE run event, so the trail tells this close from an ordinary
+    // `failed`.
+    //
+    // The answer is spelled here rather than through the child hand-off. That path would say `not-a-child`, which
+    // nobody measured; `marker-unreadable` says the child question was never asked. `abandonRefusal` refuses nothing
+    // new for such a run, so the archive door ends such a programme whole.
+    if (run.sessionId !== null && !isRegistryId(run.sessionId)) {
+      if (sweep !== undefined) {
+        const gate = await sweepGate(sweep);
+        if (gate !== null) return gate;
+      }
+      const omitted = coord.closeRun({
+        runId: id, finalState: 'failed', causedBy, handoffCommit: null,
+        program: run.program, viaClosing: target === 'closing',
+        ...(sweep === undefined ? {} : { expectClaimedBy: sweep.claimedBy }),
+      });
+      if (!omitted.ok) {
+        return omitted.error === 'claimant-changed' ? { ok: false, kind: 'claimant-changed', claimedBy: omitted.claimedBy }
+          : { ok: false, kind: 'advanceFailed', adv: omitted };
+      }
+      coord.recordRunEvent(id, causedBy, 'fleet-act-omitted:bad-session');
+      return { ok: true, id, state: 'failed', released: false,
+        childReclaim: 'not-queued', childReclaimWhy: 'marker-unreadable' };
+    }
     // The fleet act, AHEAD of the commit (D-48), and only when there is
     // something to act on: a `planned` run that never dispatched holds no
     // workspace. RELEASE ONLY WHEN NOTHING ELSE CLAIMS IT — otherwise HAND
@@ -390,6 +434,11 @@ export async function closeRun(
     // re-measure against and no worker to mail a rejection back to.
     return { ok: false, kind: 'refused', code: 'not-dispatched' };
   }
+  // Spec §2.3: a stored `sessionId` that is not a registry id refuses every close but the abandon above, this work
+  // close and the review close below alike. The refusal comes before `verifyDone`, the child gate, the PR ledger, or
+  // any hold, release or archive can name the id, and before any rejection is recorded against it or mailed to it.
+  // It is a stored defect, not a transient: the run is left exactly as it was, and the abandon is its door.
+  if (!isRegistryId(run.sessionId)) return { ok: false, kind: 'bad-session' };
   // Design 2026-09-14 §5: a REVIEW run closes on its own claim, with no
   // `closing` hop, no `.prhistory` and no PR check. One arm, one function.
   if (run.kind === 'review') return closeReviewRun(deps, run, b, causedBy, siblingsOf, survivorOf);

@@ -165,6 +165,8 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
     case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
     case 'bad-transition':
       return reply.code(409).send({ ok: false, error: 'bad-transition', from: r.from, to: r.to });
+    // Spec §2.3, a stored defect: the run's session id is not a registry id, and nothing was read or composed.
+    case 'bad-session': return reply.code(409).send({ ok: false, error: 'bad-session' });
     // `detail` spread, not `detail: r.detail`: an L4 adapter may not narrow a
     // distinction it received (`route: <why>[ <field>]`, present only for the
     // malformed-route refusal), so its PRESENCE rides the wire exactly as
@@ -238,6 +240,8 @@ function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
     case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
     case 'bad-transition':
       return reply.code(409).send({ ok: false, error: 'bad-transition', from: r.from, to: r.to });
+    // Spec §2.3, a stored defect: every close but the abandon refuses it, and nothing was read or composed.
+    case 'bad-session': return reply.code(409).send({ ok: false, error: 'bad-session' });
     case 'bad-request': return reply.code(400).send({ ok: false, error: 'bad-request' });
     case 'refused': return reply.code(409).send({ ok: false, refused: r.code });
     case 'doneVerdict': return reply.code(409).send({ ok: false, error: r.code, detail: r.detail });

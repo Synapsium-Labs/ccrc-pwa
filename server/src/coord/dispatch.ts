@@ -23,8 +23,8 @@ import {
   type HoldReasonVerdict,
 } from './rundefs.js';
 import {
-  MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, armEventDetail, parseRouteFields,
-  routeFieldsOrNull, routeParseDetail, spawnVerdict, transitionsFor,
+  MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, armEventDetail, isRegistryId,
+  parseRouteFields, routeFieldsOrNull, routeParseDetail, spawnVerdict, transitionsFor,
   type CoordCaps, type CoordCapsUsage, type RouteFields, type RunKind, type RunRefuseCode,
   type RunState, type SkillState, type SpawnVerdict,
 } from '../../../shared/api.js';
@@ -122,6 +122,11 @@ export type DispatchOutcome =
        */
       skillState: SkillState }
   | { ok: false; kind: 'unknown-run' }
+  /** Spec §2.3: the run's STORED `sessionId` is not a registry id, so no id-taking argv may name it. That rules out
+   *  the resume's `ensure`, the spent-child release or hand-over, the hold and the route write. It is refused before
+   *  the pause listing, and the run stays `planned`. This is a stored defect, not a transient: a retry cannot change
+   *  it, and `POST /api/runs/:id/abandon` closes such a run with no fleet act. */
+  | { ok: false; kind: 'bad-session' }
   | { ok: false; kind: 'bad-transition'; from: RunState; to: RunState }
   /** `detail` is PRESENT only for the malformed-`route` refusal (routing spec
    *  §5.3, slice 4: `route: <why>[ <field>]`) — every other `bad-request` on
@@ -446,6 +451,12 @@ export async function dispatchRun(
   // because reconstructed or newer-database rows can bypass that ingress.
   const hold = holdReasonVerdict(run.program, run.wave, run.waveOf, run.id);
   if (!hold.ok) return hold;
+  // The stored SESSION ID, re-checked here for the hold's reason (spec §2.3). A row written before any ingress check,
+  // or rebuilt from the registry, reaches this seam unchecked, and every id-taking call below takes this column: the
+  // resume's `ensure`, the spent-child release or hand-over, the hold and the route write. The check runs after the
+  // body checks and before the pause listing, so a refused id costs no read and composes nothing. A resume refuses
+  // here rather than holding, and the run stays `planned`; the abandon is its door.
+  if (run.sessionId !== null && !isRegistryId(run.sessionId)) return { ok: false, kind: 'bad-session' };
 
   // 1: PAUSE / KILL-SWITCH FIRST, before anything is counted or spawned. A
   // directory we cannot list is a pause we cannot rule out — fail-shut, the
