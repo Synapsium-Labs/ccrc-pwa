@@ -6252,7 +6252,8 @@ export function pruneApplyOp(db, ctx, args) {
 export function recordBeltDueIfUncovered(db, pairIdx) {
   const live = new Set(pairIdx?.beltLive ?? []);
   const s = parseBeltState(getMeta(db, BELT_META));
-  const covered = s !== null && s.v === BELT_VERSION && s.rids.length === live.size && s.rids.every((r) => live.has(r))
+  // The distinct rids, never their count: a damaged row naming one rid twice has the live set's length and members and is not the live set (HB1 H-61).
+  const covered = s !== null && s.v === BELT_VERSION && new Set(s.rids).size === live.size && s.rids.every((r) => live.has(r))
     && (s.gen === null || (s.gv === BELT_VERSION && s.gen.every((r) => live.has(r))));
   if (covered) return false;
   setMeta(db, BELT_META, formatBeltState({ v: 0, rids: [], gen: null }));
@@ -6308,7 +6309,8 @@ export function reparseApplyOp(db, ctx, args) {
   const r = reparseLeaves(db, ictx, plan.targets);
   const cleared = args.node === null ? clearLeafCrashes(db, { session: args.session }) : 0;
   withTx(db, 'NORMAL', () => { stampBeltWitness(db); });   // the op pass's witness (reparse)
-  ctx.out(`history-sweep: reparsed ${plan.targets.length} leaves (${r.changed} changed, ${r.failed} failed); node ids and sources unchanged`);
+  // The skipped count is its own (D-4602 (history-reparse-counts-skips-and-rethrows-store-faults), HB1 H-54): a leaf read as nothing is not 'unchanged'.
+  ctx.out(`history-sweep: reparsed ${plan.targets.length} leaves (${r.changed} changed, ${r.failed} failed, ${r.skipped} skipped); node ids and sources unchanged`);
   if (cleared > 0) ctx.out(`history-sweep: reparse: ${cleared} crashed boundary marker(s) cleared; the next tick derives their leaves`);
   return { rc: EXIT.OK };
 }
@@ -6639,6 +6641,13 @@ export async function repairOp(db, ctx) {
   }
   const ictx = makeIngestCtx(ctx.home, ctx.homes, ctx.now(), ctx.ids);
   const prep = ftsPrepare(db, ictx.nowMs);
+  // D-4603 (history-repair-refuses-a-failed-probe): a probe that THREW is not an FTS5 that is absent (spec §9.1: "never folded
+  // into absent"; grep keeps them apart, 5 against 7). The repair cannot tell whether an index exists, so it heals nothing, answers
+  // exit 5 and re-measures no counter. Only a Node without FTS5 has no index to heal, and that arm below stays exit 0.
+  if (prep.state === 'probe-failed') {
+    ctx.out('history-sweep: probe-failed: the FTS5 probe threw on this store, so the repair cannot tell whether an index exists; nothing was repaired');
+    return { rc: EXIT.DB, reason: 'probe-failed' };
+  }
   if (!prep.tables) {
     const present = foreignKeyRows(db).length;
     ctx.out(`history-sweep: repair: integrity_check ok; ${present} foreign-key violation(s) present; FTS5 is ${prep.state} on this Node, so there is no index to heal`);

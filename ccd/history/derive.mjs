@@ -948,8 +948,9 @@ function markReparseCrash(db, ictx, s, nodeId) {
  *  node_id, node_sources, the span and the time range; rewrites kind, status, gist, topics, directive_flag, capped
  *  and parser_version; replaces node_refs and, when ictx.fts, the nodes_fts row; all in one transaction. Counters
  *  are not folded again. A leaf whose boundary, holding copy or summary cannot be read answers 'skipped' and writes
- *  nothing. A derivation that throws for any reason but a busy store (a parser bug, RB5) is recorded by
- *  markReparseCrash and answers 'failed'; a busy store propagates, as in deriveLeaves. `pass` is deriveLeaves' cache
+ *  nothing (a parse-failed leaf is never skipped for its summary: leafFields reads that as a raw leaf; D-4602, H-55). A derivation that
+ *  throws for any reason but a store fault (a parser bug, RB5) is recorded by markReparseCrash and answers 'failed'; a busy store
+ *  and any other SQLite error propagate (D-4602, H-59), as in deriveLeaves. `pass` is deriveLeaves' cache
  *  ({ copy, epochs, files }); reparseLeaves shares one across its targets, so a copy is planned once per run. */
 export function refreshLeaf(db, ictx, nodeId, pass = { copy: null, epochs: new Map(), files: new Map() }) {
   const s = stmts(db);
@@ -968,15 +969,24 @@ export function refreshLeaf(db, ictx, nodeId, pass = { copy: null, epochs: new M
     if (holding === null) return 'skipped';
     const copy = copyPlan(s, pass, holding.file_id, budget);
     const pick = copy.picks.get(b.uuid);
-    if (pick === undefined || pick.uuid === null) return 'skipped';
-    const summaryAt = copy.index.get(pick.uuid);
-    if (summaryAt === undefined || textOf(s, copy.rows[summaryAt].blob_id, budget) === null) return 'skipped';
+    if (pick === undefined) return 'skipped';
+    // D-4602 (history-reparse-counts-skips-and-rethrows-store-faults), HB1 H-55: a parse-failed leaf is an ordinary target
+    // whatever its summary now reads as: deriveOne records one when leafFields threw on a missing or unreadable summary, and
+    // leafFields already turns that summary into a raw leaf. Only a leaf that was NOT parse-failed is left alone for it.
+    if (n.status !== 'parse-failed') {
+      if (pick.uuid === null) return 'skipped';
+      const summaryAt = copy.index.get(pick.uuid);
+      if (summaryAt === undefined || textOf(s, copy.rows[summaryAt].blob_id, budget) === null) return 'skipped';
+    }
     const byEntry = new Map(copy.rows.map((r) => [Number(r.entry_id), r]));
     const sources = db.prepare('SELECT entry_id FROM node_sources WHERE node_id = ? ORDER BY ord').all(nodeId)
       .map((r) => byEntry.get(Number(r.entry_id))).filter((r) => r !== undefined);
     f = leafFields(db, ictx, nodeToolkit(), s, copy, b, pick, nodeId, Number(n.session_pk), sources, budget);
   } catch (e) {
-    if (ictx.isBusy(e)) throw e;   // a busy store ends the reparse; anything else is RB5's recorded crash
+    // A busy store ends the reparse, and so does any other SQLite fault (CORRUPT, IOERR, NOMEM: the code every node:sqlite error
+    // carries): it is the store failing, not a parser bug, and recording it would wipe a good leaf's gist, topics, refs and
+    // nodes_fts row. Anything else is RB5's recorded crash. D-4602 (history-reparse-counts-skips-and-rethrows-store-faults), HB1 H-59.
+    if (ictx.isBusy(e) || e?.code === 'ERR_SQLITE_ERROR') throw e;
     markReparseCrash(db, ictx, s, nodeId);
     return 'failed';
   }
@@ -1000,23 +1010,27 @@ export function refreshLeaf(db, ictx, nodeId, pass = { copy: null, epochs: new M
  *  rerollParents re-rolls every parent above EVERY target, ids kept. The re-roll runs whatever changed, and also
  *  when the loop throws (a busy store), because each leaf commits alone: a run that stopped after some leaves
  *  committed, or between the last commit and the re-roll, leaves parents a rerun must heal even when every leaf
- *  then reads 'unchanged'. rerollParents is idempotent. Answers how many leaves changed and how many failed. */
+ *  then reads 'unchanged'. rerollParents is idempotent. Answers how many leaves changed, how many failed and how many
+ *  were skipped (read as nothing by refreshLeaf, so neither unchanged nor re-derived; D-4602
+ *  (history-reparse-counts-skips-and-rethrows-store-faults), HB1 H-54). */
 export function reparseLeaves(db, ictx, nodeIds) {
   const pass = { copy: null, epochs: new Map(), files: new Map() };
   let changed = 0;
   let failed = 0;
+  let skipped = 0;
   try {
     for (const id of nodeIds) {
       const r = refreshLeaf(db, ictx, id, pass);
       if (r === 'updated') changed += 1;
       else if (r === 'failed') failed += 1;
+      else if (r === 'skipped') skipped += 1;
     }
   } catch (e) {
     try { rerollParents(db, ictx, nodeIds); } catch { /* the loop's own error is the one that ends the pass */ }
     throw e;
   }
   rerollParents(db, ictx, nodeIds);
-  return { changed, failed };
+  return { changed, failed, skipped };
 }
 
 /** RB5's other retry (history-parser-crash-recorded): a boundary whose derivation threw before its leaf id was

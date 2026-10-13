@@ -16,12 +16,16 @@ import { createHash, randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import * as pty from 'node-pty';
 import {
-  beltWidth, historyPaths, floorThreshold, REPARSE_MAX_TARGETS, BELT_VERSION, WRITING_FORMS, formOf, HEALTH_REMEDIES,
+  beltWidth, historyPaths, floorThreshold, REPARSE_MAX_TARGETS, BELT_VERSION, WRITING_FORMS, formOf, HEALTH_REMEDIES, firstSentence,
+  REDACTED_MARK, redactField, makePairIndex, makeBelt, beltUnits, secretPairs, formatBeltState, BELT_META, backupNameOf,
 } from '../../ccd/history/lib.mjs';
+import { closeWriter, getMeta, openWriter, setMeta, withTx } from '../../ccd/history/store.mjs';
+import { backupOp, idsFromFiles, measureSpoolStanding, openFtsRebuild, pruneApplyOp, recordBeltDueIfUncovered } from '../../ccd/history/sweep.mjs';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { userRow, compactionSequence, toolResultRow } from './historyFixtures.js';
 import {
   makeHistoryBox, runSweep, runShim, runCli, runDriver, plantSession, plantTranscript, openStoreRO, stubShim, holdLock,
+  spoolLine, journalRecords,
   PASS_DRIVER, SHIM, withPane, seedFamily, preloadOptions, PRELOADS, CLI, skipOnDarwin, type HistoryBox,
 } from './historyHelpers.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
@@ -153,26 +157,29 @@ describe.skipIf(process.platform === 'darwin')('O54 (relay half): the CLI and th
   it('every non-zero line an operator verb prints names the operator, whatever stopped it (R-X-OPERATOR)', () => {
     const box = boundBox('ccrc-hist-o54op-');
     stubShim(box, { stdout: '{"rc":0}\n', exit: 0 });
-    const runs: Array<[string, Run]> = [
-      ['apply-in-session', op(box, ['import', '--apply'], { CLAUDECODE: '1' })],
-      ['needs-tty', op(box, ['doctor', '--adopt'])],
-      ['bad-args', op(box, ['import', '--bogus'])],
+    // Each pair carries its own exit and the words its line holds, so the pair's name is a witness: a needs-tty answered as
+    // bad-args, or a no-store as a store error, reds on its own pair (HB1 H-39).
+    const runs: Array<[string, Run, number, string]> = [
+      ['apply-in-session', op(box, ['import', '--apply'], { CLAUDECODE: '1' }), 2, 'refused: apply-in-session'],
+      ['needs-tty', op(box, ['doctor', '--adopt']), 2, 'refused: needs-tty'],
+      ['bad-args', op(box, ['import', '--bogus']), 2, 'refused: bad-args'],
     ];
     const box2 = boundBox('ccrc-hist-o54op2-');
     stubShim(box2, { stdout: '', exit: 75 });
-    runs.push(['writer-busy', op(box2, ['doctor', '--backup'])]);
+    runs.push(['writer-busy', op(box2, ['doctor', '--backup']), 4, 'writer-busy: another history pass holds the lock']);
     stubShim(box2, { stdout: 'not json\n', exit: 0 });
-    runs.push(['internal', op(box2, ['doctor', '--backup'])]);
+    runs.push(['internal', op(box2, ['doctor', '--backup']), 1, 'internal error: the history writer gave no result']);
     stubShim(box2, { stdout: '{"rc":5,"reason":"store-unreachable"}\n', exit: 5 });
-    runs.push(['store error', op(box2, ['doctor', '--backup'])]);
+    runs.push(['store error', op(box2, ['doctor', '--backup']), 5, 'store error: store-unreachable']);
     const srv = makeHistoryBox('ccrc-hist-o54op-srv-', { role: 'server', shim: true });
-    runs.push(['no-store', op(srv, ['doctor', '--backup'])]);
+    runs.push(['no-store', op(srv, ['doctor', '--backup']), 9, 'no store on this box']);
     const lineOf = (r: Run): string[] => r.stderr.split('\n').filter((l) => /^ccrc history \S+: /.test(l));
     expect(lineOf(runs[0]![1])[0], 'CONTROL: the case reads the refusal line itself').toContain('refused: apply-in-session');
-    for (const [name, run] of runs) {
-      expect(run.code, name).not.toBe(0);
+    for (const [name, run, exit, words] of runs) {
+      expect(run.code, name).toBe(exit);
       const lines = lineOf(run);
       expect(lines, `${name}: one line`).toHaveLength(1);
+      expect(lines[0], `${name} says what stopped it`).toContain(words);
       expect(lines[0], `${name} names the operator`).toMatch(/; .*\bthe operator\b/);
     }
   }, HEAVY);
@@ -791,6 +798,28 @@ describe('prune: dry run by default, tombstones by referrer age, the floor, the 
     expect(maintTombstones(box), 'below the floor is exactly where prune must run').toBeGreaterThan(0);
   }, HEAVY);
 
+  // HB1 H-40: pruneApplyOp's `between` is the journal half run after every non-empty batch. A spawned --op prune holds fewer
+  // candidates than PRUNE_BATCH, and runOpPass's release half journals anyway, so only an in-process call can tell whether
+  // `between` ran: nothing else in the call journals.
+  it('H-40: the journal half runs between prune batches: a spool line pending when pruneApplyOp tombstones its blob is journaled by the time it returns', () => {
+    const box = prunable('ccrc-hist-h40-');
+    const P = historyPaths(box.home);
+    spoolLine(box, ID, { v: 1, ev: 'Stop', id: ID });
+    const pending = path.join(P.spool, `${ID}.jsonl`);
+    expect(fs.existsSync(pending), 'CONTROL: the line is pending in spool/').toBe(true);
+    const journaled = journalRecords(box).length;
+    const lines: string[] = [];
+    const db = openWriter(P.dbFile);
+    try {
+      const r = pruneApplyOp(db, { home: box.home, ids: idsFromFiles(P), now: Date.now, out: (l: string) => lines.push(l) }, { days: 90 });
+      expect(r).toEqual({ rc: 0 });
+    } finally { closeWriter(db); }
+    expect(lines.join('\n'), 'CONTROL: the prune itself ran').toMatch(/history-sweep: pruned [1-9][0-9]* blob\(s\)/);
+    expect(maintTombstones(box), 'CONTROL: it tombstoned the old blob').toBeGreaterThan(0);
+    expect(fs.existsSync(pending), 'the journal half renamed the pending line out of spool/').toBe(false);
+    expect(journalRecords(box).length, 'and journaled it').toBeGreaterThan(journaled);
+  }, HEAVY);
+
   it('RB6: while a recovery step is registered, prune --apply answers recovering and tombstones nothing; the dry run still answers', async () => {
     const box = prunable('ccrc-hist-rb6p-');
     maintRecovering(box);
@@ -838,7 +867,7 @@ describe('reparse: targets, the 500-leaf limit, pruned spans refused, ids kept, 
     const r = runShim(a, ['--op', 'reparse', '--apply']);
     expect(r.code, r.stderr).toBe(0);
     expect(lastResult(r.stdout)).toEqual({ rc: 0 });
-    expect(r.stdout).toMatch(/^history-sweep: reparsed 2 leaves \([0-9]+ changed, 0 failed\); node ids and sources unchanged$/m);
+    expect(r.stdout).toMatch(/^history-sweep: reparsed 2 leaves \([0-9]+ changed, 0 failed, 0 skipped\); node ids and sources unchanged$/m);
     expect(allIds(a), 'a reparse never mints an id').toEqual(ids);
     expect(sourcesOf(a), 'nor moves a source').toEqual(sources);
   }, HEAVY);
@@ -901,7 +930,8 @@ describe('reparse: targets, the 500-leaf limit, pruned spans refused, ids kept, 
     plant(0, REPARSE_MAX_TARGETS);
     const ran = runShim(box, ['--op', 'reparse', '--apply']);
     expect(ran.code, ran.stderr).toBe(0);
-    expect(ran.stdout).toMatch(new RegExp(`^history-sweep: reparsed ${REPARSE_MAX_TARGETS} leaves`, 'm'));
+    // HB1 H-54 (D-4602): a leaf reparse could not read is counted skipped, never folded into "unchanged".
+    expect(ran.stdout).toMatch(new RegExp(`^history-sweep: reparsed ${REPARSE_MAX_TARGETS} leaves \\(0 changed, 0 failed, ${REPARSE_MAX_TARGETS} skipped\\)`, 'm'));
     plant(REPARSE_MAX_TARGETS, REPARSE_MAX_TARGETS + 1);
     const before = nodes();
     const refused = runShim(box, ['--op', 'reparse', '--apply']);
@@ -932,7 +962,7 @@ describe('reparse: targets, the 500-leaf limit, pruned spans refused, ids kept, 
     const r = runShim(box, ['--op', 'reparse', '--apply']);
     expect(r.code, r.stderr).toBe(0);
     expect(lastResult(r.stdout)).toEqual({ rc: 0 });
-    expect(r.stdout).toMatch(/^history-sweep: reparsed 2 leaves \(1 changed, 0 failed\); node ids and sources unchanged$/m);
+    expect(r.stdout).toMatch(/^history-sweep: reparsed 2 leaves \(1 changed, 0 failed, 0 skipped\); node ids and sources unchanged$/m);
     expect(leafRows(box), 'the leaf reads as it was first derived, under the same id').toEqual(before);
     expect(refsOf(box)).toEqual(refs);
     expect(sourcesOf(box)).toEqual(sources);
@@ -946,20 +976,287 @@ describe('reparse: targets, the 500-leaf limit, pruned spans refused, ids kept, 
       'SELECT node_id, summary_blob_id AS s FROM nodes WHERE depth = 0 ORDER BY boundary_entry_id DESC LIMIT 1')[0]!;
     expect(last.s, 'CONTROL: a native leaf names its summary blob (Task 8)').toBeGreaterThan(0);
     const crash0 = crashes(box);
+    // HB1 H-51: the crashed leaf's nodes_fts row is rewritten empty (markReparseCrash's indexNode), not left holding the old gist.
+    const fts = maintMeta(box, 'fts') === 'ready';
+    const ftsGist = (): string | undefined =>
+      maintQ<{ gist: string }>(box, 'SELECT gist FROM nodes_fts WHERE rowid = (SELECT rowid FROM nodes WHERE node_id = ?)', last.node_id)[0]?.gist;
+    if (fts) expect(ftsGist(), 'CONTROL: the leaf\'s old gist is indexed').toBe(before.find((x) => x.node_id === last.node_id)!.gist);
     const r = runShim(box, ['--op', 'reparse', '--apply'], { preloads: [PRELOADS.faults], env: { HISTORY_TEST_THROW_BLOB: String(last.s) } });
     expect(r.code, r.stderr).toBe(0);
     expect(lastResult(r.stdout)).toEqual({ rc: 0 });
-    expect(r.stdout).toMatch(/^history-sweep: reparsed 2 leaves \([0-9]+ changed, 1 failed\); node ids and sources unchanged$/m);
+    expect(r.stdout).toMatch(/^history-sweep: reparsed 2 leaves \([0-9]+ changed, 1 failed, 0 skipped\); node ids and sources unchanged$/m);
     const mid = leafRows(box);
     expect(mid.find((x) => x.node_id === last.node_id)).toMatchObject({ kind: 'raw_leaf', status: 'parse-failed', gist: null, topics: null });
     expect(mid.filter((x) => x.node_id !== last.node_id), 'the other leaf is re-derived as it was')
       .toEqual(before.filter((x) => x.node_id !== last.node_id));
     expect(maintQ(box, 'SELECT kind FROM node_refs WHERE node_id = ?', last.node_id), 'a crashed leaf holds no refs').toEqual([]);
+    if (fts) expect(ftsGist(), 'and an empty nodes_fts row, so its old gist matches nothing').toBe('');
     expect(crashes(box) - crash0, 'counted once').toBe(1);
     const again = runShim(box, ['--op', 'reparse', '--apply']);
     expect(again.code, again.stderr).toBe(0);
-    expect(again.stdout).toMatch(/^history-sweep: reparsed 2 leaves \(1 changed, 0 failed\)/m);
+    expect(again.stdout).toMatch(/^history-sweep: reparsed 2 leaves \(1 changed, 0 failed, 0 skipped\)/m);
     expect(leafRows(box), 'the next reparse retries it').toEqual(before);
+  }, HEAVY);
+
+  // HB1 H-55 (D-4602): deriveOne records a leaf parse-failed when leafFields throws on a summary that is missing or unreadable
+  // (producerOfCopy and minedRefs still run), so such a leaf is an ordinary reparse target: leafFields turns the unreadable
+  // summary into a raw leaf, where refreshLeaf's unconditional skip left it parse-failed for ever.
+  it('H-55: a parse-failed leaf whose summary is unreadable is re-derived by reparse into a raw leaf, never skipped for ever', () => {
+    const box = twoLeaves('ccrc-hist-h55-');
+    const last = maintQ<{ node_id: string; s: number }>(box,
+      'SELECT node_id, summary_blob_id AS s FROM nodes WHERE depth = 0 ORDER BY boundary_entry_id DESC LIMIT 1')[0]!;
+    const other = leafIds(box).find((x) => x !== last.node_id)!;
+    const beforeOther = leafRows(box).find((x) => x.node_id === other);
+    const db = new DatabaseSync(dbFile(box));
+    try {
+      db.exec('BEGIN IMMEDIATE');
+      db.prepare(`UPDATE nodes SET kind = 'raw_leaf', status = 'parse-failed', gist = NULL, topics = NULL, directive_flag = 0, capped = 0
+        WHERE node_id = ?`).run(last.node_id);
+      db.prepare('DELETE FROM node_refs WHERE node_id = ?').run(last.node_id);
+      db.prepare("UPDATE blobs SET z = X'00' WHERE blob_id = ?").run(last.s);   // not NULL: a NULL z is a pruned span, refused whole
+      db.exec('COMMIT');
+    } finally { db.close(); }
+    expect(leafRows(box).find((x) => x.node_id === last.node_id), 'CONTROL: planted parse-failed').toMatchObject({ kind: 'raw_leaf', status: 'parse-failed' });
+    const r = runShim(box, ['--op', 'reparse', '--apply']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(lastResult(r.stdout)).toEqual({ rc: 0 });
+    expect(leafRows(box).find((x) => x.node_id === last.node_id), 'the unreadable summary reads as a raw leaf, no longer parse-failed')
+      .toMatchObject({ kind: 'raw_leaf', status: 'not-requested', gist: null, topics: null });
+    expect(r.stdout).toMatch(/\(1 changed, 0 failed, 0 skipped\)/);
+    expect(leafRows(box).find((x) => x.node_id === other), 'the other leaf is as it was').toEqual(beforeOther);
+  }, HEAVY);
+
+  // HB1 H-59 (D-4602): refreshLeaf's catch records a parser crash, which wipes a leaf's gist, topics, refs and nodes_fts row.
+  // A store fault (an SQLite error, which carries the code ERR_SQLITE_ERROR) is no parser crash: it ends the pass and leaves
+  // the good leaves as they were. The seam throws it from derive's copyRows statement, which is read inside that try.
+  it('H-59: a store fault inside a leaf\'s re-derivation ends the reparse and wipes nothing', () => {
+    const box = twoLeaves('ccrc-hist-h59-');
+    const ftsRows = (): unknown[] => maintQ(box, "SELECT name FROM sqlite_master WHERE name = 'nodes_fts'").length === 0
+      ? [] : maintQ(box, 'SELECT rowid, gist, topics, refs FROM nodes_fts ORDER BY rowid');
+    const before = { leaves: leafRows(box), refs: refsOf(box), fts: ftsRows(), crash: crashes(box) };
+    expect(before.leaves.every((x) => x.kind === 'native_leaf' && x.gist !== null), 'CONTROL: two good native leaves').toBe(true);
+    const r = runShim(box, ['--op', 'reparse', '--apply'], {
+      preloads: [PRELOADS.faults], env: { HISTORY_TEST_THROW_SQL: 'CASE WHEN b.entry_id IS NULL THEN 0 ELSE 1 END AS is_boundary' },
+    });
+    expect(r.code, 'the fault ends the pass').not.toBe(0);
+    expect(r.stdout, 'and the pass does not report the leaves reparsed').not.toMatch(/history-sweep: reparsed /);
+    expect({ leaves: leafRows(box), refs: refsOf(box), fts: ftsRows(), crash: crashes(box) }, 'no leaf is wiped and no crash is counted').toEqual(before);
+  }, HEAVY);
+
+  // HB1 H-52: the scope of a reparse. Two families (ID and ID2) of two leaves each; in each, the earlier leaf is planted
+  // parse-failed and the later one is removed with Task 8's leaf-crashed marker (RB5's shape). A run that names a scope
+  // must re-derive and clear that scope alone.
+  const ID2 = 'claude-a-maint2';
+  const MAINT_U2 = '11111111-1111-4111-8111-1111111111a2';
+  function twoFamilies(prefix: string): HistoryBox {
+    const box = makeHistoryBox(prefix, { role: 'fleet', shim: true });
+    seedFamily(box, { id: ID, project: 'demo', uuid: MAINT_U1, rows: compactionSequence({ n: 2, trigger: 'manual' }).rows });
+    seedFamily(box, { id: ID2, project: 'demo', uuid: MAINT_U2,
+      rows: compactionSequence({ n: 2, trigger: 'manual', seed: 2, sessionId: MAINT_U2 }).rows });
+    expect(runSweep(box).code).toBe(0);
+    return box;
+  }
+  /** A family's leaves, earlier boundary first. */
+  const familyLeaves = (box: HistoryBox, ccrcId: string): Array<{ node_id: string; b: number; rid: number }> =>
+    maintQ(box, `SELECT n.node_id AS node_id, n.boundary_entry_id AS b, n.rowid AS rid FROM nodes n JOIN sessions s ON s.session_pk = n.session_pk
+      WHERE s.ccrc_id = ? AND n.depth = 0 ORDER BY n.boundary_entry_id`, ccrcId);
+  /** The leaf as Task 8 records a crashed derivation (RB5), planted by SQL with no sweep running. */
+  const plantFailed = (box: HistoryBox, nodeId: string): void => {
+    const db = new DatabaseSync(dbFile(box));
+    try {
+      db.exec('BEGIN IMMEDIATE');
+      db.prepare(`UPDATE nodes SET kind = 'raw_leaf', status = 'parse-failed', gist = NULL, topics = NULL, directive_flag = 0, capped = 0
+        WHERE node_id = ?`).run(nodeId);
+      db.prepare('DELETE FROM node_refs WHERE node_id = ?').run(nodeId);
+      db.exec('COMMIT');
+    } finally { db.close(); }
+  };
+  /** A boundary whose derivation threw before its leaf id was known: no leaf, and Task 8's marker. */
+  const plantMarker = (box: HistoryBox, leaf: { node_id: string; b: number; rid: number }): void => {
+    const db = new DatabaseSync(dbFile(box));
+    try {
+      db.exec('BEGIN IMMEDIATE');
+      db.prepare('DELETE FROM node_refs WHERE node_id = ?').run(leaf.node_id);
+      db.prepare('DELETE FROM node_sources WHERE node_id = ?').run(leaf.node_id);
+      db.prepare('DELETE FROM node_children WHERE node_id = ? OR child_id = ?').run(leaf.node_id, leaf.node_id);
+      if (db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'nodes_fts'").get() !== undefined) {
+        db.prepare('DELETE FROM nodes_fts WHERE rowid = ?').run(leaf.rid);
+      }
+      db.prepare('DELETE FROM nodes WHERE node_id = ?').run(leaf.node_id);
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('leaf-crashed', ?, '1', ?)").run(leaf.b, Date.now());
+      db.exec('COMMIT');
+    } finally { db.close(); }
+  };
+  const markers = (box: HistoryBox): number[] =>
+    maintQ<{ version: number }>(box, "SELECT version FROM derivation_state WHERE step = 'leaf-crashed' ORDER BY version").map((r) => Number(r.version));
+  const statusOf = (box: HistoryBox, nodeId: string): string | undefined => leafRows(box).find((x) => x.node_id === nodeId)?.status;
+
+  it('H-52: --session re-derives and clears that family alone, and a --node run clears no marker', () => {
+    const box = twoFamilies('ccrc-hist-h52s-');
+    const [a1, a2] = familyLeaves(box, ID) as [ReturnType<typeof familyLeaves>[number], ReturnType<typeof familyLeaves>[number]];
+    const [b1, b2] = familyLeaves(box, ID2) as [ReturnType<typeof familyLeaves>[number], ReturnType<typeof familyLeaves>[number]];
+    expect(familyLeaves(box, ID), 'CONTROL: two families of two leaves each').toHaveLength(2);
+    expect(familyLeaves(box, ID2)).toHaveLength(2);
+    plantFailed(box, a1.node_id); plantFailed(box, b1.node_id);
+    plantMarker(box, a2); plantMarker(box, b2);
+    expect(markers(box), 'CONTROL: one marker per family').toEqual([a2.b, b2.b].sort((x, y) => x - y));
+    // A --node run names no boundary without a leaf, so it clears no marker, whichever family's leaf it names.
+    const byNode = runShim(box, ['--op', 'reparse', '--node', b1.node_id, '--apply']);
+    expect(byNode.code, byNode.stderr).toBe(0);
+    expect(byNode.stdout).toMatch(/^history-sweep: reparsed 1 leaves \(1 changed, 0 failed, 0 skipped\)/m);
+    expect(byNode.stdout, 'a --node run clears nothing').not.toContain('crashed boundary marker');
+    expect(markers(box), 'both families\' markers stand').toEqual([a2.b, b2.b].sort((x, y) => x - y));
+    expect(statusOf(box, b1.node_id), 'the named leaf is re-derived').toBe('not-requested');
+    expect(statusOf(box, a1.node_id), 'the other family\'s leaf is not').toBe('parse-failed');
+    plantFailed(box, b1.node_id);
+    // --session ID: ID's leaf is re-derived, ID2's is not; ID's marker goes, ID2's stays.
+    const bySession = runShim(box, ['--op', 'reparse', '--session', ID, '--apply']);
+    expect(bySession.code, bySession.stderr).toBe(0);
+    expect(bySession.stdout).toMatch(/^history-sweep: reparsed 1 leaves \(1 changed, 0 failed, 0 skipped\)/m);
+    expect(bySession.stdout).toMatch(/^history-sweep: reparse: 1 crashed boundary marker\(s\) cleared;/m);
+    expect(statusOf(box, a1.node_id), 'ID\'s leaf is re-derived').toBe('not-requested');
+    expect(statusOf(box, b1.node_id), 'ID2\'s leaf stays parse-failed').toBe('parse-failed');
+    expect(markers(box), 'only ID\'s marker is cleared').toEqual([b2.b]);
+  }, HEAVY);
+
+  // HB1 H-52 + H-53: --node on a condensed node walks node_children down to every leaf under it, however deep, and every parent
+  // above the targets is re-rolled from its children as stored then (a leaf parent exists only above FAN_IN.leaf leaves, so
+  // these are planted by SQL: N over both leaves, M over N).
+  it('H-52/H-53: --node on a condensed node reparses every leaf under it, and the parents above the leaves are re-rolled from them', () => {
+    const box = twoLeaves('ccrc-hist-h52c-');
+    const [l1, l2] = leafIds(box) as [string, string];
+    const N = `N${'0'.repeat(19)}1`;
+    const M = `N${'0'.repeat(19)}2`;
+    const STALE = 'stalezqparent gist.';
+    const plant = (): void => {
+      const db = new DatabaseSync(dbFile(box));
+      try {
+        db.exec('BEGIN IMMEDIATE');
+        db.prepare('DELETE FROM node_children').run();
+        db.prepare("DELETE FROM node_refs WHERE node_id IN (SELECT node_id FROM nodes WHERE kind = 'condensed')").run();
+        db.prepare("DELETE FROM nodes WHERE kind = 'condensed'").run();
+        const ins = db.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics, src_chars,
+            desc_count, desc_chars, parser_version, created_ms)
+          SELECT ?, session_pk, epoch_seq, transcript_pk, 'condensed', ?, 'not-requested', ?, '["stalezqtopic"]', 0, 0, 0, 1, 1 FROM nodes WHERE node_id = ?`);
+        ins.run(N, 1, STALE, l1);
+        ins.run(M, 2, STALE, l1);
+        const kid = db.prepare('INSERT INTO node_children (node_id, child_id, ord) VALUES (?, ?, ?)');
+        kid.run(N, l1, 0); kid.run(N, l2, 1); kid.run(M, N, 0);
+        db.exec('COMMIT');
+      } finally { db.close(); }
+    };
+    const gistOf = (id: string): string | null => maintQ<{ gist: string | null }>(box, 'SELECT gist FROM nodes WHERE node_id = ?', id)[0]!.gist;
+    const rolled = (): { n: string; m: string } => {
+      const kids = [l1, l2].map((id) => gistOf(id)).filter((g): g is string => g !== null).map(firstSentence);
+      const n = kids.join(' ');
+      return { n, m: firstSentence(n) };
+    };
+    plant();
+    const leavesBefore = leafRows(box);
+    const r = runShim(box, ['--op', 'reparse', '--node', M, '--apply']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout, 'two levels down: both leaves under M').toMatch(/^history-sweep: reparsed 2 leaves \(0 changed, 0 failed, 0 skipped\)/m);
+    expect(leafRows(box)).toEqual(leavesBefore);
+    expect(rolled().n, 'CONTROL: the leaves have gists to roll').not.toBe('');
+    expect({ n: gistOf(N), m: gistOf(M) }, 'both parents are re-rolled, not left at the planted text').toEqual(rolled());
+    // The same through a leaf: the parents above the named leaf are re-rolled, whatever else the run did.
+    plant();
+    const byLeaf = runShim(box, ['--op', 'reparse', '--node', l1, '--apply']);
+    expect(byLeaf.code, byLeaf.stderr).toBe(0);
+    expect({ n: gistOf(N), m: gistOf(M) }).toEqual(rolled());
+    plant();
+    const all = runShim(box, ['--op', 'reparse', '--apply']);
+    expect(all.code, all.stderr).toBe(0);
+    expect({ n: gistOf(N), m: gistOf(M) }).toEqual(rolled());
+  }, HEAVY);
+
+  // HB1 H-51: what a reparse writes is redacted with THIS pass's index, pairs and belt, and the nodes_fts rows are the pass's own.
+  // The value is one case of letters only, which the belt cannot seed (lib's beltSeeds), so only its pair masks it. The leaf is
+  // made stale by SQL (a planted gist, a planted index row), so nothing but the reparse can put the right text back: the belt's
+  // node step (a tick's) is not run, and rewrites every nodes_fts row anyway.
+  it('H-51: a reparse masks a pair-only value in the re-derived gist, topics and refs, and replaces each leaf\'s nodes_fts row', (ctx) => {
+    const V = Array.from(randomBytes(32), (b) => 'abcdefghijklmnopqrstuvwxyz'[b % 26]).join('');
+    const box = makeHistoryBox('ccrc-hist-h51-', { role: 'fleet', shim: true });
+    fs.mkdirSync(path.join(box.home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(box.home, '.cc-secrets', 'h51.env'), `ZQ_H51=${V}\n`, { mode: 0o600 });
+    const summaryText = (k: number): string => [
+      '<summary>',
+      '1. Primary Request and Intent:',
+      `   Rotate the credential for segment ${k}.`,
+      '2. Key Technical Concepts:',
+      `   - the credential ${V} rotated in segment ${k}`,
+      '8. Current Work:',
+      `   Rotating ${V} in segment ${k}.`,
+      '9. Optional Next Step:',
+      '   Run the suite again.',
+      '</summary>',
+    ].join('\n');
+    // The fixture's Read inputs name a path; put the value in it, so the mined refs hold it too.
+    const rows = compactionSequence({ n: 2, trigger: 'manual', summaryText }).rows.map((r) => JSON.parse(JSON.stringify(r).replaceAll('quiet-basin', V)));
+    seedFamily(box, { id: ID, project: 'demo', uuid: MAINT_U1, rows });
+    expect(runSweep(box).code).toBe(0);
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();          // a Node without FTS5 has no index to replace
+    expect(leafIds(box).length, 'CONTROL: the fixture derived its two leaves').toBe(2);
+    // CONTROL: the belt alone leaves the value, the pair masks it: only the pair index can make this case pass.
+    const text = `Rotating ${V} in segment 0.`;
+    expect(redactField(text, makePairIndex([], makeBelt(beltUnits([V])))), 'CONTROL: an index holding only the belt leaves V').toContain(V);
+    expect(redactField(text, makePairIndex(secretPairs([V]).pairs)), 'CONTROL: the pair masks it').not.toContain(V);
+    const leaked = (): string[] => {
+      const db = openStoreRO(box);
+      try {
+        const cols = [
+          ...(db.prepare('SELECT gist, topics FROM nodes').all() as Array<Record<string, string | null>>).flatMap((r) => [r['gist'], r['topics']]),
+          ...(db.prepare('SELECT value FROM node_refs').all() as Array<Record<string, string>>).map((r) => r['value']),
+          ...(db.prepare('SELECT gist, topics, refs FROM nodes_fts').all() as Array<Record<string, string>>).flatMap((r) => [r['gist'], r['topics'], r['refs']]),
+        ];
+        return cols.filter((c): c is string => typeof c === 'string' && c.includes(V));
+      } finally { db.close(); }
+    };
+    const stale = new DatabaseSync(dbFile(box));
+    try {
+      stale.exec('BEGIN IMMEDIATE');
+      stale.prepare("UPDATE nodes SET gist = 'stalezqgist.', topics = '[\"stalezqtopic\"]' WHERE depth = 0").run();
+      stale.prepare('DELETE FROM node_refs').run();
+      for (const r of stale.prepare('SELECT rowid AS rid FROM nodes WHERE depth = 0').all() as Array<{ rid: number }>) {
+        stale.prepare('DELETE FROM nodes_fts WHERE rowid = ?').run(r.rid);
+        stale.prepare('INSERT INTO nodes_fts (rowid, gist, topics, refs) VALUES (?, ?, ?, ?)').run(r.rid, 'stalezqword', '', '');
+      }
+      stale.exec('COMMIT');
+    } finally { stale.close(); }
+    expect(maintQ<{ n: number }>(box, "SELECT count(*) AS n FROM nodes_fts WHERE nodes_fts MATCH 'stalezqword'")[0]!.n, 'CONTROL: the stale rows are indexed').toBe(2);
+    const r = runShim(box, ['--op', 'reparse', '--apply']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^history-sweep: reparsed 2 leaves \(2 changed, 0 failed, 0 skipped\)/m);
+    expect(leaked(), 'the value is in no gist, topic, ref or nodes_fts column').toEqual([]);
+    // Not vacuous: the fields the value was cut from are there, with its mark where it stood. (A mined path ref that held the
+    // value is no ref once masked, because the mark is no path character, so node_refs is empty here and V would be a path ref.)
+    const nodes = leafRows(box);
+    expect(nodes.map((x) => x.gist), 'the gist holds the mark').toEqual(nodes.map((x) => expect.stringContaining(REDACTED_MARK)));
+    expect(nodes.map((x) => x.topics), 'and so do the topics').toEqual(nodes.map((x) => expect.stringContaining(REDACTED_MARK)));
+    expect(refsOf(box), 'a ref that held V is dropped, not kept masked').toEqual([]);
+    expect(maintQ<{ n: number }>(box, "SELECT count(*) AS n FROM nodes_fts WHERE nodes_fts MATCH 'stalezqword'")[0]!.n, 'each nodes_fts row is the pass\'s own').toBe(0);
+    expect(maintQ<{ n: number }>(box, "SELECT count(*) AS n FROM nodes_fts WHERE nodes_fts MATCH 'rotating'")[0]!.n, 'and holds the re-derived gist\'s words').toBe(2);
+  }, HEAVY);
+
+  // HB1 H-61: the stored state's rids must be exactly the pass's live units. A damaged meta row naming one rid twice has the right
+  // length and every member live, and is still not the live set; no writer emits one, so the state is planted in process.
+  it('H-61: a stored belt state that names a rid twice is not the live set, though its length and members match', () => {
+    const box = boundBox('ccrc-hist-h61-');
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      const plant = (rids: number[]): string => {
+        const text = formatBeltState({ v: BELT_VERSION, rids, gen: null });
+        withTx(db, 'NORMAL', () => { setMeta(db, BELT_META, text); });
+        return text;
+      };
+      const due = JSON.stringify({ v: 0, rids: [], gen: null });
+      const exact = plant([7, 9]);
+      expect(withTx(db, 'NORMAL', () => recordBeltDueIfUncovered(db, { beltLive: [7, 9] })), 'CONTROL: the exact live set is covered').toBe(false);
+      expect(getMeta(db, BELT_META), 'CONTROL: and the state is left as it was').toBe(exact);
+      plant([7, 7]);
+      expect(withTx(db, 'NORMAL', () => recordBeltDueIfUncovered(db, { beltLive: [7, 9] })), 'rids [7,7] against live {7,9} are not covered').toBe(true);
+      expect(getMeta(db, BELT_META), 'so the belt is recorded due').toBe(due);
+    } finally { closeWriter(db); }
   }, HEAVY);
 
   it('RB5: an all-leaves reparse clears the leaf-crashed markers and lowers the leaves cursor, so the next tick derives the boundary under its old id', () => {
@@ -1133,6 +1430,57 @@ describe('doctor --backup: 0600 from the first byte, temp then publish, the copy
     expect(ok.code, ok.stderr).toBe(0);
     expect(maintNames(P.backups).filter((n) => BACKUP_NAME.test(n))).toHaveLength(1);
     expect(Number(maintMeta(box, 'copy_bps'))).toBeGreaterThan(0);
+  }, HEAVY);
+
+  // HB1 H-62, H-63, H-64: backupOp in process on a bound box's writer handle, with a free-space probe of the case's own. The
+  // spawned door fixes free space with a preload and runs opPass's own probe first, so none of these three arms is reachable
+  // through it: where the stale temp stands at the probe, what a taken name answers, and a probe that never settles.
+  const FIXED_MS = Date.UTC(2026, 9, 4, 10, 0, 0);
+  const PLENTY = { bavail: 2 ** 40, bsize: 1, blocks: 2 ** 41 };
+  async function inProcessBackup(box: HistoryBox, statfs: () => Promise<typeof PLENTY>): Promise<{ r: unknown; lines: string[] }> {
+    const P = historyPaths(box.home);
+    const lines: string[] = [];
+    const db = openWriter(P.dbFile);
+    try {
+      const r = await backupOp(db, { paths: P, home: box.home, now: () => FIXED_MS, out: (l: string) => lines.push(l), deps: { statfs } });
+      return { r, lines };
+    } finally { closeWriter(db); }
+  }
+
+  it('H-62: the stale backup temp is removed BEFORE the free-space probe, so the probe measures the room it frees (D-4588)', async () => {
+    const box = boundBox('ccrc-hist-h62-');
+    const P = historyPaths(box.home);
+    fs.mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(P.backups, '.20260101T000000Z.db.tmp'), 'partial');
+    const seen: string[][] = [];
+    const { r } = await inProcessBackup(box, async () => { seen.push(maintNames(P.backups)); return PLENTY; });
+    expect(seen, 'CONTROL: the probe ran once').toHaveLength(1);
+    expect(seen[0]!.filter((n) => BACKUP_TMP.test(n)), 'no stale temp stands when the probe measures').toEqual([]);
+    expect(r).toEqual({ rc: 0 });
+    expect(maintNames(P.backups).filter((n) => BACKUP_NAME.test(n)), 'CONTROL: the copy was written').toEqual([backupNameOf(FIXED_MS)]);
+  }, HEAVY);
+
+  it('H-63: a backup name already taken is backup-refused (exit 2) with the operator\'s retry, and the file there is left byte for byte', async () => {
+    const box = boundBox('ccrc-hist-h63-');
+    const P = historyPaths(box.home);
+    const taken = path.join(P.backups, backupNameOf(FIXED_MS));
+    fs.mkdirSync(P.backups, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(taken, 'an operator\'s own file');
+    const { r, lines } = await inProcessBackup(box, async () => PLENTY);
+    expect(r).toEqual({ rc: 2, reason: 'backup-refused' });
+    expect(lines, 'one line').toHaveLength(1);
+    expect(lines[0]).toMatch(/^history-sweep: backup-refused: \S+ already exists; the operator takes it again/);
+    expect(fs.readFileSync(taken, 'utf8'), 'the file there is untouched').toBe('an operator\'s own file');
+    expect(maintNames(P.backups).filter((n) => BACKUP_TMP.test(n)), 'no temp is left').toEqual([]);
+  }, HEAVY);
+
+  it('H-64: a free-space probe that never settles is 5 store-unreachable, not a refusal, and writes no copy', async () => {
+    const box = boundBox('ccrc-hist-h64-');
+    const P = historyPaths(box.home);
+    const { r, lines } = await inProcessBackup(box, () => new Promise(() => {}));
+    expect(r).toEqual({ rc: 5, reason: 'store-unreachable' });
+    expect(lines, 'the reason is the exit\'s, no refusal line is printed').toEqual([]);
+    expect(maintNames(P.backups).filter((n) => BACKUP_NAME.test(n) || BACKUP_TMP.test(n)), 'no copy was started').toEqual([]);
   }, HEAVY);
 
   it('doctor --backup through the CLI writes one backup and relays exit 0', () => {
@@ -1412,6 +1760,75 @@ describe('doctor --repair: integrity, the foreign-key baseline, the resumable FT
     } finally {
       if (fs.existsSync(locked)) fs.chmodSync(locked, 0o600);
     }
+  }, 1.5 * HEAVY);
+
+  // HB1 H-70: a rebuild cursor that does not parse, or parses to something no phase can resume from, restarts the job at its start
+  // phase with a freshly measured baseline (Task 23). Read as the cursor itself, `null` would throw in repairOp and an unknown
+  // phase would skip both index phases and complete with nothing rebuilt.
+  it('H-70: a malformed fts-rebuild cursor restarts the rebuild at its start phase, and the repair completes it', async (ctx) => {
+    const box = healable('ccrc-hist-h70-');
+    if (maintMeta(box, 'fts') !== 'ready') ctx.skip();
+    plantStale(box);
+    expect(maintMatch(box, 'staleword'), 'CONTROL: the stale term is in the index').toBe(1);
+    const START = { version: 1, state: { phase: 'start', blobId: 0, baseline: null, undecodable: 0 } };
+    const db = new DatabaseSync(dbFile(box));
+    try {
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('fts-rebuild', 1, ?, NULL)").run('{"phase":"bogus","blobId":0}');
+      expect(openFtsRebuild(db), 'an unknown phase reads as the start').toEqual(START);
+      db.prepare("UPDATE derivation_state SET cursor = ? WHERE step = 'fts-rebuild'").run('null');
+      expect(openFtsRebuild(db), 'a cursor that is JSON null reads as the start').toEqual(START);
+      db.prepare("UPDATE derivation_state SET cursor = ? WHERE step = 'fts-rebuild'").run('not json');
+      expect(openFtsRebuild(db), 'a cursor that does not parse reads as the start').toEqual(START);
+    } finally { db.close(); }
+    const r = await maintPty(box, 'shim', ['--op', 'repair']);
+    expect(r.code, r.out).toBe(0);
+    expect(lastResult(r.out)).toEqual({ rc: 0 });
+    expect(r.out).toMatch(/history-sweep: repair: resuming the index rebuild started \S+ at its start phase/);
+    expect(maintMatch(box, 'staleword'), 'the rebuild dropped what the store does not hold').toBe(0);
+    expect(maintMatch(box, 'zebrafish'), 'and rebuilt what it does').toBe(1);
+    expect(rebuilds(box).map((x) => x.completed_ms !== null), 'the step is completed').toEqual([true]);
+    expect(maintMeta(box, 'fts')).toBe('ready');
+  }, HEAVY);
+
+  // HB1 H-71: the displaced and blocked counts of the repair's re-measure. The spawned repair test plants an empty planted area and
+  // no blocked file, so both measure 0 there, and a measure fixed at 0 would reset a standing counter (D-4723 forbids).
+  it('H-71: the spool re-measure counts a displaced file in an area and a draining file whose .obs name holds a directory', () => {
+    const box = boundBox('ccrc-hist-h71-');
+    const P = historyPaths(box.home);
+    fs.mkdirSync(P.draining, { recursive: true, mode: 0o700 });
+    fs.chmodSync(P.spool, 0o700);
+    fs.chmodSync(P.draining, 0o700);
+    expect(measureSpoolStanding(box.home), 'CONTROL: an empty spool stands at nothing').toEqual({ drain_rejected: 0, spool_displaced: 0, spool_blocked: 0, spool_unreadable: 0 });
+    const area = path.join(P.draining, 'planted', '1700000000002.4242');
+    fs.mkdirSync(area, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(area, `${ID}.1700000000002.4242.jsonl`), '\n', { mode: 0o600 });
+    const stem = path.join(P.draining, `${ID}.1700000000004.4242`);
+    fs.writeFileSync(`${stem}.jsonl`, '\n', { mode: 0o600 });
+    fs.mkdirSync(`${stem}.obs`, { mode: 0o700 });
+    expect(measureSpoolStanding(box.home)).toEqual({ drain_rejected: 0, spool_displaced: 1, spool_blocked: 1, spool_unreadable: 0 });
+  }, HEAVY);
+
+  // HB1 H-73 (D-4603): a probe that THROWS is not an FTS5 that is absent. Spec §9.1 keeps them apart (grep answers 5 for one, 7
+  // for the other), and a repair that cannot tell whether an index exists has healed nothing, so it must not exit 0 and must not
+  // re-measure a standing counter. The absent arm, the control, still exits 0 and resets what is cured.
+  it('H-73: a repair whose FTS5 probe throws is 5 probe-failed and resets no counter; one on a Node without FTS5 is still exit 0', async () => {
+    const box = healable('ccrc-hist-h73-');
+    const spoolBlocked = (): string | undefined => (maintQ(box, "SELECT n FROM counters WHERE name = 'spool_blocked'") as Array<{ n: number }>)[0]?.n?.toString();
+    const plant = (): void => writable(box, (db) => {
+      db.prepare("INSERT INTO counters (name, n) VALUES ('spool_blocked', 3) ON CONFLICT (name) DO UPDATE SET n = excluded.n").run();
+    });
+    plant();
+    const failed = await maintPty(box, 'shim', ['--op', 'repair'], { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_FTS_PROBE: 'throw' } });
+    expect(lastResult(failed.out), failed.out).toEqual({ rc: 5, reason: 'probe-failed' });
+    expect(failed.code, failed.out).toBe(5);
+    expect(failed.out).toMatch(/history-sweep: probe-failed: the FTS5 probe threw on this store, so the repair cannot tell whether an index exists; nothing was repaired/);
+    expect(failed.out, 'it does not say there is no index to heal').not.toContain('no index to heal');
+    expect(spoolBlocked(), 'no counter is re-measured on that path').toBe('3');
+    // CONTROL: an FTS5 that is absent is the exit-0 arm, which re-measures: no blocked file stands, so the count goes.
+    const absent = await maintPty(box, 'shim', ['--op', 'repair'], { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_FTS_PROBE: 'absent' } });
+    expect(lastResult(absent.out), absent.out).toEqual({ rc: 0 });
+    expect(absent.out).toMatch(/FTS5 is fts5-absent on this Node, so there is no index to heal/);
+    expect(spoolBlocked(), 'CONTROL: the absent arm resets what is cured').toBeUndefined();
   }, 1.5 * HEAVY);
 
   it('a blob that no longer decodes is counted by the rebuild that read it, raising a count the store lost, and a spool it cannot measure is left as it is', async (ctx) => {
