@@ -1709,6 +1709,31 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
     entry included.
   - **Still to come:** W1b's ccd/ccd consent is asked for later.
   - Plain-ridge was told (4462, with the id corrected in 4464).
+- **2026-10-13 01:50 — OPERATOR RULING on residual (7): close it in this fix round by sealing the state on a clean
+  shutdown.**
+  - **Why the operator saw it now:** asked for progress, the operator was shown review 401's DRAFT report. That draft
+    is not the accepted report, and review 401 is still finishing its held-back mutation rows. Its measurements:
+    - (7) is the F1/4266 harm: a breaker witness lost at a restart after a write failure.
+    - In the trip form it is NOT bounded by the ten-minute gap.
+    - Conservative-on-every-start closes it, but restarts every crashed claimant's hour on every start and freezes
+      the lane while two or more are crashed.
+    - The server has no shutdown path today: no `process.on` handler, and nothing calls `app.close()` on a signal.
+  - **The ruling:** of four options (seal now; merge first and seal in a follow-up; conservative on every start;
+    accept as residual), the operator chose **"Seal on clean shutdown"**, in this fix round.
+  - **What the seal must do:**
+    - Migration 19 is still unmerged, so its typed state gains a `sealed` value.
+    - A new SIGTERM/SIGINT handler in the composition root writes `sealed` only when no pass is in flight (or one is
+      awaited within a bound), nothing is pending, the state is durably clean and the held key equals the committed
+      key.
+    - At start, a stored snapshot is trusted ONLY when it reads `sealed`. `clean`, `dirty`, `absent` and `unreadable`
+      seed conservatively.
+    - The process's first landed write unseals.
+    - No act, and no `unchanged` fast path, until a write of this process has landed.
+  - **What it leaves:** an unclean exit (SIGKILL, OOM, a crash, or a stop that outlives systemd's timeout) pays the
+    conservative cost. A process whose every write fails from start to death leaves no trace; that is inherent, and is
+    named as such. A deviation number is allocated with the fix round.
+  - **Next:** when review 401's report arrives, close review 401, rule its findings (F2 included), and send fix round 5
+    with this ruling. Both lanes stay SHADOWED.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
