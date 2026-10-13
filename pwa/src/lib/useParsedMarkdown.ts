@@ -20,9 +20,11 @@ import type { MarkdownProfile, ParseOutcome } from './markdownParse';
 import type { MarkdownParser } from './markdownRunner';
 
 export interface ParsedMarkdown {
-  /** The latest settled outcome, for the current request or an earlier one; null = nothing has settled yet. */
+  /** The outcome of the latest request that settled while it was still the latest one made: it answers the current
+   *  request once `pending` is false, and an earlier one while `pending` is true (a result for a request already
+   *  superseded never lands here, only in `lastGood`); null = no such outcome yet. */
   readonly outcome: ParseOutcome | null;
-  /** The last tree that settled; null = no tree has settled yet. */
+  /** The last tree that settled, for any request, the newest while a newer text parses; null = none has settled. */
   readonly lastGood: HastRoot | null;
   /** No outcome has settled yet for the current text, profile, budget and attempt. */
   readonly pending: boolean;

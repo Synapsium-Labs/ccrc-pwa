@@ -395,3 +395,36 @@ describe('T11 review 3-4: the last good tree stays while a newer text parses aft
     expect(noteOf(container)).toBeNull();
   });
 });
+
+describe('T11 review N1: streaming shows each newer settled tree; A -> B -> A never shows B under A', () => {
+  const heading = (c: HTMLElement): string[] => [...c.querySelectorAll('h1')].map((h) => h.textContent ?? '');
+
+  it('a tree that settles behind newer streaming text replaces the shown tree: One, Two, Three', async () => {
+    const calls = deferChatParses();
+    const { container, next } = assistant(longText('# Zero'));
+    await answer(calls, 0);
+    expect(heading(container)).toEqual(['Zero']);
+    next(longText('# One'));
+    next(longText('# Two'));
+    expect(calls.map((c) => c.src.slice(0, 7))).toEqual(['# Zero\n', '# One\n\n']);
+    await answer(calls, 1);
+    expect(heading(container)).toEqual(['One']);
+    next(longText('# Three'));
+    await answer(calls, 2);
+    expect(heading(container)).toEqual(['Two']);
+    await answer(calls, 3);
+    expect(heading(container)).toEqual(['Three']);
+  });
+
+  it("text A settled, then B, then A again: B's tree settling afterwards never shows under A", async () => {
+    const calls = deferChatParses();
+    const { container, next } = assistant(longText('# A'));
+    await answer(calls, 0);
+    next(longText('# B'));
+    next(longText('# A'));
+    expect(heading(container)).toEqual(['A']);
+    await answer(calls, 1);
+    expect(heading(container)).toEqual(['A']);
+    expect(calls).toHaveLength(2);
+  });
+});

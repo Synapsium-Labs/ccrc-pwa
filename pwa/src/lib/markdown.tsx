@@ -283,13 +283,14 @@ function SyncChatMarkdown({ text }: { text: string }): ReactNode {
  *  byte-identical to the synchronous path (M4.P10). */
 const CHAT_RENDER: RenderHastOptions = { components: CHAT_COMPONENTS, urlTransform: defaultUrlTransform };
 
-/** Over `CHAT_SYNC_MAX_BYTES`: the worker. The latest settled tree; else, while the current text parses, the last
- *  good tree; else, after an outcome that is not a tree for the current text, plain text with its note; else
- *  (nothing settled yet, or no tree yet while the current text parses) plain text alone. No Format anyway. */
+/** Over `CHAT_SYNC_MAX_BYTES`: the worker. While the current text parses, the newest tree that settled (so a
+ *  streaming message advances with each settle); else the settled tree for the current text; else, after an outcome
+ *  that is not a tree for the current text, plain text with its note; else (nothing settled yet, or no tree yet
+ *  while the current text parses) plain text alone. No Format anyway. */
 function AsyncChatMarkdown({ text, parser }: { text: string; parser: MarkdownParser }): ReactNode {
   const { outcome, lastGood, pending } = useParsedMarkdown(text, parser, { profile: 'chat', budgetMs: CHAT_PARSE_BUDGET_MS });
-  if (outcome?.kind === 'tree') return renderHast(outcome.tree, CHAT_RENDER);
   if (pending && lastGood !== null) return renderHast(lastGood, CHAT_RENDER);
+  if (outcome?.kind === 'tree') return renderHast(outcome.tree, CHAT_RENDER);
   if (outcome !== null && !pending) return <MsgPlain text={text} note={chatPlainNote(outcome)} />;
   return <MsgPlain text={text} />;
 }
