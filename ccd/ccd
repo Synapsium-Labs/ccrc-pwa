@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=b8a7f8f4443013698d42bbac640d13439c2062b1aa09c6de4592d396a2c23009
+# ccrc:generated 1 sha256=c6e8eb918e3899691dcddb46da69469e9a5ec7ec02401ad0b0adcb716b709867
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -17873,7 +17873,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   echo "$pane" | grep -q "❯" || return 0                    # not at a prompt yet
   local spid sf st sua
   spid=$(tmux list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
-  _cfg_dir_to sf "$wrapper"; sf="$sf/sessions/$spid.json"   # tick-diet spec §6.2, D-4961: memoised per wrapper (Task 5)
+  _cfg_dir_to sf "$wrapper"; sf="$sf/sessions/$spid.json"   # tick-diet spec §6.2: memoised per wrapper — an exact memo, no D-number (Task 5)
   # `-f` BEFORE THE GREP, for `_authdead`'s reason (#69 review round 3, R2):
   # `grep FILE` opens by name and blocks for ever on a FIFO with no writer or on
   # an unbounded character device, inside the 5-second tick. MEASURED on the
@@ -18478,7 +18478,7 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
   # those means GO LOOK AT THE BOX; `status=busy` means WAIT. So each gets its own slug, and the
   # detail carries the path/status that says which flavour it is.
   [[ -n "$spid" ]] || { KS_WHY=no-pane-pid; KS_DETAIL="tmux list-panes named no pane pid${ctxnote:+, $ctxnote}"; return 1; }
-  _cfg_dir_to sf "$wrapper"; sf="$sf/sessions/$spid.json"   # tick-diet spec §6.2, D-4961: memoised per wrapper (Task 5)
+  _cfg_dir_to sf "$wrapper"; sf="$sf/sessions/$spid.json"   # tick-diet spec §6.2: memoised per wrapper — an exact memo, no D-number (Task 5)
   # `-f` BEFORE THE GREP — same rung and same reason as `_auto_swap_check`'s
   # copy above, but NOT the same arm, and the difference is the whole point.
   # That lane has two answers here (idle / not) and folds every failure into a
