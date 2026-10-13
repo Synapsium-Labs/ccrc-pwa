@@ -166,12 +166,13 @@ describe('the spec says what a restart does to the dead-coordinator lane (review
       'A second identical signal during the bound kills at once, with no seal: the listeners are `once`, so the second reaches the default action, and the cost is an unclean exit',
       'A different signal during the bound (a SIGINT inside a SIGTERM\'s, or the reverse) is handled, because its `once` listener stands until the first handler ends: both handlers wait on the pass in flight, the first to resume seals and re-raises its own signal, and the process dies of that one; the seal is one generation-checked statement, so no second write can land',
       'for `no-landed-write` and `already-sealed`, which write nothing and leave the state as it stands, it says that a sealed state is trusted, and never that the state is seeded conservatively',
+      'For every other refusal, an overrun of the bound and a throw, it says the next start seeds conservatively, unless no write of this server landed and the state still reads sealed (a bound overrun on a sealed start\'s first pass, before its unseal), when the old seal stands and is trusted',
       'A start trusts the stored snapshot ONLY when the state reads `sealed`; `clean`, `dirty`, absent, unreadable and malformed all seed conservatively',
       'on SIGTERM or SIGINT it stops the watcher, asks the lane to seal within one bound of five seconds (well inside systemd\'s default stop timeout of ninety, which the unit leaves alone',
       'logs one `ccrc-server: shutdown:` warn line when the seal is refused or fails, never throws, and re-raises the same signal',
       'only when no pass is in flight (a pass is awaited within the bound), a write of this process has landed, no anchor change is pending, the state is durably clean and the held set\'s key is the one the last commit wrote; otherwise it writes nothing and says which. A seal attempt stops the lane: no pass runs after it',
       'The first pass of a process that read `sealed` writes `clean` back, before any step can change state or act (eagerly, not at the first change',
-      'until that unseal has landed a sealed start writes nothing else (a later mark or commit does not count in its place) and acts on nothing, and takes no `unchanged` shortcut; a conservative seed\'s permission is its first landed commit',
+      'until that unseal has landed a sealed start writes no breaker state or anchor beyond it (a tripping pass\'s feed row may still be written; a later mark or commit does not count in its place) and acts on nothing, and takes no `unchanged` shortcut; a conservative seed\'s permission is its first landed commit',
       'Under a sealed state the first pass also flags, at its anchor instant, every claimant of the population whose durable anchor began after the snapshot was written (D-4826); since every anchor change of this release commits with its snapshot, that is only an older build\'s anchor, written after a rollback',
       'Anchors and releases are pass-sampled: an anchor sits on its lane\'s own pass, up to one cadence after the crash, evidence that releases a hold is seen only at a pass, and a restart moves the pass grid as any start does, so a pair near the ten-minute window\'s edge can cluster or release in one lane and not in the other, the lane with more passes may act sooner, and the comparison below is claimed only for the passes and evidence both lanes share',
       'The breaker\'s clustering is monotone (§5.4), so for the passes, anchors and evidence both lanes share a restarted lane\'s breaker stands wherever an unrestarted lane\'s does when the restarted lane\'s population differs only by claimants the unrestarted lane has already ended. A claimant the unrestarted lane ended that returns under a new run is covered by the episode boundary: a supervisor heartbeat later than its durable anchor starts a fresh anchor at its next crash, so the restarted lane carries the new instant beside every one it remembers (D-4825). That rests on a heartbeat or a journaled successful spawn (D-4827): a return that leaves neither is not seen, in remote mode a fleet clock behind the server\'s can hide one, and no claim is made that no other corner exists',
@@ -339,6 +340,12 @@ describe('fix round 6 words (review 411, F4-F7; D-4916)', () => {
     expect(w).not.toContain('a sealed start writes NOTHING else');
     expect(w).toContain('`unseal-pending` (D-4916): a sealed start whose unseal has not landed. No breaker state or anchor is written (a tripping pass\'s feed row may be) and no act is composed');
     expect(w).not.toContain('whose unseal has not landed. NOTHING is written and no act is composed');
+    // Carried to the spec and the plan too (review of fix round 6, finding 2).
+    for (const doc of ['docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md', 'docs/superpowers/plans/2026-10-11-workspace-lifecycle-wave6-resumed-expiry-and-arming-close-out.md']) {
+      const d = read(doc);
+      expect(d, doc).toContain('until that unseal has landed a sealed start writes no breaker state or anchor beyond it (a tripping pass\'s feed row may still be written; a later mark or commit does not count in its place)');
+      expect(d, doc).not.toContain('a sealed start writes nothing else');
+    }
   });
   it('F6: the stale words are true', () => {
     const w = src('server/src/watch.ts');

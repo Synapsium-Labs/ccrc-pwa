@@ -20,7 +20,9 @@
 // A handler that waited past its bound would turn a stop into a SIGKILL after systemd's timeout (90 s by default; the unit
 // sets none); the bound is 5 s: a pass in flight asks tmux about a handful of coordinators, one agent round trip each, and
 // the seal itself is one local statement. A pass that outlives it is not awaited and nothing is sealed: the next start seeds
-// conservatively, which is the cost of an unclean exit and never an early act.
+// conservatively, which is the cost of an unclean exit and never an early act — unless no write of this server landed and
+// the state still reads sealed (a bound overrun on a sealed start's first pass, before its unseal), when the old seal stands
+// and is trusted, correctly, since this server changed nothing.
 import type { DeadCoordinatorSealResult } from './deadCoordinator.js';
 
 /** The one total bound, in milliseconds, a shutdown waits on the seal. */
@@ -43,12 +45,13 @@ export interface SignalHost {
 const SIGNALS: readonly NodeJS.Signals[] = ['SIGTERM', 'SIGINT'];
 
 /** What the next start does after a refused seal (review 411, F3). Two refusals write nothing and leave the state as it
- *  stands, which may be a seal the next start TRUSTS; every other one leaves a state it does not trust and seeds conservatively. */
+ *  stands, which may be a seal the next start TRUSTS; every other one, the bound and a throw seed conservatively unless no write of this server landed and the state still reads sealed (a bound
+ *  overrun before a sealed start's unseal), when the seal stands and is trusted (review of fix round 6, finding 1). */
 function refusalTail(reason: Extract<DeadCoordinatorSealResult, { sealed: false }>['reason']): string {
   switch (reason) {
     case 'already-sealed': return 'the state is already sealed, which the next start trusts';
     case 'no-landed-write': return 'nothing was written; the state stands as the last server left it, and the next start trusts it only if it reads sealed';
-    default: return 'the next start seeds it conservatively';
+    default: return 'the next start seeds it conservatively, unless no write of this server landed and the state still reads sealed';
   }
 }
 
@@ -66,11 +69,11 @@ export function installShutdownSeal(
         try { watcher.stop(); } catch (err) { log.warn(`ccrc-server: shutdown: the watcher did not stop (${err instanceof Error ? err.message : String(err)})`); }
         const bound = new Promise<'over'>((resolve) => { timer = setTimeout(() => resolve('over'), boundMs + 500); });
         const out = await Promise.race([watcher.sealDeadCoordinatorBreaker(boundMs), bound]);
-        if (out === 'over') log.warn(`ccrc-server: shutdown: the dead-coordinator breaker's state was not sealed (no answer within ${boundMs} ms) — the next start seeds it conservatively`);
+        if (out === 'over') log.warn(`ccrc-server: shutdown: the dead-coordinator breaker's state was not sealed (no answer within ${boundMs} ms) — the next start seeds it conservatively, unless no write of this server landed and the state still reads sealed`);
         else if (!out.sealed) log.warn(`ccrc-server: shutdown: the dead-coordinator breaker's state was not sealed (${out.reason}) — ${refusalTail(out.reason)}`);
         else log.log('ccrc-server: shutdown: the dead-coordinator breaker\'s state is sealed');
       } catch (err) {
-        log.warn(`ccrc-server: shutdown: the dead-coordinator breaker's state was not sealed (${err instanceof Error ? err.message : String(err)}) — the next start seeds it conservatively`);
+        log.warn(`ccrc-server: shutdown: the dead-coordinator breaker's state was not sealed (${err instanceof Error ? err.message : String(err)}) — the next start seeds it conservatively, unless no write of this server landed and the state still reads sealed`);
       } finally {
         if (timer !== undefined) clearTimeout(timer);
         removeAll();

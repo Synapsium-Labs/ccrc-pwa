@@ -104,6 +104,8 @@ describe('installShutdownSeal: the handler\'s order, its bound, and that it neve
       const line = await refusalLine(reason);
       expect(line).toContain(`(${reason})`);
       expect(line).toContain('the next start seeds it conservatively');
+      // A bound overrun on a sealed start's first pass leaves the seal standing (review of fix round 6, finding 1).
+      expect(line).toContain('unless no write of this server landed and the state still reads sealed');
     });
   }
   it('a seal that does not answer within the bound says the next start seeds it conservatively', async () => {
@@ -112,7 +114,7 @@ describe('installShutdownSeal: the handler\'s order, its bound, and that it neve
     installShutdownSeal({ stop: () => {}, sealDeadCoordinatorBreaker: () => new Promise<never>(() => {}) }, r.host, 40, l.log);
     r.fire('SIGTERM');
     await settle(() => r.events.some((e) => e.startsWith('kill')), 3000);
-    expect(l.lines.filter((x) => x.startsWith('warn') && x.includes('no answer within 40 ms') && x.includes('the next start seeds it conservatively'))).toHaveLength(1);
+    expect(l.lines.filter((x) => x.startsWith('warn') && x.includes('no answer within 40 ms') && x.includes('the next start seeds it conservatively') && x.includes('unless no write of this server landed and the state still reads sealed'))).toHaveLength(1);
   });
   it('A DIFFERENT signal during the bound (a SIGINT inside a SIGTERM\'s) is handled by the other listener, still installed: the first signal\'s handler re-raises first, and the process dies of it (review 411, F3)', async () => {
     const r = recorder();
@@ -196,7 +198,8 @@ afterEach(async () => {
  *  `CCRC_FLEET`, `CCRC_AGENT_URL`, `CCRC_PROJECTS_ROOT`, `CCRC_MAIL_TOKEN_PATH`, `CCRC_ACCOUNTS`, no `HOME` — can point the
  *  spawned server off the fixture, because none of it is passed on. `HOME` is the fixture too, so a path defaulted from
  *  `homedir()` lands in it. `TMPDIR` is a SHORT directory of its own: tsx opens an IPC socket under it, and a long path
- *  (a runner whose TMPDIR is on a deep mount) fails the spawn with `listen EINVAL`. */
+ *  (a runner whose TMPDIR is on a deep mount) fails the spawn with `listen EINVAL`. `TMUX_TMPDIR` is that directory too, so
+ *  a tmux call the child makes never reaches the operator's default socket. */
 const childEnv = (home: string, port: number, tmp: string): NodeJS.ProcessEnv => ({
   PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
   ...(process.env.LANG === undefined ? {} : { LANG: process.env.LANG }),
@@ -205,6 +208,9 @@ const childEnv = (home: string, port: number, tmp: string): NodeJS.ProcessEnv =>
   CCRC_HOME: home,
   CCRC_HOST: '127.0.0.1',
   CCRC_PORT: String(port),
+  // tmux too (review of fix round 6, finding 3): the child's tmux socket lives under the short directory, never the
+  // operator's default socket.
+  TMUX_TMPDIR: tmp,
 });
 
 const writeRoster = (home: string): void => {
@@ -230,6 +236,15 @@ const stateWord = (db: string): string | null => {
     return row?.state ?? null;
   } catch { return null; } finally { raw.close(); }
 };
+
+describe('the child\'s environment (review 411, F9; review of fix round 6, finding 3)', () => {
+  it('carries no CCRC_* key beyond its own three, and points tmux at the short directory, never the default socket', () => {
+    const env = childEnv('/fixture-home', 1, '/short');
+    expect(Object.keys(env).filter((k) => k.startsWith('CCRC_')).sort()).toEqual(['CCRC_HOME', 'CCRC_HOST', 'CCRC_PORT']);
+    expect(env.TMUX_TMPDIR).toBe('/short');
+    expect(env.TMUX).toBeUndefined();
+  });
+});
 
 describe('the real composition root installs the handler (D-4916)', () => {
   it('SIGTERM to the server whose lane has run seals the breaker\'s state, and the process dies OF THE SIGNAL', async () => {
