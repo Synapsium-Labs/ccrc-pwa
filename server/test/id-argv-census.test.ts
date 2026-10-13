@@ -16,7 +16,8 @@
 // Gates: each names a check by its HOME (file, scope, text). When the home is the call's own scope, its text must
 // stand above the call. When the call's scope reaches a gate that lives elsewhere, the row's `entry` must stand above
 // the call. A gate in a caller (close's gates above `closeReviewRun` and `verifyDone`, dispatch's gate above
-// `refuseSpentChild`) is pinned at its home only.
+// `refuseSpentChild`) is pinned at its home only. A row whose gate lives in another scope and that has no `entry` is
+// guarded through its callers: `stopArgvFor`'s three call sites and the `childSpent` helpers' callers have a case below.
 //
 // WHAT THIS DOES NOT COVER, stated plainly:
 // - It recognises a call by the literal text `CCD_ARGV.<name>(`. An argv obtained any other way is invisible to it;
@@ -257,6 +258,13 @@ const GATES = {
     file: 'server.ts', scope: 'POST /api/sessions/:id/swap',
     re: /if \(body\.crossPool === true\) \{\s*if \(!isRegistryId\(id\)\)/,
   },
+  /** The legacy stop pair's two parts, the wrapper and the row's `.project`, are fields no id gate reads. This refuses a row
+   *  whose part is not a registry id; a workspace row stops by its id, which the callers' id gates have vetted. Both of
+   *  `stopArgvFor`'s callers ask it in their identity arm (pinned in the callers case below). */
+  'stop-pair-refused': {
+    file: 'server.ts', scope: 'stopPairRefused',
+    re: /if \(rec\.workspace !== null\) return false;\s*return !isRegistryId\(stopPairWrapper\(id, rec, identity\)\) \|\| !isRegistryId\(rec\.project\);/,
+  },
   /** `readSessionRecord` answers `bad-id` before any listing, so a caller only ever holds a found row's valid id. */
   readSessionRecord: {
     file: 'registry.ts', scope: 'readSessionRecord',
@@ -340,13 +348,18 @@ interface CensusRow {
 
 const KNOWN_ID = /\bknownId\(\s*id\s*\)/;
 
+/** `sweepNames` walks `readRegistry`'s own output, which never carries a refused row. */
+const SWEEP_NAMES_LISTING = /\bconst records = await readRegistry\(this\.deps\.io, this\.deps\.cfg\);\s*for \(const r of records\) \{/;
+
 /** The 41 calls. Rows of one key (file, scope, builder, id) are in source order. */
 const CENSUS: readonly CensusRow[] = [
   // coord/childReclaim.ts: the close path's child gate (masked by close's gates) and the sweep both reach the one executor.
   { file: 'coord/childReclaim.ts', scope: 'childReclaimAudit', builder: 'wsReclaimAudit', id: 'req.sessionId', origin: ['stored', 'registry'], gate: ['child-reclaim-outcome'] },
   { file: 'coord/childReclaim.ts', scope: 'childReclaimAct', builder: 'wsReclaim', id: 'req.sessionId', origin: ['stored', 'registry'], gate: ['child-reclaim-outcome'] },
   { file: 'coord/childReclaim.ts', scope: 'releaseRetiredChildHold', builder: 'wsRelease', id: 'sessionId', origin: ['registry'], gate: ['readSessionRecord'], entry: /\breadSessionRecord\(deps\.io, deps\.cfg, sessionId\)/ },
-  // coord/childSpent.ts: `rec` is a FOUND row of `readSessionRecord` (childBindGate, childGateAtClose).
+  // coord/childSpent.ts: `rec` is a FOUND row of `readSessionRecord` (childBindGate, childGateAtClose). The read is in
+  // the callers, so the row has no `entry`: the callers case below pins who calls `childSpent` and `childSpentLive`, and
+  // the read above each caller's call.
   { file: 'coord/childSpent.ts', scope: 'childSpentLive', builder: 'prStateSession', id: 'rec.id', origin: ['stored', 'request'], gate: ['readSessionRecord'] },
   // coord/close.ts: the abandon arm's fleet act, then the coordinator close's three acts, then the review close's two.
   { file: 'coord/close.ts', scope: 'closeRun', builder: 'wsHold', id: 'run.sessionId', origin: ['stored'], gate: ['close-abandon-branch'] },
@@ -380,9 +393,10 @@ const CENSUS: readonly CensusRow[] = [
   // stopArgvFor's two callers gate the id: /stop by readSessionRecord, /archive by knownId (pinned in their own case below).
   { file: 'server.ts', scope: 'stopArgvFor', builder: 'stopId', id: 'id', origin: ['request'], gate: ['readSessionRecord', 'knownId'] },
   // The wrapper is the request id's own prefix, or the row's `.wrapper` when the id does not end in `-<project>`; the
-  // project is the row's `.project`. These gates vet the request id; both fields are vetted in each caller's identity
-  // arm by `stopPairRefused` (Task 14), whose own cases and mutation rows pin it.
-  { file: 'server.ts', scope: 'stopArgvFor', builder: 'stopPair', id: 'originalWrapper', origin: ['request', 'registry'], gate: ['readSessionRecord', 'knownId'] },
+  // project is the row's `.project`: fields no id gate reads, so the request-id gates do not guard this slot.
+  // `stopPairRefused` does, asked in each caller's identity arm (the callers case below). The `entry` ties what it vets
+  // (`stopPairWrapper(id, rec, identity)` and `rec.project`) to the two arguments composed here.
+  { file: 'server.ts', scope: 'stopArgvFor', builder: 'stopPair', id: 'originalWrapper', origin: ['request', 'registry'], gate: ['stop-pair-refused'], entry: /\bconst originalWrapper = stopPairWrapper\(id, rec, identity\);\s*return CCD_ARGV\.stopPair\(originalWrapper, rec\.project, surface\);/ },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/swap', builder: 'swapCross', id: 'id', origin: ['request'], gate: ['cross-arm-head'] },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/swap', builder: 'swap', id: 'id', origin: ['request'], gate: ['readSessionRecord'], entry: /\breadSessionRecord\(deps\.io, deps\.cfg, id\)/ },
   { file: 'server.ts', scope: 'GET /api/sessions/:id/pr', builder: 'prStateSession', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
@@ -394,9 +408,10 @@ const CENSUS: readonly CensusRow[] = [
   { file: 'server.ts', scope: 'POST /api/sessions/:id/release', builder: 'wsRelease', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
   { file: 'server.ts', scope: 'GET /api/sessions/:id/workspace/audit', builder: 'wsAudit', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/workspace/reap', builder: 'wsReap', id: 'id', origin: ['request'], gate: ['knownId'], entry: KNOWN_ID },
-  // watch.ts: the naming sweep's rows come from the listing, which never builds a refused name.
-  { file: 'watch.ts', scope: 'sweepNames', builder: 'wsRename', id: 'r.id', origin: ['registry'], gate: ['registry-refused'] },
-  { file: 'watch.ts', scope: 'sweepNames', builder: 'wsRename', id: 'r.id', origin: ['registry'], gate: ['registry-refused'] },
+  // watch.ts: the naming sweep's rows come from the listing, which never builds a refused name; the `entry` ties the
+  // loop's `r` to `readRegistry`'s output.
+  { file: 'watch.ts', scope: 'sweepNames', builder: 'wsRename', id: 'r.id', origin: ['registry'], gate: ['registry-refused'], entry: SWEEP_NAMES_LISTING },
+  { file: 'watch.ts', scope: 'sweepNames', builder: 'wsRename', id: 'r.id', origin: ['registry'], gate: ['registry-refused'], entry: SWEEP_NAMES_LISTING },
 ];
 
 /** The files whose gates ask the predicate themselves. */
@@ -472,7 +487,7 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
     expect(Object.keys(GATES).filter((g) => !used.has(g)), 'a gate no call names').toEqual([]);
   });
 
-  it("stopArgvFor's two callers each gate the id before they compose it", () => {
+  it("stopArgvFor's three call sites each stand below their id gate and the pair-part refusal", () => {
     const lines = codeOnly(readFileSync(path.join(srcRoot, 'server.ts'), 'utf8')).split('\n');
     const heads = headsOf(lines);
     const callers = lines.flatMap((l, i) => (/\bstopArgvFor\(/.test(l) && !/\bfunction stopArgvFor\(/.test(l)
@@ -483,13 +498,18 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
       'POST /api/sessions/:id/archive',
       'POST /api/sessions/:id/archive',
     ]);
-    const GATE_OF: Readonly<Record<string, RegExp>> = {
-      'POST /api/sessions/:id/stop': /\breadSessionRecord\(deps\.io, deps\.cfg, id\)/,
-      'POST /api/sessions/:id/archive': KNOWN_ID,
+    // The identity arm, which both routes share: `stopPairRefused` (the `stopPair` row's gate) answers 503 with no argv
+    // composed. It guards the pair's wrapper and project, which neither id gate reads.
+    const IDENTITY_ARM = /if \(identity === null \|\| stopPairRefused\(id, read\.record, identity\)\) \{\s*return reply\.code\(503\)\.send\(\{ ok: false, error: 'registry-unmeasurable' \}\);/;
+    const GATES_OF: Readonly<Record<string, readonly (readonly [string, RegExp])[]>> = {
+      'POST /api/sessions/:id/stop': [['its id gate', /\breadSessionRecord\(deps\.io, deps\.cfg, id\)/], ['stopPairRefused', IDENTITY_ARM]],
+      'POST /api/sessions/:id/archive': [['its id gate', KNOWN_ID], ['stopPairRefused', IDENTITY_ARM]],
     };
     for (const c of callers) {
       const before = lines.slice(c.head!.line, c.line + 1).join('\n');
-      expect(before, `${c.head!.name}: its gate stands above stopArgvFor(`).toMatch(GATE_OF[c.head!.name]!);
+      for (const [what, re] of GATES_OF[c.head!.name]!) {
+        expect(before, `${c.head!.name} (line ${c.line + 1}): ${what} stands above stopArgvFor(`).toMatch(re);
+      }
     }
   });
 
@@ -509,7 +529,10 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
   it('each helper whose gate stands in its caller is called only from that caller', () => {
     // A row whose gate's home is another scope, and that carries no `entry`, is guarded only through its callers, as
     // `stopArgvFor` is (the case above). A new CALL of a builder is the scan's to find; a new CALLER of such a helper,
-    // one that skips the gate, is this case's.
+    // one that skips the gate, is this case's. `childSpent` and `childSpentLive` take a ROW, not an id: the
+    // `readSessionRecord` that vets it stands in their callers `childBindGate` and `childGateAtClose`, which pass the
+    // found read's `record`, so each of those callers is also pinned to read first (READ_ABOVE). `childSpent` handing its
+    // own parameter on to `childSpentLive` adds no gate of its own: its callers vet it.
     const CALLERS: Readonly<Record<string, readonly string[]>> = {
       closeReviewRun: ['coord/close.ts | closeRun'],
       refuseSpentChild: ['coord/dispatch.ts | dispatchRun'],
@@ -518,19 +541,46 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
       childReclaimAudit: ['coord/childReclaim.ts | childReclaimOutcome'],
       childReclaimAct: ['coord/childReclaim.ts | childReclaimOutcome'],
       collectAudit: ['coord/collectTempRoot.ts | collectTempRoot', 'coord/collectTempRoot.ts | learnCollect'],
+      childSpent: ['coord/childBind.ts | childBindGate', 'coord/close.ts | childGateAtClose'],
+      childSpentLive: ['coord/childSpent.ts | childSpent', 'coord/close.ts | childGateAtClose'],
     };
+    /** `<callee> <- <file> | <scope>`: the caller reads the row first and passes the found read's `record`. */
+    const READ_ABOVE: Readonly<Record<string, RegExp>> = {
+      'childSpent <- coord/childBind.ts | childBindGate':
+        /\breadSessionRecord\(deps\.io, deps\.cfg, sessionId\)[\s\S]*\bchildSpent\(deps, read\.record, birth\)/,
+      'childSpent <- coord/close.ts | childGateAtClose':
+        /\breadSessionRecord\(deps\.io, deps\.cfg, sessionId\)[\s\S]*\bchildSpent\(deps, read\.record, birth, line\)/,
+      'childSpentLive <- coord/close.ts | childGateAtClose':
+        /\breadSessionRecord\(deps\.io, deps\.cfg, sessionId\)[\s\S]*\bchildSpentLive\(deps, read\.record, birth\)/,
+    };
+    const readChecked = new Set<string>();
     for (const [callee, want] of Object.entries(CALLERS)) {
       const call = new RegExp(`\\b${callee}\\(`);
       const def = new RegExp(`\\bfunction ${callee}\\(`);
-      const found = sourcesUnder(srcRoot).flatMap((f) => {
+      const sites = sourcesUnder(srcRoot).flatMap((f) => {
         const code = codeOnly(readFileSync(f, 'utf8'));
-        const heads = headsOf(code.split('\n'));
-        return blankStrings(code).split('\n').flatMap((l, i) => (call.test(l) && !def.test(l)
-          ? [`${rel(f)} | ${lastHeadAtOrBefore(heads, i)?.name ?? '(no scope)'}`]
-          : []));
+        const lines = code.split('\n');
+        const heads = headsOf(lines);
+        return blankStrings(code).split('\n').flatMap((l, i) => {
+          if (!call.test(l) || def.test(l)) return [];
+          const head = lastHeadAtOrBefore(heads, i);
+          return [{
+            where: `${rel(f)} | ${head?.name ?? '(no scope)'}`,
+            line: i + 1,
+            before: head === null ? '' : lines.slice(head.line, i + 1).join('\n'),
+          }];
+        });
       });
-      expect(found.sort(), `${callee}'s callers`).toEqual([...want].sort());
+      expect(sites.map((s) => s.where).sort(), `${callee}'s callers`).toEqual([...want].sort());
+      for (const s of sites) {
+        const key = `${callee} <- ${s.where}`;
+        const need = READ_ABOVE[key];
+        if (need === undefined) continue;
+        readChecked.add(key);
+        expect(s.before, `${key} (line ${s.line}): its readSessionRecord stands above the call, which passes read.record`).toMatch(need);
+      }
     }
+    expect([...readChecked].sort(), 'every READ_ABOVE pin was exercised by a call').toEqual(Object.keys(READ_ABOVE).sort());
   });
 
   it('CONTROL: the scan sees a call, and ignores a comment, a string and a definition', () => {
