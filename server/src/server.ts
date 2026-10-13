@@ -3264,6 +3264,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // wrapper, i.e. no task list could be looked for at all — and `draftPr`
   // treats that as "print no Plan section", same as an empty list.
   const prTasks = async (id: string): Promise<TaskItem[] | null> => {
+    // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
     const rec = (await readRegistry(deps.io, deps.cfg)).find((r) => r.id === id);
     const cfgDir = rec ? configDirFor(deps.cfg, rec.wrapper) : undefined;
     return rec && cfgDir ? (await readTasks(deps.io, cfgDir, rec.uuid)).tasks : null;

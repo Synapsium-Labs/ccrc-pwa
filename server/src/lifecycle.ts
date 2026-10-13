@@ -160,6 +160,7 @@ export async function listProjects(
       byWorkdir.set(workdir, { name, workdir });
     }
   }
+  // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
   for (const rec of await readRegistry(io, cfg)) {
     if (!byWorkdir.has(rec.workdir) && !(await isLinkedWorktree(io, rec.workdir))) {
       byWorkdir.set(rec.workdir, { name: rec.project, workdir: rec.workdir });

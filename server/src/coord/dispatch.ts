@@ -556,6 +556,7 @@ export async function dispatchRun(
     // count as pre-existing, which is always the SAFE direction to be
     // wrong in here: at worst a real id gets treated as new and trips
     // `ambiguous-dispatch` below, never silently misbound).
+    // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
     const before = await readRegistry(deps.io, deps.cfg);
     const beforeIds = new Set(before.map((r) => r.id));
     // `wsAddWorker`, not `wsAdd`: this is the one call site that knows the
@@ -638,6 +639,7 @@ export async function dispatchRun(
     // `killed` + `held` are what REPLACE the lost precondition: the first says a
     // spawn really was interrupted here and now, the second is fail-shut and says
     // nothing else has claimed the row.
+    // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
     const afterRead = await readRegistryMeasured(deps.io, deps.cfg);
     if (!afterRead.listed ||
         afterRead.records.some((r) => r.project === run.project && measuredIdentity(r) === null)) {
@@ -795,6 +797,7 @@ export async function dispatchRun(
     // draws that line explicitly: `!listed` refuses OUTRIGHT, before
     // `record` is ever computed, so `record === undefined` past this point
     // means only the first, tolerated case — never the second.
+    // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
     const registryRead = await readRegistryMeasured(deps.io, deps.cfg);
     if (!registryRead.listed) {
       return { ok: false, kind: 'registry-unmeasurable' };

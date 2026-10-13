@@ -109,6 +109,7 @@ export async function resolveDoneBranch(
   // and are refused `tip-unmeasurable` immediately below. A `worker_done`
   // this refuses is replayed and re-verified on the next sweep the same as
   // any other refusal (spec:174-177, D-10).
+  // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
   const registryRead = await readRegistryMeasured(deps.io, deps.cfg);
   if (!registryRead.listed) {
     return { ok: false, code: 'tip-unmeasurable',

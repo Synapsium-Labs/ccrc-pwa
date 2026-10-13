@@ -1090,6 +1090,27 @@ async function buildRecord(
   };
 }
 
+/** Path identity (spec §2.3): the refused ids already logged. A refused id is a
+ *  listed `.uuid` basename, minus `.uuid`, that is not a registry id. This set is
+ *  SEPARATE from `warnState` on purpose. `pruneWarnState` gets an id back as
+ *  everything before a key's first `#`, and a refused name is an arbitrary file
+ *  name that may hold one. Keyed there, `a#b` would be pruned as `a` on every
+ *  listing and logged again on every tick. */
+const refusedLogged = new Set<string>();
+
+/** One `console.warn` per refused id while it stays listed. The set is pruned to
+ *  the current refused set first, so a name that leaves the listing and comes
+ *  back is logged again. The name is quoted by `JSON.stringify`, so a newline or
+ *  a control byte in a file name cannot forge a second log line. */
+function noteRefused(refused: ReadonlySet<string>): void {
+  for (const id of refusedLogged) if (!refused.has(id)) refusedLogged.delete(id);
+  for (const id of refused) {
+    if (refusedLogged.has(id)) continue;
+    refusedLogged.add(id);
+    console.warn(`ccrc-server: registry lists ${JSON.stringify(`${id}.uuid`)}, which is not a registry id — it is never read and never composed`);
+  }
+}
+
 /** The whole-fleet read, typed (architecture doc, increment 1's second half):
  *  `listed: false` is the `io.readdir` collapse itself — the LARGER cousin of
  *  a single unmeasured field, and now distinguishable from "the registry
@@ -1106,9 +1127,18 @@ async function buildRecord(
  *  would disagree on exactly the ticks that matter. It is the FIRST listing,
  *  deliberately: the re-listing below exists to resolve a per-row reap race,
  *  runs on some calls only, and hanging the markers' cadence on it would make
- *  the banner's clock depend on whether an unrelated session was mid-reap. */
+ *  the banner's clock depend on whether an unrelated session was mid-reap.
+ *
+ *  `refused` (path identity, spec §2.3) holds the IDS, each `.uuid` basename
+ *  minus `.uuid`, of the listed rows that are not registry ids (`isRegistryId`,
+ *  shared/api.ts). For every listed id `x`, `refused.has(x)` holds exactly when
+ *  `!isRegistryId(x)`, so it is a pure function of the listing. A refused row is
+ *  never read, never built and never in `records`, so no caller can compose it.
+ *  Its raw name stays in `names`, which is the listing, not a list of sessions.
+ *  Each caller classifies what a refused row means to it; the census in
+ *  `registry-refused-census.test.ts` pins every call. */
 export type RegistryRead =
-  | { listed: true; records: SessionRecord[]; names: readonly string[] }
+  | { listed: true; records: SessionRecord[]; names: readonly string[]; refused: ReadonlySet<string> }
   | { listed: false };
 
 export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promise<RegistryRead> {
@@ -1116,8 +1146,16 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promis
   const names = await io.readdir(cfg.registryDir);
   noteWholeFleetListing(names !== null, now);
   if (names === null) return { listed: false };
-  const ids = names.filter((n) => n.endsWith('.uuid')).map((n) => n.slice(0, -'.uuid'.length)).sort();
+  // Path identity (spec §2.3): a listed id that is not a registry id is
+  // REFUSED here, before the loop. It is never handed to `buildRecord`, so
+  // none of its fields is read and none of its `noteIssue` keys is minted. It
+  // is never in `records`, so no caller can compose it. `pruneWarnState` sees
+  // the valid ids only; `noteRefused` logs each refused id once.
+  const listedIds = names.filter((n) => n.endsWith('.uuid')).map((n) => n.slice(0, -'.uuid'.length)).sort();
+  const ids = listedIds.filter((x) => isRegistryId(x));
+  const refused: ReadonlySet<string> = new Set(listedIds.filter((x) => !isRegistryId(x)));
   pruneWarnState(new Set(ids));
+  noteRefused(refused);
   const out: SessionRecord[] = [];
   /** Ids whose `.hold` was in `names` but whose bytes came back null. Resolved
    *  after the loop by ONE second listing — see below. */
@@ -1170,13 +1208,14 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promis
       }
       // `names`, not `again`: the FIRST listing is the one every caller shares
       // (D-283). `again` answers a different question, on some calls only.
-      if (retired.size > 0) return { listed: true, records: out.filter((r) => !retired.has(r.id)), names };
+      if (retired.size > 0) return { listed: true, records: out.filter((r) => !retired.has(r.id)), names, refused };
     }
   }
-  return { listed: true, records: out, names };
+  return { listed: true, records: out, names, refused };
 }
 
 export async function readRegistry(io: FleetIO, cfg: CcrcConfig): Promise<SessionRecord[]> {
+  // [registry-refused:wrapper] answers records only, so a refused row reads as absent to every caller of this wrapper.
   const r = await readRegistryMeasured(io, cfg);
   return r.listed ? r.records : [];
 }

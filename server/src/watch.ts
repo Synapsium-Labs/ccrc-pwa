@@ -1946,6 +1946,7 @@ export class FleetWatcher {
       // `!registryRead.listed` return) and `registry.ts`'s own docstring
       // states for this exact read: "a failed second listing proves nothing
       // and changes nothing".
+      // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
       const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
       // BEFORE the fail-shut return below, and on BOTH arms (D-283 (was D-B4-10)). An
       // unlistable registry is not "nothing is set": it is the exact state
@@ -2767,6 +2768,7 @@ export class FleetWatcher {
       // UNTOUCHED on `{listed:false}` rather than rebuilt from an empty `[]`
       // — a failed listing must not wipe every retained entry the branch
       // below exists to protect.
+      // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
       const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
       if (!registryRead.listed) return;
       recs = registryRead.records;
@@ -2856,6 +2858,7 @@ export class FleetWatcher {
     // failed listing still consumes this sweep's slot rather than retrying
     // every 2 s tick, the same throttle discipline every other sweep here
     // keeps.
+    // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
     const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
     if (!registryRead.listed) return;
     const records = registryRead.records;
@@ -3010,6 +3013,7 @@ export class FleetWatcher {
     // is the pane's branch, else the worktree HEAD's, else this (fleet.ts), so it
     // lags a rename by however long Claude Code takes to re-render its pane.
     // Same reason sweepTasks and sweepPr read the registry themselves.
+    // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
     const records = await readRegistry(this.deps.io, this.deps.cfg);
     for (const r of records) {
       // SKIP a degraded row before anything else: an unmeasured `uuid`
@@ -6049,6 +6053,7 @@ export class FleetWatcher {
     // own unreadable listing already does three lines up, rather than
     // silently emptying `records` and letting every row downstream mistake
     // "we could not read the fleet this pass" for "this recipient is gone".
+    // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
     const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
     if (!registryRead.listed) return;
     const records = registryRead.records;
@@ -6726,6 +6731,7 @@ export class FleetWatcher {
     const mySweep = now;
     this.prSweepStartedAt = mySweep;
     try {
+      // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
       const records = await readRegistry(this.deps.io, this.deps.cfg);
       const projects = [...new Set(records.filter((r) => r.workspace !== null).map((r) => r.project))];
       for (const project of projects) {
@@ -7167,6 +7173,7 @@ export class FleetWatcher {
    */
   private async detectDialogs(notify: boolean, records?: SessionRecord[]): Promise<Set<string>> {
     const pending = new Set<string>();
+    // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
     const recs = records ?? await readRegistry(this.deps.io, this.deps.cfg);
     for (const r of recs) {
       const pane = await this.deps.tmux.capture(r.id);

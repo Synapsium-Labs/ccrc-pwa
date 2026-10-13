@@ -621,6 +621,7 @@ export function registerCoordRoutes(
         detail: 'the registry directory could not be listed — transient, not a fact about the sender' });
       return false;
     }
+    // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
     const registry = await readRegistry(deps.io, deps.cfg);
     const row = registry.find((r) => r.id === whoId);
     if (!row) {
@@ -826,6 +827,7 @@ export function registerCoordRoutes(
       return refuse(reply, 502, 'registry-unmeasurable', { fromId, toId, kind, subject, runId },
         'the registry directory could not be listed — transient, not a fact about the sender');
     }
+    // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
     const registry = await readRegistry(deps.io, deps.cfg);
 
     // 5: sender — a registry row must exist for fromId.
@@ -1056,6 +1058,7 @@ export function registerCoordRoutes(
       return refuse(reply, 502, 'registry-unmeasurable', { fromId },
         'the registry directory could not be listed — transient, not a fact about the sender');
     }
+    // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
     const registry = await readRegistry(deps.io, deps.cfg);
     const sender = registry.find((r) => r.id === fromId);
     if (!sender) {
@@ -3164,6 +3167,7 @@ export function registerCoordRoutes(
     // `records` parameter's contract: every lane of one pass describes one
     // observation) — this route needs them itself for `uuid`, which
     // `FleetSession` does not carry.
+    // [registry-refused:unplaced] refused rows never reach these records; this caller's answer is not yet placed.
     const recs = await readRegistry(deps.io, deps.cfg);
     const recById = new Map(recs.map((r) => [r.id, r]));
     const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,

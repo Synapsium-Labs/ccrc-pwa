@@ -268,9 +268,18 @@ describe('POST /api/runs/:id/route', () => {
 
   it('409s bad-session for target worker when the dispatched sessionId is not a legal shape (a routable record, so without the guard this would 200 and write an unparseable event)', async () => {
     const home = mkTmp('ccrc-route-');
-    const { run } = makeRunner(home, { wsAddCreates: ['bad worker'] });
+    const { run } = makeRunner(home);
     const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
-    const { id, sid } = await dispatchedRun(w.app, 'bad worker');
+    // Seeded through the store, not the dispatch route (path identity, spec
+    // §2.3). `readRegistryMeasured` refuses a listed row whose id is not a
+    // registry id, so a fresh dispatch can no longer adopt `bad worker` as its
+    // spawn. The stored row this door reads is one a build before that
+    // refusal could have written.
+    const opened = (await postOpen(w.app)).json() as { id: number };
+    const id = opened.id;
+    const sid = 'bad worker';
+    w.coord.markDispatched(id, sid, sid, `ws/${sid}`, false);
+    w.coord.db.prepare("UPDATE runs SET state = 'dispatched' WHERE id = ?").run(id);
     seed(home, sid, { class: 'opus', effort: 'high' });
     const res = await postRoute(w.app, id, { target: 'worker', why: 'x', kind: 'shallow' });
     expect(res.statusCode).toBe(409);
