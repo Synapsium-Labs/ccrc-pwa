@@ -4,7 +4,7 @@
 // wells that scroll inside the bubble). System events are centered dividers.
 import { useState, type ReactNode } from 'react';
 import type { ChatEvent } from '../../../shared/api';
-import { splitClipPaths } from '../../../shared/api';
+import { isImageClip, splitClipPaths } from '../../../shared/api';
 import { clipUrl } from '../lib/api';
 import { resetClock } from '../lib/clock';
 import { ChatMarkdown, openExternal } from '../lib/markdown';
@@ -97,7 +97,11 @@ function FoldedCard({
 }
 
 /** Sent attachments. A clip deleted off disk must degrade to its name, never
- *  to a broken-image box. */
+ *  to a broken-image box — and a DOCUMENT must never be asked to be an image in
+ *  the first place. `<img src="…/clip-x.md">` reaches the same `msg-attach-gone`
+ *  fallback, but only by failing to decode a file that is perfectly fine, so a
+ *  clip present on disk would render as "deleted". The extension decides, before
+ *  any request goes out. */
 function ClipThumbs({ id, paths }: { id: string; paths: string[] }): ReactNode {
   const [broken, setBroken] = useState<Set<string>>(new Set());
   return (
@@ -106,6 +110,18 @@ function ClipThumbs({ id, paths }: { id: string; paths: string[] }): ReactNode {
         const name = p.slice(p.lastIndexOf('/') + 1);
         if (broken.has(p)) return <span key={p} className="msg-attach-gone">{name}</span>;
         const href = clipUrl(id, name);
+        if (!isImageClip(name)) {
+          return (
+            <a
+              key={p}
+              href={href}
+              className="msg-attach-doc"
+              onClick={(e) => openExternal(e, href)}
+            >
+              {name}
+            </a>
+          );
+        }
         return (
           <a key={p} href={href} className="msg-img-link" onClick={(e) => openExternal(e, href)}>
             <img
