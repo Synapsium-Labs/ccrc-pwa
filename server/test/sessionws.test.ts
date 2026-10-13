@@ -1764,6 +1764,83 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
       }
     });
 
+    it('…and a followed file whose stat FAILS on the move tick is still there: only a proven ENOENT is gone ' +
+       '(SV-1, D-4946)', async () => {
+      // The keep's "gone" is the same one `repointNeeded` uses. Calling an
+      // unreadable stat "gone" re-opens the door this rule closed: the one
+      // tick on which the registry lands behind AND the followed file's stat
+      // drops (one agent RPC timing out, in remote mode) sent B's backlog.
+      const home = mkTmp('ccrc-sv1-unread-');
+      const { b, c } = twoHops(home);
+      let failB = 0;
+      let failC = 0;
+      const io: FleetIO = {
+        ...localIO,
+        readFileFromMeasured: async (p, off) => {
+          if (p === b && failB > 0) { failB -= 1; return { ok: false, reason: 'unreadable' }; }
+          return localIO.readFileFromMeasured(p, off);
+        },
+        statMeasured: async (p) => {
+          if (p === c && failC > 0) { failC -= 1; return { ok: false, reason: 'unreadable' }; }
+          return localIO.statMeasured(p);
+        },
+      };
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m));
+      try {
+        await stream.start();
+        expect(streamTailed(stream)).toMatchObject({ path: c, followedFrom: [UUID_A, UUID_B] });
+        const tailer = streamTailer(stream);
+        frames.length = 0;
+
+        failB = 1;
+        failC = 1;
+        writeFileSync(regFile(home), UUID_B);
+        await pollOnce(stream);
+        expect(failB, 'the walk from B really failed its read').toBe(0);
+        expect(failC, 'the followed file\'s stat really failed on the move tick').toBe(0);
+        await pollOnce(stream);
+        await pollOnce(stream);
+        expect(frames.filter((f) => f.type === 'backlog' || f.type === 'rotated')).toEqual([]);
+        expect(streamTailed(stream)?.path).toBe(c);
+        expect(streamTailer(stream)).toBe(tailer);
+      } finally {
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('a /clear onto a uuid with nothing written yet is a ROTATION: `rotated`, then the new session\'s empty ' +
+       'backlog — the keep is for continuations only (SV-2, D-4947)', async () => {
+      // The most common path through the registry-move branch. `/clear` mints
+      // a uuid whose file Claude Code writes only with its first line, so the
+      // answer is a fallback; keeping the pre-clear tailer there would announce
+      // the reset and then leave the cleared chat streaming under it.
+      const home = mkTmp('ccrc-sv2-clear-');
+      seedRoster(home);
+      seed(home);
+      const D = 'd'.repeat(36);
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m));
+      try {
+        await stream.start();
+        const tailer = streamTailer(stream);
+        frames.length = 0;
+
+        writeFileSync(regFile(home), D);
+        await pollOnce(stream);
+        expect(frames.filter((f) => f.type === 'rotated')).toEqual([{ type: 'rotated', uuid: D }]);
+        const backlog = frames.find((f) => f.type === 'backlog');
+        expect(backlog).toMatchObject({ uuid: D, events: [] });
+        expect(streamUuid(stream)).toBe(D);
+        expect(streamTailed(stream)?.kind).toBe('fallback');
+        expect(streamTailer(stream)).not.toBe(tailer);
+      } finally {
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
     it('the registry moving onto a successor that is not WRITTEN yet keeps the conversation on screen, and the ' +
        'stream opens the successor at its first line (SV-2)', async () => {
       // ccd's resume path could name a successor a live background job holds
@@ -1969,10 +2046,12 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
     });
 
     it('the re-read is spent only on a CLEAN predecessor answer — one that could not read A, or that read A\'s ' +
-       'marker and declined, costs no read of A per tick (cost pin)', async () => {
+       'marker and declined, costs the stream no read of A at all (cost pin)', async () => {
       // Either flag is a "keep looking" answer the memo serves for the whole
-      // back-off, every tick; re-reading A on each would buy nothing — the
-      // flagged answer is not one that says A was resumed.
+      // back-off, every tick, and a fresh one at every re-walk; the stream
+      // does not second-guess it — not per tick, and not once per answer
+      // (`notResumed` alone would still allow that one read per back-off).
+      // The only read of A counted from the re-walk on is the walk's own.
       const run = async (flag: 'tailUnmeasured' | 'declinedTo'): Promise<number> => {
         const home = mkTmp(`ccrc-resumed-cost-${flag}-`);
         const { a, b } = setup(home);
@@ -2005,14 +2084,14 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
           appendFileSync(b, turn('a turn in the fork'), 'utf8');
           await pollOnce(stream);   // sees B grow
           if (flag === 'tailUnmeasured') failA = 1; else statBFails = true;
+          const before = readsOfA;
           await pollOnce(stream);   // re-walks from A: answers A, flagged
           if (flag === 'tailUnmeasured') expect(failA, 'the re-walk really read A').toBe(0);
           else expect(statBFailed, 'the re-walk really stat-ed B').toBeGreaterThan(0);
           statBFails = false;
-          const before = readsOfA;
           for (let i = 0; i < 5; i += 1) await pollOnce(stream);
           expect(streamTailed(stream)?.path).toBe(b);
-          return readsOfA - before;
+          return readsOfA - before - 1;   // less the walk's own read of A's tail
         } finally {
           stream.stop();
           rmSync(home, { recursive: true, force: true });
@@ -2054,6 +2133,148 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
           rmSync(home, { recursive: true, force: true });
         }
       });
+
+    it('a window with NO deciding line is not a resume: metadata past the marker never un-follows the fork — ' +
+       'only a finished turn does (D-4946, #189 re-review)', async () => {
+      // The 8 KiB window can hold no deciding line at all: more than that of
+      // records that are not turns after the marker. The walk then answers A
+      // (the shared 8 KiB rule, a declined follow), but nothing in the window
+      // says A was resumed — Claude Code, reading 64 KiB back, still sees the
+      // marker and says "continued". Un-following on that sent the open
+      // stream BACK to the frozen pre-fork file. A finished turn after it is
+      // what Claude Code itself stops at, so that still re-points.
+      const home = mkTmp('ccrc-resumed-undecided-');
+      const { a, b } = setup(home);
+      let clock = 1_000_000;
+      const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, localIO), new Bus(), ID, (m) => frames.push(m));
+      try {
+        await stream.start();
+        appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');
+        writeFileSync(b, turn('after the fork'), 'utf8');
+        await pollOnce(stream);
+        await pollOnce(stream);
+        expect(streamTailed(stream)).toMatchObject({ path: b, followedFrom: [UUID_A] });
+        frames.length = 0;
+
+        // 9 KB of a record that is not a turn lands after A's marker.
+        appendFileSync(a, `${JSON.stringify({ type: 'system', subtype: 'informational', content: 'x'.repeat(9000) })}\n`);
+        for (let i = 0; i < 2; i += 1) await pollOnce(stream);
+        clock += RESOLVER_BACKOFF_MS;
+        for (let i = 0; i < 3; i += 1) await pollOnce(stream);   // the re-walk from A answers A: undecided, not resumed
+        expect(frames.filter((f) => f.type === 'backlog' || f.type === 'rotated')).toEqual([]);
+        expect(streamTailed(stream)?.path).toBe(b);
+
+        appendFileSync(a, turn('typed into the resumed pre-fork session'), 'utf8');
+        clock += RESOLVER_BACKOFF_MS;
+        await pollOnce(stream);
+        await pollOnce(stream);
+        expect(frames.map((f) => f.type)).not.toContain('rotated');
+        expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: a, uuid: UUID_A });
+      } finally {
+        now.mockRestore();
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('…but a predecessor whose re-read FAILED is read again on the next tick: only a measured "not shown" is ' +
+       'remembered', async () => {
+      // The walk read A's finished turn and answered a clean A; the stream's
+      // own read of A, the one that decides, fails this once. Nobody knows —
+      // so the same answer, served again, is read again.
+      const home = mkTmp('ccrc-resumed-reread-');
+      const { a, b } = setup(home);
+      let readsOfA = 0;
+      let failReadNo = 0;
+      const io: FleetIO = {
+        ...localIO,
+        readFileFromMeasured: async (p, off) => {
+          if (p === a) {
+            readsOfA += 1;
+            if (readsOfA === failReadNo) return { ok: false, reason: 'unreadable' };
+          }
+          return localIO.readFileFromMeasured(p, off);
+        },
+      };
+      let clock = 1_000_000;
+      const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+      const frames: any[] = [];
+      const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, (m) => frames.push(m));
+      try {
+        await stream.start();
+        appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');
+        writeFileSync(b, turn('after the fork'), 'utf8');
+        await pollOnce(stream);
+        await pollOnce(stream);
+        expect(streamTailed(stream)?.path).toBe(b);
+        appendFileSync(a, turn('typed into the resumed pre-fork session'), 'utf8');
+        frames.length = 0;
+        failReadNo = readsOfA + 2;   // the walk's read of A succeeds; the stream's own read after it fails
+        clock += RESOLVER_BACKOFF_MS;
+        await pollOnce(stream);
+        expect(readsOfA, 'both reads of A happened on that tick').toBe(failReadNo);
+        expect(frames.filter((f) => f.type === 'backlog')).toEqual([]);
+        await pollOnce(stream);   // the same clean A, served by its unchanged stamp
+        expect(frames.map((f) => f.type)).not.toContain('rotated');
+        expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: a, uuid: UUID_A });
+      } finally {
+        now.mockRestore();
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it('…and a predecessor measured NOT resumed is not re-read every tick while the memo serves the same answer ' +
+       '(cost pin)', async () => {
+      // That state can last for the life of the socket: `ccd` reads the same
+      // 8 KiB, sees no marker either, and never moves the registry off A, so
+      // the memo serves a clean A for as long as A does not change.
+      const home = mkTmp('ccrc-resumed-undecided-cost-');
+      const { a, b } = setup(home);
+      let readsOfA = 0;
+      let statsOfA = 0;
+      // The memo's own revalidation stat (the folded `stat`, one per tick on
+      // a healthy row) is pinned to `localIO`'s and not counted: what is
+      // counted is the stream's MEASURED look at A.
+      const io: FleetIO = {
+        ...localIO,
+        stat: (p) => localIO.stat(p),
+        readFileFromMeasured: async (p, off) => {
+          if (p === a) readsOfA += 1;
+          return localIO.readFileFromMeasured(p, off);
+        },
+        statMeasured: async (p) => {
+          if (p === a) statsOfA += 1;
+          return localIO.statMeasured(p);
+        },
+      };
+      let clock = 1_000_000;
+      const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+      const stream = new SessionStream(mkLadderDeps(home, io), new Bus(), ID, () => {});
+      try {
+        await stream.start();
+        appendFileSync(a, marker(UUID_A, UUID_B), 'utf8');
+        writeFileSync(b, turn('after the fork'), 'utf8');
+        await pollOnce(stream);
+        await pollOnce(stream);
+        appendFileSync(a, `${JSON.stringify({ type: 'system', subtype: 'informational', content: 'x'.repeat(9000) })}\n`);
+        clock += RESOLVER_BACKOFF_MS;
+        await pollOnce(stream);   // the re-walk from A answers a clean A; the stream reads it once
+        expect(streamTailed(stream)?.path).toBe(b);
+        expect(readsOfA, 'the stream really measured A once').toBeGreaterThan(0);
+        readsOfA = 0;
+        statsOfA = 0;
+        for (let i = 0; i < 5; i += 1) await pollOnce(stream);
+        expect({ readsOfA, statsOfA }).toEqual({ readsOfA: 0, statsOfA: 0 });
+        expect(streamTailed(stream)?.path).toBe(b);
+      } finally {
+        now.mockRestore();
+        stream.stop();
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('a symlinked workdir and a `<pid>.json` blip after a fork (D-4946, probes E2/E2b)', () => {

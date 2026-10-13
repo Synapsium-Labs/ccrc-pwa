@@ -536,3 +536,39 @@ export function continuationInTail(tail: string, ofUuid: string): string | null 
   }
   return null;
 }
+
+/**
+ * Is the newest line of `tail` that DECIDES (`tailRecordOf`) a FINISHED TURN?
+ *
+ * `continuationInTail` folds three things into one `null`: a finished turn, a
+ * marker the rule refuses (another session's, a malformed successor), and a
+ * window with no deciding line at all. Only the first says the file was
+ * written past any older marker — RESUMED — and it is exactly the line Claude
+ * Code's own reader (`Txn`, 2.1.296) stops at with "not continued". It scans
+ * the same newest lines first, and its window (the last 64 KiB) holds this
+ * one, so it reaches the same line and the same answer. For a window with no
+ * deciding line it reads on, and for a marker naming another session it
+ * names that successor (it checks no `sessionId`): either way it can still
+ * say "continued". Two differences remain. A marker whose successor is not a
+ * uuid is "not continued" there and not a turn here, so the fork is kept. A
+ * `<pasted_content>` prompt is a prompt here without being unwrapped first
+ * (the divergence this rule already records). Claude Code may step over it
+ * and still say "continued", but that record is the operator typing into the
+ * predecessor after its marker, which is a resume.
+ *
+ * The stream asks this before it un-follows a fork (D-4946); the walk never
+ * does — for following, the three stay one answer.
+ */
+export function finishedTurnDecides(tail: string, ofUuid: string): boolean {
+  const lines = tail.split('\n');
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const v = tailRecordOf(lines[i]!, ofUuid);
+    if (v.kind === 'skip') continue;
+    if (v.kind === 'successor') return false;
+    // A `stop` comes from one of `tailRecordOf`'s three deciding arms; only
+    // the marker arm's record has its own top-level `type` "continued-in".
+    // The line parsed there, so it parses here.
+    return (JSON.parse(lines[i]!) as Record<string, unknown>)['type'] !== 'continued-in';
+  }
+  return false;
+}

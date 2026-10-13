@@ -5,7 +5,7 @@ import { configDirFor, type CcrcConfig } from './config.js';
 import { measuredIdentity, readSessionRecord } from './registry.js';
 import { liveSessionStatus, readLiveStateMeasured } from './livestate.js';
 import {
-  continuesInto, rungRank, tailVerdict, TranscriptResolver, type TranscriptResolution,
+  continuesInto, resumedPastMarker, rungRank, TranscriptResolver, type TranscriptResolution,
 } from './transcript/resolve.js';
 import { readBacklog, TranscriptTailer } from './transcript/tail.js';
 import { hasMenu, parseDialog } from './pane/dialog.js';
@@ -127,6 +127,16 @@ export class SessionStream {
    *  walk declines an empty successor — so `shouldRepoint` can move forward
    *  to it once it has content. */
   private tailed: TranscriptResolution | null = null;
+
+  /** Predecessor answers whose tail `repointFacts` MEASURED as not resumed
+   *  (`resumedPastMarker` -> `not-shown`), held by IDENTITY. The resolver's
+   *  memo hands back the same answer object for as long as that file's stamp
+   *  holds, and a new one once its walk re-runs. So a predecessor served
+   *  clean tick after tick (its window holds no deciding line) is read once,
+   *  not every 2 s, and one that changes is read again as soon as the memo
+   *  re-walks it. Only "not shown" is kept: it can delay an un-follow by the
+   *  memo's two-poll gate, never cause one. */
+  private readonly notResumed = new WeakSet<TranscriptResolution>();
 
   private readonly onNotice = (n: Notice): void => this.send({ type: 'notice', message: n.message });
   // This stream detects dialogs itself (start + every tick), so it always
@@ -398,8 +408,9 @@ export class SessionStream {
    *
    *  The fork clauses' two facts (`RepointFacts`) are measured here too, each
    *  ONLY when its clause is the one deciding — a predecessor answer that is
-   *  clean (one read of its tail), or the successor the tailed file declined
-   *  (one stat) — so neither costs a healthy tick anything. */
+   *  clean (one read of its tail, once per answer: `notResumed`), or the
+   *  successor the tailed file declined (one stat) — so neither costs a
+   *  healthy tick anything. */
   private async repointNeeded(next: TranscriptResolution): Promise<boolean> {
     const cur = this.tailed;
     if (cur === null) return false;
@@ -416,7 +427,10 @@ export class SessionStream {
       // An answer that could not read the predecessor, or that read its
       // marker and declined, is not one that says it was resumed.
       if (next.tailUnmeasured === true || next.declinedTo !== undefined) return {};
-      return { predecessorResumed: (await tailVerdict(this.deps.io, next.path, next.uuid)) === 'none' };
+      if (this.notResumed.has(next)) return {};
+      const v = await resumedPastMarker(this.deps.io, next.path, next.uuid);
+      if (v === 'not-shown') this.notResumed.add(next);
+      return { predecessorResumed: v === 'resumed' };
     }
     if (cur.declinedTo === next.uuid) return { successorHasContent: await this.hasContent(next.path) };
     return {};
@@ -724,7 +738,11 @@ export class SessionStream {
    * with a backlog, never a stitched offset.
    *
    * Paid only on a registry move this stream already calls a continuation:
-   * at most one stat of `next` and one of the tailed file.
+   * at most one stat of `next` and one of the tailed file. A keep onto a link
+   * BEHIND has a tail too: the memo serves that link's flagged answer for its
+   * back-off, and `repointNeeded` stats the tailed file on each of those
+   * ticks — one `statMeasured` per tick, for at most `RESOLVER_BACKOFF_MS`
+   * (measured; the base sent the link's backlog instead and tailed it).
    */
   private async keepsTailer(registryUuid: string, next: TranscriptResolution): Promise<boolean> {
     const cur = this.tailed;
@@ -965,9 +983,10 @@ export function nextDialogFrame(
  * Absent, each answers "not shown": neither ever re-points on a guess.
  */
 export interface RepointFacts {
-  /** `next` is a uuid `cur` was followed FROM, and its own tail, read at the
-   *  moment of this decision, names no successor (`tailVerdict` -> `none`):
-   *  it was resumed past its marker. */
+  /** `next` is a uuid `cur` was followed FROM, and the newest deciding line
+   *  of its own tail, read at the moment of this decision, is a FINISHED
+   *  TURN (`resumedPastMarker` -> `resumed`): it was resumed past its
+   *  marker. A window with no deciding line is not that. */
   readonly predecessorResumed?: boolean;
   /** `next` is the successor `cur` declined, and its file measured non-empty. */
   readonly successorHasContent?: boolean;
@@ -1010,7 +1029,11 @@ export function shouldRepoint(
   // (D-4940). The answer alone cannot say so — a clean predecessor is also
   // what a stale memo entry serves (E2b) — so the caller reads the
   // predecessor's tail at this moment (`predecessorResumed`), and only a
-  // MEASURED "no successor" re-points back.
+  // MEASURED finished turn re-points back. Not the walk's "no successor":
+  // an 8 KiB window with no deciding line in it (records that are not turns
+  // piled after the marker) is one Claude Code, reading 64 KiB back, still
+  // calls continued — and re-pointing on it sent the stream back to the
+  // frozen pre-fork file (#189 re-review, verifier probe FALSE-UNFOLLOW).
   if (cur.kind === 'found' && next.kind === 'found' && cur.uuid !== next.uuid
     && cur.followedFrom?.includes(next.uuid) === true) {
     if (facts.predecessorResumed === true) return true;
