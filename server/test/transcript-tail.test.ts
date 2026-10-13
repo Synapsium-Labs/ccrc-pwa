@@ -124,6 +124,35 @@ describe('TranscriptTailer', () => {
     }
   });
 
+  // D-4950, at the seam the PWA actually reads. A message absorbed mid-turn
+  // reaches the file as THREE records and no user record; the stream must
+  // carry the operator's words exactly once, as a user event.
+  it('an absorbed mid-turn message reaches the stream once, as the operator\'s', { timeout: 10_000 }, async () => {
+    const file = tmpFile();
+    writeFileSync(file, userLine('u1', 'one'));
+    const tailer = new TranscriptTailer(localIO, file, statSync(file).size);
+    tailer.start();
+    try {
+      const waiter = onceEvents(tailer);
+      const ts = '2026-07-20T21:00:05.000Z';
+      appendFileSync(file, [
+        { type: 'queue-operation', operation: 'enqueue', timestamp: ts, sessionId: 's', content: 'and the docs too' },
+        { type: 'queue-operation', operation: 'remove', reason: 'absorbed_mid_turn', timestamp: ts, sessionId: 's' },
+        {
+          parentUuid: 'u1', isSidechain: false, type: 'attachment', uuid: 'q1', timestamp: ts,
+          attachment: {
+            type: 'queued_command', prompt: 'and the docs too', commandMode: 'prompt',
+            origin: { kind: 'human' }, timestamp: ts,
+          },
+        },
+      ].map((r) => JSON.stringify(r) + '\n').join(''));
+      const { events } = await waiter;
+      expect(events).toEqual([{ kind: 'user', uuid: 'q1', ts, text: 'and the docs too' }]);
+    } finally {
+      tailer.stop();
+    }
+  });
+
   it('holds a partial line until the closing newline arrives', { timeout: 10_000 }, async () => {
     const file = tmpFile();
     writeFileSync(file, userLine('u1', 'one'));
