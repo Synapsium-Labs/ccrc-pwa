@@ -85,7 +85,7 @@ import {
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
   type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
-  parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
+  isRegistryId, parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
 import { ARCHIVE_REFUSALS, archiveInterrupts } from '../../shared/api.js';
 import {
@@ -1905,9 +1905,19 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // fleet's baseline is 745 agent-WS operations [registry-read-census:fleet]
   // per call in remote mode, before conditional reconfirmation, in front of
   // every human keystroke — purely to answer "does
-  // this id exist". It carries no identity of its own: `isSafeSessionId` is
-  // the real injection guard, and ccd re-checks `[[ -f "$REG/$id.uuid" ]]` on
-  // the box regardless. One
+  // this id exist". Its FIRST statement is the registry-id predicate
+  // (`isRegistryId`, L0; path-identity spec §2.3): a name ccd could read as a
+  // flag (`--actor`), a dot-leading name, or one past the file-name cap is
+  // unknown before any listing is spent on it, so these routes hand an
+  // id-taking argv nothing but a registry id. `isSafeSessionId`, which most of
+  // them still ask first, stays the clip path-component rule: it admits
+  // `--actor` and is not the injection guard. ccd re-checks
+  // `[[ -f "$REG/$id.uuid" ]]` on the box regardless. Two request-id routes
+  // stand outside this census and ask the predicate at their own heads
+  // (`/ensure`, and the crossing arm of `/swap`), so the count above is still
+  // what `routes.test.ts` measures. An `:id` over 100 characters reaches none
+  // of these handlers: Fastify's default `maxParamLength` answers 414 first.
+  // One
   // `readdir` plus membership in the listing is the SAME evidence
   // `coord/routes.ts`'s `names.includes(`${fromId}.uuid`)` already trusts for
   // exactly this question, and it fails shut the same way `readRegistry`
@@ -1920,6 +1930,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // failure to read one of a LIVE session's own sibling fields (e.g.
   // `workdir`) can no longer 404 a prompt typed into that session.
   const knownId = async (id: string, names?: readonly string[] | null): Promise<boolean> => {
+    // Before the listing, and whatever a passed-in listing says (path-identity
+    // spec §2.3): a planted `$REG/--actor.uuid` is exactly the row this refuses.
+    if (!isRegistryId(id)) return false;
     // `names` PASSED IN by a caller that already listed (the sessions route,
     // which needs the same listing for `readProjectPools`): one readdir, one
     // membership test, and the two answers cannot disagree. `undefined` — every
@@ -2629,6 +2642,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   app.post('/api/sessions/:id/ensure', async (req, reply) => {
     const { id } = req.params as { id: string };
+    // NOT behind `knownId`, whose census of 18 stays what `routes.test.ts`
+    // measures: the route asks the registry-id predicate itself, first
+    // (path-identity spec §2.3, as built). ccd's `cmd_ensure` binds its argument
+    // literally and dies on an absent row, so this is no redirect today; the
+    // check keeps a name ccd could read as a flag from ever reaching the argv.
+    if (!isRegistryId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
     return runCcdOr502(reply, CCD_ARGV.ensure(id));
   });
 
@@ -3103,8 +3122,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     // ONE queued invocation for both arms (D-2177, below), but that is the only
-    // server-side preflight they share. A declared crossing gets the 501 skew
-    // refusal and deliberately skips `readSessionRecord` plus the pool verdict;
+    // server-side preflight they share. A declared crossing asks the registry-id
+    // predicate of its id first (400 `bad-session-id`), then gets the 501 skew
+    // refusal, and deliberately skips `readSessionRecord` plus the pool verdict;
     // ccd re-measures session and tag on the fleet box. The ordinary arm owns
     // the early 404/503 ladder and pool refusal. Every applicable refusal is
     // decided BEFORE queue entry. `lifecycle.test.ts` pins ordinary-arm queueing;
@@ -3112,6 +3132,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // applicable held-slot refusals (D-1684, D-2468, D-2481).
     let argv: CcdArgv;
     if (body.crossPool === true) {
+      // FIRST in this arm, ahead of the skew gate (path-identity spec §2.3, as
+      // built): the crossing skips `readSessionRecord`, the ordinary arm's gate,
+      // so nothing else stands between a request id and `swap --cross-pool <id>`.
+      // It sits in the arm, not at the route's head, where it would also answer
+      // for the ordinary arm and mask that arm's own read.
+      if (!isRegistryId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
       // The declared crossing skips the verdict entirely — that IS the
       // override. It does not skip the SKEW gate: `capSupported` refuses on no
       // evidence, for the reason spelled out on `CCD_ARGV.swapCross`. An
