@@ -1771,8 +1771,11 @@ per request (the client's own, else the lane's `set-effort` default for that mod
 `415` for a body it cannot parse or an encoding it does not implement rather than forward it unexamined. When its
 connection to the gateway is refused, as while a release restarts the gateway, it sends the same request again
 every half second for up to 60 seconds before answering `502`; the optional `CCGPT_UPSTREAM_WAIT_S` (a whole
-number of seconds from 0 to 600, `0` for no waiting) sets that bound, and any other upstream failure is an
-immediate `502` that is never retried, since the request may already have reached the gateway.
+number of seconds from 0 to 600, `0` for no waiting) sets that bound, and any other connection failure (a reset, a
+timeout, a connection dropped mid-request) is an immediate `502`, and an upstream HTTP error status is relayed as
+it is; neither is retried, since the request may already have reached the gateway. A request is held only while its
+client is still connected: once the client has closed its connection, the shim stops waiting and sends nothing
+upstream.
 
 **Adding one is a roster edit** — `ccrc account add` does not create this kind. Add an entry to
 `~/.ccrc/accounts.json` (`homeAble: false` keeps it an overflow lane, as above; `true` lets placement pick it;

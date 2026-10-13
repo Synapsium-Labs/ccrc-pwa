@@ -121,19 +121,23 @@ rebuilds a lane's runtime restarts its gateway, which takes about a minute to
 listen again (measured: ~46 s), and in that window every connect is refused.
 The shim used to answer each request in it with an immediate 502, and Claude
 Code ended the turn on it. Now a refused connect — the one failure where
-nothing reached upstream, so sending the request again cannot send it twice —
-is retried every half second, with the same method, path, headers and body
-bytes, until the bound (measured from the first refusal) runs out; then the
-same 502 refusal as before answers, saying it was refused for the whole wait.
-Anything else (a reset, a timeout, a connection accepted and then closed, any
-other error) may have reached upstream, so it is never retried: an immediate
-502, exactly as before. See `_urlopen_through_refusal`. An invalid value
-refuses to start, like a required variable's.
+nothing reached upstream — is retried every half second, with the same
+method, path, headers and body bytes, but only while its client is still
+connected: before each re-send the shim peeks at the client's socket
+(`Handler._client_gone`), and once the client has closed it stops waiting and
+sends nothing upstream, so a request is never sent for a client that has gone.
+The wait ends at the bound (measured from the first refusal); then the same 502
+refusal as before answers, saying it was refused for the whole wait. Anything
+else (a reset, a timeout, a connection accepted and then closed, any other
+error) may have reached upstream, and a request that reached upstream is never
+re-sent: an immediate 502, exactly as before. See `_urlopen_through_refusal`.
+An invalid value refuses to start, like a required variable's.
 """
 import os
 import sys
 import time
 import json
+import socket
 import gzip
 import zlib
 import functools
@@ -184,15 +188,20 @@ def _optional_wait_s(name: str, default: int) -> int:
     Parsed once, at start-up, and an invalid value is the same named refusal
     `_required_port` gives — not a guessed bound: a unit that says
     `CCGPT_UPSTREAM_WAIT_S=sixty` has said something this shim cannot act on,
-    and quietly using 60 would hide it. Only one to three ASCII digits are
-    read, so `int()`'s own leniency (' 5', '+5', '5_0', non-ASCII digits, a
-    5000-digit string that raises) never decides what a unit file means.
+    and quietly using 60 would hide it. Only a string of ASCII digits is read,
+    leading zeros included (`0600` is 600), so `int()`'s own leniency (' 5',
+    '+5', '5_0', non-ASCII digits) never decides what a unit file means. The
+    length is checked after the zeros are stripped and BEFORE `int()` is
+    called, so a 5000-digit string, which `int()` refuses past its own
+    digit limit, never reaches it.
     """
     raw = os.environ.get(name)
     if raw is None:
         return default
-    if raw.isascii() and raw.isdigit() and len(raw) <= 3 and int(raw) <= UPSTREAM_WAIT_MAX_S:
-        return int(raw)
+    if raw.isascii() and raw.isdigit():
+        digits = raw.lstrip("0") or "0"
+        if len(digits) <= len(str(UPSTREAM_WAIT_MAX_S)) and int(digits) <= UPSTREAM_WAIT_MAX_S:
+            return int(digits)
     sys.exit(
         f"ccgpt-proxy: refusing to start — {name} is not a whole number of seconds "
         f"from 0 to {UPSTREAM_WAIT_MAX_S}: {raw!r}"
@@ -995,8 +1004,8 @@ HOP_BY_HOP = {
 
 
 # D-4933: how long to sleep between tries while upstream refuses connections.
-# Short next to a ~46 s restart, long enough that a minute of waiting is a few
-# hundred microseconds of CPU per request, not a busy loop.
+# Short next to a ~46 s restart, long enough that waiting costs about 100 µs of
+# CPU per try, roughly 12 ms per request per minute of waiting, not a busy loop.
 _REFUSED_RETRY_S = 0.5
 
 
@@ -1015,6 +1024,15 @@ class _UpstreamRefused(Exception):
         self.last = last
 
 
+class _ClientGone(Exception):
+    """Raised by `_urlopen_through_refusal` when its client closed while the
+    shim was waiting out a refused connection (D-4933). Caught by `_relay`
+    alone, which sends nothing upstream and answers nobody: there is no one to
+    answer, so it logs nothing new either. A dedicated exception, not a `None`
+    or a re-raise of the `URLError`, for `_UpstreamRefused`'s reason: "the wait
+    ran out" and "nobody is waiting any more" are handled differently."""
+
+
 def _is_refused(e: BaseException) -> bool:
     """True iff `e` is the TCP connect itself being refused (ECONNREFUSED).
 
@@ -1023,18 +1041,21 @@ def _is_refused(e: BaseException) -> bool:
     refusal is the `URLError`'s `.reason`; a bare `ConnectionRefusedError` is
     accepted too, for a caller that surfaces one unwrapped. Nothing else
     qualifies, and that narrowness is the point: a refused connect is the one
-    failure that proves no byte of the request reached upstream. A reset, a
-    timeout, `RemoteDisconnected` (a connection accepted and then closed) and
-    every other `URLError`/`OSError` may have come AFTER upstream saw the
-    request, so retrying one could send a request twice. An `HTTPError` is a
-    `URLError` whose `.reason` is a string, so it never matches either.
+    failure that proves no byte of the request reached upstream, so a request
+    that reached upstream is never re-sent. A reset, a timeout,
+    `RemoteDisconnected` (a connection accepted and then closed) and every
+    other `URLError`/`OSError` may have come AFTER upstream saw the request,
+    so none of them is retried. A refused connect is itself retried only
+    while its client is still connected (`_urlopen_through_refusal`). An
+    `HTTPError` is a `URLError` whose `.reason` is a string, so it never
+    matches either.
     """
     if isinstance(e, urllib.error.URLError):
         e = e.reason
     return isinstance(e, ConnectionRefusedError)
 
 
-def _urlopen_through_refusal(req):
+def _urlopen_through_refusal(req, client_gone):
     """`urlopen(req)`, but a REFUSED connection is waited out (D-4933).
 
     On a refusal (`_is_refused`), sleeps `_REFUSED_RETRY_S` and sends the SAME
@@ -1046,8 +1067,15 @@ def _urlopen_through_refusal(req):
     final try lands on the bound itself and "refused for the whole wait" is
     literally true. `UPSTREAM_WAIT_S` of 0 retries nothing. Every other error,
     `HTTPError` included, propagates untouched on its first occurrence: see
-    `_is_refused` for why nothing but a refusal is safe to send again. Sleeps
-    in the handler's own thread (`ThreadingHTTPServer`), which blocks no other
+    `_is_refused` for why nothing but a refusal is safe to send again.
+
+    A refused connect is retried only while its client is still connected.
+    `client_gone` (`Handler._client_gone`) is called after each sleep, before
+    the re-send; once it answers True this raises `_ClientGone` and nothing is
+    sent upstream, so a request is never sent for a client that has gone (one
+    that gave up and retried would otherwise reach a restarted gateway twice),
+    and a request that reached upstream is never re-sent. Sleeps in the
+    handler's own thread (`ThreadingHTTPServer`), which blocks no other
     request.
     """
     refused_at = None
@@ -1064,6 +1092,8 @@ def _urlopen_through_refusal(req):
             if left <= 0:
                 raise _UpstreamRefused(e) from None
             time.sleep(min(_REFUSED_RETRY_S, left))
+            if client_gone():
+                raise _ClientGone() from None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1080,6 +1110,21 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(payload)
+
+    def _client_gone(self) -> bool:
+        """True iff the client has closed its connection (D-4933). Peeks one
+        byte without consuming it or blocking: `b''` is the client's FIN, so it
+        closed; `BlockingIOError` is a client that is still there and silent;
+        bytes are a client that is still there (a pipelined request, left for
+        the next read); any other `OSError` (a reset, a closed descriptor)
+        counts as gone. Asked by `_urlopen_through_refusal` before each
+        re-send, so a request is never sent for a client that has gone."""
+        try:
+            return self.connection.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b""
+        except BlockingIOError:
+            return False
+        except OSError:
+            return True
 
     def _refuse(self, status: int, message: str) -> None:
         """Answer ONE refusal shape for the entire file (D-3153): a JSON
@@ -1103,13 +1148,14 @@ class Handler(BaseHTTPRequestHandler):
         fires AFTER `urlopen`, i.e. after the request body WAS offered
         upstream — measured, an upstream that reads the body and then
         drops its socket makes `_refuse(502, …)` answer with the recording
-        sink already having seen the request. What every call to this
-        method upholds unconditionally is narrower and still real: the ONE
-        JSON refusal shape (D-3153), never `send_error`'s HTML/status-line
-        one. (A 502 for a REFUSED connection, D-4933, is the exception to the
-        exception: the connect itself failed, so nothing was offered upstream.) Every refusal in this file — Task 6's gzip/deflate decode
-        failure and the upstream-unreachable 502 included — now calls this
-        instead of `send_error`.
+        sink already having seen the request. (A 502 for a REFUSED connection,
+        D-4933, is the exception to that exception: the connect itself failed,
+        so nothing was offered upstream.) What every call to this method
+        upholds unconditionally is narrower and still real: the ONE JSON
+        refusal shape (D-3153), never `send_error`'s HTML/status-line one.
+        Every refusal in this file — Task 6's gzip/deflate decode failure and
+        the upstream-unreachable 502 included — now calls this instead of
+        `send_error`.
         task-7a Fix round 1, M-3: a HEAD request gets headers describing the body
         (including its real `Content-Length`) but not the body bytes
         themselves, matching `send_error`'s own `self.command != 'HEAD'`
@@ -1296,7 +1342,7 @@ class Handler(BaseHTTPRequestHandler):
         if body:
             req.add_header("Content-Length", str(len(body)))
         try:
-            resp = _urlopen_through_refusal(req)
+            resp = _urlopen_through_refusal(req, self._client_gone)
         except urllib.error.HTTPError as e:
             # task-9 fix round 1 I-4 (task-9-fix-rulings.md): a non-2xx
             # upstream status lands here, and `read1` below reaches it by a
@@ -1309,6 +1355,13 @@ class Handler(BaseHTTPRequestHandler):
             # describe block's own "relays a non-2xx upstream response,
             # status and body" case.
             resp = e
+        except _ClientGone:
+            # D-4933: the client closed while the shim waited out a refused
+            # connection, and nothing was sent upstream. Nobody is left to
+            # answer, so there is no 502 and no log line; the connection is
+            # marked closed so the handler loop does not read from it again.
+            self.close_connection = True
+            return
         except _UpstreamRefused as e:
             # D-4933: every connect was refused for the whole wait, so nothing
             # reached upstream. Same 502 shape as below; the message says the
