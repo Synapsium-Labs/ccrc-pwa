@@ -5735,13 +5735,13 @@ describe('child reclamation wave 10: the collector switch has one writer, one jo
     }
     return text.slice(open);
   };
-  /** The route's POST, from its registration to the next one: `stall-settings-route.test.ts`'s slice. */
+  /** The route's POST, from its registration to its handler's own closing brace (`bodyAfter`), never on to the next
+   *  registration: a helper declared between the two is not the handler. '' when the registration is gone. */
   const postSlice = (text: string): string => {
-    const decl = "app.post('/api/coord/collect-lane'";
-    const at = text.indexOf(decl);
-    if (at < 0) return '';
-    const next = /app\.(?:get|post)\('/.exec(text.slice(at + decl.length));
-    return text.slice(at, next === null ? text.length : at + decl.length + next.index);
+    const at = text.indexOf("app.post('/api/coord/collect-lane'");
+    const rest = at < 0 ? '' : text.slice(at);
+    const body = bodyAfter(rest, /^/);
+    return body === '' ? '' : rest.slice(0, rest.indexOf(body) + body.length);
   };
 
   it('CONTROL: the scanners see a call, a method head and a body, and not a declaration, a comment line or a quoted brace', () => {
@@ -5762,8 +5762,8 @@ describe('child reclamation wave 10: the collector switch has one writer, one jo
     expect(bodyAfter(planted, /^export function f\(/m), 'the body ends at its own brace, past a quoted one')
       .toBe("{\n  const s = '}';\n  g(`${'{'}`);\n  if (x) { h(); }\n}");
     expect(bodyAfter(planted, /^export function absent\(/m), 'an absent head reads as no body').toBe('');
-    const routes = "app.get('/api/coord/collect-lane', a);\napp.post('/api/coord/collect-lane', async () => { w(); });\napp.get('/api/runs', b);\n";
-    expect(postSlice(routes)).toBe("app.post('/api/coord/collect-lane', async () => { w(); });\n");
+    const routes = "app.get('/api/coord/collect-lane', a);\napp.post('/api/coord/collect-lane', async () => { w(); });\nconst below = () => s.setCollectLane(r);\napp.get('/api/runs', b);\n";
+    expect(postSlice(routes), 'the slice ends at the handler’s brace, short of a helper below it').toBe("app.post('/api/coord/collect-lane', async () => { w(); }");
     expect(SERVER.length, 'the walk reached server/src').toBeGreaterThan(30);
     expect(SERVER.map(rel)).toContain(STORE);
   });
@@ -5791,7 +5791,7 @@ describe('child reclamation wave 10: the collector switch has one writer, one jo
     expect(count(port, /\bappendGeneration\b/g), 'the L1 port no longer declares the append').toBe(1);
     expect(count(lane, /\bappendGeneration\b/g), 'collectLane.ts names the append outside the port it declares').toBe(1);
     expect(count(code(STORE), /\bappendGeneration\b/g), 'the store names the append other than by its one call').toBe(1);
-    expect(count(code(ADAPTER), /\bappendGeneration\b/g), 'the adapter does not define the append').toBeGreaterThan(0);
+    expect(count(code(ADAPTER), /\bappendGeneration\b/g), 'the adapter does not name the append exactly once').toBe(1);
   });
 
   it('COLLECT_LANE_JOURNAL_BASENAME has one definer, and the quoted basename stands on no other TS or TSX code line', () => {
