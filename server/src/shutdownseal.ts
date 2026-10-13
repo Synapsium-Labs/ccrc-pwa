@@ -9,8 +9,9 @@
 //   3. say a refusal or a failure in ONE `console.warn('ccrc-server: …')` line, and never throw;
 //   4. exit with today's status: remove the handlers and RE-RAISE the same signal, so the process dies of the signal as it did
 //      before this handler existed (systemd, `ccrc update`'s health gate and the watchdog read the same exit). The stop takes
-//      up to the bound longer, and during it only the lane's timer is stopped: a tick in flight can still run the other
-//      lanes' sweeps and the routes keep serving, so an act begun then is cut off by the re-raise, as a SIGKILL would cut it. A
+//      up to the bound longer, and during it the watcher's tick is stopped; a tick in flight, the routes and the independent
+//      timers (the box-token driver's, the auth sessions', the session sockets') keep running, so an act begun then is cut
+//      off by the re-raise, as a SIGKILL would cut it. A
 //      second identical signal during the bound is not handled (the listeners are `once`): it kills at once, with no seal. A
 //      DIFFERENT signal during the bound (a SIGINT inside a SIGTERM's, or the reverse) IS handled: its `once` listener stands
 //      until the first handler's `finally` removes both, so a second handler runs beside the first. When a pass is in flight

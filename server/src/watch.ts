@@ -1328,7 +1328,7 @@ export class FleetWatcher {
    *  the pass does not release, FLAGGED (a wildcard in the breaker, which HOLDS only when two or more stand unreleased; one
    *  alone only has its hour restarted), beside every member, instant and flag of the snapshot it can still read.
    *  `Seeded` is that once; `CommittedKey` is the key of the snapshot the last landed commit wrote (`''` until one lands
-   *  or a clean state is read: it matches no set's key); `DurableClean` says this process knows the state reads clean;
+   *  or a sealed state is read: it matches no set's key); `DurableClean` says this process knows the state reads clean;
    *  `AnchorsPending` holds the anchor changes a commit has not landed yet (`null`: a staged delete), re-sent by the next
    *  commit and laid over the durable anchors meanwhile, so a retry is idempotent; `HeldRunId` is the run the last
    *  `run_events` record sits on (where an empty set is written). */
@@ -1341,8 +1341,8 @@ export class FleetWatcher {
    *  stored snapshot ONLY when it reads `sealed`; `Generation` is the generation of the row this process last read or wrote;
    *  `UnsealPending` is a sealed start's first-pass duty, writing `clean` back (retried each pass until it lands); `Landed`
    *  says a write of THIS process has landed (the unseal, or a dirty mark): until it has, the `unchanged` fast path is
-   *  refused and nothing seals, and a sealed start writes NOTHING else and acts on nothing until its unseal has landed
-   *  (a later mark does not count in its place: R1.5); `Sealed` says this process's seal landed; `Stopped` is set by the first seal attempt, after
+   *  refused and nothing seals, and a sealed start writes no breaker state or anchor beyond its unseal (a tripping pass may
+   *  still write its feed row) and acts on nothing until its unseal has landed (a later mark does not count in its place: R1.5); `Sealed` says this process's seal landed; `Stopped` is set by the first seal attempt, after
    *  which no pass runs; `PassRun` is the pass in flight, which a seal attempt awaits with a bound. */
   private deadCoordinatorBreakerGeneration: number | null = null;
   private deadCoordinatorBreakerUnsealPending = false;
@@ -4921,7 +4921,8 @@ export class FleetWatcher {
       this.deadCoordinatorBreakerGeneration = w.generation;
       return;
     }
-    // A failed unseal re-reads the row, so a generation another writer moved does not wedge the retry for good.
+    // A failed unseal re-reads the row, so a generation another writer moved does not wedge the retry for good while it leaves the row sealed
+    // (a writer that moves it to any other state makes the unseal impossible: fail-shut, one warn line, no feed row).
     const now = coord.deadCoordinatorBreakerState();
     if (now.kind === 'sealed') this.deadCoordinatorBreakerGeneration = now.generation;
     if (!this.deadCoordinatorBreakerUnsealWarned) {
@@ -4988,7 +4989,7 @@ export class FleetWatcher {
         // pass's population whose durable anchor STARTED (its `firstDeadAt`, never `lastDeadAt`, which every crashed pass
         // rewrites) after that snapshot was written is added to the seed, FLAGGED, at its anchor instant, beside every
         // member, instant and flag the snapshot carries. Since D-4857 every anchor change this release makes lands in the
-        // same transaction as the snapshot, written with the write-time clock, so under a clean state this flags only
+        // same transaction as the snapshot, written with the write-time clock, so under a sealed state this flags only
         // anchors written outside those commits: an older build's, run against this database after a rollback (it writes
         // `dead_claimants` and never this table). It stays as the rule; the class it could not close (a held instant that
         // lived in memory alone while writes failed) is closed by the dirty state, not by it.
@@ -5161,7 +5162,7 @@ export class FleetWatcher {
    *  (`AnchorsPending`). Four answers:
    *   - `unchanged`: nothing to change — no anchor, the held set's key is what the last landed commit wrote, and the state
    *     is known clean. Nothing is written; the pass may act;
-   *   - `unseal-pending` (D-4916): a sealed start whose unseal has not landed. NOTHING is written and no act is composed;
+   *   - `unseal-pending` (D-4916): a sealed start whose unseal has not landed. No breaker state or anchor is written (a tripping pass's feed row may be) and no act is composed;
    *     the changes stay pending and the caller moves the in-memory hold; the next pass retries the unseal first;
    *   - `mark-failed`: the dirty mark did not land. NO anchor change and no act; the changes stay pending for the next
    *     commit, as on `commit-failed`, and the caller moves the in-memory hold. The state still reads as the last landed

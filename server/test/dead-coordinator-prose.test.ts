@@ -46,6 +46,12 @@ describe('README: a coordinator that crashed', () => {
     expect(para).toContain('A lane gap of more than ten minutes (a restart, a pause, a stale mirror) starts the hour afresh');
     expect(para).toContain('and trips the breaker when two or more coordinators were crashed');
   });
+  it('says the hour is kept across a CLEAN restart only: after an unclean exit every crashed claimant\'s hour starts afresh (review 411, F8; D-4916)', () => {
+    const at = readme.indexOf('**A coordinator that crashed is ended after an hour**');
+    const para = readme.slice(at, at + 6200);
+    expect(para).toContain('kept in `coord.db` across a clean restart (after an unclean exit every crashed claimant\'s hour starts afresh: D-4916) and raised, never lowered, by a later supervisor heartbeat');
+    expect(para, 'true only across a clean restart').not.toContain('kept in `coord.db` across restarts');
+  });
   it('every passage that names what the one cleanup switch stops names this lane too', () => {
     expect(readme).toContain('pauses every reclamation, every expiry and the dead-coordinator lane fleet-wide');
     expect(readme).toContain('and the expiry of archived workspaces stops too, as does the dead-coordinator lane');
@@ -137,6 +143,7 @@ describe('the spec says what a restart does to the dead-coordinator lane (review
     expect(para, 'the write-failure class is closed (D-4857)').not.toContain('ARMING BLOCKER');
     expect(para, 'no older record is seeded (D-4857)').not.toContain('seeds the older record');
     expect(para, 'a failed commit withholds the act (D-4857)').not.toContain('a failed checkpoint of an unchanged set withholds no act');
+    expect(para, 'the watcher\'s one tick is stopped, not only a lane\'s timer (review 411, F4)').not.toContain('only the lane\'s timer is stopped');
     expect(para, 'the exit is identical, the timing is not (review of fix round 5, F4)').not.toContain('see exactly what they saw before');
     expect(para, 'a failed mark leaves the last landed write, not always clean (review F2)').not.toContain('as the last write left it, which is `clean` and never `sealed`');
     expect(para, 'a failed mark leaves the last landed write, not always clean (review F2)').not.toContain('The same words follow every unclean exit afterwards');
@@ -155,7 +162,7 @@ describe('the spec says what a restart does to the dead-coordinator lane (review
       'a restarted lane can ask for that abandon SOONER than an unrestarted one would',
       'Every pass that changes an anchor or the held set marks the state dirty first, alone, and then commits the exact snapshot, every anchor change and the state clean in one transaction. A mark or a commit that fails changes no durable anchor and acts on nothing; its anchor changes stay pending in memory, laid over the durable anchors and re-sent by the next commit, and the in-memory hold moves to that pass\'s before the first statement that can throw, and a throw anywhere between the mark and the commit\'s result (the carrier read included) is the commit-failed path, so a failed write or a thrown statement never forgets a trip or a doubt in the process that saw it. A commit that fails leaves the state dirty, so a restart is conservative; a mark that fails leaves the state as the last landed write left it (`clean`, or `dirty` after an earlier commit that failed) and never `sealed`, because the first pass of every process unseals (D-4857, D-4916)',
       'The exit status is identical to what it was before the handler existed (death by the signal)',
-      'the stop takes up to the bound longer. During that bound only the lane\'s timer is stopped: a tick already in flight can still run the other lanes\' sweeps and the routes keep serving, so an act begun then is cut off by the re-raise, as any act could be by a SIGKILL',
+      'the stop takes up to the bound longer. During that bound the watcher\'s tick is stopped; a tick already in flight, the routes and the independent timers (the box-token driver\'s, the auth sessions\', the session sockets\') keep running, so an act begun then is cut off by the re-raise, as any act could be by a SIGKILL',
       'A second identical signal during the bound kills at once, with no seal: the listeners are `once`, so the second reaches the default action, and the cost is an unclean exit',
       'A different signal during the bound (a SIGINT inside a SIGTERM\'s, or the reverse) is handled, because its `once` listener stands until the first handler ends: both handlers wait on the pass in flight, the first to resume seals and re-raises its own signal, and the process dies of that one; the seal is one generation-checked statement, so no second write can land',
       'for `no-landed-write` and `already-sealed`, which write nothing and leave the state as it stands, it says that a sealed state is trusted, and never that the state is seeded conservatively',
@@ -313,5 +320,46 @@ describe('the specs', () => {
   it('the build-4 design, where the causedBy vocabulary is written, names the third word', () => {
     expect(flat('docs/superpowers/specs/2026-08-11-build4-conversation-and-controls-design.md'))
       .toContain("carry `causedBy ∈ {'coordinator','operator',<session id>}` — and, since workspace lifecycle wave 4, `'sweep'`");
+  });
+});
+
+// FIX ROUND 6 (review 411, F4-F7; D-4916): words in the source, the spec and the plan that the seal's design made false or
+// incomplete. Each replaced phrase is pinned gone, each new one pinned present.
+describe('fix round 6 words (review 411, F4-F7; D-4916)', () => {
+  /** A source file with its comment leaders folded away, so a comment wrapped over lines reads as the sentence it is. */
+  const src = (p: string): string => read(p).replace(/\n\s*(\*|\/\/+)\s?/g, ' ').replace(/\s+/g, ' ');
+  it('F4: shutdownseal.ts says the watcher\'s tick is stopped, and what keeps running', () => {
+    const s = src('server/src/shutdownseal.ts');
+    expect(s).toContain('during it the watcher\'s tick is stopped; a tick in flight, the routes and the independent timers (the box-token driver\'s, the auth sessions\', the session sockets\') keep running');
+    expect(s).not.toContain('only the lane\'s timer is stopped');
+  });
+  it('F5: watch.ts says a sealed start writes no breaker state or anchor, not "nothing"', () => {
+    const w = src('server/src/watch.ts');
+    expect(w).toContain('a sealed start writes no breaker state or anchor beyond its unseal (a tripping pass may still write its feed row) and acts on nothing until its unseal has landed');
+    expect(w).not.toContain('a sealed start writes NOTHING else');
+    expect(w).toContain('`unseal-pending` (D-4916): a sealed start whose unseal has not landed. No breaker state or anchor is written (a tripping pass\'s feed row may be) and no act is composed');
+    expect(w).not.toContain('whose unseal has not landed. NOTHING is written and no act is composed');
+  });
+  it('F6: the stale words are true', () => {
+    const w = src('server/src/watch.ts');
+    expect(w).toContain('until one lands or a sealed state is read: it matches no set\'s key');
+    expect(w).not.toContain('until one lands or a clean state is read');
+    expect(w).toContain('so under a sealed state this flags only anchors written outside those commits');
+    expect(w).not.toContain('so under a clean state this flags only');
+    expect(w).toContain('does not wedge the retry for good while it leaves the row sealed');
+    expect(w).not.toContain('moved does not wedge the retry for good.');
+    const e = src('server/src/coord/endDeadCoordinator.ts');
+    expect(e).toContain('absent, dirty, unsealed or unreadable');
+    expect(e).not.toContain('absent, dirty or unreadable.');
+    const spec = flat('docs/superpowers/specs/2026-09-24-workspace-lifecycle-design.md');
+    expect(spec).toContain('an absent row reads `absent`, which seeds the conservative hold as an unsealed one does');
+    expect(spec).not.toContain('the lane reads no row as unsealed');
+  });
+  it('F7: the plan\'s entries say D-4916 amended them', () => {
+    const p = flat('docs/superpowers/plans/2026-10-11-workspace-lifecycle-wave6-resumed-expiry-and-arming-close-out.md');
+    expect(p).toContain('the recovery remains the rule for a SEALED state (D-4916: a clean one is not trusted and seeds conservatively, so the recovery does not run there), where it now flags only an older build\'s anchors');
+    expect(p).not.toContain('the recovery remains the rule for a clean state, where it now flags');
+    expect(p).toContain('the same conservative seed follows a typed state that reads dirty or absent (and, since D-4916, clean but not sealed)');
+    expect(p).toContain('`server/src/shutdownseal.ts` (D-4916) holds the shutdown handler and `server/src/index.ts` one additive block that installs it; both are named here by D-4916');
   });
 });

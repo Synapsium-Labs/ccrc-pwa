@@ -311,7 +311,7 @@ export function recordDeadCoordinatorBreaker(
 }
 
 /** The feed row for a pass that seeded the breaker's hold conservatively (D-4857; review 382, R2): its typed state
- *  absent, dirty or unreadable. Written once, by the pass that seeds, under the first claimant held (else the first of
+ *  absent, dirty, unsealed or unreadable. Written once, by the pass that seeds, under the first claimant held (else the first of
  *  the population, else `fleet`). */
 export function recordDeadCoordinatorBreakerSeed(
   deps: Pick<EndDeadCoordinatorDeps, 'coord' | 'notifyLog'>, cause: DeadCoordinatorSeedCause, held: readonly string[],
