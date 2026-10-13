@@ -3751,6 +3751,55 @@ if [[ "$event" == PreToolUse && "${tool:-}" == Bash && "$payload" == *merge* \
   fi
 fi
 
+# ── THE ROLE-SKILL DENY (D-4934) ─────────────────────────────────────────
+# Three skills make whoever loads them act AS the session: `ccrc-worker`,
+# `ccrc-reviewer` and `ccrc-coordinator` ack mail, take claims, send wave-done
+# or review-done, and open or dispatch runs, all under the session's identity.
+# A subagent (a session started by another session's Agent tool or a workflow
+# agent() call) cannot be the session, and one that loaded the worker skill once
+# sent a false wave-done as its worker. The three descriptions already say
+# "Never use it inside a subagent", and a subagent on a Codex lane loaded the
+# reviewer skill as its first action after that wording shipped, so wording is
+# not enough: this arm refuses the call, on every lane. It is the operator's
+# ruling of 2026-10-13 ("guard against those 3"), and it is a speed bump in the
+# merge deny's sense: a subagent that wants the text can still read the file.
+# NOTHING ELSE IS LIMITED. Subagents may use skills by design, so any other
+# skill passes, and so does the main thread: `paid` (the payload parse's flag,
+# a non-empty `agent_id`) is what tells the two apart, and an empty string is no
+# id. The skill is matched by its exact name, or by its name behind ONE
+# `<namespace>:` prefix (`x:ccrc-worker`), never as a substring: `ccrc-workers`,
+# `my-ccrc-worker` and `ccrc-worker:x` (the skill `x` of a plugin named
+# `ccrc-worker`) are other skills.
+# THE THREE NAMES ARE WRITTEN HERE, ONCE. `session-hook-role-skill-deny.test.ts`
+# pins them against the `name:` frontmatter of the three SKILL.md files, so a
+# rename turns that suite red rather than silently disarming this deny.
+# ORDER IS BUDGET, as in the merge deny above: the event, the tool name and
+# `paid` are already in memory, so a non-Skill event, and the main thread's
+# Skill call, pay no fork at all, and only a subagent's Skill call pays the one
+# jq for the skill's name.
+# A deny already set is never replaced (the merge deny's own guard, copied
+# whole). Today it cannot be set on a Skill call, because every other deny here
+# fires on another tool, and the guard is written for the day one does.
+# FAIL-OPEN, like every gate in this file: a jq that cannot read the payload
+# (`.tool_input.skill?` swallows a `tool_input` that is no object) answers
+# nothing, and a `_hook_deny_json` that cannot build the envelope leaves
+# `pre_json` as it was. This arm prints nothing itself: the one print site at
+# the end of the file emits the envelope, after the hookstate rename.
+ROLE_SKILLS="ccrc-worker ccrc-reviewer ccrc-coordinator"
+if [[ "$event" == PreToolUse && "${tool:-}" == Skill && -n "$paid" \
+      && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
+  rsk=$(jq -r '.tool_input.skill? // "" | tostring' <<<"$payload" 2>/dev/null) || rsk=""
+  rbare=${rsk#*:}
+  for rname in $ROLE_SKILLS; do
+    if [[ "$rsk" == "$rname" || "$rbare" == "$rname" ]]; then
+      rreason="ccrc: this call loads the \`$rname\` skill from a subagent (a session started by another session's Agent tool or a workflow agent() call), and that skill makes whoever loads it act as the session."
+      rreason+=" A subagent never acks, claims or sends ccrc mail and never opens or dispatches a run: do the task you were given and return your report to your parent."
+      if rjson=$(_hook_deny_json "$rreason"); then pre_json=$rjson; fi
+      break
+    fi
+  done
+fi
+
 if [[ "$event" == SubagentStart || "$event" == SubagentStop ]]; then
   name=$(jq -r '.agent_name // .subagent_name // .agent_type // "subagent"' <<<"$payload" 2>/dev/null) || name="subagent"
   now=$(_hook_epoch_ms)
