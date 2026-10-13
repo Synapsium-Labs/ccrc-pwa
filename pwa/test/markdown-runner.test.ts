@@ -404,6 +404,20 @@ describe('the queue: FIFO, abort, prewarm, dispose', () => {
     expect(clock.pending).toBe(0);
   });
 
+  it('an already-aborted signal rejects at once while another job runs, and that job is never posted', async () => {
+    const { runner, workers } = harness();
+    void runner.parse('a', CHAT);
+    const ac = new AbortController();
+    ac.abort('gone');
+    const b = track(runner.parse('b', { ...CHAT, signal: ac.signal }));
+    await flush();
+    expect(b).toEqual({ state: 'rejected', reason: 'gone' });
+    const w = workers[0]!;
+    w.reply(w.posts[0]!.id, answer(1));
+    await flush();
+    expect(w.posts.map((j) => j.src)).toEqual(['a']);
+  });
+
   it('prewarm spawns once and is idempotent; the next job uses that worker', () => {
     const { runner, workers, spawn } = harness();
     runner.prewarm();

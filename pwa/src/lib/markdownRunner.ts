@@ -187,6 +187,7 @@ export function createMarkdownRunner(deps: Partial<MarkdownRunnerDeps> = {}): Ma
     }
     const at = queue.indexOf(job);
     if (at !== -1) {
+      // Out of the queue now, not skipped by `pump` at its turn: its source is not held behind a running job.
       queue.splice(at, 1);
       job.reject(reason);
     }
