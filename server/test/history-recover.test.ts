@@ -19,7 +19,7 @@ import * as pty from 'node-pty';
 import {
   makeHistoryBox, runSweep, runShim, runDriver, skipOnDarwin, openStoreRO, counters, journalRecords, plantSession,
   plantTranscript, spoolLine, preloadOptions, PRELOADS, CLI, recoverRow, boundEmptyStore,
-  runCli, withPane, seedFamily, journalDirOf, type HistoryBox, type SpawnOpts,
+  runCli, withPane, seedFamily, journalDirOf, REPO, type HistoryBox, type SpawnOpts,
 } from './historyHelpers.js';
 import { userRow, assistantRow, boundaryRow, summaryRow } from './historyFixtures.js';
 import { removeTmpFixturesEachTest, mkTmp } from './tmpHelpers.js';
@@ -639,6 +639,24 @@ describe('the recovery step (W1-B2 Task 25; spec §9.14)', () => {
     expect(SW.journalRedactPairs(P, storeId).pairs.length, 'readable again: its pair is read too').toBe(3);
   });
 
+  it('in-process: H-184, journalRedactPairs names a link, a directory and a FIFO at a month name unreadable, apart from a regular file whose head names another store, which stays foreign', () => {
+    const box = makeHistoryBox('ccrc-history-recover-jpairs-nonregular-');
+    const P = historyPaths(box.home);
+    const { storeId } = createStore(box.home);
+    const t0 = Date.now() - 10 * MIN;
+    const M = new Date(t0).toISOString().slice(0, 7);
+    plantJournalFile(box, storeId, M, 'feedbee1', t0, []);
+    plantJournalFile(box, storeId, M, 'feedbee2', t0 + 5, [], u(0xd2));
+    const dir = path.join(box.root, 'journal', storeId);
+    fs.symlinkSync(path.join(dir, `${M}.feedbee1.jsonl`), path.join(dir, `${M}.feedbee3.jsonl`));
+    fs.mkdirSync(path.join(dir, `${M}.feedbee4.jsonl`), { mode: 0o700 });
+    const fifo = spawnSync('mkfifo', [path.join(dir, `${M}.feedbee5.jsonl`)], { encoding: 'utf8' });
+    expect(fifo.status, `${fifo.stdout}${fifo.stderr}`).toBe(0);
+    const got = SW.journalRedactPairs(P, storeId);
+    expect(got.foreign, 'only the regular file with a foreign head is foreign').toEqual([`${M}.feedbee2.jsonl`]);
+    expect([...got.unreadable].sort(), 'a link, a directory and a FIFO are data the read could not see').toEqual([`${M}.feedbee3.jsonl`, `${M}.feedbee4.jsonl`, `${M}.feedbee5.jsonl`]);
+  });
+
   it('mergeJournalByTime: two writers\' items merge by t, each file\'s own order kept, a tie to the earlier file; one file, and none, pass through (R-T25-1; planReplay and the executor share it)', () => {
     const item = (tag: string, t: number): { tag: string; t: number } => ({ tag, t });
     const tags = (xs: Array<{ tag: string }>): string[] => xs.map((x) => x.tag);
@@ -769,6 +787,44 @@ describe('the recovery step (W1-B2 Task 25; spec §9.14)', () => {
     }
   });
 
+  it('in-process: H-177, the head is the first non-empty line however far in it starts or ends: 5000 leading newlines, and a head line that straddles byte 4096, still drop the foreign file whole, as planReplay drops it', async () => {
+    // journalEnds once read a 4096-byte probe: past it the head was null, the file was kept as this store's, and its later records replayed.
+    for (const blanks of [5000, 4050]) {
+      const box = makeHistoryBox(`ccrc-history-recover-far-head-${blanks}-`);
+      const P = historyPaths(box.home);
+      const ids = createStore(box.home);
+      const t0 = Date.now() - 10 * MIN;
+      const M = new Date(t0).toISOString().slice(0, 7);
+      const name = `${ID}.${t0 + 5}.4242.jsonl`;
+      const lines = [
+        journalRecord('head', t0, { store_id: u(0xd2), month: M, writer: 'feedbea7' }),
+        journalRecord('file', t0 + 5, { name }),
+        journalRecord('spool', t0 + 5, { ord: 1, rec: { v: 1, ev: 'Stop', id: ID, sid: u(0xd3), ts: t0 + 5 } }),
+        journalRecord('verdict', t0 + 6, { event_key: 'none', kind: 'drained', file: name }),
+      ];
+      const dir = path.join(box.root, 'journal', ids.storeId);
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(dir, `${M}.feedbea7.jsonl`), `${'\n'.repeat(blanks)}${lines.join('\n')}\n`, { mode: 0o600 });
+      if (blanks === 4050) {
+        const at = Buffer.byteLength('\n'.repeat(blanks));
+        expect(at < 4096 && at + Buffer.byteLength(lines[0]!) > 4096, 'CONTROL: the head line straddles byte 4096').toBe(true);
+      }
+      const planned = planReplay({ storeId: ids.storeId, files: [{ name: `${M}.feedbea7.jsonl`, month: M, writer: 'feedbea7', lines: [...Array<string>(blanks).fill(''), ...lines] }], ticksAfter: 0 });
+      expect(planned.map((a) => a.do), `${blanks}: planReplay drops the file whole`).toEqual(['skip']);
+      const db = openWriter(P.dbFile);
+      try {
+        db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+        let r = { moved: false, done: false, held: false };
+        for (let i = 0; i < 5 && !r.done; i += 1) r = await SW.recoveryStep(db, stepCtx(box, ids));
+        expect(r.done, `${blanks}: the step completed`).toBe(true);
+        expect(countersOn(db, 'journal_head_mismatch', 'journal_spool_undrained_gone'), `${blanks}: the executor counts the file once, as planReplay does`).toEqual({ journal_head_mismatch: 1, journal_spool_undrained_gone: 0 });
+        expect({ ...db.prepare('SELECT count(*) AS n FROM spool_receipts').get() }, `${blanks}: and inserts no receipt`).toEqual({ n: 0 });
+      } finally {
+        closeWriter(db);
+      }
+    }
+  });
+
   it('in-process: H-92, a month name that is a socket, a link to a this-store file or a directory is foreign (counted journal_head_mismatch once, never replayed, never a failed chunk), like any name that is no regular file', async () => {
     // The listed name's kind decides, not the open's errno: a socket fails open with ENXIO, a link with ELOOP (O_NOFOLLOW),
     // and a directory opens and meets the regular-file check. None is journal data an unreadable file might hold, so none
@@ -857,6 +913,44 @@ describe('the recovery step (W1-B2 Task 25; spec §9.14)', () => {
     } finally {
       closeWriter(db);
       try { fs.chmodSync(dir, 0o700); fs.chmodSync(file, 0o600); } catch { /* removed with the fixture */ }
+    }
+  });
+
+  it('in-process: H-176, a journal/<id>/ that lists but cannot be searched (0600) leaves its month file unreadable, never gone: the redact-pair read names it and the recovery chunk fails', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root searches a 0600 directory
+    // Open and lstat both answer EACCES here (readdir works, so journalListing lists the name); 'gone' would drop the file from the listing and let the phases complete past it.
+    const box = makeHistoryBox('ccrc-history-recover-unsearchable-');
+    const P = historyPaths(box.home);
+    const ids = createStore(box.home);
+    const t0 = Date.now() - 10 * MIN;
+    const M = new Date(t0).toISOString().slice(0, 7);
+    const name = `${M}.feedbea8.jsonl`;
+    plantJournalFile(box, ids.storeId, M, 'feedbea8', t0, [
+      journalRecord('verdict', t0 + 1, { event_key: 'none', kind: 'family', ccrc_id: ID, generation: u(0xda), project: 'demo', first_seen_ms: t0 + 1 }),
+    ]);
+    const dir = path.join(box.root, 'journal', ids.storeId);
+    const db = openWriter(P.dbFile);
+    try {
+      db.prepare("INSERT INTO derivation_state (step, version, cursor, completed_ms) VALUES ('recover', ?, NULL, NULL)").run(Date.now());
+      fs.chmodSync(dir, 0o600);
+      try {
+        const got = SW.journalRedactPairs(P, ids.storeId);
+        expect(got.unreadable, 'the unsearchable directory\'s month file is named unreadable').toEqual([name]);
+        expect(got.foreign, 'and is no foreign file').toEqual([]);
+        expect(await SW.recoveryStep(db, stepCtx(box, ids)), 'index, a month file in an unsearchable directory').toEqual({ moved: false, done: false, held: false });
+        expect(countersOn(db, 'recover_chunk_failed'), 'the chunk failed').toEqual({ recover_chunk_failed: 1 });
+        expect(cursorOn(db)).toBeNull();
+        expect(db.prepare('SELECT count(*) AS n FROM sessions').get()!['n'], 'nothing was replayed past it').toBe(0);
+      } finally {
+        fs.chmodSync(dir, 0o700);
+      }
+      let r = { moved: false, done: false, held: false };
+      for (let i = 0; i < 5 && !r.done; i += 1) r = await SW.recoveryStep(db, stepCtx(box, ids));
+      expect(r.done, 'CONTROL: searchable again, the step completes').toBe(true);
+      expect(db.prepare('SELECT ccrc_id FROM sessions').all().map((x) => x['ccrc_id']), 'CONTROL: and replays the file').toEqual([ID]);
+    } finally {
+      closeWriter(db);
+      try { fs.chmodSync(dir, 0o700); } catch { /* removed with the fixture */ }
     }
   });
 
@@ -1777,7 +1871,49 @@ describe('C57: doctor --restore, the drill (W1-B2 Task 27)', () => {
     expect(out, 'and says recovery skips it').toContain('journal_head_mismatch');
     expect(metaOf(box, 'store_id')).toBe(storeId);
     expect(fs.existsSync(P.dbFile), 'the store is linked').toBe(true);
+    expect(out, 'H-184: the notice says what was measured, a head naming another store').toContain('a regular file whose head names another store');
   }, 1.5 * HEAVY);
+
+  it('H-184 (D-4593): a link, FIFO or directory at a month name is unreadable data, not a foreign file: the restore is refused naming it, nothing is linked (the H-103 foreign-head case, a regular file, still restores)', async () => {
+    for (const kind of ['link', 'directory'] as const) {
+      const { box, storeId } = rrBuilt(`ccrc-hist-c57nr-${kind}-`);
+      const P = rrRoot(box);
+      const name = rrBackup(box);
+      rrLose(box, { binding: false, journal: false });
+      const dir = path.join(P.journalDir, storeId);
+      const month = new Date().toISOString().slice(0, 7);
+      const entry = `${month}.feedbee4.jsonl`;
+      // The store's own month file, moved away and replaced by a link (or a directory): its redact pairs are unknown.
+      if (kind === 'link') {
+        const moved = path.join(box.home, 'moved-month-file.jsonl');
+        fs.writeFileSync(moved, '');
+        fs.symlinkSync(moved, path.join(dir, entry));
+      } else {
+        fs.mkdirSync(path.join(dir, entry), { mode: 0o700 });
+      }
+      const idBefore = fs.readFileSync(P.storeId, 'utf8');
+      const r = await shimOnPty(box, ['--op', 'restore', name]);
+      expect(lastRc(r.out), `${kind}\n${r.out}`).toEqual({ rc: 2, reason: 'restore-refused' });
+      const line = r.out.replace(/\r/g, '').split('\n').find((l) => l.includes('journal file(s) could not be read for redact pairs:'));
+      expect(line !== undefined && line.includes(entry), `${kind}: the entry is named as a file that could not be read`).toBe(true);
+      expect(fs.existsSync(P.dbFile), `${kind}: nothing was linked`).toBe(false);
+      expect(rrNames(P.dbDir).filter((n) => n.startsWith('.history.db.restore.')), `${kind}: the staged copy was removed`).toEqual([]);
+      expect(fs.readFileSync(P.storeId, 'utf8'), `${kind}: store.id is unchanged`).toBe(idBefore);
+    }
+  }, 2.5 * HEAVY);
+
+  it('H-180: the lines that say a binding verb stopped name the operator (OPERATOR_ACTS) at the end of the line: the bound-but-does-not-open, adopt-stopped and restore-stopped lines', () => {
+    // No fixture reaches these three: adoptStore's StoreError is a race after decideBind, and neither commitRestore's nor finishBind's open failure can be planted. So the source is pinned.
+    const src = fs.readFileSync(path.join(REPO, 'ccd', 'history', 'sweep.mjs'), 'utf8');
+    const defs = src.split('\n').filter((l) => l.startsWith('const OPERATOR_ACTS = '));
+    expect(defs, 'OPERATOR_ACTS is defined once').toHaveLength(1);
+    expect(defs[0], 'and names the operator').toContain('the operator acts on it, from a terminal outside any session');
+    for (const prefix of ['the store is bound but does not open yet: ', 'adopt stopped: ', 'restore stopped: ']) {
+      const lines = src.split('\n').filter((l) => l.includes('out(`history-sweep: ' + prefix));
+      expect(lines, `${prefix}: exactly one line says it (a rename turns this red, never vacuous)`).toHaveLength(1);
+      expect(lines[0]!.trimEnd().endsWith('${OPERATOR_ACTS}`);'), `${prefix}: ends with the operator clause`).toBe(true);
+    }
+  });
 });
 
 describe('Redaction first at the link: a restore applies the journal\'s redact records before history.db exists (W1-B2 Task 27)', () => {
@@ -2008,7 +2144,7 @@ describe('C58: doctor --rebuild, its store_id and its refusals (W1-B2 Task 28)',
     fs.rmSync(P.wal);
     const T = '0189abcd-1234-4678-9abc-0000000000d8';
     plantDir(box, T);
-    await refused(box, ['--store-id', T], 'store.id and --store-id disagree');
+    expect(await refused(box, ['--store-id', T], 'store.id and --store-id disagree'), 'H-187: --store-id cures nothing here, so no flag is offered').not.toMatch(/--store-id <uuid>/);
     fs.rmSync(path.join(P.journalDir, T), { recursive: true });
     fs.rmSync(P.storeId);
     fs.rmSync(P.writer);
@@ -2016,7 +2152,7 @@ describe('C58: doctor --rebuild, its store_id and its refusals (W1-B2 Task 28)',
       'H-107: a --store-id naming no directory is cured by naming one that exists').toMatch(/the operator names one with --store-id <uuid>, from a terminal outside any session/);
     // journal/X/ whose month files' heads name S: no directory names itself, so none names a store.
     fs.renameSync(path.join(P.journalDir, storeId), path.join(P.journalDir, '0189abcd-1234-4678-9abc-0000000000da'));
-    await refused(box, [], 'a directory whose heads name another store');
+    expect(await refused(box, [], 'a directory whose heads name another store'), 'H-187: nor for heads naming another store').not.toMatch(/--store-id <uuid>/);
     // A killed pass's temp is removed first, even by a rebuild that then refuses: under the lock every temp is stale
     // (§9.4). The one write a refusal makes, and only of a dead temp.
     const dead = path.join(P.dbDir, 'history.db.new.888888');
@@ -2069,14 +2205,60 @@ describe('C58: doctor --rebuild, its store_id and its refusals (W1-B2 Task 28)',
     const F = '0189abcd-1234-4678-9abc-0000000000dd';
     fs.mkdirSync(path.join(P.journalDir, E), { mode: 0o700 });
     plantJournalFile(box, F, new Date().toISOString().slice(0, 7), 'abcdef01', Date.now(), [], storeId);
+    // H-178: a link at a month name is a measured, permanent condition, so it is its own word and a refusal, never the exit-5 retry of an unreadable file.
+    const G = '0189abcd-1234-4678-9abc-0000000000de';
+    fs.mkdirSync(path.join(P.journalDir, G), { mode: 0o700 });
+    fs.symlinkSync(month, path.join(P.journalDir, G, `${new Date().toISOString().slice(0, 7)}.abcdef01.jsonl`));
     expect(SW.journalStoreDirs(box.home).map((d) => `${d.storeId}=${d.heads}`).sort())
-      .toEqual([`${storeId}=agree`, `${E}=disagree`, `${F}=disagree`].sort());
-    for (const id of [E, F]) {
+      .toEqual([`${storeId}=agree`, `${E}=disagree`, `${F}=disagree`, `${G}=foreign`].sort());
+    for (const id of [E, F, G]) {
       const r = await shimOnPty(box, ['--op', 'rebuild', '--store-id', id]);
       expect(lastRc(r.out), r.out).toEqual({ rc: 2, reason: 'rebuild-refused' });
       noStore(id);
     }
   }, 2 * HEAVY);
+
+  it('H-179 (D-4605): in one directory a month file whose head names another store outranks a file that cannot be read, in either order; a link outranks an unreadable file and is outranked by the disagreement', async (ctx) => {
+    if (process.getuid?.() === 0) ctx.skip();                       // root reads a 0000 file
+    const { box, storeId } = rrBuilt('ccrc-hist-c58prec-');
+    const P = rrRoot(box);
+    rrLose(box, { binding: true, journal: false });
+    const M = new Date().toISOString().slice(0, 7);
+    const ids = { X: u(0xf1), Y: u(0xf2), Z1: u(0xf3), Z2: u(0xf4), W1: u(0xf5), W2: u(0xf6) };
+    const locked: string[] = [];
+    // Month files sort by writer: 'aaaaaaaa' is read before 'bbbbbbbb'. A foreign head names the built store; a 0000 file is unreadable; a link to a readable file is foreign.
+    const regular = (dir: string, writer: string): void => plantJournalFile(box, dir, M, writer, Date.now(), [], storeId);
+    const unread = (dir: string, writer: string): void => {
+      plantJournalFile(box, dir, M, writer, Date.now(), [], dir);
+      const f = path.join(P.journalDir, dir, `${M}.${writer}.jsonl`);
+      fs.chmodSync(f, 0o000);
+      locked.push(f);
+    };
+    const link = (dir: string, writer: string): void => {
+      fs.mkdirSync(path.join(P.journalDir, dir), { recursive: true, mode: 0o700 });
+      fs.symlinkSync(path.join(P.journalDir, storeId, fs.readdirSync(path.join(P.journalDir, storeId)).sort()[0]!), path.join(P.journalDir, dir, `${M}.${writer}.jsonl`));
+    };
+    try {
+      regular(ids.X, 'aaaaaaaa'); unread(ids.X, 'bbbbbbbb');      // the disagreement first
+      unread(ids.Y, 'aaaaaaaa'); regular(ids.Y, 'bbbbbbbb');      // the unreadable file first
+      link(ids.Z1, 'aaaaaaaa'); unread(ids.Z1, 'bbbbbbbb');       // the link first
+      unread(ids.Z2, 'aaaaaaaa'); link(ids.Z2, 'bbbbbbbb');       // the unreadable file first
+      regular(ids.W1, 'aaaaaaaa'); link(ids.W1, 'bbbbbbbb');      // the disagreement first
+      link(ids.W2, 'aaaaaaaa'); regular(ids.W2, 'bbbbbbbb');      // the link first
+      const words = Object.fromEntries(SW.journalStoreDirs(box.home).map((d) => [d.storeId, d.heads]));
+      expect(words[ids.X], 'X: a disagreement, then an unreadable file').toBe('disagree');
+      expect(words[ids.Y], 'Y: an unreadable file, then a disagreement').toBe('disagree');
+      expect(words[ids.Z1], 'Z1: a link, then an unreadable file').toBe('foreign');
+      expect(words[ids.Z2], 'Z2: an unreadable file, then a link').toBe('foreign');
+      expect(words[ids.W1], 'W1: a disagreement, then a link').toBe('disagree');
+      expect(words[ids.W2], 'W2: a link, then a disagreement').toBe('disagree');
+      const r = await shimOnPty(box, ['--op', 'rebuild', '--store-id', ids.Y]);
+      expect(lastRc(r.out), r.out).toEqual({ rc: 2, reason: 'rebuild-refused' });
+      expect(fs.existsSync(P.dbFile), 'no DB was minted').toBe(false);
+    } finally {
+      for (const f of locked) fs.chmodSync(f, 0o600);
+    }
+  }, HEAVY);
 
   it('H-101: a directory planted at op does not wedge rebuild: the marker is cleared before it is written', async () => {
     const { box, storeId } = rrBuilt('ccrc-hist-c58op-');

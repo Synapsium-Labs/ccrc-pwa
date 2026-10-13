@@ -4703,6 +4703,38 @@ describe("decideBind: the binding verbs' preconditions, unreadable never read as
     expect(refused('rebuild', { journalStoreDirs: [S], journalDirs: [{ storeId: S, heads: 'disagree' }] })).toMatchObject({ ok: false, rc: 2, reason: 'rebuild-refused' });
   });
 
+  it('H-178 (D-4605): rebuild over a directory holding a link, socket, FIFO or directory at a month name (heads foreign) is exit 2 rebuild-refused naming the entry, on both paths and with no remedy; it is no exit 5', () => {
+    const one: Partial<libOps.BindFacts> = { journalStoreDirs: [S], journalDirs: [{ storeId: S, heads: 'foreign' }] };
+    for (const o of [one, { ...one, storeIdArg: S }]) {
+      const r = refused('rebuild', o);
+      expect(r, JSON.stringify(o)).toMatchObject({ ok: false, rc: 2, reason: 'rebuild-refused', detail: `journal/${S}/ holds an entry at a month-file name that is no regular file (a link, socket, FIFO or directory)` });
+      expect(r.ok ? null : r.remedy, `${JSON.stringify(o)}: --store-id cures nothing here`).toBeUndefined();
+    }
+  });
+
+  it('H-183 and H-187 (D-4606): only the two refusals a --store-id cures carry remedy: store-id; every other rebuild refusal, and an unmeasured one, carries none', () => {
+    const X = '0189abcd-1234-4678-9abc-0000000000e3';
+    const two: Partial<libOps.BindFacts> = { journalStoreDirs: [S, T], journalDirs: [{ storeId: S, heads: 'agree' }, { storeId: T, heads: 'agree' }] };
+    const remedyOf = (o: Partial<libOps.BindFacts>): 'store-id' | undefined => {
+      const r = refused('rebuild', o);
+      expect(r.ok, JSON.stringify(o)).toBe(false);
+      return r.ok ? undefined : r.remedy;
+    };
+    expect(remedyOf({ ...two }), 'several directories unnamed').toBe('store-id');
+    expect(remedyOf({ ...two, storeIdArg: X }), 'a --store-id naming no directory').toBe('store-id');
+    expect(remedyOf({ db: 'present', dbStoreId: v(S), storeId: v(S) }), 'a DB present').toBeUndefined();
+    expect(remedyOf({ wal: true, storeId: v(S) }), 'a leftover -wal').toBeUndefined();
+    expect(remedyOf({}), 'nothing names a store').toBeUndefined();
+    expect(remedyOf({ ...two, storeId: v(S), storeIdArg: T }), 'store.id and --store-id disagree').toBeUndefined();
+    expect(remedyOf({ journalStoreDirs: [S], journalDirs: [{ storeId: S, heads: 'disagree' }] }), 'heads naming another store, unnamed').toBeUndefined();
+    expect(remedyOf({ journalStoreDirs: [S], journalDirs: [{ storeId: S, heads: 'disagree' }], storeIdArg: S }), 'heads naming another store, named').toBeUndefined();
+    expect(remedyOf({ journalStoreDirs: [S], journalDirs: [{ storeId: S, heads: 'foreign' }] }), 'a foreign entry').toBeUndefined();
+    expect(remedyOf({ journalStoreDirs: [S], journalDirs: [{ storeId: S, heads: 'unreadable' }] }), 'an unmeasured directory').toBeUndefined();
+    expect(remedyOf({ journalStoreDirs: ['(unlistable)'] }), 'an unlistable journal/').toBeUndefined();
+    const ok = libOps.decideBind('rebuild', facts({ journalStoreDirs: [S], journalDirs: [{ storeId: S, heads: 'agree' }] }));
+    expect(ok.ok ? null : 'refused', 'CONTROL: an agreeing directory is not refused').toBeNull();
+  });
+
   it('a kind outside BIND_KINDS is a programming error', () => {
     expect(() => libOps.decideBind('import' as 'adopt', facts())).toThrow(TypeError);
   });
@@ -4815,6 +4847,18 @@ describe('RecoverCursor: the recovery step cursor grammar (spec 9.14; B4 adds ex
     // A phase's start and the reindex phase hold no group, so no size is written beside them.
     expect(libReplay.formatRecoverCursor({ phase: 'apply', file: null, offset: 0, blobId: null, groupSize: 4, pairsAdded: false })).toBe('apply');
     expect(libReplay.parseRecoverCursor('reindex:812')?.groupSize).toBeNull();
+  });
+  it('H-182 (D-4607): formatRecoverCursor writes only a group size parseRecoverCursor reads back: a size that is not a positive safe integer throws, null and absent still write none', () => {
+    const at = { phase: 'apply', file: '2026-10.0a1b2c3d.jsonl', offset: 7, blobId: null, pairsAdded: false };
+    for (const bad of [0, -1, 1.5, '2', 2 ** 53, Number.NaN, Infinity]) {
+      expect(() => libReplay.formatRecoverCursor({ ...at, groupSize: bad as number }), String(bad)).toThrow(TypeError);
+    }
+    // CONTROL: the bounds themselves are written, and read back.
+    for (const ok of [1, Number.MAX_SAFE_INTEGER]) {
+      expect(libReplay.parseRecoverCursor(libReplay.formatRecoverCursor({ ...at, groupSize: ok }))?.groupSize, String(ok)).toBe(ok);
+    }
+    expect(libReplay.formatRecoverCursor({ ...at, groupSize: null })).toBe('apply:2026-10.0a1b2c3d.jsonl:7');
+    expect(libReplay.formatRecoverCursor(at)).toBe('apply:2026-10.0a1b2c3d.jsonl:7');
   });
   it("a NULL cursor is the step's start", () => {
     expect(libReplay.parseRecoverCursor(null)).toEqual({ phase: 'index', file: null, offset: 0, blobId: null, groupSize: null, pairsAdded: false });

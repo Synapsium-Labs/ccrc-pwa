@@ -640,11 +640,11 @@ export function restoreNameOk(name: string): boolean;
 export interface BindBackup { regular: boolean; storeId: Presence<string>; userVersion: number | null; integrityOk: boolean | null }
 export interface BindFacts extends StoreFacts {
   codeVersion: number; storedVersion: Presence<number>; storeIdArg: string | null;
-  journalDirs: readonly { storeId: string; heads: 'agree' | 'disagree' | 'unreadable' }[];
+  journalDirs: readonly { storeId: string; heads: 'agree' | 'disagree' | 'unreadable' | 'foreign' }[];
   backup: null | BindBackup;
 }
 export function decideBind(kind: 'adopt' | 'restore' | 'rebuild', f: BindFacts):
-  { ok: true; storeId: string } | { ok: false; rc: 2 | 5; reason: string; detail: string };
+  { ok: true; storeId: string } | { ok: false; rc: 2 | 5; reason: string; detail: string; remedy?: 'store-id' };
 export function decideReparse(i: { targets: number; prunedSpans: number }): { ok: true } | { ok: false; reason: 'reparse-too-many' | 'span-pruned' };
 
 // --- W1-B2 Task 7: recovery and repair decisions (spec §9.14, §9.6, §8.4 doctor --repair)

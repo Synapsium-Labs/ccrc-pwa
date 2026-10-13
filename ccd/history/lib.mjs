@@ -5116,12 +5116,15 @@ const BIND_REFUSALS = Object.freeze({ adopt: 'adopt-refused', restore: 'restore-
  *    store.id, naming no directory, or naming one whose heads name another store is refused, with the
  *    candidates named. The two refusals a --store-id cures (several directories unnamed, a --store-id naming no
  *    directory) also carry `remedy: 'store-id'`, so the arm offers the flag only where it helps
- *    (D-4606 (history-rebuild-store-id-hint-where-it-cures)).
+ *    (D-4606 (history-rebuild-store-id-hint-where-it-cures)). A directory whose `heads` is `foreign` holds an entry
+ *    at a month-file name that is no regular file, a measured and permanent condition: it is refused (exit 2) naming
+ *    that, and carries no remedy, where `unreadable` is exit 5 and cured by a retry or a chmod (H-178, D-4605).
  *  D-4188 D-4185 D-4186 */
 export function decideBind(kind, f) {
   if (!Object.hasOwn(BIND_REFUSALS, kind)) throw new TypeError(`decideBind: kind outside BIND_KINDS: ${String(kind)}`);
   const unmeasured = (detail) => ({ ok: false, rc: EXIT.DB, reason: 'store-unmeasured', detail });
   const refuse = (detail) => ({ ok: false, rc: EXIT.REFUSED, reason: BIND_REFUSALS[kind], detail });
+  const foreignEntry = (id) => `journal/${id}/ holds an entry at a month-file name that is no regular file (a link, socket, FIFO or directory)`;
   if (f.dbDir === 'dangling') return { ok: false, rc: EXIT.DB, reason: 'store-root-dangling', detail: 'db/ is a link to nothing: recreate its target or remove the link' };
   if (f.dbDir === 'unmeasured' || f.db === 'unmeasured') return unmeasured('db/ or history.db could not be measured');
   if (presenceUnreadable(f.storeId)) return unmeasured('store.id exists and cannot be read');
@@ -5164,6 +5167,7 @@ export function decideBind(kind, f) {
     if (d === undefined) return { ...refuse(`--store-id ${arg} names no journal directory (journal directories: ${names})`), remedy: 'store-id' };
     // D-4605 (history-rebuild-unreadable-journal-is-unmeasured): a directory the sweep could not read is unmeasured (exit 5), never a refusal.
     if (d.heads === 'unreadable') return unmeasured(`journal/${arg}/ could not be read`);
+    if (d.heads === 'foreign') return refuse(foreignEntry(arg));
     if (d.heads !== 'agree') return refuse(`journal/${arg}/ holds head records naming another store`);
     return { ok: true, storeId: arg };
   }
@@ -5171,6 +5175,7 @@ export function decideBind(kind, f) {
   if (dirs.length === 0) return refuse('nothing names a store_id: no store.id and no journal directory');
   if (dirs.length > 1) return { ...refuse(`several journal directories: name one with --store-id (journal directories: ${names})`), remedy: 'store-id' };
   if (dirs[0].heads === 'unreadable') return unmeasured(`journal/${dirs[0].storeId}/ could not be read`);
+  if (dirs[0].heads === 'foreign') return refuse(foreignEntry(dirs[0].storeId));
   if (dirs[0].heads !== 'agree') return refuse(`journal/${dirs[0].storeId}/ holds head records naming another store`);
   return { ok: true, storeId: dirs[0].storeId };
 }
@@ -5220,10 +5225,16 @@ const RECOVER_REINDEX_CURSOR_RE = /^reindex(?::(0|[1-9][0-9]{0,15}))?(\+pairs)?$
  *  D-4607 (history-recover-cursor-records-group-shape): the position is a byte offset into a group of one file and an
  *  ordinal into a merge group's merged list, so the cursor records the group's file count `n` beside it. The executor
  *  resumes only a group whose size still equals `n`; a cursor with no `/<n>` (written before the size was kept, or
- *  `groupSize` null or absent) restarts its group from its start. */
+ *  `groupSize` null or absent) restarts its group from its start. A `groupSize` that is none of null, absent or a positive safe
+ *  integer throws a TypeError (H-182): parseRecoverCursor answers null to such a text, so it would stall the step for good. */
 export function formatRecoverCursor(c) {
   if (!RECOVER_PHASES.includes(c.phase)) throw new TypeError(`formatRecoverCursor: phase outside RECOVER_PHASES: ${String(c.phase)}`);
   let s = c.phase;
+  // H-182 (D-4607): only a size parseRecoverCursor reads back is written, so a committed cursor is never one lib refuses.
+  const g = c.groupSize;
+  if (g !== undefined && g !== null && !(Number.isSafeInteger(g) && g >= 1)) {
+    throw new TypeError(`formatRecoverCursor: groupSize is not a positive safe integer: ${String(g)}`);
+  }
   if (c.phase === 'reindex') {
     if (c.blobId !== null) s += `:${c.blobId}`;
   } else if (c.file !== null) {

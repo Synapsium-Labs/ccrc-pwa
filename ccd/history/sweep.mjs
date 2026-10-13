@@ -2069,6 +2069,33 @@ export function isRecovering(db) {
   return db.prepare(RECOVER_ROW_SQL).get() !== undefined;
 }
 
+/** The first non-empty line of the open file `fd` (`size` bytes), whole, or '' when the file holds none. It reads
+ *  JOURNAL_HEAD_PROBE bytes at a time: leading newlines are skipped however many, and a line is read to its newline or the
+ *  end of the file (H-177). The read is unbounded by design, as fileLines' and planReplay's are. */
+function firstNonEmptyLine(fd, size) {
+  const piece = Buffer.alloc(JOURNAL_HEAD_PROBE);
+  const parts = [];
+  let started = false;
+  for (let pos = 0; pos < size;) {
+    const n = readSync(fd, piece, 0, Math.min(JOURNAL_HEAD_PROBE, size - pos), pos);
+    if (n <= 0) break;
+    pos += n;
+    let from = 0;
+    if (!started) {
+      while (from < n && piece[from] === 0x0a) from += 1;
+      if (from === n) continue;
+      started = true;
+    }
+    const end = piece.subarray(from, n).indexOf(0x0a);
+    if (end !== -1) {
+      parts.push(Buffer.from(piece.subarray(from, from + end)));
+      break;
+    }
+    parts.push(Buffer.from(piece.subarray(from, n)));
+  }
+  return Buffer.concat(parts).toString('utf8');
+}
+
 /** A journal file's ends, measured as Task 7's planReplay measures a file (which the executor must agree with). Three
  *  answers besides the ends, never folded into one null (D-4592 (history-recover-unreadable-journal-fails-the-chunk);
  *  the "no overloaded null at a seam" rule): recovery never completes past journal data it could not read.
@@ -2104,12 +2131,11 @@ function journalEnds(path) {
     const st = fstatSync(fd);
     if (!st.isFile()) return { kind: 'foreign' };
     if (st.size === 0) return { kind: 'ends', headT: null, headStore: null, lastT: null };
-    const headBuf = Buffer.alloc(Math.min(JOURNAL_HEAD_PROBE, st.size));
-    readSync(fd, headBuf, 0, headBuf.length, 0);
     // The first NON-EMPTY line, as lib planReplay reads the head (H-96): a leading blank fence is skipped by both, so a
-    // file the plan drops for a foreign head is never kept and replayed by the executor.
-    const firstLine = headBuf.toString('utf8').split('\n').find((l) => l !== '') ?? '';
-    const first = parseJournalRecord(firstLine);
+    // file the plan drops for a foreign head is never kept and replayed by the executor. It is read WHOLE, however many
+    // blank bytes lead it and wherever it ends (H-177): the read goes on until its newline or the end of the file,
+    // as planReplay's and fileLines' reads do, so the two never disagree about a head that starts or ends past a probe.
+    const first = parseJournalRecord(firstNonEmptyLine(fd, st.size));
     const head = first.kind === 'record' && first.rec.k === 'head' ? first.rec : null;
     const tailLen = Math.min(JOURNAL_TAIL_PROBE, st.size);
     const tailBuf = Buffer.alloc(tailLen);
@@ -2132,6 +2158,9 @@ function journalEnds(path) {
  *  - `files`: the listed files. A file with no head is kept;
  *  - `foreign`: a file whose head names another store, or a name that is a link or no regular file. Never replayed, and
  *    counted journal_head_mismatch once when the index phase ends, as planReplay drops and counts it;
+ *  - `nonRegular`: the names in `foreign` that are a link or no regular file (journalEnds kind `foreign`), a subset of it
+ *    and the recovery step's own business never. A caller that must tell a file that is not this store's from data it
+ *    could not see reads it (journalRedactPairs, H-184);
  *  - `unreadable`: a file that could not be opened or read (D-4592): it is no other store's file, and its data is not
  *    known, so recoveryStep fails its journal chunks while one stands.
  *  A name that vanished (ENOENT) is in none. */
@@ -2141,11 +2170,12 @@ function journalListing(P, storeId) {
   try {
     names = readdirSync(dir);
   } catch (e) {
-    if (e && e.code === 'ENOENT') return { dir, files: [], foreign: [], unreadable: [] };
+    if (e && e.code === 'ENOENT') return { dir, files: [], foreign: [], nonRegular: [], unreadable: [] };
     throw e;
   }
   const files = [];
   const foreign = [];
+  const nonRegular = [];
   const unreadable = [];
   for (const name of names.sort()) {
     const m = JOURNAL_NAME_RE.exec(name);
@@ -2158,11 +2188,12 @@ function journalListing(P, storeId) {
     }
     if (ends.kind === 'foreign' || (ends.headStore !== null && ends.headStore !== storeId)) {
       foreign.push(name);
+      if (ends.kind === 'foreign') nonRegular.push(name);
       continue;
     }
     files.push({ name, month: m[1], writer: m[2], headT: ends.headT, lastT: ends.lastT });
   }
-  return { dir, files, foreign, unreadable };
+  return { dir, files, foreign, nonRegular, unreadable };
 }
 
 /** A journal file's lines from byte `start`, each with the offset just past it (`next`) and its size with its
@@ -2204,17 +2235,19 @@ function* fileLines(path, start) {
  *  from the moment the store is visible, not from the moment the phase reaches the record. The files are the index
  *  phase's own (journalListing, in name order): the pairs are exactly what that phase could learn. Two lists name every
  *  file it did not read, never skipped silently, and they are two words because they have two remedies
- *  (D-4593 (history-restore-refuses-unread-journal-pairs), refined by H-103):
- *  - `foreign`: a head naming another store, or a name that is no regular file (journalListing's `foreign`). It is not
+ *  (D-4593 (history-restore-refuses-unread-journal-pairs), refined by H-103 and H-184):
+ *  - `foreign`: a REGULAR file whose head names another store (journalListing's `foreign` less its `nonRegular`). It is not
  *    this store's file, so no pair of this store's is in it, and recovery skips it too (journal_head_mismatch);
- *  - `unreadable`: a name it cannot open or read (journalListing's `unreadable`), and any listed file whose read failed
- *    part-way. Its data is not known, so a pair only it holds may be missing.
+ *  - `unreadable`: a name it cannot open or read (journalListing's `unreadable`), a link, socket, FIFO or directory at a month
+ *    name (its `nonRegular`: a store's own month file moved away and replaced by a link is data this read cannot see, and
+ *    recovery skips it unhealed), and any listed file whose read failed part-way. Its data is not known, so a pair only
+ *    it holds may be missing.
  *  A pair is a few dozen bytes and redact records are
  *  rare, so the answer is small; the read is one pass over the journal, under the restore's lock. */
 export function journalRedactPairs(P, storeId) {
   const listing = journalListing(P, storeId);
   const pairs = [];
-  const unreadable = [...listing.unreadable];
+  const unreadable = [...listing.unreadable, ...listing.nonRegular].sort();
   for (const f of listing.files) {
     const found = [];
     try {
@@ -2228,7 +2261,7 @@ export function journalRedactPairs(P, storeId) {
     }
     pairs.push(...found);   // a file read part-way still yields the pairs it gave: a pair can only mask more
   }
-  return { pairs, foreign: listing.foreign, unreadable };
+  return { pairs, foreign: listing.foreign.filter((n) => !listing.nonRegular.includes(n)), unreadable };
 }
 
 /** One replay group's lines from position `at`.
@@ -2272,7 +2305,10 @@ function* groupLines(run, group, at) {
  *  leader changes which it is. The cursor therefore records the group's file count, and a group whose count differs, or
  *  is unknown (a cursor written before the count was kept), restarts at its start rather than reading a number as
  *  the wrong kind of position. Replay applies idempotently, but a restart counts again the skips the group's earlier
- *  chunks counted (a named residual). */
+ *  chunks counted (a named residual).
+ *  A second named residual (H-181): a member of a merge group that grows between two passes with a record timed before the
+ *  stored ordinal shifts every later item, so that record is skipped and an earlier one is applied again; the count
+ *  cannot see it. A group fingerprint beside the count is the recorded follow-up. */
 function locateGroup(groups, cursor) {
   if (cursor.file === null) return { gi: 0, at: 0 };
   const gi = groups.findIndex((g) => g[0] === cursor.file);
@@ -6775,9 +6811,9 @@ const RESTORE_BELT = {
  *  pending marker and link()), and with every redact pair the store's journal holds (Task 25's journalRedactPairs;
  *  R-restore-pairs), so §9.14's "redaction first" holds from the moment the store is visible. A journal file the pair
  *  read could not open refuses the restore (D-4593 (history-restore-refuses-unread-journal-pairs)): the copy is
- *  removed, nothing is linked and no binding file is written; a file that is not this store's (a head naming another
- *  store, a link, a name that is no regular file) is skipped with a notice naming it, as recovery skips it
- *  (H-103). A StoreError from the commit (a copy with no store_id, or
+ *  removed, nothing is linked and no binding file is written, and so does a link, socket, FIFO or directory at a month name
+ *  (data the read cannot see; H-184); a REGULAR file whose head names another store is not this store's, and is skipped
+ *  with a notice naming it, as recovery skips it (H-103). A StoreError from the commit (a copy with no store_id, or
  *  one that will not take WAL: store-not-wal, exit 5) answers its own word and exit, as adoptArm answers one; the
  *  finally removes the temp. It runs before openStore, because a missing store is the state it exists to repair. It
  *  runs under history-off too, since it is a binding verb (§8.4); its recovery step waits for the switch. */
@@ -6869,7 +6905,7 @@ export async function restoreArm(home, P, args, deps, out) {
     }
     staged = null;
     if (journalPairs.foreign.length > 0) {
-      out(`history-sweep: restore: ${journalPairs.foreign.length} journal file(s) not read for redact pairs: ${journalPairs.foreign.join(', ')}; they are not this store's (a head naming another store, or a name that is no regular file), and recovery skips them too (journal_head_mismatch)`);
+      out(`history-sweep: restore: ${journalPairs.foreign.length} journal file(s) not read for redact pairs: ${journalPairs.foreign.join(', ')}; each is a regular file whose head names another store, so it is not this store's, and recovery skips them too (journal_head_mismatch)`);
     }
     return finishBind(home, P, role, deps, out, now);
   } finally {
@@ -6887,14 +6923,18 @@ export async function restoreArm(home, P, args, deps, out) {
  *  Month files and their heads are read exactly as recovery reads them (Task 25's JOURNAL_NAME_RE and journalEnds,
  *  O_NOFOLLOW), so rebuild and replay never disagree about which files a directory holds. A head that is missing or
  *  unreadable names no store (§9.14: link() of a fsynced temp means no month file exists without its head).
- *  Each answers `heads` in three words, never one boolean (D-4605 (history-rebuild-unreadable-journal-is-unmeasured);
+ *  Each answers `heads` in four words, never one boolean (D-4605 (history-rebuild-unreadable-journal-is-unmeasured);
  *  the "no overloaded null at a seam" rule):
  *  - `agree`: it has a month file and every month file's head names this directory;
  *  - `disagree`: it holds no month file, or a month file read whole whose head is missing or names another store;
- *  - `unreadable`: the directory cannot be listed, or a month file is not a readable regular file (journalEnds kind
- *    `unreadable`, `foreign` or `gone`) and no file read whole has already disagreed, or the directory cannot be
+ *  - `foreign`: a month name holds a link, socket, FIFO or directory (journalEnds kind `foreign`) and no file read whole
+ *    has disagreed. That is measured and permanent, so decideBind refuses it (exit 2) naming the entry, where
+ *    `unreadable` is a retry (H-178). It outranks `unreadable`;
+ *  - `unreadable`: the directory cannot be listed, or a month file cannot be read (journalEnds kind `unreadable` or
+ *    `gone`) and nothing measured has already disagreed or been foreign, or the directory cannot be
  *    searched (its lstat fails with anything but ENOENT; H-108). decideBind answers it exit 5
- *    store-unmeasured, as it answers an unlistable journal/, and a rebuild never mints a store under that id. */
+ *    store-unmeasured, as it answers an unlistable journal/, and a rebuild never mints a store under that id.
+ *  The precedence is disagree, then foreign, then unreadable, whatever the order the month files are read in (H-179). */
 export function journalStoreDirs(home) {
   const dir = historyPaths(home).journalDir;
   const out = [];
@@ -6912,12 +6952,20 @@ export function journalStoreDirs(home) {
       continue;
     }
     let names;
-    try { names = readdirSync(sub); } catch { out.push({ storeId: name, heads: 'unreadable' }); continue; }
+    // Sorted, as journalListing sorts: the verdict does not depend on the order, but a test of its precedence needs one (H-179).
+    try { names = readdirSync(sub).sort(); } catch { out.push({ storeId: name, heads: 'unreadable' }); continue; }
     const months = names.filter((m) => JOURNAL_NAME_RE.test(m));
     let heads = months.length > 0 ? 'agree' : 'disagree';
     for (const m of months) {
       const e = journalEnds(`${sub}/${m}`);
-      if (e.kind !== 'ends') { if (heads === 'agree') heads = 'unreadable'; continue; }
+      if (e.kind !== 'ends') {
+        // A link, socket, FIFO or directory at a month name is a measured, permanent condition (`foreign`, H-178), where a
+        // name that cannot be read (or vanished) is cured by a retry or a chmod. A disagreement outranks both, and a
+        // foreign entry outranks an unreadable file, in either order.
+        const word = e.kind === 'foreign' ? 'foreign' : 'unreadable';
+        if (heads === 'agree' || (heads === 'unreadable' && word === 'foreign')) heads = word;
+        continue;
+      }
       if (e.headStore !== name) heads = 'disagree';
     }
     out.push({ storeId: name, heads });
