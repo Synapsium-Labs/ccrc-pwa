@@ -290,7 +290,10 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   the collector switch — is gone without the snapshot every `ccrc update` (and `ccrc backup`) takes into
   `~/ccrc-backups/<ts>/` (`pool-edges.log` is never replayed). The switch's `collect-lane-generation.log` is never
   copied into a snapshot or restored with one: leave it in place, so a database restored alone never re-arms the
-  collector (one from before the switch's last change is safety-stopped).
+  collector (one from before the switch's last change is safety-stopped). One from before the legacy collector file's
+  retirement is repaired only by a confirmed Live, which keeps its unset latch, so a standing or re-created legacy file
+  then arms the lane again, on any node, with Off refused, until a coherent same-epoch listing shows the file absent
+  and retires it.
 - **Zero new ccd verbs for coordination mutation** — mutations ride already-granted `CcdArgv` (a brand built at
   the call site, never table-looked-up). Exec surface is closed: `EXEC_COMMANDS = ['tmux','ccd']`.
 - **Box token gates every coordination WRITE** (`/api/mail*`, `/api/runs*`) — header `x-ccrc-mail-token`, `401`

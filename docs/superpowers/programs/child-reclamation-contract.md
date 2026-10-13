@@ -3706,22 +3706,69 @@ safety-stopped (path-identity design §5.3). Its only repair is a confirmed Live
 is unset and the latch never heals a mismatch. That Live keeps the restored row's unset latch. Once it has repaired the
 mismatch, a standing or re-created legacy file arms the lane again, on any node, and Off is refused again. This lasts
 until the next coherent, unpaused, same-epoch listing shows the file absent and retires the latch. The window needs the
-file to stand, and the confirm sheet does not name it.
+file to stand. While it stands, the confirm sheet says the file also arms the lane until this server records its
+removal, and over a mismatch it says the confirm also repairs the control state. It cannot say that this repair keeps
+the latch unset, or warn of a file re-created later, because the confirm's facts carry no latch.
 
-**Carried, not fixed.** The coordinator skill's `references/resume.md`, which names the newest `coord.db` snapshot as
-the restore path with no word on the journal (skill text is outside this wave; a restore that follows it fails safe,
-since no backup holds the journal). The manual-downgrade hint's copy of `coord.db` over a live write-ahead log; this wave adds only
-the line that leaves the journal in place.
+**Carried, not fixed.** The coordinator skill's `references/resume.md` still names the newest `coord.db` snapshot as
+the restore path with no word on the journal: skill text is outside this wave, and a restore that follows it fails
+safe, because no backup holds the journal. The manual-downgrade hint's copy of `coord.db` over a live write-ahead log
+is left as it was; this wave adds only the line that leaves the journal in place.
 
 **Departures found while building.**
-- `journal-reads-non-canonical-number-spellings` (Task 2): The journal reader accepts value-equal spellings of a number, such as `1.0` or `1e0`, and a duplicate key resolves last-wins. It proves values, not spelling, and only a hand edit can produce one.
-- `plan-ruling-number-in-shipped-comment` (Task 3): Shipped comments name a ruling's subject and never a plan ruling number, because those numbers collide with the programme contract's own; the comments that carried one were reworded.
+- `control-state-calls-no-choice-guard` (Task 2): The control state does not call the choice guard: the row measure reads any string as a choice, and the decision compares exact typed tokens.
+- `live-refuses-an-empty-node` (Task 2): A Live write with an empty node id is refused, which the plan's text did not state.
+- `journal-record-refuses-any-carriage-return` (Task 2): The journal grammar refuses a record that holds any carriage return, stricter than the plan's whitespace rule.
+- `oversize-bigint-held-by-two-walls` (Task 2): An oversize integer is stopped by two independent checks, so a mutation that removes only the safe-range fold stays green by construction.
+- `control-state-extra-pins` (Task 2): The control-state suite pins more than the plan lists, such as the derived journal-kind and unmeasurable-reason lists.
+- `journal-reads-non-canonical-number-spellings` (Task 2): The journal reader proves values, not spelling; see "How the control state fails" above.
+- `non-primitive-raw-value-reads-conflict` (Task 2): A non-primitive stored value, which only a hand edit can produce, never equals itself across two reads, so the write decision answers a conflict before unmeasurable; it fails closed and writes nothing.
+- `plan-ruling-number-in-shipped-comment` (Task 3): Shipped source comments name a ruling's subject and no longer cite a bare plan ruling number, because those numbers collide with the programme contract's own; the source comments that carried one were reworded, while test titles keep the plan's wording, so four test sites still carry one.
 - `node-epoch-guard-two-sided` (Task 4): The resolver's node-epoch guard is an exact comparison, and a case pins both sides: a node measured on a later connection than the one the check stands under is stopped as an unknown fleet, as an earlier one is.
+- `error-outcome-publishes-inventory-refused` (Task 5): A sweep whose reads came back but whose apply threw or was refused publishes `inventory-refused` under its captured epoch, rather than publishing nothing.
+- `link-down-at-sweep-start-publishes-nothing` (Task 5): A sweep that finds the link down before its await reads and publishes nothing, because the close already invalidated the identity cell.
+- `cell-answers-are-frozen` (Task 5): Every answer from the identity cell is a frozen object built field by field.
+- `fleet-identity-imports-nothing-pin` (Task 5): An extra case pins that the identity cell's module imports nothing and reads no clock.
+- `run-inventory-behaviour-pins` (Task 5): Extra cases run the inventory entry point in local and remote mode and count exactly one publish, beside the source-text pin.
+- `sw7-case-reads-the-resolver` (Task 5): The case for a stored Live across an update drives the resolver with the row unchanged: stopped until the same fleet node is known on the new connection, then armed again.
+- `boot-timing-red-under-load-also-at-base` (Task 5): The boot suite's 3000 ms bound on a hung ccd delaying listen reds under box load on the base tree too, so it is not this wave's, and CI decides it.
+- `journal-reopen-without-create` (Task 6): An append reopens an existing journal without `O_CREAT`, so a file removed between the two opens fails rather than being re-created, a shape the plan's text left open.
+- `decide-defect-injected-through-the-reads` (Task 6): The store's decision-defect case is injected through the store's injected reads, not by editing the decision.
+- `older-build-boot-emulated-by-a-newer-file` (Task 6): The older-build boot case puts this build where an older one stands, opening a file one version past it, because a test cannot run an older build.
+- `append-not-regular-code-eftype` (Task 6): An append to a journal that opens but is not a regular file is refused with the code `EFTYPE`; a link is refused earlier, at the open.
 - `adapter-comment-trips-the-handle-reach-scan` (Task 6): The journal adapter's header comment spells `coord.db` in backticks, because the plain spelling tripped the handle-reach scan of the single-definition suite; the scan stays armed and the meaning is unchanged.
-- `a-failed-journal-append-can-leave-a-torn-tail` (Task 6): A failed or short journal append can leave a torn or empty tail, which reads unmeasurable and stops the lane until it is repaired by hand; the adapter does not undo a failed write, and arming nothing is the safe direction.
+- `a-failed-journal-append-can-leave-a-torn-tail` (Task 6): The adapter does not undo a failed write, because that needs a new ruling; what a failed append leaves is in "How the control state fails" above.
+- `epoch-with-pause-reports-the-pause` (Task 7): When the epoch moved and a pause is raised, the executor reports the pause as its stop reason.
+- `executor-guard-admits-resolver-kinds` (Task 7): The executor's guard admits the resolver's kinds rather than a list of its own.
+- `epoch-detail-reads-the-listing-capture` (Task 7): The `epoch-changed` detail says whether the connection moved after the job was queued or during the final listing, from an epoch captured before that listing.
+- `stop-whys-answered-at-step-five` (Task 7): A stop found at the final check (a pause, a moved epoch or an unknown fleet) is answered as step 5, the final listing's step.
+- `unchanged-retire-reads-as-not-due` (Task 7): A latch retire that the store reports as unchanged reads as not due.
+- `existing-executor-cases-keep-an-epoch-zero-job` (Task 7): The executor's existing cases keep a job stamped with epoch 0, the rig's starting epoch.
+- `collect-act-epoch-scan` (Task 7): An extra source-scan pin that the act path carries the job's epoch.
+- `lane-port-and-latch-row-cases` (Task 7): Extra cases for the lane's port and the latch's feed row.
+- `collect-lane-caps-and-control-now-cases` (Task 7): Extra cases for the lane's capabilities and for the control state read now.
 - `latch-warn-key-outlives-an-executor-retire` (Task 8): A warn key for the latch can outlive a retirement made by the executor, so after a database restore under a running server one repeat warning may be suppressed; this is log hygiene only.
+- `lane-rig-gains-the-identity-cell-and-switch-handles` (Task 8): The lane's test rig gains the identity cell and the switch's handles, in a file the plan's list did not name.
+- `queue-to-start-cases-are-pins` (Task 8): The queue-to-start cases pass at entry, because an earlier task already holds them, so they pin rather than drive code.
+- `gather-move-re-seats-the-seen-epoch` (Task 8): An epoch move during a pass's gather re-seats the lane's seen epoch as it clears every pair.
+- `three-passes-measured-as-three-act-jobs` (Task 8): Three passes are measured as three separate act jobs.
+- `pass-case-title-first-sees-the-marker` (Task 8): One pass case's title is worded around the first pass that sees the legacy file.
 - `route-suite-header-list-annotated` (Task 9): The route suite types its list of header sets as string records so that the suite type-checks; its assertions are unchanged.
 - `row-12-coord-token-counts-check-sites-only` (Task 9): The coordination token census counts `checkMailToken` call sites only, so a gate added through the `requireMailToken` helper is held by the route suite's behaviour and source-scan rows and by the pause route's ungated set, not by that census.
+- `writer-census-reads-server-src` (Task 10): The writer census reads the server's source only, because the PWA client has a method of the same name that posts to the route and is not the store's writer.
+- `pins-have-no-red-first-run` (Task 10): The pins cover code already shipped, so their first run is green, and their red half is the mutation table.
+- `skill-plant-in-memory-copy` (Task 10): The skill suites prove their plant on an in-memory copy of the skill text and never edit a skill file.
+- `journal-adapter-built-once-pin` (Task 10): An extra pin that the journal adapter is constructed exactly once, in the composition root.
 - `inventory-throw-publishes-refused-pinned` (Task 10): A sweep case with a throwing store pins that a throw while recording a node publishes an `inventory-refused` cell, not nothing.
+- `collect-words-carry-the-sections-copy` (Task 11): The Settings section keeps no words of its own: every line it renders comes from the words module.
+- `collect-words-totality-pin-in-a-test-d-file` (Task 11): The words table's totality is pinned in a type-level test file.
+- `collect-view-reader-checks-armed-by-agrees` (Task 11): The view reader checks the armed-by field against the agreement rule.
+- `collect-confirm-lines-name-the-pause` (Task 11): The confirm sheet's lines name a raised pause.
+- `collect-off-note-unmeasured-latch-claims-no-control` (Task 11): A latch that was not read gets the unmeasured Off note whatever the listing shows, so the note claims no control.
+- `pause-all-cleanup-case-split` (Task 12): The Pause all cleanup cases are split into five inside one describe.
 - `stale-line-pinned-in-section` (Task 12): The Settings section pins one case beyond the plan's list: a read that did not land keeps the last view, marked stale, so a kept Live is never shown as current.
+- `usage-rewrap-heredoc-neutral` (Task 13): The rewrapped usage text keeps its heredoc's line count.
+- `journal-pins-green-at-entry` (Task 13): The restore, watchdog and uninstall cases that leave the journal in place are green at entry, because none of those paths touches it, so their red half is a mutation row.
 - `usage-shift-unpinned-by-citations` (Task 13): A shift in the update and backup usage text is measured by the citation anchors' hash, not by the session-hook suite, which stays green.
+
+Smaller departures carry no slug: three further pins in the store and journal suites, an epoch-pair case and a never-throw sentence on the latch writer's docstring added in review, the writer census bounded to the POST handler in review, and Task 11 (PWA only) built before Task 9. The path-identity spec's stale line citations are re-measured in its "§5 as built" note and left as written.

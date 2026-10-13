@@ -3880,9 +3880,14 @@ applies from the collector's next check.
 **What a restore can and cannot undo.** Every `ccrc update` and `ccrc backup` snapshots `coord.db`, but no backup
 copies `collect-lane-generation.log`, and no restore, rollback or watchdog moves it: leave it in place when you put a
 `coord.db` snapshot back. A database restored alone from before the switch's last change then disagrees with the
-journal and is safety-stopped, so an older snapshot cannot arm the collector again. A restore that rolls both files
-back together, a whole home or a whole file system, is outside this proof: after one, raise the cleanup pause and make
-a fresh confirmed change in Settings before allowing Live.
+journal and is safety-stopped, so an older snapshot cannot arm the collector again. One case reopens that once the
+lane is repaired: a snapshot from before the legacy file's retirement was recorded. Off is refused over it, so its
+only repair is a confirmed Live, and that Live keeps the snapshot's unrecorded retirement: a standing or re-created
+`$REG/collect-lane-live` then arms the lane again, on any node, and Off is refused again, until a coherent, unpaused
+listing on the same connection shows the file absent and records its retirement once more. Before confirming Live over
+such a snapshot, make sure the legacy file is gone. A restore that rolls both files back together, a whole home or a
+whole file system, is outside this proof: after one, raise the cleanup pause and make a fresh confirmed change in
+Settings before allowing Live.
 
 **Reclaim's tail, corrected in wave 7 (it is shared with `ws-expire`).** `containment-refuted` is the failed word the
 tail prints when it proves that what it would remove is not only the child's own (another session's row or tree at,
