@@ -174,7 +174,9 @@ describe('a failed journal append undoes its own bytes (path-identity spec 2026-
     ['the fsync', 'fsyncSync', throwing('EDQUOT: disk quota exceeded, fsync', 'EDQUOT'), 'EDQUOT'],
   ] as const)('(iv) a throw on a created file, at %s: the file is absent, and the lane reads the seed state', (_what, name, act, code) => {
     const { s, j } = opened();
-    expect(existsSync(path.dirname(j.logPath)), 'CONTROL: the directory stands, so the open creates only the file').toBe(true);
+    const dir = path.dirname(j.logPath);
+    expect(existsSync(dir), 'CONTROL: the directory stands, so the open creates only the file').toBe(true);
+    const dirFds = fdsOpenedOn(dir);
     const f = failOnce(name, always, act);
     h.log = [];
     expect(thrownCode(() => j.appendGeneration(1))).toBe(code);
@@ -188,6 +190,13 @@ describe('a failed journal append undoes its own bytes (path-identity spec 2026-
     expect(log.filter((c) => c.name === 'unlinkSync').map((c) => c.args[0]), 'the undo removes exactly the journal')
       .toEqual([j.logPath]);
     expect(log.filter((c) => c.name === 'ftruncateSync'), 'a created file is removed, never truncated to empty').toEqual([]);
+    // After the unlink, the undo opens the directory, fsyncs it and closes it, and only then is the journal closed.
+    const tail = log.slice(log.findIndex((c) => c.name === 'unlinkSync'));
+    expect(tail.map((c) => c.name)).toEqual(['unlinkSync', 'openSync', 'fsyncSync', 'closeSync', 'closeSync']);
+    expect(tail[1]?.args[0], 'the undo opens the journal’s directory').toBe(dir);
+    expect(dirFds, 'CONTROL: the failure came before the success path’s own directory open').toHaveLength(1);
+    expect(tail[2]?.args[0], 'the undo fsyncs the directory it opened').toBe(dirFds[0]);
+    expect(tail[3]?.args[0], 'and closes it').toBe(dirFds[0]);
   });
 
   it('(v-a) a short write whose ftruncateSync throws: the error is the original’s code, and the journal reads malformed', () => {
@@ -239,9 +248,17 @@ describe('a failed journal append undoes its own bytes (path-identity spec 2026-
     const { s, j } = opened();
     const dirFds = fdsOpenedOn(path.dirname(j.logPath));
     const f = failOnce('fsyncSync', (fd) => dirFds.includes(fd as number), throwing('EIO: i/o error, fsync', 'EIO'));
+    h.log = [];
     expect(s.setCollectLane(retire(s, j), AT, j)).toEqual({ kind: 'failed', phase: 'append', code: 'EIO' });
+    const log = h.log;
+    h.log = null;
     expect(f.fired(), 'CONTROL: the directory fsync threw').toBe(1);
     h.hooks.clear();
+    // The undo's own directory fsync, on a second open of the directory, after the unlink and before the journal's close.
+    const tail = log.slice(log.findIndex((c) => c.name === 'unlinkSync'));
+    expect(tail.map((c) => c.name)).toEqual(['unlinkSync', 'openSync', 'fsyncSync', 'closeSync', 'closeSync']);
+    expect(dirFds, 'the success path’s directory open, then the undo’s').toHaveLength(2);
+    expect(tail[2]?.args[0], 'the undo fsyncs the directory it opened').toBe(dirFds[1]);
     expect(existsSync(j.logPath), 'the file this call created is still there').toBe(false);
     expect(rawRow(s)).toEqual([SEED_RAW]);
     expect(controlOf(s, j)).toMatchObject({ kind: 'coherent', generation: 0, bootstrap: true });
@@ -289,5 +306,20 @@ describe('a failed journal append undoes its own bytes (path-identity spec 2026-
     expect(landed, 'CONTROL: the lead newline and two bytes landed before the undo').toBe('{"generation":1}\n{"');
     expect(readFileSync(j.logPath, 'utf8')).toBe('{"generation":1}');
     expect(j.read()).toEqual({ kind: 'ok', max: 1, records: 1 });
+  });
+
+  it('(x) an fstat that throws on an existing journal undoes nothing: the bytes are exactly unchanged, and nothing is truncated', () => {
+    const { s, j } = liveAtOne();
+    const before = readFileSync(j.logPath);
+    const f = failOnce('fstatSync', always, throwing('EIO: i/o error, fstat', 'EIO'));
+    h.log = [];
+    expect(thrownCode(() => j.appendGeneration(2))).toBe('EIO');
+    const log = h.log;
+    h.log = null;
+    expect(f.fired(), 'CONTROL: the fstat threw').toBe(1);
+    expect(readFileSync(j.logPath)).toEqual(before);
+    expect(log.filter((c) => c.name === 'ftruncateSync'), 'a length the fstat never measured is never truncated to').toEqual([]);
+    expect(log.filter((c) => c.name === 'unlinkSync'), 'an existing journal is never removed').toEqual([]);
+    expect(controlOf(s, j)).toMatchObject({ kind: 'coherent', generation: 1 });
   });
 });

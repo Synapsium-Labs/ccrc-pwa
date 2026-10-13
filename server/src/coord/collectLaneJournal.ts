@@ -18,11 +18,12 @@
 //   created the file. It throws on every failure, its `code` an errno word, and a throw first returns the file to its
 //   bytes before the call (or removes a file the call created), best effort: on a file it created, any failure after
 //   that create unlinks it and fsyncs the directory; on a file that stood, any failure after the fstat that measured
-//   its length truncates it back to that length and fsyncs it. The undo runs before the close, and neither its own
-//   error nor a close error ever replaces the original. It never retries, and the reader stays strict: a process killed
-//   mid-write, or an undo that itself fails, can still leave a tail that reads malformed (spec §5.2). A close that
-//   throws after a successful fsync is not undone: the record is durable. `CoordStore.setCollectLane` is its one
-//   caller, inside its transaction, BEFORE the row changes.
+//   its length truncates it back to that length and fsyncs it. The undo runs before the journal's own close, and
+//   neither the undo's error nor that close's error ever replaces the original. (The directory descriptor's own close
+//   can replace a failing directory fsync's error; the undo still runs.) It never retries, and the reader stays
+//   strict: a process killed mid-write, or an undo that itself fails, can still leave a tail that reads malformed
+//   (spec §5.2). A close that throws after a successful fsync is not undone: the record is durable.
+//   `CoordStore.setCollectLane` is its one caller, inside its transaction, BEFORE the row changes.
 // - No answer and no thrown code carries the path. A Node fs error's `message` names it, so only its `code` is read
 //   (spec §5.6: responses never expose the journal path).
 // - Synchronous on purpose: the store calls it inside `tx()`, and `DatabaseSync`'s no-async rule is the argument.
