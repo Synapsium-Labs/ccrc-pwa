@@ -10,10 +10,12 @@
 //  3. The shapes: the claim code, the generation id (spelled once), the synced line, the transport reader.
 //  4. The ninth node file, and that the inventory sweep does not read it (D-4389: the driver reads it).
 //  5. `readGenerationFile`, the ONE reader of `~/.ccrc/box-token-generation`: three outcomes, malformed is unreadable.
+//  6. The rotation interval and the overdue slack (4556, 4557): one home in L0, pinned by name and by value, and a scan
+//     of the four shipped roots for any other numeric spelling of seven days in ms.
 import { describe, expect, it } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -25,7 +27,8 @@ import {
 } from '../../shared/agent-protocol.js';
 import {
   BOX_TOKEN_PHASES, CLAIM_BODY_LIMIT_BYTES, CLAIM_REFUSALS, FLEET_TOKEN_FILE_COMMENT, GENERATION_ID_RE, OWED_REASONS,
-  TOKEN_CLAIM_PATH, TOKEN_FILE_PROBLEMS, TOKEN_HOLDS, TOKEN_ORIGINS, TOKEN_ROTATE_PATH, TOKEN_VALUE_RE, readGenerationFile,
+  TOKEN_CLAIM_PATH, TOKEN_FILE_PROBLEMS, TOKEN_HOLDS, TOKEN_ORIGINS, TOKEN_ROTATE_PATH, TOKEN_ROTATION_INTERVAL_MS,
+  TOKEN_ROTATION_OVERDUE_SLACK_MS, TOKEN_VALUE_RE, readGenerationFile,
 } from '../../shared/box-token.js';
 import { PENDING_FILE_RE } from '../src/token/boot.js';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -225,6 +228,135 @@ describe('shared/box-token.ts — the claim door, value and generation shapes, a
     const specs = [...src.matchAll(/^\s*(?:import|export)\b[^;]*?\bfrom\s+['"]([^'"]+)['"]/gm)].map((m) => m[1]);
     expect(new Set(specs)).toEqual(new Set(['./api.js', './agent-protocol.js']));
     expect(/\brequire\(|import\(|['"]node:/.test(src), 'a require, a dynamic import or a node: specifier').toBe(false);
+  });
+});
+
+// 4556, 4557: the weekly interval and its overdue slack are declared ONCE, in L0, and held there by NAME (one
+// definition) and by VALUE (no other numeric expression in the four shipped roots equals seven days in ms, whatever
+// its spelling). The seven-day regex in `single-definition.test.ts` scans `server/src` and `pwa/src` only and lets
+// `604_800_000` and `7 * 86_400_000` through; this scan covers `shared/` and `agent/src` too and reads products.
+//
+// What the scan does NOT see: a sum (`6 * DAY + DAY`), a division, a float or exponent literal (`6.048e8`), a
+// lower-case or imported-alias name, and a value built at run time. The controls below pin what it does see.
+describe('the rotation interval: declared once in L0, pinned by name and by value (4556, 4557)', () => {
+  const REPO = path.resolve(here, '..', '..');
+  const ROOTS = ['shared', 'server/src', 'pwa/src', 'agent/src'].map((r) => path.join(REPO, r));
+  const rel = (f: string): string => path.relative(REPO, f).split(path.sep).join('/');
+
+  // `__`-prefixed entries are transient mutants a parallel suite writes (same guard and reason as
+  // `single-definition.test.ts`'s `sources`): they vanish mid-walk and are verbatim copies while they exist.
+  function sourcesUnder(dir: string): string[] {
+    const out: string[] = [];
+    for (const e of readdirSync(dir)) {
+      if (e.startsWith('__')) continue;
+      const p = path.join(dir, e);
+      if (statSync(p).isDirectory()) { out.push(...sourcesUnder(p)); continue; }
+      if (/\.tsx?$/.test(p)) out.push(p);
+    }
+    return out;
+  }
+
+  /** Comment lines emptied (as `single-definition.test.ts` filters them), a trailing `//` comment cut, line numbers kept. */
+  const codeLines = (text: string): string[] =>
+    text.split('\n').map((l) => (/^\s*(\*|\/\/|\/\*)/.test(l) ? '' : l.replace(/\s\/\/.*$/, '')));
+
+  const FACTOR = String.raw`(?:\d[\d_]*|[A-Z][A-Z0-9_]*)`;
+  const PRODUCT = new RegExp(String.raw`(?<![\w.$])${FACTOR}(?:\s*\*\s*${FACTOR})*(?![\w.])`, 'g');
+  const DEFINE = /\bconst\s+([A-Z][A-Z0-9_]*)\s*(?::\s*number\s*)?=\s*([^;]+);/;
+  const WEEK_MS = 604_800_000;
+
+  /** The factors of a product text, or null when it is not a pure product of factors. */
+  const factorsOf = (text: string): string[] | null => {
+    const t = text.trim();
+    return new RegExp(`^${FACTOR}(?:\\s*\\*\\s*${FACTOR})*$`).test(t) ? t.split('*').map((s) => s.trim()) : null;
+  };
+
+  /** The product's value, or null when a factor is a name the table does not resolve. */
+  const valueOf = (factors: string[], table: Map<string, number>): number | null => {
+    let v = 1;
+    for (const f of factors) {
+      const n = /^\d/.test(f) ? Number(f.replace(/_/g, '')) : table.get(f);
+      if (n === undefined || Number.isNaN(n)) return null;
+      v *= n;
+    }
+    return v;
+  };
+
+  function sevenDayHolders(files: { rel: string; text: string }[]): string[] {
+    const lines = files.map((f) => ({ rel: f.rel, code: codeLines(f.text) }));
+    // Three passes, so a name defined from another name resolves whatever the file order.
+    const table = new Map<string, number>();
+    for (let pass = 0; pass < 3; pass++) {
+      for (const f of lines) {
+        for (const l of f.code) {
+          const d = DEFINE.exec(l);
+          const factors = d ? factorsOf(d[2]) : null;
+          const v = d && factors ? valueOf(factors, table) : null;
+          if (d && v !== null) table.set(d[1], v);
+        }
+      }
+    }
+    const hits = new Set<string>();
+    for (const f of lines) {
+      f.code.forEach((l, i) => {
+        for (const m of l.matchAll(PRODUCT)) {
+          const factors = m[0].split('*').map((s) => s.trim());
+          // A lone name is a reference to a quantity, never a second holder of it.
+          if (!factors.some((x) => /^\d/.test(x)) && factors.length < 2) continue;
+          if (valueOf(factors, table) !== WEEK_MS) continue;
+          const d = DEFINE.exec(l);
+          hits.add(d ? `${f.rel}:${d[1]}` : `${f.rel}:line ${i + 1}`);
+        }
+      });
+    }
+    return [...hits].sort();
+  }
+
+  const ALL = ROOTS.flatMap((r) => sourcesUnder(r)).map((f) => ({ rel: rel(f), text: readFileSync(f, 'utf8') }));
+
+  it('TOKEN_ROTATION_INTERVAL_MS is seven days and the slack one day, by value', () => {
+    expect(TOKEN_ROTATION_INTERVAL_MS).toBe(604_800_000);
+    expect(TOKEN_ROTATION_OVERDUE_SLACK_MS).toBe(86_400_000);
+  });
+
+  it('each is defined in exactly one file, shared/box-token.ts', () => {
+    for (const name of ['TOKEN_ROTATION_INTERVAL_MS', 'TOKEN_ROTATION_OVERDUE_SLACK_MS']) {
+      const DEFINES = new RegExp(`^\\s*(?:export\\s+)?const\\s+${name}\\s*=`, 'm');
+      expect(ALL.filter((f) => DEFINES.test(f.text)).map((f) => f.rel), name).toEqual(['shared/box-token.ts']);
+    }
+  });
+
+  const DAY = { rel: 'd.ts', text: 'const DAY_MS = 86_400_000;' };
+  it.each([
+    ...['604_800_000', '604800000', '7 * 86_400_000', '7 * 86400000', '7 * 24 * 3_600_000', '7 * 24 * 3600 * 1000',
+      '168 * 60 * 60_000', '10_080 * 60_000', '7 * 24 * 60 * 60_000', '7*24*60*60*1000']
+      .map((s) => ({ name: s, files: [{ rel: 'x.ts', text: `const A = ${s};` }], want: ['x.ts:A'] })),
+    { name: '7 * DAY_MS, with DAY_MS defined on the line above (DAY_MS itself is no holder)',
+      files: [{ rel: 'x.ts', text: 'const DAY_MS = 86_400_000;\nconst A = 7 * DAY_MS;' }], want: ['x.ts:A'] },
+    { name: '7 * DAY_MS, with DAY_MS defined in another file',
+      files: [DAY, { rel: 'x.ts', text: 'const A = 7 * DAY_MS;' }], want: ['x.ts:A'] },
+    { name: 'the same expression on a line with no const is named by its line',
+      files: [DAY, { rel: 'x.ts', text: 'f(7 * DAY_MS);' }], want: ['x.ts:line 1'] },
+  ])('the scan sees $name (CONTROLS)', ({ files, want }) => {
+    expect(sevenDayHolders(files)).toEqual(want);
+  });
+
+  it('the scan does not count a reference, a comment, or another number (CONTROLS)', () => {
+    // a lone reference to a resolvable name is a reference: W is the holder, B is not
+    expect(sevenDayHolders([{ rel: 'x.ts', text: 'const W = 604_800_000;\nconst B = W;' }])).toEqual(['x.ts:W']);
+    expect(sevenDayHolders([{ rel: 'x.ts', text: '// 7 * 24 * 3_600_000\n x(); // 604_800_000' }])).toEqual([]);
+    expect(sevenDayHolders([{ rel: 'x.ts', text: 'const C = 7 * 24 * 60 * 60_001;\nconst D = 604800;' }])).toEqual([]);
+  });
+
+  it('the holders across shared, server/src, pwa/src and agent/src are exactly the three separate seven-day quantities', () => {
+    // A weekly interval anywhere else must import the one in shared/box-token.ts. These three are separate
+    // quantities (the coordinator confirmed them, Q2); a new, unrelated seven-day quantity needs a ruling to join.
+    expect(sevenDayHolders(ALL), 'a second seven-day ms definition: import TOKEN_ROTATION_INTERVAL_MS from shared/box-token.ts, '
+      + 'or have the new quantity ruled in as a fourth separate holder').toEqual([
+      'server/src/childReclaimSweep.ts:CHILD_RECLAIM_LEAF_KEPT_HORIZON_MS',
+      'shared/api.ts:LEDGER_STALE_MS',
+      'shared/box-token.ts:TOKEN_ROTATION_INTERVAL_MS',
+    ]);
   });
 });
 
