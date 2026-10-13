@@ -5026,8 +5026,9 @@ export class FleetWatcher {
     // state clean. Whatever lands, the in-memory hold MOVES to this pass's (monotone): a dirty mark or a commit that did
     // not land keeps the anchor changes pending (laid over the durable anchors, re-sent by the next commit), and the pass
     // acts on nothing (review of D-4857, items 1 and 2: a failed write must never forget a trip or a doubt).
-    const commit = this.commitDeadCoordinatorBreaker(coord, next, upserts, deletes, ids, before);
+    // The hold moves BEFORE the commit's first statement (fix round 5, R2): nothing the commit does can drop it.
     this.deadCoordinatorBreakerHeld = next;
+    const commit = this.commitDeadCoordinatorBreaker(coord, next, upserts, deletes, ids, before);
     if (seedCause !== null) {
       this.deadCoordinatorBreakerSeeded = true;
       this.noteDeadCoordinatorSeed(coord, seedCause, next.map((m) => m.id), breaker.tripped, ids, commit === 'committed');
@@ -5085,37 +5086,44 @@ export class FleetWatcher {
     for (const [id, a] of upserts) changes.set(id, a);
     for (const id of deletes) changes.set(id, null);
     if (changes.size === 0 && key === this.deadCoordinatorBreakerCommittedKey && this.deadCoordinatorBreakerDurableClean) return 'unchanged';
-    const mark = coord.markDeadCoordinatorBreakerDirty(Date.now());
+    // NO EXCEPTION MAY DROP A COMPUTED HOLD (fix round 5, R2; review 401, F2): the changes go PENDING before the first
+    // statement that can throw, and a throw anywhere between here and the commit's result is folded into exactly the
+    // commit-failed path (state dirty, changes pending, no act). The caller moves the in-memory hold before it calls.
+    for (const [id, a] of changes) this.deadCoordinatorAnchorsPending.set(id, a);
     this.deadCoordinatorBreakerDurableClean = false;
-    if (!mark.ok) {
-      for (const [id, a] of changes) this.deadCoordinatorAnchorsPending.set(id, a);
-      console.warn(`ccrc-server: sweepDeadCoordinators could not mark the breaker's state dirty (${mark.detail}) — no anchor changed and no act this pass; the changes stay pending`);
-      return 'mark-failed';
-    }
-    const record: number[] = [];
-    if (key !== this.deadCoordinatorBreakerCommittedKey) {
-      if (next.length === 0 && this.deadCoordinatorBreakerHeldRunId !== null) record.push(this.deadCoordinatorBreakerHeldRunId);
-      for (const id of [...next.map((m) => m.id), ...before.map((m) => m.id), ...ids]) {
-        const open = coord.openRunsClaimedBy(id);
-        if (open.ok && open.siblings.length > 0) { record.push(open.siblings[0]!.id); break; }
+    try {
+      const mark = coord.markDeadCoordinatorBreakerDirty(Date.now());
+      if (!mark.ok) {
+        console.warn(`ccrc-server: sweepDeadCoordinators could not mark the breaker's state dirty (${mark.detail}) — no anchor changed and no act this pass; the changes stay pending`);
+        return 'mark-failed';
       }
-    }
-    // The WRITE-TIME clock, never the pass's `now`: a same-pass anchor (measured at its own, later instant) must not read
-    // as started after this snapshot (fix round 4, D-4826).
-    const c = coord.commitDeadCoordinatorBreakerState({ generation: mark.generation, held: next, at: Date.now(),
-      upserts: [...changes].flatMap(([id, a]) => (a === null ? [] : [[id, a] as const])),
-      deletes: [...changes].flatMap(([id, a]) => (a === null ? [id] : [])),
-      record: key === this.deadCoordinatorBreakerCommittedKey ? null : record });
-    if (!c.ok) {
-      for (const [id, a] of changes) this.deadCoordinatorAnchorsPending.set(id, a);
-      console.warn(`ccrc-server: sweepDeadCoordinators could not commit the breaker's state (${c.detail}) — it stays dirty, no act this pass; the next pass commits again`);
+      const record: number[] = [];
+      if (key !== this.deadCoordinatorBreakerCommittedKey) {
+        if (next.length === 0 && this.deadCoordinatorBreakerHeldRunId !== null) record.push(this.deadCoordinatorBreakerHeldRunId);
+        for (const id of [...next.map((m) => m.id), ...before.map((m) => m.id), ...ids]) {
+          const open = coord.openRunsClaimedBy(id);
+          if (open.ok && open.siblings.length > 0) { record.push(open.siblings[0]!.id); break; }
+        }
+      }
+      // The WRITE-TIME clock, never the pass's `now`: a same-pass anchor (measured at its own, later instant) must not read
+      // as started after this snapshot (fix round 4, D-4826).
+      const c = coord.commitDeadCoordinatorBreakerState({ generation: mark.generation, held: next, at: Date.now(),
+        upserts: [...changes].flatMap(([id, a]) => (a === null ? [] : [[id, a] as const])),
+        deletes: [...changes].flatMap(([id, a]) => (a === null ? [id] : [])),
+        record: key === this.deadCoordinatorBreakerCommittedKey ? null : record });
+      if (!c.ok) {
+        console.warn(`ccrc-server: sweepDeadCoordinators could not commit the breaker's state (${c.detail}) — it stays dirty, no act this pass; the next pass commits again`);
+        return 'commit-failed';
+      }
+      this.deadCoordinatorAnchorsPending.clear();
+      this.deadCoordinatorBreakerCommittedKey = key;
+      this.deadCoordinatorBreakerDurableClean = true;
+      if (c.recordedOn !== null) this.deadCoordinatorBreakerHeldRunId = c.recordedOn;
+      return 'committed';
+    } catch (err) {
+      console.warn(`ccrc-server: sweepDeadCoordinators: a statement of the breaker's commit threw (${err instanceof Error ? err.message : String(err)}) — it stays dirty, no act this pass; the changes stay pending and the hold stands`);
       return 'commit-failed';
     }
-    this.deadCoordinatorAnchorsPending.clear();
-    this.deadCoordinatorBreakerCommittedKey = key;
-    this.deadCoordinatorBreakerDurableClean = true;
-    if (c.recordedOn !== null) this.deadCoordinatorBreakerHeldRunId = c.recordedOn;
-    return 'committed';
   }
 
   /** The words for a pass that seeded the hold conservatively (D-4857; review 382, R2): ONE warn line and ONE feed row,

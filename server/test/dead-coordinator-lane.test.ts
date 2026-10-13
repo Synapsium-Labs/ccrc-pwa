@@ -1429,6 +1429,44 @@ describe('the breaker\'s typed state: dirty before any anchor change, clean only
     expect(r.states[Q], 'Q, due at 60, is held').toBe('working');
   }, HEAVY);
 
+  // FIX ROUND 5, R2 (review 401, F2; D-4916): no exception may drop a computed hold. The pass that forms the trip at 54 has its
+  // dirty mark LAND and then a later statement THROWS (not a `{ ok: false }` the store folds itself): the hold must still move
+  // and the anchor changes must still be pending, as for a failed mark or commit. The control run has no throw.
+  const tripWorld = (fail: (f: Fixture, minute: number) => (() => void) | null) => scripted({
+    ids: [Q, M, N], dead: [Q], passes: [0, 9, 18, 27, 36, 45, 54, 55, 60, 69, 78],
+    events: { 53: (f) => { f.live.delete(M); f.live.delete(N); }, 55: (f) => { doubt(f, M); doubt(f, N); } },
+    fail,
+  });
+  it('R2.control: with no throw, the trip at 54 holds Q through 78', async () => {
+    const r = await tripWorld(() => null);
+    expect(r.breaker).toEqual([['breaker', [M, N]]]);
+    expect(r.states[Q]).toBe('working');
+  }, HEAVY);
+  it('R2.P7: the CARRIER READ throws after the dirty mark landed, on the tripping pass: the hold still moves, the pass acts on nothing, and Q is not ended (review 401, F2)', async () => {
+    let afterThrow: string | null = null;
+    const r = await scripted({
+      ids: [Q, M, N], dead: [Q], passes: [0, 9, 18, 27, 36, 45, 54, 55, 60, 69, 78],
+      events: { 53: (f) => { f.live.delete(M); f.live.delete(N); }, 55: (f) => { doubt(f, M); doubt(f, N); } },
+      fail: (f, minute) => (minute === 54 ? failSql(f, /^SELECT CAST\(id AS TEXT\) AS idText, program, CAST\(wave AS TEXT\)/) : null),
+      after: (f, minute) => { if (minute === 54) afterThrow = stateOf(f).kind; },
+    });
+    expect(afterThrow, 'the throwing pass left the state dirty (the commit-failed path)').toBe('dirty');
+    expect(r.breaker, 'the trip formed on the throwing pass stands').toEqual([['breaker', [M, N]]]);
+    expect(r.states[Q], 'Q, due at 60, is held').toBe('working');
+  }, HEAVY);
+  it('R2.commit-throws: the store\'s commit method itself throws (outside its own try) on the tripping pass: the same — hold moved, changes pending, no act', async () => {
+    const r = await tripWorld((f, minute) => {
+      if (minute !== 54) return null;
+      const spy = vi.spyOn(f.coord, 'commitDeadCoordinatorBreakerState').mockImplementation(() => { throw new Error('injected: commit threw'); });
+      return () => spy.mockRestore();
+    });
+    expect(r.breaker).toEqual([['breaker', [M, N]]]);
+    expect(r.states[Q]).toBe('working');
+    const st = stateOf(r.f);
+    expect(st.kind, 'the next pass committed what the throwing pass computed').toBe('clean');
+    expect(st.kind === 'clean' && st.held.map((m) => m.id).sort()).toEqual([M, N]);
+  }, HEAVY);
+
   it('A LONE-SURROGATE claimant is held across a restart: its id has a spelling, so the record lands and the act is not withheld for it', async () => {
     const S = 'demo-coord-\ud800';
     const f = await fixture();
