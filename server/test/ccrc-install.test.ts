@@ -701,7 +701,10 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
   // matched, m-runtime-probe HR11) gets either the TEMPLATE a test planted
   // (`fixture-runtime-template` names its directory — copied whole, minus
   // any stamp or pip report, so the builder writes its own) or the VACUOUS
-  // python above. Nothing else changes: graphify's venv takes the arm below.
+  // python above. Either way the venv has a `lib/python3.12/site-packages`, as
+  // a real one does, so the builder's `patch` stage (spec §22.2, D-4859) passes
+  // and the probe is what answers. Nothing else changes: graphify's venv takes
+  // the arm below.
   writeFileSync(join(home, 'fixture-vacuous-python'), VACUOUS_RUNTIME_PYTHON, { mode: 0o755 });
   plant('python3', [
     '#!/bin/sh',
@@ -718,7 +721,7 @@ function ccrcEnv(home: string, omit: string[] = []): NodeJS.ProcessEnv {
     '        cp -R "$tpl/." "$3/" || exit 1',
     '        rm -f "$3/.ccrc-runtime.json" "$3/.ccrc-pip-report.json"',
     '      else',
-    '        mkdir -p "$3/bin" && cp "$HOME/fixture-vacuous-python" "$3/bin/python" && chmod 755 "$3/bin/python" || exit 1',
+    '        mkdir -p "$3/bin" "$3/lib/python3.12/site-packages" && cp "$HOME/fixture-vacuous-python" "$3/bin/python" && chmod 755 "$3/bin/python" || exit 1',
     '      fi',
     '      exit 0 ;;',
     '  esac',
@@ -7021,6 +7024,9 @@ function plantRuntimeTemplate(home: string, opts: { verdict: 'pass' | `fail:${st
   const f = join(home, 'fixture-runtime');
   const tpl = join(f, 'gen-template');
   mkdirSync(join(tpl, 'bin'), { recursive: true });
+  // A real venv's site-packages: the builder's `patch` stage writes ccrc's
+  // LiteLLM patch there before the probe (spec §22.2, D-4859).
+  mkdirSync(join(tpl, 'lib', 'python3.12', 'site-packages'), { recursive: true });
   writeFileSync(join(tpl, 'bin', 'python'), runtimeTemplatePython(f, realPy()), { mode: 0o755 });
   // Task 5's stand-in LiteLLM (ruling R29), never a second fake. Its knobs and
   // its `litellm-<port>.json` evidence live in `<home>/fake-procs`, the one
@@ -7979,12 +7985,17 @@ describe('ccrc install: the codex runtime step on a real spine (Plan 2b-2 Task 1
     const builder = read(join(home, '.local', 'bin', 'ccgpt-runtime'));
     const requirement = /^LITELLM_REQUIREMENT='([^']+)'/m.exec(builder)?.[1];
     expect(requirement, 'ccgpt-runtime declares no LITELLM_REQUIREMENT').toBeDefined();
-    const probe = spawnSync(join(home, '.local', 'bin', 'ccgpt-runtime'), ['probe-source'],
-      { env: { ...process.env, HOME: home } });
+    // One env for both spawns: ccrc-containment's census allows this suite exactly
+    // three bare parent envs, each a ccgpt-runtime spawn.
+    const rtEnv = { ...process.env, HOME: home };
+    const probe = spawnSync(join(home, '.local', 'bin', 'ccgpt-runtime'), ['probe-source'], { env: rtEnv });
     expect(probe.status).toBe(0);
+    const patch = spawnSync(join(home, '.local', 'bin', 'ccgpt-runtime'), ['patch-source'], { env: rtEnv });
+    expect(patch.status).toBe(0);
     const stamp = JSON.parse(read(join(gen, '.ccrc-runtime.json'))) as Record<string, unknown>;
     expect(stamp['requirement']).toBe(requirement);
-    expect(stamp['probeSha256']).toBe(createHash('sha256').update(probe.stdout).digest('hex'));
+    // The probe's bytes, then the LiteLLM patch's (spec §22.2, D-4859).
+    expect(stamp['probeSha256']).toBe(createHash('sha256').update(probe.stdout).update(patch.stdout).digest('hex'));
     expect(stamp['litellm']).toBe('1.101.0');
     // Ruling R33 against the REAL builder: the building line names the
     // requirement the placed builder declares (the step reads that same line),

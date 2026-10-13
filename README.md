@@ -583,7 +583,7 @@ ends with. A `server`-role box SKIPs the checks that measure per-account or per-
 | `config`, `auth`, `rc` | `ccrc.env` coherent for its fleet mode; the session gate and its passphrase file; this box's `--remote-control` setting |
 | `exposure`, `update-exposure`, `caddy`, `caddyfile`, `cert`, `name` | the exposure pieces ("Exposure", below) |
 | `wrappers`, `skills`, `accounts`, `credentials` | the roster against `~/.local/bin` (Claude Code's binary included); the ccrc skills in every home; declared credential files and provider env blocks (a Codex lane's may omit `ANTHROPIC_BASE_URL`, which its launcher exports, but may not name an endpoint other than its loopback shim); a token file for every account the health probe measures |
-| `codex` | for each `exec.kind: "codex"` lane: the four GPT-lane executables in `~/.local/bin` against the shipped tree; the isolated runtime (`ccgpt-runtime check`, which trusts the build's stamp); the roster row and its ports; `exec.authDir` and its `auth.json`, for existence and mode only; `lane.json` against the roster row and the class registry; a `codex` class registry and its haiku-class probe model; the rendered LiteLLM config against the catalogue; the two tiers (half up, foreign, unmeasurable, down under a live session, or running and not proven to run the installed bytes); and its usage timer and `~/.cc-limits` row. Lane state left under `~/.ccrc/codex/` for an id no longer `codex` is a WARN |
+| `codex` | for each `exec.kind: "codex"` lane: the four GPT-lane executables in `~/.local/bin` against the shipped tree; the isolated runtime (`ccgpt-runtime check`, which trusts the build's stamp and compares the installed LiteLLM patch with `patch-source`); the roster row and its ports; `exec.authDir` and its `auth.json`, for existence and mode only; `lane.json` against the roster row and the class registry; a `codex` class registry and its haiku-class probe model; the rendered LiteLLM config against the catalogue; the two tiers (half up, foreign, unmeasurable, down under a live session, or running and not proven to run the installed bytes); and its usage timer and `~/.cc-limits` row. Lane state left under `~/.ccrc/codex/` for an id no longer `codex` is a WARN |
 | `pools`, `memory`, `routing`, `models` | project pool tags; one memory store per project; lane routing; model-catalogue freshness |
 | `pool-sync`, `update-sync` | a fleet box's two pulled projections, present and in lease |
 | `graphify`, `graphify-path` | the pinned graph engine, its skill and the sweep's last census; `graphify` on `PATH` resolving to that engine |
@@ -1763,10 +1763,12 @@ than guess which was meant. `ccrc models` needs `node` and `jq`, and has no PWA 
 **ccrc can run a ChatGPT/Codex subscription as a lane, end to end.** Claude Code talks to a loopback **shim**
 (`ccgpt-proxy.py`) on the lane's `proxyPort`, which forwards to the lane's own **LiteLLM gateway** on
 `litellmPort`, which speaks to the Codex backend with the lane's OAuth. The shim exists because Codex refuses
-`system` messages through either door Claude Code sends them by: it folds the top-level `system` field and
-every mid-conversation `role: "system"` entry into user turns, sets `reasoning.effort` per request (the
-client's own, else the lane's `set-effort` default for that model), and answers `400` or `415` for a body it
-cannot parse or an encoding it does not implement rather than forward it unexamined.
+a mid-conversation `role: "system"` entry, which Claude Code sends: it turns each such entry into a user turn,
+in place. The top-level `system` field is kept as the system prompt — one plain string behind a lead line
+telling the model it runs inside Claude Code, not the Codex CLI — so LiteLLM carries it in Codex's
+`instructions`, after the Codex CLI prompt LiteLLM always puts there. The shim also sets `reasoning.effort`
+per request (the client's own, else the lane's `set-effort` default for that model), and answers `400` or
+`415` for a body it cannot parse or an encoding it does not implement rather than forward it unexamined.
 
 **Adding one is a roster edit** — `ccrc account add` does not create this kind. Add an entry to
 `~/.ccrc/accounts.json` (`homeAble: false` keeps it an overflow lane, as above; `true` lets placement pick it;
@@ -1798,7 +1800,11 @@ waits until both tiers answer; `stop` stops only what it proves is this lane's a
 leaves running. The runtime is an isolated LiteLLM venv under `~/.ccrc/runtime/codex/`, built by
 `ccrc install` when the roster has a `codex` lane (`ccgpt-runtime build`, which needs `python3` with `venv`;
 pip installs the `litellm[proxy]` range `ccgpt-runtime` pins, which can take minutes) and made current only
-after a behaviour probe passes; a failed build keeps the previous generation. Per-lane state lives in
+after a behaviour probe passes; a failed build keeps the previous generation. Each generation also carries
+ccrc's one patch to LiteLLM (`ccgpt-runtime patch-source` prints it): when Codex streams no delta events for a
+tool call or a reply, it hands the finished arguments or text on, so parallel tool calls keep their input. The
+probe is its acceptance test, and `ccgpt-runtime check` reads `mutated` for a generation that has lost it.
+Per-lane state lives in
 `~/.ccrc/codex/<id>/` — `lane.json`, `litellm.yaml` (re-rendered by `ccrc models litellm <id>`; it carries no
 `reasoning` keys because the shim owns effort) and `runtime.env`, which holds the gateway key — and logs in
 `~/.ccrc/logs/codex/<id>/`. The verbs need `jq` (and every one but `login` needs `node`) and are refused on a

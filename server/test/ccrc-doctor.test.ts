@@ -11156,18 +11156,32 @@ describeCodex('ccrc doctor: codex, part 1 — population, executables, runtime, 
   };
   it.each([
     ['absent', (h: string) => rmSync(join(h, '.ccrc', 'runtime'), { recursive: true, force: true }),
-      /no isolated LiteLLM runtime is current on this box \(ccgpt-runtime check: absent\)/],
+      /no isolated LiteLLM runtime is current on this box \(ccgpt-runtime check: absent\)/, /ccgpt-runtime build/],
     ['requirement-moved', (h: string) => restamp(h, { requirement: 'litellm[proxy]>=0.0.1,<0.0.2' }),
-      /built for another LiteLLM requirement than this ccrc declares \(ccgpt-runtime check: requirement-moved\)/],
+      /built for another LiteLLM requirement than this ccrc declares \(ccgpt-runtime check: requirement-moved\)/, /ccgpt-runtime build/],
+    // The probe's bytes and the patch's are one hash, so the sentence names both causes.
     ['probe-moved', (h: string) => restamp(h, { probeSha256: '0'.repeat(64) }),
-      /passed an older behaviour probe than the one this ccrc ships \(ccgpt-runtime check: probe-moved\)/],
+      /passed an older behaviour probe, or carries an older ccrc LiteLLM patch, than the one this ccrc ships \(ccgpt-runtime check: probe-moved\)/,
+      /^ {2}remedy: rebuild it: ccgpt-runtime build — it re-runs the shipped probe against a fresh, freshly patched generation$/],
     ['mutated', (h: string) => { plantFakeRuntime(h, { stamp: false }); },
-      /no longer matches its stamp \(ccgpt-runtime check: mutated\)/],
-  ] as const)('FAILs a runtime that `ccgpt-runtime check` answers %s, in its own sentence, with a rebuild remedy', async (word, plant, said) => {
+      /is no longer what its build made \(ccgpt-runtime check: mutated\): its interpreter, its stamp, its installed LiteLLM or its ccrc LiteLLM patch changed after the build/,
+      /ccgpt-runtime build/],
+  ] as const)('FAILs a runtime that `ccgpt-runtime check` answers %s, in its own sentence, with a rebuild remedy', async (word, plant, said, remedy) => {
     const home = await healthyCodexBox(`ccrc-doctor-codex-rt-${word}-`);
     plant(home);
     const r = runDoctor(home);
     const re = new RegExp(`^FAIL codex: .*${said.source}`, 'm');
+    expect(r.stdout, r.stdout).toMatch(re);
+    expect(remedyAfter(r.stdout, re)).toMatch(remedy);
+    noRunnerBugLine(r.stdout, 'codex');
+  });
+
+  it('FAILs a runtime whose installed ccrc LiteLLM patch was deleted after the build as mutated, though its stamp still matches', async () => {
+    const home = await healthyCodexBox('ccrc-doctor-codex-rt-patch-gone-');
+    const rt = plantFakeRuntime(home);
+    rmSync(join(rt.site, 'ccrc_litellm_patch.py'));
+    const r = runDoctor(home);
+    const re = /^FAIL codex: the current runtime generation is no longer what its build made \(ccgpt-runtime check: mutated\)/m;
     expect(r.stdout, r.stdout).toMatch(re);
     expect(remedyAfter(r.stdout, re)).toMatch(/ccgpt-runtime build/);
     noRunnerBugLine(r.stdout, 'codex');
