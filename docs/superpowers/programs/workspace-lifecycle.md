@@ -1799,6 +1799,41 @@ that crashed and stayed dead for an hour. The operator's rulings are the spec's 
   - **02:50 — quiet-ridge CONSENTS (4497)** for `dead-coordinator-prose.test.ts` under R56. Off-limits: the case "no
     skill file names the lane's live switch" and its `const skills` line. Forwarded in 4499. Every co-edit for fix round
     5 is now settled.
+- **2026-10-13 09:12 — fix round 5 done at `c5a96f2ef` (plain-ridge's 4533); run 358 is at `awaiting-review`; review run
+  411 dispatched.**
+  - **Re-measured:** the branch, remote ref, PR #351 head and handoff commit are all
+    `c5a96f2effaa4274238cc11331f774c50b7a58d8`, and the worker's tree is clean. The PR is OPEN and MERGEABLE, and every
+    required check is green on the PR run; macOS was still pending. Main is `e4405056e`, still at 18 migrations, and
+    merge-tree is clean, so main was not absorbed. I started a FULL-mode CI run on the tip (`38374485823`).
+  - **The claim:** 9 commits, 13 files.
+    - **R1 (4916):**
+      - migration 19 is edited in place to `clean|dirty|sealed`;
+      - the seal and unseal writers are generation-checked;
+      - a start trusts only `sealed`, and the first pass unseals eagerly;
+      - the seal is refused for any of its five reasons;
+      - `shutdownseal.ts` plus one `index.ts` call: `once` handlers, the watcher's timer stopped, the seal awaited
+        within 5 s, a re-raise that keeps exit status 143, and a second signal that kills with no seal;
+      - feebce4c4 reads R1.5 literally: a sealed start acts on and writes nothing until its own unseal lands;
+      - the wiring test spawns the real `index.ts`.
+    - **R2:** the hold and pending changes move before any statement that can throw, and the mark-to-commit span is one
+      try.
+    - **R3/R4:** the words.
+    - **R5:** X2 is red.
+    - **R6:** X9 and the Landed term are green and argued equivalent by the invariant stated at `watch.ts:5195`.
+  - **Measured by the worker:** mutations at `feebce4c4`: 57 of 58 prior rows and 12 of 13 new rows red. 37 named
+    guards green alone. The worker's internal Opus review found minors only, fixed in `c5a96f2ef`.
+  - **The worker ACCEPTED one tradeoff (its internal review's F4).** During the seal bound only the lane's timer stops:
+    a tick in flight still runs, and the routes keep serving. Review 411 judges it; it is not overruled now.
+  - **Claims:** 1221 and 1224. Co-edits under 4489, 4492, 4491, 4497 and 4499.
+  - **Review run 411:**
+    - the full held-out panel, dispatched to `ccrc-pwa-soft-canyon` (claude-dev5, `skillState: present`) with workflow on;
+    - a 7.2 KB brief: the seal's attacks, unseal liveness, the handler's bound and exit status, the wiring test's
+      isolation (SAFETY), the F4 tradeoff, R2's throw sites, the equivalence claims, migration 19 in place, the co-edit
+      pins and scope;
+    - every mutation row re-measured at the tip, and CI's full run read.
+  - Plain-ridge stays idle (4535).
+  - **Next:** the operator authorized the merge (02:05). It happens if review 411 reports no blocker and no
+    ruling-needed finding, and the required checks are green.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` number is defined in
   this file.
 
