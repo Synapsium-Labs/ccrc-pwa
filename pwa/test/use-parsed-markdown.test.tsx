@@ -195,3 +195,50 @@ describe('T11 review 3-3: a non-current job that rejects clobbers nothing', () =
     expect(result.current.outcome).toEqual(tree(second));
   });
 });
+
+describe('T11 review 3-5: text A -> B -> A never shows B under A', () => {
+  const treeText = (o: ParseOutcome | null): string | undefined => {
+    if (o?.kind !== 'tree') return undefined;
+    const p = o.tree.children[0];
+    const t = p?.type === 'element' ? p.children[0] : undefined;
+    return t?.type === 'text' ? t.value : undefined;
+  };
+
+  it('A settled, B running, A again: A stays the outcome, nothing is queued, B only becomes the last good tree', async () => {
+    const { parser, calls } = deferredParser();
+    const { result, rerender } = mount(parser, { text: 'A' });
+    await settle(calls[0], tree(treeOf('A')));
+    rerender({ text: 'B' });
+    rerender({ text: 'A' });
+    expect(result.current.pending).toBe(false);
+    expect(treeText(result.current.outcome)).toBe('A');
+    await settle(calls[1], tree(treeOf('B')));
+    expect(calls.map((c) => c.src)).toEqual(['A', 'B']);
+    expect(treeText(result.current.outcome)).toBe('A');
+    expect(result.current.pending).toBe(false);
+    expect(result.current.lastGood).toEqual(treeOf('B'));
+  });
+
+  it('a result for a text that is no longer current is kept as the last good tree only, never as the outcome', async () => {
+    const { parser, calls } = deferredParser();
+    const { result, rerender } = mount(parser, { text: 'a' });
+    rerender({ text: 'ab' });
+    const a = treeOf('a');
+    await settle(calls[0], tree(a));
+    expect(result.current).toEqual({ outcome: null, lastGood: a, pending: true });
+    await settle(calls[1], tree(treeOf('ab')));
+    expect(treeText(result.current.outcome)).toBe('ab');
+    expect(result.current.pending).toBe(false);
+  });
+
+  it('A running, B waiting, A again: the waiting B is dropped and A, when it settles, is the outcome', async () => {
+    const { parser, calls } = deferredParser();
+    const { result, rerender } = mount(parser, { text: 'A' });
+    rerender({ text: 'B' });
+    rerender({ text: 'A' });
+    await settle(calls[0], tree(treeOf('A')));
+    expect(calls.map((c) => c.src)).toEqual(['A']);
+    expect(treeText(result.current.outcome)).toBe('A');
+    expect(result.current.pending).toBe(false);
+  });
+});

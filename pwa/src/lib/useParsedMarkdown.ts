@@ -5,6 +5,9 @@
 //     parses costs one job per settle, never one per token.
 //   - A job's result is applied only while that job is still the hook's running job. Unmount aborts the running
 //     job's signal and drops the waiting one, so a parser that answers after that is not heard.
+//   - A result becomes the `outcome` only while its request is still the latest one made; a result for an earlier
+//     request is kept as `lastGood` alone. A request the hook has already answered, or that the running job
+//     answers, queues nothing: so text A -> B -> A shows A's outcome throughout, never B's under A.
 //   - `lastGood` is the last tree that settled, kept through any later outcome, so a caller can show it while a
 //     newer text parses.
 //   - A rejection ends the job with nothing applied, and the waiting job, if any, runs next. The runner rejects
@@ -49,18 +52,22 @@ interface Waiting {
 interface Jobs {
   /** Jobs started so far; a job's number tells it apart from every later one. */
   started: number;
-  /** The job in flight; absent while none runs. */
-  running: { readonly n: number; readonly ctrl: AbortController } | undefined;
+  /** The job in flight, and the request it answers; absent while none runs. */
+  running: { readonly n: number; readonly ctrl: AbortController; readonly req: Request } | undefined;
   /** The one request waiting behind it; absent when none waits. */
   queued: Waiting | undefined;
+  /** The latest request the hook made; absent before the first. */
+  latest: Request | undefined;
+  /** The request the settled `outcome` answers; absent until an outcome settles for a latest request. */
+  answered: Request | undefined;
 }
 
 function start(jobs: Jobs, next: Waiting, setSettled: Dispatch<SetStateAction<Settled>>): void {
   jobs.started += 1;
   const n = jobs.started;
   const ctrl = new AbortController();
-  jobs.running = { n, ctrl };
   const { req, parser } = next;
+  jobs.running = { n, ctrl, req };
   const current = (): boolean => jobs.running?.n === n;
   const runNext = (): void => {
     jobs.running = undefined;
@@ -70,12 +77,14 @@ function start(jobs: Jobs, next: Waiting, setSettled: Dispatch<SetStateAction<Se
   };
   parser(req.text, { profile: req.profile, budgetMs: req.budgetMs, signal: ctrl.signal }).then(
     (outcome) => {
+      const isLatest = jobs.latest !== undefined && sameRequest(jobs.latest, req);
       if (!current()) return;
       setSettled((prev) => ({
-        outcome,
+        outcome: isLatest ? outcome : prev.outcome,
         lastGood: outcome.kind === 'tree' ? outcome.tree : prev.lastGood,
-        answers: req,
+        answers: isLatest ? req : prev.answers,
       }));
+      if (isLatest) jobs.answered = req;
       runNext();
     },
     () => {
@@ -93,7 +102,7 @@ export function useParsedMarkdown(
   const { profile, budgetMs } = opts;
   const attempt = opts.attempt ?? 0;
   const [settled, setSettled] = useState<Settled>({ outcome: null, lastGood: null });
-  const jobs = useRef<Jobs>({ started: 0, running: undefined, queued: undefined });
+  const jobs = useRef<Jobs>({ started: 0, running: undefined, queued: undefined, latest: undefined, answered: undefined });
 
   useEffect(() => {
     const j = jobs.current;
@@ -107,12 +116,19 @@ export function useParsedMarkdown(
 
   // `parser` is deliberately not a dependency: it is read when a request is made.
   useEffect(() => {
-    const next: Waiting = { req: { text, profile, budgetMs, attempt }, parser };
+    const req: Request = { text, profile, budgetMs, attempt };
+    const next: Waiting = { req, parser };
     const j = jobs.current;
+    j.latest = req;
+    // A request already answered, or answered by the running job, needs no job of its own.
+    const covered =
+      (j.answered !== undefined && sameRequest(j.answered, req)) ||
+      (j.running !== undefined && sameRequest(j.running.req, req));
     if (j.running !== undefined) {
-      j.queued = next;
+      j.queued = covered ? undefined : next;
       return;
     }
+    if (covered) return;
     start(j, next, setSettled);
   }, [text, profile, budgetMs, attempt]);
 
