@@ -270,11 +270,118 @@ export function MsgPlain({ text, note }: { text: string; note?: string }): React
   );
 }
 
-/** At most `CHAT_SYNC_MAX_BYTES`: the pre-scan, then react-markdown on the main thread, exactly as before. */
+/** The content of `line` after its container markers: spaces and tabs, then repeatedly `>`, a list marker (`-`, `+`,
+ *  `*`, or up to 9 digits and `.` or `)`, followed by a blank) and the blanks after it. One pass, no recursion. */
+function blockContent(line: string): string {
+  let i = 0;
+  for (;;) {
+    while (line.charCodeAt(i) === 0x20 || line.charCodeAt(i) === 0x09) i += 1;
+    const c = line.charCodeAt(i);
+    if (c === 0x3e /* > */) {
+      i += 1;
+      continue;
+    }
+    let end = -1;
+    const blankAt = (k: number): boolean => line.charCodeAt(k) === 0x20 || line.charCodeAt(k) === 0x09;
+    if ((c === 0x2d || c === 0x2b || c === 0x2a) && blankAt(i + 1)) {
+      end = i + 1;
+    } else if (c >= 0x30 && c <= 0x39) {
+      let j = i;
+      while (line.charCodeAt(j) >= 0x30 && line.charCodeAt(j) <= 0x39) j += 1;
+      const d = line.charCodeAt(j);
+      if (j - i <= 9 && (d === 0x2e || d === 0x29) && blankAt(j + 1)) end = j + 1;
+    }
+    if (end < 0) return line.slice(i);
+    i = end;
+  }
+}
+
+/** The fence a line opens (3 or more backticks or tildes; a backtick fence's info string holds no backtick), or
+ *  `undefined`. */
+function chatFenceOpen(s: string): { ch: string; len: number } | undefined {
+  const ch = s[0];
+  if (ch !== '`' && ch !== '~') return undefined;
+  let j = 0;
+  while (s[j] === ch) j += 1;
+  if (j < 3 || (ch === '`' && s.indexOf('`', j) !== -1)) return undefined;
+  return { ch, len: j };
+}
+
+/** The columns of a GFM delimiter row (`|---|:-:|`), or 0 when `s` is not one: it holds a pipe, and every cell
+ *  between the pipes is `-` repeated with an optional `:` at either end. A leading and a trailing pipe add no cell. */
+function delimiterColumns(s: string): number {
+  if (s.indexOf('|') === -1) return 0;
+  const cells = s.trim().split('|');
+  if (cells[0]!.trim() === '') cells.shift();
+  if (cells.length > 0 && cells[cells.length - 1]!.trim() === '') cells.pop();
+  if (cells.length === 0) return 0;
+  for (const raw of cells) {
+    const cell = raw.trim();
+    let a = 0;
+    let b = cell.length;
+    if (cell[a] === ':') a += 1;
+    if (b > a && cell[b - 1] === ':') b -= 1;
+    if (b <= a) return 0;
+    for (let k = a; k < b; k += 1) if (cell[k] !== '-') return 0;
+  }
+  return cells.length;
+}
+
+/** How many cells the GFM tables in `src` would draw: columns (read from the delimiter row) times rows (the header
+ *  line, then every line up to a blank line or a fence). A cheap count from the source, one pass over the lines with
+ *  no recursion: fenced code is skipped, container markers (`>`, list markers) are stripped, and a table's body
+ *  lines count whole rows, as the parse pads a short row to the table's width. It over-counts rather than misses. */
+export function countChatTableCells(src: string): number {
+  let total = 0;
+  let fence: { ch: string; len: number } | undefined;
+  let cols = 0;
+  let prev = '';
+  let start = 0;
+  while (start <= src.length) {
+    let end = src.indexOf('\n', start);
+    if (end < 0) end = src.length;
+    const s = blockContent(src.slice(start, end));
+    start = end + 1;
+    if (fence !== undefined) {
+      let j = 0;
+      while (s[j] === fence.ch) j += 1;
+      if (j >= fence.len && s.slice(j).trim() === '') fence = undefined;
+      continue;
+    }
+    fence = chatFenceOpen(s);
+    if (fence !== undefined || s.trim() === '') {
+      cols = 0;
+      prev = '';
+      continue;
+    }
+    if (cols > 0) {
+      total += cols;
+      continue;
+    }
+    const n = prev.indexOf('|') === -1 ? 0 : delimiterColumns(s);
+    if (n > 0) {
+      cols = n;
+      total += n;
+      prev = '';
+    } else {
+      prev = s;
+    }
+  }
+  return total;
+}
+
+/** At most `CHAT_SYNC_MAX_BYTES`: the pre-scan, then a count of the cells its tables would draw, then react-markdown
+ *  on the main thread, exactly as before. The sync path has no element cap of its own (the parse's cap is the
+ *  worker's), and a table's body lines pad to its width, so a 4 KiB message can draw hundreds of thousands of cells;
+ *  one that would draw more than `DOCS_MAX_RENDER_ELEMENTS` cells shows as plain text with the too-wide note. */
 function SyncChatMarkdown({ text }: { text: string }): ReactNode {
   const scan = prescanMarkdown(text);
   if (!scan.ok) {
     return <MsgPlain text={text} note={chatPlainNote({ kind: 'refused', why: scan.why, line: scan.line, value: scan.value })} />;
+  }
+  const cells = countChatTableCells(text);
+  if (cells > DOCS_MAX_RENDER_ELEMENTS) {
+    return <MsgPlain text={text} note={chatPlainNote({ kind: 'too-wide', elements: cells })} />;
   }
   return <Markdown remarkPlugins={[remarkGfm, remarkAlerts]} components={CHAT_COMPONENTS}>{text}</Markdown>;
 }

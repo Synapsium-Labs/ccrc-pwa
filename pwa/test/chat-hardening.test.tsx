@@ -428,3 +428,60 @@ describe('T11 review N1: streaming shows each newer settled tree; A -> B -> A ne
     expect(calls).toHaveLength(2);
   });
 });
+
+describe('T11 review 2-3 (operator ruling): a short message whose tables would draw more cells than the cap is plain text', () => {
+  /** A table of `cols` columns, then `x` body lines until the text is as near 4 096 bytes as it can be; `cells` is
+   *  the cell count the parse would draw: the header and every body line, `cols` cells each. */
+  function wideTable(cols: number, prefix = ''): { text: string; cells: number } {
+    let text = `${prefix}|${'a|'.repeat(cols)}\n${prefix}|${'-|'.repeat(cols)}\n`;
+    let rows = 1;
+    while (utf8ByteLength(`${text}${prefix}x\n`) <= CHAT_SYNC_MAX_BYTES) {
+      text += `${prefix}x\n`;
+      rows += 1;
+    }
+    return { text, cells: cols * rows };
+  }
+  const tooWide = (cells: number): string =>
+    `Shown as plain text: this message would draw ${cells} elements (limit ${DOCS_MAX_RENDER_ELEMENTS}).`;
+
+  it.each([300, 500])('a 4 096-byte %i-column table shows .msg-plain with the too-wide note and draws no table', (cols) => {
+    const { text, cells } = wideTable(cols);
+    expect(utf8ByteLength(text)).toBeLessThanOrEqual(CHAT_SYNC_MAX_BYTES);
+    expect(utf8ByteLength(text)).toBeGreaterThan(CHAT_SYNC_MAX_BYTES - 4);
+    expect(cells).toBeGreaterThan(DOCS_MAX_RENDER_ELEMENTS);
+    const spy = countChatParses();
+    const { container } = assistant(text);
+    expect(plainOf(container)?.textContent).toBe(text);
+    expect(noteOf(container)).toBe(tooWide(cells));
+    expect(container.querySelector('table')).toBeNull();
+    expect(container.querySelectorAll('*').length).toBeLessThan(10);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('the same table inside a blockquote is counted too', () => {
+    const { text, cells } = wideTable(300, '> ');
+    expect(cells).toBeGreaterThan(DOCS_MAX_RENDER_ELEMENTS);
+    const { container } = assistant(text);
+    expect(noteOf(container)).toBe(tooWide(cells));
+    expect(container.querySelector('table')).toBeNull();
+  });
+
+  it('an ordinary 10 x 10 table still renders a <table>', () => {
+    const row = (c: string): string => `|${`${c}|`.repeat(10)}`;
+    const text = [row('h'), row('-'), ...Array.from({ length: 9 }, () => row('c'))].join('\n');
+    const { container } = assistant(text);
+    expect(plainOf(container)).toBeNull();
+    expect(container.querySelectorAll('table')).toHaveLength(1);
+    expect(container.querySelectorAll('td')).toHaveLength(90);
+  });
+
+  it('a fenced block holding the wide table is not counted: it renders as code', () => {
+    const { text: table } = wideTable(300);
+    const fenced = `\`\`\`\n${table.slice(0, CHAT_SYNC_MAX_BYTES - 10)}\n\`\`\`\n`;
+    expect(utf8ByteLength(fenced)).toBeLessThanOrEqual(CHAT_SYNC_MAX_BYTES);
+    const { container } = assistant(fenced);
+    expect(plainOf(container)).toBeNull();
+    expect(container.querySelector('.code-block')).not.toBeNull();
+    expect(container.querySelector('table')).toBeNull();
+  });
+});
