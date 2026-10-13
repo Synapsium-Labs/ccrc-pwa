@@ -56,6 +56,8 @@ import {
   plantLaneConfig, laneUnits, GPT_LANE_BINS, type StubRc, type LanePorts,
 } from './codexLaneFixture.js';
 import { psArgs } from './laneReaper.js';
+// CCR-15 wave 10: the collector's generation journal's ONE name (path-identity spec 2026-10-12 §5.3).
+import { COLLECT_LANE_JOURNAL_BASENAME } from '../src/coord/collectLaneJournal.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -1356,6 +1358,24 @@ describe('ccrc backup: update\'s step 2 standalone, with CCRC_BACKUP_KEEP prunin
     expect(left).not.toContain('20250102-000000');
     expect(left.length).toBe(3);
   });
+
+  it('ccrc backup takes no copy of the journal (path-identity spec 2026-10-12 §5.3)', () => {
+    const home = mkTmp('ccrc-backup-journal-');
+    plantInstalledBox(home);
+    plantCoordDb(home);
+    const journal = join(home, '.ccrc', COLLECT_LANE_JOURNAL_BASENAME);
+    writeFileSync(journal, '{"generation":3}\n', { mode: 0o600 });
+    const before = readFileSync(journal);
+    const r = runVerb(home, 'backup');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const dir = /^backup: (\S+)/m.exec(r.stdout)![1]!;
+    expect(readFileSync(join(dir, 'coord.db')).subarray(0, 15).toString('utf8'),
+      'CONTROL: the backup ran and took its coord.db snapshot').toBe('SQLite format 3');
+    const copies = readdirSync(dir, { recursive: true, encoding: 'utf8' })
+      .filter((p) => path.basename(p) === COLLECT_LANE_JOURNAL_BASENAME);
+    expect(copies, 'the backup holds a copy of the journal').toEqual([]);
+    expect(readFileSync(journal).equals(before), 'ccrc backup rewrote the journal').toBe(true);
+  });
 });
 
 describe('ccrc backup: CCRC_BACKUP_KEEP is one bounded number, the same validator as CCRC_VERSIONS_KEEP (F6)', () => {
@@ -2618,6 +2638,22 @@ describe('ccrc uninstall --purge and the history store (history spec §9.5, O42,
     const store = join(home, '.ccrc', 'history');
     const covering = sources.filter((s) => s === store || store.startsWith(s.endsWith('/') ? s : `${s}/`));
     expect(covering, 'a backup row copies the history store, or a directory holding it').toEqual([]);
+  });
+
+  it('_upd_backup_pairs lists no row equal to, or an ancestor of, the journal (path-identity spec 2026-10-12 §5.3)', () => {
+    const home = mkTmp('ccrc-uninst-journal-o45-');
+    plantInstalledBox(home);
+    const r = sourced(home, '_upd_backup_pairs');
+    expect(r.code, r.stderr).toBe(0);
+    const sources = r.stdout.split('\n').filter(Boolean).map((l) => l.split('\t')[1] ?? '');
+    expect(sources.length, 'the listing printed almost nothing — the check below would be vacuous').toBeGreaterThan(3);
+    expect(sources, 'the listing did not run against this HOME').toContain(join(home, '.ccrc', 'memory'));
+    const journal = join(home, '.ccrc', COLLECT_LANE_JOURNAL_BASENAME);
+    const covers = (s: string): boolean => s === journal || journal.startsWith(s.endsWith('/') ? s : `${s}/`);
+    expect(covers(join(home, '.ccrc')), 'CONTROL: an ancestor row covers it').toBe(true);
+    expect(covers(journal), 'CONTROL: the row itself covers it').toBe(true);
+    expect(covers(join(home, '.ccrc', 'memory')), 'CONTROL: a sibling row does not').toBe(false);
+    expect(sources.filter(covers), 'a backup row copies the journal, or a directory holding it').toEqual([]);
   });
 });
 

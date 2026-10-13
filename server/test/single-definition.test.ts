@@ -5843,3 +5843,47 @@ describe('child reclamation wave 10: the collector switch has one writer, one jo
     expect(code(EXECUTOR), 'the executor appends to the journal itself').not.toMatch(/\.appendGeneration\s*\(/);
   });
 });
+
+// CHILD RECLAMATION WAVE 10 (path-identity spec 2026-10-12 §5.3). APPENDED, for the reason the blocks above state:
+// `session-hook.test.ts`'s citation audit cites this file by line. The temp-root collector's generation journal only
+// moves forward: no backup copies it, and no restore, rollback or watchdog arm moves it back, so a database snapshot
+// restored without it reads as a mismatch and stops the lane. The one shell file that names it is `ccd/ccrc`, and only
+// in what it TELLS the operator: the usage text and the downgrade report's one echo. The name is read off its one TS
+// definer, so a rename on either side reds here.
+describe('child reclamation wave 10: only ccrc\'s wording names the journal in shell', () => {
+  const DEFINER = 'server/src/coord/collectLaneJournal.ts';
+  const NAME = /^export const COLLECT_LANE_JOURNAL_BASENAME = '([^']+)';$/m
+    .exec(readFileSync(path.join(ccrcRoot, DEFINER), 'utf8'))?.[1] ?? '';
+  /** A shell act on a path: copy, move, removal, link, install, tee, truncate, dd, rsync, or any redirect. */
+  const ACT = /\b(?:rm|cp|mv|ln|install|tee|truncate|dd|rsync)\b|>/;
+
+  it('CONTROL: the name was read off its definer, and the act pattern sees a removal and a redirect but not the echo', () => {
+    expect(NAME, `${DEFINER} no longer declares COLLECT_LANE_JOURNAL_BASENAME as one quoted literal`)
+      .toMatch(/^[a-z][a-z0-9.-]*\.log$/);
+    expect(ACT.test(`  rm -f "$HOME/.ccrc/${NAME}"`)).toBe(true);
+    expect(ACT.test(`  printf '%s\\n' x >> "$HOME/.ccrc/${NAME}"`)).toBe(true);
+    expect(ACT.test(`      echo "update: rollback:   (leave ~/.ccrc/${NAME} in place: no backup holds it"`)).toBe(false);
+  });
+
+  it('its holders are exactly ccd/ccrc', () => {
+    expect(holdersOf(NAME), 'a line of shell outside ccd/ccrc names the journal, or ccd/ccrc no longer does').toEqual(['ccd/ccrc']);
+  });
+
+  it('every holder line is an echo or usage line, none a copy, move, removal or redirect aimed at it', () => {
+    const lines = readFileSync(path.join(ccrcRoot, 'ccd/ccrc'), 'utf8').split('\n');
+    const open = lines.indexOf('usage() {');
+    const close = lines.indexOf('EOF', open);
+    expect(open, 'ccd/ccrc has no usage() {').toBeGreaterThan(-1);
+    expect(close, 'the usage heredoc has no closing EOF').toBeGreaterThan(open);
+    const held = lines.flatMap((l, i) => (!isBashComment(l) && l.includes(NAME) ? [i] : []));
+    expect(held.length, 'the two usage paragraphs and the downgrade echo: at least three lines').toBeGreaterThanOrEqual(3);
+    const echoes = held.filter((i) => /^\s*echo "update: rollback: {3}\(leave ~\/\.ccrc\//.test(lines[i]!));
+    expect(echoes, 'the downgrade report says it exactly once').toHaveLength(1);
+    for (const i of held) {
+      const l = lines[i]!;
+      expect((i > open && i < close) || echoes.includes(i),
+        `ccd/ccrc:${i + 1} names the journal outside the usage text and the downgrade echo: ${l.trim()}`).toBe(true);
+      expect(l, `ccd/ccrc:${i + 1} acts on the journal`).not.toMatch(ACT);
+    }
+  });
+});
