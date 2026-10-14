@@ -163,7 +163,7 @@ describe('the line bound: no highlighting for a block holding a line longer than
   /** `unit` repeated and cut to `n` characters. */
   const unitLine = (unit: string, n: number): string => unit.repeat(Math.ceil(n / unit.length)).slice(0, n);
   /** The largest block `lang` highlights: markdown and yaml keep 64 KiB (xml is registered without its script and
-   *  style sub-languages, so markdown reaches no bounded grammar, D-4928). */
+   *  style sub-languages, so markdown reaches no bounded grammar, review 450 F1). */
   const capOf = (_lang: string): number => MD_HIGHLIGHT_BLOCK_MAX_CHARS;
   /** The cap of `lang` (less the last partial line) of lines of `n` characters. */
   const lines = (unit: string, n: number, lang: string): string =>
@@ -418,7 +418,7 @@ describe('Review 439 F1: a fence of whitespace that spans lines is not highlight
     expect(label(c)).toBe(said(MAX + 1));
     expect(c.querySelector('pre > code.hljs')?.textContent).toBe(one);
     cleanup();
-    // A `ts` block is capped at 8 192 characters (D-4928), so the largest that reaches the whitespace bound is that.
+    // A `ts` block is capped at 8 192 characters (review 450 F1), so the largest that reaches the whitespace bound is that.
     const big = unitRun(unit, 8192);
     expect(label(block('ts', big))).toBe(said(8192));
     expect(highlight).not.toHaveBeenCalled();
@@ -550,7 +550,7 @@ describe('Review 439 F1: a fence of whitespace that spans lines is not highlight
   });
 });
 
-describe('D-4928: typescript, javascript and rust have their own, smaller block caps', () => {
+describe('review 450 F1: typescript, javascript and rust have their own, smaller block caps', () => {
   // highlight.js 11.11.1 is quadratic in a block's size for `<a>` in `typescript`/`javascript` (JSX `hasClosingTag`) and
   // for a raw string `r#"` with no closer in `rust`, on shapes that pass the word, line and whitespace bounds. The
   // literals below are the decided values (8 192 and 4 096), never the imported constants, so a mutated constant reds.
@@ -656,7 +656,7 @@ describe('D-4928: typescript, javascript and rust have their own, smaller block 
   });
 });
 
-describe('D-4928 closure: a grammar that embeds a bounded grammar through `subLanguage` is bounded too', () => {
+describe('review 450 F1, the closure: a grammar that embeds a bounded grammar through `subLanguage` is bounded too', () => {
   // `xml` is registered WITHOUT its script and style sub-languages (highlight.js's xml is quadratic on those regions
   // whatever they embed), so no registered grammar reaches typescript, javascript or rust today. Literals below are the
   // decided values, never the imported constants, so a mutated constant reds.

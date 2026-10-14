@@ -90,7 +90,7 @@ export function openExternal(e: React.MouseEvent, href: string | undefined): voi
  *  that carry one that costs: the `<script>` mode (`["javascript","handlebars","xml"]`) and the `<style>` mode
  *  (`["css","xml"]`), the `starts` of the two tag modes. Those are the only modes of the stock definition with a
  *  `subLanguage`; each keeps its `end` and `returnEnd`, so the contents run to the closing tag as ONE plain run.
- *  Why (D-4928): the grammar is quadratic on those regions whatever they embed (`<script>` repeated one per line, no
+ *  Why (review 450 F1): the grammar is quadratic on those regions whatever they embed (`<script>` repeated one per line, no
  *  closer: 1, 2, 4 and 8 KiB cost 66, 308, 1 729 and 7 918 ms; `<style>{` per line, 8 KiB 2.4 s with no javascript
  *  involved), and with them removed every probed shape is linear (a snapshot of 2026-10-14 on a loaded box, load average about 40: xml 167 ms per 64 KiB at most; markdown, which
  *  embeds xml, about 650 ms on its worst shape, `<a>` in lines, which is why it has a page budget of its own,
@@ -274,7 +274,7 @@ export function deriveBoundedCaps(h: HLJSApi, base: ReadonlyMap<string, number>)
   return caps;
 }
 
-/** The grammars highlight.js is quadratic in (D-4928), and the cap each takes: typescript and javascript at
+/** The grammars highlight.js is quadratic in (review 450 F1), and the cap each takes: typescript and javascript at
  *  `MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS`, rust at `MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS`, and every registered grammar whose
  *  `subLanguage` chain reaches one of them (none today: `xml` is registered without its script and style
  *  sub-languages) at the smallest cap among those its chain reaches. `deriveBoundedCaps` applied once to this module's
@@ -299,20 +299,20 @@ function boundedCap(lang: string): number | null {
 }
 
 /** The longest block, in characters, `CodeBlock` highlights in `lang`: the cap of `HIGHLIGHT_BOUNDED_CAPS` for a
- *  grammar in it (D-4928; typescript, javascript and rust, and any grammar embedding them: none today),
+ *  grammar in it (review 450 F1; typescript, javascript and rust, and any grammar embedding them: none today),
  *  `MD_HIGHLIGHT_BLOCK_MAX_CHARS` for every other grammar. */
 export function highlightBlockCap(lang: string): number {
   return boundedCap(lang) ?? MD_HIGHLIGHT_BLOCK_MAX_CHARS;
 }
 
 /** Whether a block in `lang` counts against a Docs page's budget for the grammars that grow with the square of a
- *  block's size (`DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS`, D-4928): every grammar in `HIGHLIGHT_BOUNDED_CAPS`. */
+ *  block's size (`DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS`, review 450 F1): every grammar in `HIGHLIGHT_BOUNDED_CAPS`. */
 export function inScanPageBudget(lang: string): boolean {
   return boundedCap(lang) !== null;
 }
 
 /** Whether a block in `lang` counts against a Docs page's budget for `markdown` code
- *  (`DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS`, D-4928): every alias highlight.js resolves to the `markdown` grammar, by
+ *  (`DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS`, review 450 F1): every alias highlight.js resolves to the `markdown` grammar, by
  *  identity. */
 export function inMarkdownPageBudget(lang: string): boolean {
   if (!lang) return false;
@@ -324,7 +324,7 @@ export function inMarkdownPageBudget(lang: string): boolean {
  *  The bar is a SIBLING above the scrolling <pre>, never an overlay.
  *  Highlighted only when the language is registered, `highlight` is not `false`, the block is at most
  *  `highlightBlockCap(lang)` characters (after the trailing-newline strip: `MD_HIGHLIGHT_BLOCK_MAX_CHARS`, or a smaller
- *  cap for the grammars of `HIGHLIGHT_BOUNDED_CAPS`, D-4928), its longest run of word units
+ *  cap for the grammars of `HIGHLIGHT_BOUNDED_CAPS`, review 450 F1), its longest run of word units
  *  (`longestWordRun`) is at most `MD_HIGHLIGHT_MAX_WORD_CHARS` (W5 bound r10), its longest line is at most
  *  `MD_HIGHLIGHT_MAX_LINE_CHARS` (the line bound), and its longest blank run (`longestBlankRun`, whitespace that may
  *  span lines) is at most `MD_HIGHLIGHT_MAX_BLANK_CHARS` (the whitespace bound). A registered block over the size cap

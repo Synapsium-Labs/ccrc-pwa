@@ -16,7 +16,7 @@ import { detachUrls } from '../src/docs/docsLinks';
 afterEach(cleanup);
 
 /** A fenced `python` block as the parse emits it: `pre > code.language-python`, holding `text` (python, not `ts`: a
- *  `ts` block also draws on the scan budget of D-4928, which the cases below measure on their own). */
+ *  `ts` block also draws on the scan budget of review 450 F1, which the cases below measure on their own). */
 const fence = (text: string): HastElement => ({
   type: 'element', tagName: 'pre', properties: {},
   children: [{ type: 'element', tagName: 'code', properties: { className: ['language-python'] }, children: [{ type: 'text', value: text }] }],
@@ -93,7 +93,7 @@ describe('M4.H2: the page budget reaches CodeBlock through PreHighlightContext (
   });
 });
 
-describe('D-4928: the scan budget, a page\'s code of typescript, javascript and rust together (393 216 characters)', () => {
+describe('review 450 F1: the scan budget, a page\'s code of typescript, javascript and rust together (393 216 characters)', () => {
   // Literal sizes, never the imported constant, so a mutated constant reds a behaviour case.
   const lang = (name: string, text: string): HastElement => ({
     type: 'element', tagName: 'pre', properties: {},
@@ -149,7 +149,7 @@ describe('D-4928: the scan budget, a page\'s code of typescript, javascript and 
   });
 });
 
-describe('D-4928: the markdown budget, a page\'s markdown code (131 072 characters), outside the scan set', () => {
+describe('review 450 F1: the markdown budget, a page\'s markdown code (131 072 characters), outside the scan set', () => {
   // Literal sizes, never the imported constants, so a mutated constant reds a behaviour case.
   const lang = (name: string, text: string): HastElement => ({
     type: 'element', tagName: 'pre', properties: {},

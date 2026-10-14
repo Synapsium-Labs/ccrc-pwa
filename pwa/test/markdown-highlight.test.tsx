@@ -19,7 +19,7 @@ afterEach(cleanup);
 const tsBody = (chars: number): string => 'const a = 1;\n'.repeat(Math.ceil(chars / 13)).slice(0, chars - 1) + 'x';
 
 /** A Python body of exactly `chars` characters, every line a keyword, ending in `x`: Python keeps the 64 KiB cap that
- *  `ts` no longer has (D-4928: `typescript` is capped at 8 192 characters), so it measures the general cap. */
+ *  `ts` no longer has (review 450 F1: `typescript` is capped at 8 192 characters), so it measures the general cap. */
 const pyBody = (chars: number): string => 'import a\n'.repeat(Math.ceil(chars / 9)).slice(0, chars - 1) + 'x';
 
 /** One fenced block, as react-markdown hands it to the `pre` component. */

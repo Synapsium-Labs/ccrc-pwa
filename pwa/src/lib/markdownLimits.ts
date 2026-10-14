@@ -52,7 +52,7 @@ export const MD_HIGHLIGHT_MAX_WORD_CHARS = 256;
  *  2 927, 5 041 and 2 843 characters; the last two are this wave's own plan's `json` rows blocks), chat's corpus none.
  *  That sweep put ONE unit on each line; whitespace that spans lines is a different shape, bounded by
  *  `MD_HIGHLIGHT_MAX_BLANK_CHARS`, and multi-character units that make a grammar scan forward are another, bounded by
- *  the per-grammar caps and page budgets below (D-4928). */
+ *  the per-grammar caps and page budgets below (review 450 F1). */
 export const MD_HIGHLIGHT_MAX_LINE_CHARS = 2048;
 /** The longest run of blank units a code block may hold and still be highlighted (the whitespace bound, review 439
  *  F1, a fifth bound beside the size, word and line bounds); a blank unit is a UTF-16 code unit of ECMAScript's `\s`:
@@ -82,7 +82,7 @@ export const MD_HIGHLIGHT_MAX_BLANK_CHARS = 2048;
  *  resolves to them) and in any grammar whose sub-language chain reaches them (none today: `xml` is registered
  *  without its script and style sub-languages; `HIGHLIGHT_BOUNDED_CAPS` in `markdown.tsx` derives the set from the
  *  registered grammars), smaller than `MD_HIGHLIGHT_BLOCK_MAX_CHARS` because those grammars grow with the square of a
- *  block's size on `<a>` shapes (JSX closing-tag scans) that pass the word, line and whitespace bounds (D-4928).
+ *  block's size on `<a>` shapes (JSX closing-tag scans) that pass the word, line and whitespace bounds (review 450 F1).
  *  Measured on highlight.js 11.11.1 (Node 24, load average 30 to 80): `'<a>'` repeated in lines of 1 800 characters
  *  costs, per KiB of block, 5.5 to 6.7 ms at 6 to 10 KiB, 10 at 16 KiB, 22 at 32 KiB and 43 at 64 KiB (2.8 s a block).
  *  The per-KiB cost is lowest near 8 KiB, so this value and `DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS` keep a crafted page
@@ -93,17 +93,17 @@ export const MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS = 8192;
 /** The longest code block, in characters, that is highlighted in `rust` (and its aliases, and any grammar that embeds
  *  it: none today), smaller than
  *  `MD_HIGHLIGHT_BLOCK_MAX_CHARS` because an unclosed raw string `r#"` makes that grammar grow with the square of
- *  a block's size (D-4928): 75, 294, 728 and 3 791 ms at 8, 16, 32 and 64 KiB, 14 s at 128 KiB; 4.5 ms a KiB at
+ *  a block's size (review 450 F1): 75, 294, 728 and 3 791 ms at 8, 16, 32 and 64 KiB, 14 s at 128 KiB; 4.5 ms a KiB at
  *  4 KiB and 7 at 8 KiB, so the smaller cap keeps a page of it under the same budget. No real fence is `rust`. */
 export const MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS = 4096;
 /** The most code, in characters, of `typescript`, `javascript` and `rust` blocks together that a Docs page highlights,
  *  and of any grammar whose sub-language chain reaches them (none today: `xml` is registered without its script and
  *  style sub-languages): `detachUrls` sums it beside `DOCS_HIGHLIGHT_PAGE_MAX_CHARS` and refuses those grammars from the
- *  block that passes it, while a block of another grammar is never refused by it (D-4928). */
+ *  block that passes it, while a block of another grammar is never refused by it (review 450 F1). */
 export const DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS = 393216;
 /** The most `markdown` code (every alias highlight.js resolves to it, `md` among them) in characters that a Docs page
  *  highlights: `detachUrls` sums it beside the other two and refuses a markdown block from the one that passes it,
- *  while a block of another grammar is never refused by it (D-4928). `markdown` hands every HTML tag to `xml`, a linear
+ *  while a block of another grammar is never refused by it (review 450 F1). `markdown` hands every HTML tag to `xml`, a linear
  *  but high rate, so it has this budget of its own and stays out of the scan set. Measured interleaved (best of 7,
  *  load 57, 64 KiB blocks): `<a>` in lines 652 ms, `</a>` 452, `<a/>` 419, against 242 to 356 for the plateau shapes
  *  of `yaml`, `json`, `typescript` and `javascript`; growth linear from 8 to 128 KiB. The most markdown code on a real

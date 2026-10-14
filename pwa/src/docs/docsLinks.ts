@@ -89,9 +89,9 @@ function preCodeClass(pre: HastElement): string {
  *  `inScanPageBudget` names (`typescript`, `javascript` and `rust`, and any grammar whose sub-language chain reaches them:
  *  none today, `xml` being registered without its script and style sub-languages; aliases included), has its own budget,
  *  `DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS`: a block of those grammars is `false` from the one that passes it, and a block
- *  of any other grammar is never refused by it (D-4928). A third sum, of the blocks whose language `inMarkdownPageBudget`
+ *  of any other grammar is never refused by it (review 450 F1). A third sum, of the blocks whose language `inMarkdownPageBudget`
  *  names (`markdown` and its aliases, `md` among them, which are outside the scan set), has its own budget,
- *  `DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS`, and refuses only markdown blocks the same way (D-4928). An element with nothing to record has no
+ *  `DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS`, and refuses only markdown blocks the same way (review 450 F1). An element with nothing to record has no
  *  entry. Never writes `tree`, so a kept outcome can be detached again, and part 2's Export reuses the copy and its
  *  map (a second detach of the copy finds no URL). */
 export function detachUrls(tree: HastRoot): Detached {
