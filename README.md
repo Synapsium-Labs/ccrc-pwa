@@ -3897,7 +3897,7 @@ still stops it. The undo cannot cover three cases:
   after the record is durable, or a failure at the database update or commit leaves the journal one generation ahead:
   a mismatch that a fresh confirmed change repairs, and that arms nothing;
 - an undo that itself fails after a short write, or on a file the failed write created, can leave a torn or empty
-  file.
+  file; the same hand repair applies.
 
 If Settings reports the generation journal malformed after the server stopped mid-write:
 1. Raise the cleanup pause first (Pause all cleanup).

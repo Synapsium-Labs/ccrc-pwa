@@ -50,8 +50,8 @@ const view = (boxToken: unknown, over: Partial<UpdatesView> = {}): UpdatesView =
   ...over,
 });
 /** The screen also mounts the Stall watch and Temp root collector sections, whose hooks read `api.stallWatch()` and
- *  `api.collectLane()`: settle both as a server without the routes (501 not-configured), so no mount here issues a
- *  live fetch. */
+ *  `api.collectLane()`: settle both as a server without the routes (501 not-configured), so neither section's route
+ *  issues a live fetch. */
 const spySectionReads = (): void => {
   vi.spyOn(api, 'stallWatch').mockRejectedValue(new ApiError(501, { error: 'not-configured' }));
   vi.spyOn(api, 'collectLane').mockRejectedValue(new ApiError(501, { error: 'not-configured' }));
