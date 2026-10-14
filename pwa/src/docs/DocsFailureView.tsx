@@ -7,6 +7,7 @@ import { docsRetryPlan, type DocsNotOk } from './failures';
 import {
   NOT_A_FILE_KIND_TEXT, TRIED_RESULT_TEXT, UNRESOLVED_TAG_HINT, failureSentence, slotSentence,
 } from './docsText';
+import { DocsPageLink } from './DocsTreeView';
 
 export interface DocsFailureViewProps {
   readonly answer: DocsNotOk;
@@ -59,7 +60,7 @@ function FailureContext(p: { readonly answer: DocsNotOk; readonly suggestHref?: 
           Did you mean{' '}
           {p.suggestHref === undefined
             ? <code>{body.suggest}</code>
-            : <a href={p.suggestHref(body.suggest)}>{body.suggest}</a>}
+            : <DocsPageLink href={p.suggestHref(body.suggest)}>{body.suggest}</DocsPageLink>}
           ?
         </p>,
       );

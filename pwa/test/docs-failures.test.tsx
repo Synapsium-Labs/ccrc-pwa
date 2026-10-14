@@ -409,3 +409,29 @@ describe('Review 439 F7, F8: no ? ever reaches a page', () => {
     expect(failureSentence(bodyOf('too-large'))).toBe('This file is larger than Docs shows files of this kind.');
   });
 });
+
+describe('Review 439 F10: the "Did you mean" link navigates in the app', () => {
+  it('a plain click is prevented and moves the location in place, with no document load', () => {
+    history.pushState(null, '', '/docs/demo?ref=mian');
+    render(<DocsFailureView answer={failed('unresolved-ref', { suggest: 'main' })} suggestHref={() => '/docs/demo?ref=main'} />);
+    const link = screen.getByRole('link', { name: 'main' });
+    expect(link).toHaveAttribute('href', '/docs/demo?ref=main');
+    // fireEvent.click answers false when a handler called preventDefault: the browser then loads nothing.
+    expect(fireEvent.click(link)).toBe(false);
+    expect(location.pathname + location.search).toBe('/docs/demo?ref=main');
+  });
+
+  it('a modified click is left to the browser (a new tab)', () => {
+    history.pushState(null, '', '/docs/demo?ref=mian');
+    render(<DocsFailureView answer={failed('unresolved-ref', { suggest: 'main' })} suggestHref={() => '/docs/demo?ref=main'} />);
+    // The app's handler must leave a modified click alone; this listener (it runs after React's) records that and then
+    // stops jsdom from trying a real navigation.
+    let leftToBrowser: boolean | null = null;
+    const stop = (e: Event): void => { leftToBrowser = !e.defaultPrevented; e.preventDefault(); };
+    document.addEventListener('click', stop);
+    fireEvent.click(screen.getByRole('link', { name: 'main' }), { ctrlKey: true });
+    document.removeEventListener('click', stop);
+    expect(leftToBrowser).toBe(true);
+    expect(location.pathname + location.search).toBe('/docs/demo?ref=mian');
+  });
+});
