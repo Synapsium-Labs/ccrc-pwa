@@ -51,8 +51,8 @@ export type FileSlot =
  *  - `fetching`: a POST is in flight.
  *  - `answered`: the route answered `fetch`; `at` is when (Date.now()).
  *  - `soon`: `fetch-too-soon`; `retryAt` (Date.now() clock) is when the one automatic POST was or is due. Its timer may
- *    have been dropped (a second `fetch-too-soon` after the one retry, or the key left before it fired), so once
- *    `retryAt` has passed the chip reads the stamp.
+ *    have been dropped (the key was left before it fired, or the screen was hidden), so once `retryAt` has passed the
+ *    chip reads the stamp.
  *  - `stale-lock`: `ref-locked` with a lock at least `DOCS_LOCK_STALE_MS` old; no automatic retry. `ref` null: the
  *    answer named no ref.
  *  - `refresh-failed`: the POST itself got no route answer (a word from the route, or a client slot).
