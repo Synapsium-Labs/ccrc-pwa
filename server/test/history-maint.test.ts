@@ -19,8 +19,8 @@ import {
   SCHEMA_VERSION, beltWidth, historyPaths, floorThreshold, REPARSE_MAX_TARGETS, BELT_VERSION, WRITING_FORMS, formOf, HEALTH_REMEDIES, firstSentence,
   REDACTED_MARK, redactField, makePairIndex, makeBelt, beltUnits, secretPairs, formatBeltState, BELT_META, backupNameOf,
 } from '../../ccd/history/lib.mjs';
-import { closeWriter, getMeta, openWriter, setMeta, withTx } from '../../ccd/history/store.mjs';
-import { backupOp, idsFromFiles, measureSpoolStanding, openFtsRebuild, pruneApplyOp, recordBeltDueIfUncovered } from '../../ccd/history/sweep.mjs';
+import { closeWriter, createFtsTables, getMeta, openWriter, setMeta, withTx, V2_INDEXES } from '../../ccd/history/store.mjs';
+import { backupOp, ftsOwedPlans, idsFromFiles, measureSpoolStanding, openFtsRebuild, pruneApplyOp, recordBeltDueIfUncovered } from '../../ccd/history/sweep.mjs';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { userRow, compactionSequence, toolResultRow } from './historyFixtures.js';
 import {
@@ -547,7 +547,7 @@ describe.skipIf(process.platform === 'darwin')('C63: doctor --migrate through th
     expect(snapshotsIn(box)).toEqual([]);
   }, HEAVY);
 
-  it('a REAL v1 store (D-5015): doctor --migrate snapshots to pre-v2.db and migrates to this build, building the owed-row index over the blobs already there', () => {
+  it('a REAL v1 store (D-5015): doctor --migrate snapshots to pre-v2.db and migrates to this build, building all four v2 indexes (the owed-row one over the blobs already there), after which the owed query plans the forced index', () => {
     const box = boundBox('ccrc-hist-c63v2-');
     plantBlobs(dbFile(box), { owed: 4, indexed: 2, pruned: 3 });
     rewindStoreToV1(dbFile(box));
@@ -560,6 +560,21 @@ describe.skipIf(process.platform === 'darwin')('C63: doctor --migrate through th
     expect(blobs).toHaveLength(9);
     expect(versionOf(dbFile(box)), 'CONTROL: the store is a v1').toBe(1);
     expect(owedIndexFacts(dbFile(box)).sql, 'CONTROL: and carries no owed-row index').toBeNull();
+    const indexNames = (file: string): string[] => {
+      const db = new DatabaseSync(file, { readOnly: true });
+      try { return (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{ name: string }>).map((x) => x.name); } finally { db.close(); }
+    };
+    // The owed queries exactly as the pass would prepare them on this store (a plain close: closeWriter's PRAGMA optimize would write statistics).
+    const owedPlans = (file: string): ReturnType<typeof ftsOwedPlans> => {
+      const db = openWriter(file);
+      try {
+        if (db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'blobs_fts'").get() === undefined) createFtsTables(db);
+        return ftsOwedPlans(db);
+      } finally { db.close(); }
+    };
+    expect(V2_INDEXES).toHaveLength(4);
+    for (const ix of V2_INDEXES) expect(indexNames(dbFile(box)), `CONTROL: the v1 store has no ${ix}`).not.toContain(ix);
+    expect(owedPlans(dbFile(box)).owesSql, 'CONTROL: the owed check on the v1 store is the plain form').not.toContain('INDEXED BY');
     const r = op(box, ['doctor', '--migrate', '--json']);
     expect(r.code, `${r.stdout}${r.stderr}`).toBe(0);
     expect(snapshotsIn(box), 'the pre-migration snapshot, as runMigration names it').toEqual(['pre-v2.db']);
@@ -571,6 +586,13 @@ describe.skipIf(process.platform === 'darwin')('C63: doctor --migrate through th
     const facts = owedIndexFacts(dbFile(box));
     expect(facts.sql).toBe('CREATE INDEX blobs_unindexed ON blobs(blob_id) WHERE fts_indexed = 0 AND z IS NOT NULL');
     expect(facts.entries, 'built over the 4 owed blobs only: not the 2 indexed, not the 3 tombstones').toBe(4);
+    for (const ix of V2_INDEXES) expect(indexNames(dbFile(box)), `the migration made ${ix}`).toContain(ix);
+    expect(indexNames(dbFile(box)), 'and v2 dropped nothing: entries_blob stays beside the covering index').toContain('entries_blob');
+    const plans = owedPlans(dbFile(box));
+    expect(plans.owesSql, 'the owed check now names the owed-row index').toContain('INDEXED BY blobs_unindexed');
+    expect(plans.owes[0], plans.owes.join(' | ')).toMatch(/^(SCAN|SEARCH) b USING INDEX blobs_unindexed\b/);
+    expect(plans.owes.filter((l: string) => /^SCAN b\s*$/.test(l)), `no full read of blobs: ${plans.owes.join(' | ')}`).toEqual([]);
+    expect(plans.owes, 'and its entries probe is the covering index').toContain('SEARCH e USING COVERING INDEX entries_blob_prov (blob_id=? AND provenance=?)');
     expect(blobsOf(dbFile(box)), 'the data is intact').toEqual(blobs);
     expect(storeIdOf(box)).toBe(storeId);
   }, HEAVY);

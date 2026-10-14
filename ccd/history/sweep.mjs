@@ -4881,7 +4881,10 @@ const ftsBackfillSql = (forced) => `SELECT b.blob_id AS blob_id, length(b.z) AS 
 const ftsOwesRowSql = (forced) => `SELECT 1 AS one FROM ${ftsOwedFrom(forced)} WHERE ${FTS_OWED_SQL} LIMIT 1`;
 
 /** Statements over the FTS tables. These are prepared only once ftsPrepare has made the tables:
- *  node:sqlite refuses to prepare against a table that does not exist. */
+ *  node:sqlite refuses to prepare against a table that does not exist. The backfill's form (forced or plain) is measured ONCE per
+ *  handle, here, and cached with it (D-5018): no production path migrates under a handle that has prepared these (the scheduled pass
+ *  returns right after runMigration, migrateOp returns, and every other op is refused migration-pending), unlike ftsOwesRow, which
+ *  measures per call. */
 function ftsStmts(db) {
   let f = FTS_STMTS.get(db);
   if (f !== undefined) return f;
@@ -4915,18 +4918,17 @@ export function ftsOwesRow(db) {
 
 /** The owed check's SQL for THIS store: forced onto the owed-row index when the store has it, plain when it has none (a v1 store).
  *  The one choice, read by ftsOwesRow and by ftsOwedPlans, so a pin of the plan sees what the pass runs. Measured per call, a
- *  point lookup in sqlite_master, so a store that gains the index (its migration) is not left on the plain form. */
+ *  point lookup in sqlite_master, so a store that gains the index (its migration) is not left on the plain form.
+ *
+ *  The forced form is what keeps a healthy pass's owed check O(index), never O(blobs) (D-5015, review 441 F1). FTS_OWED_SQL's two
+ *  leading terms, `b.fts_indexed = 0 AND b.z IS NOT NULL`, are schema v2's partial index `blobs_unindexed` predicate WRITTEN OUT
+ *  (store.mjs's V2), and SQLite only admits a partial index whose WHERE the query's own implies; INDEXED BY then keeps it chosen
+ *  (D-5018), because the planner alone drops it for `SCAN b` once the closing PRAGMA optimize has recorded the index as most of
+ *  the blobs rows (the review put the flip at about 70-75%; it reproduces here at a 90% unindexed share, and the `0 0` flip the
+ *  review saw on its fixture did NOT reproduce, so `0 0` is pinned as a forced plan only): the stat is written at the migrating
+ *  pass's own close and never refreshed. If a term here drifts from the index the forced statement no longer prepares, and
+ *  history-store.test.ts's pins go red. A store without the index (v1) is answered by the plain form. */
 const ftsOwesRowStatement = (db) => ftsOwesRowSql(ftsOwedIndexed(db));
-
-/** ftsOwesRow's statement on a store that carries the owed-row index, FORCED onto it. A healthy pass runs it on every tick once
- *  ('fts', 1) is complete, so it must cost O(index), never O(blobs) (D-5015, review 441 F1). FTS_OWED_SQL's two leading terms,
- *  `b.fts_indexed = 0 AND b.z IS NOT NULL`, are schema v2's partial index `blobs_unindexed` predicate WRITTEN OUT (store.mjs's V2), and
- *  SQLite only admits a partial index whose WHERE the query's own implies; INDEXED BY then keeps it chosen (D-5018), because the
- *  planner alone drops it for `SCAN b` once the closing PRAGMA optimize has recorded the index as about 70% or more of the blobs rows
- *  (or as empty, `0 0`): the stat is written at the migrating pass's own close and never refreshed. If a term here drifts from the
- *  index the forced statement no longer prepares, and history-store.test.ts's pins go red. A store without the index (v1) is
- *  answered by the plain form, which ftsOwesRow picks. */
-export const FTS_OWES_ROW_SQL = ftsOwesRowSql(true);
 
 /** EXPLAIN QUERY PLAN of the two owed queries exactly as this store would run them (ftsOwesRow's, and the backfill's select as
  *  ftsStmts prepares it), as `detail` lines in plan order (and the two statements' text): a pure read of the plan, for the pins that each is a search or scan of the

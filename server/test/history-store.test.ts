@@ -2050,7 +2050,13 @@ describe('blobPlainTextMeasured: a stored body as text, with the condition that 
 // `entries` is covering. The two node indexes derivation used to make with an unversioned IF NOT EXISTS are made here too.
 describe('schema v2: the owed-row index, its covering probe and the node indexes (D-5015, D-5018, D-5019, D-5020)', () => {
   interface OwedPlans { owes: string[]; backfill: string[]; owesSql: string; backfillSql: string }
-  interface OwedSweep { ftsOwedPlans(db: DatabaseSync): OwedPlans; ftsOwesRow(db: DatabaseSync): boolean; FTS_OWES_ROW_SQL: string }
+  interface FreeOk { state: 'ok'; bytes: number; fsSize: number }
+  interface OwedSweep {
+    ftsOwedPlans(db: DatabaseSync): OwedPlans; ftsOwesRow(db: DatabaseSync): boolean;
+    migrationVerdict(db: DatabaseSync, home: string, P: unknown, o: {
+      stored: number; code: number; free: FreeOk; sizeBytes: number; boundS: number | null; schemaAdded: unknown;
+    }): string;
+  }
   const loadSweep = async (): Promise<OwedSweep> => (await import('../../ccd/history/sweep.mjs')) as unknown as OwedSweep;
   const fresh = (): { h: string; file: string } => { const h = mkTmp('ccrc-history-v2idx-'); createStore(h); return { h, file: historyPaths(h).dbFile }; };
   const INDEXED_BY = ' INDEXED BY blobs_unindexed';
@@ -2095,9 +2101,10 @@ describe('schema v2: the owed-row index, its covering probe and the node indexes
   });
 
   // The statistics PRAGMA optimize writes at a writer's close (closeWriter) are what steer the planner off an unforced partial index: at
-  // about 70% of the blobs rows, or recorded empty (`0 0`), it takes `SCAN b` for the owed check and the rowid range for the backfill,
-  // both of which read every blob row, overflow chains included. These two pins run ANALYZE first, which PIN (a) does not, and each has a
-  // CONTROL that shows the plain form flipping under the same statistics.
+  // most of the blobs rows (the review put it at about 70-75%; it reproduces here at 90%), it takes `SCAN b` for the owed check and the
+  // rowid range for the backfill, both of which read every blob row, overflow chains included. The review also saw a recorded-empty
+  // (`0 0`) index flip on its fixture; that did NOT reproduce here (D-5018). These two pins run ANALYZE first, which PIN (a) does not:
+  // (a2) has a CONTROL that shows the plain form flipping under the same statistics, (a3) pins the forced plan at `0 0` and has none.
   it('PIN (a2): at a 90% unindexed share, once ANALYZEd, both queries still plan the index; the plain form flips to the full read', async () => {
     const { file } = fresh();
     plantBlobs(file, { owed: 180, indexed: 20 });
@@ -2155,7 +2162,10 @@ describe('schema v2: the owed-row index, its covering probe and the node indexes
     }
   });
 
-  it('GUARD, the other way: a store that gains the index (its migration) is not left on the plain form', async () => {
+  // Only the owed CHECK follows the index on one handle: ftsOwesRow measures it per call. ftsStmts measures it once per handle, with the
+  // statement it prepares, and this test does not claim otherwise (D-5018): no production path migrates under a handle that has prepared
+  // ftsStmts (the scheduled pass returns right after runMigration, migrateOp returns, and every other op is refused migration-pending).
+  it('GUARD, the other way: the owed check is measured per call, so a store that gains the index (its migration) is not left on the plain form', async () => {
     const S = await loadSweep();
     const { file } = fresh();
     rewindStoreToV1(file);
@@ -2226,8 +2236,8 @@ describe('schema v2: the owed-row index, its covering probe and the node indexes
     } finally { f.close(); }
   });
 
-  it('SCHEMA_ADDED[2] is light and adds no table or column; MIGRATIONS[1] is exactly four plain CREATE INDEXes, and V2_INDEXES lists them', () => {
-    expect(SCHEMA_ADDED[2]).toEqual({ heavy: false, tables: {} });
+  it('SCHEMA_ADDED[2] is HEAVY (ruling 5012, §6.11) and adds no table or column; MIGRATIONS[1] is exactly four plain CREATE INDEXes, and V2_INDEXES lists them', () => {
+    expect(SCHEMA_ADDED[2]).toEqual({ heavy: true, tables: {} });
     expect(MIGRATIONS).toHaveLength(2);
     const stmts = MIGRATIONS[1]!.trim().split(';').map((x) => x.trim()).filter((x) => x !== '');
     expect(stmts).toEqual([
@@ -2248,6 +2258,29 @@ describe('schema v2: the owed-row index, its covering probe and the node indexes
     expect(owedIndexFacts(file).sql, 'the owed-row index is there on a store born at this build').not.toBeNull();
     const have = withDb(file, (db) => (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as Array<{ name: string }>).map((r) => r.name));
     for (const ix of V2_INDEXES) expect(have, ix).toContain(ix);
+  });
+
+  it('DM43 on the REAL v2 (ruling 5012): migrationVerdict reads SCHEMA_ADDED\'s heavy flag, so a v1 store of 1.5 GB + 1 byte at the default rate answers snapshot-needs-op, and one of exactly 1.5 GB (the strict half-bound) copies', async () => {
+    const S = await loadSweep();
+    const h = mkTmp('ccrc-history-v2heavy-');
+    createStore(h);
+    const db = openWriter(historyPaths(h).dbFile);
+    const TiB = 1024 ** 4;
+    const half = (600 / 2) * 10_000_000 / 2;   // CARRIER_KILL_S / 2 seconds, at DEFAULT_COPY_BPS, the estimate counted twice: 1.5 GB
+    const verdict = (sizeBytes: number, schemaAdded: unknown): string => S.migrationVerdict(db, h, null, {
+      stored: 1, code: 2, free: { state: 'ok', bytes: TiB, fsSize: 2 * TiB }, sizeBytes, boundS: 600, schemaAdded,
+    });
+    try {
+      expect(half).toBe(1_500_000_000);
+      expect(getMeta(db, 'copy_bps'), 'CONTROL: no recorded copy_bps, so the default 10 MB/s rate').toBeNull();
+      expect(verdict(half + 1, SCHEMA_ADDED), 'the real v2 is counted twice: 1.5 GB + 1 is over the half-bound').toBe('snapshot-needs-op');
+      expect(verdict(half, SCHEMA_ADDED), 'the test is strict: exactly the half-bound copies').toBe('snapshot-then-migrate');
+      expect(verdict(half - 1, SCHEMA_ADDED)).toBe('snapshot-then-migrate');
+      // CONTROL: the same sizes with v2 light (a seam, not the real entry) are counted once and copy up to 3 GB.
+      const light = { ...SCHEMA_ADDED, 2: { heavy: false, tables: {} } };
+      expect(verdict(half + 1, light), 'CONTROL: a light v2 at 1.5 GB + 1 copies').toBe('snapshot-then-migrate');
+      expect(verdict(2 * half + 1, light), 'CONTROL: and a light v2 escalates only past 3 GB').toBe('snapshot-needs-op');
+    } finally { db.close(); }
   });
 
   it('D-5019: entries_blob stays beside the covering index (the spec\'s DDL and B1\'s listing name it), and v2 drops nothing', () => {

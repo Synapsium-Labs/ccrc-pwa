@@ -168,7 +168,7 @@ CREATE TABLE journal_outbox (seq INTEGER PRIMARY KEY AUTOINCREMENT,
 `;
 
 /** Schema v2 (D-5015, D-5018, D-5019, D-5020): every index the derived and recall reads need, and no table or column. Four plain
- *  plain index statements, none guarded by an existence test, because this versioned migration is the only place they are made.
+ *  index statements, none guarded by an existence test, because this versioned migration is the only place they are made.
  *  - `blobs_unindexed`, the owed-row partial index (D-5015): the blobs the FTS backfill could still owe a row, unindexed AND still
  *    holding bytes. The `z IS NOT NULL` term leaves out prune's tombstones (pruneBatch sets fts_indexed = 0 with z NULL; they can
  *    never be owed), so the index never grows with pruning. sweep.mjs's FTS_OWED_SQL repeats both terms LITERALLY, which is what

@@ -972,6 +972,18 @@ describe('planCopy and planMigration: the migration verdict is L1 (DM41, DM43 pu
     expect(libPlan.planMigration(mig({ ...room, copyBps: 0 }))).toBe('snapshot-then-migrate');
     expect(libPlan.planMigration(mig({ ...room, copyBps: null, heavy: true }))).toBe('snapshot-needs-op');
   });
+  it('DM43 (ruling 5012): the REAL SCHEMA_ADDED[2] is heavy, so its estimate is counted twice; 1.5 GB + 1 byte at the default rate answers snapshot-needs-op, 1.5 GB copies', () => {
+    const bound = libPlan.CARRIER_KILL_S;
+    const heavy = libPlan.SCHEMA_ADDED[2]!.heavy;   // what migrationVerdict hands planMigration for a 1 -> 2 migration
+    expect(heavy, 'v2 indexes blobs and entries: §6.11 counts it twice').toBe(true);
+    const half = (bound / 2) * libPlan.DEFAULT_COPY_BPS / 2;   // the store size whose DOUBLED estimate is exactly half the bound
+    const room = (n: number): Partial<libPlan.MigrationInputs> => ({ sizeBytes: n, freeBytes: threshold + n + 1, boundS: bound, copyBps: null, heavy });
+    expect(libPlan.planMigration(mig(room(half + 1)))).toBe('snapshot-needs-op');
+    expect(libPlan.planMigration(mig(room(half)))).toBe('snapshot-then-migrate');
+    expect(libPlan.planMigration(mig(room(half - 1)))).toBe('snapshot-then-migrate');
+    // CONTROL: counted once (a light version), the same 1.5 GB + 1 byte copies.
+    expect(libPlan.planMigration(mig({ ...room(half + 1), heavy: false }))).toBe('snapshot-then-migrate');
+  });
   it('DM43: two interrupted attempts escalate whatever the size; an --op pass (no bound) skips both tests', () => {
     expect(libPlan.planMigration(mig({ boundS: libPlan.CARRIER_KILL_S, copyBps: 1_000_000_000, attempts: 2 }))).toBe('snapshot-needs-op');
     expect(libPlan.planMigration(mig({ boundS: libPlan.CARRIER_KILL_S, copyBps: 1_000_000_000, attempts: 1 }))).toBe('snapshot-then-migrate');
