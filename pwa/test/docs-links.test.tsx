@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render } from '@testing-library/react';
 import type { Element as HastElement, ElementContent, Root as HastRoot, RootContent } from 'hast';
 import { urlAttributes } from 'html-url-attributes';
-import { docsPageUrl, githubBlobUrl, type DocsTreeOk } from '../../shared/docs';
+import { docsPageUrl, docsRefText, githubBlobUrl, parseDocsRef, type DocsTreeOk } from '../../shared/docs';
 import { SHARED_COMPONENTS } from '../src/lib/markdown';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import { renderHast } from '../src/lib/renderHast';
@@ -255,6 +255,39 @@ describe('DocLink: doc links in-app (M4.U3; refinement (o))', () => {
     expect(scroll.mock.contexts[0]).toBe(target);
     expect(push).not.toHaveBeenCalled();
     expect(ctx.onFragment).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['the committed view (view=committed)', { kind: 'bare', name: 'ws/a' }, '/docs/demo/specs/a.md?ref=ws/a&view=committed'],
+    ['a ref view, a bare ref', { kind: 'bare', name: 'ws/a' }, '/docs/demo/specs/a.md?ref=ws/a'],
+    ['a ref view, a qualified ref', { kind: 'qualified', ref: 'refs/heads/ws/a' }, '/docs/demo/specs/a.md?ref=refs/heads/ws/a'],
+  ] as const)('a same-page anchor on %s scrolls inside the view being read: no navigation, no history entry, and the href is the bare fragment', (_name, pageRef, url) => {
+    expect(parseDocsRef(docsRefText(pageRef))).toEqual(pageRef);
+    const view = url.endsWith('view=committed') ? 'committed' : 'effective';
+    history.replaceState(null, '', url);
+    const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
+    const push = vi.spyOn(history, 'pushState');
+    const replace = vi.spyOn(history, 'replaceState');
+    const before = history.length;
+    const d = detachUrls(treeOf('x'));
+    for (const raw of ['a.md#sec', '../specs/a.md#sec']) {
+      expect(docLinkTarget(ctxFor(d, { pageRef, view }), raw)).toEqual({ kind: 'fragment', fragment: 'sec' });
+    }
+    const { container, ctx } = renderDoc('[x](a.md#sec)', { pageRef, view });
+    const a = firstLink(container);
+    // A bare fragment resolves against the URL being read, so the page's own view and ref stay in it.
+    expect(a.getAttribute('href')).toBe('#sec');
+    const target = document.createElement('h2');
+    target.id = 'sec';
+    container.querySelector('article')!.append(target);
+    expect(fireEvent.click(a)).toBe(false);
+    expect(scroll).toHaveBeenCalledTimes(1);
+    expect(scroll.mock.contexts[0]).toBe(target);
+    expect(push).not.toHaveBeenCalled();
+    expect(replace).not.toHaveBeenCalled();
+    expect(history.length).toBe(before);
+    expect(ctx.onFragment).not.toHaveBeenCalled();
+    expect(location.pathname + location.search + location.hash).toBe(url);
   });
 
   it('a link to this page with NO fragment stays a doc link, and a link to another page with the same file name too', () => {
