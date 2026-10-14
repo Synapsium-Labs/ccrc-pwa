@@ -829,7 +829,7 @@ describe('T13 review 2-2: the one image of a raster leaf is not a link to the le
     await waitFor(() => expect(container.querySelectorAll('.docs-leaf img')).toHaveLength(1));
     const url = here();
     const length = history.length;
-    fireEvent.click(container.querySelector('.docs-leaf button.doc-img-link') as HTMLElement);
+    fireEvent.click(container.querySelector('.docs-leaf img') as HTMLElement);
     expect(history.length).toBe(length);
     expect(here()).toBe(url);
   });
@@ -841,12 +841,23 @@ describe('T13 review 2-2: the one image of a raster leaf is not a link to the le
     const url = here();
     expect(url).toBe('/docs/demo/specs/x.png?ref=main&view=committed');
     const length = history.length;
-    fireEvent.click(container.querySelector('.docs-leaf button.doc-img-link') as HTMLElement);
+    fireEvent.click(container.querySelector('.docs-leaf img') as HTMLElement);
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
     expect(history.length).toBe(length);
     expect(here()).toBe(url);
     const pins = f.raster.mock.calls.map((c) => (c[1] as DocPin).kind);
     expect(pins).toEqual(['committed']);
+  });
+});
+
+describe('T13 review 2-2: the leaf\'s own image is a plain img', () => {
+  it('renders no doc-img-link button, only the img', async () => {
+    const f = byPath(treeOk({ entries: [entry('specs', 'x.png')] }), {});
+    const { container } = open('/docs/demo/specs/x.png', f);
+    await waitFor(() => expect(container.querySelectorAll('.docs-leaf img')).toHaveLength(1));
+    expect(container.querySelector('.docs-leaf button.doc-img-link')).toBeNull();
+    expect(container.querySelectorAll('.docs-leaf .docs-raster button')).toHaveLength(0);
+    expect(container.querySelector('.docs-leaf .docs-raster > img')).not.toBeNull();
   });
 });
 

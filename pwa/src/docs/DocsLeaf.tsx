@@ -5,14 +5,14 @@
 // when a registered grammar matches its extension; `other` is "No preview" and Download. A listed size over its
 // class cap is the `too-large` sentence, and nothing was requested (the visit's `too-large` slot). The header and the
 // banners are `DocsScreen`'s (`DocsHead`, `DocsBanners`), above this body, so a file failure replaces only the body.
-import { useContext, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import type { Element as HastElement } from 'hast';
 import hljs from 'highlight.js/lib/core';
 import { contentClass, docsApi, entryView, type DocPin, type DocsPageLocation, type DocsShowOk, type DocsTreeOk } from '../../../shared/docs';
 import { CodeBlock } from '../lib/markdown';
 import type { MarkdownParser } from '../lib/markdownRunner';
 import { DocImage, DocsAssetContext, svgDataUrl, type DocsAssetContextValue } from './DocImage';
-import { DocLinkContext, fragmentTarget, type DocLinkContextValue } from './DocLink';
+import { DocInLinkContext, DocLinkContext, fragmentTarget, type DocLinkContextValue } from './DocLink';
 import { DOC_NOT_UTF8_NOTE, DocMarkdown, DocPlain, docMarkdownSource } from './DocMarkdown';
 import { DocsFailureView } from './DocsFailureView';
 import type { DetachedUrls } from './docsLinks';
@@ -151,8 +151,9 @@ const IGNORE_DRAFT_ASSET = (): void => {};
 /** A `raster` leaf (spec 4.4: "one `DocImage`"): the leaf's own file as the only image of a one-image page, so the
  *  pin rule, the cap, the queue, the raster checks and the object URL are all `DocImage`'s. The image is the page
  *  itself, so two things a Markdown image does are withheld here: a tap on it opens nothing (its target is this very
- *  leaf, and `DocImage` would push a duplicate entry and drop `view=committed`), and it is not counted as a drafted
- *  asset the page embeds. */
+ *  leaf, and `DocImage` would push a duplicate entry and drop `view=committed`), so it renders inside
+ *  `DocInLinkContext` as a bare `<img>` with no button to focus; and it is not counted as a drafted asset the page
+ *  embeds. The leaf's header already offers Download, so the in-link refusal (no action buttons) loses nothing. */
 function RasterBody(p: { readonly link: LinkBase; readonly name: string }): ReactNode {
   const assets = useContext(DocsAssetContext);
   const own = useMemo<DocsAssetContextValue | null>(
@@ -163,13 +164,11 @@ function RasterBody(p: { readonly link: LinkBase; readonly name: string }): Reac
     urls.set(node, { attrs: { src: './' + encodeURIComponent(p.name) }, imageIndex: 0, highlight: null });
     return { ...p.link, urls };
   }, [p.link, p.name, node]);
-  // Capture phase, so the tap ends before `DocImage`'s own handler; Load image and the failure chips are untouched.
-  const ownTap = (e: MouseEvent<HTMLDivElement>): void => {
-    if (e.target instanceof Element && e.target.closest('button.doc-img-link') !== null) e.stopPropagation();
-  };
   return (
-    <div className="docs-raster" onClickCapture={ownTap}>
-      <DocsAssetContext value={own}><DocLinkContext value={ctx}><DocImage node={node} alt={p.name} /></DocLinkContext></DocsAssetContext>
+    <div className="docs-raster">
+      <DocsAssetContext value={own}>
+        <DocLinkContext value={ctx}><DocInLinkContext value={true}><DocImage node={node} alt={p.name} /></DocInLinkContext></DocLinkContext>
+      </DocsAssetContext>
     </div>
   );
 }
