@@ -816,6 +816,8 @@ describe('T13 review 3-3: a re-list that moves the pin but not the blob keeps th
     expect(counting).toHaveBeenCalledTimes(1);
     fireEvent.click(container.querySelector('button.docs-fresh') as HTMLElement);
     await waitFor(() => expect(container.querySelector('code.docs-truth-commit')?.getAttribute('title')).toBe(COMMIT_B));
+    // The leaf's pin follows the tree in a later effect: let it settle before asking whether the body survived it.
+    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
     expect(screen.getByRole('heading', { name: 'A' })).toBe(h1);
     expect(counting).toHaveBeenCalledTimes(1);
     expect(f.file).toHaveBeenCalledTimes(1);
