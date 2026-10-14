@@ -162,12 +162,13 @@ export function docsLocation(page: DocsPageLocation, to: DocsPageTarget): DocsPa
 /** What `DocLink` renders for one link (spec 4.11). `in-app`: a Docs page of the same project at the page's ref
  *  (`href` is that page's URL, never with a fragment; `fragment: null` means the link names none). `fragment`: an
  *  anchor in this page. `external`: an http, https or mailto URL, opened on tap only. `github`: an in-repo file outside
- *  the four sections, on GitHub through `githubBlobUrl`. `inert`: everything else, with the span's whole title. */
+ *  the four sections, on GitHub through `githubBlobUrl`, with that builder's `note` (`may-differ` is the caution View on
+ *  GitHub carries too). `inert`: everything else, with the span's whole title. */
 export type DocLinkTarget =
   | { kind: 'in-app'; href: string; fragment: string | null }
   | { kind: 'fragment'; fragment: string }
   | { kind: 'external'; href: string }
-  | { kind: 'github'; href: string }
+  | { kind: 'github'; href: string; note: 'may-differ' | null }
   | { kind: 'inert'; title: string };
 
 /** The one decision for a Markdown link on a Docs page: `raw`, the link's `href` as `detachUrls` moved it (`''` for a
@@ -193,7 +194,7 @@ export function docLinkTarget(ctx: DocLinkContextValue, raw: string): DocLinkTar
       return { kind: 'external', href: r.url };
     case 'repo': {
       const link = githubBlobUrl(ctx.tree.github, ctx.tree.ref, { kind: 'repo', repoPath: r.repoPath });
-      return link.ok ? { kind: 'github', href: link.url } : inert(link.why);
+      return link.ok ? { kind: 'github', href: link.url, note: link.note } : inert(link.why);
     }
     case 'self-contained':
       return inert(r.scheme);

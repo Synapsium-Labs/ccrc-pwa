@@ -15,7 +15,7 @@ import { parseMarkdown } from '../src/lib/markdownParse';
 import { renderHast } from '../src/lib/renderHast';
 import { DocLink, DocLinkContext, type DocLinkContextValue } from '../src/docs/DocLink';
 import { detachUrls, docLinkTarget, docsLocation, type Detached } from '../src/docs/docsLinks';
-import { DOC_LINK_INERT_SENTENCE, DOC_LINK_OUTSIDE_PAGE, type DocLinkInertReason } from '../src/docs/docsText';
+import { DOCS_HEAD_TEXT, DOC_LINK_INERT_SENTENCE, DOC_LINK_OUTSIDE_PAGE, type DocLinkInertReason } from '../src/docs/docsText';
 import { pageAt, treeOk } from './docsFixtures';
 
 afterEach(() => {
@@ -515,4 +515,32 @@ describe('DocLink outside a Docs page', () => {
     expect(container.querySelectorAll('[href]')).toHaveLength(0);
     expect(container.querySelector('span.doc-link-inert')?.getAttribute('title')).toBe(DOC_LINK_OUTSIDE_PAGE);
   });
+});
+
+describe('T13 review 4-2: an in-document GitHub link carries the caution View on GitHub does', () => {
+  // `githubBlobUrl` answers a `may-differ` note for a local side that differs from, or is not measured against, origin.
+  const withRelation = (side: 'local' | 'origin', relation: DocsTreeOk['ref']['relation']): DocsTreeOk => {
+    const t = treeOk();
+    return { ...t, ref: { ...t.ref, side, relation } };
+  };
+
+  it.each(['local-ahead', 'local-behind', 'diverged', 'unmeasured'] as const)(
+    'a local page that is %s has the target note and the same may-differ caution on its mark', (relation) => {
+      const tree = withRelation('local', relation);
+      const d = detachUrls(treeOf('[r](../../../README.md)'));
+      expect(docLinkTarget(ctxFor(d, { tree }), '../../../README.md')).toEqual({
+        kind: 'github', href: 'https://github.com/example-org/example-repo/blob/main/README.md', note: 'may-differ',
+      });
+      const { container } = renderDoc('[r](../../../README.md)', { tree });
+      expect(container.querySelector('.doc-link-gh')?.getAttribute('title')).toBe(DOCS_HEAD_TEXT.githubMayDiffer);
+    });
+
+  it.each([['local', 'equal'], ['origin', 'local-behind']] as const)(
+    'a %s page whose relation is %s carries no caution', (side, relation) => {
+      const tree = withRelation(side, relation);
+      const d = detachUrls(treeOf('[r](../../../README.md)'));
+      expect(docLinkTarget(ctxFor(d, { tree }), '../../../README.md')).toMatchObject({ kind: 'github', note: null });
+      const { container } = renderDoc('[r](../../../README.md)', { tree });
+      expect(container.querySelector('.doc-link-gh')?.hasAttribute('title')).toBe(false);
+    });
 });

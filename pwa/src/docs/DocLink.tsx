@@ -8,7 +8,7 @@ import type { Element as HastElement } from 'hast';
 import type { DocSectionSlug, DocsRefSpec, DocsTreeOk } from '../../../shared/docs';
 import { openExternal } from '../lib/markdown';
 import { navigate } from '../lib/router';
-import { DOC_LINK_OUTSIDE_PAGE } from './docsText';
+import { DOCS_HEAD_TEXT, DOC_LINK_OUTSIDE_PAGE } from './docsText';
 import { docLinkTarget, type DetachedUrls } from './docsLinks';
 
 /** The page a link is resolved from (spec 4.11's `{project, pageRef, view, section, path, tree, pageSource}`; refinement
@@ -74,7 +74,8 @@ function scrollToFragment(e: MouseEvent<HTMLAnchorElement>, fragment: string): v
  *    click is prevented, hands the fragment to `onFragment`, and navigates to the URL without it.
  *  - `fragment`: `scrollToFragment`, on any click.
  *  - `external` and `github`: `target="_blank" rel="noopener noreferrer"`, opened with `openExternal` on tap only;
- *    a GitHub link carries the trailing "↗ GitHub" mark.
+ *    a GitHub link carries the trailing "↗ GitHub" mark, titled with the may-differ caution when
+ *    `githubBlobUrl` gave one.
  *  - `inert`, and any link outside a Docs page: `<span className="doc-link-inert" title>` with no `href`. */
 export function DocLink(p: ComponentProps<'a'> & { node?: HastElement }): ReactNode {
   const { node, children, href: _href, ping: _ping, target: _target, rel: _rel, onClick: _onClick, ...rest } = p;
@@ -101,7 +102,9 @@ export function DocLink(p: ComponentProps<'a'> & { node?: HastElement }): ReactN
       return (
         <a {...rest} href={t.href} target="_blank" rel="noopener noreferrer" onClick={(e) => openExternal(e, t.href)}>
           <DocInLinkContext value={true}>{children}</DocInLinkContext>
-          {t.kind === 'github' && <>{' '}<span className="doc-link-gh">↗ GitHub</span></>}
+          {t.kind === 'github' && (
+            <>{' '}<span className="doc-link-gh" title={t.note === 'may-differ' ? DOCS_HEAD_TEXT.githubMayDiffer : undefined}>↗ GitHub</span></>
+          )}
         </a>
       );
     case 'inert':
