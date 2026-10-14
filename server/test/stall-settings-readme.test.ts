@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { STALL_CONFIRM_TEXT, STALL_FOLLOW_LABEL, STALL_LEVELS, STALL_LEVEL_TEXT, STALL_SECTION_TEXT } from '../../shared/api.js';
 import { STALL_NOTICE_WINDOW_MS, STALL_QUIET_MAX_MS, STALL_QUIET_MIN_MS, STALL_QUIET_STEP_MS } from '../src/coord/stallsettings.js';
 import { STALL_QUIET_MS } from '../src/coord/stall.js';
+import { stallDurationText } from '../../shared/stall-watch.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const README = readFileSync(path.resolve(here, '..', '..', 'README.md'), 'utf8');
@@ -45,16 +46,12 @@ function stallSentences(): string {
   return p.slice(start, end);
 }
 
-/** The device words the PWA's own P6 scan refuses (`pwa/test/settings-screen.test.tsx`, its `DEVICE_WORD`), the same
- *  list spelled again here: a server test cannot import a PWA test file. */
-const DEVICE_WORD = /\b(phones?|mobiles?|desktops?|tablets?|laptops?|iphones?|ipads?|android|touchscreens?|handsets?)\b/i;
+/** The device words the PWA's own P6 scan refuses, read from that scan's one `DEVICE_WORD` literal in `pwa/test/settings-screen.test.tsx`: a server test cannot import a PWA test file, so the list is derived, never spelled twice. */
+const PWA_DEVICE_WORD = [...readFileSync(path.resolve(here, '..', '..', 'pwa', 'test', 'settings-screen.test.tsx'), 'utf8').matchAll(/^\s*const DEVICE_WORD = \/(.+)\/([a-z]*);$/gm)];
+const deviceWord = (): RegExp => { expect(PWA_DEVICE_WORD, 'the PWA scan spells DEVICE_WORD once').toHaveLength(1); return new RegExp(PWA_DEVICE_WORD[0]![1]!, PWA_DEVICE_WORD[0]![2]); };
 
-/** A duration the way the section writes one: "30 min", "2 h", "1 h 30 min". */
-function duration(ms: number): string {
-  const h = Math.floor(ms / 3_600_000);
-  const m = Math.round((ms % 3_600_000) / 60_000);
-  return [h > 0 ? `${h} h` : '', m > 0 ? `${m} min` : ''].filter((s) => s !== '').join(' ');
-}
+/** A duration the way the section writes one: L0's one formatter (`shared/stall-watch.ts`). */
+const duration = stallDurationText;
 
 describe("README's Settings paragraph names the Stall watch section (design 2026-10-05, §18 W2)", () => {
   it('names the Stall watch section, once, after the Notifications section', () => {
@@ -90,6 +87,7 @@ describe("README's Settings paragraph names the Stall watch section (design 2026
   });
 
   it('the Settings paragraph names no device, as the section itself names none (§2, 2026-10-05)', () => {
-    expect(settingsParagraph()).not.toMatch(DEVICE_WORD);
+    expect(deviceWord().test('shown on a phone'), 'CONTROL: the derived list sees a device').toBe(true);
+    expect(settingsParagraph()).not.toMatch(deviceWord());
   });
 });

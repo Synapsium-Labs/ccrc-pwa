@@ -806,10 +806,10 @@ describe('M19 control: the new files sit inside single-definition.test.ts\'s fou
     const p = path.join(dir, e);
     return statSync(p).isDirectory() ? walk(p) : /\.tsx?$/.test(p) ? [p] : [];
   });
-  it('finds shared/api.ts and server/src/coord/stallsettings.ts', () => {
+  it('finds shared/api.ts, shared/stall-watch.ts and server/src/coord/stallsettings.ts', () => {
     const all = ROOTS.flatMap(walk).map((f) => path.relative(ccrcRoot, f).split(path.sep).join('/'));
     expect(all.length).toBeGreaterThan(100);
-    for (const f of ['shared/api.ts', 'server/src/coord/stallsettings.ts']) expect(all, f).toContain(f);
+    for (const f of ['shared/api.ts', 'shared/stall-watch.ts', 'server/src/coord/stallsettings.ts']) expect(all, f).toContain(f);
   });
 });
 
@@ -825,7 +825,7 @@ describe('M19b: stallsettings.ts is the pure L1 module its docstring says it is'
   const valueImportSpecifiers = (c: string): string[] =>
     [...c.matchAll(/^\s*import\s+(type\s+)?[^'"]*?\bfrom\s*(['"])([^'"]+)\2/gm)]
       .filter((m) => m[1] === undefined).map((m) => m[3]!);
-  const ALLOWED = ['../../../shared/api.js', './stall.js', '../turnidle.js'];
+  const ALLOWED = ['../../../shared/api.js', '../../../shared/stall-watch.js', './stall.js', '../turnidle.js'];
 
   it('the scan is over real code, not an empty string', () => {
     expect(code()).toContain('export function resolveStallWatch');
