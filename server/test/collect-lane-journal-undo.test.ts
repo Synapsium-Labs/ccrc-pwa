@@ -349,8 +349,10 @@ describe('a failed journal append undoes its own bytes (path-identity spec 2026-
     expect(c.fired(), 'CONTROL: the directory close threw').toBe(1);
     expect(fsyncOn, 'CONTROL: the fsync fault is on the success path’s directory descriptor').toBe(dirFds[0]);
     expect(closeOn, 'CONTROL: the close fault is on that same directory descriptor').toBe(dirFds[0]);
-    // The directory's close sits in the `finally` straight after its fsync, so the first close after that fsync is the
-    // directory's own; the journal's close is never that close, so a fault armed on the journal's descriptor reds here.
+    // A fault armed on the journal's descriptor reds at the descriptor-number CONTROL above: the journal is still open
+    // when the directory opens, so the two numbers differ. A fault armed on the undo's own directory close passes that
+    // CONTROL, because the undo's descriptor reuses `dirFds[0]`'s number, and reds at this one: the success path's
+    // directory close sits in the `finally` straight after its fsync, so it is the first close after that fsync.
     const dirOpenAt = log.findIndex((x) => x.name === 'openSync' && x.args[0] === dir);
     const dirFsyncAt = log.findIndex((x, i) => i > dirOpenAt && x.name === 'fsyncSync' && x.args[0] === dirFds[0]);
     expect(dirFsyncAt, 'CONTROL: the directory was fsynced after its open').toBeGreaterThan(-1);
@@ -383,8 +385,9 @@ describe('a failed journal append undoes its own bytes (path-identity spec 2026-
     expect(c.fired(), 'CONTROL: the directory close threw').toBe(1);
     const journalFd = log.find((x) => x.name === 'writeSync')?.args[0];
     expect(closeOn, 'CONTROL: the close fault is on the success path’s directory descriptor').toBe(dirFds[0]);
-    // The directory's close sits in the `finally` straight after its fsync, so the first close after that fsync is the
-    // directory's own; the journal's close is never that close, so a fault armed on the journal's descriptor reds here.
+    // A fault armed on the journal's descriptor reds at the descriptor-number CONTROL above, as in (xi). This CONTROL
+    // pins the faulted close's position, the first close after the directory's fsync. No misarm measured here reds it
+    // alone: the directory opens once on this path, and only its own close carries `dirFds[0]`'s number.
     const dirOpenAt = log.findIndex((x) => x.name === 'openSync' && x.args[0] === dir);
     const dirFsyncAt = log.findIndex((x, i) => i > dirOpenAt && x.name === 'fsyncSync' && x.args[0] === dirFds[0]);
     expect(dirFsyncAt, 'CONTROL: the directory was fsynced after its open').toBeGreaterThan(-1);
