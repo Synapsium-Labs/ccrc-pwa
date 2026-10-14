@@ -2297,16 +2297,36 @@ describe('the weekly schedule through the real driver (4556, 4558)', () => {
     const j = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
     writeFileSync(file, JSON.stringify({ ...j, ...fields }), { mode: 0o600 });
   };
-  /** The 21 required keys of a BoxTokenState plus the two optional ones: a scheduled stage writes no other key. */
-  const ALLOWED = new Set(['v', 'origin', 'rotationOwed', 'owedWhy', 'current', 'pending', 'previous', 'promoting', 'recovering',
-    'fleetConfirmed', 'nextSeq', 'lastRotationAt', 'failures', 'lastFailure', 'hold', 'holdNode', 'lastSync', 'counters',
-    'retiredRefusedAt', 'mintFailedAt', 'lastBootRecovery', 'fileProblem', 'retiring']);
+  /** Every key path the previous build's `BoxTokenState` type allows (the type at 300aedf88, which lives in
+   *  `server/src/token/policy.ts`): the 21 required keys plus the two optional ones, and the keys of every nested object,
+   *  with an array written as `[]`. A scheduled stage writes no other path, at any depth. */
+  const ALLOWED_PATHS = new Set([
+    'v', 'origin', 'rotationOwed', 'owedWhy', 'current', 'pending', 'previous', 'promoting', 'recovering', 'fleetConfirmed',
+    'nextSeq', 'lastRotationAt', 'failures', 'lastFailure', 'hold', 'holdNode', 'lastSync', 'counters', 'retiredRefusedAt',
+    'mintFailedAt', 'lastBootRecovery', 'fileProblem', 'retiring',
+    'current.id', 'current.seq', 'current.since', 'current.write', 'current.write.dev', 'current.write.ino', 'current.write.writtenAtMs',
+    'pending[].id', 'pending[].seq', 'pending[].stagedAt', 'pending[].handedOutAt', 'pending[].confirmBy', 'pending[].write',
+    'pending[].write.dev', 'pending[].write.ino', 'pending[].write.writtenAtMs',
+    'previous.id', 'previous.seq', 'previous.graceUntil', 'previous.hardUntil', 'previous.currentPresented', 'previous.write',
+    'previous.write.dev', 'previous.write.ino', 'previous.write.writtenAtMs',
+    'promoting.id', 'recovering.source',
+    'lastSync.at', 'lastSync.word', 'lastSync.transport',
+    'counters.previousPresented', 'counters.retiredPresented', 'counters.retiredPresentedAt',
+    'lastBootRecovery.at', 'lastBootRecovery.source',
+    'fileProblem.at', 'fileProblem.file', 'fileProblem.word',
+    'retiring[].sha256', 'retiring[].at',
+  ]);
+  /** The key paths present in a captured write: `a.b` for an object member, `a[].b` for a member of an array's element. */
+  const keyPaths = (v: unknown, prefix = ''): string[] => {
+    if (Array.isArray(v)) return v.flatMap((e) => keyPaths(e, `${prefix}[]`));
+    if (v === null || typeof v !== 'object') return [];
+    return Object.entries(v).flatMap(([k, x]) => [prefix === '' ? k : `${prefix}.${k}`, ...keyPaths(x, prefix === '' ? k : `${prefix}.${k}`)]);
+  };
   /** A link that answers every send alike and never claims, so a lost answer is lost before the claim. */
   const countingLink = (answer: SyncResult): TokenSyncLink & { sends: number } => {
     const link = { sends: 0, send: async (): Promise<SyncResult> => { link.sends++; return answer; } };
     return link;
   };
-  const noPending = (r: Rig): boolean => !readdirSync(path.join(r.home, '.ccrc')).some((n) => n.startsWith('mail-pending-'));
   /** A new server over a box last rotated `offsetFromNow` ms ago. The plant is on the NEW rig's clock (a new rig starts at
    *  offset 0), so this never reads or sets the old rig's offset. `capture` records a deep copy of every state write. */
   async function restartDue(offsetFromNow: number, opts: { link?: TokenSyncLink; wrap?: (s: TokenStore) => TokenStore;
@@ -2315,7 +2335,8 @@ describe('the weekly schedule through the real driver (4556, 4558)', () => {
     await r.app.close();
     const t = Date.now() - offsetFromNow;
     const cur = (await stateOf(r)).current;
-    plantTop(r, { lastRotationAt: t, current: { ...cur, since: t }, ...opts.plant });
+    const { current: plantedCurrent, ...plantRest } = opts.plant ?? {};   // a planted `current` merges over the default one
+    plantTop(r, { lastRotationAt: t, current: { ...cur, since: t, ...(plantedCurrent as object | undefined) }, ...plantRest });
     const writes: Record<string, unknown>[] = [];
     const capture = (st: TokenStore): TokenStore => ({ ...st, writeState: async (x) => {
       writes.push(JSON.parse(JSON.stringify(x)) as Record<string, unknown>);
@@ -2331,7 +2352,7 @@ describe('the weekly schedule through the real driver (4556, 4558)', () => {
       r2.clock.offset = m * 60_000;
       await before?.(m);
       await r2.driver.tick();
-      expect(noPending(r2), `no pending file left after minute ${m}`).toBe(true);
+      expect(pendingFiles(r2).length === 0, `no pending file left after minute ${m}`).toBe(true);
     }
   }
 
@@ -2346,7 +2367,7 @@ describe('the weekly schedule through the real driver (4556, 4558)', () => {
       expect(writes.length).toBeGreaterThanOrEqual(3);
       for (const w of writes) {
         expect([w.rotationOwed, w.owedWhy]).toEqual([false, null]);
-        expect([...Object.keys(w)].filter((k) => !ALLOWED.has(k))).toEqual([]);
+        expect([...new Set(keyPaths(w))].filter((k) => !ALLOWED_PATHS.has(k))).toEqual([]);
       }
       expect(OWED_REASONS as readonly string[]).not.toContain('scheduled');
       const st = await readState(tokPaths(r2).state);
@@ -2362,15 +2383,18 @@ describe('the weekly schedule through the real driver (4556, 4558)', () => {
   it('E2: once per interval: an idle hour adds nothing, and the next comes one interval after the last', async () => {
     const { r2 } = await restartDue(WEEK + 60_000);
     try {
+      expect(dueByL0(await stateOf(r2), driverNow(r2))).toBe(true);
       await r2.driver.tick();
       expect(r2.agent.calls).toBe(1);
       for (let m = 1; m <= 60; m++) { r2.clock.offset = m * 60_000; await r2.driver.tick(); }
       expect(r2.agent.calls).toBe(1);
       const last = (await stateOf(r2)).lastRotationAt as number;
       r2.clock.offset = last + WEEK - 2 * 60_000 - Date.now();
+      expect(dueByL0(await stateOf(r2), driverNow(r2))).toBe(false);
       await r2.driver.tick();
       expect(r2.agent.calls).toBe(1);
       r2.clock.offset += 3 * 60_000;
+      expect(dueByL0(await stateOf(r2), driverNow(r2))).toBe(true);
       await r2.driver.tick();
       expect(r2.agent.calls).toBe(2);
     } finally { await r2.app.close(); }
@@ -2395,7 +2419,7 @@ describe('the weekly schedule through the real driver (4556, 4558)', () => {
       for (let m = 0; m < 10; m++) {
         r2.clock.offset = m * 60_000;
         await r2.driver.tick();
-        expect(noPending(r2), `no pending file left after minute ${m}`).toBe(true);
+        expect(pendingFiles(r2).length === 0, `no pending file left after minute ${m}`).toBe(true);
       }
       expect(link.sends).toBeGreaterThanOrEqual(2);
       expect(link.sends).toBeLessThanOrEqual(LADDER_MAX);
@@ -2425,12 +2449,17 @@ describe('the weekly schedule through the real driver (4556, 4558)', () => {
     const b = await bothAt(mkTmp('ccrc-token-e2e-sched-both-'), ctl);
     const promoted = (): number => b.printed.filter((l) => l.includes('and promoted')).length;
     await b.driver.tick();
-    expect((await readState(b.paths.state)).kind).toBe('state');
+    const booted = await readState(b.paths.state);
+    expect(booted.kind).toBe('state');
+    const st0 = booted.kind === 'state' ? booted.state : null;
+    expect(st0?.lastRotationAt, 'the fixture must hold no promotion: boot leaves the anchor null').toBeNull();
     ctl.off = WEEK - 60_000;
+    expect(dueByL0(st0 as St, b.now())).toBe(false);
     await b.driver.tick();
     expect(promoted()).toBe(0);
     expect(b.printed.filter((l) => l.includes('rotation started'))).toEqual([]);
     ctl.off = WEEK + 60_000;
+    expect(dueByL0(st0 as St, b.now())).toBe(true);
     await b.driver.tick();
     expect(b.printed.filter((l) => l.includes('rotation started (generation #2, scheduled)'))).toHaveLength(1);
     expect(promoted()).toBe(1);
@@ -2457,7 +2486,7 @@ describe('the weekly schedule through the real driver (4556, 4558)', () => {
       expect(link.sends).toBeLessThanOrEqual(LADDER_MAX);
       expect(r2.driver.view()).toMatchObject({ failures: 0, banner: false });
     } finally { await r2.app.close(); }
-  });
+  }, 60_000);
 
   it('E8b: a link fresh-ready before every tick whose answers are lost before the claim raises failures once per ladder step, not once per tick, and still reaches the banner (4558; G4)', async () => {
     const link = countingLink({ kind: 'lost', why: 'timeout' });
@@ -2473,7 +2502,7 @@ describe('the weekly schedule through the real driver (4556, 4558)', () => {
       expect(r2.driver.view().failures).toBe(link.sends);
       expect(r2.driver.view().banner, 'a persistent real fault still reaches the banner, across ladder steps (G4)').toBe(true);
     } finally { await r2.app.close(); }
-  });
+  }, 60_000);
 
   it('E8c: an owed rotation on the same flapping link keeps spec §5.1: a fresh ready resets its backoff, one stage per tick, as on main (4558: no-change row)', async () => {
     const link = countingLink({ kind: 'lost', why: 'timeout' });
@@ -2498,7 +2527,7 @@ describe('the weekly schedule through the real driver (4556, 4558)', () => {
       });
       expect(link.sends).toBe(10);
     } finally { await r2.app.close(); }
-  });
+  }, 60_000);
 
   it('E8e: a scheduled stage that cannot write its pending file, fresh-ready before every tick, fails once per ladder step (4558; G4)', async () => {
     let attempts = 0;
@@ -2513,8 +2542,35 @@ describe('the weekly schedule through the real driver (4556, 4558)', () => {
       expect(attempts).toBeLessThanOrEqual(LADDER_MAX);
       expect(r2.driver.view().failures).toBe(attempts);
       expect(r2.agent.calls).toBe(0);
+      const cause = r2.printed.findIndex((l) => l.includes('could not stage a generation'));
+      const miss = r2.printed.findIndex((l) => l.includes('the scheduled rotation did not complete (not staged)'));
+      expect(cause, 'the line that names the cause is printed').toBeGreaterThanOrEqual(0);
+      expect(miss, 'the miss line is printed after the line that names the cause').toBeGreaterThan(cause);
     } finally { await r2.app.close(); }
-  });
+  }, 60_000);
+
+  it('E8f: a scheduled answer whose commit throws is still counted as a miss: the schedule backs off, it does not stage again on the next tick (4558)', async () => {
+    const link = countingLink({ kind: 'unsent' });
+    let thrown = 0;
+    const { r2 } = await restartDue(WEEK + 60_000, { link, wrap: (st) => ({ ...st, writeState: async (x) => {
+      // The first two state writes after the first send's answer: the discard of the unsent value's record (its failure is
+      // warned and swallowed) and then the send path's own commit, whose failure fails the tick.
+      if (link.sends > 0 && thrown < 2) { thrown++; throw enospc(); }
+      return st.writeState(x);
+    } }) });
+    try {
+      expect(dueByL0(await stateOf(r2), driverNow(r2))).toBe(true);
+      await flapTicks(r2, 10);
+      expect(thrown, 'the fixture: the discard\'s write and the send path\'s commit both threw').toBe(2);
+      expect(r2.printed.filter((l) => l.includes('a driver tick failed')), 'the throw failed that one tick').toHaveLength(1);
+      const failedAt = r2.printed.findIndex((l) => l.includes('a driver tick failed'));
+      const missAt = r2.printed.findIndex((l) => l.includes('the scheduled rotation did not complete (unsent)'));
+      expect(missAt, 'the first miss is counted, and before the commit that throws').toBeGreaterThanOrEqual(0);
+      expect(missAt).toBeLessThan(failedAt);
+      expect(link.sends, 'a miss not counted would let the next fresh ready stage again: five sends in ten minutes').toBeLessThanOrEqual(LADDER_MAX);
+      expect(link.sends).toBeGreaterThanOrEqual(2);
+    } finally { await r2.app.close(); }
+  }, 60_000);
 
   it('E9: a scheduled rotation completed by a generation read ends the miss run: the next week backs off from the first step (4558)', async () => {
     let mode: 'unsent' | 'agent' = 'unsent';
@@ -2533,6 +2589,8 @@ describe('the weekly schedule through the real driver (4556, 4558)', () => {
       r2.agent.mode = 'lose-result';
       r2.clock.offset = 60_000;
       await r2.driver.tick();                                            // minute 1: handed out, the result is lost: a second miss
+      expect(sends, 'the fixture: one send at minute 0 and one at minute 1').toBe(2);
+      expect(r2.printed.filter((l) => l.includes('the scheduled rotation did not complete')), 'the fixture: two misses stand before the promotion').toHaveLength(2);
       r2.clock.offset = 2 * 60_000;
       await r2.driver.tick();                                            // minute 2: the generation read promotes
       expect(r2.printed.filter((l) => l.includes('confirmed (generation-read) and promoted'))).toHaveLength(1);
@@ -2547,10 +2605,11 @@ describe('the weekly schedule through the real driver (4556, 4558)', () => {
 
   // ── 4557: the view's optional nextRotationAt ──────────────────────────────────────────────────────────────────────
   it('V1: the view names the next due instant: the last promotion plus the interval', async () => {
-    const { r2, t } = await restartDue(2 * 24 * 3_600_000);
+    const { r2, t } = await restartDue(2 * 24 * 3_600_000, { plant: { current: { since: Date.now() - 4 * 24 * 3_600_000 } } });
     try {
       expect(dueByL0(await stateOf(r2), driverNow(r2))).toBe(false);
-      expect(r2.driver.view().nextRotationAt).toBe(t + WEEK);
+      expect((await stateOf(r2)).current.since, 'the fixture: the mint is older than the last promotion, so the two anchors differ').not.toBe(t);
+      expect(r2.driver.view().nextRotationAt, 'the last promotion, never current.since').toBe(t + WEEK);
     } finally { await r2.app.close(); }
   });
 

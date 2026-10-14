@@ -12,7 +12,7 @@ import {
   confirmedGeneration, extendedGraceState, handedOutState, mintedState, nextAction, phaseOf, promotedState,
   pendingExitOpen, recoveryPlan, retireDue, rotationGate, stagedState,
   adoptedState, clampRetiredStamp, foreignUnderUnusableRetired, oweForRetiredPresentation, retiredUnanswered, retiringDigests, retiringLanded, retiringRecorded,
-  nextScheduledAt, scheduleAnchor, scheduleDue,
+  nextScheduledAt, scheduleAnchor,
   type BoxTokenState, type ClaimDoorState, type FileMetaLike, type GateInput, type GateNode, type GateVerdict,
 } from '../src/token/policy.js';
 import { CLAIM_CODE_TTL_MS } from '../../shared/agent-protocol.js';
@@ -698,7 +698,7 @@ describe('the weekly schedule: a derived trigger (4556) with its own miss backof
 
   it('P8: the scheduled-miss backoff holds the scheduled why only; owed rotations, presses and a closed gate are as before (4558)', () => {
     const now = WEEK + 5000;
-    expect(scheduleDue(rotatedAt(0), now)).toBe(true);
+    expect(now - (rotatedAt(0).lastRotationAt as number)).toBeGreaterThanOrEqual(WEEK);   // the precondition: due, read without the code under test
     expect(ask(rotatedAt(0), now, { scheduleBackoffUntil: now + 1000 })).toEqual({ kind: 'backoff', until: now + 1000 });
     expect(ask(rotatedAt(0), now, { scheduleBackoffUntil: now })).toEqual({ kind: 'stage', why: 'scheduled' });          // the instant ends it
     expect(ask(rotatedAt(0), now)).toEqual({ kind: 'stage', why: 'scheduled' });                                            // an older caller passes none
@@ -708,7 +708,7 @@ describe('the weekly schedule: a derived trigger (4556) with its own miss backof
       .toEqual({ kind: 'stage', why: 'recovered' });
     const closed = rotationGate(remote({ nodes: [serverRow(), fleetRow({ updateState: 'applying' })] }));
     expect(ask(rotatedAt(0), now, { gate: closed, scheduleBackoffUntil: now + 1000 })).toEqual({ kind: 'hold', hold: 'update-in-flight', node: 'fleet' });
-    expect(scheduleDue(rotatedAt(now), now)).toBe(false);              // the precondition: not due
+    expect(now - (rotatedAt(now).lastRotationAt as number)).toBeLessThan(WEEK);   // the precondition: not due (and not ahead), read without the code under test
     expect(ask(rotatedAt(now), now, { scheduleBackoffUntil: now + 1000 })).toEqual({ kind: 'none' });
   });
 });

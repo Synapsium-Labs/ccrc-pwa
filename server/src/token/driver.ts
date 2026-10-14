@@ -344,8 +344,8 @@ export class BoxTokenDriver implements TokenRouteDriver {
       // can throw on the same fault (ENOSPC, EROFS) and would otherwise leave no backoff at all.
       this.rotateRequested = false;
       this.backoffUntil = now + backoffMs(s.failures + 1);
-      if (why === 'scheduled') this.noteScheduleMiss('not staged');
       this.warn(`ccrc-server: box token: could not stage a generation (${errno(e)}); retrying with backoff`);
+      if (why === 'scheduled') this.noteScheduleMiss('not staged');   // after the line that names the cause, still before the commit
       await this.commit({ ...s, failures: s.failures + 1, lastFailure: 'mint-failed' });
       return false;
     }
@@ -382,11 +382,11 @@ export class BoxTokenDriver implements TokenRouteDriver {
       this.warn(`ccrc-server: box token: sync failed (${out.state.lastFailure}); attempt ${out.state.failures}, retrying with backoff`);
     }
     if (r.kind === 'synced') this.backoffUntil = null;
-    await this.commit(this.mustState());
-    if (id === this.scheduledGen) {
+    if (id === this.scheduledGen) {   // before the commit, which can throw on the same fault (F3b): memory and a warn line only
       this.scheduledGen = null;
       if (out.promote === null) this.noteScheduleMiss(r.kind);   // 4558: any answer that promotes nothing is a miss
     }
+    await this.commit(this.mustState());
     if (out.promote !== null) await this.promote(out.promote, 'op-result');
   }
 
