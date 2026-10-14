@@ -21,11 +21,12 @@ const fence = (text: string): HastElement => ({
   children: [{ type: 'element', tagName: 'code', properties: { className: ['language-ts'] }, children: [{ type: 'text', value: text }] }],
 });
 
-/** `chars` characters of TypeScript holding exactly one keyword, then spaces broken into lines under 100 characters
- *  (a line over `MD_HIGHLIGHT_MAX_LINE_CHARS` is never highlighted), then the newline the parse keeps: cheap for
- *  highlight.js, so the case measures the decision, not the grammar. */
+/** `chars` characters of TypeScript holding exactly one keyword, then `x` and a space in turn, broken into lines under
+ *  100 characters (a line over `MD_HIGHLIGHT_MAX_LINE_CHARS` is never highlighted, and a long run of blank units over
+ *  `MD_HIGHLIGHT_MAX_BLANK_CHARS` neither), then the newline the parse keeps: cheap for highlight.js, so the case
+ *  measures the decision, not the grammar. */
 const body = (chars: number): string =>
-  'const a = 1;' + Array.from({ length: chars - 13 }, (_, i) => ((i + 1) % 100 === 0 ? '\n' : ' ')).join('') + '\n';
+  'const a = 1;' + Array.from({ length: chars - 13 }, (_, i) => ((i + 1) % 100 === 0 ? '\n' : i % 2 === 0 ? 'x' : ' ')).join('') + '\n';
 
 const page = (sizes: readonly number[]): HastRoot => ({ type: 'root', children: sizes.map((n) => fence(body(n))) });
 
