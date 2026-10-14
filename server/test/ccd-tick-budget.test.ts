@@ -71,17 +71,25 @@ import {
  *    away-over-ceiling 148/46 -> 148/46 · hard-blocked 244/56 -> 244/56 ·
  *    cooldown 97/36 -> 97/36 · fable 138/47 -> 138/47 · leaving 223/56 -> 223/56 ·
  *    fable-leaving 225/61 -> 223/60.
+ *
+ *  LOWERED BY W2 Task 9 (D-4962, `_limit_field_to` and its three callers; macOS, bash 5.3; measured on top of
+ *  Task 10): on the domain each `_limit_field` call loses its own `$( )` and its three `$(_limit_json_num …)`
+ *  captures, 4 forks and no exec, so every fixture falls by 4 x its `_limit_field` calls per steady tick, its
+ *  execs unchanged. Before -> after:
+ *    idle-home 140/46 -> 128/46 (3 calls) · busy 137/45 -> 125/45 (3) · narrow 75/28 (none) ·
+ *    away-over-ceiling 148/46 -> 128/46 (5) · hard-blocked 244/56 -> 172/56 (18) · cooldown 97/36 (none) ·
+ *    fable 138/47 -> 130/47 (2) · leaving 223/56 -> 151/56 (18) · fable-leaving 223/60 -> 159/60 (16).
  */
 const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
-  'idle-home': { forks: 140, execs: 46 },
-  busy: { forks: 137, execs: 45 },
+  'idle-home': { forks: 128, execs: 46 },
+  busy: { forks: 125, execs: 45 },
   narrow: { forks: 75, execs: 28 },
-  'away-over-ceiling': { forks: 148, execs: 46 },
-  'hard-blocked': { forks: 244, execs: 56 },
+  'away-over-ceiling': { forks: 128, execs: 46 },
+  'hard-blocked': { forks: 172, execs: 56 },
   cooldown: { forks: 97, execs: 36 },
-  fable: { forks: 138, execs: 47 },
-  leaving: { forks: 223, execs: 56 },
-  'fable-leaving': { forks: 223, execs: 60 },
+  fable: { forks: 130, execs: 47 },
+  leaving: { forks: 151, execs: 56 },
+  'fable-leaving': { forks: 159, execs: 60 },
 };
 
 /** `_plat_timeout`'s `-k` probe, per tick inside the loop. On `main` at

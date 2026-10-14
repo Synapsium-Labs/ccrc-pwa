@@ -19,6 +19,9 @@
 //    structural row that says which side of spec §6.3's domain each row fell on. (E5 sits above E4 in the file.)
 //  - E6, W2's share rows (D-4962, plan Task 10): `_share_pct_to` and its per-`_swap_target` memo, inside and outside
 //    the memo scope, including the empty-key departure.
+//  - E7, W2 Task 9's rows (D-4962), per locale: `_limit_field` and `_limit_field_to` over every limits row at three
+//    clocks, both fields and four maxages; into its callers' names; the one-read row; and `_avail`/`_limit_score`
+//    against their vendored legacy, called bare as the tick calls them. (E6 and E7 also sit above E4 in the file.)
 //  - E4, the corpus module: deterministic, and every row plants the shape it names.
 //
 // RED FIRST, AND STILL A GREEN COMMIT. A row whose live helper has not landed yet is PENDING: its live side must fail,
@@ -45,8 +48,8 @@ import { inheritedEnv } from './gitEnvStrip.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import {
-  FILE_ROW_SETS, LIMIT_KEYS, LIMITS_ROWS, RANDOM_ALPHABET, ROUTE_ROWS, blocksByName, inLimitsDomain, needsNonRoot,
-  randomRows, type FileRow,
+  FILE_ROW_SETS, LIMIT_KEYS, LIMITS_REWRITE, LIMITS_ROWS, LIMITS_TS, RANDOM_ALPHABET, ROUTE_ROWS, blocksByName,
+  inLimitsDomain, needsNonRoot, randomRows, type FileRow,
 } from './tickDietCorpus.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -57,12 +60,13 @@ const FIXTURE = path.join(HERE, 'fixtures', 'tick-diet-legacy.bash');
 const LEGACY_SHA = '0d0ea592166496be5eccb948313e381bcb2b87c8';
 /** E0a. Re-pinned only by the commit that vendors one more helper, the one edit the fixture takes (its header says
  *  how); never to turn a red green. */
-const FIXTURE_SHA256 = '4ba31403d0dc6362c3e109893d23d09aabdf8e27f434a00fb87f468a68b9125b';
-/** The fourteen vendored bodies, in the fixture's order (plan Task 2 Step 1). */
+const FIXTURE_SHA256 = '9f42511c1935940fa9d15b18e2a5910f8cf7b49995e3c3c5ae4a8f8cc2d40716';
+/** The sixteen vendored bodies, in the fixture's order: plan Task 2 Step 1's fourteen, then `_limit_score` and
+ *  `_avail` (W2 Task 9, for its callers' rows). */
 const VENDORED = [
   '_reg_get', '_reg_read', '_authdead', '_cfg_dir', '_limit_json_num', '_limit_field', '_share_pct',
   '_home_measured', '_route_peek', '_route_effort_for', '_route_applied_get', '_route_wanted',
-  '_route_pending_word', '_route_apply_pending',
+  '_route_pending_word', '_route_apply_pending', '_limit_score', '_avail',
 ] as const;
 /** The live helpers plan Task 2 Step 1 names as the bodies' direct callees. E0c derives the transitive set itself;
  *  this list only proves the derivation sees at least what the plan saw. */
@@ -102,9 +106,11 @@ const PLANNED_FORMS: Readonly<Record<string, string>> = {
 /** What has NOT landed in `ccd/ccd` yet: the planned forms, plus `_now_s`, the one printing form whose name is new.
  *  The task that lands a name deletes it here in the same commit (the header's "RED FIRST"). D-4961 (Task 4) landed
  *  `_now_s_to` and `_now_s`; Task 5 landed `_cfg_dir_to`; W2 Task 8 (D-4962) landed `_limit_text_to`,
- *  `_limit_num_in_to` and `_limit_json_num_to`; W2's later tasks and W3 remove theirs. */
+ *  `_limit_num_in_to` and `_limit_json_num_to`; W2 Task 9 (D-4962) landed `_limit_pick_to` and `_limit_field_to`;
+ *  W2 Task 10 (D-4962) landed `_share_pct_to`; W3 removes its own. */
 const LANDED: ReadonlySet<string> = new Set([
-  '_now_s_to', '_now_s', '_cfg_dir_to', '_limit_text_to', '_limit_num_in_to', '_limit_json_num_to', '_share_pct_to',
+  '_now_s_to', '_now_s', '_cfg_dir_to', '_limit_text_to', '_limit_num_in_to', '_limit_json_num_to',
+  '_limit_pick_to', '_limit_field_to', '_share_pct_to',
 ]);
 const PENDING: ReadonlySet<string> = new Set(
   [...Object.keys(PLANNED_FORMS), '_now_s'].filter((n) => !LANDED.has(n)),
@@ -1487,6 +1493,210 @@ describe.each(LOCALES)('E6 the W2 share rows under $name (tick-diet spec §6.3, 
   it('E6c an empty wrapper is no memo key: both calls run and the shell survives (D-4962, departure share-memo-empty-key)', (ctx) => {
     const b = got(ctx);
     expectEquivalent(E6C_ROW, b.results.get(E6C_ROW.id)!, locale!);
+  });
+});
+
+// ── E7: W2 Task 9's rows — `_limit_field_to`, its one read, and its callers (D-4962) ────────────────────────────────
+
+/** The wrapper every E7 call names: `_limit_field diet …` reads `$LIMITS_DIR/diet.json`, where `LIM_AT` plants. */
+const LF_W = 'diet';
+/** The clocks a `date` FUNCTION answers (plan Task 9 Step 1, "a `date` stub on each side of the resets"), against
+ *  `LIMITS_TS` (T): before every reset; past `fiveResetAt` = T+18000 and the five fallback's 18000 s; past
+ *  `sevenResetAt` = T+604800 and the seven fallback's 604800 s. `_now_s_to` honours a `date` function (D-4961). */
+const LF_CLOCKS: readonly number[] = [LIMITS_TS + 30, LIMITS_TS + 18001, LIMITS_TS + 604801];
+/** `maxage`: omitted (`_serviceable`'s two-argument call, written `''`), and the plan's 0, 60 and 999999. */
+const LF_MAXAGES: readonly string[] = ['', '0', '60', '999999'];
+/** Every `LIMITS_ROWS` row, the blocking shapes included (`_limit_field`'s `-f` comes before any open, legacy and live
+ *  alike); under root, not the rows whose meaning needs a non-root reader. */
+const LF_ROWS: readonly FileRow[] = LIMITS_ROWS.filter((r) => !(AS_ROOT && needsNonRoot(r)));
+/** The live names W2 Task 9 lands; every E7 row needs them. */
+const LF_NEEDS: readonly string[] = ['_limit_field_to', '_limit_pick_to'];
+/** A `date` function at the first clock, for the one-call rows. */
+const LF_STUB = `date() { printf '%s\\n' ${LIMITS_TS + 30}; }`;
+
+/** One side over a whole limits file: every clock x field x maxage. The printing form runs inside `( … )`: the contract
+ *  is `$(_limit_field …)`'s stdout and rc, and a bare legacy call would abort its whole side on the leading-zero `ts`
+ *  row. Then the out-var form into `v`, set to `__P` first, so a form that does not empty its out-var shows. */
+const lfSide = (print: string, to: string, clocks: readonly number[], maxages: readonly string[]): string => [
+  '__lfx() {',
+  '  local c fl m r',
+  `  for c in ${clocks.join(' ')}; do`,
+  `    eval "date() { printf '%s\\\\n' $c; }"`,
+  '    for fl in five seven; do',
+  `      for m in ${maxages.map((m) => (m === '' ? "''" : m)).join(' ')}; do`,
+  `        printf '[%s %s %s]' "$c" "$fl" "$m"`,
+  `        ( ${print} ${LF_W} "$fl" \${m:+"$m"} ); r=$?; printf '<rc=%s>' "$r"`,
+  `        v=__P; ${to}; r=$?; printf '{%s|%s}\\n' "$v" "$r"`,
+  '      done',
+  '    done',
+  '  done',
+  '}',
+  '__diet_caller v __lfx',
+].join('\n');
+/** One side of a caller row: `_avail` and `_limit_score` at each clock, called BARE in the side's own shell, as the tick
+ *  calls them, so a `_limit_field_to` that aborted its caller's shell would end the side. */
+const lfCallers = (avail: string, score: string): string => [
+  '__lfc() {',
+  '  local c r',
+  `  for c in ${LF_CLOCKS.join(' ')}; do`,
+  `    eval "date() { printf '%s\\\\n' $c; }"`,
+  `    printf '[%s]' "$c"; ${avail} ${LF_W}; r=$?; printf '<avail rc=%s>' "$r"`,
+  `    ${score} ${LF_W}; r=$?; printf '<score rc=%s>\\n' "$r"`,
+  '  done',
+  '}',
+  '__diet_caller v __lfc',
+].join('\n');
+
+/** Every W2 Task 9 row (plan Task 9 Step 1, tick-diet spec §6.3, D-4962):
+ *  - `files`: each limits row, 24 calls (3 clocks x 2 fields x 4 maxages) through both forms, against the legacy;
+ *  - `named`: `_limit_field_to` into `five`, `seven` and `fig`, the names its three callers pass;
+ *  - `rewrite`: the one-read row. A `_limit_pick_to` shadow rewrites the file after the FIRST key: one read answers from
+ *    the text read before it (the legacy over the untouched file), and three reads would not. `control` is the
+ *    rewritten file alone, through the legacy: it answers "", so the row can red;
+ *  - `callers`: `_avail` and `_limit_score` against `_legacy_avail` and `_legacy_limit_score` (vendored at W2 Task 9),
+ *    over E5's `LIM_ROWS` (no blocking shape: `_limit_score`'s `fivewin` read opens the path with no `-f` first);
+ *  - `random`: the first 100 of `randomRows(4962, …)`, 4 calls each (the first clock, both fields, maxage 0 and 60). */
+function w2FieldRows(): { files: Row[]; named: Row[]; rewrite: Row[]; control: Row; callers: Row[]; random: Row[] } {
+  const lf = (id: string, r: FileRow, clocks: readonly number[], maxages: readonly string[]): Row => ({
+    id, setup: plant(r, LIM_AT), needs: LF_NEEDS,
+    sides: [
+      { label: 'legacy', body: lfSide('_legacy_limit_field', `v=$(_legacy_limit_field ${LF_W} "$fl" \${m:+"$m"})`, clocks, maxages) },
+      { label: 'live', body: lfSide('_limit_field', `_limit_field_to v ${LF_W} "$fl" \${m:+"$m"}`, clocks, maxages) },
+    ],
+  });
+  const byId = (id: string): FileRow => {
+    const r = LIMITS_ROWS.find((x) => x.id === id);
+    if (!r) throw new Error(`no LIMITS_ROWS row ${id}`);
+    return r;
+  };
+  const named: Row[] = [];
+  for (const id of ['compact', 'absent', 'ts-leading-zero-89']) {
+    for (const [ov, fl, m] of [['five', 'five', '0'], ['seven', 'seven', '0'], ['fig', 'seven', '']] as const) {
+      const args = m === '' ? `${LF_W} ${fl}` : `${LF_W} ${fl} ${m}`;
+      named.push({
+        id: `_limit_field_to ${ov} ${id}`, setup: plant(byId(id), LIM_AT), needs: LF_NEEDS,
+        sides: [
+          { label: 'legacy', body: `${LF_STUB}\n__diet_caller ${ov} ${q(`${ov}=$(_legacy_limit_field ${args})`)}` },
+          { label: 'live', body: `${LF_STUB}\n__diet_caller ${ov} ${q(`_limit_field_to ${ov} ${args}`)}` },
+        ],
+      });
+    }
+  }
+  const { before, after } = LIMITS_REWRITE;
+  const shadow = [
+    'eval "__diet_real_pick_to() $(declare -f _limit_pick_to | command tail -n +2)"',
+    '_limit_pick_to() {',
+    '  __diet_real_pick_to "$@"; local __r=$?',
+    '  if [[ ! -e "$PWD/swapped" ]]; then',
+    '    : > "$PWD/swapped"; command cp -- "$DIET_TARGETS/after" "$LIMITS_DIR/diet.json"; printf swapped > "$PWD/note"',
+    '  fi',
+    '  return "$__r"',
+    '}',
+  ].join('\n');
+  const legacyFive60 = `${LF_STUB}\n__diet_caller v ${q(`v=$(_legacy_limit_field ${LF_W} five 60)`)}`;
+  const rewrite: Row[] = [{
+    id: 'rewrite between reads', needs: LF_NEEDS,
+    setup: [plant(before, LIM_AT), plant(after, '"$DIET_TARGETS/after"'), plant(before, '"$DIET_TARGETS/before"')].join('\n'),
+    sides: [
+      { label: 'legacy', body: legacyFive60 },
+      {
+        label: 'live',
+        // The file is put back after the call, so the two sides' limits trees compare equal.
+        body: [shadow, LF_STUB, `__diet_caller v ${q(`_limit_field_to v ${LF_W} five 60`)}; __r=$?`,
+          'command cp -- "$DIET_TARGETS/before" "$LIMITS_DIR/diet.json"', 'return "$__r"'].join('\n'),
+      },
+    ],
+  }];
+  const control: Row = { id: 'rewrite control: the rewritten file alone', setup: plant(after, LIM_AT), sides: [{ label: 'legacy', body: legacyFive60 }] };
+  return {
+    files: LF_ROWS.map((r) => lf(`_limit_field 24 calls, both forms: ${r.id}`, r, LF_CLOCKS, LF_MAXAGES)),
+    named,
+    rewrite,
+    control,
+    // Not the blocking shapes: `_limit_score`'s `fivewin` read is `_limit_json_num` with no `-f` first, so a FIFO or a
+    // link to /dev/zero would block BOTH sides (E5's `LIM_ROWS` rule).
+    callers: LIM_ROWS.map((r): Row => ({
+      id: `_avail and _limit_score: ${r.id}`, setup: plant(r, LIM_AT), needs: LF_NEEDS,
+      sides: [{ label: 'legacy', body: lfCallers('_legacy_avail', '_legacy_limit_score') }, { label: 'live', body: lfCallers('_avail', '_limit_score') }],
+    })),
+    random: randomRows(LIM_SEED, 100).map((r) => lf(`_limit_field 4 calls, both forms: ${r.id}`, r, [LIMITS_TS + 30], ['0', '60'])),
+  };
+}
+
+describe.each(LOCALES)('E7 W2 Task 9 under $name: `_limit_field_to`, its one read, its callers (tick-diet spec §6.3, D-4962)', ({ locale }) => {
+  const rows = w2FieldRows();
+  let h: CcdHarness;
+  let fixed: Batch | null = null;
+  let random: Batch | null = null;
+  beforeAll(() => {
+    h = makeCcdHarness('ccrc-diet-e7-');
+    if (locale !== null) {
+      fixed = runBatch(h, [...rows.files, ...rows.named, ...rows.rewrite, rows.control, ...rows.callers], locale, 600);
+      random = runBatch(h, rows.random, locale, 600);
+    }
+  }, 1_300_000);
+  afterAll(() => h.cleanup());
+  const got = (ctx: { skip: (note?: string) => never }): { fixed: Batch; random: Batch } => {
+    if (locale === null) {
+      if (process.platform === 'darwin') ctx.skip(NO_UTF8);
+      throw new Error(`${NO_UTF8} — the supervisors run under one, so this half cannot be skipped here`);
+    }
+    return { fixed: fixed!, random: random! };
+  };
+  const out = (b: Batch, id: string): string => b.results.get(id)![0]!.out.toString('latin1');
+  const T = LIMITS_TS;
+
+  it('E7x both batches ran every row to the end, inside their deadlines', (ctx) => {
+    for (const b of Object.values(got(ctx))) {
+      expect(b.hung, `a row never finished: ${b.stderr.slice(0, 2000)}`).toBeNull();
+      expect(b.status).toBe(0);
+    }
+  });
+
+  it('E7a every limits row, 3 clocks x both fields x 4 maxages: `_limit_field` prints, and `_limit_field_to` leaves, what the legacy did (D-4962)', (ctx) => {
+    const b = got(ctx).fixed;
+    for (const row of rows.files) expectEquivalent(row, b.results.get(row.id)!, locale!);
+    // Non-vacuity: the legacy sides really answered — a fresh value, a reset window, an emptied out-var, the abort.
+    const leg = (id: string): string => out(b, `_limit_field 24 calls, both forms: ${id}`);
+    expect(leg('compact')).toContain(`[${T + 30} five ]23<rc=0>{23|0}\n`);
+    expect(leg('compact')).toContain(`[${T + 30} seven 60]41<rc=0>{41|0}\n`);
+    expect(leg('compact')).toContain(`[${T + 18001} five 0]<rc=0>{|0}\n`);
+    expect(leg('compact')).toContain(`[${T + 18001} seven 0]41<rc=0>{41|0}\n`);
+    expect(leg('absent')).toContain(`[${T + 30} five 0]<rc=0>{|0}\n`);
+    expect(leg('ts-leading-zero-89')).toContain(`[${T + 30} five 0]<rc=1>{|1}\n`);
+    expect(b.results.get('_limit_field 24 calls, both forms: ts-leading-zero-89')![0]!.err).toContain('value too great for base');
+  });
+
+  it('E7b `_limit_field_to` into `five`, `seven` and `fig`, the names its three callers pass, one call per row (D-4962)', (ctx) => {
+    const b = got(ctx).fixed;
+    for (const row of rows.named) expectEquivalent(row, b.results.get(row.id)!, locale!);
+    expect(b.results.get('_limit_field_to five compact')![0]!.val!.toString('latin1')).toBe('23');
+    expect(b.results.get('_limit_field_to fig compact')![0]!.val!.toString('latin1')).toBe('41');
+    expect(b.results.get('_limit_field_to five ts-leading-zero-89')![0]!.rc).toBe(1);
+  });
+
+  it('E7c the one read: a file rewritten after the first key still answers from the text read before it (D-4962)', (ctx) => {
+    const b = got(ctx).fixed;
+    for (const row of rows.rewrite) expectEquivalent(row, b.results.get(row.id)!, locale!);
+    const [legacy, live] = b.results.get('rewrite between reads')!;
+    expect(legacy!.val!.toString('latin1'), 'the file before the rewrite answers 50').toBe('50');
+    expect(live!.note, 'the shadow rewrote the file after the first key').toBe('swapped');
+    expect(b.results.get(rows.control.id)![0]!.val!.toString('latin1'),
+      'the rewritten file alone answers "", so a second read of the file would have changed the answer').toBe('');
+  });
+
+  it('E7d `_avail` and `_limit_score`, called bare as the tick calls them, answer as their vendored legacy (D-4962)', (ctx) => {
+    const b = got(ctx).fixed;
+    for (const row of rows.callers) expectEquivalent(row, b.results.get(row.id)!, locale!);
+    const leg = (id: string): string => out(b, `_avail and _limit_score: ${id}`);
+    expect(leg('compact')).toContain(`[${T + 30}]<avail rc=0>41<score rc=0>\n`);
+    expect(leg('five-at-ceiling')).toContain(`[${T + 30}]<avail rc=1>98<score rc=0>\n`);
+    expect(leg('ts-leading-zero-89')).toContain(`[${T + 30}]<avail rc=0><score rc=0>\n`);
+  });
+
+  it(`E7e the first 100 of ${LIM_SEED}'s random limits files: both forms, both fields, maxage 0 and 60 (D-4962)`, (ctx) => {
+    const b = got(ctx).random;
+    for (const row of rows.random) expectEquivalent(row, b.results.get(row.id)!, locale!);
   });
 });
 

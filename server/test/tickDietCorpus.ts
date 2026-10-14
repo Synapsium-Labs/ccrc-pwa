@@ -127,6 +127,15 @@ export const LIMITS_ROWS: readonly FileRow[] = [
   reg('quoted-number', raw('{"five":"12"}')),
   reg('exponent', raw('{"five":1e3}')),
   reg('leading-zeros', raw('{"five":007}')),
+  // W2 Task 9 (D-4962): a `ts` with a leading zero is an OCTAL constant to bash's `$(( ))`, and `08` cannot be one, so
+  // `$((now - ts))` is an expansion error that aborts the shell's top-level command. `_limit_field` ran inside `$( )`,
+  // so the legacy lost one subshell and answered ""; the in-shell `_limit_field_to` must contain it the same way.
+  reg('ts-leading-zero-89', raw('{"five":50,"seven":10,"ts":08}')),
+  reg('ts-leading-zero-octal', raw('{"five":50,"seven":10,"ts":0777}')),
+  // `[[ now -ge 08 ]]` is the conditional's own error, not an expansion: it says so on stderr and answers false.
+  reg('reset-leading-zero-89', raw(`{"five":50,"seven":10,"ts":${T},"fiveResetAt":08,"sevenResetAt":09}`)),
+  // `_avail`'s refusal (`five` at SWAP_CEILING, 98), for W2 Task 9's caller rows.
+  reg('five-at-ceiling', raw(`{"five":98,"seven":10,"ts":${T}}`)),
   reg('huge-number', raw(`{"five":${'9'.repeat(30)}}`)),
   reg('escaped-key-in-string', raw('{"note":"\\"five\\": 3","five":4}')),
   reg('key-without-value', raw('{"five":')),
@@ -148,6 +157,14 @@ export const LIMITS_ROWS: readonly FileRow[] = [
   shaped('symlink-devzero', 'symlink-devzero'),
   shaped('dir-unsearchable', 'parent-unsearchable', raw(COMPACT)),
 ];
+
+/** W2 Task 9's "rewrite between reads" row (plan Task 9, the one-read guard): `before` is fresh at T+30 with `five` 50;
+ *  `after` keeps `five` but its `ts` is long stale and its `fiveResetAt` has passed, so any key read from it after the
+ *  first one (the value) makes `_limit_field … five 60` answer "". Not a `FILE_ROW_SETS` set: the row plants both. */
+export const LIMITS_REWRITE: { readonly before: FileRow; readonly after: FileRow } = {
+  before: reg('rewrite-before', raw(`{"five":50,"seven":10,"ts":${T},"fiveResetAt":${T + 18000}}`)),
+  after: reg('rewrite-after', raw(`{"five":50,"seven":10,"ts":${T - 999999},"fiveResetAt":${T - 1}}`)),
+};
 
 /** `$REG/<id>.<field>` values (spec §9 "registry values", plan Task 13's list). `_reg_set` writes `printf '%s'`, so a
  *  real field carries no trailing newline; the newline rows are the hand-edited and older-writer shapes `$(cat)`
