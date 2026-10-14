@@ -3002,6 +3002,17 @@ export const SCHEMA_ADDED = Object.freeze({
   2: Object.freeze({ heavy: true, tables: Object.freeze({}) }),
 });
 
+/** The heavy versions a migration from `stored` to `code` crosses (§6.11, ruling 5012): every version above the stored one up to the
+ *  code's whose SCHEMA_ADDED entry is `heavy`. `planMigration` doubles its copy estimate when there is one, and sweep's
+ *  `migrationVerdict` finds them by the same walk; doctor's `migration-needs-op` line calls this, so the estimate it prints is the
+ *  one the verdict used and no factor is hand-kept. An unmeasured stored version (null) crosses none: nothing is said of it. */
+export function heavyVersionsBetween(stored, code, schemaAdded = SCHEMA_ADDED) {
+  const out = [];
+  if (!Number.isInteger(stored)) return out;
+  for (let v = stored + 1; v <= code; v += 1) if (schemaAdded[v]?.heavy === true) out.push(v);
+  return out;
+}
+
 /** The schema version this code writes and reads: SCHEMA_ADDED's highest key,
  *  so a store's creation stamp, the writer's verdicts and the CLI's reads agree
  *  by construction. history-store.test.ts holds `MIGRATIONS.length` (the
@@ -3537,8 +3548,12 @@ export function deriveHealth(h) {
     fail.push(item('migration-refused', `a migration to v${h.codeVersion} was refused for room: ${h.freeBytes ?? 'unmeasured'} bytes free on the filesystem holding ${h.dbPath}`));
   }
   if (h.migration === 'snapshot-needs-op') {
-    const est = Math.ceil((h.sizeBytes ?? 0) / (h.copyBps ?? DEFAULT_COPY_BPS));
-    fail.push(item('migration-needs-op', `a migration to v${h.codeVersion} needs a copy of about ${est} s, too long for a scheduled pass`));
+    // The estimate planMigration compared with half the carrier's bound: the store's size at the copy rate, counted twice when a
+    // version between the stored one and this build's is heavy (ruling 5012), so the number printed is the one that made the verdict.
+    const heavy = heavyVersionsBetween(h.userVersion, h.codeVersion);
+    const est = Math.ceil(((h.sizeBytes ?? 0) * (heavy.length > 0 ? 2 : 1)) / (h.copyBps ?? DEFAULT_COPY_BPS));
+    const why = heavy.length > 0 ? ` (the copy counted twice: ${heavy.map((v) => `v${v}`).join(' and ')} backfills or indexes a large table)` : '';
+    fail.push(item('migration-needs-op', `a migration to v${h.codeVersion} needs a copy of about ${est} s${why}, too long for a scheduled pass`));
   }
   // Task 28F: an input status could not read kept its healthy default; it is named here and never judged healthy
   // (the no-overloaded-null rule). An existing word, so no HEALTH_WORDS entry is added.

@@ -14,7 +14,8 @@ import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { SCHEMA_VERSION, formatPassMarker, procStartOf, bootIdOf } from '../../ccd/history/lib.mjs';
+import { SCHEMA_VERSION, formatPassMarker, procStartOf, bootIdOf, redactField, makePairIndex } from '../../ccd/history/lib.mjs';
+import { f2Cases } from './fixtures/history/f2Cases.js';
 import { makeHistoryBox, runSweep, preloadOptions, PRELOADS, CLI, REPO, type HistoryBox } from './historyHelpers.js';
 import * as healthCp from 'node:child_process';
 import * as healthFs from 'node:fs';
@@ -336,6 +337,32 @@ describe('ccrc history status (Linux)', () => {
     }
   });
 
+  // D-5021 (ruling 5020): the shared table of f2Cases (history-lib (j3)'s) through errLine: the five characters in the JSON, Bearer, named
+  // and box-token forms, whole where the form's class admits the character, the field pass's own output where it ends. Red when the
+  // field pass leaves redactFinalLines.
+  it('H-32: the F2 table (every form, each of < > & " and a backslash) through errLine: whole where the class admits, equal to the field pass where it ends (D-5021)', () => {
+    const box = boundBox('ccrc-hist-cli-ha2-h32-f2t-');
+    const cases = f2Cases().filter((c) => c.viaStream);
+    const message = ['first', ...cases.map((c) => c.input)].join('\n');
+    const NONE = makePairIndex([]);
+    for (const [door, spec, code, head] of [
+      ['internal-error line', `Error:${message}@FROM counters`, 1, 'ccrc history: internal error: '],
+      ['store-read-failed line', `SqliteError:${message}@FROM counters`, 5, 'ccrc history: store-read-failed: '],
+    ] as const) {
+      const r = status(box, { preloads: [PRELOADS.statfs, PRELOADS.faults], env: { HISTORY_TEST_THROW_PREPARE: spec } });
+      expect(r.code, `${door}: ${r.stderr}`).toBe(code);
+      expect(r.stderr, `CONTROL ${door}: the line is written`).toContain(`${head}first`);
+      const lines = r.stderr.split('\n');
+      for (const c of cases) {
+        const why = `${door}: ${c.form} with ${JSON.stringify(c.char)}`;
+        const want = redactField(c.input, NONE);
+        expect(lines, `${why}: the line is the field pass's own output`).toContain(want);
+        // a class that ends at the character prints its tail on its own line, so a whole-mask case is judged on its own line
+        for (const run of c.runs) expect(want, `${why}: leaves ${run}`).not.toContain(run);
+      }
+    }
+  });
+
   // D-4614 (round 5): the CLI's own prefix must not swallow the message it carries.
   it('H-32: a message that starts with a context key behind the CLI prefix is masked on stderr (D-4614)', () => {
     const box = boundBox('ccrc-hist-cli-ha2-h32-pfx-');
@@ -366,10 +393,11 @@ describe('ccrc history status (Linux)', () => {
     // H-168: scan by line, not by regex up to ';' (an argument can hold one). Every write stands on one line, so the count below
     // proves the scan sees them all; a new write is a deliberate edit of this number and of the allowlist beside it.
     const writes = src.split('\n').filter((l) => /process\.stderr\.write\(/.test(l));
-    expect(writes.length, 'the scan sees every stderr write').toBe(7);
+    expect(writes.length, 'the scan sees every stderr write').toBe(9);
     expect(writes.filter((w) => /\.message|String\(e\)|\$\{e\b/.test(w)), 'a raw error text on stderr').toEqual([]);
-    // Each write's argument is a fixed line (it starts `ccrc history` or `${USAGE}`), errLine's redactFinalLines, or the op relay's `text`.
-    const allowed = /process\.stderr\.write\((?:[`']ccrc history|`\$\{USAGE\}|redactFinalLines\(|text\))/;
+    // Each write's argument is a fixed line (it starts `ccrc history` or `${USAGE}`), errLine's redactFinalLines, the op relay's `text`, or
+    // an EMPTY write (D-5022: the signal handler's and the exit's wait for stderr to drain write nothing, they only wait on a callback).
+    const allowed = /process\.stderr\.write\((?:[`']ccrc history|`\$\{USAGE\}|redactFinalLines\(|text\)|'', )/;
     expect(writes.filter((w) => !allowed.test(w)), 'a write whose argument is neither a fixed line, errLine\'s redactFinal nor the relay text').toEqual([]);
     const fn = /function errLine\([^)]*\) \{([\s\S]*?)\n\}/.exec(src);
     expect(fn, 'errLine is defined').not.toBeNull();

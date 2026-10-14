@@ -38,6 +38,7 @@ export const PRELOADS = {
   statfs: path.join(__dirname, 'fixtures', 'history', 'preload-statfs.mjs'),
   faults: path.join(__dirname, 'fixtures', 'history', 'preload-faults.mjs'),
   readspy: path.join(__dirname, 'fixtures', 'history', 'preload-readspy.mjs'),
+  throwwrite: path.join(__dirname, 'fixtures', 'history', 'preload-throwwrite.mjs'),
 } as const;
 
 /** Linux-only spawns skip on darwin (O24; the graph-sweep.test.ts:12
@@ -495,6 +496,32 @@ export function stubShim(box: HistoryBox, script: { stdout: string; exit: number
     '',
   ].join('\n'));
   fs.chmodSync(p, 0o755);
+}
+
+/** The placed shim replaced by a stand-in written line by line (bash), for a case a canned stdout and stderr cannot say: a shim
+ *  that is killed by a signal, or that stays up until the CLI is signalled. The first line records its argv as stubShim's does. */
+export function rawShim(box: HistoryBox, lines: string[]): void {
+  const p = path.join(box.home, '.local', 'bin', 'ccd-history-sweep');
+  fs.writeFileSync(p, ['#!/usr/bin/env bash', 'printf \'%s\\n\' "$*" >> "$HOME/stub-shim-argv"', ...lines, ''].join('\n'));
+  fs.chmodSync(p, 0o755);
+}
+
+export interface LiveCli { pid: number; send: (sig: NodeJS.Signals) => void; done: Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }> }
+/** `node --no-warnings cli.mjs <args>` as a child the case can signal while it runs (runCli blocks until the child ends). It is
+ *  capped like every spawn here, and `send` signals only this child, by the pid it was started with. */
+export function startCli(box: HistoryBox, args: string[], opts: SpawnOpts = {}): LiveCli {
+  const child = spawn(process.execPath, ['--no-warnings', CLI, ...args], { env: childEnv(box, opts), cwd: box.home, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (d: string) => { stdout += d; });
+  child.stderr.on('data', (d: string) => { stderr += d; });
+  const cap = setTimeout(() => { child.kill('SIGTERM'); }, opts.timeoutMs ?? SPAWN_TIMEOUT_MS);
+  const done = new Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }>((resolve) => {
+    child.on('close', (code, signal) => { clearTimeout(cap); resolve({ code, signal, stdout, stderr }); });
+  });
+  return { pid: child.pid ?? 0, send: (sig) => { child.kill(sig); }, done };
 }
 
 /** Hold the shim's lock from outside, as a first concurrent pass holds it: a `flock` holder that sleeps, in its own

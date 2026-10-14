@@ -25,10 +25,11 @@ import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { userRow, compactionSequence, toolResultRow } from './historyFixtures.js';
 import {
   makeHistoryBox, runSweep, runShim, runCli, runDriver, plantSession, plantTranscript, openStoreRO, stubShim, holdLock,
-  spoolLine, journalRecords,
+  spoolLine, journalRecords, rawShim, startCli,
   PASS_DRIVER, SHIM, withPane, seedFamily, rewindStoreToV1, plantBlobs, owedIndexFacts, preloadOptions, PRELOADS, CLI, skipOnDarwin, type HistoryBox,
 } from './historyHelpers.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { f2Cases } from './fixtures/history/f2Cases.js';
 
 removeTmpFixturesEachTest();   // each case's boxes (stores, transcripts, backup copies) go when the case ends
 
@@ -373,6 +374,10 @@ describe.skipIf(process.platform === 'darwin')('the relay pipes the shim\'s stde
     ['{"password": "hun&ter2YZ"}', ['hun&', 'ter2YZ']],
     ['Authorization: Bearer abc&defUT', ['&defUT', 'abc&']],
     ['x-ccrc-mail-token: ab<c>d&e\\fghPQ', ['<c>', 'd&e', 'e\\f', 'fghPQ']],
+    ['{"api_key":"abc\\"defWV"}', ['abc\\', 'defWV']],
+    ['password=abc<defSR', ['<defSR', 'abc<']],
+    ['password=abc>defSR', ['>defSR', 'abc>']],
+    ['{"x-ccrc-mail-token": "ab<c>d&e\\"fgh\\\\ijON"}', ['<c>', 'd&e', 'fgh', 'ijON']],
   ];
   /** A declared secretsFile's key: no shape matches it, so only its recorded pair masks it (C49's shape; C69's G). */
   const boxWithRegisteredValue = (prefix: string, G: string): HistoryBox => {
@@ -443,6 +448,185 @@ describe.skipIf(process.platform === 'darwin')('the relay pipes the shim\'s stde
     expect(r.code, r.stderr.slice(0, 300)).toBe(0);
     expect(r.stderr.split('\n').filter((l) => l.startsWith('yyyy')), 'every stderr line arrived').toHaveLength(4000);
   }, HEAVY);
+});
+
+describe.skipIf(process.platform === 'darwin')('the relay holds the shim\'s stderr and redacts it as one text, written on every ending; the exit drains stderr (D-5022, fix round 1 RD2, ruling 5020)', () => {
+  const AL = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const alnum = (n: number): string => Array.from(randomBytes(n), (b) => AL[b % AL.length]!).join('');
+  const NONE = makePairIndex([]);
+  const leaks = (text: string, s: string): string[] => {
+    const w = beltWidth(s);
+    const low = text.toLowerCase();
+    const out: string[] = [];
+    for (let k = 0; k + w <= s.length; k += 1) if (low.includes(s.slice(k, k + w).toLowerCase())) out.push(s.slice(k, k + w));
+    return out;
+  };
+  /** A box whose store holds the pair of a declared secretsFile's key (no shape matches it: only its pair masks it). */
+  const boxWithRegisteredValue = (prefix: string, G: string): HistoryBox => {
+    const roster = structuredClone(DEFAULT_TEST_ROSTER) as { version: number; accounts: Record<string, unknown>[] };
+    roster.accounts.find((a) => a['id'] === 'gpt')!['exec'] = { kind: 'external', secretsFile: '.config/x23-gw/gw.env' };
+    const box = makeHistoryBox(prefix, { role: 'fleet', shim: true, roster });
+    const f = path.join(box.home, '.config', 'x23-gw', 'gw.env');
+    fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(f, `GW_X23_KEY=${G}\n`, { mode: 0o600 });
+    const bound = runShim(box);
+    expect(bound.code, bound.stderr).toBe(0);
+    return box;
+  };
+  /** The shim pid a stand-in recorded, killed by that pid when a case ends (the one process the case started). */
+  const reapShim = (box: HistoryBox): void => {
+    const f = path.join(box.home, 'shim.pid');
+    if (!fs.existsSync(f)) return;
+    const pid = Number(fs.readFileSync(f, 'utf8').trim());
+    if (Number.isInteger(pid) && pid > 1) { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
+  };
+  const until = async (ok: () => boolean, ms = 20_000): Promise<void> => {
+    const t0 = Date.now();
+    while (!ok()) {
+      if (Date.now() - t0 > ms) throw new Error('timed out waiting for the stand-in shim');
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  };
+  const PEM = 'MIIBVgIBADANBgkqhkiG9w0BAQEFAASCAUAwggE8';
+
+  it('(a, b) a PEM block across lines and a JSON value on the line after its key, on the shim\'s stderr, reach the terminal masked: the text is redacted whole, human and --json', () => {
+    const box = boundBox('ccrc-hist-relay-ml-');
+    stubShim(box, {
+      stderr: `zqx23 start\n-----BEGIN PRIVATE KEY-----\n${PEM}\n-----END PRIVATE KEY-----\n{"token":\n"s3cr3tVALUE123"}\nzqx23 end\n`,
+      stdout: '{"rc":0}\n', exit: 0,
+    });
+    const h = op(box, ['doctor', '--backup']);
+    const j = op(box, ['doctor', '--backup', '--json']);
+    expect(h.code, h.stderr).toBe(0);
+    expect(j.code, j.stderr).toBe(0);
+    for (const [where, text] of [['human', h.stderr], ['--json', j.stderr]] as const) {
+      expect(text, `CONTROL ${where}: the text around the shapes is relayed`).toContain('zqx23 start');
+      expect(text.indexOf('zqx23 start'), `${where}: arrival order kept`).toBeLessThan(text.indexOf('zqx23 end'));
+      expect(text, `${where}: the PEM body`).not.toContain('MIIB');
+      expect(text, `${where}: the JSON value on the next line`).not.toContain('s3cr3tVALUE123');
+      expect(text, `CONTROL ${where}: a mark stands`).toContain(REDACTED_MARK);
+    }
+  }, HEAVY);
+
+  it('the F2 table (every form, each of < > & " and a backslash) printed by the shim on stdout and on stderr: whole where the class admits, the field pass\'s own output where it ends (D-5021)', () => {
+    const box = boundBox('ccrc-hist-relay-f2t-');
+    const cases = f2Cases().filter((c) => c.viaStream);
+    stubShim(box, {
+      stderr: `${cases.map((c) => `zqx23 e ${c.input}`).join('\n')}\n`,
+      stdout: `${cases.map((c) => `zqx23 o ${c.input}`).join('\n')}\n{"rc":0}\n`, exit: 0,
+    });
+    const r = op(box, ['doctor', '--backup']);
+    expect(r.code, r.stderr).toBe(0);
+    for (const [where, text, tag] of [['stdout', r.stdout, 'zqx23 o '], ['stderr', r.stderr, 'zqx23 e ']] as const) {
+      const lines = text.split('\n');
+      expect(lines.filter((l) => l.startsWith(tag)), `CONTROL ${where}: every case arrived`).toHaveLength(cases.length);
+      for (const c of cases) {
+        const want = redactField(`${tag}${c.input}`, NONE);
+        expect(lines, `${where}: ${c.form} with ${JSON.stringify(c.char)} prints the field pass's own output`).toContain(want);
+        for (const run of c.runs) expect(want, `${where}: ${c.form} with ${JSON.stringify(c.char)} leaves ${run}`).not.toContain(run);
+      }
+    }
+  }, HEAVY);
+
+  it('(c, f) a shim killed by a signal: the held stderr is written, masked, before the CLI\'s own last line; the exit stays 1', () => {
+    const G = `${alnum(39)}7`;
+    const box = boxWithRegisteredValue('ccrc-hist-relay-kill-', G);
+    rawShim(box, [`printf '%s\\n' 'zqx23 before the kill ${G} end' 'zqx23 second line' >&2`, 'kill -KILL $$']);
+    const r = op(box, ['doctor', '--backup']);
+    expect(stubArgv(box), 'CONTROL: the stand-in ran').toEqual(['--op backup']);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr, 'CONTROL: the held text is written').toContain('zqx23 before the kill');
+    expect(leaks(r.stderr, G), 'masked').toEqual([]);
+    const own = r.stderr.indexOf('ccrc history doctor: internal error');
+    expect(own, 'CONTROL: the CLI\'s own last line is written').toBeGreaterThan(-1);
+    expect(r.stderr.indexOf('zqx23 second line'), 'the held text comes before the CLI\'s own line').toBeLessThan(own);
+  }, HEAVY);
+
+  it('(f) the exit code of every ending the relay has stays what it was: a result is its rc, a shim with no result is 1', () => {
+    const box = boundBox('ccrc-hist-relay-codes-');
+    stubShim(box, { stderr: 'zqx23 err\n', stdout: '{"rc":0}\n', exit: 0 });
+    const ok = op(box, ['doctor', '--backup']);
+    expect([ok.code, ok.stderr], 'the child exits with its result').toEqual([0, 'zqx23 err\n']);
+    stubShim(box, { stderr: 'zqx23 err\n', stdout: 'no result line\n', exit: 3 });
+    const bare = op(box, ['doctor', '--backup']);
+    expect(bare.code, 'the child exits with a code and no result line').toBe(1);
+    expect(bare.stderr, 'CONTROL: the held text is written').toContain('zqx23 err\n');
+  }, HEAVY);
+
+  it('(f) a throw out of a relay stream handler is the CLI\'s own error path: the held stderr is written first, then the CLI\'s internal-error line, exit 1', () => {
+    const G = `${alnum(39)}7`;
+    const box = boxWithRegisteredValue('ccrc-hist-relay-throw-', G);
+    // the stand-in lets its stderr reach the CLI before its stdout line trips the preload (two pipes are not ordered between themselves)
+    rawShim(box, [`printf '%s\\n' 'zqx23 held ${G} end' >&2`, 'sleep 0.4', "printf '%s\\n' 'zqx23-boom' '{\"rc\":0}'"]);
+    const r = runCli(box, ['doctor', '--backup'], { preloads: [PRELOADS.throwwrite], env: { HISTORY_TEST_THROW_WRITE: 'zqx23-boom' } });
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr, 'CONTROL: the held text is written').toContain('zqx23 held');
+    expect(leaks(r.stderr, G), 'masked').toEqual([]);
+    const own = r.stderr.indexOf('ccrc history doctor: internal error: ');
+    expect(own, 'the CLI\'s own error path wrote its line').toBeGreaterThan(-1);
+    expect(r.stderr.indexOf('zqx23 held'), 'the held text comes before it').toBeLessThan(own);
+  }, HEAVY);
+
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+    it(`(d, f) the CLI receiving ${sig} while the shim runs writes the held stderr, masked, and ends as it ends without a handler: killed by ${sig}`, async () => {
+      const G = `${alnum(39)}7`;
+      const box = boxWithRegisteredValue(`ccrc-hist-relay-${sig.toLowerCase()}-`, G);
+      rawShim(box, [`printf '%s\\n' 'zqx23 held ${G} end' >&2`, 'echo $$ > "$HOME/shim.pid"', 'exec sleep 30']);
+      const cli = startCli(box, ['doctor', '--backup']);
+      try {
+        await until(() => fs.existsSync(path.join(box.home, 'shim.pid')));
+        await new Promise((r) => setTimeout(r, 500));   // the CLI has read the pipe
+        cli.send(sig);
+        const r = await cli.done;
+        expect([r.code, r.signal], 'ended by the signal, as without the handler').toEqual([null, sig]);
+        expect(r.stderr, 'CONTROL: the held text is written').toContain('zqx23 held');
+        expect(leaks(r.stderr, G), 'masked').toEqual([]);
+        expect(r.stderr, 'CONTROL: the mark stands where the value was').toContain(REDACTED_MARK);
+      } finally {
+        reapShim(box);
+      }
+    }, HEAVY);
+  }
+
+  it('(e) a stderr far over the cap is written whole: every line arrives, in order, redacted, and a line with no break at all is not dropped', async () => {
+    const G = `${alnum(39)}7`;
+    const box = boxWithRegisteredValue('ccrc-hist-relay-cap-', G);
+    const PAD = 'y'.repeat(80);
+    // 50000 lines of about 100 bytes: about 5 MB, nearly five caps of 1 MiB
+    rawShim(box, [
+      `awk 'BEGIN { for (i = 1; i <= 50000; i++) { if (i == 30000) printf "zqx23 line %06d ${G}\\n", i; else printf "zqx23 line %06d ${PAD}\\n", i } }' >&2`,
+      'printf \'%s\' "zqx23 tail with no line break" >&2',
+      'printf \'%s\\n\' \'{"rc":0}\'',
+    ]);
+    const r = await startCli(box, ['doctor', '--backup']).done;
+    expect(r.code, r.stderr.slice(0, 300)).toBe(0);
+    const nums = r.stderr.split('\n').filter((l) => l.startsWith('zqx23 line ')).map((l) => Number(l.slice(11, 17)));
+    expect(nums.length, 'every line arrived').toBe(50000);
+    expect(nums.every((n, i) => n === i + 1), 'in order').toBe(true);
+    expect(r.stderr.endsWith('zqx23 tail with no line break\n'), 'the last partial line is flushed').toBe(true);
+    expect(leaks(r.stderr, G), 'the value, past the first cap, is masked').toEqual([]);
+    expect(r.stderr, 'CONTROL: and its mark stands').toContain(REDACTED_MARK);
+  }, 1.5 * HEAVY);
+
+  it('(e) a stderr over the cap that has no line break at all is cut where the cap fell and written, not dropped', async () => {
+    const box = boundBox('ccrc-hist-relay-cap1-');
+    rawShim(box, ['head -c 2500000 /dev/zero | tr "\\\\0" z >&2', 'printf \'%s\\n\' \'{"rc":0}\'']);
+    const r = await startCli(box, ['doctor', '--backup']).done;
+    expect(r.code, r.stderr.slice(0, 300)).toBe(0);
+    expect((r.stderr.match(/z/g) ?? []).length, 'every byte arrived').toBe(2_500_000);
+  }, HEAVY);
+
+  it('(g) several MB relayed on stderr arrive complete on a pipe: the exit waits for stderr as it waits for stdout', async () => {
+    const box = boundBox('ccrc-hist-relay-drain-');
+    rawShim(box, [
+      'awk \'BEGIN { for (i = 1; i <= 50000; i++) printf "zqx23 drain %06d %s\\n", i, "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy" }\' >&2',
+      'printf \'%s\\n\' \'{"rc":0}\'',
+    ]);
+    const r = await startCli(box, ['doctor', '--backup']).done;
+    expect(r.code, r.stderr.slice(0, 300)).toBe(0);
+    expect(r.stderr.split('\n').filter((l) => l.startsWith('zqx23 drain ')), 'every line arrived').toHaveLength(50000);
+    expect(r.stderr.endsWith('\n'), 'and the last one whole').toBe(true);
+  }, 1.5 * HEAVY);
 });
 
 describe.skipIf(process.platform === 'darwin')('the no-store table and the speed bumps: decided by the CLI before any spawn (Task 19)', () => {

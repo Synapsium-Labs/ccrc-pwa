@@ -1293,9 +1293,12 @@ export function formatHealth(health) {
 //      from its own environment (slug history-op-gate-in-sweep): decided once, executed twice;
 //   4. the shim, `~/.local/bin/ccd-history-sweep --op <op> <args…>`, as a child. stdin is inherited, so the sweep's
 //      own isatty(0) is the operator's terminal (nothing on the --op path asks whether stderr is a terminal). stdout
-//      and stderr are piped and relayed line by line as they arrive (an import's dry run can list thousands of
+//      and stderr are piped. stdout is relayed line by line as it arrives (an import's dry run can list thousands of
 //      files), each line through redactFinalLines with the read verbs' index (D-5022, review 441 F10; spec §9.8:
-//      redacted on every output). Its LAST stdout line, the sweep's `{"rc":…}`, is held back for
+//      redacted on every output). stderr is HELD and redacted as ONE text, as errLine redacts a thrown message, so a
+//      shape that spans lines (a PEM body, a JSON value on the line after its key) is masked whole; it is written when
+//      the child ends, before the CLI's own last line (opRelay's header names the endings and the cap). Its LAST stdout
+//      line, the sweep's `{"rc":…}`, is held back for
 //      decideRelay: 75 (the shim found the lock held) is exit 4 writer-busy, a well-formed result is its rc and
 //      reason, and anything else is exit 1.
 // It never runs sweep.mjs itself: the shim is the ONE lock taker (§5.1, RV13). It passes no env: the child inherits
@@ -1345,14 +1348,32 @@ function opPaneName(form) {
   return t.settled && t.status === 0 ? t.stdout.trim() : null;
 }
 
+/** What the relay holds of the shim's stderr before it writes some (D-5022): 1 MiB of bytes. Under it the held text is
+ *  redacted as one text when the child ends. Past it, the text up to its LAST line boundary is redacted and written, and
+ *  the rest is held on (a text with no line break at all is written whole, cut where the cap fell). The only residual is a
+ *  shape that is split across that seam, which no pass on either side can see whole. */
+const ERR_HOLD_CAP = 1 << 20;
+/** How long the CLI's own signal handler waits for the held text to leave stderr before it ends the CLI anyway. */
+const SIGNAL_FLUSH_MS = 2000;
+const RELAY_SIGNALS = Object.freeze(['SIGINT', 'SIGTERM', 'SIGHUP']);
+
 /** The shim as a child: its stdout relayed line by line as it arrives, its LAST stdout line held back for the relay;
- *  its stderr relayed the same way, every line as it arrives and none held back (D-5022, review 441 F10). `emit(line,
- *  true)` is a stderr line. Each stream's lines keep their arrival order; the two streams are not ordered between
- *  themselves. A partial last line of either stream is flushed at the child's close. */
+ *  its stderr HELD and redacted as one text (D-5022, review 441 F10 and coordinator ruling 5020: a per-line redaction
+ *  cannot see a PEM body after its BEGIN line, or a JSON value on the line after its key, which errLine's whole-text
+ *  pass masks). `emit(text, true)` is the held stderr text, without its last line break (emit adds one). The held text
+ *  is bounded by ERR_HOLD_CAP, and it is written, redacted, BEFORE the CLI's own last line on every ending:
+ *    - the child exits with a code, or is killed by a signal (the child's `close`);
+ *    - the relay itself fails: a throw in a stream handler rejects the promise, after the flush, and operatorMain's
+ *      error path then writes its own line and exits 1;
+ *    - the CLI receives SIGINT, SIGTERM or SIGHUP: the handler writes the held text and then raises the same signal on
+ *      this process with the default action back, so the CLI ends as it ends without the handler (killed by that signal).
+ *  The handlers are installed only while the child runs. The two streams are not ordered between themselves. A partial
+ *  last line of stdout is flushed at the child's close. */
 function opRelay(P, op, opArgs, emit) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let done = false;
-    const finish = (r) => { if (!done) { done = true; resolve(r); } };
+    let detach = () => {};
+    const finish = (r) => { if (!done) { done = true; detach(); resolve(r); } };
     let child;
     try {
       child = spawnOp(P.shim, ['--op', op, ...opArgs], { stdio: ['inherit', 'pipe', 'pipe'] });
@@ -1366,32 +1387,69 @@ function opRelay(P, op, opArgs, emit) {
       if (held !== null) emit(held, false);
       held = line;
     };
+    let errHeld = '';
+    let errBytes = 0;
+    /** The held stderr text, all of it, redacted as one text by emit's caller. */
+    const flushErr = () => {
+      if (errHeld === '') return;
+      const text = errHeld.endsWith('\n') ? errHeld.slice(0, -1) : errHeld;
+      errHeld = '';
+      errBytes = 0;
+      emit(text, true);
+    };
+    /** Past the cap: the held text up to its last line boundary goes out, the rest stays held. */
+    const spillErr = () => {
+      const cut = errHeld.lastIndexOf('\n');
+      const text = cut === -1 ? errHeld : errHeld.slice(0, cut);
+      errHeld = cut === -1 ? '' : errHeld.slice(cut + 1);
+      errBytes = Buffer.byteLength(errHeld);
+      emit(text, true);
+    };
+    // A throw in a handler is the CLI's own error path: the held text goes out first (what the throw hid is the shim's
+    // stderr, the operator's only reason), then the promise rejects into operatorMain's catch, which writes its line.
+    const fail = (e) => {
+      if (done) return;
+      done = true;
+      detach();
+      try { flushErr(); } catch { /* the line that follows names the failure */ }
+      reject(e);
+    };
+    const safe = (fn) => (...a) => { try { fn(...a); } catch (e) { fail(e); } };
     child.stdout.setEncoding('utf8');
-    child.stdout.on('data', (d) => {
+    child.stdout.on('data', safe((d) => {
       buf += d;
       for (let i = buf.indexOf('\n'); i !== -1; i = buf.indexOf('\n')) {
         take(buf.slice(0, i));
         buf = buf.slice(i + 1);
       }
-    });
-    let errBuf = '';
+    }));
     child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (d) => {
-      errBuf += d;
-      for (let i = errBuf.indexOf('\n'); i !== -1; i = errBuf.indexOf('\n')) {
-        emit(errBuf.slice(0, i), true);
-        errBuf = errBuf.slice(i + 1);
-      }
-    });
-    child.on('error', () => finish({ exit: EXIT.INTERNAL }));
-    child.on('close', (status, signal) => {
-      if (errBuf !== '') emit(errBuf, true);
+    child.stderr.on('data', safe((d) => {
+      errHeld += d;
+      errBytes += Buffer.byteLength(d);
+      if (errBytes > ERR_HOLD_CAP) spillErr();
+    }));
+    child.on('error', safe(() => { flushErr(); finish({ exit: EXIT.INTERNAL }); }));
+    child.on('close', safe((status, signal) => {
+      flushErr();
       if (buf !== '') take(buf);
       let lastLine = null;
       if (held !== null && held.startsWith('{"rc"')) lastLine = held;
       else if (held !== null) emit(held, false);
       finish(healthLib.decideRelay({ status, signal, lastLine }));
-    });
+    }));
+    // The CLI's own signals: write what is held, then end the CLI as the signal would have (default action, re-raised).
+    let ending = false;
+    const handlers = RELAY_SIGNALS.map((sig) => [sig, () => {
+      const raise = () => { detach(); process.kill(process.pid, sig); };
+      if (ending) { raise(); return; }
+      ending = true;
+      try { flushErr(); } catch { /* ends below either way */ }
+      const t = setTimeout(raise, SIGNAL_FLUSH_MS);
+      process.stderr.write('', () => { clearTimeout(t); raise(); });
+    }]);
+    for (const [sig, h] of handlers) process.on(sig, h);
+    detach = () => { for (const [sig, h] of handlers) process.off(sig, h); };
   });
 }
 
@@ -1420,8 +1478,8 @@ function relayIndexOf(home, P, reach) {
 }
 
 /** One operator verb through the door. `emit(line, toStderr)` gets each line the sweep printed before its result on
- *  stdout, and each line it printed on stderr (`toStderr` true; D-5022), already through redactFinalLines with
- *  relayIndexOf's index, which is built only once the gate has passed, before the shim starts. */
+ *  stdout, and the text it printed on stderr, held and written whole (`toStderr` true; D-5022), already through
+ *  redactFinalLines with relayIndexOf's index, which is built only once the gate has passed, before the shim starts. */
 export async function runOpVerb(home, verb, rest, emit) {
   const P = healthLib.historyPaths(home);
   const map = opFormOf(verb, rest);
@@ -1516,19 +1574,29 @@ export async function operatorMain(home, argv) {
   return r.exit;
 }
 
+/** End the process once BOTH piped streams have written what they hold (D-5022): an empty write's callback runs after the
+ *  stream's queue, so process.exit() cuts neither stdout's tail nor a relayed stderr of several MB. */
+function exitDrained() {
+  let pending = 2;
+  const one = () => { pending -= 1; if (pending === 0) process.exit(); };
+  process.stdout.write('', one);
+  process.stderr.write('', one);
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   // The entry guard stays the LAST statement of cli.mjs. main() runs while this module is still evaluating (its
   // synchronous part runs at the call), so a module-level const declared below this guard would still be
   // uninitialised when main reads it: every later block (Task 28's health block) goes ABOVE it. No top-level await.
   // The code is set as process.exitCode, and process.exit() then ends the process with it, never a drained event
   // loop: a stat that never settled pins a libuv thread (above). Writing '' first lets a piped stdout flush before
-  // the exit (a pipe is asynchronous on macOS, where the Darwin row answers 9). The .catch turns a throw out of
+  // the exit (a pipe is asynchronous on macOS, where the Darwin row answers 9). Both streams are written first, not stdout
+  // alone (D-5022): a relayed stderr of several MB on a pipe lost its tail when only stdout was awaited. The .catch turns a throw out of
   // main into one stderr line and exit 1, never a raw unhandled rejection.
   main(process.argv.slice(2))
-    .then((code) => { process.exitCode = code; process.stdout.write('', () => process.exit()); })
+    .then((code) => { process.exitCode = code; exitDrained(); })
     .catch((e) => {
       errLine(`ccrc history: internal error: ${thrownText(e)}`);
       process.exitCode = EXIT.INTERNAL;
-      process.exit();
+      exitDrained();
     });
 }

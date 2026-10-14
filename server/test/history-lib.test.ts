@@ -12,6 +12,7 @@ import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
+import { f2Cases } from './fixtures/history/f2Cases.js';
 import {
   EXIT, REASONS, REFUSALS, WRITING_FORMS, STORE_DB_REL, HISTORY_ROOT_REL, STORE_DB_FILE, STORE_FILES, SWITCHES,
   SPOOL_ID_MAX, CARRIER_KILL_S, NODE_KINDS, PARSE_STATUS, ENTRY_PARSE_STATES, PROVENANCE, SEARCHABLE_PROVENANCE,
@@ -2455,6 +2456,30 @@ describe('redaction: values, context and shapes (spec 8.3)', () => {
       expect(libRedact.redactFinalLines(x, idx), x).toBe(x);
     }
   });
+  // D-5021 (ruling 5020): the same five characters in every form, by what each form's value class admits. A class that admits the
+  // character masks the value whole; a class that ENDS at it (B1's shared rule, unchanged from the base, and widening it is a
+  // reindex that B3 evaluates) leaves the field pass's own output, so redactFinalLines must equal redactField there: the field pass
+  // stays the guard. Each pin is red when the field pass leaves redactFinalLines.
+  it('(j3) every form masks a value holding < > & " or a backslash whole where its class admits the character, and equals the field pass where its class ends (D-5021)', () => {
+    const idx = idxOf([]);
+    const cases = f2Cases();
+    expect(cases.filter((c) => c.whole).length, 'CONTROL: the table holds whole-mask cases').toBeGreaterThanOrEqual(15);
+    expect(cases.filter((c) => !c.whole).length, 'CONTROL: and ends-at cases').toBeGreaterThanOrEqual(10);
+    for (const c of cases) {
+      const out = libRedact.redactFinalLines(c.input, idx);
+      const field = libRedact.redactField(c.input, idx);
+      const why = `${c.form} with ${JSON.stringify(c.char)}: ${JSON.stringify(c.input)}`;
+      expect(out, `${why}: redactFinalLines equals the field pass`).toBe(field);
+      expect(out, `${why}: the field pass must stay the guard (the final form alone prints something else)`).not.toBe(libRedact.redactFinal(c.input, idx));
+      if (c.whole) {
+        for (const run of c.runs) expect(out, `${why}: leaves ${run}`).not.toContain(run);
+        expect(out.match(/\[redacted\]/g) ?? [], `${why}: one mark`).toHaveLength(1);
+      }
+    }
+    // the residual, as measured: the two examples D-5021 records
+    expect(libRedact.redactFinalLines('password=abc&def', idx)).toBe(`password=${M}&def`);
+    expect(libRedact.redactFinalLines('Authorization: Bearer abc"def', idx)).toBe(`Authorization: Bearer ${M}"def`);
+  });
   // D-4614 (whole-branch fix round 7): layers 2 and 3 are ORDER-FREE. Every context rule and every shape matches the same text,
   // the union of their spans is masked in one pass. Round 5's order (the named rule first) and round 6's (anchors and shapes
   // first) each lost something a glued name or anchor carried; these pins hold both directions.
@@ -4128,6 +4153,28 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     const room = healthLib.deriveHealth(base({ migration: 'refuse-low-disk', sizeBytes: 1_000, thresholdBytes: 9_000, freeBytes: 500 }));
     expect(room.fail[0]!.detail).toContain('/home/u/.ccrc/history/db');
     expect(room.fail[0]!.remedy).toContain('10000 bytes');
+  });
+  // D-5015 (F1c review): the estimate doctor prints is the one planMigration used, which counts the copy twice when a version between the
+  // stored one and the code's is heavy (ruling 5012), and the line says why. Half the carrier bound is 300 s; at 10 MB/s a 1.505 GB store
+  // is 150.5 s once and 301 s counted twice. The factor comes from SCHEMA_ADDED, never a spelled 2 here.
+  it('migration-needs-op prints the estimate planMigration used: counted twice, and why, for a store whose migration crosses a heavy v2 (D-5015)', () => {
+    expect(healthLib.SCHEMA_ADDED[2]!.heavy, 'CONTROL: the real v2 is heavy').toBe(true);
+    const heavy = healthLib.deriveHealth(base({ migration: 'snapshot-needs-op', userVersion: 1, codeVersion: 2, sizeBytes: 1_505_000_000, copyBps: 10_000_000 }));
+    expect(heavy.fail[0]!.word).toBe('migration-needs-op');
+    expect(heavy.fail[0]!.detail, 'the doubled estimate, the one that passed half the bound').toContain('about 301 s');
+    expect(heavy.fail[0]!.detail, 'and the reason').toContain('counted twice: v2 backfills or indexes a large table');
+    expect(heavy.fail[0]!.remedy, 'the remedy is kept').toContain('ccrc history doctor --migrate');
+    // the verdict and the print agree: planMigration answers needs-op for 301 s and not for the single 151 s
+    const plan = (heavyOn: boolean) => healthLib.planMigration({ stored: 1, code: 2, freeBytes: 9e12, thresholdBytes: 1, sizeBytes: 1_505_000_000, boundS: healthLib.CARRIER_KILL_S, copyBps: 10_000_000, attempts: 0, heavy: heavyOn });
+    expect([plan(true), plan(false)]).toEqual(['snapshot-needs-op', 'snapshot-then-migrate']);
+    // CONTROLs: nothing crossed (stored = code) or the stored version unmeasured prints the single estimate and no reason
+    for (const userVersion of [2, null]) {
+      const light = healthLib.deriveHealth(base({ migration: 'snapshot-needs-op', userVersion, codeVersion: 2, sizeBytes: 1_505_000_000, copyBps: 10_000_000 }));
+      expect(light.fail[0]!.detail, String(userVersion)).toContain('about 151 s, too long for a scheduled pass');
+      expect(light.fail[0]!.detail, String(userVersion)).not.toContain('counted twice');
+    }
+    expect(healthLib.heavyVersionsBetween(1, 2)).toEqual([2]);
+    expect(healthLib.heavyVersionsBetween(2, 2)).toEqual([]);
   });
   it('cap-malformed and cap-near name the cap file from the input, never a spelled switch', () => {
     expect(healthLib.deriveHealth(base({ capMalformed: true })).warn[0]!.detail).toContain('/home/u/.ccrc/cap-fixture');
