@@ -27,16 +27,13 @@ import { useKeyboardInset } from '../lib/keyboard';
 import { wsUrl } from '../lib/ws';
 import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../../shared/api';
 import { BASE_CONSOLE_FONT_PX, consoleFit } from './consoleFit';
+import { GLASS_ANSI, readModel } from './drawerModel';
+import type { ModelRow } from './drawerModel';
 import './chat.css';
 
 /** The grid every attach dials and the live terminal is pinned at: the
  *  window's own size, plus the row tmux takes for its status line (D-5005). */
 const ATTACH = { cols: PINNED_WINDOW_COLS, rows: PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS } as const;
-
-/** One of the window's rows as styled cells. The cells themselves arrive with
- *  the wrapped view's model (D-5006); until then the seam carries the shape,
- *  and the default terminal answers it empty. */
-type ModelRow = readonly unknown[];
 
 /** The slice of xterm the drawer drives — injectable so tests can script it. */
 export interface DrawerTerm {
@@ -67,8 +64,9 @@ export interface DrawerTerm {
    *  the terminal does not. Opening is the drawer's choice, not the factory's. */
   open(host: HTMLElement): void;
   isOpen(): boolean;
-  /** The window's rows (the status row excluded), for every reader of the
-   *  screen. Empty until the model lands (D-5006). */
+  /** The window's rows as styled cells: `readModel` over the active buffer,
+   *  `term.rows − TMUX_STATUS_ROWS` of them, so tmux's status row is never part
+   *  of it. Every reader of the screen reads this (D-5006). */
   model(): ModelRow[];
   /** tmux's status row, for the grid's display only; nothing decides on it. */
   statusRow(): ModelRow;
@@ -237,14 +235,13 @@ const glass = () => ({
     foreground: tokenValue('--ink-on-well'),
     cursor: tokenValue('--accent'),
     cursorAccent: tokenValue('--bg-well'),
-    // On-brand ANSI palette (Phosphor & Ink) so 16-colour content reads
-    // cohesively. 256/truecolor content bypasses this and paints direct —
-    // Claude emits truecolor once COLORTERM+tmux RGB are in place (ccd spawn).
-    black: '#1B1F1D', red: '#F08A78', green: '#57E08B', yellow: '#F2B84B',
-    blue: '#96B4F4', magenta: '#C7A7F4', cyan: '#6FD6EA', white: '#ADB6AE',
-    brightBlack: '#5A635C', brightRed: '#FF9E8A', brightGreen: '#7BEDA6',
-    brightYellow: '#FFD27A', brightBlue: '#B3C8FF', brightMagenta: '#DDC2FF',
-    brightCyan: '#93E6F5', brightWhite: '#EDF1EE',
+    // The 16-colour palette has one home, `GLASS_ANSI`, which the wrapped
+    // view's `cellCss` reads too (D-5006).
+    black: GLASS_ANSI[0], red: GLASS_ANSI[1], green: GLASS_ANSI[2], yellow: GLASS_ANSI[3],
+    blue: GLASS_ANSI[4], magenta: GLASS_ANSI[5], cyan: GLASS_ANSI[6], white: GLASS_ANSI[7],
+    brightBlack: GLASS_ANSI[8], brightRed: GLASS_ANSI[9], brightGreen: GLASS_ANSI[10],
+    brightYellow: GLASS_ANSI[11], brightBlue: GLASS_ANSI[12], brightMagenta: GLASS_ANSI[13],
+    brightCyan: GLASS_ANSI[14], brightWhite: GLASS_ANSI[15],
   },
 });
 
@@ -322,8 +319,9 @@ const fitter = (term: Terminal, fit: FitAddon) => () => {
 
 /** The live terminal: built at the window's own size and NOT opened here.
  *  Where it opens is the drawer's choice (D-5005). The FitAddon is loaded for
- *  `propose` alone; nothing on this terminal ever calls its `fit`. */
-const defaultMakeTerm: MakeTerm = () => {
+ *  `propose` alone; nothing on this terminal ever calls its `fit`. Exported for
+ *  `drawer-model-equals-capture.test.ts`, which pins `model()`'s row count. */
+export const defaultMakeTerm: MakeTerm = () => {
   const term = new Terminal({
     ...glass(),
     cols: ATTACH.cols,
@@ -378,9 +376,12 @@ const defaultMakeTerm: MakeTerm = () => {
       term.open(host);
     },
     isOpen: () => opened,
-    model: () => [],
-    statusRow: () => [],
-    onParsed: () => () => {},
+    model: () => readModel(term.buffer.active, term.cols, term.rows - TMUX_STATUS_ROWS),
+    statusRow: () => readModel(term.buffer.active, term.cols, term.rows).at(-1) ?? [],
+    onParsed: (cb) => {
+      const sub = term.onWriteParsed(cb);
+      return () => sub.dispose();
+    },
     focus: () => term.focus(),
     dispose: () => term.dispose(),
   };
