@@ -22942,26 +22942,26 @@ No commit in this task but Step 5's: everything else it writes is scratch or git
 
 ## Wave 5 part 1 results
 
-Measured 2026-10-14 07:01 UTC on the tree at `f4a3839c17c3` (base `162c91491476`, 60 W5.1 commits on the first-parent line). Every number below was printed by a Task 14 command; none is a forecast. The commit that adds this section changes only this file, and it is the wave-done `handoffCommit`.
+Measured 2026-10-14 13:08 UTC on the tree at `03844f251ff0` (base `162c91491476`, 90 W5.1 commits on the first-parent line). Every number below was printed by a Task 14 command; none is a forecast. The commit that adds this section changes only this file, and it is the wave-done `handoffCommit`.
 
-Deviation entries: 8, the first 8 numbers of the issued block 4917-4932, in order, defined in `## Deviations found` above.
+Deviation entries: 11, the first 11 numbers of the issued block 4917-4932, in order, defined in `## Deviations found` above.
 
 ### Suites
 
-Spec section 7.9's every-wave and W5 suites: the PWA `tsc`, the contrast gate, the whole hermetic PWA suite as three shards (proved below to add up to the hermetic file list), the browser leg in a real Chrome, and the server files that read part 1's files as text; all in the foreground. The full server suite runs in this pull request's CI (part 1 edits `pwa/package.json`, the lock, `pwa/tsconfig.json`, a vitest config and `.github/`). First complete run of these suites in this wave: **green** (at `1abcf03b7`, whose code `f4a3839c1` and `4d5875f35` share: every suite log starts between 05:49 and 05:58Z, before `f4a3839c1` was committed at 06:00Z).
+Spec section 7.9's every-wave and W5 suites: the PWA `tsc`, the contrast gate, the whole hermetic PWA suite as three shards (proved below to add up to the hermetic file list), the browser leg in a real Chrome, and the server files that read part 1's files as text; all in the foreground. The full server suite runs in this pull request's CI (part 1 edits `pwa/package.json`, the lock, `pwa/tsconfig.json`, a vitest config and `.github/`). First complete run of these suites in this wave: **green** (at `1abcf03b7060`).
 
 | # | Command | Test Files | Tests | s | rc |
 |---|---|---|---|---|---|
-| 01 | `( cd pwa && CI=1 node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json )` | - | compiled, no errors | 20 | 0 |
+| 01 | `( cd pwa && CI=1 node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json )` | - | compiled, no errors | 26 | 0 |
 | 02 | `( cd pwa && CI=1 node design/contrast-check.mjs )` | - | ALL 702 PASS | 1 | 0 |
-| 03 | `( cd pwa && CI=1 ./node_modules/.bin/vitest run --shard=1/3 )` | 50 passed (50) | 1368 passed (1368) | 84 | 0 |
-| 04 | `( cd pwa && CI=1 ./node_modules/.bin/vitest run --shard=2/3 )` | 50 passed (50) | 1994 passed (1994) | 83 | 0 |
-| 05 | `( cd pwa && CI=1 ./node_modules/.bin/vitest run --shard=3/3 )` | 49 passed (49) | 1808 passed (1808) | 92 | 0 |
+| 03 | `( cd pwa && CI=1 ./node_modules/.bin/vitest run --shard=1/3 --maxWorkers=4 )` | 50 passed (50) | 1390 passed (1390) | 93 | 0 |
+| 04 | `( cd pwa && CI=1 ./node_modules/.bin/vitest run --shard=2/3 --maxWorkers=4 )` | 50 passed (50) | 2025 passed (2025) | 85 | 0 |
+| 05 | `( cd pwa && CI=1 ./node_modules/.bin/vitest run --shard=3/3 --maxWorkers=4 )` | 49 passed (49) | 1820 passed (1820) | 117 | 0 |
 | 06 | `( cd pwa && CI=1 CCRC_CHROME="$(cat <SCRATCH>/w5p1-chrome)" ./node_modules/.bin/vitest run --config vitest.browser.config.ts )` | 1 passed (1) | 13 passed (13) | 17 | 0 |
-| 07 | `( cd server && ./node_modules/.bin/vitest run test/docs-shared.test.ts test/single-definition.test.ts test/docs-parity.test.ts test/ci-pipeline.test.ts )` | 4 passed (4) | 898 passed (898) | 26 | 0 |
-| 08 | `( cd server && ./node_modules/.bin/vitest run test/docs-url.test.ts test/docs-grammar.test.ts test/ci-merge-queue.test.ts test/ci-verdict.test.ts test/oss-metadata.test.ts test/license.test.ts test/node-floor.test.ts test/run-routes.test.ts test/no-routing-keystroke-from-server.test.ts test/pane-history-route.test.ts test/resume-reclaim-l0.test.ts test/child-reclaim-attention-arms.test.ts )` | 12 passed (12) | 5131 passed (5131) | 142 | 0 |
-| 09 | `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )` | 1 passed (1) | 12 passed (12) | 70 | 0 |
-| 10 | `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts test/source-bytes.test.ts test/deviation-refs.test.ts test/dtbd.test.ts )` | 4 passed (4) | 89 passed (89) | 16 | 0 |
+| 07 | `( cd server && ./node_modules/.bin/vitest run test/docs-shared.test.ts test/single-definition.test.ts test/docs-parity.test.ts test/ci-pipeline.test.ts )` | 4 passed (4) | 899 passed (899) | 27 | 0 |
+| 08 | `( cd server && ./node_modules/.bin/vitest run test/docs-url.test.ts test/docs-grammar.test.ts test/ci-merge-queue.test.ts test/ci-verdict.test.ts test/oss-metadata.test.ts test/license.test.ts test/node-floor.test.ts test/run-routes.test.ts test/no-routing-keystroke-from-server.test.ts test/pane-history-route.test.ts test/resume-reclaim-l0.test.ts test/child-reclaim-attention-arms.test.ts )` | 12 passed (12) | 5131 passed (5131) | 176 | 0 |
+| 09 | `( cd server && ./node_modules/.bin/vitest run test/typecheck-tests.test.ts )` | 1 passed (1) | 12 passed (12) | 96 | 0 |
+| 10 | `( cd server && ./node_modules/.bin/vitest run test/topology-clean.test.ts test/source-bytes.test.ts test/deviation-refs.test.ts test/dtbd.test.ts )` | 4 passed (4) | 89 passed (89) | 20 | 0 |
 
 ```text
 OK pwa shards: 50 + 50 + 49 = 149 test files; `vitest list --filesOnly` holds 149 hermetic files
@@ -22972,8 +22972,8 @@ OK pwa shards: 50 + 50 + 49 = 149 test files; `vitest list --filesOnly` holds 14
 From `w5p1-invariants.py` (scope from W5.1's own commits; net shapes against the base, or the last merge of main):
 
 ```text
-base 162c91491476, ref 162c91491476, tip f4a3839c17c3, 60 W5.1 commits, 0 merges of main
-PASS subjects      60 first-parent commits since the base; subjects not ending (docs W5.1) or (docs W5.1 review): none
+base 162c91491476, ref 162c91491476, tip 03844f251ff0, 90 W5.1 commits, 0 merges of main
+PASS subjects      90 first-parent commits since the base; subjects not ending (docs W5.1), (docs W5.1 review) or (docs W5.1 review 439): none
 PASS scope         75 files touched by W5.1 commits (this plan among them: True); outside the scope: none; scope files untouched: none
 PASS untouched     server/src/, agent/, ccd/, deploy/, README.md, CLAUDE.md, chat.css, Sheet.tsx, index.html, sw-denylist.ts, docs-parity.test.ts changed vs ref: none
 PASS frozen        56 golden files; golden files, the corpus, the golden test and message-links changed by a W5.1 commit: none; net vs ref: unchanged
@@ -22988,7 +22988,7 @@ PASS ci            .github/workflows/ci.yml vs ref: job 1, needs 1, results 1, c
 PASS w4-plan       docs/superpowers/plans/2026-10-09-native-docs-reader-w4-pwa-foundation.md: 7 row `red` line(s) re-measured in place; other hunks: none
 PASS stylesheets   pwa/**/*.css: 6 at ref, 7 at the tip, added ['pwa/src/docs/docs.css'], removed none
 PASS spellings     pwa/src: no navigator.share(, react-dom/server, ?inline, <iframe or srcDoc; createObjectURL/new Blob under docs and lib/markdown* only in ['pwa/src/docs/objectUrls.ts']; postMessage or a message listener under docs: none
-PASS deviations    ## Deviations found x1 outside fences; defined ['D-<n>', 'D-<n>', 'D-<n>', 'D-<n>', 'D-<n>', 'D-<n>', 'D-<n>', 'D-<n>'] (issued 4917-4932; the first 8 expected in order); malformed definition lines: 0
+PASS deviations    ## Deviations found x1 outside fences; defined ['D-<n>', 'D-<n>', 'D-<n>', 'D-<n>', 'D-<n>', 'D-<n>', 'D-<n>', 'D-<n>', 'D-<n>', 'D-<n>', 'D-<n>'] (issued 4917-4932; the first 11 expected in order); malformed definition lines: 0
 PASS no-d-number   D-<n> tokens new in W5.1 files: none; in this plan outside ## Deviations found: none
 17 invariants, 17 PASS
 ```
@@ -22998,11 +22998,11 @@ PASS no-d-number   D-<n> tokens new in W5.1 files: none; in this plan outside ##
 From `w5p1-gate.py`, on `git archive` copies of the base and the tip built for production:
 
 ```text
-PASS measured-at     the tip copy is HEAD f4a3839c17c3; HEAD is f4a3839c17c3
+PASS measured-at     the tip copy is HEAD 03844f251ff0; HEAD is 03844f251ff0
 PASS builds          npm run build rc: base 0, tip 0
 PASS worker-chunk    markdownWorker chunks: tip ['assets/markdownWorker-DftuN5no.js'], named [1] time(s) in sw.js; base ['assets/markdownWorker-DdJLW5_N.js']
 PASS one-denylist    denylist:[ in sw.js: tip 1, base 1
-PASS precache        17 entries at the base, 17 at the tip; added none; removed none (no lazy chunk); index js 1370890 -> 1464596 bytes (+93706), index css 141516 -> 150634 bytes (+9118)
+PASS precache        17 entries at the base, 17 at the tip; added none; removed none (no lazy chunk); index js 1370890 -> 1466804 bytes (+95914), index css 141516 -> 150634 bytes (+9118)
 PASS docs-chrome     built index css (1 sheet): tip {"door": 1, "doorActive": 1, "fresh": 3, "docBody": 3}; base {"door": 0, "doorActive": 0, "fresh": 0, "docBody": 0}
 PASS no-test-code    built files naming playwright or the browser harness: none
 PASS built-worker    tip: load ok, document undefined; docs a<br>b {"kind": "tree", "elements": null, "br": 1, "brText": 0}; chat a<br>b {"kind": "tree", "elements": null, "br": 0, "brText": 1}; docs chord flood {"kind": "too-wide", "elements": 25601, "br": 0, "brText": 0}. base: docs a<br>b {"kind": "tree", "elements": null, "br": 0, "brText": 1}; chord flood {"kind": "tree", "elements": null, "br": 0, "brText": 0}
@@ -23011,7 +23011,7 @@ PASS built-worker    tip: load ok, document undefined; docs a<br>b {"kind": "tre
 
 ### Mutation table
 
-Every `W5P1-T<n>-M<k>` row of Tasks 1-13, extracted from this plan (a re-anchored id counts once, at its last occurrence) and run by `mutate.py` in a `git archive` copy of the tree at `f4a3839c17c3`, one row at a time, each file restored byte for byte after its row. No task recorded an equivalent mutant.
+Every `W5P1-T<n>-M<k>` row of Tasks 1-13, extracted from this plan (a re-anchored id counts once, at its last occurrence) and run by `mutate.py` in a `git archive` copy of the tree at `03844f251ff0`, one row at a time, each file restored byte for byte after its row. No task recorded an equivalent mutant.
 
 | Row | Task | File | Result | First red case (measured) |
 |---|---|---|---|---|
@@ -23061,7 +23061,7 @@ Every `W5P1-T<n>-M<k>` row of Tasks 1-13, extracted from this plan (a re-anchore
 | W5P1-T2-M29 | T2 | `pwa/src/docs/DocsFailureView.tsx` | red | a manual word and an auto word offer Retry; a none word, a stale lock and a missing handler do not |
 | W5P1-T2-M30 | T2 | `pwa/src/docs/DocsFailureView.tsx` | red | Fetch from origin is unresolved-ref's alone |
 | W5P1-T2-M31 | T2 (re-anchored in T13) | `pwa/src/docs/DocsFailureView.tsx` | red | unresolved-ref shows what was tried, the suggestion as a link, the tag hint and Fetch from origin |
-| W5P1-T2-M32 | T2 | `pwa/src/docs/DocsFailureView.tsx` | red | unresolved-ref shows what was tried, the suggestion as a link, the tag hint and Fetch from origin |
+| W5P1-T2-M32 | T2 (re-anchored in T13) | `pwa/src/docs/DocsFailureView.tsx` | red | unresolved-ref shows what was tried, the suggestion as a link, the tag hint and Fetch from origin |
 | W5P1-T2-M33 | T2 | `pwa/src/docs/DocsFailureView.tsx` | red | unresolved-ref shows what was tried, the suggestion as a link, the tag hint and Fetch from origin |
 | W5P1-T2-M34 | T2 | `pwa/src/docs/DocsFailureView.tsx` | red | ambiguous-worktree lists its candidates |
 | W5P1-T2-M35 | T2 | `pwa/src/docs/DocsFailureView.tsx` | red | not-a-file renders the kind's text |
@@ -23152,18 +23152,18 @@ Every `W5P1-T<n>-M<k>` row of Tasks 1-13, extracted from this plan (a re-anchore
 | W5P1-T5-M34 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a committed leaf whose blob is unchanged after the branch moves is not read again, and reports the new pin |
 | W5P1-T5-M35 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a manual Retry at 1 s settles the read; the 5 s timer then drops nothing and reads nothing |
 | W5P1-T5-M36 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a tap at 1 s on the soon chip settles the refresh; the 4 s timer then POSTs nothing |
-| W5P1-T5-M37 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | an older GET that lands after a newer POST answer does not replace the slot or move the leaf back |
-| W5P1-T5-M38 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | an older GET that lands after a newer POST answer does not replace the slot or move the leaf back |
-| W5P1-T5-M39 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | an older GET that lands after a newer POST answer still releases the reads waiting on a listing |
-| W5P1-T5-M40 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | an older GET that lands after a newer POST answer does not replace the slot or move the leaf back |
+| W5P1-T5-M37 | T5 (re-anchored in T13) | `pwa/src/docs/useDocsVisit.ts` | red | an older GET that lands after a newer POST answer does not replace the slot or move the leaf back |
+| W5P1-T5-M38 | T5 (re-anchored in T13) | `pwa/src/docs/useDocsVisit.ts` | red | an older GET that lands after a newer POST answer does not replace the slot or move the leaf back |
+| W5P1-T5-M39 | T5 (re-anchored in T13) | `pwa/src/docs/useDocsVisit.ts` | red | a GET in flight as the re-list word lands, older than a POST answer, is dropped and a fresh GET is made |
+| W5P1-T5-M40 | T5 (re-anchored in T13) | `pwa/src/docs/useDocsVisit.ts` | red | an older GET that lands after a newer POST answer does not replace the slot or move the leaf back |
 | W5P1-T5-M41 | T5 (re-anchored in T13) | `pwa/src/docs/useDocsVisit.ts` | red | a tree retry set for a page the user then left makes no GET |
 | W5P1-T5-M42 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a refresh retry set for a page the user then left makes no POST |
 | W5P1-T5-M43 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | drops that read's entry, so showing the screen again reads once more instead of loading for ever |
 | W5P1-T5-M44 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a slot that goes ok again after a sign-in is not auto-refreshed again: one POST per key per open |
-| W5P1-T5-M45 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a draft leaf whose fingerprint changes under the same holder HEAD reads the new draft but names no commit |
+| W5P1-T5-M45 | T5 (re-anchored in T13) | `pwa/src/docs/useDocsVisit.ts` | red | a changed blob is read at the new pin, the old body stays until it answers, then updatedTo names the commit |
 | W5P1-T5-M46 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a tree loader that rejects does not pin its key: Retry makes the next GET |
 | W5P1-T5-M47 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | a refresh loader that rejects does not pin its key: a tap makes the next POST |
-| W5P1-T5-M48 | T5 (re-anchored in T13) | `pwa/src/docs/useDocsVisit.ts` | red | a GET that starts after the POST began and lands before it does not stop the POST's newer tree from landing |
+| W5P1-T5-M48 | T5 (re-anchored in T13) | `pwa/src/docs/useDocsVisit.ts` | red | a GET that starts after a POST began and lands after its answer does not replace the POST's newer tree |
 | W5P1-T5-M49 | T5 | `pwa/src/docs/useDocsVisit.ts` | red | drops the loading slot, so showing the screen again lists again instead of loading for ever |
 | W5P1-T6-M1 | T6 | `pwa/src/docs/docsLinks.ts` | red | moves every html-url-attributes key out of the copy, on any tag, into the map, and keeps every other property |
 | W5P1-T6-M2 | T6 | `pwa/src/docs/docsLinks.ts` | red | returns a copy and never writes its input: a deep-frozen tree detaches, and its JSON is unchanged |
@@ -23315,7 +23315,7 @@ Every `W5P1-T<n>-M<k>` row of Tasks 1-13, extracted from this plan (a re-anchore
 | W5P1-T10-M2 | T10 (re-anchored in T13) | `pwa/src/docs/docsText.ts` | red | /docs/demo shows the served ref, the 8-hex commit, how it was chosen and the chip |
 | W5P1-T10-M3 | T10 | `pwa/src/docs/DocsHead.tsx` | red | /docs/demo shows the served ref, the 8-hex commit, how it was chosen and the chip |
 | W5P1-T10-M4 | T10 | `pwa/src/docs/DocsHead.tsx` | red | /docs/demo shows the served ref, the 8-hex commit, how it was chosen and the chip |
-| W5P1-T10-M5 | T10 | `pwa/src/docs/DocsHead.tsx` | red | via qualified (local served) with relation diverged and counts { ahead: 2, behind: 3 }: the via sentence (exactly the ref you asked for), then the relation (loc |
+| W5P1-T10-M5 | T10 (re-anchored in T13) | `pwa/src/docs/DocsHead.tsx` | red | via qualified (local served) with relation diverged and counts { ahead: 2, behind: 3 }: the via sentence (exactly the ref you asked for), then the relation (loc |
 | W5P1-T10-M6 | T10 | `pwa/src/docs/DocsHead.tsx` | red | a dangling origin/HEAD in tried[0] adds its sentence |
 | W5P1-T10-M7 | T10 | `pwa/src/docs/DocsHead.tsx` | red | no origin |
 | W5P1-T10-M8 | T10 | `pwa/src/docs/DocsHead.tsx` | red | fetched, aged by now - receivedAt |
@@ -23365,13 +23365,13 @@ Every `W5P1-T<n>-M<k>` row of Tasks 1-13, extracted from this plan (a re-anchore
 | W5P1-T10-M52 | T10 | `pwa/src/screens/DocsScreen.tsx` | red | a fetch failure changes only the chip: the listing node is the same node |
 | W5P1-T10-M53 | T10 | `pwa/src/screens/DocsScreen.tsx` | red | a holder on local main with 3 dirty docs: zero draft rows, and a hint (n = 3) linking ?ref=refs/heads/main |
 | W5P1-T10-M54 | T10 | `pwa/src/docs/share.ts` | red | copyText writes through the clipboard, and rejects when there is none |
-| W5P1-T10-M55 | T10 | `pwa/src/docs/DocsHead.tsx` | red | an answered fetch-too-soon is the soon state, counted from its own retryAfterMs and answer time (no auto-retry) |
-| W5P1-T10-M56 | T10 | `pwa/src/docs/DocsHead.tsx` | red | an answered fetch-too-soon is the soon state, counted from its own retryAfterMs and answer time (no auto-retry) |
-| W5P1-T10-M57 | T10 | `pwa/src/docs/DocsHead.tsx` | red | an answered fetch-too-soon is the soon state, counted from its own retryAfterMs and answer time (no auto-retry) |
-| W5P1-T10-M58 | T10 | `pwa/src/docs/DocsHead.tsx` | red | an answered fetch-too-soon is the soon state, counted from its own retryAfterMs and answer time (no auto-retry) |
+| W5P1-T10-M55 | T10 (re-anchored in T13) | `pwa/src/docs/DocsHead.tsx` | red | an answered fetch-too-soon is the soon state until its own retryAfterMs, from the answer time, has passed (no auto-retry) |
+| W5P1-T10-M56 | T10 (re-anchored in T13) | `pwa/src/docs/DocsHead.tsx` | red | an answered fetch-too-soon is the soon state until its own retryAfterMs, from the answer time, has passed (no auto-retry) |
+| W5P1-T10-M57 | T10 (re-anchored in T13) | `pwa/src/docs/DocsHead.tsx` | red | an answered fetch-too-soon is the soon state until its own retryAfterMs, from the answer time, has passed (no auto-retry) |
+| W5P1-T10-M58 | T10 (re-anchored in T13) | `pwa/src/docs/DocsHead.tsx` | red | an answered fetch-too-soon is the soon state until its own retryAfterMs, from the answer time, has passed (no auto-retry) |
 | W5P1-T10-M59 | T10 | `pwa/src/docs/DocsHead.tsx` | red | remote branch absent, answered this visit |
-| W5P1-T10-M60 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | an answer that names no commit falls back to the committed pin's own commit, never the tree's |
-| W5P1-T10-M61 | T10 | `pwa/src/docs/DocsBanners.tsx` | red | not-contained warns, naming the short commit the page read and the served ref, with Re-list |
+| W5P1-T10-M60 | T10 (re-anchored in T13) | `pwa/src/docs/DocsBanners.tsx` | red | an answer that names no commit falls back to the committed pin's own commit, never the tree's |
+| W5P1-T10-M61 | T10 (re-anchored in T13) | `pwa/src/docs/DocsBanners.tsx` | red | not-contained warns, naming the short commit the page read and the served ref, with Re-list |
 | W5P1-T10-M62 | T10 | `pwa/src/docs/DocsHead.tsx` | red | a draft leaf (the served ref equal to origin): link and note |
 | W5P1-T10-M63 | T10 | `pwa/src/docs/DocsHead.tsx` | red | /docs/demo/specs/d/x.md links https://github.com/example-org/example-repo/blob/main/docs/superpowers/specs/d/x.md and opens it with openExternal on tap |
 | W5P1-T10-M64 | T10 | `pwa/src/docs/DocsHead.tsx` | red | /docs/demo links https://github.com/example-org/example-repo/tree/main and opens it with openExternal on tap |
@@ -23431,8 +23431,8 @@ Every `W5P1-T<n>-M<k>` row of Tasks 1-13, extracted from this plan (a re-anchore
 | W5P1-T12-M15 | T12 | `.github/workflows/ci.yml` | red | every job declares a timeout-minutes, and one that is still a deadline |
 | W5P1-T12-M16 | T12 | `.github/workflows/ci.yml` | red | is one job, `browser-pwa`, named `browser (pwa)`, on ubuntu-latest with a 15-minute deadline |
 | W5P1-T12-M17 | T12 (re-anchored in T13) | `shared/docs.ts` | red | pages on B (same site) and C (another site) <img> a docs raster: naturalWidth 0 on both, though the request arrives |
-| W5P1-T12-M18 | T12 | `shared/docs.ts` | red | B's <script src> of a JSON docs response does not execute, with every header and with nosniff alone; the request arrives |
-| W5P1-T12-M19 | T12 | `pwa/src/docs/DocImage.tsx` | red | the page on A draws the SVG; no script runs (no marker request, no console line) and no request leaves the page |
+| W5P1-T12-M18 | T12 (re-anchored in T13) | `shared/docs.ts` | red | B's <script src> of a JSON docs response does not execute, with every header and with nosniff alone; the request arrives |
+| W5P1-T12-M19 | T12 (re-anchored in T13) | `pwa/src/docs/DocImage.tsx` | red | the page on A draws the SVG; no script runs (no marker request, no console line) and no request leaves the page |
 | W5P1-T12-M20 | T12 (re-anchored in T13) | `pwa/browser/docs-headers.browser.test.ts` | red | the page on A draws the SVG; no script runs (no marker request, no console line) and no request leaves the page |
 | W5P1-T12-M21 | T12 | `shared/docs.ts` | red | pages on B (same site) and C (another site) <img> a docs raster: naturalWidth 0 on both, though the request arrives |
 | W5P1-T12-M22 | T12 | `pwa/browser/docs-headers.browser.test.ts` | red | control: the same SVG as a top-level blob:image/svg+xml runs as A, and its fetch carries A's cookie |
@@ -23449,7 +23449,7 @@ Every `W5P1-T<n>-M<k>` row of Tasks 1-13, extracted from this plan (a re-anchore
 | W5P1-T13-M10 | T13 | `pwa/src/screens/DocsScreen.tsx` | red | docs-busy with retryAfterMs: one more GET after that wait, a second busy answer shows Retry and no third GET |
 | W5P1-T13-M11 | T13 | `pwa/src/screens/DocsScreen.tsx` | red | leaving the screen before the wait ends cancels the retry |
 | W5P1-T13-M12 | T13 | `pwa/src/docs/DocsFailureView.tsx` | red | the button is disabled and the page says fetching while the POST runs, then the fetch failure sentence |
-| W5P1-T13-M13 | T13 | `pwa/src/screens/DocsScreen.tsx` | red | the button is disabled and the page says fetching while the POST runs, then the fetch failure sentence |
+| W5P1-T13-M13 | T13 | `pwa/src/screens/DocsScreen.tsx` | red | timed out only when mutated (unmutated control green): Download saves the bytes as an octet-stream named after the leaf |
 | W5P1-T13-M14 | T13 | `pwa/src/screens/DocsScreen.tsx` | red | the button is disabled and the page says fetching while the POST runs, then the fetch failure sentence |
 | W5P1-T13-M15 | T13 | `pwa/src/docs/DocImage.tsx` | red | a refused external image in an in-app link offers no second action: the tap is the link alone |
 | W5P1-T13-M16 | T13 | `pwa/src/docs/DocImage.tsx` | red | a loaded image in an in-app link: one tap is the link alone, and no button sits inside the anchor |
@@ -23470,16 +23470,46 @@ Every `W5P1-T<n>-M<k>` row of Tasks 1-13, extracted from this plan (a re-anchore
 | W5P1-T13-M31 | T13 | `server/test/single-definition.test.ts` | red | CONTROL: the function pattern sees an async, a default, a declare-d and a generator copy |
 | W5P1-T13-M32 | T13 | `pwa/src/screens/DocsScreen.tsx` | red | navigate('/docs/p?ref=a') then '/docs/p?ref=b': loaders.tree is last called with ('p', bare b) |
 | W5P1-T13-M33 | T13 | `pwa/src/docs/DocMarkdown.tsx` | red | 10 000 nested quotes render DocPlain with the line and the depth |
+| W5P1-T13-M34 | T13 | `pwa/src/lib/markdown.tsx` | red | a ts block of "\n" one unit over the bound is not highlighted and says why (a newline) |
+| W5P1-T13-M35 | T13 | `pwa/src/lib/markdown.tsx` | red | a ts block of "\n" exactly at the bound is highlighted (a newline) |
+| W5P1-T13-M36 | T13 | `pwa/src/lib/markdownLimits.ts` | red | MD_HIGHLIGHT_MAX_BLANK_CHARS is 2048 |
+| W5P1-T13-M37 | T13 | `pwa/src/lib/markdown.tsx` | red | a yaml block of "a a a " lines of exactly the bound is highlighted |
+| W5P1-T13-M38 | T13 | `pwa/src/lib/markdown.tsx` | red | a ts block of "\n" one unit over the bound is not highlighted and says why (a newline) |
+| W5P1-T13-M39 | T13 | `pwa/src/docs/DocsBanners.tsx` | red | an answer read at an older commit than the leaf's pin says nothing |
+| W5P1-T13-M40 | T13 | `pwa/src/docs/useDocsVisit.ts` | red | a leaf whose read hit a 401 shows the body after the sign-in, with one more read |
+| W5P1-T13-M41 | T13 | `pwa/src/docs/docsText.ts` | red | via qualified (local served) with relation diverged and counts { ahead: 2, behind: 3 }: the via sentence (exactly the ref you asked for), then the relation (loc |
+| W5P1-T13-M42 | T13 | `pwa/src/docs/docsText.ts` | red | diverged with origin served and counts { ahead: 3, behind: 2 } reads local and origin have diverged (2 vs 3), showing origin's |
+| W5P1-T13-M43 | T13 | `pwa/src/docs/docsText.ts` | red | every failure word reads without a ? whichever of its optional fields the answer omits |
+| W5P1-T13-M44 | T13 | `pwa/src/docs/docsText.ts` | red | every failure word reads without a ? whichever of its optional fields the answer omits |
+| W5P1-T13-M45 | T13 | `pwa/src/docs/docsText.ts` | red | an unmeasured count stays out of the sentence on either side |
+| W5P1-T13-M46 | T13 | `pwa/src/docs/docsText.ts` | red | diverged with local served and both counts null (timeout) reads "local and origin have diverged, showing local" |
+| W5P1-T13-M47 | T13 | `pwa/src/docs/DocsHead.tsx` | red | a second fetch-too-soon, the one automatic retry spent, counts down to the stamp and never reads 0s |
+| W5P1-T13-M48 | T13 | `pwa/src/docs/DocsHead.tsx` | red | after the stamp shows, no timer is left running and further time schedules none |
+| W5P1-T13-M49 | T13 | `pwa/src/docs/DocsFailureView.tsx` | red | a plain click is prevented and moves the location in place, with no document load |
+| W5P1-T13-M50 | T13 | `pwa/src/docs/useDocsVisit.ts` | red | a GET in flight as the re-list word lands, older than a POST answer, is dropped and a fresh GET is made |
+| W5P1-T13-M51 | T13 | `pwa/src/docs/useDocsVisit.ts` | red | a GET already in flight as the re-list word lands does not count as the re-list: a fresh GET is made and releases the read |
+| W5P1-T13-M52 | T13 | `pwa/src/docs/useDocsVisit.ts` | red | a POST that began before the word answers with the old tree: the read keeps waiting, and the GET that starts after the word releases it |
+| W5P1-T13-M53 | T13 | `pwa/src/docs/useDocsVisit.ts` | red | docs-busy as the tree of a refresh, with no listing held, re-GETs the tree once at its wait, then offers only Retry |
+| W5P1-T13-M54 | T13 | `pwa/src/docs/useDocsVisit.ts` | red | a re-list that failed while a listing was held reads idle again after the next good GET |
+| W5P1-T13-M55 | T13 | `pwa/src/docs/useDocsVisit.ts` | red | a read aborted by a cleanup that rejects as fetch does is swallowed: no failure slot, no console error, no rejection |
+| W5P1-T13-M56 | T13 | `pwa/src/docs/useDocsVisit.ts` | red | Retry on a leaf that is ok starts no read |
+| W5P1-T13-M57 | T13 | `pwa/src/docs/useDocsVisit.ts` | red | Retry on a leaf that is still loading starts no second read |
+| W5P1-T13-M58 | T13 | `pwa/src/screens/DocsScreen.tsx` | red | is honoured once on the owner's page, and a later in-app visit to the page does not honour it again |
+| W5P1-T13-M59 | T13 | `.github/workflows/ci.yml` | red | has no continue-on-error (job or step), no shell override on any step, and no job or workflow defaults |
+| W5P1-T13-M60 | T13 | `.github/workflows/ci.yml` | red | has no continue-on-error (job or step), no shell override on any step, and no job or workflow defaults |
+| W5P1-T13-M61 | T13 | `.github/workflows/ci.yml` | red | has no continue-on-error (job or step), no shell override on any step, and no job or workflow defaults |
+| W5P1-T13-M62 | T13 | `.github/workflows/ci.yml` | red | has no continue-on-error (job or step), no shell override on any step, and no job or workflow defaults |
 
-455 rows; 455 measured as expected.
+484 rows; 484 measured as expected.
 
-### The four bounds
+### The five bounds
 
 - **r10**: `MD_HIGHLIGHT_MAX_WORD_CHARS` = 256; no highlighting for a block holding a word (a run of `[A-Za-z0-9_$]` or of any UTF-16 code unit from 0x7f up: the wider class is a departure from refinement (e)'s first reading, recorded in `## Deviations found`, because highlight.js's PHP grammar takes `\x7f-\xff` as identifier characters and a 64 KiB `php` fence of `_é` repeated cost 38 s while the narrow class scored it 1) longer than this, labelled with the word's length (refinement (e)). Basis: at 256 a block's worst case costs what ordinary code of the same size does, so `DOCS_HIGHLIGHT_PAGE_MAX_CHARS` keeps bounding the page (planning: one `typescript` identifier run cost 21, 11, 146 and 2 291 ms at 256, 1 024, 4 096 and 16 384 characters; 64 KiB of 256-character runs 131 ms against 139 ms of ordinary code). Rows: W5P1-T3-M1 red, W5P1-T3-M2 red, W5P1-T3-M3 red, W5P1-T3-M4 red, W5P1-T3-M13 red, W5P1-T3-M15 red.
 - **r11**: `MD_KEYSTROKE_MAX_CHARS` = 64; a code span longer than this is never a chord: `keystrokeParts` answers null before it trims or splits (refinement (f)), which also caps one span at 32 parts. Basis: the longest chord named keys make is about 40 characters, and at 64 the split costs under 0.1 ms (planning: 0.09, 0.84, 16, 396 and 3 854 ms for a span of `a`, L spaces and `b` at L = 64, 1 024, 4 096, 16 384 and 40 000). Rows: W5P1-T3-M5 red, W5P1-T3-M6 red, W5P1-T3-M7 red, W5P1-T3-M12 red, W5P1-T3-M14 red.
 - **2-2**: `DOCS_MAX_RENDER_ELEMENTS` = 20000; the parse's own element count adds, for every inline `code` not under `pre`, exactly what the chip component draws (2N-1 for a chord of N parts), so `too-wide` fires before anything renders, in the worker, for every profile (refinements (d) and (g)). Basis: Task 3 Step 0 measured the exact count moving no real document under `docs/superpowers` across the limit. Rows: W5P1-T3-M8 red, W5P1-T3-M9 red, W5P1-T3-M10 red, W5P1-T3-M11 red.
-- **line**: `MD_HIGHLIGHT_MAX_LINE_CHARS` = 2048; no highlighting for a registered block that holds a line longer than this (a line ends at a line feed or a carriage return), labelled "{label} · not highlighted (a {n}-character line)": the size cap is checked first, then r10's word scan, then this linear line scan with no regular expression (Task 3's decision 9: a fourth bound beside spec 4.10's three, recorded in `## Deviations found`). Basis: some grammars are quadratic on shapes that are not one long identifier, and that cost grows with line length (a `markdown` fence of one 64 KiB line of `[` about 9.6 s, a `yaml` fence of one 64 KiB line of `a a a ...` 2.8-3.6 s); the bound stops where that growth meets the length-independent plateau of the slowest grammars, and at 2 048 the worst line-driven shape costs 245-263 ms, where 4 096 would cost about twice it. The plateau itself is carried below. Rows: W5P1-T3-M16 red, W5P1-T3-M17 red, W5P1-T3-M18 red, W5P1-T3-M19 red, W5P1-T3-M20 red, W5P1-T3-M21 red.
-- Re-measured here (node v24.14.1, highlight.js 11.11.1, one run each, on this box's load): a 256-character `typescript` identifier highlights in 2.26 ms and a 4 096-character one in 100.9 ms; a span of `a`, 64 spaces and `b` splits in 0.16 ms, and with 16 384 spaces in 268.86 ms. The built worker's 2-2 answer is the gate's `built-worker` line above.
+- **line**: `MD_HIGHLIGHT_MAX_LINE_CHARS` = 2048; no highlighting for a registered block that holds a line longer than this (a line ends at a line feed or a carriage return), labelled "{label} · not highlighted (a {n}-character line)": the size cap is checked first, then r10's word scan, then this linear line scan with no regular expression (Task 3's decision 9: a fourth bound beside spec 4.10's three, recorded in `## Deviations found`). Basis: some grammars are quadratic on shapes that are not one long identifier, and that cost grows with line length (a `markdown` fence of one 64 KiB line of `[` about 9.6 s, a `yaml` fence of one 64 KiB line of `a a a ...` 2.8-3.6 s); the bound stops where that growth meets the length-independent plateau of the slowest grammars, and at 2 048 the worst line-driven shape costs 245-263 ms, where 4 096 would cost about twice it. Its sweep put one unit on each line; whitespace that spans lines is the fifth bound's shape. The plateau itself is carried below. Rows: W5P1-T3-M16 red, W5P1-T3-M17 red, W5P1-T3-M18 red, W5P1-T3-M19 red, W5P1-T3-M20 red, W5P1-T3-M21 red.
+- **blank**: `MD_HIGHLIGHT_MAX_BLANK_CHARS` = 2048; no highlighting for a registered block whose longest run of blank code units (ECMAScript whitespace, a run that crosses line breaks) is longer than this, labelled "{label} · not highlighted (a {n}-character run of whitespace)": checked after the size, word and line bounds, by one linear scan with no regular expression (review 439 F1, a fifth bound, recorded in `## Deviations found`). Basis: `typescript` and `javascript` cost highlight.js the square of a blank run that holds a line terminator (64 KiB of `\n` about 5-6 s; about 40 s for a page of eight), which none of the four bounds above caught; a sweep of all 15 grammars over 28 cross-line shapes (pure blank runs, and short units each followed by a line break) found no other grammar or shape that grows. The bound stops where that growth meets the length-independent plateau: at 2 048 the worst run that reaches it (U+2028 alternated with `\n`; a longer run of U+2028 alone is r10's) costs 209-333 ms against a plateau of 230-290 ms re-measured the same day, where 4 096 would cost about twice it; the longest blank run in a real fence is 104. Rows: W5P1-T13-M34 red, W5P1-T13-M35 red, W5P1-T13-M36 red, W5P1-T13-M37 red, W5P1-T13-M38 red.
+- Re-measured here (node v24.14.1, highlight.js 11.11.1, one run each, on this box's load): a 256-character `typescript` identifier highlights in 2.31 ms and a 4 096-character one in 132.45 ms; a span of `a`, 64 spaces and `b` splits in 0.1 ms, and with 16 384 spaces in 350.68 ms. The built worker's 2-2 answer is the gate's `built-worker` line above.
 
 ### Merge gate
 
@@ -23503,7 +23533,7 @@ M4.P12's mutation "count only after render" is row W5P1-T8-M8 (the parse's too-w
 
 ### For part 2: the seams part 1 hands over
 
-- pinFor: `export function pinFor`, at `pwa/src/docs/useDocsVisit.ts:93`.
+- pinFor: `export function pinFor`, at `pwa/src/docs/useDocsVisit.ts:96`.
 - imagePinFor: `export function imagePinFor`, at `pwa/src/docs/docsLinks.ts:226`.
 - detachUrls (a copy; DocMarkdown's memo per outcome): `export function detachUrls`, at `pwa/src/docs/docsLinks.ts:80`.
 - DocMarkdown's detach memo: `const detached = useMemo(() => detachUrls`, at `pwa/src/docs/DocMarkdown.tsx:148`.
@@ -23511,12 +23541,13 @@ M4.P12's mutation "count only after render" is row W5P1-T8-M8 (the parse's too-w
 - saveBytes: `export function saveBytes`, at `pwa/src/docs/objectUrls.ts:33`.
 - docs-scans.test.ts (part 2 adds M4.SH7, M4.EX2, M4.EX11, M4.EX16): `describe("clause 1: no Docs file reads a draft's state`, at `pwa/test/docs-scans.test.ts:102`.
 - the browser harness (M5.B9 runs on it): `export async function startOrigins`, at `pwa/browser/harness.ts:87`.
+- **A body kept across a same-blob commit move (review 439 F3, recorded in `## Deviations found`):** a Re-list that moves the tree to a new commit while a committed leaf's blob is unchanged keeps the body read at the old commit (spec 4.3 item 2), and the banner and the truth line describe the new pin. M4.EX12's three-way equality (provenance commit = pin commit = answer commit) does not hold for such a body. Part 2's Share must take the pin's commit as provenance for it (same blob), or re-read before it enables.
 
 ### Measured values
 
 - Grammars registered in `pwa/src/lib/markdown.tsx`: 15 (bash, typescript, javascript, json, python, css, xml, yaml, markdown, diff, sql, dockerfile, rust, go, php).
 - Golden files under `pwa/test/golden/markdown`: 56, unchanged by every W5.1 commit (the `frozen` invariant).
-- Constants `pwa/src/lib/markdownLimits.ts` declares: 14 (MD_MAX_CONTAINER_DEPTH, MD_MAX_DELIMITER_RUN, MD_MAX_TREE_DEPTH, DOCS_MAX_RENDER_ELEMENTS, MD_HIGHLIGHT_BLOCK_MAX_CHARS, DOCS_HIGHLIGHT_PAGE_MAX_CHARS, DOCS_PARSE_BUDGET_MS, DOCS_PARSE_BUDGET_LARGE_MS, DOCS_RENDER_GATE_BYTES, CHAT_SYNC_MAX_BYTES, CHAT_PARSE_BUDGET_MS, MD_HIGHLIGHT_MAX_WORD_CHARS, MD_HIGHLIGHT_MAX_LINE_CHARS, MD_KEYSTROKE_MAX_CHARS).
+- Constants `pwa/src/lib/markdownLimits.ts` declares: 15 (MD_MAX_CONTAINER_DEPTH, MD_MAX_DELIMITER_RUN, MD_MAX_TREE_DEPTH, DOCS_MAX_RENDER_ELEMENTS, MD_HIGHLIGHT_BLOCK_MAX_CHARS, DOCS_HIGHLIGHT_PAGE_MAX_CHARS, DOCS_PARSE_BUDGET_MS, DOCS_PARSE_BUDGET_LARGE_MS, DOCS_RENDER_GATE_BYTES, CHAT_SYNC_MAX_BYTES, CHAT_PARSE_BUDGET_MS, MD_HIGHLIGHT_MAX_WORD_CHARS, MD_HIGHLIGHT_MAX_LINE_CHARS, MD_HIGHLIGHT_MAX_BLANK_CHARS, MD_KEYSTROKE_MAX_CHARS).
 
 ### Notes
 
@@ -23530,6 +23561,12 @@ M4.P12's mutation "count only after render" is row W5P1-T8-M8 (the parse's too-w
 - Carried (spec-literal): "Back to the draft" shows on a typed `view=committed` URL whose draft no longer exists.
 - Carried: the SVG and html-stand-in leaf bodies are still keyed by the commit-bearing pin, so a commit move resets the SVG Source toggle (Task 13's 3-3 fixed the Markdown body only).
 - Carried: the failure view's fetch note (`.docs-fail-fresh`, Task 13 review 3-2) has no rule of its own in docs.css; it inherits the failure view's text colour (contrast and tap-target suites green).
+- **Fix round 1 (review 439, the coordinator's rulings by mail 4807).** Each finding, as ruled: F1 fixed (the whitespace bound, a fifth bound, recorded in `## Deviations found`; `b54180624`, `5ca3efb77`, and the two page-budget fixtures `5ca3efb77` and `03844f251` that filled their blocks with spaces); F2 fixed (the line bound's basis comment, Task 3's decision 9, its deviation entry and the Carried plateau now state what the five bounds leave, the plateau re-measured); F3 fixed (the not-contained banner describes the pin, recorded in `## Deviations found`; `95032db0a`; part 2's cost under the seams); F4 fixed (every move of the pin to a new file key gets "Updated to", a draft's naming its holder HEAD; `cd1e1a3ca`, `d2aefc06b`, `34c4cb6e1`); F5 fixed (`ef2e85749`); F6 fixed (the diverged sentence names the side served, recorded in `## Deviations found`; `899f56c3d`); F7 and F8 fixed (no `?` reaches a page: a fallback for every absent field, the truth line's counted relations included; `fa976096c`, `8c256497d`, `d2639bf19`); F9 fixed (the chip falls back to the stamp once its wait has passed, its last tick pinned; `920b700e3`, `58672c5a3`, `c31898573`, `7d0fc4b01`); F10 fixed (`4e732c48a`); F11 fixed (text, `638a82408`); F12 comments fixed and the nested Load button carried (`e6968927d`); F13 fixed (`b54180624`, `5ca3efb77`); F14 fixed (`e6968927d`); F15, F16 and F17 fixed (text, `638a82408`); F18 fixed (`c18cf30a7`); F19 fixed and extended within its ruling's words (the automatic re-list is a GET that starts after the word: a GET dropped as stale, a GET already in flight, and a refresh answer each release no waiting read; `2efc3180c`, `64e6fcc35`, `34c4cb6e1`); F20 fixed (`adf7763c0`); F21 fixed (the dead branch deleted, `9a343efcb`; W5P1-T5-M48, which it had left green, red again through `0f20125c0`'s case); F22 fixed (`5f783426b`); F23 fixed (`8cac1658e`); F24 carried; F25 fixed (`c31898573`); F26 fixed (`c3358bb09`); F27 fixed (W5P1-T12-M18, W5P1-T12-M19 and W5P1-T10-M5 re-measured, their `red` re-taken); F28 fixed (text, `638a82408`). Each fix had an Opus task review; three of its follow-ups (the too-large cap-only sentence, the count-free relation sentences, F9's last tick; M48's case, the in-flight GET, the refresh release) are commits of their own.
+- Fix round 1's rows: W5P1-T13-M34 to W5P1-T13-M62 (29 new) and 22 earlier rows re-anchored or re-measured, in Task 13's block. Three rows the visit's F19 agent first wrote were dropped before the plan took them: on the final code, `listTree` made unconditional, the waiter test ignoring `relistAfter`, and the waiter test inverted each make an unbounded GET loop that crashes the test worker rather than failing a case; W5P1-T13-M51 (the comparison) and the M39 cases cover what those sites feed.
+- New or changed user-visible sentences in fix round 1 (for the coordinator's review): the diverged sentence with origin served, "local and origin have diverged ({ahead} vs {behind}), showing origin's"; the count-free relations "local is ahead of origin", "origin is ahead of local", "local and origin have diverged, showing local" and "…, showing origin's"; the failure fallbacks for an absent field: "There is no project by that name under the fleet box's projects folder.", "{ref} names something that is not a commit.", "That ref names a {type}, not a commit.", "That ref does not name a commit.", "The fleet box's answer for this file was larger than it sends (at most {cap}).", "This file is {size}, over the limit for files of this kind.", "This file is larger than Docs shows files of this kind.", "This repository has more entries than Docs lists at once.", "That path could not be read on the fleet box.", "The worktree holding this draft failed the ownership check.", "A git command failed on the fleet box.", "The fleet box's ccd was stopped before it answered.", "The fleet box's ccd failed; its exit code was not measured.", "The fleet box's answer could not be read.", "The fleet box answered a failure this server does not know.", "These bytes are not the kind of image the file declares."; the image refusal `malformed`, now "its source is not a well-formed URL (it may hold a space, a control character or a backslash)"; and the code-block label "{label} · not highlighted (a {n}-character run of whitespace)".
+- Fix round 1's first full run of the suites (a discovery run, before `03844f251`) was red in shard 2, `docs-highlight-budget.test.tsx` (the fixture the whitespace bound now refuses, fixed by `03844f251`), and in shard 3 on two load flakes at load average about 34 (`contrast.test.ts`'s pseudo-element case and `docs-screen.test.tsx`'s "a fragment the linked page does not hold…", a 5 s timeout), both green alone; the table above is the clean run at the tip. The wave's `suite:` word stays the wave's first complete run (green, at 1abcf03b7). From fix round 1 on, the PWA shards run with `--maxWorkers=4` and every heavy command in a memory-capped scope: the session's pane was killed by the out-of-memory killer four times in this round (three agents at once, then the box's session slice full).
+- Invariant 'subjects' widened in the scratch tool to admit '(docs W5.1 review 439)', the suffix the coordinator's fix-round ruling (mail 4807) orders.
+- Fix round 1's mutation table ran at load average 50-105 on 16 cores, so its rows were spread over four `git archive` copies of the same tip (`03844f251`), each in its own memory-capped scope, and merged one record per row (an ok record wins over a timed-out one): 308, 85, 40 and 51 rows. Two rows needed a second pass: W5P1-T2-M49 (its control ran out of time in a call) and W5P1-T12-M18 (the browser leg's `beforeAll` timed out under load); both red on it. The copy that took the 308 is the one `final` restored and re-ran green.
 
 ### Carried, not fixed
 
@@ -23538,9 +23575,12 @@ M4.P12's mutation "count only after render" is row W5P1-T8-M8 (the parse's too-w
 - Task 13 review R3 (pwa/src/lib/markdownParse.ts): nesting continued by indentation, and review 1-4, nest the parser deeply. CARRIED: covered by `threw`, `MD_MAX_TREE_DEPTH` and the worker budget (W4's carried items); Task 14's Carried lists them. Cost: such a document is refused (threw, too deep, or the budget) and shown as plain text with its note, never a crash.
 - Task 13 review R4 ((ccd, outside part 1)): fetch stamps accumulate per branch (SEC-4), and no stamp follows a failed post-fetch for-each-ref. CARRIED: ccd behaviour outside part 1's box (PWA + L0), recommended for W5b, which restamps `ccd/ccd`; part 1 renders what ccd writes. Cost: the fetch-stamp directory grows by one file per fetched branch, and after a failed for-each-ref the chip keeps the previous stamp's age.
 - Review 412's residue R2 (`server/test/ccrc-doctor.test.ts`): under another run's claim and outside part 1's files. CARRIED to W7. Cost: none at runtime; one stale test comment until then.
-- The partial-clone `git-failed {step: 'cat-file'}` versus `unknown-commit`, and `too-many-entries`' stripped `bytes`: rendered as their words say (Task 2). Cost: a partial clone missing a blob reads "git failed" rather than "unknown commit", and the too-many sentence names no byte total.
+- The partial-clone `git-failed {step: 'cat-file'}` versus `unknown-commit`, and `too-many-entries`' stripped `bytes`: rendered as their words say (Task 2). Cost: a partial clone missing a blob reads "git failed" rather than "unknown commit", and the too-many sentence names no byte total (review 439 F8 corrected this cost: until fix round 1 the visible cost was a `?` where an absent field stood, "has ? entries", "This file is ?" and "exit code ?"; every failure sentence now has a variant for each absent field).
 - W7 prose residue: `pwa/src/lib/api.ts`'s `absolute()` comment, `server/test/sourceScan.ts`'s header counts, README, CLAUDE.md, N1's docstrings, and the spec text brought into line with refinements (a)-(x). CARRIED to W7. Cost: prose only.
-- The highlighting plateau: about 2.4 s for a crafted page of eight 64 KiB blocks of a length-independent plateau shape such as `javascript` over `(` (about 250-300 ms each), against spec 4.9's 0.25 s for a page; the line bound removes only the cost that grows with line length (Task 3's decision 9). CARRIED to the operator by the coordinator; no code change in part 1. Cost: a crafted page of that shape can hold the main thread for about 2.4 s while it highlights.
+- The highlighting plateau, re-measured after review 439 F1: with the five bounds, no registered grammar's cost grows with a block's word, line or blank-run length past its bound, and what remains is the length-independent plateau, about 230-290 ms for a 64 KiB block of the worst shape on 2026-10-14 (`typescript` 284, `markdown` 270, `yaml` 277, `javascript` 261), so about 2.3 s for a crafted page of eight such blocks, against spec 4.9's 0.25 s for a page. Before F1 the record said the same of the line bound alone, from a sweep of one unit per line that never tried whitespace spanning lines, whose residue (about 40 s a page) was 18 times larger and is now bounded. CARRIED to the operator by the coordinator; no further code change in part 1. Cost: a crafted page of a plateau shape can hold the main thread for about 2.3 s while it highlights.
+- A deferred image (index 30 and on) inside a link renders its Load button inside the anchor (review 439 F12): the tap loads the image and does not follow the link (preventDefault and stopPropagation, pinned), and the comments now say so. No small change takes the control out of the anchor without changing what a tap on the link does or departing from spec 4.11, which describes a standalone image only. Cost: nested interactive content in that one case, for assistive technology.
+- A file entry waiting on an automatic re-list whose answer was dropped while the screen was hidden is not recovered by the effect cleanup, so under `<Activity>` the leaf would stay `loading` (review 439 F24). Not reachable in the shipped app: `app.tsx` mounts DocsScreen with no Activity. CARRIED by ruling. Cost: none today; a later wave that puts DocsScreen under `<Activity>` must recover such an entry.
+- After an answered `fetch-too-soon` whose wait has passed, the chip falls back to the listing's stamp, which is older than the fetch that ccd's floor counted (review 439 F9, the watch-point its task review named). Cost: the chip can read an older "fetched … ago" than the fetch ccd last ran.
 - Part 2 (refinement (a)): Share, Markdown, text and image Export, `ExportAssets`, the settled-outcome context, `lib/markdown.css`, M4.SH1-SH8, M4.EX1-EX16, M5.B9, M4.T7's and M4.S1's amended clauses and M5.17's `downloadExport`. Not built here by design; part 2 is dispatched after this merges. Cost: no Share or Export until then.
 
 ### After the merge, not this wave
