@@ -4,7 +4,7 @@ Spec: `docs/superpowers/specs/2026-09-23-session-continuity-design.md`
 Plans: `docs/superpowers/plans/2026-09-2?-session-continuity-wave<N>-*.md` — each written once the waves it depends on
 have measured what it needs (the table's "depends on" column)
 Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-quiet-river` (assigned by the operator 2026-10-02)   Workspace: **a fresh one per wave**
-Ticket: `CCR-18` (Linear; mirrored as GitHub issue #197) — the coordinator is created from it
+Issue: GitHub #197 - the coordinator is created from it
 Companion programme: `docs/superpowers/programs/landing-order.md`
 
 **What this program is.** A restart — limit rescue, auto-home, manual swap, supervisor revival — is today a place
@@ -23,7 +23,7 @@ the one sanctioned restart. The operator's rulings are the spec's §3 (C1–C14)
 | 2 | 4, rules 2–3 (rule 1 shipped in #207) | the dated row the waits read; the rescue wait near a five-hour reset (600 s) with its own grace; the no-room wait; spread, no-bounce, the chain wait; `$REG/<id>.rescuewait`; the stage-4 instrument rows | **AGENT-FIRST** (ccd) | — | #235 | merged 2026-10-03 (`db44b136`); run 237 closed; deploy via ccrc's updater |
 | 3 | 7 | `$REG/<id>.typed`; the operator's own `/model`/`/effort` promoted to the route record before a stop; the alias table and the `familyClassOf` port with its agreement pin; FIRST, wave 2's residue | **AGENT-FIRST** (ccd) | — | #250 | merged 2026-10-05 (`77f8d63a`); run 248 closed; deploy AGENT-FIRST via ccrc's updater |
 | 4 | 6, first part | the reap-class OOM count in the instrument (its baseline week starts at deploy); `ccd-scope-sweep` with its units, verdict record and doctor reader; the limit-banner harness leak | **AGENT-FIRST** (ccd, deploy, doctor) | wave 3 | #299 | merged 2026-10-06 (`1bb88d5e`); run 274 closed; deploy AGENT-FIRST via ccrc's updater (baseline B starts at deploy); run 274 (`ccrc-pwa-still-river`); plan #288 (`0dad0fdf`); block 4012–4021 + 4088–4093 |
-| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | — | run 308 open (planned; the run's wave 5), block 4316–4325; to plan; FIRST commit: wave 4's residue (review 305 F1(a), the PASS line, I1, …) |
+| 4b | 6, first part | `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment; 3925's `/clear` fix | **AGENT-FIRST** (ccd) | wave 4 plus its one baseline week | — | baseline B complete 2026-10-13: 0 reap-class / 34 pane-scope OOM stops, 5 unmapped and 4 unmeasured; run 308 open (planned; the run's wave 5), block 4316–4325; plan drafted, written review pending; FIRST commit: wave 4's residue (review 305 F1(a), the PASS line, I1, …); scope sweep remains SHADOWED |
 | 5 | 2 | the spike: native exit handoff under ccd; a paused workflow under a blocked parent; `OOMPolicy=continue` on a scratch pane scope | measurement — needs a scratch account from the operator | wave 1 | — | to plan |
 | 6 | 3 | graceful stop; the launch record; the manifest; the composed redrive prompt | **AGENT-FIRST** | waves 1, 5 | — | after wave 5 |
 | 7 | 4, the refusal | non-rescue swaps refuse while delegated work is in flight; `--cut-delegated`; its own 409 | **AGENT-FIRST**, then server | wave 6 | — | after wave 6 |
@@ -81,7 +81,7 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   confirm or reverse** (the plan's open question 4): the hold in place after a reset turned ends `RESCUE_CHAIN_WAIT`
   (30 minutes) past the reset, where the spec held it without end; measured, `main` rescues that input at once. The
   plan's deploy step measures ccrc's own update mechanism and moves nothing by hand (operator ruling 2026-09-30).
-  §11 item 6's four `noroom_…` rows ship in its instrument (CCR-20). The spec records rule 1 as shipped and amends
+  §11 item 6's four `noroom_…` rows ship in its instrument. The spec records rule 1 as shipped and amends
   rules 2–3 to the plan (rev 6). Before the docs PR the plan was replayed onto `main` `5b1c58a8`: every edit applies
   and its suites are green there.
 - **2026-10-02 — the coordinator assigned.** The operator made session `ccrc-pwa-quiet-river` — the planning session
@@ -534,6 +534,27 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
   root and its path under the whole-volume mount share one `dev:inode`, the mount is read-write for the fleet user,
   and no unit has a private mount namespace (verified by the operator at dispatch). Afterwards, stage 1's
   `--stage 1 --json` should show `link_via_mount` rising and no `exdev-*` key in `copy_by_cause`.
+- **2026-10-13 23:17 — baseline B COMPLETE: wave 4b is unblocked for planning; the scope sweep stays SHADOWED.**
+  - The read-only stage-6 instrument measured the promised full week from `2026-10-06 23:16:00 UTC` inclusive to
+    `2026-10-13 23:17:00 UTC` exclusive, with the pressure reap still enabled.
+  - **Pressure-reap baseline:** 34 pane-scope OOM stops; `reap_class: 0`; 22 were busy within the idle window and 3
+    were idle without a live background shell. Five stops were unmapped (3 had no spawn, 2 had two sessions spawned
+    together), and 4 were unmeasured. The per-session reap-class map is empty.
+  - **Scope-sweep shadow reading:** 9 dead scopes; 2 inert scopes; both inert scopes had been dead for at least one
+    day. The instrument's verdict-record mode is `shadow`.
+  - This is baseline B, not evidence to arm a kill path: nothing creates `$REG/scope-sweep-live`. Run 308 may now be
+    planned for the pressure-reap spawn variable, 3925's `/clear` fix and the carried wave-4 residue.
+- **2026-10-14 05:36 — wave 4b's written plan is drafted and self-reviewed; operator review is pending.**
+  - Plan: `docs/superpowers/plans/2026-10-13-session-continuity-wave4b-pressure-reap-and-clear.md`. Tasks 1–4 are
+    the worker's sequential units: FIRST the full wave-4 residue, then the child spawn environment, outgoing
+    operator choice before UUID rotation, and the separate direct pressure-kill instrument. Task 5 belongs to
+    the coordinator: independent acceptance, observation of the existing updater, qualified next-start exposure
+    and weekly follow-through against frozen B.
+  - The parent self-review checked spec coverage, placeholders, interfaces and each Review Focus test owner.
+    All 63 code fences are balanced, the Python fences parse, and the 30 referenced test paths were checked
+    (one test is planned new). The snippets and mutations have not been replayed as a product prototype.
+  - Run 308 remains planned; its issued block is 4316–4325. Written-plan review is still required before
+    implementation or dispatch. No updater intent, restart, sweep marker or repository setting is changed.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 
@@ -588,11 +609,15 @@ alias table) is run 248, dispatched 2026-10-04 22:22 to `ccrc-pwa-still-harbor`,
 - **Its plan's FIRST commit is wave 2's residue**, the list above from review 246: F1, F2, F3, F5, the minors 3–5
   and F6's restated §9 target.
 
-Wave 3 is merged (#250 `77f8d63a`). Wave 4 is run 274 (planned; deviation numbers 4012 to 4021, written bare), and
-it is to plan.
-- **Its FIRST commit is wave 3's residue,** review 272's F1–F11, ruled as above.
-- **Then the reap-class OOM count and the scope sweep.** Wave 4b, the pressure-reap disable, follows.
-- **It also owes** 3925's `/clear` code fix (review 268's F4 design note: read the outgoing transcript at the uuid
-  rotation).
-Both are AGENT-FIRST.
-2026-10-02's reaped runs argue for planning 4b early.
+Wave 3 is merged (#250 `77f8d63a`). Wave 4 is merged (#299 `1bb88d5e`) and deployed. Its full baseline-B week
+is measured above: 0 reap-class among 34 pane-scope OOM stops, with 5 unmapped and 4 unmeasured; the scope-sweep
+record remains `shadow` and `$REG/scope-sweep-live` remains operator-only.
+
+Wave 4b is run 308 (planned; deviation numbers 4316 to 4325, written bare). Its plan is drafted at
+`docs/superpowers/plans/2026-10-13-session-continuity-wave4b-pressure-reap-and-clear.md`; **written-plan review
+is pending before implementation or dispatch**.
+- **Its FIRST commit is wave 4's residue:** review 305 F1(a), the qualified doctor PASS line, I1, `s6_inert`'s
+  staleness, the zombie child, the paused log line, baseline B's non-zero check and the per-task minors.
+- **Then it ships** `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1` in the spawn environment and 3925's `/clear`
+  code fix (review 268's F4 design note: read the outgoing transcript at the uuid rotation).
+- **It remains AGENT-FIRST.** It does not arm the scope sweep or create its live marker.
