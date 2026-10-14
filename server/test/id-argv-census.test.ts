@@ -258,9 +258,10 @@ const GATES = {
     file: 'server.ts', scope: 'POST /api/sessions/:id/swap',
     re: /if \(body\.crossPool === true\) \{\s*if \(!isRegistryId\(id\)\)/,
   },
-  /** The legacy stop pair's two parts, the wrapper and the row's `.project`, are fields no id gate reads. This refuses a row
-   *  whose part is not a registry id, or whose pair is not its id; a workspace row stops by its id, which the callers' id
-   *  gates have vetted. Both of `stopArgvFor`'s callers ask it in their identity arm (pinned in the callers case below). */
+  /** This refuses a legacy row whose stop-pair part is not a registry id, or whose pair is not its id, so the wrapper
+   *  `stopPair` carries is always a prefix of a vetted id (the row's `.wrapper` fallback never reaches it), and the
+   *  project is the row's `.project`, which this vets; a workspace row stops by its id, which the callers' id gates have
+   *  vetted. Both of `stopArgvFor`'s callers ask it in their identity arm (pinned in the callers case below). */
   'stop-pair-refused': {
     file: 'server.ts', scope: 'stopPairRefused',
     re: /if \(rec\.workspace !== null\) return false;\s*const wrapper = stopPairWrapper\(id, rec, identity\);\s*return !isRegistryId\(wrapper\) \|\| !isRegistryId\(rec\.project\) \|\| `\$\{wrapper\}-\$\{rec\.project\}` !== id;/,
@@ -392,10 +393,10 @@ const CENSUS: readonly CensusRow[] = [
   { file: 'server.ts', scope: 'POST /api/sessions/:id/ensure', builder: 'ensure', id: 'id', origin: ['request'], gate: ['ensure-route-head'] },
   // stopArgvFor's two callers gate the id: /stop by readSessionRecord, /archive by knownId (pinned in their own case below).
   { file: 'server.ts', scope: 'stopArgvFor', builder: 'stopId', id: 'id', origin: ['request'], gate: ['readSessionRecord', 'knownId'] },
-  // The wrapper is the request id's own prefix, or the row's `.wrapper` when the id does not end in `-<project>`; the
-  // project is the row's `.project`: fields no id gate reads, so the request-id gates do not guard this slot.
-  // `stopPairRefused` does, asked in each caller's identity arm (the callers case below). The `entry` ties what it vets
-  // (`stopPairWrapper(id, rec, identity)` and `rec.project`) to the two arguments composed here.
+  // The wrapper is a prefix of the vetted request id: `stopPairRefused`'s pair clause refuses every row whose id does
+  // not end in `-<project>`, so the row's `.wrapper` fallback never reaches this builder. The project is the row's
+  // `.project`, which `stopPairRefused` vets, asked in each caller's identity arm (the callers case below). The `entry`
+  // ties what it vets (`stopPairWrapper(id, rec, identity)` and `rec.project`) to the two arguments composed here.
   { file: 'server.ts', scope: 'stopArgvFor', builder: 'stopPair', id: 'originalWrapper', origin: ['request', 'registry'], gate: ['stop-pair-refused'], entry: /\bconst originalWrapper = stopPairWrapper\(id, rec, identity\);\s*return CCD_ARGV\.stopPair\(originalWrapper, rec\.project, surface\);/ },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/swap', builder: 'swapCross', id: 'id', origin: ['request'], gate: ['cross-arm-head'] },
   { file: 'server.ts', scope: 'POST /api/sessions/:id/swap', builder: 'swap', id: 'id', origin: ['request'], gate: ['readSessionRecord'], entry: /\breadSessionRecord\(deps\.io, deps\.cfg, id\)/ },
@@ -499,7 +500,7 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
       'POST /api/sessions/:id/archive',
     ]);
     // The identity arm, which both routes share: `stopPairRefused` (the `stopPair` row's gate) answers 503 with no argv
-    // composed. It guards the pair's wrapper and project, which neither id gate reads.
+    // composed. It vets the row's `.project` and refuses the `.wrapper` fallback, so the wrapper is the vetted id's prefix.
     const IDENTITY_ARM = /if \(identity === null \|\| stopPairRefused\(id, read\.record, identity\)\) \{\s*return reply\.code\(503\)\.send\(\{ ok: false, error: 'registry-unmeasurable' \}\);/;
     const GATES_OF: Readonly<Record<string, readonly (readonly [string, RegExp])[]>> = {
       'POST /api/sessions/:id/stop': [['its id gate', /\breadSessionRecord\(deps\.io, deps\.cfg, id\)/], ['stopPairRefused', IDENTITY_ARM]],

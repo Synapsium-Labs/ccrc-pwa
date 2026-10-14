@@ -70,7 +70,8 @@ export interface ReclaimDeps {
  *                     `restarting` is the arm this file exists to keep.
  *    `unmeasurable` — the registry directory did not list at all; or it listed `<id>.uuid` while the
  *                     row behind it could not be ASSEMBLED (D-1144, the arm below); or the
- *                     re-listing that tells those two apart failed; or tmux did not answer.
+ *                     re-listing that tells those two apart failed; or tmux did not answer; or the
+ *                     id is not a registry id (`bad-id`, answered before any listing).
  *                     Doubt is not evidence, in either direction: the identical line
  *                     `LIFECYCLE_DEAD` draws for its own `unmeasurable` key (shared/api.ts:2108-2110),
  *                     drawn again for the whole ladder. */

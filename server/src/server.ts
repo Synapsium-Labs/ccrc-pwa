@@ -2994,11 +2994,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * never reaches `stopPair`, and the pair it carries is always the id split at its `-<project>` suffix. Refusing it
    * changes no well-formed stop, because an id ending in `-<project>` always equals its pair.
    *
-   * THE PARTS stay checked. `cmd_stop`'s `--surface=*` arm strips a token of that spelling from ANY position, so a
-   * part reading `--surface=<word>` turned the pair into a one-argument stop of the OTHER token, a session nobody
-   * named, in the leading, trailing and bare forms alike. No argv order refuses that, and no ccd rule refuses it
-   * without also refusing the pre-W1a trailing order while the fleet box runs ahead of this server. So each part must
-   * pass `isRegistryId`: the session-id charset, which has no `=`, and no leading `-` or `.`.
+   * THE PARTS stay checked, as defence in depth: each part must pass `isRegistryId` (the session-id charset, which has
+   * no `=`, and no leading `-` or `.`), though a part reading `--surface=<word>`, which `cmd_stop`'s `--surface=*` arm
+   * strips from ANY position to make the pair a one-argument stop of the OTHER token, is always on the fallback arm,
+   * where the pair clause refuses alone, and on the prefix arm neither part can hold `=`, being a piece of the id the
+   * caller already vetted.
    * - The project clause is defence in depth. ccd refuses a dash-leading project only once ccd's own half of the id
    *   gate lands (W1b); until then this clause refuses a row whose id ends in `-<project>` with a project that is not
    *   a registry id (`demo-a--x` with `.project` `-x`), which the pair clause passes.

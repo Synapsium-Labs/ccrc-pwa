@@ -158,12 +158,12 @@ describe('stop sends --surface before the id (spec §2.3, §2.4)', () => {
 // `<wrapper>-<project>`, so the pair clause alone refuses every fallback-arm row,
 // one whose id does not end in `-<project>` and whose wrapper would be the row's
 // `.wrapper`: that fallback never reaches `stopPair`. The part checks stand
-// beside it because `cmd_stop`'s `--surface=*` arm strips a token of that
-// spelling from ANY position, so a part reading `--surface=<word>` made the pair
-// a one-argument stop of the OTHER token, in the leading, trailing and bare
-// forms alike, and no argv order refuses it. Both callers of `stopArgvFor` ask
-// `stopPairRefused` in their identity arm and answer 503
-// `registry-unmeasurable`, with no argv composed.
+// beside it as defence in depth, since a part reading `--surface=<word>` (the
+// cases below) is always on the fallback arm, where the pair clause refuses
+// alone: the project check alone refuses a project that is empty or leads with
+// `-` or `.` (the `demo-a--x` case), and the wrapper check is an equivalent
+// mutant. Both callers of `stopArgvFor` ask `stopPairRefused` in their identity
+// arm and answer 503 `registry-unmeasurable`, with no argv composed.
 
 /** Records every argv and never execs. tmux answers that the pane is GONE, so the archive door's fail-closed turn
  *  read is `idle` for a rostered wrapper, and only the identity arm stands between a request and its stop. */
