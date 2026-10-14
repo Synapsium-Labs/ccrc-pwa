@@ -20525,7 +20525,7 @@ Expected: `<n> rows; 0 not exactly once`, `<n>` being 332 plus the new ids Step 
 
 Close the record: fill every `outcome` and `rows`, add a last line `Findings: raised <n>, survived <m>, fixed <f>, carried <c>, not a defect <d>, asked <a>, ruled departures <r>. Commits: <list of shas>. Panel tip <TIP>; fix-wave tip <the output of git rev-parse HEAD>.` (`survived` = the findings not ruled NOT A DEFECT; the planning lines R1-R4 and A-1 are counted as carried and fixed), and copy `<SCRATCH>/review` and every Step 5 row measurement into `.superpowers/sdd/2026-10-13-native-docs-reader-w5-part1-docs-screen/task-13-review/` (`mkdir -p` it first; `cp -R "$SCRATCH/review/." <that directory>`). Task 14's results cite the record's last line, its Carried list takes every CARRIED line, and an unanswered ask is listed there too. No push and no pull request here: Task 14 is the close, and its results commit must be the tip.
 
-**Mutation rows this task contributes** (none of its own until a Step 5 fix adds one: this task carries no code. Each row a fix adds is measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at the fix's commit, then `git -C <copy> init -q`, `pwa/node_modules` and `server/node_modules` linked in; `pkg` is the package the `tests` run in; `old` is unique in `file` at that commit; `red` is the measured summary and the cases that went red. A fix that re-spells an earlier row's anchor repeats that row here with the same id and the new `old`, and says so above this block; Task 14's extractor keeps the last occurrence of an id.) Rows that Step 5 adds are appended to this array by the fix that adds them. The array is empty at planning: A-1's fix is made in Task 11's own rows block, so this task re-anchors nothing. The array now carries the review-fix rounds' rows, written after Tasks 3-12's own blocks and consolidated here (106 row objects, 106 distinct ids, each measured red in a fresh copy of the branch at `a9d9d14b0`): 90 rows no earlier block holds (Task 3 M15-M21, Task 4 M11-M15, Task 5 M35-M49, Task 6 M24-M34, Task 7 M35-M38, Task 8 M21-M23, Task 9 M32-M51, Task 10 M55-M69, Task 11 M28-M34, Task 12 M21-M23), and 16 rows that repeat an earlier row's id with the anchor or the measured red a review round changed (the last occurrence of an id wins): Task 2 M31, Task 3 M3 and M4, Task 4 M8 and M9, Task 5 M26 and M28, Task 6 M15, Task 7 M9, Task 9 M4 and M20, Task 10 M10 and M20 re-anchored; Task 7 M33 and Task 12 M17 and M20 with a re-measured red. Task 8's M23 is one contiguous edit (the doc-body boundary moves from around `DocTree` to around `DocParse`, the lines between them included in `old` and `new`), because the row tools replace one `old` text.
+**Mutation rows this task contributes** (none of its own until a Step 5 fix adds one: this task carries no code. Each row a fix adds is measured red in a separate copy, never in the worktree: `git archive HEAD | tar -x -C <copy>` at the fix's commit, then `git -C <copy> init -q`, `pwa/node_modules` and `server/node_modules` linked in; `pkg` is the package the `tests` run in; `old` is unique in `file` at that commit; `red` is the measured summary and the cases that went red. A fix that re-spells an earlier row's anchor repeats that row here with the same id and the new `old`, and says so above this block; Task 14's extractor keeps the last occurrence of an id.) Rows that Step 5 adds are appended to this array by the fix that adds them. The array is empty at planning: A-1's fix is made in Task 11's own rows block, so this task re-anchors nothing. The array now carries the review-fix rounds' rows, written after Tasks 3-12's own blocks and consolidated here (106 row objects, 106 distinct ids, each measured red in a fresh copy of the branch at `a9d9d14b0`): 90 rows no earlier block holds (Task 3 M15-M21, Task 4 M11-M15, Task 5 M35-M49, Task 6 M24-M34, Task 7 M35-M38, Task 8 M21-M23, Task 9 M32-M51, Task 10 M55-M69, Task 11 M28-M34, Task 12 M21-M23), and 16 rows that repeat an earlier row's id with the anchor or the measured red a review round changed (the last occurrence of an id wins): Task 2 M31, Task 3 M3 and M4, Task 4 M8 and M9, Task 5 M26 and M28, Task 6 M15, Task 7 M9, Task 9 M4 and M20, Task 10 M10 and M20 re-anchored; Task 7 M33 and Task 12 M17 and M20 with a re-measured red. Task 8's M23 is one contiguous edit (the doc-body boundary moves from around `DocTree` to around `DocParse`, the lines between them included in `old` and `new`), because the row tools replace one `old` text. The whole-branch review's fix wave appended 45 more row objects to this array, each measured red in a fresh copy of the branch before this commit: 33 new rows `W5P1-T13-M1` to `W5P1-T13-M33` (the fix wave's guards, in the order of its five fix groups; M32 and M33 are the two W5 halves of the spec's rows M4.R1 and M4.P1, which had cases but no row), eight re-anchors that repeat an earlier row's id with the new `old` (Task 5 M41 and M48, Task 6 M22 and Task 9 M40, which the fix wave re-anchored on purpose, and Task 5 M9, Task 7 M11 and M18 and Task 11 M25, whose anchored line a fix of this wave rewrote; Task 7 M18's `red` is also re-taken, as Finding 6-1 asks), and four more rows that repeat an earlier row's id with the measured `red` re-taken after a review fix renamed its case titles (Task 3 M13, Task 7 M8, Task 10 M2 and M46). Spec row M4.B1's boundary line is W4's own (`app.tsx`'s `RenderBoundary`), so it has no W5 row. The extractor keeps the last occurrence of an id.
 
 ```json
 [
@@ -21704,6 +21704,504 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
    "test/docs-links.test.tsx"
   ],
   "red": "pwa docs-links: 1 failed | 47 passed (48) — 'a cross-doc fragment: the href carries #part-2, a plain click navigates without it and hands it to onFragment'"
+ },
+ {
+  "id": "W5P1-T13-M1",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/useDocsVisit.ts",
+  "old": "takeAutoRetry('relist', page, '')",
+  "new": "takeAutoRetry('file', fKey, word)",
+  "tests": [
+   "test/docs-visit.test.tsx"
+  ],
+  "red": "pwa docs-visit: 1 failed | 57 passed (58) — 'a draft whose fingerprint moves on every listing re-lists once and then shows changing'"
+ },
+ {
+  "id": "W5P1-T13-M2",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/useDocsVisit.ts",
+  "old": "      autoRetried.current.delete(autoRetryId('relist', page, ''));\n",
+  "new": "",
+  "tests": [
+   "test/docs-visit.test.tsx"
+  ],
+  "red": "pwa docs-visit: 1 failed | 57 passed (58) — 'a read that succeeded re-arms the page: its next move gets its own automatic re-list'"
+ },
+ {
+  "id": "W5P1-T13-M3",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/useDocsVisit.ts",
+  "old": "if (st.trees.get(key) === a && isCurrentKey(key)) listTree(target);",
+  "new": "if (isCurrentKey(key)) listTree(target);",
+  "tests": [
+   "test/docs-visit.test.tsx"
+  ],
+  "red": "pwa docs-visit: 1 failed | 57 passed (58) — 'a manual Retry that answered ok at 1 s leaves the 5 s timer nothing to list'"
+ },
+ {
+  "id": "W5P1-T13-M4",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/useDocsVisit.ts",
+  "old": "if (f.s === 'refresh-failed' && f.answer.s === 'auth') st.freshness.set(key, { s: 'idle' });",
+  "new": "if (f.s === 'refresh-failed' && f.answer.s !== 'auth') st.freshness.set(key, { s: 'idle' });",
+  "tests": [
+   "test/docs-refresh.test.tsx"
+  ],
+  "red": "pwa docs-refresh: 2 failed | 39 passed (41) — 'a refresh POST that answered auth no longer shows refresh-failed once the sign-in is back, and does not POST again'; 'a refresh that failed for another reason keeps its chip through a sign-in'"
+ },
+ {
+  "id": "W5P1-T13-M5",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/useDocsVisit.ts",
+  "old": "if (st.freshness.get(key)?.s === 'fetching') {",
+  "new": "if (st.freshness.get(key)?.s === 'fetching' && st.alive) {",
+  "tests": [
+   "test/docs-refresh.test.tsx"
+  ],
+  "red": "pwa docs-refresh: 2 failed | 39 passed (41) — 'the answer is dropped and a screen shown again reads idle, not fetching'; 'a manual refresh dropped the same way gives the chip back what it showed before'"
+ },
+ {
+  "id": "W5P1-T5-M41",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/useDocsVisit.ts",
+  "old": "          if (st.trees.get(key) === a && isCurrentKey(key)) listTree(target);",
+  "new": "          if (st.trees.get(key) === a) listTree(target);",
+  "tests": [
+   "test/docs-visit.test.tsx"
+  ],
+  "red": "pwa docs-visit: 1 failed | 57 passed (58) — 'a tree retry set for a page the user then left makes no GET'"
+ },
+ {
+  "id": "W5P1-T5-M48",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/useDocsVisit.ts",
+  "old": "    void loadersRef.current.refresh(target.project, body).then((a) => {\n      st.refreshInflight.delete(key);\n      if (!st.alive) {\n        // The answer is dropped, so the chip must not stay `fetching` for a screen shown again: it goes back to what it\n        // showed before this POST (the default when it showed nothing).\n        if (st.freshness.get(key)?.s === 'fetching') {\n          if (before === undefined) st.freshness.delete(key);\n          else st.freshness.set(key, before);\n        }\n        return;\n      }\n      // Numbered when it ARRIVES: the route read its tree after its fetch, so it is newer than any GET that\n      // started before this answer, however early the POST began.\n      applyRefresh(target, key, reason, nextSeq(), a);",
+  "new": "    const startSeq = nextSeq();\n    void loadersRef.current.refresh(target.project, body).then((a) => {\n      st.refreshInflight.delete(key);\n      if (!st.alive) {\n        // The answer is dropped, so the chip must not stay `fetching` for a screen shown again: it goes back to what it\n        // showed before this POST (the default when it showed nothing).\n        if (st.freshness.get(key)?.s === 'fetching') {\n          if (before === undefined) st.freshness.delete(key);\n          else st.freshness.set(key, before);\n        }\n        return;\n      }\n      // Numbered when it ARRIVES: the route read its tree after its fetch, so it is newer than any GET that\n      // started before this answer, however early the POST began.\n      applyRefresh(target, key, reason, startSeq, a);",
+  "tests": [
+   "test/docs-refresh.test.tsx"
+  ],
+  "red": "pwa docs-refresh: 1 failed | 40 passed (41) — 'a GET that starts after the POST began and lands before it does not stop the POST's newer tree from landing'"
+ },
+ {
+  "id": "W5P1-T13-M6",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/DocsLeaf.tsx",
+  "old": "          body = <MarkdownBody show={show} bodyKey={bodyKeyOf(file.pin, show, pinKey)} link={link} parser={parser} />;",
+  "new": "          body = <MarkdownBody show={show} bodyKey={pin.kind === 'draft' ? bodyKeyOf(file.pin, show, pinKey) : docsApi.file(page.project, pin)} link={link} parser={parser} />;",
+  "tests": [
+   "test/docs-screen.test.tsx"
+  ],
+  "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'same blob at a new commit: the same h1 node survives, the parser is called once, and no second read is made'"
+ },
+ {
+  "id": "W5P1-T9-M40",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/DocsLeaf.tsx",
+  "old": "  return <DocMarkdown key={p.bodyKey} text=",
+  "new": "  return <DocMarkdown text=",
+  "tests": [
+   "test/docs-screen.test.tsx"
+  ],
+  "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'a re-list that moves a draft past the render gate asks first, instead of formatting on the old choice'"
+ },
+ {
+  "id": "W5P1-T13-M7",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/DocsLeaf.tsx",
+  "old": "<DocInLinkContext value={true}><DocImage node={node} alt={p.name} />",
+  "new": "<DocInLinkContext value={false}><DocImage node={node} alt={p.name} />",
+  "tests": [
+   "test/docs-screen.test.tsx"
+  ],
+  "red": "pwa docs-screen: 3 failed | 72 passed (75) — 'tapping it pushes no history entry and leaves the URL as it was'; 'on view=committed the tap keeps the view and reads no draft'; 'renders no doc-img-link button, only the img'"
+ },
+ {
+  "id": "W5P1-T13-M8",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/DocsLeaf.tsx",
+  "old": "{ ...assets, onDraftAsset: IGNORE_DRAFT_ASSET }",
+  "new": "{ ...assets }",
+  "tests": [
+   "test/docs-screen.test.tsx"
+  ],
+  "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'data-draft-assets stays 0 and no draft-assets banner is drawn'"
+ },
+ {
+  "id": "W5P1-T13-M9",
+  "pkg": "pwa",
+  "file": "pwa/src/screens/DocsScreen.tsx",
+  "old": "    if (plan.kind !== 'auto') return undefined;",
+  "new": "    return undefined;",
+  "tests": [
+   "test/docs-screen.test.tsx"
+  ],
+  "red": "pwa docs-screen: 2 failed | 73 passed (75) — 'docs-busy with retryAfterMs: one more GET after that wait, a second busy answer shows Retry and no third GET'; 'leaving the screen before the wait ends cancels the retry'"
+ },
+ {
+  "id": "W5P1-T13-M10",
+  "pkg": "pwa",
+  "file": "pwa/src/screens/DocsScreen.tsx",
+  "old": "      indexRetried.current = true;\n",
+  "new": "",
+  "tests": [
+   "test/docs-screen.test.tsx"
+  ],
+  "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'docs-busy with retryAfterMs: one more GET after that wait, a second busy answer shows Retry and no third GET'"
+ },
+ {
+  "id": "W5P1-T13-M11",
+  "pkg": "pwa",
+  "file": "pwa/src/screens/DocsScreen.tsx",
+  "old": "    return () => clearTimeout(t);",
+  "new": "    return undefined;",
+  "tests": [
+   "test/docs-screen.test.tsx"
+  ],
+  "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'leaving the screen before the wait ends cancels the retry'"
+ },
+ {
+  "id": "W5P1-T13-M12",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/DocsFailureView.tsx",
+  "old": "disabled={p.fetching === true} ",
+  "new": "",
+  "tests": [
+   "test/docs-screen.test.tsx"
+  ],
+  "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'the button is disabled and the page says fetching while the POST runs, then the fetch failure sentence'"
+ },
+ {
+  "id": "W5P1-T13-M13",
+  "pkg": "pwa",
+  "file": "pwa/src/screens/DocsScreen.tsx",
+  "old": "      return { state: 'fetching', text: DOCS_HEAD_TEXT.freshFetching };",
+  "new": "      return null;",
+  "tests": [
+   "test/docs-screen.test.tsx"
+  ],
+  "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'the button is disabled and the page says fetching while the POST runs, then the fetch failure sentence'"
+ },
+ {
+  "id": "W5P1-T13-M14",
+  "pkg": "pwa",
+  "file": "pwa/src/screens/DocsScreen.tsx",
+  "old": "          : { state: 'failed', text: failureSentence(f.failure) };",
+  "new": "          : null;",
+  "tests": [
+   "test/docs-screen.test.tsx"
+  ],
+  "red": "pwa docs-screen: 1 failed | 74 passed (75) — 'the button is disabled and the page says fetching while the POST runs, then the fetch failure sentence'"
+ },
+ {
+  "id": "W5P1-T13-M15",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/DocImage.tsx",
+  "old": "const action = inLink ? null : plan.action;",
+  "new": "const action = plan.action;",
+  "tests": [
+   "test/docs-images.test.tsx"
+  ],
+  "red": "pwa docs-images: 1 failed | 73 passed (74) — 'a refused external image in an in-app link offers no second action: the tap is the link alone'"
+ },
+ {
+  "id": "W5P1-T13-M16",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/DocImage.tsx",
+  "old": "  if (inLink) {",
+  "new": "  if (false) {",
+  "tests": [
+   "test/docs-images.test.tsx"
+  ],
+  "red": "pwa docs-images: 2 failed | 72 passed (74) — 'a loaded image in an in-app link: one tap is the link alone, and no button sits inside the anchor'; 'a loaded image in an external link: one tap opens the link once and goes nowhere in-app'"
+ },
+ {
+  "id": "W5P1-T13-M17",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/DocImage.tsx",
+  "old": "          e.stopPropagation();\n",
+  "new": "",
+  "tests": [
+   "test/docs-images.test.tsx"
+  ],
+  "red": "pwa docs-images: 1 failed | 73 passed (74) — 'Load image in a link loads the image and does not follow the link'"
+ },
+ {
+  "id": "W5P1-T13-M18",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/DocImage.tsx",
+  "old": "c.shown.s === 'failed' && c.shown.auth) {",
+  "new": "c.shown.s === 'failed' && c.shown.auth && false) {",
+  "tests": [
+   "test/docs-images.test.tsx"
+  ],
+  "red": "pwa docs-images: 1 failed | 73 passed (74) — 'a raster that answered auth is asked for once more on clearAuthLost, and then shows'"
+ },
+ {
+  "id": "W5P1-T13-M19",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/DocImage.tsx",
+  "old": "  useEffect(() => onAuthRegained(() => {\n    const c = current.current;\n    if (c.key !== null && c.shown !== null && c.shown.s === 'failed' && c.shown.auth) {\n      setDone(null); // Loading again, not the old sentence\n      setAttempt((n) => n + 1);\n    }\n  }), []);",
+  "new": "  useEffect(() => { void onAuthRegained(() => {\n    const c = current.current;\n    if (c.key !== null && c.shown !== null && c.shown.s === 'failed' && c.shown.auth) {\n      setDone(null); // Loading again, not the old sentence\n      setAttempt((n) => n + 1);\n    }\n  }); }, []);",
+  "tests": [
+   "test/docs-images.test.tsx"
+  ],
+  "red": "pwa docs-images: 1 failed | 73 passed (74) — 'an unmounted image no longer listens: its subscription is gone, and sign-in after unmount loads nothing'"
+ },
+ {
+  "id": "W5P1-T13-M20",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdown.tsx",
+  "old": "  const refusedOverCap = registered && !wanted && raw.length > MD_HIGHLIGHT_BLOCK_MAX_CHARS;",
+  "new": "  const refusedOverCap = false;",
+  "tests": [
+   "test/markdown-bounds.test.tsx"
+  ],
+  "red": "pwa markdown-bounds: 2 failed | 35 passed (37) — 'highlight={false} over the cap reads \"{label} · not highlighted ({KiB} KiB)\", with no scan and no colour'; 'a refused block is never scanned for a word or a line, however long either is'"
+ },
+ {
+  "id": "W5P1-T13-M21",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownParse.ts",
+  "old": "const DOCS_BR = /^<br(?: ?\\/)?>$/;",
+  "new": "const DOCS_BR = /^\\s*<br(?: ?\\/)?>\\s*$/;",
+  "tests": [
+   "test/markdown-parse.test.ts"
+  ],
+  "red": "pwa markdown-parse: 3 failed | 36 passed (39) — 'whitespace on both sides, a paragraph after stays literal text in the docs profile, with no br element'; 'leading whitespace only stays literal text in the docs profile, with no br element'; 'trailing whitespace, a paragraph after stays literal text in the docs profile, with no br element'"
+ },
+ {
+  "id": "W5P1-T13-M22",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/DocMarkdown.tsx",
+  "old": "parseMarkdown(p.text, 'docs')",
+  "new": "parseMarkdown(p.text, 'chat')",
+  "tests": [
+   "test/docs-markdown.test.tsx"
+  ],
+  "red": "pwa docs-markdown: 1 failed | 47 passed (48) — 'a small text with a <br>, with no Worker, draws a br element and no literal \"<br>\"'"
+ },
+ {
+  "id": "W5P1-T13-M23",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/DocsHead.tsx",
+  "old": "const localLead = c === null ? null : ref.side === 'origin' ? c.behind : c.ahead;",
+  "new": "const localLead = c === null ? null : c.ahead;",
+  "tests": [
+   "test/docs-truth.test.tsx"
+  ],
+  "red": "pwa docs-truth: 3 failed | 98 passed (101) — 'local-ahead with origin served and counts { ahead: +0, behind: 2 } reads local is 2 ahead of origin'; 'diverged with origin served and counts { ahead: 3, behind: 2 } reads local and origin have diverged (2 vs 3), showing local'; 'an unmeasured count stays out of the sentence on either side'"
+ },
+ {
+  "id": "W5P1-T13-M24",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/DocsHead.tsx",
+  "old": "const originLead = c === null ? null : ref.side === 'origin' ? c.ahead : c.behind;",
+  "new": "const originLead = c === null ? null : c.behind;",
+  "tests": [
+   "test/docs-truth.test.tsx"
+  ],
+  "red": "pwa docs-truth: 3 failed | 98 passed (101) — 'via origin (origin served) with relation local-behind and counts { ahead: 3, behind: +0 }: the via sentence (you asked for ws/a, showing origin's), then the relation (origin is 3 ahead of local; tone info)'; 'local-behind with origin served and counts { ahead: 3, behind: +0 } reads origin is 3 ahead of local'; 'diverged with origin served and counts { ahead: 3, behind: 2 } reads local and origin have diverged (2 vs 3), showing local'"
+ },
+ {
+  "id": "W5P1-T13-M25",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/DocsBanners.tsx",
+  "old": "const n = tree.entries.filter((e) => e.draft !== null).length;",
+  "new": "const n = tree.entries.filter((e) => { const dr = e.draft; return dr !== null && dr.state !== 'deleted'; }).length;",
+  "tests": [
+   "test/docs-banners.test.tsx"
+  ],
+  "red": "pwa docs-banners: 2 failed | 32 passed (34) — 'a tree whose drafts include a deletion counts it in n'; 'a tree whose ONLY draft is a deletion still shows the banner, with n = 1'"
+ },
+ {
+  "id": "W5P1-T13-M26",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/docsText.ts",
+  "old": "'unresolved-ref': 'No branch by that name was found.',",
+  "new": "'unresolved-ref': 'No branch by that name was found, locally or on origin.',",
+  "tests": [
+   "test/docs-failures.test.tsx"
+  ],
+  "red": "pwa docs-failures: 1 failed | 144 passed (145) — 'the sentence claims neither side, stays a sentence, and the one tried ref is listed under it'"
+ },
+ {
+  "id": "W5P1-T13-M27",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/docsLinks.ts",
+  "old": "return link.ok ? { kind: 'github', href: link.url, note: link.note } : inert(link.why);",
+  "new": "return link.ok ? { kind: 'github', href: link.url, note: null } : inert(link.why);",
+  "tests": [
+   "test/docs-links.test.tsx"
+  ],
+  "red": "pwa docs-links: 4 failed | 50 passed (54) — 'a local page that is local-ahead has the target note and the same may-differ caution on its mark'; 'a local page that is local-behind has the target note and the same may-differ caution on its mark'; 'a local page that is diverged has the target note and the same may-differ caution on its mark'; 'a local page that is unmeasured has the target note and the same may-differ caution on its mark'"
+ },
+ {
+  "id": "W5P1-T13-M28",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/DocLink.tsx",
+  "old": "title={t.note === 'may-differ' ? DOCS_HEAD_TEXT.githubMayDiffer : undefined}",
+  "new": "title={undefined}",
+  "tests": [
+   "test/docs-links.test.tsx"
+  ],
+  "red": "pwa docs-links: 4 failed | 50 passed (54) — 'a local page that is local-ahead has the target note and the same may-differ caution on its mark'; 'a local page that is local-behind has the target note and the same may-differ caution on its mark'; 'a local page that is diverged has the target note and the same may-differ caution on its mark'; 'a local page that is unmeasured has the target note and the same may-differ caution on its mark'"
+ },
+ {
+  "id": "W5P1-T6-M22",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/docsLinks.ts",
+  "old": "      return link.ok ? { kind: 'github', href: link.url, note: link.note } : inert(link.why);",
+  "new": "      return inert('no-github-origin');",
+  "tests": [
+   "test/docs-links.test.tsx"
+  ],
+  "red": "pwa docs-links: 8 failed | 46 passed (54) — '[r](../../../README.md) is a GitHub link built by githubBlobUrl, with the trailing mark, opened on tap'; 'detached and rendered with DocLink: no src anywhere, and every href is an a DocLink built'; 'a local page that is local-ahead has the target note and the same may-differ caution on its mark'; 'a local page that is local-behind has the target note and the same may-differ caution on its mark'; 'a local page that is diverged has the target note and the same may-differ caution on its mark'; 'a local page that is unmeasured has the target note and the same may-differ caution on its mark'; 'a local page whose relation is equal carries no caution'; 'a origin page whose relation is local-behind carries no caution'"
+ },
+ {
+  "id": "W5P1-T13-M29",
+  "pkg": "pwa",
+  "file": "pwa/src/app.tsx",
+  "old": "const docs = new RegExp('^/docs(?:/|$)').test(path);",
+  "new": "const docs = new RegExp('^/docs\\\\b').test(path);",
+  "tests": [
+   "test/app.test.tsx"
+  ],
+  "red": "pwa app: 2 failed | 21 passed (23) — '/docs-x renders the placeholder and data-view stays fleet'; '/docs.md renders the placeholder and data-view stays fleet'"
+ },
+ {
+  "id": "W5P1-T13-M30",
+  "pkg": "pwa",
+  "file": "pwa/src/session/SessionHeader.tsx",
+  "old": "        <div className=\"menu\">\n          <button type=\"button\" className=\"menu-item\" onClick={() => menuAct(onChangeModel)}>\n            <span className=\"menu-label\">Change model</span>\n            <span className=\"menu-hint\" aria-hidden=\"true\">\n              /model\n            </span>\n          </button>\n          <button type=\"button\" className=\"menu-item\" onClick={() => menuAct(onChangeEffort)}>\n            <span className=\"menu-label\">Change effort</span>\n            <span className=\"menu-hint\" aria-hidden=\"true\">\n              /effort\n            </span>\n          </button>\n          <button type=\"button\" className=\"menu-item\" onClick={() => menuAct(onOpenHistory)}>\n            <span className=\"menu-label\">History</span>\n            <span className=\"menu-hint\" aria-hidden=\"true\">\n              journal\n            </span>\n          </button>\n          {docsLink !== null && (\n            <button type=\"button\" className=\"menu-item docs-menu-item\" onClick={() => menuAct(() => navigate(docsLink.href))}>\n              <span className=\"menu-label\">Docs</span>\n              <span className=\"menu-hint\" aria-hidden=\"true\">{docsLink.branch ?? 'default'}</span>\n            </button>\n          )}",
+  "new": "        <div className=\"menu\">\n          {docsLink !== null && (\n            <button type=\"button\" className=\"menu-item docs-menu-item\" onClick={() => menuAct(() => navigate(docsLink.href))}>\n              <span className=\"menu-label\">Docs</span>\n              <span className=\"menu-hint\" aria-hidden=\"true\">{docsLink.branch ?? 'default'}</span>\n            </button>\n          )}\n          <button type=\"button\" className=\"menu-item\" onClick={() => menuAct(onChangeModel)}>\n            <span className=\"menu-label\">Change model</span>\n            <span className=\"menu-hint\" aria-hidden=\"true\">\n              /model\n            </span>\n          </button>\n          <button type=\"button\" className=\"menu-item\" onClick={() => menuAct(onChangeEffort)}>\n            <span className=\"menu-label\">Change effort</span>\n            <span className=\"menu-hint\" aria-hidden=\"true\">\n              /effort\n            </span>\n          </button>\n          <button type=\"button\" className=\"menu-item\" onClick={() => menuAct(onOpenHistory)}>\n            <span className=\"menu-label\">History</span>\n            <span className=\"menu-hint\" aria-hidden=\"true\">\n              journal\n            </span>\n          </button>",
+  "tests": [
+   "test/session-docs-link.test.tsx"
+  ],
+  "red": "pwa session-docs-link: 1 failed | 26 passed (27) — 'the Docs item is History’s next sibling in the menu, and nothing sits between them'"
+ },
+ {
+  "id": "W5P1-T13-M31",
+  "pkg": "server",
+  "file": "server/test/single-definition.test.ts",
+  "old": "    new RegExp(`^\\\\s*(?:(?:export|default|declare|async)\\\\s+)*(?:function(?:\\\\s*\\\\*\\\\s*|\\\\s+)${name}\\\\b|(?:const|let|var)\\\\s+${name}\\\\b)`, 'm');",
+  "new": "    new RegExp(`^\\\\s*(?:export\\\\s+)?(?:function\\\\s+${name}\\\\b|(?:const|let|var)\\\\s+${name}\\\\b)`, 'm');",
+  "tests": [
+   "test/single-definition.test.ts"
+  ],
+  "red": "server single-definition: 1 failed | 543 passed (544) — 'CONTROL: the function pattern sees an async, a default, a declare-d and a generator copy'"
+ },
+ {
+  "id": "W5P1-T5-M9",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/useDocsVisit.ts",
+  "old": "  return [scope, key, word].join(NUL);",
+  "new": "  return [scope, key].join(NUL);",
+  "tests": [
+   "test/docs-visit.test.tsx"
+  ],
+  "red": "pwa docs-visit: 1 failed | 57 passed (58) — 'the bookkeeping is per word: a second word gets its own one retry, a repeated one none'"
+ },
+ {
+  "id": "W5P1-T7-M11",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/DocImage.tsx",
+  "old": "  return { s: 'failed', sentence: a.s === 'failed' ? failureSentence(a.body) : slotSentence(a), auth: a.s === 'auth' };",
+  "new": "  return { s: 'failed', sentence: a.s === 'failed' ? failureSentence(a.body) : 'could not load', auth: a.s === 'auth' };",
+  "tests": [
+   "test/docs-images.test.tsx"
+  ],
+  "red": "pwa docs-images: 3 failed | 71 passed (74) — 'an unexpected response is a per-image chip with its own sentence'; 'an unreachable server is a per-image chip with its own sentence'; 'a lost sign-in is a per-image chip with its own sentence'"
+ },
+ {
+  "id": "W5P1-T7-M18",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/DocImage.tsx",
+  "old": "          e.stopPropagation();\n          setAsked(true);\n        }}>{DOC_IMAGE_TEXT.load}</button>",
+  "new": "          e.stopPropagation();\n          setAsked(false);\n        }}>{DOC_IMAGE_TEXT.load}</button>",
+  "tests": [
+   "test/docs-images.test.tsx"
+  ],
+  "red": "pwa docs-images: 3 failed | 71 passed (74) — '31 pinned images load 30; the last is one Load image, whose tap loads it (StrictMode: false)'; '31 pinned images load 30; the last is one Load image, whose tap loads it (StrictMode: true)'; 'Load image in a link loads the image and does not follow the link'"
+ },
+ {
+  "id": "W5P1-T11-M25",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/DocImage.tsx",
+  "old": "        <button type=\"button\" className=\"doc-img-load\" onClick={(e) => {",
+  "new": "        <button type=\"button\" className=\"doc-img-more\" onClick={(e) => {",
+  "tests": [
+   "test/tap-targets.test.tsx"
+  ],
+  "red": "pwa tap-targets: 1 failed | 67 passed (68) — 'are the classes the rendered controls carry'"
+ },
+ {
+  "id": "W5P1-T3-M13",
+  "pkg": "pwa",
+  "file": "pwa/src/lib/markdownLimits.ts",
+  "old": "export const MD_HIGHLIGHT_MAX_WORD_CHARS = 256;",
+  "new": "export const MD_HIGHLIGHT_MAX_WORD_CHARS = 512;",
+  "tests": [
+   "test/markdown-limits.test.ts",
+   "test/markdown-bounds.test.tsx"
+  ],
+  "red": "pwa markdown-limits + markdown-bounds: 4 failed | 63 passed (67) — 'MD_HIGHLIGHT_MAX_WORD_CHARS is 256'; 'a ts fence holding a 257-character identifier is not highlighted and says why; 256 is highlighted'; 'longestWordRun counts letters, digits, _, $ and every code unit from 0x7f up, in one pass'; 'a run of 256 code units that holds non-ASCII units still highlights; 257 does not'"
+ },
+ {
+  "id": "W5P1-T7-M8",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/DocImage.tsx",
+  "old": "    deferred: index === null || index >= DOCS_MAX_IMAGES_PER_PAGE,",
+  "new": "    deferred: false,",
+  "tests": [
+   "test/docs-images.test.tsx"
+  ],
+  "red": "pwa docs-images: 3 failed | 71 passed (74) — '31 pinned images load 30; the last is one Load image, whose tap loads it (StrictMode: false)'; '31 pinned images load 30; the last is one Load image, whose tap loads it (StrictMode: true)'; 'Load image in a link loads the image and does not follow the link'"
+ },
+ {
+  "id": "W5P1-T10-M2",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/docsText.ts",
+  "old": "  return fillSentence(ref.side === 'origin' ? DOCS_HEAD_TEXT.servedOrigin : DOCS_HEAD_TEXT.servedLocal, { name: ref.name });",
+  "new": "  return ref.name;",
+  "tests": [
+   "test/docs-truth.test.tsx",
+   "test/docs-banners.test.tsx"
+  ],
+  "red": "pwa docs-truth + docs-banners: 9 failed | 126 passed (135) — 'baseEqual false: the base hint linking refs/heads/<b>, and no overlay'; 'not-contained warns, naming the short commit the page read and the served ref, with Re-list'; 'an answer that names no commit falls back to the committed pin's own commit, never the tree's'; '/docs/demo shows the served ref, the 8-hex commit, how it was chosen and the chip'; '/docs/demo/specs shows the served ref, the 8-hex commit, how it was chosen and the chip'; '/docs/demo/specs/d/ shows the served ref, the 8-hex commit, how it was chosen and the chip'; '/docs/demo/specs/d/x.md shows the served ref, the 8-hex commit, how it was chosen and the chip'; 'a local side reads `<b> (local)`, with the full refname in its title'; 'a file failure replaces the body and keeps the header and truth line'"
+ },
+ {
+  "id": "W5P1-T10-M46",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/DocsBanners.tsx",
+  "old": "      if (file.s === 'ok' && file.answer.show.onRef === 'not-contained') {",
+  "new": "      if (file.s === 'ok' && file.answer.show.onRef === 'unmeasured') {",
+  "tests": [
+   "test/docs-banners.test.tsx"
+  ],
+  "red": "pwa docs-banners: 3 failed | 31 passed (34) — 'not-contained warns, naming the short commit the page read and the served ref, with Re-list'; 'an answer that names no commit falls back to the committed pin's own commit, never the tree's'; 'unmeasured says nothing'"
+ },
+ {
+  "id": "W5P1-T13-M32",
+  "pkg": "pwa",
+  "file": "pwa/src/screens/DocsScreen.tsx",
+  "old": "const parsed = useMemo(() => parseDocsPage(path, search), [path, search]);",
+  "new": "const parsed = useMemo(() => parseDocsPage(path, search), [path]);",
+  "tests": [
+   "test/router-location.test.tsx",
+   "test/docs-screen.test.tsx"
+  ],
+  "red": "pwa router-location + docs-screen: 2 failed | 88 passed (90) — 'navigate('/docs/p?ref=a') then '/docs/p?ref=b': loaders.tree is last called with ('p', bare b)'; 'a linked-worktree answer {\"owner\":\"a\",\"branch\":\"main\"} naming the page's own project at the same ref is a sentence, never \"Opening a…\" (/docs/a/specs/x.md; review M2)'"
+ },
+ {
+  "id": "W5P1-T13-M33",
+  "pkg": "pwa",
+  "file": "pwa/src/docs/DocMarkdown.tsx",
+  "old": "? `Line ${grouped(o.line)} nests ${grouped(o.value)} levels deep (limit ${grouped(MD_MAX_CONTAINER_DEPTH)}); shown as plain text.`",
+  "new": "? `Line ${grouped(o.line)} nests ${o.value} levels deep (limit ${grouped(MD_MAX_CONTAINER_DEPTH)}); shown as plain text.`",
+  "tests": [
+   "test/docs-markdown.test.tsx"
+  ],
+  "red": "pwa docs-markdown: 1 failed | 47 passed (48) — '10 000 nested quotes render DocPlain with the line and the depth'"
  }
 ]
 ```
@@ -21716,7 +22214,7 @@ Close the record: fill every `outcome` and `rows`, add a last line `Findings: ra
 
 This task adds no guard and edits no source or test file, so it has no red-first step of its own: what it proves red is Tasks 1-13's guards (Step 4 runs every row at the wave's end state), and each of its own tools was proved able to fail while this plan was written (Measured while planning, items 3-6). Its one commit is Step 5's, the results section alone.
 
-**Spec rows:** none of its own. Section 7.9's every-wave and W5 suites (Step 1); section 7.7's W5 gate, part 1's share (Step 5's `### Merge gate` placeholder for R1 and R2, the three bounds measured and stated with their bases, and every bound's case and row green through Step 4); every row of Tasks 1-13 through the mutation table (Step 4); lesson 10's built-artefact gate (Step 3: the worker chunk loads with no `document` and answers the docs `<br>` and the chord flood, the docs chrome is in the built stylesheet, the precache count and the main chunk's size against `BASE`).
+**Spec rows:** none of its own. Section 7.9's every-wave and W5 suites (Step 1); section 7.7's W5 gate, part 1's share (Step 5's `### Merge gate` placeholder for R1 and R2, the four bounds measured and stated with their bases, and every bound's case and row green through Step 4); every row of Tasks 1-13 through the mutation table (Step 4); lesson 10's built-artefact gate (Step 3: the worker chunk loads with no `document` and answers the docs `<br>` and the chord flood, the docs chrome is in the built stylesheet, the precache count and the main chunk's size against `BASE`).
 
 **Files:**
 - Modify: `docs/superpowers/plans/2026-10-13-native-docs-reader-w5-part1-docs-screen.md`, this plan. `## Wave 5 part 1 results` is APPENDED after the file's last line, which is the end of `## Deviations found` (Task 12 Step 10's five entries and any Task 13 added). `w5p1-results.py` is its only writer: it refuses while the file has uncommitted edits, and on a re-run (a fix round) it replaces the section it wrote, which is the file's last `## ` section by construction. No line above it changes.
@@ -21734,7 +22232,7 @@ Shell state does not survive between Bash calls, so every block below opens with
   - the test files Tasks 1-13 created or extended, and the existing suites section 7.9 names (Step 1's table);
   - `$HOME/.local/bin/ccrc-api` (`whoami`, `mail list`, `mail fetch`, `mail ack`, `mail send`), as the `ccrc-worker` skill uses it; `git push`; `gh pr list`, `gh pr create` and `gh pr view` (never `gh pr merge`, `gh pr edit` or any update-branch).
 - Produces:
-  - `## Wave 5 part 1 results` at the end of this plan: the measurement time, the measured tree's sha, the base, the W5.1 commit count and the count of deviation numbers spent (named by count and block, never spelled: Step 2's `no-d-number` invariant); `### Suites` (one line per suite: command, `Test Files`, `Tests`, seconds, rc, and a re-run's rc where one was needed), the shard check and the wave's FIRST complete-run verdict; `### Invariants` verbatim; `### Build gate` verbatim; `### Mutation table` (one line per row: id, task, file, measured verdict, first failed case) with its `<n> rows; <n> measured as expected.` line; `### The three bounds` (r10, r11 and 2-2: each constant's value read from `markdownLimits.ts`, its basis as refinements (d)-(g) state it, its rows' measured verdicts, and highlight.js and the chord split re-timed once on this box); `### Merge gate`, whose two lines read R1 and R2 "not yet run (operator, after W3's dark rollout)" for the coordinator to replace before the merge; the W5 halves of W4's refinement (a), each with the `file:line` of its W5 case; `### For part 2: the seams part 1 hands over` (`pinFor`, `imagePinFor`, `detachUrls` and `DocMarkdown`'s detach memo, `copyText`, `saveBytes`, `docs-scans.test.ts`, the browser harness), each found by its declaration; `### Measured values`; `### Notes` (Task 13's `Findings:` line, then every note this task recorded); `### Carried, not fixed` (every row Task 13 ruled `CARRIED`, each with its cost, then this plan's own carried items); and `### After the merge, not this wave`;
+  - `## Wave 5 part 1 results` at the end of this plan: the measurement time, the measured tree's sha, the base, the W5.1 commit count and the count of deviation numbers spent (named by count and block, never spelled: Step 2's `no-d-number` invariant); `### Suites` (one line per suite: command, `Test Files`, `Tests`, seconds, rc, and a re-run's rc where one was needed), the shard check and the wave's FIRST complete-run verdict; `### Invariants` verbatim; `### Build gate` verbatim; `### Mutation table` (one line per row: id, task, file, measured verdict, first failed case) with its `<n> rows; <n> measured as expected.` line; `### The four bounds` (r10, r11, 2-2 and the line bound: each constant's value read from `markdownLimits.ts`, its basis as refinements (d)-(g) state it, its rows' measured verdicts, and highlight.js and the chord split re-timed once on this box); `### Merge gate`, whose two lines read R1 and R2 "not yet run (operator, after W3's dark rollout)" for the coordinator to replace before the merge; the W5 halves of W4's refinement (a), each with the `file:line` of its W5 case; `### For part 2: the seams part 1 hands over` (`pinFor`, `imagePinFor`, `detachUrls` and `DocMarkdown`'s detach memo, `copyText`, `saveBytes`, `docs-scans.test.ts`, the browser harness), each found by its declaration; `### Measured values`; `### Notes` (Task 13's `Findings:` line, then every note this task recorded); `### Carried, not fixed` (every row Task 13 ruled `CARRIED`, each with its cost, then this plan's own carried items); and `### After the merge, not this wave`;
   - one commit, `docs: W5 part 1 results (docs W5.1)`: the wave's `handoffCommit` and the branch tip;
   - the workspace branch pushed to `origin`, and ONE pull request against `main`, titled `docs W5 part 1: the Docs screen`, whose body links this plan's `blob/main` path and the branch's compare view against `main` (the same diff as the pull request's Files changed view until it merges; the wave-done mail carries the pull request's own `/files` link, which exists only once the number does);
   - one `wave-done` mail to the coordinator whose body opens with `suite: <the wave's first complete run>` (plus `failure: unclear` when that word is `red`) and then the fingerprint `{"branchTip":<the tip>,"prNumber":<the PR's number>,"prPhase":"open","handoffCommit":<the tip>}`.
@@ -23216,7 +23714,7 @@ Run from the worktree root, after Steps 1-4. It reads only what those steps wrot
 of suites 01-10, each with any .rerun.log, and w5p1-shards.txt; w5p1-invariants.txt; w5p1-gate.txt;
 w5p1-mut.manifest.json, w5p1-mut.results.jsonl and w5p1-mutation-table.md; w5p1-notes.md when it exists), the plan's
 own `## Deviations found`, Task 13's review record (RECORD, by default the SDD ledger's task-13-review.md: its last
-`Findings:` line and every row it ruled CARRIED), and what it measures itself from the tree: the two bound constants
+`Findings:` line and every row it ruled CARRIED), and what it measures itself from the tree: the bound constants
 and their neighbours in markdownLimits.ts, highlight.js and the chord split timed once each in a node child (the
 bases of refinements (e) and (f), re-taken on this box), the registered grammars, the golden files, the W5 halves'
 cases and the part-2 seams (each found by its declaration, file:line). It refuses (exit 2, plan untouched) when the
@@ -23243,12 +23741,15 @@ SUITE_IDS = ['%02d' % n for n in range(1, 11)]
 # Each bound: its constant (read from markdownLimits.ts), the basis this plan states, and its rows (Task 3's).
 BOUNDS = [
     ('r10', 'MD_HIGHLIGHT_MAX_WORD_CHARS',
-     'no highlighting for a block holding a word (a run of `[A-Za-z0-9_$]`) longer than this, labelled with the '
+     'no highlighting for a block holding a word (a run of `[A-Za-z0-9_$]` or of any UTF-16 code unit from 0x7f up: '
+     "the wider class is a departure from refinement (e)'s first reading, recorded in `## Deviations found`, because "
+     'highlight.js\'s PHP grammar takes `\\x7f-\\xff` as identifier characters and a 64 KiB `php` fence of `_é` repeated '
+     'cost 38 s while the narrow class scored it 1) longer than this, labelled with the '
      "word's length (refinement (e)). Basis: at 256 a block's worst case costs what ordinary code of the same size "
      'does, so `DOCS_HIGHLIGHT_PAGE_MAX_CHARS` keeps bounding the page (planning: one `typescript` identifier run '
      'cost 21, 11, 146 and 2 291 ms at 256, 1 024, 4 096 and 16 384 characters; 64 KiB of 256-character runs 131 ms '
      'against 139 ms of ordinary code).',
-     ['W5P1-T3-M1', 'W5P1-T3-M2', 'W5P1-T3-M3', 'W5P1-T3-M4', 'W5P1-T3-M13']),
+     ['W5P1-T3-M1', 'W5P1-T3-M2', 'W5P1-T3-M3', 'W5P1-T3-M4', 'W5P1-T3-M13', 'W5P1-T3-M15']),
     ('r11', 'MD_KEYSTROKE_MAX_CHARS',
      "a code span longer than this is never a chord: `keystrokeParts` answers null before it trims or splits "
      '(refinement (f)), which also caps one span at 33 parts. Basis: the longest chord named keys make is about 40 '
@@ -23261,6 +23762,16 @@ BOUNDS = [
      'profile (refinements (d) and (g)). Basis: Task 3 Step 0 measured the exact count moving no real document '
      'under `docs/superpowers` across the limit.',
      ['W5P1-T3-M8', 'W5P1-T3-M9', 'W5P1-T3-M10', 'W5P1-T3-M11']),
+    ('line', 'MD_HIGHLIGHT_MAX_LINE_CHARS',
+     'no highlighting for a registered block that holds a line longer than this (a line ends at a line feed or a '
+     'carriage return), labelled "{label} · not highlighted (a {n}-character line)": the size cap is checked first, '
+     "then r10's word scan, then this linear line scan with no regular expression (Task 3's decision 9: a fourth "
+     "bound beside spec 4.10's three, recorded in `## Deviations found`). Basis: some grammars are quadratic on "
+     'shapes that are not one long identifier, and that cost grows with line length (a `markdown` fence of one 64 KiB '
+     'line of `[` about 9.6 s, a `yaml` fence of one 64 KiB line of `a a a ...` 2.8-3.6 s); the bound stops where that '
+     'growth meets the length-independent plateau of the slowest grammars, and at 2 048 the worst line-driven shape '
+     'costs 245-263 ms, where 4 096 would cost about twice it. The plateau itself is carried below.',
+     ['W5P1-T3-M16', 'W5P1-T3-M17', 'W5P1-T3-M18', 'W5P1-T3-M19', 'W5P1-T3-M20', 'W5P1-T3-M21']),
 ]
 # (row, the W4 half, the W5 case: file and the line that opens it)
 W5_HALVES = [
@@ -23297,6 +23808,11 @@ CARRIED = [
     'W7 prose residue: `pwa/src/lib/api.ts`\'s `absolute()` comment, `server/test/sourceScan.ts`\'s header counts, '
     'README, CLAUDE.md, N1\'s docstrings, and the spec text brought into line with refinements (a)-(x). CARRIED to '
     'W7. Cost: prose only.',
+    'The highlighting plateau: about 2.4 s for a crafted page of eight 64 KiB blocks of a length-independent plateau '
+    'shape such as `javascript` over `(` (about 250-300 ms each), against spec 4.9\'s 0.25 s for a page; the line '
+    'bound removes only the cost that grows with line length (Task 3\'s decision 9). CARRIED to the operator by the '
+    'coordinator; no code change in part 1. Cost: a crafted page of that shape can hold the main thread for about '
+    '2.4 s while it highlights.',
     'Part 2 (refinement (a)): Share, Markdown, text and image Export, `ExportAssets`, the settled-outcome context, '
     '`lib/markdown.css`, M4.SH1-SH8, M4.EX1-EX16, M5.B9, M4.T7\'s and M4.S1\'s amended clauses and M5.17\'s '
     '`downloadExport`. Not built here by design; part 2 is dispatched after this merges. Cost: no Share or Export '
@@ -23559,7 +24075,7 @@ out = [HEAD, '',
        'occurrence) and run by `mutate.py` in a `git archive` copy of the tree at `%s`, one row at a time, each file '
        'restored byte for byte after its row. No task recorded an equivalent mutant.' % tip, '',
        quote(table), '',
-       '### The three bounds', ''] + bound_lines + [
+       '### The four bounds', ''] + bound_lines + [
        '', '### Merge gate', '',
        '- R1 (p95 under docs load minus p95 idle, at most 250 ms): not yet run (operator, after W3\'s dark rollout).',
        '- R2 (every remote class answers `fetch.state === \'ran\'`): not yet run (operator, after W3\'s dark '
@@ -23602,14 +24118,14 @@ SCRATCH="$HOME/.cc-tmp/docs-w5p1-t14"; python3 "$SCRATCH/tools/w5p1-suites.py" "
 SCRATCH="$HOME/.cc-tmp/docs-w5p1-t14"; E=.superpowers/sdd/2026-10-13-native-docs-reader-w5-part1-docs-screen/task-14-evidence; rm -rf "$E" && mkdir -p "$E" && cp "$SCRATCH"/w5p1-suite-* "$SCRATCH/w5p1-shards.txt" "$SCRATCH/w5p1-invariants.txt" "$SCRATCH/w5p1-gate.txt" "$SCRATCH"/gate-*.json "$SCRATCH"/gate-*-build.log "$SCRATCH/w5p1-rows.json" "$SCRATCH/w5p1-mut.results.jsonl" "$SCRATCH/w5p1-mutation-table.md" "$E"/ && { [ ! -f "$SCRATCH/w5p1-notes.md" ] || cp "$SCRATCH/w5p1-notes.md" "$E"/; } && ls "$E" | wc -l && git status --short
 ```
 
-Expected: `wrote ## Wave 5 part 1 results (<n> lines) to docs/superpowers/plans/2026-10-13-native-docs-reader-w5-part1-docs-screen.md` (477 lines with the plan review's nine rows, 468 as measured before them: the mutation table is 332 of them, the suites 10) and `suite: green (the wave's first complete run, at <12 hex>)`; then ` M docs/superpowers/plans/2026-10-13-native-docs-reader-w5-part1-docs-screen.md` alone and its `1 file changed` stat; then `11 plan-pins-after` (`topology-clean`, `source-bytes`, `deviation-refs`, `dtbd`, re-run because the plan changed): `Test Files  4 passed (4)`, `rc=0` (the section names no real host, project, user, account or path; it DEFINES no number and spells none: the spent numbers are a count and the block, and quoted output writes any such token as `D-<n>`; it carries no raw control byte and no to-be-allocated token); then the evidence count (21 while planning: each suite's log, the shard line, the invariants, the gate's text, two JSON and two build logs, the rows, the results and the table; more with re-run logs or notes) and the same single status line. If `w5p1-results.py` refuses with its `not all green` list, every item on it is a finding still open: report it (Step 4's last paragraph) and stop. If it refuses with `the mutation table was measured at …`, `w5p1-invariants.txt was measured at another tip` or the gate's `measured-at` failed, HEAD moved after that step: run it again. Then read the section once, top to bottom, with `sed -n '/^## Wave 5 part 1 results$/,$p' docs/superpowers/plans/2026-10-13-native-docs-reader-w5-part1-docs-screen.md`: every number in it was printed by a command above, nothing in it is a forecast, `### Merge gate` reads R1 and R2 "not yet run (operator, after W3's dark rollout)", and `### The three bounds` names 256, 64 and 20000 with every bound row `red`.
+Expected: `wrote ## Wave 5 part 1 results (<n> lines) to docs/superpowers/plans/2026-10-13-native-docs-reader-w5-part1-docs-screen.md` (477 lines with the plan review's nine rows, 468 as measured before them: the mutation table is 332 of them, the suites 10) and `suite: green (the wave's first complete run, at <12 hex>)`; then ` M docs/superpowers/plans/2026-10-13-native-docs-reader-w5-part1-docs-screen.md` alone and its `1 file changed` stat; then `11 plan-pins-after` (`topology-clean`, `source-bytes`, `deviation-refs`, `dtbd`, re-run because the plan changed): `Test Files  4 passed (4)`, `rc=0` (the section names no real host, project, user, account or path; it DEFINES no number and spells none: the spent numbers are a count and the block, and quoted output writes any such token as `D-<n>`; it carries no raw control byte and no to-be-allocated token); then the evidence count (21 while planning: each suite's log, the shard line, the invariants, the gate's text, two JSON and two build logs, the rows, the results and the table; more with re-run logs or notes) and the same single status line. If `w5p1-results.py` refuses with its `not all green` list, every item on it is a finding still open: report it (Step 4's last paragraph) and stop. If it refuses with `the mutation table was measured at …`, `w5p1-invariants.txt was measured at another tip` or the gate's `measured-at` failed, HEAD moved after that step: run it again. Then read the section once, top to bottom, with `sed -n '/^## Wave 5 part 1 results$/,$p' docs/superpowers/plans/2026-10-13-native-docs-reader-w5-part1-docs-screen.md`: every number in it was printed by a command above, nothing in it is a forecast, `### Merge gate` reads R1 and R2 "not yet run (operator, after W3's dark rollout)", and `### The four bounds` names 256, 64, 20000 and 2048 with every bound row `red`.
 
 Then commit, in its own Bash call, only after the `11 plan-pins-after` line read `rc=0` and the section was read:
 
 ```bash
 git add docs/superpowers/plans/2026-10-13-native-docs-reader-w5-part1-docs-screen.md
 git commit -m "docs: W5 part 1 results (docs W5.1)" \
-  -m "Task 14's measured record: the every-wave and W5 suites of spec 7.9 with their counts (the PWA tsc, the contrast gate, the whole hermetic PWA suite as three shards proved to add up to the hermetic file list, the browser leg in a real Chrome, and the server files that read part 1's files as text), with the wave's first complete-run verdict; seventeen invariants judged net against the base (W5.1's own commits touch exactly the scope list; nothing under server/src, agent, ccd or deploy; every golden file and message-links unchanged at every commit; single-definition, docs-shared, shared/docs.ts, api.ts, the manifest, the lock, ci.yml and W4's plan changed only in the shapes the plan allows; one new stylesheet; the forbidden spellings absent; the deviation section holds exactly the issued numbers it spent, and no other text spells one); the build gate on base and tip copies (the worker chunk listed once, one denylist, no precache entry added, the docs chrome in the built stylesheet, no browser-leg code in the bundle, and the BUILT worker answering the docs br and the chord flood); and the mutation table of every Task 1-13 row run at the wave's end state in a git-archive copy, every row restored byte for byte. The three bounds are stated with their bases and rows; the merge gate's R1 and R2 are recorded as not yet run, for the coordinator to fill before the merge." \
+  -m "Task 14's measured record: the every-wave and W5 suites of spec 7.9 with their counts (the PWA tsc, the contrast gate, the whole hermetic PWA suite as three shards proved to add up to the hermetic file list, the browser leg in a real Chrome, and the server files that read part 1's files as text), with the wave's first complete-run verdict; seventeen invariants judged net against the base (W5.1's own commits touch exactly the scope list; nothing under server/src, agent, ccd or deploy; every golden file and message-links unchanged at every commit; single-definition, docs-shared, shared/docs.ts, api.ts, the manifest, the lock, ci.yml and W4's plan changed only in the shapes the plan allows; one new stylesheet; the forbidden spellings absent; the deviation section holds exactly the issued numbers it spent, and no other text spells one); the build gate on base and tip copies (the worker chunk listed once, one denylist, no precache entry added, the docs chrome in the built stylesheet, no browser-leg code in the bundle, and the BUILT worker answering the docs br and the chord flood); and the mutation table of every Task 1-13 row run at the wave's end state in a git-archive copy, every row restored byte for byte. The four bounds are stated with their bases and rows; the merge gate's R1 and R2 are recorded as not yet run, for the coordinator to fill before the merge." \
   -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 git log -1 --format='%H %s'; git status --short
 ```
@@ -23680,7 +24196,8 @@ devs = ['- D-%s: refinement %s.' % (n, LETTERS[i]) if i < len(LETTERS) else
 body = ['Native Docs reader, wave 5 part 1 of two: the Docs screen. `/docs` and every page under it render the '
         'fleet\'s project docs from W3\'s routes, in the PWA, with no server change: the L0 `GithubTarget` widening '
         'and `githubPermalink`; `api.docs.*` and its answer unions; every sentence map and the failure view; W4\'s '
-        'r10, r11 and 2-2 bounded in the shared Markdown pipeline for docs and chat alike, each value measured; the '
+        'r10, r11 and 2-2 bounded, and a fourth bound on the length of a highlighted line, in the shared Markdown '
+        'pipeline for docs and chat alike, each value measured; the '
         'docs profile\'s real `<br>`; the visit (slots, the expected pin, auto-refresh once per open, retries, '
         're-list on return and after sign-in); the docs link and image policy; `DocMarkdown`; the index, project, '
         'section, directory and leaf views; the header, truth line, freshness chip and banners; the Docs door and '
@@ -23703,7 +24220,7 @@ body = ['Native Docs reader, wave 5 part 1 of two: the Docs screen. `/docs` and 
         '- Invariants: %s.' % inv,
         '- Build gate: %s.' % gate,
         '- Mutation table: %s' % table, '',
-        '## The three bounds', '', part('The three bounds'), '',
+        '## The four bounds', '', part('The four bounds'), '',
         '## For part 2', '', part('For part 2: the seams part 1 hands over'), '',
         '## Carried, not fixed', '', part('Carried, not fixed'), '',
         ATTRIBUTION]
@@ -23734,7 +24251,7 @@ fi
 gh pr view "$br" --json number -q .number | tee "$SCRATCH/w5p1-pr"
 ```
 
-Expected: `wrote <SCRATCH>/w5p1-pr-body.md: <n> lines, 14 tasks, <k> deviation(s), links under https://github.com/<owner>/<repo>` (55 lines with five deviations while planning); `prs=[]` on the first run; the new pull request's URL; then its number. The body lists each spent number with its refinement letter, the merge-gate warning (not to be merged until R1 and R2 pass), the invariant, gate and table summaries, the three bounds, the part-2 seams and the carried items, and links only GitHub URLs: this plan's `blob/main` path, the branch's compare view against `main` (this pull request's Files changed diff until it merges) and the spec's blob; no tailnet link, since a pull request is read by people off the tailnet, and no private name, since the repository is public. Never `gh pr merge`, `gh pr edit` or any update-branch: the merge is the coordinator's, after the review rules clean AND the merge gate passes. CI starts on its own, the full server suite and the `browser (pwa)` leg among it; this task does not wait for it (a worker that sleeps on CI never wakes): the review reads while CI runs.
+Expected: `wrote <SCRATCH>/w5p1-pr-body.md: <n> lines, 14 tasks, <k> deviation(s), links under https://github.com/<owner>/<repo>` (55 lines with five deviations while planning); `prs=[]` on the first run; the new pull request's URL; then its number. The body lists each spent number with its refinement letter, the merge-gate warning (not to be merged until R1 and R2 pass), the invariant, gate and table summaries, the four bounds, the part-2 seams and the carried items, and links only GitHub URLs: this plan's `blob/main` path, the branch's compare view against `main` (this pull request's Files changed diff until it merges) and the spec's blob; no tailnet link, since a pull request is read by people off the tailnet, and no private name, since the repository is public. Never `gh pr merge`, `gh pr edit` or any update-branch: the merge is the coordinator's, after the review rules clean AND the merge gate passes. CI starts on its own, the full server suite and the `browser (pwa)` leg among it; this task does not wait for it (a worker that sleeps on CI never wakes): the review reads while CI runs.
 
 - [ ] **Step 7: The fingerprint, read fresh, and the mail list.** Write the wave-done builder to `<SCRATCH>/tools/w5p1-wave-done.py`:
 
@@ -23819,7 +24336,7 @@ body = '\n'.join(signal + [
     % (PR, files_view),
     'Merge gate: R1 and R2 not yet run (operator, after W3\'s dark rollout); `### Merge gate` in the results holds '
     'the two lines the coordinator fills before the merge.',
-    'Results: %s, the results section (Suites, Invariants, Build gate, Mutation table, The three bounds, Merge gate, '
+    'Results: %s, the results section (Suites, Invariants, Build gate, Mutation table, The four bounds, Merge gate, '
     'W5 halves, the seams for part 2, Carried).' % PLAN,
     'Deviations spent from %s: %s.' % (BLOCK, ', '.join('D-' + n for n in spent) or 'none'),
     'Mutation table: ' + table,
