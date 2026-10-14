@@ -1516,6 +1516,18 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
       - Wave 15 (run 300) is still held by claim 1268 (run 354) on `ccd/ccrc` alone.
       - STATUS: fleet and server v0.0.179, newest v0.0.179, backups fleet 176M/server 695M, disk free fleet 210G/work
         volume 213G/server 32G, no anomalies at 00:50.
+    - **2026-10-14 04:42 UTC: v0.0.180 auto-converged unattended.** No action was taken.
+      - The release: v0.0.180, #399 (stall watch settings wave 4, code in `ccd/`, `server/`, `pwa/` and `shared/`),
+        merged at 03:59:31 and released at 04:00:25.
+      - The server's poll, 30 minutes after its 00:47 restart (the seventh since), found it. The fleet box ran
+        04:18:34 to 04:20:27, and the server followed at 04:21:05 to 04:21:31, 38 seconds after the fleet. Both
+        reports read `phase: done` and `from: pwa` (defect A), with no detail.
+      - Both boxes read `box-token` PASS. Server doctor: 26 passed, 0 warned, 0 failed. Fleet doctor: 33 passed, 6
+        warned, 0 failed.
+      - Wave 15 (run 300) is still held, now by two claims: 1268 (run 354) on `ccd/ccrc` and 1281 (run 360) on
+        `ccd/ccd`.
+      - STATUS: fleet and server v0.0.180, newest v0.0.180, backups fleet 176M/server 697M, disk free fleet 219G/work
+        volume 204G/server 32G, no anomalies at 04:42.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
