@@ -293,6 +293,11 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     return true;
   };
 
+  const hasRelistWaiters = (tKey: string): boolean => {
+    for (const e of st.files.values()) if (e.awaitingRelist && e.treeKey === tKey) return true;
+    return false;
+  };
+
   /** Drop every file entry that waited for `tKey`'s re-list, so the next render reads its leaf again. */
   const releaseRelistWaiters = (tKey: string): void => {
     for (const [fKey, e] of st.files) if (e.awaitingRelist && e.treeKey === tKey) st.files.delete(fKey);
@@ -425,9 +430,13 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
   };
 
   const applyTreeGet = (target: Target, key: string, seq: number, a: DocsTreeAnswer): void => {
+    // A GET started before the answer that last set the slot says what the listing was, not what it is: it releases no
+    // read waiting for a re-list, and those reads get a re-list that is newer than the word they are waiting on.
+    if (!isNewest(key, seq)) {
+      if (hasRelistWaiters(key)) listTree(target);
+      return;
+    }
     releaseRelistWaiters(key);
-    // A GET started before the answer that last set the slot says what the listing was, not what it is.
-    if (!isNewest(key, seq)) return;
     const relisted = st.trees.get(key)?.s === 'ok';
     if (a.s === 'ok') {
       setTreeOk(key, seq, a.value);

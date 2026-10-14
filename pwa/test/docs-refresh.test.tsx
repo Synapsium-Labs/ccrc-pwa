@@ -393,7 +393,7 @@ describe('a timer or an answer acts only on the state it was for', () => {
     expect(result.current.file).toMatchObject({ s: 'ok', pin: { commit: COMMIT_B } });
   });
 
-  it('an older GET that lands after a newer POST answer still releases the reads waiting on a listing', async () => {
+  it('an older GET that lands after a newer POST answer releases no waiting read; the re-list is made again and releases it', async () => {
     const moved = treeOk({ commit: COMMIT_B, entries: [entry('specs', 'a.md', { committed: { kind: 'file', blob: BLOB_2, size: 9 } })] });
     const f = fakeLoaders();
     const get = held<Awaited<ReturnType<DocsLoaders['tree']>>>();
@@ -409,8 +409,10 @@ describe('a timer or an answer acts only on the state it was for', () => {
     act(() => result.current.refreshManual());
     await flush();
     expect(f.file).toHaveBeenCalledTimes(2);
+    f.tree.mockResolvedValueOnce(okTree(moved));
     await act(async () => get.settle(okTree(treeOk({ commit: COMMIT_A }))));
     await flush();
+    expect(f.tree).toHaveBeenCalledTimes(3);
     expect(f.file).toHaveBeenCalledTimes(3);
     expect(result.current.file).toMatchObject({ s: 'ok', pin: { commit: COMMIT_B } });
   });

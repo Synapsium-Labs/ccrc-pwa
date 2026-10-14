@@ -10,10 +10,10 @@ import { DOCS_CLASS_CAP, type DocPin, type DocsPageLocation } from '../../shared
 import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
 import { DOCS_RELIST_WORDS } from '../src/docs/docsText';
 import { fileKey, pinFor, treeKey, useDocsVisit } from '../src/docs/useDocsVisit';
-import type { DocsLoaders } from '../src/docs/failures';
+import type { DocsFileAnswer, DocsLoaders, DocsTreeAnswer } from '../src/docs/failures';
 import {
   BLOB_1, BLOB_2, COMMIT_A, COMMIT_B, FP_1, RAN, SERVED, bodyOf, draftOf, entry, failedAnswer, fakeLoaders, holder, okFile,
-  okRefresh, okTree, pageAt, recordingRejections, rejectsOnAbort, treeOk,
+  okRefresh, okTree, pageAt, recordingRejections, rejectsOnAbort, treeOk, treeResponse,
 } from './docsFixtures';
 
 afterEach(() => {
@@ -823,5 +823,41 @@ describe('Review 439 F20: an auto-class word inside a refresh answer retries onc
     expect(f.refresh).toHaveBeenCalledTimes(2);
     await advance(60_000);
     expect(f.tree).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('Review 439 F19: a stale tree answer releases no waiting read; the one automatic re-list fetches anew', () => {
+  it('a GET in flight as the re-list word lands, older than a POST answer, is dropped and a fresh GET is made', async () => {
+    const f = fakeLoaders();
+    let settleGet2: (a: DocsTreeAnswer) => void = () => {};
+    let settleGet3: (a: DocsTreeAnswer) => void = () => {};
+    let settleRead1: (a: DocsFileAnswer) => void = () => {};
+    f.tree.mockResolvedValueOnce(okTree());
+    f.tree.mockImplementationOnce(() => new Promise((r) => { settleGet2 = r; }));
+    f.tree.mockImplementationOnce(() => new Promise((r) => { settleGet3 = r; }));
+    f.file.mockImplementationOnce(() => new Promise((r) => { settleRead1 = r; }));
+    f.refresh.mockResolvedValueOnce(okRefresh(RAN, treeResponse()));
+    const { result } = visit(f.loaders, '/docs/demo/specs/a.md');
+    await flush();
+    act(() => result.current.retryTree());
+    await flush();
+    act(() => result.current.refreshManual());
+    await flush();
+    expect(f.tree).toHaveBeenCalledTimes(2);
+    // the read says the listing moved; its re-list is the GET already in flight, which started before the POST answered
+    await act(async () => settleRead1(failedAnswer('unknown-commit')));
+    await flush();
+    expect(f.tree).toHaveBeenCalledTimes(2);
+    expect(f.file).toHaveBeenCalledTimes(1);
+    await act(async () => settleGet2(okTree()));
+    await flush();
+    // dropped as stale: it released no read, and the re-list is made again
+    expect(f.tree).toHaveBeenCalledTimes(3);
+    expect(f.file).toHaveBeenCalledTimes(1);
+    expect(result.current.file.s).toBe('loading');
+    await act(async () => settleGet3(okTree()));
+    await flush();
+    expect(f.file).toHaveBeenCalledTimes(2);
+    expect(result.current.file.s).toBe('ok');
   });
 });
