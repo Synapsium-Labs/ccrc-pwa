@@ -21,11 +21,11 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { TOKEN_HOLDS, OWED_REASONS, TOKEN_ORIGINS } from '../../shared/box-token.js';
+import { TOKEN_HOLDS, OWED_REASONS, TOKEN_ORIGINS, TOKEN_ROTATION_INTERVAL_MS, TOKEN_ROTATION_OVERDUE_SLACK_MS } from '../../shared/box-token.js';
 import { GENERATION_ID_HEX, NODE_FILES, TOKEN_SYNC_OP_ERRORS, TOKEN_TRANSPORTS } from '../../shared/agent-protocol.js';
 import { TOKEN_FILE_PROBLEMS } from '../../shared/box-token.js';
 import { PLACEHOLDER_TOKEN } from '../src/coord/token.js';
@@ -213,9 +213,11 @@ describe('doctor box-token: PASS, and only on a measured healthy box', () => {
 
   // Row 2c invariant: the live server's disk (mail.token, box-token.json at generation #3 with counters 0 and 0 and a
   // null stamp, and box-token-retired.json in the writer's shape) is PASS at every commit.
-  const plantLiveServer = (b: Box): void => {
+  const plantLiveServer = (b: Box, ageMs?: number): void => {
     editState(b, (s) => {
       s.current.seq = 3; s.nextSeq = 4;
+      // Row 3a: the age is overridden only when a row passes one; row 2c's rows keep healthyState's own plant.
+      if (ageMs !== undefined) { s.lastRotationAt = Date.now() - ageMs; s.current.since = Date.now() - ageMs; }
       s.counters = { previousPresented: 0, retiredPresented: 0, retiredPresentedAt: null };
     });
     writeFileSync(dot(b, 'box-token-retired.json'), '{"v":1,"retired":[]}\n', { mode: 0o600 });
@@ -240,12 +242,36 @@ describe('doctor box-token: PASS, and only on a measured healthy box', () => {
     expect(r.code).toBe(0);
     expect(r.stderr).toBe('');
   });
+
+  // Row 3a invariant: the live server is about two days past its last rotation, and the weekly schedule's overdue WARN
+  // (4557) waits for the interval plus its slack, so both ages below read the plain PASS.
+  it('the live server two days after its rotation reads the live line, PASS (row 3a invariant)', () => {
+    const b = box({ role: 'server' });
+    plantLiveServer(b, 2 * 24 * 60 * MIN + 5 * MIN);
+    for (const checks of [CHECKS_SRC, disarmed()]) {
+      const r = runCheck(b, checks);
+      expect(r.stdout).toBe('PASS box-token: server: generation #3, rotated 2 d ago, fleet confirmed, retired value refused\n');
+      expect(r.code).toBe(0);
+      expect(r.stderr).toBe('');
+    }
+  });
+
+  it('seven days and twenty-three hours after the last rotation is still PASS: the overdue WARN waits for the slack (row 3a invariant)', () => {
+    const b = box({ role: 'server' });
+    plantLiveServer(b, (7 * 24 + 23) * 60 * MIN);
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toBe('PASS box-token: server: generation #3, rotated 7 d ago, fleet confirmed, retired value refused\n');
+    expect(r.code).toBe(0);
+    expect(r.stderr).toBe('');
+  });
 });
 
 // ── every armed state: FAIL or WARN with its word (SKIP only in the disarmed copy) ──
 
 interface Row { label?: string; word: string; arm: 'server' | 'fleet'; armedClass: 'FAIL' | 'WARN'; plant: (b: Box) => void }
 const now = (): number => Date.now();
+/** 4557: the age past which a standing schedule is overdue, the interval plus its slack (both L0's). */
+const OVER = TOKEN_ROTATION_INTERVAL_MS + TOKEN_ROTATION_OVERDUE_SLACK_MS;
 const ROWS: Row[] = [
   // 4553 (D-139 ruled over Decision 2 (a), 2026-10-12): the class of an absent token comes from the box's history, read
   // after the state read. A server that has a state file once held a value and lost it: FAIL. One with no state file has
@@ -291,6 +317,8 @@ const ROWS: Row[] = [
   { arm: 'server', word: 'rotation-owed:retired-written-back', armedClass: 'WARN', plant: (b) => editState(b, (s) => { s.rotationOwed = true; s.owedWhy = 'retired-written-back'; }) },
   // D-4412 (Part A, merged after the brief): a retired value presented owes one bounded forward rotation.
   { arm: 'server', word: 'rotation-owed:retired-presented', armedClass: 'WARN', plant: (b) => editState(b, (s) => { s.rotationOwed = true; s.owedWhy = 'retired-presented'; }) },
+  // 4557: no rotation for longer than the interval plus its slack, with no hold and nothing pending. Computed, never persisted.
+  { arm: 'server', word: 'rotation-overdue', armedClass: 'WARN', plant: (b) => editState(b, (s) => { s.lastRotationAt = now() - OVER - 60 * MIN; }) },
   { arm: 'server', word: 'proof-unmeasured', armedClass: 'WARN', plant: (b) => editState(b, (s) => { s.lastSync = { at: now() - MIN, word: 'proof-unmeasured', transport: 'https' }; }) },
   // D-4551 (fix round 1): the two stalled retirements merged Part A can reach. Minutes are floored, so 30 and 45 exactly.
   { arm: 'server', word: 'retire-overdue:30', armedClass: 'FAIL', plant: (b) => editState(b, (s) => {
@@ -485,6 +513,89 @@ describe('doctor box-token: a rotation answers a retired presentation (4552)', (
     expect(r.stdout).toMatch(/remedy: .*this line clears when that rotation completes/);
     expect(r.stdout).not.toMatch(/resync that box/);
     expect(r.stdout).not.toMatch(/Rotate now/);
+  });
+});
+
+// ── the weekly schedule: overdue, and a stamp ahead of the clock (4557) ──
+
+describe('doctor box-token: the weekly schedule, overdue and ahead (4557)', () => {
+  const oldAnchor = (s: BoxTokenState): void => { s.lastRotationAt = now() - OVER - 60 * MIN; s.current.since = s.lastRotationAt; };
+  const pendingEntry = (): BoxTokenState['pending'][number] =>
+    ({ id: ID_OLD, seq: 3, stagedAt: now() - MIN, handedOutAt: null, confirmBy: null, write: { dev: 1, ino: 3, writtenAtMs: now() - MIN } });
+
+  it('a null lastRotationAt counts from current.since: a minted value never rotated for eight days is overdue', () => {
+    const b = box({ role: 'server' });
+    editState(b, (s) => {
+      s.origin = 'minted'; s.lastRotationAt = null; s.retiredRefusedAt = null; s.current.since = now() - OVER - 60 * MIN;
+    });
+    const r = runCheck(b, CHECKS_SRC);
+    // The whole sentence, so a wrong constant in its words reds (the slack term spelled with the interval says 7 d, not 24 h).
+    expect(r.stdout).toMatch(/^WARN box-token: server: rotation-overdue — no rotation has completed for 8 d, past the 7 d schedule and its 24 h slack, with no hold standing and nothing in flight\b/);
+    expect(r.stdout).toMatch(/\n {2}remedy: \S/);
+    expect(r.code).toBe(2);
+  });
+
+  it('a standing hold is the finding, not the schedule', () => {
+    const b = box({ role: 'server' });
+    editState(b, (s) => { oldAnchor(s); s.hold = 'link-down'; });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toContain('server: held:link-down — ');
+    expect(r.stdout).not.toContain('rotation-overdue');
+  });
+
+  // A rotation in flight is not overdue: a staged or handed-out value has its id pending, and a recorded promotion
+  // counts whether or not its id is still pending (the crash-window row below).
+  const inFlight = 'PASS box-token: server: generation #2, rotated 8 d ago, fleet confirmed, retired value refused, a rotation in progress\n';
+  it('a rotation in flight is not overdue: a staged value', () => {
+    const b = box({ role: 'server' });
+    editState(b, (s) => { oldAnchor(s); s.pending = [pendingEntry()]; });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toBe(inFlight);
+    expect(r.code).toBe(0);
+  });
+
+  it('a rotation in flight is not overdue: a promotion recorded, its id still pending', () => {
+    const b = box({ role: 'server' });
+    editState(b, (s) => { oldAnchor(s); s.pending = [pendingEntry()]; s.promoting = { id: ID_OLD }; });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toBe(inFlight);
+    expect(r.code).toBe(0);
+  });
+
+  // A crash between promote's discard write and its commit leaves `promoting` set with `pending` empty. The PASS arm
+  // reads that as a rotation in progress, so the overdue clause must read it the same way (not "nothing in flight").
+  it('a rotation in flight is not overdue: a promotion recorded with nothing pending (the crash window)', () => {
+    const b = box({ role: 'server' });
+    editState(b, (s) => { oldAnchor(s); s.pending = []; s.promoting = { id: ID_OLD }; });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toBe(inFlight);
+    expect(r.code).toBe(0);
+  });
+
+  it('an owed rotation that is also overdue names both', () => {
+    const b = box({ role: 'server' });
+    editState(b, (s) => { oldAnchor(s); s.rotationOwed = true; s.owedWhy = 'recovered'; });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toContain('server: rotation-owed:recovered — ');
+    expect(r.stdout).toContain('server: rotation-overdue — ');
+    expect(r.code).toBe(2);
+  });
+
+  it('a stamp ahead of the clock says so on the PASS line, and the schedule waits', () => {
+    const b = box({ role: 'server' });
+    // A margin off `_bt_age`'s 7200 s boundary: Python reads its clock a few ms after the test's `now()`.
+    editState(b, (s) => { s.lastRotationAt = now() + 2 * 60 * MIN + 5 * MIN; });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toBe('PASS box-token: server: generation #2, rotated 0 s ago, fleet confirmed, retired value refused, its schedule stamp 2 h ahead of this clock (the weekly schedule counts its interval from that stamp)\n');
+    expect(r.code).toBe(0);
+  });
+
+  it('a stamp more than one interval ahead says the server rotates now', () => {
+    const b = box({ role: 'server' });
+    editState(b, (s) => { s.lastRotationAt = now() + TOKEN_ROTATION_INTERVAL_MS + 60 * MIN; });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toContain('its schedule stamp 7 d ahead of this clock (more than the interval, so the server rotates now)');
+    expect(r.code).toBe(0);
   });
 });
 
@@ -837,6 +948,16 @@ describe('doctor box-token: a box never handed a value reads PASS with its sente
     expect(r.stdout).toMatch(new RegExp(`^PASS box-token: ${never('server')}\\n$`));
     expect(r.code).toBe(0);
   });
+  // Row 3a, R19: a `~/.cc-secrets` that is MISSING is not unsearchable (ENOENT, not EACCES), so a fresh own-write box with
+  // no such directory keeps the fresh PASS on both parts.
+  it('both role, local, own-write, fresh, with no ~/.cc-secrets at all: the fresh PASS on both parts (row 3a, R19: a missing directory is not unsearchable)', () => {
+    const b = box({ role: 'both' });
+    dropServer(b); dropFleet(b);
+    rmSync(join(b.home, '.cc-secrets'), { recursive: true });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(new RegExp(`^PASS box-token: ${never('server')}; ${never('fleet')}\\n$`));
+    expect(r.code).toBe(0);
+  });
   it('fleet role: no token file, no generation file and no sync report is PASS rc 0, naming the fact, with no remedy; disarmed the same', () => {
     const b = box({ role: 'fleet' });
     dropFleet(b);
@@ -1152,7 +1273,8 @@ describe('doctor box-token: an unsearchable parent directory is unreadable, neve
   });
   // 4554: a directory with a search bit and no read bit opens its files but cannot list them, so a set-aside copy cannot be
   // ruled out, and boot refuses to start on it. Its state read is `absent` (`lstat` needs only search). An undecidable
-  // history fails closed, with a sentence and remedy of its own: "restart the server" would be false there.
+  // history fails closed, with a sentence and remedy of its own: "restart the server" would be false there, whatever the
+  // directory or the fleet side also holds (row 3a, R18).
   const unlistable = (b: Box, role: 'server' | 'both'): string => {
     const alt = join(b.home, 'alt-dir');
     mkdirSync(alt, { recursive: true, mode: 0o700 });
@@ -1186,6 +1308,98 @@ describe('doctor box-token: an unsearchable parent directory is unreadable, neve
       expect(r.stdout).toMatch(/; fleet: fleet-token-absent — .* does not exist, so this box's calls to the server carry no box token/);
       expect(r.stdout).not.toContain(FLEET_NEVER);
       expect(r.code).toBe(1);
+    });
+  });
+  // Row 3a, R18 (4554 amended): the unlisted test runs FIRST, so a directory that cannot be listed always gets the
+  // `chmod u+r` remedy, whatever it or the fleet side also holds. Boot refuses to start on such a directory, so "restart the
+  // server" would be false there even when a named trace stands beside the state file.
+  itNonRoot('server: an unlistable token directory that also holds a named trace gets the chmod u+r remedy, never the restart remedy (row 3a, R18; 4554 limit (a) closed)', () => {
+    const b = box({ role: 'server' });
+    const alt = unlistable(b, 'server');
+    writeFileSync(join(alt, 'box-token-retired.json'), RETIRED, { mode: 0o600 });
+    listless(alt, () => {
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout).toMatch(/^FAIL box-token: server: token-absent — .* cannot be listed/);
+      expect(r.stdout).toMatch(/\n {2}remedy: .*chmod u\+r /);
+      expect(r.stdout).not.toContain('restart the server');
+      expect(r.stdout).not.toContain(SERVER_NEVER);
+      expect(r.code).toBe(1);
+      const d = runCheck(b, disarmed());
+      expect(d.stdout).toMatch(/^SKIP box-token: /);
+      expect(d.code).toBe(3);
+    });
+  });
+  itNonRoot('both role, local, own-write: an unlistable token directory with the fleet file and the generation file surviving gets the chmod u+r remedy (row 3a, R18)', () => {
+    const b = box({ role: 'both' });
+    const alt = unlistable(b, 'both');
+    rmSync(dot(b, 'token-sync.json'));
+    // The precondition: both own-write traces stand, so the old order would have named one of them.
+    expect(existsSync(fleetFile(b)) && existsSync(dot(b, NODE_FILES.tokenGeneration))).toBe(true);
+    listless(alt, () => {
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout).toMatch(/^FAIL box-token: server: token-absent — .* cannot be listed/);
+      expect(r.stdout).toMatch(/\n {2}remedy: .*chmod u\+r /);
+      expect(r.stdout).not.toContain('restart the server (ccrc.service)');
+      expect(r.code).toBe(1);
+      const d = runCheck(b, disarmed());
+      expect(d.stdout).toMatch(/^SKIP box-token: /);
+      expect(d.code).toBe(3);
+    });
+  });
+  // Row 3a, R19 (4554 amended): on an own-write box a `~/.cc-secrets` that exists and cannot be searched hides the fleet
+  // token file from `-e`. With no generation file standing, that is its own trace word, never `unlisted` and never the
+  // never-minted PASS: two conditions, two remedies (u+x, u+r). The verdict is FAIL either way, through the fleet part.
+  const reEsc = (x: string): string => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const lostServerAndFleetHistory = (b: Box): void => {
+    for (const f of [dot(b, 'mail.token'), dot(b, 'box-token.json'), dot(b, NODE_FILES.tokenGeneration), dot(b, 'token-sync.json')]) rmSync(f);
+  };
+  itNonRoot('both role, local, own-write: ~/.cc-secrets that cannot be searched is its own word on the server part, unsearchable, with a chmod u+x remedy; the line stays FAIL rc 1 (row 3a, R19)', () => {
+    const b = box({ role: 'both' });
+    lostServerAndFleetHistory(b);
+    const secrets = join(b.home, '.cc-secrets');
+    unsearchable(secrets, () => {
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout).toMatch(/^FAIL box-token: server: token-absent — .* cannot be searched, so whether this box's server wrote the fleet token file there cannot be told/);
+      expect(r.stdout).toContain('fleet: fleet-token-unusable — ');
+      expect(r.stdout).toMatch(new RegExp(`\\n {2}remedy: .*chmod u\\+x ${reEsc(secrets)}`));
+      expect(r.stdout).not.toContain(SERVER_NEVER);
+      expect(r.stdout).not.toContain('cannot be listed');
+      expect(r.code).toBe(1);
+      const d = runCheck(b, disarmed());
+      expect(d.stdout).toMatch(/^SKIP box-token: /);
+      expect(d.code).toBe(3);
+    });
+  });
+  itNonRoot('both role, local, own-write: with ~/.cc-secrets unsearchable but the generation file present, the generation file is the named trace (row 3a, R19)', () => {
+    const b = box({ role: 'both' });
+    for (const f of [dot(b, 'mail.token'), dot(b, 'box-token.json'), dot(b, 'token-sync.json')]) rmSync(f);
+    expect(existsSync(dot(b, NODE_FILES.tokenGeneration))).toBe(true);
+    unsearchable(join(b.home, '.cc-secrets'), () => {
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout).toMatch(new RegExp(`^FAIL box-token: server: token-absent — .* but .*${reEsc(NODE_FILES.tokenGeneration)} does: this server held a value once`));
+      expect(r.stdout).not.toContain('cannot be searched');
+      expect(r.code).toBe(1);
+      const d = runCheck(b, disarmed());
+      expect(d.stdout).toMatch(/^SKIP box-token: /);
+      expect(d.code).toBe(3);
+    });
+  });
+  // A set-aside copy beside the state file is a definite trace, so it is named even when ~/.cc-secrets cannot be searched:
+  // the unsearchable word says only that the history cannot be told, and here a copy tells it.
+  itNonRoot('both role, local, own-write: with ~/.cc-secrets unsearchable and a set-aside copy of the state file in the token directory, the copy is the named trace, not unsearchable (row 3a, R19)', () => {
+    const b = box({ role: 'both' });
+    lostServerAndFleetHistory(b);
+    const aside = dot(b, 'box-token.json.unusable-1760000000000');
+    writeFileSync(aside, '{}\n', { mode: 0o600 });
+    unsearchable(join(b.home, '.cc-secrets'), () => {
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout).toMatch(new RegExp(`^FAIL box-token: server: token-absent — .* but ${reEsc(aside)} does: this server held a value once`));
+      expect(r.stdout).not.toContain('cannot be searched, so whether this box');
+      expect(r.stdout).not.toContain('its search bit');
+      expect(r.code).toBe(1);
+      const d = runCheck(b, disarmed());
+      expect(d.stdout).toMatch(/^SKIP box-token: /);
+      expect(d.code).toBe(3);
     });
   });
 });
@@ -1230,6 +1444,10 @@ describe('doctor box-token: the shell spellings are pinned to L0', () => {
   it('the pending cap and the driver tick are the policy\'s', () => {
     expect(arr('_BT_PENDING_CAP')).toEqual([String(PENDING_HARD_CAP)]);
     expect(arr('_BT_TICK_MS')).toEqual([String(DRIVER_TICK_MS)]);
+  });
+  it('the interval and its overdue slack are L0\'s (4557)', () => {
+    expect(arr('_BT_INTERVAL_MS')).toEqual([String(TOKEN_ROTATION_INTERVAL_MS)]);
+    expect(arr('_BT_OVERDUE_SLACK_MS')).toEqual([String(TOKEN_ROTATION_OVERDUE_SLACK_MS)]);
   });
   it('the failure count that turns failed:* FAIL is the banner threshold', () => {
     expect(arr('_BT_FAIL_AT')).toEqual([String(FAILURES_FOR_BANNER)]);

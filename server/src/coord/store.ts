@@ -62,7 +62,7 @@ import {
   // design 2026-09-20 §6/§7 (W2): the release catalogue's tag guard and channel vocabulary.
   isReleaseTag, isUpdateChannel,
   // design 2026-09-20 §6/§8/§10 (W2): the node inventory's vocabularies and the lease's two lists.
-  BUSY_UPDATE_STATES, isInstallState, isNodeOs, isNodeRole, isProvenanceState, isRequestKind, isStampRead,
+  BUSY_UPDATE_STATES, isInstallState, isNodeOs, isProvenanceState, isRequestKind, isStampRead,
   isUpdatePhase, isUpdateState, PROVENANCE_DETAIL_PREFIX, SETTLED_UPDATE_STATES, validCapWords,
   // fix round 1, D-3213: the floor/previous read-state vocabulary beside `highestVersion`/`previousVersion`.
   isTagFileRead,
@@ -102,7 +102,7 @@ import {
   type SettledUpdateState, type StampRead, type TagFileRead, type UpdatePhase, type UpdateState,
   type AutoMode, type NotifyMode,
   type WorkItemState,
-} from '../../../shared/api.js';
+} from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
 
 /** One entry in `$REG/<id>.prhistory` (ccd/ccd:2252-2253). Re-declared as a TYPE
  *  here rather than parsed twice: `coord/prhistory.ts` owns the reader. */
@@ -7284,18 +7284,18 @@ export class CoordStore {
    *  `askKey` hashes CONTENT, so a child looping over identical questions
    *  mints the same key twice and `updatedAt` is what tells instance 1 from
    *  instance 2. What it does not say is that `updatedAt` moves for reasons
-   *  that have nothing to do with the dialog: `ccd/session-hook.sh` stamps it
-   *  unconditionally on EVERY write, and its `SubagentStart`/`SubagentStop`
-   *  arm re-reads `.ask` straight back off the file (`:1227` — D-2404: it is
-   *  that re-read, NOT the `:1233` ask-clear exemption two reviewers named,
-   *  since `state` is `waiting` on this path and the clear never applies) and
-   *  restores `prev_state`, so a subagent event on a session blocked at a dialog
-   *  rewrites the identical envelope under a fresh number. Nothing re-stamped
-   *  the row, so ONE such bump refused every parent answer for the row's
-   *  whole life and the lane degraded, silently and greenly, to the
-   *  pre-feature behaviour it was built to replace. Measured across the seam
-   *  in `server/test/ask-instance-guard.test.ts` — the real hook writing, the
-   *  real CAS refusing, with the control that says the bump is why.
+   *  that have nothing to do with the dialog: `ccd/session-hook.sh` stamped it
+   *  on EVERY write, and its `SubagentStart`/`SubagentStop` arm re-read `.ask`
+   *  straight back off the file (`:1227` then — D-2404: that re-read, NOT the
+   *  `:1233` ask-clear exemption two reviewers named, since `state` is `waiting`
+   *  on this path) and restored `prev_state`, so a subagent event on a session
+   *  blocked at a dialog rewrote the identical envelope under a fresh number.
+   *  Since D-4041 a MAIN-thread wait keeps its `updatedAt` and gains `aliveAt`,
+   *  so that bump survives only for a wait a SUBAGENT raised (`waitBy:"subagent"`,
+   *  not carried) and for any other bump. Nothing re-stamped the row, so ONE
+   *  such bump refused every parent answer for the row's whole life and the lane
+   *  degraded, silently and greenly, to the pre-feature behaviour. Measured in
+   *  `server/test/ask-instance-guard.test.ts` (its last describe: the stamp that still moves).
    *
    *  WHY THIS IS NOT A WEAKENING. The `WHERE` demands both witnesses the
    *  guard actually cares about: `dialogId` — the sha1 of the menu painted in

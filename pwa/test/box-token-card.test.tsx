@@ -3,9 +3,9 @@
 // `boxToken` field of `GET /api/updates`, through ONE reader (`readBoxTokenView`),
 // and renders the server's own words: it decides nothing about the rotation.
 //
-// The idiom is settings-screen.test.tsx's: the full afterEach (cleanup,
-// restoreAllMocks, the route back to '/', the fleet store reset), `api` spied,
-// never a live fetch.
+// The idiom is settings-screen.test.tsx's: the full afterEach (cleanup, restoreAllMocks, the route back
+// to '/', the fleet store reset) and `api` spied. One live fetch is left: the screen's unarmed-exposure
+// banner reads GET /api/auth/status through `readAuthStatus`, a global `fetch` this file does not stub.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { NodeWire, UpdatesView } from '../../shared/api';

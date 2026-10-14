@@ -9,6 +9,7 @@
 // and `settle` rather than in the effect, as `useUpdatesView`'s does. It has no `refresh()`: the server decides the
 // confirm at the write (departure `server-decides-the-confirm` (D-4033)), so nothing here needs a fresh read to decide on.
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { isStallWatchRefusal } from '../../../shared/stall-watch';
 import {
   STALL_HELD_TEXT, STALL_LEVELS, STALL_NOTICE_TEXT, STALL_STAGES, STALL_STORED_STATES, isStallLevelChoice,
   type StallConfirmRequired, type StallLevel, type StallNextStep, type StallNoticeCount, type StallWatchEffective,
@@ -160,44 +161,46 @@ const isWriteEffect = (v: unknown): v is StallWriteEffect => {
 };
 
 /** The 409 body's guard: `error: 'confirm-required'`, a string `effectKey`, and an effect readable WHOLE. Nothing is
- *  dropped here: a sheet built from part of an effect would understate what the write does. Anything else is an
- *  ordinary refusal (`stallWriteRefusal`). */
+ *  dropped here: a sheet built from part of an effect would understate what the write does. Anything else is not a
+ *  confirm: `stallWriteRefusal` reads it as a refusal on a known code and as unconfirmed otherwise. */
 export function asStallConfirm(raw: unknown): StallConfirmRequired | null {
   if (!isObject(raw) || raw.error !== 'confirm-required' || typeof raw.effectKey !== 'string') return null;
   return isWriteEffect(raw.effect) ? (raw as unknown as StallConfirmRequired) : null;
 }
 
 /** A write's rejection, read: the confirm the sheet shows, a refusal whose `detail` fills `STALL_CONFIRM_TEXT.refused`,
- *  or an answer that never arrived, which may have stored the write and so is never called a refusal. */
+ *  or an answer that confirms nothing, which may have stored the write and so is never called a refusal. Its `detail`
+ *  fills `STALL_CONFIRM_TEXT.unconfirmed`, and is null when no answer arrived (`STALL_CONFIRM_TEXT.unanswered`). */
 export type StallWriteRefusal =
   | { kind: 'confirm'; confirm: StallConfirmRequired }
   | { kind: 'refused'; detail: string }
-  | { kind: 'unconfirmed' };
+  | { kind: 'unconfirmed'; detail: string | null };
 
 /** A string with something in it, trimmed; anything else is null. */
 const nonBlank = (v: unknown): string | null => (typeof v === 'string' && v.trim().length > 0 ? v.trim() : null);
 
 /**
  * A confirm needs BOTH the 409 status and a body `asStallConfirm` reads, as not-configured needs both its status and
- * its code. Every other `ApiError` is a refusal: the server answered, so nothing was written. Its detail is the first
- * non-blank of the server's own `detail` (a 400 naming an unknown key), the body's `message` (Fastify's 500 carries the
- * cause the route threw there, such as a stored row that cannot be read), the error's own text through
- * `apiErrorText` (a `confirm-required` body that does not read, a non-JSON body), and last the HTTP status (an
- * `{ error: '' }` body leaves that text empty), so the refusal line never renders with an empty slot. The status
- * text is not an L0 line: it fills the server-answer detail slot, not section copy.
+ * its code. An `ApiError` whose body's `error` is one of the route's own codes (`isStallWatchRefusal`, L0's
+ * `STALL_WATCH_REFUSALS`) is a refusal: the route answered it before any write. Every other `ApiError` is
+ * `unconfirmed` (`an-answer-without-a-refusal-code-reads-unconfirmed` (D-4045)): a gateway's 502 or 504 can follow a
+ * POST that reached the server, and a 500 can follow a store that committed, so its answer proves nothing about the
+ * write. Either detail is the first non-blank of the server's own `detail` (a 400 naming an unknown key), the body's
+ * `message` (Fastify's 500 carries the cause the route threw there), the error's own text through `apiErrorText` (a
+ * non-JSON body), and last the HTTP status (an `{ error: '' }` body leaves that text empty), so neither line renders
+ * with an empty slot. The status text is not an L0 line: it fills the server-answer detail slot, not section copy.
  *
  * A rejection that is not an `ApiError` is a network failure, and the POST may have left before it: the write may
- * have landed. It is `unconfirmed`, never a refusal, so the section never says "Nothing was changed" about it.
+ * have landed. It is `unconfirmed` with no detail, never a refusal, so the section never says "Nothing was changed"
+ * about it.
  */
 export function stallWriteRefusal(err: unknown): StallWriteRefusal {
-  if (!(err instanceof ApiError)) return { kind: 'unconfirmed' };
+  if (!(err instanceof ApiError)) return { kind: 'unconfirmed', detail: null };
   const confirm = err.status === 409 ? asStallConfirm(err.body) : null;
   if (confirm !== null) return { kind: 'confirm', confirm };
   const body = isObject(err.body) ? err.body : {};
-  return {
-    kind: 'refused',
-    detail: nonBlank(body.detail) ?? nonBlank(body.message) ?? nonBlank(apiErrorText(err)) ?? `HTTP ${err.status}`,
-  };
+  const detail = nonBlank(body.detail) ?? nonBlank(body.message) ?? nonBlank(apiErrorText(err)) ?? `HTTP ${err.status}`;
+  return isStallWatchRefusal(body.error) ? { kind: 'refused', detail } : { kind: 'unconfirmed', detail };
 }
 
 // Moved to ../lib/notAvailable.ts (settingsReadFailure); the comment below stays for its history.

@@ -6,14 +6,15 @@
 //    would claim the choice applies when the server said it does not.
 //  • asStallConfirm: the 409 `confirm-required` body, accepted only whole — a sheet built from part of an effect
 //    would understate what the write does.
-//  • stallWriteRefusal: a write's rejection read as a confirm to show, a refusal with a detail that is never empty, or
-//    (a network failure, which may have landed) an unconfirmed write.
+//  • stallWriteRefusal: a write's rejection read as a confirm to show, a refusal (only on the route's own codes,
+//    L0's STALL_WATCH_REFUSALS) whose detail is never empty, or an unconfirmed write (any other answer, or none).
 //
 // The hook adds `settle(view)` to useUpdatesView's shape: a write's reply wins over any poll issued before it (P4).
 // Only 501 `not-configured` and 404 `not-found` read as not-configured, each status with its own code (P7).
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import type { StallConfirmRequired, StallWatchEffective, StallWatchView, StallWriteEffect } from '../../shared/api';
+import { STALL_WATCH_REFUSALS } from '../../shared/stall-watch';
 import { ApiError, api, createApi } from '../src/lib/api';
 import {
   STALL_WATCH_POLL_MS, asStallConfirm, asStallWatchView, stallWriteRefusal, useStallWatchView,
@@ -259,7 +260,7 @@ describe('asStallConfirm — the 409 body, accepted only whole', () => {
   });
 });
 
-describe('stallWriteRefusal — a confirm to show, a refusal whose detail is never empty, or an unconfirmed write', () => {
+describe('stallWriteRefusal — a confirm to show, a refusal only on the route\'s own code, or an unconfirmed write', () => {
   it('reads a 409 with a readable confirm body as a confirm', () => {
     const body = confirmBody();
     expect(stallWriteRefusal(new ApiError(409, body))).toEqual({ kind: 'confirm', confirm: body });
@@ -279,32 +280,53 @@ describe('stallWriteRefusal — a confirm to show, a refusal whose detail is nev
     expect(stallWriteRefusal(err)).toEqual({ kind: 'refused', detail: 'unknown key: loudness' });
   });
 
-  it("takes Fastify's message when the body has no detail: a 500 names the cause the route threw", () => {
-    const cause = 'stall settings unreadable, nothing written: disk gone';
-    const fastify500 = new ApiError(500, { statusCode: 500, error: 'Internal Server Error', message: cause });
-    expect(stallWriteRefusal(fastify500)).toEqual({ kind: 'refused', detail: cause });
+  it('D-4045: only the route\'s own codes are refusals, and the list is L0\'s', () => {
+    expect([...STALL_WATCH_REFUSALS].sort()).toEqual(['bad-request', 'confirm-required', 'not-configured']);
     const both = new ApiError(400, { ok: false, error: 'bad-request', detail: 'unknown key: loudness', message: 'other' });
     expect(stallWriteRefusal(both)).toEqual({ kind: 'refused', detail: 'unknown key: loudness' });
-  });
-
-  it("falls back to the error's own text when the body has neither: a blank detail or message, raw text", () => {
-    const bare500 = new ApiError(500, { statusCode: 500, error: 'Internal Server Error', message: '  ' });
-    expect(stallWriteRefusal(bare500)).toEqual({ kind: 'refused', detail: 'Internal Server Error' });
     const blank = new ApiError(400, { ok: false, error: 'bad-request', detail: '   ' });
     expect(stallWriteRefusal(blank)).toEqual({ kind: 'refused', detail: 'bad-request' });
-    expect(stallWriteRefusal(new ApiError(502, 'Bad Gateway'))).toEqual({ kind: 'refused', detail: 'request failed (502)' });
+    expect(stallWriteRefusal(new ApiError(501, { ok: false, error: 'not-configured' })).kind).toBe('refused');
   });
 
-  it('never leaves the refusal detail blank: a body whose only text is empty or whitespace names the HTTP status', () => {
-    expect(stallWriteRefusal(new ApiError(400, { error: '' })), 'an empty error code').toEqual({ kind: 'refused', detail: 'HTTP 400' });
-    expect(stallWriteRefusal(new ApiError(503, { error: '   ' })), 'a whitespace-only error code').toEqual({ kind: 'refused', detail: 'HTTP 503' });
+  it('D-4045: a 500 is unconfirmed, never a refusal: the store may have committed before the throw', () => {
+    const cause = 'stall settings unreadable, nothing written: disk gone';
+    const fastify500 = new ApiError(500, { statusCode: 500, error: 'Internal Server Error', message: cause });
+    expect(stallWriteRefusal(fastify500), 'Fastify\'s message is the detail').toEqual({ kind: 'unconfirmed', detail: cause });
+    const bare500 = new ApiError(500, { statusCode: 500, error: 'Internal Server Error', message: '  ' });
+    expect(stallWriteRefusal(bare500), 'then the error\'s own text').toEqual({ kind: 'unconfirmed', detail: 'Internal Server Error' });
+  });
+
+  it('D-4045: a gateway 502 or 504 is unconfirmed, never a refusal: the POST may have reached the server', () => {
+    expect(stallWriteRefusal(new ApiError(502, 'Bad Gateway')))
+      .toEqual({ kind: 'unconfirmed', detail: 'request failed (502)' });
+    expect(stallWriteRefusal(new ApiError(502, { error: 'Bad Gateway' })))
+      .toEqual({ kind: 'unconfirmed', detail: 'Bad Gateway' });
+    expect(stallWriteRefusal(new ApiError(504, null)))
+      .toEqual({ kind: 'unconfirmed', detail: 'request failed (504)' });
+  });
+
+  it('D-4045: a code this build does not know is unconfirmed, on any status, a 409 included', () => {
+    expect(stallWriteRefusal(new ApiError(409, { ok: false, error: 'conflict', detail: 'changed twice' })))
+      .toEqual({ kind: 'unconfirmed', detail: 'changed twice' });
+    expect(stallWriteRefusal(new ApiError(400, { ok: false, detail: 'no code' })))
+      .toEqual({ kind: 'unconfirmed', detail: 'no code' });
+    expect(stallWriteRefusal(new ApiError(400, { ok: false, error: 'constructor' })).kind, 'an inherited key is no code')
+      .toBe('unconfirmed');
+  });
+
+  it('never leaves either detail blank: a body whose only text is empty or whitespace names the HTTP status', () => {
+    expect(stallWriteRefusal(new ApiError(400, { error: '' })), 'an empty error code')
+      .toEqual({ kind: 'unconfirmed', detail: 'HTTP 400' });
+    expect(stallWriteRefusal(new ApiError(503, { error: '   ' })), 'a whitespace-only error code')
+      .toEqual({ kind: 'unconfirmed', detail: 'HTTP 503' });
     expect(stallWriteRefusal(new ApiError(422, { error: '', detail: '', message: ' ' })), 'every slot blank')
-      .toEqual({ kind: 'refused', detail: 'HTTP 422' });
+      .toEqual({ kind: 'unconfirmed', detail: 'HTTP 422' });
   });
 
-  it('reads a rejection that is not an ApiError as unconfirmed, never a refusal: the POST may have landed', () => {
-    expect(stallWriteRefusal(new TypeError('Failed to fetch'))).toEqual({ kind: 'unconfirmed' });
-    expect(stallWriteRefusal(new Error('aborted'))).toEqual({ kind: 'unconfirmed' });
+  it('reads a rejection that is not an ApiError as unconfirmed with no detail, never a refusal: the POST may have landed', () => {
+    expect(stallWriteRefusal(new TypeError('Failed to fetch'))).toEqual({ kind: 'unconfirmed', detail: null });
+    expect(stallWriteRefusal(new Error('aborted'))).toEqual({ kind: 'unconfirmed', detail: null });
   });
 });
 
