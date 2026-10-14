@@ -1,16 +1,19 @@
 // The Docs link policy (spec 2026-10-01 4.10 "Highlighting" and 4.11; W5 part 1 Task 6). `detachUrls` takes every
-// URL out of a parsed tree before it renders, so no URL-bearing attribute reaches the DOM except through `DocLink` (and,
-// from Task 7, `DocImage`), and records the page highlight budget's decision for each `pre`; `docLinkTarget` is the one
-// decision `DocLink` renders; `docsLocation` is the one builder of a page location a Docs view links to (refinement
-// (q)). Pure: no React, no DOM, no module state, and no input is ever written.
+// URL out of a parsed tree before it renders, so no URL-bearing attribute reaches the DOM except through `DocLink` and
+// `DocImage`, and records the page highlight budget's decision for each `pre`; `docLinkTarget` is the one decision
+// `DocLink` renders; `imagePinFor` is the one pin rule for a page's images (W5 part 1 Task 7); `docsLocation` is the
+// one builder of a page location a Docs view links to (refinement (q)). Pure: no React state or hook (`imagePinFor`
+// asks the visit's pure `pinFor` for the page's own pin), no DOM, no module state, and no input is ever written.
 import type { Element as HastElement, Root as HastRoot, RootContent } from 'hast';
 import { urlAttributes } from 'html-url-attributes';
 import {
-  docsPageUrl, githubBlobUrl, resolveDocRef, type DocSectionSlug, type DocsPageLocation,
+  admitDraft, docsPageUrl, entryView, githubBlobUrl, resolveDocRef,
+  type DocPin, type DocSectionSlug, type DocsEntry, type DocsPageLocation, type DocsTreeOk,
 } from '../../../shared/docs';
 import { DOCS_HIGHLIGHT_PAGE_MAX_CHARS } from '../lib/markdownLimits';
 import { DOC_LINK_INERT_SENTENCE, type DocLinkInertReason } from './docsText';
 import type { DocLinkContextValue } from './DocLink';
+import { pinFor } from './useDocsVisit';
 
 /** What `detachUrls` recorded for one element of the copy. `attrs` holds every URL property moved off it (empty when it
  *  carried none), keyed by its hast property name, its value as text. `imageIndex: null` means the element is not an
@@ -178,4 +181,50 @@ export function docLinkTarget(ctx: DocLinkContextValue, raw: string): DocLinkTar
     case 'refused':
       return inert(r.why);
   }
+}
+
+/** Which bytes a Markdown image on a Docs page may show (spec 4.11's pin rule). `ok`: `pin` names them; `draft` is
+ *  true exactly when `pin` is a `DraftPin` (the image wears the `draft` chip and counts in the page banner);
+ *  `uncommittedNotShown` is true exactly when a committed page in a ref view shows the committed bytes of an image
+ *  whose draft would overlay there ("uncommitted change not shown"). Not ok, each one reason: `absent` (no entry at
+ *  the path, or the side the rule needs is not a committed file or exec), `deleted-in-worktree` (a draft page whose
+ *  image the worktree deletes), `draft-withheld` (a draft page whose image's draft is withheld or a type change: the
+ *  committed bytes are never shown in its place). */
+export type ImagePin =
+  | { ok: true; pin: DocPin; draft: boolean; uncommittedNotShown: boolean }
+  | { ok: false; why: 'absent' | 'deleted-in-worktree' | 'draft-withheld' };
+
+/** THE pin rule for a page's images (spec 4.11; the ONE derivation: `DocImage` now, Export in part 2, the W6 mockup
+ *  planner). `e` is the tree entry at the image's resolved path; `undefined` means there is none. The page is a DRAFT
+ *  page exactly when its own leaf opens a draft (`pinFor` answers a `DraftPin`); every other page is committed (the
+ *  default view, `view=committed`, a ref-view leaf that opens committed, and a page whose leaf is not in the tree).
+ *  - committed page: a committed file or exec gives `CommittedPin(ref.commit, ref.served)`, else `absent`; in a ref
+ *    view an image whose draft `admitDraft` admits is marked `uncommittedNotShown`. A draft is never resolved.
+ *  - draft page (an admitted holder at the served commit): no draft on the image gives the committed side under the
+ *    same condition; a deleted draft is `deleted-in-worktree`; a draft `entryView` opens gives
+ *    `DraftPin(drafts.branch, worktree head, fp)`; any other draft is `draft-withheld`. */
+export function imagePinFor(
+  e: DocsEntry | undefined, tree: DocsTreeOk, page: DocsPageLocation & { kind: 'path' },
+): ImagePin {
+  if (e === undefined) return { ok: false, why: 'absent' };
+  const drafts = tree.drafts;
+  const committed = (uncommittedNotShown: boolean): ImagePin => {
+    const kind = e.committed?.kind;
+    if (kind !== 'file' && kind !== 'exec') return { ok: false, why: 'absent' };
+    const pin: DocPin = {
+      kind: 'committed', commit: tree.ref.commit, servedRef: tree.ref.served, section: e.section, path: e.path,
+    };
+    return { ok: true, pin, draft: false, uncommittedNotShown };
+  };
+  if (pinFor(tree, page)?.kind !== 'draft') return committed(page.ref !== null && admitDraft(e, drafts));
+  const draft = e.draft;
+  if (draft === null) return committed(false);
+  if (draft.state === 'deleted') return { ok: false, why: 'deleted-in-worktree' };
+  if (entryView(e, drafts, 'ref').opens !== 'draft' || drafts.state !== 'holder' || draft.fp === null) {
+    return { ok: false, why: 'draft-withheld' };
+  }
+  const pin: DocPin = {
+    kind: 'draft', branch: drafts.branch, head: drafts.worktree.head, section: e.section, path: e.path, fp: draft.fp,
+  };
+  return { ok: true, pin, draft: true, uncommittedNotShown: false };
 }

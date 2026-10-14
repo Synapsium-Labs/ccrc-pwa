@@ -8,6 +8,7 @@ import type {
   DocsTreeOk, EntryBadge, GithubLink, WithheldReason,
 } from '../../../shared/docs';
 import { isDocsFailureWord, type DocsClientSlot } from './failures';
+import type { ImagePin } from './docsLinks';
 
 /** One sentence per docs failure word (spec 4.7), at least 20 characters each (M4.F1). */
 export const DOCS_FAILURE_SENTENCE: Record<DocsFailure, string> = {
@@ -244,3 +245,54 @@ export const DOC_LINK_INERT_SENTENCE: Record<DocLinkInertReason, string> = {
 
 /** The whole title of a link `DocLink` renders with no Docs page around it (no `DocLinkContext`). */
 export const DOC_LINK_OUTSIDE_PAGE = 'Links open only inside a Docs page';
+
+/** Why `DocImage` draws no image (spec 4.11: "Image not loaded: {reason}"): rendered outside a Docs page;
+ *  `imagePinFor`'s three refusals; a document that is not a raster or an SVG (`not-image`); an http or https image
+ *  (`external`: Docs never loads one); a listed size over its class cap (`too-large`, spec 5.5); an anchor; an
+ *  in-repo file outside the four sections (`repo`); a self-contained scheme; or a `resolveDocRef` refusal. A
+ *  `mailto:` source is `scheme`. */
+export type DocImageRefusal =
+  | 'outside-page'
+  | Extract<ImagePin, { ok: false }>['why']
+  | 'not-image' | 'external' | 'too-large' | 'fragment' | 'repo'
+  | Extract<DocRefResolution, { kind: 'self-contained' }>['scheme']
+  | Extract<DocRefResolution, { kind: 'refused' }>['why'];
+
+/** The `{reason}` of "Image not loaded: {reason}", one per refusal. `too-large` fills `{size}` and `{cap}` in KiB. */
+export const DOC_IMAGE_REFUSED_SENTENCE: Record<DocImageRefusal, string> = {
+  'outside-page': 'images load only inside a Docs page',
+  'absent': 'no file Docs can show is at that path',
+  'deleted-in-worktree': 'the draft deletes it in the worktree',
+  'draft-withheld': 'its draft is withheld or changed type, and the committed bytes are not shown in its place',
+  'not-image': 'it is not an image Docs shows (PNG, JPEG, GIF, WebP or SVG)',
+  'external': 'it is on another site, and Docs never loads images from other sites',
+  'too-large': 'it is {size}; Docs shows images up to {cap}',
+  'fragment': 'it names a place in this page, not an image',
+  'repo': 'it is outside the Docs sections',
+  'data': 'it carries its own bytes, which Docs does not load',
+  'blob': 'it points at an object made inside a browser, which Docs does not load',
+  'empty': 'it has no source',
+  'malformed': 'its source holds a space, a control character or a backslash',
+  'scheme': 'its source uses a scheme Docs does not load images from',
+  'protocol-relative': 'its source names another host without a scheme',
+  'root-relative': 'its source is a server path, not a document',
+  'above-root': 'its source climbs above the repository',
+  'bad-path': 'its source names a path Docs cannot address',
+};
+
+/** The rest of `DocImage`'s words (spec 4.11). `refused` is filled with `{reason}`, `loaderFailed` with `{error}`. */
+export const DOC_IMAGE_TEXT = {
+  refused: 'Image not loaded: {reason}',
+  load: 'Load image',
+  openExternal: 'Open image externally',
+  openViewer: 'Open in viewer',
+  draft: 'draft',
+  uncommittedNotShown: 'uncommitted change not shown',
+  loading: 'Loading image…',
+  loaderFailed: 'Image not loaded: the request failed ({error}).',
+} as const;
+
+/** The `why` of a client-built `malformed-answer` when a docs-show answer holds no bytes in the field its encoding
+ *  names (`downloadDocFile`, `DocImage`), and when an SVG path is answered as another class (`DocImage`). */
+export const DOCS_SHOW_NO_BYTES = 'the answer held no bytes';
+export const DOCS_SHOW_NOT_SVG = 'an SVG path was answered as another class';
