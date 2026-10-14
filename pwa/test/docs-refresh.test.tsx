@@ -665,3 +665,38 @@ describe('Review 439 F9: the soon chip falls back to the stamp once its time has
     expect(chip().getAttribute('data-state')).toBe('never');
   });
 });
+
+describe("Review 439 F21: a refresh answer is numbered when it arrives, so a GET that started after the POST cannot outrank it", () => {
+  function held<T>() {
+    let settle: (v: T) => void = () => {};
+    const promise = new Promise<T>((r) => { settle = r; });
+    return { promise, settle: (v: T) => settle(v) };
+  }
+
+  it("a GET that starts after a POST began and lands after its answer does not replace the POST's newer tree", async () => {
+    const f = fakeLoaders();
+    const post = held<DocsRefreshLoaderAnswer>();
+    const get = held<Awaited<ReturnType<DocsLoaders['tree']>>>();
+    f.tree.mockResolvedValueOnce(okTree(treeOk({ commit: COMMIT_A })));
+    f.tree.mockImplementationOnce(() => get.promise);
+    f.refresh.mockImplementationOnce(() => post.promise);
+    const { result } = visit(f.loaders, '/docs/demo/specs/a.md');
+    await flush();
+    // the POST begins first, then a GET starts (it is read before the route's fetch, so what it lists is older)
+    act(() => result.current.refreshManual());
+    await flush();
+    act(() => result.current.retryTree());
+    await flush();
+    expect(f.tree).toHaveBeenCalledTimes(2);
+    await act(async () => post.settle(okRefresh(RAN, treeResponse(treeOk({ commit: COMMIT_B })))));
+    await flush();
+    const at = (slot: typeof result.current.tree) => (slot?.s === 'ok' ? slot.answer.tree.ref.commit : slot?.s);
+    expect(at(result.current.tree)).toBe(COMMIT_B);
+    expect(result.current.file).toMatchObject({ s: 'ok', pin: { commit: COMMIT_B } });
+    await act(async () => get.settle(okTree(treeOk({ commit: COMMIT_A }))));
+    await flush();
+    expect(at(result.current.tree)).toBe(COMMIT_B);
+    expect(result.current.file).toMatchObject({ s: 'ok', pin: { commit: COMMIT_B } });
+    expect(result.current.updatedTo).toBeNull();
+  });
+});
