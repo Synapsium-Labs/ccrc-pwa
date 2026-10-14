@@ -271,3 +271,22 @@ describe('drafted assets and view=committed (spec 4.5)', () => {
     expect(screen.getByRole('link', { name: 'Back to the draft' })).toHaveAttribute('href', '/docs/demo/specs/a.md?ref=main');
   });
 });
+
+describe('T13 review 5-1: a deleted draft counts in the default-view hint', () => {
+  // A committed doc the holder's worktree has deleted is an entry with a draft (spec 4.5: `n` counts entries with a
+  // draft at all). Counting it only as a held-variable `dr.state !== 'deleted'` test would drop it.
+  it('a tree whose drafts include a deletion counts it in n', () => {
+    const entries: DocsEntry[] = [
+      entry('specs', 'a.md', { draft: draftOf('modified') }),
+      entry('specs', 'gone.md', { draft: draftOf('deleted') }),
+    ];
+    banners('/docs/demo/specs', treeOk({ entries, drafts: holderOnBranch() }));
+    expect(textOf('default-hint')).toBe('2 uncommitted docs in main checkout on ws/a');
+  });
+
+  it('a tree whose ONLY draft is a deletion still shows the banner, with n = 1', () => {
+    const entries: DocsEntry[] = [entry('specs', 'gone.md', { draft: draftOf('deleted') })];
+    banners('/docs/demo/specs', treeOk({ entries, drafts: holderOnBranch() }));
+    expect(textOf('default-hint')).toBe('1 uncommitted doc in main checkout on ws/a');
+  });
+});
