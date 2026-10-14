@@ -31,7 +31,7 @@ time.
 | 1 | server: L0 wire types and texts; L1 `stallsettings.ts` (ladder, resolver, write effect and key, counts, busy clock); `stall.ts` (quiet time, backoff ceiling, busy clock bound); the migration and store methods; both sweeps through one never-throwing resolution; `GET`/`POST /api/coord/stall-watch` and their censuses; README, `CLAUDE.md` and the parent spec | server | #320 | merged `7f7bf4afc` 2026-10-07 (v0.0.119); run 295 closed `done` (R20) |
 | 2 | the Settings section: API client and hook; a multi-line `QuickConfirm`; `StallWatchSection`; the Notifications label rename; README; wave 1's review residue | server (it serves the PWA) | #322 | merged `6e4524164` 2026-10-12; run 322 closed `done`, `final:true` (R37) |
 | 3 | finding 4063's two fixes: a subagent's tool event keeps the main thread's `waiting` and its ask (`ccd/session-hook.sh`, D-4039); the dialog cap's clock ignores inbound mail (`stall.ts`, D-4040) | both (hook on the fleet box, `stall.ts` on the server) | #362 | merged `f515cdfd4` 2026-10-13 (v0.0.177); run 394 closed `done`, `final:true` (R51) |
-| 4 | R51's follow-up list (a)-(h): the fractional-stamp cases and the hook's words; the merge-deny jq floor; the bounded POST slice; a save that confirms nothing reads unconfirmed (D-4045); one duration formatter in L0; stale comments and README; the R37 list; the W3 plan's words and rewrap | server (it serves the PWA); the hook's edits are comments | — | run 437 dispatched to a fresh child (R52) |
+| 4 | R51's follow-up list (a)-(h): the fractional-stamp cases and the hook's words; the merge-deny jq floor; the bounded POST slice; a save that confirms nothing reads unconfirmed (D-4045); one duration formatter in L0; stale comments and README; the R37 list; the W3 plan's words and rewrap | server (it serves the PWA); the hook's edits are comments | — | run 437 dispatched to a fresh child (R52); wave-done `ca2040c8b` (#399) verified, review run 438 dispatched (R53) |
 
 ## Decisions & deviations
 
@@ -1196,6 +1196,35 @@ time.
     (which also names #397, editing `shared/api.ts` about 55 lines below), and run 354's by mail 4719.
   - Dispatched (01:03): run 437 to the fresh child `ccrc-pwa-keen-meadow`, with nine items and the route above.
     Plan at `b0e53b110` (blob `4550cadf7`); brief `.superpowers/sdd/stall-watch-settings/w4-wave-brief.md`.
+- **R53 (2026-10-14 03:11)**, wave 4's wave-done is verified, and review run 438 reads it.
+  - Wave-done, mail 4776 (03:08): tip `ca2040c8b`, PR #399, all eight tasks and the whole-wave checks done. Each task
+    passed its own Opus review, and the final whole-branch review passed after one docs-only fix commit. The report is
+    copied to `w4-child-evidence/`.
+    - The worker marks the suite red. Server shard 1 of 8 had one red, boot.test.ts's "does not delay listen" timing,
+      which the worker also measured failing on a clean `main` under load. Shard 2's two reds were a known load flake
+      and an artifact of the archive copy. The box was too loaded to run shards 3 to 8.
+    - The citation instrument reads 7 passed, 443 skipped, before and after. Line counts are unchanged in the hook,
+      `shared/api.ts`, README, `store.ts` and `watch.ts`.
+    - Departures, by slug: `spec-14-follows-the-new-l0-file`, `server-full-suite-left-to-ci-at-load-48`,
+      `measured-rows-as-list-items`, `jf2-split-in-two-rows`. No number other than D-4045 is written.
+  - Re-measured, not taken from the mail:
+    - the remote branch, the workspace's HEAD and PR #399's head all read `ca2040c8b`, with a clean tree;
+    - `main` is still `162c91491`, and the PR is mergeable;
+    - every required check is green, including `test (server)` over five shards, agent, pwa, build-pwa, node floor
+      and typecheck. `test-macos 2/2` is red and advisory;
+    - the plan's first commit `dca1566ac` holds blob `4550cadf7`;
+    - the 23 changed files are claim 1279's 14 paths plus the 9 held paths the consents cover. `routes.ts` and
+      `session-hook.test.ts` are untouched.
+  - Run 437 advanced to `working`, then to `awaiting-review`, on that fingerprint. Review run 438 (`kind:'review'`,
+    `reviews:437`) was opened and dispatched to `ccrc-pwa-plain-prairie` with the held-out panel named. Its route is
+    Opus · high, Sonnet subagents, workflows on, compact at 40. Brief: `w4-review-brief.md`. It covers:
+    - D-4045 in both directions, with the gaps the worker accepted;
+    - the L0 file and the single formatter's texts;
+    - the bounded slice;
+    - the hook and the held-path edits under 4468's terms, plus merge-tree against `main` and #384;
+    - the docs and the departure;
+    - the mutation rows;
+    - the suites, and PR CI for the shards the worker could not run.
 
 ## Carried constraints (reviewers get these)
 
