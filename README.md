@@ -5455,8 +5455,8 @@ field, an older hook) kept apart from `0` (measured none).
 vouch for: a missing file, over 64 KB, malformed JSON, an unrecognised state, a
 `sessionId` that no longer matches the registry's uuid for that session (so a
 restarted session cannot inherit its predecessor's state) or no registry uuid to
-check it against, or a write older than 30 minutes. `null` therefore means *no
-fresh hook data* — never a fourth state. That folded read, `readHookState`, has
+check it against, or a file whose `updatedAt`, and `aliveAt` when it has one, are both over 30 minutes old (D-4041: a
+subagent event over a main-thread wait keeps the wait's start in `updatedAt` and writes `aliveAt` = now). `null` therefore means *no fresh hook data* — never a fourth state. That folded read, `readHookState`, has
 a measured sibling, `readHookStateMeasured`, which keeps the one distinction the
 fold drops: a read that *failed* (`unmeasured` — EACCES, a dropped agent round
 trip) apart from one that found no fresh state. The dispatch busy gate reads the

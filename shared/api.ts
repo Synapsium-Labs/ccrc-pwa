@@ -9410,8 +9410,8 @@ export function archivedFoldSince(s: Pick<FleetSession, 'bucket' | 'bucketSince'
  *  name it. `watch.ts` ENFORCES it, and `stall.ts` (L1) estimates a replayed row's first delivery from it,
  *  `deliveredAt - replayCount * MAIL_REPLAY_MS` (`replayed-deaf-from-first-delivery-estimate` (D-3803)), where a second
  *  `600_000` would be a second copy of a policy number. What it MEANS lives in `watch.ts`'s docstring in that file's constants block.
- *  It stands at the END of this file, not beside `MAIL_MAX_ATTEMPTS`: README and the compaction card cite this file by line,
- *  and an insertion above those lines moves every anchor under it. */
+ *  It was APPENDED where this file then ended, not beside `MAIL_MAX_ATTEMPTS`: README and the compaction card cite this
+ *  file by line, and an insertion above those lines moves every anchor under it. Later blocks follow it. */
 export const MAIL_REPLAY_MS = 600_000;
 
 // ── Stall watch settings (design 2026-10-05, §5, §5.1, §12) ────────────────────────────────────────────────────────
