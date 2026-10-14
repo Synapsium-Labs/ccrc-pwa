@@ -2524,6 +2524,27 @@ button.metachip:active {
   flex-wrap: wrap;
   gap: var(--sp-2);
 }
+/* The ^C/^D confirm (D-5007): in the keys' place while a tapped ^C or ^D is
+   held, the consequence first, then `send ^C` and `cancel`. It wraps rather
+   than scrolls, so on a phone the sentence keeps a line of its own. */
+.term-confirm {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+/* The sentence paints its OWN ground, the well it sits on, so the contrast gate
+   measures it rather than leaving it in its uncovered census: --ink-on-well is
+   the one text token that holds on the glass in both themes. */
+.term-confirm-word {
+  flex: 1 1 auto;
+  font: var(--weight-medium) var(--text-xs) / var(--leading-tight) var(--font-mono);
+  letter-spacing: var(--tracking-caps);
+  color: var(--ink-on-well);
+  background: var(--bg-well);
+}
 /* BELOW 420px THE BAR IS TWO ROWS, NEVER A STRIP (D-5007). The wrapped view's
    primary row and the history door come to 8x44 + 7x8 + 2x12 = 432px, so on a
    phone a strip would scroll a key off the right edge; here the caps wrap onto a

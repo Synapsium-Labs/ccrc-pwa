@@ -27,9 +27,9 @@ import { useKeyboardInset } from '../lib/keyboard';
 import { wsUrl } from '../lib/ws';
 import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../../shared/api';
 import { BASE_CONSOLE_FONT_PX, consoleFit } from './consoleFit';
-import { GLASS_ANSI, readModel } from './drawerModel';
+import { GLASS_ANSI, readModel, rowText } from './drawerModel';
 import type { ModelRow } from './drawerModel';
-import { KeyBar } from './KeyBarView';
+import { KeyBar, useKeyInput } from './KeyBarView';
 import './chat.css';
 
 /** The grid every attach dials and the live terminal is pinned at: the
@@ -772,6 +772,16 @@ export function TerminalDrawer({
     sendFrame({ type: 'input', data });
   };
 
+  /** The live screen as text, one string per window row, read off the model
+   *  WHEN IT IS CALLED: the ^C/^D guard reads it at the moment of the tap,
+   *  because the exit notice it looks for appears after the first Ctrl-C. */
+  const screenNow = (): readonly string[] => termRef.current?.model().map(rowText) ?? [];
+  /** The bar's TAPS go through the ^C/^D guard, the latch's included (D-5007).
+   *  Keys typed into the terminal do not: `term.onData` is `typed`, bare, so a
+   *  physical Ctrl-C reaches the session exactly as it always has. */
+  const keys = useKeyInput(typed, screenNow);
+  const cancelHeldKey = keys.guard.cancel;
+
   useEffect(() => {
     if (!open || host === null) return undefined;
 
@@ -1041,6 +1051,9 @@ export function TerminalDrawer({
       // A re-attach is a fresh pane read: a history captured before the drop
       // is a snapshot of a session that has moved on since.
       goHist({ at: 'live' });
+      // So is a ^C held for a confirm: it was asked about the screen this
+      // attach showed, and must not be sent into the next one on a stale Send.
+      cancelHeldKey();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sendFrame reads refs only
   }, [open, host, attempt, id, makeSocket, makeTerm]);
@@ -1497,7 +1510,7 @@ export function TerminalDrawer({
             </div>
           )}
         </div>
-        <KeyBar view="grid" send={typed} action={histDoor} />
+        <KeyBar view="grid" guard={keys.guard} action={histDoor} />
       </div>
     </Sheet>
   );

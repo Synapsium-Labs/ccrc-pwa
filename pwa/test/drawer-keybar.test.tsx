@@ -11,24 +11,35 @@
 // (f) single definition: no key byte is spelled under `pwa/src/session/`
 //     outside `keyBar.ts`, and the scan is proved live on that file;
 // (g) no two modules under `pwa/src` differ only in case, which is why the
-//     component is `KeyBarView.tsx` beside the pure `keyBar.ts`.
+//     component is `KeyBarView.tsx` beside the pure `keyBar.ts`;
+// (h) the ^C/^D guard (Task 11): a TAP of ^C or ^D — from the bar in either
+//     view, or through the latch — asks before it sends while Claude Code's
+//     exit notice is on the screen, reading the model at tap time; a physical
+//     Ctrl-C typed into the terminal is never asked about.
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, renderHook, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
+import { Terminal } from '@xterm/xterm';
 import { TerminalDrawer, type DrawerTerm } from '../src/session/TerminalDrawer';
 import { atBlock, declValue, ruleIn } from './cssRule';
 import {
   GRID_KEYS,
+  GUARDED_KEYS,
   KEY_CAP,
   KEY_SEQ,
   OVERFLOW_KEYS,
   PRIMARY_KEYS,
   ctrlCode,
+  exitNoticeShowing,
+  guardedKey,
   type KeyName,
 } from '../src/session/keyBar';
-import { KeyBar, useCtrlLatch } from '../src/session/KeyBarView';
+import { KeyBar, useCtrlLatch, useExitGuard, useKeyInput } from '../src/session/KeyBarView';
+import { readModel, rowText } from '../src/session/drawerModel';
+import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../shared/api';
+import { SYNTHETIC_SCREENS } from './fixtures/drawer/synthetic';
 
 afterEach(() => {
   cleanup();
@@ -44,19 +55,50 @@ const chatCss = readFileSync(
 const legends = (el: Element): string[] =>
   Array.from(el.querySelectorAll('button')).map((b) => b.textContent ?? '');
 
-function Wrapped({ send, action }: { send: (d: string) => void; action?: ReactNode }): ReactNode {
-  const latch = useCtrlLatch(send);
+/** The screen a bar's guard reads: none, unless a case hands one in. */
+const noScreen = (): readonly string[] => [];
+
+/** The wrapped bar wired as the drawer wires it: `useKeyInput`, so the latch
+ *  sends through the same guard as the caps. The stand-in letters are the text
+ *  field's (a later task) offer of one typed character to the latch. */
+function Wrapped({
+  send,
+  action,
+  screen = noScreen,
+}: {
+  send: (d: string) => void;
+  action?: ReactNode;
+  screen?: () => readonly string[];
+}): ReactNode {
+  const { guard, latch } = useKeyInput(send, screen);
   return (
     <>
-      <KeyBar view="wrapped" send={send} latch={latch} action={action} />
+      <KeyBar view="wrapped" guard={guard} latch={latch} action={action} />
       <button type="button" onClick={() => latch.take('c')}>
         stand-in letter c
+      </button>
+      <button type="button" onClick={() => latch.take('d')}>
+        stand-in letter d
       </button>
       <button type="button" onClick={() => latch.take('1')}>
         stand-in digit 1
       </button>
     </>
   );
+}
+
+/** The grid strip, wired the same way. */
+function Grid({
+  send,
+  action,
+  screen = noScreen,
+}: {
+  send: (d: string) => void;
+  action?: ReactNode;
+  screen?: () => readonly string[];
+}): ReactNode {
+  const { guard } = useKeyInput(send, screen);
+  return <KeyBar view="grid" guard={guard} action={action} />;
 }
 
 const door = (
@@ -424,7 +466,7 @@ describe('the ctrl latch', () => {
 describe('the grid view strip', () => {
   it('renders the grid keys and the history door', () => {
     const send = vi.fn<(d: string) => void>();
-    render(<KeyBar view="grid" send={send} action={door} />);
+    render(<Grid send={send} action={door} />);
     const toolbar = screen.getByRole('toolbar', { name: 'Terminal keys' });
     expect(toolbar.classList.contains('term-keys')).toBe(true);
     expect(toolbar.classList.contains('term-keys--grid')).toBe(true);
@@ -448,7 +490,7 @@ describe('the grid view strip', () => {
 
   it('Control C sends ^C', () => {
     const send = vi.fn<(d: string) => void>();
-    render(<KeyBar view="grid" send={send} action={door} />);
+    render(<Grid send={send} action={door} />);
     fireEvent.click(screen.getByRole('button', { name: 'Control C' }));
     expect(send).toHaveBeenCalledTimes(1);
     expect(send).toHaveBeenLastCalledWith('\x03');
@@ -456,7 +498,7 @@ describe('the grid view strip', () => {
 
   it.each(GRID_KEYS)('%s sends its sequence', (k) => {
     const send = vi.fn<(d: string) => void>();
-    render(<KeyBar view="grid" send={send} action={door} />);
+    render(<Grid send={send} action={door} />);
     fireEvent.click(screen.getByRole('button', { name: KEY_CAP[k].label }));
     expect(send).toHaveBeenCalledTimes(1);
     expect(send).toHaveBeenLastCalledWith(KEY_SEQ[k]);
@@ -534,7 +576,7 @@ describe('below 420px the bar is two rows, never a strip', () => {
     expect(declValue(base, 'min-height')).toBe('var(--tap-min)');
 
     const send = vi.fn<(d: string) => void>();
-    const { rerender } = render(<KeyBar view="grid" send={send} action={door} />);
+    const { rerender } = render(<Grid send={send} action={door} />);
     const grid = screen.getByRole('toolbar', { name: 'Terminal keys' });
     for (const b of grid.querySelectorAll('button')) {
       expect(b.classList.contains('keycap')).toBe(true);
@@ -639,3 +681,401 @@ describe('no two modules under pwa/src differ only in case', () => {
     expect(byFolded.has(path.join('session', 'keybarview'))).toBe(true);
   });
 });
+
+// — (h) the ^C/^D guard (Task 11, D-5007; spec 2026-10-14 §5.4, W11) —
+//
+// Claude Code clears a draft on the first Ctrl-C and then shows `Press Ctrl-C
+// again to exit` under its box (W11): a second one ends the session. A tap has
+// no feel, so while that notice is on the screen a tapped ^C or ^D asks first.
+
+const exitScreen = SYNTHETIC_SCREENS.find((s) => s.name === 'exit-notice');
+if (exitScreen === undefined) throw new Error('the synthetic exit-notice screen is missing');
+const NOTICE = /Press Ctrl-C again to exit/;
+const noticeAt = exitScreen.rows.findIndex((r) => NOTICE.test(r));
+
+/** The exit-notice screen with its notice moved `n` rows up, and the footer
+ *  it left showing the ordinary hint. */
+const noticeHigher = (n: number): string[] => {
+  const rows = [...exitScreen.rows];
+  rows[noticeAt - n] = rows[noticeAt]!;
+  rows[noticeAt] = '  ? for shortcuts';
+  return rows;
+};
+
+/** A screen recorded from real Claude Code (2.1.291, 220x50) that drew its box
+ *  MID-SCREEN, with blank rows under its footer: the model's last rows are
+ *  blank there, so the notice under the box is not among them. */
+const MID_SCREEN_CAPTURE = path.join(
+  import.meta.dirname, '..', '..', 'server', 'test', 'fixtures', 'panes', 'cc291-model-ack-220x50-full.txt',
+);
+const midScreen = (): string[] => {
+  const rows = readFileSync(MID_SCREEN_CAPTURE, 'utf8').split('\n').map((r) => r.replace(/ +$/, ''));
+  let footer = rows.length - 1;
+  while (footer > 0 && rows[footer]!.trim() === '') footer--;
+  rows[footer] = '  Press Ctrl-C again to exit';
+  return rows;
+};
+
+const RECORDED_ROOT = path.join(import.meta.dirname, 'fixtures', 'drawer', 'recorded');
+const recordedCaptures = readdirSync(RECORDED_ROOT, { withFileTypes: true })
+  .filter((d) => d.isDirectory())
+  .flatMap((d) =>
+    readdirSync(path.join(RECORDED_ROOT, d.name))
+      .filter((f) => f.endsWith('.json'))
+      .map((f): [string, readonly string[]] => {
+        const j = JSON.parse(readFileSync(path.join(RECORDED_ROOT, d.name, f), 'utf8')) as {
+          scenario: string;
+          capture: readonly string[];
+        };
+        return [j.scenario, j.capture];
+      }),
+  );
+
+describe('exitNoticeShowing: the notice under the box, and only there', () => {
+  it('the synthetic exit-notice screen holds the notice in its footer, under the box', () => {
+    expect(exitScreen.rows).toHaveLength(PINNED_WINDOW_ROWS);
+    expect(noticeAt).toBe(PINNED_WINDOW_ROWS - 2);
+    expect(exitNoticeShowing(exitScreen.rows)).toBe(true);
+  });
+
+  it('is false for the same text five rows higher', () => {
+    expect(exitNoticeShowing(noticeHigher(5))).toBe(false);
+  });
+
+  it('looks at exactly four rows: three rows up is in, four rows up is out', () => {
+    expect(exitNoticeShowing(noticeHigher(3))).toBe(true);
+    expect(exitNoticeShowing(noticeHigher(4))).toBe(false);
+  });
+
+  it('reads Ctrl-D the same way', () => {
+    const rows = [...exitScreen.rows];
+    rows[noticeAt] = '  Press Ctrl-D again to exit';
+    expect(exitNoticeShowing(rows)).toBe(true);
+  });
+
+  it('counts the last four rows above the blank rows under them, where Claude Code draws its box mid-screen', () => {
+    const rows = midScreen();
+    // The premise, measured on the recorded capture: its last four rows are
+    // blank, so a guard reading them literally would never see the notice.
+    expect(rows.slice(-4).every((r) => r === '')).toBe(true);
+    expect(exitNoticeShowing(rows)).toBe(true);
+  });
+
+  it('is false with no notice: every other synthetic screen', () => {
+    for (const s of SYNTHETIC_SCREENS) {
+      if (s === exitScreen) continue;
+      expect(exitNoticeShowing(s.rows), s.name).toBe(false);
+    }
+  });
+
+  it.each(recordedCaptures)('is false with no notice: the recorded %s', (_name, capture) => {
+    expect(capture).toHaveLength(PINNED_WINDOW_ROWS);
+    expect(exitNoticeShowing(capture)).toBe(false);
+  });
+
+  it('is false for an empty or blank screen', () => {
+    expect(exitNoticeShowing([])).toBe(false);
+    expect(exitNoticeShowing(Array.from({ length: PINNED_WINDOW_ROWS }, () => ''))).toBe(false);
+  });
+});
+
+describe('the guarded keys', () => {
+  it('are ^C and ^D', () => {
+    expect(GUARDED_KEYS).toEqual(['ctrlC', 'ctrlD']);
+  });
+
+  it('guardedKey names a guarded key from its bytes, and nothing else', () => {
+    expect(guardedKey(KEY_SEQ.ctrlC)).toBe('ctrlC');
+    expect(guardedKey(KEY_SEQ.ctrlD)).toBe('ctrlD');
+    expect(guardedKey(ctrlCode('c')!)).toBe('ctrlC');
+    expect(guardedKey(ctrlCode('D')!)).toBe('ctrlD');
+    for (const k of Object.keys(KEY_SEQ) as KeyName[]) {
+      if (GUARDED_KEYS.includes(k)) continue;
+      expect(guardedKey(KEY_SEQ[k]), k).toBeNull();
+    }
+    expect(guardedKey(ctrlCode('u')!)).toBeNull();
+    expect(guardedKey('c')).toBeNull();
+    expect(guardedKey('')).toBeNull();
+  });
+});
+
+const confirmGroup = (): HTMLElement | null => document.querySelector('.term-confirm');
+
+describe('the bar asks before ^C or ^D would exit Claude Code', () => {
+  const showing = (): readonly string[] => exitScreen.rows;
+
+  it('wrapped: ^C with the notice sends nothing and names the consequence', () => {
+    const send = vi.fn<(d: string) => void>();
+    render(<Wrapped send={send} action={door} screen={showing} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Control C' }));
+    expect(send).not.toHaveBeenCalled();
+    const group = screen.getByRole('group', { name: 'Confirm Control C' });
+    expect(group).toHaveTextContent('Claude Code will exit');
+    expect(screen.getByRole('button', { name: 'Send Control C' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+  });
+
+  it('wrapped: Send sends the byte once, and the bar comes back', () => {
+    const send = vi.fn<(d: string) => void>();
+    render(<Wrapped send={send} action={door} screen={showing} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Control C' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send Control C' }));
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenLastCalledWith(KEY_SEQ.ctrlC);
+    expect(confirmGroup()).toBeNull();
+    expect(screen.getByRole('button', { name: 'Control C' })).toBeInTheDocument();
+  });
+
+  it('wrapped: Cancel sends nothing, and the bar comes back', () => {
+    const send = vi.fn<(d: string) => void>();
+    render(<Wrapped send={send} action={door} screen={showing} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Control C' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(send).not.toHaveBeenCalled();
+    expect(confirmGroup()).toBeNull();
+    expect(screen.getByRole('button', { name: 'Control C' })).toBeInTheDocument();
+  });
+
+  it('wrapped: without the notice, ^C sends at once', () => {
+    const send = vi.fn<(d: string) => void>();
+    render(<Wrapped send={send} action={door} screen={() => noticeHigher(5)} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Control C' }));
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenLastCalledWith(KEY_SEQ.ctrlC);
+    expect(confirmGroup()).toBeNull();
+  });
+
+  it('wrapped: a key that is not guarded is never held, notice or not', () => {
+    const send = vi.fn<(d: string) => void>();
+    render(<Wrapped send={send} action={door} screen={showing} />);
+    for (const k of PRIMARY_KEYS) {
+      if (GUARDED_KEYS.includes(k)) continue;
+      fireEvent.click(screen.getByRole('button', { name: KEY_CAP[k].label }));
+      expect(send).toHaveBeenLastCalledWith(KEY_SEQ[k]);
+    }
+    expect(send).toHaveBeenCalledTimes(PRIMARY_KEYS.length - 1);
+    expect(confirmGroup()).toBeNull();
+  });
+
+  it('the latch then c, with the notice, is held like the cap', () => {
+    const send = vi.fn<(d: string) => void>();
+    render(<Wrapped send={send} action={door} screen={showing} />);
+    fireEvent.click(screen.getByRole('button', { name: 'More keys' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Control' }));
+    fireEvent.click(screen.getByRole('button', { name: 'stand-in letter c' }));
+    expect(send).not.toHaveBeenCalled();
+    expect(screen.getByRole('group', { name: 'Confirm Control C' })).toHaveTextContent('Claude Code will exit');
+    fireEvent.click(screen.getByRole('button', { name: 'Send Control C' }));
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenLastCalledWith(KEY_SEQ.ctrlC);
+    // The latch was used up by the letter it took: it does not wait for another.
+    expect(screen.getByRole('button', { name: 'Control' })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('the latch then d, with the notice, holds ^D', () => {
+    const send = vi.fn<(d: string) => void>();
+    render(<Wrapped send={send} action={door} screen={showing} />);
+    fireEvent.click(screen.getByRole('button', { name: 'More keys' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Control' }));
+    fireEvent.click(screen.getByRole('button', { name: 'stand-in letter d' }));
+    expect(send).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Send Control D' }));
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenLastCalledWith(KEY_SEQ.ctrlD);
+  });
+
+  it('the latch then c, without the notice, sends ^C at once', () => {
+    const send = vi.fn<(d: string) => void>();
+    render(<Wrapped send={send} action={door} />);
+    fireEvent.click(screen.getByRole('button', { name: 'More keys' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Control' }));
+    fireEvent.click(screen.getByRole('button', { name: 'stand-in letter c' }));
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenLastCalledWith(KEY_SEQ.ctrlC);
+    expect(confirmGroup()).toBeNull();
+  });
+
+  it('grid: the same guard covers the strip ^C', () => {
+    const send = vi.fn<(d: string) => void>();
+    render(<Grid send={send} action={door} screen={showing} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Control C' }));
+    expect(send).not.toHaveBeenCalled();
+    expect(screen.getByRole('group', { name: 'Confirm Control C' })).toHaveTextContent('Claude Code will exit');
+    fireEvent.click(screen.getByRole('button', { name: 'Send Control C' }));
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenLastCalledWith(KEY_SEQ.ctrlC);
+  });
+
+  it('the screen is read at tap time, not when the bar mounted', () => {
+    const send = vi.fn<(d: string) => void>();
+    let rows: readonly string[] = noticeHigher(5);
+    render(<Grid send={send} action={door} screen={() => rows} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Control C' }));
+    expect(send).toHaveBeenCalledTimes(1);
+    rows = exitScreen.rows;
+    fireEvent.click(screen.getByRole('button', { name: 'Control C' }));
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(confirmGroup()).not.toBeNull();
+  });
+
+  it('the confirm keeps focus where it is, and its caps are --tap-min keycaps in the bar', () => {
+    const send = vi.fn<(d: string) => void>();
+    render(<Wrapped send={send} action={door} screen={showing} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Control C' }));
+    const toolbar = screen.getByRole('toolbar', { name: 'Terminal keys' });
+    for (const name of ['Send Control C', 'Cancel']) {
+      const b = screen.getByRole('button', { name });
+      expect(b.closest('.term-keys')).toBe(toolbar);
+      expect(b.classList.contains('keycap')).toBe(true);
+      expect(fireEvent.pointerDown(b)).toBe(false);
+    }
+    // The history door stays beside it.
+    expect(screen.getByRole('button', { name: 'Scroll back' }).closest('.term-confirm')).toBeNull();
+  });
+
+  it('confirm sends once even when it is reached twice before a re-render', () => {
+    const send = vi.fn<(d: string) => void>();
+    const { result } = renderHook(() => useExitGuard(send, showing));
+    act(() => result.current.send(KEY_SEQ.ctrlC));
+    expect(result.current.held).toBe('ctrlC');
+    act(() => {
+      result.current.confirm();
+      result.current.confirm();
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(result.current.held).toBeNull();
+  });
+
+  it('the confirm text is measured by the contrast gate: it paints its own ground', () => {
+    const word = ruleIn(chatCss, '.term-confirm-word');
+    expect(declValue(word, 'color')).toBe('var(--ink-on-well)');
+    expect(declValue(word, 'background')).toBe('var(--bg-well)');
+  });
+});
+
+/** A drawer terminal whose model is a REAL xterm buffer: what the socket
+ *  writes is parsed, and `model()` reads it as the drawer's own does. */
+const realBufferTerm = () => {
+  const real = new Terminal({
+    cols: PINNED_WINDOW_COLS,
+    rows: PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS,
+    allowProposedApi: true,
+  });
+  let parsed: Promise<void> = Promise.resolve();
+  let dataCb: ((data: string) => void) | null = null;
+  const makeTerm = (): DrawerTerm => {
+    let opened = false;
+    return {
+      write: (d) => {
+        parsed = new Promise<void>((resolve) => real.write(d, resolve));
+      },
+      onData: (cb) => {
+        dataCb = cb;
+      },
+      onWheel: () => {},
+      pin: () => {},
+      propose: () => ({ cols: 48, rows: 20 }),
+      setFontSize: () => {},
+      open: () => {
+        opened = true;
+      },
+      isOpen: () => opened,
+      model: () => readModel(real.buffer.active, real.cols, real.rows - TMUX_STATUS_ROWS),
+      statusRow: () => readModel(real.buffer.active, real.cols, real.rows).at(-1) ?? [],
+      onParsed: () => () => {},
+      focus: () => {},
+      dispose: () => {},
+    };
+  };
+  return {
+    makeTerm,
+    parsed: () => parsed,
+    type: (d: string) => dataCb?.(d),
+    dispose: () => real.dispose(),
+  };
+};
+
+describe('the drawer guards its ^C against the live model', () => {
+  const mount = () => {
+    const t = realBufferTerm();
+    const utils = render(
+      <TerminalDrawer id={ID} open onClose={() => {}} makeSocket={makeSocket} makeTerm={t.makeTerm} />,
+    );
+    const ws = FakeSocket.instances.at(-1);
+    if (!ws) throw new Error('drawer opened no socket');
+    act(() => ws.onopen?.());
+    const paint = async (bytes: string): Promise<void> => {
+      act(() => ws.onmessage?.({ data: bytes }));
+      await t.parsed();
+    };
+    return { t, ws, paint, ...utils };
+  };
+
+  it('the model holds the notice where the guard looks', async () => {
+    const { t, paint } = mount();
+    await paint(exitScreen.stream);
+    expect(exitNoticeShowing(realModelRows(t))).toBe(true);
+    t.dispose();
+  });
+
+  it('a notice that arrives after the drawer opened holds the next ^C', async () => {
+    const { t, ws, paint } = mount();
+    await paint(hintStream());
+    fireEvent.click(screen.getByRole('button', { name: 'Control C' }));
+    expect(ws.sent.map((f) => JSON.parse(f))).toEqual([{ type: 'input', data: KEY_SEQ.ctrlC }]);
+
+    await paint(exitScreen.stream);
+    fireEvent.click(screen.getByRole('button', { name: 'Control C' }));
+    expect(ws.sent).toHaveLength(1);
+    expect(screen.getByRole('group', { name: 'Confirm Control C' })).toHaveTextContent('Claude Code will exit');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send Control C' }));
+    expect(ws.sent).toHaveLength(2);
+    expect(ws.lastFrame()).toEqual({ type: 'input', data: KEY_SEQ.ctrlC });
+    t.dispose();
+  });
+
+  it('Cancel sends nothing', async () => {
+    const { t, ws, paint } = mount();
+    await paint(exitScreen.stream);
+    fireEvent.click(screen.getByRole('button', { name: 'Control C' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(ws.sent).toHaveLength(0);
+    expect(confirmGroup()).toBeNull();
+    t.dispose();
+  });
+
+  it('a physical Ctrl-C typed into the terminal is not asked about', async () => {
+    const { t, ws, paint } = mount();
+    await paint(exitScreen.stream);
+    t.type(KEY_SEQ.ctrlC);
+    expect(ws.sent.map((f) => JSON.parse(f))).toEqual([{ type: 'input', data: KEY_SEQ.ctrlC }]);
+    expect(confirmGroup()).toBeNull();
+    t.dispose();
+  });
+
+  it('a confirm left open does not survive the drawer closing', async () => {
+    const { t, ws, paint, rerender } = mount();
+    await paint(exitScreen.stream);
+    fireEvent.click(screen.getByRole('button', { name: 'Control C' }));
+    expect(confirmGroup()).not.toBeNull();
+    rerender(<TerminalDrawer id={ID} open={false} onClose={() => {}} makeSocket={makeSocket} makeTerm={t.makeTerm} />);
+    rerender(<TerminalDrawer id={ID} open onClose={() => {}} makeSocket={makeSocket} makeTerm={t.makeTerm} />);
+    expect(confirmGroup()).toBeNull();
+    expect(ws.sent).toHaveLength(0);
+    t.dispose();
+  });
+});
+
+/** The rows the drawer's guard reads, from a terminal built like its own. */
+function realModelRows(t: ReturnType<typeof realBufferTerm>): string[] {
+  return t.makeTerm().model().map(rowText);
+}
+
+/** The exit-notice screen as it was before the first Ctrl-C: the ordinary
+ *  hint in the footer where the notice will be. */
+function hintStream(): string {
+  const stream = exitScreen!.stream.replace('Press Ctrl-C again to exit', '? for shortcuts');
+  if (stream === exitScreen!.stream) throw new Error('the exit-notice stream no longer spells its notice');
+  return stream;
+}

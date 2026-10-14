@@ -74,3 +74,44 @@ export function ctrlCode(ch: string): string | null {
   if (!/^[A-Za-z]$/.test(ch)) return null;
   return String.fromCharCode(ch.toUpperCase().charCodeAt(0) - 0x40);
 }
+
+/** The keys a TAP holds for a confirm while Claude Code's exit notice shows
+ *  (D-5007, spec 2026-10-14 §5.4): the second of either ends the session. */
+export const GUARDED_KEYS: readonly KeyName[] = ['ctrlC', 'ctrlD'];
+
+/** The guarded key these bytes are, or null. Matched on the BYTES, so a ^C
+ *  the `ctrl` latch makes out of a typed `c` is the same key as the cap. */
+export function guardedKey(data: string): KeyName | null {
+  return GUARDED_KEYS.find((k) => KEY_SEQ[k] === data) ?? null;
+}
+
+/** What Claude Code prints under its box after a first Ctrl-C (or Ctrl-D)
+ *  with an empty draft, until the second one ends it or the notice times out (W11). */
+const EXIT_NOTICE = /Press Ctrl-[CD] again to exit/;
+
+/** How many of the screen's last rows the notice is looked for in: the box's
+ *  bottom rule and what Claude Code draws under it — a status line, the footer
+ *  and a notification row are all recorded there under a real box
+ *  (`server/test/fixtures/panes/cc291-model-default-ack-120x30.txt`). It never
+ *  reaches up into the transcript, where a reply can quote the same words. */
+const EXIT_NOTICE_ROWS = 4;
+
+/**
+ * Whether the screen shows Claude Code's exit notice: the notice in its last
+ * four rows, counted UP FROM ITS LAST NON-BLANK ROW.
+ *
+ * NOT the model's last four rows as they stand. Claude Code can draw its box
+ * mid-screen, with blank rows under its footer: a 220x50 capture of it
+ * (`server/test/fixtures/panes/cc291-model-ack-220x50-full.txt`) has eleven
+ * blank rows below the footer. There the window's last rows are blank, and a
+ * guard reading them would never see the notice: it would send the second ^C
+ * that ends the session. The blank rows are dropped first.
+ *
+ * `rows` is the screen as text, one string per window row, top first: the
+ * caller reads the model AT TAP TIME, never a copy cached earlier.
+ */
+export function exitNoticeShowing(rows: readonly string[]): boolean {
+  let end = rows.length;
+  while (end > 0 && rows[end - 1]!.trim() === '') end--;
+  return rows.slice(Math.max(0, end - EXIT_NOTICE_ROWS), end).some((r) => EXIT_NOTICE.test(r));
+}
