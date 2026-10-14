@@ -562,6 +562,37 @@ re-measures the citation corpus and the `_reg_get` census on the merged tree bef
     branch were verified. These are documentation checks, not executed implementation tests or mutations.
   - The existing sequential subagent-driven method is preserved. No implementation, dispatch, merge, updater
     change, restart or sweep arming follows from publication; run 308 remains planned pending written review.
+- **2026-10-14 16:02 — #401 is MERGED; implementation remains gated on written-plan review.**
+  - Published head `7d997064360bcf983010823cfb6747b8c0186d65` merged as
+    `3786aa755fe5d3a8a1b65fc08f5356ce324cffa5`. The operator reported the merge; no separate implementation
+    approval is recorded. Run 308 was remeasured planned, unbound and undispatched.
+- **2026-10-14 16:45 — wave 4b's pre-dispatch plan is reanchored to current continuation behavior.**
+  - Documentation baseline: `c7776b08037dadaeee832e906f99e4221afdf8d2`. Task 3 adds promotion INSIDE the existing
+    accepted pane-rotation branch, before its UUID write, and preserves `_ci_pane_parked`, `_ci_pane_refused`,
+    worker-follow memory clearing, `_ci_bg_follow` and `_follow_continued_in`. Refused panes and continuation or
+    background-worker writes gain no promotion side effect. This is source integration, not a rebase.
+  - The plan now supplies admitted/refused pane and follow-order controls, separate guard/follow mutation
+    trials, and the existing UUID and both continuation-parity suites as local and final regression gates.
+    Parent self-review retains the spec, interfaces, Review Focus and four-worker-item boundary.
+  - Documentation syntax checks: 63 balanced fences, 10 Python fences parsed after dedenting in-function
+    excerpts, 19 TypeScript/JavaScript fences parsed, the guarded Bash excerpt and two fixture-control strings
+    syntax-checked. All 34 referenced test paths are accounted for, including one planned new test. These are
+    syntax/path checks, not executed test snippets, mutation results or a replay-verified implementation.
+  - Shared-file owners have ratified scoped coexistence: continuity owns the named spawn/choice/sync seams,
+    existing scope-sweep check/test region and continuity README prose; citation-only and measured README-size
+    maintenance are allowed only when this wave actually moves them. Keep neighboring owners' regions and
+    check/list entries. New helper, fixture or source-region overlap stops for fresh agreement. No claims were
+    taken, broken or released; refresh ownership before dispatch. Second-lander preservation is not an
+    independent clause-16 main-absorption trigger.
+  - Pre-publication documentation guards initially passed: privacy and deviation references, 2 files / 86
+    tests; whole changed-document private-name/path scan and whitespace check passed. A later paired rerun
+    passed privacy but timed out in the deviation scanner's 20-second case (85 passed, 1 timed out); the
+    unchanged deviation guard then passed alone, 31/31. The timeout is recorded, not called a clean paired run.
+    Python excerpts were dedented for syntax checking; TypeScript/JavaScript syntax was checked with the
+    installed esbuild, not claimed as type-checking.
+  - Written-plan review remains pending. Run 308 and its issued block 4316-4325 are unchanged; Task 5 remains
+    coordinator-owned. No product implementation, dispatch, updater change, restart, scope-sweep arming or
+    repository-settings write follows from this revision.
 - **Deviation blocks** are minted per wave, at that wave's run-open, by the coordinator. No `D-` token appears in
   this file until a plan on the same ref defines it (`deviation-refs.test.ts`).
 

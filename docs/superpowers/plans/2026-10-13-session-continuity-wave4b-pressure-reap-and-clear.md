@@ -14,7 +14,7 @@
 
 Run 308 is the existing planned work run: programme wave 4b, run wave 5. Baseline B was measured independently with the reap still enabled over `2026-10-06 23:16:00 UTC` inclusive through `2026-10-13 23:17:00 UTC` exclusive: **0 reap-class OOM stops among 34 pane-scope OOM stops**, with 5 unmapped and 4 unmeasured. The scope record was shadowed, with 9 dead scopes and 2 inert scopes; both inert scopes were at least one day old. This unblocks planning, not arming the scope sweep or restarting the fleet by hand.
 
-This is an implementation plan against `main` at `f515cdfd4b748dcd474dd33c79fc662fe78c0da3`. It is not a replay-verified prototype: the source map is verified, but the new test blocks and mutations still require red-first execution by the worker. Content anchors, not historical line numbers, locate each edit. Later main changes are measured before dispatch and on a required landing merge.
+The original source map was checked against `main` at `f515cdfd4b748dcd474dd33c79fc662fe78c0da3`. The pre-dispatch revision is anchored at `c7776b08037dadaeee832e906f99e4221afdf8d2`: the intervening continuation work materially expanded `_sync_uuid`, so Task 3 now integrates with its existing pane-admission guards and retains both follow paths. The other changed target files keep their seam contracts, with content anchors remeasured. This is not a replay-verified prototype: new test blocks and mutations still require red-first execution by the worker. Later main changes are measured before dispatch and on a required landing merge; source integration is not permission to rebase dispatched work.
 
 ## Global Constraints
 
@@ -64,7 +64,10 @@ This is an implementation plan against `main` at `f515cdfd4b748dcd474dd33c79fc66
 | `server/test/ccd-route-spawn.test.ts` | Resume/route/subagent environment composition | 2 |
 | `server/test/ccd-route-degrade.test.ts` | Degraded-route command compatibility | 2 |
 | `server/test/ccd-lifecycle-purge.test.ts` | Existing spawn spelling guard | 2 |
-| `server/test/ccd-operator-choice.test.ts` | Live rotation, marker lifecycle and shared promotion behavior | 3 |
+| `server/test/ccd-operator-choice.test.ts` | Live rotation, marker lifecycle, admitted/refused pane controls and shared promotion behavior | 3 |
+| `server/test/ccd-sync-uuid.test.ts` | Existing real pane-admission, background-worker and continuation-follow regression gate | 3 |
+| `server/test/continued-in-parity.test.ts` | Existing three-reader continuation-marker parity gate | 3 |
+| `server/test/continued-in-successor-parity.test.ts` | Existing continuation-successor parity gate | 3 |
 | `server/test/session-hook.test.ts` | S6-R11 census only if measured movement requires it | 1-3 |
 | `README.md` | Shipped behavior and named costs in the existing continuity section | 4 |
 | `docs/superpowers/specs/2026-09-23-session-continuity-design.md` | As-built annotations for the deferred clear fix and carried record representation | 4 |
@@ -1115,20 +1118,21 @@ This is D-3925's deferred code fix, not a new parser or a change to non-Anthropi
 - Consumes: `_transcript_path <id>` resolves the transcript at the CURRENT registry UUID; `_operator_choice_read <transcript> <typed-journal>` returns the existing model/effort/drift lines; `cmd_route --session <id> --set <field=value> ...` is the only route writer.
 - Produces: `_operator_choice_promote <id> [reason]`, always rc 0, reads/promotes without creating or removing `choicekept`; the optional reason defaults to `kept across a restart`.
 - Preserves: `_operator_choice_keep <id>`, always rc 0, writes its existing marker before calling the promotion; `_operator_choice_unmark`, stop ordering, spawn journal opening and marker clearing are unchanged.
-- `_sync_uuid <id>` calls promotion only when it has a non-empty live UUID DIFFERENT from the registry UUID, and BEFORE `_reg_set <id> uuid <new-uuid>`.
+- `_sync_uuid <id>` calls promotion only when it has a non-empty pane UUID DIFFERENT from the registry UUID AND the existing `_ci_pane_parked` / `_ci_pane_refused` guards admit that rotation, BEFORE `_reg_set <id> uuid <new-uuid>`. Retain the following worker-memory clearing, `_ci_bg_follow` and `_follow_continued_in` calls. Refused or unchanged pane UUIDs do not promote; background-worker and continuation-chain writes remain outside this task's promotion seam.
 
 - [ ] **Step 1: Append failing fixture-contained live-rotation cases.**
 
-Add `spawnSync` to the existing `node:child_process` import, `BOUNDED` plus `ghContainedEnv` to the existing `ccdWsHelpers.js` import, and `import { inheritedEnv } from './gitEnvStrip.js';` beside them. The new direct child spawn spreads `inheritedEnv()`, not inherited repository-redirection variables. Use this helper inside a new `describe('live UUID rotation keeps the outgoing operator choice', ...)` in `ccd-operator-choice.test.ts`. It calls the real `_sync_uuid`; only tmux is a fixture shell function, never the live binary:
+Add `spawnSync` to the existing `node:child_process` import, `BOUNDED` plus `ghContainedEnv` to the existing `ccdWsHelpers.js` import, and `import { inheritedEnv } from './gitEnvStrip.js';` beside them. The new direct child spawn spreads `inheritedEnv()`, not inherited repository-redirection variables. Use this helper inside a new `describe('live UUID rotation keeps the outgoing operator choice', ...)` in `ccd-operator-choice.test.ts`. It calls the real `_sync_uuid`; tmux is always a fixture shell function, never the live binary. The refusal and follow-order controls below additionally substitute only the named admission verdicts and follow observers:
 
 ```ts
 const NEXT = 'deadbeef-0000-4000-8000-000000000001';
 const THIRD = 'deadbeef-0000-4000-8000-000000000002';
-const sync = (sid: string): string => {
+const sync = (sid: string, controls = ''): string => {
   const dir = path.join(h.home, '.claude', 'sessions');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, '424242.json'), JSON.stringify({ sessionId: sid }));
-  return h.sh(`tmux() { [[ "$1" == list-panes ]] && printf '%s\\n' 424242; return 0; };
+  return h.sh(`${controls}
+    tmux() { [[ "$1" == list-panes ]] && printf '%s\\n' 424242; return 0; };
     _sync_uuid ${ID}; printf 'rc=%s' "$?"`);
 };
 
@@ -1262,9 +1266,51 @@ it('non-Anthropic choice stays not applicable, without freezing its live UUID', 
 });
 ```
 
-Add these controls to the same describe. The direct-promotion cases pin the shared extraction separately from `_sync_uuid`'s final unconditional rc 0:
+Add these controls to the same describe. The refusal cases substitute only the two admission verdicts and follow-call observers; the existing UUID and parity suites below exercise the real guards and readers. A proposed UUID that the current guard refuses is not a live rotation, even when the outgoing transcript contains an eligible choice. The accepted case also observes that the existing worker-follow memory is cleared before either follow path. These controls preserve main's behavior rather than widening this task into fork/background UUID promotion. The direct-promotion cases pin the shared extraction separately from `_sync_uuid`'s final unconditional rc 0:
 
 ```ts
+it.each(['parked', 'superseded'] as const)(
+  '%s pane does not promote, and both follow paths still run', (kind) => {
+    seed(); record({ class: 'fable' });
+    const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
+    const controls = `
+      _ci_pane_parked() { return ${kind === 'parked' ? 0 : 1}; };
+      _ci_pane_refused() { return ${kind === 'superseded' ? 0 : 1}; };
+      _ci_bg_follow() { printf '%s\\n' background >> "$HOME/uuid-follow"; };
+      _follow_continued_in() { printf '%s\\n' chain >> "$HOME/uuid-follow"; };`;
+    expect(sync(NEXT, controls)).toBe('rc=0');
+    expect(h.reg(ID, 'uuid')).toBe(UUID);
+    expect(h.reg(ID, 'class')).toBe('fable');
+    expect(routeLines()).toEqual([]);
+    expect(fs.existsSync(regFile(`${ID}.choicekept`))).toBe(false);
+    expect(fs.readFileSync(path.join(h.home, 'uuid-follow'), 'utf8').trim().split('\n'))
+      .toEqual(['background', 'chain']);
+  },
+);
+
+it('accepted pane rotation clears old worker memory before both follow paths', () => {
+  seed(); record({ class: 'fable' });
+  const t = now() - 600;
+  writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
+  const controls = `
+    _CI_BG[${ID}]=worker; _CI_BGMISS[${ID}]=1;
+    _CI_BGSID[${ID}]=old; _CI_BGADDRS[${ID}]=old;
+    _ci_pane_parked() { return 1; }; _ci_pane_refused() { return 1; };
+    _ci_bg_follow() {
+      [[ -z "\${_CI_BG[$1]+set}" && -z "\${_CI_BGMISS[$1]+set}"
+         && -z "\${_CI_BGSID[$1]+set}" && -z "\${_CI_BGADDRS[$1]+set}" ]] &&
+        printf '%s\\n' background-cleared >> "$HOME/uuid-follow";
+    };
+    _follow_continued_in() { printf '%s\\n' chain >> "$HOME/uuid-follow"; };`;
+  expect(sync(NEXT, controls)).toBe('rc=0');
+  expect(h.reg(ID, 'uuid')).toBe(NEXT);
+  expect(h.reg(ID, 'class')).toBe('opus');
+  expect(routeLines()).toHaveLength(1);
+  expect(fs.readFileSync(path.join(h.home, 'uuid-follow'), 'utf8').trim().split('\n'))
+    .toEqual(['background-cleared', 'chain']);
+});
+
 it('missing live session JSON neither reads choice nor changes uuid', () => {
   seed(); record({ class: 'fable' });
   const t = now() - 600;
@@ -1392,13 +1438,22 @@ The existing statements from `typed=$(_reg_get "$id" typed)` through the final `
 
 No second transcript parser, no per-field route calls, no new class vocabulary and no direct route-file writes. Retain the existing comment explaining why the non-Anthropic choice is skipped and the comments on the mtime-before-drift and merged-pair checks.
 
-Replace `_sync_uuid`'s final conditional line with this length-neutral call-site edit:
+Current main has expanded `_sync_uuid`; its old baseline-sized conditional is no longer an edit target. Within the EXISTING pane-session-file block, retain the admission condition and add promotion to its UUID-write line, before that write. The resulting excerpt is:
 
 ```bash
-  if [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]]; then _operator_choice_promote "$id" "kept before a uuid rotation"; _reg_set "$id" uuid "$sid"; fi
+    if [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]] \
+       && ! _ci_pane_parked "$id" "$cfg" "$cfg/sessions/$pid.json" \
+       && ! _ci_pane_refused "$id" "$cfg" "$cfg/sessions/$pid.json" "$sid"; then
+      _operator_choice_promote "$id" "kept before a uuid rotation"; _reg_set "$id" uuid "$sid"
+      unset "_CI_BG[$id]" "_CI_BGMISS[$id]" "_CI_BGSID[$id]" "_CI_BGADDRS[$id]"
+    fi
+  fi
+  _ci_bg_follow "$id" "$cfg"
+  _follow_continued_in "$id" "$cfg"
+  return 0
 ```
 
-This is below the proof that a live session JSON exists and above the final `return 0`. Do not move promotion after the registry write. Correct the existing comment's `/clear, compaction` claim in place to name `/clear` only; observed compaction stays in the same transcript. Update the parser's caller comment to name shared promotion and read-back, without inventing a third parser. Above the frozen citation boundary, keep prose edits length-neutral; below it, use clear comments rather than padded line-number tricks.
+The outer pane-file check and sessionId read stay unchanged; this is an excerpt, not a replacement of the whole function. Promotion runs only after both current admission guards permit a genuine pane rotation. Do not move it above those guards or after the registry write. Keep worker-memory clearing and both follow calls exactly where they are; continuation/background-driven writes acquire no new promotion side effect. Correct the existing comment's `/clear, compaction` claim in place to name `/clear` only; observed compaction stays in the same transcript. Update the parser's caller comment to name shared promotion and read-back, without inventing a third parser. Above the frozen citation boundary, keep prose edits length-neutral; below it, use clear comments rather than padded line-number tricks.
 
 - [ ] **Step 4: Stamp, pay citation/census gates, and run the whole owning suite green.**
 
@@ -1406,6 +1461,7 @@ Run the shared generated-byte and citation procedures on the task's actual paren
 
 ```bash
 ./node_modules/.bin/vitest run test/ccd-operator-choice.test.ts --maxWorkers=1
+./node_modules/.bin/vitest run test/ccd-sync-uuid.test.ts test/continued-in-parity.test.ts test/continued-in-successor-parity.test.ts --maxWorkers=1
 ./node_modules/.bin/vitest run test/ccd-route-apply.test.ts test/ccd-route-settle.test.ts --maxWorkers=1
 ./node_modules/.bin/vitest run test/ccd-swap.test.ts test/ccd-archive.test.ts test/ccd-spawn-split.test.ts --maxWorkers=1
 ```
@@ -1424,6 +1480,10 @@ If any named neighboring file has been renamed on current main, locate its sourc
 | Remove journal matching from shared promotion | ccd-typed commands excluded during rotation |
 | Remove route-field mtime precedence | Newer route fields win during rotation |
 | Return the reader's failure rather than always 0 | Failed-reader synchronization and direct promotion rc |
+| Move promotion above the pane-admission guards | Parked/superseded pane leaves route unchanged |
+| Remove each of `_ci_pane_parked` and `_ci_pane_refused` from admission in separate trials | Matching refusal case; existing real-guard UUID suite |
+| Drop worker-follow memory clearing after accepted pane rotation | Accepted-pane case observes cleared memory before follow |
+| Drop each of `_ci_bg_follow` and `_follow_continued_in` in separate trials | Both follow-call observations; existing UUID/parity gates |
 
 Each row requires an observed RED, not a comment that a test would fail. Keep the old stop/spawn marker census and its behavior cases intact. Restore the task's original mutation bytes, restamp, and rerun the affected cases green before committing.
 
@@ -1931,6 +1991,7 @@ These belong to the worker after Tasks 1-4, before its final PR and wave-done. T
 ./node_modules/.bin/vitest run test/ccd-limit-banner.test.ts test/ccd-auto-compact.test.ts --maxWorkers=1
 ./node_modules/.bin/vitest run test/ccd-resume-flag.test.ts test/ccd-spawn-split.test.ts test/ccd-route-spawn.test.ts test/ccd-route-degrade.test.ts test/ccd-lifecycle-purge.test.ts --maxWorkers=1
 ./node_modules/.bin/vitest run test/ccd-operator-choice.test.ts test/ccd-route-apply.test.ts test/ccd-route-settle.test.ts test/ccd-swap.test.ts test/ccd-archive.test.ts --maxWorkers=1
+./node_modules/.bin/vitest run test/ccd-sync-uuid.test.ts test/continued-in-parity.test.ts test/continued-in-successor-parity.test.ts --maxWorkers=1
 ./node_modules/.bin/vitest run test/ccrc-codex-launcher.test.ts test/wrapper-generate.test.ts --maxWorkers=1
 ./node_modules/.bin/vitest run test/measure-continuity.test.ts test/measure-continuity-stage4.test.ts test/measure-continuity-stage7.test.ts --maxWorkers=1
 ./node_modules/.bin/vitest run test/ownership.test.ts test/ccd-reg-get-census.test.ts test/ccd-die-containment.test.ts test/single-definition.test.ts test/ccrc-doctor-graphify.test.ts --maxWorkers=1
