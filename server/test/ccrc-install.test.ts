@@ -8342,6 +8342,11 @@ describeLinux('ccrc install: a timer systemd refuses is a COUNTED degraded step 
  *  W4, spec 2026-10-01 §7.2), by the live-shape case on the W4 tree: the three
  *  maps each gained `"docs-sw": "SKIP"` (the `--role fleet` box records
  *  `CCRC_ROLE=fleet` and serves no PWA bundle) and nothing else moved.
+ *  RE-MEASURED again when doctor gained its `transcripts` check (#189, the
+ *  forked-session continued-in chain), by the live-shape case on Linux CI on
+ *  that PR's merged tree: the three maps each gained `"transcripts": "PASS"`
+ *  (the fresh fleet box's registry holds no row reading a superseded
+ *  transcript) and nothing else moved.
  *  It is a golden: nothing re-measures
  *  it, so a merge-up that moves a doctor check's class on the live shape reds
  *  the live-shape case until Step 3 is re-run on a disposable copy of the new
@@ -8403,6 +8408,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "timeout": "PASS",
         "tmux": "PASS",
         "tmux_skew": "PASS",
+        "transcripts": "PASS",
         "update-exposure": "SKIP",
         "update-sync": "WARN",
         "wrappers": "PASS"
@@ -8455,6 +8461,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
         "timeout": "PASS",
         "tmux": "PASS",
         "tmux_skew": "PASS",
+        "transcripts": "PASS",
         "update-exposure": "SKIP",
         "update-sync": "WARN",
         "wrappers": "PASS"
@@ -8577,6 +8584,7 @@ const BASE_LIVE_SHAPE: LiveShapeMeasure = {
       "timeout": "PASS",
       "tmux": "PASS",
       "tmux_skew": "PASS",
+        "transcripts": "PASS",
       "update-exposure": "SKIP",
       "update-sync": "WARN",
       "wrappers": "PASS"
