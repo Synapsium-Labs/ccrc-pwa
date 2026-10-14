@@ -826,6 +826,24 @@ describe('coord.db: the six delegation_* tables (delegation broker wave 3, spec 
   /** This entry's slot, found by its DDL and never hard-coded (the dead_claimants case's rule): whichever of two branches
    *  holding one slot merges second moves up, and that renumber must not edit a line here. */
   const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE delegation_sessions')) + 1;
+  /** Its predecessor at measurement time, also found by DDL: this entry was written after it. A later migration from
+   *  another branch lands AFTER this entry and needs no edit here: nothing below asks for "the newest" or for the version
+   *  a current build ends at, only for `SLOT` itself, `COORD_SCHEMA_VERSION` and a build cut at this entry. */
+  const PREDECESSOR = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE dead_coordinator_breaker_state')) + 1;
+  /** The REAL db.ts over a schema.ts that stops at entry `n`: a build whose newest migration is `MIGRATIONS[n - 1]`. */
+  const buildAt = async <T>(n: number, use: (m: typeof import('../src/coord/db.js')) => T | Promise<T>): Promise<T> => {
+    vi.resetModules();
+    vi.doMock('../src/coord/schema.js', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('../src/coord/schema.js')>();
+      const cut = actual.MIGRATIONS.slice(0, n);
+      return { ...actual, MIGRATIONS: cut, COORD_SCHEMA_VERSION: cut.length };
+    });
+    try { return await use(await import('../src/coord/db.js')); } finally {
+      vi.doUnmock('../src/coord/schema.js');
+      vi.resetModules();
+    }
+  };
+  const userVersion = (d: DatabaseSync): number => (d.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
   const TABLES = [
     'delegation_activities', 'delegation_attempts', 'delegation_events', 'delegation_leases', 'delegation_lineage',
     'delegation_sessions',
@@ -873,9 +891,10 @@ describe('coord.db: the six delegation_* tables (delegation broker wave 3, spec 
   };
   const lease = (over: Record<string, string | number | null>) => ({ ...LEASE, ...over });
 
-  it('is the LAST entry, steps N-1 -> N, and holds exactly the six spec tables and their sixteen indexes', () => {
-    expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThanOrEqual(20);
-    expect(SLOT, 'the delegation migration is the newest slot').toBe(MIGRATIONS.length);
+  it('comes after the dead-coordinator breaker entry, is one migration, and holds exactly the six spec tables and their sixteen indexes', () => {
+    expect(PREDECESSOR, 'no MIGRATIONS entry creates dead_coordinator_breaker_state').toBeGreaterThanOrEqual(19);
+    expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThan(PREDECESSOR);
+    expect(SLOT).toBeLessThanOrEqual(MIGRATIONS.length);
     expect(MIGRATIONS.filter((m) => m.includes('delegation_')), 'one migration, not several').toHaveLength(1);
     const ddl = MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '');
     const statements = ddl.split(';').map((s) => s.trim()).filter((s) => s !== '');
@@ -886,10 +905,31 @@ describe('coord.db: the six delegation_* tables (delegation broker wave 3, spec 
     expect(statements.filter((s) => /^CREATE (UNIQUE )?INDEX /.test(s)).map((s) => /INDEX (\w+)/.exec(s)![1]).sort())
       .toEqual(INDEXES);
     const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(SLOT);
+    expect(userVersion(db), 'a fresh database reaches this build’s version').toBe(COORD_SCHEMA_VERSION);
     expect(masterNames(db, 'table')).toEqual(TABLES);
     expect(masterNames(db, 'index')).toEqual(INDEXES);
     db.close();
+  });
+
+  it('steps SLOT-1 -> SLOT: a build whose newest migration is this entry takes a fresh file to SLOT and a SLOT-1 file to SLOT', async () => {
+    expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThan(PREDECESSOR);
+    await buildAt(SLOT, (older) => {
+      expect(older.COORD_SCHEMA_VERSION).toBe(SLOT);
+      const fresh = older.openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+      expect(userVersion(fresh)).toBe(SLOT);
+      expect(masterNames(fresh, 'table')).toEqual(TABLES);
+      fresh.close();
+      const p = dbPathIn(mkTmp('ccrc-coord-'));
+      mkdirSync(path.dirname(p), { recursive: true });
+      const raw = new DatabaseSync(p);
+      tx(raw, () => { for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!); raw.exec(`PRAGMA user_version = ${SLOT - 1}`); });
+      expect(userVersion(raw)).toBe(SLOT - 1);
+      raw.close();
+      const stepped = older.openCoordDb(p);
+      expect(userVersion(stepped), 'exactly one step').toBe(SLOT);
+      expect(masterNames(stepped, 'table')).toEqual(TABLES);
+      stepped.close();
+    });
   });
 
   it('gives each table exactly its spec columns, types, nullability and keys', () => {
@@ -1194,8 +1234,8 @@ describe('coord.db: the six delegation_* tables (delegation broker wave 3, spec 
     db.close();
   });
 
-  it('reaches a database ALREADY at the version before it: all six tables arrive in that one step, every older row untouched', () => {
-    expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThanOrEqual(20);
+  it('reaches a database ALREADY at the version before it: all six tables arrive in that one step, every older row untouched', async () => {
+    expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThan(PREDECESSOR);
     const p = dbPathIn(mkTmp('ccrc-coord-'));
     mkdirSync(path.dirname(p), { recursive: true });
     const raw = new DatabaseSync(p);
@@ -1208,18 +1248,30 @@ describe('coord.db: the six delegation_* tables (delegation broker wave 3, spec 
     });
     expect(masterNames(raw, 'table'), 'none of the six exists before').toEqual([]);
     raw.close();
-    const db = openCoordDb(p);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(SLOT);
-    expect(masterNames(db, 'table')).toEqual(TABLES);
-    expect(masterNames(db, 'index')).toEqual(INDEXES);
-    for (const t of TABLES) expect(db.prepare(`SELECT count(*) AS n FROM ${t}`).get(), t).toEqual({ n: 0 });
-    expect(db.prepare('SELECT claimedBy, state FROM runs').get()).toEqual({ claimedBy: 'c', state: 'working' });
-    expect(db.prepare('SELECT claimantId, firstDeadAt FROM dead_claimants').get()).toEqual({ claimantId: 'c', firstDeadAt: 5 });
-    db.close();
+    await buildAt(SLOT, (older) => {
+      const db = older.openCoordDb(p);
+      expect(userVersion(db)).toBe(SLOT);
+      expect(masterNames(db, 'table')).toEqual(TABLES);
+      expect(masterNames(db, 'index')).toEqual(INDEXES);
+      for (const t of TABLES) expect(db.prepare(`SELECT count(*) AS n FROM ${t}`).get(), t).toEqual({ n: 0 });
+      expect(db.prepare('SELECT claimedBy, state FROM runs').get()).toEqual({ claimedBy: 'c', state: 'working' });
+      expect(db.prepare('SELECT claimantId, firstDeadAt FROM dead_claimants').get()).toEqual({ claimantId: 'c', firstDeadAt: 5 });
+      db.close();
+    });
+    // And the CURRENT build takes the same file to its own version, whatever has landed after this entry.
+    const p2 = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p2), { recursive: true });
+    const raw2 = new DatabaseSync(p2);
+    tx(raw2, () => { for (let v = 0; v < SLOT - 1; v++) raw2.exec(MIGRATIONS[v]!); raw2.exec(`PRAGMA user_version = ${SLOT - 1}`); });
+    raw2.close();
+    const current = openCoordDb(p2);
+    expect(userVersion(current)).toBe(COORD_SCHEMA_VERSION);
+    expect(masterNames(current, 'table')).toEqual(TABLES);
+    current.close();
   });
 
   it('a failure at ANY statement of the migration leaves the prior user_version and no partial table, then boots clean', () => {
-    expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThanOrEqual(20);
+    expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThan(PREDECESSOR);
     const original = MIGRATIONS[SLOT - 1]!;
     const statements = original.replace(/--[^\n]*/g, '').split(';').map((s) => s.trim()).filter((s) => s !== '');
     expect(statements.length, 'six tables and sixteen indexes').toBe(22);
@@ -1250,14 +1302,14 @@ describe('coord.db: the six delegation_* tables (delegation broker wave 3, spec 
       expect(after.prepare("SELECT slug FROM programs").get(), 'the older rows survive').toEqual({ slug: 'keep' });
       after.close();
       const db = openCoordDb(p);                                          // the cause is fixed: boot 2 migrates clean
-      expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(SLOT);
+      expect(userVersion(db)).toBe(COORD_SCHEMA_VERSION);
       expect(masterNames(db, 'table')).toEqual(TABLES);
       db.close();
     }
   }, 120_000);
 
-  it('is ADDITIVE: every older table and index is byte-for-byte what the previous version wrote, so an older build’s SQL still works', () => {
-    expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThanOrEqual(20);
+  it('is ADDITIVE: every older table and index is byte-for-byte what the previous version wrote, so an older build’s SQL still works', async () => {
+    expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThan(PREDECESSOR);
     const p = dbPathIn(mkTmp('ccrc-coord-'));
     mkdirSync(path.dirname(p), { recursive: true });
     const raw = new DatabaseSync(p);
@@ -1267,47 +1319,44 @@ describe('coord.db: the six delegation_* tables (delegation broker wave 3, spec 
         Array<{ name: string; sql: string }>).map((r) => [r.name, r.sql]));
     const before = schemaOf(raw);
     raw.close();
-    const db = openCoordDb(p);
-    expect(schemaOf(db), 'no older table or index changed').toEqual(before);
-    // The statements an older build runs, naming only the columns it knows.
-    db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('old', 'Old', 1, 'active')").run();
-    db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('old', 1, 1, 'demo', 'working', 'c', 1)").run();
-    db.prepare("INSERT INTO dead_claimants (claimantId, firstDeadAt, lastDeadAt) VALUES ('x', 1, 2)").run();
-    db.prepare("UPDATE runs SET state = 'done' WHERE program = 'old'").run();
-    expect(db.prepare("SELECT state FROM runs WHERE program = 'old'").get()).toEqual({ state: 'done' });
-    db.close();
+    // Cut at THIS entry, so a migration that lands after it (and may alter older tables) is not blamed on it.
+    await buildAt(SLOT, (older) => {
+      const db = older.openCoordDb(p);
+      expect(schemaOf(db), 'no older table or index changed').toEqual(before);
+      // The statements an older build runs, naming only the columns it knows.
+      db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('old', 'Old', 1, 'active')").run();
+      db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('old', 1, 1, 'demo', 'working', 'c', 1)").run();
+      db.prepare("INSERT INTO dead_claimants (claimantId, firstDeadAt, lastDeadAt) VALUES ('x', 1, 2)").run();
+      db.prepare("UPDATE runs SET state = 'done' WHERE program = 'old'").run();
+      expect(db.prepare("SELECT state FROM runs WHERE program = 'old'").get()).toEqual({ state: 'done' });
+      db.close();
+    });
   });
 
   it('an OLDER build, meeting the file at this version, reads and writes its own tables and migrates nothing (rule 3)', async () => {
-    expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThanOrEqual(20);
+    expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThan(PREDECESSOR);
     const p = dbPathIn(mkTmp('ccrc-coord-'));
     const newer = openCoordDb(p);
     put(newer, 'delegation_sessions', SESSION);
+    const newerVersion = userVersion(newer);
     newer.close();
     // The older build is the REAL db.ts over a schema.ts that stops one entry earlier, not a hand-written imitation.
-    vi.resetModules();
-    vi.doMock('../src/coord/schema.js', async (importOriginal) => {
-      const actual = await importOriginal<typeof import('../src/coord/schema.js')>();
-      const older = actual.MIGRATIONS.slice(0, SLOT - 1);
-      return { ...actual, MIGRATIONS: older, COORD_SCHEMA_VERSION: older.length };
-    });
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      const olderDb = await import('../src/coord/db.js');
-      expect(olderDb.COORD_SCHEMA_VERSION).toBe(SLOT - 1);
-      const db = olderDb.openCoordDb(p);
-      expect(warnSpy).toHaveBeenCalledTimes(1);
-      expect(warnSpy.mock.calls[0]![0]).toMatch(/this build knows/i);
-      expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(SLOT);   // never written DOWN
-      db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('old', 'Old', 1, 'active')").run();
-      db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('old', 1, 1, 'demo', 'working', 'c', 1)").run();
-      expect(db.prepare("SELECT claimedBy FROM runs WHERE program = 'old'").get()).toEqual({ claimedBy: 'c' });
-      expect(db.prepare('SELECT count(*) AS n FROM delegation_sessions').get(), 'the newer tables are still there').toEqual({ n: 1 });
-      db.close();
+      await buildAt(SLOT - 1, (older) => {
+        expect(older.COORD_SCHEMA_VERSION).toBe(SLOT - 1);
+        const db = older.openCoordDb(p);
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(warnSpy.mock.calls[0]![0]).toMatch(/this build knows/i);
+        expect(userVersion(db), 'never written DOWN').toBe(newerVersion);
+        db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('old', 'Old', 1, 'active')").run();
+        db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('old', 1, 1, 'demo', 'working', 'c', 1)").run();
+        expect(db.prepare("SELECT claimedBy FROM runs WHERE program = 'old'").get()).toEqual({ claimedBy: 'c' });
+        expect(db.prepare('SELECT count(*) AS n FROM delegation_sessions').get(), 'the newer tables are still there').toEqual({ n: 1 });
+        db.close();
+      });
     } finally {
       warnSpy.mockRestore();
-      vi.doUnmock('../src/coord/schema.js');
-      vi.resetModules();
     }
   });
 });

@@ -32,7 +32,7 @@ import type { UpdateIntentLog } from './updateintentlog.js';
 // Delegation broker wave 3, Task 7: the projection's row shapes, codecs and guards are the PURE `delegation-model.ts`;
 // this file runs the SQL and nothing else.
 import {
-  assertWave3Lease, delegationActivityCodec, delegationAttemptCodec, delegationCheckpointOfProjection, delegationEventCodec,
+  assertWave3Leases, delegationActivityCodec, delegationAttemptCodec, delegationCheckpointOfProjection, delegationEventCodec,
   delegationLeaseCodec, delegationLineageCodec, delegationSessionCodec, DelegationModelError,
   type DelegationCheckpointV1, type DelegationEventRow, type DelegationRowCodec, type DelegationSqlValue,
 } from './delegation-model.js';
@@ -8186,24 +8186,33 @@ export class CoordStore {
   // ── delegation broker wave 3, Task 7: the report-only coordination projection ────────────────────────────────────
   // The six `delegation_*` tables (MIGRATIONS entry 20) are REPAIRABLE OUTPUT. The journal and the checkpoint are the
   // authority (Task 8 owns both, and `delegation-model.ts` owns their shapes); these three methods only make SQLite say
-  // what the checkpoint says. `CoordStore` stays synchronous, one transaction per replacement, and holds no health and no
-  // coordinator intent as an authority: the checkpoint's `observationIntervals` and `coordinatorIntentByParent` do, and
-  // the session rows below are DERIVED from that map before they reach this method.
+  // what they say. `CoordStore` stays synchronous and holds no health and no coordinator intent as an authority: the
+  // checkpoint's `observationIntervals` and `coordinatorIntentByParent` do, and the session rows below are DERIVED from that
+  // map before they reach this method.
+  //
+  // TWO KINDS OF TABLE. The checkpoint carries sessions, attempts, activities, leases and lineage, so projecting it rebuilds
+  // those five. It carries NO events: `delegation_events` is journal-derived, written only by `insertDelegationEvent`, and a
+  // projection neither inserts nor rewrites one (ruling R20: a full delete and re-insert of the events table is O(events) on
+  // this synchronous loop, about 3 s per 100K rows). A lost or damaged events table is repaired by replaying the retained
+  // journal through `insertDelegationEvent`, not by projecting.
 
   /**
-   * Replaces the whole projection from `checkpoint`, in ONE transaction with foreign keys enforced, in the one
-   * foreign-key-safe order: DELETE `delegation_lineage`, `_leases`, `_events`, `_attempts`, `_activities`, `_sessions`;
-   * INSERT sessions, then activities, attempts and events, then leases, then lineage. A fault at any statement rolls the
-   * whole replacement back, so the previous projection survives intact.
+   * Makes the five non-event tables say what `checkpoint` says, in ONE transaction, in this order (every step is a
+   * dependency edge of the foreign keys, which the connection must enforce):
+   *   1. read the current session keys; `leaving` = current minus the checkpoint's;
+   *   2. DELETE `delegation_lineage`, then `delegation_leases`;
+   *   3. DELETE the `delegation_events` of each LEAVING session only (`delegation_events_by_parent`, one statement each);
+   *   4. DELETE `delegation_attempts`, then `delegation_activities`;
+   *   5. DELETE each leaving `delegation_sessions` row;
+   *   6. UPSERT `delegation_sessions` (`INSERT ... ON CONFLICT (sessionId, parentIncarnation) DO UPDATE` of every other column,
+   *      so a staying session keeps its row and its events);
+   *   7. INSERT activities, attempts, leases, lineage.
+   * A fault at any statement rolls the whole replacement back; the previous projection survives intact. The cost is
+   * O(the five tables) plus O(the events of the sessions that leave), never O(all events).
    *
-   * Everything that can be refused is refused BEFORE the transaction opens (`assertWave3Lease` over every lease, the
-   * checkpoint's version and applied position, every instant), so a refusal costs no write and no rollback. A row the
+   * Everything refusable is refused BEFORE the transaction opens: the checkpoint's version and applied position, the wave-3
+   * lease invariants (`assertWave3Leases`), every row's encoding, and a handle that does not enforce foreign keys. A row the
    * schema itself refuses (a CHECK, a unique index, a foreign key) throws SQLite's error from inside the transaction.
-   *
-   * `delegation_events` rows are evidence appended by `insertDelegationEvent`, and a checkpoint carries none, so the
-   * replacement carries over each event whose session the checkpoint still holds, byte for byte, and drops the rest as
-   * stale output (an event whose session left the checkpoint would otherwise fail its foreign key and wedge every repair).
-   * Nothing else survives: no row is merged, and nothing is read from the old projection except those events.
    */
   projectDelegationCheckpoint(checkpoint: DelegationCheckpointV1): void {
     if (checkpoint.v !== 1) throw new DelegationModelError('bad-checkpoint', `version ${String(checkpoint.v)} is not a version-1 checkpoint`);
@@ -8211,41 +8220,51 @@ export class CoordStore {
     if (!Number.isSafeInteger(applied) || applied < 0) {
       throw new DelegationModelError('bad-checkpoint', `appliedJournalSequence ${String(applied)} is not a non-negative integer`);
     }
-    for (const lease of checkpoint.leases) assertWave3Lease(lease, applied);
-    // Encoded now, outside the transaction: a malformed instant is a refusal, not a rollback.
+    assertWave3Leases(checkpoint);
+    // Encoded now, outside the transaction: a malformed instant or list is a refusal, not a rollback.
     const sessions = checkpoint.sessions.map((r) => delegationSessionCodec.toDb(r));
     const activities = checkpoint.activities.map((r) => delegationActivityCodec.toDb(r));
     const attempts = checkpoint.attempts.map((r) => delegationAttemptCodec.toDb(r));
     const leases = checkpoint.leases.map((r) => delegationLeaseCodec.toDb(r));
     const lineage = checkpoint.lineage.map((r) => delegationLineageCodec.toDb(r));
+    // `PRAGMA foreign_keys` is a no-op inside a transaction, so it is read here, before BEGIN. The statement order below is
+    // a foreign-key order; on a handle that does not enforce them it would still "work" and prove nothing.
+    const fk = (this.db.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number } | undefined)?.foreign_keys;
+    if (fk !== 1) {
+      throw new DelegationModelError('foreign-keys-off', `PRAGMA foreign_keys reads ${String(fk)}; the projection needs 1`);
+    }
     const sessionKey = (id: unknown, incarnation: unknown): string => JSON.stringify([id, incarnation]);
-    const sessionsHeld = new Set(sessions.map((r) => sessionKey(r.sessionId, r.parentIncarnation)));
+    const staying = new Set(sessions.map((r) => sessionKey(r.sessionId, r.parentIncarnation)));
 
     tx(this.db, () => {
-      const kept = (this.db.prepare(delegationSelectSql(delegationEventCodec, 'journalSequence')).all() as unknown as
-        Array<Record<string, DelegationSqlValue>>)
-        .filter((e) => sessionsHeld.has(sessionKey(e['sessionId'], e['parentIncarnation'])));
+      const leaving = (this.db.prepare('SELECT sessionId, parentIncarnation FROM delegation_sessions').all() as
+        Array<{ sessionId: string; parentIncarnation: string }>)
+        .filter((k) => !staying.has(sessionKey(k.sessionId, k.parentIncarnation)));
       // Children before parents: lineage names leases and activities, leases name activities, and everything names sessions.
-      for (const table of ['delegation_lineage', 'delegation_leases', 'delegation_events', 'delegation_attempts',
-                           'delegation_activities', 'delegation_sessions'] as const) {
-        this.db.prepare(`DELETE FROM ${table}`).run();
-      }
-      const insertAll = <Row, Col extends string>(codec: DelegationRowCodec<Row, Col>, rows: ReadonlyArray<Readonly<Record<string, DelegationSqlValue>>>): void => {
+      this.db.prepare('DELETE FROM delegation_lineage').run();
+      this.db.prepare('DELETE FROM delegation_leases').run();
+      const deleteEvents = this.db.prepare('DELETE FROM delegation_events WHERE sessionId = ? AND parentIncarnation = ?');
+      for (const k of leaving) deleteEvents.run(k.sessionId, k.parentIncarnation);
+      this.db.prepare('DELETE FROM delegation_attempts').run();
+      this.db.prepare('DELETE FROM delegation_activities').run();
+      const deleteSession = this.db.prepare('DELETE FROM delegation_sessions WHERE sessionId = ? AND parentIncarnation = ?');
+      for (const k of leaving) deleteSession.run(k.sessionId, k.parentIncarnation);
+      const run = <Row, Col extends string>(sql: string, codec: DelegationRowCodec<Row, Col>, rows: ReadonlyArray<Readonly<Record<string, DelegationSqlValue>>>): void => {
         if (rows.length === 0) return;
-        const stmt = this.db.prepare(delegationInsertSql(codec));
+        const stmt = this.db.prepare(sql);
         for (const row of rows) stmt.run(...codec.columns.map((c) => row[c]));
       };
-      insertAll(delegationSessionCodec, sessions);
-      insertAll(delegationActivityCodec, activities);
-      insertAll(delegationAttemptCodec, attempts);
-      insertAll(delegationEventCodec, kept);
-      insertAll(delegationLeaseCodec, leases);
-      insertAll(delegationLineageCodec, lineage);
+      run(delegationUpsertSql(delegationSessionCodec, ['sessionId', 'parentIncarnation']), delegationSessionCodec, sessions);
+      run(delegationInsertSql(delegationActivityCodec), delegationActivityCodec, activities);
+      run(delegationInsertSql(delegationAttemptCodec), delegationAttemptCodec, attempts);
+      run(delegationInsertSql(delegationLeaseCodec), delegationLeaseCodec, leases);
+      run(delegationInsertSql(delegationLineageCodec), delegationLineageCodec, lineage);
     });
   }
 
   /**
-   * Appends one accepted evidence event to `delegation_events`. `'duplicate'` means THIS SAME event is already there
+   * Appends one accepted evidence event to `delegation_events`: the ONLY writer of that table (a projection deletes the events
+   * of a session that leaves and inserts none). `'duplicate'` means THIS SAME event is already there
    * (the same `eventId` and an identical row): the idempotent replay a re-read of the same bytes produces. The same
    * `eventId` with a DIFFERENT row is a conflict and throws; so does a second event on one `journalSequence`, and an event
    * whose session is not in the projection (the foreign key). The row is validated before any statement runs.
@@ -8295,6 +8314,12 @@ export class CoordStore {
 /** `INSERT INTO <table> (<columns>) VALUES (?, ...)` for a delegation table. */
 function delegationInsertSql<Row, Col extends string>(codec: DelegationRowCodec<Row, Col>): string {
   return `INSERT INTO ${codec.table} (${codec.columns.join(', ')}) VALUES (${codec.columns.map(() => '?').join(', ')})`;
+}
+
+/** `INSERT ... ON CONFLICT (<keys>) DO UPDATE SET <every other column> = excluded.<column>` for a delegation table. */
+function delegationUpsertSql<Row, Col extends string>(codec: DelegationRowCodec<Row, Col>, keys: readonly Col[]): string {
+  const sets = codec.columns.filter((c) => !keys.includes(c)).map((c) => `${c} = excluded.${c}`);
+  return `${delegationInsertSql(codec)} ON CONFLICT (${keys.join(', ')}) DO UPDATE SET ${sets.join(', ')}`;
 }
 
 /** `SELECT <columns> FROM <table> ORDER BY <orderBy>` for a delegation table. */

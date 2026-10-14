@@ -1339,11 +1339,14 @@ export const MIGRATIONS: readonly string[] = [
   //     indexes snake_case, every instant is epoch ms (the server's clock); the checkpoint and the journal spell the same
   //     instants as canonical UTC strings, and `delegation-model.ts` is the one codec between the two.
   //   - THEY ARE REPAIRABLE OUTPUT, NEVER AUTHORITY. The journal (`delegation-events.log`) and the checkpoint
-  //     (`delegation-checkpoint.json`) are the record; `CoordStore.projectDelegationCheckpoint` replaces every table from
-  //     the checkpoint inside one transaction (delete `delegation_lineage`, `_leases`, `_events`, `_attempts`, `_activities`,
-  //     `_sessions`, in that order, then insert sessions, activities, attempts, events, leases, lineage), and
-  //     `insertDelegationEvent` appends one evidence row. Nothing else writes them. A lost or damaged table is rebuilt by
-  //     projecting the checkpoint again, so SQLite never becomes a second identity source, and it holds no health and no
+  //     (`delegation-checkpoint.json`) are the record. The checkpoint carries sessions, attempts, activities, leases and
+  //     lineage, and `CoordStore.projectDelegationCheckpoint` rebuilds exactly those five in one transaction: it deletes the
+  //     lineage, leases, attempts and activities, deletes the sessions (and, first, the events) that LEFT the checkpoint,
+  //     upserts the staying sessions in place, and inserts the activities, attempts, leases and lineage. The checkpoint
+  //     carries NO events, so `delegation_events` is journal-derived: only `CoordStore.insertDelegationEvent` writes it, a
+  //     projection deletes the events of a session that leaves and touches no other, and a lost or damaged events table is
+  //     repaired by replaying the retained journal through `insertDelegationEvent` (Task 8), NOT by projecting. Nothing else
+  //     writes any of the six. So SQLite never becomes a second identity source, and it holds no health and no
   //     coordinator intent as an authority (the checkpoint's `observationIntervals` and `coordinatorIntentByParent` do).
   //     Bucket cursors and pruning holds have NO table: they live in the checkpoint alone.
   //   - WAVE 3 WRITES A LEASE ROW ONLY BY REPLAYING A DURABLE `lease-created` ENTRY, and fixes generation 0, equal creating

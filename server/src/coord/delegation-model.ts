@@ -167,8 +167,9 @@ export interface DelegationEventRow {
   payloadJson: string;
 }
 
-/** Whether an hour or a bucket was observed. The shared health type already spells this pair for the recovery phase; it
- *  is named once here for the two checkpoint-only members that carry it. */
+/** Whether an hour or a bucket was observed. There is no shared measured/unmeasured type to import (the shared health
+ *  type spells `'reconstructing' | 'ready'`, which is the recovery phase and a different pair), so it is named once here
+ *  for the two checkpoint-only members that carry it. */
 export type DelegationIntervalState = 'measured' | 'unmeasured';
 
 export interface DelegationBucketCursor {
@@ -248,6 +249,8 @@ export type DelegationModelRefusal =
   | 'bad-event'              // an evidence event row that cannot be a `delegation_events` row
   | 'event-conflict'         // the same evidence event ID, a different row
   | 'bad-checkpoint'         // a checkpoint that is not a version-1 checkpoint with a sound applied position
+  | 'bad-row'                // a row the codec refuses to WRITE because its own reader would refuse it on read
+  | 'foreign-keys-off'       // the handle does not enforce foreign keys, which the projection's order relies on
   | 'bad-natural-key'        // an activity natural key that is not four strings and a known source kind
   | 'bad-identity-journal-id'
   | 'identity-journal-id-required'
@@ -256,6 +259,8 @@ export type DelegationModelRefusal =
   | 'lease-disposition'
   | 'lease-cleanup-state'
   | 'lease-transition-field'
+  | 'lease-last-observed'    // wave 3 replays firstObservedAt into lastObservedAt: they are one instant
+  | 'lease-opening-lineage'  // replay also opens the lease's own lineage row, at that same instant
   | 'lease-without-journal-entry';
 
 export class DelegationModelError extends Error {
@@ -485,6 +490,8 @@ const LEASE_TRANSITION_FIELDS = [
  * current journal sequences are equal, it is `ephemeral`, its cleanup is `not-due`, and every transition clock, evidence
  * and carrier field is null. And that entry must exist in the journal the checkpoint has applied: a lease whose creating
  * sequence is past `appliedJournalSequence` has no journal entry behind it (an "event-less" lease), and so no authority.
+ * Replay sets `lastObservedAt` to the entry's `firstObservedAt` too (so the two are equal). That the entry's sequence names
+ * a retained `lease-created` record whose fields equal the lease is the journal's to prove (Task 8), not this guard's.
  */
 export function assertWave3Lease(lease: DelegationLeaseRow, appliedJournalSequence: number): void {
   const id = lease.leaseId;
@@ -507,9 +514,36 @@ export function assertWave3Lease(lease: DelegationLeaseRow, appliedJournalSequen
       throw new DelegationModelError('lease-transition-field', `lease ${id}: ${field} must be null in wave 3`);
     }
   }
+  if (lease.lastObservedAt !== lease.firstObservedAt) {
+    throw new DelegationModelError('lease-last-observed',
+      `lease ${id} was last observed at ${lease.lastObservedAt} but first at ${lease.firstObservedAt}; wave 3 replay sets both to the entry's instant`);
+  }
   if (lease.creatingJournalSequence > appliedJournalSequence) {
     throw new DelegationModelError('lease-without-journal-entry',
       `lease ${id} was created at journal sequence ${lease.creatingJournalSequence}, past the applied sequence ${appliedJournalSequence}`);
+  }
+}
+
+/**
+ * Every lease of a checkpoint through `assertWave3Lease`, and then the one invariant that needs the checkpoint's lineage:
+ * replay opens a lease-OWNED lineage row (`leaseId` set, so neither an activity's nor a run's) whose `openedAt` is the
+ * lease's `firstObservedAt`. A lease without one is a lease whose history the journal entry would have opened and the
+ * checkpoint lost. Run before any transaction opens, so a refusal writes nothing.
+ */
+export function assertWave3Leases(checkpoint: DelegationCheckpointV1): void {
+  for (const lease of checkpoint.leases) assertWave3Lease(lease, checkpoint.appliedJournalSequence);
+  const openedAt = new Map<string, Set<string>>();
+  for (const n of checkpoint.lineage) {
+    if (n.leaseId === null) continue;
+    const at = openedAt.get(n.leaseId) ?? new Set<string>();
+    at.add(n.openedAt);
+    openedAt.set(n.leaseId, at);
+  }
+  for (const lease of checkpoint.leases) {
+    if (openedAt.get(lease.leaseId)?.has(lease.firstObservedAt) !== true) {
+      throw new DelegationModelError('lease-opening-lineage',
+        `lease ${lease.leaseId} has no lease-owned lineage row opened at its firstObservedAt ${lease.firstObservedAt}`);
+    }
   }
 }
 
@@ -572,6 +606,20 @@ const readers = (table: string, raw: RawRow) => {
     sourceList: (c: string) => jsonList(c, (v): v is DelegationIntentSource => isMember(DELEGATION_INTENT_SOURCES, v), 'intent sources') };
 };
 
+/** The write side of a typed reader: a list column a projection writes must be one `readers()` would read back. */
+const stringListOf = (v: unknown, where: string): readonly string[] => {
+  if (!Array.isArray(v) || !v.every((x) => typeof x === 'string')) {
+    throw new DelegationModelError('bad-row', `${where} is not a list of strings`);
+  }
+  return v;
+};
+const intentSourcesOf = (v: unknown, where: string): readonly DelegationIntentSource[] => {
+  if (!Array.isArray(v) || !v.every((x): x is DelegationIntentSource => isMember(DELEGATION_INTENT_SOURCES, x))) {
+    throw new DelegationModelError('bad-row', `${where} is not a list of intent sources (${DELEGATION_INTENT_SOURCES.join(', ')})`);
+  }
+  return v;
+};
+
 const instantMs = (iso: string): number => parseDelegationInstant(iso);
 const instantMsOrNull = (iso: string | null): number | null => (iso === null ? null : parseDelegationInstant(iso));
 
@@ -584,8 +632,10 @@ export const delegationSessionCodec: DelegationRowCodec<DelegationSessionRow, (t
   columns: SESSION_COLUMNS,
   toDb: (r) => ({
     sessionId: r.sessionId, parentIncarnation: r.parentIncarnation, explicitIntentAt: instantMsOrNull(r.explicitIntentAt),
-    effective: r.effective ? 1 : 0, effectiveBasisJson: canonicalDelegationJson(r.effectiveBasis),
-    claudeSessionIdsJson: canonicalDelegationJson(r.claudeSessionIds), firstObservedAt: instantMs(r.firstObservedAt),
+    effective: r.effective ? 1 : 0,
+    effectiveBasisJson: canonicalDelegationJson(intentSourcesOf(r.effectiveBasis, `session ${r.sessionId} effectiveBasis`)),
+    claudeSessionIdsJson: canonicalDelegationJson(stringListOf(r.claudeSessionIds, `session ${r.sessionId} claudeSessionIds`)),
+    firstObservedAt: instantMs(r.firstObservedAt),
     lastObservedAt: instantMs(r.lastObservedAt),
   }),
   fromDb: (raw) => {
@@ -609,7 +659,9 @@ export const delegationAttemptCodec: DelegationRowCodec<DelegationAttemptRow, (t
   toDb: (r) => ({
     attemptId: r.attemptId, parentId: r.parentId, parentIncarnation: r.parentIncarnation, project: r.project,
     adminRecord: r.adminRecord, canonicalPath: r.canonicalPath, attemptedAt: instantMs(r.attemptedAt), rung: r.rung,
-    verdict: r.verdict, evidenceJournalIdsJson: canonicalDelegationJson(r.evidenceJournalIds), detail: r.detail,
+    verdict: r.verdict,
+    evidenceJournalIdsJson: canonicalDelegationJson(stringListOf(r.evidenceJournalIds, `attempt ${r.attemptId} evidenceJournalIds`)),
+    detail: r.detail,
   }),
   fromDb: (raw) => {
     const r = readers('delegation_attempts', raw);

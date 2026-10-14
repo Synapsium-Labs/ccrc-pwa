@@ -16,6 +16,7 @@ import {
   DELEGATION_DISPOSITIONS,
   DELEGATION_EVENT_KINDS,
   DELEGATION_EXECUTION_STATES,
+  DELEGATION_INTENT_SOURCES,
   DELEGATION_LEASE_SOURCE_KINDS,
   DELEGATION_PARENTAGE_STATES,
   DELEGATION_WORKSPACE_STATES,
@@ -26,6 +27,7 @@ import {
   DelegationJsonError,
   DelegationModelError,
   assertWave3Lease,
+  assertWave3Leases,
   canonicalDelegationJson,
   delegationActivityCodec,
   delegationAttemptCodec,
@@ -422,7 +424,7 @@ const lease = (over: Partial<DelegationLeaseRow> = {}): DelegationLeaseRow => ({
   activityId: ACTIVITY_ID_FROM_JOURNAL, parentId: 'lane-a-demo', parentIncarnation: 'g1', project: 'project-a',
   adminRecord: 'wt-1', canonicalPath: '/work/project-a/.claude/worktrees/wt-1', creationBase: null, sourceKind: 'agent',
   parentageState: 'linked', workspaceState: 'unmeasured', disposition: 'ephemeral', cleanupState: 'not-due',
-  cleanupPopulation: 'ephemeral-lease', firstObservedAt: T0, lastObservedAt: T1, terminalEvidenceAt: null,
+  cleanupPopulation: 'ephemeral-lease', firstObservedAt: T0, lastObservedAt: T0, terminalEvidenceAt: null,
   adoptedAt: null, retainedAt: null, promotedAt: null, cleanupDueAt: null, cleanupStartedAt: null,
   cleanupFinishedAt: null, cleanupEvidenceJson: null, carrierGenerationSeen: null, releasedAt: null, ...over,
 });
@@ -449,6 +451,10 @@ const eventRow = (over: Partial<DelegationEventRow> = {}): DelegationEventRow =>
   sessionId: 'lane-a-demo', parentIncarnation: 'g1', claudeSessionId: 'cs-1', eventKind: 'PostToolUse', observedAt: T0,
   payloadJson: '{"v":1}', ...over,
 });
+
+const refusal = (fn: () => unknown, code: string): void => {
+  expect(fn).toThrowError(expect.objectContaining({ name: 'DelegationModelError', code }));
+};
 
 describe('assertWave3Lease — what wave 3 may write to delegation_leases', () => {
   it('accepts the one shape wave 3 writes, null creationBase and non-null alike', () => {
@@ -479,6 +485,7 @@ describe('assertWave3Lease — what wave 3 may write to delegation_leases', () =
     ['a non-ephemeral disposition (promoted)', { disposition: 'promoted' }, 5, 'lease-disposition'],
     ['cleanup state pending', { cleanupState: 'pending' }, 5, 'lease-cleanup-state'],
     ['cleanup state unmeasured', { cleanupState: 'unmeasured' }, 5, 'lease-cleanup-state'],
+    ['a lastObservedAt that is not its firstObservedAt (replay sets both to the entry’s instant)', { lastObservedAt: T1 }, 5, 'lease-last-observed'],
     ['an event-less lease: its creating sequence is past the applied journal', {}, 4, 'lease-without-journal-entry'],
     ['an event-less lease against an empty journal', {}, 0, 'lease-without-journal-entry'],
     ['terminalEvidenceAt set', { terminalEvidenceAt: T1 }, 5, 'lease-transition-field'],
@@ -506,6 +513,43 @@ describe('assertWave3Lease — what wave 3 may write to delegation_leases', () =
     try { assertWave3Lease(lease({ generation: 2 }), 5); expect.unreachable(); } catch (err) {
       expect(err).toBeInstanceOf(DelegationModelError);
     }
+  });
+});
+
+describe('assertWave3Leases — the checkpoint-level wave-3 invariants (plan: replay opens each lease’s lineage)', () => {
+  const opening = (l: DelegationLeaseRow, over: Partial<DelegationLineageRow> = {}): DelegationLineageRow => ({
+    lineageId: delegationSha256Hex(`opening-${l.leaseId}`), parentId: l.parentId, parentIncarnation: l.parentIncarnation,
+    activityId: null, leaseId: l.leaseId, runId: null, openedAt: l.firstObservedAt, closedAt: null, closeReason: null, ...over,
+  });
+  const checkpoint = (leases: DelegationLeaseRow[], lineage: DelegationLineageRow[], applied = 9): DelegationCheckpointV1 =>
+    ({ ...emptyDelegationCheckpoint(), appliedJournalSequence: applied, leases, lineage });
+  const a = lease({ leaseId: 'lease-a' });
+  const b = lease({ leaseId: 'lease-b', creatingJournalSequence: 6, currentJournalSequence: 6, canonicalPath: '/work/other', adminRecord: 'wt-2' });
+
+  it('accepts leases that each have their lease-owned opening lineage row opened at the lease’s firstObservedAt', () => {
+    expect(() => assertWave3Leases(checkpoint([a, b], [opening(a), opening(b)]))).not.toThrow();
+    expect(() => assertWave3Leases(checkpoint([], []))).not.toThrow();
+  });
+
+  it('keeps the per-lease invariants: the row-level refusals fire from the checkpoint-level guard too', () => {
+    refusal(() => assertWave3Leases(checkpoint([{ ...a, generation: 1 }], [opening(a)])), 'lease-generation');
+    refusal(() => assertWave3Leases(checkpoint([a], [opening(a)], 4)), 'lease-without-journal-entry');
+    refusal(() => assertWave3Leases(checkpoint([{ ...a, lastObservedAt: T1 }], [opening(a, { openedAt: T0 })])), 'lease-last-observed');
+  });
+
+  it.each([
+    ['no lineage row at all', () => checkpoint([a], [])],
+    ['lineage that belongs to another lease', () => checkpoint([a], [opening(b)])],
+    ['an opening row opened at another instant', () => checkpoint([a], [opening(a, { openedAt: T1 })])],
+    ['an activity-owned row that merely shares the parent', () => checkpoint([a], [opening(a, { leaseId: null, activityId: ACTIVITY_ID_FROM_JOURNAL })])],
+    ['a run-owned row that merely shares the parent', () => checkpoint([a], [opening(a, { leaseId: null, runId: 7 })])],
+    ['one lease covered and the other not', () => checkpoint([a, b], [opening(a)])],
+  ])('refuses %s', (_label, make) => {
+    refusal(() => assertWave3Leases(make()), 'lease-opening-lineage');
+  });
+
+  it('names the lease that lacks its opening row', () => {
+    expect(() => assertWave3Leases(checkpoint([a, b], [opening(a)]))).toThrow(/lease-b/);
   });
 });
 
@@ -603,6 +647,21 @@ describe('the row codecs — checkpoint shapes to table columns and back, with t
     }
     const ev = eventRow();
     expect(delegationEventCodec.fromDb(delegationEventCodec.toDb(ev))).toEqual(ev);
+  });
+
+  it('refuses on WRITE what its own reader would refuse on READ: a projection cannot commit an unreadable row', () => {
+    const bad = (fn: () => unknown) => expect(fn).toThrowError(expect.objectContaining({ name: 'DelegationModelError', code: 'bad-row' }));
+    bad(() => delegationSessionCodec.toDb(session({ effectiveBasis: ['made-up'] as unknown as DelegationSessionRow['effectiveBasis'] })));
+    bad(() => delegationSessionCodec.toDb(session({ effectiveBasis: ['explicit', 'run-owner ' as never] })));
+    bad(() => delegationSessionCodec.toDb(session({ effectiveBasis: 'explicit' as unknown as DelegationSessionRow['effectiveBasis'] })));
+    bad(() => delegationSessionCodec.toDb(session({ claudeSessionIds: [1] as unknown as DelegationSessionRow['claudeSessionIds'] })));
+    bad(() => delegationAttemptCodec.toDb(attempt({ evidenceJournalIds: [null] as unknown as DelegationAttemptRow['evidenceJournalIds'] })));
+    bad(() => delegationAttemptCodec.toDb(attempt({ evidenceJournalIds: 'x' as unknown as DelegationAttemptRow['evidenceJournalIds'] })));
+    // and every row it DOES write reads back:
+    for (const basis of DELEGATION_INTENT_SOURCES) {
+      const row = session({ effectiveBasis: [basis], claudeSessionIds: ['a'] });
+      expect(delegationSessionCodec.fromDb(delegationSessionCodec.toDb(row))).toEqual(row);
+    }
   });
 
   it('reads an unknown enum word as an unreadable row; it never casts the text', () => {
