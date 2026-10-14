@@ -439,3 +439,13 @@ describe('docMarkdownSource: a markdown leaf\'s bytes (spec 4.10 step 6)', () =>
     expect(docMarkdownSource(show({ encoding: 'base64', text: '# A' }))).toEqual({ kind: 'no-bytes' });
   });
 });
+
+describe('T13 review 1-1: the in-thread fallback parses in the docs profile', () => {
+  it('a small text with a <br>, with no Worker, draws a br element and no literal "<br>"', async () => {
+    const parser = createMarkdownRunner({ spawn: () => { throw new Error('no Worker'); } }).parse;
+    const { container } = render(<DocMarkdown text="a<br>b" pinKey="p" parser={parser} link={LINK} />);
+    await waitFor(() => expect(container.querySelector('article.doc-body')).not.toBeNull());
+    expect(container.querySelector('article br')).not.toBeNull();
+    expect(container.textContent).not.toContain('<br>');
+  });
+});
