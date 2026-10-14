@@ -144,12 +144,13 @@ const watcherFixture = async (cfg: FixtureCfg = {}) => {
   };
 };
 
-/** One sweep. `records` is the sweep's only argument: the registry LISTING —
- *  its other piece of evidence — is read by the sweep itself, after git's
- *  worktree records, and handing it in from out here would reintroduce the
- *  staleness the ordering test below exists to pin. */
+/** One sweep. `records` is the sweep's registry argument: the registry
+ *  LISTING — its other piece of evidence — is read by the sweep itself, after
+ *  git's worktree records, and handing it in from out here would reintroduce
+ *  the staleness the ordering test below exists to pin. Beside it, the tick's
+ *  refused ids: none here (`tick-refused-lanes.test.ts` hands one). */
 const sweep = async (h: Awaited<ReturnType<typeof watcherFixture>>): Promise<void> =>
-  h.watcher.sweepDivergences(await h.records());
+  h.watcher.sweepDivergences(await h.records(), new Set());
 
 /** The clock, moved past the lane's own 60s interval. Every test that sweeps
  *  more than once needs this or the second call returns at the clock gate
@@ -858,7 +859,7 @@ describe('sweepDivergences keeps each worktree\'s measured HEAD for the fleet', 
     h.plantWorktreeRecord('demo', 'quiet-basin', '/data/worktrees/demo/quiet-basin', 'docs/checked-out-by-hand');
     // The records are handed in; only the sweep's own late listing fails.
     const records = await readRegistry(localIO, h.cfgObj);
-    await h.watcher.sweepDivergences(records);
+    await h.watcher.sweepDivergences(records, new Set());
     expect(h.watcher.currentHeadBranches().get('demo-quiet-basin')).toBe('docs/checked-out-by-hand');
   });
 

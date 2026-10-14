@@ -218,7 +218,7 @@ describe('sweepDivergences feeds claim-orphan from what it already read', () => 
     h.coord.db.prepare("UPDATE runs SET state = 'failed' WHERE id = ?").run(open.id);
     const seen: Divergence[][] = [];
     h.bus.on('divergence', (d: Divergence[]) => seen.push(d));
-    await h.watcher.sweepDivergences(await h.records());
+    await h.watcher.sweepDivergences(await h.records(), NO_REFUSED);
     expect(seen.at(-1) ?? []).toContainEqual(
       expect.objectContaining({ kind: 'claim-orphan', id: 'demo-quiet-basin' }));
   });
@@ -234,7 +234,7 @@ describe('sweepDivergences feeds claim-orphan from what it already read', () => 
       handoffCommit: null, program: 'build9b', viaClosing: false });
     const seen: Divergence[][] = [];
     h.bus.on('divergence', (d: Divergence[]) => seen.push(d));
-    await h.watcher.sweepDivergences(await h.records());
+    await h.watcher.sweepDivergences(await h.records(), NO_REFUSED);
     expect(seen.at(-1) ?? []).not.toContainEqual(
       expect.objectContaining({ kind: 'claim-orphan' }));
   });

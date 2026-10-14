@@ -22,7 +22,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { DEAD_GRACE_MS, MARKER_UNREADABLE_MS, parseStallDetail } from '../src/coord/stall.js';
 import type { PushPayload } from '../src/push.js';
-import { CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, type FleetSession } from '../../shared/api.js';
+import { CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, type Divergence, type FleetSession } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { storedRun } from './idGateFixture.js';
@@ -64,7 +64,7 @@ const fleetRow = (id: string, over: Partial<FleetSession> = {}): FleetSession =>
 });
 
 interface Rig {
-  home: string; reg: string; coord: CoordStore; w: FleetWatcher; deps: Deps;
+  home: string; reg: string; coord: CoordStore; w: FleetWatcher; deps: Deps; bus: Bus;
   /** Every path any read touched, and every runner argv. */
   touched: string[]; calls: string[][]; sent: PushPayload[];
 }
@@ -95,9 +95,10 @@ const rig = async (): Promise<Rig> => {
     ...testDeps(home, run), io, coord, stateCachePath: path.join(home, 'state-cache.json'),
     push: { notify: async (p: PushPayload) => { sent.push(p); } } as never,
   };
-  const w = new FleetWatcher(deps, new Bus(), 2000);
+  const bus = new Bus();
+  const w = new FleetWatcher(deps, bus, 2000);
   await w.tick();
-  return { home, reg, coord, w, deps, touched, calls, sent };
+  return { home, reg, coord, w, deps, bus, touched, calls, sent };
 };
 
 /** The registry read `tick()` takes, asserted to have refused `--actor` and built the valid row alone. */
@@ -220,5 +221,29 @@ describe('the claim lease lanes hold a claim whose holder is a listed-but-refuse
     r.w.renewClaims(SESSIONS, read.refused);
     r.w.lapseClaims(SESSIONS, read.refused);
     expect(rowOf(r.coord, c.id)).toMatchObject({ state: 'lapsed', endedBy: 'hard-cap' });
+  });
+});
+
+describe("the divergence census leaves a listed-but-refused id out of rule 3's open-run side (tick-lanes-hold-a-refused-id)", () => {
+  /** A non-registry id with NO listed row: not refused, so it still reads as carrying no hold (carried, unchanged:
+   *  `unlisted-non-registry-id-reads-absent-on-the-tick`). */
+  const UNLISTED = '--unlisted';
+
+  it('(D) an open run whose stored worker is --actor reports no claim-divergence', async () => {
+    const r = await rig();
+    plant(r.home, GOOD);
+    plant(r.home, BAD);
+    at(T0);
+    storedRun(r.coord, { state: 'working', sessionId: BAD, claimedBy: COORD });
+    // CONTROLS: an open run on the valid row, which carries no hold, and one on an unlisted id are both named, so the
+    // census reached rule 3's open-run side on this very sweep.
+    storedRun(r.coord, { state: 'working', sessionId: GOOD, claimedBy: COORD });
+    storedRun(r.coord, { state: 'working', sessionId: UNLISTED, claimedBy: COORD });
+    const read = await tickRead(r);
+    const frames: Divergence[][] = [];
+    r.bus.on('divergence', (d: Divergence[]) => frames.push(d));
+    await r.w.sweepDivergences(read.records, read.refused);
+    const named = (frames.at(-1) ?? []).filter((d) => d.kind === 'claim-divergence').map((d) => d.id).sort();
+    expect(named).toEqual([UNLISTED, GOOD].sort());
   });
 });

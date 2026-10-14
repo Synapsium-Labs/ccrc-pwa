@@ -2009,7 +2009,10 @@ export class FleetWatcher {
       // `!registryRead.listed` return) and `registry.ts`'s own docstring
       // states for this exact read: "a failed second listing proves nothing
       // and changes nothing".
-      // [registry-refused:omits] a refused id is in no `records`: no state, no field read, no act.
+      // A refused id's absence from `records` is no measure of the session. The lanes on this tick that would read
+      // it as one are handed `registryRead.refused` and hold the id, or leave it out (`tick-lanes-hold-a-refused-id`):
+      // the stall watch on `StallTick`, the claim lease lanes and the divergence census.
+      // [registry-refused:omits] a refused id is in no `records`: no state and no field read here, and the lanes handed `refused` hold it, never read it as absent.
       const registryRead = await readRegistryMeasured(this.deps.io, this.deps.cfg);
       // BEFORE the fail-shut return below, and on BOTH arms (D-283 (was D-B4-10)). An
       // unlistable registry is not "nothing is set": it is the exact state
@@ -2114,7 +2117,13 @@ export class FleetWatcher {
       // AFTER git's records — the census weighs the two against each other, and
       // a listing snapshotted here would be three awaited lanes older than the
       // records it is compared with. `sweepDivergences` states the race in full.
-      void this.sweepDivergences(records)
+      // HANDED `registryRead.refused`, though: rule 3's open-run side leaves a
+      // refused id out rather than name it as carrying no hold
+      // (`tick-lanes-hold-a-refused-id`). Refusal is a function of the id alone,
+      // so this listing's set can differ from the census's own only by a row
+      // listed or unlisted between the two reads, for one interval, on a kind
+      // that reports and never acts.
+      void this.sweepDivergences(records, registryRead.refused)
         .catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as `sweepNames` above and then some: this
       // lane joins the per-session KeyedQueue behind wave 3's `ws-reclaim`,
@@ -3258,7 +3267,7 @@ export class FleetWatcher {
    * `this.deps.coord` is `?.`-chained because `testDeps` supplies none — a
    * non-optional call TypeErrors fourteen `hold-gate` tests plus `pr-sweep`'s.
    */
-  async sweepDivergences(records: SessionRecord[]): Promise<void> {
+  async sweepDivergences(records: SessionRecord[], refused: ReadonlySet<string>): Promise<void> {
     // `Date.now()`, not an injected clock: this class has none, and `sweepNames`
     // just above reads the same way. `!== 0` is not a style tic — it is what
     // makes the FIRST sweep run immediately after a restart instead of waiting a
@@ -3437,6 +3446,9 @@ export class FleetWatcher {
         supervisedAtMs: registrySecondsToMs(r.supervisedAt),
       })),
       worktrees, headBranch, openRunSessionIds, openRunIds, liveClaims,
+      // THE TICK'S REFUSED IDS, carried as a fact: `divergence.ts` decides that
+      // rule 3's open-run side leaves them out (`tick-lanes-hold-a-refused-id`).
+      refusedIds: refused,
       // THE REGISTRY'S OWN DIRECTORY LISTING — the evidence that a workspace
       // mid-`ws-add` is claimed before its row parses (see
       // `unclaimedWorktrees`), taken above AFTER git's records for the ordering

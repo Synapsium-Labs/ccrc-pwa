@@ -278,6 +278,11 @@ describe('tick hands this tick\'s refused set to the lanes that hold a refused i
     expect(tickBody(), 'tick no longer hands the lapse lane its refused set: a refused holder would lapse session-gone')
       .toMatch(/\bthis\.lapseClaims\(\s*sessions\s*,\s*registryRead\.refused\s*\)/);
   });
+
+  it('tick() hands registryRead.refused to sweepDivergences(', () => {
+    expect(tickBody(), 'tick no longer hands the divergence census its refused set: an open run on a refused id would be named a claim-divergence')
+      .toMatch(/\bthis\.sweepDivergences\(\s*records\s*,\s*registryRead\.refused\s*\)/);
+  });
 });
 
 // PATH IDENTITY W1a, TASK 7 (spec §2.3). The three migrated readers and the three new reads carry their placed words,
