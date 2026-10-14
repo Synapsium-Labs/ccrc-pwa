@@ -3412,3 +3412,109 @@ describe('DM48: a fork epoch comes back from the journal (W1-B2 Task 34)', () =>
     expect(b.receipts).toEqual(a.receipts);
   }, 2 * HEAVY);
 });
+
+// ── Fix round 1, review 441 F12: the node fast path stays inside the slice and the budget ─────────────────────────────
+// D-5025 (history-fast-path-stops-at-slice-and-budget). rederiveGistsFor asks the slice AND the run budget on entry, before
+// each leaf it re-derives and before each batch of BELT_NODE_BATCH nodes it rewrites; a path that stops short reopens the
+// belt's node step, so a later pass finishes what it left.
+/** A clock for a budget: it reads 0 for its first `n` calls after `allow(n)` and an hour on every later one. Every check of
+ *  the fast path (parentsBudgetLeft) makes ONE call, and a check asks the slice and then the budget (two calls when the
+ *  slice holds), so `allow(2 + 2 * k)` lets the entry check and k further checks pass and fails the next. */
+function f12Clock(): { now: () => number; allow: (n: number) => void } {
+  let left = Number.POSITIVE_INFINITY;
+  return { now: () => { if (left > 0) { left -= 1; return 0; } return 3_600_000; }, allow: (n) => { left = n; } };
+}
+/** `db` with every prepare recorded: what a pass asked of the store, in order. */
+function f12Spy(db: DatabaseSync): { db: DatabaseSync; sql: string[] } {
+  const sql: string[] = [];
+  const proxy = new Proxy(db, {
+    get(target, prop) {
+      if (prop === 'prepare') return (text: string) => { sql.push(text); return target.prepare(text); };
+      const v: unknown = Reflect.get(target, prop, target);
+      return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+    },
+  });
+  return { db: proxy, sql };
+}
+/** `n` parents, each over a clean readable native leaf and a readable native leaf holding `v` where the parent's cuts land inside it. */
+const f12Parents = (v: string, n: number): HeNode[] => Array.from({ length: n }, (_, i): HeNode[] => [
+  { id: `he-c${i}`, kind: 'native_leaf', readable: true, gist: 'Raw one.' },
+  { id: `he-v${i}`, kind: 'native_leaf', readable: true, gist: `${hePad(1186 - 'Raw one.'.length)}${v} and then more.`, topics: [`${hePad(60)}${v}`] },
+  { id: `he-p${i}`, kind: 'condensed', gist: null, kids: [`he-c${i}`, `he-v${i}`] },
+]).flat();
+const F12_LEAF_SQL = 'FROM nodes WHERE node_id = ? AND depth = 0';
+const F12_REDACT_SQL = 'UPDATE nodes SET gist = ?, topics = ? WHERE node_id = ?';
+const f12Count = (sql: readonly string[], part: string): number => sql.filter((s) => s.includes(part)).length;
+const f12Belt = (db: DatabaseSync): { cursor: string | null; completedMs: number | null } | null => getStep(db, 'nodes-belt', 1) as never;
+/** `n` native leaves with no readable summary, each holding `v`: matched, never re-derived, only rewritten in place. */
+const f12Pruned = (v: string, n: number): HeNode[] => Array.from({ length: n }, (_, i): HeNode => (
+  { id: `he-n${String(i).padStart(3, '0')}`, kind: 'native_leaf', pruned: true, gist: `Printed ${v} once.` }));
+
+describe('F12: the node fast path is bounded by the slice and the budget, and what it leaves is owed to the belt', () => {
+  it('(a) leaves: a budget that runs out after k leaves stops there, (b) the belt is due, and a following pass finishes; (c) CONTROL: an ample budget re-derives every leaf in one pass', () => {
+    const v = heValue();
+    const { db, home } = heStore('ccrc-hist-f12leaf-', f12Parents(v, 4), true);
+    try {
+      // The belt has completed on an earlier generation.
+      setStep(db, 'nodes-belt', 1, '99', 1_000);
+      const clock = f12Clock();
+      const budget = SW.newBudget(clock.now, { maxMs: 1_000 });
+      const slice = SW.newBudget(clock.now, { maxMs: 1_000 });
+      const cut = f12Spy(db);
+      clock.allow(2 + 2 * 2);
+      DV.rederiveGistsFor(cut.db, { ...heCtx(home, v, true) }, [v], budget, slice);
+      expect(f12Count(cut.sql, F12_LEAF_SQL), '(a) two leaves were re-derived, then the budget said stop').toBe(2);
+      expect(f12Count(cut.sql, F12_REDACT_SQL), '(a) and no node was rewritten after it').toBe(0);
+      expect(heLeaks(db, v), 'CONTROL: the unreached leaves still hold the value').toEqual(expect.arrayContaining(['he-v2.gist', 'he-v3.gist']));
+      expect(f12Belt(db), '(b) the belt is due: its node step is open again, from the first node').toEqual({ cursor: null, completedMs: null });
+      // A following pass with budget finishes.
+      DV.rederiveGistsFor(db, heCtx(home, v, true), [v], SW.newBudget(), SW.newBudget());
+      expect(heLeaks(db, v), '(b) a following pass redacted every node').toEqual([]);
+      expect(f12Belt(db), 'CONTROL: and the pass with budget left the belt as it found it').toEqual({ cursor: null, completedMs: null });
+    } finally { closeWriter(db); }
+
+    const again = heStore('ccrc-hist-f12leafc-', f12Parents(v, 4), true);
+    try {
+      setStep(again.db, 'nodes-belt', 1, '99', 1_000);
+      const spy = f12Spy(again.db);
+      const touched = DV.rederiveGistsFor(spy.db, heCtx(again.home, v, true), [v], SW.newBudget(), SW.newBudget());
+      expect(f12Count(spy.sql, F12_LEAF_SQL), '(c) every leaf was re-derived in one pass').toBe(4);
+      expect(touched, '(c) and every node rewritten').toBe(4);
+      expect(heLeaks(again.db, v), '(c) nothing leaks').toEqual([]);
+      expect(f12Belt(again.db), '(c) a complete pass leaves the belt as it found it, completed').toEqual({ cursor: '99', completedMs: 1_000 });
+    } finally { closeWriter(again.db); }
+  }, HEAVY);
+
+  it('(a) nodes: a budget that runs out after one batch of BELT_NODE_BATCH nodes stops there, (b) the belt is due and finishes the rest; (c) CONTROL: an ample budget rewrites every batch in one pass', () => {
+    const v = heValue();
+    const BATCH = 64;
+    const { db, home } = heStore('ccrc-hist-f12node-', f12Pruned(v, 130), true);
+    try {
+      setStep(db, 'nodes-belt', 1, '999', 1_000);
+      const clock = f12Clock();
+      const budget = SW.newBudget(clock.now, { maxMs: 1_000 });
+      const slice = SW.newBudget(clock.now, { maxMs: 1_000 });
+      const cut = f12Spy(db);
+      clock.allow(2 + 2 * 1);
+      const touched = DV.rederiveGistsFor(cut.db, heCtx(home, v, true), [v], budget, slice);
+      expect(f12Count(cut.sql, F12_REDACT_SQL), '(a) one batch was rewritten, then the budget said stop').toBe(1);
+      expect(touched, '(a) of exactly BELT_NODE_BATCH nodes').toBe(BATCH);
+      const leaking = [...new Set(heLeaks(db, v).map((x) => x.split('.')[0]!))];
+      expect(leaking, '(a) the first batch is clean and every node after it still holds the value').toEqual(f12Pruned(v, 130).slice(BATCH).map((n) => n.id));
+      expect(f12Belt(db), '(b) the belt is due: its node step is open again, from the first node').toEqual({ cursor: null, completedMs: null });
+      expect(DV.beltNodesStep(db, heCtx(home, v, true), SW.newBudget()), '(b) the next step runs to its end').toBe(true);
+      expect(heLeaks(db, v), '(b) so every matched node ends redacted').toEqual([]);
+    } finally { closeWriter(db); }
+
+    const again = heStore('ccrc-hist-f12nodec-', f12Pruned(v, 130), true);
+    try {
+      setStep(again.db, 'nodes-belt', 1, '999', 1_000);
+      const spy = f12Spy(again.db);
+      const touched = DV.rederiveGistsFor(spy.db, heCtx(again.home, v, true), [v], SW.newBudget(), SW.newBudget());
+      expect(touched, '(c) every node was rewritten in one pass').toBe(130);
+      expect(f12Count(spy.sql, F12_REDACT_SQL), '(c) in batches of BELT_NODE_BATCH: 64, 64 and 2').toBe(3);
+      expect(heLeaks(again.db, v), '(c) nothing leaks').toEqual([]);
+      expect(f12Belt(again.db), '(c) a complete pass leaves the belt as it found it, completed').toEqual({ cursor: '999', completedMs: 1_000 });
+    } finally { closeWriter(again.db); }
+  }, HEAVY);
+});

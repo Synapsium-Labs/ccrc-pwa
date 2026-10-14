@@ -497,7 +497,11 @@ export function deriveLeaves(db, ictx, budget) {
   let derived = 0;
   let waiting = 0;
   let failed = 0;
-  for (const b of s.todo.all(low, LEAF_CRASHED_STEP, crashedAt)) {
+  // D-5024 (history-leaves-rescan-pinned-cursor): both scans are stepped one row at a time under the per-item budget check, never
+  // materialised whole, and each statement is held (CT9: Node 22.15.1 finalises an unreferenced statement mid-iterate) until both
+  // loops end. The rescan itself, every boundary above the cursor on every pass, is B3's (see the plan's D-5024).
+  const held = [s.todo, s.forkCandidates];
+  for (const b of s.todo.iterate(low, LEAF_CRASHED_STEP, crashedAt)) {
     if (!ictx.budgetLeft(budget)) break;
     let r;
     try {
@@ -519,12 +523,13 @@ export function deriveLeaves(db, ictx, budget) {
       waiting += 1;
     }
   }
-  for (const c of s.forkCandidates.all()) {
+  for (const c of s.forkCandidates.iterate()) {
     if (!ictx.budgetLeft(budget)) break;
     const pk = Number(c.transcript_pk);
     const bytes = Number(c.bytes);
     if (touched.has(pk) || foldedOf(getStep(db, UNSPANNED_STEP, pk)).bytes !== bytes) recountTranscript(db, s, pk, ictx.nowMs, bytes);
   }
+  held.length = 0;
   const first = s.firstTodo.get(low, LEAF_CRASHED_STEP, crashedAt).e;
   const top = first === null ? Number(s.lastBoundary.get().e ?? low) : Number(first) - 1;
   if (top > low) withTx(db, 'NORMAL', () => { setStep(db, LEAF_STEP, NODE_PARSER_VERSION, String(top)); });
@@ -1129,8 +1134,18 @@ export function redactNodeFields(db, ictx, nodeIds) {
  *  at the pair). So one bad summary holds neither, and only `reparse` re-derives it again. Re-deriving twice is
  *  idempotent. Answers how many leaves changed. */
 export function reparseFailClosed(db, ictx, nodeIds) {
+  return reparseSome(db, ictx, nodeIds, () => true).changed;
+}
+
+/** reparseFailClosed's body with a stop: `more()` is asked before each leaf, and the first false ends the walk. The
+ *  re-roll covers the leaves ATTEMPTED (a leaf it never reached is no part of it). Answers how many leaves changed and
+ *  which were attempted, in order, so the late-pair fast path (rederiveGistsFor) can leave the rest to the belt. */
+function reparseSome(db, ictx, nodeIds, more) {
   let changed = 0;
+  const attempted = [];
   for (const id of nodeIds) {
+    if (!more()) break;
+    attempted.push(id);
     let r;
     try {
       r = refreshLeaf(db, ictx, id);
@@ -1142,8 +1157,8 @@ export function reparseFailClosed(db, ictx, nodeIds) {
     // 'failed': refreshLeaf caught a parser throw itself and wrote the leaf parse-failed (Task 21, RB5), counted once.
     if (r === 'updated' || r === 'failed') changed += 1;
   }
-  if (nodeIds.length > 0) rerollParents(db, ictx, nodeIds);
-  return changed;
+  if (attempted.length > 0) rerollParents(db, ictx, attempted);
+  return { changed, attempted };
 }
 
 /** The most leaves one call of the late-pair fast path (rederiveGistsFor) re-derives, one refreshLeaf each and one
@@ -1171,11 +1186,14 @@ const REDERIVE_LEAF_MAX = 64;
  *  - A leaf whose summary is still stored is re-derived (reparseFailClosed: same id, parents re-rolled, a throw
  *    counted and skipped), up to REDERIVE_LEAF_MAX leaves per call. Every node found, re-derived or not, is then
  *    rewritten through redactNodeFields, and the ancestors of every node that was only rewritten (a pruned or
- *    over-the-cap leaf, a condensed node) are re-rolled from redacted children (D-4610); the cost is bounded by the
- *    matched set, as the rewrite is.
+ *    over-the-cap leaf, a condensed node) are re-rolled from redacted children (D-4610). The rewrite runs in batches of
+ *    BELT_NODE_BATCH nodes, one transaction each, the ancestors of a batch's in-place nodes re-rolled right after it.
  *  - It is the same-tick fast path over nodes, as B1's phrase search is over blobs (B1's
- *    D-4344): it moves no mark, and it runs only while `slice` and `budget` last
- *    (B1's review 344 F2 rule: a fast path never runs unbudgeted ahead of the step that ends the generation). It
+ *    D-4344): it moves no mark, and it runs only while `slice` and `budget` last: they are asked on entry, before each
+ *    leaf it re-derives and before each batch it rewrites (B1's review 344 F2 rule: a fast path never runs unbudgeted
+ *    ahead of the step that ends the generation; D-5025 (history-fast-path-stops-at-slice-and-budget)). A path that
+ *    stops after it started reopens the belt's node step (derivation_state ('nodes-belt', 1), cursor NULL, not
+ *    completed), so what it did not reach is owed to the belt whatever generation is open. It
  *    runs on every tick where a value is owed, until B1's rederiveFts opens a generation (then only the values its
  *    tick recorded are searched) or completes one (the mark then covers the pair). What it misses or leaves (a value
  *    glued to letters inside one term, a hash-only pair, a spent budget) the belt's node step finishes, fail-closed:
@@ -1215,19 +1233,39 @@ export function rederiveGistsFor(db, ictx, values, budget, slice) {
   const max = Number.isSafeInteger(ictx.rederiveLeafMax) && ictx.rederiveLeafMax > 0 ? ictx.rederiveLeafMax : REDERIVE_LEAF_MAX;
   const leaves = all.slice(0, max);
   for (const id of all.slice(max)) rewrite.add(id);
-  if (leaves.length > 0) reparseFailClosed(db, ictx, leaves);
+  // D-5025 (history-fast-path-stops-at-slice-and-budget): the slice and the run budget are asked before each leaf it
+  // re-derives and before each batch of at most BELT_NODE_BATCH nodes it rewrites, so the path ends inside them whatever
+  // the matched set holds. What it did not reach is owed to the belt (below).
+  const more = () => parentsBudgetLeft(slice) && parentsBudgetLeft(budget);
+  let cut = false;
+  const reached = leaves.length > 0 ? reparseSome(db, ictx, leaves, more) : { changed: 0, attempted: [] };
+  if (reached.attempted.length < leaves.length) cut = true;
   // A parent the re-derivation re-rolled takes its children's gists as they are now. A node the match found that no
   // re-derivation reaches is rewritten in place, and so is every leaf it tried: a leaf refreshLeaf had to skip (its
   // holding copy unreadable) or that threw is still rewritten fail-closed, and rewriting a redacted field again
   // changes nothing.
   const rest = [...rewrite].sort();
-  redactNodeFields(db, ictx, [...leaves, ...rest]);
-  // Every node rewritten in place has its ancestors re-rolled from redacted children (D-4610): a parent cut through the
-  // value keeps an unmatched prefix after a field rewrite, and a matched leaf that cannot be read (its summary pruned) or
-  // that is over the cap reaches no re-derivation, which re-rolls the ancestors of the leaves it handles. The cost is
-  // bounded by the matched set, as the rewrite is.
-  if (rest.length > 0) rerollParents(db, ictx, rest);
-  return leaves.length + rest.length;
+  const restSet = new Set(rest);
+  const todo = [...reached.attempted, ...rest];
+  let touched = 0;
+  // One transaction per batch (redactNodeFields' own), and the ancestors of the batch's in-place nodes re-rolled right
+  // after it, from redacted children (D-4610): a parent cut through the value keeps an unmatched prefix after a field
+  // rewrite, and a matched leaf that cannot be read (its summary pruned) or that is over the cap reaches no re-derivation,
+  // which re-rolls the ancestors of the leaves it handles. A parent re-rolled before a later batch rewrites its children
+  // reads them through redactedRollup, so the order of the batches changes nothing.
+  for (let at = 0; !cut && at < todo.length; at += BELT_NODE_BATCH) {
+    if (!more()) { cut = true; break; }
+    const batch = todo.slice(at, at + BELT_NODE_BATCH);
+    redactNodeFields(db, ictx, batch);
+    const inPlace = batch.filter((id) => restSet.has(id));
+    if (inPlace.length > 0) rerollParents(db, ictx, inPlace);
+    touched += batch.length;
+  }
+  // Whatever the path did not reach stays owed to the belt: its node step is reopened from the first node, in the
+  // transaction of its own, so a later pass (beltNodesStep, or the next fast path) finishes it fail-closed. The step may
+  // have completed on an earlier generation, and one still walking has passed nodes this pair was not known to.
+  if (cut) withTx(db, 'NORMAL', () => { setStep(db, BELT_NODES_STEP, 1, null, null); });
+  return touched;
 }
 
 // ── W1-B2 Task 29: the belt's node step (§6.2 "The belt", §8.3 layer 4) ──────────────────────────────────────────

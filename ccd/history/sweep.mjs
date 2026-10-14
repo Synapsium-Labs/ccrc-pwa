@@ -5132,8 +5132,10 @@ export async function reindexForValues(db, ctx, values, fresh, budget, slice = r
   const ids = new Set();
   for (const v of owed) for (const unit of secretUnits(v)) for (const r of f.match.all(ftsPhrase(unit))) ids.add(Number(r.rowid));
   // §6.2 (SE4): the same-tick fast path over nodes, as the phrase search above is over blobs (W1-B2 Task 29). It moves
-  // no mark (only B1's rederiveFts does), and it runs only while the same slice and budget last. Whatever it misses
-  // or leaves, the belt's node step (beltNodesStep, restarted by every generation that opens) finishes fail-closed.
+  // no mark (only B1's rederiveFts does). It asks the same slice and budget on entry, before each leaf it re-derives
+  // and before each batch of nodes it rewrites, and stops at the first that is spent; a path that stops after it
+  // started reopens the belt's node step itself (D-5025), so what it left is owed to the belt. Whatever it misses or
+  // leaves, the belt's node step (beltNodesStep, restarted by every generation that opens) finishes fail-closed.
   rederiveGistsFor(db, ctx, owed, budget, slice);
   if (ids.size === 0) return 0;
   // Texts are computed outside the transaction and written in groups. Each group's transaction registers the

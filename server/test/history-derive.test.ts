@@ -1461,3 +1461,107 @@ describe('DM48: a fresh-sid fork\'s leaf starts at the parent\'s boundary its co
     expect(leavesOf(box, UP).map((l) => l.node_id), 'the parent\'s leaf is unchanged').toEqual([leafId(ID, UP, firstUuid(pre))]);
   }, 240_000);
 });
+
+// ── Fix round 1, review 441 F13: deriveLeaves' two scans stay under the per-item budget check ───────────────────────────
+// D-5024 (history-leaves-rescan-pinned-cursor). `todo` and `forkCandidates` are stepped with iterate(), one row at a time,
+// never materialised with all() before the first budget check. The rescan from the `leaves` cursor each pass is B3's.
+describe('F13: deriveLeaves steps its scans one row at a time under the budget, and the derived set is unchanged', () => {
+  const ID = 'claude-f13-lazy-scans';
+  const U = '0189abcd-1234-4678-9abc-0000000000f9';
+  const N = 6;
+  let box: HistoryBox;
+  beforeAll(() => {
+    box = makeHistoryBox('ccrc-hist-f13-');
+    const seq = compactionSequence({ n: N, trigger: 'manual', seed: 0xc3, sessionId: U, startMs: T0 });
+    plant(box, ID, U, seq.rows);
+    settle(box);
+  }, 240_000);
+
+  type Writer = ReturnType<typeof openWriter>;
+  interface Spy { db: Writer; all: Record<string, number>; stepped: Record<string, number>; iterated: Record<string, number> }
+  /** `db` with the two scans watched: how often each was materialised with all(), and how many rows each iterate() handed out. */
+  const watch = (db: Writer): Spy => {
+    const spy = { all: { todo: 0, forks: 0 }, stepped: { todo: 0, forks: 0 }, iterated: { todo: 0, forks: 0 } } as Omit<Spy, 'db'>;
+    const proxy = new Proxy(db, {
+      get(target, prop) {
+        if (prop === 'prepare') {
+          return (sql: string) => {
+            const stmt = target.prepare(sql);
+            const tag = sql.includes('HAVING count(*) > 1') ? 'forks' : sql.includes('ORDER BY b.entry_id') && sql.includes('SELECT b.entry_id AS entry_id') ? 'todo' : null;
+            if (tag === null) return stmt;
+            return new Proxy(stmt, {
+              get(st, p) {
+                if (p === 'all') return (...a: unknown[]) => { spy.all[tag] += 1; return (st.all as (...x: unknown[]) => unknown)(...a); };
+                if (p === 'iterate') {
+                  return function* (...a: unknown[]): Generator<unknown> {
+                    spy.iterated[tag] += 1;
+                    for (const r of (st.iterate as (...x: unknown[]) => Iterable<unknown>)(...a)) { spy.stepped[tag] += 1; yield r; }
+                  };
+                }
+                const v: unknown = Reflect.get(st, p, st);
+                return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(st) : v;
+              },
+            });
+          };
+        }
+        const v: unknown = Reflect.get(target, prop, target);
+        return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(target) : v;
+      },
+    }) as Writer;
+    return { db: proxy, ...spy };
+  };
+  const wipe = (): void => {
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      withTx(db, 'NORMAL', () => {
+        db.prepare('DELETE FROM node_refs').run();
+        db.prepare('DELETE FROM nodes_fts').run();
+        db.prepare('DELETE FROM nodes').run();
+        db.prepare("DELETE FROM derivation_state WHERE step = 'leaves'").run();
+      });
+    } finally { closeWriter(db); }
+  };
+  const snapshot = (): unknown[] => q<{ node_id: string; kind: string; status: string; gist: string | null; topics: string | null }>(box,
+    'SELECT node_id, kind, status, gist, topics FROM nodes WHERE depth = 0 ORDER BY boundary_entry_id');
+
+  it('(a) a budget that runs out after k items steps about k rows of the todo scan and never materialises it; (b) CONTROL: an ample budget derives the same set', async () => {
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as {
+      makeIngestCtx(home: string, homes: string[], nowMs: number, ids: unknown): Record<string, unknown>;
+      newBudget(now?: () => number, limits?: { maxMs?: number }): unknown;
+    };
+    const D = (await import('../../ccd/history/derive.mjs')) as unknown as {
+      deriveLeaves(db: Writer, ictx: Record<string, unknown>, budget: unknown): { derived: number; waiting: number; failed: number };
+    };
+    const before = snapshot();
+    expect(before, 'CONTROL: the settled store holds one leaf per boundary').toHaveLength(N);
+    wipe();
+    const entries = q<{ entry_id: number }>(box, 'SELECT entry_id FROM boundaries ORDER BY entry_id').map((r) => r.entry_id);
+    expect(entries, 'CONTROL: and as many boundaries').toHaveLength(N);
+    const K = 2;
+    let left = Number.POSITIVE_INFINITY;
+    const now = (): number => { if (left > 0) { left -= 1; return 0; } return 3_600_000; };
+    const budget = S.newBudget(now, { maxMs: 1_000 });
+    const db = openWriter(historyPaths(box.home).dbFile);
+    try {
+      const spy = watch(db);
+      const ictx = S.makeIngestCtx(box.home, box.homes, Date.now(), null);
+      ictx['fts'] = true;
+      left = K;
+      const cut = D.deriveLeaves(spy.db, ictx, budget);
+      expect(cut, `(a) it derived ${K} leaves and stopped`).toEqual({ derived: K, waiting: 0, failed: 0 });
+      expect(spy.all, '(a) neither scan was materialised with all()').toEqual({ todo: 0, forks: 0 });
+      expect(spy.iterated.todo, '(a) the todo scan was stepped').toBe(1);
+      expect(spy.stepped.todo, '(a) and only as far as the item that failed the budget check (k + 1 rows, of 6)').toBe(K + 1);
+      expect(spy.iterated.forks, '(a) the fork scan was stepped, not read').toBe(1);
+      expect(q<{ cursor: string }>(box, "SELECT cursor FROM derivation_state WHERE step = 'leaves' AND version = ?", NODE_PARSER_VERSION)[0]?.cursor,
+        '(a) the cursor stands just below the first boundary the budget left').toBe(String(entries[K]! - 1));
+      left = Number.POSITIVE_INFINITY;
+      const rest = D.deriveLeaves(spy.db, ictx, S.newBudget());
+      expect(rest, '(b) a pass with budget derives the rest').toEqual({ derived: N - K, waiting: 0, failed: 0 });
+      expect(spy.all, '(b) still no all()').toEqual({ todo: 0, forks: 0 });
+    } finally { closeWriter(db); }
+    expect(snapshot(), '(b) CONTROL: the derived set is the one a settled tick derived').toEqual(before);
+    expect(q<{ cursor: string }>(box, "SELECT cursor FROM derivation_state WHERE step = 'leaves' AND version = ?", NODE_PARSER_VERSION)[0]?.cursor,
+      '(b) and the cursor stands at the last boundary').toBe(String(entries[N - 1]));
+  }, 240_000);
+});
