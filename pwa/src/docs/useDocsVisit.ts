@@ -46,10 +46,13 @@ export type FileSlot =
   | (DocsClientSlot & { pin: DocPin });
 
 /** The refresh state of the current tree key (spec 4.5's freshness chip reads it beside the tree's own facts).
- *  - `idle`: no refresh this visit for this key.
+ *  - `idle`: no chip for this key: no refresh was made this visit, or what its chip showed was cleared (`relist-failed` by
+ *    the next good GET, a `refresh-failed` over a 401 by the sign-in, a dropped answer's `fetching` by the screen's return).
  *  - `fetching`: a POST is in flight.
  *  - `answered`: the route answered `fetch`; `at` is when (Date.now()).
- *  - `soon`: `fetch-too-soon`; one automatic POST is due at `retryAt` (Date.now() clock).
+ *  - `soon`: `fetch-too-soon`; `retryAt` (Date.now() clock) is when the one automatic POST was or is due. Its timer may
+ *    have been dropped (a second `fetch-too-soon` after the one retry, or the key left before it fired), so once
+ *    `retryAt` has passed the chip reads the stamp.
  *  - `stale-lock`: `ref-locked` with a lock at least `DOCS_LOCK_STALE_MS` old; no automatic retry. `ref` null: the
  *    answer named no ref.
  *  - `refresh-failed`: the POST itself got no route answer (a word from the route, or a client slot).
