@@ -15,7 +15,7 @@ import {
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { DocsLeaf } from '../src/docs/DocsLeaf';
 import { pinFor, type DocsVisit } from '../src/docs/useDocsVisit';
-import { DOCS_FAILURE_SENTENCE, DOCS_PAGE_INVALID_SENTENCE, DOCS_VIEW_TEXT } from '../src/docs/docsText';
+import { DOCS_FAILURE_SENTENCE, DOCS_PAGE_INVALID_SENTENCE } from '../src/docs/docsText';
 import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
 import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
 import type { DocsFileAnswer, DocsLoaders, DocsRasterAnswer } from '../src/docs/failures';
@@ -220,6 +220,7 @@ describe('a linked worktree is followed to its owner by replace (spec 4.7, M4.R4
     },
   );
 
+  const LOOP = 'Docs did not follow it: the owner named for this folder leads back to this folder.';
   const NOTE = "That checkout is not on a named branch, or its branch could not be read; showing a's default branch.";
 
   it('the redirect note is absent on another page (review M4)', async () => {
@@ -256,11 +257,23 @@ describe('a linked worktree is followed to its owner by replace (spec 4.7, M4.R4
     f.tree.mockImplementation(async (project: string) =>
       failedAnswer('linked-worktree', { owner: project === 'a' ? 'b' : 'a', branch: 'main' }));
     open('/docs/a/specs/x.md', f);
-    expect(await screen.findByText(DOCS_VIEW_TEXT.redirectLoop)).toBeInTheDocument();
+    expect(await screen.findByText(LOOP)).toBeInTheDocument();
     expect(screen.getByText(DOCS_FAILURE_SENTENCE['linked-worktree'])).toBeInTheDocument();
     expect(screen.queryByText(/Opening/)).toBeNull();
-    expect(here()).toBe('/docs/a/specs/x.md?ref=main');
+    expect(here()).toBe('/docs/b/specs/x.md?ref=main');
     expect(f.tree).toHaveBeenCalledTimes(3);
+  });
+
+  it('a later, separate visit to a page that was redirected from is redirected again: the chain ends when the URL leaves it (review M2)', async () => {
+    const f = owned({ owner: 'a', branch: 'ws/a' });
+    open('/docs/b/specs/x.md', f);
+    await waitFor(() => expect(here()).toBe('/docs/a/specs/x.md?ref=ws/a'));
+    act(() => { navigate('/docs/a/specs?ref=ws/a'); });
+    expect(await screen.findByText('x.md')).toBeInTheDocument();
+    act(() => { navigate('/docs/b/specs/x.md'); });
+    await waitFor(() => expect(here()).toBe('/docs/a/specs/x.md?ref=ws/a'));
+    expect(screen.queryByText(LOOP)).toBeNull();
+    expect(await screen.findByRole('heading', { name: 'A' })).toBeInTheDocument();
   });
 
   it.each([
@@ -272,7 +285,7 @@ describe('a linked worktree is followed to its owner by replace (spec 4.7, M4.R4
       const f = fakeLoaders();
       f.tree.mockResolvedValue(failedAnswer(word, ctx));
       open(url, f);
-      expect(await screen.findByText(DOCS_VIEW_TEXT.redirectLoop)).toBeInTheDocument();
+      expect(await screen.findByText(LOOP)).toBeInTheDocument();
       expect(screen.queryByText(/Opening/)).toBeNull();
       expect(f.tree).toHaveBeenCalledTimes(gets);
     });

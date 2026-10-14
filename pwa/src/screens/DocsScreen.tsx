@@ -76,9 +76,9 @@ function ownerRedirect(page: DocsPageLocation, slot: TreeSlot | null): Redirect 
   return { href: docsPageUrl(docsLocation(page, { kind: 'same-page', project: owner, ref })), note };
 }
 
-/** Whether the owner redirect `to` would lead back: to the page itself, or to a page this chain already left. */
+/** Whether the owner redirect `to` would lead back: to the page itself, or from a page this chain already left. */
 function leadsBack(to: Redirect, page: DocsPageLocation, here: string, trail: Trail): boolean {
-  return to.href === docsPageUrl(page) || trail.from.includes(here) || trail.from.includes(to.href);
+  return to.href === docsPageUrl(page) || trail.from.includes(here);
 }
 
 /** A path page whose slash the tree contradicts (spec 3.1): a directory reached without its slash goes to the slash
