@@ -796,3 +796,62 @@ describe('the DOM: no src except a created object URL or an SVG data: URL', () =
     expect(container.querySelectorAll('[src]')).toHaveLength(2);
   });
 });
+
+describe('T13 review 2-1: an image inside a link is not a second control, so one tap does one thing', () => {
+  const linkTree = (): DocsTreeOk =>
+    treeOk({ entries: [entry('specs', 'a.md'), entry('specs', 'i.png'), entry('specs', 'b.md')] });
+  const pushes = (): string[] => {
+    const seen: string[] = [];
+    vi.spyOn(history, 'pushState').mockImplementation((_s, _t, url) => { seen.push(String(url)); });
+    return seen;
+  };
+
+  it('a loaded image in an in-app link: one tap is the link alone, and no button sits inside the anchor', async () => {
+    const seen = pushes();
+    const { container } = renderDoc('[![x](i.png)](b.md)', { tree: linkTree() });
+    await waitFor(() => expect(imgs(container)).toHaveLength(1));
+    expect(container.querySelector('a button')).toBeNull();
+    fireEvent.click(imgs(container)[0]!);
+    expect(seen).toEqual(['/docs/demo/specs/b.md']);
+  });
+
+  it('a loaded image in an external link: one tap opens the link once and goes nowhere in-app', async () => {
+    const seen = pushes();
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    const { container } = renderDoc('[![x](i.png)](https://evil.example/x)', { tree: linkTree() });
+    await waitFor(() => expect(imgs(container)).toHaveLength(1));
+    fireEvent.click(imgs(container)[0]!);
+    expect(seen).toEqual([]);
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(open.mock.calls[0]![0]).toBe('https://evil.example/x');
+  });
+
+  it('a refused external image in an in-app link offers no second action: the tap is the link alone', async () => {
+    const seen = pushes();
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    const { container } = renderDoc('[![x](https://evil.example/x.png)](b.md)', { tree: linkTree() });
+    expect(container.querySelector('a button')).toBeNull();
+    expect(container.querySelector('button.doc-img-action')).toBeNull();
+    fireEvent.click(container.querySelector('a .doc-img-refused')!);
+    expect(seen).toEqual(['/docs/demo/specs/b.md']);
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it('Load image in a link loads the image and does not follow the link', async () => {
+    const seen = pushes();
+    const many = Array.from({ length: DOCS_MAX_IMAGES_PER_PAGE }, () => '![i](i.png)').join('\n\n');
+    const { container, getByRole } = renderDoc(`${many}\n\n[![x](i.png)](b.md)`, { tree: linkTree() });
+    await waitFor(() => expect(imgs(container)).toHaveLength(DOCS_MAX_IMAGES_PER_PAGE));
+    fireEvent.click(getByRole('button', { name: DOC_IMAGE_TEXT.load }));
+    await waitFor(() => expect(imgs(container)).toHaveLength(DOCS_MAX_IMAGES_PER_PAGE + 1));
+    expect(seen).toEqual([]);
+  });
+
+  it('an image outside a link is still its own control: a tap opens its leaf', async () => {
+    const seen = pushes();
+    const { container } = renderDoc('![x](i.png)', { tree: linkTree() });
+    await waitFor(() => expect(imgs(container)).toHaveLength(1));
+    fireEvent.click(container.querySelector('button.doc-img-link')!);
+    expect(seen).toEqual(['/docs/demo/specs/i.png']);
+  });
+});

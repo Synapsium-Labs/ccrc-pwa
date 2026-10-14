@@ -31,6 +31,11 @@ export interface DocLinkContextValue {
  *  page, and renders every link inert. */
 export const DocLinkContext = createContext<DocLinkContextValue | null>(null);
 
+/** `true` inside the children of a `DocLink` anchor (an in-app, fragment, external or GitHub link), `false` elsewhere.
+ *  `DocImage` reads it: an image inside a link is not a second control, so one tap is the link's alone and no button
+ *  is ever nested inside an anchor. An inert link is a span with no action and does not set it. */
+export const DocInLinkContext = createContext(false);
+
 /** A primary-button click with no modifier: the one click `DocLink` handles in-app. A modifier or middle click is the
  *  browser's (a new tab onto `/docs/...`). */
 function isPlainClick(e: MouseEvent): boolean {
@@ -85,15 +90,17 @@ export function DocLink(p: ComponentProps<'a'> & { node?: HastElement }): ReactN
           e.preventDefault();
           if (t.fragment !== null) ctx.onFragment(t.fragment, t.href);
           navigate(t.href);
-        }}>{children}</a>
+        }}><DocInLinkContext value={true}>{children}</DocInLinkContext></a>
       );
     case 'fragment':
-      return <a {...rest} href={`#${t.fragment}`} onClick={(e) => scrollToFragment(e, t.fragment)}>{children}</a>;
+      return <a {...rest} href={`#${t.fragment}`} onClick={(e) => scrollToFragment(e, t.fragment)}>
+        <DocInLinkContext value={true}>{children}</DocInLinkContext>
+      </a>;
     case 'external':
     case 'github':
       return (
         <a {...rest} href={t.href} target="_blank" rel="noopener noreferrer" onClick={(e) => openExternal(e, t.href)}>
-          {children}
+          <DocInLinkContext value={true}>{children}</DocInLinkContext>
           {t.kind === 'github' && <>{' '}<span className="doc-link-gh">↗ GitHub</span></>}
         </a>
       );

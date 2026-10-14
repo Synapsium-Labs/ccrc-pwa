@@ -12,7 +12,7 @@ import {
 } from '../../../shared/docs';
 import { openExternal } from '../lib/markdown';
 import { navigate } from '../lib/router';
-import { DocLinkContext, type DocLinkContextValue } from './DocLink';
+import { DocInLinkContext, DocLinkContext, type DocLinkContextValue } from './DocLink';
 import { docsLocation, imagePinFor } from './docsLinks';
 import {
   DOC_IMAGE_REFUSED_SENTENCE, DOC_IMAGE_TEXT, DOCS_SHOW_NO_BYTES, DOCS_SHOW_NOT_SVG, failureSentence, fillSentence,
@@ -200,6 +200,8 @@ function useImageSrc(job: LoadJob | null): Shown {
  *    **Open image externally** (an http or https image, opened on tap only) or **Open in viewer** (an html document's
  *    own leaf, in-app).
  *  - pinned, at or past image `DOCS_MAX_IMAGES_PER_PAGE` (index 30 and on): **Load image** until tapped.
+ *  - inside a link (`DocInLinkContext`): the link wins. A loaded image is a bare `<img>` and a refused one offers no
+ *    action, so one tap is the link's alone; **Load image** still loads (it stops the tap).
  *  - loading, then `<button className="doc-img-link"><img src alt className="msg-img" /></button>`, whose tap opens
  *    the image's own leaf in-app, or a failure chip with its sentence; with the `draft` and "uncommitted change not
  *    shown" chips the pin rule gives. */
@@ -207,6 +209,7 @@ export function DocImage(p: ComponentProps<'img'> & { node?: HastElement }): Rea
   const { node, alt, title } = p;
   const ctx = useContext(DocLinkContext);
   const assets = useContext(DocsAssetContext);
+  const inLink = useContext(DocInLinkContext);
   const [asked, setAsked] = useState(false);
   const outside = ctx === null || assets === null;
   const plan = useMemo(
@@ -230,7 +233,8 @@ export function DocImage(p: ComponentProps<'img'> & { node?: HastElement }): Rea
   const label = alt ?? '';
   if (plan.kind === 'refused') {
     const reason = fillSentence(DOC_IMAGE_REFUSED_SENTENCE[plan.why], plan.fields);
-    const action = plan.action;
+    // Inside a link the link's action is the tap's alone: no second action, and no button inside the anchor.
+    const action = inLink ? null : plan.action;
     return (
       <>
         <span className="doc-img-refused" role="img" aria-label={label}>
@@ -258,7 +262,12 @@ export function DocImage(p: ComponentProps<'img'> & { node?: HastElement }): Rea
   if (job === null) {
     return (
       <>
-        <button type="button" className="doc-img-load" onClick={() => setAsked(true)}>{DOC_IMAGE_TEXT.load}</button>
+        <button type="button" className="doc-img-load" onClick={(e) => {
+          // Inside a link this tap loads the image and is not the link's.
+          e.preventDefault();
+          e.stopPropagation();
+          setAsked(true);
+        }}>{DOC_IMAGE_TEXT.load}</button>
         {chips}
       </>
     );
@@ -268,6 +277,10 @@ export function DocImage(p: ComponentProps<'img'> & { node?: HastElement }): Rea
   }
   if (shown.s === 'failed') {
     return <><span className="doc-img-failed" role="img" aria-label={label}>{shown.sentence}</span>{chips}</>;
+  }
+  if (inLink) {
+    // The link is the control: a bare image, so one tap is the link's and no button sits inside the anchor.
+    return <><img src={shown.src} alt={label} title={title} className="msg-img" />{chips}</>;
   }
   const leafHref = plan.leafHref;
   return (
