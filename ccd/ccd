@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=31cb1c8e3ca38dbf14c6adebf80eb8d4d37cf79e4cc631be2794e3593c774136
+# ccrc:generated 1 sha256=1906c64fa76f59e45e9848a3df305a32be7908decaedff7d3e085e96876ac45c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -6983,12 +6983,12 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--surface <word>] [--actor <text
       # So what the check buys HERE is the honest usage line; the
       # never-terminating loop is what it buys the day an arm is reordered
       # to shift before it reads its value.
-      --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
+      --surface)   [[ $# -ge 2 && $2 != -* ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
-      --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
-      --actor)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
+      --surface=*) [[ ${1#--surface=} != -* ]] || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"; lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
+      --actor)     [[ $# -ge 2 ]] && (( ! lc_ga )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
                    lc_ga=1; lc_actor="$2"; shift 2 ;;
-      --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      --actor=*)   (( ! lc_ga )) || die "usage: ccd ws-add [--no-rc] [--child <runId>] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"; lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
       # REPEATABLE, one field per flag — the shape `cmd_route --set` already
       # has, so a dispatcher composing one argv for both verbs writes the same
       # pairs. Validated below, before anything on disk is touched.
