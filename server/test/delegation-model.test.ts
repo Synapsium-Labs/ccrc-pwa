@@ -26,6 +26,7 @@ import { MIGRATIONS } from '../src/coord/schema.js';
 import {
   DelegationJsonError,
   DelegationModelError,
+  assertDelegationCheckpointIdentity,
   assertWave3Lease,
   assertWave3Leases,
   canonicalDelegationJson,
@@ -36,7 +37,9 @@ import {
   delegationLineageCodec,
   delegationSessionCodec,
   delegationSha256Hex,
+  deriveCoordinatorIntentByParent,
   deriveDelegationActivityId,
+  deriveDelegationLineageId,
   emptyDelegationCheckpoint,
   encodeDelegationNaturalKey,
   formatDelegationInstant,
@@ -772,6 +775,57 @@ describe('the projection view — what a checkpoint looks like once projected an
     const before = canonicalDelegationJson(cp);
     projectionViewOfDelegationCheckpoint(cp);
     expect(canonicalDelegationJson(cp)).toBe(before);
+  });
+});
+
+describe('Task 8A additions: the lease lineage ID, the intent derivation and the checkpoint identity invariants', () => {
+  // Python: sha256(lp('ccrc-delegation-lineage-v1') + lp(leaseId) + lp(parentId) + lp(parentIncarnation) + lp(activityId)).
+  const PARTS = { leaseId: '5b0d9d9e-6d3c-4d2e-9f7a-0a1b2c3d4e5f', parentId: 'lane-a-demo', parentIncarnation: 'g1', activityId: ACTIVITY_ID_FROM_JOURNAL };
+
+  it('derives the lineage ID from a domain tag and the four length-prefixed strings (fixed vector)', () => {
+    expect(deriveDelegationLineageId(PARTS)).toBe('047ea347b1d2689ce34424088dd6e9af1f13eb8d0302b609a205d230322478e6');
+  });
+  it('is sensitive to every part and to the boundary between parts', () => {
+    const id = deriveDelegationLineageId(PARTS);
+    for (const k of ['leaseId', 'parentId', 'parentIncarnation', 'activityId'] as const) expect(deriveDelegationLineageId({ ...PARTS, [k]: `${PARTS[k]}x` })).not.toBe(id);
+    expect(deriveDelegationLineageId({ ...PARTS, leaseId: 'ab', parentId: 'c' })).not.toBe(deriveDelegationLineageId({ ...PARTS, leaseId: 'a', parentId: 'bc' }));
+    expect(() => deriveDelegationLineageId({ ...PARTS, leaseId: '' })).toThrow(DelegationModelError);
+  });
+
+  const session = (sessionId: string, inc: string, intent: string | null): DelegationSessionRow => ({
+    sessionId, parentIncarnation: inc, explicitIntentAt: intent, effective: intent !== null, effectiveBasis: intent === null ? [] : ['explicit'],
+    claudeSessionIds: [], firstObservedAt: T0, lastObservedAt: T0,
+  });
+  it('derives the intent map from the session rows: the LATEST explicitIntentAt per parent, none for a parent without intent', () => {
+    expect(deriveCoordinatorIntentByParent([session('a', 'g1', T1), session('a', 'g2', T2), session('b', 'g1', null)])).toEqual({ a: T2 });
+    expect(deriveCoordinatorIntentByParent([])).toEqual({});
+  });
+
+  describe('assertDelegationCheckpointIdentity', () => {
+    const activity: DelegationActivityRow = {
+      activityId: ACTIVITY_ID_FROM_JOURNAL, parentId: KEY.parentId, parentIncarnation: KEY.parentIncarnation, sourceKind: 'agent', upstreamId: KEY.upstreamId,
+      identityJournalId: J, displayName: null, executionState: 'active', openedAt: T0, endedAt: null, lastEventAt: T0,
+    };
+    const cp: DelegationCheckpointV1 = {
+      ...emptyDelegationCheckpoint(), activities: [activity], activityIdsByNaturalKey: { [KEY_ENCODING]: ACTIVITY_ID_FROM_JOURNAL },
+      sessions: [session('lane-a-demo', 'g1', null)],
+    };
+    const code = (c: DelegationCheckpointV1): string => {
+      try { assertDelegationCheckpointIdentity(c); } catch (err) { if (err instanceof DelegationModelError) return err.code; throw err; }
+      return 'accepted';
+    };
+    it('accepts a consistent checkpoint, and the empty one', () => {
+      expect(code(cp)).toBe('accepted');
+      expect(code(emptyDelegationCheckpoint())).toBe('accepted');
+    });
+    it('refuses an ID that is not the derivation from the natural key and identity journalId (the envelope eventId is not one)', () => {
+      expect(code({ ...cp, activities: [{ ...activity, activityId: ACTIVITY_ID_FROM_EVENT }], activityIdsByNaturalKey: { [KEY_ENCODING]: ACTIVITY_ID_FROM_EVENT } })).toBe('activity-id-mismatch');
+    });
+    it('refuses a natural-key map that disagrees with the rows in either direction, and an intent map that disagrees with the sessions', () => {
+      expect(code({ ...cp, activityIdsByNaturalKey: {} })).toBe('natural-key-map');
+      expect(code({ ...cp, activityIdsByNaturalKey: { ...cp.activityIdsByNaturalKey, '1:x1:y5:agent1:z': ACTIVITY_ID_FROM_EVENT } })).toBe('natural-key-map');
+      expect(code({ ...cp, coordinatorIntentByParent: { 'lane-a-demo': T1 } })).toBe('intent-map');
+    });
   });
 });
 

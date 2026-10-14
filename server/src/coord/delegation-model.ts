@@ -222,6 +222,25 @@ export interface DelegationRecoveryState {
   phase: DelegationHealthInput['recoveryPhase'];
 }
 
+/**
+ * What pure policy asks the serialized journal adapter for (the plan's fixed vocabulary; Task 12 produces it, Task 8's
+ * adapter consumes it). It carries MEASURED identity and nothing else: no UUID, no generation, no journal sequence, no
+ * clock but the canonical `firstObservedAt`, no transition state, no token and no executable action. The adapter, not
+ * policy, mints the lease ID, and only after deduplication.
+ */
+export interface DelegationLeaseCreationRequest {
+  activityId: string;
+  parentId: string;
+  parentIncarnation: string;
+  project: string;
+  adminRecord: string;
+  canonicalPath: string;
+  creationBase: string | null;
+  sourceKind: DelegationLeaseSourceKind;
+  correlationJournalIds: readonly string[];
+  firstObservedAt: string;
+}
+
 /** A checkpoint with nothing in it: no anchor, no row, no mapping. */
 export function emptyDelegationCheckpoint(): DelegationCheckpointV1 {
   return {
@@ -261,7 +280,11 @@ export type DelegationModelRefusal =
   | 'lease-transition-field'
   | 'lease-last-observed'    // wave 3 replays firstObservedAt into lastObservedAt: they are one instant
   | 'lease-opening-lineage'  // replay also opens the lease's own lineage row, at that same instant
-  | 'lease-without-journal-entry';
+  | 'lease-without-journal-entry'
+  | 'activity-id-mismatch'   // an activity row whose ID is not the derivation from its natural key and identity journalId
+  | 'natural-key-map'        // activityIdsByNaturalKey and the activity rows disagree, in either direction
+  | 'intent-map'             // coordinatorIntentByParent and the session rows' explicitIntentAt disagree
+  | 'lease-lineage';         // a lease's opening lineage row is missing, mis-owned or mis-derived
 
 export class DelegationModelError extends Error {
   constructor(readonly code: DelegationModelRefusal, detail: string) {
@@ -406,6 +429,34 @@ export function deriveDelegationActivityId(key: DelegationActivityNaturalKey, id
   return delegationSha256Hex(encodeDelegationNaturalKey(key) + lengthPrefixed(identityJournalId));
 }
 
+/** The domain tag of a lease's opening lineage ID. A different tag gives a different hash for the same four strings, so a
+ *  lineage ID can never be mistaken for any other hash this module derives. */
+const LINEAGE_ID_DOMAIN = 'ccrc-delegation-lineage-v1';
+
+/** What a lease's opening lineage ID is derived from. */
+export interface DelegationLineageIdParts {
+  leaseId: string;
+  parentId: string;
+  parentIncarnation: string;
+  activityId: string;
+}
+
+/**
+ * The lease's opening lineage ID: lowercase SHA-256 of the domain tag and `(leaseId, parentId, parentIncarnation,
+ * activityId)`, each length-prefixed exactly as the natural key is (the UTF-8 byte length, a colon, the string). It is
+ * deterministic, so replay of a `lease-created` entry opens the same lineage row the live path did.
+ */
+export function deriveDelegationLineageId(parts: DelegationLineageIdParts): string {
+  const { leaseId, parentId, parentIncarnation, activityId } = parts;
+  for (const [name, v] of [['leaseId', leaseId], ['parentId', parentId], ['parentIncarnation', parentIncarnation], ['activityId', activityId]]) {
+    if (typeof v !== 'string' || v === '' || LONE_SURROGATE.test(v)) {
+      throw new DelegationModelError('bad-row', `lineage ${name} is not a non-empty string`);
+    }
+  }
+  return delegationSha256Hex(lengthPrefixed(LINEAGE_ID_DOMAIN) + lengthPrefixed(leaseId) + lengthPrefixed(parentId)
+    + lengthPrefixed(parentIncarnation) + lengthPrefixed(activityId));
+}
+
 /**
  * Reads the immutable mapping first. A natural key with a mapping ALWAYS gets its mapped ID back, whatever journalId the
  * caller now holds: a key never mints a second activity, and an ID is never re-hashed from a later event because the
@@ -543,6 +594,74 @@ export function assertWave3Leases(checkpoint: DelegationCheckpointV1): void {
     if (openedAt.get(lease.leaseId)?.has(lease.firstObservedAt) !== true) {
       throw new DelegationModelError('lease-opening-lineage',
         `lease ${lease.leaseId} has no lease-owned lineage row opened at its firstObservedAt ${lease.firstObservedAt}`);
+    }
+  }
+}
+
+// ── The checkpoint's identity invariants ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The invariants that make a checkpoint's IDENTITY data trustworthy, in ONE pure helper that runs at checkpoint build and at
+ * recovery. A violation is a recovery failure (the phase stays `reconstructing`, pruning stays disabled), never a repair that
+ * fails forever after a bad authority is durable:
+ *   - each `activityId` equals `deriveDelegationActivityId(naturalKey, identityJournalId)` (O1, O4);
+ *   - `activityIdsByNaturalKey` agrees with the activity rows BOTH ways: every activity is mapped to its own ID, and the map holds
+ *     nothing else (two activities on one natural key, or an orphan mapping, are both refused);
+ *   - `coordinatorIntentByParent` equals what the session rows' `explicitIntentAt` say (`deriveCoordinatorIntentByParent`);
+ *   - each lease's opening lineage row (the lease-OWNED row `deriveDelegationLineageId` names) exists, belongs to the lease's
+ *     own `(parentId, parentIncarnation)`, owns nothing but the lease, and opens at the lease's `firstObservedAt`.
+ * The lease checks that need the journal (that the creating entry exists and equals the lease) are the journal proof's,
+ * made at recovery and at build by the checkpoint module.
+ */
+export function assertDelegationCheckpointIdentity(checkpoint: DelegationCheckpointV1): void {
+  const seen = new Set<string>();
+  for (const a of checkpoint.activities) {
+    const expected = deriveDelegationActivityId(a, a.identityJournalId);
+    if (a.activityId !== expected) {
+      throw new DelegationModelError('activity-id-mismatch',
+        `activity ${a.activityId} is not the derivation (${expected}) from its natural key and identity journalId ${a.identityJournalId}`);
+    }
+    const encoded = encodeDelegationNaturalKey(a);
+    if (seen.has(encoded)) throw new DelegationModelError('natural-key-map', `two activities share the natural key ${encoded}`);
+    seen.add(encoded);
+    const mapped = Object.hasOwn(checkpoint.activityIdsByNaturalKey, encoded) ? checkpoint.activityIdsByNaturalKey[encoded] : undefined;
+    if (mapped !== a.activityId) {
+      throw new DelegationModelError('natural-key-map',
+        `activity ${a.activityId} is not mapped from its natural key ${encoded} (the map says ${String(mapped)})`);
+    }
+  }
+  for (const [encoded, id] of Object.entries(checkpoint.activityIdsByNaturalKey)) {
+    if (!seen.has(encoded)) {
+      throw new DelegationModelError('natural-key-map', `the mapping ${encoded} -> ${id} has no activity row behind it`);
+    }
+  }
+  if (canonicalDelegationJson(checkpoint.coordinatorIntentByParent)
+      !== canonicalDelegationJson(deriveCoordinatorIntentByParent(checkpoint.sessions))) {
+    throw new DelegationModelError('intent-map', 'coordinatorIntentByParent disagrees with the session rows\' explicitIntentAt');
+  }
+  const lineageById = new Map(checkpoint.lineage.map((n) => [n.lineageId, n] as const));
+  for (const lease of checkpoint.leases) {
+    const lineageId = deriveDelegationLineageId(lease);
+    const opening = lineageById.get(lineageId);
+    if (opening === undefined) {
+      throw new DelegationModelError('lease-lineage', `lease ${lease.leaseId} has no opening lineage row ${lineageId}`);
+    }
+    if (opening.leaseId !== lease.leaseId || opening.activityId !== null || opening.runId !== null) {
+      throw new DelegationModelError('lease-lineage', `lineage ${lineageId} is not owned by lease ${lease.leaseId} alone`);
+    }
+    if (opening.openedAt !== lease.firstObservedAt) {
+      throw new DelegationModelError('lease-lineage', `lineage ${lineageId} opens at ${opening.openedAt}, not at the lease's firstObservedAt ${lease.firstObservedAt}`);
+    }
+  }
+  // EVERY lease-owned lineage row (the opening row included) names its lease's own parent: a lineage edge is the parent's.
+  const leaseById = new Map(checkpoint.leases.map((l) => [l.leaseId, l] as const));
+  for (const n of checkpoint.lineage) {
+    if (n.leaseId === null) continue;
+    const lease = leaseById.get(n.leaseId);
+    if (lease === undefined) throw new DelegationModelError('lease-lineage', `lineage ${n.lineageId} names lease ${n.leaseId}, which has no row`);
+    if (n.parentId !== lease.parentId || n.parentIncarnation !== lease.parentIncarnation) {
+      throw new DelegationModelError('lease-lineage',
+        `lineage ${n.lineageId} names parent (${n.parentId}, ${n.parentIncarnation}), not its lease's (${lease.parentId}, ${lease.parentIncarnation})`);
     }
   }
 }
@@ -834,6 +953,21 @@ export function sortedProjectionRows(rows: DelegationProjectionRows): Delegation
 }
 
 /**
+ * The coordinator-intent map the session rows say: per parent session ID, the LATEST `explicitIntentAt` when its incarnations
+ * disagree. The one statement of what `coordinatorIntentByParent` must agree with, shared by the drift view above and by
+ * `assertDelegationCheckpointIdentity`, so the key spelling is changed in one place if Task 15 changes it.
+ */
+export function deriveCoordinatorIntentByParent(sessions: readonly DelegationSessionRow[]): Record<string, string> {
+  const intent = new Map<string, string>();
+  for (const s of sessions) {
+    if (s.explicitIntentAt === null) continue;
+    const seen = intent.get(s.sessionId);
+    if (seen === undefined || s.explicitIntentAt > seen) intent.set(s.sessionId, s.explicitIntentAt);
+  }
+  return Object.fromEntries(intent);
+}
+
+/**
  * Assembles the checkpoint a set of PROJECTED rows stands for. Only what the rows can say is filled in:
  *   - `activityIdsByNaturalKey` is derived from the activity rows (each carries its own natural key);
  *   - `coordinatorIntentByParent` is derived from the session rows' `explicitIntentAt`, the LATEST one per parent when its
@@ -843,16 +977,10 @@ export function sortedProjectionRows(rows: DelegationProjectionRows): Delegation
  *     AUTHORITY: the round trip through SQLite is a drift check, not a read path.
  */
 export function delegationCheckpointOfProjection(rows: DelegationProjectionRows): DelegationCheckpointV1 {
-  const intent = new Map<string, string>();
-  for (const s of rows.sessions) {
-    if (s.explicitIntentAt === null) continue;
-    const seen = intent.get(s.sessionId);
-    if (seen === undefined || s.explicitIntentAt > seen) intent.set(s.sessionId, s.explicitIntentAt);
-  }
   return {
     ...emptyDelegationCheckpoint(),
     activityIdsByNaturalKey: Object.fromEntries(rows.activities.map((a) => [encodeDelegationNaturalKey(a), a.activityId])),
-    coordinatorIntentByParent: Object.fromEntries(intent),
+    coordinatorIntentByParent: deriveCoordinatorIntentByParent(rows.sessions),
     sessions: rows.sessions, attempts: rows.attempts, activities: rows.activities, leases: rows.leases, lineage: rows.lineage,
   };
 }
