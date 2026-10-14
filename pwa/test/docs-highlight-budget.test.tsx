@@ -134,15 +134,12 @@ describe('D-4928: the scan budget, a page\'s code of typescript, javascript and 
     expect(got).toEqual([true, false, false]);
   });
 
-  it('(e) xml and markdown blocks, which embed javascript, count in the same sum as ts: 24 xml and 24 ts blocks of 8 192 fill it', () => {
-    const got = decisions([
-      ...Array.from({ length: 24 }, () => lang('xml', filler(8192))), ...Array.from({ length: 24 }, () => lang('ts', filler(8192))),
-      lang('html', filler(1)),
-    ]);
+  it('(e) xml and markdown reach no bounded grammar, so they do not count in the scan sum: an xml block after the ts budget is spent is still highlighted', () => {
+    const got = decisions([...Array.from({ length: 48 }, () => lang('ts', filler(8192))), lang('xml', filler(8192)), lang('ts', filler(1))]);
     expect(got.slice(0, 48)).toEqual(Array.from({ length: 48 }, () => true));
-    expect(got[48]).toBe(false);
-    expect(decisions([lang('svg', filler(393216)), lang('md', filler(1)), lang('json', filler(1))])).toEqual([true, false, true]);
-    expect(decisions([lang('xml', filler(393216)), lang('ts', filler(1))])).toEqual([true, false]);
+    expect(got[48]).toBe(true);
+    expect(got[49]).toBe(false);
+    expect(decisions([lang('svg', filler(393216)), lang('md', filler(1)), lang('ts', filler(1))])).toEqual([true, true, true]);
   });
 
   it('a block with no language is counted by the page budget only', () => {

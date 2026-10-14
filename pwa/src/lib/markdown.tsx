@@ -19,6 +19,7 @@ import type { Components } from 'react-markdown';
 import React, { createContext, useCallback, useContext, useState, type ReactNode } from 'react';
 import type { Element as HastElement } from 'hast';
 import hljs from 'highlight.js/lib/core';
+import type { HLJSApi, LanguageFn } from 'highlight.js';
 import bash from 'highlight.js/lib/languages/bash';
 import typescript from 'highlight.js/lib/languages/typescript';
 import javascript from 'highlight.js/lib/languages/javascript';
@@ -85,11 +86,41 @@ export function openExternal(e: React.MouseEvent, href: string | undefined): voi
   window.open(absolute(href), '_blank', 'noopener,noreferrer');
 }
 
+/** highlight.js's `xml` grammar (registered as `xml`, `html` and `svg`) with the `subLanguage` removed from the two modes
+ *  that carry one that costs: the `<script>` mode (`["javascript","handlebars","xml"]`) and the `<style>` mode
+ *  (`["css","xml"]`), the `starts` of the two tag modes. Those are the only modes of the stock definition with a
+ *  `subLanguage`; each keeps its `end` and `returnEnd`, so the contents run to the closing tag as ONE plain run.
+ *  Why (D-4928): the grammar is quadratic on those regions whatever they embed (`<script>` repeated one per line, no
+ *  closer: 1, 2, 4 and 8 KiB cost 66, 308, 1 729 and 7 918 ms; `<style>{` per line, 8 KiB 2.4 s with no javascript
+ *  involved), and with them removed every probed shape is linear (xml at most 167 ms per 64 KiB, markdown, which embeds
+ *  xml, 290 ms). What it costs: script and style contents are uncoloured (one real 375-character html fence holds
+ *  `<script` or `<style>`); markup outside them is coloured as before. `xml` and `markdown` then reach no bounded
+ *  grammar, so they keep the 64 KiB cap. */
+const xmlWithoutSubLanguages: LanguageFn = (h) => {
+  const def = xml(h);
+  const seen = new Set<object>();
+  const stack: object[] = [def];
+  while (stack.length > 0) {
+    const mode = stack.pop()!;
+    if (seen.has(mode)) continue;
+    seen.add(mode);
+    const m = mode as { subLanguage?: unknown; contains?: unknown; variants?: unknown; starts?: unknown };
+    if (Array.isArray(m.subLanguage) && (m.subLanguage.includes('javascript') || m.subLanguage.includes('css'))) {
+      delete m.subLanguage;
+    }
+    for (const list of [m.contains, m.variants]) {
+      if (Array.isArray(list)) for (const child of list) if (typeof child === 'object' && child !== null) stack.push(child);
+    }
+    if (typeof m.starts === 'object' && m.starts !== null) stack.push(m.starts);
+  }
+  return def;
+};
+
 // Registering a grammar also registers any aliases IT declares — that is where
 // `golang` comes from, and why it is not in the list below. The php grammar
 // declares none, so `php` is the only fence word that reaches it.
 for (const [name, def] of Object.entries({
-  bash, typescript, javascript, json, python, css, xml,
+  bash, typescript, javascript, json, python, css, xml: xmlWithoutSubLanguages,
   yaml, markdown, diff, sql, dockerfile, rust, go, php,
 })) hljs.registerLanguage(name, def);
 hljs.registerAliases(['zsh', 'shell'], { languageName: 'bash' });
@@ -178,13 +209,18 @@ export function codeLanguage(className: string): string {
   return (/language-([\w-]+)/.exec(className)?.[1] ?? '').toLowerCase();
 }
 
-/** The registered grammars `lang` embeds through highlight.js `subLanguage`, by registered name, one table for the
- *  module. A grammar's definition is what `hljs.getLanguage` answers (the object `registerLanguage` stored, whose modes
- *  highlight.js 11.11.1 compiles into CLONES on first use, so the original `contains`, `variants` and `starts` stay
- *  readable whether or not a block has been highlighted yet; the walk keeps a `seen` set all the same, because `'self'`
- *  and compiled modes make the graph cyclic). Never follows `parent`. A name nothing registers (yaml's `ruby`, xml's
- *  `handlebars`) reaches nothing. */
-function embeddedGrammars(def: object, nameOf: ReadonlyMap<object, string>): ReadonlySet<string> {
+/** The registered grammars a definition embeds through highlight.js `subLanguage`, by registered name. A grammar's
+ *  definition is what `h.getLanguage` answers (the object `registerLanguage` stored). highlight.js 11.11.1 compiles a
+ *  mode IN PLACE on first use (`compileMode` replaces `contains` and sets `isCompiled` on the registered mode itself);
+ *  only variant and parent-dependent modes are cloned, through `inherit`, which copies `subLanguage`. So the walk sees
+ *  every `subLanguage` before and after compilation, and it keeps a `seen` set because `'self'` and compiled modes make
+ *  the graph cyclic. Never follows `parent`. A name nothing registers (yaml's `ruby`) reaches nothing. An EMPTY array
+ *  means auto-detect across every registered grammar in highlight.js (`processSubLanguage` passes `null` to
+ *  `highlightAuto`), so it reaches all of them. A string `subLanguage` is looked up by name WITHOUT alias resolution at
+ *  runtime, while the walk resolves aliases with `getLanguage`, which can only over-bound, the safe direction. */
+function embeddedGrammars(
+  h: HLJSApi, def: object, nameOf: ReadonlyMap<object, string>, every: readonly string[],
+): ReadonlySet<string> {
   const found = new Set<string>();
   const seen = new Set<object>();
   const stack: object[] = [def];
@@ -193,9 +229,10 @@ function embeddedGrammars(def: object, nameOf: ReadonlyMap<object, string>): Rea
     if (seen.has(mode)) continue;
     seen.add(mode);
     const m = mode as { subLanguage?: unknown; contains?: unknown; variants?: unknown; starts?: unknown };
+    if (Array.isArray(m.subLanguage) && m.subLanguage.length === 0) for (const n of every) found.add(n);
     const subs = typeof m.subLanguage === 'string' ? [m.subLanguage] : Array.isArray(m.subLanguage) ? m.subLanguage : [];
     for (const sub of subs) {
-      const target = typeof sub === 'string' ? hljs.getLanguage(sub) : undefined;
+      const target = typeof sub === 'string' ? h.getLanguage(sub) : undefined;
       const name = target === undefined ? undefined : nameOf.get(target);
       if (name !== undefined) found.add(name);
     }
@@ -207,25 +244,19 @@ function embeddedGrammars(def: object, nameOf: ReadonlyMap<object, string>): Rea
   return found;
 }
 
-/** The grammars highlight.js is quadratic in (D-4928), and the cap each takes: typescript and javascript at
- *  `MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS`, rust at `MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS`, and every registered grammar whose
- *  `subLanguage` chain reaches one of them (xml, which highlights `<script>` with javascript, and markdown, which embeds
- *  xml, today) at the SMALLEST cap among those its chain reaches. Derived ONCE here, from the registered grammars, so a
- *  grammar registered later that embeds a bounded one is bounded with no list to forget; `markdown-bounds.test.tsx`
- *  derives the same set again, independently, and asserts it is equal. */
-export const HIGHLIGHT_BOUNDED_CAPS: ReadonlyMap<string, number> = ((): ReadonlyMap<string, number> => {
-  const names = hljs.listLanguages();
+/** The bounded grammars of `h` and the cap each takes: the grammars of `base`, and every registered grammar whose
+ *  `subLanguage` chain reaches one of them, at the SMALLEST cap among those its chain reaches (`embeddedGrammars` says
+ *  what a chain is). Pure over `h`'s registered grammars, so a test derives it on synthetic instances. The set is fixed
+ *  at module load: no grammar is registered later in `pwa/src`. */
+export function deriveBoundedCaps(h: HLJSApi, base: ReadonlyMap<string, number>): ReadonlyMap<string, number> {
+  const names = h.listLanguages();
   const nameOf = new Map<object, string>();
   for (const n of names) {
-    const def = hljs.getLanguage(n);
+    const def = h.getLanguage(n);
     if (def !== undefined) nameOf.set(def, n);
   }
-  const base = new Map<string, number>([
-    ['typescript', MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS], ['javascript', MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS],
-    ['rust', MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS],
-  ]);
   const embeds = new Map<string, ReadonlySet<string>>();
-  for (const n of names) embeds.set(n, embeddedGrammars(hljs.getLanguage(n)!, nameOf));
+  for (const n of names) embeds.set(n, embeddedGrammars(h, h.getLanguage(n)!, nameOf, names));
   const caps = new Map<string, number>(base);
   // Fixed point: a cap only ever falls, and there are finitely many grammars, so this ends.
   for (let changed = true; changed;) {
@@ -240,7 +271,18 @@ export const HIGHLIGHT_BOUNDED_CAPS: ReadonlyMap<string, number> = ((): Readonly
     }
   }
   return caps;
-})();
+}
+
+/** The grammars highlight.js is quadratic in (D-4928), and the cap each takes: typescript and javascript at
+ *  `MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS`, rust at `MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS`, and every registered grammar whose
+ *  `subLanguage` chain reaches one of them (none today: `xml` is registered without its script and style
+ *  sub-languages) at the smallest cap among those its chain reaches. `deriveBoundedCaps` applied once to this module's
+ *  instance, so a grammar registered later that embeds a bounded one is bounded with no list to forget;
+ *  `markdown-bounds.test.tsx` derives the same set again, independently, and asserts it is equal. */
+export const HIGHLIGHT_BOUNDED_CAPS: ReadonlyMap<string, number> = deriveBoundedCaps(hljs, new Map<string, number>([
+  ['typescript', MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS], ['javascript', MD_HIGHLIGHT_JS_BLOCK_MAX_CHARS],
+  ['rust', MD_HIGHLIGHT_RUST_BLOCK_MAX_CHARS],
+]));
 
 /** `HIGHLIGHT_BOUNDED_CAPS` by definition object, so every alias highlight.js knows follows its grammar by identity and
  *  no list of aliases is kept here. */
@@ -256,7 +298,7 @@ function boundedCap(lang: string): number | null {
 }
 
 /** The longest block, in characters, `CodeBlock` highlights in `lang`: the cap of `HIGHLIGHT_BOUNDED_CAPS` for a
- *  grammar in it (D-4928; typescript, javascript, rust, and xml and markdown, which embed them),
+ *  grammar in it (D-4928; typescript, javascript and rust, and any grammar embedding them: none today),
  *  `MD_HIGHLIGHT_BLOCK_MAX_CHARS` for every other grammar. */
 export function highlightBlockCap(lang: string): number {
   return boundedCap(lang) ?? MD_HIGHLIGHT_BLOCK_MAX_CHARS;

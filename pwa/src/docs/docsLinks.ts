@@ -84,8 +84,8 @@ function preCodeClass(pre: HastElement): string {
  *  and each `pre` records the page highlight budget's decision: the `pre > code` text of every block so far, this one
  *  included, is summed, and the block is `highlight: true` while the sum is at most `DOCS_HIGHLIGHT_PAGE_MAX_CHARS`,
  *  `false` from the block that passes it on, for every later block too. A second sum, of the blocks whose language
- *  `inScanPageBudget` names (`typescript`, `javascript` and `rust`, and the grammars that embed them through `subLanguage`:
- *  `xml` and `markdown` today; aliases included), has its own budget,
+ *  `inScanPageBudget` names (`typescript`, `javascript` and `rust`, and any grammar whose sub-language chain reaches them:
+ *  none today, `xml` being registered without its script and style sub-languages; aliases included), has its own budget,
  *  `DOCS_HIGHLIGHT_SCAN_PAGE_MAX_CHARS`: a block of those grammars is `false` from the one that passes it, and a block
  *  of any other grammar is never refused by it (D-4928). An element with nothing to record has no
  *  entry. Never writes `tree`, so a kept outcome can be detached again, and part 2's Export reuses the copy and its
