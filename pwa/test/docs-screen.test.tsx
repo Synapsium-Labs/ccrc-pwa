@@ -23,7 +23,7 @@ import { parseMarkdown } from '../src/lib/markdownParse';
 import { docsRunner, type MarkdownParser } from '../src/lib/markdownRunner';
 import { navigate, useLocation } from '../src/lib/router';
 import {
-  BLOB_1, COMMIT_A, COMMIT_B, FP_1, RAN, draftOf, entry, failedAnswer, fakeLoaders, fileResponse, holder,
+  BLOB_1, COMMIT_A, COMMIT_B, FP_1, RAN, draftOf, entry, failedAnswer, fakeLoaders, fetchFailed, fileResponse, holder,
   okRefresh, okTree, pageAt, treeOk, treeResponse, type FakeLoaders,
 } from './docsFixtures';
 
@@ -907,5 +907,29 @@ describe('T13 review 3-7: the index retries an auto-class word once, then shows 
     open('/docs', f);
     await advance(60_000);
     expect(f.projects).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('T13 review 3-2: Fetch from origin on an unresolved ref says what it is doing and how it ended', () => {
+  it('the button is disabled and the page says fetching while the POST runs, then the fetch failure sentence', async () => {
+    const f = fakeLoaders({ tree: failedAnswer('unresolved-ref') });
+    let release: (a: Awaited<ReturnType<DocsLoaders['refresh']>>) => void = () => {};
+    f.refresh.mockImplementationOnce(() => new Promise((r) => { release = r; }));
+    const { container } = open('/docs/demo?ref=ws/a', f);
+    const button = await screen.findByRole('button', { name: 'Fetch from origin' });
+    const before = container.innerHTML;
+    expect(container.querySelector('.docs-fail-fresh')).toBeNull();
+    fireEvent.click(button);
+    await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(container.querySelector('.docs-fail-fresh')?.textContent).toBe('fetching…'));
+    expect(screen.getByRole('button', { name: 'Fetch from origin' })).toBeDisabled();
+    expect(container.innerHTML).not.toBe(before);
+    const during = container.innerHTML;
+    await act(async () => { release(okRefresh(fetchFailed('fetch-auth-failed'), failedAnswer('unresolved-ref').body)); });
+    await waitFor(() => expect(container.querySelector('.docs-fail-fresh')?.textContent)
+      .toContain(DOCS_FAILURE_SENTENCE['fetch-auth-failed']));
+    expect(screen.getByRole('button', { name: 'Fetch from origin' })).toBeEnabled();
+    expect(container.innerHTML).not.toBe(during);
+    expect(container.innerHTML).not.toBe(before);
   });
 });

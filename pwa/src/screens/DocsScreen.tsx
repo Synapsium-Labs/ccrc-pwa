@@ -14,7 +14,7 @@ import {
 } from '../../../shared/docs';
 import { DocsAssetContext, type DocsAssetContextValue } from '../docs/DocImage';
 import { DocsBanners } from '../docs/DocsBanners';
-import { DocsHead } from '../docs/DocsHead';
+import { DocsHead, soonUntil, type FreshChipState } from '../docs/DocsHead';
 import { DocsFailureView } from '../docs/DocsFailureView';
 import { DocsIndexView } from '../docs/DocsIndexView';
 import { DocsLeaf } from '../docs/DocsLeaf';
@@ -22,13 +22,16 @@ import { DocsPageLink, DocsTreeView } from '../docs/DocsTreeView';
 import { createFetchQueue } from '../docs/fetchQueue';
 import { docsRetryPlan, type DocsLoaders, type DocsNotOk } from '../docs/failures';
 import { docsLocation } from '../docs/docsLinks';
-import { DOCS_PAGE_INVALID_SENTENCE, DOCS_VIEW_TEXT, fillSentence } from '../docs/docsText';
+import {
+  DOCS_HEAD_TEXT, DOCS_PAGE_INVALID_SENTENCE, DOCS_VIEW_TEXT, failureSentence, fillSentence, slotSentence,
+} from '../docs/docsText';
 import { docsPathKind } from '../docs/docsTree';
-import { useDocsVisit, type TreeSlot } from '../docs/useDocsVisit';
+import { useDocsVisit, type Freshness, type TreeSlot } from '../docs/useDocsVisit';
 import { api } from '../lib/api';
 import { onAuthRegained } from '../lib/auth';
 import { docsRunner, type MarkdownParser } from '../lib/markdownRunner';
 import { navigate } from '../lib/router';
+import { useNow } from '../lib/useNow';
 import '../docs/docs.css';
 
 /** The defaults are module-scope constants (spec 4.3, the `MailScreen` idiom), so their identities are stable across
@@ -98,6 +101,39 @@ function slashRedirect(page: DocsPageLocation, tree: DocsTreeOk): Redirect | nul
   return null;
 }
 
+/** What Fetch from origin is doing or how it ended, for a page that has no listing (so no chip): the chip's own
+ *  sentences for the states a manual fetch can leave, from the visit's freshness. `null`: nothing to say (no fetch yet,
+ *  or one that ran and left the ref unresolved). */
+function fetchNoteOf(freshness: Freshness, now: number): { state: FreshChipState; text: string } | null {
+  const until = soonUntil(freshness);
+  if (until !== null) return { state: 'soon', text: fillSentence(DOCS_HEAD_TEXT.freshSoon, { n: Math.max(0, Math.ceil((until - now) / 1000)) }) };
+  switch (freshness.s) {
+    case 'fetching':
+      return { state: 'fetching', text: DOCS_HEAD_TEXT.freshFetching };
+    case 'stale-lock':
+      return {
+        state: 'failed',
+        text: freshness.ref === null ? DOCS_HEAD_TEXT.freshStaleLockUnnamed : fillSentence(DOCS_HEAD_TEXT.freshStaleLock, { ref: freshness.ref }),
+      };
+    case 'refresh-failed': {
+      const a = freshness.answer;
+      return { state: 'failed', text: fillSentence(DOCS_HEAD_TEXT.freshRefreshFailed, { sentence: a.s === 'failed' ? failureSentence(a.body) : slotSentence(a) }) };
+    }
+    case 'answered': {
+      const f = freshness.fetch;
+      if (f.state === 'skipped') return { state: 'local', text: DOCS_HEAD_TEXT.freshLocalRef };
+      if (f.state === 'failed') {
+        return f.failure.failure === 'remote-branch-absent'
+          ? { state: 'local', text: DOCS_HEAD_TEXT.freshLocalOnly }
+          : { state: 'failed', text: failureSentence(f.failure) };
+      }
+      return null;
+    }
+    default:
+      return null;
+  }
+}
+
 function treeOf(slot: TreeSlot | null): DocsTreeOk | null {
   return slot?.s === 'ok' ? slot.answer.tree : null;
 }
@@ -162,6 +198,10 @@ export function DocsScreen(p: {
 
   // Every redirect is a replace (M4.R4): canonicalisation, the slash the tree decides, the owner of a worktree.
   const tree = treeOf(visit.tree);
+  // Fetch from origin on a page with no listing has no chip to show it: its state is said under the button, and a
+  // `soon` wait counts down on the clock.
+  const soon = soonUntil(visit.freshness);
+  const clock = useNow(1000, soon !== null && Date.now() < soon);
   const [trail, setTrail] = useState<Trail>(NO_TRAIL);
   const [note, setNote] = useState<Note | null>(null);
   // A chain of owner redirects ends when the URL is anything but the one the last of them went to; a note is spent
@@ -225,6 +265,7 @@ export function DocsScreen(p: {
         <>
           <DocsFailureView
             answer={slot} onRetry={visit.retryTree} onFetchFromOrigin={visit.fetchFromOrigin} suggestHref={suggestHref}
+            fetching={visit.freshness.s === 'fetching'} fetchNote={fetchNoteOf(visit.freshness, soon === null ? clock : Date.now())}
           />
           {looped && <p className="docs-note">{DOCS_VIEW_TEXT.redirectLoop}</p>}
         </>

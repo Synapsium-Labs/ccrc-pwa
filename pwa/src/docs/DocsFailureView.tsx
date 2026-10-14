@@ -14,6 +14,11 @@ export interface DocsFailureViewProps {
   readonly onRetry?: () => void;
   /** `unresolved-ref`'s manual fetch (`reason: 'manual'`). Absent: not offered. */
   readonly onFetchFromOrigin?: () => void;
+  /** Fetch from origin is running: its button is disabled. Absent: not running. */
+  readonly fetching?: boolean;
+  /** What the visit's fetch is doing or how it ended, said under the actions (`state` is the freshness chip's word).
+   *  Absent: nothing to say. */
+  readonly fetchNote?: { readonly state: string; readonly text: string } | null;
   /** The page URL for `unresolved-ref`'s `suggest`. Absent: the suggestion is shown as text, not as a link. */
   readonly suggestHref?: (name: string) => string;
 }
@@ -95,7 +100,7 @@ export function DocsFailureView(p: DocsFailureViewProps): ReactNode {
       {(retry !== undefined || fetchFromOrigin !== undefined) && (
         <div className="docs-fail-actions">
           {fetchFromOrigin !== undefined && (
-            <button type="button" className="btn-ghost docs-fail-action" onClick={fetchFromOrigin}>
+            <button type="button" className="btn-ghost docs-fail-action" disabled={p.fetching === true} onClick={fetchFromOrigin}>
               Fetch from origin
             </button>
           )}
@@ -103,6 +108,9 @@ export function DocsFailureView(p: DocsFailureViewProps): ReactNode {
             <button type="button" className="btn-ghost docs-fail-action" onClick={retry}>Retry</button>
           )}
         </div>
+      )}
+      {fetchFromOrigin !== undefined && p.fetchNote != null && (
+        <p className="docs-fail-fresh" role="status" data-state={p.fetchNote.state}>{p.fetchNote.text}</p>
       )}
     </section>
   );
