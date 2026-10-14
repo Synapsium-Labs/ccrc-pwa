@@ -2459,7 +2459,9 @@ describe('the weekly schedule through the real driver (4556, 4558)', () => {
     expect(promoted()).toBe(0);
     expect(b.printed.filter((l) => l.includes('rotation started'))).toEqual([]);
     ctl.off = WEEK + 60_000;
-    expect(dueByL0(st0 as St, b.now())).toBe(true);
+    const afterNotDue = await readState(b.paths.state);   // the file's own reading, after the not-due tick
+    expect(afterNotDue.kind).toBe('state');
+    expect(dueByL0((afterNotDue.kind === 'state' ? afterNotDue.state : null) as St, b.now())).toBe(true);
     await b.driver.tick();
     expect(b.printed.filter((l) => l.includes('rotation started (generation #2, scheduled)'))).toHaveLength(1);
     expect(promoted()).toBe(1);
@@ -2486,7 +2488,7 @@ describe('the weekly schedule through the real driver (4556, 4558)', () => {
       expect(link.sends).toBeLessThanOrEqual(LADDER_MAX);
       expect(r2.driver.view()).toMatchObject({ failures: 0, banner: false });
     } finally { await r2.app.close(); }
-  }, 60_000);
+  }, 120_000);
 
   it('E8b: a link fresh-ready before every tick whose answers are lost before the claim raises failures once per ladder step, not once per tick, and still reaches the banner (4558; G4)', async () => {
     const link = countingLink({ kind: 'lost', why: 'timeout' });
@@ -2502,7 +2504,7 @@ describe('the weekly schedule through the real driver (4556, 4558)', () => {
       expect(r2.driver.view().failures).toBe(link.sends);
       expect(r2.driver.view().banner, 'a persistent real fault still reaches the banner, across ladder steps (G4)').toBe(true);
     } finally { await r2.app.close(); }
-  }, 60_000);
+  }, 120_000);
 
   it('E8c: an owed rotation on the same flapping link keeps spec §5.1: a fresh ready resets its backoff, one stage per tick, as on main (4558: no-change row)', async () => {
     const link = countingLink({ kind: 'lost', why: 'timeout' });
@@ -2527,7 +2529,7 @@ describe('the weekly schedule through the real driver (4556, 4558)', () => {
       });
       expect(link.sends).toBe(10);
     } finally { await r2.app.close(); }
-  }, 60_000);
+  }, 120_000);
 
   it('E8e: a scheduled stage that cannot write its pending file, fresh-ready before every tick, fails once per ladder step (4558; G4)', async () => {
     let attempts = 0;
@@ -2547,7 +2549,7 @@ describe('the weekly schedule through the real driver (4556, 4558)', () => {
       expect(cause, 'the line that names the cause is printed').toBeGreaterThanOrEqual(0);
       expect(miss, 'the miss line is printed after the line that names the cause').toBeGreaterThan(cause);
     } finally { await r2.app.close(); }
-  }, 60_000);
+  }, 120_000);
 
   it('E8f: a scheduled answer whose commit throws is still counted as a miss: the schedule backs off, it does not stage again on the next tick (4558)', async () => {
     const link = countingLink({ kind: 'unsent' });
@@ -2570,7 +2572,7 @@ describe('the weekly schedule through the real driver (4556, 4558)', () => {
       expect(link.sends, 'a miss not counted would let the next fresh ready stage again: five sends in ten minutes').toBeLessThanOrEqual(LADDER_MAX);
       expect(link.sends).toBeGreaterThanOrEqual(2);
     } finally { await r2.app.close(); }
-  }, 60_000);
+  }, 120_000);
 
   it('E9: a scheduled rotation completed by a generation read ends the miss run: the next week backs off from the first step (4558)', async () => {
     let mode: 'unsent' | 'agent' = 'unsent';

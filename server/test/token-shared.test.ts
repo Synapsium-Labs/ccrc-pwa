@@ -239,12 +239,13 @@ describe('shared/box-token.ts — the claim door, value and generation shapes, a
 //
 // What the scan does NOT see: a sum (`6 * DAY + DAY`), a division, a float or exponent literal (`6.048e8`), a
 // lower-case or imported-alias name, a value built at run time, and a product with parenthesised grouping
-// (`(7 * 24) * 60 * 60_000`). Its name table is built from `const NAME = <product>;` alone, on one line: a name defined
-// by `let`, with `as const`, or across lines is no entry, and a chain of names deeper than the table's three passes
-// stays unresolved. The table is one for all files and the last definition wins, so two files that define one name with
-// different values make a product of it resolve to the later one (today `CLEAR_POLL_MS` and `POLL_MS` are each defined
-// twice with different values; neither reaches seven days). The roots are read for `.ts` and `.tsx` only: the
-// deploy-side `shared/*.mjs` and the `*.d.mts` files are outside the scan, and none holds a seven-day value today.
+// (`(7 * 24) * 60 * 60_000`). Its name table is built from `const NAME = <product>;` on one line, with an optional
+// `export` and an optional `: number`: a name defined by `let`, with `as const`, or across lines is no entry, and a
+// chain of names ordered against the file walk and deeper than the table's three passes stays unresolved. The table
+// is one for all files and the last definition wins, so two files that define one name with different values make a
+// product of it resolve to the later one (today `CLEAR_POLL_MS` and `POLL_MS` are each defined twice with different
+// values; neither reaches seven days). The roots are read for `.ts` and `.tsx` only: the deploy-side `shared/*.mjs` and
+// the `*.d.mts` files are outside the scan, and none holds a seven-day value today.
 // The controls below pin what it does see.
 describe('the rotation interval: declared once in L0, pinned by name and by value (4556, 4557)', () => {
   const REPO = path.resolve(here, '..', '..');
@@ -371,7 +372,8 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
   // What a red of the holders row says. The row reds in two directions (a holder added, a holder gone), so the words
   // must be true of both: the pin below holds the message to naming each.
   const HOLDERS_MESSAGE = 'the seven-day holders changed. A new one must import TOKEN_ROTATION_INTERVAL_MS from '
-    + 'shared/box-token.ts, or be ruled in as a separate quantity; a missing one means the L0 home moved or changed value';
+    + 'shared/box-token.ts, or be ruled in as a separate quantity; '
+    + 'a missing one means the L0 home moved or changed value';
 
   it('the holders row\'s failure message names both directions: a new holder, and a missing one', () => {
     expect(HOLDERS_MESSAGE, 'a new holder').toMatch(/import TOKEN_ROTATION_INTERVAL_MS[^]*ruled in/);

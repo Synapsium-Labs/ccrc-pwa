@@ -709,6 +709,7 @@ describe('the weekly schedule: a derived trigger (4556) with its own miss backof
     const closed = rotationGate(remote({ nodes: [serverRow(), fleetRow({ updateState: 'applying' })] }));
     expect(ask(rotatedAt(0), now, { gate: closed, scheduleBackoffUntil: now + 1000 })).toEqual({ kind: 'hold', hold: 'update-in-flight', node: 'fleet' });
     expect(now - (rotatedAt(now).lastRotationAt as number)).toBeLessThan(WEEK);   // the precondition: not due (and not ahead), read without the code under test
+    expect((rotatedAt(now).lastRotationAt as number) - now).toBeLessThanOrEqual(WEEK);   // ... the not-ahead half: a future anchor is due beyond one interval
     expect(ask(rotatedAt(now), now, { scheduleBackoffUntil: now + 1000 })).toEqual({ kind: 'none' });
   });
 });
