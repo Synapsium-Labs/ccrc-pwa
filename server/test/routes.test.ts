@@ -962,8 +962,8 @@ describe('notify ingestion', () => {
 // answered 404 unknown-session (a LIE: the row is right there, just
 // unmeasured) rather than 503.
 describe('POST /api/sessions/:id/stop', () => {
-  // A well-formed legacy row, seeded by hand as the fully-measured case below seeds it: `seedSession` writes
-  // `project: id`, which the stop pair clause refuses 503 on its own, so it would not isolate the identity arm.
+  // A well-formed legacy row, shared by the three `/stop` cases below: `seedSession` writes `project: id`, which the
+  // stop pair clause refuses 503 on its own, so it would neither isolate the identity arm nor stop normally.
   const seedWellFormed = (home: string, id: string) => {
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
@@ -1061,13 +1061,8 @@ describe('POST /api/sessions/:id/stop', () => {
   it('stops normally (200) when the row is fully measured', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    // A well-formed legacy row, seeded by hand: `seedSession` writes `project: id`, and an id that does not end in
-    // `-<project>` makes the stop pair name a different session, which `/stop` now refuses (path identity W1a).
     const id = 'demo-a-demo';
-    const reg = path.join(home, '.cc-sessions');
-    mkdirSync(reg, { recursive: true });
-    const fields = { wrapper: 'demo-a', project: 'demo', workdir: '/w/demo', uuid: '1'.repeat(36), started: '1' };
-    for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(reg, `${id}.${k}`), v);
+    seedWellFormed(home, id);
     const calls: string[][] = [];
     const run: Runner = async (_c, args) => { calls.push([...args]); return { code: 0, stdout: '', stderr: '' }; };
     const cfg = loadConfig({ CCRC_HOME: home });

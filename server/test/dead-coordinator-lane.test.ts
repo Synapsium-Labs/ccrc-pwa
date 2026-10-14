@@ -1522,8 +1522,13 @@ describe('the breaker\'s typed state: dirty before any anchor change, clean only
     const S = 'demo-coord-\ud800';
     /** One world: A planted (its row orphaned, its pane gone) with a working run, S in the population, the lane armed.
      *  The spies record every id the journal is asked for and every anchor the lane writes. */
-    const world = async (breakerState?: 'absent') => {
-      const f = await fixture(breakerState === undefined ? {} : { breakerState });
+    const world = async (breakerState?: 'absent', firstPassStepMs?: number) => {
+      /** Block 1 only: A's first tmux `has-session` moves the clock `firstPassStepMs`, once. S makes no tmux call (it is
+       *  never measured), so S's measurement instant is T0 plus that step, while the seed instant, the pass's `now`,
+       *  stays T0. */
+      let step = firstPassStepMs;
+      const f: Fixture = await fixture({ ...(breakerState === undefined ? {} : { breakerState }),
+        ...(step === undefined ? {} : { onHasSession: (id: string) => { if (step !== undefined && id === A) { f.advance(step); step = undefined; } } }) });
       f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
       vi.spyOn(console, 'warn').mockImplementation(() => {});
       f.plant(A);
@@ -1561,22 +1566,24 @@ describe('the breaker\'s typed state: dirty before any anchor change, clean only
     // Evidence can never release S (it is never measured), so only leaving the population releases it: the operator's
     // abandon door.
     {
-      const { f, ra, anchorKeys, noCrashAnchorForS, breakerOf } = await world('absent');
+      const { f, ra, anchorKeys, noCrashAnchorForS, breakerOf } = await world('absent', 1);
       await f.pass();
       const held = [{ id: A, firstDeadAt: T0, fallback: true }, { id: S, firstDeadAt: T0, fallback: true }];
-      expect(f.coord.deadCoordinatorBreakerState(), 'the exact A/S snapshot, S a seed hold').toEqual({ kind: 'clean', generation: 2, writtenAt: T0, held });
+      expect(f.coord.deadCoordinatorBreakerState(), 'the exact A/S snapshot, S a seed hold').toEqual({ kind: 'clean', generation: 2, writtenAt: T0 + 1, held });
       const raw = (f.coord.db.prepare('SELECT CAST(held AS TEXT) AS held FROM dead_coordinator_breaker_state WHERE id = 1').get() as { held: string }).held;
       expect(raw, 'the STORED spelling: S as %uD800').toBe(`dead-coordinator-breaker-held:${A}@${T0}*,demo-coord-%uD800@${T0}*`);
       expect(/^[\x20-\x7e]*$/.test(raw), 'ASCII only: no raw surrogate, no U+FFFD').toBe(true);
       const st = f.coord.deadCoordinatorBreakerState();
       const sBack = st.kind === 'clean' ? st.held.find((m) => m.id !== A)?.id : undefined;
       expect(sBack === S && sBack.charCodeAt(11) === 0xd800, 'the typed read gives S back exactly, its lone surrogate included').toBe(true);
+      expect(st.kind === 'clean' ? st.held.find((m) => m.id !== A) : st.kind, "S's member exactly: a seed hold at the seed pass's instant, T0, never a crash instant (S is measured at T0 + 1)")
+        .toEqual({ id: S, firstDeadAt: T0, fallback: true });
       expect(f.attention().filter(([k]) => k === 'breaker'), 'the trip {A, S}').toEqual([['breaker', [A, S].sort()]]);
       expect(breakerOf(), 'the wildcard trip').toMatchObject({ tripped: true, why: 'clustered' });
       expect(breakerOf().members?.map((m) => [m.id, m.fallback]), 'both members flagged').toEqual([[A, true], [S, true]]);
       expect(anchorKeys(), 'A anchored, S not').toEqual([A]);
       f.restart();
-      expect(f.coord.deadCoordinatorBreakerState(), 'a restart keeps the members and their flags').toEqual({ kind: 'sealed', generation: 3, writtenAt: T0, held });
+      expect(f.coord.deadCoordinatorBreakerState(), 'a restart keeps the members and their flags').toEqual({ kind: 'sealed', generation: 3, writtenAt: T0 + 1, held });
       await walk(f, 2 * HOUR);
       expect(f.stateOf(ra), 'A is not ended: S is held beside it across the restart').toBe('working');
       expect(f.acts(), 'no act asked').toBe(0);
