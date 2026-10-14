@@ -1561,6 +1561,27 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         `ccd/ccd`.
       - STATUS: fleet and server v0.0.182, newest v0.0.182, backups fleet 177M/server 702M, disk free fleet 220G/work
         volume 194G/server 32G, no anomalies at 11:42.
+    - **2026-10-14 14:42 UTC: v0.0.184 auto-converged unattended, past v0.0.183; the fleet box's run exited 3 on the
+      same history FAIL.** No action was taken.
+      - v0.0.183 was released at 13:42:07 and v0.0.184 at 13:48:47. Neither box moved to v0.0.183: both releases fell
+        inside one 30-minute poll interval of the server.
+      - The fleet box ran 14:00:19 to 14:02:39, about a minute after a poll falls due on the server's 30-minute grid
+        from its 10:59 restart, so most likely the server's poll again. The server followed at 14:02:50 to 14:03:15.
+        Both reports read `phase: done` and `from: pwa` (defect A).
+      - The fleet box's trailing doctor exited 1. Its one FAIL, at 14:01:50, was `history: tick-stale` again: the last
+        tick was 13 minutes old, against the 10-minute bound. The history sweeps ran back to back, each finishing 4 to
+        8 minutes after it started. The run exited 3, the box stayed on v0.0.184 (D-3114), and the server still moved.
+        The mechanism behaved as designed. It is the history programme's flap, now at two updates in a row, and it had
+        cleared by 14:42.
+      - The fleet sweep skipped three supervisor units that had already failed before it began, and it counted one
+        restart failure as transient once its re-check passed.
+      - This is the first release on the boxes that carries #403 (the box-token rotation schedule). Both boxes read
+        `box-token` PASS, in the run and at 14:42. Server doctor: 26 passed, 0 warned, 0 failed. Fleet doctor: 33
+        passed, 7 warned, 0 failed.
+      - Wave 15 (run 300) is still held, by 1298 (run 354, `working` again) on `ccd/ccrc` and 1302 (run 360) on
+        `ccd/ccd`.
+      - STATUS: fleet and server v0.0.184, newest v0.0.184, backups fleet 177M/server 706M, disk free fleet 216G/work
+        volume 197G/server 32G, no anomalies at 14:42.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
