@@ -127,6 +127,13 @@ export function fakeLoaders(answers: {
   return { loaders: { projects, tree, file, raster, refresh }, projects, tree, file, raster, refresh };
 }
 
+/** A `file` loader that never answers but rejects with an AbortError when its signal aborts, as `fetch` does (opt-in:
+ *  `f.file.mockImplementationOnce(rejectsOnAbort)`; the default fakes ignore the signal). */
+export const rejectsOnAbort: DocsLoaders['file'] = (_project, _pin, signal) =>
+  new Promise<DocsFileAnswer>((_resolve, reject) => {
+    signal?.addEventListener('abort', () => { reject(new DOMException('The operation was aborted.', 'AbortError')); });
+  });
+
 /** The location a Docs URL parses to; throws on a URL that does not parse (a fixture defect). */
 export function pageAt(url: string): DocsPageLocation {
   const q = url.indexOf('?');

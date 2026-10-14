@@ -13,7 +13,7 @@ import { fileKey, pinFor, treeKey, useDocsVisit } from '../src/docs/useDocsVisit
 import type { DocsLoaders } from '../src/docs/failures';
 import {
   BLOB_1, BLOB_2, COMMIT_A, COMMIT_B, FP_1, SERVED, draftOf, entry, failedAnswer, fakeLoaders, holder, okFile, okTree,
-  pageAt, recordingRejections, treeOk,
+  pageAt, recordingRejections, rejectsOnAbort, treeOk,
 } from './docsFixtures';
 
 afterEach(() => {
@@ -713,5 +713,74 @@ describe('Review 439 F5: a file slot that answered 401 reads again when sign-in 
     await flush();
     expect(f.file).toHaveBeenCalledTimes(2);
     expect(result.current.file.s).toBe('ok');
+  });
+});
+
+describe('Review 439 F22: three visit guards a test now reds', () => {
+  it('a re-list that failed while a listing was held reads idle again after the next good GET', async () => {
+    const f = fakeLoaders();
+    f.tree.mockResolvedValueOnce(okTree());
+    f.tree.mockResolvedValueOnce(failedAnswer('git-failed'));
+    const { result } = visit(f.loaders, '/docs/demo');
+    await flush();
+    act(() => result.current.retryTree());
+    await flush();
+    expect(result.current.freshness.s).toBe('relist-failed');
+    expect(result.current.tree?.s).toBe('ok');
+    act(() => result.current.retryTree());
+    await flush();
+    expect(f.tree).toHaveBeenCalledTimes(3);
+    expect(result.current.freshness).toEqual({ s: 'idle' });
+  });
+
+  it('a read aborted by a cleanup that rejects as fetch does is swallowed: no failure slot, no console error, no rejection', async () => {
+    const f = fakeLoaders();
+    f.file.mockImplementationOnce(rejectsOnAbort);
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    let mode: 'visible' | 'hidden' = 'visible';
+    const wrapper = ({ children }: { children: ReactNode }) => <Activity mode={mode}>{children}</Activity>;
+    const props = { page: pageAt('/docs/demo/specs/a.md') as DocsPageLocation | null };
+    const { rerender, result } = renderHook((p: { page: DocsPageLocation | null }) => useDocsVisit(p.page, f.loaders), {
+      initialProps: props, wrapper,
+    });
+    await flush();
+    expect(f.file).toHaveBeenCalledTimes(1);
+    const seen = await recordingRejections(async () => {
+      mode = 'hidden';
+      rerender(props);
+      await flush();
+    });
+    expect(f.file.mock.calls[0]?.[2]?.aborted).toBe(true);
+    expect(seen).toEqual([]);
+    mode = 'visible';
+    rerender(props);
+    await flush();
+    expect(f.file).toHaveBeenCalledTimes(2);
+    expect(result.current.file.s).toBe('ok');
+    expect(logged).not.toHaveBeenCalled();
+    logged.mockRestore();
+  });
+
+  it('Retry on a leaf that is ok starts no read', async () => {
+    const f = fakeLoaders();
+    const { result } = visit(f.loaders, '/docs/demo/specs/a.md');
+    await flush();
+    expect(result.current.file.s).toBe('ok');
+    act(() => result.current.retryFile());
+    await flush();
+    expect(f.file).toHaveBeenCalledTimes(1);
+    expect(result.current.file.s).toBe('ok');
+  });
+
+  it('Retry on a leaf that is still loading starts no second read', async () => {
+    const f = fakeLoaders();
+    f.file.mockImplementationOnce(() => new Promise(() => {}));
+    const { result } = visit(f.loaders, '/docs/demo/specs/a.md');
+    await flush();
+    expect(result.current.file.s).toBe('loading');
+    act(() => result.current.retryFile());
+    await flush();
+    expect(f.file).toHaveBeenCalledTimes(1);
+    expect(result.current.file.s).toBe('loading');
   });
 });
