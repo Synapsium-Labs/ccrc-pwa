@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=58af71117c4ab2b7f0b816976fe1d5d24ec7b84f461c8a33e46810118c21048a
+# ccrc:generated 1 sha256=575fb456e2ad946042f115e2ab41a72fab3f98c1ca5a2fd375cdc7fe59820058
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -31052,6 +31052,10 @@ cmd_ws_reclaim() {   # ccd ws-reclaim --expect <token> --child-of <runId> --sess
   local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 defer=0 args=()
   while (( $# )); do
     case "$1" in
+      # THE IDENTITY PAIRS ARE TAKEN WHOLE (path-identity spec §2.4). A key and its value go to `args` together, so a
+      # value is never scanned again as a flag: an id of `--actor` no longer eats `--surface` and leaves the surface
+      # word to bind as the id. A key with no value goes alone, and the exact-arity rule below refuses it, as it did.
+      --expect|--child-of|--session) if (( $# >= 2 )); then args+=("$1" "$2"); shift 2; else args+=("$1"); shift; fi ;;
       --defer-expired) defer=1; shift ;;
       --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-reclaim --expect <token> --child-of <runId> --session <id> [--defer-expired] [--surface <word>] [--actor <text>] [--reason <text>]"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
@@ -31080,13 +31084,15 @@ cmd_ws_reclaim() {   # ccd ws-reclaim --expect <token> --child-of <runId> --sess
   local token=$2 childof=$4 id=$6
   # THE SESSION ID IS VALIDATED FIRST (spec §5.9). The two checks after it
   # journal their refusal against `$id`, so `$id` must already be a registry-safe
-  # charset (no `/`). Seven dies stay unjournaled, each for its reason:
+  # charset (no `/`) that spells no flag: `_reg_id_ok` refuses a leading `-`
+  # (path-identity spec §2.4), so an id of `--expect` never reaches the reap lock.
+  # Seven dies stay unjournaled, each for its reason:
   #   - the usage die and the four --actor/--reason checks above, because no
   #     id is bound yet;
   #   - a malformed session id, because it is no id to journal against;
   #   - the python3 probe below, which cannot journal at all, because the
   #     journal's encoder (`_lc_json`) is python3.
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]]         || die "bad session id"
+  _reg_id_ok "$id"                       || die "bad session id"
   [[ $token =~ ^[0-9a-f]{64}$ ]]         || _lc_refuse reclaim "$id" token-malformed "bad token"
   # wave 1's grammar, ASCII under LC_ALL=C
   _child_runid_valid "$childof"          || _lc_refuse reclaim "$id" run-id-malformed "bad run id"
@@ -31886,6 +31892,9 @@ cmd_ws_expire() {   # ccd ws-expire --expect <token> --session <id> [--surface <
   local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 args=()
   while (( $# )); do
     case "$1" in
+      # THE IDENTITY PAIRS ARE TAKEN WHOLE, as in ws-reclaim's loop (path-identity spec §2.4): a key and its value go
+      # to `args` together, and a key with no value goes alone, for the exact-arity rule below to refuse.
+      --expect|--session) if (( $# >= 2 )); then args+=("$1" "$2"); shift 2; else args+=("$1"); shift; fi ;;
       --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-expire --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
@@ -31913,7 +31922,8 @@ cmd_ws_expire() {   # ccd ws-expire --expect <token> --session <id> [--surface <
     || die "usage: ccd ws-expire --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"
   local token=$2 id=$4
   [[ $token =~ ^[0-9a-f]{64}$ ]]         || die "bad token"
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]]         || die "bad session id"
+  # NO FLAG SPELLING BINDS: `_reg_id_ok` refuses a leading `-` (path-identity spec §2.4), before the reap lock.
+  _reg_id_ok "$id"                       || die "bad session id"
   _json_str probe >/dev/null 2>&1 \
     || die "python3 unavailable — cannot quote the expiry record safely"
   # THE FLAVOUR, for this call and everything it reaches (THE FLAVOUR, RECLAIM region).
@@ -34078,6 +34088,9 @@ cmd_ws_collect() {   # ccd ws-collect --expect <token> --session <id> [--surface
   local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 args=()
   while (( $# )); do
     case "$1" in
+      # THE IDENTITY PAIRS ARE TAKEN WHOLE, as in ws-reclaim's loop (path-identity spec §2.4): a key and its value go
+      # to `args` together, and a key with no value goes alone, for the exact-arity rule below to refuse.
+      --expect|--session) if (( $# >= 2 )); then args+=("$1" "$2"); shift 2; else args+=("$1"); shift; fi ;;
       --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-collect --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
@@ -34105,7 +34118,8 @@ cmd_ws_collect() {   # ccd ws-collect --expect <token> --session <id> [--surface
     || die "usage: ccd ws-collect --expect <token> --session <id> [--surface <word>] [--actor <text>] [--reason <text>]"
   local token=$2 id=$4
   [[ $token =~ ^[0-9a-f]{64}$ ]]                            || die "bad token"
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] && _ws_tmproot_id_ok "$id" || die "bad session id"
+  # NO FLAG SPELLING BINDS (`_reg_id_ok`, path-identity spec §2.4), and no dot-leading name (`_ws_tmproot_id_ok`).
+  _reg_id_ok "$id" && _ws_tmproot_id_ok "$id"               || die "bad session id"
   _json_str probe >/dev/null 2>&1 \
     || die "python3 unavailable — cannot quote the collection record safely"
   # THE FLAVOUR `_ws_reclaim_fail` journals under (act `collect`, verb
