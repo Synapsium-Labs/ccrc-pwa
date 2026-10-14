@@ -43,7 +43,7 @@ function FailureContext(p: { readonly answer: DocsNotOk; readonly suggestHref?: 
       parts.push(
         <ul key="tried" className="docs-fail-list">
           {body.tried.map((t, i) => (
-            <li key={i}><code>{t.ref}</code> {TRIED_RESULT_TEXT[t.result] ?? t.result}</li>
+            <li key={i}><code>{t.ref}</code> {Object.hasOwn(TRIED_RESULT_TEXT, t.result) ? TRIED_RESULT_TEXT[t.result] : t.result}</li>
           ))}
         </ul>,
       );

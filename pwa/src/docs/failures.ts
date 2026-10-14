@@ -6,7 +6,8 @@
 // A loader NEVER rejects for a docs word or a server answer: a word is `{s: 'failed', body}` (an unknown word from a
 // newer server kept whole), and everything else that is not a page is one of the client slots below. It rejects in
 // exactly two cases, both the caller's own: an abort (the caller's signal) and a defect (anything that is neither a
-// server answer nor a network failure, rethrown as is rather than dressed up as a slot).
+// server answer nor a `TypeError`, rethrown as is). A `TypeError` anywhere in the read counts as `unreachable`, a
+// defect's included: the classifier cannot tell a network failure's `TypeError` from a bug's.
 import {
   DOCS_FAILURE_RETRY, DOCS_FAILURES, DOCS_RASTER_EXT, DOCS_RASTER_TYPES, contentClass, sniffRaster,
   type DocPin, type DocsFailure, type DocsFailureBody, type DocsFileResponse, type DocsProjectsResponse,
@@ -17,10 +18,12 @@ import type { ApiError } from '../lib/api';
 
 /** What a loader answers when the server did not answer a page or a docs word (spec 4.3, 4.7):
  *  - `auth`: a 401; `request` has already raised the login overlay when the body named a verdict.
- *  - `unreachable`: `fetch` rejected (offline, DNS, a dropped connection), or the body could not be read.
+ *  - `unreachable`: `fetch` rejected (offline, DNS, a dropped connection), or a 2xx body could not be read. A
+ *    non-2xx body that cannot be read is not this: `request` folds it to '' and throws an `ApiError`, so it arrives
+ *    as `unexpected-response`.
  *  - `no-docs-route`: a pre-Docs server, a 404 whose body is `{error: 'not-found'}` with no `failure` (spec 7.1).
  *  - `unexpected-response`: any other answer that is not a docs envelope. `contentType` is the response's
- *    `content-type` header as sent, and `''` has ONE meaning: the response carried no such header. */
+ *    `content-type` header as sent, and `''` means it was absent or empty. */
 export type DocsClientSlot =
   | { s: 'auth' }
   | { s: 'unreachable' }

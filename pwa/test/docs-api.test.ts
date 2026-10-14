@@ -198,6 +198,38 @@ describe('api.docs: every answer that is not a page is a union arm, never an exc
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
   });
 
+  it('an abort while a non-2xx body is being read rejects with the AbortError, never a slot (file and raster)', async () => {
+    // The body stream errors with an AbortError once the caller's signal aborts: `request` folds an unreadable error
+    // body to '' and throws ApiError, so only the signal tells the abort apart.
+    const stalled = (init: RequestInit): Response => {
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          init.signal?.addEventListener('abort', () => c.error(new DOMException('The operation was aborted.', 'AbortError')));
+        },
+      });
+      return new Response(body, { status: 503, headers: { 'content-type': 'text/plain' } });
+    };
+    for (const call of ['file', 'raster'] as const) {
+      const { api } = apiOver(async (_url, init) => stalled(init));
+      const controller = new AbortController();
+      const pending = call === 'file'
+        ? api.docs.file('demo', committed('a.md'), controller.signal)
+        : api.docs.raster('demo', committed('i.png'), controller.signal);
+      const settled = pending.then((v) => ({ v }), (e: unknown) => ({ e }));
+      await new Promise((r) => setTimeout(r, 0));
+      controller.abort();
+      const outcome = await settled;
+      expect(outcome, call).toHaveProperty('e');
+      expect((outcome as { e: { name: string } }).e.name, call).toBe('AbortError');
+    }
+  });
+
+  it('a 401 whose body names a docs word is that word: a docs word beats every status', async () => {
+    const body = { ok: false, failure: 'foreign-request' };
+    const { api } = apiOver(async () => jsonResponse(401, body));
+    expect(await api.docs.tree('demo', null)).toEqual({ s: 'failed', body });
+  });
+
   it('a non-2xx records its content type on ApiError (null when the header is absent); nothing else about ApiError changes', async () => {
     const typed = createApi((async () => new Response('x', { status: 500, headers: { 'content-type': 'text/plain' } })) as typeof fetch);
     const err = await typed.updates().then(() => null, (e: unknown) => e);

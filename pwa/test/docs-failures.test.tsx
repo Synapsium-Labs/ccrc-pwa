@@ -228,6 +228,11 @@ describe('DocsFailureView: the context each word renders (spec 4.7)', () => {
     expect(onFetch).toHaveBeenCalledTimes(1);
   });
 
+  it("a tried result that is an Object.prototype key renders as the literal word, never a function", () => {
+    render(<DocsFailureView answer={failed('unresolved-ref', { tried: [{ ref: 'refs/heads/x', result: 'constructor' }] })} />);
+    expect(screen.getByText('refs/heads/x').closest('li')).toHaveTextContent('refs/heads/x constructor');
+  });
+
   it('with no suggestHref the suggestion is text, not a link; with no handler there is no Fetch from origin', () => {
     render(<DocsFailureView answer={failed('unresolved-ref', { suggest: 'main' })} />);
     expect(screen.getByText('main').tagName).toBe('CODE');

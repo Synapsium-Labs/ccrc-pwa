@@ -23,7 +23,8 @@ export class ApiError extends Error {
   readonly status: number;
   readonly body: unknown;
   /** The response's `content-type` header; `null` has one meaning: the response carried none (Docs W5, spec 4.3:
-   *  the docs client's `unexpected-response` names it). Absent from the constructor's arguments, also `null`. */
+   *  the docs client's `unexpected-response` names it). A header that is present but empty is `''`, which the docs
+   *  client folds with `null` as "absent or empty". Absent from the constructor's arguments, also `null`. */
   readonly contentType: string | null;
 
   constructor(status: number, body: unknown, contentType: string | null = null) {
@@ -1195,6 +1196,8 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         try {
           return await readDocsEnvelope<T>(await request(path, init), fields);
         } catch (err) {
+          // `request` folds an unreadable error body to '' and throws ApiError, so an abort mid-body arrives as one.
+          if (init.signal?.aborted) throw init.signal.reason;
           return docsAnswerFromError(err);
         }
       };
@@ -1213,6 +1216,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
             try {
               return await readDocsRaster(await request(docsApi.file(project, pin), { headers: marker, signal }), declared);
             } catch (err) {
+              if (signal?.aborted) throw signal.reason;
               return docsAnswerFromError(err);
             }
           })();
