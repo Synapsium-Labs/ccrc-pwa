@@ -28,6 +28,7 @@ import {
   type StallConfirmRequired, type StallHeld, type StallLevel, type StallLevelChoice, type StallNoticeCount,
   type StallStage, type StallWatchEffective, type StallWatchRequest, type StallWatchView, type StallWriteEffect,
 } from '../../../shared/api';
+import { stallDurationText } from '../../../shared/stall-watch';
 import { QuickConfirm } from '../components/QuickConfirm';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
@@ -44,14 +45,10 @@ export function fillStallText(text: string, slots: Readonly<Record<string, strin
 }
 
 /** A span in hours and minutes, "30 min", "2 h", "1 h 30 min": every duration the section shows comes off the
- *  wire (the quiet bounds, step and built-in, the counts window) and is written by this one function. */
-export function quietText(ms: number): string {
-  const minutes = Math.round(ms / 60_000);
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  if (h === 0) return `${m} min`;
-  return m === 0 ? `${h} h` : `${h} h ${m} min`;
-}
+ *  wire (the quiet bounds, step and built-in, the counts window) and is written by L0's one formatter,
+ *  `stallDurationText` (`shared/stall-watch.ts`), which the server's feed body uses too. The name stays for the
+ *  section's callers and its tests. */
+export const quietText: (ms: number) => string = stallDurationText;
 
 /** One option of the quiet-time select: `default` (the built-in) or a value in milliseconds. */
 export interface StallQuietChoice { value: number | 'default'; label: string }
@@ -297,10 +294,10 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
   // Only the field moved, and `confirm` only as the key the server sent. Every answer is the server's: a reply
   // that reads is settled, a 2xx the guard cannot read was answered and may have landed (UNCONFIRMED_TEXT, the
   // shared "Saved — the answer could not be read" line, then a re-read), a 409 the guard reads opens the sheet, and
-  // any other refusal is toasted with the server's detail before a re-read. A rejection that never reached an
-  // answer (a network failure) may not even have left, so it gets its own line, STALL_CONFIRM_TEXT.unanswered
-  // (`unanswered-write-has-its-own-l0-line` (D-4043)), which never says "Saved" and never "Nothing was changed",
-  // then the same re-read.
+  // a refusal carrying one of the route's own codes is toasted with the server's detail before a re-read. Any other
+  // answer (a gateway's 502, a 500 after the store committed) confirms nothing: STALL_CONFIRM_TEXT.unconfirmed, with
+  // its detail (`an-answer-without-a-refusal-code-reads-unconfirmed` (D-4045)). No answer at all (a network failure)
+  // is STALL_CONFIRM_TEXT.unanswered (D-4043). Neither says "Saved" or "Nothing was changed"; both re-read.
   const write = (request: StallWatchRequest, confirm?: string): void => {
     setBusy(true);
     void api.setStallWatch(confirm === undefined ? request : { ...request, confirm })
@@ -320,8 +317,10 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
             setPending({ request, confirm: refusal.confirm });
             return;
           }
-          if (refusal.kind === 'unconfirmed') toast(STALL_CONFIRM_TEXT.unanswered);
-          else toast(fillStallText(STALL_CONFIRM_TEXT.refused, { detail: refusal.detail }), 'error');
+          if (refusal.kind === 'refused') {
+            toast(fillStallText(STALL_CONFIRM_TEXT.refused, { detail: refusal.detail }), 'error');
+          } else if (refusal.detail === null) toast(STALL_CONFIRM_TEXT.unanswered);
+          else toast(fillStallText(STALL_CONFIRM_TEXT.unconfirmed, { detail: refusal.detail }));
           reload();
         },
       )

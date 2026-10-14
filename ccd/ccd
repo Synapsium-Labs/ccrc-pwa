@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8b10073534a33a17e0b8d04c1f5c6aca8992b298266de9dfa219d3d1c37dba06
+# ccrc:generated 1 sha256=e58b79748e0b255816ed39e914a4de8d2f05386b0f07eff63dbe86bcc0c50124
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2701,7 +2701,7 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
   # past the server's own idea of the lease. Not this function's to fix —
   # NTP-typical skew is noise against the default 15-minute lease — but
   # nothing said so before this comment.
-  now=$(date +%s)
+  _now_s_to now   # D-4961: the clock seam — fork-free under bash 5 ($EPOCHSECONDS)
   (( now > 10#$lease )) && { echo stale; return 0; }
   # An account the document does not name is UNTAGGED, not unknown: the
   # document is complete by construction (the control plane always emits every
@@ -2920,7 +2920,7 @@ _session_probe() {   # id -> PROBE_VERDICT=live|gone|unknown, PROBE_DETAIL (unkn
   # its argv, so a test's `tmux() { … }` function stub would be invisible behind it — and a
   # stubbed substrate needs no deadline, it cannot wedge.
   local out rc
-  if [[ $(type -t tmux) == function ]]; then
+  if declare -F tmux >/dev/null; then
     out=$(tmux has-session -t "$(_tmux_t "$1")" 2>&1); rc=$?
   else
     out=$(_plat_timeout "$SUBSTRATE_PROBE_DEADLINE_S" tmux has-session -t "$(_tmux_t "$1")" 2>&1); rc=$?
@@ -17385,7 +17385,7 @@ _limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or "" whe
   [[ -f "$f" ]] || return 0
   val=$(_limit_json_num "$f" "$field")
   ts=$(_limit_json_num "$f" ts)
-  now=$(date +%s)
+  _now_s_to now   # D-4961: the clock seam — fork-free under bash 5 ($EPOCHSECONDS)
   if [[ "$maxage" -gt 0 && ( -z "$ts" || $((now - ts)) -gt "$maxage" ) ]]; then return 0; fi
   # A reading whose own window has already reset describes a window that ENDED.
   # resetAt comes straight from the API (statusline-command.sh), so this is fact,
@@ -18377,7 +18377,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # both still reports the older, more specific detector.
   _pane_limit_banner "$pane" && { _pane_carried_in "$id" banner "$pane" && return 1; HARD_BLOCK_VIA=banner; return 0; }
   grep -q "esc to interrupt" <<<"$pane" && return 1
-  now=$(date +%s); last=$(_reg_get "$id" stalepress)
+  _now_s_to now; last=$(_reg_get "$id" stalepress)   # D-4961: the clock seam
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$STALE_RESUME_GRACE" ]] && return 1
   scan=$(_reg_get "$id" tscan)
   scan_ts="${scan%% *}"; scan_verdict="${scan#* }"
@@ -18425,7 +18425,7 @@ _auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its ow
   _pane_limit_stale "$pane" || return 0
   echo "$pane" | grep -q "esc to interrupt" && return 0
   echo "$pane" | grep -q "❯" || return 0
-  now=$(date +%s); last=$(_reg_get "$id" stalepress)
+  _now_s_to now; last=$(_reg_get "$id" stalepress)   # D-4961: the clock seam
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$STALE_PRESS_COOLDOWN" ]] && return 0
   _reg_set "$id" stalepress "$now"
   if _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)"; then
@@ -18947,7 +18947,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # `_swap_refuse` reaches after DELETING `.lastswap`, so it is the only gate
   # holding for the whole `SWAPBLOCK_COOLDOWN`. Both clears and the pane gate's
   # deliberate silence are cases in `ccd-crosspool.test.ts` now.
-  now=$(date +%s); last=$(_reg_get "$id" lastswap)
+  _now_s_to now; last=$(_reg_get "$id" lastswap)   # D-4961: the clock seam
   if [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$SWAP_COOLDOWN" ]]; then
     [[ -z "$stuck" ]] && _tick_decided "$id"
     return 0
@@ -19218,7 +19218,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   echo "$pane" | grep -q "❯" || return 0                    # not at a prompt yet
   local spid sf st sua
   spid=$(tmux list-panes -t "$(_tmux_t "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
-  sf="$(_cfg_dir "$wrapper")/sessions/$spid.json"
+  _cfg_dir_to sf "$wrapper"; sf="$sf/sessions/$spid.json"   # tick-diet spec §6.2: memoised per wrapper — an exact memo, no D-number (Task 5)
   # `-f` BEFORE THE GREP, for `_authdead`'s reason (#69 review round 3, R2):
   # `grep FILE` opens by name and blocks for ever on a FIFO with no writer or on
   # an unbounded character device, inside the 5-second tick. MEASURED on the
@@ -19808,7 +19808,7 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
   # body that carries the phrase, which is also what `ccd-reader-standdown.test.ts`'s
   # POPULATION census requires: a phrase-carrying function guards itself.
   _pane_measurable "$id" || { KS_WHY=pane-narrow; KS_DETAIL="pane is under ${READER_MIN_COLS} cols; a wrapped phrase reads as idle (§6.3)"; return 1; }
-  now=$(date +%s)
+  _now_s_to now   # D-4961: the clock seam — fork-free under bash 5 ($EPOCHSECONDS)
   # Clean idle turn boundary — same discipline as the swap soft-path (never mid-turn/subagent).
   echo "$pane" | grep -q "esc to interrupt" && { KS_WHY=mid-turn; KS_DETAIL="$ctxnote"; return 1; }
   echo "$pane" | grep -q "❯" || { KS_WHY=no-prompt; KS_DETAIL="$ctxnote"; return 1; }
@@ -19823,7 +19823,7 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
   # those means GO LOOK AT THE BOX; `status=busy` means WAIT. So each gets its own slug, and the
   # detail carries the path/status that says which flavour it is.
   [[ -n "$spid" ]] || { KS_WHY=no-pane-pid; KS_DETAIL="tmux list-panes named no pane pid${ctxnote:+, $ctxnote}"; return 1; }
-  sf="$(_cfg_dir "$wrapper")/sessions/$spid.json"
+  _cfg_dir_to sf "$wrapper"; sf="$sf/sessions/$spid.json"   # tick-diet spec §6.2: memoised per wrapper — an exact memo, no D-number (Task 5)
   # `-f` BEFORE THE GREP — same rung and same reason as `_auto_swap_check`'s
   # copy above, but NOT the same arm, and the difference is the whole point.
   # That lane has two answers here (idle / not) and folds every failure into a
@@ -19899,7 +19899,7 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # earlier than the read that used to be the first place it could be said.
   [[ -f "$AUTOCOMPACT_DISABLE_FILE" ]] && return 0
   local id="$1" now last lastswap fromswap=0 pane pct thr wrapper t
-  now=$(date +%s)
+  _now_s_to now   # D-4961: the clock seam — fork-free under bash 5 ($EPOCHSECONDS)
   last=$(_reg_get "$id" lastcompact)
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$COMPACT_COOLDOWN" ]] && return 0
   # D-2014 — MEASURE the landing compaction; do not assert it. This line used to `return 0`
@@ -24289,6 +24289,47 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
   echo "ensured $id ($mode)"
 }
 
+# ── THE TICK DIET (#387) — fork-free cores for the supervise tick ──────────────
+# spec: docs/superpowers/specs/2026-10-13-supervisor-tick-diet-design.md §6.1–§6.4.
+# tick-diet spec §6.1 rules 1-4 and the out-var rule:
+#  1. Same names, same contracts: every converted helper keeps its stdout and rc as a
+#     one-line wrapper; the `_<name>_to` out-var form carries the fork-free core.
+#  2. Stubbed predicates stay called by name: `_avail`, `_class_gate`, `_swap_target`,
+#     `_session_hard_blocked`, `_pane_for_keystroke` and `_pane_measurable` keep their
+#     call sites; a call site moves to an out-var only when no stub intercepts the read.
+#  3. A fast path answers only on its provable domain; everything else runs the legacy
+#     code unchanged.
+#  4. The tick memo decides; it never authorizes — every read an action already makes
+#     for itself stays direct.
+#  Out-var rule: a form's own locals are `__<abbr>_`; no caller passes an out-var name
+#  that is a local of the form it calls.
+# D-4960: prime `_plat_timeout`'s `-k` cache once in the supervisor's own shell (Task 3).
+# D-4961: the clock seam — `_now_s_to` / `_now_s` (Task 4, this block).
+# `_cfg_dir_to` (Task 5): an exact per-wrapper memo of `_cfg_dir`; it needs no number (spec §6.2).
+# D-4962: limits JSON parsed with builtins on a stated domain (W2).
+# D-4963: registry reads with builtins; the route chain through out-vars (W3).
+
+# D-4961 (tick-diet spec §6.2): var -> var = epoch seconds. `$EPOCHSECONDS` when the
+# shell has it and no `date` FUNCTION is defined (11 test files stub `date` as a
+# function; `printf '%(%s)T'` would bypass them), else `date +%s`. The `! declare -F
+# date` guard is the seam: it makes `_now_s_to` call the stub the eleven suites plant,
+# and take the fork-free `$EPOCHSECONDS` path only in production (bash 5.x, no stub).
+_now_s_to() {   # var -> var = epoch seconds (D-4961; see the paragraph above)
+  if [[ -n "${EPOCHSECONDS:-}" ]] && ! declare -F date >/dev/null; then
+    printf -v "$1" '%s' "$EPOCHSECONDS"
+  else
+    printf -v "$1" '%s' "$(date +%s)"
+  fi
+}
+_now_s() { local __ns_v; _now_s_to __ns_v; printf '%s' "$__ns_v"; }   # the printing form
+
+declare -gA _CCD_CFG_DIR_MEMO=()   # -g: a global even when ccd is sourced inside a function
+_cfg_dir_to() {   # var wrapper -> var = `_cfg_dir wrapper`, memoised per wrapper for this process's life (the roster is sourced once)
+  [[ -n "${2-}" ]] || { printf -v "$1" '%s' "$(_cfg_dir '')"; return 0; }   # an empty key is no memo key
+  [[ -n "${_CCD_CFG_DIR_MEMO[$2]+x}" ]] || _CCD_CFG_DIR_MEMO[$2]=$(_cfg_dir "$2")
+  printf -v "$1" '%s' "${_CCD_CFG_DIR_MEMO[$2]}"
+}
+
 cmd_supervise() {   # systemd ExecStart: ensure then block until the session dies
   local id="${1:?usage: ccd supervise <id>}"
   # ── THE START LIMIT, ON A MANAGER THAT HAS NONE ────────────────────────
@@ -24422,6 +24463,11 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
     [[ "$PROBE_VERDICT" == live ]] || _ci_held_wait "$id"
     cmd_ensure "$id"
   fi
+  # D-4960: `_plat_timeout` caches whether `timeout -k` works, but the tick's probe calls it inside `$( )`, so the
+  # cache died with that subshell and every tick re-ran the probe (3 forks). Prime it ONCE, here, in this shell.
+  if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
+    _plat_timeout 5 true >/dev/null 2>&1 || :
+  fi
   # Re-stamped every 30s from the 5-second tick this loop already runs, so the
   # 120-second freshness window never expires under a live supervisor.
   #
@@ -24446,9 +24492,10 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
   # a second route, and the remedy is the same one stated honestly: measure the
   # seconds instead of assuming them. The worst gap is then 30s plus one tick's
   # own duration.
-  local beat=0 unknown_run=0 tick=5 t0 spent
+  local beat=0 unknown_run=0 tick=5 t0 spent hb
+  local CCD_TICK_CTX=1   # the tick context: dynamically scoped like CCD_IN_UNIT, never exported, never argv; cmd_ensure never sees it (spec §6.2)
   while :; do
-    t0=$(date +%s)
+    _now_s_to t0   # D-4961: the clock seam — fork-free under bash 5 ($EPOCHSECONDS)
     _session_probe "$id"
     case "$PROBE_VERDICT" in
       gone) break ;;   # the ONLY exit — a session tmux itself pronounced dead (D-310)
@@ -24456,9 +24503,9 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
         [[ -e "$REG/$id.substrate" ]] && _substrate_clear "$id"
         unknown_run=0; tick=5
         _sync_uuid "$id"; _auto_stale_check "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"; _route_apply_check "$id"
-        spent=$(date +%s); spent=$((spent - t0)); (( spent < 0 )) && spent=0   # a backwards clock is not negative work
+        _now_s_to spent; spent=$((spent - t0)); (( spent < 0 )) && spent=0   # a backwards clock is not negative work (D-4961)
         beat=$((beat + tick + spent))
-        (( beat >= 30 )) && { _reg_set "$id" supervised "$(date +%s)"; beat=0; }
+        (( beat >= 30 )) && { _now_s_to hb; _reg_set "$id" supervised "$hb"; beat=0; }   # D-4961: the clock seam
         ;;
       unknown)
         # Not death — refusal to guess (spec §1). Mark, keep the heartbeat honest EVERY
@@ -30801,10 +30848,10 @@ _ws_reclaim_residue() {   # workdir -> bytes under the harness's path-keyed temp
 # the row and its `.reaping` file. '' prints NO key: a reader takes
 # that absence as unmeasured, never as either value. Set by `_ws_reclaim_locked`
 # and by the shared tail; `cmd_ws_collect` shadows it to '' with `local` (a
-# collection has no breadcrumb). So `ws-expire`'s own pre-breadcrumb documents,
-# its resumed arm's `probe-unmeasured` (printed while its `expire:` breadcrumb
-# stands), and every `ws-collect` document, carry no key. Assigned here, when
-# ccd is read, so an exported value can never reach a document.
+# collection has no breadcrumb). `_ws_expire_locked` sets it too (wave 6):
+# `true` on its resumed arm, '' over a breadcrumb that stands but cannot be
+# read, `false` on its fresh arm. Assigned here, when ccd is read, so an
+# exported value can never reach a document.
 _WS_RCL_CRUMB=''
 _ws_reclaim_failed_json() {   # token detail -> the post-start failure document on stdout, with
   #                                `"crumb":true|false` only when _WS_RCL_CRUMB says one
@@ -33368,6 +33415,15 @@ _ws_expire_locked() {   # token id surface actor reason — everything the share
   [[ "$surface" == none ]] || declared="$surface"
   _ws_expire_fork "$id"
   phase="$RECLAIM_RESUME_PHASE"; resumed="$phase"
+  # `crumb` (CCR-15 spec §5.6), said as ws-reclaim says it (workspace lifecycle
+  # wave 6, question (k)): a resumed arm's breadcrumb already stands (`true`),
+  # so its `probe-unmeasured` below is printed past it and the server reads it
+  # resumable; a fresh arm's is not written yet (`false`: nothing started, so a
+  # retry audits afresh) until the tail, which says `true` once it is; a
+  # breadcrumb that stands but could not be read leaves it unsaid.
+  if [[ -n "$phase" ]]; then _WS_RCL_CRUMB=true
+  elif [[ -e "$REG/$id.reaping" || -L "$REG/$id.reaping" ]]; then _WS_RCL_CRUMB=''
+  else _WS_RCL_CRUMB=false; fi
   # The consent IS the fingerprint, recomputed HERE, inside the lock.
   if [[ "$REAP_VERDICT" == expirable && "$token" != "$REAP_TOKEN" ]]; then
     _reap_refuse state-changed "expected $REAP_TOKEN, was given $token — $id changed since the audit that minted the token" || :
@@ -33417,6 +33473,11 @@ _ws_expire_locked() {   # token id surface actor reason — everything the share
     # the breadcrumb, and the server reads the word so: it starts over from a
     # fresh audit (`archivedExpiry.ts`). A branch already absent when the token
     # was minted reads absent twice and goes on, its work kept in the attic.
+    # THE ATTACHED HEAD (review 355, F2; wave 6): with HEAD symbolic to the
+    # branch, as in every real workspace, a branch DELETED in the window never
+    # reaches this check — the pin above refuses it first (`pin-failed`: HEAD
+    # names no commit), also before the breadcrumb. Only a HEAD detached, on
+    # another branch, or gone with its worktree meets the deleted direction here.
     if [[ "$RECLAIM_BRANCHSTATE" != "$lbstate" ]]; then
       _ws_reclaim_fail "$id" "$lctx" state-changed \
         "$REAP_BRANCH read $lbstate when the token was checked inside the lock, but $RECLAIM_BRANCHSTATE when the pin read it again — it changed in between, so nothing was destroyed"
@@ -33625,8 +33686,9 @@ _ws_expire_return_gap() { :; }
 # the spawn gate — one ccd inode, one token. (`ws-reclaim` meets an `expire:`
 # breadcrumb only on a row that carries a child marker, which this verb
 # refuses to touch; its fork answers it `reap-in-progress`, unchanged.) The server composes the destructive verb ONLY behind
-# `capSupported(state, 'expire-v1')`, which refuses on no evidence; wave 3b
-# composes it, this wave ships it inert.
+# `capSupported(state, 'expire-v1')`, which refuses on no evidence; its expiry
+# lane (workspace lifecycle wave 3b) composes it already, SHADOWED until the
+# `expire-lane-live` marker exists.
 # ── end archived-workspace expiry ───────────────────────────────────────────── EXPIRE-END ──
 
 # ── temp-root collection: ws-collect (spec 2026-09-22 §5.2, §5.10) ────────────── COLLECT-BEGIN ──
