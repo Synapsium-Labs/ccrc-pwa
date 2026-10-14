@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=03cfdbdacdcf325973c53108d3604fc3a931f24597a1e33bded61cc43adc280a
+# ccrc:generated 1 sha256=cf85ae88b833ab4d442daf26fdafba708f9780d3899b178cc061f2b2666c0141
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -21057,8 +21057,8 @@ _child_tmpdir() {   # id -> rc 0 + path on stdout | 1 not a child | 2 child, lea
 # THE ID is the registry's own shape and never dot-leading: `.` and `..` would name the spool root or the registry itself,
 # and a dot-leading name is one the hook refuses to write for. Mode is set with `chmod -- 0700 <dir>` (the operand last
 # after `--`, D-3510), so a directory an older ccd or an operator widened is private again at the next spawn.
-# NOTHING PURGES IT: the spool is evidence the server may not have read yet, and it outlives the row the way `tmproots/` does;
-# the hook prunes its own buckets after 24 hours (an id's directory itself is not reclaimed in this wave).
+# NOTHING PURGES IT in this wave: the hook prunes only a LIVE owner's own buckets (at its next write), so a removed owner, or one whose
+# session never runs again, keeps its last 24 to 25 hourly buckets and this directory for good; the spool is evidence the server may not have read yet.
 _delegation_spool_dir() {   # id -> 0 the owner's directory stands, private | 1 not made (warned, or refused for the id): a failure never fails a spawn
   local LC_ALL=C id="${1-}" base="$REG/delegation" d
   [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 1

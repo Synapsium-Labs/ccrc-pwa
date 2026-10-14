@@ -10168,9 +10168,11 @@ describe('exact-pane hook ownership: the session name is asked of $TMUX_PANE, ne
   const otherState = (): string => path.join(reg(), 'other-hookcap.hookstate.json');
   const captureRoot = (): string => path.join(home, '.ccrc', 'hook-capture');
   const spoolRoot = (): string => path.join(reg(), 'delegation');
-  /** A valid delegation event: with its pane attributed to a session that has a spool directory and a generation, it WOULD write a
-   *  line there, so "no line" below measures the attribution and not a payload the spool would have refused anyway. */
+  /** An ordinary prompt: it writes a hookstate for the session it is attributed to, and no spool line (it is not a delegation event). */
   const EVENT = { hook_event_name: 'UserPromptSubmit' };
+  /** A valid delegation event: with its pane attributed to a session that has a spool directory and a generation, it WOULD write a
+   *  line there, so "no line" below measures the attribution and not a payload the spool would have refused anyway. Every row that
+   *  claims "no delegation spool" sends it as well as `EVENT`. */
   const SESSION_END = { hook_event_name: 'SessionEnd', session_id: 'uuid-1', reason: 'clear' };
   /** BOTH sessions' spool directories exist, each with the row's generation, so a mis-attributed SessionEnd has somewhere valid to land
    *  (delegation broker wave 3, carried minor of Task 1: this check could not fail while the directories did not exist). */
@@ -10275,16 +10277,18 @@ describe('exact-pane hook ownership: the session name is asked of $TMUX_PANE, ne
 
     it('a targeted lookup that FAILS attributes nothing: exit 0, no hookstate, no capture, no delegation spool', () => {
       plantTmux('echo "can\'t find pane" >&2; exit 1');
-      expect(runFull(EVENT, { TMUX_PANE: '%7' })).toEqual({ stdout: '', stderr: '' });
+      for (const event of [EVENT, SESSION_END]) expect(runFull(event, { TMUX_PANE: '%7' }), event.hook_event_name).toEqual({ stdout: '', stderr: '' });
       wroteNothing();
     });
 
     it('a targeted lookup that NEVER ANSWERS costs the bound and attributes nothing', () => {
       plantTmux('sleep 30');
-      const t0 = Date.now();
-      expect(runFull(EVENT, { TMUX_PANE: '%7' })).toEqual({ stdout: '', stderr: '' });
-      const ms = Date.now() - t0;
-      expect(ms, `the hook took ${ms}ms — the bound did not fire`).toBeLessThan(10_000);
+      for (const event of [EVENT, SESSION_END]) {
+        const t0 = Date.now();
+        expect(runFull(event, { TMUX_PANE: '%7' }), event.hook_event_name).toEqual({ stdout: '', stderr: '' });
+        const ms = Date.now() - t0;
+        expect(ms, `${event.hook_event_name}: the hook took ${ms}ms — the bound did not fire`).toBeLessThan(10_000);
+      }
       wroteNothing();
     });
 
@@ -10292,6 +10296,10 @@ describe('exact-pane hook ownership: the session name is asked of $TMUX_PANE, ne
       plantTmux(`echo "${OWNER}"; exit 0`);
       runFull(EVENT, { TMUX_PANE: '%7' });
       expect(readState().state).toBe('working');
+      // And it is the SESSION_END that makes the rows above able to fail: attributed, it writes its line into the owner's spool.
+      runFull(SESSION_END, { TMUX_PANE: '%7' });
+      const dir = path.join(spoolRoot(), 'spool', 'demo-quiet-basin');
+      expect(fs.readdirSync(dir).filter((f) => f.endsWith('.spool')), 'attributed, a SessionEnd writes a bucket').toHaveLength(1);
     });
   });
 });
@@ -10301,8 +10309,11 @@ describe('exact-pane hook ownership: the session name is asked of $TMUX_PANE, ne
 // The turn marker treated ANY non-empty `agent_id` as a subagent's event. The captured real-lane payloads
 // (`fixtures/delegation/<version>/*.json`) say what an id means: every tool event that carries one comes after a
 // SubagentStart naming it, no main-thread event (Stop, StopFailure, PostCompact, PreCompact, SessionStart,
-// SessionEnd, UserPromptSubmit) carries one in any of the 140 captured scenarios, and the only SubagentStop with no
-// Start is the unpaired one around /compact (empty agent_type). The marker therefore trusts an id only once a
+// SessionEnd, UserPromptSubmit) carries one in any of the 196 captured scenarios (14 versions, 2.1.280 to 2.1.299; 193
+// measured, and the 3 `interrupt-exit` cells of 2.1.295, 2.1.296 and 2.1.299 unmeasured), and the only SubagentStop with no
+// Start is the unpaired kind: empty agent_type, an agent id no SubagentStart ever named. It is the one around /compact in
+// every version's `clear-compact-resume` (14 measured cells); the three unmeasured `interrupt-exit` cells above also carry one
+// (empty agent_type, a foreign id), which nothing here relies on. The marker therefore trusts an id only once a
 // SubagentStart has named it in THIS owner's join file (`<id>.joined`); the same payloads with their SubagentStarts
 // taken out are the measured "agent_id alone" lane (amendment `tool-agent-id-alone-is-unjoined-evidence`), and there
 // the parent's own tool call must be recorded. SessionStart and SessionEnd are left out of the replay: they carry no
@@ -10480,6 +10491,33 @@ describe('the delegation spool leaves the hook\'s other writers alone', () => {
     runFull({ hook_event_name: 'StopFailure', session_id: SID, error: 'server_error' });
     expect(spoolLines()).toEqual([]);
   });
+
+  // THE PRODUCTION CONFIGURATION'S COST (review of Task 5, Important 2). The p95 pin in 'the fleet gate and failure polarity' runs with NO
+  // spool directory and a payload with no `session_id` or `tool_use_id`, so the spool's jq text is never compiled there. Once ccd has
+  // made the directory (every session, at its next spawn) every Bash, Agent, Task, Workflow and session event compiles it: about
+  // 11 ms of jq CPU on top of the parse. This row is that pin's twin for the configuration the fleet will actually run, with the same
+  // 150 ms allowance, and it asserts the line was written so it cannot pass by never reaching the spool. It is its own `it` (the
+  // existing pin's lines are not edited); the helpers it needs are this file's module-level `run` and the describe's `spoolLines`.
+  it('p95 of 20 realistic Bash PostToolUse runs with the spool directory and generation present stays under the same 150 ms budget, and every run wrote its line', () => {
+    const times: number[] = [];
+    for (let i = 0; i < 20; i++) {
+      const payload = {
+        session_id: SID, transcript_path: `/rig/fixhome/cfg/projects/-rig-repo/${SID}.jsonl`, cwd: '/rig/repo', prompt_id: 'd9a6fd11-6f0f-41f3-8c1b-0932efbc04a6',
+        permission_mode: 'default', effort: { level: 'medium' }, hook_event_name: 'PostToolUse', tool_name: 'Bash',
+        tool_input: { command: 'git status --short', description: 'show the working tree state' },
+        tool_response: { stdout: ' M ccd/session-hook.sh\n', stderr: '', interrupted: false, isImage: false, noOutputExpected: false },
+        tool_use_id: `toolu_01Pin${String(i).padStart(2, '0')}AAAAAAAAAAAAAAAA`, duration_ms: 41,
+      };
+      const t0 = Date.now();
+      run(payload);
+      times.push(Date.now() - t0);
+    }
+    const lines = spoolLines();
+    expect(lines.map((l) => `${l.eventKind}:${l.toolName}`), 'every run reached the spool and wrote its line').toEqual(Array(20).fill('PostToolUse:Bash'));
+    expect(new Set(lines.map((l) => l.toolUseId)).size).toBe(20);
+    times.sort((a, b) => a - b);
+    expect(times[Math.floor(times.length * 0.95) - 1]).toBeLessThan(150);
+  }, 60000);
 });
 
 // ── The tmux question's BOUND (slice-0 carry) ──────────────────────────────

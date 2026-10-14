@@ -338,16 +338,19 @@ describe('the hook\'s literal bounds equal DELEGATION_SPOOL_BOUNDS', () => {
     expect(lit(/def maxpath: (\d+);/)).toBe(B.pathBytes);
   });
   it('the shell block\'s constants', () => {
-    expect(lit(/DSP_OWNER_BYTES=(\d+)/)).toBe(B.ownerIdBytes);
+    expect(lit(/CCRC_ID_MAX=(\d+)/), 'the owner bound is the hook\'s own id bound, not a second literal').toBe(B.ownerIdBytes);
+    expect(src, 'and the spool gate reads it by name').toMatch(/\$\{#id\} -le CCRC_ID_MAX &&/);
+    expect(src).not.toContain('DSP_OWNER_BYTES');
     expect(lit(/DSP_LINE_BELOW=(\d+)/)).toBe(B.lineBytesBelow);
     expect(lit(/DSP_LIST_NAMES=(\d+)/)).toBe(B.listingNames);
     expect(lit(/DSP_NAME_BYTES=(\d+)/)).toBe(B.listingNameBytes);
   });
   it('the prefilter that decides whether the spool\'s jq text is compiled names exactly the delegation tools and events (a necessary condition: no delegation payload can lack its own name)', async () => {
     const { DELEGATION_EVENT_KINDS } = await import('../../shared/api.js');
-    const m = src.match(/case "\$payload" in ((?:\*[A-Za-z-]+\*\|?)+)\)/);
+    const m = src.match(/case "\$payload" in ((?:\*'"[A-Za-z<>-]+"?'\*\|?)+)\)/);
     expect(m, 'the hook carries the prefilter').not.toBeNull();
-    const words = m![1]!.split('|').map((w) => w.replace(/\*/g, '')).sort();
+    // Each alternative is `*'"Word"'*` (a quoted JSON string value), except the notification, whose value only STARTS with the tag.
+    const words = m![1]!.split('|').map((w) => w.replace(/^\*'"/, '').replace(/"?'\*$/, '')).map((w) => (w === '<task-notification>' ? 'task-notification' : w)).sort();
     // A tool event is named by its tool (Pre/PostToolUse carry no other delegation word), a notification by its tag, the rest by
     // their own event name. The vocabulary decides the set, so a new kind in it reds this until the prefilter learns it.
     const viaTool = new Set(['PreToolUse', 'PostToolUse']);
@@ -770,9 +773,23 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
     });
   });
 
-  describe('captured payloads, replayed whole (2.1.280 and 2.1.292)', () => {
+  describe('captured payloads, replayed whole (every version in the corpus)', () => {
+    // EVERY version in `fixtures/delegation/` (14 at the time of writing, 2.1.280 to 2.1.299), read from the directory and not listed
+    // here, so a recapture adds its rows. A cell the matrix marks `unmeasured` is skipped, never relied on. Six scenarios per version
+    // cover each kind of line the hook writes: plain and isolated Agent, isolated and plain Workflow, a raw Bash worktree, and the
+    // /compact-and-/clear run (SessionStart sources, SessionEnd reasons, the unpaired SubagentStop). This is also the soundness
+    // check for the hook's payload prefilter: a delegation event the prefilter missed would be a line missing here.
     const SCENARIOS = ['agent-plain', 'agent-iso-bg', 'wf-iso', 'wf-plain', 'raw-worktree', 'clear-compact-resume'];
-    it.each(SCENARIOS.flatMap((s) => [['2.1.280', s], ['2.1.292', s]] as Array<[string, string]>))('%s %s: every delegation event is a valid line, in order, and the rest write none', (version, scenario) => {
+    const MATRIX = (JSON.parse(fs.readFileSync(path.join(FIXTURES, 'matrix.json'), 'utf8')) as { cells: Record<string, { status: string }> }).cells;
+    const VERSIONS = fs.readdirSync(FIXTURES).filter((v) => /^2\.1\.\d+$/.test(v)).sort();
+    const CELLS = VERSIONS.flatMap((v) => SCENARIOS.filter((s) => MATRIX[`${v}/${s}`]?.status === 'measured').map((s) => [v, s] as [string, string]));
+    it('the corpus has the versions and cells this replay is meant to cover', () => {
+      expect(VERSIONS.length).toBeGreaterThanOrEqual(14);
+      expect(VERSIONS).toContain('2.1.280');
+      expect(VERSIONS).toContain('2.1.299');
+      expect(CELLS.length, 'every one of the six scenarios is measured in every version').toBe(VERSIONS.length * SCENARIOS.length);
+    });
+    it.each(CELLS)('%s %s: every delegation event is a valid line, in order, and the rest write none', (version, scenario) => {
       const events = load(version, scenario).filter((e) => e.event !== 'PreCompact' && e.event !== 'PostCompact');   // the compaction arms are not this file's subject
       const kinds = new Set<string>(Object.keys(KINDS));
       const wantTool = (e: Captured): boolean => !(e.event === 'PreToolUse' || e.event === 'PostToolUse') || ['Agent', 'Task', 'Workflow', 'Bash'].includes(String(e.payload['tool_name']));
@@ -1385,6 +1402,40 @@ describe('the delegation spool: the hook appends evidence to a directory ccd mad
       hit('toolu_01');
       expect(curLines().map((l) => l.toolUseId)).toEqual(['toolu_01']);
       expect(exists(old), 'rm failed, so the old bucket stays').toBe(true);
+    });
+  });
+
+  // ── the prefilter's selectivity (review of Task 5: the unquoted form compiled the spool's jq for any text that mentioned a tool) ──
+  describe('the spool\'s jq text is compiled only for a payload that quotes a delegation name', () => {
+    /** The length of the program the FIRST jq call of one hook run compiled (the payload parse): a jq on PATH that records its
+     *  arguments' lengths, then runs the real one. */
+    const parseLength = (payload: object): number => {
+      const log = path.join(home, 'jq-args');
+      fs.rmSync(log, { force: true });
+      fs.writeFileSync(path.join(home, 'bin', 'jq'),
+        `#!/bin/sh\n[ -e '${log}.done' ] || { for a in "$@"; do printf '%s\\n' "\${#a}" >> '${log}'; done; : > '${log}.done'; }\nexec '${REAL_JQ}' "$@"\n`, { mode: 0o755 });
+      fs.rmSync(`${log}.done`, { force: true });
+      run(payload);
+      return Math.max(...fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).map(Number));
+    };
+    const WORDS = 'Bash Task Agent Workflow SessionStart SessionEnd SubagentStart SubagentStop task-notification';
+    it('text that merely mentions the names (a Read result, an Edit string, a prompt, even with quotes round them) compiles the parse alone', () => {
+      const small = parseLength(post('Read', { file_path: '/x' }, { file: { content: WORDS } }));
+      const quoted = parseLength(post('Edit', { file_path: '/x', new_string: `say "Bash" and "Agent" and "Workflow" and "SessionStart" and "SubagentStop"` }, 'ok'));   // quotes in a JSON string's content are \" , never a bare quote after the name
+      const prompt = parseLength(ev('UserPromptSubmit', { prompt: `${WORDS} <task-notification> mentioned` }));
+      const big = parseLength(post('Bash', { command: 'true' }, { stdout: '' }));
+      expect(big, 'a Bash event compiles the spool text').toBeGreaterThan(5000);
+      for (const [n, len] of [['Read', small], ['Edit with quoted names in its text', quoted], ['a prompt', prompt]] as const) {
+        expect(len, `${n} compiles only the parse (${len} characters)`).toBeLessThan(2000);
+      }
+    });
+    it('each delegation name, and a notification, in its real position does compile it', () => {
+      for (const [n, payload] of [
+        ['Agent', post('Agent', {}, { status: 'async_launched', agentId: 'a1' })], ['Task', pre('Task', {})], ['Workflow', pre('Workflow', {})],
+        ['SessionStart', ev('SessionStart', { source: 'startup' })], ['SessionEnd', ev('SessionEnd', { reason: 'clear' })],
+        ['SubagentStart', ev('SubagentStart', { agent_id: 'a1' })], ['SubagentStop', ev('SubagentStop', { agent_id: 'a1' })],
+        ['a notification', ev('UserPromptSubmit', { prompt: '<task-notification>\n<task-id>w</task-id>\n<tool-use-id>t</tool-use-id>\n<status>completed</status>\n</task-notification>' })],
+      ] as Array<[string, object]>) expect(parseLength(payload), n).toBeGreaterThan(5000);
     });
   });
 
