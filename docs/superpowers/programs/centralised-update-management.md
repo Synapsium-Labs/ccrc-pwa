@@ -1582,6 +1582,38 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         `ccd/ccd`.
       - STATUS: fleet and server v0.0.184, newest v0.0.184, backups fleet 177M/server 706M, disk free fleet 216G/work
         volume 197G/server 32G, no anomalies at 14:42.
+    - **2026-10-14 15:42 UTC: v0.0.186, then v0.0.187, auto-converged unattended, past v0.0.185. The probe caught the
+      second move in flight. The fleet box's history FAIL outlived both runs.** No action was taken.
+      - v0.0.185 (`6da6fa4bb`, #407) was released at 15:04:14, v0.0.186 (`5bee9961f`) at 15:17:02 and v0.0.187
+        (`520ee5652`, #408) at 15:38:44. Neither box moved to v0.0.185: the server's next poll came after v0.0.186 was
+        out.
+      - **The first move.** The fleet box ran from 15:34:03 to 15:38:26, about a minute after a poll falls due on the
+        server's grid from its 14:03 restart. The server followed from 15:38:34 to 15:39:00.
+      - **The second move.** v0.0.187 came out during the server's own install. The fleet box ran from 15:39:55 to
+        15:42:13, about a minute after the server restarted on v0.0.186, which fits the poll on the first tick after
+        start. The server followed from 15:42:46 to 15:43:12. Every report reads `phase: done` and `from: pwa`
+        (defect A).
+      - **The probe.**
+        - At 15:42:22 it printed two ANOMALY lines: the boxes differed (fleet v0.0.187, server v0.0.186), and the
+          inventory read the fleet row `pending`.
+        - At 15:44:06 the server row still read `pending` and `incomplete`, under a minute after its run ended.
+        - At 15:44:25 it read OK, with no anomalies.
+
+        It was a move in flight and a once-a-minute inventory catching up. The mechanism behaved as designed.
+      - **The history FAIL.** Both fleet runs exited 3 on one FAIL, `history: tick-stale` (16, then 20 minutes old,
+        against the 10-minute bound), and each box stayed on its new build (D-3114). Unlike at 14:00, it had not
+        cleared afterwards: at 15:43 it read 21 minutes.
+        - The history sweep that started at 15:31:55 was killed at 15:41:55, at its unit's 10-minute start timeout.
+          Both fleet runs fell inside it. The earlier sweeps each finished 5 to 10 minutes after they started.
+        - A fresh sweep started at 15:42:07.
+
+        This is the history programme's to fix, not this one's.
+      - Both boxes read `box-token` PASS. Server doctor: 26 passed, 0 warned, 0 failed. Fleet doctor at 15:43: 32
+        passed, 8 warned, 1 failed (the history FAIL).
+      - Wave 15 (run 300) is still held, by 1298 (run 354, `working`) on `ccd/ccrc` and 1302 (run 360, `dispatched`)
+        on `ccd/ccd`. #408 touched none of its files.
+      - STATUS: fleet and server v0.0.187, newest v0.0.187, backups fleet 178M/server 714M, disk free fleet 218G/work
+        volume 193G/server 32G, no anomalies at 15:44.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
