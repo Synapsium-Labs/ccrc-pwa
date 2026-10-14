@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=3adfef5f8642fdb7c789f315916ca17ddb14cf6e72e8c0128459ea9b872f9230
+# ccrc:generated 1 sha256=175c0d431f156eea285a4ea0a68963ec9bd17d33d4715d65593d8350f394935a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -8093,15 +8093,14 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   # WAVE 5 — THE DEC FLAGS, STRIPPED HERE AND NOT ONE LINE EARLIER. Below the
   # `_json_str` probe, because every refusal in this verb is a QUOTED JSON
   # answer at exit 0 and an unquotable detail is a parse error rather than the
-  # refusal it actually was. Above the arity rule, because the rule is exact
-  # and a flag left in argv would refuse a correct call. A THIRD ARRANGEMENT
-  # from Tasks 45-47's two: `cmd_ws_archive` (Task 45) binds no `id` until
-  # AFTER its arity check, so its block could go almost anywhere above that
-  # check; `cmd_ws_restore` (Task 46) binds `id="${2-}"` as its very first
-  # statement, so its block had to precede that binding specifically. This verb
-  # binds neither `id` nor `new` until AFTER the arity check below (`local
-  # id=$2 new=$4`, ccd:4022 pre-wave-5) — so, unlike Task 46's case, there is no
-  # earlier binding this placement could land on the wrong side of.
+  # refusal it actually was. Above the arity rule, because the rule is exact; the
+  # `--session` and `--branch` pairs are consumed WHOLE and kept in the residue
+  # for it, so neither value is scanned as a flag (path-identity spec §2.4). A
+  # THIRD ARRANGEMENT beside two other wave-5 verbs': `cmd_ws_archive` binds no
+  # `id` until AFTER its arity check; `cmd_ws_restore` binds `id="${2-}"` as its
+  # very first statement, so its block had to precede that binding. This verb
+  # binds neither `id` nor `new` until AFTER the arity check below (`local id=$2
+  # new=$4`), so there is no earlier binding this placement could land on.
   #
   # `break`, NOT a refusal in the loop body: a `return` inside the `while` would
   # leave the remaining argv unread, and the answer this verb owes is one
@@ -8115,6 +8114,7 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=() lc_bad=''
   while (( $# )); do
     case "$1" in
+      --session|--branch) if (( $# >= 2 )); then lc_args+=("$1" "$2"); shift 2; else lc_args+=("$1"); shift; fi ;;
       --surface)   if [[ $# -ge 2 ]]; then lc_gs=1; lc_surface="$2"; shift 2
                    else lc_bad='--surface needs a value'; break; fi ;;
       --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
@@ -8181,7 +8181,7 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
     return 0
   fi
   local id=$2 new=$4
-  if [[ ! $id =~ ^[A-Za-z0-9._-]+$ ]]; then
+  if ! _reg_id_ok "$id"; then
     printf '{"refused":"bad-args","detail":%s,"paths":[]}\n' \
       "$(_json_str "bad session id: $id")"
     return 0
@@ -8737,11 +8737,11 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
   # everywhere — write it verbatim, parse it nowhere.
   # WAVE 5 — TWO FLAGS, NOT THREE, AND THAT IS THE DESIGN. `--reason` on this
   # verb is already the HOLD's reason: mandatory, positional (`$4`), and the
-  # display on every ccrc surface. Stripping it here would leave the residue at
-  # arity 2, refuse every correct call, and make the workspace unholdable; and
-  # accepting a SECOND `--reason` would put two different reasons on one verb
-  # with nothing to say which one a reader is looking at. Spec D2's `dec.reason`
-  # is therefore this same string — one reason, one meaning.
+  # display on every ccrc surface. Its arm consumes it as the positional PAIR,
+  # kept in the residue for the arity rule and never read as a decision reason,
+  # as `--session`'s arm keeps the id (path-identity spec §2.4): neither value
+  # is scanned as a flag, and a SECOND `--reason` still refuses on arity. Spec
+  # D2's `dec.reason` is therefore this same string — one reason, one meaning.
   #
   # Stripped BEFORE the exact-arity rule, `cmd_stop`'s order — and before any
   # positional binding, so a run like `ws-hold --surface pwa --session <id>
@@ -8750,9 +8750,9 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
   local lc_surface=none lc_actor='' lc_gs=0 lc_ga=0 lc_args=()
   while (( $# )); do
     case "$1" in
-      # An explicit arity check, not a bare `shift 2`: ccd runs under
-      # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
-      # shifts nothing, and this loop never terminates.
+      --session|--reason) if (( $# >= 2 )); then lc_args+=("$1" "$2"); shift 2; else lc_args+=("$1"); shift; fi ;;
+      # An explicit arity check, not a bare `shift 2`: ccd runs `set -uo pipefail` with NO
+      # `-e`, so a shift past the end of argv fails, shifts nothing, and the loop never ends.
       --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-hold [--surface <word>] [--actor <text>] --session <id> --reason <text>"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
@@ -8789,7 +8789,7 @@ cmd_ws_hold() {   # ccd ws-hold --session <id> --reason <text> — claim a
   # Task 49's emit site reads ONE variable on every verb rather than a special
   # case here, and so a future editor cannot "add the missing --reason".
   local lc_reason=$reason
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  _reg_id_ok "$id" || die "bad session id"
   [[ -f "$REG/$id.uuid" ]]       || die "no such session: $id"
   # An empty reason is an orphan hold by construction — nobody could ever say
   # why it exists, and "visible on every surface, reason says why" is the whole
@@ -8862,10 +8862,10 @@ cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim
   # WAVE 5 — THE DEC FLAGS ARE STRIPPED BEFORE THE ARITY RULE, and that order
   # is the whole correctness argument, exactly as `cmd_stop` states it in its
   # own header (grep `FLAGS ARE STRIPPED BEFORE THE ARITY RULE`): this verb's
-  # guard is EXACT arity on `--session <id>`, so a flag left in argv is not a
-  # wider call, it is a REFUSED one — `ccd ws-release --session x --surface pwa`
-  # would die in the usage check while the server reads the non-zero as "the
-  # release failed on the box".
+  # guard is EXACT arity on `--session <id>`, and the `--session` pair is
+  # consumed WHOLE and kept in the residue for that rule, so its value is never
+  # scanned as a flag: an id spelled `--actor` stays the id, and `_reg_id_ok`
+  # refuses it rather than binding the surface word (path-identity spec §2.4).
   #
   # THREE `given` FLAGS, not three value tests. `--surface ''` and no
   # `--surface` at all are two different facts: nobody declared a surface
@@ -8877,10 +8877,10 @@ cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim
   local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=()
   while (( $# )); do
     case "$1" in
-      # An explicit arity check, not a bare `shift 2`: ccd runs under
-      # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
-      # shifts nothing, and this loop never terminates (`cmd_stop` carries the
-      # same three lines over the same hazard).
+      --session)   if (( $# >= 2 )); then lc_args+=("$1" "$2"); shift 2; else lc_args+=("$1"); shift; fi ;;
+      # An explicit arity check, not a bare `shift 2`: ccd runs `set -uo pipefail`
+      # with NO `-e`, so a shift past the end of argv fails, shifts nothing, and this
+      # loop never terminates (`cmd_stop` carries the same lines over the same hazard).
       --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-release [--surface <word>] [--actor <text>] [--reason <text>] --session <id>"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
@@ -8919,7 +8919,7 @@ cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim
   fi
   [[ $# -eq 2 && $1 == --session ]] || die "usage: ccd ws-release --session <id>"
   local id=$2
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  _reg_id_ok "$id" || die "bad session id"
   [[ -f "$REG/$id.uuid" ]]       || die "no such session: $id"
   if [[ -e "$REG/$id.hold" ]]; then
     # CHECKED, for `cmd_ws_hold`'s reason with the polarity reversed — fix-wave
@@ -9781,10 +9781,10 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   # WAVE 5 — THE DEC FLAGS ARE STRIPPED BEFORE THE ARITY RULE, and that order
   # is the whole correctness argument, exactly as `cmd_stop` states it in its
   # own header (grep `FLAGS ARE STRIPPED BEFORE THE ARITY RULE`): this verb's
-  # guard is EXACT arity on `--session <id>`, so a flag left in argv is not a
-  # wider call, it is a REFUSED one — `ccd ws-archive --session x --surface pwa`
-  # would die in the usage check while the server reads the non-zero as "the
-  # archive failed on the box".
+  # guard is EXACT arity on `--session <id>`, and the `--session` pair is
+  # consumed WHOLE and kept in the residue for that rule, so its value is never
+  # scanned as a flag: an id spelled `--actor` stays the id, and `_reg_id_ok`
+  # refuses it rather than binding the surface word (path-identity spec §2.4).
   #
   # THREE `given` FLAGS, not three value tests. `--surface ''` and no
   # `--surface` at all are two different facts: nobody declared a surface
@@ -9796,10 +9796,10 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=()
   while (( $# )); do
     case "$1" in
-      # An explicit arity check, not a bare `shift 2`: ccd runs under
-      # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
-      # shifts nothing, and this loop never terminates (`cmd_stop` carries the
-      # same three lines over the same hazard).
+      --session)   if (( $# >= 2 )); then lc_args+=("$1" "$2"); shift 2; else lc_args+=("$1"); shift; fi ;;
+      # An explicit arity check, not a bare `shift 2`: ccd runs `set -uo pipefail`
+      # with NO `-e`, so a shift past the end of argv fails, shifts nothing, and this
+      # loop never terminates (`cmd_stop` carries the same lines over the same hazard).
       --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-archive [--surface <word>] [--actor <text>] [--reason <text>] --session <id>"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
@@ -9838,7 +9838,7 @@ cmd_ws_archive() {   # ccd ws-archive --session <id> — fold a merged workspace
   fi
   [[ $# -eq 2 && $1 == --session ]] || die "usage: ccd ws-archive --session <id>"
   local id=$2
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  _reg_id_ok "$id" || die "bad session id"
   [[ -f "$REG/$id.uuid" ]]       || die "no such session: $id"
   [[ -n "$(_reg_get "$id" workspace)" ]] \
     || die "not a workspace — refusing to archive a main checkout"
@@ -10268,21 +10268,21 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   local lc_surface=none lc_actor='' lc_reason='' lc_gs=0 lc_ga=0 lc_gr=0 lc_args=()
   while (( $# )); do
     case "$1" in
+      --session)   if (( $# >= 2 )); then lc_args+=("$1" "$2"); shift 2; else lc_args+=("$1"); shift; fi ;;
       # An explicit arity check, not a bare `shift 2`: ccd runs under
       # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
       # shifts nothing, and this loop never terminates.
-      # FIX ROUND 3 (operator escalation on F1's residual) — these three
-      # ARITY ("needs a value") refusals fire INSIDE the parsing loop, before
-      # the post-loop ladder below has validated anything. `lc_actor`/
-      # `lc_reason` can already hold an UNVALIDATED (blank or over-cap) value
-      # from an EARLIER `--actor`/`--reason` occurrence when a LATER flag's
-      # missing value triggers one of these — measured: `--actor <600B>
-      # --reason` (no value) put the full 600-byte actor on this refusal,
-      # unexamined, the same leak class F1 closed on the post-loop ladder,
-      # one arm over. Each arm below now applies the identical non-blank-
-      # and-within-cap test the post-loop ladder uses before adding
-      # `dec.actor`/`dec.reason` — a field that is not GIVEN is already ''
-      # here (blank, so excluded the same way) and needs no separate case.
+      # FIX ROUND 3 (operator escalation on F1's residual) — the three ARITY
+      # ("needs a value") refusals below fire INSIDE the parsing loop, before the
+      # post-loop ladder has validated anything. `lc_actor`/`lc_reason` can
+      # already hold an UNVALIDATED (blank or over-cap) value from an EARLIER
+      # `--actor`/`--reason` occurrence when a LATER flag's missing value
+      # triggers one — measured: `--actor <600B> --reason` (no value) put the
+      # full 600-byte actor on this refusal, unexamined, the leak class F1 closed
+      # on the post-loop ladder, one arm over. Each arm applies the post-loop
+      # ladder's non-blank-and-within-cap test before adding `dec.actor`/
+      # `dec.reason`; a field not GIVEN is already '' here (blank, excluded the
+      # same way). The `--session` arm refuses nothing: a lone key is arity's.
       --surface)   if [[ $# -lt 2 ]]; then
                      local lc_ra=(dec.surface "$lc_surface")
                      [[ -n "${lc_actor//[[:space:]]/}" ]] && _lc_dec_ok "$lc_actor" && lc_ra+=(dec.actor "$lc_actor")
@@ -10368,7 +10368,7 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   local id="${2-}"
   [[ $# -eq 2 && $1 == --session ]] \
     || _lc_refuse restore "$id" bad-args "usage: ccd ws-restore --session <id>"
-  [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || _lc_refuse restore "$id" bad-session-id "bad session id"
+  _reg_id_ok "$id" || _lc_refuse restore "$id" bad-session-id "bad session id"
   [[ -f "$REG/$id.uuid" ]]       || _lc_refuse restore "$id" no-such-session "no such session: $id"
 
   # SERIALISED WITH `ws-reap`, ON WS-REAP'S OWN LOCK — final-round destructive
