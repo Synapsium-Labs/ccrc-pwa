@@ -322,7 +322,8 @@ Record every line in the wave-done mail. If another PR has landed rows in any of
 | `README.md` | the Settings paragraph gains "Settings has a third section, **Stall watch** …" (one line becomes seventeen; ≈953 at `77f8d63a5`, ≈960 at `d12b5aba0`) | 4 |
 | `server/test/stall-settings-readme.test.ts` | **new** (93 lines, 6 rows as shipped): the sentence pinned to L0 and L1, the route, one lead sentence after Notifications, no device word (the PWA's own device-word list) | 4 |
 | `pwa/src/screens/settingsText.ts` | **new** (fix round 1, F4): `UNCONFIRMED_TEXT` and its docstring, imports nothing; `SettingsScreen.tsx` re-exports it and `StallWatchSection.tsx` imports it, so the two screens no longer import each other | fix round 1 |
-| `shared/api.ts` | one key, `STALL_CONFIRM_TEXT.unanswered`, inside W1's stall-watch block (`unanswered-write-has-its-own-l0-line`), and, in fix round 2, the two-line D-4043 comment above that key (no string changed); the review's item 5 edit to the block's header comment is the coordinator's (ledger R20, R21) | fix round 1 |
+| `shared/api.ts` | one key, `STALL_CONFIRM_TEXT.unanswered`, inside W1's stall-watch block (`unanswered-write-has-its-own-l0-line`), and, in fix round 2, the two-line D-4043 comment above that key (no string changed); the review's item 5 edit to the block's header comment is the coordinator's (ledger R20, R21); and, at R35 (its R1, `2f82b1ff8`), the block's lead comment, line for line, which now says the block was "APPENDED below `MAIL_REPLAY_MS` (later blocks follow it)" | fix round 1, R35 |
+| `pwa/test/box-token-card.test.tsx` | `main`'s file, licensed by R35 (review 390's F4): `spyStallWatch` and its two calls (+7 lines), so no card case fetches `/api/coord/stall-watch` live (`082cc2131`); the screen's banner still fetches `/api/auth/status` | R35 |
 | `server/test/coord-db.test.ts` | the stall_settings slot found by its DDL, not hard-coded (fix round 1, Q), and, in fix round 2, the needle stops at the name: `/CREATE TABLE stall_settings(?![A-Za-z0-9_])/` (R27 item 4), so a later `stall_settings_new` table is not counted; the review's item 5 edit is the coordinator's (ledger R20, R21) | fix round 1 |
 | `server/test/stall-sweep.test.ts` | the review's item 5 test edit, the coordinator's scope (ledger R20, R21) | coordinator |
 | `server/src/watch.ts` | the review's item 5 comment lines only (no behaviour), the coordinator's scope (ledger R20, R21) | coordinator |
@@ -3146,7 +3147,7 @@ occurs exactly once in its file, except the `          reload();` that X40 and X
 `SWS`: each of those two rows names its arm (the line after the fulfilled arm's `toast(UNCONFIRMED_TEXT);`, or after
 the rejection arm's `'error');`).
 
-| # | Guard | Mutation | Red (measured failing count out of 183, test names) |
+| # | Guard | Mutation | Red (measured failing count, test names; out of 183 unless the row says 187 or 188) |
 |---|---|---|---|
 | X1 | P1 three-state render | SWS: `) : failure === 'failed' ? (` → `) : false ? (` | `1 failed`: "P1: pending is a skeleton, a failed first read says so, and a view renders — three states, never folded" |
 | X2 | P1b not-configured wins over a landed view | SWS: render `view !== null` before `failure === 'not-configured'`, as the Updates section does (swap the first two arms of `StallWatchSection`'s conditional) | `1 failed`: "P1b: a 404 not-found after a landed view replaces the whole body — no Now block, no radio checked" |
@@ -3184,13 +3185,13 @@ the rejection arm's `'error');`).
 | X34 | M6 the sheet's `unknown` line | SWS: `return [STALL_CONFIRM_TEXT.unknown];` → `return [];` | `1 failed`: "M6: the unmeasured effect gives the one unknown line" |
 | X35 | M24 the hazard condition | SWS: `stages.alerts && stages.wave2 && !stages.busyDelivery && !held.mailOff` → `stages.alerts && !held.mailOff` | `1 failed`: "M24: the hazard line shows for alerts and the further checks without busy delivery, and not under mail off" |
 | X36 | M24 its mail-off exception | SWS: `stages.alerts && stages.wave2 && !stages.busyDelivery && !held.mailOff` → `stages.alerts && stages.wave2 && !stages.busyDelivery` | `1 failed`: "M24: the hazard line shows for alerts and the further checks without busy delivery, and not under mail off" |
-| X37 | the built-in appears once | SWS: `if (ms !== builtInMs) choices.push` → `if (true) choices.push` | `2 failed`: "quietChoices: the built-in first, then every step from min to max except the built-in, which appears once"; "renders the Now block, the Next step, the quiet time and the counts from the view" |
-| X38 | the select shows no value it does not hold | SWS: delete the line `          {quietValue === QUIET_NONE && <option value={QUIET_NONE} disabled hidden />}` | `1 failed`: "an absent or unreadable stored level checks no radio, and the quiet select shows no built-in it does not hold" |
+| X37 | the built-in appears once | SWS: `if (ms !== builtInMs) choices.push` → `if (true) choices.push` | `3 failed` of 187 (re-measured by review 340): "a stored quiet time equal to the built-in as a number is a pinned choice, shown as its own option labelled plain like every step; one off the list (the server cannot send it today) selects none"; "quietChoices: the built-in first, then every step from min to max except the built-in, which appears once"; "renders the Now block, the Next step, the quiet time and the counts from the view" |
+| X38 | the select shows no value it does not hold | SWS: delete the line `          {quietValue === QUIET_NONE && <option value={QUIET_NONE} disabled hidden />}` | `2 failed` of 187 (re-measured by review 340): "a stored quiet time equal to the built-in as a number is a pinned choice, shown as its own option labelled plain like every step; one off the list (the server cannot send it today) selects none"; "an absent or unreadable stored level checks no radio, and the quiet select shows no built-in it does not hold" |
 | X39 | `fillStallText` reads `$` literally | SWS: `return text.replace(/\{(\w+)\}/g, (whole, key: string) => (Object.hasOwn(slots, key) ? (slots[key] ?? whole) : whole));` → `return Object.entries(slots).reduce((t, [k, v]) => t.replace(`{${k}}`, v), text);` | `1 failed`: "fillStallText fills each named slot, leaves a slot it was not given, and reads a $ in a value literally" |
 | X40 | an unconfirmed write re-reads | SWS: delete the `          reload();` after the fulfilled arm's `          toast(UNCONFIRMED_TEXT);` | `2 failed`: "a 2xx body that fails the wire guard is the same unconfirmed outcome"; "an unreadable 2xx says the write may have landed and re-reads; it installs nothing" |
-| X41 | a refused or unconfirmed rejection re-reads | SWS: delete the `          reload();` after the rejection arm's `else toast(…, 'error');` line | `4 failed`: "P2: a 500 toasts the cause the server named in its message, and re-reads"; "P2: a cancelled or refused quiet write leaves the select on the stored value, never the tap"; "P2: a refused write toasts the server's detail, re-reads, and leaves the stored radio checked"; "a write whose answer never arrived says it could not be confirmed, never "Nothing was changed", and re-reads" |
+| X41 | a refused or unconfirmed rejection re-reads | SWS: delete the `          reload();` after the rejection arm's `else toast(…, 'error');` line | `4 failed` of 187 (re-measured by review 340): "P2: a 500 toasts the cause the server named in its message, and re-reads"; "P2: a cancelled or refused quiet write leaves the select on the stored value, never the tap"; "P2: a refused write toasts the server's detail, re-reads, and leaves the stored radio checked"; "a write whose answer never arrived says it was not confirmed, never "Saved" or "Nothing was changed", and re-reads" |
 | X42 | a 2xx goes through the wire guard | SWS: `asStallWatchView(answer)` → `(answer as StallWatchView)` | `1 failed`: "a 2xx body that fails the wire guard is the same unconfirmed outcome" |
-| X43 | the section is mounted | `SettingsScreen.tsx`: delete the line `      <StallWatchSection />` | `22 failed`: "M6: an unmeasured reading renders "Unknown" and "they say: unknown", and no level is read as Off"; "P10: next.kind none shows no Next step, and a step with an empty waitsOn shows no "Waits on:""; "P1: a later failed read keeps the landed view and adds the stale line"; "P1: pending is a skeleton, a failed first read says so, and a view renders — three states, never folded"; "P1b: a 404 not-found after a landed view replaces the whole body — no Now block, no radio checked"; "P1b: a 501 not-configured first read is the not-available text, not the unread line"; "P2: a 500 toasts the cause the server named in its message, and re-reads"; "P2: a cancelled or refused quiet write leaves the select on the stored value, never the tap"; "P2: a refused write toasts the server's detail, re-reads, and leaves the stored radio checked"; "P3: Set re-POSTs the same body with confirm equal to effectKey, and the 2xx settles"; "P3: a 409 opens the sheet from its effect; Cancel sends nothing more and leaves the stored choice checked"; "P3: a write answered 2xx at once sends only the field moved, opens no sheet, and settles the reply"; "P3: the controls are locked while a write is in flight: a second choice sends nothing, and the answer unlocks them"; "P3: the quiet select writes { quietMs } alone, and "Built-in" writes default"; "P3c: a key the server no longer matches opens a fresh sheet from the fresh effect, and the next Set carries the new key"; "P5: the run-less footnote is always shown — zero counts, and counts that could not be read"; "a 2xx body that fails the wire guard is the same unconfirmed outcome"; "a write whose answer never arrived says it could not be confirmed, never "Nothing was changed", and re-reads"; "an absent or unreadable stored level checks no radio, and the quiet select shows no built-in it does not hold"; "an unreadable 2xx says the write may have landed and re-reads; it installs nothing"; "is the third section, after Notifications, titled Stall watch"; "renders the Now block, the Next step, the quiet time and the counts from the view" |
+| X43 | the section is mounted | `SettingsScreen.tsx`: delete the line `      <StallWatchSection />` | `27 failed` of 188 (re-measured by review 392 at R35): every case of the describe "SettingsScreen — stall watch: the section (design 2026-10-05 §13)", all 27: the 22 first listed here (two now under new titles, "LOADING state (…)" and "a write whose answer never arrived says it was not confirmed…"), the "LANDED state (…)" case R35 added, and the four pinned built-in rows of fix rounds 2 and 3 |
 | X44 | P3 the lock covers a write in flight (§13 item 3) | SWS: `const locked = busy \|\| pending !== null;` → `const locked = pending !== null;` | `1 failed`: "P3: the controls are locked while a write is in flight: a second choice sends nothing, and the answer unlocks them" |
 | X45 | P3 `choose` sends nothing while locked | SWS: `if (!locked) write(request);` → `write(request);` | `1 failed`: "P3: the controls are locked while a write is in flight: a second choice sends nothing, and the answer unlocks them" |
 | X46 | P2 the quiet select from the server, never the tap | SWS: add `const [tappedQuiet, setTappedQuiet] = useState<string \| null>(null);` after `const locked = …`; `value={quietValue}` → `value={tappedQuiet ?? quietValue}`; the select's `onChange` also runs `setTappedQuiet(e.target.value)` before `choose(…)` | `1 failed`: "P2: a cancelled or refused quiet write leaves the select on the stored value, never the tap" |
@@ -3205,7 +3206,7 @@ the rejection arm's `'error');`).
 | X55 | P12 the `quiet` line | SWS: `return quiet ? STALL_STORED_TEXT.quiet : null;` → `return null;` | `1 failed`: "P12: exactly one stored line whenever the stored row does not apply whole, and the fallback line" |
 | X56 | P3d the due group under mail off | SWS: delete the line `    else lines.push(after.alerts ? STALL_CONFIRM_TEXT.dueMailOff : STALL_CONFIRM_TEXT.dueMailOffHeld);` | `1 failed`: "P3d: under mail off, each due and quiet line takes its mail-off variant; the dialog line does not" |
 | X58 | P3d the repeat line at Check takes `quietRepeatMailOff` under mail off | SWS: `mailOff ? STALL_CONFIRM_TEXT.quietRepeatMailOff : STALL_CONFIRM_TEXT.quietRepeat` → `STALL_CONFIRM_TEXT.quietRepeat` (in `const repeat = …`) | `1 failed`: "P3d: under mail off, each due and quiet line takes its mail-off variant; the dialog line does not" |
-| X59 | Task 1's 500 `message` arm, seen in the section | H: `nonBlank(body.detail) ?? nonBlank(body.message) ?? apiErrorText(err)` → `nonBlank(body.detail) ?? apiErrorText(err)` | `1 failed`: "P2: a 500 toasts the cause the server named in its message, and re-reads" |
+| X59 | Task 1's 500 `message` arm, seen in the section | H: ``nonBlank(body.detail) ?? nonBlank(body.message) ?? nonBlank(apiErrorText(err)) ?? `HTTP ${err.status}` `` → ``nonBlank(body.detail) ?? nonBlank(apiErrorText(err)) ?? `HTTP ${err.status}` `` | `1 failed` of 187 (re-measured on the shipped line by review 340): "P2: a 500 toasts the cause the server named in its message, and re-reads" |
 | X60 | Task 1's unconfirmed arm, seen in the section | H: `  if (!(err instanceof ApiError)) return { kind: 'unconfirmed' };` → `  if (!(err instanceof ApiError)) return { kind: 'refused', detail: apiErrorText(err) };` | `1 failed` of 187 (re-measured at fix round 3): "a write whose answer never arrived says it was not confirmed, never "Saved" or "Nothing was changed", and re-reads" |
 | X61 | a stored number off the list selects the blank option (fix round 1, re-measured at fix round 3) | SWS: in `quietValue`, `choices.some((c) => c.value === stored)` → `typeof stored === 'number'` | `1 failed` of 187: "a stored quiet time equal to the built-in as a number is a pinned choice, shown as its own option labelled plain like every step; one off the list … selects none" |
 | X62 | the pinned option is not the built-in (M1a, fix round 2, re-measured) | SWS: `  const quietValue = stored === 'default'` → `  const quietValue = stored === 'default' \|\| stored === view.quiet.builtInMs`, so a pinned built-in number selects Built-in | `3 failed` of 187: "a stored quiet time equal to the built-in as a number is a pinned choice, shown as its own option labelled plain like every step; one off the list … selects none"; "a pinned built-in number reads plain "2 h" in the select whatever the quiet line says: under a fallback (source default) …"; "from a pinned built-in number, picking Built-in is one change that writes default exactly once" |
@@ -3214,7 +3215,7 @@ the rejection arm's `'error');`).
 | X65 | the pinned option's label claims no source (fix round 3) | SWS: the extra option's `label: quietText(pinnedBuiltIn)` → `label: fillStallText(STALL_SECTION_TEXT.chosenHere, { value: quietText(pinnedBuiltIn) })` | `2 failed` of 187: "a stored quiet time equal to the built-in as a number is a pinned choice, shown as its own option labelled plain like every step; one off the list … selects none"; "a pinned built-in number reads plain "2 h" in the select whatever the quiet line says: under a fallback (source default) …" |
 | X66 | the pinned option sits at its step's numeric place (fix round 3) | SWS: in `shown`, `const at = above === -1 ? choices.length : above;` → `const at = 1;`, so it sits right after Built-in | `1 failed` of 187: "a pinned built-in number sits at its step's numeric place among the steps, between the step below and the step above" |
 
-Every row reds, so no guard here is unpinned. Rows X44 to X60 were added by the plan review's fix round. X61 guards the blank option for a stored number off the list (fix round 1, the candidate quiet-select-shows-no-unanswered-value). X62 to X66 guard the pinned option (fix rounds 2 and 3, D-4044). All are counted out of 187. X57, added
+Every row reds, so no guard here is unpinned. Rows X44 to X60 were added by the plan review's fix round. X61 guards the blank option for a stored number off the list (fix round 1, the candidate quiet-select-shows-no-unanswered-value). X62 to X66 guard the pinned option (fix rounds 2 and 3, D-4044). X48, X60 and X61 to X66 are counted out of 187, as are X37, X38, X41 and X59 as review 340 re-measured them; X43, as review 392 re-measured it, out of 188; every other row out of 183. X57, added
 with them for the repeat line on a raise, was removed with that line by the final fix round (D-4037), so the table has
 no X57. X58 stays, re-described as the guard of the repeat line's mail-off variant at Check and re-measured at the tip
 `e13dc1a6a`. X14 and X18 are back at their first counts, 3 and 4.
@@ -3396,9 +3397,10 @@ cd "$(git rev-parse --show-toplevel)/server"
 ./node_modules/.bin/vitest run test/stall-settings-readme.test.ts
 ```
 
-Expected (measured on the prototype): `Tests  5 failed (5)`. Row 1 fails `expected -1 to be greater than 1257` (the
-offset of the Notifications sentence in the joined paragraph; the number moves if the paragraph's earlier text moves);
-rows 2–5 fail `the Settings paragraph names no third section: expected -1 to be greater than -1`.
+Expected (measured on the prototype's five-row first cut; six rows ship): `Tests  5 failed (5)`. Row 1 fails
+`expected -1 to be greater than 1257` (the offset of the Notifications sentence in the joined paragraph; the number
+moves if the paragraph's earlier text moves); rows 2–5 fail `the Settings paragraph names no third section: expected
+-1 to be greater than -1`.
 
 - [ ] **Step 4: Edit the README in place**
 
@@ -3445,8 +3447,8 @@ cd server && ./node_modules/.bin/vitest run test/stall-settings-readme.test.ts |
   -t 'CITATION DEBT|README HAS|LOCATION INDEXES|ROW PASS|RANGE BOUND|TWO CORPUS|whole corpus' | grep -E '^ +Tests '
 ```
 
-Expected (measured): `17	1	README.md`; Step 1's count plus 16 (5700 on the prototype); `Tests  5 passed (5)`;
-`Tests  7 passed | 328 skipped (335)`, unchanged.
+Expected (measured): `17	1	README.md`; Step 1's count plus 16 (5700 on the prototype); `Tests  5 passed (5)` on the
+five-row first cut (`6 passed (6)` as shipped); `Tests  7 passed | 328 skipped (335)`, unchanged.
 
 - [ ] **Step 6: The mutation table**
 
@@ -3523,7 +3525,7 @@ call under the 600 s limit (13 rows).
 
 | Row | Guard | Mutation | Red in | Measured |
 |---|---|---|---|---|
-| A | The third section is stated | README as at `README_BASE` (the sentence absent) | stall-settings-readme | 5 failed (5): all five rows |
+| A | The third section is stated | README as at `README_BASE` (the sentence absent) | stall-settings-readme | 5 failed (5): all five first-cut rows (six rows ship; this row was not re-run on them) |
 | B | The levels are named by their shipped labels | `STALL_LEVEL_TEXT.log.label` `'Log only'` → `'Log'` | stall-settings-readme | 1 failed: "names the Follow choice and the six levels by their shipped labels, in the ladder's order" |
 | C | The bounds are the shipped bounds | `STALL_QUIET_MAX_MS` 12 h → 11 h | stall-settings-readme | 1 failed: "states the quiet time's built-in value, bounds and step, and the counts' window, as the build ships them" |
 | D | The window is the shipped window | `STALL_NOTICE_WINDOW_MS` 48 h → 24 h | stall-settings-readme | 1 failed: the same row as C |
@@ -3548,9 +3550,11 @@ call under the 600 s limit (13 rows).
 > reads "phone-push bell", and the absorb merge kept this branch's wording), so the device row stays green under this
 > mutation. The device row
 > is exercised by its own mutation: revert "the push bell" to "the phone-push bell" and exactly "names no device, as the
-> section itself names none (§2, 2026-10-05)" reds (1 failed). Both measured at R35 (`fr4-mut-f1.py`, README restored
-> with `cmp`). Row G's appended sentence and the `Settings has a third section` wording in rows A and G are first-cut
-> text. The same rename applies, and the shipped lead is the one to append.
+> section itself names none (§2, 2026-10-05)" reds (1 failed). Both were measured at R35, README restored and checked
+> with `cmp`, by `fr4-mut-f1.py`: a runner kept outside the tree by design (Step 6's `$INSTR`) and never committed, so
+> this plan names it but cannot re-run it, and the anchors it quotes wrap across README lines, so collapse whitespace
+> first, as the pin's `settingsParagraph` does. Row G's appended sentence and the `Settings has a third section` wording
+> in rows A and G are first-cut text. The same rename applies, and the shipped lead is the one to append.
 
 The last line prints `' M README.md\n?? server/test/stall-settings-readme.test.ts\n'`. Rows B, C and D also red W1's
 `stall-settings.test.ts` and the PWA suites that read those constants; the runner runs the pin alone, by design.
@@ -3909,9 +3913,9 @@ coordinator by slug, never a slot taken in this wave.
   > **Snapshot note (R35, 2026-10-12; no D-number).** The first absorb (R33, merge `39c42f503` of `origin/main`
   > `28e8dc1b2`) moved the pin's `SECOND` anchor to `main`'s `Settings then has a further section, **Notifications**`.
   > Review 390 then found the Stall watch lead's ordinal false: `main`'s Box token card is a section on screen, so
-  > Stall watch is the fourth `<h2>`. The R35 fix round moved the Stall watch lead to `Settings then has a further
-  > section, **Stall watch**` and renamed the constant `THIRD` to `STALL_LEAD`. Rows, messages and the header docstring
-  > follow it (commit `5756b3b29`). The history above is left as written.
+  > Stall watch is the fourth `<h2>` once the updates poll lands (the third while it loads). The R35 fix round moved
+  > the Stall watch lead to `Settings then has a further section, **Stall watch**` and renamed `THIRD` to `STALL_LEAD`.
+  > Rows, messages and the header docstring follow it (commit `5756b3b29`). The history above is left as written.
 
 **After any absorb, re-run each alone, in the foreground:**
 - PWA: `use-stall-watch-view`, `primitives`, `settings-screen`, `api`, `use-updates-view`, `caps-control`, `app` and
@@ -3933,7 +3937,7 @@ The release lane carries this wave, and nothing rolls a box by hand from here.
    Read `/health`'s `version`, or the PWA's `BuildLine`, until it names that tag. This wave needs no fleet-box move.
 3. Open the PWA's Settings (an open tab picks up the new bundle within `UPDATE_CHECK_MS`, 15 min, or on return to the
    foreground). Check that:
-   - the third section, **Stall watch**, sits after Notifications;
+   - the **Stall watch** section sits after Notifications (the fourth `<h2>` once the updates poll lands);
    - the Notifications row reads "Push notifications for this browser".
 
    Under W1's seed the section should read "Following the fleet box's files" with the level those files arm,
