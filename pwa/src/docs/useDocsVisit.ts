@@ -116,8 +116,9 @@ export interface DocsVisit {
   readonly tree: TreeSlot | null;
   readonly file: FileSlot;
   readonly freshness: Freshness;
-  /** The commit the current leaf now reads at (a committed pin's commit, a draft pin's holder HEAD) after a re-list
-   *  changed its pin and the new read answered; null = no such change for this leaf in this visit. */
+  /** The commit the current leaf now reads at after its body changed and the new read answered: the new pin's commit
+   *  (committed) or the holder's HEAD (draft), every changed body included, a draft whose fingerprint alone moved among
+   *  them. Null = this leaf's body has not changed in this visit. A same-blob move of a committed pin changes no body. */
   readonly updatedTo: string | null;
   /** A fragment to scroll to once the body renders; null = nothing to scroll to. It belongs to ONE page (a leaf's
    *  project, ref, section and path): it reads `null` on any other page, and leaves the visit when the page changes. */
@@ -150,8 +151,8 @@ interface Store {
   readonly refreshInflight: Set<string>;
   readonly freshness: Map<string, Freshness>;
   readonly files: Map<string, FileEntry>;
-  /** Per leaf (tree key, section, path, view): the file key last shown `ok`, and the commit its pin named then. */
-  readonly shown: Map<string, { readonly fKey: string; readonly commit: string }>;
+  /** Per leaf (tree key, section, path, view): the file key last shown `ok`. */
+  readonly shown: Map<string, string>;
   readonly updatedTo: Map<string, string>;
   readonly timers: Set<ReturnType<typeof setTimeout>>;
   /** The pending automatic refresh retry per tree key: a POST of any kind for the key ends it. */
@@ -570,12 +571,11 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       dirty = true;
     }
     const prev = st.shown.get(wanted.leaf);
-    const commit = pinCommit(wanted.pin);
-    if (prev?.fKey !== wanted.fKey || prev.commit !== commit) {
-      st.shown.set(wanted.leaf, { fKey: wanted.fKey, commit });
-      // A new body at the same commit (a draft whose fingerprint moved) names no commit it was not already on.
-      if (prev !== undefined && prev.fKey !== wanted.fKey && prev.commit !== commit) {
-        st.updatedTo.set(wanted.leaf, commit);
+    if (prev !== wanted.fKey) {
+      st.shown.set(wanted.leaf, wanted.fKey);
+      // Every changed body is an update, a draft whose fingerprint alone moved included: it names the holder's HEAD.
+      if (prev !== undefined) {
+        st.updatedTo.set(wanted.leaf, pinCommit(wanted.pin));
         dirty = true;
       }
     }
@@ -592,7 +592,7 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       file = e.slot;
     } else {
       // While the new pin's read is in flight, the leaf keeps the body it showed (spec 4.3: "keeping scroll").
-      const prev = st.shown.get(wanted.leaf)?.fKey;
+      const prev = st.shown.get(wanted.leaf);
       const held = prev === undefined || prev === wanted.fKey ? undefined : st.files.get(prev);
       file = held?.slot.s === 'ok' ? held.slot : { s: 'loading', pin: wanted.pin };
     }

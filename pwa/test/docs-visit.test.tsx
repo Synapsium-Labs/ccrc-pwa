@@ -270,7 +270,7 @@ describe('the file slot', () => {
     expect(result.current.updatedTo).toBe(COMMIT_B);
   });
 
-  it('a draft leaf whose fingerprint changes under the same holder HEAD reads the new draft but names no commit', async () => {
+  it('review 439 F4: a draft leaf whose fingerprint changes under the same holder HEAD reads the new draft and names that HEAD in updatedTo', async () => {
     const FP_2 = 'e'.repeat(64);
     const withFp = (fp: string) => okTree(treeOk({
       entries: [entry('specs', 'a.md', { draft: draftOf('modified', { fp }) })], drafts: holder(COMMIT_A),
@@ -285,7 +285,7 @@ describe('the file slot', () => {
     expect(f.file).toHaveBeenCalledTimes(2);
     expect(f.file.mock.calls[1]?.[1]).toMatchObject({ kind: 'draft', head: COMMIT_A, fp: FP_2 });
     expect(result.current.file).toMatchObject({ s: 'ok', pin: { fp: FP_2 } });
-    expect(result.current.updatedTo).toBeNull();
+    expect(result.current.updatedTo).toBe(COMMIT_A);
   });
 
   it('opening the committed version of a draft is a new leaf, not an update', async () => {
