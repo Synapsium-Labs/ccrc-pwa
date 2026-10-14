@@ -1108,6 +1108,7 @@ describe('every stylesheet under src/ is audited', () => {
     // complete. A list of files is the same drift class as a list of colours.
     expect(report.sheets).toEqual([
       'src/components/primitives.css',
+      'src/docs/docs.css',
       'src/fleet/fleet.css',
       'src/session/chat.css',
       'src/styles/base.css',
@@ -1936,5 +1937,81 @@ describe('the child-of-run label is measured, not left in the blind spot (wave 5
     const rows = report.measured.filter((m) => m.label.endsWith(key));
     expect(rows, key).toHaveLength(2);           // dark and light
     for (const row of rows) expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+// ── native Docs reader W5 part 1, Task 11: the Docs door and the Docs screen's chrome (M4.S1, its docs-chrome form) ──
+// Every rule in docs/docs.css that sets a colour is measured in both themes, on the ground it paints itself, through
+// a painted ancestor its selector names, or on a ground registered in INHERITED_GROUNDS with its reason; none joins
+// the frozen census and none is grandfathered. The door has two grounds, as `.settings-door` does: registered on the
+// page, and measured here on `.shell-nav`'s --bg-surface off the rule's own ink, so a retint re-measures both.
+describe('the Docs chrome is measured, not left in the blind spot (M4.S1)', () => {
+  const docsRules = rulesOf(ROOT, 'src/docs/docs.css');
+  const NOT_A_COLOUR = /^(inherit|currentColor|unset|initial|revert)$/i;
+  const colourRules = docsRules.filter((r) => {
+    const ink = declOf(r.body, 'color');
+    return ink !== null && !NOT_A_COLOUR.test(ink);
+  });
+  /** The measured rows of one rule: the rule as a pair of its own (painted, or registered), or as a descendant
+   *  measured through the painter its selector names. */
+  const rowsOf = (key: string): typeof report.measured => report.measured.filter((m) => {
+    const label = m.label.replace(/^(DARK|LIGHT)\s+/, '');
+    return label === key || label.startsWith(`${key} [in `);
+  });
+  const inkOf = (key: string): string => {
+    const rule = docsRules.find((r) => ruleKey(r) === key);
+    expect(rule, key).toBeDefined();
+    const ink = declOf((rule as { body: string }).body, 'color');
+    expect(ink, key).not.toBeNull();
+    return ink as string;
+  };
+
+  it('finds the sheet and its colour rules (not a vacuous pass)', () => {
+    expect(report.sheets).toContain('src/docs/docs.css');
+    expect(colourRules.length).toBeGreaterThanOrEqual(28);
+  });
+
+  it('measures every docs rule that sets a colour in both themes, at or above its floor', () => {
+    for (const r of colourRules) {
+      const key = ruleKey(r);
+      expect(report.uncovered, key).not.toContain(key);
+      const rows = rowsOf(key);
+      expect(rows.map((m) => m.label.split(/\s+/)[0]).sort(), key).toEqual(['DARK', 'LIGHT']);
+      for (const row of rows) expect(row.ratio, row.label).toBeGreaterThanOrEqual(row.floor);
+    }
+  });
+
+  it('grandfathers nothing from docs.css, and every docs registration is on the page with a reason', () => {
+    expect([...GRANDFATHERED_UNCOVERED].filter((k) => k.startsWith('docs.css '))).toEqual([]);
+    const registered = Object.entries(INHERITED_GROUNDS).filter(([k]) => k.startsWith('docs.css '));
+    expect(registered.length).toBeGreaterThanOrEqual(20);
+    for (const [key, entry] of registered) {
+      expect(entry.under, key).toEqual(['var(--bg-page)']);
+      expect(entry.why.length, key).toBeGreaterThan(40);
+      expect(docsRules.some((r) => ruleKey(r) === key), key).toBe(true);
+    }
+  });
+
+  it.each([
+    ['docs.css .docs-door'],
+    ['docs.css .docs-door:active'],
+  ])('%s is registered on the page and also clears AA on the desktop sidebar it sits on', (key) => {
+    expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-page)']);
+    for (const row of rowsOf(key)) expect(row.detail, row.label).toContain(`${inkOf(key)} on var(--bg-page)`);
+    for (const theme of [DARK, LIGHT]) {
+      expect(ratio(inkOf(key), ['var(--bg-surface)'], theme), key).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  // A text scan, NOT EXHAUSTIVE: it finds a hex colour, a colour function (`rgb(`, `rgba(`, `hsl(`, `hsla(`, `hwb(`,
+  // `lab(`, `lch(`, `oklab(`, `oklch(`, `color(`) and the named colours listed below, outside comments. It does not
+  // find a named colour missing from that list, a system colour (`Canvas`, `CanvasText`), or a colour that arrives
+  // through an image or an `@property` initial value; `currentColor` and `transparent` are allowed on purpose.
+  it('spells no literal colour (tokens only, section 4.14)', () => {
+    const text = docsRules.map((r) => r.body).join(';');
+    const NAMED = /:\s*[^;]*\b(black|white|red|green|blue|yellow|orange|purple|gray|grey|silver|maroon|navy|teal|olive|lime|aqua|fuchsia|pink|brown)\b/i;
+    expect(text).not.toMatch(/#[0-9a-f]{3,8}\b/i);
+    expect(text).not.toMatch(/(?<![\w-])(rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(/i);
+    expect(text).not.toMatch(NAMED);
   });
 });

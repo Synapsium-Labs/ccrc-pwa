@@ -5,7 +5,8 @@
 // page, or a leaf. It owns the page's image queue and the drafted-asset count, and gives both to the images through
 // `DocsAssetContext`. Above the view sit `DocsHead` (back, crumbs, truth line, freshness chip, actions) on every page
 // that parsed, and `DocsBanners` on a page with a listing; so a tree failure keeps the crumbs and a file failure keeps
-// the header and the truth line (spec 4.7's placement, M4.F4).
+// the header and the truth line (spec 4.7's placement, M4.F4). Its stylesheet is docs/docs.css (spec 4.14), which
+// also holds the fleet header's Docs door: this static import, through app.tsx's, puts it in the main stylesheet.
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   DOCS_PAGE_PREFIX, docsPageUrl, parseDocsPage, parseDocsRef,
@@ -28,6 +29,7 @@ import { api } from '../lib/api';
 import { onAuthRegained } from '../lib/auth';
 import { docsRunner, type MarkdownParser } from '../lib/markdownRunner';
 import { navigate } from '../lib/router';
+import '../docs/docs.css';
 
 /** The defaults are module-scope constants (spec 4.3, the `MailScreen` idiom), so their identities are stable across
  *  renders: a new `loaders` would reload every image on the page (`DocsAssetContext`'s contract). */

@@ -4,10 +4,13 @@
 // `DocLink` renders; `imagePinFor` is the one pin rule for a page's images (W5 part 1 Task 7); `docsLocation` is the
 // one builder of a page location a Docs view links to (refinement (q)). Pure: no React state or hook (`imagePinFor`
 // asks the visit's pure `pinFor` for the page's own pin), no DOM, no module state, and no input is ever written.
+// `sessionDocsHref` is the one builder of a session's link into Docs, for the actions sheet's row and the session
+// menu's item alike (spec 4.8; W5 part 1 Task 11).
 import type { Element as HastElement, Root as HastRoot, RootContent } from 'hast';
 import { urlAttributes } from 'html-url-attributes';
+import type { FleetSession } from '../../../shared/api';
 import {
-  admitDraft, docsPageUrl, entryView, githubBlobUrl, resolveDocRef,
+  admitDraft, docsPageUrl, entryView, githubBlobUrl, isDocsBareRef, isDocsProject, resolveDocRef,
   type DocPin, type DocSectionSlug, type DocsEntry, type DocsPageLocation, type DocsRefSpec, type DocsTreeOk,
 } from '../../../shared/docs';
 import { DOCS_HIGHLIGHT_PAGE_MAX_CHARS } from '../lib/markdownLimits';
@@ -243,4 +246,28 @@ export function imagePinFor(
     kind: 'draft', branch: drafts.branch, head: drafts.worktree.head, section: e.section, path: e.path, fp: draft.fp,
   };
   return { ok: true, pin, draft: true, uncommittedNotShown: false };
+}
+
+/** A session's link into Docs (spec 4.8). `href`: the session's project at the branch its worktree holds NOW, written
+ *  verbatim as `?ref=<branch>`, never the workspace slug (workspaces are renamed). `label`: the words both surfaces
+ *  show. `branch`: the branch linked; null means the default view is linked, because the session reports no branch or
+ *  one outside the bare grammar (and the string `null` never reaches a URL). */
+export interface SessionDocsLink {
+  readonly href: string;
+  readonly label: string;
+  readonly branch: string | null;
+}
+
+/** THE one builder of a session's link into Docs: `SessionActionsSheet`'s row and `SessionHeader`'s menu item both
+ *  call it, and neither builds a Docs URL of its own. It reads `s.project`, never `boardHome(s)`: a session's docs
+ *  are its own repository's, whatever card it renders on. The URL goes through `docsLocation` and `docsPageUrl`
+ *  (refinement (q)). Null has one meaning: `s.project` fails the project grammar, so there is no row to render. */
+export function sessionDocsHref(s: FleetSession): SessionDocsLink | null {
+  const project = s.project;
+  if (!isDocsProject(project)) return null;
+  const home = docsLocation({ kind: 'index' }, { kind: 'default-view', project });
+  const branch = s.branch !== null && isDocsBareRef(s.branch) ? s.branch : null;
+  if (branch === null) return { href: docsPageUrl(home), label: 'Docs, default branch', branch: null };
+  const at = docsLocation(home, { kind: 'same-page', project, ref: { kind: 'bare', name: branch } });
+  return { href: docsPageUrl(at), label: 'Docs on ' + branch, branch };
 }

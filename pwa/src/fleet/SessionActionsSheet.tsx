@@ -39,6 +39,8 @@ const holdErrorText = (err: unknown): string => {
   return apiErrorText(err);
 };
 import { accountLabel } from '../lib/accounts';
+import { navigate } from '../lib/router';
+import { sessionDocsHref } from '../docs/docsLinks';
 import { sessionLabel } from './sessionLabel';
 import { narrowSinceWidened } from './spawnWords';
 import { SwapSheet } from './SwapSheet';
@@ -295,6 +297,8 @@ export function SessionActionsSheet({
     : null;
 
   const label = sessionLabel(session);
+  // The session's link into Docs (docs design 4.8), from the one builder the session menu also calls.
+  const docsLink = sessionDocsHref(session);
 
   return (
     <>
@@ -403,6 +407,15 @@ export function SessionActionsSheet({
             <p className="sess-sheet-note">
               {`This pane is running, but no registry row claims it — so nothing will resume it, swap it or record its death. Restart session writes the claim and adopts the pane: the same thing ccd ensure ${session.id} does at a terminal. Nothing is restarted and nothing in the conversation is lost.`}
             </p>
+          )}
+
+          {/* Docs for this session (docs design 4.8): the row right after Restart and its notes. It closes the sheet,
+              then navigates to the href `sessionDocsHref` built; no row when the project fails the project grammar. */}
+          {docsLink !== null && (
+            <button type="button" className="btn-ghost docs-session-row"
+                    onClick={() => { onClose(); navigate(docsLink.href); }}>
+              {docsLink.label}
+            </button>
           )}
 
           <button type="button" className="btn-ghost" onClick={() => setSwapOpen(true)}

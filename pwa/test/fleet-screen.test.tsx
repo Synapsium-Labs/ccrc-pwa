@@ -3028,3 +3028,32 @@ describe('the halt on the fleet screen (programme wave 14, R15)', () => {
     await until(() => expect(screen.getByRole('button', { name: 'Ack fleet' })).not.toBeDisabled());
   });
 });
+
+// ── native Docs reader W5 part 1, Task 11: the Docs door (design 2026-10-01 section 4.8, M4.L1) ───────────────
+//
+// The `/settings` door's twin above, with its placement pinned too: immediately before `.accounts-door` in the
+// header's control cluster, with the word beside an aria-hidden glyph, rendered whether or not the fleet has a
+// session. Its two tap-target halves live in tap-targets.test.tsx. The file-level afterEach does not reset the route.
+describe('the Docs door (docs design 4.8, M4.L1)', () => {
+  afterEach(() => navigate('/'));
+
+  it('sits in the fleet header immediately before the accounts door, says Docs, and routes to /docs', () => {
+    render(<FleetScreen store={makeStore()} />);
+    const door = screen.getByRole('button', { name: 'Docs: specs, plans and design notes' });
+    expect(door).toHaveClass('docs-door');
+    expect(door.parentElement).toHaveClass('fleet-head-right');
+    expect(door.nextElementSibling).toHaveClass('accounts-door');
+    const words = [...door.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE).map((n) => n.textContent?.trim()).join('');
+    expect(words).toBe('Docs');
+    expect(door.querySelector('.docs-door-glyph')?.getAttribute('aria-hidden')).toBe('true');
+    fireEvent.click(door);
+    expect(location.pathname).toBe('/docs');
+  });
+
+  it('renders with no sessions at all', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    act(() => { store.setState({ conn: 'open', sessions: [] }); });
+    expect(screen.getByRole('button', { name: 'Docs: specs, plans and design notes' })).toHaveClass('docs-door');
+  });
+});

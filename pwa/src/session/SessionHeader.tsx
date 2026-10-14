@@ -17,6 +17,8 @@ import {
 import { Sheet } from '../components/Sheet';
 import { StatusDot } from '../components/StatusDot';
 import { accountLabel } from '../lib/accounts';
+import { navigate } from '../lib/router';
+import { sessionDocsHref } from '../docs/docsLinks';
 import { useMediaQuery } from '../lib/useMediaQuery';
 import { useNow } from '../lib/useNow';
 import { sessionLabel } from '../fleet/sessionLabel';
@@ -234,6 +236,10 @@ export function SessionHeader({
   const title = session ? session.project : (fallback?.title ?? '…');
   const crumb = session && session.workspace !== null ? sessionLabel(session) : null;
   const wrapper = session?.wrapper ?? fallback?.wrapper ?? '';
+  // The menu's Docs item (docs design 4.8), from the one builder the actions sheet's row also calls. No item while no
+  // row has arrived (a deep link before its first frame), and none when the builder answers null (the project fails
+  // the project grammar).
+  const docsLink = session === null ? null : sessionDocsHref(session);
 
   // Model / effort / ultracode / branch — read from the pane statusline the
   // server already parses. Tapping the model or effort chip opens its chooser.
@@ -385,6 +391,12 @@ export function SessionHeader({
               journal
             </span>
           </button>
+          {docsLink !== null && (
+            <button type="button" className="menu-item docs-menu-item" onClick={() => menuAct(() => navigate(docsLink.href))}>
+              <span className="menu-label">Docs</span>
+              <span className="menu-hint" aria-hidden="true">{docsLink.branch ?? 'default'}</span>
+            </button>
+          )}
           <button
             type="button"
             className="menu-item"
