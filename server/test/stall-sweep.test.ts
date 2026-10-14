@@ -919,7 +919,7 @@ describe('sweepStalls: wiring', () => {
 
   it('rides tick(): dispatched right after the claim lanes, before primed is set, with no timer of its own', () => {
     const src = readFileSync(path.join(here, '../src/watch.ts'), 'utf8');
-    const claims = src.indexOf('this.lapseClaims(sessions);');
+    const claims = src.indexOf('this.lapseClaims(sessions, registryRead.refused);');
     const lane = src.indexOf('void this.sweepStalls(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(');
     expect(src).toContain('this.usage, this.currentHeadBranches(), panePids);');   // the pids are assembleFleet's own
     const primed = src.indexOf('this.primed = true;');

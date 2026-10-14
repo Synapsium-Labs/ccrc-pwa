@@ -22,7 +22,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { DEAD_GRACE_MS, MARKER_UNREADABLE_MS, parseStallDetail } from '../src/coord/stall.js';
 import type { PushPayload } from '../src/push.js';
-import type { FleetSession } from '../../shared/api.js';
+import { CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, type FleetSession } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { storedRun } from './idGateFixture.js';
@@ -170,4 +170,55 @@ describe('the stall lane holds a listed-but-refused id it is handed (tick-lanes-
     // CONTROL: the valid worker WAS judged, so the lane ran: its marker was read on every sweep.
     expect(r.touched.filter((p) => path.basename(p) === `${GOOD}.turn.json`).length).toBeGreaterThan(0);
   }, 60_000);
+});
+
+describe('the claim lease lanes hold a claim whose holder is a listed-but-refused id (tick-lanes-hold-a-refused-id)', () => {
+  /** A LEGACY active claim held by `sessionId`: made through the store, as a claim made before the id gate was (the
+   *  claims route's `requireAttribution` now refuses such an id, so only such a claim can be held by one). */
+  const legacyClaim = (coord: CoordStore, sessionId: string, now: number): { id: number } => {
+    const res = coord.claimAttempt({
+      project: 'demo', paths: ['server/src/io.ts'], sessionId, uuid: 'u-legacy', runId: null, intent: 'a legacy claim', now,
+    });
+    if (!res.ok) throw new Error(`fixture claim refused: ${JSON.stringify(res)}`);
+    return res.claims[0]!;
+  };
+  /** The tick's `sessions`, as the claim lanes read them: the valid row, running. `--actor` is in none. */
+  const SESSIONS: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[] = [{ id: GOOD, status: 'idle', unmeasured: [] }];
+  const rowOf = (coord: CoordStore, id: number) => {
+    const row = coord.claimsForProject('demo', true).find((c) => c.id === id);
+    if (row === undefined) throw new Error('fixture: the claim row is gone');
+    return { state: row.state, endedBy: row.endedBy, expiresAt: row.expiresAt };
+  };
+
+  it('(C) past CLAIM_LEASE_MS, a legacy active claim held by --actor is renewed, never lapsed session-gone', async () => {
+    const r = await rig();
+    plant(r.home, GOOD);
+    plant(r.home, BAD);
+    at(T0);
+    const c = legacyClaim(r.coord, BAD, T0);
+    const read = await tickRead(r);
+    at(T0 + CLAIM_LEASE_MS + 1);
+    r.w.renewClaims(SESSIONS, read.refused);
+    r.w.lapseClaims(SESSIONS, read.refused);
+    expect(rowOf(r.coord, c.id)).toEqual({ state: 'live', endedBy: null, expiresAt: T0 + CLAIM_LEASE_MS + 1 + CLAIM_LEASE_MS });
+  });
+
+  it('(C) renewed on doubt every sweep, it still lapses at the 8 h hard cap, never before it', async () => {
+    const r = await rig();
+    plant(r.home, GOOD);
+    plant(r.home, BAD);
+    at(T0);
+    const c = legacyClaim(r.coord, BAD, T0);
+    const read = await tickRead(r);
+    for (let t = T0 + 30 * 60_000; t < T0 + CLAIM_HARD_CAP_MS; t += 30 * 60_000) {
+      at(t);
+      r.w.renewClaims(SESSIONS, read.refused);
+      r.w.lapseClaims(SESSIONS, read.refused);
+      expect(rowOf(r.coord, c.id).state, `still held at +${(t - T0) / 60_000} min`).toBe('live');
+    }
+    at(T0 + CLAIM_HARD_CAP_MS + 1);
+    r.w.renewClaims(SESSIONS, read.refused);
+    r.w.lapseClaims(SESSIONS, read.refused);
+    expect(rowOf(r.coord, c.id)).toMatchObject({ state: 'lapsed', endedBy: 'hard-cap' });
+  });
 });

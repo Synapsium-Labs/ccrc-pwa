@@ -2285,11 +2285,13 @@ export class FleetWatcher {
       // clocks — no new timer (D12), and the mail sweep below this block is
       // untouched by name (D10: a second producer lands BESIDE the most
       // load-bearing loop on the box, never inside it). Liveness comes off
-      // the SAME `sessions` this tick assembled. Wrapped like `pushNewMail`,
-      // for its reason: both walk straight into synchronous `node:sqlite`.
+      // the SAME `sessions` this tick assembled, and off the listing's refused
+      // ids, which are in no `sessions` and so must not read as gone
+      // (`tick-lanes-hold-a-refused-id`). Wrapped like `pushNewMail`, for its
+      // reason: both walk straight into synchronous `node:sqlite`.
       try {
-        this.renewClaims(sessions);
-        this.lapseClaims(sessions);
+        this.renewClaims(sessions, registryRead.refused);
+        this.lapseClaims(sessions, registryRead.refused);
       } catch (err) {
         console.warn(`ccrc-server: claim sweep failed (${err instanceof Error ? err.message : String(err)}) — one bad sweep must not kill the poll`);
       }
@@ -5410,13 +5412,22 @@ export class FleetWatcher {
    * `Pick<…>` in the sweep signatures is deliberate: the sweeps read exactly
    * three fields, and a test should not have to fabricate a whole
    * `FleetSession` to exercise a lease.
+   *
+   * `refused` is the tick listing's refused ids (`RegistryRead.refused`). A
+   * holder among them is in no `sessions`, and that proves nothing about it:
+   * it answers `unmeasurable` — doubt, which D12 renews and holds, while the
+   * hard cap still fells it — and is checked BEFORE the absent test, which
+   * would answer `gone` (slug `tick-lanes-hold-a-refused-id`). A holder with
+   * no listed row at all still reads `gone`.
    */
   private claimProbe(
     sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[],
+    refused: ReadonlySet<string>,
   ): LivenessProbe {
     const byId = new Map(sessions.map((s) => [s.id, s]));
     return {
       liveness: (id: string) => {
+        if (refused.has(id)) return 'unmeasurable';        // listed but refused: never read, so never gone
         const s = byId.get(id);
         if (s === undefined) return 'gone';                 // the fleet no longer lists it
         if (s.unmeasured.length > 0) return 'unmeasurable'; // doubt reads as HELD (D12)
@@ -5444,13 +5455,13 @@ export class FleetWatcher {
    * lapse lane below keeps the honest verdict, which is where "doubt is not
    * death" does its other half of the work.
    */
-  renewClaims(sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[]): void {
+  renewClaims(sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[], refused: ReadonlySet<string>): void {
     const now = Date.now();
     if (this.lastClaimRenew !== 0 && now - this.lastClaimRenew < CLAIM_SWEEP_MS) return;
     this.lastClaimRenew = now;
     const store = this.deps.coord;
     if (!store) return;
-    const probe = this.claimProbe(sessions);
+    const probe = this.claimProbe(sessions, refused);
     for (const c of store.activeClaims()) {
       const v = probe.liveness(c.heldBy);
       const d = claimExpiry(c, now, v === 'unmeasurable' ? 'running' : v);
@@ -5462,13 +5473,13 @@ export class FleetWatcher {
    *  gone lapses at the STANDING `expiresAt` with `endedBy:'session-gone'`;
    *  the 8 h hard cap lapses whatever the liveness said. Rows survive —
    *  `lapseClaimRow` lapses, never deletes. */
-  lapseClaims(sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[]): void {
+  lapseClaims(sessions: readonly Pick<FleetSession, 'id' | 'status' | 'unmeasured'>[], refused: ReadonlySet<string>): void {
     const now = Date.now();
     if (this.lastClaimLapse !== 0 && now - this.lastClaimLapse < CLAIM_SWEEP_MS) return;
     this.lastClaimLapse = now;
     const store = this.deps.coord;
     if (!store) return;
-    const probe = this.claimProbe(sessions);
+    const probe = this.claimProbe(sessions, refused);
     for (const c of store.activeClaims()) {
       const d = claimExpiry(c, now, probe.liveness(c.heldBy));
       if (d.act === 'lapse') store.lapseClaimRow(c.id, d.endedBy, now);

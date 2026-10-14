@@ -268,6 +268,16 @@ describe('tick hands this tick\'s refused set to the lanes that hold a refused i
     expect(tickBody(), 'tick no longer hands the stall lane its refused set: a refused worker or claimant would read as absent')
       .toMatch(/\bthis\.sweepStalls\([^;]*\{[^}]*\brefused:\s*registryRead\.refused\s*\}/);
   });
+
+  it('tick() hands registryRead.refused to renewClaims(', () => {
+    expect(tickBody(), 'tick no longer hands the renew lane its refused set: a refused holder would read as gone')
+      .toMatch(/\bthis\.renewClaims\(\s*sessions\s*,\s*registryRead\.refused\s*\)/);
+  });
+
+  it('tick() hands registryRead.refused to lapseClaims(', () => {
+    expect(tickBody(), 'tick no longer hands the lapse lane its refused set: a refused holder would lapse session-gone')
+      .toMatch(/\bthis\.lapseClaims\(\s*sessions\s*,\s*registryRead\.refused\s*\)/);
+  });
 });
 
 // PATH IDENTITY W1a, TASK 7 (spec §2.3). The three migrated readers and the three new reads carry their placed words,
