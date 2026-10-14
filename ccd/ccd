@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=7a62cb836c8221dbfae839a13d3bb406c6c7c086f9aff272e8bf88fdd016e21f
+# ccrc:generated 1 sha256=8334fe22b52c75309f9404a27d75f79da6b8db1ea8b3f0c8643ec8261b7afff9
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -32889,8 +32889,11 @@ _ws_collect_rows_clear() {   # id leaf -> 0 when no registry row lies at, inside
 # `not-witnessed` and takes NO lock: the audit never makes `.reap-<name>.lock`
 # for a name ccd never handed a temp root.
 #
-# THE LOCK. Inside the population the audit takes `$REG/.reap-<id>.lock`,
-# `-n` — the lock every verb that removes anything of the id takes. It writes
+# THE LOCK. Inside the population, and only once `_ws_collect_prelock`'s
+# advisory parse lets it (path-identity spec §2.5: a reap lock is never
+# unlinked, so that parse decides whether one is ever made), the audit takes
+# `$REG/.reap-<id>.lock`, `-n` — the lock every verb that removes anything of
+# the id takes. It writes
 # nothing that lock serialises; it holds it so the registry listing control
 # below has a name it KNOWS stands, its own lock file. Held by another process:
 # the retryable `in-progress`, nothing journaled.
@@ -33015,6 +33018,17 @@ _ws_collect_paused() {   # -> 0 when reclamation is not paused; rc 1 with `pause
     || { _ws_collect_refuse paused "reclamation is paused fleet-wide ($REG/reclaim-paused) — nothing is collected while it stands"; return 1; }
 }
 
+# THE DASH-FREE SENTENCE, ONE SOURCE (path-identity spec §2.5): an id with no
+# `-` names no project and slug, so `_ws_slug_free` cannot be asked of it —
+# split, `nodash` would be asked as `nodash-nodash` and read free. Both
+# `_ws_collect_registered`, under the lock, and `_ws_collect_prelock`, before
+# it, ask it here, so the detail they answer is one string.
+_ws_collect_slug_askable() {   # id -> 0 when id names a project and a slug (it holds a `-`); 1 with _WS_COLLECT_REG_WHY
+  local id="${1-}"
+  [[ "$id" == *-* ]] \
+    || { _WS_COLLECT_REG_WHY="$id names no project and slug, so whether its slug is free cannot be asked"; return 1; }
+}
+
 _ws_collect_registered() {   # id -> 0 when no registry row stands for id; 1 when one does; 2 when that could not be
   #                               told — each with _WS_COLLECT_REG_WHY. The CALLER HOLDS `$REG/.reap-<id>.lock`.
   local id="$1" f rc
@@ -33034,8 +33048,7 @@ _ws_collect_registered() {   # id -> 0 when no registry row stands for id; 1 whe
   ctl=("$REG/.reap-$id".lo[c]k)
   [[ ${#ctl[@]} -eq 1 && "${ctl[0]}" == "$REG/.reap-$id.lock" ]] \
     || { _WS_COLLECT_REG_WHY="a wildcard listing of $REG does not show the lock this process holds there, so $REG cannot be listed and no other row of $id could be seen"; return 2; }
-  [[ "$id" == *-* ]] \
-    || { _WS_COLLECT_REG_WHY="$id names no project and slug, so whether its slug is free cannot be asked"; return 2; }
+  _ws_collect_slug_askable "$id" || return 2
   _ws_slug_free "${id%-*}" "${id##*-}" && return 0
   _WS_COLLECT_REG_WHY="the registry still holds $(_ws_slug_residue "${id%-*}" "${id##*-}") — a row of $id, or what one left behind"
   return 1
@@ -33113,9 +33126,7 @@ _ws_collect_eval() {   # id -> the FRESH rungs: REAP_VERDICT `collectable` (REAP
   _ws_collect_registered "$id"; rc=$?
   (( rc != 2 )) || { _ws_collect_unmeasured registry "$_WS_COLLECT_REG_WHY"; return 1; }
   (( rc != 1 )) || { _ws_collect_refuse registered "$_WS_COLLECT_REG_WHY"; return 1; }
-  _ws_tmproot_witness_read "$id"; rc=$?
-  (( rc != 1 )) || { _ws_collect_refuse not-witnessed "no witness stands for $id at $(_ws_tmproot_witness_file "$id") and no quarantine record names it — there is nothing to collect"; return 1; }
-  (( rc != 2 )) || { _ws_collect_refuse witness-mismatch "the witness $(_ws_tmproot_witness_file "$id") cannot be read as ccd writes it — a temp root nothing vouches for is offered to the operator, never taken"; return 1; }
+  _ws_collect_witness_judge "$id" || return 1
   [[ "$_WS_WIT_BTIME" != - ]] \
     || { _ws_collect_refuse witness-mismatch "the witness of $id records no birth time, so device and inode alone would vouch for $leaf — it is offered to the operator, never taken"; return 1; }
   _ws_reclaim_absent "$leaf"; rc=$?
@@ -33252,15 +33263,10 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
   # fact on every audit.
   local id="$1" rec name slot sleaf orig="$HOME/.cc-tmp/$1" rc sstate=absent ostate=other phase ents
   shift
-  (( $# == 1 )) \
-    || { _ws_collect_refuse quarantine-kept "$# quarantine records name $id — a resume completes one record and never chooses between several; they are kept for the operator"; return 1; }
-  rec="$1"; name="${rec##*/}"; _WS_COLLECT_RECORD="$rec"
-  _ws_collect_record_read "$rec"; rc=$?
-  (( rc != 1 )) || { _ws_collect_unmeasured records "the quarantine record $rec vanished while it was read"; return 1; }
-  (( rc != 3 )) || { _ws_collect_unmeasured quarantine "${_WS_QPATH_WHY:-the physical ~/.cc-tmp could not be resolved} — the slot of $rec was never derived, or whether it stands was never measured; the record stays as it is, and the next pass asks again"; return 1; }
-  (( rc == 0 )) || { _ws_collect_refuse quarantine-kept "the quarantine record $rec cannot be read as ccd writes it — it, and whatever it names, are kept for the operator"; return 1; }
-  [[ "${_WS_QREC_ID-}" == "$id" ]] \
-    || { _ws_collect_refuse quarantine-kept "the quarantine record $rec names ${_WS_QREC_ID-nothing}, not $id — it is kept for the operator"; return 1; }
+  # ONE RECORD, READ AS CCD WRITES IT AND NAMING THIS ID: `_ws_collect_records_judge`, the judgement the pre-lock
+  # pass shares (path-identity spec §2.5), so a junk or foreign record is answered in one set of words.
+  _ws_collect_records_judge "$id" "$@" || return 1
+  rec="$_WS_COLLECT_RECORD"; name="${rec##*/}"
   [[ "${_WS_QREC_BTIME-}" =~ ^[1-9][0-9]*$ ]] \
     || { _ws_collect_refuse quarantine-kept "the quarantine record $rec records no birth time, so device and inode alone would vouch for what it names — it is kept for the operator"; return 1; }
   # THE QUARANTINE, asked as the fresh arm asks it (`_ws_collect_qcheck`,
@@ -33353,6 +33359,107 @@ _ws_collect_resume_eval() {   # id record... -> a RESUME: REAP_VERDICT `collecta
   REAP_VERDICT=collectable
 }
 
+_ws_collect_witness_judge() {   # id -> 0 the witness parsed (_WS_WIT_* set); 1 with `not-witnessed` (none stands)
+  #                                  or `witness-mismatch` (it is not as ccd writes it) set. Reads only; takes no lock
+  # THE FRESH RUNGS' WITNESS READ, moved here whole: `_ws_collect_eval` calls
+  # it in their place, and `_ws_collect_prelock` calls it before any lock, so a
+  # junk witness is answered in one set of words (path-identity spec §2.5). The
+  # birth-time rung stays in the fresh rungs, under the lock.
+  local id="$1" rc
+  _ws_tmproot_witness_read "$id"; rc=$?
+  (( rc != 1 )) || { _ws_collect_refuse not-witnessed "no witness stands for $id at $(_ws_tmproot_witness_file "$id") and no quarantine record names it — there is nothing to collect"; return 1; }
+  (( rc != 2 )) || { _ws_collect_refuse witness-mismatch "the witness $(_ws_tmproot_witness_file "$id") cannot be read as ccd writes it — a temp root nothing vouches for is offered to the operator, never taken"; return 1; }
+}
+
+_ws_collect_records_judge() {   # id record... -> 0 the ONE record parsed and names id (_WS_COLLECT_RECORD and
+  #                                  _WS_QREC_* set); 1 with the answer set: `quarantine-kept` (two or more records, a
+  #                                  body not as ccd writes it, or one naming another id), unmeasured `records` (it
+  #                                  vanished) or unmeasured `quarantine` (its slot cannot be derived). Reads only
+  # THE RESUME'S FIRST RUNGS, moved here whole: `_ws_collect_resume_eval`
+  # calls it in their place, and `_ws_collect_prelock` calls it before any
+  # lock, so a junk, foreign, vanished or underivable record is answered in one
+  # set of words (path-identity spec §2.5). The birth-time rung stays in the
+  # resume, under the lock. `name` is set as the resume set it; the resume
+  # derives its own from `_WS_COLLECT_RECORD`.
+  local id="$1" rec name rc
+  shift
+  (( $# == 1 )) \
+    || { _ws_collect_refuse quarantine-kept "$# quarantine records name $id — a resume completes one record and never chooses between several; they are kept for the operator"; return 1; }
+  rec="$1"; name="${rec##*/}"; _WS_COLLECT_RECORD="$rec"
+  _ws_collect_record_read "$rec"; rc=$?
+  (( rc != 1 )) || { _ws_collect_unmeasured records "the quarantine record $rec vanished while it was read"; return 1; }
+  (( rc != 3 )) || { _ws_collect_unmeasured quarantine "${_WS_QPATH_WHY:-the physical ~/.cc-tmp could not be resolved} — the slot of $rec was never derived, or whether it stands was never measured; the record stays as it is, and the next pass asks again"; return 1; }
+  (( rc == 0 )) || { _ws_collect_refuse quarantine-kept "the quarantine record $rec cannot be read as ccd writes it — it, and whatever it names, are kept for the operator"; return 1; }
+  [[ "${_WS_QREC_ID-}" == "$id" ]] \
+    || { _ws_collect_refuse quarantine-kept "the quarantine record $rec names ${_WS_QREC_ID-nothing}, not $id — it is kept for the operator"; return 1; }
+}
+
+_ws_collect_prelock() {   # id -> 0 the reap lock may be opened; 1 an answer is set (REAP_VERDICT and REAP_DETAIL;
+  #                            _WS_COLLECT_PROBE when unmeasured; _WS_COLLECT_RECORDS once the records were listed)
+  #                            and no lock may be opened. ADVISORY: it grants nothing, and prints, journals and
+  #                            writes nothing
+  # A REAP LOCK IS NEVER UNLINKED, so the first open of `$REG/.reap-<id>.lock`
+  # makes a name for good (path-identity spec §2.5). The collect audit
+  # (`_ws_collect_audit_contained`) and `cmd_ws_collect` ask this first, so a
+  # junk witness, a junk or foreign record and an id with no dash make no lock.
+  # It answers only in the words the locked evaluation gives the same disk:
+  # `_ws_collect_slug_askable`, `_ws_collect_records_judge` and
+  # `_ws_collect_witness_judge` are those rungs, shared. The locked evaluation
+  # (`_ws_collect_fork`) lists, reads and parses everything again before any
+  # act, so a race between this pass and the lock can only refuse, or be
+  # judged again under the lock. In order:
+  #   an id with no dash names no slug to ask: unmeasured `registry`;
+  #   records that cannot be listed: unmeasured `records`;
+  #   a record that parses and names the id opens the lock — the resume judges
+  #     a second record, a birth time and the phase under it;
+  #   records stand, but none both parses and names the id: the resume's own
+  #     judgement answers here, the witness read for the document as the
+  #     fork's resume arm reads it;
+  #   no record: a witness that parses opens the lock, with a birth time or
+  #     none (one with none is `witness-mismatch` under the lock, as before);
+  #   a witness that does not parse: THE REGISTRY PEEK. Under the lock the
+  #     fresh rungs ask `registered` before the witness, and a row's retryable,
+  #     unjournaled `registered` must not become a terminal, journaled
+  #     `witness-mismatch` here. So the lock opens unless `$REG/<id>.child` and
+  #     `$REG/<id>.uuid` are PROVEN absent (`_ws_reclaim_absent`), a wildcard
+  #     of `$REG` lists exactly `$REG/tmproots`, where the witness was just
+  #     read (a readable bit is no such proof: an opendir can still fail, and
+  #     a glob that fails comes back empty), and `_ws_slug_free` answers free
+  #     over every field and dot family `_ws_collect_registered` reads. A lock
+  #     opened there is a row's;
+  #   otherwise the witness judgement answers: `not-witnessed` or
+  #     `witness-mismatch`.
+  # A judgement that reads sound on its second look met a writer between the
+  # two reads: unmeasured, and the next pass asks again.
+  local id="$1" out r rc
+  local -a recs=() ctl=()
+  _ws_collect_reset
+  _ws_collect_slug_askable "$id" || { _ws_collect_unmeasured registry "$_WS_COLLECT_REG_WHY"; return 1; }
+  out=$(_ws_collect_records_of "$id"); rc=$?
+  (( rc == 0 )) || { _ws_collect_unmeasured records "the quarantine records of $id could not be listed"; return 1; }
+  [[ -z "$out" ]] || mapfile -t recs <<< "$out"
+  _WS_COLLECT_RECORDS=(${recs[@]+"${recs[@]}"})
+  if (( ${#recs[@]} )); then
+    for r in "${recs[@]}"; do
+      _ws_collect_record_read "$r" && [[ "${_WS_QREC_ID-}" == "$id" ]] && return 0
+    done
+    _ws_tmproot_witness_read "$id" || :   # the document reports it, as the fork's resume arm reads it
+    _ws_collect_records_judge "$id" "${recs[@]}" || return 1
+    _ws_collect_unmeasured records "the quarantine record of $id read as ccd writes it only on a second look, so it changed while it was read — the next pass asks again"
+    return 1
+  fi
+  _ws_tmproot_witness_read "$id" && return 0
+  # THE LISTING CONTROL, as `_ws_collect_registered` keeps one: the one name a
+  # wildcard of `$REG` must find is the directory the witness was read from.
+  ctl=("$REG"/tmproot[s])
+  _ws_reclaim_absent "$REG/$id.child" && _ws_reclaim_absent "$REG/$id.uuid" \
+    && [[ ${#ctl[@]} -eq 1 && "${ctl[0]}" == "$REG/tmproots" ]] \
+    && _ws_slug_free "${id%-*}" "${id##*-}" || return 0
+  _ws_collect_witness_judge "$id" || return 1
+  _ws_collect_unmeasured witness "the witness of $id read as ccd writes it only on a second look, so it changed while it was read — the next pass asks again"
+  return 1
+}
+
 _ws_collect_fork() {   # id -> THE ONE EVALUATION `ws-audit --collect` and `ws-collect` share: a standing record
   #                        RESUMES, else the fresh rungs. The CALLER HOLDS `$REG/.reap-<id>.lock`. Reads only.
   local id="$1" out rc
@@ -33414,6 +33521,11 @@ _ws_collect_audit_contained() {   # `_ws_collect_audit`'s body, run under `_ws_r
   command -v flock >/dev/null 2>&1 || {
     _ws_collect_unmeasured flock "flock (util-linux) is unavailable, so the reap lock of $id cannot be taken"
     _ws_collect_audit_doc "$id"; return; }
+  # THE ADVISORY PARSE (path-identity spec §2.5): a reap lock is never
+  # unlinked, so the audit opens it only for an id a parsed witness or record
+  # vouches for, or a registry row may own. It grants nothing: the fork below
+  # judges all of it again under the lock.
+  _ws_collect_prelock "$id" || { _ws_collect_audit_doc "$id"; return; }
   exec {lfd}>>"$REG/.reap-$id.lock" || {
     _ws_collect_unmeasured lock "cannot open the reap lock at $REG/.reap-$id.lock"
     _ws_collect_audit_doc "$id"; return; }
@@ -34212,6 +34324,19 @@ cmd_ws_collect() {   # ccd ws-collect --expect <token> --session <id> [--surface
     _ws_reclaim_fail "$id" "" probe-unmeasured \
       "$(_ws_leaf_why_line "no lock was taken, and nothing was moved or removed: no witness stands for $id ($wf) and its quarantine records could not be listed (${_WS_QRECS_WHY:-the listing failed}), so whether the collector may lock $id was never asked")"
     return 1
+  fi
+  # THE ADVISORY PARSE (path-identity spec §2.5): a reap lock is never
+  # unlinked, so it is opened only for an id a parsed witness or record vouches
+  # for, or a registry row may own. `_ws_collect_prelock` grants nothing:
+  # `_ws_collect_locked` judges all of it again under the lock. Its answer
+  # comes BEFORE the pause, which is read under the lock: nothing moves either way.
+  if ! _ws_collect_prelock "$id"; then
+    if [[ "${REAP_VERDICT-}" == unmeasured ]]; then
+      _ws_reclaim_fail "$id" "" probe-unmeasured "$(_ws_leaf_why_line "no lock was taken, and nothing was moved or removed: ${REAP_DETAIL-}")"
+      return 1
+    fi
+    _ws_collect_refused "$id" "" "${REAP_VERDICT-}" "no lock was taken: ${REAP_DETAIL-}" "$lc_surface" "$lc_actor" "$lc_reason"
+    return 0
   fi
   # THE SHARED LOCK: `$REG/.reap-<id>.lock`, the one ws-reap, ws-reclaim,
   # ws-expire and ws-restore take, so none of them runs on this id at once.
