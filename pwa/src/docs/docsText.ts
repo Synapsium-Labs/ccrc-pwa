@@ -228,7 +228,7 @@ export type DocLinkInertReason =
 /** The first half of an inert link's title, `<sentence>: <raw>` (spec 4.11). */
 export const DOC_LINK_INERT_SENTENCE: Record<DocLinkInertReason, string> = {
   'empty': 'This link has no target',
-  'malformed': 'This link holds a space, a control character or a backslash',
+  'malformed': 'This link is not a well-formed URL (it may hold a space, a control character or a backslash)',
   'scheme': 'This link uses a scheme Docs does not open',
   'protocol-relative': 'This link names another host without a scheme',
   'root-relative': 'This link points at a server path, not at a document',

@@ -32,10 +32,17 @@ export interface Detached {
   readonly images: number;
 }
 
-/** Every property name `html-url-attributes` lists. Moved off EVERY element whatever its tag: the package's tag lists
- *  say where a browser reads the key as a URL, and a key on another tag is moved too, so nothing depends on that
- *  list being right (fail closed). */
-const URL_KEYS: readonly string[] = Object.keys(urlAttributes);
+/** Every property name `html-url-attributes` (3.0.1) lists, and the URL-bearing names in hast's property form it
+ *  lacks: `srcSet` and `imageSrcSet` (a list of URLs), `xLinkHref`, `xLinkArcRole` and `xmlBase` (SVG and XML), the
+ *  legacy `longDesc`, `lowSrc`, `background`, `classId`, `codeBase`, `archive`, `useMap` and `profile`, and `srcDoc`
+ *  (a whole document). So `URL_KEYS` is a superset of `html-url-attributes`. Moved off EVERY element whatever its
+ *  tag: the package's tag lists say where a browser reads the key as a URL, and a key on another tag is moved too,
+ *  so nothing depends on that list being right (fail closed). */
+const URL_KEYS: readonly string[] = [
+  ...Object.keys(urlAttributes),
+  'srcSet', 'imageSrcSet', 'xLinkHref', 'xLinkArcRole', 'xmlBase', 'longDesc', 'lowSrc', 'background', 'classId',
+  'codeBase', 'archive', 'useMap', 'profile', 'srcDoc',
+];
 
 /** A hast property value as URL text: a string as is, a number in decimal, a list space-joined (as hast-util-to-jsx-
  *  runtime writes a space-separated attribute); `null` for a boolean, `null` or `undefined`, which hold no URL. */
@@ -157,13 +164,17 @@ export type DocLinkTarget =
 
 /** The one decision for a Markdown link on a Docs page: `raw`, the link's `href` as `detachUrls` moved it (`''` for a
  *  link with none), resolved from the page's own section and path by L0 `resolveDocRef`. A doc link keeps the page's
- *  project and ref and drops `view` (`docsLocation`'s `path` target with no `view`); an inert link's title is
- *  `<sentence>: <raw>`. */
+ *  project and ref and drops `view` (`docsLocation`'s `path` target with no `view`), except that a link to THIS page
+ *  that names a fragment is a `fragment` link. An inert link's title is `<sentence>: <raw>`. */
 export function docLinkTarget(ctx: DocLinkContextValue, raw: string): DocLinkTarget {
   const inert = (why: DocLinkInertReason): DocLinkTarget => ({ kind: 'inert', title: `${DOC_LINK_INERT_SENTENCE[why]}: ${raw}` });
   const r = resolveDocRef({ section: ctx.section, path: ctx.path }, raw);
   switch (r.kind) {
     case 'doc': {
+      // This very page, spelled with its file name and a fragment: an anchor in the page, not a second history entry.
+      if (r.fragment !== null && r.section === ctx.section && r.path === ctx.path) {
+        return { kind: 'fragment', fragment: r.fragment };
+      }
       const here: DocsPageLocation = { kind: 'project', project: ctx.project, ref: ctx.pageRef };
       const href = docsPageUrl(docsLocation(here, { kind: 'path', section: r.section, path: r.path, dirSlash: false }));
       return { kind: 'in-app', href, fragment: r.fragment };

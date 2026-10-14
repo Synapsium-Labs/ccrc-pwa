@@ -127,6 +127,25 @@ describe('detachUrls: a copy with every URL moved into the map (spec 4.11; refin
     expect(d.urls.get(odd)?.attrs).toEqual({ ping: 'p1 p2', href: '7' });
   });
 
+  it('moves the URL properties html-url-attributes lacks too (srcSet, xLinkHref, longDesc, ...): the move fails closed', () => {
+    const extra = ['srcSet', 'imageSrcSet', 'xLinkHref', 'xLinkArcRole', 'xmlBase', 'longDesc', 'lowSrc', 'background',
+      'classId', 'codeBase', 'archive', 'useMap', 'profile', 'srcDoc'];
+    const img = el('img', { alt: 'x', srcSet: 'a.png 1x, /api/example/b.png 2x' });
+    const use = el('use', { xLinkHref: '/api/example/sprite.svg#a', id: 'u' });
+    const others = extra.map((k) => el('div', { [k]: `u-${k}`, title: 't' }));
+    const d = detachUrls({ type: 'root', children: [img, use, ...others] });
+    const [imgCopy, useCopy, ...otherCopies] = d.tree.children as HastElement[];
+    expect(imgCopy!.properties).toEqual({ alt: 'x' });
+    expect(Object.hasOwn(imgCopy!.properties, 'srcSet')).toBe(false);
+    expect(d.urls.get(imgCopy!)?.attrs).toEqual({ srcSet: 'a.png 1x, /api/example/b.png 2x' });
+    expect(useCopy!.properties).toEqual({ id: 'u' });
+    expect(d.urls.get(useCopy!)?.attrs).toEqual({ xLinkHref: '/api/example/sprite.svg#a' });
+    extra.forEach((k, i) => {
+      expect(otherCopies[i]!.properties).toEqual({ title: 't' });
+      expect(d.urls.get(otherCopies[i]!)?.attrs).toEqual({ [k]: `u-${k}` });
+    });
+  });
+
   it('numbers img elements 0..n-1 in document order, counts them, and records nothing for an element with nothing', () => {
     const d = detachUrls(treeOf('![a](a.png)\n\n- ![b](b.png)\n\n[![c](c.png)](d.md) text'));
     expect(d.images).toBe(3);
@@ -219,6 +238,33 @@ describe('DocLink: doc links in-app (M4.U3; refinement (o))', () => {
     expect(location.hash).toBe('');
   });
 
+  it('a link to THIS page spelled with its file name and a fragment is a fragment link: a click scrolls and pushes nothing', () => {
+    const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
+    const push = vi.spyOn(history, 'pushState');
+    const d = detachUrls(treeOf('x'));
+    for (const raw of ['a.md#sec', './a.md#sec', '../specs/a.md#sec']) {
+      expect(docLinkTarget(ctxFor(d), raw)).toEqual({ kind: 'fragment', fragment: 'sec' });
+    }
+    const { container, ctx } = renderDoc('[x](a.md#sec)');
+    const a = firstLink(container);
+    expect(a.getAttribute('href')).toBe('#sec');
+    const target = document.createElement('h2');
+    target.id = 'sec';
+    container.querySelector('article')!.append(target);
+    expect(fireEvent.click(a)).toBe(false);
+    expect(scroll.mock.contexts[0]).toBe(target);
+    expect(push).not.toHaveBeenCalled();
+    expect(ctx.onFragment).not.toHaveBeenCalled();
+  });
+
+  it('a link to this page with NO fragment stays a doc link, and a link to another page with the same file name too', () => {
+    const d = detachUrls(treeOf('x'));
+    expect(docLinkTarget(ctxFor(d), 'a.md')).toMatchObject({ kind: 'in-app', fragment: null });
+    expect(docLinkTarget(ctxFor(d), '../plans/a.md#sec')).toMatchObject({ kind: 'in-app', fragment: 'sec' });
+    expect(docLinkTarget(ctxFor(d), 'b.md#sec')).toMatchObject({ kind: 'in-app', fragment: 'sec' });
+    expect(docLinkTarget(ctxFor(d, { path: 'dir/b.md' }), 'a.md#sec')).toMatchObject({ kind: 'in-app', fragment: 'sec' });
+  });
+
   it('a doc link with no fragment hands none over', () => {
     const { container, ctx } = renderDoc('[x](../plans/p.md)');
     fireEvent.click(firstLink(container));
@@ -258,6 +304,20 @@ describe('DocLink: external links on tap only (M4.U4)', () => {
     const span = container.querySelector('span.doc-link-inert');
     expect(span?.textContent).toBe('x');
     expect(span?.getAttribute('title')).toBe(`${DOC_LINK_INERT_SENTENCE[why]}: ${raw}`);
+  });
+
+  it('[x](https://) is malformed because new URL refuses it, and its sentence says so (not only space, control or backslash)', () => {
+    const { container } = renderDoc('[x](https://)');
+    expect(container.querySelector('a')).toBeNull();
+    const title = container.querySelector('span.doc-link-inert')?.getAttribute('title') ?? '';
+    expect(title.startsWith('This link is not a well-formed URL')).toBe(true);
+    expect(title).toBe(`${DOC_LINK_INERT_SENTENCE.malformed}: https://`);
+    expect(DOC_LINK_INERT_SENTENCE.malformed).toMatch(/space.*control character.*backslash/);
+    const d = detachUrls(treeOf('x'));
+    expect(docLinkTarget(ctxFor(d), 'http://a:99999'))
+      .toEqual({ kind: 'inert', title: `${DOC_LINK_INERT_SENTENCE.malformed}: http://a:99999` });
+    expect(docLinkTarget(ctxFor(d), 'a b.md'))
+      .toEqual({ kind: 'inert', title: `${DOC_LINK_INERT_SENTENCE.malformed}: a b.md` });
   });
 
   it('docLinkTarget answers the same words without rendering', () => {
@@ -343,6 +403,46 @@ describe('DocLink: fragments scroll inside the article (M4.U7)', () => {
       outside.remove();
     }
   });
+});
+
+describe('fragments are compared as strings: no selector is built from document text', () => {
+  it('a footnote label holding a dot: a tap on its reference scrolls the footnote li', () => {
+    const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
+    const { container } = renderDoc('A claim.[^a.b]\n\n[^a.b]: The note.\n');
+    const ref = container.querySelector('a[href="#user-content-fn-a.b"]');
+    expect(ref).not.toBeNull();
+    fireEvent.click(ref!);
+    expect(scroll).toHaveBeenCalledTimes(1);
+    expect(scroll.mock.contexts[0]).toBe(container.querySelector('li[id="user-content-fn-a.b"]'));
+  });
+
+  it('an id that matches only once the fragment is percent-decoded is found (#%C3%A9 names the id "\u00e9")', () => {
+    const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
+    const { container } = renderDoc('[x](#%C3%A9)');
+    const h = document.createElement('h2');
+    h.id = '\u00e9';
+    container.querySelector('article')!.append(h);
+    fireEvent.click(firstLink(container));
+    expect(scroll.mock.contexts[0]).toBe(h);
+  });
+
+  it.each(['#%E0%A4%A', '#100%', '#a%zz', '#[x]', '#a%20b'])(
+    'a fragment that is not a valid selector (%s) neither throws nor scrolls',
+    (raw) => {
+      const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
+      const errors: unknown[] = [];
+      const onError = (e: ErrorEvent): void => { errors.push(e.error); e.preventDefault(); };
+      window.addEventListener('error', onError);
+      try {
+        const { container } = renderDoc(`[x](${raw})`);
+        expect(() => fireEvent.click(firstLink(container))).not.toThrow();
+        expect(errors).toEqual([]);
+        expect(scroll).not.toHaveBeenCalled();
+      } finally {
+        window.removeEventListener('error', onError);
+      }
+    },
+  );
 });
 
 describe('no URL reaches the DOM except through DocLink (spec 4.11)', () => {
