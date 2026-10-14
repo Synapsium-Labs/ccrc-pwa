@@ -8607,6 +8607,15 @@ export const PANE_HISTORY_LINES = 2000;
  */
 export const PINNED_WINDOW_COLS = 220;
 export const PINNED_WINDOW_ROWS = 50;
+/**
+ * The rows tmux takes from every attached client for its status line. A client
+ * of R rows views a window of R − TMUX_STATUS_ROWS rows exactly (spec 2026-10-14
+ * W8), so a drawer that attaches at PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS is the
+ * window's size and tmux has nothing to pan (W6). True while `ccd/tmux.conf`
+ * leaves tmux's default single status line; `drawer-status-rows.test.ts` reds
+ * the day it does not.
+ */
+export const TMUX_STATUS_ROWS = 1;
 
 /**
  * ONE MEASUREMENT OF A PANE, and its failures told apart.
