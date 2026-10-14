@@ -3716,8 +3716,8 @@ comments and test titles cite the spec, never this contract.
   four callers, `enable`'s new project check among them, say "no LEADING dot or dash".
 - `enable-validates-its-project`: `enable <wrapper> <project>` calls `_ws_project_valid` before it journals, so a dot-
   or dash-leading project leaves no `enable` row. It refuses more than before. It asks its wrapper first, with
-  `cmd_start`'s own check and words, so an unrostered or flag-spelled wrapper leaves no `enable` row and no reap lock
-  either.
+  `cmd_start`'s own check and words, so an unrostered wrapper, or a flag-spelled one that reaches the two-argument
+  form, leaves no `enable` row and no reap lock either.
 
 **SEC5 (the cap).**
 - `id-cap-from-the-name-census`: the cap is derived from a census of every name derived from an id, not from the slot
@@ -3772,6 +3772,15 @@ comments and test titles cite the spec, never this contract.
   `pr-state --session <id>` keep the id check they had; `ensure <id>` takes its one positional with no shape check.
   None carries the decision flags the server appends.
 - `enable-one-arg-journals-an-unchecked-id`: `enable <id>` journals before any check of the id, as it did before.
+- `stripped-flag-positional-collapses-to-the-id-form`: start, enable and stop strip `--cross-pool`, `--` and
+  `--route=<f>=<v>` (and stop strips `--surface` and `--surface=`) from any position before their arity rule, so a
+  positional spelled as one of those never reaches the two-argument checks, and the call collapses to the
+  one-argument (id) form. For example, `enable --cross-pool <existing-id>` and `enable <wrapper> --` journal `enable`
+  against the other positional and start that existing id, and `stop <wrapper> --surface=x --surface pwa` stops
+  `<wrapper>`. Not a regression: the pre-wave binary does the same. ccd never mints such a name (`=` is outside the
+  charset and a leading `-` is refused). It is reachable only through an operator-typed request body to the server's
+  session-creation route, whose guard (refuse a wrapper outside the roster and a project failing the project rule) is
+  carried to a later server wave.
 - `hand-planted-ids-over-the-cap`: a row planted by hand above `_REG_ID_MAX` is not refused.
 - `files-outside-the-name-census`: the file the cap's census left out.
 - `history-spool-names-outside-the-census-patterns`: the history spool's own names are built from a bare id or a file

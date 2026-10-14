@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=7e316a57f2639a00c9201e65154ff5ab6a2ef43ecaf0fcfe5b5513d86d856819
+# ccrc:generated 1 sha256=f7f81caf08f813c4595ceb9568adda4b0936c3b4c7e3f842234f2aeb06070aa6
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -22447,7 +22447,7 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
     # its own — its id is `<wrapper>-<project>`, and roster ids cannot lead
     # with a dot. Refusing the same value at BOTH creation verbs is what
     # makes the stronger, simpler statement true — no registry row EVER
-    # holds a dot-leading project — so no future reader has to re-derive
+    # holds a dot- or dash-leading project — so no future reader has to re-derive
     # which verb could alias and which could not. See `_ws_project_valid`.
     _ws_project_valid "$project" \
       || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot or dash"
@@ -25961,9 +25961,9 @@ cmd_enable() {   # <id>  |  <wrapper> <project> [workdir]
   # grant no route builds. §3.4 gives it the same one-argument id form as `start` — it takes the
   # SAME two shapes, so it needs its own usage line rather than borrowing start's, or a mistyped
   # `ccd enable` would answer as a verb the operator did not type.
-  # STRIPPED BEFORE `_id`, and that ordering is the whole point: `_id "$1" "$2"`
-  # on an unstripped argv mints `--cross-pool-<wrapper>` and this verb journals
-  # `enable` against a session id that does not exist.
+  # STRIPPED BEFORE `_id` AND THE WRAPPER CHECK: unstripped, `_id "$1" "$2"` would mint
+  # `--cross-pool-<wrapper>`, and the two-argument check below would refuse a valid
+  # `enable --cross-pool <wrapper> <project>` as the unknown wrapper `--cross-pool`.
   #
   # `--route` IS FORWARDED, NOT PARSED. This loop strips it only so the arity
   # rule below counts POSITIONALS, and hands the pairs back to `cmd_start`

@@ -90,7 +90,7 @@ const BASE_RESIDUALS = ['dot-rule-only-at-the-token-verbs', 'verbs-outside-sec1-
   'projects-over-64-get-no-hook-card', 'btime-less-witness-takes-the-lock',
   'history-spool-names-outside-the-census-patterns', 'quarantine-record-names-outside-the-census-patterns',
   'random-slug-decides-the-cap-near-the-boundary', 'hold-card-workdir-quote-silent-near-the-cap',
-  'dash-leading-pool-tag-unclearable-on-an-upgraded-box'];
+  'dash-leading-pool-tag-unclearable-on-an-upgraded-box', 'stripped-flag-positional-collapses-to-the-id-form'];
 
 /** The residuals the records must name at this tip: the fixed list, plus each conditional one while the code still
  *  shows it. These are a server docstring that calls ccd's predicate dot-only, the EXPIRE-V1 note that says it ships

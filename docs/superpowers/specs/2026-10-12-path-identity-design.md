@@ -222,7 +222,8 @@ measured at the wave's tip unless it says otherwise.
   - a `--session` key with no value of its own, followed by a decision flag, takes that flag as its id. So
     `ws-release --session --actor ''` dies on the usage line where it died on `--actor must be non-blank`, and
     `--expect <token> --session --surface=w` at a token verb answers `bad session id` where it answered the usage
-    line. Each is still a refusal, with the same exit code and before any act: §2.4's atomic consumption.
+    line. At ws-restore the refusal row now names the flag as its id (`--surface`, for example), where it named `''`.
+    Each is still a refusal, with the same exit code and before any act: §2.4's atomic consumption.
 - `--actor` and `--reason` prose, and a hold reason, may still begin with `-`.
 - No refusal word, probe word or journal act was added, and the refusal scan's sanctioned `die` set is unchanged. The
   verbs reuse `bad session id` and their usage lines. Stop's two new refusals print `bad session id: ` followed by
@@ -254,8 +255,8 @@ measured at the wave's tip unless it says otherwise.
   rule, pinned against it name by name.
 - `enable <wrapper> <project>` checks its project with `_ws_project_valid` before it journals anything. It refuses
   more than before: a dot- or dash-leading project leaves no `enable` row. Ahead of it, enable asks its wrapper with
-  `cmd_start`'s own check and words, so an unrostered or flag-spelled wrapper leaves no `enable` row and no reap lock
-  either.
+  `cmd_start`'s own check and words, so an unrostered wrapper, or a flag-spelled one that reaches the two-argument
+  form, leaves no `enable` row and no reap lock either.
 
 **Dots (SEC6).**
 - ws-reclaim, ws-expire and ws-collect refuse a dot-leading id at entry through `_ws_tmproot_id_ok`. So do
@@ -323,8 +324,8 @@ measured at the wave's tip unless it says otherwise.
      every `$REG/<id>.<field>` and every dot family. When the lock opens, the locked evaluation answers `registered`
      or unmeasured `registry`, as before. Only when all three hold is the witness's answer given before the lock.
 - So a live row of any kind still answers `registered` ahead of `witness-mismatch`. The audit leaves `registered`
-  unjournaled, as it leaves every word that is not terminal; the verb journals it, as it journals every refusal. A
-  junk witness or junk record of an id that no row names creates no permanent lock.
+  unjournaled, as it leaves every word that is not terminal; the verb journals it, as it journals every refusal document.
+  A junk witness or junk record of an id that no row names creates no permanent lock.
 - Under the lock every input is listed, read and parsed again before any act. A race between the pass and the lock
   can therefore only refuse, or be judged again.
 - The verb reads the cleanup pause under the lock, so its pre-lock answers now come ahead of the cleanup pause. A
@@ -398,6 +399,15 @@ measured at the wave's tip unless it says otherwise.
   literally and acts on no other row (pinned).
 - `enable-one-arg-journals-an-unchecked-id`: `enable <id>` journals its row before any check of the id, as it did
   before the wave. `cmd_start`, which it calls next, applies the inline charset check and needs an existing row.
+- `stripped-flag-positional-collapses-to-the-id-form`: start, enable and stop strip `--cross-pool`, `--` and
+  `--route=<f>=<v>` (and stop strips `--surface` and `--surface=`) from any position before their arity rule, so a
+  positional spelled as one of those never reaches the two-argument checks, and the call collapses to the
+  one-argument (id) form. For example, `enable --cross-pool <existing-id>` and `enable <wrapper> --` journal `enable`
+  against the other positional and start that existing id, and `stop <wrapper> --surface=x --surface pwa` stops
+  `<wrapper>`. This is not a regression: the pre-wave binary does the same. ccd never mints such a name (`=` is
+  outside the charset and a leading `-` is refused). It is reachable only through an operator-typed request body to
+  the server's session-creation route, whose guard (refuse a wrapper outside the roster and a project failing the
+  project rule) is carried to a later server wave.
 - `hand-planted-ids-over-the-cap`: a row planted by hand above `_REG_ID_MAX` is not refused. ccd never mints one.
 - `files-outside-the-name-census`: the file the cap's census left out, listed above.
 - `history-spool-names-outside-the-census-patterns` and `quarantine-record-names-outside-the-census-patterns`: the
