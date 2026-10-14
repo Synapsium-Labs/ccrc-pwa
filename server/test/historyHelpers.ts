@@ -199,6 +199,46 @@ export function openStoreRO(box: HistoryBox): DatabaseSync {
   return new DatabaseSync(historyPaths(box.home).dbFile, { readOnly: true });
 }
 
+/** Take a store the real code just made back to schema v1: drop the owed-row index schema v2 added (D-5015) and stamp
+ *  user_version 1. What is left is the store B1 shipped, so the writer's migration path (v1 -> this build's v2) runs on it
+ *  for real. The caller holds no open connection to the file. */
+export function rewindStoreToV1(dbFile: string): void {
+  const db = new DatabaseSync(dbFile);
+  try {
+    db.exec('DROP INDEX IF EXISTS blobs_unindexed');   // tolerant: a mutant that never made it must fail at the migration's assertion, not here
+    db.exec('PRAGMA user_version = 1');
+  } finally { db.close(); }
+}
+
+/** Plant blobs rows straight into a store: `owed` are unindexed with bytes (what the FTS backfill still owes), `indexed` are
+ *  fts_indexed = 1 with bytes, `pruned` are prune's tombstones (z NULL, fts_indexed = 0: they can never be owed). The shas are
+ *  distinct and deterministic. Raw rows, no entries: the owed-row index and its predicate are measured over blobs alone. */
+export function plantBlobs(dbFile: string, n: { owed?: number; indexed?: number; pruned?: number }): void {
+  const db = new DatabaseSync(dbFile);
+  try {
+    const ins = db.prepare('INSERT INTO blobs (sha256, codec, z, raw_len, fts_indexed, pruned_ms) VALUES (?, ?, ?, ?, ?, ?)');
+    let k = Number((db.prepare('SELECT count(*) AS n FROM blobs').get() as { n: number }).n);   // a later call continues the shas
+    const sha = (): Buffer => { const b = Buffer.alloc(32); b.writeUInt32BE(k += 1, 0); return b; };
+    for (let i = 0; i < (n.owed ?? 0); i += 1) ins.run(sha(), 'br5', Buffer.from('z'), 1, 0, null);
+    for (let i = 0; i < (n.indexed ?? 0); i += 1) ins.run(sha(), 'br5', Buffer.from('z'), 1, 1, null);
+    for (let i = 0; i < (n.pruned ?? 0); i += 1) ins.run(sha(), 'br5', null, 1, 0, 1);
+  } finally { db.close(); }
+}
+
+/** The owed-row index (schema v2, D-5015) as a store holds it: its SQL from sqlite_master (null when the store has none) and how many
+ *  entries it holds (null when it has none), read from ANALYZE's own count for that index (sqlite_stat1's first integer, absent for an
+ *  empty index), so it is the index's population and not a filtered count over blobs. Writes sqlite_stat1 into the fixture store. */
+export function owedIndexFacts(dbFile: string): { sql: string | null; entries: number | null } {
+  const db = new DatabaseSync(dbFile);
+  try {
+    const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'blobs_unindexed'").get() as { sql: string } | undefined;
+    if (row === undefined) return { sql: null, entries: null };
+    db.exec('ANALYZE blobs_unindexed');
+    const st = db.prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'blobs_unindexed'").get() as { stat: string } | undefined;
+    return { sql: row.sql, entries: st === undefined ? 0 : Number(st.stat.split(' ')[0]) };
+  } finally { db.close(); }
+}
+
 /** Every counter row, as a record. */
 export function counters(box: HistoryBox): Record<string, number> {
   const db = openStoreRO(box);

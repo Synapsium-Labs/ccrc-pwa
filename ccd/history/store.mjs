@@ -167,12 +167,23 @@ CREATE TABLE journal_outbox (seq INTEGER PRIMARY KEY AUTOINCREMENT,
   rec TEXT NOT NULL);
 `;
 
+/** Schema v2's one statement (D-5015, history-schema-v2-owed-index): the owed-row partial index. It holds exactly the
+ *  blobs the FTS backfill could still owe a row: unindexed AND still holding bytes. The `z IS NOT NULL` term leaves out
+ *  prune's tombstones (pruneBatch sets fts_indexed = 0 with z NULL; they can never be owed), so the index never grows
+ *  with pruning. sweep.mjs's FTS_OWED_SQL repeats both terms LITERALLY, which is what lets SQLite use a partial index
+ *  (its WHERE must be implied by the query's own); change one side and the other together, and history-store.test.ts's
+ *  EXPLAIN QUERY PLAN pin goes red. No IF NOT EXISTS: the only place this index is made is this versioned migration. */
+const V2 = `CREATE INDEX blobs_unindexed ON blobs(blob_id) WHERE fts_indexed = 0 AND z IS NOT NULL;
+`;
+
 /** MIGRATIONS[v] takes a store from user_version v to v + 1. Index 0 is the
- *  whole v1 schema, run once by `createStore` and never by a migration (v1 has
- *  none). FROZEN: an entry, once shipped, is never edited — a store that ran it
+ *  whole v1 schema and index 1 is v2's owed-row index; `createStore` runs every
+ *  entry in order on a fresh store, so a fresh store and a migrated one are the
+ *  same by construction, and `runMigration` runs `from`..`to`-1 on an older one.
+ *  FROZEN: an entry, once shipped, is never edited — a store that ran it
  *  is past it — and every later entry is additive only (§6.11;
  *  D-4212). */
-export const MIGRATIONS = Object.freeze([V1]);
+export const MIGRATIONS = Object.freeze([V1, V2]);
 
 // ── open ─────────────────────────────────────────────────────────────────────
 
@@ -831,7 +842,7 @@ export function createStore(home, opts = {}) {
     db.exec('PRAGMA journal_mode = WAL');
     db.exec('BEGIN IMMEDIATE');
     try {
-      db.exec(MIGRATIONS[0]);
+      for (const m of MIGRATIONS) db.exec(m);
       const put = db.prepare('INSERT INTO meta (k, v) VALUES (?, ?)');
       put.run('store_id', storeId);
       put.run('writer', writer);

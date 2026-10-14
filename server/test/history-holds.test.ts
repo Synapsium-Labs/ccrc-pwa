@@ -14,10 +14,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
-import { floorThreshold } from '../../ccd/history/lib.mjs';
+import { SCHEMA_VERSION, floorThreshold } from '../../ccd/history/lib.mjs';
 import {
   makeHistoryBox, runSweep, runDriver, preloadOptions, plantSession, plantTranscript, spoolLine, openStoreRO, counters,
-  journalRecords, PRELOADS, SWEEP, type HistoryBox,
+  journalRecords, PRELOADS, SWEEP, rewindStoreToV1, plantBlobs, owedIndexFacts, type HistoryBox,
 } from './historyHelpers.js';
 
 beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
@@ -322,7 +322,10 @@ describe('O46: a hold keeps epochs', () => {
     expect(countOf(box, 'spool_receipts')).toBe(0);
     expect(counter(box, 'migration_refused_low_disk')).toBeGreaterThanOrEqual(7);
     expect(metaOf(box, 'migration')).toBe('refuse-low-disk');
-    // Unpaused: this build's schema, room to spare.
+    // Unpaused, room to spare. The store is still the v1 the seam rewound it to, so the first real pass migrates it (D-5015: this
+    // build's v2 is the owed-row index) and does nothing else; the next one drains.
+    expect(runSweep(box).code).toBe(0);
+    expect(versionOf(paths(box).db)).toBe(SCHEMA_VERSION);
     expect(runSweep(box).code).toBe(0);
     expect(draining(box)).toEqual([]);
     expect(epochsOf(box)).toEqual([
@@ -398,6 +401,37 @@ describe('DM42: no migration without a snapshot', () => {
     expect(countOf(box, 'spool_receipts'), 'a pass that migrates does nothing else but the journal half').toBe(0);
     expect(draining(box)).toHaveLength(1);
     expect(spoolRecs(box).length).toBe(1);
+  });
+
+  it('a REAL v1 store (D-5015): the scheduled pass snapshots to pre-v2.db and migrates to this build, building the owed-row index over the blobs already there', () => {
+    const box = boundBox('ccrc-hist-v2sched-');
+    const p = paths(box);
+    plantBlobs(p.db, { owed: 3, indexed: 2, pruned: 2 });
+    rewindStoreToV1(p.db);
+    const blobsOf = (file: string): unknown[] => {
+      const db = new DatabaseSync(file, { readOnly: true });
+      try { return db.prepare('SELECT blob_id, hex(sha256) AS sha, z, fts_indexed, pruned_ms FROM blobs ORDER BY blob_id').all(); } finally { db.close(); }
+    };
+    const blobs = blobsOf(p.db);
+    const storeId = fs.readFileSync(p.storeId, 'utf8').trim();
+    expect(blobs).toHaveLength(7);
+    expect(versionOf(p.db), 'CONTROL: the store is a v1').toBe(1);
+    expect(owedIndexFacts(p.db).sql, 'CONTROL: and carries no owed-row index').toBeNull();
+    const r = runSweep(box);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^history-sweep: migrated$/m);
+    const pre = path.join(p.backups, 'pre-v2.db');
+    expect(names(p.backups), 'the pre-migration snapshot, as runMigration names it').toEqual(['pre-v2.db']);
+    expect(versionOf(pre)).toBe(1);
+    expect(owedIndexFacts(pre).sql, 'the snapshot is the v1 as it was').toBeNull();
+    expect(versionOf(p.db)).toBe(2);
+    expect(versionOf(p.db)).toBe(SCHEMA_VERSION);
+    const facts = owedIndexFacts(p.db);
+    expect(facts.sql).toBe('CREATE INDEX blobs_unindexed ON blobs(blob_id) WHERE fts_indexed = 0 AND z IS NOT NULL');
+    expect(facts.entries, 'built over the 3 owed blobs only: not the 2 indexed, not the 2 tombstones').toBe(3);
+    expect(blobsOf(p.db), 'the data is intact').toEqual(blobs);
+    expect(fs.readFileSync(p.storeId, 'utf8').trim()).toBe(storeId);
+    expect(metaOf(box, 'store_id')).toBe(storeId);
   });
 
   it('a VACUUM INTO killed mid-copy leaves only the .tmp and the attempt marker at user_version 1; the next tick removes the .tmp first and migrates', () => {
@@ -670,7 +704,7 @@ describe('FR2-b (D-4339): a stale pre-migration temp is removed before the room 
     const box = boundBox('ccrc-hist-fr2b3-');
     const a = plant(box, '.pre-v1.db.tmp', 128);
     const b = plant(box, '.pre-v7.db.tmp-journal', 128);
-    const keep = [plant(box, 'pre-v1.db', 64), plant(box, '.pre-v2.attempt', 2), plant(box, '20261005T000000Z.db', 64)];
+    const keep = [plant(box, 'pre-v1.db', 64), plant(box, `.pre-v${SCHEMA_VERSION + 1}.attempt`, 2), plant(box, '20261005T000000Z.db', 64)];
     expect(runSweep(box).code).toBe(0);
     expect(fs.existsSync(a) || fs.existsSync(b)).toBe(false);
     expect(keep.every((f) => fs.existsSync(f)), 'a finished snapshot, an attempt marker and an operator backup are not temps').toBe(true);

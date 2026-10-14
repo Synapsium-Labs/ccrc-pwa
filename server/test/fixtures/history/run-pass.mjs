@@ -23,7 +23,11 @@
 //                      refused now, never thrown, so FR2-c's throw out of the journal half at lock take is injected)
 //   openStoreWord      the word an --op pass's store open answers instead of opening (FU4 M28: a word whose REASONS code is
 //                      not exit 5), handed to sweep.mjs as deps.openStore
-//   extraMigrations    SQL appended to MIGRATIONS as v2, v3, ... (the migration seam, DM42/DM43)
+//   extraMigrations    SQL run as v2, v3, ... over the v1 DDL alone (the migration seam, DM42/DM43): a build whose v2 is the seam,
+//                      standing in for the real v2 (D-5015: the owed-row index). A store the real code just made carries that index and
+//                      reads user_version = SCHEMA_VERSION, so the driver first REWINDS such a store to v1 (drops the index, stamps 1):
+//                      the store the seam migrates is then the v1 store these cases were written for. A store the seam already migrated
+//                      carries no index and is left alone.
 //   heavy              the versions among those that SCHEMA_ADDED marks heavy
 //   managedSettings    the managed-settings list the census reads instead of /etc (Task 26)
 //   budgetMs, budgetBytes, chunkBytes  the run budget's limits, handed to sweep.mjs as deps.budget (W1-B2 Task 25)
@@ -32,8 +36,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { syncBuiltinESMExports } from 'node:module';
 import { runPass } from '../../../../ccd/history/sweep.mjs';
-import { MIGRATIONS } from '../../../../ccd/history/store.mjs';
-import { SCHEMA_ADDED } from '../../../../ccd/history/lib.mjs';
+import { MIGRATIONS, closeWriter, openWriter, userVersion } from '../../../../ccd/history/store.mjs';
+import { SCHEMA_ADDED, SCHEMA_VERSION, historyPaths } from '../../../../ccd/history/lib.mjs';
 
 const spec = JSON.parse(process.env.HISTORY_TEST_DEPS ?? '{}');
 const deps = {};
@@ -42,11 +46,25 @@ if (spec.offsetMs !== undefined || spec.stepMs !== undefined) {
   deps.now = () => Date.now() + (spec.offsetMs ?? 0) + (k++) * (spec.stepMs ?? 0);
 }
 if (Array.isArray(spec.extraMigrations) && spec.extraMigrations.length > 0) {
-  deps.migrations = [...MIGRATIONS, ...spec.extraMigrations];
-  const added = { ...SCHEMA_ADDED };
-  let prev = SCHEMA_ADDED[MIGRATIONS.length].tables;
+  const dbFile = historyPaths(process.env.HOME).dbFile;
+  if (fs.existsSync(dbFile)) {
+    // Through store.mjs's own open (this fixture's ring forbids node:sqlite); a store that open refuses is left for the pass to refuse.
+    let db = null;
+    try { db = openWriter(dbFile); } catch { /* not ours to rewind */ }
+    if (db !== null) {
+      try {
+        if (userVersion(db) === SCHEMA_VERSION && db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'blobs_unindexed'").get() !== undefined) {
+          db.exec('DROP INDEX blobs_unindexed');
+          db.exec('PRAGMA user_version = 1');
+        }
+      } finally { closeWriter(db); }
+    }
+  }
+  deps.migrations = [MIGRATIONS[0], ...spec.extraMigrations];
+  const added = { 1: SCHEMA_ADDED[1] };
+  let prev = SCHEMA_ADDED[1].tables;
   spec.extraMigrations.forEach((_, i) => {
-    const v = MIGRATIONS.length + i + 1;
+    const v = 1 + i + 1;
     const tables = { ...prev, [`seam_v${v}`]: ['x'] };   // additive, as every real migration must be
     added[v] = { heavy: (spec.heavy ?? []).includes(v), tables };
     prev = tables;

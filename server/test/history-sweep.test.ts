@@ -15,7 +15,7 @@ import { pathToFileURL } from 'node:url';
 import {
   PRELOADS, REPO, SWEEP, counters, makeHistoryBox, openStoreRO, runShim, runSweep, skipOnDarwin, type HistoryBox,
 } from './historyHelpers.js';
-import { STATFS_DEADLINE_MS, historyPaths } from '../../ccd/history/lib.mjs';
+import { SCHEMA_VERSION, STATFS_DEADLINE_MS, historyPaths } from '../../ccd/history/lib.mjs';
 import { createStore, getMeta, userVersion } from '../../ccd/history/store.mjs';
 import { parseSweepArgv } from '../../ccd/history/sweep.mjs';
 import { readFileSync as readUnitText } from 'node:fs';
@@ -67,7 +67,7 @@ describe('the sweep: skeleton, store open and refusals, and the shim', () => {
     const db = openStoreRO(box);
     expect(getMeta(db, 'store_id')).toBe(storeId);
     expect(getMeta(db, 'writer')).toBe(fs.readFileSync(P.writer, 'utf8').trim());
-    expect(userVersion(db)).toBe(1);
+    expect(userVersion(db)).toBe(SCHEMA_VERSION);
     db.close();
     // The hook's gate opens with the first bound tick, never before (§5.1, S4).
     expect(fs.statSync(P.spool).mode & 0o777).toBe(0o700);
@@ -276,12 +276,12 @@ describe('the sweep: skeleton, store open and refusals, and the shim', () => {
     expect(fs.readdirSync(P.dbDir)).toEqual([]);
   });
 
-  it('DM17 (store half): a store at user_version 2 -> schema-newer, exit 5, and no write', () => {
+  it('DM17 (store half): a store at user_version SCHEMA_VERSION + 1 -> schema-newer, exit 5, and no write', () => {
     const box = makeHistoryBox('ccrc-history-sweep-');
     createStore(box.home);
     const P = historyPaths(box.home);
     const raw = new DatabaseSync(P.dbFile);
-    raw.exec("PRAGMA user_version = 2; INSERT INTO counters (name, n) VALUES ('fixture', 1);");
+    raw.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}; INSERT INTO counters (name, n) VALUES ('fixture', 1);`);
     raw.close();
     const mtime = mtimeNs(P.dbFile);
     const r = runSweep(box, ['--roster-unreadable']);
@@ -357,7 +357,7 @@ describe('the sweep: skeleton, store open and refusals, and the shim', () => {
     expect(child.signal, String(child.stderr)).toBe('SIGKILL');
     expect(fs.existsSync(P.storeId)).toBe(false);
     const raw = new DatabaseSync(P.dbFile);
-    raw.exec('PRAGMA user_version = 2');
+    raw.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`);
     raw.close();
     const pending = fs.readFileSync(P.pending, 'utf8');
     const mtime = mtimeNs(P.dbFile);

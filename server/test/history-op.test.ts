@@ -17,7 +17,7 @@ import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { syncBuiltinESMExports } from 'node:module';
 import * as pty from 'node-pty';
-import { WRITING_FORMS, CARRIER_KILL_S, journalRecord, floorThreshold, historyPaths } from '../../ccd/history/lib.mjs';
+import { WRITING_FORMS, CARRIER_KILL_S, SCHEMA_VERSION, journalRecord, floorThreshold, historyPaths } from '../../ccd/history/lib.mjs';
 import { createStore, openWriter, closeWriter, getMeta } from '../../ccd/history/store.mjs';
 import { exportCensus, homeOfPath, newBudget } from '../../ccd/history/sweep.mjs';
 import {
@@ -35,6 +35,7 @@ const U3 = '33333333-3333-4333-8333-333333333333';
 const U9 = '99999999-9999-4999-8999-999999999999';
 const SLUG = '-home-u-tree-demo';
 const V2 = 'CREATE TABLE seam_v2 (x INTEGER)';
+const V3 = 'CREATE TABLE seam_v3 (x INTEGER)';
 const MIN = 60_000;
 const DAY = 86_400_000;
 
@@ -545,7 +546,8 @@ describe('DM43: no copy a scheduled pass cannot finish', () => {
     expect(none.code, none.stderr).toBe(0);
     expect(lastResult(none.stdout)).toEqual({ rc: 0 });
     expect(names(p.backups)).toEqual([]);
-    expect(runDriver(box, { extraMigrations: [V2] }, ['--op', 'migrate']).code).toBe(0);
+    // The seam's two migrations take the store to user_version 3, past this build's SCHEMA_VERSION (D-5015: 2).
+    expect(runDriver(box, { extraMigrations: [V2, V3] }, ['--op', 'migrate']).code).toBe(0);
     const newer = runShim(box, ['--op', 'migrate']);
     expect(newer.code).toBe(2);
     expect(lastResult(newer.stdout)).toEqual({ rc: 2, reason: 'migrate-refused' });
@@ -804,7 +806,7 @@ describe('RF5a F19: the half at release runs on every --op outcome (§9.2, D-423
     { name: 'migrate-refused (a store at a newer schema)', rc: 2, reason: 'migrate-refused', journaled: true,
       arrange: (box) => {
         const db = new DatabaseSync(paths(box).db);
-        try { db.exec('PRAGMA user_version = 2'); } finally { db.close(); }
+        try { db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`); } finally { db.close(); }
         return { args: ['--op', 'migrate'] };
       } },
     { name: 'flushFirst cannot append a waiting verdict (a one-shot ENOSPC at the journal)', rc: 1, journaled: true,

@@ -1270,7 +1270,7 @@ import { markGenerated } from '../../shared/mark.mjs';
 import { createServer, type Socket } from 'node:net';
 import { DatabaseSync } from 'node:sqlite';
 import { createStore } from '../../ccd/history/store.mjs';
-import { HEALTH_COUNTERS, HEALTH_META, HEALTH_WORDS, RECOVERY_STALL_TICKS, deriveHealth } from '../../ccd/history/lib.mjs';
+import { HEALTH_COUNTERS, HEALTH_META, HEALTH_WORDS, RECOVERY_STALL_TICKS, SCHEMA_VERSION, deriveHealth } from '../../ccd/history/lib.mjs';
 import { PRELOADS, preloadOptions } from './historyHelpers.js';
 // The PWA bundle's one fixture worker (Docs W4): `healthy()` plants it and the `docs-sw` describe at the end of
 // this file measures it. Imported here, below every line another file cites, for the block comment above's reason.
@@ -13499,7 +13499,7 @@ describeLinux('ccrc doctor: history — a real store, state by state (O15, O28, 
     { word: 'cap-malformed', cls: 'WARN',
       plant: (home) => { withStore(home, freshTick); writeFileSync(join(home, '.ccrc', 'history-max-gb'), 'lots\n'); },
       names: (home) => [join(home, '.ccrc', 'history-max-gb')] },
-    { word: 'schema-newer', cls: 'FAIL', plant: (home) => withStore(home, (db) => { freshTick(db); db.exec('PRAGMA user_version = 2'); }) },
+    { word: 'schema-newer', cls: 'FAIL', plant: (home) => withStore(home, (db) => { freshTick(db); db.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`); }) },
     // O41, the doctor half: the gap guard fires on the census's counts, never on a date
     { name: 'O41: a due blob WARNs export-due, naming the count, and FAILs nothing while none is overdue', word: 'export-due', cls: 'WARN',
       plant: (home) => withStore(home, (db) => { freshTick(db); setExport(db, 3, 0); }),

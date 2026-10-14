@@ -16,7 +16,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { DatabaseSync } from 'node:sqlite';
 import { brotliCompressSync, constants as Z } from 'node:zlib';
 import { mkTmp } from './tmpHelpers.js';
-import { recordDirFsyncs, recordOpenFlags } from './historyHelpers.js';
+import { recordDirFsyncs, recordOpenFlags, rewindStoreToV1, plantBlobs, owedIndexFacts } from './historyHelpers.js';
 import { BLOB_DECODE_MAX, SIDECAR_WHOLE_MAX, makePairIndex, MAX_INTERRUPTED_ATTEMPTS, SCHEMA_ADDED, SCHEMA_VERSION, UUID_RE, WRITER_RE, decideStoreOpen, historyPaths, backupNameOf, FTS_SHADOWS, ftsTablesHealthy } from '../../ccd/history/lib.mjs';
 import {
   CODEC, MIGRATIONS, StoreError, openWriter, openReader, userVersion, probeFts5, withTx, brotli, unbrotli,
@@ -30,13 +30,14 @@ import {
 import { adoptStore, stageRestore, commitRestore, abortRestore } from '../../ccd/history/store.mjs';
 import { parseJournalRecord } from '../../ccd/history/lib.mjs';
 
-/** A delete-mode (rollback-journal) v1 store built by hand, the shape a
- *  `VACUUM INTO` restore leaves: no createStore, no binding files. */
+/** A delete-mode (rollback-journal) store at this build's schema, built by hand, the shape a
+ *  `VACUUM INTO` restore leaves: no createStore, no binding files. It runs every migration, as createStore does
+ *  (D-5015: v2 adds the owed-row index); `MIGRATIONS[0]` alone is the v1 schema. */
 const v1Store = (dir: string): string => {
   const p = path.join(dir, 'history.db');
   const db = new DatabaseSync(p);
   db.exec('PRAGMA auto_vacuum = INCREMENTAL');
-  db.exec(MIGRATIONS[0]!);
+  for (const m of MIGRATIONS) db.exec(m);
   db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   db.close();
   return p;
@@ -654,9 +655,10 @@ describe('store.mjs: the migration executor', () => {
   const bound = (): { h: string; db: DatabaseSync; storeId: string } => {
     const h = mkTmp('ccrc-history-mig-');
     const { storeId } = createStore(h);
+    rewindStoreToV1(historyPaths(h).dbFile);   // createStore makes this build's v2; these cases migrate a v1 through injected migrations
     return { h, db: openWriter(historyPaths(h).dbFile), storeId };
   };
-  /** A TEST-ONLY v2 and v3, passed in as data: shipped code has no v2. */
+  /** A TEST-ONLY v2 and v3, passed in as data, over the v1 DDL alone: they stand in for builds past v1 (the shipped v2 is the owed-row index). */
   const V2 = 'CREATE TABLE extra_v2 (x INTEGER); ALTER TABLE meta ADD COLUMN note TEXT;';
   const V3 = 'CREATE INDEX extra_v2_x ON extra_v2(x);';
   const TEST_MIGRATIONS = [MIGRATIONS[0]!, V2, V3];
@@ -2024,5 +2026,90 @@ describe('blobPlainTextMeasured: a stored body as text, with the condition that 
     expect(blobPlainText(null, false, idx, 5)).toBe('');
     expect(blobPlainText(Uint8Array.from([0, 255]), false, idx, 10)).toBe('');
     expect(blobPlainText(ok.z, true, idx, SIDECAR_WHOLE_MAX + 1)).toBe('');
+  });
+});
+
+// ── schema v2: the owed-row partial index (D-5015, review 441 F1) ───────────────────────────────────────────────
+// A healthy pass asks "is any blob still owed an FTS row?" on every tick (sweep.mjs's ftsOwesRow). Without an index on fts_indexed that is
+// a read of the whole blobs table, which cost minutes of cold I/O on a half-gigabyte store; schema v2's partial index makes it O(owed).
+describe('schema v2: the owed-row partial index (D-5015)', () => {
+  interface OwedSweep { ftsOwesRowPlan(db: DatabaseSync): string[]; FTS_OWES_ROW_SQL: string }
+  const loadSweep = async (): Promise<OwedSweep> => (await import('../../ccd/history/sweep.mjs')) as unknown as OwedSweep;
+  const fresh = (): { h: string; file: string } => { const h = mkTmp('ccrc-history-v2idx-'); createStore(h); return { h, file: historyPaths(h).dbFile }; };
+  const planOf = async (file: string): Promise<string[]> => {
+    const S = await loadSweep();
+    const db = new DatabaseSync(file, { readOnly: true });
+    try { return S.ftsOwesRowPlan(db); } finally { db.close(); }
+  };
+
+  it('PIN (a): EXPLAIN QUERY PLAN of the owed query names the index and has no full SCAN of blobs', async () => {
+    const { file } = fresh();
+    plantBlobs(file, { owed: 3, indexed: 3, pruned: 3 });
+    const plan = await planOf(file);
+    expect(plan[0], plan.join('\n')).toMatch(/^(SCAN|SEARCH) b USING (COVERING )?INDEX blobs_unindexed\b/);
+    expect(plan.filter((l) => /^SCAN b\s*$/.test(l)), `a full scan of blobs: ${plan.join(' | ')}`).toEqual([]);
+  });
+
+  it('CONTROL: the same query over a v1 store (no index) is the full scan the pin refuses, so the pin is not vacuous', async () => {
+    const { file } = fresh();
+    rewindStoreToV1(file);
+    expect((await planOf(file)).filter((l) => /^SCAN b\s*$/.test(l))).toEqual(['SCAN b']);
+  });
+
+  it('PIN (b): the index leaves out what can never be owed: N pruned tombstones and N indexed blobs, 0 owed, 0 entries; one owed blob, one entry', () => {
+    const { file } = fresh();
+    plantBlobs(file, { pruned: 40, indexed: 40 });
+    const none = owedIndexFacts(file);
+    expect(none.entries, 'a tombstone (z NULL, fts_indexed 0) is never owed, so it is not indexed; nor is an indexed blob').toBe(0);
+    expect(none.sql, 'the index has its predicate, spelled once in store.mjs').toBe('CREATE INDEX blobs_unindexed ON blobs(blob_id) WHERE fts_indexed = 0 AND z IS NOT NULL');
+    plantBlobs(file, { owed: 1 });
+    expect(owedIndexFacts(file).entries, 'CONTROL: an unindexed blob with bytes is').toBe(1);
+  });
+
+  it('PIN (b2): prune\'s tombstone leaves the index: pruneBatch on an owed blob takes it out', () => {
+    const { h, file } = fresh();
+    plantBlobs(file, { owed: 2 });
+    expect(owedIndexFacts(file).entries).toBe(2);
+    const db = openWriter(historyPaths(h).dbFile);
+    try { expect(pruneBatch(db, { blobIds: [1, 2], nowMs: 1, fts: false })).toBe(2); } finally { closeWriter(db); }
+    expect(owedIndexFacts(file).entries, 'a pruned blob keeps fts_indexed = 0 with z NULL, and the predicate leaves it out').toBe(0);
+  });
+
+  it('PIN (c): a fresh store and a migrated v1 store have the same schema, and the same user_version', () => {
+    const fresh2 = fresh();
+    // The v1 store is built from MIGRATIONS[0] alone, never through createStore, so the migration is what adds the index.
+    const h = mkTmp('ccrc-history-v2idx-mig-');
+    fs.mkdirSync(historyPaths(h).backups, { recursive: true, mode: 0o700 });
+    const v1File = path.join(h, 'v1.db');
+    const old = new DatabaseSync(v1File);
+    old.exec(MIGRATIONS[0]!);
+    old.exec('PRAGMA user_version = 1');
+    const dump = (db: DatabaseSync): unknown[] => db.prepare("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name").all();
+    const before = dump(old);
+    expect(before.some((r) => (r as { name: string }).name === 'blobs_unindexed'), 'CONTROL: v1 has no owed-row index').toBe(false);
+    runMigration(old, h, { verdict: 'snapshot-then-migrate', from: 1, to: 2, migrations: MIGRATIONS });
+    expect(userVersion(old)).toBe(2);
+    const now = dump(old);
+    old.close();
+    const f = new DatabaseSync(fresh2.file, { readOnly: true });
+    try {
+      expect(userVersion(f)).toBe(SCHEMA_VERSION);
+      expect(now).toEqual(dump(f));
+    } finally { f.close(); }
+  });
+
+  it('SCHEMA_ADDED[2] is light and adds no table or column; its migration is MIGRATIONS[1], one CREATE INDEX with no IF NOT EXISTS', () => {
+    expect(SCHEMA_ADDED[2]).toEqual({ heavy: false, tables: {} });
+    expect(MIGRATIONS).toHaveLength(2);
+    expect(MIGRATIONS[1]!.trim().split(';').filter((x) => x.trim() !== '')).toHaveLength(1);
+    expect(MIGRATIONS[1]).toMatch(/^CREATE INDEX blobs_unindexed ON blobs\(blob_id\) WHERE fts_indexed = 0 AND z IS NOT NULL;\s*$/);
+    expect(MIGRATIONS.some((m) => /IF NOT EXISTS/i.test(m) && /INDEX/i.test(m)), 'no unversioned index creation').toBe(false);
+  });
+
+  it('createStore builds a fresh store by running every migration in order', () => {
+    const { file } = fresh();
+    const db = new DatabaseSync(file, { readOnly: true });
+    try { expect(userVersion(db)).toBe(MIGRATIONS.length); } finally { db.close(); }
+    expect(owedIndexFacts(file).sql, 'the index is there on a store born at this build').not.toBeNull();
   });
 });

@@ -14,6 +14,7 @@ import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import { SCHEMA_VERSION } from '../../ccd/history/lib.mjs';
 import { makeHistoryBox, runSweep, preloadOptions, PRELOADS, CLI, REPO, type HistoryBox } from './historyHelpers.js';
 import * as healthCp from 'node:child_process';
 import * as healthFs from 'node:fs';
@@ -422,7 +423,7 @@ describe('ccrc history status (Linux)', () => {
     expect(r.code, r.stderr).toBe(0);
     const e = r.env;
     expect(e.v).toBe(1);
-    expect([e.user_version, e.code_version, e.migration]).toEqual([1, 1, 'none']);
+    expect([e.user_version, e.code_version, e.migration]).toEqual([SCHEMA_VERSION, SCHEMA_VERSION, 'none']);
     expect(typeof e.last_tick_ms).toBe('number');
     expect(e.bytes_behind_last3.length).toBeGreaterThanOrEqual(1);
     expect(e.bytes_behind_last3.length).toBeLessThanOrEqual(3);

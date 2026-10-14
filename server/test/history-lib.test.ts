@@ -7013,19 +7013,20 @@ describe('lib: version-aware reads (W1-B2 Task 17; spec §6.11 "The CLI keeps an
     };
     expect(t17lib.schemaAdditive(t17lib.SCHEMA_ADDED, measure(store.MIGRATIONS))).toEqual({ ok: true });
     const lostOf = (r: { ok: boolean; lost?: string[] }): string[] => (r.ok ? [] : r.lost!);
-    const renamed: Schema = { ...t17lib.SCHEMA_ADDED, 2: { heavy: false, tables: { nodes: ['gist2'] } } };
-    expect(lostOf(t17lib.schemaAdditive(renamed, measure([...store.MIGRATIONS, 'ALTER TABLE nodes RENAME COLUMN gist TO gist2']))))
+    // The cases below build on v1 alone: the shipped v2 (D-5015, an index, no table) would otherwise be the version they replace.
+    const renamed: Schema = { 1: t17lib.SCHEMA_ADDED[1]!, 2: { heavy: false, tables: { nodes: ['gist2'] } } };
+    expect(lostOf(t17lib.schemaAdditive(renamed, measure([...store.MIGRATIONS.slice(0, 1), 'ALTER TABLE nodes RENAME COLUMN gist TO gist2']))))
       .toContain('nodes.gist lost at v2');
-    const dropped: Schema = { ...t17lib.SCHEMA_ADDED, 2: { heavy: false, tables: {} } };
-    expect(lostOf(t17lib.schemaAdditive(dropped, measure([...store.MIGRATIONS, 'ALTER TABLE nodes DROP COLUMN topics']))))
+    const dropped: Schema = { 1: t17lib.SCHEMA_ADDED[1]!, 2: { heavy: false, tables: {} } };
+    expect(lostOf(t17lib.schemaAdditive(dropped, measure([...store.MIGRATIONS.slice(0, 1), 'ALTER TABLE nodes DROP COLUMN topics']))))
       .toContain('nodes.topics lost at v2');
-    expect(lostOf(t17lib.schemaAdditive({ ...t17lib.SCHEMA_ADDED, 2: { heavy: false, tables: { nodes: ['gist'] } } })))
+    expect(lostOf(t17lib.schemaAdditive({ 1: t17lib.SCHEMA_ADDED[1]!, 2: { heavy: false, tables: { nodes: ['gist'] } } })))
       .toContain('nodes.gist re-listed at v2');
-    const unknownKey = { ...t17lib.SCHEMA_ADDED, 2: { heavy: false, tables: {}, drops: { nodes: ['gist'] } } } as unknown as Schema;
+    const unknownKey = { 1: t17lib.SCHEMA_ADDED[1]!, 2: { heavy: false, tables: {}, drops: { nodes: ['gist'] } } } as unknown as Schema;
     expect(lostOf(t17lib.schemaAdditive(unknownKey))).toContain('v2 has keys drops,heavy,tables');
-    expect(lostOf(t17lib.schemaAdditive({ ...t17lib.SCHEMA_ADDED, 3: { heavy: false, tables: { seam: ['x'] } } }))).toContain('versions are not 1..N');
-    const undeclared = measure([...store.MIGRATIONS, 'CREATE TABLE seam_extra (x INTEGER)']);
-    expect(lostOf(t17lib.schemaAdditive({ ...t17lib.SCHEMA_ADDED, 2: { heavy: false, tables: {} } }, undeclared))).toContain('seam_extra.x undeclared at v2');
+    expect(lostOf(t17lib.schemaAdditive({ 1: t17lib.SCHEMA_ADDED[1]!, 3: { heavy: false, tables: { seam: ['x'] } } }))).toContain('versions are not 1..N');
+    const undeclared = measure([...store.MIGRATIONS.slice(0, 1), 'CREATE TABLE seam_extra (x INTEGER)']);
+    expect(lostOf(t17lib.schemaAdditive({ 1: t17lib.SCHEMA_ADDED[1]!, 2: { heavy: false, tables: {} } }, undeclared))).toContain('seam_extra.x undeclared at v2');
   });
 });
 
@@ -7123,8 +7124,8 @@ describe('lib: Task 17 fix round 1 (W1-B2 Task 17)', () => {
 
   it('schemaAdditive flags a declared version nothing measured', () => {
     const m1 = { 1: t17lib.SCHEMA_ADDED[1]!.tables as Record<string, string[]> };
-    expect(t17lib.schemaAdditive(t17lib.SCHEMA_ADDED, m1), 'CONTROL: one declared version, one measured').toEqual({ ok: true });
-    const r = t17lib.schemaAdditive({ ...t17lib.SCHEMA_ADDED, 2: { heavy: false, tables: { nodes: ['zq_new_col'] } } } as Schema, m1);
+    expect(t17lib.schemaAdditive({ 1: t17lib.SCHEMA_ADDED[1]! }, m1), 'CONTROL: one declared version, one measured').toEqual({ ok: true });
+    const r = t17lib.schemaAdditive({ 1: t17lib.SCHEMA_ADDED[1]!, 2: { heavy: false, tables: { nodes: ['zq_new_col'] } } } as Schema, m1);
     expect(r.ok).toBe(false);
     expect(lostOf(r)).toContain('v2 declared but not measured');
   });
@@ -7496,7 +7497,7 @@ describe('lib: HA2, the read verbs\' envelope, schema word, shared readers and s
 
   it('H-25: schemaAdditive names a measured column set that is no array, and reads a null measurement as none', () => {
     const v1 = t17lib.SCHEMA_ADDED[1]!.tables as Record<string, string[]>;
-    expect(t17lib.schemaAdditive(t17lib.SCHEMA_ADDED, { 1: v1 }), 'CONTROL: the real v1 is additive').toEqual({ ok: true });
+    expect(t17lib.schemaAdditive({ 1: t17lib.SCHEMA_ADDED[1]! }, { 1: v1 }), 'CONTROL: the real v1 is additive').toEqual({ ok: true });
     for (const bad of [{ gist: 1 }, 'gist', null]) {
       const r = t17lib.schemaAdditive(t17lib.SCHEMA_ADDED, { 1: { ...v1, nodes: bad as unknown as string[] } });
       expect(r.ok, JSON.stringify(bad)).toBe(false);

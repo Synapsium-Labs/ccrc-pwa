@@ -4811,7 +4811,10 @@ function ftsUndecodableKey(blobId) {
 /** The ONE owed-row relation, read by the backfill's select and by ftsOwesRow's measurement so they cannot drift: an
  *  unindexed blob that FTS_ELIGIBLE_SQL admits and that carries no failure classification matching its CURRENT decoder
  *  mode. A permanently undecodable blob keeps fts_indexed = 0 (D-4346) and is not owed in the mode that failed it, but a
- *  change of mode (a sidecar now references it) makes it owed again. `b` is blobs; binds INDEXED_PROVENANCE twice. */
+ *  change of mode (a sidecar now references it) makes it owed again. `b` is blobs; binds INDEXED_PROVENANCE twice.
+ *  Its first two terms, `b.fts_indexed = 0 AND b.z IS NOT NULL`, are the predicate of schema v2's partial index `blobs_unindexed`
+ *  (store.mjs's V2) written out, which is what lets SQLite read the owed rows from that index instead of scanning `blobs` (D-5015);
+ *  FTS_ELIGIBLE_SQL's `b.z IS NOT NULL` must stay a top-level term of this AND chain. */
 const FTS_OWED_SQL = `b.fts_indexed = 0 AND ${FTS_ELIGIBLE_SQL}
         AND NOT EXISTS (SELECT 1 FROM meta m WHERE m.k = '${FTS_UNDECODABLE_META}' || b.blob_id
                           AND m.v = CASE WHEN ${FTS_IS_SIDECAR_SQL} THEN 'sidecar' ELSE 'entry' END)`;
@@ -4848,7 +4851,20 @@ function ftsStmts(db) {
  *  failed it, so a healthy tick neither re-opens nor recounts it. */
 function ftsOwesRow(db) {
   // Prepared here, not in ftsStmts: it reads no FTS table, and ftsStmts cannot be prepared where the tables are gone.
-  return db.prepare(`SELECT 1 AS one FROM blobs b WHERE ${FTS_OWED_SQL} LIMIT 1`).get(...INDEXED_PROVENANCE, ...INDEXED_PROVENANCE) !== undefined;
+  return db.prepare(FTS_OWES_ROW_SQL).get(...INDEXED_PROVENANCE, ...INDEXED_PROVENANCE) !== undefined;
+}
+
+/** ftsOwesRow's one statement. A healthy pass runs it on every tick once ('fts', 1) is complete, so it must cost O(owed rows), not
+ *  O(blobs) (D-5015, review 441 F1). It does, because FTS_OWED_SQL's two leading terms, `b.fts_indexed = 0 AND b.z IS NOT NULL`, are
+ *  schema v2's partial index `blobs_unindexed` predicate WRITTEN OUT (store.mjs's V2), and SQLite only uses a partial index whose
+ *  WHERE the query's own implies. Never `INDEXED BY`: if a term here drifts from the index, the plan scans `blobs` and
+ *  history-store.test.ts's EXPLAIN QUERY PLAN pin goes red. */
+export const FTS_OWES_ROW_SQL = `SELECT 1 AS one FROM blobs b WHERE ${FTS_OWED_SQL} LIMIT 1`;
+
+/** EXPLAIN QUERY PLAN of ftsOwesRow's exact statement, as its `detail` lines in plan order: a pure read, for the pin that the owed check
+ *  is an index search or scan of the owed-row index and never a scan of `blobs`. */
+export function ftsOwesRowPlan(db) {
+  return db.prepare(`EXPLAIN QUERY PLAN ${FTS_OWES_ROW_SQL}`).all(...INDEXED_PROVENANCE, ...INDEXED_PROVENANCE).map((r) => String(r.detail));
 }
 
 /** What ftsTextOfBlob answers for a blob whose stored bytes do not decode (D-4346, history-permanent-failures-classified). */

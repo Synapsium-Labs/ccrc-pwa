@@ -3477,6 +3477,7 @@ describe.skipIf(process.platform === 'darwin')('DM44: the read verbs answer an o
       w.exec('ALTER TABLE entries DROP COLUMN role');
       w.exec('ALTER TABLE nodes DROP COLUMN directive_flag');
     } finally { w.close(); }
+    rH.rewindStoreToV1(libRead.historyPaths(box.home).dbFile);   // and it reads user_version 1, as the build that left it would stamp
     R = (await import('../../ccd/history/recall.mjs')) as unknown as Recall;
   }, 240_000);
 
@@ -3505,7 +3506,8 @@ describe.skipIf(process.platform === 'darwin')('DM44: the read verbs answer an o
   });
 
   it('status answers the same older store with its own version and migration word, never exit 1', () => {
-    // A spawned status reads lib's SCHEMA_VERSION; the v2 seam above is in-process only (see Choices).
+    // A spawned status reads lib's SCHEMA_VERSION; the v2 seam above is in-process only (see Choices). The store is a real v1 (D-5015:
+    // this build's v2 is the owed-row index), and no pass has recorded a migration verdict yet, so status reads 'none'.
     const st = rH.runCli(box, ['status', '--json']);
     expect(st.code, st.stderr).toBe(0);
     expect(st.json?.['user_version']).toBe(1);
@@ -3605,16 +3607,16 @@ describe.skipIf(process.platform === 'darwin')('DM17 (CLI half) and C45: a newer
     expect(five.json?.['reason']).toBe('store-mismatch');
   }, HEAVY);
 
-  it('DM17 (CLI half): a store at user_version 2 is read by every verb, and status reports its version and migration', () => {
+  it('DM17 (CLI half): a store past this build SCHEMA_VERSION is read by every verb, and status reports its version and migration', () => {
     const w = new DatabaseSync(libRead.historyPaths(box.home).dbFile);
-    try { w.exec('PRAGMA user_version = 2'); } finally { w.close(); }
+    try { w.exec(`PRAGMA user_version = ${libRead.SCHEMA_VERSION + 1}`); } finally { w.close(); }
     for (const args of [['describe', leaf], ['expand', leaf], ['expand', e(1)], ['tree']]) {
       const r = cli(args);
       expect(r.code, `${args.join(' ')}: ${r.stderr}`).toBe(0);
     }
     expect(cli(['grep', 'zqx17seam']).code, 'grep reads it too (0 or no hits, never 5)').toBe(0);
     const st = rH.runCli(box, ['status', '--json']);
-    expect(st.json?.['user_version']).toBe(2);
+    expect(st.json?.['user_version']).toBe(libRead.SCHEMA_VERSION + 1);
     expect(st.json?.['migration']).toBe('refuse-newer');
   }, HEAVY);
 });

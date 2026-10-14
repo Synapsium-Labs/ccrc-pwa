@@ -16,7 +16,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import * as pty from 'node-pty';
 import {
-  beltWidth, historyPaths, floorThreshold, REPARSE_MAX_TARGETS, BELT_VERSION, WRITING_FORMS, formOf, HEALTH_REMEDIES, firstSentence,
+  SCHEMA_VERSION, beltWidth, historyPaths, floorThreshold, REPARSE_MAX_TARGETS, BELT_VERSION, WRITING_FORMS, formOf, HEALTH_REMEDIES, firstSentence,
   REDACTED_MARK, redactField, makePairIndex, makeBelt, beltUnits, secretPairs, formatBeltState, BELT_META, backupNameOf,
 } from '../../ccd/history/lib.mjs';
 import { closeWriter, getMeta, openWriter, setMeta, withTx } from '../../ccd/history/store.mjs';
@@ -26,7 +26,7 @@ import { userRow, compactionSequence, toolResultRow } from './historyFixtures.js
 import {
   makeHistoryBox, runSweep, runShim, runCli, runDriver, plantSession, plantTranscript, openStoreRO, stubShim, holdLock,
   spoolLine, journalRecords,
-  PASS_DRIVER, SHIM, withPane, seedFamily, preloadOptions, PRELOADS, CLI, skipOnDarwin, type HistoryBox,
+  PASS_DRIVER, SHIM, withPane, seedFamily, rewindStoreToV1, plantBlobs, owedIndexFacts, preloadOptions, PRELOADS, CLI, skipOnDarwin, type HistoryBox,
 } from './historyHelpers.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
 
@@ -455,15 +455,43 @@ describe.skipIf(process.platform === 'darwin')('C63: doctor --migrate through th
     expect(snapshotsIn(box)).toEqual([]);
   }, HEAVY);
 
+  it('a REAL v1 store (D-5015): doctor --migrate snapshots to pre-v2.db and migrates to this build, building the owed-row index over the blobs already there', () => {
+    const box = boundBox('ccrc-hist-c63v2-');
+    plantBlobs(dbFile(box), { owed: 4, indexed: 2, pruned: 3 });
+    rewindStoreToV1(dbFile(box));
+    const blobsOf = (file: string): unknown[] => {
+      const db = new DatabaseSync(file, { readOnly: true });
+      try { return db.prepare('SELECT blob_id, hex(sha256) AS sha, z, fts_indexed, pruned_ms FROM blobs ORDER BY blob_id').all(); } finally { db.close(); }
+    };
+    const blobs = blobsOf(dbFile(box));
+    const storeId = storeIdOf(box);
+    expect(blobs).toHaveLength(9);
+    expect(versionOf(dbFile(box)), 'CONTROL: the store is a v1').toBe(1);
+    expect(owedIndexFacts(dbFile(box)).sql, 'CONTROL: and carries no owed-row index').toBeNull();
+    const r = op(box, ['doctor', '--migrate', '--json']);
+    expect(r.code, `${r.stdout}${r.stderr}`).toBe(0);
+    expect(snapshotsIn(box), 'the pre-migration snapshot, as runMigration names it').toEqual(['pre-v2.db']);
+    const pre = path.join(box.root, 'db', 'backups', 'pre-v2.db');
+    expect(versionOf(pre)).toBe(1);
+    expect(owedIndexFacts(pre).sql, 'the snapshot is the v1 as it was').toBeNull();
+    expect(versionOf(dbFile(box))).toBe(2);
+    expect(versionOf(dbFile(box))).toBe(SCHEMA_VERSION);
+    const facts = owedIndexFacts(dbFile(box));
+    expect(facts.sql).toBe('CREATE INDEX blobs_unindexed ON blobs(blob_id) WHERE fts_indexed = 0 AND z IS NOT NULL');
+    expect(facts.entries, 'built over the 4 owed blobs only: not the 2 indexed, not the 3 tombstones').toBe(4);
+    expect(blobsOf(dbFile(box)), 'the data is intact').toEqual(blobs);
+    expect(storeIdOf(box)).toBe(storeId);
+  }, HEAVY);
+
   it('refuse-newer: exit 2 migrate-refused, and the store is untouched', () => {
     const box = boundBox('ccrc-hist-c63b-');
     const w = new DatabaseSync(dbFile(box));
-    try { w.exec('PRAGMA user_version = 2'); w.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } finally { w.close(); }
+    try { w.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`); w.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } finally { w.close(); }
     const before = sha(dbFile(box));
     const r = op(box, ['doctor', '--migrate', '--json']);
     expect([r.code, r.json?.['reason']]).toEqual([2, 'migrate-refused']);
     expect(sha(dbFile(box))).toBe(before);
-    expect(versionOf(dbFile(box))).toBe(2);
+    expect(versionOf(dbFile(box))).toBe(SCHEMA_VERSION + 1);
     expect(snapshotsIn(box)).toEqual([]);
   }, HEAVY);
 
@@ -557,10 +585,10 @@ describe.skipIf(process.platform === 'darwin')('RB6: while a recovery step is re
         return (db.prepare("SELECT count(*) AS n FROM derivation_state WHERE step = 'recover' AND completed_ms IS NULL").get() as { n: number }).n;
       } finally { db.close(); }
     };
-    // Stored 1, code 1: the refusal stands.
+    // Stored = code (this build's SCHEMA_VERSION): the refusal stands.
     expect(lastResult(runShim(box, ['--op', 'migrate']).stdout), 'stored = code').toEqual({ rc: 2, reason: 'recovering' });
-    expect(versionOf(dbFile(box))).toBe(1);
-    // Stored 1, code 2 (a v2 migration staged): a restored older backup migrates rather than wait on its own step.
+    expect(versionOf(dbFile(box))).toBe(SCHEMA_VERSION);
+    // Stored 1 (the seam rewinds the store to v1), code 2 (a v2 migration staged): a restored older backup migrates rather than wait on its own step.
     const m = runShim(box, ['--op', 'migrate'], { env: PENDING });
     expect(lastResult(m.stdout), `${m.stdout}\n${m.stderr}`).toEqual({ rc: 0 });
     expect(versionOf(dbFile(box))).toBe(2);
@@ -575,7 +603,7 @@ describe.skipIf(process.platform === 'darwin')('RB6: while a recovery step is re
     // Newer than the code, as a rollback past a migration leaves it. Neither half refuses it `recovering`; the sweep's
     // openStore answers schema-newer, which --migrate relays as migrate-refused (C63's refuse-newer).
     const w = new DatabaseSync(dbFile(box));
-    try { w.exec('PRAGMA user_version = 2'); w.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } finally { w.close(); }
+    try { w.exec(`PRAGMA user_version = ${SCHEMA_VERSION + 1}`); w.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } finally { w.close(); }
     const before = sha(dbFile(box));
     const r = op(box, ['doctor', '--migrate', '--json']);
     expect([r.code, r.json?.['reason']], `${r.stdout}${r.stderr}`).toEqual([2, 'migrate-refused']);

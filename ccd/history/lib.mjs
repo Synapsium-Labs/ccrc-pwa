@@ -2975,6 +2975,10 @@ export const SCHEMA_ADDED = Object.freeze({
       journal_outbox: Object.freeze(['seq', 'rec']),
     }),
   }),
+  // D-5015 (history-schema-v2-owed-index): no table, no column. Its one migration (store.mjs MIGRATIONS[1]) is a partial index on
+  // blobs. `heavy: false` because the index is built right after the pre-migration snapshot copy has just read the file, and
+  // writes only the rows its predicate admits (unindexed blobs still holding bytes), a small share of a healthy store.
+  2: Object.freeze({ heavy: false, tables: Object.freeze({}) }),
 });
 
 /** The schema version this code writes and reads: SCHEMA_ADDED's highest key,

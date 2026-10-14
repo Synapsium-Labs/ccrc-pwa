@@ -1739,7 +1739,7 @@ describe('C57: doctor --restore, the drill (W1-B2 Task 27)', () => {
     expect(await refused([name], 'store.id names another store', noCopy), 'a refusal decideBind makes before the copy is staged').toContain(OPERATOR);
     fs.rmSync(P.storeId);
     fs.copyFileSync(path.join(P.backups, name), path.join(P.backups, '20200101T000001Z.db'));
-    rrSetUserVersion(path.join(P.backups, '20200101T000001Z.db'), 2);
+    rrSetUserVersion(path.join(P.backups, '20200101T000001Z.db'), SCHEMA_VERSION + 1);
     expect(await refused(['20200101T000001Z.db'], 'a newer user_version'), 'a refusal decideBind makes over the staged copy').toContain(OPERATOR);
     // H-223 (D-4599): a backup at user_version 0 holds its store_id and passes integrity, but openStore would refuse it (exit 5) after the link, and
     // restore and rebuild both refuse a present history.db: refused here, nothing linked (`refused` compares the whole snapshot).
