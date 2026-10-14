@@ -182,6 +182,10 @@ function isLocalHeadsRef(ref: DocsRefSpec | null): boolean {
   return ref !== null && ref.kind === 'qualified' && ref.ref.startsWith('refs/heads/');
 }
 
+function autoRetryId(scope: string, key: string, word: string): string {
+  return [scope, key, word].join(NUL);
+}
+
 function samePin(a: DocPin, b: DocPin): boolean {
   if (a.kind === 'committed' && b.kind === 'committed') {
     return a.commit === b.commit && a.servedRef === b.servedRef && a.section === b.section && a.path === b.path;
@@ -276,9 +280,10 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
   };
   /** Whether an answer to the request numbered `seq` is at least as new as the answer that last set `key`'s slot. */
   const isNewest = (key: string, seq: number): boolean => seq >= (st.slotSeq.get(key) ?? 0);
-  /** One automatic retry per (request kind, key, word) for the whole visit; true when this call takes it. */
+  /** One automatic retry per (request kind, key, word) for the whole visit; true when this call takes it. A re-list
+   *  word takes the kind `relist` with the page as its key and no word: the four words say one thing, the listing moved. */
   const takeAutoRetry = (scope: string, key: string, word: string): boolean => {
-    const id = [scope, key, word].join(NUL);
+    const id = autoRetryId(scope, key, word);
     if (autoRetried.current.has(id)) return false;
     autoRetried.current.add(id);
     return true;
@@ -450,7 +455,12 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       st.files.set(fKey, e);
       return e;
     };
+    // The one automatic re-list belongs to the PAGE (tree key, section, path), never to the file key: a draft's key
+    // carries its fingerprint, which can move on every listing, and a per-key one-shot would then re-list without end.
+    // A body that reads ok re-arms it for the page's next move; a manual Retry does not, since it re-lists itself.
+    const page = [tKey, pin.section, pin.path].join(NUL);
     if (a.s === 'ok') {
+      autoRetried.current.delete(autoRetryId('relist', page, ''));
       put({ s: 'ok', pin, answer: a.value, receivedAt: Date.now() });
       return;
     }
@@ -461,7 +471,7 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     const word = a.body.failure;
     if (DOCS_RELIST_WORDS.has(word)) {
       // Spec 4.3 item 1: the listing moved under the read. Re-list once automatically, then "changing, Retry".
-      if (takeAutoRetry('file', fKey, word)) {
+      if (takeAutoRetry('relist', page, '')) {
         put({ s: 'loading', pin }, true);
         listTree(w.target);
       } else {

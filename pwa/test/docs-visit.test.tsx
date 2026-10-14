@@ -638,3 +638,46 @@ describe('the fragment hand-off', () => {
     }
   });
 });
+
+describe('T13 review 3-1: the one automatic re-list is spent per page, not per file key', () => {
+  /** A draft whose fingerprint is new on every listing, held by the checkout of `main`. The tree mock stops answering
+   *  after `cap` calls, so a loop shows as a count past 2 and not as a hung run. */
+  function movingDraft(cap = 10) {
+    const f = fakeLoaders();
+    let n = 0;
+    f.tree.mockImplementation(async () => {
+      n += 1;
+      if (n > cap) return new Promise<never>(() => {});
+      const fp = String(n).padStart(64, '0');
+      return okTree(treeOk({ entries: [entry('specs', 'a.md', { draft: draftOf('modified', { fp }) })], drafts: holder() }));
+    });
+    return f;
+  }
+  const URL = '/docs/demo/specs/a.md?ref=refs/heads/main';
+
+  it('a draft whose fingerprint moves on every listing re-lists once and then shows changing', async () => {
+    const f = movingDraft();
+    f.file.mockImplementation(async () => failedAnswer('draft-changed'));
+    const { result } = visit(f.loaders, URL);
+    await flush();
+    await flush();
+    expect(f.tree.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(result.current.file.s).toBe('changing');
+  });
+
+  it('a read that succeeded re-arms the page: its next move gets its own automatic re-list', async () => {
+    const f = movingDraft();
+    f.file.mockResolvedValueOnce(failedAnswer('draft-changed'));
+    f.file.mockResolvedValueOnce(okFile());
+    f.file.mockResolvedValueOnce(failedAnswer('draft-changed'));
+    const { result } = visit(f.loaders, URL);
+    await flush();
+    expect(f.tree).toHaveBeenCalledTimes(2);
+    expect(result.current.file.s).toBe('ok');
+    act(() => result.current.retryTree());
+    await flush();
+    await flush();
+    expect(f.tree).toHaveBeenCalledTimes(4);
+    expect(result.current.file.s).toBe('ok');
+  });
+});
