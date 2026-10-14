@@ -1176,6 +1176,8 @@ async function readHealthExtras(home, env, nowMs) {
   if (held.unreadable) store.unmeasured.push('spool/.draining');
   return {
     ...store,
+    // The interrupted attempts decide a snapshot-needs-op verdict whatever the size (planMigration), so doctor's line needs the count; absent is 0.
+    migrationAttempts: env.migration === 'snapshot-needs-op' ? healthStore.readAttempts(home, env.code_version) : 0,
     modesWrong: healthLib.modesWrongOf(measureModeEntries(p, unreachable || env.reason === 'store-root-dangling')),
     rootIsSymlink,
     spoolNotDirectory,
@@ -1251,6 +1253,7 @@ function healthInputsOf(env, x, nowMs) {
     freeBytes: env.free_bytes ?? null,
     thresholdBytes: env.threshold_bytes ?? null,
     copyBps: x.copyBps,
+    migrationAttempts: x.migrationAttempts,
     backupsDb: x.backupsDb,
     journalStoreDirs: (env.journal && env.journal.other_store_dirs) ?? [],
   };
@@ -1350,8 +1353,9 @@ function opPaneName(form) {
 
 /** What the relay holds of the shim's stderr before it writes some (D-5022): 1 MiB of bytes. Under it the held text is
  *  redacted as one text when the child ends. Past it, the text up to its LAST line boundary is redacted and written, and
- *  the rest is held on (a text with no line break at all is written whole, cut where the cap fell). The only residual is a
- *  shape that is split across that seam, which no pass on either side can see whole. */
+ *  the rest is held on. A held stretch with NO line break past the cap is written where the over-cap read ended, mid-line, and
+ *  emit adds a newline there: the seam falls at that read, not exactly at the cap, and one line break is ADDED (no byte is
+ *  dropped). The only residual is a shape that is split across that seam, which no pass on either side can see whole. */
 const ERR_HOLD_CAP = 1 << 20;
 /** How long the CLI's own signal handler waits for the held text to leave stderr before it ends the CLI anyway. */
 const SIGNAL_FLUSH_MS = 2000;
@@ -1364,7 +1368,8 @@ const RELAY_SIGNALS = Object.freeze(['SIGINT', 'SIGTERM', 'SIGHUP']);
  *  is bounded by ERR_HOLD_CAP, and it is written, redacted, BEFORE the CLI's own last line on every ending:
  *    - the child exits with a code, or is killed by a signal (the child's `close`);
  *    - the relay itself fails: a throw in a stream handler rejects the promise, after the flush, and operatorMain's
- *      error path then writes its own line and exits 1;
+ *      error path then writes its own line and exits 1. The text written is what had ARRIVED when the handler threw: shim
+ *      stderr arriving after the throw is lost with the CLI, and the shim keeps running, unreaped, as at the base;
  *    - the CLI receives SIGINT, SIGTERM or SIGHUP: the handler writes the held text and then raises the same signal on
  *      this process with the default action back, so the CLI ends as it ends without the handler (killed by that signal).
  *  The handlers are installed only while the child runs. The two streams are not ordered between themselves. A partial
@@ -1397,7 +1402,8 @@ function opRelay(P, op, opArgs, emit) {
       errBytes = 0;
       emit(text, true);
     };
-    /** Past the cap: the held text up to its last line boundary goes out, the rest stays held. */
+    /** Past the cap: the held text up to its last line boundary goes out, the rest stays held. With no line boundary at all the
+     *  whole of it goes out, where the over-cap read ended, mid-line, and emit's newline lands there (a seam, one break added). */
     const spillErr = () => {
       const cut = errHeld.lastIndexOf('\n');
       const text = cut === -1 ? errHeld : errHeld.slice(0, cut);
@@ -1480,7 +1486,7 @@ function relayIndexOf(home, P, reach) {
 /** One operator verb through the door. `emit(line, toStderr)` gets each line the sweep printed before its result on
  *  stdout, and the text it printed on stderr, held and written whole (`toStderr` true; D-5022), already through
  *  redactFinalLines with relayIndexOf's index, which is built only once the gate has passed, before the shim starts. */
-export async function runOpVerb(home, verb, rest, emit) {
+export async function runOpVerb(home, verb, rest, emit, seam = {}) {
   const P = healthLib.historyPaths(home);
   const map = opFormOf(verb, rest);
   if (map === null) return { exit: EXIT.REFUSED, reason: 'bad-args' };
@@ -1503,6 +1509,7 @@ export async function runOpVerb(home, verb, rest, emit) {
     isattyOp(0), opPaneName(form));
   if (!gate.ok) return { exit: gate.rc, reason: gate.reason };
   const idx = relayIndexOf(home, P, reach);
+  seam.idx = idx;   // the caller's catch redacts its internal-error line with the index of the read that line belongs to (D-5023)
   return opRelay(P, map.op, map.opArgs, (line, toStderr) => emit(redactFinalLines(line, idx), toStderr));
 }
 
@@ -1552,12 +1559,15 @@ export async function operatorMain(home, argv) {
   // HA2 H-37). It is the only line, so the exit-words line below is skipped.
   let thrown = false;
   let r;
+  // runOpVerb sets `seam.idx` once it has built the relay's index, so a throw out of a relay stream handler (which rejects into
+  // the catch below) is redacted with the index of the read its text belongs to, as D-5023 rules; before the index exists, NO_PAIRS.
+  const seam = { idx: NO_PAIRS };
   try {
-    r = await runOpVerb(home, verb, rest.slice(1), emit);
+    r = await runOpVerb(home, verb, rest.slice(1), emit, seam);
   } catch (e) {
     thrown = true;
     r = { exit: EXIT.INTERNAL };
-    errLine(`ccrc history ${verb}: internal error: ${thrownText(e)}; ${OP_OPERATOR_NOTE_ANY}`);
+    errLine(`ccrc history ${verb}: internal error: ${thrownText(e)}; ${OP_OPERATOR_NOTE_ANY}`, seam.idx);
   }
   if (json) {
     const id = readTrimmed(P.storeId);

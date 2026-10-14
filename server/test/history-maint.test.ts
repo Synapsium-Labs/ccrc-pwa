@@ -567,6 +567,19 @@ describe.skipIf(process.platform === 'darwin')('the relay holds the shim\'s stde
     expect(r.stderr.indexOf('zqx23 held'), 'the held text comes before it').toBeLessThan(own);
   }, HEAVY);
 
+  it('(f) the relay-throw ending\'s internal-error line is redacted with the relay\'s own index: a registered value the thrown message carries is masked (D-5023, FIN)', () => {
+    const G = `${alnum(39)}7`;
+    const box = boxWithRegisteredValue('ccrc-hist-relay-throwidx-', G);
+    // the value is in NO shim output: the only place it appears is the thrown message, which no shape matches (only its pair masks it)
+    rawShim(box, ["printf '%s\\n' 'zqx23 held line' >&2", 'sleep 0.4', "printf '%s\\n' 'zqx23-boom' '{\"rc\":0}'"]);
+    const r = runCli(box, ['doctor', '--backup'], { preloads: [PRELOADS.throwwrite], env: { HISTORY_TEST_THROW_WRITE: 'zqx23-boom', HISTORY_TEST_THROW_WRITE_DETAIL: ` carrying ${G}` } });
+    expect(r.code, r.stderr).toBe(1);
+    const own = r.stderr.split('\n').find((l) => l.startsWith('ccrc history doctor: internal error: '));
+    expect(own, 'CONTROL: the CLI\'s own line carries the thrown message').toContain('carrying ');
+    expect(leaks(r.stderr, G), 'the registered value is masked in the line').toEqual([]);
+    expect(own, 'and its mark stands where the value was').toContain(REDACTED_MARK);
+  }, HEAVY);
+
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
     it(`(d, f) the CLI receiving ${sig} while the shim runs writes the held stderr, masked, and ends as it ends without a handler: killed by ${sig}`, async () => {
       const G = `${alnum(39)}7`;

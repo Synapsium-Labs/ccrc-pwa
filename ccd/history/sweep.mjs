@@ -44,7 +44,7 @@ import {
   CARRIER_KILL_S, EXIT, SPOOL_FILE_MAX, OBS_FILE_MAX, CONTROL_FILE_MAX, observationOk, SCHEMA_ADDED, SCHEMA_VERSION, SCAN_INTERVAL_MS, STATFS_DEADLINE_MS, capOf, decideCandidate,
   decideEpochLine, decideRekey, decideStoreOpen, floorThreshold, locationMatches,
   UUID_RE, WRITER_RE, drainingNameOk, drainingNameParts, drainingOrder, eventKey, historyPaths, idOk, spoolFileIdOf, joinGeneration, journalRecord, parseSpoolLine,
-  passOutcome, planFileRead, planMigration, planRun, storeVersionDamaged, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText, spoolLinesOverCap,
+  heavyVersionsBetween, passOutcome, planFileRead, planMigration, planRun, storeVersionDamaged, readBoxEnvValue, sha256Bytes, sha256Hex, splitSpoolText, spoolLinesOverCap,
   SQLITE_CODES, decideDrainFailure, blobOverDecodeCap, CHUNK_BYTES, LINE_MAX, RUN_BUDGET_MS, RUN_BUDGET_BYTES, withinBudget, isStoredRow, uuidlessTypeOf, blobBodyOf, entryOf,
   boundaryOf, provenanceOf, variantCauseOf, canonicalJson, jsonWithinStructureBound, blobShaOfBytes, ROW_TYPES, PARSE_STATE, RAW_ROW, PROV_VERSION,
   toolUsesOf, toolResultIdsOf, rawRowKey, launchFactsOf, lagOfTick, SIDECAR_WHOLE_MAX, SIDECAR_MAX_BYTES, linkSidecar, ftsTextOf,
@@ -3286,8 +3286,8 @@ export function migrationVerdict(db, home, P, o) {
   // that lets its replacement run.
   const reclaimed = removeStaleMigrationTemps(home).bytes;
   if (o.stored === o.code) return 'none';
-  let heavy = false;
-  for (let v = o.stored + 1; v <= o.code; v += 1) if (o.schemaAdded[v]?.heavy === true) heavy = true;
+  // The ONE walk of the range for a heavy version (lib's heavyVersionsBetween): doctor's printed estimate calls the same function.
+  const heavy = heavyVersionsBetween(o.stored, o.code, o.schemaAdded).length > 0;
   const bps = Number(getMeta(db, 'copy_bps'));
   const measured = o.free.state === 'ok';
   return planMigration({

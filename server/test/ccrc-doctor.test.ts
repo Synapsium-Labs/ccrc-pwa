@@ -1270,7 +1270,7 @@ import { markGenerated } from '../../shared/mark.mjs';
 import { createServer, type Socket } from 'node:net';
 import { DatabaseSync } from 'node:sqlite';
 import { createStore } from '../../ccd/history/store.mjs';
-import { HEALTH_COUNTERS, HEALTH_META, HEALTH_WORDS, RECOVERY_STALL_TICKS, SCHEMA_VERSION, deriveHealth } from '../../ccd/history/lib.mjs';
+import { HEALTH_COUNTERS, HEALTH_META, HEALTH_WORDS, RECOVERY_STALL_TICKS, SCHEMA_VERSION, deriveHealth, historyPaths } from '../../ccd/history/lib.mjs';
 import { PRELOADS, preloadOptions } from './historyHelpers.js';
 // The PWA bundle's one fixture worker (Docs W4): `healthy()` plants it and the `docs-sw` describe at the end of
 // this file measures it. Imported here, below every line another file cites, for the block comment above's reason.
@@ -13530,7 +13530,17 @@ describeLinux('ccrc doctor: history — a real store, state by state (O15, O28, 
       absent: ['FAIL history: '] },
     { name: 'DM43: a migration too long for a scheduled pass FAILs migration-needs-op, its remedy the --migrate verb', word: 'migration-needs-op', cls: 'FAIL',
       plant: (home) => withStore(home, metaOnFreshTick('migration', 'snapshot-needs-op')),
-      remedyNames: () => ['ccrc history doctor --migrate'] },
+      remedyNames: () => ['ccrc history doctor --migrate'], absent: ['interrupted'] },
+    // FIN item 4: the verdict also comes from planMigration's interrupted-attempts arm, whatever the size; status carries the count
+    // (the marker `.pre-v<code>.attempt`, read with readAttempts) so the line names that reason and never calls the estimate too long.
+    { name: 'DM43: a small store whose migration was interrupted twice FAILs migration-needs-op naming the attempts, not an estimate too long for a scheduled pass', word: 'migration-needs-op', cls: 'FAIL',
+      plant: (home) => {
+        withStore(home, metaOnFreshTick('migration', 'snapshot-needs-op'));
+        const backups = historyPaths(home).backups;
+        mkdirSync(backups, { recursive: true, mode: 0o700 });
+        writeFileSync(join(backups, `.pre-v${SCHEMA_VERSION}.attempt`), '2\n', { mode: 0o600 });
+      },
+      names: () => ['interrupted 2 times'], remedyNames: () => ['ccrc history doctor --migrate'], absent: ['too long for a scheduled pass'] },
     { name: 'migration-refused: a migration refused for room FAILs, its remedy a measured byte count', word: 'migration-refused', cls: 'FAIL',
       plant: (home) => withStore(home, metaOnFreshTick('migration', 'refuse-low-disk')),
       remedyNames: () => ['free space'], absent: ['undefined', 'NaN bytes'] },

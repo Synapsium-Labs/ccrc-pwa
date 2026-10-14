@@ -423,6 +423,8 @@ export interface HealthInputs {
   readonly freeBytes: number | null;
   readonly thresholdBytes: number | null;
   readonly copyBps: number | null;
+  /** The interrupted attempts at the migration to the code's version (store's readAttempts), measured only while the verdict is snapshot-needs-op; absent reads as 0. */
+  readonly migrationAttempts?: number;
   readonly backupsDb: readonly string[];
   readonly journalStoreDirs: readonly string[];
   /** What status could not read (Task 28F): each name is an input that kept its default and was NOT measured. */

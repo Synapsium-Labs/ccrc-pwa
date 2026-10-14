@@ -4176,6 +4176,64 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     expect(healthLib.heavyVersionsBetween(1, 2)).toEqual([2]);
     expect(healthLib.heavyVersionsBetween(2, 2)).toEqual([]);
   });
+  // FIN item 1: the verdict (sweep's migrationVerdict) and doctor's print walk the SAME range with the SAME function, so they cannot drift.
+  // The factor the verdict used is read off the verdict itself, never off a literal heavy flag: B is over half the bound when counted
+  // twice and under it counted once, so needs-op at B means the verdict counted the copy twice.
+  it('migrationVerdict and doctor\'s printed estimate share one heavy walk: the verdict\'s own factor equals heavyVersionsBetween\'s for every pair, and doctor prints the estimate that factor gives (FIN)', async () => {
+    const S = (await import('../../ccd/history/sweep.mjs')) as unknown as { migrationVerdict: (db: unknown, home: string, P: null, o: Record<string, unknown>) => string };
+    const h = mkTmp('ccrc-history-heavywalk-');
+    replayStore.createStore(h);
+    const db = replayStore.openWriter(libPlan.historyPaths(h).dbFile);
+    const TiB = 1024 ** 4;
+    const rate = 10_000_000;                                    // no recorded copy_bps: the default rate
+    const B = (healthLib.CARRIER_KILL_S / 2) * rate / 2 + 1;     // over half the bound counted twice, under it counted once
+    const factorOf = (stored: number, code: number, schemaAdded: unknown): number => {
+      const v = S.migrationVerdict(db, h, null, { stored, code, free: { state: 'ok', bytes: TiB, fsSize: 2 * TiB }, sizeBytes: B, boundS: healthLib.CARRIER_KILL_S, schemaAdded });
+      expect(['snapshot-needs-op', 'snapshot-then-migrate'], `CONTROL: ${stored}->${code} reaches the estimate test`).toContain(v);
+      return v === 'snapshot-needs-op' ? 2 : 1;
+    };
+    try {
+      // a seam whose heavy version is NOT v2: a walk that counts only v2 reads these pairs as light
+      const light = { heavy: false, tables: {} };
+      const seam = { ...healthLib.SCHEMA_ADDED, 2: light, 3: { heavy: true, tables: {} }, 4: light };
+      let heavyPairs = 0;
+      for (const schemaAdded of [healthLib.SCHEMA_ADDED, seam] as const) {
+        const top = Math.max(...Object.keys(schemaAdded).map(Number));
+        for (let stored = 1; stored < top; stored += 1) {
+          for (let code = stored + 1; code <= top; code += 1) {
+            const want = healthLib.heavyVersionsBetween(stored, code, schemaAdded).length > 0 ? 2 : 1;
+            if (want === 2) heavyPairs += 1;
+            expect(factorOf(stored, code, schemaAdded), `${stored}->${code}: the verdict's factor is the shared walk's`).toBe(want);
+          }
+        }
+      }
+      expect(heavyPairs, 'CONTROL: some pair is heavy and some is not').toBeGreaterThan(1);
+      // doctor, on the real SCHEMA_ADDED: the estimate it prints is the one the verdict's own factor gives
+      const factor = factorOf(1, 2, healthLib.SCHEMA_ADDED);
+      expect(factor, 'CONTROL: the real v2 is heavy').toBe(2);
+      const d = healthLib.deriveHealth(base({ migration: 'snapshot-needs-op', userVersion: 1, codeVersion: 2, sizeBytes: B, copyBps: null }));
+      expect(d.fail[0]!.detail).toContain(`about ${Math.ceil((B * factor) / rate)} s`);
+    } finally { db.close(); }
+  }, 60_000);
+  // FIN item 4: planMigration answers snapshot-needs-op from two arms, and the line names the one that decided.
+  it('migration-needs-op names the interrupted attempts when they decided the verdict, whatever the size, and the estimate when it did (FIN)', () => {
+    const small = { migration: 'snapshot-needs-op' as const, userVersion: 1, codeVersion: 2, sizeBytes: 1_000_000, copyBps: 10_000_000 };
+    // the verdict, from planMigration itself: two attempts escalate a small store; none does
+    const plan = (attempts: number) => healthLib.planMigration({ stored: 1, code: 2, freeBytes: 9e12, thresholdBytes: 1, sizeBytes: 1_000_000, boundS: healthLib.CARRIER_KILL_S, copyBps: 10_000_000, attempts, heavy: true });
+    expect([plan(healthLib.MAX_INTERRUPTED_ATTEMPTS), plan(0)]).toEqual(['snapshot-needs-op', 'snapshot-then-migrate']);
+    const interrupted = healthLib.deriveHealth(base({ ...small, migrationAttempts: healthLib.MAX_INTERRUPTED_ATTEMPTS })).fail[0]!;
+    expect(interrupted.word).toBe('migration-needs-op');
+    expect(interrupted.detail, 'the reason is the attempts').toContain(`interrupted ${healthLib.MAX_INTERRUPTED_ATTEMPTS} times`);
+    expect(interrupted.detail, 'and the estimate is not called too long').not.toContain('too long for a scheduled pass');
+    expect(interrupted.detail, 'the estimate is still stated').toContain('about 1 s');
+    expect(interrupted.remedy, 'the remedy is kept').toContain('ccrc history doctor --migrate');
+    // the estimate arm: a large store, no attempts (absent reads as none)
+    for (const migrationAttempts of [undefined, 0, 1]) {
+      const large = healthLib.deriveHealth(base({ migration: 'snapshot-needs-op', userVersion: 1, codeVersion: 2, sizeBytes: 50_000_000_000, copyBps: 10_000_000, ...(migrationAttempts === undefined ? {} : { migrationAttempts }) })).fail[0]!;
+      expect(large.detail, String(migrationAttempts)).toContain(', too long for a scheduled pass');
+      expect(large.detail, String(migrationAttempts)).not.toContain('interrupted');
+    }
+  });
   it('cap-malformed and cap-near name the cap file from the input, never a spelled switch', () => {
     expect(healthLib.deriveHealth(base({ capMalformed: true })).warn[0]!.detail).toContain('/home/u/.ccrc/cap-fixture');
     expect(healthLib.deriveHealth(base({ sizeBytes: 41 * 2 ** 30 })).warn[0]!.remedy).toContain('/home/u/.ccrc/cap-fixture');

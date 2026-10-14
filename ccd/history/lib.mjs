@@ -3553,7 +3553,15 @@ export function deriveHealth(h) {
     const heavy = heavyVersionsBetween(h.userVersion, h.codeVersion);
     const est = Math.ceil(((h.sizeBytes ?? 0) * (heavy.length > 0 ? 2 : 1)) / (h.copyBps ?? DEFAULT_COPY_BPS));
     const why = heavy.length > 0 ? ` (the copy counted twice: ${heavy.map((v) => `v${v}`).join(' and ')} backfills or indexes a large table)` : '';
-    fail.push(item('migration-needs-op', `a migration to v${h.codeVersion} needs a copy of about ${est} s${why}, too long for a scheduled pass`));
+    // planMigration answers this verdict by two arms, the interrupted attempts first (whatever the size) and the estimate past half the
+    // bound. The attempts count reaches here through status (`migrationAttempts`, measured with readAttempts), so the line names the arm
+    // that decided: an estimate is never called too long when the attempts decided it. An absent count reads as none.
+    const attempts = h.migrationAttempts ?? 0;
+    if (attempts >= MAX_INTERRUPTED_ATTEMPTS) {
+      fail.push(item('migration-needs-op', `a migration to v${h.codeVersion} was started and interrupted ${attempts} times (a scheduled pass stops after ${MAX_INTERRUPTED_ATTEMPTS}), whatever the size; its copy is about ${est} s${why}`));
+    } else {
+      fail.push(item('migration-needs-op', `a migration to v${h.codeVersion} needs a copy of about ${est} s${why}, too long for a scheduled pass`));
+    }
   }
   // Task 28F: an input status could not read kept its healthy default; it is named here and never judged healthy
   // (the no-overloaded-null rule). An existing word, so no HEALTH_WORDS entry is added.
