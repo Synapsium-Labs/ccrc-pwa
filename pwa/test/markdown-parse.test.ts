@@ -309,3 +309,18 @@ describe("M9.1: the docs profile's real <br> (the 2026-10-12 spec's A16; the W5 
     expect(settleHast(tree(), 'docs')).toEqual({ kind: 'tree', depth: 1, tree: { type: 'root', children: [BR] } });
   });
 });
+
+describe('T13 review 1-2: DOCS_BR matches a whole value of the tag, so whitespace around it leaves literal text', () => {
+  const brsOf = (o: ParseOutcome): AnyNode[] => nodes(treeOf(o)).filter((n) => n.type === 'element' && n.tagName === 'br');
+
+  it.each([
+    ['whitespace on both sides, a paragraph after', '  <br>  \n\nx'],
+    ['leading whitespace only', '  <br>'],
+    ['trailing whitespace, a paragraph after', '<br>  \n\nx'],
+  ])('%s stays literal text in the docs profile, with no br element', (_why, src) => {
+    const o = parseMarkdown(src, 'docs');
+    expect(brsOf(o)).toEqual([]);
+    expect(nodes(treeOf(o)).filter((n) => n.type === 'raw')).toEqual([]);
+    expect(o).toEqual(parseMarkdown(src, 'chat'));
+  });
+});
