@@ -4234,6 +4234,26 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
       expect(large.detail, String(migrationAttempts)).not.toContain('interrupted');
     }
   });
+  // FIN2 item 2 (the no-overloaded-null rule): an attempt marker that could not be measured counts as the cap, which is right for the
+  // verdict, but the line must not state that count as if it had been counted.
+  it('migration-needs-op names an unmeasured attempt marker as unmeasured, a counted one by its count, and an absent one by the estimate (FIN2)', () => {
+    const small = { migration: 'snapshot-needs-op' as const, userVersion: 1, codeVersion: 2, sizeBytes: 1_000_000, copyBps: 10_000_000 };
+    const unmeasured = healthLib.deriveHealth(base({ ...small, migrationAttempts: healthLib.MAX_INTERRUPTED_ATTEMPTS, migrationAttemptsUnmeasured: true })).fail[0]!;
+    expect(unmeasured.word, 'the word is kept').toBe('migration-needs-op');
+    expect(unmeasured.detail, 'the marker is named as unread').toContain('the attempt marker for the migration to v2 could not be read, so a scheduled pass treats the migration as interrupted');
+    expect(unmeasured.detail, 'no count nobody measured is stated').not.toMatch(/interrupted \d+ times|started and interrupted/);
+    expect(unmeasured.detail, 'the estimate is still stated').toContain('about 1 s');
+    expect(unmeasured.remedy, 'the remedy is kept').toContain('ccrc history doctor --migrate');
+    const counted = healthLib.deriveHealth(base({ ...small, migrationAttempts: healthLib.MAX_INTERRUPTED_ATTEMPTS, migrationAttemptsUnmeasured: false })).fail[0]!;
+    expect(counted.detail, 'a counted marker prints its count').toContain(`started and interrupted ${healthLib.MAX_INTERRUPTED_ATTEMPTS} times`);
+    expect(counted.detail).not.toContain('could not be read');
+    const absent = healthLib.deriveHealth(base({ migration: 'snapshot-needs-op', userVersion: 1, codeVersion: 2, sizeBytes: 50_000_000_000, copyBps: 10_000_000, migrationAttempts: 0, migrationAttemptsUnmeasured: false })).fail[0]!;
+    expect(absent.detail, 'an absent marker prints the estimate arm').toContain(', too long for a scheduled pass');
+    expect(absent.detail).not.toContain('could not be read');
+    // an unmeasured flag beside a count under the cap decides nothing: only the cap arm reads it
+    const below = healthLib.deriveHealth(base({ migration: 'snapshot-needs-op', userVersion: 1, codeVersion: 2, sizeBytes: 50_000_000_000, copyBps: 10_000_000, migrationAttempts: 0, migrationAttemptsUnmeasured: true })).fail[0]!;
+    expect(below.detail).toContain(', too long for a scheduled pass');
+  });
   it('cap-malformed and cap-near name the cap file from the input, never a spelled switch', () => {
     expect(healthLib.deriveHealth(base({ capMalformed: true })).warn[0]!.detail).toContain('/home/u/.ccrc/cap-fixture');
     expect(healthLib.deriveHealth(base({ sizeBytes: 41 * 2 ** 30 })).warn[0]!.remedy).toContain('/home/u/.ccrc/cap-fixture');

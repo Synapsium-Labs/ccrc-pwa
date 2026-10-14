@@ -921,17 +921,26 @@ export function syncWriterMirror(db, home) {
 
 const attemptMarker = (home, n) => `${historyPaths(home).backups}/.pre-v${n}.attempt`;
 
+/** The attempt marker for version `n`, measured: `absent` (count 0), `count` (a count, read as itself), or `unmeasured` (a
+ *  marker that cannot be read, is empty, or holds anything but a count; its count is MAX_INTERRUPTED_ATTEMPTS, the
+ *  escalating direction). The measured sibling of readAttempts (the no-overloaded-null rule): a count nobody measured and
+ *  a count read are two conditions, so doctor's line can tell them apart. */
+export function measureAttempts(home, n) {
+  const r = readBounded(attemptMarker(home, n), CONTROL_FILE_MAX, false);
+  if (r.state === 'absent') return { state: 'absent', count: 0 };
+  if (r.state !== 'value') return { state: 'unmeasured', count: MAX_INTERRUPTED_ATTEMPTS };
+  const v = r.value.trim();
+  return /^[0-9]{1,6}$/.test(v) ? { state: 'count', count: Number(v) } : { state: 'unmeasured', count: MAX_INTERRUPTED_ATTEMPTS };
+}
+
 /** How many attempts at migrating to version `n` were started and never
  *  finished (§6.11). Absent is 0. A marker that cannot be read, or holds
  *  anything but a count, reads as MAX_INTERRUPTED_ATTEMPTS — the escalating
  *  direction: a scheduled pass then answers `snapshot-needs-op` rather than
- *  copy again on a guess, and the operator's `--op migrate` is unbounded. */
+ *  copy again on a guess, and the operator's `--op migrate` is unbounded.
+ *  Derived from measureAttempts, which says which of the two it was. */
 export function readAttempts(home, n) {
-  const r = readBounded(attemptMarker(home, n), CONTROL_FILE_MAX, false);
-  if (r.state === 'absent') return 0;
-  if (r.state !== 'value') return MAX_INTERRUPTED_ATTEMPTS;
-  const v = r.value.trim();
-  return /^[0-9]{1,6}$/.test(v) ? Number(v) : MAX_INTERRUPTED_ATTEMPTS;
+  return measureAttempts(home, n).count;
 }
 
 /** A marker a kill left AFTER its migration committed (DI13): once the store

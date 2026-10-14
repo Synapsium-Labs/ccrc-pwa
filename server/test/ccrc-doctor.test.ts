@@ -13541,6 +13541,18 @@ describeLinux('ccrc doctor: history — a real store, state by state (O15, O28, 
         writeFileSync(join(backups, `.pre-v${SCHEMA_VERSION}.attempt`), '2\n', { mode: 0o600 });
       },
       names: () => ['interrupted 2 times'], remedyNames: () => ['ccrc history doctor --migrate'], absent: ['too long for a scheduled pass'] },
+    // FIN2 item 2: a marker that cannot be measured counts as the cap for the verdict, and the line says so instead of printing a count.
+    ...([['a garbled', 'garbled\n'], ['an empty', '']] as const).map(([what, body]): StateCase => ({
+      name: `DM43: ${what} attempt marker FAILs migration-needs-op naming the marker as unreadable, not an interrupted count`, word: 'migration-needs-op', cls: 'FAIL',
+      plant: (home) => {
+        withStore(home, metaOnFreshTick('migration', 'snapshot-needs-op'));
+        const backups = historyPaths(home).backups;
+        mkdirSync(backups, { recursive: true, mode: 0o700 });
+        writeFileSync(join(backups, `.pre-v${SCHEMA_VERSION}.attempt`), body, { mode: 0o600 });
+      },
+      names: () => ['the attempt marker', 'could not be read, so a scheduled pass treats the migration as interrupted'], remedyNames: () => ['ccrc history doctor --migrate'],
+      absent: ['started and interrupted', 'too long for a scheduled pass'],
+    })),
     { name: 'migration-refused: a migration refused for room FAILs, its remedy a measured byte count', word: 'migration-refused', cls: 'FAIL',
       plant: (home) => withStore(home, metaOnFreshTick('migration', 'refuse-low-disk')),
       remedyNames: () => ['free space'], absent: ['undefined', 'NaN bytes'] },

@@ -3557,7 +3557,10 @@ export function deriveHealth(h) {
     // bound. The attempts count reaches here through status (`migrationAttempts`, measured with readAttempts), so the line names the arm
     // that decided: an estimate is never called too long when the attempts decided it. An absent count reads as none.
     const attempts = h.migrationAttempts ?? 0;
-    if (attempts >= MAX_INTERRUPTED_ATTEMPTS) {
+    if (attempts >= MAX_INTERRUPTED_ATTEMPTS && h.migrationAttemptsUnmeasured === true) {
+      // The count is the cap because the marker could not be measured (readAttempts fails closed), not because two attempts were counted.
+      fail.push(item('migration-needs-op', `the attempt marker for the migration to v${h.codeVersion} could not be read, so a scheduled pass treats the migration as interrupted (it stops after ${MAX_INTERRUPTED_ATTEMPTS}), whatever the size; its copy is about ${est} s${why}`));
+    } else if (attempts >= MAX_INTERRUPTED_ATTEMPTS) {
       fail.push(item('migration-needs-op', `a migration to v${h.codeVersion} was started and interrupted ${attempts} times (a scheduled pass stops after ${MAX_INTERRUPTED_ATTEMPTS}), whatever the size; its copy is about ${est} s${why}`));
     } else {
       fail.push(item('migration-needs-op', `a migration to v${h.codeVersion} needs a copy of about ${est} s${why}, too long for a scheduled pass`));

@@ -567,6 +567,36 @@ describe.skipIf(process.platform === 'darwin')('the relay holds the shim\'s stde
     expect(r.stderr.indexOf('zqx23 held'), 'the held text comes before it').toBeLessThan(own);
   }, HEAVY);
 
+  it('(f) after a relay throw nothing the shim writes later is relayed: stdout, and stderr past the cap, stay as they were at the CLI\'s own last line (D-5022, FIN2)', async () => {
+    const box = boundBox('ccrc-hist-relay-throwlate-');
+    const PAD = 'y'.repeat(100);
+    // The throw lands on the stdout line 'zqx23-boom' (once only, so the held line could be written later if the relay still listened).
+    // The CLI is kept alive 2.5 s after its error line (the exit delay), in the window where a listener left on could still write; the
+    // shim then writes three stdout lines and about 1.5 MB on stderr (past the 1 MiB hold cap, which writes without waiting for the close).
+    rawShim(box, [
+      "printf '%s\\n' 'zqx23 held' >&2",
+      'sleep 0.4',
+      "printf '%s\\n' 'zqx23-boom' '{\"rc\":0}'",
+      'sleep 0.4',
+      "printf '%s\\n' 'zqx24 late out one' 'zqx24 late out two' 'zqx24 late out three'",
+      `awk 'BEGIN { for (i = 1; i <= 12000; i++) printf "zqx24 late err %06d ${PAD}\\n", i }' >&2`,
+      'printf \'%s\\n\' \'zqx24 late err tail\' >&2',
+      'touch "$HOME/late.done"',
+    ]);
+    const r = await startCli(box, ['doctor', '--backup'], {
+      preloads: [PRELOADS.throwwrite],
+      env: { HISTORY_TEST_THROW_WRITE: 'zqx23-boom', HISTORY_TEST_THROW_WRITE_ONCE: '1', HISTORY_TEST_EXIT_DELAY_MS: '2500' },
+    }).done;
+    expect(r.code, r.stderr.slice(0, 300)).toBe(1);
+    expect(fs.existsSync(path.join(box.home, 'late.done')), 'CONTROL: the shim wrote its late output while the CLI was still alive').toBe(true);
+    expect(r.stderr, 'CONTROL: the held text and the CLI\'s own line are written').toContain('zqx23 held');
+    const own = r.stderr.indexOf('ccrc history doctor: internal error: ');
+    expect(own, 'CONTROL: the CLI\'s own error path wrote its line').toBeGreaterThan(-1);
+    expect(r.stderr.slice(own), 'nothing on stderr after the CLI\'s own line but that line').toBe(r.stderr.slice(own, r.stderr.indexOf('\n', own) + 1));
+    expect(r.stderr, 'no late stderr text is relayed').not.toContain('zqx24');
+    expect(r.stdout, 'no late stdout line, and not the line held at the throw, is written').not.toMatch(/zqx24|zqx23-boom/);
+  }, HEAVY);
+
   it('(f) the relay-throw ending\'s internal-error line is redacted with the relay\'s own index: a registered value the thrown message carries is masked (D-5023, FIN)', () => {
     const G = `${alnum(39)}7`;
     const box = boxWithRegisteredValue('ccrc-hist-relay-throwidx-', G);

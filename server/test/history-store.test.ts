@@ -24,7 +24,7 @@ import {
   mintStoreId, mintWriter, writeFileAtomic, peekStoreId, measureStoreFacts, removeStaleTemps, removeStaleMigrationTemps, createStore,
   finishPending, dropPending, syncWriterMirror, createFtsTables, integrityCheck, foreignKeyRows, ftsMeasure, dropFtsTables, setCounter,
   pruneProtected, pruneCandidates, pruneBatch, pruneDryRun, incrementalVacuum, pruneApply,
-  readAttempts, clearDoneMarkers, assertAdditive, runMigration, removeEntry, readBounded, removeStaleAtomicTemps, mkdirDurable,
+  readAttempts, measureAttempts, clearDoneMarkers, assertAdditive, runMigration, removeEntry, readBounded, removeStaleAtomicTemps, mkdirDurable,
   writeBackup, blobPlainText, blobPlainTextMeasured,
 } from '../../ccd/history/store.mjs';
 import { adoptStore, stageRestore, commitRestore, abortRestore } from '../../ccd/history/store.mjs';
@@ -777,6 +777,34 @@ describe('store.mjs: the migration executor', () => {
     expect(readAttempts(h, 2)).toBe(1);
     fs.writeFileSync(path.join(P.backups, '.pre-v2.attempt'), 'garbled');
     expect(readAttempts(h, 2)).toBe(2);
+  });
+
+  it('measureAttempts says which condition it was: absent, a count, or unmeasured (an unreadable, empty or garbled marker); readAttempts derives from it (FIN2)', () => {
+    const { h, db } = bound();
+    closeWriter(db);
+    const P = historyPaths(h);
+    const marker = path.join(P.backups, '.pre-v2.attempt');
+    expect(measureAttempts(h, 2), 'no backups directory: absent').toEqual({ state: 'absent', count: 0 });
+    fs.mkdirSync(P.backups, { mode: 0o700 });
+    expect(measureAttempts(h, 2), 'no marker: absent').toEqual({ state: 'absent', count: 0 });
+    const cases: Array<[string, string, { state: string; count: number }]> = [
+      ['one', '1\n', { state: 'count', count: 1 }],
+      ['zero', '0\n', { state: 'count', count: 0 }],
+      ['the cap', `${MAX_INTERRUPTED_ATTEMPTS}\n`, { state: 'count', count: MAX_INTERRUPTED_ATTEMPTS }],
+      ['garbled', 'garbled', { state: 'unmeasured', count: MAX_INTERRUPTED_ATTEMPTS }],
+      ['empty', '', { state: 'unmeasured', count: MAX_INTERRUPTED_ATTEMPTS }],
+      ['a number with a tail', '1 attempt\n', { state: 'unmeasured', count: MAX_INTERRUPTED_ATTEMPTS }],
+    ];
+    for (const [name, body, want] of cases) {
+      fs.writeFileSync(marker, body);
+      expect(measureAttempts(h, 2), name).toEqual(want);
+      expect(readAttempts(h, 2), `${name}: readAttempts is the same count`).toBe(want.count);
+    }
+    fs.rmSync(marker);
+    const real = path.join(h, 'real-attempt');
+    fs.writeFileSync(real, '1\n');
+    fs.symlinkSync(real, marker);
+    expect(measureAttempts(h, 2), 'a link is unreadable: unmeasured').toEqual({ state: 'unmeasured', count: MAX_INTERRUPTED_ATTEMPTS });
   });
 
   it('O51: a killed creation\'s temp and its -wal go together, a recycled pid starts clean, and a done marker is cleared', () => {

@@ -45,6 +45,7 @@ export function createStore(home: string, opts?: { storeId?: string; bind?: { ki
 export function finishPending(home: string): void;
 export function dropPending(home: string): void;
 export function syncWriterMirror(db: DatabaseSync, home: string): void;
+export function measureAttempts(home: string, n: number): { state: 'absent' | 'count' | 'unmeasured'; count: number };
 export function readAttempts(home: string, n: number): number;
 export function clearDoneMarkers(home: string, version: number): string[];
 export function assertAdditive(prev: Record<string, readonly string[]>, next: Record<string, readonly string[]>): void;

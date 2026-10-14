@@ -1174,10 +1174,13 @@ async function readHealthExtras(home, env, nowMs) {
   if (refusedNodes === null) store.unmeasured.push('spool/');
   const held = env.exit === healthLib.EXIT.OK && !spoolNotDirectory ? oldestUnjournaledMs(p) : { oldest: null, unreadable: false };
   if (held.unreadable) store.unmeasured.push('spool/.draining');
+  // The interrupted attempts decide a snapshot-needs-op verdict whatever the size (planMigration), so doctor's line needs the count; absent is 0.
+  // The marker's state rides beside it: an unreadable, empty or garbled marker counts as the cap (fail closed) but was never counted.
+  const attempts = env.migration === 'snapshot-needs-op' ? healthStore.measureAttempts(home, env.code_version) : { state: 'absent', count: 0 };
   return {
     ...store,
-    // The interrupted attempts decide a snapshot-needs-op verdict whatever the size (planMigration), so doctor's line needs the count; absent is 0.
-    migrationAttempts: env.migration === 'snapshot-needs-op' ? healthStore.readAttempts(home, env.code_version) : 0,
+    migrationAttempts: attempts.count,
+    migrationAttemptsUnmeasured: attempts.state === 'unmeasured',
     modesWrong: healthLib.modesWrongOf(measureModeEntries(p, unreachable || env.reason === 'store-root-dangling')),
     rootIsSymlink,
     spoolNotDirectory,
@@ -1254,6 +1257,7 @@ function healthInputsOf(env, x, nowMs) {
     thresholdBytes: env.threshold_bytes ?? null,
     copyBps: x.copyBps,
     migrationAttempts: x.migrationAttempts,
+    migrationAttemptsUnmeasured: x.migrationAttemptsUnmeasured === true,
     backupsDb: x.backupsDb,
     journalStoreDirs: (env.journal && env.journal.other_store_dirs) ?? [],
   };
@@ -1412,38 +1416,49 @@ function opRelay(P, op, opArgs, emit) {
       emit(text, true);
     };
     // A throw in a handler is the CLI's own error path: the held text goes out first (what the throw hid is the shim's
-    // stderr, the operator's only reason), then the promise rejects into operatorMain's catch, which writes its line.
+    // stderr, the operator's only reason), then the promise rejects into operatorMain's catch, which writes its line. After the
+    // flush the CLI stops listening BY CONSTRUCTION (D-5022): the pipes' 'data' listeners and the close handler come off, so no
+    // line the shim writes later is relayed, whatever the CLI is still waiting for (exitDrained), and the pipes keep draining
+    // (resume) so the shim, unreaped as at the base, never blocks on a full pipe.
     const fail = (e) => {
       if (done) return;
       done = true;
       detach();
       try { flushErr(); } catch { /* the line that follows names the failure */ }
+      child.stdout.off('data', onOut);
+      child.stderr.off('data', onErr);
+      child.off('close', onClose);
+      child.stdout.resume();
+      child.stderr.resume();
       reject(e);
     };
     const safe = (fn) => (...a) => { try { fn(...a); } catch (e) { fail(e); } };
-    child.stdout.setEncoding('utf8');
-    child.stdout.on('data', safe((d) => {
+    const onOut = safe((d) => {
       buf += d;
       for (let i = buf.indexOf('\n'); i !== -1; i = buf.indexOf('\n')) {
         take(buf.slice(0, i));
         buf = buf.slice(i + 1);
       }
-    }));
-    child.stderr.setEncoding('utf8');
-    child.stderr.on('data', safe((d) => {
+    });
+    const onErr = safe((d) => {
       errHeld += d;
       errBytes += Buffer.byteLength(d);
       if (errBytes > ERR_HOLD_CAP) spillErr();
-    }));
-    child.on('error', safe(() => { flushErr(); finish({ exit: EXIT.INTERNAL }); }));
-    child.on('close', safe((status, signal) => {
+    });
+    const onClose = safe((status, signal) => {
       flushErr();
       if (buf !== '') take(buf);
       let lastLine = null;
       if (held !== null && held.startsWith('{"rc"')) lastLine = held;
       else if (held !== null) emit(held, false);
       finish(healthLib.decideRelay({ status, signal, lastLine }));
-    }));
+    });
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', onOut);
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', onErr);
+    child.on('error', safe(() => { flushErr(); finish({ exit: EXIT.INTERNAL }); }));
+    child.on('close', onClose);
     // The CLI's own signals: write what is held, then end the CLI as the signal would have (default action, re-raised).
     let ending = false;
     const handlers = RELAY_SIGNALS.map((sig) => [sig, () => {
