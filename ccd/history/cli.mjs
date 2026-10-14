@@ -1372,8 +1372,9 @@ const RELAY_SIGNALS = Object.freeze(['SIGINT', 'SIGTERM', 'SIGHUP']);
  *  is bounded by ERR_HOLD_CAP, and it is written, redacted, BEFORE the CLI's own last line on every ending:
  *    - the child exits with a code, or is killed by a signal (the child's `close`);
  *    - the relay itself fails: a throw in a stream handler rejects the promise, after the flush, and operatorMain's
- *      error path then writes its own line and exits 1. The text written is what had ARRIVED when the handler threw: shim
- *      stderr arriving after the throw is lost with the CLI, and the shim keeps running, unreaped, as at the base;
+ *      error path then writes its own line and exits 1. The text written is what had ARRIVED when the handler threw:
+ *      shim stdout and stderr arriving after the throw are not relayed (fail() takes the 'data' listeners and the close
+ *      handler off, D-5022), and the shim keeps running, unreaped, as at the base;
  *    - the CLI receives SIGINT, SIGTERM or SIGHUP: the handler writes the held text and then raises the same signal on
  *      this process with the default action back, so the CLI ends as it ends without the handler (killed by that signal).
  *  The handlers are installed only while the child runs. The two streams are not ordered between themselves. A partial

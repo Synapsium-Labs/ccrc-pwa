@@ -423,7 +423,7 @@ export interface HealthInputs {
   readonly freeBytes: number | null;
   readonly thresholdBytes: number | null;
   readonly copyBps: number | null;
-  /** The interrupted attempts at the migration to the code's version (store's readAttempts), measured only while the verdict is snapshot-needs-op; absent reads as 0. */
+  /** The interrupted attempts at the migration to the code's version (store's measureAttempts; its state rides migrationAttemptsUnmeasured), measured only while the verdict is snapshot-needs-op; absent reads as 0. */
   readonly migrationAttempts?: number;
   /** True when that marker could not be read, was empty or was garbled: the count then stands for the cap and nobody measured it (store's measureAttempts); absent reads as false. */
   readonly migrationAttemptsUnmeasured?: boolean;

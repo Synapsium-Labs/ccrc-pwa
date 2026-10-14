@@ -3554,8 +3554,9 @@ export function deriveHealth(h) {
     const est = Math.ceil(((h.sizeBytes ?? 0) * (heavy.length > 0 ? 2 : 1)) / (h.copyBps ?? DEFAULT_COPY_BPS));
     const why = heavy.length > 0 ? ` (the copy counted twice: ${heavy.map((v) => `v${v}`).join(' and ')} backfills or indexes a large table)` : '';
     // planMigration answers this verdict by two arms, the interrupted attempts first (whatever the size) and the estimate past half the
-    // bound. The attempts count reaches here through status (`migrationAttempts`, measured with readAttempts), so the line names the arm
-    // that decided: an estimate is never called too long when the attempts decided it. An absent count reads as none.
+    // bound. The attempts count and its read state reach here through status (`migrationAttempts` and `migrationAttemptsUnmeasured`,
+    // read with store's measureAttempts), so the line names the arm that decided: an estimate is never called too long when the
+    // attempts decided it. An absent count reads as none.
     const attempts = h.migrationAttempts ?? 0;
     if (attempts >= MAX_INTERRUPTED_ATTEMPTS && h.migrationAttemptsUnmeasured === true) {
       // The count is the cap because the marker could not be measured (readAttempts fails closed), not because two attempts were counted.
