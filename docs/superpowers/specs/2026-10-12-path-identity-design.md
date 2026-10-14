@@ -399,8 +399,8 @@ measured at the wave's tip unless it says otherwise.
   literally and acts on no other row (pinned).
 - `enable-one-arg-journals-an-unchecked-id`: `enable <id>` journals its row before any check of the id, as it did
   before the wave. `cmd_start`, which it calls next, applies the inline charset check and needs an existing row.
-- `stripped-flag-positional-collapses-to-the-id-form`: start, enable and stop strip `--cross-pool`, `--` and
-  `--route=<f>=<v>` (and stop strips `--surface` and `--surface=`) from any position before their arity rule, so a
+- `stripped-flag-positional-collapses-to-the-id-form`: start and enable strip `--cross-pool`, `--` and
+  `--route=<f>=<v>`, and stop strips `--surface` and `--surface=`, from any position before their arity rule, so a
   positional spelled as one of those never reaches the two-argument checks, and the call collapses to the
   one-argument (id) form. For example, `enable --cross-pool <existing-id>` and `enable <wrapper> --` journal `enable`
   against the other positional and start that existing id, and `stop <wrapper> --surface=x --surface pwa` stops

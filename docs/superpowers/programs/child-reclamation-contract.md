@@ -3705,8 +3705,9 @@ comments and test titles cite the spec, never this contract.
 - `valueless-session-key-takes-the-next-flag-as-its-id`: at all eight `--session` verbs, a `--session` with no value of
   its own, followed by a decision flag, takes that flag as its id. `ws-release --session --actor ''` dies on the usage
   line where it died on `--actor must be non-blank`, and at a token verb `--expect <token> --session --surface=w`
-  answers `bad session id` where it answered the usage line. It is still a refusal, with the same exit code and before
-  any act: spec §2.4's atomic consumption.
+  answers `bad session id` where it answered the usage line. At ws-restore the refusal row now names the flag as its
+  id (`--surface`, for example), where it named `''`. It is still a refusal, with the same exit code and before any
+  act: spec §2.4's atomic consumption.
 - The identity pair stays in each loop's residue, so each verb's own arity and order checks keep refusing a
   duplicate, a wrong order and a lone key with the words they used before. No refusal word, probe word or journal act
   was added, and the refusal scan's sanctioned `die` set is unchanged.
@@ -3772,8 +3773,8 @@ comments and test titles cite the spec, never this contract.
   `pr-state --session <id>` keep the id check they had; `ensure <id>` takes its one positional with no shape check.
   None carries the decision flags the server appends.
 - `enable-one-arg-journals-an-unchecked-id`: `enable <id>` journals before any check of the id, as it did before.
-- `stripped-flag-positional-collapses-to-the-id-form`: start, enable and stop strip `--cross-pool`, `--` and
-  `--route=<f>=<v>` (and stop strips `--surface` and `--surface=`) from any position before their arity rule, so a
+- `stripped-flag-positional-collapses-to-the-id-form`: start and enable strip `--cross-pool`, `--` and
+  `--route=<f>=<v>`, and stop strips `--surface` and `--surface=`, from any position before their arity rule, so a
   positional spelled as one of those never reaches the two-argument checks, and the call collapses to the
   one-argument (id) form. For example, `enable --cross-pool <existing-id>` and `enable <wrapper> --` journal `enable`
   against the other positional and start that existing id, and `stop <wrapper> --surface=x --surface pwa` stops
