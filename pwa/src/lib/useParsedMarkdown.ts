@@ -121,6 +121,9 @@ export function useParsedMarkdown(
 ): ParsedMarkdown {
   const { profile, budgetMs } = opts;
   const attempt = opts.attempt ?? 0;
+  // The request this render stands for, built once: the layout effect records it as the latest, the passive effect
+  // starts or queues it, and `pending` is measured against it, so no site can spell it differently from another.
+  const req: Request = { text, profile, budgetMs, attempt };
   const [settled, setSettled] = useState<Settled>({ outcome: null, lastGood: null });
   const jobs = useRef<Jobs>({ started: 0, running: undefined, queued: undefined, latest: undefined, answered: undefined });
 
@@ -138,12 +141,12 @@ export function useParsedMarkdown(
   // that lands between this commit and the effect below already answers an earlier request (`start`'s `isLatest`).
   // No dependency list: the committed render's props ARE the latest request, and an equal request changes nothing.
   useLayoutEffect(() => {
-    jobs.current.latest = { text, profile, budgetMs, attempt };
+    jobs.current.latest = req;
   });
 
-  // `parser` is deliberately not a dependency: it is read when a request is made.
+  // `parser` is deliberately not a dependency: it is read when a request is made. `req` is built from the four
+  // dependencies, so a render in which they are equal makes an equal request.
   useEffect(() => {
-    const req: Request = { text, profile, budgetMs, attempt };
     const next: Waiting = { req, parser };
     const j = jobs.current;
     // A request already answered, or answered by the running job, needs no job of its own.
@@ -155,9 +158,9 @@ export function useParsedMarkdown(
       return;
     }
     start(j, next, setSettled);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text, profile, budgetMs, attempt]);
 
-  const current: Request = { text, profile, budgetMs, attempt };
-  const pending = settled.answers === undefined || !sameRequest(settled.answers, current);
+  const pending = settled.answers === undefined || !sameRequest(settled.answers, req);
   return { outcome: settled.outcome, lastGood: settled.lastGood, pending };
 }

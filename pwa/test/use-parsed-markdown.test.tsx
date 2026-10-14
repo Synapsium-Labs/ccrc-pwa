@@ -43,11 +43,13 @@ interface Props {
   readonly text: string;
   readonly budgetMs?: number;
   readonly attempt?: number;
+  readonly profile?: 'chat' | 'docs';
 }
 
 function mount(parser: MarkdownParser, initialProps: Props, strict = false) {
   return renderHook(
-    (p: Props) => useParsedMarkdown(p.text, parser, { profile: 'chat', budgetMs: p.budgetMs ?? 2000, attempt: p.attempt }),
+    (p: Props) =>
+      useParsedMarkdown(p.text, parser, { profile: p.profile ?? 'chat', budgetMs: p.budgetMs ?? 2000, attempt: p.attempt }),
     { initialProps, reactStrictMode: strict },
   );
 }
@@ -313,5 +315,33 @@ describe("W5 N1: the hook's commit-to-effect window is closed (the latest reques
     const a = treeOf('a');
     await settle(calls[1], tree(a));
     expect(result.current).toEqual({ outcome: tree(a), lastGood: a, pending: false });
+  });
+
+  // W5 Task 4 review: every case above ran the 'chat' profile, so a latest-request literal with 'chat' written into
+  // it left the hook 16/16 green while a docs reply never counted as the latest request's.
+  it("the docs profile: its reply is the outcome and nothing stays pending", async () => {
+    const { parser, calls } = deferredParser();
+    const { result } = mount(parser, { text: 'a', profile: 'docs' });
+    expect(calls[0]!.opts.profile).toBe('docs');
+    expect(result.current.pending).toBe(true);
+    const a = treeOf('a');
+    await settle(calls[0], tree(a));
+    expect(result.current).toEqual({ outcome: tree(a), lastGood: a, pending: false });
+  });
+
+  it('a profile change alone (the same text) is a new request: the newer reply is the one shown, never the earlier', async () => {
+    const { parser, calls } = deferredParser();
+    const { result, rerender } = mount(parser, { text: 'a', profile: 'chat' });
+    rerender({ text: 'a', profile: 'docs' });
+    expect(calls).toHaveLength(1);
+    expect(result.current.pending).toBe(true);
+    const chat = treeOf('chat');
+    await settle(calls[0], tree(chat));
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.opts.profile).toBe('docs');
+    expect(result.current).toEqual({ outcome: null, lastGood: chat, pending: true });
+    const docs = treeOf('docs');
+    await settle(calls[1], tree(docs));
+    expect(result.current).toEqual({ outcome: tree(docs), lastGood: docs, pending: false });
   });
 });

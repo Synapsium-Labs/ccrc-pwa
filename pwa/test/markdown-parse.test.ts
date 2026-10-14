@@ -272,6 +272,21 @@ describe("M9.1: the docs profile's real <br> (the 2026-10-12 spec's A16; the W5 
     expect(o).toEqual(parseMarkdown(src, 'chat'));
   });
 
+  // A text node that spells `<br>` is text, not a raw node: only `rawToText` may turn a raw node into a `br`.
+  it.each([
+    ['an escaped angle bracket', '\\<br>', '<br>'],
+    ['an escaped angle bracket in a line', 'a\\<br>b', 'a<br>b'],
+    ['character references', '&lt;br&gt;', '<br>'],
+    ['character references in a line', 'a&lt;br&gt;b', 'a<br>b'],
+    ['inline code', '`<br>`', '<br>'],
+    ['inline code in a line', 'a `<br>` b', 'a <br> b'],
+  ])('%s stays text in the docs profile, with no br element', (_why, src, text) => {
+    const o = parseMarkdown(src, 'docs');
+    expect(brs(o)).toEqual([]);
+    expect(textOf(o)).toBe(text);
+    expect(o).toEqual(parseMarkdown(src, 'chat'));
+  });
+
   it('the br elements count toward DOCS_MAX_RENDER_ELEMENTS before anything renders', () => {
     const src = 'a<br>'.repeat(20000);
     expect(parseMarkdown(src, 'docs')).toEqual({ kind: 'too-wide', elements: 20001 });
