@@ -7414,13 +7414,18 @@ _check_history() {
 # `OWED_REASONS`, `_BT_ORIGINS` is `TOKEN_ORIGINS` (`shared/box-token.ts`); `_BT_SYNC_ERRORS` is
 # `TOKEN_SYNC_OP_ERRORS` and `_BT_TRANSPORTS` is `TOKEN_TRANSPORTS` (`shared/agent-protocol.ts`); `_BT_FAIL_AT`
 # is `FAILURES_FOR_BANNER`, `_BT_PENDING_CAP` is `PENDING_HARD_CAP` and `_BT_TICK_MS` is `DRIVER_TICK_MS`
-# (`server/src/token/policy.ts`). `_BT_LOST_WORDS` are the rest of `BoxTokenView.lastFailure`'s vocabulary, which
-# has no L0 list of its own: `link.ts`'s non-exported `LOST_WORDS` (pinned by a text scan of that file) plus
-# `mint-failed`, the one word `link.ts` does not list (the console view's word for a failed mint). The state record
-# CAN hold it, as `lastFailure`: the driver commits `lastFailure: 'mint-failed'` on a failed stage write.
+# (`server/src/token/policy.ts`); `_BT_INTERVAL_MS` is `TOKEN_ROTATION_INTERVAL_MS` and `_BT_OVERDUE_SLACK_MS` is
+# `TOKEN_ROTATION_OVERDUE_SLACK_MS` (`shared/box-token.ts`). `_BT_LOST_WORDS` are the rest of
+# `BoxTokenView.lastFailure`'s vocabulary, which has no L0 list of its own: `link.ts`'s non-exported `LOST_WORDS`
+# (pinned by a text scan of that file) plus `mint-failed`, the one word `link.ts` does not list (the console view's
+# word for a failed mint). The state record CAN hold it, as `lastFailure`: the driver commits
+# `lastFailure: 'mint-failed'` on a failed stage write.
 # D-4551's two words are doctor-local, like `pending-overdue`: `retire-overdue:<min>` (a previous value more than
 # one driver tick past its `hardUntil`) and `retiring-unlanded:<min>` (the oldest `retiring` digest older than two
-# ticks, one tick plus one tick of slack). "In grace" is never printed past `hardUntil`.
+# ticks, one tick plus one tick of slack). "In grace" is never printed past `hardUntil`. `rotation-overdue` (4557) is
+# doctor-local too, computed from the state and never persisted, like `pending-overdue`: the weekly schedule's anchor
+# (the last promotion, else the mint of the current value) older than the interval plus its slack, with no hold standing
+# and nothing pending.
 #
 # `set +x` is the function's first statement, not the file's: this file is sourced into `ccrc`, and doctor runs
 # each check in its own `$( … )`, so it cannot leak; it writes nothing, so it sets no umask (a file-level
@@ -7452,12 +7457,14 @@ _BT_LOST_WORDS=(timeout disconnected aborted mint-failed)
 _BT_FAIL_AT=3
 _BT_PENDING_CAP=3
 _BT_TICK_MS=60000
+_BT_INTERVAL_MS=604800000
+_BT_OVERDUE_SLACK_MS=86400000
 _BT_SKIP_TAIL='; the FAIL and WARN arms are switched off (_BT_ARMS_ON=0)'
 
 # The server's state record, read strictly: any field missing or of the wrong kind is `unreadable`, never a
 # default. Prints `absent`, `unreadable`, or `ok` then `<key> <value>` lines and `finding <word> [<n>] [<node>]`.
 # argv: path, origins, holds, owed reasons, last-failure words, transports, file-problem words (each space-joined),
-# the pending cap, the driver tick in ms. Times are ms.
+# the pending cap, the driver tick in ms, the rotation interval and the overdue slack in ms. Times are ms.
 # The shape is `isBoxTokenState`'s (server/src/token/files.ts) as of D-4413/D-4414: up to PENDING_HARD_CAP
 # pending entries (argv, `_BT_PENDING_CAP`), a `recovering` key, `fileProblem` and `retiring` optional (`retiring`
 # is a list of {sha256, at} awaiting their append: only the oldest `at` is read, no digest is kept or printed).
@@ -7472,6 +7479,7 @@ def bad():
 p = sys.argv[1]
 origins, holds, owed, fails, transports, fileprobs = (set(a.split()) for a in sys.argv[2:8])
 cap, tick = int(sys.argv[8]), int(sys.argv[9])
+interval, slack = int(sys.argv[10]), int(sys.argv[11])
 now = int(time.time() * 1000)
 H16 = re.compile(r"[0-9a-f]{16}\Z")
 H64 = re.compile(r"[0-9a-f]{64}\Z")
@@ -7528,6 +7536,11 @@ say("rotated", "never" if lr is None else age(lr))
 say("rotating", 1 if (s["pending"] or s["promoting"] is not None) else 0)
 say("grace", 1 if (pv is not None and now <= pv["hardUntil"]) else 0)
 say("refused", 0 if s["retiredRefusedAt"] is None else 1)
+# 4556/4557: the anchor of the schedule is the last promotion, else the mint of the current value. A stamp ahead of
+# this clock is said (the schedule waits for it, or rotates at once when it is more than one interval ahead).
+anchor = lr if lr is not None else c["since"]
+if anchor > now:
+    say("ahead", (anchor - now) // 1000, 1 if anchor - now > interval else 0)
 if s["mintFailedAt"] is not None:
     say("finding", "mint-failed", age(s["mintFailedAt"]))
 # D-4551: a previous value past its hard bound (plus one driver tick) is still here, and a retired digest whose
@@ -7549,6 +7562,11 @@ if over:
     say("finding", "pending-overdue", max(over) // 1000)
 if s["rotationOwed"]:
     say("finding", "rotation-owed:" + s["owedWhy"])
+# 4557: no rotation for longer than the interval plus its slack, with no hold standing and nothing in flight: nothing
+# pending and nothing promoting, the same two tests as the rotating word above (a crash between the promotion discard
+# and its commit leaves promoting set with pending empty, and that is a rotation in progress, not an overdue one).
+if now - anchor > interval + slack and s["hold"] is None and not s["pending"] and s["promoting"] is None:
+    say("finding", "rotation-overdue", (now - anchor) // 1000)
 if ls is not None and ls["word"] == "proof-unmeasured" and not (f > 0 and lf == "proof-unmeasured"):
     say("finding", "proof-unmeasured", age(ls["at"]))
 if br is not None and (lr is None or lr < br["at"]):
@@ -7744,6 +7762,9 @@ _bt_find() {
     server:rotation-owed:*)
       say="a rotation is owed (${word#rotation-owed:}) and has not completed"
       fix="$card, or let the driver's next tick start it" ;;
+    server:rotation-overdue)   # 4557: doctor-local, computed from the state, never persisted
+      say="no rotation has completed for $(_bt_age "$a"), past the $(_bt_age "$((_BT_INTERVAL_MS / 1000))") schedule and its $(_bt_age "$((_BT_OVERDUE_SLACK_MS / 1000))") slack, with no hold standing and nothing in flight"
+      fix="a running server starts the scheduled rotation on its next tick unless a backoff stands: read the console's Box token card and the server's log; if the server is not running, start it (ccrc.service)" ;;
     server:proof-unmeasured)
       say="the fleet's last sync ($(_bt_age "$a") ago) wrote the value but could not prove it against this server"
       fix="run ccrc doctor on the fleet box: its box-token line names the sync's own result" ;;
@@ -7808,36 +7829,53 @@ _bt_fleet_paths() {
 }
 
 # `_bt_server_trace <dir> <own: 0|1>` — 4554: a trace beside the state file that only a server that once held a value can have, by
-# NAME only (never opened: mail-previous.token holds a value). Sets the caller's BT_TRACE to the first trace's FULL PATH,
-# `unlisted` when the directory exists and cannot be listed (a set-aside copy cannot be ruled out: fail closed), else
-# empty. A directory that does not exist holds no trace (the caller's reads already measured that ENOENT).
+# NAME only (never opened: mail-previous.token holds a value). Sets the caller's BT_TRACE to the first trace's FULL PATH, or to
+# one of two words, or leaves it empty. The order is fixed (row 3a, R18 and R19, 4554 amended): the unlisted test comes FIRST,
+# then the named traces, then on an own-write box the fleet file and the generation file, then the set-aside copies, and last,
+# on an own-write box, `unsearchable`.
+#   `unlisted`      the directory exists and cannot be listed, so a set-aside copy cannot be ruled out (fail closed). Tested
+#                   before every trace, whatever the directory or the fleet side holds: boot refuses to start on it, so
+#                   `chmod u+r` is its remedy and "restart the server" would be false even beside a named trace.
+#   `unsearchable`  (row 3a, R19) own-write only: with no other trace standing, the fleet token file's directory exists and
+#                   cannot be searched, so `-e` cannot tell whether the server wrote the fleet file there. BT_TRACE_DIR holds
+#                   that directory. Its own word and remedy (`chmod u+x`), never folded into `unlisted`: two conditions. It
+#                   is tested after the set-aside copies: a copy is a definite trace, and the word says only that none can
+#                   be told.
+#   empty           no trace; a directory that does not exist holds none (the caller's reads already measured that ENOENT).
 # On an own-write box (`own` = 1: role both, local, no agent.env marking the fleet) the SERVER wrote the fleet token file
 # and the generation file (`boot.ts` step 7, and the driver's own-write promotion), so either one existing is a trace too
 # (4554, amended by review 405 F1). By existence only: the fleet file holds a value. Never off such a box: there they are
 # the fleet agent's records, and a server-role or fleet-role box does not reach this arm with them as its own.
 _bt_server_trace() {
   local d="$1" own="${2:-0}" n f BT_FLEET_FILE BT_GEN_FILE
-  BT_TRACE=""
+  BT_TRACE=""; BT_TRACE_DIR=""
+  if [ -d "$d" ] && [ ! -r "$d" ]; then BT_TRACE=unlisted; return 0; fi
   for n in "${_BT_TRACES[@]}"; do
     if [ -e "$d/$n" ] || [ -L "$d/$n" ]; then BT_TRACE="$d/$n"; return 0; fi
   done
   if [ "$own" = 1 ]; then
     _bt_fleet_paths
-    for f in "$BT_FLEET_FILE" "$BT_GEN_FILE"; do
-      if [ -e "$f" ] || [ -L "$f" ]; then BT_TRACE="$f"; return 0; fi
-    done
+    # The fleet file first, as before (a directory that cannot be searched hides it from `-e`, so this test is false there),
+    # then the generation file, which lives outside that directory: when it stands, the history is told whatever the
+    # directory's mode. A directory that cannot be searched is its own word only after the set-aside copies (below).
+    if [ -e "$BT_FLEET_FILE" ] || [ -L "$BT_FLEET_FILE" ]; then BT_TRACE="$BT_FLEET_FILE"; return 0; fi
+    if [ -e "$BT_GEN_FILE" ] || [ -L "$BT_GEN_FILE" ]; then BT_TRACE="$BT_GEN_FILE"; return 0; fi
   fi
-  if [ -d "$d" ] && [ ! -r "$d" ]; then BT_TRACE=unlisted; return 0; fi
   for n in "${_BT_ASIDE[@]}"; do
     for f in "$d/$n"*; do
       if [ -e "$f" ] || [ -L "$f" ]; then BT_TRACE="$f"; return 0; fi
     done
   done
+  if [ "$own" = 1 ]; then
+    # Last, so a set-aside copy (a definite trace) is named before a directory that merely cannot be told (row 3a, R19).
+    f="${BT_FLEET_FILE%/*}"
+    if [ -d "$f" ] && [ ! -x "$f" ]; then BT_TRACE=unsearchable; BT_TRACE_DIR="$f"; return 0; fi
+  fi
   return 0
 }
 
 _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
-  local tok="$1" state="$2" own="${3:-0}" before="${#BT_CLASS[@]}" out="" kw w n node seq="" since="" rot="" rotating=0 grace=0 refused=0 bad=0 tai=-1 BT_TRACE=""
+  local tok="$1" state="$2" own="${3:-0}" before="${#BT_CLASS[@]}" out="" kw w n node seq="" since="" rot="" ahead="" aheaddue=0 rotating=0 grace=0 refused=0 bad=0 tai=-1 BT_TRACE="" BT_TRACE_DIR=""
   _bt_value_file "$tok"
   case "$BT_TF" in
     absent) tai="${#BT_CLASS[@]}"; _bt_find server token-absent "$tok" ;;
@@ -7851,7 +7889,7 @@ _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
   if ! command -v python3 >/dev/null 2>&1; then _bt_find server state-unreadable "$state" no-python; return 0; fi
   out="$(python3 -I -c "$_BT_PY_STATE" "$state" "${_BT_ORIGINS[*]}" "${_BT_HOLDS[*]}" "${_BT_OWED[*]}" \
     "${_BT_SYNC_ERRORS[*]} ${_BT_LOST_WORDS[*]}" "${_BT_TRANSPORTS[*]}" "${_BT_FILE_PROBLEMS[*]}" \
-    "$_BT_PENDING_CAP" "$_BT_TICK_MS" 2>/dev/null)" || out=""
+    "$_BT_PENDING_CAP" "$_BT_TICK_MS" "$_BT_INTERVAL_MS" "$_BT_OVERDUE_SLACK_MS" 2>/dev/null)" || out=""
   case "${out%%$'\n'*}" in absent) BT_SERVER_STATE=absent ;; ok) BT_SERVER_STATE=ok ;; esac   # anything else stays unreadable
   case "${out%%$'\n'*}" in
     # 4553, as D-139 rules it (operator, 2026-10-12): an absent token beside an absent state is a server that has never run
@@ -7863,9 +7901,11 @@ _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
     # set-aside copy (`_bt_server_trace`, by name only), and on an own-write box the fleet token file or the generation file
     # the server itself wrote (review 405 F1). Then the FAIL stays, its sentence names the trace, and
     # `BT_SERVER_STATE` records `trace`, so an own-write fleet arm reads no `absent` state either. A token directory that
-    # exists and cannot be listed cannot rule a set-aside copy out, so it fails closed with a sentence and remedy of its own:
-    # boot refuses to start on it (`boot.ts`, `setAsideNames`), and "restart the server" would be false there. A directory
-    # that does not exist holds no trace: a fresh server whose override directory is not created yet stays the fresh PASS.
+    # exists and cannot be listed cannot rule a set-aside copy out, so it fails closed with a sentence and remedy of its own,
+    # whatever else it or the fleet side holds (row 3a, R18): boot refuses to start on it (`boot.ts`, `setAsideNames`), and
+    # "restart the server" would be false there. On an own-write box with no generation file and no set-aside copy standing,
+    # a `~/.cc-secrets` that cannot be searched does too (`unsearchable`, remedy `chmod u+x`, row 3a, R19). A directory that
+    # does not exist holds no trace: a fresh server whose override directory is not created yet stays the fresh PASS.
     absent) if [ "$tai" -ge 0 ]; then
               _bt_server_trace "${state%/*}" "$own"
               if [ -z "$BT_TRACE" ]; then
@@ -7876,6 +7916,9 @@ _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
                 if [ "$BT_TRACE" = unlisted ]; then
                   BT_PART[tai]="server: token-absent — $tok does not exist, and neither does the server's state file, and ${state%/*} cannot be listed, so a value held here once cannot be ruled out, and the server refuses to boot until it can list it"
                   BT_FIX[tai]="give ${state%/*} its read bit (chmod u+r ${state%/*}); the server then boots and mints a value"
+                elif [ "$BT_TRACE" = unsearchable ]; then
+                  BT_PART[tai]="server: token-absent — $tok does not exist, and neither does the server's state file, and $BT_TRACE_DIR cannot be searched, so whether this box's server wrote the fleet token file there cannot be told"
+                  BT_FIX[tai]="give $BT_TRACE_DIR its search bit (chmod u+x $BT_TRACE_DIR); doctor can then tell whether this box's server held a value"
                 else
                   BT_PART[tai]="server: token-absent — $tok does not exist, and neither does the server's state file, but $BT_TRACE does: this server held a value once and lost it; the server mints a new one at its next boot, and the fleet must then be handed it"
                 fi
@@ -7890,6 +7933,7 @@ _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
       ok) ;;
       seq) _bt_num "$w" && seq="$w" ;;
       since) _bt_num "$w" && since="$w" ;;
+      ahead) if _bt_num "$w" && [[ "$n" =~ ^[01]$ ]]; then ahead="$w"; aheaddue="$n"; else bad=1; fi ;;
       rotated) { [ "$w" = never ] || _bt_num "$w"; } && rot="$w" ;;
       rotating) [ "$w" = 1 ] && rotating=1 ;;
       grace) [ "$w" = 1 ] && grace=1 ;;
@@ -7897,7 +7941,7 @@ _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
       finding)
         case "$w" in
           retired-presented) if _bt_num "$n" && { [ "$node" = - ] || _bt_num "$node"; }; then _bt_find server "$w" "$n" "$node"; else bad=1; fi ;;
-          mint-failed|pending-overdue|proof-unmeasured|recovered) _bt_num "$n" && _bt_find server "$w" "$n" || bad=1 ;;
+          mint-failed|pending-overdue|rotation-overdue|proof-unmeasured|recovered) _bt_num "$n" && _bt_find server "$w" "$n" || bad=1 ;;
           retire-overdue|retiring-unlanded) _bt_num "$n" && _bt_find server "$w:$n" "$n" || bad=1 ;;
           fleet-behind|fleet-unconfirmed) _bt_find server "$w" ;;
           file:*) if _bt_member "${w#file:}" "${_BT_FILE_PROBLEMS[@]}" && _bt_num "$n" && [[ "$node" =~ ^(current|pending|previous)$ ]]; then
@@ -7922,6 +7966,10 @@ _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
   [ "$refused" -eq 1 ] && extra=", retired value refused"      # spec 10.3's proof, once the server recorded it
   [ "$rotating" -eq 1 ] && extra="$extra, a rotation in progress"
   [ "$grace" -eq 1 ] && extra="$extra, the previous value in grace"
+  if [ -n "$ahead" ]; then
+    if [ "$aheaddue" = 1 ]; then extra="$extra, its schedule stamp $(_bt_age "$ahead") ahead of this clock (more than the interval, so the server rotates now)"
+    else extra="$extra, its schedule stamp $(_bt_age "$ahead") ahead of this clock (the weekly schedule counts its interval from that stamp)"; fi
+  fi
   BT_PART+=("server: generation #$seq, $how, fleet confirmed$extra"); BT_CLASS+=(PASS); BT_FIX+=("")
 }
 
