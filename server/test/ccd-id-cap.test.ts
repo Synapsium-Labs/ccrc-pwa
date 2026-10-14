@@ -188,8 +188,8 @@ const HOOK = read('ccd/session-hook.sh');
 const hookGate = /^CCRC_ID_MAX=(\d+)$/m.exec(HOOK);
 const CCRC_ID_MAX = hookGate === null ? Number.NaN : Number(hookGate[1]);
 const WIDEST = Math.max(...ID_NAME_TEMPLATES.map((r) => r.overhead));
-/** R27 (a): the lower of the room the widest name leaves and the hook's own id gate. Derived here, never
- *  read from ccd, so a raised `_REG_ID_MAX` reds every boundary row too. */
+/** The hook's id gate binds (path-identity spec §2.9, SEC5): the lower of the room the widest name leaves and the
+ *  hook's own id gate. Derived here, never read from ccd, so a raised `_REG_ID_MAX` reds every boundary row too. */
 const CAP = Math.min(NAME_MAX - WIDEST, CCRC_ID_MAX);
 
 function bodyOf(text: string, fn: string): string {
@@ -246,7 +246,7 @@ describe('a new id fits every name ccd derives from it (path-identity spec §2.6
     expect(HOOK).toContain('set="$REG/$id.compactset"');
     expect(HOOK).toContain('mf="$REG/$id.turn.json"');
     expect(Number.isInteger(CCRC_ID_MAX), 'ccd/session-hook.sh defines CCRC_ID_MAX=<n> on a line of its own').toBe(true);
-    // R10's band: the operator was told "near 175".
+    // A sanity band around the 174 that path-identity spec §2.9 (SEC5) states; the number itself is derived above.
     expect(NAME_MAX - WIDEST).toBeGreaterThanOrEqual(160);
     expect(NAME_MAX - WIDEST).toBeLessThanOrEqual(200);
     const defs = [...ccd.matchAll(/^_REG_ID_MAX=(\d+)$/gm)].map((m) => Number(m[1]));

@@ -3723,7 +3723,7 @@ comments and test titles cite the spec, never this contract.
 - `id-cap-from-the-name-census`: the cap is derived from a census of every name derived from an id, not from the slot
   alone. The widest overhead is 81 bytes, so 255 minus 81 is 174. The session hook's peer census skips an id longer
   than `CCRC_ID_MAX`, 128, so `_REG_ID_MAX` is 128, the smaller. It applies at ws-add, at start's creating form and at
-  enable's two-argument form, each with its own die line, before anything is created or journaled.
+  enable's two-argument form, each with its own die line, before any row, worktree, branch or `.uuid`.
   `ccd-id-cap.test.ts` holds the census and the files it left out.
 - `ws-add-lock-precedes-the-cap`: ws-add takes its per-project add lock before it chooses a slug, so a cap refusal
   leaves that lock file, as every ws-add refusal after the lock does. No row, worktree, branch or `.uuid` is created.
@@ -3753,9 +3753,11 @@ comments and test titles cite the spec, never this contract.
   terminal `witness-mismatch` or `quarantine-kept`, as it does when no lock is held, because ccd writes a witness or a
   record by temp file and rename.
 - `dash-free-id-answers-unmeasured-registry-before-its-record`: for an id with no `-`, unmeasured `registry` now comes
-  ahead of every answer the resume gave before its registry rung, ahead of a standing `.child` or `.uuid`'s
-  `registered`, and ahead of the listing's unmeasured `records`; the audit document prints `records: []` for it. It is
-  unreachable in practice: every mint composes `<a>-<b>`, and the entry check counted no dash-free name on either box.
+  ahead of every answer the resume gave before its registry rung and ahead of a standing `.child` or `.uuid`'s
+  `registered`. Once the id is in the collector's population, it also comes ahead of the listing's unmeasured
+  `records`; an id with no witness is asked its population first, so a failed listing, or `not-witnessed`, answers
+  before the pass. The audit document prints `records: []` for it. It is unreachable in practice: every mint composes
+  `<a>-<b>`, and the entry check counted no dash-free name on either box.
 
 **The proof (spec §2.8 and §8).**
 - `dash-parity-in-its-own-file`: the real-binary proof is `ccdargv-dash-id-parity.test.ts`. `ccdargv-dec-parity.test.ts`
@@ -3825,8 +3827,8 @@ census blindness named under R93.
   reads, and answers unmeasured `records` or `witness`. The pass reads the witness even when records stand, so the
   audit document reports it as the locked resume does.
 - Task 10: `hold-and-rename-arms-are-matrix-blind`. Deleting ws-hold's or ws-rename's identity arm leaves the
-  real-binary matrix green, because arity already refuses those rows; `ccd-session-verbs-dash-id.test.ts` pins both
-  arms.
+  real-binary matrix green, because arity or the post-loop `_reg_id_ok` check already refuses those rows;
+  `ccd-session-verbs-dash-id.test.ts` pins both arms.
 - Task 11: `expire-v1-note-already-rewritten`. Workspace lifecycle's wave 6 had rewritten the EXPIRE-V1 note already, so
   it no longer says the lane ships inert and the stated residual the plan expected for it does not apply. The note was
   not edited.

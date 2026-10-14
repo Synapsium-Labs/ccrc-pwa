@@ -211,7 +211,8 @@ measured at the wave's tip unless it says otherwise.
   identity arm refuses anything itself, and a value is never scanned again as a flag.
 - Every post-loop id check in those eight verbs refuses a leading `-` through `_reg_id_ok`. The three token verbs
   reach it through `_ws_tmproot_id_ok`, which is built on it (SEC4 below).
-- Apart from the dot rule below, a call to these verbs that spells no id as a flag answers as before, byte for byte.
+- Apart from the dot rule and the collector's pre-lock pass below, a call to these verbs that spells no id as a flag
+  answers as before, byte for byte.
   A call whose id spells a flag may now answer `bad session id` where it answered a usage line, a "needs a value"
   line, or bound another row. A few inputs change because a value itself spells a flag and is now taken whole:
   - a token or run id at the token verbs answers `bad token` or `bad run id` where it answered the usage line, and
@@ -280,8 +281,8 @@ measured at the wave's tip unless it says otherwise.
   §2.6's 222 fit only the slot name.
 - The session hook bounds ids too:
   - `CCRC_ID_MAX` is 128. The hook's peer census skips a longer id, and its `.project` reads stop at that length.
-  - `CCRC_PROJ_MAX` is 64. A session whose project is longer gets no card, and so does a session with no project
-    whose id is longer.
+  - `CCRC_PROJ_MAX` is 64. A session whose project is longer gets no ccrc peer card (`_ct_probe` refuses it, and
+    `_hook_ccrc_card` stays silent), and so does a session with no project whose id is longer.
 - `_REG_ID_MAX` is 128: the smaller of 174 and the hook's 128, so ccd never mints an id the hook's peer census would
   skip.
 - ccd applies the cap at every mint site, before any row, worktree, branch or `.uuid` is created or journaled. Each
@@ -321,8 +322,9 @@ measured at the wave's tip unless it says otherwise.
      `$REG/<id>.child` and `$REG/<id>.uuid` are proven absent; `$REG` can be listed; and the id's slug is free across
      every `$REG/<id>.<field>` and every dot family. When the lock opens, the locked evaluation answers `registered`
      or unmeasured `registry`, as before. Only when all three hold is the witness's answer given before the lock.
-- So a live row of any kind still answers `registered` ahead of `witness-mismatch`, with nothing journaled. A junk
-  witness or junk record of an id that no row names creates no permanent lock.
+- So a live row of any kind still answers `registered` ahead of `witness-mismatch`. The audit leaves `registered`
+  unjournaled, as it leaves every word that is not terminal; the verb journals it, as it journals every refusal. A
+  junk witness or junk record of an id that no row names creates no permanent lock.
 - Under the lock every input is listed, read and parsed again before any act. A race between the pass and the lock
   can therefore only refuse, or be judged again.
 - The verb reads the cleanup pause under the lock, so its pre-lock answers now come ahead of the cleanup pause. A
@@ -334,8 +336,9 @@ measured at the wave's tip unless it says otherwise.
   another process holds the lock, as it does when none does: ccd writes a witness or a record by temp file and
   rename, so a junk body is never a write in progress.
 - For an id with no `-`, unmeasured `registry` now comes ahead of every answer the resume gave before its registry
-  rung, ahead of a standing `.child` or `.uuid`'s `registered`, and ahead of the listing's unmeasured `records`. The
-  audit document prints `records: []` for it. This is unreachable in practice: every mint composes `<a>-<b>`, and the
+  rung, ahead of a standing `.child` or `.uuid`'s `registered`. Once the id is in the collector's population, it also
+  comes ahead of the listing's unmeasured `records`; an id with no witness is asked its population first, so a failed
+  listing, or `not-witnessed`, answers before the pass. The audit document prints `records: []` for it. This is unreachable in practice: every mint composes `<a>-<b>`, and the
   entry check counted no dash-free name on either box.
 
 **Proof (§2.8, §8).**
@@ -349,7 +352,8 @@ measured at the wave's tip unless it says otherwise.
   measured by that matrix, run once against the pre-wave binary (a copy outside the tree). Of its 259 cases, 188 went
   red there and 71 stayed green, and all 259 are green at the tip. The matrix agrees with §2.2's readings of the
   loops, and shows more. Wherever no decision flag ate an id that spells a flag, the pre-wave binary bound it
-  literally and looked it up. And one verdict is wider than §2.2's: its stop row names the one-argument form, but the
+  literally and looked it up. At stop, stopPair, start and enable it also acted on it (stopped it, or created it), and
+  at ws-restore, ws-reclaim and ws-expire it also took a reap lock and journaled a line. And one verdict is wider than §2.2's: its stop row names the one-argument form, but the
   two-argument form redirected too, since a project of `--surface` stopped `<wrapper>-pwa`.
 
 | Verb | Ids that went red before W1b | What the pre-wave binary did | At the tip |
@@ -361,7 +365,7 @@ measured at the wave's tip unless it says otherwise.
 | ws-rename | `--expect`, `--defer-expired`, `--session`, `--branch`, `--child-of` | Bound the literal id and looked it up | Refused before any act |
 | ws-reclaim | all but `--defer-expired` | Looked the id up as a row, created a reap lock and journaled a line | Refused before any lock |
 | ws-expire | all eight | As ws-reclaim; `--defer-expired` also stayed literal and created a lock | Refused before any lock |
-| ws-collect | all eight | `--actor`, `--surface` and `--reason` created the reap lock of `agent`, where the fixture plants a junk witness, and journaled a line; the other five answered `not-witnessed` and journaled a line | Refused before any lock |
+| ws-collect | all eight | `--actor`, `--surface` and `--reason` bound `agent`, took its reap lock because a witness stood for it, and journaled a line; the other five answered `not-witnessed` and journaled a line | Refused before any lock |
 | ws-add | `--actor`, `--surface` as the project | Bound project `agent`, which is a create: a worktree, rows, a unit and a pane | Refused before any worktree |
 | stop | all eight in the builder's order, and all but `--surface` in the order W1a composes | The builder's order stopped the literal id, and an id of `--surface` stopped `pwa`; the other order stopped the literal id | Refused before any unit call |
 | Ids that arity already refused: ws-hold's `--actor` and `--surface`; ws-rename's `--actor`, `--surface` and `--reason`; ws-reclaim's `--defer-expired`; stop's `--surface` in the order W1a composes | None | Refused | Refused, as before |
@@ -401,7 +405,7 @@ measured at the wave's tip unless it says otherwise.
 - `random-slug-decides-the-cap-near-the-boundary`: ws-add caps the id after it chooses the slug. For a project of 114
   to 118 bytes given no slug, the random slug's length, 9 to 14 bytes, decides whether the add succeeds or is refused.
 - `projects-over-64-get-no-hook-card`: the cap bounds the composed id, not the project. A project longer than
-  `CCRC_PROJ_MAX` still gets no card.
+  `CCRC_PROJ_MAX` still gets no ccrc peer card.
 - `hold-card-workdir-quote-silent-near-the-cap`: the hook's `CCRC_WD_MAX` is 127, one under the length its reads stop
   at, and the hold card quotes a workspace's directory only when the path fits it. A worktree path past 127
   characters, which an id near the cap can reach, loses the quote. The card degrades to silence, never to a false
