@@ -15,6 +15,8 @@
 //    silent: `printf -v` lands in the callee's own local and the caller keeps its old value.
 //  - E2, the runner's own proofs: it can red, it isolates sides, and a hang is a bounded, NAMED failure.
 //  - E3, the rows, per locale. W1's are here; W2 and W3 add theirs, red first, from `tickDietCorpus.ts`.
+//  - E5, W2's limits rows (D-4962), per locale: every limits row and 500 random ones through both forms, and the
+//    structural row that says which side of spec §6.3's domain each row fell on. (E5 sits above E4 in the file.)
 //  - E4, the corpus module: deterministic, and every row plants the shape it names.
 //
 // RED FIRST, AND STILL A GREEN COMMIT. A row whose live helper has not landed yet is PENDING: its live side must fail,
@@ -41,7 +43,8 @@ import { inheritedEnv } from './gitEnvStrip.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import {
-  FILE_ROW_SETS, LIMITS_ROWS, RANDOM_ALPHABET, ROUTE_ROWS, inLimitsDomain, randomRows, type FileRow,
+  FILE_ROW_SETS, LIMIT_KEYS, LIMITS_ROWS, RANDOM_ALPHABET, ROUTE_ROWS, blocksByName, inLimitsDomain, needsNonRoot,
+  randomRows, type FileRow,
 } from './tickDietCorpus.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -96,9 +99,13 @@ const PLANNED_FORMS: Readonly<Record<string, string>> = {
 };
 /** What has NOT landed in `ccd/ccd` yet: the planned forms, plus `_now_s`, the one printing form whose name is new.
  *  The task that lands a name deletes it here in the same commit (the header's "RED FIRST"). D-4961 (Task 4) landed
- *  `_now_s_to` and `_now_s`; Task 5 landed `_cfg_dir_to`; W2 and W3 remove theirs. */
+ *  `_now_s_to` and `_now_s`; Task 5 landed `_cfg_dir_to`; W2 Task 8 (D-4962) landed `_limit_text_to`,
+ *  `_limit_num_in_to` and `_limit_json_num_to`; W2's later tasks and W3 remove theirs. */
+const LANDED: ReadonlySet<string> = new Set([
+  '_now_s_to', '_now_s', '_cfg_dir_to', '_limit_text_to', '_limit_num_in_to', '_limit_json_num_to',
+]);
 const PENDING: ReadonlySet<string> = new Set(
-  [...Object.keys(PLANNED_FORMS), '_now_s'].filter((n) => n !== '_now_s_to' && n !== '_now_s' && n !== '_cfg_dir_to'),
+  [...Object.keys(PLANNED_FORMS), '_now_s'].filter((n) => !LANDED.has(n)),
 );
 
 const sha256 = (b: Buffer | string): string => createHash('sha256').update(b).digest('hex');
@@ -1198,6 +1205,171 @@ describe.each(LOCALES)('E3 the W1 rows under $name (tick-diet spec §6.2, plan T
         continue;
       }
       row.check(s);
+    }
+  });
+});
+
+// ── E5: the W2 limits rows (D-4962) ────────────────────────────────────────────────────────────────────────────────
+
+/** Where every limits row plants its file, as the bash word the sides evaluate: `$LIMITS_DIR` is the fixture HOME's
+ *  `.cc-limits`, expanded when `__diet_caller` evals the call, never quoted into the call by `q()`. */
+const LIM_AT = '"$LIMITS_DIR/diet.json"';
+const AS_ROOT = process.getuid?.() === 0;
+/** The `LIMITS_ROWS` rows `_limit_json_num` is driven over. Not the shapes an UNGUARDED reader blocks on
+ *  (`blocksByName`): grep opens the path by name, legacy and fallback alike, so a FIFO or a link to `/dev/zero` would
+ *  hang BOTH sides — `_limit_text_to`'s `-f` refuses them, and the pipeline it hands them to blocks as it always did
+ *  (`_limit_field`'s own `-f` is what keeps them off the tick). Under root, not the rows whose meaning needs a non-root
+ *  reader either (`needsNonRoot`: root reads a mode-000 file and searches a mode-0600 directory). */
+const LIM_ROWS: readonly FileRow[] = LIMITS_ROWS.filter((r) => !blocksByName(r) && !(AS_ROOT && needsNonRoot(r)));
+/** The random corpus's seed: the one E4a pins. */
+const LIM_SEED = 4962;
+
+/** One side over a whole limits file: the six keys, each through the printing form and then the out-var form, with
+ *  every answer, rc and separator on stdout (the helper is defined in the side's body; only its NAME goes through
+ *  `__diet_caller`, whose frame of shadows holds `v`). One row per file, rather than twelve, keeps each batch to
+ *  seconds: a side's fixed cost (the wiped trees, the subshells, the frame listing) is most of a one-call row. */
+const lj6 = (print: string, to: (key: string) => string): string => [
+  '__lj6() {',
+  '  local k r',
+  `  for k in ${LIMIT_KEYS.join(' ')}; do`,
+  `    printf '[%s]' "$k"; ${print} ${LIM_AT} "$k"; r=$?; printf '<rc=%s>' "$r"`,
+  `    ${to('"$k"')}; r=$?; printf '{%s|%s}\\n' "$v" "$r"`,
+  '  done',
+  '}',
+  '__diet_caller v __lj6',
+].join('\n');
+const LJ6_LEGACY = lj6('_legacy_limit_json_num', (k) => `v=$(_legacy_limit_json_num ${LIM_AT} ${k})`);
+const LJ6_LIVE = lj6('_limit_json_num', (k) => `_limit_json_num_to v ${LIM_AT} ${k}`);
+
+interface DomainRow extends Row { readonly row: FileRow }
+
+/** Every W2 Task 8 row (plan Task 8 Step 1, tick-diet spec §6.3):
+ *  - `files`: each `LIMITS_ROWS` file, the six keys through `_limit_json_num` (raw stdout, grep's trailing newline
+ *    included) and then `_limit_json_num_to v`, against `_legacy_limit_json_num` and `v=$(_legacy_limit_json_num …)`;
+ *  - `named`: `_limit_json_num_to` into `val` (key `five`) and `ts` (key `ts`), `_limit_field`'s own variable names,
+ *    one call per row, so the out-var and the caller frame are compared for exactly that call;
+ *  - `random`: `randomRows(4962, 500)`, as `files`;
+ *  - `domain`: structural, not differential. `_limit_text_to`'s rc says which side of spec §6.3's domain a row fell
+ *    on, and a `grep` function says whether `_limit_json_num_to` ran the pipeline. An out-of-domain row that took the
+ *    fast path could still give grep's answer (the size cap is a memory bound, not an answer change), so only this
+ *    row sees the cap and the regular-and-readable guard go. */
+function w2LimitsRows(): { files: Row[]; named: Row[]; random: Row[]; domain: DomainRow[] } {
+  const side = (label: string, cmd: string, outVar: string): Side => ({ label, body: `__diet_caller ${outVar} ${q(cmd)}` });
+  const both = (id: string, r: FileRow): Row => ({
+    id, setup: plant(r, LIM_AT), needs: ['_limit_json_num_to'],
+    sides: [{ label: 'legacy', body: LJ6_LEGACY }, { label: 'live', body: LJ6_LIVE }],
+  });
+  const named: Row[] = [];
+  const domain: DomainRow[] = [];
+  for (const r of LIM_ROWS) {
+    const setup = plant(r, LIM_AT);
+    for (const [ov, k] of [['val', 'five'], ['ts', 'ts']] as const) {
+      named.push({
+        id: `_limit_json_num_to ${ov} ${r.id} ${k}`, setup, needs: ['_limit_json_num_to'],
+        sides: [side('legacy', `${ov}=$(_legacy_limit_json_num ${LIM_AT} ${k})`, ov), side('live', `_limit_json_num_to ${ov} ${LIM_AT} ${k}`, ov)],
+      });
+    }
+    domain.push({
+      id: `_limit_text_to ${r.id}`, row: r, setup, needs: ['_limit_text_to', '_limit_json_num_to'],
+      sides: [{
+        label: 'domain',
+        body: [
+          'grep() { : > "$PWD/grep.ran"; command grep "$@"; }',
+          `__diet_caller t ${q(`_limit_text_to t ${LIM_AT}`)}; __r=$?`,
+          `_limit_json_num_to __x ${LIM_AT} five >/dev/null 2>&1`,
+          'if [[ -e "$PWD/grep.ran" ]]; then __p=pipeline; else __p=builtins; fi',
+          'printf \'%s %s\' "$__r" "$__p" > "$PWD/note"',
+          'return "$__r"',
+        ].join('\n'),
+      }],
+    });
+  }
+  return {
+    files: LIM_ROWS.map((r) => both(`six keys, both forms: ${r.id}`, r)),
+    named,
+    random: randomRows(LIM_SEED, 500).map((r) => both(`six keys, both forms: ${r.id}`, r)),
+    domain,
+  };
+}
+
+describe.each(LOCALES)('E5 the W2 limits rows under $name (tick-diet spec §6.3, D-4962, plan Task 8)', ({ locale }) => {
+  const rows = w2LimitsRows();
+  let h: CcdHarness;
+  let fixed: Batch | null = null;
+  let random: Batch | null = null;
+  beforeAll(() => {
+    h = makeCcdHarness('ccrc-diet-e5-');
+    if (locale !== null) {
+      fixed = runBatch(h, [...rows.files, ...rows.named, ...rows.domain], locale, 300);
+      random = runBatch(h, rows.random, locale, 300);
+    }
+  }, 700_000);
+  afterAll(() => h.cleanup());
+  const got = (ctx: { skip: (note?: string) => never }): { fixed: Batch; random: Batch } => {
+    if (locale === null) {
+      if (process.platform === 'darwin') ctx.skip(NO_UTF8);
+      throw new Error(`${NO_UTF8} — the supervisors run under one, so this half cannot be skipped here`);
+    }
+    return { fixed: fixed!, random: random! };
+  };
+
+  it('E5x both batches ran every row to the end, inside their deadlines', (ctx) => {
+    for (const b of Object.values(got(ctx))) {
+      expect(b.hung, `a row never finished: ${b.stderr.slice(0, 2000)}`).toBeNull();
+      expect(b.status).toBe(0);
+    }
+  });
+
+  it('E5a every limits row, every key: `_limit_json_num` prints, and `_limit_json_num_to` leaves, what the legacy pipeline did (D-4962)', (ctx) => {
+    const b = got(ctx).fixed;
+    for (const row of rows.files) expectEquivalent(row, b.results.get(row.id)!, locale!);
+    // Non-vacuity: the legacy sides really answered — a match prints grep's digits and newline, the spaced writer's
+    // last key is read, and a missing file reaches grep, whose own complaint both sides must then share.
+    const legacy = (id: string): SideResult => b.results.get(`six keys, both forms: ${id}`)![0]!;
+    expect(legacy('compact').out.toString('latin1')).toMatch(/^\[five\]23\n<rc=0>\{23\|0\}\n\[seven\]41\n/);
+    expect(legacy('json-dump-spaced').out.toString('latin1')).toMatch(/\[fiveWindowMinutes\]300\n<rc=0>\{300\|0\}\n$/);
+    expect(legacy('absent').err).not.toBe('');
+    // A value carried WITH a non-zero rc (grep killed by SIGPIPE under `pipefail`): the printing form prints it.
+    expect(legacy('over-cap-many-matches').out.toString('latin1')).toMatch(/^\[five\]1\n<rc=[1-9]\d*>\{1\|[1-9]\d*\}\n/);
+  });
+
+  it('E5b `_limit_json_num_to` into `val` and `ts`, `_limit_field`\'s own names, one call per row (D-4962)', (ctx) => {
+    const b = got(ctx).fixed;
+    for (const row of rows.named) expectEquivalent(row, b.results.get(row.id)!, locale!);
+    expect(b.results.get('_limit_json_num_to val compact five')![0]!.val!.toString('latin1')).toBe('23');
+    expect(b.results.get('_limit_json_num_to ts compact ts')![0]!.val!.toString('latin1')).toBe('1760000000');
+  });
+
+  it(`E5c ${LIM_SEED}'s 500 random limits files: both forms, all six keys, as the legacy pipeline (D-4962)`, (ctx) => {
+    const b = got(ctx).random;
+    for (const row of rows.random) expectEquivalent(row, b.results.get(row.id)!, locale!);
+  });
+
+  it('E5d the fast path takes exactly spec §6.3\'s domain, and every other row runs the pipeline (D-4962)', (ctx) => {
+    const b = got(ctx).fixed;
+    for (const row of rows.domain) {
+      const s = b.results.get(row.id)![0]!;
+      expect(s.setupRc, `${row.id}: the setup failed: ${s.setupLog}`).toBe(0);
+      const pending = pendingOf(row);
+      if (pending.length > 0) {
+        expect(pending.some((n) => s.err.includes(`${n}: command not found`)),
+          `${row.id}: PENDING (${pending.join(', ')}), but it failed for another reason: ${show(s.err)}`).toBe(true);
+        continue;
+      }
+      const inside = inLimitsDomain(row.row);
+      expect(s.note, `${row.id}: ${inside ? 'inside' : 'outside'} the domain, so \`_limit_text_to\` answers `
+        + `${inside ? 0 : 3} and \`_limit_json_num_to\` runs ${inside ? 'no grep' : 'the pipeline'}`)
+        .toBe(inside ? '0 builtins' : '3 pipeline');
+      expect(s.val!.equals(inside ? row.row.bytes : Buffer.alloc(0)), `${row.id}: the text read is not the file's bytes`).toBe(true);
+      expect(s.aux, `${row.id}: the call left a global behind`).not.toMatch(/^leaked /m);
+      expect(s.aux.split('\n').filter(Boolean).every((l) => l.endsWith('=__S')), `${row.id}: the caller frame changed: ${s.aux}`).toBe(true);
+    }
+    // The edges, by name, so a moved edge reads as itself.
+    const note = (id: string): string => b.results.get(`_limit_text_to ${id}`)!.at(0)!.note;
+    expect(note('size-65535'), 'size-65535 is inside the 64 KiB cap').toBe('0 builtins');
+    for (const id of ['size-65536', 'size-64KiB-plus-1', 'nul-at-end', 'nul-after-lead-byte', 'invalid-utf8', 'non-ascii-elsewhere',
+      'directory', 'absent', ...(AS_ROOT ? [] : ['mode-000', 'dir-unsearchable'])]) {
+      expect(note(id), `${id} is outside the domain`).toBe('3 pipeline');
     }
   });
 });

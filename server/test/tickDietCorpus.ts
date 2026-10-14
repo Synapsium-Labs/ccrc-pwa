@@ -133,6 +133,11 @@ export const LIMITS_ROWS: readonly FileRow[] = [
   reg('size-65535', sized(65535)),
   reg('size-65536', sized(65536)),
   reg('size-64KiB-plus-1', sized(65537)),
+  // Plan Task 8's printing line: over the cap, so the pipeline answers, and with so many matches (540 KB of `-o`
+  // output) that `head -1` closes the pipe on grep. grep dies of SIGPIPE, and under `pipefail` the legacy prints its
+  // first match WITH rc 141 (measured, macOS bash 5.3 / BSD grep and Linux bash 5.2 / GNU grep): a value and a
+  // non-zero rc together, which a printing form that returns on the rc before printing would drop.
+  reg('over-cap-many-matches', raw(`{${'"five":1,'.repeat(60000)}"ts":${T}}`)),
   shaped('absent', 'absent'),
   shaped('directory', 'directory'),
   shaped('fifo', 'fifo'),

@@ -54,17 +54,25 @@ import {
  *  size/mtime `stat` pair on a quiescent transcript — is NOT YET COUNTED by this harness (no
  *  fixture plants a workdir, and `stat` is not a passthrough shim); counting and trimming it is
  *  the tick-diet spec's stage 2(c) (§7.2). A deliberate feature cost, stated rather than hidden.
+ *
+ *  LOWERED BY W2 Task 8 (D-4962, `_limit_json_num`'s fast core; macOS, bash 5.3): each limits parse
+ *  keeps its `$( )` until Task 9 but loses its `grep|head|grep`, 3 forks and 3 execs, so every
+ *  fixture falls by 3 x its parses per steady tick, forks and execs together. Before -> after:
+ *    idle-home 167/73 -> 140/46 (9 parses) · busy 164/72 -> 137/45 (9) · narrow 75/28 (none) ·
+ *    away-over-ceiling 193/91 -> 148/46 (15) · hard-blocked 406/218 -> 244/56 (54) ·
+ *    cooldown 97/36 (none) · fable 156/65 -> 138/47 (6) · leaving 391/224 -> 223/56 (56) ·
+ *    fable-leaving 375/211 -> 225/61 (50).
  */
 const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
-  'idle-home': { forks: 167, execs: 73 },
-  busy: { forks: 164, execs: 72 },
+  'idle-home': { forks: 140, execs: 46 },
+  busy: { forks: 137, execs: 45 },
   narrow: { forks: 75, execs: 28 },
-  'away-over-ceiling': { forks: 193, execs: 91 },
-  'hard-blocked': { forks: 406, execs: 218 },
+  'away-over-ceiling': { forks: 148, execs: 46 },
+  'hard-blocked': { forks: 244, execs: 56 },
   cooldown: { forks: 97, execs: 36 },
-  fable: { forks: 156, execs: 65 },
-  leaving: { forks: 391, execs: 224 },
-  'fable-leaving': { forks: 375, execs: 211 },
+  fable: { forks: 138, execs: 47 },
+  leaving: { forks: 223, execs: 56 },
+  'fable-leaving': { forks: 225, execs: 61 },
 };
 
 /** `_plat_timeout`'s `-k` probe, per tick inside the loop. On `main` at

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=b0d85171b80008bdbfd9d82edcc2e58bea134d6a04b7788fd012a1740be4f2a5
+# ccrc:generated 1 sha256=7efe3769a33bba19dfbc5a528d61982c2ccbcbab8f0dfbda9efdcd95fb1131b1
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -17347,7 +17347,7 @@ _limit_json_num() {   # file key -> that key's number, or "" when absent, null o
   # ccd read the lane as entirely unknown — measurably false, since this same zero-or-more
   # pattern matches a compact row identically. The producer keeps the spaced style anyway,
   # for a stricter future reader; this grep does not require it.)
-  grep -oE "\"$2\"[[:space:]]*:[[:space:]]*[0-9]+" "$1" | head -1 | grep -oE '[0-9]+$'
+  local __ljn_v __ljn_rc; _limit_json_num_to __ljn_v "$1" "$2"; __ljn_rc=$?; [[ -z "$__ljn_v" ]] || printf '%s\n' "$__ljn_v"; return "$__ljn_rc"
 }
 
 _limit_has_key() {   # file key -> success if the key is PRESENT, whatever its value.
@@ -24339,6 +24339,46 @@ _cfg_dir_to() {   # var wrapper -> var = `_cfg_dir wrapper`, memoised per wrappe
   [[ -n "${2-}" ]] || { printf -v "$1" '%s' "$(_cfg_dir '')"; return 0; }   # an empty key is no memo key
   [[ -n "${_CCD_CFG_DIR_MEMO[$2]+x}" ]] || _CCD_CFG_DIR_MEMO[$2]=$(_cfg_dir "$2")
   printf -v "$1" '%s' "${_CCD_CFG_DIR_MEMO[$2]}"
+}
+
+# D-4962 (tick-diet spec §6.3): `_limit_json_num`'s fast core. The legacy parse is a
+# `grep|head|grep` pipeline, 3 execs per call and 9 calls per idle tick. Here the file is
+# read ONCE with builtins and matched with `[[ =~ ]]`, but only on a stated domain, where
+# the answer provably equals the pipeline's: a regular, readable file read to EOF inside
+# 64 KiB (`read -n 65536` reaches EOF only for 65535 bytes or fewer; the cap bounds a
+# slurp where grep streamed) with no NUL, every byte printable ASCII or one of
+# `\t\n\v\f\r`. All of it runs under a scoped `LC_ALL=C`: under a UTF-8 locale bash 5.x
+# misses a NUL that follows a lead byte in `read -d ''` (D-3833, D-3979). The class is the
+# literal bytes `[ \t\v\f\r]`, so a match cannot cross a newline, as grep's per-line match
+# cannot; the leftmost match is the first in file order, and its digits are grep's
+# (`12.5` gives 12). Every other input — a NUL, a non-ASCII byte, a directory, FIFO,
+# unreadable or oversized file, a failed open — runs the legacy pipeline unchanged, in
+# the CALLER's locale (grep's `[[:space:]]` is locale-dependent), so its stdout, stderr
+# and rc come out as they always did. The pipeline's text exists once, in
+# `_limit_json_num_to`. `_limit_json_num`'s one code line prints the value with grep's
+# newline WHATEVER the rc: a match can come back with a non-zero rc, when a file over the
+# cap holds so many matches that `head -1` closes the pipe on grep (SIGPIPE, rc 141 under
+# `pipefail`), and the legacy printed its first match then too.
+_limit_text_to() {   # var file -> rc 0: var = the file's text, INSIDE the stated domain | 3: outside it (the caller runs the pipeline)
+  local LC_ALL=C __lt_t='' __lt_ran='' __lt_rc __lt_ws=$' \t\n\v\f\r'
+  printf -v "$1" '%s' ''
+  [[ -f "$2" && -r "$2" ]] || return 3
+  { __lt_ran=1; IFS= read -r -d '' -n 65536 __lt_t; } 2>/dev/null < "$2"; __lt_rc=$?
+  [[ -n "$__lt_ran" ]] && (( __lt_rc == 1 )) || return 3     # open failed, a NUL, or the 64 KiB cap reached
+  [[ "$__lt_t" == *[!"$__lt_ws"!-~]* ]] && return 3            # a byte that is not printable ASCII or \t\n\v\f\r
+  printf -v "$1" '%s' "$__lt_t"; return 0
+}
+_limit_num_in_to() {   # var text key -> rc 0: var = the FIRST match's digits in file order | 1: none (var empty)
+  local LC_ALL=C __ln_c=$'[ \t\v\f\r]*' __ln_re                # literal bytes: a match never crosses a newline, as grep's per-line match cannot
+  __ln_re="\"$3\"${__ln_c}:${__ln_c}([0-9]+)"
+  if [[ "$2" =~ $__ln_re ]]; then printf -v "$1" '%s' "${BASH_REMATCH[1]}"; return 0; fi
+  printf -v "$1" '%s' ''; return 1
+}
+_limit_json_num_to() {   # var file key -> var and rc exactly as `v=$(_limit_json_num file key)` leaves them
+  local __lj_t __lj_v __lj_rc
+  if _limit_text_to __lj_t "$2"; then _limit_num_in_to "$1" "$__lj_t" "$3"; return; fi
+  __lj_v=$(grep -oE "\"$3\"[[:space:]]*:[[:space:]]*[0-9]+" "$2" | head -1 | grep -oE '[0-9]+$'); __lj_rc=$?   # the legacy pipeline, in the CALLER's locale
+  printf -v "$1" '%s' "$__lj_v"; return "$__lj_rc"
 }
 
 cmd_supervise() {   # systemd ExecStart: ensure then block until the session dies
