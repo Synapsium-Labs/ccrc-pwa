@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=575fb456e2ad946042f115e2ab41a72fab3f98c1ca5a2fd375cdc7fe59820058
+# ccrc:generated 1 sha256=3adfef5f8642fdb7c789f315916ca17ddb14cf6e72e8c0128459ea9b872f9230
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -25931,6 +25931,14 @@ cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <proje
   # stop and `_id` mints `<id>---surface` — aiming the stop at a session that
   # does not exist while the real one keeps running.
   #
+  # THE FLAG MAY STAND ON EITHER SIDE OF THE ID, SO NO POSITIONAL MAY SPELL A FLAG
+  # (path-identity spec §2.4). With the pair after the id, an id of `--surface`
+  # is the key itself: `ccd stop --surface --surface pwa` would take `--surface`
+  # as the word and stop `pwa`. So a surface value never begins with `-`, no
+  # token left after the strip does either, and the composed id passes
+  # `_reg_id_ok` before anything is journaled. With the pair first,
+  # `ccd stop --surface pwa --surface` is the arm's own arity refusal.
+  #
   # The surface arrives as an argv flag because nothing else can carry it: the
   # exec seam is `(cmd, args) => Promise<ExecResult>` with no env, and the
   # agent's wire ExecReq carries {cmd, args, timeoutMs} and nothing else — a
@@ -25945,14 +25953,19 @@ cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <proje
     case "$1" in
       # An explicit arity check, not a bare `shift 2`: ccd runs under
       # `set -uo pipefail` with NO `-e`, so a shift past the end of argv fails,
-      # shifts nothing, and this loop never terminates.
-      --surface)   [[ $# -ge 2 ]] || die "usage: ccd stop [--surface <word>] <id> | ccd stop [--surface <word>] <wrapper> <project>"
+      # shifts nothing, and this loop never terminates. A value that begins with
+      # `-`, in either spelling, is refused with the same usage line: it is a flag
+      # spelling (an id the server put first), never a surface word.
+      --surface)   [[ $# -ge 2 && $2 != -* ]] || die "usage: ccd stop [--surface <word>] <id> | ccd stop [--surface <word>] <wrapper> <project>"
                    surface="$2"; declared="$2"; shift 2 ;;
-      --surface=*) surface="${1#--surface=}"; declared="$surface"; shift ;;
+      --surface=*) [[ ${1#--surface=} != -* ]] || die "usage: ccd stop [--surface <word>] <id> | ccd stop [--surface <word>] <wrapper> <project>"
+                   surface="${1#--surface=}"; declared="$surface"; shift ;;
       *)           args+=("$1"); shift ;;
     esac
   done
   set -- "${args[@]}"
+  # Each token left is an id, a wrapper or a project, and none of them may begin with `-`.
+  local a; for a in "$@"; do [[ $a != -* ]] || die "bad session id: $a"; done
 
   # The two-argument form is the legacy one and recomputes `<wrapper>-<project>`.
   # That only works for ids that ENCODE a wrapper; a workspace id is
@@ -25966,6 +25979,9 @@ cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <proje
   else
     id="${1:?usage: ccd stop [--surface <word>] <id> | ccd stop [--surface <word>] <wrapper> <project>}"
   fi
+  # The id AS COMPOSED, the one name every path, unit and pane below is built from: `_id`
+  # joins two words, so this is the check that sees the whole name, its charset included.
+  _reg_id_ok "$id" || die "bad session id: $id"
   # Through the choke point, never around it: the inlined `systemctl --user
   # disable --now` this replaces was the one stop path in the file that left
   # no record, which is how a deliberate stop became indistinguishable from a
