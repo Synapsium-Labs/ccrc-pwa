@@ -7827,26 +7827,37 @@ _bt_fleet_paths() {
 }
 
 # `_bt_server_trace <dir> <own: 0|1>` — 4554: a trace beside the state file that only a server that once held a value can have, by
-# NAME only (never opened: mail-previous.token holds a value). Sets the caller's BT_TRACE to the first trace's FULL PATH,
-# `unlisted` when the directory exists and cannot be listed (a set-aside copy cannot be ruled out: fail closed), else
-# empty. A directory that does not exist holds no trace (the caller's reads already measured that ENOENT).
+# NAME only (never opened: mail-previous.token holds a value). Sets the caller's BT_TRACE to the first trace's FULL PATH, or to
+# one of two words, or leaves it empty. The order is fixed (row 3a, R18, 4554 amended): the unlisted test comes FIRST, then
+# the named traces, then on an own-write box the fleet file, the generation file and `unsearchable`, then the set-aside copies.
+#   `unlisted`      the directory exists and cannot be listed, so a set-aside copy cannot be ruled out (fail closed). Tested
+#                   before every trace, whatever the directory or the fleet side holds: boot refuses to start on it, so
+#                   `chmod u+r` is its remedy and "restart the server" would be false even beside a named trace.
+#   `unsearchable`  (row 3a, R19) own-write only: with no generation file standing, the fleet token file's directory exists and
+#                   cannot be searched, so `-e` cannot tell whether the server wrote the fleet file there. BT_TRACE_DIR holds
+#                   that directory. Its own word and remedy (`chmod u+x`), never folded into `unlisted`: two conditions.
+#   empty           no trace; a directory that does not exist holds none (the caller's reads already measured that ENOENT).
 # On an own-write box (`own` = 1: role both, local, no agent.env marking the fleet) the SERVER wrote the fleet token file
 # and the generation file (`boot.ts` step 7, and the driver's own-write promotion), so either one existing is a trace too
 # (4554, amended by review 405 F1). By existence only: the fleet file holds a value. Never off such a box: there they are
 # the fleet agent's records, and a server-role or fleet-role box does not reach this arm with them as its own.
 _bt_server_trace() {
   local d="$1" own="${2:-0}" n f BT_FLEET_FILE BT_GEN_FILE
-  BT_TRACE=""
+  BT_TRACE=""; BT_TRACE_DIR=""
+  if [ -d "$d" ] && [ ! -r "$d" ]; then BT_TRACE=unlisted; return 0; fi
   for n in "${_BT_TRACES[@]}"; do
     if [ -e "$d/$n" ] || [ -L "$d/$n" ]; then BT_TRACE="$d/$n"; return 0; fi
   done
   if [ "$own" = 1 ]; then
     _bt_fleet_paths
-    for f in "$BT_FLEET_FILE" "$BT_GEN_FILE"; do
-      if [ -e "$f" ] || [ -L "$f" ]; then BT_TRACE="$f"; return 0; fi
-    done
+    # The fleet file first, as before (a directory that cannot be searched hides it from `-e`, so this test is false there),
+    # then the generation file, which lives outside that directory: when it stands, the history is told whatever the
+    # directory's mode. Only then is a directory that cannot be searched its own word.
+    if [ -e "$BT_FLEET_FILE" ] || [ -L "$BT_FLEET_FILE" ]; then BT_TRACE="$BT_FLEET_FILE"; return 0; fi
+    if [ -e "$BT_GEN_FILE" ] || [ -L "$BT_GEN_FILE" ]; then BT_TRACE="$BT_GEN_FILE"; return 0; fi
+    f="${BT_FLEET_FILE%/*}"
+    if [ -d "$f" ] && [ ! -x "$f" ]; then BT_TRACE=unsearchable; BT_TRACE_DIR="$f"; return 0; fi
   fi
-  if [ -d "$d" ] && [ ! -r "$d" ]; then BT_TRACE=unlisted; return 0; fi
   for n in "${_BT_ASIDE[@]}"; do
     for f in "$d/$n"*; do
       if [ -e "$f" ] || [ -L "$f" ]; then BT_TRACE="$f"; return 0; fi
@@ -7856,7 +7867,7 @@ _bt_server_trace() {
 }
 
 _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
-  local tok="$1" state="$2" own="${3:-0}" before="${#BT_CLASS[@]}" out="" kw w n node seq="" since="" rot="" ahead="" aheaddue=0 rotating=0 grace=0 refused=0 bad=0 tai=-1 BT_TRACE=""
+  local tok="$1" state="$2" own="${3:-0}" before="${#BT_CLASS[@]}" out="" kw w n node seq="" since="" rot="" ahead="" aheaddue=0 rotating=0 grace=0 refused=0 bad=0 tai=-1 BT_TRACE="" BT_TRACE_DIR=""
   _bt_value_file "$tok"
   case "$BT_TF" in
     absent) tai="${#BT_CLASS[@]}"; _bt_find server token-absent "$tok" ;;
@@ -7882,9 +7893,11 @@ _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
     # set-aside copy (`_bt_server_trace`, by name only), and on an own-write box the fleet token file or the generation file
     # the server itself wrote (review 405 F1). Then the FAIL stays, its sentence names the trace, and
     # `BT_SERVER_STATE` records `trace`, so an own-write fleet arm reads no `absent` state either. A token directory that
-    # exists and cannot be listed cannot rule a set-aside copy out, so it fails closed with a sentence and remedy of its own:
-    # boot refuses to start on it (`boot.ts`, `setAsideNames`), and "restart the server" would be false there. A directory
-    # that does not exist holds no trace: a fresh server whose override directory is not created yet stays the fresh PASS.
+    # exists and cannot be listed cannot rule a set-aside copy out, so it fails closed with a sentence and remedy of its own,
+    # whatever else it or the fleet side holds (row 3a, R18): boot refuses to start on it (`boot.ts`, `setAsideNames`), and
+    # "restart the server" would be false there. On an own-write box with no generation file standing, a `~/.cc-secrets` that
+    # cannot be searched does too (`unsearchable`, remedy `chmod u+x`, row 3a, R19). A directory that does not exist holds no
+    # trace: a fresh server whose override directory is not created yet stays the fresh PASS.
     absent) if [ "$tai" -ge 0 ]; then
               _bt_server_trace "${state%/*}" "$own"
               if [ -z "$BT_TRACE" ]; then
@@ -7895,6 +7908,9 @@ _bt_server_arm() {   # <token path> <state path> <own-write: 0|1>
                 if [ "$BT_TRACE" = unlisted ]; then
                   BT_PART[tai]="server: token-absent — $tok does not exist, and neither does the server's state file, and ${state%/*} cannot be listed, so a value held here once cannot be ruled out, and the server refuses to boot until it can list it"
                   BT_FIX[tai]="give ${state%/*} its read bit (chmod u+r ${state%/*}); the server then boots and mints a value"
+                elif [ "$BT_TRACE" = unsearchable ]; then
+                  BT_PART[tai]="server: token-absent — $tok does not exist, and neither does the server's state file, and $BT_TRACE_DIR cannot be searched, so whether this box's server wrote the fleet token file there cannot be told"
+                  BT_FIX[tai]="give $BT_TRACE_DIR its search bit (chmod u+x $BT_TRACE_DIR); doctor can then tell whether this box's server held a value"
                 else
                   BT_PART[tai]="server: token-absent — $tok does not exist, and neither does the server's state file, but $BT_TRACE does: this server held a value once and lost it; the server mints a new one at its next boot, and the fleet must then be handed it"
                 fi

@@ -21,7 +21,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -935,6 +935,16 @@ describe('doctor box-token: a box never handed a value reads PASS with its sente
     expect(r.stdout).toMatch(new RegExp(`^PASS box-token: ${never('server')}\\n$`));
     expect(r.code).toBe(0);
   });
+  // Row 3a, R19: a `~/.cc-secrets` that is MISSING is not unsearchable (ENOENT, not EACCES), so a fresh own-write box with
+  // no such directory keeps the fresh PASS on both parts.
+  it('both role, local, own-write, fresh, with no ~/.cc-secrets at all: the fresh PASS on both parts (row 3a, R19: a missing directory is not unsearchable)', () => {
+    const b = box({ role: 'both' });
+    dropServer(b); dropFleet(b);
+    rmSync(join(b.home, '.cc-secrets'), { recursive: true });
+    const r = runCheck(b, CHECKS_SRC);
+    expect(r.stdout).toMatch(new RegExp(`^PASS box-token: ${never('server')}; ${never('fleet')}\\n$`));
+    expect(r.code).toBe(0);
+  });
   it('fleet role: no token file, no generation file and no sync report is PASS rc 0, naming the fact, with no remedy; disarmed the same', () => {
     const b = box({ role: 'fleet' });
     dropFleet(b);
@@ -1250,7 +1260,8 @@ describe('doctor box-token: an unsearchable parent directory is unreadable, neve
   });
   // 4554: a directory with a search bit and no read bit opens its files but cannot list them, so a set-aside copy cannot be
   // ruled out, and boot refuses to start on it. Its state read is `absent` (`lstat` needs only search). An undecidable
-  // history fails closed, with a sentence and remedy of its own: "restart the server" would be false there.
+  // history fails closed, with a sentence and remedy of its own: "restart the server" would be false there, whatever the
+  // directory or the fleet side also holds (row 3a, R18).
   const unlistable = (b: Box, role: 'server' | 'both'): string => {
     const alt = join(b.home, 'alt-dir');
     mkdirSync(alt, { recursive: true, mode: 0o700 });
@@ -1283,6 +1294,71 @@ describe('doctor box-token: an unsearchable parent directory is unreadable, neve
       expect(r.stdout).toMatch(/^FAIL box-token: server: token-absent — .* cannot be listed/);
       expect(r.stdout).toMatch(/; fleet: fleet-token-absent — .* does not exist, so this box's calls to the server carry no box token/);
       expect(r.stdout).not.toContain(FLEET_NEVER);
+      expect(r.code).toBe(1);
+    });
+  });
+  // Row 3a, R18 (4554 amended): the unlisted test runs FIRST, so a directory that cannot be listed always gets the
+  // `chmod u+r` remedy, whatever it or the fleet side also holds. Boot refuses to start on such a directory, so "restart the
+  // server" would be false there even when a named trace stands beside the state file.
+  itNonRoot('server: an unlistable token directory that also holds a named trace gets the chmod u+r remedy, never the restart remedy (row 3a, R18; 4554 limit (a) closed)', () => {
+    const b = box({ role: 'server' });
+    const alt = unlistable(b, 'server');
+    writeFileSync(join(alt, 'box-token-retired.json'), RETIRED, { mode: 0o600 });
+    listless(alt, () => {
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout).toMatch(/^FAIL box-token: server: token-absent — .* cannot be listed/);
+      expect(r.stdout).toMatch(/\n {2}remedy: .*chmod u\+r /);
+      expect(r.stdout).not.toContain('restart the server');
+      expect(r.stdout).not.toContain(SERVER_NEVER);
+      expect(r.code).toBe(1);
+    });
+  });
+  itNonRoot('both role, local, own-write: an unlistable token directory with the fleet file and the generation file surviving gets the chmod u+r remedy (row 3a, R18)', () => {
+    const b = box({ role: 'both' });
+    const alt = unlistable(b, 'both');
+    rmSync(dot(b, 'token-sync.json'));
+    // The precondition: both own-write traces stand, so the old order would have named one of them.
+    expect(existsSync(fleetFile(b)) && existsSync(dot(b, NODE_FILES.tokenGeneration))).toBe(true);
+    listless(alt, () => {
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout).toMatch(/^FAIL box-token: server: token-absent — .* cannot be listed/);
+      expect(r.stdout).toMatch(/\n {2}remedy: .*chmod u\+r /);
+      expect(r.stdout).not.toContain('restart the server (ccrc.service)');
+      expect(r.code).toBe(1);
+    });
+  });
+  // Row 3a, R19 (4554 amended): on an own-write box a `~/.cc-secrets` that exists and cannot be searched hides the fleet
+  // token file from `-e`. With no generation file standing, that is its own trace word, never `unlisted` and never the
+  // never-minted PASS: two conditions, two remedies (u+x, u+r). The verdict is FAIL either way, through the fleet part.
+  const reEsc = (x: string): string => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const lostServerAndFleetHistory = (b: Box): void => {
+    for (const f of [dot(b, 'mail.token'), dot(b, 'box-token.json'), dot(b, NODE_FILES.tokenGeneration), dot(b, 'token-sync.json')]) rmSync(f);
+  };
+  itNonRoot('both role, local, own-write: ~/.cc-secrets that cannot be searched is its own word on the server part, unsearchable, with a chmod u+x remedy; the line stays FAIL rc 1 (row 3a, R19)', () => {
+    const b = box({ role: 'both' });
+    lostServerAndFleetHistory(b);
+    const secrets = join(b.home, '.cc-secrets');
+    unsearchable(secrets, () => {
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout).toMatch(/^FAIL box-token: server: token-absent — .* cannot be searched, so whether this box's server wrote the fleet token file there cannot be told/);
+      expect(r.stdout).toContain('fleet: fleet-token-unusable — ');
+      expect(r.stdout).toMatch(new RegExp(`\\n {2}remedy: .*chmod u\\+x ${reEsc(secrets)}`));
+      expect(r.stdout).not.toContain(SERVER_NEVER);
+      expect(r.stdout).not.toContain('cannot be listed');
+      expect(r.code).toBe(1);
+      const d = runCheck(b, disarmed());
+      expect(d.stdout).toMatch(/^SKIP box-token: /);
+      expect(d.code).toBe(3);
+    });
+  });
+  itNonRoot('both role, local, own-write: with ~/.cc-secrets unsearchable but the generation file present, the generation file is the named trace (row 3a, R19)', () => {
+    const b = box({ role: 'both' });
+    for (const f of [dot(b, 'mail.token'), dot(b, 'box-token.json'), dot(b, 'token-sync.json')]) rmSync(f);
+    expect(existsSync(dot(b, NODE_FILES.tokenGeneration))).toBe(true);
+    unsearchable(join(b.home, '.cc-secrets'), () => {
+      const r = runCheck(b, CHECKS_SRC);
+      expect(r.stdout).toMatch(new RegExp(`^FAIL box-token: server: token-absent — .* but .*${reEsc(NODE_FILES.tokenGeneration)} does: this server held a value once`));
+      expect(r.stdout).not.toContain('cannot be searched');
       expect(r.code).toBe(1);
     });
   });
