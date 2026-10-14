@@ -160,9 +160,6 @@ function buildScreenRows(cols: number): string[] {
   // Permission prompt box
   const title = 'Edit file';
   const question = 'Do you want to make this edit to loader.ts?';
-  const opt1 = '❯ 1. Yes';
-  const opt2Pre = '  2. Yes, allow all edits during this session, and do not ask again for this project until the session ends (shift+tab)';
-  const opt3 = '  3. No, and tell Claude what to do differently (esc)';
 
   const boxW = Math.min(cols, 76);
   const boxInner = boxW - 4; // "│ " + content + " │"
@@ -172,20 +169,21 @@ function buildScreenRows(cols: number): string[] {
   rows.push(top);
   rows.push('│ ' + title.padEnd(boxInner) + ' │');
   rows.push('├' + '─'.repeat(boxW - 2) + '┤');
-  rows.push('│ ' + question.padEnd(boxInner) + ' │');
+  for (const w of wrapWords(question, boxInner, 0)) rows.push('│ ' + w.padEnd(boxInner) + ' │');
 
-  // Option 1 (short, fits)
-  rows.push('│ ' + opt1.padEnd(boxInner) + ' │');
-
-  // Option 2 (long, wraps with hanging indent under the label)
-  const opt2Wrapped = wrapWords(opt2Pre, boxInner, 4);
-  for (let i = 0; i < opt2Wrapped.length; i++) {
-    const w = opt2Wrapped[i]!;
-    rows.push('│ ' + w.padEnd(boxInner) + ' │');
+  // The options keep their prefix and wrap with a hanging indent under the
+  // label, the way Claude Code lays a long option out at a narrow width.
+  for (const [prefix, label] of [
+    ['❯ 1. ', 'Yes'],
+    ['  2. ', 'Yes, allow all edits during this session, and do not ask again for this project until the session ends (shift+tab)'],
+    ['  3. ', 'No, and tell Claude what to do differently (esc)'],
+  ] as const) {
+    const wrapped = wrapWords(label, Math.max(1, boxInner - prefix.length), 0);
+    wrapped.forEach((w, i) => {
+      const row = (i === 0 ? prefix : ' '.repeat(prefix.length)) + w;
+      rows.push('│ ' + row.padEnd(boxInner) + ' │');
+    });
   }
-
-  // Option 3
-  rows.push('│ ' + opt3.padEnd(boxInner) + ' │');
   rows.push(bottom);
 
   // Blank
@@ -222,7 +220,9 @@ function Spike(): ReactNode {
   const [vv, setVv] = useState<{ w: number; h: number; top: number } | null>(null);
   const [, forceLog] = useState(0);
   const termRef = useRef<Terminal | null>(null);
-  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  // State, not a ref: the Sheet portals its content in after this component's
+  // first effects run, so an effect reading a ref on mount would find nothing.
+  const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
   const probeRef = useRef<HTMLSpanElement | null>(null);
 
   const fieldShown = coarse || fieldToggle;
@@ -284,7 +284,6 @@ function Spike(): ReactNode {
 
   // Measure scroller columns
   useEffect(() => {
-    const scroller = scrollerRef.current;
     const probe = probeRef.current;
     if (scroller === null || probe === null) return undefined;
     const measure = (): void => {
@@ -295,16 +294,17 @@ function Spike(): ReactNode {
       }
     };
     measure();
+    // The mono face may load after the first measure; its cell is the one that counts.
+    void document.fonts.ready.then(measure);
     const ro = new ResizeObserver(measure);
     ro.observe(scroller);
     return () => ro.disconnect();
-  }, []);
+  }, [scroller]);
 
   // Scroll to bottom after cols change
   useEffect(() => {
-    const scroller = scrollerRef.current;
     if (scroller !== null) scroller.scrollTop = scroller.scrollHeight;
-  }, [cols]);
+  }, [cols, scroller]);
 
   // Create the terminal ONCE, keyed on host
   useEffect(() => {
@@ -406,7 +406,7 @@ function Spike(): ReactNode {
           <div className="term-screen">
             {/* The scroller */}
             <div
-              ref={scrollerRef}
+              ref={setScroller}
               data-testid="spike-scroller"
               style={{
                 position: 'absolute',
@@ -426,7 +426,7 @@ function Spike(): ReactNode {
               {screenRows.map((row, i) => {
                 if (row.startsWith('__CARET__')) {
                   const w = Number(row.slice('__CARET__'.length));
-                  const padAfter = w - 4 - 3; // "│ " + "❯ " + caret + " │"
+                  const padAfter = w - 6; // "│ ❯ " (4) + caret (1) + padding + "│" (1) = w
                   return (
                     <div key={i}>{'│ ❯ '}<span data-testid="spike-caret" style={{ background: caretColor, color: caretBg }}>{' '}</span>{' '.repeat(Math.max(0, padAfter)) + '│'}</div>
                   );
@@ -452,6 +452,9 @@ function Spike(): ReactNode {
 
           {/* 3c. The key bar */}
           <div className="term-keys" role="toolbar" aria-label="Terminal keys">
+            {/* The sequence keys scroll inside .term-keys-seq, as in the product drawer,
+                so a phone-width bar never widens the glass. */}
+            <div className="term-keys-seq">
             {([
               { legend: 'esc', label: 'Escape', seq: '\x1b' },
               { legend: '↑', label: 'Arrow up', seq: '\x1b[A' },
@@ -471,6 +474,7 @@ function Spike(): ReactNode {
                 <span aria-hidden="true">{k.legend}</span>
               </button>
             ))}
+            </div>
             <button
               type="button"
               className="keycap keycap--act"
@@ -557,13 +561,14 @@ function FieldRow(): ReactNode {
   }, []);
 
   return (
-    <div style={{ display: 'flex', gap: 'var(--sp-2)' }}>
+    <div style={{ display: 'flex', gap: 'var(--sp-2)', padding: '0 var(--sp-3)' }}>
       <textarea
         ref={ref}
         data-testid="spike-field"
         rows={2}
         style={{
           flex: 1,
+          minWidth: 0,
           fontFamily: 'var(--font-mono)',
           fontSize: 16,
           color: 'var(--ink-on-well)',
