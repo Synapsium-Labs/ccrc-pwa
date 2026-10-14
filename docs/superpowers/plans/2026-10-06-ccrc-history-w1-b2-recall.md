@@ -17207,64 +17207,67 @@ console.log(at.length === 1 && below.length === 1 && below[0] === "}" && tla.len
     - tsc is clean.
     - `grep -c 'SELECT \*' ccd/history/recall.mjs` prints `0`.
 
-- [ ] **Step 12: Mutation pins, measured red, then restored.**
-  - Back up: `SCRATCH=.superpowers/sdd/history-w1-b2/scratch && mkdir -p "$SCRATCH" && cp ccd/history/recall.mjs "$SCRATCH/recall.mjs.orig" && cp ccd/history/sweep.mjs "$SCRATCH/sweep.mjs.orig"`
+- [ ] **Step 12: Mutation pins, measured red, then restored.** *(Re-measured in fix round 1, F7: every `-t` filter below selects a shipped title, every anchor is the shipped text at that commit, and each row records its measured result. The runs: foreground, `(cd server && ./node_modules/.bin/vitest run <file> -t '<filter>')`, the file `test/history-recall.test.ts` unless a row names another; the file count is 193 cases, so "selected" is the failed plus the passed.)*
+  - Back up: `SCRATCH=.superpowers/sdd/history-w1-b2/scratch && mkdir -p "$SCRATCH" && cp ccd/history/recall.mjs "$SCRATCH/recall.mjs.orig" && cp ccd/history/sweep.mjs "$SCRATCH/sweep.mjs.orig" && cp ccd/history/store.mjs "$SCRATCH/store.mjs.orig"`
   - Run: `(cd server && ./node_modules/.bin/vitest run test/history-recall.test.ts -t '<filter>')`
-  - Restore: `cp "$SCRATCH/recall.mjs.orig" ccd/history/recall.mjs && cp "$SCRATCH/sweep.mjs.orig" ccd/history/sweep.mjs`
-  - Apply one edit, Run with its filter and see the red, then Restore. Never use `git stash`.
+  - Restore: `cp "$SCRATCH/recall.mjs.orig" ccd/history/recall.mjs && cp "$SCRATCH/sweep.mjs.orig" ccd/history/sweep.mjs && cp "$SCRATCH/store.mjs.orig" ccd/history/store.mjs`
+  - Apply one edit, Run with its filter and see the red, then Restore and see the same filter green. Never use `git stash`.
     1. **C7: no query for regex syntax.**
-       - Edit: in `runGrep`, delete the four lines from `const syntax = regexSyntaxIn(raw);` through the closing `}` of its `if`.
-       - Filter: `C7`.
-       - Red: `expected [ 3, undefined ] to deeply equal [ 2, 'regex-syntax' ]`. The sanitiser quotes `a|b` into a valid phrase, so the query runs, and the spy's `calls` is no longer empty.
+       - Edit: in `runGrep` (recall.mjs), change `const syntax = regexSyntaxIn(raw);` to `const syntax = null;`, so the refusal's `if` never fires.
+       - Filter: `C7: regex syntax`. Selected 1.
+       - Red: `C7: regex syntax in plain search is exit 2 regex-syntax with a hint line, and no statement is ever prepared`: `expected [ 3, undefined ] to deeply equal [ 2, 'regex-syntax' ]`. The sanitiser quotes `a|b` into a valid phrase, so the query runs and answers 3. Restored: 1 passed.
     2. **C9 and DM28: the provenance filter.**
-       - Edit: in `grepParams`, change `JSON.stringify(a.includeRecall ? INDEXED_PROVENANCE : SEARCHABLE_PROVENANCE)` to `JSON.stringify(INDEXED_PROVENANCE)`.
-       - Filter: `C9|DM28`.
-       - Red: `expected 0 to be 3` on `zqechoword`.
-    3. **The echo is indexed inline at ingest.** It runs on the `inline:` fixture, whose echo arrives after the backfill completed. C9's fixture cannot red this edit: its echo is ingested in the tick that also backfills it.
-       - Edit: in `sweep.mjs`'s `prepareLines`, on the `const indexable` line, change `INDEXED_PROVENANCE.includes(provenance)` back to `SEARCHABLE_PROVENANCE.includes(provenance)`, and add `SEARCHABLE_PROVENANCE` to its lib import if Step 8 dropped it.
-       - Filter: `inline: an echo`.
-       - Red: `expected 3 to be +0` on the `--include-recall` run.
-    3b. **The backfill indexes an echo.** It runs on the `backfill:` fixture, whose echo was ingested by a tick that could not index.
-       - Edit: in `sweep.mjs`, change `ftsStmts`' `const ph = INDEXED_PROVENANCE.map(() => '?').join(', ');` back to `const ph = SEARCHABLE_PROVENANCE.map(() => '?').join(', ');`, and `deriveFts`' `f.backfill.all(cursor, ...INDEXED_PROVENANCE, ...INDEXED_PROVENANCE, BACKFILL_BATCH)` back to `f.backfill.all(cursor, ...SEARCHABLE_PROVENANCE, ...SEARCHABLE_PROVENANCE, BACKFILL_BATCH)`. Add `SEARCHABLE_PROVENANCE` to its lib import if Step 8 dropped it.
-       - Filter: `backfill: an echo`.
-       - Red: `expected 3 to be +0` on the `--include-recall` run.
+       - Edit: in `grepParams` (recall.mjs), change `provs: JSON.stringify(a.includeRecall ? INDEXED_PROVENANCE : SEARCHABLE_PROVENANCE),` to `provs: JSON.stringify(INDEXED_PROVENANCE),`.
+       - Filter: `C9|DM28`. Selected 2.
+       - Red: both reds. `DM28 (CLI half)`: `zqechoword: expected +0 to be 3`; `C9`: `expected +0 to be 3`. Restored: 2 passed.
+    3. **The echo is indexed inline at ingest.** It runs on the inline fixture, whose echo arrives after the backfill completed. C9's fixture cannot red this edit: its echo is ingested in the tick that also backfills it.
+       - Edit: in sweep.mjs's `prepareLines`, change `const indexable = ctx.fts === true && INDEXED_PROVENANCE.includes(provenance);` to `const indexable = ctx.fts === true && INDEXED_PROVENANCE.filter((p) => p !== 'recall-echo').includes(provenance);` (no new import).
+       - Filter: `echo appended after the backfill completed`. Selected 1.
+       - Red: `indexes an echo appended after the backfill completed through the inline ingest path`: `expected 3 to be +0` on the `--include-recall` run. Restored: 1 passed.
+    3b. **The backfill indexes an echo.** It runs on the backfill fixture, whose echo was ingested by a tick that could not index.
+       - Edit: in sweep.mjs's `deriveFts`, change `f.backfill.all(cursor, ...INDEXED_PROVENANCE, ...INDEXED_PROVENANCE, BACKFILL_BATCH)` to `f.backfill.all(cursor, ...INDEXED_PROVENANCE.map((p) => (p === 'recall-echo' ? 'tool' : p)), ...INDEXED_PROVENANCE.map((p) => (p === 'recall-echo' ? 'tool' : p)), BACKFILL_BATCH)`. The placeholders stay four, so the statement binds; changing `FTS_ELIGIBLE_SQL`'s `ph` as well, as this row once did, makes every other reader of that one relation throw `column index out of range` out of the seed sweep, a crash red and not this guard's.
+       - Filter: `echo captured while FTS fails`. Selected 1.
+       - Red: `indexes an echo captured while FTS fails through the next backfill, not a second inline chance`: `expected 3 to be +0` on the `--include-recall` run. Restored: 1 passed.
     4. **C27: the scope before the LIMIT.**
-       - Edit: replace the body of `rankedSql` with this. It ranks the global pool first and applies the scope after its LIMIT:
-
-         ```js
-           return `${referrerSql(rc, matchSql)}
-           SELECT r.via AS via, r.entry_id AS entry_id, r.uuid AS uuid, r.ts_ms AS ts_ms, r.role AS role,
-               r.provenance AS provenance, r.blob_id AS blob_id, r.name AS name
-             FROM (SELECT via, entry_id, uuid, transcript_pk, ts_ms, role, provenance, tool_name, blob_id, name, rank FROM refs
-               ORDER BY ${ftsOrderBy(sort, 'ts_ms')}, blob_id, entry_id LIMIT :pool) AS r
-             WHERE ${GREP_FILTER}`;
-         ```
-
-       - Filter: `C27`.
-       - Red: `relevance: expected [] to deeply equal [ '0189abcd-0027-4000-8000-000000000001' ]`. The global pool holds none of A's hits, so the page is empty; the count statement is unmutated, so the total stays 1 and this task's flat `renderHits` still answers exit 0.
+       - Edit: in `rankedSql` (recall.mjs), replace the two lines `    FROM refs r WHERE ${GREP_FILTER}` and `    ORDER BY ${ftsOrderBy(sort, 'r.ts_ms')}, r.blob_id, r.entry_id, r.ref_key LIMIT :pool`;` with one: ``    FROM (SELECT * FROM refs ORDER BY ${ftsOrderBy(sort, 'ts_ms')}, blob_id, entry_id, ref_key LIMIT :pool) AS r WHERE ${GREP_FILTER}`;``. It ranks the global pool first and applies the scope after its LIMIT.
+       - Filter: `C27`. Selected 3.
+       - Red: 2 failed, 1 passed. `C27: 3,000 other-family blobs outrank one family hit…`: `relevance: : expected 3 to be +0` (the global pool holds none of A's hits, so the page is empty; the count statement is unmutated, so the total stays 1); `DM46 (node half, review focus 4)`: `expected 3 to be +0` on its `grep zqneedle` call. Restored: 3 passed.
     5. **DM46 and C27: the transcript scope.**
-       - Edit: in `GREP_FILTER`, change `r.transcript_pk IN (SELECT value FROM json_each(:tpks))` to `(:tpks IS NOT NULL)`.
-       - Filter: `DM46`.
-       - Red: `expected 0 to be 3` on `zqforeignword` from A's pane.
+       - Edit: in `GREP_FILTER` (recall.mjs), change `r.transcript_pk IN (SELECT value FROM json_each(:tpks))` to `(:tpks IS NOT NULL)`.
+       - Filter: `DM46`. Selected 3.
+       - Red: 2 failed, 1 passed. `C27: 3,000 other-family blobs…`: `relevance: expected [ …(20) ] to deeply equal [ Array(1) ]`; `DM46 (CLI half)`: `expected +0 to be 3` on `zqforeignword` from A's pane. (The node half asks the store, not the filter, so it stays green here; the ingest-side claim rule is what it pins.) Restored: 3 passed.
     6. **The gate reads the backfill row.**
-       - Edit: in `indexGate`, change `completed: row !== undefined && row.completed_ms !== null` to `completed: true`.
-       - Filter: `re-opened`.
-       - Red: `expected [ 0, undefined ] to deeply equal [ 7, 'fts-pending' ]`.
+       - Edit: in store.mjs's `ftsGateFactsOn`, change `completed: row !== undefined && row.completed_ms !== null` to `completed: true`.
+       - Filter: `was reopened after a failed index tick`. Selected 1.
+       - Red: `returns fts-pending while a completed backfill was reopened after a failed index tick`: `expected [ +0, undefined ] to deeply equal [ 7, 'fts-pending' ]`. Restored: 1 passed.
     7. **The gate is consulted.**
-       - Edit: in `runGrep`, delete the line `if (!gate.ok) return refusal(gate.reason);`.
-       - Filter: `probe that throws`.
-       - Red: `expected [ +0, undefined ] to deeply equal [ 5, 'probe-failed' ]`. The seam touches only the probe's SQL, so with no gate the query runs and answers. A missing table is still caught as 7 by item 8's catch, and the lib case of Step 5 pins the table half of `decideGrepIndex`.
+       - Edit: in `runGrep` (recall.mjs), delete the FIRST occurrence of the line `  if (!gate.ok) return refusal(gate.reason);` (the one directly below `const gate = indexGate(rc);` after the cursor check, before `let nodes = null;`; the second occurrence is `runRegex`'s).
+       - Filter: `probe that throws`. Selected 1.
+       - Red: `C26: a probe that throws is 5 probe-failed; one answering absent is 7 fts5-absent…`: `expected [ +0, undefined ] to deeply equal [ 5, 'probe-failed' ]`. The seam touches only the probe's SQL, so with no gate the query runs and answers. A missing table is still caught as 7 by item 8's catch, and the lib case of Step 5 pins the table half of `decideGrepIndex`. Restored: 1 passed.
     8. **A vanished table is 7, never 1.**
-       - Edit: in `rankedAndCounted`, delete the line `if (/no such table: (?:main\.)?blobs_fts\b/.test(String(e && e.message))) return { result: refusal('fts-pending') };`.
-       - Filter: `repair racing`.
-       - Red: `Error: no such table: blobs_fts` thrown out of `runGrep`.
+       - Edit: in `rankedAndCounted` (recall.mjs), delete the line `    if (/no such table: (?:main\.)?blobs_fts\b/.test(String(e && e.message))) return { result: refusal('fts-pending') };`.
+       - Filter: `repair racing`. Selected 1.
+       - Red: `a statement that finds no blobs_fts (a repair racing the read) is 7 fts-pending, never exit 1 (review focus 5)`: `Error: no such table: blobs_fts` thrown out of `runGrep`. Restored: 1 passed.
     9. **A store B1 backfilled is re-opened once.** This row runs history-ingest.test.ts: `(cd server && ./node_modules/.bin/vitest run test/history-ingest.test.ts -t 'store B1 backfilled')`.
-       - Edit: in `sweep.mjs`'s `ftsPrepare`, change `} else if (getMeta(db, 'fts_provenance') !== INDEXED_PROVENANCE.join(',')) {` to `} else if (false) {`.
-       - Red: `the re-opened backfill indexed the old echo: expected +0 to be 1`.
+       - Edit: in sweep.mjs's `ftsPrepare`, change `} else if (getMeta(db, 'fts_provenance') !== INDEXED_PROVENANCE.join(',')) {` to `} else if (false) {`.
+       - Filter: `store B1 backfilled`. Selected 1 of 162.
+       - Red: `history-recall-echo-indexed on a store B1 backfilled: the first B2 tick re-opens the completed backfill once…`: `expected undefined to be 'operator,model,tool,recall-echo'`, on the case's meta assertion (measured: with this edit the old echo is still indexed, by another route in this build, so the case's `the re-opened backfill indexed the old echo` assertion stays green and the meta assertion is the one that reds; the meta set is what the once-only re-open records). One earlier red of this row was a 20 s `Hook timed out` from load, not an assertion; it was re-run alone. Restored: 1 passed.
     10. **Exit 3 states the reach.**
-       - Edit: in `grepNotFound`, change `return { ...notFound(), hint: SEARCH_REACH };` to `return notFound();`.
-       - Filter: `states grep`.
-       - Red: `expected [] to deeply equal [ 'hint: grep reaches at most the first 1 MiB…' ]`.
+       - Edit: in `grepNotFound` (recall.mjs), change `return { ...notFound(), hint: SEARCH_REACH };` to `return notFound();`.
+       - Filter: `states grep`. Selected 1.
+       - Red: `exit 3 states grep's reach on its one hint line…`: `expected [] to deeply equal [ Array(1) ]` (the one `hint:` line). Restored: 1 passed.
+    11. **F5: `--tool` is a filter.**
+       - Edit: in `GREP_FILTER` (recall.mjs), replace the line `      AND (:tool IS NULL OR r.tool_name = :tool)` with `      AND 1`.
+       - Filter: `F5|filters: --role`. Selected 4.
+       - Red: 2 failed, 2 passed. `filters: --role, --tool, --since and --before narrow inside the scope`: `expected +0 to be 3` (`--tool Read`); `--tool narrows by the call row that names the tool…`: `expected [ …(2) ] to deeply equal [ Array(1) ]`. Restored: 4 passed.
+    12. **F5: `--before` is a filter.**
+       - Edit: in `GREP_FILTER` (recall.mjs), replace the line `      AND (:before IS NULL OR r.ts_ms < :before)` with `      AND 1`.
+       - Filter: `F5|filters: --role`. Selected 4.
+       - Red: 1 failed, 3 passed. `--before is exclusive and decides by time: of two rows 20 s apart, a bound between them finds only the earlier`: `expected [ …(2) ] to deeply equal [ Array(1) ]`. The plan's `--before 2099` case stays green here by design (every row is before 2099); the time case is what decides. Restored: 4 passed.
+    13. **F5: the `next:` line re-emits `--before`.**
+       - Edit: in `grepArgv` (recall.mjs), delete the line `  if (a.beforeMs !== null) out.push('--before', new Date(a.beforeMs).toISOString());`.
+       - Filter: `F5|filters: --role`. Selected 4.
+       - Red: 1 failed, 3 passed. `the next: line re-emits --before as an absolute ISO time, in both the human and the --json form`: `expected 'next: "$HOME/.local/bin/ccrc" history…' to contain '--before 2026-10-05T10:00:50.000Z'`. Restored: 4 passed.
   - **Not pinned here: that `hitSnippet` calls the windowed snippet (finding V16).** The edit `snippetLine(displaySnippet(plain, terms, rc.pairIdx).replace(/\s+/g, ' '))` → `snippetLine(snippetWindow(redactForDisplay(plain, rc.pairIdx), terms).replace(/\s+/g, ' '))` (the whole body redacted, then cut) prints the same masks, so every case here stays green; only its cost differs, and no grep case times a multi-MiB escape-dense row: seeding one through the sweep costs B1's windowed index redaction (34-43 s for the worst shape, B1's D-4419) before the grep runs, and Task 16's scale `grep zqbulk` row is plain JSON under a 20 s SCALE_MS. The window's cost is pinned at lib level instead (Step 5's mutant 10 on `displaySnippet`'s sixth case), and Task 18's mutant (e) pins that the snippet reads through `displaySnippet`'s window at all. This is the gap Task 15's describe row had before its bound case; it is stated, not closed.
   - After the last restore, re-run Step 11's first two commands and see them green.
 

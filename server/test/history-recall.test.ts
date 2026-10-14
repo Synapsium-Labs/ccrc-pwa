@@ -1190,9 +1190,12 @@ const GRX = {
   },
 };
 
-describe("grep's FTS path (W1-B2 task 12)", () => {
+describe('grep, the FTS path: index gate, provenance, filters and everyday words (W1-B2 task 12)', () => {
   beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
   const T = 0x21;
+  /** A deviation-number-shaped word, built in two pieces so this test's source holds no D-number token for the ledger's
+   *  scanners to count (CLAUDE.md "Deviation ledger"). */
+  const DNUM = ['D', '1234'].join('-');
   let box: rH.HistoryBox;
   beforeAll(() => {
     if (process.platform === 'darwin') return;
@@ -1203,71 +1206,205 @@ describe("grep's FTS path (W1-B2 task 12)", () => {
       rFx.systemRow({ uuid: GRX.uuid(T, 3), ts: GRX.ts(3), sessionId: GRX.file(T), subtype: 'informational', content: 'zqharnessword' }),
       GRX.user(T, 4, 'zqmetaword injected', { isMeta: true }),
       rFx.summaryRow({ uuid: GRX.uuid(T, 5), ts: GRX.ts(5), sessionId: GRX.file(T), text: 'zqsummaryword summary' }),
-      GRX.toolUse(T, 6, 'toolu_g21echo', 'ccrc history grep zqasked'),
+      GRX.toolUse(T, 6, 'toolu_g21echo', '"$HOME/.local/bin/ccrc" history grep zqasked'),
       GRX.toolResult(T, 7, 'toolu_g21echo', 'zqechoword earlier recall output'),
       GRX.toolUse(T, 8, 'toolu_g21cat', 'cat notes.md'),
       GRX.toolResult(T, 9, 'toolu_g21cat', 'zqcatword <ccrc-recall id="L0123456789abcdef0123"> page body'),
       GRX.user(T, 10, 'zqfirstline\nzqsecondword'),
       GRX.user(T, 11, 'edit server/src/coord/store.ts now'),
       GRX.user(T, 12, 'run it with --force please'),
-      GRX.user(T, 13, 'history-off next'),
+      GRX.user(T, 13, `set history-off before ${DNUM} lands`),
       GRX.user(T, 14, 'fixes #123 finally'),
       GRX.user(T, 15, 'look at arr[0] closely'),
       GRX.user(T, 16, 'commit a0860d1f2e3b4c5d6e7f8091a2b3c4d5e6f70819 landed'),
       GRX.user(T, 17, 'a naïve café visit'),
+      GRX.user(T, 18, 'please say zqinner words now'),
     ]);
-  }, HEAVY);
+  }, 120_000);
   const grep = (args: string[], opts: rH.SpawnOpts = {}): CliRun => GRX.cli(box, GRX.idA, ['grep', ...args], opts);
 
-  it('C26: a ready FTS store answers hits and not-found, never pending', () => {
+  it('C26: the CLI handle on an FTS-ready store answers 0 or 3, never 7, and every --json reason maps to its exit', () => {
     const hit = grep(['zqoperatorword', '--json']);
     expect(hit.code, hit.stderr).toBe(0);
     expect(GRX.uuids(hit)).toEqual([GRX.uuid(T, 1)]);
+    expect(hit.json?.total).toBe(1);
     const none = grep(['zqnowhereword', '--json']);
     expect(none.code, none.stderr).toBe(3);
+    expect(none.json?.exit).toBe(3);
+    expect(none.json).not.toHaveProperty('reason');
     expect(none.json?.coverage).toBe('this-box');
-    const humanNone = grep(['zqnowhereword']);
-    expect(humanNone.code, humanNone.stderr).toBe(3);
-    expect(humanNone.stdout).toContain(`hint: ${libRead.SEARCH_REACH}`);
   }, HEAVY);
 
-  it('C7: plain regex syntax refuses before statements are prepared', async () => {
+  it("exit 3 states grep's reach on its one hint line, in lib's SEARCH_REACH words; a hit prints no reach line (spec §8.4, rev 3.5)", () => {
+    const none = grep(['zqnowhereword']);
+    expect(none.code, none.stderr).toBe(3);
+    expect(none.stdout.split('\n').filter((l) => l.startsWith('hint: '))).toEqual([`hint: ${libRead.SEARCH_REACH}`]);
+    const hit = grep(['zqoperatorword']);
+    expect(hit.code, hit.stderr).toBe(0);
+    expect(hit.stdout).not.toContain(libRead.SEARCH_REACH);
+  }, HEAVY);
+
+  it("C26: a probe that throws is 5 probe-failed; one answering absent is 7 fts5-absent (the reader's own probe, never meta)", () => {
+    const seam = (mode: string): CliRun => grep(['zqoperatorword', '--json'], { preloads: [rH.PRELOADS.faults], env: { HISTORY_TEST_FTS_PROBE: mode } });
+    const threw = seam('throw');
+    expect([threw.code, threw.json?.reason]).toEqual([5, 'probe-failed']);
+    const absent = seam('absent');
+    expect([absent.code, absent.json?.reason]).toEqual([7, 'fts5-absent']);
+  }, HEAVY);
+
+  it('C7: regex syntax in plain search is exit 2 regex-syntax with a hint line, and no statement is ever prepared', async () => {
     const r = grep(['a|b', '--json']);
     expect([r.code, r.json?.reason]).toEqual([2, 'regex-syntax']);
+    const human = grep(['zq.*word']);
+    expect(human.code).toBe(2);
+    expect(`${human.stdout}\n${human.stderr}`).toMatch(/^hint: .*--regex/m);
     const recall = await GRX.recall();
     const rc = await GRX.rc(box, GRX.idA);
     try {
       const calls: string[] = [];
-      const refused = recall.runGrep({ ...rc, db: GRX.spyDb(rc.db, calls) }, await GRX.grepArgs(['a|b']));
+      const spied = { ...rc, db: GRX.spyDb(rc.db, calls) };
+      const refused = recall.runGrep(spied, await GRX.grepArgs(['a|b']));
       expect([refused.exit, refused.reason]).toEqual([2, 'regex-syntax']);
       expect(calls).toEqual([]);
+      const answered = recall.runGrep(spied, await GRX.grepArgs(['zqoperatorword']));   // CONTROL: the spy sees a real query
+      expect(answered.exit).toBe(0);
+      expect(calls.some((s) => /blobs_fts MATCH/.test(s))).toBe(true);
     } finally { rc.db.close(); }
   }, HEAVY);
 
-  it('DM28 and C9: recall echoes reach FTS but default grep excludes them', () => {
-    for (const w of ['zqharnessword', 'zqmetaword', 'zqsummaryword', 'zqechoword']) expect(grep([w]).code, w).toBe(3);
+  it('DM28 (CLI half): summary, harness and recall-echo text is not found by default grep; operator and model text is', () => {
+    for (const w of ['zqharnessword', 'zqmetaword', 'zqsummaryword', 'zqechoword']) {
+      const r = grep([w, '--json']);
+      expect(r.code, w).toBe(3);
+    }
+    for (const w of ['zqoperatorword', 'zqmodelword']) expect(grep([w]).code, w).toBe(0);
+  }, HEAVY);
+
+  it('C9: an earlier `ccrc history grep` tool_result is not matched by default, and is matched with --include-recall', () => {
+    expect(grep(['zqechoword']).code).toBe(3);
     const r = grep(['zqechoword', '--include-recall', '--json']);
     expect(r.code, r.stderr).toBe(0);
     expect(GRX.uuids(r)).toEqual([GRX.uuid(T, 7)]);
     expect(GRX.items(r)[0]?.provenance).toBe('recall-echo');
-    expect(grep(['zqcatword']).code).toBe(0);
   }, HEAVY);
 
-  it('filters and everyday words are handled as quoted FTS terms', () => {
+  it('DM32 (CLI half): a cat result holding <ccrc-recall stays in default search (provenance by structure)', () => {
+    const r = grep(['zqcatword', '--json']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(GRX.uuids(r)).toEqual([GRX.uuid(T, 9)]);
+    expect(GRX.items(r)[0]?.provenance).toBe('tool');
+  }, HEAVY);
+
+  it('DM30 (CLI half): a word after a newline in a text block is found; the JSON keys type and text are not', () => {
+    expect(grep(['zqsecondword']).code).toBe(0);
+    expect(grep(['type']).code).toBe(3);
+    expect(grep(['text']).code).toBe(3);
+  }, HEAVY);
+
+  it('filters: --role, --tool, --since and --before narrow inside the scope', () => {
     expect(grep(['zqmodelword', '--role', 'assistant']).code).toBe(0);
     expect(grep(['zqmodelword', '--role', 'user']).code).toBe(3);
     expect(grep(['zqasked', '--tool', 'Bash']).code).toBe(0);
+    expect(grep(['zqasked', '--tool', 'Read']).code).toBe(3);
     expect(grep(['zqoperatorword', '--since', '2099-01-01T00:00:00Z']).code).toBe(3);
-    for (const words of [['server/src/coord/store.ts'], ['--', '--force'], ['history-off'], ['#123'], ['"arr[0]"'], ['"a0860d1f"*'], ['café'], ['cafe']]) {
-      expect(grep(['--json', ...words]).code, words.join(' ')).toBe(0);
-    }
-    for (const words of [['arr[0]'], ['a|b']]) expect(grep(words).code, words.join(' ')).toBe(2);
+    expect(grep(['zqoperatorword', '--before', '2099-01-01T00:00:00Z']).code).toBe(0);
   }, HEAVY);
 
-  it('the probe distinguishes throw and absent', () => {
-    const seam = (mode: string): CliRun => grep(['zqoperatorword', '--json'], { preloads: [rH.PRELOADS.faults], env: { HISTORY_TEST_FTS_PROBE: mode } });
-    expect([seam('throw').code, seam('throw').json?.reason]).toEqual([5, 'probe-failed']);
-    expect([seam('absent').code, seam('absent').json?.reason]).toEqual([7, 'fts5-absent']);
+  it('everyday words that are not plain words are quoted FTS terms, never an FTS syntax error or exit 1 (review focus 2)', () => {
+    const found: Array<[string[], number]> = [
+      [['server/src/coord/store.ts'], 11], [['--', '--force'], 12], [['history-off'], 13], [[DNUM], 13], [['#123'], 14],
+      [['"arr[0]"'], 15], [['"a0860d1f"*'], 16], [['a0860d1f*'], 16], [['café'], 17], [['cafe'], 17],
+      // A quoted phrase with an inner quote splits at the quotes into three quoted terms (AND); an unbalanced quote
+      // is dropped from its word. Neither is an FTS syntax error.
+      [['"say "zqinner" words"'], 18], [['"zqinner'], 18],
+    ];
+    for (const [words, row] of found) {
+      const r = grep(['--json', ...words]);
+      expect(r.code, `${words.join(' ')}: ${r.stderr}`).toBe(0);
+      expect(GRX.uuids(r), words.join(' ')).toContain(GRX.uuid(T, row));
+    }
+    for (const words of [['arr[0]'], ['a|b']]) {
+      const r = grep(words);
+      expect(r.code, words.join(' ')).toBe(2);
+      expect(`${r.stdout}\n${r.stderr}`, words.join(' ')).toMatch(/^hint: /m);
+    }
+  }, 120_000);
+
+  it('a statement that finds no blobs_fts (a repair racing the read) is 7 fts-pending, never exit 1 (review focus 5)', async () => {
+    const recall = await GRX.recall();
+    const rc = await GRX.rc(box, GRX.idA);
+    try {
+      const racing = new Proxy(rc.db, {
+        get(t, k) {
+          if (k === 'prepare') {
+            return (sql: string) => {
+              if (/blobs_fts MATCH/.test(sql)) throw new Error('no such table: blobs_fts');
+              return t.prepare(sql);
+            };
+          }
+          const v = Reflect.get(t, k, t) as unknown;
+          return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+        },
+      }) as RDatabaseSync;
+      const r = recall.runGrep({ ...rc, db: racing }, await GRX.grepArgs(['zqoperatorword']));
+      expect([r.exit, r.reason]).toEqual([7, 'fts-pending']);
+    } finally { rc.db.close(); }
+  }, HEAVY);
+});
+
+describe("grep's --tool and --before filters decide on their own, and the next: line re-emits --before (W1-B2 task 12 fix round 1, F5)", () => {
+  beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
+  const T = 0x2a;
+  let box: rH.HistoryBox;
+  beforeAll(() => {
+    if (process.platform === 'darwin') return;
+    box = rH.makeHistoryBox('ccrc-hist-grep-filt-');
+    GRX.seed(box, T, GRX.idA, 'demo', [
+      GRX.toolUse(T, 1, 'toolu_g2abash', 'ls zqtoolword'),
+      GRX.user(T, 2, 'zqtoolword said by the operator'),
+      // Two rows of one word, 20 s apart: a --before between them decides, and --since is its inclusive twin.
+      GRX.user(T, 20, 'zqtimeword the earlier row'),
+      GRX.user(T, 40, 'zqtimeword the later row'),
+    ]);
+  }, 120_000);
+  const grep = (args: string[]): CliRun => GRX.cli(box, GRX.idA, ['grep', ...args]);
+
+  it('--tool narrows by the call row that names the tool: Bash finds the call and nothing else, Read finds nothing', () => {
+    const all = grep(['zqtoolword', '--json']);
+    expect(all.code, all.stderr).toBe(0);
+    expect(new Set(GRX.uuids(all)), 'CONTROL: unfiltered, the call and the operator row both hold the word').toEqual(new Set([GRX.uuid(T, 1), GRX.uuid(T, 2)]));
+    const bash = grep(['zqtoolword', '--tool', 'Bash', '--json']);
+    expect(bash.code, bash.stderr).toBe(0);
+    expect(GRX.uuids(bash)).toEqual([GRX.uuid(T, 1)]);
+    expect(bash.json?.total).toBe(1);
+    const read = grep(['zqtoolword', '--tool', 'Read', '--json']);
+    expect(read.code, read.stderr).toBe(3);
+  }, HEAVY);
+
+  it('--before is exclusive and decides by time: of two rows 20 s apart, a bound between them finds only the earlier', () => {
+    const both = grep(['zqtimeword', '--json']);
+    expect(both.code, both.stderr).toBe(0);
+    expect(new Set(GRX.uuids(both)), 'CONTROL: unbounded, both rows are found').toEqual(new Set([GRX.uuid(T, 20), GRX.uuid(T, 40)]));
+    const early = grep(['zqtimeword', '--before', GRX.ts(30), '--json']);
+    expect(early.code, early.stderr).toBe(0);
+    expect(GRX.uuids(early)).toEqual([GRX.uuid(T, 20)]);
+    expect(early.json?.total).toBe(1);
+    expect(grep(['zqtimeword', '--before', GRX.ts(20)]).code, 'exclusive: a bound at the earlier row\'s own time drops it').toBe(3);
+    const late = grep(['zqtimeword', '--since', GRX.ts(30), '--json']);
+    expect(GRX.uuids(late), '--since is inclusive and finds only the later').toEqual([GRX.uuid(T, 40)]);
+  }, HEAVY);
+
+  it('the next: line re-emits --before as an absolute ISO time, in both the human and the --json form', () => {
+    const before = GRX.ts(50);
+    const human = grep(['zqtimeword', '--before', before, '--limit', '1']);
+    expect(human.code, human.stderr).toBe(0);
+    const nextLine = human.stdout.split('\n').find((l) => l.startsWith('next: '));
+    expect(nextLine, 'a second page is owed').toBeDefined();
+    expect(nextLine).toContain(`--before ${before}`);
+    const json = grep(['zqtimeword', '--before', before, '--limit', '1', '--json']);
+    expect(json.json?.total).toBe(2);
+    expect(json.json?.shown).toBe(1);
+    expect(String(json.json?.next)).toContain(`--before ${before}`);
   }, HEAVY);
 });
 
@@ -1367,48 +1504,68 @@ describe('recall echoes are indexed by both paths (W1-B2 task 12)', () => {
   }, HEAVY);
 });
 
-describe('C27: scope joins before grep ranking (W1-B2 task 12)', () => {
+describe("C27 and DM46: the scope join runs before the LIMIT; another project's transcript is never in scope (W1-B2 task 12)", () => {
   beforeEach((ctx) => { if (process.platform === 'darwin') ctx.skip(); });
   const TA = 0x27; const TB = 0x28; const TO = 0x29;
   let box: rH.HistoryBox;
   beforeAll(() => {
     if (process.platform === 'darwin') return;
     box = rH.makeHistoryBox('ccrc-hist-grep-scope-');
-    GRX.seed(box, TA, GRX.idA, 'demo', [GRX.user(TA, 1, 'an older note with a single zqneedle among many words')]);
-    GRX.seed(box, TB, GRX.idB, 'demo', Array.from({ length: 2100 }, (_, i) => GRX.user(TB, 100 + i, `zqneedle zqneedle zqneedle n${i}`)), 'claude-b');
-    GRX.seed(box, TO, GRX.idO, 'other', [GRX.user(TO, 1, 'zqforeignword lives elsewhere', { cwd: '/home/u/worktrees/other/x' })], 'claude-b');
+    // A: one old hit in a long sentence. B (same project, another family): 3,000 newer short rows that each say the
+    // word three times, so every one of them outranks A's hit on BM25 and on recency.
+    GRX.seed(box, TA, GRX.idA, 'demo', [GRX.user(TA, 1, 'an older note with a single zqneedle among many other plain words here')]);
+    GRX.seed(box, TB, GRX.idB, 'demo',
+      Array.from({ length: 3000 }, (_, i) => GRX.user(TB, 100 + i, `zqneedle zqneedle zqneedle n${i}`)), 'claude-b');
+    // O: another project's family, its own words.
+    GRX.seed(box, TO, GRX.idO, 'other',
+      [GRX.user(TO, 1, 'zqforeignword lives in the other project', { cwd: '/home/u/worktrees/other/x' })], 'claude-b');
+    // A planted clear line in A's spool naming O's transcript (DM46): the first claim (O's, confirmed) stands.
+    rH.spoolLine(box, GRX.idA, { v: 1, ev: 'SessionStart', id: GRX.idA, sid: GRX.file(TO), src: 'clear' });
+    for (let i = 0; i < 2; i += 1) { const s = rH.runSweep(box); expect(s.code, s.stderr).toBe(0); }
   }, 240_000);
-  it('the in-scope low-ranked hit survives a global top-ranked pool', () => {
+
+  it('C27: 3,000 other-family blobs outrank one family hit, and the hit is still returned (exit 0, true count 1)', () => {
+    const db = rH.openStoreRO(box);
+    try {   // CONTROL: globally, A's blob is outside the top RANK_POOL on rank
+      const aBlob = (db.prepare('SELECT blob_id AS b FROM entries WHERE uuid = ?').get(GRX.uuid(TA, 1)) as { b: number }).b;
+      const top = (db.prepare('SELECT rowid AS r FROM blobs_fts WHERE blobs_fts MATCH ? ORDER BY rank LIMIT 2000').all('zqneedle') as unknown as
+        Array<{ r: number }>).map((x) => x.r);
+      expect(top).toHaveLength(2000);
+      expect(top).not.toContain(aBlob);
+    } finally { db.close(); }
     for (const sort of ['relevance', 'recency', 'hybrid']) {
       const r = GRX.cli(box, GRX.idA, ['grep', 'zqneedle', '--sort', sort, '--json']);
       expect(r.code, `${sort}: ${r.stderr}`).toBe(0);
-      expect(GRX.uuids(r)).toEqual([GRX.uuid(TA, 1)]);
-      expect(r.json?.total).toBe(1);
+      expect(GRX.uuids(r), sort).toEqual([GRX.uuid(TA, 1)]);
+      expect(r.json?.total, sort).toBe(1);
     }
-  }, HEAVY);
-  it('another project stays out of the family scope', () => {
+  }, 120_000);
+
+  it("DM46 (CLI half): a planted clear line naming another project's transcript leaves its text out of the family: default grep is 3", () => {
+    const db = rH.openStoreRO(box);
+    try {   // CONTROL: the text is stored and indexed; only the scope keeps it out
+      expect((db.prepare('SELECT count(*) AS n FROM blobs_fts WHERE blobs_fts MATCH ?').get('zqforeignword') as { n: number }).n).toBe(1);
+    } finally { db.close(); }
     expect(GRX.cli(box, GRX.idA, ['grep', 'zqforeignword']).code).toBe(3);
     expect(GRX.cli(box, GRX.idO, ['grep', 'zqforeignword']).code).toBe(0);
-  }, HEAVY);
+  }, 60_000);
 
-  it('returns fts-pending rather than an internal error if the table drops after the index gate', async () => {
-    const recall = await GRX.recall();
-    const rc = await GRX.rc(box, GRX.idA);
+  it("DM46 (node half, review focus 4): the second claim chains no epoch, so none of that transcript's nodes can enter the family", () => {
+    // A node's family is its epoch's (Tasks 8 and 9 take session_pk and epoch_seq from the epoch that holds the
+    // transcript), so a uuid the first family keeps is never a node of the second.
+    const db = rH.openStoreRO(box);
     try {
-      const racing = new Proxy(rc.db, {
-        get(t, k) {
-          if (k === 'prepare') return (sql: string) => {
-            if (/blobs_fts MATCH/.test(sql)) throw new Error('no such table: blobs_fts');
-            return t.prepare(sql);
-          };
-          const v = Reflect.get(t, k, t) as unknown;
-          return typeof v === 'function' ? (v as (...x: unknown[]) => unknown).bind(t) : v;
-        },
-      }) as RDatabaseSync;
-      const r = recall.runGrep({ ...rc, db: racing }, await GRX.grepArgs(['zqneedle']));
-      expect([r.exit, r.reason]).toEqual([7, 'fts-pending']);
-    } finally { rc.db.close(); }
-  }, HEAVY);
+      const count = (sql: string): number => (db.prepare(sql).get(GRX.idA, GRX.file(TO)) as { n: number }).n;
+      expect(count(`SELECT count(*) AS n FROM epochs e JOIN sessions s ON s.session_pk = e.session_pk
+        WHERE s.ccrc_id = ? AND e.cc_session_uuid = ?`), "no epoch of A names O's transcript").toBe(0);
+      expect(count(`SELECT count(*) AS n FROM nodes n JOIN sessions s ON s.session_pk = n.session_pk
+        JOIN transcripts t ON t.transcript_pk = n.transcript_pk WHERE s.ccrc_id = ? AND t.cc_session_uuid = ?`),
+      "no node of A sits on O's transcript").toBe(0);
+    } finally { db.close(); }
+    const r = GRX.cli(box, GRX.idA, ['grep', 'zqneedle', '--json']);
+    expect(r.code, r.stderr).toBe(0);
+    expect((r.json?.scope as { transcripts: number }).transcripts, "A's scope holds its own transcript only").toBe(1);
+  }, 60_000);
 });
 
 describe("grep's snippet localization and Task 12 helper seam (W1-B2 task 12 fix round 1, phase A)", () => {
