@@ -297,10 +297,10 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
   // Only the field moved, and `confirm` only as the key the server sent. Every answer is the server's: a reply
   // that reads is settled, a 2xx the guard cannot read was answered and may have landed (UNCONFIRMED_TEXT, the
   // shared "Saved — the answer could not be read" line, then a re-read), a 409 the guard reads opens the sheet, and
-  // any other refusal is toasted with the server's detail before a re-read. A rejection that never reached an
-  // answer (a network failure) may not even have left, so it gets its own line, STALL_CONFIRM_TEXT.unanswered
-  // (`unanswered-write-has-its-own-l0-line` (D-4043)), which never says "Saved" and never "Nothing was changed",
-  // then the same re-read.
+  // a refusal carrying one of the route's own codes is toasted with the server's detail before a re-read. Any other
+  // answer (a gateway's 502, a 500 after the store committed) confirms nothing: STALL_CONFIRM_TEXT.unconfirmed, with
+  // its detail (`an-answer-without-a-refusal-code-reads-unconfirmed` (D-4045)). No answer at all (a network failure)
+  // is STALL_CONFIRM_TEXT.unanswered (D-4043). Neither says "Saved" or "Nothing was changed"; both re-read.
   const write = (request: StallWatchRequest, confirm?: string): void => {
     setBusy(true);
     void api.setStallWatch(confirm === undefined ? request : { ...request, confirm })
@@ -320,8 +320,10 @@ function StallWatchBody({ view, stale, poll }: { view: StallWatchView; stale: bo
             setPending({ request, confirm: refusal.confirm });
             return;
           }
-          if (refusal.kind === 'unconfirmed') toast(STALL_CONFIRM_TEXT.unanswered);
-          else toast(fillStallText(STALL_CONFIRM_TEXT.refused, { detail: refusal.detail }), 'error');
+          if (refusal.kind === 'refused') {
+            toast(fillStallText(STALL_CONFIRM_TEXT.refused, { detail: refusal.detail }), 'error');
+          } else if (refusal.detail === null) toast(STALL_CONFIRM_TEXT.unanswered);
+          else toast(fillStallText(STALL_CONFIRM_TEXT.unconfirmed, { detail: refusal.detail }));
           reload();
         },
       )

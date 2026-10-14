@@ -2573,14 +2573,25 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
     expect(radio(STALL_LEVEL_TEXT.log.label)).not.toBeChecked();
   });
 
-  it('P2: a 500 toasts the cause the server named in its message, and re-reads', async () => {
+  it('P2 (D-4045): a 500 says the choice may or may not have been saved, with the cause the server named, and re-reads', async () => {
     const { read } = await mount(swView());
     const cause = 'stall settings unreadable, nothing written: disk gone';
     vi.spyOn(api, 'setStallWatch').mockRejectedValue(
       new ApiError(500, { statusCode: 500, error: 'Internal Server Error', message: cause }));
     fireEvent.click(radio(STALL_LEVEL_TEXT.log.label));
-    expect(await screen.findByText(`Nothing was changed: ${cause}`)).toBeInTheDocument();
+    expect(await screen.findByText(fillStallText(STALL_CONFIRM_TEXT.unconfirmed, { detail: cause }))).toBeInTheDocument();
     await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  });
+
+  it('P2 (D-4045): a gateway 502 says the choice may or may not have been saved, plain, never "Nothing was changed", and re-reads', async () => {
+    const { read } = await mount(swView());
+    vi.spyOn(api, 'setStallWatch').mockRejectedValue(new ApiError(502, 'Bad Gateway'));
+    fireEvent.click(radio(STALL_LEVEL_TEXT.log.label));
+    const t = await screen.findByText(fillStallText(STALL_CONFIRM_TEXT.unconfirmed, { detail: 'request failed (502)' }), { selector: '.toast' });
+    expect(t, 'a plain toast, as the unanswered line').not.toHaveClass('toast--error');
+    expect(screen.queryByText(/^Nothing was changed/)).toBeNull();
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    expect(radio(STALL_LEVEL_TEXT.log.label)).not.toBeChecked();
   });
 
   it('P2: a cancelled or refused quiet write leaves the select on the stored value, never the tap', async () => {

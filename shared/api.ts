@@ -9596,7 +9596,7 @@ export const STALL_NEXT_TEXT = { lead: 'Next step:', waitsOn: 'Waits on:', top: 
 export const STALL_QUIET_NOTE = "This also sets when a dialog left open is pushed to you, how far apart repeat pushes about one open dialog can be, and, while the further checks are on, the base of the back-off for a worker that keeps answering 'working'. While they are off there is no back-off and no hold while subagents run, so a worker that keeps waiting is checked once every quiet time.";
 /** The confirm sheet's lines (§13), chosen by the PWA's `stallConfirmLines` from the server's `StallWriteEffect`.
  *  Slots: `{label}` a level's label or `STALL_FOLLOW_LABEL`, `{value}` a formatted quiet time, `{name}` and `{gate}` a
- *  stage's, `{detail}` the server's refusal detail. */
+ *  stage's, `{detail}` the server's detail, for a refusal or for an answer that confirms nothing. */
 export const STALL_CONFIRM_TEXT = {
   title: 'Set the stall watch to {label}?',
   followTitle: '{label}?',
@@ -9623,9 +9623,9 @@ export const STALL_CONFIRM_TEXT = {
   quietDialogs: 'A dialog left open longer than {value} is pushed to you from the next sweep, and repeat pushes about one open dialog can come {value} apart.',
   unknown: "The fleet box's files could not be read, so what this choice turns on cannot be shown.",
   refused: 'Nothing was changed: {detail}',
-  // A write with no answer (a network failure): unanswered-write-has-its-own-l0-line (D-4043). The 2xx-unreadable
-  // arm keeps the PWA's shared UNCONFIRMED_TEXT.
+  // No answer at all: unanswered-write-has-its-own-l0-line (D-4043). An answer with no refusal code: D-4045.
   unanswered: 'Not confirmed — the server did not answer; the screen will re-check.',
+  unconfirmed: 'Not confirmed — the choice may or may not have been saved ({detail}); the screen will re-check.',
 } as const;
 export const STALL_RUNLESS_FOOTNOTE = 'Counts notices on runs only. Notices about a session on no run, or about a coordinator itself, sent or shadow, are not counted here; shadow ones appear only in the server log.';
 /** The section's headings and small words. `counts` takes the window from the reply's `windowMs`, so no text copies
