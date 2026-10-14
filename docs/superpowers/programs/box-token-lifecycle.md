@@ -1418,6 +1418,78 @@ spec's after wave 1.
     2c. How run 410 closes with no dispatched session is measured before anything advances it.
   - **`main` moved** from the plan's `e4405056e` to `300aedf88`. Of the plan's edited files only the doctor checks
     moved, by #381 (lines from 8047, and line 213's list), as the brief already says.
+- **2026-10-14 08:04 UTC: row 3a's PR #403 opened at `d1b35d82d`, re-measured; the bar committed before its review.**
+  - **How it was built.** In the coordinator's own worktree, by the operator's 23:19 direction: no dispatch, and run
+    410 stays `planned`. Tasks 2 to 7 each had a Sonnet·high implementer and an Opus·high reviewer, with a second Opus
+    lens on Tasks 3 and 5. Every task was approved with no fix round, and the reviews carried 36 minors. The
+    coordinator ruled them into four new commits, groups A, B, C and E (`44e8a4aee`, `c2b7c0522`, `eee4a90a9`,
+    `e3f7f31fd`), each with its own Opus review. A fifth, group F (`d1b35d82d`), closed the minors those reviews
+    passed on. No commit was amended once a later one sat on it.
+  - **The claim, re-measured:**
+    - PR #403 is open and mergeable. Its head equals the pushed tip, `d1b35d82d`.
+    - It has 12 commits, each with the noreply identity. The plan is the first commit, `de241128a`, and it equals the
+      evidence copy byte for byte; Task 7 and groups E and F then settled its text.
+    - It changes exactly the plan's 10 File Structure files.
+    - `main` is `b953aefa4`, 5 commits past the base `300aedf88`, none of them on these files. `merge-tree` is clean,
+      so no absorb is owed.
+    - The only claim on its files is the run's own. 1272 lapsed at its hard cap at 07:22, and 1289 re-took the same
+      10 paths at 07:26.
+    - The PR's title, body, commit messages and added lines name no private host, path, lane, account or project.
+    - No number from 4552 to 4570 is written with the prefix, in the tree, the messages or the PR body.
+    - CI: PR run 38532462858 and full run 38532471392 started at 08:03 on `d1b35d82d`. Their results are a later
+      entry.
+  - **What the verification measured** at `e3f7f31fd`, and again at the tip for every file group F touched:
+    - The plan's 18 suites, one file per call, all green (`doctor-box-token` 282, `token-rotation-e2e` 123,
+      `token-policy` 112, `token-shared` 39 and `single-definition` 537 among them).
+    - `ccrc-doctor`, `ccrc-install` and `ccrc-update` split by `-t`, with coverage reconciled against `vitest list`:
+      898, 299 and 502 listed tests, every one covered, 0 failed in 27 pattern runs.
+    - The live-shape set read `PASS` at all 12 commits.
+    - `GateInput`, `rotationGate` and `runTick`'s fresh-ready reset are byte-identical to the base. The token-sync op,
+      `ccrc-token-sync` and the claim door are not in the diff. `_BT_PY_STATE` gains no `'`.
+    - 4556, 4557 and 4558 are defined bare, and 4552 and 4554 amended in prose. 4559 and 4560 are unused.
+    - The PR body corrects the commit messages' miscounts, and lists every named limit and the minors left for the
+      review.
+  - **Bar for the merge.** This merge reaches both live boxes by auto. It changes the server's token driver, which runs
+    on the live server, and doctor's armed `box-token` verdicts, which count in every `update`, `rollout` and
+    `install` exit code. The held-out review must find NO confirmed finding of these classes (the plan's Review Focus
+    uses the same numbers):
+    1. **The live rotation path:** a change to anything in Review Focus 1's empty list, to `rotationGate`, to
+       `GateInput` or to the fresh-ready reset; a scheduled stage that bypasses the normal backoff, sits before a
+       press, sets `rotateRequested` or runs beside another rotation; or a scheduled-miss backoff that can hold an
+       owed rotation or a press, survive a promotion, reach a commit, or let a flapping link stage faster than once
+       per ladder step.
+    2. **The live boxes after the release:** on a box in today's shape, the armed doctor prints anything but `PASS`,
+       or an `update`, `rollout` or `install` exit code changes.
+    3. **The previous build:** a scheduled stage, hand-out or promotion persists a new key, owed word or hold word, so
+       the previous build, its PWA or its doctor would read `box-token.json` differently; or `nextRotationAt` is not
+       optional and additive.
+    4. **The anchor and the clock:** a null anchor not counted from `current.since`; a future anchor within one
+       interval that does not wait, or one beyond it that is not due; a boundary off by one; or a 4552 clamp row
+       edited.
+    5. **The residue:** a verdict or rc on Task 6's grid that differs from `e4405056e`, beyond the sentence and remedy
+       moves the plan names; or `unsearchable` folded into `unlisted`.
+    6. **Pins:** a second home of the interval or the slack, a scout spelling the value scan misses, or a new pin that
+       cannot red when its guard is mutated.
+    7. **Seams:** an overloaded null (`nextRotationAt` null for anything but no current value), or a second
+       definition of an L0 word.
+    8. **Secrets:** a value, a claim code or a sha256 in any output, log, test output or report; or doctor opening the
+       fleet file or `mail-previous.token`.
+    9. **Scope:** an edit outside the 10 files.
+    10. **Numbers:** anything defined beyond 4556, 4557 and 4558, or 4552 to 4570 written with the prefix.
+    11. **The public repo:** a private name in the diff, a commit message or the PR body.
+
+    Also, every Linux leg of both runs must stay green.
+  - **The rounds:** a bar-class finding gets one fix round, then a scoped review. After that review, a bar-class
+    finding stops the merge and goes to the operator. Coverage and prose findings, with the six minors the PR body
+    lists, go into one commit before the merge or become residue for 3b.
+  - **The review.** No review run can be dispatched for a work run that was never dispatched, so the coordinator runs
+    the held-out panel here, in its own shape (clause 14): three Opus lenses and a Sonnet refute pass per finding. The
+    lenses are the live rotation path and the previous build; doctor's live `PASS` and the residue's verdicts; and
+    pins, secrets, scope, numbers and the public repo. The panel reads the PR at `d1b35d82d`; the coordinator does not
+    read the diff itself. How run 410 closes with no dispatched session is measured before anything advances it.
+  - **A citation to re-point (mail 4787, review 438's F2).** #399 moved `server/test/single-definition.test.ts` down
+    by 21 lines. The spec cites its seven-day-threshold pin at `:4774-4780`, which now begins at `:4798`. No test
+    reads the citation. Row 3a does not edit the spec, so the next edit of the spec re-points it.
 
 ## Carried constraints
 
