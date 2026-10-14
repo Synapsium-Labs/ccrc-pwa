@@ -77,6 +77,23 @@ describe('nominalLines — the predictor for a row drawn as Markdown', () => {
     expect(nominalLines('x'.repeat(NOMINAL_MEASURE * 3))).toBe(3);
   });
 
+  // A LINE IS A LINE OF THE COLUMN THE ROW IS DRAWN IN. Counted against a fixed
+  // 60 characters, a row was the same number of "lines" at every width, and
+  // the learned px-per-line quietly carried the wrap of whatever width it was
+  // learned at. Measured in headless Chromium with the real virtuoso: learned
+  // on a phone held upright, a prompt-heavy session opened in landscape +32.6%
+  // off its true length.
+  it('wraps by the MEASURE IT IS GIVEN — the column\'s own, read in the browser', () => {
+    const para = 'x'.repeat(240);
+    expect(nominalLines(para, 40)).toBe(6);
+    expect(nominalLines(para, 80)).toBe(3);
+    expect(plainLines(para, 40)).toBe(6);
+    expect(plainLines(para, 80)).toBe(3);
+    // What does not wrap does not care how wide the column is.
+    expect(nominalLines('| a | b |', 20)).toBe(TABLE_ROW_LINES);
+    expect(nominalLines('```\n' + 'x\n'.repeat(40) + '```', 20)).toBe(2 + WELL_LINES);
+  });
+
   it('does not WRAP a table row however wide — the table scrolls sideways', () => {
     const row = `| ${'c'.repeat(400)} |`;
     expect(nominalLines(row)).toBe(TABLE_ROW_LINES);

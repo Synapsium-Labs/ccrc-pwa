@@ -18,8 +18,12 @@
 // kind. The predictor is what the row SHOWS — its prose, or the one row a
 // folded card or a collapsed tool call draws whatever it carries — which the
 // list knows at mount, before anything is rendered. The slope is a property of
-// the RENDERING (font, measure, line height), so it carries from session to
-// session, which a mean never could.
+// the RENDERING (font, line height), so it carries from session to session,
+// which a mean never could.
+//
+// AND FROM WIDTH TO WIDTH, because a line is counted in the column the row is
+// drawn in (`Measures`): the record is one per browser, and one browser is a
+// phone held upright and then on its side, or a window dragged narrower.
 //
 // WHAT IS REMEMBERED IS THE EVIDENCE, NOT THE LINE: the most recent measured
 // rows of each kind, as `(lines, px, row)` triples — never any text; `row` is
@@ -78,8 +82,15 @@ export const RESERVOIR_ROWS = 30;
  *  three visits as its rows displace the oldest. */
 export const VISIT_ROWS = 10;
 
-/** The record: `{ [kind]: [[lines, px, row], …] }`, newest last; `row` is `rowId`. */
-export const ROWS_KEY = 'ccrc:chat-row-samples';
+/** The record: `{ [kind]: [[lines, px, row], …] }`, newest last; `row` is `rowId`.
+ *
+ *  `-v2`: its lines are lines of the column the row was measured in. The
+ *  record before it counted every row against a fixed 60 characters — a
+ *  different unit, which no row of this one may be fitted together with. */
+export const ROWS_KEY = 'ccrc:chat-row-samples-v2';
+
+/** Records in a unit nothing reads any more; a save clears them away. */
+const RETIRED_KEYS = ['ccrc:chat-row-samples'] as const;
 
 /** `localStorage` throws outright in some privacy modes — on merely being
  *  named — and a thumbnailer or a preview frame can hand back a store that
@@ -101,8 +112,30 @@ const clampSlope = (b: number): number =>
   Math.min(MAX_PX_PER_LINE, Math.max(0, b));
 
 /**
+ * HOW MANY CHARACTERS OF PROSE ONE LINE HOLDS, in the two forms text wraps in:
+ * an assistant paragraph (`prose`, capped at the reading measure once the
+ * column is wide enough) and a user bubble (`bubble`, 85% of the row, no cap).
+ * Read in the browser, in the live column (`ChatList.tsx`'s `measuresOf`).
+ *
+ * WHY THE PREDICTOR NEEDS IT. Counted against a fixed measure a row is the same
+ * number of "lines" at every width, so the learned px-per-line carries the
+ * wrap of whatever width it was learned at: 35.5px per line for a bubble at
+ * 390px, 5.6px at 2560px. Measured in headless Chromium with the real
+ * virtuoso, a model learned on a phone held upright opened a prompt-heavy
+ * session in landscape +32.6% off its true length. Counted in the column's own
+ * lines the slope is the line height at every width (22-23.7px for a bubble,
+ * 20.6-22px for prose, from 360px to 2560px), and transfers: learned at one
+ * width and opened at another, every measured session opened within 6.6% of
+ * its true length (a session of screenshots aside — its thumbnails take no
+ * height until they load, at any width).
+ */
+export interface Measures { prose: number; bubble: number }
+
+/**
  * THE PREDICTOR for a row drawn as MARKDOWN (an assistant turn): how many lines
- * of the nominal measure this text would take.
+ * this text takes at `measure` characters a line — the column's own measure,
+ * `Measures.prose`. `NOMINAL_MEASURE` is only what a column that cannot be
+ * read (not laid out) is assumed to hold.
  *
  * It is deliberately NOT a pixel count. The three rules below are shape, drawn
  * from this tree's own CSS; the conversion from shape to pixels is the slope,
@@ -124,7 +157,10 @@ export const NOMINAL_MEASURE = 60;
 export const WELL_LINES = 10;
 export const TABLE_ROW_LINES = 1.58;
 
-export function nominalLines(text: string): number {
+/** The measures of a column nothing could be read from. */
+export const NOMINAL_MEASURES: Measures = { prose: NOMINAL_MEASURE, bubble: NOMINAL_MEASURE };
+
+export function nominalLines(text: string, measure: number = NOMINAL_MEASURE): number {
   const body = String(text ?? '');
   // No text is no lines: a row with nothing in it has no prose to price.
   if (body === '') return 0;
@@ -141,7 +177,7 @@ export function nominalLines(text: string): number {
     }
     if (inFence) { fenced += 1; continue; }
     if (/^\s*\|/.test(line)) { lines += TABLE_ROW_LINES; continue; }
-    lines += Math.max(1, Math.ceil(line.length / NOMINAL_MEASURE));
+    lines += Math.max(1, Math.ceil(line.length / measure));
   }
   // A turn cut off mid-block — a streaming assistant message — still saturates.
   if (inFence) lines += Math.min(fenced, WELL_LINES);
@@ -149,13 +185,14 @@ export function nominalLines(text: string): number {
 }
 
 /** The predictor for text drawn AS IT IS, `white-space: pre-wrap` — a user
- *  bubble, a pill. No Markdown happens there, so nothing saturates: a pasted
- *  fence is every one of its lines, and a `|` line is a line. */
-export function plainLines(text: string): number {
+ *  bubble, a pill — at `measure` characters a line. No Markdown happens there,
+ *  so nothing saturates: a pasted fence is every one of its lines, and a `|`
+ *  line is a line. */
+export function plainLines(text: string, measure: number = NOMINAL_MEASURE): number {
   const body = String(text ?? '');
   if (body === '') return 0;
   let lines = 0;
-  for (const line of body.split('\n')) lines += Math.max(1, Math.ceil(line.trimEnd().length / NOMINAL_MEASURE));
+  for (const line of body.split('\n')) lines += Math.max(1, Math.ceil(line.trimEnd().length / measure));
   return lines;
 }
 
@@ -451,5 +488,8 @@ export function rememberRows(
     // row's number: nothing else is stored, and no text ever is.
     if (rows.length > 0) out[b] = rows.map((r) => [Math.round(r.lines * 100) / 100, Math.round(r.px), r.id]);
   }
-  try { s.setItem(ROWS_KEY, JSON.stringify(out)); } catch { /* storage refused — keep the fallback */ }
+  try {
+    s.setItem(ROWS_KEY, JSON.stringify(out));
+    for (const k of RETIRED_KEYS) s.removeItem(k);
+  } catch { /* storage refused — keep the fallback */ }
 }

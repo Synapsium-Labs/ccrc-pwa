@@ -5,7 +5,7 @@
 // wraps react-virtuoso (sticks to the bottom unless the reader scrolled up —
 // then a "jump to latest" pill); ChatListInner is the same renderer as a
 // plain list, exported for jsdom tests.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import type { ChatEvent, MailEnvelope, TaskNotification } from '../../../shared/api';
@@ -21,9 +21,9 @@ import { MailCard } from './MailCard';
 import { TaskCard } from './TaskCard';
 import { MessageBubble, foldsAway, timeOf, type MessageEvent } from './MessageBubble';
 import {
-  FALLBACK_ITEM_HEIGHT, modelsOf, nominalLines, openingHeight, plainLines, rememberRows,
+  FALLBACK_ITEM_HEIGHT, NOMINAL_MEASURES, modelsOf, nominalLines, openingHeight, plainLines, rememberRows,
   rememberedRows, rowHeights, rowId, wellLines,
-  type HeightBucket, type MeasuredRow, type RowRecord, type RowShape,
+  type HeightBucket, type Measures, type MeasuredRow, type RowRecord, type RowShape,
 } from './itemHeight';
 import { ToolCard, askCardLines, type ToolResultEvent, type ToolUseEvent } from './ToolCard';
 import './chat.css';
@@ -524,20 +524,20 @@ function thumbRows(clips: number): number {
 }
 
 /** A message row, by the form `MessageBubble` draws it in. */
-function messageShape(event: MessageEvent): RowShape {
+function messageShape(event: MessageEvent, m: Measures): RowShape {
   if (foldsAway(event)) return { bucket: 'folded', lines: 0 };
   switch (event.kind) {
     case 'system':
       // A pill. The harness's own rows (`origin`) carry fixed one-line copy.
-      return { bucket: 'system', lines: event.origin === undefined ? plainLines(event.text) : 1 };
+      return { bucket: 'system', lines: event.origin === undefined ? plainLines(event.text, m.prose) : 1 };
     case 'user': {
       // `pre-wrap` prose with the clip paths taken out — they are drawn as a
       // grid of thumbnails above the bubble, not as lines of text.
       const { paths, rest } = splitClipPaths(event.text);
-      return { bucket: 'user', lines: plainLines(rest), attach: thumbRows(paths.length) };
+      return { bucket: 'user', lines: plainLines(rest, m.bubble), attach: thumbRows(paths.length) };
     }
     case 'assistant':
-      return { bucket: 'assistant', lines: nominalLines(event.text) };
+      return { bucket: 'assistant', lines: nominalLines(event.text, m.prose) };
   }
 }
 
@@ -564,14 +564,18 @@ function messageShape(event: MessageEvent): RowShape {
  *   - a user bubble, a pill and a mail body are drawn as they are written, so
  *     they are counted plainly (`plainLines`, `wellLines`) — only an assistant
  *     turn is Markdown, with its saturating fences (`nominalLines`).
+ *
+ * IN LINES OF THE COLUMN IT IS DRAWN IN: `m` is how many characters a line
+ * holds there (`measuresOf`) — a bubble's at a bubble's width, the rest at a
+ * paragraph's.
  */
-export function shapeOf(item: ChatItem): RowShape {
+export function shapeOf(item: ChatItem, m: Measures = NOMINAL_MEASURES): RowShape {
   switch (item.kind) {
     case 'divider': return { bucket: 'divider', lines: 1 };
-    case 'message': return messageShape(item.event);
+    case 'message': return messageShape(item.event, m);
     case 'tool': {
       const ask = askCardLines(item.use, item.result);
-      return { bucket: 'tool', lines: ask === null ? 1 : ask.reduce((n, row) => n + plainLines(row), 0) };
+      return { bucket: 'tool', lines: ask === null ? 1 : ask.reduce((n, row) => n + plainLines(row, m.prose), 0) };
     }
     case 'mail':
       // Sender row, meta row, one row per artifact path, then the body's well.
@@ -582,7 +586,7 @@ export function shapeOf(item: ChatItem): RowShape {
     case 'pending':
       return {
         bucket: 'pending',
-        lines: plainLines(item.send.text),
+        lines: plainLines(item.send.text, m.bubble),
         attach: thumbRows(item.send.attachments?.length ?? 0),
       };
     case 'working': return { bucket: 'working', lines: 0 };
@@ -620,14 +624,14 @@ interface Opening {
   seed: { ranges: { startIndex: number; endIndex: number; size: number }[]; scrollTop: number } | null;
 }
 
-function openWith(items: readonly ChatItem[]): Opening {
+function openWith(items: readonly ChatItem[], m: Measures): Opening {
   const record = rememberedRows();
   const models = modelsOf(record);
   // EVERY ROW GETS ITS OWN ESTIMATE, from what it shows. It can: the screen
   // gates this list behind `loading`, so the backlog has already arrived when
   // we first render. A kind this browser has not measured enough of takes the
   // fallback, substituted here and never stored.
-  const shapes = items.map(shapeOf);
+  const shapes = items.map((item) => shapeOf(item, m));
   const px = rowHeights(shapes, models, FALLBACK_ITEM_HEIGHT);
   // WHY SEED AT ALL, when `defaultItemHeight` already exists. That prop is ONE
   // number for every row virtuoso has not measured, so it can be right when
@@ -691,6 +695,14 @@ class RowMeter {
   private readonly rows = new Map<Element, () => MeteredRow>();
   private readonly taken = new Map<string, { bucket: HeightBucket; sample: MeasuredRow }>();
 
+  /** The column's measures AS THEY ARE when a row reports: a row re-wrapped
+   *  by a turned phone is counted in the new column's lines. */
+  private readonly measures: () => Measures;
+
+  constructor(measures: () => Measures) {
+    this.measures = measures;
+  }
+
   /** Measure `el` as the row `row()` is at the time; the return stops it. */
   observe(el: Element, row: () => MeteredRow): () => void {
     if (typeof ResizeObserver === 'undefined') return () => {};
@@ -724,7 +736,7 @@ class RowMeter {
     // A row that is not laid out — the screen hidden behind another — measures
     // 0, which is a measurement of nothing.
     if (!(px > 0) || !inOpeningForm(el)) return;
-    const shape = shapeOf(item);
+    const shape = shapeOf(item, this.measures());
     const thumbs = shape.attach ?? 0;
     // The thumbnails are their own term: the bubble's sample is the row
     // without them, and the grid's height is a sample of `attach`.
@@ -779,7 +791,162 @@ function MeasuredItem({
   return <div ref={el} className="chat-item">{children}</div>;
 }
 
-export function ChatList({
+/** Ordinary prose for the probe, so its average glyph is an ordinary one. */
+const PROBE_TEXT = 'the parser reads each record and the cache keeps the result so a later call returns at once unless the entry is stale ';
+
+/** No column holds fewer characters a line than this; a probe that reads
+ *  fewer was not laid out the way the rows are. */
+const MIN_MEASURE = 8;
+
+/**
+ * THE COLUMN'S MEASURES (`Measures`), read the only way they can be: by laying
+ * out, hidden, one assistant paragraph and one user bubble in the live column,
+ * and dividing each one's width by the width of an average glyph of the same
+ * text — so whatever the font, the reading measure or the column, a line in
+ * the predictor is a line on the screen.
+ *
+ * In a frame laid over the column that SCROLLS as virtuoso's scroller does, so
+ * the probe's rows are exactly as wide as the real ones, scrollbar gutter and
+ * all. A column that is not laid out — a screen hidden behind another — reads
+ * 0, and is taken to hold the nominal measure.
+ */
+export function measuresOf(column: HTMLElement): Measures {
+  const doc = column.ownerDocument;
+  const make = (tag: string, className: string | null, probe: string | null, text: string | null): HTMLElement => {
+    const el = doc.createElement(tag);
+    if (className !== null) el.className = className;
+    if (probe !== null) el.dataset.probe = probe;
+    if (text !== null) el.textContent = text;
+    return el;
+  };
+  const frame = make('div', null, null, null);
+  frame.setAttribute('aria-hidden', 'true');
+  frame.style.cssText = 'position:absolute;inset:0;overflow-y:scroll;visibility:hidden;pointer-events:none;contain:strict';
+  const row = make('div', 'chat-item', null, null);
+  const assist = make('div', 'msg-assist', null, null);
+  const para = make('p', null, 'prose', PROBE_TEXT.repeat(8));
+  // One line that never wraps, to weigh the average glyph: `.msg-assist` is a
+  // grid, so it must not stretch to the column either.
+  const glyphs = make('span', null, 'glyphs', PROBE_TEXT.repeat(2));
+  glyphs.style.cssText = 'white-space:nowrap;width:max-content;justify-self:start';
+  const bubble = make('div', 'msg-user', 'bubble', PROBE_TEXT.repeat(8));
+  assist.append(para, glyphs);
+  row.append(assist, bubble);
+  frame.append(row);
+  column.append(frame);
+  try {
+    const glyph = glyphs.getBoundingClientRect().width / (glyphs.textContent ?? '').length;
+    const prose = para.getBoundingClientRect().width;
+    // The bubble's text runs inside its padding and border.
+    const cs = getComputedStyle(bubble);
+    const inset = [cs.paddingLeft, cs.paddingRight, cs.borderLeftWidth, cs.borderRightWidth]
+      .reduce((n, v) => n + (parseFloat(v) || 0), 0);
+    const inBubble = bubble.getBoundingClientRect().width - inset;
+    if (!(glyph > 0) || !(prose > 0) || !(inBubble > 0)) return NOMINAL_MEASURES;
+    return {
+      prose: Math.max(MIN_MEASURE, Math.floor(prose / glyph)),
+      bubble: Math.max(MIN_MEASURE, Math.floor(inBubble / glyph)),
+    };
+  } finally {
+    frame.remove();
+  }
+}
+
+/** How long after it opens, or after its column changes width, the list may
+ *  still be moving on its own: re-wrapping and re-measuring the rows it has
+ *  rendered, and virtuoso moving the scroll position to keep them steady. */
+const SETTLE_MS = 1000;
+
+/** What a reader does to move the list themselves. Any of them ends the
+ *  settling at once: from then on, what the list does is the reader's doing. */
+const READER_INPUT = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
+
+/**
+ * THE COLUMN THE ROWS ARE DRAWN IN: its measures, read again whenever its width
+ * changes, and whether the list is SETTLING — moving on its own, as it opens
+ * or as its rows re-wrap to a new width, rather than by the reader's hand.
+ *
+ * A width change is read off the column's own ResizeObserver, created before
+ * the list and so before any of virtuoso's or the rows' observers: the browser
+ * delivers observers in the order they were made, so the column knows it
+ * changed before any row re-wrapped to it reports, and before virtuoso moves
+ * the scroll position for it.
+ */
+class Column {
+  private el: HTMLElement | null = null;
+  private observer: ResizeObserver | null = null;
+  private measured: Measures | null = null;
+  private width = 0;
+  private settleUntil = Number.NEGATIVE_INFINITY;
+  private readonly release = (): void => { this.settleUntil = Number.NEGATIVE_INFINITY; };
+
+  attach(el: HTMLElement): void {
+    this.el = el;
+    this.measured = measuresOf(el);
+    // The width it opens at — not the observer's first report, which a column
+    // not laid out yet (0 wide) never makes.
+    this.width = el.getBoundingClientRect().width;
+    this.settleUntil = performance.now() + SETTLE_MS;
+    if (typeof ResizeObserver !== 'undefined') {
+      this.observer = new ResizeObserver((entries) => {
+        for (const e of entries) this.resized(e.contentBoxSize?.[0]?.inlineSize ?? e.contentRect.width);
+      });
+      this.observer.observe(el);
+    }
+    for (const type of READER_INPUT) el.addEventListener(type, this.release, { capture: true, passive: true });
+  }
+
+  detach(): void {
+    this.observer?.disconnect();
+    this.observer = null;
+    for (const type of READER_INPUT) this.el?.removeEventListener(type, this.release, { capture: true });
+  }
+
+  /** What a line holds in this column now — read when it is attached, and
+   *  again on the first ask after its width changes. */
+  measures(): Measures {
+    if (this.el === null) return NOMINAL_MEASURES;
+    return (this.measured ??= measuresOf(this.el));
+  }
+
+  /** Whether the list is still moving on its own. */
+  settling(): boolean {
+    return performance.now() < this.settleUntil;
+  }
+
+  private resized(width: number): void {
+    if (width !== this.width) {
+      this.measured = null;
+      this.settleUntil = performance.now() + SETTLE_MS;
+    }
+    this.width = width;
+  }
+}
+
+export function ChatList(props: ChatListProps): ReactNode {
+  // THE COLUMN IS READ BEFORE THE LIST OPENS: its measures price every row the
+  // list opens with, so it must be laid out first. This renders the empty
+  // column, reads it in a layout effect, and renders the list into it — React
+  // re-renders synchronously from a layout effect, so the list still lands
+  // before the first paint.
+  const ref = useRef<HTMLDivElement>(null);
+  const [column] = useState(() => new Column());
+  const [ready, setReady] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el === null) return undefined;
+    column.attach(el);
+    setReady(true);
+    return () => column.detach();
+  }, [column]);
+  return (
+    <div className="chat-list" ref={ref}>
+      {ready && <ChatScroller {...props} column={column} />}
+    </div>
+  );
+}
+
+function ChatScroller({
   id,
   events,
   pending,
@@ -788,7 +955,8 @@ export function ChatList({
   onDiscard,
   askPending,
   onAnswer,
-}: ChatListProps): ReactNode {
+  column,
+}: ChatListProps & { column: Column }): ReactNode {
   const items = useMemo(
     () => buildChatItems(events, pending, busy),
     [events, pending, busy],
@@ -796,12 +964,34 @@ export function ChatList({
   const virtuoso = useRef<VirtuosoHandle>(null);
   const [atBottom, setAtBottom] = useState(true);
 
+  // A READER AT THE NEWEST TURN STAYS THERE WHILE THE LIST MOVES ON ITS OWN.
+  // Turning a phone or dragging a window re-wraps every rendered row, and
+  // virtuoso keeps what is in view steady by moving the scroll position; with
+  // rows rendered ABOVE the viewport (the overscan below) that move carried a
+  // reader who was at the newest turn away from it — measured in headless
+  // Chromium with the real virtuoso, 475-1675px above it with the pill up,
+  // where main stayed at 0. The same happens as a cold list opens and its rows
+  // measure taller than the fallback priced them. `followOutput` only answers
+  // NEW items. So while the column is settling (`Column.settling`), leaving the
+  // bottom is the list's doing, not the reader's: a reader who was there is
+  // put back. A reader who had scrolled up is not pinned and is never moved;
+  // a wheel, a touch or a key ends the settling at once.
+  const pinned = useRef(true);
+  const onAtBottom = useCallback((bottom: boolean): void => {
+    if (!bottom && pinned.current && column.settling()) {
+      virtuoso.current?.scrollToIndex({ index: 'LAST', align: 'end' });
+      return;
+    }
+    pinned.current = bottom;
+    setAtBottom(bottom);
+  }, [column]);
+
   // READ ONCE PER MOUNT, as a lazy initial state — storage is read and parsed
   // here and on no later render. Virtuoso takes `defaultItemHeight` and the
   // snapshot when it initialises; handing it different numbers later changes
   // nothing it reads. The NEXT visit gets the benefit of this one.
-  const [opened] = useState(() => openWith(items));
-  const [meter] = useState(() => new RowMeter());
+  const [opened] = useState(() => openWith(items, column.measures()));
+  const [meter] = useState(() => new RowMeter(() => column.measures()));
 
   // THE SNAPSHOT GOES TO VIRTUOSO ON THE MOUNT RENDER ONLY. Virtuoso reads it
   // once, on mount, but re-publishes every prop it is handed on every render,
@@ -836,7 +1026,7 @@ export function ChatList({
   }, [meter, opened]);
 
   return (
-    <div className="chat-list">
+    <>
       <Virtuoso
         ref={virtuoso}
         className="chat-scroller"
@@ -874,7 +1064,7 @@ export function ChatList({
         minOverscanItemCount={{ top: 4, bottom: 4 }}
         // Stick to the bottom while the reader is there; never yank them back.
         followOutput={(isAtBottom) => (isAtBottom ? 'smooth' : false)}
-        atBottomStateChange={setAtBottom}
+        atBottomStateChange={onAtBottom}
         initialTopMostItemIndex={OPEN_AT_NEWEST}
         alignToBottom
       />
@@ -889,6 +1079,6 @@ export function ChatList({
           Jump to latest <span aria-hidden="true">↓</span>
         </button>
       )}
-    </div>
+    </>
   );
 }

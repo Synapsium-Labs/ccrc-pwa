@@ -12,7 +12,12 @@
 //   - a visit saves when the page is hidden or closed, not only on a clean
 //     unmount, and counts once however many times it saves;
 //   - a row counts once however many visits measure it: a session reopened
-//     three times is the same rows, not three times as many.
+//     three times is the same rows, not three times as many;
+//   - a row's lines are lines of the column it is drawn in, read as the list
+//     opens and again when the column changes width, so a model learned at
+//     one width prices another;
+//   - a reader at the newest turn stays there while the list moves on its
+//     own — as it opens, and as its rows re-wrap to a new width.
 //
 // Virtuoso is replaced by a list that renders every row, and ResizeObserver by
 // one the test drives: `measure()` plays the browser, handing each row's
@@ -28,6 +33,8 @@ const seen = vi.hoisted(() => ({
   props: null as Record<string, unknown> | null,
   renders: 0,
   all: [] as Record<string, unknown>[],
+  /** Every `scrollToIndex` the list asked of its handle. */
+  scrolls: [] as unknown[],
 }));
 
 vi.mock('react-virtuoso', async () => {
@@ -39,6 +46,9 @@ vi.mock('react-virtuoso', async () => {
       seen.props = props;
       seen.renders += 1;
       seen.all.push(props);
+      React.useImperativeHandle(props.ref as React.Ref<unknown>, () => ({
+        scrollToIndex: (location: unknown) => { seen.scrolls.push(location); },
+      }));
       const count = props.totalCount as number;
       const content = props.itemContent as (i: number) => ReactNode;
       const keyOf = props.computeItemKey as (i: number) => string | number;
@@ -78,7 +88,8 @@ class FakeResizeObserver {
   report(px: (row: number) => number | undefined): void {
     const rows = Array.from(document.querySelectorAll('.chat-item'));
     const entries = [...this.watched].flatMap((target) => {
-      const h = px(rows.indexOf(target));
+      const row = rows.indexOf(target);
+      const h = row < 0 ? undefined : px(row);
       return h === undefined ? [] : [{
         target,
         borderBoxSize: [{ blockSize: h, inlineSize: 390 }],
@@ -89,7 +100,47 @@ class FakeResizeObserver {
     });
     if (entries.length > 0) this.cb(entries, this as unknown as ResizeObserver);
   }
+  /** The chat column itself is now `width` wide — a phone turned, a window dragged. */
+  reportColumn(width: number): void {
+    const entries = [...this.watched].filter((t) => t.classList.contains('chat-list')).map((target) => ({
+      target,
+      borderBoxSize: [{ blockSize: 600, inlineSize: width }],
+      contentBoxSize: [{ blockSize: 600, inlineSize: width }],
+      devicePixelContentBoxSize: [],
+      contentRect: { height: 600, width } as DOMRectReadOnly,
+    } as unknown as ResizeObserverEntry));
+    if (entries.length > 0) this.cb(entries, this as unknown as ResizeObserver);
+  }
 }
+
+/** THE COLUMN'S GEOMETRY. jsdom lays nothing out, so the list's probe of its
+ *  column reads 0 everywhere and the list falls back to the nominal measure —
+ *  which every test keeps unless it sets `layout.column`. A test ABOUT the
+ *  column's width answers the probe here as a browser would at that width:
+ *  8px glyphs, a row padded 16px a side, a paragraph capped at the 680px
+ *  reading measure, and a bubble at 85% of the row. */
+const layout = { column: null as number | null };
+const GLYPH_PX = 8;
+const realRect = Element.prototype.getBoundingClientRect;
+const probedWidth = (el: Element): number | null => {
+  const part = el instanceof HTMLElement ? el.dataset.probe : undefined;
+  if (layout.column === null || part === undefined) return null;
+  const row = layout.column - 32;
+  if (part === 'glyphs') return (el.textContent ?? '').length * GLYPH_PX;
+  if (part === 'prose') return Math.min(row, 680);
+  return Math.floor(row * 0.85);
+};
+/** Characters a line holds at `width`, in each form — what the probe should read. */
+const perLine = (width: number) => ({
+  prose: Math.floor(Math.min(width - 32, 680) / GLYPH_PX),
+  bubble: Math.floor(Math.floor((width - 32) * 0.85) / GLYPH_PX),
+});
+
+/** The column changes width under an open list. */
+const widen = (width: number): void => {
+  layout.column = width;
+  act(() => { for (const o of FakeResizeObserver.live) o.reportColumn(width); });
+};
 
 /** Every row renders at the height `px` gives it (by row index); a row `px`
  *  answers `undefined` for is not reported at all. */
@@ -110,6 +161,11 @@ const pagehide = (): void => { act(() => { window.dispatchEvent(new Event('pageh
 
 beforeEach(() => {
   vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+  vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function rect(this: Element): DOMRect {
+    const width = probedWidth(this);
+    if (width === null) return realRect.call(this);
+    return { width, height: 0, top: 0, left: 0, right: width, bottom: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+  });
   unhide();
 });
 
@@ -117,9 +173,12 @@ afterEach(() => {
   cleanup();
   FakeResizeObserver.live.clear();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  layout.column = null;
   seen.props = null;
   seen.renders = 0;
   seen.all = [];
+  seen.scrolls = [];
   localStorage.clear();
   unhide();
 });
@@ -670,5 +729,157 @@ describe('the chat list opens at the newest turn', () => {
     rerender(<ChatList id="s" events={[...exchanges(), { kind: 'assistant', uuid: 'late', ts: at(60), text: 'more' }]} pending={[]} />);
     expect(seen.renders).toBeGreaterThan(1);
     expect(Object.is(seen.props?.initialTopMostItemIndex, first)).toBe(true);
+  });
+});
+
+// THE COLUMN'S OWN WIDTH (review 191, measured across widths). A row's "lines"
+// were counted against a fixed 60 characters, so a row was the same number of
+// lines at every width and the learned px-per-line carried the wrap of
+// whatever width it was learned at — and the record is one per BROWSER, kept
+// across a phone turned on its side or a window dragged narrower. Measured in
+// headless Chromium with the real virtuoso: learned upright on a phone, a
+// prompt-heavy session opened in landscape +32.6% off its true length, a
+// prose-heavy one +19.3%.
+describe('a line is a line of the column the row is drawn in', () => {
+  const WORDS = ['the', 'cache', 'keeps', 'each', 'result', 'until', 'it', 'goes', 'stale'];
+  const prose = (n: number): string => Array.from({ length: n }, (_, i) => WORDS[i % WORDS.length]).join(' ');
+  /** Five exchanges eleven minutes apart (so five date dividers), each an ask
+   *  and a reply that wrap: from one line at any width to whole paragraphs. */
+  const LENGTHS = [8, 30, 70, 130, 220];
+  const wordy = (): ChatEvent[] => LENGTHS.flatMap((n, g): ChatEvent[] => [
+    { kind: 'user', uuid: `wu${g}`, ts: at(g * 11), text: prose(n) },
+    { kind: 'assistant', uuid: `wa${g}`, ts: at(g * 11), text: prose(n * 2) },
+  ]);
+  const wrapped = (text: string, chars: number): number => Math.max(1, Math.ceil(text.length / chars));
+  /** What those rows render at in a column `width` wide: a divider 35px; a
+   *  bubble 20px of padding and 24px a line; a reply 8px and 24px a line —
+   *  at however many characters a line holds THERE. */
+  const truthAt = (width: number): number[] => {
+    const fit = perLine(width);
+    return LENGTHS.flatMap((n) => [35, 20 + 24 * wrapped(prose(n), fit.bubble), 8 + 24 * wrapped(prose(n * 2), fit.prose)]);
+  };
+
+  it('a model learned on a phone prices the same rows right on a desktop, and back', () => {
+    for (const [learnAt, openAt] of [[390, 1000], [1000, 390]] as const) {
+      localStorage.clear();
+      layout.column = learnAt;
+      visit(wordy(), 'learn');
+      measure(truthAt(learnAt));
+      pagehide();
+      cleanup();
+
+      layout.column = openAt;
+      visit(wordy(), 'open');
+      expect(seededRows()).toEqual(truthAt(openAt));
+      cleanup();
+    }
+  });
+
+  it('prices a row measured AFTER the column changed width in the new column\'s lines', () => {
+    layout.column = 390;
+    visit(wordy());
+    // Turned on its side mid-visit: every row re-wraps and reports again.
+    widen(1000);
+    measure(truthAt(1000));
+    cleanup();
+
+    layout.column = 1000;
+    visit(wordy(), 'next');
+    expect(seededRows()).toEqual(truthAt(1000));
+  });
+
+  it('does not read a record counted at the old, fixed measure — and clears it away', () => {
+    // A record written by the fixed-60 build: three dividers at 35px. Read
+    // now, its lines are a different unit from every row measured since.
+    const OLD = 'ccrc:chat-row-samples';
+    localStorage.setItem(OLD, JSON.stringify({ divider: [[1, 35, 1], [1, 35, 2], [1, 35, 3]] }));
+    visit([{ kind: 'user', uuid: 'u0', ts: at(0), text: 'ask' }]);
+    expect(seen.props?.restoreStateFrom).toBeUndefined();
+    measure([35, 70]);
+    cleanup();
+    expect(localStorage.getItem(OLD)).toBeNull();
+    expect(stored().divider.length).toBe(1);
+  });
+});
+
+// THE LIST MOVES ON ITS OWN, and a reader at the newest turn stays there
+// through it (review 191, measured across widths). Turning a phone or
+// dragging a window re-wraps every rendered row, and virtuoso keeps what is in
+// view steady by moving the scroll position — with rows rendered ABOVE the
+// viewport (`increaseViewportBy`, `minOverscanItemCount`) that move carried a
+// reader who was at the newest turn 475-1675px above it, with the "Jump to
+// latest" pill up. `followOutput` only answers NEW items. The same happens as
+// a cold list opens: rows measured taller than the fallback left it 35-102px
+// above the newest turn, pill up, where main opened at the bottom.
+describe('a reader at the newest turn stays there while the list moves on its own', () => {
+  let clock = 0;
+  beforeEach(() => {
+    clock = 10_000;
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+  });
+  const atBottom = (bottom: boolean): void => {
+    act(() => { (seen.props?.atBottomStateChange as (b: boolean) => void)(bottom); });
+  };
+  const pill = (): Element | null => document.querySelector('.jump-latest');
+  const LAST = { index: 'LAST', align: 'end' };
+
+  it('through a change of width: the rows re-wrap, the reader stays at the newest turn', () => {
+    visit();
+    atBottom(true);
+    clock += 5_000;
+    widen(844);
+    atBottom(false);
+    expect(seen.scrolls).toEqual([LAST]);
+    expect(pill()).toBeNull();
+    // Back at the bottom, and a second turn of the phone holds as well.
+    atBottom(true);
+    widen(390);
+    atBottom(false);
+    expect(seen.scrolls).toEqual([LAST, LAST]);
+    expect(pill()).toBeNull();
+  });
+
+  it('while it opens: rows taller than they were priced do not leave the reader above the newest turn', () => {
+    visit();
+    atBottom(false);
+    expect(seen.scrolls).toEqual([LAST]);
+    expect(pill()).toBeNull();
+  });
+
+  it('a reader who had scrolled up is left exactly where they were', () => {
+    visit();
+    clock += 5_000;
+    atBottom(false);
+    expect(pill()).not.toBeNull();
+    widen(844);
+    atBottom(false);
+    expect(seen.scrolls).toEqual([]);
+    expect(pill()).not.toBeNull();
+  });
+
+  it('once the list has settled, leaving the bottom is the reader\'s own doing', () => {
+    visit();
+    clock += 5_000;
+    widen(844);
+    clock += 5_000;
+    atBottom(false);
+    expect(seen.scrolls).toEqual([]);
+    expect(pill()).not.toBeNull();
+  });
+
+  it('the reader\'s own hand ends the settling at once — a wheel, a touch, a key', () => {
+    for (const touch of [
+      (el: Element) => fireEvent.wheel(el),
+      (el: Element) => fireEvent.touchStart(el),
+      (el: Element) => fireEvent.pointerDown(el),
+      (el: Element) => fireEvent.keyDown(el, { key: 'PageUp' }),
+    ]) {
+      visit();
+      touch(document.querySelector('[data-testid="virtuoso"]')!);
+      atBottom(false);
+      expect(seen.scrolls).toEqual([]);
+      expect(pill()).not.toBeNull();
+      cleanup();
+    }
   });
 });
