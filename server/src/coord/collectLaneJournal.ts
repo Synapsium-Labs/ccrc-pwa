@@ -19,10 +19,10 @@
 //   bytes before the call (or removes a file the call created), best effort: on a file it created, any failure after
 //   that create unlinks it and fsyncs the directory; on a file that stood, any failure after the fstat that measured
 //   its length truncates it back to that length and fsyncs it. The undo runs before the journal's own close, and
-//   neither the undo's error nor that close's error ever replaces the original. (The directory descriptor's own close
-//   can replace a failing directory fsync's error; the undo still runs.) It never retries, and the reader stays
+//   neither the undo's error nor that close's error ever replaces the original. It never retries, and the reader stays
 //   strict: a process killed mid-write, or an undo that itself fails, can still leave a tail that reads malformed
-//   (spec §5.2). A close that throws after a successful fsync is not undone: the record is durable.
+//   (spec §5.2). A close that throws after a successful fsync is not undone: the record is durable. When both fsyncs
+//   succeeded on a file it created and only the directory's close throws, that error is dropped, and the row commits.
 //   `CoordStore.setCollectLane` is its one caller, inside its transaction, BEFORE the row changes.
 // - No answer and no thrown code carries the path. A Node fs error's `message` names it, so only its `code` is read
 //   (spec §5.6: responses never expose the journal path).
@@ -120,7 +120,7 @@ export function collectLaneJournalAt(logPath: string): CollectLaneJournal & { re
         fsyncSync(fd);
         if (created) {
           const dfd = openSync(dir, FS.O_RDONLY);
-          try { fsyncSync(dfd); } finally { closeSync(dfd); }
+          try { fsyncSync(dfd); } finally { try { closeSync(dfd); } catch { /* the original error stands */ } }
         }
       } catch (err) {
         // The self-undo (spec §5.2): return the file to its bytes before this call, BEFORE the close, best effort. A file

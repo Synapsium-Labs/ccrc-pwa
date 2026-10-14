@@ -322,4 +322,64 @@ describe('a failed journal append undoes its own bytes (path-identity spec 2026-
     expect(log.filter((c) => c.name === 'unlinkSync'), 'an existing journal is never removed').toEqual([]);
     expect(controlOf(s, j)).toMatchObject({ kind: 'coherent', generation: 1 });
   });
+
+  it('(xi) the created arm’s directory fsync throws and the directory’s close throws too: setCollectLane’s code is the fsync’s, the file is absent, and the seed coherent', () => {
+    const { s, j } = opened();
+    const dirFds = fdsOpenedOn(path.dirname(j.logPath));
+    let fsyncOn: unknown = null;
+    let closeOn: unknown = null;
+    const f = failOnce('fsyncSync', (fd) => dirFds.includes(fd as number), (_real, fd) => {
+      fsyncOn = fd;
+      throw fsError('EIO: i/o error, fsync', 'EIO');
+    });
+    // The descriptor IS released (Linux closes it even when close reports an error); only the report is the fault.
+    const c = failOnce('closeSync', (fd) => dirFds.includes(fd as number), (real, fd) => {
+      closeOn = fd;
+      real(fd);
+      throw fsError('EBADF: bad file descriptor, close', 'EBADF');
+    });
+    h.log = [];
+    const out = s.setCollectLane(live(s, j, NODE_A), AT, j);
+    const log = h.log;
+    h.log = null;
+    expect(f.fired(), 'CONTROL: the directory fsync threw').toBe(1);
+    expect(c.fired(), 'CONTROL: the directory close threw').toBe(1);
+    const journalFd = log.find((x) => x.name === 'writeSync')?.args[0];
+    expect(fsyncOn, 'CONTROL: the fsync fault is on the success path’s directory descriptor').toBe(dirFds[0]);
+    expect(closeOn, 'CONTROL: the close fault is on that same directory descriptor').toBe(dirFds[0]);
+    expect(closeOn, 'CONTROL: never on the journal’s descriptor').not.toBe(journalFd);
+    h.hooks.clear();
+    expect(out).toEqual({ kind: 'failed', phase: 'append', code: 'EIO' });
+    expect(existsSync(j.logPath), 'the file this call created is still there').toBe(false);
+    expect(rawRow(s)).toEqual([SEED_RAW]);
+    expect(controlOf(s, j)).toMatchObject({ kind: 'coherent', generation: 0, bootstrap: true });
+  });
+
+  it('(xii) the created arm’s fsyncs succeed and only the directory’s close throws: the write is written, the file holds the record, and the row commits at that generation', () => {
+    const { s, j } = opened();
+    const dirFds = fdsOpenedOn(path.dirname(j.logPath));
+    let closeOn: unknown = null;
+    // The descriptor IS released (Linux closes it even when close reports an error); only the report is the fault.
+    const c = failOnce('closeSync', (fd) => dirFds.includes(fd as number), (real, fd) => {
+      closeOn = fd;
+      real(fd);
+      throw fsError('EBADF: bad file descriptor, close', 'EBADF');
+    });
+    h.log = [];
+    const out = s.setCollectLane(live(s, j, NODE_A), AT, j);
+    const log = h.log;
+    h.log = null;
+    expect(c.fired(), 'CONTROL: the directory close threw').toBe(1);
+    const journalFd = log.find((x) => x.name === 'writeSync')?.args[0];
+    expect(closeOn, 'CONTROL: the close fault is on the success path’s directory descriptor').toBe(dirFds[0]);
+    expect(closeOn, 'CONTROL: never on the journal’s descriptor').not.toBe(journalFd);
+    expect(log.filter((x) => x.name === 'fsyncSync').slice(0, 2).map((x) => x.args[0]),
+      'CONTROL: both fsyncs ran and succeeded, the file’s then the directory’s').toEqual([journalFd, dirFds[0]]);
+    h.hooks.clear();
+    expect(out).toMatchObject({ kind: 'written', generation: 1 });
+    expect(readFileSync(j.logPath, 'utf8')).toBe('{"generation":1}\n');
+    expect(s.collectLaneRow(), 'the row commits at that generation')
+      .toMatchObject({ kind: 'row', row: { choice: 'live', fleetNodeId: NODE_A, generation: 1n } });
+    expect(controlOf(s, j)).toMatchObject({ kind: 'coherent', generation: 1, bootstrap: false });
+  });
 });
