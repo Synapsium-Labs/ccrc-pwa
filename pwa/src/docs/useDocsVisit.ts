@@ -311,11 +311,20 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       st.refreshTimers.delete(key);
     }
     st.refreshInflight.add(key);
+    const before = st.freshness.get(key);
     st.freshness.set(key, { s: 'fetching', reason });
     const body = { ref: target.ref === null ? null : docsRefText(target.ref), reason };
     void loadersRef.current.refresh(target.project, body).then((a) => {
       st.refreshInflight.delete(key);
-      if (!st.alive) return;
+      if (!st.alive) {
+        // The answer is dropped, so the chip must not stay `fetching` for a screen shown again: it goes back to what it
+        // showed before this POST (the default when it showed nothing).
+        if (st.freshness.get(key)?.s === 'fetching') {
+          if (before === undefined) st.freshness.delete(key);
+          else st.freshness.set(key, before);
+        }
+        return;
+      }
       // Numbered when it ARRIVES: the route read its tree after its fetch, so it is newer than any GET that
       // started before this answer, however early the POST began.
       applyRefresh(target, key, reason, nextSeq(), a);

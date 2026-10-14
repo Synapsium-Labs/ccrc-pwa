@@ -4,6 +4,7 @@
 // failure changes only the freshness, its tree failure keeps the listing; fetch-too-soon and a young lock retry once,
 // a stale lock and an unmeasured one never. Loaders are spies; nothing reaches a server.
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Activity, type ReactNode } from 'react';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { DOCS_STALE_MS, type DocsPageLocation } from '../../shared/docs';
 import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
@@ -550,5 +551,59 @@ describe('T13 review 3-6 and 4-5: a sign-in clears a refresh that failed for wan
     act(() => clearAuthLost());
     await flush();
     expect(result.current.freshness).toEqual({ s: 'refresh-failed', answer: { s: 'unreachable' } });
+  });
+});
+
+describe('T13 review A-2: a refresh that answers while the screen is hidden leaves no fetching chip', () => {
+  /** The hook under an Activity boundary, so `mode` hides it (effect cleanups run) and shows it again. */
+  function hideable(loaders: DocsLoaders, url: string) {
+    let mode: 'visible' | 'hidden' = 'visible';
+    const wrapper = ({ children }: { children: ReactNode }) => <Activity mode={mode}>{children}</Activity>;
+    const props = { page: pageAt(url) as DocsPageLocation | null };
+    const r = renderHook((p: { page: DocsPageLocation | null }) => useDocsVisit(p.page, loaders), { initialProps: props, wrapper });
+    return {
+      result: r.result,
+      set: (m: 'visible' | 'hidden') => {
+        mode = m;
+        r.rerender(props);
+      },
+    };
+  }
+
+  it('the answer is dropped and a screen shown again reads idle, not fetching', async () => {
+    const f = fakeLoaders({ tree: due() });
+    let answer: (a: DocsRefreshLoaderAnswer) => void = () => {};
+    f.refresh.mockImplementationOnce(() => new Promise((r) => { answer = r; }));
+    const h = hideable(f.loaders, '/docs/demo');
+    await flush();
+    expect(h.result.current.freshness).toEqual({ s: 'fetching', reason: 'auto' });
+    h.set('hidden');
+    await flush();
+    await act(async () => answer(okRefresh()));
+    await flush();
+    h.set('visible');
+    await flush();
+    expect(h.result.current.freshness).toEqual({ s: 'idle' });
+    expect(f.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('a manual refresh dropped the same way gives the chip back what it showed before', async () => {
+    const f = fakeLoaders({ tree: due() });
+    let answer: (a: DocsRefreshLoaderAnswer) => void = () => {};
+    const h = hideable(f.loaders, '/docs/demo');
+    await flush();
+    expect(h.result.current.freshness.s).toBe('answered');
+    const before = h.result.current.freshness;
+    f.refresh.mockImplementationOnce(() => new Promise((r) => { answer = r; }));
+    act(() => h.result.current.refreshManual());
+    await flush();
+    expect(h.result.current.freshness).toEqual({ s: 'fetching', reason: 'manual' });
+    h.set('hidden');
+    await flush();
+    await act(async () => answer(okRefresh()));
+    await flush();
+    h.set('visible');
+    await flush();
+    expect(h.result.current.freshness).toEqual(before);
   });
 });
