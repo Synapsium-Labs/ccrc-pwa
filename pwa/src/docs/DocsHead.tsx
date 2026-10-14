@@ -149,8 +149,9 @@ export type FreshChipState = 'none' | 'never' | 'ok' | 'local' | 'failed' | 'fet
  *  own `soon` (its one automatic retry pending) carries it; an answered `fetch-too-soon` past that retry (a second one
  *  in the visit) is `soon` too (spec 4.5: an answered fetch-too-soon is the `soon` state), counted from the answer's
  *  `retryAfterMs` and when it landed, with no retry behind it. The time can lie in the past: a retry dropped because
- *  the user left the key leaves its `soon` behind, and a second answer's wait runs out with nothing after it. The
- *  chip then falls back to the stamp (`freshnessChip`). */
+ *  the user left the key leaves its `soon` behind, and a second answer's wait runs out with nothing after it. Both
+ *  readers then treat the wait as over: the chip falls back to the stamp (`freshnessChip`), and the no-listing page's
+ *  fetch note, which has no stamp, says nothing (`fetchNoteOf`, DocsScreen). Neither counts "again in 0s". */
 export function soonUntil(freshness: Freshness): number | null {
   if (freshness.s === 'soon') return freshness.retryAt;
   if (freshness.s === 'answered' && freshness.fetch.state === 'failed' && freshness.fetch.failure.failure === 'fetch-too-soon') {

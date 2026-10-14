@@ -103,10 +103,16 @@ function slashRedirect(page: DocsPageLocation, tree: DocsTreeOk): Redirect | nul
 
 /** What Fetch from origin is doing or how it ended, for a page that has no listing (so no chip): the chip's own
  *  sentences for the states a manual fetch can leave, from the visit's freshness. `null`: nothing to say (no fetch yet,
- *  or one that ran and left the ref unresolved). */
+ *  or one that ran and left the ref unresolved). A `soon` wait (`soonUntil`: the visit's pending retry, or an answered
+ *  `fetch-too-soon`) counts down only while `now < until`, so `n` is at least 1 and never reads "again in 0s"; from
+ *  `until` on (nothing is due and nothing is pending) the note is what it would be with no `soon`, as the chip's is
+ *  (`freshnessChip`). This page has no stamp to fall back to, so that is `null`: an answered `fetch-too-soon` past its
+ *  wait is not a `failed` note either. */
 function fetchNoteOf(freshness: Freshness, now: number): { state: FreshChipState; text: string } | null {
   const until = soonUntil(freshness);
-  if (until !== null) return { state: 'soon', text: fillSentence(DOCS_HEAD_TEXT.freshSoon, { n: Math.max(0, Math.ceil((until - now) / 1000)) }) };
+  if (until !== null) {
+    return now < until ? { state: 'soon', text: fillSentence(DOCS_HEAD_TEXT.freshSoon, { n: Math.ceil((until - now) / 1000) }) } : null;
+  }
   switch (freshness.s) {
     case 'fetching':
       return { state: 'fetching', text: DOCS_HEAD_TEXT.freshFetching };

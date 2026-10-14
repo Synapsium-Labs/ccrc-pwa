@@ -949,6 +949,65 @@ describe('T13 review 3-2: Fetch from origin on an unresolved ref says what it is
   });
 });
 
+describe('Review 450 F3: the no-listing page\'s fetch note stops counting at the end of its wait, as the chip does', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const advance = (ms: number): Promise<void> => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+  const tooSoon = (ms: number): ReturnType<typeof okRefresh> => okRefresh(fetchFailed('fetch-too-soon', { retryAfterMs: ms }), failedAnswer('unresolved-ref').body);
+  const noteText = (c: HTMLElement): string | undefined => c.querySelector('.docs-fail-fresh')?.textContent ?? undefined;
+
+  it('a second fetch-too-soon (past the visit\'s one automatic retry) counts down from 1s, then leaves no note', async () => {
+    vi.useFakeTimers();
+    const f = fakeLoaders({ tree: failedAnswer('unresolved-ref') });
+    f.refresh.mockResolvedValueOnce(tooSoon(2000)).mockResolvedValueOnce(tooSoon(4000));
+    const { container } = open('/docs/demo?ref=ws/a', f);
+    await advance(10);
+    fireEvent.click(screen.getByRole('button', { name: 'Fetch from origin' }));
+    await advance(10);
+    expect(f.refresh).toHaveBeenCalledTimes(1);
+    expect(noteText(container)).toMatch(/^fetched moments ago; again in [12]s$/);
+    await advance(2100);
+    expect(f.refresh).toHaveBeenCalledTimes(2);
+    expect(noteText(container)).toMatch(/^fetched moments ago; again in [1-4]s$/);
+    // Never "again in 0s" while it counts: every second of the wait reads at least 1.
+    for (let i = 0; i < 3; i += 1) {
+      await advance(1000);
+      const t = noteText(container);
+      if (t !== undefined) expect(t).toMatch(/^fetched moments ago; again in [1-9]\d*s$/);
+    }
+    await advance(1000);
+    expect(f.refresh).toHaveBeenCalledTimes(2);
+    expect(noteText(container)).toBeUndefined();
+    await advance(6000);
+    expect(noteText(container)).toBeUndefined();
+    await advance(120_000);
+    expect(noteText(container)).toBeUndefined();
+    expect(container.textContent).not.toContain('again in 0s');
+    expect(screen.getByRole('button', { name: 'Fetch from origin' })).toBeEnabled();
+  });
+
+  it('a retry dropped because the user left the key: after the wait there is no "again in 0s"', async () => {
+    vi.useFakeTimers();
+    const f = fakeLoaders({ tree: failedAnswer('unresolved-ref') });
+    f.refresh.mockResolvedValueOnce(tooSoon(3000)).mockResolvedValue(tooSoon(3000));
+    const { container } = open('/docs/demo?ref=ws/a', f);
+    await advance(10);
+    fireEvent.click(screen.getByRole('button', { name: 'Fetch from origin' }));
+    await advance(10);
+    expect(noteText(container)).toMatch(/^fetched moments ago; again in [1-3]s$/);
+    act(() => { navigate('/docs/demo?ref=ws/b'); });
+    await advance(3500);
+    expect(f.refresh).toHaveBeenCalledTimes(1);
+    act(() => { navigate('/docs/demo?ref=ws/a'); });
+    await advance(10);
+    expect(f.refresh).toHaveBeenCalledTimes(1);
+    await advance(6000);
+    expect(noteText(container)).toBeUndefined();
+    await advance(120_000);
+    expect(noteText(container)).toBeUndefined();
+    expect(container.textContent).not.toContain('again in 0s');
+  });
+});
+
 describe('Review 439 F3: the not-contained banner describes the pin, and a Re-list through the visit clears it', () => {
   /** A leaf whose file answer says its commit (COMMIT_A) is no longer on the served ref. */
   const notContained = (): DocsFileAnswer => {
