@@ -676,6 +676,46 @@ jobs:
       - if: env.CCRC_LEG == 'run'
         run: test -f server/dist-pwa/index.html
 
+  # THE REAL-BROWSER LEG (native Docs reader spec 2026-10-01 §5.7, U4). pwa's
+  # second vitest config drives a real Chrome through playwright-core for the
+  # claims jsdom cannot show: what Chrome does with the docs response headers
+  # and with an SVG drawn as an image (M5.B5, M5.B6). ubuntu-latest ships
+  # /usr/bin/google-chrome, which the harness takes when CCRC_CHROME is unset;
+  # with neither, its beforeAll throws, so a missing browser is a red leg and
+  # never a skipped one.
+  #
+  # Not a branch-protection check (operator ruling 2026-10-13), but
+  # `full-suite` needs it, so a red browser leg fails the daily run and the
+  # stable gate. No job-level `if:` and no `needs:`: it skips by STEP on a
+  # refresh or a rebuild, like the required legs, because a job skipped by
+  # `if:` reads as red in full-suite. Pinned by ci-pipeline.test.ts.
+  browser-pwa:
+    name: browser (pwa)
+    runs-on: ubuntu-latest
+    # About a minute of tests after npm ci; 15 is headroom for a cold npm
+    # cache and a slow Chrome start, as build-pwa's is.
+    timeout-minutes: 15
+    env:
+      CCRC_LEG: ${{ ((github.event_name == 'push' && !inputs.mode) || inputs.mode == 'rebuild') && 'skip' || 'run' }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.CCRC_LEG == 'run'
+      - uses: actions/setup-node@v4
+        if: env.CCRC_LEG == 'run'
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: pwa/package-lock.json
+      - name: Install
+        if: env.CCRC_LEG == 'run'
+        working-directory: pwa
+        run: npm ci
+      # Local binary, never npx (see the test matrix above).
+      - name: Test
+        if: env.CCRC_LEG == 'run'
+        working-directory: pwa
+        run: ./node_modules/.bin/vitest run --config vitest.browser.config.ts
+
   # THE FLOOR ITSELF, on exactly its own version (ccrc history spec
   # 2026-10-05 §9.9; O18). Every other leg runs '22', which setup-node
   # resolves to the newest 22.x — far above `engines.node` — so no other leg
@@ -943,15 +983,15 @@ jobs:
 
   # THE STABLE GATE'S EVIDENCE (design 2026-09-23 §8). Exists only in `full`
   # mode, and is green iff every leg is — the Linux shards through their
-  # summary, the typecheck, agent, pwa, the build, the macOS shards, and the
-  # Node-floor leg.
+  # summary, the typecheck, agent, pwa, the build, the macOS shards, the
+  # Node-floor leg and the browser leg.
   # release-stable.yml looks for a successful job with this name in a trusted
   # run of the commit it promotes — this file's daily or manual full run on
   # main, or its own earlier call (`<caller job> / full-suite`), never a pull
   # request's run (main-artifact.mjs green-full-suite) — and reads the
   # `verdict` output when it called this file itself.
   full-suite:
-    needs: [select, server, server-shard, server-typecheck, test, build-pwa, test-macos, node-floor]
+    needs: [select, server, server-shard, server-typecheck, test, build-pwa, test-macos, node-floor, browser-pwa]
     # Never on a merge-queue run: a queue run skips test-macos, and one that
     # fell back to `full` would read that skip as a red leg (landing-order
     # stage 2; a queue run is never the stable gate's evidence anyway —
@@ -978,7 +1018,7 @@ jobs:
       - name: Verdict
         id: verdict
         env:
-          RESULTS: select=${{ needs.select.result }} server=${{ needs.server.result }} server-shard=${{ needs.server-shard.result }} server-typecheck=${{ needs.server-typecheck.result }} test=${{ needs.test.result }} build-pwa=${{ needs.build-pwa.result }} test-macos=${{ needs.test-macos.result }} node-floor=${{ needs.node-floor.result }}
+          RESULTS: select=${{ needs.select.result }} server=${{ needs.server.result }} server-shard=${{ needs.server-shard.result }} server-typecheck=${{ needs.server-typecheck.result }} test=${{ needs.test.result }} build-pwa=${{ needs.build-pwa.result }} test-macos=${{ needs.test-macos.result }} node-floor=${{ needs.node-floor.result }} browser-pwa=${{ needs.browser-pwa.result }}
         run: |
           node .github/ci/verdict.mjs full
           echo "verdict=green" >> "$GITHUB_OUTPUT"
