@@ -2409,7 +2409,7 @@ describe('SettingsScreen — stall watch: the section (design 2026-10-05 §13)',
 
   it('a pinned built-in number reads plain "2 h" in the select whatever the quiet line says: under a fallback (source default) the line reads built-in and the option still reads plain', async () => {
     const builtIn = swView().quiet.builtInMs;
-    await mount(swView({ chosen: swChosen({ quietMs: builtIn }), quiet: { ...swView().quiet, effectiveMs: builtIn, source: 'default' } }));
+    await mount(swView({ chosen: swChosen({ quietMs: builtIn }), quiet: { ...swView().quiet, effectiveMs: builtIn, source: 'default' }, fallback: { at: 5, reason: 'the resolver threw' } }));
     const select = within(section()).getByRole('combobox', { name: STALL_SECTION_TEXT.quiet }) as HTMLSelectElement;
     expect(within(section()).getByText(fillStallText(STALL_SECTION_TEXT.builtIn, { value: quietText(builtIn) }), { selector: 'p' }),
       'the quiet line says the value is the built-in').toBeInTheDocument();
