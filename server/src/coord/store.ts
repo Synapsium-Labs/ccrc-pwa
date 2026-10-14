@@ -55,7 +55,7 @@ import {
   // design 2026-09-20 §6/§7 (W2): the release catalogue's tag guard and channel vocabulary.
   isReleaseTag, isUpdateChannel,
   // design 2026-09-20 §6/§8/§10 (W2): the node inventory's vocabularies and the lease's two lists.
-  BUSY_UPDATE_STATES, isInstallState, isNodeOs, isNodeRole, isProvenanceState, isRequestKind, isStampRead,
+  BUSY_UPDATE_STATES, isInstallState, isNodeOs, isProvenanceState, isRequestKind, isStampRead,
   isUpdatePhase, isUpdateState, PROVENANCE_DETAIL_PREFIX, SETTLED_UPDATE_STATES, validCapWords,
   // fix round 1, D-3213: the floor/previous read-state vocabulary beside `highestVersion`/`previousVersion`.
   isTagFileRead,
@@ -95,7 +95,7 @@ import {
   type SettledUpdateState, type StampRead, type TagFileRead, type UpdatePhase, type UpdateState,
   type AutoMode, type NotifyMode,
   type WorkItemState,
-} from '../../../shared/api.js';
+} from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
 
 /** One entry in `$REG/<id>.prhistory` (ccd/ccd:2252-2253). Re-declared as a TYPE
  *  here rather than parsed twice: `coord/prhistory.ts` owns the reader. */

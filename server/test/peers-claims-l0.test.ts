@@ -154,11 +154,10 @@ describe('the mail table carries the two peer-lane codes (landed with wave 0)', 
 });
 
 describe('L0 stays import-free: the PWA bundles this file', () => {
-  it('shared/api.ts has exactly four import lines, and all are types (D-3021)', () => {
-    // Account-pool membership, release rollout and the box-token lifecycle's
-    // console card each added an L0 sibling shape. Keeping them here avoids
-    // duplicate wire types while preserving the rule this pin defends:
-    // shared/api.ts imports nothing at runtime.
+  it('shared/api.ts has exactly five import lines, and all are types (D-3021)', () => {
+    // Account-pool membership, release rollout, the box-token console card and
+    // the node role each added an L0 sibling shape: no duplicate wire types, and
+    // the rule this pin defends holds: shared/api.ts imports nothing at runtime.
     const lines = readFileSync(apiPath, 'utf8').split('\n');
     const imports = lines.filter((l) => /^import\s/.test(l));
     expect(imports).toEqual([
@@ -166,6 +165,7 @@ describe('L0 stays import-free: the PWA bundles this file', () => {
       "import type { AccountPoolWire } from './poolrule.js';",
       "import type { BuildInfo } from './buildinfo.js';",
       "import type { BoxTokenView } from './box-token.js';",
+      "import type { NodeRole } from './node-role.js';",
     ]);
   });
 });
