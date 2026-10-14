@@ -119,9 +119,10 @@ export interface DocsVisit {
   readonly tree: TreeSlot | null;
   readonly file: FileSlot;
   readonly freshness: Freshness;
-  /** The commit the current leaf now reads at after its body changed and the new read answered: the new pin's commit
-   *  (committed) or the holder's HEAD (draft), every changed body included, a draft whose fingerprint alone moved among
-   *  them. Null = this leaf's body has not changed in this visit. A same-blob move of a committed pin changes no body. */
+  /** The commit the current leaf now reads at after its pin moved to a new file key and the new read answered: for a
+   *  committed pin, a new blob (its new pin's commit); for a draft, a new holder HEAD or a new fingerprint (the holder's
+   *  HEAD), so a HEAD move with the same fingerprint counts. Null = the leaf's pin has not moved to a new file key in
+   *  this visit. A same-blob move of a committed pin keeps its file key and sets nothing. */
   readonly updatedTo: string | null;
   /** A fragment to scroll to once the body renders; null = nothing to scroll to. It belongs to ONE page (a leaf's
    *  project, ref, section and path): it reads `null` on any other page, and leaves the visit when the page changes. */
