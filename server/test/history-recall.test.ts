@@ -308,9 +308,14 @@ describe('the read verbs: identity, §8.3\'s table, the read-only handle, the fa
     // Task 12, measured). The sole writer closes last: one more tick checkpoints and unlinks both.
     expect(runSweep(box).code).toBe(0);
     for (const f of ['history.db-wal', 'history.db-shm']) expect(fs.existsSync(hist(box, 'db', f)), `${f}: the sweep closed cleanly`).toBe(false);
-    const r = spawnSync('bash', ['-c', 'umask 0002; exec "$0" "$@"', process.execPath, '--no-warnings', CLI, 'tree', '--json'], {
+    // Node and the CLI ride the environment and are unset before the exec: the shell text stays constant (CodeQL
+    // reads every argv element of a `bash -c` as part of the command), and the CLI's argv and env are as before.
+    const r = spawnSync('bash', ['-c', 'umask 0002; n=$RUN_NODE c=$RUN_CLI; unset RUN_NODE RUN_CLI; exec "$n" --no-warnings "$c" tree --json'], {
       cwd: box.home, encoding: 'utf8',
-      env: { ...box.env, HISTORY_TEST_STATFS: 'plenty', NODE_OPTIONS: preloadOptions([PRELOADS.statfs]), ...withPane(box, ID) },
+      env: {
+        ...box.env, HISTORY_TEST_STATFS: 'plenty', NODE_OPTIONS: preloadOptions([PRELOADS.statfs]), ...withPane(box, ID),
+        RUN_NODE: process.execPath, RUN_CLI: CLI,
+      },
     });
     expect(r.status, r.stderr).toBe(0);
     for (const f of ['history.db', 'history.db-wal', 'history.db-shm']) {

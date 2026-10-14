@@ -337,9 +337,11 @@ describe('O53: readBoxEnvValue agrees with ccrc\'s _box_env_value, row by row', 
     throw new Error('_box_env_value() never closes');
   })();
 
+  // The file and key ride the environment, not argv: CodeQL reads every argv element of a `bash -c` as part of the
+  // command (js/shell-command-injection-from-environment), so the text after the lifted function stays constant.
   const viaBash = (file: string, key: string): { found: boolean; value: string } => {
-    const r = spawnSync('bash', ['-c', `${BOX_ENV_VALUE}\n_box_env_value "$1" "$2"; printf '\\n%s\\n' "$?"`, '_', file, key],
-      { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '/usr/bin:/bin' } });
+    const r = spawnSync('bash', ['-c', `${BOX_ENV_VALUE}\n_box_env_value "$ENV_FILE" "$ENV_KEY"; printf '\\n%s\\n' "$?"`],
+      { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '/usr/bin:/bin', ENV_FILE: file, ENV_KEY: key } });
     const m = /^([\s\S]*)\n([0-9]+)\n$/.exec(r.stdout);
     expect(m, `bash answered nothing parseable: ${JSON.stringify(r.stdout)} ${r.stderr}`).not.toBeNull();
     expect(['0', '1'], 'the default mode answers rc 0 (seen) or 1 (never named)').toContain(m![2]);
@@ -1564,7 +1566,7 @@ describe('variantCauseOf, backendOf and the producer rule (spec 6.1, 6.2, DM2b p
 describe('redaction: values, context and shapes (spec 8.3)', () => {
   const ALNUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   const rndHex = (bytes: number): string => historyCrypto.randomBytes(bytes).toString('hex');
-  const rndAlnum = (n: number): string => [...historyCrypto.randomBytes(n)].map((b) => ALNUM[b % ALNUM.length]).join('');
+  const rndAlnum = (n: number): string => Array.from({ length: n }, () => ALNUM[historyCrypto.randomInt(ALNUM.length)]).join('');
   const idxOf = (values: string[]): libRedact.PairIndex => libRedact.makePairIndex(libRedact.secretPairs(values).pairs);
   const M = libRedact.REDACTED_MARK;
 
@@ -6346,7 +6348,7 @@ describe('the substring belt (W1-B2 Task 7A; spec §8.3 layer 4, §6.2; O59 lib 
 
   it('the seed rule\'s price: a one-case [a-z0-9] unit is masked wherever a print holds a digit, and a digit-free K-window alone is the named residual', () => {
     const lower = 'abcdefghijklmnopqrstuvwxyz';
-    const pick = (s: string): string => s[historyCrypto.randomBytes(1)[0]! % s.length]!;
+    const pick = (s: string): string => s[historyCrypto.randomInt(s.length)]!;
     // A digit at every sixth offset: every 14-wide gram holds two, so every gram seeds.
     const one = Array.from({ length: 32 }, (_, i) => (i % 6 === 5 ? pick('0123456789') : pick(lower))).join('');
     const idx = beltIdx([one]);

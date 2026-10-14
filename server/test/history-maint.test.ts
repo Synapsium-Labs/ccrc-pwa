@@ -1804,12 +1804,17 @@ describe('reparse: targets, the 500-leaf limit, pruned spans refused, ids kept, 
 });
 
 /** The placed shim run from a parent whose umask is `umask` (C35's "an inherited umask 0002"), with the statfs
- *  preload and any others. */
+ *  preload and any others. The umask and the shim's path ride the environment and are unset before the exec, so
+ *  the shell text is constant (CodeQL reads every argv element of a `bash -c` as part of the command) and the shim
+ *  sees the argv and environment it always did. */
 function maintShimUmask(box: HistoryBox, umask: string, args: string[], env: Record<string, string> = {},
   preloads: string[] = [PRELOADS.statfs]): { status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string } {
-  const r = spawnSync('bash', ['-c', `umask ${umask}; exec bash "$0" "$@"`, path.join(box.home, '.local', 'bin', 'ccd-history-sweep'), ...args], {
+  const r = spawnSync('bash', ['-c', 'umask "$RUN_UMASK"; s=$RUN_SHIM; unset RUN_UMASK RUN_SHIM; exec bash "$s" "$@"', 'bash', ...args], {
     cwd: box.home, encoding: 'utf8', timeout: 240_000, killSignal: 'SIGTERM',
-    env: { ...box.env, HISTORY_TEST_STATFS: 'plenty', NODE_OPTIONS: preloadOptions(preloads), ...env },
+    env: {
+      ...box.env, HISTORY_TEST_STATFS: 'plenty', NODE_OPTIONS: preloadOptions(preloads), ...env,
+      RUN_UMASK: umask, RUN_SHIM: path.join(box.home, '.local', 'bin', 'ccd-history-sweep'),
+    },
   });
   return { status: r.status, signal: r.signal, stdout: String(r.stdout), stderr: String(r.stderr) };
 }
