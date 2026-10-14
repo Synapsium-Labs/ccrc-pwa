@@ -1512,38 +1512,100 @@ describe('the breaker\'s typed state: dirty before any anchor change, clean only
     expect(st.kind === 'clean' && st.held.map((m) => m.id).sort()).toEqual([M, N]);
   }, HEAVY);
 
-  it('A LONE-SURROGATE claimant is held across a restart: its id has a spelling, so the record lands and the act is not withheld for it', async () => {
+  it('A LONE-SURROGATE claimant is never measured: it reads unmeasured (bad-id), never crashed; a dirty seed still holds it flagged with its exact spelling across a restart, and a sealed start leaves its partner a lone crash', async () => {
+    // S is not a registry id (a lone surrogate is not ASCII), so `measureClaimant` answers it `unmeasurable` on its
+    // `bad-id` arm, before any listing — never `absent`, so never crashed, whatever its journal says (spec §2.3). Its id
+    // still has a spelling in the breaker's record. `claimedBy` cannot carry a lone surrogate through SQLite (it reads
+    // back U+FFFD), so the population is given S directly, and the journal clause answers S a journaled successful spawn
+    // on EVERY pass: a positive history that would read S crashed (its row gone) if `bad-id` were ever folded into
+    // `absent`. The journal is read only for ids measured dead, so that answer is never even asked for.
     const S = 'demo-coord-\ud800';
-    const f = await fixture();
-    f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-    f.plant(A);
-    const ra = f.working(A);
-    // `claimedBy` cannot carry a lone surrogate through SQLite (it reads back U+FFFD), so the population and the journal
-    // clause are given it directly: S has no registry row and, for the first pass only, a journaled successful spawn —
-    // so it reads crashed (its row gone) at 0, and unmeasured (no history) after, its anchor deleted.
-    let sCrashed = true;
-    const ids = f.coord.openCoordinatorIds.bind(f.coord);
-    vi.spyOn(f.coord, 'openCoordinatorIds').mockImplementation(() => [...ids(), S]);
-    const rows = f.coord.deadCoordinatorJournalRows.bind(f.coord);
-    vi.spyOn(f.coord, 'deadCoordinatorJournalRows').mockImplementation((asked: readonly string[]) => {
-      const m = rows(asked.filter((id) => id !== S));
-      if (asked.includes(S)) {
-        m.set(S, sCrashed ? { hasHistory: true, rows: [{ act: 'spawn', outcome: 'done', at: T0 - 7_200_000, gen: '1790000000000000000',
-          dec: { surface: 'none' }, meas: { rc: 0 }, raw: '{}' }] } : { rows: [], hasHistory: false });
-      }
-      return m;
-    });
-    await f.pass();                                      // A and S crash together: the trip {A, S}
-    expect(f.attention().filter(([k]) => k === 'breaker')).toEqual([['breaker', [A, S].sort()]]);
-    sCrashed = false;
-    f.next(); await f.pass();                            // S unmeasured: its anchor goes, the hold is memory and the record
-    const st = f.coord.deadCoordinatorBreakerState();
-    expect(st.kind === 'clean' && st.held.map((m) => m.id).sort(), 'the snapshot carries S exactly').toEqual([A, S].sort());
-    f.restart();
-    await walk(f, 2 * HOUR);
-    expect(f.stateOf(ra), 'A is not ended: S is held across the restart').toBe('working');
-    expect(f.attention().filter(([k]) => k === 'breaker')).toEqual([['breaker', [A, S].sort()]]);
+    /** One world: A planted (its row orphaned, its pane gone) with a working run, S in the population, the lane armed.
+     *  The spies record every id the journal is asked for and every anchor the lane writes. */
+    const world = async (breakerState?: 'absent') => {
+      const f = await fixture(breakerState === undefined ? {} : { breakerState });
+      f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      f.plant(A);
+      const ra = f.working(A);
+      const ids = f.coord.openCoordinatorIds.bind(f.coord);
+      vi.spyOn(f.coord, 'openCoordinatorIds').mockImplementation(() => [...ids(), S]);
+      const rows = f.coord.deadCoordinatorJournalRows.bind(f.coord);
+      const journalAsked = vi.spyOn(f.coord, 'deadCoordinatorJournalRows').mockImplementation((asked: readonly string[]) => {
+        const m = rows(asked.filter((id) => id !== S));
+        if (asked.includes(S)) {
+          m.set(S, { hasHistory: true, rows: [{ act: 'spawn', outcome: 'done', at: T0 - 7_200_000, gen: '1790000000000000000',
+            dec: { surface: 'none' }, meas: { rc: 0 }, raw: '{}' }] });
+        }
+        return m;
+      });
+      const anchored = vi.spyOn(f.coord, 'setDeadAnchor');
+      /** The WHOLE anchor-key set — never `anchorOf(S)` alone: a raw surrogate can round-trip through SQLite as U+FFFD. */
+      const anchorKeys = () => { const a = f.coord.deadAnchors(); return a.ok ? [...a.anchors.keys()] : 'unreadable'; };
+      /** S never receives a crash anchor (every anchor write is A's), and the journal is never asked for S. */
+      const noCrashAnchorForS = (): void => {
+        expect(anchored.mock.calls.length, 'the lane did write anchors').toBeGreaterThan(0);
+        expect([...new Set(anchored.mock.calls.map(([id]) => id))], 'every anchor written is A\'s: none is S\'s, nor its U+FFFD form').toEqual([A]);
+        expect(journalAsked.mock.calls.length, 'the journal was read').toBeGreaterThan(0);
+        expect(journalAsked.mock.calls.filter(([asked]) => asked.includes(S)), 'the journal is never asked for S').toEqual([]);
+      };
+      const breakerOf = () => (f.watcher() as unknown as { deadCoordinatorBreakerState: { tripped: boolean; why?: string; members?: { id: string; fallback?: true }[] } })
+        .deadCoordinatorBreakerState;
+      return { f, ra, anchorKeys, noCrashAnchorForS, breakerOf };
+    };
+
+    // 1. THE DIRTY SEED. No breaker state yet (the deploy that creates the table; an unclean exit seeds the same way), so
+    // the first pass holds every claimant it does not release, flagged. Unmeasured is no evidence, so S is unreleased:
+    // the seed holds A and S together, S at the seed pass's instant (never a crash instant), and the wildcard trips the
+    // breaker `clustered` with both members flagged. A's fate: held, flagged, beside S, for as long as S's run stays open.
+    // Evidence can never release S (it is never measured), so only leaving the population releases it: the operator's
+    // abandon door.
+    {
+      const { f, ra, anchorKeys, noCrashAnchorForS, breakerOf } = await world('absent');
+      await f.pass();
+      const held = [{ id: A, firstDeadAt: T0, fallback: true }, { id: S, firstDeadAt: T0, fallback: true }];
+      expect(f.coord.deadCoordinatorBreakerState(), 'the exact A/S snapshot, S a seed hold').toEqual({ kind: 'clean', generation: 2, writtenAt: T0, held });
+      const raw = (f.coord.db.prepare('SELECT CAST(held AS TEXT) AS held FROM dead_coordinator_breaker_state WHERE id = 1').get() as { held: string }).held;
+      expect(raw, 'the STORED spelling: S as %uD800').toBe(`dead-coordinator-breaker-held:${A}@${T0}*,demo-coord-%uD800@${T0}*`);
+      expect(/^[\x20-\x7e]*$/.test(raw), 'ASCII only: no raw surrogate, no U+FFFD').toBe(true);
+      const st = f.coord.deadCoordinatorBreakerState();
+      const sBack = st.kind === 'clean' ? st.held.find((m) => m.id !== A)?.id : undefined;
+      expect(sBack === S && sBack.charCodeAt(11) === 0xd800, 'the typed read gives S back exactly, its lone surrogate included').toBe(true);
+      expect(f.attention().filter(([k]) => k === 'breaker'), 'the trip {A, S}').toEqual([['breaker', [A, S].sort()]]);
+      expect(breakerOf(), 'the wildcard trip').toMatchObject({ tripped: true, why: 'clustered' });
+      expect(breakerOf().members?.map((m) => [m.id, m.fallback]), 'both members flagged').toEqual([[A, true], [S, true]]);
+      expect(anchorKeys(), 'A anchored, S not').toEqual([A]);
+      f.restart();
+      expect(f.coord.deadCoordinatorBreakerState(), 'a restart keeps the members and their flags').toEqual({ kind: 'sealed', generation: 3, writtenAt: T0, held });
+      await walk(f, 2 * HOUR);
+      expect(f.stateOf(ra), 'A is not ended: S is held beside it across the restart').toBe('working');
+      expect(f.acts(), 'no act asked').toBe(0);
+      expect(f.calls, 'nothing composed on the box').toEqual([]);
+      expect(f.attention().filter(([k]) => k === 'breaker'), 'the trip stays listed').toEqual([['breaker', [A, S].sort()]]);
+      expect(breakerOf()).toMatchObject({ tripped: true, why: 'clustered' });
+      expect(breakerOf().members?.map((m) => [m.id, m.fallback])).toEqual([[A, true], [S, true]]);
+      expect(f.watcher().currentDeadCoordinators().get(S)?.crashedPasses, 'S never counts a crashed pass').toBe(0);
+      expect(anchorKeys()).toEqual([A]);
+      noCrashAnchorForS();
+    }
+    vi.restoreAllMocks();
+
+    // 2. THE MEASUREMENT-ONLY CONTROL. A sealed, empty start (no seed), S still answered its positive spawn history: S
+    // reads unmeasured, so no anchor and no crash-derived trip; with one of two unmeasurable the breaker's
+    // `allUnmeasurable` arm is not taken, so A is a lone crash and is ended after its hour.
+    {
+      const { f, ra, anchorKeys, noCrashAnchorForS, breakerOf } = await world();
+      await f.pass();
+      expect(f.attention().filter(([k]) => k === 'breaker'), 'no trip').toEqual([]);
+      expect(breakerOf()).toEqual({ tripped: false });
+      expect(f.watcher().currentDeadCoordinators().get(S)?.crashedPasses, 'S reads unmeasured, never crashed').toBe(0);
+      expect(anchorKeys(), 'A anchored, S not').toEqual([A]);
+      await walk(f, HOUR);
+      expect(f.stateOf(ra), 'A, a lone crash, is ended after its hour').toBe('failed');
+      expect(f.attention().filter(([k]) => k === 'breaker')).toEqual([]);
+      expect(f.watcher().currentDeadCoordinators().get(S)?.crashedPasses).toBe(0);
+      noCrashAnchorForS();
+    }
   }, HEAVY);
 
   it('a DIRTY state with a READABLE snapshot: every member, instant and flag it carries is kept, every unreleased claimant is added flagged, an exact record is written before clean — and nothing is cleared by its age', async () => {
