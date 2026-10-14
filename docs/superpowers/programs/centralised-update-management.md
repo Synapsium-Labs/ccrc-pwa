@@ -1528,6 +1528,23 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         `ccd/ccd`.
       - STATUS: fleet and server v0.0.180, newest v0.0.180, backups fleet 176M/server 697M, disk free fleet 219G/work
         volume 204G/server 32G, no anomalies at 04:42.
+    - **2026-10-14 10:42 UTC: v0.0.181 auto-converged unattended; v0.0.182 released, its move not yet due.** No action
+      was taken.
+      - The releases: v0.0.181 is #395 (the supervisor tick diet's wave 1, which edits `ccd/ccd`), merged at 10:20:30
+        and released at 10:21:52. v0.0.182 is #190 (the terminal fit, interim), merged at 10:36:45 and released at
+        10:37:46.
+      - The fleet box ran 10:22:33 to 10:24:55, and the server followed at 10:25:13 to 10:25:38. Both reports read
+        `phase: done` and `from: pwa` (defect A), with no detail.
+      - The fleet box started 41 seconds after the release. A 30-minute poll counted from the server's 04:21 restart
+        falls at about 10:21:31, before the release, unless the cadence drifted. The server's journal logs neither a
+        poll nor a tap, so with defect A the two cannot be told apart.
+      - v0.0.182 waits for the server's next poll, about 30 minutes after its 10:25 restart.
+      - Both boxes read `box-token` PASS (server: generation #3, rotated 3 d ago). Server doctor: 26 passed, 0 warned,
+        0 failed. Fleet doctor: 33 passed, 6 warned, 0 failed.
+      - Wave 15 (run 300) is still held, by claims 1298 (run 354) on `ccd/ccrc` and 1302 (run 360) on `ccd/ccd`.
+        #395 moved `ccd/ccd` again, so its plan's re-measure now covers that too.
+      - STATUS: fleet and server v0.0.181, newest v0.0.182, backups fleet 176M/server 700M, disk free fleet 217G/work
+        volume 199G/server 32G, no anomalies at 10:42.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
