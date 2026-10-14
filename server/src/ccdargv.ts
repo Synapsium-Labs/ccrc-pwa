@@ -326,11 +326,11 @@ export const CCD_ARGV = {
    *  `identity.wrapper` no longer changes any outcome: a row that would use
    *  it is refused by that pair clause, while `measuredIdentity`'s null arm
    *  still answers 503. Defence in depth: the part check refuses a part
-   *  that is not a registry id. A `.project` spelled `--surface=<word>`
-   *  (stripped from any position by `cmd_stop`'s `--surface=*` arm, which
-   *  no argv order can refuse) is a fallback-arm row: both clauses refuse
-   *  it. One only the part check refuses ends the id, empty or leading `-`
-   *  or `.`: W1b's ccd refuses the dash; else ccd's `$1-$2` is the tapped row.
+   *  that is not a registry id. A `.project` of `--surface=<word>`, which
+   *  `cmd_stop`'s `--surface=*` arm strips from any position, is on the
+   *  fallback arm, so both clauses refuse it. One only the part check
+   *  refuses ends the id, empty or leading `-` or `.`: W1b's ccd refuses a
+   *  dash, `${2:?}` refuses an empty one, a dot one's `$1-$2` is the tapped row.
    *  The order is safe on every ccd that advertises `stop-surface`,
    *  whose loop strips the flag from any position: the any-position loop
    *  came two days before the `stop-surface` token, so every ccd that
