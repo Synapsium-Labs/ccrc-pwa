@@ -25,7 +25,7 @@ import { tmuxName, tmuxTarget } from '../../shared/tmux-target.js';
 import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../shared/api.js';
 
 const ROOT = path.resolve(__dirname, '..', '..');
-const STUB = path.resolve(__dirname, '..', 'test', 'fixtures', 'drawer-stub-alt.mjs');
+const STUB = path.join(__dirname, 'fixtures', 'drawer-stub-alt.mjs');
 const CONF = path.join(ROOT, 'ccd', 'tmux.conf');
 
 /** The real tmux, resolved on the ambient PATH and absolute. */
@@ -42,7 +42,7 @@ const BEHAVIOURAL = 'D-5005 — a window-sized client moves nothing (real tmux, 
 const SOCK = `dws${process.pid}${Math.random().toString(36).slice(2, 6)}`;
 
 const cleanEnv = (): NodeJS.ProcessEnv => {
-  const env = { ...process.env, TERM: 'xterm-256color' };
+  const env: NodeJS.ProcessEnv = { ...process.env, TERM: 'xterm-256color' };
   delete env.TMUX;
   delete env.TMUX_PANE;
   delete env.TMUX_TMPDIR;
@@ -61,8 +61,9 @@ const windowSizeOpt = (target: string): string =>
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-// Expectations are computed from the shared constants, independently of the
-// attach size, so editing ONLY ATTACH_COLS/ATTACH_ROWS moves the test with them.
+// (e) The attach and the expectations both read the shared constants, so a
+// change to the constants moves the test with them. The expectations never
+// read ATTACH_*, so a wrong attach on its own goes red (the mutation table).
 const ATTACH_COLS = PINNED_WINDOW_COLS;
 const ATTACH_ROWS = PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS;
 const CLIENT = `${PINNED_WINDOW_COLS} ${PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS}`;
@@ -75,6 +76,10 @@ interface AttachedSession {
   stream: string[];
   ready: 'stream' | 'pane-then-stream';
 }
+
+/** Every client this file attached, so `afterEach` detaches it even when a case
+ *  failed before its own `p.kill()`. */
+const attached: pty.IPty[] = [];
 
 const spawnAndAttach = async (id: string): Promise<AttachedSession> => {
   const name = tmuxName(id);
@@ -101,6 +106,7 @@ const spawnAndAttach = async (id: string): Promise<AttachedSession> => {
     rows: ATTACH_ROWS,
     env: cleanEnv(),
   });
+  attached.push(p);
   p.onData((chunk) => {
     stream.push(chunk);
     lastStreamAt = Date.now();
@@ -135,10 +141,15 @@ const waitForEcho = async (target: string, text: string): Promise<void> => {
   throw new Error(`echo of "${text}" not seen in pane ${target}`);
 };
 
+/** The client and the window, read together so a red line shows both: a wrong
+ *  attach moves the window under `latest`, and the diff says where it went. */
+const geometry = (target: string): { client: string; window: string } =>
+  ({ client: clients(), window: windowSize(target) });
+const EXPECTED = { client: CLIENT, window: WINDOW };
+
 const assertGeometry = (target: string): void => {
   expect(windowSizeOpt(target), 'window-size option').toBe('latest');
-  expect(clients(), 'client geometry').toBe(CLIENT);
-  expect(windowSize(target), 'window geometry').toBe(WINDOW);
+  expect(geometry(target), 'client and window geometry').toEqual(EXPECTED);
 };
 
 describe.skipIf(NO_TMUX)(BEHAVIOURAL, () => {
@@ -150,6 +161,9 @@ describe.skipIf(NO_TMUX)(BEHAVIOURAL, () => {
   });
 
   afterEach(async () => {
+    for (const p of attached.splice(0)) {
+      try { p.kill(); } catch { /* already gone */ }
+    }
     const ls = T('list-sessions', '-F', '#{session_name}');
     if (ls.status === 0) {
       for (const name of ls.stdout.split('\n').filter(Boolean)) {
@@ -182,15 +196,14 @@ describe.skipIf(NO_TMUX)(BEHAVIOURAL, () => {
     expect(latch.status, `resize-window latch: ${latch.stderr}`).toBe(0);
     expect(windowSizeOpt(target), 'window-size option after latch').toBe('manual');
 
-    expect(clients(), 'client geometry after manual latch').toBe(CLIENT);
-    expect(windowSize(target), 'window geometry after manual latch').toBe(WINDOW);
+    expect(geometry(target), 'client and window geometry after the manual latch').toEqual(EXPECTED);
 
     const text = 'klmnopqrstuvwxyz1234';
     p.write(text);
     await waitForEcho(target, text);
 
-    expect(clients(), 'client geometry after typing').toBe(CLIENT);
-    expect(windowSize(target), 'window geometry after typing').toBe(WINDOW);
+    expect(geometry(target), 'client and window geometry after typing under manual').toEqual(EXPECTED);
+    expect(windowSizeOpt(target), 'window-size option after typing').toBe('manual');
     p.kill();
   }, 30_000);
 
@@ -217,21 +230,17 @@ describe.skipIf(NO_TMUX)(BEHAVIOURAL, () => {
   }, 30_000);
 });
 
-/*
-Mutation table — applied to ATTACH_COLS/ATTACH_ROWS only, then run alone.
-The expectations (CLIENT/WINDOW) stay fixed because they derive from the
-shared constants; only the attach size changes.
-
-| Mutant | Expected |
-|---|---|
-| attach at 220x50 | (a) RED under `latest`: the window becomes 220x49 |
-| attach at 220x52 | (a) RED under `latest`: the window becomes 220x51 |
-| attach at 200x51 | (a) RED (client width), and the window becomes 200x50 |
-| attach at 300x51 | (a) RED under `latest` (the window becomes 300x50); (d) RED too: tmux fills past the window with `·` after `manual` latches at 220 |
-
-Observed red lines (run before final commit):
-- 220x50 mutant: ________________________________________________________________
-- 220x52 mutant: ________________________________________________________________
-- 200x51 mutant: ________________________________________________________________
-- 300x51 mutant: ________________________________________________________________
-*/
+// MUTATION TABLE (D-5005), RUN on tmux 3.7c, 2026-10-14: each mutant edits
+// ONLY the attach line (ATTACH_COLS / ATTACH_ROWS), the suite runs alone, and the
+// file is restored after. CLIENT and WINDOW derive from the shared constants on
+// their own, so the attach cannot move the expectations with it. Under `latest`
+// a wrong attach drags the window to the client's size minus the status row.
+//
+// | Mutant (attach) | Observed |
+// |---|---|
+// | 220x50 | (a), (b), (c) RED: `{ client: '220 50', window: '220x49' }`, expected `{ client: '220 51', window: '220x50' }` |
+// | 220x52 | (a), (b), (c) RED: `{ client: '220 52', window: '220x51' }` |
+// | 200x51 | (a), (b), (c) RED: `{ client: '200 51', window: '200x50' }` |
+// | 300x51 | (a), (b), (c) RED: `{ client: '300 51', window: '300x50' }`; and (d) RED: once `manual` latches the window at 220, tmux fills the client past it with U+00B7 (`collected client stream: expected '…' not to contain` it) |
+//
+// The red-first run was the 220x50 row, before the attach read the constants.
