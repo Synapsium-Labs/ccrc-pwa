@@ -849,3 +849,15 @@ describe('T13 review 2-2: the one image of a raster leaf is not a link to the le
     expect(pins).toEqual(['committed']);
   });
 });
+
+describe('T13 review 4-4: a drafted raster leaf is not an embedded draft asset', () => {
+  it('data-draft-assets stays 0 and no draft-assets banner is drawn', async () => {
+    const f = byPath(treeOk({ entries: [entry('specs', 'x.png', { draft: draftOf('modified') })], drafts: holder() }), {});
+    const { container } = open('/docs/demo/specs/x.png?ref=refs/heads/main', f);
+    await waitFor(() => expect(container.querySelectorAll('.docs-leaf img')).toHaveLength(1));
+    await waitFor(() => expect(f.raster).toHaveBeenCalled());
+    expect((f.raster.mock.calls[0]![1] as DocPin).kind).toBe('draft');
+    expect(container.querySelector('.docs-screen')).toHaveAttribute('data-draft-assets', '0');
+    expect(screen.queryByText(/embeds \d+ uncommitted asset/)).toBeNull();
+  });
+});

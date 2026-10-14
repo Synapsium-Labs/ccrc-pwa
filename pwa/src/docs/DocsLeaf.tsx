@@ -11,7 +11,7 @@ import hljs from 'highlight.js/lib/core';
 import { contentClass, docsApi, entryView, type DocPin, type DocsPageLocation, type DocsShowOk, type DocsTreeOk } from '../../../shared/docs';
 import { CodeBlock } from '../lib/markdown';
 import type { MarkdownParser } from '../lib/markdownRunner';
-import { DocImage, DocsAssetContext, svgDataUrl } from './DocImage';
+import { DocImage, DocsAssetContext, svgDataUrl, type DocsAssetContextValue } from './DocImage';
 import { DocLinkContext, fragmentTarget, type DocLinkContextValue } from './DocLink';
 import { DOC_NOT_UTF8_NOTE, DocMarkdown, DocPlain, docMarkdownSource } from './DocMarkdown';
 import { DocsFailureView } from './DocsFailureView';
@@ -144,11 +144,19 @@ function HtmlStandIn(p: { readonly show: DocsShowOk; readonly download: ReactNod
   );
 }
 
+/** The leaf's own image is not an embedded draft asset (the truth line already says draft), so this leaf's assets
+ *  context never counts it. */
+const IGNORE_DRAFT_ASSET = (): void => {};
+
 /** A `raster` leaf (spec 4.4: "one `DocImage`"): the leaf's own file as the only image of a one-image page, so the
  *  pin rule, the cap, the queue, the raster checks and the object URL are all `DocImage`'s. The image is the page
- *  itself, so a tap on it opens nothing (its target is this very leaf, and `DocImage` would push a duplicate entry
- *  and drop `view=committed`). */
+ *  itself, so two things a Markdown image does are withheld here: a tap on it opens nothing (its target is this very
+ *  leaf, and `DocImage` would push a duplicate entry and drop `view=committed`), and it is not counted as a drafted
+ *  asset the page embeds. */
 function RasterBody(p: { readonly link: LinkBase; readonly name: string }): ReactNode {
+  const assets = useContext(DocsAssetContext);
+  const own = useMemo<DocsAssetContextValue | null>(
+    () => (assets === null ? null : { ...assets, onDraftAsset: IGNORE_DRAFT_ASSET }), [assets]);
   const node = useMemo<HastElement>(() => ({ type: 'element', tagName: 'img', properties: {}, children: [] }), []);
   const ctx = useMemo<DocLinkContextValue>(() => {
     const urls = new WeakMap<HastElement, DetachedUrls>();
@@ -161,7 +169,7 @@ function RasterBody(p: { readonly link: LinkBase; readonly name: string }): Reac
   };
   return (
     <div className="docs-raster" onClickCapture={ownTap}>
-      <DocLinkContext value={ctx}><DocImage node={node} alt={p.name} /></DocLinkContext>
+      <DocsAssetContext value={own}><DocLinkContext value={ctx}><DocImage node={node} alt={p.name} /></DocLinkContext></DocsAssetContext>
     </div>
   );
 }
