@@ -120,7 +120,7 @@ export interface HistoryPaths {
   /** SQLite's rollback journal beside the DB (`history.db-journal`), not the history journal. */
   readonly journalFile: string;
   readonly backups: string; readonly storeId: string; readonly pending: string; readonly writer: string;
-  readonly op: string; readonly lock: string; readonly off: string; readonly cap: string;
+  readonly op: string; readonly pass: string; readonly lock: string; readonly off: string; readonly cap: string;
   readonly ccrcEnv: string; readonly accountsSh: string; readonly reg: string; readonly shim: string;
 }
 export function historyPaths(home: string): HistoryPaths;
@@ -358,6 +358,12 @@ export function linkSidecar(name: string, candidates: ReadonlyArray<{ entryId: n
 export function secretKindOf(source: object | null, path: string): 'sessions' | 'env-identifier' | 'env' | 'token' | 'json';
 export function ftsPhrase(value: string): string;
 export function parseOpMarker(text: string): { verb: string; pid: number; startMs: number } | null;
+export interface ProcIdentity { readonly procStart: string; readonly bootId: string }
+export function parsePassMarker(text: string): { pid: number; startMs: number; procStart: string; bootId: string } | null;
+export function formatPassMarker(pid: number, startMs: number, identity: ProcIdentity): string;
+export function procStartOf(statText: string): string | null;
+export function bootIdOf(text: string): string | null;
+export function decidePassLive(marker: { procStart: string; bootId: string } | null, identityNow: ProcIdentity | null): boolean;
 
 // ── task 28: the health block (HealthClass is task 3's declaration, reused) ──
 export interface HealthItem { readonly word: string; readonly detail: string; readonly remedy: string }
@@ -383,6 +389,8 @@ export interface HealthInputs {
   readonly historyOff: boolean;
   readonly recovering: null | { readonly step: string; readonly cursor: string; readonly cursorUnmovedTicks: number };
   readonly op: null | { readonly verb: string; readonly pid: number; readonly alive: boolean };
+  /** D-5016: the scheduled pass's marker as status measured it; `live` only when its identity measured equal. */
+  readonly pass: null | { readonly pid: number; readonly startMs: number; readonly live: boolean };
   readonly bytesBehindLast3: readonly number[];
   readonly fts: string | null;
   readonly modesWrong: readonly ModeWrong[];

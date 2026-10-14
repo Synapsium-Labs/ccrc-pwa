@@ -423,6 +423,7 @@ export function historyPaths(home) {
     pending: `${root}/store.id.pending`,
     writer: `${root}/store.writer`,
     op: `${root}/op`,
+    pass: `${root}/pass`,
     lock: `${h}/.ccrc/history-sweep.lock`,
     off: `${h}/${SWITCHES.off}`,
     cap: `${h}/${SWITCHES.maxGb}`,
@@ -3152,6 +3153,49 @@ export function parseOpMarker(text) {
   return m === null ? null : { verb: m[1], pid: Number(m[2]), startMs: Number(m[3]) };
 }
 
+/** The pass marker's one grammar (D-5016 `history-doctor-reads-a-live-pass`): `~/.ccrc/history/pass` holds
+ *  `<pid> <start_ms> <proc_start> <boot_id>`, written by a scheduled pass under the lock when it starts and removed when
+ *  it ends. `proc_start` is field 22 of `/proc/<pid>/stat` (the process's start time, in clock ticks since boot) and
+ *  `boot_id` is `/proc/sys/kernel/random/boot_id`: a reused pid has another start time, and a pid from before a reboot
+ *  another boot id, so neither can pass for the pass that wrote the marker. Anything else is null. */
+export function parsePassMarker(text) {
+  const m = /^([1-9][0-9]{0,9}) ([0-9]{1,16}) ([0-9]{1,20}) ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s*$/.exec(text);
+  return m === null ? null : { pid: Number(m[1]), startMs: Number(m[2]), procStart: m[3], bootId: m[4] };
+}
+
+/** The marker's text for a pass: the grammar above, newline-ended. */
+export function formatPassMarker(pid, startMs, identity) {
+  return `${pid} ${startMs} ${identity.procStart} ${identity.bootId}\n`;
+}
+
+/** A process's start time from the text of `/proc/<pid>/stat`: field 22, counted after the LAST `)` (the comm field in
+ *  front of it may hold spaces and parentheses). A process in state `Z` (zombie) or `X` (dead) is not a running pass and
+ *  answers null, as does any text that is not that shape. */
+export function procStartOf(statText) {
+  if (typeof statText !== 'string') return null;
+  const close = statText.lastIndexOf(')');
+  if (close < 0) return null;
+  const fields = statText.slice(close + 1).trim().split(/\s+/);
+  // fields[0] is field 3 (the state), so field 22 is fields[19].
+  if (fields.length < 20 || !/^[A-Za-z]$/.test(fields[0]) || fields[0] === 'Z' || fields[0] === 'X') return null;
+  return /^[0-9]{1,20}$/.test(fields[19]) ? fields[19] : null;
+}
+
+/** The boot id from the text of `/proc/sys/kernel/random/boot_id`, or null when it is not a UUID. */
+export function bootIdOf(text) {
+  if (typeof text !== 'string') return null;
+  const v = text.trim().toLowerCase();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v) ? v : null;
+}
+
+/** Whether a pass marker names a pass that is running now (D-5016): ONLY when the marker parsed, the pid's identity was
+ *  measured now (`identityNow` is null when it could not be: no /proc, a dead pid, a zombie, an unreadable file) and both
+ *  its start time and the boot id equal the marker's. `kill(pid, 0)` is not this test: a reused pid answers it. */
+export function decidePassLive(marker, identityNow) {
+  return marker !== null && identityNow !== null && identityNow !== undefined
+    && identityNow.procStart === marker.procStart && identityNow.bootId === marker.bootId;
+}
+
 // ── the health block: every §9.6 rule as a word (history spec §9.6) ───────────
 // `status --json` MEASURES, this function DECIDES, and doctor's `_check_history`
 // only RELAYS what it returns: the one place a verdict about this box's store
@@ -3422,7 +3466,17 @@ export function deriveHealth(h) {
   // for ever (§9.6 step 4; FE3: a RUNNING sweep in catch-up is not stale). `off` and `op-running` are an
   // operator switch and a live marker, not tick evidence, so they hold regardless.
   const tickAge = h.lastTickMs === null ? null : h.nowMs - h.lastTickMs;
-  const tickFresh = tickAge !== null && tickAge <= TICK_STALE_MS;
+  // D-5016 (history-doctor-reads-a-live-pass): the ticks row is stamped with the pass START but written at its END, so a
+  // healthy pass that runs longer than the timer's period shows an old tick while it runs. A pass the marker proves
+  // LIVE (its identity measured equal; lib's decidePassLive) that started within TICK_STALE_MS is a fresh tick, for
+  // every rule that reads tickFresh: catching-up and recovering (a running sweep's evidence is still moving, FE3),
+  // lag-unmeasured (a running pass has not yet reached every file's end), and the stale-tick FAIL itself. One that has
+  // run past TICK_STALE_MS is hung, and FAILs below. No live pass reads as it always did.
+  const passLive = h.pass !== null && h.pass !== undefined && h.pass.live === true;
+  const passAge = passLive ? h.nowMs - h.pass.startMs : null;
+  const passFresh = passLive && passAge <= TICK_STALE_MS;
+  const passHung = passLive && passAge > TICK_STALE_MS;
+  const tickFresh = (tickAge !== null && tickAge <= TICK_STALE_MS) || passFresh;
   const b = h.bytesBehindLast3;
   const catching = tickFresh && b.length === CATCHING_UP_TICKS && b.every((v, i) => i === 0 || b[i - 1] > v);
   if (catching) warn.push(item('catching-up', `the backlog is falling: ${b[b.length - 1]} bytes behind, from ${b[0]} ${CATCHING_UP_TICKS} ticks ago`));
@@ -3431,8 +3485,13 @@ export function deriveHealth(h) {
   const stateHeld = h.historyOff || (h.recovering !== null && tickFresh) || opLive || catching || lagUnmeasured;
 
   // 4. the FAILs.
+  if (passHung) {
+    fail.push(item('tick-stale', `the scheduled pass (pid ${h.pass.pid}) started ${minutesOf(passAge)} min ago and is still running (hung past ${minutesOf(TICK_STALE_MS)} min)`));
+  }
   if (!stateHeld) {
-    if (tickAge === null) {
+    if (passLive) {
+      // A live pass answers for the tick: fresh above, or the hung FAIL just pushed.
+    } else if (tickAge === null) {
       fail.push(item('tick-stale', h.shimMtimeMs !== null
         ? `no tick has run, and the shim was placed ${minutesOf(h.nowMs - h.shimMtimeMs)} min ago`
         : 'no tick has run'));

@@ -282,6 +282,8 @@ export interface DriverDeps {
   sizeBytesSeq?: number[];
   /** Appended to `$HOME/<rel>` once the pass's first statfs call has answered (RF5a F19: a line landing mid-pass). */
   afterFirstStatfs?: Array<{ rel: string; text: string }>;
+  /** When the first statfs call answers, `$HOME/<rel>` is copied to `$HOME/<to>` (the word `absent` when there is none): D-5016, the pass marker seen from inside the pass. */
+  snapshotAtFirstStatfs?: Array<{ rel: string; to: string }>;
   /** The first statfs call never settles after it has appended afterFirstStatfs's lines (FU4 M27: a dead volume). */
   hangAfterAppend?: boolean;
   /** Once the first statfs call has answered, the first <times> (default 1) calls of fs.<fn> on a path holding <needle> throw <code> (FU4 M26). */

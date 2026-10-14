@@ -33,7 +33,7 @@
 // test-only preload, never a variable this file reads (§10.1 "Seams").
 import fs, {
   accessSync, chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, openSync, readdirSync,
-  readSync, realpathSync, renameSync, statSync, unlinkSync, writeSync,
+  readFileSync, readSync, realpathSync, renameSync, statSync, unlinkSync, writeSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -54,7 +54,7 @@ import {
   makeBelt, beltUnits, BELT_META, BELT_NODES_STEP, BELT_COUNTERS, REDACT_SOURCES_META, normalizeRedactSources, parseBeltState, formatBeltState,
   decideBelt, beltAfterGeneration, BELT_VERSION, beltWitnessMoved,
   REDERIVE_SLICE_MS, REDERIVE_SLICE_BYTES,
-  REASONS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker, parseOpVerbArgs, BIND_KINDS, paneReadWanted,
+  REASONS, TMUX_DEADLINE_MS, decideOpGate, formOf, parseOpMarker, formatPassMarker, procStartOf, bootIdOf, parseOpVerbArgs, BIND_KINDS, paneReadWanted,
   HARNESS_TABLE, exportDates, dueTranscriptKeys, shortestRetentionHome, planExport, retentionLowered, parseJournalRecord,
   decideRecallOff, recallOffPath, decideReparse, REPARSE_MAX_TARGETS, planCopy, STORE_DB_REL,
   diffForeignKeys, ftsTablesHealthy, FTS_REBUILD_STEP, decideCounterResets, decideIntegrity,
@@ -3350,10 +3350,40 @@ export function passCtx(o) {
   };
 }
 
+/** A process's identity, measured now from /proc: its start time (field 22 of /proc/<pid>/stat) and the boot id, or null
+ *  when either cannot be measured (no /proc, a dead pid, a zombie, an unreadable or malformed file). The pass marker
+ *  records it beside the pid, and status measures it again, so a reused pid never reads as the pass (D-5016). */
+export function procIdentityOf(pid) {
+  try {
+    const procStart = procStartOf(readFileSync(`/proc/${pid}/stat`, 'utf8'));
+    const bootId = bootIdOf(readFileSync('/proc/sys/kernel/random/boot_id', 'utf8'));
+    return procStart === null || bootId === null ? null : { procStart, bootId };
+  } catch {
+    return null;
+  }
+}
+
+/** Written under the lock when a scheduled pass starts (D-5016 history-doctor-reads-a-live-pass): the pass's pid, its start
+ *  and its identity. A pass that cannot measure its own identity (no /proc) writes none, and a write that fails (no history
+ *  root yet) is skipped: the marker is evidence for doctor and never a condition of the pass, and no marker reads as no
+ *  live pass, which is how the box was judged before. A stale marker is overwritten, or removed when none can be written. */
+function writePassMarker(P, nowMs) {
+  try {
+    removeEntry(P.pass);
+    const identity = procIdentityOf(process.pid);
+    if (identity !== null) writeFileAtomic(P.pass, formatPassMarker(process.pid, nowMs, identity), 0o600);
+  } catch { /* evidence only: the pass goes on without it */ }
+}
+
+/** Removed when the pass ends, on every exit path (scheduledPass's finally). A killed pass leaves its marker, which
+ *  reads as not live (its identity no longer measures) and which the next pass overwrites. */
+function removePassMarker(P) {
+  try { removeEntry(P.pass); } catch { /* a leftover reads as not live */ }
+}
+
 /** One scheduled pass (no --op). Returns its exit: 0 for a run, a pause or a hold; 5 for a refusal. */
 export async function scheduledPass(parsed, deps, out) {
-  const home = deps.home;
-  const P = historyPaths(home);
+  const P = historyPaths(deps.home);
   const now = deps.now ?? Date.now;
   if (existsSync(P.off)) {
     out('history-sweep: off');
@@ -3364,6 +3394,17 @@ export async function scheduledPass(parsed, deps, out) {
     out('history-sweep: store-create-refused-role');
     return EXIT.OK;
   }
+  // D-5016: the pass marker stands from here, before any long step, to the pass's end.
+  writePassMarker(P, now());
+  try {
+    return await scheduledPassBody(parsed, deps, out, P, now, role);
+  } finally {
+    removePassMarker(P);
+  }
+}
+
+async function scheduledPassBody(parsed, deps, out, P, now, role) {
+  const home = deps.home;
   // D-4179 (history-free-space-floor): the ONE probe before the tick. deps.statfs is Task 14's in-process seam; undefined leaves statfsWithDeadline's own default.
   const free = await statfsWithDeadline(probePath(P, home), STATFS_DEADLINE_MS, deps.statfs);
   if (free.state === 'unsettled') return holdPass(home, P, 'store-unreachable', now, out);

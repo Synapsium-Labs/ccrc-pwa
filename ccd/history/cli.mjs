@@ -36,7 +36,7 @@ import { pathToFileURL } from 'node:url';
 import {
   EXIT, COVERAGE, SCHEMA_VERSION, UUID_RE, HARNESSES, CLI_STAT_DEADLINE_MS,
   historyPaths, readBoxEnvValue, decideCliStore, CONTROL_FILE_MAX, decideStatusRead, capOf, floorThreshold, exportHorizonDays, parseOpMarker,
-  decideStatusReadFailure, RETENTION_STATE_META, decideGrepIndex,
+  decideStatusReadFailure, RETENTION_STATE_META, decideGrepIndex, parsePassMarker, decidePassLive,
 } from './lib.mjs';
 import { StoreError, measureStoreFacts, openReader, userVersion, measuredSize, readBounded, FTS_GATE_SQL, ftsGateFactsOn } from './store.mjs';
 // The health block's own imports (task 28). Namespace imports, so this block
@@ -60,7 +60,7 @@ import {
   decideRecallOff, recallOffPath, parseSpoolLine, SCOPE_FAMILIES_JSON_MAX,
   readEnvelope, shownLine, nextLine,
 } from './lib.mjs';
-import { loadSecrets } from './sweep.mjs';
+import { loadSecrets, procIdentityOf } from './sweep.mjs';
 import { runTree, grepVerb, describeVerb, expandVerb, familiesOf, transcriptsOf, scopeHeader } from './recall.mjs';
 import { spawn as spawnOp } from 'node:child_process';
 import { isatty as isattyOp } from 'node:tty';
@@ -176,7 +176,7 @@ function emptyEnvelope(P) {
     },
     retention: { lowered: null, unmeasured: [] },
     redact_unreadable: [],
-    recovering: null, op: null, history_off: false, shim_mtime_ms: null,
+    recovering: null, op: null, pass: null, history_off: false, shim_mtime_ms: null,
     counters: {},
     health: { pass: null, warn: [], fail: [] },
   };
@@ -203,6 +203,12 @@ function boxFacts(env, P) {
   const text = readTrimmed(P.op);
   const m = text === null ? null : parseOpMarker(text);
   env.op = m === null ? null : { verb: m.verb, pid: m.pid, alive: pidAlive(m.pid), start_ms: m.startMs };
+  // D-5016 (history-doctor-reads-a-live-pass): the scheduled pass's marker. `live` is the IDENTITY test (the pid's start
+  // time and the boot id measured now equal the marker's), never `kill(pid, 0)`, which a reused pid answers; anything
+  // unmeasurable (no /proc, a dead pid, an unreadable or malformed marker) is not live, and a malformed one is no marker.
+  const pt = readTrimmed(P.pass);
+  const pm = pt === null ? null : parsePassMarker(pt);
+  env.pass = pm === null ? null : { pid: pm.pid, start_ms: pm.startMs, live: decidePassLive(pm, procIdentityOf(pm.pid)) };
 }
 
 /** This store's journal (bytes, newest UTC month) and every OTHER store's directory beside it, listed and
@@ -1155,6 +1161,7 @@ function healthInputsOf(env, x, nowMs) {
       ? { step: String(env.recovering.step), cursor: String(env.recovering.cursor ?? ''), cursorUnmovedTicks: x.recoverUnmovedTicks }
       : null,
     op: env.op ? { verb: env.op.verb, pid: env.op.pid, alive: env.op.alive === true } : null,
+    pass: env.pass ? { pid: env.pass.pid, startMs: env.pass.start_ms, live: env.pass.live === true } : null,
     // The envelope lists the newest tick first; deriveHealth's catching-up rule reads oldest first.
     bytesBehindLast3: [...(env.bytes_behind_last3 ?? [])].map(Number).reverse(),
     fts: env.fts ?? null,

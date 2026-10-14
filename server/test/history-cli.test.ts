@@ -14,7 +14,7 @@ import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { SCHEMA_VERSION } from '../../ccd/history/lib.mjs';
+import { SCHEMA_VERSION, formatPassMarker, procStartOf, bootIdOf } from '../../ccd/history/lib.mjs';
 import { makeHistoryBox, runSweep, preloadOptions, PRELOADS, CLI, REPO, type HistoryBox } from './historyHelpers.js';
 import * as healthCp from 'node:child_process';
 import * as healthFs from 'node:fs';
@@ -36,6 +36,7 @@ interface Envelope {
   journal: { bytes: number; newest_month: string | null; outbox: number; growth_30d_bytes: number; skipped: number; unwritable: boolean; other_store_dirs: string[] };
   export: Record<string, { horizon_days: number | null; retention_days: number | null; due_blobs: number; overdue_blobs: number; segments: number }>;
   recovering: { step: string; cursor: string } | null; op: { verb: string; pid: number; alive: boolean; start_ms: number } | null;
+  pass: { pid: number; start_ms: number; live: boolean } | null;
   history_off: boolean; shim_mtime_ms: number | null; counters: Record<string, number>;
   health: { pass: string | null; warn: unknown[]; fail: unknown[] };
 }
@@ -438,6 +439,7 @@ describe('ccrc history status (Linux)', () => {
     expect(e.journal.outbox).toBe(0);
     expect(e.journal.other_store_dirs).toEqual([]);
     expect(e.op).toEqual({ verb: 'import', pid: dead, alive: false, start_ms: 1700000000000 });
+    expect(e.pass, 'D-5016: no pass marker, no pass fact (the key is always present, additive)').toBeNull();
     expect(e.history_off).toBe(true);
     expect(typeof e.shim_mtime_ms).toBe('number');
     expect(e.recovering).toBeNull();
@@ -588,6 +590,106 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
     const { env } = statusOf(box);
     expect(wordsOf(env!['health']['warn'])).toContain('off');
     expect(wordsOf(env!['health']['fail'])).not.toContain('tick-stale');
+  });
+
+  // D-5016 (history-doctor-reads-a-live-pass): status measures the scheduled pass's marker (`pass: { pid, start_ms, live }`), and the
+  // health decision reads a LIVE pass as a fresh tick (started within TICK_STALE_MS) or as hung (past it). `live` is an IDENTITY test:
+  // the pid's start time (/proc/<pid>/stat field 22) and the boot id, measured now, equal the marker's.
+  describe('the pass marker (D-5016)', () => {
+    const MIN = 60_000;
+    const passFile = (box: healthHh.HistoryBox): string => healthPath.join(box.home, '.ccrc', 'history', 'pass');
+    const identityOf = (pid: number): { procStart: string; bootId: string } => {
+      const procStart = procStartOf(healthFs.readFileSync(`/proc/${pid}/stat`, 'utf8'));
+      const bootId = bootIdOf(healthFs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8'));
+      if (procStart === null || bootId === null) throw new Error('this box has no /proc identity');
+      return { procStart, bootId };
+    };
+    /** A bound store whose last tick is 40 minutes old, on a box whose shim is long placed: the tick-stale baseline. */
+    const staleBox = (prefix: string): healthHh.HistoryBox => {
+      const box = healthHh.makeHistoryBox(prefix, { role: 'fleet', shim: true });
+      ageFile(shimOf(box), 120 * MIN);
+      tickedStore(box, Date.now() - 40 * MIN);
+      const db = healthStore.openWriter(dbFile(box));       // lag measured as of now, so only the tick is old (no lag-high beside it)
+      try { healthStore.setMeta(db, 'last_zero_behind_ms', String(Date.now())); } finally { healthStore.closeWriter(db); }
+      return box;
+    };
+    const plant = (box: healthHh.HistoryBox, pid: number, ago: number, identity = identityOf(pid)): void => {
+      healthFs.mkdirSync(healthPath.dirname(passFile(box)), { recursive: true, mode: 0o700 });
+      healthFs.writeFileSync(passFile(box), formatPassMarker(pid, Date.now() - ago, identity), { mode: 0o600 });
+    };
+    const failOf = (r: { env: Envelope | null }): Array<{ word: string; detail: string }> => r.env!['health']['fail'];
+
+    it('(c) CONTROL: with no marker, a 40 min old tick is FAIL tick-stale as it always was, and pass is null', () => {
+      const box = staleBox('ccrc-history-pass-none-');
+      const r = statusOf(box);
+      expect(r.env!['pass']).toBeNull();
+      expect(wordsOf(failOf(r))).toEqual(['tick-stale']);
+      expect(failOf(r)[0]!.detail).toContain('the last tick ran 40 min ago');
+    });
+
+    it('(a) a marker whose identity measures equal (a live pass) started 7 min ago: pass.live, and the 40 min old tick is no tick-stale FAIL', () => {
+      const box = staleBox('ccrc-history-pass-fresh-');
+      plant(box, process.pid, 7 * MIN);
+      const r = statusOf(box);
+      expect(r.env!['pass']).toMatchObject({ pid: process.pid, live: true });
+      expect(r.env!['pass']['start_ms']).toBeGreaterThan(Date.now() - 8 * MIN);
+      expect(wordsOf(failOf(r))).toEqual([]);
+    });
+
+    it('(b) the same live pass started 11 min ago is FAIL tick-stale naming a pass that is still running', () => {
+      const box = staleBox('ccrc-history-pass-hung-');
+      plant(box, process.pid, 11 * MIN);
+      const r = statusOf(box);
+      expect(r.env!['pass']['live']).toBe(true);
+      expect(wordsOf(failOf(r))).toEqual(['tick-stale']);
+      expect(failOf(r)[0]!.detail).toContain(`the scheduled pass (pid ${process.pid}) started 11 min ago and is still running`);
+    });
+
+    it('(d) a dead pid, a LIVE pid with another start time (a reused pid), another boot id and a malformed marker each read as not live', () => {
+      const box = staleBox('ccrc-history-pass-notlive-');
+      const dead = spawnSync(process.execPath, ['-e', '']).pid!;              // a pid that has already exited
+      const me = identityOf(process.pid);
+      const cases: Array<[string, () => void, boolean]> = [
+        ['a dead pid with a start time it once had', () => plant(box, dead, 2 * MIN, { procStart: String(Number(me.procStart) + 1), bootId: me.bootId }), false],
+        ['a live pid recorded with a start time one tick off', () => plant(box, process.pid, 2 * MIN, { procStart: String(Number(me.procStart) + 1), bootId: me.bootId }), false],
+        ['a live pid recorded under another boot id', () => plant(box, process.pid, 2 * MIN, { procStart: me.procStart, bootId: '0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e' }), false],
+        ['CONTROL: the same live pid, recorded as measured', () => plant(box, process.pid, 2 * MIN), true],
+      ];
+      for (const [what, arrange, live] of cases) {
+        arrange();
+        const r = statusOf(box);
+        expect(r.env!['pass'], what).toMatchObject({ pid: expect.any(Number), live });
+        expect(wordsOf(failOf(r)), what).toEqual(live ? [] : ['tick-stale']);
+        if (!live) expect(failOf(r)[0]!.detail, what).not.toContain('still running');
+      }
+      for (const junk of ['', 'garbage\n', `${process.pid} 1 2\n`, `import ${process.pid} ${Date.now()}\n`]) {
+        healthFs.writeFileSync(passFile(box), junk, { mode: 0o600 });
+        const r = statusOf(box);
+        expect(r.env!['pass'], JSON.stringify(junk)).toBeNull();
+        expect(wordsOf(failOf(r)), JSON.stringify(junk)).toEqual(['tick-stale']);
+      }
+      healthFs.rmSync(passFile(box));
+      healthCp.execFileSync('mkfifo', [passFile(box)]);                        // a FIFO is never waited on, and names no pass
+      const fifo = statusOf(box, ['--json'], { preloads: [], env: {}, timeoutMs: 8_000 });
+      expect(fifo.env!['pass']).toBeNull();
+      expect(wordsOf(failOf(fifo))).toEqual(['tick-stale']);
+    });
+
+    it('(d) a marker a KILLED pass left reads live while its process stands and not live once it is killed', async () => {
+      const box = staleBox('ccrc-history-pass-killed-');
+      const child = healthCp.spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' });
+      try {
+        await new Promise<void>((resolve, reject) => { child.once('spawn', () => resolve()); child.once('error', reject); });
+        plant(box, child.pid!, 2 * MIN);
+        expect(statusOf(box).env!['pass']).toMatchObject({ pid: child.pid, live: true });
+        const gone = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+        child.kill('SIGKILL');
+        await gone;
+        const r = statusOf(box);
+        expect(r.env!['pass']).toMatchObject({ pid: child.pid, live: false });
+        expect(wordsOf(failOf(r))).toEqual(['tick-stale']);
+      } finally { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); }
+    });
   });
 
   // Task 28F item 3: a failed extras read is unmeasured, never a healthy default. The smallest seam: the breaker

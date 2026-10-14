@@ -3523,6 +3523,54 @@ describe('lib: parseOpMarker (plan task 25)', () => {
   });
 });
 
+// ===========================================================================
+// D-5016 (history-doctor-reads-a-live-pass): the pass marker's one grammar and its identity test. A marker is live ONLY
+// when the pid's start time and the boot id, measured now, equal the ones it recorded; `kill(pid, 0)` is not that test.
+// ===========================================================================
+describe('lib: the pass marker, its grammar and its identity test (D-5016)', () => {
+  const BOOT = '0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e';
+  it('parsePassMarker accepts `<pid> <start_ms> <proc_start> <boot_id>` and formatPassMarker writes exactly that', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.parsePassMarker(`4242 1700000000000 987654 ${BOOT}\n`)).toEqual({ pid: 4242, startMs: 1700000000000, procStart: '987654', bootId: BOOT });
+    expect(lib.formatPassMarker(4242, 1700000000000, { procStart: '987654', bootId: BOOT })).toBe(`4242 1700000000000 987654 ${BOOT}\n`);
+    expect(lib.parsePassMarker(lib.formatPassMarker(7, 0, { procStart: '0', bootId: BOOT }))).toEqual({ pid: 7, startMs: 0, procStart: '0', bootId: BOOT });
+  });
+  it('parsePassMarker answers null for every other shape: the op marker\'s, a missing field, a malformed boot id, a second line', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    for (const bad of ['', '\n', 'import 4242 1700000000000', '4242 1700000000000', '4242 1700000000000 987654', `4242 1700000000000 987654 ${BOOT.toUpperCase()}`,
+      `0 1700000000000 987654 ${BOOT}`, `-4 1 2 ${BOOT}`, `4242 -1 987654 ${BOOT}`, `4242 1 -2 ${BOOT}`, `4242 1 2 ${BOOT}x`, `4242 1 2 ${BOOT}\n4243 1 2 ${BOOT}`,
+      '4242 1700000000000 987654 not-a-boot-id', `12345678901 1 2 ${BOOT}`]) {
+      expect(lib.parsePassMarker(bad), JSON.stringify(bad)).toBeNull();
+    }
+  });
+  it('procStartOf reads field 22 after the LAST `)`, so a comm with spaces and parentheses cannot shift it; a zombie or dead process, or a short line, answers null', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const tail = (state: string): string => `${state} 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 55555 20 21`;   // fields 3..24; field 22 is the 20th
+    expect(lib.procStartOf(`4242 (node) ${tail('S')}`)).toBe('55555');
+    expect(lib.procStartOf(`4242 (a b) c) d (e) ${tail('R')}`)).toBe('55555');
+    expect(lib.procStartOf(`4242 (node) ${tail('Z')}`), 'a zombie is not a running pass').toBeNull();
+    expect(lib.procStartOf(`4242 (node) ${tail('X')}`)).toBeNull();
+    expect(lib.procStartOf('4242 (node) S 1 2 3'), 'too short').toBeNull();
+    expect(lib.procStartOf('no parentheses at all')).toBeNull();
+    expect(lib.procStartOf(`4242 (node) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 -5 20 21`), 'a non-numeric field 22').toBeNull();
+  });
+  it('bootIdOf takes a UUID and nothing else', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    expect(lib.bootIdOf(`${BOOT}\n`)).toBe(BOOT);
+    expect(lib.bootIdOf('nope')).toBeNull();
+    expect(lib.bootIdOf('')).toBeNull();
+  });
+  it('decidePassLive is true only when the marker parsed AND the identity measured now equals it in both fields', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const marker = { pid: 4242, startMs: 1, procStart: '55555', bootId: BOOT };
+    expect(lib.decidePassLive(marker, { procStart: '55555', bootId: BOOT })).toBe(true);
+    expect(lib.decidePassLive(marker, { procStart: '55556', bootId: BOOT }), 'a reused pid has another start time').toBe(false);
+    expect(lib.decidePassLive(marker, { procStart: '55555', bootId: '99999999-4f5a-4b6c-8d7e-9f0a1b2c3d4e' }), 'another boot').toBe(false);
+    expect(lib.decidePassLive(marker, null), 'unmeasurable now').toBe(false);
+    expect(lib.decidePassLive(null, { procStart: '55555', bootId: BOOT }), 'no marker').toBe(false);
+  });
+});
+
 // ── task 28: deriveHealth — every §9.6 rule as a word (history spec §9.6) ─────
 // Pure: every input is a parameter, the clock included. Each case names the
 // word it expects and its class; the coverage case binds the table to
@@ -3538,7 +3586,7 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     nowMs: NOW, storeId: STORE, exit: 0, reason: null,
     shimMtimeMs: NOW - 60 * MIN, lastTickMs: NOW - MIN, lagS: 5, sizeBytes: 1_000_000,
     capGb: 50, capMalformed: false, capFile: '/home/u/.ccrc/cap-fixture', capturePause: '',
-    migration: 'none', userVersion: 1, codeVersion: 1, historyOff: false, recovering: null, op: null,
+    migration: 'none', userVersion: 1, codeVersion: 1, historyOff: false, recovering: null, op: null, pass: null,
     bytesBehindLast3: [0, 0, 0], fts: 'ready', modesWrong: [], rootIsSymlink: false,
     redactUnreadable: [], breakerOpen: false, rosterUnreadable: false, exportDue: 0, exportOverdue: 0,
     exportWriterLive: false, exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [],
@@ -3912,6 +3960,53 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
   it('off and a live op marker stay held with a 3 h old tick: neither is tick evidence (D-4314)', () => {
     expect(words(healthLib.deriveHealth(base({ historyOff: true, lastTickMs: NOW - 180 * MIN })), 'fail')).toEqual([]);
     expect(words(healthLib.deriveHealth(base({ op: { verb: 'backup', pid: 4242, alive: true }, lastTickMs: NOW - 180 * MIN })), 'fail')).toEqual([]);
+  });
+  // D-5016 (history-doctor-reads-a-live-pass, fix round 1; review 441 F1/F14): the ticks row is stamped with the pass START and written at
+  // its END, so a healthy pass longer than the timer's period shows an old tick while it runs. One pin per case, each red on removal.
+  it('D-5016 (a): a LIVE pass that started within TICK_STALE_MS reads as a fresh tick: an old tick is no tick-stale FAIL, and no tick at all is none either', () => {
+    const live = (ago: number) => ({ pid: 4242, startMs: NOW - ago, live: true });
+    const r = healthLib.deriveHealth(base({ lastTickMs: NOW - 40 * MIN, pass: live(7 * MIN) }));
+    expect(words(r, 'fail')).toEqual([]);
+    const atBound = healthLib.deriveHealth(base({ lastTickMs: NOW - 40 * MIN, pass: live(healthLib.TICK_STALE_MS) }));
+    expect(words(atBound, 'fail'), 'inclusive at TICK_STALE_MS, as the tick bound is').toEqual([]);
+    const first = healthLib.deriveHealth(base({ lastTickMs: null, lagS: null, shimMtimeMs: NOW - 60 * MIN, pass: live(5 * MIN) }));
+    expect(words(first, 'fail'), 'a first pass still running is no "no tick has run"').toEqual([]);
+    // The other rules that read a fresh tick: a running pass keeps catching-up, recovering and lag-unmeasured warned, not failed.
+    expect(words(healthLib.deriveHealth(base({ lastTickMs: NOW - 40 * MIN, lagS: null, pass: live(MIN) })), 'warn')).toContain('lag-unmeasured');
+    expect(words(healthLib.deriveHealth(base({ lastTickMs: NOW - 40 * MIN, bytesBehindLast3: [300, 200, 100], pass: live(MIN) })), 'warn')).toContain('catching-up');
+    const rec = healthLib.deriveHealth(base({ lastTickMs: NOW - 40 * MIN, recovering: { ...RECOVER, cursorUnmovedTicks: 2 }, pass: live(MIN) }));
+    expect(words(rec, 'warn')).toContain('recovering');
+    expect(words(rec, 'fail')).toEqual([]);
+    // It answers for the tick only: lag-high is its own rule and still fires.
+    expect(words(healthLib.deriveHealth(base({ lastTickMs: NOW - 40 * MIN, lagS: 7200, pass: live(MIN) })), 'fail')).toEqual(['lag-high']);
+  });
+  it('D-5016 (b): a LIVE pass that started more than TICK_STALE_MS ago is FAIL tick-stale, naming the running pass and how long', () => {
+    const hung = { pid: 4242, startMs: NOW - healthLib.TICK_STALE_MS - 1, live: true };
+    for (const lastTickMs of [NOW - 40 * MIN, NOW - 2 * MIN, null]) {
+      const r = healthLib.deriveHealth(base({ lastTickMs, lagS: lastTickMs === null ? null : 30, shimMtimeMs: NOW - 60 * MIN, pass: hung }));
+      expect(words(r, 'fail'), `last tick ${lastTickMs}`).toEqual(['tick-stale']);
+      expect(r.fail[0]!.detail).toContain('still running');
+      expect(r.fail[0]!.detail).toContain('pid 4242');
+      expect(r.fail[0]!.detail).toContain('started 10 min ago');
+      expect(r.fail[0]!.remedy).toBe(healthLib.HEALTH_REMEDIES['tick-stale']);
+    }
+    const long = healthLib.deriveHealth(base({ lastTickMs: NOW - 40 * MIN, pass: { pid: 4242, startMs: NOW - 45 * MIN, live: true } }));
+    expect(long.fail.map((i) => i.detail).join('\n')).toContain('started 45 min ago');
+  });
+  it('D-5016 (c) CONTROL: with no live pass, an old or absent tick FAILs tick-stale in the words it always had; a pass that is not live changes nothing', () => {
+    const gone = { pid: 4242, startMs: NOW - MIN, live: false };
+    for (const pass of [null, gone]) {
+      const old = healthLib.deriveHealth(base({ lastTickMs: NOW - 40 * MIN, pass }));
+      expect(words(old, 'fail')).toEqual(['tick-stale']);
+      expect(old.fail[0]!.detail).toContain('the last tick ran 40 min ago');
+      expect(old.fail[0]!.detail).not.toContain('still running');
+      const none = healthLib.deriveHealth(base({ lastTickMs: null, lagS: null, shimMtimeMs: NOW - 60 * MIN, pass }));
+      expect(words(none, 'fail')).toEqual(['tick-stale']);
+      expect(none.fail[0]!.detail).toContain('no tick has run');
+    }
+    // A dead pass's old start is never "hung": not live, it is not running.
+    const deadOld = healthLib.deriveHealth(base({ lastTickMs: NOW - 2 * MIN, pass: { pid: 4242, startMs: NOW - 90 * MIN, live: false } }));
+    expect(words(deadOld, 'fail')).toEqual([]);
   });
   // Task 28F item 3: an input status could not read is not a healthy input (the no-overloaded-null rule).
   it('an extras read that failed is FAIL status-unreadable naming what could not be read, beside whatever else was measured', () => {

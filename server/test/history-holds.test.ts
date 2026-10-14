@@ -753,3 +753,62 @@ describe('HI2 H-162 (D-4599): a bound store at user_version 0 is refused by the 
     expect(spoolRecs(box).length, 'the journal half still ran: the spool line is held in the journal').toBe(1);
   });
 });
+
+// D-5016 (history-doctor-reads-a-live-pass): the scheduled pass writes `~/.ccrc/history/pass` (`<pid> <start_ms> <proc_start> <boot_id>`) when it
+// starts, before any long step, and removes it when it ends on every exit path; doctor reads the marker through status. The pass is seen from
+// INSIDE by the driver's snapshotAtFirstStatfs: its first statfs probe is the first long step.
+describe('D-5016 the scheduled pass marker', () => {
+  const MIN = 60_000;
+  const passFile = (box: HistoryBox): string => path.join(paths(box).root, 'pass');
+  const seen = (box: HistoryBox, name: string): string => fs.readFileSync(path.join(box.home, name), 'utf8');
+  const snap = [{ rel: path.join('.ccrc', 'history', 'pass'), to: 'pass.seen' }];
+  const BOOT = fs.existsSync('/proc/sys/kernel/random/boot_id') ? fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim() : null;
+
+  it('(e) the marker stands while the pass runs (this pass\'s own pid, its start, its identity) and is gone when the pass ends', async () => {
+    const lib = await import('../../ccd/history/lib.mjs');
+    const box = boundBox('ccrc-hist-pass-run-');
+    const before = Date.now();
+    expect(fs.existsSync(passFile(box)), 'no marker between passes').toBe(false);
+    const r = runDriver(box, { snapshotAtFirstStatfs: snap });
+    expect(r.code, r.stderr).toBe(0);
+    const m = lib.parsePassMarker(seen(box, 'pass.seen'));
+    expect(m, `a marker in the grammar was standing mid-pass: ${JSON.stringify(seen(box, 'pass.seen'))}`).not.toBeNull();
+    expect(m!.pid, 'the pass\'s own pid, never the runner\'s').toBeGreaterThan(0);
+    expect(m!.pid).not.toBe(process.pid);
+    expect(m!.startMs).toBeGreaterThanOrEqual(before - MIN);
+    expect(m!.startMs).toBeLessThanOrEqual(Date.now());
+    expect(m!.bootId).toBe(BOOT);
+    expect(m!.procStart).toMatch(/^[0-9]+$/);
+    expect(fs.existsSync(passFile(box)), 'removed when the pass ended').toBe(false);
+    expect(names(paths(box).root).filter((n) => n.startsWith('pass')), 'no temp left beside it').toEqual([]);
+  });
+
+  it('(e) the marker is private (0600) and a stale one is overwritten: a killed pass\'s marker and a planted directory never keep the new pass from writing', () => {
+    const box = boundBox('ccrc-hist-pass-stale-');
+    fs.writeFileSync(passFile(box), `4242 1 2 ${BOOT ?? '0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e'}\n`);     // what a killed pass leaves
+    let r = runDriver(box, { snapshotAtFirstStatfs: snap });
+    expect(r.code, r.stderr).toBe(0);
+    expect(seen(box, 'pass.seen')).not.toContain('4242 1 2 ');
+    expect(fs.existsSync(passFile(box))).toBe(false);
+    fs.mkdirSync(passFile(box));                                                                     // a planted directory
+    r = runDriver(box, { snapshotAtFirstStatfs: snap });
+    expect(r.code, r.stderr).toBe(0);
+    expect(seen(box, 'pass.seen'), 'written over a planted directory').toMatch(/^[1-9][0-9]* [0-9]+ [0-9]+ [0-9a-f-]{36}\n$/);
+    expect(fs.existsSync(passFile(box)), 'the empty directory was removed by type, and the marker with it').toBe(false);
+    r = runDriver(box, { snapshotAtFirstStatfs: snap });
+    expect(r.code, r.stderr).toBe(0);
+    expect(seen(box, 'pass.seen.mode'), 'private to the user').toBe('600');
+  });
+
+  it('(e) the marker is removed on a pass that holds early (a store that does not answer) and on one whose tick throws', () => {
+    const box = boundBox('ccrc-hist-pass-exits-');
+    const hung = runDriver(box, { snapshotAtFirstStatfs: snap, afterFirstStatfs: [], hangAfterAppend: true });
+    expect(hung.stdout, hung.stderr).toMatch(/history-sweep: store-unreachable/);
+    expect(seen(box, 'pass.seen'), 'the marker stood when the probe was made').toMatch(/^[1-9][0-9]* /);
+    expect(fs.existsSync(passFile(box)), 'a held pass removes its marker').toBe(false);
+    const thrown = runDriver(box, { snapshotAtFirstStatfs: snap, throwTimesAfterFirstStatfs: { fn: 'readdirSync', needle: '/history/spool', code: 'EIO', times: 1000 } });
+    expect(thrown.code, `the throw ends the pass: ${thrown.stderr}`).not.toBe(0);
+    expect(seen(box, 'pass.seen')).toMatch(/^[1-9][0-9]* /);
+    expect(fs.existsSync(passFile(box)), 'a pass that threw removes its marker').toBe(false);
+  });
+});

@@ -13745,7 +13745,7 @@ describe('ccrc doctor: history — the relay (O15: every word, and the one rule 
   const cleanInputs = (now: number): Parameters<typeof deriveHealth>[0] => ({
     nowMs: now, storeId: SID, exit: 0, reason: null, shimMtimeMs: now - 3_600_000, lastTickMs: now - 30_000, lagS: 30,
     sizeBytes: 1_048_576, capGb: 50, capMalformed: false, capFile: '/home/u/.ccrc/history-max-gb', capturePause: '',
-    migration: 'none', userVersion: 1, codeVersion: 1, historyOff: false, recovering: null, op: null,
+    migration: 'none', userVersion: 1, codeVersion: 1, historyOff: false, recovering: null, op: null, pass: null,
     bytesBehindLast3: [0, 0, 0], fts: 'ready', modesWrong: [], rootIsSymlink: false, redactUnreadable: [],
     breakerOpen: false, rosterUnreadable: false, exportDue: 0, exportOverdue: 0, exportWriterLive: false,
     exportPausedLowDisk: false, retentionLowered: null, retentionUnmeasured: [], journalGrowth30d: 0, journalSkipped: 0, blobUndecodable: 0, drainRejected: 0, spoolDisplaced: 0, spoolBlocked: 0, spoolUnreadable: 0, spoolNotDirectory: false, spoolNodesRefused: 0,

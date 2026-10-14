@@ -12,6 +12,10 @@
 //   afterFirstStatfs   [{rel, text}]: after the pass's FIRST statfs call answers, each `text` is appended to `$HOME/<rel>` (its
 //                      directory made 0700), as a hook landing a line mid-pass would (RF5a F19). For an --op pass the first call
 //                      is the probe right after the lock-take journal half
+//   snapshotAtFirstStatfs
+//                      [{rel, to}]: when the pass's FIRST statfs call answers, `$HOME/<rel>` is copied to `$HOME/<to>`, or `to` holds
+//                      the word `absent` when there is no such file (D-5016: the scheduled pass's marker, seen from INSIDE the pass,
+//                      which has written it before its first probe and removes it at its end); `<to>.mode` holds its octal mode)
 //   hangAfterAppend    true: the first statfs call, after appending afterFirstStatfs's lines, never settles (a dead volume the
 //                      line landed before, FU4 M27); the pass's own bounded probe then answers store-unreachable
 //   throwTimesAfterFirstStatfs
@@ -75,13 +79,18 @@ if (typeof spec.sizeBytes === 'number') deps.measureSize = () => spec.sizeBytes;
 if (Array.isArray(spec.sizeBytesSeq)) { let k = 0; deps.measureSize = () => spec.sizeBytesSeq[Math.min(k++, spec.sizeBytesSeq.length - 1)]; }
 if (Array.isArray(spec.managedSettings)) deps.managedSettings = spec.managedSettings;
 if (typeof spec.openStoreWord === 'string') deps.openStore = () => ({ word: spec.openStoreWord });
-if (Array.isArray(spec.afterFirstStatfs) || spec.throwTimesAfterFirstStatfs !== undefined) {
+if (Array.isArray(spec.afterFirstStatfs) || spec.throwTimesAfterFirstStatfs !== undefined || Array.isArray(spec.snapshotAtFirstStatfs)) {
   let fired = false;
   const armed = spec.throwTimesAfterFirstStatfs;
   deps.statfs = async (p) => {
     const r = await fs.promises.statfs(p);
     if (!fired) {
       fired = true;
+      for (const w of spec.snapshotAtFirstStatfs ?? []) {
+        const from = path.join(process.env.HOME, w.rel);
+        fs.writeFileSync(path.join(process.env.HOME, w.to), fs.existsSync(from) ? fs.readFileSync(from) : 'absent');
+        fs.writeFileSync(path.join(process.env.HOME, `${w.to}.mode`), fs.existsSync(from) ? (fs.statSync(from).mode & 0o777).toString(8) : 'absent');
+      }
       for (const w of spec.afterFirstStatfs ?? []) {
         const f = path.join(process.env.HOME, w.rel);
         fs.mkdirSync(path.dirname(f), { recursive: true, mode: 0o700 });
