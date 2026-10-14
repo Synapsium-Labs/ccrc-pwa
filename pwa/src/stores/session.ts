@@ -77,10 +77,16 @@ export interface PendingSend {
    *  on screen, never the phone's. Only an event strictly newer than this can
    *  be this message's echo (`isFresh`).
    *
-   *  Stamped once, at `send()`, and kept across `retry`/`resolve`: a re-send is
-   *  the same message, and an echo of ANY attempt is newer than the moment it
-   *  was first sent. What this excludes is history that predates the message
-   *  entirely — which is what a backlog replays.
+   *  Stamped at `send()`, and RAISED at each re-send (`retry`/`resolve`) to the
+   *  newest event on screen then, never lowered (`reSendBar`). What this
+   *  excludes is history the operator had already been shown when they sent —
+   *  which is what a backlog replays.
+   *
+   *  It is what THIS STORE had seen, not what the box had written: a screen
+   *  that was stale at the send (the socket down, the backlog not yet in)
+   *  admits a same-text message written in the gap, and that clears the bubble
+   *  early — `main`'s behaviour, and the message itself still shows once it is
+   *  delivered.
    *
    *  ABSENT when nothing from the transcript was on screen yet (before the
    *  first backlog, or right after a `rotated`): then there is no bar, and any
@@ -358,9 +364,15 @@ const revoke = (p: PendingSend | undefined): void => {
  *  carry over. (`/branch` is a different copy path, the one that adds
  *  `forkedFrom`; the `[bg]` successor writes no `forkedFrom`.)
  *
- *  The one way this errs is the box's clock stepping BACKWARDS between the bar
- *  and the echo, and that errs toward the ten-minute fallback — never toward
- *  clearing an undelivered message.
+ *  It errs two ways, in opposite directions:
+ *  - the box's clock stepping BACKWARDS between the bar and the echo refuses
+ *    the echo, and the bubble waits for the ten-minute fallback;
+ *  - the bar is the newest event THIS STORE had seen, not the box's state at
+ *    the send. A screen that was stale when the operator pressed send (the
+ *    socket down, a reconnect's backlog not yet in) has a low bar, and a
+ *    same-text message written in that gap passes it and clears the bubble
+ *    early. That is what `main` did for every replay; the message itself still
+ *    shows once it is delivered. A uuid seen-set has the same hole (above).
  *
  *  The bar is the MAX over the events on screen, never the first or the last:
  *  transcript order is not time order, because that same writer appends a
@@ -387,6 +399,30 @@ function newestTranscriptTs(events: ChatEvent[]): number | undefined {
  *  so against a bar it never clears; with no bar it is accepted as before. */
 const isFresh = (e: ChatEvent, p: PendingSend): boolean =>
   p.sentAfter === undefined || Date.parse(e.ts) > p.sentAfter;
+
+/** D-4952. The bar a RE-send (`retry`, `resolve`) carries: the newest event on
+ *  screen at the re-send, and never lower than the bar `p` already had.
+ *
+ *  RAISED, because everything the store has shown by the time the operator
+ *  presses Retry or Send it is history to this message, exactly as it is to a
+ *  first send: a same-text message that landed while the pending sat failed (a
+ *  "yes" typed in the terminal) would otherwise pass the first send's bar on a
+ *  later replay and clear a re-send that has not been delivered.
+ *
+ *  NEVER LOWERED, because "the newest event now" can be no bar at all — right
+ *  after a `rotated`, before its backlog, nothing from a transcript is on
+ *  screen — and dropping the first send's bar would re-admit the history it
+ *  refused.
+ *
+ *  The cost: an echo of an EARLIER attempt that was delivered after all (a
+ *  failure reported on a send that landed) and is no newer than the re-send's
+ *  bar no longer clears it. The re-send is delivered too and its own echo
+ *  clears it; an error toward the ten-minute fallback, never toward clearing. */
+function reSendBar(p: PendingSend, events: ChatEvent[]): number | undefined {
+  const now = newestTranscriptTs(events);
+  if (now === undefined) return p.sentAfter;
+  return p.sentAfter === undefined ? now : Math.max(p.sentAfter, now);
+}
 
 /** D-4951. The command a pending would run, when it is one: the first word of
  *  the composed text if that text starts with `/` (`/effort ultracode` ->
@@ -495,9 +531,22 @@ export interface SessionStoreDeps {
    *  cannot echo inside five seconds, so the operator watched their own message
    *  vanish. The deletion is not removed — it is the terminal condition for
    *  every pending whose echo never comes (a command that writes no
-   *  `<command-name>` row, a message whose echo fell outside a reconnect's
-   *  backlog window, a box clock that stepped back — `isFresh`) — it is moved
-   *  to a horizon where a bubble quietly retiring is no longer a surprise.
+   *  `<command-name>` row, a box clock that stepped back — `isFresh` — and an
+   *  echo this store never receives) — it is moved to a horizon where a bubble
+   *  quietly retiring is no longer a surprise.
+   *
+   *  THE BACKLOG WINDOW IS ONE OF THOSE (D-4952). Every backlog the server
+   *  sends after the file on screen changed — a reconnect whose `sinceFile`
+   *  no longer matches, a fork follow, a repoint, a registry catch-up, even
+   *  one delayed by the resolver's back-off — replays only the newest fifty
+   *  events (`BACKLOG_N` in `server/src/sessionws.ts`). An echo written while
+   *  this store was not receiving, and pushed out of that window by fifty
+   *  later events, is never seen: the bubble stays `sending`, truthfully, and
+   *  retires here. The fix is server-side and not built: widen a backlog back
+   *  to the first event newer than the client's oldest pending `sentAfter`
+   *  (within a cap), after which `isFresh` and the echo match clear it with
+   *  no change here.
+   *
    *  When this landed, a slash command's `system` echo was not matched at all
    *  and this timer was the only way its bubble ever cleared; D-4951 made it
    *  the fallback. */
@@ -775,7 +824,8 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         set((s) => ({
           pending: s.pending.map((x) =>
             x.key === key ? { ...x, state: 'sending' as const, error: undefined, code: undefined, draft: undefined,
-                              submittable: undefined, queued: undefined } : x),
+                              submittable: undefined, queued: undefined,
+                              sentAfter: reSendBar(x, s.events) } : x),
         }));
         void dispatch(key, p.text, { replaceDraft: p.replaceDraft, attachments: pathsOf(p) });
       },
@@ -790,7 +840,8 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
           pending: s.pending.map((x) =>
             x.key === key
               ? { ...x, text, state: 'sending' as const, error: undefined, code: undefined, draft: undefined,
-                  submittable: undefined, queued: undefined, replaceDraft: opts.replaceDraft }
+                  submittable: undefined, queued: undefined, replaceDraft: opts.replaceDraft,
+                  sentAfter: reSendBar(x, s.events) }
               : x),
         }));
         void dispatch(key, text, { replaceDraft: opts.replaceDraft, attachments: pathsOf(p) });

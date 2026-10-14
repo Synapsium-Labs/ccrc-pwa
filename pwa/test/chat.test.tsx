@@ -5,7 +5,7 @@ import type { ChatEvent } from '../../shared/api';
 import { useLayoutEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { createSessionStore, type SessionStore } from '../src/stores/session';
-import { ChatListInner } from '../src/session/ChatList';
+import { buildChatItems, ChatListInner } from '../src/session/ChatList';
 import { Composer } from '../src/session/Composer';
 import { loadAcks } from '../src/lib/seen';
 import { SessionScreen } from '../src/screens/SessionScreen';
@@ -875,5 +875,37 @@ describe('a system row that carries a BODY folds — it never floods the scroll'
     fireEvent.click(head);
     expect(container.querySelector('.compaction-body.msg-assist')).not.toBeNull();
     expect(container.querySelector('.compaction-raw')).toBeNull();
+  });
+});
+
+describe('the quiet-gap divider measures from the newest time seen, not the last one (D-4950)', () => {
+  // An absorbed mid-turn message is stamped with its ENQUEUE time (the
+  // `queued_command` attachment's own `timestamp`), but it is written where
+  // the model took it — after records stamped minutes later. Measured on the
+  // fleet: an attachment stamped 10:01:56 written after a tool result stamped
+  // 10:06:06. Rewinding the divider's clock to it drew a timestamp divider
+  // under a turn that never went quiet.
+  const at = (kind: 'user' | 'assistant', uuid: string, hhmmss: string): ChatEvent =>
+    ({ kind, uuid, ts: `2026-07-20T${hhmmss}.000Z`, text: uuid } as ChatEvent);
+  const dividers = (events: ChatEvent[]): string[] =>
+    buildChatItems(events, []).filter((i) => i.kind === 'divider').map((i) => i.key);
+
+  it('a message that waited in the queue draws no divider after it', () => {
+    expect(dividers([
+      at('assistant', 'a0', '10:00:00'),
+      at('assistant', 'a1', '10:04:00'),
+      at('assistant', 'a2', '10:08:00'),
+      at('assistant', 'a3', '10:12:00'),
+      at('user', 'q1', '10:01:00'),        // absorbed: enqueued at 10:01, taken at 10:12
+      at('assistant', 'a4', '10:12:30'),
+    ])).toEqual(['div-a0']);
+  });
+
+  it('a real quiet gap still gets its divider', () => {
+    expect(dividers([
+      at('assistant', 'a0', '10:00:00'),
+      at('user', 'q1', '09:59:00'),
+      at('assistant', 'a1', '10:10:00'),
+    ])).toEqual(['div-a0', 'div-a1']);
   });
 });

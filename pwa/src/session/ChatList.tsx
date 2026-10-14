@@ -132,7 +132,11 @@ export function buildChatItems(
       const label = dividerLabel(e.ts);
       if (label !== null) items.push({ kind: 'divider', key: `div-${e.uuid}`, label });
     }
-    if (Number.isFinite(t)) lastTs = t;
+    // The NEWEST time seen, never rewound: transcript order is not time order.
+    // An absorbed mid-turn message (D-4950) carries its ENQUEUE time but is
+    // written where the model took it, minutes of records later, so measuring
+    // the next gap from it drew a divider under a turn that never went quiet.
+    if (Number.isFinite(t) && (lastTs === null || t > lastTs)) lastTs = t;
 
     if (e.kind === 'tool_use') {
       const tool: Extract<ChatItem, { kind: 'tool' }> = { kind: 'tool', key: e.toolId, use: e };

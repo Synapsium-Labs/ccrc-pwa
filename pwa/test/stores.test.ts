@@ -931,6 +931,95 @@ describe('the echo that clears a pending', () => {
     store.getState().apply({ type: 'events', uuid: 'u1', offset: 50, events: [userAt('n1', 'hello', T1)] });
     expect(store.getState().pending).toEqual([]);
   });
+
+  // — D-4952 through the re-send paths: `retry` and `resolve` —
+  //
+  // A re-send carries a bar too, and it is the newest event on screen AT THE
+  // RE-SEND, never lower than the bar the pending already had. Everything the
+  // store had seen when the operator pressed Retry or Send it is history to
+  // this message, exactly as it is to a first send.
+  const T5 = '2026-07-20T10:05:00.000Z';
+  const T5b = '2026-07-20T10:05:02.000Z';
+  const T6 = '2026-07-20T10:06:00.000Z';
+  const failingOnce = (id: string, err: ApiError) => {
+    vi.useFakeTimers();
+    const prompt = vi.fn().mockRejectedValueOnce(err).mockResolvedValue(undefined);
+    return createSessionStore(id, { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 600_000 });
+  };
+  const reSend = {
+    retry: async (store: ReturnType<typeof createSessionStore>, key: string) => {
+      store.getState().retry(key);
+      await Promise.resolve();
+    },
+    resolve: async (store: ReturnType<typeof createSessionStore>, key: string) => {
+      store.getState().resolve(key, 'yes', { replaceDraft: true });
+      await Promise.resolve();
+    },
+  };
+  const failures = {
+    retry: () => new ApiError(500, { ok: false, error: 'tmux-error' }),
+    resolve: () => new ApiError(409, { ok: false, error: 'draft-present', draft: 'half-typed thought' }),
+  };
+
+  for (const via of ['retry', 'resolve'] as const) {
+    it(`a ${via}() keeps a bar: a replay of history from before the FIRST send still does not clear it`, async () => {
+      const store = failingOnce(`r-${via}-1`, failures[via]());
+      const history = [userAt('old-1', 'yes', T0), assistantAt('old-2', 'done', T0)];
+      store.getState().apply(backlog('/t/a.jsonl', history));
+      await store.getState().send('yes');
+      const key = store.getState().pending[0]!.key;
+      expect(store.getState().pending[0]!.state).toBe('failed');
+
+      await reSend[via](store, key);
+      expect(store.getState().pending[0]!.state).toBe('sending');
+      store.getState().apply(backlog('/t/a.jsonl', history));
+      expect(store.getState().pending).toHaveLength(1);
+
+      store.getState().apply({ type: 'events', uuid: 'u1', offset: 90, events: [userAt('n1', 'yes', T6)] });
+      expect(store.getState().pending).toEqual([]);
+    });
+
+    it(`a ${via}() RAISES the bar to what is on screen then: a same-text message the operator saw before re-sending is history`, async () => {
+      // The re-review's reproduction. The first attempt fails; while it sits
+      // failed, a "yes" typed in the terminal lands and is shown (a failed
+      // pending clears on nothing). The operator then re-sends. A later
+      // backlog — a fork follow, a swap repoint — replays that "yes": it is
+      // older than the re-send, so it is not this message's echo.
+      const store = failingOnce(`r-${via}-2`, failures[via]());
+      store.getState().apply(backlog('/t/a.jsonl', [assistantAt('h0', 'ready', T0)]));
+      await store.getState().send('yes');
+      const key = store.getState().pending[0]!.key;
+      store.getState().apply({
+        type: 'events', uuid: 'u1', offset: 90,
+        events: [userAt('typed', 'yes', T5), assistantAt('h1', 'ok', T5b)],
+      });
+      expect(store.getState().pending).toHaveLength(1);
+
+      await reSend[via](store, key);
+      store.getState().apply(backlog('/t/b.jsonl', [
+        assistantAt('h0', 'ready', T0), userAt('typed', 'yes', T5), assistantAt('h1', 'ok', T5b),
+      ]));
+      expect(store.getState().pending).toHaveLength(1);
+
+      store.getState().apply({ type: 'events', uuid: 'u1', offset: 120, events: [userAt('n1', 'yes', T6)] });
+      expect(store.getState().pending).toEqual([]);
+    });
+
+    it(`a ${via}() never LOWERS the bar: pressed between a rotation and its backlog, it keeps the one it had`, async () => {
+      // Right after `rotated` nothing from a transcript is on screen, so
+      // "the newest event now" is no bar at all. Taking it would drop the
+      // first send's bar and let replayed history clear the message.
+      const store = failingOnce(`r-${via}-3`, failures[via]());
+      store.getState().apply(backlog('/t/a.jsonl', [userAt('old-1', 'yes', T0), assistantAt('old-2', 'done', T1)]));
+      await store.getState().send('yes');
+      const key = store.getState().pending[0]!.key;
+      store.getState().apply({ type: 'rotated', uuid: 'u2' });
+
+      await reSend[via](store, key);
+      store.getState().apply(backlog('/t/b.jsonl', [userAt('copy-1', 'yes', T0)], 'u2'));
+      expect(store.getState().pending).toHaveLength(1);
+    });
+  }
 });
 
 // — session store: connection —
