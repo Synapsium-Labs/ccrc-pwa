@@ -12,8 +12,8 @@ import { DOCS_RELIST_WORDS } from '../src/docs/docsText';
 import { fileKey, pinFor, treeKey, useDocsVisit } from '../src/docs/useDocsVisit';
 import type { DocsLoaders } from '../src/docs/failures';
 import {
-  BLOB_1, BLOB_2, COMMIT_A, COMMIT_B, FP_1, SERVED, draftOf, entry, failedAnswer, fakeLoaders, holder, okFile, okTree,
-  pageAt, recordingRejections, rejectsOnAbort, treeOk,
+  BLOB_1, BLOB_2, COMMIT_A, COMMIT_B, FP_1, RAN, SERVED, bodyOf, draftOf, entry, failedAnswer, fakeLoaders, holder, okFile,
+  okRefresh, okTree, pageAt, recordingRejections, rejectsOnAbort, treeOk,
 } from './docsFixtures';
 
 afterEach(() => {
@@ -782,5 +782,46 @@ describe('Review 439 F22: three visit guards a test now reds', () => {
     await flush();
     expect(f.file).toHaveBeenCalledTimes(1);
     expect(result.current.file.s).toBe('loading');
+  });
+});
+
+describe('Review 439 F20: an auto-class word inside a refresh answer retries once, like the same word on a GET', () => {
+  it('docs-busy as the tree of a refresh, with no listing held, re-GETs the tree once at its wait, then offers only Retry', async () => {
+    vi.useFakeTimers();
+    const f = fakeLoaders();
+    f.tree.mockResolvedValueOnce(failedAnswer('unresolved-ref', { ref: 'ws/a' }));
+    f.refresh.mockResolvedValueOnce(okRefresh(RAN, bodyOf('docs-busy', { retryAfterMs: 2000 })));
+    const { result } = visit(f.loaders, '/docs/demo?ref=ws/a');
+    await flush();
+    expect(result.current.tree?.s).toBe('failed');
+    act(() => result.current.fetchFromOrigin());
+    await flush();
+    expect(f.refresh).toHaveBeenCalledTimes(1);
+    expect(result.current.tree).toEqual(failedAnswer('docs-busy', { retryAfterMs: 2000 }));
+    expect(f.tree).toHaveBeenCalledTimes(1);
+    await advance(1999);
+    expect(f.tree).toHaveBeenCalledTimes(1);
+    await advance(1);
+    expect(f.tree).toHaveBeenCalledTimes(2);
+    expect(result.current.tree?.s).toBe('ok');
+  });
+
+  it('a second docs-busy for the same tree key does not retry again', async () => {
+    vi.useFakeTimers();
+    const f = fakeLoaders();
+    f.tree.mockResolvedValueOnce(failedAnswer('unresolved-ref', { ref: 'ws/a' }));
+    f.tree.mockResolvedValueOnce(failedAnswer('unresolved-ref', { ref: 'ws/a' }));
+    f.refresh.mockResolvedValue(okRefresh(RAN, bodyOf('docs-busy', { retryAfterMs: 1000 })));
+    const { result } = visit(f.loaders, '/docs/demo?ref=ws/a');
+    await flush();
+    act(() => result.current.fetchFromOrigin());
+    await flush();
+    await advance(1000);
+    expect(f.tree).toHaveBeenCalledTimes(2);
+    act(() => result.current.fetchFromOrigin());
+    await flush();
+    expect(f.refresh).toHaveBeenCalledTimes(2);
+    await advance(60_000);
+    expect(f.tree).toHaveBeenCalledTimes(2);
   });
 });

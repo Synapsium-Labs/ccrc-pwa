@@ -381,9 +381,24 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     } else if (st.trees.get(key)?.s === 'ok') {
       st.freshness.set(key, { s: 'relist-failed', answer: { s: 'failed', body: tree } });
     } else {
+      const failed: TreeSlot = { s: 'failed', body: tree };
       st.slotSeq.set(key, seq);
-      st.trees.set(key, { s: 'failed', body: tree });
+      st.trees.set(key, failed);
       st.freshness.set(key, { s: 'answered', fetch, at: now });
+      retryTreeLater(target, key, failed);
+    }
+  };
+
+  /** The one automatic re-GET of a failed tree slot, by its word's plan (spec 4.7): a failure that came as a GET's
+   *  answer and one carried in a refresh answer both take it. It acts only on the slot it was set for. */
+  const retryTreeLater = (target: Target, key: string, a: TreeSlot): void => {
+    if (a.s !== 'failed') return;
+    const plan = docsRetryPlan(a.body);
+    if (plan.kind === 'auto' && takeAutoRetry('tree', key, a.body.failure)) {
+      later(plan.afterMs, () => {
+        // Only the failed slot this timer was set for: a Retry since then has put another in its place.
+        if (st.trees.get(key) === a && isCurrentKey(key)) listTree(target);
+      });
     }
   };
 
@@ -427,15 +442,7 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     }
     st.slotSeq.set(key, seq);
     st.trees.set(key, a);
-    if (a.s === 'failed') {
-      const plan = docsRetryPlan(a.body);
-      if (plan.kind === 'auto' && takeAutoRetry('tree', key, a.body.failure)) {
-        later(plan.afterMs, () => {
-          // Only the failed slot this timer was set for: a Retry since then has put another in its place.
-          if (st.trees.get(key) === a && isCurrentKey(key)) listTree(target);
-        });
-      }
-    }
+    retryTreeLater(target, key, a);
   };
 
   const readFile = (w: Extract<Wanted, { kind: 'read' }>): void => {
