@@ -316,7 +316,7 @@ export const DOC_IMAGE_REFUSED_SENTENCE: Record<DocImageRefusal, string> = {
   'data': 'it carries its own bytes, which Docs does not load',
   'blob': 'it points at an object made inside a browser, which Docs does not load',
   'empty': 'it has no source',
-  'malformed': 'its source holds a space, a control character or a backslash',
+  'malformed': 'its source is not a well-formed URL (it may hold a space, a control character or a backslash)',
   'scheme': 'its source uses a scheme Docs does not load images from',
   'protocol-relative': 'its source names another host without a scheme',
   'root-relative': 'its source is a server path, not a document',
