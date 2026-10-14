@@ -1495,6 +1495,27 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         daily cap.
       - STATUS: fleet and server v0.0.177, newest v0.0.177, backups fleet 175M/server 690M, disk free fleet 209G/work
         volume 216G/server 32G, no anomalies at 23:42.
+    - **2026-10-14 00:50 UTC: v0.0.178 and v0.0.179 auto-converged unattended, one after the other.** No action was
+      taken.
+      - The releases, both docs only: v0.0.178, #394 (a programme ledger), at 23:53:23; and v0.0.179, #396 (a plan and
+        its ledger), at 00:17:22.
+      - **v0.0.178.** The fleet box ran 00:09:48 to 00:11:54, and the server followed at 00:12:18 to 00:12:44.
+      - **v0.0.179.** The server's next poll, 30 minutes after its own restart, found it. The fleet box ran 00:43:35 to
+        00:46:07, and the server followed at 00:47:02 to 00:47:27, 55 seconds after the fleet.
+      - **The fleet's v0.0.179 update closed `done` with "doctor exited 1 - the box moved; its health is ccrc
+        doctor's"**: the case an update reports as exit 3 (the report records no exit code). Its closing doctor read one
+        FAIL, `history: tick-stale`: reads at 00:44 and 00:45 gave "the last tick ran 12 min ago" and "13 min ago",
+        against a 10-minute limit. That check is the history programme's, not the update mechanism's. Under the box's
+        load (about 24 on 16 cores), sweep passes ran back to back for up to 7.5 minutes, and the check dates the tick
+        from the last finished pass, so a long pass plus the next one crossed the 10 minutes. The server still followed,
+        as an exit 3 should allow. At 00:48 the fleet doctor read the history check PASS ("last tick 551s ago"), with 0
+        failed.
+      - Both boxes read `box-token` PASS. Server doctor: 26 passed, 0 warned, 0 failed. Fleet doctor at 00:48: 33
+        passed, 7 warned, 0 failed. The seventh WARN is `graphify`'s "the last graph-sweep pass finished 48 minutes
+        ago", also a load reading.
+      - Wave 15 (run 300) is still held by claim 1268 (run 354) on `ccd/ccrc` alone.
+      - STATUS: fleet and server v0.0.179, newest v0.0.179, backups fleet 176M/server 695M, disk free fleet 210G/work
+        volume 213G/server 32G, no anomalies at 00:50.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
