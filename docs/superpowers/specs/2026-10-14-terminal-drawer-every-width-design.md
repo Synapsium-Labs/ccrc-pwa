@@ -1,6 +1,6 @@
 # The terminal drawer at every width: a window-sized client, a wrapped view for narrow glasses, and a guarded follow for wide ones (design)
 
-**Status:** DRAFT rev 1 — operator chose stages 1+2 with recommendations on 2026-10-14; for review in the docs PR.
+**Status:** APPROVED by the operator on 2026-10-14 (#405): stages 1+2 with the recommendations — phone native typing deferred (O1), follow cap 300 (O3), stage 2 gated on the ccd geometry settle (O4); the other open items take their recommendations. Stage 2's ccd change and any attach of a new client to a fleet tmux server still follow the SAFETY rules.
 **Date:** 2026-10-14 · **Base:** `origin/main` `e66ca6ac` (PR #190) · **Branch:** `ws/drawer-every-width`
 **Plan:** `docs/superpowers/plans/2026-10-14-terminal-drawer-every-width-stage1.md` (stages 1 and 1b). It is the single home of this design's deviation numbers, D-5005 to D-5013 (§13). Stage 2 gets its own plan once stage 1 is on the box, and that plan cites these numbers rather than redefining them.
 **Program ledger:** `docs/superpowers/programs/terminal-drawer-fit.md`.
