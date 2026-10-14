@@ -9804,3 +9804,240 @@ export const COLLECT_BOX_LABELS = {
 } as const;
 export type CollectBoxLine = keyof typeof COLLECT_BOX_LABELS;
 export const COLLECT_BOX_LINES: readonly CollectBoxLine[] = Object.keys(COLLECT_BOX_LABELS) as CollectBoxLine[];
+
+// ── Delegation observation: the shared event and state vocabulary (delegation broker wave 3) ──────────────────────
+// Declared ONCE, here, and derived everywhere else: each closed set is an `as const` array with its type read from
+// it, and `single-definition.test.ts` fails the build on a second spelling. This block imports nothing (L0).
+// Names and shapes are a contract between the hook, the server's reader and the later projection; never rename a
+// property or collapse a union member.
+
+/** The seven hook events a delegation spool line may carry. A closed set: a line whose `eventKind` is not one of
+ *  these is not a delegation line. */
+export const DELEGATION_EVENT_KINDS = [
+  'SessionStart',
+  'PreToolUse',
+  'PostToolUse',
+  'SubagentStart',
+  'SubagentStop',
+  'UserPromptSubmit',
+  'SessionEnd',
+] as const;
+export type DelegationEventKind = (typeof DELEGATION_EVENT_KINDS)[number];
+
+/** Where an activity (a unit of delegated work the parent started) came from. `bash-worktree` is raw Bash use of
+ *  a worktree; it maps to lease provenance `raw`. */
+export const DELEGATION_ACTIVITY_SOURCE_KINDS = [
+  'agent',
+  'workflow',
+  'bash-worktree',
+] as const;
+export type DelegationActivitySourceKind =
+  (typeof DELEGATION_ACTIVITY_SOURCE_KINDS)[number];
+
+/** Provenance of a lease. `attached` is representable in the complete migration; wave 3 has no writer for it. */
+export const DELEGATION_LEASE_SOURCE_KINDS = [
+  'agent',
+  'workflow',
+  'raw',
+  'attached',
+] as const;
+export type DelegationLeaseSourceKind =
+  (typeof DELEGATION_LEASE_SOURCE_KINDS)[number];
+
+/** Whether the work is running. `unknown` is a measurement state, never a default for `ended`. */
+export const DELEGATION_EXECUTION_STATES = ['active', 'ended', 'unknown'] as const;
+export type DelegationExecutionState = (typeof DELEGATION_EXECUTION_STATES)[number];
+
+/** Whether an activity is tied to a parent. `unmeasured` means the evidence to decide was unreadable or missing, and
+ *  is never folded into `unresolved`. */
+export const DELEGATION_PARENTAGE_STATES = [
+  'linked', 'unresolved', 'conflicting', 'unmeasured',
+] as const;
+export type DelegationParentageState = (typeof DELEGATION_PARENTAGE_STATES)[number];
+
+export const DELEGATION_WORKSPACE_STATES = [
+  'none', 'provisioning', 'present', 'absent', 'unmeasured',
+] as const;
+export type DelegationWorkspaceState = (typeof DELEGATION_WORKSPACE_STATES)[number];
+
+export const DELEGATION_DISPOSITIONS = [
+  'ephemeral', 'adopted', 'retained', 'promoted',
+] as const;
+export type DelegationDisposition = (typeof DELEGATION_DISPOSITIONS)[number];
+
+/** Cleanup progress. Wave 3 is report-only: no state here authorises an action by itself. */
+export const DELEGATION_CLEANUP_STATES = [
+  'not-due', 'pending', 'running', 'refused', 'reclaimed', 'unmeasured',
+] as const;
+export type DelegationCleanupState = (typeof DELEGATION_CLEANUP_STATES)[number];
+
+export const DELEGATION_CLEANUP_POPULATIONS = [
+  'ephemeral-lease',
+] as const;
+export type DelegationCleanupPopulation =
+  (typeof DELEGATION_CLEANUP_POPULATIONS)[number];
+
+export const DELEGATION_INTENT_SOURCES = [
+  'explicit', 'run-owner', 'delegation-inferred', 'retained-lineage',
+] as const;
+export type DelegationIntentSource = (typeof DELEGATION_INTENT_SOURCES)[number];
+
+export const DELEGATION_ATTEMPT_VERDICTS = [
+  'linked', 'unresolved', 'conflicting', 'unmeasured',
+] as const;
+export type DelegationAttemptVerdict = (typeof DELEGATION_ATTEMPT_VERDICTS)[number];
+
+/** The keys every spool line carries. A line is evidence and never authority; the hook decides nothing about
+ *  parentage. `truncated` marks a line whose optional fields were dropped to fit its size bound. */
+export interface DelegationSpoolCommonV1 {
+  v: 1;
+  eventKind: DelegationEventKind;
+  observedAt: string;
+  sessionId: string;
+  parentIncarnation: string;
+  claudeSessionId: string;
+  claudeVersion?: string;
+  cwd?: string;
+  transcriptPath?: string;
+  agentId?: string;
+  agentType?: string | null;
+  truncated?: true;
+}
+
+export type DelegationPreToolUseEvidenceV1 =
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'PreToolUse';
+      toolName: 'Agent' | 'Task' | 'Workflow';
+      toolUseId: string;
+      isolation: string | null;
+    })
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'PreToolUse';
+      toolName: 'Bash';
+      toolUseId: string;
+      listing?: readonly string[];
+    });
+
+export interface DelegationAgentLaunchV1 {
+  status: 'async-launched' | 'completed';
+  agentId: string;
+  isAsync: boolean;
+}
+
+export interface DelegationWorkflowLaunchV1 {
+  status: 'async-launched' | 'completed';
+  taskId: string;
+  taskType: string;
+  workflowName: string;
+  runId: string;
+  transcriptDir: string;
+  scriptPath: string;
+}
+
+export type DelegationPostToolUseEvidenceV1 =
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'PostToolUse';
+      toolName: 'Agent' | 'Task';
+      toolUseId: string;
+      outcome: 'completed' | 'failed' | 'async-launched' | 'unknown';
+      launch: DelegationAgentLaunchV1 | null;
+    })
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'PostToolUse';
+      toolName: 'Workflow';
+      toolUseId: string;
+      outcome: 'completed' | 'failed' | 'async-launched' | 'unknown';
+      launch: DelegationWorkflowLaunchV1 | null;
+    })
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'PostToolUse';
+      toolName: 'Bash';
+      toolUseId: string;
+      outcome: 'completed' | 'failed' | 'unknown';
+      listing?: readonly string[];
+    });
+
+/** The raw spool line: a closed discriminated union, each variant accepting only its named keys. */
+export type DelegationSpoolLineV1 =
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'SessionStart';
+      source: string;
+    })
+  | DelegationPreToolUseEvidenceV1
+  | DelegationPostToolUseEvidenceV1
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'SubagentStart';
+      agentId: string;
+      agentType: string | null;
+    })
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'SubagentStop';
+      agentId: string;
+      agentType: string | null;
+      agentTranscriptPath: string | null;
+    })
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'UserPromptSubmit';
+      notification: {
+        taskId: string;
+        toolUseId: string;
+        status: 'completed' | 'failed' | 'cancelled' | 'unknown';
+      };
+    })
+  | (DelegationSpoolCommonV1 & {
+      eventKind: 'SessionEnd';
+      reason: string;
+    });
+
+/** A spool line as the server read it: the bucket and the byte range it occupied, from which `eventId` is derived. */
+export type DelegationEventEnvelopeV1 = DelegationSpoolLineV1 & {
+  eventId: string;
+  bucket: string;
+  startOffset: number;
+  endOffset: number;
+};
+
+/** The immutable identity of an activity; the activity id is minted once for it and never re-derived. */
+export interface DelegationActivityNaturalKey {
+  parentId: string;
+  parentIncarnation: string;
+  sourceKind: DelegationActivitySourceKind;
+  upstreamId: string;
+}
+
+/** The report-only health the server publishes. Absence on the wire means unknown. */
+export interface DelegationObservationHealth {
+  mode: 'report-only';
+  windowStartedAt: string | null;
+  windowEndedAt: string | null;
+  measuredSessionHours: number;
+  unmeasuredSessionHours: number;
+  unmeasuredRate: number | null;
+  stageGate: 'eligible' | 'ineligible' | 'unmeasured';
+  circuitBreaker: 'clear' | 'suspended' | 'unmeasured';
+  unresolved: number;
+  conflicting: number;
+  unmeasured: number;
+  lastJournalSequence: number | null;
+  lastCheckpointRevision: number | null;
+  lastIngestedAt: string | null;
+}
+
+/** What the health projection is computed from; every field is a measurement the server already holds. */
+export interface DelegationHealthInput {
+  windowStartedAt: string | null;
+  windowEndedAt: string | null;
+  windowComplete: boolean;
+  measuredSessionHours: number;
+  unmeasuredSessionHours: number;
+  capabilityState: 'present' | 'absent' | 'unmeasured';
+  registryReadable: boolean;
+  recoveryPhase: 'reconstructing' | 'ready';
+  circuitBreaker: 'clear' | 'suspended' | 'unmeasured';
+  unresolved: number;
+  conflicting: number;
+  unmeasured: number;
+  lastJournalSequence: number | null;
+  lastCheckpointRevision: number | null;
+  lastIngestedAt: string | null;
+}
