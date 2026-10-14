@@ -29,3 +29,10 @@ export const DOCS_RENDER_GATE_BYTES = 524288;
 export const CHAT_SYNC_MAX_BYTES = 4096;
 /** The worker budget for one chat message. */
 export const CHAT_PARSE_BUDGET_MS = 2000;
+/** The longest run of `[A-Za-z0-9_$]` a code block may hold and still be highlighted (W5 bound r10). One longer run
+ *  costs highlight.js the square of its length in `typescript`, `javascript`, `rust` and `bash`; at this length a
+ *  block's worst case costs what ordinary code of its size costs, so the per-page cap keeps bounding the page. */
+export const MD_HIGHLIGHT_MAX_WORD_CHARS = 256;
+/** The longest inline code span that can be a keystroke chord (W5 bound r11); a longer one is plain inline code,
+ *  never trimmed or split. The longest chord of named keys is about 40 characters. */
+export const MD_KEYSTROKE_MAX_CHARS = 64;

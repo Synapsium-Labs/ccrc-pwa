@@ -8,6 +8,9 @@
 // pre-scanned, then rendered as before; a longer one parses in `chatRunner`'s worker; whatever is not formatted
 // shows as `MsgPlain` with `chatPlainNote`'s sentence; and `isRefusedChatImageSrc` keeps chat from drawing an
 // image whose source is not an absolute http(s) URL (`chat-hardening.test.tsx`).
+// Bounded per W5 Task 3 (section 4.10's "Bounds on the shared components"): `CodeBlock` does not highlight a block
+// holding a word longer than `MD_HIGHLIGHT_MAX_WORD_CHARS` (r10), and `keystrokeParts` moved to `markdownGuard.ts`,
+// where the parse's element count calls it too (2-2) and it refuses a span over `MD_KEYSTROKE_MAX_CHARS` (r11).
 import Markdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
@@ -31,9 +34,9 @@ import php from 'highlight.js/lib/languages/php';
 import { remarkAlerts } from './remarkAlerts';
 import {
   CHAT_PARSE_BUDGET_MS, CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, MD_HIGHLIGHT_BLOCK_MAX_CHARS,
-  MD_MAX_CONTAINER_DEPTH, MD_MAX_DELIMITER_RUN, MD_MAX_TREE_DEPTH,
+  MD_HIGHLIGHT_MAX_WORD_CHARS, MD_MAX_CONTAINER_DEPTH, MD_MAX_DELIMITER_RUN, MD_MAX_TREE_DEPTH,
 } from './markdownLimits';
-import { prescanMarkdown, utf8ByteLength } from './markdownGuard';
+import { keystrokeParts, prescanMarkdown, utf8ByteLength } from './markdownGuard';
 import type { ParseOutcome } from './markdownParse';
 import { chatRunner, type MarkdownParser } from './markdownRunner';
 import { renderHast, type RenderHastOptions } from './renderHast';
@@ -108,28 +111,31 @@ export function nodeText(n: ReactNode): string {
   return '';
 }
 
-/** Keystroke-shaped inline code → real <kbd> caps (`Cmd+K`, `Esc`). */
-const NAMED_KEY =
-  /^(?:Ctrl|Control|Cmd|Command|⌘|Alt|Option|⌥|Opt|Shift|⇧|Win|Super|Meta|Fn|Esc|Escape|Enter|Return|↵|⏎|Tab|⇥|Space|Spacebar|Backspace|⌫|Delete|Del|Insert|Ins|Home|End|PageUp|PgUp|PageDown|PgDn|Up|Down|Left|Right|↑|↓|←|→|F(?:[1-9]|1[0-2]))$/;
-const SINGLE = /^[\p{L}\p{N}`~!@#$%^&*()\-_=+[\]{};:'",.<>/?\\|]$/u;
-/** The most parts one inline code span splits into chips. A chord of single characters costs two bytes a part, so a
- *  part count above half of `CHAT_SYNC_MAX_BYTES` cannot come from a message chat renders on the main thread;
- *  past it the span stays plain code, as any code that is not a keystroke does. The parse's element cap counts hast
- *  elements, and one span of N parts draws 2N-1 more. */
-const KEYSTROKE_MAX_PARTS = CHAT_SYNC_MAX_BYTES / 2;
-export function keystrokeParts(raw: string): string[] | null {
-  const parts = raw.trim().split(/\s*\+\s*/);
-  if (parts.length > KEYSTROKE_MAX_PARTS) return null;
-  const ok = (p: string): boolean => NAMED_KEY.test(p) || SINGLE.test(p);
-  if (parts.length > 1) return parts.every(ok) ? parts : null;
-  return NAMED_KEY.test(parts[0]!) ? parts : null; // bare single chars stay chips
+/** The longest run of `[A-Za-z0-9_$]` in `s` (0 for none): one pass over its UTF-16 code units, no regular
+ *  expression, so its cost is linear in the length of `s` whatever it holds. */
+export function longestWordRun(s: string): number {
+  let best = 0;
+  let run = 0;
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.charCodeAt(i);
+    if ((c >= 0x30 && c <= 0x39) || (c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a) || c === 0x5f || c === 0x24) {
+      run += 1;
+      if (run > best) best = run;
+    } else {
+      run = 0;
+    }
+  }
+  return best;
 }
 
 /** Fenced code: language label + copy bar over a syntax-highlighted well.
  *  The bar is a SIBLING above the scrolling <pre>, never an overlay.
- *  Highlighted only when the language is registered, `highlight` is not `false`, and the block is at most
- *  `MD_HIGHLIGHT_BLOCK_MAX_CHARS` characters (after the trailing-newline strip); a registered block over the cap
- *  renders as plain text and says so in its label, its size in whole KiB of characters, rounded up. */
+ *  Highlighted only when the language is registered, `highlight` is not `false`, the block is at most
+ *  `MD_HIGHLIGHT_BLOCK_MAX_CHARS` characters (after the trailing-newline strip), and its longest run of
+ *  `[A-Za-z0-9_$]` is at most `MD_HIGHLIGHT_MAX_WORD_CHARS` (W5 bound r10). A registered block over the size cap
+ *  renders as plain text and says so in its label, its size in whole KiB of characters, rounded up; one within it
+ *  that holds a longer word renders as plain text labelled with that word's length. The size check comes first, so
+ *  a block over the cap is never scanned. */
 export function CodeBlock({ children, highlight }: { children?: ReactNode; highlight?: boolean }): ReactNode {
   const [copied, setCopied] = useState(false);
   const codeEl = React.Children.toArray(children).find(React.isValidElement) as
@@ -140,7 +146,9 @@ export function CodeBlock({ children, highlight }: { children?: ReactNode; highl
   const raw = nodeText(children).replace(/\n$/, '');
   const wanted = highlight !== false && Boolean(lang && hljs.getLanguage(lang));
   const overCap = wanted && raw.length > MD_HIGHLIGHT_BLOCK_MAX_CHARS;
-  const html = wanted && !overCap
+  const word = wanted && !overCap ? longestWordRun(raw) : 0;
+  const overWord = word > MD_HIGHLIGHT_MAX_WORD_CHARS;
+  const html = wanted && !overCap && !overWord
     ? hljs.highlight(raw, { language: lang, ignoreIllegals: true }).value // sync, never throws
     : null;
   const onCopy = useCallback(() => {
@@ -153,7 +161,9 @@ export function CodeBlock({ children, highlight }: { children?: ReactNode; highl
     <div className="code-block">
       <div className="code-block-bar">
         <span className="code-block-lang">
-          {overCap ? `${label} · not highlighted (${Math.ceil(raw.length / 1024)} KiB)` : label}
+          {overCap
+            ? `${label} · not highlighted (${Math.ceil(raw.length / 1024)} KiB)`
+            : overWord ? `${label} · not highlighted (a ${word}-character word)` : label}
         </span>
         <button type="button" className="code-block-copy" onClick={onCopy}
                 aria-label="Copy code" data-copied={copied || undefined}>

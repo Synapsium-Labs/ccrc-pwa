@@ -83,3 +83,27 @@ describe('the built markdownWorker chunk', () => {
     expect(text).not.toContain('&copy;');
   }, 90_000);
 });
+
+// Docs W5 part 1, Task 3 (W5 bound 2-2, refinement (d)): the parse's element count includes the chips inline code
+// draws. The count runs inside the worker closure, so only the built chunk proves the shipped worker carries it: a
+// docs job of 400 spans of a 31-plus chord (64 elements a span, 25 601 in all) must answer too-wide, not a tree.
+describe('the built markdownWorker chunk counts the chips inline code draws (W5 bound 2-2)', () => {
+  it('answers a docs job of 400 spans of a 31-plus chord with too-wide and 25 601 elements', () => {
+    const assets = path.join(out, 'assets');
+    const chunk = readdirSync(assets).find((n) => /^markdownWorker-[\w-]+\.js$/.test(n));
+    expect(chunk).toBeDefined();
+    const docsLoader = LOADER.replace("profile: 'chat'", "profile: 'docs'");
+    expect(docsLoader).not.toBe(LOADER);
+    const src = Array.from({ length: 400 }, () => `\`${'a+'.repeat(31)}a\``).join(' ');
+    const stdout = execFileSync(
+      process.execPath,
+      ['--input-type=module', '-e', docsLoader, path.join(assets, chunk!), src],
+      { encoding: 'utf8', env: { PATH: process.env['PATH'] ?? '' }, timeout: 60_000 },
+    );
+    const result = JSON.parse(stdout.trim().split('\n').at(-1)!) as {
+      load: string; replies?: { id: number; outcome: { kind: string; elements?: number } }[];
+    };
+    expect(result.load).toBe('ok');
+    expect(result.replies).toEqual([{ id: 7, outcome: { kind: 'too-wide', elements: 1 + 400 * 64 } }]);
+  }, 90_000);
+});

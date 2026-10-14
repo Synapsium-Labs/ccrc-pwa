@@ -5,7 +5,8 @@
 //      callouts, then remark-rehype with raw HTML kept as `raw` nodes; `runSync(parse(src), src)`;
 //   3. every `raw` node becomes a `text` node, so raw HTML renders as literal text, never as markup;
 //   4. one walk drops `position` and measures the tree: deeper than `MD_MAX_TREE_DEPTH` is `too-deep`, more than
-//      `DOCS_MAX_RENDER_ELEMENTS` elements is `too-wide`;
+//      `DOCS_MAX_RENDER_ELEMENTS` elements is `too-wide`, an inline `code` counting the chips its component draws
+//      (`inlineCodeExtraElements`, W5 bound 2-2), so the cap bounds the DOM before anything renders;
 //   5. any exception is `threw`, carrying the error's name only.
 // Steps 3 and 4 are explicit-stack walks: a tree that reached them is not yet known to be shallow.
 //
@@ -18,7 +19,7 @@ import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import remarkRehype from 'remark-rehype';
 import { remarkAlerts } from './remarkAlerts';
-import { prescanMarkdown } from './markdownGuard';
+import { keystrokeParts, prescanMarkdown } from './markdownGuard';
 import { DOCS_MAX_RENDER_ELEMENTS, MD_MAX_TREE_DEPTH } from './markdownLimits';
 
 /** Who asked: a label carried through the worker protocol and the runner. The pipeline is the same for both. */
@@ -47,6 +48,7 @@ const PLUGINS_BY_PROFILE: Readonly<Record<MarkdownProfile, PluggableList>> = {
 /** A hast node as the two walks see it. */
 interface WalkNode {
   type: string;
+  tagName?: string;
   value?: string;
   children?: WalkNode[];
   position?: unknown;
@@ -73,24 +75,44 @@ function rawToText(tree: WalkNode): void {
   }
 }
 
+/** The elements `SHARED_COMPONENTS.code` draws for an inline code span of `text` beyond the one `code` element the
+ *  walk already counts (W5 bound 2-2): a chord of N parts draws `span.kbd-combo`, N `kbd` and N - 1 `span.kbd-plus`,
+ *  2N elements in place of one, so 2N - 1 more; any other span draws its one `code`, so 0. The component and this
+ *  count call the same `keystrokeParts`, so a span over `MD_KEYSTROKE_MAX_CHARS` adds nothing to either. */
+export function inlineCodeExtraElements(text: string): number {
+  const keys = keystrokeParts(text);
+  return keys === null ? 0 : 2 * keys.length - 1;
+}
+
 /** Step 4: drops `position` from every node and measures the deepest node below the root (the root is 0) and
- *  the element count, in one walk with an explicit stack. */
+ *  the element count, in one walk with an explicit stack. A `code` element whose parent is not a `pre` (inline
+ *  code; a fenced block's `code` is `CodeBlock`'s, which draws no chips) adds `inlineCodeExtraElements` of its text
+ *  children's text, the text its component receives. */
 function measure(tree: WalkNode): { depth: number; elements: number } {
   const nodes: WalkNode[] = [tree];
   const depths: number[] = [0];
+  const parents: (string | undefined)[] = [undefined];
   let depth = 0;
   let elements = 0;
   while (nodes.length > 0) {
     const node = nodes.pop()!;
     const d = depths.pop()!;
+    const parent = parents.pop();
     delete node.position;
     if (node.type === 'element') elements += 1;
+    if (node.type === 'element' && node.tagName === 'code' && parent !== 'pre') {
+      let text = '';
+      for (const child of node.children ?? []) if (child.type === 'text') text += child.value ?? '';
+      elements += inlineCodeExtraElements(text);
+    }
     if (d > depth) depth = d;
     const children = node.children;
     if (children) {
+      const tag = node.type === 'element' ? node.tagName : undefined;
       for (let i = children.length - 1; i >= 0; i -= 1) {
         nodes.push(children[i]!);
         depths.push(d + 1);
+        parents.push(tag);
       }
     }
   }
