@@ -12,9 +12,11 @@ import {
   confirmedGeneration, extendedGraceState, handedOutState, mintedState, nextAction, phaseOf, promotedState,
   pendingExitOpen, recoveryPlan, retireDue, rotationGate, stagedState,
   adoptedState, clampRetiredStamp, foreignUnderUnusableRetired, oweForRetiredPresentation, retiredUnanswered, retiringDigests, retiringLanded, retiringRecorded,
+  nextScheduledAt, scheduleAnchor, scheduleDue,
   type BoxTokenState, type ClaimDoorState, type FileMetaLike, type GateInput, type GateNode, type GateVerdict,
 } from '../src/token/policy.js';
 import { CLAIM_CODE_TTL_MS } from '../../shared/agent-protocol.js';
+import { TOKEN_ROTATION_INTERVAL_MS } from '../../shared/box-token.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const NODE = '11111111-2222-4333-8444-555555555555';
@@ -40,6 +42,8 @@ const bothLocal = (over: Partial<GateInput> = {}): GateInput => ({
 });
 const OPEN: GateVerdict = { open: true, mode: 'remote', nodeId: NODE };
 const base = (): BoxTokenState => mintedState(1000, W(1), null, null, 'c'.repeat(16));
+const WEEK = TOKEN_ROTATION_INTERVAL_MS;
+const rotatedAt = (t: number): BoxTokenState => ({ ...base(), lastRotationAt: t });
 
 describe('rotationGate: each mechanical condition alone holds and names itself (spec 9.2)', () => {
   it('opens with everything measured, and binds the code to the one fleet node', () => {
@@ -132,9 +136,10 @@ describe('the hold rule (R1 as amended by R5): one gate for every trigger, auto 
   it('an owed rotation and "Rotate now" stage on the same open gate, and both hold on the same closed one', () => {
     const owed: BoxTokenState = { ...base(), rotationOwed: true, owedWhy: 'adopted' };
     const held = rotationGate(remote({ nodes: [serverRow(), fleetRow({ updateState: 'applying' })] }));
-    for (const [state, rotateRequested] of [[owed, false], [base(), true]] as const) {
-      expect(nextAction({ state, gate: OPEN, generation: null, rotateRequested, backoffUntil: null, now: 2000 }).kind).toBe('stage');
-      expect(nextAction({ state, gate: held, generation: null, rotateRequested, backoffUntil: null, now: 2000 }))
+    // 4556: a due schedule is the third trigger on the same gate (its `now` is past the interval; the others keep 2000).
+    for (const [state, rotateRequested, now] of [[owed, false, 2000], [base(), true, 2000], [rotatedAt(0), false, WEEK + 2000]] as const) {
+      expect(nextAction({ state, gate: OPEN, generation: null, rotateRequested, backoffUntil: null, now }).kind).toBe('stage');
+      expect(nextAction({ state, gate: held, generation: null, rotateRequested, backoffUntil: null, now }))
         .toEqual({ kind: 'hold', hold: 'update-in-flight', node: 'fleet' });
     }
   });
@@ -619,6 +624,92 @@ describe('D-4414 F3: a held grace-end retirement blocks nothing else, on a remot
 describe('F7: the timings that bound a live re-probe are pinned by value', () => {
   it('HOLD_REPROBE_MS is one hour (a 55-minute re-probe is faster than the plan, and reds here)', () => {
     expect(HOLD_REPROBE_MS).toBe(60 * 60_000);
+  });
+});
+
+describe('the weekly schedule: a derived trigger (4556) with its own miss backoff (4558)', () => {
+  const ask = (s: BoxTokenState, now: number, extra: Partial<Parameters<typeof nextAction>[0]> = {}) =>
+    nextAction({ state: s, gate: OPEN, generation: null, rotateRequested: false, backoffUntil: null, now, ...extra });
+  const G = '1'.repeat(16);
+
+  it('P1: due one interval after the last promotion, never before', () => {
+    expect(ask(rotatedAt(5000), 5000 + WEEK - 1)).toEqual({ kind: 'none' });
+    expect(ask(rotatedAt(5000), 5000 + WEEK)).toEqual({ kind: 'stage', why: 'scheduled' });
+  });
+
+  it('P2: a null lastRotationAt counts from current.since (a both box that never promoted still rotates)', () => {
+    expect(base().lastRotationAt).toBeNull();                          // the precondition: the fixture has no promotion
+    expect(ask(base(), 1000 + WEEK - 1)).toEqual({ kind: 'none' });
+    expect(ask(base(), 1000 + WEEK)).toEqual({ kind: 'stage', why: 'scheduled' });
+    expect(scheduleAnchor(base())).toBe(1000);
+  });
+
+  it('P3: an anchor ahead of the clock waits, unless it is more than one interval ahead', () => {
+    const now = 10_000_000;
+    expect(ask(rotatedAt(now + 10 * 60_000), now)).toEqual({ kind: 'none' });
+    expect(ask(rotatedAt(now + WEEK), now)).toEqual({ kind: 'none' });                          // exactly one interval ahead waits
+    expect(ask(rotatedAt(now + WEEK + 1), now)).toEqual({ kind: 'stage', why: 'scheduled' });
+    expect(ask(rotatedAt(now + 10 * 60_000), now + 10 * 60_000 + WEEK)).toEqual({ kind: 'stage', why: 'scheduled' });   // the wait is the skew
+  });
+
+  it('P4: scheduled is last in the why chain: an owed word, a lost hand-out, a behind fleet and a press each name themselves', () => {
+    const now = WEEK + 5000;
+    expect(now - (rotatedAt(0).lastRotationAt as number)).toBeGreaterThanOrEqual(WEEK);   // the precondition: every case below is also due (read without the code under test)
+    expect(ask({ ...rotatedAt(0), rotationOwed: true, owedWhy: 'recovered' }, now)).toEqual({ kind: 'stage', why: 'recovered' });
+    expect(ask(rotatedAt(0), now, { rotateRequested: true })).toEqual({ kind: 'stage', why: 'rotate-now' });
+    expect(ask(rotatedAt(0), now, { generation: { read: { kind: 'absent' }, measuredAt: now } })).toEqual({ kind: 'stage', why: 'fleet-behind' });
+    const lost = handedOutState(stagedState(rotatedAt(0), G, 2000, W(2)), G, 3000);   // confirmBy 3000 + 5 min, long past
+    expect(ask(lost, now)).toEqual({ kind: 'stage', why: 'confirm-deadline' });
+  });
+
+  it('P5: scheduled waits out the normal backoff; only a press bypasses it', () => {
+    const now = WEEK + 5000;
+    expect(ask(rotatedAt(0), now, { backoffUntil: now + 1000 })).toEqual({ kind: 'backoff', until: now + 1000 });
+    expect(ask(rotatedAt(0), now, { backoffUntil: now + 1000, rotateRequested: true })).toEqual({ kind: 'stage', why: 'rotate-now' });
+  });
+
+  it('P6: one at a time: a due schedule joins a rotation in flight', () => {
+    const now = WEEK + 5000;
+    const inflight = handedOutState(stagedState(rotatedAt(0), G, now - 2000, W(2)), G, now - 1000);   // inside confirmBy
+    expect(ask(inflight, now)).toEqual({ kind: 'none' });
+    const staged = stagedState(rotatedAt(0), G, now - 2000, W(2));
+    expect(now - (staged.lastRotationAt as number)).toBeGreaterThanOrEqual(WEEK);   // the precondition: due, read without the code under test
+    expect(ask(staged, now)).toEqual({ kind: 'send', generation: G, nodeId: NODE });
+    expect(ask(staged, now, { gate: rotationGate(bothLocal()) })).toEqual({ kind: 'promote', generation: G, via: 'own-write' });
+  });
+
+  it('P6b: a due schedule over a full pending cap holds pending-cap (no-change row: the cap returns before the chain reaches scheduled)', () => {
+    const now = WEEK + 5_000_000;
+    let s = rotatedAt(0);
+    for (let i = 0; i < PENDING_HARD_CAP; i++) {
+      const id = String(i + 1).repeat(16);
+      s = handedOutState(stagedState(s, id, 2000, W(2 + i)), id, 3000 + i);
+    }
+    expect(s.pending.length).toBe(PENDING_HARD_CAP);                   // the precondition: the cap is full, and every confirmBy is past
+    expect(s.pending.every((p) => (p.confirmBy as number) < now)).toBe(true);
+    expect(ask(s, now)).toEqual({ kind: 'hold', hold: 'pending-cap', node: null });
+  });
+
+  it('P7: nextScheduledAt: the anchor plus the interval, or now when due', () => {
+    expect(nextScheduledAt(rotatedAt(5000), 6000)).toBe(5000 + WEEK);
+    expect(nextScheduledAt(rotatedAt(0), WEEK + 7)).toBe(WEEK + 7);
+    expect(nextScheduledAt(base(), 2000)).toBe(1000 + WEEK);
+  });
+
+  it('P8: the scheduled-miss backoff holds the scheduled why only; owed rotations, presses and a closed gate are as before (4558)', () => {
+    const now = WEEK + 5000;
+    expect(scheduleDue(rotatedAt(0), now)).toBe(true);
+    expect(ask(rotatedAt(0), now, { scheduleBackoffUntil: now + 1000 })).toEqual({ kind: 'backoff', until: now + 1000 });
+    expect(ask(rotatedAt(0), now, { scheduleBackoffUntil: now })).toEqual({ kind: 'stage', why: 'scheduled' });          // the instant ends it
+    expect(ask(rotatedAt(0), now)).toEqual({ kind: 'stage', why: 'scheduled' });                                            // an older caller passes none
+    expect(ask(rotatedAt(0), now, { scheduleBackoffUntil: null })).toEqual({ kind: 'stage', why: 'scheduled' });
+    expect(ask(rotatedAt(0), now, { scheduleBackoffUntil: now + 1000, rotateRequested: true })).toEqual({ kind: 'stage', why: 'rotate-now' });
+    expect(ask({ ...rotatedAt(0), rotationOwed: true, owedWhy: 'recovered' }, now, { scheduleBackoffUntil: now + 1000 }))
+      .toEqual({ kind: 'stage', why: 'recovered' });
+    const closed = rotationGate(remote({ nodes: [serverRow(), fleetRow({ updateState: 'applying' })] }));
+    expect(ask(rotatedAt(0), now, { gate: closed, scheduleBackoffUntil: now + 1000 })).toEqual({ kind: 'hold', hold: 'update-in-flight', node: 'fleet' });
+    expect(scheduleDue(rotatedAt(now), now)).toBe(false);              // the precondition: not due
+    expect(ask(rotatedAt(now), now, { scheduleBackoffUntil: now + 1000 })).toEqual({ kind: 'none' });
   });
 });
 
