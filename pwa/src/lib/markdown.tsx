@@ -92,8 +92,9 @@ export function openExternal(e: React.MouseEvent, href: string | undefined): voi
  *  `subLanguage`; each keeps its `end` and `returnEnd`, so the contents run to the closing tag as ONE plain run.
  *  Why (D-4928): the grammar is quadratic on those regions whatever they embed (`<script>` repeated one per line, no
  *  closer: 1, 2, 4 and 8 KiB cost 66, 308, 1 729 and 7 918 ms; `<style>{` per line, 8 KiB 2.4 s with no javascript
- *  involved), and with them removed every probed shape is linear (a snapshot of 2026-10-14 on a loaded box, load average about 40: xml 167 ms per 64 KiB at most, markdown, which
- *  embeds xml, 290 ms; the claim it supports is the GROWTH, linear from 8 to 128 KiB, not the figures). What it costs: script and style contents are uncoloured (one real 375-character html fence holds
+ *  involved), and with them removed every probed shape is linear (a snapshot of 2026-10-14 on a loaded box, load average about 40: xml 167 ms per 64 KiB at most; markdown, which
+ *  embeds xml, about 650 ms on its worst shape, `<a>` in lines, which is why it has a page budget of its own,
+ *  `DOCS_HIGHLIGHT_MARKDOWN_PAGE_MAX_CHARS`; the claim it supports is the GROWTH, linear from 8 to 128 KiB, not the figures). What it costs: script and style contents are uncoloured (one real 375-character html fence holds
  *  `<script` or `<style>`); markup outside them is coloured as before. `xml` and `markdown` then reach no bounded
  *  grammar, so they keep the 64 KiB cap. */
 const xmlWithoutSubLanguages: LanguageFn = (h) => {
@@ -331,8 +332,8 @@ export function inMarkdownPageBudget(lang: string): boolean {
  *  that holds a longer word renders as plain text labelled with that word's length, one with a longer line, labelled
  *  with that line's length, and one with a longer blank run, labelled with that run's length (a block that trips more
  *  than one is labelled by the first: word, then line, then blank run). The size check comes first, so a block over
- *  the cap is never scanned. A block the page budget refuses (`highlight={false}`) is labelled by its size the same way, and is never
- *  scanned either. */
+ *  the cap is never scanned. A block a page budget refuses (`highlight={false}`) is never scanned either: over its own cap it is labelled
+ *  by its size the same way, and within it its label is the language alone. */
 export function CodeBlock({ children, highlight }: { children?: ReactNode; highlight?: boolean }): ReactNode {
   const [copied, setCopied] = useState(false);
   const codeEl = React.Children.toArray(children).find(React.isValidElement) as

@@ -188,9 +188,10 @@ describe('D-4928: the markdown budget, a page\'s markdown code (131 072 characte
     ])).toEqual([true, true, false, true, true]);
   });
 
-  it('(d) markdown does not count in the scan sum: a ts block after 128 KiB of markdown is highlighted, and only its own sum refuses it', () => {
-    expect(decisions([lang('markdown', filler(65536)), lang('md', filler(65536)), lang('ts', filler(393216)), lang('ts', filler(1))]))
-      .toEqual([true, true, true, false]);
+  it('(d) markdown does not count in the scan sum: a ts block after 64 KiB of markdown is highlighted, and only its own sum refuses the next', () => {
+    // 65 536 + 393 216 + 1 = 458 753, under the page budget (524 288): the last block is refused by the scan sum alone.
+    expect(decisions([lang('md', filler(65536)), lang('ts', filler(393216)), lang('ts', filler(1))]))
+      .toEqual([true, true, false]);
   });
 
   it('(d2) code of other grammars does not use the markdown budget: 131 072 characters of yaml and of json leave two markdown blocks of 65 536 highlighted', () => {
