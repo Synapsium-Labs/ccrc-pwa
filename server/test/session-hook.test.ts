@@ -643,7 +643,7 @@ describe('the fleet gate and failure polarity', () => {
     plantGraph(tree, { built: 'deadbee' });
 
     const cheapTimes: number[] = [];
-    const mainTimes: number[] = [];
+    const mainTimes: number[] = []; run({ hook_event_name: 'UserPromptSubmit' }); run({ hook_event_name: 'SubagentStart', agent_id: 'a-1', agent_type: 'general-purpose' });   // a-1 is JOINED, so the cheap arm stays a subagent's (delegation broker wave 3)
     for (let i = 0; i < 20; i++) {
       const t0 = process.hrtime.bigint();
       run({ hook_event_name: 'PostToolUse', tool_name: 'Bash', agent_id: 'a-1' });
@@ -10277,6 +10277,92 @@ describe('exact-pane hook ownership: the session name is asked of $TMUX_PANE, ne
       runFull(EVENT, { TMUX_PANE: '%7' });
       expect(readState().state).toBe('working');
     });
+  });
+});
+
+// ── A bare agent_id is not a subagent: the captured payloads, replayed (delegation broker wave 3, Task 2) ──
+//
+// The turn marker treated ANY non-empty `agent_id` as a subagent's event. The captured real-lane payloads
+// (`fixtures/delegation/<version>/*.json`) say what an id means: every tool event that carries one comes after a
+// SubagentStart naming it, no main-thread event (Stop, StopFailure, PostCompact, PreCompact, SessionStart,
+// SessionEnd, UserPromptSubmit) carries one in any of the 140 captured scenarios, and the only SubagentStop with no
+// Start is the unpaired one around /compact (empty agent_type). The marker therefore trusts an id only once a
+// SubagentStart has named it in THIS owner's hookstate; the same payloads with their SubagentStarts taken out are the
+// measured "agent_id alone" lane (amendment `tool-agent-id-alone-is-unjoined-evidence`), and there the parent's own
+// tool call must be recorded. SessionStart and SessionEnd are left out of the replay: they carry no id and run the
+// card and teardown machinery this property does not need.
+describe('a bare agent_id is not a subagent: captured delegation payloads replayed through the hook', () => {
+  const FIXTURES = path.resolve(__dirname, 'fixtures/delegation');
+  type Captured = { seq: number; event: string; envSid: string; payload: Record<string, unknown> & { agent_id?: string } };
+  const load = (version: string, scenario: string): Captured[] =>
+    (JSON.parse(fs.readFileSync(path.join(FIXTURES, version, `${scenario}.json`), 'utf8')) as { events: Captured[] }).events
+      .filter((e) => e.event !== 'SessionStart' && e.event !== 'SessionEnd');
+  const markerFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.turn.json');
+  const marker = (): string | null => (fs.existsSync(markerFile()) ? fs.readFileSync(markerFile(), 'utf8') : null);
+  const TOOL = new Set(['PreToolUse', 'PostToolUse']);
+  /** Replays the events through the hook and reports, for each TOOL event that carries an id, the marker before and after. */
+  const replay = (events: Captured[]): Array<{ seq: number; id: string; before: string | null; after: string | null; joined: boolean }> => {
+    const seenStart = new Set<string>();
+    const rows: Array<{ seq: number; id: string; before: string | null; after: string | null; joined: boolean }> = [];
+    for (const e of events) {
+      const before = marker();
+      runFull(e.payload, { CLAUDE_CODE_SESSION_ID: e.envSid });
+      const id = e.payload.agent_id;
+      if (TOOL.has(e.event) && typeof id === 'string' && id !== '') rows.push({ seq: e.seq, id, before, after: marker(), joined: seenStart.has(id) });
+      if (e.event === 'SubagentStart' && typeof id === 'string') seenStart.add(id);
+    }
+    return rows;
+  };
+  const withoutStarts = (events: Captured[]): Captured[] => events.filter((e) => e.event !== 'SubagentStart');
+
+  const CASES: Array<[string, string]> = [
+    ['2.1.280', 'agent-plain'], ['2.1.292', 'agent-plain'],
+    ['2.1.280', 'agent-iso-bg'], ['2.1.292', 'agent-iso-bg'],
+    ['2.1.280', 'wf-iso'], ['2.1.292', 'wf-iso'],
+  ];
+
+  it.each(CASES)('%s %s: a joined subagent\'s tool events never move the marker, however they interleave with the parent\'s Stop', (version, scenario) => {
+    const rows = replay(load(version, scenario));
+    expect(rows.length, 'the scenario carries tool events with an agent_id').toBeGreaterThanOrEqual(2);
+    for (const r of rows) {
+      expect(r.joined, `seq ${r.seq}: the capture names ${r.id} in a SubagentStart first`).toBe(true);
+      expect(r.after, `seq ${r.seq}: the subagent's tool event left the marker as it found it`).toBe(r.before);
+    }
+  });
+
+  it.each(CASES)('%s %s: the same events with their SubagentStarts taken out are the agent_id-alone lane: each tool event is the main thread', (version, scenario) => {
+    const rows = replay(withoutStarts(load(version, scenario)));
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    // A tool event over a marker that already reads working is a builtin read and writes nothing, whoever sent it; the
+    // lane bites where the parent's Stop has come first, so those rows must exist and each must be re-opened by it.
+    const afterStop = rows.filter((r) => r.before !== null && (JSON.parse(r.before) as { state: string }).state === 'done');
+    expect(afterStop.length, 'the scenario has an agent_id tool event after the parent\'s Stop').toBeGreaterThanOrEqual(1);
+    for (const r of rows) {
+      expect(r.joined).toBe(false);
+      expect(JSON.parse(r.after as string), `seq ${r.seq}: an unjoined id leaves the parent's turn working`).toMatchObject({ state: 'working' });
+    }
+    for (const r of afterStop) {
+      expect(JSON.parse(r.after as string), `seq ${r.seq}: an unjoined id's tool event after Stop stamps the parent's turn`)
+        .toMatchObject({ state: 'working', event: expect.stringMatching(/ToolUse$/) });
+    }
+  });
+
+  it('the captured unpaired SubagentStop (the /compact one, empty agent_type) admits nothing: its id is still the main thread', () => {
+    for (const version of ['2.1.280', '2.1.292']) {
+      const stray = (JSON.parse(fs.readFileSync(path.join(FIXTURES, version, 'clear-compact-resume.json'), 'utf8')) as { events: Captured[] })
+        .events.find((e) => e.event === 'SubagentStop')!;
+      expect(stray.payload.agent_type, `${version}: fixture is the unpaired kind`).toBe('');
+      const tool = load(version, 'agent-plain').find((e) => e.event === 'PreToolUse' && e.payload.agent_id)!;
+      runFull({ hook_event_name: 'UserPromptSubmit' });
+      runFull({ hook_event_name: 'Stop' });
+      runFull(stray.payload, { CLAUDE_CODE_SESSION_ID: stray.envSid });
+      const done = marker();
+      expect(JSON.parse(done as string).state).toBe('done');
+      runFull({ ...tool.payload, agent_id: stray.payload.agent_id }, { CLAUDE_CODE_SESSION_ID: stray.envSid });
+      expect(JSON.parse(marker() as string), `${version}: a tool event under the unpaired id`).toMatchObject({ state: 'working', event: 'PreToolUse' });
+      fs.rmSync(markerFile());
+      fs.rmSync(stateFile());
+    }
   });
 });
 
