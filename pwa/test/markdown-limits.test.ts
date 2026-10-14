@@ -26,6 +26,7 @@ const VALUES: Readonly<Record<string, number>> = {
   CHAT_PARSE_BUDGET_MS: 2000,
   MD_HIGHLIGHT_MAX_WORD_CHARS: 256,
   MD_HIGHLIGHT_MAX_LINE_CHARS: 2048,
+  MD_HIGHLIGHT_MAX_BLANK_CHARS: 2048,
   MD_KEYSTROKE_MAX_CHARS: 64,
 };
 const NAMES: readonly string[] = [...Object.keys(VALUES), 'DOCS_PARSE_BUDGET_MS'].sort();
@@ -39,7 +40,7 @@ describe('markdownLimits: the values of section 4.9', () => {
     expect(typeof limits.DOCS_PARSE_BUDGET_MS).toBe('function');
   });
 
-  it('exports exactly the fourteen limits', () => {
+  it('exports exactly the fifteen limits', () => {
     expect(Object.keys(limits).sort()).toEqual(NAMES);
   });
 });

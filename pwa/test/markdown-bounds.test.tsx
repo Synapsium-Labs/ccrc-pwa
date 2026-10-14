@@ -14,11 +14,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render } from '@testing-library/react';
 import hljs from 'highlight.js/lib/core';
 import type { Root as HastRoot } from 'hast';
-import { ChatMarkdown, CodeBlock, SHARED_COMPONENTS, longestWordRun } from '../src/lib/markdown';
+import { ChatMarkdown, CodeBlock, SHARED_COMPONENTS, longestBlankRun, longestWordRun } from '../src/lib/markdown';
 import { keystrokeParts, utf8ByteLength } from '../src/lib/markdownGuard';
 import {
-  CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, MD_HIGHLIGHT_BLOCK_MAX_CHARS, MD_HIGHLIGHT_MAX_LINE_CHARS,
-  MD_HIGHLIGHT_MAX_WORD_CHARS, MD_KEYSTROKE_MAX_CHARS,
+  CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, MD_HIGHLIGHT_BLOCK_MAX_CHARS, MD_HIGHLIGHT_MAX_BLANK_CHARS,
+  MD_HIGHLIGHT_MAX_LINE_CHARS, MD_HIGHLIGHT_MAX_WORD_CHARS, MD_KEYSTROKE_MAX_CHARS,
 } from '../src/lib/markdownLimits';
 import { inlineCodeExtraElements, parseMarkdown, type MarkdownProfile } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
@@ -384,5 +384,159 @@ describe('T13 review 4-3: a block the page budget refuses labels itself by its s
     calls.mockRestore();
     expect(label(container)).toBe(`TypeScript · not highlighted (${Math.ceil(word.length / 1024)} KiB)`);
     expect(n).toBeLessThan(1000);
+  });
+});
+
+describe('Review 439 F1: a fence of whitespace that spans lines is not highlighted past MD_HIGHLIGHT_MAX_BLANK_CHARS', () => {
+  const MAX = MD_HIGHLIGHT_MAX_BLANK_CHARS;
+  /** `unit` repeated and cut to `n` characters. */
+  const unitRun = (unit: string, n: number): string => unit.repeat(Math.ceil(n / unit.length)).slice(0, n);
+  const SHAPES: ReadonlyArray<readonly [string, string]> = [
+    ['\n', 'a newline'], [' \n', 'a space and a newline'], ['\t\n', 'a tab and a newline'], ['\r\n', 'a CRLF pair'],
+  ];
+  const NOT_HIGHLIGHTED = /^TypeScript \u00b7 not highlighted \(a (\d+)-character run of whitespace\)$/;
+  /** The sentence of a block whose longest blank run is `n` characters. */
+  const said = (n: number): string => `TypeScript \u00b7 not highlighted (a ${n}-character run of whitespace)`;
+
+  it('declares 2048 characters', () => {
+    expect(MD_HIGHLIGHT_MAX_BLANK_CHARS).toBe(2048);
+  });
+
+  it.each(SHAPES)('a ts block of %j one unit over the bound is not highlighted and says why (%s)', (unit) => {
+    const highlight = spyHighlight();
+    const one = unitRun(unit, MAX + 1);
+    const c = block('ts', one);
+    expect(highlight).not.toHaveBeenCalled();
+    expect(label(c)).toBe(said(MAX + 1));
+    expect(c.querySelector('pre > code.hljs')?.textContent).toBe(one);
+    cleanup();
+    const big = unitRun(unit, MD_HIGHLIGHT_BLOCK_MAX_CHARS);
+    expect(label(block('ts', big))).toBe(said(MD_HIGHLIGHT_BLOCK_MAX_CHARS));
+    expect(highlight).not.toHaveBeenCalled();
+  });
+
+  it.each(SHAPES)('a ts block of %j exactly at the bound is highlighted (%s)', (unit) => {
+    const highlight = spyHighlight();
+    const c = block('ts', unitRun(unit, MAX));
+    expect(label(c)).toBe('TypeScript');
+    expect(highlight).toHaveBeenCalledTimes(1);
+  });
+
+  it('the same shapes through Docs (parseMarkdown, renderHast, SHARED_COMPONENTS) never reach highlight.js', () => {
+    const highlight = spyHighlight();
+    for (const [unit] of SHAPES) {
+      const src = `\`\`\`ts\n${unitRun(unit, MD_HIGHLIGHT_BLOCK_MAX_CHARS - 2)}\n\`\`\`\n`;
+      const { container } = render(renderHast(treeOf(src, 'docs'), { components: SHARED_COMPONENTS }));
+      expect(label(container)).toMatch(NOT_HIGHLIGHTED);
+      expect(Number(NOT_HIGHLIGHTED.exec(label(container) ?? '')?.[1])).toBeGreaterThan(MAX);
+      cleanup();
+    }
+    expect(highlight).not.toHaveBeenCalled();
+  });
+
+  it("chat gets the bound on the synchronous path and on the worker path", async () => {
+    const highlight = spyHighlight();
+    for (const [unit] of SHAPES) {
+      // A margin over the bound: the parse drops a fence's trailing blank lines.
+      const small = `\`\`\`ts\nx${unitRun(unit, MAX + 64)}x\n\`\`\`\n`;
+      expect(utf8ByteLength(small)).toBeLessThanOrEqual(CHAT_SYNC_MAX_BYTES);
+      const sync = await chat(small);
+      expect(sync.parser).not.toHaveBeenCalled();
+      expect(label(sync.container)).toMatch(NOT_HIGHLIGHTED);
+      cleanup();
+      const large = `\`\`\`ts\nx${unitRun(unit, 3 * MAX)}x\n\`\`\`\n`;
+      expect(utf8ByteLength(large)).toBeGreaterThan(CHAT_SYNC_MAX_BYTES);
+      const worker = await chat(large);
+      expect(worker.parser).toHaveBeenCalledTimes(1);
+      expect(worker.container.querySelector('pre.msg-plain')).toBeNull();
+      expect(label(worker.container)).toMatch(NOT_HIGHLIGHTED);
+      expect(Number(NOT_HIGHLIGHTED.exec(label(worker.container) ?? '')?.[1])).toBeGreaterThan(MAX);
+      cleanup();
+    }
+    expect(highlight).not.toHaveBeenCalled();
+  });
+
+  it('every grammar the shared components register is bounded the same way, not only ts and js', () => {
+    const highlight = spyHighlight();
+    for (const lang of ['javascript', 'bash', 'python', 'markdown', 'yaml', 'json']) {
+      const c = block(lang, unitRun('\n', MAX + 1));
+      expect(label(c)).toMatch(/not highlighted \(a 2049-character run of whitespace\)$/);
+      cleanup();
+    }
+    expect(highlight).not.toHaveBeenCalled();
+  });
+
+  it('runs that are each within the bound highlight: a non-blank unit ends a run', () => {
+    const highlight = spyHighlight();
+    const run = unitRun('\n', MAX);
+    expect(label(block('ts', `${run};${run};${run}`))).toBe('TypeScript');
+    expect(highlight).toHaveBeenCalledTimes(1);
+  });
+
+  it('a mixed run of tabs, spaces, CR and LF counts as one run', () => {
+    const highlight = spyHighlight();
+    expect(label(block('ts', unitRun(' \t\r\n', MAX + 1)))).toBe(said(MAX + 1));
+    expect(highlight).not.toHaveBeenCalled();
+  });
+
+  it.each(['\u3000\n', '\u00a0\n', '\ufeff\n', '\u2028\n', '\u2029\n'])('a run of %j (a blank unit from 0x7f up joins a run) is bounded', (unit) => {
+    const highlight = spyHighlight();
+    expect(label(block('ts', unitRun(unit, MAX + 1)))).toBe(said(MAX + 1));
+    expect(highlight).not.toHaveBeenCalled();
+  });
+
+  it.each(['\u2028', '\u2029'])('a run of %j alone is refused by the word bound first (r10 counts every unit from 0x7f up)', (unit) => {
+    const highlight = spyHighlight();
+    expect(label(block('ts', unitRun(unit, MAX + 1)))).toBe(`TypeScript \u00b7 not highlighted (a ${MAX + 1}-character word)`);
+    expect(highlight).not.toHaveBeenCalled();
+  });
+
+  it('longestBlankRun counts exactly the units of ECMAScript whitespace, in one pass, and a neighbour ends a run', () => {
+    const members = [0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20, 0xa0, 0x1680, 0x2000, 0x2005, 0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff];
+    for (const m of members) expect(longestBlankRun(String.fromCharCode(m).repeat(7))).toBe(7);
+    const neighbours = [0x08, 0x0e, 0x1f, 0x21, 0x85, 0x180e, 0x1fff, 0x200b, 0x202e, 0x2060, 0x3001, 0xfefe, 0xfeff + 1];
+    for (const n of neighbours) expect(longestBlankRun(String.fromCharCode(n).repeat(7))).toBe(0);
+    expect(longestBlankRun('')).toBe(0);
+    expect(longestBlankRun('a\n\n b\n  \t\r\n\n c')).toBe(8);
+    expect(longestBlankRun('  \n\n\u2028 x\n')).toBe(6);
+  });
+
+  it('the label order is size, then word, then line, then whitespace', () => {
+    const highlight = spyHighlight();
+    expect(label(block('ts', `${unitRun('\n', MAX + 1)}${'a'.repeat(MD_HIGHLIGHT_BLOCK_MAX_CHARS)}`))).toBe(`TypeScript \u00b7 not highlighted (${Math.ceil((MAX + 1 + MD_HIGHLIGHT_BLOCK_MAX_CHARS) / 1024)} KiB)`);
+    expect(label(block('ts', `${unitRun('\n', MAX + 1)}${'a'.repeat(300)}`))).toBe('TypeScript \u00b7 not highlighted (a 300-character word)');
+    const spaces = ' '.repeat(MD_HIGHLIGHT_MAX_LINE_CHARS + 1);
+    expect(label(block('ts', spaces))).toBe(`TypeScript \u00b7 not highlighted (a ${MD_HIGHLIGHT_MAX_LINE_CHARS + 1}-character line)`);
+    expect(highlight).not.toHaveBeenCalled();
+  });
+
+  it('a block over the size cap is not scanned for a blank run, and an unregistered fence keeps its plain label', () => {
+    const highlight = spyHighlight();
+    expect(label(block('ts', unitRun('\n', MD_HIGHLIGHT_BLOCK_MAX_CHARS + 5)))).toBe(`TypeScript \u00b7 not highlighted (${Math.ceil((MD_HIGHLIGHT_BLOCK_MAX_CHARS + 5) / 1024)} KiB)`);
+    expect(label(block('mermaid', unitRun('\n', MAX + 1)))).toBe('mermaid');
+    expect(highlight).not.toHaveBeenCalled();
+  });
+
+  it('64 KiB of ordinary code with indentation and blank lines is highlighted, with markup', () => {
+    const chunk = [
+      'export function total(items: readonly Item[]): number {',
+      '  let sum = 0;',
+      '',
+      '  for (const item of items) {',
+      '    if (item.price > 0) {',
+      '      sum += item.price * item.count;',
+      '    }',
+      '  }',
+      '',
+      '',
+      '  return sum; // the total',
+      '}',
+      '',
+    ].join('\n');
+    const body = unitRun(chunk, MD_HIGHLIGHT_BLOCK_MAX_CHARS);
+    expect(body.length).toBe(MD_HIGHLIGHT_BLOCK_MAX_CHARS);
+    const c = block('ts', body);
+    expect(label(c)).toBe('TypeScript');
+    expect(c.querySelectorAll('.hljs-keyword').length).toBeGreaterThan(0);
   });
 });

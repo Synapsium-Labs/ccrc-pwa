@@ -35,9 +35,9 @@ export const CHAT_PARSE_BUDGET_MS = 2000;
  *  `typescript`, `javascript`, `rust`, `bash` and `php` (64 KiB of `_é` in `php` costs about 38 s); at this length a
  *  block's worst case costs what ordinary code of its size costs, so the per-page cap keeps bounding the page. */
 export const MD_HIGHLIGHT_MAX_WORD_CHARS = 256;
-/** The longest line, in characters, a code block may hold and still be highlighted (W5 bound r10, the operator's
- *  ruling of 2026-10-14); a line ends at `\n` or `\r`. Measured on highlight.js 11.11.1 (Node 24, a loaded box:
- *  load average about 30), `hljs.highlight(..., {ignoreIllegals: true})` over 64 KiB filled with one repeated
+/** The longest line, in characters, a code block may hold and still be highlighted (the line bound, its own bound
+ *  beside r10: the operator's ruling of 2026-10-14); a line ends at `\n` or `\r`. Measured on highlight.js 11.11.1
+ *  (Node 24, a loaded box: load average about 30), `hljs.highlight(..., {ignoreIllegals: true})` over 64 KiB filled with one repeated
  *  short unit per line, every registered grammar, 474 units of one and two characters, with and without spaces,
  *  at 4 096 characters a line, then the worst of them at 512 to 16 384 (minimum of 3 to 7 runs). Only two families
  *  grow with the length of a line: `markdown` on runs of `[` (`[`, `[[`, `![`, `[a`, `a[`: 79 ms at 512, 120 at
@@ -48,8 +48,31 @@ export const MD_HIGHLIGHT_MAX_WORD_CHARS = 256;
  *  of ordinary code costs 43 to 81 ms in the slowest grammar (`typescript`, `json`), and 4 096 would cost twice the
  *  plateau (451 to 483 ms). The strict reading, a worst case no dearer than ordinary code, has no value for `yaml`
  *  (166 ms at 512) and would need 512 or 1 024, which would leave 163 or 30 real fences plain. The docs corpus holds
- *  one registered-language fence over this value (a line of 2 927 characters) among 17 384. */
+ *  one registered-language fence over this value (a line of 2 927 characters) among 17 384. That sweep put ONE unit on
+ *  each line; whitespace that spans lines is a different shape, bounded by `MD_HIGHLIGHT_MAX_BLANK_CHARS`. */
 export const MD_HIGHLIGHT_MAX_LINE_CHARS = 2048;
+/** The longest run of blank units a code block may hold and still be highlighted (the whitespace bound, review 439
+ *  F1, a fifth bound beside the size, word and line bounds); a blank unit is a UTF-16 code unit of ECMAScript's `\s`:
+ *  U+0009 to U+000D, U+0020, U+00A0, U+1680, U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F, U+3000 and U+FEFF. The
+ *  run crosses line breaks, so `\n`, ` \n`, `\t\n` and `\r\n` repeated are one run. Measured on highlight.js 11.11.1
+ *  (Node 24, a loaded box: load average 20 to 40), `hljs.highlight(..., {ignoreIllegals: true})`, every registered
+ *  grammar (15) over 28 shapes (pure whitespace runs of 11 kinds, and 17 short units followed by a line break) in
+ *  blocks of 4 096, 16 384 and 65 536 characters, minimum of 3 runs. Only `typescript` and `javascript` grow with the
+ *  length of a blank run (64 KiB of `\n`: 5.2 and 6.3 s; of U+2028: 9.8 to 10.9 s; the other 13 grammars stay under 400 ms on
+ *  every shape, `a\n` and `(\n` units included), and a run costs only when it holds a line terminator (`\n`, `\r`,
+ *  U+2028, U+2029): 64 KiB of spaces or tabs alone costs 1 ms. A scan of every code unit from 0 to 0xFFFF, each
+ *  alternated with `\n`, found exactly the `\s` set above and no other unit that joins a run. A 64 KiB block of runs
+ *  of L blank units, each ended by one letter, costs about N x L x c, so the bound caps L. Worst grammar and
+ *  separator, `\n` / U+2028 or U+2029 in ms: 512: 37-43 / 66-80; 1 024: 77-82 / 129-200; 2 048: 146-192 / 268-333;
+ *  4 096: 301-317 / 576-766; 8 192: 562-676 / 1 088-1 334; 16 384: 1 215-1 302 / 2 833-3 759. The length-independent
+ *  plateau that the other bounds leave sits at about 230 to 290 ms on this box now (`typescript` 284, `javascript`
+ *  261, `markdown` 270, `yaml` 277). At this value the worst blank run (U+2028) costs what that plateau costs, a
+ *  `\n` run about two thirds of it, and 4 096 would cost twice the plateau; 64 KiB of ordinary code costs 62 ms in
+ *  `typescript` and 28 ms in `javascript`. The strict reading, a worst case no dearer than ordinary code, would need
+ *  512 or less. Real fences need none of that room: the longest blank run in any registered-language fence of
+ *  `docs/superpowers` and in chat's corpus is 104 characters, so this value leaves none of the 17 383 there plain (a
+ *  dated snapshot, 2026-10-14). */
+export const MD_HIGHLIGHT_MAX_BLANK_CHARS = 2048;
 /** The longest inline code span that can be a keystroke chord (W5 bound r11); a longer one is plain inline code,
  *  never trimmed or split. The longest chord of named keys is about 40 characters. */
 export const MD_KEYSTROKE_MAX_CHARS = 64;

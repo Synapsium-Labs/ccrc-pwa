@@ -37,7 +37,7 @@ import php from 'highlight.js/lib/languages/php';
 import { remarkAlerts } from './remarkAlerts';
 import {
   CHAT_PARSE_BUDGET_MS, CHAT_SYNC_MAX_BYTES, DOCS_MAX_RENDER_ELEMENTS, MD_HIGHLIGHT_BLOCK_MAX_CHARS,
-  MD_HIGHLIGHT_MAX_LINE_CHARS, MD_HIGHLIGHT_MAX_WORD_CHARS,
+  MD_HIGHLIGHT_MAX_BLANK_CHARS, MD_HIGHLIGHT_MAX_LINE_CHARS, MD_HIGHLIGHT_MAX_WORD_CHARS,
   MD_MAX_CONTAINER_DEPTH, MD_MAX_DELIMITER_RUN, MD_MAX_TREE_DEPTH,
 } from './markdownLimits';
 import { keystrokeParts, prescanMarkdown, utf8ByteLength } from './markdownGuard';
@@ -152,16 +152,39 @@ export function longestLine(s: string): number {
   return best;
 }
 
+/** The length of the longest run of blank code units in `s` (0 for none): ECMAScript's `\s` set, U+0009 to U+000D,
+ *  U+0020, U+00A0, U+1680, U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F, U+3000 and U+FEFF. The run crosses line
+ *  breaks: `typescript` and `javascript` cost highlight.js the square of a blank run that holds a line terminator
+ *  (64 KiB of `\n` about 5 to 6 s, of U+2028 about 10 s), and these are exactly the units that join such a run. One
+ *  pass, no regular expression, so its cost is linear in the length of `s` whatever it holds. */
+export function longestBlankRun(s: string): number {
+  let best = 0;
+  let run = 0;
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.charCodeAt(i);
+    if ((c >= 0x09 && c <= 0x0d) || c === 0x20 || c === 0xa0 || c === 0x1680 || (c >= 0x2000 && c <= 0x200a)
+        || c === 0x2028 || c === 0x2029 || c === 0x202f || c === 0x205f || c === 0x3000 || c === 0xfeff) {
+      run += 1;
+      if (run > best) best = run;
+    } else {
+      run = 0;
+    }
+  }
+  return best;
+}
+
 /** Fenced code: language label + copy bar over a syntax-highlighted well.
  *  The bar is a SIBLING above the scrolling <pre>, never an overlay.
  *  Highlighted only when the language is registered, `highlight` is not `false`, the block is at most
  *  `MD_HIGHLIGHT_BLOCK_MAX_CHARS` characters (after the trailing-newline strip), its longest run of word units
- *  (`longestWordRun`) is at most `MD_HIGHLIGHT_MAX_WORD_CHARS`, and its longest line is at most
- *  `MD_HIGHLIGHT_MAX_LINE_CHARS` (W5 bound r10). A registered block over the size cap renders as plain text and says
- *  so in its label, its size in whole KiB of characters, rounded up; one within it that holds a longer word renders
- *  as plain text labelled with that word's length, and one with a longer line, labelled with that line's length
- *  (a block that trips both is labelled by its word). The size check comes first, so a block over the cap is never
- *  scanned. A block the page budget refuses (`highlight={false}`) is labelled by its size the same way, and is never
+ *  (`longestWordRun`) is at most `MD_HIGHLIGHT_MAX_WORD_CHARS` (W5 bound r10), its longest line is at most
+ *  `MD_HIGHLIGHT_MAX_LINE_CHARS` (the line bound), and its longest blank run (`longestBlankRun`, whitespace that may
+ *  span lines) is at most `MD_HIGHLIGHT_MAX_BLANK_CHARS` (the whitespace bound). A registered block over the size cap
+ *  renders as plain text and says so in its label, its size in whole KiB of characters, rounded up; one within it
+ *  that holds a longer word renders as plain text labelled with that word's length, one with a longer line, labelled
+ *  with that line's length, and one with a longer blank run, labelled with that run's length (a block that trips more
+ *  than one is labelled by the first: word, then line, then blank run). The size check comes first, so a block over
+ *  the cap is never scanned. A block the page budget refuses (`highlight={false}`) is labelled by its size the same way, and is never
  *  scanned either. */
 export function CodeBlock({ children, highlight }: { children?: ReactNode; highlight?: boolean }): ReactNode {
   const [copied, setCopied] = useState(false);
@@ -181,7 +204,9 @@ export function CodeBlock({ children, highlight }: { children?: ReactNode; highl
   const overWord = word > MD_HIGHLIGHT_MAX_WORD_CHARS;
   const line = wanted && !overCap ? longestLine(raw) : 0;
   const overLine = line > MD_HIGHLIGHT_MAX_LINE_CHARS;
-  const html = wanted && !overCap && !overWord && !overLine
+  const blank = wanted && !overCap && !overWord && !overLine ? longestBlankRun(raw) : 0;
+  const overBlank = blank > MD_HIGHLIGHT_MAX_BLANK_CHARS;
+  const html = wanted && !overCap && !overWord && !overLine && !overBlank
     ? hljs.highlight(raw, { language: lang, ignoreIllegals: true }).value // sync, never throws
     : null;
   const onCopy = useCallback(() => {
@@ -197,7 +222,8 @@ export function CodeBlock({ children, highlight }: { children?: ReactNode; highl
           {overCap || refusedOverCap
             ? `${label} · not highlighted (${Math.ceil(raw.length / 1024)} KiB)`
             : overWord ? `${label} · not highlighted (a ${word}-character word)`
-              : overLine ? `${label} · not highlighted (a ${line}-character line)` : label}
+              : overLine ? `${label} · not highlighted (a ${line}-character line)`
+                : overBlank ? `${label} · not highlighted (a ${blank}-character run of whitespace)` : label}
         </span>
         <button type="button" className="code-block-copy" onClick={onCopy}
                 aria-label="Copy code" data-copied={copied || undefined}>
