@@ -3032,47 +3032,56 @@ msid="${CLAUDE_CODE_SESSION_ID:-$psid}"
 # The suffix is DOT-FREE so `_reg_purge`'s glob loop unlinks it with the row.
 # NO WINDOW ORPHANS THE FILE, by one line on each side, because this hook takes no lock and a purge can run while it
 # writes. An orphan is a dot-free field: it would hold the slug for ever (`_ws_slug_free` returns 1 on any such field and
-# `ws-gc` never clears it). (a) AFTER the write, and after a rotation's rename, which can create the file again, the hook
-# looks at `<id>.generation` once more and, if the row is gone, removes what it wrote. (b) `_reg_purge` removes
-# `<id>.joined` once more AFTER it removes `generation`. An append that lands while `generation` still stands is taken by
-# (b); one that lands or finishes after it is gone is taken by (a): whichever side of the generation's removal the write
-# falls on, one of the two sees it. NOT closed: a hook killed between its write and its re-check, after a purge that had
-# already finished, leaves the file; that needs a purge to complete inside the hook's own few milliseconds AND the kill.
-# A REGULAR FILE OR NOTHING, as the history spool's append: a symlink, directory or FIFO at the path is neither read nor
-# written (builtin tests; a FIFO read would block the hook).
-# BOUNDED: past JOIN_ROTATE_AT lines a SubagentStart rewrites the file to its JOIN_KEEP most recent (temp + rename,
-# `_hook_write_atomic`); forks are fine there, and the hysteresis makes it rare (about one Start in 64 once the file has
-# rotated). THE ROTATION WINDOW, stated exactly: an append that lands between a rotation's `tail` and its rename goes to
-# the old inode and is lost, and a hook whose append went there then reads the new, short file and does not rotate
-# itself. Once rotated the file sits between 64 and 128 lines, so a fan-out of k Starts straddles the cap with probability
-# about k/65, and every Start that reads more than 128 lines rotates at the same time: a fan-out that straddles the cap
-# can lose SEVERAL joins, those appended inside a rotation's tail..rename window (a few ms each). Only a session's first
-# 128 joins are free of it, because the file has not rotated yet. Every lost join fails toward the main turn: that
-# subagent's events read as the main thread, the direction this file fails in everywhere.
-# A short write (a full disk) can fuse a torn id with the next line; that too fails toward the main turn.
+# `ws-gc` never clears it). (a) AFTER the write, and after a rotation's rename, the hook looks at `<id>.generation` once
+# more and, if the row is gone, removes BOTH names (`joined`, `joinedprev`). (b) `_reg_purge` removes both once more AFTER
+# it removes `generation`. An append that lands while `generation` still stands is taken by (b); one that lands or
+# finishes after it is gone is taken by (a): whichever side of the generation's removal the write falls on, one of the two
+# sees it. NOT closed: a hook killed between its write and its re-check, after a purge that had already finished.
+# A REGULAR FILE OR NOTHING, as the history spool's append: a symlink, directory or FIFO at either path is neither read nor
+# written (builtin tests; a FIFO read would block the hook), and a `joinedprev` that is not one stops the rotation.
+# BOUNDED, BY RENAME: past JOIN_ROTATE_AT lines the Start that notices opens the file on its own fd, takes `flock -n` on it,
+# confirms the path still names that inode (`-ef /dev/fd/N`) and still holds more than the cap, then `mv -f`s it whole to
+# `<id>.joinedprev` (dot-free too), replacing the last one. Nothing is rewritten, so NO APPEND IS LOST: a writer whose
+# descriptor opened the old inode writes into joinedprev, a later one creates a fresh `joined`, and a second rotator fails
+# `flock -n`, finds the path renamed or finds a short new file, and skips. Membership is the union: the last JOIN_ROTATE_AT
+# to 2*JOIN_ROTATE_AT ids. Still lost: an append in flight to an inode after TWO rotations (JOIN_ROTATE_AT Starts during
+# one write). No `flock` (stock macOS) means no rotation: the file outgrows JOIN_READ_MAX and its newest ids go unread,
+# which fails toward the main turn like everything else here, as does a torn short write fused with the next line.
 # The file is written only by this block, one id per line, and read back whole-line only (below).
-JOIN_KEEP=64 JOIN_ROTATE_AT=128 JOIN_READ_MAX=16384
+JOIN_ROTATE_AT=128 JOIN_READ_MAX=16384
 _hook_join_record() {   # $aid -> 0 appended; 1 refused (never fatal: the caller says `|| true`)
-  local jf="$REG/$id.joined" cur="" nl="" tail_ids=""
+  local jf="$REG/$id.joined" jp="$REG/$id.joinedprev" cur="" nl="" fd=""
   [[ ! -L "$jf" && ( -f "$jf" || ! -e "$jf" ) ]] || return 1
   { printf '%s\n' "$aid" >> "$jf"; } 2>/dev/null || return 1
   { IFS= read -r -N "$JOIN_READ_MAX" cur < "$jf"; } 2>/dev/null
   nl="${cur//[!$'\n']/}"
-  if (( ${#nl} > JOIN_ROTATE_AT )); then
-    tail_ids=$(tail -n "$JOIN_KEEP" "$jf" 2>/dev/null) && [[ -n "$tail_ids" ]] && _hook_write_atomic "$jf" joined "$tail_ids"
+  if (( ${#nl} > JOIN_ROTATE_AT )) && command -v flock >/dev/null 2>&1 \
+     && [[ ! -L "$jp" && ( -f "$jp" || ! -e "$jp" ) ]] && { exec {fd}<"$jf"; } 2>/dev/null; then
+    if flock -n "$fd" 2>/dev/null && [[ "$jf" -ef "/dev/fd/$fd" ]]; then
+      cur=""; { IFS= read -r -N "$JOIN_READ_MAX" cur <&"$fd"; } 2>/dev/null
+      nl="${cur//[!$'\n']/}"
+      (( ${#nl} > JOIN_ROTATE_AT )) && mv -f "$jf" "$jp" 2>/dev/null
+    fi
+    { exec {fd}<&-; } 2>/dev/null
   fi
-  [[ -e "$REG/$id.generation" ]] || rm -f "$jf"   # (a) of "no window orphans the file" above: the row was purged under the write
+  [[ -e "$REG/$id.generation" ]] || rm -f "$jf" "$jp"   # (a) of "no window orphans the file" above: the row was purged under the write
   return 0
 }
 if [[ "$event" == SubagentStart && -n "$aid" && -e "$REG/$id.generation" ]]; then _hook_join_record || true; fi
-# THE MEMBERSHIP TEST, on the hot path of every subagent tool event: one builtin `read` of a file under
-# JOIN_READ_MAX characters (128 ids of 64 fill about 8 K), then a whole-line match: the id between two newlines, the
-# last line only if its newline arrived. An absent or unreadable file, or anything else, joins nobody and the main turn
-# is stamped. A payload with no id pays nothing.
-tmsub="" hsl="" jfile="$REG/$id.joined"
-if [[ -n "$paid" && -n "$aid" && ! -L "$jfile" && -f "$jfile" ]]; then
-  { IFS= read -r -N "$JOIN_READ_MAX" hsl < "$jfile"; } 2>/dev/null
-  [[ $'\n'"$hsl" == *$'\n'"$aid"$'\n'* ]] && tmsub=1
+# THE MEMBERSHIP TEST, on the hot path of every subagent tool event: a builtin `read` of `joined` and, only if the id is not
+# there, one of `joinedprev`, each under JOIN_READ_MAX characters (129 ids of 64 fill about 8 K), then a whole-line match:
+# the id between two newlines, the last line only if its newline arrived. An absent, unreadable or non-regular file joins
+# nobody and the main turn is stamped. A payload with no id pays nothing. No fork.
+tmsub="" hsl="" jfile="$REG/$id.joined" jprev="$REG/$id.joinedprev"
+if [[ -n "$paid" && -n "$aid" ]]; then
+  if [[ ! -L "$jfile" && -f "$jfile" ]]; then
+    { IFS= read -r -N "$JOIN_READ_MAX" hsl < "$jfile"; } 2>/dev/null
+    [[ $'\n'"$hsl" == *$'\n'"$aid"$'\n'* ]] && tmsub=1
+  fi
+  if [[ -z "$tmsub" && ! -L "$jprev" && -f "$jprev" ]]; then
+    hsl=""; { IFS= read -r -N "$JOIN_READ_MAX" hsl < "$jprev"; } 2>/dev/null
+    [[ $'\n'"$hsl" == *$'\n'"$aid"$'\n'* ]] && tmsub=1
+  fi
 fi
 if [[ -z "$tmsub" && -e "$REG/$id.generation" ]]; then
   tmkind=""

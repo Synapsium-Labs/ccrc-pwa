@@ -212,10 +212,15 @@ const TURN_KEYS: readonly string[] = ['v', 'sessionId', 'state', 'event', 'at', 
 
 /** The delegation join record (`<id>.joined`, delegation broker wave 3): one agent id per line, exactly as the payload sent it
  *  (only an id that is already a plain `[A-Za-z0-9_-]{1,64}` is ever recorded), appended by a SubagentStart. `undefined`
- *  when the file is absent, so "nothing was ever joined" reads differently from an empty list. */
+ *  when the file is absent, so "nothing was ever joined" reads differently from an empty list. Past 128 lines a Start
+ *  renames the whole file to `<id>.joinedprev`, and membership is the union of the two. */
 const joinFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.joined');
-const joined = (): string[] | undefined =>
-  (fs.existsSync(joinFile()) ? fs.readFileSync(joinFile(), 'utf8').split('\n').filter((l) => l !== '') : undefined);
+const prevFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.joinedprev');
+const idsOf = (f: string): string[] | undefined =>
+  (fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter((l) => l !== '') : undefined);
+const joined = (): string[] | undefined => idsOf(joinFile());
+const joinedPrev = (): string[] | undefined => idsOf(prevFile());
+const joinedAll = (): string[] => [...(joinedPrev() ?? []), ...(joined() ?? [])];
 
 describe('the turn marker (§5.1)', () => {
   /** A Stop's line with nothing carried: what the writer emits over a foreign or unreadable previous line. */
@@ -1035,44 +1040,104 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
     expect(fs.statSync(joinFile()).mtimeMs).toBe(mtime);
   });
 
-  describe('the file is bounded: a SubagentStart past 128 lines rewrites it to the 64 most recent', () => {
-    const plant = (n: number): string[] => {
-      const ids = Array.from({ length: n }, (_, i) => `j${i}`);
-      fs.writeFileSync(joinFile(), `${ids.join('\n')}\n`);
+  describe('the record rotates by RENAME: no append is lost, and membership is the last 129 to 257 ids', () => {
+    // Past 128 lines the Start that notices renames `<id>.joined` to `<id>.joinedprev` whole (`mv -f`, one rename(2)), under a
+    // `flock -n` on its own descriptor and after checking that the path still names the inode it locked. An appender whose
+    // descriptor opened the old inode writes into what is now joinedprev, so nothing is dropped, and membership is the union
+    // of the two files. Nothing is rewritten: the old tail+rewrite lost every append that landed inside its window.
+    const hasFlock = spawnSync('sh', ['-c', 'command -v flock'], { encoding: 'utf8' }).status === 0;
+    const plant = (n: number, file = joinFile(), tag = 'j'): string[] => {
+      const ids = Array.from({ length: n }, (_, i) => `${tag}${i}`);
+      fs.writeFileSync(file, `${ids.join('\n')}\n`);
       return ids;
     };
-    it('at 128 lines it only appends; the 129th rewrites it, keeping exactly the 64 most recent and leaving no temp behind', () => {
+    const shadow = (body: string): Record<string, string> => {
+      const f = path.join(home, 'shadow.sh');
+      fs.writeFileSync(f, `${body}\n`);
+      return { BASH_ENV: f };
+    };
+
+    it('at 128 lines it only appends; the 129th renames the whole file to joinedprev, and the next Start begins a new one', () => {
       doneLine();
       const ids = plant(127);
       start('j-new');
-      expect(joined(), 'the 128th line: appended, no rewrite').toEqual([...ids, 'j-new']);
+      expect(joined(), 'the 128th line: appended').toEqual([...ids, 'j-new']);
+      expect(fs.existsSync(prevFile()), 'and no rotation').toBe(false);
       start('j-newer');
-      const all = [...ids, 'j-new', 'j-newer'];
-      expect(joined(), 'the 129th: rewritten to the 64 most recent').toEqual(all.slice(-64));
-      expect(joined()).toHaveLength(64);
-      expect(fs.readdirSync(reg()).filter((n) => n.endsWith('.tmp')), 'no temp left behind').toEqual([]);
-      expect(fs.statSync(joinFile()).isFile()).toBe(true);
-    });
-
-    it('the 64 survive and the 65th-oldest does not: j65 is still a subagent, j64 is the main thread again', () => {
-      doneLine();
-      plant(128);
-      start('j-new');   // 129 entries -> the last 64: j65..j127 (63 of them) and j-new
-      expect(joined()![0]).toBe('j65');
-      expect(joined()).toHaveLength(64);
-      expect(isJoined('j65'), 'the oldest survivor').toBe(true);
-      expect(isJoined('j-new'), 'the newcomer').toBe(true);
-      expect(isJoined('j64'), 'the first evicted').toBe(false);
-      expect(isJoined('j0'), 'an old one').toBe(false);
-    });
-
-    it('an append after the rewrite lands in the new file', () => {
-      doneLine();
-      plant(128);
-      start('j-new');
+      expect(joinedPrev(), 'the 129th: the whole file moved, nothing dropped').toEqual([...ids, 'j-new', 'j-newer']);
+      expect(joined(), 'and the path is free for the next append').toBeUndefined();
       start('j-after');
-      expect(joined()!.slice(-2)).toEqual(['j-new', 'j-after']);
-      expect(isJoined('j-after')).toBe(true);
+      expect(joined()).toEqual(['j-after']);
+      expect(joinedPrev()).toHaveLength(129);
+      expect(fs.readdirSync(reg()).filter((n) => n.includes('.hook-write.') || n.endsWith('.tmp')), 'no temp').toEqual([]);
+    });
+
+    it('membership is the union: an id in joinedprev is a subagent, and the next rotation retires the first file', () => {
+      doneLine();
+      plant(129, prevFile(), 'old');
+      plant(128, joinFile(), 'cur');
+      expect(isJoined('old5'), 'found in joinedprev').toBe(true);
+      expect(isJoined('cur5'), 'found in joined').toBe(true);
+      start('x-new');   // 129 lines: joinedprev becomes the cur* file, the old* file is gone
+      expect(isJoined('old5'), 'retired with the first file').toBe(false);
+      expect(isJoined('cur5')).toBe(true);
+      expect(isJoined('x-new')).toBe(true);
+    });
+
+    it('an append whose descriptor opened the old file before the rename lands in joinedprev and stays visible', () => {
+      doneLine();
+      plant(128);
+      const fd = fs.openSync(joinFile(), 'a');   // an appender between its open and its write
+      try {
+        start('j-new');                           // rotates: the path is renamed under the open descriptor
+        fs.writeSync(fd, 'late-1\n');
+      } finally { fs.closeSync(fd); }
+      expect(joinedPrev(), 'the late write went into the renamed file').toContain('late-1');
+      expect(isJoined('late-1')).toBe(true);
+    });
+
+    it.skipIf(!hasFlock)('a rotator that cannot take the lock skips: the file stays whole and nothing moves', async () => {
+      doneLine();
+      plant(130);
+      // Another rotator mid-rotation: a process holding the lock on the file's inode.
+      const holder = spawn('bash', ['-c', 'exec 9<"$0"; flock -n 9 || exit 3; echo locked; read -r _', joinFile()], { stdio: ['pipe', 'pipe', 'ignore'] });
+      await new Promise<void>((resolve, reject) => {
+        holder.stdout!.once('data', () => resolve());
+        holder.once('exit', (code) => reject(new Error(`the lock holder exited ${code}`)));
+      });
+      try {
+        start('j-new');
+        expect(joined(), 'the append landed and the file was not touched').toHaveLength(131);
+        expect(fs.existsSync(prevFile()), 'no rotation while another holds the lock').toBe(false);
+      } finally {
+        holder.stdin!.end();
+        await new Promise((resolve) => { holder.once('exit', resolve); });
+      }
+      start('j-after');   // the lock is gone: the next Start retries and rotates
+      expect(joinedPrev(), 'the retry rotated').toHaveLength(132);
+    });
+
+    it.skipIf(!hasFlock)('a rotator whose path no longer names its inode skips: the -ef re-check', () => {
+      doneLine();
+      plant(130);
+      // Between this Start's open and its lock, ANOTHER rotator renamed the file and a new one was started.
+      const env = shadow(`flock() { command mv -f '${joinFile()}' '${prevFile()}'; command printf 'fresh-1\\nfresh-2\\n' > '${joinFile()}'; command flock "$@"; }`);
+      run({ hook_event_name: 'SubagentStart', agent_id: 'b-1', agent_type: 'general-purpose' }, env);
+      expect(joinedPrev(), 'the first rotator\'s file is untouched: this Start did not rename the new file over it').toHaveLength(131);
+      expect(joinedPrev()).toContain('b-1');
+      expect(joined(), 'and the new file stays').toEqual(['fresh-1', 'fresh-2']);
+    });
+
+    it('without flock the file is never rotated; the read bound then drops the newest ids, which fails toward the main turn', () => {
+      doneLine();
+      const long = (i: number): string => `n${String(i).padStart(63, '0')}`;
+      fs.writeFileSync(joinFile(), `${Array.from({ length: 300 }, (_, i) => long(i)).join('\n')}\n`);
+      const env = shadow(`command() { if [[ "\${1:-}" == -v && "\${2:-}" == flock ]]; then return 1; fi; builtin command "$@"; }`);
+      run({ hook_event_name: 'SubagentStart', agent_id: long(999), agent_type: 'general-purpose' }, env);
+      expect(fs.existsSync(prevFile()), 'never rotated').toBe(false);
+      expect(joined(), 'the file just grows').toHaveLength(301);
+      expect(isJoined(long(5)), 'an id inside the read bound').toBe(true);
+      expect(isJoined(long(999)), 'the newest id is past the read bound').toBe(false);
     });
   });
 
@@ -1118,6 +1183,36 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
     });
   });
 
+  describe('junk at joinedprev', () => {
+    it('a directory, a symlink or a FIFO there is not read, not written through, never blocks the hook, and stops the rotation', () => {
+      doneLine();
+      fs.writeFileSync(path.join(home, 'elsewhere'), 'zz-9\n');
+      for (const make of [
+        () => fs.mkdirSync(prevFile()),
+        () => fs.symlinkSync(path.join(home, 'elsewhere'), prevFile()),
+        () => { execFileSync('mkfifo', [prevFile()]); },
+      ]) {
+        fs.rmSync(prevFile(), { recursive: true, force: true });
+        fs.writeFileSync(joinFile(), `${Array.from({ length: 130 }, (_, i) => `j${i}`).join('\n')}\n`);
+        make();
+        for (const payload of [
+          { hook_event_name: 'SubagentStart', agent_id: 'a-2', agent_type: 'general-purpose' },
+          { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'true' }, agent_id: 'zz-9' },
+        ]) {
+          const t0 = Date.now();
+          const r = spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv({}), timeout: 20_000 });
+          expect(r.status, `${payload.hook_event_name}: exit 0, never blocked`).toBe(0);
+          expect(Date.now() - t0).toBeLessThan(15_000);
+        }
+        expect(fs.readFileSync(path.join(home, 'elsewhere'), 'utf8'), 'nothing was written through').toBe('zz-9\n');
+        expect(joined(), 'the rotation was refused, so the file is whole').toHaveLength(131);
+        if (fs.statSync(prevFile()).isDirectory()) expect(fs.readdirSync(prevFile()), 'nothing was moved into the directory').toEqual([]);
+        expect(turnMark().state, 'the id the junk seems to hold read as the main thread').toBe('working');
+        run({ hook_event_name: 'Stop' });
+      }
+    });
+  });
+
   describe('only a live row, and only the pane that owns it, gets a join file', () => {
     it('control: the fixture row\'s own pane writes it', () => {
       start('a-1');
@@ -1147,10 +1242,10 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
 
   describe('no window orphans a join record (the row can be purged while a Start is writing)', () => {
     // An orphan is a dot-free field: it holds the slug for ever. The hook takes no lock, so the only thing it can do is look again
-    // after it has written: if the row's `generation` is gone it removes what it wrote. These rows drive the window with a
-    // shell function that `BASH_ENV` plants in the hook's own shell and that fires on ONE call, the join's append (or the
-    // rotation's `tail`), so the purge lands at exactly that point and no sleep is involved. `_reg_purge`'s half of the pair
-    // (an append after the loop, before generation goes) is in `ccd-lifecycle-purge.test.ts`.
+    // after it has written: if the row's `generation` is gone it removes what it wrote, BOTH names (`joined` and `joinedprev`).
+    // These rows drive the window with a shell function that `BASH_ENV` plants in the hook's own shell and that fires on ONE
+    // call, the join's append (or the rotation's `mv`), so the purge lands at exactly that point and no sleep is involved.
+    // `_reg_purge`'s half of the pair (an append after the loop, before generation goes) is in `ccd-lifecycle-purge.test.ts`.
     const GEN = (): string => path.join(reg(), 'demo-quiet-basin.generation');
     const shadow = (body: string): Record<string, string> => {
       const f = path.join(home, 'shadow.sh');
@@ -1166,31 +1261,31 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
       expect(fs.existsSync(GEN())).toBe(true);
     });
 
-    it('the row is purged between the Start\'s check and its append: the file the append made is removed', () => {
+    it('the row is purged between the Start\'s check and its append: the files the append made and the rotation left are removed', () => {
+      fs.writeFileSync(prevFile(), 'old-1\n');   // a rotation's file from earlier in the row's life
       const env = shadow(`printf() { if [[ "\${1:-}" == '%s\\n' && "\${2:-}" == "orphan-1" ]]; then rm -f '${GEN()}'; fi; builtin printf "$@"; }`);
       run({ hook_event_name: 'SubagentStart', agent_id: 'orphan-1', agent_type: 'general-purpose' }, env);
       expect(fs.existsSync(GEN()), 'fixture: the shadow ran, the row is gone').toBe(false);
       expect(fs.existsSync(joinFile()), 'no join record orphaned beside a purged row').toBe(false);
-      expect(registry().filter((n) => n.endsWith('.joined') || n.endsWith('.tmp')), 'and no temp').toEqual([]);
+      expect(fs.existsSync(prevFile()), 'nor its rotation file').toBe(false);
+      expect(registry().filter((n) => n.includes('.joined') || n.endsWith('.tmp')), 'and no temp').toEqual([]);
     });
 
-    it('the row is purged while a ROTATION runs: the rename that recreates the file is followed by the same check', () => {
+    it('the row is purged while a ROTATION runs: the rename that makes joinedprev is followed by the same check, which removes both names', () => {
       fs.writeFileSync(joinFile(), `${Array.from({ length: 128 }, (_, i) => `j${i}`).join('\n')}\n`);
-      // The purge (generation and the record unlinked) lands after the rotation's `tail` has read the file and before the
-      // rename publishes its result, which would create the file again.
-      const env = shadow(`tail() { local out; out=$(command tail "$@"); rm -f '${GEN()}' '${joinFile()}'; builtin printf '%s\\n' "$out"; }`);
+      // The purge (its glob already past both names) takes `generation` just after the rotation's rename made `joinedprev`.
+      const env = shadow(`mv() { command mv "$@"; rm -f '${GEN()}'; }`);
       run({ hook_event_name: 'SubagentStart', agent_id: 'orphan-2', agent_type: 'general-purpose' }, env);
       expect(fs.existsSync(GEN()), 'fixture: the shadow ran, the row is gone').toBe(false);
-      expect(fs.existsSync(joinFile()), 'the rename\'s file is removed again').toBe(false);
-      expect(registry().filter((n) => n.endsWith('.joined') || n.includes('.hook-write.')), 'no file and no temp left').toEqual([]);
+      expect(registry().filter((n) => n.includes('.joined') || n.includes('.hook-write.')), 'no file and no temp left').toEqual([]);
     });
 
-    it('control: the same rotation with the row standing keeps the 64 most recent and the new id', () => {
+    it('control: the same rotation with the row standing leaves the whole file as joinedprev', () => {
       fs.writeFileSync(joinFile(), `${Array.from({ length: 128 }, (_, i) => `j${i}`).join('\n')}\n`);
-      const env = shadow(`tail() { command tail "$@"; }`);
+      const env = shadow(`mv() { command mv "$@"; }`);
       run({ hook_event_name: 'SubagentStart', agent_id: 'kept-1', agent_type: 'general-purpose' }, env);
-      expect(joined()).toHaveLength(64);
-      expect(joined()!.at(-1)).toBe('kept-1');
+      expect(joinedPrev()).toHaveLength(129);
+      expect(joinedPrev()!.at(-1)).toBe('kept-1');
     });
   });
 
@@ -1231,6 +1326,36 @@ describe('only an agent id with a qualifying join is a subagent to the turn mark
       }
       expect(lost(ids), 'every start of the fan-out is a join').toEqual([]);
       expect([...(joined() ?? [])].sort(), 'one line each, none lost').toEqual([...ids].sort());
+    }, 120_000);
+
+    it('a fan-out that STRADDLES the cap loses nothing: eight Starts at once onto 126 lines, six times (every id is in joined or joinedprev)', async () => {
+      doneLine();
+      for (let t = 0; t < 6; t += 1) {
+        fs.rmSync(joinFile(), { force: true });
+        fs.rmSync(prevFile(), { force: true });
+        const planted = Array.from({ length: 126 }, (_, i) => `p${t}-${i}`);
+        fs.writeFileSync(joinFile(), `${planted.join('\n')}\n`);
+        const batch = Array.from({ length: 8 }, (_, k) => `f${t}-${k}`);
+        await Promise.all(batch.map((id) => runAsync({ hook_event_name: 'SubagentStart', agent_id: id, agent_type: 'workflow-subagent' })));
+        const have = new Set(joinedAll());
+        expect(batch.filter((id) => !have.has(id)), `trial ${t}: every append is in a file`).toEqual([]);
+        expect(planted.filter((id) => !have.has(id)), `trial ${t}: and so is every id that was already there`).toEqual([]);
+      }
+      expect(lost(joinedAll().slice(-3)), 'and the last trial\'s ids are subagents to the marker').toEqual([]);
+    }, 120_000);
+
+    it('concurrent rotators: four Starts at once onto 200 lines; the planted file is never replaced by a newer one', async () => {
+      doneLine();
+      for (let t = 0; t < 4; t += 1) {
+        fs.rmSync(joinFile(), { force: true });
+        fs.rmSync(prevFile(), { force: true });
+        const planted = Array.from({ length: 200 }, (_, i) => `q${t}-${i}`);
+        fs.writeFileSync(joinFile(), `${planted.join('\n')}\n`);
+        const batch = Array.from({ length: 4 }, (_, k) => `g${t}-${k}`);
+        await Promise.all(batch.map((id) => runAsync({ hook_event_name: 'SubagentStart', agent_id: id, agent_type: 'workflow-subagent' })));
+        const have = new Set(joinedAll());
+        expect([...batch, ...planted].filter((id) => !have.has(id)), `trial ${t}: no id vanished`).toEqual([]);
+      }
     }, 120_000);
   });
 
