@@ -8,7 +8,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { Terminal } from '@xterm/xterm';
-import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS } from '../../shared/api';
+import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../shared/api';
 import { SYNTHETIC_SCREENS } from './fixtures/drawer/synthetic';
 
 const NAMES = [
@@ -52,7 +52,7 @@ describe('synthetic screens', () => {
       it('paints its rows on an un-opened 220x51 terminal', async () => {
         const term = new Terminal({
           cols: PINNED_WINDOW_COLS,
-          rows: PINNED_WINDOW_ROWS + 1,
+          rows: PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS,
         });
         try {
           await new Promise<void>((resolve) => term.write(s.stream, resolve));
@@ -71,7 +71,7 @@ describe('synthetic screens', () => {
       it('has a non-empty status row 50', async () => {
         const term = new Terminal({
           cols: PINNED_WINDOW_COLS,
-          rows: PINNED_WINDOW_ROWS + 1,
+          rows: PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS,
         });
         try {
           await new Promise<void>((resolve) => term.write(s.stream, resolve));
@@ -87,7 +87,7 @@ describe('synthetic screens', () => {
       it('has its caret, and only its caret, in reverse video', async () => {
         const term = new Terminal({
           cols: PINNED_WINDOW_COLS,
-          rows: PINNED_WINDOW_ROWS + 1,
+          rows: PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS,
         });
         try {
           await new Promise<void>((resolve) => term.write(s.stream, resolve));

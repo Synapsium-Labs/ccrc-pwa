@@ -2,8 +2,8 @@
  * Twelve hand-built, Claude-Code-shaped 220x50 screens (D-5006; plan Task 5).
  *
  * Each is the byte stream that paints it on a PINNED_WINDOW_COLS x
- * (PINNED_WINDOW_ROWS + 1) terminal (the window plus tmux's status row) and its
- * text in `capture-pane -p`'s shape. They let the re-wrapper and the model go
+ * (PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS) terminal (the window plus tmux's
+ * status row) and its text in `capture-pane -p`'s shape. They let the re-wrapper and the model go
  * red first before the rig records real pairs (Task 6); where the two
  * disagree, the recorded pair wins and this builder follows it. Every name and
  * path is fictional (`project-a`, `lane-a`). The only reverse-video cell on a
@@ -25,7 +25,7 @@ export interface SyntheticScreen {
   /** Which later task/property this screen feeds. */
   covers: readonly string[];
   /** The bytes that paint it on a PINNED_WINDOW_COLS x
-   *  (PINNED_WINDOW_ROWS + 1) terminal. */
+   *  (PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS) terminal. */
   stream: string;
   /** PINNED_WINDOW_ROWS (50) window rows, trailing U+0020 trimmed:
    *  capture-pane -p's shape. */
@@ -252,8 +252,8 @@ export function paint(rows: readonly Row[]): string {
       }
     }
   }
-  // The tmux status row, at row index PINNED_WINDOW_ROWS: the "+ 1" is
-  // TMUX_STATUS_ROWS (Task 2, shared/api.ts), not imported here.
+  // tmux's status line, the TMUX_STATUS_ROWS (1) row under the window, at row
+  // index PINNED_WINDOW_ROWS. The "+ 1" is CUP's 1-based row, not a row count.
   const statusPad = ' '.repeat(SRC_COLS - cellWidth(STATUS_TEXT));
   out += `\x1b[${PINNED_WINDOW_ROWS + 1};1H\x1b[30;42m${STATUS_TEXT}${statusPad}\x1b[0m`;
   return out;
