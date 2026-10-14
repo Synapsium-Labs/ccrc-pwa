@@ -29,7 +29,7 @@ import '../src/session/chat.css';
 import { Sheet } from '../src/components/Sheet';
 import { useKeyboardInset } from '../src/lib/keyboard';
 import { useMediaQuery } from '../src/lib/useMediaQuery';
-import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS } from '../../shared/api';
+import { PINNED_WINDOW_COLS, PINNED_WINDOW_ROWS, TMUX_STATUS_ROWS } from '../../shared/api';
 
 // ── The log (module scope, before React) ──────────────────────────────────
 
@@ -312,7 +312,7 @@ function Spike(): ReactNode {
 
     const term = new Terminal({
       cols: PINNED_WINDOW_COLS,
-      rows: PINNED_WINDOW_ROWS + 1, // +1 for tmux status row (TMUX_STATUS_ROWS, not yet defined)
+      rows: PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS, // the drawer's attach: the window plus tmux's status row
       fontFamily: readToken('--font-mono') ?? 'monospace',
       fontSize: 14,
       cursorBlink: true,
@@ -398,7 +398,7 @@ function Spike(): ReactNode {
             wordBreak: 'break-all',
           }}>
             <div>{navigator.userAgent}</div>
-            <div>{`coarse: ${String(coarse)}  inner: ${window.innerWidth}x${window.innerHeight}  term: ${PINNED_WINDOW_COLS}x${PINNED_WINDOW_ROWS + 1}  cols: ${cols}`}</div>
+            <div>{`coarse: ${String(coarse)}  inner: ${window.innerWidth}x${window.innerHeight}  term: ${PINNED_WINDOW_COLS}x${PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS}  cols: ${cols}`}</div>
             <div>{`vv: ${vv === null ? 'none' : `${vv.w}x${vv.h} top ${vv.top}`}`}</div>
           </div>
 
