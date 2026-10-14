@@ -1614,6 +1614,23 @@ spine as wave 4 and follows it, and is disjoint from wave 5. Parallel dispatch h
         on `ccd/ccd`. #408 touched none of its files.
       - STATUS: fleet and server v0.0.187, newest v0.0.187, backups fleet 178M/server 714M, disk free fleet 218G/work
         volume 193G/server 32G, no anomalies at 15:44.
+    - **2026-10-14 16:42 UTC: v0.0.190 auto-converged unattended, past v0.0.188 and v0.0.189, with both runs clean.
+      v0.0.191 is released.** No action was taken.
+      - v0.0.188 (`84729c722`, #400) was released at 16:02:24, v0.0.189 (`3786aa755`, #401) at 16:03:45, v0.0.190
+        (`af62cc229`) at 16:05:20 and v0.0.191 (`c7776b080`, #406) at 16:17:54.
+      - The fleet box ran from 16:13:33 to 16:15:34, about 20 seconds after a poll falls due on the server's grid from
+        its 15:43 restart. The server followed from 16:16:03 to 16:16:29. Both reports read `phase: done` and
+        `from: pwa` (defect A), with no doctor detail.
+      - Both trailing doctors passed. This is the fleet box's first clean run in four. Fleet: 34 passed, 7 warned, 0
+        failed. Server: 26 passed, 0 warned, 0 failed. Both read `box-token` PASS.
+      - The history sweeps since 15:42:07 each finished 4 to 8 minutes after they started, and none hit the unit's
+        timeout.
+      - v0.0.191 came out about a minute and a half after the server's restart, so the boxes stay on v0.0.190 until
+        the next poll, due about 16:46.
+      - Wave 15 (run 300) is still held: 1332 (run 354, `working`; it replaces 1298) on `ccd/ccrc`, and 1302 (run 360,
+        `dispatched`) on `ccd/ccd`. None of the four merges touched its files.
+      - STATUS: fleet and server v0.0.190, newest v0.0.191, backups fleet 178M/server 717M, disk free fleet 217G/work
+        volume 189G/server 32G, no anomalies at 16:42.
 
 - **2026-09-30 12:22 UTC — wave 8 opened (run 182) for the live audit's residue, and dispatched.**
   - **Planning:** two Opus scoping agents measured each defect at `a742eb6a`, and an Opus writer assembled the
