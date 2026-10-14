@@ -948,3 +948,33 @@ describe('T13 review 3-2: Fetch from origin on an unresolved ref says what it is
     expect(container.innerHTML).not.toBe(before);
   });
 });
+
+describe('Review 439 F3: the not-contained banner describes the pin, and a Re-list through the visit clears it', () => {
+  /** A leaf whose file answer says its commit (COMMIT_A) is no longer on the served ref. */
+  const notContained = (): DocsFileAnswer => {
+    const r = fileResponse('# Kept\n');
+    return { s: 'ok', value: { ...r, show: { ...r.show, commit: COMMIT_A, blob: BLOB_1, onRef: 'not-contained' } } };
+  };
+  const banner = (c: Element): Element | null => c.querySelector('[data-banner="not-contained"]');
+
+  it("an answer read at the pin's own commit shows the banner, naming that commit", async () => {
+    const f = fakeLoaders({ tree: okTree(treeOk({ commit: COMMIT_A })), file: notContained() });
+    const { container } = open('/docs/demo/specs/a.md', f);
+    expect(await screen.findByRole('heading', { name: 'Kept' })).toBeInTheDocument();
+    expect(banner(container)?.textContent).toContain('Commit aaaaaaaa is no longer on origin/main');
+  });
+
+  it('Re-list that moves the tree to a new commit at the SAME blob: no re-read, the truth line names the new commit, no banner', async () => {
+    const f = fakeLoaders({ tree: okTree(treeOk({ commit: COMMIT_A })), file: notContained() });
+    f.tree.mockResolvedValueOnce(okTree(treeOk({ commit: COMMIT_A })));
+    f.tree.mockResolvedValueOnce(okTree(treeOk({ commit: COMMIT_B })));
+    const { container } = open('/docs/demo/specs/a.md', f);
+    expect(await screen.findByRole('heading', { name: 'Kept' })).toBeInTheDocument();
+    expect(banner(container)).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Re-list' }));
+    await waitFor(() => expect(container.querySelector('code.docs-truth-commit')?.getAttribute('title')).toBe(COMMIT_B));
+    await waitFor(() => expect(banner(container)).toBeNull());
+    expect(f.file).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('heading', { name: 'Kept' })).toBeInTheDocument();
+  });
+});

@@ -290,3 +290,23 @@ describe('T13 review 5-1: a deleted draft counts in the default-view hint', () =
     expect(textOf('default-hint')).toBe('1 uncommitted doc in main checkout on ws/a');
   });
 });
+
+describe('Review 439 F3: the not-contained banner describes the pin', () => {
+  const slot = (answerCommit: string, pinCommit: string): FileSlot => {
+    const r = fileResponse('# A');
+    return {
+      s: 'ok', pin: { kind: 'committed', commit: pinCommit, servedRef: SERVED, section: 'specs', path: 'a.md' },
+      answer: { ...r, show: { ...r.show, onRef: 'not-contained', commit: answerCommit } }, receivedAt: 0,
+    };
+  };
+
+  it("an answer read at an older commit than the leaf's pin says nothing", () => {
+    banners('/docs/demo/specs/a.md', treeOk({ commit: COMMIT_B }), slot(COMMIT_A, COMMIT_B));
+    expect(banner('not-contained')).toBeNull();
+  });
+
+  it("an answer read at the leaf's pin shows the banner, naming that commit", () => {
+    banners('/docs/demo/specs/a.md', treeOk({ commit: COMMIT_B }), slot(COMMIT_B, COMMIT_B));
+    expect(textOf('not-contained')).toBe('Commit bbbbbbbb is no longer on origin/main (the branch was rewritten).');
+  });
+});

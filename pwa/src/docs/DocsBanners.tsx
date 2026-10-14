@@ -3,8 +3,8 @@
 // the QUALIFIED `refs/heads/<branch>` (a bare name could serve origin and overlay nothing); a ref view overlays only
 // when the holder's HEAD is the served commit, and otherwise says what the drafts are based on; each drafts state that
 // shows none says why; a leaf's withheld, deleted, type-changed and conflicted drafts come from `entryView` (never a
-// read of the draft's own state, M4.T7); a commit the branch no longer contains offers Re-list; drafted images are
-// counted; `view=committed` offers the way back. A pure renderer: it starts no request (Retry and Re-list call
+// read of the draft's own state, M4.T7); the pin's commit, when the branch no longer contains it, offers Re-list;
+// drafted images are counted; `view=committed` offers the way back. A pure renderer: it starts no request (Retry and Re-list call
 // `onRelist`), and every link is `docsPageUrl(docsLocation(page, to))` (refinement (q)).
 import type { ReactNode } from 'react';
 import { docsPageUrl, parseDocsRef, type DocsPageLocation, type DocsTreeOk } from '../../../shared/docs';
@@ -36,8 +36,9 @@ function HintLink(p: { readonly href: string | null; readonly label: string }): 
 }
 
 /** The banners for `page` over `tree`. `file` is the visit's file slot (only a leaf's `ok` answer is read, for
- *  `onRef`); `draftAssets` counts the drafted images on the page; `onRelist` is the visit's `retryTree`. The index
- *  has none. */
+ *  `onRef`); the not-contained banner describes the leaf's PIN, so it shows only when that answer was read at the
+ *  pin's own commit, and a Re-list that moves the pin on clears it. `draftAssets` counts the drafted images on the
+ *  page; `onRelist` is the visit's `retryTree`. The index has none. */
 export function DocsBanners(p: {
   readonly page: DocsPageLocation; readonly tree: DocsTreeOk; readonly file: FileSlot; readonly draftAssets: number;
   readonly onRelist: () => void;
@@ -137,10 +138,13 @@ export function DocsBanners(p: {
       }
       if (v.badge === 'conflicted') out.push(<Banner key="conflicted" id="conflicted" tone="warn" text={DOCS_BANNER_TEXT.conflicted} />);
       if (file.s === 'ok' && file.answer.show.onRef === 'not-contained') {
-        // The commit the PAGE read: the answer's own, else the committed pin's. Never the tree's (the served ref's
-        // tip, on the ref by definition), so a page whose commit is unknown says nothing rather than a wrong one.
-        const read = file.answer.show.commit ?? (file.pin.kind === 'committed' ? file.pin.commit : null);
-        if (read !== null) {
+        // The banner describes the PIN: it shows only while the answer was read at the commit the leaf is pinned to.
+        // A Re-list that moves the pin to a new commit keeps a same-blob body (spec 4.3 item 2), so that answer's
+        // `onRef` was measured for the old commit and says nothing about the new pin, which is on the ref by
+        // construction. Never the tree's commit, so a page whose commit is unknown says nothing rather than a wrong one.
+        const pinned = file.pin.kind === 'committed' ? file.pin.commit : null;
+        const read = file.answer.show.commit ?? pinned;
+        if (read !== null && read === pinned) {
           out.push(
             <Banner key="not-contained" id="not-contained" tone="warn"
               text={fillSentence(DOCS_BANNER_TEXT.notContained, { short: shortCommit(read), served: servedRefText(tree.ref) })}>
