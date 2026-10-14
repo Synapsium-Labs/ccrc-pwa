@@ -3265,7 +3265,7 @@ phone-push bell" (≈951) is left as it is: §13 measured that nothing in README
 That phrase was put to the operator under "Open questions for the operator"; it is settled there (README now reads
 "push bell"). **Superseded in place (shipped):** the phone-push phrase was not left as it was. README :967 reads
 "push bell" (`a5771e471`, the operator's 2026-10-05 directive), and the device row, the README pin's sixth `it`
-(`stall-settings-readme.test.ts:90`), scans the whole Settings paragraph, not only the new section's sentences
+(`stall-settings-readme.test.ts:89`), scans the whole Settings paragraph, not only the new section's sentences
 (`505ffbff4`).
 
 **README is in the citation corpus.** The edit adds 16 lines inside one paragraph. The citation instrument stays

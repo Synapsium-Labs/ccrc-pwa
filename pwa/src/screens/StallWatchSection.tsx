@@ -28,6 +28,7 @@ import {
   type StallConfirmRequired, type StallHeld, type StallLevel, type StallLevelChoice, type StallNoticeCount,
   type StallStage, type StallWatchEffective, type StallWatchRequest, type StallWatchView, type StallWriteEffect,
 } from '../../../shared/api';
+import { stallDurationText } from '../../../shared/stall-watch';
 import { QuickConfirm } from '../components/QuickConfirm';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
@@ -44,14 +45,10 @@ export function fillStallText(text: string, slots: Readonly<Record<string, strin
 }
 
 /** A span in hours and minutes, "30 min", "2 h", "1 h 30 min": every duration the section shows comes off the
- *  wire (the quiet bounds, step and built-in, the counts window) and is written by this one function. */
-export function quietText(ms: number): string {
-  const minutes = Math.round(ms / 60_000);
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  if (h === 0) return `${m} min`;
-  return m === 0 ? `${h} h` : `${h} h ${m} min`;
-}
+ *  wire (the quiet bounds, step and built-in, the counts window) and is written by L0's one formatter,
+ *  `stallDurationText` (`shared/stall-watch.ts`), which the server's feed body uses too. The name stays for the
+ *  section's callers and its tests. */
+export const quietText: (ms: number) => string = stallDurationText;
 
 /** One option of the quiet-time select: `default` (the built-in) or a value in milliseconds. */
 export interface StallQuietChoice { value: number | 'default'; label: string }

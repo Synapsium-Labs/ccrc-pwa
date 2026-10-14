@@ -6,6 +6,9 @@
 // What lives here, once:
 // - `StallWatchRefusal`, `STALL_WATCH_REFUSALS` and `isStallWatchRefusal`: the codes `POST /api/coord/stall-watch`
 //   refuses with. `stall-settings-route.test.ts` holds the list equal to the codes the POST handler sends.
+// - `stallDurationText`, the one duration formatter: the Settings section writes every duration it shows with it (the
+//   quiet bounds, step and built-in, the counts window), and the server's feed body writes a quiet-time change with
+//   it, so one value is never worded two ways. `single-definition.test.ts` holds the hours-and-minutes template here.
 // The line for an answer that carries none of those codes is `STALL_CONFIRM_TEXT.unconfirmed`, in `shared/api.ts`
 // with the section's other words, where the PWA's device-word scan reads it.
 import type { StallConfirmRequired } from './api.js';
@@ -22,4 +25,13 @@ export const STALL_WATCH_REFUSALS: readonly StallWatchRefusal[] =
 /** The refusal guard: the `includes` form, never `in`, so an inherited key such as `constructor` is never a code. */
 export function isStallWatchRefusal(v: unknown): v is StallWatchRefusal {
   return typeof v === 'string' && (STALL_WATCH_REFUSALS as readonly string[]).includes(v);
+}
+
+/** A span in hours and minutes, rounded to the minute first: "30 min", "2 h", "1 h 30 min". */
+export function stallDurationText(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h === 0) return `${m} min`;
+  return m === 0 ? `${h} h` : `${h} h ${m} min`;
 }
