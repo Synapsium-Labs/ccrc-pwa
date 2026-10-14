@@ -12,6 +12,11 @@ import type { Hue } from './roster.js';
 import type { AccountPoolWire } from './poolrule.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
+import type { NodeRole } from './node-role.js';
+// Re-exported from the leaf module so server/src/config.ts (and the test
+// helpers that reach it) do not pull in this ~10k-line file at runtime.
+export type { NodeRole } from './node-role.js';
+export { NODE_ROLES, isNodeRole } from './node-role.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -8871,14 +8876,8 @@ export function isStampRead(v: unknown): v is StampRead {
   return typeof v === 'string' && (STAMP_READS as readonly string[]).includes(v);
 }
 
-/** A node's role (§6 `nodes.role`): the bash spine's `CCRC_ROLE` words. A
- *  token outside the list reads `null` on the wire. */
-export type NodeRole = 'server' | 'fleet' | 'both';
-export const NODE_ROLES = ['server', 'fleet', 'both'] as const satisfies readonly NodeRole[];
-/** Use THIS, never `NODE_ROLES.includes(x as NodeRole)` — `isRunState`'s rule. */
-export function isNodeRole(v: unknown): v is NodeRole {
-  return typeof v === 'string' && (NODE_ROLES as readonly string[]).includes(v);
-}
+// NodeRole, NODE_ROLES, isNodeRole live in node-role.ts — see the re-export
+// near the top of this file.
 
 /** A node's OS, from `~/.ccrc/ccrc-caps` line 1 (`os linux|darwin`, §8).
  *  `unknown` = no caps file, or one that failed validation. */

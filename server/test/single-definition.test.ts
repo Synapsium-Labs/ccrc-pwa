@@ -913,7 +913,7 @@ describe('store.ts docstrings that describe their own callers', () => {
 // before review", not "unforgeable".
 describe('the account roster — runtime data, no compile-time copies', () => {
   // The names to hunt for now come from `DEFAULT_TEST_ROSTER`
-  // (server/test/helpers.ts), NOT from a shipped source file — because after
+  // (server/test/helpers/roster.ts, re-exported from helpers.ts), NOT from a shipped source file — because after
   // Task 6 the roster is not defined in one. The single copy still under the
   // scanned roots (`pwa/src/lib/accounts.ts`'s transitional `PRODUCTION_ROSTER`,
   // deleted in Task 7) is the very thing this hunts for, so drawing the hunt
@@ -3521,11 +3521,14 @@ describe('the update control plane — one definition per vocabulary and wire ty
   // same second copy with one fewer keyword.
   const TYPES = [
     'UpdateChannel', 'UpdateState', 'BusyUpdateState', 'SettledUpdateState', 'UpdatePhase', 'InstallState',
-    'ProvenanceState', 'AutoMode', 'NotifyMode', 'RequestKind', 'StampRead', 'NodeRole', 'NodeOs', 'TagFileRead',
+    'ProvenanceState', 'AutoMode', 'NotifyMode', 'RequestKind', 'StampRead', 'NodeOs', 'TagFileRead',
     'CatalogueErrorReason', 'ReleaseRefusalWire', 'ReleaseWire', 'NodeRequestWire', 'NodeReportWire',
     'NodeUpdateWire', 'NodeWire', 'UpdateIntentWire', 'CatalogueState', 'UpdatesView', 'UpdateRouteError',
     'UpdateRouteRefusal', 'IntentWriteAnswer', 'AckAnswer',
   ] as const;
+  // NodeRole moved to shared/node-role.ts (a leaf module, re-exported from
+  // api.ts) so server/src/config.ts does not pull in the ~10k-line api.ts at
+  // runtime. Its single-definition assertion is separate, below.
   // The DECLARATION shape, not the bare keyword: `type <Name> [<…>] =` or
   // `interface <Name>`, `export`/`declare` optional. The bare `(?:type|
   // interface)\s+<Name>\b` form also matches an inline-type import specifier
@@ -3548,16 +3551,25 @@ describe('the update control plane — one definition per vocabulary and wire ty
     });
   }
 
+  // NodeRole lives in shared/node-role.ts (re-exported from api.ts). Same
+  // single-definition invariant, different file.
+  it('declares NodeRole exactly once, in shared/node-role.ts', () => {
+    const DEF = DEF_OF('NodeRole');
+    expect(DEF.test(`import {\n  type NodeRole,\n} from '../../../shared/api.js';`), 'import specifier').toBe(false);
+    expect(DEF.test(`type NodeRole = 'a';`), 'un-exported local declaration').toBe(true);
+    expect(ALL.filter((f) => DEF.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/node-role.ts']);
+  });
+
   const VALUES = [
     'UPDATE_CHANNELS', 'UPDATE_STATES', 'BUSY_UPDATE_STATES', 'SETTLED_UPDATE_STATES', 'UPDATE_PHASES',
     'IN_FLIGHT_UPDATE_PHASES', 'INSTALL_STATES', 'PROVENANCE_STATES', 'AUTO_MODES', 'NOTIFY_MODES',
-    'REQUEST_KINDS', 'STAMP_READS', 'NODE_ROLES', 'NODE_OSES', 'TAG_FILE_READS', 'RELEASE_TAG', 'CAP_WORD', 'MAX_CAP_WORDS',
+    'REQUEST_KINDS', 'STAMP_READS', 'NODE_OSES', 'TAG_FILE_READS', 'RELEASE_TAG', 'CAP_WORD', 'MAX_CAP_WORDS',
     'FLEET_SCOPE',   // ruling R4: shared/api.ts only — store.ts (Task 6) and resolve.ts/project.ts (Task 12) import it
     'UNIX_SECONDS_MAX',   // C5, final fix wave: resolve.ts and inventory.ts both import it; neither declares its own
   ] as const;
   const GUARDS = [
     'isUpdateChannel', 'isUpdateState', 'isUpdatePhase', 'isInstallState', 'isProvenanceState', 'isAutoMode',
-    'isNotifyMode', 'isRequestKind', 'isStampRead', 'isNodeRole', 'isNodeOs', 'isTagFileRead', 'isReleaseTag', 'validCapWords',
+    'isNotifyMode', 'isRequestKind', 'isStampRead', 'isNodeOs', 'isTagFileRead', 'isReleaseTag', 'validCapWords',
   ] as const;
   it('defines every array, pattern and guard exactly once, in shared/api.ts', () => {
     for (const name of VALUES) {
@@ -3568,6 +3580,15 @@ describe('the update control plane — one definition per vocabulary and wire ty
       const DEF = new RegExp(`^\\s*(?:export\\s+)?function\\s+${name}\\b`, 'm');
       expect(ALL.filter((f) => DEF.test(readFileSync(f, 'utf8'))).map(rel), name).toEqual(['shared/api.ts']);
     }
+  });
+
+  // NODE_ROLES and isNodeRole moved to shared/node-role.ts (re-exported from
+  // api.ts). Same single-definition invariant, different file.
+  it('defines NODE_ROLES and isNodeRole exactly once, in shared/node-role.ts', () => {
+    const arrDEF = new RegExp('^\\s*(?:export\\s+)?(?:const|let|var)\\s+NODE_ROLES\\b', 'm');
+    expect(ALL.filter((f) => arrDEF.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/node-role.ts']);
+    const fnDEF = new RegExp('^\\s*(?:export\\s+)?function\\s+isNodeRole\\b', 'm');
+    expect(ALL.filter((f) => fnDEF.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/node-role.ts']);
   });
 
   it('StampRead is DERIVED from its array — a hand-written union restates ReadFailure\'s pair', () => {
